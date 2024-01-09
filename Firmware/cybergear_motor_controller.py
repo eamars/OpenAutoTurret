@@ -157,6 +157,7 @@ class CyberGearMotorController:
         # Axis attributes
         self.min_position = None
         self.max_position = None
+        self.current_position = None
 
         # Housekeeping
         self._register_name_value_dict = {v["name"]: {"address": key, **v} for key, v in self.REGISTER_DATA_MODEL.items()}
@@ -442,6 +443,7 @@ class CyberGearMotorController:
         # Reset position variables
         self.min_position = None
         self.max_position = None
+        self.current_position = None
 
         # Declare constants
         ZERO_TIME_S = 30
@@ -523,17 +525,26 @@ class CyberGearMotorController:
         self.set_run_mode(RunModeEnum.POSITION_MODE)
         self.enable()
 
-    def move_to_position(self, angle_radian):
+    def move_to_position(self, angle_radian, guard=True):
         # Check against range
         abs_min = abs(self.min_position)
         abs_max = abs(self.max_position)
 
-        if angle_radian < abs_min:
-            raise ValueError(f"Position {angle_radian} is smaller than minimum {abs_min}")
-        elif angle_radian > abs_max:
-            raise ValueError(f"Position {angle_radian} is smaller than minimum {abs_max}")
+        if guard:
+            if angle_radian < abs_min:
+                angle_radian = abs_min
+            elif angle_radian > abs_max:
+                angle_radian = abs_max
+
+        else:
+            if angle_radian < abs_min:
+                raise ValueError(f"Position {angle_radian} is smaller than minimum {abs_min}")
+            elif angle_radian > abs_max:
+                raise ValueError(f"Position {angle_radian} is smaller than minimum {abs_max}")
 
         self.set_loc_ref(self.min_position - angle_radian)
+
+        self.current_position = angle_radian
 
     def move_to_position_deg(self, angle_deg):
         position_rad = math.radians(angle_deg)
@@ -551,6 +562,11 @@ if __name__ == '__main__':
 # time.sleep(5)
 # yaw_motor.set_loc_ref(-2)
 # pitch_motor.set_loc_ref(-0.2)
-
-    # pitch_motor = CyberGearMotorController(motor_can_id=100)
-    # yaw_motor = CyberGearMotorController(motor_can_id=101)
+# time.sleep(5)
+# yaw_motor.move_to_position_deg(20)
+# pitch_motor.move_to_position_deg(30)
+#     # pitch_motor = CyberGearMotorController(motor_can_id=100)
+#     # yaw_motor = CyberGearMotorController(motor_can_id=101)
+#
+# yaw_motor.move_to_position_deg(20)
+# pitch_motor.move_to_position_deg(30)
