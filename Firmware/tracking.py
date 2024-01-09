@@ -72,7 +72,7 @@ def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorC
     while True:
         person_coord, frame_size = data_queue.get(True)
         print(person_coord)
-        
+
         center_x = frame_size[0]/2
         center_y = frame_size[1]/2
 
@@ -101,8 +101,6 @@ if __name__ == "__main__":
 
     pitch_motor.zero_axis()
     yaw_motor.zero_axis()
-    pitch_motor = None
-    yaw_motor = None
 
     # Initialize the data exchange
     data_queue = queue.Queue()
