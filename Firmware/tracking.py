@@ -80,6 +80,8 @@ def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorC
         delta_yaw = math.atan2(delta_x, frame_size[1] / (2 * math.tan(fov/2)))
         delta_pitch = math.atan2(delta_y, frame_size[0] / (2 * math.tan(fov/2)))
 
+        print(f"delta_yaw={delta_yaw}, delta_pitch={delta_pitch}")
+
         yaw_motor.move_to_position(yaw_motor.current_position + delta_yaw)
         pitch_motor.move_to_position(pitch_motor.current_position + delta_pitch)
 
