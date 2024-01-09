@@ -71,6 +71,8 @@ def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorC
 
     while True:
         person_coord, frame_size = data_queue.get(True)
+        print(person_coord)
+        
         center_x = frame_size[0]/2
         center_y = frame_size[1]/2
 
