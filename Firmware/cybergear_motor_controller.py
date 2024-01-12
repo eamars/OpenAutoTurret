@@ -157,7 +157,7 @@ class CyberGearMotorController:
         # Axis attributes
         self.min_position = None
         self.max_position = None
-        self.current_position = None
+        self._current_position_set_point = None
 
         # Housekeeping
         self._register_name_value_dict = {v["name"]: {"address": key, **v} for key, v in self.REGISTER_DATA_MODEL.items()}
@@ -443,7 +443,7 @@ class CyberGearMotorController:
         # Reset position variables
         self.min_position = None
         self.max_position = None
-        self.current_position = None
+        self._current_position_set_point = None
 
         # Declare constants
         ZERO_TIME_S = 30
@@ -474,7 +474,10 @@ class CyberGearMotorController:
             positions = []
             self.set_spd_ref(ZERO_SPEED)
             while time.time() < timeout_time:
-                mech_pos = self.read_register_by_name("mechPos")
+                try:
+                    mech_pos = self.read_register_by_name("mechPos")
+                except:
+                    continue
                 positions.append(mech_pos)
                 if len(positions) > MIN_SAMPLES:
                     samples = positions[-NUM_SAMPLE:]
@@ -495,7 +498,10 @@ class CyberGearMotorController:
             positions = []
             self.set_spd_ref(-ZERO_SPEED)
             while time.time() < timeout_time:
-                mech_pos = self.read_register_by_name("mechPos")
+                try:
+                    mech_pos = self.read_register_by_name("mechPos")
+                except:
+                    continue
                 positions.append(mech_pos)
                 if len(positions) > MIN_SAMPLES:
                     samples = positions[-NUM_SAMPLE:]
@@ -517,15 +523,15 @@ class CyberGearMotorController:
         travel = abs(self.min_position - self.max_position)
         self.log.info(f"min_position={self.min_position}, max_position={self.max_position}")
         self.set_position_mode()
-        self.move_to_position(abs(travel) / 2)
+        self.set_position(abs(travel) / 2)
 
-    def set_position_mode(self):
-        self.set_limit_cur(8)
-        self.set_limit_spd(3)
+    def set_position_mode(self, speed_limit=3, current_limit=8):
+        self.set_limit_cur(current_limit)
+        self.set_limit_spd(speed_limit)
         self.set_run_mode(RunModeEnum.POSITION_MODE)
         self.enable()
 
-    def move_to_position(self, angle_radian, guard=True):
+    def set_position(self, angle_radian, guard=True):
         # Check against range
         abs_min = abs(self.min_position)
         abs_max = abs(self.max_position)
@@ -544,12 +550,30 @@ class CyberGearMotorController:
 
         self.set_loc_ref(self.min_position - angle_radian)
 
-        self.current_position = angle_radian
+        self._current_position_set_point = angle_radian
 
-    def move_to_position_deg(self, angle_deg):
+    def set_position_deg(self, angle_deg):
         position_rad = math.radians(angle_deg)
 
-        self.move_to_position(position_rad)
+        self.set_position(position_rad)
+
+    def get_position_set_point(self):
+        return self._current_position_set_point
+
+    def get_position(self):
+        retry = 3
+        while retry > 0:
+            try:
+                mech_pos = self.read_register_by_name("mechPos")
+            except:
+                retry -= 1
+            else:
+                break
+        else:
+            raise RuntimeError("Unable to retrieve current position due to communication error")
+        current_position = self.min_position - mech_pos
+
+        return current_position
 
 
 
