@@ -62,17 +62,17 @@ def run_tracker_in_thread(filename, model, file_index, data_queue: queue.Queue):
             most_confident_person_coord = max(person_list, key=lambda pair: pair[0])[1]
 
             try:
-                data_queue.put(most_confident_person_coord, block=True)
+                data_queue.put(most_confident_person_coord, block=False)
             except queue.Full:
                 pass
 
             # Draw the center dot
             cv2.circle(res_plotted, (int(most_confident_person_coord[0]), int(most_confident_person_coord[1])), 5,
-                       (255, 0, 0), -1)
-            cv2.circle(res_plotted, (int(most_confident_person_coord[0]), int(most_confident_person_coord[1])), 60,
-                       (255, 0, 0), 2)
+                       (0, 0, 255), -1)
+            cv2.circle(res_plotted, (int(most_confident_person_coord[0]), int(most_confident_person_coord[1])), 50,
+                       (0, 0, 255), 2)
 
-        # cv2.imshow(f"Tracking_Stream_{file_index}", res_plotted)
+        cv2.imshow(f"Tracking_Stream_{file_index}", res_plotted)
 
         key = cv2.waitKey(1)
         if key == ord('q'):
@@ -106,8 +106,11 @@ def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorC
         delta_yaw = math.atan2(delta_x, center_coord[0] / (2 * math.tan(hfov/2))) / 2
         delta_pitch = math.atan2(delta_y, center_coord[1] / (2 * math.tan(vfov/2))) / 2
 
-        current_yaw = yaw_motor.get_position()
-        current_pitch = pitch_motor.get_position()
+        try:
+            current_yaw = yaw_motor.get_position()
+            current_pitch = pitch_motor.get_position()
+        except RuntimeError:
+            continue
         new_yaw = current_yaw + delta_yaw
         new_pitch = current_pitch + delta_pitch
         print(f"current_yaw={current_yaw}, current_pitch={current_pitch}")

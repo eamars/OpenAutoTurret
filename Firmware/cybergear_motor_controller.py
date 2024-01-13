@@ -149,7 +149,7 @@ class CyberGearMotorController:
         self.bus = bus
         self.host_can_id = host_can_id
         self._motor_can_id = None
-        self.block_wait_time_s = 0.5
+        self.block_wait_time_s = 0.01
 
         # self.bus_filters = {"can_id": motor_can_id, "can_mask": bitmask(7, 8), "extended": True}
         self.motor_can_id = motor_can_id
@@ -483,6 +483,7 @@ class CyberGearMotorController:
                     samples = positions[-NUM_SAMPLE:]
                     if (max(samples) - min(samples)) < STABLE_THRESHOLD:
                         break
+                time.sleep(0.5)
             else:
                 raise RuntimeError("Unable to zero with current speed")
 
@@ -507,6 +508,8 @@ class CyberGearMotorController:
                     samples = positions[-NUM_SAMPLE:]
                     if (max(samples) - min(samples)) < STABLE_THRESHOLD:
                         break
+
+                time.sleep(0.5)
             else:
                 raise RuntimeError("Unable to zero with current speed")
 
@@ -525,7 +528,7 @@ class CyberGearMotorController:
         self.set_position_mode()
         self.set_position(abs(travel) / 2)
 
-    def set_position_mode(self, speed_limit=3, current_limit=8):
+    def set_position_mode(self, speed_limit=4, current_limit=8):
         self.set_limit_cur(current_limit)
         self.set_limit_spd(speed_limit)
         self.set_run_mode(RunModeEnum.POSITION_MODE)
