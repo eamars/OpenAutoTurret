@@ -439,7 +439,7 @@ class CyberGearMotorController:
         """
         return self.write_register_by_name("loc_ref", angle)
 
-    def zero_axis(self):
+    def zero_axis(self, zero_speed=0.8, zero_current=2):
         # Reset position variables
         self.min_position = None
         self.max_position = None
@@ -448,7 +448,6 @@ class CyberGearMotorController:
         # Declare constants
         ZERO_TIME_S = 30
         NUM_SAMPLE = 3
-        ZERO_SPEED = 1
         STABLE_THRESHOLD = 1e-2
         MIN_SAMPLES = 5
 
@@ -459,7 +458,7 @@ class CyberGearMotorController:
         self.set_spd_ref(0)
 
         # Set current to 1A
-        self.set_limit_cur(2)
+        self.set_limit_cur(zero_current)
 
         # Enable the motor
         self.enable()
@@ -472,7 +471,8 @@ class CyberGearMotorController:
             # Move clockwise until stop
             timeout_time = time.time() + ZERO_TIME_S
             positions = []
-            self.set_spd_ref(ZERO_SPEED)
+            self.set_spd_ref(zero_speed)
+            time.sleep(2)  # Allow time for motor to move
             while time.time() < timeout_time:
                 try:
                     mech_pos = self.read_register_by_name("mechPos")
@@ -497,7 +497,8 @@ class CyberGearMotorController:
             # Move clockwise until stop
             timeout_time = time.time() + ZERO_TIME_S
             positions = []
-            self.set_spd_ref(-ZERO_SPEED)
+            self.set_spd_ref(-zero_speed)
+            time.sleep(2)  # Allow time for motor to move
             while time.time() < timeout_time:
                 try:
                     mech_pos = self.read_register_by_name("mechPos")

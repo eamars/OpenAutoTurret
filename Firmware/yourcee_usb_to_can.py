@@ -29,6 +29,10 @@ except ImportError:
 
 
 class YourCeeSerialBus(SerialBus):
+    """
+    References:
+        https://wit-motion.yuque.com/wumwnr/docs/nrngkq
+    """
     def __init__(
             self,
             channel: str,

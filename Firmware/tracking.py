@@ -103,8 +103,8 @@ def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorC
         delta_x = center_coord[0] - person_coord[0]
         delta_y = center_coord[1] - person_coord[1]
 
-        delta_yaw = math.atan2(delta_x, center_coord[0] / (2 * math.tan(hfov/2))) / 2
-        delta_pitch = math.atan2(delta_y, center_coord[1] / (2 * math.tan(vfov/2))) / 2
+        delta_yaw = math.atan2(delta_x, center_coord[0] / (2 * math.tan(hfov/2))) / 4
+        delta_pitch = math.atan2(delta_y, center_coord[1] / (2 * math.tan(vfov/2))) / 4
 
         try:
             current_yaw = yaw_motor.get_position()
@@ -122,7 +122,7 @@ def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorC
 
 
 if __name__ == "__main__":
-    # logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     from yourcee_usb_to_can import YourCeeSerialBus
     bus = YourCeeSerialBus(channel="COM4")
