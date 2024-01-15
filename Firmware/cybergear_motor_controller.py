@@ -150,13 +150,14 @@ class CyberGearMotorController:
         self.host_can_id = host_can_id
         self._motor_can_id = None
         self.block_wait_time_s = 0.01
+        self.ask_retry_cnt = 5
 
         # self.bus_filters = {"can_id": motor_can_id, "can_mask": bitmask(7, 8), "extended": True}
         self.motor_can_id = motor_can_id
 
         # Axis attributes
-        self.min_position = None
-        self.max_position = None
+        self._min_position = None
+        self._max_position = None
         self._current_position_set_point = None
 
         # Housekeeping
@@ -174,6 +175,18 @@ class CyberGearMotorController:
         # Update filter
         # self.bus_filters["can_id"] = (new_id & 0xff) << 8
         # self.bus.set_filters([self.bus_filters])
+
+    @property
+    def min_position(self):
+        if self._min_position is None:
+            raise RuntimeError("You need to call `zero_axis` first before querying the min position")
+        return self._min_position
+
+    @property
+    def max_position(self):
+        if self._max_position is None:
+            raise RuntimeError("You need to call `zero_axis` first before querying the min position")
+        return self._max_position
 
     def flush_rx_buffer(self, timeout_s=10):
         timeout_time = time.time() + timeout_s
@@ -204,40 +217,55 @@ class CyberGearMotorController:
         self.log.debug(f'Ask mode={mode}, data2={data2}, data1={data1}, cb_before_recv={cb_before_recv}')
         self.flush_rx_buffer()
 
-        # Send command first, then wait for response
-        self.write(mode, data2, data1)
+        retry = self.ask_retry_cnt
+        while retry > 0:
+            retry -= 1
 
-        # Run the callback function
-        if cb_before_recv:
-            cb_before_recv()
+            # Send command first, then wait for response
+            self.write(mode, data2, data1)
 
-        try:
-            msg = self.bus.recv(self.block_wait_time_s)
-        except Exception as e:
-            self.log.exception(e)
-            raise
+            # Run the callback function
+            if cb_before_recv:
+                cb_before_recv()
 
-        if msg is None:
-            raise RuntimeError('No data received')
+            try:
+                msg = self.bus.recv(self.block_wait_time_s)
+                if msg is None:
+                    raise ValueError("No data received")
+            except Exception as e:
+                self.log.debug(f"Unable to read from the motor due to {e}")
+                continue
 
-        # Do simple parse of the message
-        mode = bitfield(msg.arbitration_id, 4, 24)
+            # Do simple parse of the message
+            try:
+                mode = bitfield(msg.arbitration_id, 4, 24)
+            except AttributeError as e:
+                self.log.error(f"Unable to parse msg {msg} due to {e}")
+                continue
 
-        decoded_msg = None
-        if mode == 0:
-            decoded_msg = self.parse_message_type_0(msg)
-        elif mode == 2:
-            decoded_msg = self.parse_message_type_2(msg)
-            self.update_motor_status(decoded_msg)
-        elif mode == 8:
-            decoded_msg = self.parse_message_type_8(msg)
-        elif mode == 17:
-            decoded_msg = self.parse_message_type_17(msg)
+            try:
+                decoded_msg = None
+                if mode == 0:
+                    decoded_msg = self.parse_message_type_0(msg)
+                elif mode == 2:
+                    decoded_msg = self.parse_message_type_2(msg)
+                    self.update_motor_status(decoded_msg)
+                elif mode == 8:
+                    decoded_msg = self.parse_message_type_8(msg)
+                elif mode == 17:
+                    decoded_msg = self.parse_message_type_17(msg)
+                else:
+                    self.log.warning('Unable to decode message')
+                    decoded_msg = msg
+
+                self.log.debug(f'Decoded Msg: {decoded_msg}')
+            except Exception as e:
+                self.log.warning(f'Unable to decode message {msg} due to {e}')
+                continue
+
+            break
         else:
-            self.log.warning('Unable to decode message')
-            decoded_msg = msg
-
-        self.log.debug(f'Decoded Msg: {decoded_msg}')
+            raise RuntimeError("Unable to read response data for command")
 
         return decoded_msg
 
@@ -439,14 +467,13 @@ class CyberGearMotorController:
         """
         return self.write_register_by_name("loc_ref", angle)
 
-    def zero_axis(self, zero_speed=0.8, zero_current=2):
+    def zero_axis(self, zero_speed=0.8, zero_current=2, zero_timeout_s=30):
         # Reset position variables
-        self.min_position = None
-        self.max_position = None
+        self._min_position = None
+        self._max_position = None
         self._current_position_set_point = None
 
         # Declare constants
-        ZERO_TIME_S = 30
         NUM_SAMPLE = 3
         STABLE_THRESHOLD = 1e-2
         MIN_SAMPLES = 5
@@ -457,7 +484,7 @@ class CyberGearMotorController:
         # Set speed to 0
         self.set_spd_ref(0)
 
-        # Set current to 1A
+        # Set current limit
         self.set_limit_cur(zero_current)
 
         # Enable the motor
@@ -469,52 +496,52 @@ class CyberGearMotorController:
         try:
             self.log.info("clockwise move")
             # Move clockwise until stop
-            timeout_time = time.time() + ZERO_TIME_S
+            timeout_time = time.time() + zero_timeout_s
             positions = []
             self.set_spd_ref(zero_speed)
-            time.sleep(2)  # Allow time for motor to move
+
             while time.time() < timeout_time:
-                try:
-                    mech_pos = self.read_register_by_name("mechPos")
-                except:
-                    continue
+                mech_pos = self.read_register_by_name("mechPos")
+                current = self.read_register_by_name("iqf")
+                self.log.debug(f"MechPos={mech_pos}, Current={current}")
+
                 positions.append(mech_pos)
                 if len(positions) > MIN_SAMPLES:
                     samples = positions[-NUM_SAMPLE:]
-                    if (max(samples) - min(samples)) < STABLE_THRESHOLD:
+                    if (max(samples) - min(samples)) < STABLE_THRESHOLD and current > 0.5 * zero_current:
                         break
                 time.sleep(0.5)
             else:
                 raise RuntimeError("Unable to zero with current speed")
 
             # Record the clockwise position max
-            self.min_position = positions[-1]
+            self._min_position = positions[-1]
 
             # Set zero position
             self.force_zero()
 
             self.log.info("counter-clockwise move")
             # Move clockwise until stop
-            timeout_time = time.time() + ZERO_TIME_S
+            timeout_time = time.time() + zero_timeout_s
             positions = []
             self.set_spd_ref(-zero_speed)
-            time.sleep(2)  # Allow time for motor to move
+
             while time.time() < timeout_time:
-                try:
-                    mech_pos = self.read_register_by_name("mechPos")
-                except:
-                    continue
+                mech_pos = self.read_register_by_name("mechPos")
+                current = self.read_register_by_name("iqf")
+                self.log.debug(f"MechPos={mech_pos}, Current={current}")
+
                 positions.append(mech_pos)
                 if len(positions) > MIN_SAMPLES:
                     samples = positions[-NUM_SAMPLE:]
-                    if (max(samples) - min(samples)) < STABLE_THRESHOLD:
+                    if (max(samples) - min(samples)) < STABLE_THRESHOLD and current < 0.5 * -zero_current:
                         break
 
                 time.sleep(0.5)
             else:
                 raise RuntimeError("Unable to zero with current speed")
 
-            self.max_position = positions[-1]
+            self._max_position = positions[-1]
 
         except RuntimeError:
             self.disable()
@@ -522,12 +549,12 @@ class CyberGearMotorController:
 
         self.set_spd_ref(0)
 
-        # Switch to position mode and hold
-        # Calculate total travel
-        travel = abs(self.min_position - self.max_position)
-        self.log.info(f"min_position={self.min_position}, max_position={self.max_position}")
-        self.set_position_mode()
-        self.set_position(abs(travel) / 2)
+        # # Switch to position mode and hold
+        # # Calculate total travel
+        # travel = self.get_travel()
+        # self.log.info(f"min_position={self.min_position}, max_position={self.max_position}")
+        # self.set_position_mode()
+        # self.set_position(abs(travel) / 2)
 
     def set_position_mode(self, speed_limit=4, current_limit=8):
         self.set_limit_cur(current_limit)
@@ -535,66 +562,53 @@ class CyberGearMotorController:
         self.set_run_mode(RunModeEnum.POSITION_MODE)
         self.enable()
 
-    def set_position(self, angle_radian, guard=True):
+    def set_position(self, position_set_point, guard=True, block_wait=False):
         # Check against range
         abs_min = abs(self.min_position)
         abs_max = abs(self.max_position)
 
         if guard:
-            if angle_radian < abs_min:
+            if position_set_point < abs_min:
                 angle_radian = abs_min
-            elif angle_radian > abs_max:
+            elif position_set_point > abs_max:
                 angle_radian = abs_max
 
         else:
-            if angle_radian < abs_min:
-                raise ValueError(f"Position {angle_radian} is smaller than minimum {abs_min}")
-            elif angle_radian > abs_max:
-                raise ValueError(f"Position {angle_radian} is smaller than minimum {abs_max}")
+            if position_set_point < abs_min:
+                raise ValueError(f"Position {position_set_point} is smaller than minimum {abs_min}")
+            elif position_set_point > abs_max:
+                raise ValueError(f"Position {position_set_point} is smaller than minimum {abs_max}")
 
-        self.set_loc_ref(self.min_position - angle_radian)
+        self.set_loc_ref(self.min_position - position_set_point)
 
-        self._current_position_set_point = angle_radian
+        self._current_position_set_point = position_set_point
 
-    def set_position_deg(self, angle_deg):
-        position_rad = math.radians(angle_deg)
+        if block_wait:
+            while True:
+                current_position = self.get_position()
+                print(current_position, position_set_point)
+                if abs(current_position - position_set_point) < math.radians(5):
+                    break
+                time.sleep(0.5)
 
-        self.set_position(position_rad)
+    def set_position_deg(self, position_set_point, guard=True, block_wait=False):
+        position_rad = math.radians(position_set_point)
+        self.set_position(position_rad, guard, block_wait)
 
     def get_position_set_point(self):
         return self._current_position_set_point
 
     def get_position(self):
-        retry = 3
-        while retry > 0:
-            try:
-                mech_pos = self.read_register_by_name("mechPos")
-            except:
-                retry -= 1
-            else:
-                break
-        else:
-            raise RuntimeError("Unable to retrieve current position due to communication error")
+        mech_pos = self.read_register_by_name("mechPos")
         current_position = self.min_position - mech_pos
 
         return current_position
 
+    def get_travel(self):
+        travel = abs(self.min_position - self.max_position)
+
+        return travel
 
 
 if __name__ == '__main__':
     pass
-    # logging.basicConfig(level=logging.DEBUG)
-#
-# yaw_motor.set_loc_ref(-5)
-# pitch_motor.set_loc_ref(-1.2)
-# time.sleep(5)
-# yaw_motor.set_loc_ref(-2)
-# pitch_motor.set_loc_ref(-0.2)
-# time.sleep(5)
-# yaw_motor.move_to_position_deg(20)
-# pitch_motor.move_to_position_deg(30)
-#     # pitch_motor = CyberGearMotorController(motor_can_id=100)
-#     # yaw_motor = CyberGearMotorController(motor_can_id=101)
-#
-# yaw_motor.move_to_position_deg(20)
-# pitch_motor.move_to_position_deg(30)

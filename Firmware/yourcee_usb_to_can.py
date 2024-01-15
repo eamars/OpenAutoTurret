@@ -111,22 +111,38 @@ class YourCeeSerialBus(SerialBus):
         # set the new read timeout
         self._ser.timeout = timeout
 
-        rx_bytes = self._ser.readline()
-        logger.debug(f"Raw RX byte={rx_bytes}")
+        while True:
+            # Read prefix. If reads invalid data then return empty data
+            prefix = self._ser.read(2)
+            if len(prefix) != 2 or prefix[0] != ord('A') or prefix[1] != ord('T'):
+                break
 
-        if rx_bytes:
-            # Decode the arbitration id part
-            can_id_byte = rx_bytes[2:6]
+            # Read can_id
+            can_id_byte = self._ser.read(4)
             can_id = struct.unpack(">I", can_id_byte)[0]
             arbitration_id = can_id >> 3
 
-            # Decode the data length
-            dlc = rx_bytes[6]
+            if arbitration_id >= 0x20000000:
+                raise ValueError(
+                    "received arbitration id may not exceed 2^29 (0x20000000)"
+                )
 
-            # Decode the data
-            payload = rx_bytes[7:7+dlc]
+            # Read DLC
+            dlc = ord(self._ser.read(1))
+            if dlc > 8:
+                raise ValueError("received DLC may not exceed 8 bytes")
 
-            # Reconstruct the message
+            # Read data
+            payload = self._ser.read(dlc)
+
+            # Read postfix
+            postfix = self._ser.read(2)
+            if len(postfix) != 2 or postfix[0] != ord('\r') or postfix[1] != ord('\n'):
+                raise CanOperationError(
+                    f"invalid postfix while reading message: {postfix}"
+                )
+
+            # Rebuild the message
             msg = Message(
                 arbitration_id=arbitration_id,
                 dlc=dlc,
@@ -134,8 +150,8 @@ class YourCeeSerialBus(SerialBus):
             )
 
             return msg, False
-        else:
-            return None, False
+
+        return None, False
 
 
 if __name__ == "__main__":
