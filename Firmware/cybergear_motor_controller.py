@@ -586,7 +586,6 @@ class CyberGearMotorController:
         if block_wait:
             while True:
                 current_position = self.get_position()
-                print(current_position, position_set_point)
                 if abs(current_position - position_set_point) < math.radians(5):
                     break
                 time.sleep(0.5)
