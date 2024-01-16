@@ -115,5 +115,5 @@ if __name__ == '__main__':
 
     #
 
-    turret.disable()
-    bus.shutdown()
+    # turret.disable()
+    # bus.shutdown()
