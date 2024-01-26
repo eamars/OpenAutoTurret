@@ -6,12 +6,13 @@ import math
 import time
 import logging
 
-import cybergear_motor_controller
 from cybergear_motor_controller import CyberGearMotorController
+from turret import Turret
+from vision_turret_controller import VisionTurretController
 import can
 
 
-def run_tracker_in_thread(filename, model, file_index, data_queue: queue.Queue):
+def run_tracker_in_thread(filename, model, file_index, vision_controller: VisionTurretController):
     """
     Runs a video file or webcam stream concurrently with the YOLOv8 model using threading.
 
@@ -46,7 +47,7 @@ def run_tracker_in_thread(filename, model, file_index, data_queue: queue.Queue):
             if object_type != 0:
                 continue
 
-            if object_propability < 0.7:
+            if object_propability < 0.5:
                 continue
             object_coordinate = box.xyxy[0].tolist()
 
@@ -62,7 +63,7 @@ def run_tracker_in_thread(filename, model, file_index, data_queue: queue.Queue):
             most_confident_person_coord = max(person_list, key=lambda pair: pair[0])[1]
 
             try:
-                data_queue.put(most_confident_person_coord, block=False)
+                vision_controller.update_coordinate(most_confident_person_coord, block=False)
             except queue.Full:
                 pass
 
@@ -84,41 +85,10 @@ def run_tracker_in_thread(filename, model, file_index, data_queue: queue.Queue):
     video.release()
 
 
-def run_motor_controller(pitch_motor: cybergear_motor_controller.CyberGearMotorController,
-                         yaw_motor: cybergear_motor_controller.CyberGearMotorController,
-                         data_queue: queue.Queue,
-                         resolution,
-                         diagonal_fov=55):
-    center_coord = (resolution[0] / 2, resolution[1] / 2)
-    diagonal_resolution = math.sqrt(resolution[0] ** 2 + resolution[1] ** 2)
-    hfov = 2 * math.atan(math.tan(math.radians(diagonal_fov/2)) * (resolution[0] / diagonal_resolution))
-    vfov = 2 * math.atan(math.tan(math.radians(diagonal_fov/2)) * (resolution[1] / diagonal_resolution))
-
-    print(f"hfov={math.degrees(hfov)}, vfov={math.degrees(vfov)}")
+def run_motor_controller(vision_controller: VisionTurretController):
 
     while True:
-        person_coord = data_queue.get(True)
-        print(f"Person coord={person_coord}")
-
-        delta_x = center_coord[0] - person_coord[0]
-        delta_y = center_coord[1] - person_coord[1]
-
-        delta_yaw = math.atan2(delta_x, center_coord[0] / (2 * math.tan(hfov/2))) / 4
-        delta_pitch = math.atan2(delta_y, center_coord[1] / (2 * math.tan(vfov/2))) / 4
-
-        try:
-            current_yaw = yaw_motor.get_position()
-            current_pitch = pitch_motor.get_position()
-        except RuntimeError:
-            continue
-        new_yaw = current_yaw + delta_yaw
-        new_pitch = current_pitch + delta_pitch
-        print(f"current_yaw={current_yaw}, current_pitch={current_pitch}")
-        print(f"delta_yaw={delta_yaw}, delta_pitch={delta_pitch}")
-        print(f"new_yaw={new_yaw}, new_pitch={new_pitch}")
-
-        yaw_motor.set_position(new_yaw)
-        pitch_motor.set_position(new_pitch)
+        vision_controller.control()
 
 
 if __name__ == "__main__":
@@ -136,15 +106,30 @@ if __name__ == "__main__":
     # bus = can.Bus(channel="can0", interface="socketcan")
     pitch_motor = CyberGearMotorController(bus=bus, motor_can_id=100)
     yaw_motor = CyberGearMotorController(bus=bus, motor_can_id=101)
-
-    pitch_motor.zero_axis()
-    yaw_motor.zero_axis()
+    turret = Turret(yaw_motor, pitch_motor, dict())
+    turret.zero_all()
 
     # Initialize the data exchange
     data_queue = queue.Queue(1)
 
-    tracker_thread = threading.Thread(target=run_tracker_in_thread, args=(video_stream, model2, 1, data_queue), daemon=True)
-    motor_thread = threading.Thread(target=run_motor_controller, args=(pitch_motor, yaw_motor, data_queue, (640, 480), 55), daemon=True)
+    # Initial controller
+    yaw_config = dict(
+        kf=0.01,
+        kp=0.0005,
+        ki=0.0001,
+        kd=0.0001,
+    )
+
+    pitch_config = dict(
+        kf=0.01,
+        kp=0.0005,
+        ki=0.0001,
+        kd=0.0001,
+    )
+    vision_controller = VisionTurretController(turret, (320, 240), yaw_config, pitch_config, data_queue)
+
+    tracker_thread = threading.Thread(target=run_tracker_in_thread, args=(video_stream, model2, 1, vision_controller), daemon=True)
+    motor_thread = threading.Thread(target=run_motor_controller, args=(vision_controller,), daemon=True)
 
     tracker_thread.start()
     motor_thread.start()
