@@ -114,16 +114,16 @@ if __name__ == "__main__":
 
     # Initial controller
     yaw_config = dict(
-        kf=0.01,
-        kp=0.0005,
-        ki=0.0001,
+        kf=0.000,
+        kp=0.001,
+        ki=0.0000,
         kd=0.0001,
     )
 
     pitch_config = dict(
-        kf=0.01,
-        kp=0.0005,
-        ki=0.0001,
+        kf=0.000,
+        kp=0.001,
+        ki=0.0000,
         kd=0.0001,
     )
     vision_controller = VisionTurretController(turret, (320, 240), yaw_config, pitch_config, data_queue)
