@@ -15,7 +15,7 @@
 | 0 | Preserve/instrument POC | [x] | POC archived under `Firmware/legacy/` (commit d9e79cc); reference doc `CyberGear_AI_Reference.md` committed (b6e942b) |
 | 1 | Production CAN/motor layer | [~] | See checklist below |
 | 2 | Homing and safety foundation | [~] | Config, logical coords, contact detector, homing FSM, full-axis (§23), multi-axis plan (§25), soft-limit envelope (§18), safety supervisor (§38/§39), boot FSM (§27), park (§33), and the `controld` daemon all done+tested; calibration persistence (§28/§41) pending |
-| 3 | Trajectory generator | [~] | Online jerk-limited generator + 4 tests done; stopping/stop-reachability + collision envelope pending |
+| 3 | Trajectory generator | [x] | All done+tested: online jerk-limited generator, receding-horizon retarget (§17.3), stopping trajectories + stop-reachability (§17.2/§48, randomized tests), coupled collision envelope interface (§19, path validation) |
 | 4 | Vision daemon (Python) | [ ] | |
 | 5 | Geometry and estimator (C++) | [ ] | |
 | 6 | Closed-loop tracking | [ ] | |
@@ -83,9 +83,9 @@
 ## Phase 3 — Trajectory generator
 
 - [x] Online jerk-limited generator (§17): velocity-cap + stop-distance profile, proportional vel loop (τ=0.2 s) + jerk clamp; 4 tests (commit ce1d405). Bang-bang variants were dead-ends (limit-cycling) — see log.
-- [ ] Receding-horizon target updates without discontinuity (§17.3)
-- [ ] Stopping trajectories + `verify_stop_reachability` (§17.2, §48), randomized unit tests
-- [ ] Coupled collision envelope interface (§19): constant limits now, piecewise table/polygon later; path (not just endpoint) validation
+- [x] Receding-horizon target updates without discontinuity (§17.3): `set_target` retargets continue from the current q/v/a state (no restart from zero); C0/C1 continuity verified through a single mid-move reversal and repeated rapid retargets (`ChangingTargetIsSmooth`, `RepeatedRapidRetargetsStayContinuous`)
+- [x] Stopping trajectories + `verify_stop_reachability` (§17.2, §48): `StopPlan plan_stop(state, a_brake, j_brake)` (jerk-limited d_stop = v²/2a + va/2j, consistent with the SafetyEnvelope model) + `verify_stop_reachability(state, q_boundary, a_brake, j_brake)` (stop-before-boundary check); **2000-sample randomized unit test** over q∈[−3,3] rad, v∈[−v_max,v_max] (fixed seed, reproducible) per §48
+- [x] Coupled collision envelope interface (§19): `CollisionEnvelope` abstract (controller/checker depend only on it) + `RectangularCollisionEnvelope` (constant pitch/yaw limits, the v1 form); `is_path_safe` validates the **whole path**, not just the endpoint (mid-path exit is caught); a piecewise table/polygon plugs in as a new `is_safe` impl later without touching the controller — `control/collision_envelope.hpp` (7 tests)
 
 ## Phase 4 — Vision daemon (Python)
 
@@ -249,3 +249,37 @@
   exits cleanly on a bad config (no CAN). **Stopping here, before the live homing
   run** (user authorizes/runs it). Next: live homing → post-homing queue → (Phase 3)
   collision envelope + tracking.
+
+- **2026-09-01 (NZST)** — Completed **Phase 3 (trajectory generator)**, all in
+  simulation, verified with unit tests only (no live/real tests run during
+  implementation). Three items:
+  (1) **Receding-horizon retarget (§17.3)** — the generator already continues from
+  the current q/v/a on retarget (no restart from zero); added `RepeatedRapidRetargetsStayContinuous`
+  alongside the existing `ChangingTargetIsSmooth` to prove C0/C1 continuity through a
+  mid-move reversal and repeated rapid retargets.
+  (2) **Stopping trajectories + stop-reachability (§17.2, §48)** — added
+  `StopPlan plan_stop(state, a_brake, j_brake)` and
+  `verify_stop_reachability(state, q_boundary, a_brake, j_brake)` to
+  `JerkLimitedTrajectory`. The stop model is the jerk-limited
+  `d_stop = v²/2a + va/2j`, kept **consistent with `SafetyEnvelope::stop_distance`**
+  (the envelope adds its extra safety margin on top). `plan_stop` treats
+  |v| < at_rest (1e-3 rad/s) as "already stopped → stay here", mirroring the
+  envelope's at-rest short-circuit. Added a **2000-sample randomized test** over
+  q∈[−3,3] rad, v∈[−v_max,v_max] (fixed-seed, reproducible) per §48
+  ("unit-tested against randomized positions/velocities"): it asserts the stop lands
+  strictly in the direction of motion, that a boundary just beyond the stop is
+  reachable and one just before (in the direction of motion) is not.
+  (3) **Coupled collision envelope interface (§19)** — new
+  `control/collision_envelope.hpp`: the `CollisionEnvelope` abstract type (the
+  controller/checker depend only on it) + `RectangularCollisionEnvelope` (constant
+  pitch/yaw limits, the v1 form) + `is_path_safe`, which validates the **whole
+  path** (a mid-path exit is caught even when both endpoints are inside). A
+  piecewise table/polygon plugs in later as a new `is_safe` impl without touching
+  the controller. 7 collision tests (inside/outside, custom ranges, whole-path-vs-
+  endpoint, empty path, polymorphic interface).
+  One test bug found and fixed: the first cut of `plan_stop` had no at-rest branch,
+  so the randomized test's at-rest case saw a tiny (~1e-5 rad) non-zero stop
+  distance and failed the exact-zero check — added the at-rest short-circuit to
+  `plan_stop` (and dropped v=0 from the model test, covering it via the at-rest
+  sub-case instead). Full suite now **16/16 ctest binaries green**. No live motion;
+  no `vcan9`/`can0` changes.

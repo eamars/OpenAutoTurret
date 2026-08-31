@@ -11,6 +11,11 @@ namespace {
 // cycles) not to excite the jerk-limited acceleration loop into oscillation.
 constexpr double kVelTauS = 0.2;
 
+// |v| below this is "at rest": a stationary axis cannot cross a boundary by
+// stopping, so the stop-reachability check is satisfied regardless of position
+// (mirrors SafetyEnvelopeParams::at_rest_vel_rad_s).
+constexpr double kAtRestVelRadS = 1e-3;
+
 double clamp(double x, double lo, double hi) {
   return std::max(lo, std::min(hi, x));
 }
@@ -68,6 +73,31 @@ TrajectoryState JerkLimitedTrajectory::step() {
   q_ += v_ * dt_;
 
   return TrajectoryState{q_, v_, a_};
+}
+
+StopPlan JerkLimitedTrajectory::plan_stop(const TrajectoryState& s, double a_brake,
+                                          double j_brake) const {
+  const double v = std::fabs(s.v_rad_s);
+  // A (near) stationary axis is already stopped; the stop plan is "stay here"
+  // (consistent with the SafetyEnvelope's at-rest short-circuit).
+  if (v < kAtRestVelRadS) return StopPlan{s.q_rad, 0.0, 0.0};
+  // Jerk-limited stop distance and time, matching the SafetyEnvelope model
+  // (d_stop = v^2/(2a) + v*a/(2j); t_stop = v/a + a/(2j)).
+  const double d_stop = v * v / (2.0 * a_brake) + v * a_brake / (2.0 * j_brake);
+  const double t_stop = v / a_brake + a_brake / (2.0 * j_brake);
+  const double dir = (s.v_rad_s >= 0.0) ? 1.0 : -1.0;
+  return StopPlan{s.q_rad + dir * d_stop, t_stop, a_brake};
+}
+
+bool JerkLimitedTrajectory::verify_stop_reachability(const TrajectoryState& s,
+                                                     double q_boundary_rad,
+                                                     double a_brake, double j_brake) const {
+  // A (near) stationary axis is already stopped; it cannot cross a boundary by
+  // stopping, so the check is satisfied regardless of position.
+  if (std::fabs(s.v_rad_s) < kAtRestVelRadS) return true;
+  const StopPlan plan = plan_stop(s, a_brake, j_brake);
+  if (s.v_rad_s > 0.0) return plan.end_q_rad <= q_boundary_rad + 1e-9;
+  return plan.end_q_rad >= q_boundary_rad - 1e-9;
 }
 
 }  // namespace ota
