@@ -62,6 +62,14 @@ struct Defaults {
   double repeatability_deg = 0.5;
   double yaw_park_deg = 0.0;
   double pitch_park_deg = 0.0;
+  double park_pos_tolerance_deg = 0.5;
+  double park_vel_tolerance_deg_s = 1.0;
+  int park_dwell_ms = 500;
+  double park_speed_deg_s = 10.0;
+  int feedback_max_age_ms = 100;
+  int deadline_max_us = 2000;
+  int deadline_miss_threshold = 5;
+  double motor_overtemp_c = 75.0;
 };
 
 double opt_double(const YAML::Node& node, const std::string& key,
@@ -207,6 +215,52 @@ void load_contact(const YAML::Node& hc, HomingConfig& out, std::vector<std::stri
   if (cc.repeatability_deg <= 0.0) err.push_back(p + "repeatability_deg must be > 0");
 }
 
+// §25.2 homing_plan: an ordered list of homing steps. A missing/empty plan is
+// a hard error (the daemon needs a plan to home); each action is validated for
+// a known action/axis/endpoint/precision and, for `move`, a position.
+void load_homing_plan(const YAML::Node& root, HomingPlanConfig& out,
+                      std::vector<std::string>& warn, std::vector<std::string>& err) {
+  const YAML::Node plan = fetch(root, "homing_plan");
+  if (!plan.IsDefined() || !plan.IsSequence() || plan.size() == 0) {
+    err.push_back("missing or empty required section: homing_plan");
+    return;
+  }
+  int idx = 0;
+  for (const YAML::Node& a : plan) {
+    if (!a.IsDefined() || !a.IsMap()) {
+      err.push_back("homing_plan[" + std::to_string(idx) + "] must be a mapping");
+      ++idx;
+      continue;
+    }
+    const std::string p = "homing_plan[" + std::to_string(idx) + "].";
+    HomingPlanActionConfig ac;
+    ac.action = req_string(a, "action", p + "action", err);
+    ac.axis = req_string(a, "axis", p + "axis", err);
+    if (ac.action != "home_endpoint" && ac.action != "move" &&
+        ac.action != "home_full_range")
+      err.push_back(p + "action must be home_endpoint|move|home_full_range, got '" +
+                    ac.action + "'");
+    if (ac.axis != "pitch" && ac.axis != "yaw")
+      err.push_back(p + "axis must be pitch|yaw, got '" + ac.axis + "'");
+    if (ac.action == "home_endpoint") {
+      ac.endpoint = opt_string(a, "endpoint", p + "endpoint", "lower", warn);
+      ac.precision = opt_string(a, "precision", p + "precision", "fine", warn);
+      if (ac.endpoint != "lower" && ac.endpoint != "upper")
+        err.push_back(p + "endpoint must be lower|upper, got '" + ac.endpoint + "'");
+      if (ac.precision != "coarse" && ac.precision != "fine")
+        err.push_back(p + "precision must be coarse|fine, got '" + ac.precision + "'");
+    } else if (ac.action == "home_full_range") {
+      ac.precision = opt_string(a, "precision", p + "precision", "fine", warn);
+      if (ac.precision != "coarse" && ac.precision != "fine")
+        err.push_back(p + "precision must be coarse|fine, got '" + ac.precision + "'");
+    } else {  // move
+      ac.position_deg = req_double(a, "position_deg", p + "position_deg", err);
+    }
+    out.actions.push_back(ac);
+    ++idx;
+  }
+}
+
 }  // namespace
 
 LoadResult load_turret_config(const std::string& path) {
@@ -288,6 +342,7 @@ LoadResult load_turret_config(const std::string& path) {
   load_axis(fetch(root["axes"], "pitch"), "pitch", c.axes[0], warn, err);
   load_axis(fetch(root["axes"], "yaw"), "yaw", c.axes[1], warn, err);
   load_contact(fetch(root, "homing"), c.homing, warn, err);
+  load_homing_plan(root, c.homing_plan, warn, err);
   {
     const std::string p = "shutdown.";
     const YAML::Node sh = fetch(root, "shutdown");
@@ -295,6 +350,44 @@ LoadResult load_turret_config(const std::string& path) {
                                          Defaults().yaw_park_deg, warn);
     c.shutdown.pitch_park_deg = opt_double(sh, "pitch_park_deg", p + "pitch_park_deg",
                                            Defaults().pitch_park_deg, warn);
+    c.shutdown.pos_tolerance_deg =
+        opt_double(sh, "pos_tolerance_deg", p + "pos_tolerance_deg",
+                   Defaults().park_pos_tolerance_deg, warn);
+    c.shutdown.vel_tolerance_deg_s =
+        opt_double(sh, "vel_tolerance_deg_s", p + "vel_tolerance_deg_s",
+                   Defaults().park_vel_tolerance_deg_s, warn);
+    c.shutdown.dwell_ms = opt_int(sh, "dwell_ms", p + "dwell_ms",
+                                  Defaults().park_dwell_ms, warn);
+    c.shutdown.speed_deg_s =
+        opt_double(sh, "speed_deg_s", p + "speed_deg_s", Defaults().park_speed_deg_s, warn);
+    if (c.shutdown.pos_tolerance_deg <= 0.0)
+      err.push_back(p + "pos_tolerance_deg must be > 0");
+    if (c.shutdown.vel_tolerance_deg_s <= 0.0)
+      err.push_back(p + "vel_tolerance_deg_s must be > 0");
+    if (c.shutdown.dwell_ms <= 0) err.push_back(p + "dwell_ms must be > 0");
+    if (c.shutdown.speed_deg_s <= 0.0) err.push_back(p + "speed_deg_s must be > 0");
+  }
+  {
+    const std::string p = "safety.";
+    const YAML::Node sf = fetch(root, "safety");
+    c.safety.feedback_max_age_ms =
+        opt_int(sf, "feedback_max_age_ms", p + "feedback_max_age_ms",
+                Defaults().feedback_max_age_ms, warn);
+    c.safety.deadline_max_us =
+        opt_int(sf, "deadline_max_us", p + "deadline_max_us", Defaults().deadline_max_us, warn);
+    c.safety.deadline_miss_threshold =
+        opt_int(sf, "deadline_miss_threshold", p + "deadline_miss_threshold",
+                Defaults().deadline_miss_threshold, warn);
+    c.safety.motor_overtemp_c =
+        opt_double(sf, "motor_overtemp_c", p + "motor_overtemp_c",
+                   Defaults().motor_overtemp_c, warn);
+    if (c.safety.feedback_max_age_ms <= 0)
+      err.push_back(p + "feedback_max_age_ms must be > 0");
+    if (c.safety.deadline_max_us <= 0) err.push_back(p + "deadline_max_us must be > 0");
+    if (c.safety.deadline_miss_threshold <= 0)
+      err.push_back(p + "deadline_miss_threshold must be > 0");
+    if (c.safety.motor_overtemp_c <= 0.0)
+      err.push_back(p + "motor_overtemp_c must be > 0");
   }
 
   // tracking (sensible defaults).

@@ -54,16 +54,49 @@ struct HomingConfig {
   ContactConfig contact;
 };
 
+// One step of the multi-axis homing plan (§25.2). Units are degrees for
+// positions. `action` is "home_endpoint" | "move" | "home_full_range";
+// `axis` is "pitch" | "yaw"; `endpoint` ("lower" | "upper") and `precision`
+// ("coarse" | "fine") apply to the homing actions; `position_deg` applies to
+// `move`.
+struct HomingPlanActionConfig {
+  std::string action;
+  std::string axis;
+  std::string endpoint = "lower";
+  std::string precision = "fine";
+  double position_deg = 0.0;
+};
+
+// §25.2 `homing_plan:` block — an ordered, executable list of homing steps.
+struct HomingPlanConfig {
+  std::vector<HomingPlanActionConfig> actions;
+};
+
 // §40 `tracking:` block (§58 params 19-20).
 struct TrackingConfig {
   bool search_enabled_by_default = false;
   std::string target_lost_behavior = "hold";  // "hold" | "search"
 };
 
-// §40 `shutdown:` block (§58 param 4).
+// §40 `shutdown:` block (§58 param 4) + §33 park sequence parameters.
+// The park positions (deg, in the homed logical frame) must lie inside the
+// calibrated soft limits, not against the mechanical stop (§33.1).
 struct ShutdownConfig {
   double yaw_park_deg = 0.0;
   double pitch_park_deg = 0.0;
+  // §33.2 verification before the motors are de-energized.
+  double pos_tolerance_deg = 0.5;    // |q - q_park| below this counts as "at park"
+  double vel_tolerance_deg_s = 1.0;  // |v| below this counts as "settled"
+  int dwell_ms = 500;                // verification must hold for this long
+  double speed_deg_s = 10.0;         // speed limit for the park moves
+};
+
+// §38/§39 safety supervisor + watchdog tuning.
+struct SafetyConfig {
+  int feedback_max_age_ms = 100;     // §39.2: stale motor feedback -> no open-loop
+  int deadline_max_us = 2000;        // §39.3: cycle longer than this = a miss
+  int deadline_miss_threshold = 5;   // consecutive/short-window misses -> derate
+  double motor_overtemp_c = 75.0;    // §38: over-temperature fault threshold
 };
 
 struct CameraConfig {
@@ -87,8 +120,10 @@ struct TurretConfig {
   int control_loop_hz = 200;
   AxisLimitsConfig axes[2];
   HomingConfig homing;
+  HomingPlanConfig homing_plan;
   TrackingConfig tracking;
   ShutdownConfig shutdown;
+  SafetyConfig safety;
   CameraConfig camera;
   InstallationConfig installation;
   PayloadConfig payload;

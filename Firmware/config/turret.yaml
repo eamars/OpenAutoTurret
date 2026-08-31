@@ -49,6 +49,21 @@ homing:
     backoff_deg: 5
     repeatability_deg: 0.5
 
+# §25.2 executable multi-axis homing plan. Default for the simple pitch/yaw
+# gimbal: home each axis across its full mechanical range, yaw then pitch.
+# There is no articulated payload or known fixed obstruction, so no clearance
+# `move` steps are required. If the mechanism gains a payload or an obstruction
+# that forces one axis to a safe angle before another traverses, insert `move`
+# steps between the homes (architecture §25 / §25.2); the interpreter already
+# supports home_endpoint / move / home_full_range.
+homing_plan:
+  - action: home_full_range
+    axis: yaw
+    precision: fine
+  - action: home_full_range
+    axis: pitch
+    precision: fine
+
 tracking:
   search_enabled_by_default: false
   target_lost_behavior: hold    # hold | search (§58 params 19-20)
@@ -56,6 +71,19 @@ tracking:
 shutdown:
   yaw_park_deg: 0               # §58 param 4; refine to a safe side pose
   pitch_park_deg: 0
+  # §33.2 verification before the motors are de-energized (commanded shutdown
+  # only; see §33.3 for uncontrolled power loss).
+  pos_tolerance_deg: 0.5
+  vel_tolerance_deg_s: 1.0
+  dwell_ms: 500
+  speed_deg_s: 10
+
+# §38/§39 safety supervisor + watchdog tuning.
+safety:
+  feedback_max_age_ms: 100      # §39.2 stale motor feedback -> no open-loop
+  deadline_max_us: 2000         # §39.3 cycle longer than this counts as a miss
+  deadline_miss_threshold: 5    # misses in the window before a derate
+  motor_overtemp_c: 75.0        # §38 over-temperature fault threshold
 
 camera:
   intrinsics_file: calibration/camera_intrinsics.yaml

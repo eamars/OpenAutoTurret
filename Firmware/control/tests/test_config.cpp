@@ -52,12 +52,28 @@ homing:
     contact_dwell_ms: 250
     backoff_deg: 6
     repeatability_deg: 0.4
+homing_plan:
+  - action: home_full_range
+    axis: yaw
+    precision: fine
+  - action: home_full_range
+    axis: pitch
+    precision: fine
 tracking:
   search_enabled_by_default: false
   target_lost_behavior: hold
 shutdown:
   yaw_park_deg: 10
   pitch_park_deg: -5
+  pos_tolerance_deg: 0.5
+  vel_tolerance_deg_s: 1.0
+  dwell_ms: 500
+  speed_deg_s: 10
+safety:
+  feedback_max_age_ms: 100
+  deadline_max_us: 2000
+  deadline_miss_threshold: 5
+  motor_overtemp_c: 75.0
 )";
 
 }  // namespace
@@ -85,7 +101,93 @@ TEST(Config, ValidFullConfigLoads) {
   EXPECT_EQ(r.config.homing.contact.contact_dwell_ms, 250);
   EXPECT_DOUBLE_EQ(r.config.shutdown.yaw_park_deg, 10.0);
   EXPECT_DOUBLE_EQ(r.config.shutdown.pitch_park_deg, -5.0);
+  EXPECT_DOUBLE_EQ(r.config.shutdown.pos_tolerance_deg, 0.5);
+  EXPECT_DOUBLE_EQ(r.config.shutdown.vel_tolerance_deg_s, 1.0);
+  EXPECT_EQ(r.config.shutdown.dwell_ms, 500);
+  EXPECT_DOUBLE_EQ(r.config.shutdown.speed_deg_s, 10.0);
+  EXPECT_EQ(r.config.safety.feedback_max_age_ms, 100);
+  EXPECT_EQ(r.config.safety.deadline_max_us, 2000);
+  EXPECT_EQ(r.config.safety.deadline_miss_threshold, 5);
+  EXPECT_DOUBLE_EQ(r.config.safety.motor_overtemp_c, 75.0);
   EXPECT_EQ(r.config.tracking.target_lost_behavior, "hold");
+  // Homing plan parsed.
+  ASSERT_EQ(r.config.homing_plan.actions.size(), 2u);
+  EXPECT_EQ(r.config.homing_plan.actions[0].action, "home_full_range");
+  EXPECT_EQ(r.config.homing_plan.actions[0].axis, "yaw");
+  EXPECT_EQ(r.config.homing_plan.actions[0].precision, "fine");
+  EXPECT_EQ(r.config.homing_plan.actions[1].axis, "pitch");
+}
+
+TEST(Config, HomingPlanWithAllActionTypesLoads) {
+  const std::string body = R"(
+schema_version: 1
+can: { interface: can0, bitrate: 1000000, host_can_id: 0 }
+motors:
+  pitch: { can_id: 100, direction_sign: 1 }
+  yaw:   { can_id: 101, direction_sign: -1 }
+control: { loop_hz: 200 }
+homing_plan:
+  - action: home_endpoint
+    axis: pitch
+    endpoint: lower
+    precision: coarse
+  - action: move
+    axis: pitch
+    position_deg: 20
+  - action: home_full_range
+    axis: yaw
+    precision: fine
+)";
+  const std::string p = write_file("plan_all.yaml", body);
+  auto r = ota::config::load_turret_config(p);
+  EXPECT_TRUE(r.ok) << "errors: " << r.errors.size();
+  for (auto& e : r.errors) std::cerr << "  err: " << e << "\n";
+  ASSERT_EQ(r.config.homing_plan.actions.size(), 3u);
+  EXPECT_EQ(r.config.homing_plan.actions[0].action, "home_endpoint");
+  EXPECT_EQ(r.config.homing_plan.actions[0].endpoint, "lower");
+  EXPECT_EQ(r.config.homing_plan.actions[0].precision, "coarse");
+  EXPECT_EQ(r.config.homing_plan.actions[1].action, "move");
+  EXPECT_DOUBLE_EQ(r.config.homing_plan.actions[1].position_deg, 20.0);
+  EXPECT_EQ(r.config.homing_plan.actions[2].action, "home_full_range");
+}
+
+TEST(Config, MissingHomingPlanFails) {
+  const std::string body = R"(
+schema_version: 1
+can: { interface: can0, bitrate: 1000000, host_can_id: 0 }
+motors:
+  pitch: { can_id: 100, direction_sign: 1 }
+  yaw:   { can_id: 101, direction_sign: -1 }
+control: { loop_hz: 200 }
+)";
+  const std::string p = write_file("noplan.yaml", body);
+  auto r = ota::config::load_turret_config(p);
+  EXPECT_FALSE(r.ok);
+  bool found = false;
+  for (auto& e : r.errors)
+    if (e.find("homing_plan") != std::string::npos) found = true;
+  EXPECT_TRUE(found) << "expected a homing_plan error";
+}
+
+TEST(Config, BadHomingPlanActionFails) {
+  const std::string body = R"(
+schema_version: 1
+can: { interface: can0, bitrate: 1000000, host_can_id: 0 }
+motors:
+  pitch: { can_id: 100, direction_sign: 1 }
+  yaw:   { can_id: 101, direction_sign: -1 }
+control: { loop_hz: 200 }
+homing_plan:
+  - action: teleport
+    axis: pitch
+)";
+  const std::string p = write_file("badplan.yaml", body);
+  auto r = ota::config::load_turret_config(p);
+  EXPECT_FALSE(r.ok);
+  bool found = false;
+  for (auto& e : r.errors)
+    if (e.find("action must be") != std::string::npos) found = true;
+  EXPECT_TRUE(found) << "expected an action error";
 }
 
 TEST(Config, TbdValuesFallBackToConservativeDefaults) {
@@ -118,6 +220,9 @@ homing:
     contact_dwell_ms: TBD
     backoff_deg: TBD
     repeatability_deg: TBD
+homing_plan:
+  - { action: home_full_range, axis: yaw }
+  - { action: home_full_range, axis: pitch }
 )";
   const std::string p = write_file("tbd.yaml", body);
   auto r = ota::config::load_turret_config(p);
@@ -216,6 +321,9 @@ motors:
   pitch: { can_id: 100, direction_sign: 1 }
   yaw:   { can_id: 101, direction_sign: -1 }
 control: { loop_hz: 200 }
+homing_plan:
+  - { action: home_full_range, axis: yaw }
+  - { action: home_full_range, axis: pitch }
 )";
   const std::string p = write_file("defaults.yaml", body);
   auto r = ota::config::load_turret_config(p);
