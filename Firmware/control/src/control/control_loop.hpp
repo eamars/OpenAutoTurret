@@ -29,7 +29,9 @@
 #include <utility>
 
 #include "calibration/homing_plan.hpp"
+#include "calibration/installation_pose.hpp"
 #include "calibration/park_controller.hpp"
+#include "calibration/world_frame_telemetry.hpp"
 #include "control/motor_backend.hpp"
 #include "control/reference_manager.hpp"
 #include "control/safety_envelope.hpp"
@@ -105,6 +107,13 @@ class ControlLoop {
   // tracking_mode_enabled().
   const TrackingController& tracking_controller() const { return *tracking_; }
 
+  // --- installation orientation (Phase 7, §29/§30) -------------------------
+  // Set the active base->world orientation (loaded from the stored pose at
+  // boot, or updated by a calibration). Defaults to identity (assumed-level
+  // base). Consumed by the telemetry snapshot (world-frame LOS + base tilt).
+  void set_base_orientation(const BaseOrientation& o) { base_orientation_ = o; }
+  const BaseOrientation& base_orientation() const { return base_orientation_; }
+
   // One control cycle. `period_ns` is how long the previous cycle took (drives
   // the §39.3 deadline watchdog). Returns the (possibly updated) phase.
   Phase step(TimeNs now_ns, TimeNs period_ns);
@@ -152,6 +161,8 @@ class ControlLoop {
   int deadline_miss_count_ = 0;
   // Phase 6 tracking subsystem (null unless tracking mode is enabled).
   std::unique_ptr<TrackingController> tracking_;
+  // Phase 7 installation orientation (base -> world). Identity by default.
+  BaseOrientation base_orientation_ = identity_pose();
   ReferenceRequest tracking_ref_;  // produced each cycle while tracking is on
   bool has_pending_measurement_ = false;
   vision::TargetMeasurement pending_measurement_;

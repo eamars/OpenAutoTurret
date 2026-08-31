@@ -179,6 +179,18 @@ int main(int argc, char** argv) {
 
   // 5. Control loop: homing -> safe hold -> park on shutdown.
   ControlLoop loop(make_control_cfg(cfg), std::move(backend));
+
+  // Phase 7: load the stored installation orientation (base -> world, §29/§30).
+  // No calibration file => identity pose (assumed-level base); the telemetry
+  // reports it as uncalibrated so the web UI can prompt for a calibration.
+  FixedStoredPoseProvider pose_provider(cfg.installation.pose_file);
+  loop.set_base_orientation(pose_provider.get());
+  spdlog::info(
+      "installation pose: source={} calibrated={} (file={})",
+      pose_source_name(pose_provider.get().source),
+      (pose_provider.get().source != PoseSource::Identity) ? "yes" : "no",
+      cfg.installation.pose_file);
+
   HomingPlan plan = make_homing_plan(cfg, err);
   if (!err.empty()) {
     spdlog::error("homing plan invalid: {}", err);

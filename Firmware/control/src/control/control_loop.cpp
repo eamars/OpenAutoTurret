@@ -379,6 +379,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.safety_action = last_decision_.action;
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
+    // Phase 7: world-frame telemetry (§29/§30) — base tilt + world-frame LOS
+    // from the active R_W_B. Makes tracking world-correct for a tilted base.
+    double az_base = 0.0, el_base = 0.0;
+    tracking_->predicted_los(az_base, el_base);
+    fill_world_frame_telemetry(base_orientation_, az_base, el_base, snap);
     tracking_->telemetry().set_snapshot(snap);
   }
 

@@ -1,0 +1,500 @@
+"""OpenAutoTurret — installation orientation calibration (architecture §29).
+
+Visually calibrate the base->world rotation ``R_W_B`` from a fiducial board
+(ChArUco, §29.1) that is physically levelled or plumb during commissioning.
+The levelled board is the gravity reference: its frame coincides with the world
+frame up to a known, usually identity, ``R_W_D``. The camera-to-base extrinsic
+``R_P_C`` comes from the camera calibration (§28.3). Per observed frame we:
+
+  1. detect the board corners (cv2 ChArUco detector),
+  2. solve the camera pose relative to the board (PnP), giving ``R_C_D``/``t_C_D``
+     and a reprojection error (§29.2 inputs: intrinsics + fiducial geometry +
+     detected corners + current calibrated yaw/pitch + extrinsics),
+  3. derive ``R_W_B = R_W_D @ (R_P_C @ R_C_D)^T``,
+
+then collect N frames, reject outliers, and average (§29.3). The result is
+committed atomically to the same text format that controld's
+``FixedStoredPoseProvider`` reads (``control/src/calibration/installation_pose.hpp``).
+
+Safety: this module NEVER touches CAN or the motor driver. Camera frames are
+injected by the caller (CLI), so the math is fully testable on synthetic frames.
+"""
+from __future__ import annotations
+
+import math
+import os
+import struct
+import tempfile
+from dataclasses import dataclass, field
+from typing import Callable, List, Optional, Sequence, Tuple
+
+import numpy as np
+
+# cv2 is imported lazily so the pure-math helpers (R_W_B derivation, outlier
+# rejection, persistence) are importable and testable without OpenCV installed.
+def _cv2():
+    import cv2  # noqa: WPS433 (import guarded)
+    return cv2
+
+
+# --------------------------------------------------------------------------- #
+# Board / camera configuration                                                 #
+# --------------------------------------------------------------------------- #
+
+# ArUco dictionaries available in this cv2 build.
+_DICT_BY_NAME = {
+    "DICT_4X4_50": "DICT_4X4_50",
+    "DICT_4X4_100": "DICT_4X4_100",
+    "DICT_4X4_250": "DICT_4X4_250",
+    "DICT_4X4_1000": "DICT_4X4_1000",
+    "DICT_5X5_50": "DICT_5X5_50",
+    "DICT_5X5_100": "DICT_5X5_100",
+}
+
+
+@dataclass
+class BoardSpec:
+    """A ChArUco board with known metric geometry (§29.1 / §29.2)."""
+
+    marker_cols: int = 3
+    marker_rows: int = 3
+    square_length_m: float = 0.030   # chessboard square side (must be > marker)
+    marker_length_m: float = 0.020   # ArUco marker side
+    dictionary: str = "DICT_4X4_50"
+    marker_id_offset: int = 0
+
+    def make_cv_board(self):
+        """Build the cv2 CharucoBoard and return (board, object_points Nx3)."""
+        cv2 = _cv2()
+        aruco = cv2.aruco
+        if self.square_length_m <= self.marker_length_m:
+            raise ValueError(
+                "charuco requires square_length_m > marker_length_m "
+                f"({self.square_length_m} vs {self.marker_length_m})"
+            )
+        if self.dictionary not in _DICT_BY_NAME:
+            raise ValueError(f"unknown dictionary {self.dictionary!r}")
+        dict_ = aruco.getPredefinedDictionary(getattr(aruco, self.dictionary))
+        board = aruco.CharucoBoard(
+            (self.marker_cols, self.marker_rows),
+            self.square_length_m,
+            self.marker_length_m,
+            dict_,
+            self.marker_id_offset,
+        )
+        obj = np.asarray(board.getObjPoints(), dtype=np.float64).reshape(-1, 3)
+        return board, obj
+
+
+@dataclass
+class CameraIntrinsics:
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    distortion: Sequence[float] = (0.0, 0.0, 0.0, 0.0, 0.0)
+    width: int = 640
+    height: int = 480
+
+    @property
+    def K(self) -> np.ndarray:
+        return np.array(
+            [[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+
+    @property
+    def dist(self) -> np.ndarray:
+        return np.asarray(list(self.distortion), dtype=np.float64)
+
+    @classmethod
+    def load(cls, path: str) -> "CameraIntrinsics":
+        import yaml
+        with open(path) as f:
+            d = yaml.safe_load(f)
+        return cls(
+            fx=float(d["fx"]), fy=float(d["fy"]), cx=float(d["cx"]),
+            cy=float(d["cy"]),
+            distortion=tuple(float(x) for x in d.get("distortion", [0.0] * 5)),
+            width=int(d.get("width", 640)),
+            height=int(d.get("height", 480)),
+        )
+
+    def to_yaml(self) -> str:
+        return (
+            f"fx: {self.fx}\nfy: {self.fy}\ncx: {self.cx}\ncy: {self.cy}\n"
+            f"distortion: {list(self.distortion)}\n"
+            f"width: {self.width}\nheight: {self.height}\n"
+        )
+
+
+@dataclass
+class CameraExtrinsics:
+    """Camera-to-base extrinsic (the kinematics ``R_P_C``, §28.3).
+
+    ``R_P_C`` rotates a camera-frame vector into the base frame (the inverse of
+    the base->camera rotation). ``aligned()`` is the ideal-aligned camera.
+    """
+
+    R_P_C: np.ndarray = field(default_factory=lambda: np.identity(3))
+    t_P_C: np.ndarray = field(default_factory=lambda: np.zeros(3))
+
+    @classmethod
+    def aligned(cls) -> "CameraExtrinsics":
+        return cls(R_P_C=np.identity(3), t_P_C=np.zeros(3))
+
+    @classmethod
+    def load(cls, path: str) -> "CameraExtrinsics":
+        import yaml
+        with open(path) as f:
+            d = yaml.safe_load(f)
+        R = np.array(d.get("R_P_C", np.identity(3)), dtype=np.float64)
+        t = np.array(d.get("t_P_C", np.zeros(3)), dtype=np.float64)
+        return cls(R_P_C=R, t_P_C=t)
+
+    def to_yaml(self) -> str:
+        def fmt(m):
+            return "\n".join(
+                "  - [" + ", ".join(f"{v:.17g}" for v in row) + "]"
+                for row in self.R_P_C
+            )
+        return (
+            "R_P_C:\n" + fmt(self.R_P_C) + "\n"
+            "t_P_C: [" + ", ".join(f"{v:.17g}" for v in self.t_P_C) + "]\n"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Pose solve + R_W_B derivation                                                #
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class FramePose:
+    """One detected board observation (§29.3 per-frame pose)."""
+
+    R_C_D: np.ndarray        # board -> camera rotation (PnP)
+    t_C_D: np.ndarray        # board origin in camera frame (m)
+    reprojection_error_px: float
+    timestamp_ns: int
+    n_corners: int
+
+    @property
+    def R_D_C(self) -> np.ndarray:
+        return self.R_C_D.T
+
+
+def _rodrigues(rvec: np.ndarray) -> np.ndarray:
+    return np.asarray(_cv2().Rodrigues(np.asarray(rvec).reshape(3, 1))[0])
+
+
+def _geodesic_deg(R_a: np.ndarray, R_b: np.ndarray) -> float:
+    """Angle (deg) between two rotations via their relative rotation."""
+    c = (np.trace(R_a.T @ R_b) - 1.0) / 2.0
+    c = float(np.clip(c, -1.0, 1.0))
+    return math.degrees(math.acos(c))
+
+
+def solve_board_pose(
+    obj_points: np.ndarray,
+    image_points: np.ndarray,
+    intrinsics: CameraIntrinsics,
+    timestamp_ns: int,
+) -> FramePose:
+    """Solve the board->camera pose (PnP) from 3D/2D correspondences.
+
+    Returns a :class:`FramePose` with the recovered rotation/translation and the
+    mean reprojection error in pixels (§29.3 "report reprojection error").
+    """
+    cv2 = _cv2()
+    obj = np.asarray(obj_points, dtype=np.float64).reshape(-1, 3)
+    img = np.asarray(image_points, dtype=np.float64).reshape(-1, 2)
+    if len(obj) < 4 or len(obj) != len(img):
+        raise ValueError(f"need >=4 matching points, got {len(obj)}/{len(img)}")
+    success, rvec, tvec = cv2.solvePnP(
+        obj, img, intrinsics.K, intrinsics.dist,
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+    if not success:
+        raise RuntimeError("solvePnP failed")
+    R = _rodrigues(rvec)
+    t = np.asarray(tvec, dtype=np.float64).reshape(3)
+    proj, _ = cv2.projectPoints(obj, rvec, tvec, intrinsics.K, intrinsics.dist)
+    err = float(np.mean(np.linalg.norm(proj.reshape(-1, 2) - img, axis=-1)))
+    return FramePose(R, t, err, timestamp_ns, len(obj))
+
+
+def derive_R_W_B(
+    R_C_D: np.ndarray,
+    R_P_C: np.ndarray,
+    R_W_D: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Derive the base->world rotation from a board pose.
+
+    Frames: C = camera, B = base, D = (levelled) board, W = world.
+      * PnP gives ``R_C_D`` (board -> camera), so ``v_D = R_C_D^T v_C``.
+      * ``R_P_C`` (camera -> base): ``v_C = R_P_C^T v_B``.
+      * Levelled board: ``v_W = R_W_D v_D`` (identity when the board axes line
+        up with the world).
+    Chaining: ``R_W_B = R_W_D @ (R_P_C @ R_C_D)^T``.
+    """
+    if R_W_D is None:
+        R_W_D = np.identity(3)
+    R_W_B = R_W_D @ (np.asarray(R_P_C) @ np.asarray(R_C_D)).T
+    return _re_orthonormal(R_W_B)
+
+
+def _re_orthonormal(R: np.ndarray) -> np.ndarray:
+    """Project a near-rotation back onto SO(3) (removes numerical drift).
+
+    A matrix that is already orthonormal with det=+1 is returned unchanged:
+    SVD is degenerate for a perfect rotation (all singular values 1) and would
+    otherwise inject ~1e-8 rad of spurious error.
+    """
+    R = np.asarray(R, dtype=np.float64)
+    if (np.linalg.norm(R @ R.T - np.identity(3)) < 1e-10
+            and np.linalg.det(R) > 0):
+        return R
+    U, _, Vt = np.linalg.svd(R)
+    out = U @ Vt
+    if np.linalg.det(out) < 0:
+        U[:, -1] *= -1
+        out = U @ Vt
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Multi-frame calibration (outlier rejection + average, §29.3)                 #
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class CalibrationResult:
+    R_W_B: np.ndarray
+    covariance: float          # scalar attitude variance (rad^2)
+    n_frames: int              # frames that went into the result
+    n_rejected: int            # frames rejected as outliers
+    reprojection_error_px: float
+    per_frame_R_W_B: List[np.ndarray] = field(default_factory=list)
+    per_frame_error_px: List[float] = field(default_factory=list)
+    timestamp_ns: int = 0
+
+    @property
+    def valid(self) -> bool:
+        return self.n_frames >= 3
+
+
+def _average_rotations(Rs: Sequence[np.ndarray]) -> np.ndarray:
+    S = sum((np.asarray(R, dtype=np.float64) for R in Rs), start=np.zeros((3, 3)))
+    U, _, Vt = np.linalg.svd(S)
+    out = U @ Vt
+    if np.linalg.det(out) < 0:
+        U[:, -1] *= -1
+        out = U @ Vt
+    return out
+
+
+def calibrate_from_poses(
+    poses: Sequence[FramePose],
+    R_P_C: np.ndarray,
+    R_W_D: Optional[np.ndarray] = None,
+    max_outlier_deg: float = 3.0,
+    min_frames: int = 3,
+) -> CalibrationResult:
+    """Derive R_W_B per frame, reject outliers, and average (§29.3).
+
+    Two passes: a first consensus (SVD mean) seeds the outlier threshold; frames
+    farther than ``max_outlier_deg`` are dropped; the final R_W_B is the SVD mean
+    of the accepted frames. The scalar covariance is the variance (rad^2) of the
+    accepted frames' angular distance to the final mean.
+    """
+    if len(poses) < min_frames:
+        return CalibrationResult(
+            R_W_B=identity_R_W_B(), covariance=1e6, n_frames=len(poses),
+            n_rejected=0, reprojection_error_px=0.0,
+        )
+    per_frame = [derive_R_W_B(p.R_C_D, R_P_C, R_W_D) for p in poses]
+    # The plain SVD mean is sensitive to outliers: with a few gross outliers it
+    # is pulled enough that even inliers can exceed a tight threshold. Anchor the
+    # rejection to the frame nearest the initial consensus (a reliable inlier) so
+    # the threshold is measured against an unpolluted reference (§29.3).
+    consensus = _average_rotations(per_frame)
+    dists = [_geodesic_deg(r, consensus) for r in per_frame]
+    reference = per_frame[int(np.argmin(dists))]
+    ref_dists = [_geodesic_deg(r, reference) for r in per_frame]
+    keep = [i for i, d in enumerate(ref_dists) if d <= max_outlier_deg]
+    if len(keep) < min_frames:
+        keep = list(range(len(poses)))  # not enough inliers: keep all (flag via n)
+    final = _average_rotations([per_frame[i] for i in keep])
+    final_dists = [_geodesic_deg(per_frame[i], final) for i in keep]
+    cov = float(np.var(np.deg2rad(final_dists))) if len(keep) >= 2 else 1e6
+    reproj = float(np.mean([poses[i].reprojection_error_px for i in keep]))
+    return CalibrationResult(
+        R_W_B=final,
+        covariance=cov,
+        n_frames=len(keep),
+        n_rejected=len(poses) - len(keep),
+        reprojection_error_px=reproj,
+        per_frame_R_W_B=[per_frame[i] for i in keep],
+        per_frame_error_px=[poses[i].reprojection_error_px for i in keep],
+        timestamp_ns=max((poses[i].timestamp_ns for i in keep), default=0),
+    )
+
+
+def identity_R_W_B() -> np.ndarray:
+    return np.identity(3)
+
+
+# --------------------------------------------------------------------------- #
+# Detection wrapper                                                            #
+# --------------------------------------------------------------------------- #
+
+def make_detector(board_spec: BoardSpec):
+    """Return (cv_board, object_points, detector) for a BoardSpec."""
+    cv2 = _cv2()
+    board, obj = board_spec.make_cv_board()
+    detector = cv2.aruco.CharucoDetector(
+        board, cv2.aruco.CharucoParameters())
+    return board, obj, detector
+
+
+def detect_charuco(
+    frame_bgr: np.ndarray,
+    board,
+    detector,
+    min_corners: int = 4,
+):
+    """Detect the board in a frame.
+
+    Returns ``(object_points Nx3, image_points Nx2, n)`` where the two arrays
+    are already matched (via ``board.matchImagePoints``), ready for PnP.
+    Returns ``(None, None, 0)`` if too few corners are found.
+    """
+    corners, ids, _mc, _mi = detector.detectBoard(frame_bgr)
+    if corners is None or ids is None:
+        return None, None, 0
+    n = int(np.asarray(ids).size)
+    if n < min_corners:
+        return None, None, 0
+    obj_pts, img_pts = board.matchImagePoints(corners, ids)
+    obj_pts = np.asarray(obj_pts, dtype=np.float64).reshape(-1, 3)
+    img_pts = np.asarray(img_pts, dtype=np.float64).reshape(-1, 2)
+    return obj_pts, img_pts, n
+
+
+# --------------------------------------------------------------------------- #
+# Atomic persistence (C++-compatible format, §29.3 / §41)                      #
+# --------------------------------------------------------------------------- #
+
+def commit_R_W_B(result: CalibrationResult, path: str) -> None:
+    """Atomically write the calibrated R_W_B (temp file + rename, §41).
+
+    The format matches controld's ``load_installation_pose`` so the committed
+    file is directly loadable by the ``FixedStoredPoseProvider``.
+    """
+    R = np.asarray(result.R_W_B, dtype=np.float64)
+    lines = [
+        "# ota-installation-pose v1",
+        "source=visual_calibration",
+        "valid=1" if result.valid else "0",
+        f"timestamp_ns={result.timestamp_ns}",
+        f"covariance={result.covariance:.17g}",
+        f"n_frames={result.n_frames}",
+        f"reprojection_error_px={result.reprojection_error_px:.17g}",
+    ]
+    for i in range(3):
+        lines.append(
+            " ".join(f"{R[i, j]:.17g}" for j in range(3)))
+    payload = "\n".join(lines) + "\n"
+
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".install_", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)  # atomic on POSIX
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def load_R_W_B(path: str) -> Optional[np.ndarray]:
+    """Read a committed R_W_B (or None if missing/invalid)."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return None
+    matrix: List[float] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" in line:
+            continue
+        parts = line.split()
+        if len(parts) == 3:
+            try:
+                matrix.extend(float(x) for x in parts)
+            except ValueError:
+                return None
+    if len(matrix) != 9:
+        return None
+    R = np.array(matrix, dtype=np.float64).reshape(3, 3)
+    if not np.all(np.isfinite(R)):
+        return None
+    return _re_orthonormal(R)
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end (camera capture injected by the CLI)                              #
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class CalibrationConfig:
+    board: BoardSpec = field(default_factory=BoardSpec)
+    intrinsics: Optional[CameraIntrinsics] = None
+    extrinsics: Optional[CameraExtrinsics] = None
+    R_W_D: Optional[np.ndarray] = None   # None => identity (levelled, aligned)
+    n_frames: int = 20
+    max_outlier_deg: float = 3.0
+    min_frames: int = 3
+
+
+def run_calibration(
+    capture: Callable[[], Optional[np.ndarray]],
+    clock_ns: Callable[[], int],
+    cfg: CalibrationConfig,
+) -> CalibrationResult:
+    """Collect ``n_frames`` valid observations and calibrate R_W_B.
+
+    ``capture`` yields a BGR frame or None (no frame yet); ``clock_ns`` yields a
+    monotonic timestamp. Neither is a motor/can call. This is the routine the
+    webd "start installation visual calibration" command drives.
+    """
+    board, obj_full, detector = make_detector(cfg.board)
+    poses: List[FramePose] = []
+    attempts = 0
+    max_attempts = max(cfg.n_frames * 20, 200)
+    while len(poses) < cfg.n_frames and attempts < max_attempts:
+        attempts += 1
+        frame = capture()
+        if frame is None:
+            continue
+        obj_pts, img_pts, n = detect_charuco(
+            frame, board, detector, min_corners=cfg.min_frames)
+        if img_pts is None:
+            continue
+        ts = clock_ns()
+        poses.append(
+            solve_board_pose(obj_pts, img_pts, cfg.intrinsics, ts))
+    result = calibrate_from_poses(
+        poses,
+        cfg.extrinsics.R_P_C if cfg.extrinsics else np.identity(3),
+        cfg.R_W_D,
+        cfg.max_outlier_deg,
+        cfg.min_frames,
+    )
+    return result

@@ -161,3 +161,5 @@ cython_debug/
 
 # Ignore Yolo file
 *.pt
+# stray nohup output
+nohup.out

@@ -42,6 +42,16 @@ struct TelemetrySnapshot {
   tracking::TrackState track_state = tracking::TrackState::ReadyHold;
   double target_confidence = 0.0;
   bool tracking_active = false;
+  double target_az_world_rad = 0.0;   // world-frame LOS (valid when tracking)
+  double target_el_world_rad = 0.0;
+  // Installation orientation (§29/§30, Phase 7): base tilt relative to level,
+  // from the active R_W_B. installation_source is the PoseSource enum value
+  // (kept as an int to keep this header decoupled from the calibration module).
+  double base_roll_rad = 0.0;
+  double base_pitch_rad = 0.0;
+  double base_yaw_rad = 0.0;
+  bool installation_calibrated = false;  // true iff a real (non-identity) pose
+  int8_t installation_source = 0;        // PoseSource::Unknown default
   // Safety / timing.
   SafetyAction safety_action = SafetyAction::Allow;
   int64_t feedback_age_ms = 0;
