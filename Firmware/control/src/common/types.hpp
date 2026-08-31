@@ -13,6 +13,11 @@ namespace ota {
 
 using TimeNs = int64_t;
 
+// Unit conversions (mechanical coordinates are radians internally; the host
+// logical frame and most configuration values are degrees).
+constexpr double kRad2Deg = 180.0 / 3.14159265358979323846;
+constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
+
 // Logical axes. CAN IDs come from configuration, never hard-coded here.
 enum class AxisId : uint8_t {
   Pitch = 0,

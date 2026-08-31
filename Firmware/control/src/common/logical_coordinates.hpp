@@ -14,10 +14,9 @@
 
 #include <cmath>
 
-namespace ota {
+#include "common/types.hpp"
 
-constexpr double kRad2Deg = 180.0 / 3.14159265358979323846;
-constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
+namespace ota {
 
 // Affine raw<->logical model for one axis. All logical values are degrees, all
 // raw values are radians (feedback-angle space). The mapping is identity-safe:
