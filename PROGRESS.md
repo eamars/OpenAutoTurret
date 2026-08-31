@@ -14,7 +14,7 @@
 |---|---|:---:|---|
 | 0 | Preserve/instrument POC | [x] | POC archived under `Firmware/legacy/` (commit d9e79cc); reference doc `CyberGear_AI_Reference.md` committed (b6e942b) |
 | 1 | Production CAN/motor layer | [~] | See checklist below |
-| 2 | Homing and safety foundation | [~] | Config, logical coords, contact detector, per-endpoint homing FSM, full-axis homing (§23) all done+tested; safety envelope/supervisor/boot/park pending |
+| 2 | Homing and safety foundation | [~] | Config, logical coords, contact detector, homing FSM, full-axis (§23), multi-axis plan (§25), soft-limit envelope (§18), safety supervisor (§38/§39), boot FSM (§27), park (§33), and the `controld` daemon all done+tested; calibration persistence (§28/§41) pending |
 | 3 | Trajectory generator | [~] | Online jerk-limited generator + 4 tests done; stopping/stop-reachability + collision envelope pending |
 | 4 | Vision daemon (Python) | [ ] | |
 | 5 | Geometry and estimator (C++) | [ ] | |
@@ -72,12 +72,13 @@
 - [x] Contact detector (§21): filtered velocity/progress/signed-effort, dwell, independent hard abort (5 tests)
 - [x] Precision homing state machine per endpoint (§22): coarse approach → back-off → settle → fine approach → repeatability verify (5 tests, §26 failure semantics)
 - [x] Full-axis homing + travel band validation (§23): wrapper `calibration/full_axis_homing.{hpp,cpp}` (home A → traverse → home B → validate span, build logical model); 5 unit tests on a two-stop simulated plant (success, travel too short/long → invalid, endpoint A fault / endpoint B timeout → whole axis fails)
-- [ ] Multi-axis homing plan interpreter (§25, §25.1, §25.2): `home_endpoint` / `move` / `home_full_range` steps, clearance poses
-- [ ] Soft limits + braking envelope (§18.1, §18.2): stop feasibility from trajectory model
-- [ ] Safety supervisor (§38) with layered watchdogs (§39)
-- [ ] Boot state machine (§27) incl. FAULT_LOCKED path
-- [ ] Safe shutdown/park state machine (§33) incl. verification + dwell
-- [~] Unit tests: contact detector (5), homing FSM (5), full-axis homing (5), trajectory (4) done; stop feasibility tests pending
+- [x] Multi-axis homing plan interpreter (§25, §25.1, §25.2): `home_endpoint` / `move` / `home_full_range` steps — `calibration/homing_plan.{hpp,cpp}` (8 tests)
+- [x] Soft limits + braking envelope (§18.1, §18.2): stop feasibility from the trajectory stop model — `control/safety_envelope.{hpp,cpp}` (9 tests); independent of trajectory gen (§18.3)
+- [x] Safety supervisor (§38) with layered watchdogs (§39): pure const-evaluable decision gate (owns the envelope), stale-feedback/over-temp/deadline layers, homing gate per §38.1 — `control/safety_supervisor.{hpp}` (13 tests)
+- [x] Boot state machine (§27) incl. FAULT_LOCKED path: POWER_ON→…→DISCOVER→MOTOR_SELF_TEST→UNHOMED (camera/installation/payload stubbed in Phase 2) — `control/boot_fsm.{hpp,cpp}` (3 tests)
+- [x] Safe shutdown/park state machine (§33) incl. verification + dwell: move yaw→pitch, verify pos+vel, dwell, de-energize pitch→yaw; rejects a park pose outside the soft limits (§33.1) — `calibration/park_controller.{hpp,cpp}` (5 tests)
+- [x] `controld` daemon: `MotorBackend` abstraction + `SimMotorBackend` (test plant) + `CanMotorBackend` (real CAN, §46 position-mode recipe) + `ControlLoop` (§46 200 Hz engine) + `main.cpp` (config→boot→home→hold→park, SIGINT/SIGTERM park) — `control/src/control/`, `control/src/main.cpp`
+- [x] Unit tests: 15 ctest binaries green (config 9, contact 5, homing 5, full-axis 5, homing plan 8, trajectory 4, envelope 9, supervisor 13, park 5, control loop 3, boot fsm 3, protocol/history/seqlock/timing)
 
 ## Phase 3 — Trajectory generator
 
@@ -220,3 +221,31 @@
   faults). Full suite now 9/9 binaries green (60 tests: config 9, contact
   detector 5, full-axis homing 5, history 7, homing 5, protocol 17, seqlock 4,
   timing stats 4, trajectory 4). Committed wrapper + tests.
+
+- **2026-09-01 (NZST)** — Completed the Phase 2 safety foundation and the
+  `controld` daemon (all in simulation; **no live motor motion**). New transport
+  abstraction `control/motor_backend.hpp` (SETUP: discover/read/enter-position-mode/
+  de-energize; CONTROL LOOP: non-blocking snapshot + fire-and-forget command) so
+  `ControlLoop`/`BootFsm` depend only on the interface (§54 testability). Two
+  backends: `sim/sim_motor_backend.hpp` (first-order position plant with end stops
+  + stall effort, so contact detection and park settle behave like the real motor —
+  a bang-bang velocity model was rejected: it limit-cycled and never settled below
+  the MoveTo velocity tolerance) and `control/can_motor_backend.{hpp,cpp}` (real
+  CyberGear transport; the verified-live §46 position-mode recipe: stop→50 ms→
+  RunMode=1→enable→50 ms→LimitSpd→read MechPos→LocRef=current). New `ControlLoop`
+  (`control/control_loop.{hpp,cpp}`), the §46 200 Hz per-cycle engine: snapshot →
+  deadline watchdog → supervisor decision → per-axis phase reference (homing/hold/
+  park/fault) → safety action (Allow/Derate/Hold/Brake/Disable) → command; tracking
+  is hard-disabled in Phase 2. `BootFsm` (§27, boot-only slow path): discover +
+  self-test → UNHOMED, any failure → FAULT_LOCKED. `main.cpp` rewritten: config →
+  open CAN → boot → start homing → 200 Hz hold loop → SIGINT/SIGTERM park. Fixed a
+  post-homing-recovery bug: a freshly-homed axis sits at the raw stop (outside the
+  inset soft limit) at rest, so `stop_feasible` now short-circuits `true` when
+  |v| < at_rest (a stationary axis cannot cross a boundary by stopping). Added
+  `Firmware/docs/post_homing_test_queue.md` (prioritized live/HIL queue: P0 live
+  homing → P1 hold → P2 park → P3 re-home repeatability → P4 stale feedback → P5
+  fault injection → P6 payload stub; flags the 0/0 park default that violates
+  §33.1). Full suite now **15/15 ctest binaries green**; `controld` builds and
+  exits cleanly on a bad config (no CAN). **Stopping here, before the live homing
+  run** (user authorizes/runs it). Next: live homing → post-homing queue → (Phase 3)
+  collision envelope + tracking.

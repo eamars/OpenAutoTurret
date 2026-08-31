@@ -67,6 +67,7 @@ struct SupervisorDecision {
 
 class SafetySupervisor {
  public:
+  SafetySupervisor() = default;
   explicit SafetySupervisor(SupervisorParams p) : p_(p) {
     SafetyEnvelopeParams e;
     e.a_brake_rad_s2 = p_.a_brake_rad_s2;

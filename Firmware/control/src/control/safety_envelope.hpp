@@ -68,6 +68,11 @@ struct SafetyEnvelopeParams {
   double j_brake_rad_s3 = 300.0 * kDeg2Rad;  // braking jerk
   double margin_rad = 0.05;                  // extra distance margin (safety)
   double v_max_rad_s = 30.0 * kDeg2Rad;      // fallback speed when no limits set
+  // |v| below this is "at rest": a stationary axis cannot cross a boundary by
+  // stopping, so the Layer-3 stop-feasibility check does not apply to it. This
+  // is what lets a freshly-homed axis (sitting at a stop, outside the inset
+  // soft limit) recover toward the ready pose instead of tripping Layer 3.
+  double at_rest_vel_rad_s = 1e-3;
 };
 
 class SafetyEnvelope {
@@ -89,6 +94,10 @@ class SafetyEnvelope {
   // When limits are not valid there is nothing to check (returns true).
   bool stop_feasible(double q_rad, double v_rad_s, const AxisLimits& lim) const {
     if (!lim.valid) return true;
+    // A (near) stationary axis is already stopped; it cannot cross a boundary
+    // by stopping, so the check is satisfied regardless of position. See the
+    // at_rest_vel_rad_s note above (post-homing recovery from a stop).
+    if (std::fabs(v_rad_s) < p_.at_rest_vel_rad_s) return true;
     const double d_stop = stop_distance(v_rad_s);
     const double d_avail = (v_rad_s > 0.0) ? (lim.q_soft_max_rad - q_rad)
                         : (v_rad_s < 0.0) ? (q_rad - lim.q_soft_min_rad)
