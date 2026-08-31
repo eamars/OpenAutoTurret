@@ -25,6 +25,10 @@ enum class AxisId : uint8_t {
   Count = 2,
 };
 
+// Number of axes as a plain int (AxisId is an enum class and cannot index a
+// built-in array / std::array or be used in integer comparisons directly).
+inline constexpr int kAxisCount = static_cast<int>(AxisId::Count);
+
 inline constexpr const char* axis_name(AxisId a) {
   switch (a) {
     case AxisId::Pitch: return "pitch";
