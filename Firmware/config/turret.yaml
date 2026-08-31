@@ -1,0 +1,68 @@
+# OpenAutoTurret — production configuration (architecture §40 / §58).
+#
+# Commissioning values (§58) below are CONSERVATIVE PLACEHOLDERS: they keep the
+# daemon safe (slow speeds, wide soft-limit bands) until the real numbers are
+# measured on this mechanism. Update them during commissioning — they are config,
+# never compile-time assumptions. The loader treats a missing key or the literal
+# "TBD" as "use the built-in conservative default" and records a warning.
+schema_version: 1
+
+can:
+  interface: can0
+  bitrate: 1000000        # CyberGear runs at 1 Mbit/s.
+  host_can_id: 0          # host data2 field.
+
+motors:
+  pitch:
+    can_id: 100           # 0x64 (discovery ground truth).
+    direction_sign: 1     # logical -> mechanical sense; verify at commissioning.
+  yaw:
+    can_id: 101           # 0x65 (discovery ground truth).
+    direction_sign: -1    # logical -> mechanical sense; verify at commissioning.
+
+control:
+  loop_hz: 200            # frozen by §59.4; profiled.
+
+axes:
+  pitch:
+    # Wide band that contains the observed ~-86 deg position; refine after the
+    # first homing measures the true mechanical travel (§58 params 1-3).
+    expected_travel_deg: { min: -120, max: 120 }
+    soft_margin_deg: 5
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
+  yaw:
+    expected_travel_deg: { min: -180, max: 180 }
+    soft_margin_deg: 5
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
+
+homing:
+  contact:
+    coarse_speed_deg_s: 10      # slow coarse approach (§58 params 8, 10)
+    fine_speed_deg_s: 1         # very slow fine approach
+    current_or_effort_limit: 3.0
+    stall_velocity_threshold: 0.5   # rad/s; below this = stalled/in contact
+    contact_dwell_ms: 200
+    backoff_deg: 5
+    repeatability_deg: 0.5
+
+tracking:
+  search_enabled_by_default: false
+  target_lost_behavior: hold    # hold | search (§58 params 19-20)
+
+shutdown:
+  yaw_park_deg: 0               # §58 param 4; refine to a safe side pose
+  pitch_park_deg: 0
+
+camera:
+  intrinsics_file: calibration/camera_intrinsics.yaml
+  extrinsics_file: calibration/camera_extrinsics.yaml
+
+installation:
+  pose_file: calibration/installation_pose.yaml
+
+payload:
+  active_profile: conservative
