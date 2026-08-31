@@ -1,7 +1,6 @@
 # Waveshare RS485 CAN HAT Setup Record
 
 Date: 2026-08-30
-Host: `192.168.2.79` (`rpi-turret`)
 Guide: [Waveshare RS485 CAN HAT Wiki](https://www.waveshare.com/wiki/RS485_CAN_HAT)
 
 ## Scope

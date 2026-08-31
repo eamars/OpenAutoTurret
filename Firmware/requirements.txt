@@ -1,4 +1,0 @@
-python-can
-ultralytics
-wpilib
-jupyterlab

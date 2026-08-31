@@ -1,7 +1,6 @@
 # Raspberry Pi AI Camera Setup Record
 
 Date: 2026-08-30
-Host: `192.168.2.79` (`rpi-turret`)
 Guide: [Raspberry Pi AI Camera documentation](https://www.raspberrypi.com/documentation/accessories/ai-camera.html)
 
 ## Result
