@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -139,9 +140,17 @@ class Telemetry {
   static constexpr std::size_t kEventCap = 512;
   static constexpr std::size_t kBlackBoxCap = 8192;     // ~40 s at 200 Hz
 
-  // §6.3 the current-cycle snapshot (overwritten each cycle).
-  void set_snapshot(const TelemetrySnapshot& s) { snapshot_ = s; }
-  const TelemetrySnapshot& snapshot() const { return snapshot_; }
+  // §6.3 the current-cycle snapshot (overwritten each cycle). The web/log
+  // processes read this from a non-real-time thread, so the snapshot is
+  // guarded by a lightweight mutex (uncontended in the hot path, ~tens of ns).
+  void set_snapshot(const TelemetrySnapshot& s) {
+    std::lock_guard<std::mutex> lk(snapshot_mu_);
+    snapshot_ = s;
+  }
+  TelemetrySnapshot snapshot() const {
+    std::lock_guard<std::mutex> lk(snapshot_mu_);
+    return snapshot_;
+  }
 
   // §43.1 high-rate control log.
   void push_control(const ControlLogRecord& r) { control_log_.push(r); }
@@ -172,6 +181,7 @@ class Telemetry {
   }
 
  private:
+  mutable std::mutex snapshot_mu_;
   TelemetrySnapshot snapshot_;
   RingBuffer<ControlLogRecord, kControlLogCap> control_log_;
   RingBuffer<EventRecord, kEventCap> event_log_;

@@ -107,4 +107,16 @@ inline constexpr const char* system_state_name(SystemState s) {
   return "?";
 }
 
+inline constexpr const char* safety_action_name(SafetyAction a) {
+  switch (a) {
+    case SafetyAction::Allow:     return "ALLOW";
+    case SafetyAction::Derate:    return "DERATE";
+    case SafetyAction::Brake:     return "BRAKE";
+    case SafetyAction::Hold:      return "HOLD";
+    case SafetyAction::FaultStop: return "FAULT_STOP";
+    case SafetyAction::Disable:   return "DISABLE";
+  }
+  return "?";
+}
+
 }  // namespace ota

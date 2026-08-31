@@ -1,6 +1,8 @@
 // OpenAutoTurret — ControlLoop implementation (§46 per-cycle engine).
 #include "control/control_loop.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -158,6 +160,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     last_q_[i] = sp[i].q_rad;  // for telemetry
   }
 
+  // 1a. Phase 8: execute any developer commands submitted via the web UI
+  //     (§42.2). They were validated against the previous cycle's state on the
+  //     web thread; execution happens HERE on the control thread so all state
+  //     mutation stays single-threaded.
+  process_commands();
+
   // 1b. Phase 6: feed the tracking controller the current pose (for §11
   //      timestamp interpolation) and consume any pending visiond measurement.
   if (tracking_) {
@@ -257,10 +265,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
         break;
       }
+      // Phase 8: restricted one-shot test motion (§42.2) on yaw, validated by
+      // the web UI and re-clamped by the envelope below. Takes priority over
+      // the ready pose for that cycle.
+      const bool test_motion = has_test_motion_;
+      has_test_motion_ = false;
       // Move to the safe ready pose (if not already there), then hold. Never
       // press against a stop.
       at_ready_ = true;
       for (int i = 0; i < kAxisCount; ++i) {
+        if (test_motion && i == (int)ix(AxisId::Yaw)) {
+          const double target =
+              env_.constrain_reference(test_motion_target_rad_, limits_[i]);
+          q_ref[i] = target;
+          lim[i] = std::min(cfg_.hold_speed_rad_s,
+                            env_.max_speed_at(target, limits_[i]));
+          at_ready_ = false;
+          continue;
+        }
         if (std::fabs(sp[i].q_rad - ready_raw_[i]) > kReadyPosTolRad) {
           q_ref[i] = ready_raw_[i];
           lim[i] = cfg_.hold_speed_rad_s;
@@ -343,9 +365,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     fault(last_decision_.reason);
   }
 
-  // 8. Phase 6 telemetry (§43): fill the high-rate control log + black box and
-  //    the snapshot with this cycle's data. In-memory only (§46: no I/O here).
-  if (tracking_) {
+  // 8. Telemetry (§43, §6.3): ALWAYS fill the §6.3 snapshot (webd/logd read it
+  //    at 10-20 Hz from a non-RT thread) plus the high-rate logs. In-memory
+  //    only (§46: no I/O in the control loop). Tracking fields are populated
+  //    only while tracking mode is enabled.
+  {
     telemetry::ControlLogRecord rec;
     rec.timestamp_ns = now_ns;
     rec.q_actual[ix(AxisId::Pitch)] = sp[ix(AxisId::Pitch)].q_rad;
@@ -359,35 +383,137 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                               ? (now_ns - sp[ix(AxisId::Yaw)].rx_ns) / 1000000
                               : INT64_MAX;
     rec.cycle_duration_us = period_ns / 1000;
-    rec.track_state = tracking_->track_state();
+    rec.track_state = tracking_ ? tracking_->track_state()
+                                : tracking::TrackState::ReadyHold;
     for (int i = 0; i < kAxisCount; ++i)
       rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
-    tracking_->telemetry().push_control(rec);
-    tracking_->telemetry().push_blackbox(rec);
+    telemetry_.push_control(rec);
+    telemetry_.push_blackbox(rec);
 
     telemetry::TelemetrySnapshot snap;
     snap.timestamp_ns = now_ns;
     snap.q_yaw_rad = sp[ix(AxisId::Yaw)].q_rad;
     snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
+    snap.effort_yaw = sp[ix(AxisId::Yaw)].torque_nm;
     snap.q_pitch_rad = sp[ix(AxisId::Pitch)].q_rad;
     snap.v_pitch_rad_s = sp[ix(AxisId::Pitch)].v_rad_s;
+    snap.effort_pitch = sp[ix(AxisId::Pitch)].torque_nm;
     snap.q_ref_yaw_rad = q_ref[ix(AxisId::Yaw)];
     snap.q_ref_pitch_rad = q_ref[ix(AxisId::Pitch)];
-    snap.track_state = tracking_->track_state();
-    snap.target_confidence = tracking_->confidence();
-    snap.tracking_active = tracking_ref_.is_tracking_reference;
+    snap.track_state = tracking_ ? tracking_->track_state()
+                                 : tracking::TrackState::ReadyHold;
+    snap.target_confidence = tracking_ ? tracking_->confidence() : 0.0;
+    snap.tracking_active = tracking_ && tracking_ref_.is_tracking_reference;
     snap.safety_action = last_decision_.action;
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
     // Phase 7: world-frame telemetry (§29/§30) — base tilt + world-frame LOS
     // from the active R_W_B. Makes tracking world-correct for a tilted base.
     double az_base = 0.0, el_base = 0.0;
-    tracking_->predicted_los(az_base, el_base);
+    if (tracking_) tracking_->predicted_los(az_base, el_base);
     fill_world_frame_telemetry(base_orientation_, az_base, el_base, snap);
-    tracking_->telemetry().set_snapshot(snap);
+    telemetry_.set_snapshot(snap);
+  }
+
+  // 8b. Phase 8: publish the command-validation state (§42.2) so the web thread
+  //     can validate developer commands against the authoritative state.
+  {
+    std::lock_guard<std::mutex> lk(command_mutex_);
+    command_state_.homed = homed_;
+    command_state_.fault = (phase_ == Phase::Fault);
+    command_state_.tracking_enabled = tracking_ != nullptr;
+    command_state_.tracking_active =
+        tracking_ && tracking_ref_.is_tracking_reference;
+    command_state_.search_enabled =
+        tracking_ && tracking_->track_state() == tracking::TrackState::Search;
+    command_state_.moving = (phase_ == Phase::Homing) ||
+                            (phase_ == Phase::Parking) ||
+                            (last_decision_.action != SafetyAction::Allow &&
+                             last_decision_.action != SafetyAction::Hold);
+    command_state_.limits_valid =
+        limits_[ix(AxisId::Pitch)].valid && limits_[ix(AxisId::Yaw)].valid;
+    command_state_.q_min_rad[web::kPitchIx] =
+        limits_[ix(AxisId::Pitch)].q_soft_min_rad;
+    command_state_.q_max_rad[web::kPitchIx] =
+        limits_[ix(AxisId::Pitch)].q_soft_max_rad;
+    command_state_.q_min_rad[web::kYawIx] = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
+    command_state_.q_max_rad[web::kYawIx] = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
   }
 
   return phase_;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: developer-command plumbing (§42.2).
+// ---------------------------------------------------------------------------
+
+web::CommandResult ControlLoop::submit_command(const std::string& name,
+                                               const std::string& arg) {
+  std::lock_guard<std::mutex> lk(command_mutex_);
+  web::CommandResult r = web::validate_command(command_state_, name, arg);
+  if (r.ok) command_queue_.emplace_back(name, arg);
+  return r;
+}
+
+void ControlLoop::process_commands() {
+  std::deque<std::pair<std::string, std::string>> cmds;
+  {
+    std::lock_guard<std::mutex> lk(command_mutex_);
+    cmds.swap(command_queue_);
+  }
+  for (auto& c : cmds) execute_command(c.first, c.second);
+}
+
+void ControlLoop::disable_tracking() {
+  tracking_.reset();
+  tracking_ref_ = ReferenceRequest{};
+}
+
+void ControlLoop::execute_command(const std::string& name,
+                                  const std::string& arg) {
+  std::string err;
+  if (name == "hold") {
+    // Hold: drop any tracking reference so the loop settles at the ready pose.
+    if (tracking_) disable_tracking();
+    return;
+  }
+  if (name == "start_tracking") {
+    if (tracking_) return;  // already enabled (validation should have caught it)
+    TrackingController::Config tcfg;
+    if (!enable_tracking(tcfg, err)) {
+      spdlog::warn("start_tracking rejected: {}", err);
+    }
+    return;
+  }
+  if (name == "stop_tracking") {
+    disable_tracking();
+    return;
+  }
+  if (name == "request_park") {
+    if (!start_parking(err)) spdlog::warn("request_park rejected: {}", err);
+    return;
+  }
+  if (name == "request_shutdown") {
+    shutdown_requested_.store(true);
+    return;
+  }
+  if (name == "run_test_motion") {
+    // Restricted one-shot move to `arg` radians on the yaw axis (already
+    // envelope-checked by validate_command). The reference manager will clamp
+    // it against the soft limits on the next cycle as well.
+    test_motion_target_rad_ = std::stod(arg);
+    has_test_motion_ = true;
+    return;
+  }
+  if (name == "select_target" || name == "enable_search" ||
+      name == "disable_search" || name == "start_homing" ||
+      name == "start_installation_calibration" ||
+      name == "start_payload_verification") {
+    // These are validated here but acted on by the tracking/vision subsystem or
+    // an external tool (see webd). Acknowledge so the UI can proceed.
+    return;
+  }
+  spdlog::warn("unhandled web command: {}", name);
 }
 
 }  // namespace ota

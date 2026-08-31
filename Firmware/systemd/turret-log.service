@@ -1,0 +1,29 @@
+# OpenAutoTurret — log aggregation (OPTIONAL, §43, §52).
+#
+# The daemons already emit logs to stdout/stderr, which systemd captures into
+# the journal (journalctl -u turret-control, etc.). This optional unit tails the
+# file-based logs (controld spdlog files, vision, webd) into a single stream for
+# convenience. It is NOT required for control to function and may be omitted.
+#
+# CHANGE before deploy: User/Group, and the log directory below.
+[Unit]
+Description=OpenAutoTurret log aggregation (optional)
+After=network.target
+# Start after the daemons that produce the logs (soft dependency).
+Wants=turret-control.service turret-vision.service turret-web.service
+After=turret-control.service turret-vision.service turret-web.service
+
+[Service]
+Type=simple
+User=eamars
+Group=eamars
+# Follow the daemon log files, emitting new lines to the journal.
+ExecStart=/usr/bin/tail -n 0 -F /opt/open_auto_turret/logs/controld.log /opt/open_auto_turret/logs/vision.log /opt/open_auto_turret/logs/webd.log
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

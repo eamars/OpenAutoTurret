@@ -118,15 +118,21 @@
 
 ## Phase 7 — Installation orientation
 
-- [ ] `installation_pose.*`: `InstallationPoseProvider` interface + `FixedStoredPoseProvider` (§30)
-- [ ] Fiducial (ChArUco/AprilTag) multi-frame visual calibration, outlier rejection, atomic commit (§29)
-- [ ] World-frame telemetry
+- [x] `installation_pose.*`: `InstallationPoseProvider` interface + `FixedStoredPoseProvider` (§30) — `calibration/installation_pose.hpp` (+ `test_installation_pose`); `main.cpp` loads the pose file and feeds `loop.set_base_orientation(...)`
+- [x] Fiducial (ChArUco) multi-frame visual calibration, outlier rejection, atomic commit (§29) — `vision/installation_calibration.py` (+ `test_installation_calibration`); R_W_B written as C++-compatible text, atomically committed; camera-only, no motor
+- [x] World-frame telemetry (§29/§30) — `calibration/world_frame_telemetry.hpp` (+ `test_world_frame_telemetry`): base tilt + world-frame LOS from the active R_W_B, published in the §6.3 snapshot
+- [x] controld loads the stored pose at boot and makes tracking world-correct for a tilted base
 
 ## Phase 8 — Web UI and diagnostics
 
-- [ ] `web/webd` FastAPI: dashboard (§42.1), developer controls (§42.2), optional preview (§42.3)
-- [ ] Hostname-based access only, no hard-coded IP (§53)
-- [ ] UI load test: control p99 unaffected (§54.5)
+- [x] `web/webd` FastAPI: dashboard (§42.1 panels: System/Vision/Target/Yaw-pitch/Calibration/Video/CAN), developer controls (§42.2), low-priority video placeholder (§42.3) — `web/webd/app.py` + `dashboard.py`
+- [x] controld-side web server (§5.3/§6.1/§6.3): `control/src/web/web_server.hpp` — JSON over UDS `SOCK_SEQPACKET`, 10–20 Hz downsampled snapshot, command relay; never opens can0 (+ `test_web_server`)
+- [x] Developer-command validation gate (§42.2): `control/src/web/command_validation.hpp` + `ControlLoop::submit_command`/`process_commands` (validated on the web thread, executed on the control thread) (+ `test_command_validation`)
+- [x] Telemetry restructured: the loop ALWAYS fills the §6.3 snapshot (webd reads it from a non-RT thread); tracking fields conditional
+- [x] Hostname-based access only, no hard-coded IP (§53) — `web/webd/config.py` (bind host/port + socket path via env)
+- [x] webd tests (no CAN, no camera): `web/webd/tests/` — protocol, controld client, FastAPI app (+ a `FakeControld` server stand-in); 20 tests
+- [x] UI load test: control p99 unaffected, no client starvation, no CAN-feedback staleness (§54.5) — `tests/test_web_load.cpp`
+- [x] systemd unit files (§52) — `Firmware/systemd/`: `turret-control` / `turret-vision` / `turret-web` (+ optional `turret-log`) + `can0` bring-up; `Restart=on-failure` is safe because boot always returns UNHOMED; `Wants=` (not `Requires=`) keeps the loop network-independent; templates only, not run (no CAN/motor)
 
 ## Phase 9 — Payload profiling/tuning
 
@@ -375,3 +381,41 @@
     changes, no motor motion.
   - **Next:** systemd unit files (§52, deployment), then Phase 7 (installation
     orientation). Live tests (§P7/§P8) remain queued — not run, no motor.
+
+- **2026-09-01 (NZST)** — Implemented **Phase 8 (web UI + diagnostics)** end-to-end,
+  computation-only (no CAN, no motor; controld not run).
+  - **C++ (controld side, §5.3/§6.1/§6.3):** `control/src/web/web_server.hpp` — a
+    non-RT web server that publishes the §6.3 telemetry snapshot (JSON over UDS
+    `SOCK_SEQPACKET`, 10–20 Hz downsampled) and relays developer commands. It never
+    opens `can0`; it only reads `loop.telemetry()` and calls `loop.submit_command`.
+    Restructured the control loop so it **always** fills the top-level telemetry
+    (so webd reads a fresh snapshot from another thread); tracking fields are
+    conditional. Added `ControlLoop::submit_command`/`process_commands` + a
+    `web::command_validation` gate: a developer command is **validated on the web
+    thread** against `command_state_` and, only if valid, executed on the control
+    thread next cycle (§42.2 "every request goes through the state validation").
+    `main.cpp` wires the web server (env-overridable socket/rate, §53) and stops it
+    on shutdown.
+  - **Python (`web/webd`, §42/§53):** FastAPI/Uvicorn app + dashboard (System/
+    Vision/Target/Yaw-pitch/Calibration/Video-placeholder panels + §42.2 developer
+    controls), a `ControldClient` (UDS reader with reconnect, command send), a
+    config loader (host/port/socket/hz/title via env — **no hard-coded IP**), and a
+    `FakeControld` server stand-in for tests. `telemetry_from_json`/`to_json` match
+    the C++ wire format exactly (lockstep).
+  - **Tests:** C++ `test_web_server` (transport), `test_command_validation`
+    (the §42.2 gate), and `test_web_load` (§54.5: 8 clients connected while the 200 Hz
+    loop runs — control timing not degraded, **no client starvation**, CAN-feedback
+    staleness proxy stays fresh). Python `web/webd/tests/`: protocol, controld client
+    (incl. reconnect), and the FastAPI app — **20 tests**. Plus a live uvicorn smoke
+    run (fake controld → `/api/health`, `/api/state`, `/api/command`, dashboard).
+  - **§52 systemd:** `Firmware/systemd/` — `can0`, `turret-control`, `turret-vision`,
+    `turret-web`, (+ optional `turret-log`) + a README. `turret-control` restarts
+    `on-failure` but **always returns UNHOMED** (boot re-homes; never resumes stale
+    coords); all deps are `Wants=`/`After=` so the deterministic loop never depends
+    on network or the web UI (§53). Templates only — none enabled/run (no CAN/motor).
+  - Result: **33/33 ctest green** (32 prior + 1 web-load) **and** 20/20 Python webd
+    green; controld builds clean. No live camera, no `can0`/`vcan9` changes, no
+    motor motion.
+  - **Next:** Phase 9 (payload profiling/tuning, §44/§31) — or the queued live
+    commissioning tests (§P7/§P8), which need the physical station + a safe,
+    supervised run (not automated here).

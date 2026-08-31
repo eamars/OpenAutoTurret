@@ -1,0 +1,33 @@
+# OpenAutoTurret — vision daemon (IMX500 target detection, §5.2, §52).
+#
+# Camera-only: it publishes timestamped target measurements to a UDS and NEVER
+# drives the motors. On the target it runs the real IMX500 (picamera2); the
+# synthetic frame source is the safe development default (drop --real).
+#
+# §52: After= turret-control or camera availability. Wants= (not Requires=) so
+# vision can still publish if control is briefly restarting.
+#
+# CHANGE before deploy: User/Group, the install root, and the venv python path.
+[Unit]
+Description=OpenAutoTurret vision daemon (IMX500 target detection)
+After=network.target turret-control.service
+Wants=turret-control.service
+
+[Service]
+Type=simple
+User=eamars
+Group=eamars
+SupplementaryGroups=video
+WorkingDirectory=/opt/open_auto_turret
+# Real camera mode. --socket must match controld's vision IPC path.
+ExecStart=/opt/open_auto_turret/.venv/bin/python -m vision.visiond --real --socket /tmp/ota_vision.sock
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=15
+# PrivateTmp OFF: /tmp/ota_vision.sock is shared with turret-control.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,53 @@
+# OpenAutoTurret — deterministic control daemon (architecture §5.1, §52, §53).
+#
+# This is the SOLE owner of can0 and the motors. Vision and web publish
+# measurements/requests but can never issue motor commands from this process.
+#
+# §52 restart guarantee: a crash/restart MUST return to UNHOMED — it must not
+# silently resume old coordinates. controld's boot FSM starts at UNHOMED and
+# re-homes from a known stop, so a plain Restart=on-failure is safe: every
+# (re)start re-runs discovery + self-test + homing before any motion.
+#
+# CHANGE before deploy: User/Group (below) and the /opt/open_auto_turret install
+# root used in ExecStart/WorkingDirectory.
+[Unit]
+Description=OpenAutoTurret control daemon (sole owner of can0 and the motors)
+After=can0.service network.target
+Wants=can0.service
+# The deterministic loop does not depend on the network (§53): Wi-Fi/Ethernet
+# failure must not disturb it. Wants= (not Requires=) so a missing network still
+# lets control start.
+
+[Service]
+Type=simple
+User=eamars
+Group=eamars
+SupplementaryGroups=can
+WorkingDirectory=/opt/open_auto_turret
+# The config path is an argument (controld's argv[1]), not hard-coded.
+ExecStart=/opt/open_auto_turret/build/control/controld /opt/open_auto_turret/config/turret.yaml
+# §53: the web socket path + publish rate are configuration (env), not code.
+Environment=OTA_WEB_SOCKET=/run/ota/controld-web.sock
+Environment=OTA_WEB_HZ=15
+# The web socket lives in /run (tmpfs); ensure the dir exists before bind.
+ExecStartPre=/usr/bin/mkdir -p /run/ota
+ExecStartPre=/usr/bin/chown eamars:eamars /run/ota
+# §33: SIGINT/SIGTERM -> safe park (not a hard stop); on-failure restart is
+# safe because boot always returns UNHOMED (§52).
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=120
+TimeoutStopSec=30
+# Isolate from unrelated writes; /run/ota must stay writable for the web socket.
+# PrivateTmp is OFF because /tmp/ota_vision.sock is shared with turret-vision.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/run/ota
+# Best-effort determinism for the 200 Hz loop (relax if the target lacks RT
+# privileges; a failure here is a warning, not a start blocker).
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,196 @@
+"""webd FastAPI application (architecture §5.3, §42, §54.5).
+
+Wiring:
+  * a :class:`ControldClient` keeps the UDS to controld alive and delivers
+    telemetry + command responses;
+  * a :class:`TelemetryHub` fans telemetry out to connected browser clients
+    over WebSockets. Each client has its own bounded queue; a slow client is
+    DROPPED rather than blocking anyone (§42.3 "control timing wins over
+    browser video"). Because webd is a separate process from controld and
+    controld's web server runs on a non-RT thread, browser load can never
+    degrade the control loop or CAN feedback staleness (§54.5).
+  * FastAPI routes: ``/`` (dashboard), ``/api/state``, ``/api/health``,
+    ``/api/command`` (POST), ``/ws`` (telemetry stream).
+
+SAFETY: webd never opens can0 and never decides safety. It relays commands to
+controld, whose validation gate (§42.2) is the sole authority.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+import threading
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
+
+from .config import WebConfig, load_web_config
+from .controld_client import ControldClient
+from .dashboard import dashboard_html
+from .protocol import ResponseMessage, Telemetry, telemetry_to_json
+
+
+@dataclass
+class ClientSession:
+    """One connected browser client: its socket + a bounded telemetry queue."""
+
+    ws: WebSocket
+    q: "queue.Queue[str]" = field(default_factory=lambda: queue.Queue(maxsize=256))
+
+
+class TelemetryHub:
+    """Fans telemetry out to browser clients; drops slow clients (§42.3)."""
+
+    def __init__(self) -> None:
+        self._sessions: list[ClientSession] = []
+        self._lock = threading.Lock()
+
+    def add(self, ws: WebSocket) -> ClientSession:
+        s = ClientSession(ws=ws)
+        with self._lock:
+            self._sessions.append(s)
+        return s
+
+    def remove(self, s: ClientSession) -> None:
+        with self._lock:
+            if s in self._sessions:
+                self._sessions.remove(s)
+
+    @property
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+    def on_telemetry(self, t: Telemetry) -> None:
+        """Called on the controld-client reader thread. Non-blocking: a slow
+        client's full queue causes its next frame to be dropped, never a
+        block of the reader or the control path."""
+        data = telemetry_to_json(t)
+        with self._lock:
+            sessions = list(self._sessions)
+        for s in sessions:
+            try:
+                s.q.put_nowait(data)
+            except queue.Full:
+                pass  # slow client: drop this frame (control wins, §42.3)
+
+    async def serve(self, s: ClientSession, latest: Optional[Telemetry]) -> None:
+        """Drain one client's queue until it disconnects."""
+        try:
+            if latest is not None:
+                await s.ws.send_text(telemetry_to_json(latest))
+            while True:
+                try:
+                    data = await asyncio.to_thread(s.q.get, True, 1.0)
+                except queue.Empty:
+                    continue
+                await s.ws.send_text(data)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        except Exception:
+            pass
+        finally:
+            self.remove(s)
+
+
+class CommandRequest(BaseModel):
+    command: str
+    arg: str = ""
+
+
+def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
+    """Build the FastAPI app around a live ControldClient."""
+    hub = TelemetryHub()
+
+    # Re-point the client's telemetry callback at the hub (so the dashboard
+    # gets live frames). Kept off the control path: this only feeds browsers.
+    client.on_telemetry = hub.on_telemetry
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):  # noqa: ARG001
+        client.start()
+        yield
+        client.stop()
+
+    app = FastAPI(title=f"{config.title} webd", lifespan=lifespan)
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index() -> str:
+        return dashboard_html(config.title)
+
+    @app.get("/api/state")
+    async def state() -> JSONResponse:
+        t = client.latest_telemetry()
+        if t is None:
+            return JSONResponse(
+                status_code=503, content={"error": "no telemetry yet"}
+            )
+        return JSONResponse({"type": "telemetry", **json.loads(telemetry_to_json(t))})
+
+    @app.get("/api/health")
+    async def health() -> dict:
+        return {
+            "ok": True,
+            "controld_connected": client.connected(),
+            "browser_clients": hub.client_count,
+        }
+
+    @app.post("/api/command")
+    async def command(req: CommandRequest) -> ResponseMessage:
+        return client.send_command(req.command, req.arg)
+
+    @app.websocket("/ws")
+    async def ws_endpoint(ws: WebSocket) -> None:
+        await ws.accept()
+        session = hub.add(ws)
+        await hub.serve(session, client.latest_telemetry())
+
+    return app
+
+
+class WebdApp:
+    """Lifecycle wrapper: config + client + app (+ optional uvicorn server)."""
+
+    def __init__(self, config: Optional[WebConfig] = None) -> None:
+        self.config = config or load_web_config()
+        self.client = ControldClient(self.config.socket_path)
+        self.app = create_app(self.client, self.config)
+        self._server = None
+
+    def run(self) -> int:
+        """Run uvicorn in-process (blocking). Used by the daemon entry point."""
+        import uvicorn
+
+        uvicorn.run(
+            self.app,
+            host=self.config.host,
+            port=self.config.port,
+            log_level="info",
+        )
+        return 0
+
+
+def create_webd_app() -> FastAPI:
+    """Factory for the external uvicorn CLI:
+    ``uvicorn web.webd.app:create_webd_app --factory``.
+
+    Builds a fresh WebdApp (config from env, §53) and returns its FastAPI app.
+    The ControldClient is started by the app's lifespan, so the same app object
+    works for both the in-process and external-server paths.
+    """
+    return WebdApp().app
+
+
+def main() -> int:
+    """Entry point: ``python -m web.webd.app``."""
+    WebdApp().run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -22,7 +22,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -32,6 +35,7 @@
 #include "calibration/installation_pose.hpp"
 #include "calibration/park_controller.hpp"
 #include "calibration/world_frame_telemetry.hpp"
+#include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
 #include "control/reference_manager.hpp"
 #include "control/safety_envelope.hpp"
@@ -114,6 +118,27 @@ class ControlLoop {
   void set_base_orientation(const BaseOrientation& o) { base_orientation_ = o; }
   const BaseOrientation& base_orientation() const { return base_orientation_; }
 
+  // --- telemetry (§6.3, §43) --------------------------------------------
+  // The loop fills the §6.3 snapshot EVERY cycle (webd/logd read it at 10-20 Hz
+  // from a non-RT thread; guarded by the store's mutex). Tracking fields are
+  // populated only while tracking mode is enabled.
+  const telemetry::Telemetry& telemetry() const { return telemetry_; }
+
+  // --- developer commands (§42.2) ----------------------------------------
+  // Submit a high-level developer command from the web UI. Validates against
+  // the authoritative state (web::validate_command) and enqueues it; it is
+  // executed on the control thread the next cycle (single-threaded mutation).
+  // Returns the validation result (accepted, or the rejection reason). The web
+  // server calls this from its non-RT thread.
+  web::CommandResult submit_command(const std::string& name,
+                                    const std::string& arg);
+  // True once the web UI requested a safe shutdown (main() polls this).
+  bool shutdown_requested() const { return shutdown_requested_.load(); }
+  const web::SystemCommandState& command_state() const {
+    std::lock_guard<std::mutex> lk(command_mutex_);
+    return command_state_;
+  }
+
   // One control cycle. `period_ns` is how long the previous cycle took (drives
   // the §39.3 deadline watchdog). Returns the (possibly updated) phase.
   Phase step(TimeNs now_ns, TimeNs period_ns);
@@ -134,6 +159,10 @@ class ControlLoop {
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   bool enter_position_mode_all(double limit_spd, std::string& err);
   bool finalize_homing();
+  // Phase 8: command execution on the control thread (§42.2).
+  void process_commands();
+  void execute_command(const std::string& name, const std::string& arg);
+  void disable_tracking();
   void fault(const std::string& reason) {
     if (phase_ != Phase::Fault) {
       phase_ = Phase::Fault;
@@ -163,6 +192,18 @@ class ControlLoop {
   std::unique_ptr<TrackingController> tracking_;
   // Phase 7 installation orientation (base -> world). Identity by default.
   BaseOrientation base_orientation_ = identity_pose();
+  // §6.3/§43 top-level telemetry (always filled; webd reads the snapshot).
+  telemetry::Telemetry telemetry_;
+  // Phase 8: developer-command plumbing (§42.2). command_state_ is published
+  // each cycle for web-thread validation; command_queue_ is drained on the
+  // control thread. Both guarded by command_mutex_.
+  web::SystemCommandState command_state_;
+  mutable std::mutex command_mutex_;
+  std::deque<std::pair<std::string, std::string>> command_queue_;
+  std::atomic<bool> shutdown_requested_{false};
+  // One-shot restricted test-motion target (rad), consumed next cycle.
+  bool has_test_motion_ = false;
+  double test_motion_target_rad_ = 0.0;
   ReferenceRequest tracking_ref_;  // produced each cycle while tracking is on
   bool has_pending_measurement_ = false;
   vision::TargetMeasurement pending_measurement_;

@@ -1,0 +1,23 @@
+# OpenAutoTurret — bring up the MCP2515 CAN interface (the "can0 setup" that
+# turret-control.service is After=, architecture §52).
+#
+# The MCP2515 is a kernel driver (dtoverlay), so the `can0` interface appears at
+# boot; this unit configures the bitrate and brings it UP. It is idempotent and
+# best-effort: if the driver/interface is not present, the control daemon simply
+# fails its CAN-open step and returns UNHOMED (it never moves).
+#
+# Bitrate 1 Mbit/s matches the observed bus setup (CyberGear default).
+[Unit]
+Description=OpenAutoTurret CAN0 (MCP2515) @ 1 Mbit/s
+DefaultDependencies=no
+After=local-filesystem.target
+Before=turret-control.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Wait up to ~10 s for the driver to create can0, then configure + bring it up.
+ExecStart=/bin/sh -c 'i=0; while [ $i -lt 20 ] && ! ip link show can0 >/dev/null 2>&1; do sleep 0.5; i=$((i+1)); done; ip link set can0 type can bitrate 1000000 restart-ms 100 && ip link set up can0'
+
+[Install]
+WantedBy=multi-user.target

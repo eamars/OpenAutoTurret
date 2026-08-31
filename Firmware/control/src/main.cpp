@@ -32,6 +32,7 @@
 #include "control/boot_fsm.hpp"
 #include "control/can_motor_backend.hpp"
 #include "control/control_loop.hpp"
+#include "web/web_server.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -204,6 +205,29 @@ int main(int argc, char** argv) {
   }
   spdlog::info("homing started; tracking is DISABLED in Phase 2");
 
+  // 5b. Phase 8: web server (webd-facing, §5.3/§42.2). Publishes the §6.3
+  //     snapshot at 10-20 Hz and relays developer commands through the
+  //     validation gate. It never opens can0; commands are queued and executed
+  //     on the control thread next cycle. Socket path + rate are overridable
+  //     via env (§53: nothing hard-coded).
+  web::WebServer::Config web_cfg;
+  if (const char* sp = std::getenv("OTA_WEB_SOCKET")) web_cfg.socket_path = sp;
+  if (const char* hz = std::getenv("OTA_WEB_HZ")) {
+    try { web_cfg.telemetry_hz = std::stoi(hz); } catch (...) {}
+  }
+  web::WebServer web(web_cfg,
+                     [&loop]() { return loop.telemetry().snapshot(); },
+                     [&loop](const std::string& n, const std::string& a) {
+                       return loop.submit_command(n, a);
+                     });
+  if (!web.start(err)) {
+    spdlog::warn("web server did not start: {} (continuing without web UI)",
+                 err);
+  } else {
+    spdlog::info("web server listening: UDS {} @ {} Hz", web_cfg.socket_path,
+                 web_cfg.telemetry_hz);
+  }
+
   const TimeNs period_ns = static_cast<TimeNs>(1e9) / cfg.control_loop_hz;
   TimingStats stats;
   TimeNs t_prev = now_monotonic_ns();
@@ -213,6 +237,11 @@ int main(int argc, char** argv) {
 
   // Steady-state 200 Hz loop (no slow work inside).
   while (!g_shutdown.load()) {
+    if (loop.shutdown_requested()) {
+      spdlog::info("safe shutdown requested via web UI");
+      g_shutdown.store(true);
+      break;
+    }
     const TimeNs t0 = now_monotonic_ns();
     const TimeNs period = t0 - t_prev;
     t_prev = t0;
@@ -237,7 +266,9 @@ int main(int argc, char** argv) {
     if (tnow < next) std::this_thread::sleep_for(std::chrono::nanoseconds(next - tnow));
   }
 
-  // 6. Shutdown: safe park (if homed and not faulted), else de-energize.
+  // 6. Shutdown: stop the web server (no more clients), then safe park (if
+  //    homed and not faulted), else de-energize.
+  web.stop();
   spdlog::info("shutdown requested; {}", loop.homed() ? "parking" : "de-energizing");
   if (loop.homed() && loop.phase() != Phase::Fault &&
       loop.phase() != Phase::Parked && loop.start_parking(err)) {

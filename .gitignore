@@ -1,0 +1,14 @@
+# Build artifacts
+Firmware/build/
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Runtime / generated data
+*.log
+run/
