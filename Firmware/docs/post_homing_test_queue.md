@@ -200,6 +200,52 @@ with no payload-related fault). The real payload check lands in Phase 3.
 
 ---
 
+## P7 — Live camera / vision verification (Phase 4)
+
+**SAFETY: the vision daemon is independent of the motor driver. This test runs
+`visiond` against the real IMX500 and verifies detection + timestamping + IPC
+only — it does NOT open `can0`, does NOT energize the motors, and does NOT send
+any setpoint. `controld` may be stopped entirely for this test.**
+
+Prereq: IMX500 + `imx500-all` installed (see `docs/AI_CAMERA_SETUP.md`); a
+detector RPK configured (YOLO11n recommended).
+
+1. Start a measurement sink on the controld IPC socket (a throwaway subscriber
+   is fine for a camera-only check; the real sink is `controld`).
+2. Run the vision daemon in real mode:
+   ```bash
+   # from Firmware/
+   python3 -m vision.visiond --real \
+       --image-config <picamera2_config.json> \
+       --detector-rpk <imx500_network_yolo11n_pp.rpk.json> \
+       --socket /tmp/ota_vision.sock --frames 300
+   ```
+3. Verify:
+   - The daemon publishes `TargetMeasurement`s at ~the frame rate.
+   - With a person in frame: `valid=true`, `class_id=1` (person), confidence
+     above threshold, and a **stable** `visual_track_id` (association holds).
+   - `sensor_timestamp_ns` is monotonic and ~frame-rate spaced (mandatory
+     capture time, §6.2).
+   - With the target removed, the measurement goes `valid=false` after the
+     `max_lost_frames` grace (target lost → no setpoint, §12.2).
+4. Cross-check one published message by hand-decoding its 58-byte UDS payload
+   (matches `vision/protocol.py` / `control/src/tracking/target_measurement.hpp`).
+5. Confirm `can0` is untouched and no motor moved (feedback flat / motors
+   de-energized) before and after.
+
+## P8 — Live tracking (Phase 6, NOT YET IMPLEMENTED)
+
+Full closed-loop tracking (vision → estimator → reference → trajectory →
+motors) is **Phase 6** and is not built yet. Once Phase 6 lands, add:
+- Stationary-target hold (target LOS error < threshold for N ms).
+- Moving-target tracking (LOS error vs. a reference, §55 metrics).
+- Target-loss → COASTING → LOST → BRAKE_TO_HOLD (with the safe brake, §34).
+- Tracking hard-disabled until the homing/calibration gates pass (§38.1).
+
+This MUST run only after P0–P7 pass and with the user present (motors move).
+
+---
+
 ## Out of scope (Phase 3+)
 
 - Collision / safety envelope tracking (§18.2/§19) — tracking is disabled here.

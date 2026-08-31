@@ -16,8 +16,8 @@
 | 1 | Production CAN/motor layer | [~] | See checklist below |
 | 2 | Homing and safety foundation | [~] | Config, logical coords, contact detector, homing FSM, full-axis (§23), multi-axis plan (§25), soft-limit envelope (§18), safety supervisor (§38/§39), boot FSM (§27), park (§33), and the `controld` daemon all done+tested; calibration persistence (§28/§41) pending |
 | 3 | Trajectory generator | [x] | All done+tested: online jerk-limited generator, receding-horizon retarget (§17.3), stopping trajectories + stop-reachability (§17.2/§48, randomized tests), coupled collision envelope interface (§19, path validation) |
-| 4 | Vision daemon (Python) | [ ] | |
-| 5 | Geometry and estimator (C++) | [ ] | |
+| 4 | Vision daemon (Python) | [x] | visiond (synthetic-safe + real guarded), target association (§12), UDS `SOCK_SEQPACKET` publish; 17 camera-free tests, no CAN/motor. Live IMX500 deferred to test queue |
+| 5 | Geometry and estimator (C++) | [x] | camera model (§10), gimbal kinematics + configurable R_P_C (§9.2/§10.3), §11 history-interpolation alignment, alpha-beta estimator + prediction (§13); 6 new C++ test binaries incl. replay (§54.3) |
 | 6 | Closed-loop tracking | [ ] | |
 | 7 | Installation orientation calibration | [ ] | |
 | 8 | Web UI and diagnostics | [ ] | |
@@ -89,18 +89,20 @@
 
 ## Phase 4 — Vision daemon (Python)
 
-- [ ] `vision/visiond.py`: Picamera2 + IMX500, detection parse, `SensorTimestamp` attach, frame sequence
-- [ ] Target association/selection (§12): class gate, confidence, IoU, continuity; one selected target
-- [ ] `TargetMeasurement` publish over UDS `SOCK_SEQPACKET` (§6.1, §6.2)
-- [ ] No CAN access, no motion logic in visiond
+- [x] `vision/visiond.py`: frame source (real Picamera2/IMX500 **guarded** + deterministic `SyntheticFrameSource`), detection parse, `SensorTimestamp` + frame sequence attach. Runs the full pipeline in `--synthetic` mode with NO camera and NO motor
+- [x] Target association/selection (§12): class gate, confidence threshold, IoU + centroid-proximity association, track age/continuity, auto-reacquisition, configurable fallback → **one** selected target per frame (`vision/target_selector.py`)
+- [x] `TargetMeasurement` publish over UDS `SOCK_SEQPACKET` (§6.1, §6.2) — `vision/ipc.py`; 58-byte wire format, cross-checked C++↔Python (both directions)
+- [x] **No CAN access, no motion logic in visiond** (enforced by design; the process only publishes measurements — verified by the camera-free test suite, which never touches CAN or the motor driver)
+- Tests: 17 `unittest` cases (protocol round-trip, association/continuity/reacquisition, end-to-end daemon→subscriber) + CLI smoke; all camera-free. **Live IMX500 run is deferred to the test queue** (needs the real camera; see `docs/post_homing_test_queue.md` §P7).
 
 ## Phase 5 — Geometry and estimator (C++)
 
-- [ ] `geometry/camera_model.*`: intrinsics, distortion, pixel→ray (§10)
-- [ ] `geometry/turret_kinematics.*`: frame convention (R_A_B), R_B_Y(q_yaw)·R_Y_P(q_pitch)·R_P_C chain, LOS→joint solve (§9, §14)
-- [ ] Timestamp alignment: history interpolation at `sensor_timestamp`, timing-invalid flag (§11)
-- [ ] `tracking/target_estimator.*`: const-ang-velocity Kalman/alpha-beta, confidence-aware prediction horizon (§13, §35)
-- [ ] Replay tests with recorded measurements
+- [x] `geometry/camera_model.*`: intrinsics + full projective pixel↔ray (§10.1/§10.2), OpenCV/IMX500 camera frame (X right, Y down, Z forward); distortion is a no-op placeholder for v1 (added as a hook later)
+- [x] `geometry/turret_kinematics.*`: base frame (X fwd, Y left, Z up); `ray_to_base = R_z(q_yaw)·R_y(q_pitch)·R_P_C` with a **configurable** R_P_C extrinsic (aligned default; swappable for a fiducial-board estimate, §10.3) + LOS→(azimuth, elevation). The LOS→**joint** solve (§14) is the reference manager's job → Phase 6
+- [x] Timestamp alignment (§11): `MotorStateHistory::interpolate` at the frame's `sensor_timestamp` (returns false → timing-invalid, never silently uses a newer pose) — 6 tests; the replay test proves a stale pose gives a visibly wrong LOS
+- [x] `tracking/target_estimator.*`: const-angular-velocity alpha-beta on base-frame LOS angles (azimuth wrap-safe) + forward prediction to actuation time (§13.1/§13.3); a full covariance Kalman + confidence-aware measurement noise (§13.2) is the documented upgrade path
+- [x] Replay tests with recorded measurements (§54.3): deterministic scenario (moving target + moving gimbal) replayed through pixel→interpolated-pose→base-frame-LOS→estimator, no camera/CAN/motor; 6 new C++ test binaries
+- Note: `tracking/target_measurement.hpp` mirrors `vision/protocol.py` (58-byte LE); cross-language encode/decode verified both directions.
 
 ## Phase 6 — Closed-loop tracking
 
@@ -283,3 +285,45 @@
   `plan_stop` (and dropped v=0 from the model test, covering it via the at-rest
   sub-case instead). Full suite now **16/16 ctest binaries green**. No live motion;
   no `vcan9`/`can0` changes.
+
+- **2026-09-01 (NZST)** — Implemented **Phase 4 (vision daemon, Python)** and
+  **Phase 5 (geometry + estimator, C++)**. Per the user's instruction, all
+  camera/estimator work is verified with **safe, camera-free / replay tests that
+  never invoke the motor driver**, and the **live** camera + tracking tests are
+  queued for later (post-homing queue §P7/§P8), not run now.
+  - **Phase 4** (`Firmware/vision/`): `protocol.py` (the §6.2 `TargetMeasurement`
+    + a fixed 58-byte little-endian wire format), `frame_source.py` (a
+    `FrameSource` with a **deterministic `SyntheticFrameSource`** for
+    camera-free runs and a **guarded** real `Picamera2FrameSource`),
+    `target_selector.py` (§12 association: class gate + confidence + IoU +
+    centroid proximity + track age/continuity + auto-reacquisition + fallback →
+    one selected target), `ipc.py` (UDS `SOCK_SEQPACKET` latest-value publisher +
+    a test subscriber), and `visiond.py` (the daemon; `--synthetic` is the SAFE
+    default, `--real` needs the camera). **visiond never opens CAN or drives the
+    motor** (enforced by design). 17 `unittest` cases + a CLI smoke, all
+    camera-free (the end-to-end test runs the full pipeline into a subscriber
+    stand-in for controld).
+  - **Phase 5** (`Firmware/control/src/{geometry,tracking}/`): `vec3.hpp`
+    (dependency-free Vec3/Mat3 — Eigen's CMake config isn't installed),
+    `camera_model.hpp` (§10.1/§10.2 intrinsics + full-projective pixel↔ray,
+    OpenCV camera frame), `turret_kinematics.hpp` (§9.2/§10.3 base frame X fwd /
+    Y left / Z up; `ray_to_base = R_z(q_yaw)·R_y(q_pitch)·R_P_C` with a
+    **configurable** R_P_C extrinsic + LOS→(az,elev)), `target_measurement.hpp`
+    (mirrors `vision/protocol.py`), and `target_estimator.{hpp,cpp}` (§13
+    const-angular-velocity alpha-beta on base-frame LOS, azimuth wrap-safe, +
+    forward prediction to actuation time). Six new C++ test binaries:
+    `test_camera_model`, `test_turret_kinematics`, `test_target_estimator`,
+    `test_history_interpolation` (§11.1), `test_target_measurement`, and
+    `test_replay` (§54.3 deterministic moving-target + moving-gimbal replay
+    through pixel→interpolated-pose→base-frame-LOS→estimator, plus a check that a
+    **stale** pose yields a visibly wrong LOS — the §11 warning made concrete).
+  - **Cross-language protocol check:** C++ encode → Python decode and Python
+    encode → C++ decode both verified (58-byte LE, all fields match).
+  - Full suite now **22/22 ctest binaries green** (16 prior + 6) **and** 17
+    Python vision tests green. Two compile fixes (missing `<cmath>` for `M_PI`;
+    `CameraModel` default ctor) and two test-tolerance fixes (the synthetic target
+    legitimately wraps → new track; the alpha-beta filter's steady-state lag on a
+    moving target). No live camera, no `can0`/`vcan9` changes, no motor motion.
+  - **Deferred (queued, not run):** §P7 live IMX500 vision verification
+    (camera-only, no motor), §P8 live tracking (needs Phase 6). Phase 6 (LOS→joint
+    solve §14, reference manager, tracking FSM, closed-loop) is next.
