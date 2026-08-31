@@ -14,8 +14,8 @@
 |---|---|:---:|---|
 | 0 | Preserve/instrument POC | [x] | POC archived under `Firmware/legacy/` (commit d9e79cc); reference doc `CyberGear_AI_Reference.md` committed (b6e942b) |
 | 1 | Production CAN/motor layer | [~] | See checklist below |
-| 2 | Homing and safety foundation | [ ] | |
-| 3 | Trajectory generator | [ ] | |
+| 2 | Homing and safety foundation | [~] | Config, logical coords, contact detector, per-endpoint homing FSM, full-axis homing (§23) all done+tested; safety envelope/supervisor/boot/park pending |
+| 3 | Trajectory generator | [~] | Online jerk-limited generator + 4 tests done; stopping/stop-reachability + collision envelope pending |
 | 4 | Vision daemon (Python) | [ ] | |
 | 5 | Geometry and estimator (C++) | [ ] | |
 | 6 | Closed-loop tracking | [ ] | |
@@ -68,20 +68,20 @@
 
 - [x] Versioned YAML config loader + validation (`control/src/config/turret_config.{hpp,cpp}`, §40; all §58 commissioning params are config, not compile-time). Missing/TBD values → built-in conservative defaults + warning; required keys / bad schema_version / out-of-range / `min>=max` / `dir_sign∉{±1}` / duplicate can_id → hard error. 9 loader tests green.
 - [ ] Calibration persistence with integrity (§28, §41): schema version, timestamps, HW IDs, atomic write (tmp+rename), last-known-good
-- [ ] Host logical joint coordinates (§24): raw↔logical mapping, direction sign, home reference
-- [ ] Contact detector (§21): filtered velocity/progress/signed-effort, dwell, independent hard abort
-- [ ] Precision homing state machine per endpoint (§22): coarse approach → back-off → settle → fine approach → repeatability verify
-- [ ] Full-axis homing + travel band validation (§23)
+- [x] Host logical joint coordinates (§24): raw↔logical mapping, direction sign, home reference (`common/logical_coordinates.hpp`; endpoint+0 convention via `setup_model_from_endpoints`)
+- [x] Contact detector (§21): filtered velocity/progress/signed-effort, dwell, independent hard abort (5 tests)
+- [x] Precision homing state machine per endpoint (§22): coarse approach → back-off → settle → fine approach → repeatability verify (5 tests, §26 failure semantics)
+- [x] Full-axis homing + travel band validation (§23): wrapper `calibration/full_axis_homing.{hpp,cpp}` (home A → traverse → home B → validate span, build logical model); 5 unit tests on a two-stop simulated plant (success, travel too short/long → invalid, endpoint A fault / endpoint B timeout → whole axis fails)
 - [ ] Multi-axis homing plan interpreter (§25, §25.1, §25.2): `home_endpoint` / `move` / `home_full_range` steps, clearance poses
 - [ ] Soft limits + braking envelope (§18.1, §18.2): stop feasibility from trajectory model
 - [ ] Safety supervisor (§38) with layered watchdogs (§39)
 - [ ] Boot state machine (§27) incl. FAULT_LOCKED path
 - [ ] Safe shutdown/park state machine (§33) incl. verification + dwell
-- [ ] Unit tests: contact detector, homing repeatability/travel math, logical coordinates, stop feasibility, state transitions
+- [~] Unit tests: contact detector (5), homing FSM (5), full-axis homing (5), trajectory (4) done; stop feasibility tests pending
 
 ## Phase 3 — Trajectory generator
 
-- [ ] Online jerk-limited S-curve / time-optimal generator (§17): inputs (q,v,a, target, limits), outputs (q_ref, v_ref, a_ref)
+- [x] Online jerk-limited generator (§17): velocity-cap + stop-distance profile, proportional vel loop (τ=0.2 s) + jerk clamp; 4 tests (commit ce1d405). Bang-bang variants were dead-ends (limit-cycling) — see log.
 - [ ] Receding-horizon target updates without discontinuity (§17.3)
 - [ ] Stopping trajectories + `verify_stop_reachability` (§17.2, §48), randomized unit tests
 - [ ] Coupled collision envelope interface (§19): constant limits now, piecewise table/polygon later; path (not just endpoint) validation
@@ -179,3 +179,44 @@
   duplicate can_id, missing file, malformed YAML, default-safety) — all 41 tests green.
   Next: wire config into `controld`, then logical coordinates + homing FSM.
 
+
+- **2026-09-01 (NZST)** — Implemented the §23 full-axis homing wrapper and ran one
+  full homing operation against a simulated plant (no live motor motion). New
+  `control/src/calibration/full_axis_homing.{hpp,cpp}`: a transport-agnostic
+  `FullAxisHoming` that sequences two `HomingController` (§22) instances —
+  precision-home endpoint A → (the endpoint-B approach doubles as the §23
+  "traverse safely") → precision-home endpoint B → compute measured travel —
+  then validates `expected_travel_min_deg <= measured_travel_deg <=
+  expected_travel_max_deg`. On success it sets up the host logical model (§24)
+  via `setup_model_from_endpoints` (low endpoint = logical 0, travel positive)
+  and reports the measured span; on any endpoint failure or out-of-band travel it
+  fails with `valid=false` (the axis must not be treated as referenced, §23/§26).
+  Build green (ninja, new files auto-globbed). Ran ONE operation end-to-end via a
+  standalone harness on a two-stop plant (stops at ±1.0 rad, start mid-travel at
+  0, like the real pitch position): endpoint A homed at −1.0000 rad, traversed,
+  endpoint B homed at +1.0000 rad, measured travel 114.592° (within the [100,130]°
+  band), worst repeatability 0.000° (limit 0.5°), logical model dir_sign=+1 with
+  raw_ref=−1.0000 rad → logical 0 and endpoint B at +114.592° logical. Terminal
+  state Complete, result valid, harness exit 0. Next: in-repo unit tests for the
+  wrapper (success + travel-out-of-band + single-endpoint-fail), then §25 homing
+  plan, §18 safety envelope, and wiring config+trajectory+homing into controld.
+
+- **2026-09-01 (NZST)** — Added the in-repo unit tests for the §23 full-axis
+  homing wrapper and committed it. New `control/tests/test_full_axis_homing.cpp`
+  (5 tests) drives `FullAxisHoming` against a two-stop simulated plant (end-stops
+  at each end, torque signed in the travel direction, per-end-side clamping):
+  (1) both endpoints homed + travel 114.592° inside the [100,130]° band →
+  Complete/valid, logical model dir_sign=+1 with the low endpoint at logical 0
+  and the high endpoint at +travel; (2) travel too short (28.6°) → both endpoints
+  valid but the axis fails validation ("outside expected"), position invalid;
+  (3) travel too long (229.2°, widened travel limit) → same out-of-band failure;
+  (4) motor fault during endpoint A → whole axis fails, reason attributed to
+  "endpoint A … hard abort or motor fault"; (5) endpoint B approach timeout
+  (unreachable stop) → whole axis fails, reason attributed to "endpoint B …
+  timeout", endpoint A still reported valid. One test bug found and fixed: the
+  first cut set the approach timeout to 5 s, which is shorter than endpoint A's
+  own coarse (~5.7 s) and fine (~5 s) approaches, so endpoint A timed out first —
+  raised to 10 s (the failure correctly proved the wrapper attributes per-endpoint
+  faults). Full suite now 9/9 binaries green (60 tests: config 9, contact
+  detector 5, full-axis homing 5, history 7, homing 5, protocol 17, seqlock 4,
+  timing stats 4, trajectory 4). Committed wrapper + tests.
