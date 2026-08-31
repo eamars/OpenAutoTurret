@@ -103,6 +103,26 @@ void ControlLoop::deenergize_all() {
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
 }
 
+bool ControlLoop::enable_tracking(const TrackingController::Config& cfg,
+                                  std::string& err) {
+  if (tracking_) {
+    err = "tracking already enabled";
+    return false;
+  }
+  if (!homed_) {
+    err = "cannot enable tracking: not homed (position validity unknown, §38.1)";
+    return false;
+  }
+  tracking_.reset(new TrackingController(cfg));
+  return true;
+}
+
+void ControlLoop::feed_measurement(const vision::TargetMeasurement& m) {
+  if (!tracking_) return;
+  pending_measurement_ = m;
+  has_pending_measurement_ = true;
+}
+
 bool ControlLoop::finalize_homing() {
   for (int i = 0; i < kAxisCount; ++i) {
     const AxisId a = static_cast<AxisId>(i);
@@ -138,6 +158,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     last_q_[i] = sp[i].q_rad;  // for telemetry
   }
 
+  // 1b. Phase 6: feed the tracking controller the current pose (for §11
+  //      timestamp interpolation) and consume any pending visiond measurement.
+  if (tracking_) {
+    tracking_->update_snapshots(now_ns, sp[ix(AxisId::Pitch)].q_rad,
+                                sp[ix(AxisId::Yaw)].q_rad);
+    if (has_pending_measurement_) {
+      tracking_->set_measurement(pending_measurement_);
+      has_pending_measurement_ = false;
+    }
+  }
+
   // 2. §39.3 deadline watchdog: a cycle longer than the control period is a
   //    miss; consecutive misses feed the supervisor.
   int64_t overrun_us = 0;
@@ -146,6 +177,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     ++deadline_miss_count_;
   } else {
     deadline_miss_count_ = 0;
+  }
+
+  // 2b. Phase 6: compute the tracking reference (only while tracking is active,
+  //     i.e. tracking enabled and in the ready-hold operation). This must
+  //     precede the supervisor input so `tracking_enabled` reflects the cycle.
+  tracking_ref_ = ReferenceRequest{};
+  if (tracking_ && phase_ == Phase::Hold) {
+    tracking_ref_ = tracking_->compute_reference(
+        now_ns, ready_raw_[ix(AxisId::Pitch)], ready_raw_[ix(AxisId::Yaw)]);
+    tracking_->record_pose(sp[ix(AxisId::Yaw)].q_rad);
+    tracking_->record_reference(tracking_ref_);
   }
 
   // 3. Build the supervisor input.
@@ -161,7 +203,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     in.axes[i].limits = limits_[i];
   }
   in.homing_valid = homed_;
-  in.tracking_enabled = false;  // Phase 2: the station never tracks.
+  // §38.1: the supervisor applies the stricter tracking checks only when the
+  // reference is actually a tracking reference (position validity is known
+  // because tracking requires a valid homing).
+  in.tracking_enabled = tracking_ref_.is_tracking_reference;
   in.cycle_overrun_us = overrun_us;
   in.deadline_miss_count = deadline_miss_count_;
 
@@ -196,6 +241,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Hold: {
+      if (tracking_) {
+        // Phase 6: delegate to the tracking controller (tracking > search >
+        // hold, §16). The reference was computed in step 2b. Constrain it with
+        // the safety envelope (§15: reference manager -> SafetyEnvelope): clamp
+        // the position to the soft limits and cap the speed at the largest
+        // value from which a full stop still fits before the boundary.
+        for (int i = 0; i < kAxisCount; ++i) {
+          const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
+                                                  : tracking_ref_.q_pitch_rad;
+          q_ref[i] = env_.constrain_reference(r, limits_[i]);
+          lim[i] = std::min(tracking_ref_.v_max_rad_s,
+                            env_.max_speed_at(q_ref[i], limits_[i]));
+          at_ready_ = false;  // not at the ready pose while tracking/seeking
+        }
+        break;
+      }
       // Move to the safe ready pose (if not already there), then hold. Never
       // press against a stop.
       at_ready_ = true;
@@ -280,6 +341,45 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   } else if (last_decision_.action == SafetyAction::FaultStop &&
              phase_ != Phase::Fault) {
     fault(last_decision_.reason);
+  }
+
+  // 8. Phase 6 telemetry (§43): fill the high-rate control log + black box and
+  //    the snapshot with this cycle's data. In-memory only (§46: no I/O here).
+  if (tracking_) {
+    telemetry::ControlLogRecord rec;
+    rec.timestamp_ns = now_ns;
+    rec.q_actual[ix(AxisId::Pitch)] = sp[ix(AxisId::Pitch)].q_rad;
+    rec.q_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].q_rad;
+    rec.v_actual[ix(AxisId::Pitch)] = sp[ix(AxisId::Pitch)].v_rad_s;
+    rec.v_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].v_rad_s;
+    rec.q_ref[ix(AxisId::Pitch)] = q_ref[ix(AxisId::Pitch)];
+    rec.q_ref[ix(AxisId::Yaw)] = q_ref[ix(AxisId::Yaw)];
+    rec.safety_action = last_decision_.action;
+    rec.feedback_age_ms = sp[ix(AxisId::Yaw)].has_feedback
+                              ? (now_ns - sp[ix(AxisId::Yaw)].rx_ns) / 1000000
+                              : INT64_MAX;
+    rec.cycle_duration_us = period_ns / 1000;
+    rec.track_state = tracking_->track_state();
+    for (int i = 0; i < kAxisCount; ++i)
+      rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
+    tracking_->telemetry().push_control(rec);
+    tracking_->telemetry().push_blackbox(rec);
+
+    telemetry::TelemetrySnapshot snap;
+    snap.timestamp_ns = now_ns;
+    snap.q_yaw_rad = sp[ix(AxisId::Yaw)].q_rad;
+    snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
+    snap.q_pitch_rad = sp[ix(AxisId::Pitch)].q_rad;
+    snap.v_pitch_rad_s = sp[ix(AxisId::Pitch)].v_rad_s;
+    snap.q_ref_yaw_rad = q_ref[ix(AxisId::Yaw)];
+    snap.q_ref_pitch_rad = q_ref[ix(AxisId::Pitch)];
+    snap.track_state = tracking_->track_state();
+    snap.target_confidence = tracking_->confidence();
+    snap.tracking_active = tracking_ref_.is_tracking_reference;
+    snap.safety_action = last_decision_.action;
+    snap.feedback_age_ms = rec.feedback_age_ms;
+    snap.control_cycle_us = period_ns / 1000;
+    tracking_->telemetry().set_snapshot(snap);
   }
 
   return phase_;

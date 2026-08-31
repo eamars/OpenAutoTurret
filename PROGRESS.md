@@ -18,7 +18,7 @@
 | 3 | Trajectory generator | [x] | All done+tested: online jerk-limited generator, receding-horizon retarget (§17.3), stopping trajectories + stop-reachability (§17.2/§48, randomized tests), coupled collision envelope interface (§19, path validation) |
 | 4 | Vision daemon (Python) | [x] | visiond (synthetic-safe + real guarded), target association (§12), UDS `SOCK_SEQPACKET` publish; 17 camera-free tests, no CAN/motor. Live IMX500 deferred to test queue |
 | 5 | Geometry and estimator (C++) | [x] | camera model (§10), gimbal kinematics + configurable R_P_C (§9.2/§10.3), §11 history-interpolation alignment, alpha-beta estimator + prediction (§13); 6 new C++ test binaries incl. replay (§54.3) |
-| 6 | Closed-loop tracking | [ ] | |
+| 6 | Closed-loop tracking | [~] | LOS→joint (§14), tracking FSM (§34)+confidence (§35), reference manager (§16), search planner (§36/§49), telemetry (§6.3/§43) all done+tested; closed-loop integration verified on SimMotorBackend + synthetic vision (no CAN/motor). systemd units (§52) deferred |
 | 7 | Installation orientation calibration | [ ] | |
 | 8 | Web UI and diagnostics | [ ] | |
 | 9 | Payload profiling/tuning | [ ] | |
@@ -106,13 +106,15 @@
 
 ## Phase 6 — Closed-loop tracking
 
-- [ ] `control_loop.*` per §46 pseudocode (200 Hz, absolute-deadline sleep, no I/O/alloc in loop)
-- [ ] Reference manager arbitration with priority (§16)
-- [ ] Tracking state machine (§34): READY_HOLD/TRACKING/COASTING/BRAKE_TO_HOLD/LOST, config thresholds
-- [ ] Search planner (§36, §49) and stationary hold (§37)
-- [ ] Telemetry snapshot publisher 10–20 Hz (§6.3) + high-rate control log (§43.1) + event log (§43.3) + black-box ring (§43.4)
-- [ ] controld main(): signal handling, boot FSM wiring, UNHOMED on restart (§52)
-- [ ] systemd unit files (§52)
+- [x] `control_loop.*` per §46 pseudocode (200 Hz, absolute-deadline sleep, no I/O/alloc in loop) — tracking path wired into the existing loop; 200 Hz (5 ms) step verified in the SimMotorBackend integration test
+- [x] Reference manager arbitration with priority (§16) — `control/reference_manager.hpp`: TRACKING (Tracking/Coasting) > SEARCH > HOLD, v_max scaled by confidence
+- [x] Tracking state machine (§34): READY_HOLD/TRACKING/COASTING/BRAKE_TO_HOLD/LOST, config thresholds — `tracking/tracking_state_machine.hpp` + §35 confidence decay
+- [x] Search planner (§36, §49) and stationary hold (§37) — `control/search_planner.hpp` (soft-limit sweep, S-curve dwell, reduced speed); hold = ready-pose reference
+- [x] Telemetry snapshot publisher 10–20 Hz (§6.3) + high-rate control log (§43.1) + event log (§43.3) + black-box ring (§43.4) — `telemetry/telemetry.hpp` (ring-buffered, filled in-loop)
+- [x] LOS→joint solver (§14) — `geometry/los_joint_solver.hpp` (angular-decomposition seed + gradient refinement vs calibrated R_P_C)
+- [x] Closed-loop integration test (mocks only, no CAN) — `tests/test_tracking_integration.cpp`: synthetic base-frame target → pixel → full stack on SimMotorBackend; tracking, loss→coast→brake→hold, search sweep, soft-limit containment, fault→safe stop
+- [x] controld main(): signal handling, boot FSM wiring, UNHOMED on restart (§52) — from Phases 2/5 (daemon present; not run, no motor)
+- [ ] systemd unit files (§52) — deployment only, deferred (no motor)
 
 ## Phase 7 — Installation orientation
 
@@ -327,3 +329,49 @@
   - **Deferred (queued, not run):** §P7 live IMX500 vision verification
     (camera-only, no motor), §P8 live tracking (needs Phase 6). Phase 6 (LOS→joint
     solve §14, reference manager, tracking FSM, closed-loop) is next.
+
+- **2026-09-01 (NZST)** — Implemented **Phase 6 (closed-loop tracking)** end-to-end
+  in C++ and verified it with **mocks only** (SimMotorBackend + synthetic vision —
+  **no CAN, no motor driver**, per the explicit "don't touch the actual motor"
+  constraint). New sources (all header-only, auto-globbed):
+  - `geometry/los_joint_solver.hpp` (§14): LOS→(q_yaw,q_pitch) via an
+    angular-decomposition seed (aligned gimbal: q_yaw=azimuth, q_pitch=−elevation)
+    refined by a 12-step gradient against the **calibrated** R_P_C; reports residual
+    and returns false when the LOS is unreachable.
+  - `tracking/tracking_state_machine.hpp` (§34/§35): READY_HOLD→TRACKING→(missing)
+    COASTING→(timeout) BRAKE_TO_HOLD→TARGET_LOST→SEARCH/READY_HOLD, all thresholds
+    config; confidence decays 1.0→0.0 as the target goes stale (0 before first
+    acquisition, handled via `has_seen_valid_`).
+  - `control/search_planner.hpp` (§36/§49): soft-limit yaw sweep with S-curve dwell
+    turnarounds at reduced speed.
+  - `control/reference_manager.hpp` (§16): TRACKING (Tracking/Coasting, v_max
+    ×confidence) > SEARCH > HOLD arbitration.
+  - `telemetry/telemetry.hpp` (§6.3/§43): snapshot + high-rate control log + event
+    log + black-box ring (bounded ring buffers, filled in-loop, no alloc).
+  - `control/tracking_controller.hpp`: the §11/§13/§14 glue — per-axis
+    MotorStateHistory, pose interpolated at the capture timestamp (timing-invalid →
+    not fed), pixel→ray→base→(az,el)→estimator, predict to now+control_delay+
+    motor_response, then reference-manager output.
+  - `control/control_loop.{hpp,cpp}`: `enable_tracking()` (gated on `homed_`, §38.1),
+    `feed_measurement()`, and the Hold-phase tracking branch (tracking reference
+    constrained by the §18 envelope) + in-loop control-log/black-box/snapshot
+    publication.
+  - `tests/`: 5 new component binaries (los_joint_solver, tracking_state_machine,
+    search_planner, reference_manager, telemetry) + `tests/test_tracking_integration.cpp`
+    (5 cases): a base-frame target projected to pixels through the real camera+kinematics
+    drives the full stack on the simulated plant — **tracks a rotating target**
+    (optical axis converges on it), **loss→coast→brake→ready-hold**, **search sweep**,
+    **stays within soft limits**, and **fault→safe stop** (supervisor disables the
+    motors, §16 top priority).
+  - Coordinate-frame note: for the aligned 1:1 sim the LOS→joint output (joint
+    angle) equals the raw position, so the tracking reference is used directly as the
+    raw reference and clamped by the §18 envelope; the logical frame (deg from the
+    homing endpoint) is used only for the ready pose/limits.
+  - Result: **28/28 ctest green** (22 prior + 5 component + 1 integration) **and**
+    17/17 Python vision tests green. Two test-setup fixes found while wiring the
+    integration (the `TravelBand{min,max}` check is `span∈[0.5·(max−min),1.5·(max−min)]`;
+    and the homing coarse approach can't close a 180° span, so the sim uses ±1 rad
+    stops like the existing control-loop test). No live camera, no `can0`/`vcan9`
+    changes, no motor motion.
+  - **Next:** systemd unit files (§52, deployment), then Phase 7 (installation
+    orientation). Live tests (§P7/§P8) remain queued — not run, no motor.

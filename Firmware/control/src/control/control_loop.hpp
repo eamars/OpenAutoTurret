@@ -26,12 +26,17 @@
 #include <optional>
 #include <string>
 
+#include <utility>
+
 #include "calibration/homing_plan.hpp"
 #include "calibration/park_controller.hpp"
 #include "control/motor_backend.hpp"
+#include "control/reference_manager.hpp"
 #include "control/safety_envelope.hpp"
 #include "control/safety_supervisor.hpp"
+#include "control/tracking_controller.hpp"
 #include "common/types.hpp"
+#include "tracking/target_measurement.hpp"
 
 namespace ota {
 
@@ -87,6 +92,19 @@ class ControlLoop {
   bool start_parking(std::string& err);  // requires homed_ (valid limits/models)
   void deenergize_all();
 
+  // --- tracking (Phase 6, §13-§16) --------------------------------------
+  // Enable the tracking mode. Requires a valid homing (position validity
+  // known, §38.1). The TrackingController is then owned by the loop and the
+  // Hold phase delegates its reference to it (tracking > search > hold, §16).
+  bool enable_tracking(const TrackingController::Config& cfg, std::string& err);
+  // Feed a new target measurement published by visiond (no-op if tracking is
+  // not enabled). Non-blocking; the control loop consumes it next cycle.
+  void feed_measurement(const vision::TargetMeasurement& m);
+  bool tracking_mode_enabled() const { return tracking_ != nullptr; }
+  // Access to the tracking controller (telemetry, state). Only call when
+  // tracking_mode_enabled().
+  const TrackingController& tracking_controller() const { return *tracking_; }
+
   // One control cycle. `period_ns` is how long the previous cycle took (drives
   // the §39.3 deadline watchdog). Returns the (possibly updated) phase.
   Phase step(TimeNs now_ns, TimeNs period_ns);
@@ -132,6 +150,11 @@ class ControlLoop {
   std::array<double, kAxisCount> last_q_{};
   TimeNs deadline_ns_ = 0;
   int deadline_miss_count_ = 0;
+  // Phase 6 tracking subsystem (null unless tracking mode is enabled).
+  std::unique_ptr<TrackingController> tracking_;
+  ReferenceRequest tracking_ref_;  // produced each cycle while tracking is on
+  bool has_pending_measurement_ = false;
+  vision::TargetMeasurement pending_measurement_;
 };
 
 }  // namespace ota
