@@ -58,7 +58,7 @@ class VideoSource:
     """
 
     def __init__(self, enabled: bool = True, orientation: str = "none",
-                 white_balance: str = "auto") -> None:
+                 white_balance: str = "off") -> None:
         self._enabled = enabled
         self._orientation = ic.validate_orientation(orientation)
         self._wb_mode = ic.validate_white_balance(white_balance)
@@ -209,9 +209,11 @@ class VideoSource:
     def _make_callback(self, Image, quality: int):
         """Build the picamera2 request callback (runs on the camera thread).
 
-        The install-level orientation and white-balance corrections are applied
-        HERE, on the raw frame, before any encoding — i.e. before the frame enters
-        processing (doc §42.3) — so the preview shows the corrected image.
+        The install-level orientation correction is applied HERE, on the raw frame,
+        before any encoding — i.e. before the frame enters processing (doc §42.3) —
+        so the preview shows the corrected image. White balance is off by default: the
+        sensor feed is already neutral once the BGRX byte order is decoded correctly,
+        so it is only needed for a genuinely mis-balanced install.
         """
         state = self
         orientation = state._orientation
@@ -229,8 +231,12 @@ class VideoSource:
                 # 1) Orientation (install-level) on the raw frame, first.
                 if orientation != "none":
                     arr = ic.apply_orientation_image(arr, orientation)
-                # 2) XBGR8888 -> RGB (drop X).
-                rgb = arr[..., ::-1][..., :3]
+                # 2) XBGR8888 -> RGB. V4L2_PIX_FMT_XBGR32 is BGRX-8-8-8-8
+                #    (byte0=B, byte1=G, byte2=R, byte3=X). Take the first 3
+                #    bytes and reverse -> [R, G, B], dropping the trailing X.
+                #    (Getting this order wrong puts the constant-255 X byte into
+                #    "red" and drops blue -> a false red cast.)
+                rgb = arr[..., :3][..., ::-1]
                 # 3) White balance (install-level): auto gray-world, smoothed.
                 if wb_mode == "auto":
                     g = ic.gray_world_correction(rgb)

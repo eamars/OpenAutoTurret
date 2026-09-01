@@ -121,12 +121,12 @@ def main() -> int:
     os.environ.setdefault("OTA_VIDEO_HEIGHT", "480")
     os.environ.setdefault("OTA_VIDEO_FPS", "15")
     os.environ.setdefault("OTA_VIDEO_QUALITY", "80")
-    # This install: the IMX500 is mounted upside-down, and its colour
-    # balance is warm/red. Both are corrected at capture (before
-    # processing / control). Override with the matching env var if the
-    # physical mount changes.
+    # This install: the IMX500 is mounted upside-down, so rotate_180 is
+    # applied at capture (before processing / control) to both the preview
+    # and the vision/control pipeline. The colour is neutral once the
+    # BGRX byte order is decoded correctly, so no white-balance correction
+    # is needed (OTA_VIDEO_WB stays at its default "off").
     os.environ.setdefault("OTA_VIDEO_ORIENTATION", "rotate_180")
-    os.environ.setdefault("OTA_VIDEO_WB", "auto")
     print(f"[inspection] webd listening on http://{args.host}:{args.port}",
           flush=True)
     WebdApp().run()

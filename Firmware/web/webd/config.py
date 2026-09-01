@@ -20,7 +20,9 @@ Env vars:
   OTA_VIDEO_QUALITY   JPEG quality 1..95 (default 80)
   OTA_VIDEO_ORIENTATION install orientation correction (default none):
                         none | rotate_180 | flip_horizontal | flip_vertical
-  OTA_VIDEO_WB        white balance: off | auto (gray-world, default auto)
+  OTA_VIDEO_WB        white balance: off | auto (gray-world, default off).
+                        off = trust the sensor (neutral once BGRX order is correct);
+                        auto = software gray-world for a genuinely mis-balanced install
                         applied at capture, before processing / control
 """
 from __future__ import annotations
@@ -44,7 +46,7 @@ class WebConfig:
     video_fps: int = 15
     video_quality: int = 80
     video_orientation: str = "none"
-    video_white_balance: str = "auto"
+    video_white_balance: str = "off"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -88,6 +90,6 @@ def load_web_config() -> WebConfig:
         video_quality=min(95, max(1, _env_int("OTA_VIDEO_QUALITY", 80))),
         video_orientation=_env_choice("OTA_VIDEO_ORIENTATION", "none",
                                       ic.ORIENTATIONS),
-        video_white_balance=_env_choice("OTA_VIDEO_WB", "auto",
+        video_white_balance=_env_choice("OTA_VIDEO_WB", "off",
                                         ic.WHITE_BALANCES),
     )
