@@ -158,10 +158,22 @@ tracking:
 shutdown:
   # §33.1 safe in-travel park pose: the no-dangle mid-travel pose (the same
   # pose the homing plan uses to park each axis between homes). Logical degrees
-  # (low stop = 0, high stop = travel): pitch mid of ~80 deg = 40, yaw mid of
-  # ~360 deg = 180. Parking here and de-energizing leaves the arm at its
-  # gravity rest (no slide). Adjust only on evidence (P2 verification).
-  yaw_park_deg: 180
+  # (low stop = 0, high stop = travel). Parking here and de-energizing leaves
+  # the arm at its gravity rest (no slide). Adjust only on evidence (P2).
+  #
+  # YAW: 176 deg, NOT the travel mid (180). Evidence (rehome4, 2026-09-02):
+  # a 4 h 45 m energized hold at the ready pose (175.6 deg) showed the yaw
+  # gravity balance sits at ~175.6-176.5 deg (the axis wandered +/-0.8 deg
+  # stick-slip around it, 2.8 deg total, then re-centered). Parking at 180
+  # deg is ~4 deg PAST the balance, so (a) the park move crawls against
+  # gravity (~0.07 deg/s position-mode, full 40 s park timeout), (b) Verify
+  # can never hold the axis within 0.5 deg of 180 (gravity pulls it back),
+  # and (c) the de-energized yaw sat 1.4 deg short of target (rehome1:
+  # 3.96 deg short). 176 deg = center of the observed friction deadband.
+  # PITCH: 40 deg — the 4.7 h hold was flat (0.02 deg total) and the
+  # de-energized check showed no slide; the balance point is within the
+  # friction deadband here.
+  yaw_park_deg: 176
   pitch_park_deg: 40
   # §33.2 verification before the motors are de-energized (commanded shutdown
   # only; see §33.3 for uncontrolled power loss).

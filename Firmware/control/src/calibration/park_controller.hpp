@@ -77,12 +77,23 @@ struct ParkParams {
   double move_pos_tol_rad = 0.01;
   double move_vel_tol_rad_s = 0.1 * kDeg2Rad;
   double move_timeout_s = 30.0;
+  // Drive current limit (A) per axis for the SPEED-MODE park moves
+  // ([0] = pitch, [1] = yaw). The park moves run in speed mode — the drive's
+  // velocity loop is the motion source (P0o); the position-mode park move
+  // crawled ~0.07 deg/s against gravity + friction and never landed (rehome4:
+  // 40 s park timeout, yaw de-energized 1.4 deg short of target; rehome1:
+  // 3.96 deg short). Defaults match the production per-axis homing limits.
+  std::array<double, kAxisCount> limit_cur_a{3.0, 1.0};
 };
 
 // What the executor should do this cycle.
 struct ParkOutput {
   DesiredState pitch;  // desired state for pitch (hold if not the active move axis)
   DesiredState yaw;    // desired state for yaw
+  // True while MoveYaw/MovePitch: the executor drives via SpdRef (speed mode,
+  // velocity_rad_s is the signed command). False from Verify on: the executor
+  // enters position mode once and holds target_rad (the §33.2 hold).
+  bool speed_mode = false;
   bool disable_pitch = false;  // request to de-energize pitch now
   bool disable_yaw = false;    // request to de-energize yaw now
   bool complete = false;       // reached Parked (power-safe)

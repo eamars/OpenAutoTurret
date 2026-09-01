@@ -139,6 +139,13 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.park.vel_tol_deg_s = cfg.shutdown.vel_tolerance_deg_s;
   c.park.dwell_ms = cfg.shutdown.dwell_ms;
   c.park.speed_deg_s = cfg.shutdown.speed_deg_s;
+  // Park moves run in speed mode: reuse the per-axis homing current limits
+  // (pitch 3 A / yaw 1 A — under the 10 A safe cap) as the drive LimitCur for
+  // the park moves.
+  c.park.limit_cur_a[0] = cfg.axes[0].limit_cur_a > 0.0 ? cfg.axes[0].limit_cur_a
+                                                        : c.park.limit_cur_a[0];
+  c.park.limit_cur_a[1] = cfg.axes[1].limit_cur_a > 0.0 ? cfg.axes[1].limit_cur_a
+                                                        : c.park.limit_cur_a[1];
   // Phase 9: payload verification (§27, §31.3).
   c.payload_auto_verify = cfg.payload.auto_verify;
   return c;

@@ -237,6 +237,11 @@ class ControlLoop {
   SupervisorDecision last_decision_;
   std::unique_ptr<HomingPlan> homing_;
   std::unique_ptr<ParkController> park_;
+  // Park: position mode is entered once, when the ParkController leaves the
+  // speed-mode move states (MoveYaw/MovePitch) for the §33.2 target-hold
+  // (Verify/Dwell/Disable). The blocking enter_position_mode recipe (~100-200
+  // ms) would otherwise re-run every cycle. Reset in start_parking().
+  bool park_pos_mode_entered_ = false;
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};

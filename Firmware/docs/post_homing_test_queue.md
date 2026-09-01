@@ -124,8 +124,49 @@ stationary and the bus is healthy.
 - **Acceleration monitor:** confirmed working — detected the friction break-through
   during homing (low `a`, `v~0`, `cmd≠0` dwells at the stop). See P3 note.
 
+**Result (rehome4, 2026-09-02 04:07–04:19, PASS with one yaw caveat):**
+- **No drift — pitch:** PASS. 3×1 s samples −1.49538/−1.49533/−1.49548
+  (range 0.00015 rad = 0.009°); 1 Hz flat at −1.4956/−1.4960 for 20+ min.
+- **No drift — yaw:** borderline. After ~4 min of flat hold at −2.2765 the yaw
+  took a 0.06° stick-slip step (04:00:29) to a new equilibrium and then
+  micro-oscillates ±0.02° around −2.2746 (15-s cadence: range 0.0008 rad =
+  0.045°; 1-s cadence: range 0.0005 rad vs the 0.0004 criterion). Net creep
+  0.11° over 15 min, then locked. Interpretation: the ready pose
+  (yaw 175.6°) sits near the yaw static-friction breakaway — gravity torque
+  there is close to the friction hold limit, so the hold settles by a slip
+  step and then stick-slips microscopically. The hold-phase executor
+  re-pins its reference to the current position each cycle (by design: the
+  drive's internal position loop holds the point), so no outer-loop
+  correction acts against the creep. The park pose is yaw 180° (4.4° away);
+  P2 will show whether the park pose sits at the gravity balance (and the
+  P2 park-pose tuning is the proper fix if not).
+- **Bus healthy:** PASS. `turret-can stats`: err_rx=0, tx_fail=0. Concurrency
+  with `turret-can` reads shows up as single-cycle Derates (2–5 ms overruns,
+  `misses=1`, immediately Allow) — no escalation, no faults.
+- **Thermals:** PASS. pitch 25.9 °C, yaw 33.3 °C — flat for 25+ min, far
+  below the 75 °C fault threshold.
+- **Hold under load (manual push-recovery):** SKIPPED per operator
+  (2026-09-02: "I don't care about the holding") — not tested.
+- **Long-hold observation (unplanned, 03:51–08:37 = 4 h 45 m, 1 Hz data):**
+  the daemon held at the ready pose far longer than the check window.
+  - **Pitch: rock-solid** — −1.4956 → −1.4960 total (0.02°), 10-min window
+    range ≤ 0.0006 rad. No creep of any kind.
+  - **Yaw: slow stick-slip wander around the gravity balance** — two ±0.8°
+    excursions: +0.8° at ~04:25 (settled 176.7°), −0.8° return at ~05:55
+    (back at 175.6°), one ±1.4° window at ~06:35; 2.8° total over 4.7 h,
+    then locked at −2.2755 ± 0.001. Interpretation: the ready pose
+    (175.6°) sits inside the yaw friction deadband; the hold re-pins to the
+    current position (no outer correction), so the arm wanders on friction
+    + a tiny residual gravity torque and re-centers. **Gravity balance
+    estimate: yaw ≈ 175.6–176.5°** — the basis for the P2 park-pose
+    re-tune (180° → 176°).
+  - Temps cooled to 23.9 / 31.3 °C; only sporadic 2–5 ms Derates from
+    concurrent `turret-can` reads (one 197 ms re-arm spike during homing) —
+    no escalation, no faults over the whole window.
+
 **Pass criteria:** position variance ≤ 0.0004 rad, no CAN errors, temp stable,
-hold resists a light manual push and recovers.
+hold resists a light manual push and recovers. (Hold-under-load waived by the
+operator; all other checks PASS.)
 
 ---
 
@@ -153,6 +194,55 @@ de-energized at the park pose)`.
 (0x7019): pitch −1.49726 / yaw −2.19864 (the mid-travel). Second read +15 s: pitch
 −1.49707 / yaw −2.19854 → **no gravity slide** (Δ<0.01°). De-energize order pitch
 then yaw. A fresh de-energized read held the park pose.
+(Note: the yaw de-energized 3.96° OFF the 180° park target — the position-mode
+park move never landed; see the rehome4 result below.)
+
+**Result (rehome4, 2026-09-02 08:37, park INCOMPLETE — root-caused + fixed):**
+SIGTERM after the 4 h 45 m hold → `shutdown requested; parking` (08:37:06) →
+`de-energized (phase=parking, fault='')` + `controld stopped cleanly` (08:37:47).
+**No `PARKED` line**: the 8000-cycle (40 s) park window in `main.cpp` expired
+without reaching `Phase::Parked`, so the safe fallback `deenergize_all()` ran.
+
+- **De-energize order:** pitch then yaw ✓ (`deenergize_all` loop).
+- **Final de-energized pose (0x7019):** pitch −1.5009 (40.2° — target reached,
+  0.2° over) / yaw −2.2301 (**178.2° — 1.4° short of the 180° target**).
+- **Root cause (two compounding issues):**
+  1. **The park moves ran in position mode** (`start_parking` →
+     `enter_position_mode_all`): the drive's internal position loop is weak
+     against gravity + friction — the yaw move (ready 175.6° → target 180°,
+     fighting gravity uphill) crawled at ~0.07°/s vs the 10°/s command
+     (0.046 rad over ~35 s).
+  2. **The 180° park target sits ~4° PAST the yaw gravity balance**
+     (≈175.6–176.5°, from the P1 4.7 h hold data): after the yaw neared the
+     target, gravity pulled it back and the Verify stage (±0.5° + 500 ms
+     dwell) could never hold it in the window — the old Verify/Dwell also
+     re-pinned to the current position (no pull-back), so the park sat in
+     Verify until the 40 s window expired.
+  rehome1 shows the same short-landing (3.96°) — the position-mode park move
+  has never once landed at the real station.
+- **No-slide check at the de-energized pose (17 min, 08:37:47–08:49:28):**
+  pitch −1.50088…−1.50117 (range 0.017°), yaw −2.22991…−2.23016 (range
+  0.014°) → **no gravity slide** — static friction holds the arm at the
+  178.2° / 40.2° pose. (The yaw balance question is answered by the re-tune
+  below, not by this pose.)
+
+**Fix (implemented 2026-09-02, pending live verification):**
+1. **Park moves run in speed mode** (SpdRef, the drive's velocity loop — the
+   proven smooth motion source, P0o): `start_parking` now enters speed mode
+   with the per-axis current limits (pitch 3 A / yaw 1 A, under the 10 A cap);
+   the executor commands `po.velocity_rad_s` (MoveTo's signed stop-distance
+   profile) for the active axis and SpdRef=0 for the other. Position mode is
+   entered **once, at Verify**, for the §33.2 hold. (The `StopTracking` state
+   stays in speed mode — a premature position-mode entry there would swallow
+   the SpdRef moves.)
+2. **Verify/Dwell hold at the park target** (position mode, drive's position
+   loop pulls the axis back to the target — the outer correction the old
+   re-pin-to-current behavior lacked).
+3. **`yaw_park_deg: 180 → 176`** in `config/turret.yaml`: the center of the
+   observed yaw friction deadband (175.6–176.7°) = the gravity balance, so
+   the park move is nearly torque-free and the de-energized arm sits balanced.
+   Pitch stays at 40° (4.7 h hold flat; 17 min de-energized no-slide).
+ctest 38/38 + pytest 93 passed/2 skipped green on the new code.
 
 **Checks:**
 - De-energize order: **pitch then yaw** (per §33; verify in the log / motor state).

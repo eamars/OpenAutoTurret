@@ -46,13 +46,19 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
   switch (state_) {
     case ParkState::StopTracking:
       // Phase 2: there is no tracking/search to stop (the caller has already
-      // disabled it). Hold for one cycle, then begin the park moves.
+      // disabled it). Hold for one cycle, then begin the park moves. Still in
+      // speed mode (both axes at SpdRef=0): position mode is entered only at
+      // Verify, when the §33.2 target-hold begins — the executor enters it on
+      // the first !speed_mode cycle, so a premature position-mode entry here
+      // would swallow the SpdRef park moves.
+      out.speed_mode = true;
       out.message = "stop tracking (no-op in phase 2)";
       state_ = ParkState::MoveYaw;
       break;
 
     case ParkState::MoveYaw:
       out.yaw = yaw_move_->step(yaw_fb);
+      out.speed_mode = true;  // SpdRef-driven move (velocity_rad_s, signed)
       out.message = "move yaw to park";
       if (yaw_move_->terminal()) {
         if (yaw_move_->ok()) {
@@ -70,6 +76,7 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
                             p_.move_vel_tol_rad_s, p_.move_timeout_s);
       }
       out.pitch = pitch_move_->step(pitch_fb);
+      out.speed_mode = true;  // SpdRef-driven move (velocity_rad_s, signed)
       out.message = "move pitch to park";
       if (pitch_move_->terminal()) {
         if (pitch_move_->ok()) {
@@ -80,15 +87,34 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
       }
       break;
 
-    case ParkState::Verify:
+    case ParkState::Verify: {
+      // POSITION-MODE HOLD AT THE PARK TARGET (not at the current position):
+      // the drive's position loop pulls the axis back to the target while the
+      // §33.2 check runs. Re-pinning to the current position (the old
+      // behavior, shared with the ready-hold) has NO outer correction — at
+      // the real station the yaw gravity balance sits ~4 deg off the 180 deg
+      // park pose, so the axis drifted back out of the 0.5 deg window and the
+      // park timed out at the 40 s shutdown window (rehome4; the yaw also
+      // de-energized 1.4 deg short of target, rehome1 3.96 deg short).
+      out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)], 0.0, 0.0, true,
+                               "hold at park target"};
+      out.yaw = DesiredState{park_raw_[ix(AxisId::Yaw)], 0.0, 0.0, true,
+                             "hold at park target"};
       out.message = "verify park pose";
       if (at_park(pitch_fb, AxisId::Pitch) && at_park(yaw_fb, AxisId::Yaw)) {
         dwell_start_ns_ = pitch_fb.t_ns;
         state_ = ParkState::Dwell;
       }
       break;
+    }
 
     case ParkState::Dwell: {
+      // Same target hold as Verify: keep pulling at the park pose for the
+      // dwell duration (drift back to Verify if it leaves the window).
+      out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)], 0.0, 0.0, true,
+                               "hold at park target"};
+      out.yaw = DesiredState{park_raw_[ix(AxisId::Yaw)], 0.0, 0.0, true,
+                             "hold at park target"};
       out.message = "park dwell";
       const bool still = at_park(pitch_fb, AxisId::Pitch) && at_park(yaw_fb, AxisId::Yaw);
       if (!still) {

@@ -116,11 +116,20 @@ bool ControlLoop::start_parking(std::string& err) {
     fault(err);
     return false;
   }
+  // The park MOVES run in speed mode (SpdRef, per-axis current limit from
+  // config — pitch 3 A / yaw 1 A, under the 10 A cap): the drive's velocity
+  // loop is the strong, smooth motion source (P0o). The old position-mode
+  // park move crawled ~0.07 deg/s against gravity + friction and never
+  // landed at the real station (rehome4: full 40 s park timeout, yaw
+  // de-energized 1.4 deg short of the 180 deg target; rehome1: 3.96 deg
+  // short). Position mode is entered once, at the ParkController's Verify
+  // state, for the §33.2 target-hold (executor, Phase::Parking).
   std::string e;
-  if (!enter_position_mode_all(cfg_.park.speed_deg_s * kDeg2Rad, e)) {
+  if (!enter_speed_mode_all(cfg_.park.limit_cur_a.data(), e)) {
     err = e;
     return false;
   }
+  park_pos_mode_entered_ = false;
   phase_ = Phase::Parking;
   return true;
 }
@@ -506,10 +515,34 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       ParkOutput po = park_->step(
           to_feedback(sp[ix(AxisId::Pitch)], v_est_[ix(AxisId::Pitch)]),
           to_feedback(sp[ix(AxisId::Yaw)], v_est_[ix(AxisId::Yaw)]));
-      q_ref[ix(AxisId::Pitch)] = po.pitch.target_rad;
-      lim[ix(AxisId::Pitch)] = po.pitch.hold ? 0.0 : po.pitch.speed_rad_s;
-      q_ref[ix(AxisId::Yaw)] = po.yaw.target_rad;
-      lim[ix(AxisId::Yaw)] = po.yaw.hold ? 0.0 : po.yaw.speed_rad_s;
+      if (po.speed_mode) {
+        // Speed-mode park move (MoveYaw/MovePitch): SpdRef-driven, mirroring
+        // the Homing phase (P0o). MoveTo emits the signed velocity for the
+        // active axis (capped by the stop-distance profile); the inactive
+        // axis holds at SpdRef=0. The generic command path below sees
+        // in_speed_mode and only issues a controlled stop (SpdRef=0) on a
+        // safety action, which is issued after this and therefore wins.
+        backend_->command_velocity(AxisId::Pitch, po.pitch.velocity_rad_s);
+        backend_->command_velocity(AxisId::Yaw, po.yaw.velocity_rad_s);
+      } else {
+        // §33.2 target-hold (Verify/Dwell/Disable): position mode holding AT
+        // THE PARK TARGET (the drive's position loop pulls the axis back to
+        // the target — no re-pin to the current position; see
+        // ParkController::step for the real-station evidence). One-time
+        // blocking mode entry = a single Derate.
+        if (!park_pos_mode_entered_) {
+          std::string e;
+          if (enter_position_mode_all(cfg_.park.speed_deg_s * kDeg2Rad, e)) {
+            park_pos_mode_entered_ = true;
+          } else {
+            fault(e);
+          }
+        }
+        q_ref[ix(AxisId::Pitch)] = po.pitch.target_rad;
+        lim[ix(AxisId::Pitch)] = 0.0;
+        q_ref[ix(AxisId::Yaw)] = po.yaw.target_rad;
+        lim[ix(AxisId::Yaw)] = 0.0;
+      }
       if (po.disable_pitch) backend_->deenergize(AxisId::Pitch);
       if (po.disable_yaw) backend_->deenergize(AxisId::Yaw);
       if (po.failed) fault("park failed: " + po.message);
