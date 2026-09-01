@@ -92,6 +92,8 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
   if (cc.backoff_deg > 0) hp.backoff_rad = cc.backoff_deg * kDeg2Rad;
   if (cc.repeatability_deg > 0)
     hp.repeatability_rad = cc.repeatability_deg * kDeg2Rad;
+  if (cc.repeatability_retries > 0)
+    hp.repeatability_retries = cc.repeatability_retries;
   // Adaptive-current homing (push-through, §22). Shared across axes.
   if (cc.limit_cur_step_a > 0) hp.limit_cur_step_a = cc.limit_cur_step_a;
   if (cc.limit_cur_max_a > 0) hp.limit_cur_max_a = cc.limit_cur_max_a;

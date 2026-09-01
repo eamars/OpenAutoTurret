@@ -72,6 +72,9 @@ struct Defaults {
   int contact_dwell_ms = 200;
   double backoff_deg = 5.0;
   double repeatability_deg = 0.5;
+  int repeatability_retries = 2;  // p3f: second-approach re-runs on a
+                                  // non-repeatable q2 (friction-stall false
+                                  // contact); 0 in YAML = this default
   // Adaptive-current homing (push-through, §22). Defaults match
   // HomingParams; YAML overrides are authoritative.
   double limit_cur_step_a = 1.0;   // +1 A per false-contact latch
@@ -248,6 +251,9 @@ void load_contact(const YAML::Node& hc, HomingConfig& out, std::vector<std::stri
   cc.backoff_deg = opt_double(ct, "backoff_deg", p + "backoff_deg", Defaults().backoff_deg, warn);
   cc.repeatability_deg = opt_double(ct, "repeatability_deg", p + "repeatability_deg",
                                     Defaults().repeatability_deg, warn);
+  cc.repeatability_retries =
+      opt_int(ct, "repeatability_retries", p + "repeatability_retries",
+              Defaults().repeatability_retries, warn);
   cc.limit_cur_step_a =
       opt_double(ct, "limit_cur_step_a", p + "limit_cur_step_a",
                  Defaults().limit_cur_step_a, warn);
@@ -282,6 +288,8 @@ void load_contact(const YAML::Node& hc, HomingConfig& out, std::vector<std::stri
   if (cc.contact_dwell_ms <= 0) err.push_back(p + "contact_dwell_ms must be > 0");
   if (cc.backoff_deg <= 0.0) err.push_back(p + "backoff_deg must be > 0");
   if (cc.repeatability_deg <= 0.0) err.push_back(p + "repeatability_deg must be > 0");
+  if (cc.repeatability_retries < 0)
+    err.push_back(p + "repeatability_retries must be >= 0");
 }
 
 // §25.2 homing_plan: an ordered list of homing steps. A missing/empty plan is

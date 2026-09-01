@@ -333,14 +333,33 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
             result_.fine_contact_rad =
                 0.5 * (fine_contact1_rad_ + fine_contact2_rad_);
             result_.fine_samples = fine_samples_;
+            result_.repeatability_retries = verify_retries_;
             result_.peak_torque_nm = peak_torque_nm_;
             result_.contact_torque_nm = std::fabs(fb.torque_nm);
             result_.final_limit_cur_a = limit_cur_a_;
             result_.current_raises = current_raises_;
             begin_hold();
             state_ = AxisHomeState::Complete;
+          } else if (verify_retries_ < p_.repeatability_retries) {
+            // p3f: a non-repeatable q2 is usually a static-friction STALL in
+            // the second approach latching a false contact short of the stop
+            // (see HomingParams::repeatability_retries) — the repeatability
+            // check is the safety authority and rejected it correctly, and
+            // the breakaway is stochastic. Re-run the (small backoff +
+            // second approach) pass; q1 stays the reference. begin_backoff_to
+            // re-arms position mode (pos_enter_pending_) and the phase timer
+            // restarts, so each pass gets a fresh backoff timeout.
+            ++verify_retries_;
+            begin_backoff_to(fb.t_ns,
+                             fine_contact1_rad_ - p_.small_backoff_rad * dir_,
+                             fine_contact1_rad_);
+            verify_phase_ = 0;
           } else {
-            fail("repeatability exceeded: |q1 - q2| over the limit" +
+            result_.repeatability_retries = verify_retries_;
+            fail("repeatability exceeded: |q1 - q2|=" +
+                 std::to_string(rep / kDeg2Rad) + " deg > " +
+                 std::to_string(p_.repeatability_rad / kDeg2Rad) + " deg " +
+                 "after " + std::to_string(verify_retries_) + " retries" +
                  jitter_suffix());
           }
         } else if (timed_out(fb)) {

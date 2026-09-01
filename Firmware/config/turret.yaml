@@ -103,6 +103,14 @@ homing:
     contact_dwell_ms: 1500
     backoff_deg: 5
     repeatability_deg: 0.5
+    # p3f: the second fine approach can stall in the drive's static-friction
+    # zone short of the stop (measured 75-79 deg pitch: 0.1-0.44 N.m,
+    # v~0.02) and the detector latches that stall as a false contact, so the
+    # (correct) repeatability check rejects a non-repeatable q2. The
+    # breakaway is stochastic, so the (small backoff + second approach) pass
+    # is re-run this many times on a non-repeatable q2 before faulting. A
+    # genuinely non-repeatable stop still faults after the retries.
+    repeatability_retries: 2
     # --- Speed-mode homing safety limits ---
     # No adaptive current raise: the homing runs at the per-axis limit_cur_a
     # (pitch 3 A / yaw 1 A) for the whole approach. At these currents the

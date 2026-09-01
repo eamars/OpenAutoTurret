@@ -46,6 +46,18 @@ struct HomingParams {
   double backoff_rad = 5.0 * kDeg2Rad;          // back-off after the coarse contact
   double small_backoff_rad = 2.0 * kDeg2Rad;    // back-off for the repeatability pass
   double repeatability_rad = 0.5 * kDeg2Rad;    // max allowed |fine_1 - fine_2|
+  // p3f (2026-09-02): the second fine approach can STALL in the drive's
+  // static-friction zone short of the stop (0.1-0.44 N.m, v~0.02 — measured
+  // at 75-79 deg pitch, where the velocity loop's P-term at the 15 deg/s
+  // error is ~0.26 N.m and spd_ki=0.002 is too slow to build breakaway
+  // torque). The contact detector cannot distinguish that stall from a true
+  // stop (it clears the effort_hard_contact 0.40 N.m gate), latches a false
+  // contact, and the (correct) repeatability check rejects the non-
+  // repeatable q2. The breakaway is stochastic (p3f's first fine approach
+  // needed two breakaways to cross the same zone), so on a repeatability
+  // failure the (small backoff + second approach) pass is re-run this many
+  // times before faulting. A genuinely non-repeatable stop still faults.
+  int repeatability_retries = 2;
   double settle_time_s = 0.5;                   // dwell after each stop
   double approach_timeout_s = 30.0;             // max time for one approach move
   double max_travel_rad = 150.0 * kDeg2Rad;     // safety: max travel from the start
@@ -182,6 +194,8 @@ struct HomingResult {
   double fine_contact_rad = 0.0;     // the validated fine contact (avg of samples)
   double repeatability_rad = 0.0;    // |fine_contact_1 - fine_contact_2|
   int fine_samples = 0;              // number of fine contact samples
+  int repeatability_retries = 0;     // second-approach passes re-run on a
+                                     // non-repeatable q2 (p3f friction stall)
   std::string fail_reason;           // non-empty if !valid
   // --- Adaptive-current diagnostics (§22) ---
   double peak_torque_nm = 0.0;       // max |tau| observed during the run
@@ -274,6 +288,7 @@ class HomingController {
   double fine_contact1_rad_ = 0.0;
   double fine_contact2_rad_ = 0.0;
   int fine_samples_ = 0;
+  int verify_retries_ = 0;  // second-approach passes re-run so far (p3f)
 
   // --- Adaptive-current state (§22) ---
   double limit_cur_a_ = 0.0;        // current drive limit (A); 0 until first use

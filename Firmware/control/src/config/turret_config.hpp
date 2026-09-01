@@ -63,6 +63,9 @@ struct ContactConfig {
   int contact_dwell_ms = 0;
   double backoff_deg = 0.0;
   double repeatability_deg = 0.0;
+  int repeatability_retries = 0;  // second-approach re-runs on a non-repeatable
+                                  // q2 (p3f friction stall); 0 = HomingParams
+                                  // default (2)
   // --- Adaptive-current homing (push-through, §22) ---
   // The yaw is a ~360 deg axis whose mid-travel friction stalls (false
   // contacts) beat a low LimitCur. On each coarse-contact latch the homing

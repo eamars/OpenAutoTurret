@@ -29,11 +29,28 @@ struct SimAxis {
   double contact_effort = 5.0; // N·m while pushing into the stop
   double noise = 0.05;         // rad/s velocity noise amplitude
 
+  // p3f: a static-friction zone short of the stop (the measured 75-79 deg
+  // pitch breakaway stall, which the contact detector misreads as a stop).
+  // On the (stall_after_approaches+1)th and later speed-mode approaches, the
+  // first entry into the band [zone_near, zone_far] from the stop stalls the
+  // axis (v=0, plateau torque). Position-mode moves (the backoffs) break it.
+  // sticky_stalls_left bounds how many entries stall (0 = none, >0 = that
+  // many, so a retry can succeed once it is spent).
+  bool has_zone = false;
+  int stall_after_approaches = 2;  // stall the 3rd+ speed approach (2nd fine)
+  int sticky_stalls_left = 0;      // 0 = zone disabled even if has_zone
+  double zone_near_rad = 0.3 * kDeg2Rad;
+  double zone_far_rad = 1.0 * kDeg2Rad;
+
   double q = 0.0;
   double v = 0.0;
   double torque = 0.0;
   bool at_stop = false;
   int stop_dir = 0;  // travel direction when the stop was reached
+
+  bool was_moving_toward_stop_ = false;
+  int speed_approach_count_ = 0;
+  bool zone_stalled_ = false;
 
   void reset(double start_q, double stop) {
     q = start_q;
@@ -42,6 +59,9 @@ struct SimAxis {
     at_stop = false;
     stop_dir = 0;
     stop_at = stop;
+    was_moving_toward_stop_ = false;
+    speed_approach_count_ = 0;
+    zone_stalled_ = false;
   }
 
   void step(const DesiredState& ds, int64_t t_ns) {
@@ -63,6 +83,44 @@ struct SimAxis {
           std::min(std::fabs(err) / kDtS, ds.speed_rad_s), err);
     } else {
       v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
+    }
+
+    // p3f static-friction zone (see the field comment). Counted on each
+    // speed-mode approach start (rest/hold -> driving toward the stop); the
+    // coarse approach is #1, the first fine #2, the second fine #3.
+    const bool in_speed_mode = !ds.position_move;
+    const bool moving_toward_stop =
+        in_speed_mode && ((v_cmd > 0 && stop_at > q) || (v_cmd < 0 && stop_at < q));
+    if (moving_toward_stop && !was_moving_toward_stop_) ++speed_approach_count_;
+    was_moving_toward_stop_ = moving_toward_stop;
+    const double dist_to_stop = std::fabs(stop_at - q);
+    const bool in_zone_band = has_zone &&
+                              dist_to_stop >= zone_near_rad &&
+                              dist_to_stop <= zone_far_rad;
+    if (in_speed_mode) {
+      if (zone_stalled_) {
+        if (!in_zone_band) {
+          zone_stalled_ = false;  // a backoff pulled the axis out of the zone
+        } else {
+          // Still stuck: hold position, push with the stop-plateau torque
+          // (clears the detector's effort gates -> a latched false contact).
+          v = 0.0;
+          torque = contact_effort * (v_cmd >= 0 ? 1 : -1);
+          at_stop = false;
+          return;
+        }
+      } else if (moving_toward_stop && in_zone_band &&
+                 speed_approach_count_ > stall_after_approaches &&
+                 sticky_stalls_left > 0) {
+        zone_stalled_ = true;
+        --sticky_stalls_left;
+        v = 0.0;
+        torque = contact_effort * (v_cmd > 0 ? 1 : -1);
+        at_stop = false;
+        return;
+      }
+    } else {
+      zone_stalled_ = false;  // position mode (backoff) breaks the friction
     }
 
     // First-order velocity response (~50 ms time constant).
@@ -310,6 +368,58 @@ TEST(Homing, TorqueSafetyAbortsBelowHardAbort) {
   EXPECT_TRUE(hc.state() == ota::AxisHomeState::Failed) << r.fail_reason;
   EXPECT_FALSE(r.valid);
   EXPECT_NE(r.fail_reason.find("torque safety"), std::string::npos)
+      << "fail_reason was: " << r.fail_reason;
+  SUCCEED();
+}
+
+TEST(Homing, RepeatabilityRetrySucceedsWhenStallBreaksOnRetry) {
+  // p3f: the second fine approach stalls in a static-friction zone short of
+  // the stop and the detector latches a false contact, so the (correct)
+  // repeatability check rejects a non-repeatable q2. The breakaway is
+  // stochastic: on the retry the zone gives way and the approach reaches the
+  // stop, so the (backoff + second approach) pass succeeds and the homing
+  // completes with exactly one retry recorded.
+  SimAxis axis;
+  axis.stop_at = 1.0;
+  axis.has_zone = true;
+  axis.stall_after_approaches = 2;  // stall the 3rd speed approach (2nd fine)
+  axis.sticky_stalls_left = 1;      // the stall breaks on the retry
+  axis.reset(0.5, 1.0);
+  HomingController hc(ota::AxisId::Pitch, +1, test_params());
+
+  run_homing(hc, axis, 6000);
+  const ota::HomingResult& r = hc.result();
+  EXPECT_TRUE(hc.state() == ota::AxisHomeState::Complete)
+      << "failed: " << r.fail_reason;
+  EXPECT_TRUE(r.valid);
+  EXPECT_EQ(r.repeatability_retries, 1)
+      << "the false contact should be retried exactly once";
+  EXPECT_NEAR(r.fine_contact_rad, 1.0, 0.01);
+  EXPECT_LE(r.repeatability_rad, test_params().repeatability_rad);
+  SUCCEED();
+}
+
+TEST(Homing, RepeatabilityRetryExhaustsThenFails) {
+  // p3f: a persistently non-repeatable second approach (the friction stall
+  // never breaks) must fault AFTER the configured retries — the
+  // repeatability check stays the safety authority, never waived.
+  SimAxis axis;
+  axis.stop_at = 1.0;
+  axis.has_zone = true;
+  axis.stall_after_approaches = 2;
+  axis.sticky_stalls_left = 100;  // the stall never breaks
+  axis.reset(0.5, 1.0);
+  HomingParams p = test_params();
+  p.repeatability_retries = 2;
+  HomingController hc(ota::AxisId::Pitch, +1, p);
+
+  run_homing(hc, axis, 6000);
+  const ota::HomingResult& r = hc.result();
+  EXPECT_TRUE(hc.state() == ota::AxisHomeState::Failed) << r.fail_reason;
+  EXPECT_FALSE(r.valid);
+  EXPECT_EQ(r.repeatability_retries, 2)
+      << "must run all retries before faulting";
+  EXPECT_NE(r.fail_reason.find("repeatability"), std::string::npos)
       << "fail_reason was: " << r.fail_reason;
   SUCCEED();
 }

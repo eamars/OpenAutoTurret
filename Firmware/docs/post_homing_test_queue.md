@@ -649,14 +649,70 @@ backoff (the stomp happened on Allow cycles, which are not logged).
 
 ctest 38/38 + pytest 93/2 after the change.
 
-**Live re-test p3f** (fresh boot → home → ready → SIGTERM → PARKED, doubles
-as the P2 park re-verification): the arm must move within ~1–5 s of the
-backoff start on the real drive (breakaway can take up to ~4 s — do not
-treat <4 s of creep as a stall before 15 s); the wire capture must show the
-backoff reference UNCONTENDED (no hold/brake frames interleaved with the
-`loc_ref = −0.897712 @ 0.174533` backoff frames); `turret-can read pitch
-0x7017` mid-backoff must read 0.174533; and the fault/shutdown holds must
-show no BRAKE/ALLOW flap in the log.
+**Live re-test p3f (2026-09-02 11:08:32, daemon 207807, cb0354a) — backoff
+fix VERIFIED, new failure at the repeatability check:**
+
+- **The p3d/p3e root cause is fixed live.** The 5° position-mode backoff
+  MOVED: q −0.813 → −0.899 in **~4.4 s** (min −0.918, ~0.3° overshoot, then
+  damped settle at −0.89895), no 15 s timeout, no `verify failed`, no
+  A/C stomp — matching the quiet-bus ground truth (breakaway ~3.5–4 s +
+  burst). Wire capture (`/tmp/p3f_candump.log`, `candump -ta`) covers the
+  whole run for the no-stomp confirmation.
+- **New failure — `repeatability exceeded: |q1 - q2| over the limit`** at
+  11:08:50 (`/tmp/controld_p3f.log`, 1683 motion rows):
+  - coarse contact 1 @ −0.81121 (tq +1.016 N·m) → 5° backoff → settle
+    −0.89895 (min −0.91802);
+  - first fine approach (from −0.91535, 6° travel at 15°/s): stick-slip
+    stall ~1.2 s (~74.5°), burst, mini-stall 0.4 s (~76.4°), burst, contact
+    @ −0.81121 (tq 0.94) — **q1, the same position as the coarse contact**;
+  - small backoff → −0.83219 (only 1.18° of the 2° target — at the edge of
+    the 0.8° arrival window, an open question of its own);
+  - **second fine approach (1.2° of travel, starting mid-zone): CREEPT
+    −0.832 → −0.822 over 1.87 s (v 0.001–0.036 rad/s, tq 0.1–0.44 N·m
+    oscillating — never broke away)** → the contact detector latched the
+    stall as a false contact → rep = |−0.822 − (−0.8112)| = **0.63° > 0.5°**
+    → fault.
+- **Root cause: the drive's static-friction zone at 75–79° pitch** (q ≈
+  −0.846…−0.811). In speed mode the velocity loop's P-term at the full
+  15°/s (0.2618 rad/s) error is ~0.26 N·m (Kp 0.38 N·m/(rad/s)) — below the
+  ~0.44+ N·m breakaway, and spd_ki = 0.002 winds up too slowly → stall with
+  tq oscillating 0.1–0.44 N·m (exactly the measured P-term + slow I).
+  Breakaway is STOCHASTIC: the first fine approach needed two breakaways
+  (1.2 s + 0.4 s stalls) to cross the zone; the second (1.2° of travel,
+  starting mid-zone) never broke free in its 1.87 s. The detector's latch is
+  not a detector bug: every gate passed, including
+  `very_high_effort` 0.44 > 0.40 N·m — the stall plateau is
+  **indistinguishable from a true stop plateau** (0.43–0.73 N·m measured at
+  the real stop), and the creep never exceeded `v_move_threshold` (0.10) so
+  no jitter "recovery" was counted.
+- **Not a regression from cb0354a:** p3d/p3e never reached the fine-approach
+  phases (they died at the backoff); the second approach's SpdRef comes from
+  the homing handler's `command_velocity` (unchanged); and the first full
+  success (p3, 08:55) shows this phase CAN pass — it is luck-dependent on
+  the stochastic breakaways.
+- **Fix: retry the repeatability pass.** On `rep > repeatability_rad`, the
+  (small backoff + second approach) pass is re-run up to
+  `repeatability_retries` times (default 2, config
+  `homing.contact.repeatability_retries`) before faulting. q1 stays the
+  reference; each retry re-runs the small backoff (position mode, fresh 15 s
+  timeout) and the second approach. Rationale: the repeatability check
+  remains the safety authority (a genuinely non-repeatable stop still faults
+  after the retries), and the retries exploit the stochastic breakaway — the
+  same reason the first fine approach got through on its second breakaway.
+  Rejected: retuning the detector (the stall IS indistinguishable at
+  0.40 N·m — that threshold is safety-critical), raising spd_ki (global drive
+  behavior change affecting payload/hold/park), enlarging the small backoff
+  (parameter fiddling; the retry is more general).
+
+**Live re-test p3g** (fresh boot → home → ready → SIGTERM → PARKED, doubles
+as the P2 park re-verification) on the retry fix: homing must succeed — the
+second approach may now show an extra small-backoff/settle cycle in the 100
+Hz log (a retry); if the retries exhaust, the fault message now reads
+`repeatability exceeded: |q1 - q2|=<rep> deg > <limit> deg after <N>
+retries`. The backoffs must remain A-only on the wire (no A/C stomp —
+cb0354a), and the run must end `PARKED (motors de-energized at the park
+pose)` at yaw 176° (raw ≈ −2.2739) / pitch 40° (raw ≈ −1.5009) with 10+ min
+no-slide.
 
 ---
 
