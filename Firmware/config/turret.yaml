@@ -144,9 +144,20 @@ homing_plan:
   - action: home_full_range
     axis: yaw
     precision: fine
-  - action: move          # park yaw mid-travel so it doesn't dangle during pitch re-home
+  - action: move          # park yaw at the no-dangle pose so it doesn't dangle during pitch re-home
     axis: yaw
-    position_deg: 180     # mid-travel of the ~360 deg yaw
+    # 176 deg = the yaw GRAVITY BALANCE (center of the 175.6-176.7 deg
+    # friction deadband, 4 h 45 m hold data), NOT the travel mid (180).
+    # p3b (2026-09-02, wire-confirmed): a 180 deg move from the low stop
+    # arrives at 10 deg/s; the drive velocity-loop lag (~0.13 s) overshoots
+    # 1.2 deg to 181.2 deg — 5.2 deg past the balance — and the return
+    # command (-8.3 deg/s) only produces ~0.1 N.m (P-term at 0.145 rad/s
+    # error; the drive's spd_ki is too small to build torque against static
+    # friction at a low speed-ref), so the axis could not break away and the
+    # move timed out (30 s) -> homing fault. At 176 deg the move is
+    # torque-free (the balance point) and any overshoot settles back to the
+    # balance on its own, so the mid-park never sticks.
+    position_deg: 176
   - action: home_full_range
     axis: pitch
     precision: fine
@@ -181,6 +192,18 @@ shutdown:
   vel_tolerance_deg_s: 1.0
   dwell_ms: 500
   speed_deg_s: 10
+  # Verify/Dwell position-mode hold speed limit (deg/s). MUST be non-zero:
+  # the CyberGear position loop is PINNED at LimitSpd=0, so a 0-limit hold
+  # can never pull an axis back into the §33.2 window. Evidence (p3,
+  # 2026-09-02): the speed-mode park move overshot the 176 deg yaw target by
+  # 0.84 deg (drive velocity-loop lag ~0.13 s), the old Verify hold carried
+  # LimitSpd=0, and the axis sat at the overshoot point (175.16 deg) for the
+  # full 40 s shutdown window -> no PARKED. Kept LOW: the position loop
+  # overshoots a fast correction by ~speed x 0.13 s of velocity-loop lag, so
+  # a 2 deg/s hold corrects a ~0.8 deg residual in one pass and lands inside
+  # the 0.5 deg window; a 10 deg/s hold would limit-cycle ~1.3 deg, outside
+  # it.
+  verify_speed_deg_s: 2.0
 
 # §38/§39 safety supervisor + watchdog tuning.
 safety:

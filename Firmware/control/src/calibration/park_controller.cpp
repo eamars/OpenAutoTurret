@@ -96,9 +96,14 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
       // park pose, so the axis drifted back out of the 0.5 deg window and the
       // park timed out at the 40 s shutdown window (rehome4; the yaw also
       // de-energized 1.4 deg short of target, rehome1 3.96 deg short).
-      out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)], 0.0, 0.0, true,
+      // The hold carries a NON-ZERO speed limit: the position loop needs a
+      // non-zero LimitSpd to be able to pull an axis back to the target
+      // (p3: a 0-limit hold pinned the overshoot in place for 40 s).
+      out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)],
+                               p_.verify_speed_deg_s * kDeg2Rad, 0.0, true,
                                "hold at park target"};
-      out.yaw = DesiredState{park_raw_[ix(AxisId::Yaw)], 0.0, 0.0, true,
+      out.yaw = DesiredState{park_raw_[ix(AxisId::Yaw)],
+                             p_.verify_speed_deg_s * kDeg2Rad, 0.0, true,
                              "hold at park target"};
       out.message = "verify park pose";
       if (at_park(pitch_fb, AxisId::Pitch) && at_park(yaw_fb, AxisId::Yaw)) {
@@ -111,9 +116,11 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
     case ParkState::Dwell: {
       // Same target hold as Verify: keep pulling at the park pose for the
       // dwell duration (drift back to Verify if it leaves the window).
-      out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)], 0.0, 0.0, true,
+      out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)],
+                               p_.verify_speed_deg_s * kDeg2Rad, 0.0, true,
                                "hold at park target"};
-      out.yaw = DesiredState{park_raw_[ix(AxisId::Yaw)], 0.0, 0.0, true,
+      out.yaw = DesiredState{park_raw_[ix(AxisId::Yaw)],
+                             p_.verify_speed_deg_s * kDeg2Rad, 0.0, true,
                              "hold at park target"};
       out.message = "park dwell";
       const bool still = at_park(pitch_fb, AxisId::Pitch) && at_park(yaw_fb, AxisId::Yaw);

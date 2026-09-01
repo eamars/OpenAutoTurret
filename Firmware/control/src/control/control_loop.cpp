@@ -528,20 +528,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // §33.2 target-hold (Verify/Dwell/Disable): position mode holding AT
         // THE PARK TARGET (the drive's position loop pulls the axis back to
         // the target — no re-pin to the current position; see
-        // ParkController::step for the real-station evidence). One-time
-        // blocking mode entry = a single Derate.
+        // ParkController::step for the real-station evidence). The hold
+        // carries a NON-ZERO speed limit (verify_speed_deg_s): the CyberGear
+        // position loop is pinned at LimitSpd=0, so a 0-limit hold can never
+        // pull an axis back into the §33.2 window (p3: 40 s stall at the
+        // overshoot point). One-time blocking mode entry = a single Derate.
         if (!park_pos_mode_entered_) {
           std::string e;
-          if (enter_position_mode_all(cfg_.park.speed_deg_s * kDeg2Rad, e)) {
+          if (enter_position_mode_all(cfg_.park.verify_speed_deg_s * kDeg2Rad,
+                                      e)) {
             park_pos_mode_entered_ = true;
           } else {
             fault(e);
           }
         }
         q_ref[ix(AxisId::Pitch)] = po.pitch.target_rad;
-        lim[ix(AxisId::Pitch)] = 0.0;
+        lim[ix(AxisId::Pitch)] = cfg_.park.verify_speed_deg_s * kDeg2Rad;
         q_ref[ix(AxisId::Yaw)] = po.yaw.target_rad;
-        lim[ix(AxisId::Yaw)] = 0.0;
+        lim[ix(AxisId::Yaw)] = cfg_.park.verify_speed_deg_s * kDeg2Rad;
       }
       if (po.disable_pitch) backend_->deenergize(AxisId::Pitch);
       if (po.disable_yaw) backend_->deenergize(AxisId::Yaw);

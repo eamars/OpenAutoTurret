@@ -84,6 +84,7 @@ struct Defaults {
   double park_vel_tolerance_deg_s = 1.0;
   int park_dwell_ms = 500;
   double park_speed_deg_s = 10.0;
+  double park_verify_speed_deg_s = 2.0;
   int feedback_max_age_ms = 100;
   int deadline_max_us = 2000;
   int deadline_miss_threshold = 5;
@@ -428,12 +429,19 @@ LoadResult load_turret_config(const std::string& path) {
                                   Defaults().park_dwell_ms, warn);
     c.shutdown.speed_deg_s =
         opt_double(sh, "speed_deg_s", p + "speed_deg_s", Defaults().park_speed_deg_s, warn);
+    c.shutdown.verify_speed_deg_s =
+        opt_double(sh, "verify_speed_deg_s", p + "verify_speed_deg_s",
+                   Defaults().park_verify_speed_deg_s, warn);
     if (c.shutdown.pos_tolerance_deg <= 0.0)
       err.push_back(p + "pos_tolerance_deg must be > 0");
     if (c.shutdown.vel_tolerance_deg_s <= 0.0)
       err.push_back(p + "vel_tolerance_deg_s must be > 0");
     if (c.shutdown.dwell_ms <= 0) err.push_back(p + "dwell_ms must be > 0");
     if (c.shutdown.speed_deg_s <= 0.0) err.push_back(p + "speed_deg_s must be > 0");
+    // Must be > 0: LimitSpd=0 pins the drive's position loop, so a 0-limit
+    // Verify hold could never pull an axis back into the §33.2 window (p3).
+    if (c.shutdown.verify_speed_deg_s <= 0.0)
+      err.push_back(p + "verify_speed_deg_s must be > 0");
   }
   {
     const std::string p = "safety.";

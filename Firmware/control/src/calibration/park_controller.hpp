@@ -71,6 +71,18 @@ struct ParkParams {
   int dwell_ms = 500;
   // Speed limit for the park moves.
   double speed_deg_s = 10.0;
+  // Speed limit for the Verify/Dwell POSITION-MODE hold (LimitSpd, deg/s).
+  // MUST be non-zero: the CyberGear position loop is pinned at LimitSpd=0, so
+  // a 0-limit hold can never pull an axis back into the §33.2 window. (p3,
+  // 2026-09-02: the speed-mode park move overshot the 176 deg yaw target by
+  // 0.84 deg (drive velocity-loop lag), then the Verify hold at LimitSpd=0
+  // sat at the overshoot point for the full 40 s shutdown window — the
+  // position loop was pinned and could not correct.) Low on purpose: the
+  // drive's position loop overshoots a fast correction by ~speed x 0.13 s of
+  // velocity-loop lag, so a 2 deg/s hold corrects a ~0.8 deg residual in one
+  // pass and lands inside the 0.5 deg window (a 10 deg/s hold would
+  // limit-cycle ~1.3 deg, outside the window).
+  double verify_speed_deg_s = 2.0;
   // §33.1: the park pose must sit inside the soft limit by at least this margin.
   double min_soft_margin_deg = 2.0;
   // Move arrival tolerances / timeout (delegated to MoveTo).

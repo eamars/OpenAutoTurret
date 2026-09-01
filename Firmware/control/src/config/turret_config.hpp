@@ -114,6 +114,13 @@ struct ShutdownConfig {
   double vel_tolerance_deg_s = 1.0;  // |v| below this counts as "settled"
   int dwell_ms = 500;                // verification must hold for this long
   double speed_deg_s = 10.0;         // speed limit for the park moves
+  // Speed limit (deg/s) of the Verify/Dwell position-mode hold. Must be
+  // non-zero (LimitSpd=0 pins the drive's position loop — it could never
+  // pull an axis back into the §33.2 window; p3 2026-09-02) and low (the
+  // position loop overshoots a fast correction by ~speed x 0.13 s of
+  // velocity-loop lag; 2 deg/s lands a ~0.8 deg residual inside the 0.5 deg
+  // window in one pass).
+  double verify_speed_deg_s = 2.0;
 };
 
 // §38/§39 safety supervisor + watchdog tuning.

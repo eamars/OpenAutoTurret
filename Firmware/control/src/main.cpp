@@ -139,6 +139,10 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.park.vel_tol_deg_s = cfg.shutdown.vel_tolerance_deg_s;
   c.park.dwell_ms = cfg.shutdown.dwell_ms;
   c.park.speed_deg_s = cfg.shutdown.speed_deg_s;
+  // Verify/Dwell position-mode hold speed limit (deg/s). Non-zero: LimitSpd=0
+  // pins the drive's position loop (p3 2026-09-02: 40 s stall at the
+  // overshoot point, the 0-limit hold could not pull the axis back).
+  c.park.verify_speed_deg_s = cfg.shutdown.verify_speed_deg_s;
   // Park moves run in speed mode: reuse the per-axis homing current limits
   // (pitch 3 A / yaw 1 A — under the 10 A safe cap) as the drive LimitCur for
   // the park moves.

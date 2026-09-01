@@ -244,6 +244,67 @@ without reaching `Phase::Parked`, so the safe fallback `deenergize_all()` ran.
    Pitch stays at 40° (4.7 h hold flat; 17 min de-energized no-slide).
 ctest 38/38 + pytest 93 passed/2 skipped green on the new code.
 
+**Result (p3, 2026-09-02 09:02 — first live verification of the speed-mode
+park; park INCOMPLETE again, NEW root cause):** SIGTERM (09:02:26) → 40 s
+window → `de-energized (phase=parking, fault='')` 09:03:07, no `PARKED`.
+The speed-mode moves now run at command rate (no 0.07°/s crawl), but:
+- **Velocity-mode point-stop overshoot:** the yaw park move (176.6° → 176°,
+  0.6°) overshot to **175.16° — 0.84° PAST the target**. The drive's
+  velocity loop has ~0.1–0.3 s of step-response lag (+ integral windup):
+  every speed-mode point stop lands ~1° x the arrival speed past the target.
+- **Verify then could never correct it:** the Verify/Dwell hold carried
+  `LimitSpd=0`. The CyberGear position loop is **pinned at LimitSpd=0** —
+  the yaw sat at the overshoot point (175.16°) for the full 39 s of
+  Verify/Dwell, 0.84° outside the 0.5° window, and the 40 s park window
+  expired. Final de-energized pose: pitch −1.4987 (40.15°) / yaw −2.28845
+  (175.16°).
+
+**Result (p3b, 2026-09-02 09:04 — boot after p3; HOMING FAILED):** boot
+09:04:56 → `control fault: homing failed: yaw move to 180.000000 deg failed:
+move timeout` 09:07:24. Wire capture (candump, /tmp/p3_cand.log) of the
+failed `move yaw 180` plan action:
+- The 180° climb from the low stop (0°) ran at 10°/s; the decel profile
+  arrives at ~9°/s; the velocity-loop lag overshoots **1.2° to 181.2°**
+  (5.2° past the 176° gravity balance).
+- The return command (−8.3°/s = −0.1450 rad/s) then produced only
+  **~0.1 N·m** (wire: tq −0.02…−0.22 N·m, v≈0, axis pinned at 181.2°):
+  P-term at 0.145 rad/s error ≈ 0.055 N·m + the drive's tiny `spd_ki`
+  building integral slowly. That is below the breakaway static friction at
+  5.2° from balance → the move could not reverse → 30 s MoveTo timeout →
+  fault. (rehome1–4 ran the same 0°→180° move successfully four times —
+  the breakaway at 181.2° is marginal and run-to-run dependent; p3b lost
+  the coin flip.)
+- **The homing plan's mid-park was still at 180°** — the same no-dangle
+  pose error already fixed for shutdown parking (`move yaw 180 ... mid-
+  travel of the ~360 deg yaw`).
+- Post-fault observation: the fault phase holds via SpdRef=0 (speed mode) /
+  re-pinned position hold; the pitch crept +2.7° (43.2°→45.9° in 76 s, then
+  decayed) = the drive velocity-loop integral wound up by the pitch's
+  +climb slowly discharging against SpdRef=0. The yaw held 181.2° solid
+  (static friction). De-energized at shutdown (SIGTERM, 09:22:09):
+  `de-energized (phase=fault, ...)` + `controld stopped cleanly`.
+- **No-slide check at the de-energized fault pose (2.5 min, 09:27–09:30):**
+  pitch 45.81° (range 0.008°), yaw 181.20° (range 0.0115°) → **static
+  friction holds even 5.2° past the yaw balance** (the p3b stick was
+  genuinely below breakaway, not a marginal hold).
+
+**Fix (implemented 2026-09-02, pending live verification — round 2):**
+4. **Homing plan mid-park `move yaw 180` → `move yaw 176`** (config): the
+   gravity balance = the true no-dangle pose. The 176° move is torque-free
+   and any overshoot (~1.2° → 177.2°, 1.2° from balance) settles back on
+   its own; the breakaway requirement is smallest at the balance, so the
+   mid-park can no longer stick (the p3b failure mode).
+5. **Verify/Dwell hold carries a NON-ZERO speed limit**
+   (`shutdown.verify_speed_deg_s: 2.0`, new; wired through
+   ShutdownConfig → ParkParams → executor, validated > 0 in config load):
+   the position-mode hold now enters and runs at 2°/s LimitSpd, so the
+   drive's position loop CAN pull a speed-move overshoot back into the
+   0.5° window (a ~0.8° residual corrects in one pass: 0.4 s travel +
+   0.13 s lag → ~0.26° past, inside the window). 2°/s is deliberately low:
+   at 10°/s the position loop would overshoot a correction by ~1.3°
+   (speed x 0.13 s velocity-lag) and limit-cycle outside the window.
+ctest 38/38 + pytest 93 passed/2 skipped green on the round-2 code.
+
 **Checks:**
 - De-energize order: **pitch then yaw** (per §33; verify in the log / motor state).
 - After de-energize: `./turret-can read <axis> 0x7019` — the position should hold
@@ -303,6 +364,17 @@ endpoints repeat to **≤0.1°** vs the P0 reference (tol 0.5°):
 
 Ready pose: pitch −1.4956 / yaw −2.2765 — **exact match with P0**. Measured
 travels: pitch 79.5°, yaw 352.7°.
+
+**Result (p3b / "rehome5" attempt, 2026-09-02 09:04, FAIL — homing fault,
+root-caused from the CAN wire capture):** the boot after the failed p3 park
+failed inside homing itself: `homing failed: yaw move to 180.000000 deg
+failed: move timeout` (09:07:24, 30 s MoveTo timeout on the plan's `move
+yaw 180` no-dangle action). Full wire-level diagnosis is in P2 (velocity-
+loop stop overshoot 1.2° to 181.2°; return command at ~0.1 N·m below
+breakaway static friction 5.2° from the 176° balance; the plan's mid-park
+still at the wrong 180° pose). Fix: mid-park moved to 176° (P2 fix 4) + the
+Verify-hold LimitSpd fix (P2 fix 5); the re-test (fresh boot → home → ready
+→ SIGTERM → PARKED) is the re-run of both P2 and P3.
 
 > ✅ **RESOLVED — the yaw "+stop 7.2° off" (rehome1) is the detent-zone width, not
 > a soft stop.** The yaw's +stop is a friction/detent *zone* ~7.3° wide (raw
