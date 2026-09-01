@@ -6,11 +6,23 @@
 
 namespace ota {
 
+namespace {
+// Endpoint B starts with its coarse approach pointing AWAY from endpoint
+// A's stop, at the moment the drive's velocity-loop integral is still
+// wound up pushing that stop (endpoint A's final fine contact + dwell).
+// Reset the drive's velocity controller at endpoint B's start so the
+// approach begins clean (rehome3 root cause, 2026-09-02).
+HomingParams with_start_rearm(HomingParams p) {
+  p.rearm_before_start = true;
+  return p;
+}
+}  // namespace
+
 FullAxisHoming::FullAxisHoming(AxisId axis, FullAxisHomingParams p)
     : axis_(axis),
       p_(p),
       home_a_(axis, p.dir_endpoint_a, p.homing),
-      home_b_(axis, p.dir_endpoint_b, p.homing) {}
+      home_b_(axis, p.dir_endpoint_b, with_start_rearm(p.homing)) {}
 
 DesiredState FullAxisHoming::step(const HomingFeedback& fb) {
   switch (phase_) {

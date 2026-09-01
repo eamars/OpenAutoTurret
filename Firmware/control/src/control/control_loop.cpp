@@ -349,22 +349,48 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // reported v: the MoveTo arrival test and the contact detector's
       // motion/stall logic need a trustworthy velocity (P0j).
       DesiredState ds = homing_->step(to_feedback(sp[ix(a)], v_est_[ix(a)]));
-      // Speed mode (velocity): command the constant speed (SpdRef) the drive's
-      // velocity loop should hold. The homing controller produces a signed
-      // velocity (approach +v·dir, back-off −v·dir, fine +v_f·dir, or 0 to
-      // hold). This is the root-cause fix for the position-mode stick-slip
-      // (P0o): the drive's own velocity loop is the smooth source of motion,
-      // not a host-regenerated moving LocRef.
-      backend_->command_velocity(a, ds.velocity_rad_s);
-      // Hold the non-active axis in place (SpdRef=0). It is in speed mode too
-      // (entered in start_homing); holding at its (low) homing current is fine
-      // — the axes are orthogonal, so a little drift doesn't affect the homing.
-      const AxisId other = (a == AxisId::Pitch) ? AxisId::Yaw : AxisId::Pitch;
-      backend_->command_velocity(other, 0.0);
-      // The homing carries the drive current limit on the cycle it changes it
-      // (the initial per-axis value). 0.0 = leave it unchanged. (Redundant with
-      // start_homing's enter_speed_mode, but keeps the controller authoritative.)
-      if (ds.limit_cur_a > 0.0) backend_->set_current_limit(a, ds.limit_cur_a);
+      // One-shot velocity-controller re-arm (see HomingController): before a
+      // post-contact backoff or endpoint B's approach, de-energize/re-energize
+      // with the verified speed-mode recipe to reset the drive's velocity-loop
+      // integral. That integral winds up while the contact dwell pushes the
+      // stop (~1.3-1.8 N.m wire-measured in rehome3) and then exceeds the
+      // P-term of ANY SpdRef (Kp ~0.38 N.m/(rad/s); 30 deg/s max ~1.14 N.m),
+      // so the backoff command sits on the bus ignored and the axis stays
+      // pinned to the stop until the backoff timeout. Blocking ~150 ms: one
+      // deadline miss (a single Derate; Hold needs a 5-streak) and a brief
+      // feedback gap on the non-active axis (benign — the supervisor does not
+      // act during homing). The axis bounces slightly off the stop during the
+      // de-energize; the target-seeking backoff and fine re-approach handle it.
+      bool rearmed = true;
+      if (ds.rearm_speed_mode) {
+        std::string e;
+        rearmed = backend_->enter_speed_mode(a, ds.limit_cur_a, e);
+        if (!rearmed) {
+          fault("homing re-arm speed mode failed: " + e);
+        }
+      }
+      if (rearmed) {
+        // Speed mode (velocity): command the constant speed (SpdRef) the
+        // drive's velocity loop should hold. The homing controller produces a
+        // signed velocity (approach +v·dir, back-off −v·dir, fine +v_f·dir, or
+        // 0 to hold). This is the root-cause fix for the position-mode
+        // stick-slip (P0o): the drive's own velocity loop is the smooth source
+        // of motion, not a host-regenerated moving LocRef.
+        backend_->command_velocity(a, ds.velocity_rad_s);
+        // Hold the non-active axis in place (SpdRef=0). It is in speed mode
+        // too (entered in start_homing); holding at its (low) homing current
+        // is fine — the axes are orthogonal, so a little drift doesn't affect
+        // the homing.
+        const AxisId other = (a == AxisId::Pitch) ? AxisId::Yaw : AxisId::Pitch;
+        backend_->command_velocity(other, 0.0);
+        // The homing carries the drive current limit on the cycle it changes
+        // it (the initial per-axis value; also on a re-arm cycle — the
+        // backend de-duplicates). 0.0 = leave it unchanged. (Redundant with
+        // start_homing's enter_speed_mode, but keeps the controller
+        // authoritative.)
+        if (ds.limit_cur_a > 0.0)
+          backend_->set_current_limit(a, ds.limit_cur_a);
+      }
       // High-rate motion log (100 Hz) for the active axis: position, the
       // position-derived velocity/acceleration/jerk, torque, and the commanded
       // velocity. This is the evidence stream for detecting jitter / stuck-slip

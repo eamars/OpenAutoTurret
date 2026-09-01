@@ -68,6 +68,22 @@ homed → safe hold → park cycle.**
 inspect the fault, fix the cause (mechanical stop position, CAN wiring, config
 `expected_travel_deg`), then re-run.
 
+**Result (rehome4, 2026-09-02 03:51–03:55, PASS — final clean run):** full plan
+(pitch full-range → pitch park 40° → yaw full-range → yaw park 180° → pitch
+re-home) completed in **3 m 20 s** with no fault, no timeout, no supervisor
+escalation (single-cycle Derates only — one 197 ms spike was a re-arm recipe
+blocking the loop, by design). All six homing sub-runs landed within **0.1°**
+of the P0 reference (table in P3 below). Ready pose reached exactly:
+pitch −1.4956 / yaw −2.2765 (= P0). Measured travel: pitch span 79.5°
+(raw −2.1994 → −0.8112), yaw span 352.7° (raw −5.3458 → +0.8104, the detent
+zone excluded — see P3 note). Temperatures stable (pitch 25.9 °C,
+yaw 33.3 °C).
+
+> History: rehome1 (PASS, 5 min) → rehome2 (PASS, but backoffs crawled 16–20 s
+> — stick-slip at the 10°/s backoff speed) → rehome3 (FAIL — pitch endpoint-A
+> backoff timed out at 10 s; root cause: drive velocity-loop integral windup,
+> see P3) → **rehome4 (PASS — the re-arm fix, verified on the wire)**.
+
 ---
 
 ## P1 — Safe-hold verification `[MOTOR]`
@@ -179,19 +195,90 @@ Reboot the daemon and re-home; verify the endpoints repeat within tolerance.
 | pitch | + | −0.8108 | −0.8105 | 0.02° | PASS |
 | pitch | − | −2.1994 | −2.2009 | 0.09° | PASS |
 | yaw | − | −5.3447 | −5.3462 | 0.09° | PASS |
-| yaw | + | +0.9374 | +0.8108 | **7.2°** | ⚠ soft stop |
+| yaw | + | +0.9374 | +0.8108 | **7.2°** | ⚠ detent zone (explained below) |
 
 Ready pose: pitch −1.4956 (Δ0.0°), yaw −2.2768 vs P0 −2.2765 (Δ0.02°) — **highly
 repeatable** (the yaw settles to the P0 ready pose; an early −2.2627 reading was the
 yaw still settling post-home).
 
-> ⚠️ **OPEN ISSUE — yaw +stop is a soft (friction) stop, not a hard mechanical
-> reference.** The yaw is a ~352.8° continuous axis; its +stop (raw ~+0.81) is not a
-> hard mechanical stop, so it does not repeat (7.2° vs P0). The **yaw −stop (hard)**
-> is the reliable reference. The pitch (both stops hard) repeats to <0.1°. To make the
-> yaw +stop repeatable, either add a hard mechanical stop / detent on the +side or
-> drive the +stop to a higher current so it is a true mechanical stop. Tracked as an
-> open issue (yaw +stop repeatability).
+**Result (rehome4, 2026-09-02 03:51, PASS — final, after the re-arm fix):** all
+endpoints repeat to **≤0.1°** vs the P0 reference (tol 0.5°):
+
+| axis | stop | P0 raw | rehome4 raw (contacts) | Δ | repeatability |
+|------|------|--------|------------------------|---|---------------|
+| pitch | + (A) | −0.8108 | −0.8112 / −0.8112 (re-home: −0.8108/−0.8116) | 0.04° | 0.0°–0.05° |
+| pitch | − (B) | −2.1994 | −2.1994 / −2.1975…−2.1998 (re-home: −2.1994/−2.1994) | ≤0.05° | 0.05° |
+| yaw | + (A) | +0.8108 | +0.8108 / +0.8104 | 0.02° | 0.02° |
+| yaw | − (B) | −5.3447 | −5.3454 / −5.3462 | 0.07° | 0.05° |
+
+Ready pose: pitch −1.4956 / yaw −2.2765 — **exact match with P0**. Measured
+travels: pitch 79.5°, yaw 352.7°.
+
+> ✅ **RESOLVED — the yaw "+stop 7.2° off" (rehome1) is the detent-zone width, not
+> a soft stop.** The yaw's +stop is a friction/detent *zone* ~7.3° wide (raw
+> [−5.4728, −5.3458], unwrapped — the same physical edge as raw +0.8108:
+> Δ = 2π − 7.3°). A coarse approach always stops at the *entry edge* of whichever
+> side it approaches from: from the − side it stops at −5.3458 (endpoint B); the
+> P0 "+stop" reading (+0.9374) was taken from the + side (entry edge +0.8108 plus
+> zone width ≈ +0.9374). rehome1's "+stop" (+0.8108) and P0's −stop (−5.3447) are
+> the **same physical edge** (Δ = 2π − 7.2°), and both rehome4 endpoints agree with
+> their respective entry edges to ≤0.07°. The 7.2° "delta" is therefore expected
+> geometry, not a repeatability fault — the yaw +stop is repeatable *within* its
+> approach direction (0.02° in rehome4). The logical model excludes the zone
+> (span 352.7°, documented in the axis model).
+
+### rehome3 failure + rehome4 fix: drive velocity-loop integral windup
+
+**Symptom (rehome3):** pitch endpoint-A backoff never moved. The axis sat at the
+stop (contact + 1.5 s dwell + 0.5 s settle with SpdRef = 0 while the drive kept
+pushing the stop), and the subsequent 10°/s backoff command was visible on the
+bus (SpdRef = −0.1745) while the axis was pinned: measured drive torque stayed
+positive (+0.79…+1.44 N·m) for the full 10 s backoff timeout; the 100 Hz log
+showed `cmd≠0, v≈0 (±0.05), a≈0` — the stuck-slip signature. rehome2 showed the
+weaker form of the same effect: backoffs crawled 16–20 s (the drive's own
+integral slowly bled down and the axis slipped forward).
+
+**Root cause (wire-verified from the candump of the failed backoff):** while the
+drive pushes the mechanical stop at SpdRef = +0.5236, its velocity-loop integral
+winds up to **+1.3…+1.8 N·m** (rehome3 peak +1.825 and still rising at settle).
+That residual exceeds the P-term available at *any* SpdRef the drive accepts
+(Kp ≈ 0.38 N·m per rad/s; even 30°/s gives ≈ +1.14 N·m of P), so the reverse
+backoff command cannot produce net reverse torque — the axis is pinned by the
+drive's own windup. The drive's internal windup decay is slow and stalls at
+~70% of peak (observed: 1.82 → 1.38 in 0.84 s, then flat at ~1.1–1.2 N·m), so
+waiting is not an option.
+
+**Fix (rehome4): re-arm the drive's velocity controller before every
+post-contact backoff and before the endpoint-B start.** The verified
+`enter_speed_mode` recipe — `Stop (de-energize) → 50 ms → RunMode=2 → Enable →
+50 ms → LimitCur → SpdRef=0` — fully resets the drive's velocity-PI state.
+Implementation: `HomingController` raises a one-shot `rearm_speed_mode` flag in
+the `DesiredState` at `begin_backoff_to()` (coarse backoff + VerifyRepeatability
+small backoff) and at endpoint-B construction (`rearm_before_start`); the
+`Phase::Homing` executor runs the recipe via `backend_->enter_speed_mode()`
+before writing the velocity command that carries the flag. Cost: one ~105 ms
+blocking cycle per re-arm (supervisor: single-cycle Derate, no escalation —
+verified in the rehome4 log).
+
+**rehome4 wire verification (candump + 100 Hz log, pitch endpoint A):**
+pre-re-arm settle shows `tq +0.47…+0.68` (windup still present) → **105 ms gap
+in the 100 Hz log** (the recipe blocked the loop: Stop/RunMode/Enable/LimitCur/
+SpdRef) → first post-re-arm sample: position bounced 0.07° off the stop,
+**`tq +0.65 → 0.00` (integral cleared)**, backoff SpdRef −0.1745 written and the
+axis free. Same signature on the yaw endpoint-B re-arm (tq −0.60 → 0.00).
+
+**Residual behavior (accepted, documented):** at the 10°/s backoff speed the
+drive's velocity loop sits in the stick-slip regime — backoffs take 5–7 s
+(stall → the acceleration-based stall detector fires the 3× burst → release →
+next stall) instead of ~1 s, and the burst momentum can overshoot the 2° small-
+backoff target by ~0.6° (the target-seeking command corrects it). The fine
+approach self-corrects from the backoff's residual integral (~4 s stuck-slip
+start, then clean to the stop; contact still lands to 0.04°). All within the
+0.5° repeatability budget and far from the 10 s timeouts. Candidate
+improvement (not done): raise the backoff speed out of the stick-slip regime or
+re-arm before post-backoff moves that coast on a residual (the `move yaw 180`
+after the yaw-B detent fight coasted up to 26°/s — 3× its 10°/s command — on the
+decaying integral; the proportional move law still landed it correctly).
 
 ---
 
@@ -662,6 +749,10 @@ history is auditable.
 
 ## Resolved since the Phase-2 edition of this queue
 
+- **Backoff stuck-slip / windup (rehome2 crawl, rehome3 timeout)** → velocity-
+  controller re-arm before post-contact backoffs (rehome4, wire-verified) +
+  acceleration-based stall detection with 3× bursts (see P3 for the full
+  evidence chain).
 - **P6 payload check was a stub** → real in-loop check + profiler + verifier +
   derate (Phase 9); see the new P6/P10.
 - **P8 tracking was "not built yet"** → implemented + integration-tested on

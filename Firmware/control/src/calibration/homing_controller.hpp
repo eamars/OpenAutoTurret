@@ -50,6 +50,37 @@ struct HomingParams {
   double approach_timeout_s = 30.0;             // max time for one approach move
   double max_travel_rad = 150.0 * kDeg2Rad;     // safety: max travel from the start
   double arrival_tol_rad = 0.01;                // "arrived" position tolerance
+  // --- Backoff drive: closed-loop target tracking with stall-breaking ---
+  // Root cause of the 2026-09-02 yaw homing hang (rehome2): the backoff was a
+  // fixed-sign velocity command (10 deg/s). The yaw "end-stop" is a wide
+  // (~7 deg) friction/detent zone; the 10 deg/s backoff stick-slipped in it
+  // for ~10 s (q crawling at ~1 deg/s while pushing 0.3-0.6 N.m), then burst
+  // free with momentum (measured v=+0.56 rad/s vs the +0.1745 command),
+  // overshot the backoff target, and the fixed-sign command kept driving AWAY
+  // from it — the axis lapped to the far edge of the same zone and the
+  // timeout-less Backoff state hung forever. The backoff is now:
+  //   (a) target-seeking: v = speed * sign(target - q) (0 near the target);
+  //       an overshoot reverses the command instead of driving away;
+  //   (b) stall-breaking: when the move stalls in friction for
+  //       backoff_stall_detect_s, a short burst at backoff_burst_factor *
+  //       speed breaks the static friction (30 deg/s is known to clear the
+  //       zone — the 30 deg/s coarse approach does), then it resumes;
+  //   (c) timeout: a backoff that cannot reach its target fails cleanly
+  //       instead of hanging.
+  double backoff_timeout_s = 10.0;               // hard timeout for a backoff move
+  double backoff_stall_vel_rad_s = 0.02;         // |v| below this = "not moving"
+  double backoff_stall_detect_s = 0.3;           // stalled duration that triggers a burst
+  double backoff_burst_factor = 3.0;             // burst speed = factor * backoff speed
+  double backoff_burst_s = 0.25;                 // burst duration (s)
+  double backoff_arrive_vel_rad_s = 0.1;         // |v| below this to accept arrival
+  // Re-arm the drive (de-energize/re-energize, the verified speed-mode
+  // recipe) at the start of the coarse approach, before any motion.
+  // FullAxisHoming enables this for endpoint B: when endpoint A completes
+  // its second fine contact the drive's velocity-loop integral is still
+  // wound up pushing the stop, and endpoint B's opposite-direction coarse
+  // approach would start by fighting that residual (it crawled through in
+  // rehome2, but only because the old code had no timeouts).
+  bool rearm_before_start = false;
   ContactDetectorParams contact;
   // --- Adaptive-current homing (push-through, §22) ---
   // The yaw is a ~360 deg axis whose mid-travel friction stalls (false
@@ -91,6 +122,16 @@ struct DesiredState {
   // Drive current limit to apply this cycle (A). 0.0 = leave it unchanged.
   // The executor writes LimitCur on the cycle this is non-zero.
   double limit_cur_a = 0.0;
+  // De-energize/re-energize the axis (the verified speed-mode recipe)
+  // before executing this cycle's velocity command. Purpose: reset the
+  // drive's velocity-loop integral, which winds up while pushing the
+  // contact stop (1.5 s dwell + 0.5 s settle) and can then hold ~1+ N.m
+  // of torque that NO SpdRef can overcome (rehome3 root cause: the backoff
+  // command was on the bus and ignored — the axis stayed pinned to the
+  // stop, tq +0.8..+1.4, v jitter only, until the 10 s backoff timeout).
+  // The axis bounces slightly off the stop during the de-energize; the
+  // target-seeking backoff and the fine re-approach are unaffected.
+  bool rearm_speed_mode = false;
 };
 
 // The outcome of a homing run.
@@ -150,6 +191,15 @@ class HomingController {
   void begin_approach(double speed_rad_s, TimeNs now, double current_pos_rad,
                       double target_distance_rad = -1.0);
   void begin_backoff_to(TimeNs now, double target_rad);
+  // Backoff move drive: closed-loop position tracking in velocity mode
+  // (target-seeking + stall-breaking burst; see the HomingParams backoff
+  // comment). Updates phase_.velocity_rad_s and returns the commanded
+  // velocity. Called every cycle while a backoff move is active.
+  double backoff_velocity(const HomingFeedback& fb);
+  // Backoff arrival: at the target AND slow enough to hold there (a
+  // momentum-coasting axis must not be handed to the settle while it is
+  // still crossing the target at speed).
+  bool backoff_arrived(const HomingFeedback& fb) const;
   void begin_settle(TimeNs now);
   void begin_hold();
   void fail(const std::string& reason);
@@ -166,6 +216,10 @@ class HomingController {
   ContactResult last_cr_{};  // latest detector result during the approach
   Phase phase_;
 
+  // Stall-breaking state for the backoff move (backoff_velocity).
+  TimeNs stall_since_ns_ = 0;  // 0 = not currently stalled
+  TimeNs burst_until_ns_ = 0;  // 0 = no burst in flight
+
   // VerifyRepeatability sub-phase: 0 = back-off, 1 = second fine approach.
   int verify_phase_ = 0;
 
@@ -181,6 +235,7 @@ class HomingController {
   // --- Adaptive-current state (§22) ---
   double limit_cur_a_ = 0.0;        // current drive limit (A); 0 until first use
   bool current_dirty_ = false;      // DesiredState must carry limit_cur_a_
+  bool rearm_pending_ = false;      // next DesiredState must carry rearm_speed_mode
   double coarse_start_pos_rad_ = 0.0;  // position when the coarse approach began
   bool has_coarse_start_ = false;
   int current_raises_ = 0;
