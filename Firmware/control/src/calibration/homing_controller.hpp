@@ -73,7 +73,20 @@ struct HomingParams {
   // anywhere inside it is a valid backoff, because the fine re-approach
   // re-measures the end-stop precisely from whatever position the axis
   // settles at.
-  double backoff_timeout_s = 10.0;      // hard timeout for a backoff move
+  //
+  // Live drive profile (quiet bus, 2026-09-02, pitch 5 deg backoff from the
+  // +stop zone, LimitSpd = 10 deg/s): ~3.5-4 s of breakaway creep against
+  // static friction, then an accelerating burst (7+ deg/s) that arrives
+  // ~4.5 s after the step and overshoots ~0.3-0.4 deg, then a slow damped
+  // settle (still converging at +10 s). p3d (first live homing on the real
+  // drive) timed out at 10 s with the drive commanding tq ~ 0: the root
+  // cause was a dropped recipe frame on the fire-and-forget CAN wire (the
+  // drive was not in an active position loop at all), fixed by read-back
+  // verify + retry in CanMotorBackend::enter_position_mode. With the
+  // recipe verified, the measured worst case is ~5 s (arrival 4.5 s + 0.5
+  // s settle); 15 s keeps >=2x margin over a bad-luck breakaway while
+  // still catching a genuinely stuck drive quickly.
+  double backoff_timeout_s = 15.0;      // hard timeout for a backoff move
   // Arrival window = max(0.5 deg, backoff_arrive_frac * backoff distance).
   // The coarse 5 deg backoff accepts arrival from ~3 deg out (target 5 deg
   // from the stop -> the axis ends >=3 deg clear of it); the 2 deg small

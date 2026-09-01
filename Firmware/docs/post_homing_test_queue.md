@@ -386,6 +386,21 @@ outcome was luck-dependent (see the p3c root-cause subsection below). Fix
 implemented: position-mode backoff; the re-test (p3d: fresh boot → home →
 ready → SIGTERM → PARKED → no-slide) doubles as the P2 park re-verification.
 
+**Result (p3d, 2026-09-02 10:19, FAIL — homing fault; root-caused, fix
+implemented, re-test = p3e):** fresh boot → homing fault at the pitch
+endpoint-A coarse backoff: `homing failed: pitch home full range failed:
+endpoint A homing failed: backoff: timeout (position mode, stuck in friction?
+q=-0.820363 target=-0.897712 dq=0.077348 v=0.000584 rad)` (10 s timeout,
+10:19:07). The axis moved only 0.13° in the whole window and the drive
+commanded tq ≈ 0 (744 of 979 samples within ±0.1 N·m, max |tq| 0.5 N·m) — the
+drive's position loop was not commanding at all. Root cause: a dropped
+fire-and-forget CAN frame in the `enter_position_mode` recipe (the drive was
+left in no active position loop), not a position-loop weakness — on a quiet
+bus the identical recipe + 5° step tracks reproducibly (3/3 runs, including
+the exact p3d hot-push-into-stop condition). Fix: read-back verify + retry on
+both mode recipes + backoff timeout 10 → 15 s (see the p3d subsection
+below).
+
 > ✅ **RESOLVED — the yaw "+stop 7.2° off" (rehome1) is the detent-zone width, not
 > a soft stop.** The yaw's +stop is a friction/detent *zone* ~7.3° wide (raw
 > [−5.4728, −5.3458], unwrapped — the same physical edge as raw +0.8108:
@@ -523,9 +538,68 @@ that depends on creep speed is not a design.
 Unit tests: the `test_homing`/`test_homing_plan` sim plants and
 `SimMotorBackend` model the position-mode branch (drive toward LocRef at the
 speed cap, full torque from the first cycle); ctest 38/38 + pytest 93/2.
-Live re-test p3d will confirm the real drive's position loop breaks the
-detent as modeled (watch `msg=move:pos` in the 100 Hz log: q should move at
-~10°/s within ~1 s of the re-arm, no bursts).
+
+### p3d failure + verified-recipe fix (2026-09-02)
+
+**Failure:** p3d (10:19:07) faulted at the pitch endpoint-A coarse backoff —
+the first live run of the position-mode design. 100 Hz log (`/tmp/controld_p3d.log`):
+979 `move:pos` samples over 10.0 s, q −0.8104 → −0.8204 (0.13°: a residual
+dwell coast for 106 ms, then a 0.04° creep), tq distribution 1 cycle > +0.5
+N·m, 744 within ±0.1 N·m, 234 in −0.5…−0.1 N·m, then `backoff: timeout`.
+A working position loop with a 5° error wants `loc_kp × err = 30 × 0.0873 =
+2.6 N·m` (clamped at the 1…3 A limit); the drive never commanded more than
+0.5 N·m. The position loop was not active.
+
+**Root cause (quiet-bus experiments, no daemon, full wire capture):**
+
+1. The first reproduction attempt was contaminated: the p3d daemon was still
+   running in its fault phase, and its fault hold loop
+   (`control_loop.cpp` `Phase::Fault`: at rest `q_ref = q`, `lim = 0`;
+   `command()` writes LocRef + LimitSpd write-on-change) was concurrently
+   writing `LimitSpd = 0` / `0.087266` and re-pinning LocRef on the same bus
+   — it *looked* like "the drive ignores LimitSpd writes". With the daemon
+   killed and the bus quiet, the recipe works.
+2. Quiet-bus ground truth (pitch, 3/3 runs, one of them the exact p3d
+   condition — hot push into the +stop, 1.5 s dwell, recipe immediately
+   after the stop command): the recipe's LimitSpd readback verifies
+   (0.174533), the LocRef pin sticks, and a 5° LocRef step is tracked with
+   ~3.5–4 s of breakaway creep against static friction, then an
+   accelerating burst (7+°/s) that arrives ~4.5 s after the step,
+   overshoots ~0.3–0.4°, and damps out slowly (still converging at +10 s).
+   The post-fault register readout seen after p3d (`run_mode=1,
+   limit_spd=0, loc_ref=mechPos`) is the fault-phase hold's own writes —
+   not evidence about what the backoff programmed.
+3. Every recipe frame is fire-and-forget: `write_reg_float` / `write_reg_u8`
+   / `send_enable` are plain bus sends — the CyberGear does not ACK
+   register writes on the wire, so a dropped frame is invisible. p3d's
+   signature (tq ≈ 0, no tracking, LocRef register still accepting writes)
+   is exactly what a lost `enable` (drive de-energized in position mode →
+   zero commanded torque, gravity creep) or a lost `RunMode=1` (drive still
+   in speed mode with SpdRef = 0 → same) produces.
+
+**Fix (implemented, `can_motor_backend.cpp`):** both mode recipes are now
+verified live — after the recipe, the mode-defining registers are read back
+(`enter_position_mode`: RunMode == 1, LimitSpd == written, LocRef == pinned;
+`enter_speed_mode`: RunMode == 2, LimitCur == written, SpdRef == 0) and the
+whole recipe is re-run on any mismatch, up to 3 attempts, after which the
+call fails with `recipe verify failed` (a hard fault, never a silent
+degraded mode). Cost: 3 register reads (~50 ms) per recipe; the recipes are
+blocking setup calls (homing transitions, re-arms, hold/park entries), so
+the cost is one longer supervisor cycle at most (the re-arms already take
+~105–200 ms). The backoff hard timeout also moved 10 → 15 s: the measured
+drive worst case is ~5 s (4.5 s arrival + 0.5 s settle), and 15 s keeps ≥2×
+margin over a bad-luck breakaway while still catching a genuinely stuck
+drive quickly.
+
+Unit tests: unchanged plants still pass (the verify/retry lives in the CAN
+backend, which the sim does not exercise); ctest 38/38 + pytest 93/2 after
+the change.
+
+**Live re-test p3e** (fresh boot → home → ready → SIGTERM → PARKED, doubles
+as the P2 park re-verification): with the verified recipe the arm must move
+within ~1–5 s of the backoff start on the real drive (breakaway can take up
+to ~4 s — do not treat <4 s of creep as a stall before 15 s), and
+`turret-can read pitch 0x7017` mid-backoff must read 0.174533.
 
 ---
 

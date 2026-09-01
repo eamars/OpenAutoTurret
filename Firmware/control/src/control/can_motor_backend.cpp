@@ -2,6 +2,7 @@
 #include "control/can_motor_backend.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <thread>
 
 #include <spdlog/spdlog.h>
@@ -12,6 +13,14 @@ namespace ota {
 
 namespace {
 constexpr int kRecipeDelayMs = 50;  // CyberGear needs ~50 ms after a stop.
+// Every recipe frame is fire-and-forget: the CyberGear does not ACK register
+// writes on the wire, so a frame can be silently dropped and the drive can
+// end up in the wrong mode (or de-energized) while every write "succeeded".
+// p3d homing lost its backoff to exactly this: the drive commanded tq ~ 0
+// for the whole 10 s window (no position-loop action) after the recipe had
+// "completed". The recipes below therefore read back the mode-defining
+// registers after each attempt and retry the whole recipe on any mismatch.
+constexpr int kRecipeMaxAttempts = 3;
 }  // namespace
 
 bool CanMotorBackend::write_reg_float(cybergear::Reg reg, float value,
@@ -48,41 +57,76 @@ bool CanMotorBackend::read_register(AxisId axis, cybergear::Reg reg,
 //   LimitSpd -> read MechPos (pin current) -> LocRef=current (hold in place).
 bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
                                           std::string& err) {
-  if (!system_.send_stop(axis, &err)) return false;
-  std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
-  if (!write_reg_u8(cybergear::Reg::RunMode, 1, axis)) {
-    err = "write RunMode=1 failed";
-    return false;
+  for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
+    std::string rerr;
+    if (!system_.send_stop(axis, &rerr)) {
+      err = rerr;
+      continue;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
+    if (!write_reg_u8(cybergear::Reg::RunMode, 1, axis)) {
+      err = "write RunMode=1 failed";
+      continue;
+    }
+    if (!system_.send_enable(axis, &rerr)) {
+      err = rerr;
+      continue;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
+    if (!write_reg_float(cybergear::Reg::LimitSpd,
+                         static_cast<float>(limit_spd_rad_s), axis)) {
+      err = "write LimitSpd failed";
+      continue;
+    }
+    double current = 0.0;
+    if (!read_register(axis, cybergear::Reg::MechPos, current, timeout_ms_,
+                       rerr)) {
+      err = "read MechPos failed: " + rerr;
+      continue;
+    }
+    const bool pin_ok =
+        system_.send_position_ref(axis, static_cast<float>(current), &rerr);
+    if (!pin_ok) {
+      err = "pin position ref failed: " + rerr;
+      continue;
+    }
+    // Verify the recipe actually took: RunMode, LimitSpd and the LocRef pin
+    // must all read back exactly what we wrote. A dropped frame (e.g. a lost
+    // enable) leaves one of these wrong; retry the whole recipe from the
+    // stop.
+    double run_mode = 0.0, limit_spd = 0.0, loc_ref = 0.0;
+    const bool verified =
+        read_register(axis, cybergear::Reg::RunMode, run_mode, timeout_ms_,
+                      rerr) &&
+        read_register(axis, cybergear::Reg::LimitSpd, limit_spd,
+                      timeout_ms_, rerr) &&
+        read_register(axis, cybergear::Reg::LocRef, loc_ref, timeout_ms_,
+                      rerr) &&
+        run_mode == 1.0 &&
+        std::fabs(limit_spd - limit_spd_rad_s) < 1e-6 &&
+        std::fabs(loc_ref - current) < 1e-6;
+    if (!verified) {
+      err = "enter_position_mode: recipe verify failed (attempt " +
+            std::to_string(attempt) + ")";
+      spdlog::warn("enter_position_mode verify failed axis={} attempt={} "
+                   "run_mode={} limit_spd={} loc_ref={} expect ls={} qr={}",
+                   static_cast<int>(axis), attempt, run_mode, limit_spd,
+                   loc_ref, limit_spd_rad_s, current);
+      continue;
+    }
+    in_position_mode_[static_cast<size_t>(axis)] = true;
+    // The mode flags are mutually exclusive. enter_speed_mode clears
+    // in_position_mode_ (and this clears in_speed_mode_); leaving the other
+    // flag set would keep the control loop's speed-mode branch
+    // (command_velocity) active after a transition to position mode. That
+    // branch only pings the drive when the safety supervisor brakes, so on
+    // Allow cycles nothing is commanded, the feedback goes stale, and the
+    // supervisor flaps ALLOW/BRAKE every feedback_max_age_ms (p0p hold
+    // phase).
+    in_speed_mode_[static_cast<size_t>(axis)] = false;
+    return true;
   }
-  if (!system_.send_enable(axis, &err)) return false;
-  std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
-  if (!write_reg_float(cybergear::Reg::LimitSpd,
-                       static_cast<float>(limit_spd_rad_s), axis)) {
-    err = "write LimitSpd failed";
-    return false;
-  }
-  double current = 0.0;
-  if (!read_register(axis, cybergear::Reg::MechPos, current, timeout_ms_,
-                     err)) {
-    err = "read MechPos failed: " + err;
-    return false;
-  }
-  const bool pin_ok =
-      system_.send_position_ref(axis, static_cast<float>(current), &err);
-  if (!pin_ok) {
-    err = "pin position ref failed: " + err;
-    return false;
-  }
-  in_position_mode_[static_cast<size_t>(axis)] = true;
-  // The mode flags are mutually exclusive. enter_speed_mode clears
-  // in_position_mode_ (and this clears in_speed_mode_); leaving the other flag
-  // set would keep the control loop's speed-mode branch (command_velocity)
-  // active after a transition to position mode. That branch only pings the
-  // drive when the safety supervisor brakes, so on Allow cycles nothing is
-  // commanded, the feedback goes stale, and the supervisor flaps ALLOW/BRAKE
-  // every feedback_max_age_ms (p0p hold phase).
-  in_speed_mode_[static_cast<size_t>(axis)] = false;
-  return true;
+  return false;
 }
 
 // The verified-live speed-mode recipe (mirrors the position-mode recipe, which
@@ -91,28 +135,60 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
 // the current position against any load up to LimitCur.
 bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
                                        std::string& err) {
-  if (!system_.send_stop(axis, &err)) return false;
-  std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
-  if (!write_reg_u8(cybergear::Reg::RunMode, 2, axis)) {
-    err = "write RunMode=2 failed";
-    return false;
+  for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
+    std::string rerr;
+    if (!system_.send_stop(axis, &rerr)) {
+      err = rerr;
+      continue;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
+    if (!write_reg_u8(cybergear::Reg::RunMode, 2, axis)) {
+      err = "write RunMode=2 failed";
+      continue;
+    }
+    if (!system_.send_enable(axis, &rerr)) {
+      err = rerr;
+      continue;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
+    if (!write_reg_float(cybergear::Reg::LimitCur,
+                         static_cast<float>(limit_cur_a), axis)) {
+      err = "write LimitCur failed";
+      continue;
+    }
+    if (!write_reg_float(cybergear::Reg::SpdRef, 0.0f, axis)) {
+      err = "write SpdRef=0 failed";
+      continue;
+    }
+    // Verify the recipe actually took (same fire-and-forget hazard as the
+    // position-mode recipe; a dropped enable leaves the axis de-energized
+    // and the following approach times out).
+    double run_mode = 0.0, limit_cur = 0.0, spd_ref = 0.0;
+    const bool verified =
+        read_register(axis, cybergear::Reg::RunMode, run_mode, timeout_ms_,
+                      rerr) &&
+        read_register(axis, cybergear::Reg::LimitCur, limit_cur,
+                      timeout_ms_, rerr) &&
+        read_register(axis, cybergear::Reg::SpdRef, spd_ref, timeout_ms_,
+                      rerr) &&
+        run_mode == 2.0 && std::fabs(limit_cur - limit_cur_a) < 1e-6 &&
+        std::fabs(spd_ref) < 1e-6;
+    if (!verified) {
+      err = "enter_speed_mode: recipe verify failed (attempt " +
+            std::to_string(attempt) + ")";
+      spdlog::warn("enter_speed_mode verify failed axis={} attempt={} "
+                   "run_mode={} limit_cur={} spd_ref={} expect lc={}",
+                   static_cast<int>(axis), attempt, run_mode, limit_cur,
+                   spd_ref, limit_cur_a);
+      continue;
+    }
+    last_limit_cur_a_[static_cast<size_t>(axis)] = limit_cur_a;
+    last_spd_ref_[static_cast<size_t>(axis)] = 0.0;
+    in_position_mode_[static_cast<size_t>(axis)] = false;
+    in_speed_mode_[static_cast<size_t>(axis)] = true;
+    return true;
   }
-  if (!system_.send_enable(axis, &err)) return false;
-  std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
-  if (!write_reg_float(cybergear::Reg::LimitCur, static_cast<float>(limit_cur_a),
-                       axis)) {
-    err = "write LimitCur failed";
-    return false;
-  }
-  last_limit_cur_a_[static_cast<size_t>(axis)] = limit_cur_a;
-  if (!write_reg_float(cybergear::Reg::SpdRef, 0.0f, axis)) {
-    err = "write SpdRef=0 failed";
-    return false;
-  }
-  last_spd_ref_[static_cast<size_t>(axis)] = 0.0;
-  in_position_mode_[static_cast<size_t>(axis)] = false;
-  in_speed_mode_[static_cast<size_t>(axis)] = true;
-  return true;
+  return false;
 }
 
 void CanMotorBackend::deenergize(AxisId axis) {
