@@ -86,6 +86,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   }
   homed_ = false;
   at_ready_ = false;
+  homing_log_cycle_ = 0;
   phase_ = Phase::Homing;
   return true;
 }
@@ -181,6 +182,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   for (int i = 0; i < kAxisCount; ++i) {
     sp[i] = backend_->snapshot(static_cast<AxisId>(i), now_ns);
     last_q_[i] = sp[i].q_rad;  // for telemetry
+    last_temp_[i] = sp[i].temp_c;  // for telemetry (drive NTC, degC)
     // Position-derived velocity (see header): refresh only when fresh
     // feedback arrives so the 200 Hz loop does not average in zeros.
     if (sp[i].has_feedback && sp[i].rx_ns > v_est_t_prev_[i]) {
@@ -363,6 +365,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // (the initial per-axis value). 0.0 = leave it unchanged. (Redundant with
       // start_homing's enter_speed_mode, but keeps the controller authoritative.)
       if (ds.limit_cur_a > 0.0) backend_->set_current_limit(a, ds.limit_cur_a);
+      // High-rate motion log (100 Hz) for the active axis: position, the
+      // position-derived velocity/acceleration/jerk, torque, and the commanded
+      // velocity. This is the evidence stream for detecting jitter / stuck-slip
+      // (the "observe the acceleration" directive): a clean stop shows a->0 with
+      // v~0 and flat q; a stick-slip shows a spikes as the drive slips free and
+      // re-catches; a stuck (not-driven) axis shows cmd!=0 but v,a~0. Logged
+      // every 2nd cycle (100 Hz) to stay under the 200 Hz deadline (a per-cycle
+      // log tripped the watchdog — P0h).
+      if ((homing_log_cycle_++ & 1) == 0) {
+        spdlog::info(
+            "motion t={:.2f}ms ax={} q={:+.5f} v={:+.4f} a={:+.2f} j={:+.1f} "
+            "tq={:+.3f} cmd={:+.4f}",
+            static_cast<double>(now_ns) / 1e6, axis_name(a), sp[ix(a)].q_rad,
+            v_est_[ix(a)], a_est_[ix(a)], jerk_est_[ix(a)],
+            sp[ix(a)].torque_nm, ds.velocity_rad_s);
+      }
       if (homing_->failed()) {
         fault("homing failed: " + homing_->fail_reason());
       } else if (homing_->complete()) {

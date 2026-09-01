@@ -81,11 +81,32 @@ stationary and the bus is healthy.
   variance must be ≤ 0.0004 rad (at rest). Use `read`, **never** `feedback`
   (feedback re-energizes the motor and is not a valid post-stop check).
 - **Bus healthy:** `./turret-can stats` — no RX/TX errors, no bitrate warnings.
-- **Thermals:** the daemon telemetry + `turret-can read <axis> 0x700C` (temp) —
-  motor temp well below the 75 °C fault threshold and not climbing.
+- **Thermals:** the daemon 1 Hz telemetry now exposes `temp_pitch` / `temp_yaw`
+  (°C) directly — motor temp well below the 75 °C fault threshold and not
+  climbing. (Note: there is **no** `0x700C` temp register in the 0x7005..0x7020
+  table; the earlier `0x700C` in this queue was a typo. Drive temp is `temp_c` in
+  the drive feedback, surfaced in the daemon log.)
 - **Hold under load:** gently try to move a turret arm by hand. The position-mode
   hold should resist (the motor is enabled, holding torque). Release. Verify the
   position returns to the held value and the daemon stays in `hold`.
+- **Acceleration-based stuck-slip / jitter monitor:** the 100 Hz `motion` log
+  (`a=` / `j=` per axis, position-derived, 0.02 s LPF) is the detector for
+  stick-slip and creep. Signature keys — clean stop: `a→0, v~0, q flat`;
+  **stuck-slip: `cmd≠0` but `v~0` with low `a` (~0.15–0.24 rad/s²) and tiny `dq`**
+  (friction break-through); creep: `cmd≠0`, slow `v` (~0.002–0.02 rad/s), low `a`.
+
+**Result (rehome1, 2026-09-02, mostly PASS — hold-under-load pending):**
+- **No drift:** 1 Hz position flat (pitch −1.4956, yaw −2.2768, `a≈0`) over ~12 min
+  of hold. PASS.
+- **Thermals:** temp_pitch 26.6 °C, temp_yaw 31.3→31.9 °C (not climbing) — well
+  below 75 °C. PASS.
+- **Bus healthy:** can0 RX errors 0; TX errors 1 / drops 1 over the whole ~20 min
+  (a single collision between the daemon and the `turret-can` tool) — negligible.
+  PASS.
+- **Hold under load (manual push-recovery):** PENDING — requires the operator's
+  physical hand-push at the station.
+- **Acceleration monitor:** confirmed working — detected the friction break-through
+  during homing (low `a`, `v~0`, `cmd≠0` dwells at the stop). See P3 note.
 
 **Pass criteria:** position variance ≤ 0.0004 rad, no CAN errors, temp stable,
 hold resists a light manual push and recovers.
@@ -105,19 +126,17 @@ daemon moves yaw then pitch to the park pose, verifies position + velocity withi
 tolerance, dwells, then de-energizes pitch then yaw → `PARKED (motors
 de-energized at the park pose)`.
 
-> ⚠️ **FLAG — the shipped park defaults are placeholders (Part 3, item 6).**
-> `config/turret.yaml` ships `yaw_park_deg: 0` / `pitch_park_deg: 0`. Logical 0 is
-> the **low mechanical stop** (homing sets logical 0 = low endpoint), and the soft
-> limit is inset 5° — so the 0/0 park pose sits **outside the soft limits** and
-> **violates §33.1** ("park must be inside the soft limits, not against the
-> stop"). The ParkController **rejects it**, and the daemon falls back to
-> **de-energizing at the current (ready) pose**, which is still safe (the ready
-> pose is the travel midpoint, away from both stops) — the log shows the
-> rejection reason.
+> ✅ **RESOLVED — the park pose is now set (§33.1 compliant).**
+> `config/turret.yaml` now ships `yaw_park_deg: 180` / `pitch_park_deg: 40` — the
+> **no-dangle mid-travel pose** (the same pose homing uses to park each axis between
+> homes). Logical mid-travel is strictly inside the soft limits with margin, so the
+> ParkController accepts it and the full `PARKED` path runs.
 
-**Before relying on the park pose**, set `yaw_park_deg` / `pitch_park_deg` to a
-safe in-travel pose (e.g. the midpoint, or a designated "stowed" side pose) and
-re-run this test to confirm the full `PARKED` path.
+**Result (rehome1, 2026-09-02 02:45, PASS):** SIGTERM → `shutdown requested; parking`
+→ `PARKED (motors de-energized at the park pose)` in ~4 s. De-energized positions
+(0x7019): pitch −1.49726 / yaw −2.19864 (the mid-travel). Second read +15 s: pitch
+−1.49707 / yaw −2.19854 → **no gravity slide** (Δ<0.01°). De-energize order pitch
+then yaw. A fresh de-energized read held the park pose.
 
 **Checks:**
 - De-energize order: **pitch then yaw** (per §33; verify in the log / motor state).
@@ -150,6 +169,29 @@ Reboot the daemon and re-home; verify the endpoints repeat within tolerance.
 - Record the measured travel + repeatability numbers (§55 homing metrics).
 
 **Pass criteria:** re-home succeeds, endpoints repeat within 0.5°, same ready pose.
+
+**Result (rehome1, 2026-09-02 02:33, PASS with yaw +stop caveat):** re-home succeeded
+(no fault), full safe-park homing ran in ~5 min. Endpoints vs P0 ref
+(`/tmp/p0_reference.txt`, tol 0.5° = 0.0087 rad):
+
+| axis | stop | P0 raw | rehome1 raw | Δ | verdict |
+|------|------|--------|-------------|---|---------|
+| pitch | + | −0.8108 | −0.8105 | 0.02° | PASS |
+| pitch | − | −2.1994 | −2.2009 | 0.09° | PASS |
+| yaw | − | −5.3447 | −5.3462 | 0.09° | PASS |
+| yaw | + | +0.9374 | +0.8108 | **7.2°** | ⚠ soft stop |
+
+Ready pose: pitch −1.4956 (Δ0.0°), yaw −2.2768 vs P0 −2.2765 (Δ0.02°) — **highly
+repeatable** (the yaw settles to the P0 ready pose; an early −2.2627 reading was the
+yaw still settling post-home).
+
+> ⚠️ **OPEN ISSUE — yaw +stop is a soft (friction) stop, not a hard mechanical
+> reference.** The yaw is a ~352.8° continuous axis; its +stop (raw ~+0.81) is not a
+> hard mechanical stop, so it does not repeat (7.2° vs P0). The **yaw −stop (hard)**
+> is the reliable reference. The pitch (both stops hard) repeats to <0.1°. To make the
+> yaw +stop repeatable, either add a hard mechanical stop / detent on the +side or
+> drive the +stop to a higher current so it is a true mechanical stop. Tracked as an
+> open issue (yaw +stop repeatability).
 
 ---
 

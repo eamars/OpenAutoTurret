@@ -293,9 +293,13 @@ int main(int argc, char** argv) {
     }
     ++cycles;
     if (cycles % cfg.control_loop_hz == 0) {
-      spdlog::info("t={:.2f}s phase={} q_pitch={:+.4f} q_yaw={:+.4f} rad",
-                   ns_to_ms(t0) / 1e3, phase_name(ph),
-                   loop.last_positions()[0], loop.last_positions()[1]);
+      spdlog::info(
+          "t={:.2f}s phase={} q_pitch={:+.4f} q_yaw={:+.4f} rad "
+          "temp_pitch={:.1f} temp_yaw={:.1f} C a_pitch={:+.2f} a_yaw={:+.2f}",
+          ns_to_ms(t0) / 1e3, phase_name(ph),
+          loop.last_positions()[0], loop.last_positions()[1],
+          loop.last_temps()[0], loop.last_temps()[1],
+          loop.last_accels()[0], loop.last_accels()[1]);
     }
     const TimeNs next = t0 + period_ns;
     const TimeNs tnow = now_monotonic_ns();

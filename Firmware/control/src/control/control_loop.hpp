@@ -181,6 +181,17 @@ class ControlLoop {
   const std::array<double, kAxisCount>& last_positions() const {
     return last_q_;
   }
+  // Latest drive-reported motor temperature (degC) per axis (for telemetry;
+  // the 1 Hz log and the web snapshot). The drive's NTC via the feedback.
+  const std::array<double, kAxisCount>& last_temps() const {
+    return last_temp_;
+  }
+  // Position-derived acceleration (rad/s^2) per axis — the filtered derivative
+  // of v_est_ (see kATauS). Exposed so the 1 Hz log shows motion quality
+  // (jitter / stuck-slip) at a glance.
+  const std::array<double, kAxisCount>& last_accels() const {
+    return a_est_;
+  }
 
  private:
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
@@ -227,6 +238,11 @@ class ControlLoop {
   std::unique_ptr<HomingPlan> homing_;
   std::unique_ptr<ParkController> park_;
   std::array<double, kAxisCount> last_q_{};
+  // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
+  std::array<double, kAxisCount> last_temp_{};
+  // Homing high-rate motion-log cycle counter (gates the 100 Hz log; see the
+  // Phase::Homing case). Reset in start_homing().
+  int homing_log_cycle_ = 0;
   // Position-derived velocity for at-rest decisions (P0j): the drive's
   // self-reported v is a ±0.05 rad/s noise band at rest that chatters the
   // fault phase's |v|>kAtRestVelRadS gate, ping-ponging the emergency-stop

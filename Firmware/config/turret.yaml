@@ -156,8 +156,13 @@ tracking:
   target_lost_behavior: hold    # hold | search (§58 params 19-20)
 
 shutdown:
-  yaw_park_deg: 0               # §58 param 4; refine to a safe side pose
-  pitch_park_deg: 0
+  # §33.1 safe in-travel park pose: the no-dangle mid-travel pose (the same
+  # pose the homing plan uses to park each axis between homes). Logical degrees
+  # (low stop = 0, high stop = travel): pitch mid of ~80 deg = 40, yaw mid of
+  # ~360 deg = 180. Parking here and de-energizing leaves the arm at its
+  # gravity rest (no slide). Adjust only on evidence (P2 verification).
+  yaw_park_deg: 180
+  pitch_park_deg: 40
   # §33.2 verification before the motors are de-energized (commanded shutdown
   # only; see §33.3 for uncontrolled power loss).
   pos_tolerance_deg: 0.5
