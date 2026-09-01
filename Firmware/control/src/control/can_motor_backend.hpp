@@ -42,6 +42,7 @@ class CanMotorBackend : public MotorBackend {
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override;
   void command_velocity(AxisId axis, double velocity_rad_s) override;
+  void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
 
  private:

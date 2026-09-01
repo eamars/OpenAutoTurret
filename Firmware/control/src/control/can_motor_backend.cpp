@@ -16,10 +16,19 @@ constexpr int kRecipeDelayMs = 50;  // CyberGear needs ~50 ms after a stop.
 // Every recipe frame is fire-and-forget: the CyberGear does not ACK register
 // writes on the wire, so a frame can be silently dropped and the drive can
 // end up in the wrong mode (or de-energized) while every write "succeeded".
-// p3d homing lost its backoff to exactly this: the drive commanded tq ~ 0
-// for the whole 10 s window (no position-loop action) after the recipe had
-// "completed". The recipes below therefore read back the mode-defining
-// registers after each attempt and retry the whole recipe on any mismatch.
+// The recipes below therefore read back the mode-defining registers after
+// each attempt and retry the whole recipe on any mismatch.
+//
+// Defense-in-depth, NOT the p3d/p3e root cause: the wire capture of p3e
+// shows the recipe verified correctly (RunMode/LimitSpd/LocRef readback all
+// correct) and yet the backoff still timed out. The real cause was upstream
+// in the control loop — see control_loop.cpp: during the position-mode
+// backoff the step-6 safety/command stage re-issued the DEFAULT hold
+// reference (current position @ 0) on every Allow cycle, stomping the
+// backoff target the Homing handler had just written, so the drive's
+// position loop saw the target flip at 100 Hz and could never break static
+// friction. (The recipe readback+retry is kept because a genuine drop would
+// otherwise leave the drive in the wrong mode with no error.)
 constexpr int kRecipeMaxAttempts = 3;
 }  // namespace
 
@@ -234,24 +243,36 @@ void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
     }
     last_spd_ref_[a] = velocity_rad_s;
   }
-  // Keepalive ping: as in position mode, the CyberGear emits COMM_TYPE_2
-  // feedback ONLY in response to a command (no periodic telemetry). A
-  // same-value LimitCur rewrite is inert (a limit, not a reference: it does
-  // not re-arm the velocity loop) yet elicits a feedback response, holding the
-  // feedback age below the safety supervisor's feedback_max_age_ms.
-  {
-    static TimeNs last_ping_ns[2] = {0, 0};
-    constexpr int64_t kPingWhenAgeNs = 30'000'000;   // ping at 30 ms age
-    constexpr int64_t kPingIntervalNs = 50'000'000;  // at most 20 pings/s
-    const TimeNs now_ns = now_monotonic_ns();
-    can::AxisLatest fb{};
-    bool stale = !system_.axis(axis).latest(fb) || !fb.has_feedback;
-    if (!stale && (now_ns - fb.rx_ns) > kPingWhenAgeNs) stale = true;
-    if (stale && (now_ns - last_ping_ns[a]) >= kPingIntervalNs) {
-      write_reg_float(cybergear::Reg::LimitCur,
-                      static_cast<float>(last_limit_cur_a_[a]), axis);
-      last_ping_ns[a] = now_ns;
-    }
+  // Keepalive ping: see keepalive() below.
+  keepalive(axis);
+}
+
+void CanMotorBackend::keepalive(AxisId axis) {
+  // The CyberGear emits COMM_TYPE_2 feedback ONLY in response to a command
+  // (no periodic telemetry, CyberGear_AI_Reference.md §21). On cycles where
+  // no reference is commanded (speed-mode axis + supervisor Allow — the
+  // control loop deliberately issues nothing so it does not disturb the
+  // drive), a same-value LimitCur rewrite is inert (a limit, not a
+  // reference: it does not re-arm the velocity loop) yet elicits a feedback
+  // response, holding the feedback age below the safety supervisor's
+  // feedback_max_age_ms. Without this the age crosses ~100 ms after ~5
+  // cycles and the supervisor flaps BRAKE/ALLOW forever, each BRAKE stomping
+  // the other axis's reference (p0p hold phase; p3e fault-phase flap,
+  // wire-verified B/C 1:1 alternation).
+  // Rate-limited: only when the age is already >30 ms and at most every
+  // 50 ms (20 pings/s), so steady-state costs one CAN frame per ~50 ms.
+  const int a = static_cast<int>(axis);
+  static TimeNs last_ping_ns[2] = {0, 0};
+  constexpr int64_t kPingWhenAgeNs = 30'000'000;   // ping at 30 ms age
+  constexpr int64_t kPingIntervalNs = 50'000'000;  // at most 20 pings/s
+  const TimeNs now_ns = now_monotonic_ns();
+  can::AxisLatest fb{};
+  bool stale = !system_.axis(axis).latest(fb) || !fb.has_feedback;
+  if (!stale && (now_ns - fb.rx_ns) > kPingWhenAgeNs) stale = true;
+  if (stale && (now_ns - last_ping_ns[a]) >= kPingIntervalNs) {
+    write_reg_float(cybergear::Reg::LimitCur,
+                    static_cast<float>(last_limit_cur_a_[a]), axis);
+    last_ping_ns[a] = now_ns;
   }
 }
 

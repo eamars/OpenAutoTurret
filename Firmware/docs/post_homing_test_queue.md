@@ -387,19 +387,20 @@ implemented: position-mode backoff; the re-test (p3d: fresh boot → home →
 ready → SIGTERM → PARKED → no-slide) doubles as the P2 park re-verification.
 
 **Result (p3d, 2026-09-02 10:19, FAIL — homing fault; root-caused, fix
-implemented, re-test = p3e):** fresh boot → homing fault at the pitch
+implemented, re-test = p3e → p3f):** fresh boot → homing fault at the pitch
 endpoint-A coarse backoff: `homing failed: pitch home full range failed:
 endpoint A homing failed: backoff: timeout (position mode, stuck in friction?
 q=-0.820363 target=-0.897712 dq=0.077348 v=0.000584 rad)` (10 s timeout,
 10:19:07). The axis moved only 0.13° in the whole window and the drive
 commanded tq ≈ 0 (744 of 979 samples within ±0.1 N·m, max |tq| 0.5 N·m) — the
-drive's position loop was not commanding at all. Root cause: a dropped
-fire-and-forget CAN frame in the `enter_position_mode` recipe (the drive was
-left in no active position loop), not a position-loop weakness — on a quiet
-bus the identical recipe + 5° step tracks reproducibly (3/3 runs, including
-the exact p3d hot-push-into-stop condition). Fix: read-back verify + retry on
-both mode recipes + backoff timeout 10 → 15 s (see the p3d subsection
-below).
+drive's position loop was not commanding at all. First hypothesis (a dropped
+fire-and-forget recipe frame) was refuted by p3e (below); the TRUE root cause
+is a control-loop bug: the step-6 command stage stomps the homing backoff
+reference every cycle. Fix: publish the backoff reference into the phase
+`q_ref/lim` (step 6 Allow becomes a no-op) + feedback keepalive for
+speed-mode axes on Allow cycles (kills the Brake/Allow flap); the read-back
+verify + retry + 15 s timeout are kept as defense-in-depth (see the p3d/p3e
+subsection below).
 
 > ✅ **RESOLVED — the yaw "+stop 7.2° off" (rehome1) is the detent-zone width, not
 > a soft stop.** The yaw's +stop is a friction/detent *zone* ~7.3° wide (raw
@@ -539,7 +540,7 @@ Unit tests: the `test_homing`/`test_homing_plan` sim plants and
 `SimMotorBackend` model the position-mode branch (drive toward LocRef at the
 speed cap, full torque from the first cycle); ctest 38/38 + pytest 93/2.
 
-### p3d failure + verified-recipe fix (2026-09-02)
+### p3d/p3e failure + root cause + fix (2026-09-02)
 
 **Failure:** p3d (10:19:07) faulted at the pitch endpoint-A coarse backoff —
 the first live run of the position-mode design. 100 Hz log (`/tmp/controld_p3d.log`):
@@ -548,7 +549,9 @@ dwell coast for 106 ms, then a 0.04° creep), tq distribution 1 cycle > +0.5
 N·m, 744 within ±0.1 N·m, 234 in −0.5…−0.1 N·m, then `backoff: timeout`.
 A working position loop with a 5° error wants `loc_kp × err = 30 × 0.0873 =
 2.6 N·m` (clamped at the 1…3 A limit); the drive never commanded more than
-0.5 N·m. The position loop was not active.
+0.5 N·m — at the time this read as "the position loop was not active";
+p3e's wire capture showed the loop WAS active but was commanded to hold in
+place on every other frame (root cause below).
 
 **Root cause (quiet-bus experiments, no daemon, full wire capture):**
 
@@ -573,11 +576,10 @@ A working position loop with a 5° error wants `loc_kp × err = 30 × 0.0873 =
    / `send_enable` are plain bus sends — the CyberGear does not ACK
    register writes on the wire, so a dropped frame is invisible. p3d's
    signature (tq ≈ 0, no tracking, LocRef register still accepting writes)
-   is exactly what a lost `enable` (drive de-energized in position mode →
-   zero commanded torque, gravity creep) or a lost `RunMode=1` (drive still
-   in speed mode with SpdRef = 0 → same) produces.
+   looked exactly like a lost `enable` or a lost `RunMode=1`. **Hypothesis,
+   later refuted by p3e (see below) — kept here for the record.**
 
-**Fix (implemented, `can_motor_backend.cpp`):** both mode recipes are now
+**Fix v1 (f999d5f, `can_motor_backend.cpp`):** both mode recipes are now
 verified live — after the recipe, the mode-defining registers are read back
 (`enter_position_mode`: RunMode == 1, LimitSpd == written, LocRef == pinned;
 `enter_speed_mode`: RunMode == 2, LimitCur == written, SpdRef == 0) and the
@@ -591,15 +593,70 @@ drive worst case is ~5 s (4.5 s arrival + 0.5 s settle), and 15 s keeps ≥2×
 margin over a bad-luck breakaway while still catching a genuinely stuck
 drive quickly.
 
-Unit tests: unchanged plants still pass (the verify/retry lives in the CAN
-backend, which the sim does not exercise); ctest 38/38 + pytest 93/2 after
-the change.
+**p3e (2026-09-02 10:51, FAIL — identical signature, hypothesis refuted):**
+fresh boot → homing fault at the SAME pitch endpoint-A backoff, now 15 s:
+`backoff: timeout (position mode, stuck in friction? q=-0.821126
+target=-0.897712 dq=0.076585 v=0.000547 rad)`. The recipe VERIFY PASSED
+(RunMode/LimitSpd/LocRef readback all correct — no `verify failed` log),
+which a dropped recipe frame cannot explain.
 
-**Live re-test p3e** (fresh boot → home → ready → SIGTERM → PARKED, doubles
-as the P2 park re-verification): with the verified recipe the arm must move
-within ~1–5 s of the backoff start on the real drive (breakaway can take up
-to ~4 s — do not treat <4 s of creep as a stall before 15 s), and
-`turret-can read pitch 0x7017` mid-backoff must read 0.174533.
+**TRUE root cause (p3e wire capture, 29 127 frames decoded,
+`/tmp/p3e_wire.txt`):** the control loop fights itself. In `Phase::Homing`
+the homing handler issues the backoff command DIRECTLY (`command(target,
+10°/s)`), but it never publishes it into the phase `q_ref[]`/`lim[]` arrays
+that the common step-6 command stage uses. Step 6 re-commands every
+position-mode axis from `q_ref/lim` on EVERY cycle — so on each Allow cycle
+it wrote the DEFAULT hold (current position @ LimitSpd 0) immediately after
+the handler's target write. Decoded pitch command pattern over the full 15 s
+backoff: **`A C A C A C …` exactly 1:1 (2944 backoff frames, 2944 hold
+frames, only 2 brake frames)** — the drive's position loop saw the target
+flip between "backoff target @ 10°/s" and "hold in place @ 0" at 100 Hz and
+could never build the sustained torque to break static friction.
+Deterministic failure: p3d (10 s) and p3e (15 s) are the same bug at two
+timeout settings. The unit tests could not catch it: the sim plant has no
+static friction, so a 50 %-duty stomp still creeps to arrival.
+
+Secondary finding — the carried-over **fault-phase BRAKE/ALLOW flap** (and
+the p0p hold-phase flap): the wire shows `B C B C …` 1:1 (449/450) in the
+fault phase, where B = the Brake override (emergency target @ 5°/s) and C =
+the Allow hold. The CyberGear has NO periodic telemetry (it answers
+commands only), and step 6 only issues a speed-mode command (the only thing
+that pings for feedback) on non-Allow cycles. So an idle speed-mode axis
+(= yaw, still in speed mode at fault time) ages past
+`feedback_max_age_ms` = 100 ms after ~5 quiet cycles → supervisor BRAKE →
+the brake pings the yaw but stomps the OTHER axis's reference with the
+emergency target → next cycle Allow → the yaw ages out again → … A
+self-sustaining ~100 ms flap that also slowly creeps the fault hold toward
+the stop (the B stomp commands 5°/s toward the emergency target). During
+homing the flap does not occur — the homing handler pings BOTH axes every
+cycle — which is why the p3e log shows the supervisor silent through the
+backoff (the stomp happened on Allow cycles, which are not logged).
+
+**Fix v2 (implemented, `control_loop.cpp` + backend `keepalive`):**
+1. Homing phase: the position-move branch now publishes
+   `q_ref[ix(a)] = target; lim[ix(a)] = speed` — step 6's Allow cycle
+   becomes a write-on-change no-op (zero extra CAN traffic), while a
+   Brake/Hold/Derate cycle still overrides the reference (safety authority
+   preserved: a genuine stale-feedback brake during a backoff still stops
+   the arm — P4 depends on this).
+2. Step 6: a speed-mode axis on an Allow cycle now gets `keepalive()`
+   (new `MotorBackend` method; CAN impl = a rate-limited same-value LimitCur
+   rewrite — inert, no reference change — that elicits a feedback response,
+   same ping the `command`/`command_velocity` paths already used) so the
+   feedback age stays ~40 ms and the supervisor can no longer flap.
+3. Fix v1 (verify + retry, 15 s timeout) retained as defense-in-depth
+   against genuine fire-and-forget drops.
+
+ctest 38/38 + pytest 93/2 after the change.
+
+**Live re-test p3f** (fresh boot → home → ready → SIGTERM → PARKED, doubles
+as the P2 park re-verification): the arm must move within ~1–5 s of the
+backoff start on the real drive (breakaway can take up to ~4 s — do not
+treat <4 s of creep as a stall before 15 s); the wire capture must show the
+backoff reference UNCONTENDED (no hold/brake frames interleaved with the
+`loc_ref = −0.897712 @ 0.174533` backoff frames); `turret-can read pitch
+0x7017` mid-backoff must read 0.174533; and the fault/shutdown holds must
+show no BRAKE/ALLOW flap in the log.
 
 ---
 

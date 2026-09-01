@@ -396,6 +396,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // (both write-on-change — a fixed target costs one CAN write per
           // backoff) and let the drive's position loop drive the move.
           backend_->command(a, ds.target_rad, ds.speed_rad_s);
+          // PUBLISH the reference in q_ref[]/lim[] too: step 6 (below) runs
+          // after this handler and re-commands every position-mode axis from
+          // q_ref[]/lim[], applying the safety action on the way. Without
+          // this, an Allow cycle re-commands the DEFAULT hold (current
+          // position @ 0) and stomps the backoff target every single cycle —
+          // the drive's position loop sees the target flip between
+          // "backoff @ 10 deg/s" and "hold in place @ 0" at 100 Hz, can never
+          // break static friction, and the backoff times out (p3d/p3e root
+          // cause, wire-verified: A/C 1:1 alternation for the full 15 s).
+          // Safety authority is preserved: a Brake/Hold/Derate cycle still
+          // overrides this reference in step 6.
+          q_ref[ix(a)] = ds.target_rad;
+          lim[ix(a)] = ds.speed_rad_s;
         } else {
           // Speed mode (velocity): command the constant speed (SpdRef) the
           // drive's velocity loop should hold. The homing controller produces
@@ -633,9 +646,16 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // position-mode reference — issuing it here would switch the axis out
         // of speed mode and reintroduce the stick-slip. On a safety action
         // (anything but Allow) command a controlled stop (SpdRef=0); the
-        // velocity loop decelerates smoothly to rest.
+        // velocity loop decelerates smoothly to rest. On Allow issue NOTHING
+        // that changes the reference — but do keep the feedback alive: the
+        // drive has no periodic telemetry, so without a ping the feedback age
+        // crosses feedback_max_age_ms after ~5 quiet cycles and the supervisor
+        // flaps BRAKE/ALLOW forever, each BRAKE stomping the other axis's
+        // reference (p0p hold phase; p3e fault phase, wire-verified B/C 1:1).
         if (last_decision_.action != SafetyAction::Allow)
           backend_->command_velocity(a, 0.0);
+        else
+          backend_->keepalive(a);
       } else {
         backend_->command(a, qr, ls);
       }

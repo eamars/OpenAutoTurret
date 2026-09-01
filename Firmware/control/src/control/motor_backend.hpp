@@ -73,6 +73,15 @@ class MotorBackend {
   // speed with its internal velocity loop; current rises as needed up to the
   // current limit). Fire-and-forget; safe to call every cycle.
   virtual void command_velocity(AxisId axis, double velocity_rad_s) = 0;
+  // Feedback keepalive: elicit a fresh COMM_TYPE_2 response WITHOUT changing
+  // any reference (the CyberGear has no periodic telemetry — it answers
+  // commands only). Needed for speed-mode axes on Allow cycles, where no
+  // reference command is issued: without a periodic ping the feedback age
+  // crosses feedback_max_age_ms and the supervisor flaps BRAKE/ALLOW every
+  // ~100 ms, and each BRAKE stomps the other axis's reference (p0p hold
+  // phase; the p3e fault-phase flap). No-op where feedback is self-generated
+  // (sim). Safe to call every cycle; the implementation rate-limits.
+  virtual void keepalive(AxisId axis) {}
   // Set the drive current limit (A, 0..23) for this axis (LimitCur, 0x7018).
   // Fire-and-forget; safe from the control loop — the adaptive-current homing
   // raises it on each false-contact latch (§22).
