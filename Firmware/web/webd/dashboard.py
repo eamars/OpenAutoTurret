@@ -273,7 +273,11 @@ async function setVideo(on) {
   const tg = $("video-toggle"); tg.disabled = true;
   videoStatus(on ? "opening camera…" : "closing camera…");
   try {
-    const r = await fetch(on ? "/api/video/start" : "/api/video/stop", { method: "POST" });
+    const r = await fetch(on ? "/api/video/start" : "/api/video/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
     const j = await r.json();
     applyVideo(j.running, j);
     if (!j.running && j.error) { videoStatus(j.error, true); logline(`video -> ${j.error}`, "err"); }

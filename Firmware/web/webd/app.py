@@ -166,7 +166,9 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         return video.state().to_dict()
 
     @app.post("/api/video/start")
-    async def video_start(req: VideoStartRequest) -> JSONResponse:
+    async def video_start(req: Optional[VideoStartRequest] = None) -> JSONResponse:
+        # Body is optional: a bare POST (no JSON body) starts with the defaults.
+        req = req or VideoStartRequest()
         width = req.width or config.video_width
         height = req.height or config.video_height
         fps = req.fps if req.fps and req.fps > 0 else float(config.video_fps)

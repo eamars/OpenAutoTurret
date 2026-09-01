@@ -90,6 +90,16 @@ class VideoApiTest(unittest.TestCase):
         self.assertTrue(j["running"])
         self.assertEqual((j["width"], j["height"]), (160, 120))
 
+    def test_start_no_body(self) -> None:
+        # A bare POST with no JSON body must start with the config defaults
+        # (the browser/clients may omit the body; this guards the 422 regression).
+        r = self.tc.post("/api/video/start")
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertTrue(j["ok"])
+        self.assertTrue(j["running"])
+        self.assertEqual(j["camera"], "fake-imx500")
+
     def test_disabled_feature(self) -> None:
         # Rebuild the app with the video feature disabled (§53 kill switch).
         self.config.video_enabled = False
