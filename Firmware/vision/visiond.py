@@ -74,6 +74,7 @@ def _make_parser() -> argparse.ArgumentParser:
     p.add_argument("--framerate", type=float, default=30.0, help="synthetic frame rate (Hz)")
     p.add_argument("--image-config", default="", help="path to the picamera2 config JSON (real mode)")
     p.add_argument("--detector-rpk", default="", help="path to the IMX500 detector RPK JSON (real mode)")
+    p.add_argument("--orientation", default="none", help="install orientation applied to the detector boxes (none|rotate_180|flip_horizontal|flip_vertical); keeps control geometry correct when the camera is mounted upside-down")
     return p
 
 
@@ -86,7 +87,9 @@ def main(argv: Optional[list] = None) -> int:
         except Exception as e:
             print(f"error: real camera unavailable: {e}", file=sys.stderr)
             return 1
-        fs: FrameSource = Picamera2FrameSource(args.image_config, args.detector_rpk)
+        fs: FrameSource = Picamera2FrameSource(
+            args.image_config, args.detector_rpk, orientation=args.orientation
+        )
     else:
         # SAFE default: synthetic camera (no hardware, no motor driver).
         fs = SyntheticFrameSource(framerate_hz=args.framerate)

@@ -121,6 +121,12 @@ def main() -> int:
     os.environ.setdefault("OTA_VIDEO_HEIGHT", "480")
     os.environ.setdefault("OTA_VIDEO_FPS", "15")
     os.environ.setdefault("OTA_VIDEO_QUALITY", "80")
+    # This install: the IMX500 is mounted upside-down, and its colour
+    # balance is warm/red. Both are corrected at capture (before
+    # processing / control). Override with the matching env var if the
+    # physical mount changes.
+    os.environ.setdefault("OTA_VIDEO_ORIENTATION", "rotate_180")
+    os.environ.setdefault("OTA_VIDEO_WB", "auto")
     print(f"[inspection] webd listening on http://{args.host}:{args.port}",
           flush=True)
     WebdApp().run()

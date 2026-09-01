@@ -8,8 +8,10 @@ the (real) camera is touched. For tests and for running without a camera, use
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Protocol, Tuple
+
+from common import image_corrections as ic
 
 
 @dataclass
@@ -179,7 +181,14 @@ class Picamera2FrameSource:
     Import is deferred so the module loads (and tests run) without picamera2.
     """
 
-    def __init__(self, config_path: str, detector_rpk_path: str, image_size: Tuple[int, int] = (1920, 1080)) -> None:
+    def __init__(self, config_path: str, detector_rpk_path: str,
+                 image_size: Tuple[int, int] = (1920, 1080),
+                 orientation: str = "none") -> None:
+        # The detector reports boxes in the RAW sensor frame; the install
+        # orientation (e.g. an upside-down mount) is applied to those boxes so
+        # the control-loop geometry agrees with the corrected image. Applied
+        # at capture, before processing / control (doc §5.1).
+        self._orientation = ic.validate_orientation(orientation)
         try:
             from picamera2 import Picamera2
         except ImportError as e:  # pragma: no cover - requires the real camera
@@ -225,6 +234,8 @@ class Picamera2FrameSource:
         except Exception:
             sensor_ns = time.time_ns() - self._t0_ns
         dets = self._parse_detections(frame)
+        if self._orientation != "none":
+            dets = [self._reorient(d) for d in dets]
         return FrameCapture(
             width=self._image_size[0],
             height=self._image_size[1],
@@ -252,3 +263,16 @@ class Picamera2FrameSource:
             pass
         self._seq += 1
         return dets
+
+    def _reorient(self, det: Detection) -> Detection:  # pragma: no cover
+        """Re-express one detection box in the install-corrected image frame."""
+        x0, y0, x1, y1 = ic.apply_orientation_bbox(
+            (det.bbox_x_min_px, det.bbox_y_min_px,
+             det.bbox_x_max_px, det.bbox_y_max_px),
+            self._orientation, self._image_size[0], self._image_size[1],
+        )
+        return replace(
+            det,
+            bbox_x_min_px=x0, bbox_y_min_px=y0,
+            bbox_x_max_px=x1, bbox_y_max_px=y1,
+        )

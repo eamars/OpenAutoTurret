@@ -24,6 +24,10 @@ import time
 from dataclasses import dataclass, asdict
 from typing import Optional, Tuple
 
+import numpy as np
+
+from common import image_corrections as ic
+
 
 @dataclass
 class VideoState:
@@ -37,6 +41,9 @@ class VideoState:
     camera: str = ""
     error: str = ""
     frames_published: int = 0
+    wb_gains: tuple = (1.0, 1.0, 1.0)
+    orientation: str = "none"
+    white_balance: str = "off"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -50,8 +57,11 @@ class VideoSource:
     only re-sends a frame when it changes, so N viewers cost the same capture.
     """
 
-    def __init__(self, enabled: bool = True) -> None:
+    def __init__(self, enabled: bool = True, orientation: str = "none",
+                 white_balance: str = "auto") -> None:
         self._enabled = enabled
+        self._orientation = ic.validate_orientation(orientation)
+        self._wb_mode = ic.validate_white_balance(white_balance)
         self._frame_lock = threading.Lock()   # protects _latest/_seq/_ts/_count
         self._lifecycle_lock = threading.Lock()  # serializes start/stop + camera
         self._latest: bytes = b""
@@ -65,6 +75,9 @@ class VideoSource:
         self._min_publish_s = 1.0 / 15.0
         self._last_publish = 0.0
         self._open_error = ""
+        # Smoothed gray-world white-balance gains (EMA across frames: no flicker).
+        self._wb_gains = (1.0, 1.0, 1.0)
+        self._wb_alpha = 0.2
 
     # -- introspection ------------------------------------------------------
     def is_running(self) -> bool:
@@ -81,6 +94,9 @@ class VideoSource:
                 camera=self._state.camera,
                 error=self._state.error or self._open_error,
                 frames_published=self._count,
+                wb_gains=self._wb_gains,
+                orientation=self._orientation,
+                white_balance=self._wb_mode,
             )
         return st
 
@@ -106,6 +122,7 @@ class VideoSource:
             self._seq = 0
             self._count = 0
             self._open_error = ""
+            self._wb_gains = (1.0, 1.0, 1.0)
             self._first_frame.clear()
             with self._frame_lock:
                 self._latest = b""
@@ -125,6 +142,16 @@ class VideoSource:
                 cfg = cam.create_video_configuration(
                     main={"size": (int(width), int(height))}, buffer_count=3
                 )
+                if self._wb_mode == "auto":
+                    # Disable the camera's own auto-white-balance so it cannot
+                    # drift the per-channel balance out from under our software
+                    # gray-world (which re-equalizes every frame). With the
+                    # camera AWB off the raw balance is stable, so the correction
+                    # fully neutralizes the red cast instead of chasing it.
+                    try:
+                        cfg["controls"]["AwbEnable"] = 0
+                    except Exception:  # noqa: BLE001 - control name varies
+                        pass
                 cam.request_callback = self._make_callback(Image, quality)
                 cam.configure(cfg)
                 cam.start()  # blocks until the pipeline is up
@@ -180,8 +207,15 @@ class VideoSource:
                 pass
 
     def _make_callback(self, Image, quality: int):
-        """Build the picamera2 request callback (runs on the camera thread)."""
+        """Build the picamera2 request callback (runs on the camera thread).
+
+        The install-level orientation and white-balance corrections are applied
+        HERE, on the raw frame, before any encoding — i.e. before the frame enters
+        processing (doc §42.3) — so the preview shows the corrected image.
+        """
         state = self
+        orientation = state._orientation
+        wb_mode = state._wb_mode
 
         def _cb(request) -> None:
             # FPS cap: only JPEG-encode a frame when one is due. Skipped frames
@@ -192,9 +226,24 @@ class VideoSource:
             state._last_publish = now
             try:
                 arr = request.make_array("main")
-                rgb = arr[..., ::-1][..., :3]  # XBGR8888 -> RGB (drop X)
+                # 1) Orientation (install-level) on the raw frame, first.
+                if orientation != "none":
+                    arr = ic.apply_orientation_image(arr, orientation)
+                # 2) XBGR8888 -> RGB (drop X).
+                rgb = arr[..., ::-1][..., :3]
+                # 3) White balance (install-level): auto gray-world, smoothed.
+                if wb_mode == "auto":
+                    g = ic.gray_world_correction(rgb)
+                    a, prev = state._wb_alpha, state._wb_gains
+                    state._wb_gains = (
+                        a * g[0] + (1 - a) * prev[0],
+                        a * g[1] + (1 - a) * prev[1],
+                        a * g[2] + (1 - a) * prev[2],
+                    )
+                    rgb = ic.apply_white_balance(rgb, state._wb_gains)
                 buf = io.BytesIO()
-                Image.fromarray(rgb).save(buf, "JPEG", quality=quality)
+                Image.fromarray(np.ascontiguousarray(rgb)).save(
+                    buf, "JPEG", quality=quality)
                 jpeg = buf.getvalue()
             except Exception as e:  # noqa: BLE001
                 state._open_error = f"frame encode failed: {e}"

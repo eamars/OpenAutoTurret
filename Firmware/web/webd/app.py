@@ -122,7 +122,11 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
 
     # Separate low-priority video source (§42.3): its own path from the IMX500,
     # never through the control socket. Off until a client turns it on.
-    video = VideoSource(enabled=config.video_enabled)
+    video = VideoSource(
+        enabled=config.video_enabled,
+        orientation=config.video_orientation,
+        white_balance=config.video_white_balance,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001

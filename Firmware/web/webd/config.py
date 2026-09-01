@@ -18,11 +18,17 @@ Env vars:
   OTA_VIDEO_HEIGHT    default stream height (default 480)
   OTA_VIDEO_FPS       capped publish FPS (default 15, §42.3 "reduce FPS")
   OTA_VIDEO_QUALITY   JPEG quality 1..95 (default 80)
+  OTA_VIDEO_ORIENTATION install orientation correction (default none):
+                        none | rotate_180 | flip_horizontal | flip_vertical
+  OTA_VIDEO_WB        white balance: off | auto (gray-world, default auto)
+                        applied at capture, before processing / control
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
+from common import image_corrections as ic
 
 
 @dataclass
@@ -37,6 +43,8 @@ class WebConfig:
     video_height: int = 480
     video_fps: int = 15
     video_quality: int = 80
+    video_orientation: str = "none"
+    video_white_balance: str = "auto"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -56,6 +64,15 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_choice(name: str, default: str, choices) -> str:
+    """Read an env var, keeping it within ``choices`` (else the default)."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    raw = raw.strip().lower()
+    return raw if raw in choices else default
+
+
 def load_web_config() -> WebConfig:
     """Build a WebConfig from the environment."""
     return WebConfig(
@@ -69,4 +86,8 @@ def load_web_config() -> WebConfig:
         video_height=_env_int("OTA_VIDEO_HEIGHT", 480),
         video_fps=max(1, _env_int("OTA_VIDEO_FPS", 15)),
         video_quality=min(95, max(1, _env_int("OTA_VIDEO_QUALITY", 80))),
+        video_orientation=_env_choice("OTA_VIDEO_ORIENTATION", "none",
+                                      ic.ORIENTATIONS),
+        video_white_balance=_env_choice("OTA_VIDEO_WB", "auto",
+                                        ic.WHITE_BALANCES),
     )
