@@ -1,25 +1,44 @@
-# Post-Homing Test Queue (Phase 2)
+# Post-Homing Test Queue
 
-**When to run:** after the live homing run (below) is verified on the real turret.
-**Scope:** Phase 2 only — boot → home → safe hold → park. **Tracking is disabled**
-in Phase 2; nothing in this queue enables it.
-**Safety posture:** every command in the daemon passes the SafetySupervisor. There
-is no open-loop path. Stale feedback → **Brake** (recoverable safe stop); a motor
-fault / over-temp → **Disable** (de-energize, sticky). The station never homes or
-moves with an unknown motor state (boot faults lock out).
+**When to run:** after the live homing run (P0) is verified on the real turret.
+**Scope (this edition, post-Phase 9):** Phases 2–9 — boot → home → safe hold →
+park, live payload checks, live vision, live closed-loop tracking, installation
+orientation calibration, systemd deployment, live web end-to-end, and the §54/§55
+HIL + acceptance-metrics pass.
+
+**How to read the tags**
+
+- `[MOTOR]` moves the real motors over CAN — **user-run, supervised station only**.
+- `[CAMERA]` uses the real IMX500 but never touches `can0` — the assistant may
+  run it; `controld` may be stopped entirely.
+- `[SW]` software/computation only — no motor, no camera.
+- **`GOOD-TO-GO` items:** the user said "good to go" for the station. Everything
+  in Part 1 that is `[MOTOR]` still requires the user at the station; the
+  Part-2 swap-in map lists every place a mock/guard/placeholder is replaced by
+  the real thing at that moment.
+
+**Safety posture:** every command in the daemon passes the SafetySupervisor.
+There is no open-loop path. Stale feedback → **Brake** (recoverable safe stop);
+a motor fault / over-temp → **Disable** (de-energize, sticky). The station never
+homes or moves with an unknown motor state (boot faults lock out). Tracking is
+hard-disabled until the homing gates pass (§38.1), and the tracking reference is
+constrained by the §18 soft-limit envelope.
 
 Build + run from `Firmware/build`:
 ```
 cd Firmware/build && ninja
 ```
-Binaries: `./control/controld` (the daemon), `./turret-can` (diagnostics).
+Binaries: `./control/controld` (the daemon), `./turret-can` (diagnostics),
+`./turret-payload` (payload profiling/verification, `--sim` rehearsal).
 
 ---
 
-## P0 — Live homing run (user-run gate)
+# Part 1 — Live test queue (run in this order)
 
-The Phase-2 deliverable: **reliable boot → homed → safe hold → park cycle.**
-Everything below assumes this passes.
+## P0 — Live homing run (user-run gate) `[MOTOR]`
+
+The Phase-2 deliverable and the gate for everything else: **reliable boot →
+homed → safe hold → park cycle.**
 
 ```
 ./control/controld config/turret.yaml
@@ -33,12 +52,16 @@ Everything below assumes this passes.
    contact → back-off → fine approach → contact → repeatability pass.
 5. `homed + at ready pose; holding (Ctrl-C to park)` — the daemon moves to the
    logical midpoint of each axis's travel (never at a stop) and holds.
+   (Phase 9: with `payload_auto_verify` enabled, a `payload_check` phase runs
+   once after first hold — small moves in the central region, one axis at a time.)
 
 **Pass criteria:**
 - Both axes home without a `control fault:` line.
 - The daemon reaches `homed + at ready pose` and holds (telemetry line shows
   `phase=hold`, positions stable).
 - No unexpected motion, no over-temperature, no CAN errors (see P1).
+- Note the measured travel per axis (used to update the `expected_travel_deg`
+  placeholders — Part 3, items 4–5).
 
 **If it fails:** the log states the fault reason (e.g. `contact not detected`,
 `travel out of band`, `motor self-test failed`). Do **not** retry blindly —
@@ -47,7 +70,7 @@ inspect the fault, fix the cause (mechanical stop position, CAN wiring, config
 
 ---
 
-## P1 — Safe-hold verification (after homing, before anything else)
+## P1 — Safe-hold verification `[MOTOR]`
 
 With the daemon holding at the ready pose (P0 step 5), confirm it is genuinely
 stationary and the bus is healthy.
@@ -69,7 +92,7 @@ hold resists a light manual push and recovers.
 
 ---
 
-## P2 — Shutdown / park cycle (§33)
+## P2 — Shutdown / park cycle (§33) `[MOTOR]`
 
 Trigger a clean shutdown and verify the park sequence.
 
@@ -82,19 +105,19 @@ daemon moves yaw then pitch to the park pose, verifies position + velocity withi
 tolerance, dwells, then de-energizes pitch then yaw → `PARKED (motors
 de-energized at the park pose)`.
 
-> ⚠️ **FLAG — the shipped park defaults are placeholders (see Flags below).**
+> ⚠️ **FLAG — the shipped park defaults are placeholders (Part 3, item 6).**
 > `config/turret.yaml` ships `yaw_park_deg: 0` / `pitch_park_deg: 0`. Logical 0 is
 > the **low mechanical stop** (homing sets logical 0 = low endpoint), and the soft
 > limit is inset 5° — so the 0/0 park pose sits **outside the soft limits** and
 > **violates §33.1** ("park must be inside the soft limits, not against the
 > stop"). The ParkController **rejects it**, and the daemon falls back to
 > **de-energizing at the current (ready) pose**, which is still safe (the ready
-> pose is the travel midpoint, away from both stops) — the log will show
-> `de-energized (phase=…, fault='')` instead of `PARKED`.
->
-> **Before relying on the park pose**, set `yaw_park_deg` / `pitch_park_deg` to a
-> safe in-travel pose (e.g. the midpoint, or a designated "stowed" side pose) and
-> re-run this test to confirm the full `PARKED` path.
+> pose is the travel midpoint, away from both stops) — the log shows the
+> rejection reason.
+
+**Before relying on the park pose**, set `yaw_park_deg` / `pitch_park_deg` to a
+safe in-travel pose (e.g. the midpoint, or a designated "stowed" side pose) and
+re-run this test to confirm the full `PARKED` path.
 
 **Checks:**
 - De-energize order: **pitch then yaw** (per §33; verify in the log / motor state).
@@ -109,7 +132,7 @@ no gravity slide.
 
 ---
 
-## P3 — Reboot + re-home repeatability
+## P3 — Reboot + re-home repeatability `[MOTOR]`
 
 Reboot the daemon and re-home; verify the endpoints repeat within tolerance.
 
@@ -124,12 +147,13 @@ Reboot the daemon and re-home; verify the endpoints repeat within tolerance.
   default 0.5°).
 - The ready pose is the same as P0.
 - No fault on the re-home.
+- Record the measured travel + repeatability numbers (§55 homing metrics).
 
 **Pass criteria:** re-home succeeds, endpoints repeat within 0.5°, same ready pose.
 
 ---
 
-## P4 — Stale feedback / CAN timeout (§39.4)
+## P4 — Stale feedback / CAN timeout (§39.4) `[MOTOR]`
 
 Verify the recoverable **Brake** behavior when motor feedback goes stale.
 
@@ -150,7 +174,7 @@ mean it was mis-classified as a Disable).
 
 ---
 
-## P5 — Motor fault injection (§38)
+## P5 — Motor fault injection (§38) `[MOTOR]`
 
 Verify the sticky **Disable** behavior on a hard motor fault.
 
@@ -166,60 +190,65 @@ A reboot is required to clear the fault-locked state.
 **Pass criteria:** fault → both axes de-energized, `phase=fault`, sticky until
 reboot. No motion after the fault.
 
-> ⚠️ This is a **destructive** test (fault-locks the station). Run it last, and
-> be ready to reboot the daemon to recover.
+> ⚠️ This is a **destructive** test (fault-locks the station). Run it **last in
+> the pure-motor group** (P0–P6), and be ready to reboot the daemon to recover.
 
 ---
 
-## P6 — Payload response check (§27, optional)
+## P6 — In-loop payload response check (§27, §31.3) `[MOTOR]`
 
-**Phase 2: STUBBED.** The `OPTIONAL_PAYLOAD_RESPONSE_CHECK` state is a no-op in
-Phase 2 (no payload attached / no payload driver). Verify only that the daemon
-passes through it without fault (it does — the log shows the hold transition
-with no payload-related fault). The real payload check lands in Phase 3.
+**No longer a stub** (it was a no-op in the Phase-2 edition of this queue). The
+daemon now runs the §31.3 payload check in-loop: after first hold,
+`Phase::PayloadCheck` performs small amplitude-clamped moves **one axis at a
+time** in the safe central region, then auto-verifies the measured response
+against the active payload profile (§27 `OPTIONAL_PAYLOAD_RESPONSE_CHECK`).
+A manual `start_payload_verification` web command re-runs it on demand.
+
+**Checks:**
+1. With `payload_auto_verify: true` (or the manual command), watch the log:
+   `phase=payload_check` appears after first hold, one axis at a time, then the
+   loop returns to `hold`.
+2. Telemetry: `payload_check_active` true during the check, `payload_profile_status`
+   `ok` when the response matches the active profile.
+3. **Mismatch path:** temporarily point `payload.active_profile` at a profile
+   that does NOT match the installed mass (e.g. a too-light profile). The check
+   must report `mismatch`, set `payload_derated` → the ready-pose / test-motion /
+   tracking speed limits all drop by `derate_factor` (§31.4). Re-select the
+   correct profile and re-verify: status returns `ok` and the derate clears.
+4. The SafetySupervisor kept authority throughout (no limit crossing; the check
+   amplitudes are clamped by the margin to the region edges).
+
+**Pass criteria:** check runs one axis at a time and returns to hold; mismatch →
+derate visible in telemetry + limits; re-verify with the correct profile clears it.
 
 ---
 
-## Flags to resolve during commissioning
-
-1. **Park pose (P2):** `yaw_park_deg`/`pitch_park_deg` ship as `0/0` = the low
-   stop (outside the soft limits, violates §33.1). The ParkController rejects it;
-   the daemon safely de-energizes at the ready pose instead. **Set a safe
-   in-travel park pose before relying on the park.** This is the top commissioning
-   item.
-2. **Expected travel bands:** `axes.*.expected_travel_deg` are conservative
-   placeholders (pitch ±120°, yaw ±180°). After the first real homing, update them
-   to the measured travel (the homing validates the measured travel against these
-   bands; too tight a band will reject a valid home, too loose weakens the check).
-3. **YAML commissioning params:** the 23 §58 commissioning parameters are
-   conservative placeholders (config-driven, never compile-time). Refine them
-   (contact effort thresholds, speeds, tolerances) against the real motors.
-4. **Leftover virtual interface:** a `vcan9` interface was left up from earlier
-   testing. Confirm it is not needed and remove it (`ip link del vcan9`) so it
-   cannot shadow real traffic.
-
----
-
-## P7 — Live camera / vision verification (Phase 4)
+## P7 — Live camera / vision verification (Phase 4) `[CAMERA]`
 
 **SAFETY: the vision daemon is independent of the motor driver. This test runs
 `visiond` against the real IMX500 and verifies detection + timestamping + IPC
 only — it does NOT open `can0`, does NOT energize the motors, and does NOT send
 any setpoint. `controld` may be stopped entirely for this test.**
 
-Prereq: IMX500 + `imx500-all` installed (see `docs/AI_CAMERA_SETUP.md`); a
-detector RPK configured (YOLO11n recommended).
+Prereqs (Part 3, item 11): IMX500 + `imx500-all` installed (see
+`docs/AI_CAMERA_SETUP.md`); a picamera2 config JSON and a detector RPK JSON
+(`--image-config` / `--detector-rpk`). The official YOLO11n RPK is AGPL —
+license review before distribution.
 
 1. Start a measurement sink on the controld IPC socket (a throwaway subscriber
    is fine for a camera-only check; the real sink is `controld`).
-2. Run the vision daemon in real mode:
+2. Run the vision daemon in real mode (the `--synthetic` default is the stand-in
+   being replaced — Part 2, S3):
    ```bash
    # from Firmware/
    python3 -m vision.visiond --real \
        --image-config <picamera2_config.json> \
        --detector-rpk <imx500_network_yolo11n_pp.rpk.json> \
-       --socket /tmp/ota_vision.sock --frames 300
+       --socket /tmp/ota_vision.sock --frames 300 \
+       --orientation rotate_180
    ```
+   (`--orientation` applies the install-level correction to the detector boxes —
+   same `common/image_corrections.py` path the web video uses.)
 3. Verify:
    - The daemon publishes `TargetMeasurement`s at ~the frame rate.
    - With a person in frame: `valid=true`, `class_id=1` (person), confidence
@@ -233,23 +262,374 @@ detector RPK configured (YOLO11n recommended).
 5. Confirm `can0` is untouched and no motor moved (feedback flat / motors
    de-energized) before and after.
 
-## P8 — Live tracking (Phase 6, NOT YET IMPLEMENTED)
+---
 
-Full closed-loop tracking (vision → estimator → reference → trajectory →
-motors) is **Phase 6** and is not built yet. Once Phase 6 lands, add:
-- Stationary-target hold (target LOS error < threshold for N ms).
-- Moving-target tracking (LOS error vs. a reference, §55 metrics).
-- Target-loss → COASTING → LOST → BRAKE_TO_HOLD (with the safe brake, §34).
-- Tracking hard-disabled until the homing/calibration gates pass (§38.1).
+## P8 — Live closed-loop tracking (Phase 6) `[MOTOR] + [CAMERA]`
 
-This MUST run only after P0–P7 pass and with the user present (motors move).
+Phase 6 is **implemented and integration-tested on SimMotorBackend + synthetic
+vision** (track a rotating target; loss → coast → brake → ready-hold; search
+sweep; soft-limit containment; fault → safe stop). Running it live requires one
+**code prerequisite** first:
+
+> ⚠️ **PREREQ — controld vision wiring (Part 2, S1).** The production
+> `controld` (`control/src/main.cpp`) does **not** yet open
+> `/tmp/ota_vision.sock`, decode `TargetMeasurement`, or call
+> `enable_tracking()`. Before this test: (a) add a UDS `SOCK_SEQPACKET` client
+> that decodes the 58-byte measurement → `ControlLoop::feed_measurement(m)`;
+> (b) load the `tracking:` config block (§58 params 19–20) + the camera
+> intrinsics file → `TrackingController::Config`; (c) `enable_tracking()` gated
+> on the homing gate (§38.1). All tracking machinery (estimator, FSM, reference
+> manager, solver) already exists and is tested — this is wiring, not new
+> control code.
+
+Once wired (and only after P0–P7 pass, user present — motors move):
+1. **Tracking hard-disabled until homed:** boot with a person in frame; the
+   daemon must NOT track before the homing gates pass (§38.1).
+2. **Stationary-target acquisition:** person stands still in view; the turret
+   acquires (`track_state=tracking`), the optical axis converges on the target,
+   and the LOS error stays inside a small band (record it for §55).
+3. **Moving-target tracking:** the person walks slowly across the field of view;
+   the turret follows at the §16 tracking speed (≤ 30°/s, scaled by the §35
+   confidence).
+4. **Target loss:** the person leaves; the state walks
+   `tracking → coasting (≤200 ms) → brake_to_hold → target_lost → ready_hold`
+   (or `search` if `search_enabled_by_default: true`) with the safe brake, and
+   the confidence decays to 0 (§34/§35).
+5. **Search:** with search enabled, the `search` sweep runs between the
+   configured yaw limits with dwells (§36/§49), and reacquires the person when
+   they re-enter the field of view.
+6. **Envelope authority:** throughout, the §18 soft-limit envelope constrains
+   the tracking reference (a target near a limit must not drive the turret into
+   the stop).
+7. **Fault during tracking:** trigger the P5-style fault mid-track → both axes
+   Disable (tracking can never override the supervisor, §38).
+
+**Pass criteria:** all seven sub-tests pass with no limit crossing and no
+open-loop motion; telemetry `track_state`/`confidence` behave per §34/§35.
 
 ---
 
-## Out of scope (Phase 3+)
+## P9 — Installation orientation calibration (Phase 7) `[CAMERA]`, then `[MOTOR]`
 
-- Collision / safety envelope tracking (§18.2/§19) — tracking is disabled here.
-- Calibration persistence / reload (§28/§41).
-- Structured event logging + telemetry service (§43/§55).
-- HIL harness for the full control stack (§54).
-- Payload driver (§27 payload check).
+The code is done (fiducial ChArUco calibration in `vision/installation_calibration.py`,
+`FixedStoredPoseProvider` in controld, world-frame telemetry); none of it has
+seen the real station.
+
+1. **[CAMERA]** Run the fiducial calibration with the real camera against the
+   ChArUco board: multi-frame estimate, outlier rejection, atomic commit →
+   `calibration/installation_pose.yaml` (R_W_B, C++-compatible text). Verify the
+   file is written atomically and the C++ side parses it.
+2. **`calibration/*.yaml` placeholder paths (Part 3, item 20):** after this test
+   the `installation.pose_file` path is real. Also produce/verify the
+   `camera_intrinsics.yaml` (§28.2) consumed by the tracking config (P8 prereq)
+   — until then the intrinsics are commissioning placeholders.
+3. **Boot check:** restart `controld`; the log shows
+   `installation pose: source=stored calibrated=true`; telemetry reports the
+   base tilt instead of "assumed-level".
+4. **[MOTOR]** Tilt the base (or accept the as-installed tilt): with a target in
+   view, tracking (P8) must now aim correctly in the world frame — the
+   world-frame LOS telemetry must agree with the target's apparent position.
+   Before/after comparison: an uncalibrated (identity R_W_B) run shows a
+   systematic aim offset that the calibrated run removes.
+
+**Pass criteria:** R_W_B file committed + loaded at boot; world-frame LOS
+consistent; aim offset removed vs the identity baseline.
+
+---
+
+## P10 — Payload profiling + verification on the real station (Phase 9) `[MOTOR]`
+
+**Supervised station only.** Everything in Phase 9 was verified on
+`SimMotorBackend` (`--sim`); the real-plant run is the remaining step.
+
+1. **Profile the installed payload** (replaces the `--sim` rehearsal — Part 2,
+   S2):
+   ```bash
+   # from Firmware/build, with the daemon STOPPED:
+   ./turret-payload profile --config ../config/turret.yaml --name <payload>
+   ```
+   The §44 battery runs one axis at a time (±steps, tracking triangle,
+   multi-speed brakes, holding effort); targets are clamped ≥2° inside the soft
+   limits. Watch the station the whole time.
+2. **Inspect the profile:** `./turret-payload list` — rise/settle/overshoot/stop
+   distance per axis + the derived v/a/j envelope (`derive_limits`).
+3. **Verify against the profile:** `./turret-payload verify --name <payload>` —
+   must report `ok` for a repeat run (repeatability of the response).
+4. **Daemon integration:** set `payload.active_profile: <payload>` (replaces the
+   `conservative` placeholder, Part 3, item 23), enable `payload_auto_verify`,
+   boot the daemon → the P6 in-loop check must now pass against the *real*
+   profile, and the tracking `v_max` / hold limits must use the payload-derived
+   envelope when derated.
+5. **Mismatch → derate → clear** on the real plant: swap in a wrong profile,
+   confirm the derate in telemetry + limits, swap back, re-verify, confirm the
+   derate clears (the live version of the Phase-9 SimMotorBackend test).
+
+**Pass criteria:** profile captured on the real plant; verify `ok`; the daemon
+auto-verify agrees; mismatch derates and re-verify clears — all with the
+SafetySupervisor holding authority and no limit crossing.
+
+---
+
+## P11 — systemd deployment (§52) `[MOTOR]`
+
+The units exist as templates (`Firmware/systemd/`: `can0`, `turret-control`,
+`turret-vision`, `turret-web`, optional `turret-log`) — **none has been run**.
+
+1. Install to `/etc/systemd/system` (or drop-in paths) with the `ExecStart`
+   paths adjusted for the actual install location (`WorkingDirectory`/
+   `ExecStart` currently point at `/opt/open_auto_turret`).
+2. `systemctl daemon-reload && systemctl enable --now can0 turret-control`
+   (`turret-vision`/`turret-web` after P7/P8 pass).
+3. **Restart safety:** kill -9 `turret-control`; `Restart=on-failure` brings it
+   back and boot must return **UNHOMED** (it re-homes; it never resumes stale
+   coordinates).
+4. **Network independence:** stop `turret-web` (and drop the network if you
+   dare); the control loop must run at 200 Hz unaffected (`Wants=`, not
+   `Requires=`).
+5. `turret-vision` restarts the real `visiond` (P7 command) under the unit.
+
+**Pass criteria:** all units survive reboot; control loop unaffected by web/
+network state; a crash restart always lands in UNHOMED → re-home → hold.
+
+---
+
+## P12 — Live web end-to-end (§42, §54.5) `[MOTOR] + [CAMERA]`
+
+The inspection webd currently talks to a **FakeControld** stand-in (Part 2,
+S4). Point it at the real daemon:
+
+1. Set webd's socket config to the real controld web socket
+   (`OTA_WEB_SOCKET` / the systemd unit's socket path) and start webd.
+2. Dashboard panels against live telemetry: System/Vision/Target/Yaw-pitch/
+   Calibration/Video/Payload all show real values (tracking fields appear only
+   while tracking is enabled — §6.3).
+3. Developer commands (§42.2) against the real loop: start/stop tracking,
+   enable/disable search, `start_payload_verification`, homing status — each
+   must pass the validation gate and execute on the control thread.
+4. **Video feed on/off:** switch on → IMX500 opens, MJPEG stream (capped FPS),
+   switch off → camera released (zero CPU). Confirm the served image reads as
+   right-side-up (the `rotate_180` correction was live-verified at 0.9996
+   correlation; if the physical mount is a mirror, switch
+   `OTA_VIDEO_ORIENTATION` — Part 3, item 22).
+5. **§54.5 UI load, live:** several dashboard clients + video preview open while
+   the 200 Hz loop runs (and is tracking): control-loop p99 must not materially
+   degrade, no client starvation, no CAN feedback staleness, logging does not
+   block.
+
+**Pass criteria:** real telemetry on every panel; every command works through
+the gate; video on/off releases/acquires the camera; load test passes with the
+real loop + real camera.
+
+---
+
+## P13 — HIL checklist + acceptance metrics (§54.4, §55) `[MOTOR]`
+
+The final supervised pass. The mock-device tests (38 ctest binaries + 95 Python
+unittest) are the rehearsal; this is the hardware truth.
+
+1. **§54.4 HIL checklist** (both CAN IDs live):
+   - loss of one motor (pull the connector) → the other axis stops safely
+     (supervisor Disable/Brake, whole-station stop);
+   - error-active / error-passive / bus-off behavior where safely reproducible;
+   - delayed feedback (throttle, as in P4 but milder) → no false Brake, no
+     missed real Brake;
+   - stop contact (drive toward a stop in position mode) → contact force within
+     the configured threshold, no overshoot damage;
+   - current-limit behavior (stall against a stop) → the motor current-limit
+     engages as expected, no thermal excursion.
+2. **§55 acceptance metrics — report at least:**
+   - **Control timing:** target loop rate, p50/p95/p99 cycle, worst cycle,
+     deadline miss count (the loop already logs these; extract from the
+     high-rate control log / black-box ring).
+   - **CAN:** feedback age per motor, dropped/invalid frames, error frames
+     (`turret-can stats` + daemon log).
+   - **Homing:** endpoint repeatability, measured travel, homing duration, peak
+     homing effort, expected-range pass/fail (from P0/P3).
+   - **Tracking:** acquisition time, LOS tracking error (mean/max) for
+     stationary + moving targets, loss→brake time, search reacquire time (from
+     P8).
+   - **Limits:** soft-limit excursions (must be zero), derate events (P6/P10).
+3. **Close out the placeholders** (Part 3): refine `turret.yaml` from the
+   measured numbers (§58 params, travel bands, park pose, payload profile).
+
+**Pass criteria:** HIL checklist items all safe; metrics report produced with
+the numbers above; `turret.yaml` updated from measurements and the suite re-run.
+
+---
+
+# Part 2 — "Good to go" swap-in map
+
+Every place where a real test/hardware is required, what stands in for it today,
+and the exact replacement when the user says **good to go**. Ordered by queue
+position.
+
+| # | Location | Current stand-in / guard | Good-to-go replacement | Queue |
+|---|----------|--------------------------|------------------------|-------|
+| S1 | `control/src/main.cpp` (controld) | **No vision wiring:** never opens `/tmp/ota_vision.sock`, never decodes `TargetMeasurement`, never calls `enable_tracking()` (tracking machinery exists + is tested, but the daemon does not use it) | Add a UDS `SOCK_SEQPACKET` client thread (58-byte decode → `loop.feed_measurement(m)`); load the `tracking:` block + `camera.intrinsics_file` → `TrackingController::Config`; `loop.enable_tracking(cfg, err)` gated on `homed_` (§38.1) | P8 |
+| S2 | `tools/turret_payload.cpp` (`turret-payload`) | `--sim` rehearsal on `SimMotorBackend` (no CAN, deterministic clock/pacer) | Drop `--sim`: real mode opens CAN + `BootFsm` and moves the real motors (supervised, daemon stopped) | P10 |
+| S3 | `vision/visiond.py` | `--synthetic` (SAFE default): `SyntheticFrameSource`, no camera | `--real --image-config <json> --detector-rpk <json>` (+ `--orientation rotate_180`); the guarded `Picamera2FrameSource` path activates | P7, P8 |
+| S4 | `web/webd` (inspection service) | `FakeControld` stand-in server (sim telemetry); real camera already live-verified | Point webd's socket config at the real controld web socket (`OTA_WEB_SOCKET`); run with `turret-web` unit | P12 |
+| S5 | `Firmware/systemd/*.service` | Templates only — none installed/enabled (paths point at `/opt/open_auto_turret`) | Adjust `ExecStart`/`WorkingDirectory` to the install path; `systemctl enable --now can0 turret-control [turret-vision turret-web]` | P11 |
+| S6 | C++ mock tests: `test_tracking_integration`, `test_payload_daemon`, `test_control_loop`, homing/trajectory suites (all `SimMotorBackend`) | Simulated plant (first-order lag, end stops, stall effort) | HIL counterparts per §54.4: the same scenarios (rotating-target track, loss→coast→brake, search sweep, in-loop payload check, stop contact) executed against the real CAN — supervised | P13 |
+| S7 | `calibration/camera_intrinsics.yaml` | Path in `turret.yaml`; **file does not exist** (tracking config not yet loaded in main.cpp) | Produce the §28.2 intrinsics file (camera matrix + distortion) at commissioning | P8/P9 |
+| S8 | `calibration/camera_extrinsics.yaml` (R_P_C) | Path in `turret.yaml`; **file does not exist** → aligned-identity default in `TrackingController::Config` | §28.3 extrinsic estimate (fiducial board), loaded into `geo::TurretKinematics` | P9 |
+| S9 | `calibration/installation_pose.yaml` (R_W_B) | Path in `turret.yaml`; **file does not exist** → identity "assumed-level base", telemetry flags uncalibrated | §29 fiducial (ChArUco) calibration run → atomic commit → daemon loads at boot | P9 |
+| S10 | `config/turret.yaml` `payload.active_profile` | `conservative` (built-in placeholder profile) | Real profile name from `turret-payload profile` (S2) | P10 |
+| S11 | `config/turret.yaml` §58 commissioning values (23 params), `expected_travel_deg` bands, `shutdown.*_park_deg` | Conservative placeholders (slow speeds, wide bands, 0/0 park) | Measured values from P0/P3/P13 (travel, contact thresholds, safe park pose) | P0–P3, P13 |
+| S12 | `web/webd` video | `FakeCamera` in unit tests; real IMX500 path already live-verified | Nothing to replace — keep tests as-is; live feed is real | P12 (confirm only) |
+
+**Not swapped (deliberately deferred, see Part 3):** comm-19 parameter table,
+speed-mode use, Kalman upgrade, piecewise collision envelope, per-class anchors,
+homing-result persistence. None of them gates the queue.
+
+---
+
+# Part 3 — Placeholder registry (development order)
+
+Every placeholder introduced across the development cycles, in the order it was
+introduced (phase order), with where and how it gets resolved. Items marked
+**RESOLVED** were placeholders that a later phase removed — kept here so the
+history is auditable.
+
+**Phase 1 — CAN/motor layer**
+1. **comm-19 parameter table** (0x2000/0x3000/0x1000-series registers, e.g.
+   `echoFreHz` 0x2004) — undocumented, unreachable via comm 17/18 (they read
+   stale/garbage). Placeholder for "how to enable free-running periodic
+   feedback / tune parameters". → **Not needed for v1** (request/response MIT
+   model verified 1:1 at 200 Hz). Revisit only if free-running feedback or
+   parameter tuning is ever required.
+2. **Speed mode (run_mode=2 + SpdRef 0x700A)** — does not drive the loaded axis
+   at the commanded rate with default gains (~1% of command measured).
+   Placeholder for "fast open-loop-ish moves". → **v1 uses position mode for
+   commissioning and MIT mode (run_mode=0) for the 200 Hz loop.** Deferred.
+3. **Motor health: bus error counters not surfaced** (Phase-1 checklist item) —
+   feedback freshness + fault flags are in `AxisLatest`; CAN bus error counters
+   are not yet in telemetry. → Resolve during P13 metrics work (§55 CAN block).
+
+**Phase 2 — homing & safety**
+4. **23 §58 commissioning parameters in `turret.yaml`** — conservative
+   placeholders (slow speeds, wide soft-limit bands). Loader falls back to the
+   same built-in defaults for any `TBD`/missing key (with a warning). → Refine
+   from P0/P3/P13 measurements (config, never compile-time).
+5. **`axes.*.expected_travel_deg` bands** (pitch ±120°, yaw ±180°) — wide
+   placeholders (the pitch band was widened to contain the observed −86° raw
+   position pre-homing). → Tighten to the measured travel after the first real
+   homing (P0/P3); too tight rejects a valid home, too loose weakens the §23
+   check.
+6. **Park pose `yaw_park_deg`/`pitch_park_deg: 0/0`** — placeholder that sits
+   on the low stop, **outside the soft limits (violates §33.1)**.
+   ParkController rejects it; daemon safely de-energizes at the ready pose.
+   → **Top commissioning item:** set a safe in-travel pose before relying on
+   park (P2).
+7. **§27 post-homing boot states (camera / installation / payload checks)** —
+   STUBS in Phase 2 (the hold phase passed straight through them). →
+   **PARTIALLY RESOLVED:** the payload check is now real (`Phase::PayloadCheck`,
+   Phase 9, P6). The camera/installation "checks" are out-of-loop by design in
+   v1 (camera = external `visiond` process; installation = pose file loaded at
+   boot, P9) — no further in-loop state needed.
+8. **Homing calibration persistence (§28/§41)** — schema version, timestamps,
+   HW IDs, atomic write, last-known-good for the homing *result* — still pending.
+   → **Deferred by design:** every boot returns UNHOMED and re-homes (the
+   systemd restart-safety property), so persistence is an optimization, not a
+   safety requirement. Not queue-blocking.
+9. **Leftover `vcan9` interface** — virtual CAN left up from earlier testing.
+   → Ops: `ip link del vcan9` **before P0** so it cannot shadow real traffic.
+
+**Phase 3 — trajectory**
+10. **Piecewise collision envelope** — v1 ships the `RectangularCollisionEnvelope`
+    (constant pitch/yaw limits). A piecewise table/polygon plugs in later as a
+    new `is_safe` implementation without touching the controller. → Only if the
+    real install needs non-rectangular safe regions. Deferred.
+
+**Phase 4 — vision**
+11. **Detector RPK + picamera2 config JSON** — not in the repo (commissioning
+    artifacts; `docs/AI_CAMERA_SETUP.md` describes the setup; the official
+    YOLO11n/YOLOv8n RPKs are AGPL-3.0 — license review against the project's
+    GPLv3 before distribution). → P7 prerequisite (S3).
+12. **Class set: 3-value protocol (none=0 / person=1 / car=2)** — a MobileNet
+    SSD COCO subset; "the v1 tracker only follows 'person'". Animals have no
+    class ID (a non-person box can only be followed via `fallback_to_best` when
+    no person is present — incidental, not designed support). → If another class
+    (e.g. animal) must be tracked: add the class ID to `vision/protocol.py`
+    (the C++ side is class-agnostic), make the detector RPK emit it, and set
+    `preferred_class_id` in `target_selector.py`. Design note, no queue item.
+13. **`visiond --synthetic` default** — the SAFE default stand-in for the
+    camera. → Replaced by `--real` at good-to-go (S3, P7).
+
+**Phase 5 — geometry & estimator**
+14. **Camera distortion — no-op placeholder in v1** (`geometry/camera_model.hpp`;
+    the hook exists, "added later"). → Fill with the §28.2 distortion parameters
+    when the intrinsics file is produced (P9, S7).
+15. **R_P_C extrinsic — aligned-identity default** (configurable in
+    `TurretKinematics`, "swappable for a fiducial-board estimate, §10.3").
+    → Replaced by the §28.3 calibration (P9, S8).
+16. **Alpha-beta estimator (v1)** — const-angular-velocity on base-frame LOS.
+    A full-covariance Kalman with confidence-aware measurement noise (§13.2) is
+    the documented upgrade path. → Only if live tracking (P8) shows the
+    filter's lag/noise behavior is inadequate.
+17. **Anchor = bbox centre** (v1 default, §10.1). → "Later it may use a pose
+    keypoint or another object-class-specific stable anchor." Only if tracking
+    accuracy needs it.
+
+**Phase 6 — tracking**
+18. **controld vision wiring** — `enable_tracking()` + the `/tmp/ota_vision.sock`
+    client are not wired in `main.cpp` (the queue's only **code** prerequisite).
+    → Implement before P8 (S1).
+19. **systemd units — "templates only, not run (no CAN/motor)"** → enable at
+    P11 (S5).
+
+**Phase 7 — installation orientation**
+20. **`calibration/*.yaml` files (intrinsics / extrinsics / installation pose)**
+    — placeholder paths in `turret.yaml`; **the directory and files do not
+    exist**; the daemon falls back to identity "assumed-level" + an
+    uncalibrated telemetry flag. → Produced by the §28.2/§28.3/§29 calibrations
+    at P9 (S7–S9).
+
+**Phase 8 — web**
+21. **webd telemetry source = `FakeControld` stand-in** — the inspection
+    service runs against a simulated controld. → Point at the real daemon at
+    P12 (S4).
+22. **Video orientation — `rotate_180`** — live-verified (served frame
+    correlates 0.9996 with a 180° rotation of the raw sensor frame), but the
+    user has not yet confirmed the image reads as right-side-up; if the physical
+    mount is a mirror-flip instead, switch `OTA_VIDEO_ORIENTATION`. → Confirm at
+    P12 (S12).
+
+**Phase 9 — payload**
+23. **`payload.active_profile: conservative`** — built-in conservative
+    placeholder profile (the `--sim` rehearsal stored a `sim` profile in
+    `/tmp` during development; neither represents the installed mass). →
+    Replaced by the real `turret-payload profile` output at P10 (S10).
+24. **Real-plant payload commissioning** — all Phase-9 tests ran on
+    `SimMotorBackend`; the in-loop check, derate, and re-verify have never moved
+    a real motor. → P6 (in-loop) + P10 (standalone), supervised.
+
+**Cross-cutting**
+25. **§54.4 HIL checklist** (both CAN IDs; loss of one motor;
+    error-active/passive/bus-off; delayed feedback; stop contact;
+    current-limit behavior) — not yet run on hardware. → P13.
+26. **§55 acceptance metrics** (control timing, CAN, homing, tracking, limits)
+    — the data is logged in-loop; the report has never been produced from the
+    real station. → P13.
+27. **§54.2 simulated-plant fidelity** — `SimMotorBackend` has first-order lag
+    + end stops + stall effort; the §54.2 extras (noise, feedback delay, CAN
+    dropout, variable inertia) are not modeled. → Optional extension before P13
+    if the HIL surprises need a sim repro.
+
+---
+
+## Resolved since the Phase-2 edition of this queue
+
+- **P6 payload check was a stub** → real in-loop check + profiler + verifier +
+  derate (Phase 9); see the new P6/P10.
+- **P8 tracking was "not built yet"** → implemented + integration-tested on
+  SimMotorBackend (Phase 6); remaining work is the S1 wiring + the live run.
+- **"Out of scope (Phase 3+)" items** — calibration persistence (§28/§41) still
+  pending (item 8, by design); structured event logging + telemetry (§43/§55)
+  implemented (telemetry snapshot + high-rate control log + event log +
+  black-box ring; the §55 *report* is P13); HIL harness (§54) → P13; payload
+  driver (§27) implemented (Phase 9); collision envelope (§19) implemented in
+  its v1 rectangular form (item 10); web UI (§42) implemented incl. the real
+  IMX500 video feed (the §42.3 placeholder is gone); installation orientation
+  (Phase 7) implemented, live run at P9; systemd (§52) templates done, enable at
+  P11.
