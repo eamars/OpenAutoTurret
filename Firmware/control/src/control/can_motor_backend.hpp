@@ -34,11 +34,15 @@ class CanMotorBackend : public MotorBackend {
                      int timeout_ms, std::string& err) override;
   bool enter_position_mode(AxisId axis, double limit_spd_rad_s,
                            std::string& err) override;
+  bool enter_speed_mode(AxisId axis, double limit_cur_a,
+                        std::string& err) override;
   void deenergize(AxisId axis) override;
 
   // --- MotorBackend: control loop (fast, non-blocking) ----------------------
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override;
+  void command_velocity(AxisId axis, double velocity_rad_s) override;
+  void set_current_limit(AxisId axis, double limit_cur_a) override;
 
  private:
   // Fire-and-forget register writes (no response wait).
@@ -50,6 +54,14 @@ class CanMotorBackend : public MotorBackend {
   // Position mode is tracked locally: the feedback "mode" field is the motor
   // state (reset/cali/running), not the RunMode register we set.
   std::array<bool, kAxisCount> in_position_mode_{};
+  std::array<bool, kAxisCount> in_speed_mode_{};
+  // The last current limit applied per axis (A); set_current_limit writes
+  // LimitCur only on change (avoids a redundant CAN TX every cycle).
+  std::array<double, kAxisCount> last_limit_cur_a_{};
+  // The last SpdRef written per axis (rad/s); command_velocity writes only on
+  // change (re-arming a speed reference every cycle would needlessly re-trigger
+  // the drive, mirroring the position-mode write-on-change policy).
+  std::array<double, kAxisCount> last_spd_ref_{{-1e30, -1e30}};
 };
 
 }  // namespace ota

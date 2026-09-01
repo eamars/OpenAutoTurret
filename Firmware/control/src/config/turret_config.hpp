@@ -37,6 +37,11 @@ struct AxisLimitsConfig {
   double max_velocity_deg_s = 0.0;
   double max_acceleration_deg_s2 = 0.0;
   double max_jerk_deg_s3 = 0.0;
+  // Adaptive-current homing (push-through, §22): the INITIAL drive current
+  // limit (A) for this axis. The homing raises it by limit_cur_step_a on each
+  // false-contact latch, up to limit_cur_max_a. Written to LimitCur (0x7018)
+  // on boot and as the homing pushes it up. 0 = use the HomingParams default.
+  double limit_cur_a = 0.0;
 };
 
 // §40 `homing.contact:` block (§58 params 8-13).
@@ -45,9 +50,29 @@ struct ContactConfig {
   double fine_speed_deg_s = 0.0;
   double current_or_effort_limit = 0.0;  // A (or N.m; validated positive).
   double stall_velocity_threshold = 0.0;  // rad/s; below this the axis is stalled.
+  double v_move_threshold = 0.0;  // rad/s; jitter/recovery "moving" threshold,
+                                  // below the approach speed (distinct from
+                                  // stall_velocity_threshold). 0 = use the
+                                  // ContactDetectorParams default (0.10).
+  double effort_hard_contact_nm = 0.0;  // N.m; sustained effort this high declares
+                                        // contact even without prior motion (measured
+                                        // end-stop push plateau 0.43-0.73 N.m, P0e).
+  double motion_history_velocity = 0.0;  // rad/s; the axis must have reached this
+                                         // (position-derived) speed since the approach
+                                         // began for a motion-based contact.
   int contact_dwell_ms = 0;
   double backoff_deg = 0.0;
   double repeatability_deg = 0.0;
+  // --- Adaptive-current homing (push-through, §22) ---
+  // The yaw is a ~360 deg axis whose mid-travel friction stalls (false
+  // contacts) beat a low LimitCur. On each coarse-contact latch the homing
+  // raises the drive current by this step (A) and keeps driving, until a
+  // consistent end-stop or the safe upper limit. 0 = use the HomingParams
+  // default.
+  double limit_cur_step_a = 0.0;
+  double limit_cur_max_a = 0.0;    // safe upper limit (A); 0 = default
+  double max_rotation_deg = 0.0;   // coarse-approach rotation cap (deg); 0 = default
+  double torque_safety_nm = 0.0;   // |tau| above this aborts the push (N.m); 0 = default
 };
 
 struct HomingConfig {

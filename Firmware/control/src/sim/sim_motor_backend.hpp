@@ -79,14 +79,25 @@ class SimMotorBackend : public MotorBackend {
     auto& ax = axes_[ix(axis)];
     ax.deenergized = false;
     ax.in_position_mode = true;
+    ax.in_speed_mode = false;
     ax.limit_spd = limit_spd_rad_s;
     ax.target = ax.q;  // pin LocRef to the freshly-read position
+    return true;
+  }
+  bool enter_speed_mode(AxisId axis, double limit_cur_a, std::string&) override {
+    auto& ax = axes_[ix(axis)];
+    ax.deenergized = false;
+    ax.in_speed_mode = true;
+    ax.in_position_mode = false;
+    ax.limit_cur_a = limit_cur_a;
+    ax.spd_ref = 0.0;  // hold in place (velocity loop holds q against load)
     return true;
   }
   void deenergize(AxisId axis) override {
     auto& ax = axes_[ix(axis)];
     ax.deenergized = true;
     ax.in_position_mode = false;
+    ax.in_speed_mode = false;
     ax.v = 0.0;
   }
 
@@ -102,6 +113,7 @@ class SimMotorBackend : public MotorBackend {
     s.temp_c = ax.temp_c;
     s.faults = ax.faults;
     s.in_position_mode = ax.in_position_mode;
+    s.in_speed_mode = ax.in_speed_mode;
     return s;
   }
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override {
@@ -110,6 +122,18 @@ class SimMotorBackend : public MotorBackend {
     ax.limit_spd = limit_spd_rad_s;
     advance(ix(axis));
   }
+  void command_velocity(AxisId axis, double velocity_rad_s) override {
+    auto& ax = axes_[ix(axis)];
+    ax.spd_ref = velocity_rad_s;
+    advance(ix(axis));
+  }
+  void set_current_limit(AxisId axis, double limit_cur_a) override {
+    axes_[ix(axis)].limit_cur_a = limit_cur_a;
+  }
+  double current_limit(AxisId axis) const {
+    return axes_[ix(axis)].limit_cur_a;
+  }
+  bool in_speed_mode(AxisId a) const { return axes_[ix(a)].in_speed_mode; }
 
  private:
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
@@ -121,17 +145,26 @@ class SimMotorBackend : public MotorBackend {
   // contact detector behaves identically.
   void advance(size_t i) {
     auto& ax = axes_[i];
-    if (ax.deenergized || !ax.in_position_mode) {
+    if (ax.deenergized || (!ax.in_position_mode && !ax.in_speed_mode)) {
       ax.v = 0.0;
       ax.torque = 0.0;
       ax.at_stop = false;
       ax.stop_side = 0;
       return;
     }
-    const double max_dq = ax.limit_spd * dt_;
-    double dq = (ax.target - ax.q) * (dt_ / (ax.tau_pos + dt_));
-    if (dq > max_dq) dq = max_dq;
-    else if (dq < -max_dq) dq = -max_dq;
+    // The commanded motion: position mode chases the reference (first-order,
+    // speed-limited); speed mode holds the commanded speed (SpdRef) — the
+    // drive's own velocity loop is the smooth source of motion, so the plant
+    // moves at that constant speed.
+    double dq;
+    if (ax.in_speed_mode) {
+      dq = ax.spd_ref * dt_;
+    } else {
+      const double max_dq = ax.limit_spd * dt_;
+      dq = (ax.target - ax.q) * (dt_ / (ax.tau_pos + dt_));
+      if (dq > max_dq) dq = max_dq;
+      else if (dq < -max_dq) dq = -max_dq;
+    }
 
     double new_q = ax.q + dq;
     ax.at_stop = false;
@@ -148,10 +181,17 @@ class SimMotorBackend : public MotorBackend {
     ax.v = (new_q - ax.q) / dt_;
     ax.q = new_q;
 
+    // Pushing into a stop = the commanded motion points into the stop. Speed
+    // mode: SpdRef points into it (SpdRef=0 at a stop is a HOLD, not a push).
+    // Position mode: the reference lies beyond the stop.
     const bool pushing = ax.at_stop &&
-                         ((ax.stop_side > 0 && ax.target > ax.q) ||
-                          (ax.stop_side < 0 && ax.target < ax.q));
-    const int dir = (dq >= 0) ? 1 : -1;
+                         (ax.in_speed_mode
+                              ? ((ax.stop_side > 0 && ax.spd_ref > 0.0) ||
+                                (ax.stop_side < 0 && ax.spd_ref < 0.0))
+                              : ((ax.stop_side > 0 && ax.target > ax.q) ||
+                                (ax.stop_side < 0 && ax.target < ax.q)));
+    const int dir =
+        (ax.in_speed_mode ? (ax.spd_ref >= 0.0) : (dq >= 0.0)) ? 1 : -1;
     if (pushing) ax.torque = ax.contact_effort * dir;
     else if (std::fabs(ax.v) > 1e-3) ax.torque = ax.drive_effort * dir;
     else ax.torque = 0.0;
@@ -165,12 +205,15 @@ class SimMotorBackend : public MotorBackend {
     double stop_high = 1.0;
     double target = 0.0;
     double limit_spd = 1.0;
+    double limit_cur_a = 0.0;
     bool at_stop = false;
     int stop_side = 0;
     double torque = 0.0;
     double drive_effort = 1.0;
     double contact_effort = 5.0;
     bool in_position_mode = false;
+    bool in_speed_mode = false;
+    double spd_ref = 0.0;  // commanded speed (SpdRef, rad/s) in speed mode
     bool deenergized = true;
     double temp_c = 25.0;
     uint16_t faults = 0;

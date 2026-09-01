@@ -32,6 +32,7 @@ struct AxisSnapshot {
   double temp_c = 25.0;
   uint16_t faults = 0;     // non-zero = hard fault
   bool in_position_mode = false;  // energized in position mode right now
+  bool in_speed_mode = false;     // energized in speed (velocity) mode right now
 };
 
 class MotorBackend {
@@ -49,6 +50,15 @@ class MotorBackend {
   // motor does not drive to a stale target). SLOW — phase transitions only.
   virtual bool enter_position_mode(AxisId axis, double limit_spd_rad_s,
                                    std::string& err) = 0;
+  // Enter speed (velocity) mode on this axis: de-energize, set RunMode=2,
+  // re-energize, set the current limit, and command SpdRef=0 (hold in place).
+  // The drive's own velocity loop then holds the commanded speed smoothly —
+  // the correct mode for "drive at a constant speed until something stops us"
+  // (homing / zeroing, free roam), as opposed to position mode's
+  // "drive to a target and hold" (tracking, hold). SLOW — phase transitions
+  // only.
+  virtual bool enter_speed_mode(AxisId axis, double limit_cur_a,
+                                std::string& err) = 0;
   // De-energize the motor (safe stop). Called on shutdown / disable / fault.
   virtual void deenergize(AxisId axis) = 0;
 
@@ -59,6 +69,14 @@ class MotorBackend {
   // limit_spd_rad_s. Fire-and-forget; safe to call every cycle.
   virtual void command(AxisId axis, double q_ref_rad,
                        double limit_spd_rad_s) = 0;
+  // Speed-mode command: write SpdRef = velocity_rad_s (the drive holds this
+  // speed with its internal velocity loop; current rises as needed up to the
+  // current limit). Fire-and-forget; safe to call every cycle.
+  virtual void command_velocity(AxisId axis, double velocity_rad_s) = 0;
+  // Set the drive current limit (A, 0..23) for this axis (LimitCur, 0x7018).
+  // Fire-and-forget; safe from the control loop — the adaptive-current homing
+  // raises it on each false-contact latch (§22).
+  virtual void set_current_limit(AxisId axis, double limit_cur_a) = 0;
 };
 
 }  // namespace ota

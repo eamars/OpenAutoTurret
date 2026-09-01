@@ -54,12 +54,30 @@ struct Defaults {
   double max_acceleration_deg_s2 = 60.0;
   double max_jerk_deg_s3 = 300.0;
   double coarse_speed_deg_s = 10.0;
-  double fine_speed_deg_s = 1.0;
+  // Fine approach speed (deg/s). Characterized (drive_current_friction_tuning.md
+  // §1, P0j-P0m): at the current friction/load the yaw stick-slips with
+  // position-dependent breakaway stalls at <=10 deg/s but runs smooth at
+  // 20 deg/s. The fine approach must be REPEATABLE, so it uses the smooth
+  // speed to avoid latching a false contact on a breakaway stall; the
+  // ContactDetector jitter gate is a safety net, and the limit_cur sizing
+  // (Phase A.5) is the root-cause fix. Matches HomingParams::fine_speed_rad_s.
+  double fine_speed_deg_s = 20.0;
   double current_or_effort_limit = 3.0;
   double stall_velocity_threshold = 0.5;
+  // Jitter/recovery "moving" threshold: below the approach speed (10/20 deg/s
+  // = 0.175/0.349 rad/s) and above filtered rest noise. Tuned in A.3.
+  double v_move_threshold = 0.1;
+  double effort_hard_contact_nm = 0.40;
+  double motion_history_velocity = 0.05;
   int contact_dwell_ms = 200;
   double backoff_deg = 5.0;
   double repeatability_deg = 0.5;
+  // Adaptive-current homing (push-through, §22). Defaults match
+  // HomingParams; YAML overrides are authoritative.
+  double limit_cur_step_a = 1.0;   // +1 A per false-contact latch
+  double limit_cur_max_a = 10.0;   // safe upper limit (A); under the 23 A drive max
+  double max_rotation_deg = 360.0; // coarse-approach rotation cap (deg)
+  double torque_safety_nm = 10.0;  // |tau| above this aborts the push (N.m)
   double yaw_park_deg = 0.0;
   double pitch_park_deg = 0.0;
   double park_pos_tolerance_deg = 0.5;
@@ -189,6 +207,8 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
                  Defaults().max_acceleration_deg_s2, warn);
   out.max_jerk_deg_s3 = opt_double(anode, "max_jerk_deg_s3", p + "max_jerk_deg_s3",
                                    Defaults().max_jerk_deg_s3, warn);
+  out.limit_cur_a = opt_double(anode, "limit_cur_a", p + "limit_cur_a", 0.0, warn);
+  if (out.limit_cur_a < 0.0) err.push_back(p + "limit_cur_a must be >= 0");
   if (out.expected_travel_deg.min >= out.expected_travel_deg.max)
     err.push_back(p + "expected_travel_deg.min must be < max");
   if (out.soft_margin_deg < 0.0) err.push_back(p + "soft_margin_deg must be >= 0");
@@ -213,17 +233,51 @@ void load_contact(const YAML::Node& hc, HomingConfig& out, std::vector<std::stri
   cc.stall_velocity_threshold =
       opt_double(ct, "stall_velocity_threshold", p + "stall_velocity_threshold",
                  Defaults().stall_velocity_threshold, warn);
+  cc.v_move_threshold =
+      opt_double(ct, "v_move_threshold", p + "v_move_threshold",
+                 Defaults().v_move_threshold, warn);
+  cc.effort_hard_contact_nm =
+      opt_double(ct, "effort_hard_contact_nm", p + "effort_hard_contact_nm",
+                 Defaults().effort_hard_contact_nm, warn);
+  cc.motion_history_velocity =
+      opt_double(ct, "motion_history_velocity", p + "motion_history_velocity",
+                 Defaults().motion_history_velocity, warn);
   cc.contact_dwell_ms = opt_int(ct, "contact_dwell_ms", p + "contact_dwell_ms",
                                 Defaults().contact_dwell_ms, warn);
   cc.backoff_deg = opt_double(ct, "backoff_deg", p + "backoff_deg", Defaults().backoff_deg, warn);
   cc.repeatability_deg = opt_double(ct, "repeatability_deg", p + "repeatability_deg",
                                     Defaults().repeatability_deg, warn);
+  cc.limit_cur_step_a =
+      opt_double(ct, "limit_cur_step_a", p + "limit_cur_step_a",
+                 Defaults().limit_cur_step_a, warn);
+  cc.limit_cur_max_a =
+      opt_double(ct, "limit_cur_max_a", p + "limit_cur_max_a",
+                 Defaults().limit_cur_max_a, warn);
+  cc.max_rotation_deg =
+      opt_double(ct, "max_rotation_deg", p + "max_rotation_deg",
+                 Defaults().max_rotation_deg, warn);
+  cc.torque_safety_nm =
+      opt_double(ct, "torque_safety_nm", p + "torque_safety_nm",
+                 Defaults().torque_safety_nm, warn);
+  // limit_cur_step_a / limit_cur_max_a: legacy adaptive-raise knobs, now
+  // optional (0 disables; speed-mode homing runs at a fixed current). No >0
+  // requirement.
+  if (cc.limit_cur_step_a < 0.0) err.push_back(p + "limit_cur_step_a must be >= 0");
+  if (cc.limit_cur_max_a < 0.0) err.push_back(p + "limit_cur_max_a must be >= 0");
+  if (cc.max_rotation_deg <= 0.0) err.push_back(p + "max_rotation_deg must be > 0");
+  if (cc.torque_safety_nm <= 0.0) err.push_back(p + "torque_safety_nm must be > 0");
   if (cc.coarse_speed_deg_s <= 0.0) err.push_back(p + "coarse_speed_deg_s must be > 0");
   if (cc.fine_speed_deg_s <= 0.0) err.push_back(p + "fine_speed_deg_s must be > 0");
   if (cc.current_or_effort_limit <= 0.0)
     err.push_back(p + "current_or_effort_limit must be > 0");
   if (cc.stall_velocity_threshold <= 0.0)
     err.push_back(p + "stall_velocity_threshold must be > 0");
+  if (cc.v_move_threshold <= 0.0)
+    err.push_back(p + "v_move_threshold must be > 0");
+  if (cc.effort_hard_contact_nm <= 0.0)
+    err.push_back(p + "effort_hard_contact_nm must be > 0");
+  if (cc.motion_history_velocity <= 0.0)
+    err.push_back(p + "motion_history_velocity must be > 0");
   if (cc.contact_dwell_ms <= 0) err.push_back(p + "contact_dwell_ms must be > 0");
   if (cc.backoff_deg <= 0.0) err.push_back(p + "backoff_deg must be > 0");
   if (cc.repeatability_deg <= 0.0) err.push_back(p + "repeatability_deg must be > 0");

@@ -69,6 +69,8 @@ struct ControlLogRecord {
   TimeNs timestamp_ns = 0;
   double q_actual[kAxisCount] = {0.0, 0.0};
   double v_actual[kAxisCount] = {0.0, 0.0};
+  double a_actual[kAxisCount] = {0.0, 0.0};    // position-derived accel (rad/s^2)
+  double jerk_actual[kAxisCount] = {0.0, 0.0}; // position-derived jerk (rad/s^3)
   double effort[kAxisCount] = {0.0, 0.0};
   double q_ref[kAxisCount] = {0.0, 0.0};
   double soft_limit_distance[kAxisCount] = {0.0, 0.0};

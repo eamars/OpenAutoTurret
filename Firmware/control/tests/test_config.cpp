@@ -236,7 +236,9 @@ homing_plan:
   EXPECT_DOUBLE_EQ(r.config.axes[1].expected_travel_deg.min, -180.0);
   EXPECT_DOUBLE_EQ(r.config.axes[1].expected_travel_deg.max, 180.0);
   EXPECT_DOUBLE_EQ(r.config.homing.contact.coarse_speed_deg_s, 10.0);
-  EXPECT_DOUBLE_EQ(r.config.homing.contact.fine_speed_deg_s, 1.0);
+  // Fine approach runs at the characterized smooth speed (20 deg/s); 10 deg/s
+  // has position-dependent breakaway stalls (drive_current_friction_tuning.md).
+  EXPECT_DOUBLE_EQ(r.config.homing.contact.fine_speed_deg_s, 20.0);
   EXPECT_EQ(r.config.homing.contact.contact_dwell_ms, 200);
   // Warnings recorded for each TBD fallback.
   EXPECT_FALSE(r.warnings.empty());
@@ -335,8 +337,12 @@ homing_plan:
   EXPECT_GT(r.config.axes[0].max_jerk_deg_s3, 0.0);
   EXPECT_GT(r.config.homing.contact.coarse_speed_deg_s, 0.0);
   EXPECT_GT(r.config.homing.contact.fine_speed_deg_s, 0.0);
-  EXPECT_LE(r.config.homing.contact.fine_speed_deg_s,
-            r.config.homing.contact.coarse_speed_deg_s);
+  // NOTE: fine_speed is intentionally NOT required to be <= coarse_speed.
+  // Contact precision comes from the mechanical stop + the repeatability check,
+  // not the approach speed; and at the current friction/load the fine approach
+  // must run at the characterized SMOOTH speed (20 deg/s) to avoid
+  // position-dependent breakaway stalls (drive_current_friction_tuning.md §1),
+  // which can be faster than the coarse speed.
   // The pitch band contains the observed ~-86 deg position.
   EXPECT_LE(r.config.axes[0].expected_travel_deg.min, -86.0);
   EXPECT_GE(r.config.axes[0].expected_travel_deg.max, 86.0);

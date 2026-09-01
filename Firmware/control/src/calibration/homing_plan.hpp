@@ -59,6 +59,10 @@ struct TravelBand {
 struct HomingPlanConfig {
   HomingParams homing;                                // shared homing params
   std::array<TravelBand, kAxisCount> travel_bands{};  // per-axis expected travel
+  // Per-axis INITIAL drive current limit (A) for the adaptive-current homing
+  // (§22). 0.0 = use the HomingParams default. Set on homing.limit_cur_initial_a
+  // for the active axis in start_action().
+  std::array<double, kAxisCount> limit_cur_initial_a{};
   double move_speed_rad_s = 10.0 * kDeg2Rad;          // speed for Move actions
   double move_pos_tol_rad = 0.01;                     // "arrived" position tol
   double move_vel_tol_rad_s = 0.1 * kDeg2Rad;         // "arrived" velocity tol

@@ -80,18 +80,30 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
     hp.fine_speed_rad_s = cc.fine_speed_deg_s * kDeg2Rad;
   if (cc.stall_velocity_threshold > 0)
     hp.contact.v_stall_threshold_rad_s = cc.stall_velocity_threshold;
+  if (cc.v_move_threshold > 0)
+    hp.contact.v_move_threshold_rad_s = cc.v_move_threshold;
   if (cc.current_or_effort_limit > 0)
     hp.contact.effort_contact_threshold_nm = cc.current_or_effort_limit;
+  if (cc.effort_hard_contact_nm > 0)
+    hp.contact.effort_hard_contact_nm = cc.effort_hard_contact_nm;
+  if (cc.motion_history_velocity > 0)
+    hp.contact.motion_history_vel_rad_s = cc.motion_history_velocity;
   if (cc.contact_dwell_ms > 0) hp.contact.contact_dwell_ms = cc.contact_dwell_ms;
   if (cc.backoff_deg > 0) hp.backoff_rad = cc.backoff_deg * kDeg2Rad;
   if (cc.repeatability_deg > 0)
     hp.repeatability_rad = cc.repeatability_deg * kDeg2Rad;
+  // Adaptive-current homing (push-through, §22). Shared across axes.
+  if (cc.limit_cur_step_a > 0) hp.limit_cur_step_a = cc.limit_cur_step_a;
+  if (cc.limit_cur_max_a > 0) hp.limit_cur_max_a = cc.limit_cur_max_a;
+  if (cc.max_rotation_deg > 0) hp.max_rotation_rad = cc.max_rotation_deg * kDeg2Rad;
+  if (cc.torque_safety_nm > 0) hp.torque_safety_nm = cc.torque_safety_nm;
 
   HomingPlanConfig hpc;
   hpc.homing = hp;
   for (int i = 0; i < kAxisCount; ++i) {
     hpc.travel_bands[i].min_deg = cfg.axes[i].expected_travel_deg.min;
     hpc.travel_bands[i].max_deg = cfg.axes[i].expected_travel_deg.max;
+    hpc.limit_cur_initial_a[i] = cfg.axes[i].limit_cur_a;
   }
 
   std::vector<HomingAction> actions;

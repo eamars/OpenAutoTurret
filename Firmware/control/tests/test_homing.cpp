@@ -46,8 +46,12 @@ struct SimAxis {
 
   void step(const DesiredState& ds, int64_t t_ns) {
     const double to_stop = stop_at - q;
-    const double v_cmd =
-        ds.hold ? 0.0 : ((ds.target_rad >= q ? 1.0 : -1.0) * ds.speed_rad_s);
+    // Speed mode: the commanded velocity is ds.velocity_rad_s (signed). The
+    // drive's own velocity loop holds it — the plant moves at that constant
+    // speed (first-order, ~50 ms). This mirrors the real CyberGear's speed-mode
+    // behavior (the smooth source of motion, as opposed to a host-regenerated
+    // moving position target, which stick-slips).
+    const double v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
 
     // First-order velocity response (~50 ms time constant).
     const double alpha = kDtS / (0.05 + kDtS);
@@ -222,5 +226,78 @@ TEST(Homing, HardAbortOnLargeEffortFails) {
   EXPECT_TRUE(hc.state() == ota::AxisHomeState::Failed) << hc.result().fail_reason;
   EXPECT_FALSE(hc.result().valid);
   EXPECT_NE(hc.result().fail_reason.find("hard abort"), std::string::npos);
+  SUCCEED();
+}
+
+TEST(Homing, RunsAtFixedHomingCurrentNoRaise) {
+  // Speed-mode homing runs at a FIXED homing current for the whole approach —
+  // there is no adaptive current raise (the position-mode push-through hack
+  // that made friction notches *hold* instead of slipping). A latched contact
+  // at the homing current is the true mechanical end-stop, accepted directly.
+  // The SimAxis models a hard mechanical stop (it stalls at the stop
+  // regardless of current), so the homing must latch it once and complete,
+  // with zero raises and the current held at the initial value.
+  SimAxis axis;
+  axis.stop_at = 1.0;
+  // Above the contact threshold (3.0, strict >) and below the hard-abort (9).
+  axis.contact_effort = 4.0;
+  axis.reset(0.0, 1.0);
+  HomingParams p = test_params();
+  p.limit_cur_initial_a = 3.0;  // a low homing current (POC pitch value)
+  p.limit_cur_step_a = 0.0;     // no adaptive raise (speed mode)
+  p.limit_cur_max_a = 0.0;
+  HomingController hc(ota::AxisId::Pitch, +1, p);
+
+  run_homing(hc, axis, 6000);
+  const ota::HomingResult& r = hc.result();
+  EXPECT_TRUE(hc.state() == ota::AxisHomeState::Complete)
+      << "failed: " << r.fail_reason;
+  EXPECT_TRUE(r.valid);
+  EXPECT_EQ(r.current_raises, 0) << "speed-mode homing never raises the current";
+  EXPECT_DOUBLE_EQ(r.final_limit_cur_a, 3.0);
+  EXPECT_NEAR(r.fine_contact_rad, 1.0, 0.01);
+  SUCCEED();
+}
+
+TEST(Homing, RotationCapFailsWhenNoStopFound) {
+  // A full-rotation axis with NO end-stop in this direction: the homing must
+  // not run forever. It caps the cumulative rotation at max_rotation_rad
+  // (360 deg) and fails. Use a fast coarse speed so the cap is reached well
+  // inside the test window (180 deg/s -> 360 deg in ~2 s).
+  SimAxis axis;
+  axis.stop_at = 100.0;  // effectively no stop
+  axis.reset(0.0, 100.0);
+  ota::HomingParams p = test_params();
+  p.coarse_speed_rad_s = 180.0 * kDeg2Rad;  // reach 360 deg in ~2 s
+  HomingController hc(ota::AxisId::Yaw, +1, p);
+
+  run_homing(hc, axis, 2000);
+  const ota::HomingResult& r = hc.result();
+  EXPECT_TRUE(hc.state() == ota::AxisHomeState::Failed) << r.fail_reason;
+  EXPECT_FALSE(r.valid);
+  EXPECT_NE(r.fail_reason.find("rotation cap"), std::string::npos)
+      << "fail_reason was: " << r.fail_reason;
+  SUCCEED();
+}
+
+TEST(Homing, TorqueSafetyAbortsBelowHardAbort) {
+  // The end-stop push exceeds the (lowered) torque-safety threshold but stays
+  // below the contact-detector hard-abort (9 N·m). The torque safety must fire
+  // first, protecting the mechanical stop. Set torque_safety to 5 N·m and the
+  // contact effort to 7 N·m (5 < 7 < 9).
+  SimAxis axis;
+  axis.stop_at = 0.2;
+  axis.contact_effort = 7.0;  // above torque safety (5), below hard abort (9)
+  axis.reset(0.0, 0.2);
+  ota::HomingParams p = test_params();
+  p.torque_safety_nm = 5.0;
+  HomingController hc(ota::AxisId::Pitch, +1, p);
+
+  run_homing(hc, axis, 2000);
+  const ota::HomingResult& r = hc.result();
+  EXPECT_TRUE(hc.state() == ota::AxisHomeState::Failed) << r.fail_reason;
+  EXPECT_FALSE(r.valid);
+  EXPECT_NE(r.fail_reason.find("torque safety"), std::string::npos)
+      << "fail_reason was: " << r.fail_reason;
   SUCCEED();
 }
