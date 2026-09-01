@@ -714,6 +714,58 @@ cb0354a), and the run must end `PARKED (motors de-energized at the park
 pose)` at yaw 176° (raw ≈ −2.2739) / pitch 40° (raw ≈ −1.5009) with 10+ min
 no-slide.
 
+**Live re-test p3g RESULT (2026-09-02 11:32:01, daemon 210497, 3750e7e) —
+homing SUCCESS (no fault), park verified, no-slide PASS:**
+
+- **Homing succeeded end-to-end** (11:32:01 → `homing complete` 11:33:53 →
+  ready-pose hold → SIGTERM → `PARKED` 11:46:31), **no `control fault`**. The pitch
+  endpoint-A repeatability check — the friction-zone case that faulted in p3f —
+  **passed this time, without using a retry** (the stochastic breakaway worked; the
+  retry fix remains the safety net for the p3f stall case).
+- **Pitch endpoint-A sequence** (`/tmp/controld_p3g.log`, 100 Hz):
+  - coarse contact @ −0.81083 (tq +1.214) → 5° position-mode backoff **~4.25 s**
+    (−0.81083 → −0.89284) → settle;
+  - first fine approach (from −0.89437, 6° at 15°/s): stick-slip, broke away,
+    contact @ −0.81121 — **q1**;
+  - small backoff → −0.83219 (1.18° of the 2° target, again at the edge of the
+    0.8° arrival window — the open p3f question reproduces);
+  - **second fine approach (1.2° of travel, starting mid-zone): CREEPT
+    −0.83219 → −0.81121 over 4.0 s (v 0.002–0.036 rad/s, tq 0.13–0.99 N·m)
+    and REACHED THE STOP** — unlike p3f, where the same creep stalled at −0.822 and
+    latched a false contact; contact @ −0.81159 — **q2**;
+  - rep = |−0.81159 − (−0.81121)| ≈ **0.02° < 0.5°** → pass, `endpoint A homed`
+    at 11:32:22. Exactly one small backoff + one second approach on the wire (no
+    extra retry cycle) — confirming the retry path was NOT triggered.
+- **Wire: A-only backoffs confirmed** (`/tmp/p3g_candump.log`, `candump -ta`).
+  The pitch endpoint-A backoff shows the clean pattern: enter position mode →
+  `lspd=0.174533` + `loc=−0.898093` (target) → **~4.2 s of silence**
+  (write-on-change; the drive moves on its own, breakaway included) → at arrival
+  `lspd=0` + `loc=current` (post-arrival hold) → exit to speed mode. **No A/C stomp
+  during any move** — the p3d/p3e fix (cb0354a) held across the whole run (all pitch
+  homing backoffs clean; the only A/Z `limit_spd` runs are the post-arrival holds
+  and the ready-pose chatter below).
+- **SIGTERM → PARKED cleanly** 11:46:31: `shutdown requested; parking` →
+  `PARKED (motors de-energized at the park pose)` → `controld stopped cleanly`.
+  Wire: park move run=2 (speed) → run=1 (position settle/dwell) → final hold
+  commands (`loc_ref` = park pose) → de-energize (power-safe hold at the balance
+  point). Transient one-cycle BRAKE/DERATE during the 9 s park move are expected
+  (feedback stopping + one 206 ms cycle) and recovered to ALLOW.
+- **Park pose (sample 1, 11:46:59, `turret-can read 0x7019`):** pitch −1.49791
+  (40.2°), yaw −2.279 (175.9°) — within 0.2–0.3° of the targets (pitch −1.5009 /
+  40.0°, yaw −2.2739 / 176.0°).
+- **No-slide check PASS (doubles as the P2 park re-verification):** sample 2 at
+  11:57:17 (10.3 min later, motors de-energized, arm undisturbed): pitch −1.49781
+  (Δ **0.006°**), yaw −2.2788 (Δ **0.012°**). No measurable slide — the power-safe
+  hold at the balance point is stable over 10+ min.
+- **Secondary observation (not blocking, logged for follow-up):** the
+  move-to-ready-pose (hold phase) took **~20 s for a 40° move** (vs ~4 s at 10°/s).
+  The wire shows a `limit_spd` A/Z alternation (0.174533/0) in that window — the
+  hold phase toggling between "move" (outside the 0.57° `kReadyPosTolRad`) and
+  "hold" (inside) as the axis settles. The move completed and the hold is stable
+  (no drift); a minor inefficiency, possibly related to position-control settling /
+  the inactive-axis windup open item. Distinct from (and not a return of) the p3d/p3e
+  friction backoff stomp, which is confirmed gone.
+
 ---
 
 ## P4 — Stale feedback / CAN timeout (§39.4) `[MOTOR]`
