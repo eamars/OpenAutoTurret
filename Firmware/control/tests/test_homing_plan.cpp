@@ -149,7 +149,19 @@ struct Plant {
     }
 
     void step(const DesiredState& ds) {
-      const double v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
+      double v_cmd = 0.0;
+      if (ds.position_move && !ds.hold) {
+        // Position mode (the backoff moves, p3c fix): drive toward target_rad
+        // at up to speed_rad_s with full torque from the first cycle — it
+        // releases from the stop immediately (the real drive's position loop;
+        // see the HomingParams backoff comment). The rest of this plant still
+        // models the velocity-mode-only executor this test exists to exercise
+        // (approach + MoveTo signed SpdRef).
+        const double err = ds.target_rad - q;
+        v_cmd = std::copysign(std::min(std::fabs(err) / kDtS, ds.speed_rad_s), err);
+      } else {
+        v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
+      }
       const double alpha = kDtS / (0.05 + kDtS);
       v += alpha * (v_cmd - v);
       if (at_stop) {

@@ -51,7 +51,19 @@ struct SimAxis {
     // speed (first-order, ~50 ms). This mirrors the real CyberGear's speed-mode
     // behavior (the smooth source of motion, as opposed to a host-regenerated
     // moving position target, which stick-slips).
-    const double v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
+    // Position mode (the backoff moves, p3c fix): the drive's own position
+    // loop drives toward ds.target_rad at up to ds.speed_rad_s, with full
+    // torque from the first cycle — it releases from the stop and breaks any
+    // static friction immediately (the velocity-mode P-term cannot; that is
+    // what the position-mode backoff exists for).
+    double v_cmd = 0.0;
+    if (ds.position_move && !ds.hold) {
+      const double err = ds.target_rad - q;
+      v_cmd = std::copysign(
+          std::min(std::fabs(err) / kDtS, ds.speed_rad_s), err);
+    } else {
+      v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
+    }
 
     // First-order velocity response (~50 ms time constant).
     const double alpha = kDtS / (0.05 + kDtS);

@@ -42,7 +42,7 @@ struct HomingParams {
   // breakaway authority to beat the static-friction stall while still hitting
   // the mechanical stop cleanly (precision comes from the stop, not speed).
   double fine_speed_rad_s = 20.0 * kDeg2Rad;
-  double backoff_speed_rad_s = 10.0 * kDeg2Rad; // speed for the back-off moves
+  double backoff_speed_rad_s = 10.0 * kDeg2Rad; // speed cap (LimitSpd) for back-off moves
   double backoff_rad = 5.0 * kDeg2Rad;          // back-off after the coarse contact
   double small_backoff_rad = 2.0 * kDeg2Rad;    // back-off for the repeatability pass
   double repeatability_rad = 0.5 * kDeg2Rad;    // max allowed |fine_1 - fine_2|
@@ -50,29 +50,37 @@ struct HomingParams {
   double approach_timeout_s = 30.0;             // max time for one approach move
   double max_travel_rad = 150.0 * kDeg2Rad;     // safety: max travel from the start
   double arrival_tol_rad = 0.01;                // "arrived" position tolerance
-  // --- Backoff drive: closed-loop target tracking with stall-breaking ---
-  // Root cause of the 2026-09-02 yaw homing hang (rehome2): the backoff was a
-  // fixed-sign velocity command (10 deg/s). The yaw "end-stop" is a wide
-  // (~7 deg) friction/detent zone; the 10 deg/s backoff stick-slipped in it
-  // for ~10 s (q crawling at ~1 deg/s while pushing 0.3-0.6 N.m), then burst
-  // free with momentum (measured v=+0.56 rad/s vs the +0.1745 command),
-  // overshot the backoff target, and the fixed-sign command kept driving AWAY
-  // from it — the axis lapped to the far edge of the same zone and the
-  // timeout-less Backoff state hung forever. The backoff is now:
-  //   (a) target-seeking: v = speed * sign(target - q) (0 near the target);
-  //       an overshoot reverses the command instead of driving away;
-  //   (b) stall-breaking: when the move stalls in friction for
-  //       backoff_stall_detect_s, a short burst at backoff_burst_factor *
-  //       speed breaks the static friction (30 deg/s is known to clear the
-  //       zone — the 30 deg/s coarse approach does), then it resumes;
-  //   (c) timeout: a backoff that cannot reach its target fails cleanly
-  //       instead of hanging.
-  double backoff_timeout_s = 10.0;               // hard timeout for a backoff move
-  double backoff_stall_vel_rad_s = 0.02;         // |v| below this = "not moving"
-  double backoff_stall_detect_s = 0.3;           // stalled duration that triggers a burst
-  double backoff_burst_factor = 3.0;             // burst speed = factor * backoff speed
-  double backoff_burst_s = 0.25;                 // burst duration (s)
-  double backoff_arrive_vel_rad_s = 0.1;         // |v| below this to accept arrival
+  // --- Backoff drive: position mode (p3c root cause, 2026-09-02) ---
+  // The back-off moves run in the drive's POSITION mode (LocRef = target,
+  // LimitSpd = backoff_speed), not velocity mode. p3c (yaw low stop)
+  // root-caused the velocity-mode backoff as structurally weak in the yaw
+  // detent zone (the 0-7 deg region at the low end stop, static friction
+  // ~0.4-0.55 N.m): the velocity loop's P-term at the 10 deg/s command is
+  // only 0.066 N.m (Kp ~0.38 N.m/(rad/s)), so breaking away depends on slow
+  // integral windup (measured 0.0285 N.m/s) and 30 deg/s momentum bursts.
+  // Each burst slips the axis PAST the 5 deg target (p3c: +3.2 deg, to 6.6
+  // deg), and the return then fights F_s + gravity (toward the 176 deg
+  // balance) PLUS the wound-up +integral: net return torque capped ~0.35
+  // N.m, creep 0.036 deg/s, 10 s backoff timeout -> fault. The outcome was
+  // luck-dependent on (burst overshoot x creep rate): the p3 run made it
+  // (0.94 deg overshoot, 0.15 deg/s creep), p3c did not (1.6 deg, 0.036).
+  // The position loop (loc_kp ~30 N.m/rad) applies the full current-limit
+  // torque from the FIRST cycle (a 5 deg error wants 2.6 N.m, clamped at
+  // LimitCur) — no I build-up, no bursts, no momentum overshoot (P shrinks
+  // as the error closes and self-corrects any slip). It can still stall
+  // 0.5-1.5 deg short of the exact target inside the zone (P falls below
+  // F_s as the error closes), which is why arrival uses a wide window:
+  // anywhere inside it is a valid backoff, because the fine re-approach
+  // re-measures the end-stop precisely from whatever position the axis
+  // settles at.
+  double backoff_timeout_s = 10.0;      // hard timeout for a backoff move
+  // Arrival window = max(0.5 deg, backoff_arrive_frac * backoff distance).
+  // The coarse 5 deg backoff accepts arrival from ~3 deg out (target 5 deg
+  // from the stop -> the axis ends >=3 deg clear of it); the 2 deg small
+  // backoff accepts from ~1.2 deg out — far enough that the second fine
+  // approach starts its 1.5 s contact dwell well clear of the stop.
+  double backoff_arrive_frac = 0.4;
+  double backoff_arrive_vel_rad_s = 0.1;  // |v| below this to accept arrival
   // Re-arm the drive (de-energize/re-energize, the verified speed-mode
   // recipe) at the start of the coarse approach, before any motion.
   // FullAxisHoming enables this for endpoint B: when endpoint A completes
@@ -132,6 +140,17 @@ struct DesiredState {
   // The axis bounces slightly off the stop during the de-energize; the
   // target-seeking backoff and the fine re-approach are unaffected.
   bool rearm_speed_mode = false;
+  // Position-mode move: the executor drives the drive's own position loop
+  // (LocRef = target_rad, LimitSpd = speed_rad_s) instead of commanding a
+  // velocity. Used for the backoff moves — see the HomingParams backoff
+  // comment (p3c root cause). velocity_rad_s is 0.0 for these.
+  bool position_move = false;
+  // One-shot: the executor must run the (blocking) position-mode entry
+  // recipe (de-energize, RunMode=1, re-energize, LimitSpd, pin LocRef)
+  // BEFORE executing this cycle's position command. The de-energize also
+  // resets the drive's velocity-loop integral (the rehome3 fix), so the
+  // backoff starts from a clean controller.
+  bool enter_pos_mode = false;
 };
 
 // The outcome of a homing run.
@@ -177,6 +196,10 @@ class HomingController {
     // velocity loop is the smooth source of motion (as opposed to a
     // host-generated moving position target, which stick-slips).
     double velocity_rad_s = 0.0;
+    // Position-mode phase (the backoff moves): the executor pins LocRef =
+    // target_rad and LimitSpd = speed_rad_s and the drive's own position
+    // loop does the moving. velocity_rad_s is unused (0.0).
+    bool position_mode = false;
     bool approach = false;  // move until contact, not to a fixed target
     TimeNs start_ns = 0;
   };
@@ -190,15 +213,14 @@ class HomingController {
   // target_distance_rad < 0 = use p_.max_travel_rad (the fine approaches).
   void begin_approach(double speed_rad_s, TimeNs now, double current_pos_rad,
                       double target_distance_rad = -1.0);
-  void begin_backoff_to(TimeNs now, double target_rad);
-  // Backoff move drive: closed-loop position tracking in velocity mode
-  // (target-seeking + stall-breaking burst; see the HomingParams backoff
-  // comment). Updates phase_.velocity_rad_s and returns the commanded
-  // velocity. Called every cycle while a backoff move is active.
-  double backoff_velocity(const HomingFeedback& fb);
-  // Backoff arrival: at the target AND slow enough to hold there (a
-  // momentum-coasting axis must not be handed to the settle while it is
-  // still crossing the target at speed).
+  // start_rad is the position the backoff begins from (the contact position);
+  // it sizes the arrival window (see backoff_arrive_frac).
+  void begin_backoff_to(TimeNs now, double target_rad, double start_rad);
+  // Backoff arrival: within the wide arrival window of the target AND slow
+  // enough to hold there. The window is wide on purpose — the position loop
+  // can stall 0.5-1.5 deg short of the exact target inside the detent zone,
+  // and any position inside the window is a valid backoff (the fine
+  // re-approach re-measures the end-stop precisely).
   bool backoff_arrived(const HomingFeedback& fb) const;
   void begin_settle(TimeNs now);
   void begin_hold();
@@ -216,9 +238,9 @@ class HomingController {
   ContactResult last_cr_{};  // latest detector result during the approach
   Phase phase_;
 
-  // Stall-breaking state for the backoff move (backoff_velocity).
-  TimeNs stall_since_ns_ = 0;  // 0 = not currently stalled
-  TimeNs burst_until_ns_ = 0;  // 0 = no burst in flight
+  // Backoff arrival window (rad), sized from the backoff distance in
+  // begin_backoff_to (see HomingParams::backoff_arrive_frac).
+  double arrive_tol_rad_ = 0.0;
 
   // VerifyRepeatability sub-phase: 0 = back-off, 1 = second fine approach.
   int verify_phase_ = 0;
@@ -236,6 +258,7 @@ class HomingController {
   double limit_cur_a_ = 0.0;        // current drive limit (A); 0 until first use
   bool current_dirty_ = false;      // DesiredState must carry limit_cur_a_
   bool rearm_pending_ = false;      // next DesiredState must carry rearm_speed_mode
+  bool pos_enter_pending_ = false;  // next DesiredState must carry enter_pos_mode
   double coarse_start_pos_rad_ = 0.0;  // position when the coarse approach began
   bool has_coarse_start_ = false;
   int current_raises_ = 0;

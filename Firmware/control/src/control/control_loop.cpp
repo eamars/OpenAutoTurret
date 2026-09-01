@@ -358,18 +358,25 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // reported v: the MoveTo arrival test and the contact detector's
       // motion/stall logic need a trustworthy velocity (P0j).
       DesiredState ds = homing_->step(to_feedback(sp[ix(a)], v_est_[ix(a)]));
-      // One-shot velocity-controller re-arm (see HomingController): before a
-      // post-contact backoff or endpoint B's approach, de-energize/re-energize
-      // with the verified speed-mode recipe to reset the drive's velocity-loop
-      // integral. That integral winds up while the contact dwell pushes the
-      // stop (~1.3-1.8 N.m wire-measured in rehome3) and then exceeds the
-      // P-term of ANY SpdRef (Kp ~0.38 N.m/(rad/s); 30 deg/s max ~1.14 N.m),
-      // so the backoff command sits on the bus ignored and the axis stays
-      // pinned to the stop until the backoff timeout. Blocking ~150 ms: one
-      // deadline miss (a single Derate; Hold needs a 5-streak) and a brief
-      // feedback gap on the non-active axis (benign — the supervisor does not
-      // act during homing). The axis bounces slightly off the stop during the
-      // de-energize; the target-seeking backoff and fine re-approach handle it.
+      // One-shot mode entries (see HomingController):
+      //  rearm_speed_mode: de-energize/re-energize with the verified
+      //    speed-mode recipe before a fine re-approach (after a position-mode
+      //    backoff) or endpoint B's approach, resetting the drive's
+      //    velocity-loop integral (winds up to ~1.3-1.8 N.m while the
+      //    contact dwell pushes the stop — rehome3 root cause, wire-
+      //    measured; it exceeds the P-term of ANY SpdRef, Kp ~0.38 N.m/(rad/s)).
+      //  enter_pos_mode: the position-mode entry recipe before a backoff
+      //    move (de-energize, RunMode=1, re-energize, LimitSpd, pin LocRef to
+      //    the current position). The backoff then runs on the drive's own
+      //    position loop (p3c fix, 2026-09-02 — see HomingParams backoff
+      //    comment): full current-limit torque from the first cycle, no
+      //    integral to wind up.
+      // Both are blocking (~150-250 ms): one deadline miss (a single Derate;
+      // Hold needs a 5-streak) and a brief feedback gap on the non-active
+      // axis (benign — the supervisor does not act during homing). The axis
+      // bounces/slides slightly during the de-energize; the backoff starts
+      // from wherever it lands and the fine re-approach re-measures the
+      // end-stop.
       bool rearmed = true;
       if (ds.rearm_speed_mode) {
         std::string e;
@@ -377,15 +384,27 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         if (!rearmed) {
           fault("homing re-arm speed mode failed: " + e);
         }
+      } else if (ds.enter_pos_mode) {
+        std::string e;
+        if (!backend_->enter_position_mode(a, ds.speed_rad_s, e)) {
+          fault("homing backoff position mode failed: " + e);
+        }
       }
       if (rearmed) {
-        // Speed mode (velocity): command the constant speed (SpdRef) the
-        // drive's velocity loop should hold. The homing controller produces a
-        // signed velocity (approach +v·dir, back-off −v·dir, fine +v_f·dir, or
-        // 0 to hold). This is the root-cause fix for the position-mode
-        // stick-slip (P0o): the drive's own velocity loop is the smooth source
-        // of motion, not a host-regenerated moving LocRef.
-        backend_->command_velocity(a, ds.velocity_rad_s);
+        if (ds.position_move) {
+          // Position mode (backoff): pin LocRef = target, LimitSpd = speed
+          // (both write-on-change — a fixed target costs one CAN write per
+          // backoff) and let the drive's position loop drive the move.
+          backend_->command(a, ds.target_rad, ds.speed_rad_s);
+        } else {
+          // Speed mode (velocity): command the constant speed (SpdRef) the
+          // drive's velocity loop should hold. The homing controller produces
+          // a signed velocity (approach +v·dir, fine +v_f·dir, or 0 to hold).
+          // This is the root-cause fix for the position-mode stick-slip
+          // (P0o): the drive's own velocity loop is the smooth source of
+          // motion, not a host-regenerated moving LocRef.
+          backend_->command_velocity(a, ds.velocity_rad_s);
+        }
         // Hold the non-active axis in place (SpdRef=0). It is in speed mode
         // too (entered in start_homing); holding at its (low) homing current
         // is fine — the axes are orthogonal, so a little drift doesn't affect
@@ -411,10 +430,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       if ((homing_log_cycle_++ & 1) == 0) {
         spdlog::info(
             "motion t={:.2f}ms ax={} q={:+.5f} v={:+.4f} a={:+.2f} j={:+.1f} "
-            "tq={:+.3f} cmd={:+.4f}",
+            "tq={:+.3f} cmd={:+.4f} msg={}",
             static_cast<double>(now_ns) / 1e6, axis_name(a), sp[ix(a)].q_rad,
             v_est_[ix(a)], a_est_[ix(a)], jerk_est_[ix(a)],
-            sp[ix(a)].torque_nm, ds.velocity_rad_s);
+            sp[ix(a)].torque_nm, ds.velocity_rad_s, ds.message);
       }
       if (homing_->failed()) {
         fault("homing failed: " + homing_->fail_reason());

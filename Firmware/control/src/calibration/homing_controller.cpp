@@ -42,6 +42,9 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
                                       double target_distance_rad) {
   phase_.kind = PhaseKind::Move;
   phase_.approach = true;
+  // Approaches are always speed mode (the backoff is the only position-mode
+  // phase); clear the flag a previous backoff move left behind.
+  phase_.position_mode = false;
   phase_.speed_rad_s = speed_rad_s;
   // Speed mode: command the constant approach speed (signed by the approach
   // direction). The drive's velocity loop holds it smoothly; the axis stops on
@@ -60,74 +63,45 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
   last_cr_ = ContactResult{};
 }
 
-void HomingController::begin_backoff_to(TimeNs now, double target_rad) {
+void HomingController::begin_backoff_to(TimeNs now, double target_rad,
+                                        double start_rad) {
   phase_.kind = PhaseKind::Move;
   phase_.approach = false;
+  phase_.position_mode = true;
+  // Position mode (p3c fix, 2026-09-02): the drive's own position loop
+  // (loc_kp ~30 N.m/rad) drives target_rad with a speed cap of
+  // backoff_speed (LimitSpd). At a 5 deg error its P-term wants 2.6 N.m
+  // (clamped at LimitCur) from the FIRST cycle — the full current-limit
+  // torque — so the yaw detent zone's static friction (~0.4-0.55 N.m) cannot
+  // hold, and there is no integral to wind up (the velocity-mode backoff's
+  // 0.066 N.m P-term + slow I build-up + momentum-burst overshoot is the
+  // p3c failure; see the HomingParams backoff comment).
   phase_.speed_rad_s = p_.backoff_speed_rad_s;
-  // Speed mode: the velocity command is set per cycle by backoff_velocity()
-  // (target-seeking with stall-breaking bursts). The previous fixed-sign
-  // command (-backoff_speed * dir_) caused the 2026-09-02 yaw hang: a
-  // stuck-slip burst overshot the target with momentum and the fixed command
-  // then drove away from it forever.
   phase_.velocity_rad_s = 0.0;
   phase_.target_rad = target_rad;
   phase_.start_ns = now;
-  stall_since_ns_ = 0;
-  burst_until_ns_ = 0;
-  // Re-arm the drive's velocity controller before the backoff (rehome3 root
-  // cause, 2026-09-02): during the contact dwell + settle the drive pushes
-  // the stop at the commanded approach speed, and its velocity-loop integral
-  // winds up to ~1.3-1.8 N.m (wire-measured: tq +1.825 and still rising at
-  // settle). That residual exceeds the P-term of ANY SpdRef (Kp ~0.38
-  // N.m/(rad/s); even 30 deg/s gives ~1.14 N.m), so the backoff command is
-  // on the bus but the axis never moves — rehome3 hit the 10 s backoff
-  // timeout pinned at the stop. A de-energize/re-energize (the verified
-  // speed-mode recipe) resets the integral; the brief de-energize lets the
-  // axis bounce slightly off the stop, which the target-seeking backoff and
-  // the fine re-approach handle. The executor runs the recipe when it sees
-  // rearm_speed_mode on the next DesiredState.
-  rearm_pending_ = true;
-}
-
-double HomingController::backoff_velocity(const HomingFeedback& fb) {
-  const double d = phase_.target_rad - fb.pos_rad;
-  const bool near = std::fabs(d) < p_.arrival_tol_rad;
-  const double sgn = (d >= 0.0) ? 1.0 : -1.0;
-  double v = near ? 0.0 : p_.backoff_speed_rad_s * sgn;
-  if (near) {
-    // At the target: hold in place and clear any in-flight stall/burst state
-    // (a momentum overshoot re-arms it on a later cycle via the sign flip).
-    stall_since_ns_ = 0;
-    burst_until_ns_ = 0;
-  } else {
-    const bool stalled = std::fabs(fb.vel_rad_s) < p_.backoff_stall_vel_rad_s;
-    if (stalled) {
-      if (stall_since_ns_ == 0) stall_since_ns_ = fb.t_ns;
-      if (burst_until_ns_ == 0 &&
-          (fb.t_ns - stall_since_ns_) >=
-              static_cast<TimeNs>(p_.backoff_stall_detect_s * 1e9)) {
-        // Stuck in friction: burst at the coarse-approach-class speed to
-        // break the static friction, then resume the normal backoff speed.
-        // (Measured 2026-09-02: the 10 deg/s backoff stick-slips in the yaw
-        // detent zone for ~10 s before slipping free on its own; 30 deg/s
-        // clears the zone directly — that is what the coarse approach does.)
-        burst_until_ns_ =
-            fb.t_ns + static_cast<TimeNs>(p_.backoff_burst_s * 1e9);
-        stall_since_ns_ = 0;  // re-arm: burst again if it stalls again
-      }
-    } else if (burst_until_ns_ == 0) {
-      stall_since_ns_ = 0;  // moving: the stall window does not accumulate
-    }
-    if (fb.t_ns < burst_until_ns_) {
-      v = p_.backoff_speed_rad_s * p_.backoff_burst_factor * sgn;
-    }
-  }
-  phase_.velocity_rad_s = v;
-  return v;
+  // Wide arrival window (see HomingParams::backoff_arrive_frac): the
+  // position loop can stall 0.5-1.5 deg short of the exact target inside
+  // the detent zone (P falls below F_s as the error closes); anywhere inside
+  // the window is a valid backoff. The window is always well below the
+  // backoff distance, so the axis has actually left the stop.
+  const double dist = std::fabs(target_rad - start_rad);
+  arrive_tol_rad_ =
+      std::max(0.5 * kDeg2Rad, p_.backoff_arrive_frac * dist);
+  // One-shot position-mode entry (the executor runs the blocking
+  // de-energize/RunMode=1/re-energize/LimitSpd/pin-LocRef recipe before
+  // this cycle's command). The de-energize also resets the drive's
+  // velocity-loop integral, which winds up to ~1.3-1.8 N.m while the
+  // contact dwell pushes the stop (rehome3 root cause, wire-measured) —
+  // in position mode that residual is inert (the velocity loop is not in
+  // the control path), but the reset keeps the controller clean. The brief
+  // de-energize lets the axis bounce off the stop toward the gravity
+  // balance; the position move simply starts from wherever it lands.
+  pos_enter_pending_ = true;
 }
 
 bool HomingController::backoff_arrived(const HomingFeedback& fb) const {
-  return std::fabs(fb.pos_rad - phase_.target_rad) < p_.arrival_tol_rad &&
+  return std::fabs(fb.pos_rad - phase_.target_rad) < arrive_tol_rad_ &&
          std::fabs(fb.vel_rad_s) < p_.backoff_arrive_vel_rad_s;
 }
 
@@ -252,13 +226,16 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
 
     case AxisHomeState::ContactCoarse:
       if (settled(fb)) {
-        begin_backoff_to(fb.t_ns, coarse_contact_rad_ - p_.backoff_rad * dir_);
+        begin_backoff_to(fb.t_ns, coarse_contact_rad_ - p_.backoff_rad * dir_,
+                         coarse_contact_rad_);
         state_ = AxisHomeState::Backoff;
       }
       break;
 
     case AxisHomeState::Backoff:
-      backoff_velocity(fb);  // target-seeking + stall-breaking burst
+      // Position mode: the drive's own position loop drives the move
+      // (LocRef/LimitSpd are pinned by the executor every cycle); there is
+      // no host-side velocity to compute here.
       if (fb.motor_fault) {
         fail("backoff: motor fault");
       } else if (backoff_arrived(fb)) {
@@ -267,18 +244,28 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       } else if (fb.t_ns - phase_.start_ns >=
                  static_cast<TimeNs>(p_.backoff_timeout_s * 1e9)) {
         // The previous code had no timeout here: an axis that cannot reach
-        // the backoff target (stuck in friction, or a burst that keeps
-        // re-latching) hung the homing forever (2026-09-02 yaw rehome2).
-        fail("backoff: timeout (stuck in friction? q=" +
+        // the backoff target (stuck in friction) hung the homing forever
+        // (2026-09-02 yaw rehome2); p3c timed out inside the yaw detent
+        // zone on the velocity-mode backoff that this replaced.
+        fail("backoff: timeout (position mode, stuck in friction? q=" +
              std::to_string(fb.pos_rad) + " target=" +
-             std::to_string(phase_.target_rad) + " cmd_v=" +
-             std::to_string(phase_.velocity_rad_s) + " rad/s)");
+             std::to_string(phase_.target_rad) + " dq=" +
+             std::to_string(fb.pos_rad - phase_.target_rad) +
+             " v=" + std::to_string(fb.vel_rad_s) + " rad)");
       }
       break;
 
     case AxisHomeState::Settle:
       if (settled(fb)) {
         begin_approach(p_.fine_speed_rad_s, fb.t_ns, fb.pos_rad);
+        // The backoff left the axis in position mode; the fine approach is
+        // speed mode. Re-arm (de-energize/re-energize, the speed-mode
+        // recipe) so the approach starts from a clean velocity controller
+        // — the same re-arm endpoint B uses before its coarse approach.
+        // The de-energize lets the axis slide slightly off its backoff
+        // settle position; the approach is "move until contact", so the
+        // start position doesn't matter (the end-stop re-measures).
+        rearm_pending_ = true;
         state_ = AxisHomeState::ApproachFine;
       }
       break;
@@ -302,7 +289,8 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
     case AxisHomeState::ContactFine:
       if (settled(fb)) {
         verify_phase_ = 0;
-        begin_backoff_to(fb.t_ns, fine_contact1_rad_ - p_.small_backoff_rad * dir_);
+        begin_backoff_to(fb.t_ns, fine_contact1_rad_ - p_.small_backoff_rad * dir_,
+                         fine_contact1_rad_);
         state_ = AxisHomeState::VerifyRepeatability;
       }
       break;
@@ -311,21 +299,26 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       if (hard_abort || fb.motor_fault) {
         fail("repeatability: hard abort or motor fault");
       } else if (verify_phase_ == 0) {
-        // Small backoff: the same target-seeking + stall-breaking drive as
-        // the coarse backoff (it starts at the stop, in the detent zone, and
-        // the 10 deg/s command can stick here too).
-        backoff_velocity(fb);
+        // Small backoff: position mode, same as the coarse backoff (it
+        // starts at the stop, in the detent zone).
         if (fb.motor_fault) {
           fail("repeatability: small backoff motor fault");
         } else if (backoff_arrived(fb)) {
           verify_phase_ = 1;
           begin_approach(p_.fine_speed_rad_s, fb.t_ns, fb.pos_rad);
+          // The small backoff left the axis in position mode; the second
+          // fine approach is speed mode — re-arm (de-energize/re-energize)
+          // so the SpdRef commands take effect (see the Settle ->
+          // ApproachFine transition).
+          rearm_pending_ = true;
         } else if (fb.t_ns - phase_.start_ns >=
                    static_cast<TimeNs>(p_.backoff_timeout_s * 1e9)) {
-          fail("repeatability: small backoff timeout (stuck in friction? q=" +
+          fail("repeatability: small backoff timeout (position mode, stuck "
+               "in friction? q=" +
                std::to_string(fb.pos_rad) + " target=" +
-               std::to_string(phase_.target_rad) + " cmd_v=" +
-               std::to_string(phase_.velocity_rad_s) + " rad/s)");
+               std::to_string(phase_.target_rad) + " dq=" +
+               std::to_string(fb.pos_rad - phase_.target_rad) +
+               " v=" + std::to_string(fb.vel_rad_s) + " rad)");
         }
       } else {  // second fine approach
         if (contact) {
@@ -379,13 +372,16 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       ds = hold_state("settle");
       break;
     case PhaseKind::Move:
-      ds = move_state(phase_.target_rad, phase_.speed_rad_s,
-                      phase_.velocity_rad_s,
-                      phase_.approach
-                          ? "approach"
-                          : (burst_until_ns_ != 0 && fb.t_ns < burst_until_ns_
-                                 ? "move:burst"
-                                 : "move"));
+      if (phase_.position_mode) {
+        // Position mode (the backoff moves): the executor pins LocRef =
+        // target_rad, LimitSpd = speed_rad_s (both write-on-change; a fixed
+        // target costs one CAN write). velocity_rad_s stays 0.
+        ds = move_state(phase_.target_rad, phase_.speed_rad_s, 0.0, "move:pos");
+        ds.position_move = true;
+      } else {
+        ds = move_state(phase_.target_rad, phase_.speed_rad_s,
+                        phase_.velocity_rad_s, phase_.approach ? "approach" : "move");
+      }
       break;
   }
   // Apply the drive current limit on the cycle it changed (adaptive current,
@@ -404,6 +400,15 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
     ds.rearm_speed_mode = true;
     ds.limit_cur_a = limit_cur_a_;
     rearm_pending_ = false;
+  }
+  // One-shot position-mode entry (the backoff moves). Carries the current
+  // limit for the same reason as the re-arm cycle: the executor applies it
+  // right after the mode-entry recipe (enter_position_mode's recipe does not
+  // rewrite LimitCur; the backend de-duplicates the write).
+  if (pos_enter_pending_) {
+    ds.enter_pos_mode = true;
+    ds.limit_cur_a = limit_cur_a_;
+    pos_enter_pending_ = false;
   }
   return ds;
 }

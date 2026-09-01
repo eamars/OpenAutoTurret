@@ -376,6 +376,16 @@ still at the wrong 180° pose). Fix: mid-park moved to 176° (P2 fix 4) + the
 Verify-hold LimitSpd fix (P2 fix 5); the re-test (fresh boot → home → ready
 → SIGTERM → PARKED) is the re-run of both P2 and P3.
 
+**Result (p3c, 2026-09-02 09:34, FAIL — homing fault, root-caused; fix
+implemented, re-test = p3d):** fresh boot → homing fault at the yaw
+endpoint-B backoff: `homing failed: yaw home full range failed: endpoint B
+homing failed: backoff: timeout (stuck in friction? q=-5.248531
+target=-5.258541 cmd_v=-0.174533 rad/s)` (10 s backoff timeout, 09:34:38).
+The earlier p3 run (08:55) succeeded through the identical sequence — the
+outcome was luck-dependent (see the p3c root-cause subsection below). Fix
+implemented: position-mode backoff; the re-test (p3d: fresh boot → home →
+ready → SIGTERM → PARKED → no-slide) doubles as the P2 park re-verification.
+
 > ✅ **RESOLVED — the yaw "+stop 7.2° off" (rehome1) is the detent-zone width, not
 > a soft stop.** The yaw's +stop is a friction/detent *zone* ~7.3° wide (raw
 > [−5.4728, −5.3458], unwrapped — the same physical edge as raw +0.8108:
@@ -441,6 +451,81 @@ improvement (not done): raise the backoff speed out of the stick-slip regime or
 re-arm before post-backoff moves that coast on a residual (the `move yaw 180`
 after the yaw-B detent fight coasted up to 26°/s — 3× its 10°/s command — on the
 decaying integral; the proportional move law still landed it correctly).
+(Superseded by the position-mode backoff below, which removes the residual
+entirely.)
+
+### p3c failure + position-mode backoff fix (2026-09-02)
+
+**Failure:** p3c (09:34) faulted at the yaw endpoint-B backoff with a 10 s
+timeout; the identical p3 run (08:55) had passed. Same drive, same pose, same
+code — the difference was stick-slip luck.
+
+**Root cause (from the 100 Hz motion log, `/tmp/controld_p3c.log`):** the
+speed-mode backoff is a friction fight the velocity loop cannot win:
+
+1. Contact at 09:34:27.9 (tq −0.64), 1.5 s dwell pushing on the stop; the
+   velocity-loop integral winds to ≥1.3 N·m at the 1 A limit during the dwell
+   — so 1 A is NOT the torque bottleneck, the drive can output it.
+2. Re-arm at 09:34:28.185 (supervisor BRAKE, overrun 95 ms — the one blocking
+   cycle). While de-energized the arm slides +3.2° off the low stop toward the
+   176° gravity balance.
+3. The +10°/s backoff (away from the low stop) starts 3.2° from it and
+   immediately stalls ~1.9° short of the 5° target: P only (0.066 N·m at the
+   10°/s error) + I at 0.0285 N·m/s build cannot reach breakaway static
+   friction (~0.4–0.55 N·m, toward the balance point). 100 Hz log:
+   `cmd=+0.1745`, `tq=+0.27 N·m`, `v≈0.0003`, q frozen at −5.2913 for ~4 s.
+4. The stall detector's 3× burst finally slips the joint, but the burst
+   momentum overshoots the 5° target to 6.6° (−5.2298; 1 Hz a_yaw −0.83
+   rad/s² slip decel).
+5. The −10°/s return from 6.6° must re-fight F_s + gravity + the wound-up
+   integral (tq peaks −0.348, below breakaway) → creep at 0.036°/s → the axis
+   is still ~0.6° short of the target (q −5.2485) when the 10 s backoff
+   timeout fires at 09:34:38.1 → `control fault`.
+
+   (Correction of record: an earlier reading of this log reported a
+   "5-second motion-log gap" during the stall. There was no gap — a parser
+   regex that only matched negative `cmd=` values, plus line-dedup, collapsed
+   the continuous 99-line/s stall region. The yaw log is continuous through
+   the whole event; per-second line counts confirm it.)
+
+**Why p3 passed and p3c failed:** identical dynamics, different stick-slip
+dice. p3's burst overshoot was 0.94° and its return creep 0.15°/s (made it
+home in ~3.2 s); p3c's was 1.6° at 0.036°/s (timed out at 10 s). Any margin
+that depends on creep speed is not a design.
+
+**Fix — backoff moves run in the drive's position mode** (implemented in
+`homing_controller.{hpp,cpp}`, `control_loop.cpp`, `can_motor_backend.cpp`):
+
+- The coarse 5° and small 2° backoffs now command `LocRef` = the fixed
+  backoff target with `LimitSpd = 10°/s` (a speed cap, never 0 — 0 pins the
+  position loop). The position loop (loc_kp ≈ 30 N·m/rad) wants `30 × err`
+  N·m from the FIRST cycle — a 5° error wants 2.6 N·m, clamped at the 1 A
+  limit — so it breaks static friction immediately; there is no integral to
+  wind up and no bursts (P ∝ error, so overshoot self-corrects).
+- Mode sequence per endpoint: contact dwell (speed mode) →
+  `enter_position_mode` (one-shot, blocking CAN recipe: stop → RunMode=1 →
+  enable → LimitSpd=10°/s → pin LocRef to the just-read MechPos; the
+  de-energize also resets the wound-up velocity integral — the rehome3 class
+  of problem) → position backoff → settle (position mode HOLDS the pinned
+  LocRef, no re-pinning) → re-arm `enter_speed_mode` (de-energize → RunMode=2
+  → re-energize; LimitCur persists) → fine approach (speed mode, as before)
+  → [contact 2 → small position backoff → re-arm → fine approach 2].
+- Arrival uses a wide window because the position loop can stall 0.5–1.5°
+  short of the target in the detent zone (P < F_s there):
+  `arrive_tol = max(0.5°, 0.4 × backoff distance)` → the coarse backoff
+  arrives ≥3° clear of the stop, the small ≥1.2°. The fine approach is
+  "move until contact" anyway — it re-measures the stop (endpoint
+  repeatability is 0.05°, so a de-energize slide before it is benign).
+- A 10 s timeout on a position-mode backoff now means genuinely stuck
+  (mechanical), not "velocity loop lost the friction fight"; the fault
+  message says so.
+
+Unit tests: the `test_homing`/`test_homing_plan` sim plants and
+`SimMotorBackend` model the position-mode branch (drive toward LocRef at the
+speed cap, full torque from the first cycle); ctest 38/38 + pytest 93/2.
+Live re-test p3d will confirm the real drive's position loop breaks the
+detent as modeled (watch `msg=move:pos` in the 100 Hz log: q should move at
+~10°/s within ~1 s of the re-arm, no bursts).
 
 ---
 
