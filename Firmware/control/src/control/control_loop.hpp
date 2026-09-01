@@ -185,6 +185,11 @@ class ControlLoop {
  private:
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   bool enter_position_mode_all(double limit_spd, std::string& err);
+  // Speed mode (velocity) for homing: enter speed mode on every axis with its
+  // per-axis drive current limit. The drive's own velocity loop holds the
+  // constant approach speed (SpdRef) — the smooth source of motion.
+  bool enter_speed_mode_all(const double limit_cur_a[kAxisCount],
+                            std::string& err);
   bool finalize_homing();
   // Phase 8: command execution on the control thread (§42.2).
   void process_commands();
@@ -201,7 +206,11 @@ class ControlLoop {
       fault_reason_ = reason;
     }
   }
-  static HomingFeedback to_feedback(const AxisSnapshot& s);
+  // vel_rad_s is passed in (the position-derived v_est_) rather than read from
+  // the snapshot: the drive's self-reported v is a +/-0.05 rad/s noise band at
+  // rest (P0j) that makes the MoveTo arrival test and the contact detector's
+  // motion/stall logic flaky.
+  static HomingFeedback to_feedback(const AxisSnapshot& s, double vel_rad_s);
 
   Config cfg_;
   std::unique_ptr<MotorBackend> backend_;
@@ -218,6 +227,23 @@ class ControlLoop {
   std::unique_ptr<HomingPlan> homing_;
   std::unique_ptr<ParkController> park_;
   std::array<double, kAxisCount> last_q_{};
+  // Position-derived velocity for at-rest decisions (P0j): the drive's
+  // self-reported v is a ±0.05 rad/s noise band at rest that chatters the
+  // fault phase's |v|>kAtRestVelRadS gate, ping-ponging the emergency-stop
+  // reference at 1 Hz. Delta-q estimation (updated only when fresh feedback
+  // arrives; low-pass tau=0.1 s) is ~0 at rest and tracks real motion.
+  static constexpr double kVestTauS = 0.1;
+  // Acceleration / jerk low-pass constants for telemetry capture (C1, A.1).
+  // Shorter than kVestTauS so the logged a/j resolve a stick-slip slip while
+  // staying above single-frame noise. The signals are a filtered derivative of
+  // v_est_ (position-derived), never the drive's self-reported v.
+  static constexpr double kATauS = 0.02;
+  static constexpr double kJTauS = 0.02;
+  std::array<TimeNs, kAxisCount> v_est_t_prev_{};
+  std::array<double, kAxisCount> v_est_q_prev_{};
+  std::array<double, kAxisCount> v_est_{};
+  std::array<double, kAxisCount> a_est_{};
+  std::array<double, kAxisCount> jerk_est_{};
   TimeNs deadline_ns_ = 0;
   int deadline_miss_count_ = 0;
   // Phase 6 tracking subsystem (null unless tracking mode is enabled).

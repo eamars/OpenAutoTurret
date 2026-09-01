@@ -50,14 +50,37 @@ bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
   return true;
 }
 
+bool ControlLoop::enter_speed_mode_all(
+    const double limit_cur_a[kAxisCount], std::string& err) {
+  for (int i = 0; i < kAxisCount; ++i) {
+    const AxisId a = static_cast<AxisId>(i);
+    std::string e;
+    if (!backend_->enter_speed_mode(a, limit_cur_a[i], e)) {
+      err = std::string(axis_name(a)) + ": " + e;
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   if (phase_ == Phase::Fault) {
     err = "in fault; reset required";
     return false;
   }
   homing_.reset(new HomingPlan(std::move(plan)));
+  // Speed mode (velocity) for homing: the drive's own velocity loop holds the
+  // constant approach speed (SpdRef) — the smooth source of motion. This is
+  // the root-cause fix for the position-mode stick-slip (P0o): a host-regenerated
+  // moving LocRef at 200 Hz executes as stick-slip on this CyberGear, while a
+  // constant SpdRef is smooth. The per-axis homing current (pitch 3 A / yaw
+  // 1 A) is carried by the HomingController and applied on its first cycle
+  // (set_current_limit); here we enter speed mode with a hold default so the
+  // non-active axis has a sane current until the active axis is switched.
+  double limit_cur[kAxisCount];
+  for (int i = 0; i < kAxisCount; ++i) limit_cur[i] = 5.0;
   std::string e;
-  if (!enter_position_mode_all(cfg_.hold_speed_rad_s, e)) {
+  if (!enter_speed_mode_all(limit_cur, e)) {
     err = e;
     return false;
   }
@@ -142,11 +165,11 @@ bool ControlLoop::finalize_homing() {
   return true;
 }
 
-HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s) {
+HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s) {
   HomingFeedback fb;
   fb.t_ns = s.rx_ns;
   fb.pos_rad = s.q_rad;
-  fb.vel_rad_s = s.v_rad_s;
+  fb.vel_rad_s = vel_rad_s;
   fb.torque_nm = s.torque_nm;
   fb.motor_fault = (s.faults != 0);
   return fb;
@@ -158,6 +181,31 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   for (int i = 0; i < kAxisCount; ++i) {
     sp[i] = backend_->snapshot(static_cast<AxisId>(i), now_ns);
     last_q_[i] = sp[i].q_rad;  // for telemetry
+    // Position-derived velocity (see header): refresh only when fresh
+    // feedback arrives so the 200 Hz loop does not average in zeros.
+    if (sp[i].has_feedback && sp[i].rx_ns > v_est_t_prev_[i]) {
+      if (v_est_t_prev_[i] != 0) {
+        const double dt = (sp[i].rx_ns - v_est_t_prev_[i]) / 1e9;
+        if (dt >= 1e-3) {
+          const double v_inst = (sp[i].q_rad - v_est_q_prev_[i]) / dt;
+          const double alpha = dt / (kVestTauS + dt);
+          const double v_prev = v_est_[i];
+          v_est_[i] += alpha * (v_inst - v_est_[i]);
+          // Acceleration and jerk for telemetry capture (C1, A.1): filtered
+          // derivatives of the position-derived velocity. The drive's own
+          // velocity is a +/-0.05 rad/s noise band at rest and is never used.
+          const double a_inst = (v_est_[i] - v_prev) / dt;
+          const double alpha_a = dt / (kATauS + dt);
+          const double a_prev = a_est_[i];
+          a_est_[i] += alpha_a * (a_inst - a_est_[i]);
+          const double j_inst = (a_est_[i] - a_prev) / dt;
+          const double alpha_j = dt / (kJTauS + dt);
+          jerk_est_[i] += alpha_j * (j_inst - jerk_est_[i]);
+        }
+      }
+      v_est_t_prev_[i] = sp[i].rx_ns;
+      v_est_q_prev_[i] = sp[i].q_rad;
+    }
   }
 
   // 1a. Phase 8: execute any developer commands submitted via the web UI
@@ -177,11 +225,26 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
   }
 
-  // 2. §39.3 deadline watchdog: a cycle longer than the control period is a
-  //    miss; consecutive misses feed the supervisor.
+  // 2. §39.3 deadline watchdog. A cycle is a deadline miss only when its
+  //    overrun past the control period exceeds the configured grace
+  //    (deadline_max_us, default 2 ms) — the same threshold the supervisor
+  //    uses for its single-overrun Derate. A loop that runs a few tens of µs
+  //    over its period (ordinary host scheduling jitter; sleep-for wakeup
+  //    latency) is tolerated: such a cycle is not a miss and clears the
+  //    streak, so only (near-)consecutive true misses can escalate to Hold.
+  //    A persistently overloaded loop (every cycle over the grace) still
+  //    accumulates misses and Holds.
+  //    (History: counting every over-period cycle as a miss made a 198 Hz
+  //    loop Hold all axes within 5 cycles — the P0 no-motion root cause.
+  //    The first fix reset only on strictly on-time cycles, but on a host
+  //    where the period is always a hair over the deadline that branch never
+  //    executes, so five sporadic >2 ms spikes latched a permanent Hold —
+  //    the P0f root cause. Reset on any sub-grace cycle instead.)
   int64_t overrun_us = 0;
   if (period_ns > deadline_ns_) {
     overrun_us = (period_ns - deadline_ns_) / 1000;
+  }
+  if (overrun_us > static_cast<int64_t>(cfg_.deadline_max_us)) {
     ++deadline_miss_count_;
   } else {
     deadline_miss_count_ = 0;
@@ -227,7 +290,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   SupervisorInput in;
   for (int i = 0; i < kAxisCount; ++i) {
     in.axes[i].q_raw_rad = sp[i].q_rad;
-    in.axes[i].v_rad_s = sp[i].v_rad_s;
+    // Use the position-derived velocity (v_est_), NOT the drive's
+    // self-reported v_rad_s: the latter is a +/-0.05 rad/s noise band at
+    // rest (P0j) that trips the supervisor's Layer-3 stop_feasible ("stop
+    // infeasible before soft boundary") when a freshly-homed axis sits at a
+    // stop (just outside the inset soft limit, so distance_to_soft is
+    // negative). v_est_ is the trustworthy motion derivative — the same one
+    // the Fault phase uses for its at-rest gate.
+    in.axes[i].v_rad_s = v_est_[i];
     in.axes[i].has_feedback = sp[i].has_feedback;
     in.axes[i].feedback_age_ms =
         sp[i].has_feedback ? (now_ns - sp[i].rx_ns) / 1000000 : INT64_MAX;
@@ -245,6 +315,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
 
   // 4. Safety decision (authoritative).
   last_decision_ = supervisor_.evaluate(in);
+  // Low-rate observation of the safety ladder: log an action *transition*
+  // (rate-limited to at most once per 100 ms). High-frequency per-command
+  // logging in this loop (the P0 [DBG] change-detector) drove the cycle over
+  // its 200 Hz deadline and tripped the watchdog — P0h. A transition log is
+  // cheap and still reveals chatter (an oscillating action logs ~10x/s).
+  {
+    static int last_action = -1;
+    static TimeNs last_log_ns = 0;
+    const int action = static_cast<int>(last_decision_.action);
+    if (action != last_action && now_ns - last_log_ns >= 100'000'000) {
+      spdlog::info("supervisor: {} reason='{}' overrun_us={} misses={}",
+                   safety_action_name(last_decision_.action),
+                   last_decision_.reason, in.cycle_overrun_us,
+                   in.deadline_miss_count);
+      last_action = action;
+      last_log_ns = now_ns;
+    }
+  }
 
   // 5. Phase reference (per-axis q_ref, limit_spd). Default: hold in place.
   double q_ref[kAxisCount], lim[kAxisCount];
@@ -255,9 +343,26 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   switch (phase_) {
     case Phase::Homing: {
       const AxisId a = homing_->active_axis();
-      DesiredState ds = homing_->step(to_feedback(sp[ix(a)]));
-      q_ref[ix(a)] = ds.target_rad;
-      lim[ix(a)] = ds.hold ? 0.0 : ds.speed_rad_s;
+      // Position-derived velocity (v_est_), not the drive's noisy self-
+      // reported v: the MoveTo arrival test and the contact detector's
+      // motion/stall logic need a trustworthy velocity (P0j).
+      DesiredState ds = homing_->step(to_feedback(sp[ix(a)], v_est_[ix(a)]));
+      // Speed mode (velocity): command the constant speed (SpdRef) the drive's
+      // velocity loop should hold. The homing controller produces a signed
+      // velocity (approach +v·dir, back-off −v·dir, fine +v_f·dir, or 0 to
+      // hold). This is the root-cause fix for the position-mode stick-slip
+      // (P0o): the drive's own velocity loop is the smooth source of motion,
+      // not a host-regenerated moving LocRef.
+      backend_->command_velocity(a, ds.velocity_rad_s);
+      // Hold the non-active axis in place (SpdRef=0). It is in speed mode too
+      // (entered in start_homing); holding at its (low) homing current is fine
+      // — the axes are orthogonal, so a little drift doesn't affect the homing.
+      const AxisId other = (a == AxisId::Pitch) ? AxisId::Yaw : AxisId::Pitch;
+      backend_->command_velocity(other, 0.0);
+      // The homing carries the drive current limit on the cycle it changes it
+      // (the initial per-axis value). 0.0 = leave it unchanged. (Redundant with
+      // start_homing's enter_speed_mode, but keeps the controller authoritative.)
+      if (ds.limit_cur_a > 0.0) backend_->set_current_limit(a, ds.limit_cur_a);
       if (homing_->failed()) {
         fault("homing failed: " + homing_->fail_reason());
       } else if (homing_->complete()) {
@@ -354,8 +459,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Parking: {
-      ParkOutput po = park_->step(to_feedback(sp[ix(AxisId::Pitch)]),
-                                  to_feedback(sp[ix(AxisId::Yaw)]));
+      ParkOutput po = park_->step(
+          to_feedback(sp[ix(AxisId::Pitch)], v_est_[ix(AxisId::Pitch)]),
+          to_feedback(sp[ix(AxisId::Yaw)], v_est_[ix(AxisId::Yaw)]));
       q_ref[ix(AxisId::Pitch)] = po.pitch.target_rad;
       lim[ix(AxisId::Pitch)] = po.pitch.hold ? 0.0 : po.pitch.speed_rad_s;
       q_ref[ix(AxisId::Yaw)] = po.yaw.target_rad;
@@ -368,9 +474,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
     case Phase::Fault: {
       // Controlled stop: keep braking while moving, then hold in place.
+      // Use the position-derived velocity (v_est_), NOT the drive's
+      // self-reported v_rad_s: the latter is a ±0.05 rad/s noise band at rest
+      // (P0j) that chatters the kAtRestVelRadS gate and ping-ponged the
+      // emergency-stop reference at 1 Hz while the axis was actually stopped.
       for (int i = 0; i < kAxisCount; ++i) {
-        if (std::fabs(sp[i].v_rad_s) > kAtRestVelRadS) {
-          q_ref[i] = env_.emergency_stop_target(sp[i].q_rad, sp[i].v_rad_s,
+        if (std::fabs(v_est_[i]) > kAtRestVelRadS) {
+          q_ref[i] = env_.emergency_stop_target(sp[i].q_rad, v_est_[i],
                                                 limits_[i]);
           lim[i] = cfg_.emergency_speed_rad_s;
         } else {
@@ -404,7 +514,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         break;
       case SafetyAction::Brake:
       case SafetyAction::FaultStop:
-        qr = env_.emergency_stop_target(sp[i].q_rad, sp[i].v_rad_s, limits_[i]);
+        // Position-derived velocity (v_est_), as in the Fault phase: the
+        // drive's self-reported v is a noise band at rest (P0j) that would
+        // ping-pong the stop reference each cycle.
+        qr = env_.emergency_stop_target(sp[i].q_rad, v_est_[i], limits_[i]);
         ls = cfg_.emergency_speed_rad_s;
         break;
       case SafetyAction::Disable:
@@ -413,7 +526,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         do_command = false;
         break;
     }
-    if (do_command) backend_->command(a, qr, ls);
+    if (do_command) {
+      if (sp[i].in_speed_mode) {
+        // Speed mode (homing): the motion reference is the SpdRef command from
+        // the Homing phase, NOT the position-mode (qr, ls). command() is a
+        // position-mode reference — issuing it here would switch the axis out
+        // of speed mode and reintroduce the stick-slip. On a safety action
+        // (anything but Allow) command a controlled stop (SpdRef=0); the
+        // velocity loop decelerates smoothly to rest.
+        if (last_decision_.action != SafetyAction::Allow)
+          backend_->command_velocity(a, 0.0);
+      } else {
+        backend_->command(a, qr, ls);
+      }
+    }
   }
 
   // 7. Fault transitions (a fault is sticky; it needs a manual reset).
@@ -435,6 +561,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.q_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].q_rad;
     rec.v_actual[ix(AxisId::Pitch)] = sp[ix(AxisId::Pitch)].v_rad_s;
     rec.v_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].v_rad_s;
+    // Position-derived acceleration / jerk (C1, A.1): the trustworthy motion
+    // derivatives for smoothness observation and jitter-threshold tuning.
+    rec.a_actual[ix(AxisId::Pitch)] = a_est_[ix(AxisId::Pitch)];
+    rec.a_actual[ix(AxisId::Yaw)] = a_est_[ix(AxisId::Yaw)];
+    rec.jerk_actual[ix(AxisId::Pitch)] = jerk_est_[ix(AxisId::Pitch)];
+    rec.jerk_actual[ix(AxisId::Yaw)] = jerk_est_[ix(AxisId::Yaw)];
     rec.q_ref[ix(AxisId::Pitch)] = q_ref[ix(AxisId::Pitch)];
     rec.q_ref[ix(AxisId::Yaw)] = q_ref[ix(AxisId::Yaw)];
     rec.safety_action = last_decision_.action;

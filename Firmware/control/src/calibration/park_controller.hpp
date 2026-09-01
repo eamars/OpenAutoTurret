@@ -120,7 +120,9 @@ class ParkController {
            std::fabs(fb.vel_rad_s) < vel_tol_rad_s;
   }
   static DesiredState hold(const HomingFeedback& fb) {
-    return DesiredState{fb.pos_rad, 0.0, true, "hold"};
+    // Field order is {target_rad, speed_rad_s, velocity_rad_s, hold, message,
+    // limit_cur_a} — the velocity field must be 0.0 (hold in place), not true.
+    return DesiredState{fb.pos_rad, 0.0, 0.0, true, "hold"};
   }
 
   ParkParams p_;

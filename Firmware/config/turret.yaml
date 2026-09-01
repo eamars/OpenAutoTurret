@@ -25,41 +25,128 @@ control:
 
 axes:
   pitch:
-    # Wide band that contains the observed ~-86 deg position; refine after the
-    # first homing measures the true mechanical travel (§58 params 1-3).
-    expected_travel_deg: { min: -120, max: 120 }
+    # Refined after the first speed-mode homing (p0p): the measured full-range
+    # travel is ~80 deg (POC min_travel is 75 deg, so this is the true
+    # mechanical span). The sanity band is [0.5x, 1.5x] of the span, so a span
+    # of ~140 deg gives [70, 210] deg, which contains the measured 79.5 deg with
+    # margin while still catching a short (stopped-early) or over-travel fault.
+    expected_travel_deg: { min: -70, max: 70 }
     soft_margin_deg: 5
     max_velocity_deg_s: 30
     max_acceleration_deg_s2: 60
     max_jerk_deg_s3: 300
+    # Speed-mode homing: the drive current limit (A) for pitch. The POC
+    # reference (zero_pitch_axis) runs pitch at 3 A — high enough to reach and
+    # latch the mechanical stop, low enough that friction notches slip. Written
+    # to LimitCur (0x7018) on the homing cycle.
+    limit_cur_a: 3.0
   yaw:
-    expected_travel_deg: { min: -180, max: 180 }
+    # YAW IS A ~360 DEG CONTINUOUS-ROTATION AXIS (user-confirmed). The P0k
+    # "end-stops" at raw -1.214..+0.811 rad were FALSE contacts (friction
+    # stalls the old stop-at-first-contact homing latched before reaching the
+    # real mechanical stops). The homing no longer assumes an angle: it pushes
+    # until the mechanical end-stop or >max_rotation_deg (360) of rotation.
+    # The band below only sanity-checks the measured span (~360 deg) and is
+    # generous: [0.5x, 1.5x] of the 360 deg span = [180, 540] deg.
+    expected_travel_deg: { min: 0, max: 360 }
     soft_margin_deg: 5
     max_velocity_deg_s: 30
     max_acceleration_deg_s2: 60
     max_jerk_deg_s3: 300
+    # Speed-mode homing: the drive current limit (A) for yaw. The POC reference
+    # (zero_yaw_axis) runs yaw at just 1 A — the friction notches SLIP at this
+    # current (they never stay stable over the 1.5 s stop window), so only the
+    # true mechanical end-stop latches as a stop. Do NOT raise this: a higher
+    # current makes the notches hold and produce false stops.
+    limit_cur_a: 1.0
 
 homing:
   contact:
-    coarse_speed_deg_s: 10      # slow coarse approach (§58 params 8, 10)
-    fine_speed_deg_s: 1         # very slow fine approach
-    current_or_effort_limit: 3.0
-    stall_velocity_threshold: 0.5   # rad/s; below this = stalled/in contact
-    contact_dwell_ms: 200
+    # Speed-mode (velocity) homing: the drive's own velocity loop holds these
+    # constant speeds (SpdRef), the smooth source of motion. Values follow the
+    # POC reference (zero_pitch_axis 0.5 rad/s, zero_yaw_axis 0.8 rad/s); a
+    # single coarse speed is used for both axes (slower than yaw's POC value,
+    # safely above the friction-notch slip threshold).
+    coarse_speed_deg_s: 30      # ~0.52 rad/s coarse approach (§58 params 8, 10)
+    # Fine approach: slower than coarse for a repeatable, stable re-latch at
+    # the end-stop (repeatability pass). ~0.26 rad/s.
+    fine_speed_deg_s: 15
+    # Pushing-confirmation threshold (N.m): the drive's stop-push torque scales
+    # with LimitCur, so at the POC homing currents (yaw 1 A / pitch 3 A) it is
+    # far below the 0.25 N.m measured at higher currents (P0e). Set low so the
+    # "drive is pushing" gate is satisfied at 1 A while a true stop's sustained
+    # stall (1.5 s) does the real discrimination. Calibrate on the supervised run.
+    current_or_effort_limit: 0.05
+    stall_velocity_threshold: 0.5   # rad/s; contact-gate stall (above approach
+                                    # speed, so position-progress is the real
+                                    # discriminator). Do NOT use for jitter.
+    # Jitter/recovery "moving" threshold (rad/s): a breakaway stall is the
+    # drive moving at approach speed, stalling, then moving again. Must sit
+    # BELOW the approach speed (coarse 10 deg/s = 0.175, fine 20 deg/s =
+    # 0.349) and above filtered rest noise. Tuned in A.3 on clean vs jittery
+    # data (drive_current_friction_tuning.md §3.4).
+    v_move_threshold: 0.10
+    # P0j: reject the drive's slow-start ramp (creeps 0.5-1.6 deg/s while
+    # pushing 0.2-0.45 N.m against local loads, misread as contact 37 deg
+    # short of the true end-stop). Contact now also requires the axis to have
+    # reached motion_history_velocity since the approach began, OR a sustained
+    # push of at least effort_hard_contact_nm (the measured end-stop plateau
+    # 0.43-0.73 N.m). A true coarse stop is reached at ~10 deg/s (0.17 rad/s),
+    # well above the ramp's 0.028 rad/s peak.
+    effort_hard_contact_nm: 0.40
+    motion_history_velocity: 0.05   # rad/s
+    # POC stability window: a genuine mechanical stop stays stable; a friction
+    # notch SLIPS before 1.5 s. Require the stalled+pushing candidate to persist
+    # for 1.5 s (matching the POC zero_axis 3x0.5 s position-span window) so a
+    # briefly-holding notch cannot false-positive as a stop. This is the speed-
+    # mode analogue of the POC's "position steady ~1.5 s + drive pushing" test.
+    contact_dwell_ms: 1500
     backoff_deg: 5
     repeatability_deg: 0.5
+    # --- Speed-mode homing safety limits ---
+    # No adaptive current raise: the homing runs at the per-axis limit_cur_a
+    # (pitch 3 A / yaw 1 A) for the whole approach. At these currents the
+    # friction notches slip (never stable over the stop window), so a latched
+    # contact is the true mechanical end-stop. (limit_cur_step_a /
+    # limit_cur_max_a are legacy position-mode push-through parameters; 0 =
+    # no raise, which is the speed-mode behavior.)
+    limit_cur_step_a: 0.0
+    limit_cur_max_a: 0.0
+    max_rotation_deg: 360.0  # coarse-approach rotation cap; >this = no stop found
+    # |tau| above this aborts the push to protect the mechanical end-stop.
+    # CONSERVATIVE first-run value (measured end-stop push is 0.43-0.73 N.m);
+    # the run logs peak + at-contact torque so we dial this in together.
+    torque_safety_nm: 10.0
 
 # §25.2 executable multi-axis homing plan. Default for the simple pitch/yaw
-# gimbal: home each axis across its full mechanical range, yaw then pitch.
+# gimbal: home each axis across its full mechanical range, PITCH then YAW
+# (matches the POC zero_all order; pitch is a bounded axis and homes reliably
+# first, so a failure is diagnosed before the long 360 deg yaw sweep).
 # There is no articulated payload or known fixed obstruction, so no clearance
 # `move` steps are required. If the mechanism gains a payload or an obstruction
 # that forces one axis to a safe angle before another traverses, insert `move`
 # steps between the homes (architecture §25 / §25.2); the interpreter already
 # supports home_endpoint / move / home_full_range.
+# Multi-axis homing plan (§25). The axes are mechanically coupled: an axis
+# left at a mechanical stop dangles and can steal the OTHER axis's range. So
+# after each axis is homed it is parked at a safe mid-travel pose before the
+# next axis is homed. Because yaw's orientation sets pitch's usable range,
+# pitch is re-zeroed LAST (at the final yaw pose) so its reference is valid
+# for the operating orientation. `position_deg` is logical (low stop = 0,
+# high stop = travel), so mid-travel ~= travel/2:
 homing_plan:
+  - action: home_full_range
+    axis: pitch
+    precision: fine
+  - action: move          # park pitch mid-travel so it doesn't dangle during yaw home
+    axis: pitch
+    position_deg: 40      # ~mid-travel of ~80 deg; adjust to the true no-dangle pose
   - action: home_full_range
     axis: yaw
     precision: fine
+  - action: move          # park yaw mid-travel so it doesn't dangle during pitch re-home
+    axis: yaw
+    position_deg: 180     # mid-travel of the ~360 deg yaw
   - action: home_full_range
     axis: pitch
     precision: fine
@@ -80,7 +167,15 @@ shutdown:
 
 # §38/§39 safety supervisor + watchdog tuning.
 safety:
-  feedback_max_age_ms: 100      # §39.2 stale motor feedback -> no open-loop
+  # §39.2 stale motor feedback -> no open-loop.
+  # 100 ms (architecture §39.2 default). The CyberGear emits feedback
+  # ONLY in response to a command (CyberGear_AI_Reference.md §21 — no
+  # periodic telemetry), so CanMotorBackend::command() sends a
+  # same-value LimitSpd keepalive write whenever feedback ages past
+  # 30 ms; the age therefore stays below ~40 ms in normal operation and
+  # 100 ms remains a genuine loss-of-feedback detector (a dead drive or
+  # dropped bus trips the brake within ~100 ms).
+  feedback_max_age_ms: 100
   deadline_max_us: 2000         # §39.3 cycle longer than this counts as a miss
   deadline_miss_threshold: 5    # misses in the window before a derate
   motor_overtemp_c: 75.0        # §38 over-temperature fault threshold

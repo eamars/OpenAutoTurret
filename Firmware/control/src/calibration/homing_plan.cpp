@@ -66,15 +66,18 @@ DesiredState CoarseEndpointHome::step(const HomingFeedback& fb) {
     // on contact (or the timeout/travel limit), well short of this target. The
     // speed is a positive magnitude; the direction is implied by the target.
     const double target = fb.pos_rad + p_.max_travel_rad * dir_;
-    return DesiredState{target, p_.coarse_speed_rad_s, false, "coarse approach to stop"};
+    // The velocity-mode executor commands ds.velocity_rad_s, so it must carry
+    // the SIGNED approach speed (magnitude * direction), not just the magnitude.
+    const double v = p_.coarse_speed_rad_s * static_cast<double>(dir_);
+    return DesiredState{target, p_.coarse_speed_rad_s, v, false, "coarse approach to stop"};
   }
   if (st_ == St::Settling) {
-    return DesiredState{fb.pos_rad, 0.0, true, "settling after coarse contact"};
+    return DesiredState{fb.pos_rad, 0.0, 0.0, true, "settling after coarse contact"};
   }
   if (st_ == St::Complete) {
-    return DesiredState{contact_rad_, 0.0, true, "coarse endpoint homed"};
+    return DesiredState{contact_rad_, 0.0, 0.0, true, "coarse endpoint homed"};
   }
-  return DesiredState{fb.pos_rad, 0.0, true, "coarse home failed: " + fail_reason_};
+  return DesiredState{fb.pos_rad, 0.0, 0.0, true, "coarse home failed: " + fail_reason_};
 }
 
 // ---------------------------------------------------------------------------
@@ -120,19 +123,25 @@ void HomingPlan::start_action() {
   move_.reset();
 
   const size_t i = ix(a.axis);
+  // Per-axis initial drive current (adaptive-current homing, §22): apply it to
+  // the shared params for this action's axis (0 = keep the HomingParams default).
+  HomingParams axis_homing = cfg_.homing;
+  if (cfg_.limit_cur_initial_a[i] > 0.0) {
+    axis_homing.limit_cur_initial_a = cfg_.limit_cur_initial_a[i];
+  }
   switch (a.type) {
     case HomingActionType::HomeEndpoint: {
       const int dir = (a.endpoint == Endpoint::Lower) ? -1 : +1;
       if (a.precision == Precision::Coarse) {
-        coarse_.emplace(a.axis, dir, cfg_.homing);
+        coarse_.emplace(a.axis, dir, axis_homing);
       } else {
-        home_.emplace(a.axis, dir, cfg_.homing);
+        home_.emplace(a.axis, dir, axis_homing);
       }
       break;
     }
     case HomingActionType::HomeFullRange: {
       FullAxisHomingParams fp;
-      fp.homing = cfg_.homing;
+      fp.homing = axis_homing;
       fp.dir_endpoint_a = +1;
       fp.dir_endpoint_b = -1;
       const TravelBand& band = cfg_.travel_bands[i];
@@ -250,8 +259,9 @@ void HomingPlan::record_action_result() {
 }
 
 DesiredState HomingPlan::step(const HomingFeedback& fb) {
-  if (complete_) return DesiredState{0.0, 0.0, true, "homing plan complete"};
-  if (failed_) return DesiredState{0.0, 0.0, true, "homing plan failed: " + fail_reason_};
+  if (complete_) return DesiredState{0.0, 0.0, 0.0, true, "homing plan complete"};
+  if (failed_)
+    return DesiredState{0.0, 0.0, 0.0, true, "homing plan failed: " + fail_reason_};
 
   DesiredState ds;
   bool sub_terminal = false;

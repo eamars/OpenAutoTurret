@@ -54,6 +54,26 @@ TEST(SafetyEnvelope, StopFeasibleFarAndSlow) {
   EXPECT_FALSE(env.stop_feasible(-0.9, -0.05, lim));
 }
 
+TEST(SafetyEnvelope, AtRestAtBoundaryIsFeasible) {
+  // Regression (root cause #2): the supervisor must feed a position-derived
+  // velocity (v_est_), NOT the drive's noisy self-reported v. At a mechanical
+  // stop the axis sits OUTSIDE the inset soft limit, so the drive's at-rest
+  // noise band (±0.05 rad/s) defeats the at-rest exemption and stop_feasible
+  // fails -> spurious BRAKE flapping. A truly at-rest velocity (what v_est_
+  // reports at a stop) must pass the at-rest exemption.
+  const auto env = make_env();
+  const auto lim = make_limits();
+  // At the lower soft boundary (-0.9) with the drive's noisy at-rest sample
+  // (0.05 rad/s): infeasible (this is the bug the v_est_ fix removes).
+  EXPECT_FALSE(env.stop_feasible(-0.9, -0.05, lim));
+  // A truly at-rest velocity (0.0, what v_est_ reports at a stop): feasible.
+  EXPECT_TRUE(env.stop_feasible(-0.9, 0.0, lim));
+  // Below the at_rest threshold (1e-3 rad/s): also feasible.
+  EXPECT_TRUE(env.stop_feasible(-0.9, -0.0005, lim));
+  SUCCEED();
+}
+
+
 TEST(SafetyEnvelope, StopInfeasibleNearBoundaryAndFast) {
   const auto env = make_env();
   const auto lim = make_limits();

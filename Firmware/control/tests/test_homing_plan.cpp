@@ -123,6 +123,94 @@ struct Plant {
   }
 };
 
+  // A velocity-mode (SpdRef) executor plant, matching the control loop's homing
+  // phase: the axis follows the SIGNED ds.velocity_rad_s (not speed_rad_s toward
+  // target_rad). This is the executor the homing plan actually drives, so it is
+  // the model that exercises the MoveTo signed-velocity command. Stop handling
+  // and the contact/effort model mirror TwoStopAxis so the contact detector
+  // (used by full-range homing) still latches.
+  struct VelAxis {
+    double stop_low = -1.0;
+    double stop_high = +1.0;
+    double drive_effort = 1.0;
+    double contact_effort = 5.0;
+    double noise = 0.05;
+
+    double q = 0.0;
+    double v = 0.0;
+    double torque = 0.0;
+    bool at_stop = false;
+    int stop_side = 0;
+
+    void reset(double start_q, double low, double high) {
+      q = start_q; v = 0.0; torque = 0.0;
+      at_stop = false; stop_side = 0;
+      stop_low = low; stop_high = high;
+    }
+
+    void step(const DesiredState& ds) {
+      const double v_cmd = ds.hold ? 0.0 : ds.velocity_rad_s;
+      const double alpha = kDtS / (0.05 + kDtS);
+      v += alpha * (v_cmd - v);
+      if (at_stop) {
+        const bool away = (stop_side < 0 && v_cmd > 0) || (stop_side > 0 && v_cmd < 0);
+        if (away) { at_stop = false; stop_side = 0; }
+        else { q = (stop_side > 0) ? stop_high : stop_low; v = 0.0; }
+      }
+      if (!at_stop) {
+        const double dq = v * kDtS;
+        if (dq >= 0 && q + dq >= stop_high) {
+          q = stop_high; v = 0.0; at_stop = true; stop_side = +1;
+        } else if (dq <= 0 && q + dq <= stop_low) {
+          q = stop_low; v = 0.0; at_stop = true; stop_side = -1;
+        } else { q += dq; }
+      }
+      const bool pushing = at_stop &&
+                           ((stop_side > 0 && v_cmd > 0) || (stop_side < 0 && v_cmd < 0));
+      const int dir_cmd = (v_cmd >= 0) ? 1 : -1;
+      const int dir_v = (v >= 0) ? 1 : -1;
+      if (pushing) torque = contact_effort * dir_cmd;
+      else if (std::fabs(v) > 1e-3) torque = drive_effort * dir_v;
+      else torque = 0.0;
+    }
+
+    HomingFeedback feedback(int64_t t_ns) const {
+      HomingFeedback fb;
+      fb.t_ns = t_ns;
+      fb.pos_rad = q;
+      fb.vel_rad_s = v + std::sin(t_ns / 1e5) * noise;
+      fb.torque_nm = torque + std::sin(t_ns / 3e4) * 0.1;
+      fb.motor_fault = false;
+      return fb;
+    }
+  };
+
+  struct VelPlant {
+    VelAxis pitch;
+    VelAxis yaw;
+    HomingFeedback feedback(AxisId a, int64_t t) const {
+      return (a == AxisId::Pitch) ? pitch.feedback(t) : yaw.feedback(t);
+    }
+    void step(AxisId a, const DesiredState& ds) {
+      if (a == AxisId::Pitch) pitch.step(ds);
+      else yaw.step(ds);
+    }
+  };
+
+  int run_plan_vel(HomingPlan& plan, VelPlant& plant, int max_steps) {
+    int64_t t = 0;
+    for (int i = 0; i < max_steps; ++i) {
+      const AxisId a = plan.active_axis();
+      HomingFeedback fb = plant.feedback(a, t);
+      DesiredState ds = plan.step(fb);
+      plant.step(a, ds);
+      t += kDtNs;
+      if (plan.complete() || plan.failed()) return i + 1;
+    }
+    return max_steps;
+  }
+
+
 int run_plan(HomingPlan& plan, Plant& plant, int max_steps) {
   int64_t t = 0;
   for (int i = 0; i < max_steps; ++i) {
@@ -316,3 +404,48 @@ TEST(HomingPlan, EndpointFailurePropagates) {
       << plan.fail_reason();
   SUCCEED();
 }
+
+TEST(HomingPlan, MoveToSignedVelocityVelMode) {
+  // Regression: the velocity-mode executor (the homing phase drives via SpdRef)
+  // commands ds.velocity_rad_s. MoveTo must emit a SIGNED velocity (a magnitude-
+  // only / zero-velocity command would never move the axis and would time out).
+  // Here a full-range home (velocity-mode) establishes the reference, then a
+  // move to logical +60° must actually drive the axis to the target.
+  VelPlant plant;
+  plant.pitch.reset(0.0, -1.0, +1.0);
+  plant.yaw.reset(0.0, -1.0, +1.0);
+  HomingPlan plan({full_range(AxisId::Pitch), move_to(AxisId::Pitch, 60.0)}, make_cfg());
+
+  run_plan_vel(plan, plant, 30000);
+  EXPECT_TRUE(plan.complete()) << plan.fail_reason();
+  // logical 60° => raw = -1.0 + 60°(rad) = -1.0 + 1.0472 = +0.0472.
+  EXPECT_NEAR(plant.pitch.q, -1.0 + 60.0 * kDeg2Rad, 0.02);
+  SUCCEED();
+}
+
+TEST(HomingPlan, SafeParkSequenceVelMode) {
+  // Regression for the user's safe-park requirement: home pitch -> park pitch
+  // mid-travel -> home yaw -> park yaw mid-travel -> re-home pitch. The pitch
+  // re-home is LAST because the yaw pose sets the pitch's available range
+  // ("nothing dangles causing reduced range"). The move actions run in
+  // velocity mode, so this also exercises the MoveTo signed-velocity command
+  // between each home and the next axis's home.
+  VelPlant plant;
+  plant.pitch.reset(0.0, -1.0, +1.0);
+  plant.yaw.reset(0.0, -1.0, +1.0);
+  HomingPlan plan(
+      {full_range(AxisId::Pitch),
+       move_to(AxisId::Pitch, 30.0),   // safe pose (~mid-travel of the sim span)
+       full_range(AxisId::Yaw),
+       move_to(AxisId::Yaw, 30.0),     // safe pose (~mid-travel of the sim span)
+       full_range(AxisId::Pitch)},     // pitch zero is LAST
+      make_cfg());
+
+  run_plan_vel(plan, plant, 60000);
+  EXPECT_TRUE(plan.complete()) << plan.fail_reason();
+  EXPECT_FALSE(plan.failed());
+  EXPECT_TRUE(plan.axis_homed(AxisId::Pitch));
+  EXPECT_TRUE(plan.axis_homed(AxisId::Yaw));
+  SUCCEED();
+}
+
