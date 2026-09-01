@@ -194,8 +194,33 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   if (tracking_ && phase_ == Phase::Hold) {
     tracking_ref_ = tracking_->compute_reference(
         now_ns, ready_raw_[ix(AxisId::Pitch)], ready_raw_[ix(AxisId::Yaw)]);
+    // §28.5/§31.3: the payload profile v_max (and any mismatch derate) caps
+    // the tracking speed.
+    tracking_ref_.v_max_rad_s =
+        std::min(tracking_ref_.v_max_rad_s, hold_speed_effective());
     tracking_->record_pose(sp[ix(AxisId::Yaw)].q_rad);
     tracking_->record_reference(tracking_ref_);
+  }
+
+  // 2c. Phase 9: payload verification (§27, §31.3, §42.2). A web-commanded
+  //     check (validated in process_commands) starts here, on the control
+  //     thread, with the real cycle timestamp. The §27 OPTIONAL_PAYLOAD_
+  //     RESPONSE_CHECK stage runs once per boot: post-homing, on first hold,
+  //     at rest, before READY_HOLD — only when a profile is loaded (verifying
+  //     against a baseline is the point; profiling is the tool's job, §44).
+  if (payload_check_requested_) {
+    payload_check_requested_ = false;
+    start_payload_check(now_ns, true);
+  } else if (cfg_.payload_auto_verify && !payload_auto_done_ &&
+             phase_ == Phase::Hold && !tracking_ && at_ready_ &&
+             payload_profile_.has_value()) {
+    bool at_rest = true;
+    for (int i = 0; i < kAxisCount; ++i)
+      if (std::fabs(sp[i].v_rad_s) > kAtRestVelRadS) at_rest = false;
+    if (at_rest) {
+      payload_auto_done_ = true;
+      start_payload_check(now_ns, false);
+    }
   }
 
   // 3. Build the supervisor input.
@@ -278,19 +303,53 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double target =
               env_.constrain_reference(test_motion_target_rad_, limits_[i]);
           q_ref[i] = target;
-          lim[i] = std::min(cfg_.hold_speed_rad_s,
+          lim[i] = std::min(hold_speed_effective(),
                             env_.max_speed_at(target, limits_[i]));
           at_ready_ = false;
           continue;
         }
         if (std::fabs(sp[i].q_rad - ready_raw_[i]) > kReadyPosTolRad) {
           q_ref[i] = ready_raw_[i];
-          lim[i] = cfg_.hold_speed_rad_s;
+          lim[i] = hold_speed_effective();
           at_ready_ = false;
         } else {
           q_ref[i] = sp[i].q_rad;
           lim[i] = 0.0;
         }
+      }
+      break;
+    }
+    case Phase::PayloadCheck: {
+      // Phase 9: one axis at a time (pitch, then yaw); the other axis holds.
+      // The check stepper is a pure reference computer; the loop commands
+      // (so the supervisor above keeps authority, §38).
+      for (int i = 0; i < kAxisCount; ++i) {
+        q_ref[i] = sp[i].q_rad;
+        lim[i] = 0.0;
+      }
+      auto& check = payload_checks_[payload_axis_ix_];
+      if (!check.active() && !check.failed()) {
+        if (!check.begin(now_ns, sp[payload_axis_ix_].q_rad,
+                         sp[payload_axis_ix_].has_feedback)) {
+          abort_payload_check(now_ns, check.fail_reason());
+          break;
+        }
+      }
+      if (check.active()) {
+        const auto out = check.step(now_ns, sp[payload_axis_ix_]);
+        q_ref[payload_axis_ix_] = out.q_ref_rad;
+        lim[payload_axis_ix_] = out.limit_spd_rad_s;
+        if (!check.active()) {
+          if (payload_axis_ix_ == 0) {
+            payload_axis_ix_ = 1;  // begin the yaw check next cycle
+          } else if (!check.failed()) {
+            finish_payload_check(now_ns);
+          } else {
+            abort_payload_check(now_ns, check.fail_reason());
+          }
+        }
+      } else if (check.failed()) {
+        abort_payload_check(now_ns, check.fail_reason());
       }
       break;
     }
@@ -407,6 +466,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.safety_action = last_decision_.action;
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
+    // Phase 9: payload profile status (§42.1, §31.3).
+    snap.payload_profile_name = payload_profile_ ? payload_profile_->name : "";
+    snap.payload_profile_status =
+        payload::payload_status_name(payload_status_);
+    snap.payload_derated = payload_derated_;
+    snap.payload_check_active = (phase_ == Phase::PayloadCheck);
     // Phase 7: world-frame telemetry (§29/§30) — base tilt + world-frame LOS
     // from the active R_W_B. Makes tracking world-correct for a tilted base.
     double az_base = 0.0, el_base = 0.0;
@@ -428,6 +493,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         tracking_ && tracking_->track_state() == tracking::TrackState::Search;
     command_state_.moving = (phase_ == Phase::Homing) ||
                             (phase_ == Phase::Parking) ||
+                            (phase_ == Phase::PayloadCheck) ||
                             (last_decision_.action != SafetyAction::Allow &&
                              last_decision_.action != SafetyAction::Hold);
     command_state_.limits_valid =
@@ -441,6 +507,106 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
 
   return phase_;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9: payload profiling / verification (§28.5, §31.3, §41).
+// ---------------------------------------------------------------------------
+
+void ControlLoop::set_payload_profile(payload::PayloadProfile pr) {
+  if (phase_ == Phase::PayloadCheck) return;  // never swap mid-check
+  payload_profile_ = std::move(pr);
+  // A commissioned profile is trusted (§28.5) until a verification says
+  // otherwise; a fresh profile clears any earlier mismatch derate (this is
+  // the repeatable-commissioning path, §28.5/§31.3).
+  payload_status_ = payload::PayloadStatus::Ok;
+  payload_detail_ = "profile loaded: " + payload_profile_->name;
+  apply_payload_derate(false);
+}
+
+double ControlLoop::hold_speed_effective() const {
+  double v = cfg_.hold_speed_rad_s;
+  if (payload_profile_) {
+    // §28.5: the profiled safe v_max caps station motion.
+    if (payload_profile_->pitch.v_max_rad_s > 0.0)
+      v = std::min(v, payload_profile_->pitch.v_max_rad_s);
+    if (payload_profile_->yaw.v_max_rad_s > 0.0)
+      v = std::min(v, payload_profile_->yaw.v_max_rad_s);
+  }
+  if (payload_derated_) v *= cfg_.derate_factor;  // §31.3 conservative path
+  return v;
+}
+
+void ControlLoop::apply_payload_derate(bool derated) {
+  payload_derated_ = derated;
+  // Cap the safety-envelope v_max (it bounds the tracking reference, §15):
+  // derated -> profile-capped hold speed * derate factor.
+  double cap = derated ? cfg_.derate_factor * cfg_.hold_speed_rad_s
+                       : cfg_.hold_speed_rad_s;
+  if (payload_profile_) {
+    if (payload_profile_->pitch.v_max_rad_s > 0.0)
+      cap = std::min(cap, payload_profile_->pitch.v_max_rad_s);
+    if (payload_profile_->yaw.v_max_rad_s > 0.0)
+      cap = std::min(cap, payload_profile_->yaw.v_max_rad_s);
+  }
+  env_.set_v_max(cap);
+}
+
+void ControlLoop::start_payload_check(TimeNs now_ns, bool manual) {
+  if (phase_ == Phase::Fault || phase_ == Phase::PayloadCheck) return;
+  if (!homed_) return;
+  // The check takes over the axes: drop any tracking reference first.
+  if (tracking_) disable_tracking();
+  payload_check_cfg_ = payload::PayloadCheckConfig{};
+  payload_check_cfg_.step_amplitude_rad = cfg_.payload_check_step_deg * kDeg2Rad;
+  payload_check_cfg_.speed_rad_s = cfg_.payload_check_speed_deg_s * kDeg2Rad;
+  const payload::PayloadProfile* prof =
+      payload_profile_ ? &*payload_profile_ : nullptr;
+  for (int i = 0; i < kAxisCount; ++i)
+    payload_checks_[i] = payload::PayloadCheck(
+        payload_check_cfg_, prof, static_cast<AxisId>(i));
+  payload_axis_ix_ = 0;
+  payload_check_manual_ = manual;
+  phase_ = Phase::PayloadCheck;
+  telemetry_.push_event(now_ns, telemetry::Event::PayloadVerifyStarted,
+                        manual ? "manual (start_payload_verification)"
+                               : "auto (§27 optional stage)");
+  spdlog::info("payload check started (manual={}, profile={})", manual,
+               payload_profile_ ? payload_profile_->name : std::string("none"));
+}
+
+void ControlLoop::finish_payload_check(TimeNs now_ns) {
+  payload::VerifyResult vr;
+  for (int i = 0; i < kAxisCount; ++i) vr.axes[i] = payload_checks_[i].axis_result();
+  const bool profile_loaded = payload_profile_.has_value();
+  vr.status = payload::overall_status(vr.axes, profile_loaded);
+  std::string detail = payload::payload_status_name(vr.status);
+  for (int i = 0; i < kAxisCount; ++i)
+    for (const auto& v : vr.axes[i].violations) detail += "; " + v;
+  vr.detail = detail;
+  const auto d = payload::decide(vr, cfg_.derate_factor);
+  payload_status_ = vr.status;
+  payload_detail_ = d.action + (detail != payload::payload_status_name(vr.status)
+                                    ? " — " + detail
+                                    : std::string());
+  if (d.derate != payload_derated_) apply_payload_derate(d.derate);
+  phase_ = Phase::Hold;
+  if (vr.status == payload::PayloadStatus::Ok)
+    telemetry_.push_event(now_ns, telemetry::Event::PayloadVerifyOk, detail);
+  else if (vr.status == payload::PayloadStatus::Mismatch)
+    telemetry_.push_event(now_ns, telemetry::Event::PayloadVerifyMismatch, detail);
+  else
+    telemetry_.push_event(now_ns, telemetry::Event::PayloadVerifyError, detail);
+  spdlog::info("payload check complete: {} (derated={})", payload_detail_,
+               payload_derated_);
+}
+
+void ControlLoop::abort_payload_check(TimeNs now_ns, const std::string& reason) {
+  payload_status_ = payload::PayloadStatus::Error;
+  payload_detail_ = reason;
+  phase_ = Phase::Hold;
+  telemetry_.push_event(now_ns, telemetry::Event::PayloadVerifyError, reason);
+  spdlog::warn("payload check aborted: {}", reason);
 }
 
 // ---------------------------------------------------------------------------
@@ -505,10 +671,18 @@ void ControlLoop::execute_command(const std::string& name,
     has_test_motion_ = true;
     return;
   }
+  if (name == "start_payload_verification") {
+    // Phase 9 (§31.3, §42.2): begin the payload response check. The web gate
+    // already required homed && !fault && !moving; the actual start happens in
+    // step() (2c) so it runs on the control thread with the cycle timestamp.
+    if (phase_ == Phase::Hold) payload_check_requested_ = true;
+    else spdlog::warn("start_payload_verification: not in hold (phase={})",
+                      phase_name(phase_));
+    return;
+  }
   if (name == "select_target" || name == "enable_search" ||
       name == "disable_search" || name == "start_homing" ||
-      name == "start_installation_calibration" ||
-      name == "start_payload_verification") {
+      name == "start_installation_calibration") {
     // These are validated here but acted on by the tracking/vision subsystem or
     // an external tool (see webd). Acknowledge so the UI can proceed.
     return;

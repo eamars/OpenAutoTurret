@@ -94,3 +94,7 @@ installation:
 
 payload:
   active_profile: conservative
+  profile_dir: config/payload_profiles
+  # §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK: verify the loaded profile once on
+  # first hold after homing (post-homing, pre-READY_HOLD).
+  auto_verify: false

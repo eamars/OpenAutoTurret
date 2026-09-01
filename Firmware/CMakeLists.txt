@@ -28,3 +28,7 @@ add_subdirectory(control)
 # Commissioning / probe CLI (architecture §50 tools/).
 add_executable(turret-can tools/turret_can.cpp)
 target_link_libraries(turret-can PRIVATE ota_core)
+
+# Phase 9: payload profiling / verification commissioning CLI (§28.5/§31/§44).
+add_executable(turret-payload tools/turret_payload.cpp)
+target_link_libraries(turret-payload PRIVATE ota_core)

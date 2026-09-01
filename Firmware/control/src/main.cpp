@@ -32,6 +32,7 @@
 #include "control/boot_fsm.hpp"
 #include "control/can_motor_backend.hpp"
 #include "control/control_loop.hpp"
+#include "payload/payload_profile.hpp"
 #include "web/web_server.hpp"
 
 #include <spdlog/spdlog.h>
@@ -126,6 +127,8 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.park.vel_tol_deg_s = cfg.shutdown.vel_tolerance_deg_s;
   c.park.dwell_ms = cfg.shutdown.dwell_ms;
   c.park.speed_deg_s = cfg.shutdown.speed_deg_s;
+  // Phase 9: payload verification (§27, §31.3).
+  c.payload_auto_verify = cfg.payload.auto_verify;
   return c;
 }
 
@@ -186,6 +189,27 @@ int main(int argc, char** argv) {
   // reports it as uncalibrated so the web UI can prompt for a calibration.
   FixedStoredPoseProvider pose_provider(cfg.installation.pose_file);
   loop.set_base_orientation(pose_provider.get());
+
+  // Phase 9: load the active payload profile (§28.5, §41). Missing or
+  // invalid file is NOT fatal: the station runs with no_profile status and
+  // conservative defaults, and telemetry says a payload tuning is required
+  // (§31.3). The commissioning tool (turret-payload) writes these files.
+  {
+    payload::PayloadProfileStore store(cfg.payload.profile_dir);
+    payload::PayloadProfile prof;
+    std::string perr;
+    if (store.load(cfg.payload.active_profile, prof, perr)) {
+      const double vp = prof.pitch.v_max_rad_s / kDeg2Rad;
+      const double vy = prof.yaw.v_max_rad_s / kDeg2Rad;
+      loop.set_payload_profile(std::move(prof));
+      spdlog::info("payload profile: loaded '{}' (v_max pitch={:.1f} deg/s, yaw={:.1f} deg/s)",
+                   cfg.payload.active_profile, vp, vy);
+    } else {
+      spdlog::warn("payload profile: '{}' not loaded ({}); running with "
+                   "no_profile status (commission with turret-payload, §44)",
+                   cfg.payload.active_profile, perr);
+    }
+  }
   spdlog::info(
       "installation pose: source={} calibrated={} (file={})",
       pose_source_name(pose_provider.get().source),

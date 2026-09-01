@@ -57,6 +57,11 @@ struct TelemetrySnapshot {
   SafetyAction safety_action = SafetyAction::Allow;
   int64_t feedback_age_ms = 0;
   int64_t control_cycle_us = 0;
+  // Phase 9: payload profiling status (§42.1, §31.3).
+  std::string payload_profile_name;    // active profile ("" = none)
+  std::string payload_profile_status;  // "no_profile"|"ok"|"mismatch"|"error"
+  bool payload_derated = false;        // motion limits derated after mismatch
+  bool payload_check_active = false;   // verification motion in progress
 };
 
 // §43.1 high-rate control log record (one per cycle, both axes).
@@ -91,6 +96,10 @@ enum class Event : uint8_t {
   HomingComplete,
   CalibrationCommit,
   Shutdown,
+  PayloadVerifyStarted,
+  PayloadVerifyOk,
+  PayloadVerifyMismatch,
+  PayloadVerifyError,
 };
 
 struct EventRecord {

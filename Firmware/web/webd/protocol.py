@@ -54,6 +54,11 @@ class Telemetry:
     safety_action: str = "ALLOW"
     feedback_age_ms: int = 0
     control_cycle_us: int = 0
+    # Phase 9 payload verification (§28.5, §31.3, §42.1).
+    payload_profile_name: str = ""          # active stored profile ("" = none)
+    payload_profile_status: str = "no_profile"  # ok|no_profile|mismatch|error
+    payload_derated: bool = False           # motion limits derated (mismatch)
+    payload_check_active: bool = False      # in-loop verification running
 
 
 @dataclass

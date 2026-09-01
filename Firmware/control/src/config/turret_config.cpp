@@ -95,6 +95,20 @@ int opt_int(const YAML::Node& node, const std::string& key,
   return static_cast<int>(opt_double(node, key, path, static_cast<double>(def), warn));
 }
 
+bool opt_bool(const YAML::Node& node, const std::string& key,
+              const std::string& path, bool def,
+              std::vector<std::string>& warn) {
+  const YAML::Node v = fetch(node, key);
+  if (unspecified(v)) return def;
+  try {
+    return v.as<bool>();
+  } catch (const YAML::Exception&) {
+    warn.push_back(path + ": could not parse as bool; using default " +
+                  std::string(def ? "true" : "false"));
+    return def;
+  }
+}
+
 std::string opt_string(const YAML::Node& node, const std::string& key,
                        const std::string& path, const std::string& def,
                        std::vector<std::string>& warn) {
@@ -420,10 +434,14 @@ LoadResult load_turret_config(const std::string& path) {
   c.installation.pose_file = opt_string(inst, "pose_file", "installation.pose_file",
                                         "calibration/installation_pose.yaml", warn);
 
-  // payload (default).
+  // payload (default; Phase 9 profiling, §28.5/§27).
   const YAML::Node pay = fetch(root, "payload");
   c.payload.active_profile = opt_string(pay, "active_profile", "payload.active_profile",
                                         "conservative", warn);
+  c.payload.profile_dir = opt_string(pay, "profile_dir", "payload.profile_dir",
+                                     "config/payload_profiles", warn);
+  c.payload.auto_verify = opt_bool(pay, "auto_verify", "payload.auto_verify",
+                                   false, warn);
 
   r.ok = err.empty();
   return r;

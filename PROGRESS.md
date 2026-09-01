@@ -21,7 +21,7 @@
 | 6 | Closed-loop tracking | [~] | LOS→joint (§14), tracking FSM (§34)+confidence (§35), reference manager (§16), search planner (§36/§49), telemetry (§6.3/§43) all done+tested; closed-loop integration verified on SimMotorBackend + synthetic vision (no CAN/motor). systemd units (§52) deferred |
 | 7 | Installation orientation calibration | [ ] | |
 | 8 | Web UI and diagnostics | [ ] | |
-| 9 | Payload profiling/tuning | [ ] | |
+| 9 | Payload profiling/tuning | [x] | §44 battery (`turret-payload`, `--sim` rehearsal), schema-v1 store, §31.3 in-loop check + auto-verify (§27) + manual command, mismatch→derate (§31.4), telemetry+dashboard mirror; 5 new SimMotorBackend-only C++ binaries (38/38 ctest) + 3 webd tests (95/95 Python). No CAN/motor in any test |
 
 **Session target (Appendix D first milestone):** boot → discover both motors → robust sensorless multi-axis homing → logical coordinates → safe jerk-limited moves → stopping envelope → safe park → timing/feedback logs. Vision may only generate motion targets after this is reliable.
 
@@ -138,8 +138,18 @@
 
 ## Phase 9 — Payload profiling/tuning
 
-- [ ] Profiling utility (§44): step/triangle/brake/holding tests → rise/settle/overshoot/stop distance
-- [ ] Payload profile storage + mismatch detection + derating (§31.3, §31.4)
+- [x] Profiling utility (§44): step/triangle/brake/holding tests → rise/settle/overshoot/stop distance
+  - `control/src/payload/response_metrics.{hpp}` — `analyze_step`/`analyze_brake`/`rms_tracking_error` (first-order rise/settle, overshoot, stop distance, tracking RMS; validity guards).
+  - `control/src/payload/payload_profiler.{hpp,cpp}` — the §44 battery over any `MotorBackend` (injectable clock/pacer ⇒ deterministic in tests): ±step, tracking triangle, multi-speed brake, holding effort; `clamp_target` keeps every target ≥2° inside the soft limits (fails safe on a degenerate band); `derive_limits` yields a conservative v/a/j envelope from the measured response.
+  - `tools/turret_payload.cpp` + `turret-payload` — operator CLI: `profile` / `verify` / `list`. `--sim` runs the full battery on the `SimMotorBackend` (no CAN/motor); real mode is wired (CAN + `BootFsm`) but only run on the supervised station.
+- [x] Payload profile storage + mismatch detection + derating (§31.3, §31.4, §41, §42.1/§42.2)
+  - `control/src/payload/payload_profile.{hpp,cpp}` — schema-v1 store (atomic tmp+fsync+rename, `.prev` backup, safe-name validation, dir creation).
+  - `control/src/payload/payload_verifier.{hpp,cpp}` — `VerifyTolerances` (rise/settle ratio, overshoot, peak-effort, tracking-RMS), per-axis `compare_axis`, `overall_status`, `decide` (only a Mismatch derates).
+  - `control_loop.{hpp,cpp}`: `Phase::PayloadCheck` runs the §31.3 in-loop check one axis at a time (amplitude clamped by the margin to the region edges), auto-verifies once after reaching Hold (§27) and accepts a manual `start_payload_verification` command (§42.2). A Mismatch sets `payload_derated_` ⇒ `hold_speed_effective()` / ready-pose & test-motion limits / tracking `v_max` all drop by `derate_factor`; a re-verified `Ok` clears it. SafetySupervisor keeps authority (§38).
+  - Web mirror: 4 telemetry fields (`payload_profile_name/status/derated/check_active`) over the wire + a Payload panel on the dashboard.
+- [x] Tests on the **mocked device** (SimMotorBackend; no CAN/motor): response metrics, profile store, profiler, verifier, daemon integration
+  - 5 new C++ binaries, all `SimMotorBackend`-only (no CAN, controld never started): `test_response_metrics` (8), `test_payload_profile` (10), `test_payload_profiler` (6), `test_payload_verifier` (10), `test_payload_daemon` (4: auto-verify matches baseline, mismatch derates + re-verify clears, no-profile behavior, store round-trip).
+  - **Result: 38/38 ctest green** (33 prior + 5 new) **and** 95/95 Python green (92 prior + 3 new webd protocol tests).
 
 ## Cross-cutting
 
@@ -436,3 +446,10 @@
     - **Live result (IMX500, 640×480@15):** before `R=255 G≈96 B≈98` (R/G≈2.65, very red) → after **`R=97 G=96.6 B=97.2` (R/G=1.003, R/B=0.998), neutral and stable** across frames. The de-saturation lands the feed on a common (lower) mean — the correct neutral for a saturated-red scene. The converged multipliers are exposed as `wb_gains` in `/api/video/state` (and `orientation`/`white_balance`) for diagnosis/tuning.
     - **Tests:** 4 new `common` tests for `gray_world_correction` (neutral noop, black safe-noop, saturated-red neutralizes, no-clip beats plain gray-world). **Full suite 92 green (28 common + 34 webd + 30 vision, 2 skipped = the camera-only paths).**
     - **Next:** confirm the served image reads as right-side-up to the user (180° is the standard upside-down correction; switch `OTA_VIDEO_ORIENTATION` if it's a mirror). Phase 9 (payload profiling, §44/§31) or the queued live commissioning tests (§P7/§P8) remain the next functional steps.
+- **2026-09-01 (NZST)** — Implemented **Phase 9 (payload profiling/tuning)** end-to-end on the **mocked device only** (`SimMotorBackend`; no CAN, no motor, controld never started). All production code under `Firmware/`.
+  - **C++ (`control/src/payload/`):** `response_metrics.{hpp}` (step/brake/tracking metrics + validity guards), `payload_profiler.{hpp,cpp}` (§44 battery over any `MotorBackend` with an injectable clock/pacer for determinism; `clamp_target` keeps every target ≥2° inside the soft limits and fails safe on a degenerate band; `derive_limits`), `payload_profile.{hpp,cpp}` (schema-v1 atomic store, `.prev`, safe names), `payload_verifier.{hpp,cpp}` (tolerances, `compare_axis`, `overall_status`, `decide`). Fixed `payload_profile` to round-trip `max_verified_speed_rad_s`.
+  - **Daemon (`control/src/control/control_loop.*`):** `Phase::PayloadCheck` (§31.3 in-loop check, one axis at a time, amplitude clamped by region margin), auto-verify once after Hold (§27), manual `start_payload_verification` command (§42.2), mismatch→`payload_derated_`→`hold_speed_effective()`/ready/test/tracking `v_max` derate (§31.4), re-verify clears it. `SafetySupervisor` keeps authority (§38).
+  - **Tool (`tools/turret_payload.cpp` → `turret-payload`):** `profile`/`verify`/`list`; `--sim` rehearsal fully working (smoke: profile + verify OK on the sim plant). Real mode wired but never executed here.
+  - **Web mirror (`web/webd/`):** 4 telemetry fields + a Payload panel on the dashboard; 3 new protocol tests.
+  - **Tests — mocked device only:** 5 new C++ binaries, all `SimMotorBackend`: `test_response_metrics` (8), `test_payload_profile` (10), `test_payload_profiler` (6), `test_payload_verifier` (10), `test_payload_daemon` (4). Root-caused + fixed the daemon segfault (a `unique_ptr` moved into `ControlLoop` was later dereferenced; the reference member is the valid handle). **Result: 38/38 ctest green and 95/95 Python green.**
+  - **Next:** live commissioning of the payload check on the physical station (supervised; not automated here) — or the remaining queued §P7/§P8 live tests.

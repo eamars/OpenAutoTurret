@@ -109,7 +109,12 @@ struct InstallationConfig {
 };
 
 struct PayloadConfig {
+  // Phase 9 (§28.5, §41): the active payload profile name + its directory.
   std::string active_profile = "conservative";
+  std::string profile_dir = "config/payload_profiles";
+  // §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK: run the response check once on
+  // first hold, at boot (post-homing, pre-READY_HOLD).
+  bool auto_verify = false;
 };
 
 struct TurretConfig {

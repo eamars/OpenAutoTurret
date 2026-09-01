@@ -98,7 +98,12 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << pose_source_name(static_cast<PoseSource>(s.installation_source)) << "\""
      << ",\"safety_action\":\"" << safety_action_name(s.safety_action) << "\""
      << ",\"feedback_age_ms\":" << s.feedback_age_ms
-     << ",\"control_cycle_us\":" << s.control_cycle_us << "}";
+     << ",\"control_cycle_us\":" << s.control_cycle_us
+     << ",\"payload_profile_name\":\"" << json_escape(s.payload_profile_name) << "\""
+     << ",\"payload_profile_status\":\"" << s.payload_profile_status << "\""
+     << ",\"payload_derated\":" << (s.payload_derated ? "true" : "false")
+     << ",\"payload_check_active\":" << (s.payload_check_active ? "true" : "false")
+     << "}";
   return os.str();
 }
 

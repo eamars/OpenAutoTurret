@@ -138,6 +138,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="muted">read-only; motors are driven solely by controld</div>
   </section>
 
+  <section class="panel" id="p-payload">
+    <h2>Payload (§28.5 / §31)</h2>
+    <div class="row"><span class="k">Profile</span><span id="pp-name">—</span></div>
+    <div class="row"><span class="k">Status</span><span id="pp-status" class="badge">—</span></div>
+    <div class="row"><span class="k">Derated</span><span id="pp-derated">no</span></div>
+    <div class="row"><span class="k">Check running</span><span id="pp-check">no</span></div>
+    <div class="muted">a mismatch derates motion limits until re-verified</div>
+  </section>
+
   <section class="panel" id="p-controls" style="grid-column:1/-1">
     <h2>Developer controls (§42.2) — every request is validated by controld</h2>
     <div id="controls">
@@ -185,6 +194,10 @@ function trackKind(s) {
   return (s === "tracking" || s === "coasting") ? "ok"
        : s === "search" ? "info" : s === "target_lost" ? "warn" : "info";
 }
+function payloadKind(s) {
+  return s === "ok" ? "ok" : s === "mismatch" ? "warn"
+       : s === "error" ? "err" : "info";
+}
 
 let ws = null;
 function connect() {
@@ -221,6 +234,11 @@ function render(t) {
   $("by").textContent = rad(t.base_yaw_rad);
   $("ey").textContent = num(t.effort_yaw, 2);
   $("ep").textContent = num(t.effort_pitch, 2);
+  $("pp-name").textContent = t.payload_profile_name || "—";
+  badge($("pp-status"), t.payload_profile_status || "no_profile",
+        payloadKind(t.payload_profile_status));
+  $("pp-derated").textContent = t.payload_derated ? "yes" : "no";
+  $("pp-check").textContent = t.payload_check_active ? "yes" : "no";
 }
 
 function logline(msg, kind) {

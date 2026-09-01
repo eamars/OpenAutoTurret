@@ -36,6 +36,13 @@ class SimMotorBackend : public MotorBackend {
     axes_[ix(a)].drive_effort = drive;
     axes_[ix(a)].contact_effort = contact;
   }
+  // Payload-inertia emulation (Phase 9): a heavier/different payload slows
+  // the closed-loop position response. tau is the first-order position
+  // time constant (default 50 ms). Test hook — mirrors what a payload
+  // change does to a real drive's response.
+  void set_response_tau(AxisId a, double tau_s) {
+    axes_[ix(a)].tau_pos = tau_s;
+  }
   double position(AxisId a) const { return axes_[ix(a)].q; }
   double velocity(AxisId a) const { return axes_[ix(a)].v; }
   bool in_position_mode(AxisId a) const { return axes_[ix(a)].in_position_mode; }
@@ -121,9 +128,8 @@ class SimMotorBackend : public MotorBackend {
       ax.stop_side = 0;
       return;
     }
-    constexpr double kTauPos = 0.05;  // position response time constant
     const double max_dq = ax.limit_spd * dt_;
-    double dq = (ax.target - ax.q) * (dt_ / (kTauPos + dt_));
+    double dq = (ax.target - ax.q) * (dt_ / (ax.tau_pos + dt_));
     if (dq > max_dq) dq = max_dq;
     else if (dq < -max_dq) dq = -max_dq;
 
@@ -154,6 +160,7 @@ class SimMotorBackend : public MotorBackend {
   struct Axis {
     double q = 0.0;
     double v = 0.0;
+    double tau_pos = 0.05;  // position response time constant (50 ms default)
     double stop_low = -1.0;
     double stop_high = 1.0;
     double target = 0.0;

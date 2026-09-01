@@ -80,6 +80,12 @@ class SafetyEnvelope {
   SafetyEnvelope() = default;
   explicit SafetyEnvelope(SafetyEnvelopeParams p) : p_(p) {}
 
+  // Phase 9: payload derate (§31.3) can lower the effective speed cap at
+  // runtime (rare, non-cyclic path). Only the v_max is updatable; the braking
+  // model itself is fixed at construction.
+  void set_v_max(double v_max_rad_s) { p_.v_max_rad_s = v_max_rad_s; }
+  double v_max() const { return p_.v_max_rad_s; }
+
   // Distance needed to come to a full stop from speed |v| under the braking
   // model. Uses the same jerk-limited form the planner derives
   // (d_stop = v^2/(2a) + v a/(2j)) plus a small margin, so it is consistent

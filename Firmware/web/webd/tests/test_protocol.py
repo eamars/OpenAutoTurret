@@ -105,6 +105,48 @@ class ProtocolTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_message('{"type":"bogus"}')
 
+    def test_telemetry_payload_fields_parse(self) -> None:
+        # Phase 9 payload fields (§28.5, §31.3, §42.1) come over the wire.
+        obj = telemetry_from_json(
+            {
+                "type": "telemetry",
+                "track_state": "ready_hold",
+                "payload_profile_name": "sniper_rifle",
+                "payload_profile_status": "mismatch",
+                "payload_derated": True,
+                "payload_check_active": False,
+            }
+        )
+        self.assertEqual(obj.payload_profile_name, "sniper_rifle")
+        self.assertEqual(obj.payload_profile_status, "mismatch")
+        self.assertTrue(obj.payload_derated)
+        self.assertFalse(obj.payload_check_active)
+
+    def test_telemetry_payload_fields_default(self) -> None:
+        # An older controld without the payload fields still parses.
+        obj = telemetry_from_json({"type": "telemetry", "track_state": "search"})
+        self.assertEqual(obj.payload_profile_name, "")
+        self.assertEqual(obj.payload_profile_status, "no_profile")
+        self.assertFalse(obj.payload_derated)
+        self.assertFalse(obj.payload_check_active)
+
+    def test_telemetry_payload_round_trip(self) -> None:
+        t = Telemetry(
+            ts_ns=7,
+            track_state="ready_hold",
+            payload_profile_name="smg",
+            payload_profile_status="ok",
+            payload_derated=False,
+            payload_check_active=True,
+        )
+        mtype, obj = parse_message(telemetry_to_json(t))
+        self.assertEqual(mtype, "telemetry")
+        back = telemetry_from_json(obj)
+        self.assertEqual(back.payload_profile_name, "smg")
+        self.assertEqual(back.payload_profile_status, "ok")
+        self.assertFalse(back.payload_derated)
+        self.assertTrue(back.payload_check_active)
+
 
 if __name__ == "__main__":
     unittest.main()

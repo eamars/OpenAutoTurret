@@ -42,6 +42,9 @@
 #include "control/safety_supervisor.hpp"
 #include "control/tracking_controller.hpp"
 #include "common/types.hpp"
+#include "payload/payload_check.hpp"
+#include "payload/payload_profile.hpp"
+#include "payload/payload_verifier.hpp"
 #include "tracking/target_measurement.hpp"
 
 namespace ota {
@@ -53,6 +56,9 @@ enum class Phase {
   Parking,  // executing the safe park / shutdown sequence (§33)
   Parked,   // de-energized at the park pose (power-safe)
   Fault,    // fault-locked: controlled stop commanded, no further motion
+  // Phase 9: payload response check (§27, §31.3) — small moves in the safe
+  // central region, one axis at a time.
+  PayloadCheck,
 };
 
 inline const char* phase_name(Phase p) {
@@ -63,6 +69,7 @@ inline const char* phase_name(Phase p) {
     case Phase::Parking: return "parking";
     case Phase::Parked:  return "parked";
     case Phase::Fault:   return "fault";
+    case Phase::PayloadCheck: return "payload_check";
   }
   return "?";
 }
@@ -88,6 +95,11 @@ class ControlLoop {
     double soft_margin_rad = 2.0 * kDeg2Rad;
     // §33 park sequence parameters.
     ParkParams park;
+    // Phase 9: payload verification (§27, §31.3).
+    bool payload_auto_verify = false;  // §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK:
+                                       // run once on first hold, at boot
+    double payload_check_step_deg = 2.0;   // conservative check amplitude
+    double payload_check_speed_deg_s = 5.0;  // conservative check speed
   };
 
   ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend);
@@ -117,6 +129,21 @@ class ControlLoop {
   // base). Consumed by the telemetry snapshot (world-frame LOS + base tilt).
   void set_base_orientation(const BaseOrientation& o) { base_orientation_ = o; }
   const BaseOrientation& base_orientation() const { return base_orientation_; }
+
+  // --- payload profiling / verification (Phase 9, §28.5, §31) -----------
+  // Load the active payload profile (loaded from config/payload_profiles/ at
+  // boot, or after re-profiling). Without one, the loop runs with the
+  // no_profile status and conservative defaults (§31.3: request a tuning).
+  void set_payload_profile(payload::PayloadProfile p);
+  payload::PayloadStatus payload_status() const { return payload_status_; }
+  bool payload_derated() const { return payload_derated_; }
+  bool payload_check_active() const { return phase_ == Phase::PayloadCheck; }
+  const std::string& payload_detail() const { return payload_detail_; }
+  // Effective speed limit for hold-phase motion (ready pose, test motion) and
+  // the tracking v_max: the configured hold speed, capped by the profile
+  // v_max when present, scaled by the derate factor while derated
+  // (§28.5/§31.3).
+  double hold_speed_effective() const;
 
   // --- telemetry (§6.3, §43) --------------------------------------------
   // The loop fills the §6.3 snapshot EVERY cycle (webd/logd read it at 10-20 Hz
@@ -163,6 +190,11 @@ class ControlLoop {
   void process_commands();
   void execute_command(const std::string& name, const std::string& arg);
   void disable_tracking();
+  // Phase 9: payload verification (§27, §31.3).
+  void start_payload_check(TimeNs now_ns, bool manual);
+  void finish_payload_check(TimeNs now_ns);
+  void abort_payload_check(TimeNs now_ns, const std::string& reason);
+  void apply_payload_derate(bool derated);
   void fault(const std::string& reason) {
     if (phase_ != Phase::Fault) {
       phase_ = Phase::Fault;
@@ -204,6 +236,18 @@ class ControlLoop {
   // One-shot restricted test-motion target (rad), consumed next cycle.
   bool has_test_motion_ = false;
   double test_motion_target_rad_ = 0.0;
+  // Phase 9: payload profiling state (§28.5, §31.3, §41).
+  std::optional<payload::PayloadProfile> payload_profile_;
+  payload::PayloadStatus payload_status_ = payload::PayloadStatus::NoProfile;
+  bool payload_derated_ = false;
+  std::string payload_detail_;
+  payload::PayloadCheckConfig payload_check_cfg_;
+  std::array<payload::PayloadCheck, kAxisCount> payload_checks_;
+  int payload_axis_ix_ = 0;          // axis currently being checked
+  bool payload_check_manual_ = false;  // web-commanded (vs §27 auto)
+  bool payload_auto_done_ = false;    // §27: the auto check runs once per boot
+  bool payload_check_requested_ = false;  // web command pending (executed at
+                                          // the top of the next cycle)
   ReferenceRequest tracking_ref_;  // produced each cycle while tracking is on
   bool has_pending_measurement_ = false;
   vision::TargetMeasurement pending_measurement_;
