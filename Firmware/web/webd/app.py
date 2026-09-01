@@ -26,13 +26,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .config import WebConfig, load_web_config
 from .controld_client import ControldClient
 from .dashboard import dashboard_html
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
+from .video import VideoSource, mjpeg_frame
 
 
 @dataclass
@@ -103,6 +104,14 @@ class CommandRequest(BaseModel):
     arg: str = ""
 
 
+class VideoStartRequest(BaseModel):
+    """Optional start parameters; defaults come from the WebConfig (§53)."""
+
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
+
+
 def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     """Build the FastAPI app around a live ControldClient."""
     hub = TelemetryHub()
@@ -111,10 +120,16 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     # gets live frames). Kept off the control path: this only feeds browsers.
     client.on_telemetry = hub.on_telemetry
 
+    # Separate low-priority video source (§42.3): its own path from the IMX500,
+    # never through the control socket. Off until a client turns it on.
+    video = VideoSource(enabled=config.video_enabled)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
         client.start()
         yield
+        # Release the camera on shutdown (blocking; keep it off the loop).
+        await asyncio.to_thread(video.stop)
         client.stop()
 
     app = FastAPI(title=f"{config.title} webd", lifespan=lifespan)
@@ -143,6 +158,56 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     @app.post("/api/command")
     async def command(req: CommandRequest) -> ResponseMessage:
         return client.send_command(req.command, req.arg)
+
+    # -- video preview (separate low-priority path, §42.3) ------------------
+
+    @app.get("/api/video/state")
+    async def video_state() -> dict:
+        return video.state().to_dict()
+
+    @app.post("/api/video/start")
+    async def video_start(req: VideoStartRequest) -> JSONResponse:
+        width = req.width or config.video_width
+        height = req.height or config.video_height
+        fps = req.fps if req.fps and req.fps > 0 else float(config.video_fps)
+        # Camera open is blocking — keep it off the event loop.
+        st = await asyncio.to_thread(video.start, width, height, fps,
+                                     config.video_quality)
+        return JSONResponse({"ok": st.running, **st.to_dict()})
+
+    @app.post("/api/video/stop")
+    async def video_stop() -> JSONResponse:
+        st = await asyncio.to_thread(video.stop)
+        return JSONResponse({"ok": True, **st.to_dict()})
+
+    @app.get("/api/video")
+    async def video_stream(limit: Optional[int] = None) -> StreamingResponse:
+        """MJPEG stream (multipart/x-mixed-replace). Only while the video is on;
+        every client re-sends a frame only when it changes, so N viewers share
+        one capture. ``?limit=N`` caps the number of frames (production safety
+        valve; also makes the stream bounded for tests)."""
+        if not video.is_running():
+            return JSONResponse(
+                status_code=409, content={"error": "video not running"}
+            )
+
+        async def gen():
+            last_seq = -1
+            sent = 0
+            while limit is None or sent < limit:
+                jpeg, seq, _ts = video.latest()
+                if seq != last_seq and jpeg:
+                    last_seq = seq
+                    sent += 1
+                    yield mjpeg_frame(jpeg)
+                else:
+                    await asyncio.sleep(0.02)
+
+        return StreamingResponse(
+            gen(),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

@@ -7,8 +7,9 @@ developer commands.
 
 SAFETY: the page only DISPLAYS state and SUBMITS high-level commands. Every
 command is validated by controld before it runs; the page has no motor/CAN
-authority of its own. The video preview (§42.3) is a placeholder: video frames
-are a separate low-priority path and do not traverse the control IPC.
+authority of its own. The video preview (§42.3) is a real IMX500 MJPEG feed on a
+separate low-priority path (its own HTTP stream, never the control IPC); the on/off switch
+opens/releases the camera, so the feed costs no CPU while off.
 """
 from __future__ import annotations
 
@@ -58,6 +59,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .muted { color:var(--dim); }
   .video-ph { display:flex; align-items:center; justify-content:center; height:140px;
               border:1px dashed var(--border); border-radius:6px; color:var(--dim); }
+  .video-panel { grid-column:1/-1; }
+  .video-panel h2 { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .video-status { font-size:12px; margin:0 0 8px; min-height:1em; }
+  .video-stage img { width:100%; display:block; background:#000; border-radius:6px; }
+  .switch { position:relative; display:inline-block; width:44px; height:24px; flex:0 0 auto; }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; inset:0; background:#222b38; border:1px solid var(--border);
+              border-radius:24px; transition:.15s; cursor:pointer; }
+  .slider::before { content:""; position:absolute; width:18px; height:18px; left:3px; top:2px;
+              background:var(--dim); border-radius:50%; transition:.15s; }
+  .switch input:checked + .slider { background:rgba(63,185,80,.25); border-color:var(--ok); }
+  .switch input:checked + .slider::before { transform:translateX(20px); background:var(--ok); }
 </style>
 </head>
 <body>
@@ -103,10 +116,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="row"><span class="k">Base yaw</span><span id="by">—</span></div>
   </section>
 
-  <section class="panel" id="p-video">
-    <h2>Video (low priority, §42.3)</h2>
-    <div class="video-ph">video preview is a separate path — not part of the control IPC</div>
+    <section class="panel video-panel" id="p-video">
+    <h2><span>Video — separate low-priority path (low priority)</span>
+      <label class="switch" title="Open / close the camera feed">
+        <input type="checkbox" id="video-toggle">
+        <span class="slider"></span>
+      </label>
+    </h2>
+    <div class="video-status muted" id="video-status">checking…</div>
+    <div class="video-stage" id="video-stage">
+      <img id="video-img" alt="camera feed" style="display:none">
+      <div class="video-ph" id="video-ph">Camera off — flip the switch on to open the IMX500 feed (costs no CPU while off).</div>
+    </div>
   </section>
+
 
   <section class="panel" id="p-can">
     <h2>CAN / Actuation</h2>
@@ -231,7 +254,41 @@ document.getElementById("controls").addEventListener("click", async (ev) => {
   }
 });
 
+function videoStatus(text, err) {
+  const el = $("video-status");
+  el.textContent = text;
+  el.style.color = err ? "var(--err)" : "";
+}
+function applyVideo(on, st) {
+  const img = $("video-img"), ph = $("video-ph");
+  $("video-toggle").checked = on;
+  if (on) { img.src = "/api/video"; img.style.display = "block"; ph.style.display = "none"; }
+  else { img.removeAttribute("src"); img.style.display = "none"; ph.style.display = "flex"; }
+  if (st && st.running)
+    videoStatus(`${st.camera || "camera"} ${st.width}x${st.height} @ ${st.fps} fps · ${st.frames_published} frames`);
+  else if (st && st.error) videoStatus(st.error, true);
+  else videoStatus("off");
+}
+async function setVideo(on) {
+  const tg = $("video-toggle"); tg.disabled = true;
+  videoStatus(on ? "opening camera…" : "closing camera…");
+  try {
+    const r = await fetch(on ? "/api/video/start" : "/api/video/stop", { method: "POST" });
+    const j = await r.json();
+    applyVideo(j.running, j);
+    if (!j.running && j.error) { videoStatus(j.error, true); logline(`video -> ${j.error}`, "err"); }
+    else logline(`video -> ${j.running ? "ON" : "off"}`, j.running ? "ok" : undefined);
+  } catch (e) { videoStatus(`error: ${e}`, true); tg.checked = !on; }
+  finally { tg.disabled = false; }
+}
+async function refreshVideoState() {
+  try { const r = await fetch("/api/video/state"); applyVideo((await r.json()).running, null); }
+  catch (e) { videoStatus("off"); }
+}
+$("video-toggle").addEventListener("change", (e) => setVideo(e.target.checked));
+
 connect();
+refreshVideoState();
 </script>
 </body>
 </html>

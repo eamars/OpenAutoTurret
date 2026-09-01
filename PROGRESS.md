@@ -125,12 +125,13 @@
 
 ## Phase 8 — Web UI and diagnostics
 
-- [x] `web/webd` FastAPI: dashboard (§42.1 panels: System/Vision/Target/Yaw-pitch/Calibration/Video/CAN), developer controls (§42.2), low-priority video placeholder (§42.3) — `web/webd/app.py` + `dashboard.py`
+- [x] `web/webd` FastAPI: dashboard (§42.1 panels: System/Vision/Target/Yaw-pitch/Calibration/Video/CAN), developer controls (§42.2), **real IMX500 MJPEG video feed** with an on/off switch (separate low-priority path, §42.3) — `web/webd/app.py` + `dashboard.py` + `video.py`
 - [x] controld-side web server (§5.3/§6.1/§6.3): `control/src/web/web_server.hpp` — JSON over UDS `SOCK_SEQPACKET`, 10–20 Hz downsampled snapshot, command relay; never opens can0 (+ `test_web_server`)
 - [x] Developer-command validation gate (§42.2): `control/src/web/command_validation.hpp` + `ControlLoop::submit_command`/`process_commands` (validated on the web thread, executed on the control thread) (+ `test_command_validation`)
 - [x] Telemetry restructured: the loop ALWAYS fills the §6.3 snapshot (webd reads it from a non-RT thread); tracking fields conditional
 - [x] Hostname-based access only, no hard-coded IP (§53) — `web/webd/config.py` (bind host/port + socket path via env)
-- [x] webd tests (no CAN, no camera): `web/webd/tests/` — protocol, controld client, FastAPI app (+ a `FakeControld` server stand-in); 20 tests
+- [x] webd tests (no CAN; camera via a fake `picamera2`): `web/webd/tests/` — protocol, controld client, FastAPI app, **video source + video API** (+ a `FakeControld` stand-in); 33 tests
+- [x] Video feed (§42.3): `web/webd/video.py` `VideoSource` opens/releases the IMX500 on demand (off = zero CPU), capped-FPS MJPEG over `GET /api/video` (multipart/x-mixed-replace), `POST /api/video/start|stop` + `GET /api/video/state`; dashboard switch toggles it. Env knobs `OTA_VIDEO_{ENABLE,WIDTH,HEIGHT,FPS,QUALITY}` (§53)
 - [x] UI load test: control p99 unaffected, no client starvation, no CAN-feedback staleness (§54.5) — `tests/test_web_load.cpp`
 - [x] systemd unit files (§52) — `Firmware/systemd/`: `turret-control` / `turret-vision` / `turret-web` (+ optional `turret-log`) + `can0` bring-up; `Restart=on-failure` is safe because boot always returns UNHOMED; `Wants=` (not `Requires=`) keeps the loop network-independent; templates only, not run (no CAN/motor)
 
@@ -419,3 +420,11 @@
   - **Next:** Phase 9 (payload profiling/tuning, §44/§31) — or the queued live
     commissioning tests (§P7/§P8), which need the physical station + a safe,
     supervised run (not automated here).
+- **2026-09-01 (NZST)** — Added the **real video feed** to the Phase 8 web UI (the §42.3 placeholder became a working IMX500 stream) with an **on/off switch**. Computation + camera only — no CAN, no motor, controld not run.
+  - **Probed the camera first** (permitted HW): libcamera/picamera2 present; IMX500 registered to the PiSP pipeline (BCM2712_C0). Confirmed the safe capture path is the picamera2 **request callback** + software JPEG (`main` XBGR8888 -> RGB) — the hardware `MJPEG` main *format* aborts the process, so it is not used. Real rate: 640×480 at ~30 fps available; we cap the publish rate for §42.3 low-priority.
+  - **`web/webd/video.py`** `VideoSource`: a single-owner, on/off camera. `start()` opens the IMX500 lazily/defensively (webd still runs with no camera; a busy/absent camera is reported as an endpoint error, never a crash) and waits for the first frame. A capture thread (the picamera2 callback) JPEG-encodes **only when a frame is due** (FPS cap = the main §42.3 CPU lever) and stores the latest frame in a lock-guarded slot; N browser clients share that one capture. `stop()` releases the camera. **Separate path:** it never touches the controld control socket (§6.1/doc §42.3); webd is already a separate process from controld, so browser video cannot degrade the control loop or CAN feedback (§54.5).
+  - **`web/webd/app.py`**: `GET /api/video/state`, `POST /api/video/start` (optional width/height/fps), `POST /api/video/stop`, and `GET /api/video` (MJPEG, optional `?limit=N` safety valve). Start/stop run via `asyncio.to_thread` (camera open is blocking). Camera released on shutdown.
+  - **`dashboard.py`**: the Video panel is now full-width with a **switch** that POSTs start/stop and points an `<img>` at `/api/video` (MJPEG-in-`<img>`). Off = camera released (no CPU); on = live feed. Reflects state on load.
+  - **`config.py`** (§53): `OTA_VIDEO_{ENABLE,WIDTH,HEIGHT,FPS,QUALITY}` (defaults 1/640/480/15/80); `tools/run_webd_inspection.py` now exposes them.
+  - **Tests:** `web/webd/tests/fake_camera.py` (a fake `picamera2` that mimics the exact API used), `test_video.py` (lifecycle, FPS cap, shared slot, MJPEG framing, disabled), `test_video_api.py` (state/start/stop + bounded MJPEG stream, custom size, disabled feature). **33/33 Python webd green** (20 prior + 8 + 5); C++ build unchanged (ninja no-op).
+  - **Live-verified on the real camera:** `/api/video/start` opened the IMX500 in ~0.9s (`camera: imx500`, 640×480 @ 15fps cap -> ~11–15 fps effective); `/api/video?limit=4` returned 4 valid 640×480 JPEG frames; `frames_published` advanced while running (live); `stop` released the camera and the stream returns 409. The inspection web service was restarted and is serving the **real** video (telemetry remains the FakeControld sim).

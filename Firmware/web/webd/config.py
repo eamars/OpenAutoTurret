@@ -9,6 +9,15 @@ Env vars:
   OTA_WEB_PORT    bind port (default 8080)
   OTA_WEB_SOCKET  controld UDS path (default /run/ota/controld-web.sock)
   OTA_WEB_HZ      telemetry rate hint for the dashboard (default 15)
+
+  # Video preview (separate low-priority path, §42.3). The stream is OFF until
+  # a client turns it on; these set the resolution / capped FPS / JPEG quality
+  # used when it is turned on.
+  OTA_VIDEO_ENABLE    1 = feature available (default 1); 0 = never open camera
+  OTA_VIDEO_WIDTH     default stream width (default 640)
+  OTA_VIDEO_HEIGHT    default stream height (default 480)
+  OTA_VIDEO_FPS       capped publish FPS (default 15, §42.3 "reduce FPS")
+  OTA_VIDEO_QUALITY   JPEG quality 1..95 (default 80)
 """
 from __future__ import annotations
 
@@ -23,6 +32,11 @@ class WebConfig:
     socket_path: str = "/run/ota/controld-web.sock"
     telemetry_hz: int = 15
     title: str = "OpenAutoTurret"
+    video_enabled: bool = True
+    video_width: int = 640
+    video_height: int = 480
+    video_fps: int = 15
+    video_quality: int = 80
 
 
 def _env_int(name: str, default: int) -> int:
@@ -35,6 +49,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def load_web_config() -> WebConfig:
     """Build a WebConfig from the environment."""
     return WebConfig(
@@ -43,4 +64,9 @@ def load_web_config() -> WebConfig:
         socket_path=os.environ.get("OTA_WEB_SOCKET", "/run/ota/controld-web.sock"),
         telemetry_hz=_env_int("OTA_WEB_HZ", 15),
         title=os.environ.get("OTA_WEB_TITLE", "OpenAutoTurret"),
+        video_enabled=_env_flag("OTA_VIDEO_ENABLE", True),
+        video_width=_env_int("OTA_VIDEO_WIDTH", 640),
+        video_height=_env_int("OTA_VIDEO_HEIGHT", 480),
+        video_fps=max(1, _env_int("OTA_VIDEO_FPS", 15)),
+        video_quality=min(95, max(1, _env_int("OTA_VIDEO_QUALITY", 80))),
     )
