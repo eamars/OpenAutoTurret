@@ -78,6 +78,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"ts_ns\":" << s.timestamp_ns
      << ",\"phase\":\"" << json_escape(s.phase) << "\""
      << ",\"fault\":\"" << json_escape(s.fault_reason) << "\""
+     << ",\"at_ready\":" << (s.at_ready ? "true" : "false")
      << ",\"track_state\":\"" << track_state_name(s.track_state) << "\""
      << ",\"tracking_active\":" << (s.tracking_active ? "true" : "false")
      << ",\"target_confidence\":" << s.target_confidence

@@ -32,7 +32,13 @@ TEST(PayloadCheckRegion, LiveReadyPoseIsOutsideDefaultRegion) {
   // region 0 +/- 20 deg) rejects the live ready pose.
   PayloadCheck check;
   EXPECT_FALSE(check.begin(0, kLiveReadyPitchRad, true));
-  EXPECT_EQ(check.fail_reason(), "start pose outside the safe central region");
+  // The reason must name the numbers, not just the verdict: on the station the
+  // operator has to decide whether to move to the ready pose or widen the region.
+  EXPECT_NE(check.fail_reason().find("outside the safe central region"),
+            std::string::npos)
+      << check.fail_reason();
+  EXPECT_NE(check.fail_reason().find("deg"), std::string::npos)
+      << check.fail_reason();
 }
 
 TEST(PayloadCheckRegion, PerAxisRegionCenteredOnPoseAcceptsLiveReadyPose) {

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>   // snprintf for the fail message
+
 
 namespace ota {
 namespace payload {
@@ -22,7 +24,18 @@ bool PayloadCheck::begin(TimeNs now_ns, double q_start_rad, bool has_feedback) {
   const double lo = region_center_ - region_half_span_;
   const double hi = region_center_ + region_half_span_;
   if (q_start_rad < lo || q_start_rad > hi) {
-    fail("start pose outside the safe central region");
+    // With numbers: this fires when the region was clamped to (or past) zero by
+    // the soft limits, i.e. the station is holding too close to a travel stop.
+    // Without them the operator sees a verdict and no way to act on it.
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "start pose %.2f deg outside the safe central region "
+                  "[%.2f, %.2f] deg (half span %.2f deg; a region clamped near "
+                  "zero means the station is holding too close to a travel "
+                  "stop - retry from the ready pose)",
+                  q_start_rad * 180.0 / M_PI, lo * 180.0 / M_PI,
+                  hi * 180.0 / M_PI, region_half_span_ * 180.0 / M_PI);
+    fail(buf);
     return false;
   }
   q_start_ = q_start_rad;

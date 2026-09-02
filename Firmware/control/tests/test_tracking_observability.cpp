@@ -163,6 +163,11 @@ TEST(TrackingObservability, SnapshotCarriesVisionHealth) {
   loop.step(t, kDtNs);
   t += kDtNs;
   auto snap = loop.telemetry().snapshot();
+  // Homed and holding the ready pose: the same condition the operator's P0 line
+  // reports, now visible in the 6.3 snapshot (and in the JSON the dashboard
+  // renders). phase alone cannot distinguish this from "still homing".
+  EXPECT_TRUE(snap.at_ready);
+  EXPECT_EQ(snap.phase, "hold");
   EXPECT_FALSE(snap.vision_connected);
   EXPECT_EQ(snap.vision_frames, 0u);
   EXPECT_EQ(snap.vision_measurement_age_ms, -1)

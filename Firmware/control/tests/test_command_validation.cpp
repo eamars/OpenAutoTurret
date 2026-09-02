@@ -10,6 +10,7 @@ namespace {
 SystemCommandState homed_state() {
   SystemCommandState s;
   s.homed = true;
+  s.at_ready = true;   // homed AND holding the ready pose (§38.1)
   s.limits_valid = true;
   s.q_min_rad[kPitchIx] = -1.5;
   s.q_max_rad[kPitchIx] = 1.5;
@@ -106,4 +107,22 @@ TEST(CommandValidation, UnknownCommandRejected) {
   auto r = validate_command(s, "launch_missiles");
   EXPECT_FALSE(r.ok);
   EXPECT_NE(r.error.find("unknown command"), std::string::npos);
+}
+
+TEST(CommandValidation, PayloadVerificationRequiresReadyPose) {
+  // Homing passes through Hold between stages, so "not moving" is not enough:
+  // a check requested while the station is still travelling to the ready pose
+  // would step from a travel stop, where the safe central region is empty.
+  // Rejecting synchronously gives the operator a reason instead of an async
+  // abort buried in the log (§42.2).
+  SystemCommandState s = homed_state();
+  s.at_ready = false;
+  const auto r = validate_command(s, "start_payload_verification");
+  EXPECT_FALSE(r.ok);
+  EXPECT_NE(r.error.find("ready pose"), std::string::npos) << r.error;
+
+  // select_payload_profile only changes caps (no motion), so it stays allowed:
+  // the operator can prepare a profile during the ready move.
+  const auto sel = validate_command(s, "select_payload_profile", "conservative");
+  EXPECT_TRUE(sel.ok) << sel.error;
 }

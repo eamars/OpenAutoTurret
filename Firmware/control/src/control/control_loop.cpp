@@ -796,6 +796,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.timestamp_ns = now_ns;
     snap.phase = phase_name(phase_);
     snap.fault_reason = fault_reason_;
+    snap.at_ready = at_ready_;
     snap.q_yaw_rad = sp[ix(AxisId::Yaw)].q_rad;
     snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
     snap.effort_yaw = sp[ix(AxisId::Yaw)].torque_nm;
@@ -850,6 +851,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     std::lock_guard<std::mutex> lk(command_mutex_);
     command_state_.homed = homed_;
     command_state_.fault = (phase_ == Phase::Fault);
+    // Homing is a sequence: between stages the phase is Hold while the station
+    // is still travelling to the ready pose. `moving` alone cannot see that, and
+    // a payload check requested in that window used to be accepted and then
+    // aborted (the hold pose was a travel stop, so the safe region came out
+    // empty). The gate now says so synchronously (§42.2).
+    command_state_.at_ready = at_ready_;
     command_state_.tracking_enabled = tracking_ != nullptr;
     command_state_.tracking_active =
         tracking_ && tracking_ref_.is_tracking_reference;

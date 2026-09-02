@@ -89,6 +89,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="row"><span class="k">Tracking active</span><span id="tracking-active">—</span></div>
     <div class="row"><span class="k">Feedback age</span><span id="fb-age">—</span></div>
     <div class="row"><span class="k">Control cycle</span><span id="cycle">—</span></div>
+    <div class="row"><span class="k">At ready pose</span><span class="badge" id="at-ready">—</span></div>
     <div class="row"><span class="k">Fault</span><span id="fault">—</span></div>
   </section>
 
@@ -224,6 +225,8 @@ function render(t) {
   $("tracking-active").textContent = t.tracking_active ? "yes" : "no";
   $("fb-age").textContent = num(t.feedback_age_ms, 1) + " ms";
   $("cycle").textContent = num(t.control_cycle_us, 1) + " µs";
+  badge($("at-ready"), t.at_ready ? "homed + ready" : "not ready",
+        t.at_ready ? "ok" : "warn");
   $("fault").textContent = t.fault || "—";
   badge($("vis-conn"), t.vision_connected ? "visiond connected" : "no publisher",
         t.vision_connected ? "ok" : "warn");

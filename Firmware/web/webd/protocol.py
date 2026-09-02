@@ -37,6 +37,9 @@ class Telemetry:
     # "payload_check") + the fault reason while phase == "fault" (§6.3).
     phase: str = ""
     fault: str = ""
+    # Homed AND holding the ready pose (the P0 "homed + at ready pose" state).
+    # `phase` alone cannot tell "waiting for a target" from "still homing".
+    at_ready: bool = False
     track_state: str = "ready_hold"
     tracking_active: bool = False
     target_confidence: float = 0.0

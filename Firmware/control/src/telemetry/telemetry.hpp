@@ -35,6 +35,11 @@ struct TelemetrySnapshot {
   // station IPC client both need it (§42.1).
   std::string phase;
   std::string fault_reason;
+  // "homed AND holding the safe ready pose" — the same condition the operator's
+  // P0 log line reports ("homed + at ready pose") and the §27 auto payload check
+  // gate. It distinguishes "waiting for a target" from "still homing / moving to
+  // the ready pose", which `phase` alone cannot (§6.3/§38.1).
+  bool at_ready = false;
   // Per-axis actuals.
   double q_yaw_rad = 0.0;
   double v_yaw_rad_s = 0.0;

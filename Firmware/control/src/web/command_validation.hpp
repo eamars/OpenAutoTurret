@@ -26,6 +26,10 @@ struct SystemCommandState {
   bool tracking_active = false;   // a tracking reference is being produced
   bool search_enabled = false;
   bool moving = false;            // currently executing a motion phase
+  // Holding the safe ready pose (homing sequence finished). Homing passes
+  // through Hold between stages, so `moving` alone is not enough for checks
+  // that start from wherever the station happens to be.
+  bool at_ready = false;
   // Soft-limit envelope (rad) for restricted test motion, valid after homing.
   bool limits_valid = false;
   double q_min_rad[2] = {-1e9, -1e9};  // [pitch, yaw]
@@ -147,6 +151,14 @@ inline CommandResult validate_command(const SystemCommandState& s,
   if (command == "start_payload_verification") {
     if (s.moving) {
       r.error = "system is moving; wait for hold";
+      return r;
+    }
+    if (!s.at_ready) {
+      // The check steps from wherever the station is holding. Requested during
+      // the post-homing ready move, that "wherever" is a travel stop and the
+      // safe central region comes out empty — reject here so the operator gets
+      // a reason instead of an async abort in the log.
+      r.error = "not at the ready pose yet (homing or repositioning in progress)";
       return r;
     }
     r.ok = true;
