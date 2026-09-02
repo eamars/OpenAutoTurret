@@ -241,3 +241,26 @@ payload:
   # §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK: verify the loaded profile once on
   # first hold after homing (post-homing, pre-READY_HOLD).
   auto_verify: false
+  # §44 "safe central region": per-axis half-span of the payload-check region.
+  # The region is centered on each axis's pose at check start (the ready
+  # pose) and intersected with the homed soft limits, so the check is valid
+  # from any homed pose. 10 deg leaves a wide margin for the 2 deg step +
+  # 2 deg edge margin; the ready pose sits ~37 deg from the nearest stop on
+  # both axes.
+  check_region_half_span_deg: 10.0
+  # Drive current limit (A) applied to BOTH axes for the payload check. The
+  # post-homing LimitCur (3 A pitch / 1 A yaw) is marginal for a 2 deg
+  # position-mode step, so the check raises both to this value (5 A, under
+  # the 10 A station cap) and leaves it there (the position holds are more
+  # authoritative at 5 A).
+  check_current_a: 5.0
+  # Drive inner speed-loop gains applied to BOTH axes at payload-check start.
+  # The stock CyberGear gains (SpdKp=1.0, SpdKi=0.002) are too weak to hold the
+  # position-mode speed limit against the pitch's gravity load: the
+  # "against-gravity" half of the 2 deg step creeps and times out while the
+  # "with-gravity" half is assisted and fast. Raising them (5x) lets the inner
+  # loop build the torque to hold the commanded rate against gravity, so the
+  # step response is the drive's controlled (mass-sensitive) response, not a
+  # gravity-dominated creep. Still bounded by the current/torque limits.
+  check_spd_kp: 5.0
+  check_spd_ki: 0.02

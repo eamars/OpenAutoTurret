@@ -150,6 +150,28 @@ struct PayloadConfig {
   // §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK: run the response check once on
   // first hold, at boot (post-homing, pre-READY_HOLD).
   bool auto_verify = false;
+  // §44 "safe central region": per-axis half-span (deg) of the check region,
+  // centered on each axis's pose at check start and intersected with the
+  // homed soft limits.
+  double check_region_half_span_deg = 10.0;
+  // Drive current limit (A) applied to BOTH axes for the duration of the
+  // check. The post-homing LimitCur (3 A pitch / 1 A yaw) is marginal for a
+  // 2 deg position-mode step (the yaw creeps at 1 A), so the check raises
+  // both to this value (5 A, well under the 10 A station cap) and leaves it
+  // there — the §33.2/hold position holds are MORE authoritative at 5 A, and
+  // the boot speed-mode hold already uses this same 5 A default.
+  double check_current_a = 5.0;
+  // Drive inner speed-loop gains (both axes) applied at check start. The stock
+  // CyberGear gains (SpdKp=1.0, SpdKi=0.002) are too weak to hold the
+  // position-mode speed limit against the pitch's gravity load: the
+  // "against-gravity" half of the 2 deg step creeps at a fraction of the
+  // commanded rate and times out, while the "with-gravity" half is assisted and
+  // is fast. Raising them lets the inner loop hold the commanded rate against
+  // gravity so the step response is the drive's controlled (mass-sensitive)
+  // response. Still bounded by the current/torque limits, so safe. 5x the
+  // stock values; tune here if the step still creeps or (over)shoots.
+  double check_spd_kp = 5.0;
+  double check_spd_ki = 0.02;
 };
 
 struct TurretConfig {

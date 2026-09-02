@@ -100,6 +100,20 @@ class ControlLoop {
                                        // run once on first hold, at boot
     double payload_check_step_deg = 2.0;   // conservative check amplitude
     double payload_check_speed_deg_s = 5.0;  // conservative check speed
+    // Drive current limit (A, both axes) applied for the check; see
+    // TurretConfig::PayloadConfig::check_current_a.
+    double payload_check_current_a = 5.0;
+    // Drive inner speed-loop gains (both axes) applied for the check; see
+    // TurretConfig::PayloadConfig::check_spd_kp / check_spd_ki. The stock
+    // gains (1.0 / 0.002) are too weak to hold the position-mode speed limit
+    // against the pitch's gravity load, so the check raises them.
+    double payload_check_spd_kp = 5.0;
+    double payload_check_spd_ki = 0.02;
+    // Per-axis safe-region half-span (§44). The region is centered on each
+    // axis's pose at check start and intersected with the homed soft limits,
+    // so a check from any homed pose is valid; it must stay >= ~4 deg for the
+    // full check amplitude (2 deg step + 2 deg edge margin).
+    double payload_check_region_half_span_deg = 10.0;
   };
 
   ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend);
@@ -206,8 +220,11 @@ class ControlLoop {
   void process_commands();
   void execute_command(const std::string& name, const std::string& arg);
   void disable_tracking();
-  // Phase 9: payload verification (§27, §31.3).
-  void start_payload_check(TimeNs now_ns, bool manual);
+  // Phase 9: payload verification (§27, §31.3). `sp` holds the current
+  // axis snapshots: the per-axis safe region is centered on each axis's
+  // current pose (the check starts where the station holds).
+  void start_payload_check(TimeNs now_ns, bool manual,
+                           const AxisSnapshot sp[kAxisCount]);
   void finish_payload_check(TimeNs now_ns);
   void abort_payload_check(TimeNs now_ns, const std::string& reason);
   void apply_payload_derate(bool derated);
@@ -291,6 +308,15 @@ class ControlLoop {
   payload::PayloadCheckConfig payload_check_cfg_;
   std::array<payload::PayloadCheck, kAxisCount> payload_checks_;
   int payload_axis_ix_ = 0;          // axis currently being checked
+  // FIXED hold targets for the payload check: every axis is held AT its
+  // check-start position (a fixed target, NOT a re-pin to the live position)
+  // with a NONZERO speed limit, so the CyberGear position loop actively holds
+  // it. At LimitSpd=0 the position loop is pinned and the inactive axis
+  // free-drifts under gravity/friction stick-slip (P6 live Run A: yaw +3.6
+  // deg, incl. a 2.7 deg/s burst, while the pitch axis was checked). Holding
+  // a fixed target with a nonzero limit is the proven park Verify pattern
+  // (§33.2, control_loop.cpp).
+  std::array<double, kAxisCount> payload_hold_target_{};
   bool payload_check_manual_ = false;  // web-commanded (vs §27 auto)
   bool payload_auto_done_ = false;    // §27: the auto check runs once per boot
   bool payload_check_requested_ = false;  // web command pending (executed at

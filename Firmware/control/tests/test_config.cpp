@@ -350,3 +350,38 @@ homing_plan:
   EXPECT_LT(r.config.axes[0].expected_travel_deg.min,
             r.config.axes[0].expected_travel_deg.max);
 }
+
+// The payload-check speed-loop gain knobs (P6): the stock CyberGear gains are
+// too weak to hold the position-mode speed limit against the pitch's gravity
+// load, so the check raises them. Verify the config plumbing: safe defaults,
+// yaml override, and invalid-value clamping.
+TEST(Config, PayloadCheckSpeedLoopGainsDefaults) {
+  // No payload section at all -> built-in defaults.
+  const std::string p = write_file("gains_default.yaml", kFullConfig);
+  auto r = ota::config::load_turret_config(p);
+  ASSERT_TRUE(r.ok) << r.errors.size();
+  EXPECT_DOUBLE_EQ(r.config.payload.check_spd_kp, 5.0);
+  EXPECT_DOUBLE_EQ(r.config.payload.check_spd_ki, 0.02);
+}
+
+TEST(Config, PayloadCheckSpeedLoopGainsFromYaml) {
+  const std::string body = kFullConfig +
+      "\npayload:\n  check_spd_kp: 8.0\n  check_spd_ki: 0.05\n";
+  const std::string p = write_file("gains_yaml.yaml", body);
+  auto r = ota::config::load_turret_config(p);
+  ASSERT_TRUE(r.ok) << r.errors.size();
+  EXPECT_DOUBLE_EQ(r.config.payload.check_spd_kp, 8.0);
+  EXPECT_DOUBLE_EQ(r.config.payload.check_spd_ki, 0.05);
+}
+
+TEST(Config, PayloadCheckSpeedLoopGainsInvalidClamped) {
+  // Non-positive Kp and negative Ki are unsafe/nonsensical: clamp to defaults
+  // (with a warning) rather than trusting the value.
+  const std::string body = kFullConfig +
+      "\npayload:\n  check_spd_kp: -1.0\n  check_spd_ki: -0.01\n";
+  const std::string p = write_file("gains_bad.yaml", body);
+  auto r = ota::config::load_turret_config(p);
+  ASSERT_TRUE(r.ok) << r.errors.size();
+  EXPECT_DOUBLE_EQ(r.config.payload.check_spd_kp, 5.0);
+  EXPECT_DOUBLE_EQ(r.config.payload.check_spd_ki, 0.02);
+}

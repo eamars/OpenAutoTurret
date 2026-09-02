@@ -44,6 +44,8 @@ class CanMotorBackend : public MotorBackend {
   void command_velocity(AxisId axis, double velocity_rad_s) override;
   void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
+  void set_speed_loop_gains(AxisId axis, double spd_kp,
+                            double spd_ki) override;
 
  private:
   // Fire-and-forget register writes (no response wait).

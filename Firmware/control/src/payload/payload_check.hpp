@@ -32,12 +32,23 @@ struct PayloadCheckConfig {
   // Conservative verification limits (§31.3 "conservative limits").
   double step_amplitude_rad = 2.0 * kDeg2Rad;  // small move
   double speed_rad_s = 10.0 * kDeg2Rad;        // conservative speed
-  double settle_band_frac = 0.02;              // ±2 % of amplitude
+  // Settle band as a fraction of the step amplitude. It must exceed the
+  // drive's STEADY-STATE position error for a step this size, or the check
+  // can never settle on the real drive: the CyberGear position loop settles
+  // ~3 % off a 2 deg target (friction deadband holds the axis just past the
+  // LocRef; P6 live Run A: the +step settled 0.057 deg = 2.9 % off a 2 deg
+  // step and the 2 % band timed out). 5 % leaves margin while still gating
+  // on "arrived and stopped" (the velocity gate is the other half).
+  double settle_band_frac = 0.05;              // ±5 % of amplitude
   double at_rest_vel_rad_s = 0.05;
   double settle_time_s = 0.3;                  // dwell to confirm settled
   double max_move_s = 8.0;                     // hard bound per move (timeout)
   // The safe central region the check is clamped to (§44 "safe central
-  // region"). The start pose must lie inside it.
+  // region"). The start pose must lie inside it. These are the DEFAULT
+  // region (applied when the caller does not set a per-axis one via
+  // PayloadCheck::set_region); the ControlLoop always sets a per-axis
+  // region centered on the axis's current pose, because the check starts
+  // where the station holds, which is generally not the static default.
   double region_center_rad = 0.0;
   double region_half_span_rad = 20.0 * kDeg2Rad;
   VerifyTolerances tol;
@@ -49,7 +60,19 @@ class PayloadCheck {
   PayloadCheck() = default;
   PayloadCheck(const PayloadCheckConfig& cfg, const PayloadProfile* profile,
                AxisId axis)
-      : cfg_(cfg), profile_(profile), axis_(axis) {}
+      : cfg_(cfg), profile_(profile), axis_(axis),
+        region_center_(cfg.region_center_rad),
+        region_half_span_(cfg.region_half_span_rad) {}
+
+  // Per-axis safe region (§44). The check starts where the station holds,
+  // so the region must be set to CONTAIN the current pose of THIS axis
+  // (the ControlLoop centers it on that pose and intersects it with the
+  // homed soft limits); without this the static default region rejects
+  // any start pose outside 0 +/- 20 deg.
+  void set_region(double center_rad, double half_span_rad) {
+    region_center_ = center_rad;
+    region_half_span_ = half_span_rad;
+  }
 
   // Begin the check from `q_start` (the current axis position, which must lie
   // inside the safe central region). Returns false (fail_reason set) if the
@@ -88,6 +111,9 @@ class PayloadCheck {
   PayloadCheckConfig cfg_;
   const PayloadProfile* profile_ = nullptr;
   AxisId axis_ = AxisId::Pitch;
+  // Effective region (per set_region; defaults mirror PayloadCheckConfig).
+  double region_center_ = 0.0;
+  double region_half_span_ = 20.0 * kDeg2Rad;
 
   bool active_ = false;
   bool failed_ = false;

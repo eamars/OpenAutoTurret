@@ -8,8 +8,8 @@ namespace ota {
 namespace payload {
 
 double PayloadCheck::clamp_to_region(double q) const {
-  const double lo = cfg_.region_center_rad - cfg_.region_half_span_rad;
-  const double hi = cfg_.region_center_rad + cfg_.region_half_span_rad;
+  const double lo = region_center_ - region_half_span_;
+  const double hi = region_center_ + region_half_span_;
   return std::max(lo, std::min(hi, q));
 }
 
@@ -19,8 +19,8 @@ bool PayloadCheck::begin(TimeNs now_ns, double q_start_rad, bool has_feedback) {
     fail("no axis feedback at check start");
     return false;
   }
-  const double lo = cfg_.region_center_rad - cfg_.region_half_span_rad;
-  const double hi = cfg_.region_center_rad + cfg_.region_half_span_rad;
+  const double lo = region_center_ - region_half_span_;
+  const double hi = region_center_ + region_half_span_;
   if (q_start_rad < lo || q_start_rad > hi) {
     fail("start pose outside the safe central region");
     return false;

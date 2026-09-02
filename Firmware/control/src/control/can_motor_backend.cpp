@@ -354,4 +354,21 @@ void CanMotorBackend::set_current_limit(AxisId axis, double limit_cur_a) {
   }
 }
 
+void CanMotorBackend::set_speed_loop_gains(AxisId axis, double spd_kp,
+                                           double spd_ki) {
+  // Write the inner speed-loop gains (SpdKp 0x701F, SpdKi 0x7020). Called once
+  // at payload-check start (not every cycle), so a plain fire-and-forget write
+  // of both registers is fine — no write-on-change bookkeeping needed. The
+  // values persist in the drive across daemon restarts (until the drive is
+  // power-cycled or rewritten), which is desirable: the stronger speed loop
+  // also makes the post-check position holds more authoritative.
+  const int a = static_cast<int>(axis);
+  if (!write_reg_float(cybergear::Reg::SpdKp, static_cast<float>(spd_kp),
+                       axis))
+    spdlog::warn("write SpdKp FAIL axis={} kp={:.4f}", a, spd_kp);
+  if (!write_reg_float(cybergear::Reg::SpdKi, static_cast<float>(spd_ki),
+                       axis))
+    spdlog::warn("write SpdKi FAIL axis={} ki={:.6f}", a, spd_ki);
+}
+
 }  // namespace ota

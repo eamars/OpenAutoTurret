@@ -512,6 +512,38 @@ LoadResult load_turret_config(const std::string& path) {
                                      "config/payload_profiles", warn);
   c.payload.auto_verify = opt_bool(pay, "auto_verify", "payload.auto_verify",
                                    false, warn);
+  c.payload.check_region_half_span_deg = opt_double(
+      pay, "check_region_half_span_deg", "payload.check_region_half_span_deg",
+      10.0, warn);
+  if (c.payload.check_region_half_span_deg < 2.25) {
+    warn.push_back("payload.check_region_half_span_deg < 2.25 deg: the check "
+                   "amplitude would be clamped below its 0.25 deg minimum; "
+                   "keeping the value (the check will fail its guard)");
+  }
+  c.payload.check_current_a =
+      opt_double(pay, "check_current_a", "payload.check_current_a", 5.0, warn);
+  // The station current cap is 10 A (safety boundary): clamp, don't trust.
+  if (c.payload.check_current_a > 10.0) {
+    warn.push_back("payload.check_current_a > 10 A: clamped to the 10 A "
+                   "station cap");
+    c.payload.check_current_a = 10.0;
+  }
+  if (c.payload.check_current_a <= 0.0) {
+    warn.push_back("payload.check_current_a <= 0 A: using the 5 A default");
+    c.payload.check_current_a = 5.0;
+  }
+  c.payload.check_spd_kp =
+      opt_double(pay, "check_spd_kp", "payload.check_spd_kp", 5.0, warn);
+  c.payload.check_spd_ki =
+      opt_double(pay, "check_spd_ki", "payload.check_spd_ki", 0.02, warn);
+  if (c.payload.check_spd_kp <= 0.0) {
+    warn.push_back("payload.check_spd_kp <= 0: using the 5.0 default");
+    c.payload.check_spd_kp = 5.0;
+  }
+  if (c.payload.check_spd_ki < 0.0) {
+    warn.push_back("payload.check_spd_ki < 0: using the 0.02 default");
+    c.payload.check_spd_ki = 0.02;
+  }
 
   r.ok = err.empty();
   return r;

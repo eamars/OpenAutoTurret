@@ -154,6 +154,11 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
                                                         : c.park.limit_cur_a[1];
   // Phase 9: payload verification (§27, §31.3).
   c.payload_auto_verify = cfg.payload.auto_verify;
+  c.payload_check_region_half_span_deg =
+      cfg.payload.check_region_half_span_deg;
+  c.payload_check_current_a = cfg.payload.check_current_a;
+  c.payload_check_spd_kp = cfg.payload.check_spd_kp;
+  c.payload_check_spd_ki = cfg.payload.check_spd_ki;
   return c;
 }
 

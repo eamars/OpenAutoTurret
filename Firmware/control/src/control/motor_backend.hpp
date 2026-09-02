@@ -86,6 +86,20 @@ class MotorBackend {
   // Fire-and-forget; safe from the control loop — the adaptive-current homing
   // raises it on each false-contact latch (§22).
   virtual void set_current_limit(AxisId axis, double limit_cur_a) = 0;
+  // Set the drive's inner speed-loop gains (SpdKp 0x701F, SpdKi 0x7020).
+  // The stock CyberGear gains (SpdKp=1.0, SpdKi=0.002) are too weak to hold
+  // the position-mode speed limit against a gravity load: on the pitch axis
+  // the "against-gravity" half of a 2 deg check step creeps at a fraction of
+  // the commanded rate on a few hundred milliamps and never settles in the
+  // move budget (the "with-gravity" half is assisted and is fast). Raising the
+  // speed-loop gains lets the inner loop build the torque needed to hold the
+  // commanded rate against gravity, so the step response is the drive's
+  // controlled response (mass-sensitive) rather than a gravity-dominated
+  // creep. Fire-and-forget; the values are still bounded by the current /
+  // torque limits. No-op where the backend has no drive-internal loop gains
+  // (sim: its plant is a fixed time constant, not a tuned velocity loop).
+  virtual void set_speed_loop_gains(AxisId axis, double spd_kp,
+                                    double spd_ki) {}
 };
 
 }  // namespace ota

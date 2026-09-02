@@ -284,7 +284,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   //     against a baseline is the point; profiling is the tool's job, §44).
   if (payload_check_requested_) {
     payload_check_requested_ = false;
-    start_payload_check(now_ns, true);
+    start_payload_check(now_ns, true, sp);
   } else if (cfg_.payload_auto_verify && !payload_auto_done_ &&
              phase_ == Phase::Hold && !tracking_ && at_ready_ &&
              payload_profile_.has_value()) {
@@ -293,7 +293,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       if (std::fabs(sp[i].v_rad_s) > kAtRestVelRadS) at_rest = false;
     if (at_rest) {
       payload_auto_done_ = true;
-      start_payload_check(now_ns, false);
+      start_payload_check(now_ns, false, sp);
     }
   }
 
@@ -513,9 +513,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // Phase 9: one axis at a time (pitch, then yaw); the other axis holds.
       // The check stepper is a pure reference computer; the loop commands
       // (so the supervisor above keeps authority, §38).
+      //
+      // Inactive-axis hold: EVERY axis is held at its FIXED check-start
+      // position (payload_hold_target_) with a NONZERO speed limit, so the
+      // CyberGear position loop actively holds it. At LimitSpd=0 the
+      // position loop is pinned and the inactive axis free-drifts under
+      // gravity/friction stick-slip (P6 live Run A: yaw +3.6 deg, incl. a
+      // 2.7 deg/s burst, while the pitch axis was checked). A fixed target
+      // (not a re-pin to the live position) is what makes it a real hold —
+      // the proven park Verify pattern (§33.2).
       for (int i = 0; i < kAxisCount; ++i) {
-        q_ref[i] = sp[i].q_rad;
-        lim[i] = 0.0;
+        q_ref[i] = payload_hold_target_[i];
+        lim[i] = std::min(cfg_.hold_speed_rad_s,
+                          env_.max_speed_at(payload_hold_target_[i], limits_[i]));
       }
       auto& check = payload_checks_[payload_axis_ix_];
       if (!check.active() && !check.failed()) {
@@ -526,16 +536,26 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
       }
       if (check.active()) {
-        const auto out = check.step(now_ns, sp[payload_axis_ix_]);
+        // Settle gate on POSITION-derived velocity (v_est_), not the drive's
+        // self-reported v: at rest that is a ±0.05 rad/s noise band (P0j)
+        // sitting exactly on the at_rest_vel_rad_s gate, so the 0.3 s dwell
+        // could never confirm. Same substitution the Fault phase uses.
+        AxisSnapshot gate = sp[payload_axis_ix_];
+        gate.v_rad_s = v_est_[payload_axis_ix_];
+        const auto out = check.step(now_ns, gate);
         q_ref[payload_axis_ix_] = out.q_ref_rad;
         lim[payload_axis_ix_] = out.limit_spd_rad_s;
         if (!check.active()) {
-          if (payload_axis_ix_ == 0) {
-            payload_axis_ix_ = 1;  // begin the yaw check next cycle
-          } else if (!check.failed()) {
-            finish_payload_check(now_ns);
-          } else {
+          // A FAILED axis aborts the whole check — do NOT silently advance
+          // to the other axis (P6 live Run A: the swallowed pitch failure let
+          // the yaw check run its own 8 s, so the abort logged 16 s after
+          // check start with the SECOND axis's reason).
+          if (check.failed()) {
             abort_payload_check(now_ns, check.fail_reason());
+          } else if (payload_axis_ix_ == 0) {
+            payload_axis_ix_ = 1;  // pitch done OK; begin the yaw check next cycle
+          } else {
+            finish_payload_check(now_ns);
           }
         }
       } else if (check.failed()) {
@@ -804,19 +824,66 @@ void ControlLoop::apply_payload_derate(bool derated) {
   env_.set_v_max(cap);
 }
 
-void ControlLoop::start_payload_check(TimeNs now_ns, bool manual) {
+void ControlLoop::start_payload_check(TimeNs now_ns, bool manual,
+                                      const AxisSnapshot sp[kAxisCount]) {
   if (phase_ == Phase::Fault || phase_ == Phase::PayloadCheck) return;
   if (!homed_) return;
   // The check takes over the axes: drop any tracking reference first.
   if (tracking_) disable_tracking();
+  // The position-mode check needs real torque authority: the post-homing
+  // LimitCur (3 A pitch / 1 A yaw) is marginal for a 2 deg step (the yaw
+  // creeps at 1 A; the 3 A pitch hold only just holds). Raise BOTH axes to
+  // the check current (5 A, under the 10 A station cap) for the check and
+  // LEAVE it there — the §33.2/Hold position holds are more authoritative
+  // at 5 A, and the boot speed-mode hold already uses this same 5 A.
+  for (int i = 0; i < kAxisCount; ++i)
+    backend_->set_current_limit(static_cast<AxisId>(i),
+                                cfg_.payload_check_current_a);
+  // The stock drive speed-loop gains (SpdKp=1.0, SpdKi=0.002) are too weak to
+  // hold the position-mode speed limit against a gravity load: on the pitch
+  // axis the "against-gravity" half of the 2 deg check step creeps at a
+  // fraction of the commanded rate (a few hundred milliamps, ~0.08 deg/s) and
+  // never settles in the move budget, while the "with-gravity" half is
+  // assisted and is fast. Raise the inner speed loop so it builds the torque
+  // needed to hold the commanded rate against gravity and the step response is
+  // the drive's controlled (mass-sensitive) response, not a gravity-dominated
+  // creep. Capped by the current/torque limits, so safe. No-op in sim.
+  for (int i = 0; i < kAxisCount; ++i)
+    backend_->set_speed_loop_gains(static_cast<AxisId>(i),
+                                   cfg_.payload_check_spd_kp,
+                                   cfg_.payload_check_spd_ki);
   payload_check_cfg_ = payload::PayloadCheckConfig{};
   payload_check_cfg_.step_amplitude_rad = cfg_.payload_check_step_deg * kDeg2Rad;
   payload_check_cfg_.speed_rad_s = cfg_.payload_check_speed_deg_s * kDeg2Rad;
   const payload::PayloadProfile* prof =
       payload_profile_ ? &*payload_profile_ : nullptr;
-  for (int i = 0; i < kAxisCount; ++i)
+  // The safe region is PER-AXIS, centered on that axis's CURRENT pose
+  // (§44 "safe central region"): the check starts where the station holds
+  // (the ready pose), which is not the static config default (0 +/- 20 deg)
+  // on this rig (ready: pitch -1.496 rad, yaw -2.261 rad) — a shared static
+  // region would make begin() fail "start pose outside the safe central
+  // region". Intersecting with the homed soft limits keeps the region clear
+  // of the travel stops; if the pose is too close to a stop the region
+  // shrinks and begin() fails the min-amplitude guard instead of stepping
+  // toward the boundary.
+  for (int i = 0; i < kAxisCount; ++i) {
     payload_checks_[i] = payload::PayloadCheck(
         payload_check_cfg_, prof, static_cast<AxisId>(i));
+    const double c = sp[i].has_feedback ? sp[i].q_rad : 0.0;
+    double half_span = cfg_.payload_check_region_half_span_deg * kDeg2Rad;
+    if (limits_[i].valid)
+      half_span = std::min(
+          half_span, std::min(c - limits_[i].q_soft_min_rad,
+                              limits_[i].q_soft_max_rad - c));
+    payload_checks_[i].set_region(c, half_span);
+    // FIXED hold target: this axis's position right now. For the whole check
+    // the axis is commanded to this (fixed) target with a NONZERO speed limit
+    // so the position loop actively holds it against drift; re-pinning to the
+    // live position would just follow the drift. The active axis's reference
+    // is overridden each cycle by the check stepper (see the Phase::
+    // PayloadCheck handler).
+    payload_hold_target_[i] = c;
+  }
   payload_axis_ix_ = 0;
   payload_check_manual_ = manual;
   phase_ = Phase::PayloadCheck;
@@ -841,6 +908,23 @@ void ControlLoop::finish_payload_check(TimeNs now_ns) {
   payload_detail_ = d.action + (detail != payload::payload_status_name(vr.status)
                                     ? " — " + detail
                                     : std::string());
+  // Audit trail of the MEASURED response (what a commissioned profile's
+  // baseline must match, §28.5) — logged at info on every completed check.
+  for (int i = 0; i < kAxisCount; ++i) {
+    const auto& ax = vr.axes[i];
+    if (!ax.measured) continue;
+    const auto& p = ax.step_pos;
+    const auto& n = ax.step_neg;
+    spdlog::info(
+        "payload check measured [{}]: +step amp={:.4f} rad rise={:.3f} s "
+        "overshoot={:.4f} settle={:.3f} s rms={:.5f} rad peak_effort={:.3f} Nm; "
+        "-step amp={:.4f} rad rise={:.3f} s overshoot={:.4f} settle={:.3f} s "
+        "rms={:.5f} rad peak_effort={:.3f} Nm",
+        i == 0 ? "pitch" : "yaw", p.amplitude_rad, p.rise_time_s, p.overshoot,
+        p.settling_time_s, p.tracking_rms_rad, p.peak_effort_nm,
+        n.amplitude_rad, n.rise_time_s, n.overshoot, n.settling_time_s,
+        n.tracking_rms_rad, n.peak_effort_nm);
+  }
   if (d.derate != payload_derated_) apply_payload_derate(d.derate);
   phase_ = Phase::Hold;
   if (vr.status == payload::PayloadStatus::Ok)
