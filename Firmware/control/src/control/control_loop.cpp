@@ -812,6 +812,28 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.safety_action = last_decision_.action;
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
+    // CAN link health (§55/§54.4): read the transport's own counters. Same
+    // cost class as the vision stats read below (a mutex + a POD copy), and it
+    // is observation only — no decision in the loop consults these numbers.
+    {
+      const CanHealth ch = backend_->can_health();
+      snap.can_available = ch.available;
+      snap.can_kind = ch.kind;
+      snap.can_device = ch.device;
+      snap.can_up = ch.up;
+      snap.can_state = static_cast<int8_t>(ch.state);
+      snap.can_rx_frames = ch.rx_frames;
+      snap.can_rx_error_frames = ch.rx_error_frames;
+      snap.can_tx_frames = ch.tx_frames;
+      snap.can_tx_failed = ch.tx_failed;
+      // A negative age would mean the two stamps live in different clock
+      // domains (a test clock against a monotonic one); publish -1 = "unknown"
+      // rather than nonsense, the same rule as the vision age below.
+      snap.can_last_rx_age_ms =
+          (ch.last_rx_ns > 0 && now_ns >= ch.last_rx_ns)
+              ? static_cast<int64_t>((now_ns - ch.last_rx_ns) / 1000000)
+              : -1;
+    }
     // Phase 9: payload profile status (§42.1, §31.3).
     snap.payload_profile_name = payload_profile_ ? payload_profile_->name : "";
     snap.payload_profile_status =

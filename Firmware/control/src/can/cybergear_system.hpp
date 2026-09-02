@@ -65,6 +65,10 @@ class CyberGearSystem {
   AxisRuntime& axis(AxisId a) { return axes_[static_cast<size_t>(a)]; }
   const AxisRuntime& axis(AxisId a) const { return axes_[static_cast<size_t>(a)]; }
   CanTransport& bus() { return *bus_; }
+  // Read-only view for the CAN health report (§55): stats()/is_up()/can_state()
+  // are const on the transport, so reporting bus health needs no mutable access
+  // and must never be the reason the control thread touches the bus.
+  CanTransport& bus() const { return *bus_; }
   uint8_t motor_id(AxisId a) const {
     return (a == AxisId::Pitch) ? cfg_.pitch_motor_id : cfg_.yaw_motor_id;
   }

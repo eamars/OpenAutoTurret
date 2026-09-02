@@ -103,6 +103,16 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"feedback_age_ms\":" << s.feedback_age_ms
      << ",\"control_cycle_us\":" << s.control_cycle_us
      << ",\"payload_profile_name\":\"" << json_escape(s.payload_profile_name) << "\""
+     << ",\"can_available\":" << (s.can_available ? "true" : "false")
+     << ",\"can_kind\":\"" << json_escape(s.can_kind) << "\""
+     << ",\"can_device\":\"" << json_escape(s.can_device) << "\""
+     << ",\"can_up\":" << (s.can_up ? "true" : "false")
+     << ",\"can_state\":" << static_cast<int>(s.can_state)
+     << ",\"can_rx_frames\":" << s.can_rx_frames
+     << ",\"can_rx_error_frames\":" << s.can_rx_error_frames
+     << ",\"can_tx_frames\":" << s.can_tx_frames
+     << ",\"can_tx_failed\":" << s.can_tx_failed
+     << ",\"can_last_rx_age_ms\":" << s.can_last_rx_age_ms
      << ",\"payload_profile_status\":\"" << s.payload_profile_status << "\""
      << ",\"payload_derated\":" << (s.payload_derated ? "true" : "false")
      << ",\"payload_check_active\":" << (s.payload_check_active ? "true" : "false")

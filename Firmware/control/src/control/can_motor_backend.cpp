@@ -371,4 +371,26 @@ void CanMotorBackend::set_speed_loop_gains(AxisId axis, double spd_kp,
     spdlog::warn("write SpdKi FAIL axis={} ki={:.6f}", a, spd_ki);
 }
 
+
+CanHealth CanMotorBackend::can_health() const {
+  // Pure counter read: the transport keeps these under its own lock and the
+  // control loop calls this only when it builds a report, never to decide
+  // anything (§55). An empty answer here would be a lie in the other direction,
+  // so `available` is set only after the bus object is actually reached.
+  CanHealth h;
+  can::CanTransport& bus = system_.bus();
+  const can::BusStats s = bus.stats();
+  h.available = true;
+  h.kind = bus.kind();
+  h.device = bus.device();
+  h.up = bus.is_up();
+  h.state = static_cast<int>(bus.can_state());
+  h.rx_frames = s.rx_frames;
+  h.rx_error_frames = s.rx_error_frames;
+  h.tx_frames = s.tx_frames;
+  h.tx_failed = s.tx_failed;
+  h.last_rx_ns = s.last_rx_ns;
+  return h;
+}
+
 }  // namespace ota

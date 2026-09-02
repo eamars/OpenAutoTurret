@@ -35,6 +35,30 @@ struct AxisSnapshot {
   bool in_speed_mode = false;     // energized in speed (velocity) mode right now
 };
 
+// CAN link health (§55 CAN family, §54.4 error-state observation).
+//
+// The transports have counted all of this since the transport interface
+// existed (can_transport.hpp BusStats: rx/tx/error/failure counters + the
+// interface state), and NOTHING consumed it: the acceptance report could not ask
+// for the numbers, and a link quietly rotting into error-passive was invisible
+// on the dashboard until feedback went stale. Defaults matter here: the sim
+// backend reports available=false, so a simulated run can never look like a
+// healthy bus.
+struct CanHealth {
+  bool available = false;
+  std::string kind;              // "socketcan" | "yousee"
+  std::string device;            // "can0" | "/dev/ttyUSB0"
+  bool up = false;
+  int state = -1;                // CanIfState as int: -1 unknown, 0 error-active,
+                                 // 1 error-warning, 2 error-passive, 3 bus-off,
+                                 // 4 stopped, 5 sleeping
+  uint64_t rx_frames = 0;
+  uint64_t rx_error_frames = 0;  // decode/framing losses (PHY corruption hint)
+  uint64_t tx_frames = 0;
+  uint64_t tx_failed = 0;
+  TimeNs last_rx_ns = 0;         // host monotonic; 0 = never received anything
+};
+
 class MotorBackend {
  public:
   virtual ~MotorBackend() = default;
@@ -82,6 +106,11 @@ class MotorBackend {
   // phase; the p3e fault-phase flap). No-op where feedback is self-generated
   // (sim). Safe to call every cycle; the implementation rate-limits.
   virtual void keepalive(AxisId axis) {}
+
+  // Observe-only bus health. Not part of the control path: the loop reads it at
+  // report time, never to decide anything. Backends without a CAN link (the
+  // simulated plant) keep the default, which says "nothing to report".
+  virtual CanHealth can_health() const { return {}; }
   // Set the drive current limit (A, 0..23) for this axis (LimitCur, 0x7018).
   // Fire-and-forget; safe from the control loop — the adaptive-current homing
   // raises it on each false-contact latch (§22).

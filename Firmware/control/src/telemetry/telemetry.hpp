@@ -72,6 +72,24 @@ struct TelemetrySnapshot {
   double base_yaw_rad = 0.0;
   bool installation_calibrated = false;  // true iff a real (non-identity) pose
   int8_t installation_source = 0;        // PoseSource::Unknown default
+  // CAN link health (§55 CAN family, §54.4 error states). Counted by the
+  // transport from the first commit, published here so the dashboard and the
+  // acceptance report can see them: a link degrading into error-passive, or a
+  // TX path failing every send, is otherwise only noticed when feedback goes
+  // stale — which is also what the supervisor reacts to, so the operator loses
+  // the chance to see the cause. can_available=false means the backend has no
+  // CAN link at all (a simulated run): never read those zeros as a healthy bus.
+  bool can_available = false;
+  std::string can_kind;                 // "socketcan" | "yousee"
+  std::string can_device;               // "can0" | "/dev/ttyUSB0"
+  bool can_up = false;
+  int8_t can_state = -1;                // CanIfState (-1 unknown, 0 active,
+                                        // 1 warning, 2 passive, 3 bus-off)
+  uint64_t can_rx_frames = 0;
+  uint64_t can_rx_error_frames = 0;
+  uint64_t can_tx_frames = 0;
+  uint64_t can_tx_failed = 0;
+  int64_t can_last_rx_age_ms = -1;      // -1 = nothing received yet
   // Safety / timing.
   SafetyAction safety_action = SafetyAction::Allow;
   int64_t feedback_age_ms = 0;

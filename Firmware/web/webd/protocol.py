@@ -73,6 +73,22 @@ class Telemetry:
     vision_dropped: int = 0                 # bad-size / undecodable datagrams
     vision_last_frame_sequence: int = 0
     vision_measurement_age_ms: int = -1     # since the last measurement
+    # CAN link health (§55 CAN family, §54.4 error states). The transport has
+    # counted these from the start; they are here so a degrading link is visible
+    # BEFORE feedback goes stale and the supervisor reacts to the symptom.
+    # can_available=false means there is no CAN link at all (the simulated
+    # backend), so the zeros below must never be read as "a healthy bus".
+    can_available: bool = False
+    can_kind: str = ""                      # socketcan | yousee
+    can_device: str = ""                    # can0 | /dev/ttyUSB0
+    can_up: bool = False
+    can_state: int = -1                     # -1 unknown, 0 error-active,
+                                            # 1 warning, 2 passive, 3 bus-off
+    can_rx_frames: int = 0
+    can_rx_error_frames: int = 0
+    can_tx_frames: int = 0
+    can_tx_failed: int = 0
+    can_last_rx_age_ms: int = -1            # -1 = nothing received yet
 
 
 @dataclass

@@ -57,6 +57,18 @@ ControlLoop::Config make_cfg() {
 
 // Home both axes, then move to the safe ready pose (the §27 MOVE_TO_READY /
 // HOLD_POSE transition). Returns the sim time after the ready pose is reached.
+TEST(ControlLoopSim, SimulatedBackendClaimsNoCanLink) {
+  // The interface default is the whole guarantee: a simulated plant must never
+  // report a healthy bus, because every §55 CAN metric read from a sim run
+  // would otherwise look like evidence about hardware.
+  sim::SimMotorBackend backend(0.005);
+  const CanHealth h = backend.can_health();
+  EXPECT_FALSE(h.available);
+  EXPECT_EQ(h.state, -1);
+  EXPECT_EQ(h.rx_frames, 0u);
+  EXPECT_TRUE(h.kind.empty());
+}
+
 bool run_to_ready(ControlLoop& loop, sim::SimMotorBackend& sim, int64_t& t_out) {
   int64_t t = 0;
   for (int i = 0; i < kMaxSteps; ++i) {

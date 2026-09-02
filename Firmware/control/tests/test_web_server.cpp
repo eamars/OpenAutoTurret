@@ -60,6 +60,18 @@ telemetry::TelemetrySnapshot sample_snapshot() {
   s.installation_source = static_cast<int8_t>(PoseSource::VisualCalibration);
   s.safety_action = SafetyAction::Allow;
   s.control_cycle_us = 4990;
+  // A live yousee link with a few corrupted frames, so the §55 CAN family is
+  // exercised with values that are not all zero (zeros pass any test by luck).
+  s.can_available = true;
+  s.can_kind = "yousee";
+  s.can_device = "/dev/ttyUSB0";
+  s.can_up = true;
+  s.can_state = 2;  // CanIfState::ErrorPassive
+  s.can_rx_frames = 4021;
+  s.can_rx_error_frames = 17;
+  s.can_tx_frames = 8000;
+  s.can_tx_failed = 1;
+  s.can_last_rx_age_ms = 4;
   return s;
 }
 
@@ -90,6 +102,48 @@ TEST(WebServer, PublishesTelemetryJson) {
   EXPECT_NE(msg.find("\"installation_source\":\"visual_calibration\""),
             std::string::npos);
   EXPECT_NE(msg.find("\"safety_action\":\"ALLOW\""), std::string::npos);
+  // §55 CAN family: the counters the transport keeps must reach the wire.
+  EXPECT_NE(msg.find("\"can_available\":true"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_kind\":\"" + std::string("yousee") + "\""),
+            std::string::npos);
+  EXPECT_NE(msg.find("\"can_device\":\"" + std::string("/dev/ttyUSB0") + "\""),
+            std::string::npos);
+  EXPECT_NE(msg.find("\"can_state\":2"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_rx_frames\":4021"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_rx_error_frames\":17"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_tx_frames\":8000"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_tx_failed\":1"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_last_rx_age_ms\":4"), std::string::npos);
+  ::close(cfd);
+  server.stop();
+}
+
+TEST(WebServer, NoBusIsPublishedAsAbsenceNotAsZeroHealth) {
+  // The simulated backend has no CAN link. Publishing rx=0/tx=0/state=0 with
+  // can_available unset would read as "a quiet, error-active bus" to both the
+  // dashboard and the acceptance extractor - so the snapshot must say so.
+  telemetry::TelemetrySnapshot bare;   // exactly what a sim run yields
+  EXPECT_FALSE(bare.can_available);
+  EXPECT_EQ(bare.can_state, -1);
+  EXPECT_EQ(bare.can_last_rx_age_ms, -1);
+
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_can.sock";
+  cfg.telemetry_hz = 50;
+  WebServer server(cfg, [] { return telemetry::TelemetrySnapshot{}; },
+                   [](const std::string&, const std::string&) {
+                     CommandResult r;
+                     r.ok = true;
+                     return r;
+                   });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+  int cfd = connect_client(cfg.socket_path);
+  std::string msg;
+  ASSERT_TRUE(read_message(cfd, msg));
+  EXPECT_NE(msg.find("\"can_available\":false"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_state\":-1"), std::string::npos);
+  EXPECT_NE(msg.find("\"can_last_rx_age_ms\":-1"), std::string::npos);
   ::close(cfd);
   server.stop();
 }

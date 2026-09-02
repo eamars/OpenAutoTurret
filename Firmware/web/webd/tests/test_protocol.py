@@ -1,6 +1,7 @@
 """Round-trip tests for the webd <-> controld JSON wire protocol."""
 from __future__ import annotations
 
+import json
 import unittest
 
 from ..protocol import (
@@ -150,3 +151,49 @@ class ProtocolTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CanHealthWireTest(unittest.TestCase):
+    """The §55 CAN block on the wire, including what an OLD daemon looks like.
+
+    webd and controld are not restarted in lockstep at a station: the usual
+    state during an upgrade is one side being behind. Missing keys must land on
+    defaults that say "no bus", never on zeros that read as a healthy bus.
+    """
+
+    def test_can_health_round_trip(self) -> None:
+        t = Telemetry(phase="hold", can_available=True, can_kind="yousee",
+                      can_device="/dev/ttyUSB0", can_up=True, can_state=2,
+                      can_rx_frames=4021, can_rx_error_frames=17,
+                      can_tx_frames=8000, can_tx_failed=1,
+                      can_last_rx_age_ms=4)
+        back = telemetry_from_json(json.loads(telemetry_to_json(t)))
+        self.assertTrue(back.can_available)
+        self.assertEqual(back.can_kind, "yousee")
+        self.assertEqual(back.can_device, "/dev/ttyUSB0")
+        self.assertTrue(back.can_up)
+        self.assertEqual(back.can_state, 2)          # error-passive
+        self.assertEqual(back.can_rx_frames, 4021)
+        self.assertEqual(back.can_rx_error_frames, 17)
+        self.assertEqual(back.can_tx_frames, 8000)
+        self.assertEqual(back.can_tx_failed, 1)
+        self.assertEqual(back.can_last_rx_age_ms, 4)
+
+    def test_keys_absent_on_an_older_daemon_default_to_no_bus(self) -> None:
+        legacy = ('{"type":"telemetry","ts_ns":1,"phase":"hold",'
+                  '"safety_action":"ALLOW"}')
+        t = telemetry_from_json(json.loads(legacy))
+        self.assertEqual(t.phase, "hold")
+        self.assertFalse(t.can_available)
+        self.assertEqual(t.can_state, -1)
+        self.assertEqual(t.can_last_rx_age_ms, -1)
+        self.assertEqual(t.can_kind, "")
+
+    def test_bus_off_survives_as_a_number_not_a_string(self) -> None:
+        # The dashboard maps -1..5 to names; the wire carries the enum. If a
+        # future change stringifies it here, the dashboard silently shows
+        # "unknown" for every state - including BUS-OFF.
+        t = telemetry_from_json(json.loads(telemetry_to_json(
+            Telemetry(phase="hold", can_available=True, can_state=3))))
+        self.assertIsInstance(t.can_state, int)
+        self.assertEqual(t.can_state, 3)

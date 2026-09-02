@@ -47,6 +47,9 @@ class CanMotorBackend : public MotorBackend {
   void set_speed_loop_gains(AxisId axis, double spd_kp,
                             double spd_ki) override;
 
+  // Bus health straight from the transport counters (§55).
+  CanHealth can_health() const override;
+
  private:
   // Fire-and-forget register writes (no response wait).
   bool write_reg_float(cybergear::Reg reg, float value, AxisId axis);

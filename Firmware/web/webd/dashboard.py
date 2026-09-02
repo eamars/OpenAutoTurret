@@ -144,6 +144,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="muted">read-only; motors are driven solely by controld</div>
   </section>
 
+  <section class="panel" id="p-can">
+    <h2>CAN link (§55 / §54.4)</h2>
+    <div class="row"><span class="k">Transport</span><span id="can-kind">—</span></div>
+    <div class="row"><span class="k">Bus state</span><span id="can-state" class="badge">—</span></div>
+    <div class="row"><span class="k">RX / RX error frames</span><span id="can-rx">—</span></div>
+    <div class="row"><span class="k">TX / TX failed</span><span id="can-tx">—</span></div>
+    <div class="row"><span class="k">Last RX age</span><span id="can-age">—</span></div>
+    <div class="muted" id="can-note">waiting for telemetry…</div>
+  </section>
+
   <section class="panel" id="p-payload">
     <h2>Payload (§28.5 / §31)</h2>
     <div class="row"><span class="k">Profile</span><span id="pp-name">—</span></div>
@@ -226,6 +236,37 @@ function connect() {
   };
 }
 let LAST_T = null;              // last telemetry frame, for the profile marker
+const CAN_STATE = {-1: ["unknown", "info"], 0: ["error-active", "ok"],
+                   1: ["error-warning", "warn"], 2: ["error-passive", "warn"],
+                   3: ["BUS-OFF", "err"], 4: ["stopped", "err"],
+                   5: ["sleeping", "info"]};
+
+function renderCan(t) {
+  // A simulated backend has no bus to report. Showing rx=0 tx=0 as if it were a
+  // live-but-quiet bus would be the most misleading possible default, so the
+  // whole panel changes tone when can_available is false.
+  if (!t.can_available) {
+    $("can-kind").textContent = "no CAN link";
+    badge($("can-state"), "not applicable", "info");
+    $("can-rx").textContent = "—"; $("can-tx").textContent = "—";
+    $("can-age").textContent = "—";
+    $("can-note").textContent = "can_available=false: this daemon has no CAN "
+      + "transport (simulated backend). Zeros here are absence, not health.";
+    return;
+  }
+  const st = CAN_STATE[t.can_state] || ["state " + t.can_state, "info"];
+  $("can-kind").textContent = (t.can_kind || "?") + " · " + (t.can_device || "?")
+    + (t.can_up ? "" : " (down)");
+  badge($("can-state"), st[0], st[1]);
+  $("can-rx").textContent = t.can_rx_frames + " / " + t.can_rx_error_frames;
+  $("can-tx").textContent = t.can_tx_frames + " / " + t.can_tx_failed;
+  $("can-age").textContent = t.can_last_rx_age_ms < 0 ? "none received"
+                                                      : t.can_last_rx_age_ms + " ms";
+  $("can-note").textContent = "error frames climbing while the bus stays "
+    + "error-active points at the PHY/cabling; bus-off means the controller "
+    + "stopped talking (§54.4)";
+}
+
 function render(t) {
   LAST_T = t;
   markActiveProfile();
@@ -262,6 +303,7 @@ function render(t) {
   $("by").textContent = rad(t.base_yaw_rad);
   $("ey").textContent = num(t.effort_yaw, 2);
   $("ep").textContent = num(t.effort_pitch, 2);
+  renderCan(t);
   $("pp-name").textContent = t.payload_profile_name || "—";
   badge($("pp-status"), t.payload_profile_status || "no_profile",
         payloadKind(t.payload_profile_status));
