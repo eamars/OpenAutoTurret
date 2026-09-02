@@ -1247,14 +1247,14 @@ position.
 
 | # | Location | Current stand-in / guard | Good-to-go replacement | Queue |
 |---|----------|--------------------------|------------------------|-------|
-| S1 | `control/src/main.cpp` (controld) | **No vision wiring:** never opens `/tmp/ota_vision.sock`, never decodes `TargetMeasurement`, never calls `enable_tracking()` (tracking machinery exists + is tested, but the daemon does not use it) | Add a UDS `SOCK_SEQPACKET` client thread (58-byte decode → `loop.feed_measurement(m)`); load the `tracking:` block + `camera.intrinsics_file` → `TrackingController::Config`; `loop.enable_tracking(cfg, err)` gated on `homed_` (§38.1) | P8 |
+| S1 | `control/src/vision/vision_ingest.{hpp,cpp}` + `control/src/main.cpp` | **DONE offline 2026-09-03:** controld BINDS the `SOCK_SEQPACKET` UDS (`vision.socket_path`, `$OTA_VISION_SOCKET` override), decodes 58-byte `TargetMeasurement`s on its own accept/reader threads (§46: never in the 200 Hz cycle), hands them to `loop.feed_measurement()`, auto-enables tracking once `homed_` (§38.1), loads the `tracking:` block + intrinsics/extrinsics, and publishes link health (`vision_connected/frames/dropped/last_frame_sequence/measurement_age_ms`) in the §6.3 snapshot. Sim-verified end to end + 8 unit tests (`test_vision_ingest`) | **Nothing to build — the live half is P8 itself:** run the real camera + real motors, supervised | P8 |
 | S2 | `tools/turret_payload.cpp` (`turret-payload`) | `--sim` rehearsal on `SimMotorBackend` (no CAN, deterministic clock/pacer) | Drop `--sim`: real mode opens CAN + `BootFsm` and moves the real motors (supervised, daemon stopped) | P10 |
-| S3 | `vision/visiond.py` | `--synthetic` (SAFE default): `SyntheticFrameSource`, no camera | `--real --image-config <json> --detector-rpk <json>` (+ `--orientation rotate_180`); the guarded `Picamera2FrameSource` path activates | P7, P8 |
+| S3 | `vision/visiond.py` + `vision/frame_source.py` | `--synthetic` (SAFE default). `--real` now speaks the picamera2 that is installed (0.3.37): camera started once, request-callback → newest-frame mailbox (same proven pattern as `web/webd/video.py`), `SensorTimestamp` in the monotonic domain, install orientation applied to frame AND boxes. `--detector rpk` (attempts the IMX500 AI API, **degrades to no detections** — measurements stay `valid=false`), `--detector simple` (classical bridge detector, `vision/simple_detector.py`), `--detector none` | The RPK/Hailo stack (platform upgrade or USB accelerator — `research_vision_readiness_p7.md`) replaces the bridge detector; then P8 is a production run | P7, P8 |
 | S4 | `web/webd` (inspection service) | `FakeControld` stand-in server (sim telemetry); real camera already live-verified | Point webd's socket config at the real controld web socket (`OTA_WEB_SOCKET`); run with `turret-web` unit | P12 |
 | S5 | `Firmware/systemd/*.service` | Templates only — none installed/enabled (paths point at `/opt/open_auto_turret`) | Adjust `ExecStart`/`WorkingDirectory` to the install path; `systemctl enable --now can0 turret-control [turret-vision turret-web]` | P11 |
 | S6 | C++ mock tests: `test_tracking_integration`, `test_payload_daemon`, `test_control_loop`, homing/trajectory suites (all `SimMotorBackend`) | Simulated plant (first-order lag, end stops, stall effort) | HIL counterparts per §54.4: the same scenarios (rotating-target track, loss→coast→brake, search sweep, in-loop payload check, stop contact) executed against the real CAN — supervised | P13 |
-| S7 | `calibration/camera_intrinsics.yaml` | Path in `turret.yaml`; **file does not exist** (tracking config not yet loaded in main.cpp) | Produce the §28.2 intrinsics file (camera matrix + distortion) at commissioning | P8/P9 |
-| S8 | `calibration/camera_extrinsics.yaml` (R_P_C) | Path in `turret.yaml`; **file does not exist** → aligned-identity default in `TrackingController::Config` | §28.3 extrinsic estimate (fiducial board), loaded into `geo::TurretKinematics` | P9 |
+| S7 | `calibration/camera_intrinsics.yaml` | Path in `turret.yaml`; **file still does not exist.** The LOADER is done (`control/src/calibration/camera_calibration.hpp`: `load_camera_intrinsics`, key=value, requires fx/fy/cx/cy/width/height) — absent it, controld logs `UNCALIBRATED` and uses the default pinhole (fx=fy=1000, cx/cy centre) | Produce the §28.2 intrinsics file (camera matrix + distortion) at commissioning | P8/P9 |
+| S8 | `calibration/camera_extrinsics.yaml` (R_P_C) | Path in `turret.yaml`; **file still does not exist** → aligned-identity default. The LOADER is done (`load_camera_extrinsics`: 3×3 row parse + orthonormality check, aligned default otherwise) | §28.3 extrinsic estimate (fiducial board), loaded into `geo::TurretKinematics` | P9 |
 | S9 | `calibration/installation_pose.yaml` (R_W_B) | Path in `turret.yaml`; **file does not exist** → identity "assumed-level base", telemetry flags uncalibrated | §29 fiducial (ChArUco) calibration run → atomic commit → daemon loads at boot | P9 |
 | S10 | `config/turret.yaml` `payload.active_profile` | `conservative` (built-in placeholder profile) | Real profile name from `turret-payload profile` (S2) | P10 |
 | S11 | `config/turret.yaml` §58 commissioning values (23 params), `expected_travel_deg` bands, `shutdown.*_park_deg` | Conservative placeholders (slow speeds, wide bands, 0/0 park) | Measured values from P0/P3/P13 (travel, contact thresholds, safe park pose) | P0–P3, P13 |
@@ -1419,3 +1419,161 @@ history is auditable.
   IMX500 video feed (the §42.3 placeholder is gone); installation orientation
   (Phase 7) implemented, live run at P9; systemd (§52) templates done, enable at
   P11.
+
+---
+
+## Offline session 2026-09-03 (b) — S1 + observability batch `[SW]`
+
+All of this was built and measured **offline** (sim plant / unit tests; the real
+camera and CAN were untouched). Nothing here satisfies a `[MOTOR]` queue item.
+Probe artifacts live in `Firmware/build/probe/` (logs + JSONL); the harness
+scripts are `probe2_payload.sh`, `probe3_select.sh`, `probe4_regression.sh`.
+
+### S1 — controld vision ingest: BUILT and sim-verified
+
+The daemon now binds the vision UDS and consumes `TargetMeasurement`s exactly as
+§6.1/§6.2 specify. Sim probe (`controld config/turret_sim.yaml --sim` +
+`visiond --synthetic --frames 600 --framerate 30`):
+
+```
+tracking ENABLED (v_max track=30.0 deg/s search=10.0 deg/s, ... intrinsics fx=1000.0 ...)
+vision: 600 frames (0 dropped, seq 599, age 138321 ms) | tracking=on state=ready_hold
+state sequence: ready_hold -> tracking (conf 1.00) -> brake_to_hold (conf 0.08) -> ready_hold
+final pose: q_pitch=-1.5053 q_yaw=-2.2677 rad   (ready pose, within 0.02 deg)
+```
+
+The publisher disappearing drove §34 exactly as designed (track → coast/brake →
+hold, and the axes returned to the ready pose). Unit coverage: `test_vision_ingest`
+(8 cases: byte-exact round trip; short and oversized datagrams counted as dropped
+and never handed to the loop; second publisher rejected; stop unlinks + counts
+down; restart rebinds; counter semantics; age measured on the control clock) and
+`test_tracking_observability` (5 cases, incl. `at_ready` with tracking enabled and
+the §6.3 vision block).
+
+### S1b — final regression (`probe4_regression.sh`, one daemon run)
+
+Payload selection + the real UDS hand-off + §34 loss behaviour + park, all in one
+run, with the async logger in place:
+
+```
+select_payload_profile ghost     -> {"ok":false,"error":"no payload profile named 'ghost' in config/payload_profiles"}
+select sim_plant + verify        -> phase=payload_check (active=True) -> "payload check complete: ok (derated=false)"
+visiond --synthetic 300 frames   -> vision: 269 frames (0 dropped, seq 268, age 18 ms) | tracking=on state=tracking conf=1.00
+publisher exits (age 1007 ms)    -> state=brake_to_hold conf=0.09 -> state=ready_hold conf=0.00
+after exit (state)               -> vision_connected=False, vision_frames=300, age 1123 ms ("was streaming, then stopped")
+loop: target=200 Hz p50=5.055 p95=5.059 p99=5.067 worst=5.129 ms (n=4096); SLOW CYCLE count: 0
+PARKED (motors de-energized at the park pose) / controld stopped cleanly
+```
+
+`measurement_age_ms` staying in the 7–29 ms band while visiond published at 30 Hz
+is the §6.2 timestamp chain doing its job (capture → IPC → control cycle), and the
+~1 s age after the publisher died is what makes a dead visiond obvious on the
+dashboard instead of looking like "no target".
+
+### Control-thread stalls: the synchronous logger was the cause
+
+The first probe (before this batch's logging change) captured
+`supervisor: DERATE reason='control-loop cycle overrun' overrun_us=1074018` and
+`overrun_us=800159` — 0.8–1.1 s stalls of a 5 ms cycle, from spdlog writing
+synchronously from the control thread (a §46 violation). controld now starts an
+**async logger** (8192-message bounded queue, one writer thread, `create_async_nb`
+= overrun-oldest, so a full queue drops log lines instead of stalling the cycle;
+falls back to the default logger if it cannot be created) and logs per-cycle
+period percentiles every second:
+
+```
+loop: target=200 Hz p50=5.054 p95=5.058 p99=5.068 worst=5.092 ms (n=4096)
+```
+
+Three further probes (~5 min of sim: homing + payload checks + tracking + park)
+show `worst` <= 5.2 ms in steady state; the only remaining `SLOW CYCLE` warnings
+were 2.4 ms / 5.0 ms **during homing**, i.e. the known blocking register recipes
+(re-arm / backoff), not random stalls.
+
+**Why this matters for P3/P4:** both recorded a recurring ~98 ms feedback gap that
+tripped `feedback_max_age_ms` (Brake) with nothing on the wire to explain it. A
+~100 ms logging stall on the same host is exactly that size, and it is now gone
+offline. P3/P4 still have to be re-run live — this is a candidate root cause
+removed, not a live pass, because the sim plant has no CAN transport to stall.
+
+### `payload_check_active` "snapshot freeze" — NOT reproducible, closed
+
+P6's note claimed the §6.3 snapshot stops during a payload check. Recorded at
+~15 Hz across two real checks (`tools/telemetry_stream.py --jsonl`):
+
+```
+t=39630.823 phase=payload_check  payload_check_active=True
+t=39637.036 phase=hold           payload_check_active=False payload_profile_status=mismatch payload_derated=True
+t=39691.243 phase=payload_check  payload_check_active=True          (1816 frames, no gap)
+```
+
+The snapshot is rewritten every cycle and both new fields stream. The original
+report is explained by the tool, not the daemon: `tools/station_ipc.py state`
+asked for keys that are not on the wire (`phase`, `confidence`, `q_pitch`,
+`fault`) — missing keys printed `?`, and `phase` did not exist yet. `phase` +
+`fault` are now published and the tool's key list matches the real names.
+
+### New: `select_payload_profile <name>` (§42.2) — the mismatch→clear cycle without a restart
+
+Until now the only way out of a `mismatch` derate was editing
+`payload.active_profile` and restarting the daemon. The command swaps the profile
+at runtime: the new caps apply immediately, but the **status becomes
+`no_profile`** until `start_payload_verification` runs (§31.3), so selecting an
+unverified profile can never silently raise a limit. Verified offline, full cycle:
+
+```
+select sim_plant  -> no_profile -> verify -> payload check complete: ok (derated=false)
+select too_light  -> no_profile -> verify -> mismatch; peak effort 1.00 Nm exceeds 2.0x baseline (0.35 Nm); derate 0.5
+select sim_plant  -> no_profile -> verify -> ok   (derate CLEARED)
+select ghost      -> ok:false, "no payload profile named 'ghost' in config/payload_profiles"
+```
+
+Two related fixes: unknown names are rejected **synchronously** (the web response
+is written before the control thread executes anything, so an `ok` that decays
+into a log-only warning would lie to the UI; the `stat()` runs on the web thread,
+never on the control thread, §46), and `config/payload_profiles/sim_plant.yaml`
+is a clearly-labelled SIM-PLANT fixture so this path stays testable offline.
+
+### Two defects the new tests caught (both fixed)
+
+1. `vision_measurement_age_ms` could go **hugely negative** when the arrival
+   stamp and the loop clock disagreed (`-41022034` ms in a test). In the daemon
+   both are CLOCK_MONOTONIC so production was unaffected, but the snapshot is the
+   operator's only view: the age is clamped at 0, `-1` still means "no measurement
+   has ever arrived", and the counters stay cumulative after the publisher dies
+   (so "it was streaming, then it stopped" is visible).
+2. **`at_ready()` was false whenever tracking was enabled**, even while the
+   station was holding the ready pose. On a station running with
+   `tracking.enabled: true` that silenced the operator's P0 pass line
+   (`homed + at ready pose; holding`) and gated off the §27 auto payload check.
+   `at_ready_` is now derived from the arbitration (`source == Hold`) plus the
+   pose tolerance; regression-tested both ways.
+
+### Vision: the platform gap is unchanged, the bridge is built
+
+`Picamera2FrameSource` was rewritten against the picamera2 that is actually
+installed (0.3.37: camera started once, request callback → newest-frame mailbox —
+the old code called `capture_file()` per frame, which cannot stream). The RPK path
+is now an *attempt* that degrades to "streaming WITHOUT detections" (no detections
+→ `valid=false` → no tracking: the safe direction). A **classical bridge
+detector** (`vision/simple_detector.py`, `--detector simple`) exists so P8's loop
+can be brought up on real glass: three-frame differencing with polarity-consistent
+cells and edge-band stitching, and tests that state its accuracy honestly (centre
+within about half the per-frame motion; a motion detector loses a target that
+stops moving; the class id is synthetic). It is not the §10.1 detector — **P7
+stays open** (`research_vision_readiness_p7.md`).
+
+### Tools + coverage
+
+- `tools/telemetry_stream.py` (new): records/prints the §6.3 stream
+  (`--changes-only`, `--count-transitions`, `--jsonl`); read-only by construction.
+- `tools/station_ipc.py`: commands now pass their **arg** (it was silently
+  dropped — the reason the first `select_payload_profile` probes "failed" with a
+  validation error), honours `$OTA_WEB_SOCKET` / `--socket`, and `state` prints
+  real field names.
+- `controld --sim` never opens a CAN transport at all (it will not invent a
+  `vcan0`), logs a loud `*** SIM MODE ***` line, and no sim run is ever evidence
+  for a `P#` live item.
+- Suite: `ctest` 42/42 (added `test_vision_ingest`, `test_tracking_observability`);
+  pytest 116 passed / 2 skipped (added `test_simple_detector.py`, the `--detector`
+  CLI cases, and the monotonic-stamp/pacing tests).
