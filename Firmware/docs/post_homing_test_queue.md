@@ -872,6 +872,78 @@ A manual `start_payload_verification` web command re-runs it on demand.
 **Pass criteria:** check runs one axis at a time and returns to hold; mismatch →
 derate visible in telemetry + limits; re-verify with the correct profile clears it.
 
+**Live run log (in progress):**
+
+- [x] **Safe-region fix.** The check region is now PER-AXIS, centered on each
+  axis's pose at check start and intersected with the homed soft limits (§44
+  "safe central region"), so a check from the ready pose is valid (it previously
+  failed "start pose outside the safe central region" because the region was a
+  shared static 0 ± 20 deg box).
+- [x] **Unit tests.** `test_payload_check.cpp` (settle band, region guards,
+  per-segment timing) + `test_payload_daemon.cpp` — including the failure-swallow
+  regression: an abort must log the *failing* axis's own segment reason (not the
+  next axis's) and stop at the first move's 8 s budget (not 8 s + the next axis's
+  battery). Off-center ready pose and first-axis-fail-aborts-whole-check covered.
+- [x] **Integration.** 39/39 ctest + 93 pytest green.
+- [x] **Run A (live) — partial pass, residual root-caused.** Verified live: the
+  failure-swallow fix (abort logs the failing axis reason), the inactive-axis
+  (yaw) fixed-target hold (held ±0.0003 rad over ~11 s), and the 5 % settle band
+  on the +step. **Residual:** the `pos_return` (against-gravity) half timed out at
+  8 s.
+- [x] **Root cause (Run A residual).** The drive's stock inner **speed-loop gains
+  are too weak to hold the commanded 5°/s against the pitch's gravity load**:
+  `spd_kp=1.0` / `spd_ki=0.002` (drive defaults). The position loop commands
+  0.0873 rad/s (clamped by `LimitSpd`), but the axis only creeps ~0.02 rad/s on
+  ~0.05 A — never torque-limited, so it was NOT a current-limit problem (5 A was
+  plenty). The with-gravity half of the 2° step is assisted (fast burst); the
+  against-gravity half crawls and times out. Gravity-neutral pitch ≈ −1.4620 rad;
+  yaw is a vertical axis (no gravity torque, only friction) so it is unaffected.
+- [x] **Fix (firmware, reproducible).** `MotorBackend::set_speed_loop_gains()`
+  (CAN writes `SpdKp` 0x701F / `SpdKi` 0x7020; **no-op in sim**, whose plant has no
+  drive-internal velocity loop) + config knobs `payload.check_spd_kp` /
+  `check_spd_ki` (5.0 / 0.02 = 5× stock, with validation/clamping), applied to
+  **both axes at check start**. 4 new unit tests (config default/yaml/invalid-clamp
+  + a daemon test asserting the loop issues the gains on both axes). Full suite
+  green (39 ctest, 93 pytest). This replaces the earlier one-off manual CAN writes
+  (which are lost on a drive power-cycle) with a firmware-owned, reproducible
+  write.
+- [ ] **BLOCKED — live re-validation (Run A re-run).** The CAN bus (MCP2515,
+  `can0`) entered a persistent `ERROR-PASSIVE` state mid-run: a **physical-layer
+  bus fault**. All software resets exhausted (stray `candump` kill, interface
+  down/up, a full MCP2515 re-probe via SPI `unbind`/`rebind`, auto-restart
+  re-enabled) — the controller recovers to `ERROR-ACTIVE` for ~1 s then degrades
+  back to `ERROR-PASSIVE`, and the drives are fully silent (no response to reads
+  or discovery). **Awaiting a hardware power-cycle of the drives and/or the CAN
+  adapter at the station.** Once recovered: re-run the check and confirm the gain
+  fix clears the `pos_return` timeout (watch for oscillation; the `neg_step` is
+  also an against-gravity move).
+  **Research (2026-09-02, online — full note in
+  `docs/research_can_bus_error_passive.md`):** the ~1 s ACTIVE→PASSIVE
+  re-degrade after every reset is the signature of a *continuous* physical-layer
+  fault (hundreds of bit errors/s re-accumulate TEC/REC past 128); error-passive
+  is NOT covered by the kernel's `restart-ms` (it only fires on BUS-OFF), so no
+  software reset can clear it while the fault persists. The silent drives are
+  the same fault from the other side: bus-off / fault-latched, unrecoverable
+  until power-cycled (CAN 2.0B bus-off recovery needs 128×11 clean recessive
+  bits). The MCP2515/HAT is exonerated (re-probe works, reaches ACTIVE). Leading
+  candidates: load-induced power-rail sag / ground bounce or EMI at the
+  against-gravity peak current (the fault's trigger), or a latched transceiver
+  (cleared only by power-cycling the affected device). **After the power
+  cycle, verify before re-running:** `ip -details -statistics link show can0`
+  (state ERROR-ACTIVE, error counters flat) + `candump can0 -ea` in a terminal
+  during the run (any `ERRORFRAME` line = the fault is still there) +
+  `turret-can stats` + discovery reads of both drives. Firmware follow-ups
+  (not blocking): `berr-reporting on` in `can0.service` (the daemon's RX filter
+  already accepts `CAN_ERR_FLAG` frames) + runtime `CanIfState` monitoring with
+  bounded down/up recovery, so the next bus fault is a one-line log instead of a
+  multi-hour mystery.
+- [ ] **Runs B/C/D + profiles.** `conservative.yaml` / `too_light.yaml` baselines
+  must match the drive's *measured* response, so they are written from a passing
+  Run A; then Run B (conservative, `auto_verify: true` → ok, derated=false), Run C
+  (too_light → mismatch + derate 0.5 + telemetry `derated` true, hold drops to
+  5°/s), Run D (back to conservative → ok, derate clears). Deferred until the bus
+  is back.
+
 ---
 
 ## P7 — Live camera / vision verification (Phase 4) `[CAMERA]`
