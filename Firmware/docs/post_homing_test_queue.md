@@ -907,17 +907,65 @@ derate visible in telemetry + limits; re-verify with the correct profile clears 
   green (39 ctest, 93 pytest). This replaces the earlier one-off manual CAN writes
   (which are lost on a drive power-cycle) with a firmware-owned, reproducible
   write.
-- [ ] **BLOCKED — live re-validation (Run A re-run).** The CAN bus (MCP2515,
-  `can0`) entered a persistent `ERROR-PASSIVE` state mid-run: a **physical-layer
-  bus fault**. All software resets exhausted (stray `candump` kill, interface
-  down/up, a full MCP2515 re-probe via SPI `unbind`/`rebind`, auto-restart
-  re-enabled) — the controller recovers to `ERROR-ACTIVE` for ~1 s then degrades
-  back to `ERROR-PASSIVE`, and the drives are fully silent (no response to reads
-  or discovery). **Awaiting a hardware power-cycle of the drives and/or the CAN
-  adapter at the station.** Once recovered: re-run the check and confirm the gain
-  fix clears the `pos_return` timeout (watch for oscillation; the `neg_step` is
-  also an against-gravity move).
-  **Research (2026-09-02, online — full note in
+- [x] **RESOLVED (2026-09-02) — fault reproduced, root cause
+  **unresolved-external**; re-validation gated on station hardware.** Live
+  diagnosis (15:21–16:10 NZ, direct MCP2515 register access over SPI,
+  corrected per architect review) — **full evidence:
+  `docs/can_hardware_fault_report.md` (v2)**:
+  - **MCP2515 core functional** (kernel loopback TX/RX 5/5 zero errors;
+    corrected raw loopback passes; SPI, oscillator, IRQ, driver healthy).
+  - **An intermittent EXTERNAL signal on CANH/CANL drives real receive
+    errors**: MERRF/ERRIF storms (≥20–100/s, scaling with receiver bitrate),
+    REC pinned ≥128 → ERROR-PASSIVE, which sticks until a reset lands in a
+    quiet window. No valid frame decodes at any bitrate (1M→100k sweep).
+    The earlier "internally fabricated phantom frame" was a probe
+    misinterpretation (CANINTF 0xA0 = MERRF+ERRIF, not RX1IF+WAKIF; RXB1
+    content was stale — report §3).
+  - **Source not discriminable remotely** — HAT transceiver/RX-path damage,
+    a faulted CyberGear transceiver, wiring/termination, and electrical
+    disturbance all remain candidates. Do NOT classify the HAT as faulty
+    before the isolation ladder.
+  - **Drives silent** (no discovery response, no ACK) — power-cycle needed.
+  - **`berr-reporting` unsupported** by this kernel's mcp251x.
+  **Operator action before re-running Run A:** physical isolation ladder
+  (report §6): Test A HAT disconnected ≥5 min → Test B cable → Test C pitch
+  → Test D yaw → Test E both → motor-load ramp → termination measurement →
+  scope if available → A/B with a replacement HAT. Then power-cycle the
+  drives, confirm `./turret-can discover` returns both IDs, and re-run the
+  payload check (the `pos_return` gain fix is still pending live
+  verification). Supervisor (`tools/can_supervisor.py`) delivered and
+  live-tested.
+- [x] **Run B (live, yousee PHY, 2026-09-02 23:19–23:45) — FULL PASS.**
+  Ran the whole P6 verification on the yousee USB-CAN transport after a
+  drive power-cycle (logs /tmp/controld_p6_runB1..4.log):
+  - **Run B1 (no profile):** homing → hold → `start_payload_verification` →
+    both axes measured cleanly (pitch rise 0.53/0.45 s, settle 0.79/1.21 s;
+    yaw 0.51/0.46 s, 0.71/0.55 s) → `complete: no_profile`. The Run A
+    residual (against-gravity `pos_return` timeout) is GONE — the
+    `check_spd_kp/ki` firmware gain fix works live.
+  - Profiles captured from that run: `config/payload_profiles/conservative.yaml`
+    (real baseline) and `too_light.yaml` (0.35x rise/settle — deliberate
+    mismatch-test profile, never install).
+  - **Run B2 (conservative):** `payload check complete: ok (derated=false)`.
+  - **Run B3 (too_light):** `mismatch; rise_time ratio 3.53 ... (derated=true)`;
+    telemetry `{payload_profile_status: mismatch, payload_derated: True}`.
+  - **Run B4 (conservative again):** `ok (derated=false)`, telemetry derate
+    cleared. Bonus negative test: a second command issued mid-return was
+    correctly rejected (`system is moving; wait for hold`).
+  - Zero soft-limit excursions / limit crossings in all four runs (grep-verified).
+  - Mechanism note: profile selection happens at boot (no runtime selector),
+    so the mismatch→clear cycle ran via config change + daemon restart; a
+    `select_payload_profile` web command would make one-session operation
+    possible (small follow-up).
+  - Telemetry note: the 15 Hz snapshot producer blocks with the check, so
+    `payload_check_active` cannot stream `true` mid-check (it reads false;
+    phase transitions + `payload_profile_status` updates are correct).
+    Cosmetic observability gap — worth a small fix later.
+  - **Decision:** keep `auto_verify: false` (operator-triggered check; boot
+    stays deterministic). Manual `start_payload_verification` is fully
+    functional as the §27 path.
+
+**Research (2026-09-02, online — full note in
   `docs/research_can_bus_error_passive.md`):** the ~1 s ACTIVE→PASSIVE
   re-degrade after every reset is the signature of a *continuous* physical-layer
   fault (hundreds of bit errors/s re-accumulate TEC/REC past 128); error-passive
@@ -932,11 +980,11 @@ derate visible in telemetry + limits; re-verify with the correct profile clears 
   cycle, verify before re-running:** `ip -details -statistics link show can0`
   (state ERROR-ACTIVE, error counters flat) + `candump can0 -ea` in a terminal
   during the run (any `ERRORFRAME` line = the fault is still there) +
-  `turret-can stats` + discovery reads of both drives. Firmware follow-ups
-  (not blocking): `berr-reporting on` in `can0.service` (the daemon's RX filter
-  already accepts `CAN_ERR_FLAG` frames) + runtime `CanIfState` monitoring with
-  bounded down/up recovery, so the next bus fault is a one-line log instead of a
-  multi-hour mystery.
+  `turret-can stats` + discovery reads of both drives. (The earlier
+  "firmware follow-ups: berr-reporting on + CanIfState monitoring" are
+  superseded: `berr-reporting` is unsupported on this kernel's mcp251x, and
+  the monitoring/recovery is delivered as `tools/can_supervisor.py` —
+  see `docs/can_hardware_fault_report.md` §6.)
 - [ ] **Runs B/C/D + profiles.** `conservative.yaml` / `too_light.yaml` baselines
   must match the drive's *measured* response, so they are written from a passing
   Run A; then Run B (conservative, `auto_verify: true` → ok, derated=false), Run C
@@ -947,6 +995,17 @@ derate visible in telemetry + limits; re-verify with the correct profile clears 
 ---
 
 ## P7 — Live camera / vision verification (Phase 4) `[CAMERA]`
+
+> **STATUS 2026-09-03: BLOCKED — platform gap, not our code.** IMX500 streams
+> fine (system python3 only), but the installed picamera2 (0.3.37) has no
+> detection API, no RPK assets and no Hailo/Dataforensics SDK exist on the
+> station. Findings, ranked options (platform upgrade / bring RPK on USB /
+> classical bridge detector for P8 bring-up) and the offline-unblockable P8
+> prereq S1: **see `docs/research_vision_readiness_p7.md`**. The
+> `Picamera2FrameSource` scaffold in `vision/frame_source.py` must be adapted
+> to whichever API wins (its `detect_objects=True` / `metadata["Objects"]`
+> shape does not exist on this system).
+
 
 **SAFETY: the vision daemon is independent of the motor driver. This test runs
 `visiond` against the real IMX500 and verifies detection + timestamping + IPC
