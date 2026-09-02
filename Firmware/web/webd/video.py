@@ -52,9 +52,18 @@ class VideoState:
 class VideoSource:
     """A single-owner, on/off MJPEG source fed by the IMX500.
 
-    One capture thread (the picamera2 request callback) produces the *latest*
+    One capture thread PULLS completed camera requests and produces the *latest*
     JPEG into a shared slot. Any number of browser clients read that slot; each
     only re-sends a frame when it changes, so N viewers cost the same capture.
+
+    Why pull rather than the request callback: on this station's picamera2
+    (0.3.37) `request_callback` is deprecated and silently maps onto
+    `post_callback`, which fired only ~0.8 times per second (measured: 2
+    callbacks in 2.5 s) and left `stop()` blocked forever on a job that never
+    completed — i.e. a slideshow UI that could not be switched off. Pulling with
+    `capture_request()` delivered 40 requests in 2.0 s and stopped cleanly, on
+    the same camera in the same process. Same finding killed the callback design
+    in `vision/frame_source.py`; both now use the pull pattern.
     """
 
     def __init__(self, enabled: bool = True, orientation: str = "none",
@@ -70,6 +79,8 @@ class VideoSource:
         self._count: int = 0
         self._running: bool = False
         self._camera = None
+        self._thread: threading.Thread | None = None
+        self._stop_evt = threading.Event()
         self._state = VideoState()
         self._first_frame = threading.Event()
         self._min_publish_s = 1.0 / 15.0
@@ -152,9 +163,15 @@ class VideoSource:
                         cfg["controls"]["AwbEnable"] = 0
                     except Exception:  # noqa: BLE001 - control name varies
                         pass
-                cam.request_callback = self._make_callback(Image, quality)
                 cam.configure(cfg)
                 cam.start()  # blocks until the pipeline is up
+                # OUR thread pulls requests (see the class docstring for why the
+                # callback attribute must NOT be set on this picamera2).
+                self._stop_evt.clear()
+                self._thread = threading.Thread(
+                    target=self._pull_loop, args=(cam, Image, quality),
+                    name="webd-video-capture", daemon=True)
+                self._thread.start()
             except Exception as e:  # noqa: BLE001
                 if cam is not None:
                     self._safe_close(cam)
@@ -165,6 +182,7 @@ class VideoSource:
 
             # Confirm the camera is actually producing frames.
             if not self._first_frame.wait(timeout=5.0):
+                self._join_thread()
                 self._safe_close(cam)
                 self._camera = None
                 msg = "camera started but produced no frames"
@@ -189,6 +207,9 @@ class VideoSource:
         """Stop producing and release the camera (idempotent)."""
         with self._lifecycle_lock:
             self._running = False
+            # The puller must be gone BEFORE the camera is stopped, or it is
+            # blocked in capture_request() on a camera that no longer exists.
+            self._join_thread()
             if self._camera is not None:
                 self._safe_close(self._camera)
                 self._camera = None
@@ -206,8 +227,47 @@ class VideoSource:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_callback(self, Image, quality: int):
-        """Build the picamera2 request callback (runs on the camera thread).
+    def _join_thread(self) -> None:
+        """Ask the capture thread to finish and wait for it (bounded)."""
+        self._stop_evt.set()
+        th, self._thread = self._thread, None
+        if th is not None and th.is_alive():
+            # One pull iteration costs about a frame period; 3 s is generous and
+            # bounded on purpose — a hung join would hang webd's shutdown.
+            th.join(timeout=3.0)
+
+    def _pull_loop(self, cam, Image, quality: int) -> None:
+        """Capture thread: pull completed requests, publish JPEGs at the cap.
+
+        `capture_request()` blocks for roughly one frame period, so a stop is
+        noticed within ~1 frame and every request is released — holding one
+        starves the pipeline, which is how the callback variant wedged.
+        """
+        while not self._stop_evt.is_set():
+            try:
+                request = cam.capture_request()
+            except Exception as e:  # noqa: BLE001
+                # Camera died / was stopped under us. Record it; the MJPEG
+                # handler keeps serving the last frame and the UI shows the error.
+                self._open_error = f"camera request failed: {e}"
+                return
+            now = time.monotonic()
+            try:
+                # FPS cap: only JPEG-encode a frame when one is due. Skipping is
+                # cheap — and the request is ALWAYS released (the main §42.3
+                # "low CPU" lever must not come at the cost of the pipeline).
+                if now - self._last_publish >= self._min_publish_s:
+                    self._encode_request(request, Image, quality, now)
+            except Exception as e:  # noqa: BLE001
+                self._open_error = f"frame encode failed: {e}"
+            finally:
+                try:
+                    request.release()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _encode_request(self, request, Image, quality: int, now: float) -> None:
+        """Turn one completed request into the newest JPEG in the shared slot.
 
         The install-level orientation correction is applied HERE, on the raw frame,
         before any encoding — i.e. before the frame enters processing (doc §42.3) —
@@ -218,51 +278,37 @@ class VideoSource:
         state = self
         orientation = state._orientation
         wb_mode = state._wb_mode
-
-        def _cb(request) -> None:
-            # FPS cap: only JPEG-encode a frame when one is due. Skipped frames
-            # cost just this comparison — the main §42.3 "low CPU" lever.
-            now = time.monotonic()
-            if now - state._last_publish < state._min_publish_s:
-                return
-            state._last_publish = now
-            try:
-                arr = request.make_array("main")
-                # 1) Orientation (install-level) on the raw frame, first.
-                if orientation != "none":
-                    arr = ic.apply_orientation_image(arr, orientation)
-                # 2) XBGR8888 -> RGB. V4L2_PIX_FMT_XBGR32 is BGRX-8-8-8-8
-                #    (byte0=B, byte1=G, byte2=R, byte3=X). Take the first 3
-                #    bytes and reverse -> [R, G, B], dropping the trailing X.
-                #    (Getting this order wrong puts the constant-255 X byte into
-                #    "red" and drops blue -> a false red cast.)
-                rgb = arr[..., :3][..., ::-1]
-                # 3) White balance (install-level): auto gray-world, smoothed.
-                if wb_mode == "auto":
-                    g = ic.gray_world_correction(rgb)
-                    a, prev = state._wb_alpha, state._wb_gains
-                    state._wb_gains = (
-                        a * g[0] + (1 - a) * prev[0],
-                        a * g[1] + (1 - a) * prev[1],
-                        a * g[2] + (1 - a) * prev[2],
-                    )
-                    rgb = ic.apply_white_balance(rgb, state._wb_gains)
-                buf = io.BytesIO()
-                Image.fromarray(np.ascontiguousarray(rgb)).save(
-                    buf, "JPEG", quality=quality)
-                jpeg = buf.getvalue()
-            except Exception as e:  # noqa: BLE001
-                state._open_error = f"frame encode failed: {e}"
-                return
-            with state._frame_lock:
-                state._latest = jpeg
-                state._seq += 1
-                state._ts = now
-                state._count += 1
-            if not state._first_frame.is_set():
-                state._first_frame.set()
-
-        return _cb
+        state._last_publish = now
+        arr = request.make_array("main")
+        # 1) Orientation (install-level) on the raw frame, first.
+        if orientation != "none":
+            arr = ic.apply_orientation_image(arr, orientation)
+        # 2) XBGR8888 -> RGB. V4L2_PIX_FMT_XBGR32 is BGRX-8-8-8-8
+        #    (byte0=B, byte1=G, byte2=R, byte3=X). Take the first 3
+        #    bytes and reverse -> [R, G, B], dropping the trailing X.
+        #    (Getting this order wrong puts the constant-255 X byte into
+        #    "red" and drops blue -> a false red cast.)
+        rgb = arr[..., :3][..., ::-1]
+        # 3) White balance (install-level): auto gray-world, smoothed.
+        if wb_mode == "auto":
+            g = ic.gray_world_correction(rgb)
+            a, prev = state._wb_alpha, state._wb_gains
+            state._wb_gains = (
+                a * g[0] + (1 - a) * prev[0],
+                a * g[1] + (1 - a) * prev[1],
+                a * g[2] + (1 - a) * prev[2],
+            )
+            rgb = ic.apply_white_balance(rgb, state._wb_gains)
+        buf = io.BytesIO()
+        Image.fromarray(np.ascontiguousarray(rgb)).save(buf, "JPEG", quality=quality)
+        jpeg = buf.getvalue()
+        with state._frame_lock:
+            state._latest = jpeg
+            state._seq += 1
+            state._ts = now
+            state._count += 1
+        if not state._first_frame.is_set():
+            state._first_frame.set()
 
 
 def mjpeg_boundary() -> str:

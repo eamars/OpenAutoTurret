@@ -200,14 +200,28 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         async def gen():
             last_seq = -1
             sent = 0
+            stale_s = 0.0
             while limit is None or sent < limit:
+                # End the stream when the source is switched off (or dies). Without
+                # this an open <img> keeps the connection — and therefore uvicorn's
+                # graceful shutdown — alive indefinitely: `systemctl stop turret-web`
+                # would then sit in "Waiting for connections to close" and never run
+                # the lifespan shutdown that releases the IMX500, so a browser left
+                # open could hold the camera away from visiond until TimeoutStopSec
+                # SIGKILLs us.
+                if not video.is_running():
+                    break
                 jpeg, seq, _ts = video.latest()
                 if seq != last_seq and jpeg:
                     last_seq = seq
                     sent += 1
+                    stale_s = 0.0
                     yield mjpeg_frame(jpeg)
                 else:
                     await asyncio.sleep(0.02)
+                    stale_s += 0.02
+                    if stale_s > 10.0:
+                        break        # capture stalled: let the client reconnect
 
         return StreamingResponse(
             gen(),
@@ -242,6 +256,12 @@ class WebdApp:
             host=self.config.host,
             port=self.config.port,
             log_level="info",
+            # Bounded graceful exit. A browser holding the MJPEG stream must not
+            # decide when webd stops: the stream now ends when video stops, but a
+            # stuck client would otherwise keep uvicorn in "Waiting for
+            # connections to close" — past the lifespan shutdown that releases
+            # the camera — until systemd's TimeoutStopSec (15 s) kills the unit.
+            timeout_graceful_shutdown=5,
         )
         return 0
 
