@@ -159,10 +159,161 @@ from a motor fault. Proposed changes, in priority order:
    verification checklist attached, so "recovered" is provable before the Run A
    re-run.
 
-## 5. Sources
+### 4.3 Addendum — live diagnosis 2026-09-02 (supersedes the proposals above)
 
-- [CAN Wiki — CAN Bus-Off condition/state](http://can-wiki.info/doku.php?id=can_bus_off&rev=1363860418&mddo=print) — error-state thresholds; bus-off recovery (128×11 recessive bits, CAN 2.0B §8.12 / ISO 11898-1 §6.15); "in real life a controller can switch to ErrorPassive sporadic, but BusOff should never arrive without a hardware error".
+The fault was re-diagnosed live on the station (15:21–16:10 NZ) with direct
+MCP2515 register access over SPI plus a kernel loopback test. Full evidence:
+`docs/can_hardware_fault_report.md` (v2). Outcomes:
+
+1. **`berr-reporting` is NOT supported by this kernel's mcp251x driver**
+   (6.18.39+rpt-rpi-2712): `ip link set can0 type can berr-reporting on`
+   (link down) -> `Error: requested control mode berr-reporting not
+   supported`. Mitigation 4.2.1 is therefore **not implementable on this
+   kernel** — the delivered supervisor uses netdev counters + `ip` state
+   polling instead.
+2. **MCP2515 core exonerated at the silicon level**: kernel-level CAN
+   loopback mode transmits and receives 5/5 frames with zero errors;
+   corrected raw loopback (REQOP=010) passes too. SPI, oscillator, IRQ and
+   the driver are all healthy.
+3. **An intermittent EXTERNAL signal on CANH/CANL drives real receive
+   errors**: MERRF/ERRIF interrupt storms (≥20–100/s, rate scaling with
+   receiver bitrate: 1M→63/s, 500k→39/s, 250k→23/s, 100k→20/s), REC pinned
+   ≥128 → ERROR-PASSIVE which then sticks (REC decrements only on successful
+   receives) until a down/up lands in a quiet window. No valid frame decodes
+   at any receiver bitrate (1M…100k sweep). **Correction of record:** the
+   earlier "bit-rate-independent phantom frame" (EXT ID 0x01e79fdf, DLC=15)
+   was a probe misinterpretation — CANINTF 0xA0 is MERRF+ERRIF (not
+   RX1IF+WAKIF; RX1IF=0x02, RX0IF=0x01), and the buffer content was stale
+   (read without RXnIF asserted). The v1 "listen-only clean" test was
+   actually loopback mode (0x40) and the v1 "raw loopback fail" was actually
+   configuration mode (0x80) — both invalid; corrected constants fix both.
+4. **Drives are silent** (no discovery response, no ACK) — power-cycle
+   needed at the station.
+5. **Root cause remains unresolved** — HAT transceiver/RX-path damage, a
+   faulted CyberGear transceiver, wiring/termination, and electrical
+   disturbance all remain candidates. **Do not classify the HAT as
+   confirmed faulty**; run the physical isolation ladder (report §6:
+   HAT disconnected → cable → pitch → yaw → both → motor load →
+   termination → scope → A/B) before replacing anything.
+6. **Software recovery ladder cannot clear a physical-layer fault**; it
+   remains correct and required for *bus-level* faults on a healthy HAT.
+   Delivered:
+## 5. Sources- [CAN Wiki — CAN Bus-Off condition/state](http://can-wiki.info/doku.php?id=can_bus_off&rev=1363860418&mddo=print) — error-state thresholds; bus-off recovery (128×11 recessive bits, CAN 2.0B §8.12 / ISO 11898-1 §6.15); "in real life a controller can switch to ErrorPassive sporadic, but BusOff should never arrive without a hardware error".
 - [Vector CAN-list — MCP2515: Recovering from Error-Passive state](https://canlist.vector-informatik.narkive.com/fuk8y5jZ/mcp2515-recovering-from-error-passive-state) — MCP2515 TEC decrements only on actual successful transmissions; "taking off the node with the high error count doesn't mean that node has the problem"; bus length / termination / reflection margins at 1 Mbit/s.
 - [Seeed-Studio pi-hats issue #18 — Heavy traffic makes errors and frame drops](https://github.com/Seeed-Studio/pi-hats/issues/18) — near-identical field report: RPi + MCP251x HAT + motor drive, `tx-recessive-bit-error` storm, `tx-error-passive` at counter 128, drive bus-off.
 - [Xiaomi_CyberGear_Arduino issue #1](https://github.com/DanielKalicki/Xiaomi_CyberGear_Arduino/issues/1) — silent CyberGear drive recovered by restarting the drive (default ID 0x7F).
 - [Linux kernel — drivers/net/can/mcp251x.c](https://android.googlesource.com/kernel/common.git/+/9a4e328eb2bfa23b160558cff96e17ffa65ea5cf/drivers/net/can/mcp251x.c#3) and [linux-can mcp251x restart-ms patch discussion](http://mail.spinics.net/lists/linux-can/msg02650.html) — kernel CAN state reporting and restart-ms (bus-off only) semantics.
+
+## 6. Occurrence log
+
+**Occurrence 1 — 2026-09-02, P6 Run A (first incident).** Described in §§1–4:
+ERROR-PASSIVE mid-check at the against-gravity `pos_return` move; drives
+latched silent; survived host reboot + interface cycles + a full MCP2515
+SPI re-probe (the loopback isolation test proved the host-side controller
+TX/RX path healthy — frames echo perfectly when the physical bus is
+isolated — pinning the fault outside the HAT).
+
+**Station recovery — 2026-09-02 ~20:1x.** A power-cycle at the STATION (not
+the host — the Pi kept its 14:55 boot) cleared the latches. Full health
+checklist passed at 20:19–20:22: `can state` ERROR-ACTIVE before and after
+probe, zero `ERRORFRAME` in an 8 s listen, and BOTH drives (0x64/0x65)
+answered register reads (loc_kp=30, spd_kp=1.0, spd_ki=0.002 — factory
+defaults, expected after a drive power-cycle; the firmware re-writes
+check gains at every check start). Confirms §4.1.1: a drive/station
+power-cycle is the only reset that clears it.
+
+**Occurrence 2 — 2026-09-02 20:24:27, controld homing (P6 re-validation
+attempt, "Run A2").** Cleanest timeline yet:
+- 20:24:11 controld boot; homing starts; both drives' feedback flowing.
+- ~20:24:16 pitch reaches its first hard-stop push (contact found at
+  q≈0.0 — expected: CyberGear's mechanical zero is volatile and restarts
+  from the power-on pose, `docs/CyberGear_AI_Reference.md` §Zero position;
+  homing correctly re-derives endpoints from contacts).
+- **20:24:27 — 16 s into the run, seconds into the first STALL push — the
+  first `send_position_ref FAIL ... No buffer space available`.** Telemetry
+  frozen at that instant (q_pitch=-0.0074 for the next 2.5 min), 59,625 TX
+  failures, daemon SIGTERM'd at 20:26:58 (clean de-energize).
+- Aftermath identical to occurrence 1: down/up → ERROR-ACTIVE for 1 s →
+  ERROR-PASSIVE with zero host traffic; drives ignore all reads.
+
+**Interpretation.** The bus fails **within seconds of the first stall-load
+event** and recovers **only on a station power-cycle**. Of the ranked causes
+in §3 this evidences **#1 (load-induced rail sag / ground bounce) as the
+TRIGGER** and **#3 (latched transceiver / drive CAN fault) as the
+self-sustaining aftermath**. Motor-load dependence was already hinted by
+occurrence 1 (failed at the against-gravity move — the highest-load move of
+the check) and is now explicit (fails at the stop-push stall).
+
+**Actions before the next run (station-side, in order):**
+1. Station power-cycle to unlatch drives/HAT.
+2. Physical audit: drive PSU vs Pi/HAT supply topology (shared rail?),
+   single common-ground point, 120 Ω termination at both bus ends, CAN pair
+   twisted + routed clear of motor phase wires, connector seating
+   (HAT header + drive terminals).
+3. Re-run the health checklist (§4.1.2) BEFORE any motor test.
+4. If it still faults at the first stall after (2): try
+   `berr-reporting on` to capture error-frame types mid-fault, and consider
+   the last-resort 500 kbit/s mitigation (`COMM_TYPE_22`/0x16, firmware
+   ≥ 1.2.1.5; `CyberGear_AI_Reference.md` §23 — CAUTION: a wrong write
+   makes the drive unreachable over CAN; needs explicit approval).
+
+**Occurrence 3 — 2026-09-02 21:20–21:23, controld homing under a dedicated
+sniffer (post station-reset #2, "Run A3").** Instrumentation: candump
+(11737, live data frames), 1 Hz state poller, ip monitor. Note: mcp251x
+REJECTS `berr-reporting` ("control mode not supported") — SocketCAN error
+frames are therefore unobtainable on this driver; frame-level error
+visibility requires the SPI-register forensics approach (MERRF/EFLG via
+`can_hardware_fault_report.md`). Sniffer-logging lesson: use
+`candump -l -e -L /tmp/sniffer/` (absolute-time log files); `-t d` gives
+deltas only.
+
+Timeline (absolute, from daemon log + state ticks; frame-rate from sniffer):
+- 21:19:30 sniffer up; bus ERROR-ACTIVE; 6 register reads → both drives
+  answered. Agent-side load: ZERO afterwards (passive logging only).
+- 21:20:38 controld start; homing proceeds normally (pitch far contact
+  −2.1921 ≈ historical −2.1994; both endpoints found; yaw repeatability
+  sweep next). Measured steady traffic **85 fps ≈ 30 kbit/s (~3 % of the
+  1 Mbit bus)** — 3× below rates this bus sustained for hours when healthy.
+- 21:21:00 first **ERROR-WARNING** blip (1 s) — inside the high-power
+  contact/push window. Recovered.
+- ~21:21:20 sniffer socket stops receiving (degradation bursts overrunning
+  its buffer) — degradation has begun. controld's actively-drained socket
+  keeps pulling frames ~1 min longer.
+- 21:21:58–59 ERROR-WARNING blips + supervisor BRAKE/ALLOW flap (two
+  stale-feedback episodes); **21:21:59 first host TX failures** during a
+  NORMAL yaw sweep (not a stall push).
+- 21:22:05 kernel reports ERROR-PASSIVE. Drive→host RX keeps delivering
+  fresh feedback until ~21:22:0x–21:22:16 (telemetry freezes at
+  q_yaw=−3.5620) — **the failure is asymmetric: host TX dies while the
+  drives' TX/ACK path still works for tens of seconds**. Last sniffer frames
+  (21:22:0x): sporadic limit-current piggyback writes + drive feedback —
+  then both directions silent.
+- 21:23:22 daemon SIGTERM (clean de-energize). Post-mortem: drives latch
+  silent to reads; down/up → ACTIVE 1 s → PASSIVE with zero host traffic;
+  station power-cycle is again the only known clear.
+
+**Refinements to §3 from occurrences 2+3:**
+- NOT a single-event stall spike: the fault *ramps* across ~60–90 s of
+  motor running (WARNING inside the first stall window, final TX death
+  later during a low-load move) — thermal/progressive transceiver
+  disturbance, consistent with §3-1 (rail sag/ground bounce) latching into
+  §3-3 (latched transceiver).
+- Traffic-volume / "agent software flooding" theory REFUTED by measurement:
+  steady-state 85 fps; agent actions during the run were passive logging +
+  6 pre-run register reads; failure onset tracks motor power phases, not
+  traffic phases.
+- TX-first/RX-last asymmetry points at the HAT-side transceiver's TX
+  sampling being the disturbance-sensitive element (drives ACKed the host
+  at first, then the host could not win the bus at all).
+
+**Next actions, in order, before ANY motor operation:**
+1. Station power-cycle (clears current latches — required now).
+2. **Motorless traffic soak** (new, decisive): no controld, motors idle —
+   `cangen can0 -g 5000 -e` (~200 fps) for 10 min + SPI EFLG/MERRF
+   snapshot poller. Survives → traffic + HAT-alone exonerated, motor
+   coupling proven by contrast; degrades → HAT/wiring/termination suspect
+   independent of motors.
+3. Physical audit (§ previous list): PSU topology, common ground,
+   termination, pair twist/routing, terminal seating.
+4. Re-run A3 with sniffer + SPI EFLG poller; correlate first WARNING with
+   motor current from the daemon's 100 Hz motion log.
