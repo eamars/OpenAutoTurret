@@ -1,0 +1,71 @@
+# OpenAutoTurret payload profile (schema v1)
+schema_version: 1
+name: too_light
+created_ns: 1788348602787242240
+config_revision: turret.yaml@post-homing-queue
+hardware: 0x7b43313130333104,0x781131313033310a
+notes: DELIBERATELY too-light baseline for P6 mismatch-path test (never install)
+pitch:
+  v_max_rad_s: 0.35
+  a_max_rad_s2: 1.75
+  j_max_rad_s3: 8.7
+  gain_kp: 30.0
+  gain_ki: 1.0
+  gain_kd: 0.0
+  baseline:
+    step_pos:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.186
+      overshoot: 0.005
+      settling_time_s: 0.275
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00096
+      peak_effort_nm: 0.35
+    step_neg:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.159
+      overshoot: 0.005
+      settling_time_s: 0.423
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00163
+      peak_effort_nm: 0.35
+    triangle_rms_rad: 0.0012
+    brake:
+      valid: false
+    hold_effort_nm: 0.5
+    max_verified_speed_rad_s: 0.0873
+    valid: true
+yaw:
+  v_max_rad_s: 0.35
+  a_max_rad_s2: 1.75
+  j_max_rad_s3: 8.7
+  gain_kp: 30.0
+  gain_ki: 1.0
+  gain_kd: 0.0
+  baseline:
+    step_pos:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.177
+      overshoot: 0.005
+      settling_time_s: 0.248
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.0007
+      peak_effort_nm: 0.35
+    step_neg:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.159
+      overshoot: 0.005
+      settling_time_s: 0.193
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00067
+      peak_effort_nm: 0.35
+    triangle_rms_rad: 0.0007
+    brake:
+      valid: false
+    hold_effort_nm: 0.1
+    max_verified_speed_rad_s: 0.0873
+    valid: true

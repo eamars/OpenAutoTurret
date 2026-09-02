@@ -1,0 +1,72 @@
+# OpenAutoTurret payload profile (schema v1)
+schema_version: 1
+name: conservative
+created_ns: 1788348602787242240
+config_revision: turret.yaml@post-homing-queue
+hardware: 0x7b43313130333104,0x781131313033310a
+notes: P6 live capture 2026-09-02 yousee PHY, hold@-0.685/+2.595; 2deg steps, check
+  gains 5.0/0.02
+pitch:
+  v_max_rad_s: 0.35
+  a_max_rad_s2: 1.75
+  j_max_rad_s3: 8.7
+  gain_kp: 30.0
+  gain_ki: 1.0
+  gain_kd: 0.0
+  baseline:
+    step_pos:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.532
+      overshoot: 0.0382
+      settling_time_s: 0.785
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00096
+      peak_effort_nm: 0.722
+    step_neg:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.454
+      overshoot: 0.0601
+      settling_time_s: 1.21
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00163
+      peak_effort_nm: 0.715
+    triangle_rms_rad: 0.0012
+    brake:
+      valid: false
+    hold_effort_nm: 0.5
+    max_verified_speed_rad_s: 0.0873
+    valid: true
+yaw:
+  v_max_rad_s: 0.35
+  a_max_rad_s2: 1.75
+  j_max_rad_s3: 8.7
+  gain_kp: 30.0
+  gain_ki: 1.0
+  gain_kd: 0.0
+  baseline:
+    step_pos:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.505
+      overshoot: 0.0
+      settling_time_s: 0.708
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.0007
+      peak_effort_nm: 0.825
+    step_neg:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.455
+      overshoot: 0.0273
+      settling_time_s: 0.552
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00067
+      peak_effort_nm: 0.581
+    triangle_rms_rad: 0.0007
+    brake:
+      valid: false
+    hold_effort_nm: 0.1
+    max_verified_speed_rad_s: 0.0873
+    valid: true
