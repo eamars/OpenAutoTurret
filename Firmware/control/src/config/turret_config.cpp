@@ -380,11 +380,16 @@ LoadResult load_turret_config(const std::string& path) {
   if (!can.IsDefined() || !can.IsMap()) {
     err.push_back("missing required section: can");
   } else {
+    c.can.backend = opt_string(can, "backend", "can.backend", "socketcan", warn);
     c.can.interface = req_string(can, "interface", "can.interface", err);
     c.can.bitrate = static_cast<int>(req_double(can, "bitrate", "can.bitrate", err));
+    c.can.uart_baud = opt_int(can, "uart_baud", "can.uart_baud", 921600, warn);
     c.can.host_can_id = req_int(can, "host_can_id", "can.host_can_id", err);
+    if (c.can.backend != "socketcan" && c.can.backend != "yousee")
+      err.push_back("can.backend must be 'socketcan' or 'yousee'");
     if (c.can.interface.empty()) err.push_back("can.interface must be non-empty");
     if (c.can.bitrate <= 0) err.push_back("can.bitrate must be > 0");
+    if (c.can.uart_baud <= 0) err.push_back("can.uart_baud must be > 0");
     if (c.can.host_can_id < 0 || c.can.host_can_id > 255)
       err.push_back("can.host_can_id out of range [0,255]");
   }

@@ -181,7 +181,9 @@ int main(int argc, char** argv) {
   // 2. Open the CAN bus (this process is the sole owner of can0).
   can::CyberGearSystem system;
   can::CyberGearSystemConfig scfg;
+  scfg.transport = cfg.can.backend;
   scfg.iface = cfg.can.interface;
+  scfg.uart_baud = cfg.can.uart_baud;
   scfg.bitrate = static_cast<uint32_t>(cfg.can.bitrate);
   scfg.host_can_id = static_cast<uint8_t>(cfg.can.host_can_id);
   scfg.pitch_motor_id = static_cast<uint8_t>(cfg.motors[0].can_id);
@@ -191,6 +193,8 @@ int main(int argc, char** argv) {
     spdlog::error("CAN open failed: {}", err);
     return 1;
   }
+  spdlog::info("CAN transport: {} device={} (CAN {} bit/s)", cfg.can.backend,
+               cfg.can.interface, cfg.can.bitrate);
 
   // 3. Boot FSM: discover + self-test (slow, blocking, boot-only, §27).
   auto backend = std::make_unique<CanMotorBackend>(system);

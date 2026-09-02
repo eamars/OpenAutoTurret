@@ -270,4 +270,15 @@ bool SocketCanBus::is_up() const { return up_state_; }
 CanIfState SocketCanBus::can_state() const { return can_state_; }
 uint32_t SocketCanBus::bitrate() const { return bitrate_state_; }
 
+// --- CanTransport interface -------------------------------------------------
+bool SocketCanBus::start(std::string& err) {
+  if (!open(opts_, err)) return false;
+  return start_rx(err);
+}
+
+void SocketCanBus::stop() {
+  stop_rx();
+  close();
+}
+
 }  // namespace ota::can

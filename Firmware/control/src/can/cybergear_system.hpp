@@ -1,6 +1,8 @@
 #pragma once
-// CyberGear system: one SocketCAN bus multiplexing the two axes
-// (architecture §8).
+// CyberGear system: one CAN transport multiplexing the two axes
+// (architecture §8). The transport (PHY) is configuration-selected through
+// the CanTransport interface: SocketCAN (MCP2515 HAT) or the yousee USB-CAN
+// AT adapter — the protocol stack above never knows which is active.
 //
 // Responsibilities:
 //  - RX: parse COMM_TYPE_2 feedback, update per-axis state + history;
@@ -11,19 +13,24 @@
 //  - fire-and-forget command TX for the control loop.
 #include <array>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
 
+#include "can/can_transport.hpp"
 #include "can/cybergear_axis.hpp"
 #include "can/cybergear_protocol.hpp"
-#include "can/socketcan_bus.hpp"
 #include "common/types.hpp"
 
 namespace ota::can {
 
 struct CyberGearSystemConfig {
+  // Transport ("PHY") selection — swap freely (see can_transport.hpp).
+  // "socketcan": iface = can0.   "yousee": iface = /dev/ttyUSB0 (serial).
+  std::string transport = "socketcan";
   std::string iface = "can0";
-  uint32_t bitrate = 1000000;
+  int uart_baud = 921600;      // yousee only (adapter UART side)
+  uint32_t bitrate = 1000000;  // CAN-side bitrate both PHYs
   uint8_t host_can_id = 0;
   uint8_t pitch_motor_id = 100;  // 0x64
   uint8_t yaw_motor_id = 101;    // 0x65
@@ -57,7 +64,7 @@ class CyberGearSystem {
   // --- State access ---------------------------------------------------------
   AxisRuntime& axis(AxisId a) { return axes_[static_cast<size_t>(a)]; }
   const AxisRuntime& axis(AxisId a) const { return axes_[static_cast<size_t>(a)]; }
-  SocketCanBus& bus() { return bus_; }
+  CanTransport& bus() { return *bus_; }
   uint8_t motor_id(AxisId a) const {
     return (a == AxisId::Pitch) ? cfg_.pitch_motor_id : cfg_.yaw_motor_id;
   }
@@ -71,7 +78,7 @@ class CyberGearSystem {
                      std::string* err);
 
   CyberGearSystemConfig cfg_{};
-  SocketCanBus bus_;
+  std::unique_ptr<CanTransport> bus_;
   std::array<AxisRuntime, 2> axes_{};
 
   // Synchronous request/response (setup path only, never in control loop).

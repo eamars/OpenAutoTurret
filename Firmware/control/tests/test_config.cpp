@@ -4,6 +4,8 @@
 #include <fstream>
 #include <string>
 
+#include <sys/stat.h>
+
 #include "config/turret_config.hpp"
 
 namespace {
@@ -11,6 +13,7 @@ namespace {
 const char* kDir = "/tmp/ota_config_test";
 
 std::string write_file(const std::string& name, const std::string& body) {
+  ::mkdir(kDir, 0755);  // /tmp is tmpfs: the dir may simply not exist yet
   std::string p = std::string(kDir) + "/" + name;
   std::ofstream f(p);
   f << body;
@@ -77,6 +80,37 @@ safety:
 )";
 
 }  // namespace
+
+TEST(Config, CanBackendDefaultsAndYousee) {
+  // PHY swap point: default socketcan, yousee selectable, bad rejected.
+  {
+    auto r = ota::config::load_turret_config(write_file("be_default.yaml", kFullConfig));
+    ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
+    EXPECT_EQ(r.config.can.backend, "socketcan");
+    EXPECT_EQ(r.config.can.interface, "can0");
+    EXPECT_EQ(r.config.can.uart_baud, 921600);
+  }
+  {
+    std::string y = kFullConfig;
+    auto pos = y.find("  interface: can0\n");
+    ASSERT_NE(pos, std::string::npos);
+    y = y.substr(0, pos) +
+        "  backend: yousee\n  interface: /dev/ttyUSB0\n  uart_baud: 921600\n" +
+        y.substr(pos + std::string("  interface: can0\n").size());
+    auto r = ota::config::load_turret_config(write_file("be_yousee.yaml", y));
+    ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
+    EXPECT_EQ(r.config.can.backend, "yousee");
+    EXPECT_EQ(r.config.can.interface, "/dev/ttyUSB0");
+  }
+  {
+    std::string y = kFullConfig;
+    auto pos = y.find("  interface: can0\n");
+    ASSERT_NE(pos, std::string::npos);
+    y = y.substr(0, pos) + "  backend: mcp-fake\n" + y.substr(pos);
+    auto r = ota::config::load_turret_config(write_file("be_bad.yaml", y));
+    EXPECT_FALSE(r.ok);
+  }
+}
 
 TEST(Config, ValidFullConfigLoads) {
   const std::string p = write_file("full.yaml", kFullConfig);

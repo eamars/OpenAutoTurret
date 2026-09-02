@@ -355,3 +355,53 @@ experiment set, motors NEVER energized:
    raise tolerance at the motor layer. Daemon-side TX-failure back-off is a
    required robustness fix regardless (never keep 100 Hz queueing into a
    dead TX path).
+
+### Occurrence 5 — 2026-09-02 23:11–23:15, FIRST MOTOR RUN ON THE SECOND PHY (yousee adapter)
+
+The decisive experiment. New PHY-agnostic transport layer (`can/can_transport.hpp`,
+`YouseeTransport`, config `can.backend`) put controld on the USB-CAN AT adapter
+(CH340 → /dev/ttyUSB0, AT+CAN_BAUD=1000000 verified); the MCP2515 HAT stayed on
+the bus as a passive witness (`candump can0`).
+
+Timeline (all times local; logs: `/tmp/keep/controld_yousee_incidentA.log`,
+`/tmp/keep/hat_witness_incidentA.log`):
+
+* 23:11:38 boot on yousee: `CAN transport: yousee device=/dev/ttyUSB0`,
+  discovery OK (both UIDs), boot homing auto-starts. Feedback stream: full rate.
+* 23:13:06.17 — **last feedback frame seen on the bus by the HAT witness**
+  (`028064xx/028065xx`), mid yaw coarse sweep (q_yaw −0.933, no endstop, no
+  stall). Both drives' feedback stops at the same instant.
+* Supervisor: BRAKE 'stale or missing motor feedback' — correct reaction over
+  the new transport; homing engine blocks in its bounded read; 16 BRAKE/17
+  ALLOW flaps while q stays frozen (motors held, safe).
+* 23:13:40–45 — fresh register probes sent **through the HAT** (`cansend`):
+  **zero replies**. Zero feedback in witness. can0 stays ERROR-ACTIVE (self-ACK:
+  HAT state cannot see drive silence).
+* 23:15 — SIGTERM: clean de-energize over the adapter.
+
+Verdict (isolates the motor layer):
+
+1. The failure **reproduced identically on a second, independent host PHY**
+   (~90 s into sustained motor+traffic load) — the host transceiver family is
+   NOT the motor-layer culprit.
+2. The independent witness proves the drives themselves went silent (both
+   axes, simultaneously, mid-normal-motion) and stayed silent to probes from
+   the other node. **Motor-layer latch is drive-side/environmental** — power,
+   ground, or the drive's own transceiver supply — exactly the state that a
+   CyberGear power-cycle cures (occurrences 1–3 pattern).
+3. The base-layer HAT episode (Occ. 4, motorless PASSIVE crossing, cleared by
+   link reset) remains a separate, lesser host-side fragility — but it did not
+   occur again across ~28 min of motorless 197-fps flooding in this HAT power
+   window, and it is not what blocks motor development.
+
+Revised next actions:
+1. CyberGear power-cycle (recovers Occ. 5, as before) — then re-verify adapter.
+2. Physical/electrical audit focused on the DRIVES: PSU capacity/sag during
+   motion, drive power vs logic power topology, common-ground point, and — if
+   available — scope the drive 12V rail during a homing sweep. The failure
+   signature (transceiver silence mid-sweep, MCU presumably alive since a
+   plain power-cycle restores it) smells like transceiver-supply brownout or a
+   common-mode event coupling into the drive CAN PHYs.
+3. Keep running development on the yousee PHY (it behaves correctly;
+   supervisor + clean shutdown verified over it). The HAT remains witness-only
+   until a replacement arrives.

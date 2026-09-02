@@ -2,6 +2,9 @@
 
 #include <chrono>
 
+#include "can/socketcan_bus.hpp"
+#include "can/yousee_transport.hpp"
+
 namespace ota::can {
 
 namespace {
@@ -14,27 +17,43 @@ bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err) {
   close();
   cfg_ = cfg;
 
-  SocketCanBus::Options bopts{};
-  bopts.iface = cfg_.iface;
-  bopts.bitrate = cfg_.bitrate;
-  bopts.bring_up_if_down = cfg_.bring_up_if_down;
-  bopts.install_filters = true;
-  if (!bus_.open(bopts, err)) return false;
+  // PHY factory: everything below this point is transport-agnostic.
+  if (cfg_.transport == "yousee") {
+    YouseeTransport::Options yo{};
+    yo.port = cfg_.iface;
+    yo.uart_baud = cfg_.uart_baud;
+    yo.can_bitrate = cfg_.bitrate;
+    bus_ = std::make_unique<YouseeTransport>(yo);
+  } else if (cfg_.transport == "socketcan" || cfg_.transport.empty()) {
+    SocketCanBus::Options bo{};
+    bo.iface = cfg_.iface;
+    bo.bitrate = cfg_.bitrate;
+    bo.bring_up_if_down = cfg_.bring_up_if_down;
+    bo.install_filters = true;
+    bus_ = std::make_unique<SocketCanBus>(bo);
+  } else {
+    err = "unknown can transport '" + cfg_.transport +
+          "' (expected socketcan|yousee)";
+    return false;
+  }
 
   // Size the per-axis history rings before the RX thread starts writing.
   for (auto& ax : axes_) ax.reset_history(cfg_.history_capacity);
 
-  bus_.set_frame_callback([this](const RawFrame& f) { on_frame(f); });
-  std::string rerr;
-  if (!bus_.start_rx(rerr)) {
-    bus_.close();
-    err = "start_rx: " + rerr;
+  bus_->set_frame_callback([this](const RawFrame& f) { on_frame(f); });
+  if (!bus_->start(err)) {
+    bus_.reset();
     return false;
   }
   return true;
 }
 
-void CyberGearSystem::close() { bus_.close(); }
+void CyberGearSystem::close() {
+  if (bus_) {
+    bus_->stop();
+    bus_.reset();
+  }
+}
 
 void CyberGearSystem::on_frame(const RawFrame& f) {
   cybergear::CanFrame cf;
@@ -156,7 +175,11 @@ bool CyberGearSystem::read_register(AxisId axis, cybergear::Reg reg, double& val
 }
 
 bool CyberGearSystem::send(uint32_t ext_id, const uint8_t data[8], std::string* err) {
-  return bus_.send(ext_id, data, err);
+  if (!bus_) {
+    if (err) *err = "can transport closed";
+    return false;
+  }
+  return bus_->send(ext_id, data, err);
 }
 
 bool CyberGearSystem::send_enable(AxisId axis, std::string* err) {

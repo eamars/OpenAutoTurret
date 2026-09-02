@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
   } else if (cmd == "stats") {
     const auto s = sys.bus().stats();
     std::printf("iface=%s rx=%llu err_rx=%llu tx=%llu tx_fail=%llu last_rx_age=%.1f ms\n",
-                sys.bus().iface().c_str(),
+                sys.bus().device().c_str(),
                 static_cast<unsigned long long>(s.rx_frames),
                 static_cast<unsigned long long>(s.rx_error_frames),
                 static_cast<unsigned long long>(s.tx_frames),

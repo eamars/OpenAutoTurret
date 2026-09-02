@@ -14,8 +14,12 @@ namespace ota::config {
 
 // §40 `can:` block.
 struct CanConfig {
+  // CAN PHY selection (can_transport.hpp): "socketcan" (MCP2515 HAT,
+  // interface = can0) or "yousee" (USB AT adapter, interface = /dev/ttyUSB0).
+  std::string backend = "socketcan";
   std::string interface = "can0";
-  int bitrate = 1000000;      // bits/s; CyberGear is 1 Mbit/s.
+  int bitrate = 1000000;      // CAN-side bits/s; CyberGear is 1 Mbit/s.
+  int uart_baud = 921600;     // yousee only: the adapter UART side.
   int host_can_id = 0;        // the host's data2 field; must be in [0, 255].
 };
 
