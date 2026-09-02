@@ -223,23 +223,79 @@ function payloadKind(s) {
        : s === "error" ? "err" : "info";
 }
 
+// Connection supervision. This page gets watched from across a room, usually in
+// a background tab, and it is the operator's only view of the turret — so it has
+// to survive a daemon restart by itself. The original reconnected only from
+// ws.onclose through a single setTimeout, and websockets do drop (webd
+// restarting, a NAT evicting the mapping, a laptop lid). A hidden tab's timers
+// are throttled or frozen outright, so the retry never fired and the page sat on
+// "disconnected" while the backend was perfectly healthy — indistinguishable
+// from a dead station. The watchdog below is the difference between a page that
+// recovers and a page somebody has to go and reload.
 let ws = null;
+let wsTry = 0;            // consecutive failed attempts, shown in the status line
+let wsCloseCode = null;   // last close code, so one screenshot is diagnosable
+
+function connNote() {
+  $("conn").classList.remove("on");
+  const code = wsCloseCode === null ? "" : " code " + wsCloseCode;
+  $("state-word").textContent =
+    "disconnected" + code + " — retry #" + wsTry;
+}
+
 function connect() {
+  // Idempotent on purpose: the watchdog, visibilitychange and onclose all call
+  // this, and two sockets delivering the same telemetry would double every
+  // counter on screen while looking completely normal.
+  if (ws && (ws.readyState === WebSocket.OPEN ||
+             ws.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(proto + location.host + "/ws");
-  ws.onopen = () => { $("conn").classList.add("on"); $("state-word").textContent = "connected"; };
-  ws.onclose = () => { $("conn").classList.remove("on"); $("state-word").textContent = "disconnected — retrying"; setTimeout(connect, 1500); };
+  try { ws = new WebSocket(proto + location.host + "/ws"); }
+  catch (e) { wsTry += 1; connNote(); setTimeout(connect, 1500); return; }
+  ws.onopen = () => {
+    const wasDown = wsTry > 0;
+    wsTry = 0; wsCloseCode = null;
+    $("conn").classList.add("on"); $("state-word").textContent = "connected";
+    // Coming back is more than re-subscribing: the MJPEG request the <img> holds
+    // died with the old socket, and the profile list may have changed while we
+    // were away. Re-sync both, rather than keeping a frozen frame on screen and
+    // calling it live video.
+    if (wasDown) { refreshVideoState(); refreshProfiles(); }
+  };
+  ws.onclose = (ev) => {
+    wsCloseCode = (ev && ev.code) ? ev.code : null;
+    ws = null; wsTry += 1; connNote();
+    setTimeout(connect, 1500);   // fast first retry; the watchdog is the backstop
+  };
+  // ws.onerror needs no handler of its own: it is always followed by onclose.
   ws.onmessage = (e) => {
     let t; try { t = JSON.parse(e.data); } catch { return; }
     if (t.type !== "telemetry") return;
     render(t);
   };
 }
+setInterval(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) connect();
+}, 2000);
+document.addEventListener("visibilitychange", () => {
+  // Reveal the tab and it reconnects now, not up to two seconds later.
+  if (!document.hidden) connect();
+});
 let LAST_T = null;              // last telemetry frame, for the profile marker
-const CAN_STATE = {-1: ["unknown", "info"], 0: ["error-active", "ok"],
-                   1: ["error-warning", "warn"], 2: ["error-passive", "warn"],
-                   3: ["BUS-OFF", "err"], 4: ["stopped", "err"],
-                   5: ["sleeping", "info"]};
+// CAN controller error state (CanIfState) -> [label, badge class]. An array of
+// pairs, deliberately: a {-1: ...} object literal is a JavaScript SYNTAX ERROR
+// (a leading "-" is not a property name), and one bad line in this <script>
+// kills every statement in it — including connect(). The page still renders from
+// HTML, so it looks like the backend is down when it is the page that died. That
+// is what test_dashboard_js_parses.py now guards.
+const CAN_STATE = [[-1, ["unknown", "info"]], [0, ["error-active", "ok"]],
+                   [1, ["error-warning", "warn"]], [2, ["error-passive", "warn"]],
+                   [3, ["BUS-OFF", "err"]], [4, ["stopped", "err"]],
+                   [5, ["sleeping", "info"]]];
+function canStateName(code) {
+  const hit = CAN_STATE.find((p) => p[0] === code);
+  return hit ? hit[1] : ["state " + code, "info"];
+}
 
 function renderCan(t) {
   // A simulated backend has no bus to report. Showing rx=0 tx=0 as if it were a
@@ -254,7 +310,7 @@ function renderCan(t) {
       + "transport (simulated backend). Zeros here are absence, not health.";
     return;
   }
-  const st = CAN_STATE[t.can_state] || ["state " + t.can_state, "info"];
+  const st = canStateName(t.can_state);
   $("can-kind").textContent = (t.can_kind || "?") + " · " + (t.can_device || "?")
     + (t.can_up ? "" : " (down)");
   // "unknown" is not one state, it is two very different situations, and on
@@ -437,7 +493,11 @@ function videoStatus(text, err) {
 function applyVideo(on, st) {
   const img = $("video-img"), ph = $("video-ph");
   $("video-toggle").checked = on;
-  if (on) { img.src = "/api/video"; img.style.display = "block"; ph.style.display = "none"; }
+  // The query string is not about caching. Re-assigning the SAME url to an <img>
+  // whose multipart stream already died is a no-op in at least one engine, so a
+  // reconnect would leave the last frame up and read as "the camera is frozen".
+  // A fresh url forces a new request, which is what "video is back" has to mean.
+  if (on) { img.src = "/api/video?t=" + Date.now(); img.style.display = "block"; ph.style.display = "none"; }
   else { img.removeAttribute("src"); img.style.display = "none"; ph.style.display = "flex"; }
   if (st && st.running)
     videoStatus(`${st.camera || "camera"} ${st.width}x${st.height} @ ${st.fps} fps · ${st.frames_published} frames`);
@@ -461,8 +521,15 @@ async function setVideo(on) {
   finally { tg.disabled = false; }
 }
 async function refreshVideoState() {
-  try { const r = await fetch("/api/video/state"); applyVideo((await r.json()).running, null); }
-  catch (e) { videoStatus("off"); }
+  try {
+    const r = await fetch("/api/video/state");
+    const st = await r.json();
+    // Pass st through (it used to be null): after a reconnect the caption is the
+    // only place that says which camera/resolution came back and whether frames
+    // are actually moving, so restoring the picture without it is half a sync.
+    applyVideo(st.running, st);
+  }
+  catch (e) { videoStatus(`webd unreachable: ${e}`, true); }
 }
 $("video-toggle").addEventListener("change", (e) => setVideo(e.target.checked));
 
