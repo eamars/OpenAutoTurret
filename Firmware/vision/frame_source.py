@@ -246,9 +246,12 @@ class Picamera2FrameSource:
     jobs — a callback-based stream therefore receives NOTHING and looks like a
     dead camera (measured on the real IMX500: "request_callback is deprecated"
     then no frames ever arrive). ``capture_request`` is the pattern
-    ``tools/vision_probe.py`` proves works here. (webd's video source still uses
-    the deprecated attribute; it appears to work because it also drives the
-    capture_file path — worth aligning one day, not today's change.)
+    ``tools/vision_probe.py`` proves works here. webd's video source had the same
+    bug and was converted to pull in the same session (measured there: 2 callbacks
+    in 2.5 s and a ``stop()`` that never returned, versus 11.3 fps and a 0.43 s
+    stop); ``web/webd/tests/fake_camera.py`` now raises if anything assigns
+    ``request_callback``/``post_callback`` again, so neither path can regress
+    quietly.
 
     If the pipeline ever stalls, ``capture()`` blocks in the camera stack rather
     than inventing timestamps; that is deliberate. Vision liveness is not what

@@ -19,6 +19,16 @@ Commands clicked in the UI are acknowledged by the simulated controld
 resumes it). They have NO hardware effect because no real controld/motor is
 connected. This is a dev/inspection tool, not a control path.
 
+Video runs on the PULL path (web/webd/video.py pulls completed requests on its
+own thread): measured on this station's IMX500 the deprecated callback path gave
+2 callbacks in 2.5 s and a stop() that never returned; pull gives 11+ fps and a
+0.43 s stop, verified through this very tool.
+
+The Payload panel lists stored profiles from OTA_PAYLOAD_PROFILE_DIR (default
+config/payload_profiles) — point it at the same directory the daemon's
+payload.profile_dir resolves to, or the picker offers names controld will reject
+(with a reason, visible in the command log).
+
 Usage:  python3 tools/run_webd_inspection.py [--host 0.0.0.0] [--port 8080]
         [--socket /run/ota/controld-web.sock] [--hz 15]
 """
