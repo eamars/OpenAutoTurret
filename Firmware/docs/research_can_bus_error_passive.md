@@ -317,3 +317,41 @@ Timeline (absolute, from daemon log + state ticks; frame-rate from sniffer):
    termination, pair twist/routing, terminal seating.
 4. Re-run A3 with sniffer + SPI EFLG poller; correlate first WARNING with
    motor current from the daemon's 100 Hz motion log.
+
+**Occurrence 4 — 2026-09-02 22:04–22:17, MOTORLESS traffic floods (station
+reset #3 = CyberGear power-cycle only; HAT stayed powered).** Decisive
+experiment set, motors NEVER energized:
+- Post-reset health: link freshened, ACTIVE stable, drives 8/8 responsive
+  at factory gains.
+- Baseline bug found first: `cangen -g 5000` = 5000 MS (0.2 fps) — the
+  5.5 min "clean soak" was a trickle, not a soak. Re-fired at `-g 5`
+  (~197 fps measured both at kernel and sniffer level).
+- FLOOD #1 (197 fps): **ERROR-PASSIVE at 4.2 min** (error-warn 8→9,
+  error-pass 42→43 — single threshold crossings). Frames KEPT FLOWING at
+  198 fps during PASSIVE, and both drives ANSWERED probes while still in
+  PASSIVE → PASSIVE ≠ dead. Aftermath: stuck PASSIVE while idle (frozen
+  counters — MCP2515 REC/TEC hold without traffic), but a plain link
+  down/up restored stable ACTIVE with **no power-cycle and no drive latch**.
+- FLOOD #2 (197 fps, immediately after, same HAT power session): **6 min
+  FULLY CLEAN** (ACTIVE, counters unchanged).
+- Sniffer caveat found: this candump's socket also dies (silent overrun)
+  during error bursts — state-poll logs, not frame logs, are the clock.
+
+**Model revision (v2) from occurrence 4:**
+1. **Base layer (always present, HAT-side)**: an intermittent EXTERNAL
+   disturbance on CANH/CANL (matches `can_hardware_fault_report.md` SPI
+   forensics: real MERRF/ERRIF error storms, source not host-side)
+   probabilistically walks the error counters past 128 under sustained
+   ~200 fps traffic — sometimes within ~4 min, sometimes >6 min clean.
+   Cleared by a simple link reset; bus keeps limping through PASSIVE.
+2. **Motor layer (the P6 killers)**: motor power events (stall pushes,
+   high-current phases) raise the disturbance rate/intensity enough to trip
+   both nodes within ~16–100 s AND latch the CyberGear transceivers — the
+   drive power-cycle in resets #1–3 was curing THIS layer; the kernel TX
+   retry storm of the still-flailing controld (59,625 queued sends) made
+   occurrences 1–2 look like a permanently dead HAT.
+3. Implication for fixes: termination/grounding/routing work (and, if that
+   fails, 500 kbit/s) target the base layer — they should also materially
+   raise tolerance at the motor layer. Daemon-side TX-failure back-off is a
+   required robustness fix regardless (never keep 100 Hz queueing into a
+   dead TX path).
