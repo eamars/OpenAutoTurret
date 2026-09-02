@@ -479,7 +479,7 @@ LoadResult load_turret_config(const std::string& path) {
       err.push_back(p + "motor_overtemp_c must be > 0");
   }
 
-  // tracking (sensible defaults).
+  // tracking (§40, §58 params 19-20 + the S1 ingest parameters).
   const YAML::Node trk = fetch(root, "tracking");
   {
     const YAML::Node se = fetch(trk, "search_enabled_by_default");
@@ -490,12 +490,80 @@ LoadResult load_turret_config(const std::string& path) {
         warn.push_back("tracking.search_enabled_by_default: not a bool; using false");
       }
     }
+    c.tracking.enabled =
+        opt_bool(trk, "enabled", "tracking.enabled", false, warn);
     c.tracking.target_lost_behavior =
         opt_string(trk, "target_lost_behavior", "tracking.target_lost_behavior", "hold", warn);
     if (c.tracking.target_lost_behavior != "hold" &&
         c.tracking.target_lost_behavior != "search")
       err.push_back("tracking.target_lost_behavior must be 'hold' or 'search'");
+    if (c.tracking.search_enabled_by_default &&
+        c.tracking.target_lost_behavior != "search")
+      err.push_back("tracking.search_enabled_by_default requires "
+                    "target_lost_behavior: search (§36)");
+
+    c.tracking.track_speed_deg_s = opt_double(
+        trk, "track_speed_deg_s", "tracking.track_speed_deg_s", 30.0, warn);
+    if (c.tracking.track_speed_deg_s <= 0.0) {
+      warn.push_back("tracking.track_speed_deg_s <= 0: using the 30 deg/s default");
+      c.tracking.track_speed_deg_s = 30.0;
+    }
+    // §16: tracking never exceeds the architecture's 30 deg/s cap. Clamp rather
+    // than trust the file (same policy as the 10 A current cap).
+    if (c.tracking.track_speed_deg_s > 30.0) {
+      warn.push_back("tracking.track_speed_deg_s > 30 deg/s: clamped to the "
+                     "§16 tracking speed cap");
+      c.tracking.track_speed_deg_s = 30.0;
+    }
+    c.tracking.search_speed_deg_s = opt_double(
+        trk, "search_speed_deg_s", "tracking.search_speed_deg_s", 10.0, warn);
+    if (c.tracking.search_speed_deg_s <= 0.0) {
+      warn.push_back("tracking.search_speed_deg_s <= 0: using the 10 deg/s default");
+      c.tracking.search_speed_deg_s = 10.0;
+    }
+    c.tracking.search_span_deg =
+        opt_double(trk, "search_span_deg", "tracking.search_span_deg", 45.0, warn);
+    if (c.tracking.search_span_deg <= 0.0) {
+      warn.push_back("tracking.search_span_deg <= 0: using the 45 deg default");
+      c.tracking.search_span_deg = 45.0;
+    }
+    c.tracking.control_delay_ms =
+        opt_int(trk, "control_delay_ms", "tracking.control_delay_ms", 20, warn);
+    c.tracking.motor_response_ms =
+        opt_int(trk, "motor_response_ms", "tracking.motor_response_ms", 20, warn);
+    c.tracking.fresh_threshold_ms =
+        opt_int(trk, "fresh_threshold_ms", "tracking.fresh_threshold_ms", 100, warn);
+    c.tracking.coast_timeout_ms =
+        opt_int(trk, "coast_timeout_ms", "tracking.coast_timeout_ms", 200, warn);
+    c.tracking.lost_timeout_ms =
+        opt_int(trk, "lost_timeout_ms", "tracking.lost_timeout_ms", 1000, warn);
+    c.tracking.estimator_alpha =
+        opt_double(trk, "estimator_alpha", "tracking.estimator_alpha", 0.8, warn);
+    c.tracking.estimator_beta =
+        opt_double(trk, "estimator_beta", "tracking.estimator_beta", 0.3, warn);
+    // Structural sanity: fresh < coast < lost (§34 state ordering).
+    if (!(c.tracking.fresh_threshold_ms > 0 && c.tracking.coast_timeout_ms > 0 &&
+          c.tracking.lost_timeout_ms > 0))
+      err.push_back("tracking timeouts (fresh/coast/lost) must be > 0");
+    else if (!(c.tracking.fresh_threshold_ms <= c.tracking.coast_timeout_ms &&
+               c.tracking.coast_timeout_ms < c.tracking.lost_timeout_ms))
+      err.push_back("tracking timeouts must satisfy fresh <= coast < lost (§34)");
+    if (!(c.tracking.estimator_alpha > 0.0 && c.tracking.estimator_alpha < 1.0))
+      err.push_back("tracking.estimator_alpha must be in (0,1)");
+    if (!(c.tracking.estimator_beta > 0.0 && c.tracking.estimator_beta < 1.0))
+      err.push_back("tracking.estimator_beta must be in (0,1)");
+    if (c.tracking.enabled && c.tracking.search_enabled_by_default)
+      warn.push_back("tracking.enabled: tracking auto-enables after homing — "
+                     "the station will follow detected targets without an "
+                     "operator command (§42.2)");
   }
+
+  // vision ingest (§6.1, Part 2 S1).
+  const YAML::Node vis = fetch(root, "vision");
+  c.vision.socket_path = opt_string(vis, "socket_path", "vision.socket_path",
+                                    "/tmp/ota_vision.sock", warn);
+  if (c.vision.socket_path.empty())
+    err.push_back("vision.socket_path must not be empty");
 
   // camera (defaults; Phase 4 fills these in).
   const YAML::Node cam = fetch(root, "camera");

@@ -76,6 +76,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
   std::ostringstream os;
   os << "{\"type\":\"telemetry\""
      << ",\"ts_ns\":" << s.timestamp_ns
+     << ",\"phase\":\"" << json_escape(s.phase) << "\""
+     << ",\"fault\":\"" << json_escape(s.fault_reason) << "\""
      << ",\"track_state\":\"" << track_state_name(s.track_state) << "\""
      << ",\"tracking_active\":" << (s.tracking_active ? "true" : "false")
      << ",\"target_confidence\":" << s.target_confidence
@@ -103,6 +105,11 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"payload_profile_status\":\"" << s.payload_profile_status << "\""
      << ",\"payload_derated\":" << (s.payload_derated ? "true" : "false")
      << ",\"payload_check_active\":" << (s.payload_check_active ? "true" : "false")
+     << ",\"vision_connected\":" << (s.vision_connected ? "true" : "false")
+     << ",\"vision_frames\":" << s.vision_frames
+     << ",\"vision_dropped\":" << s.vision_dropped
+     << ",\"vision_last_frame_sequence\":" << s.vision_last_frame_sequence
+     << ",\"vision_measurement_age_ms\":" << s.vision_measurement_age_ms
      << "}";
   return os.str();
 }

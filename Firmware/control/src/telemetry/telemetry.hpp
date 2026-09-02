@@ -29,6 +29,12 @@ namespace telemetry {
 // §6.3 telemetry snapshot (published at 10-20 Hz).
 struct TelemetrySnapshot {
   TimeNs timestamp_ns = 0;
+  // Control-loop phase name ("idle"|"homing"|"hold"|"parking"|"parked"|
+  // "fault"|"payload_check") + the fault reason when phase=fault. §6.3 lists
+  // the loop state as snapshot content; the dashboard's System panel and the
+  // station IPC client both need it (§42.1).
+  std::string phase;
+  std::string fault_reason;
   // Per-axis actuals.
   double q_yaw_rad = 0.0;
   double v_yaw_rad_s = 0.0;
@@ -45,6 +51,14 @@ struct TelemetrySnapshot {
   bool tracking_active = false;
   double target_az_world_rad = 0.0;   // world-frame LOS (valid when tracking)
   double target_el_world_rad = 0.0;
+  // Vision transport (§6.1/§6.2, Part 2 S1): what the ingest thread actually
+  // sees, so the dashboard can tell "no detector output" apart from "detector
+  // sees nothing". Ages are host-monotonic.
+  bool vision_connected = false;      // a visiond publisher is attached
+  uint64_t vision_frames = 0;         // decoded measurements since boot
+  uint64_t vision_dropped = 0;        // datagrams with a bad size / decode
+  uint64_t vision_last_frame_sequence = 0;
+  int64_t vision_measurement_age_ms = -1;  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,
   // from the active R_W_B. installation_source is the PoseSource enum value
   // (kept as an int to keep this header decoupled from the calibration module).

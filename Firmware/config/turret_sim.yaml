@@ -1,0 +1,131 @@
+# OpenAutoTurret — SIM bring-up configuration (NOT the station config).
+#
+# Use with:  ./build/control/controld config/turret_sim.yaml --sim
+#
+# `--sim` makes controld run the whole production control stack against
+# SimMotorBackend (a first-order plant with end stops) and it NEVER opens a CAN
+# transport, so nothing can move at the station. This is the offline harness for
+# the P8/P12 bring-up probes and for CI (§54): the vision ingest, the tracking
+# FSM, the reference arbitration and the web command path all run for real, the
+# PLANT does not. Nothing here verifies a live-station test (P#).
+#
+# Derived from config/turret.yaml (2026-09-03): the homing/contact tuning,
+# limits, payload values and shutdown pose are the station's, so the logical
+# frame, soft limits and phase behaviour match. It differs in three places:
+#   1. homing_plan is the short form (home each axis once, no mid-parks) — the
+#      coupling the mid-parks protect against is gravity, which the sim plant
+#      does not model; boot-to-hold then takes ~40 s instead of ~3 min.
+#   2. tracking.enabled: true — safe HERE (no real motor); the station config
+#      keeps it false (§38.1 plus operator control via `start_tracking`).
+#   3. vision.socket_path is a probe socket so it cannot shadow a live run.
+schema_version: 1
+
+can:
+  # Unused in --sim (no transport is opened); kept so the same loader validates.
+  backend: yousee
+  interface: /dev/ttyUSB0
+  uart_baud: 921600
+  bitrate: 1000000
+  host_can_id: 0
+
+motors:
+  pitch: { can_id: 100, direction_sign: 1 }
+  yaw:   { can_id: 101, direction_sign: -1 }
+
+control:
+  loop_hz: 200
+
+axes:
+  pitch:
+    expected_travel_deg: { min: -70, max: 70 }   # nominal 140 -> band [70, 210]
+    soft_margin_deg: 5
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
+    limit_cur_a: 3.0
+  yaw:
+    expected_travel_deg: { min: 0, max: 360 }     # nominal 360 -> band [180, 540]
+    soft_margin_deg: 5
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
+    limit_cur_a: 1.0
+
+homing:
+  contact:
+    coarse_speed_deg_s: 30
+    fine_speed_deg_s: 15
+    current_or_effort_limit: 0.05
+    stall_velocity_threshold: 0.5
+    v_move_threshold: 0.10
+    effort_hard_contact_nm: 0.40
+    motion_history_velocity: 0.05
+    contact_dwell_ms: 1500
+    backoff_deg: 5
+    repeatability_deg: 0.5
+    repeatability_retries: 2
+    limit_cur_step_a: 0.0
+    limit_cur_max_a: 0.0
+    max_rotation_deg: 360.0
+    torque_safety_nm: 10.0
+
+homing_plan:
+  - action: home_full_range
+    axis: pitch
+    precision: fine
+  - action: home_full_range
+    axis: yaw
+    precision: fine
+
+# Auto-enable tracking after the homing gates pass (§38.1). SIM ONLY: with no
+# real motor the worst outcome of a bad measurement is a sim plant move. The
+# station config keeps `enabled: false` and uses the `start_tracking` command.
+tracking:
+  enabled: true
+  search_enabled_by_default: false
+  target_lost_behavior: hold
+  track_speed_deg_s: 30
+  search_speed_deg_s: 10
+  search_span_deg: 45
+  control_delay_ms: 20
+  motor_response_ms: 20
+  fresh_threshold_ms: 100
+  coast_timeout_ms: 200
+  lost_timeout_ms: 1000
+  estimator_alpha: 0.8
+  estimator_beta: 0.3
+
+# Part 2 S1: the vision ingest socket controld binds (visiond connects to it).
+vision:
+  socket_path: /tmp/ota_vision_probe.sock
+
+shutdown:
+  yaw_park_deg: 176
+  pitch_park_deg: 40
+  pos_tolerance_deg: 0.5
+  vel_tolerance_deg_s: 1.0
+  dwell_ms: 500
+  speed_deg_s: 10
+  verify_speed_deg_s: 2.0
+
+safety:
+  feedback_max_age_ms: 100
+  deadline_max_us: 2000
+  deadline_miss_threshold: 5
+  motor_overtemp_c: 75.0
+
+camera:
+  intrinsics_file: calibration/camera_intrinsics.yaml
+  extrinsics_file: calibration/camera_extrinsics.yaml
+
+installation:
+  pose_file: calibration/installation_pose.yaml
+
+payload:
+  active_profile: conservative
+  profile_dir: config/payload_profiles
+  auto_verify: false
+  check_region_half_span_deg: 10.0
+  check_current_a: 5.0
+  check_spd_kp: 5.0
+  check_spd_ki: 0.02

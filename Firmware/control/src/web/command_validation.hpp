@@ -48,7 +48,8 @@ inline constexpr int kYawIx = 1;
 // Allowed commands:
 //   hold, start_tracking, stop_tracking, enable_search, disable_search,
 //   select_target <id>, start_homing, start_installation_calibration,
-//   start_payload_verification, request_park, request_shutdown,
+//   start_payload_verification, select_payload_profile <name>,
+//   request_park, request_shutdown,
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -144,6 +145,25 @@ inline CommandResult validate_command(const SystemCommandState& s,
     return r;
   }
   if (command == "start_payload_verification") {
+    if (s.moving) {
+      r.error = "system is moving; wait for hold";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "select_payload_profile") {
+    // Runtime profile switch (§42.2). Never while the station is moving — the
+    // profile is a motion limit, and it must not change under a running
+    // payload check (§44) or a tracking move.
+    if (arg.empty()) {
+      r.error = "select_payload_profile requires a profile name";
+      return r;
+    }
+    if (arg.size() > 64 || arg.find_first_of("/\\\n\r") != std::string::npos) {
+      r.error = "invalid profile name";
+      return r;
+    }
     if (s.moving) {
       r.error = "system is moving; wait for hold";
       return r;

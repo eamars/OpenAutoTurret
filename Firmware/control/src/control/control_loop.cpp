@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "vision/vision_ingest.hpp"
+
 namespace ota {
 
 namespace {
@@ -138,7 +140,7 @@ void ControlLoop::deenergize_all() {
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
 }
 
-bool ControlLoop::enable_tracking(const TrackingController::Config& cfg,
+bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
                                   std::string& err) {
   if (tracking_) {
     err = "tracking already enabled";
@@ -148,12 +150,51 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg,
     err = "cannot enable tracking: not homed (position validity unknown, §38.1)";
     return false;
   }
+  // §36/§49: the SearchPlanner requires its yaw bounds to be STRICTLY inside
+  // the tracking soft limits (it has no envelope of its own — the envelope
+  // brakes, it does not veto). Center the configured span on the safe ready
+  // pose and take only what fits inside the soft limits with the soft margin
+  // AND the envelope's stop margin on top. A narrow-travel station therefore
+  // gets a narrow sweep, never a sweep that reaches for a stop.
+  TrackingController::Config cfg = cfg_in;
+  const AxisLimits& yl = limits_[ix(AxisId::Yaw)];
+  const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
+  const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
+  double lo = std::max(ready_yaw - cfg_.search_span_rad, yl.q_soft_min_rad + inset);
+  double hi = std::min(ready_yaw + cfg_.search_span_rad, yl.q_soft_max_rad - inset);
+  if (!(hi > lo)) {  // degenerate: no room to sweep — hold the ready yaw
+    spdlog::warn("search sweep clamped to the ready pose (no yaw room inside "
+                 "the soft limits)");
+    lo = hi = ready_yaw;
+  } else if (hi - lo < 2.0 * cfg_.search_span_rad - 1e-9) {
+    spdlog::info("search sweep clamped to [{:.1f}, {:.1f}] deg (logical) to stay "
+                 "inside the soft limits",
+                 models_[ix(AxisId::Yaw)].raw_to_logical_deg(lo),
+                 models_[ix(AxisId::Yaw)].raw_to_logical_deg(hi));
+  }
+  cfg.search.yaw_low_rad = lo;
+  cfg.search.yaw_high_rad = hi;
+  cfg.search.pitch_rad = ready_raw_[ix(AxisId::Pitch)];  // the safe elevation
+  cfg.search.v_max_rad_s = cfg.search_v_max_rad_s;
   tracking_.reset(new TrackingController(cfg));
+  spdlog::info(
+      "tracking ENABLED (v_max track={:.1f} deg/s search={:.1f} deg/s, "
+      "search_enabled={}, fresh={} ms, intrinsics fx={:.1f} fy={:.1f} "
+      "cx={:.1f} cy={:.1f} {}x{})",
+      cfg.track_v_max_rad_s / kDeg2Rad, cfg.search_v_max_rad_s / kDeg2Rad,
+      cfg.fsm.search_enabled ? "yes" : "no", cfg.fresh_threshold_ns / 1000000,
+      cfg.intrinsics.fx, cfg.intrinsics.fy, cfg.intrinsics.cx,
+      cfg.intrinsics.cy, cfg.intrinsics.width, cfg.intrinsics.height);
   return true;
 }
 
 void ControlLoop::feed_measurement(const vision::TargetMeasurement& m) {
-  if (!tracking_) return;
+  // Called from the vision-ingest thread (§6.1). The critical section is a
+  // 58-byte copy — the control thread holds this mutex once per cycle (1b).
+  // `tracking_` is deliberately NOT touched here: it is control-thread state.
+  // A measurement delivered while tracking is off is discarded by the
+  // consumer, so the "no-op unless tracking enabled" contract still holds.
+  std::lock_guard<std::mutex> lk(measurement_mutex_);
   pending_measurement_ = m;
   has_pending_measurement_ = true;
 }
@@ -226,14 +267,34 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   process_commands();
 
   // 1b. Phase 6: feed the tracking controller the current pose (for §11
-  //      timestamp interpolation) and consume any pending visiond measurement.
+  //     timestamp interpolation) and consume any pending visiond measurement.
+  //
+  //     Auto-enable (§38.1): tracking is HARD-disabled until the homing gates
+  //     pass — this branch is unreachable before homed_ is set by
+  //     finalize_homing(), and enable_tracking() re-checks it.
+  if (tracking_auto_enable_ && !tracking_ && homed_) {
+    std::string terr;
+    if (!enable_tracking(tracking_cfg_, terr))
+      spdlog::warn("auto-enable tracking failed: {}", terr);
+  }
   if (tracking_) {
     tracking_->update_snapshots(now_ns, sp[ix(AxisId::Pitch)].q_rad,
                                 sp[ix(AxisId::Yaw)].q_rad);
-    if (has_pending_measurement_) {
-      tracking_->set_measurement(pending_measurement_);
-      has_pending_measurement_ = false;
+  }
+  {
+    vision::TargetMeasurement m;
+    bool have = false;
+    {
+      std::lock_guard<std::mutex> lk(measurement_mutex_);
+      if (has_pending_measurement_) {
+        m = pending_measurement_;
+        has_pending_measurement_ = false;
+        have = true;
+      }
     }
+    // Consume (and drop) measurements while tracking is off so a stale frame
+    // cannot be applied the instant tracking is enabled.
+    if (have && tracking_) tracking_->set_measurement(m);
   }
 
   // 2. §39.3 deadline watchdog. A cycle is a deadline miss only when its
@@ -470,14 +531,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // the safety envelope (§15: reference manager -> SafetyEnvelope): clamp
         // the position to the soft limits and cap the speed at the largest
         // value from which a full stop still fits before the boundary.
+        //
+        // `at_ready_` still means "holding the safe ready pose" WHILE tracking
+        // is on: the arbitration is holding (no tracking, no search reference)
+        // and both axes are within tolerance of it. Without this, a station
+        // with tracking enabled never reports "at ready pose" (the operator's
+        // P0 hold criterion) and the §27 auto payload check — which is gated
+        // on at_ready — could never run.
+        bool at_ready_now = tracking_ref_.source == ReferenceSource::Hold;
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
           q_ref[i] = env_.constrain_reference(r, limits_[i]);
           lim[i] = std::min(tracking_ref_.v_max_rad_s,
                             env_.max_speed_at(q_ref[i], limits_[i]));
-          at_ready_ = false;  // not at the ready pose while tracking/seeking
+          if (std::fabs(sp[i].q_rad - ready_raw_[i]) > kReadyPosTolRad)
+            at_ready_now = false;
         }
+        at_ready_ = at_ready_now;
         break;
       }
       // Phase 8: restricted one-shot test motion (§42.2) on yaw, validated by
@@ -723,6 +794,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
 
     telemetry::TelemetrySnapshot snap;
     snap.timestamp_ns = now_ns;
+    snap.phase = phase_name(phase_);
+    snap.fault_reason = fault_reason_;
     snap.q_yaw_rad = sp[ix(AxisId::Yaw)].q_rad;
     snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
     snap.effort_yaw = sp[ix(AxisId::Yaw)].torque_nm;
@@ -744,6 +817,25 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         payload::payload_status_name(payload_status_);
     snap.payload_derated = payload_derated_;
     snap.payload_check_active = (phase_ == Phase::PayloadCheck);
+    // Vision transport (observe-only; the ingest thread owns these counters).
+    if (vision_link_) {
+      const vision::VisionLink::Stats vs = vision_link_->stats();
+      snap.vision_connected = vs.connected;
+      snap.vision_frames = vs.frames;
+      snap.vision_dropped = vs.dropped;
+      snap.vision_last_frame_sequence = vs.last_frame_sequence;
+      if (vs.last_arrival_ns > 0) {
+        // Both stamps are in the host-monotonic domain (§6.2): the ingest thread
+        // stamps arrival with now_monotonic_ns() and the daemon drives this
+        // loop's clock from the same clock. A negative age can therefore only
+        // mean a clock-domain mismatch (a simulated clock in tests): clamp it,
+        // never publish nonsense to the dashboard.
+        const int64_t age_ms = (now_ns - vs.last_arrival_ns) / 1000000;
+        snap.vision_measurement_age_ms = age_ms > 0 ? age_ms : 0;
+      } else {
+        snap.vision_measurement_age_ms = -1;  // no measurement has ever arrived
+      }
+    }
     // Phase 7: world-frame telemetry (§29/§30) — base tilt + world-frame LOS
     // from the active R_W_B. Makes tracking world-correct for a tilted base.
     double az_base = 0.0, el_base = 0.0;
@@ -785,14 +877,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
 // Phase 9: payload profiling / verification (§28.5, §31.3, §41).
 // ---------------------------------------------------------------------------
 
-void ControlLoop::set_payload_profile(payload::PayloadProfile pr) {
+void ControlLoop::set_payload_profile(payload::PayloadProfile pr,
+                                      bool commissioned) {
   if (phase_ == Phase::PayloadCheck) return;  // never swap mid-check
   payload_profile_ = std::move(pr);
-  // A commissioned profile is trusted (§28.5) until a verification says
-  // otherwise; a fresh profile clears any earlier mismatch derate (this is
-  // the repeatable-commissioning path, §28.5/§31.3).
-  payload_status_ = payload::PayloadStatus::Ok;
-  payload_detail_ = "profile loaded: " + payload_profile_->name;
+  if (commissioned) {
+    // A commissioned profile is trusted (§28.5) until a verification says
+    // otherwise; a fresh profile clears any earlier mismatch derate (this is
+    // the repeatable-commissioning path, §28.5/§31.3).
+    payload_status_ = payload::PayloadStatus::Ok;
+    payload_detail_ = "profile loaded: " + payload_profile_->name;
+  } else {
+    // Runtime selection (§42.2): the profile CAPS station motion from now on,
+    // but it is not believed until the check measures against it (§31.3).
+    payload_status_ = payload::PayloadStatus::NoProfile;
+    payload_detail_ = "profile '" + payload_profile_->name +
+                      "' selected at runtime; run start_payload_verification "
+                      "to confirm it against the installed mass (§31.3)";
+  }
   apply_payload_derate(false);
 }
 
@@ -953,6 +1055,24 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
                                                const std::string& arg) {
   std::lock_guard<std::mutex> lk(command_mutex_);
   web::CommandResult r = web::validate_command(command_state_, name, arg);
+  if (r.ok && name == "select_payload_profile") {
+    // Reject an unknown profile SYNCHRONOUSLY. The web response is written
+    // before the control thread executes anything, so an "ok" that later turns
+    // into a log-only warning would lie to the operator (§42.1: what the UI
+    // shows must be what the station did). This is a cheap stat() on the
+    // CALLER's thread (the web server thread) — never on the control thread
+    // (§46) — and `arg` is already name-validated by web::validate_command
+    // (no '/', no "..", length-capped), so the path cannot escape the store.
+    const std::string path =
+        payload_profile_dir_.empty() ? std::string()
+                                     : payload_profile_dir_ + "/" + arg + ".yaml";
+    if (path.empty() || ::access(path.c_str(), R_OK) != 0) {
+      r.ok = false;
+      r.error = "no payload profile named '" + arg + "' in " +
+                (payload_profile_dir_.empty() ? std::string("<unset>")
+                                              : payload_profile_dir_);
+    }
+  }
   if (r.ok) command_queue_.emplace_back(name, arg);
   return r;
 }
@@ -981,8 +1101,9 @@ void ControlLoop::execute_command(const std::string& name,
   }
   if (name == "start_tracking") {
     if (tracking_) return;  // already enabled (validation should have caught it)
-    TrackingController::Config tcfg;
-    if (!enable_tracking(tcfg, err)) {
+    // Use the COMMISSIONED configuration (turret.yaml `tracking:` block +
+    // the calibration files), not the built-in defaults (Part 2, S1).
+    if (!enable_tracking(tracking_cfg_, err)) {
       spdlog::warn("start_tracking rejected: {}", err);
     }
     return;
@@ -1014,6 +1135,33 @@ void ControlLoop::execute_command(const std::string& name,
     if (phase_ == Phase::Hold) payload_check_requested_ = true;
     else spdlog::warn("start_payload_verification: not in hold (phase={})",
                       phase_name(phase_));
+    return;
+  }
+  if (name == "select_payload_profile") {
+    // §42.2 runtime profile switch (P6 follow-up: the mismatch -> clear cycle
+    // used to require a config edit + a daemon restart). The new profile caps
+    // station motion immediately; its status stays no_profile until the
+    // operator runs start_payload_verification (§31.3), so selecting an
+    // unverified profile can never silently raise a limit on trust.
+    if (phase_ == Phase::PayloadCheck) {
+      spdlog::warn("select_payload_profile: a payload check is running; not "
+                   "swapping the profile mid-check (§44)");
+      return;
+    }
+    payload::PayloadProfileStore store(payload_profile_dir_);
+    payload::PayloadProfile prof;
+    std::string perr;
+    if (!store.load(arg, prof, perr)) {
+      spdlog::warn("select_payload_profile: '{}' not loaded ({})", arg, perr);
+      return;
+    }
+    set_payload_profile(std::move(prof), /*commissioned=*/false);
+    spdlog::info("payload profile: selected '{}' at runtime (status={}, "
+                 "v_max pitch={:.1f} deg/s yaw={:.1f} deg/s); run "
+                 "start_payload_verification to confirm it (§31.3)",
+                 arg, payload::payload_status_name(payload_status_),
+                 payload_profile_->pitch.v_max_rad_s / kDeg2Rad,
+                 payload_profile_->yaw.v_max_rad_s / kDeg2Rad);
     return;
   }
   if (name == "select_target" || name == "enable_search" ||

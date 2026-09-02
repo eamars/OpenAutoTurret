@@ -104,10 +104,40 @@ struct HomingPlanConfig {
   std::vector<HomingPlanActionConfig> actions;
 };
 
-// §40 `tracking:` block (§58 params 19-20).
+// §40 `tracking:` block (§58 params 19-20) + the Part-2 S1 ingest wiring.
 struct TrackingConfig {
+  // Auto-enable tracking once the homing gates pass (§38.1). FALSE by default:
+  // a station must never start following pixels because a config file said so.
+  // The `start_tracking` developer command (§42.2) is the operator path.
+  bool enabled = false;
   bool search_enabled_by_default = false;
   std::string target_lost_behavior = "hold";  // "hold" | "search"
+  // §16 tracking speed limit (deg/s). The architecture caps tracking at 30 deg/s.
+  double track_speed_deg_s = 30.0;
+  // §36/§49 search sweep speed (deg/s) — reduced relative to tracking.
+  double search_speed_deg_s = 10.0;
+  // §49 search sweep half-span (deg) around the ready pose. The loop clamps it
+  // strictly inside the homed soft limits (minus the safety margin).
+  double search_span_deg = 45.0;
+  // §13.3 actuation horizon: control + motor-response latency the estimator
+  // predicts across (ms each).
+  int control_delay_ms = 20;
+  int motor_response_ms = 20;
+  // §34: how stale a valid measurement may be and still count as "detected".
+  int fresh_threshold_ms = 100;
+  // §34 coast window: keep extrapolating for this long after measurements stop.
+  int coast_timeout_ms = 200;
+  // §34: declare the target lost after this long without a valid measurement.
+  int lost_timeout_ms = 1000;
+  // §13 alpha-beta gains.
+  double estimator_alpha = 0.8;
+  double estimator_beta = 0.3;
+};
+
+// §5.1/§6.1 vision ingest (Part 2, S1): what controld binds so visiond can
+// publish TargetMeasurements to it.
+struct VisionConfig {
+  std::string socket_path = "/tmp/ota_vision.sock";
 };
 
 // §40 `shutdown:` block (§58 param 4) + §33 park sequence parameters.
@@ -188,6 +218,7 @@ struct TurretConfig {
   HomingConfig homing;
   HomingPlanConfig homing_plan;
   TrackingConfig tracking;
+  VisionConfig vision;
   ShutdownConfig shutdown;
   SafetyConfig safety;
   CameraConfig camera;

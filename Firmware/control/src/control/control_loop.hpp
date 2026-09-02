@@ -49,6 +49,10 @@
 
 namespace ota {
 
+namespace vision {
+class VisionLink;  // lock-free vision-link counters (vision_ingest.hpp)
+}
+
 enum class Phase {
   Idle,     // no motion phase active (pre-homing or post-park)
   Homing,   // executing the multi-axis homing plan
@@ -114,6 +118,10 @@ class ControlLoop {
     // so a check from any homed pose is valid; it must stay >= ~4 deg for the
     // full check amplitude (2 deg step + 2 deg edge margin).
     double payload_check_region_half_span_deg = 10.0;
+    // §49 search sweep half-span (rad) around the ready pose. Clamped strictly
+    // inside the homed soft limits when tracking is enabled (the SearchPlanner
+    // requires its bounds to leave braking margin, §36).
+    double search_span_rad = 45.0 * kDeg2Rad;
   };
 
   ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend);
@@ -129,13 +137,34 @@ class ControlLoop {
   // known, §38.1). The TrackingController is then owned by the loop and the
   // Hold phase delegates its reference to it (tracking > search > hold, §16).
   bool enable_tracking(const TrackingController::Config& cfg, std::string& err);
-  // Feed a new target measurement published by visiond (no-op if tracking is
-  // not enabled). Non-blocking; the control loop consumes it next cycle.
+  // Supply the tracking configuration BEFORE homing completes so the
+  // `start_tracking` developer command (§42.2) and any auto-enable use the
+  // commissioned values (intrinsics, kinematics, speeds, §58 params 19-20)
+  // instead of the built-in defaults. `enabled` gates the auto-enable: the
+  // loop turns tracking on by itself once the homing gate passes (§38.1).
+  void set_tracking_config(const TrackingController::Config& cfg,
+                           bool auto_enable) {
+    tracking_cfg_ = cfg;
+    tracking_auto_enable_ = auto_enable;
+  }
+  const TrackingController::Config& tracking_config() const {
+    return tracking_cfg_;
+  }
+  // Feed a new target measurement published by visiond. THREAD-SAFE: called
+  // from the vision-ingest thread, consumed by the control thread next cycle.
+  // Non-blocking. It never dereferences `tracking_` (that pointer is owned by
+  // the control thread); a measurement delivered while tracking is off is
+  // simply discarded by the consumer.
   void feed_measurement(const vision::TargetMeasurement& m);
   bool tracking_mode_enabled() const { return tracking_ != nullptr; }
   // Access to the tracking controller (telemetry, state). Only call when
   // tracking_mode_enabled().
   const TrackingController& tracking_controller() const { return *tracking_; }
+
+  // --- vision link (Part 2, S1) -------------------------------------------
+  // Observe-only: the ingest thread writes the link counters, the control
+  // thread reads them into the §6.3 snapshot. The loop never owns it.
+  void set_vision_link(const vision::VisionLink* link) { vision_link_ = link; }
 
   // --- installation orientation (Phase 7, §29/§30) -------------------------
   // Set the active base->world orientation (loaded from the stored pose at
@@ -148,7 +177,15 @@ class ControlLoop {
   // Load the active payload profile (loaded from config/payload_profiles/ at
   // boot, or after re-profiling). Without one, the loop runs with the
   // no_profile status and conservative defaults (§31.3: request a tuning).
-  void set_payload_profile(payload::PayloadProfile p);
+  // `commissioned` = true for a boot-time load (the operator commissioned it,
+  // §28.5: trusted until a verification says otherwise). A RUNTIME selection
+  // (`select_payload_profile`, §42.2) is NOT trusted: the status stays
+  // no_profile until `start_payload_verification` confirms it (§31.3).
+  void set_payload_profile(payload::PayloadProfile p, bool commissioned = true);
+  // Where `select_payload_profile` looks profiles up (§41 store directory).
+  void set_payload_profile_dir(std::string dir) {
+    payload_profile_dir_ = std::move(dir);
+  }
   payload::PayloadStatus payload_status() const { return payload_status_; }
   bool payload_derated() const { return payload_derated_; }
   bool payload_check_active() const { return phase_ == Phase::PayloadCheck; }
@@ -302,6 +339,8 @@ class ControlLoop {
   double test_motion_target_rad_ = 0.0;
   // Phase 9: payload profiling state (§28.5, §31.3, §41).
   std::optional<payload::PayloadProfile> payload_profile_;
+  // §41: where `select_payload_profile` loads from (config payload.profile_dir).
+  std::string payload_profile_dir_;
   payload::PayloadStatus payload_status_ = payload::PayloadStatus::NoProfile;
   bool payload_derated_ = false;
   std::string payload_detail_;
@@ -322,8 +361,17 @@ class ControlLoop {
   bool payload_check_requested_ = false;  // web command pending (executed at
                                           // the top of the next cycle)
   ReferenceRequest tracking_ref_;  // produced each cycle while tracking is on
+  // Latest visiond measurement, handed over from the ingest thread. Guarded by
+  // measurement_mutex_ (held for a 58-byte copy only; never contended long).
+  std::mutex measurement_mutex_;
   bool has_pending_measurement_ = false;
   vision::TargetMeasurement pending_measurement_;
+  // Commissioned tracking configuration (from turret.yaml + the calibration
+  // files). Used by the `start_tracking` command and the auto-enable path.
+  TrackingController::Config tracking_cfg_;
+  bool tracking_auto_enable_ = false;
+  // Observe-only view of the vision transport (owned by main / VisionIngest).
+  const vision::VisionLink* vision_link_ = nullptr;
 };
 
 }  // namespace ota
