@@ -83,15 +83,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   <section class="panel" id="p-system">
     <h2>System</h2>
+    <div class="row"><span class="k">Loop phase</span><span class="badge" id="phase">—</span></div>
     <div class="row"><span class="k">Track state</span><span class="badge" id="track-state">—</span></div>
     <div class="row"><span class="k">Safety action</span><span class="badge" id="safety">—</span></div>
     <div class="row"><span class="k">Tracking active</span><span id="tracking-active">—</span></div>
     <div class="row"><span class="k">Feedback age</span><span id="fb-age">—</span></div>
     <div class="row"><span class="k">Control cycle</span><span id="cycle">—</span></div>
+    <div class="row"><span class="k">Fault</span><span id="fault">—</span></div>
   </section>
 
   <section class="panel" id="p-vision">
     <h2>Vision</h2>
+    <div class="row"><span class="k">Publisher</span><span class="badge" id="vis-conn">—</span></div>
+    <div class="row"><span class="k">Measurements</span><span id="vis-frames">—</span></div>
+    <div class="row"><span class="k">Measurement age</span><span id="vis-age">—</span></div>
     <div class="row"><span class="k">Target confidence</span><span id="conf">—</span></div>
     <div class="row"><span class="k">Target az (world)</span><span id="taz">—</span></div>
     <div class="row"><span class="k">Target el (world)</span><span id="tel">—</span></div>
@@ -212,11 +217,20 @@ function connect() {
   };
 }
 function render(t) {
+  badge($("phase"), t.phase || "—", t.phase === "fault" ? "err" :
+        (t.phase === "hold" || t.phase === "parked" ? "ok" : "warn"));
   badge($("track-state"), t.track_state, trackKind(t.track_state));
   badge($("safety"), t.safety_action, safetyKind(t.safety_action));
   $("tracking-active").textContent = t.tracking_active ? "yes" : "no";
   $("fb-age").textContent = num(t.feedback_age_ms, 1) + " ms";
   $("cycle").textContent = num(t.control_cycle_us, 1) + " µs";
+  $("fault").textContent = t.fault || "—";
+  badge($("vis-conn"), t.vision_connected ? "visiond connected" : "no publisher",
+        t.vision_connected ? "ok" : "warn");
+  $("vis-frames").textContent = (t.vision_frames || 0) +
+    (t.vision_dropped ? " (" + t.vision_dropped + " dropped)" : "");
+  $("vis-age").textContent = t.vision_measurement_age_ms < 0
+    ? "never" : num(t.vision_measurement_age_ms, 0) + " ms";
   $("conf").textContent = num(t.target_confidence, 3);
   $("taz").textContent = rad(t.target_az_world_rad);
   $("tel").textContent = rad(t.target_el_world_rad);

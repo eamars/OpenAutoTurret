@@ -33,6 +33,10 @@ class Telemetry:
     """One §6.3 telemetry snapshot (controld -> webd)."""
 
     ts_ns: int = 0
+    # Loop phase ("idle"|"homing"|"hold"|"parking"|"parked"|"fault"|
+    # "payload_check") + the fault reason while phase == "fault" (§6.3).
+    phase: str = ""
+    fault: str = ""
     track_state: str = "ready_hold"
     tracking_active: bool = False
     target_confidence: float = 0.0
@@ -59,6 +63,13 @@ class Telemetry:
     payload_profile_status: str = "no_profile"  # ok|no_profile|mismatch|error
     payload_derated: bool = False           # motion limits derated (mismatch)
     payload_check_active: bool = False      # in-loop verification running
+    # Vision transport (§6.1/§6.2, Part 2 S1): distinguishes "no detector
+    # output at all" from "the detector sees nothing".
+    vision_connected: bool = False          # a visiond publisher is attached
+    vision_frames: int = 0                  # decoded measurements since boot
+    vision_dropped: int = 0                 # bad-size / undecodable datagrams
+    vision_last_frame_sequence: int = 0
+    vision_measurement_age_ms: int = -1     # since the last measurement
 
 
 @dataclass
