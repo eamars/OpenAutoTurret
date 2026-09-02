@@ -26,6 +26,10 @@ Environment=OTA_WEB_HOST=0.0.0.0
 Environment=OTA_WEB_PORT=8080
 Environment=OTA_WEB_SOCKET=/run/ota/controld-web.sock
 Environment=OTA_WEB_HZ=15
+# This install: IMX500 is mounted upside-down; rotate_180 is the
+# live-verified correction (0.9996 correlation; see run_webd_inspection.py).
+# Without it the web feed (and any capture from this unit) is flipped.
+Environment=OTA_VIDEO_ORIENTATION=rotate_180
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=15
