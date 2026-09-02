@@ -31,6 +31,38 @@ by hostname, not IP.
 
 ## Install (on the target)
 
+Preferred: `tools/install_station.py` stages the runtime tree, renders the units
+for the real install root / user, and then **checks the four agreements that
+fail silently** (vision socket on both sides, web socket on both sides,
+`--orientation` vs `OTA_VIDEO_ORIENTATION`, and the fact that the camera device
+is exclusive), plus the §52/§33 guarantees (`TimeoutStartSec=infinity`,
+`KillSignal=SIGINT`, `Restart=on-failure`). It never calls `systemctl`: starting
+`turret-control` homes the turret, and that is a supervised decision.
+
+```sh
+cd Firmware
+# 1. Stage into the install root and render the units for it (dry run first).
+python3 -m tools.install_station stage --stage /opt/open_auto_turret
+python3 -m tools.install_station stage --stage /opt/open_auto_turret --apply
+# 2. Verify the staged tree BEFORE anything is copied to /etc/systemd/system.
+python3 -m tools.install_station check --root /opt/open_auto_turret \
+    --units /opt/open_auto_turret/systemd
+# 3. Install the rendered units and enable (no --now: see the checklist).
+sudo cp /opt/open_auto_turret/systemd/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable can0.service turret-control.service \
+                      turret-vision.service turret-web.service
+# 4. Re-check against what systemd actually holds, and verify python deps.
+sudo python3 -m tools.install_station check --root /opt/open_auto_turret \
+    --units /etc/systemd/system --verify-python
+```
+
+`check` is read-only; run it again after any hand edit, and again whenever
+`vision_connected=false` shows up with an otherwise healthy-looking daemon
+(checklist #3 is almost always the cause, and the tool says so by name).
+
+Hand-typed equivalent, for the record and for a machine without this checkout:
+
 ```sh
 # 1. Install the firmware to /opt/open_auto_turret: build/ + config/ + the
 #    Python packages. The camera/UI processes run on the SYSTEM python —
