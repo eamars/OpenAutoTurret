@@ -1173,6 +1173,44 @@ The units exist as templates (`Firmware/systemd/`: `can0`, `turret-control`,
 **Pass criteria:** all units survive reboot; control loop unaffected by web/
 network state; a crash restart always lands in UNHOMED → re-home → hold.
 
+### Static review done offline 2026-09-03 (b) — four template defects fixed
+
+Everything below is decidable without hardware, and each one would have cost a
+supervised station visit:
+
+| Defect | Why it bites | Fix |
+|---|---|---|
+| `TimeoutStartSec=120` in `turret-control` | Homing from cold is ~2.5 min (volatile mechanical zero). systemd would SIGTERM the daemon **mid-homing**, and because a timeout stop is not a "failure", `Restart=on-failure` would not bring it back: a silent, unhomed station that `systemctl status` reports as deployed | `TimeoutStartSec=infinity` + the reasoning in the unit; the daemon's own contact/stall/supervisor gates are what bound a stuck home |
+| `turret-vision` / `turret-web` used `.venv/bin/python` | **Import-probed both interpreters:** the venv fails `import picamera2` (`No module named 'libcamera'`) and `uvicorn` is missing from it; `/usr/bin/python3` has picamera2/uvicorn/fastapi/numpy/av/PIL/yaml. picamera2 cannot be pip-installed into a venv (it binds the system libcamera stack), so this was not fixable by installing more into the venv | both units now run `/usr/bin/python3`, with the probe result in the comments (the README's old advice — "put fastapi/uvicorn/picamera2 in the venv" — was unachievable) |
+| `turret-vision` had **no** `--orientation` | The IMX500 is mounted upside-down. A missing `rotate_180` does not crash anything: the dashboard looks right while the control geometry is 180° wrong | `--orientation rotate_180` in `ExecStart`, and `visiond --orientation` now has `choices=` so a typo exits with a usage line in the journal instead of a traceback |
+| `turret-vision` had no detector choice | Silent ambiguity about what produces detections; today the platform has none | `--detector none` explicit, with the `simple` (P8 bring-up) and `rpk` (production) meanings in the unit |
+
+Also reviewed and left as-is, deliberately: `turret-can-supervisor` watches
+`can0` (the MCP2515 witness) — while the yousee adapter is primary it protects
+nothing the motors use, so the README says not to expect it to; `turret-log`
+tails `logs/*.log`, which the current runbook does not produce (controld logs to
+stdout → journald), noted in the README rather than "fixed" by inventing files.
+
+`systemd-analyze verify` on all five units: no structural complaints; the only
+unresolved reference is `/opt/open_auto_turret/build/control/controld` (the
+deploy root does not exist on a dev checkout, as expected). A new
+**pre-flight checklist** (8 items: timeouts, interpreter, socket agreement,
+orientation, detector, camera exclusivity, which CAN link the supervisor
+actually watches, where the logs really go) is in `systemd/README.md` — read it
+before the first `systemctl start`.
+
+Related hardening found while checking the unit's restart semantics:
+`visiond` used to die with a connect traceback when controld's socket was not
+there yet (which under `Restart=on-failure` reads as "vision keeps restarting",
+hiding the real reason). `IpcPublisher.start()` now waits for the socket
+(`--connect-timeout-s`, default forever) with one legible line, honours
+Ctrl-C/SIGTERM while waiting, and `visiond` exits with a hint that controld is
+the side that binds. 6 new tests (`test_ipc_publisher.py`): immediate connect,
+late-bind wait, timeout raises `OSError`, stop aborts the wait promptly, a dead
+peer surfaces on publish (no silent queueing), and SEQPACKET boundaries survive.
+The live P11 run (enable, kill -9 restart → UNHOMED, network independence) is
+still the user's, on the supervised station.
+
 ---
 
 ## P12 — Live web end-to-end (§42, §54.5) `[MOTOR] + [CAMERA]`
