@@ -4,7 +4,7 @@
   python3 tools/station_ipc.py cmd start_payload_verification
   python3 tools/station_ipc.py cmd select_payload_profile conservative
   python3 tools/station_ipc.py telemetry
-  python3 tools/station_ipc.py state        # phase + payload/tracking fields
+  python3 tools/station_ipc.py state        # phase + at_ready + payload/tracking fields
   python3 tools/station_ipc.py --socket /path/controld-web.sock state
 """
 import json, os, re, socket, sys
@@ -53,7 +53,13 @@ if __name__ == "__main__":
         cmd(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
     elif w == "telemetry": telemetry()
     elif w == "state":
-        telemetry(1, ["phase", "payload_check_active", "payload_profile_status",
+        # at_ready is here deliberately: it is the P0 "homed + at ready pose"
+        # line, and it is the honest precondition for the developer commands
+        # (a payload check started while still travelling aborts with a clamped
+        # region). phase == hold is NOT enough: homing passes through hold
+        # between stages.
+        telemetry(1, ["phase", "at_ready", "payload_check_active",
+                      "payload_profile_status",
                       "payload_derated", "track_state", "target_confidence",
                       "q_pitch_rad", "q_yaw_rad", "fault", "safety_action",
                       "vision_connected", "vision_frames",
