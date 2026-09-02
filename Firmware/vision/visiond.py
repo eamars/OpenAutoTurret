@@ -16,6 +16,7 @@ import sys
 import time
 from typing import Optional
 
+from common import image_corrections as ic
 from .frame_source import FrameSource, SyntheticFrameSource
 from .ipc import IpcPublisher
 from .protocol import TargetMeasurement
@@ -30,10 +31,12 @@ class VisionDaemon:
         frame_source: FrameSource,
         target_selector: TargetSelector,
         ipc_publisher: IpcPublisher,
+        connect_timeout_s: float = 0.0,
     ) -> None:
         self._fs = frame_source
         self._ts = target_selector
         self._ipc = ipc_publisher
+        self._connect_timeout_s = float(connect_timeout_s)
         self._stop = False
 
     def run(self, num_frames: int = 0) -> int:
@@ -42,7 +45,10 @@ class VisionDaemon:
         ``num_frames == 0`` runs until stopped (e.g. SIGINT/SIGTERM).
         """
         self._fs.start()
-        self._ipc.start()
+        # controld binds the socket, so waiting for it is normal at service
+        # start; Ctrl-C / SIGTERM must still be able to abort the wait.
+        self._ipc.start(timeout_s=self._connect_timeout_s,
+                        should_stop=lambda: self._stop)
         published = 0
         try:
             while not self._stop:
@@ -72,6 +78,17 @@ def _make_parser() -> argparse.ArgumentParser:
     p.add_argument("--socket", default="/tmp/ota_vision.sock", help="controld IPC socket path")
     p.add_argument("--frames", type=int, default=0, help="stop after N frames (0 = run until stopped)")
     p.add_argument("--framerate", type=float, default=30.0, help="synthetic frame rate (Hz)")
+    p.add_argument(
+        "--connect-timeout-s",
+        type=float,
+        default=0.0,
+        help=(
+            "seconds to wait for controld's socket at start (0 = wait forever, "
+            "the service default: controld BINDS the socket, so a systemd start "
+            "can legitimately race it). Scripts that want a fast failure should "
+            "set e.g. 5."
+        ),
+    )
     p.add_argument("--image-config", default="", help="path to the picamera2 config JSON (real mode)")
     p.add_argument("--detector-rpk", default="", help="path to the IMX500 detector RPK JSON (real mode)")
     p.add_argument(
@@ -87,7 +104,18 @@ def _make_parser() -> argparse.ArgumentParser:
             "auto = rpk when --detector-rpk is given, else none."
         ),
     )
-    p.add_argument("--orientation", default="none", help="install orientation applied to the detector boxes (none|rotate_180|flip_horizontal|flip_vertical); keeps control geometry correct when the camera is mounted upside-down")
+    p.add_argument(
+        "--orientation",
+        default="none",
+        choices=list(ic.ORIENTATIONS),
+        help=(
+            "install orientation applied to the frame AND the detector boxes "
+            "(keeps control geometry correct when the camera is mounted "
+            "upside-down; this station's IMX500 needs rotate_180). Choices are "
+            "enforced here so a typo in a systemd unit fails with a usage "
+            "message in the journal instead of a traceback."
+        ),
+    )
     return p
 
 
@@ -142,7 +170,7 @@ def main(argv: Optional[list] = None) -> int:
     ts = TargetSelector(TargetSelectorConfig())
     ipc = IpcPublisher(args.socket)
 
-    daemon = VisionDaemon(fs, ts, ipc)
+    daemon = VisionDaemon(fs, ts, ipc, connect_timeout_s=args.connect_timeout_s)
 
     def _handle(signum, frame):  # noqa: ARG001
         daemon.request_stop()
@@ -150,7 +178,18 @@ def main(argv: Optional[list] = None) -> int:
     signal.signal(signal.SIGINT, _handle)
     signal.signal(signal.SIGTERM, _handle)
 
-    published = daemon.run(num_frames=args.frames)
+    published = 0
+    try:
+        published = daemon.run(num_frames=args.frames)
+    except OSError as e:
+        # Almost always: controld is not up (or the socket paths disagree). One
+        # clear line beats a traceback in the journal; the unit's Restart= handles
+        # the retry.
+        print(f"error: cannot publish to {args.socket}: {e}", file=sys.stderr)
+        print("hint: controld binds this socket (§6.1). Is it running, and does "
+              "its vision.socket_path / OTA_VISION_SOCKET match --socket?",
+              file=sys.stderr)
+        return 1
     extra = ""
     if bridge is not None:
         extra = f", bridge blobs {bridge.blobs}/{bridge.frames} frames"

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import threading
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 from .protocol import TargetMeasurement
 
@@ -23,9 +25,46 @@ class IpcPublisher:
         self._path = socket_path
         self._sock: Optional[socket.socket] = None
 
-    def start(self) -> None:
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        self._sock.connect(self._path)
+    def start(self, timeout_s: float = 0.0, retry_log_s: float = 5.0,
+              should_stop: Optional[Callable[[], bool]] = None) -> None:
+        """Connect to controld's socket, waiting for it to appear.
+
+        controld BINDS this socket (§6.1), so a systemd start can legitimately
+        put visiond ahead of the daemon (`Wants=` is soft, and controld may be
+        restarting). Failing hard here makes the unit crash-loop every
+        `RestartSec` with a connect traceback, which reads as "vision keeps
+        restarting" rather than the truth: there is no daemon to talk to yet. So
+        wait, and say so legibly once in a while.
+
+        ``timeout_s <= 0`` (the service default) waits until connected or
+        ``should_stop()``; a positive value re-raises the last OSError after the
+        deadline. Either way the caller gets ONE clear message, not a stack.
+        """
+        deadline = None if timeout_s <= 0 else time.monotonic() + timeout_s
+        last_log = 0.0
+        attempt = 0
+        while True:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            try:
+                sock.connect(self._path)
+                self._sock = sock
+                if attempt:
+                    print(f"connected to controld at {self._path} "
+                          f"after {attempt} attempt(s)", flush=True)
+                return
+            except OSError as e:
+                sock.close()
+                attempt += 1
+                now = time.monotonic()
+                if attempt == 1 or now - last_log >= retry_log_s:
+                    last_log = now
+                    print(f"waiting for controld at {self._path}: {e}",
+                          file=sys.stderr, flush=True)
+                if should_stop is not None and should_stop():
+                    raise
+                if deadline is not None and now >= deadline:
+                    raise
+                time.sleep(0.2)
 
     def publish(self, m: TargetMeasurement) -> None:
         if self._sock is None:
