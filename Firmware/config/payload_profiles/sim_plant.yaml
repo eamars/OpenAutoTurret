@@ -1,0 +1,83 @@
+# OpenAutoTurret payload profile (schema v1)
+#
+# ⚠ SIM PLANT ONLY — NEVER INSTALL ON THE STATION ⚠
+#
+# This is the step response of SimMotorBackend (control/src/sim/), measured on
+# the offline probe harness (Firmware/build/probe/controld_sim_probe2.log,
+# 2026-09-03: 2 deg position-mode step, rise 0.325 s, settle 0.40 s,
+# peak effort 1.0 Nm — the sim's fixed drive_effort). It exists so the payload
+# check's ok/mismatch/derate/clear path can be exercised END TO END offline
+# (the real `conservative` profile is a measurement of the real mechanism,
+# which the first-order sim plant cannot reproduce — against it the sim
+# correctly reports `mismatch`). The station's profiles are the captured
+# `conservative` one; this file is a test fixture.
+schema_version: 1
+name: sim_plant
+created_ns: 1788429000000000000
+config_revision: turret_sim.yaml@sim-probe
+hardware: sim-motor-backend
+notes: SIM PLANT FIXTURE - never install (see header)
+pitch:
+  v_max_rad_s: 0.35
+  a_max_rad_s2: 1.75
+  j_max_rad_s3: 8.7
+  gain_kp: 30.0
+  gain_ki: 1.0
+  gain_kd: 0.0
+  baseline:
+    step_pos:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.325
+      overshoot: 0.000
+      settling_time_s: 0.404
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00003
+      peak_effort_nm: 1.0
+    step_neg:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.325
+      overshoot: 0.000
+      settling_time_s: 0.399
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00003
+      peak_effort_nm: 1.0
+    triangle_rms_rad: 0.00003
+    brake:
+      valid: false
+    hold_effort_nm: 1.0
+    max_verified_speed_rad_s: 0.0873
+    valid: true
+yaw:
+  v_max_rad_s: 0.35
+  a_max_rad_s2: 1.75
+  j_max_rad_s3: 8.7
+  gain_kp: 30.0
+  gain_ki: 1.0
+  gain_kd: 0.0
+  baseline:
+    step_pos:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.325
+      overshoot: 0.000
+      settling_time_s: 0.404
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00003
+      peak_effort_nm: 1.0
+    step_neg:
+      valid: true
+      amplitude_rad: 0.0349
+      rise_time_s: 0.325
+      overshoot: 0.000
+      settling_time_s: 0.399
+      settle_band_rad: 0.00175
+      tracking_rms_rad: 0.00003
+      peak_effort_nm: 1.0
+    triangle_rms_rad: 0.00003
+    brake:
+      valid: false
+    hold_effort_nm: 1.0
+    max_verified_speed_rad_s: 0.0873
+    valid: true
