@@ -7,7 +7,6 @@ the (real) camera is touched. For tests and for running without a camera, use
 """
 from __future__ import annotations
 
-import threading
 import time
 from dataclasses import dataclass, field, replace
 from typing import List, Optional, Protocol, Tuple
@@ -236,11 +235,25 @@ class Picamera2FrameSource:
     """Real IMX500 frame source via Picamera2 (architecture §5.1).
 
     Written against the picamera2 that is actually installed on the station
-    (0.3.37 — see `docs/research_vision_readiness_p7.md`): the camera is
-    STARTED once and frames arrive on picamera2's request-callback thread, which
-    publishes the newest frame into a one-slot mailbox; `capture()` takes the
-    newest and never blocks the camera thread. That is the same pattern webd's
-    video source uses successfully on this box (`web/webd/video.py`).
+    (0.3.37 — measured, not assumed; see `docs/research_vision_readiness_p7.md`).
+    The camera is STARTED once and each ``capture()`` PULLS the next completed
+    request (``capture_request()`` -> ``make_array`` + ``get_metadata`` ->
+    ``release``): one array and its own metadata, no copying, no file I/O, one
+    thread.
+
+    Why pull, not callback: on this install ``request_callback`` is DEPRECATED
+    and silently maps onto ``post_callback``, which only fires for capture *file*
+    jobs — a callback-based stream therefore receives NOTHING and looks like a
+    dead camera (measured on the real IMX500: "request_callback is deprecated"
+    then no frames ever arrive). ``capture_request`` is the pattern
+    ``tools/vision_probe.py`` proves works here. (webd's video source still uses
+    the deprecated attribute; it appears to work because it also drives the
+    capture_file path — worth aligning one day, not today's change.)
+
+    If the pipeline ever stalls, ``capture()`` blocks in the camera stack rather
+    than inventing timestamps; that is deliberate. Vision liveness is not what
+    keeps the station safe: controld ages the measurement out
+    (``vision_measurement_age_ms`` grows), coasts, then brakes to hold (§34).
 
     Detection is OPTIONAL and never assumed:
       * ``detector_rpk_path`` set -> attempt the IMX500 AI-stack configuration.
@@ -275,11 +288,8 @@ class Picamera2FrameSource:
         self._seq = 0
         self._started = False
         self._picam = None
-        # Newest-frame mailbox written by the camera thread (§46-style: the
-        # camera thread never blocks on a consumer, the consumer sees stale).
-        self._lock = threading.Lock()
-        self._latest: Optional[Tuple[int, int, object, dict]] = None
-        self.frames_dropped = 0            # consumer too slow (overwrites)
+        self.frames_stale = 0              # requests whose timestamp did not advance
+        self.frames_without_sensor_timestamp = 0   # §6.2 stamp absent
         self.detection_backend = "none"    # "none" | "rpk"
         self.detection_note = ""
 
@@ -294,13 +304,13 @@ class Picamera2FrameSource:
             self._picam.configure(cfg)
         else:
             cfg = self._picam.create_video_configuration(
-                main={"size": self._image_size}, buffer_count=4
+                main={"size": self._image_size, "format": "XRGB8888"},
+                buffer_count=4,
             )
             try:
                 cfg["controls"]["FrameRate"] = self._framerate
             except Exception:  # noqa: BLE001 - control availability varies
                 pass
-            self._picam.request_callback = self._on_request
             self._picam.configure(cfg)
 
         if self._detector_rpk_path:
@@ -336,21 +346,6 @@ class Picamera2FrameSource:
         print(f"warning: {self.detection_note}; streaming WITHOUT detections",
               flush=True)
 
-    def _on_request(self, request) -> None:  # pragma: no cover - real camera
-        """picamera2 request callback (camera thread): keep only the newest."""
-        try:
-            meta = dict(request.get_metadata("main") or {})
-            arr = request.make_array("main")
-        except Exception:  # noqa: BLE001
-            return
-        seq = self._seq
-        self._seq += 1
-        with self._lock:
-            if self._latest is not None:
-                self.frames_dropped += 1
-            self._latest = (seq, int(meta.get("SensorTimestamp", 0) or 0),
-                            arr, meta)
-
     def stop(self) -> None:  # pragma: no cover - requires the real camera
         self._started = False
         if self._picam is not None:
@@ -368,22 +363,37 @@ class Picamera2FrameSource:
     def capture(self) -> FrameCapture:  # pragma: no cover - requires the real camera
         if not self._started:
             raise RuntimeError("Picamera2FrameSource.start() was not called")
-        deadline = time.monotonic() + 2.0
-        latest = None
-        while latest is None and time.monotonic() < deadline:
-            with self._lock:
-                latest = self._latest
-            if latest is None:
-                time.sleep(0.002)
-        if latest is None:
-            raise RuntimeError("camera produced no frames within 2 s")
+        # Pull the next COMPLETED request. The array and its metadata come from
+        # the SAME request, so the timestamp describes exactly this image (§6.2
+        # mandates that pairing); release() hands the buffer straight back.
+        try:
+            req = self._picam.capture_request()
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"camera request failed: {e}") from e
+        try:
+            # NB: CompletedRequest.get_metadata() takes NO stream argument on
+            # this picamera2 (0.3.37) — SensorTimestamp is in the request's
+            # metadata. make_array() DOES take the stream name.
+            meta = dict(req.get_metadata() or {})
+            arr = req.make_array("main")
+        finally:
+            try:
+                req.release()
+            except Exception:  # noqa: BLE001
+                pass
 
-        seq, sensor_ns, arr, meta = latest
+        seq = self._seq
+        self._seq += 1
+        sensor_ns = int(meta.get("SensorTimestamp", 0) or 0)
         # libcamera's SensorTimestamp is host CLOCK_MONOTONIC — the same domain
-        # controld stamps the motor history with (§6.2/§11). If a frame carries
+        # controld stamps the motor history with (§6.2/§11; measured against
+        # time.monotonic_ns() by tools/camera_bringup_probe.py). If a frame carries
         # none, stamp it with the monotonic clock; NEVER CLOCK_REALTIME.
-        meta = dict(meta)
         if sensor_ns <= 0:
+            # No real sensor stamp: fall back to the monotonic clock and COUNT
+            # it. If this ever climbs, §11 alignment is degrading and the
+            # interpolation in controld is being fed consumer-side stamps.
+            self.frames_without_sensor_timestamp += 1
             sensor_ns = int(time.monotonic_ns())
             meta["SensorTimestamp"] = sensor_ns
 
