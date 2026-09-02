@@ -145,6 +145,64 @@ class MetricsExtractionTest(unittest.TestCase):
         self.assertEqual(rows["error frames"].value, "12")
         self.assertEqual(rows["dropped"].value, "3")
 
+    # -- CAN family, from the transport's own counters (§55) ----------------
+    def _rows_capture(self, lines: list[str]) -> dict:
+        f = os.path.join(self.dir, "capture.jsonl")
+        with open(f, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        result = analyse([self.log], [f], [])
+        return {r.name: r for r in result["rows"]}
+
+    def test_transport_counters_are_reported_as_deltas(self):
+        """The published counters are cumulative since daemon start, so the
+        number that describes a run is the change across it. Printing only the
+        absolute total would credit this run with frames it did not move."""
+        rows = self._rows_capture([
+            '{"can_available": true, "can_kind": "yousee", '
+            '"can_device": "/dev/ttyUSB0", "can_up": true, "can_state": 0, '
+            '"can_rx_frames": 100, "can_rx_error_frames": 1, '
+            '"can_tx_frames": 200, "can_tx_failed": 0, '
+            '"can_last_rx_age_ms": 3}',
+            '{"can_available": true, "can_kind": "yousee", '
+            '"can_device": "/dev/ttyUSB0", "can_up": true, "can_state": 0, '
+            '"can_rx_frames": 150, "can_rx_error_frames": 4, '
+            '"can_tx_frames": 260, "can_tx_failed": 2, '
+            '"can_last_rx_age_ms": 5}',
+        ])
+        self.assertEqual(rows["rx frames during capture"].value,
+                         "50 (total 150)")
+        self.assertTrue(rows["rx error frames during capture"].value
+                        .startswith("3 (total 4)"))
+        self.assertTrue(rows["tx frames / tx failed during capture"].value
+                        .startswith("60 / 2"))
+        self.assertIn("yousee", rows["transport"].value)
+        self.assertIn("/dev/ttyUSB0", rows["transport"].value)
+        self.assertEqual(rows["bus states observed"].value, "error-active")
+
+    def test_a_simulated_capture_is_never_read_as_a_quiet_bus(self):
+        rows = self._rows_capture([
+            '{"can_available": false, "can_rx_frames": 0, "can_state": -1}'])
+        v = rows["transport counters (telemetry)"].value
+        self.assertTrue(v.startswith("NOT MEASURED"), v)
+        self.assertIn("simulated", v)
+
+    def test_bus_off_appears_by_name(self):
+        """§54.4 asks for the error states to be recorded; a bare 3 in a report
+        is not something anyone will catch at a glance."""
+        rows = self._rows_capture([
+            '{"can_available": true, "can_state": 0, "can_rx_frames": 10}',
+            '{"can_available": true, "can_state": 3, "can_rx_frames": 10}',
+        ])
+        v = rows["bus states observed"].value
+        self.assertIn("error-active", v)
+        self.assertIn("BUS-OFF", v)
+
+    def test_no_capture_points_at_the_field_that_would_answer_it(self):
+        rows = self._rows_capture([])
+        v = rows["transport counters (telemetry)"].value
+        self.assertTrue(v.startswith("NOT MEASURED"), v)
+        self.assertIn("can_rx_error_frames", v)
+
     # -- report hygiene ----------------------------------------------------
     def test_no_metric_is_reported_as_zero_when_its_source_is_absent(self):
         rows = self._rows()

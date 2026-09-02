@@ -366,6 +366,52 @@ def analyse(log_paths: List[str], telemetry_paths: List[str],
         add("CAN", "feedback age (from telemetry capture)",
             _num([float(a) for a in ages]) + " ms", "telemetry capture")
 
+    # The transport's own counters, published since the §55 plumbing landed.
+    # Counters are cumulative since daemon start, so the number that means
+    # something for a run is the DELTA across the capture; the absolute values
+    # are printed alongside so a one-sample capture is still readable.
+    bus = [t for t in telem if t.get("can_available")]
+    if not telem:
+        add("CAN", "transport counters (telemetry)", NOT_MEASURED +
+            " — no --telemetry capture given; controld publishes "
+            "can_rx_frames/can_rx_error_frames/can_tx_frames/can_tx_failed/"
+            "can_state/can_last_rx_age_ms on every frame", NOTHING_READ)
+    elif not bus:
+        add("CAN", "transport counters (telemetry)", NOT_MEASURED +
+            f" — {len(telem)} captured frames all say can_available=false: "
+            "that daemon had no CAN link (a simulated run). No hardware "
+            "conclusion may be drawn from these frames", NOTHING_READ)
+    else:
+        first, last = bus[0], bus[-1]
+        d = lambda k: int(last.get(k, 0)) - int(first.get(k, 0))
+        states = {int(t.get("can_state", -1)) for t in bus}
+        names = {-1: "unknown", 0: "error-active", 1: "error-warning",
+                 2: "error-passive", 3: "BUS-OFF", 4: "stopped",
+                 5: "sleeping"}
+        add("CAN", "transport",
+            f"{last.get('can_kind', '?')} on {last.get('can_device', '?')} "
+            f"({'up' if last.get('can_up') else 'DOWN'})",
+            f"{len(bus)} telemetry frames with can_available=true")
+        add("CAN", "bus states observed",
+            ", ".join(names.get(s, str(s)) for s in sorted(states)),
+            "can_state (CanIfState); §54.4 wants active/passive/bus-off "
+            "behaviour recorded")
+        add("CAN", "rx frames during capture",
+            f"{d('can_rx_frames')} (total {last.get('can_rx_frames', 0)})",
+            "delta of the cumulative counter")
+        add("CAN", "rx error frames during capture",
+            f"{d('can_rx_error_frames')} "
+            f"(total {last.get('can_rx_error_frames', 0)})",
+            "delta; PHY corruption / arbitration hints — §54.4")
+        add("CAN", "tx frames / tx failed during capture",
+            f"{d('can_tx_frames')} / {d('can_tx_failed')} "
+            f"(totals {last.get('can_tx_frames', 0)} / "
+            f"{last.get('can_tx_failed', 0)})",
+            "delta of the cumulative counters")
+        add("CAN", "last-rx age",
+            _num([float(t.get("can_last_rx_age_ms", -1)) for t in bus])
+            + " ms", "can_last_rx_age_ms (bus silence detector)")
+
     meta = {"log_lines": lines, "loop_reports": len(loops),
             "motion_events": len(motion), "second_lines": len(seconds),
             "vision_lines": len(visions), "telemetry_samples": len(telem),
