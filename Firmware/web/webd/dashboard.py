@@ -257,14 +257,29 @@ function renderCan(t) {
   const st = CAN_STATE[t.can_state] || ["state " + t.can_state, "info"];
   $("can-kind").textContent = (t.can_kind || "?") + " · " + (t.can_device || "?")
     + (t.can_up ? "" : " (down)");
-  badge($("can-state"), st[0], st[1]);
+  // "unknown" is not one state, it is two very different situations, and on
+  // THIS station it is permanent: the yousee USB-CAN adapter exposes no
+  // controller error state at all (yousee_transport.hpp), so the badge would sit
+  // on "unknown" forever while the operator looked for a fault that isn't there.
+  // SocketCAN (the MCP2515 HAT) reports the real netlink state. Distinguish the
+  // two and point at the signals that DO exist on yousee.
+  if (t.can_state === -1 && t.can_kind === "yousee") {
+    badge($("can-state"), "not exposed by adapter", "info");
+    $("can-note").textContent = "the yousee adapter exposes no controller error "
+      + "state (§54.4 error-active/passive/bus-off are only readable on the "
+      + "MCP2515/can0 path). Here the CAN-health signals are RX error frames "
+      + "(codec resyncs = wire corruption) and the RX age; feedback staleness is "
+      + "supervised regardless (§34).";
+  } else {
+    badge($("can-state"), st[0], st[1]);
+    $("can-note").textContent = "error frames climbing while the bus stays "
+      + "error-active points at the PHY/cabling; bus-off means the controller "
+      + "stopped talking (§54.4)";
+  }
   $("can-rx").textContent = t.can_rx_frames + " / " + t.can_rx_error_frames;
   $("can-tx").textContent = t.can_tx_frames + " / " + t.can_tx_failed;
   $("can-age").textContent = t.can_last_rx_age_ms < 0 ? "none received"
                                                       : t.can_last_rx_age_ms + " ms";
-  $("can-note").textContent = "error frames climbing while the bus stays "
-    + "error-active points at the PHY/cabling; bus-off means the controller "
-    + "stopped talking (§54.4)";
 }
 
 function render(t) {

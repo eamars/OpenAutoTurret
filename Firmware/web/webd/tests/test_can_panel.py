@@ -32,6 +32,17 @@ class CanPanelSurfaceTest(unittest.TestCase):
         self.assertIn('"err"', DASHBOARD_HTML[DASHBOARD_HTML.index("CAN_STATE"):
                                               DASHBOARD_HTML.index("CAN_STATE") + 400])
 
+    def test_yousee_gets_no_permanent_unknown_badge(self):
+        """This station's primary PHY is the yousee adapter, which exposes no
+        controller error state (yousee_transport.hpp). A plain state map would
+        sit on "unknown" forever and read as a fault; the panel must say the
+        state is not exposed and name the signals that DO exist there."""
+        note = DASHBOARD_HTML[DASHBOARD_HTML.index("function renderCan"):]
+        note = note[:note.index("function render(t)")]
+        self.assertIn('t.can_kind === "yousee"', note)
+        self.assertIn("not exposed by adapter", note)
+        self.assertIn("RX error frames", note)
+
     def test_simulated_backend_is_labelled_as_absence(self):
         note = DASHBOARD_HTML[DASHBOARD_HTML.index("function renderCan"):]
         note = note[:note.index("function render(t)")]

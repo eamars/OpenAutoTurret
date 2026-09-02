@@ -1634,8 +1634,25 @@ history is auditable.
    Placeholder for "fast open-loop-ish moves". → **v1 uses position mode for
    commissioning and MIT mode (run_mode=0) for the 200 Hz loop.** Deferred.
 3. **Motor health: bus error counters not surfaced** (Phase-1 checklist item) —
-   feedback freshness + fault flags are in `AxisLatest`; CAN bus error counters
-   are not yet in telemetry. → Resolve during P13 metrics work (§55 CAN block).
+   **surfaced 2026-09-03 (d)**, and the gap was never instrumentation:
+   `can::BusStats` (rx/tx frames, tx failures, decode losses =
+   `rx_error_frames`, last-rx stamp) and `CanIfState` have been implemented by
+   both transports from the start; nothing read them. `MotorBackend::can_health()`
+   → `TelemetrySnapshot` → web JSON → dashboard panel ("CAN link", §55) now
+   carries them, and `tools/acceptance_metrics.py` reports the family as
+   **deltas across the capture** (the published counters are cumulative since
+   daemon start). What each PHY actually answers differs, and the panel says so
+   rather than showing a permanent `unknown`:
+   * `socketcan` / `can0` (MCP2515 HAT): the interface state is the real netlink
+     state, so §54.4's error-active / error-warning / error-passive / **bus-off**
+     are observable (§54.4's checklist is now readable on this path).
+   * `yousee` USB-CAN (**this station's primary**): the adapter exposes **no**
+     controller error state (`can_state()` is Unknown by design), so the usable
+     signals are `rx_error_frames` (codec resyncs — wire corruption) and the RX
+     age; feedback staleness is supervised by the supervisor regardless (§34).
+   Still not surfaced on either path: the controller's `rxerr`/`txerr` counters
+   and a bus-off **event history** (needs an ERROR-AWARE raw binding). If §54.4
+   must record those, that is the remaining work — say so and it gets built.
 
 **Phase 2 — homing & safety**
 4. **23 §58 commissioning parameters in `turret.yaml`** — conservative
