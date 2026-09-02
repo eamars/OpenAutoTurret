@@ -29,6 +29,12 @@ ExecStart=/opt/open_auto_turret/build/control/controld /opt/open_auto_turret/con
 # §53: the web socket path + publish rate are configuration (env), not code.
 Environment=OTA_WEB_SOCKET=/run/ota/controld-web.sock
 Environment=OTA_WEB_HZ=15
+# Vision IPC (§6.1): controld BINDS this socket and visiond connects to it. The
+# code/config default is /tmp/ota_vision.sock, which turret-vision.service uses
+# today. If you ever move it (e.g. to /run/ota — cleaner than world-writable
+# /tmp) it MUST change here and in visiond's --socket together: a mismatch is
+# silent, the station simply never sees a target (vision_connected=false).
+#Environment=OTA_VISION_SOCKET=/tmp/ota_vision.sock
 # The web socket lives in /run (tmpfs); ensure the dir exists before bind.
 ExecStartPre=/usr/bin/mkdir -p /run/ota
 ExecStartPre=/usr/bin/chown eamars:eamars /run/ota
@@ -37,7 +43,15 @@ ExecStartPre=/usr/bin/chown eamars:eamars /run/ota
 KillSignal=SIGINT
 Restart=on-failure
 RestartSec=2s
-TimeoutStartSec=120
+# Homing duration is NOT bounded by design: after a power-cycle the mechanical
+# zero is volatile, so the daemon re-derives both endpoints from cold (~2.5 min
+# for both axes measured on this station). A finite TimeoutStartSec would
+# SIGTERM the daemon MID-HOMING — and a systemd timeout stop is not a "failure",
+# so Restart=on-failure would not bring it back: the station would sit silent and
+# unhomed while `systemctl status` looks deployed. The daemon's own gates
+# (contact detection, 3x-burst stall detection, the supervisor) are what bound a
+# stuck home — not the service manager.
+TimeoutStartSec=infinity
 TimeoutStopSec=30
 # Isolate from unrelated writes; /run/ota must stay writable for the web socket.
 # PrivateTmp is OFF because /tmp/ota_vision.sock is shared with turret-vision.

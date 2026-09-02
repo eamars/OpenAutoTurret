@@ -9,7 +9,12 @@
 # §53: bind host, port, and the controld socket are configuration (env), never
 # hard-coded — access is by hostname, not IP.
 #
-# CHANGE before deploy: User/Group, the install root, and the venv python path.
+# CHANGE before deploy: User/Group and the /opt/open_auto_turret install root.
+#
+# ⚠ INTERPRETER: the SYSTEM python (/usr/bin/python3). The repo venv has no
+# uvicorn (verified by import 2026-09-03), and its picamera2 import fails too, so
+# `.venv/bin/python -m web.webd.app` cannot serve the UI — let alone the video
+# feed. The live-verified runbook uses system python3 for exactly this reason.
 [Unit]
 Description=OpenAutoTurret web UI (webd)
 After=network.target turret-control.service
@@ -20,7 +25,7 @@ Type=simple
 User=eamars
 Group=eamars
 WorkingDirectory=/opt/open_auto_turret
-ExecStart=/opt/open_auto_turret/.venv/bin/python -m web.webd.app
+ExecStart=/usr/bin/python3 -m web.webd.app
 # §53: nothing hard-coded — host/port/socket/rate are env configuration.
 Environment=OTA_WEB_HOST=0.0.0.0
 Environment=OTA_WEB_PORT=8080

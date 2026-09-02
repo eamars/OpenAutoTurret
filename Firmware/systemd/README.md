@@ -32,28 +32,76 @@ by hostname, not IP.
 ## Install (on the target)
 
 ```sh
-# 1. Install the firmware to /opt/open_auto_turret (build + config + venv), and
-#    make sure /opt/open_auto_turret/.venv has fastapi/uvicorn/picamera2.
+# 1. Install the firmware to /opt/open_auto_turret: build/ + config/ + the
+#    Python packages. The camera/UI processes run on the SYSTEM python —
+#    verified on this station by importing in both interpreters:
+#      /usr/bin/python3 : picamera2 OK, uvicorn OK, fastapi/numpy/av/PIL/yaml OK
+#      .venv/bin/python : picamera2 FAILS (no libcamera), uvicorn MISSING
+#    picamera2 cannot be pip-installed into a venv (it binds the system libcamera
+#    stack), so "everything in the venv" is not achievable for those two units.
 # 2. Copy the units and reload systemd.
 sudo cp /path/to/Firmware/systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-# 3. Enable the required units (turret-log is optional).
+# 3. Pre-flight — before anything that can move a motor (see the checklist):
+sudo systemd-analyze verify /etc/systemd/system/turret-*.service
+systemd-analyze critical-chain turret-control.service
+ls -l /opt/open_auto_turret/build/control/controld /opt/open_auto_turret/config/turret.yaml
+# 4. Enable the required units (turret-log is optional).
 sudo systemctl enable can0.service turret-control.service turret-vision.service turret-web.service
-# 4. Start (and watch control return to UNHOMED, then home, then safe hold).
+# 5. Start (and watch control return to UNHOMED, then home, then safe hold).
 sudo systemctl start can0.service
 sudo systemctl start turret-control.service
+journalctl -u turret-control.service -f      # wait for "homed + at ready pose"
 sudo systemctl start turret-vision.service turret-web.service
-journalctl -u turret-control.service -f
 ```
+
+## Pre-flight checklist (P11) — read before the first `systemctl start`
+
+These are the ways a unit can look healthy and still not run the station:
+
+1. **Homing vs `TimeoutStartSec`.** Homing from cold takes minutes (the
+   mechanical zero is volatile; both endpoints are re-derived every boot — ~2.5
+   min measured). `turret-control.service` therefore uses
+   `TimeoutStartSec=infinity`: with a finite value systemd would SIGTERM the
+   daemon mid-home, and because a timeout stop is not a "failure",
+   `Restart=on-failure` would leave the station silently unhomed.
+2. **Interpreter.** `turret-vision` / `turret-web` run `/usr/bin/python3` (see
+   step 1 above). `.venv` remains correct for tests and offline tools.
+3. **Vision socket agreement.** controld binds `/tmp/ota_vision.sock`; visiond's
+   `--socket` must match (or set `OTA_VISION_SOCKET` on BOTH sides). A mismatch
+   is silent: telemetry simply reports `vision_connected=false`, forever, with a
+   healthy-looking daemon.
+4. **Orientation.** `--orientation rotate_180` on vision (and
+   `OTA_VIDEO_ORIENTATION=rotate_180` on web): the IMX500 is mounted
+   upside-down. Dropping it does not crash anything — it aims 180° wrong.
+5. **Detector.** `--detector none` streams without detections on this platform
+   (no RPK/Hailo stack), so tracking stays disarmed by design — that is the safe
+   outcome, not a bug. `--detector simple` is the P8 bring-up bridge (§10.1's
+   real detector replaces it).
+6. **The camera is exclusive.** webd's video and visiond cannot both hold the
+   IMX500. Leave webd video off while vision runs.
+7. **`turret-can-supervisor` watches `can0`,** i.e. the MCP2515 HAT. While the
+   yousee USB-CAN adapter is the primary PHY (`can.backend: yousee` in
+   `config/turret.yaml`), that unit is a witness aid only — do not enable it and
+   expect it to protect the link the motors actually use.
+8. **Logs go to journald** (controld logs to stdout; the units don't redirect),
+   so `journalctl -u turret-control -f` is the live view. `turret-log.service` is
+   only for a file-based layout (`logs/*.log`), which the current runbook does not
+   produce — do not expect it to show anything otherwise.
 
 ## Notes
 
 - **can0** is an MCP2515 kernel driver (dtoverlay); `can0.service` waits for the
   interface, sets 1 Mbit/s, and brings it UP. If the driver is missing, control
   fails its CAN-open step and stays UNHOMED (no motion).
-- **Vision** runs `--real` (IMX500) on the target; drop `--real` for the
-  synthetic, hardware-free development mode.
+- **Vision** runs `--real --orientation rotate_180 --detector none` on the
+  target (see the checklist for why each flag is there); dropping `--real` gives
+  the synthetic, hardware-free development mode.
 - **web** and **control** share `/run/ota/controld-web.sock`; `control` creates
   `/run/ota` in its `ExecStartPre`.
 - `PrivateTmp` is left off for control + vision because they share
-  `/tmp/ota_vision.sock`.
+  `/tmp/ota_vision.sock`. If you move that socket to `/run/ota`, `PrivateTmp`
+  could be turned on for vision — but change both sides together (checklist #3).
+- The units are **templates**: nothing here is enabled by this repo, and no
+  `[SW]` test in the queue depends on them. Enabling + boot-verifying them is
+  the live P11 item.

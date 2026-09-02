@@ -7,7 +7,18 @@
 # §52: After= turret-control or camera availability. Wants= (not Requires=) so
 # vision can still publish if control is briefly restarting.
 #
-# CHANGE before deploy: User/Group, the install root, and the venv python path.
+# CHANGE before deploy: User/Group and the /opt/open_auto_turret install root.
+#
+# ⚠ INTERPRETER: this must be the SYSTEM python (/usr/bin/python3), not the
+# repo venv. Verified by import on this station (2026-09-03): the venv fails
+# `import picamera2` (No module named 'libcamera') and `import uvicorn`; the
+# system interpreter has picamera2/uvicorn/fastapi/numpy/av/PIL/yaml. picamera2
+# cannot be pip-installed into a venv — it needs the system libcamera stack — so
+# "put everything in the venv" is not an option for the camera processes.
+#
+# CAMERA IS EXCLUSIVE: webd's video feed and visiond both own the IMX500. Run
+# one at a time (leave webd's video OFF when vision runs — it is off by default
+# until a client turns it on, and vice versa).
 [Unit]
 Description=OpenAutoTurret vision daemon (IMX500 target detection)
 After=network.target turret-control.service
@@ -19,8 +30,25 @@ User=eamars
 Group=eamars
 SupplementaryGroups=video
 WorkingDirectory=/opt/open_auto_turret
-# Real camera mode. --socket must match controld's vision IPC path.
-ExecStart=/opt/open_auto_turret/.venv/bin/python -m vision.visiond --real --socket /tmp/ota_vision.sock
+# Real camera mode. --socket must match controld's vision IPC path (see the note
+# in turret-control.service: a mismatch is silent).
+#
+# --orientation rotate_180 is MANDATORY on this station: the IMX500 is mounted
+# upside-down, and the correction is applied to the frame AND to every detection
+# box, so the control geometry (LOS from the pixel anchor, §29.1) agrees with
+# the image. Without it the turret would aim 180 degrees wrong — a "works on the
+# dashboard, aims at the floor" class of bug.
+#
+# --detector chooses what produces detections (10.1):
+#   none   -> stream frames only; measurements stay valid=false and controld
+#             never tracks. SAFE default for today: this platform has no
+#             RPK/Hailo AI stack (docs/research_vision_readiness_p7.md).
+#   simple -> classical bridge detector for P8 bring-up only (largest moving
+#             blob, no target CLASS; see vision/simple_detector.py).
+#   rpk    -> the production IMX500 AI path once the stack exists (also pass
+#             --detector-rpk <json>; it degrades to `none` if the API is absent).
+ExecStart=/usr/bin/python3 -m vision.visiond --real --socket /tmp/ota_vision.sock \
+    --orientation rotate_180 --detector none
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=15
