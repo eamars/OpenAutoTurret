@@ -1230,6 +1230,61 @@ step 4 with the operator.
 
 ---
 
+### The calibration chain exists now 2026-09-03 (d) — and the files it wrote were unreadable `[SW]`
+
+P9 step 1 (visual calibration → `installation_pose.yaml`) and step 0 (intrinsics →
+`camera_intrinsics.yaml`) both stopped being blocked. Three separate things were in
+the way, and only one of them was "needs a printed board":
+
+1. **The calibration files the Python wrote were in a format controld cannot read.**
+   Python wrote `fx: 1420.5` / `R_P_C:` + nested YAML lists;
+   `camera_calibration.hpp` parses `fx=1420.5` key lines and **nine raw doubles**
+   with an orthonormality check. A line without `=` is not a syntax error there —
+   it just stops being a key, and the loader answers *"missing key(s); intrinsics
+   NOT applied"* / *"no 3x3 rotation found (using aligned camera mount)"*. The
+   station then runs **UNCALIBRATED off a file that looks perfectly fine**.
+   `commit_R_W_B` also wrote a bare `0` instead of `valid=0` on an invalid result:
+   probed against the real loader, a matrix row needs three doubles so the line was
+   dropped and `valid` came from the parser's default of `false` — right by
+   accident, and the file had stopped carrying its own verdict. Fixed
+   writer-first + tolerant reader, and 7 new ctest cases now load the exact bytes
+   the Python emits (`test_camera_calibration_files`), with a Python test that
+   reads those literals back out of the C++ source so either side drifting breaks
+   a test. **No test had ever touched either loader.**
+2. **`tools/calibrate_installation_pose.py` did not exist.** The docs said to run
+   `python3 -m vision.installation_calibration --board-cols …` — a module with no
+   CLI and flag names nothing parses. It exists now (`--live` through the same
+   `Picamera2FrameSource` visiond uses, so the frame is the deployment frame; or
+   `--images DIR`), and it **refuses to run without intrinsics** unless
+   `--allow-uncalibrated`: R_W_B comes from a PnP pose, so a wrong fx does not
+   fail, it tilts the answer smoothly — refusing at the keyboard is cheaper than
+   discovering it at P8 with the motors armed.
+3. **Nothing could produce intrinsics at all (S7).** New
+   `tools/calibrate_camera_intrinsics.py` (§28.2) fits them from the same printed
+   board. The one decision worth recording: the daemon's v1 model applies **no**
+   distortion, and a normal OpenCV fit trades focal length against k1, so the tool
+   fits twice and writes the **zero-distortion** fit — the model actually in use —
+   while reporting `edge_bearing_error_deg`, the angular cost of ignoring
+   distortion at the frame edge. That number is suppressed unless the distortion
+   fit earns it (>15 % rms gain): on low-distortion data an unconstrained k1
+   chases 0.4 px of warp noise and predicted **6.116°** of phantom edge error from
+   a synthetic set that has none.
+
+Measured against ground truth, not against itself: views are warped through a
+**known** pinhole (fx=610 fy=612 cx=322 cy=241) and the fit recovers
+**fx 0.503 %, fy 0.392 %, cx 0.35 px, cy 0.14 px** at 0.376 px corner rms. The whole
+offline chain (board → views → intrinsics → R_W_B → commit) was then read back by a
+probe compiled against `control/src`:
+
+```
+intrinsics: found=1  fx=613.456 fy=614.83 cx=321.367 cy=241.427 640x480 (distortion stored, not applied in v1)
+pose: valid=1 source=3 (VisualCalibration) n_frames=14 reproj=0.3243
+```
+
+What P9 still needs from the station is only the physical part: print the sheet,
+lay it **level on the ground**, and run the two commands the board tool now prints
+(it used to print a command that did not exist).
+
 ## P10 — Payload profiling + verification on the real station (Phase 9) `[MOTOR]`
 
 **Supervised station only.** Everything in Phase 9 was verified on
@@ -1324,6 +1379,32 @@ still the user's, on the supervised station.
 
 ---
 
+### Staging + a deploy check 2026-09-03 (d) — `tools/install_station.py` `[SW]`
+
+The units are still templates and nothing is enabled here, but "edit the paths and
+type `cp`/`sed`" is no longer the only route. The tool stages the runtime tree
+(controld, `config/`, `calibration/`, the two Python packages — deliberately not
+the tests or the venv), renders the units for the real install root and user, and
+then **checks the agreements that fail silently**:
+
+| checked | the failure it prevents |
+|---|---|
+| visiond `--socket` == controld's vision socket | `vision_connected=false` forever, with a healthy-looking daemon |
+| web socket on both sides | webd serves 503 "no telemetry yet" forever |
+| `--orientation` == `OTA_VIDEO_ORIENTATION` | the preview and the tracker disagree about which way is up |
+| `TimeoutStartSec=infinity`, `KillSignal=SIGINT`, `Restart=on-failure` | a mid-homing SIGTERM that `Restart=on-failure` will not undo (§52) |
+| `ExecStart` non-empty, `/usr/bin/python3`, `User=` exists, `video` group | an "active" unit that runs nothing, or visiond that cannot open `/dev/video1` |
+
+It never calls `systemctl` — starting `turret-control` homes the turret, which
+stays a supervised decision — and `check` is read-only, so it is worth rerunning
+whenever `vision_connected=false` appears (checklist #3 is nearly always the
+cause and the tool names it). Two things it caught were its own bugs: the
+renderer erased every `ExecStart` it rewrote, and flag-scanning matched the
+*comment* explaining `--socket` while missing `--orientation` on its continuation
+line. `can0.service` absent is INFO, not FAIL: this station's primary PHY is the
+yousee USB-CAN adapter, so a FAIL there would make the check cry wolf where it
+runs. 17 tests, all offline against fake units.
+
 ## P12 — Live web end-to-end (§42, §54.5) `[MOTOR] + [CAMERA]`
 
 The inspection webd currently talks to a **FakeControld** stand-in (Part 2,
@@ -1352,6 +1433,7 @@ the gate; video on/off releases/acquires the camera; load test passes with the
 real loop + real camera.
 
 ### Offline rehearsal done 2026-09-03 (c) — `tools/webd_rehearsal.py`, 18/18 checks `[SW] + [CAMERA]`
+(grew to **26 checks** with the §54.5 load leg on 2026-09-03 (d); see the load-leg subsection under P12)
 
 Not FakeControld: the **real webd** (system python, as the unit runs it) against
 the **real controld** (`--sim`, so no CAN transport and no motor could move) over
@@ -1411,6 +1493,66 @@ working path now.
 
 ---
 
+### Load leg added — 26/26 offline, 2026-09-03 (d) `[SW] + [CAMERA]`
+
+`tools/webd_rehearsal.py --load N` now covers the §54.5 shape offline: N websocket
+clients at 15 Hz plus three MJPEG viewers, then SIGTERM to webd **with two clients
+and a live MJPEG stream still attached** — the condition that can strand uvicorn in
+"waiting for connections to close" past the lifespan shutdown that hands the camera
+back to visiond. Measured here (controld `--sim` @ 200 Hz):
+
+```
+frames/client [183,183,183,183,183,183]   worst gap 0.09 s
+/api/state p95 3 ms over 118 samples, 0 failures
+loop p50 5.055 -> 5.056 ms, worst 5.496 ms during load, 0 SLOW CYCLE lines
+jpegs/viewer [96,96,96]; 7.9 fps published for 3 viewers at 10 fps requested
+webd exited cleanly with clients attached
+```
+
+It found a bug in its own check: `n=` on the `loop:` line is the sample count
+inside the timing ring and it **saturates at 4096**, so "did the loop keep running"
+compared 4096 to 4096 and reported starvation — the FAIL line printed p50 5.055 vs
+5.056 next to its own verdict, which is the one way a bad assertion becomes
+visible. Liveness now counts `loop:` reports (one per second).
+
+Also this session: the dashboard gained the **payload profile picker** (§28.5/§31.3
+/§42.2) — `GET /api/payload_profiles` lists the stored names (and echoes the
+absolute directory, because webd and controld running from different working
+directories is the usual cause of an empty list), and the command log prints the
+daemon's **rejection text verbatim**. The panel states the semantic that is easy to
+misread: selecting a profile applies its motion **caps** immediately, but only
+`start_payload_verification` commissions it as verified payload data.
+
+### §55 metrics extractor 2026-09-03 (d) — `tools/acceptance_metrics.py` `[SW]`
+
+P13's deliverable is a five-family number table, and a table assembled by eye from
+a 100 MB log at the end of a supervised run acquires numbers that "look right".
+`tools/acceptance_metrics.py` parses the lines controld already writes (`loop:`,
+`SLOW CYCLE`, the per-event `motion … q= … tq= … msg=` lines, the 1 Hz
+`t=… phase=… q_pitch=…` line, `vision: …`, `control fault:`, `supervisor:`,
+`payload check complete:`), accepts a JSON-lines telemetry capture and a saved
+`turret-can stats` file, and prints markdown or JSON with **the source of every
+row**. Anything the inputs do not carry is printed `NOT MEASURED` with the capture
+that would be needed — and the row names are identical whether measured or not, so
+two runs have the same shape and a gap cannot be misread as "yaw was fine".
+
+Three honest gaps it exposes instead of filling in:
+
+* **LOS tracking error** (§55 wants mean/max): controld logs no LOS figure and the
+  telemetry schema has none (§34 says the same). Reporting it means adding a field
+  to `Snapshot` + `web_server.hpp` — a decision for the operator, not a parse.
+* **Endpoint travel**: the daemon logs `endpoint A homed; starting endpoint B` and
+  never end B's `q` (measured), so travel comes from the **swept q range** over the
+  homing motion events and says so in its source column.
+* **Endpoint repeatability** requires ≥ 2 homing runs; one run prints NOT MEASURED,
+  because the spread of a single number is not a spread.
+
+Ran against the rehearsal log: 12/18 measured, 6 NOT MEASURED — e.g. `worst cycle
+ever reported 9.822 ms`, `SLOW CYCLE warnings 4 (max 9.822 ms, phases ['hold'])`,
+`duration 68.00 s`, `measured travel (yaw) swept range 6.1562 rad = 352.72 deg`.
+13 fixture tests assert both directions: known values come out exact, absent
+sources never come out as 0.
+
 ## P13 — HIL checklist + acceptance metrics (§54.4, §55) `[MOTOR]`
 
 The final supervised pass. The mock-device tests (38 ctest binaries + 95 Python
@@ -1458,9 +1600,9 @@ position.
 | S2 | `tools/turret_payload.cpp` (`turret-payload`) | `--sim` rehearsal on `SimMotorBackend` (no CAN, deterministic clock/pacer) | Drop `--sim`: real mode opens CAN + `BootFsm` and moves the real motors (supervised, daemon stopped) | P10 |
 | S3 | `vision/visiond.py` + `vision/frame_source.py` | `--synthetic` (SAFE default). `--real` now speaks the picamera2 that is installed (0.3.37): camera started once, request-callback → newest-frame mailbox (same proven pattern as `web/webd/video.py`), `SensorTimestamp` in the monotonic domain, install orientation applied to frame AND boxes. `--detector rpk` (attempts the IMX500 AI API, **degrades to no detections** — measurements stay `valid=false`), `--detector simple` (classical bridge detector, `vision/simple_detector.py`), `--detector none` | The RPK/Hailo stack (platform upgrade or USB accelerator — `research_vision_readiness_p7.md`) replaces the bridge detector; then P8 is a production run | P7, P8 |
 | S4 | `web/webd` (inspection service) | `FakeControld` stand-in server (sim telemetry); real camera already live-verified | Point webd's socket config at the real controld web socket (`OTA_WEB_SOCKET`); run with `turret-web` unit | P12 |
-| S5 | `Firmware/systemd/*.service` | Templates only — none installed/enabled (paths point at `/opt/open_auto_turret`) | Adjust `ExecStart`/`WorkingDirectory` to the install path; `systemctl enable --now can0 turret-control [turret-vision turret-web]` | P11 |
+| S5 | `Firmware/systemd/*.service` | Templates only — none installed/enabled. Staging + deploy verification now exist: `python3 -m tools.install_station stage/check` renders the units for the real root+user and checks the silent-failure agreements (vision socket both sides, web socket both sides, orientation both sides, `TimeoutStartSec=infinity`) | `install_station stage --apply`, then `cp /opt/open_auto_turret/systemd/*.service /etc/systemd/system/`, `daemon-reload`, `systemctl enable` (no `--now` until the checklist passes), start under supervision | P11 |
 | S6 | C++ mock tests: `test_tracking_integration`, `test_payload_daemon`, `test_control_loop`, homing/trajectory suites (all `SimMotorBackend`) | Simulated plant (first-order lag, end stops, stall effort) | HIL counterparts per §54.4: the same scenarios (rotating-target track, loss→coast→brake, search sweep, in-loop payload check, stop contact) executed against the real CAN — supervised | P13 |
-| S7 | `calibration/camera_intrinsics.yaml` | Path in `turret.yaml`; **file still does not exist.** The LOADER is done (`control/src/calibration/camera_calibration.hpp`: `load_camera_intrinsics`, key=value, requires fx/fy/cx/cy/width/height) — absent it, controld logs `UNCALIBRATED` and uses the default pinhole (fx=fy=1000, cx/cy centre) | Produce the §28.2 intrinsics file (camera matrix + distortion) at commissioning | P8/P9 |
+| S7 | `calibration/camera_intrinsics.yaml` | Path in `turret.yaml`; **file still does not exist**, but its producer does: `python3 -m tools.calibrate_camera_intrinsics --live --frames 40 --orientation rotate_180` (validated against a known pinhole: fx 0.5 %, cy 0.14 px). Ground truth must come from the real lens, so this stays a station step. The LOADER is done (`control/src/calibration/camera_calibration.hpp`: `load_camera_intrinsics`, key=value, requires fx/fy/cx/cy/width/height) — absent it, controld logs `UNCALIBRATED` and uses the default pinhole (fx=fy=1000, cx/cy centre) | Produce the §28.2 intrinsics file (camera matrix + distortion) at commissioning | P8/P9 |
 | S8 | `calibration/camera_extrinsics.yaml` (R_P_C) | Path in `turret.yaml`; **file still does not exist** → aligned-identity default. The LOADER is done (`load_camera_extrinsics`: 3×3 row parse + orthonormality check, aligned default otherwise) | §28.3 extrinsic estimate (fiducial board), loaded into `geo::TurretKinematics` | P9 |
 | S9 | `calibration/installation_pose.yaml` (R_W_B) | Path in `turret.yaml`; **file does not exist** → identity "assumed-level base", telemetry flags uncalibrated | §29 fiducial (ChArUco) calibration run → atomic commit → daemon loads at boot | P9 |
 | S10 | `config/turret.yaml` `payload.active_profile` | `conservative` (built-in placeholder profile) | Real profile name from `turret-payload profile` (S2) | P10 |
