@@ -137,6 +137,52 @@ class BoardSpec:
                 f"{offset} ({e}); leave marker_id_offset=0") from e
 
 
+def _legacy_yaml(path: str) -> dict:
+    """Parse a legacy YAML-mapping calibration file, or explain why we cannot.
+
+    The key=value format these modules WRITE needs no dependencies; YAML is
+    only reached for files produced before that format was fixed. The station's
+    /usr/bin/python3 has PyYAML; the test venv does not, so say what is missing
+    and how to move off it rather than raising a bare ImportError.
+    """
+    try:
+        import yaml
+    except ImportError as e:  # pragma: no cover - environment dependent
+        raise ValueError(
+            f"{path} is in the legacy YAML mapping format and PyYAML is not "
+            f"installed in this interpreter; re-save it with the key=value "
+            f"format (CameraIntrinsics/CameraExtrinsics .to_yaml())") from e
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def parse_key_value_file(path: str) -> dict:
+    """Parse a `key=value` calibration file (the C++ contract), or {}.
+
+    WHY THIS EXISTS: the daemon's loaders (`load_camera_intrinsics`,
+    `load_camera_extrinsics`, `load_installation_pose`) read `key=value` with
+    `#` comments and a trailing raw-number section. The Python writers here used
+    to emit YAML mapping text (`fx: 1420.5`, `R_P_C:`), which the C++ parsers
+    cannot see at all - `fx: 1.0` has no `=`, so it lands in the raw section and
+    the loader reports "missing key(s); intrinsics NOT applied" / "no 3x3
+    rotation found" and quietly keeps the UNCALIBRATED defaults. Strict writer,
+    tolerant reader: we write the documented format and still read the old one.
+    """
+    out = {}
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
 @dataclass
 class CameraIntrinsics:
     fx: float
@@ -160,9 +206,14 @@ class CameraIntrinsics:
 
     @classmethod
     def load(cls, path: str) -> "CameraIntrinsics":
-        import yaml
-        with open(path) as f:
-            d = yaml.safe_load(f)
+        kv = parse_key_value_file(path)
+        if "fx" in kv:                      # the format controld also reads
+            d = dict(kv)
+            dist = tuple(float(kv.get(k, 0.0))
+                         for k in ("k1", "k2", "p1", "p2", "k3"))
+            d["distortion"] = dist
+        else:                               # legacy YAML-mapping file
+            d = _legacy_yaml(path)
         return cls(
             fx=float(d["fx"]), fy=float(d["fy"]), cx=float(d["cx"]),
             cy=float(d["cy"]),
@@ -172,11 +223,30 @@ class CameraIntrinsics:
         )
 
     def to_yaml(self) -> str:
-        return (
-            f"fx: {self.fx}\nfy: {self.fy}\ncx: {self.cx}\ncy: {self.cy}\n"
-            f"distortion: {list(self.distortion)}\n"
-            f"width: {self.width}\nheight: {self.height}\n"
-        )
+        """`# ota-camera-intrinsics v1` + key=value (see camera_calibration.hpp).
+
+        The six keys fx/fy/cx/cy/width/height are MANDATORY: the loader applies
+        nothing if any is missing. k1..k3/p1/p2 are stored for provenance and
+        are NOT applied by the v1 C++ camera model (Part 3 item 14), which is
+        why tools/calibrate_camera_intrinsics.py fits the pinhole values with
+        the distortion held at zero instead of quietly writing a fit the daemon
+        will only partly use.
+        """
+        d = list(self.distortion) + [0.0] * 5
+        lines = [
+            "# ota-camera-intrinsics v1",
+            f"fx={self.fx:.17g}",
+            f"fy={self.fy:.17g}",
+            f"cx={self.cx:.17g}",
+            f"cy={self.cy:.17g}",
+            f"width={int(self.width)}",
+            f"height={int(self.height)}",
+        ]
+        if any(abs(x) > 0.0 for x in d):
+            lines.append("dist_model=plumb_bob")
+            for name, val in zip(("k1", "k2", "p1", "p2", "k3"), d):
+                lines.append(f"{name}={val:.17g}")
+        return "\n".join(lines) + "\n"
 
 
 @dataclass
@@ -196,23 +266,46 @@ class CameraExtrinsics:
 
     @classmethod
     def load(cls, path: str) -> "CameraExtrinsics":
-        import yaml
+        """Read our own format (header + 3 rows) or the legacy YAML mapping."""
         with open(path) as f:
-            d = yaml.safe_load(f)
+            text = f.read()
+        rows = [ln.strip() for ln in text.splitlines()
+                if ln.strip() and not ln.startswith("#") and "=" not in ln]
+        try:                       # our format: three rows of three numbers
+            R = np.array([[float(x) for x in r.split()] for r in rows[:3]],
+                         dtype=np.float64)
+            if R.shape != (3, 3):
+                raise ValueError(R.shape)
+        except (ValueError, IndexError):
+            R = None               # legacy `R_P_C:` YAML text, not raw rows
+        if R is not None:
+            kv = parse_key_value_file(path)
+            t = np.array([float(x) for x in
+                          kv.get("t_P_C", "0 0 0").replace(",", " ").split()],
+                         dtype=np.float64)
+            if t.size != 3:
+                t = np.zeros(3)
+            return cls(R_P_C=R, t_P_C=t)
+        d = _legacy_yaml(path)
         R = np.array(d.get("R_P_C", np.identity(3)), dtype=np.float64)
         t = np.array(d.get("t_P_C", np.zeros(3)), dtype=np.float64)
         return cls(R_P_C=R, t_P_C=t)
 
     def to_yaml(self) -> str:
-        def fmt(m):
-            return "\n".join(
-                "  - [" + ", ".join(f"{v:.17g}" for v in row) + "]"
-                for row in self.R_P_C
-            )
-        return (
-            "R_P_C:\n" + fmt(self.R_P_C) + "\n"
-            "t_P_C: [" + ", ".join(f"{v:.17g}" for v in self.t_P_C) + "]\n"
-        )
+        """`# ota-camera-extrinsics v1` + a raw 3x3 section (camera_calibration).
+
+        The C++ loader reads EXACTLY nine numbers from the non-key lines and
+        then checks orthonormality, so the rotation must be raw rows - not
+        `R_P_C:` YAML, which produced "no 3x3 rotation found (using aligned
+        camera mount)" and a silently uncalibrated station. `t_P_C` is a key
+        line: unknown keys are ignored by the daemon, and we keep the offset for
+        our own round-trip (§28.3 treats it as commissioning data).
+        """
+        rows = "\n".join(
+            " ".join(f"{v:.17g}" for v in row) for row in self.R_P_C)
+        return ("# ota-camera-extrinsics v1\n"
+                "t_P_C=" + " ".join(f"{v:.17g}" for v in self.t_P_C) + "\n"
+                + rows + "\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -445,7 +538,13 @@ def commit_R_W_B(result: CalibrationResult, path: str) -> None:
     lines = [
         "# ota-installation-pose v1",
         "source=visual_calibration",
-        "valid=1" if result.valid else "0",
+        # `valid=0`, not a bare `0`. Probed against the real loader: a line
+        # without `=` is read as a matrix row and needs THREE doubles, so a bare
+        # `0` was silently dropped - `valid` then fell back to the parser's
+        # default of false, which is the right answer here only by accident, and
+        # the file no longer carried its own verdict when you `cat` it. Emit the
+        # documented key (installation_pose.hpp) instead of relying on defaults.
+        "valid=1" if result.valid else "valid=0",
         f"timestamp_ns={result.timestamp_ns}",
         f"covariance={result.covariance:.17g}",
         f"n_frames={result.n_frames}",

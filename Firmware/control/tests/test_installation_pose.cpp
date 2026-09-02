@@ -117,6 +117,45 @@ TEST_F(InstallationPoseTest, LoadMalformedFileIsInvalid) {
   EXPECT_FALSE(l.valid);
 }
 
+TEST_F(InstallationPoseTest, LoadsPythonCommitterFormat) {
+  // The §29 calibration is WRITTEN by vision/installation_calibration.py
+  // (commit_R_W_B) and READ here, so the two formats are a contract only this
+  // test can enforce. Shapes Python actually produces:
+  //   - `%.17g` numbers, which go to exponent form for small values
+  //     (covariance -> 1.0471975511965979e-03);
+  //   - `valid=0`, i.e. an INVALID calibration, stated as a key. (The writer
+  //     once emitted a bare `0` there. Measured with a probe: a matrix row needs
+  //     three doubles, so that line was dropped and `valid` came from the
+  //     parser's default of false — right by accident, and the file stopped
+  //     carrying its own verdict. This test pins the contract as DOCUMENTED,
+  //     not merely tolerated.)
+  const std::string p = tmp_path("from_python.yaml");
+  {
+    std::ofstream f(p);
+    f << "# ota-installation-pose v1\n"
+      << "source=visual_calibration\n"
+      << "valid=0\n"
+      << "timestamp_ns=987654321\n"
+      << "covariance=1.0471975511965979e-03\n"
+      << "n_frames=4\n"
+      << "reprojection_error_px=0.60000000000000009\n"
+      << "0.99500416527802584 -0.099833416646828154 0\n"
+      << "0.099833416646828154 0.99500416527802584 0\n"
+      << "0 0 1\n";
+  }
+  BaseOrientation l = load_installation_pose(p);
+  EXPECT_FALSE(l.valid);                          // honoured, not silently defaulted
+  EXPECT_EQ(l.source, PoseSource::VisualCalibration);
+  EXPECT_EQ(l.timestamp_ns, 987654321);
+  EXPECT_NEAR(l.covariance, 1.0471975511965979e-03, 1e-15);
+  EXPECT_EQ(l.n_frames, 4);
+  EXPECT_NEAR(l.reprojection_error_px, 0.6, 1e-12);
+  EXPECT_NEAR(l.R_W_B.m[0][0], 0.99500416527802584, 1e-12);   // matrix NOT shifted
+  EXPECT_NEAR(l.R_W_B.m[0][1], -0.099833416646828154, 1e-12);
+  EXPECT_NEAR(l.R_W_B.m[1][0], 0.099833416646828154, 1e-12);
+  EXPECT_NEAR(l.R_W_B.m[2][2], 1.0, 1e-12);
+}
+
 TEST_F(InstallationPoseTest, FixedProviderLoadsStoredPose) {
   BaseOrientation o;
   o.source = PoseSource::VisualCalibration;
