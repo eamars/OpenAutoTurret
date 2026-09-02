@@ -1302,6 +1302,64 @@ S4). Point it at the real daemon:
 the gate; video on/off releases/acquires the camera; load test passes with the
 real loop + real camera.
 
+### Offline rehearsal done 2026-09-03 (c) — `tools/webd_rehearsal.py`, 18/18 checks `[SW] + [CAMERA]`
+
+Not FakeControld: the **real webd** (system python, as the unit runs it) against
+the **real controld** (`--sim`, so no CAN transport and no motor could move) over
+the actual §6.3 socket, plus the **real IMX500** for the video leg. Steps 1–4 of
+the checklist are rehearsed; step 5 (load while tracking on hardware) stays live.
+
+```
+[PASS] controld bound its web socket                    [PASS] controld homed and at the ready pose (via webd)
+[PASS] webd answers /api/health (controld_connected)    [PASS] unknown payload profile rejected with a reason
+[PASS] webd relays controld telemetry (phase='homing')  [PASS] valid command accepted by the gate (ok:true)
+[PASS] state carries phase/fault                        [PASS] payload_check_active visible through webd
+[PASS] state carries the vision health block            [PASS] video starts
+[PASS] dashboard renders phase + vision rows            [PASS] video publishes 11.3 fps
+                                                       [PASS] frames are real JPEGs (25 parts read)
+                                                       [PASS] video stops promptly — 0.43s
+                                                       [PASS] open MJPEG ends when video stops
+                                                       [PASS] webd responsive after video stop
+                                                       [PASS] webd shut down cleanly (SIGTERM)
+                                                       [PASS] controld parked and exited rc=0
+```
+
+`payload_check_active` streamed with `phases seen via webd: ['hold',
+'payload_check']` — the §42.2 gate + the §6.3 field + the dashboard row are one
+working path now.
+
+**Three real defects found by this rehearsal:**
+
+1. **webd's video was built on the deprecated callback.** `request_callback` on
+   picamera2 0.3.37 maps to `post_callback`: measured **2 callbacks in 2.5 s**
+   and then `cam.stop()` **hung forever** (waiting on a job that never
+   completed). Consequences: a ~1 fps "live" view and a `turret-web` restart that
+   could not release the camera. `web/webd/video.py` now **pulls** requests on
+   its own capture thread (the same fix as `vision/frame_source.py`):
+   **11.3 fps** and stop in **0.43 s** on the same camera. The test fake
+   (`web/webd/tests/fake_camera.py`) was rewritten to model the pull API and now
+   **raises** if anything assigns `request_callback` again; it also paces
+   `capture_request()` like a real pipeline instead of returning instantly.
+2. **An open `<img>` could hold webd's shutdown hostage.** The MJPEG generator
+   looped forever, so `systemctl stop turret-web` sat in "Waiting for connections
+   to close" and never reached the lifespan `video.stop()` — the camera stayed
+   claimed (I had to SIGINT a stuck webd during this session). The stream now
+   ends when the source stops (and after 10 s without a new frame), and
+   `uvicorn.run(..., timeout_graceful_shutdown=5)` bounds the worst client.
+3. **A payload check could be accepted while the station was still moving to the
+   ready pose.** Homing passes through `phase=hold` between stages, so the gate's
+   `moving` proxy missed it; the check then began from a **travel stop**, the safe
+   central region came out empty (clamped to zero by the soft limits), and it
+   aborted with an unhelpful verdict. Fixes: `at_ready` is now a real §6.3
+   snapshot field (JSON `at_ready`, parsed by webd, shown as the dashboard's
+   "At ready pose" row), the command gate requires it
+   (`"not at the ready pose yet (homing or repositioning in progress)"`), and the
+   payload-check failure names its numbers (`start pose -85.71 deg outside the
+   safe central region [-20.00, 20.00] deg (half span 20.00 deg; …)`). New C++
+   tests: `PayloadVerificationRequiresReadyPose` + the snapshot assertion.
+   Note `select_payload_profile` deliberately stays allowed there — it changes
+   caps, not motion.
+
 ---
 
 ## P13 — HIL checklist + acceptance metrics (§54.4, §55) `[MOTOR]`
