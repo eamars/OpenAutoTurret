@@ -996,15 +996,14 @@ derate visible in telemetry + limits; re-verify with the correct profile clears 
 
 ## P7 — Live camera / vision verification (Phase 4) `[CAMERA]`
 
-> **STATUS 2026-09-03: BLOCKED — platform gap, not our code.** IMX500 streams
-> fine (system python3 only), but the installed picamera2 (0.3.37) has no
-> detection API, no RPK assets and no Hailo/Dataforensics SDK exist on the
-> station. Findings, ranked options (platform upgrade / bring RPK on USB /
-> classical bridge detector for P8 bring-up) and the offline-unblockable P8
-> prereq S1: **see `docs/research_vision_readiness_p7.md`**. The
-> `Picamera2FrameSource` scaffold in `vision/frame_source.py` must be adapted
-> to whichever API wins (its `detect_objects=True` / `metadata["Objects"]`
-> shape does not exist on this system).
+> **STATUS 2026-09-03 (b): camera path VERIFIED on real glass; the DETECTOR stack
+> is still the gap.** `tools/camera_bringup_probe.py` streams the IMX500 through
+> the shipped `Picamera2FrameSource` (45/45 frames, real `SensorTimestamp`s, same
+> clock domain as controld — details below) and feeds a real-camera stream into
+> `controld --sim` end to end. What remains missing is object *classification*
+> (no detection API, no RPK assets, no Hailo/Dataforensics SDK): ranked options in
+> **`docs/research_vision_readiness_p7.md`**. Bring-up path without the stack:
+> `--detector simple` (S1/S3 in Part 2).
 
 
 **SAFETY: the vision daemon is independent of the motor driver. This test runs
@@ -1044,25 +1043,88 @@ license review before distribution.
 5. Confirm `can0` is untouched and no motor moved (feedback flat / motors
    de-energized) before and after.
 
+### Real-camera verification 2026-09-03 (b) — `[CAMERA]`, no CAN, no motor
+
+`tools/camera_bringup_probe.py` (new) drives the **shipped**
+`Picamera2FrameSource` on the real IMX500. Measured:
+
+```
+frames captured  : 45/45         image (1080, 1920, 4) uint8
+real SensorTimestamp used: 45/45 (monotonic fallback: 0 frames)
+stamp advance    : 33.314 – 33.318 ms   (30 fps requested: 33.333 ms)
+|wall - sensor|  : 26.6 – 31.0 ms
+```
+
+The last line is the §6.2/§11 proof: the stamp is in the **host CLOCK_MONOTONIC
+domain** controld interpolates the motor history against, offset by well under one
+frame (a `CLOCK_REALTIME` stamp would read ~1.7e9 s off, not tens of ms). The
+detector leg paints a bright patch at known positions **on real captured pixels**
+(a probe cannot wave a target): 18/20 frames reported it, tracked 969 px of a
+1083 px sweep (90 %), centre error −28 px ≈ one 30 px grid cell. That validates
+format/geometry on real data; it does **not** certify real-world detection
+accuracy (only a supervised session with a real target does that).
+
+End-to-end with the daemon (no hardware at risk — `controld --sim` never opens a
+CAN transport):
+
+```
+visiond --real --detector simple --frames 120 --orientation rotate_180
+  -> published 120 measurements, bridge blobs 0/120 (dark, static room)
+controld --sim:
+  vision: 116 frames (0 dropped, seq 115, age 27 ms) | tracking=off state=ready_hold conf=0.00
+  tracking ENABLED (...)            <- only after homing (§38.1)
+  vision: 120 frames (0 dropped, seq 119, age 17963 ms) | tracking=on state=ready_hold conf=0.00
+  loop: target=200 Hz p50=5.054 p95=5.056 p99=5.062 worst=5.112 ms (n=4096)
+```
+
+Age 23–28 ms at a 33 ms frame period → the §34 freshness window (100 ms) is met
+with real sensor timestamps; after the publisher exited, age grew honestly
+(+1 s/s) and the state stayed `ready_hold` — **no phantom target from a dark
+room**, which is exactly the direction the design says to fail in. Camera +
+ingest cost the 200 Hz loop nothing measurable (worst 5.112 ms, same as the
+synthetic-session numbers).
+
+**One practical finding for P8:** mean scene luma was **1.5 / 255** — the room is
+effectively dark. A motion/blob detector (and any NN) needs light; do not read
+"0 blobs" as "the detector is broken" during the first live session.
+
+**Defect found and fixed on the way (would have looked like a dead camera):**
+`request_callback` is **deprecated on picamera2 0.3.37** and silently maps onto
+`post_callback`, which fires only for capture-*file* jobs — the callback
+mailbox therefore received **zero frames** and `capture()` timed out after 2 s.
+`Picamera2FrameSource` now **pulls** completed requests
+(`capture_request()` → `get_metadata()` + `make_array("main")` → `release()`),
+which is what `tools/vision_probe.py` proves works here; note
+`CompletedRequest.get_metadata()` takes **no** stream argument (passing `"main"`
+is a `TypeError`). Frames with no `SensorTimestamp` are counted
+(`frames_without_sensor_timestamp`) rather than silently re-stamped. Regression
+pinned by `vision/tests/test_picamera2_source_contract.py` (7 cases against a
+fake picamera2: pull-and-release order, the deprecated callback is never
+assigned again, monotonic fallback counted, orientation applied to pixels AND
+boxes together, RPK failure not fatal). The fake cannot prove the camera works —
+that is what the probe is for — it only makes the known failure modes loud.
+
 ---
 
 ## P8 — Live closed-loop tracking (Phase 6) `[MOTOR] + [CAMERA]`
 
 Phase 6 is **implemented and integration-tested on SimMotorBackend + synthetic
 vision** (track a rotating target; loss → coast → brake → ready-hold; search
-sweep; soft-limit containment; fault → safe stop). Running it live requires one
-**code prerequisite** first:
+sweep; soft-limit containment; fault → safe stop). **The code prerequisite is
+done** (Part 2 S1) and the vision input is now proven against the **real camera**
+into `controld --sim` (see P7's verification above: 120 frames, 0 dropped, age
+23–28 ms, §38.1 gate held, loop p50 5.054 ms with camera + ingest running). What
+remains for this row is the live station: a supervised window, motors armed, and
+a **lit scene with a real target** (the last session measured luma 1.5/255 — the
+room was dark, so "0 blobs" was not a detector failure).
 
-> ⚠️ **PREREQ — controld vision wiring (Part 2, S1).** The production
-> `controld` (`control/src/main.cpp`) does **not** yet open
-> `/tmp/ota_vision.sock`, decode `TargetMeasurement`, or call
-> `enable_tracking()`. Before this test: (a) add a UDS `SOCK_SEQPACKET` client
-> that decodes the 58-byte measurement → `ControlLoop::feed_measurement(m)`;
-> (b) load the `tracking:` config block (§58 params 19–20) + the camera
-> intrinsics file → `TrackingController::Config`; (c) `enable_tracking()` gated
-> on the homing gate (§38.1). All tracking machinery (estimator, FSM, reference
-> manager, solver) already exists and is tested — this is wiring, not new
-> control code.
+> ✅ **PREREQ — controld vision wiring (Part 2, S1): BUILT.** `controld` binds the
+> `SOCK_SEQPACKET` UDS (`vision.socket_path` / `$OTA_VISION_SOCKET`), decodes the
+> 58-byte measurement, feeds `ControlLoop::feed_measurement`, loads the
+> `tracking:` block + camera intrinsics, and calls `enable_tracking()` only after
+> the homing gates pass (§38.1) — with the search span clamped inside the homed
+> soft limits. Verified offline against synthetic frames *and* against the real
+> IMX500 stream (sim backend, so no motor could move).
 
 Once wired (and only after P0–P7 pass, user present — motors move):
 1. **Tracking hard-disabled until homed:** boot with a person in frame; the
