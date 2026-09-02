@@ -47,6 +47,12 @@ class WebConfig:
     video_quality: int = 80
     video_orientation: str = "none"
     video_white_balance: str = "off"
+    # Where the payload profiles live, ONLY so the dashboard can offer a list.
+    # The daemon reads its own cfg.payload.profile_dir and is the authority: a
+    # name webd lists but controld cannot find is REJECTED with a reason
+    # (§31.3/§42.2), never applied. Keep this equal to turret.yaml's
+    # payload.profile_dir or the dropdown just offers lies.
+    payload_profile_dir: str = "config/payload_profiles"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -92,4 +98,6 @@ def load_web_config() -> WebConfig:
                                       ic.ORIENTATIONS),
         video_white_balance=_env_choice("OTA_VIDEO_WB", "off",
                                         ic.WHITE_BALANCES),
+        payload_profile_dir=os.environ.get("OTA_PAYLOAD_PROFILE_DIR",
+                                           "config/payload_profiles"),
     )

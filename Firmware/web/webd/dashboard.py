@@ -150,7 +150,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="row"><span class="k">Status</span><span id="pp-status" class="badge">—</span></div>
     <div class="row"><span class="k">Derated</span><span id="pp-derated">no</span></div>
     <div class="row"><span class="k">Check running</span><span id="pp-check">no</span></div>
+    <div class="row"><span class="k">Stored profiles</span>
+      <select id="profile-select" style="max-width:160px"></select></div>
+    <div class="row"><span class="k"></span>
+      <button data-cmd="select_payload_profile">Select profile</button></div>
+    <div class="muted" id="profile-note">loading profiles…</div>
     <div class="muted">a mismatch derates motion limits until re-verified</div>
+    <div class="muted">selecting a profile applies its motion CAPS at once; it
+      is only commissioned as verified payload data by
+      "Start payload verification" (§31.3)</div>
   </section>
 
   <section class="panel" id="p-controls" style="grid-column:1/-1">
@@ -217,7 +225,10 @@ function connect() {
     render(t);
   };
 }
+let LAST_T = null;              // last telemetry frame, for the profile marker
 function render(t) {
+  LAST_T = t;
+  markActiveProfile();
   badge($("phase"), t.phase || "—", t.phase === "fault" ? "err" :
         (t.phase === "hold" || t.phase === "parked" ? "ok" : "warn"));
   badge($("track-state"), t.track_state, trackKind(t.track_state));
@@ -265,29 +276,101 @@ function logline(msg, kind) {
   if (el.children.length > 200) el.textContent = el.textContent.split("\n").slice(0, 200).join("\n");
 }
 
-document.getElementById("controls").addEventListener("click", async (ev) => {
-  const btn = ev.target.closest("button[data-cmd]");
-  if (!btn) return;
-  const cmd = btn.dataset.cmd;
-  let arg = "";
-  if (cmd === "select_target") arg = String($("sel-target").value || 0);
-  if (cmd === "run_test_motion") arg = String($("test-motion").value || 0);
-  btn.disabled = true;
+async function sendCommand(cmd, arg, btn) {
+  if (btn) btn.disabled = true;
   try {
     const r = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ command: cmd, arg }),
+      body: JSON.stringify({ command: cmd, arg: arg || "" }),
     });
     const j = await r.json();
-    if (j.ok) logline(`${cmd}(${arg}) -> OK`, "ok");
-    else logline(`${cmd}(${arg}) -> REJECTED: ${j.error}`, "err");
+    if (j.ok) {
+      logline(`${cmd}(${arg || ""}) -> OK`, "ok");
+      if (cmd === "select_payload_profile") refreshProfiles();   // active moves
+    } else {
+      // The daemon's reason is the useful part: "no payload profile named …"
+      // or "not at the ready pose yet" belong on the operator's screen, not in
+      // a log file they would have to go and open.
+      logline(`${cmd}(${arg || ""}) -> REJECTED: ${j.error}`, "err");
+    }
+    return j;
   } catch (e) {
     logline(`${cmd} -> ERROR: ${e}`, "err");
+    return { ok: false, error: String(e) };
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
-});
+}
+
+function argFor(cmd) {
+  if (cmd === "select_target") return String($("sel-target").value || 0);
+  if (cmd === "run_test_motion") return String($("test-motion").value || 0);
+  if (cmd === "select_payload_profile") {
+    const sel = $("profile-select");
+    if (!sel.value) {
+      logline("select_payload_profile -> nothing selected (no profiles listed; "
+              + "see the note under Payload)", "err");
+      return null;
+    }
+    return String(sel.value);
+  }
+  return "";
+}
+
+function wireCommands(rootId) {
+  const root = document.getElementById(rootId);
+  if (!root) return;
+  root.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("button[data-cmd]");
+    if (!btn) return;
+    const cmd = btn.dataset.cmd;
+    const arg = argFor(cmd);
+    if (arg === null) return;           // refused locally, already logged
+    await sendCommand(cmd, arg, btn);
+  });
+}
+wireCommands("controls");
+wireCommands("p-payload");
+
+let PROFILE_NAMES = [];
+async function refreshProfiles() {
+  const sel = $("profile-select"), note = $("profile-note");
+  try {
+    const j = await (await fetch("/api/payload_profiles")).json();
+    PROFILE_NAMES = j.profiles || [];
+    sel.innerHTML = "";
+    for (const name of PROFILE_NAMES) {
+      const o = document.createElement("option");
+      o.value = name; o.textContent = name;
+      sel.appendChild(o);
+    }
+    if (!PROFILE_NAMES.length) {
+      const o = document.createElement("option");
+      o.value = ""; o.textContent = "(none found)";
+      sel.appendChild(o);
+      note.textContent = j.error || "no profiles";
+    } else {
+      note.textContent = `${PROFILE_NAMES.length} in ${j.dir} — names come from `
+        + `that directory; controld validates them and says why if one is bad`;
+    }
+    markActiveProfile();
+  } catch (e) {
+    note.textContent = "cannot read the profile list: " + e;
+  }
+}
+
+function markActiveProfile() {
+  // Annotate, do not overwrite: the operator may be pointing at a different
+  // profile on purpose, and the dropdown must not fight the telemetry.
+  const sel = $("profile-select");
+  if (typeof LAST_T === "undefined" || !PROFILE_NAMES.length) return;
+  const active = (LAST_T && LAST_T.payload_profile_name) || "";
+  for (const o of sel.options) {
+    o.textContent = o.value === active && o.value ? `${o.value} (active)` : o.value;
+  }
+}
+refreshProfiles();
 
 function videoStatus(text, err) {
   const el = $("video-status");

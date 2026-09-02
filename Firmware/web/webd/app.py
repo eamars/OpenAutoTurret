@@ -18,6 +18,7 @@ controld, whose validation gate (§42.2) is the sole authority.
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import queue
 import threading
@@ -162,6 +163,30 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     @app.post("/api/command")
     async def command(req: CommandRequest) -> ResponseMessage:
         return client.send_command(req.command, req.arg)
+
+    @app.get("/api/payload_profiles")
+    async def payload_profiles() -> dict:
+        """The stored profile NAMES, for the dashboard's picker (§28.5).
+
+        Names only, and a courtesy: controld re-validates every
+        `select_payload_profile` and answers with a reason when a name has no
+        file (§31.3), so a stale or mis-pathed listing here is visible, not
+        dangerous. `dir` is echoed because the commonest failure is webd and
+        controld running from different working directories — the operator has
+        to be able to compare it against turret.yaml's payload.profile_dir.
+        """
+        directory = config.payload_profile_dir
+        try:
+            names = sorted(
+                os.path.splitext(f)[0] for f in os.listdir(directory)
+                if f.endswith((".yaml", ".yml")) and not f.startswith("."))
+            error = "" if names else (
+                f"no profile files in {os.path.abspath(directory)} — check "
+                "that this matches payload.profile_dir in config/turret.yaml")
+        except OSError as e:
+            names, error = [], f"cannot read {os.path.abspath(directory)}: {e.strerror}"
+        return {"dir": os.path.abspath(directory), "profiles": names,
+                "error": error}
 
     # -- video preview (separate low-priority path, §42.3) ------------------
 
