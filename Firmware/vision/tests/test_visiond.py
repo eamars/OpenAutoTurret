@@ -12,6 +12,7 @@ import unittest
 from vision.frame_source import SyntheticFrameSource
 from vision.ipc import IpcPublisher, IpcSubscriber
 from vision.target_selector import TargetSelector, TargetSelectorConfig
+from vision import visiond
 from vision.visiond import VisionDaemon
 
 
@@ -94,6 +95,51 @@ class TestVisionDaemonEndToEnd(unittest.TestCase):
             sub.stop()
         self.assertIsNotNone(latest)
         self.assertFalse(latest.valid)
+
+
+class TestVisiondCliDetector(unittest.TestCase):
+    """The --detector switch (§10.1 backend selection) must never break a run,
+    and it must be honest about what is actually producing detections."""
+
+    def _cli(self, extra):
+        import contextlib
+        import io
+
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            sock = d + "/vision.sock"
+            sub = IpcSubscriber(sock)
+            sub.start()
+            try:
+                with contextlib.redirect_stderr(err):
+                    rc = visiond.main(["--synthetic", "--frames", "4",
+                                       "--socket", sock] + extra)
+                time.sleep(0.05)
+                latest = sub.latest
+            finally:
+                sub.stop()
+        return rc, latest, err.getvalue()
+
+    def test_detector_none_runs_and_publishes(self):
+        rc, latest, _ = self._cli(["--detector", "none"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(latest.valid)
+
+    def test_explicit_detector_is_reported_as_ignored_in_synthetic(self):
+        # The synthetic source publishes SCRIPTED detections: a detector choice
+        # there must be announced as ignored, not silently swallowed (an
+        # operator who believes --detector simple is running would draw the
+        # wrong conclusion from a live P8 run).
+        for extra in (["--detector", "simple"], ["--detector", "rpk"]):
+            rc, latest, err = self._cli(extra)
+            self.assertEqual(rc, 0)
+            self.assertTrue(latest.valid)
+            self.assertIn("--detector", err)
+
+    def test_auto_in_synthetic_is_quiet(self):
+        rc, _, err = self._cli([])          # default is auto
+        self.assertEqual(rc, 0)
+        self.assertNotIn("--detector", err)
 
 
 if __name__ == "__main__":

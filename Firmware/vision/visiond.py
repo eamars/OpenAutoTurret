@@ -74,6 +74,19 @@ def _make_parser() -> argparse.ArgumentParser:
     p.add_argument("--framerate", type=float, default=30.0, help="synthetic frame rate (Hz)")
     p.add_argument("--image-config", default="", help="path to the picamera2 config JSON (real mode)")
     p.add_argument("--detector-rpk", default="", help="path to the IMX500 detector RPK JSON (real mode)")
+    p.add_argument(
+        "--detector",
+        default="auto",
+        choices=["auto", "rpk", "simple", "none"],
+        help=(
+            "detection backend for --real. rpk = the IMX500 AI stack (production "
+            "intent, §10.1; degrades to no detections where the platform has no "
+            "AI API). simple = the classical bridge detector for P8 bring-up "
+            "(reports the largest moving blob; NOT a production detector). "
+            "none = stream frames only (measurements stay valid=false). "
+            "auto = rpk when --detector-rpk is given, else none."
+        ),
+    )
     p.add_argument("--orientation", default="none", help="install orientation applied to the detector boxes (none|rotate_180|flip_horizontal|flip_vertical); keeps control geometry correct when the camera is mounted upside-down")
     return p
 
@@ -81,17 +94,49 @@ def _make_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = _make_parser().parse_args(argv)
 
+    detector_choice = args.detector
+    if detector_choice == "auto":
+        detector_choice = "rpk" if (args.real and args.detector_rpk) else "none"
+
+    fs: FrameSource
+    bridge = None
     if args.real:
         try:
             from .frame_source import Picamera2FrameSource
         except Exception as e:
             print(f"error: real camera unavailable: {e}", file=sys.stderr)
             return 1
-        fs: FrameSource = Picamera2FrameSource(
-            args.image_config, args.detector_rpk, orientation=args.orientation
+        fs = Picamera2FrameSource(
+            args.image_config,
+            args.detector_rpk if detector_choice == "rpk" else "",
+            orientation=args.orientation,
+            framerate_hz=args.framerate,
         )
+        if detector_choice == "rpk" and not args.detector_rpk:
+            print("warning: --detector rpk but no --detector-rpk given: the "
+                  "camera will stream WITHOUT detections (measurements stay "
+                  "valid=false)", file=sys.stderr)
+        if detector_choice == "simple":
+            from .frame_source import DetectedFrameSource
+            from .simple_detector import MotionBlobDetector
+
+            bridge = DetectedFrameSource(fs, MotionBlobDetector())
+            fs = bridge
+            print(
+                "WARNING: --detector simple is the P8 BRING-UP bridge detector "
+                "(largest moving blob, see vision/simple_detector.py). It is "
+                "NOT the §10.1 detector: it has no notion of a target CLASS. "
+                "Swap in the RPK detector for any production use.",
+                file=sys.stderr,
+            )
     else:
-        # SAFE default: synthetic camera (no hardware, no motor driver).
+        # SAFE default: synthetic camera (no hardware, no motor driver). Its
+        # detections are SCRIPTED, so no detector backend applies — say so
+        # rather than quietly pretending the choice took effect.
+        if args.detector != "auto" and args.detector != "none":
+            print("note: --detector is ignored in --synthetic mode (the "
+                  "synthetic source publishes scripted detections)",
+                  file=sys.stderr)
         fs = SyntheticFrameSource(framerate_hz=args.framerate)
 
     ts = TargetSelector(TargetSelectorConfig())
@@ -106,7 +151,10 @@ def main(argv: Optional[list] = None) -> int:
     signal.signal(signal.SIGTERM, _handle)
 
     published = daemon.run(num_frames=args.frames)
-    print(f"visiond: published {published} measurements on {args.socket}")
+    extra = ""
+    if bridge is not None:
+        extra = f", bridge blobs {bridge.blobs}/{bridge.frames} frames"
+    print(f"visiond: published {published} measurements on {args.socket}{extra}")
     return 0
 
 
