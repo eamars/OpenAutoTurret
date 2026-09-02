@@ -1115,6 +1115,49 @@ accelerator, then re-run this row's detection half.
 
 ---
 
+**(d) 2026-09-03 11:30 — first live homing on real hardware. Operator remote.**
+
+`controld config/turret.yaml` (no `--sim`) was started on the operator's explicit
+instruction while they watched the dashboard over the LAN. **Nobody was at the
+station.** That fact stays in the record: this is not a P0/P8 sign-off, because a
+homing nobody can put a hand on is a supervised item performed unsupervised, and
+"the video looked fine" cannot see a stall, a bound, or the current. What it does
+establish, with numbers from `build/probe/real-controld.log`:
+
+* Discovery on the primary PHY: `boot OK: pitch uid=0x7b43313130333104
+  yaw uid=0x781131313033310a`, yousee `/dev/ttyUSB0` @ 1 Mbit/s.
+* **Measured mechanical span — pitch 79.9 deg** (−79.7 .. +0.1). `config/turret.yaml`
+  claims "~80 deg true mechanical span" for pitch; this is an independent
+  confirmation from a different run, not a restatement. **Yaw 352.8 deg**
+  (−27.6 .. +325.2), consistent with the user-confirmed ~360 deg continuous axis
+  reaching a real stop rather than a friction contact.
+* Duration **106 s** (sim: 34 s). Stage sequence on both axes: `approach` →
+  `endpoint A homed; starting endpoint B` → `moving to target`.
+* Peak effort during homing: **pitch 2.13 Nm, yaw 0.89 Nm**. Motor temperature
+  rise **1.4 K on each axis** (pitch 21.9→23.3 °C, yaw 23.9→25.3 °C): the drives
+  latch the stops at 3 A / 1 A without grinding. At-rest loop: p50 5.06 ms,
+  p99 5.09 ms against a 200 Hz target.
+* First §55 CAN numbers ever published from this station: 8,175 rx / 8,177 tx
+  frames over the run (15,936 / 15,939 four minutes later), **0 rx error frames,
+  0 tx failures**, rx age 7–16 ms. `can_state = -1`, exactly as documented for
+  yousee — which is why the dashboard says "not exposed by adapter" rather than
+  drawing an unknown as a fault.
+
+**Finding — the CyberGear mode-entry recipe blocks the 200 Hz control thread.**
+28 `SLOW CYCLE` warnings of 109.3–113.0 ms, every one `action=BRAKE`, plus one
+224.6 ms at the homing → hold transition. They are not random: each lands on a
+homing stage change. `CanMotorBackend::enter_speed_mode` / `enter_position_mode`
+contain two `sleep_for(kRecipeDelayMs=50ms)` — the CyberGear post-stop wait — and
+`ControlLoop::enter_speed_mode_all()` / `enter_position_mode_all()` call them
+**from the control thread** at exactly those transitions: 2 × 50 ms plus the CAN
+round trips ≈ 110 ms with no cycles, which the supervisor correctly reads as stale
+feedback and brakes (§34 did its job; the loop did not). Consequences: homing is
+correct but stepped, §46's "setup never runs in the control loop" is violated in
+the path that runs it most, and a 110 ms hole with a live target during tracking
+would not be benign. Fix: take mode entry off the loop (setup thread, or turn the
+two fixed waits into a per-cycle state machine — they are only waits) and give the
+supervisor a bounded expected-gap token so a planned pause is not a fault.
+
 ## P8 — Live closed-loop tracking (Phase 6) `[MOTOR] + [CAMERA]`
 
 Phase 6 is **implemented and integration-tested on SimMotorBackend + synthetic
