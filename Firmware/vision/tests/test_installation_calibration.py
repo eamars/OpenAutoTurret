@@ -205,17 +205,26 @@ class TestDetection(unittest.TestCase):
         self.assertEqual(pose.n_corners, 8)
 
     def test_detect_charuco_rendered_board(self):
-        """Exercise the production charuco path on a rendered board. Detection
-        quality on the synthetic image is OpenCV-build dependent, so this is
-        lenient: when the detector finds enough corners it must yield a solvable,
-        low-reprojection pose."""
+        """Exercise the production charuco path on a rendered board.
+
+        This used to `skipTest` when nothing was detected, blamed on "OpenCV
+        build variance". It was never the build: `BoardSpec.make_cv_board`
+        passed marker_id_offset where the Python binding expects the ids
+        vector, producing a board whose ids do not match, which
+        CharucoDetector.detectBoard silently refuses. Detection failing here
+        means P9 has no trustworthy calibration path, so it FAILS now — a skip
+        is how that defect survived this long.
+        """
         spec = ic.BoardSpec(marker_cols=3, marker_rows=3)
         board, obj, detector = ic.make_detector(spec)
         import cv2
         img = np.asarray(board.generateImage((480, 480)))
         obj_pts, img_pts, n = ic.detect_charuco(img, board, detector)
-        if img_pts is None:
-            self.skipTest("charuco detection returned no corners on this build")
+        self.assertIsNotNone(
+            img_pts,
+            "detect_charuco found nothing on a board WE generated: the board "
+            "object and its marker ids disagree (see BoardSpec.make_cv_board "
+            "notes) — P9 cannot be trusted until this passes")
         self.assertEqual(obj_pts.shape[0], img_pts.shape[0])
         intr = ic.CameraIntrinsics(400.0, 400.0, 240.0, 240.0,
                                    (0.0,) * 5, 480, 480)
@@ -226,9 +235,9 @@ class TestDetection(unittest.TestCase):
 class TestEndToEnd(unittest.TestCase):
     def test_run_calibration_frontal(self):
         # Render the board frontally; the pipeline collects valid frames and
-        # produces a stable, valid R_W_B. Detection on the synthetic image is
-        # OpenCV-build dependent, so if the detector finds no corners we skip
-        # (the per-stage math is covered by TestMultiFrame / TestDetection).
+        # produces a stable, valid R_W_B. This is P9's end-to-end path, so a run
+        # that collects no frames FAILS rather than skipping: it once skipped
+        # for months on an ids mismatch that was ours, not OpenCV's.
         spec = ic.BoardSpec(marker_cols=3, marker_rows=3)
         board, obj, detector = ic.make_detector(spec)
         import cv2
@@ -247,8 +256,10 @@ class TestEndToEnd(unittest.TestCase):
 
         ts = [0]
         res = ic.run_calibration(capture, lambda: (ts.__setitem__(0, ts[0] + 1) or ts[0]), cfg)
-        if res.n_frames < 3:
-            self.skipTest("charuco detection returned no frames on this build")
+        self.assertGreaterEqual(
+            res.n_frames, 3,
+            "the pipeline collected no usable frames from a board WE rendered — "
+            "a board/ids mismatch, not OpenCV (see BoardSpec.make_cv_board)")
         self.assertTrue(res.valid)
         # Frontal render: board aligned with camera => R_W_B == R_P_C^T.
         self.assertLess(_ang_deg(res.R_W_B, R_P_C.T), 2.0)

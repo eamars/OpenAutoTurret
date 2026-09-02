@@ -75,15 +75,66 @@ class BoardSpec:
         if self.dictionary not in _DICT_BY_NAME:
             raise ValueError(f"unknown dictionary {self.dictionary!r}")
         dict_ = aruco.getPredefinedDictionary(getattr(aruco, self.dictionary))
+        # Two traps, both measured on this station's OpenCV (4.10 and 5.0 agree):
+        #
+        #  1. The first argument is SQUARES, not markers: markers are placed on
+        #     every black square, so (3, 3) is a 3x3-square board with 4 markers
+        #     and 4 ChArUco corners. Anything that sizes a *printed* board from
+        #     "markers" is off by ~2.3x and the detector silently returns
+        #     nothing — see vision/charuco_board.py, which sizes by measurement.
+        #  2. marker_id_offset must NOT be passed positionally. In the Python
+        #     binding the 6th positional parameter is the ids VECTOR, so passing
+        #     an int either crashes ("Size of ids must be equal to the number of
+        #     markers: 18") for bigger grids or yields a board whose ids do not
+        #     match, making CharucoDetector.detectBoard() return None while
+        #     ArucoDetector happily sees the markers. Both failure modes look
+        #     like "the board in the room is wrong", at the station.
         board = aruco.CharucoBoard(
             (self.marker_cols, self.marker_rows),
             self.square_length_m,
             self.marker_length_m,
             dict_,
-            self.marker_id_offset,
         )
+        if self.marker_id_offset:
+            board = self._with_id_offset(board, aruco, self.marker_id_offset)
         obj = np.asarray(board.getObjPoints(), dtype=np.float64).reshape(-1, 3)
+        n_markers = obj.shape[0] // 4
+        # Dictionary capacity: exceeding it aborts deep inside generateImageMarker.
+        # bytesList is the dictionary's id table: a numpy array in the Python
+        # binding (a Mat elsewhere) — one row per usable id.
+        bl = dict_.bytesList
+        capacity = (int(bl.shape[0]) if hasattr(bl, "shape") else int(bl.rows)) \
+            - int(self.marker_id_offset)
+        if n_markers > capacity:
+            raise ValueError(
+                f"board needs {n_markers} marker ids but {self.dictionary} has "
+                f"{capacity} available from offset {self.marker_id_offset}; "
+                f"use a bigger dictionary (e.g. DICT_4X4_1000) or a smaller grid"
+            )
         return board, obj
+
+    @staticmethod
+    def _with_id_offset(board, aruco, offset: int):
+        """Rebuild a board shifted by `offset` ids, or refuse.
+
+        Only the keyword form is safe (see make_cv_board); if this binding does
+        not support it, fail loudly instead of handing back a mis-id'd board.
+        """
+        try:
+            ids = np.arange(int(np.asarray(board.getObjPoints()).shape[0] / 4),
+                            dtype=np.int32) + int(offset)
+            return aruco.CharucoBoard(
+                board.getSize() if hasattr(board, "getSize") else
+                (board.getSquaresX(), board.getSquaresY()),
+                board.getSquareLength(), board.getMarkerLength(),
+                board.getPredefinedDictionary() if hasattr(
+                    board, "getPredefinedDictionary") else board.dictionary,
+                ids,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(
+                f"this OpenCV binding cannot shift ChArUco marker ids by "
+                f"{offset} ({e}); leave marker_id_offset=0") from e
 
 
 @dataclass
