@@ -1179,6 +1179,35 @@ seen the real station.
 **Pass criteria:** R_W_B file committed + loaded at boot; world-frame LOS
 consistent; aim offset removed vs the identity baseline.
 
+### Board is now printable + a real defect in the board construction 2026-09-03 (c) `[SW]`
+
+P9 step 1 needs a board **in the room**, and nothing in the repo produced one.
+`tools/make_charuco_board.py` (+ `vision/charuco_board.py`) now does, and it
+**refuses to emit a sheet it cannot verify**: render → detect with
+`installation_calibration.detect_charuco` (the function P9 runs) → measure the
+square size in pixels → resample so one square is exactly `square_length_m` at
+300 dpi → re-detect and confirm corners and spacing.
+
+```bash
+cd Firmware && PYTHONPATH=. python3 -m tools.make_charuco_board \
+     --out build/charuco_board_P9.pdf        # 6x6 squares, 24 mm, A4, 18 markers
+```
+Print at 100 % (never "fit to page"), check the 50 mm line on the sheet with a
+ruler, mount flat on card. The sheet states its own geometry and the tool echoes
+the flags the calibrator must be given — the paper and the model must agree.
+
+**What the probe found (OpenCV 4.10 and 5.0 agree, so this is not build luck):**
+
+| Finding | Consequence before the fix |
+|---|---|
+| `aruco.CharucoBoard(...)`'s 6th **positional** parameter is the **ids vector**, not `marker_id_offset`. `BoardSpec.make_cv_board()` passed an int there. | Small grids: the board got ids that do not match it, so `CharucoDetector.detectBoard()` returned **None** while `ArucoDetector` saw the markers fine — indistinguishable at the station from "my printed board is bad". Larger grids: hard crash (`Size of ids must be equal to the number of markers: 18`). |
+| The constructor's first argument is **squares**, not markers (markers fill every black square): `(3,3)` = 3×3 squares = 4 markers / 4 corners, not a 3×3-*marker* (7×7 square) board. | Any sheet sized from the "markers" reading is 2.3× too big for the board object the calibrator builds — detection returns nothing, silently. The tool now sizes **by measurement** instead. |
+| Dictionary capacity was unchecked (12×12 squares needs 72 ids, `DICT_4X4_50` has 50). | `generateImageMarker` aborted deep inside OpenCV. |
+| Two tests in `test_installation_calibration.py` did `skipTest("charuco detection returned no corners **on this build**")`. | The skip blamed OpenCV and hid the bug: `test_run_calibration_frontal` — P9's own end-to-end path — had **never actually run on this machine**. Both now run and pass (139 passed, **0 skipped**, up from 129+2). |
+
+Still live for P9: print the sheet, level it, run step 1–3 (camera only), then
+step 4 with the operator.
+
 ---
 
 ## P10 — Payload profiling + verification on the real station (Phase 9) `[MOTOR]`
