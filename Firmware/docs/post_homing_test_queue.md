@@ -787,6 +787,42 @@ feedback returns, the daemon resumes `hold` with no manual reset.
 limit); on feedback recovery → back to `hold`. No `control fault:` (a fault would
 mean it was mis-classified as a Disable).
 
+**Live test p4 RESULT (2026-09-02, daemon 213494, 3750e7e) — PASS:**
+
+- **Method used:** the preferred (least-intrusive) — a saturating CAN flood:
+  `timeout 3 cangen can0 -I 300 -L 8 -g 0 -p 50` (unrelated standard ID 0x300,
+  max rate with ENobufs polling) while the daemon held at the ready pose.
+  (Note: bare `-g 0` fails with `No buffer space available` — the tx buffer
+  overflows at max rate; the `-p <ms>` poll option is what sustains the
+  saturation. A partial flood, e.g. `-g 0.5` ≈ 26% of the bus, only reached
+  `DERATE reason='control-loop cycle overrun'` — not enough to age the
+  feedback past the 100 ms threshold.)
+- **Wire (candump -ta):** in the 3 s flood window, 9302 flood frames were on the
+  bus while drive feedback frames (0x02806400/0x02806500) collapsed to **3**
+  (vs ~39–44/s immediately before and after) — the feedback was genuinely aged
+  out. The daemon's own command frames still got through (11763 in the window),
+  so it could issue the Brake hold.
+- **Daemon response:** one `supervisor: BRAKE reason='stale or missing motor
+  feedback'` at 12:10:35.8 (flood start) → held → one `supervisor: ALLOW
+  reason='ok'` at 12:10:38.8 (flood end + ~0.8 s). The arm stayed locked at the
+  ready pose the whole window (q_pitch=−1.4960, q_yaw=−2.2608, a≈0).
+  **Zero `control fault:` lines.**
+- **Pass criteria met:** safe stop on stale feedback (no open-loop, no motion
+  into a limit — the arm was at rest at the balance-point ready pose and stayed
+  there); back to `hold` on feedback recovery with no manual reset; no
+  `control fault:` (not mis-classified as a Disable).
+- **Recovery:** the Brake is a sustained safe-hold for the duration of the stale
+  feedback, then auto-resumes to Allow/hold — recoverable, as designed. SIGTERM
+  afterwards → clean `PARKED`.
+- **Secondary observation (pre-existing, NOT flood-induced):** throughout homing
+  and the ready-pose hold — before any flood — the supervisor showed a recurring
+  single-cycle `BRAKE reason='stale or missing motor feedback'` alternating with
+  `ALLOW reason='ok'` (p3g showed the same: 28 such BRAKEs at `overrun_us`
+  ≈ 97.5–99.2 ms, just under the 100 ms threshold). It is recoverable (one cycle
+  each, no fault), but it is the likely cause of the slow move-to-ready-pose
+  crawl noted in p3g — the feedback sits just under the stale threshold during
+  position-mode moves, flapping Brake/Allow. Flagged for follow-up.
+
 ---
 
 ## P5 — Motor fault injection (§38) `[MOTOR]`
