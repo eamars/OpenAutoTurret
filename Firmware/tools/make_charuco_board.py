@@ -91,13 +91,22 @@ def main(argv=None) -> int:
           f"{info['board_mm'][1]:.1f} mm on paper, and the 50 mm line 50 mm")
     # The number that must NOT drift: whatever the paper says, the calibrator has
     # to be told the same thing.
-    print("  calibrate with the SAME geometry, e.g.:")
-    print("    python3 -m vision.installation_calibration "
-          "\\")
-    print(f"        --board-cols {spec.marker_cols} "
-          f"--board-rows {spec.marker_rows} "
-          f"--square-mm {args.square_mm:g} --marker-mm {args.marker_mm:g} "
-          f"--dict {spec.dictionary}")
+    # Real commands, real flag names (this echo once told the operator to run
+    # `python3 -m vision.installation_calibration`, a module with no CLI - the
+    # kind of instruction that costs an afternoon at the station). The board
+    # geometry must be repeated to BOTH tools, because they build the board the
+    # calibrator solves against, not the sheet.
+    geo = (f"--grid-cols {spec.marker_cols} --grid-rows {spec.marker_rows} "
+           f"--square-mm {args.square_mm:g} --marker-mm {args.marker_mm:g} "
+           f"--dict {spec.dictionary}")
+    cont = " " + chr(92)          # shell line continuation, kept out of f-strings
+    print("  then calibrate with the SAME geometry (orientation is this "
+          "station's: rotate_180):")
+    print("    python3 -m tools.calibrate_camera_intrinsics" + cont)
+    print(f"        --live --frames 40 --orientation rotate_180 {geo}")
+    print("    python3 -m tools.calibrate_installation_pose" + cont)
+    print(f"        --live --frames 25 --orientation rotate_180 {geo}" + cont)
+    print("        --commit calibration/installation_pose.yaml")
     return 0
 
 
