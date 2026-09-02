@@ -1104,6 +1104,15 @@ assigned again, monotonic fallback counted, orientation applied to pixels AND
 boxes together, RPK failure not fatal). The fake cannot prove the camera works —
 that is what the probe is for — it only makes the known failure modes loud.
 
+**Decision 2026-09-03 (operator): P7 stays open, fly P8 on the bridge detector.**
+The Pi 5 has no RPK/Hailo AI stack, so `--detector rpk` degrades to no
+detections; rather than block P8 on platform work, the live tracking window uses
+`--detector simple` (largest moving blob). That proves the **control** path
+(§34/§35/§36/§49 — acquisition, follow, loss→coast→brake→ready-hold, envelope
+authority) but says nothing about detector quality, so this row keeps its open
+status and the follow-up stands: on-board NPU stack or a USB RPK-class
+accelerator, then re-run this row's detection half.
+
 ---
 
 ## P8 — Live closed-loop tracking (Phase 6) `[MOTOR] + [CAMERA]`
@@ -1125,6 +1134,17 @@ room was dark, so "0 blobs" was not a detector failure).
 > the homing gates pass (§38.1) — with the search span clamped inside the homed
 > soft limits. Verified offline against synthetic frames *and* against the real
 > IMX500 stream (sim backend, so no motor could move).
+
+> 📄 **A run sheet exists: `docs/run_sheet_P8.md`.** It turns the seven steps
+> below into a printable station sequence — pre-flight table, a 5-minute `--sim`
+> dry run of the exact commands (dry-run executed 2026-09-03: `state` shows
+> `phase=homing at_ready=False`, `start_tracking` returns
+> `not homed (position validity unknown)`), the log lines to watch
+> (`homed + at ready pose`, `loop: … worst=`, `SLOW CYCLE … (phase=…, action=…)`,
+> `vision: … age … ms`), abort criteria, and a paste-back block. It also carries
+> the **P3/P4 stall re-check** in the same window (idle vs under-tracking loop
+> distribution — the attribution question: was the ~98 ms Brake the loop or the
+> bus?), and it deliberately excludes step 7 (fault injection needs its own GO).
 
 Once wired (and only after P0–P7 pass, user present — motors move):
 1. **Tracking hard-disabled until homed:** boot with a person in frame; the
