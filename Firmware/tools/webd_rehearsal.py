@@ -17,17 +17,27 @@ What it proves, in order (each line is PASS/FAIL with the measured number):
      promptly with webd still responsive afterwards.
   5. Both daemons shut down on SIGTERM within the expected window.
 
-Usage: python3 tools/webd_rehearsal.py [--skip-video]
-Requires ./build/control/controld built, and the IMX500 free for step 4.
+  6. (§54.5, --load) The dashboard under load: N websocket clients at 15 Hz
+     plus three MJPEG viewers. Measured from controld's own 1 Hz `loop:` line,
+     not from the network side: the loop must keep its cadence, no client may be
+     starved, /api/state must stay responsive, and the publish rate must not
+     multiply with viewers (§42.3 shared capture). Then webd is stopped WITH
+     clients still attached, because that is what can strand the camera.
+
+Usage: python3 tools/webd_rehearsal.py [--skip-video] [--load N] [--load-seconds S]
+       (--load 0 disables the load leg)
+Requires ./build/control/controld built, and the IMX500 free for step 4/6.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import http as _http        # alias: main() defines no local named http
 import urllib.error
@@ -90,8 +100,269 @@ def terminate(proc: subprocess.Popen, name: str, timeout: float = 12.0) -> str:
     return f"{name} DID NOT exit within {timeout}s"
 
 
+# ------------------------------------------------------- §54.5 load leg (P12)
+#
+# The queue's P12 ask is "the dashboard under load must not disturb control".
+# Doing that live costs a supervised window and a motor; the part that actually
+# threatens the control loop is measurable offline: N browsers pulling 15 Hz
+# telemetry, plus an MJPEG preview, all served by webd, while controld keeps its
+# 200 Hz loop. controld reports its OWN timing (the 1 Hz `loop:` line, §6.3),
+# which is the only instrument that answers the question — a slow HTTP response
+# says nothing about the loop, and a fast one proves nothing either.
+
+attached_note = ""          # set by run_load_leg; drives the shutdown banner
+
+LOOP_RE = re.compile(r"loop: target=(\d+) Hz p50=([\d.]+) p95=([\d.]+) "
+                     r"p99=([\d.]+) worst=([\d.]+) ms \(n=(\d+)\)")
+SLOW_RE = re.compile(r"SLOW CYCLE ([\d.]+) ms")
+
+
+def _arg_int(name: str, default: int) -> int:
+    for i, a in enumerate(sys.argv):
+        if a == name and i + 1 < len(sys.argv):
+            try:
+                return int(sys.argv[i + 1])
+            except ValueError:
+                return default
+        if a.startswith(name + "="):
+            try:
+                return int(a.split("=", 1)[1])
+            except ValueError:
+                return default
+    return default
+
+
+def _daemon_stats() -> dict:
+    """controld's own latest loop timing + cumulative SLOW CYCLE count."""
+    path = os.path.join(PROBE, "rehearsal-controld.log")
+    out = {"p50": None, "p99": None, "worst": None, "n": 0, "slow": 0,
+           "reports": 0}
+    try:
+        with open(path, errors="replace") as f:
+            txt = f.read()
+    except OSError:
+        return out
+    hits = LOOP_RE.findall(txt)
+    if hits:
+        t = hits[-1]
+        out.update(p50=float(t[1]), p99=float(t[3]), worst=float(t[4]),
+                   n=int(t[5]))
+    out["slow"] = len(SLOW_RE.findall(txt))
+    # `n=` is the sample count INSIDE the timing window and it SATURATES (the
+    # statistics are kept in a 4096-sample ring: measured n=4096 and
+    # identical p50/worst across successive reads). Liveness therefore counts
+    # REPORTS — one line per second — which cannot saturate.
+    out["reports"] = len(hits)
+    out["worst_seen"] = max((float(h[4]) for h in hits), default=0.0)
+    return out
+
+
+def _ws_leg(n_ws: int, seconds: float, n_sticky: int, out: list,
+            lock: threading.Lock) -> None:
+    """Run n_ws telemetry clients for `seconds`, and leave n_sticky attached.
+
+    The sticky ones are the point of the second half of the leg: a browser that
+    is still reading when webd is stopped is exactly what can keep uvicorn in
+    "waiting for connections to close" past the lifespan shutdown that hands the
+    camera back (§42.3).
+    """
+    import asyncio
+
+    try:
+        import websockets
+    except ImportError:
+        with lock:
+            out.append({"frames": 0, "error": "websockets not installed"})
+        return
+
+    async def client(sticky: bool) -> None:
+        rec = {"frames": 0, "max_gap": 0.0, "error": ""}
+        url = f"ws://{HOST}:{PORT}/ws"
+        try:
+            async with websockets.connect(url, max_queue=256) as ws:
+                prev = None
+                deadline = time.monotonic() + seconds
+                while sticky or time.monotonic() < deadline:
+                    timeout = 2.0 if not sticky else 120.0
+                    try:
+                        await asyncio.wait_for(ws.recv(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        if not sticky:
+                            rec["error"] = "recv timeout"
+                        break
+                    now = time.monotonic()
+                    if prev is not None:
+                        rec["max_gap"] = max(rec["max_gap"], now - prev)
+                    prev = now
+                    rec["frames"] += 1
+        except Exception as e:  # noqa: BLE001
+            rec["error"] = repr(e)[:80]     # a closed socket at shutdown is fine
+        if not sticky:
+            with lock:
+                out.append(rec)
+
+    async def main_coro() -> None:
+        for _ in range(n_sticky):
+            asyncio.get_running_loop().create_task(client(True))
+        await asyncio.gather(*(client(False) for _ in range(n_ws)),
+                             return_exceptions=True)
+
+    try:
+        asyncio.run(main_coro())
+    except Exception as e:  # noqa: BLE001
+        with lock:
+            out.append({"frames": 0, "error": repr(e)[:80]})
+
+
+def _video_reader(stop: threading.Event, out: list, lock: threading.Lock) -> None:
+    conn = _http.client.HTTPConnection(HOST, PORT, timeout=6.0)
+    rec = {"jpegs": 0, "bytes": 0, "error": ""}
+    try:
+        conn.request("GET", "/api/video")
+        stream = conn.getresponse()
+        while not stop.is_set():
+            chunk = stream.read(8192)
+            if not chunk:
+                break
+            rec["bytes"] += len(chunk)
+            rec["jpegs"] += chunk.count(b"\xff\xd8")
+    except Exception as e:  # noqa: BLE001
+        rec["error"] = repr(e)[:60]
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        with lock:
+            out.append(rec)
+
+
+def run_load_leg(n_ws: int, seconds: float, video_ok: bool) -> None:
+    global attached_note
+    print(f"=== §54.5 load leg: {n_ws} dashboard clients"
+          + (" + 3 MJPEG viewers" if video_ok else " (video skipped)")
+          + f" for {seconds:.0f}s ===", flush=True)
+    base = _daemon_stats()
+    if base["p50"] is None:
+        print("       (no baseline loop line yet; using in-leg numbers only)",
+              flush=True)
+
+    ws_out: list = []
+    ws_lock = threading.Lock()
+    threading.Thread(target=_ws_leg, args=(n_ws, seconds, 2, ws_out, ws_lock),
+                     daemon=True).start()
+    ok, detail = wait_for(
+        lambda: int((http("/api/health", timeout=3.0) or {}).get(
+            "browser_clients", 0)) >= n_ws, 10.0, 0.2)
+    check("every dashboard client is attached", ok,
+          f"browser_clients={str(detail)[:40]}")
+
+    vid_out: list = []
+    vid_lock = threading.Lock()
+    stop_ev = threading.Event()
+    fps_req, n0 = 10.0, 0
+    if video_ok:
+        r = http("/api/video/start", {"width": 640, "height": 480, "fps": 10},
+                 timeout=20.0)
+        fps_req = float(r.get("fps") or 10.0)
+        n0 = int(r.get("frames_published", 0))
+        for _ in range(3):
+            threading.Thread(target=_video_reader,
+                             args=(stop_ev, vid_out, vid_lock),
+                             daemon=True).start()
+        print(f"       video on for 3 viewers ({fps_req:g} fps requested)",
+              flush=True)
+
+    # Sample the operator-facing path under load: /api/state is what the
+    # dashboard polls, so its latency is what the operator perceives as lag.
+    lat: list[float] = []
+    failures = 0
+    t_end = time.monotonic() + seconds
+    while time.monotonic() < t_end:
+        t0 = time.monotonic()
+        st = _state()
+        if st is None:
+            failures += 1
+        else:
+            lat.append(time.monotonic() - t0)
+        time.sleep(0.1)
+
+    if video_ok:
+        stop_ev.set()
+        http("/api/video/stop", {}, timeout=15.0)
+        time.sleep(0.6)
+        vs = http("/api/video/state", timeout=5.0)
+        n1 = int(vs.get("frames_published", 0))
+
+    during = _daemon_stats()
+    with ws_lock:
+        recs = list(ws_out)
+    with vid_lock:
+        vrecs = list(vid_out)
+
+    frames = [r["frames"] for r in recs] or [0]
+    check("every client received telemetry (none starved)",
+          all(f > 0 for f in frames), f"frames/client={frames}")
+    check("no client was starved by the others (fairness)",
+          max(frames) == 0 or min(frames) >= 0.5 * max(frames),
+          f"min={min(frames)} max={max(frames)} over ~{seconds:.0f}s")
+    worst_gap = max((r.get("max_gap", 0.0) for r in recs), default=99.0)
+    check("no telemetry stall longer than 1 s on any client", worst_gap < 1.0,
+          f"worst gap {worst_gap:.2f}s")
+    lat.sort()
+    p95 = lat[int(len(lat) * 0.95) - 1] if lat else 99.0
+    check("/api/state stays responsive under load",
+          p95 < 0.25 and failures == 0,
+          f"p95 {p95*1000:.0f} ms over {len(lat)} samples, {failures} failures")
+
+    if during["p50"] is not None:
+        starved = (during["worst"] is None or during["worst"] >= 10.0
+                   or during["p50"] > (base["p50"] or 0.0) * 4.0 + 1.0
+                   or during["reports"] <= base["reports"])
+        check("control loop kept its cadence under web load", not starved,
+              f"before p50={base['p50']} worst={base['worst']} "
+              f"reports={base['reports']}; during p50={during['p50']} "
+              f"worst={during['worst']} reports={during['reports']}; "
+              f"slow_cycles={during['slow'] - base['slow']}")
+        print(f"       loop under load: p50={during['p50']:.3f} "
+              f"p99={during['p99']:.3f} worst={during['worst']:.3f} ms over "
+              f"{during['n']} samples", flush=True)
+    else:
+        check("controld published loop statistics", False,
+              "no 'loop:' line in the log — the leg proves nothing about timing")
+
+    if video_ok:
+        got = [r["jpegs"] for r in vrecs] or [0]
+        check("every MJPEG viewer got frames", all(g >= 2 for g in got),
+              f"jpegs/viewer={got} errors={[r['error'] for r in vrecs if r['error']]}")
+        # The claim in §42.3 is that viewers SHARE one capture. If the publisher
+        # rate scaled with clients, three viewers would triple the camera work.
+        elapsed = max(1.0, seconds)
+        pub_fps = (n1 - n0) / elapsed
+        check("viewers share one capture (publish rate did not multiply)",
+              pub_fps <= fps_req * 1.8 + 2.0,
+              f"{pub_fps:.1f} fps published for 3 viewers at {fps_req:g} fps")
+
+    # Leave the sticky clients (and, if we can, one live stream) attached so the
+    # shutdown below is exercised under exactly the condition that bites.
+    if video_ok:
+        http("/api/video/start", {"width": 640, "height": 480, "fps": 10},
+             timeout=20.0)
+        threading.Thread(target=_video_reader,
+                         args=(threading.Event(), [], threading.Lock()),
+                         daemon=True).start()
+        attached_note = "2 telemetry clients and 1 MJPEG stream still attached"
+    else:
+        attached_note = "2 telemetry clients still attached"
+
+
 def main() -> int:
     skip_video = "--skip-video" in sys.argv
+    load_ws = _arg_int("--load", 6)          # 0 disables the load leg
+    load_seconds = _arg_int("--load-seconds", 12)
+    print(f"=== P12 offline rehearsal (load leg: {load_ws} clients x "
+          f"{load_seconds}s; video: {'on' if not skip_video else 'skipped'}) ===",
+          flush=True)
     os.makedirs(PROBE, exist_ok=True)
     for p in (WEB_SOCK, VISION_SOCK):
         if os.path.exists(p):
@@ -180,7 +451,9 @@ def main() -> int:
             print("       (video leg skipped: --skip-video)", flush=True)
         else:
             vs = http("/api/video/state", timeout=10.0)
-            check("video starts", True, str(vs.get("error") or "no error"))
+            check("video state readable before start",
+                  isinstance(vs, dict) and "running" in vs,
+                  f"running={vs.get('running')} error={vs.get('error')!r}")
             r = http("/api/video/start", {})
             n0 = int(r.get("frames_published", 0))
             time.sleep(3.0)
@@ -230,7 +503,18 @@ def main() -> int:
             ok, detail = wait_for(lambda: _health(), 5.0)
             check("webd still responsive after video stop", ok, str(detail))
 
+        # -- §54.5 load leg: N dashboards + video while the daemon keeps its loop
+        if load_ws > 0:
+            run_load_leg(load_ws, load_seconds, not skip_video)
+
         # -- 5. shutdown -------------------------------------------------------
+        # With clients STILL attached on purpose: the P12 risk is not the steady
+        # state, it is uvicorn's lifespan shutdown sitting in "waiting for
+        # connections to close" while a browser holds the endless MJPEG stream —
+        # which is the same mechanism that would keep the camera away from
+        # visiond after a real restart.
+        if attached_note:
+            print(f"=== shutting down with {attached_note} ===", flush=True)
         print("=== shutdown (SIGTERM, never SIGKILL) ===", flush=True)
         msg_w = terminate(webd, "webd", 12.0)
         check("webd shut down cleanly", "exited" in msg_w, msg_w)
