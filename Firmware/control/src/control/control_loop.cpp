@@ -1195,6 +1195,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         telemetry::TrackListing& out = snap.tracks[snap.track_count++];
         out = telemetry::TrackListing{};
         out.uuid_lo = t.uuid.lo;
+        out.uuid_hi = t.uuid.hi;
+        telemetry::format_uuid_text(out.uuid_text, t.uuid.hi, t.uuid.lo);
         out.display_index = t.display_index;
         // Same shape as the selection's own descriptor (§10): a label is a label in
         // both places or the operator is being shown two vocabularies.
@@ -1224,6 +1226,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
     }
     snap.selected_track_id = selected_track_id_;
+    {
+      // §50/§78: the identity, not the label. `selected_track()` is the same pointer the
+      // selection manager acts on, so what the page prints and what the controller followed are
+      // the same track by construction rather than by two lookups agreeing by luck.
+      const tracks::Track* who = selection_.selected_track();
+      snap.selected_uuid_valid = who != nullptr && who->uuid.valid();
+      if (snap.selected_uuid_valid)
+        telemetry::format_uuid_text(snap.selected_uuid_text, who->uuid.hi, who->uuid.lo);
+    }
     {
       const auto& sel = selection_.selection();
       snap.selected_display_index = sel.has_selection ? sel.selected_display_index : 0;
@@ -1780,7 +1791,9 @@ void ControlLoop::preserve_scene(const telemetry::TelemetrySnapshot& live,
   std::snprintf(out.safety_action, sizeof out.safety_action, "%s",
                 safety_action_name(live.safety_action));
 
-  out.selected_uuid = live.selected_track_id;
+  out.selected_display_index = live.selected_track_id;
+  std::snprintf(out.selected_uuid_text, sizeof(out.selected_uuid_text), "%s",
+                live.selected_uuid_text);
   std::snprintf(out.selected_label, sizeof out.selected_label, "%s",
                 live.selected_descriptor.c_str());
   std::snprintf(out.selection_visibility, sizeof out.selection_visibility, "%s",

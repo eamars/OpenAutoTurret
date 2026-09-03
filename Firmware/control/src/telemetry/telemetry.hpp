@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -32,8 +33,28 @@ namespace telemetry {
 // thread fills at 200 Hz, so it must not allocate, and a bounded list is also the
 // honest one — §58 caps what a TrackSet carries, and a telemetry list that could grow
 // would be a second, unbounded buffer behind it.
+// Long enough for "18446744073709551615:18446744073709551615" plus the NUL, which is the whole
+// 128-bit identifier in decimal. One constant, so the listing, the snapshot and the capture all
+// carry the same width and the formatter cannot be handed an array it would overflow.
+inline constexpr std::size_t kUuidTextLen = 41;
+
+// Both halves of a track identifier as text, in one place, so the live page and a post-incident
+// capture cannot drift into describing the same track with two different strings.
+inline void format_uuid_text(char (&out)[kUuidTextLen], uint64_t hi, uint64_t lo) {
+  std::snprintf(out, kUuidTextLen, "%llu:%llu", static_cast<unsigned long long>(hi),
+                static_cast<unsigned long long>(lo));
+}
+
 struct TrackListing {
   uint64_t uuid_lo = 0;
+  // The other half of the identifier, and both of them as text. `uuid_lo` alone names a
+  // *numbering*, not a track: the high half is the session nonce visiond draws when it starts
+  // (vision/track_manager.py), which is what distinguishes this run's track 22 from the last
+  // run's track 22. Text because that nonce spans the whole 64-bit range and a JavaScript
+  // number is exact only to 2^53 — a browser handed the number would print an identifier that
+  // never existed, and quoting it into an investigation would name a track no log contains.
+  uint64_t uuid_hi = 0;
+  char uuid_text[kUuidTextLen] = {};
   uint16_t display_index = 0;
   char label[24] = {};        // "Person #2" (§10) — what the operator reads
   char class_name[16] = {};   // as the detector named it
@@ -68,7 +89,12 @@ struct BlackBoxCapture {
   // tracks" is the phrase in §80, and it is the part that cannot be reconstructed: the
   // scene is gone, and a replay that shows only the chosen track proves nothing about
   // whether the choice was the only defensible one.
-  uint64_t selected_uuid = 0;
+  // Was named `selected_uuid` while holding `selected_track_id`, which is a display index. A
+  // capture that mislabels an identifier is worse than one missing it — an investigator reads
+  // "uuid 11" as a fact about the world and searches for a track that never existed — so the
+  // number is called what it is and the real identifier travels beside it as text (§50/§78).
+  uint64_t selected_display_index = 0;
+  char selected_uuid_text[kUuidTextLen] = {};
   char selected_label[24] = {};
   char selection_visibility[24] = {};
   int64_t selection_age_ms = -1;
@@ -295,6 +321,13 @@ struct TelemetrySnapshot {
   // conditions that must hold are in the fill in `control_loop.cpp`; when any of them fails
   // the flag is false and the two numbers are not measurements. The last aim point of a
   // session that ended is not where the turret is pointing now.
+  // §50 `target_selection.track_uuid`, live. Until now the selected target's identity existed
+  // only inside a capture taken after something went wrong: the running page could say "person
+  // #12" — which is a label, and re-numbered — but not which track the machine had actually
+  // committed to. Empty text with `selected_uuid_valid` false means nobody is selected; it must
+  // never be drawn as a zero-filled identifier (§72 again).
+  bool selected_uuid_valid = false;
+  char selected_uuid_text[kUuidTextLen] = {};
   bool aim_point_valid = false;
   double aim_point_x = 0.0;
   double aim_point_y = 0.0;

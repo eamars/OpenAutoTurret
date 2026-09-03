@@ -1192,9 +1192,13 @@ TEST(BlackBox, APreservedSceneCarriesWhatTheOperatorWasTold) {
   EXPECT_EQ(snap.blackbox.candidate_count, 2)
       << "a scene with only the chosen track cannot be used to judge whether the choice "
          "was defensible — which is the stated purpose of this record (§80)";
-  EXPECT_EQ(snap.blackbox.selected_uuid, snap.selected_track_id)
+  EXPECT_EQ(snap.blackbox.selected_display_index, snap.selected_track_id)
       << "the preserved selection disagrees with what the dashboard was showing at the "
          "same instant, so nobody knows which one to believe";
+  // The capture used to carry the display index under the name `selected_uuid`, which is how an
+  // investigation starts with a search for a track that never existed. Both halves, as text.
+  EXPECT_EQ(snap.blackbox.selected_uuid_text, std::string("0:11"))
+      << "the preserved scene does not name the track it was following";
   EXPECT_EQ(snap.blackbox.selected_label, std::string("Person #1"));
   // "hold", not "ready": `phase` is the loop's phase and `at_ready` is a separate flag.
   // The record copies what was published, so it inherits that distinction rather than
@@ -1890,6 +1894,75 @@ TEST(ManualLimits, AJogRunsOutToTheEndOfTravelAndStopsThere) {
       << " deg short of the bound the page shows, which is further than an eased approach "
          "explains";
   h.run("manual_jog_stop");
+}
+
+TEST(TrackIdentity, TheSelectedTrackIsNamedWithBothHalvesOfItsIdentifier) {
+  // §50 lists `track_uuid` under the runtime UI state and §78 asks for it again in diagnostics.
+  // What controld published instead, until now, was the display index — a label that is
+  // re-numbered whenever the candidate set changes — and the 128-bit identifier appeared only
+  // inside a capture taken after something went wrong, and only as its low half.
+  //
+  // The low half is the trap. visiond draws the high half as a session nonce spanning the whole
+  // 64-bit range, so `lo` alone says "number 31 of some run", and a page given the value as a
+  // JavaScript number would round anything past 2^53: it would print an identifier that names no
+  // track in any log, and an operator quoting it would be quoting a number the station never
+  // emitted. So the identifier crosses as text, and this test uses a nonce above 2^53 to make
+  // the difference unhideable.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const uint64_t nonce = 0x9E3779B97F4A7C15ull;  // 11400714819323198485, deliberately > 2^53
+
+  tracks::TrackSet set;
+  set.frame_sequence = 1;
+  set.sensor_timestamp_ns = h.t;
+  set.publish_timestamp_ns = h.t + 1'000'000;
+  set.width = 1280;
+  set.height = 720;
+  tracks::Track t;
+  t.uuid = tracks::TrackUuid{nonce, 31};
+  t.display_index = 1;
+  t.class_id = 1;
+  std::memcpy(t.class_name, "person", 6);
+  t.state = tracks::TrackState::Confirmed;
+  t.detector_confidence = t.track_confidence = 0.9f;
+  t.bbox.x_min = 0.25f; t.bbox.x_max = 0.35f; t.bbox.y_min = 0.4f; t.bbox.y_max = 0.7f;
+  t.anchor_x = 0.3f; t.anchor_y = 0.55f;
+  set.add(t);
+
+  h.run("set_mode", "AUTO_TRACK");
+  for (int i = 0; i < 40; ++i) {
+    tracks::TrackSet f = set;
+    f.frame_sequence = static_cast<uint32_t>(i + 1);
+    f.sensor_timestamp_ns = h.t;
+    f.publish_timestamp_ns = h.t + 1'000'000;
+    h.loop->feed_track_set(f, h.t);
+    h.step(1);
+  }
+  h.run("select_target", "1");
+  h.step(6);
+  for (int i = 0; i < 6; ++i) {
+    tracks::TrackSet f = set;
+    f.frame_sequence = static_cast<uint32_t>(100 + i);
+    f.sensor_timestamp_ns = h.t;
+    f.publish_timestamp_ns = h.t + 1'000'000;
+    h.loop->feed_track_set(f, h.t);
+    h.step(1);
+  }
+
+  const telemetry::TelemetrySnapshot snap = h.snap();
+  ASSERT_GT(snap.selected_track_id, 0u) << "nothing was selected, so there is no identity to check";
+  ASSERT_TRUE(snap.selected_uuid_valid);
+  EXPECT_EQ(std::string(snap.selected_uuid_text), "11400714819323198485:31")
+      << "the live page names the followed track as `" << snap.selected_uuid_text
+      << "`: with the high half missing or rounded, two sessions' track 31 are the same track";
+
+  // The same string is what the candidate list carries, so the operator can point at a row in
+  // the list and an investigator can find that row in a capture.
+  bool listed = false;
+  for (int i = 0; i < snap.track_count; ++i) {
+    if (std::string(snap.tracks[i].uuid_text) == "11400714819323198485:31") listed = true;
+  }
+  EXPECT_TRUE(listed) << "the selection is named one way and the candidate list another";
 }
 }  // namespace
 

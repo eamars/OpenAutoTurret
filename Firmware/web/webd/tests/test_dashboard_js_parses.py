@@ -330,7 +330,8 @@ def test_webd_declares_the_fields_the_dashboard_reads():
                        "roam_pattern", "roam_progress", "blackbox_capture_id",
                        "blackbox", "intent_has_joint_target", "intent_q_pitch_rad",
                        "intent_q_yaw_rad", "aim_point_valid", "aim_point_x",
-                       "aim_point_y", "soft_limits_valid", "q_soft_min_pitch_rad",
+                       "aim_point_y", "selected_uuid_valid", "selected_uuid",
+                       "soft_limits_valid", "q_soft_min_pitch_rad",
                        "q_soft_max_pitch_rad", "q_soft_min_yaw_rad",
                        "q_soft_max_yaw_rad", "soft_limit_distance_pitch_rad",
                        "soft_limit_distance_yaw_rad"):
@@ -476,3 +477,41 @@ def test_an_unmeasured_range_is_not_rendered_as_a_limit_at_zero():
         assert any("soft_limits_valid" in ln for ln in used), (
             "%s renders bounds without consulting the flag" % readout
         )
+
+
+def test_a_track_identifier_is_never_arithmetic():
+    """§50/§78's track uuid is 128 bits, its high half is a session nonce drawn from the whole
+    64-bit range, and this page parses JSON in a language whose only number is a double — exact
+    to 2^53. A uuid that arrives as a number is therefore correct until the session nonce
+    happens to be large, which is not a condition any test anyone writes will think to check.
+
+    So the identifier crosses as text and stays text. This guard is here because the failure is
+    silent and specific: the page would print a twenty-digit number naming no track in any log,
+    and an operator quoting it into an investigation would be quoting a value the station never
+    emitted.
+    """
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parents[1]
+    js = (here / "dashboard.py").read_text(encoding="utf-8")
+    proto = (here / "protocol.py").read_text(encoding="utf-8")
+
+    decl = [ln for ln in proto.splitlines() if ln.strip().startswith("selected_uuid:")]
+    assert decl, "protocol.py no longer declares the selected identifier at all"
+    assert "str" in decl[0], "the identifier is declared as a number: %s" % decl[0].strip()
+
+    # Numeric coercion in any of the shapes this page would reach for. Note what is *not* here:
+    # string concatenation with `+`, which is the correct use and the one the page actually
+    # makes. A guard that forbade `+` would fail on the right code, which is how guards end up
+    # deleted.
+    used = [ln.strip() for ln in js.splitlines() if "uuid" in ln.lower()]
+    assert used, "nothing on the page reads the identifier, so publishing it is theatre"
+    for ln in used:
+        if ln.startswith("//"):
+            continue
+        for bad in ("parseInt", "parseFloat", "Number(", "toFixed", "Math.", " > ", " < ",
+                    " - ", " * ", " % "):
+            assert bad not in ln, "the page coerces an identifier numerically: %s" % ln
+    assert any("textContent" in ln or ".title" in ln for ln in used), (
+        "the identifier is read but never shown, so §50 is satisfied in the schema only"
+    )

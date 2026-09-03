@@ -558,7 +558,46 @@ draft wrote the ambiguity margin to 0.0 on every station that named nothing, whi
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 271 pytest green, and
+**A telemetry field that reaches nobody is not a telemetry field.** §50 and §78 have now been
+read out of the document and checked layer by layer — controld's snapshot → the wire JSON →
+webd's declared model → the page — in
+`Firmware/web/webd/tests/test_documented_telemetry_reaches_the_page.py`, which parses the two
+sections from the document itself so the map cannot drift into certifying an older revision. What
+it found, in the order it hurt:
+
+- **The selected target had no live identifier.** §50 lists `track_uuid` under the runtime UI
+  state; controld published a *display index*, which is re-numbered whenever the candidate set
+  changes, and the real 128-bit value existed only inside a capture taken after something had
+  already gone wrong — and in that capture the field named `selected_uuid` was holding the display
+  index. An investigation artifact that mislabels an identifier is worse than one missing it: the
+  reader searches for a track that never existed. The number is now called `selected_display_index`
+  and the identifier travels beside it.
+- **Identifiers cross as text, not as numbers, and that is a correctness rule.** A track uuid's
+  high half is a session nonce drawn from the whole 64-bit range (vision/track_manager.py) and the
+  browser parses JSON into doubles, exact to 2^53. Emitted as a number it is right every time the
+  nonce happens to be small — which is every case anyone thinks to test — and silently rounded on a
+  real session, at the precision where two tracks stop being the same track. `selected_uuid` and
+  the per-track `uuid` are now text at every layer, with a C++ test using a nonce above 2^53 so the
+  rounding cannot hide, and a page-side guard against coercing one numerically. My own first draft
+  of that test asserted the wrong decimal for the constant, which is the same mistake in another
+  form: a twenty-digit number is not something to transcribe, it is something to compare as text.
+- **Three fields §50 promises had never been on screen** — the followed target's confidence, how
+  stale its last real measurement is, and how long the aim has been running on prediction; and all
+  four of the AUTO_ROAM fields, so a bounded sweep looked exactly like a stall. The guard requires
+  `page=True` for anything an operator is owed, which is what turned these up: there is now a
+  `following 84% · seen 40 ms ago · predicted 60 ms` line and a
+  `sweep → waypoint 41.2° 62% of region` line.
+- **Four documented fields are recorded as absent, and checked to still be absent**: §78's predicted
+  LOS, §78's roam boundary margin, §78's association timing, and §50's manual frame — the last of
+  these because §110 MANUAL/7 makes the Level frame conditional on an IMU this station does not
+  have. Each carries a reason, and closing one has to break the guard, because that is the only
+  mechanism by which a known hole stays known.
+
+Cycle cost is unchanged by all of it — the fields are filled at the publish rate, not per control
+cycle, and re-measured after the change: p50 1.3–2.2 µs, p99 1.5–2.7 µs across all six conditions,
+zero cycles over the 5 ms period or the 2 ms grace, indistinguishable from the previous run.
+
+Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 276 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured

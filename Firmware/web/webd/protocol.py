@@ -144,6 +144,12 @@ class Telemetry:
     manual_profile: str = ""
     # §50's remaining fields. See the note on `tracks`: an undeclared field here does not
     # raise, it just stops arriving.
+    # §50's `track_uuid`, live. Text, deliberately: the high half of a track identifier is a
+    # 64-bit session nonce and JSON numbers are doubles here, so a uuid carried as a number
+    # survives only while the nonce is small — it works in every test anyone thinks of and
+    # rounds on a real session, at the precision where two tracks stop being the same track.
+    selected_uuid_valid: bool = False
+    selected_uuid: str = ""
     selection_last_seen_age_ms: int = -1
     prediction_age_ms: int = -1
     roam_pattern: str = ""

@@ -75,6 +75,59 @@ telemetry::TelemetrySnapshot sample_snapshot() {
   return s;
 }
 
+TEST(WebServer, ATrackIdentifierCrossesTheWireAsTextNotAsARoundNumber) {
+  // §50's `track_uuid` and §78's "selected UUID". Two separate hazards in one field: the
+  // identifier is 128 bits with the high half drawn from the whole 64-bit range, and every
+  // consumer on the other end of this socket parses JSON into a language whose number is a
+  // double, exact to 2^53. Emitted as a number it survives only when the nonce happens to be
+  // small — which is every bit as bad as it sounds, because it works in every test anyone thinks
+  // to write and fails on a real session, silently, at the precision where two tracks differ.
+  telemetry::TelemetrySnapshot bare;
+  EXPECT_FALSE(bare.selected_uuid_valid);
+  EXPECT_STREQ("", bare.selected_uuid_text);  // absence is empty text, not "0:0" (§72)
+
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_uuid.sock";
+  cfg.telemetry_hz = 50;
+  WebServer server(cfg, [] { return telemetry::TelemetrySnapshot{}; },
+                   [](const std::string&, const std::string&) {
+                     CommandResult r;
+                     r.ok = true;
+                     return r;
+                   });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+  int cfd = connect_client(cfg.socket_path);
+  std::string msg;
+  ASSERT_TRUE(read_message(cfd, msg));
+  EXPECT_NE(msg.find("\"selected_uuid_valid\":false"), std::string::npos);
+  EXPECT_NE(msg.find("\"selected_uuid\":\"\""), std::string::npos)
+      << "with nobody selected the page must be handed nothing, not an identifier that looks "
+         "like a real track from a previous session";
+  ::close(cfd);
+  server.stop();
+
+  telemetry::TelemetrySnapshot filled;
+  filled.selected_uuid_valid = true;
+  telemetry::format_uuid_text(filled.selected_uuid_text, 0x9E3779B97F4A7C15ull, 31);
+  WebServer::Config cfg2;
+  cfg2.socket_path = "/tmp/ota_web_test_uuid2.sock";
+  cfg2.telemetry_hz = 50;
+  WebServer server2(cfg2, [&filled] { return filled; },
+                    [](const std::string&, const std::string&) {
+                      CommandResult r;
+                      r.ok = true;
+                      return r;
+                    });
+  ASSERT_TRUE(server2.start(err)) << err;
+  cfd = connect_client(cfg2.socket_path);
+  ASSERT_TRUE(read_message(cfd, msg));
+  EXPECT_NE(msg.find("\"selected_uuid\":\"11400714819323198485:31\""), std::string::npos)
+      << "the identifier reached the wire as something other than the exact text of both halves";
+  ::close(cfd);
+  server2.stop();
+}
+
 }  // namespace
 
 TEST(WebServer, PublishesTelemetryJson) {

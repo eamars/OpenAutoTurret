@@ -117,6 +117,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="row"><span class="k">q pitch</span><span id="qp">—</span></div>
     <div class="row"><span class="k">q ref pitch</span><span id="qrp">—</span></div>
     <div class="row"><span class="k">q asked pitch</span><span id="qip">—</span></div>
+    <div class="row"><span class="k">roam</span><span id="roam">—</span></div>
+    <div class="row"><span class="k">following</span><span id="follow">—</span></div>
     <div class="row"><span class="k">yaw travel</span><span id="sly">—</span></div>
     <div class="row"><span class="k">pitch travel</span><span id="slp">—</span></div>
     <div class="row"><span class="k">v pitch</span><span id="vp">—</span></div>
@@ -458,6 +460,29 @@ function render(t) {
   $("slp").className = slNear(t.soft_limits_valid, t.soft_limit_distance_pitch_rad)
     ? "warn" : "";
 
+  // §50's AUTO_ROAM block and the confidence half of target_selection, as one line each.
+  // The sweep line exists because a bounded sweep looks identical to a stall from the outside:
+  // without pattern, direction and waypoint, an operator watching a turret that has paused at an
+  // end of its region cannot tell planned turnaround from a fault.
+  const roaming = t.operating_mode === "AUTO_ROAM";
+  $("roam").textContent = !roaming
+    ? "not in AUTO_ROAM"
+    : (t.roam_pattern || "unknown pattern") +
+      " " + (Number(t.roam_sweep_direction) < 0 ? "\u2190" : "\u2192") +
+      "  waypoint " + rad(t.roam_target_yaw_rad) +
+      "  " + Math.round((Number(t.roam_progress) || 0) * 100) + "% of region";
+
+  // The follow line is where "it is still tracking" stops being a colour and becomes a number:
+  // confidence, how stale the last real measurement is, and how long the aim has been running on
+  // prediction. -1 on any of them means there is no value, which is why none of them are drawn
+  // as 0 (§72, and the reason this file has four guards of this shape).
+  const conf = Number(t.selected_confidence), seen = Number(t.selection_last_seen_age_ms);
+  const pred = Number(t.prediction_age_ms);
+  $("follow").textContent = !isFinite(conf) || conf < 0
+    ? "no confidence value yet"
+    : Math.round(conf * 100) + "%  ·  seen " + (seen < 0 ? "never" : seen + " ms ago") +
+      "  ·  predicted " + (pred < 0 ? "n/a" : pred + " ms");
+
   const calib = t.installation_calibrated ? "calibrated" : "NOT calibrated";
   badge($("calib"), calib, t.installation_calibrated ? "ok" : "warn");
   $("calib-src").textContent = t.installation_source;
@@ -528,7 +553,12 @@ function render(t) {
         b.textContent = (tr.label || ("#" + tr.display_index)) + " " +
           Math.round((tr.confidence || 0) * 100) + "%" + (tr.selected ? " \u2713" : "");
         b.disabled = !v3 || !tr.selectable || stale;
+        // The identifier goes in the tooltip, not the label. §10's split stands — the operator
+        // acts on "Person #2", the uuid is what a capture and an investigation agree on — and it
+        // arrives as text and is used as text, because arithmetic on it in JavaScript rounds
+        // away the half that distinguishes this session's track 22 from last session's.
         b.title = tr.class_name + " / " + tr.state +
+          (tr.uuid ? " / " + tr.uuid : "") +
           (tr.selectable ? "" : " (not selectable, \u00a78)") +
           (stale ? " \u2014 list is " + age + " ms old" : "");
         b.addEventListener("click", () => {
@@ -536,6 +566,15 @@ function render(t) {
         });
         list.appendChild(b);
       });
+      // §50/§78: which track the machine committed to, not merely which label it was wearing.
+      // The display index is re-numbered whenever the candidate set changes; when somebody
+      // reports "it followed #1", the uuid is the only thing a capture can be searched with.
+      if (t.selected_uuid_valid && t.selected_uuid) {
+        const who = document.createElement("span");
+        who.className = "muted";
+        who.textContent = "  \u00b7 following " + t.selected_uuid;
+        list.appendChild(who);
+      }
       if (stale) {
         const note = document.createElement("span");
         note.className = "err";

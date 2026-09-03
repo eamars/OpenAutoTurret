@@ -158,7 +158,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
                      ",\"q_cmd_rad\":" + js(b.q_cmd) + ",\"q_ref_rad\":" + js(b.q_ref) +
                      ",\"q_actual_rad\":" + js(b.q_actual) +
                      ",\"v_actual_rad_s\":" + js(b.v_actual) +
-                     ",\"selected_uuid\":" + std::to_string(b.selected_uuid) +
+                     ",\"selected_display_index\":" + std::to_string(b.selected_display_index) +
+                     ",\"selected_uuid\":\"" + json_escape(b.selected_uuid_text) + "\""
                      ",\"selected_label\":\"" + json_escape(b.selected_label) + "\"" +
                      ",\"selection_visibility\":\"" + json_escape(b.selection_visibility) +
                      "\"" +
@@ -171,7 +172,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
                  for (int i = 0; i < b.candidate_count; ++i) {
                    const telemetry::TrackListing& t = b.candidates[i];
                    if (i) c += ",";
-                   c += "{\"uuid\":" + std::to_string(t.uuid_lo) +
+                   c += "{\"uuid\":\"" + json_escape(t.uuid_text) + "\"" +
                         ",\"label\":\"" + json_escape(t.label) + "\"" +
                         ",\"state\":\"" + json_escape(t.state) + "\"" +
                         ",\"confidence\":" + std::to_string(t.confidence) +
@@ -210,7 +211,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
           for (int i = 0; i < s.track_count; ++i) {
             const telemetry::TrackListing& t = s.tracks[i];
             if (i) out += ",";
-            out += "{\"uuid\":" + std::to_string(t.uuid_lo) +
+            out += "{\"uuid\":\"" + json_escape(t.uuid_text) + "\"" +
                    ",\"display_index\":" + std::to_string(t.display_index) +
                    ",\"label\":\"" + json_escape(t.label) + "\"" +
                    ",\"class_name\":\"" + json_escape(t.class_name) + "\"" +
@@ -249,6 +250,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      // reads fine there because both numbers describe one captured event; for the bounds of an
      // axis, the reader is drawing one axis at a time, and Pitch-is-0 has been the thing two
      // people remembered differently at least once.
+     << ",\"selected_uuid_valid\":" << (s.selected_uuid_valid ? "true" : "false")
+     << ",\"selected_uuid\":\"" << json_escape(s.selected_uuid_text) << "\""
      << ",\"soft_limits_valid\":" << (s.soft_limits_valid ? "true" : "false")
      << ",\"q_soft_min_pitch_rad\":" << s.q_soft_min_pitch_rad
      << ",\"q_soft_max_pitch_rad\":" << s.q_soft_max_pitch_rad
