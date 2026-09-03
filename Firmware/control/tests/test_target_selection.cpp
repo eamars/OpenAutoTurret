@@ -215,6 +215,37 @@ TEST_F(SelectionTest, StaleAndRetiredSelectionsAreRefusedNotHonoured) {
   EXPECT_NE(r.reason.find("too long ago"), std::string::npos) << r.reason;
 }
 
+TEST_F(SelectionTest, ASilentProducerAgesTheWholeListAndNotJustTheSelectedTarget) {
+  // The station's real failure, written down as a test. The detector process died, so
+  // observe() was never called again — and every staleness rule in this manager lives INSIDE
+  // observe(), so nothing recomputed anything. Four people stayed on the candidate list, two
+  // of them still CONFIRMED, `select_target` accepted one of them, and the page reported
+  // track_list_age_ms climbing past four minutes while the daemon that published it was
+  // happily taking the selection. Note that the test above reaches staleness by feeding 400
+  // EMPTY frames, which keeps the producer alive; that is the case that already worked.
+  observe(b_.frame({{kOne, 1}}));
+  ASSERT_TRUE(mgr_.select_by_display_index(1, b_.now).ok);
+
+  const TimeNs four_seconds_later = b_.now + 4'000'000'000;  // and nothing was heard from
+
+  auto r = mgr_.select_by_display_index(1, four_seconds_later);
+  EXPECT_FALSE(r.ok) << "a pick out of a list nobody has refreshed in 4 s must be refused";
+  EXPECT_NE(r.reason.find("4000 ms old"), std::string::npos)
+      << "a refusal that will not say how old the list is, is a shrug: " << r.reason;
+
+  auto r2 = mgr_.select_track(kOne, four_seconds_later);
+  EXPECT_FALSE(r2.ok) << "knowing the identifier must not be a way around the age limit";
+
+  EXPECT_EQ(mgr_.effective_visibility(four_seconds_later), tracks::Visibility::Stale)
+      << "the page must not go on saying VISIBLE for something unseen since before the crash";
+
+  // Freshen the list and the very same selection is fine again: the refusal is about the
+  // silence, not about the target. Without this half the test only proves a refusal exists.
+  observe(b_.frame({{kOne, 1}}));
+  EXPECT_TRUE(mgr_.select_by_display_index(1, b_.now).ok)
+      << mgr_.select_by_display_index(1, b_.now).reason;
+}
+
 TEST_F(SelectionTest, SelectionPersistsAcrossModeChanges) {
   // §12, the rule the whole design turns on, and the easiest thing to break by
   // accident: a ModeManager that "helpfully" clears state when the mode changes would

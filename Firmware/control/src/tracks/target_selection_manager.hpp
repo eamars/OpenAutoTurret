@@ -159,6 +159,13 @@ struct TargetSelectionConfig {
     // retired track and having the turret swing toward where it used to be is worse
     // than a refusal.
     int64_t recently_known_ms = 1500;
+
+    // How old the candidate LIST may be and still be pointed at. This is not in the config
+    // file — `recently_known_ms` above isn't either, so this follows its neighbour rather than
+    // inventing a plumbing path for one value. The number is §21's reacquisition window: the
+    // station already refuses to keep a *target* alive this long without measurements, so it
+    // must not accept a whole *list* that is older than the thing it just gave up on.
+    int64_t candidate_list_max_age_ms = 3000;
     int recently_known_slots = 16;
     // §22's reacquisition window, in the same units the vision side uses.
     int64_t reacquire_ms = 2000;
@@ -190,6 +197,41 @@ class TargetSelectionManager {
   const TrackSet& last_set() const { return last_set_; }
   bool have_set() const { return have_set_; }
 
+  // Age of the most recent TrackSet, in ms, measured against `now`.
+  //
+  // Why this is a query and not a field: every other staleness rule in this manager is
+  // evaluated inside observe(), i.e. when a new set arrives. A producer that stops publishing
+  // never calls observe(), so nothing ever recomputes anything and the last list received is
+  // "current" forever. That is not theoretical: on the station the detector process died, the
+  // candidate list kept showing four people for four minutes, and `select_target` accepted one
+  // of them. Anything whose clock only advances when it is spoken to will report the world as
+  // it last heard it.
+  int64_t list_age_ms(TimeNs now) const {
+    if (!have_set_ || last_set_ns_ == 0) return -1;
+    if (now < last_set_ns_) return 0;  // clock moved backwards; treat as fresh, never negative
+    return static_cast<int64_t>((now - last_set_ns_) / 1000000);
+  }
+
+  // Empty when the list is fresh enough to point at; otherwise the refusal, with the age in
+  // it — a refusal that does not carry its number is a shrug (§52).
+  std::string list_too_stale(TimeNs now) const {
+    const int64_t age = list_age_ms(now);
+    if (age < 0 || age <= cfg_.candidate_list_max_age_ms) return {};
+    return "the candidate list is " + std::to_string(age) +
+           " ms old and nothing has been seen since, so there is nothing visible to select "
+           "(the limit is " + std::to_string(cfg_.candidate_list_max_age_ms) +
+           " ms) — start the detector again, or roam until something is seen";
+  }
+
+  // Visibility as of `now`, which is not the same as visibility as of the last frame. Without
+  // this the page keeps saying VISIBLE for a target nobody has observed since the producer
+  // went quiet, because the value was true once and nothing was ever asked to revisit it.
+  Visibility effective_visibility(TimeNs now) const {
+    if (!sel_.has_selection) return Visibility::None;
+    if (!list_too_stale(now).empty()) return Visibility::Stale;
+    return sel_.visibility_state;
+  }
+
   // §14. The operator picks a *label*, because that is what §10 puts on the screen;
   // the uuid is resolved here, so the number the human reads and the identity the
   // machine holds cannot drift apart without this function noticing.
@@ -197,6 +239,9 @@ class TargetSelectionManager {
     if (!have_set_) {
       return {false, false, "no vision data has reached controld yet"};
     }
+    // "Is there any vision data" is the wrong question; "is it current" is the right one.
+    // Answering only the first is how a list four minutes old stayed selectable.
+    if (std::string why = list_too_stale(now); !why.empty()) return {false, false, why};
     const Track* found = nullptr;
     for (int i = 0; i < last_set_.count; ++i) {
       if (last_set_.tracks[i].display_index == index) {
@@ -218,6 +263,15 @@ class TargetSelectionManager {
     if (!uuid.valid()) return {false, false, "target id must not be zero"};
 
     const Track* t = find_in_last(uuid);
+    if (t != nullptr) {
+      // The list-level age check goes on the in-list path ONLY. A uuid that has already left
+      // the list has its own, more specific story ("that target was last seen too long ago"),
+      // and a refusal that could have named the target but names the list instead is a worse
+      // sentence about the same decision. Ordering is not decoration here: the first draft of
+      // this gate ran ahead of that branch and replaced the specific reason with the general
+      // one, which is the kind of thing an operator has to work around.
+      if (std::string why = list_too_stale(now); !why.empty()) return {false, false, why};
+    }
     if (t == nullptr) {
       const Recent* r = recent_find(uuid);
       if (r == nullptr) return {false, false, "unknown target id"};
@@ -298,6 +352,8 @@ class TargetSelectionManager {
     last_arrival_ns_ = now;
     last_sensor_ns_ = set.sensor_timestamp_ns;
     have_set_ = true;
+    last_set_ns_ = now;  // see list_age_ms(): the point is that this is the LAST time it
+                         // happened to be true, which is a fact only a query can use later.
 
     for (int i = 0; i < set.count; ++i) remember(set.tracks[i], now);
 
@@ -505,6 +561,7 @@ class TargetSelectionManager {
   TargetSelection sel_;
   TrackSet last_set_{};
   bool have_set_ = false;
+  TimeNs last_set_ns_ = 0;  // when a TrackSet last actually arrived, not when the world last was
   TimeNs last_arrival_ns_ = 0;
   TimeNs last_sensor_ns_ = 0;
   Recent recent_[16]{};

@@ -1240,9 +1240,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       snap.selected_display_index = sel.has_selection ? sel.selected_display_index : 0;
       snap.selected_descriptor =
           sel.has_selection ? std::string(sel.selected_descriptor) : std::string();
+      // The loop already knew: `last_set_receive_ns_` is what computes track_list_age_ms two
+    // hundred lines above, which is why the page could report 240 s of staleness while this
+    // same daemon accepted a pick from that list. The age lived in one object, the decision in
+    // another, and nothing passed it across.
+    // Asked as of now, not as of the last frame: a selection made while the detector was
+      // alive must stop claiming VISIBLE the moment the list it came from ages out.
       snap.selection_visibility =
-          tracks::visibility_name(sel.has_selection ? sel.visibility_state
-                                                   : tracks::Visibility::None);
+          tracks::visibility_name(selection_.effective_visibility(now_ns));
       snap.selection_ambiguous = sel.has_selection && sel.ambiguous_reacquisition;
       // §79 with §21: refusing to choose is a decision, recorded from the same value the
       // operator is shown, so the feed and the badge cannot disagree about whether the
