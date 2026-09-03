@@ -459,12 +459,41 @@ the code; `BlackBox.AScenePreservedBeforeAnythingWasPublishedStillSaysWhatModeIt
 asserts it, including that the record reaches the published view on the next cycle rather
 than only existing privately.
 
+**§110 now has a place to be answered, and it is not the document.** `tools/v3_acceptance.py`
+parses the checklist out of the architecture document — so the report can never certify a copy
+that drifted from the list — and records evidence in
+`Firmware/docs/acceptance/v3_acceptance_log.json`. The checkboxes in the document are
+deliberately **not** read for status: a box in a markdown file can be ticked by anyone with a
+text editor, and the person most likely to tick one optimistically is the one who wrote the
+code and wants it finished. An item reaches `passed` only with a named human, the station it
+was observed on, and a sentence about what was seen; `--method simulation` cannot produce
+`passed` under any argument, it produces `simulated`, which is what it is; an entry records the
+item's wording, so if §110 is edited later the report flags that entry rather than carrying the
+stamp forward against text that did not exist when it was accepted. `attach` reads one
+`/api/state` snapshot as evidence and refuses any other URL — there is a test that the tool
+never addresses the command endpoint, because an acceptance runner that can move the turret is
+not a runner, it is an operator, and the operator in this project is a person standing where the
+arms cannot reach them.
+
+Where that leaves §110 today, from `report`: **30 items — 0 accepted on hardware by a named
+person, 19 shown by simulation only, 11 untried.** The 11 untried are worth reading as work,
+not as paperwork, because most are gaps in *simulation* coverage too: whether detections keep
+arriving while roaming (AUTO_ROAM/4), whether a selection persists across a roam stretch
+(/5), whether roaming refrains from pursuing a selected target by default (/6 — that one may be
+an implementation gap rather than a test gap, and needs reading the code before writing the
+test), whether switching into AUTO_TRACK acquires an already-selected visible target (/7), the
+FINE/NORMAL/FAST profiles as behaviour rather than as telemetry strings (MANUAL/3), travel
+limits under manual (MANUAL/5), target-unreachable and target-switch constraints
+(AUTO_TRACK/9, /10), turnaround constraints (AUTO_ROAM/2), that no UI or vision process can
+write motors (COMMON/4 — statically checkable and worth a guard), and the IMU-conditional frame
+(MANUAL/7, which waits on hardware that may never arrive).
+
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 260 pytest green, and
+Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 267 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured

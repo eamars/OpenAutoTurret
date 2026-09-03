@@ -1,0 +1,195 @@
+{
+  "entries": {
+    "AUTO_TRACK/1": {
+      "item_text": "User can select a visible target.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "BothPeopleAreListedAndNamingOneMarksIt",
+      "station": "",
+      "evidence": "the candidate list carries both people and the click that names one is accepted with a reason on the page",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/2": {
+      "item_text": "Selected target has persistent runtime identity.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "TwoEquallyPlausiblePeopleAreNotFollowed",
+      "station": "",
+      "evidence": "selection is held by UUID across frames and mode changes; display indices are reused, identifiers are not",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/3": {
+      "item_text": "AUTO_TRACK automatically starts tracking selected target when visible.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ARecordedSessionReproducesSelectionLossAndReturn",
+      "station": "",
+      "evidence": "a replayed session goes select -> ACQUIRE -> TRACKING without any further command",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/4": {
+      "item_text": "No selected target => hold.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ARecordedSessionReproducesSelectionLossAndReturn",
+      "station": "",
+      "evidence": "clear_target leaves the loop at WAIT_TARGET with intent=hold and no selection",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/5": {
+      "item_text": "Selected target not visible => hold after bounded coast.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ARecordedSessionReproducesSelectionLossAndReturn",
+      "station": "",
+      "evidence": "a lost target runs COASTING then LOST_HOLD then WAIT_TARGET on the configured timings",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/6": {
+      "item_text": "Brief dropout => prediction/coast.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ARecordedSessionReproducesSelectionLossAndReturn",
+      "station": "",
+      "evidence": "during a dropout the loop holds the last line of sight rather than inventing frames (§58)",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/7": {
+      "item_text": "Confident reacquisition => automatic resume.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "OneClearCandidateIsFollowedAgainWithoutAClick",
+      "station": "",
+      "evidence": "one clear candidate inside the reacquisition window is followed again without a new selection",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_TRACK/8": {
+      "item_text": "Ambiguous reacquisition does not silently choose another target.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "TwoEquallyPlausiblePeopleAreNotFollowed",
+      "station": "",
+      "evidence": "two plausible candidates inside the window produce no target stealing and an event naming why",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_ROAM/1": {
+      "item_text": "Controller scans a configured safe envelope autonomously.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "AutoRoamSweepsAndReportsWhereItIsGoing",
+      "station": "",
+      "evidence": "the sweep runs inside the named region and telemetry says which end it is heading for",
+      "at": "2026-09-03T20:34:52+12:00"
+    },
+    "AUTO_ROAM/3": {
+      "item_text": "Roam region remains inside v1 safe envelope.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ctest V3Config.ARegionOutsideTheSafeTravelIsRefusedWithNumbers",
+      "station": "",
+      "evidence": "a roam region that crosses the soft travel is refused at load, and the refusal prints the region edge and the soft limit it broke",
+      "at": "2026-09-03T20:35:53+12:00"
+    },
+    "MANUAL/1": {
+      "item_text": "Dead-man jog works.",
+      "group": "MANUAL",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ALeasedJogMovesTheTurretAndStopsWhenTheBrowserGoesQuiet",
+      "station": "",
+      "evidence": "a leased jog moves the turret and expires when keepalives stop arriving",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "MANUAL/2": {
+      "item_text": "Lost browser/keepalive stops jog.",
+      "group": "MANUAL",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ALeasedJogMovesTheTurretAndStopsWhenTheBrowserGoesQuiet",
+      "station": "",
+      "evidence": "the same test ends by dropping the keepalive and asserting motion stops",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "MANUAL/4": {
+      "item_text": "Step move works.",
+      "group": "MANUAL",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "AStepIsAFiniteMoveThatStops",
+      "station": "",
+      "evidence": "a step is a finite move that stops at the commanded offset",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "MANUAL/6": {
+      "item_text": "Requested/reference/actual motion is visible to operator.",
+      "group": "MANUAL",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "test_the_requested_pose_is_not_rendered_as_zero_when_there_is_none",
+      "station": "",
+      "evidence": "asked / reference / actual are published and drawn side by side, with no pose rendered as zero",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "COMMON/1": {
+      "item_text": "Exactly one normal operating mode owns motion at a time.",
+      "group": "COMMON",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "NoImpossibleStepAndNoIntentSurvivesItsMode",
+      "station": "",
+      "evidence": "across mode switches no intent from the previous mode survives and no impossible joint step appears",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "COMMON/2": {
+      "item_text": "STOP MOTION always results in MANUAL/HOLD.",
+      "group": "COMMON",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "StopMotionEndsTheSweepAndLeavesItInManualHold",
+      "station": "",
+      "evidence": "stop motion ends the sweep and leaves the loop in MANUAL holding",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "COMMON/3": {
+      "item_text": "Safety/homing/park states override all operating modes.",
+      "group": "COMMON",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "AnUnhomedStationRefusesToRoamAndSaysWhy",
+      "station": "",
+      "evidence": "the homing gate refuses a mode that would move an unhomed station, with a reason",
+      "at": "2026-09-03T20:34:53+12:00"
+    },
+    "COMMON/6": {
+      "item_text": "All mode changes and target changes are logged.",
+      "group": "COMMON",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ctest SessionReplay.ARecordedSessionReproducesSelectionLossAndReturn + test_control_loop mode-switch events",
+      "station": "",
+      "evidence": "mode changes, selection changes and the reacquisition refusal are emitted as §79 events and asserted in the replayed transcript",
+      "at": "2026-09-03T20:35:53+12:00"
+    },
+    "COMMON/5": {
+      "item_text": "Existing v1 control-loop timing remains within accepted limits.",
+      "group": "COMMON",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ctest cycle_cost_gate (tools/cycle_cost.cpp)",
+      "station": "",
+      "evidence": "every v3 mode measures p99 <= 4 us in simulation against a 5000 us period; the accepted limits are the pre-v3 measurement on the Pi, which v3 has not yet been held against",
+      "at": "2026-09-03T20:36:16+12:00"
+    }
+  },
+  "doc_sha256": "2c572e530706196dc122fda869a6a337acdef3b65c71b3799dbf4b236aa35202"
+}
