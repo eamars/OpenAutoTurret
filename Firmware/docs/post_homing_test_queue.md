@@ -1158,6 +1158,57 @@ would not be benign. Fix: take mode entry off the loop (setup thread, or turn th
 two fixed waits into a per-cycle state machine — they are only waits) and give the
 supervisor a bounded expected-gap token so a planned pause is not a fault.
 
+**(e) 2026-09-03 12:05 — roaming (§36) on real hardware, from a cold start with no
+target.** Same supervision caveat as (d): the operator watched over the LAN, nobody
+was at the station, and a sweep covers 88° of workspace — this is recorded as
+observed behaviour, not as a signed-off P-item.
+
+Two defects had to be fixed first, and the operator's objection is what surfaced
+them. My plan was to inject a synthetic target to reach the sweep; they pointed out
+that after boot there is no guarantee a target ever appears — which is the case the
+sweep exists for. Checking that assumption found:
+
+1. `TrackingStateMachine` reached SEARCH only through TARGET_LOST, and TARGET_LOST
+   requires `has_seen_valid_`. **A station that had never acquired anything could
+   never go looking.** Fixed: after the same grace a lost target gets (`lost_ns`),
+   no-target-yet enters SEARCH; `reset()` re-arms the window; with search not armed
+   nothing changes, and a real target still ends a sweep instantly.
+2. `enable_search` / `disable_search` were validated, answered `ok:true`, and were
+   dropped ("Acknowledge so the UI can proceed"). The only real way to enable
+   search was a config edit plus a restart, so the dashboard reported success for a
+   no-op. Both now act immediately in both directions — `web::validate_command`
+   requiring `search_enabled` for `disable_search` shows the button exists to stop
+   a sweep that is running *now*, which a next-session answer cannot do.
+
+Measured on the turret (`build/probe/real-controld-roam.log`, `sweep-rows.json`):
+
+* `at_ready` 105.9 s after boot → `enable_search` + `start_tracking` with **no
+  vision source of any kind** → `track_state=search` **1.5 s later**.
+* Swept yaw **104.4 .. 193.2°** repeatedly — the configured 45° span centred on the
+  ready yaw, unclipped by the soft limits, as designed.
+* **Actual sweep speed 9.8 °/s on all four legs** (median and max) against the
+  configured search cap of 10 °/s. `lim[i] = min(ref.v_max, envelope)` is honoured.
+* Bounds repeated within **0.4°** across legs (193.2 / 193.2 / 193.2 / 192.8),
+  a repeatability figure of the kind §55 asks for, obtained from the sweep instead
+  of a second homing run.
+* `disable_search` ended the sweep in **0.5 s**, the arm returned to the ready pose
+  (`at_ready=True`, q_yaw 148.7°), `stop_tracking` clean. CAN: 0 error frames,
+  0 TX failures throughout.
+
+**Finding — the dashboard's yaw-speed readout is not the axis speed.** During the
+sweep the telemetry `v_yaw_rad_s` read median 9.6 but **p90 17.2 and max 28.0 °/s**,
+while the position trace — the authority — gives 9.8 °/s on every leg. The axis was
+obedient; the *number on screen* spiked ~2.8x at turnarounds (the drive's velocity
+estimate through a reversal). That is not cosmetic: the operator's instrument
+showing 28 °/s where the arm does 10 both invites a wrong diagnosis and, worse,
+trains them to ignore an overspeed warning that one day will be real. Either derive
+the displayed velocity from the position trace over a short window or carry both
+figures; do not leave one number that is neither.
+
+**Still standing from (d):** the same 28 ~110 ms `SLOW CYCLE` + BRAKE events appear
+in this run too — the CyberGear mode-entry recipe's two 50 ms sleeps still run on
+the control thread. Roaming did not add a new stall profile.
+
 ## P8 — Live closed-loop tracking (Phase 6) `[MOTOR] + [CAMERA]`
 
 Phase 6 is **implemented and integration-tested on SimMotorBackend + synthetic

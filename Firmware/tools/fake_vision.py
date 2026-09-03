@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Synthetic target publisher — a FAKE visiond, for exercising the control path.
 
-Why this exists: the tracking state machine will not enter Search until it has
-seen at least one valid measurement (`tracking_state_machine.hpp`:
-`if (!has_seen_valid_) -> ReadyHold`), so the roaming path cannot be reached with
-no detector at all — and the real detector needs /dev/video1, which webd holds
-while the operator is watching the video feed. Without this tool the options are
-"fight the daemon for the camera" or "wait for a person to walk into frame", and
-neither is a test you can run on demand or reproduce.
+What this is for: the acquire/lose half of the tracking lifecycle needs a target
+on demand — acquire, coast, confidence decay (§35), brake, reacquire after a
+dropout — on a schedule, reproducibly, without a person standing in front of the
+lens and without taking /dev/video1 away from webd while the operator is watching
+the feed.
+
+What this is NOT for, and the correction matters: it was written so the roaming
+path could be reached, on the assumption that SEARCH requires a target first.
+That assumption was wrong, and it was the bug — a station boots with no target
+and there is no guarantee one ever appears, so cold-start roaming had to become
+reachable with nothing in view (§36, tracking_state_machine.hpp). **Do not use
+this tool to test roaming**: feeding a target in first would pass a test of a
+feature that does not work for the only case that matters. Roaming is verified by
+starting tracking with this tool NOT running.
 
 What is real and what is not: this publishes the SAME 58-byte TargetMeasurement
 visiond publishes (§6.1), so everything downstream of the socket — vision ingest,
