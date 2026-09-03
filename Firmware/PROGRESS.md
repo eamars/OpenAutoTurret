@@ -425,3 +425,30 @@ runs with 0 live aim samples and 0% tracking.
 
 55 CTest, 301 pytest green. 04:42 note: no ctest/pytest production code changed this round -
 the changes are in `tools/`. Section 110 unchanged: 30 items, 0 accepted on hardware by a named person.
+
+
+### Addendum, same day: the lead diagnosis is limited by a missing measurement, not by guessing
+
+Adding a second lead measure to S3 - the estimator's published LOS against the true target, separate
+from the executed reference - gave the decisive number: during a 25 deg/s dart,
+`target_az_world_rad` **lags by 1.307 deg** (min -2.213, max -0.764, negative in every sample). At
+25 deg/s that is **52 ms of lag**, while the actuation horizon the controller is configured with is
+40 ms *forward*.
+
+What that proves, and what it does not. `target_az_world_rad` is filled from the estimator's live
+filtered state, so a lag is expected of it and it cannot on its own prove the intent omits the
+prediction. And `q_ref` is the **output of the slew limiter**, so a lead measured there conflates
+"no lead was asked for" with "lead was asked for and the reference could not slew that fast" - which
+is exactly why the same dart showed reference lead near zero while the axis never exceeded 18-20
+deg/s of a permitted 30.
+
+The signal that would settle it - the LOS actually handed to the solver as the AUTO_TRACK intent,
+with the horizon applied - **is not published at all**. So §78's requirement that telemetry show the
+predicted LOS is unmet, §20's `prediction.predicted_anchor_norm` gap is the same hole wearing a
+different name, and the lead clause cannot be closed by tuning, because there is nothing to observe.
+
+Next round, in this order: publish the predicted LOS plus the estimator's azimuth/elevation rates and
+the horizon used (small, no behaviour change), re-run the same S3 dart, and only then decide between
+a too-short horizon, a rate estimate that `beta = 0.3` smoothing has flattened, and the 19-of-30
+deg/s rate ceiling. Tuning lead that cannot be observed would be another number invented to end a
+conversation.

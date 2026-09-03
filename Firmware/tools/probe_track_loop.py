@@ -718,7 +718,15 @@ def main() -> int:
                     az_ref, _el = base_to_los(axis_direction(qry, qrp))
                     # Signed by the direction of travel: positive means the reference is ahead.
                     lead = math.degrees(az_ref - az_t)
+                # A second lead, from the estimator's published LOS rather than the executed
+                # reference. q_ref is the OUTPUT of the slew limiter, so lead measured on it cannot
+                # tell "no lead was asked for" from "lead was asked for and the reference could not
+                # slew that fast". The sign settles it: a filtered estimate lags the truth, a
+                # prediction with a 40 ms horizon leads it.
+                tgt = s.get("target_az_world_rad")
+                lead_tgt = (math.degrees(tgt - az_t) if isinstance(tgt, float) else None)
                 rows.append({"t": t, "phase": phase, "aim_err": aim_err, "lead": lead,
+                             "lead_tgt": lead_tgt,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
                              "track_state": s.get("track_state"), "v_yaw": s["v_yaw_rad_s"],
@@ -763,6 +771,11 @@ def main() -> int:
               % (len(leads), lead_p50, leads[0] if leads else float("nan"),
                  leads[-1] if leads else float("nan"),
                  (100.0 * sum(1 for x in leads if x > 0) / len(leads)) if leads else 0.0))
+        tleads = sorted(r["lead_tgt"] for r in dart_rows if r["lead_tgt"] is not None)
+        print("      estimator-LOS lead (separates 'no lead asked' from 'could not slew'):")
+        print("        n=%d  p50 %+.3f deg  min %+.3f  max %+.3f"
+              % (len(tleads), pct(tleads, .5), tleads[0] if tleads else float("nan"),
+                 tleads[-1] if tleads else float("nan")))
         print("    hold-window aim error: p50 %.1f px / p95 %.1f px (%.3f / %.3f of box height)"
               % (pct(errs, .5), pct(errs, .95), pct(errs, .5) / box_h_px, pct(errs, .95) / box_h_px))
         print("    back inside tolerance at t=%s s after the dart; peak |yaw rate| %.1f deg/s"
