@@ -725,6 +725,14 @@ def main() -> int:
                 # prediction with a 40 ms horizon leads it.
                 tgt = s.get("target_az_world_rad")
                 lead_tgt = (math.degrees(tgt - az_t) if isinstance(tgt, float) else None)
+                # The third lead, which is the one that localises the fault. The other two answer "where
+                # is the truth" and "where did the estimator think it was"; neither says where the
+                # REFERENCE sits relative to what the controller itself believed. Recording the reference
+                # against the ESTIMATE separates an axis that lags its own setpoint from an estimator
+                # that trails the truth, and it is the only pair of these three that is unaffected by a
+                # boresight error, because both of its terms come through the same mount transform.
+                lead_ref_vs_est = (math.degrees(az_ref - tgt)
+                                   if isinstance(tgt, float) and isinstance(qry, float) else None)
                 # The intent's own input, now that controld publishes it: predicted LOS at
                 # actuation, against the truth. This is the number that says whether lead was
                 # ASKED FOR, independent of whether the axis could slew to it.
@@ -740,6 +748,7 @@ def main() -> int:
                              "ref_v": rv, "ref_a": ra, "q_ref": s.get("q_ref_yaw_rad"),
                              "vs": s.get("intent_velocity_scale"),
                              "lead_tgt": lead_tgt, "lead_pred": lead_pred,
+                             "lead_ref_est": lead_ref_vs_est,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
                              "track_state": s.get("track_state"), "v_yaw": s["v_yaw_rad_s"],

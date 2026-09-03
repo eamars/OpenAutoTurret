@@ -1652,3 +1652,33 @@ box heights, inside the 1/3 tolerance, as locked.
 No code changed. **437 pytest / 57 CTest** stand. Station untouched in MANUAL/HOLD, homed and ready.
 **§110: 0 items accepted on hardware by a named person; C3 remains FAILED and now has a stated reason why the
 recorded number may be the wrong measure — which is not the same as it passing.**
+
+## 2026-09-04, 18:5x — round 24: C3 is *already* an LOS measurement — my round-23 criteria question did not exist (3rd wrong explanation of this metric)
+
+The computing line: `az_ref = base_to_los(axis_direction(q_ref_yaw, q_ref_pitch))`,
+`lead = degrees(az_ref - az_t)` — the reference is converted through the same mount transform as everything
+else, so **C3's −8.856° is already a camera LOS azimuth**, same space as the estimator and predicted leads
+reported beside it. **No joint-vs-LOS scoring question. No criteria change to request.** C3 fails as measured.
+
+**Three explanations of this one metric, three wrong, all mine:** (1) the "0.22 authority derate mid-dart"
+carried since round 12 — unreachable from the confidence bands; (2) the 300 ms handover ramp — refuted by 0 of
+149 reference changes exceeding the ceiling in force; (3) today's space claim — refuted by **one line of code**.
+Same habit each time: **characterising a metric from a summary of it instead of from the expression that
+computes it** (and twice reporting non-existence from a rigid grep). Rule left behind: open the expression
+before saying what a number means.
+
+**Same-space picture:** reference −8.86° / estimator −1.53° / predicted −0.50°. The gap between the first and
+the other two is **real and unexplained**; it is not a rate ceiling and not a units question. To localise it,
+the probe now records a fourth per-sample quantity — reference against the **estimator's own estimate**
+(`az_ref − target_az_world_rad`): axis lag measured against what the controller *believed*, and the one lead
+term where a **boresight offset largely cancels** (both terms ride the same mount transform) — which matters
+because boresight is exactly what isn't commissioned. It separates "servo lags its setpoint" from "estimator
+trails the world", and can be read before (c) unblocks.
+
+**Not finished, plainly:** the printed summary line for that column. Three heredoc attempts failed on quoting /
+indentation, and **a probe that commands motors is a bad place to guess whitespace** — value recorded per sample
+and named for what it is; the print waits for an edit with the file open. Tool compiles, runs, prints usage;
+**437 pytest** unchanged; no control code touched, so **57 CTest** stand from the last verified build.
+
+Station untouched: homed, ready, MANUAL/HOLD, synthetic vision. Nothing here moves the turret; nothing here is
+acceptance evidence. **§110: 0 items accepted on hardware by a named person. C3 still FAILS.**
