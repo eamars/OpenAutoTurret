@@ -63,6 +63,21 @@ struct CameraModel {
     u = intrinsics.cx + (r_cam.x / r_cam.z) * intrinsics.fx;
     v = intrinsics.cy + (r_cam.y / r_cam.z) * intrinsics.fy;
   }
+
+  // Camera-frame line-of-sight angles of a camera-space ray: yaw positive to the right, pitch
+  // positive upward, both zero along the optical axis. This is the exact inverse of the pixel map
+  // above - tan(yaw) is (u-cx)/fx and tan(-pitch) is (v-cy)/fy, because the image's y axis grows
+  // downward while elevation grows upward - and it is written next to that map on purpose: two
+  // names for one angle, defined in two places, is a sign error that survives every review and
+  // shows up on the operator's screen as a prediction cue on the wrong side of the target.
+  //
+  // A ray behind the camera (z <= 0) yields |yaw| > 90 deg rather than an error, which is the
+  // honest answer for an angle function but useless as a heading. Callers that must not publish
+  // astern rays guard on z, as the telemetry fill does.
+  static void ray_to_los_angles(const Vec3& r_cam, double& yaw_rad, double& pitch_rad) {
+    yaw_rad = std::atan2(r_cam.x, r_cam.z);
+    pitch_rad = std::atan2(-r_cam.y, r_cam.z);
+  }
 };
 
 }  // namespace geo

@@ -209,6 +209,25 @@ struct TelemetrySnapshot {
   double predicted_target_el_world_rad = 0.0;
   bool predicted_target_los_valid = false;
   int64_t prediction_horizon_ms = 0;
+
+  // §20 prediction block. This is NOT a second prediction: it is the same ray that
+  // predicted_target_*_world_rad and aim_point_* already describe - the line of sight the axis will
+  // be pointing along once the loop's measured actuation delay has elapsed - published under the
+  // names the data contract uses, in the frame the contract asks for (camera LOS rather than world
+  // azimuth/elevation) and the units it asks for (degrees, normalised image coordinates). One
+  // computation under several names; a second estimator would be free to disagree, which is the
+  // only new failure mode the split would add.
+  //
+  // `prediction_valid` means the ray exists and points in front of the camera.
+  // `prediction_anchor_*_norm` additionally means it lands inside the frame. The two are separate
+  // because a prediction that has left the frame is still a real prediction - the edge cue needs it
+  // - but it is not a point that can be painted on the picture.
+  bool prediction_valid = false;
+  double prediction_los_yaw_rad = 0.0;    // camera frame, + right, 0 = optical axis
+  double prediction_los_pitch_rad = 0.0;  // camera frame, + up
+  double prediction_anchor_x_norm = 0.0;
+  double prediction_anchor_y_norm = 0.0;
+  bool prediction_anchor_in_frame = false;
   double target_az_rate_world_rad_s = 0.0;
   double target_el_rate_world_rad_s = 0.0;
 

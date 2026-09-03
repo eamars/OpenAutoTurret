@@ -150,6 +150,17 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"predicted_target_el_world_rad\":" << s.predicted_target_el_world_rad
      << ",\"predicted_target_los_valid\":" << (s.predicted_target_los_valid ? "true" : "false")
      << ",\"prediction_horizon_ms\":" << s.prediction_horizon_ms
+     // §20's `prediction.*`. Assembled from the same snapshot fields the flat aim_point_ and
+     // predicted_target_ fields use, not recomputed: the nested block exists because that is how the
+     // contract names these values, and two spellings of one number are only safe when there is
+     // exactly one number behind them.
+     << ",\"prediction\":{\"valid\":" << (s.prediction_valid ? "true" : "false")
+     << ",\"predicted_los_yaw_deg\":" << s.prediction_los_yaw_rad * 57.29577951308232
+     << ",\"predicted_los_pitch_deg\":" << s.prediction_los_pitch_rad * 57.29577951308232
+     << ",\"predicted_anchor_norm\":[" << s.prediction_anchor_x_norm << ","
+     << s.prediction_anchor_y_norm << "]"
+     << ",\"anchor_in_frame\":" << (s.prediction_anchor_in_frame ? "true" : "false")
+     << ",\"horizon_ms\":" << s.prediction_horizon_ms << "}"
      << ",\"target_az_rate_world_rad_s\":" << s.target_az_rate_world_rad_s
      << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
      << ",\"q_ref_rate_yaw_rad_s\":" << s.q_ref_rate_yaw_rad_s

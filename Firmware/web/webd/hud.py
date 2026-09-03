@@ -60,6 +60,69 @@ function hudAxisNorm(intr) {
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
 
+// --- §10 prediction cue ----------------------------------------------------
+//
+// The one element on this page whose colour is a safety statement: §10 says the prediction "must not
+// be green", because green on this display means measured - something the camera sees now. A
+// prediction drawn in green is an intention wearing the uniform of an observation, and the operator
+// cannot tell them apart at a glance. So the colour assertions below are not decoration.
+function hudPredictionBox(o) {
+  // Where the dashed square goes. o = { cx, cy, w, h, box: [x0,y0,x1,y1], gap }
+  //
+  // "Placed near the selected target but not touching its box" is a geometric rule, so it is
+  // implemented as one: the cue is centred on the predicted anchor, and if that overlaps the
+  // measured box it is shoved outward along the direction the prediction is pointing - the
+  // direction the operator needs to read anyway - until the gap clears. When the prediction is
+  // almost exactly on the target (a still target, a settled loop) there is no meaningful direction,
+  // so it goes right and up, and says so by reporting shifted.
+  if (!o || typeof o.cx !== "number" || typeof o.cy !== "number" || !(o.w > 0) || !(o.h > 0)) return null;
+  const box = (Array.isArray(o.box) && o.box.length === 4) ? o.box : null;
+  let x = o.cx - o.w / 2, y = o.cy - o.h / 2;
+  const gap = (typeof o.gap === "number") ? o.gap : 8.0;
+  let shifted = false;
+  if (box) {
+    const bx0 = Math.min(box[0], box[2]), bx1 = Math.max(box[0], box[2]);
+    const by0 = Math.min(box[1], box[3]), by1 = Math.max(box[1], box[3]);
+    const bcx = (bx0 + bx1) / 2, bcy = (by0 + by1) / 2;
+    let guard = 0;
+    while (x < bx1 + gap && x + o.w > bx0 - gap && y < by1 + gap && y + o.h > by0 - gap && guard < 400) {
+      let dx = o.cx - bcx, dy = o.cy - bcy;
+      if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) { dx = 1.0; dy = -0.5; }   // no direction to use
+      const n = Math.hypot(dx, dy) || 1.0;
+      x += (dx / n) * 4.0; y += (dy / n) * 4.0; shifted = true; ++guard;
+    }
+  }
+  return { x: x, y: y, w: o.w, h: o.h, cx: x + o.w / 2, cy: y + o.h / 2, shifted: shifted };
+}
+
+function hudPredictionSvg(b, C, o) {
+  // §10's shape: amber dashed square, small amber + at its centre, small PRED label.
+  if (!b) return "";
+  const amber = C.amber;
+  const parts = [
+    '<rect x="' + b.x + '" y="' + b.y + '" width="' + b.w + '" height="' + b.h +
+      '" fill="none" stroke="' + amber + '" stroke-width="1.2" stroke-dasharray="6 4" opacity=".92"/>',
+    '<line x1="' + (b.cx - 5) + '" y1="' + b.cy + '" x2="' + (b.cx + 5) + '" y2="' + b.cy +
+      '" stroke="' + amber + '" stroke-width="1.2"/>',
+    '<line x1="' + b.cx + '" y1="' + (b.cy - 5) + '" x2="' + b.cx + '" y2="' + (b.cy + 5) +
+      '" stroke="' + amber + '" stroke-width="1.2"/>',
+    '<text class="tlbl" x="' + (b.x + b.w / 2) + '" y="' + (b.y - 5) +
+      '" text-anchor="middle" fill="' + amber + '">PRED</text>'
+  ];
+  // "A long error vector across the image is not shown by default. If a short connector is used, it
+  // should be very subtle." So: only when the two are already close, and at a quarter opacity. When
+  // the prediction is far away - mid-dart, which is exactly when it is most tempting to draw the
+  // line - the cue stands on its own.
+  if (o && o.near && o.near.length === 2) {
+    const d = Math.hypot(o.near[0] - b.cx, o.near[1] - b.cy);
+    if (d <= (o.nearMax || 140.0)) {
+      parts.unshift('<line x1="' + o.near[0] + '" y1="' + o.near[1] + '" x2="' + b.cx + '" y2="' +
+                    b.cy + '" stroke="' + amber + '" stroke-width="1" opacity=".28"/>');
+    }
+  }
+  return parts.join("");
+}
+
 // --- §5 / §6 travel tapes --------------------------------------------------
 //
 // Geometry and drawing, both as pure functions, deliberately. The revision specifies these tapes
@@ -299,7 +362,7 @@ function render(t) {
   const stale = updateStaleness(t);
 
   // --- what the overlay is made of, rebuilt each frame -------------------
-  const layers = { cand: "", sel: "", reticle: "", tape: "" };
+  const layers = { cand: "", sel: "", reticle: "", pred: "", tape: "" };
 
   // §7 + §9: boxes are drawn from the detector's own normalised bbox; the anchor is
   // the point the controller centres, and it is drawn - never as a dot on the reticle.
@@ -370,6 +433,40 @@ function render(t) {
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
   }
 
+  // §10: the prediction cue, from webd's `prediction` block. Absent when invalid - the revision says
+  // prediction disappears when invalid or stale (§661's rule), and an empty group is the honest
+  // rendering of "the controller is not predicting anything right now".
+  // §10: the prediction cue, from webd's `prediction` block. Two gates, both the controller's:
+  // `valid` means it predicted anything at all, and `anchor_in_frame` means that point is on the
+  // picture rather than off the edge of it. Prediction disappears when there is nothing to predict
+  // (the revision's own rule at §661), and an empty group is the honest rendering of that.
+  const pred = (t.prediction && typeof t.prediction === "object") ? t.prediction : null;
+  layers.pred = "";
+  if (pred && pred.valid === true && pred.anchor_in_frame === true &&
+      Array.isArray(pred.predicted_anchor_norm) && pred.predicted_anchor_norm.length === 2 && !stale) {
+    const a = hudProject(pred.predicted_anchor_norm[0], pred.predicted_anchor_norm[1], lay);
+    if (a.ok) {
+      // The cue is the size of the target it predicts, so the operator is comparing like with like:
+      // a dashed box where the same body will be, against the solid box where it is.
+      const sel = tracks.filter((x) => x && x.selected && Array.isArray(x.bbox) &&
+                                      x.bbox.length === 4)[0] || null;
+      let w = 48.0, h = 48.0, near = null;
+      if (sel) {
+        const p0 = hudProject(sel.bbox[0], sel.bbox[1], lay);
+        const p1 = hudProject(sel.bbox[2], sel.bbox[3], lay);
+        if (p0.ok && p1.ok) {
+          w = Math.max(24.0, p1.x - p0.x);
+          h = Math.max(24.0, p1.y - p0.y);
+          near = [(p0.x + p1.x) / 2, (p0.y + p1.y) / 2];
+        }
+      }
+      layers.pred = hudPredictionSvg(
+        hudPredictionBox({ cx: a.x, cy: a.y, w: w, h: h, box: near ? [
+          near[0] - w / 2, near[1] - h / 2, near[0] + w / 2, near[1] + h / 2] : null }), C,
+        { near: near });
+    }
+  }
+
   // §5 + §6 travel tapes. Placement is taken from the revision's own numbers rather than from
   // judgement: the yaw tape sits in the upper 10-15% band (12.5%) across the middle 55-60% of the
   // width (57.5%), the pitch tape in the middle 40-45% of the height (42.5%) near the right edge.
@@ -401,6 +498,7 @@ function render(t) {
   $("g-candidates").innerHTML = layers.cand;
   $("g-selected").innerHTML = layers.sel;
   $("g-reticle").innerHTML = layers.reticle;
+  $("g-prediction").innerHTML = layers.pred;
   $("g-tapes").innerHTML = layers.tape;
 
   // target_aim_x/y_norm (the point inside the target the controller is driving onto the axis) is
@@ -632,6 +730,7 @@ HUD_HTML = """<!DOCTYPE html>
          the target" literally true - it is painted last, over anything in a box. -->
     <g id="g-candidates"></g>
     <g id="g-selected"></g>
+    <g id="g-prediction"></g>
     <g id="g-reticle"></g>
     <g id="g-tapes"></g>
   </svg>

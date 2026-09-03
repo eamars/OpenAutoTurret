@@ -893,3 +893,84 @@ strongest statement available short of looking.
 
 56 CTest, 321 pytest (13 new on the tapes). Station: controld publishing, `telemetry_stale` False, webd
 serving the tape build, page 200. Section 110: still 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 10:4x — round 9: §20 prediction block + §10 cue, seen valid on the real daemon
+
+### What went in
+
+`prediction.{valid, predicted_los_yaw_deg, predicted_los_pitch_deg, predicted_anchor_norm,
+anchor_in_frame, horizon_ms}` — the §20 shape — emitted by controld, and the §10 cue drawn from it:
+amber dashed square, small amber `+`, small `PRED` label, subtle short connector only when the pair is
+already close. `<g id="g-prediction">` sits between the selected target and the reticle, which is §18's
+z=12 on a page whose only z-order is document order.
+
+**No second prediction was created.** `aim_point_x/y` already projected `predicted_los_at_actuation`
+through the intrinsics, behind four documented guards (estimate exists; intrinsics agree with the
+detector's frame size; ray in front of the camera; point inside the frame). The new fields are filled
+*inside that same block*, so the flat and nested spellings cannot disagree, and the guards exist once.
+Camera-frame LOS came as `CameraModel::ray_to_los_angles`, written beside `ray_to_pixel` because it is
+its inverse: tan(yaw) = (u−cx)/fx and tan(−pitch) = (v−cy)/fy, since v grows downward while elevation
+grows upward. Five gtests on that helper, including a round trip across the frame and a corner check
+against the 69.30 × 40.42° this station commissioned.
+
+`FakeControld` now speaks the block too. A field the fake does not emit is a field the page tests
+cannot notice going missing — and `telemetry_from_json` silently drops keys it has not seen, which has
+twice produced a confident "controld does not publish X" about a field webd itself discarded.
+
+### Live, on the station, during AUTO_TRACK on a synthetic dart
+
+38 samples at 10 Hz with `prediction.valid` true, from the real daemon:
+
+```
+horizon_ms seen            : [40]          (the 20 ms control delay + 20 ms motor response)
+lead in x                  : median 2.4 px   p95 27.1 px   max 28.5 px   (0.101 deg median)
+anchor_in_frame            : 38 of 38 true
+predicted LOS yaw          : -0.48 .. +13.77 deg
+```
+
+At idle the block is honestly `valid:false, anchor_in_frame:false, horizon_ms:0` — not a zero at the
+centre of the frame posing as a prediction.
+
+The two numbers worth reading together: the **cue** leads the measured anchor by 2.4–28.5 px, while the
+**axis** still lags the target (C3 lead −8.9°). Both are true, and that is what §10 is for — the
+operator can now see the gap between what the controller intends and what the picture confirms. The lag
+is round 6's finding (confidence derating pulls the ceiling to ~7–10°/s against a dart asking 25°/s),
+not a cue defect.
+
+### Metric honesty, not metric tuning
+
+C5a now reads **PASS (p95 60.0, max 60.0)** where it had read FAIL on identical numbers. Nothing about
+the motion changed: the probe compared differenced telemetry against a bare `60.0`, and a profile
+sitting exactly on its ceiling failed on floating-point dust. The tolerance is now stated in the line —
+`bar 60 + 1.5 from 15 Hz differencing`, 1.5°/s² being one `j·dt` control cycle, the resolution that
+derivation actually has.
+
+C5b still reads FAIL (p95 543 vs 300+60) and I am leaving it FAIL. The same move measured from the 99 Hz
+profile-state log gave p95 340. Two rates disagree because differencing an accel sequence at 15 Hz is
+too coarse to resolve a 300°/s³ ramp; the 99 Hz figure is the defensible one and the probe's is a lower
+bound on nothing at all. Recording the disagreement beats picking the flattering one.
+
+C4 also flipped to FAIL (3 sign changes vs 2 last round) — the count-only metric already recorded as
+too crude; a flip of one crossing is within what that metric can mean without amplitudes.
+
+### Defects I introduced and caught this round
+
+- **I invented `hudMapNorm`/`hudMapU`/`hudMapV`** and called them from the render path. The real mapper
+  is `hudProject(u, v, lay)`. In a page script an undefined call inside `render()` kills the whole HUD
+  while the server keeps returning 200 — same class as this round's duplicate `const`, and it is why
+  there is now a test that every mapper the cue calls is actually defined.
+- **A Python triple-quote ate the closing `"`** of a C++ string literal in `web_server.hpp`: build
+  error, caught at compile.
+- **Anchors I guessed wrong** — `prediction_horizon_ms` is `int64_t`, not `double`; `CameraIntrinsics`
+  has no `valid_flag` (validity is derived by `valid()`). The compiler and the assert caught both.
+- **My corner test contradicted my own sign test** three lines above it (I asserted positive pitch at
+  v=1079, the bottom of the frame). A test that disagrees with its neighbours is usually the wrong one.
+- **A sampler crash** from double-indexing an already-unpacked pair, and **another vacuous assertion**
+  of mine (`assertLess(index, len(text))`) which I replaced with the real stale/invalid gate check —
+  the second time this round I have caught myself writing a test that cannot fail.
+- **My non-touching test asserted my own implementation** — it demanded the cue end up to the *right*
+  of the box and failed when the cue correctly moved straight up. The rule is "not touching", in any
+  direction; the assertion now checks rectangle intersection.
+
+57 CTest (5 new), 330 pytest (9 new). Station: homed, controld publishing the prediction block, webd
+serving the cue. Section 110: still 0 items accepted on hardware by a named person.

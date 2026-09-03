@@ -217,6 +217,11 @@ class Telemetry:
     # The threshold lives here so the server and the page cannot disagree about what "stale" means.
     telemetry_age_ms: Optional[int] = None
     telemetry_stale: bool = False
+    # §20's nested prediction block, passed through as received. Declared as one dict rather than
+    # field by field because telemetry_from_json silently drops keys it has never seen - twice now
+    # this project has mistaken "webd never sent it" for "the daemon does not have it" - and a
+    # container declaration means a new key inside the block arrives instead of vanishing.
+    prediction: Optional[dict] = None
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

@@ -42,6 +42,19 @@ class FakeControld:
             q_pitch_rad=0.0,
             installation_calibrated=False,
             installation_source="identity",
+            # §20's prediction block, at rest. The fake daemon carries it because the fake is what
+            # the page tests run against: a field the fake does not speak is a field the page tests
+            # cannot notice going missing, which is how "webd dropped it" turns into a day of
+            # suspecting the daemon. Idle means not predicting - hence valid False, not zeros dressed
+            # up as a real prediction at the centre of the frame.
+            prediction={
+                "valid": False,
+                "predicted_los_yaw_deg": 0.0,
+                "predicted_los_pitch_deg": 0.0,
+                "predicted_anchor_norm": [0.0, 0.0],
+                "anchor_in_frame": False,
+                "horizon_ms": 40,
+            },
         )
         # command handler: (command, arg) -> ResponseMessage
         self._handler: Callable[[str, str], ResponseMessage] = (

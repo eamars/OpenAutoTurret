@@ -1490,10 +1490,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           geo::CameraModel(intr).ray_to_pixel(r_cam, u, v);
           snap.aim_point_x = u / static_cast<double>(intr.width);
           snap.aim_point_y = v / static_cast<double>(intr.height);
+          // §20: the same ray, in the frame and units the contract names. Filled here, inside the
+          // block that has already decided the estimate exists, the intrinsics agree with the
+          // detector's frame size, and the ray is in front of the camera - because those guards are
+          // the whole difference between a cue and a lie, and a second copy of them somewhere else
+          // would be free to drift.
+          geo::CameraModel::ray_to_los_angles(r_cam, snap.prediction_los_yaw_rad,
+                                              snap.prediction_los_pitch_rad);
+          snap.prediction_valid = true;
+          snap.prediction_anchor_x_norm = snap.aim_point_x;
+          snap.prediction_anchor_y_norm = snap.aim_point_y;
           //   4. and inside the frame. An off-screen aim point belongs to the edge cues,
           //      not to a reticle painted on the bezel.
           snap.aim_point_valid = (snap.aim_point_x >= 0.0 && snap.aim_point_x <= 1.0 &&
                                   snap.aim_point_y >= 0.0 && snap.aim_point_y <= 1.0);
+          snap.prediction_anchor_in_frame = snap.aim_point_valid;
         }
       }
     }
