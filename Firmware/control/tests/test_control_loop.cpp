@@ -642,9 +642,15 @@ TEST(ManualMode, ALeasedJogMovesTheTurretAndStopsWhenTheBrowserGoesQuiet) {
     h.step(1);
   }
   const double yaw_jogged = h.loop->last_positions()[1];
-  EXPECT_GT(yaw_jogged, yaw0 + 0.01)
-      << "two seconds of a live jog lease and the turret never moved. The intent is "
-         "formed, the mode is right, and something downstream is not honouring it";
+  // Two seconds at the profile's rate is a lot of motion, so the bar is high on
+  // purpose. The version of this test that asked only "did it move" passed against a
+  // jog that moved 2 degrees and stopped, because a broken integration still produces
+  // one step of motion; the assertion was satisfied by the symptom of the bug.
+  EXPECT_GT(yaw_jogged, yaw0 + 0.15)
+      << "two seconds of a live jog lease moved the yaw only "
+      << (yaw_jogged - yaw0) / 0.0174533 << " deg";
+  EXPECT_GT(yaw_jogged - yaw0, 0.9 * 0.45 * 0.35 * 2.0 * 0.5)
+      << "the jog is not sustaining motion; it moved once and parked";
   EXPECT_EQ(h.snap().intent_type, "joint_position")
       << "a jog must reach the reference as an integrated position, not a velocity the "
          "drive cannot follow (25)";

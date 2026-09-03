@@ -309,6 +309,10 @@ class ManualController {
       // A lease is a deadline that renews; the intent carries one a cycle longer than the
       // browser's refresh, so an intent is never honoured after the lease it came from.
       out.intent.valid_until_ns = lease_until_ns_ + period_ns;
+      // Set on the intent as well as the output: the intent is what reaches telemetry,
+      // and a jog whose published reason was empty looked like a bug in the intent
+      // builder when it was only a missing line here.
+      out.intent.set_reason("jogging");
       out.reason = "jogging";
       return out;
     }

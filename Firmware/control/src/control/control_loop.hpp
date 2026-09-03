@@ -496,6 +496,9 @@ class ControlLoop {
   // enough to make verification fail and the safety layer derate a freshly homed station,
   // which is the sort of collateral a safety-relevant default must not have.
   bool mode_has_moved_ = false;
+  // §36/§44: authority is ramped in over this many cycles after a handover (300 ms).
+  static constexpr int kModeRampCycles = 60;
+  int mode_ramp_cycles_ = 0;
   mutable bool mode_hold_in_place_ = false;
   mutable bool mode_hold_latched_ = false;
   mutable double mode_hold_yaw_rad_ = 0.0;

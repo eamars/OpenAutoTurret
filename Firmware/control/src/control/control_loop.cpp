@@ -438,7 +438,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // A jog integrated against lagging feedback would drift by the lag every cycle;
       // against the reference it advances by exactly what was asked, and the difference
       // between the two is what an operator would feel as a turret that keeps creeping.
-      double q_logical[2] = {tracking_ref_.q_pitch_rad, tracking_ref_.q_yaw_rad};
+      // The *measured* joint positions, not the reference being followed. Section 2b
+      // clears tracking_ref_ at the top of every cycle, so reading it here returned
+      // 0.0 — and a jog integrates its moving waypoint from "where the turret is", so a
+      // zero base pinned the waypoint one horizon step from joint zero. Measured: a jog
+      // commanded for two seconds moved the turret 2.0 degrees and stopped, with the
+      // intent looking perfectly healthy the whole time, and a test that only asked
+      // "did it move at all" passed.
+      double q_logical[2] = {sp[ix(AxisId::Pitch)].q_rad, sp[ix(AxisId::Yaw)].q_rad};
       const double vmax = hold_speed_effective();
       const double v_max[2] = {vmax, vmax};
       const bool was_leased = manual_.lease_active();
@@ -497,6 +504,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       at_out_ = AutoTrackOutput{};
     }
     last_intent_ = build_mode_intent(now_ns);
+    // §36/§44 across every handover, not just the one the section is titled after.
+    // A mode's velocity_scale is authority, and authority changes discontinuously at a
+    // switch: AUTO_ROAM runs at the roam ceiling and AUTO_TRACK at the track ceiling, so
+    // clicking from one to the other stepped the turret 3x on the spot (measured:
+    // 0.175 -> 0.524 rad/s, which is within every commissioning limit and still a jolt).
+    // Ramping the authority over 300 ms is §44's own "brake/hold first", applied
+    // uniformly, and it leaves the envelope the last word exactly as before.
+    if (mode_ramp_cycles_ > 0) {
+      const double frac =
+          1.0 - static_cast<double>(mode_ramp_cycles_ - 1) /
+                    static_cast<double>(kModeRampCycles);
+      last_intent_.velocity_scale *= frac;
+      last_intent_.acceleration_scale *= frac;
+      --mode_ramp_cycles_;
+    }
     if (last_intent_.type != IntentType::Hold)
       mode_has_moved_ = true;  // from here on, "hold" means *here*, not "back to ready"
     tracking_ref_ = ref_mgr_
@@ -1324,6 +1346,7 @@ ModeResult ControlLoop::stop_motion() {
 
 void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
   mode_hold_latched_ = false;  // §44: "here" is re-decided at a handover, not inherited
+  mode_ramp_cycles_ = kModeRampCycles;  // §36/§44: see the ramp in step()
   // `mode_has_moved_` deliberately survives a handover. It is cleared only when the
   // station leaves Ready, below. Clearing it here would break the one handover that
   // matters most: STOP MOTION goes AUTO_ROAM -> MANUAL, and a flag reset by that
@@ -2059,8 +2082,11 @@ void ControlLoop::execute_command(const std::string& name,
       ack_command(name, false, "step size must be one of 0.5, 1, or 5 degrees");
       return;
     }
-    const double q_logical = axis == 1 ? tracking_ref_.q_yaw_rad
-                                       : tracking_ref_.q_pitch_rad;
+    // Same trap as the jog: the step is relative to where the turret *is*. Reading the
+    // reference here (cleared each cycle by section 2b) would make every step relative
+    // to joint zero, so a station at 90 degrees asked for "+1" would be driven to 1
+    // degree — and in a simulation that starts near zero, both numbers look the same.
+    const double q_logical = last_positions()[axis];
     if (!manual_.step_move(axis, sign * deg * 0.017453292519943295, q_logical,
                            now_ns_)) {
       ack_command(name, false, "step was malformed");
