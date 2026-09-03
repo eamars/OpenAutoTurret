@@ -176,13 +176,12 @@ computed, and the honest fix was to publish the wish as well — where *requeste
 the envelope clamped it (§33) or the LOS solver declined part of it (§67), which is the one
 thing on this list an operator cannot infer from the axis positions.
 
-What remains for the operator's judgement: with only "goal" and
-"actual" published, the page cannot present **§92's three separate columns** (requested /
-reference / actual), and a hold taken mid-sweep displays a reference still parked at the far
-end until the ramp lands. The behaviour is correct — the turret stops where it stops — but
-the operator is not being shown the reference the axes are following. Closing it means
-letting `ReferenceManager` expose its interpolated output, which is v1 code and a decision to
-make on its own merits, not as a side effect of writing a test.
+What remains of that: a hold taken mid-sweep still displays a
+reference parked at the far end of the sweep until the ramp lands. That is a property of
+position-mode control (the target is the goal; the drive shapes the move), not a defect — but
+it is the sort of readout an operator should be told about rather than left to interpret
+during a sweep, and §110's acceptance walk is where that happens.
+
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by
