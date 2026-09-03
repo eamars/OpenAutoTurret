@@ -801,3 +801,95 @@ other visual claim on this page is, and belongs to §24's operator-signed list.
 
 308 pytest (7 new), 56 CTest. Station: controld resumed, publishing, `telemetry_stale` False.
 Section 110: still 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 09:4x — round 8: §5/§6 travel tapes, and a belief about the pitch scale that did not survive contact with the repo
+
+The tapes went in as the next item in the revision's own order, and the round turned into something
+more useful than decoration: the station's live telemetry contradicted an angle convention I had been
+carrying in my head and never verified.
+
+### What was built
+
+Both tapes are drawn by `hudTravelTape` (geometry) and `hudTravelTapeSvg` (markup), both pure and both
+executed under node from the page's source. The revision specifies them numerically, so the numbers are
+asserted rather than admired:
+
+| revision claim | check | live result |
+| --- | --- | --- |
+| yaw "upper 10-15% of the viewport" | y/vh ∈ [0.10, 0.15] | 0.125 |
+| yaw "middle 55-60% of the image width" | span/vw ∈ [0.55, 0.60] | 0.575, centred to 1e-6 |
+| pitch "middle 40-45% of viewport height" | span/vh ∈ [0.40, 0.45] | 0.425 |
+| pitch "close to the right image edge" | x > vw − 140 | 1814 |
+| "endpoints always show the software-safe travel limits" | both endpoints present, labelled with ° | −22.6° … +320.2° |
+| §6.3 hierarchy (dim fine ticks, green coarse, dark box, green outline) | colour tokens in the drawn markup | verified |
+| §5.3 no compass letters | no N/E/S/W anywhere in the drawn markup | verified |
+| §18 layer order | document order, since this page has no SVG z-index | candidates → selected → reticle → tapes |
+| §16 one monospace stack | exactly one font stack in the CSS | verified |
+
+Tick spacing is adaptive with a stated reason: the smallest step from {5,10,15,20,30,45,60,90} that
+keeps labels ≥ 52 px apart, fine = coarse/4. A fixed 20° would collide on a narrow safe range or leave
+four ticks across a 342.8° one. Live: yaw picked 20°/5° (71 ticks), pitch 10°/2.5° (30 ticks).
+
+An un-homed axis gets **no tape**: `soft_limits_valid` false, or min ≥ max, returns null and the page
+says `YAW / PITCH TAPE: TRAVEL UNRANGED (home the turret)`. Drawing endpoints for an axis that was
+never homed would name a limit that does not exist.
+
+### Live, from the station — not a fixture
+
+```
+YAW   tape: -22.6° … +320.2° | YAW +174.2° | JOINT TRAVEL, NOT HEADING   (caret x=1042, tape 408-1512)
+PITCH tape:  -4.9° …  -74.7° | PITCH  -44.0° | JOINT, NOT ELEVATION      (caret y=567, tape 311-770)
+caret inside its tape: true true   value inside limits: true true   no cardinal letters: true
+```
+
+### The belief that fell over
+
+I started converting the tapes to front-relative azimuth and elevation, from `az = q_yaw + 180°`,
+`el = 90° + q_pitch` — figures I remembered from the geometry commissioning. Two things killed it:
+
+1. **Neither formula appears anywhere in the repo.** I grepped for them before using them and found
+   nothing. A scale on an operator's screen cannot rest on my recollection.
+2. **The theodolite probe says the offset cannot be measured this way at all** (its own docstring):
+   *"Principal point and camera-to-axis boresight are NOT separable at the small angular spans
+   available here — both enter as a constant pixel offset."*
+
+So objective item (c) is **partly** commissioned and I am recording it that way rather than as
+"done": effective FOV and principal point are measured (69.30° × 40.42°, 24.22 px/deg, matching the
+theodolite's 69.2° × 40.4°); **the camera-to-axis boresight is not**, and the method used could not
+have separated it. Centring tolerance and frame-exit margin — the reason item (c) exists — rest on the
+FOV and principal point, which are measured; what is *not* available is a world elevation for the
+camera's boresight, and therefore no honest elevation scale for the pitch tape.
+
+What saved the design is the revision itself: §5.3 asks for **logical joint travel, not compass
+heading**. Raw joint degrees were always the correct scale. The live oddity — yaw spanning 342.8°,
+pitch entirely negative — is the machine being truthful: `config/turret.yaml` states *"YAW IS A ~360
+DEG CONTINUOUS-ROTATION AXIS (user-confirmed)"*, and its ready pose sits at 176° joint because that is
+where the gravity balance is, not at the travel mid. So each tape now states its own scale —
+`JOINT TRAVEL, NOT HEADING` and `JOINT, NOT ELEVATION` — instead of letting −44.0 read as elevation.
+
+### My own defects this round, all found before the page ran
+
+- **A second `const HUD_R2D`** in the same script. In a page script that is a SyntaxError at load, and
+  the whole HUD would have drawn *nothing at all* while the server happily served 200. Caught by
+  `node --check` on the concatenated page source, which is why that check is now routine.
+- **The vertical clamp reused the horizontal variable**, clamping the pitch caret between `x` and `x`
+  and collapsing every pitch marker onto the tape's own column: expected 593.7, produced 1842.0. Hand
+  arithmetic found it; the arithmetic is now in the test.
+- **A CSS anchor matched inside `text.lbl {`**, splitting three rules across two conventions and
+  duplicating the font stack three ways — the drift pattern I have been writing up all week.
+- **A test fixture 4 px off** (`x=412` copied from an ad-hoc shell run, not the 408 the page computes),
+  which made a centring assertion fail for the wrong reason. A fixture that is not what the code passes
+  cannot test the code.
+- **A vacuous assertion I wrote** — `assertLess(x if c else 10**9, 10**9)`, true in every universe —
+  deleted and replaced with one that reads the caret's actual fill. And a stale export list naming a
+  function I had deliberately never written, since both tapes share one implementation.
+
+### Evidence boundary
+
+Geometry, colour tokens and draw order are measured. **Resemblance to the approved reference is §24 and
+remains unsigned**: no browser automation exists here, so nobody has seen these tapes painted. The
+caret positions above are the page's own arithmetic on the station's own encoders, which is the
+strongest statement available short of looking.
+
+56 CTest, 321 pytest (13 new on the tapes). Station: controld publishing, `telemetry_stale` False, webd
+serving the tape build, page 200. Section 110: still 0 items accepted on hardware by a named person.

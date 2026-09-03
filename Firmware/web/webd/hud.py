@@ -60,6 +60,160 @@ function hudAxisNorm(intr) {
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
 
+// --- §5 / §6 travel tapes --------------------------------------------------
+//
+// Geometry and drawing, both as pure functions, deliberately. The revision specifies these tapes
+// numerically - "upper 10-15% of the viewport", "middle 55-60% of the image width", endpoints that
+// "always show the software-safe travel limits" - and a claim written that specific is supposed to be
+// checkable. Keeping the maths and the markup out of the render path means node can execute them
+// against a real telemetry payload and assert the result, which is the closest thing to looking at
+// the page that exists in this environment.
+// HUD_R2D is declared above, beside the other shared constants; declaring it again here would be a
+// SyntaxError at load, which in a page script means the whole HUD silently draws nothing.
+
+function hudTickSteps(spanDeg, px) {
+  // "Fine tick marks at small angular increments; coarse ticks and labels at meaningful intervals"
+  // is not a number, so the number here is chosen from what the tape can actually show: the smallest
+  // step that keeps labels at least 52 px apart, which is roughly the width of "+120 deg" at the
+  // label size in §16. A fixed 20 deg would either collide on a narrow safe range or produce four
+  // ticks across a 200 deg one.
+  const steps = [5, 10, 15, 20, 30, 45, 60, 90];
+  let coarse = steps[steps.length - 1];
+  for (let i = 0; i < steps.length; ++i) {
+    if (spanDeg > 0 && (steps[i] / spanDeg) * px >= 52.0) { coarse = steps[i]; break; }
+  }
+  return { coarse: coarse, fine: Math.max(1.0, coarse / 4.0) };
+}
+
+function hudTravelTape(o) {
+  // One function for both tapes: the revision gives the yaw tape and the pitch tape the same
+  // content and the same hierarchy, and a second near-identical implementation is how the two drift
+  // apart into showing different truths about the same travel.
+  //
+  //   o = { horizontal, x, y, length, minDeg, maxDeg, valueDeg, valid }
+  //
+  // Returns null when there is no ranged travel to show. That is a real state, not an error: before
+  // homing, `soft_limits_valid` is false and the bounds are unset, and drawing invented endpoints
+  // would name a limit this machine was never homed to. The caller draws the refusal instead.
+  if (!o || !o.valid || !(o.maxDeg > o.minDeg) || !(o.length > 0)) return null;
+
+  const span = o.maxDeg - o.minDeg;
+  const steps = hudTickSteps(span, o.length);
+  const at = (deg) => o.horizontal
+    ? o.x + ((deg - o.minDeg) / span) * o.length          // left = min
+    : o.y + ((o.maxDeg - deg) / span) * o.length;         // top = max, so up is up (§6.2)
+
+  const ticks = [];
+  const firstIdx = Math.ceil(o.minDeg / steps.fine - 1e-9);
+  const lastIdx = Math.floor(o.maxDeg / steps.fine + 1e-9);
+  for (let k = firstIdx; k <= lastIdx; ++k) {
+    const deg = k * steps.fine;
+    const coarse = Math.abs(deg / steps.coarse - Math.round(deg / steps.coarse)) < 1e-9;
+    ticks.push({ deg: deg, pos: at(deg), coarse: coarse, endpoint: false,
+                 label: coarse ? hudDegLabel(deg, false) : "" });
+  }
+  // Endpoints are always present and always labelled (§5.2), whether or not they fall on a step.
+  [{ deg: o.minDeg, pos: o.horizontal ? o.x : o.y + o.length },
+   { deg: o.maxDeg, pos: o.horizontal ? o.x + o.length : o.y }].forEach((e) => {
+    const dupe = ticks.some((t) => Math.abs(t.deg - e.deg) < 1e-6);
+    if (dupe) { ticks.filter((t) => Math.abs(t.deg - e.deg) < 1e-6).forEach((t) => {
+      t.endpoint = true; t.coarse = true; t.label = hudDegLabel(e.deg, true); }); }
+    else ticks.push({ deg: e.deg, pos: e.pos, coarse: true, endpoint: true,
+                      label: hudDegLabel(e.deg, true) });
+  });
+  ticks.sort((a, b) => a.pos - b.pos);
+
+  // Clamped along the tape's own axis. The first version clamped the vertical case between o.x and
+  // o.x - the line's own column - because the horizontal variable was reused without being thought
+  // about, and every pitch marker collapsed onto the tape's x-coordinate. Hand arithmetic caught it
+  // (expected 593.7, produced 1842.0); a test now carries that arithmetic.
+  const lo = o.horizontal ? o.x : o.y;
+  const hi = o.horizontal ? o.x + o.length : o.y + o.length;
+  const marker = Math.max(lo, Math.min(hi, at(o.valueDeg)));   // never point off the tape
+  return {
+    horizontal: !!o.horizontal, x: o.x, y: o.y, length: o.length,
+    x1: o.horizontal ? o.x + o.length : o.x, y1: o.horizontal ? o.y : o.y + o.length,
+    minDeg: o.minDeg, maxDeg: o.maxDeg, steps: steps, ticks: ticks, marker: marker,
+    valueDeg: o.valueDeg,
+    // §6.3: the value box is a dark translucent fill with a thin green outline. Sized for
+    // "PITCH -12.3 deg" at the label size, and always placed where it cannot leave the viewport.
+    box: { w: 96, h: 34, x: 0, y: 0 },
+    note: ""
+  };
+}
+
+function hudDegLabel(deg, withDegree) {
+  const v = Math.abs(deg) < 1e-9 ? 0 : deg;
+  const txt = (v > 0 ? "+" : (v < 0 ? "-" : "")) + Math.abs(v).toFixed(Math.abs(v) % 1 ? 1 : 0);
+  return txt + (withDegree ? "\u00b0" : "");
+}
+
+function hudTravelTapeSvg(t, C, opts) {
+  // Drawing only: every number above came from hudTravelTape, so what the test executes is what the
+  // page draws rather than a description of it.
+  if (!t) return "";
+  const base = C.green, fine = C.dim, lbl = C.green, mark = C.white;
+  const parts = [];
+  const w = t.horizontal;
+  parts.push('<line ' + (w ? 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x1 + '" y2="' + t.y
+                           : 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x + '" y2="' + t.y1) +
+             '" stroke="' + base + '" stroke-width="1" opacity=".85"/>');
+  t.ticks.forEach((tk) => {
+    const len = tk.endpoint ? 13 : (tk.coarse ? 10 : 5);
+    const col = tk.coarse ? base : fine;
+    parts.push('<line ' + (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
+                           : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos) +
+               '" stroke="' + col + '" stroke-width="1"/>');
+    if (tk.label) {
+      parts.push('<text class="tlbl" ' +
+        (w ? 'x="' + tk.pos + '" y="' + (t.y - 7) + '" text-anchor="middle"'
+           : 'x="' + (t.x + 8) + '" y="' + (tk.pos + 4) + '" text-anchor="start"') +
+        ' fill="' + lbl + '">' + tk.label + '</text>');
+    }
+  });
+  // Current-position caret (§5.2) and its value box. Drawn last inside the group so it sits over the
+  // ticks it overlaps.
+  const mk = t.marker;
+  parts.push(w
+    ? '<path d="M ' + mk + ' ' + (t.y + 2) + ' L ' + (mk - 6) + ' ' + (t.y + 12) + ' L ' +
+      (mk + 6) + ' ' + (t.y + 12) + ' Z" fill="' + C.green + '" stroke="' + mark +
+      '" stroke-width=".8"/>'
+    : '<path d="M ' + (t.x - 2) + ' ' + mk + ' L ' + (t.x - 12) + ' ' + (mk - 6) + ' L ' +
+      (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + mark +
+      '" stroke-width=".8"/>');
+  const bx = w ? Math.max(4, Math.min(mk - 48, (opts && opts.vw ? opts.vw - 100 : mk)))
+               : Math.max(4, t.x - 84);
+  const by = w ? (t.y + 16) : Math.min(t.y1 + 10, (opts && opts.vh ? opts.vh - 44 : t.y1));
+  parts.push('<rect x="' + bx + '" y="' + by + '" width="' + t.box.w + '" height="' + t.box.h +
+             '" fill="' + C.black + '" stroke="' + C.green + '" stroke-width="1" rx="2"/>');
+  parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 14) +
+             '" text-anchor="middle" fill="' + C.green + '">' + (opts && opts.title ? opts.title : "") +
+             '</text>');
+  parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 28) +
+             '" text-anchor="middle" fill="' + C.white + '">' + (opts && opts.value ? opts.value : "") +
+             '</text>');
+  // What the scale actually is, stated on the tape that uses it. §5.3 asks for logical joint travel
+  // and forbids compass letters, which the drawing honours - but on this station the joint numbers
+  // are surprising enough to be misread: yaw travels -22.6 to +320.2 deg (the config says in terms:
+  // "YAW IS A ~360 DEG CONTINUOUS-ROTATION AXIS") and pitch sits -74.7 to -4.9, which an operator
+  // will read as elevation unless told otherwise. It is not elevation. The theodolite probe records
+  // that camera-to-axis boresight is NOT separable from the principal point at the spans available
+  // here, so the world elevation of this scale's zero has never been measured, and the tape says so
+  // rather than borrowing an offset from somebody's recollection - mine included.
+  if (opts && opts.note) {
+    parts.push('<text class="tlbl" x="' + (bx + t.box.w / 2) + '" y="' + (by + t.box.h + 13) +
+               '" text-anchor="middle" fill="' + C.dim + '">' + opts.note + '</text>');
+  }
+  return parts.join("");
+}
+
+function hudUnrangedNote(x, y, label) {
+  // What replaces a tape that has no endpoints to show. Silence here would read as a target-free
+  // sky rather than as an un-commissioned axis.
+  return '<text class="tlbl" x="' + x + '" y="' + y + '" text-anchor="middle" fill="' +
+    "#f2b329" + '">' + label + ' TAPE: TRAVEL UNRANGED (home the turret)</text>';
+}
+
 // §25: "stale telemetry stops visual interpolation and indicates stale/disconnected state".
 //
 // A pure function of what is known, rather than three comparisons scattered through the render path,
@@ -145,7 +299,7 @@ function render(t) {
   const stale = updateStaleness(t);
 
   // --- what the overlay is made of, rebuilt each frame -------------------
-  const layers = { cand: "", sel: "", reticle: "", };
+  const layers = { cand: "", sel: "", reticle: "", tape: "" };
 
   // §7 + §9: boxes are drawn from the detector's own normalised bbox; the anchor is
   // the point the controller centres, and it is drawn - never as a dot on the reticle.
@@ -216,9 +370,38 @@ function render(t) {
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
   }
 
+  // §5 + §6 travel tapes. Placement is taken from the revision's own numbers rather than from
+  // judgement: the yaw tape sits in the upper 10-15% band (12.5%) across the middle 55-60% of the
+  // width (57.5%), the pitch tape in the middle 40-45% of the height (42.5%) near the right edge.
+  // Those figures are asserted in the test, because a claim this specific is only worth writing if
+  // something checks it, and "visually centered" is how a tape ends up wherever the last edit left
+  // it. Both tapes show LOGICAL JOINT TRAVEL (§5.3) from the encoders, never a compass heading, and
+  // no cardinal letters appear anywhere.
+  const yawTape = hudTravelTape({
+    horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
+    minDeg: deg(t.q_soft_min_yaw_rad), maxDeg: deg(t.q_soft_max_yaw_rad),
+    valueDeg: deg(t.q_yaw_rad), valid: t.soft_limits_valid === true
+  });
+  const pitchLen = vh * 0.425;
+  const pitchTape = hudTravelTape({
+    horizontal: false, x: vw - Math.max(78.0, vw * 0.055), y: vh / 2 - pitchLen / 2,
+    length: pitchLen, minDeg: deg(t.q_soft_min_pitch_rad), maxDeg: deg(t.q_soft_max_pitch_rad),
+    valueDeg: deg(t.q_pitch_rad), valid: t.soft_limits_valid === true
+  });
+  layers.tape =
+    hudTravelTapeSvg(yawTape, C, { title: "YAW", vw: vw, vh: vh,
+                                   value: hudDegLabel(deg(t.q_yaw_rad), true),
+                                   note: "JOINT TRAVEL, NOT HEADING" }) +
+    hudTravelTapeSvg(pitchTape, C, { title: "PITCH", vw: vw, vh: vh,
+                                     value: hudDegLabel(deg(t.q_pitch_rad), true),
+                                     note: "JOINT, NOT ELEVATION" }) +
+    ((yawTape || pitchTape) ? ""
+     : hudUnrangedNote(vw / 2, vh * 0.125, "YAW / PITCH"));
+
   $("g-candidates").innerHTML = layers.cand;
   $("g-selected").innerHTML = layers.sel;
   $("g-reticle").innerHTML = layers.reticle;
+  $("g-tapes").innerHTML = layers.tape;
 
   // target_aim_x/y_norm (the point inside the target the controller is driving onto the axis) is
   // deliberately NOT drawn. v3.2 mentions an aiming marker exactly once - §7's open centre, which
@@ -402,6 +585,8 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
 #strip .v { color: var(--hud-green); }
 #strip .warn { color: var(--hud-amber); }
 #strip .sep { color: var(--hud-line); }
+text.tlbl { font-size: 11px; letter-spacing: .04em; font-family: inherit; }   /* tape labels */
+text.tval { font-size: 12px; letter-spacing: .06em; font-family: inherit; }   /* value boxes */
 text.lbl { font-size: 11px; letter-spacing: .08em; font-family: inherit; }
 /* §25: stale telemetry stops visual interpolation and says so. The filter is presentation
    only - the overlay keeps drawing the last known geometry, dimmed, with the AGE cell amber. */
@@ -448,6 +633,7 @@ HUD_HTML = """<!DOCTYPE html>
     <g id="g-candidates"></g>
     <g id="g-selected"></g>
     <g id="g-reticle"></g>
+    <g id="g-tapes"></g>
   </svg>
 
   <div id="mode-block"></div>
