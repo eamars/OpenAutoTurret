@@ -1433,3 +1433,21 @@ so it is always cheaper to spend it.
 
 No code changed this round. **435 pytest, 57 CTest** (unchanged, re-verified). Station homed, ready,
 MANUAL/HOLD, synthetic vision flowing. §110: still 0 items accepted on hardware by a named person.
+
+### Addendum: I rewrote a published commit while committing this round
+
+The commit command for round 17 was written as a chain: `git add -A`, a `git commit -m "placeholder"
+--dry-run` probe, then `git commit --amend -F <msgfile>`. The amend did **not** create round 17's commit —
+it **replaced the already-pushed round-16 commit** `137c0d5` with a new object carrying round 17's message.
+The push was rejected as non-fast-forward, which was the only reason a rewritten history did not go out to
+the remote.
+
+Repaired without force-pushing: `git reset --soft 137c0d5` (back onto the published commit, change kept
+staged) then a normal commit → `9a13f3f` as a proper child, pushed fast-forward. Round 16's published
+commit is untouched; `git show --stat HEAD` shows round 17 is the record file alone; both entries present;
+tree clean.
+
+The mistake was chaining a probe and a history-rewriting command on one line, where the probe's exit status
+was hidden by redirection and the amend then acted on whatever HEAD happened to be. **Standing rule: never
+amend a commit that has been pushed — this project pushes every round, so amend is effectively never
+correct here. Write the message file, then `git commit -F` it, one command, no chain, no amend.**
