@@ -350,6 +350,24 @@ def ensure_yaw_centred(s):
     return wait_settled(s)
 
 
+def report_ref_vs_estimate(dart_rows, pct):
+    """The reference measured against the controller's OWN estimate, not against the truth.
+
+    Three leads are reported on the dart: the executed reference, the estimator's line of sight and the
+    predicted line of sight, all in camera LOS azimuth. When the reference trails by many degrees while the
+    estimate trails by one or two, that gap is the fault to localise, and only one comparison separates a
+    servo that lags its own setpoint from an estimator that trails the world: reference minus estimate. A
+    boresight offset largely cancels in that difference, because both terms ride the same mount transform,
+    so it is the one lead figure readable before the camera geometry is commissioned.
+    """
+    vals = sorted(r["lead_ref_est"] for r in dart_rows if r.get("lead_ref_est") is not None)
+    print("      reference vs the ESTIMATE it was following (axis lag against what the controller")
+    print("      itself believed; a boresight offset largely cancels here):")
+    print("        n=%d  p50 %+.3f deg  min %+.3f  max %+.3f"
+          % (len(vals), pct(vals, .5), vals[0] if vals else float("nan"),
+             vals[-1] if vals else float("nan")))
+
+
 def wait_settled(s, timeout_s: float = 30.0, tol_rad: float = 5.0e-4, window_s: float = 0.5):
     """Wait until the pose is genuinely not moving, and hand back that state.
 
@@ -810,7 +828,7 @@ def main() -> int:
         print("    back inside tolerance at t=%s s after the dart; peak |yaw rate| %.1f deg/s"
               % ("%.2f" % back if back is not None else "NEVER",
                  max((abs(r["v_yaw"]) for r in rows), default=0.0) * 180 / math.pi))
-        print("    aim-error sign changes after arrival: %d" % flips)
+        print("    aim-error sign changes after arrival: %d" % flips); report_ref_vs_estimate(dart_rows, pct)
         # C5: smoothness, judged on the REFERENCE. Configured limits are 60 deg/s^2 and
         # 300 deg/s^3 (yaw axis, turret.yaml). Jerk below is differenced from the published
         # reference acceleration at the probe's own sampling rate, so it is an estimate - a

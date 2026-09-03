@@ -1682,3 +1682,45 @@ and named for what it is; the print waits for an edit with the file open. Tool c
 
 Station untouched: homed, ready, MANUAL/HOLD, synthetic vision. Nothing here moves the turret; nothing here is
 acceptance evidence. **§110: 0 items accepted on hardware by a named person. C3 still FAILS.**
+
+## 2026-09-04, 19:2x — round 25: ran the dart with the new term. LEAD is absent at the *source*, and the servo adds its own lag on top
+
+Verdicts at **25° of azimuth in 0.40 s (62 deg/s)**, station homed, synthetic target published by the probe,
+probe returned to MANUAL on exit: **C1 containment PASS · C2 recovery FAIL (2.46 s, bar 1.50) · C3 lead FAIL
+(p50 −12.119°) · C4 PASS (1 sign change) · C5a PASS (accel max 60.0, bar 60+1.5) · C6 PASS.**
+Evidence file: `docs/evidence/dart_25deg_62degps_2026-09-04_r25.log` (copied out of `/tmp`, because evidence
+that lives in `/tmp` has a habit of not existing when the operator asks for it).
+
+Four leads, all in camera LOS azimuth, all from the same samples:
+
+| lead | p50 | min |
+|---|---|---|
+| truth vs executed reference | **−12.119°** | −22.648 |
+| **reference vs the estimator's own estimate** (new term) | **−6.699°** | −18.833 |
+| estimator vs truth | **−3.680°** | −5.948 |
+| predicted LOS vs truth (lead *asked for*) | **−1.745°** | −4.042 |
+
+**The arithmetic closes without hand-waving:** −6.699 + −3.680 = −10.38 against a measured −12.119, with the
+residual explained by p50s of different series not being additive. So the deficit is **two faults, not one**:
+the estimator trails the truth by ~3.7°, **and the axis lags its own setpoint by ~6.7°**. The prediction is
+*working* — it lifts −3.68° to −1.75°, which is ≈ +2.0° of genuine lead, close to the 2.48° that
+40 ms × 62 deg/s implies — but it starts so far behind that the commanded aim still sits behind the target.
+**Lead is absent at the source, not in the lead law.**
+
+That closes the round-22/23/24 loop honestly: it is not the confidence band, not the 300 ms ramp, not a
+joint-vs-LOS scoring error, and not a dead prediction term. The two real candidates are estimator lag at 62
+deg/s and servo lag against its own reference — both **tuning questions the operator must authorise**, not
+mine to change unbidden. **C1 passing says the frame-exit half of (b) holds at this dart; the head-aim half
+does not:** hold-window aim p50 228.8 px = **0.605 box heights**, outside the 1/3 bar (previous locked number
+was 0.246 on a gentler dart).
+
+**Correcting myself before anyone has to:** I introduced this run as "same defaults as the saved run, so the
+numbers stay comparable". **They are not comparable** — the saved −8.856° run was a gentler dart with 27 samples;
+this one is 25° at 62 deg/s with 11 samples. Both numbers are now recorded with their motion parameters
+attached, which is the least a lead figure can ask for after being misread three times.
+
+Deferred item closed: the report line for the new term is in, verified by calling it directly (including the
+no-data case) before any motor ran, and it printed in the real log. **437 pytest / 48 tools tests pass**; no
+control code touched, **57 CTest** stand. Station homed, back to MANUAL/HOLD, `visiond` left stopped so the
+probe had sole ownership of the vision input — **restart it before trusting any vision-dependent evidence**.
+**§110: 0 items accepted on hardware by a named person. C2 and C3 remain FAIL, now with a decomposition.**
