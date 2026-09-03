@@ -349,3 +349,99 @@ TEST(TrackingIntegration, FaultStopsSafely) {
   EXPECT_FALSE(r.sim().in_position_mode(AxisId::Yaw));
   EXPECT_TRUE(r.loop().fault_reason().find("fault") != std::string::npos);
 }
+
+// --- §36 roaming from a cold start, and the command that arms it -----------
+//
+// The station boots with no target and there is no guarantee one ever appears.
+// Two defects lived here together, and each test below is one of them:
+//   * the FSM reached SEARCH only through TARGET_LOST, so a station that had
+//     never acquired anything could never go looking — the sweep was gated on
+//     the acquisition the sweep exists to cause;
+//   * `enable_search` was validated, acknowledged to the UI, and then dropped
+//     (control_loop.cpp: "Acknowledge so the UI can proceed"), so the dashboard
+//     reported success for a no-op.
+
+TEST(TrackingIntegration, ColdStationWithSearchArmedGoesLooking) {
+  TrackingRig r;
+  int64_t t0 = 0;
+  ASSERT_TRUE(run_to_ready(r, t0));
+  std::string err;
+
+  ASSERT_TRUE(r.loop().submit_command("enable_search", "").ok);
+  r.loop().step(t0, kDtNs);                     // commands run on the next cycle
+  ASSERT_TRUE(r.loop().search_override().has_value());
+  ASSERT_TRUE(r.loop().search_override().value());
+
+  // turret.yaml in this rig says search is off (§36: opt-in). The operator's
+  // word must outrank it.
+  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  const double yaw_at_enable = r.loop().last_positions()[1];
+
+  // 2.5 s of nothing at all: no measurement has EVER arrived.
+  for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
+
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Search)
+      << "a station that has never seen a target must go looking for one";
+  EXPECT_NE(r.loop().last_positions()[1], yaw_at_enable)
+      << "SEARCH is a sweep, not a nicer word for holding still";
+}
+
+TEST(TrackingIntegration, ColdStationWithoutSearchHoldsInstead) {
+  // The other half: with search NOT armed, "no target" must remain a quiet hold.
+  // Otherwise this fix would have turned every un-armed station into a sweeper.
+  TrackingRig r;
+  int64_t t0 = 0;
+  ASSERT_TRUE(run_to_ready(r, t0));
+  std::string err;
+  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  const double yaw0 = r.loop().last_positions()[1];
+  for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::ReadyHold);
+  // A band, not bit-equality: run_to_ready guarantees |q - ready| < 0.01 rad, and
+  // the hold reference settles the remaining fraction. The claim being tested is
+  // "it did not start sweeping", which one degree distinguishes from a 45 deg
+  // sweep with room to spare.
+  EXPECT_LT(std::fabs(r.loop().last_positions()[1] - yaw0), 1.0 * kDeg);
+}
+
+TEST(TrackingIntegration, DisableSearchEndsASweepThatIsRunning) {
+  // web::validate_command requires s.search_enabled (i.e. "a sweep is running")
+  // for disable_search, which settles what the button is FOR: stopping a turret
+  // that is roaming, right now. A "takes effect on your next session" answer
+  // would make it useless at its one moment of need.
+  TrackingRig r;
+  int64_t t0 = 0;
+  ASSERT_TRUE(run_to_ready(r, t0));
+  std::string err;
+  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(true), err)) << err;
+  for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
+  ASSERT_EQ(r.loop().tracking_controller().track_state(), TrackState::Search);
+
+  ASSERT_TRUE(r.loop().submit_command("disable_search", "").ok);
+  for (int i = 500; i < 560; ++i) step_no_target(r, t0 + i * kDtNs);
+
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::ReadyHold)
+      << "disarming must end the sweep, not merely decline to start another";
+  EXPECT_EQ(r.loop().tracking_controller().last_reference().source,
+            ReferenceSource::Hold)
+      << "and hand control back to the normal hold path — one stop behaviour, "
+         "not a second one invented for search";
+}
+
+TEST(TrackingIntegration, EnableSearchStartsASweepMidSession) {
+  // The other direction, on the same live flag: a station holding with no target
+  // (the grace window long expired) starts looking the moment the operator arms
+  // it, without a stop/start cycle.
+  TrackingRig r;
+  int64_t t0 = 0;
+  ASSERT_TRUE(run_to_ready(r, t0));
+  std::string err;
+  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
+  ASSERT_EQ(r.loop().tracking_controller().track_state(), TrackState::ReadyHold);
+
+  ASSERT_TRUE(r.loop().submit_command("enable_search", "").ok);
+  for (int i = 500; i < 560; ++i) step_no_target(r, t0 + i * kDtNs);
+
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Search);
+}

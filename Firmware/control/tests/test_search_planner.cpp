@@ -3,6 +3,8 @@
 // speed limit. Pure planning.
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "control/search_planner.hpp"
 
 namespace {
@@ -20,6 +22,23 @@ SearchPlannerConfig test_cfg() {
   c.v_max_rad_s = 10.0 * kDeg;
   c.dwell_s = 0.25;
   return c;
+}
+
+TEST(SearchPlanner, FirstStepWithoutStartNeverCommandsTheDefaultPose) {
+  // The cold-start sweep (§36: no target has ever appeared) enters SEARCH
+  // without anyone calling start(). If step() did not latch the current yaw
+  // first, the very first command would be Output's default q_yaw_rad = 0 —
+  // which on a station homed to raw +148 deg is a ~148 deg jump, not a sweep.
+  SearchPlanner planner(test_cfg());
+  const double q_now = 10.0 * kDeg;
+  const SearchPlanner::Output out = planner.step(0, q_now);
+  EXPECT_TRUE(planner.started());
+  EXPECT_NE(std::fabs(out.q_yaw_rad), 0.0)
+      << "the first search target must be a bound, never the uninitialised 0";
+  // Bounds are +/-45 deg and we are at +10 deg, so the FARTHER bound is -45 deg:
+  // the first sweep goes across the whole workspace, not the 35 deg next door.
+  EXPECT_LT(out.q_yaw_rad, 0.0)
+      << "the first sweep must aim at the farther bound, not the near one";
 }
 
 TEST(SearchPlanner, TargetsFartherBoundFirst) {

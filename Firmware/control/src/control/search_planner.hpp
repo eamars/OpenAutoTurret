@@ -46,8 +46,11 @@ class SearchPlanner {
     bool dwelling = false;
   };
 
-  // Begin a sweep from the current yaw (so the first move is toward the nearer
-  // bound, not a jump).
+  // Begin a sweep from the current yaw, aiming at whichever bound is FARTHER so
+  // the first sweep covers the whole workspace instead of turning around at the
+  // nearest one. Latching the start yaw here is also what keeps the cold-start
+  // path safe: without it the first target would be the uninitialised 0, which
+  // on a station homed to raw +148 deg is a jump, not a sweep.
   void start(double q_yaw_start_rad) {
     started_ = true;
     // Move toward whichever bound is farther (a full first sweep).

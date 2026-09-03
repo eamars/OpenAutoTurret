@@ -172,6 +172,15 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
                  models_[ix(AxisId::Yaw)].raw_to_logical_deg(lo),
                  models_[ix(AxisId::Yaw)].raw_to_logical_deg(hi));
   }
+  // §36 runtime opt-in. Until now the ONLY way to enable the sweep was a config
+  // edit plus a daemon restart, while `enable_search` existed, was validated and
+  // answered ok:true having changed nothing — an operator who pressed it got a
+  // confirmation for an action that never happened, which is worse than no
+  // button. The operator's word outranks turret.yaml in both directions: armed
+  // when the config says off, and disarmed when config (or
+  // target_lost_behavior=search) says on. The line below prints the EFFECTIVE
+  // value, so the log records which one won.
+  if (search_override_.has_value()) cfg.fsm.search_enabled = *search_override_;
   cfg.search.yaw_low_rad = lo;
   cfg.search.yaw_high_rad = hi;
   cfg.search.pitch_rad = ready_raw_[ix(AxisId::Pitch)];  // the safe elevation
@@ -1193,8 +1202,31 @@ void ControlLoop::execute_command(const std::string& name,
                  payload_profile_->yaw.v_max_rad_s / kDeg2Rad);
     return;
   }
-  if (name == "select_target" || name == "enable_search" ||
-      name == "disable_search" || name == "start_homing" ||
+  if (name == "enable_search" || name == "disable_search") {
+    // See enable_tracking(): this used to be acknowledged and dropped. It arms
+    // or disarms the sweep for the NEXT start_tracking. It deliberately cannot
+    // retune a session already running — the FSM lives inside
+    // TrackingController and rebuilding it mid-flight would throw away the
+    // acquisition history — and "applies next time" is stated rather than left
+    // for the operator to discover by watching a turret that keeps sweeping.
+    const bool want = (name == "enable_search");
+    search_override_ = want;
+    if (tracking_) {
+      // Live: the flag is consulted at the next transition, so arming it while
+      // holding starts the sweep on the next cycle, and disarming it while
+      // sweeping stops sweeping (the FSM hands back to the hold). Both are the
+      // point of the buttons; a version that only affected a future session
+      // could not be used to stop a turret that is already roaming.
+      tracking_->set_search_enabled(want);
+      spdlog::info("search mode {} for the RUNNING session (§36)",
+                   want ? "ARMED" : "disarmed — returning to the hold");
+    } else {
+      spdlog::info("search mode {} for the next start_tracking (§36)",
+                   want ? "ARMED" : "disarmed");
+    }
+    return;
+  }
+  if (name == "select_target" || name == "start_homing" ||
       name == "start_installation_calibration") {
     // These are validated here but acted on by the tracking/vision subsystem or
     // an external tool (see webd). Acknowledge so the UI can proceed.

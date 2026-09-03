@@ -9,6 +9,12 @@
 //   COASTING -> (timeout) -> BRAKE_TO_HOLD -> TARGET_LOST ->
 //       +-- search enabled ----> SEARCH
 //       +-- otherwise ----------> READY_HOLD
+//   READY_HOLD (never saw any target, search enabled, after lost_ns) -> SEARCH
+//
+// The last edge is the one that matters at a station: after boot there is no
+// guarantee a target will ever appear, and SEARCH exists precisely to go looking
+// for one. If it were reachable only through TARGET_LOST it would require an
+// acquisition before it could be used to get an acquisition.
 //
 // All timing thresholds are configuration. "Do not continue extrapolating an
 // old target indefinitely" (§34): as vision goes stale the confidence decays
@@ -32,7 +38,7 @@ enum class TrackState : uint8_t {
   Coasting,     // measurement temporarily missing; continuing the prediction
   BrakeToHold,  // longer dropout; progressively braking toward a safe hold
   TargetLost,   // extended dropout; controlled stop (transient -> Search/ReadyHold)
-  Search,       // target lost and search is enabled
+  Search,       // search enabled: target lost, OR none has ever appeared (§36)
 };
 
 inline const char* track_state_name(TrackState s) {
@@ -69,6 +75,14 @@ class TrackingStateMachine {
   // Returns the resulting state.
   TrackState update(TimeNs now_ns, bool has_valid) {
     now_cache_ns_ = now_ns;
+    // The FSM is constructed when tracking is enabled, so the first cycle is the
+    // station's "search clock zero". A flag rather than a 0 comparison: test
+    // clocks legitimately start at 0, and a sentinel that collides with a valid
+    // value is how a grace period silently becomes "expired immediately".
+    if (!start_stamped_) {
+      start_stamped_ = true;
+      start_ns_ = now_ns;
+    }
     if (has_valid) {
       last_valid_ns_ = now_ns;
       has_seen_valid_ = true;
@@ -76,7 +90,16 @@ class TrackingStateMachine {
       return state_;
     }
     if (!has_seen_valid_) {
-      state_ = TrackState::ReadyHold;  // never saw a target
+      // No target has EVER been seen. §36: that is the normal way to boot, and
+      // the sweep is how a target gets found — so waiting in READY_HOLD for a
+      // target to happen to appear is not safety, it is a turret that refuses to
+      // do the one job this state exists for. Give the detector the same grace a
+      // lost target gets (lost_ns) — long enough that a slow first frame is not
+      // answered with a sweep, short enough that "nothing yet" is answered by
+      // looking — then roam. With search disabled the hold is still the answer.
+      const bool grace_expired = now_ns - start_ns_ >= cfg_.lost_ns;
+      state_ = (cfg_.search_enabled && grace_expired) ? TrackState::Search
+                                                      : TrackState::ReadyHold;
       return state_;
     }
     if (state_ == TrackState::TargetLost) {
@@ -101,6 +124,25 @@ class TrackingStateMachine {
 
   TrackState state() const { return state_; }
 
+  // §36 runtime opt-in, effective immediately.
+  //
+  // This is a flag, not a rebuild: it consults the next transition, so nothing
+  // about the acquisition history is thrown away (that is what made the command
+  // seem like a next-session-only thing). Turning it OFF while sweeping has to end
+  // the sweep — an operator watching a turret roam wants the roaming to stop when
+  // they say so, and `disable_search` answering "that applies to your next
+  // session" would be a command you cannot use for its one real purpose.
+  void set_search_enabled(bool enabled) {
+    cfg_.search_enabled = enabled;
+    if (!enabled && state_ == TrackState::Search) {
+      // Hand back to the safe hold. The reference manager then drives to the
+      // ready pose through the normal hold path, so there is no second stop
+      // behaviour to keep in sync.
+      state_ = TrackState::ReadyHold;
+    }
+  }
+  bool search_enabled() const { return cfg_.search_enabled; }
+
   // §35 confidence in the current target: 1.0 when fresh, decaying linearly to
   // 0.0 at the lost threshold. Used to scale tracking speed.
   double confidence() const {
@@ -118,6 +160,11 @@ class TrackingStateMachine {
     last_valid_ns_ = 0;
     now_cache_ns_ = 0;
     has_seen_valid_ = false;
+    // A reset means "we are not enabled any more": the next enable must earn its
+    // own grace window instead of inheriting an expired one and sweeping the
+    // instant tracking comes back on.
+    start_stamped_ = false;
+    start_ns_ = 0;
   }
 
   TimeNs last_valid_ns() const { return last_valid_ns_; }
@@ -128,6 +175,9 @@ class TrackingStateMachine {
   TimeNs last_valid_ns_ = 0;
   TimeNs now_cache_ns_ = 0;  // set via update() (for confidence)
   bool has_seen_valid_ = false;
+  // Grace window origin for the never-seen-a-target case (§36 cold-start sweep).
+  TimeNs start_ns_ = 0;
+  bool start_stamped_ = false;
 };
 
 }  // namespace tracking

@@ -157,6 +157,11 @@ class ControlLoop {
   // simply discarded by the consumer.
   void feed_measurement(const vision::TargetMeasurement& m);
   bool tracking_mode_enabled() const { return tracking_ != nullptr; }
+
+  // §36 runtime search opt-in: nullopt = "whatever turret.yaml says", true/false
+  // = the operator's explicit word, which outranks the config in both
+  // directions. Exposed so a test can assert what a command ACTUALLY changed.
+  std::optional<bool> search_override() const { return search_override_; }
   // Access to the tracking controller (telemetry, state). Only call when
   // tracking_mode_enabled().
   const TrackingController& tracking_controller() const { return *tracking_; }
@@ -369,6 +374,7 @@ class ControlLoop {
   // Commissioned tracking configuration (from turret.yaml + the calibration
   // files). Used by the `start_tracking` command and the auto-enable path.
   TrackingController::Config tracking_cfg_;
+  std::optional<bool> search_override_;  // enable_search / disable_search
   bool tracking_auto_enable_ = false;
   // Observe-only view of the vision transport (owned by main / VisionIngest).
   const vision::VisionLink* vision_link_ = nullptr;

@@ -144,6 +144,11 @@ class TrackingController {
 
   // --- accessors ----------------------------------------------------------
   tracking::TrackState track_state() const { return fsm_.state(); }
+
+  // enable_search / disable_search (§36), live. Bounds stay a start_tracking
+  // property — they are derived from the homed soft limits at enable time — but
+  // on/off is the operator's, any time.
+  void set_search_enabled(bool enabled) { fsm_.set_search_enabled(enabled); }
   double confidence() const { return fsm_.confidence(); }
   bool has_measurement() const { return has_measurement_; }
   bool estimator_initialized() const { return estimator_.initialized(); }

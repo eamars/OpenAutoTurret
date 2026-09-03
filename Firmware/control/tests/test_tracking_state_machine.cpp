@@ -27,6 +27,70 @@ TEST(TrackingStateMachine, AcquireFromReadyHold) {
   EXPECT_EQ(fsm.state(), TrackState::Tracking);
 }
 
+TEST(TrackingStateMachine, ColdStartWithNoTargetEverStillSearches) {
+  // The station boots with no target in view and there is no guarantee one ever
+  // appears. Gating SEARCH on TARGET_LOST made it reachable only after an
+  // acquisition — i.e. only in the case it exists to prevent — so a cold turret
+  // sat in READY_HOLD forever while the sweep that would have found a target
+  // never ran. After the same grace a lost target gets, it must go looking.
+  TrackingStateMachineConfig c = test_cfg();
+  c.search_enabled = true;
+  TrackingStateMachine fsm(c);
+
+  fsm.update(0, /*has_valid=*/false);
+  EXPECT_EQ(fsm.state(), TrackState::ReadyHold)
+      << "the grace window exists so a detector that is merely slow to publish "
+         "its first frame is not answered with a sweep";
+  fsm.update(999 * kMs, false);
+  EXPECT_EQ(fsm.state(), TrackState::ReadyHold);
+  fsm.update(1000 * kMs, false);
+  EXPECT_EQ(fsm.state(), TrackState::Search);
+  fsm.update(60 * kMs * 1000, false);
+  EXPECT_EQ(fsm.state(), TrackState::Search) << "it must keep searching";
+}
+
+TEST(TrackingStateMachine, ColdStartHoldsWhenSearchIsDisabled) {
+  // §36: search is opt-in. Disabling it must keep the old, boring behaviour —
+  // otherwise "search off" would secretly mean "sweep the workspace".
+  TrackingStateMachineConfig c = test_cfg();
+  c.search_enabled = false;
+  TrackingStateMachine fsm(c);
+  fsm.update(0, false);
+  fsm.update(10 * 1000 * kMs, false);
+  EXPECT_EQ(fsm.state(), TrackState::ReadyHold);
+}
+
+TEST(TrackingStateMachine, ColdStartGraceIsReArmedByReset) {
+  // reset() is what happens when tracking is stopped and started again. The new
+  // enable must get its own window; inheriting an expired one would make the
+  // turret sweep the instant tracking is re-enabled, before the detector has
+  // said anything at all.
+  TrackingStateMachineConfig c = test_cfg();
+  c.search_enabled = true;
+  TrackingStateMachine fsm(c);
+  fsm.update(0, false);
+  fsm.update(2000 * kMs, false);
+  ASSERT_EQ(fsm.state(), TrackState::Search);
+  fsm.reset();
+  fsm.update(3000 * kMs, false);
+  EXPECT_EQ(fsm.state(), TrackState::ReadyHold);
+  fsm.update(4000 * kMs, false);
+  EXPECT_EQ(fsm.state(), TrackState::Search);
+}
+
+TEST(TrackingStateMachine, ARealTargetEndsTheColdStartSweep) {
+  // The sweep is a means: the moment a target exists, TRACKING wins. Otherwise
+  // this fix would have traded "never searches" for "never stops searching".
+  TrackingStateMachineConfig c = test_cfg();
+  c.search_enabled = true;
+  TrackingStateMachine fsm(c);
+  fsm.update(0, false);
+  fsm.update(2000 * kMs, false);
+  ASSERT_EQ(fsm.state(), TrackState::Search);
+  fsm.update(2033 * kMs, /*has_valid=*/true);
+  EXPECT_EQ(fsm.state(), TrackState::Tracking);
+}
+
 TEST(TrackingStateMachine, CoastingOnShortDropout) {
   TrackingStateMachine fsm(test_cfg());
   fsm.update(0, true);
