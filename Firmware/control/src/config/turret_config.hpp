@@ -208,6 +208,33 @@ struct PayloadConfig {
   double check_spd_ki = 0.02;
 };
 
+// §72: the v3 block. Parsed and validated at load, and *nothing here is optional at
+// runtime* — an absent block keeps today's behaviour exactly (the roam region derived from
+// the station's own limits, the built-in 300 ms lease, the sanctioned step sizes). Naming
+// a value is how an operator takes responsibility for it; not naming one is not the same
+// as naming a default, and the two must not look alike in the file.
+struct V3Config {
+  // Boot mode. Only MANUAL is accepted (§16/§52): a station that starts sweeping or
+  // tracking by itself on power-up has made a decision the operator never authorised,
+  // and no config file in this project gets to make one.
+  std::string default_mode = "MANUAL";
+
+  // §33: a named sweep region, in the same degrees the rest of the file uses. Yaw only —
+  // the pitch reference is a single pose, not a range, because the sweep holds pitch and
+  // walks yaw. Unset means "derive it from what the station proved during homing".
+  bool has_roam_region = false;
+  double roam_yaw_min_deg = 0.0;
+  double roam_yaw_max_deg = 0.0;
+  bool has_roam_pitch = false;
+  double roam_pitch_deg = 0.0;
+  double roam_velocity_deg_s = 0.0;  // 0 = derive from the tracking search speed
+
+  // §38/§41: the dead-man timings and the step sizes offered.
+  int jog_keepalive_ms = 0;   // 0 = the controller's default
+  int jog_lease_ms = 0;
+  std::vector<double> step_sizes_deg;  // empty = the sanctioned three
+};
+
 struct TurretConfig {
   int schema_version = 1;
   CanConfig can;
@@ -224,6 +251,7 @@ struct TurretConfig {
   CameraConfig camera;
   InstallationConfig installation;
   PayloadConfig payload;
+  V3Config v3;   // §72
 };
 
 struct LoadResult {

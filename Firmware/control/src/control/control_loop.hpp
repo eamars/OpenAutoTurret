@@ -130,6 +130,18 @@ class ControlLoop {
     // so a check from any homed pose is valid; it must stay >= ~4 deg for the
     // full check amplitude (2 deg step + 2 deg edge margin).
     double payload_check_region_half_span_deg = 10.0;
+    // §72: values an operator may name in the config file. Zero / empty keeps today's
+    // behaviour exactly — derived region, built-in 300 ms lease, sanctioned step sizes.
+    // The distinction is deliberate: an omitted value is not a value.
+    bool roam_region_named = false;
+    double roam_yaw_min_deg = 0.0;
+    double roam_yaw_max_deg = 0.0;
+    bool roam_pitch_named = false;
+    double roam_pitch_deg = 0.0;
+    double roam_velocity_deg_s = 0.0;  // 0 = derive
+    int manual_lease_ms = 0;
+    int manual_keepalive_ms = 0;
+    std::vector<double> step_sizes_deg;  // empty = the sanctioned three
     // §49 search sweep half-span (rad) around the ready pose. Clamped strictly
     // inside the homed soft limits when tracking is enabled (the SearchPlanner
     // requires its bounds to leave braking margin, §36).
@@ -517,6 +529,7 @@ class ControlLoop {
   // here rather than only in the snapshot because each cycle fills a fresh snapshot.
   telemetry::BlackBoxCapture blackbox_{};
   bool was_unsafe_ = false;
+  bool manual_cfg_applied_ = false;
 
   // §79's transition memory: events fire on changes, not on every cycle.
   AutoTrackState last_at_state_ = AutoTrackState::WaitTarget;
@@ -540,6 +553,11 @@ class ControlLoop {
   // "logged" in one place and "structured" in another and drift from it. The subject is
   // folded into the detail because that is what the record can carry; §80's replay gets
   // the full picture from the black box beside it.
+  // §72: the configured lease, applied the first time manual motion is asked for rather
+  // than in a constructor that may run before the configuration does. Idempotent, so it
+  // can sit on the path without becoming a second source of truth.
+  void ensure_manual_cfg();
+
   void emit(telemetry::Event e, TimeNs now_ns, uint64_t subject_id = 0,
             const char* subject = nullptr, const char* detail = nullptr) {
     std::string d;

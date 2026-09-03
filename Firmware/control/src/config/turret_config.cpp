@@ -338,6 +338,129 @@ void load_homing_plan(const YAML::Node& root, HomingPlanConfig& out,
   }
 }
 
+// §72. Parse *and* refuse. The refusals are the point: every one of these values ends up
+// moving a gimbal, and a mistake in the file should be a message at startup rather than a
+// motion the operator did not expect. Where the check is only an approximation of what
+// the control loop enforces at runtime, it says so — the runtime validation stays
+// authoritative, and this one exists so the failure is a sentence instead of an event.
+void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& err,
+              std::vector<std::string>& warn, const AxisLimitsConfig axes[2]) {
+  const YAML::Node n = fetch(root, "v3");
+  if (n.IsDefined() && !n.IsMap()) {
+    err.push_back("v3: must be a mapping");
+    return;
+  }
+  if (!n.IsDefined()) return;  // today's behaviour, unchanged
+
+  out.default_mode = opt_string(n, "default_mode", "v3.default_mode", "MANUAL", warn);
+  if (out.default_mode != "MANUAL") {
+    err.push_back("v3.default_mode must be MANUAL (got '" + out.default_mode +
+                  "'). controld boots in MANUAL and stays there until an operator asks "
+                  "for a mode (§16/§52): the machine does not choose to move because a "
+                  "file said so.");
+  }
+
+  const YAML::Node roam = fetch(n, "auto_roam");
+  if (roam.IsDefined()) {
+    const YAML::Node lo = fetch(roam, "yaw_min_deg");
+    const YAML::Node hi = fetch(roam, "yaw_max_deg");
+    if (!unspecified(lo) && !unspecified(hi)) {
+      out.has_roam_region = true;
+      out.roam_yaw_min_deg = lo.as<double>();
+      out.roam_yaw_max_deg = hi.as<double>();
+      if (!(out.roam_yaw_min_deg < out.roam_yaw_max_deg)) {
+        err.push_back("v3.auto_roam.yaw_min_deg must be below yaw_max_deg");
+        out.has_roam_region = false;
+      }
+    } else if (!unspecified(lo) || !unspecified(hi)) {
+      err.push_back("v3.auto_roam needs both yaw_min_deg and yaw_max_deg, or neither");
+    }
+    const YAML::Node pit = fetch(roam, "pitch_deg");
+    if (!unspecified(pit)) {
+      out.has_roam_pitch = true;
+      out.roam_pitch_deg = pit.as<double>();
+    }
+    out.roam_velocity_deg_s =
+        opt_double(roam, "velocity_deg_s", "v3.auto_roam.velocity_deg_s", 0.0, warn);
+    if (out.roam_velocity_deg_s < 0.0) {
+      err.push_back("v3.auto_roam.velocity_deg_s must be >= 0 (0 derives it)");
+      out.roam_velocity_deg_s = 0.0;
+    }
+
+    // Strictly inside the soft limits, checked here against the numbers in this same
+    // file. The control loop re-checks at runtime with the *homed* limits and the
+    // braking margin, which are the real ones; this check exists because a region that
+    // is obviously outside the range the axes reported during homing is a typo, and a
+    // typo is cheaper to catch before anything moves.
+    if (out.has_roam_region) {
+      const AxisLimitsConfig& yaw = axes[1];
+      const double margin = yaw.soft_margin_deg;
+      const double lo_lim = yaw.expected_travel_deg.min + margin;
+      const double hi_lim = yaw.expected_travel_deg.max - margin;
+      if (out.roam_yaw_min_deg < lo_lim || out.roam_yaw_max_deg > hi_lim) {
+        char msg[256];
+        std::snprintf(msg, sizeof msg,
+                      "v3.auto_roam region [%.2f, %.2f] deg is not inside the yaw soft "
+                      "limits [%.2f, %.2f] deg (travel plus %.2f deg soft margin). The "
+                      "roam envelope must be strictly inside the safe envelope (§33); "
+                      "the control loop will refuse to sweep anyway — fix the file.",
+                      out.roam_yaw_min_deg, out.roam_yaw_max_deg, lo_lim, hi_lim, margin);
+        err.push_back(msg);
+      }
+    }
+    if (out.has_roam_pitch) {
+      const AxisLimitsConfig& pitch = axes[0];
+      const double margin = pitch.soft_margin_deg;
+      if (out.roam_pitch_deg < pitch.expected_travel_deg.min + margin ||
+          out.roam_pitch_deg > pitch.expected_travel_deg.max - margin) {
+        err.push_back("v3.auto_roam.pitch_deg is outside the pitch soft limits (§33)");
+      }
+    }
+  }
+
+  const YAML::Node man = fetch(n, "manual");
+  if (man.IsDefined()) {
+    out.jog_keepalive_ms =
+        static_cast<int>(opt_double(man, "jog_keepalive_ms", "v3.manual.jog_keepalive_ms",
+                                    0.0, warn));
+    out.jog_lease_ms = static_cast<int>(opt_double(man, "jog_lease_timeout_ms",
+                                                   "v3.manual.jog_lease_timeout_ms", 0.0,
+                                                   warn));
+    // The same ratio the dashboard's own guard asserts, enforced here as well: three
+    // renewals must fit inside the lease, or a held jog stops on an ordinary network
+    // hiccup — which the operator experiences as the turret refusing to obey them.
+    if (out.jog_keepalive_ms > 0 && out.jog_lease_ms > 0) {
+      if (out.jog_keepalive_ms < 50)
+        err.push_back("v3.manual.jog_keepalive_ms below 50 floods the command path");
+      if (out.jog_keepalive_ms * 3 > out.jog_lease_ms)
+        err.push_back("v3.manual: the browser must be able to renew at least three times "
+                      "inside jog_lease_timeout_ms (keepalive " +
+                      std::to_string(out.jog_keepalive_ms) + " ms vs lease " +
+                      std::to_string(out.jog_lease_ms) + " ms)");
+    }
+    const YAML::Node steps = fetch(man, "step_sizes_deg");
+    if (steps.IsDefined()) {
+      if (!steps.IsSequence() || steps.size() == 0) {
+        err.push_back("v3.manual.step_sizes_deg must be a non-empty sequence");
+      }
+      for (const YAML::Node& v : steps) {
+        const double d = v.as<double>();
+        // §41 sanctions 0.5 / 1 / 5 degrees, and the daemon refuses anything else. A
+        // config file may narrow that set; it may not widen it, because the sizes were
+        // chosen for what a person can correct with a step, not for convenience.
+        if (d != 0.5 && d != 1.0 && d != 5.0) {
+          char msg[128];
+          std::snprintf(msg, sizeof msg,
+                        "v3.manual.step_sizes_deg: %.3f is not one of 0.5, 1, 5 "
+                        "(§41) — the daemon would refuse it", d);
+          err.push_back(msg);
+        }
+        out.step_sizes_deg.push_back(d);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 LoadResult load_turret_config(const std::string& path) {
@@ -617,6 +740,9 @@ LoadResult load_turret_config(const std::string& path) {
     warn.push_back("payload.check_spd_ki < 0: using the 0.02 default");
     c.payload.check_spd_ki = 0.02;
   }
+
+  // §72. Last, so it can see the axis limits it has to be checked against.
+  parse_v3(root, c.v3, err, warn, c.axes);
 
   r.ok = err.empty();
   return r;

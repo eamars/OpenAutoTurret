@@ -6,6 +6,31 @@
 # never compile-time assumptions. The loader treats a missing key or the literal
 # "TBD" as "use the built-in conservative default" and records a warning.
 schema_version: 1
+# §72 — the v3 block, everything in it commented out.
+#
+# It is commented out because these values move a gimbal, and a value that arrives in a
+# station's file because code was merged is a decision nobody made at the bench. The
+# defaults are the ones v3 derives from the station itself (roam region from the homed
+# soft limits, 300 ms jog lease, 0.5/1/5 degree steps), and they are what is running
+# today. Uncomment a key to take responsibility for it.
+#
+# What naming a value does NOT do: widen where the turret may go. The roam region is
+# clamped inside the homed soft limits minus the braking inset, and the runtime envelope
+# check still runs, so a named region can only ever narrow the sweep. A named speed may
+# only slow it. A boot mode other than MANUAL is refused at load, not clamped — the
+# machine does not decide to move because a file said so.
+#
+# v3:
+#   default_mode: MANUAL              # only MANUAL is accepted (§16/§52)
+#   auto_roam:
+#     yaw_min_deg: 100.0              # must be inside the yaw soft limits (§33)
+#     yaw_max_deg: 190.0
+#     pitch_deg: -39.6                # one elevation for the whole sweep (§30)
+#     velocity_deg_s: 10.0            # may slow the sweep, never speed it past the limit
+#   manual:
+#     jog_keepalive_ms: 100           # the page renews at this rate (§38)
+#     jog_lease_timeout_ms: 300       # must fit three renewals
+#     step_sizes_deg: [0.5, 1.0, 5.0] # may narrow §41's set, never widen it
 
 can:
   # PHY swap point (can_transport.hpp). "socketcan" = MCP2515 HAT on can0;

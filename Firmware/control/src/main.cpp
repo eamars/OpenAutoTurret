@@ -195,6 +195,19 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
 ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   ControlLoop::Config c;
   c.control_hz = cfg.control_loop_hz;
+  // §72: the named values. Each is passed through only when the file named it; an
+  // omitted value stays zero/false so the loop keeps deriving it from what the station
+  // measured. Degrees here, radians in the loop — the same convention the rest of this
+  // function obeys, and the reason the conversion happens here rather than in the file.
+  c.roam_region_named = cfg.v3.has_roam_region;
+  c.roam_yaw_min_deg = cfg.v3.roam_yaw_min_deg;
+  c.roam_yaw_max_deg = cfg.v3.roam_yaw_max_deg;
+  c.roam_pitch_named = cfg.v3.has_roam_pitch;
+  c.roam_pitch_deg = cfg.v3.roam_pitch_deg;
+  c.roam_velocity_deg_s = cfg.v3.roam_velocity_deg_s;
+  c.manual_lease_ms = cfg.v3.jog_lease_ms;
+  c.manual_keepalive_ms = cfg.v3.jog_keepalive_ms;
+  c.step_sizes_deg = cfg.v3.step_sizes_deg;
   c.feedback_max_age_ms = cfg.safety.feedback_max_age_ms;
   c.deadline_max_us = cfg.safety.deadline_max_us;
   c.deadline_miss_threshold = cfg.safety.deadline_miss_threshold;

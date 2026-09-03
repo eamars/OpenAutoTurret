@@ -1435,25 +1435,61 @@ RoamEnvelope ControlLoop::safe_envelope() const {
   return e;
 }
 
+void ControlLoop::ensure_manual_cfg() {
+  if (manual_cfg_applied_) return;
+  manual_cfg_applied_ = true;
+  if (cfg_.manual_lease_ms <= 0 && cfg_.manual_keepalive_ms <= 0) return;  // defaults
+  ManualConfig mc = manual_.config();
+  if (cfg_.manual_lease_ms > 0) mc.lease_ms = cfg_.manual_lease_ms;
+  if (cfg_.manual_keepalive_ms > 0) mc.keepalive_ms = cfg_.manual_keepalive_ms;
+  // The ratio the config loader already refused to accept, checked again where it
+  // matters. The lease is what stops the turret; a keepalive that cannot fit inside it
+  // three times means a held jog dies on an ordinary network hiccup, which the operator
+  // experiences as the turret refusing to obey and never as a number in a YAML file.
+  if (mc.keepalive_ms * 3 > mc.lease_ms) {
+    spdlog::warn("manual lease {} ms cannot hold three renewals of {} ms; restoring "
+                 "300/100 ms (§38)", mc.lease_ms, mc.keepalive_ms);
+    mc.lease_ms = 300;
+    mc.keepalive_ms = 100;
+  }
+  manual_.set_config(mc);
+}
+
 RoamConfig ControlLoop::roam_config() const {
   RoamConfig c = roam_.config();
   const AxisLimits& yl = limits_[ix(AxisId::Yaw)];
   const AxisLimits& pl = limits_[ix(AxisId::Pitch)];
   const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
-  c.envelope.yaw_min_rad =
-      std::max(ready_yaw - cfg_.search_span_rad, yl.q_soft_min_rad + inset);
-  c.envelope.yaw_max_rad =
-      std::min(ready_yaw + cfg_.search_span_rad, yl.q_soft_max_rad - inset);
+  if (cfg_.roam_region_named) {
+    // §72: a named region is a request, not an override. It is still clamped inside the
+    // homed soft limits minus the braking inset, and validate_envelope() below still has
+    // to pass — so the file can narrow where the turret sweeps and can never widen where
+    // it may go. That asymmetry is the only reason naming it is safe.
+    c.envelope.yaw_min_rad =
+        std::max(cfg_.roam_yaw_min_deg * kDeg2Rad, yl.q_soft_min_rad + inset);
+    c.envelope.yaw_max_rad =
+        std::min(cfg_.roam_yaw_max_deg * kDeg2Rad, yl.q_soft_max_rad - inset);
+  } else {
+    c.envelope.yaw_min_rad =
+        std::max(ready_yaw - cfg_.search_span_rad, yl.q_soft_min_rad + inset);
+    c.envelope.yaw_max_rad =
+        std::min(ready_yaw + cfg_.search_span_rad, yl.q_soft_max_rad - inset);
+  }
   c.envelope.pitch_min_rad = pl.q_soft_min_rad + inset;
   c.envelope.pitch_max_rad = pl.q_soft_max_rad - inset;
-  // §30: one elevation for the whole sweep, and it is the elevation the station was
+  // §30: one elevation for the whole sweep. Default is the elevation the station was
   // declared ready at — the pose the operator has already seen is safe under load. §72
-  // will let a station name its own roam region and elevation; until that file exists,
-  // deriving from the limits the station already obeys is the only source that cannot
-  // drift from the truth.
-  c.pitch_ref_rad = ready_raw_[ix(AxisId::Pitch)];
-  c.v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, hold_speed_effective());
+  // lets a station name its own; the named value is still checked against the safe
+  // envelope below, so naming an elevation cannot put the sweep somewhere unsafe.
+  const double derived_v =
+      std::min(tracking_cfg_.search_v_max_rad_s, hold_speed_effective());
+  c.pitch_ref_rad = cfg_.roam_pitch_named ? cfg_.roam_pitch_deg * kDeg2Rad
+                                         : ready_raw_[ix(AxisId::Pitch)];
+  // A named speed may slow the sweep; it may not exceed the station's own search limit.
+  c.v_max_rad_s = cfg_.roam_velocity_deg_s > 0.0
+                      ? std::min(derived_v, cfg_.roam_velocity_deg_s * kDeg2Rad)
+                      : derived_v;
   // §33: a world-level scan needs gravity from the BNO085 expansion. This station has
   // the sensor, but core v3 does not depend on it, so the sweep stays in joint space and
   // says so rather than claiming a level scan it cannot honour.
@@ -2289,6 +2325,7 @@ void ControlLoop::execute_command(const std::string& name,
                                          : "no jog lease to renew (it expired)");
       return;
     }
+    ensure_manual_cfg();  // §72: before a lease is ever granted, not after
     if (name == "manual_jog_stop") {
       if (manual_.lease_active())
         emit(telemetry::Event::ManualJogStopped, now_ns_, 0, nullptr,
@@ -2363,11 +2400,25 @@ void ControlLoop::execute_command(const std::string& name,
     // move the section says not to build, and a typo of one digit is a turret crossing
     // the room. §72 can widen the list at commissioning.
     const double allowed[3] = {0.5, 1.0, 5.0};
+    // §72 may narrow the offered set; it may not widen it, and widening is impossible
+    // here rather than merely discouraged — the candidates below are intersected with
+    // the sanctioned three, so a YAML value of 90 never reaches this check.
     bool ok_size = false;
-    for (double d : allowed)
-      if (std::fabs(deg - d) < 1e-9) ok_size = true;
+    for (double d : allowed) {
+      if (std::fabs(deg - d) > 1e-9) continue;
+      if (!cfg_.step_sizes_deg.empty()) {
+        bool offered = false;
+        for (double s2 : cfg_.step_sizes_deg)
+          if (std::fabs(d - s2) < 1e-9) offered = true;
+        if (!offered) continue;
+      }
+      ok_size = true;
+    }
     if (!ok_size) {
-      ack_command(name, false, "step size must be one of 0.5, 1, or 5 degrees");
+      ack_command(name, false,
+                  cfg_.step_sizes_deg.empty()
+                      ? "step size must be one of 0.5, 1, or 5 degrees"
+                      : "step size is not one this station was configured to offer (§72)");
       return;
     }
     // Same trap as the jog: the step is relative to where the turret *is*. Reading the
