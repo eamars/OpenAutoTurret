@@ -92,6 +92,8 @@ class Telemetry:
     selection_ambiguous: bool = False
     reacquisition_score: float = 0.0
     ambiguity_margin: float = 0.0
+    confidence_band: str = "INVALID"
+    selected_confidence: float = 0.0
     cmd_ack_seq: int = 0
     # Phase 9 payload verification (§28.5, §31.3, §42.1).
     payload_profile_name: str = ""          # active stored profile ("" = none)

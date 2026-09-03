@@ -396,7 +396,7 @@ TEST(FeedTrackSet, TentativeCandidatesAreNotFollowed) {
       << "a tentative track became the thing being followed";
 }
 
-TEST(FeedTrackSet, ConfirmedPersonIsFollowedAndItsIdentityIsPublished) {
+TEST(FeedTrackSet, AVisibleTargetIsSeenButOnlyASelectionIsFollowed) {
   HomedLoop h;
   ASSERT_TRUE(h.ready);
   h.run("set_mode", "AUTO_TRACK");
@@ -405,9 +405,25 @@ TEST(FeedTrackSet, ConfirmedPersonIsFollowedAndItsIdentityIsPublished) {
          "TrackingController::Config in this rig is not commissionable";
   auto set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f);
   feed(h, set, 4, 20);
-  EXPECT_EQ(h.snap().selected_track_id, 3u)
-      << "the followed candidate's identity has to be on the wire (§78), or a "
-         "tracking complaint has no subject to reason about";
+  // §16, and the retirement of the interim rule as a source of motion. The estimator
+  // IS primed — vision keeps being processed, which is what makes a selection act
+  // immediately instead of waiting out a warm-up — but the turret is not following
+  // anybody, and `selected_track_id` says so. An earlier version of this test asserted
+  // the opposite: that the identity of the best-scoring detection was published as the
+  // thing being followed. That field would have been describing a decision nobody made.
+  EXPECT_TRUE(h.loop->tracking_controller().estimator_initialized())
+      << "vision stopped being processed for want of a selection";
+  EXPECT_EQ(h.snap().selected_track_id, 0u);
+  EXPECT_EQ(h.snap().mode_phase, "WAIT_TARGET");
+  EXPECT_EQ(h.snap().selected_display_index, 0);
+
+  h.run("select_target", "1");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  feed(h, set, 3, 24);
+  ASSERT_EQ(h.snap().selected_track_id, 3u)
+      << "§78: once the operator's choice is what the turret is acting on, the "
+         "identity is published rather than argued about";
+  EXPECT_EQ(h.snap().selected_display_index, 1);
 }
 
 TEST(FeedTrackSet, V1sClassAndConfidenceLimitsSurviveTheMove) {

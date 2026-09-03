@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -179,6 +180,51 @@ void step_with_target(TrackingRig& r, int64_t t, int64_t seq, double az,
   r.loop().step(t, kDtNs);
 }
 
+// v3 path: the same synthetic target, published the way visiond publishes it — a
+// TrackSet with a normalized anchor, a uuid and a label — then one control cycle. The
+// v1 feed above stays: §17 keeps the pixel -> ray -> LOS -> estimator chain, and the
+// tests that walk the v1 FSM's own transitions through it are still honest.
+void step_with_track(TrackingRig& r, int64_t t, int64_t seq, double az, double el,
+                     uint16_t index = 1, uint64_t uuid = 7) {
+  const double yaw = r.loop().last_positions()[1];
+  const double pitch = r.loop().last_positions()[0];
+  double u, v;
+  base_los_to_pixel(r.cam(), r.kin(), az, el, yaw, pitch, u, v);
+  ota::tracks::TrackSet set;
+  set.frame_sequence = seq;
+  set.sensor_timestamp_ns = t;
+  set.publish_timestamp_ns = t + 3'000'000;
+  set.width = 1920;
+  set.height = 1080;
+  ota::tracks::Track tr;
+  tr.uuid = ota::tracks::TrackUuid{0, uuid};
+  tr.display_index = index;
+  tr.class_id = 1;
+  std::memcpy(tr.class_name, "person", 6);
+  tr.state = ota::tracks::TrackState::Confirmed;
+  tr.detector_confidence = 0.95f;
+  tr.track_confidence = 0.95f;
+  tr.bbox.x_min = static_cast<float>((u - 40.0) / 1920.0);
+  tr.bbox.x_max = static_cast<float>((u + 40.0) / 1920.0);
+  tr.bbox.y_min = static_cast<float>((v - 80.0) / 1080.0);
+  tr.bbox.y_max = static_cast<float>((v + 80.0) / 1080.0);
+  tr.anchor_x = static_cast<float>(u / 1920.0);
+  tr.anchor_y = static_cast<float>(v / 1080.0);
+  tr.visible_frames = 30;
+  set.add(tr);
+  r.loop().feed_track_set(set, t);
+  r.loop().step(t, kDtNs);
+}
+
+// The operator's act (§14): name the target the turret is allowed to follow.
+void select_first(TrackingRig& r, int64_t& t) {
+  r.loop().submit_command("select_target", "1");
+  for (int i = 0; i < 4; ++i) {
+    step_with_track(r, t, 900 + i, 0.0, 0.0);
+    t += kDtNs;
+  }
+}
+
 // Step one control cycle with NO target measurement (target lost / not present).
 void step_no_target(TrackingRig& r, int64_t t) { r.loop().step(t, kDtNs); }
 
@@ -211,10 +257,28 @@ TEST(TrackingIntegration, TracksRotatingTarget) {
   const double el_const = 5.0 * kDeg;  // rad
   const int cycles = 500;              // 2.5 s
 
+  // v3: the turret follows the target the operator named, so this test has to name one
+  // before it can ask whether the gimbal is following it. Under §16 the same scene with
+  // no selection holds still, which is asserted by
+  // AutoTrackWithNoSelectionHoldsEvenWhenSomethingIsVisible below.
+  int64_t t = t0;
+  for (int i = 0; i < 3; ++i) {
+    step_with_track(r, t, i, 0.0, el_const);
+    t += kDtNs;
+  }
+  r.loop().submit_command("select_target", "1");
+  for (int i = 0; i < 4; ++i) {
+    step_with_track(r, t, 10 + i, 0.0, el_const);
+    t += kDtNs;
+  }
+  ASSERT_EQ(r.loop().telemetry().snapshot().selected_display_index, 1)
+      << "the selection did not take, so this test would be watching a turret that is "
+         "deliberately not following anything";
+
   for (int i = 0; i < cycles; ++i) {
-    const int64_t t = t0 + i * kDtNs;
+    const int64_t tt = t + i * kDtNs;
     const double az = az_rate * (i * 0.005);
-    step_with_target(r, t, i, az, el_const);
+    step_with_track(r, tt, 100 + i, az, el_const);
     if (r.loop().phase() == Phase::Fault) break;
   }
 
@@ -450,4 +514,50 @@ TEST(TrackingIntegration, RoamArmedMidSessionStartsSweeping) {
   EXPECT_EQ(r.loop().last_intent().source, ota::MotionSource::AutoRoam);
   EXPECT_GT(std::fabs(r.loop().last_positions()[1] - yaw_before), 0.1)
       << "the sweep should be under way within 0.7 s of choosing AUTO_ROAM";
+}
+
+// §16, the rule that changes what an unattended station does: "No target selected:
+// remain WAIT_TARGET, show 'Select a target', no autonomous motion." v1 acquired the
+// best detection it could find, and the interim v3 rule that preserved that on the way
+// here is retired by AutoTrackController, so this is the test that pins the difference.
+TEST(TrackingIntegration, AutoTrackWithNoSelectionHoldsEvenWhenSomethingIsVisible) {
+  TrackingRig r;
+  int64_t t0 = 0;
+  ASSERT_TRUE(run_to_ready(r, t0));
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
+  const double yaw0 = r.loop().last_positions()[1];
+
+  // A perfectly good target — CONFIRMED, confident, 25 degrees off to one side. The
+  // turret sees it and does not move.
+  int64_t t = t0;
+  for (int i = 0; i < 200; ++i) {
+    step_with_track(r, t, i, 25.0 * kDeg, 0.0);
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault);
+  }
+
+  const double yaw_now = r.loop().last_positions()[1];
+  EXPECT_LT(std::fabs(yaw_now - yaw0), 1.0 * kDeg)
+      << "AUTO_TRACK acquired a target nobody selected. It may be the right target; it "
+         "may be whoever walked into frame. That is not a decision the station gets to "
+         "make on its own (§16)";
+  const auto snap = r.loop().telemetry().snapshot();
+  EXPECT_EQ(snap.mode_phase, "WAIT_TARGET");
+  EXPECT_EQ(snap.selected_track_id, 0u);
+  EXPECT_NE(snap.intent_reason.find("select a target"), std::string::npos)
+      << snap.intent_reason;
+  // And it did see it: the estimator is primed, so the moment somebody chooses, the
+  // turret has history to act on instead of starting cold.
+  EXPECT_TRUE(r.loop().tracking_controller().estimator_initialized())
+      << "no selection turned into no vision processing, which is not what §16 says";
+
+  // The operator then chooses, and the same visible target starts being followed
+  // without anything else changing.
+  r.loop().submit_command("select_target", "1");
+  for (int i = 0; i < 200; ++i) {
+    step_with_track(r, t, 500 + i, 25.0 * kDeg, 0.0);
+    t += kDtNs;
+  }
+  EXPECT_GT(std::fabs(r.loop().last_positions()[1] - yaw0), 10.0 * kDeg)
+      << "the selection did not turn into motion; the WAIT_TARGET gate would be stuck";
 }

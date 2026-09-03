@@ -79,7 +79,13 @@ struct TelemetrySnapshot {
   std::string selection_visibility;     // NONE | VISIBLE | OCCLUDED | LOST_REACQUIRABLE | STALE
   bool selection_ambiguous = false;     // §21: two candidates, reselect — do not guess
   float reacquisition_score = 0.0f;   // §78: what the best candidate scored
-  float ambiguity_margin = 0.0f;      // §78: and how far ahead of the next-best  // since the last measurement (-1 = none)
+  float ambiguity_margin = 0.0f;      // §78: and how far ahead of the next-best
+  // §78 AUTO_TRACK: the derating band the controller granted itself, and the number it
+  // was computed from. intent_velocity_scale already carries the resulting scale; the
+  // band says why, which is the difference between "it slowed down" and "it slowed down
+  // because it was only half sure".
+  std::string confidence_band;
+  float selected_confidence = 0.0f;  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,
   // from the active R_W_B. installation_source is the PoseSource enum value
   // (kept as an int to keep this header decoupled from the calibration module).

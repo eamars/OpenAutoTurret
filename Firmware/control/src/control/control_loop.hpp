@@ -36,6 +36,7 @@
 #include "calibration/park_controller.hpp"
 #include "calibration/world_frame_telemetry.hpp"
 #include "mode/mode_manager.hpp"
+#include "tracking/auto_track_controller.hpp"
 #include "tracks/target_selection_manager.hpp"
 #include "tracks/track_set.hpp"
 #include "web/command_validation.hpp"
@@ -462,6 +463,15 @@ class ControlLoop {
   TimeNs now_ns_ = 0;              // this cycle's clock, for command timestamps
   uint64_t selected_track_id_ = 0;   // low half of the UUID being followed (§78)
   tracks::TargetSelectionManager selection_;
+  // §15-§20: AUTO_TRACK's own state machine, and the facts it was last fed. The input
+  // is refreshed whenever a TrackSet arrives (camera rate) and read every control cycle,
+  // which is the honest shape of it: the state machine runs at 200 Hz because the
+  // coast timer does, but nothing about the target is *new* between frames.
+  AutoTrackController autotrack_;
+  AutoTrackInput at_input_;
+  AutoTrackOutput at_out_;
+  TimeNs last_measurement_ns_ = 0;
+  bool at_was_visible_ = false;      // for §21's just-reacquired edge
 
   // Handed across measurement_mutex_ by the ingest thread (§61). Copied rather than
   // referenced: 2.6 KB at camera rate is nothing, and the alternative is the control

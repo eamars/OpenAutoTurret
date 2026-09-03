@@ -461,6 +461,7 @@ function render(t) {
     selNote.className = (t && t.selection_ambiguous) ? "err" : "muted";
   }
   $("intent").textContent = "intent: " + (t.intent_source || "none") + " / " +
+    (t.confidence_band ? "[\u00a719 " + t.confidence_band + "] " : "") +
     (t.intent_type || "hold") +
     (t.intent_reason ? " — " + t.intent_reason : "") +
     " · scale " + num(t.intent_velocity_scale, 2);

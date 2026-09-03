@@ -333,7 +333,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // inferred. Zero while tracking is off is not a contradiction with the selection
       // fields beside it — those say what the operator chose, this says what the
       // turret is acting on, and the two legitimately differ in MANUAL.
-      selected_track_id_ = (tracking_ && followed) ? followed->uuid.lo : 0;
+      // The identity the machine is *acting on*, which is the operator's selection — not
+      // whatever the estimator happened to be primed with. They differ, legitimately:
+      // with no selection the estimator is still fed (vision keeps being processed, so
+      // a later selection can be acted on immediately), and reporting its pick here
+      // would tell the operator the turret was following somebody it was not.
+      const tracks::Track* acting = selection_.selected_track();
+      selected_track_id_ =
+          (tracking_ && acting != nullptr) ? acting->uuid.lo : 0;
     } else if (have && tracking_) {
       tracking_->set_measurement(m);
       selected_track_id_ = m.has_track_id ? m.visual_track_id : 0;
@@ -398,6 +405,26 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // stricter than v1's.
     mode_proposal_.v_max_rad_s =
         std::min(mode_proposal_.v_max_rad_s, hold_speed_effective());
+    // §15-§20. AUTO_TRACK's state advances every control cycle (its coast is wall
+    // clock), from facts that only change when a frame arrives. Every other mode resets
+    // it, so coming back to AUTO_TRACK never resumes an acquisition history that
+    // belongs to a different moment — §93's stale-intent class of bug, seen from the
+    // target's side.
+    if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
+      at_input_.measurement_age_ms =
+          last_measurement_ns_ > 0 ? (now_ns - last_measurement_ns_) / 1000000 : -1;
+      at_input_.estimator_ready = tracking_ && tracking_->estimator_initialized();
+      // §22 via §67: the converter reports what it could not satisfy and this decides
+      // what to do about it. One cycle of lag — the refused request was built from the
+      // previous cycle's view. Removing the lag would mean the intent builder consulting
+      // the envelope mid-construction, which is the coupling the layer split exists to
+      // prevent.
+      at_input_.los_feasible = !tracking_ref_.target_unreachable;
+      at_out_ = autotrack_.update(at_input_, now_ns);
+    } else if (autotrack_.state() != AutoTrackState::WaitTarget || at_out_.follow_los) {
+      autotrack_.reset();
+      at_out_ = AutoTrackOutput{};
+    }
     last_intent_ = build_mode_intent(now_ns);
     tracking_ref_ = ref_mgr_
                       ? ref_mgr_->resolve(last_intent_, intent_limits(now_ns))
@@ -942,7 +969,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // nothing in it to explain itself.
     snap.operating_mode = operating_mode_name(mode_mgr_.mode());
     snap.supervisory_state = supervisory_state_name(mode_mgr_.supervisory());
-    snap.mode_phase = mode_phase_label();
+    snap.mode_phase = mode_mgr_.mode() == OperatingMode::AutoTrack
+                        ? auto_track_state_name(at_out_.state)
+                        : mode_phase_label();
+    snap.confidence_band = confidence_band_name(at_out_.band);
+    snap.selected_confidence = at_out_.selected_confidence;
     snap.intent_source = motion_source_name(last_intent_.source);
     snap.intent_type = intent_type_name(last_intent_.type);
     snap.intent_reason = last_intent_.reason;
@@ -1202,42 +1233,34 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
       return MotionIntent::hold(MotionSource::Manual, "manual hold");
 
     case OperatingMode::AutoTrack: {
+      // §15-§20: this answer comes from AutoTrackController, not from the v1 FSM. What
+      // is left here is mechanical — turn "follow the predicted LOS at this authority"
+      // into an intent, or hold, saying which.
+      //
+      // The v1 FSM can no longer cause motion in this mode, which is also what finally
+      // enforces §111.5: its sweep is reached through a search intent, and nothing here
+      // ever asks for one. AUTO_ROAM owns roaming, and the operator owns AUTO_ROAM.
       if (!tracking_)
         return MotionIntent::hold(MotionSource::AutoTrack,
-                                  "no tracking session started");
-      const tracking::TrackState st = tracking_->track_state();
-      if (st == tracking::TrackState::Tracking ||
-          st == tracking::TrackState::Coasting) {
-        if (!tracking_->estimator_initialized())
-          return MotionIntent::hold(MotionSource::AutoTrack,
-                                    "estimator not initialised");
-        double az = 0.0, el = 0.0;
-        tracking_->predicted_los_at_actuation(az, el);
-        in.source = MotionSource::AutoTrack;
-        in.type = IntentType::LosDirection;
-        in.has_los = true;
-        in.los_az_rad = az;
-        in.los_el_rad = el;
-        // §19/§35: confidence derates, and it arrives as a scale on the intent so
-        // telemetry can show what was asked for next to what was allowed.
-        const double c = std::max(0.0, std::min(1.0, tracking_->confidence()));
-        in.velocity_scale = c;
-        in.confidence = c;
-        in.set_reason(track_state_name(st));
-        return in;
-      }
-      if (st == tracking::TrackState::Search) {
-        // §111.5, and the reason this branch has to exist explicitly: a station
-        // that lost its target in AUTO_TRACK must NOT start sweeping the
-        // workspace looking for any target it happens to find. That is
-        // AUTO_ROAM's job, and the operator chooses it. Without this branch the
-        // inherited v1 search planner would happily keep sweeping, and the two
-        // modes would mean the same thing.
+                                  at_out_.reason[0] ? at_out_.reason
+                                                    : "no tracking session started");
+      if (!at_out_.follow_los || !at_input_.estimator_ready)
         return MotionIntent::hold(MotionSource::AutoTrack,
-                                  "target absent; roaming needs AUTO_ROAM (111.5)");
-      }
-      return MotionIntent::hold(MotionSource::AutoTrack,
-                                track_state_name(st));
+                                  at_out_.reason[0] ? at_out_.reason : "hold");
+      double az = 0.0, el = 0.0;
+      tracking_->predicted_los_at_actuation(az, el);  // valid: estimator_ready
+      in.source = MotionSource::AutoTrack;
+      in.type = IntentType::LosDirection;
+      in.has_los = true;
+      in.los_az_rad = az;
+      in.los_el_rad = el;
+      // §19: the derating rides on the intent, so telemetry shows what was asked for
+      // beside what was allowed, and an operator can see the turret was deliberately
+      // gentle rather than wondering whether it was failing.
+      in.velocity_scale = at_out_.velocity_scale;
+      in.confidence = at_out_.selected_confidence;
+      in.set_reason(at_out_.reason);
+      return in;
     }
 
     case OperatingMode::AutoRoam: {
@@ -1480,17 +1503,20 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
   // instead of a parallel path beside it.
   selection_.observe(set, now);
 
-  // INTERIM rule, and the last place controld follows something nobody chose. When no
-  // operator selection exists it reproduces v1's behaviour — the best-scoring CONFIRMED
-  // person, with v1's gates — so upgrading controld does not, by itself, change what
-  // the station does with an unattended scene.
+  // Which candidate's measurement primes the estimator. With a selection, that is the
+  // selected track and nothing else. Without one, it is the best-scoring CONFIRMED
+  // person under v1's gates — which is a *measurement source*, not a decision to move:
+  // §16 gives motion only to a selection, and AutoTrackController is what enforces that
+  // (WAIT_TARGET holds). Priming is what lets a selection made at frame 400 act on
+  // frame 401 instead of waiting out the estimator's own warm-up.
   //
-  // It is not the v3 rule and it is not meant to outlive V3-4: §15's WAIT_TARGET is the
-  // state that should be answering here ("no selection, no pursuit"), and a fallback
-  // that grabs the highest-confidence target is exactly how a turret ends up tracking a
-  // stranger after the selected one walks behind a pillar. The tests that pin v1's
-  // class and confidence gates stay meaningful either way, because §14's own validation
-  // shares them.
+  // Why it is still here rather than deleted: the estimator is v1's, and an estimator
+  // with no history makes the first seconds after a selection worse, not better. Why it
+  // is not a fallback for *motion*: a rule that grabs the highest-confidence target is
+  // exactly how a turret ends up tracking a stranger after the selected one walks
+  // behind a pillar. v1's class and confidence gates are kept because §14's validation
+  // shares them, and a station that primes itself on any class the detector knows about
+  // would be a wider target appetite than v1 ever had.
   const tracks::Track* pick = selection_.selected_track();
   const bool from_selection = pick != nullptr;
   if (!from_selection && !selection_.has_selection()) {
@@ -1547,6 +1573,37 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
       m.visual_track_id = pick->uuid.lo;
     }
   }
+  // §19/§15: the facts the AUTO_TRACK state machine works from, refreshed once per
+  // frame. Anything not refreshed is stale by construction — a track that stopped being
+  // published is not counted visible, which is the whole basis of §20.
+  {
+    const auto& sel = selection_.selection();
+    const bool visible = sel.visibility_state == tracks::Visibility::Visible;
+    at_input_.just_reacquired =
+        visible && !at_was_visible_ && sel.reacquisition_score > 0.0f;
+    at_was_visible_ = visible;
+    at_input_.has_selection = sel.has_selection;
+    at_input_.target_visible = visible;
+    at_input_.target_occluded = sel.visibility_state == tracks::Visibility::Occluded;
+    at_input_.ambiguous = sel.ambiguous_reacquisition;
+    at_input_.reacquisition_score = sel.reacquisition_score;
+    if (pick != nullptr) {
+      at_input_.detector_confidence = pick->detector_confidence;
+      at_input_.track_confidence = pick->track_confidence;
+      at_input_.visible_frames = pick->visible_frames;
+      at_input_.missing_frames = pick->missing_frames;
+    } else {
+      // No target in hand: the confidence inputs go to zero rather than keeping the last
+      // target's numbers, which would hold the state machine in a band it no longer has
+      // evidence for.
+      at_input_.detector_confidence = 0.0f;
+      at_input_.track_confidence = 0.0f;
+      at_input_.visible_frames = 0;
+      at_input_.missing_frames = 0;
+    }
+  }
+  if (m.valid) last_measurement_ns_ = now;
+
   if (pick != nullptr && from_selection) {
     static tracks::TrackUuid logged{};
     if (!(logged == pick->uuid)) {
@@ -1719,6 +1776,7 @@ void ControlLoop::execute_command(const std::string& name,
     // are acked verbatim, which is the only reason a refusal is survivable at all.
     if (name == "clear_target") {
       auto r = selection_.clear(now_ns_);
+      if (r.changed) autotrack_.reset();  // §16: back to WAIT_TARGET
       spdlog::info("target selection: {}", r.reason);
       ack_command(name, r.ok, r.reason);
       return;
@@ -1736,6 +1794,7 @@ void ControlLoop::execute_command(const std::string& name,
     }
     auto r = selection_.select_by_display_index(
         static_cast<uint16_t>(index), now_ns_);
+    if (r.changed) autotrack_.reset();  // §15: acquisition restarts for a new subject
     spdlog::info("select_target {}: {} ({})", index, r.ok ? "ACCEPTED" : "REFUSED",
                  r.reason);
     ack_command(name, r.ok, r.reason);
