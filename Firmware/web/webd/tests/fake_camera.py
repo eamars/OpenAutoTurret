@@ -9,7 +9,7 @@ actually uses now — ``Picamera2()``, ``create_video_configuration``,
 ``from picamera2 import ...``) use the fake.
 
 Two deliberate modelling choices, both learned on the real IMX500 (see
-docs/post_homing_test_queue.md, P12/P7):
+docs/archive/post_homing_test_queue.md, P12/P7):
 
   * Frames arrive at the CONSUMER's pace: ``capture_request()`` blocks about one
     frame period, like the real pipeline. A fake that returned instantly would

@@ -1,7 +1,7 @@
 """Contract tests for the REAL camera source — pinned against a FAKE picamera2.
 
 These exist because of what the hardware taught us on 2026-09-03 (measured on the
-station's IMX500, see docs/post_homing_test_queue.md P7/P8):
+station's IMX500, see docs/archive/post_homing_test_queue.md P7/P8):
 
   * ``request_callback`` is DEPRECATED on picamera2 0.3.37 and silently maps onto
     ``post_callback``, which only fires for capture-FILE jobs. A callback-based

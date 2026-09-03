@@ -11,7 +11,7 @@ can:
   # PHY swap point (can_transport.hpp). "socketcan" = MCP2515 HAT on can0;
   # "yousee" = USB-CAN AT adapter on a serial device. Swap freely — nothing
   # else changes. 2026-09-02: HAT field-sick (see
-  # docs/research_can_bus_error_passive.md); running on the yousee adapter
+  # docs/archive/research_can_bus_error_passive.md); running on the yousee adapter
   # until the replacement HAT lands. To revert: backend socketcan +
   # interface can0.
   backend: yousee

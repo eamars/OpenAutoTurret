@@ -2,7 +2,7 @@
 
 **Incident:** 2026-09-02, P6 payload check Run A — `can0` (MCP2515) entered a
 persistent `ERROR-PASSIVE` mid-run; drives fully silent; all software resets
-exhausted (see `docs/post_homing_test_queue.md`, P6 BLOCKED item).
+exhausted (see `docs/archive/post_homing_test_queue.md`, P6 BLOCKED item).
 **This note:** online research into the root cause and mitigations, recorded
 2026-09-02.
 

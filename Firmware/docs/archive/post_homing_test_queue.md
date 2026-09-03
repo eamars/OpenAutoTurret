@@ -966,7 +966,7 @@ derate visible in telemetry + limits; re-verify with the correct profile clears 
     functional as the §27 path.
 
 **Research (2026-09-02, online — full note in
-  `docs/research_can_bus_error_passive.md`):** the ~1 s ACTIVE→PASSIVE
+  `docs/archive/research_can_bus_error_passive.md`):** the ~1 s ACTIVE→PASSIVE
   re-degrade after every reset is the signature of a *continuous* physical-layer
   fault (hundreds of bit errors/s re-accumulate TEC/REC past 128); error-passive
   is NOT covered by the kernel's `restart-ms` (it only fires on BUS-OFF), so no
@@ -1229,7 +1229,7 @@ room was dark, so "0 blobs" was not a detector failure).
 > soft limits. Verified offline against synthetic frames *and* against the real
 > IMX500 stream (sim backend, so no motor could move).
 
-> 📄 **A run sheet exists: `docs/run_sheet_P8.md`.** It turns the seven steps
+> 📄 **A run sheet exists: `docs/archive/run_sheet_P8.md`.** It turns the seven steps
 > below into a printable station sequence — pre-flight table, a 5-minute `--sim`
 > dry run of the exact commands (dry-run executed 2026-09-03: `state` shows
 > `phase=homing at_ready=False`, `start_tracking` returns

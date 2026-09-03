@@ -36,7 +36,7 @@ ready-hold, envelope authority); it is not evidence about detector quality.
 | 5 | Search stays off | `grep -n -A3 "^tracking:" config/turret.yaml` → `search_enabled_by_default: false`, `target_lost_behavior: hold`, track 30 deg/s, search 10 deg/s |
 | 6 | Camera is free (exclusive device) | `sudo fuser -v /dev/video1` → stop `turret-web` for this window: its live view and `visiond` cannot share the IMX500 |
 | 7 | Scene is **lit** and the target is real | The last session measured **mean luma 1.5/255**. The bridge detector reports the largest *moving* blob: switch the room lights on and plan to move the target (a person walking slowly, or a cardboard panel) with visible contrast against the background |
-| 8 | Witness supervisor running (for the P3/P4 leg) | `journalctl -u turret-can-supervisor -f` in a second terminal, per `docs/HANDOFF_2026-09-03.md` (it watches `can0`, the MCP2515 witness HAT) |
+| 8 | Witness supervisor running (for the P3/P4 leg) | `journalctl -u turret-can-supervisor -f` in a second terminal, per `docs/archive/HANDOFF_2026-09-03.md` (it watches `can0`, the MCP2515 witness HAT) |
 | 9 | Dry run done (5 min, no motors) | see §2 |
 
 ## 2. Dry run — same commands, `--sim`, nothing armed
@@ -118,7 +118,7 @@ build commit: ____________            homing time to at_ready: ____ s
 notes: ________________________________________________________________
 ```
 
-Paste into `docs/post_homing_test_queue.md` → P8 steps 1–6 + pass criteria, and
+Paste into `docs/archive/post_homing_test_queue.md` → P8 steps 1–6 + pass criteria, and
 into P3/P4 where the ~98 ms Brake flap was recorded (the attribution line is the
 new evidence). If 3.6–3.11 all pass with no limit crossing, P8 flips to verified;
 P7 remains open until there is an RPK/accelerator path.

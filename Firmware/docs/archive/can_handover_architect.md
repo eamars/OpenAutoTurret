@@ -309,8 +309,8 @@ time, ≥5 min idle watch each, no transmissions in Test A:
 | Root-cause report | `docs/can_hardware_fault_report.md` | classification, evidence table, ladder results, architecture, operator actions |
 | Production watchdog | `tools/can_supervisor.py` | Python 3 stdlib only (no venv needed). 2 s poll; L0→L5 ladder; every command under `timeout 5`; ACK probe via netdev counters; rate limit 3/10 min + cooldown latch; counters + verdict JSON at `/tmp/ota_can_supervisor.json`; snapshot to `/tmp/ota_can_diag/`. **Live-tested** on the faulted HAT: detected, escalated L0→L3 without hanging, classified, latched. |
 | systemd template | `systemd/turret-can-supervisor.service` | `After=can0.service`, `Before=turret-control.service`, root, `Restart=always`. Enable at P11. |
-| Queue update | `docs/post_homing_test_queue.md` (P6) | BLOCKED → RESOLVED with evidence + operator checklist |
-| Research-note addendum | `docs/research_can_bus_error_passive.md` §4.3 | corrects the berr-reporting mitigation; records live findings |
+| Queue update | `docs/archive/post_homing_test_queue.md` (P6) | BLOCKED → RESOLVED with evidence + operator checklist |
+| Research-note addendum | `docs/archive/research_can_bus_error_passive.md` §4.3 | corrects the berr-reporting mitigation; records live findings |
 | Raw probe tools (disposable) | `/tmp/mcp*.c` on the Pi | register dump, loopback, listen-only, bitrate sweep, raw TX, watch/rate |
 
 Runtime artifacts on the Pi: `/tmp/ota_can_diag/diag_20260902-{153658,154508}.txt`,

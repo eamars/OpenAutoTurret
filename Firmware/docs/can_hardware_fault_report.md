@@ -204,10 +204,10 @@ See the handover doc for review targets.
 
 ## 9. Files
 
-- `docs/can_handover_architect.md` — raw evidence, session timeline,
+- `docs/archive/can_handover_architect.md` — raw evidence, session timeline,
   open questions, reproducibility kit.
-- `docs/post_homing_test_queue.md` (P6) and
-  `docs/research_can_bus_error_passive.md` (§4.3) — updated.
+- `docs/archive/post_homing_test_queue.md` (P6) and
+  `docs/archive/research_can_bus_error_passive.md` (§4.3) — updated.
 - `tools/can_supervisor.py`, `systemd/turret-can-supervisor.service`.
 - Corrected raw-probe tools (disposable, on the Pi): `/tmp/mcp_correct.c`
   (corrected constants + mode table + error-rate/real-frame capture),
