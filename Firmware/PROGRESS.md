@@ -328,3 +328,46 @@ discarded the name. Seven further rounds, including `-j4` under four CPU-burning
 **Unattributed and unreproduced**, recorded rather than dropped.
 
 55 CTest, 301 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named person.
+
+
+## 2026-09-04, 04:29 — S2 (following a moving target) measured, after it passed twice for nothing
+
+`probe_track_loop.py s2` now exists: a target sweeping world azimuth at a constant rate, with its
+criteria written into the file before the run - containment (never leaves the frame), following
+error (<= 1/3 box height at p95 after the first second), no divergence.
+
+### Measured on the station, -8 deg/s for 7 s, 159 steady samples
+
+| criterion | result |
+| --- | --- |
+| C1 containment - target never left the frame | **PASS** |
+| C2 following error, aim point to reticle | p50 **9.5 px** / p95 **13.2 px** = **0.025 / 0.035** of box height, bar 0.333 - **PASS**, n=159 |
+| world azimuth error while following | p50 **0.16 deg**, max 0.52 deg |
+| commanded yaw rate | p50 **7.53 deg/s** against a target rate of 8.00 deg/s |
+| C0 the tracker was actually tracking | **PASS** (100% of steady samples; the `ready_hold` entries are the first second, before acquisition) |
+
+The rate row is what makes the error row believable: the axis is moving at nearly the target's rate
+rather than sitting still while the aim happens to be nearby.
+
+### Twice this scenario passed while doing nothing, and the reason is worth keeping
+
+First run: PASS on `p50 == p95` - one sample, left over from an earlier run, while `track_state` was
+`ready_hold` and the controller's target estimate sat 34 deg away. Second: the axis was parked
+against its yaw soft limit from an earlier sweep, so the guard stopped the run at t=0 and the
+criteria scored an empty run.
+
+Both were the same defect I keep finding elsewhere: **a verdict computed from a run that never
+exercised the behaviour.** The scenario now (a) sweeps toward the middle of the remaining travel and
+shortens itself to stay inside it, (b) walks yaw back to mid-travel with `manual_step` if a previous
+run left it pinned, and (c) refuses to render any verdict - printing INVALID, not PASS or FAIL -
+unless there are >=30 live aim samples and >=80% of steady samples in state `tracking`. A harness
+that reports PASS on its own empty run is worse than one that fails.
+
+### Still not measured
+
+S3 (a dart: sudden motion, containment through it, and whether the aim *leads* it) is the part of
+requirement (b) that an 8 deg/s sweep cannot speak to, and it is the predictor's whole reason for
+existing. Not implemented yet. 8 deg/s is also not the fastest thing this station will be asked to
+follow.
+
+55 CTest, 301 pytest green. Section 110 unchanged: 30 items, 0 accepted on hardware by a named person.

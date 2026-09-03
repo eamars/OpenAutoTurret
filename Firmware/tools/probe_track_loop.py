@@ -295,6 +295,10 @@ def main() -> int:
     ap.add_argument("scenario", choices=["roundtrip", "s1", "s2", "s3"])
     ap.add_argument("--rotate180", action="store_true", help="flip the predicted pixel (upside-down mount)")
     ap.add_argument("--offset-deg", type=float, default=12.0)
+    ap.add_argument("--sweep-sign", dest="sweep_sign", default="", help=""
+                    "S2: force +1 or -1 instead of choosing from the remaining travel")
+    ap.add_argument("--rate-deg-s", dest="rate_deg_s", type=float, default=8.0,
+                   help="S2: constant world-azimuth rate of the moving target (deg/s)")
     ap.add_argument("--seconds", type=float, default=14.0)
     ap.add_argument("--backdate-ms", type=float, default=0.0,
                     help="stamp sensor_timestamp_ns this far in the past (see Publisher)")
@@ -370,6 +374,179 @@ def main() -> int:
         cmd_az_el_for_roundtrip(pub)
         pub.close()
         return 0
+
+    # ---- S2: a target that MOVES at a constant rate, and does not stop ------------------------
+    #
+    # S1 only proves the loop can reach a still target. Requirement (b) is different: following has
+    # to be smooth and must not let the target leave the frame before the axis catches up. Those are
+    # measurable claims, and the criteria are fixed here, in the file, before the run - a threshold
+    # chosen after seeing the data is not a threshold.
+    if args.scenario == "s2":
+        rate = args.rate_deg_s
+        # If a previous run left the axis against its travel limit, no amount of scenario design
+        # will produce a following measurement: the guard stops it at t=0. Walk it back to the
+        # middle of the travel first, in MANUAL, one small step at a time.
+        s = state()
+        lo, hi = s.get("q_soft_min_yaw_rad"), s.get("q_soft_max_yaw_rad")
+        if isinstance(lo, float) and isinstance(hi, float) and hi > lo:
+            mid = 0.5 * (lo + hi)
+            if abs(s["q_yaw_rad"] - mid) > 0.2 * (hi - lo):
+                if s.get("operating_mode") != "MANUAL":
+                    command("set_mode", "MANUAL"); time.sleep(0.5)
+                print("  walking yaw toward mid-travel before starting...")
+                for _ in range(80):
+                    s = state()
+                    qy = s["q_yaw_rad"]
+                    if abs(qy - mid) <= 0.15 * (hi - lo):
+                        break
+                    step = max(-5.0, min(5.0, math.degrees(mid - qy)))
+                    command("manual_step", "yaw%+.2f" % step)
+                    time.sleep(1.0)
+                print("  yaw now %.3f rad (travel %.3f..%.3f)" % (s["q_yaw_rad"], lo, hi))
+        print("\nS2 criteria, fixed before running:")
+        print("  C1 containment   : the target never leaves the frame while the axis follows")
+        print("  C2 following     : aim-to-reticle <= 1/3 box height (%.0f px) for >=95%% of samples"
+              % (BOX_H_NORM * FH / 3.0))
+        print("                     after the first 1.0 s of steady motion")
+        print("  C3 no divergence : no consecutive out-of-frame run, no soft-limit guard trip")
+        print("  motion           : +%.1f deg/s in world azimuth for %.1f s" % (rate, args.seconds))
+
+        s = state()
+        az0, el0 = base_to_los(axis_direction(s["q_yaw_rad"], s["q_pitch_rad"]))
+        box_h_px = BOX_H_NORM * FH
+        tol_px = box_h_px / 3.0
+
+        # Sweep TOWARD the middle of the travel, not away from it. The first runs of this scenario
+        # ended at the yaw soft limit after 1.8 s and then scored a PASS off one leftover sample:
+        # the axis was pinned, the target kept going, and the criteria never looked at whether
+        # anything was being tracked. The station's yaw travel is wide but it is not infinite, and
+        # where it starts depends on what ran before it.
+        lo, hi = (s.get("q_soft_min_yaw_rad"), s.get("q_soft_max_yaw_rad"))
+        sign = 1.0 if rate >= 0 else -1.0
+        if args.sweep_sign:
+            sign = float(args.sweep_sign)
+        if isinstance(lo, float) and isinstance(hi, float) and hi > lo:
+            qy = s["q_yaw_rad"]
+            room_up, room_dn = hi - qy, qy - lo
+            if (sign > 0 and room_up < 0.9 * abs(math.radians(rate)) * args.seconds / 1.0) or \
+               (sign > 0 and room_up < room_dn):
+                sign = -1.0
+            elif sign < 0 and room_dn < room_up:
+                sign = 1.0
+            # Cap the run so the sweep cannot reach the limit even with the sign chosen right.
+            room = room_up if sign > 0 else room_dn
+            max_seconds = (0.75 * room) / max(abs(math.radians(rate)), 1e-6)
+            if args.seconds > max_seconds:
+                print("  shortening to %.1f s: %.2f rad of yaw travel left in that direction"
+                      % (max_seconds, room))
+                args.seconds = max(2.0, max_seconds)
+        rate = sign * abs(rate)
+        print("  sweep direction: %+.1f deg/s (chosen from the remaining yaw travel)" % rate)
+
+        # Start ON the axis: S2 is about following, not about the initial slew.
+        az_t, el_t = az0, el0
+        if not pub.publish(az_t, el_t):
+            print("  could not publish the starting target")
+            pub.close(); return 1
+        time.sleep(0.5)
+        s = state()
+        seq0 = s.get("cmd_ack_seq", 0)
+        command("select_target", "1")
+        wait_ack(seq0)
+        s = state()
+        if not s.get("selected_uuid_valid"):
+            print("  selection refused: %r" % (s.get("cmd_ack_reason"),))
+            pub.close(); return 1
+        seq0 = s.get("cmd_ack_seq", 0)
+        command("set_mode", "AUTO_TRACK")
+        wait_ack(seq0)
+        print("  selected uuid=%s, mode %s/%s" % (s.get("selected_uuid"),
+                                                  (s := state())["operating_mode"], s["mode_phase"]))
+
+        rows = []
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < args.seconds:
+            t = time.monotonic() - t0
+            az_t = az0 + math.radians(rate) * t          # a WORLD sweep, not an image-space drag
+            if not pub.publish(az_t, el_t):
+                print("  publish failed at t=%.2f s (target behind the camera?)" % t)
+                break
+            s = state()
+            if guard_or_abort(s):
+                command("stop_motion")
+                print("  soft-limit guard tripped at t=%.2f s" % t)
+                break
+            nrm = world_to_norm(az_t, el_t, s["q_yaw_rad"], s["q_pitch_rad"], args.rotate180)
+            if nrm:
+                (un, vn), (u, vv) = nrm
+                au = s.get("target_aim_x_norm")
+                av = s.get("target_aim_y_norm")
+                aim_err = (math.hypot(au * FW - CX, av * FH - CY)
+                           if s.get("target_aim_valid") and isinstance(au, float) else None)
+                rows.append({"t": t, "ex": u - CX, "ey": vv - CY, "aim_err": aim_err,
+                             "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
+                             "outside": getattr(pub, "outside", False),
+                             "v_yaw": s["v_yaw_rad_s"], "track_state": s.get("track_state"),
+                             "az_err_deg": math.degrees(az_t - (s.get("target_az_world_rad") or az_t))})
+            time.sleep(0.033)
+
+        pub.close()
+        print("  published %d TrackSets, sampled %d" % (pub.published, len(rows)))
+        if not rows:
+            print("  no samples - cannot judge anything")
+            return 1
+        steady = [r for r in rows if r["t"] >= 1.0]
+        errs = sorted(r["aim_err"] for r in steady if r["aim_err"] is not None)
+        out_of_frame = [r["t"] for r in rows if not r["in_frame"] or r["outside"]]
+        tracking_frac = (sum(1 for r in steady if str(r["track_state"]) == "tracking") /
+                         float(len(steady))) if steady else 0.0
+        # A verdict needs data, and it needs the controller to have been doing the thing under
+        # test. An earlier version of this printed PASS on a single leftover aim-point sample
+        # while the tracker sat in ready_hold and the target estimate was 34 deg away - which is
+        # every bit the sin this whole file exists to avoid, committed by the tool itself.
+        n_aim = len(errs)
+        meaningful = n_aim >= 30 and tracking_frac >= 0.8
+        print("    samples: %d steady, %d with a live aim point, tracking in %.0f%% of them;"
+              % (len(steady), n_aim, 100.0 * tracking_frac))
+        print("              %d published as out-of-frame/LOST"
+              % sum(1 for r in rows if r["outside"]))
+        if not meaningful:
+            print("\n  S2 VERDICT: INVALID, not a failure - the run did not exercise tracking.")
+            print("          Need >=30 live aim samples and >=80% of steady samples in state")
+            print("          'tracking'. Got n=%d, tracking=%.0f%%. Diagnose the acquisition"
+                  % (n_aim, 100.0 * tracking_frac))
+            print("          before reading anything into the error numbers.")
+            command("clear_target"); time.sleep(0.2)
+            command("set_mode", "MANUAL")
+            return 3
+
+        def pct(vals, q):
+            return vals[min(len(vals) - 1, int(q * len(vals)))] if vals else float("nan")
+
+        c1 = not out_of_frame
+        c2 = bool(errs) and pct(errs, 0.95) <= tol_px
+        print("\n  S2 result (using the aim point published by controld, %s):"
+              % ("head aim" if any(r["aim_err"] is not None for r in steady) else "anchor fallback"))
+        print("    following error p50 %.1f px / p95 %.1f px  (%.3f / %.3f of box height)"
+              % (pct(errs, .5), pct(errs, .95), pct(errs, .5) / box_h_px, pct(errs, .95) / box_h_px))
+        print("    world azimuth error p50 %.2f deg / max %.2f deg"
+              % (sorted(abs(r["az_err_deg"]) for r in steady)[len(steady) // 2] if steady else float("nan"),
+                 max((abs(r["az_err_deg"]) for r in steady), default=float("nan"))))
+        print("    commanded yaw rate p50 %.2f deg/s (target rate %.2f deg/s)"
+              % (sorted(abs(r["v_yaw"]) for r in rows)[len(rows) // 2] * 180 / math.pi, rate))
+        print("    states seen: %s" % sorted({str(r["track_state"]) for r in rows}))
+        print("    C1 containment  : %s%s" % ("PASS" if c1 else "FAIL",
+              "" if c1 else "  left the frame at t=%s" % ["%.2f" % x for x in out_of_frame[:6]]))
+        print("    C2 following    : %s (p95 %.1f px vs bar %.1f px, n=%d)"
+              % ("PASS" if c2 else "FAIL", pct(errs, .95), tol_px, n_aim))
+        print("    C0 was tracking : %s (needed >=80%% of steady samples)"
+              % ("PASS" if tracking_frac >= 0.8 else "FAIL"))
+        print("    C3 no divergence: %s" % ("PASS" if not any(
+            all(r["outside"] for r in rows[i:i + 12]) for i in range(max(0, len(rows) - 11))) else "FAIL"))
+        command("clear_target"); time.sleep(0.2)
+        command("set_mode", "MANUAL")
+        return 0 if (c1 and c2 and tracking_frac >= 0.8) else 1
+
     # ---- S1: one world-fixed target, 12 deg off the current axis, and let the controller work ----
     s = state()
     az0, el0 = base_to_los(axis_direction(s["q_yaw_rad"], s["q_pitch_rad"]))
