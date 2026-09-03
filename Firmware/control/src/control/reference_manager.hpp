@@ -24,6 +24,7 @@
 #include <algorithm>
 
 #include "common/types.hpp"
+#include "control/motion_intent.hpp"
 #include "control/search_planner.hpp"
 #include "geometry/los_joint_solver.hpp"
 #include "tracking/tracking_state_machine.hpp"
@@ -36,6 +37,12 @@ enum class ReferenceSource : uint8_t {
   Search,    // target lost + search enabled
   Hold,      // no target; hold the safe ready pose
   Developer, // manual/test command (sits just above hold in the full priority)
+  // v3 (§53): the mode sources, named so telemetry can say WHICH mode is moving
+  // the turret. v1 had no Manual/Roam distinction because it had no modes;
+  // collapsing both into Developer would leave the operator's screen unable to
+  // answer "why is it moving" — the first question during a live run.
+  Manual,    // manual jog / step / goto
+  Roam,      // AUTO_ROAM sweep waypoint
 };
 
 inline const char* reference_source_name(ReferenceSource s) {
@@ -45,6 +52,8 @@ inline const char* reference_source_name(ReferenceSource s) {
     case ReferenceSource::Search:    return "search";
     case ReferenceSource::Hold:      return "hold";
     case ReferenceSource::Developer: return "developer";
+    case ReferenceSource::Manual:     return "manual";
+    case ReferenceSource::Roam:       return "roam";
   }
   return "?";
 }
@@ -61,6 +70,14 @@ struct ReferenceRequest {
   bool is_tracking_reference = false;
   // The target confidence that produced this reference (0..1; 1 for hold).
   double confidence = 0.0;
+  // §67: the intent asked to point somewhere unreachable. The caller turns this
+  // into AutoTrackState::TARGET_UNREACHABLE — the converter does not decide
+  // policy, it reports what it could not satisfy. Without this field the only
+  // signal would be "it holds, for no stated reason".
+  bool target_unreachable = false;
+  // Literal-only diagnostics (§52): static strings, so no allocation on the
+  // control thread (§46).
+  const char* reason = "";
 };
 
 struct ReferenceManagerInput {
@@ -131,7 +148,129 @@ class ReferenceManager {
     return req;
   }
 
+  // --- v3: convert a MotionIntent (§53) ---------------------------------
+  //
+  // The shape §53 asks for. Note what is NOT here: no mode logic, no priority
+  // chain. The caller has already applied the §26 ordering (safety override,
+  // then homing/calibration/park, then the one authoritative mode controller)
+  // and hands over the surviving intent; this function's whole job is turning
+  // "point at this LOS" / "go to these joints" / "hold" into a joint reference
+  // with a speed limit, and saying honestly when it cannot.
+  //
+  // The v1 compute() above stays for the existing paths and their tests; it
+  // retires as each mode migrates onto intents, not before.
+  struct IntentLimits {
+    int64_t now_ns = 0;
+    // Where to hold when the intent says hold.
+    double q_yaw_hold_rad = 0.0;
+    double q_pitch_hold_rad = 0.0;
+    // Per-source configured ceilings; the intent's velocity_scale multiplies the
+    // one belonging to its own source, and the envelope gets the final word.
+    double track_v_max_rad_s = 30.0 * kDeg2Rad;
+    double roam_v_max_rad_s = 10.0 * kDeg2Rad;
+    double manual_v_max_rad_s = 30.0 * kDeg2Rad;
+    double hold_v_max_rad_s = 10.0 * kDeg2Rad;
+  };
+
+  ReferenceRequest resolve(const MotionIntent& in, const IntentLimits& lim) const {
+    ReferenceRequest req;
+    req.confidence = in.confidence;
+    req.reason = in.reason[0] != '\0' ? in.reason : intent_type_name(in.type);
+
+    // An expired intent is a hold, whatever it asked for. §93 requires that a
+    // stale intent cannot survive a transition; handling it here makes that a
+    // property of the data instead of a rule every consumer must remember.
+    if (in.source == MotionSource::None || !in.live_at(lim.now_ns)) {
+      return hold_reference(lim, in.source == MotionSource::None
+                                    ? "no intent"
+                                    : "intent expired -> hold");
+    }
+
+    const double vs = clamp_scale(in.velocity_scale);
+    switch (in.type) {
+      case IntentType::LosDirection: {
+        if (!in.has_los) return hold_reference(lim, "los intent without los");
+        double qy, qp;
+        if (!solver_.solve(in.los_az_rad, in.los_el_rad, qy, qp)) {
+          // §67: an unreachable target is reported, not pressed into a hold.
+          req = hold_reference(lim, "target outside travel");
+          req.target_unreachable = true;
+          return req;
+        }
+        req.q_yaw_rad = qy;
+        req.q_pitch_rad = qp;
+        req.source = ReferenceSource::Tracking;
+        req.is_tracking_reference = true;
+        req.v_max_rad_s = lim.track_v_max_rad_s * vs;
+        return req;
+      }
+      case IntentType::JointPosition: {
+        if (!in.has_joint_target)
+          return hold_reference(lim, "joint intent without target");
+        req.q_yaw_rad = in.q_yaw_rad;
+        req.q_pitch_rad = in.q_pitch_rad;
+        req.source = (in.source == MotionSource::AutoRoam) ? ReferenceSource::Roam
+                                                          : ReferenceSource::Manual;
+        req.v_max_rad_s = (in.source == MotionSource::AutoRoam
+                               ? lim.roam_v_max_rad_s
+                               : lim.manual_v_max_rad_s) * vs;
+        return req;
+      }
+      case IntentType::WorldLevelYaw: {
+        // The level constraint itself is resolved upstream: it needs gravity
+        // from the IMU expansion, which §98 says is not a v3 dependency. What
+        // arrives is the joint pose that constraint produced, plus the elevation
+        // it was derived at — kept so telemetry can show what was asked for, not
+        // only what was commanded.
+        if (!in.has_joint_target)
+          return hold_reference(lim, "level intent without joint target");
+        req.q_yaw_rad = in.q_yaw_rad;
+        req.q_pitch_rad = in.q_pitch_rad;
+        req.source = ReferenceSource::Roam;
+        req.v_max_rad_s = lim.roam_v_max_rad_s * vs;
+        if (in.has_world_elevation) req.reason = "world-level sweep";
+        return req;
+      }
+      case IntentType::JointVelocity: {
+        // Deliberately not honoured, and deliberately not reinterpreted as a
+        // position. Measured on this station, CyberGear speed mode does not move
+        // a loaded axis at the commanded rate on default gains, so a jog has to
+        // be integrated into a position reference at the control rate — which is
+        // ManualController's job in V3-5, not the converter's. "Hold, with a
+        // stated reason" is the honest interim: the operator reads why, instead
+        // of watching a turret do something unrelated to the button pressed.
+        (void)vs;
+        return hold_reference(lim, "velocity intent not yet supported");
+      }
+      case IntentType::Hold:
+      default:
+        return hold_reference(lim, in.reason[0] != '\0' ? in.reason : "hold");
+    }
+  }
+
  private:
+  static double clamp_scale(double s) {
+    // Scales are derating factors (§19, §20.1). Capping at 1.5 lets a deliberate
+    // modest override through while a misconfigured 10.0 cannot become a 10x
+    // speed command; the envelope still clamps position and the supervisor still
+    // owns the brake. The NaN case falls to 0.0 (a hold), which is the only
+    // comparison-safe reading of an unrepresentable scale.
+    if (!(s >= 0.0)) return 0.0;
+    return s > 1.5 ? 1.5 : s;
+  }
+
+  static ReferenceRequest hold_reference(const IntentLimits& lim,
+                                         const char* why) {
+    ReferenceRequest req;
+    req.q_yaw_rad = lim.q_yaw_hold_rad;
+    req.q_pitch_rad = lim.q_pitch_hold_rad;
+    req.source = ReferenceSource::Hold;
+    req.v_max_rad_s = lim.hold_v_max_rad_s;
+    req.confidence = 0.0;
+    req.reason = why;
+    return req;
+  }
+
   geo::LosJointSolver solver_;
 };
 
