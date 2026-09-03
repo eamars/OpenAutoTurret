@@ -1584,10 +1584,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.camera_height = ci.height;
     // §20: how long ago the camera geometry in force was measured. -1 when there is no
     // calibration file at all, which stays JSON null rather than becoming a confident zero.
-    snap.camera_measurement_age_ms =
-        (camera_cal_mtime_ns_ > 0 && now_ns_ > camera_cal_mtime_ns_)
-            ? (now_ns_ - camera_cal_mtime_ns_) / 1000000
-            : -1;
+    // Two different clocks, which is the whole reason this field published null for a round:
+    // camera_cal_mtime_ns_ comes from stat() and is CLOCK_REALTIME (ns since the epoch, ~1.8e18), while
+    // now_ns_ is controld's monotonic clock (ns since boot, ~1e14 here). Comparing them asks whether a
+    // 42-hour uptime is larger than 56 years, which is always false, so the age fell through to -1.
+    // Ask the realtime clock instead: the question is "how long since that measurement was written",
+    // and only one clock can answer it.
+    snap.camera_measurement_age_ms = -1;
+    if (camera_cal_mtime_ns_ > 0) {
+      const int64_t realtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+      const int64_t age = (realtime_ns - camera_cal_mtime_ns_) / 1000000;
+      snap.camera_measurement_age_ms = age >= 0 ? age : -1;   // a future-dated file is unknown, not 0
+    }
 
     geo::field_of_view_deg(ci, snap.effective_hfov_deg, snap.effective_vfov_deg);
     snap.camera_fps = vs.camera_fps;

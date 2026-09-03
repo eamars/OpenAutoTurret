@@ -54,7 +54,7 @@ class FakeControld:
             # §20's camera block, idle. fps 0.0 because nothing has arrived yet, and the FOV values
             # are the station's commissioned ones so the inset draws a real rectangle in tests.
             camera={"fps": 0.0, "effective_hfov_deg": 69.3002, "effective_vfov_deg": 40.4171,
-                    "measurement_age_ms": None},
+                    "measurement_age_ms": 3600000},
             # §20's imu block: the stub that says there is nothing. world_elevation_deg is None rather
             # than 0.0, because 0.0 is the claim "this turret is level" and nothing on this station is
             # entitled to make it.

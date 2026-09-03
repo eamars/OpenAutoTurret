@@ -90,9 +90,9 @@ LEDGER = {
     "camera.effective_hfov_deg": ("path", "camera.effective_hfov_deg", "commissioned by the encoder-as-theodolite pass"),
     "camera.effective_vfov_deg": ("path", "camera.effective_vfov_deg", "commissioned by the encoder-as-theodolite pass"),
     "camera.fps": ("path", "camera.fps", "inter-TrackSet cadence: the only camera rate the daemon can observe"),
-    "camera.measurement_age_ms": ("null", "camera.measurement_age_ms",
-                                 "the daemon loads intrinsics from a file and does not carry that file's "
-                                 "timestamp into telemetry, so the age is unknown; sent as null rather "
+    "camera.measurement_age_ms": ("path", "camera.measurement_age_ms",
+                                 "controld publishes the calibration file's own mtime aged per snapshot and "
+                                 "says so as null where there is no calibration file; sent as null rather "
                                  "than 0, because 0 would claim freshly commissioned geometry"),
 
     "field_of_regard.safe_envelope_points[]": ("path", "field_of_regard.safe_envelope_points",

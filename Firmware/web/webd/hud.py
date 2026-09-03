@@ -283,6 +283,14 @@ function hudDiagRows(t) {
                         ? Math.round(t.selected_confidence * 100) + "%" : "--")],
     ["PREDICTION HORIZON", (typeof t.prediction_horizon_ms === "number"
                             ? String(t.prediction_horizon_ms) + " MS" : "--")],
+    // Geometry staleness belongs on the engineering panel: every pixel->ray conversion the HUD draws
+    // rests on this file, and "measured once, eight months ago" changes how much the centring margin
+    // means. Unknown is shown as UNKNOWN, never as a fresh zero.
+    ["GEOMETRY AGE", (t.camera && typeof t.camera.measurement_age_ms === "number")
+      ? (t.camera.measurement_age_ms >= 86400000
+          ? (t.camera.measurement_age_ms / 86400000).toFixed(2) + " D"
+          : (t.camera.measurement_age_ms / 3600000).toFixed(1) + " H")
+      : "UNKNOWN"],
     ["IMU", (t.imu && t.imu.present) ? "PRESENT" : "ABSENT"]
   ];
 }

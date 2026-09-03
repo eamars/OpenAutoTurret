@@ -1476,3 +1476,38 @@ The §20 ledger was **not** updated to credit this field — a value the station
 
 Vision restored after this restart (301 sets). Station left **homing**, not ready. 57 CTest on a clean
 build. **§110: 0 items accepted on hardware by a named person**; nothing here is acceptance evidence.
+
+## 2026-09-04, 16:2x — round 19: the geometry age was a **clock-domain mix**; one log line found it
+
+Round 18 ended promising a *diagnostic*, not more code. One boot line settled it: the path resolved, the file
+loaded, the loop received `mtime_ns=1788441777846949617`. The bug was the comparison — controld's internal
+`now_ns_` is **monotonic (~1.5e14, since boot)** while a file mtime is **REALTIME (~1.8e18, since epoch)**.
+`now > mtime` asks whether a two-day uptime exceeds 56 years: never, so the age fell through to `-1` and
+published `null` on a station with a calibration file that plainly existed. Fixed by asking the realtime
+clock, keeping a future-dated file as unknown rather than letting a negative age escape as a number.
+
+**Verified against the thing itself:** daemon `34,470,315 ms` vs the file's real age `34,470,382 ms` —
+**67 ms apart**; a later sample reads 35,183,626 ms ~12 min later (ages must grow). Now operator-visible: DIAG
+prints **`GEOMETRY AGE 9.8 H`** beside `IMU ABSENT`. §20 ledger entry moved `null → path`; **the fake daemon
+had to start emitting a numeric age too**, because a fake still sending `None` lets every test around this
+field pass while the real question goes untested — and that change was *forced by a correct test failure*,
+not volunteered.
+
+**Two mistakes in my own test file, both caught before becoming evidence:** (1) a replacement located by plain
+string index hit the *first* occurrence instead of the ledger entry and deleted 400 characters elsewhere —
+file stopped parsing, restored from git, redone against an anchor **printed from the file**; (2) a stray
+trailing comma in my note text turned a 3-tuple into a 4-tuple → four `too many values to unpack`. Repeating
+lesson: read exact bytes first; prefer a literal match that fails over a positional guess that "works".
+
+**Suite invocation fact (new):** this repo has **no pytest config at all**, so the recorded 435 =
+`pytest web tools vision common` (234+48+125+28). Bare `pytest` from the root also collects
+`legacy/opencv_test.py` → `ModuleNotFoundError: ultralytics` → collection dies with an unrelated error.
+`legacy/` is outside the suite by design; a future bare-pytest collection error is an invocation mistake, not
+a regression.
+
+Green on a verified clean build: **57 CTest**, **435 pytest**; `node --check` OK on the concatenated HUD; the
+page served over HTTP carries the new row. Running controld is one comment-only change behind the tree
+(harmless, picked up next restart); the boot line stays and its comment now says why — it shows the two clock
+domains for whoever wonders why an age looks surprising. Station **homed/ready, MANUAL/HOLD**, 19,354 TrackSets.
+**§110: 0 items accepted on hardware by a named person** — a 9.8-hour geometry age is a fact about a file, not
+acceptance evidence.

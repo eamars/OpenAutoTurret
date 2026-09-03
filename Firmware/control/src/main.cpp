@@ -240,6 +240,14 @@ int main(int argc, char** argv) {
   // intrinsics were actually loaded from, so the number describes the values in force.
   loop.set_camera_calibration_mtime_ns(file_mtime_ns(cfg.camera.intrinsics_file));
 
+  // Boot record of what the §20 geometry age is derived from. Worth logging permanently because the
+  // two numbers live on different clocks: the mtime below is CLOCK_REALTIME (ns since the epoch) while
+  // everything inside the control loop is monotonic (ns since boot). Mixing them is what made this field
+  // publish null for a whole round even though the file plainly loaded, so the line that shows the input
+  // is the line that would explain a surprising age.
+  spdlog::info("geometry age source: path={} mtime_ns={}", cfg.camera.intrinsics_file,
+               file_mtime_ns(cfg.camera.intrinsics_file));
+
   // 5a. Phase 6 (Part 2, S1): the vision ingest. controld BINDS the
   //     SOCK_SEQPACKET socket (§6.1) and visiond connects to it; every decoded
   //     TargetMeasurement is handed to the control loop (thread-safe, §6.2).
