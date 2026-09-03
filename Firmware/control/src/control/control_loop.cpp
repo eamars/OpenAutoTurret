@@ -1696,10 +1696,22 @@ void ControlLoop::preserve_scene(const telemetry::TelemetrySnapshot& live,
   out.id = blackbox_.id + 1;
   out.t_ns = now_ns_;
   std::snprintf(out.reason, sizeof out.reason, "%s", reason != nullptr ? reason : "");
-  std::snprintf(out.operating_mode, sizeof out.operating_mode, "%s",
-                live.operating_mode.c_str());
+  // One exception to the rule above, because two of these fields can arrive empty and an
+  // empty field in an investigation record is the silence-that-looks-like-an-answer trap:
+  // "the record does not say what mode it was in" gets read as "it was in no mode". A scene
+  // preserved in the first cycles after boot, or during homing, is copied from a view that
+  // was never published to anyone — so there is no screen it could disagree with, and the
+  // loop's own authority is the only true thing available. Measured, not theorised: the
+  // scene preserved when homing's recipe sleep first tripped the watchdog logged an empty
+  // mode, which is how this was noticed at all.
+  const std::string mode_field =
+      live.operating_mode.empty() ? std::string(operating_mode_name(mode_mgr_.mode()))
+                                 : live.operating_mode;
+  const std::string phase_field =
+      live.phase.empty() ? std::string(phase_name(phase_)) : live.phase;
+  std::snprintf(out.operating_mode, sizeof out.operating_mode, "%s", mode_field.c_str());
   std::snprintf(out.mode_phase, sizeof out.mode_phase, "%s", live.mode_phase.c_str());
-  std::snprintf(out.phase, sizeof out.phase, "%s", live.phase.c_str());
+  std::snprintf(out.phase, sizeof out.phase, "%s", phase_field.c_str());
   std::snprintf(out.safety_action, sizeof out.safety_action, "%s",
                 safety_action_name(live.safety_action));
 

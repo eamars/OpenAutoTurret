@@ -391,12 +391,40 @@ come from; nobody has looked at an IMX500 picture with these boxes on it. Alignm
 the detector's frame and the streamed picture (crop, aspect, orientation) is exactly the kind
 of thing only a person notices, and it belongs to §110 with the operator.
 
+**v3's cost per cycle has now been measured — in simulation, on this host, which is what
+that sentence does and does not buy.** `tools/cycle-cost` times `ControlLoop::step()` around
+the call and reports p50/p95/p99/worst per condition (quiet hold, leased manual jog,
+AUTO_TRACK at 30 Hz of detector traffic, AUTO_ROAM sweeping, homing), and
+`ctest -R cycle_cost_gate` runs it as a gate. Two runs of 2000–3000 cycles each: **every
+condition landed at p99 ≤ 4 µs against a 5000 µs period, with zero cycles over the period and
+zero over the §39.3 grace.** The spread between conditions (hold 1.3–2.1 µs p50, tracking
+2.0–3.2) is inside the run-to-run spread of the *baseline itself*, so the honest statement is
+that the three modes are indistinguishable from standing still at this resolution — not that
+roam is cheaper than tracking. Nothing here is a station measurement: the sim backend answers
+instantly, so a real cycle also pays the CAN exchange, and the pre-v3 figure of 5.06 ms p50 /
+5.09 ms p99 remains the only number anyone has measured on the Pi. The gate's ceiling is
+deliberately absurd (p99 < 4000 µs) because what it is for is a factor of ten — an
+allocation, a file write, a socket appearing on the control path — not 40 µs of laptop
+jitter. The homing row is printed and not gated: it is where §46's `sleep_for(50 ms)` recipe
+delays live, and v3 inherits them unchanged; the worst cycle observed here was 101–149 ms,
+consistent with the 109–113 ms recorded on metal before v3 existed.
+
+What that same run turned up, and what got fixed: **the first black-box scene this project
+ever preserved named no operating mode.** A preserved scene copies the published view, and
+when homing's recipe sleep trips the watchdog during homing, the view it copies had no mode
+in it — so the artifact read "mode: ⌀", which nobody reading an investigation record will
+ever hear as "not yet published". They will hear "it was in no mode". `preserve_scene` now
+falls back to the loop's own authority for the two fields that can be empty, and says so in
+the code; `BlackBox.AScenePreservedBeforeAnythingWasPublishedStillSaysWhatModeItWasIn`
+asserts it, including that the record reaches the published view on the next cycle rather
+than only existing privately.
+
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 53 CTest binaries green, 259 pytest green, and
+Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 259 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured

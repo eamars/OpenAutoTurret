@@ -1240,6 +1240,34 @@ TEST(ConfiguredTimings, ANamedConfidenceBandIsTheOneTheControllerUses) {
          "controller — it still reports " << band_demanding << " for a 0.90 target";
 }
 
+TEST(BlackBox, AScenePreservedBeforeAnythingWasPublishedStillSaysWhatModeItWasIn) {
+  // The first capture this project ever took was triggered by homing's own recipe sleep
+  // (§46) tripping the deadline watchdog, and the record it wrote had an **empty** mode
+  // field: a preserved scene copies the published view, and at that moment there had not
+  // been a published view worth the name. An artifact that does not name the mode is not
+  // neutral — whoever reads it afterwards will take the silence for an answer, which is the
+  // same mistake `0.0` made in the config loader and in the requested-pose telemetry. The
+  // fallback is the loop's own authority, so assert it against the case that produced it: a
+  // caller handing in a view that was never filled.
+  HomedLoop h;
+  const telemetry::TelemetrySnapshot nothing;  // exactly what a boot-time capture sees
+  const uint64_t before = h.loop->telemetry().snapshot().blackbox.id;
+  h.loop->preserve_scene(nothing, "synthetic: watchdog fired before the first publish");
+  // Two cycles, because that is how the artifact reaches the world: the record exists in the
+  // loop the instant it is preserved, and the published view — the one the dashboard and
+  // this test read — carries it on the next publish. A caller that asserted on the loop
+  // private state would be testing a different promise than the one the operator gets.
+  h.step(2);
+  const telemetry::BlackBoxCapture rec = h.loop->telemetry().snapshot().blackbox;
+  ASSERT_NE(rec.id, before) << "the scene was not preserved at all";
+  EXPECT_NE(rec.operating_mode[0], '\0')
+      << "the record names no operating mode; a reader will hear \"there was none\"";
+  EXPECT_NE(rec.phase[0], '\0') << "the record names no phase";
+  EXPECT_STREQ(rec.operating_mode, "MANUAL")
+      << "a station that has homed and been told no other mode is in MANUAL; the record "
+         "should say so rather than leave the field to be inferred";
+}
+
 // §81: the replay path. These go through replay_session(), which is the same code the
 // station tool runs — a test of a private copy of the logic would prove nothing about the
 // tool that reads an operator's recording.

@@ -36,6 +36,15 @@ target_link_libraries(turret-payload PRIVATE ota_core)
 # §81: replay a recorded session through the real controller. Registered as a test with
 # --expect, so the tool's own behaviour is checked by the same `ctest` run as everything
 # else: a tool that no one runs is a tool that broke three months ago.
+# §94/§46: what a control cycle costs, per mode. Run as a ctest entry with a gate that is
+# deliberately about orders of magnitude: the point is to notice a factor of ten (an
+# allocation, a write, a socket on the control path), not 40 us of laptop jitter — the
+# station's own timing budget is measured on the station, and this says so in its header.
+add_executable(cycle-cost tools/cycle_cost.cpp)
+target_link_libraries(cycle-cost PRIVATE ota_core)
+add_test(NAME cycle_cost_gate
+         COMMAND cycle-cost --cycles 2000 --assert-p99-us 4000)
+
 add_executable(replay-session tools/replay_session.cpp)
 target_link_libraries(replay-session PRIVATE ota_core)
 # The same session against the station's own configuration file. Two entries, not one
