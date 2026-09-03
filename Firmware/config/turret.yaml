@@ -27,6 +27,19 @@ schema_version: 1
 #     yaw_max_deg: 190.0
 #     pitch_deg: -39.6                # one elevation for the whole sweep (§30)
 #     velocity_deg_s: 10.0            # may slow the sweep, never speed it past the limit
+#   auto_track:
+#     coast_ms: 300                   # §20: authority fades this long after the last frame
+#     lost_hold_ms: 2000              # when the hold is decided
+#     reacquire_window_ms: 3000       # how long a memory of the person is kept
+#     confidence_medium_min: 0.50     # §19's bands
+#     confidence_high_min: 0.75
+#     reacquire_threshold: 0.55       # §21: the score a candidate needs
+#     ambiguous_match_margin: 0.15    # §21: and how far ahead of the runner-up
+#     confidence_derating:
+#       medium_velocity_scale: 0.60   # ceilings; may not exceed 1.0
+#       low_velocity_scale: 0.30
+#       # *_acceleration_scale is refused: this build applies one ceiling per band (§19),
+#       # and a key that does nothing is worse than no key.
 #   manual:
 #     jog_keepalive_ms: 100           # the page renews at this rate (§38)
 #     jog_lease_timeout_ms: 300       # must fit three renewals

@@ -205,12 +205,17 @@ struct HomedLoop {
   int64_t t = 0;
   bool ready = false;
 
-  HomedLoop(bool home = true) {
+  // `coast_ms` exists so a test can build the *configured* station rather than a second
+  // implementation of one: the value travels the same path from ControlLoop::Config that
+  // the YAML value takes on the station.
+  HomedLoop(bool home = true, float confidence_high_min = 0.0f) {
     sim_owner = std::make_unique<sim::SimMotorBackend>(0.005);
     sim = sim_owner.get();
     sim->set_stops(AxisId::Pitch, -1.0, 1.0);
     sim->set_stops(AxisId::Yaw, -1.0, 1.0);
-    loop = std::make_unique<ControlLoop>(make_cfg(), std::move(sim_owner));
+    auto cfg = make_cfg();
+    cfg.auto_track_high_min = confidence_high_min;  // 0 = the default
+    loop = std::make_unique<ControlLoop>(cfg, std::move(sim_owner));
     if (home) {
       std::string err;
       (void)loop->start_homing(make_plan(), err);
@@ -1195,4 +1200,41 @@ TEST(BlackBox, APreservedSceneCarriesWhatTheOperatorWasTold) {
   EXPECT_GT(h.snap().blackbox_capture_id, snap.blackbox_capture_id)
       << "the second incident overwrote the first without a new id; two accidents have to "
          "look like two accidents";
+}
+
+// --- §72, the half that matters: a named commissioning value has to reach the machine
+//     that acts on it. Asserted as a behaviour rather than as a copied field, because "the
+//     struct was assigned" is a test that passes while the value is being ignored.
+TEST(ConfiguredTimings, ANamedConfidenceBandIsTheOneTheControllerUses) {
+  // Which value to prove with, chosen for the right reason. My first two attempts picked
+  // timings (`coast_ms`, then `lost_hold_ms`) and both "failed" by showing the config was
+  // ignored, when what they showed was that the branch under test does not pass through
+  // that number: with vision silent there is no occlusion to coast toward, and the
+  // give-up point on that path is not the number I named. A commissioning value that is
+  // wired correctly but observed on a branch it does not gate proves nothing either way,
+  // so this measures the value whose effect is directly on the page: the confidence band
+  // the controller publishes when it derives authority (§19/§78).
+  HomedLoop standard;
+  ASSERT_TRUE(standard.ready);
+  HomedLoop demanding(true, 0.99f);  // HIGH now starts at 0.99 instead of 0.75
+  ASSERT_TRUE(demanding.ready);
+
+  std::string band_standard, band_demanding;
+  for (HomedLoop* h : {&standard, &demanding}) {
+    h->run("set_mode", "AUTO_TRACK");
+    auto set = make_set_with(tracks::TrackState::Confirmed, 1, 0.90f);
+    feed(*h, set, 20, 10);
+    h->run("select_target", "1");
+    ASSERT_EQ(h->snap().cmd_ack_accepted, 1) << h->snap().cmd_ack_reason;
+    feed(*h, set, 20, 40);
+    if (h == &standard) band_standard = h->snap().confidence_band;
+    else band_demanding = h->snap().confidence_band;
+  }
+
+  EXPECT_EQ(band_standard, "HIGH")
+      << "the default station no longer calls 0.90 confidence HIGH; the band boundaries "
+         "moved and this test would pass by accident";
+  EXPECT_NE(band_demanding, "HIGH")
+      << "confidence_high_min: 0.99 was accepted by the loader and ignored by the "
+         "controller — it still reports " << band_demanding << " for a 0.90 target";
 }

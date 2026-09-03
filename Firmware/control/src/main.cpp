@@ -205,6 +205,15 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.roam_pitch_named = cfg.v3.has_roam_pitch;
   c.roam_pitch_deg = cfg.v3.roam_pitch_deg;
   c.roam_velocity_deg_s = cfg.v3.roam_velocity_deg_s;
+  c.auto_track_coast_ms = cfg.v3.auto_track_coast_ms;
+  c.auto_track_lost_hold_ms = cfg.v3.auto_track_lost_hold_ms;
+  c.auto_track_reacquire_window_ms = cfg.v3.auto_track_reacquire_window_ms;
+  c.auto_track_medium_min = cfg.v3.auto_track_medium_min;
+  c.auto_track_high_min = cfg.v3.auto_track_high_min;
+  c.auto_track_medium_scale = cfg.v3.auto_track_medium_scale;
+  c.auto_track_low_scale = cfg.v3.auto_track_low_scale;
+  c.reacquire_threshold = cfg.v3.reacquire_threshold;
+  c.ambiguous_match_margin = cfg.v3.ambiguous_match_margin;
   c.manual_lease_ms = cfg.v3.jog_lease_ms;
   c.manual_keepalive_ms = cfg.v3.jog_keepalive_ms;
   c.step_sizes_deg = cfg.v3.step_sizes_deg;

@@ -139,6 +139,15 @@ class ControlLoop {
     bool roam_pitch_named = false;
     double roam_pitch_deg = 0.0;
     double roam_velocity_deg_s = 0.0;  // 0 = derive
+    int auto_track_coast_ms = 0;
+    int auto_track_lost_hold_ms = 0;
+    int auto_track_reacquire_window_ms = 0;
+    float auto_track_medium_min = 0.0f;
+    float auto_track_high_min = 0.0f;
+    float auto_track_medium_scale = 0.0f;
+    float auto_track_low_scale = 0.0f;
+    float reacquire_threshold = 0.0f;
+    float ambiguous_match_margin = 0.0f;
     int manual_lease_ms = 0;
     int manual_keepalive_ms = 0;
     std::vector<double> step_sizes_deg;  // empty = the sanctioned three
@@ -530,6 +539,7 @@ class ControlLoop {
   telemetry::BlackBoxCapture blackbox_{};
   bool was_unsafe_ = false;
   bool manual_cfg_applied_ = false;
+  bool v3_cfg_applied_ = false;
 
   // §79's transition memory: events fire on changes, not on every cycle.
   AutoTrackState last_at_state_ = AutoTrackState::WaitTarget;
@@ -557,6 +567,9 @@ class ControlLoop {
   // than in a constructor that may run before the configuration does. Idempotent, so it
   // can sit on the path without becoming a second source of truth.
   void ensure_manual_cfg();
+
+  // §72: the auto-track and reacquisition numbers, applied on the first cycle.
+  void apply_v3_config_once();
 
   void emit(telemetry::Event e, TimeNs now_ns, uint64_t subject_id = 0,
             const char* subject = nullptr, const char* detail = nullptr) {

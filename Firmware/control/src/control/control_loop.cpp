@@ -1070,7 +1070,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     telemetry_.push_control(rec);
     telemetry_.push_blackbox(rec);
 
-    telemetry::TelemetrySnapshot snap;
+    apply_v3_config_once();  // §72: before anything below can act on a number
+
+  telemetry::TelemetrySnapshot snap;
     snap.timestamp_ns = now_ns;
     snap.phase = phase_name(phase_);
     snap.fault_reason = fault_reason_;
@@ -1433,6 +1435,55 @@ RoamEnvelope ControlLoop::safe_envelope() const {
   e.pitch_min_rad = limits_[ix(AxisId::Pitch)].q_soft_min_rad;
   e.pitch_max_rad = limits_[ix(AxisId::Pitch)].q_soft_max_rad;
   return e;
+}
+
+void ControlLoop::apply_v3_config_once() {
+  // §72, applied before anything can use it: the first cycle, which is before any mode
+  // change, selection, or jog, and does not depend on a constructor ordering that has
+  // already bitten this file once (the reference manager that was never emplaced).
+  if (v3_cfg_applied_) return;
+  v3_cfg_applied_ = true;
+
+  AutoTrackConfig ac = autotrack_.config();
+  if (cfg_.auto_track_coast_ms > 0) ac.coast_ms = cfg_.auto_track_coast_ms;
+  if (cfg_.auto_track_lost_hold_ms > 0) ac.lost_hold_ms = cfg_.auto_track_lost_hold_ms;
+  if (cfg_.auto_track_reacquire_window_ms > 0)
+    ac.reacquire_window_ms = cfg_.auto_track_reacquire_window_ms;
+  if (cfg_.auto_track_medium_min > 0.0f) ac.medium_min = cfg_.auto_track_medium_min;
+  if (cfg_.auto_track_high_min > 0.0f) ac.high_min = cfg_.auto_track_high_min;
+  if (cfg_.auto_track_medium_scale > 0.0f) ac.medium_scale = cfg_.auto_track_medium_scale;
+  if (cfg_.auto_track_low_scale > 0.0f) ac.low_scale = cfg_.auto_track_low_scale;
+  autotrack_.set_config(ac);
+
+  // §21's two numbers are the whole argument behind "it declined to choose", so naming
+  // them is naming when the turret is allowed to be sure. The setter keeps the operator's
+  // existing selection — retuning the scorer must not cost somebody their target.
+  if (cfg_.reacquire_threshold > 0.0f || cfg_.ambiguous_match_margin > 0.0f) {
+    tracks::TargetSelectionManager::Config sc = selection_.config();
+    if (cfg_.reacquire_threshold > 0.0f) sc.scorer.threshold = cfg_.reacquire_threshold;
+    // Strictly greater than, like every other key here. The first version used >= 0.0f
+    // "so that a margin of zero could be named", and it silently replaced the default
+    // 0.15 with 0.0 on every station that named nothing — a margin of zero means two
+    // candidates can never be too close to call, which switches off §21 by way of a
+    // config field nobody set. The loop test caught it; the scorer has no opinion about
+    // being handed a zero.
+    if (cfg_.ambiguous_match_margin > 0.0f)
+      sc.scorer.margin = cfg_.ambiguous_match_margin;
+    selection_.set_config(sc);
+  }
+
+  // Say what the station is now running, read back from the components rather than from
+  // the config struct: if a value never reached the controller, the log should show the
+  // number that did and let someone notice the difference.
+  const auto& scorer_now = selection_.config().scorer;
+  spdlog::info("v3 auto_track: coast {} ms, lost-hold {} ms, reacquire window {} ms, "
+               "bands {:.2f}/{:.2f}, ceilings {:.2f}/{:.2f}; reacquire threshold {:.2f}, "
+               "ambiguity margin {:.2f}",
+               ac.coast_ms, ac.lost_hold_ms, ac.reacquire_window_ms,
+               static_cast<double>(ac.medium_min), static_cast<double>(ac.high_min),
+               static_cast<double>(ac.medium_scale), static_cast<double>(ac.low_scale),
+               static_cast<double>(scorer_now.threshold),
+               static_cast<double>(scorer_now.margin));
 }
 
 void ControlLoop::ensure_manual_cfg() {

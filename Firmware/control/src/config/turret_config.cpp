@@ -418,6 +418,75 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
     }
   }
 
+  // §19/§20/§21. Each key stands alone: naming coast_ms must not quietly re-pick the
+  // defaults of the four numbers sitting next to it in the file.
+  const YAML::Node at = fetch(n, "auto_track");
+  if (at.IsDefined()) {
+    out.auto_track_coast_ms =
+        static_cast<int>(opt_double(at, "coast_ms", "v3.auto_track.coast_ms", 0.0, warn));
+    out.auto_track_lost_hold_ms = static_cast<int>(opt_double(
+        at, "lost_hold_ms", "v3.auto_track.lost_hold_ms", 0.0, warn));
+    out.auto_track_reacquire_window_ms =
+        static_cast<int>(opt_double(at, "reacquire_window_ms",
+                                    "v3.auto_track.reacquire_window_ms", 0.0, warn));
+    out.auto_track_medium_min = static_cast<float>(
+        opt_double(at, "confidence_medium_min", "v3.auto_track.confidence_medium_min",
+                   0.0, warn));
+    out.auto_track_high_min = static_cast<float>(
+        opt_double(at, "confidence_high_min", "v3.auto_track.confidence_high_min", 0.0,
+                   warn));
+    const YAML::Node der = fetch(at, "confidence_derating");
+    if (der.IsDefined()) {
+      out.auto_track_medium_scale = static_cast<float>(opt_double(
+          der, "medium_velocity_scale", "v3.auto_track.confidence_derating.medium_velocity_scale",
+          0.0, warn));
+      out.auto_track_low_scale = static_cast<float>(opt_double(
+          der, "low_velocity_scale", "v3.auto_track.confidence_derating.low_velocity_scale",
+          0.0, warn));
+      // §72's example also lists medium/low *acceleration* scales. This build has one
+      // authority ceiling per band, applied to both, so an independent acceleration
+      // number cannot be honoured. It is refused rather than accepted-and-ignored:
+      // a commissioning file that appears to set something and does not is the exact
+      // lie this section exists to prevent.
+      if (!fetch(der, "medium_acceleration_scale").IsDefined() &&
+          !fetch(der, "low_acceleration_scale").IsDefined()) {
+        // nothing asked for; fine
+      } else {
+        err.push_back(
+            "v3.auto_track.confidence_derating: this build applies one ceiling per band "
+            "to both velocity and acceleration (§19), so *_acceleration_scale cannot be "
+            "set independently. Remove it rather than leave a value that does nothing.");
+      }
+    }
+    out.reacquire_threshold = static_cast<float>(
+        opt_double(at, "reacquire_threshold", "v3.auto_track.reacquire_threshold", 0.0,
+                   warn));
+    out.ambiguous_match_margin = static_cast<float>(
+        opt_double(at, "ambiguous_match_margin", "v3.auto_track.ambiguous_match_margin",
+                   0.0, warn));
+
+    if (out.auto_track_coast_ms < 0 || out.auto_track_lost_hold_ms < 0 ||
+        out.auto_track_reacquire_window_ms < 0)
+      err.push_back("v3.auto_track timings must be >= 0 (0 keeps the default)");
+    if (out.auto_track_coast_ms > 5000 || out.auto_track_lost_hold_ms > 30000 ||
+        out.auto_track_reacquire_window_ms > 60000)
+      err.push_back("v3.auto_track timings are outside any sane commissioning range; "
+                    "check for a value typed in the wrong units (§20)");
+    if (out.auto_track_medium_min >= 0.0f && out.auto_track_high_min >= 0.0f &&
+        out.auto_track_medium_min >= out.auto_track_high_min)
+      err.push_back("v3.auto_track: confidence_medium_min must be below "
+                    "confidence_high_min, or every band collapses into one");
+    for (float s : {out.auto_track_medium_scale, out.auto_track_low_scale}) {
+      if (s > 1.0f) err.push_back("v3.auto_track derating scales are ceilings: they may "
+                                 "not exceed 1.0 (that would raise authority on doubt)");
+      if (s < 0.0f) err.push_back("v3.auto_track derating scales must be >= 0");
+    }
+    for (float s : {out.reacquire_threshold}) {
+      if (s > 1.0f) err.push_back("v3.auto_track.reacquire_threshold is a score ceiling "
+                                 "in [0,1] (§21)");
+    }
+  }
+
   const YAML::Node man = fetch(n, "manual");
   if (man.IsDefined()) {
     out.jog_keepalive_ms =

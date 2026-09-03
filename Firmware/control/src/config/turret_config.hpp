@@ -229,6 +229,19 @@ struct V3Config {
   double roam_pitch_deg = 0.0;
   double roam_velocity_deg_s = 0.0;  // 0 = derive from the tracking search speed
 
+  // §19/§20/§21: when a value is absent the controller's own default stands, and the
+  // distinction is kept per key rather than per block — naming only coast_ms must not
+  // silently re-pick defaults for the reacquisition numbers beside it.
+  int auto_track_coast_ms = 0;
+  int auto_track_lost_hold_ms = 0;
+  int auto_track_reacquire_window_ms = 0;
+  float auto_track_medium_min = 0.0f;
+  float auto_track_high_min = 0.0f;
+  float auto_track_medium_scale = 0.0f;
+  float auto_track_low_scale = 0.0f;
+  float reacquire_threshold = 0.0f;
+  float ambiguous_match_margin = 0.0f;
+
   // §38/§41: the dead-man timings and the step sizes offered.
   int jog_keepalive_ms = 0;   // 0 = the controller's default
   int jog_lease_ms = 0;
