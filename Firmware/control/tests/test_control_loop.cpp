@@ -12,6 +12,7 @@
 
 #include "calibration/homing_plan.hpp"
 #include "control/control_loop.hpp"
+#include "control/session_replay.hpp"
 #include "sim/sim_motor_backend.hpp"
 
 #include <gtest/gtest.h>
@@ -1237,4 +1238,93 @@ TEST(ConfiguredTimings, ANamedConfidenceBandIsTheOneTheControllerUses) {
   EXPECT_NE(band_demanding, "HIGH")
       << "confidence_high_min: 0.99 was accepted by the loader and ignored by the "
          "controller — it still reports " << band_demanding << " for a 0.90 target";
+}
+
+// §81: the replay path. These go through replay_session(), which is the same code the
+// station tool runs — a test of a private copy of the logic would prove nothing about the
+// tool that reads an operator's recording.
+namespace {
+
+// Frames at 33 ms, which is the rate a recording has when visiond is behaving. Written by
+// hand rather than generated, because the interesting part of a recording is the gaps and
+// a generator has to be told to make them.
+std::string steady_frames(double from_ms, double to_ms, unsigned long long uuid,
+                          const char* anchor) {
+  std::string s;
+  char line[128];
+  for (double t = from_ms; t < to_ms; t += 33.0) {
+    // class_id 1 is the id this station's configuration makes selectable. The name is
+    // decoration beside it, which is exactly why the format carries both: a recording that
+    // lost its id would have to be guessed, and the guess decides who may be selected.
+    std::snprintf(line, sizeof line,
+                  "F %.0f 1 %llu 1 person 0.90 %s 0.55 0.10 0.20 CONF\n", t, uuid, anchor);
+    s += line;
+  }
+  return s;
+}
+
+}  // namespace
+
+TEST(SessionReplay, ARecordedSessionReproducesSelectionLossAndReturn) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready) << h.loop->fault_reason();
+
+  ReplayScript script;
+  std::string err;
+  const std::string text =
+      "E 0 set_mode AUTO_TRACK\n" +
+      steady_frames(33.0, 1000.0, 11, "0.30") +
+      "E 1000 select_target 1\n" +
+      steady_frames(1033.0, 2000.0, 11, "0.32") +
+      // 400 ms of nothing: long enough to coast, short enough that the memory of the
+      // person is still warm (§20). A long gap is a different test on purpose — after
+      // several seconds the scorer declines every candidate, and that refusal is the
+      // subject of the §89 scene, not this one.
+      "E 2400 select_target 1\n";
+  ASSERT_TRUE(parse_replay_script(text, script, err)) << err;
+  ASSERT_EQ(script.frames.size(), 60u) << "the script is not what the test thinks";
+  ASSERT_EQ(script.events.size(), 3u);
+
+  const ReplayResult res = replay_session(*h.loop, script, h.t);
+  std::string transcript;
+  for (const auto& l : res.lines) transcript += l + "\n";
+  ASSERT_TRUE(res.ok) << res.error << "\n" << transcript;
+
+  auto count = [&transcript](const char* needle) {
+    size_t n = 0, at = 0;
+    while ((at = transcript.find(needle, at)) != std::string::npos) {
+      ++n;
+      at += strlen(needle);
+    }
+    return n;
+  };
+
+  EXPECT_GT(count("cmd=set_mode accepted"), 0u) << transcript;
+  EXPECT_GT(count("mode=AUTO_TRACK phase=TRACKING sel=1"), 0u)
+      << "the recording selected a target and the transcript never shows it following:\n"
+      << transcript;
+  EXPECT_GT(count("phase=LOST_HOLD"), 0u)
+      << "the recording goes silent and the machine never notices:\n" << transcript;
+  // §79: the transcript carries the events, in order, with the times the controller gave
+  // them. That ordering is the reason to replay at all — a table of final states cannot
+  // show that the turret asked for help before it gave up rather than after.
+  EXPECT_GT(count("event=TARGET_ACQUIRED"), 0u) << transcript;
+}
+
+TEST(SessionReplay, ARecordingThatGoesBackwardsIsRefusedNotSorted) {
+  ReplayScript script;
+  std::string err;
+  const std::string text = "E 500 set_mode AUTO_TRACK\nE 100 set_mode MANUAL\n";
+  EXPECT_FALSE(parse_replay_script(text, script, err));
+  EXPECT_NE(err.find("backwards"), std::string::npos) << err;
+  EXPECT_NE(err.find("line 2"), std::string::npos) << err;
+}
+
+TEST(SessionReplay, AnUnknownStateIsRefusedWithItsLineNumber) {
+  ReplayScript script;
+  std::string err;
+  const std::string text = "F 33 1 7 1 person 0.9 0.3 0.5 0.1 0.2 SOLID\n";
+  EXPECT_FALSE(parse_replay_script(text, script, err));
+  EXPECT_NE(err.find("line 1"), std::string::npos) << err;
+  EXPECT_NE(err.find("SOLID"), std::string::npos) << err;
 }
