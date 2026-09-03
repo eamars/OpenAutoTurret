@@ -325,8 +325,15 @@ TEST(TelemetryV3, ModeAndIntentArePublishedEveryCycle) {
   HomedLoop h;
   ASSERT_TRUE(h.ready);
   EXPECT_EQ(h.snap().operating_mode, "MANUAL");
-  EXPECT_EQ(h.snap().intent_source, "none")
-      << "no mode controller is running yet, so nothing is asking for motion";
+  // This used to assert "none", and that assertion was recording a gap rather than a
+  // design: MANUAL had no controller, so no intent was produced at all and the field
+  // was empty. V3-5 put a ManualController there, and the honest reading of a turret
+  // that is idle in MANUAL is "manual, holding" — the mode owns motion and has decided
+  // not to move. "none" would now mean something specific and different: that no mode
+  // controller ran this cycle, which is a fault condition, not an idle one.
+  EXPECT_EQ(h.snap().intent_source, "manual");
+  EXPECT_EQ(h.snap().intent_type, "hold");
+  EXPECT_STREQ(h.snap().intent_reason.c_str(), "manual hold");
   h.run("set_mode", "AUTO_TRACK");
   EXPECT_EQ(h.snap().intent_source, "auto_track");
   EXPECT_EQ(h.snap().intent_type, "hold")
@@ -593,4 +600,95 @@ TEST(TargetSelectionIntegration, SelectionSurvivesWithoutTrackingTurnedOn) {
   EXPECT_EQ(h.snap().selected_display_index, 1);
   EXPECT_FALSE(h.loop->tracking_mode_enabled())
       << "§14: selection causes no motion and must not start a tracking session";
+}
+
+// --- §38/§52 through the real command path: the mode gate, and a jog that actually
+//     moves the simulated turret and then stops by itself.
+TEST(ManualMode, MotionOutsideManualIsRefusedWithTheReasonFrom52) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoTrack);
+
+  h.run("manual_jog_start", "yaw+:normal");
+  auto snap = h.snap();
+  EXPECT_EQ(snap.cmd_ack_accepted, 0);
+  EXPECT_NE(snap.cmd_ack_reason.find("only available in MANUAL"), std::string::npos)
+      << snap.cmd_ack_reason;
+  EXPECT_NE(snap.cmd_ack_reason.find("AUTO_TRACK"), std::string::npos)
+      << "the refusal should say what mode it is refusing in";
+
+  h.run("manual_step", "yaw+1");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+
+  // And the lease is genuinely not running: the refusal is not cosmetic.
+  EXPECT_FALSE(h.snap().manual_lease_active);
+}
+
+TEST(ManualMode, ALeasedJogMovesTheTurretAndStopsWhenTheBrowserGoesQuiet) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);                     // MANUAL is the mode after homing
+  const double yaw0 = h.loop->last_positions()[1];
+
+  h.run("manual_jog_start", "yaw+:normal");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  ASSERT_TRUE(h.snap().manual_lease_active);
+
+  // Keep it alive the way a browser would: every 100 ms, which at 200 Hz is every 20
+  // cycles. Not more often — a test that renews every cycle would never notice a lease
+  // that was shorter than it should be.
+  for (int i = 0; i < 400; ++i) {
+    if (i % 20 == 0) h.loop->submit_command("manual_jog_keepalive", "");
+    h.step(1);
+  }
+  const double yaw_jogged = h.loop->last_positions()[1];
+  EXPECT_GT(yaw_jogged, yaw0 + 0.01)
+      << "two seconds of a live jog lease and the turret never moved. The intent is "
+         "formed, the mode is right, and something downstream is not honouring it";
+  EXPECT_EQ(h.snap().intent_type, "joint_position")
+      << "a jog must reach the reference as an integrated position, not a velocity the "
+         "drive cannot follow (25)";
+
+  // Silence. The tab is closed; nothing arrives.
+  h.step(80);  // 400 ms, past the 300 ms lease
+  EXPECT_FALSE(h.snap().manual_lease_active);
+  EXPECT_EQ(h.snap().intent_source, "manual");
+  EXPECT_EQ(h.snap().intent_type, "hold");
+  const double yaw_after = h.loop->last_positions()[1];
+  h.step(60);  // 300 ms more
+  EXPECT_NEAR(h.loop->last_positions()[1], yaw_after, 2e-3)
+      << "the lease expired and the turret kept going";
+}
+
+TEST(ManualMode, AStepIsAFiniteMoveThatStops) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const double yaw0 = h.loop->last_positions()[1];
+  h.run("manual_step", "yaw+1");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  h.step(400);  // 2 s
+  const double moved = h.loop->last_positions()[1] - yaw0;
+  EXPECT_GT(moved, 1.0 * 0.017453292519943295 * 0.5)
+      << "the step did not get close to one degree";
+  EXPECT_LT(moved, 1.0 * 0.017453292519943295 * 2.0)
+      << "the step overshot by more than it moved";
+  h.step(200);
+  EXPECT_NEAR(h.loop->last_positions()[1] - yaw0, moved, 1e-3)
+      << "a finite move that keeps going is not a step";
+}
+
+TEST(ManualMode, OnlyTheSanctionedStepSizesAreAccepted) {
+  // §41: 0.5 / 1 / 5 degrees, and no raw-radian move on the operator page. The reason
+  // this is a refusal rather than a clamp is that a mistyped digit on an operator page
+  // should fail loudly; clamping a 50 into a 5 would move the turret and hide the typo.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("manual_step", "yaw+3");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("0.5, 1, or 5"), std::string::npos)
+      << h.snap().cmd_ack_reason;
+  h.run("manual_step", "roll+1");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  h.run("manual_step", "yaw+1");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1);
 }

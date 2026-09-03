@@ -132,6 +132,9 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"selection_ambiguous\":" << (s.selection_ambiguous ? 1 : 0)
      << ",\"reacquisition_score\":" << s.reacquisition_score
      << ",\"ambiguity_margin\":" << s.ambiguity_margin
+     << ",\"manual_lease_active\":" << (s.manual_lease_active ? 1 : 0)
+     << ",\"manual_lease_remaining_ms\":" << s.manual_lease_remaining_ms
+     << ",\"manual_profile\":\"" << json_escape(s.manual_profile) << "\""
      << ",\"confidence_band\":\"" << json_escape(s.confidence_band) << "\""
      << ",\"selected_confidence\":" << s.selected_confidence
      << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""

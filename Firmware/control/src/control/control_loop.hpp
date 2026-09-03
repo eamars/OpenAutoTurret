@@ -36,6 +36,7 @@
 #include "calibration/park_controller.hpp"
 #include "calibration/world_frame_telemetry.hpp"
 #include "mode/mode_manager.hpp"
+#include "mode/manual_controller.hpp"
 #include "tracking/auto_track_controller.hpp"
 #include "tracks/target_selection_manager.hpp"
 #include "tracks/track_set.hpp"
@@ -467,6 +468,8 @@ class ControlLoop {
   // is refreshed whenever a TrackSet arrives (camera rate) and read every control cycle,
   // which is the honest shape of it: the state machine runs at 200 Hz because the
   // coast timer does, but nothing about the target is *new* between frames.
+  ManualController manual_;
+  ManualOutput manual_out_;
   AutoTrackController autotrack_;
   AutoTrackInput at_input_;
   AutoTrackOutput at_out_;

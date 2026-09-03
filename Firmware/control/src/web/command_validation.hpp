@@ -53,6 +53,8 @@ inline constexpr int kYawIx = 1;
 // Allowed commands:
 //   hold, set_mode <MANUAL|AUTO_TRACK|AUTO_ROAM>, stop_motion,
 //   start_tracking, stop_tracking, enable_search, disable_search,
+//   manual_jog_start <dir[:profile]> / manual_jog_keepalive /
+//   manual_jog_stop / manual_step <axis><sign><deg>,
 //   select_target <label> / clear_target, start_homing,
 //   start_installation_calibration,
 //   start_payload_verification, select_payload_profile <name>,
@@ -144,6 +146,28 @@ inline CommandResult validate_command(const SystemCommandState& s,
   if (command == "disable_search") {
     if (!s.search_enabled) {
       r.error = "search is not enabled";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "manual_jog_start" || command == "manual_jog_keepalive" ||
+      command == "manual_jog_stop" || command == "manual_step") {
+    // Shape only. Which mode is allowed, whether a lease exists to renew, and whether a
+    // step size is one of the sanctioned choices are controld's decisions (§38-§41,
+    // §52), made on the thread that owns the lease — a web-thread guess about a lease
+    // that expires in 300 ms would be wrong about as often as it was right.
+    if (command == "manual_jog_start" && arg.empty()) {
+      r.error = "jog needs a direction (yaw+, yaw-, pitch+, pitch-)";
+      return r;
+    }
+    if (command == "manual_step" && arg.empty()) {
+      r.error = "step needs an axis and degrees (yaw+1)";
+      return r;
+    }
+    if ((command == "manual_jog_keepalive" || command == "manual_jog_stop") &&
+        !arg.empty()) {
+      r.error = "this command takes no argument";
       return r;
     }
     r.ok = true;

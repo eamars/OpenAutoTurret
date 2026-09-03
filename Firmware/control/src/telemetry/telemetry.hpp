@@ -84,6 +84,13 @@ struct TelemetrySnapshot {
   // was computed from. intent_velocity_scale already carries the resulting scale; the
   // band says why, which is the difference between "it slowed down" and "it slowed down
   // because it was only half sure".
+  // §78 MANUAL / §50 ui_state: is a jog lease live, how long is left on it, and which
+  // profile it is running at. The remaining time is published rather than inferred
+  // because the operator's question is "if the tab dies now, when does it stop" — and
+  // the answer must come from the machine that would do the stopping.
+  bool manual_lease_active = false;
+  int64_t manual_lease_remaining_ms = 0;
+  std::string manual_profile;
   std::string confidence_band;
   float selected_confidence = 0.0f;  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,

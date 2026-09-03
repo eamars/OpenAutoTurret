@@ -394,22 +394,71 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   tracking_ref_ = ReferenceRequest{};
   mode_proposal_ = ReferenceRequest{};
   last_intent_ = MotionIntent{};
-  if (tracking_ && phase_ == Phase::Hold) {
-    mode_proposal_ = tracking_->compute_reference(
-        now_ns, ready_raw_[ix(AxisId::Pitch)], ready_raw_[ix(AxisId::Yaw)]);
+  if (phase_ == Phase::Hold) {
+    // §25/§53: the intent path belongs to the modes, not to the tracking session. It
+    // used to be gated on `tracking_`, which was harmless while AUTO_TRACK was the only
+    // mode that could move anything — and it is why MANUAL motion did nothing at all the
+    // first time it was wired up: MANUAL releases the tracking session, so the block that
+    // builds the intent never ran, and the turret sat in MANUAL acknowledging jog and
+    // step commands at 200 Hz with an intent source of "none". Nothing in the log. The
+    // converter is created here for exactly that reason: a jog needs the reference
+    // layers, and it does not need a camera.
+    // The kinematics come from the tracking configuration, which is the only place
+    // they are configured. MANUAL motion needs the *converter*, not the solver: a jog is
+    // a joint reference and never touches the camera, so an unset calibration cannot make
+    // a jog unsafe here — it would only make a LosDirection intent wrong, and MANUAL
+    // does not form one.
+    if (!ref_mgr_) ref_mgr_.emplace(geo::LosJointSolver(tracking_cfg_.kinematics));
+    if (tracking_) {
+      mode_proposal_ = tracking_->compute_reference(
+          now_ns, ready_raw_[ix(AxisId::Pitch)], ready_raw_[ix(AxisId::Yaw)]);
     // §28.5/§31.3: the payload profile v_max (and any mismatch derate) caps
     // station motion. Applied to the proposal here and again to the intent's
     // ceiling in intent_limits(); the double application is deliberate — the cap
     // is applied *before* the confidence derate so a degrading target cannot lift
     // the effective ceiling back up, which is the safer ordering and slightly
     // stricter than v1's.
-    mode_proposal_.v_max_rad_s =
-        std::min(mode_proposal_.v_max_rad_s, hold_speed_effective());
+      mode_proposal_.v_max_rad_s =
+          std::min(mode_proposal_.v_max_rad_s, hold_speed_effective());
+    }
     // §15-§20. AUTO_TRACK's state advances every control cycle (its coast is wall
     // clock), from facts that only change when a frame arrives. Every other mode resets
     // it, so coming back to AUTO_TRACK never resumes an acquisition history that
     // belongs to a different moment — §93's stale-intent class of bug, seen from the
     // target's side.
+    if (mode_mgr_.mode() == OperatingMode::Manual) {
+      // §38: the lease is checked on the cycle clock. A browser that stopped talking is
+      // noticed within one cycle (5 ms), not on the next request that never arrives.
+      //
+      // "Current logical q" is the reference being followed, not the measured feedback.
+      // A jog integrated against lagging feedback would drift by the lag every cycle;
+      // against the reference it advances by exactly what was asked, and the difference
+      // between the two is what an operator would feel as a turret that keeps creeping.
+      double q_logical[2] = {tracking_ref_.q_pitch_rad, tracking_ref_.q_yaw_rad};
+      const double vmax = hold_speed_effective();
+      const double v_max[2] = {vmax, vmax};
+      const bool was_leased = manual_.lease_active();
+      const bool was_expired = std::string(manual_out_.reason) == "jog lease expired";
+      manual_out_ = manual_.update(q_logical, v_max, now_ns, period_ns);
+      if (was_leased && !manual_.lease_active() && !was_expired) {
+        // §79's MANUAL_JOG_EXPIRED, as a log line until the event bus lands. This is the
+        // one MANUAL event that is not the operator's deliberate act, so it is the one
+        // worth recording: it is what a dropped wifi, a backgrounded tab, or a laptop
+        // going to sleep looks like from the turret's side, and "the jog stopped by
+        // itself" is the report that needs a timestamp.
+        spdlog::warn("MANUAL jog lease expired after {} ms — controlled stop to "
+                     "MANUAL/HOLD (38)",
+                     manual_.config().lease_ms);
+      }
+      if (manual_out_.step_rejected) {
+        spdlog::warn("manual step refused: {}", manual_out_.step_reject_reason);
+      }
+    } else if (manual_.lease_active() || manual_out_.step_in_progress) {
+      // §41/§93: leaving MANUAL cancels the lease and any step in flight. Coming back
+      // must not resume a jog that was interrupted by an AUTO_TRACK acquisition.
+      manual_.cancel(now_ns);
+      manual_out_ = ManualOutput{};
+    }
     if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
       at_input_.measurement_age_ms =
           last_measurement_ns_ > 0 ? (now_ns - last_measurement_ns_) / 1000000 : -1;
@@ -420,6 +469,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // the envelope mid-construction, which is the coupling the layer split exists to
       // prevent.
       at_input_.los_feasible = !tracking_ref_.target_unreachable;
+      if (tracking_ref_.target_unreachable && manual_out_.step_in_progress)
+        manual_.notify_step_refused();  // §41: say so, do not push against a limit
       at_out_ = autotrack_.update(at_input_, now_ns);
     } else if (autotrack_.state() != AutoTrackState::WaitTarget || at_out_.follow_los) {
       autotrack_.reset();
@@ -440,8 +491,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                       "mode reference");
       }
     }
-    tracking_->record_pose(sp[ix(AxisId::Yaw)].q_rad);
-    tracking_->record_reference(tracking_ref_);
+    if (tracking_) {  // MANUAL has no tracking session, and this block used to be
+                      // gated on having one — the dereference below is what a segfault
+                      // looks like when the gate is opened and its guards are not.
+      tracking_->record_pose(sp[ix(AxisId::Yaw)].q_rad);
+      tracking_->record_reference(tracking_ref_);
+    }
   }
 
   // 2c. Phase 9: payload verification (§27, §31.3, §42.2). A web-commanded
@@ -972,6 +1027,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.mode_phase = mode_mgr_.mode() == OperatingMode::AutoTrack
                         ? auto_track_state_name(at_out_.state)
                         : mode_phase_label();
+    snap.manual_lease_active = manual_.lease_active();
+    snap.manual_lease_remaining_ms = manual_out_.lease_remaining_ms;
+    snap.manual_profile = manual_profile_name(manual_.profile());
     snap.confidence_band = confidence_band_name(at_out_.band);
     snap.selected_confidence = at_out_.selected_confidence;
     snap.intent_source = motion_source_name(last_intent_.source);
@@ -1226,11 +1284,18 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
   MotionIntent in;
   in.timestamp_ns = now_ns;
   switch (mode_mgr_.mode()) {
-    case OperatingMode::Manual:
-      // V3-5 replaces this with jog/step/goto intents from ManualController. The
-      // run_test_motion developer path (§42.2) is untouched below it: that is a
-      // developer request in §16's sense, not one of the three modes' motion.
-      return MotionIntent::hold(MotionSource::Manual, "manual hold");
+    case OperatingMode::Manual: {
+      // §38-§41. The lease and the step live in ManualController; what arrives here is
+      // either a moving position reference (a jog) or a finite one (a step), both of
+      // which go through the same v1 reference, envelope and trajectory generator as
+      // everything else. A hold has no deadline; a jog carries one a cycle longer than
+      // its lease, so an intent can never outlive the permission it was formed under.
+      const MotionIntent& mi = manual_out_.intent;
+      if (mi.type != IntentType::Hold) return mi;
+      // The run_test_motion developer path (§42.2) is untouched below this switch: that
+      // is a developer request in §16's sense, not one of the three modes' motion.
+      return MotionIntent::hold(MotionSource::Manual, manual_out_.reason);
+    }
 
     case OperatingMode::AutoTrack: {
       // §15-§20: this answer comes from AutoTrackController, not from the v1 FSM. What
@@ -1767,6 +1832,105 @@ void ControlLoop::execute_command(const std::string& name,
       spdlog::info("search mode {} for the next start_tracking (§36)",
                    want ? "ARMED" : "disarmed");
     }
+    return;
+  }
+  if (name == "manual_jog_start" || name == "manual_jog_keepalive" ||
+      name == "manual_jog_stop" || name == "manual_step") {
+    // §38-§41. Every one of these is refused outside MANUAL with the reason §52 names
+    // ("manual jog only available in MANUAL mode") — a jog that quietly started a
+    // motion while AUTO_TRACK believed it owned the axes is the arbitration failure §26
+    // exists to prevent, so the mode is checked here rather than assumed.
+    if (mode_mgr_.mode() != OperatingMode::Manual) {
+      ack_command(name, false,
+                  "manual motion is only available in MANUAL (currently " +
+                      std::string(operating_mode_name(mode_mgr_.mode())) + ")");
+      return;
+    }
+    if (name == "manual_jog_keepalive") {
+      // Answered honestly: a keepalive that renews nothing means the lease already
+      // lapsed, and the operator holding a button needs to know that rather than
+      // watching the turret refuse to move.
+      const bool renewed = manual_.jog_keepalive(now_ns_);
+      ack_command(name, renewed, renewed ? "lease renewed"
+                                         : "no jog lease to renew (it expired)");
+      return;
+    }
+    if (name == "manual_jog_stop") {
+      manual_.jog_stop(now_ns_);
+      ack_command(name, true, "jog stopped");
+      return;
+    }
+    if (name == "manual_jog_start") {
+      JogDirection dir;
+      ManualProfile profile = manual_.profile();
+      char why[96] = {};
+      if (!ManualController::parse_jog_arg(arg.c_str(), dir, profile, why, sizeof why)) {
+        ack_command(name, false, why);
+        return;
+      }
+      if (!manual_.jog_start(dir, profile, now_ns_)) {
+        ack_command(name, false, "jog direction was empty");
+        return;
+      }
+      spdlog::info("MANUAL jog {}{} profile {} (lease {} ms)",
+                   dir.yaw ? (dir.yaw > 0 ? "yaw+ " : "yaw- ") : "",
+                   dir.pitch ? (dir.pitch > 0 ? "pitch+ " : "pitch- ") : "",
+                   manual_profile_name(profile), manual_.config().lease_ms);
+      ack_command(name, true,
+                  std::string("jogging at ") + manual_profile_name(profile));
+      return;
+    }
+    // manual_step <axis><sign><degrees>, e.g. "yaw+1" or "pitch-0.5"
+    std::string a = arg;
+    size_t k = 0;
+    while (k < a.size() && ((a[k] >= 'a' && a[k] <= 'z') || (a[k] >= 'A' && a[k] <= 'Z')))
+      ++k;
+    const std::string axis_name = a.substr(0, k);
+    const std::string rest = a.substr(k);
+    if (axis_name.empty() || rest.empty()) {
+      ack_command(name, false, "step needs an axis and degrees (yaw+1, pitch-0.5)");
+      return;
+    }
+    int axis = -1;
+    if (axis_name == "yaw" || axis_name == "yaw_axis") axis = 1;
+    else if (axis_name == "pitch") axis = 0;
+    if (axis < 0) {
+      ack_command(name, false, "step axis must be yaw or pitch");
+      return;
+    }
+    double sign = 1.0;
+    size_t off = 0;
+    if (!rest.empty() && (rest[0] == '+' || rest[0] == '-')) {
+      sign = rest[0] == '-' ? -1.0 : 1.0;
+      off = 1;
+    }
+    double deg = 0.0;
+    try {
+      deg = std::stod(rest.substr(off));
+    } catch (...) {
+      ack_command(name, false, "step degrees could not be read");
+      return;
+    }
+    // §41's choices are 0.5 / 1 / 5 degrees. Anything larger is refused rather than
+    // performed: an unbounded "move N degrees" on the operator page is the raw test
+    // move the section says not to build, and a typo of one digit is a turret crossing
+    // the room. §72 can widen the list at commissioning.
+    const double allowed[3] = {0.5, 1.0, 5.0};
+    bool ok_size = false;
+    for (double d : allowed)
+      if (std::fabs(deg - d) < 1e-9) ok_size = true;
+    if (!ok_size) {
+      ack_command(name, false, "step size must be one of 0.5, 1, or 5 degrees");
+      return;
+    }
+    const double q_logical = axis == 1 ? tracking_ref_.q_yaw_rad
+                                       : tracking_ref_.q_pitch_rad;
+    if (!manual_.step_move(axis, sign * deg * 0.017453292519943295, q_logical,
+                           now_ns_)) {
+      ack_command(name, false, "step was malformed");
+      return;
+    }
+    ack_command(name, true, "step issued to v1 safety (41)");
     return;
   }
   if (name == "select_target" || name == "clear_target") {
