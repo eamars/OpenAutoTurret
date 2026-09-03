@@ -51,6 +51,15 @@ class FakeControld:
             # something to draw in tests and so a regression that drops the block is visible to the
             # suite rather than only to the station. Values are a plausible rectangle for this turret,
             # not a claim about it: the real one is measured and published by controld.
+            # §20's camera block, idle. fps 0.0 because nothing has arrived yet, and the FOV values
+            # are the station's commissioned ones so the inset draws a real rectangle in tests.
+            camera={"fps": 0.0, "effective_hfov_deg": 69.3002, "effective_vfov_deg": 40.4171,
+                    "measurement_age_ms": None},
+            # §20's imu block: the stub that says there is nothing. world_elevation_deg is None rather
+            # than 0.0, because 0.0 is the claim "this turret is level" and nothing on this station is
+            # entitled to make it.
+            imu={"present": False, "gravity_valid": False, "world_elevation_valid": False,
+                 "world_elevation_deg": None, "basis": "no inertial sensor on this station"},
             field_of_regard={
                 "valid": True,
                 "kind": 1,

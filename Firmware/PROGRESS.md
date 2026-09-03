@@ -1061,3 +1061,86 @@ exist.
 as 11 cases where it had 9 (run directly, all pass). 346 pytest (16 new). Station: homed, controld
 running the de-duplicated build, webd serving the inset. Section 110: still 0 items accepted on
 hardware by a named person.
+
+## 2026-09-04, 11:4x — round 11: §20 becomes checkable, and the check immediately cost a permanent red chip
+
+### Operator input this round
+
+Told directly: **there is no IMU installed**, skip it or stub it as nothing. That upgraded the IMU
+claim from inference to fact — I had concluded "no inertial sensor" from the code (the only "imu" in
+the tree is inside the word "simulation"), and the operator confirmed it as a hardware statement. The
+stub therefore stays, because §20 names `imu.present / imu.gravity_valid / imu.world_elevation_deg` and
+an absent answer delivered as data beats a hole every reader fills differently. `world_elevation_deg`
+goes out as JSON **null, not 0** — 0.0 is the sentence "this turret is level", and nothing on this
+station is entitled to say it.
+
+### What went in
+
+- `camera.{fps, effective_hfov_deg, effective_vfov_deg, measurement_age_ms}` — fps is the
+  inter-TrackSet cadence, the only camera rate this process can observe; §12's example strip quotes
+  that figure ("FPS 29"), and the browser's preview rate is a separately limited relay number.
+  `measurement_age_ms` is null: the daemon loads intrinsics from a file and does not carry that file's
+  timestamp into telemetry. Not 0, which would claim freshly commissioned geometry. Plumbing the file's
+  own mtime through is the known, bounded fix, and the gap is declared in the ledger rather than held
+  in my head.
+- `imu.{present, gravity_valid, world_elevation_valid, world_elevation_deg, basis}` as described.
+- **`web/webd/tests/test_section_20_ledger.py`** — the thing that mattered. Nothing in the suite had
+  ever read §20 of the revision. The v3 architecture document's §50 had a ledger; §20, the list the
+  revision actually demands, had none. So "the data contract is nearly complete" was a feeling. The
+  names are now parsed from the document itself: every name must map to a path that resolves in the
+  payload the page reads, or be a declared absence with a reason. A mapped name that stops resolving is
+  a regression; a declared gap that quietly fills is drift. Both fail.
+
+§20 result: **34 names, 32 mapped, 2 honest nulls** (`camera.measurement_age_ms`,
+`imu.world_elevation_deg`).
+
+### The defect the ledger found in the act of being written
+
+Mapping `system.connected` required finding where the fact lives: `controld_connected` is served by
+**`/api/health`**. The §8 health chip reads `t.controld_connected` — from the **state** payload, which
+never carried it. So `!!undefined` was false and **the CONNECTED chip has been permanently red on every
+working station since it was written** — on a turret that is homed, tracking, and publishing. An
+indicator that is always wrong on healthy hardware teaches an operator to ignore the display, which is
+worse than no indicator.
+
+No test could see this because the suite checked the staleness fields and the health endpoint
+separately; nobody had asserted that the field the chip reads is a field the endpoint sends. Both
+endpoints now report the same `client.connected()` call — one fact behind two spellings.
+
+### Defects in my own work, caught in place
+
+- **My ledger's own parser silently read less than the document says.** Its regex allowed two dotted
+  segments, so all six `axes.yaw.actual_deg` style names were skipped without a word — and the file
+  would have gone green having ignored six requirements. It surfaced only because I also wrote the
+  two-sided check (unmapped doc names *and* stale ledger entries); the "stale" list was the one that
+  made nonsense, which is how I found out the parser was wrong rather than my transcription. A
+  requirement-vacuating bug in the test written to prevent requirement-vacuating bugs.
+- I transcribed three names wrong or missed them (`system.mode_phase`, `system.operating_mode`,
+  `system.safety_action`, and `predicted_anchor_norm[]` vs `predicted_anchor_norm`) — the reason the
+  ledger parses the document instead of trusting me to copy it.
+- I guessed `controld_connected` was in `/api/state` from memory of the §25 work. It was in
+  `/api/health`. That guess is what a mapping table with a resolving test exists to punish.
+- Two string-surgery slips while emitting the new blocks: a stale anchor from last round's comma fix
+  (aborted before writing, as the asserts keep doing), and a mangled line that dropped a `<<` and
+  duplicated a quote — caught by the compiler, and by reading the lines back rather than trusting the
+  patch's exit code.
+- A `grep -c` count that reported one occurrence because it counts lines, not matches, briefly hiding a
+  duplicate field again (see round 10).
+
+### One flake, recorded rather than smoothed over
+
+One CTest run failed; three subsequent runs were green, and the failure name was not recoverable from
+the captured output. The plausible mechanism is named rather than guessed away: the socket reader in
+`test_web_server.cpp` waits on a 1000 ms `poll` deadline against a publisher sending every 20 ms, so
+the test asserts arrival while measuring scheduling. On a loaded station that is a coin flip that adds
+nothing. The default is now 5000 ms with the reason in the source; callers that pass their own timeout
+keep it, and latency assertions elsewhere keep their tolerances. Suite is 57/57 twice after.
+
+### Also corrected
+
+A comment beside the §12 strip claimed "FPS is not in the snapshot yet, so it reads `--`". FPS has been
+in the snapshot for many rounds and the cell reads it. Comments like that are how the next reader
+decides what is true, so it now says what `camera_fps` is and why §12 quotes it.
+
+355 pytest (9 new), 57 CTest entries. Station: homed and ready, both blocks live, CONNECTED chip now
+reporting a real value. Section 110: still 0 items accepted on hardware by a named person.

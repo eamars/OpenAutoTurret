@@ -247,6 +247,21 @@ struct TelemetrySnapshot {
   int for_envelope_kind = 0;
   int for_envelope_count = 0;
   double for_envelope_deg[64] = {0.0};
+
+  // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
+  // the calibration files, not in the control code (the only "imu" anywhere in the tree is inside the
+  // word "simulation"). These fields exist so the absence is a stated fact on the wire rather than an
+  // empty space that each reader fills with its own guess, and they are a `present` flag rather than a
+  // constant so that adding hardware later is a change of value, not a change of contract.
+  //
+  // `imu_world_elevation_valid` gates the number, and that gate is the whole point. A world elevation
+  // of 0.0 would claim the turret is level; with no sensor the honest value is "no value", and the
+  // emitter sends JSON null rather than the field's initialiser. Anything that flattens the null to
+  // zero turns an unknown into a safety claim.
+  bool imu_present = false;
+  bool imu_gravity_valid = false;
+  bool imu_world_elevation_valid = false;
+  double imu_world_elevation_deg = 0.0;
   double target_az_rate_world_rad_s = 0.0;
   double target_el_rate_world_rad_s = 0.0;
 

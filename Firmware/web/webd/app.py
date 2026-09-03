@@ -191,7 +191,7 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             return JSONResponse(
                 status_code=503, content={"error": "no telemetry yet"}
             )
-        return JSONResponse({"type": "telemetry", **json.loads(telemetry_to_json(_stamped(t)))})
+        return JSONResponse({"type": "telemetry", "controld_connected": client.connected(), **json.loads(telemetry_to_json(_stamped(t)))})
 
     @app.get("/api/health")
     async def health() -> dict:

@@ -179,6 +179,31 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
           return pts;
         }()
      << "]}"
+     // §20's camera block. `fps` is the inter-TrackSet cadence - the rate fresh frames reach the
+     // detector, measured as an EWMA of arrival gaps - which is the only camera rate this process can
+     // observe. The browser's preview is a separate relay that webd meters and limits on its own, and
+     // §12's strip quotes this figure rather than that one. hfov/vfov are the commissioned values from
+     // the encoder-as-theodolite pass, also published flat: one measurement, two spellings, which is
+     // only safe because exactly one field is behind both.
+     << ",\"camera\":{\"fps\":" << s.camera_fps
+     << ",\"effective_hfov_deg\":" << s.effective_hfov_deg
+     << ",\"effective_vfov_deg\":" << s.effective_vfov_deg
+     // §20 asks for the age of this geometry measurement. The daemon loads intrinsics from a file and
+     // does not carry that file's timestamp into telemetry, so the age is unknown here and goes out as
+     // JSON null. It is NOT sent as 0: an age of zero would claim freshly commissioned geometry on a
+     // station whose intrinsics were measured once by an offline probe. Plumbing the file's own
+     // modification time through is the known fix, and the gap is declared in the contract test.
+     << ",\"measurement_age_ms\":null}"
+     // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
+     // the calibration files, not in the control code, where the only "imu" in the tree sits inside the
+     // word "simulation". `world_elevation_deg` is null rather than 0 for the reason stated on the
+     // snapshot field: with no sensor, 0.0 would assert that the turret is level.
+     << ",\"imu\":{\"present\":" << (s.imu_present ? "true" : "false")
+     << ",\"gravity_valid\":" << (s.imu_gravity_valid ? "true" : "false")
+     << ",\"world_elevation_valid\":" << (s.imu_world_elevation_valid ? "true" : "false")
+     << ",\"world_elevation_deg\":"
+     << (s.imu_world_elevation_valid ? std::to_string(s.imu_world_elevation_deg) : "null")
+     << ",\"basis\":\"no inertial sensor on this station\"}"
      << ",\"target_az_rate_world_rad_s\":" << s.target_az_rate_world_rad_s
      << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
      << ",\"q_ref_rate_yaw_rad_s\":" << s.q_ref_rate_yaw_rad_s

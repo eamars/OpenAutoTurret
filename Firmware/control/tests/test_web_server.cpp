@@ -31,7 +31,13 @@ int connect_client(const std::string& path) {
 }
 
 // Read one full message (SOCK_SEQPACKET preserves boundaries).
-bool read_message(int fd, std::string& out, int timeout_ms = 1000) {
+// Five seconds, not one. This deadline asks "does a frame arrive at all" against a publisher sending
+// one every 20 ms, so the original second proved nothing about the system and something about the
+// machine: on a loaded station - homing, vision, other suites - the verdict started depending on
+// scheduling rather than on the code. One flake appeared and would not reproduce in three runs after,
+// which is the worst property a suite can have when its red is meant to mean something. Callers that
+// pass their own timeout keep it; latency claims elsewhere keep their tighter tolerances.
+bool read_message(int fd, std::string& out, int timeout_ms = 5000) {
   pollfd pfd{fd, POLLIN, 0};
   int pr = ::poll(&pfd, 1, timeout_ms);
   if (pr != 1) return false;

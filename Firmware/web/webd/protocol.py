@@ -227,6 +227,12 @@ class Telemetry:
     # from one the daemon never sent. This exact shape of nothingness has already cost this project a
     # wrong conclusion twice; every container the contract names gets declared.
     field_of_regard: Optional[dict] = None
+    # §20's camera and imu blocks, declared for the same reason as the two above them: an undeclared
+    # field is indistinguishable from one the daemon never sent. `imu` in particular carries the
+    # station's honest answer that there is no inertial sensor - operator-confirmed 2026-09-04 - and a
+    # statement of absence is only useful if it survives the trip to the page.
+    camera: Optional[dict] = None
+    imu: Optional[dict] = None
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

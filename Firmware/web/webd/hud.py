@@ -672,7 +672,9 @@ function render(t) {
   const safe = String(t.safety_action || "").toUpperCase();
   hs.appendChild(chip("SAFETY", safe && safe !== "NONE" ? "amber" : "ok", safe && safe !== "NONE" ? safe : "ALLOW"));
 
-  // §12 bottom strip. FPS is not in the snapshot yet, so it reads "--" rather than a guess.
+  // §12 bottom strip. FPS here is `camera_fps`: the inter-TrackSet cadence, which is what
+  // §12's example strip quotes ("FPS 29"). The browser's preview rate is a different, separately
+  // limited number and is not what this cell claims..
   const cell = (k, v, cls) => '<span class="k">' + k + '</span><span class="' + (cls || "v") + '">' + v + '</span>';
   $("strip").innerHTML =
     cell("MODE", mode, "v") + '<span class="sep">|</span>' +
