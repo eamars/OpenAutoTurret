@@ -189,6 +189,66 @@
       "station": "",
       "evidence": "every v3 mode measures p99 <= 4 us in simulation against a 5000 us period; the accepted limits are the pre-v3 measurement on the Pi, which v3 has not yet been held against",
       "at": "2026-09-03T20:36:16+12:00"
+    },
+    "AUTO_ROAM/4": {
+      "item_text": "Detections continue while roaming.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "DetectionsKeepArrivingAndTheSelectionSurvivesTheWholeSweep",
+      "station": "",
+      "evidence": "while a sweep runs, ~30 Hz of detector frames keep reaching controld and the candidate list stays populated",
+      "at": "2026-09-03T20:49:40+12:00"
+    },
+    "AUTO_ROAM/5": {
+      "item_text": "Target selection may persist.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "DetectionsKeepArrivingAndTheSelectionSurvivesTheWholeSweep",
+      "station": "",
+      "evidence": "the selected track identifier is asserted unchanged across 1.5 s of sweeping, with frames still arriving",
+      "at": "2026-09-03T20:49:40+12:00"
+    },
+    "AUTO_ROAM/6": {
+      "item_text": "Roaming does not automatically pursue selected target by default.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ASweepDoesNotPursueTheSelectedTarget",
+      "station": "",
+      "evidence": "a selected person is left in place and AUTO_ROAM sweeps anyway: no auto_track intent and no los_direction intent appear, and the yaw demonstrably moved",
+      "at": "2026-09-03T20:49:40+12:00"
+    },
+    "AUTO_ROAM/7": {
+      "item_text": "Switching to AUTO_TRACK acquires selected visible target.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "SwitchingIntoAutoTrackAcquiresTheTargetThatWasAlreadyChosen",
+      "station": "",
+      "evidence": "after a sweep, switching to AUTO_TRACK with no new click reaches ACQUIRE then TRACKING on the surviving selection",
+      "at": "2026-09-03T20:49:40+12:00"
+    },
+    "MANUAL/3": {
+      "item_text": "Fine/Normal/Fast profiles work.",
+      "group": "MANUAL",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "TheProfileBandChangesTheSpeedAndNotOnlyTheLabel",
+      "station": "",
+      "evidence": "the same jog at FINE and FAST differs in the plant, not only in the label: published scale 0.15 against 1.0, and peak yaw speed differs by more than half again",
+      "at": "2026-09-03T20:49:40+12:00"
+    },
+    "COMMON/4": {
+      "item_text": "No UI/vision process can write motors directly.",
+      "group": "COMMON",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "pytest test_only_controld_touches_the_bus",
+      "station": "",
+      "evidence": "no web or vision source contains code that opens a CAN or serial device, and the only bus layer on the station lives in control/src/can",
+      "at": "2026-09-03T20:49:52+12:00"
     }
   },
   "doc_sha256": "2c572e530706196dc122fda869a6a337acdef3b65c71b3799dbf4b236aa35202"

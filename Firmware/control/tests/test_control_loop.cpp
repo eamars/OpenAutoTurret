@@ -1499,6 +1499,174 @@ TEST(AimPoint, ThereIsNoAimPointBeforeThereIsAnEstimate) {
   h.step(20);
   EXPECT_FALSE(h.snap().aim_point_valid);
 }
+
+// §110's roam and profile items, closed as *behaviour*. Each of these was one of the
+// "untried" entries in `tools/v3_acceptance.py report`, and they stayed untried because the
+// existing tests ask the modes what they are doing rather than whether the machine's
+// behaviour differs from another mode's. A sweep that happened to drift toward a selected
+// target would have passed every roam test in this file.
+namespace {
+// A person in the picture, at a chosen horizontal position, being tracked continuously.
+// Returns the identity the loop selected, so the caller asserts on what controld chose
+// rather than on the number this test happened to use.
+uint64_t select_one_person(HomedLoop& h, float anchor_x, const char* mode) {
+  tracks::TrackSet set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f, anchor_x);
+  feed(h, set, 30, 1);
+  h.run("set_mode", mode);
+  h.run("select_target", "1");
+  // Frames still arriving when the identity is read. `selected_track_id` names the *track*
+  // being acted on, and a choice whose track has gone quiet publishes nothing — which is
+  // correct under §58 (no invented frames) and `selection_last_seen_age_ms` is where the page
+  // says so. A helper that captured during a gap would assert on an absence.
+  feed(h, set, 6, 100);
+  const uint64_t sel = h.snap().selected_track_id;
+  EXPECT_NE(sel, 0u) << "the selection did not take, so nothing below this can mean anything";
+  return sel;
+}
+}  // namespace
+
+TEST(RoamBehaviour, ASweepDoesNotPursueTheSelectedTarget) {
+  // §110 AUTO_ROAM: "Roaming does not automatically pursue selected target by default".
+  // The selection is deliberately left in place and deliberately in a direction the sweep
+  // is not going, because that is the case the item is about: the operator chose somebody,
+  // walked away, and AUTO_ROAM must sweep the region rather than stalk the person they
+  // picked. Pursuit here would not be a bug anyone would notice in a roam test — the turret
+  // moves either way — which is exactly why it needs its own assertion.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  (void)select_one_person(h, 0.95f, "AUTO_TRACK");
+  h.step(20);  // let tracking begin to bear toward the anchor
+
+  h.run("set_mode", "AUTO_ROAM");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  const double yaw_at_switch = h.loop->last_positions()[1];
+
+  bool saw_tracking_intent = false;
+  std::string worst_source;
+  for (int i = 0; i < 400; ++i) {  // 2 s of sweeping
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    if (s.intent_source == "auto_track" || s.intent_type == "los_direction") {
+      saw_tracking_intent = true;
+      worst_source = s.intent_source + "/" + s.intent_type;
+    }
+  }
+  EXPECT_FALSE(saw_tracking_intent)
+      << "while roaming, an aim at the selected person appeared (" << worst_source
+      << "); the selection survives a mode change, the intent to chase it does not";
+  EXPECT_EQ(h.snap().intent_source, "auto_roam");
+  // And it *was* sweeping, because "no pursuit" on a turret that never moved would be the
+  // sort of green test that hides a broken roam planner.
+  EXPECT_GT(std::fabs(h.loop->last_positions()[1] - yaw_at_switch), 0.05)
+      << "two seconds in AUTO_ROAM and nothing moved, so the absence above proves nothing";
+}
+
+TEST(RoamBehaviour, DetectionsKeepArrivingAndTheSelectionSurvivesTheWholeSweep) {
+  // §110 AUTO_ROAM/4 and /5 together: the detector keeps reporting while the sweep runs, and
+  // the operator's choice is still chosen afterwards. Both halves are needed: selection that
+  // "persists" because the vision ingest stopped would look identical from the outside, and
+  // a candidate list that keeps updating while the selection silently drops would too.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const uint64_t sel = select_one_person(h, 0.30f, "AUTO_TRACK");
+  h.run("set_mode", "AUTO_ROAM");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+
+  tracks::TrackSet frames = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f, 0.30f);
+  uint64_t seq = 1000;
+  int saw_candidates = 0;
+  for (int i = 0; i < 300; ++i) {
+    if (i % 6 == 0) {  // ~30 Hz of detector traffic, as visiond sends it
+      frames.frame_sequence = seq++;
+      frames.sensor_timestamp_ns = h.t;
+      frames.publish_timestamp_ns = h.t + 1'000'000;
+      h.loop->feed_track_set(frames, h.t);
+    }
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    if (s.track_count > 0) ++saw_candidates;
+    EXPECT_EQ(s.selected_track_id, sel) << "the selection was dropped 5 ms into a sweep";
+  }
+  EXPECT_GT(saw_candidates, 40)
+      << "the candidate list was empty for most of a 1.5 s sweep: detections are not "
+         "reaching controld while roaming";
+  EXPECT_EQ(h.snap().selected_track_id, sel);
+}
+
+TEST(RoamBehaviour, SwitchingIntoAutoTrackAcquiresTheTargetThatWasAlreadyChosen) {
+  // §110 AUTO_ROAM/7: the operator picks somebody, sends the turret to sweep, then decides
+  // to watch that person. Nothing new should have to be selected — the choice was mode
+  // independent (§10) and survived the sweep above.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const uint64_t sel = select_one_person(h, 0.30f, "AUTO_TRACK");
+  h.run("set_mode", "AUTO_ROAM");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  h.step(200);  // half a second of sweep, with nobody touching anything
+
+  tracks::TrackSet frames = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f, 0.30f);
+  uint64_t seq = 2000;
+  h.run("set_mode", "AUTO_TRACK");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+
+  bool acquired = false, tracking = false;
+  for (int i = 0; i < 300 && !tracking; ++i) {
+    if (i % 6 == 0) {
+      frames.frame_sequence = seq++;
+      frames.sensor_timestamp_ns = h.t;
+      frames.publish_timestamp_ns = h.t + 1'000'000;
+      h.loop->feed_track_set(frames, h.t);
+    }
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    if (s.mode_phase == "ACQUIRE") acquired = true;
+    if (s.mode_phase == "TRACKING") tracking = true;
+  }
+  EXPECT_TRUE(acquired) << "no ACQUIRE phase: the loop did not start from the survivor";
+  EXPECT_TRUE(tracking)
+      << "a visible, already-selected target was not picked up after roaming (§10 says the "
+         "choice is mode independent; §110 says this is what the operator sees)";
+  EXPECT_EQ(h.snap().selected_track_id, sel);
+  EXPECT_EQ(h.snap().intent_source, "auto_track");
+}
+
+TEST(ManualBehaviour, TheProfileBandChangesTheSpeedAndNotOnlyTheLabel) {
+  // §110 MANUAL/3: FINE / NORMAL / FAST must be three speeds, not one speed and three
+  // strings. The published name would pass a test that asked the page what it says, so this
+  // asks the plant what it did: the same jog, the same direction, the same number of cycles,
+  // with only the band changed.
+  auto peak_speed = [](const char* profile) {
+    HomedLoop h;
+    EXPECT_TRUE(h.ready);
+    h.run("set_mode", "MANUAL");
+    const std::string arg = std::string("yaw+:") + profile;
+    h.loop->submit_command("manual_jog_start", arg.c_str());
+    h.step(3);
+    double peak = 0.0;
+    double scale_seen = 0.0;
+    for (int i = 0; i < 400; ++i) {
+      if (i % 40 == 0) h.loop->submit_command("manual_jog_start", arg.c_str());
+      h.step(1);
+      const telemetry::TelemetrySnapshot s = h.snap();
+      peak = std::max(peak, std::fabs(s.v_yaw_rad_s));
+      scale_seen = s.intent_velocity_scale;
+    }
+    EXPECT_EQ(h.snap().manual_profile, profile)
+        << "the page and the plant disagree about which band is active";
+    return std::make_pair(peak, scale_seen);
+  };
+
+  const auto fine = peak_speed("FINE");
+  const auto fast = peak_speed("FAST");
+  EXPECT_GT(fine.second, 0.0);
+  EXPECT_LT(fine.second, 0.3) << "FINE's published velocity scale is " << fine.second;
+  EXPECT_GT(fast.second, 0.9) << "FAST's published velocity scale is " << fast.second;
+  // The behavioural half. If the plant does not actually go slower, the band is a label and
+  // the item is not met however the scales read.
+  EXPECT_GT(fast.first, fine.first * 1.5)
+      << "FINE peaked at " << fine.first << " rad/s and FAST at " << fast.first
+      << "; three profiles that move the turret at one speed are one profile";
+}
 }  // namespace
 
 TEST(ModeSwitchingUnderMotion, NoImpossibleStepAndNoIntentSurvivesItsMode) {

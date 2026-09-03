@@ -476,24 +476,54 @@ not a runner, it is an operator, and the operator in this project is a person st
 arms cannot reach them.
 
 Where that leaves §110 today, from `report`: **30 items — 0 accepted on hardware by a named
-person, 19 shown by simulation only, 11 untried.** The 11 untried are worth reading as work,
-not as paperwork, because most are gaps in *simulation* coverage too: whether detections keep
-arriving while roaming (AUTO_ROAM/4), whether a selection persists across a roam stretch
-(/5), whether roaming refrains from pursuing a selected target by default (/6 — that one may be
-an implementation gap rather than a test gap, and needs reading the code before writing the
-test), whether switching into AUTO_TRACK acquires an already-selected visible target (/7), the
-FINE/NORMAL/FAST profiles as behaviour rather than as telemetry strings (MANUAL/3), travel
-limits under manual (MANUAL/5), target-unreachable and target-switch constraints
-(AUTO_TRACK/9, /10), turnaround constraints (AUTO_ROAM/2), that no UI or vision process can
-write motors (COMMON/4 — statically checkable and worth a guard), and the IMU-conditional frame
-(MANUAL/7, which waits on hardware that may never arrive).
+person, 25 shown by simulation only, 5 untried.** Closing six of the original eleven the same
+day is not a claim that they were easy; it is what happens when the report names the gaps in
+the order they can be checked, and the tests are written as behaviour rather than as questions
+put to the code:
+
+- **AUTO_ROAM/6, the one that might have been an implementation gap**, is not one: `intent_for()`
+  in AUTO_ROAM returns RoamPlanner's intent and never consults `tracking_`. It was nevertheless
+  untested, and untested in a way that hid it — a roam test that only asks "did it move" passes
+  just as well if the turret was drifting toward the selected person the whole time. The test
+  now selects somebody off to one side, sweeps for two seconds, and fails if *any* cycle shows
+  an `auto_track` or `los_direction` intent, with a companion assertion that the yaw actually
+  moved, because "no pursuit" on a turret that never moved would be a green test hiding a broken
+  planner.
+- **AUTO_ROAM/4 and /5** are one test, because each half alone would pass on the other's
+  failure: detections must keep arriving *and* the selection must survive, and selection that
+  "persists" because the ingest stopped looks identical from outside. Writing it also surfaced
+  something worth knowing: `selected_track_id` names the track being acted on, so it publishes
+  nothing while vision is quiet (§58 — no invented frames) even though the choice stands; a
+  helper that sampled during a gap would have been asserting on an absence.
+- **AUTO_ROAM/7**: after a sweep, `set_mode AUTO_TRACK` with nobody re-selecting reaches
+  ACQUIRE then TRACKING on the surviving identifier. That is §10's mode-independent choice
+  earning its keep.
+- **MANUAL/3**: FINE and FAST are two speeds, not one speed and two strings — the published
+  scales (0.15 / 1.0) are checked *and* the plant's peak yaw speed is required to differ, since
+  the number an operator can read is not the number that keeps a hand safe.
+- **COMMON/4** is now a static guard (`test_only_controld_touches_the_bus`): nothing in webd or
+  visiond contains code that could open a CAN or serial device — imports, socket families, port
+  configuration, device paths — while `control/src/can` is checked in the same test to still
+  open one. Searching for the word "CAN" would have failed on the first comment anyone wrote
+  about CAN health, so the guard searches for the vocabulary of *doing it*; test files are
+  excluded, because a guard that scans itself reports a violation forever; and the positive
+  half is asserted, because a forbidden-thing-only check passes vacuously the day the permitted
+  implementation disappears.
+
+The 5 left are the ones that cannot be closed by writing a test today: whether a target beyond
+safe travel stops driving instead of pressing the limit (AUTO_TRACK/9) and whether a target
+switch is trajectory-constrained (/10) — both are about the envelope and the generator under a
+v3 workload, and both want a scene built on purpose; turnarounds under the acceleration and jerk
+ceiling (AUTO_ROAM/2); travel limits under manual (MANUAL/5), which is v1's envelope wearing
+v3's clothing and deserves its own assertion; and the IMU-conditional Level/Joint frame
+(MANUAL/7), which waits on hardware this station may never get.
 
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 267 pytest green, and
+Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 270 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured
