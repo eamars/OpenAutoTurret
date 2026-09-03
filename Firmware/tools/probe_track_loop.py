@@ -732,7 +732,12 @@ def main() -> int:
                 lead_pred = (math.degrees(pl - az_t)
                              if isinstance(pl, float) and s.get("predicted_target_los_valid")
                              else None)
+                # The reference's own profile, so "smooth" is judged on what the controller asked
+                # for rather than on differenced encoder noise.
+                rv = s.get("q_ref_rate_yaw_rad_s")
+                ra = s.get("q_ref_accel_yaw_rad_s2")
                 rows.append({"t": t, "phase": phase, "aim_err": aim_err, "lead": lead,
+                             "ref_v": rv, "ref_a": ra, "q_ref": s.get("q_ref_yaw_rad"),
                              "lead_tgt": lead_tgt, "lead_pred": lead_pred,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
@@ -744,6 +749,7 @@ def main() -> int:
         print("  published %d TrackSets, sampled %d" % (pub.published, len(rows)))
         dart_start = 1.5
         hold_rows = [r for r in rows if r["phase"] == "hold"]
+        all_rows = rows
         dart_rows = [r for r in rows if r["phase"] == "dart"]
         errs = sorted(r["aim_err"] for r in hold_rows if r["aim_err"] is not None)
         tracking_frac = (sum(1 for r in hold_rows if str(r["track_state"]) == "tracking")
@@ -795,6 +801,75 @@ def main() -> int:
               % ("%.2f" % back if back is not None else "NEVER",
                  max((abs(r["v_yaw"]) for r in rows), default=0.0) * 180 / math.pi))
         print("    aim-error sign changes after arrival: %d" % flips)
+        # C5: smoothness, judged on the REFERENCE. Configured limits are 60 deg/s^2 and
+        # 300 deg/s^3 (yaw axis, turret.yaml). Jerk below is differenced from the published
+        # reference acceleration at the probe's own sampling rate, so it is an estimate - a
+        # violation would have to be confirmed against the 200 Hz loop, not treated as proof.
+        # Step test, deliberately EWMA-free. Two different faults look the same in an acceleration
+        # figure: a reference that slew-ramps honestly but too fast, and a reference that JUMPS and
+        # then sits still. The second is the thing the operator called not-smooth, and it is visible
+        # without any smoothing at all: divide consecutive published references by the wall-clock
+        # gap between them. A ramp cannot exceed the rate limit between samples; a step trivially
+        # does.
+        qr = [(r["t"], r["q_ref"], r["phase"]) for r in all_rows
+              if isinstance(r.get("q_ref"), float)]
+        r2d0 = 180.0 / math.pi
+        # Divide by the interval over which the change ACTUALLY accumulated. Sampling the snapshot
+        # faster than controld republishes it means consecutive rows often carry the same reference;
+        # dividing a two-interval change by one interval inflates the rate, and a rate limit claim
+        # lives or dies on that denominator. So each change is timed from the last sample that held
+        # a different value, which is the shortest interval the data can honestly support.
+        worst = None
+        over = 0
+        changes = 0
+        for i in range(1, len(qr)):
+            if qr[i][1] == qr[i - 1][1]:
+                continue
+            changes += 1
+            j = i - 1
+            while j > 0 and qr[j][1] == qr[j - 1][1]:
+                j -= 1
+            dt = qr[i][0] - qr[j][0]
+            if dt <= 1e-3:
+                continue
+            dqa = abs(qr[i][1] - qr[j][1]) * r2d0
+            implied = dqa / dt          # deg per second over the honest interval
+            if implied > 30.0:
+                over += 1
+            if worst is None or implied > worst[0]:
+                worst = (implied, qr[i][0], dqa, qr[i][2], dt)
+        print("      reference step test (no smoothing; rate over the interval each change really "
+              "took, %d changes observed)" % changes)
+        if worst:
+            print("        samples over the 30 deg/s track limit: %d of %d" % (over, len(qr) - 1))
+            print("        worst: %.1f deg/s, from a %.3f deg reference move over %.0f ms at t=%.2f s (%s)"
+                  % (worst[0], worst[2], worst[4] * 1000.0, worst[1], worst[3]))
+            print("        -> C6 reference within its own rate limit: %s"
+                  % ("PASS" if over == 0 else "FAIL"))
+        else:
+            print("        no consecutive reference pair to compare")
+        rv = sorted(abs(r["ref_v"]) for r in all_rows if isinstance(r.get("ref_v"), float))
+        ra = sorted(abs(r["ref_a"]) for r in all_rows if isinstance(r.get("ref_a"), float))
+        series = [(r["t"], r["ref_a"]) for r in all_rows
+                  if isinstance(r.get("ref_a"), float)]
+        jk = sorted(abs((series[i][1] - series[i - 1][1]) / max(series[i][0] - series[i - 1][0], 1e-3))
+                    for i in range(1, len(series)))
+        r2d = 180.0 / math.pi
+        print("    reference profile (what the controller ASKED FOR; limits 60 deg/s^2, 300 deg/s^3):")
+        if rv:
+            print("      rate : p50 %.1f  p95 %.1f  max %.1f deg/s   (track limit 30 deg/s)"
+                  % (pct(rv, .5) * r2d, pct(rv, .95) * r2d, rv[-1] * r2d))
+        if ra:
+            print("      accel: p50 %.1f  p95 %.1f  max %.1f deg/s^2  -> C5a %s"
+                  % (pct(ra, .5) * r2d, pct(ra, .95) * r2d, ra[-1] * r2d,
+                     "PASS" if pct(ra, .95) * r2d <= 60.0 else "FAIL"))
+        if jk:
+            print("      jerk : p50 %.0f  p95 %.0f  max %.0f deg/s^3 (estimated from accel at probe "
+                  "rate) -> C5b %s"
+                  % (pct(jk, .5) * r2d, pct(jk, .95) * r2d, jk[-1] * r2d,
+                     "PASS" if pct(jk, .95) * r2d <= 300.0 else "FAIL"))
+        if not rv:
+            print("      no reference-rate samples: controld or webd predates q_ref_rate_*")
         print("    C1 containment : %s" % ("PASS" if c1 else "FAIL - the target left the frame"))
         print("    C2 recovery    : %s%s" % ("PASS" if c2 else "FAIL",
               "" if back is None else "  (t=%.2f s, bar %.2f s)" % (back, args.max_recovery_s)))

@@ -484,3 +484,60 @@ Process notes from this round, both mine, both worth keeping:
 - `ctest` reported 55/55 PASS while the build had failed, because I grepped the summary without
   grepping the build for `error:`. It happened twice today. The suite is not evidence about a binary
   that did not link.
+
+## 2026-09-04, 06:1x — round 4: the reference exceeds its own rate limit, and two of my own numbers were wrong first
+
+### What is now measured, on the station, with the dart's criteria fixed beforehand
+
+| criterion | result | number |
+| --- | --- | --- |
+| C1 target stays in frame | **PASS** | containment held in every dart |
+| C2 back inside 1/3 box height | **FAIL** | 2.0-2.2 s against a 1.50 s bar |
+| C3 reference leads the dart | **FAIL** | p50 -0.29 to -0.46 deg |
+| C4 no ringing | **PASS** | 1 sign change after arrival |
+| C5a/C5b reference accel and jerk | **NOT JUDGED** | derived figures are publish-quantisation, not profile |
+| C6 reference within its 30 deg/s limit | **FAIL** | 4 of 152 changes over the limit, worst 42.9 deg/s |
+
+C6 is the new one and it is the interesting result: during fast target motion the **published
+reference itself moves faster than the configured track-rate limit**, up to 42.9 deg/s against
+30 - so 1.43x, in about 3% of observed reference changes - while the axis peaked at 19.6 deg/s.
+That is consistent with the recovery failure: if the reference runs ahead of what the axis can do,
+the aim error is allowed to open and then has to be closed again.
+
+C5 must not be reported as a failure. The accel figure came out at p95 742 deg/s^2 against a
+configured 60, which looks damning, and it is mostly an artefact: I derive accel by differencing a
+reference that is republished in jumps, so a 1.5 deg move followed by a hold becomes a huge positive
+spike and a huge negative one. Rate survives this criticism because position over a known interval
+is well defined; the second derivative does not. So "jerk-limited" is **still unverified**, exactly
+as it was at the start of the round - the only difference is that I now know what would verify it:
+the motion log records feedback `q v a j` at 100 Hz and does **not** record the reference, so the
+profile can only be seen through a 15 Hz window. Making smoothness measurable is a logging change,
+not a tuning change.
+
+### Two numbers of mine that were wrong, and what each one teaches
+
+1. **`prediction_horizon_ms = 0` was wrong.** webd's `Telemetry` is a dataclass, and absent keys are
+   filled with *declared defaults*, so a key being present in `/api/state` says nothing about
+   whether controld sent it. The zero was webd's default; while tracking, the station reports 40 ms.
+   I had written that the missing lead "would be explained by construction". It is not. The fields
+   added for §20 now default to `None`, so absence and zero are different answers - the same honesty
+   §20 demands of the operator's data, applied to my own tooling.
+2. **The first step-test figure (74.8 deg/s) was inflated by my own denominator.** I divided a
+   reference change by the interval between two *polls*, but a change can accumulate across two
+   publish intervals. Dividing by the interval the change actually took gave 42.9 deg/s - still a
+   violation, 43% smaller. A rate-limit claim lives on its denominator.
+
+### What the prediction is actually doing
+
+During a 25 deg/s dart the predicted LOS sits about **1.25 deg ahead of the estimator's filtered
+LOS**, which is what 25 deg/s x 40 ms predicts (1.0 deg), so the lead mechanism is alive and
+roughly correctly scaled. What remains is that both are *behind the target*: the filtered estimate
+lags by ~1.6 deg and the prediction cancels most but not all of it, leaving -0.29 to -0.46 deg of
+net lag. So the failure is not "no prediction"; it is that a 40 ms horizon does not cover the
+loop's actual latency, and the reference then also overruns what the axis can follow. Measuring
+that latency end to end (detector frame -> intent -> axis motion) is the next thing, and it needs
+the same timestamp discipline as the blackbox, not a gain.
+
+55 CTest, 301 pytest green. `test_documented_telemetry_reaches_the_page` failed exactly as designed
+when the predicted-LOS gap closed, and the map was updated with the reason retired rather than
+deleted. Section 110: still 0 items accepted on hardware by a named person.
