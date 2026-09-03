@@ -123,6 +123,125 @@ function hudPredictionSvg(b, C, o) {
   return parts.join("");
 }
 
+// --- §11 field-of-regard inset ------------------------------------------------
+//
+// Everything in this inset is in LOGICAL JOINT DEGREES, which is what §11.3 asks for and also the
+// only space this station can honestly fill: the camera-to-axis boresight is not separable from the
+// principal point at the spans the theodolite probe reaches, so an envelope drawn over the picture
+// would inherit an offset nobody has measured. In joint degrees every number comes from the encoders,
+// and the tape caveat - "JOINT TRAVEL, NOT HEADING" - applies here too: the axes are labelled by
+// their own travel, and no cardinal direction appears anywhere.
+//
+// The scale is ONE number for both axes. Fitting yaw and pitch independently would fill the box more
+// attractively and would make the white FOV rectangle a lie - the rectangle's job is to show how big
+// the camera's view is next to the region the turret can point, and that comparison is only true if
+// both axes share a scale. So the envelope is letterboxed instead of stretched, and the test asserts
+// the aspect ratio of the rectangle rather than how nicely it fills the box.
+function hudForInset(o) {
+  if (!o || !Array.isArray(o.pts) || o.pts.length < 3 || !(o.hfovDeg > 0) || !(o.vfovDeg > 0) ||
+      !Array.isArray(o.los)) return null;
+  const vw = o.vw, vh = o.vh;
+  if (!(vw > 0) || !(vh > 0)) return null;
+
+  const w = vw * 0.26, h = vh * 0.215;             // §11.2: 25-27% wide, 20-23% tall
+  const x = vw * 0.015;                            // "lower left", clear of the bezel
+  const y = vh - h - vh * 0.055;                   // above the §12 status strip
+  const titleH = Math.max(12, h * 0.17);
+  const pad = Math.max(6, Math.min(w, h) * 0.08);
+  const plot = { x: x + pad, y: y + titleH, w: w - 2 * pad, h: h - titleH - pad };
+  if (!(plot.w > 0) || !(plot.h > 0)) return null;
+
+  let minY = Infinity, maxY = -Infinity, minP = Infinity, maxP = -Infinity;
+  for (const pt of o.pts) {
+    // typeof checks, not isFinite: in JavaScript isFinite(null) is TRUE, because Number(null) is 0.
+    // A malformed vertex would otherwise have been plotted at yaw 0 as a legitimate corner, which is
+    // the worst kind of wrong on a map whose entire job is saying where the turret may point.
+    if (!Array.isArray(pt) || pt.length < 2 || typeof pt[0] !== "number" ||
+        typeof pt[1] !== "number" || !isFinite(pt[0]) || !isFinite(pt[1])) return null;
+    minY = Math.min(minY, pt[0]); maxY = Math.max(maxY, pt[0]);
+    minP = Math.min(minP, pt[1]); maxP = Math.max(maxP, pt[1]);
+  }
+  const spanY = Math.max(1e-6, maxY - minY), spanP = Math.max(1e-6, maxP - minP);
+  const k = Math.min(plot.w / spanY, plot.h / spanP);          // the one shared scale
+  const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
+  const midY = (minY + maxY) / 2, midP = (minP + maxP) / 2;
+  const toPx = (yawDeg, pitchDeg) => [cx + (yawDeg - midY) * k, cy - (pitchDeg - midP) * k];
+
+  const clampMark = (pt) => {
+    // Off-map is information, not an error: a target the axis cannot reach is exactly what an
+    // operator needs to see, and silently dropping it would make the inset read as "no target".
+    // So it is pinned to the border and flagged, which is the same honesty rule as the off-screen
+    // target cue in the main view.
+    const raw = toPx(pt[0], pt[1]);
+    const off = raw[0] < plot.x || raw[0] > plot.x + plot.w ||
+                raw[1] < plot.y || raw[1] > plot.y + plot.h;
+    return { x: Math.min(Math.max(raw[0], plot.x), plot.x + plot.w),
+             y: Math.min(Math.max(raw[1], plot.y), plot.y + plot.h),
+             off: off, yawDeg: pt[0], pitchDeg: pt[1] };
+  };
+
+  const los = clampMark(o.los);
+  const fovW = o.hfovDeg * k, fovH = o.vfovDeg * k;            // §11.3: size from effective HFOV/VFOV
+  const g = {
+    x: x, y: y, w: w, h: h, plot: plot, scale: k,
+    envPx: o.pts.map((pt) => { const q = toPx(pt[0], pt[1]); return { x: q[0], y: q[1] }; }),
+    fov: { x: los.x - fovW / 2, y: los.y - fovH / 2, w: fovW, h: fovH },
+    los: los,
+    target: Array.isArray(o.target) ? clampMark(o.target) : null,
+    pred: Array.isArray(o.pred) ? clampMark(o.pred) : null,
+    titleH: titleH
+  };
+  return g;
+}
+
+function hudForInsetSvg(g, C) {
+  if (!g) return "";
+  const pts = g.envPx.map((p) => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ");
+  const parts = [
+    // "It is not a full dashboard card" - one low-opacity panel, no card chrome, so the scene stays
+    // dominant as §11.2 requires.
+    '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w + '" height="' + g.h + '" rx="2" ' +
+      'fill="' + C.black + '" fill-opacity=".28" stroke="' + C.line + '" stroke-width="1"/>',
+    '<text class="tlbl" x="' + (g.x + g.w / 2) + '" y="' + (g.y + g.titleH * 0.72) +
+      '" text-anchor="middle" fill="' + C.dim + '">FIELD OF REGARD</text>',
+    '<polygon points="' + pts + '" fill="' + C.green + '" fill-opacity=".10" stroke="' + C.green +
+      '" stroke-width="1" opacity=".85"/>',
+    '<text class="tlbl" x="' + (g.plot.x + 2) + '" y="' + (g.plot.y + g.plot.h - 3) +
+      '" fill="' + C.green + '" opacity=".8">SAFE ENVELOPE</text>',
+    '<rect x="' + g.fov.x + '" y="' + g.fov.y + '" width="' + g.fov.w + '" height="' + g.fov.h +
+      '" fill="none" stroke="' + C.white + '" stroke-width="1" opacity=".95"/>',
+    '<line x1="' + (g.los.x - 4) + '" y1="' + g.los.y + '" x2="' + (g.los.x + 4) + '" y2="' +
+      g.los.y + '" stroke="' + C.white + '" stroke-width="1.2"/>',
+    '<line x1="' + g.los.x + '" y1="' + (g.los.y - 4) + '" x2="' + g.los.x + '" y2="' +
+      (g.los.y + 4) + '" stroke="' + C.white + '" stroke-width="1.2"/>'
+  ];
+  if (g.target) {
+    parts.push('<circle cx="' + g.target.x + '" cy="' + g.target.y + '" r="4" fill="none" stroke="' +
+               C.green + '" stroke-width="1.4"' + (g.target.off ? ' opacity=".45"/>' : '/>'));
+  }
+  if (g.pred) {
+    // Amber, and shaped differently from the target marker: two green symbols side by side would put
+    // an intention and a measurement in the same uniform, which §10 already forbids in the main view.
+    const d = 4.5, q = g.pred;
+    parts.push('<path d="M' + q.x + ' ' + (q.y - d) + 'L' + (q.x + d) + ' ' + q.y + 'L' + q.x + ' ' +
+               (q.y + d) + 'L' + (q.x - d) + ' ' + q.y + 'Z" fill="none" stroke="' + C.amber +
+               '" stroke-width="1.4"' + (q.off ? ' opacity=".45"/>' : '/>'));
+  }
+  // §11's "short legend": three rows, no paragraphs.
+  const lx = g.x + g.w - Math.max(52, g.w * 0.20), ly = g.y + g.titleH + 3;
+  parts.push('<line x1="' + lx + '" y1="' + ly + '" x2="' + (lx + 9) + '" y2="' + ly +
+             '" stroke="' + C.white + '" stroke-width="1"/><text class="tlbl" x="' + (lx + 12) +
+             '" y="' + (ly + 3) + '" fill="' + C.dim + '">FOV</text>');
+  parts.push('<circle cx="' + (lx + 4) + '" cy="' + (ly + 12) + '" r="3.4" fill="none" stroke="' +
+             C.green + '" stroke-width="1.2"/><text class="tlbl" x="' + (lx + 12) + '" y="' +
+             (ly + 15) + '" fill="' + C.dim + '">TARGET</text>');
+  parts.push('<path d="M' + (lx + 4) + ' ' + (ly + 18) + 'L' + (lx + 9) + ' ' + (ly + 23) + 'L' +
+             (lx + 4) + ' ' + (ly + 28) + 'L' + (lx - 1) + ' ' + (ly + 23) + 'Z" fill="none" stroke="' +
+             C.amber + '" stroke-width="1.2"/><text class="tlbl" x="' + (lx + 12) + '" y="' +
+             (ly + 26) + '" fill="' + C.dim + '">PRED</text>');
+  return parts.join("");
+}
+
 // --- §5 / §6 travel tapes --------------------------------------------------
 //
 // Geometry and drawing, both as pure functions, deliberately. The revision specifies these tapes
@@ -362,7 +481,7 @@ function render(t) {
   const stale = updateStaleness(t);
 
   // --- what the overlay is made of, rebuilt each frame -------------------
-  const layers = { cand: "", sel: "", reticle: "", pred: "", tape: "" };
+  const layers = { cand: "", sel: "", reticle: "", pred: "", for: "", tape: "" };
 
   // §7 + §9: boxes are drawn from the detector's own normalised bbox; the anchor is
   // the point the controller centres, and it is drawn - never as a dot on the reticle.
@@ -485,6 +604,29 @@ function render(t) {
     length: pitchLen, minDeg: deg(t.q_soft_min_pitch_rad), maxDeg: deg(t.q_soft_max_pitch_rad),
     valueDeg: deg(t.q_pitch_rad), valid: t.soft_limits_valid === true
   });
+  // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
+  // ceremony - if the server ever starts sending a polygon in a different frame, drawing it as joint
+  // travel would be quietly wrong rather than visibly wrong, and this station has already been burned
+  // once by a number whose frame was assumed.
+  const forB = (t.field_of_regard && typeof t.field_of_regard === "object") ? t.field_of_regard : null;
+  layers.for = "";
+  if (forB && forB.valid === true && forB.coordinate_frame === "joint_deg" &&
+      Array.isArray(forB.safe_envelope_points) && t.effective_hfov_deg > 0 &&
+      t.effective_vfov_deg > 0 && typeof t.q_yaw_rad === "number" &&
+      typeof t.q_pitch_rad === "number") {
+    const hasIntent = t.intent_has_joint_target === true &&
+                      typeof t.intent_q_yaw_rad === "number" && typeof t.intent_q_pitch_rad === "number";
+    const hasRef = typeof t.q_ref_yaw_rad === "number" && typeof t.q_ref_pitch_rad === "number";
+    const gi = hudForInset({
+      vw: vw, vh: vh, pts: forB.safe_envelope_points,
+      hfovDeg: t.effective_hfov_deg, vfovDeg: t.effective_vfov_deg,
+      los: [deg(t.q_yaw_rad), deg(t.q_pitch_rad)],
+      target: hasIntent ? [deg(t.intent_q_yaw_rad), deg(t.intent_q_pitch_rad)] : null,
+      pred: hasRef ? [deg(t.q_ref_yaw_rad), deg(t.q_ref_pitch_rad)] : null
+    });
+    layers.for = hudForInsetSvg(gi, C);
+  }
+
   layers.tape =
     hudTravelTapeSvg(yawTape, C, { title: "YAW", vw: vw, vh: vh,
                                    value: hudDegLabel(deg(t.q_yaw_rad), true),
@@ -499,6 +641,7 @@ function render(t) {
   $("g-selected").innerHTML = layers.sel;
   $("g-reticle").innerHTML = layers.reticle;
   $("g-prediction").innerHTML = layers.pred;
+  $("g-for").innerHTML = layers.for;
   $("g-tapes").innerHTML = layers.tape;
 
   // target_aim_x/y_norm (the point inside the target the controller is driving onto the axis) is
@@ -732,6 +875,7 @@ HUD_HTML = """<!DOCTYPE html>
     <g id="g-selected"></g>
     <g id="g-prediction"></g>
     <g id="g-reticle"></g>
+    <g id="g-for"></g>
     <g id="g-tapes"></g>
   </svg>
 

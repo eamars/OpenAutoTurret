@@ -1514,6 +1514,26 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // turret was near an end without knowing which end, or whether an end existed yet.
     snap.soft_limits_valid = limits_[ix(AxisId::Pitch)].valid &&
                              limits_[ix(AxisId::Yaw)].valid;
+
+    // §20/§11: the safe region, published in joint degrees. These are the SAME measured soft limits
+    // the loop hands to the collision envelope a little further down this file (it is constructed as
+    // RectangularEnvelopeConfig from limits_[].q_soft_*_rad), so what the operator sees as the field of
+    // regard is the region the safety checker actually permits, not a second copy that can drift.
+    // Four corners, ordered counter-clockwise from the lowest yaw and pitch, closed by repetition at
+    // the page's convenience rather than here.
+    snap.for_envelope_valid = snap.soft_limits_valid;
+    snap.for_envelope_kind = snap.for_envelope_valid ? 1 : 0;
+    snap.for_envelope_count = 0;
+    if (snap.for_envelope_valid) {
+      const double kRad2Deg = 57.29577951308232;
+      const double y0 = limits_[ix(AxisId::Yaw)].q_soft_min_rad * kRad2Deg;
+      const double y1 = limits_[ix(AxisId::Yaw)].q_soft_max_rad * kRad2Deg;
+      const double p0 = limits_[ix(AxisId::Pitch)].q_soft_min_rad * kRad2Deg;
+      const double p1 = limits_[ix(AxisId::Pitch)].q_soft_max_rad * kRad2Deg;
+      const double corners[8] = {y0, p0, y1, p0, y1, p1, y0, p1};
+      for (int k = 0; k < 8; ++k) snap.for_envelope_deg[k] = corners[k];
+      snap.for_envelope_count = 4;
+    }
     snap.q_soft_min_pitch_rad = limits_[ix(AxisId::Pitch)].q_soft_min_rad;
     snap.q_soft_max_pitch_rad = limits_[ix(AxisId::Pitch)].q_soft_max_rad;
     snap.q_soft_min_yaw_rad = limits_[ix(AxisId::Yaw)].q_soft_min_rad;

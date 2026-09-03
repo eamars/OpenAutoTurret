@@ -222,6 +222,11 @@ class Telemetry:
     # this project has mistaken "webd never sent it" for "the daemon does not have it" - and a
     # container declaration means a new key inside the block arrives instead of vanishing.
     prediction: Optional[dict] = None
+    # §20's field_of_regard block, passed through as received for the same reason as `prediction`:
+    # telemetry_from_json discards keys it has not seen, so an undeclared field is indistinguishable
+    # from one the daemon never sent. This exact shape of nothingness has already cost this project a
+    # wrong conclusion twice; every container the contract names gets declared.
+    field_of_regard: Optional[dict] = None
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

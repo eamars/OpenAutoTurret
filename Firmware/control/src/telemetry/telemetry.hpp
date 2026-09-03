@@ -228,6 +228,25 @@ struct TelemetrySnapshot {
   double prediction_anchor_x_norm = 0.0;
   double prediction_anchor_y_norm = 0.0;
   bool prediction_anchor_in_frame = false;
+
+  // §20's `field_of_regard.safe_envelope_points[]` and §11's inset, in DEGREES of logical joint
+  // travel (§11.3: "FOR coordinates use yaw/pitch degrees", not image coordinates). That choice is
+  // what makes this publishable at all: the camera-to-axis boresight is not separable from the
+  // principal point with the spans the theodolite probe has, so a FOR drawn over the picture would
+  // inherit an offset nobody has measured. In joint degrees, every number comes from the encoders.
+  //
+  // Flat pairs, [yaw_deg, pitch_deg, yaw_deg, pitch_deg, ...], with `for_envelope_count` points.
+  // Room for 32 points is reserved so a piecewise or coupled envelope (§19 anticipates one, and the
+  // envelope header says the constant rectangle can be replaced without touching the controller) can
+  // publish its real outline through these same fields instead of a new contract.
+  //
+  // `for_envelope_kind` is 0 for none, 1 for the constant quadrilateral in force today. It is
+  // published rather than implied so the page draws what it is told rather than assuming the region
+  // is always four corners - the assumption is exactly what stops being true when §19's polygon lands.
+  bool for_envelope_valid = false;
+  int for_envelope_kind = 0;
+  int for_envelope_count = 0;
+  double for_envelope_deg[64] = {0.0};
   double target_az_rate_world_rad_s = 0.0;
   double target_el_rate_world_rad_s = 0.0;
 

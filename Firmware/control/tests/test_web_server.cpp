@@ -609,3 +609,188 @@ TEST(WebServer, CleanStop) {
   ASSERT_TRUE(server2.start(err)) << err;
   server2.stop();
 }
+
+// --- structural validity of the telemetry line -------------------------------
+//
+// json_balanced above proves nesting. It cannot see the two mistakes a hand-written emitter actually
+// makes. A double comma is perfectly balanced. A key emitted twice is perfectly balanced. Both
+// produce a document that substring assertions accept happily while the reader on the other end
+// either rejects the line outright or keeps one of the two values in silence - and until this
+// function, the telemetry line was tested ONLY by substring search, which is precisely the weakness
+// the comment on json_balanced calls out while continuing to do it.
+//
+// Not hypothetical. A nested block added to this emitter left `},` followed by `,"next":` behind, so
+// the line read `...},,"next":...`. The build was clean, every CTest in this file was green, and only
+// a manual look at the live payload showed that the UI's entire input was not JSON.
+namespace strict {
+
+struct Tok {
+  bool is_str;
+  std::string s;
+  char punct;
+};
+
+inline std::vector<Tok> Tokenize(const std::string& m) {
+  std::vector<Tok> out;
+  std::string cur;
+  bool in = false, esc = false;
+  auto flush = [&]() {
+    if (!cur.empty()) {
+      out.push_back(Tok{false, cur, '\0'});
+      cur.clear();
+    }
+  };
+  for (size_t i = 0; i < m.size(); ++i) {
+    const char c = m[i];
+    if (in) {
+      if (esc) { cur += c; esc = false; }
+      else if (c == '\\') { cur += c; esc = true; }
+      else if (c == '"') {
+        out.push_back(Tok{true, cur, '\0'});
+        // Clear, or the next flush() leaks this word out a second time as a bare token. That is how
+        // the duplicate-key check appeared to pass: the spurious token sat where the ':' was expected,
+        // so no key was ever recorded and nothing could ever be found twice. The self-test below is
+        // the only reason that is visible instead of shipped.
+        cur.clear();
+        in = false;
+      }
+      else cur += c;
+      continue;
+    }
+    if (c == '"') { flush(); in = true; cur.clear(); continue; }
+    if (c == '{' || c == '}' || c == '[' || c == ']' || c == ',' || c == ':') {
+      flush();
+      out.push_back(Tok{false, std::string(), c});
+      continue;
+    }
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+    cur += c;
+  }
+  flush();
+  return out;
+}
+
+// Rejects what balance cannot: empty elements (`{,`, `,,`, `,}`), and the same key twice in the same
+// object. Key identity is qualified by the path, because `prediction.valid` and
+// `field_of_regard.valid` are two different fields that both must be called `valid`.
+inline bool Check(const std::string& m, std::string* where) {
+  if (!json_balanced(m, where)) return false;
+  const std::vector<Tok> t = Tokenize(m);
+  std::vector<std::string> scopes(1, "$");
+  std::vector<std::string> seen;
+  auto path = [&]() {
+    std::string p;
+    for (size_t i = 1; i < scopes.size(); ++i) { p += scopes[i]; p += "."; }
+    return p;
+  };
+  for (size_t i = 0; i < t.size(); ++i) {
+    const Tok& k = t[i];
+    if (k.punct == '{' || k.punct == '[') {
+      if (i + 1 < t.size() && t[i + 1].punct == ',') {
+        if (where) *where = "empty element right after '" + std::string(1, k.punct) + "' at token " +
+                            std::to_string(i);
+        return false;
+      }
+      std::string name = (k.punct == '{') ? "{}" : "[]";
+      if (i >= 2 && t[i - 1].punct == ':' && t[i - 2].is_str) name = t[i - 2].s;
+      scopes.push_back(name);
+      continue;
+    }
+    if (k.punct == '}' || k.punct == ']') {
+      if (i >= 1 && t[i - 1].punct == ',') {
+        if (where) *where = "trailing comma before '" + std::string(1, k.punct) + "' at token " +
+                            std::to_string(i);
+        return false;
+      }
+      if (scopes.size() > 1) scopes.pop_back();
+      continue;
+    }
+    if (k.punct == ',') {
+      if (i >= 1 && t[i - 1].punct == ',') {
+        if (where) *where = "empty element between two commas at token " + std::to_string(i);
+        return false;
+      }
+      if (i + 1 < t.size() && (t[i + 1].punct == '}' || t[i + 1].punct == ']')) {
+        if (where) *where = "trailing comma at token " + std::to_string(i);
+        return false;
+      }
+      continue;
+    }
+    if (k.is_str && i + 1 < t.size() && t[i + 1].punct == ':') {
+      const std::string id = path() + k.s;
+      for (size_t j = 0; j < seen.size(); ++j) {
+        if (seen[j] == id) {
+          if (where) *where = "key '" + id + "' emitted twice in the same object; a reader keeps one "
+                              "and the other vanishes without a trace";
+          return false;
+        }
+      }
+      seen.push_back(id);
+    }
+  }
+  return true;
+}
+
+}  // namespace strict
+
+TEST(WebServer, TheTelemetryLineIsStructurallyValidJson) {
+  // The same populated snapshot the other tests in this file send, so the checker runs against a line
+  // with real strings, enums and nested values in it rather than a bare default.
+  telemetry::TelemetrySnapshot s = sample_snapshot();
+
+  auto expect_valid = [&](const char* what) {
+    const std::string msg = ota::web::format_telemetry(s);
+    std::string where;
+    EXPECT_TRUE(strict::Check(msg, &where)) << what << ": " << where << "\n  line: "
+                                            << msg;
+  };
+
+  expect_valid("an empty snapshot");
+
+  // The nested blocks, filled. Each is a place where a bracket or separator can go wrong, and each is
+  // emitted by a chain of << that the compiler cannot check for me.
+  s.prediction_valid = true;
+  s.prediction_anchor_in_frame = true;
+  s.prediction_los_yaw_rad = 0.06;
+  s.prediction_los_pitch_rad = -0.02;
+  s.prediction_anchor_x_norm = 0.531;
+  s.prediction_anchor_y_norm = 0.492;
+  s.prediction_horizon_ms = 40;
+  expect_valid("with the §20 prediction block filled");
+
+  const double kRad2Deg = 57.29577951308232;
+  s.for_envelope_valid = true;
+  s.for_envelope_kind = 1;
+  s.for_envelope_count = 4;
+  const double corners[8] = {-22.573, -74.712, 320.144, -74.712, 320.144, -4.891, -22.573, -4.891};
+  for (int k = 0; k < 8; ++k) s.for_envelope_deg[k] = corners[k];
+  (void)kRad2Deg;
+  expect_valid("with the field-of-regard polygon filled");
+
+  const std::string msg = ota::web::format_telemetry(s);
+  EXPECT_NE(msg.find("\"prediction\":{"), std::string::npos) << "§20's block must be an object";
+  EXPECT_NE(msg.find("\"field_of_regard\":{"), std::string::npos);
+  EXPECT_NE(msg.find("\"safe_envelope_points\":[["), std::string::npos)
+      << "§20 names safe_envelope_points[]; a point is a pair, so the array opens with a pair";
+  EXPECT_NE(msg.find("\"coordinate_frame\":\"joint_deg\""), std::string::npos)
+      << "§11.3: FOR coordinates are yaw/pitch degrees, and the page refuses to draw without being told";
+
+  // A count of zero must emit an empty array, not an empty element. Both look similar in a diff; only
+  // one of them parses.
+  s.for_envelope_count = 0;
+  s.prediction_valid = false;
+  expect_valid("with the polygon empty");
+  EXPECT_NE(ota::web::format_telemetry(s).find("\"safe_envelope_points\":[]"), std::string::npos);
+}
+
+TEST(WebServer, TheStructuralCheckerRejectsTheMistakesItExistsFor) {
+  // A checker nobody has seen fail is a decoration. Each of these is balanced, so the pre-existing
+  // json_balanced accepts all four; this is the only thing standing between them and a green build.
+  std::string where;
+  EXPECT_FALSE(strict::Check("{\"a\":1},,{\"b\":2}", &where)) << "the double comma that reached the station";
+  EXPECT_FALSE(strict::Check("{\"a\":1,}", &where)) << "trailing comma";
+  EXPECT_FALSE(strict::Check("{\"a\":1,\"a\":2}", &where)) << "duplicate key at the top level";
+  EXPECT_TRUE(strict::Check("{\"p\":{\"valid\":true},\"f\":{\"valid\":false}}", &where))
+      << "same key name in two different objects is not a duplicate";
+  EXPECT_TRUE(strict::Check("{\"a\":[[1,2],[3,4]],\"b\":[]}", &where)) << "nested pairs and an empty array";
+}

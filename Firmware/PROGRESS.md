@@ -974,3 +974,90 @@ too crude; a flip of one crossing is within what that metric can mean without am
 
 57 CTest (5 new), 330 pytest (9 new). Station: homed, controld publishing the prediction block, webd
 serving the cue. Section 110: still 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 11:0x — round 10: §11 FOR inset, and a validator that immediately found two live defects
+
+### What went in
+
+`field_of_regard.{valid, kind, coordinate_frame, safe_envelope_points[]}` from controld, and §11's
+inset drawn from it: low-opacity panel, `FIELD OF REGARD`, green envelope polygon, white FOV rectangle,
+LOS centre marker, green target marker, amber predicted marker, three-row legend, `SAFE ENVELOPE`.
+
+**§11.3 is what makes this publishable at all.** FOR coordinates are yaw/pitch degrees, not image
+coordinates. Round 8 established that the camera-to-axis boresight is not separable from the principal
+point at the spans the theodolite probe reaches, so an envelope drawn over the picture would inherit an
+offset nobody has measured. In joint degrees every number comes from the encoders — and the envelope is
+taken from the *same* `limits_[].q_soft_*_rad` the loop hands to the collision envelope elsewhere in
+the file, so the picture of what is permitted is the permission, not a copy of it that can drift.
+
+One scale for both axes, deliberately. Fitting yaw and pitch independently fills the box more
+attractively and makes the FOV rectangle misreport the camera's field; the envelope is letterboxed
+instead. The test asserts the rectangle's aspect ratio rather than how nicely it fills the box.
+
+Live, driven through the page's own function with the station's real payload:
+
+```
+inset box             : 499 x 232 px  = 26.0% x 21.5% of viewport   (§11.2: 25-27% x 20-23%)
+scale                 : 1.348 px per degree, one scale
+FOV rect              : 93.4 x 54.5 px = 69.30 x 40.42 deg, aspect 1.715 (camera 1.715)
+polygon               : 4 points, equal to the published soft travel to 1e-3 deg
+FOV inside envelope   : true          pred marker: on the LOS (idle: reference == current)
+```
+
+### The validator, and what it found within one build
+
+`json_balanced` already existed in `test_web_server.cpp`, but the telemetry line itself — the input the
+entire UI is built from — was tested **only by substring search**, which is the weakness that helper's
+own comment names while continuing to do it. Substrings cannot see a double comma, and a double comma is
+perfectly balanced.
+
+So: a structural checker over the emitted line — quote-aware, rejecting empty elements (`{,`, `,,`,
+`,}`), trailing commas, and the same key twice in the same object (paths qualified, because
+`prediction.valid` and `field_of_regard.valid` are different fields that must both be called `valid`).
+It found two real duplicates immediately:
+
+- **`target_aim_is_head` emitted twice** — the field carrying objective (a)'s head-aim acceptance
+- **`target_el_rate_world_rad_s` emitted twice**
+
+Both emit identical expressions, so nothing is wrong on the air today; a reader keeps the last. The
+danger is the future edit: change one of a silent pair and the field starts reporting something other
+than what the control loop computed, with no compiler, no test, and no parser complaining. Both de-
+duplicated; each looked like `X     << X`, a collapsed line break from some earlier patch.
+
+**I had already seen one of them.** `target_el_rate_world_rad_s` appeared twice in a `sed` listing
+earlier this session and I read it as my `cut -c` truncating the line. Then `grep -c` reported "1",
+which hid it again — `grep -c` counts *lines*, and both copies were on one line. Counting lines when
+asking how many times something occurs is the same mistake as counting files when asking how many tests
+exist.
+
+### Defects in my own new code, caught before they shipped
+
+- **I wrote a comment claiming a declaration that I did not write.** In `protocol.py` the patch added
+  "…every container the contract names gets declared" and no field. The comment described the fix; the
+  fix wasn't there. Symptom: `field_of_regard: null` from a daemon that was verifiably emitting it,
+  through the exact silent-drop trap this project has now been bitten by three times.
+- **The trailing comma I introduced** (`<< "]},"` while the next field also led with `,`) produced
+  `},,"target_az_rate…"`. Clean build, green substring tests. Only a manual look at the live payload
+  showed the UI's entire input was not JSON — which is why the validator now exists rather than because
+  it seemed like a nice idea.
+- **`isFinite(null)` is `true`** in JavaScript, because `Number(null)` is 0. My vertex guard accepted a
+  malformed envelope point and would have plotted it at yaw 0 as a legitimate corner — a fake vertex on
+  a map whose only job is saying where the turret may point. Guard now checks `typeof … === "number"`.
+- **The checker's own tokenizer double-emitted strings.** I pushed a string token without clearing the
+  accumulator, so the next flush leaked the word again; the stray token sat where a `:` was expected, so
+  no key was ever recorded and **the duplicate detector could never find anything** — and the main
+  telemetry test passed happily on that dead code. Only the self-test that asserts the checker *fails*
+  on known-bad input exposed it. A validator that has never been seen failing is a decoration.
+- Test bugs: `latest_telemetry()` returns a `Telemetry` object, not a dict, so three tests crashed in
+  `setUp`; and I guessed `s.ts_ns` / `s.track_state = "ready_hold"` / `telemetry::format_telemetry`
+  where the real ones are `sample_snapshot()`, an enum, and `ota::web::` — caught by the compiler in
+  one round trip, which is cheaper than the alternative.
+- Two mangled edits from my own slice arithmetic (a C++ literal's closing quote eaten by a Python
+  triple-quote; an emission block half-replaced), both caught at compile or by reading the lines back.
+
+### Counts
+
+57 CTest entries — one entry per binary, so the two new cases inside `test_web_server.cpp` show there
+as 11 cases where it had 9 (run directly, all pass). 346 pytest (16 new). Station: homed, controld
+running the de-duplicated build, webd serving the inset. Section 110: still 0 items accepted on
+hardware by a named person.

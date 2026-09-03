@@ -47,6 +47,16 @@ class FakeControld:
             # cannot notice going missing, which is how "webd dropped it" turns into a day of
             # suspecting the daemon. Idle means not predicting - hence valid False, not zeros dressed
             # up as a real prediction at the centre of the frame.
+            # §20/§11: a stand-in field of regard in joint degrees, so the page's FOR inset has
+            # something to draw in tests and so a regression that drops the block is visible to the
+            # suite rather than only to the station. Values are a plausible rectangle for this turret,
+            # not a claim about it: the real one is measured and published by controld.
+            field_of_regard={
+                "valid": True,
+                "kind": 1,
+                "coordinate_frame": "joint_deg",
+                "safe_envelope_points": [[-30.0, -60.0], [30.0, -60.0], [30.0, 20.0], [-30.0, 20.0]],
+            },
             prediction={
                 "valid": False,
                 "predicted_los_yaw_deg": 0.0,

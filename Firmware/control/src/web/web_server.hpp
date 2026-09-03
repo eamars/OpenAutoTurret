@@ -145,7 +145,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"target_aim_x_norm\":" << s.target_aim_x_norm
      << ",\"target_aim_y_norm\":" << s.target_aim_y_norm
      << ",\"target_aim_valid\":" << (s.target_aim_valid ? "true" : "false")
-     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")
+     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")
      << ",\"predicted_target_az_world_rad\":" << s.predicted_target_az_world_rad
      << ",\"predicted_target_el_world_rad\":" << s.predicted_target_el_world_rad
      << ",\"predicted_target_los_valid\":" << (s.predicted_target_los_valid ? "true" : "false")
@@ -161,8 +161,26 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << s.prediction_anchor_y_norm << "]"
      << ",\"anchor_in_frame\":" << (s.prediction_anchor_in_frame ? "true" : "false")
      << ",\"horizon_ms\":" << s.prediction_horizon_ms << "}"
+     // §20's field_of_regard block. Degrees of logical joint travel (§11.3), points as
+     // [yaw_deg, pitch_deg] pairs counter-clockwise from the minimum corner, emitted in the order the
+     // control loop produced them. `coordinate_frame` is published rather than assumed: the page must
+     // not have to guess whether it is looking at joint travel or a compass heading, because §5.3's
+     // whole point is that those are different things on this machine.
+     << ",\"field_of_regard\":{\"valid\":" << (s.for_envelope_valid ? "true" : "false")
+     << ",\"kind\":" << s.for_envelope_kind
+     << ",\"coordinate_frame\":\"joint_deg\" ,\"safe_envelope_points\":["
+     << [&s]() {
+          std::string pts;
+          for (int k = 0; k < s.for_envelope_count; ++k) {
+            if (k > 0) pts += ",";
+            pts += "[" + std::to_string(s.for_envelope_deg[2 * k]) + "," +
+                   std::to_string(s.for_envelope_deg[2 * k + 1]) + "]";
+          }
+          return pts;
+        }()
+     << "]}"
      << ",\"target_az_rate_world_rad_s\":" << s.target_az_rate_world_rad_s
-     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
+     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
      << ",\"q_ref_rate_yaw_rad_s\":" << s.q_ref_rate_yaw_rad_s
      << ",\"q_ref_rate_pitch_rad_s\":" << s.q_ref_rate_pitch_rad_s
      << ",\"q_ref_accel_yaw_rad_s2\":" << s.q_ref_accel_yaw_rad_s2
