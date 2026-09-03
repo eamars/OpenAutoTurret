@@ -531,6 +531,37 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       at_input_.los_feasible = !tracking_ref_.target_unreachable;
       if (tracking_ref_.target_unreachable && manual_out_.step_in_progress)
         manual_.notify_step_refused();  // §41: say so, do not push against a limit
+      // §13/§16, once per cycle and not once per frame. The block that normally refreshes
+      // these facts runs when a TrackSet arrives, and this is the case it cannot cover:
+      // vision has gone quiet and the operator clears the target — the exact situation in
+      // which they would do it. The selection is controld's own state and it has already
+      // changed, but `at_input_` still holds the last frame's answer, in which somebody
+      // *was* selected. Before this, CLEAR_TARGET during a vision dropout left the turret
+      // aiming along the last line of sight it was given, and the only thing that would
+      // stop it was another frame. Replaying a silent session is what showed it: no
+      // detector traffic, so nothing ever told the controller the truth had changed.
+      //
+      // `just_reacquired` stays in the frame path on purpose. A reacquisition is an event
+      // in the detector stream; a cycle with no frames cannot produce a new one, and
+      // synthesising one from an age transition would be §58's forbidden fabrication.
+      {
+        const auto& sel = selection_.selection();
+        const bool visible = sel.visibility_state == tracks::Visibility::Visible;
+        at_input_.has_selection = sel.has_selection;
+        at_input_.target_visible = visible;
+        at_input_.target_occluded = sel.visibility_state == tracks::Visibility::Occluded;
+        at_input_.ambiguous = sel.ambiguous_reacquisition;
+        at_input_.reacquisition_score = sel.reacquisition_score;
+        if (!sel.has_selection) {
+          // With no subject there is no evidence about a target either, and leaving the
+          // previous one's confidence in place would keep the state machine in a band the
+          // station has no basis for (§19). Same reasoning as the missing-pick branch in
+          // the frame path, same reason stated there.
+          at_input_.detector_confidence = 0.0f;
+          at_input_.track_confidence = 0.0f;
+          at_input_.visible_frames = 0;
+        }
+      }
       const AutoTrackState was_state = last_at_state_;
       at_out_ = autotrack_.update(at_input_, now_ns);
       last_at_state_ = at_out_.state;

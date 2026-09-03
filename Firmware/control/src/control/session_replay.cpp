@@ -149,8 +149,7 @@ ReplayResult replay_session(ControlLoop& loop, const ReplayScript& script,
     return s;
   }();
 
-  std::string last_phase, last_mode;
-  int last_sel = -1;
+  std::string last_key;
   uint64_t last_event_ns = 0;
   bool have_event_watermark = false;
   bool saw_ready = false;
@@ -206,16 +205,22 @@ ReplayResult replay_session(ControlLoop& loop, const ReplayScript& script,
       have_event_watermark = true;
     }
 
-    if (snap.operating_mode != last_mode || snap.mode_phase != last_phase ||
-        int(snap.selected_display_index) != last_sel) {
+    // The intent belongs in the transcript beside the phase, and this is the line that
+    // earns its place in a tool meant to be read by a person: the phase says what the
+    // controller believes it is doing, the intent says what the axes were told. Those two
+    // disagreeing — a mode that has no selection and is still aiming — is the failure an
+    // operator cannot see from the page, and it is exactly what a replay is for.
+    const std::string key = snap.operating_mode + "\x1f" + snap.mode_phase + "\x1f" +
+                            std::to_string(snap.selected_display_index) + "\x1f" +
+                            snap.intent_type;
+    if (key != last_key) {
       char line[256];
-      std::snprintf(line, sizeof line, "t=%.0fms mode=%s phase=%s sel=%u",
+      std::snprintf(line, sizeof line, "t=%.0fms mode=%s phase=%s sel=%u intent=%s",
                     double(t - start_ns) / 1e6, snap.operating_mode.c_str(),
-                    snap.mode_phase.c_str(), unsigned(snap.selected_display_index));
+                    snap.mode_phase.c_str(), unsigned(snap.selected_display_index),
+                    snap.intent_type.c_str());
       res.lines.emplace_back(line);
-      last_mode = snap.operating_mode;
-      last_phase = snap.mode_phase;
-      last_sel = int(snap.selected_display_index);
+      last_key = key;
     }
 
     // The tail is the last eight events, newest last. Anything newer than the watermark is

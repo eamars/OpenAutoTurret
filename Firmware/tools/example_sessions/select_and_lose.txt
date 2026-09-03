@@ -1,0 +1,74 @@
+# §81 example session: a person appears, is selected, is followed, and walks out
+# of the camera's view. Times are milliseconds from the start of the recording; the
+# first column after the frame count is the class id (1 = person on this station),
+# which is what §14's selectability is decided by. Anchor 0.30 is 30%% across a 16:9
+# frame. Written by hand: the interesting part of a recording is the gaps, and a
+# generator has to be told to make them.
+#
+#   replay-session --expect "phase=TRACKING sel=1" tools/example_sessions/select_and_lose.txt
+E 0 set_mode AUTO_TRACK
+F 33 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 66 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 99 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 132 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 165 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 198 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 231 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 264 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 297 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 330 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 363 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 396 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 429 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 462 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 495 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 528 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 561 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 594 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 627 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 660 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 693 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 726 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 759 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 792 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 825 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 858 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 891 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 924 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 957 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+F 990 1 11 1 person 0.90 0.30 0.55 0.10 0.20 CONF
+E 1000 select_target 1
+F 1033 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1066 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1099 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1132 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1165 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1198 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1231 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1264 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1297 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1330 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1363 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1396 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1429 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1462 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1495 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1528 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1561 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1594 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1627 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1660 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1693 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1726 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1759 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1792 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1825 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1858 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1891 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1924 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1957 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+F 1990 1 11 1 person 0.90 0.32 0.55 0.10 0.20 CONF
+# 410 ms of nothing at 2000: the coast window (300 ms) expires and the controller
+# starts counting down the hold. Nothing moves, because it is holding what it last
+# saw the person do (§20), not where the last box was.
+E 2400 clear_target

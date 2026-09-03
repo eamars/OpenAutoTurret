@@ -111,9 +111,23 @@ opt-in via `OTA_BLACKBOX_DIR`), **§72** the configuration block an operator may
 region, jog lease, step sizes, auto-track timings and §21's scorer numbers, all of which
 may *narrow* what the turret does and never widen it — and **§81** session replay, which
 drives ControlLoop itself from a recorded TrackSet stream plus operator actions
-(`replay_session()` in `Firmware/control/src/control/session_replay.{hpp,cpp}`); the
-`tools/replay_session` command line is not written, so §81's "an operator runs it at the
-bench" half is unmet.
+(`replay_session()` in `Firmware/control/src/control/session_replay.{hpp,cpp}`) and
+`build/replay-session <session.txt>`, with an example at
+`Firmware/tools/example_sessions/select_and_lose.txt` and a `ctest` entry that runs the
+binary against it.
+
+**The first thing the replay found was a real defect, and it is the kind no unit test had
+caught**: `CLEAR_TARGET` while the camera stream was quiet did not stop the aim. The facts
+the AUTO_TRACK state machine works from were refreshed when a TrackSet arrived, so with no
+frames coming — precisely the degraded moment an operator reaches for CLEAR — the
+controller kept being handed the last frame's answer, in which a target *was* selected, and
+the axes went on following that line of sight. The transcript said it in one line,
+`sel=0 intent=los_direction`. Selection facts are now refreshed every cycle from
+controld's own selection (§13/§16), and the transcript asserts the invariant: **nothing is
+aimed at while nothing is selected.** Behaviour change for the operator: clearing a target
+during a dropout stops the follow on the next cycle instead of the next frame. Frames are
+still never invented between detector frames (§58) — `just_reacquired` deliberately stays a
+detector-stream event, because a cycle with no frames cannot contain a new acquisition.
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by

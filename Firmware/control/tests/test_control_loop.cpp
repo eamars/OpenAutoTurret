@@ -1272,15 +1272,15 @@ TEST(SessionReplay, ARecordedSessionReproducesSelectionLossAndReturn) {
   ReplayScript script;
   std::string err;
   const std::string text =
-      "E 0 set_mode AUTO_TRACK\n" +
+      "E 0 set_mode AUTO_TRACK\n" +  // the operator asks for autonomy, not for motion
+
       steady_frames(33.0, 1000.0, 11, "0.30") +
       "E 1000 select_target 1\n" +
       steady_frames(1033.0, 2000.0, 11, "0.32") +
-      // 400 ms of nothing: long enough to coast, short enough that the memory of the
-      // person is still warm (§20). A long gap is a different test on purpose — after
-      // several seconds the scorer declines every candidate, and that refusal is the
-      // subject of the §89 scene, not this one.
-      "E 2400 select_target 1\n";
+      // 400 ms of nothing, then the operator gives up on it. A long gap is a different
+      // test on purpose — after several seconds the scorer declines every candidate, and
+      // that refusal is the subject of the §89 scene, not this one.
+      "E 2400 clear_target\n";
   ASSERT_TRUE(parse_replay_script(text, script, err)) << err;
   ASSERT_EQ(script.frames.size(), 60u) << "the script is not what the test thinks";
   ASSERT_EQ(script.events.size(), 3u);
@@ -1308,7 +1308,21 @@ TEST(SessionReplay, ARecordedSessionReproducesSelectionLossAndReturn) {
   // §79: the transcript carries the events, in order, with the times the controller gave
   // them. That ordering is the reason to replay at all — a table of final states cannot
   // show that the turret asked for help before it gave up rather than after.
-  EXPECT_GT(count("event=TARGET_ACQUIRED"), 0u) << transcript;
+  EXPECT_GT(count("event=TARGET_TRACKING"), 0u)
+      << "the recording was followed and the controller never said so:\n" << transcript;
+
+  // The invariant this replay exists to hold, and the one that was broken when the tool
+  // was first run: with no subject selected, nothing may be aimed at. Before the fix, the
+  // operator's CLEAR_TARGET arrived while vision was silent, the selection changed, and
+  // the controller kept being fed the last frame's `has_selection = true` — so the axes
+  // went on following a line of sight nobody had chosen. The transcript says it plainly:
+  // `sel=0 intent=los_direction`.
+  EXPECT_EQ(transcript.find("sel=0 intent=los_direction"), std::string::npos)
+      << "the turret was aiming somewhere with nothing selected:\n" << transcript;
+  EXPECT_GT(count("phase=WAIT_TARGET sel=0 intent=hold"), 1u)
+      << "after the target was cleared the station never returned to holding with no "
+         "subject:\n"
+      << transcript;
 }
 
 TEST(SessionReplay, ARecordingThatGoesBackwardsIsRefusedNotSorted) {

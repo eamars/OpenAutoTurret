@@ -32,3 +32,15 @@ target_link_libraries(turret-can PRIVATE ota_core)
 # Phase 9: payload profiling / verification commissioning CLI (§28.5/§31/§44).
 add_executable(turret-payload tools/turret_payload.cpp)
 target_link_libraries(turret-payload PRIVATE ota_core)
+
+# §81: replay a recorded session through the real controller. Registered as a test with
+# --expect, so the tool's own behaviour is checked by the same `ctest` run as everything
+# else: a tool that no one runs is a tool that broke three months ago.
+add_executable(replay-session tools/replay_session.cpp)
+target_link_libraries(replay-session PRIVATE ota_core)
+add_test(NAME replay_session_cli
+         COMMAND replay-session
+                 --expect "phase=TRACKING sel=1"
+                 --expect "cmd=select_target accepted"
+                 --expect "phase=WAIT_TARGET sel=0 intent=hold"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/example_sessions/select_and_lose.txt)
