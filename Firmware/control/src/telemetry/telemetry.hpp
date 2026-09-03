@@ -63,7 +63,13 @@ struct TelemetrySnapshot {
   uint64_t vision_frames = 0;         // decoded measurements since boot
   uint64_t vision_dropped = 0;        // datagrams with a bad size / decode
   uint64_t vision_last_frame_sequence = 0;
-  int64_t vision_measurement_age_ms = -1;  // since the last measurement (-1 = none)
+  int64_t vision_measurement_age_ms = -1;
+  // v3 §61: publisher generation, the two latency intervals, and which candidate is
+  // being followed. Ages are -1 for "never", never 0 — same rule as the CAN family.
+  uint64_t vision_track_sets = 0;
+  int64_t vision_sensor_age_ms = -1;
+  int64_t vision_publish_to_receive_ms = -1;
+  uint64_t selected_track_id = 0;  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,
   // from the active R_W_B. installation_source is the PoseSource enum value
   // (kept as an int to keep this header decoupled from the calibration module).

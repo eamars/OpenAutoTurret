@@ -15,7 +15,8 @@ import threading
 import time
 from typing import Callable, Optional
 
-from .protocol import TargetMeasurement
+from .protocol import (PROTOCOL_SIZE, TRACK_SET_SIZE, TargetMeasurement,
+                    TrackSet)
 
 
 class IpcPublisher:
@@ -66,10 +67,17 @@ class IpcPublisher:
                     raise
                 time.sleep(0.2)
 
-    def publish(self, m: TargetMeasurement) -> None:
+    def publish(self, msg) -> None:
+        """Send one TargetMeasurement (§6.2) or one TrackSet (§9/§59).
+
+        Duck-typed on encode() on purpose: both messages are constant-length and the
+        socket is SEQPACKET, so the receiver tells them apart by length (§59). A type
+        byte here would have changed v1's message format, and the whole point of the
+        length rule is that controld can be upgraded before visiond.
+        """
         if self._sock is None:
             raise RuntimeError("IpcPublisher.start() was not called")
-        self._sock.send(m.encode())
+        self._sock.send(msg.encode())
 
     def stop(self) -> None:
         if self._sock is not None:
@@ -118,13 +126,29 @@ class IpcSubscriber:
         self._conn, _ = self._sock.accept()
         while self._running:
             try:
-                data = self._conn.recv(64)
+                # Must exceed the largest valid message. A small buffer on a SEQPACKET
+                # socket truncates silently, and this stand-in then "decodes" a
+                # TrackSet that controld would have refused — a test pass describing a
+                # message that could never arrive.
+                data = self._conn.recv(4096)
             except OSError:
                 break
             if not data:
                 break
+            # Same length rule controld applies (§59): 58 bytes is a v1 measurement,
+            # TRACK_SET_SIZE is a TrackSet, anything else is dropped rather than
+            # half-parsed.
+            try:
+                if len(data) == TRACK_SET_SIZE:
+                    decoded = TrackSet.decode(data)
+                elif len(data) == PROTOCOL_SIZE:
+                    decoded = TargetMeasurement.decode(data)
+                else:
+                    continue
+            except ValueError:
+                continue
             with self._lock:
-                self._latest = TargetMeasurement.decode(data)
+                self._latest = decoded
 
     def stop(self) -> None:
         self._running = False

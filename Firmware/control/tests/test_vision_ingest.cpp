@@ -1,5 +1,7 @@
 // Vision ingest tests (architecture §6.1, Part-2 task S1).
 // Raw POSIX sockets stand in for visiond: NO CAN, NO motor, NO camera.
+#include <vector>
+#include "tracks/track_wire.hpp"
 #include "vision/vision_ingest.hpp"
 
 #include <poll.h>
@@ -261,5 +263,144 @@ TEST(VisionLinkCounters, AgeIsMeasuredOnTheControlClock) {
   EXPECT_LT(age_ns, 500'000'000);
 }
 
+
+// --- v3 §59/§60: the TrackSet datagram on the same socket -----------------
+
+TEST_F(VisionIngestTest, TrackSetDatagramReachesTheTrackSetHandler) {
+  std::atomic<int> measurements{0};
+  std::atomic<int> track_sets{0};
+  tracks::TrackSet got{};
+  vision::VisionIngest ingest(
+      cfg_, &link_,
+      [&](const vision::TargetMeasurement&) { measurements.fetch_add(1); },
+      [&](const tracks::TrackSet& s, TimeNs) {
+        got = s;
+        track_sets.fetch_add(1);
+      });
+  std::string err;
+  ASSERT_TRUE(ingest.start(err)) << err;
+
+  tracks::TrackSet in;
+  in.frame_sequence = 42;
+  in.sensor_timestamp_ns = 1234567890;
+  in.publish_timestamp_ns = 1234567890 + 8'000'000;
+  in.width = 1280;
+  in.height = 720;
+  tracks::Track t;
+  t.uuid = tracks::TrackUuid{7, 1};
+  t.display_index = 1;
+  t.class_id = 1;
+  std::memcpy(t.class_name, "person", 6);
+  t.state = tracks::TrackState::Confirmed;
+  t.anchor_x = 0.2f;
+  t.anchor_y = 0.35f;
+  in.add(t);
+
+  uint8_t wire[tracks::kTrackSetWireSize];
+  ASSERT_EQ(tracks::encode_track_set(in, wire, sizeof(wire)),
+            tracks::kTrackSetWireSize);
+  int cfd = connect_client(cfg_.socket_path);
+  ASSERT_GE(cfd, 0);
+  ASSERT_EQ(::send(cfd, wire, sizeof(wire), 0),
+            static_cast<ssize_t>(sizeof(wire)));
+
+  ASSERT_TRUE(wait_for([&] { return track_sets.load() == 1; }));
+  EXPECT_EQ(measurements.load(), 0)
+      << "a TrackSet was routed to the single-target handler";
+  EXPECT_EQ(got.frame_sequence, 42u);
+  EXPECT_EQ(got.width, 1280u);
+  ASSERT_EQ(got.count, 1);
+  EXPECT_EQ(got.tracks[0].uuid, (tracks::TrackUuid{7, 1}));
+  EXPECT_STREQ(got.tracks[0].class_name, "person");
+
+  // §61: the stamps the latency telemetry is built from, recorded on the transport
+  // thread that actually saw them.
+  auto s = link_.stats();
+  EXPECT_EQ(s.track_sets, 1u);
+  EXPECT_EQ(s.frames, 1u);
+  EXPECT_EQ(s.last_sensor_ns, 1234567890);
+  EXPECT_EQ(s.last_publish_ns, 1234567890 + 8'000'000);
+  ::close(cfd);
+  ingest.stop();
+}
+
+TEST_F(VisionIngestTest, BothGenerationsShareTheSocketAndAreToldApartByLength) {
+  // The compatibility rule that lets controld be upgraded before visiond, exercised on
+  // a real socket: interleaved v1 and v3 datagrams plus one piece of junk, and every
+  // one goes to the right place or is counted as dropped.
+  std::atomic<int> measurements{0};
+  std::atomic<int> track_sets{0};
+  vision::VisionIngest ingest(
+      cfg_, &link_,
+      [&](const vision::TargetMeasurement&) { measurements.fetch_add(1); },
+      [&](const tracks::TrackSet&, TimeNs) { track_sets.fetch_add(1); });
+  std::string err;
+  ASSERT_TRUE(ingest.start(err)) << err;
+
+  int cfd = connect_client(cfg_.socket_path);
+  ASSERT_GE(cfd, 0);
+  const auto v1 = make_measurement(11).encode();
+  ASSERT_EQ(::send(cfd, v1.data(), v1.size(), 0),
+            static_cast<ssize_t>(v1.size()));
+
+  tracks::TrackSet in;
+  in.frame_sequence = 12;
+  in.width = 640;
+  in.height = 480;
+  tracks::Track t;
+  t.uuid = tracks::TrackUuid{1, 9};
+  t.class_id = 1;
+  t.state = tracks::TrackState::Confirmed;
+  in.add(t);
+  uint8_t wire[tracks::kTrackSetWireSize];
+  ASSERT_EQ(tracks::encode_track_set(in, wire, sizeof(wire)),
+            tracks::kTrackSetWireSize);
+  ASSERT_EQ(::send(cfd, wire, sizeof(wire), 0),
+            static_cast<ssize_t>(sizeof(wire)));
+
+  const uint8_t junk[200] = {0};
+  ASSERT_EQ(::send(cfd, junk, sizeof(junk), 0),
+            static_cast<ssize_t>(sizeof(junk)));
+
+  ASSERT_TRUE(wait_for([&] {
+    return measurements.load() == 1 && track_sets.load() == 1;
+  }));
+  auto s = link_.stats();
+  EXPECT_EQ(s.frames, 2u) << "both generations count as frames";
+  EXPECT_EQ(s.track_sets, 1u);
+  EXPECT_EQ(s.dropped, 1u);
+  EXPECT_EQ(s.last_frame_sequence, 12u) << "the newest message wins, as in v1";
+  ::close(cfd);
+  ingest.stop();
+}
+
+TEST_F(VisionIngestTest, ADatagramLargerThanTheBufferIsNotTruncatedIntoData) {
+  // The buffer is larger than the largest valid message, and a read that fills it
+  // completely is treated as truncation rather than parsed. A truncated TrackSet that
+  // still happened to parse would report a scene that lost the tracks it dropped —
+  // including the one somebody is pointing at.
+  std::atomic<int> track_sets{0};
+  vision::VisionIngest ingest(cfg_, &link_,
+                              [](const vision::TargetMeasurement&) {},
+                              [&](const tracks::TrackSet&, TimeNs) {
+                                track_sets.fetch_add(1);
+                              });
+  std::string err;
+  ASSERT_TRUE(ingest.start(err)) << err;
+  int cfd = connect_client(cfg_.socket_path);
+  ASSERT_GE(cfd, 0);
+  std::vector<uint8_t> huge(8192, 0xAB);
+  tracks::TrackSet in;
+  in.frame_sequence = 5;
+  uint8_t wire[tracks::kTrackSetWireSize];
+  tracks::encode_track_set(in, wire, sizeof(wire));
+  std::memcpy(huge.data(), wire, sizeof(wire));
+  ASSERT_EQ(::send(cfd, huge.data(), huge.size(), 0),
+            static_cast<ssize_t>(huge.size()));
+  ASSERT_TRUE(wait_for([&] { return link_.stats().dropped >= 1u; }));
+  EXPECT_EQ(track_sets.load(), 0) << "an oversized datagram was delivered as a TrackSet";
+  ::close(cfd);
+  ingest.stop();
+}
 }  // namespace
 }  // namespace ota

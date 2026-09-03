@@ -103,9 +103,16 @@ void VisionIngest::accept_loop() {
 }
 
 void VisionIngest::client_loop(int cfd) {
-  // One datagram == one measurement. A larger buffer is harmless: any size
-  // other than exactly kWireSize is counted as a drop (never silently parsed).
-  uint8_t buf[128];
+  // One datagram == one measurement or one TrackSet, told apart by length (§59).
+  // The buffer is deliberately LARGER than the biggest valid message: on a
+  // SEQPACKET socket a too-small buffer truncates silently, and a truncated TrackSet
+  // that still parses as a valid length would be read as a scene that genuinely
+  // lost the tracks it dropped — including, possibly, the one being tracked.
+  // `n == sizeof(buf)` is therefore treated as truncation rather than as data.
+  constexpr std::size_t kMaxDatagram = 4096;
+  static_assert(kMaxDatagram > tracks::kTrackSetWireSize,
+                "receive buffer must exceed the largest valid message");
+  uint8_t buf[kMaxDatagram];
   while (running_.load()) {
     pollfd pfd{cfd, POLLIN, 0};
     int pr = ::poll(&pfd, 1, 100);
@@ -120,12 +127,30 @@ void VisionIngest::client_loop(int cfd) {
       if (n < 0 && errno == EINTR) continue;
       break;  // publisher closed / died
     }
+    if (static_cast<std::size_t>(n) == sizeof(buf)) {
+      if (link_) link_->note_dropped();
+      continue;  // truncated: larger than the buffer, see above
+    }
+    const TimeNs arrival_ns = now_monotonic_ns();
+    if (static_cast<std::size_t>(n) == tracks::kTrackSetWireSize) {
+      tracks::TrackSet set;
+      if (!tracks::decode_track_set(buf, static_cast<std::size_t>(n), set)) {
+        if (link_) link_->note_dropped();
+        continue;
+      }
+      if (link_)
+        link_->note_track_set(set.sensor_timestamp_ns, set.publish_timestamp_ns,
+                             set.frame_sequence, arrival_ns);
+      if (track_set_handler_) track_set_handler_(set, arrival_ns);
+      continue;
+    }
     TargetMeasurement m;
-    if (!TargetMeasurement::decode(buf, static_cast<size_t>(n), m)) {
+    if (!TargetMeasurement::decode(buf, static_cast<std::size_t>(n), m)) {
+      // v1's 58-byte message, and anything else: counted, never silently parsed.
       if (link_) link_->note_dropped();
       continue;
     }
-    if (link_) link_->note_frame(m.frame_sequence, now_monotonic_ns());
+    if (link_) link_->note_frame(m.frame_sequence, arrival_ns);
     if (handler_) handler_(m);
   }
   // Unregister ourselves (mirrors WebServer::client_loop).

@@ -79,6 +79,12 @@ class Telemetry:
     cmd_ack_reason: str = ""
     cmd_ack_controller_state: str = ""
     cmd_ack_safety_state: str = ""
+    # §61: v3 publisher generation, the two latency intervals (-1 = never), and which
+    # candidate controld is actually following.
+    vision_track_sets: int = 0
+    vision_sensor_age_ms: int = -1
+    vision_publish_to_receive_ms: int = -1
+    selected_track_id: int = 0
     cmd_ack_seq: int = 0
     # Phase 9 payload verification (§28.5, §31.3, §42.1).
     payload_profile_name: str = ""          # active stored profile ("" = none)

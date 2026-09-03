@@ -36,6 +36,7 @@
 #include "calibration/park_controller.hpp"
 #include "calibration/world_frame_telemetry.hpp"
 #include "mode/mode_manager.hpp"
+#include "tracks/track_set.hpp"
 #include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
 #include "control/reference_manager.hpp"
@@ -157,6 +158,11 @@ class ControlLoop {
   // the control thread); a measurement delivered while tracking is off is
   // simply discarded by the consumer.
   void feed_measurement(const vision::TargetMeasurement& m);
+  // v3 §17/§59: a detector frame's TrackSet arrives instead of a single target. The
+  // bottom half of §17's chain — pixel -> ray -> motor interpolation -> LOS -> v1
+  // TargetEstimator — is unchanged v1, which is why the hand-off below is still a
+  // TargetMeasurement and not a second path beside the one that works.
+  void feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns);
   bool tracking_mode_enabled() const { return tracking_ != nullptr; }
 
   // §36 runtime search opt-in: nullopt = "whatever turret.yaml says", true/false
@@ -441,6 +447,7 @@ class ControlLoop {
   MotionIntent last_intent_;         // what it asked for this cycle
   CommandAck last_ack_;              // §52: the answer to the last command
   uint64_t ack_seq_ = 0;
+  uint64_t selected_track_id_ = 0;   // low half of the UUID being followed (§78)
   std::string ack_in_flight_;        // command being executed right now
   ReferenceRequest mode_proposal_;   // the controller's proposal, before the mode
   bool tracking_auto_enable_ = false;

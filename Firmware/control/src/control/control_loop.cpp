@@ -307,7 +307,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
     // Consume (and drop) measurements while tracking is off so a stale frame
     // cannot be applied the instant tracking is enabled.
-    if (have && tracking_) tracking_->set_measurement(m);
+    if (have && tracking_) {
+      tracking_->set_measurement(m);
+      // §78: which candidate is actually being followed, published rather than
+      // inferred. Every hard-to-diagnose tracking story in this project has been "the
+      // turret is chasing something" with no field anywhere that says what.
+      selected_track_id_ = m.has_track_id ? m.visual_track_id : 0;
+    } else if (!tracking_) {
+      selected_track_id_ = 0;
+    }
   }
 
   // 2. §39.3 deadline watchdog. A cycle is a deadline miss only when its
@@ -854,6 +862,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                                  : tracking::TrackState::ReadyHold;
     snap.target_confidence = tracking_ ? tracking_->confidence() : 0.0;
     snap.tracking_active = tracking_ && tracking_ref_.is_tracking_reference;
+    // Which candidate is being followed is loop state, not link state. Publishing it
+    // from inside the `if (vision_link_)` block below would report "following nothing"
+    // for every unit test and for controld started without a vision socket, while the
+    // turret was in fact tracking something — a field that lies only in some
+    // configurations is worse than one that is missing.
+    snap.selected_track_id = selected_track_id_;
     snap.safety_action = last_decision_.action;
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
@@ -915,6 +929,18 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       snap.vision_frames = vs.frames;
       snap.vision_dropped = vs.dropped;
       snap.vision_last_frame_sequence = vs.last_frame_sequence;
+    // §61: is the publisher speaking v3, and where is the time going? A TrackSet
+    // count of zero against a connected publisher means it is still v1, which is a
+    // different story from "v3 but slow" and needs a different fix.
+    snap.vision_track_sets = vs.track_sets;
+    snap.vision_sensor_age_ms =
+        (vs.last_sensor_ns > 0 && now_ns >= vs.last_sensor_ns)
+            ? static_cast<int64_t>((now_ns - vs.last_sensor_ns) / 1000000)
+            : -1;
+    snap.vision_publish_to_receive_ms =
+        (vs.last_publish_ns > 0 && vs.last_arrival_ns >= vs.last_publish_ns)
+            ? static_cast<int64_t>((vs.last_arrival_ns - vs.last_publish_ns) / 1000000)
+            : -1;
       if (vs.last_arrival_ns > 0) {
         // Both stamps are in the host-monotonic domain (§6.2): the ingest thread
         // stamps arrival with now_monotonic_ns() and the daemon drives this
@@ -1395,6 +1421,80 @@ void ControlLoop::process_commands() {
     }
     ack_in_flight_.clear();
   }
+}
+
+void ControlLoop::feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns) {
+  // INTERIM selection rule, and the last place controld picks a target without being
+  // told to. §59 moved that decision out of visiond ("controld remains authoritative
+  // for selected target"), so until TargetSelectionManager lands (V3-3) the rule here
+  // reproduces what v1's vision-side selector did — follow the best-scoring person —
+  // with the scoring explicit and deterministic instead of buried in a Python helper.
+  //
+  // It is NOT the v3 rule: there is no operator choice, no persistence across a
+  // dropout, and no refusal to steal a target on an ambiguous reacquisition (§21).
+  // V3-3 replaces this function outright; it must not survive as a fallback, because
+  // a fallback that grabs the highest-confidence target is exactly how a turret ends
+  // up tracking a stranger after the selected one walks behind a pillar.
+  // Two carry-overs from v1's selector, kept deliberately. Moving the selection into
+  // controld (§59) is a change of *who decides*, not a licence to decide more broadly:
+  // without these, the day visiond starts publishing every class the detector has ever
+  // been told about, the turret acquires a car — and nobody chose that. §72 makes both
+  // configurable, and TargetSelectionManager (V3-3) owns them properly.
+  constexpr int32_t kPreferredClassId = 1;  // v1 preferred_class_id: 'person'
+  constexpr float kMinConfidence = 0.5f;    // v1 confidence_threshold
+
+  const tracks::Track* pick = nullptr;
+  double best_area = -1.0;
+  for (int i = 0; i < set.count; ++i) {
+    const tracks::Track& t = set.tracks[i];
+    if (t.state != tracks::TrackState::Confirmed) continue;  // §8: only CONFIRMED
+    if (t.class_id != kPreferredClassId) continue;
+    if (t.track_confidence < kMinConfidence) continue;
+    const double area = double(t.bbox.x_max - t.bbox.x_min) *
+                        double(t.bbox.y_max - t.bbox.y_min);
+    const double cand = double(t.track_confidence);
+    const double cur = pick ? double(pick->track_confidence) : -1.0;
+    // Confidence first, then size (a nearer, larger target is the better anchor for
+    // LOS), then the smaller uuid — so two identical candidates resolve to the same
+    // one every time instead of flickering between them frame to frame.
+    if (!pick || cand > cur + 1e-6 ||
+        (std::fabs(cand - cur) <= 1e-6 && area > best_area + 1e-9)) {
+      pick = &t;
+      best_area = area;
+    }
+  }
+
+  vision::TargetMeasurement m;  // invalid == "no target this frame" (§6.2)
+  m.frame_sequence = set.frame_sequence;
+  m.sensor_timestamp_ns = set.sensor_timestamp_ns;
+  if (pick != nullptr) {
+    if (set.width == 0 || set.height == 0) {
+      // The §9 anchor is normalized (§60), so turning it into a pixel needs the
+      // resolution it was normalized against. Without it the honest answer is "no
+      // target": guessing a resolution would produce a confident, wrong LOS.
+      static bool warned_geometry = false;
+      if (!warned_geometry) {
+        warned_geometry = true;
+        spdlog::warn("TrackSet from visiond carries width=0/height=0: normalized "
+                     "anchors cannot become pixels. Treating as no target until the "
+                     "publisher fills them in (one warning).");
+      }
+    } else {
+      m.valid = true;
+      m.class_id = pick->class_id;
+      m.confidence = pick->track_confidence;
+      m.bbox_x_min_norm = pick->bbox.x_min;
+      m.bbox_y_min_norm = pick->bbox.y_min;
+      m.bbox_x_max_norm = pick->bbox.x_max;
+      m.bbox_y_max_norm = pick->bbox.y_max;
+      m.anchor_u_px = pick->anchor_x * static_cast<float>(set.width);
+      m.anchor_v_px = pick->anchor_y * static_cast<float>(set.height);
+      m.has_track_id = true;
+      m.visual_track_id = pick->uuid.lo;
+    }
+  }
+  (void)receive_ns;  // §61 stamps are recorded by VisionLink, which owns that clock
+  feed_measurement(m);  // existing thread-safe hand-off: no new shared state
 }
 
 void ControlLoop::ack_command(const std::string& name, bool accepted,

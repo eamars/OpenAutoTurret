@@ -122,6 +122,10 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"vision_last_frame_sequence\":" << s.vision_last_frame_sequence
      << ",\"vision_measurement_age_ms\":" << s.vision_measurement_age_ms
      // v3 §50/§52: the mode, the intent, and the answer to the last command.
+     << ",\"vision_track_sets\":" << s.vision_track_sets
+     << ",\"vision_sensor_age_ms\":" << s.vision_sensor_age_ms
+     << ",\"vision_publish_to_receive_ms\":" << s.vision_publish_to_receive_ms
+     << ",\"selected_track_id\":" << s.selected_track_id
      << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""
      << ",\"supervisory_state\":\"" << json_escape(s.supervisory_state) << "\""
      << ",\"mode_phase\":\"" << json_escape(s.mode_phase) << "\""

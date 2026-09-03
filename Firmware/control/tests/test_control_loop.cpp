@@ -5,6 +5,7 @@
 //   * the Phase-2 deliverable: boot -> homed -> safe hold -> park cycle;
 //   * stale feedback -> Brake (a recoverable safe stop, NOT a fault);
 //   * motor hard fault -> Disable (de-energize, fault-locked).
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -332,4 +333,116 @@ TEST(TelemetryV3, ModeAndIntentArePublishedEveryCycle) {
       << "AUTO_TRACK with no target ever seen is a hold (§111.5), and the "
          "telemetry has to show that rather than leave it implied";
   EXPECT_EQ(h.snap().mode_phase, "WAIT_TARGET");
+}
+
+// --- v3 §59: controld decides what to follow, and v1's limits still apply --
+namespace {
+tracks::TrackSet make_set_with(tracks::TrackState state, int32_t class_id,
+                               float confidence, float anchor_x = 0.5f) {
+  tracks::TrackSet set;
+  // Deliberately *not* a fixed timestamp: the caller fills these from the loop's own
+  // clock (see feed()), because §11 aligns the motor pose at the capture time. A test
+  // that feeds a 700 ms-old capture into a loop that has been simulating for 30 s gets
+  // its measurement discarded as stale — and then every "was refused" assertion below
+  // passes while proving nothing. Getting this wrong is the most comfortable way to
+  // write a green test suite that tests nothing.
+  set.frame_sequence = 0;
+  set.sensor_timestamp_ns = 0;
+  set.publish_timestamp_ns = 0;
+  set.width = 1280;
+  set.height = 720;
+  tracks::Track t;
+  t.uuid = tracks::TrackUuid{0xfeed, 3};
+  t.display_index = 1;
+  t.class_id = static_cast<uint16_t>(class_id);
+  std::memcpy(t.class_name, "person", 6);
+  t.state = state;
+  t.detector_confidence = confidence;
+  t.track_confidence = confidence;
+  t.bbox.x_min = anchor_x - 0.05f;
+  t.bbox.x_max = anchor_x + 0.05f;
+  t.bbox.y_min = 0.4f;
+  t.bbox.y_max = 0.7f;
+  t.anchor_x = anchor_x;
+  t.anchor_y = 0.55f;
+  t.visible_frames = 9;
+  set.add(t);
+  return set;
+}
+}  // namespace
+
+// Feed `n` frames of `set`, keeping every stamp inside the loop's own clock.
+void feed(HomedLoop& h, tracks::TrackSet set, int n, uint64_t seq0) {
+  for (int i = 0; i < n; ++i) {
+    set.frame_sequence = seq0 + i;
+    set.sensor_timestamp_ns = h.t;             // "this frame", in loop time
+    set.publish_timestamp_ns = h.t + 1'000'000;
+    h.loop->feed_track_set(set, h.t);
+    h.step(1);
+  }
+}
+
+TEST(FeedTrackSet, TentativeCandidatesAreNotFollowed) {
+  // §8: TENTATIVE is not selectable, and "not selectable" has to mean the turret does
+  // not move toward it either. The estimator latching onto a one-frame flicker is how
+  // a turret acquires a shadow.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoTrack);
+  auto set = make_set_with(tracks::TrackState::Tentative, 1, 0.95f);
+  feed(h, set, 5, 10);
+  EXPECT_EQ(h.snap().selected_track_id, 0u)
+      << "a tentative track became the thing being followed";
+}
+
+TEST(FeedTrackSet, ConfirmedPersonIsFollowedAndItsIdentityIsPublished) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  ASSERT_TRUE(h.loop->tracking_mode_enabled())
+      << "the mode was accepted but no tracking session started: the default "
+         "TrackingController::Config in this rig is not commissionable";
+  auto set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f);
+  feed(h, set, 4, 20);
+  EXPECT_EQ(h.snap().selected_track_id, 3u)
+      << "the followed candidate's identity has to be on the wire (§78), or a "
+         "tracking complaint has no subject to reason about";
+}
+
+TEST(FeedTrackSet, V1sClassAndConfidenceLimitsSurviveTheMove) {
+  // §59 changes WHO selects, not HOW MUCH the station is willing to follow. v1's
+  // selector refused anything but 'person' and anything under its confidence
+  // threshold; if that restriction quietly widened when the decision moved into
+  // controld, the turret would start acquiring cars the day visiond published every
+  // class the detector knows. §72 makes both configurable; until then they are
+  // carried over explicitly, and this test is what stops the carry-over being
+  // "simplified" away.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  for (auto& pair : std::vector<std::pair<int32_t, float>>{{2, 0.99f}, {1, 0.2f}}) {
+    auto set = make_set_with(tracks::TrackState::Confirmed, pair.first, pair.second);
+    feed(h, set, 4, 30);
+    EXPECT_EQ(h.snap().selected_track_id, 0u)
+        << "class " << pair.first << " at confidence " << pair.second
+        << " would have been refused by v1's selector; controld must refuse it too";
+  }
+}
+
+TEST(FeedTrackSet, MissingResolutionIsRefusedRatherThanGuessed) {
+  // The §9 anchor is normalized (§60). Turning it back into a pixel needs the frame
+  // size it was normalized against; inventing one would produce a confident, wrong
+  // line of sight — the worst kind of wrong, because it moves the turret smoothly
+  // somewhere that is not where the target is.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f);
+  set.width = 0;
+  set.height = 0;
+  feed(h, set, 4, 40);
+  EXPECT_EQ(h.snap().selected_track_id, 0u);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold)
+      << "refusing an unreadable message must not fault the station";
 }

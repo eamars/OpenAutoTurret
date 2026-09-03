@@ -359,6 +359,12 @@ int main(int argc, char** argv) {
     vision = std::make_unique<vision::VisionIngest>(
         vc, &vision_link, [&loop](const vision::TargetMeasurement& m) {
           loop.feed_measurement(m);
+      },
+      [&loop](const ota::tracks::TrackSet& set, ota::TimeNs arrival_ns) {
+        // v3 §59: the multi-candidate path. Everything downstream of the selection
+        // inside feed_track_set is v1's (§17), so the estimator, the timestamp
+        // alignment and the safety chain are untouched by which message arrived.
+        loop.feed_track_set(set, arrival_ns);
         });
     std::string verr;
     if (!vision->start(verr)) {

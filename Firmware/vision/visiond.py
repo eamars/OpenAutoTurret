@@ -1,7 +1,16 @@
 """visiond — the vision daemon (architecture §5.1).
 
-Pipeline: FrameSource (capture + SensorTimestamp + detections) ->
-TargetSelector (one selected target) -> IpcPublisher (latest-value IPC).
+v3 pipeline (§59): FrameSource (capture + SensorTimestamp + detections) ->
+TrackManager (multi-object tracks, §8/§9/§10) -> IpcPublisher (one TrackSet per frame).
+
+v1 stopped at TargetSelector, which scored every detection and published the single
+best one — so "which target" was decided in visiond. §59 moves that decision to
+controld ("controld remains authoritative for selected target"), because the operator
+has to be able to choose a specific human being and have that choice survive a dropout,
+a mode change, and the detector momentarily preferring somebody else. TargetSelector is
+no longer wired in; it stays in the tree, unused, until V3-3 (TargetSelectionManager)
+lands and its heuristics can be judged against something real rather than deleted from
+memory.
 
 SAFETY: this process NEVER opens CAN and NEVER drives the motor. It only
 publishes timestamped target measurements. In the default ``--synthetic`` mode
@@ -19,8 +28,7 @@ from typing import Optional
 from common import image_corrections as ic
 from .frame_source import FrameSource, SyntheticFrameSource
 from .ipc import IpcPublisher
-from .protocol import TargetMeasurement
-from .target_selector import TargetSelector, TargetSelectorConfig
+from .track_manager import TrackManager, detections_to_tracks
 
 
 class VisionDaemon:
@@ -29,12 +37,12 @@ class VisionDaemon:
     def __init__(
         self,
         frame_source: FrameSource,
-        target_selector: TargetSelector,
+        track_manager: TrackManager,
         ipc_publisher: IpcPublisher,
         connect_timeout_s: float = 0.0,
     ) -> None:
         self._fs = frame_source
-        self._ts = target_selector
+        self._tm = track_manager
         self._ipc = ipc_publisher
         self._connect_timeout_s = float(connect_timeout_s)
         self._stop = False
@@ -53,8 +61,15 @@ class VisionDaemon:
         try:
             while not self._stop:
                 cap = self._fs.capture()
-                m = self._ts.update(cap)
-                self._ipc.publish(m)
+                # §58: association runs once per detector frame, here, at camera rate —
+                # never at the 200 Hz control rate. publish_timestamp_ns is stamped
+                # after the work and before the send, so §61's publish-to-receive
+                # interval measures the transport, not the inference that produced it.
+                now_ns = time.monotonic_ns()
+                self._tm.update(detections_to_tracks(cap, now_ns), now_ns)
+                self._ipc.publish(self._tm.build_track_set(
+                    cap.frame_sequence, cap.sensor_timestamp_ns, now_ns,
+                    cap.width, cap.height))
                 published += 1
                 if 0 < num_frames <= published:
                     break
@@ -167,10 +182,10 @@ def main(argv: Optional[list] = None) -> int:
                   file=sys.stderr)
         fs = SyntheticFrameSource(framerate_hz=args.framerate)
 
-    ts = TargetSelector(TargetSelectorConfig())
+    tm = TrackManager()
     ipc = IpcPublisher(args.socket)
 
-    daemon = VisionDaemon(fs, ts, ipc, connect_timeout_s=args.connect_timeout_s)
+    daemon = VisionDaemon(fs, tm, ipc, connect_timeout_s=args.connect_timeout_s)
 
     def _handle(signum, frame):  # noqa: ARG001
         daemon.request_stop()
@@ -193,7 +208,7 @@ def main(argv: Optional[list] = None) -> int:
     extra = ""
     if bridge is not None:
         extra = f", bridge blobs {bridge.blobs}/{bridge.frames} frames"
-    print(f"visiond: published {published} measurements on {args.socket}{extra}")
+    print(f"visiond: published {published} TrackSets (§59) on {args.socket}{extra}")
     return 0
 
 
