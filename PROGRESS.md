@@ -396,25 +396,7 @@ draft wrote the ambiguity margin to 0.0 on every station that named nothing, whi
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 53 CTest binaries green, 258 pytest green, and
-the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
-document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
-because a copied list keeps certifying the world as it used to be. The loop's measured
-5.06 ms p50 / 5.09 ms p99 at 200 Hz belongs to the **pre-v3** binary the station is
-still running; v3's cost per cycle has not been measured on metal, and the recipe sleep
-above is a known 109–113 ms excursion that no v3 measurement will hide.
-
-Same day earlier: cleaned for the next architecture revision. The detailed per-phase
-item lists moved to `Firmware/docs/AS_BUILT_v1.md`; the session log and the six items
-still open moved to `Firmware/docs/archive/progress_before_v3.md`. Same day before that:
-first live homing, first live cold-start roaming, and `enable_search` made to actually do
-something.
- an unset config field is never expressed as `0` (a
-draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
-have switched §21's no-target-steering off by default — caught by the event test, not by
-review), and the counts below are recounted by running the suites rather than copied
-forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 53 CTest binaries green, 258 pytest green, and
+Evidence as of now, all of it simulation: 53 CTest binaries green, 259 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured
