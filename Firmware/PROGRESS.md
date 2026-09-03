@@ -143,3 +143,75 @@ inset and any "point it at the horizon" expectation must respect.
 
 **Not done:** no dart/lead test yet, no centring verification on metal, no HUD code.
 54 CTest, 294 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named person.
+
+---
+
+## 2026-09-04, 03:20 — AUTO_TRACK centred a target for the first time, after three of my claims were killed
+
+The operator stepped away and said: skeleton first, get a working product, do not optimise before it
+works; and granted permission to run tracking against a fake target, with the instruction that the
+fake target must **stay in world coordinates and not move with the video**. That instruction is the
+whole method — a virtual target computed from the current pose and pinned near the image centre
+makes tracking succeed trivially while proving nothing.
+
+`tools/probe_track_loop.py` publishes **TrackSets through the production encoder** (`vision.protocol`,
+not a mock), with the target as a world azimuth/elevation; only its projection depends on where the
+axis is. Its own self-check proves the property numerically: the same world direction, axis 5° later,
+must move ~120 px in the image — if that number is small the target is riding the video and every
+result is worthless.
+
+Three defects had to die before anything could centre, and each was invisible from the outside:
+
+**1. The camera was mounted 90° rolled and nobody knew.** The encoder theodolite's own numbers say
+it: yaw +5° at −15.8° depression moved the image **−120 px in u, v≈0**; pitch +5° at −39° moved it
+**−127 px in v, u≈0**. The aligned-identity default controld had been using predicts the exact
+opposite (yaw → +80 px in v, pitch → −121 px in u). `R_P_C = rot_z(−90°)` predicts −117 px and
+−128 px at those poses: 2.5 % and 0.8 %. So `calibration/camera_extrinsics.yaml` now exists, controld
+logs `R_P_C loaded from file`, and any LOS computed before today had its axes swapped — a horizontal
+target error commanded a *pitch* slew.
+
+**2. Joint branch vs direction.** The tracking reference was pinned to *exactly*
+`q_soft_min_yaw_rad` (−0.3940) while the target sat 182 px off the reticle, reason `tracking`, for
+twelve seconds. Nothing was unreachable, nothing had expired: the solver had correctly solved the
+direction and returned **−4.27 rad**, equivalent to the reachable **+2.013 rad**. Angles repeat every
+2π; this station's yaw travel [−0.394, 5.588] rad does not, so the far branch fell below the soft
+minimum and the envelope clamped it. The turret was parked at a travel limit over a choice of
+representation. `geo::wrap_near()` now picks the branch nearest the pose we are at; nothing anywhere
+reports this, because `los_feasible` is consumed internally and never published (§20 gap).
+
+**3. The analytic IK seed is wrong for this station's entire workspace.** `angular_decomposition`
+returns `q_yaw = wrap(az), q_pitch = −el`, exact only for the ideal aligned gimbal. But the pitch
+soft limits are −74.7°..−4.9°, so `sin(q_pitch) < 0` **everywhere**, which makes axis azimuth
+`q_yaw + 180°` and axis elevation `90° + q_pitch`. Asked to solve for the direction the camera was
+*already looking at*, the seed answered 180° away in azimuth — and because the seeded elevation
+comes out as `90° − el`, exactly **orthogonal in 3D** (measured π/2 to 1e-16). Twelve gradient steps
+cannot recover from that, so AUTO_TRACK drove away from its own target and the target left the frame.
+Tracking now refines from the pose the turret is actually at (`solve_from_pose`), falling back to the
+analytic seed. Physically correct and numerically sound: a tracker chases what it was just looking at.
+
+**S1 measured, tolerance fixed before the run:** world-fixed target 12° of azimuth away (185 px),
+AUTO_TRACK. Error fell to **0.3 px mean** in the last 2 s (tolerance 126 px = 1/3 of the declared box
+height), first inside tolerance at **t = 0.80 s**, 2 error-sign changes in the final 2 s (noise about
+zero, not hunting), peak **20.3 °/s**, daemon's own `q_ref_yaw − q_yaw` down to 0.0008 rad, and its
+LOS agreeing with the probe's independent projection to a mean of 0.038°.
+
+**My own errors, kept in the record.** (a) I claimed the seed pointed "180° away" — my test made me
+look: 180° in *azimuth*, but exactly 90° in 3D, because seeded elevation is `90° − el`; my Python
+print had been labelling radians as degrees. (b) I twice read "no motion" as "stalled against
+friction" when the cause was a clamped reference; the mechanism the config documents — "the drive's
+spd_ki is too small to build torque against static friction at a low speed-ref" — is real and
+on file, but it was not what was happening here. (c) My S1 "PASS" at 6° offset was worthless because
+6° starts *inside* the acceptance band; the probe now refuses to run such a test. (d) Three
+self-check false alarms were all my expectation formulas, not the geometry: the axis→principal-point
+check is exact to 1e-13 px, and a 12° azimuth offset at 51° depression correctly moves 183 px
+(foreshortened by `cos el`), not `fx·tan(12°)`. (e) My publisher initially emitted anchors *outside*
+the frame — a real detector cannot — which let the controller chase a phantom to 4842 px; off-frame
+is now a LOST track.
+
+**What this does not prove.** The target is synthetic (through the production wire format and
+controld's real sensing→estimator→solver→trajectory→drive path, but it does not exercise a detector;
+the detector-asset gap still stands). The operator's rule is the **head** at 1/3 box height — centring
+here is anchor centring, and the aim point is not implemented yet, though `aim_point_x/y/valid` are
+already published. S2 (constant-rate following) and S3 (dart, and whether the aim *leads*) have not
+been run. 54 CTest, 294 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named
+person.

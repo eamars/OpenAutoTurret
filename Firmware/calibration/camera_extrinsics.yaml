@@ -1,0 +1,36 @@
+# ota-camera-extrinsics v1
+#
+# WHAT THIS IS. R_P_C, the fixed rotation from camera frame into the pitch frame, for THIS
+# station. Measured 2026-09-04 with the axis encoder used as a theodolite (tools/probe_theodolite.py,
+# closed-loop confirmation in tools/probe_track_loop.py). Before this file existed controld used
+# TurretKinematics::aligned(), i.e. R_P_C = identity, and that was WRONG on this machine.
+#
+# HOW IT WAS DECIDED. The encoder gives a known angular step; the image tells us which way the
+# scene moved, measured on a single pixel strip so that scene content cannot bias it:
+#
+#     motion commanded        measured image motion (1920x1080)    identity model predicted
+#     yaw   +5 deg @ -15.8    du -120 px,  dv ~   0 px             du    ~ +3 px, dv ~ +80 px
+#     pitch +5 deg @ -39      du    ~ 0 px, dv -127 px             du -121 px,    dv    ~ 0 px
+#
+# Identity therefore swaps the axes: it would make a horizontal target error command a PITCH slew.
+# With R_P_C = rot_z(-90 deg) the same forward model predicts -117 px (yaw) and -128 px (pitch),
+# against 120 px and 127 px measured: 2.5% and 0.8%, correct signs, negligible cross terms. The
+# sign is not free: rot_z(+90) puts both motions the wrong way round, which the walk rules out.
+#
+# CONSEQUENCE. The camera is mounted rotated 90 deg about its own optical axis relative to the
+# "aligned" assumption. Any LOS computed before this file existed had its axes swapped.
+#
+# WHAT THIS DOES NOT KNOW.
+#   t_P_C below is NOT measured. It is irrelevant to a direction-only line of sight (and the loader
+#   ignores translation), but it is exactly the term that matters for close-range parallax, and it
+#   is still unmeasured on this station.
+#   Camera roll about the optical axis beyond this 90 deg is bounded by the theodolite walk at
+#   roughly 0.1-0.4 deg, which is inside its noise; no residual roll is claimed here.
+#   Distortion is unmodelled, as it has been throughout.
+#
+# Syntax: keys are untrimmed key=value lines; the three non-key lines after them are R_P_C in
+# row-major order, and the loader refuses a matrix that is not orthonormal.
+t_P_C=0 0 0
+0 1 0
+-1 0 0
+0 0 1

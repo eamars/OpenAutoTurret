@@ -118,8 +118,13 @@ class ReferenceManager {
          in.track_state == tracking::TrackState::Coasting);
     if (want_track) {
       double qy, qp;
-      if (solver_.solve(in.predicted_az_rad, in.predicted_el_rad, qy, qp)) {
-        req.q_yaw_rad = qy;
+      // Seed from where the turret actually is: the analytic seed is 180 deg wrong in
+      // yaw throughout this station's (always negative) pitch range - see solve_from_pose.
+      if (solver_.solve_from_pose(in.predicted_az_rad, in.predicted_el_rad,
+                                  in.q_yaw_hold_rad, in.q_pitch_hold_rad, qy, qp) ||
+          solver_.solve(in.predicted_az_rad, in.predicted_el_rad, qy, qp)) {
+        // Same direction, nearer branch: see geo::wrap_near. Pitch is untouched.
+        req.q_yaw_rad = geo::wrap_near(qy, in.q_yaw_hold_rad);
         req.q_pitch_rad = qp;
         req.source = ReferenceSource::Tracking;
         req.is_tracking_reference = true;
@@ -191,13 +196,18 @@ class ReferenceManager {
       case IntentType::LosDirection: {
         if (!in.has_los) return hold_reference(lim, "los intent without los");
         double qy, qp;
-        if (!solver_.solve(in.los_az_rad, in.los_el_rad, qy, qp)) {
+        if (!solver_.solve_from_pose(in.los_az_rad, in.los_el_rad,
+                                     lim.q_yaw_hold_rad, lim.q_pitch_hold_rad, qy, qp) &&
+            !solver_.solve(in.los_az_rad, in.los_el_rad, qy, qp)) {
           // §67: an unreachable target is reported, not pressed into a hold.
           req = hold_reference(lim, "target outside travel");
           req.target_unreachable = true;
           return req;
         }
-        req.q_yaw_rad = qy;
+        // Same direction, nearer branch. Without this the wrapped answer can land below
+        // q_soft_min_yaw_rad, get clamped to that limit, and AUTO_TRACK will hold there
+        // reporting "tracking" - which is what happened on the station 2026-09-04.
+        req.q_yaw_rad = geo::wrap_near(qy, lim.q_yaw_hold_rad);
         req.q_pitch_rad = qp;
         req.source = ReferenceSource::Tracking;
         req.is_tracking_reference = true;

@@ -78,3 +78,58 @@ TEST(LosJointSolver, MisalignedExtrinsicStillConverges) {
 }
 
 }  // namespace
+
+
+// ---------------------------------------------------------------------------
+// The seed decides the answer.
+//
+// Station case, 2026-09-04, with the measured mount roll (R_P_C = rot_z(-90 deg)) and
+// the pitch the station is actually at (its soft limits are -74.7..-4.9 deg, so
+// sin(q_pitch) < 0 everywhere). AUTO_TRACK diverged from a target 182 px off the
+// reticle because the analytic seed for the direction the camera was ALREADY looking
+// at pointed 180 deg away in azimuth - orthogonal in 3D - and the twelve gradient steps
+// could
+// not recover from a start that is orthogonal to the answer.
+// ---------------------------------------------------------------------------
+TEST(LosJointSolver, SeededFromTheCurrentPoseItReproducesThatPose) {
+  ota::geo::TurretKinematics kin = ota::geo::TurretKinematics::aligned();
+  ota::geo::Mat3 r_pc{};
+  r_pc.m[0][0] = 0.0;  r_pc.m[0][1] = 1.0;  r_pc.m[0][2] = 0.0;
+  r_pc.m[1][0] = -1.0; r_pc.m[1][1] = 0.0;  r_pc.m[1][2] = 0.0;
+  r_pc.m[2][0] = 0.0;  r_pc.m[2][1] = 0.0;  r_pc.m[2][2] = 1.0;
+  kin.R_PC = r_pc;
+  const ota::geo::LosJointSolver solver(kin);
+
+  const double qy = 1.7924, qp = -0.6678;                 // where the station stood
+  const ota::geo::Vec3 ax = kin.ray_to_base({0.0, 0.0, 1.0}, qy, qp);
+  double az = 0.0, el = 0.0;
+  ota::geo::TurretKinematics::base_ray_to_los(ax, az, el);
+
+  // First, the reason: the ideal-gimbal seed does not point at the direction it was given.
+  double seed_qy = 0.0, seed_qp = 0.0;
+  solver.angular_decomposition(az, el, seed_qy, seed_qp);
+  const ota::geo::Vec3 seeded_axis = kin.ray_to_base({0.0, 0.0, 1.0}, seed_qy, seed_qp);
+  double seed_az = 0.0, seed_el = 0.0;
+  ota::geo::TurretKinematics::base_ray_to_los(seeded_axis, seed_az, seed_el);
+  double daz = seed_az - az;
+  while (daz > M_PI) daz -= 2.0 * M_PI;
+  while (daz < -M_PI) daz += 2.0 * M_PI;
+  EXPECT_NEAR(std::fabs(daz), M_PI, 1e-6)
+      << "the seed's azimuth should be opposite the requested one here, got " << daz;
+  double dot = seeded_axis.dot(ax);
+  dot = dot > 1.0 ? 1.0 : (dot < -1.0 ? -1.0 : dot);
+  EXPECT_NEAR(std::acos(dot), M_PI / 2.0, 1e-6)
+      << "and because the seeded elevation is 90 deg - el, the seed is exactly orthogonal";
+
+  // And the fix: refining from the pose we are at returns that same pose.
+  double sy = 0.0, sp = 0.0;
+  ASSERT_TRUE(solver.solve_from_pose(az, el, qy, qp, sy, sp));
+  EXPECT_NEAR(sy, qy, 1e-4);
+  EXPECT_NEAR(sp, qp, 1e-4);
+
+  // A target 12 deg further round must ask for 12 deg of yaw, not for a 140 deg sweep.
+  double ty = 0.0, tp = 0.0;
+  ASSERT_TRUE(solver.solve_from_pose(az + 12.0 * M_PI / 180.0, el, qy, qp, ty, tp));
+  EXPECT_NEAR(std::fabs(ty - qy), 12.0 * M_PI / 180.0, 2e-3)
+      << "got a " << (ty - qy) << " rad yaw demand";
+}

@@ -3,6 +3,8 @@
 // (§35), and the safe fall-through when the target LOS is unreachable.
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "control/reference_manager.hpp"
 
 namespace {
@@ -110,3 +112,45 @@ TEST(ReferenceManager, BrakeToHoldFallsToHoldNotTracking) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// The joint-space branch, not the direction, is what the limits apply to.
+//
+// Observed on the station on 2026-09-04: AUTO_TRACK sat with a target 182 px off
+// the reticle, reporting `tracking`, while q_ref_yaw was pinned to EXACTLY
+// q_soft_min_yaw_rad (-0.3940). Nothing was unreachable and nothing had expired;
+// LosJointSolver had correctly solved the direction and returned -4.27 rad, an
+// angle equivalent to the reachable +2.013 rad. Angles repeat every 2*pi; this
+// station's yaw travel [-0.394, 5.588] rad does not, so the equivalent-but-far
+// branch fell below the soft minimum and the envelope clamped it to the limit.
+// The turret was holding at a limit because of a choice of representation.
+// ---------------------------------------------------------------------------
+TEST(ReferenceManager, TrackingReferenceTakesTheShortWayRound) {
+  auto rm = make_rm();
+  const double hold_yaw = 1.7874;  // where the station actually was
+
+  // Sweep the whole azimuth circle at a downward-looking elevation: whatever the
+  // solver's internal seed does, a reference must never demand the long way round.
+  for (int i = 0; i < 36; ++i) {
+    const double az = -M_PI + i * (M_PI / 18.0);
+    ReferenceManager::IntentLimits lim;
+    lim.q_yaw_hold_rad = hold_yaw;
+    lim.q_pitch_hold_rad = -0.675;
+
+    ota::MotionIntent in;
+    in.source = ota::MotionSource::AutoTrack;
+    in.type = ota::IntentType::LosDirection;
+    in.has_los = true;
+    in.los_az_rad = az;
+    in.los_el_rad = 0.9;
+    in.timestamp_ns = 1000000000;
+    in.valid_until_ns = 0;  // no expiry, exactly as AUTO_TRACK builds it
+
+    const auto req = rm.resolve(in, lim);
+    if (req.target_unreachable) continue;  // genuinely not pointable: fine, and said so
+    const double delta = std::fabs(req.q_yaw_rad - hold_yaw);
+    EXPECT_LE(delta, M_PI + 1e-9)
+        << "azimuth " << az << " resolved to " << req.q_yaw_rad
+        << ", demanding a " << delta << " rad slew for a direction that has a nearer branch";
+  }
+}
