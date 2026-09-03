@@ -106,7 +106,20 @@ so with a measurement attached.
 
 **2026-09-03** — v3 phases V3-1…V3-9 recorded above (`d4dcc05`…`015876a`, twelve commits:
 V3-1 in two, V3-2…V3-8 one apiece, V3-9 in three slices).
-Evidence as of now, all of it simulation: 50 CTest binaries green, 252 pytest green, and
+Three sections followed, in the same style: **§80** black-box scene preservation (writer
+opt-in via `OTA_BLACKBOX_DIR`), **§72** the configuration block an operator may name — roam
+region, jog lease, step sizes, auto-track timings and §21's scorer numbers, all of which
+may *narrow* what the turret does and never widen it — and **§81** session replay, which
+drives ControlLoop itself from a recorded TrackSet stream plus operator actions
+(`replay_session()` in `Firmware/control/src/control/session_replay.{hpp,cpp}`); the
+`tools/replay_session` command line is not written, so §81's "an operator runs it at the
+bench" half is unmet.
+Two habits those rounds changed here: an unset config field is never expressed as `0` (a
+draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
+have switched §21's no-target-steering off by default — caught by the event test, not by
+review), and the counts below are recounted by running the suites rather than copied
+forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
+Evidence as of now, all of it simulation: 51 CTest binaries green, 257 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured
