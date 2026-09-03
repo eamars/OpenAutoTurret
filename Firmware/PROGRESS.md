@@ -1511,3 +1511,37 @@ page served over HTTP carries the new row. Running controld is one comment-only 
 domains for whoever wonders why an age looks surprising. Station **homed/ready, MANUAL/HOLD**, 19,354 TrackSets.
 **§110: 0 items accepted on hardware by a named person** — a 9.8-hour geometry age is a fact about a file, not
 acceptance evidence.
+
+## 2026-09-04, 16:5x — round 20: a diagnosis I had inherited three times was wrong, and objective (c) is blocked on assets that do not exist
+
+**Corrected: there is no shared-class candidate-label problem, because there are no candidate labels.** The
+record said §16's candidate-label tier was "deferred 3x because candidate labels share `class="tlbl"` with
+scale labels". The overlay emits exactly **9 `tlbl` texts and 2 `tval` texts**, and every `tlbl` use belongs to
+`hudPredictionSvg` (the PRED caption), `hudForInsetSvg` (title, scale, three legend rows), `hudTravelTapeSvg`
+(tick labels and the "JOINT TRAVEL, NOT HEADING" note) and `hudUnrangedNote`. **No text is emitted near
+`g-candidates` at all.** Three rounds of deferral were aimed at a size-collision problem on an element the HUD
+never drew. What §16's hierarchy line "candidate labels — small" actually requires is a *new element*: identity
+drawn on the candidate boxes, at the small tier, with the FOR legend separately demoted to the smallest
+readable tier. The constraint that must be respected when it is built: box baselines are tuned constants
+(`b.y - 5` above the box, `by + box.h + 13` below), so a new label needs its own below-box left-aligned short
+form rather than a resized existing one.
+
+**Objective (c) is not reachable by me on this station, with the evidence rather than an assertion.** The real
+path documented in the archive needs `--image-config <picamera2 config json>` and `--detector-rpk
+<imx500 yolo11n rpk json>`; searching the whole tree finds **no `.rpk`, no picamera2 config, no imx500 asset of
+any kind**, and `/var/lib/ota` contains only `blackbox`. `turret-vision` is not a systemd unit, so nothing has
+ever started the real camera automatically. `visiond --synthetic` — what is running now — **cannot commission
+boresight, because it never looks at the world**: its TrackSets are generated, not observed. Boresight needs
+the real sensor plus a distant reference and somebody who can place it. So (c) stands as: effective FOV and
+principal point measured (69.3002 x 40.4171 deg, 24.22 px/deg against a probe value of 69.2 x 40.4), boresight
+**not separable at the spans available and not commissioned**, which is why the tapes say
+`JOINT TRAVEL, NOT HEADING` and no world-elevation scale is published or drawn. That is the honest ABSENT
+report, not a self-signature, and it is the operator's step to take, not mine to work around.
+
+**Checked an inherited claim instead of repeating it:** §20's FOR envelope polygon really is supplied — the
+ledger entry is kind `path` and the ledger test reads `field_of_regard.safe_envelope_points` out of the live
+payload, not out of a fixture. Same check on `camera.measurement_age_ms` is now a real path since round 19.
+
+No code changed this round, so the last verified results stand (**57 CTest, 435 pytest** on a clean build, tree
+clean at `f30601d`). Station homed and ready, MANUAL/HOLD, synthetic vision flowing. **§110: 0 items accepted
+on hardware by a named person.**
