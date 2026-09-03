@@ -148,12 +148,33 @@ bands alone was **refused at load — controld would not start**, and nothing in
 wrong. Every optional key now has to be optional in the strong sense: naming it must not
 make its neighbours mandatory. `V3Config.NamingOneAutoTrackValueDoesNotDemandTheOthers`
 holds that, alongside the check that a genuinely inverted pair is still refused.
+
+**§93 (mode switching under active motion) is now tested at the turret**, and the exercise
+produced a diagnostic finding rather than a bug: `ModeSwitchingUnderMotion` takes the three
+switches the document names — AUTO_ROAM→AUTO_TRACK mid-sweep, AUTO_TRACK→MANUAL while
+following, MANUAL jog→AUTO_ROAM with the lease still held — each with the previous mode
+moving, and asserts that no cycle demands a step the machine cannot take (measured: 0.05°
+per cycle against a 0.6° bound), that the speed ceiling holds, and that **once the new mode's
+intent has appeared, the old mode's never comes back**. Getting there meant correcting a
+false assumption of my own: `q_ref_pitch_rad`/`q_ref_yaw_rad` in the snapshot are the *goal*
+the reference manager is executing, not its interpolated output — mid-sweep they sit at the
+far end of the sweep while the turret travels, and after a handover they stay on the old goal
+until that ramp lands. So a jump in `q_ref` is not a lurch, and continuity of the commanded
+trajectory is v1's `TrajectoryGenerator` contract, tested where it lives.
+
+What that leaves open, for the operator's judgement rather than mine: with only "goal" and
+"actual" published, the page cannot present **§92's three separate columns** (requested /
+reference / actual), and a hold taken mid-sweep displays a reference still parked at the far
+end until the ramp lands. The behaviour is correct — the turret stops where it stops — but
+the operator is not being shown the reference the axes are following. Closing it means
+letting `ReferenceManager` expose its interpolated output, which is v1 code and a decision to
+make on its own merits, not as a side effect of writing a test.
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 51 CTest binaries green, 257 pytest green, and
+Evidence as of now, all of it simulation: 53 CTest binaries green, 257 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured

@@ -1342,3 +1342,167 @@ TEST(SessionReplay, AnUnknownStateIsRefusedWithItsLineNumber) {
   EXPECT_NE(err.find("line 1"), std::string::npos) << err;
   EXPECT_NE(err.find("SOLID"), std::string::npos) << err;
 }
+
+// --- §93: mode switching while something is actually moving.
+//
+// The three switches the document names, each made with the previous mode in mid-motion,
+// measured at the published snapshot rather than at the planner — "no raw position jump" is
+// a claim about what the axes are told, and only the reference the loop publishes can show
+// it. The unit tests of each mode cannot see this: a mode that behaves perfectly alone and
+// drops a stale intent on the way out is two passing suites and a turret that lurches.
+namespace {
+
+struct SwitchWatch {
+  double max_dq_ref = 0.0;    // largest single-cycle change in the published reference
+  double max_dq_act = 0.0;    // ... and in the measured position
+  double max_speed = 0.0;     // largest published speed, any axis
+  std::string worst_at;       // intent source when the worst step happened
+  std::vector<std::string> sources;  // every intent source seen, in order
+  std::string source_after;   // the last one
+};
+
+// One control cycle at a time, because every quantity of interest is a difference between
+// neighbours. A helper that ran the cycles internally could not answer "how big was the
+// largest jump", which is the whole question.
+SwitchWatch watch_motion(HomedLoop& h, int cycles) {
+  SwitchWatch w;
+  telemetry::TelemetrySnapshot prev = h.snap();
+  for (int i = 0; i < cycles; ++i) {
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    // Named per-axis fields, not the arrays: the snapshot's axis values are spelled out
+    // one per line (§78's reason — a field an operator has to index is a field they will
+    // index wrongly on the page), so this reads them the way the web layer does.
+    const double d_pitch = std::fabs(s.q_ref_pitch_rad - prev.q_ref_pitch_rad);
+    const double d_yaw = std::fabs(s.q_ref_yaw_rad - prev.q_ref_yaw_rad);
+    if (std::max(d_pitch, d_yaw) > w.max_dq_ref) {
+      w.max_dq_ref = std::max(d_pitch, d_yaw);
+      w.worst_at = s.intent_source;
+    }
+    w.max_speed = std::max(w.max_speed, std::max(std::fabs(s.v_pitch_rad_s),
+                                                 std::fabs(s.v_yaw_rad_s)));
+    w.max_dq_act = std::max(w.max_dq_act,
+                            std::max(std::fabs(s.q_pitch_rad - prev.q_pitch_rad),
+                                     std::fabs(s.q_yaw_rad - prev.q_yaw_rad)));
+    if (w.sources.empty() || w.sources.back() != s.intent_source) {
+      w.sources.push_back(s.intent_source);
+      w.source_after = s.intent_source;
+    }
+    prev = s;
+  }
+  for (const auto& x : w.sources) std::fprintf(stderr, "%s ", x.c_str());
+  std::fprintf(stderr, "\n");
+  return w;
+}
+
+// "No stale mode intent survives the transition", expressed the way it can actually be
+// observed: once the new mode's intent has appeared, the old mode's may never come back.
+// The same source reappearing means something old was re-applied — a queued intent, or a
+// controller that was still being asked to update after its mode was taken away.
+void expect_no_stale_source(const SwitchWatch& w, const char* gave, const char* took) {
+  bool gave_it_up = false;
+  for (const auto& s : w.sources) {
+    if (s == took) gave_it_up = true;
+    if (gave_it_up) EXPECT_NE(s, gave) << "the station went " << gave << " -> " << took
+                                      << " and then something asked " << gave
+                                      << " for motion again";
+  }
+  EXPECT_TRUE(gave_it_up) << "never saw an intent from " << took
+                         << "; the sources were: " << [&w] {
+    std::string all;
+    for (const auto& s : w.sources) all += s + " ";
+    return all;
+  }();
+}
+
+}  // namespace
+
+TEST(ModeSwitchingUnderMotion, NoImpossibleStepAndNoIntentSurvivesItsMode) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready) << h.loop->fault_reason();
+
+  // What this can and cannot measure — established by measuring it, not by reading the
+  // code, and the reading was wrong at first. The published `q_ref_*` is the **goal the
+  // reference manager is executing**, not its interpolated output: during a sweep it sits at
+  // the far end of the sweep (±40 deg on this rig) while the turret travels, and after a
+  // handover it stays on the old goal until that ramp lands. A per-cycle jump in `q_ref` is
+  // therefore not evidence of a lurch — a change in it *is* the handover decision — and
+  // continuity of the commanded trajectory is v1's TrajectoryGenerator contract, tested in
+  // v1. What is measurable at the turret is the thing §93 actually fears: a transition that
+  // demands a step the machine cannot take, which shows up as the measured position moving
+  // in one cycle further than the speed ceiling permits, and as an over-speed demand.
+  //
+  // The bound is loose on purpose: 30 deg/s is 2.6 mrad per 5 ms cycle, so anything under
+  // four cycles of travel at the ceiling is a trajectory, not a substitution. A raw handover
+  // would be the distance between two modes' poses — degrees, an order of magnitude more.
+  //
+  // Recorded rather than quietly accepted, as a §50/§78 diagnostic gap: with only "goal" and
+  // "actual" published, the page cannot show §92's three columns (requested, reference,
+  // actual), and a hold taken mid-sweep reads a reference still parked at the far end until
+  // the ramp lands. The behaviour is right — the turret stops where it stops — but the
+  // operator is not being shown the reference the axes are following. Closing it means
+  // letting ReferenceManager expose its interpolated output: v1 code, and a decision to make
+  // on its own merits, not as a side effect of writing a test.
+  constexpr double kJumpRad = 4.0 * (30.0 * kDeg2Rad) * 0.005;
+
+  // A. AUTO_ROAM -> AUTO_TRACK, mid-sweep. The sweep is the only thing in v3 that walks
+  // the turret under its own steam for minutes, so this is the switch most likely to be
+  // taken while the reference is far from the actual pose.
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(160);  // 800 ms of sweep
+  const SwitchWatch a = [&] {
+    SwitchWatch probe = watch_motion(h, 20);
+    EXPECT_GT(probe.max_speed, 0.01)
+        << "the sweep was not moving when the switch was made, so this test measured a "
+           "station standing still and not §93";
+    h.run("set_mode", "AUTO_TRACK");
+    return watch_motion(h, 80);
+  }();
+  EXPECT_LT(a.max_dq_act, kJumpRad)
+      << "measured position jumped " << a.max_dq_act / kDeg2Rad
+      << " deg in one cycle going AUTO_ROAM -> AUTO_TRACK";
+  expect_no_stale_source(a, "auto_roam", "auto_track");
+
+  // B. AUTO_TRACK -> MANUAL, while following somebody.
+  auto set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f);
+  feed(h, set, 20, 300);
+  h.run("select_target", "1");
+  feed(h, set, 60, 340);
+  ASSERT_STREQ(h.snap().mode_phase.c_str(), "TRACKING") << h.snap().mode_phase;
+  h.run("set_mode", "MANUAL");
+  const SwitchWatch b = watch_motion(h, 80);
+  EXPECT_LT(b.max_dq_act, kJumpRad)
+      << "measured position jumped " << b.max_dq_act / kDeg2Rad
+      << " deg in one cycle going AUTO_TRACK -> MANUAL";
+  // Manual with nobody holding a button asks for nothing; what must not happen is the
+  // tracking intent continuing under a mode that no longer owns it.
+  expect_no_stale_source(b, "auto_track", "manual");
+
+  // C. MANUAL jog -> AUTO_ROAM, with the jog lease still held. This is the one that catches
+  // a manual controller that keeps publishing because its lease has not expired: the mode
+  // changed, so the lease must be void (§38/§15), not merely ignored.
+  h.run("manual_jog_start", "yaw+");
+  h.step(20);
+  h.run("set_mode", "AUTO_ROAM");
+  const SwitchWatch c = watch_motion(h, 120);
+  EXPECT_LT(c.max_dq_act, kJumpRad)
+      << "measured position jumped " << c.max_dq_act / kDeg2Rad
+      << " deg in one cycle going MANUAL jog -> AUTO_ROAM";
+  expect_no_stale_source(c, "manual", "auto_roam");
+
+  // Speed is asserted last and everywhere: a discontinuous reference would already have
+  // shown up above, and an over-speed reference means the trajectory generator was handed
+  // something it could not honour. The rig's ceiling is 30 deg/s; 5% covers the estimator,
+  // not a mistake.
+  for (const auto& w : {a, b, c}) {
+    EXPECT_LT(w.max_speed, 1.05 * (30.0 * kDeg2Rad))
+        << "a reference ran at " << w.max_speed / kDeg2Rad
+        << " deg/s against a 30 deg/s ceiling; the sources through the switch were: "
+        << [&w] {
+             std::string all;
+             for (const auto& s : w.sources) all += s + " ";
+             return all;
+           }();
+  }
+}
+
