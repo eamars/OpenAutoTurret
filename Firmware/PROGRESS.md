@@ -1611,3 +1611,44 @@ authority, which is a real design question and probably the operator's.
 No code changed. **437 pytest / 57 CTest** stand from the verified round-21 build, tree clean, station
 homed/ready in MANUAL/HOLD. **§110: 0 items accepted on hardware by a named person** — and C3 stays FAILED
 until somebody measures it again knowing which clock was running when it was sampled.
+
+## 2026-09-04, 18:2x — round 23: C3's real numbers were already on disk, and they refute BOTH explanations I had offered
+
+I went to capture an `intent_velocity_scale` time series across a dart — a motor run — and found the earlier
+run's log still in `/tmp/dart_v19.log` with the lead decomposition already computed. **No motors were needed,
+and none were moved.** (Also worth noting: the probe *does* record the authority, as the key `vs`; my grep for
+the long field name reported absence. That is the second time in four rounds a rigid-spelling search has
+manufactured a false "it isn't implemented", and both times reading the file cost less than the wrong claim.)
+
+The saved C3 evidence, at yaw ≈ 149°, pitch ≈ −39°:
+
+* **reference (`q_ref`) lead: p50 −8.856°, min −16.040, ahead in 0 % of samples** — the C3 FAIL as recorded.
+* **predicted-LOS lead: p50 −0.503°** (min −1.626, max +0.401) at a 40 ms horizon — the lead *asked for* is
+  essentially zero, roughly 0.5° **behind** the target where ~1.6° ahead would be expected from horizon ×
+  dart rate.
+* **estimator-LOS lead: p50 −1.533°** — the estimator's own line of sight trails the true target by 1.5°.
+* **reference step test: 0 of 149 changes over the ceiling in force** (30 deg/s × live derating, +10 %),
+  worst observed 18.1 deg/s; peak yaw rate 22.2 deg/s. **C6 PASS.**
+
+**Round 22's ramp hypothesis is wrong.** If the 300 ms anti-jolt ramp had been suppressing the reference
+during the dart, the reference would have been pinned against its own rate ceiling. It never came close: zero
+of 149 reference changes exceeded the ceiling in force. Authority was not the binding constraint, and the
+"0.22 mid-dart" number I have been carrying since round 12 never described the failure at all.
+
+**What the numbers do say:** the failure is in *what the reference is asked to be*, not in how hard it is
+allowed to get there. Two candidate causes are visible and they are different problems: (1) the prediction
+contributes no forward offset at this horizon (−0.5° instead of ≈ +1.6°), and (2) an **8.9° joint-space**
+deficit sitting on top of only a **1.5° LOS-space** deficit — which at yaw 149° / pitch −39° is exactly what a
+joint↔LOS Jacobian would do if the comparison is being made in joint space while the operator's requirement is
+about the *image*. The frame is LOS space, so an 8.9° figure may overstate what the operator would see.
+
+**The open question, stated precisely for the next round:** in which space does §(b)'s "must LEAD so the
+target never exits the frame" get measured? The probe currently reports both, and C3 is scored on the joint
+one. Deciding that is a criteria decision — mine to surface, the operator's to make — and re-scoring C3 in LOS
+space must be done explicitly, not quietly, because changing the measure changes the verdict. C2's 2.33 s
+recovery and C4's 3 sign changes are unaffected by the space question; hold-window aim p50 was 93 px = 0.246
+box heights, inside the 1/3 tolerance, as locked.
+
+No code changed. **437 pytest / 57 CTest** stand. Station untouched in MANUAL/HOLD, homed and ready.
+**§110: 0 items accepted on hardware by a named person; C3 remains FAILED and now has a stated reason why the
+recorded number may be the wrong measure — which is not the same as it passing.**
