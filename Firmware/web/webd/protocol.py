@@ -180,6 +180,13 @@ class Telemetry:
     effective_hfov_deg: float = 0.0
     effective_vfov_deg: float = 0.0
     camera_fps: float = 0.0
+    # Where inside the selected target the axis is aimed. NOT the same as aim_point_*, which is
+    # where the axis currently points; this is the point inside the target the controller is trying
+    # to put on it. The acceptance rule is the distance between the two, so the HUD needs both.
+    target_aim_x_norm: float = 0.0
+    target_aim_y_norm: float = 0.0
+    target_aim_valid: bool = False
+    target_aim_is_head: bool = False
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

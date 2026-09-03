@@ -216,6 +216,13 @@ homing_plan:
     precision: fine
 
 tracking:
+  # The operator's acceptance rule is the reticle on the target's HEAD, within one third of the
+  # box height. The §9 anchor a detector reports is the box centroid, which on a standing person
+  # is a torso - so the rule has to be stated as a station setting, not left to a code default
+  # that was chosen before the rule existed. head_fraction_from_top is an assumption about this
+  # detector's box, which is why it is here and not a constant.
+  aim_at_head: true
+  head_fraction_from_top: 0.22
   search_enabled_by_default: false
   target_lost_behavior: hold    # hold | search (§58 params 19-20)
 

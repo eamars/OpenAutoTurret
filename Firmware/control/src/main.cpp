@@ -141,6 +141,16 @@ TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
   const IntrinsicsLoad il = load_camera_intrinsics(cfg.camera.intrinsics_file);
   if (il.found) {
     t.intrinsics = il.intrinsics;
+    // Where to aim inside the target. Handed over here rather than defaulted inside the
+    // controller, so the station file remains the single place the operator's rule is set.
+    t.aim.aim_at_head = cfg.tracking.aim_at_head;
+    t.aim.head_fraction_from_top = cfg.tracking.head_fraction_from_top;
+    if (cfg.tracking.aim_at_head) {
+      spdlog::info("tracking aim point: head, {:.0f}% below the top of the target box",
+                   cfg.tracking.head_fraction_from_top * 100.0);
+    } else {
+      spdlog::info("tracking aim point: anchor (the detector's box centroid)");
+    }
     spdlog::info("camera intrinsics: {} ({})", il.detail,
                  cfg.camera.intrinsics_file);
   } else {

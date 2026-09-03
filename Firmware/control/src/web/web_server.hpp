@@ -142,6 +142,10 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"effective_hfov_deg\":" << s.effective_hfov_deg
      << ",\"effective_vfov_deg\":" << s.effective_vfov_deg
      << ",\"camera_fps\":" << s.camera_fps
+     << ",\"target_aim_x_norm\":" << s.target_aim_x_norm
+     << ",\"target_aim_y_norm\":" << s.target_aim_y_norm
+     << ",\"target_aim_valid\":" << (s.target_aim_valid ? "true" : "false")
+     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")
      // v3 §50/§52: the mode, the intent, and the answer to the last command.
      << ",\"vision_track_sets\":" << s.vision_track_sets
      << ",\"vision_sensor_age_ms\":" << s.vision_sensor_age_ms

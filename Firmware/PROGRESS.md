@@ -272,3 +272,59 @@ how the symbology looks and survives on the operator's screen. That is an operat
 something to be inferred from a green suite.
 
 54 CTest, 301 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named person.
+
+
+## 2026-09-04, 04:21 — the axis now aims at the head, and the rule measures
+
+The acceptance rule is the target's **head** inside one third of the box height. Until today the
+controller servo-ed the §9 anchor, which is the detector's box centroid: on a standing person that
+is a torso, and every published number still called it centred. So the aim point became its own
+concept: `control/src/tracking/aim_point.hpp`, driven from the detector's own box through the
+intrinsics that were actually loaded, selected by station config (`tracking.aim_at_head`,
+`head_fraction_from_top`) rather than a code default that predates the rule.
+
+Written against a stub first: the stub returned the anchor unchanged and **two of the four tests
+failed**, which is the only reason to trust that they can detect the behaviour's absence instead of
+restating it. One of the two caught a guard of mine spot-checking the wrong field (`fy > 0` while
+the test zeroed `fx`) — the intrinsics type already had `valid()`, and a guard that guesses which
+field matters checks the wrong one.
+
+### Measured on the station, target 12 deg of azimuth away, n=186 over the final 7 s
+
+| quantity | p50 | p95 | bar |
+| --- | --- | --- | --- |
+| **aim point -> reticle**, in box heights | **0.002** | **0.003** | 0.333 |
+| aim point vs head recomputed from the published box | 0.00 px | 0.00 px | — |
+| anchor -> reticle (expected to sit BELOW the reticle) | 0.282 box heights | — | — |
+
+`head` flag held on all 186 samples, state `tracking` throughout. The anchor row is the tell that
+this is head aiming and not a relabelled centroid: (0.5 - 0.22) x 378 px = 105.8 px predicted,
+106.5 px measured.
+
+The independent recomputation matters: it checks the controller's published aim point against the
+head derived from the box in the payload, so the test cannot be satisfied by the controller merely
+labelling whatever it chose as "head".
+
+### Two boundary lessons, both the same lesson
+
+`head flag held=False` on the first run, with the geometry already correct: **webd was still running
+the pre-change `protocol.py`**, whose `telemetry_from_json` drops undeclared keys. The controller was
+right and the operator-facing number was missing. Then the station reported `at_ready=False` for
+~90 s: homing is ~60-90 s after a boot, which is a different wait from the ~25 s CAN release, and my
+notes had been treating them as one number.
+
+### No new symbology
+
+v3.2 mentions an aiming marker once, in §7: the reticle's open centre, which IS the optical axis. So
+`target_aim_*` is published and deliberately not drawn - inventing an unspecced symbol would put
+something on the operator's screen that the revision does not authorise, and it is unnecessary: when
+the controller drives the head onto the axis, what the operator sees is the reticle on the head,
+which is the rule as stated.
+
+### Test-suite note, kept because it is unresolved
+
+One `ctest` run reported 54/55 and I did not capture which test - my filter kept the summary line and
+discarded the name. Seven further rounds, including `-j4` under four CPU-burning loads, were clean.
+**Unattributed and unreproduced**, recorded rather than dropped.
+
+55 CTest, 301 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named person.

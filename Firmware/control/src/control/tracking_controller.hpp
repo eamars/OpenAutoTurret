@@ -30,6 +30,7 @@
 #include "geometry/los_joint_solver.hpp"
 #include "telemetry/telemetry.hpp"
 #include "tracking/target_estimator.hpp"
+#include "tracking/aim_point.hpp"
 #include "tracking/target_measurement.hpp"
 #include "tracking/tracking_state_machine.hpp"
 
@@ -43,6 +44,8 @@ class TrackingController {
     SearchPlannerConfig search;
     geo::TurretKinematics kinematics = geo::TurretKinematics::aligned();
     geo::CameraIntrinsics intrinsics;
+    // Which point inside the target the axis is aimed at (head vs anchor). See aim_point.hpp.
+    tracking::AimOptions aim;
     // §13.3 actuation horizon: how far ahead to predict so the setpoint
     // matters when it reaches the motor.
     int64_t control_delay_ns = 20 * 1000 * 1000;      // 20 ms
@@ -89,7 +92,17 @@ class TrackingController {
     if (!history_pitch_.interpolate(m.sensor_timestamp_ns, sp)) return false;
     if (!history_yaw_.interpolate(m.sensor_timestamp_ns, sy)) return false;
     // Camera pixel -> camera ray -> base-frame LOS.
-    const geo::Vec3 r_cam = camera_.pixel_to_ray(m.anchor_u_px, m.anchor_v_px);
+    //
+    // The pixel is the AIM point, not necessarily the anchor. They differ as soon as the station
+    // asks for head aiming, and the difference is the operator's acceptance rule: a box centroid
+    // on a standing person is a torso. With no usable box the two are the same point and
+    // last_aim_point_.head_applied says which case the operator is looking at.
+    const tracking::AimPoint ap =
+        tracking::aim_point_px(m.anchor_u_px, m.anchor_v_px, m.bbox_x_min_norm, m.bbox_y_min_norm,
+                              m.bbox_x_max_norm, m.bbox_y_max_norm, cfg_.intrinsics, cfg_.aim);
+    last_aim_point_ = ap;
+    aim_valid_ = true;
+    const geo::Vec3 r_cam = camera_.pixel_to_ray(ap.u_px, ap.v_px);
     const geo::Vec3 r_base =
         cfg_.kinematics.ray_to_base(r_cam, sy.q, sp.q);
     double az, el;
@@ -189,9 +202,30 @@ class TrackingController {
     telemetry_.clear();
   }
 
+  // What the axis is aimed at, for the HUD's aim cue. Kept in the controller because that is the
+  // only place that knows both the pixel the reference was built from and the intrinsics that
+  // turned it into a ray; a HUD that recomputed it would be a second implementation of the rule.
+  struct AimStatus {
+    double u_norm = 0.0;
+    double v_norm = 0.0;
+    bool valid = false;
+    bool head = false;
+  };
+  AimStatus aim_status() const {
+    AimStatus a;
+    a.u_norm = last_aim_point_.u_px / static_cast<double>(cfg_.intrinsics.width);
+    a.v_norm = last_aim_point_.v_px / static_cast<double>(cfg_.intrinsics.height);
+    a.valid = aim_valid_ && cfg_.intrinsics.width > 0 && cfg_.intrinsics.height > 0;
+    a.head = last_aim_point_.head_applied;
+    return a;
+  }
+
+
  private:
   Config cfg_;
   geo::CameraModel camera_;
+  tracking::AimPoint last_aim_point_;
+  bool aim_valid_ = false;
   geo::LosJointSolver solver_;
   tracking::TargetEstimator estimator_;
   MotorStateHistory history_pitch_;

@@ -217,19 +217,46 @@ def main() -> int:
                         continue
                     gap = ((ax * FW - PCX) ** 2 + (ay * FH - PCY) ** 2) ** 0.5
                     bh = (bb[3] - bb[1]) * FH
-                    if bh > 0:
-                        samples.append((gap, gap / bh, ss.get("track_state")))
+                    if bh <= 0:
+                        continue
+                    # The acceptance rule is stated against the AIM point, which controld
+                    # publishes; the anchor is reported alongside because with head aiming the
+                    # anchor is SUPPOSED to sit below the reticle, and a reader who does not know
+                    # that would call a passing run a failure.
+                    au, av = ss.get("target_aim_x_norm"), ss.get("target_aim_y_norm")
+                    head_ok = bool(ss.get("target_aim_valid")) and bool(ss.get("target_aim_is_head"))
+                    gap_head = float("nan")
+                    disagree = float("nan")
+                    if head_ok and isinstance(au, (int, float)) and isinstance(av, (int, float)):
+                        gap_head = ((au * FW - PCX) ** 2 + (av * FH - PCY) ** 2) ** 0.5
+                        # Independent recomputation from the published box. If the controller's
+                        # aim point is not the head this says so, instead of the test simply
+                        # agreeing with whatever the controller chose to publish.
+                        exp_u = 0.5 * (bb[0] + bb[2]) * FW
+                        exp_v = (bb[1] + 0.22 * (bb[3] - bb[1])) * FH
+                        disagree = ((au * FW - exp_u) ** 2 + (av * FH - exp_v) ** 2) ** 0.5
+                    samples.append((gap, gap / bh, ss.get("track_state"),
+                                    gap_head, gap_head / bh, disagree, head_ok))
             time.sleep(0.033)
         pub.close()
         if samples:
-            fr = sorted(x[1] for x in samples)
-            gaps = sorted(x[0] for x in samples)
-            print("anchor-to-reticle over the final %.0fs (n=%d): p50 %.1f px / p95 %.1f px; "
-                  "in box heights p50 %.3f / p95 %.3f (bar 0.333); states %s"
-                  % (end - warm_end, len(samples), gaps[len(gaps) // 2],
-                     gaps[min(len(gaps) - 1, int(0.95 * len(gaps)))],
-                     fr[len(fr) // 2], fr[min(len(fr) - 1, int(0.95 * len(fr)))],
-                     sorted({str(x[2]) for x in samples})))
+            def pct(vals, q):
+                v = sorted(x for x in vals if x == x)
+                return v[min(len(v) - 1, int(q * len(v)))] if v else float("nan")
+            heads = [x[3] for x in samples]
+            hbh = [x[4] for x in samples]
+            print("AIM POINT (the rule) over the final %.0fs, n=%d, head flag held=%s:"
+                  % (end - warm_end, len(samples), all(x[6] for x in samples)))
+            print("  aim-to-reticle p50 %.1f px / p95 %.1f px  ->  p50 %.3f / p95 %.3f of box height"
+                  " (bar 0.333) => %s"
+                  % (pct(heads, .5), pct(heads, .95), pct(hbh, .5), pct(hbh, .95),
+                     "INSIDE" if pct(hbh, .95) <= 1 / 3.0 else "OUTSIDE"))
+            print("  controller's aim point vs head recomputed from the published box: p95 %.2f px"
+                  % pct([x[5] for x in samples], .95))
+            print("  anchor-to-reticle p50 %.1f px (%.3f of box height) - expected to sit BELOW the"
+                  " reticle while aiming at the head" % (pct([x[0] for x in samples], .5),
+                                                         pct([x[1] for x in samples], .5)))
+            print("  states seen: %s" % sorted({str(x[2]) for x in samples}))
 
     s = state()
     intr = s.get("camera_intrinsics") or {}

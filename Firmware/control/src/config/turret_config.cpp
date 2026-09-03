@@ -690,6 +690,16 @@ LoadResult load_turret_config(const std::string& path) {
     }
     c.tracking.enabled =
         opt_bool(trk, "enabled", "tracking.enabled", false, warn);
+    c.tracking.aim_at_head = opt_bool(trk, "aim_at_head", "tracking.aim_at_head", false, warn);
+    c.tracking.head_fraction_from_top =
+        opt_double(trk, "head_fraction_from_top", "tracking.head_fraction_from_top", 0.22, warn);
+    if (!(c.tracking.head_fraction_from_top >= 0.0 && c.tracking.head_fraction_from_top <= 1.0)) {
+      // Out of range means "outside the target's own box". Refused at load time rather than
+      // discovered as an axis pointing at empty scene next to a target.
+      warn.push_back("tracking.head_fraction_from_top outside [0,1]: would aim outside the "
+                     "target's own box; using 0.22");
+      c.tracking.head_fraction_from_top = 0.22;
+    }
     c.tracking.target_lost_behavior =
         opt_string(trk, "target_lost_behavior", "tracking.target_lost_behavior", "hold", warn);
     if (c.tracking.target_lost_behavior != "hold" &&

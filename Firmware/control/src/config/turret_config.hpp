@@ -119,6 +119,13 @@ struct TrackingConfig {
   // §49 search sweep half-span (deg) around the ready pose. The loop clamps it
   // strictly inside the homed soft limits (minus the safety margin).
   double search_span_deg = 45.0;
+  // Where inside the target box the axis is pointed. The operator's acceptance rule is stated
+  // against the HEAD with a tolerance of a third of the box height; following the §9 anchor (the
+  // box centroid a detector reports) puts the reticle on a standing person's torso and still looks
+  // "centred" to every number the controller publishes. Default off: centroid following is the
+  // behaviour that has been measured, and this changes the point the loop servos against.
+  bool aim_at_head = false;
+  double head_fraction_from_top = 0.22;  // fraction of box height below the top edge
   // §13.3 actuation horizon: control + motor-response latency the estimator
   // predicts across (ms each).
   int control_delay_ms = 20;

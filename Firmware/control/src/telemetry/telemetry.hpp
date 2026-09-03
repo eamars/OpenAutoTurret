@@ -183,6 +183,19 @@ struct TelemetrySnapshot {
   double effective_hfov_deg = 0.0;
   double effective_vfov_deg = 0.0;
   double camera_fps = 0.0;
+
+  // Where inside the selected target the axis is aimed (v3.2 s20's target_selection aim cue).
+  //
+  // Do not confuse these with aim_point_x/y/valid, which mean the opposite thing: aim_point_* is
+  // where the AXIS is pointing, projected into the image (a boresight mark). target_aim_* is the
+  // point INSIDE THE TARGET we intend to put on the axis - the head, when the station asks for it.
+  // The HUD needs both: one to show where the gun is, one to show where it is trying to land, and
+  // the acceptance rule is the distance between them. head=false means the controller fell back to
+  // the anchor, and the cue must not claim a head it is not tracking.
+  double target_aim_x_norm = 0.0;
+  double target_aim_y_norm = 0.0;
+  bool target_aim_valid = false;
+  bool target_aim_is_head = false;
   // v3 §61: publisher generation, the two latency intervals, and which candidate is
   // being followed. Ages are -1 for "never", never 0 — same rule as the CAN family.
   uint64_t vision_track_sets = 0;

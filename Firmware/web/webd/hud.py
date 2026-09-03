@@ -185,6 +185,13 @@ function render(t) {
   $("g-selected").innerHTML = layers.sel;
   $("g-reticle").innerHTML = layers.reticle;
 
+  // target_aim_x/y_norm (the point inside the target the controller is driving onto the axis) is
+  // deliberately NOT drawn. v3.2 mentions an aiming marker exactly once - §7's open centre, which
+  // IS the optical axis - and inventing a second marker would put an unspecced symbol on the
+  // operator's screen. It is also unnecessary: the controller aims the head AT the axis, so what
+  // the operator sees is the reticle sitting on the head, which is the acceptance rule as stated.
+  // The field stays in telemetry for measurement and for the DIAG drawer.
+
   // §4.1 mode block: three lines, first line strongest.
   const mode = String(t.operating_mode || "--").replace("_", " ");
   $("mode-block").innerHTML =

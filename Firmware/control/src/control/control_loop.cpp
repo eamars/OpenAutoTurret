@@ -1457,6 +1457,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.camera_height = ci.height;
     geo::field_of_view_deg(ci, snap.effective_hfov_deg, snap.effective_vfov_deg);
     snap.camera_fps = vs.camera_fps;
+    if (tracking_) {
+      const auto as = tracking_->aim_status();
+      snap.target_aim_x_norm = as.u_norm;
+      snap.target_aim_y_norm = as.v_norm;
+      snap.target_aim_valid = as.valid;
+      snap.target_aim_is_head = as.head;
+    }
     snap.vision_sensor_age_ms =
         (vs.last_sensor_ns > 0 && now_ns >= vs.last_sensor_ns)
             ? static_cast<int64_t>((now_ns - vs.last_sensor_ns) / 1000000)
