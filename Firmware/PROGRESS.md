@@ -1732,3 +1732,41 @@ entry, because the entry described the state at the time it was written and the 
 being true is a new dated statement, not a quiet correction. The rule from round 17 is unchanged: after any
 controld restart, restart the vision source and check `vision_track_sets` before trusting anything that
 depends on vision.
+
+## 2026-09-04, 19:5x — round 26: **the dart probe's own defaults ask for 3.6x the commissioned envelope**, so C2/C3 have been measuring the envelope, not the controller
+
+The logged run showed the reference rate capped at **exactly 10.0 deg/s** with accel saturated at **60.0**. That
+smells like a limit rather than a defect, so the arithmetic was checked before any tuning thought: under the
+commissioned yaw envelope (30 deg/s, 60 deg/s², 300 deg/s³), a rest-to-rest **25° move needs 1.43 s**. The
+probe's default — and the run's actual motion — is **25° in 0.40 s**.
+
+It cross-validates against the log three independent ways:
+* reachable reference rate in 0.40 s from rest, jerk-limited: **12.0 deg/s** — log observed max **10.0**;
+* reachable displacement in 0.40 s: **4.8°** against a target moving 25° → predicted deficit **20.2°** —
+  log's worst lead **−22.6°**;
+* envelope minimum **1.43 s** against **C2's 1.50 s recovery bar** — i.e. the bar sits 0.07 s from the physical
+  minimum for that dart, so "recovered in 2.46 s → FAIL" was never a fair test at that magnitude.
+
+**What this changes about objective (b):** the two faults decomposed in round 25 (~3.7° estimator lag, ~6.7°
+servo lag against its own setpoint) are *not* both control defects. At this dart the servo cannot do what is
+asked; the profile forbids it. C1 (containment, the frame-exit half of (b)) **passed**, so the "target never
+leaves the frame" requirement is not what broke — C2/C3 broke on a demand the commissioning limits forbid.
+
+**What this does not change:** no verdict was edited. C2 and C3 stay FAIL in the record. The finding is about
+*what the failure means*, not about the number, and the criteria decision — whether a 25°/0.40 s target motion
+is the thing AUTO_TRACK must survive (in which case the envelope must be re-commissioned, a motor/safety call)
+or whether the dart should be sized inside the envelope (e.g. 25° over 1.6 s, or 6° over 1.0 s) — **is the
+operator's, and I have not changed the defaults.**
+
+**Landed instead, and verified without touching a motor:** the probe now prints an envelope feasibility line
+*before* the run — `envelope_min_time_s()` forward-simulates the slew-limited profile (1 ms steps, deceleration
+commanded at v²/2a, no closed form to get wrong) and says plainly when a requested dart is "NOT ACHIEVABLE … so
+C2/C3 would be measuring the envelope, not the controller". Verified by direct call: 1° → 0.345 s,
+25° → 1.430 s, 25°/0.40 s → refused-as-feasible, 25°/2.00 s → achievable. **48 tools tests pass**, probe
+compiles, no control code touched, so **57 CTest** and **437 pytest** stand.
+
+Round-22's derate instinct deserves one line of justice: authority *does* scale the rate ceiling, so a low
+band would cap the reference — but it was not needed to explain this run, since jerk and accel alone reproduce
+the observed 10 deg/s and the observed deficit. It is recorded as *not the cause here*, not as ruled out in
+general. Station homed, MANUAL/HOLD, synthetic vision running. **§110: 0 items accepted on hardware by a named
+person.**

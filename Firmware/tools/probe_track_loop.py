@@ -53,6 +53,47 @@ BASE = "http://127.0.0.1:8080"
 # The intrinsics controld loaded (calibration/camera_intrinsics.yaml, measured on this box).
 FX, FY, CX, CY, FW, FH = 1389.0, 1467.0, 960.0, 540.0, 1920, 1080
 
+# The yaw envelope as commissioned: track rate 30 deg/s, accel 60 deg/s^2, jerk 300 deg/s^3 (turret.yaml).
+# These numbers had been printed in this probe's report strings for rounds without ever being used to ask a
+# prior question - whether a requested dart is reachable at all. See envelope_min_time_s.
+TRACK_V_MAX, TRACK_A_MAX, TRACK_J_MAX = 30.0, 60.0, 300.0
+
+
+def envelope_min_time_s(deg, v_max=TRACK_V_MAX, a_max=TRACK_A_MAX, j_max=TRACK_J_MAX, dt=1.0e-3):
+    """Seconds a rest-to-rest yaw move of `deg` needs under the commissioned profile limits.
+
+    Forward simulation rather than a closed form: the regimes (jerk-limited ramp to peak accel, constant
+    accel, rate-limited cruise) combine into a closed form that is easier to write wrong than to compute,
+    and a 1 ms step is far finer than anything measured here. Deceleration is commanded as soon as the
+    remaining room equals v^2 / (2a), which is what a slew limiter does.
+    """
+    vel = acc = dist = t = 0.0
+    while t < 60.0:
+        room = deg - dist
+        acc = -a_max if room <= (vel * vel) / (2.0 * a_max) else min(a_max, acc + j_max * dt)
+        vel = max(0.0, min(v_max, vel + acc * dt))
+        dist += vel * dt
+        t += dt
+        if dist >= deg and vel <= 1.0e-6:
+            return t
+    return float("nan")
+
+
+def report_dart_feasibility(deg, ramp_s):
+    """Say out loud, before the motors, whether the requested dart lies inside the envelope.
+
+    Without this, C2 and C3 score a controller against a motion the commissioned limits forbid, and the
+    FAIL is then read as a control defect. It is not: the reference simply cannot cover the distance in
+    the time. Stating it changes what the failure means, not the verdict.
+    """
+    t_min = envelope_min_time_s(deg)
+    ok = ramp_s >= t_min
+    print("  envelope         : %.1f deg needs >= %.2f s at %.0f deg/s, %.0f deg/s^2, %.0f deg/s^3 -> %s"
+          % (deg, t_min, TRACK_V_MAX, TRACK_A_MAX, TRACK_J_MAX,
+             "achievable" if ok else "NOT ACHIEVABLE - the axis cannot cover this in the requested time, "
+                                     "so C2/C3 would be measuring the envelope, not the controller"))
+    return ok
+
 BOX_H_NORM = 0.35          # declared person box height as an image fraction (~380 px of 1080)
 SOFT_MARGIN_RAD = 0.20     # abort before the axis gets this close to a soft limit
 
@@ -676,7 +717,7 @@ def main() -> int:
         print("                     target's true position, in the direction of travel")
         print("  C4 no ringing    : aim error changes sign <= 2 times after arrival")
         print("  motion           : %.1f deg of azimuth in %.2f s (%.0f deg/s), then hold %.1f s"
-              % (D, ramp, D / ramp, args.hold_s))
+              % (D, ramp, D / ramp, args.hold_s)); report_dart_feasibility(D, ramp)
         if D * px_per_deg > 850.0:
             print("  dart too large: %.0f px of travel would leave the frame whatever the controller"
                   " does; pick a smaller --dart-deg" % (D * px_per_deg))
