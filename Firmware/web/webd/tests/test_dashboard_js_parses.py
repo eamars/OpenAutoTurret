@@ -329,7 +329,8 @@ def test_webd_declares_the_fields_the_dashboard_reads():
                        "confidence_band", "selection_last_seen_age_ms", "prediction_age_ms",
                        "roam_pattern", "roam_progress", "blackbox_capture_id",
                        "blackbox", "intent_has_joint_target", "intent_q_pitch_rad",
-                       "intent_q_yaw_rad"):
+                       "intent_q_yaw_rad", "aim_point_valid", "aim_point_x",
+                       "aim_point_y"):
         assert re.search(rf"^\s*{field_name}\s*:", proto, re.M), (
             f"webd does not declare {field_name}: the dashboard would read undefined "
             "and the dashboard's own fallback text would hide it"
@@ -425,3 +426,29 @@ def test_the_video_overlay_is_telemetry_and_says_when_it_is_stale():
     assert "#video-overlay" in css and "pointer-events:none" in css, (
         "the overlay sits over the picture and takes clicks"
     )
+
+
+def test_the_aim_point_is_not_treated_like_a_detection():
+    """§73's reticle comes from controld and the boxes come from vision, and the difference
+    is the whole point of drawing both. So the overlay is checked on the one property that
+    cannot be inferred from the picture: the aim point must be drawn from the flag controld
+    sets (no flag, no marker — there is no plausible coordinate to fall back to), and it must
+    be drawn *outside* the staleness fade, because a turret that has lost the target is still
+    aimed somewhere and that is the fact the operator needs at exactly that moment.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "dashboard.py").read_text(encoding="utf-8")
+    start = src.index("function drawOverlay(t) {")
+    body = src[start:src.index("\nfunction ", start + 1)]
+    aim = body.index("t.aim_point_valid")
+    assert body.count("aim_point_valid") == 1, (
+        "the aim point is consulted more than once; the flag should gate the whole marker"
+    )
+    assert "ctx.restore()" in body
+    assert aim > body.index("ctx.restore()"), (
+        "the reticle is inside the target-list fade: when vision goes quiet the aim point "
+        "dims with data it does not come from"
+    )
+    # No fallback coordinate, in either direction.
+    assert "aim_point_x" in body[aim:aim + 600] and "aim_point_y" in body[aim:aim + 600]

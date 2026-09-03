@@ -379,11 +379,41 @@ an edge cue rather than silence, and an absent `bbox` draws a crosshair labelled
 controld. A pytest guard asserts all of that as properties of the *function*, including that
 the canvas is cleared when the video is off and that it cannot swallow clicks.
 
-What §73 still does not have: the **LOS reticle and the predicted target box**. Both need a
-pixel position, and the honest place to compute one is controld (it holds the §28.2
-intrinsics and the base→camera transform), not the page — duplicating that geometry in
-JavaScript would give the operator a second, slowly-diverging answer. Deferred as its own
-piece of §50 work.
+**The reticle came next, and it is computed where the geometry lives.** controld projects the
+commanded line of sight — the estimator's state predicted to the actuation time, §13.3, which
+is the same LOS an AUTO_TRACK intent is built from — through the inverse gimbal transform and
+the §28.2 intrinsics, and publishes it normalised exactly like a track anchor. The inverse
+(`base_to_ray`) is written as the transpose of the existing `ray_to_base` product rather than
+as three negated angles, so it cannot drift from the forward transform when the camera
+extrinsic changes; the test for it is a round trip over five gimbal poses and sixty pixels
+against the transform already trusted, plus the case with an answer nobody has to compute (a
+ray down the optical axis projects to the principal point, at every joint angle). Then a
+loop-level test follows a target all the way through — pixel → ray → base LOS → back to a
+pixel — and asserts the marker lands within 5% of the box it is following, because a reticle
+a few degrees off would look exactly like bad tracking, which is the worst failure a
+diagnostic can have: it makes the controller look wrong when the drawing is.
+
+Four conditions must hold before there is an answer to publish, each a different reason for
+silence: an estimate must exist (the last aim point of a session that ended is not where the
+turret is pointing now); the intrinsics must describe the **same picture the detector
+reported** — if they disagree, projecting anyway puts the reticle a few per cent off the mark
+the operator is being asked to trust, and a small systematic offset reads as controller error
+rather than as configuration, so the loop says nothing instead (asserted both ways); the ray
+must be in front of the camera, because `ray_to_pixel` answers a ray behind the camera with
+the principal point, which would draw an astern target dead centre on the very mark that
+means "here is where we are aiming"; and the result must be inside the frame — an off-screen
+aim point belongs to the edge cues, not to a reticle painted on the bezel.
+
+On the page the reticle is drawn *outside* the staleness fade that dims the boxes, and a
+pytest guard asserts that ordering: the boxes are vision's and go stale when vision is quiet,
+but the aim point is controld's own, live at 200 Hz, and the moment it matters most — nothing
+detected, the turret still aimed at where it last believed somebody was — is the moment a fade
+would erase the only live thing on the overlay.
+
+What §73 still does not have: a **predicted target box**. A box has a size, and the size of a
+target two control periods from now is the detector's business, not controld's — there is no
+honest way to grow a bbox forward in time without a model of the target's shape and distance.
+The reticle is what can be said truthfully: where the turret is aiming.
 
 And the limit that matters for this one: **the overlay has never been rendered against a
 real camera frame.** It is guarded by parse checks and by assertions about where its numbers
@@ -434,7 +464,7 @@ draft wrote the ambiguity margin to 0.0 on every station that named nothing, whi
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 259 pytest green, and
+Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 260 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured

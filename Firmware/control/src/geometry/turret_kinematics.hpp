@@ -39,6 +39,25 @@ struct TurretKinematics {
     return (R * r_cam).normalized();
   }
 
+  // Base-frame LOS -> camera-frame ray: the exact inverse of `ray_to_base`, for the one
+  // thing only controld can compute (§73's aim point on the picture). It is written as the
+  // transpose of the same product rather than as three separate negated angles so that it
+  // cannot drift from `ray_to_base` when the extrinsic R_PC changes — a forward transform
+  // and an inverse that disagree are a bug that shows up as a reticle quietly off-target,
+  // and the round-trip test below exists because that is not visible any other way.
+  Vec3 base_to_ray(const Vec3& r_base, double q_yaw_rad, double q_pitch_rad) const {
+    const Mat3 R = Mat3::rot_z(q_yaw_rad) * Mat3::rot_y(q_pitch_rad) * R_PC;
+    return (R.transposed() * r_base).normalized();
+  }
+
+  // (azimuth, elevation) -> base-frame unit ray: the inverse of `base_ray_to_los`.
+  static Vec3 los_to_base_ray(double azimuth_rad, double elevation_rad) {
+    const double cz = std::cos(elevation_rad) * std::cos(azimuth_rad);
+    const double cy = std::cos(elevation_rad) * std::sin(azimuth_rad);
+    const double cx = std::sin(elevation_rad);
+    return Vec3{cz, cy, cx}.normalized();
+  }
+
   // Base-frame LOS -> (azimuth, elevation) in radians.
   //   azimuth   = atan2(Y, X)   (0 = forward, + = left)
   //   elevation = atan2(Z, sqrt(X^2+Y^2)) (0 = level, + = up)

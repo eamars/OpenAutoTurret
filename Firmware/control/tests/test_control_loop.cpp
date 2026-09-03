@@ -1443,6 +1443,62 @@ void expect_no_stale_source(const SwitchWatch& w, const char* gave, const char* 
   }();
 }
 
+
+// §73's reticle: the aim point controld publishes for the overlay.
+TEST(AimPoint, AFollowedTargetProjectsToWhereTheReticleIsDrawn) {
+  // The geometry is one chain — pixel to ray to base LOS in, and the commanded LOS back out
+  // to a pixel — and the only way to know the second half agrees with the first is to run a
+  // target all the way through and look at where the marker lands. A reticle a few degrees
+  // off would look exactly like poor tracking, which is the worst possible failure for a
+  // diagnostic: it makes the controller look wrong when the drawing is.
+  HomedLoop h;
+  h.run("set_mode", "AUTO_TRACK");
+  tracks::TrackSet set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f, 0.5f);
+  // Match the built-in §28.2 intrinsics (1920x1080, principal point at the centre), so an
+  // anchor at (0.5, 0.55) means what it says: straight ahead, slightly down. The frame the
+  // detector used and the frame the intrinsics were fitted to have to be the same picture;
+  // the next test is what happens when they are not.
+  set.width = 1920;
+  set.height = 1080;
+  feed(h, set, 30, 1);
+  h.run("select_target", "1");
+  feed(h, set, 60, 100);  // 2 s of following it
+
+  const telemetry::TelemetrySnapshot snap = h.snap();
+  ASSERT_TRUE(snap.aim_point_valid)
+      << "the loop refused to project an aim point while tracking a target straight ahead";
+  EXPECT_LT(std::fabs(snap.aim_point_x - 0.5), 0.05)
+      << "the reticle is at x=" << snap.aim_point_x << " for a target at 0.50";
+  EXPECT_LT(std::fabs(snap.aim_point_y - 0.55), 0.08)
+      << "the reticle is at y=" << snap.aim_point_y << " for a target at 0.55";
+}
+
+TEST(AimPoint, NothingIsPublishedWhenTheGeometryAndThePictureDisagree) {
+  // The same rig, with the detector reporting a 1280x720 picture while the commissioned
+  // intrinsics describe 1920x1080. Projecting anyway would put the reticle a few per cent off
+  // the mark the operator is being asked to trust, and a small systematic offset is far harder
+  // to notice than a missing one — it gets blamed on the controller. Say nothing instead.
+  HomedLoop h;
+  h.run("set_mode", "AUTO_TRACK");
+  tracks::TrackSet set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f, 0.5f);
+  set.width = 1280;
+  set.height = 720;
+  feed(h, set, 30, 1);
+  h.run("select_target", "1");
+  feed(h, set, 60, 100);
+  EXPECT_FALSE(h.snap().aim_point_valid)
+      << "an aim point was projected through mismatched geometry (" << h.snap().aim_point_x
+      << ", " << h.snap().aim_point_y << ")";
+}
+
+TEST(AimPoint, ThereIsNoAimPointBeforeThereIsAnEstimate) {
+  // Waiting for a target is not the same as aiming somewhere. The last aim point of a session
+  // that ended must not survive as a live-looking marker, which is the same rule the boxes
+  // follow and the reason the flag is separate from the numbers.
+  HomedLoop h;
+  h.step(20);
+  EXPECT_FALSE(h.snap().aim_point_valid);
+}
 }  // namespace
 
 TEST(ModeSwitchingUnderMotion, NoImpossibleStepAndNoIntentSurvivesItsMode) {

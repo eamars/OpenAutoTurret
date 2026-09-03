@@ -1338,6 +1338,53 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.intent_type = intent_type_name(last_intent_.type);
     snap.intent_reason = last_intent_.reason;
     snap.intent_velocity_scale = last_intent_.velocity_scale;
+    // §73's aim point — the reticle. Where the commanded line of sight falls in the
+    // picture, so the operator can see what the turret is pointing at even when there is
+    // nothing in view to draw a box around. Only controld can answer this: the estimate is a
+    // base-frame LOS and the picture is camera pixels, with the gimbal angles, the §10.3
+    // extrinsic and the §28.2 intrinsics in between. Duplicating that chain in JavaScript
+    // would hand the operator a second geometry, and the second geometry would be the one
+    // that quietly drifts.
+    //
+    // Four things must hold, and each is a different reason to say nothing:
+    snap.aim_point_valid = false;
+    if (tracking_ && tracking_->estimator_initialized()) {
+      //   1. there must be an estimate. No state, no aim point — and not a stale one from a
+      //      session that ended, which the page would draw as though it were live.
+      const tracks::TrackSet& frame = selection_.last_set();
+      const geo::CameraIntrinsics& intr = tracking_cfg_.intrinsics;
+      //   2. the projection comes out in the intrinsics' pixel units and the page scales it
+      //      onto the frame the detector used. On a real station those are the same frame by
+      //      construction; if they are not, somebody has changed one of them, and a marker
+      //      scaled by the wrong size is off by a few per cent — which reads as tracking
+      //      error rather than as a configuration mistake. Say nothing instead (§72's rule
+      //      in a different costume).
+      if (intr.valid() && frame.width == intr.width && frame.height == intr.height) {
+        double az_act = 0.0, el_act = 0.0;
+        tracking_->predicted_los_at_actuation(az_act, el_act);
+        // The camera is bolted to the axes, so the projection uses the *measured* joint
+        // angles: what the picture shows depends on where the hardware actually is, not on
+        // where it was told to be.
+        const geo::Vec3 r_cam = tracking_cfg_.kinematics.base_to_ray(
+            geo::TurretKinematics::los_to_base_ray(az_act, el_act),
+            sp[ix(AxisId::Yaw)].q_rad, sp[ix(AxisId::Pitch)].q_rad);
+        //   3. in front of the camera. `ray_to_pixel` answers a ray behind the camera with
+        //      the principal point — sensible for a geometry helper, awful to publish: a
+        //      target astern during a roam sweep would be drawn dead centre, on the very
+        //      mark that reads "here is where we are aiming". 0.05 is ~86 deg off axis,
+        //      past which the projection carries no information anyway.
+        if (r_cam.z > 0.05) {
+          double u = 0.0, v = 0.0;
+          geo::CameraModel(intr).ray_to_pixel(r_cam, u, v);
+          snap.aim_point_x = u / static_cast<double>(intr.width);
+          snap.aim_point_y = v / static_cast<double>(intr.height);
+          //   4. and inside the frame. An off-screen aim point belongs to the edge cues,
+          //      not to a reticle painted on the bezel.
+          snap.aim_point_valid = (snap.aim_point_x >= 0.0 && snap.aim_point_x <= 1.0 &&
+                                  snap.aim_point_y >= 0.0 && snap.aim_point_y <= 1.0);
+        }
+      }
+    }
     snap.intent_has_joint_target = last_intent_.has_joint_target;
     snap.intent_q_pitch_rad = last_intent_.q_pitch_rad;
     snap.intent_q_yaw_rad = last_intent_.q_yaw_rad;

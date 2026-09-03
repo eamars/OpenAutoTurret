@@ -147,6 +147,9 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
     tr.selectable = true;
     tr.selected = true;
   }
+  s.aim_point_valid = true;
+  s.aim_point_x = 0.42;
+  s.aim_point_y = 0.31;
   s.intent_has_joint_target = true;
   s.intent_q_yaw_rad = 0.25;
   s.intent_q_pitch_rad = -0.1;
@@ -187,6 +190,18 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
   // sent as zero rather than as whatever the last mode left behind: a stale number with a
   // false flag is still a stale number, and the reader that trusts the flag should never
   // have to be cleverer than the writer.
+  // §73's reticle: the key has to arrive, and it has to arrive gated by its flag for the
+  // same reason as every other optional quantity here — an aim point from a session that
+  // ended is not where the turret is pointing now.
+  EXPECT_NE(msg.find("\"aim_point_valid\":true"), std::string::npos);
+  EXPECT_NE(msg.find("\"aim_point_x\":0.42"), std::string::npos);
+  EXPECT_NE(msg.find("\"aim_point_y\":0.31"), std::string::npos);
+  {
+    telemetry::TelemetrySnapshot blind = s;
+    blind.aim_point_valid = false;  // the numbers are still in the fields
+    EXPECT_NE(web::format_telemetry(blind).find("\"aim_point_x\":0"), std::string::npos)
+        << "a stale aim point was published as if it were live";
+  }
   EXPECT_NE(msg.find("\"intent_has_joint_target\":true"), std::string::npos);
   EXPECT_NE(msg.find("\"bbox\":[0.300000,0.400000,0.500000,0.700000]"), std::string::npos)
       << "the candidate box is not on the wire; §73's overlay would be drawing from "

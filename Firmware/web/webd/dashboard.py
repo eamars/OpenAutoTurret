@@ -836,6 +836,26 @@ function drawOverlay(t) {
   });
   ctx.restore();
 
+  // §73's aim point: where the line the turret is pointing along crosses the picture.
+  // Deliberately drawn after `ctx.restore()`, outside the staleness fade. The boxes are
+  // vision's and go stale when vision is quiet; this is controld's, computed from the
+  // commanded line of sight and the measured joint angles, and it is the *live* thing on
+  // this overlay. The moment it matters most — nothing detected, the turret still aimed at
+  // where it last believed somebody was — is exactly the moment a fade would erase it.
+  if (t.aim_point_valid) {
+    const ax = t.aim_point_x * W, ay = t.aim_point_y * H;
+    ctx.strokeStyle = "#4ea3ff";
+    ctx.fillStyle = "#4ea3ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ax - 14, ay); ctx.lineTo(ax - 5, ay);   // a gap in the middle, so the point
+    ctx.moveTo(ax + 5, ay); ctx.lineTo(ax + 14, ay);   // being aimed at is not covered up
+    ctx.moveTo(ax, ay - 14); ctx.lineTo(ax, ay - 5);
+    ctx.moveTo(ax, ay + 5); ctx.lineTo(ax, ay + 14);
+    ctx.stroke();
+    ctx.fillText("aim", ax + 17, ay + 4);
+  }
+
   if (stale && ts.length) {
     ctx.fillStyle = "#ffb020";
     ctx.fillText("target list is " + age + " ms old \u2014 boxes are where controld last saw " +

@@ -69,6 +69,14 @@ class Telemetry:
     mode_phase: str = ""                 # WAIT_TARGET | TRACK | COAST | SWEEP | ...
     intent_source: str = "none"          # who is asking for motion (§26)
     intent_type: str = "hold"            # what it asked for (§25)
+    # §73's reticle, normalised against the detector's frame like `tracks`. controld owns the
+    # gimbal angles, the camera extrinsic and the intrinsics, so the projection is done there
+    # and shipped as a position; when `aim_point_valid` is false there is no aim point to
+    # show — no estimate yet, or the geometry and the picture disagree — and the two numbers
+    # beside it are not measurements.
+    aim_point_valid: bool = False
+    aim_point_x: float = 0.0
+    aim_point_y: float = 0.0
     intent_has_joint_target: bool = False  # §92: whether a pose was asked for at all
     intent_q_pitch_rad: float = 0.0      # what the mode wanted, before the envelope (§33)
     intent_q_yaw_rad: float = 0.0        # or the LOS solver (§67) changed it

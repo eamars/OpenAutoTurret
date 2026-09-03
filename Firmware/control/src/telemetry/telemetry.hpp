@@ -288,6 +288,16 @@ struct TelemetrySnapshot {
   bool intent_has_joint_target = false;
   double intent_q_pitch_rad = 0.0;
   double intent_q_yaw_rad = 0.0;
+  // §73's aim point: where the line the turret is pointing along lands in the picture,
+  // normalised the same way the track anchors are. Only controld can compute it — the
+  // estimate is a base-frame line of sight, the picture is camera pixels, and between them
+  // sit the gimbal angles, the §10.3 camera extrinsic and the §28.2 intrinsics. The four
+  // conditions that must hold are in the fill in `control_loop.cpp`; when any of them fails
+  // the flag is false and the two numbers are not measurements. The last aim point of a
+  // session that ended is not where the turret is pointing now.
+  bool aim_point_valid = false;
+  double aim_point_x = 0.0;
+  double aim_point_y = 0.0;
   std::string intent_reason;        // why — the operator's question, answered
   double intent_velocity_scale = 1.0;
   // §52 CommandAck: every command answers, and "accepted" has to be earned.
