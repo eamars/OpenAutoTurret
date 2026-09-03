@@ -541,3 +541,27 @@ the same timestamp discipline as the blackbox, not a gain.
 55 CTest, 301 pytest green. `test_documented_telemetry_reaches_the_page` failed exactly as designed
 when the predicted-LOS gap closed, and the map was updated with the reason retired rather than
 deleted. Section 110: still 0 items accepted on hardware by a named person.
+
+### Correction, minutes later: I attributed a number to the wrong machine state
+
+The commit before this one, and the section above, both say the 665 deg/s^3 "jerk" figure came from
+"an axis whose barely moved". It did not. `motion t=... ax=... q=... v=... a=... j=...` is emitted
+only inside the **homing / move** path (the guard is `homing_log_cycle_`, and the `msg=` field it
+prints is the drive's move message - the samples I read said `msg=moving` and `msg=arrived`, at
+p50 9.8 deg/s). So:
+
+- the 665 deg/s^3 figure belongs to a homing move, where a large differenced jerk is unsurprising,
+  and it says nothing at all about tracking smoothness in either direction;
+- and the real gap is larger than I described: **there is no high-rate log while AUTO_TRACK is
+  running.** The 100 Hz motion log is a homing/move facility. During tracking, the reference and the
+  feedback are visible only through the ~15 Hz telemetry snapshot, which is precisely why the second
+  derivative came out as publish quantisation.
+
+So the concrete next change is not "add q_ref to the motion log" but **add a throttled tracking
+motion log** - reference, feedback, and the derived reference rate at the same 100 Hz cadence the
+homing log already uses, emitted only while a tracking reference is active. Until that exists, the
+"jerk-limited" half of requirement (b) cannot be measured on this station at all, and any number I
+quote for it is an artefact of the sampling window.
+
+The C6 rate-limit finding is unaffected by this correction: it came from published positions over
+their own intervals, not from that log.
