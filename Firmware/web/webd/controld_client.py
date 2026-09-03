@@ -52,6 +52,7 @@ class ControldClient:
         # the one failure mode an operator cannot debug.
         self.malformed_frames = 0
         self._latest: Optional[Telemetry] = None
+        self._latest_mono: Optional[float] = None
         self._latest_lock = threading.Lock()
         self._resp_q: "queue.Queue[ResponseMessage]" = queue.Queue()
         self._cmd_lock = threading.Lock()  # serialize command sends
@@ -93,6 +94,22 @@ class ControldClient:
     def latest_telemetry(self) -> Optional[Telemetry]:
         with self._latest_lock:
             return self._latest
+
+    def telemetry_age_s(self) -> Optional[float]:
+        """Seconds since a telemetry frame actually arrived; None if none ever has.
+
+        `connected()` cannot answer the question §25 asks. It reports a socket, and a daemon that
+        hangs while holding that socket open stays "connected" indefinitely while every number on
+        the page freezes - which is worse than a disconnection, because a disconnection announces
+        itself. So age is taken from the arrival stamp and measured on the monotonic clock, growing
+        whether or not anything is reading it: the fact being recorded is when the data stopped, not
+        when it was looked at.
+        """
+        with self._latest_lock:
+            mono = self._latest_mono
+        if mono is None:
+            return None
+        return max(0.0, time.monotonic() - mono)
 
     def connected(self) -> bool:
         return self._connected_evt.is_set()
@@ -194,6 +211,7 @@ class ControldClient:
             t = telemetry_from_json(payload)
             with self._latest_lock:
                 self._latest = t
+                self._latest_mono = time.monotonic()
             if self._on_telemetry is not None:
                 try:
                     self._on_telemetry(t)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+import dataclasses
 import queue
 import threading
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ from pydantic import BaseModel
 from .config import WebConfig, load_web_config
 from .blackbox import BlackBoxWriter
 from .controld_client import ControldClient
+from .protocol import TELEMETRY_STALE_AFTER_S
 from .dashboard import dashboard_html
 from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
@@ -166,6 +168,22 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         numbers; s23 means it is a tool, not the operator view."""
         return dashboard_html(config.title)
 
+    def _stamped(t):
+        """Attach webd's own view of how old this snapshot is, on a copy.
+
+        The cached Telemetry object belongs to the client and is shared by every reader, so the age
+        is written onto a replacement rather than onto the cached instance: mutating it would make
+        the snapshot's age depend on who read it last, which is the class of bug that produces a page
+        that looks fresh for exactly as long as nobody looks at it.
+        """
+        age_s = client.telemetry_age_s()
+        age_ms = None if age_s is None else int(round(age_s * 1000.0))
+        return dataclasses.replace(
+            t,
+            telemetry_age_ms=age_ms,
+            telemetry_stale=bool(age_s is None or age_s > TELEMETRY_STALE_AFTER_S),
+        )
+
     @app.get("/api/state")
     async def state() -> JSONResponse:
         t = client.latest_telemetry()
@@ -173,7 +191,7 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             return JSONResponse(
                 status_code=503, content={"error": "no telemetry yet"}
             )
-        return JSONResponse({"type": "telemetry", **json.loads(telemetry_to_json(t))})
+        return JSONResponse({"type": "telemetry", **json.loads(telemetry_to_json(_stamped(t)))})
 
     @app.get("/api/health")
     async def health() -> dict:
@@ -184,6 +202,8 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             # belongs beside `controld_connected` rather than somewhere clever, because the pair
             # is the whole diagnosis: connected but refusing frames looks identical to disconnected
             # from the dashboard, and is a different emergency.
+            "telemetry_age_ms": (lambda a: None if a is None else int(round(a * 1000.0)))(
+                client.telemetry_age_s()),
             "malformed_frames": getattr(client, "malformed_frames", 0),
             "browser_clients": hub.client_count,
         }

@@ -28,6 +28,14 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Optional, Tuple
 
 
+# Half a second. controld publishes telemetry at roughly 15 Hz, so this is about seven missing
+# frames: long enough that a hiccup does not flash the banner, short enough that an operator is not
+# watching frozen numbers for a second and a half without being told. The document names no number;
+# this one is derived from the publish rate and is stated rather than hidden in a comparison. It
+# lives here, beside the field it governs, so the server and the page cannot drift apart.
+TELEMETRY_STALE_AFTER_S = 0.5
+
+
 @dataclass
 class Telemetry:
     """One §6.3 telemetry snapshot (controld -> webd)."""
@@ -203,6 +211,12 @@ class Telemetry:
     q_ref_accel_yaw_rad_s2: Optional[float] = None
     q_ref_accel_pitch_rad_s2: Optional[float] = None
     q_ref_rate_valid: bool = False
+    # §25: "stale telemetry stops visual interpolation and indicates stale/disconnected state".
+    # Age is computed by webd when the snapshot is READ, not when it was received, because a cached
+    # frame that is served for ten seconds is ten seconds old at the moment the operator sees it.
+    # The threshold lives here so the server and the page cannot disagree about what "stale" means.
+    telemetry_age_ms: Optional[int] = None
+    telemetry_stale: bool = False
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

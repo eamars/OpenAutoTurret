@@ -59,6 +59,35 @@ function hudAxisNorm(intr) {
   }
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
+
+// §25: "stale telemetry stops visual interpolation and indicates stale/disconnected state".
+//
+// A pure function of what is known, rather than three comparisons scattered through the render path,
+// for two reasons. The first is that the whole rule can then be executed and tested outside a
+// browser, which is more than the previous version of this page could say about its own staleness
+// logic. The second is that the rule has to be one thing: it is answered differently by three
+// sources that fail differently, and a rule written three times drifts.
+//
+//  - transportOk: webd's health says controld is gone, or the socket closed. Announces itself.
+//  - telemetryStale / telemetryAgeMs: webd's own judgement, measured from when the frame ARRIVED,
+//    polled from /api/health so it stays live even when no frames are coming. This is the case a
+//    socket cannot cover: a controld that hangs while holding the connection open stays
+//    "connected" forever, and the reticle sits still on live video looking exactly like a target
+//    that has stopped moving.
+//  - msgAgeMs: the link to THIS page went quiet. Independent of everything above, because the
+//    failure can be only between webd and the browser, where the server's opinion is unreachable
+//    by definition.
+//  - trackListAgeMs: not staleness of the whole picture but of the target list specifically, which
+//    controld measures itself. Kept because losing tracks while the attitude stays live is a
+//    different and very real emergency - the reticle would still be honest, the boxes would not.
+function hudStale(o) {
+  if (!o || o.transportOk === false) return true;
+  if (o.telemetryStale === true) return true;
+  if (typeof o.telemetryAgeMs === "number" && o.telemetryAgeMs > o.staleAfterMs) return true;
+  if (typeof o.msgAgeMs === "number" && o.msgAgeMs > o.quietAfterMs) return true;
+  if (typeof o.trackListAgeMs === "number" && o.trackListAgeMs > o.trackAfterMs) return true;
+  return false;
+}
 """
 
 
@@ -82,6 +111,15 @@ const C = {
 let lastTelemetry = null;
 let lastTelemetryAt = 0;
 let transportOk = true;      // false => show the stale/disconnected state (§25)
+let healthAgeMs = null;      // webd's own age of controld's data, from /api/health (§25)
+let staleNow = false;        // last computed §25 verdict, so a transition can repaint
+
+const STALE_AFTER_MS = 500;  // webd's threshold, mirrored so server and page agree
+const QUIET_AFTER_MS = 1500; // silence on the link to THIS page: three times the server's own
+                             // threshold, so when webd can see the problem its verdict arrives
+                             // first, and under the 2 s health poll, so the page never has to wait
+                             // on polling alone to notice that nothing is coming.
+const TRACK_AFTER_MS = 500;  // target-list staleness, as measured and reported by controld
 
 function chip(label, state, value) {
   // §8: small translucent chips with a status dot; near-white text; no header bar.
@@ -105,9 +143,7 @@ function render(t) {
   svg.setAttribute("width", vw);
   svg.setAttribute("height", vh);
 
-  const stale = !transportOk ||
-    (typeof t.track_list_age_ms === "number" && t.track_list_age_ms > 500);
-  document.getElementById("viewport").classList.toggle("stale", stale);
+  const stale = updateStaleness(t);
 
   // --- what the overlay is made of, rebuilt each frame -------------------
   const layers = { cand: "", sel: "", reticle: "", };
@@ -230,6 +266,27 @@ function paint(t) {
   render(t);
 }
 
+function updateStaleness(t) {
+  // §25. Applies the verdict, and returns it so the caller can colour the fields it is about to
+  // draw. Re-rendering is how "stops visual interpolation" is enforced rather than merely asserted:
+  // the overlay is rebuilt from the payload that is on hand, and when that payload is old the whole
+  // viewport desaturates and declares itself - nothing keeps drifting on numbers that died.
+  const verdict = hudStale({
+    transportOk: transportOk,
+    telemetryStale: !!(t && t.telemetry_stale === true),
+    telemetryAgeMs: healthAgeMs,
+    msgAgeMs: lastTelemetryAt ? (Date.now() - lastTelemetryAt) : null,
+    trackListAgeMs: (t && typeof t.track_list_age_ms === "number") ? t.track_list_age_ms : null,
+    staleAfterMs: STALE_AFTER_MS,
+    quietAfterMs: QUIET_AFTER_MS,
+    trackAfterMs: TRACK_AFTER_MS
+  });
+  const vp = document.getElementById("viewport");
+  if (vp) vp.classList.toggle("stale", verdict);
+  staleNow = verdict;
+  return verdict;
+}
+
 // --- transport -----------------------------------------------------------
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -277,6 +334,10 @@ async function pollHealth() {
     const r = await fetch("/api/health");
     const h = await r.json();
     if (!h.controld_connected) transportOk = false; else transportOk = true;
+    // webd's own measure of how stale controld's data is, live, independent of whether any frames
+    // are arriving - which is the only way this page can notice a daemon that hung rather than
+    // died. Absent (older webd, or no telemetry yet) stays null and simply does not vote.
+    healthAgeMs = (typeof h.telemetry_age_ms === "number") ? h.telemetry_age_ms : null;
     if (lastTelemetry) render(lastTelemetry);
     // Self-heal the preview: if the stream stopped (daemon bounce, or another owner took the
     // camera and let go), ask again instead of letting a frozen frame keep looking like a live one.
@@ -294,6 +355,12 @@ document.addEventListener("DOMContentLoaded", () => {
   connect();
   pollHealth();
   setInterval(pollHealth, 2000);
+  // The watchdog §25 actually needs. /api/health can be polled twice a second, and the transport
+  // announces a close, but between those two a link that merely goes SILENT - no close event, webd
+  // still healthy, controld still publishing to everyone else - leaves this page showing its last
+  // frame indefinitely. Checking the clock costs a DOM class toggle four times a second and is the
+  // only mechanism that does not assume someone will eventually tell us.
+  setInterval(() => { if (lastTelemetry) render(lastTelemetry); }, 250);
 });
 """
 

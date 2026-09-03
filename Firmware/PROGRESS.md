@@ -725,3 +725,79 @@ follower matching a 20 deg/s target holds back by up to vA/2j = 2 deg (measured 
 
 56 CTest (10 of them the limiter's own), 301 pytest. Section 110: still 0 items accepted on hardware
 by a named person.
+
+## 2026-09-04, 08:5x — round 7: §25 staleness, measured with the daemon frozen rather than killed
+
+`controld_connected` reports a **socket**. A controld that stops publishing while still holding that
+socket open therefore leaves the page showing frozen numbers under a health endpoint that says
+"connected" - which is worse than a disconnection, because a disconnection announces itself. This was
+on the known-defect list as "webd serves dead-daemon state as current". It is closed, and closed with
+the failure actually reproduced rather than described.
+
+### The measurement (real station, real daemon, real HTTP)
+
+controld was **SIGSTOPped**, not killed: the process freezes with its socket open and its publish
+loop silent, which is the case the old code could not see. Killing it would have exercised the path
+that already worked.
+
+| controld state | controld_connected | /api/health age | /api/state age | telemetry_stale |
+| --- | --- | --- | --- | --- |
+| publishing | True | 4 ms | 6 ms | False |
+| frozen +0.8 s | **True** | 858 ms | 859 ms | **True** |
+| frozen +1.6 s | **True** | 1661 ms | 1662 ms | **True** |
+| frozen +2.4 s | **True** | 2464 ms | 2465 ms | **True** |
+| resumed +0.4 s | True | 47 ms | 48 ms | False |
+| resumed +1.6 s | True | 59 ms | 60 ms | False |
+
+The `connected` column is the finding: it never moved, across all three frozen rows. Age climbed in
+steps matching the sampling interval, which is the property the fix rests on - **age is computed when
+the snapshot is read**, not stamped when it arrived. Stamping on arrival produces a frame that reports
+itself fresh forever, because the last thing to touch it declared it recent.
+
+### What changed
+
+- `ControldClient.telemetry_age_s()` - monotonic, measured from the arrival stamp, `None` when no
+  frame has ever landed so a daemon that never answered does not read as "0 ms old".
+- `/api/state` answers on a **copy** carrying `telemetry_age_ms` + `telemetry_stale`; the cached
+  Telemetry is shared by every reader, and mutating it would make a snapshot's age depend on who read
+  it last. `/api/health` gained the age beside the connection flag, because "connected but silent" is
+  the diagnosis and the two facts belong in one sentence.
+- Threshold `TELEMETRY_STALE_AFTER_S = 0.5`, in `protocol.py` beside the field it governs: controld
+  publishes near 15 Hz, so that is about seven missing frames. The document names no number, so the
+  number has to state its arithmetic instead of hiding inside a comparison.
+- The page's rule became **one pure function** `hudStale(o)`, in the geometry block so node can
+  execute it, covering five distinct ways the picture can lie: transport down, server says stale,
+  hung daemon on a live socket, link to *this* page gone quiet, and target list dead while attitude
+  stays live. The last one is kept separate because it is a different emergency: the reticle would
+  still be honest while the boxes were not. Previously the page had three inline comparisons, which
+  is not one rule and is not testable.
+- A **silence watchdog** (250 ms tick): without it the page learns it is stale only when something
+  arrives to tell it. A link that goes quiet with no close event, a healthy webd, and a controld still
+  publishing to everyone else is precisely the case where a stationary reticle on live video looks
+  like a target that has stopped moving.
+
+### Two errors worth keeping in the record
+
+1. My first repair of a bad insertion in `app.py` **deleted the `@app.get("/api/state")` decorator**,
+   and I looked at the leftover blank line, called it cosmetic, and moved on. The route then answered
+   404 while the file still parsed and imported cleanly. A silently missing route is exactly the
+   failure mode this project's own notes call undebuggable, and it survived until the new test hit it.
+2. Three of the new tests first failed for a reason that is a better lesson than the tests: the
+   injected "last frame arrived 3 s ago" timestamp was being overwritten within milliseconds, because
+   `FakeControld` was still publishing at 20 Hz. The tests were changed to stop the publisher - to
+   arrange the state under test instead of pretending - and the live SIGSTOP measurement above came
+   from the same thought.
+
+Also fixed while there: a shipped comment justifying `QUIET_AFTER_MS` as "three times the ~15 Hz frame
+period", which is 200 ms and not 1500 ms. Wrong arithmetic in a comment about a timeout is worse than
+no comment.
+
+### Evidence boundary, stated plainly
+
+The rule was executed under node from the page's own source (7 cases, `node --check` clean). Its
+inputs were verified live on the station. **What was not observed is the paint itself** - there is no
+browser automation here, so "the operator sees the banner" remains unverified in the same way every
+other visual claim on this page is, and belongs to §24's operator-signed list.
+
+308 pytest (7 new), 56 CTest. Station: controld resumed, publishing, `telemetry_stale` False.
+Section 110: still 0 items accepted on hardware by a named person.
