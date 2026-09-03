@@ -100,6 +100,11 @@ class Telemetry:
     # how selected_track_id once looked like a vision bug.
     # §79: the structured event window and the counter behind it. Undeclared fields do
     # not error here — they stop arriving, which is a much worse failure to diagnose.
+    # §80: a preserved scene. The id changes only when the station stopped believing what
+    # it was doing; the dict is that instant, and webd is what writes it to disk (see
+    # controld_client). Absent when nothing has gone wrong since controld started.
+    blackbox_capture_id: int = 0
+    blackbox: dict = field(default_factory=dict)
     event_generation: int = 0
     events: list = field(default_factory=list)
     track_count: int = 0

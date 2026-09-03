@@ -38,6 +38,11 @@ class WebConfig:
     host: str = "0.0.0.0"
     port: int = 8080
     socket_path: str = "/run/ota/controld-web.sock"
+    # §80: where preserved scenes are written. Empty means the writer is not installed at
+    # all. It is opt-in because writing files is a side effect, and a side effect that
+    # appears because code was merged is a surprise to whoever has to explain the disk
+    # filling up. Set OTA_BLACKBOX_DIR to turn it on.
+    blackbox_dir: str = ""
     telemetry_hz: int = 15
     title: str = "OpenAutoTurret"
     video_enabled: bool = True
@@ -87,6 +92,7 @@ def load_web_config() -> WebConfig:
         host=os.environ.get("OTA_WEB_HOST", "0.0.0.0"),
         port=_env_int("OTA_WEB_PORT", 8080),
         socket_path=os.environ.get("OTA_WEB_SOCKET", "/run/ota/controld-web.sock"),
+        blackbox_dir=os.environ.get("OTA_BLACKBOX_DIR", ""),
         telemetry_hz=_env_int("OTA_WEB_HZ", 15),
         title=os.environ.get("OTA_WEB_TITLE", "OpenAutoTurret"),
         video_enabled=_env_flag("OTA_VIDEO_ENABLE", True),

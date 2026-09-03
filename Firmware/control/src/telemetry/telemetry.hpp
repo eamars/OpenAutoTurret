@@ -45,6 +45,55 @@ struct TrackListing {
   bool selected = false;      // the operator's choice, marked in the list
 };
 
+// §80's list, in one struct, fixed size for the reasons above. Nothing here is derived
+// later: every field is what the control loop believed at that instant, which is the only
+// version of the story that a replay can be checked against.
+struct BlackBoxCapture {
+  uint64_t id = 0;
+  TimeNs t_ns = 0;
+  char reason[64] = {};
+
+  char operating_mode[16] = {};
+  char mode_phase[24] = {};
+  char phase[16] = {};
+  char safety_action[16] = {};
+
+  // The selection and everything the detector was offering at the time. "All candidate
+  // tracks" is the phrase in §80, and it is the part that cannot be reconstructed: the
+  // scene is gone, and a replay that shows only the chosen track proves nothing about
+  // whether the choice was the only defensible one.
+  uint64_t selected_uuid = 0;
+  char selected_label[24] = {};
+  char selection_visibility[24] = {};
+  int64_t selection_age_ms = -1;
+  bool selection_ambiguous = false;
+  float reacquisition_score = 0.0f;
+  std::array<TrackListing, 8> candidates{};
+  int candidate_count = 0;
+
+  // What was asked for, as distinct from what the reference generator produced. The
+  // `intent_has_joint_target` flag is load-bearing: an intent may be a LOS aim or a hold
+  // rather than a joint pose, and publishing a zero pose for those would say "it was
+  // told to go to zero", which is a different accident entirely. Index order matches
+  // ix(AxisId::): 0 = pitch, 1 = yaw.
+  bool intent_has_joint_target = false;
+  char intent_type[16] = {};
+  char intent_source[16] = {};
+  double q_cmd[2] = {0.0, 0.0};
+  double q_ref[2] = {0.0, 0.0};
+  double q_actual[2] = {0.0, 0.0};
+  double v_actual[2] = {0.0, 0.0};
+
+  // The estimate and how old it was, plus the transport ages: a turret that swung at a
+  // two-second-old measurement is not broken in the same place as one that swung at a
+  // fresh one.
+  double target_az_world_rad = 0.0;
+  double target_el_world_rad = 0.0;
+  bool estimator_ready = false;
+  int64_t measurement_age_ms = -1;
+  int64_t feedback_age_ms = -1;
+};
+
 struct TelemetrySnapshot {
   static constexpr int kMaxTrackList = 8;
   TimeNs timestamp_ns = 0;
@@ -112,6 +161,20 @@ struct TelemetrySnapshot {
   // *which is which*, which is the whole of the candidate list.
   std::array<TrackListing, kMaxTrackList> tracks{};
   int track_count = 0;
+  // §80: a preserved scene. When the station stops believing what it was doing — a
+  // safety brake, a fault, motion that did not match the request — the question is
+  // "what did it think it was looking at", and by the time anyone reads the log the
+  // answer is gone: the estimator moved on, the candidates changed, the selection aged
+  // out. So the relevant state is *copied at that instant* into fixed storage and
+  // published until someone takes it.
+  //
+  // It rides the snapshot rather than being written from the control thread because
+  // writing a file is an unbounded-time operation, and the thread that has a 5 ms
+  // deadline must not do the disk's work. The web thread publishes at 15 Hz and does the
+  // writing; the id tells it when there is something new and tells a reader that what it
+  // is looking at is a scene, not a live value.
+  uint64_t blackbox_capture_id = 0;
+  BlackBoxCapture blackbox{};
   // How long ago the newest frame in that list arrived, measured on controld's own clock
   // (0..n; -1 when no set has ever been received). Published because controld must not
   // invent track state between frames — association is visiond's per-frame job (§58), so

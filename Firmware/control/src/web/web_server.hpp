@@ -72,6 +72,13 @@ inline std::string json_escape(const std::string& s) {
 }
 
 // Format a TelemetrySnapshot as the published JSON telemetry object (§6.3).
+// A two-element joint vector as JSON. Named short because it is used four times in the
+// black-box object and each use is the same pair of numbers; the alternative was four
+// copies of the same concatenation, which is how one of them ends up wrong.
+inline std::string js(const double v[2]) {
+  return "[" + std::to_string(v[0]) + "," + std::to_string(v[1]) + "]";
+}
+
 inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
   std::ostringstream os;
   os << "{\"type\":\"telemetry\""
@@ -132,6 +139,52 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"selection_ambiguous\":" << (s.selection_ambiguous ? 1 : 0)
      << ",\"reacquisition_score\":" << s.reacquisition_score
      << ",\"ambiguity_margin\":" << s.ambiguity_margin
+     << ",\"blackbox_capture_id\":" << s.blackbox_capture_id
+     << (s.blackbox_capture_id == 0
+             ? std::string()
+             : (",\"blackbox\":" + [&s]() {
+                 const telemetry::BlackBoxCapture& b = s.blackbox;
+                 std::string c = "{\"id\":" + std::to_string(b.id) +
+                     ",\"t_ns\":" + std::to_string(b.t_ns) +
+                     ",\"reason\":\"" + json_escape(b.reason) + "\"" +
+                     ",\"operating_mode\":\"" + json_escape(b.operating_mode) + "\"" +
+                     ",\"mode_phase\":\"" + json_escape(b.mode_phase) + "\"" +
+                     ",\"phase\":\"" + json_escape(b.phase) + "\"" +
+                     ",\"safety_action\":\"" + json_escape(b.safety_action) + "\"" +
+                     ",\"intent_type\":\"" + json_escape(b.intent_type) + "\"" +
+                     ",\"intent_source\":\"" + json_escape(b.intent_source) + "\"" +
+                     ",\"intent_has_joint_target\":" +
+                     (b.intent_has_joint_target ? "true" : "false") +
+                     ",\"q_cmd_rad\":" + js(b.q_cmd) + ",\"q_ref_rad\":" + js(b.q_ref) +
+                     ",\"q_actual_rad\":" + js(b.q_actual) +
+                     ",\"v_actual_rad_s\":" + js(b.v_actual) +
+                     ",\"selected_uuid\":" + std::to_string(b.selected_uuid) +
+                     ",\"selected_label\":\"" + json_escape(b.selected_label) + "\"" +
+                     ",\"selection_visibility\":\"" + json_escape(b.selection_visibility) +
+                     "\"" +
+                     ",\"selection_age_ms\":" + std::to_string(b.selection_age_ms) +
+                     ",\"selection_ambiguous\":" + (b.selection_ambiguous ? "true" : "false") +
+                     ",\"reacquisition_score\":" + std::to_string(b.reacquisition_score) +
+                     ",\"candidate_count\":" + std::to_string(b.candidate_count) +
+                     ",\"candidates\":["
+                     ;
+                 for (int i = 0; i < b.candidate_count; ++i) {
+                   const telemetry::TrackListing& t = b.candidates[i];
+                   if (i) c += ",";
+                   c += "{\"uuid\":" + std::to_string(t.uuid_lo) +
+                        ",\"label\":\"" + json_escape(t.label) + "\"" +
+                        ",\"state\":\"" + json_escape(t.state) + "\"" +
+                        ",\"confidence\":" + std::to_string(t.confidence) +
+                        ",\"anchor_x\":" + std::to_string(t.anchor_x) +
+                        ",\"anchor_y\":" + std::to_string(t.anchor_y) + "\"}";
+                 }
+                 c += "],\"target_az_world_rad\":" + std::to_string(b.target_az_world_rad) +
+                      ",\"target_el_world_rad\":" + std::to_string(b.target_el_world_rad) +
+                      ",\"estimator_ready\":" + (b.estimator_ready ? "true" : "false") +
+                      ",\"measurement_age_ms\":" + std::to_string(b.measurement_age_ms) +
+                      ",\"feedback_age_ms\":" + std::to_string(b.feedback_age_ms) + "]}";
+                 return c;
+               }()))
      << ",\"event_generation\":" << s.event_generation
      // §79. The generation travels with the window so a reader can tell "nothing has
      // happened" from "I have not looked yet", and can tell a restart from a quiet

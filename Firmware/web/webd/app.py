@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .config import WebConfig, load_web_config
+from .blackbox import BlackBoxWriter
 from .controld_client import ControldClient
 from .dashboard import dashboard_html
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
@@ -119,7 +120,18 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
 
     # Re-point the client's telemetry callback at the hub (so the dashboard
     # gets live frames). Kept off the control path: this only feeds browsers.
-    client.on_telemetry = hub.on_telemetry
+    # §80: the hub keeps the page fed; this keeps the evidence. Composed here rather than
+    # inside the hub, because the hub's contract is "what the browser sees" and this is a
+    # side effect on disk — and because the writer is absent unless a directory is named.
+    # Both run on the client's reader thread, which is not the control loop: a hung disk
+    # can stall the dashboard, and must never be able to stall the turret.
+    blackbox = BlackBoxWriter(config.blackbox_dir)
+
+    def on_telemetry(t: Telemetry) -> None:
+        hub.on_telemetry(t)
+        blackbox.observe(t)
+
+    client.on_telemetry = on_telemetry
 
     # Separate low-priority video source (§42.3): its own path from the IMX500,
     # never through the control socket. Off until a client turns it on.

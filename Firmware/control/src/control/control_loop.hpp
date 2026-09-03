@@ -86,6 +86,12 @@ inline const char* phase_name(Phase p) {
 
 class ControlLoop {
  public:
+
+  // §80. Copies what the loop currently believes into the capture and gives it a new id.
+  // Public deliberately: this is the same call the safety edge makes, and a test seam that
+  // reaches a *different* function than the one that runs on metal is not a seam, it is a
+  // second implementation. Tests call this one.
+  void preserve_scene(const telemetry::TelemetrySnapshot& live, const char* reason);
   struct Config {
     int control_hz = 200;
     // Braking model (must match the SafetyEnvelope the supervisor uses).
@@ -507,6 +513,11 @@ class ControlLoop {
   char mode_refusal_reason_[224] = {};
   RoamPlanner roam_;
   RoamOutput roam_out_;
+  // §80: the preserved scene, held so it can be published until someone takes it. Kept
+  // here rather than only in the snapshot because each cycle fills a fresh snapshot.
+  telemetry::BlackBoxCapture blackbox_{};
+  bool was_unsafe_ = false;
+
   // §79's transition memory: events fire on changes, not on every cycle.
   AutoTrackState last_at_state_ = AutoTrackState::WaitTarget;
   int last_roam_dir_ = 0;

@@ -1098,6 +1098,27 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // selection manager holds, so it is by construction the same list the selection was
     // validated against — a UI built on a different copy could offer a label controld
     // would refuse, which is the dead-button problem again.
+    // §80: preserve the scene when the station stops believing what it was doing. The
+    // edge, not the level — a station sitting in a brake for a minute should hold one
+    // record, not twelve hundred, or the artifact that arrives by mail is mostly the
+    // same 5 ms over and over.
+    {
+      const bool unsafe = last_decision_.action == SafetyAction::Brake ||
+                          last_decision_.action == SafetyAction::FaultStop ||
+                          phase_ == Phase::Fault;
+      if (unsafe && !was_unsafe_) {
+        char why[64];
+        std::snprintf(why, sizeof why, "%s in %s",
+                      safety_action_name(last_decision_.action), phase_name(phase_));
+        preserve_scene(snap, why);
+      }
+      was_unsafe_ = unsafe;
+    }
+    // The preserved scene rides every publish until a newer one replaces it: a reader at
+    // 15 Hz must not need to be unlucky in exactly the right way to see it.
+    snap.blackbox_capture_id = blackbox_.id;
+    if (blackbox_.id != 0) snap.blackbox = blackbox_;
+
     // §79's published tail. Rebuilt only when the push counter moved, so the cost on a
     // cycle where nothing happened is one integer compare; the copy happens at event
     // rate, which is a person pressing things, not 200 Hz.
@@ -1537,6 +1558,64 @@ ModeResult ControlLoop::stop_motion() {
   spdlog::warn("STOP_MOTION: {} intent cancelled, controlled hold in MANUAL "
                "(§27; not a disable, not a shutdown)", operating_mode_name(was));
   return r;
+}
+
+void ControlLoop::preserve_scene(const telemetry::TelemetrySnapshot& live,
+                                 const char* reason) {
+  // §80. Everything copied from the snapshot the loop has just filled, which is the same
+  // view the operator's dashboard had at that instant — deliberately not re-derived from
+  // the models, because a record that re-computes is a record that can disagree with what
+  // was on the screen during the thing being investigated, and then nobody knows which
+  // one to believe.
+  telemetry::BlackBoxCapture out{};
+  out.id = blackbox_.id + 1;
+  out.t_ns = now_ns_;
+  std::snprintf(out.reason, sizeof out.reason, "%s", reason != nullptr ? reason : "");
+  std::snprintf(out.operating_mode, sizeof out.operating_mode, "%s",
+                live.operating_mode.c_str());
+  std::snprintf(out.mode_phase, sizeof out.mode_phase, "%s", live.mode_phase.c_str());
+  std::snprintf(out.phase, sizeof out.phase, "%s", live.phase.c_str());
+  std::snprintf(out.safety_action, sizeof out.safety_action, "%s",
+                safety_action_name(live.safety_action));
+
+  out.selected_uuid = live.selected_track_id;
+  std::snprintf(out.selected_label, sizeof out.selected_label, "%s",
+                live.selected_descriptor.c_str());
+  std::snprintf(out.selection_visibility, sizeof out.selection_visibility, "%s",
+                live.selection_visibility.c_str());
+  out.selection_age_ms = live.selection_last_seen_age_ms;
+  out.selection_ambiguous = live.selection_ambiguous;
+  out.reacquisition_score = live.reacquisition_score;
+  out.candidate_count = live.track_count < static_cast<int>(out.candidates.size())
+                            ? live.track_count
+                            : static_cast<int>(out.candidates.size());
+  for (int i = 0; i < out.candidate_count; ++i) out.candidates[i] = live.tracks[i];
+
+  out.q_actual[0] = live.q_pitch_rad;
+  out.q_actual[1] = live.q_yaw_rad;
+  out.v_actual[0] = live.v_pitch_rad_s;
+  out.v_actual[1] = live.v_yaw_rad_s;
+  out.q_ref[0] = live.q_ref_pitch_rad;
+  out.q_ref[1] = live.q_ref_yaw_rad;
+  out.intent_has_joint_target = last_intent_.has_joint_target;
+  std::snprintf(out.intent_type, sizeof out.intent_type, "%s",
+                live.intent_type.c_str());
+  std::snprintf(out.intent_source, sizeof out.intent_source, "%s",
+                live.intent_source.c_str());
+  if (last_intent_.has_joint_target) {
+    out.q_cmd[0] = last_intent_.q_pitch_rad;
+    out.q_cmd[1] = last_intent_.q_yaw_rad;
+  }
+
+  out.target_az_world_rad = live.target_az_world_rad;
+  out.target_el_world_rad = live.target_el_world_rad;
+  out.estimator_ready = tracking_ != nullptr && tracking_->estimator_initialized();
+  out.measurement_age_ms = live.prediction_age_ms;
+  out.feedback_age_ms = live.feedback_age_ms;
+
+  blackbox_ = out;
+  spdlog::warn("black-box scene preserved (id {}): {} — mode {} phase {} safety {}",
+               out.id, out.reason, out.operating_mode, out.phase, out.safety_action);
 }
 
 void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {

@@ -1145,3 +1145,54 @@ TEST(RuntimeUiState, StaleEstimatesSayTheyAreStale) {
          "a field that cannot answer and a field that answers zero look the same to a "
          "dashboard";
 }
+
+// --- §80: the scene a fault has to leave behind. Reached through the same function the
+//     safety edge calls, with the snapshot the loop itself published — not a hand-built
+//     fixture, because the whole claim of this record is that it holds what the machine
+//     believed, in the shape the operator's screen held it.
+TEST(BlackBox, APreservedSceneCarriesWhatTheOperatorWasTold) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2, 0.90f, 0.70f, 0.30f, 0.70f);
+  feed(h, set, 20, 10);
+  h.run("select_target", "1");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  feed(h, set, 10, 40);
+  // Not asserted to be zero. This rig passes through the same safety brake that homing
+  // takes on the station — the recipe sleep that makes ≈110 ms cycles, answered by
+  // BRAKE — and the edge below fires on it, which is the trigger working on ordinary
+  // conditions rather than on a contrived one. On the station, with a directory
+  // configured, that will mean one artifact per homing: which is not noise, it is the
+  // §46 defect leaving evidence for once.
+  const uint64_t before = h.snap().blackbox_capture_id;
+
+  // The call the brake/fault edge makes.
+  h.loop->preserve_scene(h.snap(), "brake in Ready");
+  h.step(1);  // the capture is published by the cycle after it is taken, like everything
+              // else on this page — asserting it any other way would be asserting a
+              // shortcut that does not exist on the station
+  auto snap = h.snap();
+  ASSERT_GT(snap.blackbox_capture_id, before) << "the capture was not published";
+  EXPECT_EQ(snap.blackbox.candidate_count, 2)
+      << "a scene with only the chosen track cannot be used to judge whether the choice "
+         "was defensible — which is the stated purpose of this record (§80)";
+  EXPECT_EQ(snap.blackbox.selected_uuid, snap.selected_track_id)
+      << "the preserved selection disagrees with what the dashboard was showing at the "
+         "same instant, so nobody knows which one to believe";
+  EXPECT_EQ(snap.blackbox.selected_label, std::string("Person #1"));
+  // "hold", not "ready": `phase` is the loop's phase and `at_ready` is a separate flag.
+  // The record copies what was published, so it inherits that distinction rather than
+  // inventing a tidier one nobody else uses.
+  EXPECT_EQ(snap.blackbox.phase, std::string("hold"));
+  EXPECT_NE(snap.blackbox.reason, std::string(""));
+  // It keeps riding every publish until replaced: a reader at 15 Hz must not need to be
+  // unlucky in exactly the right way to see the one thing it wants.
+  h.step(50);
+  EXPECT_EQ(h.snap().blackbox_capture_id, snap.blackbox_capture_id);
+  h.loop->preserve_scene(h.snap(), "fault in ready");
+  h.step(1);
+  EXPECT_GT(h.snap().blackbox_capture_id, snap.blackbox_capture_id)
+      << "the second incident overwrote the first without a new id; two accidents have to "
+         "look like two accidents";
+}

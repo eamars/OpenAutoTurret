@@ -327,7 +327,8 @@ def test_webd_declares_the_fields_the_dashboard_reads():
     for field_name in ("tracks", "track_count", "track_list_age_ms", "selected_display_index",
                        "selection_visibility", "manual_lease_active", "roam_sweep_direction",
                        "confidence_band", "selection_last_seen_age_ms", "prediction_age_ms",
-                       "roam_pattern", "roam_progress"):
+                       "roam_pattern", "roam_progress", "blackbox_capture_id",
+                       "blackbox"):
         assert re.search(rf"^\s*{field_name}\s*:", proto, re.M), (
             f"webd does not declare {field_name}: the dashboard would read undefined "
             "and the dashboard's own fallback text would hide it"
