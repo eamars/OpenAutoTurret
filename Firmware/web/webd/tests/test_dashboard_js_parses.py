@@ -216,3 +216,75 @@ def test_ambiguous_reacquisition_tells_the_operator_to_reselect():
     assert "AMBIGUOUS" in js
     assert "selection_visibility" in js
     assert "LOST_REACQUIRABLE" in js
+
+
+def test_manual_jog_row_renews_faster_than_the_lease_it_holds():
+    """§38, checked across the two languages that have to agree.
+
+    The dead-man lease only works if the browser asks to renew it comfortably inside the
+    deadline controld is holding. Either number on its own is a constant; the *ratio* is
+    the safety property, and both sides are parsed from source rather than repeated here
+    — a list copied into a test certifies nothing once the code moves.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    ctrl = (root / "control" / "src" / "mode" / "manual_controller.hpp").read_text(
+        encoding="utf-8"
+    )
+    lease = re.search(r"int64_t lease_ms = (\d+)", ctrl)
+    assert lease, "the jog lease timeout moved shape; update this guard"
+    lease_ms = int(lease.group(1))
+
+    keepalive = re.search(r"JOG_KEEPALIVE_MS = (\d+)", DASHBOARD_HTML)
+    assert keepalive, "the dashboard no longer names its keepalive interval"
+    keep_ms = int(keepalive.group(1))
+
+    assert keep_ms > 0 and lease_ms > 0
+    # Three renewals inside the lease: two lost requests are survivable, and a third
+    # lapses the jog rather than extending it indefinitely on a bad link.
+    assert keep_ms * 3 <= lease_ms, (
+        f"browser renews every {keep_ms} ms against a {lease_ms} ms lease: the turret "
+        "would stop under a held button on any ordinary network hiccup"
+    )
+    # And not so fast that the page becomes a request generator on the control path.
+    assert keep_ms >= 50, f"{keep_ms} ms keepalive floods the command path"
+
+    for cmd in ("manual_jog_start", "manual_jog_keepalive", "manual_jog_stop"):
+        assert cmd in DASHBOARD_HTML, f"{cmd} is not wired from the page"
+    # Release must be bound to *every* way a held pointer silently disappears. A missing
+    # one is not visible until someone's tab dies while they hold yaw+.
+    for event in ("pointerdown", "pointerup", "pointercancel", "blur",
+                  "visibilitychange", "pagehide"):
+        assert event in DASHBOARD_HTML, f"{event} is not handled by the jog control"
+
+
+def test_step_choices_offered_are_the_ones_controld_allows():
+    """§41: 0.5 / 1 / 5 degrees. The page must not offer a step controld would refuse.
+
+    The refusal itself is correct behaviour, but a button that is *designed* to be
+    refused is the dead-button problem wearing a different hat: the operator pressed it,
+    and something on the screen has to be wrong for that to be a normal outcome.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    # The list lives where the refusal lives: control_loop.cpp checks an incoming step
+    # against it, so that is the file that actually decides what is allowed.
+    ctrl = (root / "control" / "src" / "control" / "control_loop.cpp").read_text(
+        encoding="utf-8"
+    )
+    allowed = re.search(r"const double allowed\[[0-9]+\] = \{([^}]*)\}", ctrl)
+    assert allowed, "the sanctioned step sizes moved shape; update this guard"
+    sizes = sorted(float(x) for x in allowed.group(1).split(","))
+
+    # The selected= attribute sits before the closing bracket on one of these, so the
+    # pattern must stop at the quote: a stricter pattern silently returns two of the
+    # three choices, which would make the guard below compare the wrong sets.
+    offered = sorted(float(x) for x in re.findall(
+        r'<option value="([0-9.]+)"', DASHBOARD_HTML.split('id="step-size"')[1][:400]))
+    assert offered == sizes, f"page offers {offered}, controld allows {sizes}"
+
+    # Directions: four jog buttons, both axes, both signs.
+    jogs = set(re.findall(r'data-jog="([^"]+)"', DASHBOARD_HTML))
+    assert jogs == {"yaw+", "yaw-", "pitch+", "pitch-"}, jogs

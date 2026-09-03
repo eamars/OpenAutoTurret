@@ -189,6 +189,36 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button data-cmd="clear_target">CLEAR TARGET</button>
       </span>
     </div>
+    <div id="manual-controls">
+      <label class="muted" for="jog-profile">speed</label>
+      <select id="jog-profile">
+        <option value="fine">FINE</option>
+        <option value="normal" selected>NORMAL</option>
+        <option value="fast">FAST</option>
+      </select>
+      <button data-jog="yaw-">YAW &minus;</button>
+      <button data-jog="yaw+">YAW +</button>
+      <button data-jog="pitch-">PITCH &minus;</button>
+      <button data-jog="pitch+">PITCH +</button>
+      <span id="jog-lease" class="badge">lease: idle</span>
+      <label class="muted" for="step-size">step</label>
+      <select id="step-size">
+        <option value="0.5">0.5&deg;</option>
+        <option value="1" selected>1&deg;</option>
+        <option value="5">5&deg;</option>
+      </select>
+      <button data-cmd="manual_step" data-axis="yaw" data-sign="+">STEP YAW +</button>
+      <button data-cmd="manual_step" data-axis="yaw" data-sign="-">STEP YAW &minus;</button>
+      <button data-cmd="manual_step" data-axis="pitch" data-sign="+">STEP PITCH +</button>
+      <button data-cmd="manual_step" data-axis="pitch" data-sign="-">STEP PITCH &minus;</button>
+    </div>
+    <div class="muted" id="manual-note">Hold a jog button to move (§38). The turret grants
+      a 300 ms lease that this page renews every 100 ms, so a closed tab, a lost wifi
+      link, or the page going to the background stops it — the absence of a message is
+      what stops the turret, which is the only signal those failures reliably produce.
+      Steps are 0.5 / 1 / 5 degrees (§41); controld refuses anything else rather than
+      clamping it, because a mistyped digit on an operator page should fail loudly. Both
+      are available in MANUAL only (§52).</div>
     <div class="muted" id="selection-note">Selection is independent of mode (§12):
       choosing a target here does not make the turret move, and switching to MANUAL
       does not forget it. Only CLEAR TARGET removes it.</div>
@@ -413,7 +443,8 @@ function render(t) {
   const v3 = !!t.operating_mode;
   const mode = t.operating_mode || "not reported";
   document.querySelectorAll(
-      "#mode-controls button[data-cmd]:not(.danger)").forEach((btn) => {
+      "#mode-controls button[data-cmd]:not(.danger), #manual-controls button"
+    ).forEach((btn) => {
     btn.disabled = !v3;
   });
   const note = $("mode-unsupported");
@@ -425,6 +456,37 @@ function render(t) {
   }
   badge($("mode"), mode, mode === "MANUAL" ? "ok" : "warn");
   badge($("mode-phase"), t.mode_phase || "—", "info");
+  // §50/§78: the lease countdown is controld's clock, not the page's. It answers the
+  // operator's actual question — "if this tab dies right now, when does it stop" — and
+  // the answer has to come from the machine that would do the stopping.
+  const lease = $("jog-lease");
+  if (lease) {
+    const live = !!t.manual_lease_active;
+    lease.textContent = live
+      ? "lease: " + (t.manual_lease_remaining_ms || 0) + " ms "
+        + (t.manual_profile ? "@ " + t.manual_profile : "")
+      : "lease: idle";
+    lease.className = "badge " + (live ? "warn" : "info");
+  }
+  // §45/§47: manual motion exists in MANUAL. Greyed rather than hidden, and the note
+  // says why, because an operator who cannot find the control looks for a fault.
+  const manualRow = $("manual-controls");
+  if (manualRow) {
+    const canManual = v3 && mode === "MANUAL";
+    manualRow.querySelectorAll("button, select").forEach((el) => {
+      el.disabled = !canManual;
+    });
+    const note = $("manual-note");
+    if (note) {
+      note.className = canManual ? "muted" : "err";
+      note.textContent = canManual ? note.textContent :
+        ("Manual motion is only available in MANUAL (§52); currently " + (mode || "unknown") +
+         ". Hold a jog button to move (§38): the turret grants a 300 ms lease that this "
+         + "page renews every 100 ms, so a closed tab, a lost wifi link, or the page "
+         + "going to the background stops it. Steps are 0.5 / 1 / 5 degrees (§41); "
+         + "controld refuses anything else rather than clamping it.");
+    }
+  }
   badge($("sup-state"), t.supervisory_state || "—",
         t.supervisory_state === "READY" ? "ok" : "warn");
   markActiveMode(mode);
@@ -554,6 +616,17 @@ function argFor(cmd, btn) {
     }
     return String(v);
   }
+  if (cmd === "manual_step") {
+    // Assembled from two controls the operator just used, in the one place that reads
+    // them, so the number sent is the number showing. controld accepts only
+    // 0.5 / 1 / 5 degrees and says so (§41); clamping a 50 into a 5 here would move the
+    // turret and hide the typo.
+    const size = $("step-size").value;
+    const axis = btn && btn.dataset.axis;
+    const sign = (btn && btn.dataset.sign) || "+";
+    if (!axis) return null;
+    return axis + sign + size;
+  }
   if (cmd === "run_test_motion") return String($("test-motion").value || 0);
   if (cmd === "select_payload_profile") {
     const sel = $("profile-select");
@@ -668,6 +741,63 @@ async function refreshVideoState() {
   }
   catch (e) { videoStatus(`webd unreachable: ${e}`, true); }
 }
+// §38 — the dead-man jog. A held button is not a hand on a trigger: the tab can be
+// backgrounded, the wifi can drop, the browser can close, and none of those reliably
+// arrive as *anything*. So the browser renews a short lease (§38 suggests ~100 ms
+// against controld's 250-350 ms) and controld stops the turret when the renewals stop.
+// The page therefore does not need to detect its own death; it needs to stop pretending
+// to be alive, which it does by simply not being able to ask.
+let jogDir = null;
+let jogTimer = null;
+const JOG_KEEPALIVE_MS = 100;
+
+function jogProfile() {
+  const s = $("jog-profile");
+  return s && s.value ? s.value : "normal";
+}
+
+async function jogRelease() {
+  if (jogDir === null && jogTimer === null) return;
+  const was = jogDir;
+  jogDir = null;
+  if (jogTimer !== null) { clearInterval(jogTimer); jogTimer = null; }
+  if (was !== null) await sendCommand("manual_jog_stop", "", null);
+}
+
+async function jogPress(dir) {
+  if (jogDir === dir) return;                 // pointer repeat; not a new request
+  if (jogDir !== null) await jogRelease();    // changing direction stops first
+  jogDir = dir;
+  const r = await sendCommand("manual_jog_start", dir + ":" + jogProfile(), null);
+  if (!r.ok) {
+    // Refused: wrong mode, malformed direction. Renewing a refusal at 10 Hz would bury
+    // the reason in a wall of identical rejections, so the press is abandoned here.
+    await jogRelease();
+    return;
+  }
+  if (jogDir !== dir) { await jogRelease(); return; }   // released while the POST flew
+  jogTimer = setInterval(async () => {
+    const k = await sendCommand("manual_jog_keepalive", "", null);
+    if (!k.ok) await jogRelease();   // the lease lapsed, or the mode changed, under us
+  }, JOG_KEEPALIVE_MS);
+}
+
+document.addEventListener("pointerdown", (ev) => {
+  const b = ev.target.closest("button[data-jog]");
+  if (b) jogPress(b.dataset.jog);
+});
+["pointerup", "pointercancel"].forEach((t) =>
+  document.addEventListener(t, () => { jogRelease(); }));
+// Three ways a held button silently stops being held, none of which produce a
+// pointerup: the window loses focus, the page is hidden, or the tab is closed. The
+// lease covers all of them anyway; releasing here just keeps the turret from spending
+// another 300 ms moving after the operator has plainly gone.
+window.addEventListener("blur", () => { jogRelease(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) jogRelease();
+});
+window.addEventListener("pagehide", () => { jogRelease(); });
+
 $("video-toggle").addEventListener("change", (e) => setVideo(e.target.checked));
 
 connect();
