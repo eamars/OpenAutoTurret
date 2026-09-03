@@ -182,6 +182,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <span id="mode-phase" class="badge">—</span>
       <span id="sup-state" class="badge">—</span>
       <span id="selection" class="badge">selected: none</span>
+      <span id="candidates" class="muted">candidates: none in view</span>
       <span id="sel-index-row">
         <input id="sel-index" type="number" min="1" step="1" style="width:4.5em"
                title="the label number on the overlay (Person #2 is 2)">
@@ -470,6 +471,47 @@ function render(t) {
   }
   // §45/§47: manual motion exists in MANUAL. Greyed rather than hidden, and the note
   // says why, because an operator who cannot find the control looks for a fault.
+  // §11: the candidate list. Rebuilt from the snapshot every frame rather than kept in
+  // sync with clicks, so what is on screen is what controld saw — a button that shows a
+  // person who left three seconds ago is worse than no button, and a list that lingers
+  // because the page is protecting its own DOM is exactly that.
+  const list = $("candidates");
+  if (list) {
+    const ts = Array.isArray(t.tracks) ? t.tracks : [];
+    const age = (typeof t.track_list_age_ms === "number") ? t.track_list_age_ms : -1;
+    const stale = age > 500;          // three detector frames at 30 Hz; vision is quiet
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!ts.length) {
+      list.textContent = "candidates: none in view";
+      list.className = "muted";
+    } else {
+      list.textContent = "";
+      ts.forEach((tr) => {
+        const b = document.createElement("button");
+        // textContent, never innerHTML: the label is assembled from a class name that
+        // arrived over a socket from the detector process. It is trusted to be a string
+        // and is not trusted to be safe markup.
+        b.textContent = (tr.label || ("#" + tr.display_index)) + " " +
+          Math.round((tr.confidence || 0) * 100) + "%" + (tr.selected ? " \u2713" : "");
+        b.disabled = !v3 || !tr.selectable || stale;
+        b.title = tr.class_name + " / " + tr.state +
+          (tr.selectable ? "" : " (not selectable, \u00a78)") +
+          (stale ? " \u2014 list is " + age + " ms old" : "");
+        b.addEventListener("click", () => {
+          sendCommand("select_target", String(tr.display_index), null);
+        });
+        list.appendChild(b);
+      });
+      if (stale) {
+        const note = document.createElement("span");
+        note.className = "err";
+        note.textContent = " (vision quiet for " + age + " ms \u2014 the list is the last " +
+          "thing controld received, not what the camera sees now)";
+        list.appendChild(note);
+      }
+      list.className = stale ? "muted" : "muted";
+    }
+  }
   const manualRow = $("manual-controls");
   if (manualRow) {
     const canManual = v3 && mode === "MANUAL";

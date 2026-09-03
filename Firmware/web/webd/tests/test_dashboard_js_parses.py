@@ -288,3 +288,46 @@ def test_step_choices_offered_are_the_ones_controld_allows():
     # Directions: four jog buttons, both axes, both signs.
     jogs = set(re.findall(r'data-jog="([^"]+)"', DASHBOARD_HTML))
     assert jogs == {"yaw+", "yaw-", "pitch+", "pitch-"}, jogs
+
+
+def test_candidate_list_is_built_from_telemetry_not_from_clicks():
+    """§11: the operator chooses from what the machine sees, not from what was last pressed.
+
+    Three things are checked because each has been the failure: the list must read the
+    published `tracks` array (a page that invents its own list is a second source of
+    truth), it must treat an aged list as unusable (controld deliberately does not rewrite
+    track states between frames — §58 puts association in visiond — so freshness is the
+    page's job), and the labels must reach the DOM as text, because a label is assembled
+    from a class name that arrived over a socket from another process.
+    """
+    src = DASHBOARD_HTML
+    assert "t.tracks" in src, "the candidate list is not read from the telemetry array"
+    assert "track_list_age_ms" in src, "the list's freshness is not consulted"
+    assert "select_target" in src, "candidate buttons do not name a target"
+
+    # No markup interpolation of anything that came off the wire.
+    inject = re.findall(r"innerHTML\s*=\s*[`\"][^`\"]*\$\{", src)
+    assert not inject, f"template interpolation into innerHTML: {inject[:3]}"
+
+    # The grey-out must be a threshold with a reason, not a bare truthiness test.
+    assert re.search(r"track_list_age_ms[^\n]*\n?[^\n]*>\s*\d+", src, re.M) or \
+        re.search(r"age\s*>\s*\d+", src), "no staleness threshold on the candidate list"
+
+
+def test_webd_declares_the_fields_the_dashboard_reads():
+    """The daemon re-serialises telemetry through its own dataclass, so any field the
+    page reads that the dataclass does not declare simply does not arrive — with no error
+    anywhere. `selected_track_id` once looked like a vision bug for exactly this reason.
+    """
+    from pathlib import Path
+
+    proto = (Path(__file__).resolve().parents[1] / "protocol.py").read_text(
+        encoding="utf-8"
+    )
+    for field_name in ("tracks", "track_count", "track_list_age_ms", "selected_display_index",
+                       "selection_visibility", "manual_lease_active", "roam_sweep_direction",
+                       "confidence_band"):
+        assert re.search(rf"^\s*{field_name}\s*:", proto, re.M), (
+            f"webd does not declare {field_name}: the dashboard would read undefined "
+            "and the dashboard's own fallback text would hide it"
+        )

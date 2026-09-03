@@ -469,7 +469,8 @@ class ControlLoop {
   CommandAck last_ack_;              // §52: the answer to the last command
   uint64_t ack_seq_ = 0;
   TimeNs now_ns_ = 0;              // this cycle's clock, for command timestamps
-  uint64_t selected_track_id_ = 0;   // low half of the UUID being followed (§78)
+  uint64_t selected_track_id_ = 0;
+  TimeNs last_set_receive_ns_ = 0;   // §78: the age of the published candidate list   // low half of the UUID being followed (§78)
   tracks::TargetSelectionManager selection_;
   // §15-§20: AUTO_TRACK's own state machine, and the facts it was last fed. The input
   // is refreshed whenever a TrackSet arrives (camera rate) and read every control cycle,

@@ -92,6 +92,15 @@ class Telemetry:
     selection_ambiguous: bool = False
     reacquisition_score: float = 0.0
     ambiguity_margin: float = 0.0
+    # §11/§78: the candidate list. A list of plain dicts rather than a nested
+    # dataclass, because telemetry_from_json copies values straight through and
+    # asdict() on the way out would otherwise rebuild objects on every telemetry
+    # frame for no reader's benefit. Undeclared fields here do not merely lose
+    # their type — they disappear from the re-serialised frame entirely, which is
+    # how selected_track_id once looked like a vision bug.
+    track_count: int = 0
+    track_list_age_ms: int = -1
+    tracks: list = field(default_factory=list)
     roam_target_yaw_rad: float = 0.0
     roam_sweep_direction: int = 0
     manual_lease_active: bool = False

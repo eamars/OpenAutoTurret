@@ -27,7 +27,26 @@ namespace ota {
 namespace telemetry {
 
 // §6.3 telemetry snapshot (published at 10-20 Hz).
+// §78/§11: one candidate as the machine sees it, for the operator's list and the
+// overlay. Fixed size and POD on purpose: this sits inside the snapshot the control
+// thread fills at 200 Hz, so it must not allocate, and a bounded list is also the
+// honest one — §58 caps what a TrackSet carries, and a telemetry list that could grow
+// would be a second, unbounded buffer behind it.
+struct TrackListing {
+  uint64_t uuid_lo = 0;
+  uint16_t display_index = 0;
+  char label[24] = {};        // "Person #2" (§10) — what the operator reads
+  char class_name[16] = {};   // as the detector named it
+  char state[16] = {};        // CONFIRMED | TENTATIVE | OCCLUDED | LOST
+  float confidence = 0.0f;
+  float anchor_x = 0.0f;      // normalised, for the overlay's box
+  float anchor_y = 0.0f;
+  bool selectable = false;    // §8: only CONFIRMED can be chosen
+  bool selected = false;      // the operator's choice, marked in the list
+};
+
 struct TelemetrySnapshot {
+  static constexpr int kMaxTrackList = 8;
   TimeNs timestamp_ns = 0;
   // Control-loop phase name ("idle"|"homing"|"hold"|"parking"|"parked"|
   // "fault"|"payload_check") + the fault reason when phase=fault. §6.3 lists
@@ -88,6 +107,19 @@ struct TelemetrySnapshot {
   // profile it is running at. The remaining time is published rather than inferred
   // because the operator's question is "if the tab dies now, when does it stop" — and
   // the answer must come from the machine that would do the stopping.
+  // §11/§78: the candidates in the last TrackSet controld received, in display-index
+  // order. Without this the UI can say *that* there are two people and cannot show
+  // *which is which*, which is the whole of the candidate list.
+  std::array<TrackListing, kMaxTrackList> tracks{};
+  int track_count = 0;
+  // How long ago the newest frame in that list arrived, measured on controld's own clock
+  // (0..n; -1 when no set has ever been received). Published because controld must not
+  // invent track state between frames — association is visiond's per-frame job (§58), so
+  // with vision silent the last set stays exactly as it was received, and the *only*
+  // honest way to show that is to say how old it is. A page that greys the list on this
+  // number is truthful; a controld that rewrote CONFIRMED to LOST on a timer would be
+  // reporting an inference as an observation.
+  int64_t track_list_age_ms = -1;
   bool manual_lease_active = false;
   int64_t manual_lease_remaining_ms = 0;
   std::string manual_profile;

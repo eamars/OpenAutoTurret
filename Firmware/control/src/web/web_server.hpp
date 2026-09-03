@@ -132,6 +132,28 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"selection_ambiguous\":" << (s.selection_ambiguous ? 1 : 0)
      << ",\"reacquisition_score\":" << s.reacquisition_score
      << ",\"ambiguity_margin\":" << s.ambiguity_margin
+     << ",\"track_count\":" << s.track_count
+     << ",\"track_list_age_ms\":" << s.track_list_age_ms
+     << ",\"tracks\":["
+     << [&s]() {
+          std::string out;
+          for (int i = 0; i < s.track_count; ++i) {
+            const telemetry::TrackListing& t = s.tracks[i];
+            if (i) out += ",";
+            out += "{\"uuid\":" + std::to_string(t.uuid_lo) +
+                   ",\"display_index\":" + std::to_string(t.display_index) +
+                   ",\"label\":\"" + json_escape(t.label) + "\"" +
+                   ",\"class_name\":\"" + json_escape(t.class_name) + "\"" +
+                   ",\"state\":\"" + json_escape(t.state) + "\"" +
+                   ",\"confidence\":" + std::to_string(t.confidence) +
+                   ",\"anchor_x\":" + std::to_string(t.anchor_x) +
+                   ",\"anchor_y\":" + std::to_string(t.anchor_y) +
+                   ",\"selectable\":" + (t.selectable ? "true" : "false") +
+                   ",\"selected\":" + (t.selected ? "true" : "false") + "}";
+          }
+          return out;
+        }()
+     << "]"
      << ",\"roam_target_yaw_rad\":" << s.roam_target_yaw_rad
      << ",\"roam_sweep_direction\":" << s.roam_sweep_direction
      << ",\"manual_lease_active\":" << (s.manual_lease_active ? 1 : 0)

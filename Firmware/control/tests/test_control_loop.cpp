@@ -854,3 +854,91 @@ TEST(AmbiguousReacquisition, OneClearCandidateIsFollowedAgainWithoutAClick) {
   EXPECT_EQ(h.snap().selected_display_index, 1)
       << "and it must be the person that was chosen, not a new identity";
 }
+
+// --- §11/§78: the candidate list itself. A count is not a choice: the operator has to
+//     be able to see who is in view, what the machine calls them, and which one is
+//     already named — and the list has to be the same one the selection was validated
+//     against, or the page offers labels controld will refuse.
+TEST(CandidateList, BothPeopleAreListedAndNamingOneMarksIt) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2, 0.90f, 0.70f, 0.30f, 0.70f);
+  feed(h, set, 10, 10);
+
+  auto snap = h.snap();
+  ASSERT_EQ(snap.track_count, 2)
+      << "two people were published and the operator's list shows "
+      << snap.track_count;
+  EXPECT_EQ(snap.tracks[0].display_index, 1);
+  EXPECT_EQ(snap.tracks[1].display_index, 2);
+  EXPECT_STREQ(snap.tracks[0].label, "Person #1");
+  EXPECT_STREQ(snap.tracks[1].label, "Person #2");
+  EXPECT_STREQ(snap.tracks[0].state, "CONFIRMED");
+  EXPECT_TRUE(snap.tracks[0].selectable);
+  EXPECT_NE(snap.tracks[0].anchor_x, 0.0f)
+      << "no anchor means the overlay cannot draw a box around the thing it is listing";
+  EXPECT_NE(snap.tracks[0].uuid_lo, snap.tracks[1].uuid_lo);
+  EXPECT_EQ(snap.tracks[0].selected, false)
+      << "nobody has chosen anybody yet";
+
+  h.run("select_target", "2");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  snap = h.snap();
+  EXPECT_TRUE(snap.tracks[1].selected) << "the list does not show the operator's own choice";
+  EXPECT_FALSE(snap.tracks[0].selected)
+      << "the list marks the wrong person as chosen, which is worse than marking nobody";
+}
+
+TEST(CandidateList, ATentativeCandidateIsListedButNotSelectable) {
+  // §8: TENTATIVE is visible but not choosable. Hiding it entirely would be the worse
+  // lie — the operator can see a person standing there, and the list has to explain why
+  // that person cannot be named yet rather than silently omitting them.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = make_set_with(tracks::TrackState::Tentative, 1, 0.95f);
+  feed(h, set, 3, 5);
+  auto snap = h.snap();
+  ASSERT_EQ(snap.track_count, 1);
+  EXPECT_STREQ(snap.tracks[0].state, "TENTATIVE");
+  EXPECT_FALSE(snap.tracks[0].selectable);
+
+  // And controld agrees with the page: the label is refused, not silently accepted.
+  h.run("select_target", "1");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0)
+      << "the list said not-selectable and the daemon accepted the selection anyway";
+}
+
+TEST(CandidateList, VisionGoingQuietAgesTheListInsteadOfRewritingIt) {
+  // The tempting behaviour is for controld to rewrite CONFIRMED to LOST after a
+  // timeout, and it is wrong: association happens once per detector frame, in visiond
+  // (§58). With no frames there is no new observation to report, and inventing one is
+  // reporting an inference as a fact. What controld can say truthfully — and must — is
+  // how long ago the newest frame in the list arrived, so the page can grey it out.
+  // The selection's own staleness (§14) is the separate, already-tested mechanism that
+  // decides whether the machine still believes it may follow somebody.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2);
+  feed(h, set, 10, 10);
+  ASSERT_EQ(h.snap().track_count, 2);
+  EXPECT_GE(h.snap().track_list_age_ms, 0);
+
+  for (int i = 0; i < 600; ++i) h.step(1);  // 3 s of silence
+  auto snap = h.snap();
+  EXPECT_GT(snap.track_list_age_ms, 2500)
+      << "the list is published as if it were current; its age is "
+      << snap.track_list_age_ms << " ms";
+  bool still_confirmed = false;
+  for (int i = 0; i < snap.track_count; ++i)
+    still_confirmed = still_confirmed || (std::string(snap.tracks[i].state) == "CONFIRMED");
+  EXPECT_TRUE(still_confirmed)
+      << "controld rewrote a state it has not observed since; the age field exists so "
+         "it does not have to";
+  // What *is* allowed to change on controld's own clock is its belief about following.
+  EXPECT_NE(snap.selection_visibility, "VISIBLE")
+      << "vision has been silent for 3 s and the selection still claims to be looking "
+         "at the person";
+}

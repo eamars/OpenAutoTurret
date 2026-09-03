@@ -1029,6 +1029,50 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // for every unit test and for controld started without a vision socket, while the
     // turret was in fact tracking something — a field that lies only in some
     // configurations is worse than one that is missing.
+    // §11/§78: publish the candidates, not just a count. The distinction matters at
+    // 11 pm over a network link: "2 tracks" tells the operator the detector is alive,
+    // and nothing at all about which one to name. The list comes from the set the
+    // selection manager holds, so it is by construction the same list the selection was
+    // validated against — a UI built on a different copy could offer a label controld
+    // would refuse, which is the dead-button problem again.
+    snap.track_count = 0;
+    snap.track_list_age_ms =
+        last_set_receive_ns_ > 0 ? static_cast<int64_t>((now_ns - last_set_receive_ns_) /
+                                                        1000000)
+                                : -1;
+    {
+      const tracks::TrackSet& shown = selection_.last_set();
+      const tracks::Track* chosen = selection_.selected_track();
+      for (int i = 0; i < shown.count && snap.track_count < telemetry::TelemetrySnapshot::kMaxTrackList;
+           ++i) {
+        const tracks::Track& t = shown.tracks[i];
+        telemetry::TrackListing& out = snap.tracks[snap.track_count++];
+        out = telemetry::TrackListing{};
+        out.uuid_lo = t.uuid.lo;
+        out.display_index = t.display_index;
+        // Same shape as the selection's own descriptor (§10): a label is a label in
+        // both places or the operator is being shown two vocabularies.
+        char cap[16];
+        std::snprintf(cap, sizeof cap, "%s", t.class_name);
+        if (cap[0] >= 'a' && cap[0] <= 'z') cap[0] = static_cast<char>(cap[0] - 32);
+        std::snprintf(out.label, sizeof out.label, "%s #%u", cap,
+                      static_cast<unsigned>(t.display_index));
+        std::snprintf(out.class_name, sizeof out.class_name, "%s", t.class_name);
+        // Telemetry's state vocabulary is uppercase throughout (READY, VISIBLE,
+        // SWEEP); the tracks header names these lowercase for the vision wire. Both are
+        // right where they live, and a page that compares one against the other needs
+        // the conversion said out loud rather than a mix of cases to debug.
+        std::snprintf(out.state, sizeof out.state, "%s",
+                      tracks::track_state_name(t.state));
+        for (char* c = out.state; *c; ++c)
+          if (*c >= 'a' && *c <= 'z') *c = static_cast<char>(*c - 32);
+        out.confidence = t.detector_confidence;
+        out.anchor_x = t.anchor_x;
+        out.anchor_y = t.anchor_y;
+        out.selectable = t.state == tracks::TrackState::Confirmed;
+        out.selected = chosen != nullptr && chosen->uuid.lo == t.uuid.lo;
+      }
+    }
     snap.selected_track_id = selected_track_id_;
     {
       const auto& sel = selection_.selection();
@@ -1719,6 +1763,7 @@ void ControlLoop::feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns)
 
 const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
                                                   TimeNs now) {
+  last_set_receive_ns_ = now;
   // §17's chain, entered from the v3 door: the set is observed, a track is chosen, and
   // the result is handed to the v1 estimator as a pixel measurement. Everything from
   // "pixel" rightwards — ray, motor interpolation at the SensorTimestamp, LOS, the
