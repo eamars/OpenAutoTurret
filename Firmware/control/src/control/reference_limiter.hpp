@@ -38,6 +38,9 @@ struct ReferenceLimiter {
   // frame, and an unsmoothed derivative of that noise would be fed straight into the reference -
   // which is how a limiter meant to remove jitter would become its source.
   double target_v_rad_s = 0.0;
+  // The profile's own acceleration. A state, not a per-cycle recomputation, because the whole point
+  // of the third-order limiter is that acceleration cannot change instantaneously.
+  double a_rad_s2 = 0.0;
   double prev_target_rad = 0.0;
   bool have_prev_target = false;
 
@@ -46,11 +49,37 @@ struct ReferenceLimiter {
   void reset_at(double q0_rad) {
     q_rad = q0_rad;
     v_rad_s = 0.0;
+    a_rad_s2 = 0.0;
     target_v_rad_s = 0.0;
     have_prev_target = false;
     initialised = true;
   }
 };
+
+// Distance needed to bring the profile to a stop from speed `v_rad_s` while its acceleration is
+// currently `a_rad_s2`, given both ceilings. With bounded jerk this is strictly more than v^2/2a,
+// because the profile first has to spend TIME turning its acceleration around, and it travels while
+// doing so. The closed form is short: ramp a to -a_max over t1 = (a + a_max)/j, then coast down at
+// -a_max. Where the ramp alone would already have stopped it, the ramp expression is used as-is,
+// which overestimates - and overestimating here means braking earlier, which is the safe direction.
+//
+// This function exists because omitting it is not a small error: with the plain v^2/2a rule the
+// profile entered every final approach with the turnaround still to pay, overshot by 0.16 deg, and
+// never landed at all - it was still travelling at 21 deg/s two hundred simulated seconds in.
+inline double stopping_distance_rad(double v_rad_s, double a_rad_s2, double a_max_rad_s2,
+                                    double j_max_rad_s3) {
+  const double av = std::abs(v_rad_s);
+  if (av <= 0.0 || a_max_rad_s2 <= 0.0) return 0.0;
+  if (j_max_rad_s3 <= 0.0) return (av * av) / (2.0 * a_max_rad_s2);
+
+  const double sgn = (v_rad_s >= 0.0) ? 1.0 : -1.0;
+  const double a_on = std::max(-a_max_rad_s2, std::min(a_max_rad_s2, a_rad_s2 * sgn));  // along motion
+  const double t1 = (a_on + a_max_rad_s2) / j_max_rad_s3;
+  const double d1 = av * t1 + 0.5 * a_on * t1 * t1 - j_max_rad_s3 * t1 * t1 * t1 / 6.0;
+  const double v1 = av + a_on * t1 - 0.5 * j_max_rad_s3 * t1 * t1;
+  if (v1 <= 0.0) return std::max(0.0, d1);
+  return std::max(0.0, d1 + (v1 * v1) / (2.0 * a_max_rad_s2));
+}
 
 // Advance one control period toward `target_rad`, never exceeding `v_max_rad_s` or `a_max_rad_s2`,
 // and return the reference to publish this cycle.
@@ -61,8 +90,13 @@ struct ReferenceLimiter {
 // requirement (b) calls oscillation. Position is then integrated from the velocity that survived
 // the a_max ramp; capping position and velocity independently instead would let the position run
 // away from the speed the profile claims to have.
+// j_max_rad_s3 is deliberately not defaulted: every caller must say what jerk the machine allows,
+// because a call site that quietly omitted it would restore the exact defect this exists for (the
+// station measured 793 deg/s^3 median against a configured 300). Passing 0 means "no jerk figure is
+// configured for this axis", which falls back to ramping acceleration no further than a_max itself -
+// the previous behaviour, not an unlimited jump.
 inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt_s,
-                              double v_max_rad_s, double a_max_rad_s2) {
+                              double v_max_rad_s, double a_max_rad_s2, double j_max_rad_s3) {
   if (!st.initialised) {
     st.reset_at(target_rad);
     return st.q_rad;
@@ -85,6 +119,7 @@ inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt
     // carried speed off at a_max rather than teleporting onto the target or pressing on regardless.
     const double dv = (a_max_rad_s2 > 0.0) ? a_max_rad_s2 * dt_s : std::abs(st.v_rad_s);
     st.v_rad_s -= std::copysign(std::min(dv, std::abs(st.v_rad_s)), st.v_rad_s);
+    st.a_rad_s2 = 0.0;
     st.q_rad += st.v_rad_s * dt_s;
     return st.q_rad;
   }
@@ -116,16 +151,67 @@ inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt
     // moved one way would have shipped a turret that tracked left and not right.
     const double dist_ahead =
         std::max(0.0, std::abs(err) - std::abs(st.v_rad_s) * 0.5 * dt_s);
-    u_want += std::sqrt(2.0 * a_max_rad_s2 * dist_ahead);
+    // Reserve what it will cost to turn the acceleration around before braking is even possible,
+    // then brake against what is left. Omitting this is what made the profile arrive too fast to
+    // stop and never land.
+    const double reserve =
+        std::max(0.0, stopping_distance_rad(st.v_rad_s, st.a_rad_s2, a_max_rad_s2, j_max_rad_s3) -
+                          (st.v_rad_s * st.v_rad_s) / (2.0 * a_max_rad_s2));
+    u_want += std::sqrt(2.0 * a_max_rad_s2 * std::max(0.0, dist_ahead - reserve));
   } else {
     u_want = std::max(u_want, std::abs(err) / dt_s);
   }
   u_want = std::min(u_want, v_max_rad_s);
 
-  const double dv_cap =
-      (a_max_rad_s2 > 0.0) ? a_max_rad_s2 * dt_s : std::abs(u_want - st.v_rad_s * dir);
   const double v_want = u_want * dir;
-  st.v_rad_s += std::max(-dv_cap, std::min(dv_cap, v_want - st.v_rad_s));
+  if (a_max_rad_s2 > 0.0 && j_max_rad_s3 > 0.0) {
+    // Third order, which is the whole reason this branch exists. Capping the MAGNITUDE of
+    // acceleration while still changing it in steps bounds jerk only by a_max/dt - 12,000 deg/s^3
+    // at 200 Hz against the 300 the station configures - and that is precisely the 793 deg/s^3
+    // median that was measured on the real axis. Capping a quantity is not the same as ramping it,
+    // and the mistake had simply moved one derivative down.
+    double a_want = std::max(-a_max_rad_s2,
+                             std::min(a_max_rad_s2, (v_want - st.v_rad_s) / dt_s));
+    // Do not ask for acceleration that would push through the speed ceiling: cap it to what reaches
+    // the ceiling exactly this cycle. The first version asked for it, integrated it, and then
+    // clamped the velocity and ZEROED the acceleration in the same cycle - which bounded jerk at
+    // a_max/dt, 12,000 deg/s^3, while the file was busy claiming to limit jerk to 300. Fixing one
+    // step discontinuity by adding another is the same mistake with a different sign, and the test
+    // that caught it measured 6,900 deg/s^3 in simulation before it ever reached hardware.
+    if (a_want * st.v_rad_s > 0.0 || (st.v_rad_s == 0.0 && a_want != 0.0)) {
+      // Reserve the speed that will still be gained while the acceleration is being ramped back to
+      // zero - a^2/2j - before asking for any more. Without that term the profile only discovers the
+      // ceiling when it is already against it, and then either cuts acceleration in one cycle (a
+      // 6,900 deg/s^3 jolt, measured, which is the very defect this file was written to remove) or
+      // overshoots the ceiling and has to be clipped, which is the same jolt in the velocity.
+      // Anticipating it is what makes the arrival at full speed a curve instead of a corner.
+      const double ramp_gain =
+          (j_max_rad_s3 > 0.0) ? (st.a_rad_s2 * st.a_rad_s2) / (2.0 * j_max_rad_s3) : 0.0;
+      const double head_room = v_max_rad_s - std::abs(st.v_rad_s) - ramp_gain;
+      a_want = std::min(a_want * ((st.v_rad_s != 0.0) ? (st.v_rad_s > 0.0 ? 1.0 : -1.0)
+                                                     : (a_want > 0.0 ? 1.0 : -1.0)),
+                        head_room / dt_s) *
+               ((st.v_rad_s != 0.0) ? (st.v_rad_s > 0.0 ? 1.0 : -1.0)
+                                    : (a_want > 0.0 ? 1.0 : -1.0));
+    }
+    const double da_cap = j_max_rad_s3 * dt_s;
+    st.a_rad_s2 += std::max(-da_cap, std::min(da_cap, a_want - st.a_rad_s2));
+    // No clamp here any more, and that is deliberate. The head-room cap above reserves a^2/2j of
+    // speed, so the ceiling is approached on a curve and never crossed; clamping the already-ramped
+    // acceleration to "whatever reaches the ceiling this cycle" was an instantaneous cut, and it is
+    // what put p95 jerk at 340 and the peak at 851 deg/s^3 on hardware while the median sat exactly
+    // at the 300 the construction promises. Every change to acceleration now goes through the jerk
+    // ramp, which is the only way the limit is true rather than approximate.
+    st.v_rad_s += st.a_rad_s2 * dt_s;
+    // Dust only: nothing should reach this, and if it does it is a rounding hair, not a clamp.
+    if (std::abs(st.v_rad_s) > v_max_rad_s)
+      st.v_rad_s = std::copysign(v_max_rad_s, st.v_rad_s);
+  } else {
+    const double dv_cap =
+        (a_max_rad_s2 > 0.0) ? a_max_rad_s2 * dt_s : std::abs(v_want - st.v_rad_s);
+    st.v_rad_s += std::max(-dv_cap, std::min(dv_cap, v_want - st.v_rad_s));
+    st.a_rad_s2 = 0.0;
+  }
   st.q_rad += st.v_rad_s * dt_s;
 
   // Finish the move - but only when finishing is something this axis could actually do. Zeroing the
@@ -147,6 +233,7 @@ inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt
       std::abs(target_rad - st.q_rad) <= snap_floor) {
     st.q_rad = target_rad;
     st.v_rad_s = 0.0;
+    st.a_rad_s2 = 0.0;  // inside the same position resolution as the snap above, not a real jolt
   }
   return st.q_rad;
 }

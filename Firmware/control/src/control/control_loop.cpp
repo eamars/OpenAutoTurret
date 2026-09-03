@@ -855,9 +855,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // pose is near a boundary, so the profile can never ask for more speed than the envelope
           // permits at that pose. Position stays inside constrain_reference either way.
           if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
-          q_ref[i] = ota::control::limit_reference(ref_lim_[i], solved,
-                                     static_cast<double>(period_ns) * 1.0e-9, lim[i],
-                                     cfg_.a_brake_rad_s2);
+          q_ref[i] = ota::control::limit_reference(
+              ref_lim_[i], solved, static_cast<double>(period_ns) * 1.0e-9, lim[i],
+              cfg_.a_brake_rad_s2, cfg_.j_brake_rad_s3);
         }
         ref_lim_engaged_ = true;
         break;
@@ -1193,6 +1193,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // reference move smoothly, and did the axis follow it - can be answered separately instead of
     // inferred from one differenced feedback channel. Only while a tracking reference is active, so
     // a station at rest does not write a stream nobody asked for.
+    // Publish the profile's OWN rate and acceleration, now that it has them. The block above
+    // re-derives both by differencing the published reference, which was the only way when the
+    // reference was a bare solve - and on hardware it turned out to be the noise source, not the
+    // motion: the worst "jerk" events came with a real velocity change of 0.36 deg/s (36 deg/s^2,
+    // inside the limit) while the derived column swung 11-15 deg/s^2 between adjacent lines. After
+    // the limiter, acceleration is a state of the profile, so the state is what gets published; the
+    // derived figures stay as the fallback for paths that have no profile (a quiet hold, homing).
+    if (ref_lim_engaged_) {
+      snap.q_ref_rate_yaw_rad_s = ref_lim_[ix(AxisId::Yaw)].v_rad_s;
+      snap.q_ref_rate_pitch_rad_s = ref_lim_[ix(AxisId::Pitch)].v_rad_s;
+      snap.q_ref_accel_yaw_rad_s2 = ref_lim_[ix(AxisId::Yaw)].a_rad_s2;
+      snap.q_ref_accel_pitch_rad_s2 = ref_lim_[ix(AxisId::Pitch)].a_rad_s2;
+      snap.q_ref_rate_valid = true;
+    }
     if (snap.tracking_active && (tracking_log_cycle_++ & 1) == 0) {
       spdlog::info(
           "track-motion t={:.2f}ms q={:+.5f} v={:+.4f} qref={:+.5f} vref={:+.4f} "
