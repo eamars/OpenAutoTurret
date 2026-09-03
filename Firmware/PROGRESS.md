@@ -1392,3 +1392,44 @@ code to match a wrong expectation. Each fix went to the assertion after checking
 
 **435 pytest (+12), 57 CTest.** Station homed, ready, MANUAL / HOLD. §110: 0 items accepted on hardware by
 a named person.
+
+## 2026-09-04, 15:0x — round 17: the vision pipeline had been dead for four rounds, and my own restarts killed it
+
+Probing a §20 field (`camera.fps`, which I had been quoting as "supplied" while it read 0) turned up
+something bigger: **`vision_track_sets: 0`, `track_list_age_ms: -1` — no TrackSets had reached controld at
+all since the round-13 controld restart.** `visiond` is not a service (`turret-vision` does not exist as a
+unit; it has always been hand-started), so every controld restart in rounds 13, 14 and 16 silently left
+the ingest socket with nothing connecting.
+
+**What this degrades, said plainly:** the `select_target` refusals I reported in rounds 13–16 as good gate
+evidence ("no vision data has reached controld yet") were *also* a symptom of a dead input, and I read them
+as "correct refusal for a nonexistent target" without asking why there was no vision whatsoever. The §20
+evidence from those rounds is weaker than it looked: `camera.fps 0`, `camera.measurement_age_ms null`,
+and the prediction cue **never exercised with real tracks**. The HUD was telling the truth the whole time —
+`VISION` chip amber, `NO SETS` — while I was not reading the chip I had written.
+
+**Rule for every future round: after any controld restart, restart `visiond` too, and check
+`vision_track_sets > 0` before trusting any evidence that depends on vision.**
+
+Restored with the documented synthetic mode (`--synthetic`, no IMX500 and no motor; still MANUAL/HOLD,
+nothing commanded): `vision_track_sets 299`, `camera_fps 30`, `track_list_age_ms 20`, `track_count 2`, and
+the `VISION` chip computes green from live data. **Synthetic targets — plumbing evidence only, never
+acceptance evidence for (a)/(b).**
+
+Then the first real end-to-end run of the drawer's central claim, over live TrackSets rather than a
+fixture: the TARGETS drawer listed `#3 PERSON` and `#2 PERSON` and built `select_target 3` / `select_target
+2` with confidence notes. Sending exactly what the button sends hit a genuine race — the synthetic identities
+churned between snapshot and command — so the response came back `verdict:"submitted"` while the published
+ack read **`accepted 0, "no target # 3 in the current frame"`**. That is the two-channel design working on
+an unrehearsed race instead of a contrived one: the drawer shows the refusal with the daemon's reason, not a
+phantom selection. Selection stayed empty, mode stayed MANUAL/HOLD, nothing moved; `clear_target` confirmed
+clean.
+
+**Almost reported a second invented defect:** `prediction_valid` came back absent from my probe and looked
+like the declare-or-lose trap again, but the page reads the nested `prediction` container (17 uses) and
+never the flat key — the invented key was in my *diagnostic script*, not in the page. Fifth time this
+session that a wrong key produced a confident-sounding finding; the check that settles it costs one grep,
+so it is always cheaper to spend it.
+
+No code changed this round. **435 pytest, 57 CTest** (unchanged, re-verified). Station homed, ready,
+MANUAL/HOLD, synthetic vision flowing. §110: still 0 items accepted on hardware by a named person.
