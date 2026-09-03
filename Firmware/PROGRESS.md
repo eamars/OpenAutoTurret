@@ -1330,3 +1330,32 @@ bind failure and the serving process's age (both pids 28 s, no `Errno 98`).
 
 57 CTest, 408 pytest (+31). Station homed, ready, holding. §110: still 0 items accepted on hardware by a
 named person.
+
+## 2026-09-04, 14:0x — round 15: §15 / §16 / §18 audit, and an undeclared token that silently deleted three rules
+
+**The bug.** Three rules — dock buttons, drawer body, safety indication — read `var(--hud-mono)` inside a
+`font:` **SHORTHAND**. **Nothing declared that token.** An undefined custom property in a shorthand makes
+the *whole declaration* invalid at computed-value time, so those rules did not fall back to the inherited
+font — the browser discarded **size and weight too**. The dock would have rendered in the UA's serif button
+font at UA size: §16's typography simply absent in the newest parts, with every test green because each one
+asserted a substring it already knew was there. The suite now asserts **every `var()` read is a token
+declared**, and asserts the check fails on the stylesheet that actually shipped for three rounds.
+
+**Caught by an older test:** my first fix left the stack literal in `html, body` *and* added the token; the
+tapes-round test — *"the font stack is set once; three copies is how they drift"* — failed immediately and
+was right. The literal is gone.
+
+**Conformance fixes:** mode phase 13→11px and selected 12→11px so the tape value (12px) is the strongest
+numeric text per §16 — **only HTML divs shrunk**; the boxed tape value is text-metric sized with a fixed
+baseline constant, so enlarging SVG text blind would change layout nobody can verify. Safety indication
+**45 → 50**: §18 has no row for it, and at 20 a drawer would cover a FAULT banner, making §22's "interrupt
+normal operation" false the moment DIAG opens; 60 stays reserved-and-unimplemented, §17's z=1 filter absent
+by choice with a test recording the absence. A **refused command is amber, not red** — §15 restricts red to
+fault/stop, and spending red on inconvenience trains the operator to ignore FAULT.
+
+**Recorded as not done:** candidate labels share `tlbl` with scale labels, so §16's small-vs-medium-small
+step is unexpressed — deferred rather than fixed blind, same reason as the SVG sizing above.
+
+15 new tests. **423 pytest, 57 CTest.** Served page: no undeclared tokens, one stack, layers
+0/10/20/30/40/50, refusal amber; fresh webd (no `Errno 98`, pids 9 s old). **Still no real-browser paint in
+this project's evidence** — §24 stays operator-signed. §110: 0 items accepted on hardware by a named person.

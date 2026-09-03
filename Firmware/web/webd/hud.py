@@ -1188,10 +1188,19 @@ HUD_CSS = r"""
   --hud-white: #edf2eb;
   --hud-black: rgba(3,6,5,.80);
   --hud-line: rgba(230,245,230,.24);
+  /* §16's stack, declared as a token because three later rules read var(--hud-mono) inside a `font:`
+     SHORTHAND. An undefined custom property makes the whole shorthand invalid at computed-value time,
+     which drops the size and weight too - so an undeclared token is not "falls back to the inherited
+     font", it is "the dock renders in the browser's serif default at 13px". Static review does not show
+     that; a test that every var() is declared does. */
+  --hud-mono: "IBM Plex Mono", "Roboto Mono", "SFMono-Regular", Consolas, monospace;
 }
 /* §16: narrow monospaced sensor display, not a proportional UI font. */
 html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
-  font-family: "IBM Plex Mono", "Roboto Mono", "SFMono-Regular", Consolas, monospace;
+  /* The stack lives in one place. An earlier revision of this file carried it here as a literal AND in
+     var(--hud-mono), which a test written before that change had already warned about: "the font stack
+     is set once; three copies is how they drift". */
+  font-family: var(--hud-mono);
   color: var(--hud-white); }
 #viewport { position: fixed; inset: 0; }
 /* §18 layering, exactly as specified. */
@@ -1200,8 +1209,8 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
 #overlay { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
 #mode-block { position: absolute; left: 1%; top: 1.2%; z-index: 20; text-shadow: 0 0 6px rgba(0,0,0,.9); }
 #mode-block .m1 { color: var(--hud-green); font-size: 20px; letter-spacing: .12em; }
-#mode-block .m2 { color: var(--hud-white); font-size: 13px; letter-spacing: .12em; opacity: .86; }
-#mode-block .m3 { color: var(--hud-white); font-size: 12px; letter-spacing: .12em; opacity: .62; }
+#mode-block .m2 { color: var(--hud-white); font-size: 11px; letter-spacing: .12em; opacity: .86; }
+#mode-block .m3 { color: var(--hud-white); font-size: 11px; letter-spacing: .12em; opacity: .62; }
 #health { position: absolute; right: 1%; top: 1.2%; z-index: 20; display: flex; gap: 6px; }
 .chip { display: flex; align-items: center; gap: 5px; padding: 3px 7px; font-size: 10px;
   letter-spacing: .1em; background: var(--hud-black); border: 1px solid var(--hud-line);
@@ -1262,11 +1271,11 @@ text.lbl { font-size: 11px; letter-spacing: .08em; font-family: inherit; }
 #drawer .drow.confirm .rl { color:#f2b329; }
 #drawer .dack { margin-top:6px; font-size:9px; letter-spacing:.05em; color:rgba(149,245,139,.56); }
 #drawer .dack.ok { color:#95f58b; }
-#drawer .dack.bad { color:#ff5d5d; }
+#drawer .dack.bad { color:var(--hud-amber); }
 
 /* --- §22 safety presentation ------------------------------------------------ */
 #safety { position:absolute; left:50%; top:16%; transform:translateX(-50%); text-align:center;
-          font-family:var(--hud-mono); z-index:45; }
+          font-family:var(--hud-mono); z-index:50; }
 #safety[hidden] { display:none; }
 #safety .s1 { font-size:22px; letter-spacing:.22em; }
 #safety .s2 { font-size:11px; letter-spacing:.08em; margin-top:3px; opacity:.9; }
