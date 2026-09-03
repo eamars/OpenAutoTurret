@@ -44,6 +44,7 @@
 #include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
 #include "control/reference_manager.hpp"
+#include "control/reference_limiter.hpp"
 #include "control/safety_envelope.hpp"
 #include "control/safety_supervisor.hpp"
 #include "control/tracking_controller.hpp"
@@ -494,6 +495,13 @@ class ControlLoop {
   double ref_accel_pitch_ = 0.0;
   int64_t ref_prev_ns_ = 0;
   bool ref_rate_init_ = false;
+  // One profile per axis, so yaw and pitch are shaped independently (a target moving diagonally
+  // gives them different amounts to do, and a shared profile would make the slower axis dictate).
+  ota::control::ReferenceLimiter ref_lim_[kAxisCount];
+  // True on a cycle that published a shaped reference, so the first cycle of an engagement re-seats
+  // the profile at the pose the hardware is actually in instead of at wherever the last one ended.
+  bool ref_lim_engaged_ = false;
+  unsigned tracking_log_cycle_ = 0;
   std::optional<bool> search_override_;  // enable_search / disable_search
   // v3 §53: converts the authoritative mode's intent into a joint reference.
   // Built from the commissioned kinematics when a tracking session is configured

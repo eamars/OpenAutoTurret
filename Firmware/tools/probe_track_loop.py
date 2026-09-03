@@ -738,6 +738,7 @@ def main() -> int:
                 ra = s.get("q_ref_accel_yaw_rad_s2")
                 rows.append({"t": t, "phase": phase, "aim_err": aim_err, "lead": lead,
                              "ref_v": rv, "ref_a": ra, "q_ref": s.get("q_ref_yaw_rad"),
+                             "vs": s.get("intent_velocity_scale"),
                              "lead_tgt": lead_tgt, "lead_pred": lead_pred,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
@@ -819,6 +820,11 @@ def main() -> int:
         # dividing a two-interval change by one interval inflates the rate, and a rate limit claim
         # lives or dies on that denominator. So each change is timed from the last sample that held
         # a different value, which is the shortest interval the data can honestly support.
+        # The ceiling in force is NOT the configured 30 deg/s: the intent carries a confidence
+        # derating (section 19) that multiplies it, and it was measured dipping to 0.217 mid-dart.
+        # Judging the reference against 30 while a 0.25 scale was in force would blame the profile
+        # for obeying a policy. Each change is therefore scored against the smallest ceiling seen
+        # across the interval that change covers (missing scale = no derate).
         worst = None
         over = 0
         changes = 0
@@ -834,14 +840,18 @@ def main() -> int:
                 continue
             dqa = abs(qr[i][1] - qr[j][1]) * r2d0
             implied = dqa / dt          # deg per second over the honest interval
-            if implied > 30.0:
+            scales = [all_rows[k].get("vs") for k in range(j, i + 1)]
+            scales = [float(x) for x in scales if isinstance(x, (int, float))]
+            ceiling = 30.0 * (min(scales) if scales else 1.0)
+            if implied > ceiling * 1.10:  # 10% for publish jitter in the denominator
                 over += 1
             if worst is None or implied > worst[0]:
                 worst = (implied, qr[i][0], dqa, qr[i][2], dt)
         print("      reference step test (no smoothing; rate over the interval each change really "
               "took, %d changes observed)" % changes)
         if worst:
-            print("        samples over the 30 deg/s track limit: %d of %d" % (over, len(qr) - 1))
+            print("        changes over the ceiling IN FORCE (30 deg/s x live derating, +10%%): "
+                  "%d of %d" % (over, len(qr) - 1))
             print("        worst: %.1f deg/s, from a %.3f deg reference move over %.0f ms at t=%.2f s (%s)"
                   % (worst[0], worst[2], worst[4] * 1000.0, worst[1], worst[3]))
             print("        -> C6 reference within its own rate limit: %s"

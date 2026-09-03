@@ -565,3 +565,71 @@ quote for it is an artefact of the sampling window.
 
 The C6 rate-limit finding is unaffected by this correction: it came from published positions over
 their own intervals, not from that log.
+
+## 2026-09-04, 07:0x — round 5: the reference now has a profile, and the profile turned out to be enforcing a policy that was being bypassed
+
+### What was wrong
+
+`step()` published the resolver's answer as the reference, position-clamped. The velocity ceiling was
+handed to the drive, so the *drive* obeyed it while the *reference* did not: measured at 99 Hz (the
+new tracking motion log, whose own stamps confirmed the cadence), the reference moved at up to
+**105 deg/s** with a median acceleration of **106 deg/s^2** against the 60 the same config struct
+declares for braking, and the axis spent 5% of a dart run more than **15 deg** behind its own
+reference — 432 px on a 69 deg frame. A stepped reference against a capped drive is a step response,
+and requirement (b) names that behaviour explicitly.
+
+### What was built
+
+`control/src/control/reference_limiter.hpp`: a per-axis rate+acceleration limiter that follows the
+solved direction instead of teleporting to it. The acceleration ceiling is `cfg_.a_brake_rad_s2` —
+the figure the safety envelope already brakes with, deliberately not a second tunable number that
+could drift out of sync. The velocity ceiling is `lim[i]`, which already includes the §19 confidence
+derating and the envelope's reduction near a boundary.
+
+Seven tests in `control/tests/test_reference_limiter.cpp`, and they earned their keep four times:
+
+- they caught my "land exactly" rule zeroing velocity in a single cycle — an arrival bought with an
+  acceleration the axis does not have, which is the same defect standing in a nicer place;
+- they caught a permanent `v^2/2a` lag (3.3 deg at 20 deg/s, ~80 px) from braking to a *standstill*
+  instead of to the target's speed, which is why the limiter now estimates the target's own velocity;
+- the half-step fix was written with a signed distance floored at zero, which made the braking
+  distance vanish for every move in the negative direction — **the reference refused to go left**.
+  Caught by the one test that happened to aim at a negative angle; a suite that only ever moved one
+  way would have shipped exactly that;
+- the discretisation crossing (0.074 deg, predicted 0.075 deg by `a*dt*t_decel/2`) was fixed by
+  aiming the braking curve at mid-period, and the arrival bar is now documented as two control
+  periods with the arithmetic shown, because a bar tighter than one sample interval is a demand for a
+  different sample rate, not a stricter requirement.
+
+56 CTest green (55 + the new suite), verified after a clean build — twice today `ctest` reported a
+pass over a failed build, and one of those was this very change.
+
+### The result, and it is not the simple one
+
+| | before | after |
+| --- | --- | --- |
+| reference rate p95 / max | 40.4 / **105.2** deg/s | 10.0 / **10.0** deg/s |
+| largest reference move per 10 ms | 1.066 deg | **0.102 deg** |
+| following error p50 / p95 | 10.8 / **432** px | 21.1 / **82.6** px |
+| C1 stays in frame | PASS | PASS |
+| C2 back inside 1/3 box | 2.08 s | 2.27 s |
+| C3 reference leads | -0.45 deg | **-8.76 deg** |
+| S2 steady 8 deg/s sweep | az err p50 0.16 deg | az err p50 **0.14 deg** |
+
+Smoothness is fixed and following error is 5x better at the tail. Steady tracking is unchanged
+(slightly better). **And the dart's aim now lags much further behind**, which is not a defect in the
+limiter: during the dart `intent_velocity_scale` was measured at **0.217**, so the ceiling in force
+was about 7-10 deg/s, and the reference is now actually held to it. Before, the stepped reference was
+**riding roughshod over the §19 confidence derating** — the estimator's confidence collapses during
+fast motion, the policy said "go gently", and the reference went at 105 deg/s anyway.
+
+So requirement (b)'s two halves are in tension through a policy, not through a bug: the operator's
+derating rule slows exactly the response that the lead rule demands. The resolution is the
+operator's, not mine — the knob is the derating schedule and `tracking.track_speed_deg_s`, and
+raising either to make a synthetic dart look better would be trading a documented safety behaviour
+for a number in my own test. What I will do, and did, is make the probe judge the reference against
+the ceiling *in force* (30 deg/s x live scale) rather than the nominal 30, because the previous C6
+bar was measuring the reference against a limit that the derating had already legitimately lowered.
+
+Section 110: still 0 items accepted on hardware by a named person. The tension above is recorded as
+a question for the operator, not resolved by me.

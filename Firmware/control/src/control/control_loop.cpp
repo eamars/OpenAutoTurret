@@ -708,6 +708,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
 
   // 5. Phase reference (per-axis q_ref, limit_spd). Default: hold in place.
+  // Was the previous cycle a shaped move? Captured before it is cleared below, so the limiter knows
+  // it is starting fresh without needing a separate "engagement started" event from every caller.
+  const bool ref_lim_was_engaged = ref_lim_engaged_;
+  ref_lim_engaged_ = false;
   double q_ref[kAxisCount], lim[kAxisCount];
   for (int i = 0; i < kAxisCount; ++i) {
     q_ref[i] = sp[i].q_rad;
@@ -836,10 +840,26 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
-          q_ref[i] = env_.constrain_reference(r, limits_[i]);
+          const double solved = env_.constrain_reference(r, limits_[i]);
           lim[i] = std::min(tracking_ref_.v_max_rad_s,
-                            env_.max_speed_at(q_ref[i], limits_[i]));
+                            env_.max_speed_at(solved, limits_[i]));
+          // The resolver's answer is a REQUEST for where the axes should point, not a trajectory, and
+          // publishing it directly is what made the reference step: measured at 99 Hz, the reference
+          // moved at up to 105 deg/s against a 30 deg/s ceiling with a median acceleration of
+          // 106 deg/s^2 against the 60 this same struct declares, leaving the axis 15 deg behind its
+          // own reference. So the solved direction is now followed at a rate and acceleration the
+          // machine claims it can produce - cfg_.a_brake_rad_s2, the same figure the safety envelope
+          // brakes with, deliberately not a second number someone could tune out of sync.
+          //
+          // The ceiling handed to the limiter is lim[i], already reduced by the envelope when the
+          // pose is near a boundary, so the profile can never ask for more speed than the envelope
+          // permits at that pose. Position stays inside constrain_reference either way.
+          if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
+          q_ref[i] = ota::control::limit_reference(ref_lim_[i], solved,
+                                     static_cast<double>(period_ns) * 1.0e-9, lim[i],
+                                     cfg_.a_brake_rad_s2);
         }
+        ref_lim_engaged_ = true;
         break;
       }
       // Quiet hold. Kept in its v1 shape on purpose, including the part a
@@ -1158,6 +1178,30 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                                  : tracking::TrackState::ReadyHold;
     snap.target_confidence = tracking_ ? tracking_->confidence() : 0.0;
     snap.tracking_active = tracking_ && tracking_ref_.is_tracking_reference;
+    // The tracking counterpart of the homing motion log, at half the cadence of this fill (so
+    // it stays inside the 200 Hz deadline the way P0h established). The cadence claim is not asserted
+    // here: the t= stamps in the output are the evidence, and they are what first refuted the
+    // assumption behind this line - it was originally placed above, where it read snap.tracking_active
+    // BEFORE this file assigns it, so it logged nothing at all and looked like a silent feature.. It exists because requirement
+    // (b) asks whether following is JERK-LIMITED, and until now the only high-rate evidence stream
+    // on this station was homing's: during AUTO_TRACK the reference was visible only through the
+    // ~15 Hz telemetry snapshot, where a 1.5 deg reference step followed by a hold looks like a
+    // megabyte of acceleration. Second derivatives need a rate that can see them.
+    //
+    // Logged on the same line: the reference AND the axis, plus the reference's derived rate and
+    // acceleration, so the two questions a smoothness complaint actually splits into - did the
+    // reference move smoothly, and did the axis follow it - can be answered separately instead of
+    // inferred from one differenced feedback channel. Only while a tracking reference is active, so
+    // a station at rest does not write a stream nobody asked for.
+    if (snap.tracking_active && (tracking_log_cycle_++ & 1) == 0) {
+      spdlog::info(
+          "track-motion t={:.2f}ms q={:+.5f} v={:+.4f} qref={:+.5f} vref={:+.4f} "
+          "aref={:+.2f} q_p={:+.5f} qref_p={:+.5f}",
+          static_cast<double>(now_ns) / 1e6, snap.q_yaw_rad, snap.v_yaw_rad_s,
+          snap.q_ref_yaw_rad, snap.q_ref_rate_yaw_rad_s, snap.q_ref_accel_yaw_rad_s2,
+          snap.q_pitch_rad, snap.q_ref_pitch_rad);
+    }
+
     // Which candidate is being followed is loop state, not link state. Publishing it
     // from inside the `if (vision_link_)` block below would report "following nothing"
     // for every unit test and for controld started without a vision socket, while the
