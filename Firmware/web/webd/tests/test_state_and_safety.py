@@ -30,7 +30,8 @@ class _NodeBuilders(unittest.TestCase):
     def setUp(self) -> None:
         self._mod = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False)
         self._mod.write(HUD_GEOMETRY_JS +
-                        "\nmodule.exports = { hudStateLabel, hudSafetyPresentation, hudSafetyEdge };\n")
+                        "\nmodule.exports = { hudStateLabel, hudSafetyPresentation, hudSafetyEdge, "
+                        "hudTravelTape, hudTravelTapeSvg };\n")
         self._mod.close()
 
     def tearDown(self) -> None:
@@ -209,6 +210,81 @@ class SafetyPresentationIsOnThePage(unittest.TestCase):
         self.assertIn("t.mode_phase", HUD_JS[at:at + 200])
         self.assertIn("manual_lease_active", HUD_JS[at:at + 200])
         self.assertIn('<div class="m1">\' + st.line1', HUD_JS)
+
+
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed; the builders cannot be executed")
+class DerateMarksTheTapeEdge(_NodeBuilders):
+    """§22: "amber, including the relevant travel-tape edge or FOR boundary".
+
+    Round 14 named the edge in text and said the highlight was deferred. It is here now, and it marks the
+    tape's own endpoint - the tape ends ARE the soft limits, from the same numbers the limiter acts on -
+    rather than a separate marker that could sit at odds with the scale it is drawn against.
+    """
+
+    C = {"green": "#95f58b", "dim": "rgba(149,245,139,.56)", "amber": "#f2b329",
+         "white": "#edf2eb", "black": "rgba(3,6,5,.80)", "line": "rgba(230,245,230,.24)"}
+
+    def _tape(self, opts):
+        # The harness's _node already binds the module to T; redeclaring it is a SyntaxError on the
+        # second line of the temp script, which surfaced as "node exited 1" and nothing else.
+        return self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));" % json.dumps(opts))
+
+    def _svg(self, opts):
+        return self._node(
+            "const C=%s;console.log(T.hudTravelTapeSvg(T.hudTravelTape(%s),C,{}));"
+            % (json.dumps(self.C), json.dumps(opts)))
+
+    def _opts(self, markDeg=None):
+        o = {"horizontal": True, "x": 100, "y": 60, "length": 600,
+             "minDeg": -100.0, "maxDeg": 100.0, "valueDeg": 96.0, "valid": True}
+        if markDeg is not None:
+            o["markDeg"] = markDeg
+        return o
+
+    def test_the_named_limit_end_is_marked_and_the_other_is_not(self) -> None:
+        tape = self._tape(self._opts(markDeg=100.0))
+        marked = [tk["deg"] for tk in tape["ticks"] if tk.get("marked")]
+        self.assertEqual(marked, [100.0],
+                         "marking the far end must not also light the end the reference came from")
+
+    def test_no_mark_means_no_amber_on_the_tape_at_all(self) -> None:
+        # §15: amber means caution. A healthy tape that carries amber anywhere teaches the operator that
+        # amber is decoration.
+        plain = self._svg(self._opts())
+        self.assertNotIn(self.C["amber"], plain, "an unmarked tape must be amber-free")
+        self.assertIn(self.C["green"], plain)
+
+    def test_a_marked_end_is_amber_and_longer_than_its_neighbours(self) -> None:
+        marked = self._svg(self._opts(markDeg=100.0))
+        self.assertIn(self.C["amber"], marked)
+        self.assertIn('y2="77"', marked, "the marked tick is 17px, an endpoint is 13px")
+        plain = self._svg(self._opts())
+        self.assertNotIn('y2="77"', plain)
+
+    def test_the_label_of_the_marked_end_goes_with_it(self) -> None:
+        marked = self._svg(self._opts(markDeg=100.0))
+        # hudDegLabel signs positive limits explicitly and uses a literal degree sign, so assert the
+        # prefix rather than a guessed entity: the point of this test is which colour the label got.
+        self.assertIn('fill="%s">+100' % self.C["amber"], marked)
+        self.assertIn('fill="%s">+80' % self.C["green"], marked,
+                      "the neighbour tick stays green; everything amber at once is not a highlight")
+
+    def test_the_page_only_asks_for_a_mark_while_safety_is_derating(self) -> None:
+        at = HUD_JS.index('const dEdge = String(t.safety_action || "")')
+        body = HUD_JS[at:at + 900]
+        self.assertIn('"DERATE"', body[:130], "BRAKE and FAULT are not limit problems; highlighting a "
+                                              "tape edge for them would name a cause that is not there")
+        self.assertIn("hudSafetyEdge(t)", body)
+        self.assertIn('markDeg: (dEdge && dEdge.axis === "YAW")', body)
+        self.assertIn('markDeg: (dEdge && dEdge.axis === "PITCH")', body,
+                      "both tapes carry limits; a mark that only ever appears on yaw would be half a rule")
+
+    def test_the_mark_comes_from_the_same_limits_the_tape_is_drawn_from(self) -> None:
+        # The highlight and the scale must not be computed from different numbers.
+        at = HUD_JS.index("const yawMin = deg(t.q_soft_min_yaw_rad)")
+        self.assertIn("minDeg: yawMin, maxDeg: yawMax", HUD_JS[at:at + 420])
 
 
 if __name__ == "__main__":

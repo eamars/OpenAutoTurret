@@ -532,6 +532,15 @@ function hudTravelTape(o) {
   });
   ticks.sort((a, b) => a.pos - b.pos);
 
+  // §22 asks a DERATE indication to include the relevant travel-tape edge. The tape's ends ARE the soft
+  // limits - the same numbers the limiter is acting on - so the honest way to do this is to light up the
+  // end being named, not to add a separate marker that could disagree with the scale it sits on.
+  // Matched on the degree value rather than on index, because which tick is an endpoint depends on
+  // whether the limit happened to fall on a fine step.
+  if (typeof o.markDeg === "number") {
+    ticks.forEach((tk) => { tk.marked = Math.abs(tk.deg - o.markDeg) < 1e-6; });
+  }
+
   // Clamped along the tape's own axis. The first version clamped the vertical case between o.x and
   // o.x - the line's own column - because the horizontal variable was reused without being thought
   // about, and every pitch marker collapsed onto the tape's x-coordinate. Hand arithmetic caught it
@@ -568,8 +577,8 @@ function hudTravelTapeSvg(t, C, opts) {
                            : 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x + '" y2="' + t.y1) +
              '" stroke="' + base + '" stroke-width="1" opacity=".85"/>');
   t.ticks.forEach((tk) => {
-    const len = tk.endpoint ? 13 : (tk.coarse ? 10 : 5);
-    const col = tk.coarse ? base : fine;
+    const len = tk.marked ? 17 : (tk.endpoint ? 13 : (tk.coarse ? 10 : 5));
+    const col = tk.marked ? C.amber : (tk.coarse ? base : fine);   // §22: caution is amber
     parts.push('<line ' + (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
                            : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos) +
                '" stroke="' + col + '" stroke-width="1"/>');
@@ -577,7 +586,7 @@ function hudTravelTapeSvg(t, C, opts) {
       parts.push('<text class="tlbl" ' +
         (w ? 'x="' + tk.pos + '" y="' + (t.y - 7) + '" text-anchor="middle"'
            : 'x="' + (t.x + 8) + '" y="' + (tk.pos + 4) + '" text-anchor="start"') +
-        ' fill="' + lbl + '">' + tk.label + '</text>');
+        ' fill="' + (tk.marked ? C.amber : lbl) + '">' + tk.label + '</text>');
     }
   });
   // Current-position caret (§5.2) and its value box. Drawn last inside the group so it sits over the
@@ -820,15 +829,25 @@ function render(t) {
   // something checks it, and "visually centered" is how a tape ends up wherever the last edit left
   // it. Both tapes show LOGICAL JOINT TRAVEL (§5.3) from the encoders, never a compass heading, and
   // no cardinal letters appear anywhere.
+  // §22: a DERATE indication has to include the relevant travel-tape edge. The edge is computed from
+  // the same published soft limits the tape is drawn from, so the highlighted end and the drawer's
+  // "DERATE YAW MAX" text cannot drift apart - which matters more than it sounds, because an amber
+  // highlight pointing at the wrong end of the tape is worse than no highlight at all.
+  const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
+  const yawMin = deg(t.q_soft_min_yaw_rad), yawMax = deg(t.q_soft_max_yaw_rad);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
-    minDeg: deg(t.q_soft_min_yaw_rad), maxDeg: deg(t.q_soft_max_yaw_rad),
+    minDeg: yawMin, maxDeg: yawMax,
+    markDeg: (dEdge && dEdge.axis === "YAW") ? (dEdge.side === "MIN" ? yawMin : yawMax) : undefined,
     valueDeg: deg(t.q_yaw_rad), valid: t.soft_limits_valid === true
   });
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({
     horizontal: false, x: vw - Math.max(78.0, vw * 0.055), y: vh / 2 - pitchLen / 2,
     length: pitchLen, minDeg: deg(t.q_soft_min_pitch_rad), maxDeg: deg(t.q_soft_max_pitch_rad),
+    markDeg: (dEdge && dEdge.axis === "PITCH")
+      ? (dEdge.side === "MIN" ? deg(t.q_soft_min_pitch_rad) : deg(t.q_soft_max_pitch_rad))
+      : undefined,
     valueDeg: deg(t.q_pitch_rad), valid: t.soft_limits_valid === true
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not

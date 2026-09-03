@@ -1359,3 +1359,36 @@ step is unexpressed — deferred rather than fixed blind, same reason as the SVG
 15 new tests. **423 pytest, 57 CTest.** Served page: no undeclared tokens, one stack, layers
 0/10/20/30/40/50, refusal amber; fresh webd (no `Errno 98`, pids 9 s old). **Still no real-browser paint in
 this project's evidence** — §24 stays operator-signed. §110: 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 14:3x — round 16: §22's tape edge, closed from the running station
+
+Round 14's deferral is done. A DERATE indication now lights **the actual tape end it names** — the tape's
+endpoints *are* the soft limits, the same published numbers the limiter acts on and the same numbers the
+tape is drawn from, so the highlight can't disagree with the scale beneath it (the reason I deferred it: an
+amber highlight at the wrong end is worse than none — the operator believes it). Marked tick: amber, longer
+than an endpoint tick, its degree label amber too. The mark is requested **only while `safety_action` is
+DERATE**, only on the axis named — `BRAKE`/`FAULT` are not limit problems, so lighting an edge for them
+would name a cause that isn't there — and yaw vs pitch comes from the same `hudSafetyEdge` the drawer text
+reads, so chip and tape cannot drift.
+
+Tests insist on: an **unmarked tape contains no amber anywhere** (§15 — a healthy tape carrying amber
+teaches the operator that amber is decoration); the marked end out-lengths its neighbours **while they stay
+green** (everything amber at once isn't a highlight); the mark is asked for only under DERATE; and **both**
+tapes can carry it (a rule that only fires on yaw is half a rule).
+
+**Verified on the station, not just in tests:** live telemetry (`ALLOW`) → the yaw tape the page's own code
+generates contains **no amber at all**; the same code over the same live numbers with `safety_action` set to
+`DERATE` → edge `PITCH MAX`, amber present, green still present. Deciding code on real numbers — still **no
+real-browser paint**, so §24 stays operator-signed.
+
+Still owed: candidate labels share `tlbl` with scale labels, so §16's small-vs-medium-small step is
+unexpressed — deferred a third time, same reason (SVG text is sized against measured boxes with a fixed
+baseline constant; changing it blind can't be verified here).
+
+Own defects, all in my test code, all caught before becoming evidence: nested double quotes through a
+heredoc (unparseable file), node helpers redeclaring the harness binding (surfaced only as an exit code),
+and a label assertion that guessed an entity where the formatter emits `+100°` — nearly "fixed" correct
+code to match a wrong expectation. Each fix went to the assertion after checking which one was wrong.
+
+**435 pytest (+12), 57 CTest.** Station homed, ready, MANUAL / HOLD. §110: 0 items accepted on hardware by
+a named person.
