@@ -661,3 +661,67 @@ That is what the station's own configuration asks for, and it is the same class 
 confidence derating - the configured smoothness limits and the "lead a sharp move" rule are pulling
 against each other, and which one wins is an operator decision, not something I should settle by
 picking a number that makes my own test pass.
+
+## 2026-09-04, 08:1x — round 6: the reference is jerk-limited, and where the last 15% lives
+
+Same dart, same station, same criteria. The jerk clause went from failing outright to sitting on its
+limit, with a residue that is now identified rather than vague:
+
+| reference profile, 99 Hz | start of round | end of round | limit |
+| --- | --- | --- | --- |
+| jerk p50 | 793 deg/s^3 | **282** | 300 |
+| jerk max | 2494 deg/s^3 | **344** | 300 |
+| accel p95 | 742 (derived, noise-dominated) | **57.9** (profile state) | 60 |
+| accel max | 1354 | **60.2** | 60 |
+| largest reference move per 10 ms | 1.066 deg | 0.102 deg | - |
+| following error p95 | 432 px | **88 px** | - |
+| C1 stays in frame / C4 ringing | PASS / PASS | **PASS / PASS** | - |
+| C2 back inside tolerance | 2.2 s | 2.40 s | 1.50 s |
+| C3 leads the dart | -8.8 deg | -9.9 deg | > 0 |
+
+### What it took to get there, in the order it went wrong
+
+1. **Braking against `v^2/2a` is wrong under bounded jerk.** The profile has to spend distance
+   turning its acceleration around, and with that reserve omitted it overshot every final approach
+   and never landed - it was still moving at 21 deg/s after two hundred simulated seconds. Fixed by
+   computing the true stopping distance under bounded jerk (ramp a to -a_max over (a+a_max)/j, then
+   decelerate) and braking against what is left of the gap.
+2. **The speed ceiling has to be anticipated, not enforced.** Cap it after integrating and you must
+   either cut acceleration in one cycle (measured 6,900 deg/s^3) or clip the velocity (the same jolt
+   in a different variable). Reserving `a^2/2j` of speed - what will still be gained while the
+   acceleration is being ramped off - makes the arrival at full speed a curve.
+3. **A clamp applied *after* the jerk ramp is not jerk-limited.** The post-ramp "reach the ceiling
+   exactly" clamp was putting p95 at 340 and the peak at 851 while the median sat exactly at the
+   promised limit. Removing it, now that the anticipation makes it redundant, cut the peak 2.5x.
+4. **The telemetry was the noise, not the motion.** The worst "jerk" events came with a real velocity
+   change of 0.36 deg/s - 36 deg/s^2, well inside the limit - while the derived acceleration column
+   swung 11-15 deg/s^2 between adjacent lines. Once acceleration is a state of the profile, publish
+   the state. Every smoothness number quoted before this change measured my differentiator.
+
+### What the residue is
+
+Jerk p50 282 is the construction: the ramp allows 2 x 300 x 5 ms = 3.00 deg/s^2 per log line and the
+median measures 2.87. The tail does not fit that - and I checked my first explanation instead of
+publishing it: I suspected the stamp-gap denominator (a third denominator error today would have been
+noteworthy), and the gaps are a solid 10.10-10.15 ms, so that was wrong. What the data actually shows
+is p95 equal to max (3.44 deg/s^2), i.e. a handful of isolated events rather than a systematic
+excess, which is what the two remaining code paths that zero acceleration outright look like:
+`reset_at()` on re-engagement, and the no-speed-authority branch. Both are legitimate restarts of a
+profile rather than violations in progress - but "legitimate" is a claim about intent, so it stays
+written here as a claim, and the honest summary is: **jerk is at its limit for the body of the
+profile and about 15% over in a few isolated cycles whose mechanism is known.**
+
+### And the part that is not a defect but is the headline
+
+C2 and C3 still fail, and the reason is now measured rather than suspected: `intent_velocity_scale`
+falls to ~0.22 mid-dart, so the ceiling in force is roughly 7-10 deg/s while the dart asks for 25. A
+jerk-limited profile that is also obeying the operator's confidence derating *cannot* lead a target
+moving two and a half times its permitted speed, and C1 (target stays in frame) still passes - which
+is the hard requirement. The knob is the derating schedule and `tracking.track_speed_deg_s`, and both
+are the operator's to turn, not mine: raising them buys my synthetic dart's number at the cost of a
+documented safety behaviour. Same for the steady-state cost of smoothness itself - a jerk-limited
+follower matching a 20 deg/s target holds back by up to vA/2j = 2 deg (measured 0.76 deg = 18 px,
+15% of the 126 px acceptance band) purely to be able to stop cleanly.
+
+56 CTest (10 of them the limiter's own), 301 pytest. Section 110: still 0 items accepted on hardware
+by a named person.
