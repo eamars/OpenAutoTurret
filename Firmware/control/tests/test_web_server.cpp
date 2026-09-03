@@ -800,3 +800,31 @@ TEST(WebServer, TheStructuralCheckerRejectsTheMistakesItExistsFor) {
       << "same key name in two different objects is not a duplicate";
   EXPECT_TRUE(strict::Check("{\"a\":[[1,2],[3,4]],\"b\":[]}", &where)) << "nested pairs and an empty array";
 }
+
+TEST(WebServer, TheCommandResponseSaysWhichQuestionItAnswered) {
+  // A response answers "did the validation gate take this", not "did the station do it". Those are
+  // different questions with different latencies, and a bare `ok` let the HUD render a queued
+  // select_target as an acquired target - the operator would have seen a nonexistent person tracked.
+  // The scope is on the wire now, and ok and verdict may not disagree.
+  ota::web::CommandResult queued;
+  queued.ok = true;
+  const std::string sub = ota::web::format_response("set_mode", queued);
+  EXPECT_NE(sub.find("\"verdict\":\"submitted\""), std::string::npos) << sub;
+  EXPECT_NE(sub.find("\"ok\":true,\"verdict\":\"submitted\""), std::string::npos)
+      << "ok and verdict must agree, or a reader has to pick a favourite: " << sub;
+
+  ota::web::CommandResult refused;
+  refused.ok = false;
+  refused.error = "select_target needs the number shown on screen";
+  const std::string rej = ota::web::format_response("select_target", refused);
+  EXPECT_NE(rej.find("\"verdict\":\"rejected\""), std::string::npos) << rej;
+  EXPECT_NE(rej.find("\"ok\":false,\"verdict\":\"rejected\""), std::string::npos) << rej;
+  EXPECT_NE(rej.find("needs the number shown on screen"), std::string::npos)
+      << "the refusal reason is the operator's only feedback for a gate rejection";
+
+  // Both shapes still have to be JSON that a strict parser accepts - the response goes through the same
+  // hand-written emitter as telemetry, which has already produced invalid output once this week.
+  std::string where;
+  EXPECT_TRUE(strict::Check(sub, &where)) << "submitted response is malformed: " << where << " in " << sub;
+  EXPECT_TRUE(strict::Check(rej, &where)) << "rejected response is malformed: " << where << " in " << rej;
+}

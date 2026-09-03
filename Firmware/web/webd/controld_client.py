@@ -130,7 +130,10 @@ class ControldClient:
         surfaces it to the operator).
         """
         if not self.connected():
-            return ResponseMessage(command, ok=False, error="controld not connected")
+            # The gate never saw it, so nothing was queued. "rejected" answers the one question this
+            # response answers, and the reason says why.
+            return ResponseMessage(command, ok=False, error="controld not connected",
+                                   verdict="rejected")
         with self._cmd_lock:
             # Drain any stale responses from a previous (timed-out) send.
             while True:
@@ -142,6 +145,9 @@ class ControldClient:
             try:
                 return self._resp_q.get(timeout=timeout)
             except queue.Empty:
+                # Sent, but the gate never answered. The verdict is unknown, NOT "rejected": asserting a
+                # refusal for a command that may have executed is the same lie in the other direction, and
+                # this field exists to stop exactly that. It stays None.
                 return ResponseMessage(
                     command, ok=False, error="no response within timeout"
                 )

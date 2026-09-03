@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -261,6 +262,91 @@ class CommandPathIsReal(unittest.TestCase):
         html = self.http.get("/").text
         for needle in ('id="dock"', 'id="drawer"', "hudDockSpecs", "hudDrawerActions", "setDrawer"):
             self.assertIn(needle, html, "%s never reached the served page" % needle)
+
+
+
+class CommandVerdictIsNotAmbiguous(unittest.TestCase):
+    """`ok` answers "did the gate take it". Nothing on the wire said so, and the HUD read it as "the
+    station did it". The two answers are now named, at every hop, because a field that one hop drops is
+    a field the next reader cannot see.
+    """
+
+    maxDiff = None
+
+    # controld's emitter is C++; the case TheCommandResponseSaysWhichQuestionItAnswered in
+    # control/tests/test_web_server.cpp covers that side. Everything below is the chain the HUD reads.
+
+    def test_a_response_from_the_daemon_arrives_with_its_verdict(self) -> None:
+        from ..protocol import parse_message
+
+        # Spelled as controld's C++ emitter writes it, because that is the line webd has to read. There
+        # is no Python response encoder to round-trip through - responses are produced by the daemon - so
+        # the only honest version of this test quotes the wire.
+        submitted = '{"type":"response","command":"select_target","ok":true,"verdict":"submitted"}'
+        kind, msg = parse_message(submitted)
+        self.assertEqual(kind, "response")
+        self.assertEqual(msg.verdict, "submitted",
+                         "the parser must declare the field or it vanishes and the ambiguity is back")
+
+        rejected = ('{"type":"response","command":"select_target","ok":false,'
+                    '"verdict":"rejected","error":"needs the number shown on screen"}')
+        _, refused = parse_message(rejected)
+        self.assertEqual(refused.verdict, "rejected")
+        self.assertIn("number", refused.error)
+
+        # A daemon that predates the field must still parse, with the verdict unknown rather than False,
+        # so that "we did not hear" cannot be read as "it was refused".
+        _, old = parse_message('{"type":"response","command":"hold","ok":true}')
+        self.assertIsNone(old.verdict)
+
+    def test_an_unknown_verdict_stays_unknown(self) -> None:
+        # The client's own timeout answer. Asserting a refusal for a command that may well have executed
+        # would be the same error pointed the other way.
+        src = pathlib.Path(__file__).resolve().parents[1].joinpath("controld_client.py").read_text()
+        at = src.index("no response within timeout")
+        self.assertNotIn("verdict=", src[at - 200:at + 200],
+                         "the timeout path must leave the verdict None, not invent one")
+
+    def test_the_page_tells_submitted_and_rejected_apart(self) -> None:
+        at = HUD_JS.index("async function sendCommand")
+        body = HUD_JS[at:HUD_JS.index("dock.addEventListener", at)]
+        self.assertIn('j.verdict === "rejected"', body,
+                      "a gate rejection is a decision and must show as one, at once")
+        self.assertIn('"  SUBMITTED"', body, "a receipt for queueing must not be dressed as success")
+        self.assertIn('"  SENT"', body, "an older daemon with no verdict gets honest wording, not a guess")
+        self.assertNotIn('"  ACCEPTED"', body, "acceptance still belongs to cmd_ack_accepted alone")
+
+    def test_the_endpoint_passes_the_verdict_through(self) -> None:
+        import json as _json
+        import os
+        import tempfile
+        from fastapi.testclient import TestClient
+        from ..app import create_app
+        from ..controld_client import ControldClient
+        from ..config import WebConfig
+        from ..fake_controld import FakeControld
+        from . import fake_camera
+
+        tc = fake_camera.install(frame_delay=0.0)
+        tmp = tempfile.TemporaryDirectory(prefix="ota_webd_verdict_")
+        sock = os.path.join(tmp.name, "controld.sock")
+        fake = FakeControld(sock, telemetry_hz=20.0)
+        fake.start()
+        client = ControldClient(sock, reconnect_interval=0.05)
+        app = create_app(client, WebConfig(host="127.0.0.1", port=0, socket_path=sock))
+        try:
+            http = TestClient(app)
+            http.__enter__()
+            r = http.post("/api/command", json={"command": "hold", "arg": ""})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json().get("verdict"), "submitted",
+                             "webd must not be the hop that loses the distinction")
+            http.__exit__(None, None, None)
+        finally:
+            client.stop()
+            fake.stop()
+            fake_camera.restore(tc)
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

@@ -269,6 +269,10 @@ class ResponseMessage:
     command: str
     ok: bool
     error: str = ""
+    # "submitted" once the command passes controld's gate and is queued, "rejected" when the gate
+    # refused it. `ok` on its own reads as "the station did it", which is a different question: the
+    # execution verdict arrives separately as cmd_ack_* on the telemetry stream.
+    verdict: Optional[str] = None
 
 
 def command_to_json(command: str, arg: str = "") -> str:
@@ -314,5 +318,6 @@ def parse_message(raw: str) -> Tuple[str, Any]:
             command=obj.get("command", ""),
             ok=bool(obj.get("ok", False)),
             error=obj.get("error", ""),
+            verdict=obj.get("verdict"),
         )
     raise ValueError(f"unknown message type: {t!r}")

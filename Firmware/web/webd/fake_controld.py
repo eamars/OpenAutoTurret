@@ -94,7 +94,8 @@ class FakeControld:
 
     @staticmethod
     def _default_handler(command: str, arg: str) -> ResponseMessage:
-        return ResponseMessage(command=command, ok=True, error="")
+        # Mirrors controld's two-answer contract: this is the gate's answer, not the station's.
+        return ResponseMessage(command=command, ok=True, error="", verdict="submitted")
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -204,6 +205,7 @@ class FakeControld:
                 "type": "response",
                 "command": resp.command,
                 "ok": resp.ok,
+                "verdict": resp.verdict,
                 **({"error": resp.error} if resp.error else {}),
             },
             separators=(",", ":"),

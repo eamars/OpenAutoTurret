@@ -360,11 +360,27 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
   return os.str();
 }
 
+// A command response answers ONE question, and the answer now says so on the wire instead of leaving a
+// bare boolean to be inferred.
+//
+//   "ok":true,  "verdict":"submitted"  the command passed controld's validation gate and is queued.
+//                                       The station has not acted. The execution answer - accepted, or
+//                                       refused because the target is gone or the mode or safety state
+//                                       forbids it - arrives as cmd_ack_command / cmd_ack_accepted /
+//                                       cmd_ack_reason on the telemetry stream.
+//   "ok":false, "verdict":"rejected"   the gate refused it outright; nothing will execute. The control
+//                                       thread acks the refusal too, so both channels agree.
+//
+// This is not pedantry. The HUD read `ok:true` as "the turret did it" and nearly told an operator that a
+// target which does not exist had been acquired, because select_target passes the gate (a number was
+// supplied) and is refused later, against the TrackSet actually in hand - the right place to decide
+// existence, and the wrong place for a web-thread snapshot to guess.
 inline std::string format_response(const std::string& command,
                                    const CommandResult& r) {
   std::ostringstream os;
   os << "{\"type\":\"response\",\"command\":\"" << json_escape(command)
-     << "\",\"ok\":" << (r.ok ? "true" : "false");
+     << "\",\"ok\":" << (r.ok ? "true" : "false")
+     << ",\"verdict\":\"" << (r.ok ? "submitted" : "rejected") << "\"";
   if (!r.ok && !r.error.empty()) {
     os << ",\"error\":\"" << json_escape(r.error) << "\"";
   }

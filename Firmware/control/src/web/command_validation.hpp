@@ -55,7 +55,7 @@ inline constexpr int kYawIx = 1;
 //   start_tracking, stop_tracking, enable_search, disable_search,
 //   manual_jog_start <dir[:profile]> / manual_jog_keepalive /
 //   manual_jog_stop / manual_step <axis><sign><deg>,
-//   select_target <label> / clear_target, start_homing,
+//   select_target <number shown on screen> / clear_target, start_homing,
 //   start_installation_calibration,
 //   start_payload_verification, select_payload_profile <name>,
 //   request_park, request_shutdown,

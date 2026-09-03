@@ -1227,3 +1227,64 @@ reason "already in MANUAL"; mode and ready state unchanged by the probes.
 
 57 CTest entries, 373 pytest (18 new). Station: homed, ready, MANUAL, holding; webd serving the dock.
 Section 110: still 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 13:0x — round 13: correcting my own claim about the command response, and a torn read that was really there
+
+### My round-12 claim was wrong, and stays in the record
+
+Round 12 said controld's command response "lies" — `select_target 9999` answering `ok:true` while the log
+said REFUSED. Reading `submit_command` shows that was **my** error. The response is written on the web
+thread after the validation gate and answers *"did the gate take this?"*; the control thread answers
+*"what did the station do?"* through `cmd_ack_accepted`/`cmd_ack_reason`. Whether a target exists is
+decided against the TrackSet actually in hand rather than a stale web-thread snapshot — the gate's own
+comment says so. **Nothing was lying. My page read a receipt as a result.**
+
+What *was* genuinely wrong is that nothing on the wire distinguished the two, so the next reader repeats
+my mistake. The response now says which question it answered:
+
+| case | live response | what the drawer shows |
+|---|---|---|
+| `select_target person` | `ok:false, verdict:"rejected", error:"target label must be a number"` | `REFUSED: …` at once — the gate's decision is final |
+| `hold` | `ok:true, verdict:"submitted"` | `SUBMITTED`, not dressed as success |
+| `select_target 9999` | `ok:true, verdict:"submitted"` → later `accepted:0, reason:"no vision data has reached controld yet"` | `REFUSED: no vision data has reached controld yet` |
+
+webd *declares* the field (undeclared, the parser drops it — that trap again), the fake daemon emits it so
+a test notices it going missing, and the client's own timeout answer leaves the verdict **null**:
+asserting a refusal for a command that may have executed is the same error pointed the other way.
+
+### A torn read on the telemetry path, found by refusing to shrug at a flake
+
+CTest failed 1 of 4 runs. Last round I lost such a name; this round I captured it:
+**`SeqLock.AdversarialContentionNoTornReads` — 3 failures in 80 direct runs (~3.8%)**, and it was not a
+timeout: a read returned `true` with an inconsistent payload. This is the lock-free path the CAN RX
+thread writes and the 200 Hz control loop reads, so a mismatched yaw/pitch pair could reach the
+controller and the HUD together.
+
+Two ordering faults, both specific to weakly-ordered A76:
+
+1. **Writer:** the odd marker was stored with `release`, which orders everything *before* it and
+   constrains *nothing after* it. The payload stores could therefore become visible before the marker, so
+   a reader that sampled the previous even value on both sides of its copy certified a half-written
+   payload. Needs a full fence between marker and payload.
+2. **Reader:** the fence between copying the payload and re-sampling the sequence was `acquire`, which
+   guards the opposite direction and let the copy sink past the sample meant to validate it. Needs
+   `release`.
+
+Measured: **0 tears in 240 runs** after, where the baseline rate would give 0 by luck ~1 time in 10 000
+(`(1−3/80)^240 = 1.0e-4`). That is evidence plus a memory-model argument, not a formal proof, and is
+recorded as such.
+
+### Second process trap this session, and the verification it invalidated
+
+The webd I "verified" against was **30 minutes old**. Round 12's SIGTERM'd shell had left it holding
+8080; my new launch died on `Errno 98 address already in use`, and the served page had no verdict code
+because the *old* module was in memory. Round 12 printed `webd still alive` and I accepted that instead
+of asking *how* alive — two pids looked like parent and child, which they were, of the process I should
+have killed. All the live verdict numbers above were re-taken after killing the stale process; the first
+version of them is worth nothing. **A restart that fails to bind looks exactly like a restart that
+succeeded, if you only check that something is answering.**
+
+### Counts and state
+
+57 CTest entries (`test_web_server` now 12 cases), 377 pytest. Station homed, ready, telemetry 47 ms,
+no stale flag. Section 110: still 0 items accepted on hardware by a named person.

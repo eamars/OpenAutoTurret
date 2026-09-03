@@ -1007,7 +1007,13 @@ async function sendCommand(cmd, arg) {
   const seq = (lastTelemetry && typeof lastTelemetry.cmd_ack_seq === "number")
     ? lastTelemetry.cmd_ack_seq : 0;
   pendingAck = { command: cmd, afterSeq: seq, at: Date.now() };
-  lastAck = { text: cmd + "  SENT", kind: "" };
+  // `verdict` says which question the response answered, so the two cases can finally be told apart.
+  // "rejected" is a decision and is shown as one, immediately - the gate refused it and nothing will
+  // execute. "submitted" is a receipt for queueing and must not be dressed up as success. An older
+  // daemon that sends no verdict leaves the wording honest rather than guessed.
+  lastAck = (j && j.verdict === "rejected")
+    ? { text: cmd + "  REFUSED: " + ((j && j.error) || "no reason given"), kind: "bad" }
+    : { text: cmd + ((j && j.verdict === "submitted") ? "  SUBMITTED" : "  SENT"), kind: "" };
   pendingConfirm = null;
   renderDrawer();
 }
