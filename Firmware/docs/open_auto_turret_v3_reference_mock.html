@@ -1,0 +1,2555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OpenAutoTurret v3 UI Reference Mock</title>
+
+<!--
+OpenAutoTurret v3 UI REFERENCE MOCK
+===================================
+
+Purpose:
+- This file is a UI/interaction reference for an implementation agent that may not have vision capability.
+- It is NOT production code and does not connect to real hardware.
+- Every visual concept from the v3 architecture is represented with explicit DOM semantics, IDs, and comments.
+
+PRIMARY USER MODES:
+1. MANUAL
+2. AUTO_TRACK
+3. AUTO_ROAM
+
+MODE SEMANTICS:
+- MANUAL: no camera detection causes motion. Jog/step/goto are operator initiated.
+- AUTO_TRACK: selected target is tracked automatically whenever confidently visible.
+              if lost -> coast briefly -> hold -> auto resume on confident reacquisition.
+- AUTO_ROAM: safe autonomous scanning. Target detection/selection remains active, but roaming
+             does NOT automatically pursue a selected target.
+
+GLOBAL SAFETY SEMANTICS:
+- STOP MOTION => cancel current motion source -> controlled brake -> MANUAL/HOLD.
+- The browser is not safety-authoritative.
+- Manual jog uses a dead-man lease concept in production.
+- Homing, calibration, safe park, shutdown, and FAULT are supervisory states above normal modes.
+- All motion requests must still pass ReferenceManager -> SafetyEnvelope -> TrajectoryGenerator.
+
+NORMAL PAGE INFORMATION HIERARCHY:
+- Header: connection/homed/vision/IMU/safety/mode
+- Main: video + field-of-regard
+- Right/secondary: target selection + current mode context controls
+- Diagnostics: collapsed by default
+
+DO NOT put architecture section references, CAN explanations, raw radians, implementation-stage
+notes, or engineering prose on the default runtime page.
+-->
+
+<style>
+:root {
+  --bg: #0a0f15;
+  --panel: #111820;
+  --panel-2: #0d141c;
+  --panel-3: #151f2a;
+  --border: #273440;
+  --text: #e9f0f6;
+  --muted: #8fa2b4;
+  --muted-2: #697b8c;
+  --green: #5bd36f;
+  --green-dim: rgba(91,211,111,.15);
+  --blue: #54b8ff;
+  --blue-dim: rgba(84,184,255,.16);
+  --cyan: #3ed5e8;
+  --amber: #ffbf3f;
+  --amber-dim: rgba(255,191,63,.15);
+  --red: #ff5d67;
+  --red-dim: rgba(255,93,103,.13);
+  --white: #ffffff;
+  --shadow: 0 10px 30px rgba(0,0,0,.24);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 50% -40%, #182432 0, transparent 45%),
+    var(--bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.35;
+}
+
+button, select, input { font: inherit; }
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: .38;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  min-height: 64px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(10,15,21,.95);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(10px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: auto;
+  font-weight: 750;
+  font-size: 19px;
+  letter-spacing: .01em;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border: 2px solid #d8e2ea;
+  border-radius: 50%;
+  position: relative;
+}
+
+.brand-mark:before,
+.brand-mark:after {
+  content: "";
+  position: absolute;
+  background: #d8e2ea;
+}
+
+.brand-mark:before { width: 14px; height: 2px; left: 6px; top: 12px; }
+.brand-mark:after { width: 2px; height: 14px; left: 12px; top: 6px; }
+
+.status-chip {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: #b9c8d5;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.status-chip.good {
+  border-color: #255c33;
+  background: var(--green-dim);
+  color: #83e493;
+}
+
+.status-chip.warn {
+  border-color: #735a22;
+  background: var(--amber-dim);
+  color: #ffd26d;
+}
+
+.status-chip.info {
+  border-color: #22567a;
+  background: var(--blue-dim);
+  color: #8dd0ff;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.mode-chip {
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.icon-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: #c9d5df;
+}
+
+.main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(420px, .95fr);
+  gap: 14px;
+  padding: 14px;
+  max-width: 1720px;
+  margin: 0 auto;
+}
+
+.left-column,
+.right-column {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.card {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, #121b25, #0f161f);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card-header {
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-title {
+  color: #aebdca;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.card-header .spacer {
+  margin-left: auto;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.tiny {
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------------------------
+   VIDEO / HUD
+   -------------------------------------------------------------------------- */
+
+.video-stage {
+  aspect-ratio: 16 / 9;
+  min-height: 420px;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 48% 40%, rgba(225,225,210,.25), transparent 22%),
+    linear-gradient(90deg, rgba(22,28,31,.65), rgba(59,69,68,.25)),
+    #182127;
+}
+
+/* Mock visual environment. Production uses actual video element. */
+.video-stage:before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, transparent 0 10%, rgba(255,255,255,.04) 10% 11%, transparent 11% 29%, rgba(255,255,255,.03) 29% 30%, transparent 30% 100%),
+    radial-gradient(ellipse at 70% 82%, #1c2c22 0 18%, transparent 19%),
+    linear-gradient(180deg, #202a31 0%, #273239 48%, #1d2925 48%, #18231f 100%);
+  filter: saturate(.8);
+}
+
+/* Abstract "person" silhouettes for candidate targets. */
+.mock-person {
+  position: absolute;
+  width: 58px;
+  height: 170px;
+  border-radius: 26px 26px 12px 12px;
+  background: linear-gradient(180deg, #202328 0%, #0f1216 100%);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 10px 18px rgba(0,0,0,.35);
+}
+.mock-person:before {
+  content: "";
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  left: 7px;
+  top: -34px;
+  background: #171a1e;
+}
+
+#personShape1 { left: 52%; top: 62%; }
+#personShape2 { left: 76%; top: 58%; transform: translate(-50%, -50%) scale(.82); }
+#personShape3 { left: 26%; top: 65%; transform: translate(-50%, -50%) scale(.72); }
+
+.reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%,-50%);
+  z-index: 8;
+  pointer-events: none;
+}
+
+.reticle:before,
+.reticle:after {
+  content: "";
+  position: absolute;
+  background: rgba(255,255,255,.82);
+}
+
+.reticle:before {
+  width: 42px;
+  height: 1px;
+  left: -4px;
+  top: 16px;
+}
+.reticle:after {
+  width: 1px;
+  height: 42px;
+  left: 16px;
+  top: -4px;
+}
+
+.reticle-center {
+  width: 8px;
+  height: 8px;
+  border: 1px solid white;
+  border-radius: 50%;
+  position: absolute;
+  left: 13px;
+  top: 13px;
+  background: rgba(0,0,0,.2);
+}
+
+.video-status {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 9;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: rgba(7,11,15,.72);
+  border: 1px solid rgba(255,255,255,.07);
+  backdrop-filter: blur(4px);
+}
+
+.video-status .state {
+  color: var(--green);
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.video-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 46px;
+  z-index: 10;
+  background: rgba(7,11,15,.7);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 7px;
+  padding: 8px 9px;
+  font-size: 11px;
+  color: #c9d3dc;
+  display: grid;
+  gap: 5px;
+}
+
+.legend-line {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.legend-swatch {
+  width: 14px;
+  height: 10px;
+  border: 1px solid currentColor;
+}
+
+.legend-swatch.candidate { color: #6faee0; }
+.legend-swatch.selected { color: var(--green); }
+.legend-swatch.predicted { color: var(--amber); border-style: dashed; }
+
+.target-box {
+  position: absolute;
+  z-index: 6;
+  border: 1px solid #6faee0;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, opacity .15s;
+}
+
+.target-box:hover {
+  box-shadow: 0 0 0 1px rgba(111,174,224,.45);
+}
+
+.target-box.selected {
+  border: 2px solid var(--green);
+  box-shadow: 0 0 0 1px rgba(91,211,111,.18), 0 0 14px rgba(91,211,111,.18);
+}
+
+.target-box.lost {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.target-label {
+  position: absolute;
+  top: -25px;
+  left: -1px;
+  padding: 3px 6px;
+  border-radius: 4px 4px 4px 0;
+  background: #24517a;
+  color: #e8f5ff;
+  font-size: 11px;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.target-box.selected .target-label {
+  background: #2e693a;
+  color: #e9ffed;
+}
+
+#targetBox1 { left: 44%; top: 31%; width: 16%; height: 47%; }
+#targetBox2 { left: 69%; top: 33%; width: 12%; height: 37%; }
+#targetBox3 { left: 20%; top: 42%; width: 11%; height: 31%; }
+
+.predicted-marker {
+  position: absolute;
+  z-index: 9;
+  width: 18px;
+  height: 18px;
+  border: 2px dashed var(--amber);
+  transform: translate(-50%,-50%);
+  pointer-events: none;
+  display: none;
+}
+
+.predicted-marker:before,
+.predicted-marker:after {
+  content: "";
+  position: absolute;
+  background: var(--amber);
+}
+.predicted-marker:before {
+  width: 8px; height: 1px; left: 3px; top: 7px;
+}
+.predicted-marker:after {
+  width: 1px; height: 8px; left: 7px; top: 3px;
+}
+
+.error-vector {
+  position: absolute;
+  z-index: 7;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(62,213,232,.3), var(--cyan));
+  transform-origin: 0 50%;
+  display: none;
+}
+
+.offscreen-cue {
+  position: absolute;
+  z-index: 10;
+  right: 14px;
+  top: 70px;
+  color: var(--amber);
+  font-weight: 800;
+  font-size: 12px;
+  display: none;
+  padding: 5px 7px;
+  background: rgba(10,12,14,.75);
+  border: 1px solid rgba(255,191,63,.35);
+  border-radius: 6px;
+}
+
+/* Video travel rulers. */
+.yaw-ruler {
+  position: absolute;
+  z-index: 9;
+  left: 8%;
+  right: 8%;
+  bottom: 12px;
+  height: 22px;
+  background: rgba(7,11,15,.68);
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.05);
+}
+
+.yaw-ruler-line {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  height: 3px;
+  top: 10px;
+  background: #344452;
+  border-radius: 3px;
+}
+
+.ruler-actual,
+.ruler-reference {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+}
+
+.ruler-actual {
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--cyan);
+}
+
+.ruler-reference {
+  width: 12px;
+  height: 12px;
+  border: 2px solid white;
+  border-radius: 50%;
+  top: 5px;
+}
+
+.pitch-ruler {
+  position: absolute;
+  z-index: 9;
+  right: 12px;
+  top: 17%;
+  bottom: 17%;
+  width: 22px;
+  background: rgba(7,11,15,.68);
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.05);
+}
+
+.pitch-ruler-line {
+  position: absolute;
+  width: 3px;
+  top: 5%;
+  bottom: 5%;
+  left: 9px;
+  background: #344452;
+  border-radius: 3px;
+}
+
+.pitch-ruler .ruler-actual {
+  width: 14px;
+  height: 4px;
+  left: 4px;
+  top: auto;
+  transform: translateY(-50%);
+}
+.pitch-ruler .ruler-reference {
+  width: 12px;
+  height: 12px;
+  left: 5px;
+  top: auto;
+  transform: translateY(-50%);
+}
+
+/* --------------------------------------------------------------------------
+   FIELD OF REGARD
+   -------------------------------------------------------------------------- */
+
+.for-body {
+  padding: 10px 12px 12px;
+}
+
+.for-layout {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 180px;
+  gap: 12px;
+}
+
+.for-plot {
+  border: 1px solid var(--border);
+  background: #0a1118;
+  min-height: 330px;
+  border-radius: 7px;
+  position: relative;
+  overflow: hidden;
+}
+
+.for-plot svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.for-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 8px 2px;
+  color: #aebdca;
+  font-size: 11px;
+}
+
+.for-legend-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.for-symbol {
+  width: 18px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--cyan);
+  font-weight: 800;
+}
+
+.for-values {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.for-value {
+  padding: 10px 8px;
+  text-align: center;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+}
+.for-value:last-child { border-right: 0; }
+
+.for-value .label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.for-value .value {
+  margin-top: 2px;
+  font-weight: 750;
+  font-size: 15px;
+}
+
+/* --------------------------------------------------------------------------
+   TARGET SELECTION
+   -------------------------------------------------------------------------- */
+
+.target-layout {
+  display: grid;
+  grid-template-columns: 1.15fr .85fr;
+  gap: 12px;
+  padding: 12px;
+}
+
+.target-list {
+  display: grid;
+  gap: 7px;
+}
+
+.target-row {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 10px;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  gap: 9px;
+  align-items: center;
+  text-align: left;
+}
+
+.target-row:hover {
+  border-color: #3d5568;
+}
+
+.target-row.selected {
+  border-color: #3074a9;
+  box-shadow: 0 0 0 1px rgba(84,184,255,.18);
+  background: #102238;
+}
+
+.target-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #1d2a35;
+  display: grid;
+  place-items: center;
+  color: #a9bac9;
+  font-size: 12px;
+}
+
+.target-confidence {
+  color: #7fe48f;
+  font-size: 12px;
+}
+
+.target-details {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  padding: 11px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px 12px;
+  font-size: 12px;
+}
+
+.details-grid .key {
+  color: var(--muted);
+}
+
+.details-grid .val {
+  text-align: right;
+  color: #dde7ef;
+}
+
+.btn {
+  border: 1px solid #394958;
+  background: #18232e;
+  color: #d7e2eb;
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+
+.btn:hover { background: #202f3d; }
+
+.btn.blue {
+  border-color: #2f6c9d;
+  background: #17344c;
+  color: #96d2ff;
+}
+
+.btn.green {
+  border-color: #2a6d3b;
+  background: #15311d;
+  color: #87e899;
+}
+
+.btn.amber {
+  border-color: #765c20;
+  background: #33290f;
+  color: #ffd26b;
+}
+
+.btn.red {
+  border-color: #98414b;
+  background: #38191e;
+  color: #ffb2b8;
+}
+
+.clear-target {
+  width: 100%;
+  margin-top: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   MODE SELECTOR / CONTEXT PANEL
+   -------------------------------------------------------------------------- */
+
+.mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3,1fr);
+  gap: 8px;
+  padding: 12px;
+}
+
+.mode-tab {
+  min-height: 62px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: #c2cfda;
+  text-align: left;
+  padding: 9px 11px;
+}
+
+.mode-tab strong {
+  display: block;
+  font-size: 13px;
+}
+
+.mode-tab span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mode-tab.active {
+  border-color: #2b78ac;
+  background: #12314a;
+  box-shadow: 0 0 0 1px rgba(84,184,255,.15);
+}
+
+.mode-tab[data-mode="AUTO_TRACK"].active {
+  border-color: #367c43;
+  background: #15351f;
+}
+
+.mode-tab[data-mode="AUTO_ROAM"].active {
+  border-color: #78632b;
+  background: #372f15;
+}
+
+.context-body {
+  padding: 12px;
+}
+
+.context-panel {
+  display: none;
+}
+
+.context-panel.active {
+  display: block;
+}
+
+.context-summary {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 7px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.context-summary strong {
+  display: block;
+  font-size: 15px;
+}
+
+.context-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Manual control */
+.manual-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
+}
+
+.dpad {
+  display: grid;
+  grid-template-columns: 62px 62px 62px;
+  grid-template-rows: 54px 54px 54px;
+  gap: 6px;
+  justify-content: center;
+  align-items: center;
+}
+
+.jog {
+  border: 1px solid #3a4a59;
+  background: #17232e;
+  color: #dce6ee;
+  border-radius: 10px;
+  font-size: 20px;
+  user-select: none;
+  touch-action: none;
+}
+
+.jog.active {
+  border-color: var(--cyan);
+  background: #153849;
+  color: #a8eff8;
+}
+
+.jog-up { grid-column: 2; grid-row: 1; }
+.jog-left { grid-column: 1; grid-row: 2; }
+.jog-center {
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.25;
+  cursor: default;
+}
+.jog-right { grid-column: 3; grid-row: 2; }
+.jog-down { grid-column: 2; grid-row: 3; }
+
+.control-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.control-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-size: 10px;
+}
+
+.segment {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #0c131a;
+}
+
+.segment button {
+  flex: 1;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: #9fb0be;
+  padding: 8px 9px;
+}
+.segment button:last-child { border-right: 0; }
+.segment button.active {
+  background: #245c8d;
+  color: white;
+}
+
+.step-row {
+  display: grid;
+  grid-template-columns: repeat(5,1fr);
+  gap: 6px;
+}
+
+.step-row button {
+  border: 1px solid var(--border);
+  background: #111b25;
+  color: #b9c8d4;
+  border-radius: 6px;
+  padding: 7px;
+}
+
+.stop-motion {
+  margin-top: 12px;
+  width: 100%;
+  min-height: 44px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+/* AUTO TRACK */
+.track-state-grid,
+.roam-state-grid {
+  display: grid;
+  grid-template-columns: repeat(4,1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.metric {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 9px;
+  border-radius: 7px;
+}
+.metric .label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.metric .value {
+  margin-top: 2px;
+  font-weight: 700;
+}
+
+.track-note {
+  border: 1px solid #38526a;
+  background: rgba(84,184,255,.08);
+  color: #b9dbf3;
+  padding: 10px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+/* AUTO ROAM */
+.roam-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* --------------------------------------------------------------------------
+   PRIMARY / SUPERVISORY ACTIONS
+   -------------------------------------------------------------------------- */
+
+.supervisory-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.supervisory-actions .btn {
+  flex: 1;
+}
+
+/* --------------------------------------------------------------------------
+   DIAGNOSTICS
+   -------------------------------------------------------------------------- */
+
+.diagnostics {
+  max-width: 1720px;
+  margin: 0 auto 18px;
+  padding: 0 14px;
+}
+
+details.diag-card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+details.diag-card summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 13px 14px;
+  color: #b7c6d2;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+details.diag-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.diag-content {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(4,1fr);
+  gap: 10px;
+}
+
+.diag-group {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.diag-group h4 {
+  margin: 0 0 8px;
+  color: #c3d0db;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.diag-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+
+.diag-row span:first-child { color: var(--muted); }
+
+.mock-scenario {
+  grid-column: span 2;
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+  .for-layout {
+    grid-template-columns: 1fr;
+  }
+  .for-legend {
+    display: grid;
+    grid-template-columns: repeat(3,1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+  .main-grid {
+    padding: 8px;
+  }
+  .target-layout,
+  .manual-grid {
+    grid-template-columns: 1fr;
+  }
+  .mode-tabs {
+    grid-template-columns: 1fr;
+  }
+  .for-values {
+    grid-template-columns: repeat(2,1fr);
+  }
+  .diag-content {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+</head>
+
+<body>
+<div class="app-shell">
+
+  <!-- ====================================================================
+       HEADER
+       Only immediate operator state. No design-stage or protocol notes here.
+       ==================================================================== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>OpenAutoTurret</span>
+    </div>
+
+    <div class="status-chip good"><span class="status-dot"></span>Connected</div>
+    <div class="status-chip good">✓ Homed</div>
+    <div class="status-chip info">◉ Vision</div>
+    <div class="status-chip info">◇ IMU</div>
+    <div class="status-chip good" id="safetyChip">Safety: ALLOW</div>
+    <div class="status-chip info mode-chip" id="headerMode">Mode: MANUAL</div>
+    <button class="icon-button" id="menuBtn" title="System menu">☰</button>
+  </header>
+
+  <main class="main-grid">
+
+    <!-- ==================================================================
+         LEFT: VIDEO + TARGET SELECTION
+         ================================================================== -->
+    <section class="left-column">
+
+      <article class="card" id="videoCard">
+        <div class="card-header">
+          <div class="card-title">Live view</div>
+          <div class="spacer small muted">Mock stream · overlay rendered client-side</div>
+          <button class="btn" id="hudToggle">HUD: ON</button>
+        </div>
+
+        <div class="video-stage" id="videoStage">
+
+          <!-- Mock physical silhouettes; production uses a <video> or image stream. -->
+          <div class="mock-person" id="personShape1"></div>
+          <div class="mock-person" id="personShape2"></div>
+          <div class="mock-person" id="personShape3"></div>
+
+          <!-- Camera optical axis. Always represents actual LOS, never the target. -->
+          <div class="reticle hud">
+            <div class="reticle-center"></div>
+          </div>
+
+          <!-- Current tracking state. -->
+          <div class="video-status hud">
+            <div class="state" id="videoState">MANUAL / HOLD</div>
+            <div class="small" id="videoSubstate">No automatic motion</div>
+          </div>
+
+          <!-- Candidate tracks.
+               Clicking one sends SELECT_TARGET(track_uuid) in production. -->
+          <div class="target-box hud"
+               id="targetBox1"
+               data-track-id="track-person-1"
+               role="button"
+               tabindex="0"
+               aria-label="Select Person #1">
+            <div class="target-label">Person #1 · 94%</div>
+          </div>
+
+          <div class="target-box hud"
+               id="targetBox2"
+               data-track-id="track-person-2"
+               role="button"
+               tabindex="0"
+               aria-label="Select Person #2">
+            <div class="target-label">Person #2 · 88%</div>
+          </div>
+
+          <div class="target-box hud"
+               id="targetBox3"
+               data-track-id="track-person-3"
+               role="button"
+               tabindex="0"
+               aria-label="Select Person #3">
+            <div class="target-label">Person #3 · 76%</div>
+          </div>
+
+          <!-- Prediction marker exists only for selected target. -->
+          <div class="predicted-marker hud" id="predictedMarker"></div>
+          <div class="error-vector hud" id="errorVector"></div>
+
+          <!-- Off-screen cue appears when selected target has a valid predicted LOS
+               outside the visible image. -->
+          <div class="offscreen-cue hud" id="offscreenCue">TARGET ↗</div>
+
+          <div class="video-legend hud">
+            <div class="legend-line"><span class="legend-swatch candidate"></span>Candidate target</div>
+            <div class="legend-line"><span class="legend-swatch selected"></span>Selected target</div>
+            <div class="legend-line"><span class="legend-swatch predicted"></span>Predicted LOS</div>
+          </div>
+
+          <!-- Compact travel indicators around video. -->
+          <div class="yaw-ruler hud">
+            <div class="yaw-ruler-line"></div>
+            <div class="ruler-actual" id="yawRulerActual"></div>
+            <div class="ruler-reference" id="yawRulerReference"></div>
+          </div>
+
+          <div class="pitch-ruler hud">
+            <div class="pitch-ruler-line"></div>
+            <div class="ruler-actual" id="pitchRulerActual"></div>
+            <div class="ruler-reference" id="pitchRulerReference"></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- TARGET SELECTOR:
+           Selection persists independently from operating mode. -->
+      <article class="card" id="targetCard">
+        <div class="card-header">
+          <div class="card-title">Targets · select one</div>
+          <div class="spacer small muted" id="targetInstruction">
+            Selection alone does not cause motion in MANUAL or AUTO_ROAM.
+          </div>
+        </div>
+
+        <div class="target-layout">
+          <div class="target-list">
+            <button class="target-row"
+                    data-track-id="track-person-1"
+                    id="targetRow1">
+              <span class="target-index">1</span>
+              <span>
+                <strong>Person #1</strong>
+                <span class="tiny muted">Confirmed · visible</span>
+              </span>
+              <span class="target-confidence">94%</span>
+            </button>
+
+            <button class="target-row"
+                    data-track-id="track-person-2"
+                    id="targetRow2">
+              <span class="target-index">2</span>
+              <span>
+                <strong>Person #2</strong>
+                <span class="tiny muted">Confirmed · visible</span>
+              </span>
+              <span class="target-confidence">88%</span>
+            </button>
+
+            <button class="target-row"
+                    data-track-id="track-person-3"
+                    id="targetRow3">
+              <span class="target-index">3</span>
+              <span>
+                <strong>Person #3</strong>
+                <span class="tiny muted">Confirmed · visible</span>
+              </span>
+              <span class="target-confidence">76%</span>
+            </button>
+          </div>
+
+          <div class="target-details">
+            <div class="details-grid">
+              <span class="key">Selected</span><span class="val" id="selectedName">None</span>
+              <span class="key">Visibility</span><span class="val" id="selectedVisibility">—</span>
+              <span class="key">Confidence</span><span class="val" id="selectedConfidence">—</span>
+              <span class="key">Track age</span><span class="val" id="selectedAge">—</span>
+              <span class="key">Last seen</span><span class="val" id="selectedLastSeen">—</span>
+              <span class="key">Auto-track</span><span class="val" id="selectedAutoTrack">Inactive</span>
+            </div>
+            <button class="btn clear-target" id="clearTargetBtn">Clear target</button>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ==================================================================
+         RIGHT: FIELD OF REGARD + MODE + MODE-SPECIFIC CONTROLS
+         ================================================================== -->
+    <aside class="right-column">
+
+      <!-- FIELD OF REGARD:
+           Adapted from sensor field-of-regard human-factors principles.
+           Safe envelope is application/safety envelope, NOT mechanical hard stops.
+           Camera FOV is shown as an area, not just a point.
+           Selected target and predicted target remain distinct. -->
+      <article class="card" id="forCard">
+        <div class="card-header">
+          <div class="card-title">Field of regard · safe envelope</div>
+          <div class="spacer small muted">Yaw × Pitch logical space</div>
+        </div>
+
+        <div class="for-body">
+          <div class="for-layout">
+            <div class="for-plot">
+              <svg viewBox="0 0 700 390" aria-label="Yaw pitch field of regard">
+                <defs>
+                  <linearGradient id="safeFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#4fd26b" stop-opacity=".10"/>
+                    <stop offset="100%" stop-color="#4fd26b" stop-opacity=".03"/>
+                  </linearGradient>
+                </defs>
+
+                <!-- grid -->
+                <g stroke="#24313c" stroke-width="1">
+                  <line x1="80" y1="60" x2="80" y2="330"/>
+                  <line x1="155" y1="60" x2="155" y2="330"/>
+                  <line x1="230" y1="60" x2="230" y2="330"/>
+                  <line x1="305" y1="60" x2="305" y2="330"/>
+                  <line x1="380" y1="60" x2="380" y2="330"/>
+                  <line x1="455" y1="60" x2="455" y2="330"/>
+                  <line x1="530" y1="60" x2="530" y2="330"/>
+                  <line x1="605" y1="60" x2="605" y2="330"/>
+
+                  <line x1="80" y1="60" x2="620" y2="60"/>
+                  <line x1="80" y1="105" x2="620" y2="105"/>
+                  <line x1="80" y1="150" x2="620" y2="150"/>
+                  <line x1="80" y1="195" x2="620" y2="195"/>
+                  <line x1="80" y1="240" x2="620" y2="240"/>
+                  <line x1="80" y1="285" x2="620" y2="285"/>
+                  <line x1="80" y1="330" x2="620" y2="330"/>
+                </g>
+
+                <!-- Safe envelope polygon.
+                     Production receives actual envelope from controld. -->
+                <path id="safeEnvelopeSvg"
+                      d="M110 115
+                         Q135 82 190 75
+                         L510 75
+                         Q565 82 590 116
+                         L600 245
+                         Q590 292 540 306
+                         L465 315
+                         Q430 300 390 309
+                         Q350 318 310 309
+                         Q270 300 235 315
+                         L160 306
+                         Q110 292 100 245
+                         Z"
+                      fill="url(#safeFill)"
+                      stroke="#5bd36f"
+                      stroke-width="2"/>
+
+                <!-- Camera FOV rectangle.
+                     Center = actual LOS.
+                     Size = camera angular FOV. -->
+                <rect id="cameraFovSvg"
+                      x="285" y="160" width="120" height="76"
+                      fill="rgba(84,184,255,.10)"
+                      stroke="#54b8ff"
+                      stroke-width="2"/>
+
+                <!-- Camera LOS cross -->
+                <g id="actualLosSvg" stroke="#fff" stroke-width="2">
+                  <line x1="337" y1="198" x2="353" y2="198"/>
+                  <line x1="345" y1="190" x2="345" y2="206"/>
+                </g>
+
+                <!-- Reference LOS ring -->
+                <circle id="referenceLosSvg"
+                        cx="358" cy="193" r="8"
+                        fill="none" stroke="#ffffff" stroke-width="2"/>
+
+                <!-- Requested LOS diamond -->
+                <path id="requestedLosSvg"
+                      d="M382 185 l8 8 l-8 8 l-8 -8 z"
+                      fill="none" stroke="#ffbf3f" stroke-width="2"/>
+
+                <!-- selected target measured -->
+                <circle id="targetLosSvg"
+                        cx="445" cy="150" r="8"
+                        fill="none" stroke="#5bd36f" stroke-width="3"
+                        style="display:none"/>
+
+                <!-- predicted target -->
+                <circle id="predictedLosSvg"
+                        cx="475" cy="132" r="8"
+                        fill="none" stroke="#ffbf3f" stroke-width="2"
+                        stroke-dasharray="4 3"
+                        style="display:none"/>
+
+                <!-- cue line -->
+                <line id="forCueLine"
+                      x1="345" y1="198" x2="475" y2="132"
+                      stroke="#3ed5e8" stroke-width="1.5"
+                      stroke-dasharray="6 5"
+                      style="display:none"/>
+
+                <!-- axis labels -->
+                <g fill="#8fa2b4" font-size="12">
+                  <text x="345" y="365" text-anchor="middle">YAW (deg)</text>
+                  <text x="24" y="205" transform="rotate(-90 24 205)" text-anchor="middle">PITCH (deg)</text>
+
+                  <text x="80" y="350" text-anchor="middle">-80</text>
+                  <text x="215" y="350" text-anchor="middle">-40</text>
+                  <text x="350" y="350" text-anchor="middle">0</text>
+                  <text x="485" y="350" text-anchor="middle">+40</text>
+                  <text x="620" y="350" text-anchor="middle">+80</text>
+
+                  <text x="68" y="65" text-anchor="end">+55</text>
+                  <text x="68" y="198" text-anchor="end">0</text>
+                  <text x="68" y="333" text-anchor="end">-45</text>
+                </g>
+              </svg>
+            </div>
+
+            <div class="for-legend">
+              <div class="for-legend-row"><span class="for-symbol">+</span>Camera LOS actual</div>
+              <div class="for-legend-row"><span class="for-symbol">▭</span>Camera FOV current</div>
+              <div class="for-legend-row"><span class="for-symbol">○</span>Trajectory reference</div>
+              <div class="for-legend-row"><span class="for-symbol">◇</span>Requested LOS</div>
+              <div class="for-legend-row"><span class="for-symbol" style="color:var(--green)">◉</span>Selected target</div>
+              <div class="for-legend-row"><span class="for-symbol" style="color:var(--amber)">◌</span>Predicted target</div>
+              <div class="for-legend-row"><span class="for-symbol" style="color:var(--green)">—</span>Safe envelope</div>
+            </div>
+          </div>
+
+          <div class="for-values">
+            <div class="for-value">
+              <div class="label">Yaw actual</div>
+              <div class="value" id="yawActualText">+2.6°</div>
+            </div>
+            <div class="for-value">
+              <div class="label">Pitch actual</div>
+              <div class="value" id="pitchActualText">-0.7°</div>
+            </div>
+            <div class="for-value">
+              <div class="label">Yaw reference</div>
+              <div class="value" id="yawRefText">+2.6°</div>
+            </div>
+            <div class="for-value">
+              <div class="label">Pitch reference</div>
+              <div class="value" id="pitchRefText">-0.7°</div>
+            </div>
+            <div class="for-value">
+              <div class="label">World elevation</div>
+              <div class="value" id="worldElevText">+0.0°</div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Exactly three normal operating modes. -->
+      <article class="card" id="modeCard">
+        <div class="card-header">
+          <div class="card-title">Operating mode</div>
+          <div class="spacer small muted" id="modePhaseLabel">MANUAL · HOLD</div>
+        </div>
+
+        <div class="mode-tabs">
+          <button class="mode-tab active" data-mode="MANUAL">
+            <strong>MANUAL</strong>
+            <span>Jog, step, hold</span>
+          </button>
+
+          <button class="mode-tab" data-mode="AUTO_TRACK">
+            <strong>AUTO TRACK</strong>
+            <span>Follow selected target</span>
+          </button>
+
+          <button class="mode-tab" data-mode="AUTO_ROAM">
+            <strong>AUTO ROAM</strong>
+            <span>Scan safe field of regard</span>
+          </button>
+        </div>
+
+        <!-- ==============================================================
+             MODE-SPECIFIC CONTEXT
+             ============================================================== -->
+        <div class="context-body">
+
+          <!-- MANUAL ---------------------------------------------------- -->
+          <section class="context-panel active" data-context="MANUAL">
+            <div class="context-summary">
+              <strong>MANUAL · HOLD</strong>
+              <span>No detection causes movement. Hold a jog button to move.</span>
+            </div>
+
+            <div class="manual-grid">
+              <div class="dpad">
+                <button class="jog jog-up" data-jog-pitch="1">▲</button>
+                <button class="jog jog-left" data-jog-yaw="-1">◀</button>
+                <button class="jog jog-center" disabled>DEAD-MAN<br/>HOLD</button>
+                <button class="jog jog-right" data-jog-yaw="1">▶</button>
+                <button class="jog jog-down" data-jog-pitch="-1">▼</button>
+              </div>
+
+              <div class="control-stack">
+                <div>
+                  <div class="control-label">Speed profile</div>
+                  <div class="segment" id="speedSegment">
+                    <button data-speed="FINE">Fine</button>
+                    <button data-speed="NORMAL" class="active">Normal</button>
+                    <button data-speed="FAST">Fast</button>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="control-label">Movement frame</div>
+                  <div class="segment" id="frameSegment">
+                    <button data-frame="JOINT" class="active">Joint</button>
+                    <button data-frame="LEVEL">Level</button>
+                  </div>
+                  <div class="tiny muted" style="margin-top:5px;">
+                    Level uses IMU gravity. It does not bypass joint safety.
+                  </div>
+                </div>
+
+                <div>
+                  <div class="control-label">Step</div>
+                  <div class="step-row">
+                    <button data-step="0.5">0.5°</button>
+                    <button data-step="1">1°</button>
+                    <button data-step="2">2°</button>
+                    <button data-step="5">5°</button>
+                    <button data-step="-1">−1°</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button class="btn red stop-motion" data-stop>STOP MOTION</button>
+          </section>
+
+          <!-- AUTO TRACK ------------------------------------------------ -->
+          <section class="context-panel" data-context="AUTO_TRACK">
+            <div class="context-summary">
+              <strong id="autoTrackHeading">AUTO TRACK · WAIT_TARGET</strong>
+              <span id="autoTrackSummary">Select a target. Tracking starts automatically when it is visible.</span>
+            </div>
+
+            <div class="track-state-grid">
+              <div class="metric">
+                <div class="label">Target</div>
+                <div class="value" id="trackMetricTarget">None</div>
+              </div>
+              <div class="metric">
+                <div class="label">Visibility</div>
+                <div class="value" id="trackMetricVisibility">—</div>
+              </div>
+              <div class="metric">
+                <div class="label">Confidence</div>
+                <div class="value" id="trackMetricConfidence">—</div>
+              </div>
+              <div class="metric">
+                <div class="label">Phase</div>
+                <div class="value" id="trackMetricPhase">WAIT_TARGET</div>
+              </div>
+            </div>
+
+            <div class="track-note" id="trackNote">
+              AUTO_TRACK follows only the selected target. Another visible person does not steal selection.
+            </div>
+
+            <button class="btn red stop-motion" data-stop>STOP MOTION</button>
+          </section>
+
+          <!-- AUTO ROAM ------------------------------------------------- -->
+          <section class="context-panel" data-context="AUTO_ROAM">
+            <div class="context-summary">
+              <strong id="autoRoamHeading">AUTO ROAM · SWEEP</strong>
+              <span>Autonomous bounded scan. Detected targets remain selectable but are not pursued.</span>
+            </div>
+
+            <div class="roam-state-grid">
+              <div class="metric">
+                <div class="label">Pattern</div>
+                <div class="value">SWEEP</div>
+              </div>
+              <div class="metric">
+                <div class="label">Direction</div>
+                <div class="value" id="roamDirection">RIGHT</div>
+              </div>
+              <div class="metric">
+                <div class="label">Yaw range</div>
+                <div class="value">−65° … +65°</div>
+              </div>
+              <div class="metric">
+                <div class="label">Elevation</div>
+                <div class="value" id="roamElevation">0.0°</div>
+              </div>
+            </div>
+
+            <div class="roam-controls">
+              <button class="btn blue" id="roamPatternBtn">Pattern: Sweep</button>
+              <button class="btn green" id="roamLevelBtn">World-level: ON</button>
+            </div>
+
+            <div class="track-note">
+              Selected target remains selected. Switch to AUTO TRACK to follow it.
+            </div>
+
+            <button class="btn red stop-motion" data-stop>STOP MOTION</button>
+          </section>
+        </div>
+
+        <!-- Supervisory requests. They are not normal operating modes. -->
+        <div class="supervisory-actions">
+          <button class="btn" id="parkBtn">Safe park</button>
+          <button class="btn" id="homeBtn">Home</button>
+          <button class="btn red" id="shutdownBtn">Safe shutdown</button>
+        </div>
+      </article>
+    </aside>
+  </main>
+
+  <!-- ====================================================================
+       DIAGNOSTICS
+       Collapsed by default. Engineering internals live here.
+       ==================================================================== -->
+  <section class="diagnostics">
+    <details class="diag-card">
+      <summary>Diagnostics · CAN · timing · motors · payload · calibration · logs</summary>
+
+      <div class="diag-content">
+        <div class="diag-group">
+          <h4>Control timing</h4>
+          <div class="diag-row"><span>Loop</span><span>200.0 Hz</span></div>
+          <div class="diag-row"><span>p99 cycle</span><span>5.21 ms</span></div>
+          <div class="diag-row"><span>Deadline misses</span><span>0</span></div>
+        </div>
+
+        <div class="diag-group">
+          <h4>CAN</h4>
+          <div class="diag-row"><span>Adapter</span><span>yousee</span></div>
+          <div class="diag-row"><span>RX/TX</span><span>12842 / 12804</span></div>
+          <div class="diag-row"><span>Feedback age</span><span>8 ms</span></div>
+        </div>
+
+        <div class="diag-group">
+          <h4>Motors</h4>
+          <div class="diag-row"><span>Yaw effort</span><span>-0.07 Nm</span></div>
+          <div class="diag-row"><span>Pitch effort</span><span>-0.01 Nm</span></div>
+          <div class="diag-row"><span>Temperature</span><span>42.1 °C</span></div>
+        </div>
+
+        <div class="diag-group">
+          <h4>Payload / calibration</h4>
+          <div class="diag-row"><span>Profile</span><span>conservative</span></div>
+          <div class="diag-row"><span>Homing</span><span>valid</span></div>
+          <div class="diag-row"><span>IMU alignment</span><span>valid</span></div>
+        </div>
+
+        <!-- Reference-only scenario controls. These are deliberately inside
+             Diagnostics because they are not production operator controls. -->
+        <div class="diag-group mock-scenario">
+          <h4>Mock scenario controls · reference file only</h4>
+          <div style="display:flex; flex-wrap:wrap; gap:7px;">
+            <button class="btn" id="simulateLossBtn">Toggle selected target visible/lost</button>
+            <button class="btn" id="simulateOffscreenBtn">Toggle selected target off-screen</button>
+            <button class="btn" id="resetMockBtn">Reset mock state</button>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">
+            Production implementation should not expose these scenario controls on the normal UI.
+          </div>
+        </div>
+
+        <div class="diag-group mock-scenario">
+          <h4>Event log</h4>
+          <div id="eventLog" class="tiny muted">
+            00:00:00 UI reference mock loaded.
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+</div>
+
+<script>
+/*
+REFERENCE INTERACTION MODEL
+===========================
+
+This JS simulates v3 UI semantics only.
+
+Production API semantics should map to:
+- SET_MODE(MANUAL | AUTO_TRACK | AUTO_ROAM)
+- SELECT_TARGET(track_uuid)
+- CLEAR_TARGET
+- STOP_MOTION
+- MANUAL_JOG_START / KEEPALIVE / STOP
+- MANUAL_STEP
+- supervisory PARK/HOME/SHUTDOWN
+
+This mock intentionally does not model CAN or hardware I/O.
+*/
+
+// ---------------------------------------------------------------------------
+// Mock track registry
+// ---------------------------------------------------------------------------
+const tracks = {
+  "track-person-1": {
+    id: "track-person-1",
+    name: "Person #1",
+    confidence: 94,
+    age: 1.32,
+    visible: true,
+    offscreen: false,
+    // target LOS in logical joint degrees for simulation
+    yaw: 28,
+    pitch: 12,
+    // approximate video target center (normalized)
+    screenX: .52,
+    screenY: .55
+  },
+  "track-person-2": {
+    id: "track-person-2",
+    name: "Person #2",
+    confidence: 88,
+    age: 2.74,
+    visible: true,
+    offscreen: false,
+    yaw: 52,
+    pitch: 4,
+    screenX: .75,
+    screenY: .51
+  },
+  "track-person-3": {
+    id: "track-person-3",
+    name: "Person #3",
+    confidence: 76,
+    age: .84,
+    visible: true,
+    offscreen: false,
+    yaw: -44,
+    pitch: -5,
+    screenX: .255,
+    screenY: .58
+  }
+};
+
+const boxByTrack = {
+  "track-person-1": document.querySelector("#targetBox1"),
+  "track-person-2": document.querySelector("#targetBox2"),
+  "track-person-3": document.querySelector("#targetBox3")
+};
+
+const rowByTrack = {
+  "track-person-1": document.querySelector("#targetRow1"),
+  "track-person-2": document.querySelector("#targetRow2"),
+  "track-person-3": document.querySelector("#targetRow3")
+};
+
+// ---------------------------------------------------------------------------
+// Mock controller state
+// ---------------------------------------------------------------------------
+const state = {
+  mode: "MANUAL",
+  modePhase: "HOLD",
+
+  selectedTrackId: null,
+
+  qActual: { yaw: 2.6, pitch: -0.7 },
+  qReference: { yaw: 2.6, pitch: -0.7 },
+  qRequested: { yaw: 2.6, pitch: -0.7 },
+
+  yawMin: -80,
+  yawMax: 80,
+  pitchMin: -45,
+  pitchMax: 55,
+
+  speedProfile: "NORMAL",
+  manualFrame: "JOINT",
+  jog: { yaw: 0, pitch: 0, active: false },
+
+  roamDirection: 1,
+  roamMin: -65,
+  roamMax: 65,
+  roamPitch: 0,
+  roamWorldLevel: true,
+
+  hudEnabled: true,
+  mockLost: false,
+  mockOffscreen: false,
+
+  // AUTO_TRACK state
+  trackPhase: "WAIT_TARGET",
+  lostSince: null
+};
+
+const speedDegPerSec = {
+  FINE: 4,
+  NORMAL: 14,
+  FAST: 30
+};
+
+// ---------------------------------------------------------------------------
+// Utility
+// ---------------------------------------------------------------------------
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const fmtDeg = v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}°`;
+const pct = (v,a,b) => (v-a)/(b-a);
+
+function logEvent(msg) {
+  const log = document.querySelector("#eventLog");
+  const time = new Date().toLocaleTimeString();
+  log.innerHTML = `${time} ${msg}<br/>` + log.innerHTML;
+}
+
+// ---------------------------------------------------------------------------
+// Target selection
+// ---------------------------------------------------------------------------
+function selectTarget(trackId) {
+  if (!tracks[trackId]) return;
+
+  state.selectedTrackId = trackId;
+  state.mockLost = false;
+  state.mockOffscreen = false;
+
+  logEvent(`TARGET_SELECTED ${tracks[trackId].name}`);
+  updateTargetSelectionUI();
+
+  // Important v3 semantic:
+  // selection does NOT itself change mode.
+  // If already AUTO_TRACK, the next control tick will begin acquisition.
+}
+
+function clearTarget() {
+  if (state.selectedTrackId) {
+    logEvent(`TARGET_CLEARED ${tracks[state.selectedTrackId].name}`);
+  }
+
+  state.selectedTrackId = null;
+  state.trackPhase = "WAIT_TARGET";
+  state.lostSince = null;
+  state.mockLost = false;
+  state.mockOffscreen = false;
+  updateTargetSelectionUI();
+}
+
+function selectedTrack() {
+  return state.selectedTrackId ? tracks[state.selectedTrackId] : null;
+}
+
+function updateTargetSelectionUI() {
+  Object.keys(tracks).forEach(id => {
+    boxByTrack[id].classList.toggle("selected", id === state.selectedTrackId);
+    rowByTrack[id].classList.toggle("selected", id === state.selectedTrackId);
+  });
+
+  const t = selectedTrack();
+
+  document.querySelector("#selectedName").textContent = t ? t.name : "None";
+  document.querySelector("#selectedVisibility").textContent =
+    t ? (state.mockLost ? "LOST" : state.mockOffscreen ? "OFF-SCREEN" : "VISIBLE") : "—";
+  document.querySelector("#selectedConfidence").textContent = t ? `${t.confidence}%` : "—";
+  document.querySelector("#selectedAge").textContent = t ? `${t.age.toFixed(2)} s` : "—";
+  document.querySelector("#selectedLastSeen").textContent =
+    t ? (state.mockLost ? "1.8 s ago" : "0.08 s ago") : "—";
+  document.querySelector("#selectedAutoTrack").textContent =
+    state.mode === "AUTO_TRACK" ? state.trackPhase : "Inactive";
+
+  document.querySelector("#trackMetricTarget").textContent = t ? t.name : "None";
+  document.querySelector("#trackMetricVisibility").textContent =
+    t ? (state.mockLost ? "LOST" : state.mockOffscreen ? "OFF-SCREEN" : "VISIBLE") : "—";
+  document.querySelector("#trackMetricConfidence").textContent = t ? `${t.confidence}%` : "—";
+
+  // Visibility of candidate overlay:
+  Object.keys(tracks).forEach(id => {
+    const isSelected = id === state.selectedTrackId;
+    if (isSelected && (state.mockLost || state.mockOffscreen)) {
+      boxByTrack[id].classList.add("lost");
+    } else {
+      boxByTrack[id].classList.remove("lost");
+    }
+  });
+}
+
+// Click target on video
+Object.values(boxByTrack).forEach(box => {
+  box.addEventListener("click", () => selectTarget(box.dataset.trackId));
+  box.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") selectTarget(box.dataset.trackId);
+  });
+});
+
+// Click target in list
+Object.values(rowByTrack).forEach(row => {
+  row.addEventListener("click", () => selectTarget(row.dataset.trackId));
+});
+
+document.querySelector("#clearTargetBtn").addEventListener("click", clearTarget);
+
+// ---------------------------------------------------------------------------
+// Mode manager
+// ---------------------------------------------------------------------------
+function setMode(mode) {
+  if (!["MANUAL","AUTO_TRACK","AUTO_ROAM"].includes(mode)) return;
+
+  if (state.mode === mode) return;
+
+  const previous = state.mode;
+  state.mode = mode;
+
+  // Invalidate manual jog on every mode transition.
+  stopJog(false);
+
+  if (mode === "MANUAL") {
+    state.modePhase = "HOLD";
+    state.trackPhase = "WAIT_TARGET";
+    state.qRequested = { ...state.qActual };
+  }
+
+  if (mode === "AUTO_TRACK") {
+    state.modePhase = "WAIT_TARGET";
+    state.trackPhase = "WAIT_TARGET";
+    state.lostSince = null;
+  }
+
+  if (mode === "AUTO_ROAM") {
+    state.modePhase = "SWEEP";
+    state.trackPhase = "WAIT_TARGET";
+    // Preserve target selection; do not chase target.
+  }
+
+  logEvent(`MODE_CHANGED ${previous} -> ${mode}`);
+  updateModeUI();
+}
+
+function updateModeUI() {
+  document.querySelectorAll(".mode-tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.mode === state.mode);
+  });
+
+  document.querySelectorAll(".context-panel").forEach(panel => {
+    panel.classList.toggle("active", panel.dataset.context === state.mode);
+  });
+
+  const friendly = {
+    MANUAL: "MANUAL",
+    AUTO_TRACK: "AUTO TRACK",
+    AUTO_ROAM: "AUTO ROAM"
+  }[state.mode];
+
+  document.querySelector("#headerMode").textContent = `Mode: ${friendly}`;
+  document.querySelector("#modePhaseLabel").textContent = `${friendly} · ${state.modePhase}`;
+
+  updateTargetSelectionUI();
+}
+
+document.querySelectorAll(".mode-tab").forEach(btn => {
+  btn.addEventListener("click", () => setMode(btn.dataset.mode));
+});
+
+// ---------------------------------------------------------------------------
+// STOP MOTION
+// v3 frozen semantic: controlled brake -> MANUAL/HOLD
+// ---------------------------------------------------------------------------
+function stopMotion() {
+  stopJog(false);
+
+  state.qRequested = { ...state.qActual };
+  state.qReference = { ...state.qActual };
+
+  const prevMode = state.mode;
+  state.mode = "MANUAL";
+  state.modePhase = "HOLD";
+  state.trackPhase = "WAIT_TARGET";
+  state.lostSince = null;
+
+  logEvent(`STOP_MOTION from ${prevMode} -> MANUAL/HOLD`);
+  updateModeUI();
+}
+
+document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", stopMotion));
+
+// ---------------------------------------------------------------------------
+// Manual jog
+// Production: JOG_START + keepalive every ~100 ms + lease expiry in controld.
+// Mock: press/hold pointer.
+// ---------------------------------------------------------------------------
+let jogTimer = null;
+
+function startJog(button) {
+  if (state.mode !== "MANUAL") return;
+
+  state.jog.yaw = Number(button.dataset.jogYaw || 0);
+  state.jog.pitch = Number(button.dataset.jogPitch || 0);
+  state.jog.active = true;
+  state.modePhase = "JOG";
+  button.classList.add("active");
+
+  logEvent(`MANUAL_JOG_STARTED yaw=${state.jog.yaw} pitch=${state.jog.pitch}`);
+
+  if (jogTimer) clearInterval(jogTimer);
+
+  jogTimer = setInterval(() => {
+    if (!state.jog.active) return;
+
+    const s = speedDegPerSec[state.speedProfile];
+    const dt = .04;
+
+    state.qRequested.yaw = clamp(
+      state.qRequested.yaw + state.jog.yaw * s * dt,
+      state.yawMin,
+      state.yawMax
+    );
+
+    // LEVEL frame demo:
+    // left/right yaw introduces a small compensating pitch curve.
+    if (state.manualFrame === "LEVEL" && state.jog.yaw !== 0) {
+      const targetPitch = 5 * Math.sin(state.qRequested.yaw * Math.PI / 90);
+      state.qRequested.pitch = clamp(targetPitch, state.pitchMin, state.pitchMax);
+    } else {
+      state.qRequested.pitch = clamp(
+        state.qRequested.pitch + state.jog.pitch * s * dt,
+        state.pitchMin,
+        state.pitchMax
+      );
+    }
+  }, 40);
+
+  updateModeUI();
+}
+
+function stopJog(writeEvent=true) {
+  document.querySelectorAll(".jog").forEach(b => b.classList.remove("active"));
+
+  if (jogTimer) clearInterval(jogTimer);
+  jogTimer = null;
+
+  if (state.jog.active && writeEvent) {
+    logEvent("MANUAL_JOG_STOPPED");
+  }
+
+  state.jog = { yaw: 0, pitch: 0, active: false };
+
+  if (state.mode === "MANUAL") {
+    state.modePhase = "HOLD";
+  }
+}
+
+document.querySelectorAll(".jog[data-jog-yaw],.jog[data-jog-pitch]").forEach(btn => {
+  btn.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    startJog(btn);
+  });
+
+  btn.addEventListener("pointerup", () => stopJog());
+  btn.addEventListener("pointercancel", () => stopJog());
+});
+
+window.addEventListener("blur", () => stopJog());
+
+// Speed profile
+document.querySelectorAll("#speedSegment button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    state.speedProfile = btn.dataset.speed;
+    document.querySelectorAll("#speedSegment button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    logEvent(`MANUAL_SPEED_PROFILE ${state.speedProfile}`);
+  });
+});
+
+// Joint / Level frame
+document.querySelectorAll("#frameSegment button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    state.manualFrame = btn.dataset.frame;
+    document.querySelectorAll("#frameSegment button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    logEvent(`MANUAL_FRAME ${state.manualFrame}`);
+  });
+});
+
+// Step example: this reference mock applies step to yaw.
+// Production UI can use contextual axis selection or separate axis step buttons.
+document.querySelectorAll("[data-step]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (state.mode !== "MANUAL") return;
+    const delta = Number(btn.dataset.step);
+    state.qRequested.yaw = clamp(state.qRequested.yaw + delta, state.yawMin, state.yawMax);
+    state.modePhase = "STEP";
+    logEvent(`MANUAL_STEP yaw ${delta} deg`);
+    setTimeout(() => {
+      if (state.mode === "MANUAL") {
+        state.modePhase = "HOLD";
+        updateModeUI();
+      }
+    }, 350);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUTO_TRACK state machine simulation
+// ---------------------------------------------------------------------------
+function updateAutoTrack(nowMs) {
+  if (state.mode !== "AUTO_TRACK") return;
+
+  const t = selectedTrack();
+
+  if (!t) {
+    state.trackPhase = "WAIT_TARGET";
+    state.modePhase = "WAIT_TARGET";
+    state.qRequested = { ...state.qActual };
+    state.lostSince = null;
+    return;
+  }
+
+  // If mock off-screen but not lost, target has valid predicted LOS.
+  const visible = !state.mockLost;
+  const offscreen = state.mockOffscreen;
+
+  if (visible) {
+    state.lostSince = null;
+
+    // AUTO_TRACK automatically begins when selected target is visible.
+    if (state.trackPhase === "WAIT_TARGET" ||
+        state.trackPhase === "LOST_HOLD" ||
+        state.trackPhase === "COASTING") {
+      state.trackPhase = "ACQUIRE";
+    }
+
+    // Very short acquire phase for the mock.
+    state.trackPhase = "TRACKING";
+    state.modePhase = "TRACKING";
+
+    // Requested LOS follows selected target.
+    // Off-screen remains trackable/reachable in this mock.
+    state.qRequested.yaw = clamp(t.yaw, state.yawMin, state.yawMax);
+    state.qRequested.pitch = clamp(t.pitch, state.pitchMin, state.pitchMax);
+    return;
+  }
+
+  // Lost.
+  if (state.lostSince === null) {
+    state.lostSince = nowMs;
+  }
+
+  const lostMs = nowMs - state.lostSince;
+
+  if (lostMs < 350) {
+    state.trackPhase = "COASTING";
+    state.modePhase = "COASTING";
+
+    // brief prediction/coast toward last target
+    state.qRequested.yaw = clamp(t.yaw + 2.5, state.yawMin, state.yawMax);
+    state.qRequested.pitch = clamp(t.pitch + 1.0, state.pitchMin, state.pitchMax);
+  } else {
+    state.trackPhase = "LOST_HOLD";
+    state.modePhase = "LOST_HOLD";
+    state.qRequested = { ...state.qActual };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AUTO_ROAM simulation
+// Target remains selected but does not own motion.
+// ---------------------------------------------------------------------------
+function updateAutoRoam(dt) {
+  if (state.mode !== "AUTO_ROAM") return;
+
+  state.modePhase = "SWEEP";
+
+  const roamSpeed = 10; // mock deg/s
+  state.qRequested.yaw += state.roamDirection * roamSpeed * dt;
+
+  if (state.qRequested.yaw >= state.roamMax) {
+    state.qRequested.yaw = state.roamMax;
+    state.roamDirection = -1;
+    logEvent("ROAM_DIRECTION_REVERSED RIGHT -> LEFT");
+  }
+
+  if (state.qRequested.yaw <= state.roamMin) {
+    state.qRequested.yaw = state.roamMin;
+    state.roamDirection = 1;
+    logEvent("ROAM_DIRECTION_REVERSED LEFT -> RIGHT");
+  }
+
+  if (state.roamWorldLevel) {
+    // mock pitch compensation for base tilt
+    state.qRequested.pitch = 4.5 * Math.sin(state.qRequested.yaw * Math.PI / 90);
+  } else {
+    state.qRequested.pitch = state.roamPitch;
+  }
+
+  document.querySelector("#roamDirection").textContent =
+    state.roamDirection > 0 ? "RIGHT" : "LEFT";
+}
+
+// ---------------------------------------------------------------------------
+// Mock plant / trajectory
+// requested -> reference -> actual.
+// This visually demonstrates the v3 actual/reference/requested distinction.
+// ---------------------------------------------------------------------------
+function updateMockPlant() {
+  state.qReference.yaw = lerp(state.qReference.yaw, state.qRequested.yaw, .12);
+  state.qReference.pitch = lerp(state.qReference.pitch, state.qRequested.pitch, .12);
+
+  state.qActual.yaw = lerp(state.qActual.yaw, state.qReference.yaw, .08);
+  state.qActual.pitch = lerp(state.qActual.pitch, state.qReference.pitch, .08);
+}
+
+// ---------------------------------------------------------------------------
+// UI rendering
+// ---------------------------------------------------------------------------
+function mapYawToSvg(yaw) {
+  return 80 + pct(yaw, state.yawMin, state.yawMax) * 540;
+}
+
+function mapPitchToSvg(pitch) {
+  return 330 - pct(pitch, state.pitchMin, state.pitchMax) * 270;
+}
+
+function renderFieldOfRegard() {
+  const ax = mapYawToSvg(state.qActual.yaw);
+  const ay = mapPitchToSvg(state.qActual.pitch);
+
+  const rx = mapYawToSvg(state.qReference.yaw);
+  const ry = mapPitchToSvg(state.qReference.pitch);
+
+  const qx = mapYawToSvg(state.qRequested.yaw);
+  const qy = mapPitchToSvg(state.qRequested.pitch);
+
+  // FOV mock = 34 deg x 22 deg.
+  const fovWidth = (34 / (state.yawMax - state.yawMin)) * 540;
+  const fovHeight = (22 / (state.pitchMax - state.pitchMin)) * 270;
+
+  const fov = document.querySelector("#cameraFovSvg");
+  fov.setAttribute("x", (ax - fovWidth/2).toFixed(2));
+  fov.setAttribute("y", (ay - fovHeight/2).toFixed(2));
+  fov.setAttribute("width", fovWidth.toFixed(2));
+  fov.setAttribute("height", fovHeight.toFixed(2));
+
+  const actual = document.querySelector("#actualLosSvg");
+  actual.querySelectorAll("line")[0].setAttribute("x1", ax - 8);
+  actual.querySelectorAll("line")[0].setAttribute("x2", ax + 8);
+  actual.querySelectorAll("line")[0].setAttribute("y1", ay);
+  actual.querySelectorAll("line")[0].setAttribute("y2", ay);
+
+  actual.querySelectorAll("line")[1].setAttribute("x1", ax);
+  actual.querySelectorAll("line")[1].setAttribute("x2", ax);
+  actual.querySelectorAll("line")[1].setAttribute("y1", ay - 8);
+  actual.querySelectorAll("line")[1].setAttribute("y2", ay + 8);
+
+  const ref = document.querySelector("#referenceLosSvg");
+  ref.setAttribute("cx", rx);
+  ref.setAttribute("cy", ry);
+
+  // requested diamond
+  const req = document.querySelector("#requestedLosSvg");
+  req.setAttribute("d",
+    `M ${qx} ${qy-8} L ${qx+8} ${qy} L ${qx} ${qy+8} L ${qx-8} ${qy} Z`
+  );
+
+  const t = selectedTrack();
+  const targetSvg = document.querySelector("#targetLosSvg");
+  const predictedSvg = document.querySelector("#predictedLosSvg");
+  const cue = document.querySelector("#forCueLine");
+
+  if (t) {
+    const tx = mapYawToSvg(t.yaw);
+    const ty = mapPitchToSvg(t.pitch);
+
+    targetSvg.style.display = state.mockLost ? "none" : "";
+    targetSvg.setAttribute("cx", tx);
+    targetSvg.setAttribute("cy", ty);
+
+    // Small prediction lead.
+    const predYaw = clamp(t.yaw + 5, state.yawMin, state.yawMax);
+    const predPitch = clamp(t.pitch + 2, state.pitchMin, state.pitchMax);
+    const px = mapYawToSvg(predYaw);
+    const py = mapPitchToSvg(predPitch);
+
+    predictedSvg.style.display = "";
+    predictedSvg.setAttribute("cx", px);
+    predictedSvg.setAttribute("cy", py);
+
+    cue.style.display = "";
+    cue.setAttribute("x1", ax);
+    cue.setAttribute("y1", ay);
+    cue.setAttribute("x2", px);
+    cue.setAttribute("y2", py);
+  } else {
+    targetSvg.style.display = "none";
+    predictedSvg.style.display = "none";
+    cue.style.display = "none";
+  }
+
+  document.querySelector("#yawActualText").textContent = fmtDeg(state.qActual.yaw);
+  document.querySelector("#pitchActualText").textContent = fmtDeg(state.qActual.pitch);
+  document.querySelector("#yawRefText").textContent = fmtDeg(state.qReference.yaw);
+  document.querySelector("#pitchRefText").textContent = fmtDeg(state.qReference.pitch);
+
+  // Mock world elevation. In actual implementation this comes from geometry/IMU.
+  const worldElev = state.qActual.pitch - 4.5 * Math.sin(state.qActual.yaw * Math.PI / 90);
+  document.querySelector("#worldElevText").textContent = fmtDeg(worldElev);
+}
+
+function renderVideoHud() {
+  const allHud = document.querySelectorAll(".hud");
+  allHud.forEach(el => {
+    el.style.visibility = state.hudEnabled ? "visible" : "hidden";
+  });
+
+  if (!state.hudEnabled) return;
+
+  const t = selectedTrack();
+  const marker = document.querySelector("#predictedMarker");
+  const line = document.querySelector("#errorVector");
+  const cue = document.querySelector("#offscreenCue");
+  const stage = document.querySelector("#videoStage");
+
+  if (t) {
+    if (state.mockOffscreen) {
+      marker.style.display = "none";
+      line.style.display = "none";
+      cue.style.display = "";
+    } else {
+      cue.style.display = "none";
+
+      const predX = clamp(t.screenX + .08, .05, .95);
+      const predY = clamp(t.screenY - .07, .06, .94);
+
+      marker.style.display = "";
+      marker.style.left = `${predX*100}%`;
+      marker.style.top = `${predY*100}%`;
+
+      // Line from video center to predicted point.
+      const rect = stage.getBoundingClientRect();
+      const dx = (predX - .5) * rect.width;
+      const dy = (predY - .5) * rect.height;
+      const len = Math.sqrt(dx*dx + dy*dy);
+      const ang = Math.atan2(dy,dx) * 180/Math.PI;
+
+      line.style.display = "";
+      line.style.left = "50%";
+      line.style.top = "50%";
+      line.style.width = `${len}px`;
+      line.style.transform = `rotate(${ang}deg)`;
+    }
+  } else {
+    marker.style.display = "none";
+    line.style.display = "none";
+    cue.style.display = "none";
+  }
+
+  // Yaw ruler
+  const yawA = pct(state.qActual.yaw, state.yawMin, state.yawMax);
+  const yawR = pct(state.qReference.yaw, state.yawMin, state.yawMax);
+  document.querySelector("#yawRulerActual").style.left = `${5 + yawA*90}%`;
+  document.querySelector("#yawRulerReference").style.left = `${5 + yawR*90}%`;
+
+  // Pitch ruler
+  const pitA = 1 - pct(state.qActual.pitch, state.pitchMin, state.pitchMax);
+  const pitR = 1 - pct(state.qReference.pitch, state.pitchMin, state.pitchMax);
+  document.querySelector("#pitchRulerActual").style.top = `${5 + pitA*90}%`;
+  document.querySelector("#pitchRulerReference").style.top = `${5 + pitR*90}%`;
+
+  // State text.
+  const videoState = document.querySelector("#videoState");
+  const videoSub = document.querySelector("#videoSubstate");
+
+  if (state.mode === "MANUAL") {
+    videoState.textContent = `MANUAL / ${state.modePhase}`;
+    videoSub.textContent = "No automatic motion";
+  }
+
+  if (state.mode === "AUTO_TRACK") {
+    const tr = selectedTrack();
+    videoState.textContent = `AUTO TRACK / ${state.trackPhase}`;
+    videoSub.textContent =
+      tr ? `${tr.name} · ${state.mockLost ? "lost" : "selected"}` : "Select a target";
+  }
+
+  if (state.mode === "AUTO_ROAM") {
+    videoState.textContent = "AUTO ROAM / SWEEP";
+    videoSub.textContent = `Scanning ${state.roamDirection > 0 ? "right" : "left"}`;
+  }
+}
+
+function renderTrackContext() {
+  const t = selectedTrack();
+
+  document.querySelector("#trackMetricPhase").textContent = state.trackPhase;
+  document.querySelector("#autoTrackHeading").textContent =
+    `AUTO TRACK · ${state.trackPhase}`;
+
+  let summary = "Select a target. Tracking starts automatically when it is visible.";
+
+  if (t) {
+    if (state.trackPhase === "TRACKING") {
+      summary = `Tracking ${t.name} automatically.`;
+    } else if (state.trackPhase === "COASTING") {
+      summary = `${t.name} temporarily missing. Short prediction/coast active.`;
+    } else if (state.trackPhase === "LOST_HOLD") {
+      summary = `${t.name} lost. Turret holding safely and waiting for confident reacquisition.`;
+    } else if (state.trackPhase === "WAIT_TARGET") {
+      summary = `${t.name} selected. Waiting for a visible/confident measurement.`;
+    }
+  }
+
+  document.querySelector("#autoTrackSummary").textContent = summary;
+  document.querySelector("#selectedAutoTrack").textContent =
+    state.mode === "AUTO_TRACK" ? state.trackPhase : "Inactive";
+}
+
+function renderModePhase() {
+  const friendly = {
+    MANUAL: "MANUAL",
+    AUTO_TRACK: "AUTO TRACK",
+    AUTO_ROAM: "AUTO ROAM"
+  }[state.mode];
+
+  document.querySelector("#modePhaseLabel").textContent =
+    `${friendly} · ${state.modePhase}`;
+}
+
+function render() {
+  updateTargetSelectionUI();
+  renderFieldOfRegard();
+  renderVideoHud();
+  renderTrackContext();
+  renderModePhase();
+}
+
+// ---------------------------------------------------------------------------
+// Mock main loop
+// ---------------------------------------------------------------------------
+let lastFrame = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - lastFrame)/1000, .05);
+  lastFrame = now;
+
+  updateAutoTrack(now);
+  updateAutoRoam(dt);
+  updateMockPlant();
+  render();
+
+  requestAnimationFrame(tick);
+}
+
+requestAnimationFrame(tick);
+
+// ---------------------------------------------------------------------------
+// HUD toggle
+// ---------------------------------------------------------------------------
+document.querySelector("#hudToggle").addEventListener("click", () => {
+  state.hudEnabled = !state.hudEnabled;
+  document.querySelector("#hudToggle").textContent =
+    `HUD: ${state.hudEnabled ? "ON" : "OFF"}`;
+});
+
+// ---------------------------------------------------------------------------
+// AUTO_ROAM toggles
+// ---------------------------------------------------------------------------
+document.querySelector("#roamLevelBtn").addEventListener("click", () => {
+  state.roamWorldLevel = !state.roamWorldLevel;
+  document.querySelector("#roamLevelBtn").textContent =
+    `World-level: ${state.roamWorldLevel ? "ON" : "OFF"}`;
+  logEvent(`ROAM_WORLD_LEVEL ${state.roamWorldLevel ? "ON" : "OFF"}`);
+});
+
+// ---------------------------------------------------------------------------
+// Supervisory actions (mock only)
+// ---------------------------------------------------------------------------
+document.querySelector("#parkBtn").addEventListener("click", () => {
+  logEvent("SAFE_PARK requested");
+  state.qRequested = { yaw: 0, pitch: -35 };
+});
+
+document.querySelector("#homeBtn").addEventListener("click", () => {
+  logEvent("HOME requested (mock only)");
+});
+
+document.querySelector("#shutdownBtn").addEventListener("click", () => {
+  logEvent("SAFE_SHUTDOWN requested (mock only)");
+  state.qRequested = { yaw: 0, pitch: -35 };
+});
+
+document.querySelector("#menuBtn").addEventListener("click", () => {
+  alert("Reference mock: system menu would contain secondary operations such as safe shutdown, UI preferences, and developer settings.");
+});
+
+// ---------------------------------------------------------------------------
+// Diagnostics-only scenario controls
+// ---------------------------------------------------------------------------
+document.querySelector("#simulateLossBtn").addEventListener("click", () => {
+  if (!state.selectedTrackId) {
+    selectTarget("track-person-1");
+  }
+
+  state.mockLost = !state.mockLost;
+  state.mockOffscreen = false;
+
+  if (!state.mockLost) {
+    state.lostSince = null;
+    logEvent("TARGET_REAPPEARED / eligible for reacquisition");
+  } else {
+    logEvent("TARGET_LOST simulated");
+  }
+
+  updateTargetSelectionUI();
+});
+
+document.querySelector("#simulateOffscreenBtn").addEventListener("click", () => {
+  if (!state.selectedTrackId) {
+    selectTarget("track-person-1");
+  }
+
+  state.mockOffscreen = !state.mockOffscreen;
+  state.mockLost = false;
+  state.lostSince = null;
+
+  logEvent(`TARGET_OFFSCREEN ${state.mockOffscreen ? "ON" : "OFF"}`);
+  updateTargetSelectionUI();
+});
+
+document.querySelector("#resetMockBtn").addEventListener("click", () => {
+  stopJog(false);
+
+  state.mode = "MANUAL";
+  state.modePhase = "HOLD";
+  state.selectedTrackId = null;
+  state.qActual = { yaw: 2.6, pitch: -0.7 };
+  state.qReference = { yaw: 2.6, pitch: -0.7 };
+  state.qRequested = { yaw: 2.6, pitch: -0.7 };
+  state.speedProfile = "NORMAL";
+  state.manualFrame = "JOINT";
+  state.roamDirection = 1;
+  state.roamWorldLevel = true;
+  state.mockLost = false;
+  state.mockOffscreen = false;
+  state.trackPhase = "WAIT_TARGET";
+  state.lostSince = null;
+
+  document.querySelectorAll("#speedSegment button").forEach(b => {
+    b.classList.toggle("active", b.dataset.speed === "NORMAL");
+  });
+  document.querySelectorAll("#frameSegment button").forEach(b => {
+    b.classList.toggle("active", b.dataset.frame === "JOINT");
+  });
+  document.querySelector("#roamLevelBtn").textContent = "World-level: ON";
+
+  updateModeUI();
+  updateTargetSelectionUI();
+  logEvent("MOCK_RESET");
+});
+
+// Initial state.
+updateModeUI();
+updateTargetSelectionUI();
+</script>
+</body>
+</html>
