@@ -112,7 +112,6 @@ let lastTelemetry = null;
 let lastTelemetryAt = 0;
 let transportOk = true;      // false => show the stale/disconnected state (§25)
 let healthAgeMs = null;      // webd's own age of controld's data, from /api/health (§25)
-let staleNow = false;        // last computed §25 verdict, so a transition can repaint
 
 const STALE_AFTER_MS = 500;  // webd's threshold, mirrored so server and page agree
 const QUIET_AFTER_MS = 1500; // silence on the link to THIS page: three times the server's own
@@ -282,8 +281,7 @@ function updateStaleness(t) {
     trackAfterMs: TRACK_AFTER_MS
   });
   const vp = document.getElementById("viewport");
-  if (vp) vp.classList.toggle("stale", verdict);
-  staleNow = verdict;
+  if (vp) vp.classList.toggle("stale", verdict);   // a no-op when the verdict did not change
   return verdict;
 }
 
@@ -359,8 +357,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // announces a close, but between those two a link that merely goes SILENT - no close event, webd
   // still healthy, controld still publishing to everyone else - leaves this page showing its last
   // frame indefinitely. Checking the clock costs a DOM class toggle four times a second and is the
-  // only mechanism that does not assume someone will eventually tell us.
-  setInterval(() => { if (lastTelemetry) render(lastTelemetry); }, 250);
+  // only mechanism that does not assume someone will eventually tell us. It re-evaluates the verdict
+  // rather than repainting the page: the overlay is rebuilt from payloads when payloads exist, and
+  // rebuilding the DOM four times a second to notice that nothing arrived is a lot of work to
+  // discover an absence.
+  setInterval(() => { if (lastTelemetry) updateStaleness(lastTelemetry); }, 250);
 });
 """
 
