@@ -98,6 +98,10 @@ class Telemetry:
     # frame for no reader's benefit. Undeclared fields here do not merely lose
     # their type — they disappear from the re-serialised frame entirely, which is
     # how selected_track_id once looked like a vision bug.
+    # §79: the structured event window and the counter behind it. Undeclared fields do
+    # not error here — they stop arriving, which is a much worse failure to diagnose.
+    event_generation: int = 0
+    events: list = field(default_factory=list)
     track_count: int = 0
     track_list_age_ms: int = -1
     tracks: list = field(default_factory=list)

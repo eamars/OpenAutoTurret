@@ -331,3 +331,33 @@ def test_webd_declares_the_fields_the_dashboard_reads():
             f"webd does not declare {field_name}: the dashboard would read undefined "
             "and the dashboard's own fallback text would hide it"
         )
+
+
+def test_every_event_the_document_asks_for_has_a_name():
+    """§79 lists the events by name. The name table is checked against that list.
+
+    The list is read out of the architecture document rather than typed in here, for the
+    reason every other guard in this file parses its source: a copied list keeps passing
+    after the code has moved on, and it is the copy that made the old "dead buttons"
+    possible in the first place. A missing name is not cosmetic — the fallback renders as
+    UNKNOWN, and an operator looking at UNKNOWN learns only that something was forgotten.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    doc = (root / "docs" / "open_auto_turret_v3_three_mode_target_tracking_architecture.md").read_text(
+        encoding="utf-8"
+    )
+    section = doc.split("# 79. Event logging", 1)
+    assert len(section) == 2, "§79 moved; this guard is now pointing at nothing"
+    asked = re.findall(r"^[A-Z][A-Z_]{3,}$", section[1].split("---")[0], re.M)
+    assert len(asked) >= 15, f"§79's list did not parse ({len(asked)} names)"
+
+    header = (root / "control" / "src" / "telemetry" / "telemetry.hpp").read_text(
+        encoding="utf-8"
+    )
+    named = set(re.findall(r'return "([A-Z][A-Z_]+)";', header))
+    missing = sorted(set(asked) - named)
+    assert not missing, (
+        f"§79 asks for events with no entry in event_name(): {missing}"
+    )

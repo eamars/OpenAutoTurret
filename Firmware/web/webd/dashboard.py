@@ -475,6 +475,7 @@ function render(t) {
   // sync with clicks, so what is on screen is what controld saw — a button that shows a
   // person who left three seconds ago is worse than no button, and a list that lingers
   // because the page is protecting its own DOM is exactly that.
+  showEvents(t);   // §79, before anything that can bail out on a partial frame
   const list = $("candidates");
   if (list) {
     const ts = Array.isArray(t.tracks) ? t.tracks : [];
@@ -789,6 +790,32 @@ async function refreshVideoState() {
 // against controld's 250-350 ms) and controld stops the turret when the renewals stop.
 // The page therefore does not need to detect its own death; it needs to stop pretending
 // to be alive, which it does by simply not being able to ask.
+// §79: the operator's event feed. controld publishes a window plus a generation, and
+// the page keeps its own cursor: printing the whole window every frame would scroll the
+// log with the same eight lines fifteen times a second, which is how a feed becomes
+// wallpaper. A generation that goes *backwards* is a controld restart, and the cursor
+// resets rather than silently swallowing everything after it.
+let seenEvents = 0;
+
+function eventKind(name) {
+  if (/^(SAFETY_BRAKE|CAN_FAULT|MOTOR_FAULT|LOOP_OVERRUN|STOP_MOTION|TARGET_UNREACHABLE|TARGET_REACQUIRE_AMBIGUOUS)$/.test(name)) return "err";
+  if (/_OK$|COMPLETE$|^TARGET_TRACKING$|^TARGET_REACQUIRED$|^MANUAL_JOG_STARTED$|^ROAM_STARTED$|^TARGET_SELECTED$/.test(name)) return "ok";
+  return "info";
+}
+
+function showEvents(t) {
+  const gen = typeof t.event_generation === "number" ? t.event_generation : 0;
+  const evs = Array.isArray(t.events) ? t.events : [];
+  if (gen < seenEvents) seenEvents = 0;
+  if (gen > seenEvents && evs.length) {
+    const freshCount = Math.min(evs.length, gen - seenEvents);
+    evs.slice(evs.length - freshCount).forEach((e) => {
+      logline(`${e.event}${e.detail ? " — " + e.detail : ""}`, eventKind(e.event));
+    });
+    seenEvents = gen;
+  }
+}
+
 let jogDir = null;
 let jogTimer = null;
 const JOG_KEEPALIVE_MS = 100;

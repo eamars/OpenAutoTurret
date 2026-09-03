@@ -793,12 +793,16 @@ TEST(AmbiguousReacquisition, TwoEquallyPlausiblePeopleAreNotFollowed) {
   EXPECT_STREQ(h.snap().mode_phase.c_str(), "LOST_HOLD") << h.snap().mode_phase;
   const double yaw_lost = h.loop->last_positions()[1];
 
-  // Two people step into frame near where #1 vanished. After 2.5 s of nothing, the
-  // TrackManager's own association has expired that track, so what arrives now carries
-  // *new* identities: controld cannot recognise the person by uuid and must decide by
-  // geometry and confidence alone (§21). Both candidates are CONFIRMED, both near the
-  // last known anchor, and their scores are within a hair of each other — the case §21
-  // exists for, where picking either is a coin toss dressed as an inference.
+  // Two people step into frame near where #1 vanished, carrying *new* identities: after
+  // 2.5 s the TrackManager's own association has expired the old one, so controld cannot
+  // recognise the person by uuid and can only decide by geometry and confidence (§21).
+  //
+  // What this scene actually measures, stated because it is narrower than the heading:
+  // the reacquisition score decays with the gap, so after 2.5 s both candidates fall
+  // below the accept threshold. The machine holds because *nothing here is plausible*,
+  // which is the outcome §111.5 asks for and the one an operator sees — but it is not
+  // the tie deciding. The tie is the Events test below, where the memory is still warm;
+  // the two are different refusals and they belong in different tests.
   auto both = two_people(200, h.t, 1, 2, 0.88f, 0.86f, 0.48f, 0.52f);
   both.tracks[0].uuid = tracks::TrackUuid{0, 33};  // not the person that was chosen
   both.tracks[1].uuid = tracks::TrackUuid{0, 44};
@@ -941,4 +945,151 @@ TEST(CandidateList, VisionGoingQuietAgesTheListInsteadOfRewritingIt) {
   EXPECT_NE(snap.selection_visibility, "VISIBLE")
       << "vision has been silent for 3 s and the selection still claims to be looking "
          "at the person";
+}
+
+// --- §79: the structured event record. Not "does a log line exist" — a log line is a
+//     rendering. These ask whether the *decision* is present, addressable, and says what
+//     it was about, because §80's replay and an operator's memory of an afternoon are
+//     both built out of these and neither can be reconstructed from prose.
+namespace {
+bool has_event(const telemetry::TelemetrySnapshot& s, const char* name,
+               const char* must_contain = nullptr) {
+  for (int i = 0; i < s.event_tail_count; ++i) {
+    if (std::string(s.event_tail[i].name) != name) continue;
+    if (must_contain == nullptr) return true;
+    if (std::string(s.event_tail[i].detail).find(must_contain) != std::string::npos)
+      return true;
+  }
+  return false;
+}
+}  // namespace
+
+TEST(Events, DecisionsAreRecordedWithTheirSubject) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const uint64_t before = h.snap().event_generation;
+
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2);
+  feed(h, set, 6, 10);
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  h.run("select_target", "2");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  feed(h, set, 3, 20);
+
+  auto snap = h.snap();
+  EXPECT_GT(snap.event_generation, before) << "decisions were made and nothing was recorded";
+  EXPECT_TRUE(has_event(snap, "MODE_CHANGED"))
+      << "the operator changed the mode and the record does not show it";
+  EXPECT_TRUE(has_event(snap, "TARGET_SELECTED", "Person #2"))
+      << "TARGET_SELECTED without the descriptor cannot be read back afterwards: which "
+         "person, out of the two standing there?";
+  EXPECT_NE(snap.event_tail_count, 0);
+
+  h.run("stop_motion", "");
+  {
+    std::string seen;
+    auto s2 = h.snap();
+    for (int i = 0; i < s2.event_tail_count; ++i)
+      seen += s2.event_tail[i].name + std::string(" ");
+    EXPECT_TRUE(has_event(s2, "STOP_MOTION"))
+        << "the operator's own intervention is the first thing any investigation looks "
+           "for; the window held: " << seen;
+  }
+}
+
+TEST(Events, AWindowIsNotAHistoryAndSaysSo) {
+  // The published tail holds the newest few. What it does not hold must be visible as a
+  // number rather than inferred from absence: "I see 8 events and 40 have happened" is
+  // the difference between a quiet station and a feed that dropped the interesting part.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2);
+  feed(h, set, 3, 10);
+  h.run("select_target", "1");  // a decision, so there is a window to watch
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  feed(h, set, 2, 14);
+  const uint64_t g0 = h.snap().event_generation;
+  ASSERT_GT(g0, 0u);
+
+  // A cycle with no events must still show the window it showed before.
+  h.step(50);
+  auto snap = h.snap();
+  EXPECT_EQ(snap.event_generation, g0);
+  EXPECT_GT(snap.event_tail_count, 0)
+      << "the window emptied on a quiet cycle, so a reader sampling at 15 Hz misses "
+         "everything that happened between two publishes";
+
+  // Many events later, the generation has moved past the window.
+  // Alternated rather than repeated: clearing an empty selection changes nothing, and a
+  // no-op that logged an event would make the record a stream of nothing. This loop is
+  // the check that only the decisions are recorded — half of these calls are no-ops.
+  for (int i = 0; i < 30; ++i) {
+    h.run("select_target", "1");
+    feed(h, set, 1, 200 + i);
+    h.run("clear_target", "");
+  }
+  EXPECT_GT(h.snap().event_generation, g0 + 20);
+  EXPECT_LE(h.snap().event_tail_count, telemetry::TelemetrySnapshot::kEventTail);
+}
+
+TEST(Events, JogLeaseExpiryIsRecordedWithoutAnOperatorAskingForIt) {
+  // The one MANUAL event that is not a deliberate act, and therefore the one that needs
+  // a timestamp: it is what a dropped wifi link looks like from the turret's side.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "MANUAL");
+  h.run("manual_jog_start", "yaw+:normal");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_TRUE(has_event(h.snap(), "MANUAL_JOG_STARTED"));
+
+  h.step(200);  // one second of held button with no keepalive: the lease lapses
+  EXPECT_TRUE(has_event(h.snap(), "MANUAL_JOG_EXPIRED"))
+      << "the jog stopped by itself and the record does not say when";
+}
+
+TEST(Events, AnAmbiguousReacquisitionIsRecordedAsAskingRatherThanChoosing) {
+  // §21 and §79 together. The scene is the one §89 established — same anchors, same
+  // confidences, #2 tentative before the loss — because what is under test here is the
+  // record, not the conditions that produce the refusal. Re-deriving those here would
+  // make this test fail for reasons that have nothing to do with events, which is how a
+  // suite ends up with four tests that all fail together and no way to tell which one
+  // knows what.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2, 0.90f, 0.40f, 0.30f, 0.85f);
+  set.tracks[1].state = tracks::TrackState::Tentative;
+  feed(h, set, 40, 10);
+  h.run("select_target", "1");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  feed(h, set, 60, 60);
+  ASSERT_STREQ(h.snap().mode_phase.c_str(), "TRACKING") << h.snap().mode_phase;
+
+  // A *short* gap, deliberately. The reacquisition score decays with how long the
+  // target has been gone, and after a couple of seconds everything scores below the
+  // threshold — the machine then holds because nothing is plausible, which is its own
+  // good behaviour (§89) but is not a tie. To test the tie the memory has to still be
+  // warm: the selection is gone from the set, still recent, and two candidates step into
+  // roughly its footprint within a hair of each other.
+  tracks::TrackSet none;  // an empty frame: the detector is alive, the person is not
+  none.width = 1280;
+  none.height = 720;
+  feed(h, none, 30, 100);  // 150 ms of nothing in view
+  auto both = two_people(200, h.t, 1, 2, 0.88f, 0.86f, 0.30f, 0.34f);
+  both.tracks[0].uuid = tracks::TrackUuid{0, 33};
+  both.tracks[1].uuid = tracks::TrackUuid{0, 44};
+  feed(h, both, 60, 200);
+
+  std::string seen;
+  auto s2 = h.snap();
+  for (int i = 0; i < s2.event_tail_count; ++i)
+    seen += s2.event_tail[i].name + std::string(" | ");
+  EXPECT_TRUE(has_event(s2, "TARGET_REACQUIRE_AMBIGUOUS"))
+      << "the turret refused to choose between two candidates and left no record of "
+         "having refused. phase=" << s2.mode_phase << " ambiguous="
+      << s2.selection_ambiguous << " window: " << seen;
+  EXPECT_TRUE(has_event(s2, "TARGET_REACQUIRE_AMBIGUOUS", "reselect"))
+      << "a refusal that does not tell the operator to choose is a mystery, not a request";
 }

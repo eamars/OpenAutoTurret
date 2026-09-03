@@ -123,6 +123,20 @@ struct TelemetrySnapshot {
   bool manual_lease_active = false;
   int64_t manual_lease_remaining_ms = 0;
   std::string manual_profile;
+  // §79: the newest events, oldest-first, for the operator's feed and the diagnostics
+  // panel. Fixed-size POD, because the control thread fills this snapshot at 200 Hz and
+  // an event feed must not become a reason to allocate on that thread. Detail is
+  // truncated rather than grown: a diagnostic that overruns its neighbour is worse than
+  // a short one. The durable, uncapped history is the ring behind it and the log file.
+  static constexpr int kEventTail = 8;
+  struct EventTail {
+    uint64_t t_ns = 0;
+    char name[32] = {};
+    char detail[88] = {};
+  };
+  std::array<EventTail, kEventTail> event_tail{};
+  int event_tail_count = 0;
+  uint64_t event_generation = 0;  // total events ever pushed, not the window size
   // §78 AUTO_ROAM: where the sweep is going next and which way it is running. Both are
   // published because during a sweep they are the only way an operator can tell the
   // turret is still executing the plan rather than stuck at an end — and "which way" is
@@ -227,7 +241,76 @@ enum class Event : uint8_t {
   PayloadVerifyOk,
   PayloadVerifyMismatch,
   PayloadVerifyError,
+  // §79: the v3 three-mode vocabulary. Appended rather than interleaved — a log line
+  // written by an older build and read back by a newer one must still mean what it said.
+  ModeChanged,
+  // TARGET_ACQUIRED and TARGET_LOST already existed from §43.3 and are reused rather
+  // than duplicated; TARGET_TRACKING is the one §79 kind with no v1 counterpart in the
+  // tracking states, so it is the one added.
+  TargetTracking,
+  TargetSelected,
+  TargetCleared,
+  TargetOccluded,
+  TargetReacquired,
+  TargetReacquireAmbiguous,
+  TargetUnreachable,
+  RoamStarted,
+  RoamBoundary,
+  RoamDirectionReversed,
+  RoamStopped,
+  ManualJogStarted,
+  ManualJogExpired,
+  ManualJogStopped,
+  ManualStep,
+  StopMotion,
 };
+
+// The name is the wire format. Numbers are for storage; a log, a dashboard and a person
+// reading a fault all need the same word, and the word must not be whatever the dashboard
+// author guessed. Every value is covered: an event that renders as "UNKNOWN" on the
+// operator's screen is an event nobody can act on.
+inline const char* event_name(Event e) {
+  switch (e) {
+    case Event::TargetAcquired: return "TARGET_ACQUIRED";
+    case Event::TargetLost: return "TARGET_LOST";
+    case Event::CoastingStarted: return "COASTING_STARTED";
+    case Event::BrakingStarted: return "BRAKING_STARTED";
+    case Event::SearchStarted: return "SEARCH_STARTED";
+    case Event::SearchStopped: return "SEARCH_STOPPED";
+    case Event::HoldEntered: return "HOLD_ENTERED";
+    case Event::SafetyBrake: return "SAFETY_BRAKE";
+    case Event::LimitProximity: return "LIMIT_PROXIMITY";
+    case Event::CanFault: return "CAN_FAULT";
+    case Event::MotorFault: return "MOTOR_FAULT";
+    case Event::LoopOverrun: return "LOOP_OVERRUN";
+    case Event::HomingStarted: return "HOMING_STARTED";
+    case Event::HomingComplete: return "HOMING_COMPLETE";
+    case Event::CalibrationCommit: return "CALIBRATION_COMMIT";
+    case Event::Shutdown: return "SHUTDOWN";
+    case Event::PayloadVerifyStarted: return "PAYLOAD_VERIFY_STARTED";
+    case Event::PayloadVerifyOk: return "PAYLOAD_VERIFY_OK";
+    case Event::PayloadVerifyMismatch: return "PAYLOAD_VERIFY_MISMATCH";
+    case Event::PayloadVerifyError: return "PAYLOAD_VERIFY_ERROR";
+    case Event::ModeChanged: return "MODE_CHANGED";
+    case Event::TargetTracking: return "TARGET_TRACKING";
+    case Event::TargetSelected: return "TARGET_SELECTED";
+    case Event::TargetCleared: return "TARGET_CLEARED";
+    case Event::TargetOccluded: return "TARGET_OCCLUDED";
+    case Event::TargetReacquired: return "TARGET_REACQUIRED";
+    case Event::TargetReacquireAmbiguous: return "TARGET_REACQUIRE_AMBIGUOUS";
+    case Event::TargetUnreachable: return "TARGET_UNREACHABLE";
+    case Event::RoamStarted: return "ROAM_STARTED";
+    case Event::RoamBoundary: return "ROAM_BOUNDARY";
+    case Event::RoamDirectionReversed: return "ROAM_DIRECTION_REVERSED";
+    case Event::RoamStopped: return "ROAM_STOPPED";
+    case Event::ManualJogStarted: return "MANUAL_JOG_STARTED";
+    case Event::ManualJogExpired: return "MANUAL_JOG_EXPIRED";
+    case Event::ManualJogStopped: return "MANUAL_JOG_STOPPED";
+    case Event::ManualStep: return "MANUAL_STEP";
+    case Event::StopMotion: return "STOP_MOTION";
+  }
+  return "UNKNOWN";
+}
 
 struct EventRecord {
   TimeNs timestamp_ns = 0;
@@ -259,6 +342,16 @@ class RingBuffer {
     return out;
   }
   const T& newest() const { return buf_[(write_ - 1) % N]; }
+  // The newest `n` records, oldest-first, copied into caller storage. all() returns a
+  // vector, which is right for a web thread and wrong for the control thread that
+  // publishes an event tail: allocating on someone's 5 ms deadline because a *reader*
+  // wanted a window is not a trade anyone agreed to.
+  int latest(T out[], int n) const {
+    const std::size_t have = count_ < static_cast<std::size_t>(n) ? count_
+                                             : static_cast<std::size_t>(n);
+    for (std::size_t k = 0; k < have; ++k) out[k] = buf_[(write_ - have + k) % N];
+    return static_cast<int>(have);
+  }
   std::size_t size() const { return count_; }
   bool empty() const { return count_ == 0; }
   void clear() { write_ = 0; count_ = 0; }
@@ -297,7 +390,13 @@ class Telemetry {
   // §43.3 event log.
   void push_event(TimeNs t, Event e, std::string detail = "") {
     event_log_.push(EventRecord{t, e, std::move(detail)});
+    // size() stops counting at the capacity, so anything that watches the ring for
+    // *changes* needs a number that does not saturate. Without it the published event
+    // tail would freeze at the 512th event of a long session, which is exactly the sort
+    // of thing that only shows up on the operator's third hour of running.
+    ++event_pushes_;
   }
+  uint64_t event_push_count() const { return event_pushes_; }
   const RingBuffer<EventRecord, kEventCap>& event_log() const {
     return event_log_;
   }
@@ -321,6 +420,7 @@ class Telemetry {
   TelemetrySnapshot snapshot_;
   RingBuffer<ControlLogRecord, kControlLogCap> control_log_;
   RingBuffer<EventRecord, kEventCap> event_log_;
+  uint64_t event_pushes_ = 0;  // does not saturate where size() does
   RingBuffer<ControlLogRecord, kBlackBoxCap> blackbox_;
 };
 

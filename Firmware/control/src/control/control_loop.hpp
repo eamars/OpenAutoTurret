@@ -507,6 +507,45 @@ class ControlLoop {
   char mode_refusal_reason_[224] = {};
   RoamPlanner roam_;
   RoamOutput roam_out_;
+  // §79's transition memory: events fire on changes, not on every cycle.
+  AutoTrackState last_at_state_ = AutoTrackState::WaitTarget;
+  int last_roam_dir_ = 0;
+  bool last_roam_turnaround_ = false;
+  bool last_roam_active_ = false;
+  bool last_at_ambiguous_ = false;
+  uint64_t last_event_push_count_ = 0;
+  int last_event_tail_count_ = 0;
+  // The window itself, kept here rather than only in the snapshot. Each cycle fills a
+  // fresh snapshot, so a count without a copy behind it publishes "there are 8 events"
+  // next to eight blank rows — which a reader cannot tell apart from an empty station.
+  // 128 bytes times 8 copied per cycle is the price of a feed that does not lie; the
+  // alternative (rebuilding from the ring every cycle) costs the same and allocates.
+  std::array<telemetry::TelemetrySnapshot::EventTail,
+             telemetry::TelemetrySnapshot::kEventTail>
+      last_event_tail_{};
+
+  // One call per decision, at the place the decision was made. §43.3's ring is the
+  // history and the log line is a rendering of the same thing, so an event cannot be
+  // "logged" in one place and "structured" in another and drift from it. The subject is
+  // folded into the detail because that is what the record can carry; §80's replay gets
+  // the full picture from the black box beside it.
+  void emit(telemetry::Event e, TimeNs now_ns, uint64_t subject_id = 0,
+            const char* subject = nullptr, const char* detail = nullptr) {
+    std::string d;
+    if (subject != nullptr && subject[0] != '\0') d += subject;
+    if (subject_id != 0) {
+      char id[24];
+      std::snprintf(id, sizeof id, "%s#%llu", d.empty() ? "track " : " / track ",
+                    static_cast<unsigned long long>(subject_id));
+      d += id;
+    }
+    if (detail != nullptr && detail[0] != '\0') {
+      if (!d.empty()) d += " | ";
+      d += detail;
+    }
+    telemetry_.push_event(now_ns, e, std::move(d));
+  }
+
   ManualController manual_;
   ManualOutput manual_out_;
   AutoTrackController autotrack_;

@@ -132,6 +132,23 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"selection_ambiguous\":" << (s.selection_ambiguous ? 1 : 0)
      << ",\"reacquisition_score\":" << s.reacquisition_score
      << ",\"ambiguity_margin\":" << s.ambiguity_margin
+     << ",\"event_generation\":" << s.event_generation
+     // §79. The generation travels with the window so a reader can tell "nothing has
+     // happened" from "I have not looked yet", and can tell a restart from a quiet
+     // station: a generation that goes backwards means controld came back up.
+     << ",\"events\":["
+     << [&s]() {
+          std::string out;
+          for (int i = 0; i < s.event_tail_count; ++i) {
+            const telemetry::TelemetrySnapshot::EventTail& e = s.event_tail[i];
+            if (i) out += ",";
+            out += "{\"t_ns\":" + std::to_string(e.t_ns) +
+                   ",\"event\":\"" + json_escape(e.name) + "\"" +
+                   ",\"detail\":\"" + json_escape(e.detail) + "\"}";
+          }
+          return out;
+        }()
+     << "]"
      << ",\"track_count\":" << s.track_count
      << ",\"track_list_age_ms\":" << s.track_list_age_ms
      << ",\"tracks\":["

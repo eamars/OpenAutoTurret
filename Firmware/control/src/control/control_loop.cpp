@@ -457,11 +457,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // worth recording: it is what a dropped wifi, a backgrounded tab, or a laptop
         // going to sleep looks like from the turret's side, and "the jog stopped by
         // itself" is the report that needs a timestamp.
+        emit(telemetry::Event::ManualJogExpired, now_ns_, 0, nullptr,
+             "lease lapsed; controlled stop to MANUAL/HOLD");
         spdlog::warn("MANUAL jog lease expired after {} ms — controlled stop to "
                      "MANUAL/HOLD (38)",
                      manual_.config().lease_ms);
       }
       if (manual_out_.step_rejected) {
+        // A step the envelope would not allow is exactly the kind of thing §80's replay
+        // needs: the operator asked, and the answer was no, with a reason.
+        emit(telemetry::Event::ManualStep, now_ns_, 0, "refused",
+             manual_out_.step_reject_reason);
         spdlog::warn("manual step refused: {}", manual_out_.step_reject_reason);
       }
     } else if (manual_.lease_active() || manual_out_.step_in_progress) {
@@ -479,12 +485,39 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const double qp = sp[ix(AxisId::Pitch)].q_rad;
       roam_.set_config(roam_config());
       if (!roam_.active()) roam_.enter(qy, qp);  // §36: seeded from where it is
+      const bool was_active = last_roam_active_;
+      const int was_dir = last_roam_dir_;
+      const bool was_turn = last_roam_turnaround_;
       roam_out_ = roam_.update(qy, qp, now_ns, period_ns);
+      // §79's ROAM_* set, all derived from what the planner actually did rather than
+      // from the request that started it. A sweep that stops because the envelope said
+      // so must be distinguishable from a sweep that was never asked for.
+      if (!was_active) {
+        emit(telemetry::Event::RoamStarted, now_ns_, 0, roam_state_name(roam_out_.state),
+             roam_out_.reason[0] ? roam_out_.reason : "bounded sweep inside the safe envelope");
+      } else if (!roam_out_.envelope_valid) {
+        emit(telemetry::Event::RoamStopped, now_ns_, 0, nullptr, roam_out_.reason);
+      }
+      if (roam_out_.state == RoamState::Turnaround && !was_turn)
+        emit(telemetry::Event::RoamBoundary, now_ns_, 0, roam_out_.reason, nullptr);
+      if (was_dir != 0 && roam_out_.direction != 0 && was_dir != roam_out_.direction)
+        emit(telemetry::Event::RoamDirectionReversed, now_ns_, 0, nullptr,
+             roam_out_.reason);
+      last_roam_active_ = roam_.active() && roam_out_.envelope_valid;
+      last_roam_dir_ = roam_out_.direction;
+      last_roam_turnaround_ = roam_out_.state == RoamState::Turnaround;
     } else if (roam_.active()) {
       // §35: a safety override or an operator STOP ends the sweep, and §36's continuity
       // means the next AUTO_ROAM re-enters from wherever the turret ended up.
       roam_.exit();
       roam_out_ = RoamOutput{};
+      if (last_roam_active_) {
+        emit(telemetry::Event::RoamStopped, now_ns_, 0, nullptr,
+             "left AUTO_ROAM; sweep ended");
+        last_roam_active_ = false;
+        last_roam_dir_ = 0;
+        last_roam_turnaround_ = false;
+      }
     }
     if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
       at_input_.measurement_age_ms =
@@ -498,7 +531,37 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       at_input_.los_feasible = !tracking_ref_.target_unreachable;
       if (tracking_ref_.target_unreachable && manual_out_.step_in_progress)
         manual_.notify_step_refused();  // §41: say so, do not push against a limit
+      const AutoTrackState was_state = last_at_state_;
       at_out_ = autotrack_.update(at_input_, now_ns);
+      last_at_state_ = at_out_.state;
+      // §79's TARGET_* set, on transitions only. A state that persists is not an event;
+      // 200 Hz of "TARGET_TRACKING" would bury the one line that says when it started,
+      // which is the line §80's replay is indexed by. The subject is carried so that a
+      // log of a session with three people can be read back as being about one of them.
+      auto emit_state = [&](telemetry::Event e, const char* why) {
+        const auto& sel = selection_.selection();
+        const tracks::Track* who = selection_.selected_track();
+        emit(e, now_ns_, who ? who->uuid.lo : 0, sel.selected_descriptor, why);
+      };
+      if (at_out_.state != was_state) {
+        switch (at_out_.state) {
+          case AutoTrackState::Acquire: emit_state(telemetry::Event::TargetAcquired, at_out_.reason); break;
+          case AutoTrackState::Tracking: emit_state(telemetry::Event::TargetTracking, at_out_.reason); break;
+          case AutoTrackState::Coasting:
+            if (at_input_.target_occluded)
+              emit_state(telemetry::Event::TargetOccluded, at_out_.reason);
+            break;
+          case AutoTrackState::LostHold: emit_state(telemetry::Event::TargetLost, at_out_.reason); break;
+          case AutoTrackState::Reacquire: emit_state(telemetry::Event::TargetReacquired, at_out_.reason); break;
+          case AutoTrackState::TargetUnreachable:
+            emit_state(telemetry::Event::TargetUnreachable, at_out_.reason);
+            break;
+          case AutoTrackState::WaitTarget: break;
+        }
+      }
+      // §21's ambiguity is emitted where the operator sees it (see the telemetry fill),
+      // not from the controller's input copy: that flag is refreshed only when a set
+      // arrives, so an edge could land between two publishes and be missed.
     } else if (autotrack_.state() != AutoTrackState::WaitTarget || at_out_.follow_los) {
       autotrack_.reset();
       at_out_ = AutoTrackOutput{};
@@ -1035,6 +1098,35 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // selection manager holds, so it is by construction the same list the selection was
     // validated against — a UI built on a different copy could offer a label controld
     // would refuse, which is the dead-button problem again.
+    // §79's published tail. Rebuilt only when the push counter moved, so the cost on a
+    // cycle where nothing happened is one integer compare; the copy happens at event
+    // rate, which is a person pressing things, not 200 Hz.
+    {
+      const uint64_t pushes = telemetry_.event_push_count();
+      snap.event_generation = pushes;
+      if (pushes != last_event_push_count_) {
+        last_event_push_count_ = pushes;
+        telemetry::EventRecord rec[telemetry::TelemetrySnapshot::kEventTail];
+        const int n = telemetry_.event_log().latest(
+            rec, telemetry::TelemetrySnapshot::kEventTail);
+        for (int i = 0; i < n; ++i) {
+          telemetry::TelemetrySnapshot::EventTail& out = snap.event_tail[i];
+          out = telemetry::TelemetrySnapshot::EventTail{};
+          out.t_ns = static_cast<uint64_t>(rec[i].timestamp_ns);
+          std::snprintf(out.name, sizeof out.name, "%s",
+                        telemetry::event_name(rec[i].event));
+          std::snprintf(out.detail, sizeof out.detail, "%s", rec[i].detail.c_str());
+        }
+        last_event_tail_count_ = n;
+        for (int i = 0; i < n; ++i) last_event_tail_[i] = snap.event_tail[i];
+      }
+      // The window persists between pushes on purpose: a reader sampling at 15 Hz must
+      // not miss an event that fired in between, and the generation says how far behind
+      // what it is looking at is. It has to be *copied* to persist — the snapshot starts
+      // blank every cycle.
+      for (int i = 0; i < last_event_tail_count_; ++i) snap.event_tail[i] = last_event_tail_[i];
+      snap.event_tail_count = last_event_tail_count_;
+    }
     snap.track_count = 0;
     snap.track_list_age_ms =
         last_set_receive_ns_ > 0 ? static_cast<int64_t>((now_ns - last_set_receive_ns_) /
@@ -1083,6 +1175,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           tracks::visibility_name(sel.has_selection ? sel.visibility_state
                                                    : tracks::Visibility::None);
       snap.selection_ambiguous = sel.has_selection && sel.ambiguous_reacquisition;
+      // §79 with §21: refusing to choose is a decision, recorded from the same value the
+      // operator is shown, so the feed and the badge cannot disagree about whether the
+      // machine asked. The two scores ride along because they are the whole argument:
+      // "it declined" means something different at 0.55/0.02 than at 0.90/0.01, and
+      // §80's replay is read by someone reconstructing exactly that.
+      if (snap.selection_ambiguous && !last_at_ambiguous_) {
+        char why[96];
+        std::snprintf(why, sizeof why,
+                      "no legitimate winner: best %.2f, margin %.2f - reselect",
+                      static_cast<double>(sel.reacquisition_score),
+                      static_cast<double>(sel.ambiguity_margin));
+        emit(telemetry::Event::TargetReacquireAmbiguous, now_ns_, sel.selected.lo,
+             sel.selected_descriptor, why);
+      }
+      last_at_ambiguous_ = snap.selection_ambiguous;
       snap.reacquisition_score = sel.reacquisition_score;
       snap.ambiguity_margin = sel.ambiguity_margin;
     }
@@ -1369,10 +1476,17 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
               std::string(r.changed ? "entered " : "already in ") +
                   operating_mode_name(target));
   sync_controllers_to_mode(target);
-  if (r.changed)
+  if (r.changed) {
+    // §79. The mode is *who is driving*, and every question about an afternoon of
+    // running starts with when that changed. Recorded even when the change was refused
+    // elsewhere is not this line's job — a refusal never reaches here, and the ack that
+    // answered it carries the reason.
+    emit(telemetry::Event::ModeChanged, now_ns_, 0, operating_mode_name(target),
+         r.ok ? (r.changed ? "entered" : "already in") : r.reason);
     spdlog::info("MODE_CHANGED -> {} (supervisory {})",
                  operating_mode_name(target),
                  supervisory_state_name(mode_mgr_.supervisory()));
+  }
   return r;
 }
 
@@ -1383,6 +1497,11 @@ ModeResult ControlLoop::stop_motion() {
               std::string("cancelled ") + operating_mode_name(was) +
                   " intent; manual hold");
   sync_controllers_to_mode(OperatingMode::Manual);
+  // The operator's own intervention, with what it cancelled: the first line an
+  // investigation looks for, and the one that must never be inferred from the absence of
+  // motion.
+  emit(telemetry::Event::StopMotion, now_ns_, 0, operating_mode_name(was),
+       "intent cancelled; controlled hold in MANUAL");
   spdlog::warn("STOP_MOTION: {} intent cancelled, controlled hold in MANUAL "
                "(§27; not a disable, not a shutdown)", operating_mode_name(was));
   return r;
@@ -2060,6 +2179,9 @@ void ControlLoop::execute_command(const std::string& name,
       return;
     }
     if (name == "manual_jog_stop") {
+      if (manual_.lease_active())
+        emit(telemetry::Event::ManualJogStopped, now_ns_, 0, nullptr,
+             "operator released the jog");
       manual_.jog_stop(now_ns_);
       ack_command(name, true, "jog stopped");
       return;
@@ -2075,6 +2197,16 @@ void ControlLoop::execute_command(const std::string& name,
       if (!manual_.jog_start(dir, profile, now_ns_)) {
         ack_command(name, false, "jog direction was empty");
         return;
+      }
+      {
+        char who[24] = {};
+        std::snprintf(who, sizeof who, "%s%s", dir.yaw ? (dir.yaw > 0 ? "yaw+" : "yaw-") : "",
+                      dir.pitch ? (dir.pitch > 0 ? " pitch+" : " pitch-") : "");
+        char why[64] = {};
+        std::snprintf(why, sizeof why, "profile %s, lease %lld ms",
+                      manual_profile_name(profile),
+                      static_cast<long long>(manual_.config().lease_ms));
+        emit(telemetry::Event::ManualJogStarted, now_ns_, 0, who, why);
       }
       spdlog::info("MANUAL jog {}{} profile {} (lease {} ms)",
                    dir.yaw ? (dir.yaw > 0 ? "yaw+ " : "yaw- ") : "",
@@ -2146,8 +2278,13 @@ void ControlLoop::execute_command(const std::string& name,
     // the web thread happened to see a moment ago. Reasons are the operator's — they
     // are acked verbatim, which is the only reason a refusal is survivable at all.
     if (name == "clear_target") {
+      const auto was = selection_.selection();
       auto r = selection_.clear(now_ns_);
-      if (r.changed) autotrack_.reset();  // §16: back to WAIT_TARGET
+      if (r.changed) {
+        autotrack_.reset();  // §16: back to WAIT_TARGET
+        emit(telemetry::Event::TargetCleared, now_ns_, was.selected.lo,
+             was.selected_descriptor, r.reason.c_str());
+      }
       spdlog::info("target selection: {}", r.reason);
       ack_command(name, r.ok, r.reason);
       return;
@@ -2165,7 +2302,20 @@ void ControlLoop::execute_command(const std::string& name,
     }
     auto r = selection_.select_by_display_index(
         static_cast<uint16_t>(index), now_ns_);
-    if (r.changed) autotrack_.reset();  // §15: acquisition restarts for a new subject
+    if (r.changed) {
+      autotrack_.reset();  // §15: acquisition restarts for a new subject
+      last_at_state_ = AutoTrackState::WaitTarget;
+      last_at_ambiguous_ = false;
+    }
+    if (r.ok) {
+      // §79 with the two identities the operator cares about: the descriptor in the
+      // subject, the daemon's own reason in the detail. "TARGET_SELECTED" alone cannot be
+      // read back after the fact — which person, and did it need a second try.
+      const auto& sel = selection_.selection();
+      const tracks::Track* who = selection_.selected_track();
+      emit(telemetry::Event::TargetSelected, now_ns_, who ? who->uuid.lo : 0,
+           sel.selected_descriptor, r.reason.c_str());
+    }
     spdlog::info("select_target {}: {} ({})", index, r.ok ? "ACCEPTED" : "REFUSED",
                  r.reason);
     ack_command(name, r.ok, r.reason);
