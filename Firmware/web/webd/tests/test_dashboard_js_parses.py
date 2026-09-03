@@ -81,3 +81,59 @@ class DashboardJSTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_dashboard_ids_are_unique():
+    """The JS guard above proves the script PARSES. It cannot prove the handlers
+    ever get attached: getElementById returns the FIRST match, so a duplicated id
+    silently wires one panel and leaves the other's buttons inert — the page looks
+    healthy, every button in it does nothing, and no test notices. This one does.
+    (Caught in the v3 mode row, which reused the developer panel's id="controls".)
+    """
+    from collections import Counter
+
+    ids = re.findall(r'id="([^"]+)"', DASHBOARD_HTML)
+    dupes = sorted(i for i, n in Counter(ids).items() if n > 1)
+    assert not dupes, f"duplicate element ids would leave controls unwired: {dupes}"
+
+
+def test_every_button_is_wired():
+    """Every button on the dashboard must name a command controld accepts.
+
+    The vocabulary is PARSED from controld's validator
+    (control/src/web/command_validation.hpp) rather than duplicated here, because a
+    hardcoded list drifts and a drifting list passes: it would keep certifying the
+    buttons as real long after the daemon stopped honouring them. That is precisely
+    how `enable_search` came to answer ok:true for a request nobody acted on, and
+    how `select_target` still does.
+    """
+    import re as _re
+    from pathlib import Path
+
+    header = (Path(__file__).resolve().parents[3]
+              / "control" / "src" / "web" / "command_validation.hpp")
+    text = header.read_text(encoding="utf-8")
+    accepted = set(_re.findall(r'command\s*==\s*"([a-z_]+)"', text))
+    assert accepted, f"no commands parsed from {header} — the validator changed shape"
+
+    used = set(re.findall(r'data-cmd="([^"]+)"', DASHBOARD_HTML))
+    assert used, "no buttons found — the dashboard changed shape"
+    unknown = sorted(used - accepted)
+    assert not unknown, (
+        "dashboard offers buttons controld does not accept: "
+        f"{unknown}; validator knows {sorted(accepted)}"
+    )
+
+
+def test_mode_buttons_exist_and_spelling_is_exact():
+    """§45: the mode selector is the operator's primary control. The argument
+    spelling must match what controld parses character-for-character — a lower-case
+    or renamed variant is refused at runtime, and a refused button looks identical
+    to a working one until someone presses it."""
+    for mode in ("MANUAL", "AUTO_TRACK", "AUTO_ROAM"):
+        assert f'data-cmd="set_mode" data-mode="{mode}"' in DASHBOARD_HTML, (
+            f"no button selects {mode} (§45)"
+        )
+    assert 'data-cmd="stop_motion"' in DASHBOARD_HTML, (
+        "§27: STOP MOTION has to be reachable in one press, from any mode"
+    )

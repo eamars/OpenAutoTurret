@@ -144,7 +144,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="muted">read-only; motors are driven solely by controld</div>
   </section>
 
-  <section class="panel" id="p-can">
+  <section class="panel" id="p-can-link">
     <h2>CAN link (§55 / §54.4)</h2>
     <div class="row"><span class="k">Transport</span><span id="can-kind">—</span></div>
     <div class="row"><span class="k">Bus state</span><span id="can-state" class="badge">—</span></div>
@@ -169,6 +169,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="muted">selecting a profile applies its motion CAPS at once; it
       is only commissioned as verified payload data by
       "Start payload verification" (§31.3)</div>
+  </section>
+
+  <section class="panel" id="p-mode" style="grid-column:1/-1">
+    <h2>Operating mode (§45) — exactly one mode owns motion</h2>
+    <div id="mode-controls">
+      <button data-cmd="set_mode" data-mode="MANUAL">MANUAL</button>
+      <button data-cmd="set_mode" data-mode="AUTO_TRACK">AUTO TRACK</button>
+      <button data-cmd="set_mode" data-mode="AUTO_ROAM">AUTO ROAM</button>
+      <button class="danger" data-cmd="stop_motion">STOP MOTION</button>
+      <span id="mode" class="badge">—</span>
+      <span id="mode-phase" class="badge">—</span>
+      <span id="sup-state" class="badge">—</span>
+    </div>
+    <div><span id="intent">intent: —</span></div>
+    <div><span id="ack" class="muted">last command: none since controld started</span></div>
+    <div class="muted">STOP MOTION cancels the active intent and lands in
+      MANUAL / HOLD. It does not disable the motors, power down, or park, and it is
+      accepted in every state including fault (§27). A mode change the station is
+      not entitled to is refused with the reason, shown above (§52). AUTO TRACK does
+      not go looking for a target when it loses one — that is AUTO ROAM (§111.5).</div>
   </section>
 
   <section class="panel" id="p-controls" style="grid-column:1/-1">
@@ -374,12 +394,54 @@ function render(t) {
   $("by").textContent = rad(t.base_yaw_rad);
   $("ey").textContent = num(t.effort_yaw, 2);
   $("ep").textContent = num(t.effort_pitch, 2);
+  // v3 §50: the three things the operator asks in order — who is driving, what
+  // it is doing about it, and what the last button press actually accomplished.
+  const mode = t.operating_mode || "—";
+  badge($("mode"), mode, mode === "MANUAL" ? "ok" : "warn");
+  badge($("mode-phase"), t.mode_phase || "—", "info");
+  badge($("sup-state"), t.supervisory_state || "—",
+        t.supervisory_state === "READY" ? "ok" : "warn");
+  markActiveMode(mode);
+  $("intent").textContent = "intent: " + (t.intent_source || "none") + " / " +
+    (t.intent_type || "hold") +
+    (t.intent_reason ? " — " + t.intent_reason : "") +
+    " · scale " + num(t.intent_velocity_scale, 2);
+  renderAck(t);
   renderCan(t);
   $("pp-name").textContent = t.payload_profile_name || "—";
   badge($("pp-status"), t.payload_profile_status || "no_profile",
         payloadKind(t.payload_profile_status));
   $("pp-derated").textContent = t.payload_derated ? "yes" : "no";
   $("pp-check").textContent = t.payload_check_active ? "yes" : "no";
+}
+
+function markActiveMode(mode) {
+  document.querySelectorAll("#mode-controls button[data-mode]").forEach((btn) => {
+    const on = btn.dataset.mode === mode;
+    btn.classList.toggle("primary", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function renderAck(t) {
+  // §52. The ack is read from telemetry, not from the button's HTTP reply:
+  // controld executes commands on the control thread, so the answer is not
+  // known yet when the request is accepted for execution. -1 means no command
+  // has been executed since the daemon started, which is not the same claim as
+  // "the last one succeeded" and must not be displayed as one.
+  const el = $("ack");
+  if (!el) return;
+  if (t.cmd_ack_accepted === -1 || !t.cmd_ack_command) {
+    el.textContent = "last command: none since controld started";
+    el.className = "muted";
+    return;
+  }
+  const ok = t.cmd_ack_accepted === 1;
+  el.textContent = "last command: " + t.cmd_ack_command + " -> " +
+    (ok ? "ACCEPTED" : "REJECTED") + " — " + (t.cmd_ack_reason || "") +
+    " (state " + (t.cmd_ack_controller_state || "?") +
+    ", safety " + (t.cmd_ack_safety_state || "?") + ")";
+  el.className = ok ? "muted" : "err";
 }
 
 function logline(msg, kind) {
@@ -416,7 +478,10 @@ async function sendCommand(cmd, arg, btn) {
   }
 }
 
-function argFor(cmd) {
+function argFor(cmd, btn) {
+  // Two buttons share set_mode and differ only by argument, so the argument
+  // comes from the button rather than from a control elsewhere on the page.
+  if (cmd === "set_mode") return (btn && btn.dataset.mode) || "";
   if (cmd === "select_target") return String($("sel-target").value || 0);
   if (cmd === "run_test_motion") return String($("test-motion").value || 0);
   if (cmd === "select_payload_profile") {
@@ -438,11 +503,12 @@ function wireCommands(rootId) {
     const btn = ev.target.closest("button[data-cmd]");
     if (!btn) return;
     const cmd = btn.dataset.cmd;
-    const arg = argFor(cmd);
+    const arg = argFor(cmd, btn);
     if (arg === null) return;           // refused locally, already logged
     await sendCommand(cmd, arg, btn);
   });
 }
+wireCommands("mode-controls");
 wireCommands("controls");
 wireCommands("p-payload");
 

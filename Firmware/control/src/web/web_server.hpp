@@ -121,6 +121,22 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"vision_dropped\":" << s.vision_dropped
      << ",\"vision_last_frame_sequence\":" << s.vision_last_frame_sequence
      << ",\"vision_measurement_age_ms\":" << s.vision_measurement_age_ms
+     // v3 §50/§52: the mode, the intent, and the answer to the last command.
+     << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""
+     << ",\"supervisory_state\":\"" << json_escape(s.supervisory_state) << "\""
+     << ",\"mode_phase\":\"" << json_escape(s.mode_phase) << "\""
+     << ",\"intent_source\":\"" << json_escape(s.intent_source) << "\""
+     << ",\"intent_type\":\"" << json_escape(s.intent_type) << "\""
+     << ",\"intent_reason\":\"" << json_escape(s.intent_reason) << "\""
+     << ",\"intent_velocity_scale\":" << s.intent_velocity_scale
+     << ",\"cmd_ack_command\":\"" << json_escape(s.cmd_ack_command) << "\""
+     << ",\"cmd_ack_accepted\":" << static_cast<int>(s.cmd_ack_accepted)
+     << ",\"cmd_ack_reason\":\"" << json_escape(s.cmd_ack_reason) << "\""
+     << ",\"cmd_ack_controller_state\":\""
+     << json_escape(s.cmd_ack_controller_state) << "\""
+     << ",\"cmd_ack_safety_state\":\"" << json_escape(s.cmd_ack_safety_state)
+     << "\""
+     << ",\"cmd_ack_seq\":" << s.cmd_ack_seq
      << "}";
   return os.str();
 }

@@ -182,6 +182,21 @@ class ControlLoop {
 
   // The facts the mode gate is judged on, assembled from authoritative state.
   ModeRequestContext mode_context() const;
+
+  // §52: answer every command, including the ones that do nothing. `accepted`
+  // here means controld acted on it — not that the web layer delivered it. A
+  // command with no honest answer is how v1 ended up with buttons that reported
+  // success for work nobody did (enable_search, and still today select_target,
+  // start_homing and start_installation_calibration, which are acked and dropped).
+  struct CommandAck {
+    std::string command;
+    bool accepted = false;
+    std::string reason;
+    std::string controller_state;  // phase + mode at the decision
+    std::string safety_state;
+    uint64_t seq = 0;
+  };
+  const CommandAck& last_command_ack() const { return last_ack_; }
   // Access to the tracking controller (telemetry, state). Only call when
   // tracking_mode_enabled().
   const TrackingController& tracking_controller() const { return *tracking_; }
@@ -285,6 +300,9 @@ class ControlLoop {
   // v3: make the v1 controllers match a mode that has already been accepted, and
   // build the authoritative cycle intent from whichever mode owns motion (§53).
   void sync_controllers_to_mode(OperatingMode mode);
+  void ack_command(const std::string& name, bool accepted,
+                   const std::string& why);
+  const char* mode_phase_label() const;
   MotionIntent build_mode_intent(TimeNs now_ns) const;
   ReferenceManager::IntentLimits intent_limits(TimeNs now_ns) const;
   // Phase 9: payload verification (§27, §31.3). `sp` holds the current
@@ -362,7 +380,19 @@ class ControlLoop {
   // control thread. Both guarded by command_mutex_.
   web::SystemCommandState command_state_;
   mutable std::mutex command_mutex_;
-  std::deque<std::pair<std::string, std::string>> command_queue_;
+  // A command that the web thread's gate refused still goes onto the queue,
+  // carrying the refusal, so the control thread publishes it as the answer.
+  // Otherwise a gate rejection leaves the previous command's ack on the
+  // operator's screen — which reads as "your last command worked" when the last
+  // one never reached controld at all. The ack has to be written by the control
+  // thread: command_state_ and telemetry_ belong to it, and the web thread
+  // writing them would be a data race dressed up as a convenience.
+  struct PendingCommand {
+    std::string name;
+    std::string arg;
+    std::string gate_reject;  // empty = run it; non-empty = answer with this
+  };
+  std::deque<PendingCommand> command_queue_;
   std::atomic<bool> shutdown_requested_{false};
   // One-shot restricted test-motion target (rad), consumed next cycle.
   bool has_test_motion_ = false;
@@ -409,6 +439,9 @@ class ControlLoop {
   std::optional<ReferenceManager> ref_mgr_;
   ModeManager mode_mgr_;             // v3 §43: which mode owns motion
   MotionIntent last_intent_;         // what it asked for this cycle
+  CommandAck last_ack_;              // §52: the answer to the last command
+  uint64_t ack_seq_ = 0;
+  std::string ack_in_flight_;        // command being executed right now
   ReferenceRequest mode_proposal_;   // the controller's proposal, before the mode
   bool tracking_auto_enable_ = false;
   // Observe-only view of the vision transport (owned by main / VisionIngest).

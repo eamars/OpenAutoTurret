@@ -885,6 +885,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         payload::payload_status_name(payload_status_);
     snap.payload_derated = payload_derated_;
     snap.payload_check_active = (phase_ == Phase::PayloadCheck);
+    // v3 §50: what the screen needs in order to say *why* the turret is doing
+    // what it is doing. The intent is reported as names plus its velocity scale,
+    // so a derated tracking reference reads as "auto_track / los_direction /
+    // coasting / 0.4" instead of a turret that quietly slowed down and a log with
+    // nothing in it to explain itself.
+    snap.operating_mode = operating_mode_name(mode_mgr_.mode());
+    snap.supervisory_state = supervisory_state_name(mode_mgr_.supervisory());
+    snap.mode_phase = mode_phase_label();
+    snap.intent_source = motion_source_name(last_intent_.source);
+    snap.intent_type = intent_type_name(last_intent_.type);
+    snap.intent_reason = last_intent_.reason;
+    snap.intent_velocity_scale = last_intent_.velocity_scale;
+    // §52. Published from the loop's own copy, so the answer exists even with no
+    // web client connected: whoever pressed the button while the browser was
+    // closed is exactly the person who wants to know what it did.
+    snap.cmd_ack_command = last_ack_.command;
+    snap.cmd_ack_accepted = last_ack_.command.empty()
+                                ? static_cast<int8_t>(-1)
+                                : static_cast<int8_t>(last_ack_.accepted ? 1 : 0);
+    snap.cmd_ack_reason = last_ack_.reason;
+    snap.cmd_ack_controller_state = last_ack_.controller_state;
+    snap.cmd_ack_safety_state = last_ack_.safety_state;
+    snap.cmd_ack_seq = last_ack_.seq;
     // Vision transport (observe-only; the ingest thread owns these counters).
     if (vision_link_) {
       const vision::VisionLink::Stats vs = vision_link_->stats();
@@ -1014,12 +1037,16 @@ ModeRequestContext ControlLoop::mode_context() const {
 }
 
 ModeResult ControlLoop::request_mode(OperatingMode target) {
+  const std::string who = ack_in_flight_.empty() ? "request_mode" : ack_in_flight_;
   const ModeResult r = mode_mgr_.request(target, mode_context());
   if (!r.ok) {
-    spdlog::warn("mode change to {} refused: {}", operating_mode_name(target),
-                 r.reason);
+    // §52: the reason that used to stop in the log now goes back to whoever asked.
+    ack_command(who, false, r.reason);
     return r;
   }
+  ack_command(who, true,
+              std::string(r.changed ? "entered " : "already in ") +
+                  operating_mode_name(target));
   sync_controllers_to_mode(target);
   if (r.changed)
     spdlog::info("MODE_CHANGED -> {} (supervisory {})",
@@ -1031,6 +1058,9 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
 ModeResult ControlLoop::stop_motion() {
   const OperatingMode was = mode_mgr_.mode();
   const ModeResult r = mode_mgr_.stop_motion(mode_context());
+  ack_command(ack_in_flight_.empty() ? "stop_motion" : ack_in_flight_, true,
+              std::string("cancelled ") + operating_mode_name(was) +
+                  " intent; manual hold");
   sync_controllers_to_mode(OperatingMode::Manual);
   spdlog::warn("STOP_MOTION: {} intent cancelled, controlled hold in MANUAL "
                "(§27; not a disable, not a shutdown)", operating_mode_name(was));
@@ -1076,6 +1106,27 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   l.track_v_max_rad_s = std::min(tracking_cfg_.track_v_max_rad_s, cap);
   l.roam_v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, cap);
   return l;
+}
+
+const char* ControlLoop::mode_phase_label() const {
+  // v3 §45's substate vocabulary, translated from the v1 FSM while V3-4/V3-6
+  // replace it. Translating rather than showing v1 names is deliberate: the
+  // operator learns one vocabulary, and when AutoTrackController arrives it
+  // reports these same strings from a real state machine instead of a table.
+  if (!tracking_) return "HOLD";
+  switch (tracking_->track_state()) {
+    case tracking::TrackState::ReadyHold:    return "WAIT_TARGET";
+    case tracking::TrackState::Tracking:     return "TRACK";
+    case tracking::TrackState::Coasting:     return "COAST";
+    case tracking::TrackState::BrakeToHold:  return "LOST_HOLD";
+    case tracking::TrackState::TargetLost:   return "LOST_HOLD";
+    case tracking::TrackState::Search:
+      // The same internal state means two different things depending on the mode
+      // (§111.5): a sweep in AUTO_ROAM, a refused one in AUTO_TRACK. Showing
+      // "SWEEP" in both would be the UI lying on the FSM's behalf.
+      return mode_mgr_.mode() == OperatingMode::AutoRoam ? "SWEEP" : "LOST_HOLD";
+  }
+  return "HOLD";
 }
 
 MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
@@ -1315,17 +1366,50 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
                                               : payload_profile_dir_);
     }
   }
-  if (r.ok) command_queue_.emplace_back(name, arg);
+  // Rejected here or executed there, either way controld answers (§52).
+  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error});
   return r;
 }
 
 void ControlLoop::process_commands() {
-  std::deque<std::pair<std::string, std::string>> cmds;
+  std::deque<PendingCommand> cmds;
   {
     std::lock_guard<std::mutex> lk(command_mutex_);
     cmds.swap(command_queue_);
   }
-  for (auto& c : cmds) execute_command(c.first, c.second);
+  for (auto& c : cmds) {
+    if (!c.gate_reject.empty()) {
+      ack_command(c.name, false, "web gate: " + c.gate_reject);
+      continue;
+    }
+    ack_in_flight_ = c.name;
+    const uint64_t before = ack_seq_;
+    execute_command(c.name, c.arg);
+    if (ack_seq_ == before) {
+      // Nobody claimed the answer, so this command has no failure path: the quiet
+      // hold, the stop, the shutdown request. That default is honest only because
+      // every path that CAN fail now answers for itself — which is why the no-op
+      // commands below answer explicitly rather than inheriting "accepted" the
+      // way v1's blanket acknowledge let them.
+      ack_command(c.name, true, "accepted");
+    }
+    ack_in_flight_.clear();
+  }
+}
+
+void ControlLoop::ack_command(const std::string& name, bool accepted,
+                              const std::string& why) {
+  ++ack_seq_;
+  last_ack_.command = name;
+  last_ack_.accepted = accepted;
+  last_ack_.reason = why;
+  last_ack_.controller_state =
+      std::string(phase_name(phase_)) + "/" + operating_mode_name(mode_mgr_.mode());
+  last_ack_.safety_state = safety_action_name(last_decision_.action);
+  last_ack_.seq = ack_seq_;
+  if (!accepted)
+    spdlog::warn("command '{}' rejected: {} (state {}, safety {})", name, why,
+                 last_ack_.controller_state, last_ack_.safety_state);
 }
 
 void ControlLoop::disable_tracking() {
@@ -1349,8 +1433,8 @@ void ControlLoop::execute_command(const std::string& name,
   if (name == "set_mode") {
     OperatingMode target;
     if (!operating_mode_from_name(arg.c_str(), target)) {
-      spdlog::warn("set_mode rejected: unknown mode '{}' (expected MANUAL, "
-                   "AUTO_TRACK or AUTO_ROAM)", arg);
+      ack_command(name, false, "unknown mode '" + arg +
+                                  "'; expected MANUAL, AUTO_TRACK or AUTO_ROAM");
       return;
     }
     request_mode(target);
@@ -1376,7 +1460,7 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "request_park") {
-    if (!start_parking(err)) spdlog::warn("request_park rejected: {}", err);
+    if (!start_parking(err)) ack_command(name, false, "park rejected: " + err);
     return;
   }
   if (name == "request_shutdown") {
@@ -1395,9 +1479,13 @@ void ControlLoop::execute_command(const std::string& name,
     // Phase 9 (§31.3, §42.2): begin the payload response check. The web gate
     // already required homed && !fault && !moving; the actual start happens in
     // step() (2c) so it runs on the control thread with the cycle timestamp.
-    if (phase_ == Phase::Hold) payload_check_requested_ = true;
-    else spdlog::warn("start_payload_verification: not in hold (phase={})",
+    if (phase_ == Phase::Hold) {
+      payload_check_requested_ = true;
+    } else {
+      ack_command(name, false,
+                  std::string("payload check needs Hold; phase is ") +
                       phase_name(phase_));
+    }
     return;
   }
   if (name == "select_payload_profile") {
@@ -1407,15 +1495,16 @@ void ControlLoop::execute_command(const std::string& name,
     // operator runs start_payload_verification (§31.3), so selecting an
     // unverified profile can never silently raise a limit on trust.
     if (phase_ == Phase::PayloadCheck) {
-      spdlog::warn("select_payload_profile: a payload check is running; not "
-                   "swapping the profile mid-check (§44)");
+      ack_command(name, false,
+                  "a payload check is running; not swapping the profile mid-check "
+                  "(§44)");
       return;
     }
     payload::PayloadProfileStore store(payload_profile_dir_);
     payload::PayloadProfile prof;
     std::string perr;
     if (!store.load(arg, prof, perr)) {
-      spdlog::warn("select_payload_profile: '{}' not loaded ({})", arg, perr);
+      ack_command(name, false, "profile '" + arg + "' not loaded: " + perr);
       return;
     }
     set_payload_profile(std::move(prof), /*commissioned=*/false);
@@ -1451,13 +1540,31 @@ void ControlLoop::execute_command(const std::string& name,
     }
     return;
   }
-  if (name == "select_target" || name == "start_homing" ||
-      name == "start_installation_calibration") {
-    // These are validated here but acted on by the tracking/vision subsystem or
-    // an external tool (see webd). Acknowledge so the UI can proceed.
+  if (name == "select_target") {
+    // NOT IMPLEMENTED, and saying so is the whole point. The dashboard has had a
+    // "Select target" button answering ok:true to a request nothing ever acted
+    // on — the same shape of lie enable_search was, found while building the
+    // acknowledgement path that makes such lies visible. It becomes real in V3-3
+    // (TargetSelectionManager, §13/§14).
+    ack_command(name, false,
+                "target selection is not implemented in this build (v3 V3-3)");
     return;
   }
-  spdlog::warn("unhandled web command: {}", name);
+  if (name == "start_homing" || name == "start_installation_calibration") {
+    // Both are advertised on the dashboard and neither is acted on: homing comes
+    // from the boot sequence, and visual calibration is an offline tool that needs
+    // a printed board (§29, P9). Acking them as accepted would keep a button that
+    // does nothing looking like a button that worked, so until each is wired
+    // deliberately or removed from the UI it says what it is.
+    ack_command(name, false,
+                name == "start_homing"
+                    ? "controld does not start homing from a web command in this "
+                      "build; homing runs from the boot sequence"
+                    : "visual calibration is run by the offline tool "
+                      "vision/installation_calibration.py, not by controld");
+    return;
+  }
+  ack_command(name, false, "unknown command '" + name + "'");
 }
 
 }  // namespace ota

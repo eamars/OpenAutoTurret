@@ -197,3 +197,48 @@ class CanHealthWireTest(unittest.TestCase):
             Telemetry(phase="hold", can_available=True, can_state=3))))
         self.assertIsInstance(t.can_state, int)
         self.assertEqual(t.can_state, 3)
+
+
+def test_v3_telemetry_fields_survive_the_wire():
+    """§50/§52: the mode, the intent and the command ack are the operator's
+    explanation of why the turret is moving. webd re-serialises telemetry through
+    this dataclass, so a field controld sends that the dataclass does not declare
+    is DROPPED on the way to the browser — no error, no log, just a dashboard that
+    never learns about it. That asymmetry is why this test exists."""
+    raw = {
+        "type": "telemetry",
+        "operating_mode": "AUTO_ROAM",
+        "supervisory_state": "READY",
+        "mode_phase": "SWEEP",
+        "intent_source": "auto_roam",
+        "intent_type": "joint_position",
+        "intent_reason": "bounded sweep",
+        "intent_velocity_scale": 1.0,
+        "cmd_ack_command": "set_mode",
+        "cmd_ack_accepted": 1,
+        "cmd_ack_reason": "entered AUTO_ROAM",
+        "cmd_ack_controller_state": "hold/AUTO_ROAM",
+        "cmd_ack_safety_state": "ALLOW",
+        "cmd_ack_seq": 12,
+    }
+    t = telemetry_from_json(raw)
+    assert t.operating_mode == "AUTO_ROAM"
+    assert t.mode_phase == "SWEEP"
+    assert t.intent_source == "auto_roam"
+    assert t.cmd_ack_accepted == 1
+    assert t.cmd_ack_seq == 12
+    # And it must come back out the other side: the browser is fed by
+    # telemetry_to_json, which only emits declared fields.
+    assert json.loads(telemetry_to_json(t))["cmd_ack_reason"] == (
+        "entered AUTO_ROAM"
+    )
+
+
+def test_no_command_yet_is_not_rendered_as_success():
+    """-1 means "nothing has been executed since controld started". A client that
+    defaults it to 0 shows a refusal that never happened; one that defaults to 1
+    shows a success that never happened. The third value is the point."""
+    t = telemetry_from_json({"type": "telemetry"})
+    assert t.cmd_ack_accepted == -1
+    assert t.cmd_ack_command == ""
+    assert t.operating_mode == ""

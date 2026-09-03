@@ -96,6 +96,27 @@ struct TelemetrySnapshot {
   int64_t control_cycle_us = 0;
   // Phase 9: payload profiling status (§42.1, §31.3).
   std::string payload_profile_name;    // active profile ("" = none)
+  // --- v3 §50/§52: the mode, and what the last command actually did --------
+  // Names, not enums: these cross a process boundary into a browser, and a
+  // renumbered enum on one side is a silent wrong label on the other.
+  std::string operating_mode;       // MANUAL | AUTO_TRACK | AUTO_ROAM
+  std::string supervisory_state;    // READY | HOMING | PARKING | FAULT | ... (§2)
+  std::string mode_phase;           // the mode's substate, e.g. WAIT_TARGET
+  std::string intent_source;        // who is asking for motion (§26)
+  std::string intent_type;          // and what it asked for (§25)
+  std::string intent_reason;        // why — the operator's question, answered
+  double intent_velocity_scale = 1.0;
+  // §52 CommandAck: every command answers, and "accepted" has to be earned.
+  // cmd_ack_accepted = -1 means "no command since the daemon started", which is
+  // different from a command that was refused — the dashboard must not show a
+  // refusal that never happened, nor a success that never happened.
+  std::string cmd_ack_command;
+  int8_t cmd_ack_accepted = -1;
+  std::string cmd_ack_reason;
+  std::string cmd_ack_controller_state;
+  std::string cmd_ack_safety_state;
+  uint64_t cmd_ack_seq = 0;
+
   std::string payload_profile_status;  // "no_profile"|"ok"|"mismatch"|"error"
   bool payload_derated = false;        // motion limits derated after mismatch
   bool payload_check_active = false;   // verification motion in progress

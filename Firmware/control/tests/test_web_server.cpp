@@ -118,6 +118,65 @@ TEST(WebServer, PublishesTelemetryJson) {
   server.stop();
 }
 
+TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
+  // The v3 fields cross a process boundary into a browser. Asserting them here,
+  // on the actual bytes, is what keeps the C++ struct and the Python dataclass
+  // from drifting apart in silence — the failure mode that already bit this
+  // project once, in the other direction, when a telemetry field the dashboard
+  // asked for had never existed on the wire.
+  TelemetrySnapshot s = sample_snapshot();
+  s.operating_mode = "AUTO_TRACK";
+  s.supervisory_state = "READY";
+  s.mode_phase = "COAST";
+  s.intent_source = "auto_track";
+  s.intent_type = "los_direction";
+  s.intent_reason = "coasting";
+  s.intent_velocity_scale = 0.42;
+  s.cmd_ack_command = "set_mode";
+  s.cmd_ack_accepted = 0;  // refused
+  s.cmd_ack_reason = "station is not homed";
+  s.cmd_ack_controller_state = "hold/AUTO_TRACK";
+  s.cmd_ack_safety_state = "ALLOW";
+  s.cmd_ack_seq = 7;
+
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_ack.sock";
+  cfg.telemetry_hz = 50;
+  WebServer server(cfg, [&] { return s; },
+                   [](const std::string&, const std::string&) {
+                     CommandResult r;
+                     r.ok = true;
+                     return r;
+                   });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+  int cfd = connect_client(cfg.socket_path);
+  std::string msg;
+  ASSERT_TRUE(read_message(cfd, msg));
+
+  EXPECT_NE(msg.find("\"operating_mode\":\"AUTO_TRACK\""), std::string::npos);
+  EXPECT_NE(msg.find("\"supervisory_state\":\"READY\""), std::string::npos);
+  EXPECT_NE(msg.find("\"mode_phase\":\"COAST\""), std::string::npos);
+  EXPECT_NE(msg.find("\"intent_source\":\"auto_track\""), std::string::npos);
+  EXPECT_NE(msg.find("\"intent_type\":\"los_direction\""), std::string::npos);
+  EXPECT_NE(msg.find("\"intent_reason\":\"coasting\""), std::string::npos);
+  // The scale matters as much as the names: a reference that was derated for low
+  // confidence has to look derated, or the operator reads a tracking problem as a
+  // latency problem.
+  EXPECT_NE(msg.find("\"intent_velocity_scale\":0.42"), std::string::npos);
+  EXPECT_NE(msg.find("\"cmd_ack_command\":\"set_mode\""), std::string::npos);
+  EXPECT_NE(msg.find("\"cmd_ack_accepted\":0"), std::string::npos)
+      << "a refusal must stay distinguishable from a success and from 'no "
+         "command yet' (-1), so it cannot be flattened to a bool";
+  EXPECT_NE(msg.find("\"cmd_ack_reason\":\"station is not homed\""),
+            std::string::npos);
+  EXPECT_NE(msg.find("\"cmd_ack_controller_state\":\"hold/AUTO_TRACK\""),
+            std::string::npos);
+  EXPECT_NE(msg.find("\"cmd_ack_seq\":7"), std::string::npos);
+  ::close(cfd);
+  server.stop();
+}
+
 TEST(WebServer, NoBusIsPublishedAsAbsenceNotAsZeroHealth) {
   // The simulated backend has no CAN link. Publishing rx=0/tx=0/state=0 with
   // can_available unset would read as "a quiet, error-active bus" to both the

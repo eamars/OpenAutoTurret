@@ -61,6 +61,25 @@ class Telemetry:
     safety_action: str = "ALLOW"
     feedback_age_ms: int = 0
     control_cycle_us: int = 0
+    # v3 §50: who is driving, and why. Strings by design — this crosses a process
+    # boundary into a browser, and an enum renumbered on one side becomes a wrong
+    # label on the other with nothing to complain about it.
+    operating_mode: str = ""             # MANUAL | AUTO_TRACK | AUTO_ROAM
+    supervisory_state: str = ""          # READY | HOMING | PARKING | FAULT | ...
+    mode_phase: str = ""                 # WAIT_TARGET | TRACK | COAST | SWEEP | ...
+    intent_source: str = "none"          # who is asking for motion (§26)
+    intent_type: str = "hold"            # what it asked for (§25)
+    intent_reason: str = ""              # why
+    intent_velocity_scale: float = 1.0   # confidence / derate applied to the ask
+    # §52: the answer to the last command. -1 = none executed since controld
+    # started; that is not the same claim as "the last one worked", and a client
+    # that renders it as one is lying about a command nobody sent.
+    cmd_ack_command: str = ""
+    cmd_ack_accepted: int = -1           # -1 none | 0 rejected | 1 accepted
+    cmd_ack_reason: str = ""
+    cmd_ack_controller_state: str = ""
+    cmd_ack_safety_state: str = ""
+    cmd_ack_seq: int = 0
     # Phase 9 payload verification (§28.5, §31.3, §42.1).
     payload_profile_name: str = ""          # active stored profile ("" = none)
     payload_profile_status: str = "no_profile"  # ok|no_profile|mismatch|error

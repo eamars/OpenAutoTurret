@@ -187,3 +187,149 @@ TEST(ControlLoop, MotorFaultTriggersDisable) {
   t += kDtNs;
   EXPECT_EQ(loop.phase(), Phase::Fault);
 }
+
+// --- v3 §52: every command answers, and "accepted" has to be earned -------
+//
+// These tests exist because v1 answered ok:true for commands it then dropped on
+// the floor (enable_search was one; select_target, start_homing and
+// start_installation_calibration still are, and now say so). A mode that refuses
+// must say why, and the reason has to survive into the snapshot the web layer
+// reads — a refusal that only reaches a log file is a refusal the operator cannot
+// act on.
+namespace {
+struct HomedLoop {
+  std::unique_ptr<sim::SimMotorBackend> sim_owner;
+  sim::SimMotorBackend* sim = nullptr;
+  std::unique_ptr<ControlLoop> loop;
+  int64_t t = 0;
+  bool ready = false;
+
+  HomedLoop(bool home = true) {
+    sim_owner = std::make_unique<sim::SimMotorBackend>(0.005);
+    sim = sim_owner.get();
+    sim->set_stops(AxisId::Pitch, -1.0, 1.0);
+    sim->set_stops(AxisId::Yaw, -1.0, 1.0);
+    loop = std::make_unique<ControlLoop>(make_cfg(), std::move(sim_owner));
+    if (home) {
+      std::string err;
+      (void)loop->start_homing(make_plan(), err);
+      ready = run_to_ready(*loop, *sim, t);
+    }
+  }
+  void step(int n) {
+    for (int i = 0; i < n; ++i) {
+      loop->step(t, kDtNs);
+      t += kDtNs;
+    }
+  }
+  void run(const char* name, const char* arg = "") {
+    loop->submit_command(name, arg);
+    step(3);
+  }
+  // The published snapshot — what the web layer reads — not the publisher
+  // object it is held in (§6.3). Testing the publisher would prove nothing about
+  // what an operator can actually see.
+  telemetry::TelemetrySnapshot snap() { return loop->telemetry().snapshot(); }
+};
+}  // namespace
+
+TEST(CommandAck, NothingClaimedBeforeTheFirstCommand) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready) << h.loop->fault_reason();
+  EXPECT_EQ(h.snap().cmd_ack_accepted, -1)
+      << "no command yet must not be rendered as a success, or as a failure";
+  EXPECT_TRUE(h.snap().cmd_ack_command.empty());
+}
+
+TEST(CommandAck, RejectedModeChangeCarriesTheReasonToTheSnapshot) {
+  HomedLoop h(/*home=*/false);
+  ASSERT_FALSE(h.loop->homed());
+  h.run("set_mode", "AUTO_TRACK");
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual)
+      << "an unhomed station cannot enter autonomy";
+  EXPECT_EQ(h.loop->last_command_ack().accepted, false);
+  EXPECT_NE(h.loop->last_command_ack().reason.find("hom"), std::string::npos)
+      << "the reason must say what is missing, got: "
+      << h.loop->last_command_ack().reason;
+  // The same text the browser shows (§52), not a different string assembled by
+  // the web layer from a guess.
+  EXPECT_EQ(h.snap().cmd_ack_reason, h.loop->last_command_ack().reason);
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+}
+
+TEST(CommandAck, AcceptedModeChangeSaysSoAndMovesTheMode) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready) << h.loop->fault_reason();
+  h.run("set_mode", "AUTO_TRACK");
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoTrack);
+  EXPECT_TRUE(h.loop->last_command_ack().accepted);
+  EXPECT_NE(h.loop->last_command_ack().reason.find("entered AUTO_TRACK"),
+            std::string::npos)
+      << h.loop->last_command_ack().reason;
+  EXPECT_EQ(h.snap().operating_mode, "AUTO_TRACK");
+  // The ack names the state it was decided in, so a report can be read later
+  // without guessing what the turret was doing at the time.
+  EXPECT_NE(h.loop->last_command_ack().controller_state.find("hold"),
+            std::string::npos)
+      << h.loop->last_command_ack().controller_state;
+}
+
+TEST(CommandAck, ModeNameThatDoesNotExistIsRefusedNotIgnored) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "SEARCH");
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_FALSE(h.loop->last_command_ack().accepted);
+  EXPECT_NE(h.loop->last_command_ack().reason.find("MANUAL"), std::string::npos)
+      << "the refusal must name the accepted spellings: "
+      << h.loop->last_command_ack().reason;
+}
+
+TEST(CommandAck, UnknownCommandIsAnswered) {
+  HomedLoop h;
+  h.run("launch_the_rocket");
+  EXPECT_FALSE(h.loop->last_command_ack().accepted);
+  EXPECT_NE(h.loop->last_command_ack().reason.find("unknown command"),
+            std::string::npos)
+      << h.loop->last_command_ack().reason;
+}
+
+TEST(CommandAck, CommandsThatDoNothingSayTheyDidNothing) {
+  // The three that v1 acked and dropped. These stay RED-shaped on purpose: when
+  // V3-3 implements selection, this test is the place that has to change, and it
+  // will change because the feature exists rather than because nobody noticed.
+  HomedLoop h;
+  h.run("select_target", "3");
+  EXPECT_FALSE(h.loop->last_command_ack().accepted)
+      << "selection has no implementation behind it yet";
+  h.run("start_homing");
+  EXPECT_FALSE(h.loop->last_command_ack().accepted);
+  h.run("start_installation_calibration");
+  EXPECT_FALSE(h.loop->last_command_ack().accepted);
+}
+
+TEST(CommandAck, StopMotionAnswersAndWorksFromAnyMode) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_ROAM");
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  h.run("stop_motion");
+  EXPECT_TRUE(h.loop->last_command_ack().accepted);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_NE(h.loop->last_command_ack().reason.find("AUTO_ROAM"), std::string::npos)
+      << "it should say what it cancelled: " << h.loop->last_command_ack().reason;
+}
+
+TEST(TelemetryV3, ModeAndIntentArePublishedEveryCycle) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  EXPECT_EQ(h.snap().operating_mode, "MANUAL");
+  EXPECT_EQ(h.snap().intent_source, "none")
+      << "no mode controller is running yet, so nothing is asking for motion";
+  h.run("set_mode", "AUTO_TRACK");
+  EXPECT_EQ(h.snap().intent_source, "auto_track");
+  EXPECT_EQ(h.snap().intent_type, "hold")
+      << "AUTO_TRACK with no target ever seen is a hold (§111.5), and the "
+         "telemetry has to show that rather than leave it implied";
+  EXPECT_EQ(h.snap().mode_phase, "WAIT_TARGET");
+}
