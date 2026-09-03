@@ -301,6 +301,13 @@ class ControlLoop {
   // executed on the control thread the next cycle (single-threaded mutation).
   // Returns the validation result (accepted, or the rejection reason). The web
   // server calls this from its non-RT thread.
+  // §20: how old the camera geometry is. main.cpp reads the calibration file's own modification
+  // time once at boot and every snapshot then reports the elapsed time. The loop deliberately does
+  // not re-stat the file: the geometry in force is the one that was loaded, and a file replaced on
+  // disk only takes effect after a restart, so ageing the loaded value is the truth while polling
+  // the path would report a measurement the station is not using.
+  void set_camera_calibration_mtime_ns(int64_t ns) { camera_cal_mtime_ns_ = ns; }
+
   web::CommandResult submit_command(const std::string& name,
                                     const std::string& arg);
   // True once the web UI requested a safe shutdown (main() polls this).
@@ -338,6 +345,7 @@ class ControlLoop {
   }
 
  private:
+  int64_t camera_cal_mtime_ns_ = 0;   // ns since epoch; 0 == geometry age unknown
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   bool enter_position_mode_all(double limit_spd, std::string& err);
   // Speed mode (velocity) for homing: enter speed mode on every axis with its

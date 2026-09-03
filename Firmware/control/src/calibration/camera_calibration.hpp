@@ -29,7 +29,10 @@
 //   0.0 -1.0 0.0
 //
 // Pure data + boot-time file I/O: NO CAN, NO camera, NO motor driver.
+#include <sys/stat.h>
+
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -40,8 +43,18 @@
 
 namespace ota {
 
+// Modification time of a file, in ns since the epoch, or 0 when it cannot be read. Kept here rather
+  // than at the call site because the answer belongs to whoever knows the path.
+inline int64_t file_mtime_ns(const std::string& path) {
+  struct stat sb {};
+  if (::stat(path.c_str(), &sb) != 0) return 0;
+  return static_cast<int64_t>(sb.st_mtim.tv_sec) * 1000000000LL +
+         static_cast<int64_t>(sb.st_mtim.tv_nsec);
+}
+
 struct IntrinsicsLoad {
   bool found = false;            // the file existed and parsed
+  int64_t source_mtime_ns = 0;   // when the geometry being reported was measured (0 = unknown)
   geo::CameraIntrinsics intrinsics;
   bool has_distortion = false;   // stored for later (unused by the v1 model)
   std::string detail;            // human-readable status for the boot log
@@ -78,8 +91,9 @@ inline IntrinsicsLoad load_camera_intrinsics(const std::string& path) {
   std::ifstream f(path);
   if (!f) {
     out.detail = "no file (using aligned-default intrinsics, UNCALIBRATED)";
-    return out;
+    return out;   // source_mtime_ns stays 0, and telemetry will say the age is unknown
   }
+  out.source_mtime_ns = file_mtime_ns(path);
   std::ostringstream ss;
   ss << f.rdbuf();
   std::string keys[64];

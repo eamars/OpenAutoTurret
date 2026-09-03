@@ -1582,6 +1582,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.camera_cy_px = ci.cy;
     snap.camera_width = ci.width;
     snap.camera_height = ci.height;
+    // §20: how long ago the camera geometry in force was measured. -1 when there is no
+    // calibration file at all, which stays JSON null rather than becoming a confident zero.
+    snap.camera_measurement_age_ms =
+        (camera_cal_mtime_ns_ > 0 && now_ns_ > camera_cal_mtime_ns_)
+            ? (now_ns_ - camera_cal_mtime_ns_) / 1000000
+            : -1;
+
     geo::field_of_view_deg(ci, snap.effective_hfov_deg, snap.effective_vfov_deg);
     snap.camera_fps = vs.camera_fps;
     if (tracking_) {

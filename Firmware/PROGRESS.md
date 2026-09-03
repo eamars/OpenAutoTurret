@@ -1451,3 +1451,28 @@ The mistake was chaining a probe and a history-rewriting command on one line, wh
 was hidden by redirection and the amend then acted on whatever HEAD happened to be. **Standing rule: never
 amend a commit that has been pushed — this project pushes every round, so amend is effectively never
 correct here. Write the message file, then `git commit -F` it, one command, no chain, no amend.**
+
+## 2026-09-04, 15:4x — round 18: geometry-age plumbing, **not working yet** (recorded as broken)
+
+§20's `camera.measurement_age_ms` went out as deliberate `null` with a comment naming the fix — carry the
+calibration file's mtime. That plumbing is now in the tree: `file_mtime_ns()` in the loader, mtime recorded
+at load, the loop told once at boot and ageing per snapshot, telemetry field defaulting to `-1`, emitter
+sending a number or `null` (never 0 by default).
+
+**It does not work.** Configured `calibration/camera_intrinsics.yaml` exists and is 0.39 days old (expected
+≈ 34,042,300 ms), and live telemetry still reads `null`. Candidates named, not guessed: relative path
+resolving against a different cwd; the assignment landing in a snapshot builder whose result isn't the struct
+the emitter formats; the boot handover receiving a different string than the loader used. Ruled out by
+observation: that the code path doesn't run — `effective_hfov_deg` published beside it is live and correct
+(69.3002 × 40.4171). **Next round starts by printing controld's resolved path, not by changing more code.**
+The §20 ledger was **not** updated to credit this field — a value the station doesn't send isn't supplied.
+
+**Method lessons, both already paid for once and paid for again:**
+1. **Grep the build for `error:` before believing ctest.** My emitter edit broke compilation (dropped quote;
+   a stray `;` ending a stream chain early) and **ctest still said 57/57** on stale binaries. A green suite
+   after a failed build is not evidence.
+2. **Process trap, third time.** One command line held a bracketed pattern *and* the plain module string, so
+   the kill matched its own shell and the launch never ran. Kill in one call, launch in the next.
+
+Vision restored after this restart (301 sets). Station left **homing**, not ready. 57 CTest on a clean
+build. **§110: 0 items accepted on hardware by a named person**; nothing here is acceptance evidence.

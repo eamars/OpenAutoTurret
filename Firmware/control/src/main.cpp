@@ -236,6 +236,10 @@ int main(int argc, char** argv) {
   // 5. Control loop: homing -> safe hold -> park on shutdown.
   ControlLoop loop(make_control_cfg(cfg), std::move(backend));
 
+  // §20: tell the loop when the geometry it is using was measured, read from the file the
+  // intrinsics were actually loaded from, so the number describes the values in force.
+  loop.set_camera_calibration_mtime_ns(file_mtime_ns(cfg.camera.intrinsics_file));
+
   // 5a. Phase 6 (Part 2, S1): the vision ingest. controld BINDS the
   //     SOCK_SEQPACKET socket (§6.1) and visiond connects to it; every decoded
   //     TargetMeasurement is handed to the control loop (thread-safe, §6.2).

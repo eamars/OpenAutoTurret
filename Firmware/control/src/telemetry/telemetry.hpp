@@ -181,6 +181,9 @@ struct TelemetrySnapshot {
   int32_t camera_width = 0;
   int32_t camera_height = 0;
   double effective_hfov_deg = 0.0;
+  // -1 when the geometry has no known measurement time (no calibration file). Never 0 by default:
+  // 0 would mean "measured this instant".
+  int64_t camera_measurement_age_ms = -1;
   double effective_vfov_deg = 0.0;
   double camera_fps = 0.0;
 

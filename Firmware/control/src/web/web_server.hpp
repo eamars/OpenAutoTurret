@@ -193,7 +193,10 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      // JSON null. It is NOT sent as 0: an age of zero would claim freshly commissioned geometry on a
      // station whose intrinsics were measured once by an offline probe. Plumbing the file's own
      // modification time through is the known fix, and the gap is declared in the contract test.
-     << ",\"measurement_age_ms\":null}"
+     << ",\"measurement_age_ms\":"
+     << (s.camera_measurement_age_ms < 0 ? std::string("null")
+                                        : std::to_string(s.camera_measurement_age_ms))
+      << "}"
      // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
      // the calibration files, not in the control code, where the only "imu" in the tree sits inside the
      // word "simulation". `world_elevation_deg` is null rather than 0 for the reason stated on the
