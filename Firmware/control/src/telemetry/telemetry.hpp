@@ -69,7 +69,17 @@ struct TelemetrySnapshot {
   uint64_t vision_track_sets = 0;
   int64_t vision_sensor_age_ms = -1;
   int64_t vision_publish_to_receive_ms = -1;
-  uint64_t selected_track_id = 0;  // since the last measurement (-1 = none)
+  uint64_t selected_track_id = 0;
+  // §13/§78: the operator's own choice, as controld understands it. The label and the
+  // uuid are both published because they answer different questions — "which one did I
+  // pick" is the label, "is the machine talking about the same thing I am" is the uuid,
+  // and after a label is reused (§10) only the uuid can answer the second.
+  uint16_t selected_display_index = 0;  // 0 = nothing selected
+  std::string selected_descriptor;      // "Person #2" (§10)
+  std::string selection_visibility;     // NONE | VISIBLE | OCCLUDED | LOST_REACQUIRABLE | STALE
+  bool selection_ambiguous = false;     // §21: two candidates, reselect — do not guess
+  float reacquisition_score = 0.0f;   // §78: what the best candidate scored
+  float ambiguity_margin = 0.0f;      // §78: and how far ahead of the next-best  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,
   // from the active R_W_B. installation_source is the PoseSource enum value
   // (kept as an int to keep this header decoupled from the calibration module).

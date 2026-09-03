@@ -240,6 +240,12 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
 }
 
 Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
+  now_ns_ = now_ns;
+  // Commands are executed inside the cycle and need a timestamp to record a selection
+  // against (§13's selection_timestamp). It is this cycle's clock, not the instant the
+  // operator clicked: a selection made between two cycles takes effect at the next one,
+  // and saying so with the clock it actually happened on is what makes the log
+  // reconcile with the turret's behaviour later.
   // 1. Non-blocking snapshots.
   AxisSnapshot sp[kAxisCount];
   for (int i = 0; i < kAxisCount; ++i) {
@@ -297,21 +303,39 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   {
     vision::TargetMeasurement m;
     bool have = false;
+    tracks::TrackSet set;
+    bool have_set = false;
     {
       std::lock_guard<std::mutex> lk(measurement_mutex_);
-      if (has_pending_measurement_) {
+      if (has_pending_set_) {
+        set = pending_set_;
+        has_pending_set_ = false;
+        have_set = true;
+      } else if (has_pending_measurement_) {
         m = pending_measurement_;
         has_pending_measurement_ = false;
         have = true;
       }
     }
-    // Consume (and drop) measurements while tracking is off so a stale frame
-    // cannot be applied the instant tracking is enabled.
-    if (have && tracking_) {
-      tracking_->set_measurement(m);
+    // A TrackSet wins when both arrived, which is the steady state for a v3 publisher:
+    // the legacy measurement is the same frame's selected target as visiond chose it,
+    // and visiond no longer chooses (§59). During an upgrade window this order is also
+    // what makes controld-first safe — a v1 publisher never sets has_pending_set_, so
+    // nothing changes for it.
+    if (have_set) {
+      // Observed whether or not a tracking session is running. The first version gated
+      // this on tracking_, and every selection attempt then answered "no vision data
+      // has reached controld yet" while TrackSets were arriving by the hundred: §12/§14
+      // let the operator choose a target before anything is following anything, so the
+      // observer cannot be downstream of the tracker.
+      const tracks::Track* followed = apply_track_set(set, now_ns);
       // §78: which candidate is actually being followed, published rather than
-      // inferred. Every hard-to-diagnose tracking story in this project has been "the
-      // turret is chasing something" with no field anywhere that says what.
+      // inferred. Zero while tracking is off is not a contradiction with the selection
+      // fields beside it — those say what the operator chose, this says what the
+      // turret is acting on, and the two legitimately differ in MANUAL.
+      selected_track_id_ = (tracking_ && followed) ? followed->uuid.lo : 0;
+    } else if (have && tracking_) {
+      tracking_->set_measurement(m);
       selected_track_id_ = m.has_track_id ? m.visual_track_id : 0;
     } else if (!tracking_) {
       selected_track_id_ = 0;
@@ -868,6 +892,18 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // turret was in fact tracking something — a field that lies only in some
     // configurations is worse than one that is missing.
     snap.selected_track_id = selected_track_id_;
+    {
+      const auto& sel = selection_.selection();
+      snap.selected_display_index = sel.has_selection ? sel.selected_display_index : 0;
+      snap.selected_descriptor =
+          sel.has_selection ? std::string(sel.selected_descriptor) : std::string();
+      snap.selection_visibility =
+          tracks::visibility_name(sel.has_selection ? sel.visibility_state
+                                                   : tracks::Visibility::None);
+      snap.selection_ambiguous = sel.has_selection && sel.ambiguous_reacquisition;
+      snap.reacquisition_score = sel.reacquisition_score;
+      snap.ambiguity_margin = sel.ambiguity_margin;
+    }
     snap.safety_action = last_decision_.action;
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
@@ -1424,43 +1460,60 @@ void ControlLoop::process_commands() {
 }
 
 void ControlLoop::feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns) {
-  // INTERIM selection rule, and the last place controld picks a target without being
-  // told to. §59 moved that decision out of visiond ("controld remains authoritative
-  // for selected target"), so until TargetSelectionManager lands (V3-3) the rule here
-  // reproduces what v1's vision-side selector did — follow the best-scoring person —
-  // with the scoring explicit and deterministic instead of buried in a Python helper.
-  //
-  // It is NOT the v3 rule: there is no operator choice, no persistence across a
-  // dropout, and no refusal to steal a target on an ambiguous reacquisition (§21).
-  // V3-3 replaces this function outright; it must not survive as a fallback, because
-  // a fallback that grabs the highest-confidence target is exactly how a turret ends
-  // up tracking a stranger after the selected one walks behind a pillar.
-  // Two carry-overs from v1's selector, kept deliberately. Moving the selection into
-  // controld (§59) is a change of *who decides*, not a licence to decide more broadly:
-  // without these, the day visiond starts publishing every class the detector has ever
-  // been told about, the turret acquires a car — and nobody chose that. §72 makes both
-  // configurable, and TargetSelectionManager (V3-3) owns them properly.
-  constexpr int32_t kPreferredClassId = 1;  // v1 preferred_class_id: 'person'
-  constexpr float kMinConfidence = 0.5f;    // v1 confidence_threshold
+  // The ingest thread's entire contribution: copy the frame's tracks across. Nothing
+  // here decides anything. Selection, visibility and §21's reacquisition all read
+  // control-thread state, and a socket thread running them would race the control
+  // cycle that is using the same answers to move a turret.
+  (void)receive_ns;  // §61 stamps are recorded by VisionLink, which owns that clock
+  std::lock_guard<std::mutex> lk(measurement_mutex_);
+  pending_set_ = set;
+  has_pending_set_ = true;
+}
 
-  const tracks::Track* pick = nullptr;
-  double best_area = -1.0;
-  for (int i = 0; i < set.count; ++i) {
-    const tracks::Track& t = set.tracks[i];
-    if (t.state != tracks::TrackState::Confirmed) continue;  // §8: only CONFIRMED
-    if (t.class_id != kPreferredClassId) continue;
-    if (t.track_confidence < kMinConfidence) continue;
-    const double area = double(t.bbox.x_max - t.bbox.x_min) *
-                        double(t.bbox.y_max - t.bbox.y_min);
-    const double cand = double(t.track_confidence);
-    const double cur = pick ? double(pick->track_confidence) : -1.0;
-    // Confidence first, then size (a nearer, larger target is the better anchor for
-    // LOS), then the smaller uuid — so two identical candidates resolve to the same
-    // one every time instead of flickering between them frame to frame.
-    if (!pick || cand > cur + 1e-6 ||
-        (std::fabs(cand - cur) <= 1e-6 && area > best_area + 1e-9)) {
-      pick = &t;
-      best_area = area;
+const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
+                                                  TimeNs now) {
+  // §17's chain, entered from the v3 door: the set is observed, a track is chosen, and
+  // the result is handed to the v1 estimator as a pixel measurement. Everything from
+  // "pixel" rightwards — ray, motor interpolation at the SensorTimestamp, LOS, the
+  // TargetEstimator, the joint solver — is the v1 that has been tested on this
+  // hardware (§111.18), which is the reason this function ends in a TargetMeasurement
+  // instead of a parallel path beside it.
+  selection_.observe(set, now);
+
+  // INTERIM rule, and the last place controld follows something nobody chose. When no
+  // operator selection exists it reproduces v1's behaviour — the best-scoring CONFIRMED
+  // person, with v1's gates — so upgrading controld does not, by itself, change what
+  // the station does with an unattended scene.
+  //
+  // It is not the v3 rule and it is not meant to outlive V3-4: §15's WAIT_TARGET is the
+  // state that should be answering here ("no selection, no pursuit"), and a fallback
+  // that grabs the highest-confidence target is exactly how a turret ends up tracking a
+  // stranger after the selected one walks behind a pillar. The tests that pin v1's
+  // class and confidence gates stay meaningful either way, because §14's own validation
+  // shares them.
+  const tracks::Track* pick = selection_.selected_track();
+  const bool from_selection = pick != nullptr;
+  if (!from_selection && !selection_.has_selection()) {
+    constexpr int32_t kPreferredClassId = 1;  // v1 preferred_class_id: 'person'
+    constexpr float kMinConfidence = 0.5f;    // v1 confidence_threshold
+    double best_area = -1.0;
+    for (int i = 0; i < set.count; ++i) {
+      const tracks::Track& t = set.tracks[i];
+      if (t.state != tracks::TrackState::Confirmed) continue;  // §8: only CONFIRMED
+      if (t.class_id != kPreferredClassId) continue;
+      if (t.track_confidence < kMinConfidence) continue;
+      const double area = double(t.bbox.x_max - t.bbox.x_min) *
+                          double(t.bbox.y_max - t.bbox.y_min);
+      const double cand = double(t.track_confidence);
+      const double cur = pick ? double(pick->track_confidence) : -1.0;
+      // Confidence first, then size (a nearer, larger target is the better anchor for
+      // LOS), then the smaller uuid — so two identical candidates resolve to the same
+      // one every time instead of flickering between them frame to frame.
+      if (!pick || cand > cur + 1e-6 ||
+          (std::fabs(cand - cur) <= 1e-6 && area > best_area + 1e-9)) {
+        pick = &t;
+        best_area = area;
+      }
     }
   }
 
@@ -1479,6 +1532,7 @@ void ControlLoop::feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns)
                      "anchors cannot become pixels. Treating as no target until the "
                      "publisher fills them in (one warning).");
       }
+      pick = nullptr;
     } else {
       m.valid = true;
       m.class_id = pick->class_id;
@@ -1493,8 +1547,26 @@ void ControlLoop::feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns)
       m.visual_track_id = pick->uuid.lo;
     }
   }
-  (void)receive_ns;  // §61 stamps are recorded by VisionLink, which owns that clock
-  feed_measurement(m);  // existing thread-safe hand-off: no new shared state
+  if (pick != nullptr && from_selection) {
+    static tracks::TrackUuid logged{};
+    if (!(logged == pick->uuid)) {
+      logged = pick->uuid;
+      spdlog::info("following the selected target {} ({}) — sequence {}",
+                   selection_.selection().selected_descriptor, pick->uuid.lo,
+                   set.frame_sequence);
+    }
+  }
+  // Applied here rather than queued through feed_measurement(), which is the ingest
+  // thread's hand-off and would add a cycle of delay for no reason — this function is
+  // already running on the control thread, in the same place the v1 path applies its
+  // measurement. Queuing it also meant a measurement could be overtaken by the next
+  // frame's set and never reach the estimator at all: invisible at 30 Hz against
+  // 200 Hz, and exactly the kind of one-in-five-cycles bug that only shows up live.
+  //
+  // Nothing is applied while tracking is off, matching the rule the v1 path has always
+  // enforced: a stale frame must not be waiting to fire the instant tracking starts.
+  if (tracking_ && m.valid) tracking_->set_measurement(m);
+  return pick;
 }
 
 void ControlLoop::ack_command(const std::string& name, bool accepted,
@@ -1640,14 +1712,33 @@ void ControlLoop::execute_command(const std::string& name,
     }
     return;
   }
-  if (name == "select_target") {
-    // NOT IMPLEMENTED, and saying so is the whole point. The dashboard has had a
-    // "Select target" button answering ok:true to a request nothing ever acted
-    // on — the same shape of lie enable_search was, found while building the
-    // acknowledgement path that makes such lies visible. It becomes real in V3-3
-    // (TargetSelectionManager, §13/§14).
-    ack_command(name, false,
-                "target selection is not implemented in this build (v3 V3-3)");
+  if (name == "select_target" || name == "clear_target") {
+    // §14. Validation is controld's, and this is the thread that can do it honestly:
+    // the answer is computed against the TrackSet actually in hand, not against what
+    // the web thread happened to see a moment ago. Reasons are the operator's — they
+    // are acked verbatim, which is the only reason a refusal is survivable at all.
+    if (name == "clear_target") {
+      auto r = selection_.clear(now_ns_);
+      spdlog::info("target selection: {}", r.reason);
+      ack_command(name, r.ok, r.reason);
+      return;
+    }
+    unsigned index = 0;
+    try {
+      index = static_cast<unsigned>(std::stoul(arg));
+    } catch (...) {
+      ack_command(name, false, "target id must be a number (the label on the screen)");
+      return;
+    }
+    if (index == 0 || index > 65535) {
+      ack_command(name, false, "target id must be a positive label number");
+      return;
+    }
+    auto r = selection_.select_by_display_index(
+        static_cast<uint16_t>(index), now_ns_);
+    spdlog::info("select_target {}: {} ({})", index, r.ok ? "ACCEPTED" : "REFUSED",
+                 r.reason);
+    ack_command(name, r.ok, r.reason);
     return;
   }
   if (name == "start_homing" || name == "start_installation_calibration") {

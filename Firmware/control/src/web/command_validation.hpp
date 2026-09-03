@@ -53,7 +53,8 @@ inline constexpr int kYawIx = 1;
 // Allowed commands:
 //   hold, set_mode <MANUAL|AUTO_TRACK|AUTO_ROAM>, stop_motion,
 //   start_tracking, stop_tracking, enable_search, disable_search,
-//   select_target <id>, start_homing, start_installation_calibration,
+//   select_target <label> / clear_target, start_homing,
+//   start_installation_calibration,
 //   start_payload_verification, select_payload_profile <name>,
 //   request_park, request_shutdown,
 //   run_test_motion <pos_rad>  (restricted test motion)
@@ -148,20 +149,34 @@ inline CommandResult validate_command(const SystemCommandState& s,
     r.ok = true;
     return r;
   }
-  if (command == "select_target") {
-    if (!s.tracking_enabled) {
-      r.error = "tracking is not enabled";
+  if (command == "select_target" || command == "clear_target") {
+    // §12: selection is independent of operating mode. This gate therefore checks
+    // shape and nothing else — no tracking_enabled, no mode, no safety state. An
+    // operator must be able to point at somebody while standing in MANUAL and have the
+    // choice waiting when AUTO_TRACK starts; refusing because of the mode is precisely
+    // the coupling §12 forbids. Whether the target exists, is CONFIRMED and is an
+    // allowed class is controld's decision (§14), made against the TrackSet actually in
+    // hand rather than against a web-thread snapshot.
+    if (command == "clear_target") {
+      if (!arg.empty()) {
+        r.error = "clear_target takes no argument";
+        return r;
+      }
+      r.ok = true;
       return r;
     }
-    int id = 0;
-    try {
-      id = std::stoi(arg);
-    } catch (...) {
-      r.error = "invalid target id";
+    if (arg.empty()) {
+      r.error = "select_target needs the label number shown on screen";
       return r;
     }
-    if (id < 0 || id > 15) {
-      r.error = "target id out of range (0..15)";
+    for (char c : arg) {
+      if (c < '0' || c > '9') {
+        r.error = "target label must be a number";
+        return r;
+      }
+    }
+    if (arg.size() > 5) {
+      r.error = "target label out of range";
       return r;
     }
     r.ok = true;

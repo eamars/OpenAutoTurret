@@ -126,6 +126,12 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"vision_sensor_age_ms\":" << s.vision_sensor_age_ms
      << ",\"vision_publish_to_receive_ms\":" << s.vision_publish_to_receive_ms
      << ",\"selected_track_id\":" << s.selected_track_id
+     << ",\"selected_display_index\":" << s.selected_display_index
+     << ",\"selected_descriptor\":\"" << json_escape(s.selected_descriptor) << "\""
+     << ",\"selection_visibility\":\"" << json_escape(s.selection_visibility) << "\""
+     << ",\"selection_ambiguous\":" << (s.selection_ambiguous ? 1 : 0)
+     << ",\"reacquisition_score\":" << s.reacquisition_score
+     << ",\"ambiguity_margin\":" << s.ambiguity_margin
      << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""
      << ",\"supervisory_state\":\"" << json_escape(s.supervisory_state) << "\""
      << ",\"mode_phase\":\"" << json_escape(s.mode_phase) << "\""

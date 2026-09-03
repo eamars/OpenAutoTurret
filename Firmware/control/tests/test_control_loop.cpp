@@ -446,3 +446,135 @@ TEST(FeedTrackSet, MissingResolutionIsRefusedRatherThanGuessed) {
   EXPECT_EQ(h.loop->phase(), Phase::Hold)
       << "refusing an unreadable message must not fault the station";
 }
+
+// --- §88 through the real command API (the software half; the operator half of §88
+//     — a person watching a real turret pick the right real person — stays open).
+namespace {
+tracks::TrackSet two_people(uint32_t seq, TimeNs sensor, uint16_t idx_a, uint16_t idx_b,
+                            float conf_a = 0.9f, float conf_b = 0.7f,
+                            float ax_a = 0.3f, float ax_b = 0.7f) {
+  tracks::TrackSet set;
+  set.frame_sequence = seq;
+  set.sensor_timestamp_ns = sensor;
+  set.publish_timestamp_ns = sensor + 3'000'000;
+  set.width = 1280;
+  set.height = 720;
+  const std::pair<tracks::TrackUuid, std::pair<uint16_t, float>> who[2] = {
+      {tracks::TrackUuid{0, 11}, {idx_a, conf_a}},
+      {tracks::TrackUuid{0, 22}, {idx_b, conf_b}},
+  };
+  const float ax[2] = {ax_a, ax_b};
+  for (int i = 0; i < 2; ++i) {
+    tracks::Track t;
+    t.uuid = who[i].first;
+    t.display_index = who[i].second.first;
+    t.class_id = 1;
+    std::memcpy(t.class_name, "person", 6);
+    t.state = tracks::TrackState::Confirmed;
+    t.detector_confidence = t.track_confidence = who[i].second.second;
+    t.bbox.x_min = ax[i] - 0.05f;
+    t.bbox.x_max = ax[i] + 0.05f;
+    t.bbox.y_min = 0.4f;
+    t.bbox.y_max = 0.7f;
+    t.anchor_x = ax[i];
+    t.anchor_y = 0.55f;
+    set.add(t);
+  }
+  return set;
+}
+}  // namespace
+
+TEST(TargetSelectionIntegration, ChoosingTwoPeopleSelectingTheSecondFollowsThesecond) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  // Both must be CONFIRMED before selection is possible, which needs the set to arrive
+  // more than once — but the vision side does the confirming, so controld sees them
+  // confirmed from the first frame it is given.
+  h.loop->feed_track_set(two_people(1, h.t, 1, 2), h.t);
+  h.step(1);
+
+  h.run("select_target", "2");
+  auto snap = h.snap();
+  EXPECT_EQ(snap.cmd_ack_accepted, 1) << snap.cmd_ack_reason;
+  EXPECT_EQ(snap.cmd_ack_reason, "selected Person #2");
+  EXPECT_EQ(snap.selected_display_index, 2);
+  EXPECT_EQ(snap.selected_track_id, 0u)
+      << "the selection fields say what the operator chose and the followed id says "
+         "what the turret is acting on; with no tracking session running they "
+         "legitimately differ, and a build that reported 22 here would be claiming "
+         "motion it is not making";
+
+  h.run("set_mode", "AUTO_TRACK");
+  h.loop->feed_track_set(two_people(900, h.t, 1, 2), h.t);
+  h.step(2);
+  EXPECT_EQ(h.snap().selected_track_id, 22u)
+      << "§78: once the mode acts on the selection, the followed identity is published "
+         "rather than argued about";
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoTrack);
+  h.loop->feed_track_set(two_people(2, h.t, 1, 2), h.t);
+  h.step(2);
+  EXPECT_EQ(h.snap().selected_track_id, 22u)
+      << "§88 step 5: #2 is the one being followed";
+
+  // §88 step 6: #1 becomes the bigger, better, faster detection. v1 would have moved on
+  // it without a word.
+  for (int i = 0; i < 10; ++i) {
+    h.loop->feed_track_set(two_people(10 + i, h.t, 1, 2, 0.99f, 0.4f,
+                                      0.3f + 0.02f * i),
+                           h.t);
+    h.step(1);
+  }
+  EXPECT_EQ(h.snap().selected_track_id, 22u)
+      << "the strongest detection on screen took the selection away from the one the "
+         "operator chose";
+  EXPECT_EQ(h.snap().selected_display_index, 2);
+
+  // §12: MANUAL does not forget it, and AUTO_TRACK picks it straight back up.
+  h.run("set_mode", "MANUAL");
+  EXPECT_EQ(h.snap().selected_display_index, 2)
+      << "§12: switching modes must not clear the selection";
+  h.run("set_mode", "AUTO_TRACK");
+  h.loop->feed_track_set(two_people(30, h.t, 1, 2), h.t);
+  h.step(2);
+  EXPECT_EQ(h.snap().selected_track_id, 22u);
+
+  // And only the explicit command removes it.
+  h.run("clear_target");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.snap().cmd_ack_reason, "cleared Person #2");
+  h.loop->feed_track_set(two_people(40, h.t, 1, 2), h.t);
+  h.step(2);
+  EXPECT_EQ(h.snap().selected_display_index, 0)
+      << "cleared, yet controld is still following something";
+}
+
+TEST(TargetSelectionIntegration, ARefusalReachesTheOperatorWithItsReason) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.loop->feed_track_set(two_people(1, h.t, 1, 2), h.t);
+  h.step(1);
+  h.run("select_target", "7");
+  const auto snap = h.snap();
+  EXPECT_EQ(snap.cmd_ack_accepted, 0);
+  EXPECT_NE(snap.cmd_ack_reason.find("no target # 7"), std::string::npos)
+      << snap.cmd_ack_reason
+      << " — a refusal the operator cannot act on is indistinguishable from a bug";
+  EXPECT_EQ(snap.selected_display_index, 0)
+      << "a refused selection must not half-apply";
+}
+
+TEST(TargetSelectionIntegration, SelectionSurvivesWithoutTrackingTurnedOn) {
+  // The v1 gate refused this outright; §12 makes the refusal the bug. Selecting must
+  // not require a tracking session, because "which one" is a question the operator can
+  // ask before anything is following anything.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  ASSERT_FALSE(h.loop->tracking_mode_enabled());
+  h.loop->feed_track_set(two_people(1, h.t, 1, 2), h.t);
+  h.step(1);
+  h.run("select_target", "1");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.snap().selected_display_index, 1);
+  EXPECT_FALSE(h.loop->tracking_mode_enabled())
+      << "§14: selection causes no motion and must not start a tracking session";
+}

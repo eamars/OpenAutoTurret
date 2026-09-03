@@ -68,14 +68,35 @@ TEST(CommandValidation, SearchLifecycle) {
   EXPECT_FALSE(validate_command(s, "disable_search").ok);
 }
 
-TEST(CommandValidation, SelectTargetRequiresTrackingAndValidId) {
+TEST(CommandValidation, SelectionIsShapeCheckedBecauseModeIsIrrelevant) {
+  // §12, and a deliberate reversal of what this gate used to enforce. v1 refused
+  // select_target while tracking was off, which is the coupling the document calls out
+  // by name: the operator must be able to say "that one" in MANUAL and have the choice
+  // still standing when AUTO_TRACK begins. It also meant the only way to answer "who
+  // should we follow" was to start following something first.
+  //
+  // What remains here is shape only. Existence, CONFIRMED state and allowed class are
+  // controld's to decide against the TrackSet it actually has (§14) — a 99 that does
+  // not exist is refused there, with the real reason, instead of being refused here by
+  // a bound nobody documented.
   auto s = homed_state();
-  EXPECT_FALSE(validate_command(s, "select_target", "1").ok);  // tracking off
+  EXPECT_TRUE(validate_command(s, "select_target", "1").ok)
+      << "tracking off must not block a selection (§12)";
   s.tracking_enabled = true;
   EXPECT_TRUE(validate_command(s, "select_target", "1").ok);
-  EXPECT_FALSE(validate_command(s, "select_target", "99").ok);  // out of range
+  EXPECT_TRUE(validate_command(s, "select_target", "99").ok)
+      << "out-of-range is a fact about the current frame, not about the command";
+
   EXPECT_FALSE(validate_command(s, "select_target", "abc").ok);  // not a number
   EXPECT_FALSE(validate_command(s, "select_target", "").ok);
+  EXPECT_FALSE(validate_command(s, "select_target", "-1").ok);
+  EXPECT_FALSE(validate_command(s, "select_target", "999999").ok);
+
+  EXPECT_TRUE(validate_command(s, "clear_target").ok);
+  s.tracking_enabled = false;
+  EXPECT_TRUE(validate_command(s, "clear_target").ok)
+      << "clearing a selection is never blocked by the machine's state";
+  EXPECT_FALSE(validate_command(s, "clear_target", "2").ok);
 }
 
 TEST(CommandValidation, HomingOnlyWhenNotHomed) {

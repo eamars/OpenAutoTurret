@@ -181,7 +181,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <span id="mode" class="badge">—</span>
       <span id="mode-phase" class="badge">—</span>
       <span id="sup-state" class="badge">—</span>
+      <span id="selection" class="badge">selected: none</span>
+      <span id="sel-index-row">
+        <input id="sel-index" type="number" min="1" step="1" style="width:4.5em"
+               title="the label number on the overlay (Person #2 is 2)">
+        <button data-cmd="select_target">SELECT TARGET</button>
+        <button data-cmd="clear_target">CLEAR TARGET</button>
+      </span>
     </div>
+    <div class="muted" id="selection-note">Selection is independent of mode (§12):
+      choosing a target here does not make the turret move, and switching to MANUAL
+      does not forget it. Only CLEAR TARGET removes it.</div>
     <div><span id="mode-unsupported" class="muted"></span></div>
     <div><span id="intent">intent: —</span></div>
     <div><span id="ack" class="muted">last command: none since controld started</span></div>
@@ -200,10 +210,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button data-cmd="stop_tracking">Stop tracking</button>
       <button data-cmd="enable_search">Enable search</button>
       <button data-cmd="disable_search">Disable search</button>
-      <span>target
-        <input id="sel-target" type="number" min="0" max="15" value="0" style="width:56px">
-      </span>
-      <button data-cmd="select_target">Select target</button>
+      <!-- select_target used to live here, as a number box the operator was asked to
+           fill in blind. It is in the mode row now, beside the thing it selects (§45). -->
       <button data-cmd="start_homing">Start homing</button>
       <button data-cmd="start_installation_calibration">Start visual calibration</button>
       <button data-cmd="start_payload_verification">Start payload verification</button>
@@ -404,7 +412,8 @@ function render(t) {
   // question the page should not have been asking. Say what is missing instead.
   const v3 = !!t.operating_mode;
   const mode = t.operating_mode || "not reported";
-  document.querySelectorAll("#mode-controls button[data-mode]").forEach((btn) => {
+  document.querySelectorAll(
+      "#mode-controls button[data-cmd]:not(.danger)").forEach((btn) => {
     btn.disabled = !v3;
   });
   const note = $("mode-unsupported");
@@ -419,6 +428,38 @@ function render(t) {
   badge($("sup-state"), t.supervisory_state || "—",
         t.supervisory_state === "READY" ? "ok" : "warn");
   markActiveMode(mode);
+  // What controld understood, not what was last clicked. The distinction is the whole
+  // point of this line: a selection that was refused, or that has since gone stale,
+  // looks identical to a live one if the page keeps showing the button press.
+  const selTxt = $("selection");
+  if (selTxt) {
+    if (!v3) {
+      selTxt.textContent = "selected: not reported";
+      badge(selTxt, "not reported", "warn");
+    } else if (!t.selected_display_index) {
+      selTxt.textContent = "selected: none";
+      badge(selTxt, "none", "");
+    } else {
+      selTxt.textContent = "selected: " + (t.selected_descriptor || ("#" + t.selected_display_index)) +
+        " · " + (t.selection_visibility || "NONE");
+      badge(selTxt, selTxt.textContent,
+            t.selection_visibility === "VISIBLE" ? "ok"
+            : t.selection_visibility === "OCCLUDED" ? "warn"
+            : t.selection_visibility === "LOST_REACQUIRABLE" ? "warn" : "err");
+    }
+  }
+  const selNote = $("selection-note");
+  if (selNote) {
+    selNote.textContent = (t && t.selection_ambiguous)
+      ? "AMBIGUOUS REACQUISITION (§21): more than one candidate could be the selected " +
+        "target, so controld has not picked one. Select the right one explicitly — it " +
+        "will not guess. (best " + num(t.reacquisition_score, 2) + ", margin " +
+        num(t.ambiguity_margin, 2) + ")"
+      : "Selection is independent of mode (§12): choosing a target here does not make " +
+        "the turret move, and switching to MANUAL does not forget it. Only CLEAR " +
+        "TARGET removes it.";
+    selNote.className = (t && t.selection_ambiguous) ? "err" : "muted";
+  }
   $("intent").textContent = "intent: " + (t.intent_source || "none") + " / " +
     (t.intent_type || "hold") +
     (t.intent_reason ? " — " + t.intent_reason : "") +
@@ -499,7 +540,19 @@ function argFor(cmd, btn) {
   // Two buttons share set_mode and differ only by argument, so the argument
   // comes from the button rather than from a control elsewhere on the page.
   if (cmd === "set_mode") return (btn && btn.dataset.mode) || "";
-  if (cmd === "select_target") return String($("sel-target").value || 0);
+  if (cmd === "select_target") {
+    // The label number, not a uuid. §10: uuids travel in commands, labels are what the
+    // operator reads — and controld resolves one to the other, refusing if they no
+    // longer agree. Reading the value here rather than keeping it in a hidden field
+    // means the number being sent is the number in the box.
+    const v = parseInt($("sel-index").value, 10);
+    if (!Number.isFinite(v) || v < 1) {
+      logline("select_target needs the label number (Person #2 is 2) — nothing sent",
+              "err");
+      return null;
+    }
+    return String(v);
+  }
   if (cmd === "run_test_motion") return String($("test-motion").value || 0);
   if (cmd === "select_payload_profile") {
     const sel = $("profile-select");

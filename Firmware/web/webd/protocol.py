@@ -85,6 +85,13 @@ class Telemetry:
     vision_sensor_age_ms: int = -1
     vision_publish_to_receive_ms: int = -1
     selected_track_id: int = 0
+    # §13/§78: the operator's selection as controld understands it.
+    selected_display_index: int = 0
+    selected_descriptor: str = ""
+    selection_visibility: str = "NONE"
+    selection_ambiguous: bool = False
+    reacquisition_score: float = 0.0
+    ambiguity_margin: float = 0.0
     cmd_ack_seq: int = 0
     # Phase 9 payload verification (§28.5, §31.3, §42.1).
     payload_profile_name: str = ""          # active stored profile ("" = none)

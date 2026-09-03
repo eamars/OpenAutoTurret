@@ -148,3 +148,71 @@ def test_mode_row_degrades_when_controld_is_older():
     assert 'const v3 = !!t.operating_mode;' in DASHBOARD_HTML
     assert "btn.disabled = !v3;" in DASHBOARD_HTML
     assert 'id="mode-unsupported"' in DASHBOARD_HTML
+
+
+def _vocabulary():
+    import re as _re
+    from pathlib import Path
+
+    header = (Path(__file__).resolve().parents[3]
+              / "control" / "src" / "web" / "command_validation.hpp")
+    return set(_re.findall(r'command\s*==\s*"([a-z_]+)"',
+                           header.read_text(encoding="utf-8")))
+
+
+def _mode_row():
+    html = DASHBOARD_HTML
+    row = html[html.index('id="mode-controls"'):]
+    return row[: row.index("</section>")]
+
+
+def test_selection_controls_are_in_the_operators_row():
+    """§45/§12: choosing a target is an operator action, so it sits with the mode
+    controls — and there is now exactly one place on the page that sends it.
+
+    The legacy version lived in the developer section as a bare number box with a
+    0..15 range nobody documented, in a part of the page an operator has no reason to
+    open. Two inputs for one command is also how the wrong number gets sent with no way
+    to tell from the page which box was read.
+    """
+    row = _mode_row()
+    assert 'data-cmd="select_target"' in row
+    assert 'data-cmd="clear_target"' in row
+    assert 'id="sel-index"' in row
+    assert 'id="selection"' in DASHBOARD_HTML
+    assert 'id="selection-note"' in DASHBOARD_HTML
+    assert 'id="sel-target"' not in DASHBOARD_HTML, (
+        "a second select-target input came back; it would be dead, and a dead control "
+        "that looks live is the bug this project already paid for once")
+    assert "clear_target" in _vocabulary(), (
+        "the button names a command controld does not accept")
+
+
+def test_stop_motion_is_not_reachable_by_the_version_skew_disable():
+    """§27: STOP MOTION is accepted in every state, including fault.
+
+    The v3-absent degradation disables the mode row's buttons so an operator cannot
+    press something an old controld will ignore. Doing that to STOP MOTION would take
+    the one control that must always be available and make it depend on the version of
+    a daemon — the exact inversion of what it is for.
+    """
+    js = _script()
+    assert ":not(.danger)" in js, "the disable selector must exclude the danger control"
+    row = _mode_row()
+    assert '<button class="danger" data-cmd="stop_motion">' in row, (
+        "STOP MOTION must keep the class the selector excludes")
+
+
+def test_ambiguous_reacquisition_tells_the_operator_to_reselect():
+    """§21: when controld refuses to guess, the page must not stay calm.
+
+    "remain LOST_HOLD and ask the operator to reselect" is only useful if the asking
+    survives the trip to the screen. Otherwise the turret sits still and the dashboard
+    looks like it is working, which is the failure an operator notices only after
+    walking over to the station.
+    """
+    js = _script()
+    assert "selection_ambiguous" in js
+    assert "AMBIGUOUS" in js
+    assert "selection_visibility" in js
+    assert "LOST_REACQUIRABLE" in js
