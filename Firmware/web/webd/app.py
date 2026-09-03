@@ -169,6 +169,11 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         return {
             "ok": True,
             "controld_connected": client.connected(),
+            # Non-zero here means controld is publishing and webd is refusing what it hears. It
+            # belongs beside `controld_connected` rather than somewhere clever, because the pair
+            # is the whole diagnosis: connected but refusing frames looks identical to disconnected
+            # from the dashboard, and is a different emergency.
+            "malformed_frames": getattr(client, "malformed_frames", 0),
             "browser_clients": hub.client_count,
         }
 

@@ -27,10 +27,13 @@ Env vars:
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
 from common import image_corrections as ic
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,6 +80,19 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _resolve_orientation():
+    """The installed camera orientation, and warn loudly when nothing describes the mount."""
+    orientation, where = ic.read_install_orientation(
+        explicit=os.environ.get("OTA_VIDEO_ORIENTATION"), explicit_source="OTA_VIDEO_ORIENTATION")
+    if where.startswith("not configured"):
+        log.warning("camera mount orientation is %s — if the lens is not mounted level, the "
+                    "preview will look normal while the control geometry is wrong; say so in "
+                    "config/camera_install.yaml", where)
+    else:
+        log.info("camera orientation %s (from %s)", orientation, where)
+    return orientation
+
+
 def _env_choice(name: str, default: str, choices) -> str:
     """Read an env var, keeping it within ``choices`` (else the default)."""
     raw = os.environ.get(name)
@@ -100,8 +116,10 @@ def load_web_config() -> WebConfig:
         video_height=_env_int("OTA_VIDEO_HEIGHT", 480),
         video_fps=max(1, _env_int("OTA_VIDEO_FPS", 15)),
         video_quality=min(95, max(1, _env_int("OTA_VIDEO_QUALITY", 80))),
-        video_orientation=_env_choice("OTA_VIDEO_ORIENTATION", "none",
-                                      ic.ORIENTATIONS),
+        # The mount is described by the station (config/camera_install.yaml), not remembered
+        # at launch. OTA_VIDEO_ORIENTATION still overrides — and the source is logged by app.py
+        # so an override is visible instead of being a rumour about someone's shell profile.
+        video_orientation=_resolve_orientation(),
         video_white_balance=_env_choice("OTA_VIDEO_WB", "off",
                                         ic.WHITE_BALANCES),
         payload_profile_dir=os.environ.get("OTA_PAYLOAD_PROFILE_DIR",

@@ -128,6 +128,187 @@ TEST(WebServer, ATrackIdentifierCrossesTheWireAsTextNotAsARoundNumber) {
   server2.stop();
 }
 
+TEST(WebServer, AFrameLongerThanOneQueueSlotArrivesWhole) {
+  // The bug this exists for, stated so it is not re-introduced by someone tidying the send path:
+  // this socket is SOCK_SEQPACKET, which means one send() is one datagram — and the kernel will
+  // accept a *partial* send and label whatever remains as a new datagram. The send loop that used
+  // to live here wrote a long frame out in pieces. Nothing errored. The reader received a JSON
+  // document sawn in half at roughly one kernel queue slot (~2 KB) and threw it away, so the
+  // station's dashboard showed nothing while controld published happily at 15 Hz and logged not a
+  // word. It took the v3 fields pushing the frame past that slot to expose a loop that had been
+  // wrong since the day it was written.
+  //
+  // Which is also why this test fills the snapshot in rather than using a bare one: every other
+  // test here passes a default-constructed snapshot, whose JSON is short, and "the tests were
+  // green" was precisely the thing that was misleading. The assertion that the frame is *long* is
+  // part of the test — if somebody shrinks the snapshot below a queue slot, this test has to fail
+  // and say so, rather than quietly reverting to the case that used to pass by accident.
+  telemetry::TelemetrySnapshot s;
+  s.phase = "hold";
+  s.operating_mode = "AUTO_TRACK";
+  s.mode_phase = "TRACKING";
+  s.intent_source = "auto_track";
+  s.intent_type = "los_direction";
+  s.intent_reason = "following the person the operator selected at 21:56:11";
+  s.can_device = "/dev/ttyUSB0";
+  s.can_kind = "yousee";
+  s.payload_profile_name = "conservative-with-a-longer-name-for-a-reason";
+  s.selected_uuid_valid = true;
+  telemetry::format_uuid_text(s.selected_uuid_text, 0x9E3779B97F4A7C15ull, 31);
+  s.soft_limits_valid = true;
+  s.q_soft_min_pitch_rad = -0.95; s.q_soft_max_pitch_rad = 0.95;
+  s.q_soft_min_yaw_rad = 2.05;   s.q_soft_max_yaw_rad = 3.10;
+  for (int i = 0; i < telemetry::TelemetrySnapshot::kMaxTrackList; ++i) {
+    telemetry::TrackListing& t = s.tracks[i];
+    t.uuid_lo = 20 + i;
+    t.uuid_hi = 0x9E3779B97F4A7C15ull;
+    telemetry::format_uuid_text(t.uuid_text, t.uuid_hi, t.uuid_lo);
+    t.display_index = static_cast<uint16_t>(i + 1);
+    std::snprintf(t.label, sizeof t.label, "Person #%d", i + 1);
+    std::snprintf(t.class_name, sizeof t.class_name, "person");
+    std::snprintf(t.state, sizeof t.state, "CONFIRMED");
+    t.confidence = 0.9f;
+    t.bbox[0] = 0.1f; t.bbox[1] = 0.2f; t.bbox[2] = 0.3f; t.bbox[3] = 0.6f;
+    t.selectable = true;
+    t.selected = (i == 0);
+  }
+  s.track_count = telemetry::TelemetrySnapshot::kMaxTrackList;
+  for (int i = 0; i < telemetry::TelemetrySnapshot::kEventTail; ++i) {
+    s.event_tail[i].t_ns = 1000 * (i + 1);
+    std::snprintf(s.event_tail[i].name, sizeof s.event_tail[i].name, "TARGET_TRACKING");
+    std::snprintf(s.event_tail[i].detail, sizeof s.event_tail[i].detail,
+                  "reacquired with a score of 0.71 against a margin of 0.15 over 42 ms of gap");
+    s.event_tail_count = i + 1;
+  }
+  s.event_generation = 6;
+
+  std::string wire;
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_bigframe.sock";
+  cfg.telemetry_hz = 50;
+  WebServer server(cfg, [&s] { return s; },
+                   [](const std::string&, const std::string&) {
+                     CommandResult r;
+                     r.ok = true;
+                     return r;
+                   });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+  int cfd = connect_client(cfg.socket_path);
+  std::string msg;
+  ASSERT_TRUE(read_message(cfd, msg));
+
+  // The premise, asserted rather than assumed: this frame is bigger than the slot that used to
+  // truncate it. If this ever fails, the snapshot shrank and the rest of the test proves nothing.
+  EXPECT_GT(msg.size(), 2048u)
+      << "this frame is only " << msg.size()
+      << " bytes — small enough to have passed under the old truncation, so the test has stopped "
+         "testing anything";
+  // And the point: one datagram, whole, ending where a JSON document ends.
+  EXPECT_EQ(msg.back(), '}') << "the frame stops at byte " << msg.size()
+                             << " with no closing brace: it was torn, and the reader cannot tell";
+  EXPECT_NE(msg.find("\"selected_uuid\":\"11400714819323198485:31\""), std::string::npos)
+      << "the middle of the frame is missing, which is what a torn datagram looks like from here";
+  EXPECT_NE(msg.find("operating_mode"), std::string::npos);
+  ::close(cfd);
+  server.stop();
+}
+
+// A quote-aware bracket balance check. Not a JSON parser — the point is narrower and meaner: a
+// frame whose braces and brackets do not nest cannot be JSON, and every previous test in this
+// file looked for substrings, which a torn or mis-closed document can satisfy perfectly while
+// being unreadable by anything on the other end of the socket.
+inline bool json_balanced(const std::string& m, std::string* where) {
+  std::string stack;
+  bool in_string = false, escaped = false;
+  for (size_t i = 0; i < m.size(); ++i) {
+    const char c = m[i];
+    if (in_string) {
+      if (escaped) escaped = false;
+      else if (c == '\\') escaped = true;
+      else if (c == '"') in_string = false;
+      continue;
+    }
+    if (c == '"') in_string = true;
+    else if (c == '{' || c == '[') stack.push_back(c);
+    else if (c == '}' || c == ']') {
+      if (stack.empty()) { if (where) *where = "closing with nothing open at byte " + std::to_string(i); return false; }
+      const char open = stack.back();
+      stack.pop_back();
+      if ((c == '}' && open != '{') || (c == ']' && open != '[')) {
+        if (where) *where = std::string("'") + c + "' closes a '" + open + "' at byte " + std::to_string(i);
+        return false;
+      }
+    }
+  }
+  if (!stack.empty()) {
+    if (where)
+      *where = "frame ends with " + std::to_string(stack.size()) + " scopes still open; frame is "
+               + std::to_string(m.size()) + " bytes and stops at ..." + m.substr(m.size() > 70 ? m.size() - 70 : 0);
+    return false;
+  }
+  if (in_string) { if (where) *where = "frame ends inside a string"; return false; }
+  return true;
+}
+
+TEST(WebServer, APreservedSceneDoesNotBreakTheFrameItTravelsIn) {
+  // §80's black box arrived with one bracket too many at the end of its object, so every frame
+  // carrying a preserved scene was unparsable — and it stayed that way from the commit that added
+  // the feature until a station happened to brake at startup and a human asked why the dashboard
+  // was empty. Three things conspired: the block is skipped entirely when no scene is preserved
+  // (so a quiet station never showed it), the tests searched for substrings instead of parsing,
+  // and webd answered the resulting JSON error by dropping the frame in silence.
+  telemetry::TelemetrySnapshot s;
+  s.phase = "fault";
+  s.blackbox_capture_id = 7;
+  telemetry::BlackBoxCapture& b = s.blackbox;
+  b.id = 7;
+  b.t_ns = 123456789;
+  std::snprintf(b.reason, sizeof b.reason, "BRAKE in hold — stale motor feedback");
+  std::snprintf(b.operating_mode, sizeof b.operating_mode, "AUTO_TRACK");
+  std::snprintf(b.mode_phase, sizeof b.mode_phase, "TRACKING");
+  std::snprintf(b.phase, sizeof b.phase, "hold");
+  std::snprintf(b.selected_label, sizeof b.selected_label, "Person #1");
+  std::snprintf(b.selected_uuid_text, sizeof b.selected_uuid_text, "11400714819323198485:11");
+  std::snprintf(b.selection_visibility, sizeof b.selection_visibility, "VISIBLE");
+  b.candidate_count = 3;
+  for (int i = 0; i < 3; ++i) {
+    telemetry::TrackListing& t = b.candidates[i];
+    t.uuid_lo = 11 + i;
+    t.uuid_hi = 0x9E3779B97F4A7C15ull;
+    telemetry::format_uuid_text(t.uuid_text, t.uuid_hi, t.uuid_lo);
+    std::snprintf(t.label, sizeof t.label, "Person #%d", i + 1);
+    std::snprintf(t.state, sizeof t.state, "CONFIRMED");
+  }
+
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_capture.sock";
+  cfg.telemetry_hz = 50;
+  WebServer server(cfg, [&s] { return s; },
+                   [](const std::string&, const std::string&) {
+                     CommandResult r;
+                     r.ok = true;
+                     return r;
+                   });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+  int cfd = connect_client(cfg.socket_path);
+  std::string msg;
+  ASSERT_TRUE(read_message(cfd, msg));
+
+  std::string where;
+  EXPECT_TRUE(json_balanced(msg, &where))
+      << "the frame is not well-formed with a capture in it: " << where
+      << " — this is the shape that left a real station's dashboard blank";
+  EXPECT_NE(msg.find("\"blackbox\""), std::string::npos) << "no capture in the frame at all";
+  EXPECT_NE(msg.find("Person #3"), std::string::npos) << "the candidates went missing";
+  // The rest of the frame still has to survive the black box being appended to it: the whole
+  // point of §80 is that the scene arrives *with* the state, not instead of it.
+  EXPECT_NE(msg.find("\"phase\""), std::string::npos);
+  ::close(cfd);
+  server.stop();
+}
+
 }  // namespace
 
 TEST(WebServer, PublishesTelemetryJson) {

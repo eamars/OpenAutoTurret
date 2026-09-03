@@ -121,14 +121,17 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--orientation",
-        default="none",
+        default=None,          # resolved from config/camera_install.yaml, see below
         choices=list(ic.ORIENTATIONS),
         help=(
             "install orientation applied to the frame AND the detector boxes "
             "(keeps control geometry correct when the camera is mounted "
-            "upside-down; this station's IMX500 needs rotate_180). Choices are "
-            "enforced here so a typo in a systemd unit fails with a usage "
-            "message in the journal instead of a traceback."
+            "upside-down). Defaults to the station's own description of its "
+            "mount in config/camera_install.yaml, NOT to "
+            '"none": forgetting this flag leaves the detector boxes turned 180 '
+            "degrees from the picture while everything keeps streaming, which is "
+            "how a whole afternoon once went. Choices are enforced here so a typo "
+            "in a unit file fails with a usage message instead of a traceback."
         ),
     )
     return p
@@ -136,6 +139,13 @@ def _make_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list] = None) -> int:
     args = _make_parser().parse_args(argv)
+
+    # Resolve the mount from the station, then let an explicit flag win — and say which one
+    # was used, because a detector whose boxes are 180 degrees from the picture otherwise
+    # produces nothing but healthy-looking frames and a turret that aims away from the target.
+    orientation, orientation_from = ic.read_install_orientation(
+        explicit=args.orientation, explicit_source="--orientation")
+    print(f"camera orientation {orientation} (from {orientation_from})", file=sys.stderr)
 
     detector_choice = args.detector
     if detector_choice == "auto":
@@ -152,7 +162,7 @@ def main(argv: Optional[list] = None) -> int:
         fs = Picamera2FrameSource(
             args.image_config,
             args.detector_rpk if detector_choice == "rpk" else "",
-            orientation=args.orientation,
+            orientation=orientation,
             framerate_hz=args.framerate,
         )
         if detector_choice == "rpk" and not args.detector_rpk:

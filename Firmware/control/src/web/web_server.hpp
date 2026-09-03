@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
+#include "spdlog/spdlog.h"  // a torn frame has to be said out loud
 #include <sys/un.h>
 #include <thread>
 #include <unistd.h>
@@ -177,13 +178,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
                         ",\"state\":\"" + json_escape(t.state) + "\"" +
                         ",\"confidence\":" + std::to_string(t.confidence) +
                         ",\"anchor_x\":" + std::to_string(t.anchor_x) +
-                        ",\"anchor_y\":" + std::to_string(t.anchor_y) + "\"}";
+                        ",\"anchor_y\":" + std::to_string(t.anchor_y) + "}";
                  }
                  c += "],\"target_az_world_rad\":" + std::to_string(b.target_az_world_rad) +
                       ",\"target_el_world_rad\":" + std::to_string(b.target_el_world_rad) +
                       ",\"estimator_ready\":" + (b.estimator_ready ? "true" : "false") +
                       ",\"measurement_age_ms\":" + std::to_string(b.measurement_age_ms) +
-                      ",\"feedback_age_ms\":" + std::to_string(b.feedback_age_ms) + "]}";
+                      ",\"feedback_age_ms\":" + std::to_string(b.feedback_age_ms) + "}";
                  return c;
                }()))
      << ",\"event_generation\":" << s.event_generation
@@ -394,6 +395,7 @@ class WebServer {
         if (errno == EINTR) continue;
         break;
       }
+      size_socket(cfd);
       {
         std::lock_guard<std::mutex> lk(clients_mu_);
         if (static_cast<int>(client_fds_.size()) >= cfg_.max_clients) {
@@ -426,9 +428,9 @@ class WebServer {
           break;  // closed
         }
         buf[n] = 0;
-        handle_command(cfd, buf);
+        if (!handle_command(cfd, buf)) break;
       }
-      if (!peer_gone) publish_telemetry(cfd);
+      if (!peer_gone && !publish_telemetry(cfd)) break;
       if (peer_gone) break;
     }
     // Remove ourselves.
@@ -444,7 +446,7 @@ class WebServer {
     }
   }
 
-  void handle_command(int cfd, const char* json) {
+  bool handle_command(int cfd, const char* json) {
     std::string command, arg;
     json_get_string(json, "command", command);
     json_get_string(json, "arg", arg);
@@ -454,26 +456,59 @@ class WebServer {
       result.ok = false;
       result.error = "no command handler installed";
     }
-    send_all(cfd, format_response(command, result));
+    return send_frame(cfd, format_response(command, result), "command response");
   }
 
-  void publish_telemetry(int cfd) {
-    if (!provider_) return;
+  bool publish_telemetry(int cfd) {
+    if (!provider_) return true;
     telemetry::TelemetrySnapshot s = provider_();
-    send_all(cfd, format_telemetry(s));
+    return send_frame(cfd, format_telemetry(s), "telemetry");
   }
 
-  void send_all(int cfd, const std::string& msg) {
-    size_t off = 0;
-    while (off < msg.size()) {
-      ssize_t n = ::send(cfd, msg.data() + off, msg.size() - off,
-                         MSG_NOSIGNAL);
-      if (n <= 0) {
-        if (n < 0 && errno == EINTR) continue;
-        return;  // peer gone
-      }
-      off += static_cast<size_t>(n);
+  // A SEQPACKET socket delivers one send() as one datagram — and the kernel will accept a
+  // partial send and call whatever remains a *new* datagram. The loop that used to live here
+  // pushed a telemetry frame out in pieces, which stayed invisible for as long as the frame fit
+  // in one queue slot (~2 KB on this kernel). When the frame grew past it, every reader began
+  // receiving a JSON document sawn in half and had to throw it away: the dashboard shows nothing
+  // while the daemon publishes merrily at 15 Hz and logs no error at all. So a frame goes out
+  // exactly once, and a frame the socket will not take loses the client. A reader can live with
+  // missing frames — that is what staleness indicators are for. It cannot live with half a frame
+  // that arrives dressed as a whole one.
+  static constexpr size_t kFrameBudget = 256 * 1024;
+
+  void size_socket(int fd) {
+    // Set on the accepted socket, not the listener: what matters is the queue this peer's frames
+    // travel through, and inheritance across accept() is not something to rely on.
+    const int want = static_cast<int>(kFrameBudget);
+    const int opts[2] = {SO_SNDBUF, SO_RCVBUF};
+    for (int opt : opts) {
+      if (::setsockopt(fd, SOL_SOCKET, opt, &want, sizeof(want)) != 0)
+        spdlog::warn("web: could not raise socket buffer (errno {}); a frame near {} bytes may "
+                     "not be deliverable whole to this client", errno, kFrameBudget);
     }
+  }
+
+  bool send_frame(int cfd, const std::string& msg, const char* what) {
+    if (msg.size() > kFrameBudget)
+      spdlog::warn("web: {} frame is {} bytes, over the {} budget the sockets are sized for",
+                   what, msg.size(), kFrameBudget);
+    ssize_t n = ::send(cfd, msg.data(), msg.size(), MSG_NOSIGNAL | MSG_EOR);
+    if (n < 0 && errno == EINTR)
+      n = ::send(cfd, msg.data(), msg.size(), MSG_NOSIGNAL | MSG_EOR);
+    if (n < 0) {
+      const int e = errno;
+      if (e != EPIPE && e != ECONNRESET && e != EAGAIN && e != EWOULDBLOCK)
+        spdlog::error("web: {} frame could not be sent (errno {}) — dropping the client rather "
+                      "than publishing a partial frame", what, e);
+      return false;
+    }
+    if (static_cast<size_t>(n) != msg.size()) {
+      spdlog::error("web: {} frame torn — the socket took {} of {} bytes; dropping the client so "
+                    "the reader says 'no telemetry' out loud instead of parsing half a document",
+                    what, n, msg.size());
+      return false;
+    }
+    return true;
   }
 
   Config cfg_;

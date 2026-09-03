@@ -1,0 +1,15 @@
+# How the camera is physically mounted, read by every process that turns sensor pixels into
+# geometry — webd's preview and visiond's detector alike. One description, one place.
+#
+# This exists because the correction used to be supplied at launch time (OTA_VIDEO_ORIENTATION
+# for the web daemon, --orientation for the detector) and forgetting it fails *silently*: the
+# picture looks perfectly ordinary while the geometry the controller reasons about is turned
+# 180 degrees away from it. An operator then aims at a target the turret looks at the wrong way
+# round, and nothing in any log explains why.
+#
+# Allowed: none | rotate_180 | flip_horizontal | flip_vertical
+#   rotate_180      top<->bottom AND left<->right — the Pi 5 IMX500 module on this bracket
+#
+# A value outside that list stops the process rather than being ignored. A process that is
+# about to reason about geometry wrongly is not a process that should keep running.
+orientation: rotate_180

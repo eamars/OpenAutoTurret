@@ -12,11 +12,14 @@ commands; controld's validation gate decides whether they are legal (§42.2).
 """
 from __future__ import annotations
 
+import logging
 import queue
 import socket
 import threading
 import time
 from typing import Callable, Optional
+
+log = logging.getLogger(__name__)
 
 from .protocol import (
     ResponseMessage,
@@ -42,6 +45,12 @@ class ControldClient:
         self._thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
         self._connected_evt = threading.Event()
+        # Frames received from controld that could not be parsed. This counter exists because the
+        # first version of this file answered an unparseable frame with a bare `return`, and the
+        # result on a real station was a dashboard showing nothing while the daemon logged a
+        # healthy publish loop and nothing anywhere said the words "malformed frame". Silence is
+        # the one failure mode an operator cannot debug.
+        self.malformed_frames = 0
         self._latest: Optional[Telemetry] = None
         self._latest_lock = threading.Lock()
         self._resp_q: "queue.Queue[ResponseMessage]" = queue.Queue()
@@ -167,8 +176,18 @@ class ControldClient:
     def _dispatch(self, raw: str) -> None:
         try:
             mtype, payload = parse_message(raw)
-        except (ValueError, KeyError):
-            return  # ignore malformed
+        except (ValueError, KeyError) as exc:
+            self.malformed_frames += 1
+            # Rate-limited, not suppressed: at 15 Hz this would drown the journal, and once is
+            # enough for the first occurrence and then again every five seconds of continuing
+            # failure, which is what "it is broken and stays broken" is allowed to cost.
+            if self.malformed_frames == 1 or self.malformed_frames % 75 == 0:
+                log.error(
+                    "rejected a frame from controld (%d so far): %s%s — the page has had no "
+                    "telemetry since the last good frame; frame began %r",
+                    self.malformed_frames, exc,
+                    (" at byte %d" % exc.pos if hasattr(exc, "pos") else ""), raw[:72])
+            return
         if mtype == "telemetry":
             from .protocol import telemetry_from_json
 

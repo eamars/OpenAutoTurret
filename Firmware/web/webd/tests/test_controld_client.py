@@ -95,3 +95,43 @@ class ControldClientTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_frame_that_cannot_be_parsed_is_counted_and_said_out_loud(caplog):
+    """§80 taught this the hard way twice over: controld once emitted a black-box object with one
+    bracket too many, and the client's answer to the resulting JSON error was a bare `return`. The
+    station then sat with a blind dashboard, a daemon publishing at 15 Hz, and no error in any log
+    — because the component that knew the truth had decided it wasn't its problem.
+
+    So a rejected frame must be counted and logged, and the reader must survive to receive the
+    next one (a malformed frame is a data fault, not a reason to drop the connection).
+    """
+    import logging
+
+    from web.webd.controld_client import ControldClient
+
+    client = ControldClient("/tmp/definitely-not-there.sock")
+    assert client.malformed_frames == 0
+
+    class _Sock:
+        def __init__(self, frames):
+            self._frames = list(frames)
+
+        def recv(self, _n):
+            return self._frames.pop(0) if self._frames else b""
+
+    good = b'{"type":"telemetry","ts_ns":1,"phase":"hold"}'
+    bad = b'{"type":"telemetry","ts_ns":1,"blackbox":{"a":1]}'
+
+    with caplog.at_level(logging.ERROR):
+        client._read_loop(_Sock([bad, good, bad]))
+
+    assert client.malformed_frames == 2, (
+        "malformed frames were swallowed again — that is the silent-blind-dashboard bug"
+    )
+    text = caplog.text
+    assert "rejected a frame from controld" in text, "nothing was said about the bad frames"
+    assert "no telemetry" in text.lower(), (
+        "the log line must say what the operator is about to notice, not just that something "
+        "failed to parse"
+    )

@@ -15,6 +15,7 @@ never drift out of sync with what the control loop sees.
 """
 from __future__ import annotations
 
+import pathlib
 from typing import Sequence, Tuple
 
 # Orientation of the mounted sensor relative to the world. "none" is the safe,
@@ -161,3 +162,119 @@ def apply_white_balance(rgb, gains: Sequence[float]):
     out[..., 1] *= float(gains[1])
     out[..., 2] *= float(gains[2])
     return np.clip(out, 0.0, 255.0).astype(rgb.dtype)
+
+
+# ── the installed camera orientation, read from the station rather than remembered ─────
+#
+# The IMX500 on this station is mounted upside-down. Getting that correction in place has
+# been a hand job on every bring-up — an environment variable for the web daemon, a
+# command-line flag for the detector — and forgetting it does not crash anything, which is
+# precisely the problem: the preview looks entirely normal while the geometry the controller
+# reasons about is 180 degrees away from the picture, and the archive notes record somebody
+# losing hours that way (docs/archive/post_homing_test_queue.md). A parameter that only
+# exists if the person launching a process remembers it is not a parameter. So the mount is
+# described once, in one file, and read by every process that turns sensor pixels into
+# geometry: webd's preview and visiond's detector. An explicit flag still wins, and says so
+# when it disagrees — because overriding the station's description of its own hardware is
+# worth a line in the log.
+# Anchored to the checkout, not to the working directory. A daemon started from elsewhere must
+# not silently conclude that nobody described the mount and run the camera uncorrected; that is
+# the same silent 180-degree error this file exists to prevent, wearing a costume.
+INSTALL_ORIENTATION_FILE = (
+    pathlib.Path(__file__).resolve().parent.parent / "config" / "camera_install.yaml")
+UNCONFIGURED_ORIENTATION = "none"
+
+
+def read_install_orientation(path=None, explicit=None, explicit_source="an explicit option"):
+    """Resolve the installed orientation. Returns (orientation, where_it_came_from).
+
+    Order of authority: an explicit option (flag or environment variable), then the station
+    file, then "none" — and the third case is reported rather than assumed, because "none"
+    is what an *aligned* camera wants and what a forgotten configuration leaves behind.
+    Raises ValueError on a value outside ORIENTATIONS, naming the choices: a typo in a mount
+    description must stop the process that is about to reason about geometry wrongly, not
+    continue quietly with a picture that looks fine.
+    """
+    if explicit is not None and str(explicit).strip() != "":
+        return validate_orientation(str(explicit).strip()), "%s" % explicit_source
+
+    wanted = pathlib.Path(path) if path else pathlib.Path(INSTALL_ORIENTATION_FILE)
+    if not wanted.exists():
+        return UNCONFIGURED_ORIENTATION, ("not configured (%s absent; assuming an aligned "
+                                         "camera)" % wanted)
+    value = None
+    for lineno, raw in enumerate(wanted.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        key, sep, val = line.partition(":")
+        if not sep:
+            key, sep, val = line.partition("=")
+        if not sep or key.strip() != "orientation":
+            continue
+        value = val.strip().strip("\"'\"")
+        where = "%s:%d" % (wanted, lineno)
+        break
+    if value is None:
+        return UNCONFIGURED_ORIENTATION, ("not configured (%s has no `orientation` key)" % wanted)
+    try:
+        return validate_orientation(value), where
+    except ValueError as exc:
+        raise ValueError("%s (%s)" % (exc, wanted)) from exc
+
+
+# ── channel order of a camera stream, taken from the library that writes it ────────────
+#
+# The web preview used to hardcode `arr[..., :3][..., ::-1]` on the reasoning that
+# V4L2_PIX_FMT_XBGR32 is 0x00RRGGBB in host byte order, so the bytes must arrive B,G,R,X.
+# That derivation is defensible on paper and wrong on this stack: picamera2's own encoder
+# (`request.py`, the path every picamera2 example uses and the one that produces correct
+# colour in the wild) encodes an XBGR8888 buffer with colourspace tag "RGBX" — it treats the
+# buffer as R,G,B,X in memory. Doing the reversal anyway swaps red and blue, which is not an
+# obvious defect: white stays white, so the scene looks fine until something saturated
+# appears. An operator at this station described it precisely — "the yellow is rendered as
+# blue", "not just yellow blue swap, but also pink purple swap" — which is R<->B exactly:
+# yellow (255,255,0) becomes cyan, pink (255,192,203) becomes lavender, green is untouched.
+# Measurement agreed: 1.71% of the live frame was blue-dominant against 0.02% red-dominant,
+# with near-white pixels dead neutral (a cast moves white; a swap does not).
+#
+# So the order comes from the format name, using the same correspondence the installed
+# picamera2 uses, and an unrecognised format is refused rather than guessed at. The table's
+# agreement with the installed library is asserted by a test that reads the library's source,
+# because a hand-copied table is exactly the kind of list that goes on certifying a world
+# that no longer exists.
+_RGB_INDEX_FOR_FORMAT = {
+    # format name -> which channels of the buffer are R, G, B, in memory order.
+    # Derived from picamera2's FORMAT_TABLE: {"XBGR8888": "RGBX", "XRGB8888": "BGRX",
+    # "BGR888": "RGB", "RGB888": "BGR"} — the colourspace tag names the memory order.
+    "XBGR8888": (0, 1, 2),   # encodes as "RGBX"
+    "XRGB8888": (2, 1, 0),   # encodes as "BGRX"
+    "BGR888": (0, 1, 2),     # encodes as "RGB"  — the fourcc name is NOT the memory order
+    "RGB888": (2, 1, 0),     # encodes as "BGR"  — ditto. My first draft of this table read the
+                             # names instead of the tags and got both of these backwards; the
+                             # test that compares this table against picamera2's source caught
+                             # it within one run, which is why that test exists.
+}
+_CHANNELS_FOR_FORMAT = {"XBGR8888": 4, "XRGB8888": 4, "BGR888": 3, "RGB888": 3}
+
+
+def rgb_from_stream(arr, pixel_format: str):
+    """Return an (H, W, 3) RGB view of a camera buffer in the format named by ``pixel_format``.
+
+    Raises ValueError for a format this function does not know, and for a buffer whose channel
+    count contradicts its own format name. Both cases are refusals on purpose: the alternative
+    is to keep running and produce a picture whose colours are quietly permuted, and that
+    failure has already cost this station an afternoon once.
+    """
+    if pixel_format not in _RGB_INDEX_FOR_FORMAT:
+        raise ValueError(
+            "unknown camera pixel format %r; known formats are %s — refusing to guess a "
+            "channel order, because a wrong guess is a picture with red and blue exchanged "
+            "and nothing else visibly wrong"
+            % (pixel_format, sorted(_RGB_INDEX_FOR_FORMAT)))
+    want = _CHANNELS_FOR_FORMAT[pixel_format]
+    if arr.ndim != 3 or arr.shape[2] != want:
+        raise ValueError(
+            "format %s expects %d channels per pixel but the buffer has shape %r"
+            % (pixel_format, want, tuple(arr.shape)))
+    return arr[..., list(_RGB_INDEX_FOR_FORMAT[pixel_format])]

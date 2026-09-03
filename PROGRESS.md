@@ -13,6 +13,16 @@ updated against the running code.
 `vision/`, `web/`, `config/`, `calibration/`, `tools/`); the spec's §50 tree is applied
 relative to `Firmware/`.
 
+> **Known defect in this file, stated where it cannot be missed.** Below the `## Last
+> updated` section there is a second, older `# OpenAutoTurret — Phase Status` document with its
+> own phase table, left behind when this file was restructured. Roughly 380 non-blank lines are
+> in that copy and nowhere else, and the most recent entries have been appended *below* the
+> second heading, so the newest work and the stalest phase table are in the same file and
+> disagree with each other. Do not read the first table as the whole truth. The fix is a merge
+> of the two, which has not been done yet — deliberately, because losing an entry to a hurried
+> merge would be worse than a flagged contradiction. Until it is done, treat the *last*
+> `## Last updated` section as the current state.
+
 ## Phase status (spec §56)
 
 | Phase | Code | On hardware | What the second column does and does not mean |
@@ -610,3 +620,158 @@ item lists moved to `Firmware/docs/AS_BUILT_v1.md`; the session log and the six 
 still open moved to `Firmware/docs/archive/progress_before_v3.md`. Same day before that:
 first live homing, first live cold-start roaming, and `enable_search` made to actually do
 something.
+
+
+---
+
+## 2026-09-03, later — the station was opened, and three silent defects came out of it
+
+The operator was present, at the station, with main power in reach, and lifted the standing
+"do not run P5 for now" instruction: *"Yes, P5 gate lifted — deploy v3 with me watching"* and
+*"You have full permission to operate the motor from now on."* v3 is running on the machine.
+This was worth more than a week of simulation, and not for the reason expected: the findings
+below are all in the *web* path, none in the control law.
+
+**v3 on metal, measured.** controld's own line: `loop: target=200 Hz p50=5.055 p95=5.066
+p99=5.084 worst=5.689 ms (n=4096)`. The pre-v3 binary the station ran before this, measured over
+90 s of idle-ready telemetry (881 samples): p50 5057 µs, p95 5081, p99 5099, max 5146 — and
+**881/881 samples over the 5000 µs period**, i.e. 0% on-period, ~197.7 Hz. So v3 is the same
+speed as pre-v3 on this metal, and the loop has never met its period on this hardware; it is
+inside the 2 ms grace, which is what the grace is for. Recording it as "the metal loop runs at
+about 197.7 Hz and always has" rather than as a v3 regression or a pass.
+
+**Three things observed with a human watching (not signed — see §110 below):**
+
+- **AUTO_ROAM/1** swept yaw **109.3° → 188.3°** on the real turret with `SWEEP` →
+  `TURNAROUND` phases and the waypoint named in telemetry. Note for whoever looks next: the
+  sweep peaked at **0.457 rad/s = 26.2 °/s**, above the `conservative` payload profile's
+  20.1 °/s, and `payload_check_active` was **false** at the time. Whether the envelope ceiling or
+  the payload ceiling governs a roam sweep is now an open question with a number attached.
+- **`stop_motion` mid-sweep** left `MANUAL / HOLD`, intent `manual`, reason `'manual hold'` —
+  §110's stop-motion requirement, observed on the machine. No scene was preserved (capture id
+  unchanged), which is defensible: an operator request is not the station losing a belief.
+- **The dead-man lease** (MANUAL, the item simulation could only ever half-answer): a jog with
+  **no keepalives at all** had its lease cleared after **~337 ms** and the axis came to rest
+  (v→0, 1.2° travelled). The timer expiring in a unit test says a flag flipped; this says the
+  turret stopped.
+
+**§46's recipe sleeps, now with a body count.** One homing produced **56 supervisor brakes**, each
+preserving a black-box scene, with `overrun_us` clustering at **104–108 ms** and one at
+**219 889 µs**. That is the documented 109–113 ms sleep cost appearing as feedback-watchdog trips
+during homing, on real drives. They stop the moment homing ends — this is not a fault at rest.
+The async recipe state machine is still unimplemented because it changes the homing sequence and
+needs a risk agreement first; it now has 56 measurements behind it.
+
+**`OTA_BLACKBOX_DIR` was unset on this station**, so §80's writer had never written anything
+here — the only black-box JSON on the machine was from my own pytest runs. With the directory set,
+the first real artifact appeared: `/var/lib/ota/blackbox/blackbox_0029_BRAKE_in_hold.json`.
+
+### The three silent defects
+
+1. **The black box was two typos, and had therefore never been readable.** Its object closed with
+   a stray `]`, and every candidate object ended `... "anchor_y":0.0}` with a stray `"`. Both came
+   from `6aa77ef` — my own §80 commit. Consequence: **no frame carrying a preserved scene has ever
+   parsed**, which is to say §80 never reached a page or a file, while its tests passed. The reason
+   they passed is the actual lesson: the block is skipped entirely when nothing is preserved (a
+   quiet station never shows it), and every test checked for substrings instead of parsing. There
+   is now a quote-aware balance check in `control/tests/test_web_server.cpp` and a test that puts
+   a populated capture in a snapshot and refuses the frame if it does not nest.
+2. **webd answered an unparseable frame with `return  # ignore malformed`.** That is why the
+   station sat with a blind dashboard for ten minutes while controld logged a healthy 15 Hz publish
+   loop and no journal anywhere contained the words "malformed frame". `controld_client.py` had
+   never imported `logging` at all. Malformed frames are now counted (`/api/health`
+   → `malformed_frames`, because connected-but-refusing looks identical to disconnected from the
+   page) and logged rate-limited, with what the operator will notice next in the sentence.
+3. **The preview's red and blue channels were exchanged.** Reported by the operator, who also
+   supplied the diagnosis I had not reached: *"the yellow is rendered as blue"* and *"not just
+   yellow blue swap, but also pink purple swap"* — R↔B exactly: yellow→cyan, pink→lavender, green
+   untouched, white unmoved. `video.py` decoded with `arr[..., :3][..., ::-1]`, justified by a
+   comment deriving byte order from the V4L2 fourcc `V4L2_PIX_FMT_XBGR32`. **That reasoning was
+   wrong**: picamera2's own encoder (`request.py`, `FORMAT_TABLE = {"XBGR8888": "RGBX", ...}`)
+   treats the buffer as R,G,B,X in memory order. Reversing on top of that is the swap. Measured
+   before: 1.71 % blue-dominant pixels, 0.02 % red-dominant, near-whites dead neutral (a cast moves
+   white; a swap does not, which is why "everything else seemed fine"). After: 0.01 % blue,
+   2.03 % red, same scene.
+
+   The decode now comes from the negotiated format via `ic.rgb_from_stream`, with an unknown format
+   refused rather than guessed. Two guards make the class hard to repeat: a test that reads
+   picamera2's `FORMAT_TABLE` out of the **installed library's source** and compares it with our
+   table (it caught my first draft getting the two 3-channel entries backwards, because I read the
+   fourcc *names* instead of the colour *tags*); and a one-time startup check comparing our decode
+   against `request.make_image()`, the encoder picamera2 owns end to end — which on this station
+   reports `ok: matches picamera2's encoder for XBGR8888 (mean difference 0.0; the closest other
+   channel order would be 4.5)`.
+
+   Both guards were wrong before they were right, and both failures are worth keeping in the
+   record. The first version of the startup check compared only the red/blue exchange, so a
+   different channel error (taking the padding byte as red) passed it — my own injected-fault test
+   walked straight through. It now scores all six permutations and requires the decode it ran to be
+   the best of them. The second: the check compared the *rotated* frame against an unrotated
+   reference, so on this station — `rotate_180` — every permutation scored the same and it printed
+   `"ok: ... mean difference 59.7; the closest other channel order would be 59.7"`, which is a
+   check that has looked at nothing. The two identical numbers are the tell, and the test suite
+   missed it because every test ran with orientation `none`. It now compares before the orientation
+   correction and there is a test that runs the inverted mount.
+
+**And a wrong claim of mine, kept deliberately.** When the dashboard first went blank I told the
+operator the SEQPACKET frame was being **torn** by a chunking loop in `send_all()`. It was not. The
+live datagram was 3048 bytes, arrived whole, ended `"…_seq":0}`, and failed to parse at byte 2025 —
+because of defect 1 above. The chunking loop is still wrong in principle for a message socket and
+was replaced with one `send()` per frame plus a test, but the mechanism I asserted as fact was a
+plausible story that happened to fit. I also hardened socket buffers against a 2048-byte limit that
+this kernel does not have (measured: 65 536-byte datagrams pass with default 212 992-byte buffers);
+that code stays because it is harmless and says what it does, but it solved nothing.
+
+### The camera's orientation is a parameter now
+
+*"This is the 3rd time when you bring up, you ad-hoc inverted the video. No this has to be done
+formally. It has to be read from config regarding the camera rotation and load by default."*
+Fair. `rotate_180` had to be remembered per launch — an env var for webd, a flag for the detector —
+and forgetting it does not crash anything: the picture looks normal while the control geometry is
+180° away from it, which is on record as having cost hours before.
+
+The mount is now described once in `Firmware/config/camera_install.yaml`, read by
+`common/image_corrections.py` (the module both processes already import), defaulted by **both**
+webd and visiond, overridable by flag or env — with the source of the value logged and reported
+(`/api/video/state` → `orientation`), the path anchored to the checkout so a daemon started from an
+odd working directory cannot silently conclude nobody described the mount, and a value outside the
+four choices stopping the process that is about to reason about geometry wrongly. Verified by the
+person who reported it: **"Right way up now"**, with `OTA_VIDEO_ORIENTATION` confirmed absent from
+the daemon's environment — the value came from the file and nothing else. Ten tests in
+`Firmware/vision/tests/test_camera_install_orientation.py`.
+
+### Named gaps this round found and did not paper over
+
+- **§52's command response is a liar, and the fix is architectural.** `submit_command` answers on
+  the **web thread** immediately after validation, but mode-dependent refusals are decided on the
+  **control thread** a cycle later and recorded only into the telemetry ack. Observed directly:
+  `manual_step` in AUTO_ROAM was correctly refused in the daemon's log — `manual motion is only
+  available in MANUAL (currently AUTO_ROAM)` — and the socket answered `{"ok":true}` to the
+  caller. The daemon's judgement is right and honest; the response frame reports "I processed your
+  request" as "I did it", with no `reason` and no `controller_state`. §52 asks for the verdict *in
+  the acknowledgement*, which means the response must wait for the control thread's decision with a
+  bounded wait — a cross-thread acknowledgement inside the daemon. Not attempted tonight while a
+  person stood next to a machine I was commanding; named here instead.
+- **Whether the payload ceiling governs AUTO_ROAM** (26.2 °/s measured against a 20.1 °/s profile,
+  `payload_check_active` false). Needs answering with a measurement, not a reading of the code.
+- **`intent_velocity_scale` read 0.25** while idle in MANUAL with no target selected, which is not
+  obviously wrong but is not explained either.
+- `PROGRESS.md` contains two documents (note at the top of this file).
+- Still open from before: §46's async recipe, V3-9's legacy `HOLD|TRACK|SEARCH` retirement with the
+  operator, the AS_BUILT_v1 fold-in, §73's predicted target box, replay-tool intrinsics, and the
+  four §50/§78 fields recorded as absent.
+
+### §110, unchanged — and why
+
+`30 items in §110.  0 accepted on hardware by a named person.  29 shown by simulation only.
+1 untried.`
+
+Everything observed at the station above is recorded as *observed*, not *accepted*: the acceptance
+tool requires a person, and when asked for a name for the record the answer was *"Just call it
+operator. I don't care."* "operator" is a role, not a signature, and the whole point of the field
+is that somebody can be pointed at afterwards. The measurements stand on their own; the tally does
+not move until a name goes in it. (`tools/v3_acceptance.py`'s `UNNAMED` set is worth widening to
+catch role-words like `operator`, `tech`, `engineer` — a hole I pointed out and have not closed.)
+
+Evidence as of this entry: **54 CTest binaries green, 294 pytest green.**
+

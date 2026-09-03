@@ -19,6 +19,7 @@ busy camera is reported as an error on the video endpoints, never a crash.
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -27,6 +28,8 @@ from typing import Optional, Tuple
 import numpy as np
 
 from common import image_corrections as ic
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +47,12 @@ class VideoState:
     wb_gains: tuple = (1.0, 1.0, 1.0)
     orientation: str = "none"
     white_balance: str = "off"
+    # The negotiated main-stream pixel format, and the verdict of the one-time check that
+    # our own decode agrees with the camera library's encoder. Both are reported on the
+    # page because colour errors in a preview are invisible by construction: a permuted
+    # picture still looks exactly like a picture.
+    pixel_format: str = ""
+    colour_check: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -83,6 +92,9 @@ class VideoSource:
         self._stop_evt = threading.Event()
         self._state = VideoState()
         self._first_frame = threading.Event()
+        self._pixel_format = ""
+        self._colour_check = ""
+        self._colour_checked = False
         self._min_publish_s = 1.0 / 15.0
         self._last_publish = 0.0
         self._open_error = ""
@@ -108,6 +120,8 @@ class VideoSource:
                 wb_gains=self._wb_gains,
                 orientation=self._orientation,
                 white_balance=self._wb_mode,
+                pixel_format=self._pixel_format,
+                colour_check=self._colour_check,
             )
         return st
 
@@ -163,6 +177,13 @@ class VideoSource:
                         cfg["controls"]["AwbEnable"] = 0
                     except Exception:  # noqa: BLE001 - control name varies
                         pass
+                # The channel order is a property of the negotiated format, so the format
+                # is read from the configuration instead of being assumed. An empty value is
+                # left empty and refused downstream: guessing here is how a preview ends up
+                # with red and blue exchanged and nothing else wrong with it.
+                self._pixel_format = str((cfg.get("main") or {}).get("format", "") or "")
+                log.info("video main stream negotiated as %r, orientation %s",
+                         self._pixel_format, self._orientation)
                 cam.configure(cfg)
                 cam.start()  # blocks until the pipeline is up
                 # OUR thread pulls requests (see the class docstring for why the
@@ -182,10 +203,15 @@ class VideoSource:
 
             # Confirm the camera is actually producing frames.
             if not self._first_frame.wait(timeout=5.0):
+                # Keep a reason that is already known: "no frames" is a symptom, and the reason
+                # (an undecodable format, say) was recorded by the thread that hit it.
                 self._join_thread()
                 self._safe_close(cam)
                 self._camera = None
-                msg = "camera started but produced no frames"
+                # Keep a reason that is already known. "Produced no frames" is a symptom;
+                # the cause (an undecodable pixel format, say) was recorded by the capture
+                # thread, and losing it here is how a colour defect becomes a mystery.
+                msg = self._open_error or "camera started but produced no frames"
                 self._open_error = msg
                 self._state = VideoState(error=msg)
                 return self.state()
@@ -280,15 +306,40 @@ class VideoSource:
         wb_mode = state._wb_mode
         state._last_publish = now
         arr = request.make_array("main")
+        # The colour-order check (below, once) needs the decode WITHOUT the install orientation:
+        # request.make_image() knows nothing about how the lens is mounted, so comparing a
+        # rotated frame against an unrotated one compares two different pictures. On this
+        # station — rotate_180 — that mistake made every channel order score the same mean
+        # difference (59.7 against 59.7), and the check cheerfully reported "ok" while having
+        # distinguished nothing.
+        raw_rgb = None
+        if not state._colour_checked:
+            try:
+                raw_rgb = ic.rgb_from_stream(arr, state._pixel_format)
+            except ValueError:
+                raw_rgb = None  # the refusal below is the more important report
         # 1) Orientation (install-level) on the raw frame, first.
         if orientation != "none":
             arr = ic.apply_orientation_image(arr, orientation)
-        # 2) XBGR8888 -> RGB. V4L2_PIX_FMT_XBGR32 is BGRX-8-8-8-8
-        #    (byte0=B, byte1=G, byte2=R, byte3=X). Take the first 3
-        #    bytes and reverse -> [R, G, B], dropping the trailing X.
-        #    (Getting this order wrong puts the constant-255 X byte into
-        #    "red" and drops blue -> a false red cast.)
-        rgb = arr[..., :3][..., ::-1]
+        # 2) The stream's channels -> RGB, by the format the pipeline actually negotiated.
+        #    This line used to read  rgb = arr[..., :3][..., ::-1]  and was justified by the
+        #    comment below it: V4L2_PIX_FMT_XBGR32 is 0x00RRGGBB in host byte order, so the
+        #    bytes were assumed to arrive B,G,R,X. That reasoning was WRONG and it lived here
+        #    a long time, because picamera2's own encoder treats XBGR8888 as "RGBX" in memory
+        #    order; reversing on top of that exchanges red and blue. The symptom is not a crash
+        #    and not a cast: white stays white, so the scene looks normal until something
+        #    saturated shows up. The operator at this station described it exactly -- "the
+        #    yellow is rendered as blue", "not just yellow blue swap, but also pink purple
+        #    swap" -- which is R<->B precisely. Measured on the live frame: 1.71% blue-dominant
+        #    pixels against 0.02% red-dominant, near-whites dead neutral (a cast moves white, a
+        #    swap does not). The order now comes from the format name; see
+        #    common/image_corrections.py for where that correspondence comes from.
+        try:
+            rgb = ic.rgb_from_stream(arr, state._pixel_format)
+        except ValueError as exc:
+            state._open_error = "cannot decode camera frame: %s" % exc
+            log.error("%s", state._open_error)
+            return
         # 3) White balance (install-level): auto gray-world, smoothed.
         if wb_mode == "auto":
             g = ic.gray_world_correction(rgb)
@@ -309,6 +360,71 @@ class VideoSource:
             state._count += 1
         if not state._first_frame.is_set():
             state._first_frame.set()
+        if not state._colour_checked:
+            state._colour_checked = True
+            if raw_rgb is not None:
+                state._check_colour_order(request, raw_rgb, state._pixel_format)
+
+    def _check_colour_order(self, request, rgb, pixel_format: str) -> None:
+        """Once per start: compare our decode against the camera library's own encoder.
+
+        picamera2 can hand us the same frame as a PIL image through a path it owns end to end.
+        If our hand-rolled channel order is right, the two agree; if red and blue have been
+        exchanged, the swapped comparison is decisively closer. That makes this a check of the
+        thing static reasoning could not settle -- what the bytes on this kernel with this sensor
+        actually are -- and it costs one extra encode, once, at startup.
+
+        Two things make this comparison valid rather than decorative, and both were got wrong
+        first: it runs on the decode BEFORE the install orientation (the reference frame is not
+        rotated, so a rotated comparison is a comparison of two different pictures), and it
+        refuses to conclude anything from a colourless frame, which cannot tell one channel
+        order from another.
+        """
+        try:
+            ref = np.asarray(request.make_image("main").convert("RGB"), dtype=np.int16)
+            ours = np.asarray(rgb, dtype=np.int16)
+            if ref.shape != ours.shape:
+                self._colour_check = "skipped (reference frame is %r, ours is %r)" % (
+                    tuple(ref.shape), tuple(ours.shape))
+                return
+            if int((ours.max(axis=2) - ours.min(axis=2)).mean()) < 12:
+                self._colour_check = (
+                    "inconclusive: the first frame had almost no colour in it, which cannot "
+                    "tell one channel order from another")
+                log.warning("colour-order check inconclusive for %s (%s)",
+                            pixel_format, self._colour_check)
+                return
+            # Every permutation, not just the one I thought of. The first version of this
+            # check compared the decoded frame only against its red/blue exchange, and a
+            # different mistake — taking the padding byte as one of the colour channels —
+            # sailed straight through it, because "as decoded is closer than an R/B swap" is
+            # true of a great many wrong answers. Testing all six makes the verdict mean
+            # something: the decode we ran has to be the best of the six, not merely better
+            # than one rival.
+            names = {(0, 1, 2): "as decoded (R,G,B)", (0, 2, 1): "green and blue exchanged",
+                     (1, 0, 2): "red and green exchanged", (1, 2, 0): "channels rotated",
+                     (2, 0, 1): "channels rotated the other way",
+                     (2, 1, 0): "red and blue exchanged"}
+            scores = {}
+            for perm in names:
+                scores[perm] = float(np.abs(ours[..., list(perm)] - ref).mean())
+            identity = float(scores[(0, 1, 2)])
+            best = min(scores, key=lambda k: scores[k])
+            if best != (0, 1, 2) and scores[best] + 6.0 < identity:
+                self._colour_check = (
+                    "FAILED: our decode disagrees with picamera2's encoder for %s — it looks "
+                    "like %s (mean difference %.1f as decoded, %.1f that way)"
+                    % (pixel_format, names[best], identity, scores[best]))
+                log.error("camera colour order is wrong: %s", self._colour_check)
+            else:
+                rival = min((v for k, v in scores.items() if k != (0, 1, 2)))
+                self._colour_check = (
+                    "ok: matches picamera2's encoder for %s (mean difference %.1f; the closest "
+                    "other channel order would be %.1f)" % (pixel_format, identity, rival))
+                log.info("colour-order check: %s", self._colour_check)
+        except Exception as exc:  # noqa: BLE001 - a failed diagnostic must not stop the video
+            self._colour_check = "not performed (%s)" % exc
+            log.warning("colour-order check could not run: %s", exc)
 
 
 def mjpeg_boundary() -> str:
