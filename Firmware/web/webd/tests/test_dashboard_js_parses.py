@@ -330,7 +330,10 @@ def test_webd_declares_the_fields_the_dashboard_reads():
                        "roam_pattern", "roam_progress", "blackbox_capture_id",
                        "blackbox", "intent_has_joint_target", "intent_q_pitch_rad",
                        "intent_q_yaw_rad", "aim_point_valid", "aim_point_x",
-                       "aim_point_y"):
+                       "aim_point_y", "soft_limits_valid", "q_soft_min_pitch_rad",
+                       "q_soft_max_pitch_rad", "q_soft_min_yaw_rad",
+                       "q_soft_max_yaw_rad", "soft_limit_distance_pitch_rad",
+                       "soft_limit_distance_yaw_rad"):
         assert re.search(rf"^\s*{field_name}\s*:", proto, re.M), (
             f"webd does not declare {field_name}: the dashboard would read undefined "
             "and the dashboard's own fallback text would hide it"
@@ -452,3 +455,24 @@ def test_the_aim_point_is_not_treated_like_a_detection():
     )
     # No fallback coordinate, in either direction.
     assert "aim_point_x" in body[aim:aim + 600] and "aim_point_y" in body[aim:aim + 600]
+
+
+def test_an_unmeasured_range_is_not_rendered_as_a_limit_at_zero():
+    """§50's bounds of travel are the fifth visit to the same hole, and it is the one that
+    bites hardest on this station: before homing, the bounds are zeros, and a page that prints
+    them says the turret's whole travel is 0° … 0° — a limit that was never measured, and one
+    that would make any sane operator refuse to move it. The page has to say it does not know.
+    """
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parents[1] / "dashboard.py").read_text(encoding="utf-8")
+    line = [ln for ln in js.splitlines() if "const slText =" in ln]
+    assert line, "the travel readout has gone"
+    assert "valid" in line[0], "the readout ignores whether the range was ever measured"
+    assert "not measured" in js, "there is no wording for an unmeasured range"
+    for readout in ("sly", "slp"):
+        used = [ln for ln in js.splitlines() if '$("%s")' % readout in ln]
+        assert used, "%s is never written" % readout
+        assert any("soft_limits_valid" in ln for ln in used), (
+            "%s renders bounds without consulting the flag" % readout
+        )

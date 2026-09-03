@@ -245,6 +245,17 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"intent_type\":\"" << json_escape(s.intent_type) << "\""
      << ",\"intent_reason\":\"" << json_escape(s.intent_reason) << "\""
      << ",\"intent_velocity_scale\":" << s.intent_velocity_scale
+     // Named, not positional. `js()` emits a two-element array for the black-box object and
+     // reads fine there because both numbers describe one captured event; for the bounds of an
+     // axis, the reader is drawing one axis at a time, and Pitch-is-0 has been the thing two
+     // people remembered differently at least once.
+     << ",\"soft_limits_valid\":" << (s.soft_limits_valid ? "true" : "false")
+     << ",\"q_soft_min_pitch_rad\":" << s.q_soft_min_pitch_rad
+     << ",\"q_soft_max_pitch_rad\":" << s.q_soft_max_pitch_rad
+     << ",\"q_soft_min_yaw_rad\":" << s.q_soft_min_yaw_rad
+     << ",\"q_soft_max_yaw_rad\":" << s.q_soft_max_yaw_rad
+     << ",\"soft_limit_distance_pitch_rad\":" << s.soft_limit_distance_pitch_rad
+     << ",\"soft_limit_distance_yaw_rad\":" << s.soft_limit_distance_yaw_rad
      << ",\"aim_point_valid\":" << (s.aim_point_valid ? "true" : "false")
      << ",\"aim_point_x\":" << (s.aim_point_valid ? s.aim_point_x : 0.0)
      << ",\"aim_point_y\":" << (s.aim_point_valid ? s.aim_point_y : 0.0)

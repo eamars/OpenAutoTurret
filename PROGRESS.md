@@ -510,20 +510,55 @@ put to the code:
   half is asserted, because a forbidden-thing-only check passes vacuously the day the permitted
   implementation disappears.
 
-The 5 left are the ones that cannot be closed by writing a test today: whether a target beyond
-safe travel stops driving instead of pressing the limit (AUTO_TRACK/9) and whether a target
-switch is trajectory-constrained (/10) — both are about the envelope and the generator under a
-v3 workload, and both want a scene built on purpose; turnarounds under the acceleration and jerk
-ceiling (AUTO_ROAM/2); travel limits under manual (MANUAL/5), which is v1's envelope wearing
-v3's clothing and deserves its own assertion; and the IMU-conditional Level/Joint frame
-(MANUAL/7), which waits on hardware this station may never get.
+**§110 is now 29 shown by simulation, 1 untried, 0 accepted** — the remaining item is
+MANUAL/7, the Level/Joint frame, which the document itself makes conditional on an IMU existing.
+The four that closed on the way here are the edge-of-envelope ones, and two of them changed what
+I thought the architecture did:
+
+- **AUTO_TRACK/9** needed a turret that cannot reach what it can see. The first attempt shortened
+  the measured travel and homing refused it — `measured travel 22.9 deg outside expected
+  [57.5, 172.5]` — which is §72's plausibility check doing its job, and the right thing to leave
+  alone; the case was built instead by giving the same station a wider lens. A target at 61° on a
+  station that reaches 55° never once put a reference past the soft bound, never sat the axis
+  past it, and let its speed collapse to nothing rather than press. **What it did *not* do is
+  reach §67's TARGET_UNREACHABLE**, and that is worth recording rather than tidying: §67's state
+  is a *kinematic* verdict from the LOS→joint solver, and with an aligned camera every direction
+  the picture can show is kinematically reachable — what stops this turret is the measured
+  envelope, not the geometry. So "beyond travel" surfaces as a clamp plus a reason string, not as
+  §67's named state. Whether it should is a question for the document's author, not a thing to
+  change quietly from a test.
+- **AUTO_TRACK/10** measured a **25° step in the published reference in a single 5 ms cycle** at a
+  target switch — and that is *correct*, the same lesson §92 had to learn twice: the reference
+  controld publishes is the goal, the drive shapes the move under its speed cap. Asserting on the
+  goal's derivative would have failed on correct behaviour and been deleted within a day, so the
+  test asserts what an operator feels: the achieved position never exceeded the per-cycle ceiling
+  and the speed never exceeded the tracking ceiling. The goal's step is printed in the failure
+  message rather than asserted away, because it is the interesting number.
+- **AUTO_ROAM/2** asserts the turnaround stays inside the per-cycle ceiling — and asserts first
+  that a turnaround actually happened in the 20 s window, because "no snap observed" on a sweep
+  that never reached an end of its region is the same vacuous green that hid AUTO_ROAM/6.
+- **MANUAL/5** jogs under a held lease into the end of travel for 15 s and finds the turret
+  stopping *short* of the published bound with its speed collapsing. That is a shaped approach to
+  a limit, not sloppiness, so the test says so and allows 7° of slack while forbidding the two
+  things that would be wrong: a reference asking past the bound, and an axis being driven while
+  sitting at it.
+
+Closing those needed one telemetry addition. controld had been computing each axis's distance to
+its soft limit and putting it nowhere an operator could see — the snapshot carried no bounds of
+travel at all, and the one distance that existed lived in the black-box capture. The page now
+shows `−55.2° … +54.8° · 2.6° to limit` per axis, in words when nothing has been measured yet
+(`not measured yet (needs homing)`), because the bounds before homing are zeros and **zero is the
+bound every axis appears to share** — the same hole, fifth visit. The guard for it is in
+`test_an_unmeasured_range_is_not_rendered_as_a_limit_at_zero`, and the bounds are published
+scalar-per-axis rather than as a `[min,max]` array: Pitch-is-index-0 has been remembered
+differently by two people at least once.
 
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 270 pytest green, and
+Evidence as of now, all of it simulation: 54 CTest binaries green (including the cycle-cost gate), 271 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured

@@ -74,6 +74,17 @@ class Telemetry:
     # and shipped as a position; when `aim_point_valid` is false there is no aim point to
     # show — no estimate yet, or the geometry and the picture disagree — and the two numbers
     # beside it are not measurements.
+    # §50/§78: the bounds of travel. controld refuses a step that leaves them and refuses a
+    # reference beyond them, so the page should not be the one place that cannot say where the
+    # end is. `soft_limits_valid` is false until homing has measured the range — the bounds are
+    # then zero, and zero is the bound every axis appears to share before anything is measured.
+    soft_limits_valid: bool = False
+    q_soft_min_pitch_rad: float = 0.0
+    q_soft_max_pitch_rad: float = 0.0
+    q_soft_min_yaw_rad: float = 0.0
+    q_soft_max_yaw_rad: float = 0.0
+    soft_limit_distance_pitch_rad: float = 0.0
+    soft_limit_distance_yaw_rad: float = 0.0
     aim_point_valid: bool = False
     aim_point_x: float = 0.0
     aim_point_y: float = 0.0

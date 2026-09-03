@@ -298,6 +298,23 @@ struct TelemetrySnapshot {
   bool aim_point_valid = false;
   double aim_point_x = 0.0;
   double aim_point_y = 0.0;
+  // §50/§78: where the end of travel *is*, not merely how far away it is. The distance to a
+  // soft limit — which the daemon had been computing for ages and never sending — is a
+  // half-truth: "2.6 degrees to the limit" does not say whether the axis is near the front of
+  // its travel or the back, and that is exactly what decides whether to keep jogging.
+  // `soft_limits_valid` is false until homing has measured the range; the zeros beside it are
+  // the bounds every axis appears to share before anything has been measured, so they must
+  // never be drawn as if they were a measured limit (§72's rule again).
+  bool soft_limits_valid = false;
+  double q_soft_min_pitch_rad = 0.0;
+  double q_soft_max_pitch_rad = 0.0;
+  double q_soft_min_yaw_rad = 0.0;
+  double q_soft_max_yaw_rad = 0.0;
+  // Distance to the nearer soft limit on each axis, in radians — the same expression the
+  // black-box capture records, so the number on the page and the number in an investigation
+  // artifact cannot disagree about how close the turret came to the end of its travel.
+  double soft_limit_distance_pitch_rad = 0.0;
+  double soft_limit_distance_yaw_rad = 0.0;
   std::string intent_reason;        // why — the operator's question, answered
   double intent_velocity_scale = 1.0;
   // §52 CommandAck: every command answers, and "accepted" has to be earned.

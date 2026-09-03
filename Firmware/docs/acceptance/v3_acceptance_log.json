@@ -249,6 +249,46 @@
       "station": "",
       "evidence": "no web or vision source contains code that opens a CAN or serial device, and the only bus layer on the station lives in control/src/can",
       "at": "2026-09-03T20:49:52+12:00"
+    },
+    "AUTO_TRACK/9": {
+      "item_text": "Target outside safe travel does not drive against a limit.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "TheTurretClampsAtTheEndOfTravelInsteadOfPressing",
+      "station": "",
+      "evidence": "a target at 61 degrees on a station that reaches 55: the commanded reference never crossed the soft bound, the axis never sat past it, and the speed collapsed to nothing instead of pressing",
+      "at": "2026-09-03T21:10:31+12:00"
+    },
+    "AUTO_TRACK/10": {
+      "item_text": "Target switch is trajectory-constrained.",
+      "group": "AUTO_TRACK",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "MovingFromOnePersonToAnotherIsTrajectoryConstrained",
+      "station": "",
+      "evidence": "switching between two people 0.4 apart in the picture: the achieved position never moved more than the per-cycle ceiling and the speed stayed under the tracking ceiling (the published goal itself steps ~25 degrees in one cycle, which is what position-mode control with a speed cap looks like)",
+      "at": "2026-09-03T21:10:31+12:00"
+    },
+    "AUTO_ROAM/2": {
+      "item_text": "Turnarounds are acceleration/jerk constrained.",
+      "group": "AUTO_ROAM",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "ATurnaroundTurnsAroundRatherThanSnapping",
+      "station": "",
+      "evidence": "20 s of sweeping that demonstrably reached an end and reversed: at the turnaround cycles the reference step stayed inside the per-cycle ceiling and the sweep speed never exceeded the envelope ceiling",
+      "at": "2026-09-03T21:10:32+12:00"
+    },
+    "MANUAL/5": {
+      "item_text": "Travel limits remain enforced.",
+      "group": "MANUAL",
+      "status": "simulated",
+      "method": "simulation",
+      "by": "AJogRunsOutToTheEndOfTravelAndStopsThere",
+      "station": "",
+      "evidence": "a 15 s jog held under lease against the end of travel: the reference never asked past the bound, the axis never sat past it, and it came to rest short of the bound with the speed collapsing, as a shaped approach to a limit does",
+      "at": "2026-09-03T21:10:32+12:00"
     }
   },
   "doc_sha256": "2c572e530706196dc122fda869a6a337acdef3b65c71b3799dbf4b236aa35202"

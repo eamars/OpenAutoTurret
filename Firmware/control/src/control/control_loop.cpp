@@ -1385,6 +1385,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
       }
     }
+    // §50/§78: the bounds of travel, published. Command validation has known them for as long
+    // as it has existed (§52 refuses a step that leaves the range), and the page has shown the
+    // distance to them without ever showing where they are — so the operator could see the
+    // turret was near an end without knowing which end, or whether an end existed yet.
+    snap.soft_limits_valid = limits_[ix(AxisId::Pitch)].valid &&
+                             limits_[ix(AxisId::Yaw)].valid;
+    snap.q_soft_min_pitch_rad = limits_[ix(AxisId::Pitch)].q_soft_min_rad;
+    snap.q_soft_max_pitch_rad = limits_[ix(AxisId::Pitch)].q_soft_max_rad;
+    snap.q_soft_min_yaw_rad = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
+    snap.q_soft_max_yaw_rad = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+    snap.soft_limit_distance_pitch_rad =
+        limits_[ix(AxisId::Pitch)].valid
+            ? limits_[ix(AxisId::Pitch)].distance_to_soft(sp[ix(AxisId::Pitch)].q_rad)
+            : 0.0;
+    snap.soft_limit_distance_yaw_rad =
+        limits_[ix(AxisId::Yaw)].valid
+            ? limits_[ix(AxisId::Yaw)].distance_to_soft(sp[ix(AxisId::Yaw)].q_rad)
+            : 0.0;
     snap.intent_has_joint_target = last_intent_.has_joint_target;
     snap.intent_q_pitch_rad = last_intent_.q_pitch_rad;
     snap.intent_q_yaw_rad = last_intent_.q_yaw_rad;

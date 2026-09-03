@@ -117,6 +117,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="row"><span class="k">q pitch</span><span id="qp">—</span></div>
     <div class="row"><span class="k">q ref pitch</span><span id="qrp">—</span></div>
     <div class="row"><span class="k">q asked pitch</span><span id="qip">—</span></div>
+    <div class="row"><span class="k">yaw travel</span><span id="sly">—</span></div>
+    <div class="row"><span class="k">pitch travel</span><span id="slp">—</span></div>
     <div class="row"><span class="k">v pitch</span><span id="vp">—</span></div>
   </section>
 
@@ -439,6 +441,23 @@ function render(t) {
   $("qrp").textContent = num(t.q_ref_pitch_rad);
   $("qip").textContent = t.intent_has_joint_target ? num(t.intent_q_pitch_rad) : "— none";
   $("vp").textContent = num(t.v_pitch_rad_s, 3);
+  // §50: where travel ends, and how close this axis is to the end of it. Both numbers, always:
+  // the distance on its own tells an operator "2.6° from the limit" without saying which limit,
+  // and "which way do I stop jogging" is decided by the direction, not the distance. Before
+  // homing there is no range to report — and reporting zeros would name a limit that was never
+  // measured, which on this station is the difference between a wide sweep and a stopped one.
+  const slText = (valid, lo, hi, away) => !valid
+    ? "not measured yet (needs homing)"
+    : rad(lo) + " … " + rad(hi) + "  ·  " + rad(away) + " to limit";
+  const slNear = (valid, away) => valid && away < 0.0524;   // ~3 degrees
+  $("sly").textContent = slText(t.soft_limits_valid, t.q_soft_min_yaw_rad,
+                                t.q_soft_max_yaw_rad, t.soft_limit_distance_yaw_rad);
+  $("sly").className = slNear(t.soft_limits_valid, t.soft_limit_distance_yaw_rad) ? "warn" : "";
+  $("slp").textContent = slText(t.soft_limits_valid, t.q_soft_min_pitch_rad,
+                                t.q_soft_max_pitch_rad, t.soft_limit_distance_pitch_rad);
+  $("slp").className = slNear(t.soft_limits_valid, t.soft_limit_distance_pitch_rad)
+    ? "warn" : "";
+
   const calib = t.installation_calibrated ? "calibrated" : "NOT calibrated";
   badge($("calib"), calib, t.installation_calibrated ? "ok" : "warn");
   $("calib-src").textContent = t.installation_source;

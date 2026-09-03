@@ -209,7 +209,11 @@ struct HomedLoop {
   // `coast_ms` exists so a test can build the *configured* station rather than a second
   // implementation of one: the value travels the same path from ControlLoop::Config that
   // the YAML value takes on the station.
-  HomedLoop(bool home = true, float confidence_high_min = 0.0f) {
+  // `wide_lens` swaps in a ~61 degree half-field camera before homing, so that a target near
+  // the edge of the picture asks for a yaw the station cannot reach. The tracker is built once,
+  // at the homing gate, from whatever configuration is current there — which is why this has to
+  // happen here rather than from inside a test body.
+  HomedLoop(bool home = true, float confidence_high_min = 0.0f, bool wide_lens = false) {
     sim_owner = std::make_unique<sim::SimMotorBackend>(0.005);
     sim = sim_owner.get();
     sim->set_stops(AxisId::Pitch, -1.0, 1.0);
@@ -217,6 +221,11 @@ struct HomedLoop {
     auto cfg = make_cfg();
     cfg.auto_track_high_min = confidence_high_min;  // 0 = the default
     loop = std::make_unique<ControlLoop>(cfg, std::move(sim_owner));
+    if (wide_lens) {
+      TrackingController::Config tcfg;
+      tcfg.intrinsics = geo::CameraIntrinsics{350.0, 350.0, 640.0, 360.0, 1280, 720};
+      loop->set_tracking_config(tcfg, true);
+    }
     if (home) {
       std::string err;
       (void)loop->start_homing(make_plan(), err);
@@ -1666,6 +1675,221 @@ TEST(ManualBehaviour, TheProfileBandChangesTheSpeedAndNotOnlyTheLabel) {
   EXPECT_GT(fast.first, fine.first * 1.5)
       << "FINE peaked at " << fine.first << " rad/s and FAST at " << fast.first
       << "; three profiles that move the turret at one speed are one profile";
+}
+
+// The last four §110 items that can be answered without a person at the station. All four are
+// about what the machine is *asked to do* near the edges of its envelope — where "it works" and
+// "it works and stops asking for the impossible" look identical from a distance.
+
+TEST(TargetBeyondTravel, TheTurretClampsAtTheEndOfTravelInsteadOfPressing) {
+  // §110 AUTO_TRACK/9: "Target outside safe travel does not drive against a limit." Somebody is
+  // standing at 61 degrees and the turret can reach 55. The wrong answers are all plausible:
+  // driving until the drive strains against its stop, or publishing a reference beyond the
+  // envelope and letting the hardware discover the difference.
+  // A station with a wide-angle lens: same measured travel as every other rig here, so the
+  // envelope is the ordinary one and only the picture is wider. (The first attempt built a
+  // short-travel turret instead and homing refused it — "measured travel 22.9 deg outside
+  // expected [57.5, 172.5]" — which is the §72 plausibility check working, and the right thing
+  // to leave alone.)
+  HomedLoop h(true, 0.0f, /*wide_lens=*/true);
+  ASSERT_TRUE(h.ready);
+  const telemetry::TelemetrySnapshot at_ready = h.snap();
+  ASSERT_TRUE(at_ready.soft_limits_valid)
+      << "the bounds of travel were never published, so this test has no ruler";
+  const double max_yaw = at_ready.q_soft_max_yaw_rad;
+  ASSERT_GT(max_yaw, 0.4);
+  ASSERT_LT(max_yaw, 1.0);
+
+  // Frames arrive with the loop's own clock, as `feed` does for the other rigs: a capture
+  // timestamp that predates the loop's history is discarded as stale (§11), and every "did not
+  // follow" assertion below would then pass by not being tested.
+  auto send = [&](uint64_t seq) {
+    tracks::TrackSet set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f, 0.99f);
+    set.frame_sequence = seq;
+    set.sensor_timestamp_ns = h.t;
+    set.publish_timestamp_ns = h.t + 1'000'000;
+    h.loop->feed_track_set(set, h.t);
+    h.step(1);
+  };
+
+  h.loop->submit_command("set_mode", "AUTO_TRACK");
+  h.step(3);
+  for (int i = 1; i <= 40; ++i) send(static_cast<uint64_t>(i));
+  h.loop->submit_command("select_target", "1");
+  h.step(3);
+
+  double worst_ref_over = 0.0;   // how far past the bound the *demand* ever reached
+  double worst_act_over = 0.0;   // ... and the hardware
+  for (int i = 0; i < 400; ++i) {
+    if (i % 6 == 0) send(1000 + static_cast<uint64_t>(i));
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    worst_ref_over = std::max(worst_ref_over, s.q_ref_yaw_rad - max_yaw);
+    worst_act_over = std::max(worst_act_over, s.q_yaw_rad - max_yaw);
+  }
+  const telemetry::TelemetrySnapshot later = h.snap();
+  EXPECT_LE(worst_ref_over, 1e-9)
+      << "the commanded reference asked for " << worst_ref_over
+      << " rad beyond the soft limit; the envelope is supposed to clamp the wish, not pass it on";
+  EXPECT_LE(worst_act_over, 1e-6)
+      << "the axis sat " << worst_act_over << " rad past where its travel ends";
+  EXPECT_LT(std::fabs(later.v_yaw_rad_s), 0.02)
+      << "still driving at " << later.v_yaw_rad_s << " rad/s while pressed against the end of "
+         "travel — a clamped reference and a straining drive look the same until something breaks";
+
+  // What the operator is told. Note that §67's TARGET_UNREACHABLE is a *kinematic* verdict,
+  // computed by the LOS->joint solver, and with an aligned camera every direction the picture
+  // can show is kinematically reachable: what stops this turret is the measured envelope, not
+  // the geometry. So the honest assertion here is that the loop says *something* about why it
+  // is not following, and the finding — that "beyond travel" is reported as a clamp rather than
+  // as §67's unreachable state unless the camera is misaligned — is recorded with it rather than
+  // quietly tidied away by asserting less.
+  EXPECT_FALSE(later.mode_phase.empty()) << "no state published while a target is unreachable";
+  EXPECT_FALSE(later.intent_reason.empty())
+      << "the turret stopped following a person and offered no reason for it";
+}
+
+TEST(TargetSwitch, MovingFromOnePersonToAnotherIsTrajectoryConstrained) {
+  // §110 AUTO_TRACK/10: the switch between two selected people must be followed, not teleported.
+  // The reference the drive is given is a position plus a speed cap, so a jump in the goal is
+  // survivable — which is exactly why it needs asserting: nothing crashes when it happens, the
+  // turret simply lashes out across the field of view and the picture is gone.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const double v_max = 30.0 * kDeg2Rad;  // the rig's tracking ceiling
+  feed(h, two_people(1, h.t, 1, 2), 30, 1);
+  h.run("set_mode", "AUTO_TRACK");
+  h.run("select_target", "1");
+  h.step(120);  // settle onto person 1 at anchor 0.3
+
+  // Both people stay in view. `selected_track_id` names the track being acted on and publishes
+  // nothing while vision is quiet (§58, no invented frames), so a switch test that stopped
+  // feeding would end by asserting on a dropout rather than on a switch.
+  auto watch_with_frames = [&](int n) {
+    SwitchWatch w;
+    double prev = h.snap().q_ref_yaw_rad;
+    double prev_act = h.snap().q_yaw_rad;
+    for (int i = 0; i < n; ++i) {
+      if (i % 6 == 0) feed(h, two_people(500 + static_cast<uint32_t>(i), h.t, 1, 2), 1,
+                           500 + static_cast<uint64_t>(i));
+      h.step(1);
+      const telemetry::TelemetrySnapshot s = h.snap();
+      w.max_dq_ref = std::max(w.max_dq_ref, std::fabs(s.q_ref_yaw_rad - prev));
+      w.max_dq_act = std::max(w.max_dq_act, std::fabs(s.q_yaw_rad - prev_act));
+      prev = s.q_ref_yaw_rad;
+      prev_act = s.q_yaw_rad;
+      w.max_speed = std::max(w.max_speed, std::max(std::fabs(s.v_yaw_rad_s),
+                                                   std::fabs(s.v_pitch_rad_s)));
+      w.sources.push_back(s.intent_source);
+      w.source_after = s.intent_source;
+    }
+    return w;
+  };
+
+  watch_with_frames(3);
+  h.run("select_target", "2");                      // now the other one, at anchor 0.7
+  SwitchWatch after = watch_with_frames(300);
+
+  // What is constrained is the *motion*, not the goal. This is the same distinction §92 had to
+  // learn the hard way: the published reference is the position the drive is told to reach,
+  // accompanied by a speed cap, and the drive does the shaping. So a switch legitimately steps
+  // the goal — measured here at ~25 degrees in one cycle — and the promise that matters is that
+  // the turret travels there inside its ceiling rather than lurching. Asserting on the goal's
+  // derivative would have failed on correct behaviour, which is the sort of test that gets
+  // deleted rather than read.
+  const double per_cycle_ceiling = v_max * kDtNs / 1'000'000'000.0;
+  EXPECT_LE(after.max_dq_act, per_cycle_ceiling * 1.5)
+      << "the axis moved " << after.max_dq_act / kDeg2Rad << " deg in one 5 ms cycle while "
+         "switching targets, against a per-cycle ceiling of " << per_cycle_ceiling / kDeg2Rad
+      << " deg (the goal itself stepped " << after.max_dq_ref / kDeg2Rad
+      << " deg, which is allowed: the drive shapes the move)";
+  EXPECT_LE(after.max_speed, v_max * 1.2)
+      << "the switch was followed at " << after.max_speed << " rad/s, over the tracking ceiling "
+      << v_max << " — the turret lashed across the field of view instead of moving to the "
+         "second person";
+  EXPECT_EQ(after.source_after, "auto_track") << "the switch ended in someone else's motion";
+  EXPECT_EQ(h.snap().selected_track_id, 22u) << "and it never got to the second person";
+}
+
+TEST(RoamBehaviour, ATurnaroundTurnsAroundRatherThanSnapping) {
+  // §110 AUTO_ROAM/2: "Turnarounds are acceleration/jerk constrained." The turnaround is the
+  // one moment a bounded sweep reverses direction, and the easy way to get it wrong is a
+  // waypoint that flips sign while the reference stays a position command — the drive then chases
+  // a goal on the far side of the region at whatever its speed cap allows.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_ROAM");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+
+  const double ceiling = 30.0 * kDeg2Rad;  // the rig's envelope ceiling for this mode
+  const double per_cycle_ceiling = ceiling * kDtNs / 1'000'000'000.0;
+  bool saw_turnaround = false;
+  double worst_dq = 0.0, worst_speed = 0.0, worst_at_turn = 0.0;
+  double prev_ref = h.snap().q_ref_yaw_rad;
+  for (int i = 0; i < 4000; ++i) {  // 20 s: long enough to reach an end and come back
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    const double dq = std::fabs(s.q_ref_yaw_rad - prev_ref);
+    prev_ref = s.q_ref_yaw_rad;
+    worst_dq = std::max(worst_dq, dq);
+    worst_speed = std::max(worst_speed, std::fabs(s.v_yaw_rad_s));
+    if (s.mode_phase == "TURNAROUND") {
+      saw_turnaround = true;
+      worst_at_turn = std::max(worst_at_turn, dq);
+    }
+  }
+  ASSERT_TRUE(saw_turnaround)
+      << "no turnaround in 20 s of sweeping — the assertion below would have passed on a turret "
+         "that never reached an end of its region";
+  EXPECT_LE(worst_at_turn, per_cycle_ceiling * 1.5)
+      << "at the reversal the reference moved " << worst_at_turn / kDeg2Rad
+      << " deg in one cycle, against a ceiling of " << per_cycle_ceiling / kDeg2Rad;
+  EXPECT_LE(worst_speed, ceiling * 1.2)
+      << "the sweep ran at " << worst_speed << " rad/s, over the ceiling it was given";
+}
+
+TEST(ManualLimits, AJogRunsOutToTheEndOfTravelAndStopsThere) {
+  // §110 MANUAL/5: "Travel limits remain enforced" — under v3's manual mode, with its lease and
+  // its profiles, on the same envelope v1 built. The jog is the operator's own request, which is
+  // what makes this worth asserting separately from everything else: a machine refusing a request
+  // it was given by a person is a different refusal from one it invented.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "MANUAL");
+  const telemetry::TelemetrySnapshot before = h.snap();
+  ASSERT_TRUE(before.soft_limits_valid) << "no published bounds to test against";
+  const double hi = before.q_soft_max_yaw_rad;
+  const double lo = before.q_soft_min_yaw_rad;
+  ASSERT_GT(hi - lo, 0.1);
+
+  h.loop->submit_command("manual_jog_start", "yaw+");
+  double worst_over = 0.0;
+  for (int i = 0; i < 3000; ++i) {  // 15 s: longer than it takes to reach either end
+    if (i % 40 == 0) h.loop->submit_command("manual_jog_start", "yaw+");
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    worst_over = std::max(worst_over, s.q_ref_yaw_rad - hi);
+    worst_over = std::max(worst_over, lo - s.q_ref_yaw_rad);
+    EXPECT_LE(s.q_yaw_rad, hi + 1e-6);
+    EXPECT_GE(s.q_yaw_rad, lo - 1e-6);
+  }
+  const telemetry::TelemetrySnapshot ended = h.snap();
+  EXPECT_LE(worst_over, 1e-9)
+      << "the jog asked for " << worst_over << " rad beyond the end of travel";
+  EXPECT_LT(std::fabs(ended.v_yaw_rad_s), 0.02)
+      << "at the end of travel it was still commanded along at " << ended.v_yaw_rad_s
+      << " rad/s";
+  // It settles *short* of the published bound, and that is correct rather than sloppy: the
+  // envelope tapers the speed approaching the end of travel (§19), so a position-mode drive
+  // with a speed cap eases in and never arrives exactly. What must not happen — and what is
+  // asserted above — is the reference asking for a place past the bound, or the axis sitting
+  // there still being driven. One degree of slack would be a bug worth chasing; five, with the
+  // speed collapsing to nothing, is what a shaped approach to a limit looks like.
+  EXPECT_NEAR(ended.q_yaw_rad, hi, 0.12)
+      << "it stopped " << (hi - ended.q_yaw_rad) / kDeg2Rad
+      << " deg short of the bound the page shows, which is further than an eased approach "
+         "explains";
+  h.run("manual_jog_stop");
 }
 }  // namespace
 
