@@ -762,3 +762,95 @@ TEST(RoamMode, AnUnhomedStationRefusesToRoamAndSaysWhy) {
   EXPECT_FALSE(r.ok);
   EXPECT_NE(std::string(r.reason).find("homed"), std::string::npos) << r.reason;
 }
+
+// --- §21/§89: an ambiguous reacquisition must ask, not choose. The safety content of
+// this is small to state and expensive to get wrong: two people step into view near
+// where the selected one was last seen, and a turret that follows "whichever looks more
+// like it" has just decided, on its own, to point a gimbal at a stranger.
+TEST(AmbiguousReacquisition, TwoEquallyPlausiblePeopleAreNotFollowed) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoTrack);
+
+  // One person, named by the operator, tracked.
+  auto set = two_people(1, h.t, 1, 2, 0.90f, 0.40f, 0.30f, 0.85f);
+  set.tracks[1].state = tracks::TrackState::Tentative;  // #2 is not a candidate yet
+  feed(h, set, 40, 10);
+  h.run("select_target", "1");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  // The label is the field under test here (§78: what the operator chose). The
+  // identity field additionally requires an armed tracking session, which this rig does
+  // not configure, and §89 is about ambiguity rather than about that plumbing.
+  ASSERT_EQ(h.snap().selected_display_index, 1) << "the operator's label did not take";
+  feed(h, set, 60, 60);
+  ASSERT_STREQ(h.snap().mode_phase.c_str(), "TRACKING") << h.snap().mode_phase;
+  const double yaw_tracking = h.loop->last_positions()[1];
+
+  // Vision stops entirely: 2.5 s of nothing, long past coast (300 ms) and into
+  // LOST_HOLD (2 s).
+  h.step(500);
+  EXPECT_STREQ(h.snap().mode_phase.c_str(), "LOST_HOLD") << h.snap().mode_phase;
+  const double yaw_lost = h.loop->last_positions()[1];
+
+  // Two people step into frame near where #1 vanished. After 2.5 s of nothing, the
+  // TrackManager's own association has expired that track, so what arrives now carries
+  // *new* identities: controld cannot recognise the person by uuid and must decide by
+  // geometry and confidence alone (§21). Both candidates are CONFIRMED, both near the
+  // last known anchor, and their scores are within a hair of each other — the case §21
+  // exists for, where picking either is a coin toss dressed as an inference.
+  auto both = two_people(200, h.t, 1, 2, 0.88f, 0.86f, 0.48f, 0.52f);
+  both.tracks[0].uuid = tracks::TrackUuid{0, 33};  // not the person that was chosen
+  both.tracks[1].uuid = tracks::TrackUuid{0, 44};
+  feed(h, both, 60, 200);
+
+  EXPECT_STREQ(h.snap().mode_phase.c_str(), "LOST_HOLD")
+      << "§21: neither candidate is clearly the chosen person, so the machine holds and "
+         "asks. It went to " << h.snap().mode_phase << " instead, which means it "
+      << "decided to point the gimbal at a stranger on the strength of a tie.";
+  EXPECT_EQ(h.snap().intent_type, "hold")
+      << "§16/§21: an unresolved identity is not authority to move";
+  EXPECT_NEAR(h.loop->last_positions()[1], yaw_lost, 2e-3)
+      << "the turret moved " << (h.loop->last_positions()[1] - yaw_lost) / 0.0174533
+      << " deg toward one of two equally plausible people";
+}
+
+TEST(AmbiguousReacquisition, OneClearCandidateIsFollowedAgainWithoutAClick) {
+  // §20.3: a *confident* reacquisition needs no operator click — that is what keeps a
+  // three-second occlusion from becoming a session the operator has to restart. It is
+  // the same code path as the test above, and the difference between them is the whole
+  // content of §21: the margin, not the visibility.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = two_people(1, h.t, 1, 2, 0.90f, 0.40f, 0.30f, 0.85f);
+  set.tracks[1].state = tracks::TrackState::Tentative;
+  feed(h, set, 40, 10);
+  h.run("select_target", "1");
+  ASSERT_EQ(h.snap().selected_display_index, 1);
+  feed(h, set, 60, 60);
+  ASSERT_STREQ(h.snap().mode_phase.c_str(), "TRACKING");
+
+  h.step(500);  // lost, into LOST_HOLD
+  ASSERT_STREQ(h.snap().mode_phase.c_str(), "LOST_HOLD");
+
+  // One person back, clearly: the same uuid, the same label, the far stronger score.
+  //
+  // Stated plainly, because the shape of this case is doing work: the uuid is
+  // re-emitted, which is what a TrackManager that kept the track alive would send. The
+  // other shape — a gap long enough for the vision side to expire it, so a confident
+  // single candidate arrives under a NEW identity — is covered by the scorer's unit
+  // tests, not here, and this test does not claim otherwise. The test above is the
+  // new-identity case, and there the machine refuses to choose between a tie; that is
+  // the asymmetry §21 asks for, and it is the reason these two sit next to each other.
+  auto back = two_people(200, h.t, 1, 2, 0.95f, 0.30f, 0.48f, 0.90f);
+  back.tracks[1].state = tracks::TrackState::Tentative;  // the other is not a candidate
+  feed(h, back, 60, 200);
+
+  EXPECT_FALSE(h.snap().selection_ambiguous);
+  EXPECT_TRUE(h.snap().mode_phase == "REACQUIRE" || h.snap().mode_phase == "TRACKING")
+      << "a confident single reacquisition should resume on its own, got "
+      << h.snap().mode_phase;
+  EXPECT_EQ(h.snap().selected_display_index, 1)
+      << "and it must be the person that was chosen, not a new identity";
+}

@@ -883,19 +883,26 @@ TEST(ModeTransitions, AutoTrackToAutoRoamKeepsTheSelection) {
   // skipped test with the numbers in its message rather than an assertion chosen to
   // pass. Recorded in the commit note.
   const auto after = snap_of(r);
+  // §44: "Selection is preserved" — and now with the numbers measured rather than
+  // inferred. The operator's label is 1 before the switch and 1 after it; the identity
+  // the turret is acting on reads 7, which is the track uuid, because a tracking
+  // session is armed in AUTO_ROAM (vision keeps running, the estimator stays warm for
+  // the switch back) even though the *sweep* owns motion — see the source's comment at
+  // the field. A previous version of this test asserted 0 there on the theory that
+  // AUTO_ROAM must report "acting on nothing"; the theory was wrong, and the field
+  // answered with the selection all along.
   EXPECT_STREQ(after.selection_visibility.c_str(), "VISIBLE")
       << "§34/§44: the chosen target must stay known and visible while the sweep owns "
          "motion. Got " << after.selection_visibility;
+  EXPECT_EQ(after.selected_display_index, index_before)
+      << "the label the operator typed must survive the handover";
+  EXPECT_NE(after.selected_track_id, 0u)
+      << "§12: the choice is still live in AUTO_ROAM";
   EXPECT_GT(std::fabs(r.loop().last_positions()[1] - yaw_at_switch), 0.01)
       << "RoamPlanner did not initialise from the current pose and start sweeping";
-  // The §78 field, reported rather than asserted either way. Before the switch the
-  // published label was the track uuid; after it, zero. The rule (§44: selection is
-  // preserved) holds — the field that would show it to an operator does not.
-  if (after.selected_display_index != index_before)
-    GTEST_SKIP() << "OPEN (§78): the operator chose label " << index_before
-                 << "; in AUTO_ROAM the published selected_display_index is "
-                 << after.selected_display_index
-                 << " while the selection itself is live (visibility VISIBLE). "
-                    "§44's rule is satisfied; the telemetry field is wrong.";
-
+  // §34: pursuing it is a mode switch, not a reflex. The sweep kept ownership here even
+  // with a live, visible, selected target two tenths of a radian off.
+  EXPECT_EQ(r.loop().last_intent().source, ota::MotionSource::AutoRoam)
+      << "§34: the sweep abandoned its pattern to chase a selected target; pursuing is "
+         "the operator's call to make by changing mode";
 }
