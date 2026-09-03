@@ -633,3 +633,31 @@ bar was measuring the reference against a limit that the derating had already le
 
 Section 110: still 0 items accepted on hardware by a named person. The tension above is recorded as
 a question for the operator, not resolved by me.
+
+### Jerk: the honest number, and why my limiter does not fix it
+
+Computed from the new 99 Hz log's own `aref=` column rather than from probe samples — a **lower
+bound**, since the published reference acceleration is EWMA-smoothed over ~20 ms and smoothing
+attenuates peaks:
+
+**reference jerk p50 793, p95 1984, max 2494 deg/s^3 against the configured 300.**
+
+That is a real failure of the "jerk-limited" clause, and the reason is structural rather than a
+tuning miss: a limiter that caps velocity and *the magnitude of* acceleration still changes
+acceleration in steps - whenever the wanted velocity starts demanding more, acceleration jumps from
+zero to `a_max` in one control period, so jerk is bounded only by `a_max / dt`, which at 200 Hz is
+12,000 deg/s^3. Capping a quantity is not the same as ramping it. The same mistake one level down,
+found by measuring it.
+
+The fix is the third-order version of the same function, and the pieces are all there: keep the
+commanded acceleration in the state, ramp it by `j_brake_rad_s3 * dt` (already in `Config`, 300
+deg/s^3, already the figure the safety envelope uses), clamp it to `a_max`, and integrate velocity and
+position from what survives. The existing seven tests are the safety net - the rate, accel and
+convergence assertions should survive untouched, and a jerk assertion joins them.
+
+One consequence to put in front of the operator rather than discover later: honouring 300 deg/s^3
+means reaching 30 deg/s takes roughly a third of a second, and reaching full acceleration a fifth.
+That is what the station's own configuration asks for, and it is the same class of trade-off as the
+confidence derating - the configured smoothness limits and the "lead a sharp move" rule are pulling
+against each other, and which one wins is an operator decision, not something I should settle by
+picking a number that makes my own test pass.
