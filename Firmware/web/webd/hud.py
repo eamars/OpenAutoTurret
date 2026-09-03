@@ -60,6 +60,109 @@ function hudAxisNorm(intr) {
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
 
+
+// --- §21 state deltas and §22 safety presentation -----------------------------
+//
+// Both builders return data. What the operator sees is derived from it, so "what does the HUD say when
+// the station is coasting" is a question with an answer that a test can check without a browser - and
+// this is a page whose claims about state have already been wrong once this session for lack of exactly
+// that separation.
+
+function hudStateLabel(o) {
+  // §21's five states, mapped from what the daemon publishes rather than from the raw phase string.
+  // `jogging` is manual_lease_active: a published fact, so "MANUAL / JOG" is read off the station and
+  // not inferred from motion that might be a roam or a homing remnant.
+  o = o || {};
+  const mode = String(o.mode || "").toUpperCase();
+  const phase = String(o.phase || "").toUpperCase();
+  const auto = mode === "AUTO_TRACK";
+  const roam = mode === "AUTO_ROAM";
+
+  if (auto && phase === "TRACK") return { line1: "AUTO TRACK", line2: "TRACKING", named: true };
+  if (auto && phase === "COAST") return { line1: "AUTO TRACK", line2: "COASTING", named: true };
+  // §21.3 says "TARGET LOST / HOLDING or equivalent compact state". Losing the target is the fact the
+  // operator has to act on; it goes on the strong line rather than under a mode name.
+  if (auto && phase === "LOST_HOLD") return { line1: "TARGET LOST", line2: "HOLDING", named: true };
+  if (auto && phase === "WAIT_TARGET") return { line1: "AUTO TRACK", line2: "WAIT TARGET", named: true };
+  if (roam && phase === "SWEEP") return { line1: "AUTO ROAM", line2: "SWEEP", named: true };
+  if (mode === "MANUAL") {
+    // §21.4 asks for SWEEP LEFT|RIGHT; the daemon publishes no sweep direction, so the direction is
+    // left off rather than guessed from the sign of a rate that also moves for other reasons.
+    return o.jogging ? { line1: "MANUAL", line2: "JOG", named: true }
+                     : { line1: "MANUAL", line2: "HOLD", named: true };
+  }
+
+  // Anything §21 does not name keeps the daemon's own word on the second line. A label invented here
+  // would sound authoritative about a state nobody specified, which is the failure mode this project
+  // keeps meeting: the interface asserting more than the station said.
+  return {
+    line1: (auto ? "AUTO TRACK" : roam ? "AUTO ROAM" : mode || "--"),
+    line2: phase || "--",
+    named: false
+  };
+}
+
+function hudSafetyEdge(t) {
+  // §22 requires DERATE to name the relevant travel-tape edge or FOR boundary. The margin that matters
+  // is between the COMMAND reference and the soft limit, because that is the quantity the limiter acts
+  // on - measuring actual position instead would name an edge the operator has already moved away from.
+  t = t || {};
+  const d = (r) => (typeof r === "number" ? r * 57.29577951308232 : null);
+  const cands = [];
+  [["YAW", t.q_ref_yaw_rad, t.q_soft_min_yaw_rad, t.q_soft_max_yaw_rad],
+   ["PITCH", t.q_ref_pitch_rad, t.q_soft_min_pitch_rad, t.q_soft_max_pitch_rad]]
+    .forEach(function (row) {
+      const axis = row[0], q = d(row[1]), lo = d(row[2]), hi = d(row[3]);
+      if (q === null || lo === null || hi === null || !(hi > lo)) return;
+      cands.push({ axis: axis, side: "MIN", margin_deg: q - lo });
+      cands.push({ axis: axis, side: "MAX", margin_deg: hi - q });
+    });
+  if (!cands.length) return null;
+  // Ascending margin: a limit already breached (negative margin) is the one to name, and otherwise the
+  // one still ahead. Any ordering that put a far limit ahead of a breached one would point the operator
+  // at the wrong edge of the tape while the machine was already past the right one.
+  cands.sort((a, b) => a.margin_deg - b.margin_deg);
+  const w = cands[0];
+  return { axis: w.axis, side: w.side, margin_deg: w.margin_deg };
+}
+
+function hudSafetyPresentation(t) {
+  // §22's four presentations, plus the two daemon states §22 gives no wording for. tier drives size and
+  // placement: normal is a chip, caution a chip with the limit named, prominent is larger amber, and
+  // interrupt is a red banner, because a fault stop that shares a chip with "ALLOW" is the "no large
+  // banners" rule taken too far - §22 itself asks FAULT to interrupt normal operation.
+  t = t || {};
+  const a = String(t.safety_action || "").toUpperCase();
+  const fault = String(t.fault || "").trim();
+
+  if (fault || a === "FAULT_STOP") {
+    // The reason is the point of the panel. A red box that says only FAULT makes the operator go looking
+    // for the cause in a log, at the worst moment to be reading logs.
+    return { label: "FAULT", reason: fault || "fault stop commanded by controld",
+             tone: "red", tier: "interrupt", edge: null };
+  }
+  if (a === "BRAKE") return { label: "BRAKING", reason: "", tone: "amber", tier: "prominent", edge: null };
+  if (a === "DERATE") {
+    const e = hudSafetyEdge(t);
+    return { label: "DERATE",
+             reason: e ? (e.axis + " " + e.side) : "limit not published",
+             tone: "amber", tier: "caution", edge: e };
+  }
+  // §22 names four. The daemon can also answer HOLD and DISABLE, and neither is silently folded into a
+  // named one: the daemon's word is shown, so an operator reading "SAFETY HOLD" is reading the station,
+  // not my summary of it.
+  if (a === "HOLD") return { label: "SAFETY HOLD", reason: "motion held by safety", tone: "amber",
+                             tier: "caution", edge: null };
+  if (a === "DISABLE") return { label: "DISABLED", reason: "amplifiers disabled", tone: "amber",
+                                tier: "prominent", edge: null };
+  if (a && a !== "ALLOW" && a !== "NONE" && a !== "?") {
+    // A state this file has never seen must not default to green.
+    return { label: "SAFETY " + a, reason: "unrecognised safety action", tone: "amber",
+             tier: "caution", edge: null };
+  }
+  return { label: "SAFETY ALLOW", reason: "", tone: "green", tier: "normal", edge: null };
+}
+
 // --- §13 dock and §14 drawers --------------------------------------------------
 //
 // The command list is built as data, not as markup with commands buried in attributes, so that "what
@@ -775,11 +878,12 @@ function render(t) {
   // the operator sees is the reticle sitting on the head, which is the acceptance rule as stated.
   // The field stays in telemetry for measurement and for the DIAG drawer.
 
-  // §4.1 mode block: three lines, first line strongest.
-  const mode = String(t.operating_mode || "--").replace("_", " ");
+  // §4.1 mode block, §21's state wording. Three lines, first line strongest.
+  const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase,
+                             jogging: !!t.manual_lease_active });
   $("mode-block").innerHTML =
-    '<div class="m1">' + mode + '</div>' +
-    '<div class="m2">' + (String(t.mode_phase || "--")) + '</div>' +
+    '<div class="m1">' + st.line1 + '</div>' +
+    '<div class="m2' + (st.named ? "" : " raw") + '">' + st.line2 + '</div>' +
     '<div class="m3">' + (t.selected_label || (t.selected_uuid_valid ? String(t.selected_uuid) : "--")) +
     '</div>';
 
@@ -793,8 +897,21 @@ function render(t) {
   const vis = (typeof t.vision_track_sets === "number" && t.vision_track_sets > 0) ? "ok" : "amber";
   hs.appendChild(chip("VISION", vis, vis === "ok" ? "" : "NO SETS"));
   hs.appendChild(chip("IMU", "amber", "ABSENT"));
-  const safe = String(t.safety_action || "").toUpperCase();
-  hs.appendChild(chip("SAFETY", safe && safe !== "NONE" ? "amber" : "ok", safe && safe !== "NONE" ? safe : "ALLOW"));
+  // §22. Normal is green and compact; anything heavier gets its own element, sized by tier, and the
+  // FAULT case is allowed to interrupt precisely because §22 asks it to.
+  const sf = hudSafetyPresentation(t);
+  if (sf.tier === "normal") hs.appendChild(chip("SAFETY", "ok", "ALLOW"));
+  else if (sf.tier === "caution") hs.appendChild(chip(sf.label, "amber", sf.reason));
+  const banner = $("safety");
+  if (sf.tier === "normal" || sf.tier === "caution") {
+    banner.hidden = true;
+    banner.innerHTML = "";
+  } else {
+    banner.hidden = false;
+    banner.className = sf.tone + " " + sf.tier;
+    banner.innerHTML = '<div class="s1">' + sf.label + '</div>' +
+                       (sf.reason ? '<div class="s2">' + sf.reason + '</div>' : "");
+  }
 
   // §12 bottom strip. FPS here is `camera_fps`: the inter-TrackSet cadence, which is what
   // §12's example strip quotes ("FPS 29"). The browser's preview rate is a different, separately
@@ -1146,6 +1263,23 @@ text.lbl { font-size: 11px; letter-spacing: .08em; font-family: inherit; }
 #drawer .dack { margin-top:6px; font-size:9px; letter-spacing:.05em; color:rgba(149,245,139,.56); }
 #drawer .dack.ok { color:#95f58b; }
 #drawer .dack.bad { color:#ff5d5d; }
+
+/* --- §22 safety presentation ------------------------------------------------ */
+#safety { position:absolute; left:50%; top:16%; transform:translateX(-50%); text-align:center;
+          font-family:var(--hud-mono); z-index:45; }
+#safety[hidden] { display:none; }
+#safety .s1 { font-size:22px; letter-spacing:.22em; }
+#safety .s2 { font-size:11px; letter-spacing:.08em; margin-top:3px; opacity:.9; }
+#safety.amber .s1 { color:#f2b329; }
+#safety.amber .s2 { color:rgba(242,179,41,.8); }
+#safety.prominent .s1 { font-size:30px; }
+/* §22: FAULT is red and "prominent enough to interrupt normal operation". §14 reserves red for stop and
+   fault, which is exactly the case this rule is for. */
+#safety.red .s1 { color:#ff5d5d; text-shadow:0 0 12px rgba(255,93,93,.45); }
+#safety.red .s2 { color:rgba(255,150,150,.92); }
+#safety.interrupt .s1 { font-size:38px; letter-spacing:.3em; }
+#mode-block .m2.raw { color:rgba(237,242,235,.55); }   /* a phase §21 does not name, dimmed as the
+                                                          daemon's own word rather than HUD wording */
 """
 
 HUD_HTML = """<!DOCTYPE html>
@@ -1196,6 +1330,9 @@ HUD_HTML = """<!DOCTYPE html>
        painted geometry. They come last in document order, which on this page IS the z-order (§18: dock
        30, drawer 40); the z-index in the CSS states it rather than relying on it. -->
   <div id="dock" role="toolbar" aria-label="context controls"></div>
+  <!-- §22 safety indication. Outside the health chips, because BRAKING and FAULT are asked to be more
+       prominent than a chip and a fault to interrupt normal operation. -->
+  <div id="safety" hidden role="status" aria-live="assertive"></div>
   <div id="drawer" hidden role="dialog" aria-modal="false"></div>
 </div>
 <script>""" + HUD_JS + """</script>

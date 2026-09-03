@@ -1288,3 +1288,45 @@ succeeded, if you only check that something is answering.**
 
 57 CTest entries (`test_web_server` now 12 cases), 377 pytest. Station homed, ready, telemetry 47 ms,
 no stale flag. Section 110: still 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 13:3x — round 14: §21 state wording, §22 safety ladder
+
+**§21** — the mode block stops echoing controld's phase string. A pure builder maps mode+phase onto the
+revision's wording: `AUTO TRACK / TRACKING`, `AUTO TRACK / COASTING`, **`TARGET LOST / HOLDING`** (the loss
+goes on the strong line — burying it under a mode name is how an HUD hides the interesting part),
+`AUTO ROAM / SWEEP`, `MANUAL / HOLD | JOG`. `JOG` is read from the published `manual_lease_active`, not
+inferred from a non-zero rate, which would also light up during homing, a roam, or settling after a hold.
+
+Two honest gaps: **no sweep direction** (`SWEEP LEFT|RIGHT` in §21.4 — controld publishes none, so no arrow
+is drawn; same class as the IMU absence), and **unnamed states keep the daemon's own word, dimmed**, rather
+than getting invented friendly wording.
+
+**§22** — one chip could not carry a ladder, so there is one now:
+
+| safety state | presentation |
+|---|---|
+| `ALLOW` | green chip, compact — `SAFETY ALLOW` |
+| `DERATE` | amber, **naming the edge** (ref vs soft limits; breached sorts ahead of still-ahead) |
+| `BRAKE` | amber, larger — `BRAKING` |
+| `FAULT_STOP` / non-empty `fault` | **red, largest, with the short reason**, `aria-live="assertive"` |
+
+The enum has six states and §22 words four: `HOLD` and `DISABLE` keep the daemon's word and are never
+green, and an unrecognised action defaults to **amber caution, not green** — defaulting an unknown safety
+state to safe is the one default that can kill.
+
+**Not done, not claimed:** §22's *"including the relevant travel-tape edge"* is met by **naming** the edge,
+not by highlighting it on the tape. The tape renderer has no marked-tick concept, and bolting one on from
+the safety code without reading that renderer through is the blind-patch class that has cost time twice
+here. Deferred with the reason.
+
+**Own defects caught before running:** my first edge sort penalised *breached* limits — the opposite of its
+own comment (ascending margin is both simpler and right); a walrus-operator class hack and a `replace()`
+that made an assertion a no-op in the test file.
+
+**Live**, as the page's own code computes it from the station's snapshot: `MANUAL / HOLD` in revision
+wording, `SAFETY ALLOW` green/normal — from mode MANUAL, phase HOLD, `safety_action ALLOW`, lease 0, fault
+empty. Round-13's stale-process lesson applied on purpose: separate kill/launch calls, then checked for a
+bind failure and the serving process's age (both pids 28 s, no `Errno 98`).
+
+57 CTest, 408 pytest (+31). Station homed, ready, holding. §110: still 0 items accepted on hardware by a
+named person.
