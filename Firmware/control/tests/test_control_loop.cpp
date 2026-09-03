@@ -692,3 +692,67 @@ TEST(ManualMode, OnlyTheSanctionedStepSizesAreAccepted) {
   h.run("manual_step", "yaw+1");
   EXPECT_EQ(h.snap().cmd_ack_accepted, 1);
 }
+
+// --- §35/§86 through the loop: the sweep is the mode's, and STOP MOTION ends it.
+TEST(RoamMode, AutoRoamSweepsAndReportsWhereItIsGoing) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const double yaw0 = h.loop->last_positions()[1];
+  h.run("set_mode", "AUTO_ROAM");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+
+  h.step(400);  // 2 s
+  auto snap = h.snap();
+  EXPECT_EQ(snap.operating_mode, "AUTO_ROAM");
+  EXPECT_EQ(snap.intent_source, "auto_roam");
+  EXPECT_TRUE(snap.mode_phase == "SWEEP" || snap.mode_phase == "MOVE_TO_SCAN_START" ||
+              snap.mode_phase == "TURNAROUND")
+      << "§35's states are the operator's vocabulary for what the sweep is doing; got "
+      << snap.mode_phase;
+  EXPECT_NE(snap.roam_sweep_direction, 0)
+      << "which way it is running is the one thing a person needs in order to step out "
+         "of its path with confidence";
+  EXPECT_GT(std::fabs(h.loop->last_positions()[1] - yaw0), 0.05)
+      << "two seconds in AUTO_ROAM and it never moved";
+  // §32: the waypoint it is driving to is inside the region, never at a stop.
+  EXPECT_LT(std::fabs(snap.roam_target_yaw_rad), 3.2)
+      << "a waypoint at " << snap.roam_target_yaw_rad << " rad is not inside anything";
+}
+
+TEST(RoamMode, StopMotionEndsTheSweepAndLeavesItInManualHold) {
+  // §35: "any operator STOP -> MANUAL/HOLD". The sweep is the most autonomous thing this
+  // machine does, so this is the button whose behaviour matters most — and the part that
+  // is easy to get wrong is the *planner* staying armed afterwards, so the next glance
+  // says SWEEP while the turret sits still.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(400);
+  ASSERT_NE(h.snap().roam_sweep_direction, 0);
+
+  h.run("stop_motion", "");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1);
+  EXPECT_EQ(h.snap().operating_mode, "MANUAL");
+  h.step(40);
+  EXPECT_EQ(h.snap().roam_sweep_direction, 0)
+      << "the mode says MANUAL and the planner still reports a direction";
+  EXPECT_EQ(h.snap().intent_source, "manual");
+  EXPECT_EQ(h.snap().intent_type, "hold");
+  const double yaw = h.loop->last_positions()[1];
+  h.step(200);  // a second of stopped-but-armed
+  EXPECT_NEAR(h.loop->last_positions()[1], yaw, 2e-3)
+      << "it stopped, and then remembered it was supposed to be sweeping";
+}
+
+TEST(RoamMode, AnUnhomedStationRefusesToRoamAndSaysWhy) {
+  // §32 through §52: without homing the roam region is not *knowable* — the soft limits
+  // are relative to the homed pose. The old behaviour would have been to sweep anyway
+  // against limits that do not exist yet, which is how a turret learns where the stops
+  // are.
+  auto backend = std::make_unique<sim::SimMotorBackend>(0.005);
+  ControlLoop loop(make_cfg(), std::move(backend));  // fresh: never homed
+  ASSERT_FALSE(loop.homed());
+  auto r = loop.request_mode(OperatingMode::AutoRoam);
+  EXPECT_FALSE(r.ok);
+  EXPECT_NE(std::string(r.reason).find("homed"), std::string::npos) << r.reason;
+}

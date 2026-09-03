@@ -92,6 +92,8 @@ class Telemetry:
     selection_ambiguous: bool = False
     reacquisition_score: float = 0.0
     ambiguity_margin: float = 0.0
+    roam_target_yaw_rad: float = 0.0
+    roam_sweep_direction: int = 0
     manual_lease_active: bool = False
     manual_lease_remaining_ms: int = 0
     manual_profile: str = ""

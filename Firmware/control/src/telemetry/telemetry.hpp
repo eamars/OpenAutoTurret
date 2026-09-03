@@ -91,6 +91,12 @@ struct TelemetrySnapshot {
   bool manual_lease_active = false;
   int64_t manual_lease_remaining_ms = 0;
   std::string manual_profile;
+  // §78 AUTO_ROAM: where the sweep is going next and which way it is running. Both are
+  // published because during a sweep they are the only way an operator can tell the
+  // turret is still executing the plan rather than stuck at an end — and "which way" is
+  // what a person needs in order to step out of its path with confidence.
+  double roam_target_yaw_rad = 0.0;
+  int roam_sweep_direction = 0;
   std::string confidence_band;
   float selected_confidence = 0.0f;  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,

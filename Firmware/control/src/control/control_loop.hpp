@@ -37,6 +37,7 @@
 #include "calibration/world_frame_telemetry.hpp"
 #include "mode/mode_manager.hpp"
 #include "mode/manual_controller.hpp"
+#include "mode/roam_planner.hpp"
 #include "tracking/auto_track_controller.hpp"
 #include "tracks/target_selection_manager.hpp"
 #include "tracks/track_set.hpp"
@@ -200,6 +201,12 @@ class ControlLoop {
 
   // The facts the mode gate is judged on, assembled from authoritative state.
   ModeRequestContext mode_context() const;
+  // §32: the region AUTO_ROAM may sweep, derived from the station's own limits rather
+  // than typed in, and the safe envelope it must sit inside. `roam_config()` is called
+  // every cycle, so a live config edit cannot leave a sweep heading for a waypoint that
+  // has just become illegal.
+  RoamConfig roam_config() const;
+  RoamEnvelope safe_envelope() const;
 
   // §52: answer every command, including the ones that do nothing. `accepted`
   // here means controld acted on it — not that the web layer delivered it. A
@@ -468,6 +475,34 @@ class ControlLoop {
   // is refreshed whenever a TrackSet arrives (camera rate) and read every control cycle,
   // which is the honest shape of it: the state machine runs at 200 Hz because the
   // coast timer does, but nothing about the target is *new* between frames.
+  // §29-§36. AUTO_ROAM's own planner: it owns the sweep, the envelope it is bounded by,
+  // and the direction it is going. It is consulted only while the mode says so (§53).
+  // ModeResult::reason is a const char*, so a refusal built at runtime needs a place to
+  // live longer than the statement that formed it. Fixed buffer, no allocation, stable
+  // address: every caller copies it immediately (ack_command does), and the only writer
+  // is the control thread inside request_mode.
+  // Where a mode's "hold" means *here*, latched once on the transition into holding.
+  // Latched rather than tracked: if the hold target followed the measured position every
+  // cycle, the turret would creep with encoder noise, which is a slow version of the same
+  // mistake. Latched rather than read from the last reference, because disable_tracking()
+  // zeroes that — and a hold pose of (0,0) is a drive to joint zero, which is what this
+  // was briefly doing before a STOP MOTION test caught it.
+  // mutable: this is a cache of a decision, and the function that reads it
+  // (intent_limits, const, called from the reference conversion) is the only writer.
+  // Set once the operating mode has actually asked for motion. Until then "hold" keeps
+  // its v1 meaning, because the post-homing sequence — reach the ready pose, run §27's
+  // payload verification at rest, then declare READY_HOLD — is defined *at that pose*.
+  // Applying "hold where you are" before the station has ever been where it stopped was
+  // enough to make verification fail and the safety layer derate a freshly homed station,
+  // which is the sort of collateral a safety-relevant default must not have.
+  bool mode_has_moved_ = false;
+  mutable bool mode_hold_in_place_ = false;
+  mutable bool mode_hold_latched_ = false;
+  mutable double mode_hold_yaw_rad_ = 0.0;
+  mutable double mode_hold_pitch_rad_ = 0.0;
+  char mode_refusal_reason_[224] = {};
+  RoamPlanner roam_;
+  RoamOutput roam_out_;
   ManualController manual_;
   ManualOutput manual_out_;
   AutoTrackController autotrack_;

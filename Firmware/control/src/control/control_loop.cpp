@@ -378,6 +378,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   //      the phase each cycle rather than hooked at each phase assignment, so a
   //      phase added later cannot forget to say so and leave a mode thinking it is
   //      in charge during a homing run.
+  // Leaving Ready means the station owes the post-homing duty again (reach the ready
+  // pose, §27 verification at rest, then READY_HOLD), so "hold" reverts to its v1
+  // meaning until a mode moves it somewhere else.
+  if (mode_mgr_.supervisory() != SupervisoryState::Ready) mode_has_moved_ = false;
   mode_mgr_.notify_supervisory(phase_ == Phase::Homing    ? SupervisoryState::Homing
                                : phase_ == Phase::Parking ? SupervisoryState::Parking
                                : phase_ == Phase::Fault   ? SupervisoryState::Fault
@@ -459,6 +463,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       manual_.cancel(now_ns);
       manual_out_ = ManualOutput{};
     }
+    if (mode_mgr_.mode() == OperatingMode::AutoRoam) {
+      // §34: the sweep needs no camera and no tracking session. Vision keeps running
+      // alongside it and the selection stays visible, but pursuing what it sees means
+      // switching to AUTO_TRACK — which is also what makes this the mode that still
+      // works when no target ever appears.
+      const double qy = sp[ix(AxisId::Yaw)].q_rad;
+      const double qp = sp[ix(AxisId::Pitch)].q_rad;
+      roam_.set_config(roam_config());
+      if (!roam_.active()) roam_.enter(qy, qp);  // §36: seeded from where it is
+      roam_out_ = roam_.update(qy, qp, now_ns, period_ns);
+    } else if (roam_.active()) {
+      // §35: a safety override or an operator STOP ends the sweep, and §36's continuity
+      // means the next AUTO_ROAM re-enters from wherever the turret ended up.
+      roam_.exit();
+      roam_out_ = RoamOutput{};
+    }
     if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
       at_input_.measurement_age_ms =
           last_measurement_ns_ > 0 ? (now_ns - last_measurement_ns_) / 1000000 : -1;
@@ -477,6 +497,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       at_out_ = AutoTrackOutput{};
     }
     last_intent_ = build_mode_intent(now_ns);
+    if (last_intent_.type != IntentType::Hold)
+      mode_has_moved_ = true;  // from here on, "hold" means *here*, not "back to ready"
     tracking_ref_ = ref_mgr_
                       ? ref_mgr_->resolve(last_intent_, intent_limits(now_ns))
                       : ReferenceRequest{};
@@ -715,8 +737,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // the ready pose for that cycle.
       const bool test_motion = has_test_motion_;
       has_test_motion_ = false;
-      // Move to the safe ready pose (if not already there), then hold. Never
-      // press against a stop.
+      // Whose pose a "hold" holds is a decision, not a constant — and it took a failing
+      // test to make that visible. v1's hold meant "return to the safe ready pose", which
+      // is right for the end of homing and wrong for §52's STOP MOTION: measured in
+      // simulation, a stop taken 14 degrees into a sweep drove the turret 14 degrees the
+      // other way to get back to ready. During the three operating modes at Ready the hold
+      // pose is the place it stopped, latched on the stopping cycle; everywhere else it is
+      // the ready pose, exactly as v1 had it.
+      //
+      // Everything below is unchanged on purpose, including the arrived case's lim = 0:
+      // on this station that is the difference between a parked arm and one whose position
+      // loop fights static friction forever (§33.2's lesson, from metal).
+      const double hold_pose[2] = {
+          mode_hold_in_place_ ? mode_hold_pitch_rad_ : ready_raw_[0],
+          mode_hold_in_place_ ? mode_hold_yaw_rad_ : ready_raw_[1]};
       at_ready_ = true;
       for (int i = 0; i < kAxisCount; ++i) {
         if (test_motion && i == (int)ix(AxisId::Yaw)) {
@@ -728,8 +762,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           at_ready_ = false;
           continue;
         }
-        if (std::fabs(sp[i].q_rad - ready_raw_[i]) > kReadyPosTolRad) {
-          q_ref[i] = ready_raw_[i];
+        if (std::fabs(sp[i].q_rad - hold_pose[i]) > kReadyPosTolRad) {
+          q_ref[i] = hold_pose[i];
           lim[i] = hold_speed_effective();
           at_ready_ = false;
         } else {
@@ -1024,9 +1058,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // nothing in it to explain itself.
     snap.operating_mode = operating_mode_name(mode_mgr_.mode());
     snap.supervisory_state = supervisory_state_name(mode_mgr_.supervisory());
-    snap.mode_phase = mode_mgr_.mode() == OperatingMode::AutoTrack
-                        ? auto_track_state_name(at_out_.state)
-                        : mode_phase_label();
+    snap.mode_phase =
+        mode_mgr_.mode() == OperatingMode::AutoRoam
+            ? roam_state_name(roam_.state())
+            : mode_mgr_.mode() == OperatingMode::AutoTrack
+                  ? auto_track_state_name(at_out_.state)
+                  : mode_phase_label();
+    snap.roam_target_yaw_rad = roam_out_.target_yaw_rad;
+    snap.roam_sweep_direction = roam_out_.direction;
     snap.manual_lease_active = manual_.lease_active();
     snap.manual_lease_remaining_ms = manual_out_.lease_remaining_ms;
     snap.manual_profile = manual_profile_name(manual_.profile());
@@ -1161,6 +1200,41 @@ double ControlLoop::hold_speed_effective() const {
 
 // --- v3 mode plumbing (§43/§44/§53) ---------------------------------------
 
+RoamEnvelope ControlLoop::safe_envelope() const {
+  RoamEnvelope e;
+  e.yaw_min_rad = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
+  e.yaw_max_rad = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+  e.pitch_min_rad = limits_[ix(AxisId::Pitch)].q_soft_min_rad;
+  e.pitch_max_rad = limits_[ix(AxisId::Pitch)].q_soft_max_rad;
+  return e;
+}
+
+RoamConfig ControlLoop::roam_config() const {
+  RoamConfig c = roam_.config();
+  const AxisLimits& yl = limits_[ix(AxisId::Yaw)];
+  const AxisLimits& pl = limits_[ix(AxisId::Pitch)];
+  const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
+  const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
+  c.envelope.yaw_min_rad =
+      std::max(ready_yaw - cfg_.search_span_rad, yl.q_soft_min_rad + inset);
+  c.envelope.yaw_max_rad =
+      std::min(ready_yaw + cfg_.search_span_rad, yl.q_soft_max_rad - inset);
+  c.envelope.pitch_min_rad = pl.q_soft_min_rad + inset;
+  c.envelope.pitch_max_rad = pl.q_soft_max_rad - inset;
+  // §30: one elevation for the whole sweep, and it is the elevation the station was
+  // declared ready at — the pose the operator has already seen is safe under load. §72
+  // will let a station name its own roam region and elevation; until that file exists,
+  // deriving from the limits the station already obeys is the only source that cannot
+  // drift from the truth.
+  c.pitch_ref_rad = ready_raw_[ix(AxisId::Pitch)];
+  c.v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, hold_speed_effective());
+  // §33: a world-level scan needs gravity from the BNO085 expansion. This station has
+  // the sensor, but core v3 does not depend on it, so the sweep stays in joint space and
+  // says so rather than claiming a level scan it cannot honour.
+  c.level_scan_available = false;
+  return c;
+}
+
 ModeRequestContext ControlLoop::mode_context() const {
   ModeRequestContext c;
   // Allow/Derate are the "healthy" answers; Brake / Hold / FaultStop / Disable
@@ -1181,15 +1255,45 @@ ModeRequestContext ControlLoop::mode_context() const {
   // §32/§72 and a real validator; until then an empty band must refuse AUTO_ROAM
   // rather than let it fall back to sweeping the whole soft-limit span, which is
   // the tempting implementation and the one that finds the mechanical stops.
-  c.roam_envelope_valid =
-      tracking_cfg_.search.yaw_high_rad > tracking_cfg_.search.yaw_low_rad;
+  // §32, checked rather than assumed: the roam region must be non-empty *and* sit
+  // inside the safe envelope with room left over. The test here used to be "the v1 search
+  // band is non-empty", which passes a configuration that sweeps right up to the
+  // mechanical stops — the tempting implementation, and the one that finds them.
+  {
+    char unused[1] = {};
+    const RoamConfig rc = roam_config();
+    c.roam_envelope_valid =
+        homed_ && RoamPlanner::validate_envelope(rc.envelope, safe_envelope(),
+                                                 rc.pitch_ref_rad,
+                                                 rc.min_inside_safe_rad, unused,
+                                                 sizeof unused);
+  }
   c.supervisory = mode_mgr_.supervisory();
   return c;
 }
 
 ModeResult ControlLoop::request_mode(OperatingMode target) {
   const std::string who = ack_in_flight_.empty() ? "request_mode" : ack_in_flight_;
-  const ModeResult r = mode_mgr_.request(target, mode_context());
+  const ModeRequestContext ctx = mode_context();
+  const ModeResult r = mode_mgr_.request(target, ctx);
+  if (!r.ok && target == OperatingMode::AutoRoam && !ctx.roam_envelope_valid) {
+    // The mode manager's reason is true and useless: "roam envelope invalid". Which
+    // bound, by how much? Say it here, where the numbers are in scope, because this is
+    // the message someone acts on from the other end of a network connection.
+    char why[192] = {};
+    if (!homed_) {
+      std::snprintf(why, sizeof why,
+                    "not homed, so the roam region is not known (home first)");
+    } else {
+      const RoamConfig rc = roam_config();
+      RoamPlanner::validate_envelope(rc.envelope, safe_envelope(), rc.pitch_ref_rad,
+                                     rc.min_inside_safe_rad, why, sizeof why);
+    }
+    std::snprintf(mode_refusal_reason_, sizeof mode_refusal_reason_,
+                  "AUTO_ROAM refused: %s", why);
+    ack_command(who, false, mode_refusal_reason_);
+    return {false, false, mode_refusal_reason_};
+  }
   if (!r.ok) {
     // §52: the reason that used to stop in the log now goes back to whoever asked.
     ack_command(who, false, r.reason);
@@ -1219,6 +1323,12 @@ ModeResult ControlLoop::stop_motion() {
 }
 
 void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
+  mode_hold_latched_ = false;  // §44: "here" is re-decided at a handover, not inherited
+  // `mode_has_moved_` deliberately survives a handover. It is cleared only when the
+  // station leaves Ready, below. Clearing it here would break the one handover that
+  // matters most: STOP MOTION goes AUTO_ROAM -> MANUAL, and a flag reset by that
+  // transition puts the hold pose back to the ready pose — so the turret stops, then
+  // drives the whole way back. §52's button must stop the machine, not relocate it.
   // The v1 controllers are the mechanism; the mode is the authority. Search
   // (the sweep) is armed only for AUTO_ROAM — §111.5 freezes that AUTO_TRACK
   // does not roam looking for a target, so the flag follows the mode. Any stale
@@ -1248,8 +1358,43 @@ void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
 ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   ReferenceManager::IntentLimits l;
   l.now_ns = now_ns;
-  l.q_yaw_hold_rad = ready_raw_[ix(AxisId::Yaw)];
-  l.q_pitch_hold_rad = ready_raw_[ix(AxisId::Pitch)];
+  // "Hold" has two meanings and v1 used only the first. v1's hold was *return to the
+  // ready pose* — correct for the end of homing and for a tracking session winding down.
+  // For the three operating modes it has to mean "stay where you are", and the
+  // difference is not cosmetic: measured in simulation, a STOP MOTION taken 14 degrees
+  // into a sweep moved the turret 14 degrees on the way to the ready pose. A button whose
+  // name is STOP MOTION does not get to make a move of that size, and "it moved away
+  // from me when I hit stop" is the sort of fact that ends trust in the panel.
+  //
+  // The pose is the last commanded reference rather than the measured feedback, so the
+  // hold target does not wander with encoder noise; and this applies only while the
+  // station is in one of the three modes at Ready. Homing, parking and fault are
+  // Supervisory and carry their own explicit targets, where "go to the ready pose" is
+  // exactly what is wanted.
+  const bool mode_hold_in_place =
+      mode_has_moved_ && mode_mgr_.supervisory() == SupervisoryState::Ready &&
+      (mode_mgr_.mode() == OperatingMode::Manual ||
+       mode_mgr_.mode() == OperatingMode::AutoTrack ||
+       mode_mgr_.mode() == OperatingMode::AutoRoam);
+  mode_hold_in_place_ = mode_hold_in_place;
+  if (mode_hold_in_place) {
+    // The pose is taken from the measured joints on the cycle the turret *stopped*
+    // moving, and then held there. Two properties that only make sense together: no
+    // creep (it is not re-read every cycle) and no journey (it is not the ready pose).
+    if (!mode_hold_latched_ || last_intent_.type != IntentType::Hold) {
+      const double q[2] = {last_positions()[ix(AxisId::Pitch)],
+                           last_positions()[ix(AxisId::Yaw)]};
+      mode_hold_pitch_rad_ = q[ix(AxisId::Pitch)];
+      mode_hold_yaw_rad_ = q[ix(AxisId::Yaw)];
+      mode_hold_latched_ = true;
+    }
+    l.q_yaw_hold_rad = mode_hold_yaw_rad_;
+    l.q_pitch_hold_rad = mode_hold_pitch_rad_;
+  } else {
+    mode_hold_latched_ = false;  // homing / parking / fault will re-latch on return
+    l.q_yaw_hold_rad = ready_raw_[ix(AxisId::Yaw)];
+    l.q_pitch_hold_rad = ready_raw_[ix(AxisId::Pitch)];
+  }
   // §28.5/§31.3: the profiled safe v_max, with any mismatch derate.
   const double cap = hold_speed_effective();
   l.hold_v_max_rad_s = cap;
@@ -1329,26 +1474,17 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
     }
 
     case OperatingMode::AutoRoam: {
-      if (!tracking_)
-        return MotionIntent::hold(MotionSource::AutoRoam,
-                                  "sweep not started");
-      if (tracking_->track_state() != tracking::TrackState::Search ||
-          mode_proposal_.source != ReferenceSource::Search) {
-        // Includes the lost-timeout grace before the sweep begins, and the
-        // turnaround dwells. §36's "do not jump to a distant scan start" is
-        // satisfied by the planner being re-seeded from the current yaw; RoamPlanner
-        // owns that properly in V3-6.
-        return MotionIntent::hold(MotionSource::AutoRoam,
-                                  track_state_name(tracking_->track_state()));
-      }
-      in.source = MotionSource::AutoRoam;
-      in.type = IntentType::JointPosition;
-      in.has_joint_target = true;
-      in.q_yaw_rad = mode_proposal_.q_yaw_rad;
-      in.q_pitch_rad = mode_proposal_.q_pitch_rad;
-      in.confidence = 1.0;  // no target involved; the sweep is not uncertain
-      in.set_reason("bounded sweep");
-      return in;
+      // §29-§36: RoamPlanner's intent, verbatim — the waypoint it chose, the elevation
+      // it decided to hold, and the reason it gave. The v1 search planner no longer owns
+      // motion in any mode (it stays compiled for the legacy path the operator has not
+      // retired), which is what §34's "RoamPlanner owns motion" means at this level.
+      //
+      // Note what is *not* tested here: `tracking_`. A sweep never needed a tracker, and
+      // the station has to be able to roam with no camera and nothing in view.
+      const MotionIntent& ri = roam_out_.intent;
+      if (ri.type != IntentType::Hold) return ri;
+      return MotionIntent::hold(MotionSource::AutoRoam,
+                                roam_out_.reason[0] ? roam_out_.reason : "roam hold");
     }
   }
   return MotionIntent::hold(MotionSource::None, "unreachable mode value");
