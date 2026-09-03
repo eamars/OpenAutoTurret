@@ -137,3 +137,14 @@ def test_mode_buttons_exist_and_spelling_is_exact():
     assert 'data-cmd="stop_motion"' in DASHBOARD_HTML, (
         "§27: STOP MOTION has to be reachable in one press, from any mode"
     )
+
+
+def test_mode_row_degrades_when_controld_is_older():
+    """During any rollout the dashboard is newer than the daemon for a while. The
+    old controld has no `set_mode` and no operating_mode field, so the mode buttons
+    would be pressable, get refused, and leave the operator reasoning about a
+    rejection the page could have predicted. One telemetry field of difference is
+    enough to know — so the page must use it."""
+    assert 'const v3 = !!t.operating_mode;' in DASHBOARD_HTML
+    assert "btn.disabled = !v3;" in DASHBOARD_HTML
+    assert 'id="mode-unsupported"' in DASHBOARD_HTML

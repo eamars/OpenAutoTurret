@@ -182,6 +182,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <span id="mode-phase" class="badge">—</span>
       <span id="sup-state" class="badge">—</span>
     </div>
+    <div><span id="mode-unsupported" class="muted"></span></div>
     <div><span id="intent">intent: —</span></div>
     <div><span id="ack" class="muted">last command: none since controld started</span></div>
     <div class="muted">STOP MOTION cancels the active intent and lands in
@@ -396,7 +397,23 @@ function render(t) {
   $("ep").textContent = num(t.effort_pitch, 2);
   // v3 §50: the three things the operator asks in order — who is driving, what
   // it is doing about it, and what the last button press actually accomplished.
-  const mode = t.operating_mode || "—";
+  // A dashboard newer than the daemon is the normal state during an upgrade, and
+  // it must not pretend otherwise. An old controld has no operating_mode in its
+  // telemetry and no set_mode in its validator, so the buttons would sit there
+  // looking pressable and answer "unknown command" — which is a true answer to a
+  // question the page should not have been asking. Say what is missing instead.
+  const v3 = !!t.operating_mode;
+  const mode = t.operating_mode || "not reported";
+  document.querySelectorAll("#mode-controls button[data-mode]").forEach((btn) => {
+    btn.disabled = !v3;
+  });
+  const note = $("mode-unsupported");
+  if (note) {
+    note.textContent = v3 ? "" :
+      "controld is not reporting an operating mode: this build predates v3 (§43). " +
+      "Update and restart controld before using the mode buttons.";
+    note.className = v3 ? "muted" : "err";
+  }
   badge($("mode"), mode, mode === "MANUAL" ? "ok" : "warn");
   badge($("mode-phase"), t.mode_phase || "—", "info");
   badge($("sup-state"), t.supervisory_state || "—",
