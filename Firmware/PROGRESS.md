@@ -1814,3 +1814,37 @@ that is a defect worth naming.
 
 **437 pytest / 57 CTest** stand (no control code touched). Station homed, MANUAL/HOLD, vision restarted and
 running. **§110: 0 items accepted on hardware by a named person. C2, C3, C4, C5b FAIL; C1, C5a PASS.**
+
+## 2026-09-04, 20:5x — round 28: the 10 deg/s ceiling found — AUTO_TRACK's reference is bounded by the **hold** speed, one third of its own configured tracking speed
+
+The chain, every link read from the source rather than inferred:
+
+1. `control_loop.cpp` (envelope cap, just before `env_.set_v_max(cap)`): `double cap = derated ?
+   cfg_.derate_factor * cfg_.hold_speed_rad_s : cfg_.hold_speed_rad_s;` — and its own comment says *"Cap the
+   safety-envelope v_max (it bounds the **tracking** reference, §15)"*.
+2. `control_loop.hpp:108`: `hold_speed_rad_s = 10.0 * kDeg2Rad` (default), and `main.cpp:133` sets
+   `t.hold_v_max_rad_s = 10.0 * kDeg2Rad` — **hard-coded, no yaml key exists for it**.
+3. `main.cpp:131`: `t.track_v_max_rad_s = cfg.tracking.track_speed_deg_s * kDeg2Rad`, and `turret_config.cpp:713`
+   defaults that to **30.0 deg/s** — `config/turret.yaml` has **no `track_speed_deg_s` key at all**, so it is a
+   defaulted value (which is what the `warn` argument in that call is for).
+4. Measured, twice, at different dart magnitudes: reference rate **max 10.0 deg/s**, accel saturating at 60.0.
+
+**So AUTO_TRACK can never exceed 10 deg/s — one third of its own configured 30 deg/s — because the envelope that
+bounds its reference is capped by the speed meant for holding.** That single line explains what four rounds of
+explanations could not: why the reference rate ceiling was *identical* (10.0) in an impossible 0.40 s dart and an
+envelope-legal 1.60 s dart; why it sat below the 30 deg/s axis limit; why C2/C3/C4 fail at **any** dart
+magnitude; and why round 27 called the match with `hold_v_max` a "suspicious coincidence". It was not a
+coincidence and it is not the confidence band, not the 300 ms ramp, and not the axis envelope.
+
+**Named, but deliberately not changed.** The fix is small in shape — take the envelope cap from
+`track_v_max_rad_s` when the mode is tracking (or make the hold speed configurable rather than hard-coded) — but
+its effect is to **raise how fast the station is allowed to swing while a target is being followed**, which is a
+safety-envelope change: the operator's to authorise, with the acceptance run re-measured afterwards and §24
+signed by name, never by me. Two sources currently disagree by construction — the intent asks for 30 deg/s and
+the envelope permits 10 — and the disagreement is invisible on the HUD, which shows commanded *rate*, not the
+ceiling in force. Worth surfacing to the operator as an open question rather than left as a quiet constant.
+
+Also honest about what this does not settle: C5b's jerk failure (p95 542 vs 300+60, measured at probe rate as a
+lower bound) is a separate matter, and C1's PASS says containment held at these magnitudes — it does not say the
+lead rule is met. No code changed this round. **437 pytest / 57 CTest** stand; station homed, MANUAL/HOLD,
+vision running. **§110: 0 items accepted on hardware by a named person.**
