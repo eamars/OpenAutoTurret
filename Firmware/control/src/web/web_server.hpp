@@ -176,6 +176,10 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"manual_lease_active\":" << (s.manual_lease_active ? 1 : 0)
      << ",\"manual_lease_remaining_ms\":" << s.manual_lease_remaining_ms
      << ",\"manual_profile\":\"" << json_escape(s.manual_profile) << "\""
+     << ",\"selection_last_seen_age_ms\":" << s.selection_last_seen_age_ms
+     << ",\"prediction_age_ms\":" << s.prediction_age_ms
+     << ",\"roam_pattern\":\"" << json_escape(s.roam_pattern) << "\""
+     << ",\"roam_progress\":" << s.roam_progress
      << ",\"confidence_band\":\"" << json_escape(s.confidence_band) << "\""
      << ",\"selected_confidence\":" << s.selected_confidence
      << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""

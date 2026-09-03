@@ -110,6 +110,12 @@ class Telemetry:
     manual_lease_active: bool = False
     manual_lease_remaining_ms: int = 0
     manual_profile: str = ""
+    # §50's remaining fields. See the note on `tracks`: an undeclared field here does not
+    # raise, it just stops arriving.
+    selection_last_seen_age_ms: int = -1
+    prediction_age_ms: int = -1
+    roam_pattern: str = ""
+    roam_progress: float = 0.0
     confidence_band: str = "INVALID"
     selected_confidence: float = 0.0
     cmd_ack_seq: int = 0

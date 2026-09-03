@@ -1243,6 +1243,38 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.manual_lease_remaining_ms = manual_out_.lease_remaining_ms;
     snap.manual_profile = manual_profile_name(manual_.profile());
     snap.confidence_band = confidence_band_name(at_out_.band);
+    // §50. Computed here, next to the fields they belong to, from the same cycle's
+    // measurements — see the note on the snapshot for why none of these read a commanded
+    // value.
+    {
+      const auto& sel = selection_.selection();
+      snap.selection_last_seen_age_ms =
+          (sel.has_selection && sel.last_seen_timestamp > 0)
+              ? static_cast<int64_t>((now_ns_ - sel.last_seen_timestamp) / 1000000)
+              : -1;
+      // Only meaningful while AUTO_TRACK is steering from an estimate. The input struct
+      // keeps its last value between modes, and publishing that stale number in MANUAL
+      // would be the same mistake as publishing a zero that means "never" — a field whose
+      // silence and its answer look identical is a field that lies.
+      snap.prediction_age_ms = mode_mgr_.mode() == OperatingMode::AutoTrack
+                                   ? at_input_.measurement_age_ms
+                                   : -1;
+      // A leg runs from the bound it left to the bound ahead of it, and progress is
+      // measured at the turret rather than at the planner: if an axis cannot follow, the
+      // number has to stop too. Nothing else on this page will admit it.
+      snap.roam_pattern = roam_.active() && roam_out_.envelope_valid ? "BOUNDED_SWEEP"
+                                                                    : "NONE";
+      const double lo = roam_.sweep_lo_rad(), hi = roam_.sweep_hi_rad();
+      const double qy = last_positions()[ix(AxisId::Yaw)];
+      if (roam_.active() && hi > lo) {
+        const double along = (qy - lo) / (hi - lo);
+        const double clamped = along < 0.0 ? 0.0 : (along > 1.0 ? 1.0 : along);
+        snap.roam_progress =
+            roam_out_.direction >= 0 ? clamped : 1.0 - clamped;
+      } else {
+        snap.roam_progress = 0.0;
+      }
+    }
     snap.selected_confidence = at_out_.selected_confidence;
     snap.intent_source = motion_source_name(last_intent_.source);
     snap.intent_type = intent_type_name(last_intent_.type);

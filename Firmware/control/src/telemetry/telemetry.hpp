@@ -144,6 +144,24 @@ struct TelemetrySnapshot {
   double roam_target_yaw_rad = 0.0;
   int roam_sweep_direction = 0;
   std::string confidence_band;
+  // §50's remaining fields. Each is the answer to a question the operator asks out loud,
+  // and each is computed from what is measured rather than from what was commanded —
+  // commanded values are how a dashboard keeps saying "72% through the sweep" while the
+  // turret is stuck against something.
+  //
+  // How long ago the selected person was last seen, on controld's clock. -1 when no
+  // selection has ever resolved. Distinct from the candidate list's age: the list can be
+  // fresh while *this* person is not in it, which is precisely the occlusion case.
+  int64_t selection_last_seen_age_ms = -1;
+  // AUTO_TRACK: how stale the estimate the controller is steering from is. Equal to the
+  // measurement age while a track is being followed; during coast it keeps growing,
+  // which is the number that explains why the turret slowed before it stopped (§20).
+  int64_t prediction_age_ms = -1;
+  // AUTO_ROAM: which sweep is running, and how much of the current leg is behind it.
+  // "NONE" when the planner is not sweeping, rather than an empty string, so a reader can
+  // tell "not roaming" from "roaming with an unnamed pattern".
+  std::string roam_pattern;
+  double roam_progress = 0.0;
   float selected_confidence = 0.0f;  // since the last measurement (-1 = none)
   // Installation orientation (§29/§30, Phase 7): base tilt relative to level,
   // from the active R_W_B. installation_source is the PoseSource enum value

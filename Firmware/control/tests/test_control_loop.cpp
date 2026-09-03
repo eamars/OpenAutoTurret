@@ -1093,3 +1093,55 @@ TEST(Events, AnAmbiguousReacquisitionIsRecordedAsAskingRatherThanChoosing) {
   EXPECT_TRUE(has_event(s2, "TARGET_REACQUIRE_AMBIGUOUS", "reselect"))
       << "a refusal that does not tell the operator to choose is a mystery, not a request";
 }
+
+// --- §50: the fields the operator's panel is specified to show. Two of them are the
+//     interesting ones, because both are easy to publish as a number that is always
+//     slightly wrong in a direction that flatters the machine.
+TEST(RuntimeUiState, SweepProgressIsMeasuredAtTheTurretNotAtThePlanner) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(200);  // 1 s: it has left the entry bound and is inside the leg
+  auto snap = h.snap();
+  EXPECT_EQ(snap.roam_pattern, "BOUNDED_SWEEP") << snap.roam_pattern;
+  EXPECT_GT(snap.roam_progress, 0.0) << "one second into a leg and it reports nothing "
+                                        "behind it; progress computed from the target "
+                                        "rather than from where the turret actually is";
+  const double p0 = snap.roam_progress;
+  h.step(400);
+  EXPECT_GT(h.snap().roam_progress, p0)
+      << "the leg is running and the published progress has not moved";
+  EXPECT_LE(h.snap().roam_progress, 1.0);
+
+  // Leaving the mode must not leave a frozen sweep on the page.
+  h.run("set_mode", "MANUAL");
+  EXPECT_EQ(h.snap().roam_pattern, "NONE");
+}
+
+TEST(RuntimeUiState, StaleEstimatesSayTheyAreStale) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto set = make_set_with(tracks::TrackState::Confirmed, 1, 0.9f);
+  feed(h, set, 20, 10);
+  h.run("select_target", "1");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  feed(h, set, 20, 40);
+
+  auto live = h.snap();
+  EXPECT_GE(live.selection_last_seen_age_ms, 0)
+      << "the person is on screen and the age field does not know it";
+  EXPECT_LE(live.selection_last_seen_age_ms, 100) << live.selection_last_seen_age_ms;
+
+  h.step(400);  // 2 s with no vision at all
+  auto later = h.snap();
+  EXPECT_GT(later.selection_last_seen_age_ms, 1500)
+      << "vision has been silent for two seconds and the selection still reports a "
+         "recent sighting";
+  // And a mode that is not steering from an estimate must not report an age for one.
+  h.run("set_mode", "MANUAL");
+  EXPECT_EQ(h.snap().prediction_age_ms, -1)
+      << "MANUAL published an estimate age inherited from the last AUTO_TRACK cycle; "
+         "a field that cannot answer and a field that answers zero look the same to a "
+         "dashboard";
+}
