@@ -124,7 +124,7 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
   // from drifting apart in silence — the failure mode that already bit this
   // project once, in the other direction, when a telemetry field the dashboard
   // asked for had never existed on the wire.
-  TelemetrySnapshot s = sample_snapshot();
+  telemetry::TelemetrySnapshot s = sample_snapshot();
   s.operating_mode = "AUTO_TRACK";
   s.supervisory_state = "READY";
   s.mode_phase = "COAST";
