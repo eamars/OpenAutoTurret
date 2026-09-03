@@ -128,6 +128,26 @@ aimed at while nothing is selected.** Behaviour change for the operator: clearin
 during a dropout stops the follow on the next cycle instead of the next frame. Frames are
 still never invented between detector frames (§58) — `just_reacquired` deliberately stays a
 detector-stream event, because a cycle with no frames cannot contain a new acquisition.
+
+`replay-session --config <turret.yaml>` now exists, and to write it honestly the
+config→station mapping (`make_control_cfg`, `make_homing_plan`) had to leave `main.cpp` for
+`control/src/config/station_wiring.{hpp,cpp}` — shared by controld and the tool. They were
+static functions in `main.cpp`, which left a replay with two bad options: duplicate the
+mapping and watch it drift, or replay against built-in defaults and produce a transcript
+everyone trusts about a station that never existed. Two `ctest` entries now run the same
+session twice, once against built-in defaults and once against the repo's `turret.yaml`:
+when those two ever disagree, somebody changed a commissioning value that changes what the
+operator may do, which is worth a failing test. Camera intrinsics/extrinsics are **not**
+read by the tool, so a replay is exact about the machine's limits and approximate about the
+camera; the tool's own header line states which replay you are looking at.
+
+Writing that test produced the third visit to the same trap, and this one was the worst:
+the band guard compared `confidence_medium_min >= confidence_high_min` while *both were
+absent*, `0.0 >= 0.0` is true, so a commissioning file that named `coast_ms` and left the
+bands alone was **refused at load — controld would not start**, and nothing in the file is
+wrong. Every optional key now has to be optional in the strong sense: naming it must not
+make its neighbours mandatory. `V3Config.NamingOneAutoTrackValueDoesNotDemandTheOthers`
+holds that, alongside the check that a genuinely inverted pair is still refused.
 Two habits those rounds changed here: an unset config field is never expressed as `0` (a
 draft wrote the ambiguity margin to 0.0 on every station that named nothing, which would
 have switched §21's no-target-steering off by default — caught by the event test, not by

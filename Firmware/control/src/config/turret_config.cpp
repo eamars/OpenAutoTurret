@@ -472,7 +472,13 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
         out.auto_track_reacquire_window_ms > 60000)
       err.push_back("v3.auto_track timings are outside any sane commissioning range; "
                     "check for a value typed in the wrong units (§20)");
-    if (out.auto_track_medium_min >= 0.0f && out.auto_track_high_min >= 0.0f &&
+    // Both floors must have been named before they can be compared. This guard used to
+    // read `medium_min >= 0.0f && high_min >= 0.0f`, which is true of two *absent* values
+    // (0.0 >= 0.0), so a commissioning file that named coast_ms and left the confidence
+    // bands alone was refused at load with "bands collapse into one" — controld would not
+    // start, and the file says nothing wrong. The trap is the one this project keeps
+    // falling into: a value that means "not set" also being a legal answer.
+    if (out.auto_track_medium_min > 0.0f && out.auto_track_high_min > 0.0f &&
         out.auto_track_medium_min >= out.auto_track_high_min)
       err.push_back("v3.auto_track: confidence_medium_min must be below "
                     "confidence_high_min, or every band collapses into one");

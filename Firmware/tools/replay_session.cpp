@@ -24,6 +24,8 @@
 #include "spdlog/spdlog.h"
 
 #include "calibration/homing_plan.hpp"
+#include "config/station_wiring.hpp"
+#include "config/turret_config.hpp"
 #include "control/control_loop.hpp"
 #include "control/session_replay.hpp"
 #include "sim/sim_motor_backend.hpp"
@@ -40,6 +42,17 @@ void usage() {
       "usage: replay-session [options] <session.txt>\n"
       "\n"
       "  --verbose         the loop's per-cycle motion and supervisor log on stderr\n"
+      "  --config PATH     build the station from a turret.yaml using controld's own\n"
+      "                    mapping (envelope, margins, roam region, §72 timings, homing\n"
+      "                    plan). Flags given after it still win, so a replay can ask\n"
+      "                    \"and what if the coast window were longer?\" against a real\n"
+      "                    station. Camera intrinsics/extrinsics are NOT read here: the\n"
+      "                    LOS geometry stays at controld's defaults (§28.2/§28.3 files\n"
+      "                    are loaded by the daemon), so the angles a replay produces are\n"
+      "                    right about the machine's limits and approximate about the\n"
+      "                    camera. For selection, loss and mode transitions that is the\n"
+      "                    whole question; for aiming accuracy it is not, and the header\n"
+      "                    says which replay this was.\n"
       "  --expect SUBSTR   fail (exit 4) unless SUBSTR appears in the transcript.\n"
       "                    Repeatable. This is how the tool is used from a test.\n"
       "  --coast-ms N      §20 coast window          --lost-hold-ms N   hold window\n"
@@ -67,6 +80,7 @@ struct Options {
 
 int main(int argc, char** argv) {
   Options o;
+  std::string config_path;
   bool verbose = false;
   spdlog::set_level(spdlog::level::warn);  // see --verbose
   o.cfg.control_hz = 200;
@@ -95,6 +109,8 @@ int main(int argc, char** argv) {
     } else if (a == "--help" || a == "-h") {
       usage();
       return 0;
+    } else if (a == "--config") {
+      config_path = next("--config");
     } else if (a == "--expect") {
       o.expect.emplace_back(next("--expect"));
     } else if (a == "--coast-ms") {
@@ -129,6 +145,26 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // --config: replay the station that file describes, through the same mapping controld
+  // uses. That is not a code-sharing nicety. Every value below — the soft margins the
+  // envelope is cut from, the roam region, the coast and hold windows, who is allowed to be
+  // selected at all — decides which refusals appear in the transcript. A replay built from
+  // a copy of that mapping would eventually disagree with the daemon, and the transcript
+  // would be evidence about a machine that does not exist.
+  std::unique_ptr<config::TurretConfig> tc;
+  if (!config_path.empty()) {
+    config::LoadResult lr = config::load_turret_config(config_path);
+    for (const auto& e : lr.errors) std::cerr << "replay-session: " << e << "\n";
+    if (!lr.ok) {
+      std::cerr << "replay-session: refusing to replay against a configuration controld "
+                   "would not start with: " << config_path << "\n";
+      return 2;
+    }
+    tc.reset(new config::TurretConfig(lr.config));
+    o.cfg = wire::make_control_cfg(*tc);  // then the flags below, so a flag can still ask
+                                         // "and what if the coast were longer?"
+  }
+
   std::ifstream f(o.path);
   if (!f.is_open()) {
     std::cerr << "replay-session: cannot open " << o.path << "\n";
@@ -156,20 +192,52 @@ int main(int argc, char** argv) {
   sim->set_position(AxisId::Yaw, -0.3);
   ControlLoop loop(o.cfg, std::move(backend));
 
-  HomingPlanConfig hcfg;
-  HomingParams hp;
-  hp.coarse_speed_rad_s = 20.0 * kDeg2Rad;
-  hp.fine_speed_rad_s = 2.0 * kDeg2Rad;
-  hp.settle_time_s = 0.3;
-  hcfg.homing = hp;
-  hcfg.travel_bands[0] = TravelBand{0.0, 115.0};
-  hcfg.travel_bands[1] = TravelBand{0.0, 115.0};
-  std::vector<HomingAction> actions;
-  actions.push_back(
-      HomingAction{.type = HomingActionType::HomeFullRange, .axis = AxisId::Pitch});
-  actions.push_back(
-      HomingAction{.type = HomingActionType::HomeFullRange, .axis = AxisId::Yaw});
-  HomingPlan plan(std::move(actions), hcfg);
+  // Where the homing plan comes from: the file, or the built-in full-range default. One
+  // if/else rather than an early exit, so there is one plan and one place that starts
+  // homing — the version with a `goto` in it worked and read like a bug.
+  HomingPlan plan({}, HomingPlanConfig{});
+  if (tc) {
+    std::string perr;
+    plan = wire::make_homing_plan(*tc, perr);
+    if (!perr.empty()) {
+      std::cerr << "replay-session: " << perr << "\n";
+      return 3;
+    }
+    // The simulated end stops move to the travel the file expects, because that is the
+    // only range the file knows about. Homing then *measures* its limits against them and
+    // the envelope is derived from the measurement, exactly as on metal: the stops are the
+    // plant, not the envelope, and this tool never tells the loop where its soft limits
+    // are. If it did, the replay would be assuming the thing worth checking.
+    const double lo0 = tc->axes[0].expected_travel_deg.min * kDeg2Rad;
+    const double hi0 = tc->axes[0].expected_travel_deg.max * kDeg2Rad;
+    const double lo1 = tc->axes[1].expected_travel_deg.min * kDeg2Rad;
+    const double hi1 = tc->axes[1].expected_travel_deg.max * kDeg2Rad;
+    sim->set_stops(AxisId::Pitch, lo0, hi0);
+    sim->set_stops(AxisId::Yaw, lo1, hi1);
+    sim->set_position(AxisId::Pitch, 0.5 * (lo0 + hi0));
+    sim->set_position(AxisId::Yaw, 0.5 * (lo1 + hi1));
+    std::fprintf(stderr,
+                 "replay-session: simulated stops from %s — pitch [%.2f, %.2f] deg, yaw "
+                 "[%.2f, %.2f] deg\n",
+                 config_path.c_str(), tc->axes[0].expected_travel_deg.min,
+                 tc->axes[0].expected_travel_deg.max, tc->axes[1].expected_travel_deg.min,
+                 tc->axes[1].expected_travel_deg.max);
+  } else {
+    HomingPlanConfig hcfg;
+    HomingParams hp;
+    hp.coarse_speed_rad_s = 20.0 * kDeg2Rad;
+    hp.fine_speed_rad_s = 2.0 * kDeg2Rad;
+    hp.settle_time_s = 0.3;
+    hcfg.homing = hp;
+    hcfg.travel_bands[0] = TravelBand{0.0, 115.0};
+    hcfg.travel_bands[1] = TravelBand{0.0, 115.0};
+    std::vector<HomingAction> actions;
+    actions.push_back(
+        HomingAction{.type = HomingActionType::HomeFullRange, .axis = AxisId::Pitch});
+    actions.push_back(
+        HomingAction{.type = HomingActionType::HomeFullRange, .axis = AxisId::Yaw});
+    plan = HomingPlan(std::move(actions), hcfg);
+  }
 
   std::string herr;
   if (!loop.start_homing(plan, herr)) {
@@ -192,9 +260,13 @@ int main(int argc, char** argv) {
 
   std::printf("# replay-session %s: %zu frames, %zu operator actions\n", o.path.c_str(),
               script.frames.size(), script.events.size());
-  std::printf("# station under replay: simulated plant, homed by %s; timings from options "
-              "or built-in defaults, NOT from turret.yaml\n",
-              "the ordinary homing plan");
+  std::printf("# station under replay: simulated plant, homed by the ordinary homing "
+              "plan; %s\n",
+              config_path.empty()
+                  ? "timings from options and built-in defaults (no --config: this is NOT "
+                    "any real station)"
+                  : (std::string("configuration ") + config_path +
+                     ", mapped by controld's own wiring").c_str());
   std::printf(
       "# coast=%lldms lost_hold=%lldms reacquire=%lldms high_min=%.2f threshold=%.2f "
       "margin=%.2f lease=%dms steps=%zu\n",

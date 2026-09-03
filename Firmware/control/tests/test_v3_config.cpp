@@ -6,6 +6,9 @@
 #include <string>
 
 #include "config/turret_config.hpp"
+#include "config/station_wiring.hpp"
+
+using namespace ota::wire;  // the mapping under test
 #include "gtest/gtest.h"
 
 namespace ota {
@@ -117,6 +120,95 @@ TEST(V3Config, ALeaseThatCannotHoldThreeRenewalsIsRefused) {
   EXPECT_TRUE(any_error_contains(r, "renew")) << "no complaint about the lease ratio";
 }
 
+
+
+
+// --- §58/§72 through controld's own wiring.
+//
+// These mappings used to be static functions in main.cpp, which left them with no test and
+// the replay tool with nothing to call. Testing them here is the point of the move: the
+// daemon and the tool cannot disagree about what a configuration file means, because there
+// is one function that means it, and this is the one place that can say what it returns.
+TEST(StationWiring, NamedValuesReachTheControlLoopConfig) {
+  TempYaml y(R"(v3:
+  auto_roam:
+    yaw_min_deg: 100.0
+    yaw_max_deg: 190.0
+    pitch_deg: -20.0
+    velocity_deg_s: 8.0
+  auto_track:
+    coast_ms: 700
+    reacquire_threshold: 0.70
+    ambiguous_match_margin: 0.25
+  manual:
+    jog_lease_timeout_ms: 500
+    jog_keepalive_ms: 100
+    step_sizes_deg: [1.0]
+)");
+  auto r = config::load_turret_config(y.path);
+  // Not r.ok: the fixture is one section deep on purpose, and `can` being absent is a
+  // complaint about the fixture, not about the mapping. What these tests depend on is that
+  // the v3 block parsed cleanly, which is what the next line checks.
+  std::string all;
+  for (const auto& e : r.errors) all += "\n  - " + e;
+  EXPECT_FALSE(any_error_contains(r, "v3")) << "errors:" << all;
+
+  const ControlLoop::Config c = wire::make_control_cfg(r.config);
+  EXPECT_TRUE(c.roam_region_named);
+  EXPECT_DOUBLE_EQ(c.roam_yaw_min_deg, 100.0);
+  EXPECT_DOUBLE_EQ(c.roam_yaw_max_deg, 190.0);
+  EXPECT_TRUE(c.roam_pitch_named);
+  EXPECT_EQ(c.auto_track_coast_ms, 700);
+  EXPECT_FLOAT_EQ(c.reacquire_threshold, 0.70f);
+  EXPECT_FLOAT_EQ(c.ambiguous_match_margin, 0.25f);
+  EXPECT_EQ(c.manual_lease_ms, 500);
+  ASSERT_EQ(c.step_sizes_deg.size(), 1u);
+  EXPECT_DOUBLE_EQ(c.step_sizes_deg[0], 1.0);
+}
+
+TEST(V3Config, NamingOneAutoTrackValueDoesNotDemandTheOthers) {
+  // The bug this catches refused the file at load: the band comparison below ran on two
+  // *absent* floors, found 0.0 >= 0.0, and told the operator the bands collapse — so adding
+  // coast_ms to a station's file stopped controld starting. Every optional key has to be
+  // optional in that strong sense: naming it must not make its neighbours mandatory.
+  TempYaml y(R"(v3:
+  auto_track:
+    coast_ms: 700
+)");
+  auto r = config::load_turret_config(y.path);
+  std::string all;
+  for (const auto& e : r.errors) all += "\n  - " + e;
+  EXPECT_FALSE(any_error_contains(r, "v3")) << "naming coast_ms alone produced:" << all;
+  EXPECT_EQ(r.config.v3.auto_track_coast_ms, 700);
+  EXPECT_FLOAT_EQ(r.config.v3.auto_track_medium_min, 0.0f)
+      << "an absent floor must stay 0 = not named, not become a number";
+  // And the guard still guards, when both floors are actually named.
+  TempYaml bad(R"(v3:
+  auto_track:
+    confidence_medium_min: 0.80
+    confidence_high_min: 0.50
+)");
+  EXPECT_TRUE(any_error_contains(config::load_turret_config(bad.path), "confidence_medium_min"));
+}
+
+TEST(StationWiring, AFileThatNamesNothingLeavesTheLoopDeriving) {
+  // The other half of §72, and the half a mapping function is usually written wrong: an
+  // absent key must arrive as "not named" (false / zero / empty), never as a plausible
+  // number. A mapping that defaulted `roam_pitch_deg` to 0.0 with `roam_pitch_named` true
+  // would put every sweep at a pitch of exactly zero degrees — a value that looks like a
+  // commissioning decision and is really the absence of one.
+  TempYaml y("control_loop_hz: 200\n");
+  auto r = config::load_turret_config(y.path);
+  EXPECT_FALSE(any_error_contains(r, "v3"));
+
+  const ControlLoop::Config c = wire::make_control_cfg(r.config);
+  EXPECT_FALSE(c.roam_region_named);
+  EXPECT_FALSE(c.roam_pitch_named);
+  EXPECT_DOUBLE_EQ(c.roam_pitch_deg, 0.0);
+  EXPECT_EQ(c.auto_track_coast_ms, 0);
+  EXPECT_FLOAT_EQ(c.ambiguous_match_margin, 0.0f);
+  EXPECT_TRUE(c.step_sizes_deg.empty());
+}
+
 }  // namespace
 }  // namespace ota
-

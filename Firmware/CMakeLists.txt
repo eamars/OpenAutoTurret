@@ -38,6 +38,16 @@ target_link_libraries(turret-payload PRIVATE ota_core)
 # else: a tool that no one runs is a tool that broke three months ago.
 add_executable(replay-session tools/replay_session.cpp)
 target_link_libraries(replay-session PRIVATE ota_core)
+# The same session against the station's own configuration file. Two entries, not one
+# parametrised loop, because the interesting difference between them is the station: if the
+# YAML-driven run ever stops agreeing with the default one, somebody changed a commissioning
+# value that changes what the operator may do — which is worth a failing test.
+add_test(NAME replay_session_station_config
+         COMMAND replay-session
+                 --config ${CMAKE_CURRENT_SOURCE_DIR}/config/turret.yaml
+                 --expect "phase=TRACKING sel=1"
+                 --expect "phase=WAIT_TARGET sel=0 intent=hold"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/example_sessions/select_and_lose.txt)
 add_test(NAME replay_session_cli
          COMMAND replay-session
                  --expect "phase=TRACKING sel=1"
