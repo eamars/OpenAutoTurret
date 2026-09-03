@@ -452,3 +452,35 @@ the horizon used (small, no behaviour change), re-run the same S3 dart, and only
 a too-short horizon, a rate estimate that `beta = 0.3` smoothing has flattened, and the 19-of-30
 deg/s rate ceiling. Tuning lead that cannot be observed would be another number invented to end a
 conversation.
+
+## 2026-09-04, 05:0x — the new telemetry is live, and it reported something I did not expect
+
+`prediction_horizon_ms = 0` on a ready station.
+
+Everything else from the new field set arrived (`camera_intrinsics`, `target_aim_valid`,
+`prediction_horizon_ms`, `target_az_rate_world_rad_s` all present in `/api/state`), so the fill path
+runs and the readout is not the problem. The number it reports is zero.
+
+What makes this worth a page rather than a shrug: the code default is 20 ms + 20 ms, the loader
+default is 20/20, `config/turret.yaml` sets neither key, and the handover in `make_tracking_cfg` is
+`control_delay_ms * 1000000` at function scope - so a 40 ms horizon is what the source says. If the
+runtime value really is zero, then `predicted_los_at_actuation` predicts "now", and **the absent lead
+that S3 measured is explained by construction rather than by tuning**: no horizon, no lead, no
+amount of gain work would have changed it. That is also exactly the kind of defect that survives
+review, because every individual piece looks right.
+
+Two hypotheses remain, and the discriminator is small: either the config the controller is built
+with is not the one `make_tracking_cfg` returns, or `prediction_horizon_ns()` is reading a different
+`cfg_` than the one populated. The next round should log the horizon at startup - one line, next to
+the existing "tracking aim point: head, 22% below the top of the target box" line - and let the
+station say which it is. I am not changing a control-law number on the strength of an inference.
+
+Process notes from this round, both mine, both worth keeping:
+
+- A `git commit -q -F - <<'MSG'` followed by more shell commands in the same invocation swallowed
+  those commands into the commit message: `7e5e0f6` was born with a Python script as its subject.
+  Unpushed, so it is now `a8683fc` with the intended message. Nested heredocs in one command are a
+  trap; message files are not.
+- `ctest` reported 55/55 PASS while the build had failed, because I grepped the summary without
+  grepping the build for `error:`. It happened twice today. The suite is not evidence about a binary
+  that did not link.
