@@ -1724,3 +1724,11 @@ no-data case) before any motor ran, and it printed in the real log. **437 pytest
 control code touched, **57 CTest** stand. Station homed, back to MANUAL/HOLD, `visiond` left stopped so the
 probe had sole ownership of the vision input — **restart it before trusting any vision-dependent evidence**.
 **§110: 0 items accepted on hardware by a named person. C2 and C3 remain FAIL, now with a decomposition.**
+
+**Addendum, minutes later:** the line above says `visiond` was left stopped — that was true when written, and it
+is no longer the state of the station. The synthetic source was restarted after the commit and verified live
+(`camera.fps` 30, TrackSets climbing, station MANUAL). Recorded as an addendum rather than edited into the
+entry, because the entry described the state at the time it was written and the fix for a statement that stops
+being true is a new dated statement, not a quiet correction. The rule from round 17 is unchanged: after any
+controld restart, restart the vision source and check `vision_track_sets` before trusting anything that
+depends on vision.
