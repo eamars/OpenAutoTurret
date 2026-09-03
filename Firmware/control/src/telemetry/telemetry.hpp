@@ -211,6 +211,20 @@ struct TelemetrySnapshot {
   int64_t prediction_horizon_ms = 0;
   double target_az_rate_world_rad_s = 0.0;
   double target_el_rate_world_rad_s = 0.0;
+
+  // The REFERENCE profile's own rate and acceleration, derived from successive published
+  // references. This exists because requirement (b) asks whether following is SMOOTH, and the
+  // v/a/j fields already in the motion log are derived from motor feedback: differencing noisy
+  // feedback velocities produced a peak "jerk" of 665 deg/s^3 on an axis whose configured jerk
+  // limit is 300, on a run where the axis barely moved. That number cannot support or refute a
+  // smoothness claim either way. What matters for smoothness is the trajectory the controller
+  // ASKED FOR, and nothing published it. Derived here with the same timestamps the pairs came in
+  // on, and labelled as derived rather than as a measured motor quantity.
+  double q_ref_rate_yaw_rad_s = 0.0;
+  double q_ref_rate_pitch_rad_s = 0.0;
+  double q_ref_accel_yaw_rad_s2 = 0.0;
+  double q_ref_accel_pitch_rad_s2 = 0.0;
+  bool q_ref_rate_valid = false;
   // v3 §61: publisher generation, the two latency intervals, and which candidate is
   // being followed. Ages are -1 for "never", never 0 — same rule as the CAN family.
   uint64_t vision_track_sets = 0;

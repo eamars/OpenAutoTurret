@@ -177,9 +177,9 @@ class Telemetry:
     # principal point would quietly move the thing the acceptance rule is judged by.
     # effective_*_deg of 0.0 means NOT MEASURED, not "no field of view".
     camera_intrinsics: Dict[str, Any] = field(default_factory=dict)
-    effective_hfov_deg: float = 0.0
-    effective_vfov_deg: float = 0.0
-    camera_fps: float = 0.0
+    effective_hfov_deg: Optional[float] = None
+    effective_vfov_deg: Optional[float] = None
+    camera_fps: Optional[float] = None
     # Where inside the selected target the axis is aimed. NOT the same as aim_point_*, which is
     # where the axis currently points; this is the point inside the target the controller is trying
     # to put on it. The acceptance rule is the distance between the two, so the HUD needs both.
@@ -190,12 +190,19 @@ class Telemetry:
     # The direction the AUTO_TRACK intent is built from, its horizon, and the rates that give it
     # value. Without these, lead cannot be measured: q_ref is post-slew-limiter, so it cannot tell
     # "no lead requested" from "lead requested and the reference could not slew" - opposite fixes.
-    predicted_target_az_world_rad: float = 0.0
-    predicted_target_el_world_rad: float = 0.0
+    predicted_target_az_world_rad: Optional[float] = None
+    predicted_target_el_world_rad: Optional[float] = None
     predicted_target_los_valid: bool = False
-    prediction_horizon_ms: int = 0
-    target_az_rate_world_rad_s: float = 0.0
-    target_el_rate_world_rad_s: float = 0.0
+    prediction_horizon_ms: Optional[int] = None
+    target_az_rate_world_rad_s: Optional[float] = None
+    target_el_rate_world_rad_s: Optional[float] = None
+    # The reference profile's own rate/accel: what "smooth" has to be judged on. The motion log's
+    # v/a/j come from motor feedback and are too noisy to prove anything about the profile.
+    q_ref_rate_yaw_rad_s: Optional[float] = None
+    q_ref_rate_pitch_rad_s: Optional[float] = None
+    q_ref_accel_yaw_rad_s2: Optional[float] = None
+    q_ref_accel_pitch_rad_s2: Optional[float] = None
+    q_ref_rate_valid: bool = False
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

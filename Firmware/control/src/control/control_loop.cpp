@@ -4,6 +4,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 
@@ -1116,6 +1117,43 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.effort_pitch = sp[ix(AxisId::Pitch)].torque_nm;
     snap.q_ref_yaw_rad = q_ref[ix(AxisId::Yaw)];
     snap.q_ref_pitch_rad = q_ref[ix(AxisId::Pitch)];
+    {
+      // Rate and acceleration OF THE REFERENCE, from successive cycles. Steady-clock wall time is
+      // used deliberately: what is wanted is how fast the commanded trajectory moves in real time,
+      // whatever cadence this fill happens to run at. Gaps (a paused loop, a first cycle) leave the
+      // previous estimate alone rather than inventing a spike, and the smoothing is only for
+      // readability - the reference itself is already continuous by construction.
+      const int64_t now_ref = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      const double qy_ref = q_ref[ix(AxisId::Yaw)];
+      const double qp_ref = q_ref[ix(AxisId::Pitch)];
+      const double dt = static_cast<double>(now_ref - ref_prev_ns_) * 1.0e-9;
+      if (!ref_rate_init_) {
+        ref_prev_q_yaw_ = qy_ref;
+        ref_prev_q_pitch_ = qp_ref;
+        ref_rate_init_ = true;
+      } else if (dt > 0.001 && dt < 0.5) {
+        const double k = 0.25;
+        const double vy = (qy_ref - ref_prev_q_yaw_) / dt;
+        const double vp = (qp_ref - ref_prev_q_pitch_) / dt;
+        ref_rate_yaw_ += k * (vy - ref_rate_yaw_);
+        ref_rate_pitch_ += k * (vp - ref_rate_pitch_);
+        const double ay = (ref_rate_yaw_ - ref_prev_rate_yaw_) / dt;
+        const double ap = (ref_rate_pitch_ - ref_prev_rate_pitch_) / dt;
+        ref_accel_yaw_ += k * (ay - ref_accel_yaw_);
+        ref_accel_pitch_ += k * (ap - ref_accel_pitch_);
+        ref_prev_rate_yaw_ = ref_rate_yaw_;
+        ref_prev_rate_pitch_ = ref_rate_pitch_;
+        ref_prev_q_yaw_ = qy_ref;
+        ref_prev_q_pitch_ = qp_ref;
+        snap.q_ref_rate_yaw_rad_s = ref_rate_yaw_;
+        snap.q_ref_rate_pitch_rad_s = ref_rate_pitch_;
+        snap.q_ref_accel_yaw_rad_s2 = ref_accel_yaw_;
+        snap.q_ref_accel_pitch_rad_s2 = ref_accel_pitch_;
+        snap.q_ref_rate_valid = true;
+      }
+      ref_prev_ns_ = now_ref;
+    }
     snap.track_state = tracking_ ? tracking_->track_state()
                                  : tracking::TrackState::ReadyHold;
     snap.target_confidence = tracking_ ? tracking_->confidence() : 0.0;

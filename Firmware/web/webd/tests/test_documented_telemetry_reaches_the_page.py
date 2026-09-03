@@ -86,6 +86,18 @@ def M(name, why, page=True, wire=None, proto=True, snap=None):  # noqa: N802 - t
 
 
 MAPPED = {
+    # §78's predicted LOS. Implemented as a set, because one number cannot express it: az and el
+    # of the direction the AUTO_TRACK intent is actually built from, a validity flag, and the
+    # horizon it is worth (`prediction_horizon_ms`) - lead is rate x horizon, and without the
+    # horizon the prediction is a number with no units of comparison. page=False is deliberate:
+    # the HUD cue that would draw it (§10) is not built, so today the reader is the dart probe.
+    # What it is NOT: it is not a promise about the future, and it is not the aim point.
+    ("AUTO_TRACK", "predicted los"): M(
+        "predicted_target_az_world_rad",
+        "predicted LOS at actuation (estimator state advanced by control delay + motor response); "
+        "published with predicted_target_el_world_rad, predicted_target_los_valid, and "
+        "prediction_horizon_ms so the lead it represents can be checked rather than assumed",
+        page=False),
     ("operating_mode", "MANUAL | AUTO_TRACK | AUTO_ROAM"): M(
         "operating_mode", "the three-mode label itself"),
     ("mode_phase", "..."): M(
@@ -165,12 +177,6 @@ MAPPED.update({
 # cannot keep yet; the reason says why, and closing one should break this test rather than pass it
 # quietly — that is the only mechanism by which a known hole stays known.
 ABSENT = {
-    ("AUTO_TRACK", "predicted los"): (
-        "predicted",
-        "§78 asks for the predicted LOS beside the measured one. The estimator holds it "
-        "internally and the loop uses it to project the aim point, but nothing publishes an "
-        "az/el for it, so asking 'where did it think the target would be' still means reading a "
-        "capture."),
     ("AUTO_ROAM", "boundary margin"): (
         "roam_boundary_margin",
         "§78 asks how far inside the roam region's edge the sweep is running. The planner knows "

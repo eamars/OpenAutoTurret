@@ -483,6 +483,17 @@ class ControlLoop {
   // Commissioned tracking configuration (from turret.yaml + the calibration
   // files). Used by the `start_tracking` command and the auto-enable path.
   TrackingController::Config tracking_cfg_;
+  // Last published reference, to derive its rate and acceleration (see telemetry fields).
+  double ref_prev_q_yaw_ = 0.0;
+  double ref_prev_q_pitch_ = 0.0;
+  double ref_rate_yaw_ = 0.0;
+  double ref_rate_pitch_ = 0.0;
+  double ref_prev_rate_yaw_ = 0.0;
+  double ref_prev_rate_pitch_ = 0.0;
+  double ref_accel_yaw_ = 0.0;
+  double ref_accel_pitch_ = 0.0;
+  int64_t ref_prev_ns_ = 0;
+  bool ref_rate_init_ = false;
   std::optional<bool> search_override_;  // enable_search / disable_search
   // v3 §53: converts the authoritative mode's intent into a joint reference.
   // Built from the commissioned kinematics when a tracking session is configured
