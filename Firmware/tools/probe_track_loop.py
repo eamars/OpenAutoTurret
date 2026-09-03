@@ -245,13 +245,44 @@ class Publisher:
             pass
 
 
+_near_hist = {}
+
+
 def guard_or_abort(s: dict, why: str = "") -> bool:
-    """Stop the run if the axis approaches a soft limit or anything looks wrong."""
-    for q, lo, hi, nm in ((s["q_yaw_rad"], s["q_soft_min_yaw_rad"], s["q_soft_max_yaw_rad"], "yaw"),
-                          (s["q_pitch_rad"], s["q_soft_min_pitch_rad"], s["q_soft_max_pitch_rad"], "pitch")):
-        if q <= lo + SOFT_MARGIN_RAD or q >= hi - SOFT_MARGIN_RAD:
-            print("  SAFETY: %s %.3f rad at/near its soft limit [%s, %s] %s" % (nm, q, lo, hi, why))
+    """Stop the run when an axis is being DRIVEN THROUGH a soft limit.
+
+    Two versions of this got it wrong, and both wrongs are worth recording. The first aborted on
+    proximity: this station's homed pitch rests about 11 deg from its lower soft limit, so every
+    scenario was refused before it began. The second added the velocity sign, and a holding axis
+    ripples by +-0.2 rad/s, so it aborted anyway on feedback noise ("driven into its soft limit",
+    when 3 s of sampling showed 0.02 deg of drift).
+
+    What is actually dangerous is an axis near a limit that keeps MOVING FURTHER OUT, measured where
+    measurement is reliable - on position, over a window. Sitting near a limit is this station's
+    working life; crossing it is the hazard.
+    """
+    for key, q, lo, hi, nm in (
+            ("yaw", s["q_yaw_rad"], s["q_soft_min_yaw_rad"], s["q_soft_max_yaw_rad"], "yaw"),
+            ("pitch", s["q_pitch_rad"], s["q_soft_min_pitch_rad"], s["q_soft_max_pitch_rad"], "pitch")):
+        if not (isinstance(q, float) and isinstance(lo, float) and isinstance(hi, float)):
+            continue
+        near_lo, near_hi = q <= lo + SOFT_MARGIN_RAD, q >= hi - SOFT_MARGIN_RAD
+        now = time.monotonic()
+        hist = [x for x in _near_hist.get(key, []) if now - x[0] <= 1.0]
+        hist.append((now, q))
+        _near_hist[key] = hist
+        if not (near_lo or near_hi):
+            continue
+        # How far has it travelled in the outward direction inside the window?
+        outward = (min(x[1] for x in hist) - q) if near_lo else (q - max(x[1] for x in hist))
+        room = min(q - lo, hi - q)
+        if outward > max(0.01, room):        # 0.6 deg, or all the room that is left
+            print("  SAFETY: %s has moved %.3f rad OUTWARD while %.3f rad from its soft limit "
+                  "[%s, %s]%s - stopping" % (nm, outward, room, lo, hi, (" " + why) if why else ""))
             return True
+        if outward > 0.002:
+            print("  note: %s creeping outward near its soft limit (%.3f rad in 1 s, %.3f left)"
+                  % (nm, outward, room))
     return False
 
 
@@ -290,6 +321,71 @@ def cmd_az_el_for_roundtrip(pub: Publisher) -> None:
     print("  (a persistent daz is the yaw-zero convention of homing, not an error in either side)")
 
 
+def ensure_yaw_centred(s):
+    """Walk yaw back toward the middle of its travel before a scenario that needs room to follow.
+
+    A previous run can leave the axis parked against its soft limit; the guard then stops a new
+    scenario at t=0 and the criteria end up scoring an empty run. That happened, and the scenario
+    reported PASS. Doing this in one place keeps S2 and S3 from each inventing their own version.
+    """
+    lo, hi = s.get("q_soft_min_yaw_rad"), s.get("q_soft_max_yaw_rad")
+    if not (isinstance(lo, float) and isinstance(hi, float) and hi > lo):
+        return s
+    mid = 0.5 * (lo + hi)
+    if abs(s["q_yaw_rad"] - mid) <= 0.2 * (hi - lo):
+        return s
+    if s.get("operating_mode") != "MANUAL":
+        command("set_mode", "MANUAL")
+        time.sleep(0.5)
+    print("  walking yaw toward mid-travel before starting...")
+    for _ in range(80):
+        s = state()
+        qy = s["q_yaw_rad"]
+        if abs(qy - mid) <= 0.15 * (hi - lo):
+            break
+        step = max(-5.0, min(5.0, math.degrees(mid - qy)))
+        command("manual_step", "yaw%+.2f" % step)
+        time.sleep(1.0)
+    print("  yaw now %.3f rad (travel %.3f..%.3f)" % (s["q_yaw_rad"], lo, hi))
+    return wait_settled(s)
+
+
+def wait_settled(s, timeout_s: float = 30.0, tol_rad: float = 5.0e-4, window_s: float = 0.5):
+    """Wait until the pose is genuinely not moving, and hand back that state.
+
+    Every scenario derives its world target from the CURRENT pose, so a pose that is travelling makes
+    the target a fiction. The first version of this tested velocity against a threshold, and it never
+    closed - not because the axes were moving, but because this station's velocity feedback ripples
+    by +-0.2 rad/s on an axis that is demonstrably holding (measured: 0.022 deg of yaw drift over
+    3 s). An instantaneous velocity sample on a holding axis is noise, not motion. So stability is
+    judged on POSITION, which is the thing the geometry actually depends on: the tolerance below is
+    0.03 deg, which is under one pixel of image travel.
+    """
+    deadline = time.monotonic() + timeout_s
+    seen = []
+    announced = False
+    while time.monotonic() < deadline:
+        s = state()
+        qy, qp = s.get("q_yaw_rad"), s.get("q_pitch_rad")
+        if not (isinstance(qy, float) and isinstance(qp, float)):
+            return s
+        now = time.monotonic()
+        seen.append((now, qy, qp))
+        seen = [x for x in seen if now - x[0] <= window_s]
+        if len(seen) >= 4:
+            span_y = max(x[1] for x in seen) - min(x[1] for x in seen)
+            span_p = max(x[2] for x in seen) - min(x[2] for x in seen)
+            if span_y < tol_rad and span_p < tol_rad:
+                return s
+        if not announced and now > deadline - timeout_s + 3.0:
+            print("  waiting for the pose to settle (yaw span %.4f, pitch span %.4f rad over %.1fs)"
+                  % (span_y, span_p, window_s))
+            announced = True
+        time.sleep(0.05)
+    print("  pose still moving after %.0f s - proceeding anyway, and the result is suspect" % timeout_s)
+    return s
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario", choices=["roundtrip", "s1", "s2", "s3"])
@@ -297,6 +393,14 @@ def main() -> int:
     ap.add_argument("--offset-deg", type=float, default=12.0)
     ap.add_argument("--sweep-sign", dest="sweep_sign", default="", help=""
                     "S2: force +1 or -1 instead of choosing from the remaining travel")
+    ap.add_argument("--dart-deg", dest="dart_deg", type=float, default=25.0,
+                   help="S3: azimuth step of the dart (deg)")
+    ap.add_argument("--dart-ramp-s", dest="dart_ramp_s", type=float, default=0.40,
+                   help="S3: time the dart is completed over (s)")
+    ap.add_argument("--hold-s", dest="hold_s", type=float, default=3.0,
+                   help="S3: how long the target holds still after the dart (s)")
+    ap.add_argument("--max-recovery-s", dest="max_recovery_s", type=float, default=1.50,
+                   help="S3: how long the axis may take to get back inside tolerance (s)")
     ap.add_argument("--rate-deg-s", dest="rate_deg_s", type=float, default=8.0,
                    help="S2: constant world-azimuth rate of the moving target (deg/s)")
     ap.add_argument("--seconds", type=float, default=14.0)
@@ -388,21 +492,7 @@ def main() -> int:
         # middle of the travel first, in MANUAL, one small step at a time.
         s = state()
         lo, hi = s.get("q_soft_min_yaw_rad"), s.get("q_soft_max_yaw_rad")
-        if isinstance(lo, float) and isinstance(hi, float) and hi > lo:
-            mid = 0.5 * (lo + hi)
-            if abs(s["q_yaw_rad"] - mid) > 0.2 * (hi - lo):
-                if s.get("operating_mode") != "MANUAL":
-                    command("set_mode", "MANUAL"); time.sleep(0.5)
-                print("  walking yaw toward mid-travel before starting...")
-                for _ in range(80):
-                    s = state()
-                    qy = s["q_yaw_rad"]
-                    if abs(qy - mid) <= 0.15 * (hi - lo):
-                        break
-                    step = max(-5.0, min(5.0, math.degrees(mid - qy)))
-                    command("manual_step", "yaw%+.2f" % step)
-                    time.sleep(1.0)
-                print("  yaw now %.3f rad (travel %.3f..%.3f)" % (s["q_yaw_rad"], lo, hi))
+        s = ensure_yaw_centred(s)
         print("\nS2 criteria, fixed before running:")
         print("  C1 containment   : the target never leaves the frame while the axis follows")
         print("  C2 following     : aim-to-reticle <= 1/3 box height (%.0f px) for >=95%% of samples"
@@ -547,8 +637,152 @@ def main() -> int:
         command("set_mode", "MANUAL")
         return 0 if (c1 and c2 and tracking_frac >= 0.8) else 1
 
+    # ---- S3: a dart, and whether the aim gets ahead of it --------------------------------------
+    #
+    # Requirement (b) is not "follows a slow target". It is that the aim LEADS sharp movement by
+    # projection, so the target does not leave the frame before the axis catches up. A constant-rate
+    # sweep cannot speak to that: at 8 deg/s the axis simply keeps up, and the predictor never has to
+    # earn its place. So this scenario moves the target fast and asks three separate questions - did
+    # it stay in frame, did the axis come back inside tolerance, and was the reference actually AHEAD
+    # of where the target really was while the dart was happening.
+    if args.scenario == "s3":
+        D = args.dart_deg
+        ramp = args.dart_ramp_s
+        px_per_deg = 24.2                     # measured by tools/probe_theodolite.py: 24.22 px/deg
+        print("\nS3 criteria, fixed before running:")
+        print("  C1 containment   : target never leaves the frame through the dart")
+        print("  C2 recovery      : aim-to-reticle back within 1/3 box height (%.0f px) and held,"
+              % (BOX_H_NORM * FH / 3.0))
+        print("                     no more than %.2f s after the dart starts" % args.max_recovery_s)
+        print("  C3 lead          : during the dart the REFERENCE (q_ref) must sit ahead of the")
+        print("                     target's true position, in the direction of travel")
+        print("  C4 no ringing    : aim error changes sign <= 2 times after arrival")
+        print("  motion           : %.1f deg of azimuth in %.2f s (%.0f deg/s), then hold %.1f s"
+              % (D, ramp, D / ramp, args.hold_s))
+        if D * px_per_deg > 850.0:
+            print("  dart too large: %.0f px of travel would leave the frame whatever the controller"
+                  " does; pick a smaller --dart-deg" % (D * px_per_deg))
+            pub.close()
+            return 2
+
+        s = ensure_yaw_centred(state())
+        s = wait_settled(s)
+        az0, el0 = base_to_los(axis_direction(s["q_yaw_rad"], s["q_pitch_rad"]))
+        box_h_px = BOX_H_NORM * FH
+        tol_px = box_h_px / 3.0
+        if not pub.publish(az0, el0):
+            pub.close()
+            return 1
+        time.sleep(0.5)
+        s = state()
+        seq0 = s.get("cmd_ack_seq", 0)
+        command("select_target", "1")
+        wait_ack(seq0)
+        s = state()
+        if not s.get("selected_uuid_valid"):
+            print("  selection refused: %r" % (s.get("cmd_ack_reason"),))
+            pub.close()
+            return 1
+        seq0 = s.get("cmd_ack_seq", 0)
+        command("set_mode", "AUTO_TRACK")
+        wait_ack(seq0)
+
+        rows = []
+        t0 = time.monotonic()
+        total = 1.5 + ramp + args.hold_s
+        while time.monotonic() - t0 < total:
+            t = time.monotonic() - t0
+            if t < 1.5:
+                phase, az_t = "settle", az0
+            elif t < 1.5 + ramp:
+                phase, az_t = "dart", az0 + math.radians(D) * ((t - 1.5) / ramp)
+            else:
+                phase, az_t = "hold", az0 + math.radians(D)
+            if not pub.publish(az_t, el0):
+                print("  publish failed at t=%.3f s (%s)" % (t, phase))
+                break
+            s = state()
+            if guard_or_abort(s):
+                command("stop_motion")
+                print("  soft-limit guard tripped at t=%.2f s" % t)
+                break
+            nrm = world_to_norm(az_t, el0, s["q_yaw_rad"], s["q_pitch_rad"], args.rotate180)
+            if nrm:
+                (un, vn), (u, vv) = nrm
+                au, av = s.get("target_aim_x_norm"), s.get("target_aim_y_norm")
+                aim_err = (math.hypot(au * FW - CX, av * FH - CY)
+                           if s.get("target_aim_valid") and isinstance(au, float) else None)
+                lead = None
+                qry, qrp = s.get("q_ref_yaw_rad"), s.get("q_ref_pitch_rad")
+                if isinstance(qry, float) and isinstance(qrp, float):
+                    az_ref, _el = base_to_los(axis_direction(qry, qrp))
+                    # Signed by the direction of travel: positive means the reference is ahead.
+                    lead = math.degrees(az_ref - az_t)
+                rows.append({"t": t, "phase": phase, "aim_err": aim_err, "lead": lead,
+                             "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
+                             "outside": getattr(pub, "outside", False),
+                             "track_state": s.get("track_state"), "v_yaw": s["v_yaw_rad_s"],
+                             "ex": u - CX})
+            time.sleep(0.033)
+
+        pub.close()
+        print("  published %d TrackSets, sampled %d" % (pub.published, len(rows)))
+        dart_start = 1.5
+        hold_rows = [r for r in rows if r["phase"] == "hold"]
+        dart_rows = [r for r in rows if r["phase"] == "dart"]
+        errs = sorted(r["aim_err"] for r in hold_rows if r["aim_err"] is not None)
+        tracking_frac = (sum(1 for r in hold_rows if str(r["track_state"]) == "tracking")
+                         / float(len(hold_rows))) if hold_rows else 0.0
+        n_aim = len(errs)
+        if n_aim < 30 or tracking_frac < 0.8:
+            print("\n  S3 VERDICT: INVALID - not enough tracking data after the dart (n=%d live aim"
+                  " samples, tracking in %.0f%% of hold samples)." % (n_aim, 100.0 * tracking_frac))
+            print("          The dart happened; the measurement did not. Diagnose acquisition first.")
+            command("clear_target")
+            time.sleep(0.2)
+            command("set_mode", "MANUAL")
+            return 3
+
+        def pct(vals, q):
+            return vals[min(len(vals) - 1, int(q * len(vals)))] if vals else float("nan")
+
+        c1 = not any((not r["in_frame"]) or r["outside"] for r in rows)
+        back = next((r["t"] - dart_start for r in rows
+                     if r["phase"] == "hold" and r["aim_err"] is not None and r["aim_err"] <= tol_px),
+                    None)
+        c2 = back is not None and back <= args.max_recovery_s
+        leads = sorted(r["lead"] for r in dart_rows if r["lead"] is not None)
+        lead_p50 = pct(leads, .5)
+        c3 = bool(leads) and lead_p50 > 0.0
+        signs = [1 if r["ex"] > 0 else -1 for r in hold_rows if abs(r["ex"]) > 1.0]
+        flips = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
+        c4 = flips <= 2
+        print("\n  S3 result:")
+        print("    reference lead during the dart (positive = ahead of the target in travel dir):")
+        print("      n=%d  p50 %+.3f deg  min %+.3f  max %+.3f  ahead in %.0f%% of samples"
+              % (len(leads), lead_p50, leads[0] if leads else float("nan"),
+                 leads[-1] if leads else float("nan"),
+                 (100.0 * sum(1 for x in leads if x > 0) / len(leads)) if leads else 0.0))
+        print("    hold-window aim error: p50 %.1f px / p95 %.1f px (%.3f / %.3f of box height)"
+              % (pct(errs, .5), pct(errs, .95), pct(errs, .5) / box_h_px, pct(errs, .95) / box_h_px))
+        print("    back inside tolerance at t=%s s after the dart; peak |yaw rate| %.1f deg/s"
+              % ("%.2f" % back if back is not None else "NEVER",
+                 max((abs(r["v_yaw"]) for r in rows), default=0.0) * 180 / math.pi))
+        print("    aim-error sign changes after arrival: %d" % flips)
+        print("    C1 containment : %s" % ("PASS" if c1 else "FAIL - the target left the frame"))
+        print("    C2 recovery    : %s%s" % ("PASS" if c2 else "FAIL",
+              "" if back is None else "  (t=%.2f s, bar %.2f s)" % (back, args.max_recovery_s)))
+        print("    C3 leads       : %s (p50 lead %+.3f deg)"
+              % ("PASS" if c3 else ("FAIL" if leads else "UNMEASURABLE - no q_ref published"),
+                 lead_p50))
+        print("    C4 no ringing  : %s (%d sign changes)" % ("PASS" if c4 else "FAIL", flips))
+        command("clear_target")
+        time.sleep(0.2)
+        command("set_mode", "MANUAL")
+        return 0 if (c1 and c2 and c3 and c4) else 1
+
     # ---- S1: one world-fixed target, 12 deg off the current axis, and let the controller work ----
-    s = state()
+    s = wait_settled(state())   # a world target only means something if the pose it came from is still
     az0, el0 = base_to_los(axis_direction(s["q_yaw_rad"], s["q_pitch_rad"]))
     az_t, el_t = az0 + math.radians(args.offset_deg), el0     # a WORLD direction, fixed from here
     print("\nS1: target fixed at az %.2f deg, el %.2f deg (axis now at az %.2f, el %.2f)"

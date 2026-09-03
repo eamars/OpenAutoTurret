@@ -371,3 +371,57 @@ existing. Not implemented yet. 8 deg/s is also not the fastest thing this statio
 follow.
 
 55 CTest, 301 pytest green. Section 110 unchanged: 30 items, 0 accepted on hardware by a named person.
+
+
+## 2026-09-04, 04:42 — S3 falsifies the lead clause, and three of my tools were wrong first
+
+Requirement (b) says the aim must LEAD sharp target motion by projection, so the target never
+leaves the frame before the axis catches up. `probe_track_loop.py s3` now tests that: settle, dart
+25 deg of azimuth, hold, then four criteria fixed in the file before the run - containment, time
+back inside tolerance, whether the reference actually sits ahead of the target during the dart, and
+sign changes of the aim error after arrival.
+
+### The finding
+
+| dart | containment | back inside 1/3 box | reference lead during dart | ringing |
+| --- | --- | --- | --- | --- |
+| 25 deg in 0.40 s (62 deg/s) | PASS | **FAIL 2.39 s** (bar 1.50) | **FAIL -1.305 deg** (ahead in 30% of 10 samples) | PASS (1) |
+| 25 deg in 1.00 s (25 deg/s) | PASS | **FAIL 2.58 s** (bar 1.50) | +0.071 deg, ahead in 50% of 26 samples - no lead | PASS (1) |
+
+The second row is the one that matters. 25 deg/s is a rate the axis can follow, so the first row's
+lag cannot be blamed on the rate limit: at a followable rate the reference leads by **0.071 deg,
+which is 1.7 px** at this station's measured 24.2 px/deg. **The aim does not lead target motion.
+The lead clause of requirement (b) is not satisfied**, and this is now a measurement rather than an
+impression.
+
+Supporting numbers, both runs: peak achieved yaw rate 19.0-20.1 deg/s (config allows 30 deg/s),
+hold-window aim error p50 0.38-0.61 of box height - i.e. the axis spends most of the hold still
+outside the acceptance band - while the *static* target from S1 settles to 0.002 box heights. The
+loop is not aiming at the wrong place; it takes ~2.5 s to get there after the target moves, and the
+slower dart recovered *slower* (2.58 s vs 2.39 s), which says recovery time is set by something in
+the reference generation, not by the size or speed of the disturbance.
+
+Diagnosis for the next round, in order of cheapness: whether the estimator's actuation-horizon
+prediction is actually applied while the target is moving (and over what horizon), the achieved-vs-
+allowed rate (19 of 30 deg/s), and the settle time constant. Not started: this round's job was to
+find out, and the operator's instruction was to reach a working product before optimising.
+
+### Three tool defects that had to die first, all found by running the station
+
+1. **A proximity-only safety guard refused every run.** This station's homed pitch rests about
+   11 deg from its lower soft limit (soft [-74.7, -4.9] deg, homed about -63.7 deg) - sitting near a
+   limit is normal here; crossing one is the hazard.
+2. **A velocity-based guard and settle test could never close.** The velocity feedback ripples by
+   about +-0.2 rad/s on an axis that is demonstrably holding: 3 s of sampling in MANUAL/HOLD showed
+   0.022 deg of yaw drift and 0.044 deg of pitch drift. An instantaneous velocity sample on a
+   holding axis is noise. Both now judge POSITION over a window (settle tolerance 0.03 deg, under
+   one pixel of image travel; guard = outward drift over 1 s near a limit).
+3. **Scenarios derived their "world-fixed" target from a pose that was still travelling.** Every
+   scenario now passes through `wait_settled()` first, because a target computed from a moving pose
+   is a target that never existed.
+
+The INVALID verdict earned its keep: the first three S3 attempts printed it instead of a PASS, on
+runs with 0 live aim samples and 0% tracking.
+
+55 CTest, 301 pytest green. 04:42 note: no ctest/pytest production code changed this round -
+the changes are in `tools/`. Section 110 unchanged: 30 items, 0 accepted on hardware by a named person.
