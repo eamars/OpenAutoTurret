@@ -1,0 +1,51 @@
+# Camera intrinsics — MEASURED on the station, 2026-09-04, by encoder-as-theodolite.
+#
+# Method (tools/probe_theodolite.py, run on rpi-turret against the live camera and axis):
+#   step the axis by a sanctioned 1 deg increment, wait for the position to settle, and
+#   measure the image displacement by phase correlation on a single high-contrast STRIP.
+#   The yaw scale is taken from one ROW and the pitch scale from one COLUMN, because for a
+#   pinhole looking down at depression the projection factor is cos(b)/cos(theta-b) — constant
+#   along a row, varying across rows — so whole-frame correlation averages different
+#   elevations and reports a scene-dependent scale instead of the lens. Whole-frame walks on
+#   this machine disagreed with strip walks by up to 45%, and the earlier "the pixels are
+#   anamorphic" reading was that bias, not the sensor.
+#   The estimator's sign convention is verified against a known synthetic shift before every
+#   run; the first version of that check caught the transform conjugated on the wrong side
+#   (right magnitudes, inverted sign).
+#
+# Measurements at pitch -15.8 deg, frame 1920x1080 (the frame visiond configures):
+#   yaw    79.27 deg per normalised width   ->  24.22 px/deg   (outbound leg only; out-and-back
+#                                                       residual 8.7%, i.e. ~0.2 deg of play)
+#   pitch  42.19 deg per normalised height  ->  25.60 px/deg   (out-and-back residual 0.4%)
+#   pixel aspect ratio 1.057 +- 0.06  => square pixels; fx and fy differ by measurement noise.
+#
+# Implied fields of view (what "will the target leave the frame" is finally computed from):
+#   HFOV = 2*atan(960 /1389) = 69.2 deg   ->  34.6 deg of image to either side of the reticle
+#   VFOV = 2*atan(540 /1467) = 40.4 deg   ->  20.2 deg above and below
+#
+# WHAT THIS FILE DOES NOT KNOW, stated so nobody mistakes it for commissioned:
+#   * cx/cy are the GEOMETRIC CENTRE BY CONVENTION, not a measurement. On a rotating platform
+#     the principal point and the camera-to-axis boresight enter as the same constant pixel
+#     offset and are not separable by rotation-only observation. This choice is not cosmetic:
+#     the closed-loop tracker drives the target to (cx, cy), so (cx, cy) IS the aim point, and
+#     v3.2 s7 requires the reticle to sit on the optical axis — the HUD must therefore draw the
+#     reticle at exactly this cx/cy, or "reticle overlaps target" fails by construction.
+#   * No distortion coefficients: k1/k2/p1/p2 would need a board, not a pan-tilt.
+#   * The mount is left "aligned" (no extrinsics file): measured roll about the optical axis is
+#     ~0.1-0.4 deg and the pitch axis tracks image rows to 0.07 deg, both inside the noise, and
+#     writing an identity matrix would dress up unmeasured as measured.
+#   * FOV DEPENDS ON THE REQUESTED STREAM SIZE on this sensor: deg per normalised width
+#     measured 79.3 at 640x480, 81.2 at 1280x720, 68.5-79.3 at 1920x1080 depending on pose.
+#     These numbers are therefore valid for the 1920x1080 tracker frame ONLY. Anything else —
+#     including the operator preview — must run at 1920x1080 or it sees a different field, and
+#     target boxes drawn over it are misplaced (v3.2 s25).
+#
+# Syntax note: the 28.2 loader takes the key text verbatim, without trimming, so a space
+# either side of '=' silently yields "missing key(s); intrinsics NOT applied". No spaces here.
+
+fx=1389
+fy=1467
+cx=960
+cy=540
+width=1920
+height=1080

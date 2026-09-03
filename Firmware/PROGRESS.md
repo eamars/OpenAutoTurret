@@ -60,3 +60,86 @@ p95 5.059 / p99 5.065 ms with worst 223.9 ms (the §46 recipe sleep, already on 
 
 §110 is unchanged: `30 items, 0 accepted on hardware by a named person, 29 simulated, 1 untried.`
 54 CTest binaries green.
+
+---
+
+## 2026-09-04, 01:50 — v3.2 arrived; the reticle question turned out to be a calibration question
+
+Pulled `open_auto_turret_v3_2_apache_hud_ui_revision.md` (846 lines) and its reference mock. The
+operator's reading — "auto tracking means the centre of the reticle should overlap the target" —
+is **not in the document set**: §2.4 only says AUTO_TRACK follows the selected target when
+confidently visible, neither §24 nor §25 acceptance mentions centring, and §7 goes the other way,
+insisting the reticle *never* represents target, prediction or requested LOS. So it is a controller
+acceptance rule, stated without a tolerance, and therefore unfalsifiable until written down.
+
+**The operator's rules, recorded as acceptance text.** Overlap = the reticle lands on the **head**,
+tolerance **1/3 of the target box height**. Doing the arithmetic: the anchor the tracker centres on
+sits at 0.5·H while a head centre sits near 0.12·H from the top, so aiming at the anchor misses the
+head by **0.38·H — outside the 1/3 bar**. Head aiming is therefore not a refinement, it is required
+for the criterion to pass at all; it becomes a controller aim-point parameter plus a `+` cue inside
+the selected box (never on the reticle, per §7). "Smooth" was clarified as *no rapid step changes in
+the reference while tracking* — dynamic, not static. And the aim must **lead** sharp target motion so
+the target does not leave the frame.
+
+**What the probe found about the lead.** The §13.3 actuation horizon exists and the reference does
+take a predicted LOS "at the actuation time" — but it is fixed at `control_delay 20 ms +
+motor_response 20 ms` = **40 ms**, which is latency compensation, not catch-up lead. Whether 40 ms
+saves a darting target could not even be *computed*, because frame-exit margin needs the horizontal
+FOV and controld boots saying `tracking geometry is UNCALIBRATED` with both `calibration/*.yaml`
+absent. So commissioning became the critical path, not a side job.
+
+**`tools/probe_theodolite.py`: the encoder as a known angle.** Step the axis, settle, and measure how
+far the scene moved. Built it, and it paid for itself before measuring anything:
+
+* Its **sign self-test caught the transform conjugated on the wrong side** — right magnitudes,
+  inverted sign, which would have produced a calibration that drives the turret backwards.
+* My "**the pixels are anamorphic, vertical is 2.0× horizontal**" reading was **wrong**, and the
+  analytics show why: for a pinhole looking down at depression θ a pan step shifts the image by
+  `f·cosβ/cos(θ−β)`, which is constant along a row and varies 0.875–1.14 across rows. Whole-frame
+  correlation averages elevations and reports the scene, not the lens. Measuring a **single row** for
+  yaw and a **single column** for pitch removed it: 24.22 px/deg horizontal, 25.60 px/deg vertical,
+  aspect 1.057 ± 0.06 = square pixels.
+* My printed "**camera roll −2.67°**" was **arithmetic**: `atan2(dy, dx)` fed signed `dx` across a
+  reversal reads ~180°. Real roll ≈ 0.1–0.4°, inside noise, which is why no extrinsics file was
+  written — an identity matrix would dress unmeasured up as measured.
+
+**Now on disk and loaded:** `calibration/camera_intrinsics.yaml` — `fx=1389 fy=1467 cx=960 cy=540
+1920x1080`, and controld now logs them as loaded instead of UNCALIBRATED. Derived: **HFOV 69.2°,
+VFOV 40.4°**, i.e. **34.6° of image either side of the reticle** — the first real number for "does
+the target fall out of frame". The file states what it does *not* know: cx/cy are the geometric
+centre **by convention**, because on a rotating platform the principal point and the camera-to-axis
+boresight are the same constant offset and are not separable by rotation-only observation. That
+convention is load-bearing, since the closed-loop tracker drives the target *to* (cx, cy): the HUD
+reticle must be drawn at exactly that pixel or "reticle overlaps target" fails by construction.
+
+**Three defects found, all with numbers:**
+
+1. **The field of view depends on the requested stream size** — 79.3 / 81.2 / 68–79 deg per frame
+   width at 640×480 / 1280×720 / 1920×1080. The operator preview was 4:3 while visiond configures
+   1920×1080 16:9, so target boxes were drawn over a *different field* than the one that produced
+   them. The preview default is now 1920×1080, with the reason in `web/webd/config.py`. The real fix
+   is one capture shared between preview and tracker, which still does not exist.
+2. **`manual_step` refusals are reported as success.** `manual_step yaw+2` returned
+   `{"ok": true}` while controld refused it — `'step size must be one of 0.5, 1, or 5 degrees'` was
+   only in `cmd_ack_reason`. This is the §52 response gap costing a real run: a probe that trusted
+   `ok` walked the axis seven times believing it had moved. Scripts must read `cmd_ack_seq` /
+   `cmd_ack_accepted`; the response should carry the control thread's verdict.
+3. **`CAN open failed: yousee: AT mismatch … got 'ERROR'` reproduced a second time** on restart,
+   with controld exiting rather than retrying and leaving the station with no daemon. Two
+   occurrences from quick restarts; the pause-and-retry recovery works but is manual.
+
+**Two things the operator told me, recorded as theirs, with the measurement that agrees.** The
+velocity chatter I had been measuring is an artefact of *how the axis is driven in hold* (no dead
+zone / no static position mode), so optimizing it is optimizing a symptom — dropped as instructed.
+The independent support for that view came out of the calibration walk: at 1° steps the out-and-back
+residual was 8.7 %, i.e. **~0.2° of play in yaw**, so anything commanding finer than that cycles
+without moving the camera. Separately, the channel the operator's "smooth" would be judged on — the
+**reference/commanded velocity — is not published at all**; telemetry carries only
+`v_yaw_rad_s`/`v_pitch_rad_s` from the drive, and the probe's own settle test had to be rewritten to
+use position because the reported velocity is unusable at rest.
+
+Also: **soft pitch limits are −74.7° to −4.9° — the camera can never look level**, which the FOR
+inset and any "point it at the horizon" expectation must respect.
+
+**Not done:** no dart/lead test yet, no centring verification on metal, no HUD code.
+54 CTest, 294 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named person.

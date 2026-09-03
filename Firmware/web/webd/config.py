@@ -14,8 +14,16 @@ Env vars:
   # a client turns it on; these set the resolution / capped FPS / JPEG quality
   # used when it is turned on.
   OTA_VIDEO_ENABLE    1 = feature available (default 1); 0 = never open camera
-  OTA_VIDEO_WIDTH     default stream width (default 640)
-  OTA_VIDEO_HEIGHT    default stream height (default 480)
+  OTA_VIDEO_WIDTH     default stream width (default 1920)
+  OTA_VIDEO_HEIGHT    default stream height (default 1080)
+                      The default MATCHES THE TRACKER'S FRAME on purpose: this sensor changes
+                      its field of view with the requested size (measured 79.3 / 81.2 / 68-79
+                      deg per frame width at 640x480 / 1280x720 / 1920x1080), so a smaller
+                      preview does not merely look softer, it sees a DIFFERENT FIELD than the
+                      detector that produced the target boxes. Boxes drawn over a differently-
+                      sized preview are misplaced by an amount that grows toward the edges,
+                      which is exactly what v3.2 s25 ("target boxes mapped correctly through
+                      rendered-video geometry") refuses to accept.
   OTA_VIDEO_FPS       capped publish FPS (default 15, §42.3 "reduce FPS")
   OTA_VIDEO_QUALITY   JPEG quality 1..95 (default 80)
   OTA_VIDEO_ORIENTATION install orientation correction (default none):
@@ -49,8 +57,8 @@ class WebConfig:
     telemetry_hz: int = 15
     title: str = "OpenAutoTurret"
     video_enabled: bool = True
-    video_width: int = 640
-    video_height: int = 480
+    video_width: int = 1920
+    video_height: int = 1080
     video_fps: int = 15
     video_quality: int = 80
     video_orientation: str = "none"
@@ -112,8 +120,8 @@ def load_web_config() -> WebConfig:
         telemetry_hz=_env_int("OTA_WEB_HZ", 15),
         title=os.environ.get("OTA_WEB_TITLE", "OpenAutoTurret"),
         video_enabled=_env_flag("OTA_VIDEO_ENABLE", True),
-        video_width=_env_int("OTA_VIDEO_WIDTH", 640),
-        video_height=_env_int("OTA_VIDEO_HEIGHT", 480),
+        video_width=_env_int("OTA_VIDEO_WIDTH", 1920),
+        video_height=_env_int("OTA_VIDEO_HEIGHT", 1080),
         video_fps=max(1, _env_int("OTA_VIDEO_FPS", 15)),
         video_quality=min(95, max(1, _env_int("OTA_VIDEO_QUALITY", 80))),
         # The mount is described by the station (config/camera_install.yaml), not remembered
