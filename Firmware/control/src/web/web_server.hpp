@@ -129,6 +129,19 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"vision_dropped\":" << s.vision_dropped
      << ",\"vision_last_frame_sequence\":" << s.vision_last_frame_sequence
      << ",\"vision_measurement_age_ms\":" << s.vision_measurement_age_ms
+     // v3.2 section 20: the camera geometry the HUD draws with. The reticle's position IS the
+     // measured principal point (section 7) - never the viewport centre, never the target - and
+     // the field of view is derived from the intrinsics that were actually loaded, because this
+     // sensor's field changes with the requested stream size (measured: 79.3 / 81.2 / 68-79 deg
+     // per frame width at 640x480 / 1280x720 / 1920x1080). valid=false and 0.0 mean NOT
+     // MEASURED; the page is expected to say so rather than draw a confident guess.
+     << ",\"camera_intrinsics\":{\"valid\":" << (s.camera_intrinsics_valid ? "true" : "false")
+     << ",\"fx\":" << s.camera_fx_px << ",\"fy\":" << s.camera_fy_px
+     << ",\"cx\":" << s.camera_cx_px << ",\"cy\":" << s.camera_cy_px
+     << ",\"width\":" << s.camera_width << ",\"height\":" << s.camera_height << "}"
+     << ",\"effective_hfov_deg\":" << s.effective_hfov_deg
+     << ",\"effective_vfov_deg\":" << s.effective_vfov_deg
+     << ",\"camera_fps\":" << s.camera_fps
      // v3 §50/§52: the mode, the intent, and the answer to the last command.
      << ",\"vision_track_sets\":" << s.vision_track_sets
      << ",\"vision_sensor_age_ms\":" << s.vision_sensor_age_ms

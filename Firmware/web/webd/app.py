@@ -9,7 +9,8 @@ Wiring:
     browser video"). Because webd is a separate process from controld and
     controld's web server runs on a non-RT thread, browser load can never
     degrade the control loop or CAN feedback staleness (§54.5).
-  * FastAPI routes: ``/`` (dashboard), ``/api/state``, ``/api/health``,
+  * FastAPI routes: ``/`` (v3.2 HUD), ``/dashboard`` (legacy engineering page),
+    ``/api/state``, ``/api/health``,
     ``/api/command`` (POST), ``/ws`` (telemetry stream).
 
 SAFETY: webd never opens can0 and never decides safety. It relays commands to
@@ -34,6 +35,7 @@ from .config import WebConfig, load_web_config
 from .blackbox import BlackBoxWriter
 from .controld_client import ControldClient
 from .dashboard import dashboard_html
+from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
 from .video import VideoSource, mjpeg_frame
 
@@ -153,6 +155,15 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
+        # v3.2 s3: the operator view is the camera-dominant HUD. The card dashboard is what
+        # s3 rules out, but its engineering numbers are still needed until the DIAG drawer
+        # exists, so it stays reachable rather than being deleted out from under anyone.
+        return HUD_HTML
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard() -> str:
+        """The pre-v3.2 engineering page. Kept until the HUD's DIAG drawer carries the same
+        numbers; s23 means it is a tool, not the operator view."""
         return dashboard_html(config.title)
 
     @app.get("/api/state")

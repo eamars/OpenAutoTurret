@@ -42,6 +42,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,7 +66,18 @@ def command(name: str, arg: str = "") -> dict:
         BASE + "/api/command",
         data=json.dumps({"command": name, "arg": arg}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    return json.loads(urllib.request.urlopen(req, timeout=4).read())
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=4).read())
+    except urllib.error.HTTPError as e:
+        # The web gate answers refusals as 4xx with the reason in the body. Letting this raise
+        # hides the only explanation the tool is going to get - this is the s52 response gap
+        # showing up in the tooling instead of the protocol.
+        try:
+            body = json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            body = {"error": e.reason, "body": ""}
+        body.setdefault("http_status", e.code)
+        return body
 
 
 def wait_ack(seq0: int, timeout: float = 3.0):

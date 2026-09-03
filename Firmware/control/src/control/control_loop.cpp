@@ -1444,6 +1444,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // count of zero against a connected publisher means it is still v1, which is a
     // different story from "v3 but slow" and needs a different fix.
     snap.vision_track_sets = vs.track_sets;
+    // Camera geometry for the HUD, from the calibration file that was actually loaded. Not
+    // mirrored from config defaults: if calibration/camera_intrinsics.yaml is absent, `valid`
+    // stays false and the page says the reticle is unclosed rather than drawing it anyway.
+    const geo::CameraIntrinsics& ci = tracking_cfg_.intrinsics;
+    snap.camera_intrinsics_valid = ci.valid();
+    snap.camera_fx_px = ci.fx;
+    snap.camera_fy_px = ci.fy;
+    snap.camera_cx_px = ci.cx;
+    snap.camera_cy_px = ci.cy;
+    snap.camera_width = ci.width;
+    snap.camera_height = ci.height;
+    geo::field_of_view_deg(ci, snap.effective_hfov_deg, snap.effective_vfov_deg);
+    snap.camera_fps = vs.camera_fps;
     snap.vision_sensor_age_ms =
         (vs.last_sensor_ns > 0 && now_ns >= vs.last_sensor_ns)
             ? static_cast<int64_t>((now_ns - vs.last_sensor_ns) / 1000000)

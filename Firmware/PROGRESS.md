@@ -215,3 +215,60 @@ here is anchor centring, and the aim point is not implemented yet, though `aim_p
 already published. S2 (constant-rate following) and S3 (dart, and whether the aim *leads*) have not
 been run. 54 CTest, 294 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named
 person.
+
+
+## 2026-09-04, 03:57 — the HUD cut its first vertical slice, and the slice caught four things
+
+The operator view is now the v3.2 HUD: `web/webd/hud.py` served at `/`, full-viewport video with an
+SVG overlay, §7 reticle, §9 candidate/selected boxes, §4.1 mode block, §8 health chips, §12 status
+strip, §15 tokens, §16 typography. The card dashboard was not deleted - it moved to `/dashboard` and
+keeps its numbers until the DIAG drawer can carry them. `/api/*` is untouched.
+
+**The video is `contain`, not `cover`.** Cover fills by cropping, and the frame edge is precisely
+the boundary the operator has to judge against for the lead requirement. Showing a boundary that is
+not the camera's would hide the acceptance margin. The letterbox bars are the deliberate cost.
+
+**The reticle is drawn at the measured principal point**, which required saying so in telemetry:
+controld now publishes `camera_intrinsics{valid,fx,fy,cx,cy,width,height}`, `effective_hfov_deg`,
+`effective_vfov_deg`, `camera_fps` (webd's `Telemetry` had to declare them - `telemetry_from_json`
+drops undeclared keys, which is why the first live check showed nothing). The derived field of view
+came out **69.30° x 40.42°**; the encoder-theodolite walk had measured **69.2° x 40.4°** by an
+independent route. `camera_fps` reads **0** with no publisher attached: unknown, published as
+unknown. A unit test pins the derivation to the theodolite numbers so the two cannot silently drift.
+
+### Four defects, all found by running things rather than reading code
+
+1. **`/api/video` answers 409 until the stream is asked for.** After a webd restart the HUD shipped
+   a dead black panel behind perfectly correct symbology. The page now starts the preview, re-asks
+   when the `<img>` errors, re-checks via `/api/video/state`, and prints the refusal reason on the
+   notices layer if the camera is held by something else - rather than letting a missing picture
+   look like a missing target. `tools/probe_hud_composite.py` hit the same 409, which is the proof.
+2. **`z-index` on an SVG group does nothing.** My first §18 layering put `style="z-index:11"` on
+   `<g>` elements: markup that reads as compliance and is ignored by the renderer. Layering inside
+   the overlay is document order, and the test now asserts that order and forbids the decoration.
+3. **My openness check was confounded.** Reading the centre pixel of a composite where the target
+   happens to be centred reported "filled dot" because the target's own anchor cross was on the
+   axis. The reticle is now drawn alone on the untouched scene and checked there: real frame, centre
+   pixel (213,219,217) = scene, so **open centre, no filled dot: YES**.
+4. **A stale payload was about to be reported as a measurement.** The first composite run printed
+   "201.6 px - OUTSIDE" while S1 had measured 0.3 px for the same geometry. Neither number was
+   wrong: the probe sampled the payload *after* the TrackSet publisher stopped, and the axis kept
+   moving. Measured while the target was actually being observed, n=185 over 7 s:
+   **p50 0.6 px / p95 1.1 px = 0.001 / 0.003 of box height against the 0.333 bar**, state
+   `tracking` throughout. The probe now refuses to present an aged payload as an acceptance number
+   (it caught a 497 s-old track list doing exactly that).
+
+### What is verified and what is not
+
+Verified across the real boundary: the served bytes; controld's payload keys through HTTP/WS; the
+page's projection executed **under node from the page's own source string** against independent
+arithmetic, including the property that a non-central principal point *moves the reticle off centre*
+(today cx=960,cy=540 coincides with the centre, so the coincidence had to be separated from the
+rule); controld's real payload composited onto a real 1920x1080 IMX500 frame.
+
+Not verified: **rendering in an actual browser.** There is no browser automation on this station, so
+no assertion has ever caused a real DOM/SVG paint. What is missing is exactly the last centimetre:
+how the symbology looks and survives on the operator's screen. That is an operator-sign item, not
+something to be inferred from a green suite.
+
+54 CTest, 301 pytest green. §110 unchanged: 30 items, 0 accepted on hardware by a named person.

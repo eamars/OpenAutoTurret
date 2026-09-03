@@ -164,6 +164,25 @@ struct TelemetrySnapshot {
   uint64_t vision_dropped = 0;        // datagrams with a bad size / decode
   uint64_t vision_last_frame_sequence = 0;
   int64_t vision_measurement_age_ms = -1;
+
+  // v3.2 §20 - camera geometry the operator-facing HUD has to have.
+  //
+  // The reticle represents the actual optical axis (§7), which IS the measured principal point;
+  // the FOR inset and any "will it leave the frame" judgement need the field of view (§11). If
+  // the page guessed the image centre instead of reading cx/cy, "the reticle overlaps the target"
+  // would hold only by coincidence, and a hard-coded FOV is wrong the moment the stream size
+  // changes - this sensor's field does change with it (79.3 / 81.2 / 68-79 deg per frame width at
+  // 640x480 / 1280x720 / 1920x1080, measured). Zero means not measured, and stays zero.
+  bool camera_intrinsics_valid = false;
+  double camera_fx_px = 0.0;
+  double camera_fy_px = 0.0;
+  double camera_cx_px = 0.0;
+  double camera_cy_px = 0.0;
+  int32_t camera_width = 0;
+  int32_t camera_height = 0;
+  double effective_hfov_deg = 0.0;
+  double effective_vfov_deg = 0.0;
+  double camera_fps = 0.0;
   // v3 §61: publisher generation, the two latency intervals, and which candidate is
   // being followed. Ages are -1 for "never", never 0 — same rule as the CAN family.
   uint64_t vision_track_sets = 0;

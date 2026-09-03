@@ -72,4 +72,29 @@ TEST(CameraModel, IntrinsicsValidity) {
   EXPECT_FALSE(bad2.valid());
 }
 
+// The field of view the HUD's FOR inset and the frame-exit margin are computed from,
+// cross-checked against an independent measurement rather than against the formula that
+// produced it: tools/probe_theodolite.py walked the axis encoder against the image and
+// measured 24.22 px/deg horizontally and 25.60 px/deg vertically in a 1920x1080 frame,
+// which is 69.2 deg and 40.4 deg across. If this ever disagrees by more than half a
+// degree, one of the two is wrong - and that is the point of writing it down.
+TEST(CameraFieldOfView, AgreesWithTheTheodoliteWalkOnThisStation) {
+  ota::geo::CameraIntrinsics in;
+  in.fx = 1389.0; in.fy = 1467.0; in.cx = 960.0; in.cy = 540.0;
+  in.width = 1920; in.height = 1080;
+  double h = -1.0, v = -1.0;
+  ota::geo::field_of_view_deg(in, h, v);
+  EXPECT_NEAR(h, 69.2, 0.5);
+  EXPECT_NEAR(v, 40.4, 0.5);
+
+  // Uncalibrated must not become "zero degrees of view" dressed as a measurement... and must
+  // not become a default either: the caller has to be able to tell "unknown" from "60 deg".
+  ota::geo::CameraIntrinsics bad;
+  bad.fx = 0.0;
+  h = -1.0; v = -1.0;
+  ota::geo::field_of_view_deg(bad, h, v);
+  EXPECT_DOUBLE_EQ(h, 0.0);
+  EXPECT_DOUBLE_EQ(v, 0.0);
+}
+
 }  // namespace

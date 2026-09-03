@@ -62,6 +62,7 @@ class VisionLink {
     // camera need different fixes and one combined number cannot tell them apart.
     uint64_t track_sets = 0;      // TrackSet datagrams decoded (0 = v1 publisher)
     int64_t last_sensor_ns = 0;   // camera SensorTimestamp of the last TrackSet
+    double camera_fps = 0.0;      // implied by TrackSet sensor stamps; 0 = unknown
     int64_t last_publish_ns = 0;  // when visiond let go of it
   };
 
@@ -79,7 +80,17 @@ class VisionLink {
   void note_track_set(int64_t sensor_ns, int64_t publish_ns,
                       uint64_t frame_sequence, TimeNs arrival_ns) {
     track_sets_.fetch_add(1, std::memory_order_relaxed);
-    last_sensor_ns_.store(sensor_ns, std::memory_order_relaxed);
+    // Rate the camera's own capture stamps imply, from their exponential mean interval.
+    // Deliberately not "how fast datagrams arrive": the stream can be retransmitted, polled or
+    // burst-queued, and §20 asks how fast the SENSOR saw. Zero means unknown, and 0 is published
+    // as unknown rather than rounded into a plausible number.
+    const int64_t prev_sensor = last_sensor_ns_.exchange(sensor_ns, std::memory_order_relaxed);
+    const int64_t sensor_dt = sensor_ns - prev_sensor;
+    if (prev_sensor != 0 && sensor_dt > 0 && sensor_dt < 2000000000) {
+      const int64_t prev_ewma = sensor_dt_ewma_ns_.load(std::memory_order_relaxed);
+      sensor_dt_ewma_ns_.store(prev_ewma == 0 ? sensor_dt : (prev_ewma * 9 + sensor_dt) / 10,
+                               std::memory_order_relaxed);
+    }
     last_publish_ns_.store(publish_ns, std::memory_order_relaxed);
     note_frame(frame_sequence, arrival_ns);
   }
@@ -93,6 +104,8 @@ class VisionLink {
     s.last_frame_sequence = last_seq_.load(std::memory_order_relaxed);
     s.last_arrival_ns = last_arrival_ns_.load(std::memory_order_relaxed);
     s.track_sets = track_sets_.load(std::memory_order_relaxed);
+    const int64_t ewma_dt = sensor_dt_ewma_ns_.load(std::memory_order_relaxed);
+    s.camera_fps = ewma_dt > 0 ? (1.0e9 / static_cast<double>(ewma_dt)) : 0.0;
     s.last_sensor_ns = last_sensor_ns_.load(std::memory_order_relaxed);
     s.last_publish_ns = last_publish_ns_.load(std::memory_order_relaxed);
     return s;
@@ -106,6 +119,7 @@ class VisionLink {
   std::atomic<int64_t> last_arrival_ns_{0};
   std::atomic<uint64_t> track_sets_{0};
   std::atomic<int64_t> last_sensor_ns_{0};
+  std::atomic<int64_t> sensor_dt_ewma_ns_{0};
   std::atomic<int64_t> last_publish_ns_{0};
 };
 

@@ -93,11 +93,19 @@ class AppTest(unittest.TestCase):
         self.assertEqual(r.json()["error"], "not homed")
 
     def test_dashboard_html(self) -> None:
+        """v3.2 s3 moved the operator view: `/` is the camera-dominant HUD, and the card page
+        with the developer controls is a tool at `/dashboard` until the DIAG drawer replaces it.
+        The old assertion was not wrong, it described the contract that the revision replaced -
+        so it is rewritten against the new one, keeping the part that still has to hold."""
         r = self.tc.get("/")
         self.assertEqual(r.status_code, 200)
         self.assertIn("<!DOCTYPE html>", r.text)
-        self.assertIn("Developer controls", r.text)
         self.assertIn("/ws", r.text)
+        self.assertNotIn("Developer controls", r.text,
+                         "the operator view must not be the engineering console (v3.2 s3)")
+        d = self.tc.get("/dashboard")
+        self.assertEqual(d.status_code, 200)
+        self.assertIn("Developer controls", d.text)
 
     def test_websocket_streams_telemetry(self) -> None:
         with self.tc.websocket_connect("/ws") as ws:

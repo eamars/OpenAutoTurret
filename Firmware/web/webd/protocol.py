@@ -169,6 +169,17 @@ class Telemetry:
     vision_dropped: int = 0                 # bad-size / undecodable datagrams
     vision_last_frame_sequence: int = 0
     vision_measurement_age_ms: int = -1     # since the last measurement
+    # v3.2 section 20 camera geometry, which the HUD draws with. `camera_intrinsics` is the
+    # calibration the DAEMON loaded, as an object {"valid","fx","fy","cx","cy","width","height"}.
+    # When no calibration file existed it arrives valid=false and the page must say the reticle is
+    # unclosed instead of assuming the image centre: section 7 makes the reticle the actual optical
+    # axis, and the operator's centring acceptance is measured against that mark, so a guessed
+    # principal point would quietly move the thing the acceptance rule is judged by.
+    # effective_*_deg of 0.0 means NOT MEASURED, not "no field of view".
+    camera_intrinsics: Dict[str, Any] = field(default_factory=dict)
+    effective_hfov_deg: float = 0.0
+    effective_vfov_deg: float = 0.0
+    camera_fps: float = 0.0
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.
