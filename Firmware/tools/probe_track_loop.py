@@ -274,7 +274,7 @@ class Publisher:
                       tracks=[t])
         try:
             self.sock.send(ts.encode())
-        except BlockingIOError:
+        except (BlockingIOError, BrokenPipeError, OSError):
             return False
         self.published += 1
         return True

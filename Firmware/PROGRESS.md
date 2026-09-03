@@ -1770,3 +1770,47 @@ band would cap the reference — but it was not needed to explain this run, sinc
 the observed 10 deg/s and the observed deficit. It is recorded as *not the cause here*, not as ruled out in
 general. Station homed, MANUAL/HOLD, synthetic vision running. **§110: 0 items accepted on hardware by a named
 person.**
+
+## 2026-09-04, 20:2x — round 27: an envelope-LEGAL dart still fails, so round 26's explanation was incomplete — the reference never exceeds ~10 deg/s
+
+Ran S3 at 25° over **1.60 s** (16 deg/s average; envelope minimum 1.43 s, so the new pre-check printed
+"achievable" and the run was fair by construction). Evidence:
+`docs/evidence/dart_25deg_in_1.6s_envelope_legal_2026-09-04_r27.log`.
+
+**C1 PASS · C2 FAIL (2.85 s, bar 1.50) · C3 FAIL (−11.628°) · C4 FAIL (3 sign changes) · C5a PASS · C5b FAIL
+(jerk p95 542 / max 576 vs 300 + 60).** Leads: predicted **−0.60°**, estimator **−1.40°**, reference vs estimate
+**−10.17°**, hold-window aim p50 92.1 px = **0.244 box heights** (inside the 1/3 bar while holding).
+
+**The important number: reference rate p50 9.3 / max 10.0 deg/s — identical to the impossible 0.40 s run — with
+accel saturating at 60.0 both times.** The yaw track limit is 30 deg/s, confirmed in `turret.yaml`, and there is
+no velocity limit in the `tracking:` section. So a reference that never passes 10 deg/s is **not** envelope-bound
+at all: something is multiplying the ceiling down to about a third, or the reference is behaving like the
+hold-mode speed (`hold_v_max = 10 deg/s` in `main.cpp:133`), which is a suspicious coincidence.
+
+**Round 26's finding stands but is now known to be only half the story.** The envelope genuinely forbids
+25°/0.40 s — that part is arithmetic and unchanged. But legalising the dart did **not** fix C2/C3, so "the
+envelope is why C3 fails" would have been the wrong conclusion, and I nearly left it there. It also means
+round 22's authority-derate instinct pointed at something real, even though round 26 correctly showed it was
+not needed to explain the *fast* dart.
+
+**Two failed edits before a working one, recorded plainly:** my first attempt to turn the probe's
+`BrokenPipeError` traceback into a message produced a nested `try` (the original already had one); my second
+attempt, done by rebuilding a multi-line string inside a script, emitted an unterminated literal. I **restored
+the file from `7b847f8` and made the smallest true change** — widening the existing clause to
+`except (BlockingIOError, BrokenPipeError, OSError)`, so a socket held by another publisher now returns False
+into the existing "publish failed" path instead of crashing mid-run. 48 tools tests pass. The explanation lives
+in this record rather than in a print, because a print is not worth a broken probe.
+
+**A trap I walked into again, and it cost a run:** the first attempt of this round died instantly with
+`BrokenPipeError` because **`visiond` was running and controld accepts one vision publisher.** Round 25 stopped
+it deliberately; round 27 forgot. Rule, restated where it can be seen: **stop the vision source before any
+probe scenario that publishes its own targets, and restart it afterwards** (it is restarted and verified now).
+
+**Next round, cheap and mostly motionless:** find what holds `intent_velocity_scale` near 1/3 during AUTO_TRACK
+— confidence band vs payload derate vs mode ramp — by sampling telemetry across a short AUTO_TRACK dwell and
+comparing against `band_scale` values (1.0/0.60/0.30) and the derate flags. If it is a band or derate question,
+it is the operator's call; if the multiplier is right and something else clamps the reference to hold speed,
+that is a defect worth naming.
+
+**437 pytest / 57 CTest** stand (no control code touched). Station homed, MANUAL/HOLD, vision restarted and
+running. **§110: 0 items accepted on hardware by a named person. C2, C3, C4, C5b FAIL; C1, C5a PASS.**
