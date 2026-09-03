@@ -63,6 +63,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .video-panel h2 { display:flex; justify-content:space-between; align-items:center; gap:12px; }
   .video-status { font-size:12px; margin:0 0 8px; min-height:1em; }
   .video-stage img { width:100%; display:block; background:#000; border-radius:6px; }
+  .video-stage { position:relative; }
+  /* The overlay is drawn over the picture and cannot be clicked through by accident,
+     because a target marker that eats the click the operator aimed at the video toggle is
+     a UI bug with the shape of a hardware fault. */
+  #video-overlay { position:absolute; left:0; top:0; pointer-events:none; display:none; }
   .switch { position:relative; display:inline-block; width:44px; height:24px; flex:0 0 auto; }
   .switch input { opacity:0; width:0; height:0; }
   .slider { position:absolute; inset:0; background:#222b38; border:1px solid var(--border);
@@ -134,6 +139,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="video-status muted" id="video-status">checking…</div>
     <div class="video-stage" id="video-stage">
       <img id="video-img" alt="camera feed" style="display:none">
+      <canvas id="video-overlay"></canvas>
       <div class="video-ph" id="video-ph">Camera off — flip the switch on to open the IMX500 feed (costs no CPU while off).</div>
     </div>
   </section>
@@ -483,6 +489,7 @@ function render(t) {
   // person who left three seconds ago is worse than no button, and a list that lingers
   // because the page is protecting its own DOM is exactly that.
   showEvents(t);   // §79, before anything that can bail out on a partial frame
+  drawOverlay(t);  // §73: boxes over the picture, from the same snapshot as the list
   const list = $("candidates");
   if (list) {
     const ts = Array.isArray(t.tracks) ? t.tracks : [];
@@ -744,6 +751,97 @@ function markActiveProfile() {
   }
 }
 refreshProfiles();
+
+// §73's video overlay: where controld says each candidate is, drawn on the picture.
+//
+// Every quantity here comes from the telemetry snapshot, and that is the whole design.
+// The page does not track anything: no interpolation between snapshots, no remembering the
+// last box to make the motion look smooth. A box that is drawn where the *controller* says
+// the target is can be compared with the picture and disagrees honestly when the two
+// disagree, which is information. A box the page smoothed into place is decoration.
+//
+// Which is also why the staleness rule is the same one the candidate list uses: after the
+// vision path has been quiet for three detector frames, the boxes are the last thing
+// controld received, not what the camera is seeing, and they are drawn saying so.
+function drawOverlay(t) {
+  const cv = $("video-overlay");
+  const img = $("video-img");
+  if (!cv || !img) return;
+  const ctx = cv.getContext("2d");
+  if (img.style.display === "none" || !img.clientWidth || !img.clientHeight) {
+    // Video off (or not laid out yet). Clear rather than leave the last frame's boxes
+    // floating over the placeholder — that is the specific sight that makes an operator
+    // ask whether the tracker is still reporting something.
+    if (cv.width && cv.height) ctx.clearRect(0, 0, cv.width, cv.height);
+    cv.style.display = "none";
+    return;
+  }
+  cv.style.display = "block";
+  const W = img.clientWidth, H = img.clientHeight;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  ctx.clearRect(0, 0, W, H);
+
+  const ts = Array.isArray(t.tracks) ? t.tracks : [];
+  const age = (typeof t.track_list_age_ms === "number") ? t.track_list_age_ms : -1;
+  const stale = age > 500;   // three detector frames at 30 Hz, as in the candidate list
+  ctx.save();
+  if (stale) ctx.globalAlpha = 0.45;
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.lineWidth = 2;
+
+  ts.forEach((tr) => {
+    const ax = (typeof tr.anchor_x === "number") ? tr.anchor_x : NaN;
+    const ay = (typeof tr.anchor_y === "number") ? tr.anchor_y : NaN;
+    if (!isFinite(ax) || !isFinite(ay)) return;
+    const selected = !!tr.selected;
+    const st = (tr.state || "").toUpperCase();
+    const offscreen = ax < 0 || ax > 1 || ay < 0 || ay > 1;
+
+    ctx.strokeStyle = selected ? "#ffb020" : (st === "CONFIRMED" ? "#3ddc84" : "#8b93a7");
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.setLineDash(st === "OCCLUDED" || st === "LOST" ? [6, 4] : []);
+
+    const bb = Array.isArray(tr.bbox) ? tr.bbox : null;
+    const hasBox = !!(bb && bb.length === 4 && (bb[2] > bb[0]) && (bb[3] > bb[1]));
+    if (offscreen) {
+      // §73's off-screen cue: the target exists in controld's world but the camera is not
+      // looking at it. Point at the edge rather than draw nothing, because "the turret is
+      // following something behind you" must not look like a dropped frame.
+      const ex = Math.min(Math.max(ax, 0), 1) * W;
+      const ey = Math.min(Math.max(ay, 0), 1) * H;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillText((tr.label || "") + " (off screen)", Math.min(ex + 8, W - 120), ey);
+      return;
+    }
+    if (hasBox) {
+      const x0 = bb[0] * W, y0 = bb[1] * H, x1 = bb[2] * W, y1 = bb[3] * H;
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      const pct = Math.round((tr.confidence || 0) * 100);
+      ctx.fillText((tr.label || ("#" + tr.display_index)) + " " + pct + "%" +
+                   (tr.selectable ? "" : " (\u00a78: not selectable)"),
+                   x0, y0 > 14 ? y0 - 4 : y1 + 12);
+    } else {
+      // No box on the wire (an older controld, or a detector that reports points). Draw the
+      // anchor as a marker. The failure mode this avoids is drawing a rectangle from four
+      // zeros, which puts a confident box in the top-left corner of every frame.
+      const x = ax * W, y = ay * H;
+      ctx.beginPath();
+      ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y);
+      ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8);
+      ctx.stroke();
+      ctx.fillText((tr.label || "") + " (anchor only)", Math.min(x + 10, W - 130), y);
+    }
+  });
+  ctx.restore();
+
+  if (stale && ts.length) {
+    ctx.fillStyle = "#ffb020";
+    ctx.fillText("target list is " + age + " ms old \u2014 boxes are where controld last saw " +
+                 "them, not where the camera sees them now", 8, 16);
+  }
+}
 
 function videoStatus(text, err) {
   const el = $("video-status");

@@ -41,6 +41,12 @@ struct TrackListing {
   float confidence = 0.0f;
   float anchor_x = 0.0f;      // normalised, for the overlay's box
   float anchor_y = 0.0f;
+  // The detector's box, normalised against the frame the detector used — so it scales
+  // onto whatever the page is showing without knowing the sensor's size. All four at zero
+  // means **there is no box**, not a box in the top-left corner: a page that drew this
+  // unconditionally would paint a person-shaped lie at the origin of every frame the
+  // moment it talked to a controld that does not fill them.
+  float bbox[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   bool selectable = false;    // §8: only CONFIRMED can be chosen
   bool selected = false;      // the operator's choice, marked in the list
 };

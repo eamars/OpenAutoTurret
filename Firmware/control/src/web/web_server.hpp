@@ -218,6 +218,9 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
                    ",\"confidence\":" + std::to_string(t.confidence) +
                    ",\"anchor_x\":" + std::to_string(t.anchor_x) +
                    ",\"anchor_y\":" + std::to_string(t.anchor_y) +
+                   ",\"bbox\":[" + std::to_string(t.bbox[0]) + "," +
+                   std::to_string(t.bbox[1]) + "," + std::to_string(t.bbox[2]) + "," +
+                   std::to_string(t.bbox[3]) + "]" +
                    ",\"selectable\":" + (t.selectable ? "true" : "false") +
                    ",\"selected\":" + (t.selected ? "true" : "false") + "}";
           }

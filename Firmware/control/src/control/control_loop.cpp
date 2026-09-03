@@ -1213,6 +1213,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         for (char* c = out.state; *c; ++c)
           if (*c >= 'a' && *c <= 'z') *c = static_cast<char>(*c - 32);
         out.confidence = t.detector_confidence;
+        out.bbox[0] = t.bbox.x_min;
+        out.bbox[1] = t.bbox.y_min;
+        out.bbox[2] = t.bbox.x_max;
+        out.bbox[3] = t.bbox.y_max;
         out.anchor_x = t.anchor_x;
         out.anchor_y = t.anchor_y;
         out.selectable = t.state == tracks::TrackState::Confirmed;

@@ -112,6 +112,11 @@ class Telemetry:
     events: list = field(default_factory=list)
     track_count: int = 0
     track_list_age_ms: int = -1
+    # Each entry is controld's own listing: uuid, display_index, label, class_name, state,
+    # confidence, anchor_x/anchor_y, selectable, selected, and `bbox` = [x_min, y_min,
+    # x_max, y_max] normalised to the detector's frame. A missing or all-zero `bbox` means
+    # no box was reported (an older controld), and the page must draw a marker in that case
+    # rather than a rectangle at the origin.
     tracks: list = field(default_factory=list)
     roam_target_yaw_rad: float = 0.0
     roam_sweep_direction: int = 0

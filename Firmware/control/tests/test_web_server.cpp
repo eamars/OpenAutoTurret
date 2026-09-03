@@ -132,6 +132,21 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
   s.intent_type = "los_direction";
   s.intent_reason = "coasting";
   s.intent_velocity_scale = 0.42;
+  {
+    // One listed candidate with a box, so the key that the overlay draws from is asserted
+    // rather than assumed: `bbox` is what turns a marker into a rectangle, and a page that
+    // reads a key nobody emits draws nothing and looks like it is working.
+    telemetry::TrackListing& tr = s.tracks[0];
+    s.track_count = 1;
+    tr.display_index = 2;
+    std::snprintf(tr.label, sizeof tr.label, "Person #2");
+    std::snprintf(tr.state, sizeof tr.state, "CONFIRMED");
+    tr.anchor_x = 0.4f;
+    tr.anchor_y = 0.5f;
+    tr.bbox[0] = 0.30f; tr.bbox[1] = 0.40f; tr.bbox[2] = 0.50f; tr.bbox[3] = 0.70f;
+    tr.selectable = true;
+    tr.selected = true;
+  }
   s.intent_has_joint_target = true;
   s.intent_q_yaw_rad = 0.25;
   s.intent_q_pitch_rad = -0.1;
@@ -173,6 +188,9 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
   // false flag is still a stale number, and the reader that trusts the flag should never
   // have to be cleverer than the writer.
   EXPECT_NE(msg.find("\"intent_has_joint_target\":true"), std::string::npos);
+  EXPECT_NE(msg.find("\"bbox\":[0.300000,0.400000,0.500000,0.700000]"), std::string::npos)
+      << "the candidate box is not on the wire; §73's overlay would be drawing from "
+         "nothing. Got: " + msg.substr(msg.find("\"tracks\""), 260);
   EXPECT_NE(msg.find("\"intent_q_yaw_rad\":0.25"), std::string::npos);
   {
     telemetry::TelemetrySnapshot bare = s;

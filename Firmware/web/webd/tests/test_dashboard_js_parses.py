@@ -386,3 +386,42 @@ def test_the_requested_pose_is_not_rendered_as_zero_when_there_is_none():
             % (readout, line[0].strip())
         )
         assert "none" in line[0], "%s has no way to say \"no pose was requested\"" % readout
+
+
+def test_the_video_overlay_is_telemetry_and_says_when_it_is_stale():
+    """§73's overlay is the one part of the page that can lie persuasively: a box drawn on
+    a live picture looks like live information even when it is three seconds of nothing.
+    So the overlay is checked as a data consumer, not as a drawing.
+
+    The properties below are the ones whose absence would not raise an error anywhere:
+      - boxes come from the snapshot's `tracks`, never from what the page clicked or
+        remembers (a remembered box on a live picture is the exact lie);
+      - the same staleness rule as the candidate list, and the note is drawn;
+      - no rectangle is built from an absent bbox (four zeros would put a confident box in
+        the corner of every frame against an older controld);
+      - the canvas is cleared when the video is off, rather than keeping the last frame's
+        targets floating over the "camera off" placeholder;
+      - and it cannot swallow clicks, because an overlay that eats the toggle looks like a
+        fault elsewhere.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "dashboard.py").read_text(encoding="utf-8")
+    start = src.index("function drawOverlay(t) {")
+    body = src[start:src.index("\nfunction ", start + 1)]
+    assert "t.tracks" in body, "the overlay does not draw from the snapshot's tracks"
+    assert "track_list_age_ms" in body, "the overlay does not know how old its own data is"
+    assert "ms old" in body, "the staleness is invisible: no note is drawn on the picture"
+    assert "hasBox" in body and "bb[2] > bb[0]" in body, (
+        "nothing distinguishes an absent bbox from a box at the origin"
+    )
+    assert "clearRect" in body and 'style.display === "none"' in body, (
+        "the overlay keeps the previous frame's boxes when the video is off"
+    )
+    assert "t.last_click" not in body and "jogDir" not in body, (
+        "the overlay is consulting page state instead of telemetry"
+    )
+    css = src[:src.index("</style>")]
+    assert "#video-overlay" in css and "pointer-events:none" in css, (
+        "the overlay sits over the picture and takes clicks"
+    )
