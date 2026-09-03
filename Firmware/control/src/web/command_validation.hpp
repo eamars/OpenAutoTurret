@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include "mode/mode_manager.hpp"
 
 namespace ota {
 namespace web {
@@ -50,7 +51,8 @@ inline constexpr int kYawIx = 1;
 // (empty for no-arg commands). Returns ok or the rejection reason.
 //
 // Allowed commands:
-//   hold, start_tracking, stop_tracking, enable_search, disable_search,
+//   hold, set_mode <MANUAL|AUTO_TRACK|AUTO_ROAM>, stop_motion,
+//   start_tracking, stop_tracking, enable_search, disable_search,
 //   select_target <id>, start_homing, start_installation_calibration,
 //   start_payload_verification, select_payload_profile <name>,
 //   request_park, request_shutdown,
@@ -61,6 +63,31 @@ inline CommandResult validate_command(const SystemCommandState& s,
   CommandResult r;
   if (command == "hold") {
     // Always allowed: hold is the safe default.
+    r.ok = true;
+    return r;
+  }
+  if (command == "stop_motion") {
+    // §27. No gate at all, on either layer. STOP MOTION is the button an operator
+    // reaches for when something is already wrong; a state check standing between
+    // them and a stop is worse than no button. It changes no safety state,
+    // disables nothing, and parks nothing — it cancels the active intent and
+    // lands in MANUAL/HOLD, which is the only thing that reliably stays stopped.
+    r.ok = true;
+    return r;
+  }
+  if (command == "set_mode") {
+    // §51. Shape-checked here, state-checked by the control thread — deliberately.
+    // Whether the station may change mode depends on homing, feedback freshness,
+    // the safety ladder and the roam envelope, all of which controld owns and the
+    // web thread can only guess at. Two layers gating the same state is how you
+    // end up with a UI that rejects a request the loop would honour (that is
+    // exactly what v1's enable_search/disable_search pair grew into). controld
+    // answers with the real reason, §52.
+    ota::OperatingMode target;
+    if (!ota::operating_mode_from_name(arg.c_str(), target)) {
+      r.error = "set_mode needs MANUAL, AUTO_TRACK or AUTO_ROAM";
+      return r;
+    }
     r.ok = true;
     return r;
   }

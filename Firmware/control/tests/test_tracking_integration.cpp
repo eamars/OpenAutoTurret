@@ -182,6 +182,19 @@ void step_with_target(TrackingRig& r, int64_t t, int64_t seq, double az,
 // Step one control cycle with NO target measurement (target lost / not present).
 void step_no_target(TrackingRig& r, int64_t t) { r.loop().step(t, kDtNs); }
 
+// v3 §53: motion belongs to a MODE. Give the loop its commissioned tracking
+// configuration and enter the mode whose motion the test is about. Calling the
+// v1 entry point (enable_tracking) and then expecting motion is no longer a thing
+// that works — MANUAL owns motion until a mode says otherwise, which is exactly
+// what §26 is for.
+void enter_mode(TrackingRig& r, const TrackingController::Config& cfg,
+                ota::OperatingMode mode) {
+  r.loop().set_tracking_config(cfg, false);
+  const auto res = r.loop().request_mode(mode);
+  ASSERT_TRUE(res.ok) << ota::operating_mode_name(mode) << ": " << res.reason;
+  ASSERT_EQ(r.loop().operating_mode(), mode);
+}
+
 }  // namespace
 
 // The core Phase 6 deliverable: a target rotating in the base frame is tracked
@@ -192,7 +205,7 @@ TEST(TrackingIntegration, TracksRotatingTarget) {
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
   std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
 
   const double az_rate = 3.0 * kDeg;   // rad/s (slow)
   const double el_const = 5.0 * kDeg;  // rad
@@ -247,7 +260,7 @@ TEST(TrackingIntegration, TargetLossTransitionsToBrakeThenHold) {
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
   std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
 
   const int track = 100;  // 0.5 s of tracking
   track_then_lose(r, t0, track, 5.0 * kDeg, 3.0 * kDeg);
@@ -274,7 +287,7 @@ TEST(TrackingIntegration, SearchSweepsWhenEnabled) {
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
   std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(true), err)) << err;
+  enter_mode(r, make_tracking_cfg(true), ota::OperatingMode::AutoRoam);
 
   const int track = 100;
   track_then_lose(r, t0, track, 5.0 * kDeg, 3.0 * kDeg);
@@ -306,7 +319,7 @@ TEST(TrackingIntegration, StaysWithinSoftLimits) {
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
   std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
 
   const double az_rate = 15.0 * kDeg;  // faster, to stress the limits
   const int cycles = 800;              // 4 s -> ~60 deg sweep
@@ -335,7 +348,7 @@ TEST(TrackingIntegration, FaultStopsSafely) {
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
   std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
 
   const int track = 80;
   track_then_lose(r, t0, track, 5.0 * kDeg, 3.0 * kDeg);
@@ -361,87 +374,80 @@ TEST(TrackingIntegration, FaultStopsSafely) {
 //     (control_loop.cpp: "Acknowledge so the UI can proceed"), so the dashboard
 //     reported success for a no-op.
 
-TEST(TrackingIntegration, ColdStationWithSearchArmedGoesLooking) {
+TEST(TrackingIntegration, ColdStationInAutoRoamGoesLooking) {
+  // v3 §30/§36, and the case the operator's correction was about: the station
+  // boots, no target ever appears, and in AUTO_ROAM it must go looking anyway.
+  //
+  // The configuration here deliberately says search is OFF. What arms the sweep
+  // is the MODE, not the v1 flag — which is the point: under v3 the operator
+  // chooses an operating mode, and turret.yaml does not get to veto it.
   TrackingRig r;
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
-  std::string err;
-
-  ASSERT_TRUE(r.loop().submit_command("enable_search", "").ok);
-  r.loop().step(t0, kDtNs);                     // commands run on the next cycle
-  ASSERT_TRUE(r.loop().search_override().has_value());
-  ASSERT_TRUE(r.loop().search_override().value());
-
-  // turret.yaml in this rig says search is off (§36: opt-in). The operator's
-  // word must outrank it.
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoRoam);
   const double yaw_at_enable = r.loop().last_positions()[1];
 
   // 2.5 s of nothing at all: no measurement has EVER arrived.
   for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
 
   EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Search)
-      << "a station that has never seen a target must go looking for one";
-  EXPECT_NE(r.loop().last_positions()[1], yaw_at_enable)
-      << "SEARCH is a sweep, not a nicer word for holding still";
+      << "a station in AUTO_ROAM that has never seen a target must go looking";
+  EXPECT_EQ(r.loop().last_intent().source, ota::MotionSource::AutoRoam)
+      << "the sweep must be attributed to the mode that asked for it, or the "
+         "operator's screen cannot say why the turret is moving";
+  EXPECT_EQ(r.loop().last_intent().type, ota::IntentType::JointPosition);
+  EXPECT_GT(std::fabs(r.loop().last_positions()[1] - yaw_at_enable), 0.2)
+      << "AUTO_ROAM is a sweep, not a nicer word for holding still (moved "
+      << std::fabs(r.loop().last_positions()[1] - yaw_at_enable) / kDeg
+      << " deg)";
 }
 
-TEST(TrackingIntegration, ColdStationWithoutSearchHoldsInstead) {
-  // The other half: with search NOT armed, "no target" must remain a quiet hold.
-  // Otherwise this fix would have turned every un-armed station into a sweeper.
+TEST(TrackingIntegration, AutoTrackNeverSweepsLookingForATarget) {
+  // §111.5, frozen: "AUTO_TRACK does not roam when target is absent."
+  //
+  // This is the test that separates the state machine from the authority. With
+  // the config asking for search and the target never arriving, the inherited v1
+  // FSM still walks into Search internally — the mechanism is intact. What must
+  // NOT happen is the turret sweeping, because AUTO_TRACK is not allowed to
+  // author motion while it has no target. If these two ever agree again, the
+  // modes have quietly collapsed back into one behaviour and §110's
+  // "AUTO_TRACK with no target holds forever" fails on the station, where it is
+  // a turret wandering around a room looking for something it was never told to
+  // find.
   TrackingRig r;
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
-  std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
+  enter_mode(r, make_tracking_cfg(true), ota::OperatingMode::AutoTrack);
   const double yaw0 = r.loop().last_positions()[1];
+
   for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
-  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::ReadyHold);
-  // A band, not bit-equality: run_to_ready guarantees |q - ready| < 0.01 rad, and
-  // the hold reference settles the remaining fraction. The claim being tested is
-  // "it did not start sweeping", which one degree distinguishes from a 45 deg
-  // sweep with room to spare.
-  EXPECT_LT(std::fabs(r.loop().last_positions()[1] - yaw0), 1.0 * kDeg);
+
+  EXPECT_TRUE(r.loop().tracking_controller().track_state() == TrackState::Search ||
+              r.loop().tracking_controller().track_state() == TrackState::ReadyHold)
+      << "the mechanism still runs; it is the authority that is withheld";
+  EXPECT_EQ(r.loop().last_intent().type, ota::IntentType::Hold)
+      << "AUTO_TRACK must emit a hold while it has no target";
+  EXPECT_LT(std::fabs(r.loop().last_positions()[1] - yaw0), 1.0 * kDeg)
+      << "and the turret must actually still: yaw moved "
+      << std::fabs(r.loop().last_positions()[1] - yaw0) / kDeg << " deg";
 }
 
-TEST(TrackingIntegration, DisableSearchEndsASweepThatIsRunning) {
-  // web::validate_command requires s.search_enabled (i.e. "a sweep is running")
-  // for disable_search, which settles what the button is FOR: stopping a turret
-  // that is roaming, right now. A "takes effect on your next session" answer
-  // would make it useless at its one moment of need.
+TEST(TrackingIntegration, RoamArmedMidSessionStartsSweeping) {
+  // Mode change as the only way to start the sweep: a station in AUTO_TRACK that
+  // has held for a long time begins scanning the cycle the operator selects
+  // AUTO_ROAM, with no stop/start of the tracking session.
   TrackingRig r;
   int64_t t0 = 0;
   ASSERT_TRUE(run_to_ready(r, t0));
-  std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(true), err)) << err;
+  enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
   for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
-  ASSERT_EQ(r.loop().tracking_controller().track_state(), TrackState::Search);
+  const double yaw_before = r.loop().last_positions()[1];
+  ASSERT_LT(std::fabs(yaw_before - r.loop().last_positions()[1]), 1e-9);
 
-  ASSERT_TRUE(r.loop().submit_command("disable_search", "").ok);
-  for (int i = 500; i < 560; ++i) step_no_target(r, t0 + i * kDtNs);
+  ASSERT_TRUE(r.loop().request_mode(ota::OperatingMode::AutoRoam).ok);
+  for (int i = 500; i < 640; ++i) step_no_target(r, t0 + i * kDtNs);
 
-  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::ReadyHold)
-      << "disarming must end the sweep, not merely decline to start another";
-  EXPECT_EQ(r.loop().tracking_controller().last_reference().source,
-            ReferenceSource::Hold)
-      << "and hand control back to the normal hold path — one stop behaviour, "
-         "not a second one invented for search";
-}
-
-TEST(TrackingIntegration, EnableSearchStartsASweepMidSession) {
-  // The other direction, on the same live flag: a station holding with no target
-  // (the grace window long expired) starts looking the moment the operator arms
-  // it, without a stop/start cycle.
-  TrackingRig r;
-  int64_t t0 = 0;
-  ASSERT_TRUE(run_to_ready(r, t0));
-  std::string err;
-  ASSERT_TRUE(r.loop().enable_tracking(make_tracking_cfg(false), err)) << err;
-  for (int i = 1; i < 500; ++i) step_no_target(r, t0 + i * kDtNs);
-  ASSERT_EQ(r.loop().tracking_controller().track_state(), TrackState::ReadyHold);
-
-  ASSERT_TRUE(r.loop().submit_command("enable_search", "").ok);
-  for (int i = 500; i < 560; ++i) step_no_target(r, t0 + i * kDtNs);
-
-  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Search);
+  EXPECT_EQ(r.loop().last_intent().source, ota::MotionSource::AutoRoam);
+  EXPECT_GT(std::fabs(r.loop().last_positions()[1] - yaw_before), 0.1)
+      << "the sweep should be under way within 0.7 s of choosing AUTO_ROAM";
 }

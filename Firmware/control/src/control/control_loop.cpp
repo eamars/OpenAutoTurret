@@ -181,6 +181,10 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   // target_lost_behavior=search) says on. The line below prints the EFFECTIVE
   // value, so the log records which one won.
   if (search_override_.has_value()) cfg.fsm.search_enabled = *search_override_;
+  // The intent converter needs the same kinematics the tracker solves against —
+  // two different R_P_C estimates in one loop would make the tracking reference
+  // and the mode reference disagree about where the camera is pointing.
+  ref_mgr_.emplace(geo::LosJointSolver(cfg.kinematics));
   cfg.search.yaw_low_rad = lo;
   cfg.search.yaw_high_rad = hi;
   cfg.search.pitch_rad = ready_raw_[ix(AxisId::Pitch)];  // the safe elevation
@@ -331,17 +335,52 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     deadline_miss_count_ = 0;
   }
 
-  // 2b. Phase 6: compute the tracking reference (only while tracking is active,
-  //     i.e. tracking enabled and in the ready-hold operation). This must
-  //     precede the supervisor input so `tracking_enabled` reflects the cycle.
+  // 2a2. v3 §2: the supervisory states outrank every operating mode. Derived from
+  //      the phase each cycle rather than hooked at each phase assignment, so a
+  //      phase added later cannot forget to say so and leave a mode thinking it is
+  //      in charge during a homing run.
+  mode_mgr_.notify_supervisory(phase_ == Phase::Homing    ? SupervisoryState::Homing
+                               : phase_ == Phase::Parking ? SupervisoryState::Parking
+                               : phase_ == Phase::Fault   ? SupervisoryState::Fault
+                               : (phase_ == Phase::Idle || phase_ == Phase::Parked)
+                                   ? SupervisoryState::Unhomed
+                                   : SupervisoryState::Ready);
+
+  // 2b. v3 §53: exactly one mode owns motion. The mode's controller *proposes*
+  //     (the v1 TrackingController still produces the numbers: its FSM,
+  //     estimator and search planner are what V3-4 / V3-6 replace); the mode
+  //     decides whether that proposal is honoured; the ReferenceManager converts
+  //     the surviving intent into a joint reference. Everything after this point —
+  //     envelope, trajectory, adapter — is unchanged v1 (§111.18).
   tracking_ref_ = ReferenceRequest{};
+  mode_proposal_ = ReferenceRequest{};
+  last_intent_ = MotionIntent{};
   if (tracking_ && phase_ == Phase::Hold) {
-    tracking_ref_ = tracking_->compute_reference(
+    mode_proposal_ = tracking_->compute_reference(
         now_ns, ready_raw_[ix(AxisId::Pitch)], ready_raw_[ix(AxisId::Yaw)]);
     // §28.5/§31.3: the payload profile v_max (and any mismatch derate) caps
-    // the tracking speed.
-    tracking_ref_.v_max_rad_s =
-        std::min(tracking_ref_.v_max_rad_s, hold_speed_effective());
+    // station motion. Applied to the proposal here and again to the intent's
+    // ceiling in intent_limits(); the double application is deliberate — the cap
+    // is applied *before* the confidence derate so a degrading target cannot lift
+    // the effective ceiling back up, which is the safer ordering and slightly
+    // stricter than v1's.
+    mode_proposal_.v_max_rad_s =
+        std::min(mode_proposal_.v_max_rad_s, hold_speed_effective());
+    last_intent_ = build_mode_intent(now_ns);
+    tracking_ref_ = ref_mgr_
+                      ? ref_mgr_->resolve(last_intent_, intent_limits(now_ns))
+                      : ReferenceRequest{};
+    if (!ref_mgr_) {
+      // Cannot happen on any path that reaches here (it is built in
+      // enable_tracking), but the alternative is dereferencing an optional on the
+      // control thread and guessing. Hold, and say so once per boot-ish.
+      static bool warned_no_converter = false;
+      if (!warned_no_converter) {
+        warned_no_converter = true;
+        spdlog::error("no intent converter: holding instead of following the "
+                      "mode reference");
+      }
+    }
     tracking_->record_pose(sp[ix(AxisId::Yaw)].q_rad);
     tracking_->record_reference(tracking_ref_);
   }
@@ -534,32 +573,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Hold: {
-      if (tracking_) {
-        // Phase 6: delegate to the tracking controller (tracking > search >
-        // hold, §16). The reference was computed in step 2b. Constrain it with
-        // the safety envelope (§15: reference manager -> SafetyEnvelope): clamp
-        // the position to the soft limits and cap the speed at the largest
-        // value from which a full stop still fits before the boundary.
-        //
-        // `at_ready_` still means "holding the safe ready pose" WHILE tracking
-        // is on: the arbitration is holding (no tracking, no search reference)
-        // and both axes are within tolerance of it. Without this, a station
-        // with tracking enabled never reports "at ready pose" (the operator's
-        // P0 hold criterion) and the §27 auto payload check — which is gated
-        // on at_ready — could never run.
-        bool at_ready_now = tracking_ref_.source == ReferenceSource::Hold;
+      if (tracking_ref_.source != ReferenceSource::Hold) {
+        // v3: a mode asked for motion, so the envelope constrains that reference
+        // (§15: clamp the position to the soft limits, and cap the speed at the
+        // largest value from which a full stop still fits before the boundary).
+        // Nothing below this line runs for a moving mode.
+        at_ready_ = false;  // "at the ready pose" and "a mode is pointing
+                            // elsewhere" are exclusive by definition
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
           q_ref[i] = env_.constrain_reference(r, limits_[i]);
           lim[i] = std::min(tracking_ref_.v_max_rad_s,
                             env_.max_speed_at(q_ref[i], limits_[i]));
-          if (std::fabs(sp[i].q_rad - ready_raw_[i]) > kReadyPosTolRad)
-            at_ready_now = false;
         }
-        at_ready_ = at_ready_now;
         break;
       }
+      // Quiet hold. Kept in its v1 shape on purpose, including the part a
+      // refactor tends to "clean up": once both axes are on the ready pose the
+      // command is *stay exactly here with no speed authority* (lim = 0), not
+      // *drive to the ready pose at hold speed*. On paper the same answer; on
+      // this station it is the difference between a parked arm and one whose
+      // position loop fights static friction forever. Not something to change as
+      // a side effect of wiring modes in.
       // Phase 8: restricted one-shot test motion (§42.2) on yaw, validated by
       // the web UI and re-clamped by the envelope below. Takes priority over
       // the ready pose for that cycle.
@@ -949,6 +985,174 @@ double ControlLoop::hold_speed_effective() const {
   return v;
 }
 
+// --- v3 mode plumbing (§43/§44/§53) ---------------------------------------
+
+ModeRequestContext ControlLoop::mode_context() const {
+  ModeRequestContext c;
+  // Allow/Derate are the "healthy" answers; Brake / Hold / FaultStop / Disable
+  // all mean the supervisor has taken the axes away. Derived from the supervisor
+  // rather than re-derived here so the two can never disagree about what "we are
+  // allowed to move" means — a mode gate with its own opinion of health is how a
+  // station ends up arguing with itself.
+  const bool allowed = last_decision_.action == SafetyAction::Allow ||
+                       last_decision_.action == SafetyAction::Derate;
+  c.safety_healthy = allowed;
+  // §44's "position valid": homed, *and* not being told the feedback is stale.
+  // A station that cannot see its own encoders does not know where it is, however
+  // homed its bookkeeping claims.
+  c.position_valid = homed_ && allowed;
+  // V3-1: the roam region is still v1's search band (computed at enable_tracking
+  // from the homed soft limits minus margins). It counts as valid when that band
+  // is non-empty. V3-6 replaces this with the configured inner roam envelope of
+  // §32/§72 and a real validator; until then an empty band must refuse AUTO_ROAM
+  // rather than let it fall back to sweeping the whole soft-limit span, which is
+  // the tempting implementation and the one that finds the mechanical stops.
+  c.roam_envelope_valid =
+      tracking_cfg_.search.yaw_high_rad > tracking_cfg_.search.yaw_low_rad;
+  c.supervisory = mode_mgr_.supervisory();
+  return c;
+}
+
+ModeResult ControlLoop::request_mode(OperatingMode target) {
+  const ModeResult r = mode_mgr_.request(target, mode_context());
+  if (!r.ok) {
+    spdlog::warn("mode change to {} refused: {}", operating_mode_name(target),
+                 r.reason);
+    return r;
+  }
+  sync_controllers_to_mode(target);
+  if (r.changed)
+    spdlog::info("MODE_CHANGED -> {} (supervisory {})",
+                 operating_mode_name(target),
+                 supervisory_state_name(mode_mgr_.supervisory()));
+  return r;
+}
+
+ModeResult ControlLoop::stop_motion() {
+  const OperatingMode was = mode_mgr_.mode();
+  const ModeResult r = mode_mgr_.stop_motion(mode_context());
+  sync_controllers_to_mode(OperatingMode::Manual);
+  spdlog::warn("STOP_MOTION: {} intent cancelled, controlled hold in MANUAL "
+               "(§27; not a disable, not a shutdown)", operating_mode_name(was));
+  return r;
+}
+
+void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
+  // The v1 controllers are the mechanism; the mode is the authority. Search
+  // (the sweep) is armed only for AUTO_ROAM — §111.5 freezes that AUTO_TRACK
+  // does not roam looking for a target, so the flag follows the mode. Any stale
+  // value left by the v1 enable_search command is corrected here rather than
+  // argued with.
+  search_override_ = (mode == OperatingMode::AutoRoam);
+  switch (mode) {
+    case OperatingMode::Manual:
+      // MANUAL owns motion through jog/step (V3-5). Until those exist it holds,
+      // and holding is exactly what dropping the tracking reference does.
+      if (tracking_) disable_tracking();
+      break;
+    case OperatingMode::AutoTrack:
+    case OperatingMode::AutoRoam: {
+      std::string err;
+      if (!tracking_ && !enable_tracking(tracking_cfg_, err))
+        spdlog::warn("mode {}: tracking session could not start: {} — the mode "
+                     "stays selected but will hold", operating_mode_name(mode),
+                     err);
+      else if (tracking_)
+        tracking_->set_search_enabled(mode == OperatingMode::AutoRoam);
+      break;
+    }
+  }
+}
+
+ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
+  ReferenceManager::IntentLimits l;
+  l.now_ns = now_ns;
+  l.q_yaw_hold_rad = ready_raw_[ix(AxisId::Yaw)];
+  l.q_pitch_hold_rad = ready_raw_[ix(AxisId::Pitch)];
+  // §28.5/§31.3: the profiled safe v_max, with any mismatch derate.
+  const double cap = hold_speed_effective();
+  l.hold_v_max_rad_s = cap;
+  l.manual_v_max_rad_s = cap;
+  l.track_v_max_rad_s = std::min(tracking_cfg_.track_v_max_rad_s, cap);
+  l.roam_v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, cap);
+  return l;
+}
+
+MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
+  MotionIntent in;
+  in.timestamp_ns = now_ns;
+  switch (mode_mgr_.mode()) {
+    case OperatingMode::Manual:
+      // V3-5 replaces this with jog/step/goto intents from ManualController. The
+      // run_test_motion developer path (§42.2) is untouched below it: that is a
+      // developer request in §16's sense, not one of the three modes' motion.
+      return MotionIntent::hold(MotionSource::Manual, "manual hold");
+
+    case OperatingMode::AutoTrack: {
+      if (!tracking_)
+        return MotionIntent::hold(MotionSource::AutoTrack,
+                                  "no tracking session started");
+      const tracking::TrackState st = tracking_->track_state();
+      if (st == tracking::TrackState::Tracking ||
+          st == tracking::TrackState::Coasting) {
+        if (!tracking_->estimator_initialized())
+          return MotionIntent::hold(MotionSource::AutoTrack,
+                                    "estimator not initialised");
+        double az = 0.0, el = 0.0;
+        tracking_->predicted_los_at_actuation(az, el);
+        in.source = MotionSource::AutoTrack;
+        in.type = IntentType::LosDirection;
+        in.has_los = true;
+        in.los_az_rad = az;
+        in.los_el_rad = el;
+        // §19/§35: confidence derates, and it arrives as a scale on the intent so
+        // telemetry can show what was asked for next to what was allowed.
+        const double c = std::max(0.0, std::min(1.0, tracking_->confidence()));
+        in.velocity_scale = c;
+        in.confidence = c;
+        in.set_reason(track_state_name(st));
+        return in;
+      }
+      if (st == tracking::TrackState::Search) {
+        // §111.5, and the reason this branch has to exist explicitly: a station
+        // that lost its target in AUTO_TRACK must NOT start sweeping the
+        // workspace looking for any target it happens to find. That is
+        // AUTO_ROAM's job, and the operator chooses it. Without this branch the
+        // inherited v1 search planner would happily keep sweeping, and the two
+        // modes would mean the same thing.
+        return MotionIntent::hold(MotionSource::AutoTrack,
+                                  "target absent; roaming needs AUTO_ROAM (111.5)");
+      }
+      return MotionIntent::hold(MotionSource::AutoTrack,
+                                track_state_name(st));
+    }
+
+    case OperatingMode::AutoRoam: {
+      if (!tracking_)
+        return MotionIntent::hold(MotionSource::AutoRoam,
+                                  "sweep not started");
+      if (tracking_->track_state() != tracking::TrackState::Search ||
+          mode_proposal_.source != ReferenceSource::Search) {
+        // Includes the lost-timeout grace before the sweep begins, and the
+        // turnaround dwells. §36's "do not jump to a distant scan start" is
+        // satisfied by the planner being re-seeded from the current yaw; RoamPlanner
+        // owns that properly in V3-6.
+        return MotionIntent::hold(MotionSource::AutoRoam,
+                                  track_state_name(tracking_->track_state()));
+      }
+      in.source = MotionSource::AutoRoam;
+      in.type = IntentType::JointPosition;
+      in.has_joint_target = true;
+      in.q_yaw_rad = mode_proposal_.q_yaw_rad;
+      in.q_pitch_rad = mode_proposal_.q_pitch_rad;
+      in.confidence = 1.0;  // no target involved; the sweep is not uncertain
+      in.set_reason("bounded sweep");
+      return in;
+    }
+  }
+  return MotionIntent::hold(MotionSource::None, "unreachable mode value");
+}
+
 void ControlLoop::apply_payload_derate(bool derated) {
   payload_derated_ = derated;
   // Cap the safety-envelope v_max (it bounds the tracking reference, §15):
@@ -1133,17 +1337,38 @@ void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
   std::string err;
   if (name == "hold") {
-    // Hold: drop any tracking reference so the loop settles at the ready pose.
-    if (tracking_) disable_tracking();
+    // v3 §2: HOLD is not a mode, it is what MANUAL does when nothing is asked of
+    // it. The command stays — every script and habit uses it — but it now has to
+    // *change the mode*, because dropping the tracking reference while AUTO_TRACK
+    // is still authoritative would leave it re-acquiring on the next frame and
+    // moving again. That restart-by-design is the stale intent §93 is about, and
+    // this button used to be reachable proof of it.
+    request_mode(OperatingMode::Manual);
+    return;
+  }
+  if (name == "set_mode") {
+    OperatingMode target;
+    if (!operating_mode_from_name(arg.c_str(), target)) {
+      spdlog::warn("set_mode rejected: unknown mode '{}' (expected MANUAL, "
+                   "AUTO_TRACK or AUTO_ROAM)", arg);
+      return;
+    }
+    request_mode(target);
+    return;
+  }
+  if (name == "stop_motion") {
+    stop_motion();
     return;
   }
   if (name == "start_tracking") {
-    if (tracking_) return;  // already enabled (validation should have caught it)
-    // Use the COMMISSIONED configuration (turret.yaml `tracking:` block +
-    // the calibration files), not the built-in defaults (Part 2, S1).
-    if (!enable_tracking(tracking_cfg_, err)) {
-      spdlog::warn("start_tracking rejected: {}", err);
-    }
+    // v3: this is SET_MODE(AUTO_TRACK). Kept as an alias because §16's old
+    // semantics ("start tracking" as a separate action from "be in the tracking
+    // mode") are what created the class of bug where a command reports success
+    // and the mode never changes: it enabled a controller without taking
+    // authority, so the operator's screen and the turret disagreed about who was
+    // driving. Uses the COMMISSIONED configuration (turret.yaml `tracking:`
+    // block + the calibration files), not built-in defaults (Part 2, S1).
+    request_mode(OperatingMode::AutoTrack);
     return;
   }
   if (name == "stop_tracking") {

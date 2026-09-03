@@ -120,6 +120,14 @@ class TrackingController {
       az = el = 0.0;
     }
 
+    // What was predicted *to the actuation time* is what got commanded, so that
+    // is what gets remembered: predicted_los() above returns the estimator's
+    // current state, and the two differ by exactly the lookahead. Telemetry that
+    // shows the wrong one (§78) makes a latency problem look like a geometry
+    // problem, which is a bad afternoon either way.
+    predicted_az_act_rad_ = az;
+    predicted_el_act_rad_ = el;
+
     ReferenceManagerInput in;
     in.track_state = st;
     in.target_confidence = fsm_.confidence();
@@ -156,6 +164,13 @@ class TrackingController {
     az = estimator_.azimuth();
     el = estimator_.elevation();
   }
+  // The LOS actually commanded this cycle: the estimator state predicted forward
+  // by control delay + motor response (§13.3). This is the one an AUTO_TRACK
+  // intent is built from, and the one §78 asks telemetry to show.
+  void predicted_los_at_actuation(double& az, double& el) const {
+    az = predicted_az_act_rad_;
+    el = predicted_el_act_rad_;
+  }
   telemetry::Telemetry& telemetry() { return telemetry_; }
   const telemetry::Telemetry& telemetry() const { return telemetry_; }
   const ReferenceRequest& last_reference() const { return last_ref_; }
@@ -191,6 +206,8 @@ class TrackingController {
   TimeNs last_valid_arrival_ns_ = 0;
   TimeNs now_ns_ = 0;
   double last_q_yaw_ = 0.0;
+  double predicted_az_act_rad_ = 0.0;
+  double predicted_el_act_rad_ = 0.0;
   ReferenceRequest last_ref_;
 };
 

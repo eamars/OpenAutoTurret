@@ -126,3 +126,46 @@ TEST(CommandValidation, PayloadVerificationRequiresReadyPose) {
   const auto sel = validate_command(s, "select_payload_profile", "conservative");
   EXPECT_TRUE(sel.ok) << sel.error;
 }
+
+// --- v3 §51/§52: the mode commands ---------------------------------------
+
+TEST(CommandValidation, StopMotionIsAcceptedInEveryState) {
+  // The state below says: not homed, faulted, no valid limits. Everything the
+  // other gates refuse, this one must still accept. §27 is not a request to move,
+  // it is a request to stop, and a stop that is conditional on the machine being
+  // healthy is not a stop.
+  SystemCommandState s;
+  s.fault = true;
+  s.homed = false;
+  s.at_ready = false;
+  s.limits_valid = false;
+  EXPECT_TRUE(validate_command(s, "stop_motion").ok);
+}
+
+TEST(CommandValidation, SetModeChecksShapeNotState) {
+  auto s = homed_state();
+  EXPECT_TRUE(validate_command(s, "set_mode", "MANUAL").ok);
+  EXPECT_TRUE(validate_command(s, "set_mode", "AUTO_TRACK").ok);
+  EXPECT_TRUE(validate_command(s, "set_mode", "auto_roam").ok);
+  // The interesting half: the gate deliberately does NOT re-implement controld's
+  // state checks (homing, feedback freshness, safety ladder, roam envelope).
+  // Duplicating them here is what produced v1's enable_search/disable_search
+  // contract mismatch — a UI that refused a request the loop would have honoured,
+  // and vice versa. controld owns that answer and gives a reason (§52).
+  SystemCommandState bad;  // nothing homed, nothing valid
+  EXPECT_TRUE(validate_command(bad, "set_mode", "AUTO_TRACK").ok);
+}
+
+TEST(CommandValidation, SetModeRejectsNamesThatDoNotExist) {
+  auto s = homed_state();
+  EXPECT_FALSE(validate_command(s, "set_mode", "").ok);
+  EXPECT_FALSE(validate_command(s, "set_mode", "SEARCH").ok)
+      << "v1's SEARCH is an AUTO_ROAM phase now; accepting the old spelling would "
+         "leave a stale UI half-working instead of failing it with a reason";
+  EXPECT_FALSE(validate_command(s, "set_mode", "HOLD").ok)
+      << "HOLD is a phase of MANUAL, not a mode (§2)";
+  auto r = validate_command(s, "set_mode", "AUTOPILOT");
+  EXPECT_FALSE(r.ok);
+  EXPECT_NE(r.error.find("MANUAL"), std::string::npos)
+      << "the rejection must name the accepted spellings, not just say no";
+}

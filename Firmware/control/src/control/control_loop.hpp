@@ -35,6 +35,7 @@
 #include "calibration/installation_pose.hpp"
 #include "calibration/park_controller.hpp"
 #include "calibration/world_frame_telemetry.hpp"
+#include "mode/mode_manager.hpp"
 #include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
 #include "control/reference_manager.hpp"
@@ -162,6 +163,25 @@ class ControlLoop {
   // = the operator's explicit word, which outranks the config in both
   // directions. Exposed so a test can assert what a command ACTUALLY changed.
   std::optional<bool> search_override() const { return search_override_; }
+
+  // --- v3: the operating mode (§43) --------------------------------------
+  // The mode is the authority on WHO may ask for motion; the v1 layers below it
+  // decide whether that motion is safe. Both are asked every cycle, and they are
+  // not the same question: AUTO_TRACK may be in charge and still be refused a
+  // reference by the envelope in the same cycle.
+  OperatingMode operating_mode() const { return mode_mgr_.mode(); }
+  SupervisoryState supervisory_state() const { return mode_mgr_.supervisory(); }
+  const MotionIntent& last_intent() const { return last_intent_; }
+
+  // Ask for a mode change (web command, or the boot sequence). Never partial:
+  // either the mode changes and the controllers follow, or nothing moves and the
+  // reason says why (§52).
+  ModeResult request_mode(OperatingMode target);
+  // §27: cancel the active intent, land in MANUAL/HOLD. Unconditional.
+  ModeResult stop_motion();
+
+  // The facts the mode gate is judged on, assembled from authoritative state.
+  ModeRequestContext mode_context() const;
   // Access to the tracking controller (telemetry, state). Only call when
   // tracking_mode_enabled().
   const TrackingController& tracking_controller() const { return *tracking_; }
@@ -262,6 +282,11 @@ class ControlLoop {
   void process_commands();
   void execute_command(const std::string& name, const std::string& arg);
   void disable_tracking();
+  // v3: make the v1 controllers match a mode that has already been accepted, and
+  // build the authoritative cycle intent from whichever mode owns motion (§53).
+  void sync_controllers_to_mode(OperatingMode mode);
+  MotionIntent build_mode_intent(TimeNs now_ns) const;
+  ReferenceManager::IntentLimits intent_limits(TimeNs now_ns) const;
   // Phase 9: payload verification (§27, §31.3). `sp` holds the current
   // axis snapshots: the per-axis safe region is centered on each axis's
   // current pose (the check starts where the station holds).
@@ -375,6 +400,16 @@ class ControlLoop {
   // files). Used by the `start_tracking` command and the auto-enable path.
   TrackingController::Config tracking_cfg_;
   std::optional<bool> search_override_;  // enable_search / disable_search
+  // v3 §53: converts the authoritative mode's intent into a joint reference.
+  // Built from the commissioned kinematics when a tracking session is configured
+  // (that is where the calibrated kinematics live today). When V3-5 gives MANUAL
+  // its own controller this must move onto the loop's own config: a mode that can
+  // only convert intents while a tracking session happens to exist is a
+  // dependency that will bite the first time someone jogs with tracking off.
+  std::optional<ReferenceManager> ref_mgr_;
+  ModeManager mode_mgr_;             // v3 §43: which mode owns motion
+  MotionIntent last_intent_;         // what it asked for this cycle
+  ReferenceRequest mode_proposal_;   // the controller's proposal, before the mode
   bool tracking_auto_enable_ = false;
   // Observe-only view of the vision transport (owned by main / VisionIngest).
   const vision::VisionLink* vision_link_ = nullptr;
