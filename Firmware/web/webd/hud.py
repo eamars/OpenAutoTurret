@@ -465,14 +465,14 @@ function hudForInsetSvg(g, C) {
   // §11's "short legend": three rows, no paragraphs.
   const lx = g.x + g.w - Math.max(52, g.w * 0.20), ly = g.y + g.titleH + 3;
   parts.push('<line x1="' + lx + '" y1="' + ly + '" x2="' + (lx + 9) + '" y2="' + ly +
-             '" stroke="' + C.white + '" stroke-width="1"/><text class="tlbl" x="' + (lx + 12) +
+             '" stroke="' + C.white + '" stroke-width="1"/><text class="flbl" x="' + (lx + 12) +
              '" y="' + (ly + 3) + '" fill="' + C.dim + '">FOV</text>');
   parts.push('<circle cx="' + (lx + 4) + '" cy="' + (ly + 12) + '" r="3.4" fill="none" stroke="' +
-             C.green + '" stroke-width="1.2"/><text class="tlbl" x="' + (lx + 12) + '" y="' +
+             C.green + '" stroke-width="1.2"/><text class="flbl" x="' + (lx + 12) + '" y="' +
              (ly + 15) + '" fill="' + C.dim + '">TARGET</text>');
   parts.push('<path d="M' + (lx + 4) + ' ' + (ly + 18) + 'L' + (lx + 9) + ' ' + (ly + 23) + 'L' +
              (lx + 4) + ' ' + (ly + 28) + 'L' + (lx - 1) + ' ' + (ly + 23) + 'Z" fill="none" stroke="' +
-             C.amber + '" stroke-width="1.2"/><text class="tlbl" x="' + (lx + 12) + '" y="' +
+             C.amber + '" stroke-width="1.2"/><text class="flbl" x="' + (lx + 12) + '" y="' +
              (ly + 26) + '" fill="' + C.dim + '">PRED</text>');
   return parts.join("");
 }
@@ -1251,9 +1251,15 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
 #strip .v { color: var(--hud-green); }
 #strip .warn { color: var(--hud-amber); }
 #strip .sep { color: var(--hud-line); }
-text.tlbl { font-size: 11px; letter-spacing: .04em; font-family: inherit; }   /* tape labels */
+text.tlbl { font-size: 11px; letter-spacing: .04em; font-family: inherit; }   /* scale labels */
 text.tval { font-size: 12px; letter-spacing: .06em; font-family: inherit; }   /* value boxes */
-text.lbl { font-size: 11px; letter-spacing: .08em; font-family: inherit; }
+/* 16's hierarchy is a size RELATIONSHIP, not a list of names. Three of its rows used to share one 11px
+   rule, which left the hierarchy true only in the document: scale labels, candidate labels and the FOR
+   legend all measured the same. The sizes below are the section read out in order - 12px is the strongest
+   numeric (yaw/pitch values), 11px scale labels (medium-small), 10px candidate labels (small, the same
+   step the bottom strip uses, as the section asks), 9px the FOR legend at the smallest readable size. */
+text.lbl { font-size: 10px; letter-spacing: .08em; font-family: inherit; }    /* candidate labels */
+text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /* FOR legend */
 /* §25: stale telemetry stops visual interpolation and says so. The filter is presentation
    only - the overlay keeps drawing the last known geometry, dimmed, with the AGE cell amber. */
 #viewport.stale #video { filter: grayscale(.55) brightness(.72); }

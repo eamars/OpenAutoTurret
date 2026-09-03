@@ -1545,3 +1545,37 @@ payload, not out of a fixture. Same check on `camera.measurement_age_ms` is now 
 No code changed this round, so the last verified results stand (**57 CTest, 435 pytest** on a clean build, tree
 clean at `f30601d`). Station homed and ready, MANUAL/HOLD, synthetic vision flowing. **§110: 0 items accepted
 on hardware by a named person.**
+
+## 2026-09-04, 17:2x — round 21: §16's ladder is now **numbers, not words** — and both earlier diagnoses of it were mine and wrong
+
+Sizes read the section out in order: **12px** axis values (strongest numeric) → **11px** scale labels →
+**10px** candidate labels (the same step the bottom strip uses, as §16 asks) → **9px** FOR legend, which got a
+class of its own because it had been sharing the scale tier. Two assertions hold it: one compares the four
+tiers as an **ordering and rejects any tie** (a tie is what a quiet regression looks like in a ladder), the
+other checks the classes are **declared *and* spent** by the drawing code — the `--hud-mono` failure mode.
+Both were **falsified on purpose** before being trusted.
+
+**This element has been misdiagnosed twice, by me.** The old note claimed candidate labels shared `tlbl` with
+scale labels (a collision problem needing care). Round 20 concluded the opposite — that no candidate label
+existed at all. **Both wrong**, and round 20's error is the instructive one: my inventory regex required
+`class=` *immediately* after `<text`, while the target label declares `x`/`y` first. The tool reported absence
+in a rigid spelling and **I trusted the absence**. Truth: target labels exist with their own class `lbl`,
+already distinct from the scale tier; the only defect was that both classes held **the same number**. So the
+fix was one number + one new class — three earlier deferrals chased a problem that never existed in either
+shape I described.
+
+**Test proxy → real element:** the existing typography test compared the axis value against `#drawer .dtitle`
+*as a stand-in* for "FOR legend smallest", because the legend had no tier to measure. It now measures
+`text.flbl` itself, keeping the drawer title as its own case. Stated out loud because proxy-swaps can hide
+regressions: this assertion got **stronger**, and was falsified in both directions.
+
+**Path mishap:** my falsification backup used `with_suffix('.bak19')`, which **replaces** `.py` instead of
+appending → backup landed at `hud.bak19`, the restore found nothing, and **hud.py stayed sabotaged**. The suite
+said `1 failed` — the sound of the arrangement working — and `git status` showed exactly the two intended
+files. Restored from the stray backup, confirmed 10px.
+
+Counts checked, not assumed: **437 pytest** (435 + 2 new), **57 CTest** (no control code touched — verified by
+the tree holding only two web files). Served page re-fetched over HTTP carries the new rules and 3 legend rows;
+`node --check` OK. Station homed/ready, MANUAL/HOLD, 2 synthetic tracks, geometry age honest at ~10 h.
+**§110: 0 items accepted on hardware by a named person** — a numerically correct type ladder is fidelity, not
+evidence the reticle lands on a head.

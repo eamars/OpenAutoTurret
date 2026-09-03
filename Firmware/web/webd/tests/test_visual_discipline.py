@@ -124,8 +124,9 @@ class TypographyMatchesSection16(unittest.TestCase):
         tval = self._size("text.tval")
         self.assertGreater(tval, self._size("#strip"))
         self.assertGreater(tval, self._size("text.tlbl"))
-        self.assertGreater(tval, self._size("#drawer .dtitle"), "the FOR legend is the smallest normal "
-                                                               "readable size, so the value out-sizes it")
+        self.assertGreater(tval, self._size("text.flbl"), "the FOR legend is the smallest normal "
+                                                          "readable size, so the value out-sizes it")
+        self.assertGreater(tval, self._size("#drawer .dtitle"))
         self.assertLessEqual(self._size("#mode-block .m2"), tval,
                              "mode phase is 'medium'; it must not out-size the strongest numeric")
         self.assertLessEqual(self._size("#mode-block .m3"), tval)
@@ -133,6 +134,27 @@ class TypographyMatchesSection16(unittest.TestCase):
     def test_the_mode_name_stays_the_strongest_text_overall(self) -> None:
         self.assertGreater(self._size("#mode-block .m1"), self._size("#mode-block .m2"))
         self.assertGreater(self._size("#mode-block .m1"), self._size("text.tval"))
+
+
+
+    def test_candidate_labels_sit_below_scale_labels(self) -> None:
+        # "scale labels  medium-small" and "candidate labels  small" are two rungs, not one 11px rule.
+        # Until this assertion existed the two were numerically identical, so the ladder was only true in
+        # the document; a tie is the failure mode here, and equality is what a quiet regression looks like.
+        scale = self._size("text.tlbl")
+        cand = self._size("text.lbl")
+        self.assertGreater(scale, cand, "16 puts candidate labels a step BELOW scale labels")
+        self.assertGreater(cand, self._size("text.flbl"), "the FOR legend stays the smallest readable")
+
+    def test_the_tiers_are_declared_and_actually_spent(self) -> None:
+        # A class that is declared but never emitted is how --hud-mono deleted three rules with every test
+        # still green. Sizes mean nothing unless the drawing uses the class carrying them.
+        self.assertGreaterEqual(HUD_JS.count('class="flbl"'), 3,
+                                "the FOR legend rows must be drawn with the smallest tier")
+        self.assertIn('class="lbl" fill="', HUD_JS,
+                      "target identity must be drawn on the candidate tier")
+        self.assertGreaterEqual(HUD_JS.count('class="tlbl"'), 5,
+                                "the tape scale must stay on the scale tier")
 
 
 class PaletteDiscipline(unittest.TestCase):
@@ -173,3 +195,4 @@ class PaletteDiscipline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
