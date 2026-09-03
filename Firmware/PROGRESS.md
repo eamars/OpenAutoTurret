@@ -1144,3 +1144,86 @@ decides what is true, so it now says what `camera_fps` is and why §12 quotes it
 
 355 pytest (9 new), 57 CTest entries. Station: homed and ready, both blocks live, CONNECTED chip now
 reporting a real value. Section 110: still 0 items accepted on hardware by a named person.
+
+## 2026-09-04, 12:2x — round 12: §13 dock, §14 drawers, and a command path that lied about success
+
+### What went in
+
+The five-button dock (`TARGETS MODE MANUAL DIAG MENU`, §13's order), drawers that open one at a time,
+and the first command plumbing this HUD has ever had — the page previously only ever read.
+
+Command rows are **built as data by a pure function**, so "which commands will this drawer send" is a
+question node answers without a browser or a socket. Every name and argument spelling was read out of
+the daemon's own handlers first: `select_target` takes the **display index as a number** (controld's
+refusal text says "the label on the screen"), `manual_jog_start` takes `yaw+/yaw-/pitch+/pitch-`,
+`manual_step` takes `yaw+1`, `set_mode` takes `MANUAL/AUTO_TRACK/AUTO_ROAM` and refuses rather than
+falling back, and STOP MOTION is `hold`.
+
+Behavioural choices worth stating:
+- **Gated rows are shown greyed with the reason on the row**, not hidden. A control that silently
+  vanishes is how an operator learns to guess at an interface.
+- **STOP MOTION is never gated.** `hold` is accepted in every mode, and a stop that works in one mode
+  is not a stop.
+- **The active mode and the selected target carry no command at all** — not a command the renderer
+  happens to disable. My own test caught the two drawers disagreeing about this; the data is what the
+  tests read, so it has to say what is true.
+- **Park and supervisory shutdown ask twice**, with the row changing to CONFIRM … PRESS AGAIN so the
+  waiting state is on screen rather than in someone's memory. §14 reserves red for stop and fault, so
+  colour is not the only signal here.
+- One `drawerOpen` variable, not five booleans: §13.2's "only one drawer at a time" becomes structural.
+- `#drawer` is `position:absolute` over the video, because §13.2 requires the drawer not to resize the
+  picture — the moment a drawer reflows the viewport is the moment the operator stops seeing the scene.
+
+18 new tests execute the builders under node and assert the styling/markup rules.
+
+### The defect the live probe caught, which no unit test could
+
+Posting what the drawer would send — `select_target 9999`, a target that does not exist — to the live
+station:
+
+```
+/api/command answered   : {"command":"select_target","ok":true,"error":""}
+controld's log          : select_target 9999: REFUSED (no vision data has reached controld yet)
+published ack, later    : seq 3, cmd select_target, accepted 0, reason "no vision data has reached controld yet"
+```
+
+**The socket response says ok for a command the daemon refused.** It reports that the command reached
+the handler, not what the handler decided. Had the drawer rendered it, the operator would have seen
+`ACCEPTED` for a target that does not exist. This is the defect my notes recorded as "manual_step
+refusal returning ok:true" — and it is not specific to `manual_step`; it is the response path.
+
+The page now reports the socket reply as `SENT` and takes `ACCEPTED`/`REFUSED` **only** from the
+daemon's published `cmd_ack_accepted`, matched on `cmd_ack_seq` so a stale ack cannot answer a new
+command, with a four-second `NO ACK FROM CONTROLD` path so a command that produces nothing does not sit
+there looking accepted. Verified live: the drawer's own data source produces
+`REFUSED: no vision data has reached controld yet`.
+
+**Still open, deliberately:** the response itself should carry the ack. The page no longer trusts it,
+but the lie is still on the wire for any other consumer. That is next round's work, not this one's.
+
+### My own defects this round
+
+- **I walked into the trap written in my own notes.** One command line contained both
+  `pkill -f "web[.]webd[.]app"` and the plain string `web.webd.app` in the launch that followed it, so
+  the kill matched my own shell and SIGTERM'd it mid-call. The note says *kill in one call, launch in
+  another*. The station was fine; the call was not.
+- **`python3 -c "…"` mangled again** (a `NameError` from shell-quoted code), for the second time this
+  session after round 10's X-server incident. Everything with quoting now goes through files.
+- **A test of mine asserted a word that also appears in prose** — `assertNotIn("ACCEPTED", body)`
+  failed against my own explanatory comment. It now asserts on the string literal `"  ACCEPTED"`,
+  because a test that cannot tell code from commentary passes and fails for the wrong reasons.
+- Stale anchors again (my §10 anchor and a markup anchor) — the asserts aborted before writing, which is
+  the only reason the file was never half-patched.
+- **One sample was not enough.** Immediately after the command, `cmd_ack_seq` still read 2 — the ack is
+  set on the loop thread and reaches telemetry on a later snapshot. Concluding "the ack never updates"
+  from that single read would have been wrong, and is exactly the shape of error this project keeps
+  meeting. It is also why the resolver is driven from the render path instead of from the send.
+
+### Also verified live
+
+Page 200 with `id="dock"`, `id="drawer"`, `hudDrawerActions`, `STOP MOTION` all present; the
+command endpoint accepts the page's body shape; `set_mode MANUAL` (already MANUAL) acks accepted with
+reason "already in MANUAL"; mode and ready state unchanged by the probes.
+
+57 CTest entries, 373 pytest (18 new). Station: homed, ready, MANUAL, holding; webd serving the dock.
+Section 110: still 0 items accepted on hardware by a named person.

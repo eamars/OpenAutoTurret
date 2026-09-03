@@ -60,6 +60,130 @@ function hudAxisNorm(intr) {
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
 
+// --- §13 dock and §14 drawers --------------------------------------------------
+//
+// The command list is built as data, not as markup with commands buried in attributes, so that "what
+// will this button send to the turret" is a question a test can ask without a browser. The rendering
+// is derived from that list. A drawer that looks live and sends nothing - or sends something the daemon
+// will refuse - is the failure mode this page keeps meeting, and no screenshot shows it.
+//
+// Every command name and argument spelling here was read out of the daemon's own handlers rather than
+// from prose: select_target takes the DISPLAY INDEX as a number (controld's own refusal says "the label
+// on the screen"), manual_jog_start takes yaw+/yaw-/pitch+/pitch- with an optional fine|normal|fast
+// profile, manual_step takes yaw+1 / pitch-0.5, set_mode takes MANUAL / AUTO_TRACK / AUTO_ROAM and
+// refuses anything else instead of falling back, and STOP MOTION is `hold`.
+function hudDockSpecs(o) {
+  // §13's five, in the order the revision lists them. Always five, whatever the state: a control that
+  // disappears when it is not applicable teaches the operator that the layout is arbitrary.
+  const keys = ["TARGETS", "MODE", "MANUAL", "DIAG", "MENU"];
+  const open = (o && typeof o.open === "string") ? o.open : null;
+  return keys.map((k) => ({ key: k, active: (k === open) }));
+}
+
+function hudDrawerActions(name, t) {
+  // What this drawer offers, as commands. kind: "act" | "current" | "gated" | "stop" | "danger".
+  t = t || {};
+  const tracks = Array.isArray(t.tracks) ? t.tracks : [];
+  const mode = String(t.operating_mode || "").toUpperCase();
+  const inManual = mode === "MANUAL";
+
+  if (name === "TARGETS") {
+    const rows = [];
+    tracks.forEach((tr) => {
+      // A positive display index is the whole eligibility test, because that is what the daemon
+      // demands: it refuses 0 and refuses anything non-numeric. Offering such a target would put a
+      // live-looking button on the screen whose only possible outcome is a refusal.
+      const di = (tr && typeof tr.display_index === "number") ? tr.display_index : 0;
+      if (!(di >= 1 && di <= 65535)) return;
+      // The selected row carries no command, matching how the MODE drawer marks the active mode: a
+      // renderer that only remembers to disable by kind would otherwise still hold a real command for a
+      // row that must not send one. The data is the contract the tests read, so it says what is true.
+      rows.push({ label: "#" + di + " " + String(tr.label || tr.class_name || "TRACK").toUpperCase(),
+                  command: tr.selected ? null : "select_target", arg: String(di),
+                  kind: tr.selected ? "current" : "act",
+                  note: (typeof tr.confidence === "number" ? Math.round(tr.confidence * 100) + "%" : "") });
+    });
+    if (!rows.length) rows.push({ label: "NO TARGETS", command: null, kind: "current", note: "" });
+    if (tracks.some((x) => x && x.selected)) {
+      rows.push({ label: "CLEAR SELECTION", command: "clear_target", arg: "", kind: "act", note: "" });
+    }
+    return rows;
+  }
+
+  if (name === "MODE") {
+    // §13: MANUAL / AUTO TRACK / AUTO ROAM. The mode already in force is rendered as selected and sends
+    // nothing: re-issuing the current mode is a command with no effect, and a control that appears to
+    // act while doing nothing is what the rest of this file is paranoid about.
+    return [["MANUAL", "MANUAL"], ["AUTO TRACK", "AUTO_TRACK"], ["AUTO ROAM", "AUTO_ROAM"]]
+      .map(function (pair) {
+        const shown = pair[0], wire = pair[1], now = (wire === mode);
+        return { label: shown, command: now ? null : "set_mode", arg: wire,
+                 kind: now ? "current" : "act", note: now ? "ACTIVE" : "" };
+      });
+  }
+
+  if (name === "MANUAL") {
+    // The jogs and steps are gated by the daemon: outside MANUAL it answers ok=false with an
+    // explanation. They are still listed - greyed, reason on the row - because a control that silently
+    // vanishes is how an operator learns to guess at the interface. STOP is deliberately not in that
+    // group: `hold` is accepted in every mode, and a stop that only works in one mode is not a stop.
+    const gate = inManual ? "act" : "gated";
+    const note = inManual ? "" : "MANUAL MODE ONLY";
+    const rows = [
+      { label: "YAW LEFT", command: "manual_jog_start", arg: "yaw-", kind: gate, note: note },
+      { label: "YAW RIGHT", command: "manual_jog_start", arg: "yaw+", kind: gate, note: note },
+      { label: "PITCH UP", command: "manual_jog_start", arg: "pitch+", kind: gate, note: note },
+      { label: "PITCH DOWN", command: "manual_jog_start", arg: "pitch-", kind: gate, note: note },
+      { label: "STEP YAW +1", command: "manual_step", arg: "yaw+1", kind: gate, note: note },
+      { label: "STEP YAW -1", command: "manual_step", arg: "yaw-1", kind: gate, note: note },
+      { label: "STEP PITCH +1", command: "manual_step", arg: "pitch+1", kind: gate, note: note },
+      { label: "STEP PITCH -1", command: "manual_step", arg: "pitch-1", kind: gate, note: note }
+    ];
+    rows.push({ label: "STOP MOTION", command: "hold", arg: "", kind: "stop",
+                note: inManual ? "" : "ALWAYS AVAILABLE" });
+    return rows;
+  }
+
+  if (name === "MENU") {
+    // Supervisory actions move the turret somewhere the operator did not just ask it to go, so they ask
+    // twice. §14 reserves red for stop and fault, so the confirm state - not colour alone - is what
+    // signals danger here.
+    return [
+      { label: "HOME", command: "start_homing", arg: "", kind: "act", note: "" },
+      { label: "HOLD / PARK", command: "request_park", arg: "", kind: "danger", note: "CONFIRM TWICE" },
+      { label: "SUPERVISORY SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
+        note: "CONFIRM TWICE" }
+    ];
+  }
+
+  return [];   // DIAG is read-only telemetry; §14 gives it no actions.
+}
+
+
+function hudDiagRows(t) {
+  // §13: DIAG is "engineering telemetry". Read-only, and deliberately the fields an operator is asked to
+  // quote when something behaves oddly - rates and limits rather than impressions. Anything the snapshot
+  // does not carry shows as "--", never as a zero that would look like a measured stillness.
+  t = t || {};
+  const d = (r) => (typeof r === "number" ? r * 57.29577951308232 : null);
+  const num = (v, dp) => (typeof v === "number" ? d(v).toFixed(dp === undefined ? 2 : dp) : "--");
+  return [
+    ["MODE / PHASE", String(t.operating_mode || "--") + " / " + String(t.mode_phase || "--")],
+    ["Q YAW / PITCH", num(t.q_yaw_rad) + " / " + num(t.q_pitch_rad) + " DEG"],
+    ["REF YAW / PITCH", num(t.q_ref_yaw_rad) + " / " + num(t.q_ref_pitch_rad)],
+    ["CMD RATE YAW", num(t.q_ref_rate_yaw_rad_s) + " DEG/S"],
+    ["CMD ACCEL YAW", num(t.q_ref_accel_yaw_rad_s2) + " DEG/S2"],
+    ["LIMITS YAW", num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
+    ["LIMITS PITCH", num(t.q_soft_min_pitch_rad, 1) + " ... " + num(t.q_soft_max_pitch_rad, 1) + " DEG"],
+    ["TRACK RATE", (typeof t.camera_fps === "number" ? t.camera_fps.toFixed(1) : "--") + " HZ"],
+    ["SELECTED CONF", (typeof t.selected_confidence === "number"
+                        ? Math.round(t.selected_confidence * 100) + "%" : "--")],
+    ["PREDICTION HORIZON", (typeof t.prediction_horizon_ms === "number"
+                            ? String(t.prediction_horizon_ms) + " MS" : "--")],
+    ["IMU", (t.imu && t.imu.present) ? "PRESENT" : "ABSENT"]
+  ];
+}
+
 // --- §10 prediction cue ----------------------------------------------------
 //
 // The one element on this page whose colour is a safety statement: §10 says the prediction "must not
@@ -688,6 +812,7 @@ function render(t) {
 function paint(t) {
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
+  resolveAckFromTelemetry(t);
   render(t);
 }
 
@@ -770,6 +895,145 @@ async function pollHealth() {
   } catch (e) { transportOk = false; if (lastTelemetry) render(lastTelemetry); }
 }
 
+
+// --- §13 dock / §14 drawer behaviour -----------------------------------------
+const dock = $("dock"), drawer = $("drawer");
+let drawerOpen = null;
+let lastAck = { text: "", kind: "" };
+let pendingConfirm = null;    // label awaiting a second press; see the two-press rule below
+let pendingAck = null;        // {command, afterSeq, at}: the published ack this command is waiting on
+
+// Line icons, drawn rather than filled: §13.1 asks for a green line icon and explicitly rules out the
+// raised solid-fill card look, which is the fastest way for an overlay to stop reading as a HUD.
+function dockIcon(k) {
+  const g = 'stroke="' + C.green + '" stroke-width="1.4" fill="none"';
+  const inner = {
+    TARGETS: '<circle cx="7" cy="7" r="4" ' + g + '/><line x1="7" y1="0.5" x2="7" y2="3.5" ' + g +
+             '/><line x1="7" y1="10.5" x2="7" y2="13.5" ' + g + '/><line x1="0.5" y1="7" x2="3.5" y2="7" ' +
+             g + '/><line x1="10.5" y1="7" x2="13.5" y2="7" ' + g + '/>',
+    MODE: '<path d="M2 5h8L7.5 2.5M12 9H4l2.5 2.5" ' + g + '/>',
+    MANUAL: '<line x1="7" y1="13" x2="7" y2="5" ' + g + '/><path d="M4 8l3-3 3 3" ' + g +
+            '/><line x1="2.5" y1="13" x2="11.5" y2="13" ' + g + '/>',
+    DIAG: '<polyline points="1.5,10 4,10 5.5,4 8,12 10,7 12.5,7" ' + g + '/>',
+    MENU: '<line x1="2" y1="4" x2="12" y2="4" ' + g + '/><line x1="2" y1="7" x2="12" y2="7" ' + g +
+          '/><line x1="2" y1="10" x2="12" y2="10" ' + g + '/>'
+  }[k] || "";
+  return '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">' + inner + "</svg>";
+}
+
+function renderDock() {
+  dock.innerHTML = hudDockSpecs({ open: drawerOpen }).map((b) =>
+    '<button type="button" class="dockbtn' + (b.active ? " on" : "") + '" data-key="' + b.key +
+    '" aria-pressed="' + (b.active ? "true" : "false") + '">' + dockIcon(b.key) +
+    "<span>" + b.key + "</span></button>").join("");
+}
+
+// The daemon's ack is the only thing entitled to say ACCEPTED. It arrives on the next snapshot, so this
+// runs from render(); a command whose ack never comes is called out after a moment rather than left
+// looking accepted, because a command that quietly produced nothing is the failure the operator cannot
+// see from a picture that keeps moving.
+function resolveAckFromTelemetry(t) {
+  if (!pendingAck || !t) return;
+  const seq = (typeof t.cmd_ack_seq === "number") ? t.cmd_ack_seq : 0;
+  if (t.cmd_ack_command === pendingAck.command && seq > pendingAck.afterSeq) {
+    const accepted = t.cmd_ack_accepted === 1 || t.cmd_ack_accepted === true;
+    const why = String(t.cmd_ack_reason || "");
+    lastAck = { text: pendingAck.command + (accepted ? "  ACCEPTED"
+                  : "  REFUSED: " + (why || "no reason given")), kind: accepted ? "ok" : "bad" };
+    pendingAck = null;
+  } else if (Date.now() - pendingAck.at > 4000) {
+    lastAck = { text: pendingAck.command + "  NO ACK FROM CONTROLD", kind: "bad" };
+    pendingAck = null;
+  }
+}
+
+function renderDrawer() {
+  if (!drawerOpen) { drawer.hidden = true; drawer.innerHTML = ""; return; }
+  let rows;
+  if (drawerOpen === "DIAG") {
+    rows = hudDiagRows(lastTelemetry || {}).map((kv) =>
+      '<div class="drow"><span class="rl">' + kv[0] + '</span><span class="rn">' + kv[1] +
+      "</span></div>").join("");
+  } else {
+    rows = hudDrawerActions(drawerOpen, lastTelemetry || {}).map((a) => {
+      const inert = a.command === null || a.kind === "current" || a.kind === "gated";
+      const cls = "drow " + (a.kind === "stop" ? "stop" : a.kind === "danger" ? "danger" :
+                             a.kind === "gated" ? "gated" : a.kind === "current" ? "on" : "");
+      const waiting = pendingConfirm === a.label;
+      return '<button type="button" class="' + cls + (waiting ? " confirm" : "") + '" data-cmd="' +
+             (a.command || "") + '" data-arg="' + (a.arg || "") + '" data-kind="' + a.kind + '"' +
+             (inert ? " disabled" : "") + '><span class="rl">' +
+             (waiting ? "CONFIRM " + a.label : a.label) + '</span><span class="rn">' +
+             (waiting ? "PRESS AGAIN" : (a.note || "")) + "</span></button>";
+    }).join("");
+  }
+  drawer.innerHTML = '<div class="dtitle">' + drawerOpen + "</div>" + rows +
+    '<div class="dack ' + lastAck.kind + '" role="status">' + (lastAck.text || "&nbsp;") + "</div>";
+  drawer.hidden = false;
+}
+
+// §13.2: only one drawer at a time, and pressing the same button again closes it. There is one
+// `drawerOpen` variable rather than five toggles, which makes the rule structural instead of something
+// each handler has to remember to honour.
+function setDrawer(key) {
+  drawerOpen = (drawerOpen === key) ? null : key;
+  lastAck = { text: "", kind: "" };
+  pendingConfirm = null;
+  renderDock();
+  renderDrawer();
+}
+
+async function sendCommand(cmd, arg) {
+  let j = null;
+  try {
+    const r = await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: cmd, arg: arg || "" })
+    });
+    j = await r.json();
+  } catch (e) {
+    lastAck = { text: cmd + "  NOT SENT: transport", kind: "bad" };
+    renderDrawer();
+    return;
+  }
+  // What came back over the socket is NOT the verdict. It says the command reached the daemon's
+  // handler; the daemon's own decision is recorded separately and published as cmd_ack_* - and the two
+  // disagree today, which was found by posting a selection the station could not honour: controld's log
+  // says "select_target 9999: REFUSED (no vision data has reached controld yet)" while /api/command
+  // answered ok:true. Rendering that response as ACCEPTED would have told the operator the turret had
+  // picked a target that does not exist. So the response is reported as SENT, and the verdict is read
+  // from the ack the daemon publishes, matched on command name and sequence.
+  const seq = (lastTelemetry && typeof lastTelemetry.cmd_ack_seq === "number")
+    ? lastTelemetry.cmd_ack_seq : 0;
+  pendingAck = { command: cmd, afterSeq: seq, at: Date.now() };
+  lastAck = { text: cmd + "  SENT", kind: "" };
+  pendingConfirm = null;
+  renderDrawer();
+}
+
+dock.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("button[data-key]") : null;
+  if (b) setDrawer(b.getAttribute("data-key"));
+});
+
+drawer.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("button[data-cmd]") : null;
+  if (!b || b.disabled) return;
+  const cmd = b.getAttribute("data-cmd");
+  if (!cmd) return;
+  if (b.getAttribute("data-kind") === "danger") {
+    // Two presses for the actions that move the turret somewhere it was not just asked to go. The label
+    // changes and the row says PRESS AGAIN, so the waiting state is on screen, not in someone's memory.
+    const label = String((b.querySelector && b.querySelector(".rl")) ?
+                         b.querySelector(".rl").textContent : b.textContent);
+    if (pendingConfirm !== label) { pendingConfirm = label; renderDrawer(); return; }
+  }
+  sendCommand(cmd, b.getAttribute("data-arg") || "");
+});
+
+renderDock();
+
 window.addEventListener("resize", () => { if (lastTelemetry) render(lastTelemetry); });
 document.addEventListener("DOMContentLoaded", () => {
   $("video").addEventListener("loadedmetadata", () => { if (lastTelemetry) render(lastTelemetry); });
@@ -841,6 +1105,41 @@ text.lbl { font-size: 11px; letter-spacing: .08em; font-family: inherit; }
   border: 1px solid var(--hud-amber); padding: 3px 8px; }
 #notices { position: absolute; left: 1%; top: 14%; z-index: 20; font-size: 11px;
   letter-spacing: .08em; color: var(--hud-amber); text-shadow: 0 0 6px rgba(0,0,0,.9); }
+
+/* --- §13.1 dock, §14 drawer ------------------------------------------------- */
+#dock { position:absolute; right:1.2%; bottom:8.5%; display:flex; gap:6px; z-index:30; }
+.dockbtn { display:flex; flex-direction:column; align-items:center; gap:3px; width:46px;
+           padding:5px 2px 4px; background:rgba(3,6,5,.62); border:1px solid rgba(230,245,230,.22);
+           border-radius:2px; color:#edf2eb; font:500 8.5px/1 var(--hud-mono); letter-spacing:.06em;
+           cursor:pointer; }
+.dockbtn:hover { border-color:rgba(149,245,139,.55); }
+.dockbtn.on { border-color:#95f58b; background:rgba(3,6,5,.78); }
+.dockbtn span { color:#edf2eb; }
+
+/* §14: translucent black body, thin green/neutral border, monospaced, compact, boxes inside boxes kept
+   rare. Absolutely positioned over the video, so opening it never rescales the picture - §13.2's
+   explicit requirement, and the reason this is not a flex sibling of the viewport. */
+#drawer { position:absolute; right:1.2%; bottom:calc(8.5% + 58px); width:min(330px,32vw); max-height:52vh;
+          overflow:auto; background:rgba(2,5,4,.86); border:1px solid rgba(149,245,139,.38);
+          border-radius:2px; padding:7px 8px 6px; z-index:40; font:400 10px/1.45 var(--hud-mono);
+          color:#edf2eb; }
+#drawer[hidden] { display:none; }
+#drawer .dtitle { color:#95f58b; font-size:9px; letter-spacing:.14em; margin:0 0 5px; }
+#drawer .drow { display:flex; justify-content:space-between; gap:10px; width:100%; text-align:left;
+                background:none; border:0; border-bottom:1px solid rgba(230,245,230,.09); color:#edf2eb;
+                font:inherit; padding:3px 1px; cursor:pointer; }
+#drawer .drow:hover:not(:disabled) { background:rgba(149,245,139,.10); }
+#drawer .drow .rn { color:rgba(149,245,139,.56); white-space:nowrap; }
+#drawer .drow.on .rl { color:#95f58b; }
+#drawer .drow.gated { opacity:.42; cursor:not-allowed; }
+#drawer .drow.gated .rn { color:#f2b329; }
+#drawer .drow.stop .rl { color:#ff5d5d; }
+#drawer .drow.stop:hover { background:rgba(255,93,93,.14); }
+#drawer .drow.confirm { background:rgba(242,179,41,.16); }
+#drawer .drow.confirm .rl { color:#f2b329; }
+#drawer .dack { margin-top:6px; font-size:9px; letter-spacing:.05em; color:rgba(149,245,139,.56); }
+#drawer .dack.ok { color:#95f58b; }
+#drawer .dack.bad { color:#ff5d5d; }
 """
 
 HUD_HTML = """<!DOCTYPE html>
@@ -885,6 +1184,13 @@ HUD_HTML = """<!DOCTYPE html>
   <div id="health"></div>
   <div id="notices"></div>
   <div id="strip"></div>
+
+  <!-- §13 dock and §14 drawer. Outside the SVG deliberately: these are the only parts of the overlay the
+       operator presses, and real elements keep focus, hover and button semantics away from a hit-test on
+       painted geometry. They come last in document order, which on this page IS the z-order (§18: dock
+       30, drawer 40); the z-index in the CSS states it rather than relying on it. -->
+  <div id="dock" role="toolbar" aria-label="context controls"></div>
+  <div id="drawer" hidden role="dialog" aria-modal="false"></div>
 </div>
 <script>""" + HUD_JS + """</script>
 </body>
