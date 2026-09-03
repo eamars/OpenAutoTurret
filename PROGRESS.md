@@ -405,9 +405,19 @@ instantly, so a real cycle also pays the CAN exchange, and the pre-v3 figure of 
 5.09 ms p99 remains the only number anyone has measured on the Pi. The gate's ceiling is
 deliberately absurd (p99 < 4000 µs) because what it is for is a factor of ten — an
 allocation, a file write, a socket appearing on the control path — not 40 µs of laptop
-jitter. The homing row is printed and not gated: it is where §46's `sleep_for(50 ms)` recipe
-delays live, and v3 inherits them unchanged; the worst cycle observed here was 101–149 ms,
-consistent with the 109–113 ms recorded on metal before v3 existed.
+jitter. The two informational rows are not gated, and the first version of
+this tool got one of them wrong in a way worth keeping: it blamed a 90–150 ms worst cycle on
+homing's §46 recipe sleeps — and **the sim backend has no recipe sleeps**, because those live
+in `can_motor_backend`, which this run never touches. Adding a 200-cycle idle row *in front
+of* homing moved the spike into it, so the real cause is a once-per-process ~100 ms cost (the
+first spdlog write, which in this tool happens when homing first trips the watchdog and
+preserves a black-box scene). controld logs long before homing on the station, so the
+practical consequence there is probably small — but the rule is general and this tool now
+encodes it: **a one-time cost is charged to whoever runs first**, so the tool runs idle
+cycles before it begins measuring anything. Single-cycle outliers of the same kind show up in
+AUTO_TRACK (p99 2.6 µs, worst 113 µs in one cycle in 600) and are first-touch, not a trend.
+What §46's sleeps *are* remains what metal said: 109–113 ms homing cycles on the CAN path,
+unchanged by v3, still waiting on an operator's risk decision.
 
 What that same run turned up, and what got fixed: **the first black-box scene this project
 ever preserved named no operating mode.** A preserved scene copies the published view, and

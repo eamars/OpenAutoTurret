@@ -75,7 +75,7 @@ void print_row(const Condition& c) {
               static_cast<unsigned long long>(r.samples), r.p50_ns / 1000.0,
               r.p95_ns / 1000.0, r.p99_ns / 1000.0, r.worst_ns / 1000.0,
               static_cast<long long>(c.over_period), static_cast<long long>(c.over_grace),
-              c.informational ? "   (informational: §46 recipe sleeps)" : "");
+              c.informational ? "   (informational: printed, not gated)" : "");
 }
 
 }  // namespace
@@ -134,10 +134,27 @@ int main(int argc, char** argv) {
 
   auto backend = std::make_unique<sim::SimMotorBackend>(0.005);
   sim::SimMotorBackend* sim = backend.get();
-  sim->set_stops(AxisId::Pitch, -1.0, 1.0);
-  sim->set_stops(AxisId::Yaw, -1.0, 1.0);
-  sim->set_position(AxisId::Pitch, 0.5);
-  sim->set_position(AxisId::Yaw, -0.3);
+  if (tc) {
+    // The stops are the plant. Homing *measures* its limits against them and the envelope is
+    // derived from that measurement, exactly as on metal, so a named station config has to
+    // get the travel it declares — otherwise homing fails on "measured travel 114.59 deg
+    // outside expected [180.00, 540.00]", which is the tool contradicting its own arguments.
+    // The first run with --config did precisely that: a message that was right about the
+    // plant and wrong about the tool.
+    const double lo0 = tc->axes[0].expected_travel_deg.min * kDeg2Rad;
+    const double hi0 = tc->axes[0].expected_travel_deg.max * kDeg2Rad;
+    const double lo1 = tc->axes[1].expected_travel_deg.min * kDeg2Rad;
+    const double hi1 = tc->axes[1].expected_travel_deg.max * kDeg2Rad;
+    sim->set_stops(AxisId::Pitch, lo0, hi0);
+    sim->set_stops(AxisId::Yaw, lo1, hi1);
+    sim->set_position(AxisId::Pitch, 0.5 * (lo0 + hi0));
+    sim->set_position(AxisId::Yaw, 0.5 * (lo1 + hi1));
+  } else {
+    sim->set_stops(AxisId::Pitch, -1.0, 1.0);
+    sim->set_stops(AxisId::Yaw, -1.0, 1.0);
+    sim->set_position(AxisId::Pitch, 0.5);
+    sim->set_position(AxisId::Yaw, -0.3);
+  }
   ControlLoop loop(cfg, std::move(backend));
 
   HomingPlan plan({}, HomingPlanConfig{});
@@ -165,19 +182,37 @@ int main(int argc, char** argv) {
     plan = HomingPlan(std::move(actions), hcfg);
   }
 
+  std::vector<Condition> conds;
+  conds.emplace_back();
+  conds.back().name = "startup (idle)";
+  conds.back().informational = true;
+  Condition& startup = conds.back();
+
+  int64_t t = 0;
+
+  // Timed before anything has been asked of the loop, so that a one-time cost has somewhere
+  // to show up other than the row it happens to land in. Without this row, the first log
+  // line the process ever writes (which happens during homing, because homing's first
+  // watchdog trip preserves a black-box scene) charges a ~100 ms first-touch to homing, and
+  // a reader is left with a number whose cause is whoever ran last.
+  for (int i = 0; i < 200; ++i) {
+    const auto s = t0();
+    loop.step(t, kDtNs);
+    sample(startup, std::chrono::duration_cast<std::chrono::nanoseconds>(t0() - s).count());
+    t += kDtNs;
+  }
+
   std::string herr;
   if (!loop.start_homing(plan, herr)) {
     std::cerr << "cycle-cost: homing could not start: " << herr << "\n";
     return 3;
   }
 
-  std::vector<Condition> conds;
   conds.emplace_back();
   conds.back().name = "homing";
   conds.back().informational = true;
   Condition& homing = conds.back();
 
-  int64_t t = 0;
   bool homed = false;
   for (int i = 0; i < kMaxHomeSteps; ++i) {
     const auto s = t0();
@@ -319,8 +354,25 @@ int main(int argc, char** argv) {
   std::printf("\n# >period counts cycles slower than the 5 ms period; >grace counts those "
               "past the period plus the 2 ms the §39.3 watchdog allows, which is what the "
               "supervisor would see as a miss.\n");
-  std::printf("# The homing row is informational: the recipe sleeps in can_motor_backend are "
-              "sleep_for(50 ms) on the control thread (§46), inherited unchanged by v3 and "
-              "still waiting on an operator's risk decision.\n");
+  std::printf("\n# What the two informational rows are for. The recipe sleeps §46 complains "
+              "about live in\n"
+              "# can_motor_backend (sleep_for(kRecipeDelayMs) on the control thread) and this "
+              "run does not\n"
+              "# use that backend at all, so nothing here measures them — the 109-113 ms "
+              "homing cycles on\n"
+              "# metal stay a separate, real, measured fact about the CAN path. The rows are "
+              "here because\n"
+              "# an earlier version of this tool blamed exactly that on homing and was wrong:\n"
+              "# its 'homing' row showed a 90-150 ms worst cycle, and moving a 200-cycle idle "
+              "row in front\n"
+              "# of homing moved the spike with it. Something in this process pays ~100 ms "
+              "once — the\n"
+              "# first spdlog write, which in this tool happens when homing first trips the "
+              "watchdog and\n"
+              "# preserves a black-box scene. controld logs long before homing on the "
+              "station, so the\n"
+              "# practical consequence there is small; the lesson is that a one-time cost is "
+              "charged to\n"
+              "# whoever runs first, which is why this row exists.\n");
   return rc;
 }
