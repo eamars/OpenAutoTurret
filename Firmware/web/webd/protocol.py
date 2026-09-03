@@ -187,6 +187,15 @@ class Telemetry:
     target_aim_y_norm: float = 0.0
     target_aim_valid: bool = False
     target_aim_is_head: bool = False
+    # The direction the AUTO_TRACK intent is built from, its horizon, and the rates that give it
+    # value. Without these, lead cannot be measured: q_ref is post-slew-limiter, so it cannot tell
+    # "no lead requested" from "lead requested and the reference could not slew" - opposite fixes.
+    predicted_target_az_world_rad: float = 0.0
+    predicted_target_el_world_rad: float = 0.0
+    predicted_target_los_valid: bool = False
+    prediction_horizon_ms: int = 0
+    target_az_rate_world_rad_s: float = 0.0
+    target_el_rate_world_rad_s: float = 0.0
     # CAN link health (§55 CAN family, §54.4 error states). The transport has
     # counted these from the start; they are here so a degrading link is visible
     # BEFORE feedback goes stale and the supervisor reacts to the symptom.

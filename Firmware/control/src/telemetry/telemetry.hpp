@@ -196,6 +196,21 @@ struct TelemetrySnapshot {
   double target_aim_y_norm = 0.0;
   bool target_aim_valid = false;
   bool target_aim_is_head = false;
+
+  // The direction the AUTO_TRACK intent is actually built from, and what it is worth.
+  //
+  // §78 asks telemetry to show the PREDICTED LOS, and until now it did not: the only LOS published
+  // was target_az/el_world_rad, which is the estimator's filtered state and therefore lags by
+  // construction. That gap made the operator's lead requirement unverifiable in a specific way -
+  // q_ref is post-slew-limiter, so it cannot distinguish "no lead requested" from "lead requested,
+  // reference could not slew" - and the two have opposite fixes. Rates are published alongside
+  // because lead is rate x horizon; without the rate the horizon is just a number.
+  double predicted_target_az_world_rad = 0.0;
+  double predicted_target_el_world_rad = 0.0;
+  bool predicted_target_los_valid = false;
+  int64_t prediction_horizon_ms = 0;
+  double target_az_rate_world_rad_s = 0.0;
+  double target_el_rate_world_rad_s = 0.0;
   // v3 §61: publisher generation, the two latency intervals, and which candidate is
   // being followed. Ages are -1 for "never", never 0 — same rule as the CAN family.
   uint64_t vision_track_sets = 0;

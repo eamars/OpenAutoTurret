@@ -184,6 +184,16 @@ class TrackingController {
     az = predicted_az_act_rad_;
     el = predicted_el_act_rad_;
   }
+
+  // The estimator's own rate estimates, and the horizon the prediction above is worth. Published
+  // because a lead claim is otherwise unmeasurable: `q_ref` is the OUTPUT of the slew limiter, so a
+  // lead measured on it conflates "no lead was asked for" with "lead was asked for and the reference
+  // could not slew that fast". These three numbers say what was actually requested.
+  double target_az_rate_rad_s() const { return estimator_.azimuth_rate(); }
+  double target_el_rate_rad_s() const { return estimator_.elevation_rate(); }
+  int64_t prediction_horizon_ns() const {
+    return cfg_.control_delay_ns + cfg_.motor_response_ns;
+  }
   telemetry::Telemetry& telemetry() { return telemetry_; }
   const telemetry::Telemetry& telemetry() const { return telemetry_; }
   const ReferenceRequest& last_reference() const { return last_ref_; }

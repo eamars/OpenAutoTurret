@@ -145,7 +145,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"target_aim_x_norm\":" << s.target_aim_x_norm
      << ",\"target_aim_y_norm\":" << s.target_aim_y_norm
      << ",\"target_aim_valid\":" << (s.target_aim_valid ? "true" : "false")
-     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")
+     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")     << ",\"target_aim_is_head\":" << (s.target_aim_is_head ? "true" : "false")
+     << ",\"predicted_target_az_world_rad\":" << s.predicted_target_az_world_rad
+     << ",\"predicted_target_el_world_rad\":" << s.predicted_target_el_world_rad
+     << ",\"predicted_target_los_valid\":" << (s.predicted_target_los_valid ? "true" : "false")
+     << ",\"prediction_horizon_ms\":" << s.prediction_horizon_ms
+     << ",\"target_az_rate_world_rad_s\":" << s.target_az_rate_world_rad_s
+     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
      // v3 §50/§52: the mode, the intent, and the answer to the last command.
      << ",\"vision_track_sets\":" << s.vision_track_sets
      << ",\"vision_sensor_age_ms\":" << s.vision_sensor_age_ms

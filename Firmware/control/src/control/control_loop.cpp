@@ -1459,6 +1459,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.camera_fps = vs.camera_fps;
     if (tracking_) {
       const auto as = tracking_->aim_status();
+      // The intent's own inputs, next to the filtered estimate that has always been published.
+      // Reading the two together is what makes lead measurable: the filtered LOS lags by
+      // construction, and the difference between them IS the prediction being applied.
+      tracking_->predicted_los_at_actuation(snap.predicted_target_az_world_rad,
+                                           snap.predicted_target_el_world_rad);
+      snap.predicted_target_los_valid = tracking_->estimator_initialized();
+      snap.prediction_horizon_ms = tracking_->prediction_horizon_ns() / 1000000;
+      snap.target_az_rate_world_rad_s = tracking_->target_az_rate_rad_s();
+      snap.target_el_rate_world_rad_s = tracking_->target_el_rate_rad_s();
       snap.target_aim_x_norm = as.u_norm;
       snap.target_aim_y_norm = as.v_norm;
       snap.target_aim_valid = as.valid;

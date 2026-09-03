@@ -725,8 +725,15 @@ def main() -> int:
                 # prediction with a 40 ms horizon leads it.
                 tgt = s.get("target_az_world_rad")
                 lead_tgt = (math.degrees(tgt - az_t) if isinstance(tgt, float) else None)
+                # The intent's own input, now that controld publishes it: predicted LOS at
+                # actuation, against the truth. This is the number that says whether lead was
+                # ASKED FOR, independent of whether the axis could slew to it.
+                pl = s.get("predicted_target_az_world_rad")
+                lead_pred = (math.degrees(pl - az_t)
+                             if isinstance(pl, float) and s.get("predicted_target_los_valid")
+                             else None)
                 rows.append({"t": t, "phase": phase, "aim_err": aim_err, "lead": lead,
-                             "lead_tgt": lead_tgt,
+                             "lead_tgt": lead_tgt, "lead_pred": lead_pred,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
                              "track_state": s.get("track_state"), "v_yaw": s["v_yaw_rad_s"],
@@ -771,6 +778,12 @@ def main() -> int:
               % (len(leads), lead_p50, leads[0] if leads else float("nan"),
                  leads[-1] if leads else float("nan"),
                  (100.0 * sum(1 for x in leads if x > 0) / len(leads)) if leads else 0.0))
+        pleads = sorted(r["lead_pred"] for r in dart_rows if r["lead_pred"] is not None)
+        hz = max((state().get("prediction_horizon_ms") or 0,), default=0)
+        print("      PREDICTED-LOS lead (was lead ASKED FOR; horizon %d ms):" % hz)
+        print("        n=%d  p50 %+.3f deg  min %+.3f  max %+.3f"
+              % (len(pleads), pct(pleads, .5), pleads[0] if pleads else float("nan"),
+                 pleads[-1] if pleads else float("nan")))
         tleads = sorted(r["lead_tgt"] for r in dart_rows if r["lead_tgt"] is not None)
         print("      estimator-LOS lead (separates 'no lead asked' from 'could not slew'):")
         print("        n=%d  p50 %+.3f deg  min %+.3f  max %+.3f"
