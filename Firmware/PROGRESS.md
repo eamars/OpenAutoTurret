@@ -1579,3 +1579,35 @@ the tree holding only two web files). Served page re-fetched over HTTP carries t
 `node --check` OK. Station homed/ready, MANUAL/HOLD, 2 synthetic tracks, geometry age honest at ~10 h.
 **§110: 0 items accepted on hardware by a named person** — a numerically correct type ladder is fidelity, not
 evidence the reticle lands on a head.
+
+## 2026-09-04, 17:5x — round 22: C3's 0.22 authority cannot have come from the confidence band, so my standing explanation of the lead failure was wrong
+
+Objective (b) carries one failing measurement: **C3 lead, −8.9°**, recorded across rounds as
+*"intent_velocity_scale derates to ~0.22 mid-dart"*, which every summary has been repeating as though the
+number explained itself. Reading the mechanism says otherwise.
+
+During TRACKING, authority is `band_scale(band)` and the bands are **discrete**: High **1.0**, Medium
+**0.60**, Low **0.30**, Invalid **0.0** (`auto_track_controller.hpp:81-82,350-357`). **0.22 is not one of
+them, and no product of them is 0.22 either.** The only thing in this code that produces intermediate
+authority is `control_loop.cpp:609-615`, the §44 anti-jolt ramp, which multiplies the intent's velocity and
+acceleration scale by `frac` over **300 ms after a mode handover** — put in because clicking AUTO_ROAM →
+AUTO_TRACK stepped the turret 3× on the spot (measured 0.175 → 0.524 rad/s, inside every commissioning limit
+and *still* a jolt).
+
+So the C3 samples were taken **while the handover ramp was in force** (or it restarted), not while a
+confidence band cut authority. That is not a nitpick about wording: the sentence I kept repeating blamed a
+confidence-derate design conflict, which would have invited somebody to retune how hard the station swings at
+uncertain targets — a safety-adjacent change — to fix a defect that is not located there. **A number I did not
+trace became the accepted explanation, and it survived nine rounds of summarisation.**
+
+What this does *not* do: it does not make C3 pass. −8.9° of under-lead is still measured, and §(b) still is
+not satisfied. What it does is move the question from "is the lead law too weak?" to "does the dart overlap
+the 300 ms authority ramp?", which is answerable cheaply: `tools/probe_track_loop.py s3` prints its criteria
+*before* running (C1–C4 fixed in advance, as recorded), and the decisive datum is a time series of
+`intent_velocity_scale` against the mode-entry timestamp — not a new gain. Next round: capture that series and
+the ramp state across the dart, and only then decide whether the ramp should be allowed to suppress *lead*
+authority, which is a real design question and probably the operator's.
+
+No code changed. **437 pytest / 57 CTest** stand from the verified round-21 build, tree clean, station
+homed/ready in MANUAL/HOLD. **§110: 0 items accepted on hardware by a named person** — and C3 stays FAILED
+until somebody measures it again knowing which clock was running when it was sampled.
