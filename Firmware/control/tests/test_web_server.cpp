@@ -132,6 +132,9 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
   s.intent_type = "los_direction";
   s.intent_reason = "coasting";
   s.intent_velocity_scale = 0.42;
+  s.intent_has_joint_target = true;
+  s.intent_q_yaw_rad = 0.25;
+  s.intent_q_pitch_rad = -0.1;
   s.cmd_ack_command = "set_mode";
   s.cmd_ack_accepted = 0;  // refused
   s.cmd_ack_reason = "station is not homed";
@@ -164,6 +167,23 @@ TEST(WebServer, ModeIntentAndCommandAckReachTheWire) {
   // confidence has to look derated, or the operator reads a tracking problem as a
   // latency problem.
   EXPECT_NE(msg.find("\"intent_velocity_scale\":0.42"), std::string::npos);
+  // §92's requested pose has to survive the trip, because the page cannot show what did not
+  // arrive — and it has to arrive *with its flag*. When no pose was asked for, the pose is
+  // sent as zero rather than as whatever the last mode left behind: a stale number with a
+  // false flag is still a stale number, and the reader that trusts the flag should never
+  // have to be cleverer than the writer.
+  EXPECT_NE(msg.find("\"intent_has_joint_target\":true"), std::string::npos);
+  EXPECT_NE(msg.find("\"intent_q_yaw_rad\":0.25"), std::string::npos);
+  {
+    telemetry::TelemetrySnapshot bare = s;
+    bare.intent_has_joint_target = false;
+    bare.intent_q_yaw_rad = 0.25;  // what the previous mode asked for, still in the field
+    const std::string bare_msg = web::format_telemetry(bare);
+    EXPECT_NE(bare_msg.find("\"intent_has_joint_target\":false"), std::string::npos);
+    EXPECT_NE(bare_msg.find("\"intent_q_yaw_rad\":0"), std::string::npos)
+        << "a pose nobody asked for was published anyway; the flag is not enough if the "
+           "number keeps travelling";
+  }
   EXPECT_NE(msg.find("\"cmd_ack_command\":\"set_mode\""), std::string::npos);
   EXPECT_NE(msg.find("\"cmd_ack_accepted\":0"), std::string::npos)
       << "a refusal must stay distinguishable from a success and from 'no "

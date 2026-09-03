@@ -107,9 +107,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <h2>Yaw · Pitch</h2>
     <div class="row"><span class="k">q yaw</span><span id="qy">—</span></div>
     <div class="row"><span class="k">q ref yaw</span><span id="qry">—</span></div>
+    <div class="row"><span class="k">q asked yaw</span><span id="qiy">—</span></div>
     <div class="row"><span class="k">v yaw</span><span id="vy">—</span></div>
     <div class="row"><span class="k">q pitch</span><span id="qp">—</span></div>
     <div class="row"><span class="k">q ref pitch</span><span id="qrp">—</span></div>
+    <div class="row"><span class="k">q asked pitch</span><span id="qip">—</span></div>
     <div class="row"><span class="k">v pitch</span><span id="vp">—</span></div>
   </section>
 
@@ -422,9 +424,14 @@ function render(t) {
   $("tel").textContent = rad(t.target_el_world_rad);
   $("qy").textContent = num(t.q_yaw_rad);
   $("qry").textContent = num(t.q_ref_yaw_rad);
+  // §92's three positions side by side: what the mode asked for, what the drive is being
+  // told to reach, and where the axis actually is. "—" when nothing was asked for, because
+  // zero is a place on this turret and the page must not invent a pose to fill a gap.
+  $("qiy").textContent = t.intent_has_joint_target ? num(t.intent_q_yaw_rad) : "— none";
   $("vy").textContent = num(t.v_yaw_rad_s, 3);
   $("qp").textContent = num(t.q_pitch_rad);
   $("qrp").textContent = num(t.q_ref_pitch_rad);
+  $("qip").textContent = t.intent_has_joint_target ? num(t.intent_q_pitch_rad) : "— none";
   $("vp").textContent = num(t.v_pitch_rad_s, 3);
   const calib = t.installation_calibrated ? "calibrated" : "NOT calibrated";
   badge($("calib"), calib, t.installation_calibrated ? "ok" : "warn");

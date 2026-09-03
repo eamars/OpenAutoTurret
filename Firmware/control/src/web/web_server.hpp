@@ -242,6 +242,9 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"intent_type\":\"" << json_escape(s.intent_type) << "\""
      << ",\"intent_reason\":\"" << json_escape(s.intent_reason) << "\""
      << ",\"intent_velocity_scale\":" << s.intent_velocity_scale
+     << ",\"intent_has_joint_target\":" << (s.intent_has_joint_target ? "true" : "false")
+     << ",\"intent_q_pitch_rad\":" << (s.intent_has_joint_target ? s.intent_q_pitch_rad : 0.0)
+     << ",\"intent_q_yaw_rad\":" << (s.intent_has_joint_target ? s.intent_q_yaw_rad : 0.0)
      << ",\"cmd_ack_command\":\"" << json_escape(s.cmd_ack_command) << "\""
      << ",\"cmd_ack_accepted\":" << static_cast<int>(s.cmd_ack_accepted)
      << ",\"cmd_ack_reason\":\"" << json_escape(s.cmd_ack_reason) << "\""

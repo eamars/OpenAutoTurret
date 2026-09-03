@@ -328,7 +328,8 @@ def test_webd_declares_the_fields_the_dashboard_reads():
                        "selection_visibility", "manual_lease_active", "roam_sweep_direction",
                        "confidence_band", "selection_last_seen_age_ms", "prediction_age_ms",
                        "roam_pattern", "roam_progress", "blackbox_capture_id",
-                       "blackbox"):
+                       "blackbox", "intent_has_joint_target", "intent_q_pitch_rad",
+                       "intent_q_yaw_rad"):
         assert re.search(rf"^\s*{field_name}\s*:", proto, re.M), (
             f"webd does not declare {field_name}: the dashboard would read undefined "
             "and the dashboard's own fallback text would hide it"
@@ -363,3 +364,25 @@ def test_every_event_the_document_asks_for_has_a_name():
     assert not missing, (
         f"§79 asks for events with no entry in event_name(): {missing}"
     )
+
+
+def test_the_requested_pose_is_not_rendered_as_zero_when_there_is_none():
+    """§92 asks for three positions — requested, reference, actual — and the third one is
+    easy to fake. A mode may aim a line of sight or hold, in which case no joint pose was
+    ever requested, and 0.0 rad is a *place* on this turret: rendering the absence of a pose
+    as a number tells the operator the turret is being told to go to zero. The flag exists
+    for that; this guard exists because the flag is only worth anything if the page consults
+    it. The same class of mistake has been caught in controld, in the config loader, and in
+    the black-box writer, always by the same test shape: assert the absence is drawn.
+    """
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parents[1] / "dashboard.py").read_text(encoding="utf-8")
+    for readout in ("qiy", "qip"):
+        line = [ln for ln in js.splitlines() if '$("%s")' % readout in ln]
+        assert line, "%s is never written" % readout
+        assert "intent_has_joint_target" in line[0], (
+            "%s renders the requested pose without asking whether one exists: %s"
+            % (readout, line[0].strip())
+        )
+        assert "none" in line[0], "%s has no way to say \"no pose was requested\"" % readout

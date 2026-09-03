@@ -1334,6 +1334,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.intent_type = intent_type_name(last_intent_.type);
     snap.intent_reason = last_intent_.reason;
     snap.intent_velocity_scale = last_intent_.velocity_scale;
+    snap.intent_has_joint_target = last_intent_.has_joint_target;
+    snap.intent_q_pitch_rad = last_intent_.q_pitch_rad;
+    snap.intent_q_yaw_rad = last_intent_.q_yaw_rad;
     // §52. Published from the loop's own copy, so the answer exists even with no
     // web client connected: whoever pressed the button while the browser was
     // closed is exactly the person who wants to know what it did.

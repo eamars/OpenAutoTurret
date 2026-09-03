@@ -1477,6 +1477,15 @@ TEST(ModeSwitchingUnderMotion, NoImpossibleStepAndNoIntentSurvivesItsMode) {
   // Manual with nobody holding a button asks for nothing; what must not happen is the
   // tracking intent continuing under a mode that no longer owns it.
   expect_no_stale_source(b, "auto_track", "manual");
+  // And "asks for nothing" has to be observable, not inferred from a pose that happens to
+  // sit somewhere plausible (§92's requested/reference/actual distinction). A joint target
+  // still published after the mode stopped asking is a phantom: the page would show the
+  // turret being told to go somewhere that no mode wants.
+  const telemetry::TelemetrySnapshot settled = h.snap();
+  EXPECT_FALSE(settled.intent_has_joint_target)
+      << "after AUTO_TRACK -> MANUAL with nobody holding a button, the loop still publishes "
+         "a requested joint pose at "
+      << settled.intent_q_yaw_rad / kDeg2Rad << " deg yaw";
 
   // C. MANUAL jog -> AUTO_ROAM, with the jog lease still held. This is the one that catches
   // a manual controller that keeps publishing because its lease has not expired: the mode

@@ -266,6 +266,22 @@ struct TelemetrySnapshot {
   std::string mode_phase;           // the mode's substate, e.g. WAIT_TARGET
   std::string intent_source;        // who is asking for motion (§26)
   std::string intent_type;          // and what it asked for (§25)
+  // §92's three positions, published so they can be told apart. `q_ref_*` is the reference
+  // — the position the drive is being told to reach, with LimitSpd shaping the move (v3 has
+  // no host-side interpolated reference: the drive's own position loop does the ramping, and
+  // no amount of telemetry will make controld publish a curve it never computed). These are
+  // what the *mode* asked for, before the envelope clamped it and before the reference
+  // manager resolved a line of sight into joints. Where the two differ, something between
+  // the wish and the command intervened — which is the one diagnostic an operator cannot
+  // infer from the axis positions alone.
+  //
+  // `intent_has_joint_target` is not decoration. A mode may ask for a line of sight, or for
+  // nothing at all, and a pose of 0.0 is a legitimate position on this station: without the
+  // flag, "no pose was requested" and "the requested pose is zero" are the same number, and
+  // the page would show the turret being told to go to zero.
+  bool intent_has_joint_target = false;
+  double intent_q_pitch_rad = 0.0;
+  double intent_q_yaw_rad = 0.0;
   std::string intent_reason;        // why — the operator's question, answered
   double intent_velocity_scale = 1.0;
   // §52 CommandAck: every command answers, and "accepted" has to be earned.

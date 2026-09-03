@@ -69,6 +69,9 @@ class Telemetry:
     mode_phase: str = ""                 # WAIT_TARGET | TRACK | COAST | SWEEP | ...
     intent_source: str = "none"          # who is asking for motion (§26)
     intent_type: str = "hold"            # what it asked for (§25)
+    intent_has_joint_target: bool = False  # §92: whether a pose was asked for at all
+    intent_q_pitch_rad: float = 0.0      # what the mode wanted, before the envelope (§33)
+    intent_q_yaw_rad: float = 0.0        # or the LOS solver (§67) changed it
     intent_reason: str = ""              # why
     intent_velocity_scale: float = 1.0   # confidence / derate applied to the ask
     # §52: the answer to the last command. -1 = none executed since controld

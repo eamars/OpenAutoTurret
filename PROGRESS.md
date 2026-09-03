@@ -162,7 +162,21 @@ far end of the sweep while the turret travels, and after a handover they stay on
 until that ramp lands. So a jump in `q_ref` is not a lurch, and continuity of the commanded
 trajectory is v1's `TrajectoryGenerator` contract, tested where it lives.
 
-What that leaves open, for the operator's judgement rather than mine: with only "goal" and
+**Closed the same day, and the diagnosis above was wrong in a way worth keeping.** The
+three positions §92 asks for are now published and displayed: `intent_q_pitch_rad` /
+`intent_q_yaw_rad` (what the mode asked for) beside the existing `q_ref_*` (the reference the
+drive is being told to reach) and `q_*_rad` (where the axis is), with
+`intent_has_joint_target` saying whether a pose was asked for at all — the page draws
+"— none" rather than a number, and a pytest guard exists because *that* field is only worth
+anything if the page consults it. There is no host-side interpolated reference to expose: on
+the position-mode path controld sends a target plus `LimitSpd` and **the drive's own position
+loop does the ramping** (measured: a steady 35 mrad lag between reference and actual during a
+jog, which is a follower, not a curve). So controld cannot publish a trajectory it never
+computed, and the honest fix was to publish the wish as well — where *requested ≠ reference*
+the envelope clamped it (§33) or the LOS solver declined part of it (§67), which is the one
+thing on this list an operator cannot infer from the axis positions.
+
+What remains for the operator's judgement: with only "goal" and
 "actual" published, the page cannot present **§92's three separate columns** (requested /
 reference / actual), and a hold taken mid-sweep displays a reference still parked at the far
 end until the ramp lands. The behaviour is correct — the turret stops where it stops — but
@@ -174,7 +188,7 @@ draft wrote the ambiguity margin to 0.0 on every station that named nothing, whi
 have switched §21's no-target-steering off by default — caught by the event test, not by
 review), and the counts below are recounted by running the suites rather than copied
 forward — §81's commit message claims "54/54" and is wrong; these are the real figures.
-Evidence as of now, all of it simulation: 53 CTest binaries green, 257 pytest green, and
+Evidence as of now, all of it simulation: 53 CTest binaries green, 258 pytest green, and
 the guards in `Firmware/web/webd/tests/` that parse controld's own source and this
 document — command vocabulary, step sizes, the jog-lease ratio, and §79's event list —
 because a copied list keeps certifying the world as it used to be. The loop's measured
