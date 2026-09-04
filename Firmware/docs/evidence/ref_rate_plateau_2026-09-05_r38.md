@@ -114,3 +114,58 @@ established (34 frames at exactly 10.00 deg/s, zero acceleration), and so is its
 accounting). The cause is not. The operator-facing documents say exactly that, and no limit should be touched on
 this evidence. Next round: print the daemon's *loaded* tracking speed and the authority fraction from a
 measurement path, rather than inferring them from source.
+
+---
+
+## Addendum, 2026-09-05 03:3x (round 40) — the plateau explained, at last, by a line the code comments over-describes
+
+Measured, in order:
+
+1. controld's own boot log: "tracking ENABLED (v_max track=30.0 deg/s search=10.0 deg/s ...)" and
+   "payload profile: loaded 'conservative' (v_max pitch=20.1 deg/s, yaw=20.1 deg/s)". So the configured tracking
+   speed really is 30, and the payload profile really is 20.1.
+2. During all 34 plateau frames: track_state=tracking, mode_phase=TRACKING, confidence_band=HIGH,
+   tracking_active=true, selected_track_id=700, selection_ambiguous=0. **Not** the search branch (round 39's
+   hope) and not confidence (30 x 1 = 30).
+3. control_loop.cpp:427, inside the AUTO_TRACK branch:
+
+       mode_proposal_.v_max_rad_s = std::min(mode_proposal_.v_max_rad_s, hold_speed_effective());
+
+   and control_loop.cpp:1713-1721: hold_speed_effective() = min(cfg_.hold_speed_rad_s, payload pitch v_max,
+   payload yaw v_max) = min(10.0, 20.1, 20.1) = **10 deg/s**.
+
+**So the full chain is:** 30 (track speed) x 1.0 (confidence) -> min with hold_speed_effective() = 10 ->
+lim[i] = min(10, max_speed_at = large) = 10 -> reference pinned at exactly 10.00 deg/s with zero acceleration.
+Every link is either a log line, a telemetry field, or an expression; none is inferred.
+
+**Round 28's substance was right; round 37's retraction was right too, and both were incomplete.** Round 28 said
+the hard-coded 10 deg/s hold speed caps AUTO_TRACK while the configured tracking speed is 30 - true. It blamed
+SafetyEnvelope's set_v_max - false, which round 37 correctly killed along with the HUD row that repeated it. The
+real mechanism is line 427. Round 39's three rejections all stand: confidence, soft-limit braking and the
+envelope fallback are each ruled out by the numbers above.
+
+**The comment above line 427 says "the payload profile v_max caps station motion", but the expression it
+applies is hold_speed_effective(), whose binding term is not the payload profile (20.1) - it is the hard-coded
+hold speed (10).** The comment describes the intent; the binding constant is something else, and the code is
+explicit that the ordering is deliberate ("applied before the confidence derate ... the safer ordering"). So
+this is a design decision, not a slip: a hold-mode speed constant is the ceiling on tracking, on purpose.
+
+### What the operator now has to decide
+
+- The acceptance rule demands LEAD: a 25 deg dart in 1.60 s needs ~15.6 deg/s average, ~17.4 peak. The station's
+  effective tracking ceiling is **10 deg/s**. **C2 and C3 cannot pass at that dart size, at any tuning of
+  prediction or tracker gains**, because the ceiling is applied to the reference before any of that.
+- The 10 deg/s comes from `main.cpp:133`, hard-coded, with **no key in `turret.yaml`** - only the *unbound*
+  `tracking.track_speed_deg_s` (30) is configurable today. So "make tracking keep up" is a safety-ceiling
+  decision, not a tuning knob.
+- Three legitimate resolutions, all the operator's: raise the hold/payload ceiling (a safety decision about how
+  fast this station may swing), size the acceptance dart to what 10 deg/s can follow, or change the design
+  intent at line 427 so tracking is capped by the payload profile (20.1) rather than the hold speed. **None
+  should be taken by the agent that wrote this file.**
+
+### Follow-up worth doing, not done this round
+
+Publish `hold_speed_effective()` (deg/s) and label it as the effective station ceiling. It is the number that
+actually binds, and it is not on the operator's screen: the panel currently shows ENVELOPE V-MAX "(not in
+force)" - accurate, and useless as an answer to "why won't it keep up". The round-37 row was the right fix to a
+wrong label; the right *number* is still missing.
