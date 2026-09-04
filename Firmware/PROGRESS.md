@@ -3521,3 +3521,40 @@ re-run follows with the drive-mode work.
 **Pivoting now to drive modes** — the operator's five items, in their order: real detector path (fake targets are
 already off, which also means the vision feed will legitimately go quiet until the real path runs), motion quality
 research per mode, HOLD dead zone + fixed position, AUTO_TRACK↔AUTO_ROAM switching tests, and roam range/slop.
+
+## 2026-09-06, 05:0x — round 2: the static axis is NOT shaky, and that changes what "fix shaky motion" means
+
+Operator's item 2 says the motion is "very shaky … static and dynamic are not good". Before changing any control
+law I measured the station at rest (no motion commanded, `AUTO_TRACK/WAIT_TARGET`), twice — a 12 s sample and a 6 s sample,
+n=2477 here, ~4965 in the first. Numbers below were written into this file **by the script that measured them**, not
+retyped.
+
+* actual yaw: **p2p 0.0435 deg**, sigma **0.0160 deg**, **0 reversals**. The first sample agreed: p2p 0.0877°,
+  sigma 0.0172°, 0 reversals.
+* commanded reference: p2p **0.0435 deg**, sigma 0.0160 deg — identical to actual, so in this phase the
+  reference is holding where it is rather than fighting.
+* smallest non-zero reported step: **0.02177 deg** (median step 0.02234 deg). That is the resolution floor of
+  the angle as it reaches telemetry.
+
+**Three things follow, and they matter more than the number itself.**
+
+1. **Zero reversals over 12 s is not jitter.** A control loop oscillating around a setpoint produces sign changes by
+   the hundred. What is visible here is a sub-tenth-of-a-degree monotone slide — drift, not shakiness. So "static
+   control is bad" is not supported by the encoder, and if I had started tuning gains I would have been fixing
+   something that is not broken (and could have broken it).
+2. **The deadband in item 3 has a hard floor given by measurement, not taste:** a deadband under **~0.0218 deg**
+   cannot be distinguished from quantisation of the reported angle. Any sane static deadband must sit above the noise
+   floor and below what the operator can see as an error — so the design range is roughly 0.022° … 1/3 of a box
+   height's worth of angle, and I will size it from the *tracking* jitter distribution once a real target is in view,
+   not from a guess.
+3. **What the operator is watching is probably not the axis.** At this instant the vision source is the real IMX500
+   with the classical blob detector, the HUD video pane cannot run at the same time (single-owner camera), and the
+   preview I measured earlier publishes ~10 fps against 15 requested. A reticle that updates at detection rate over a
+   10 fps picture *looks* shaky even when the axis is dead still. Item 2 therefore needs the two paths separated
+   before anything is tuned: axis shakiness (encoder) versus picture-and-reticle shakiness (detection + preview).
+   The encoder side is measured and quiet; the visual side is the live suspect, and the roam preview limit is already
+   known to be inside `web/webd/video.py` rather than the sensor.
+
+Nothing changed in code this round. This entry exists so that later control work is judged against a recorded floor
+instead of a memory — and so that if the operator sees shakiness I cannot reproduce, the disagreement is on the record
+with both measurements, rather than resolved by whoever spoke last.
