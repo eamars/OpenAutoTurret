@@ -3214,3 +3214,43 @@ edge is reachable — and assert agreement between the reason and the recorded a
 
 Station after restart: `MANUAL / HOLD`, `ready`, homed, synthetic source running again (required after a controld
 restart). Nothing signed; this is a record-integrity fix, not a limit or behaviour change.
+
+## 2026-09-05, 23:5x — round 77: the regression test for the round-76 fix was written, measured, and withdrawn — because it could not reach the edge
+
+Round 76 left one thing unverified: no Brake edge had occurred since the fix, so the symptom had not been observed
+to disappear. The plan was a test that drives the loop to a **natural** unsafe edge (no hand-call of the callee) and
+asks the artifact whether its `safety_action` agrees with the `reason` it was preserved for.
+
+It was written, built, and **run** — and it failed on its own premise:
+
+    no unsafe edge occurred in 600 cycles
+
+I had read `test_control_loop.cpp:1177-1182` — "this rig passes through the same safety brake that homing takes on
+the station, the recipe sleep that makes ≈110 ms cycles, answered by BRAKE" — as saying the brake happens on the
+cycles I was driving. It does not: that brake belongs to **homing's slow recipe cycles**, not to steady post-homing
+AUTO_TRACK cycles on the sim rig, where feedback stays fresh and the supervisor never leaves ALLOW. My premise, not
+the ordering, is what the failure reported — which is the only reason the assertion was worth writing at all.
+
+**The test was withdrawn rather than left in two degenerate forms**, both of which would have been worse than no
+test:
+* *skipping* when no edge occurs (`GTEST_SKIP`) would have looked like coverage and asserted nothing — the exact
+  hollow PASS I removed from C6's rate check in round 57;
+* forcing the edge by calling `preserve_scene` by hand is what the neighbouring test already does, and it is precisely
+  why the ordering bug survived a green suite: a hand-called callee cannot be caught by anything the caller does.
+
+So round 76's verification gap **stays open, and is now precisely characterised**: to close it, a test needs a cycle
+where feedback age crosses `feedback_max_age_ms` without the sim answering — i.e. advance the test clock past the age
+limit while suppressing `SimMotorBackend` feedback, or drive homing at its real ≈110 ms period. Both are harness
+questions (one API decision about stepping the sim without feeding it), not understanding questions. The station
+already answers the empirical half: 98 Brake edges in hold were recorded there, so the edge is reachable in the real
+system and the fix will be visible in the next scene that appears (`reason` must prefix-match `safety_action`).
+
+Two smaller lessons, both mine, both about silence:
+* `ninja` does **not** print `Built target` — that phrasing belongs to the Makefile generator. My `grep
+  "error:|Built target"` returned nothing on a successful compile and I read that as "no work happened". Silence from
+  the wrong pattern is not evidence; `ninja: no work to do` and `grep -rl <new-symbol> build/` are.
+* `ctest -R` found "No tests were found" for a test that *was* compiled into the binary — gtest discovery feeds the
+  ctest list, so the reliable path for a new test is `./build/control/test_control_loop --gtest_filter=…` first.
+
+Tree restored, **57/57 CTest** green again, round 76's fix intact and in the running daemon. No behavioural change
+this round; station untouched. Nothing signed.
