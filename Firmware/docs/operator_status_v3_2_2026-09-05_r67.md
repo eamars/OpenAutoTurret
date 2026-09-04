@@ -55,14 +55,14 @@ The operator's lead criterion — 25 deg in 1.60 s — needs about **15.6 deg/s 
   (`tools/calibrate_camera_intrinsics.py`, `make_charuco_board.py`, `probe_theodolite.py`).
 * **Real detector**: every centring and head-aim number above is against the synthetic fixture. Plumbing evidence,
   not acceptance evidence.
-* **Hardware acceptance and §24 visual fidelity**: **0 accepted by a named person.** The sign-off package holds
-  **16 numbered rows** — that count was re-derived today by parsing the file, and it is the count that matters
-  operationally because it is the list someone would actually sign. The **30 v3 system items** are the ledger in
-  `docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md`; that figure comes from an earlier round of
-  this session (round 30) and **could not be re-derived today** — the table pattern I tried matched one row, not
-  thirty, and I am recording that rather than repeating the number as though I had just checked it. Either way the
-  signed count is zero. `docs/acceptance_signoff_v3_2_visual.md` disqualifies itself on its face and carries a
-  read-first pointer plus a round-61 addendum correcting its superseded dart numbers.
+* **Hardware acceptance and §24 visual fidelity**: **0 accepted by a named person.** Both counts were
+  re-derived today by parsing the specs: §24 (`# 24. Acceptance criteria — visual fidelity`, an H1 — my
+  earlier `^##` pattern is why round 67 could not find it) holds **16 checklist items**, matching the **16
+  numbered rows** in `docs/acceptance_signoff_v3_2_visual.md`; §110 (`# 110. V3 target-state acceptance
+  checklist`) holds **30 items**. Round 67 recorded the §110 figure as remembered-from-round-30 and
+  unverified; it is now measured, and the round-30 memory of "30" is confirmed.
+  `docs/acceptance_signoff_v3_2_visual.md` disqualifies itself on its face and carries a read-first pointer
+  plus a round-61 addendum correcting its superseded dart numbers.
 * IMU: **none installed**, reported as `IMU ABSENT` on the panel rather than emulated.
 
 ## 5. State of the machine and the tree as of this writing
