@@ -3049,3 +3049,40 @@ The intrinsics header stays as it is until a run replaces it, and nothing is sig
 
 Docs and arithmetic only; station untouched (`MANUAL / HOLD`, `at_ready`, synthetic source running). Suites stand at
 **487 pytest / 57 CTest** from round 71.
+
+## 2026-09-05, 21:5x — round 73: `--strip-at-u` shipped, the cx fit did NOT happen, and the attempt surfaced an axis wander I could not reproduce afterwards
+
+Implemented (count-checked anchors, `py_compile` clean, **84 tools tests pass**, `--help` shows it):
+`tools/probe_theodolite.py --strip-at-u <column>` restricts the yaw correlation to a band at a commanded image
+position, with `max_dx` tightened to the retained margin so a shift larger than the band reads as no answer rather
+than a large wrong one. Default `None` keeps the historical full-width behaviour. **It has not yet produced a
+measurement**, so it is unvalidated as an instrument and is not quoted as one.
+
+The first walk failed before cropping: `axis never settled after yaw+1`. That check refusing to measure was correct
+behaviour, because the axis was genuinely not settling — and what followed is the part worth writing down even
+though it did not reproduce:
+
+* after the probe died, yaw continued to move, then **wandered ±6°** between samples (244.4 → 238.9 → 232.0 →
+  237.5°) while reporting `MANUAL / HOLD`, with `at_ready` flickering;
+* it kept doing that with the target cleared **and the synthetic source stopped**, so nothing I could point at was
+  commanding it;
+* I stopped motion authority (`pkill controld`, telemetry froze at 238.3° and `telemetry_stale` True — the process
+  lingered after SIGTERM and needed SIGKILL), then booted fresh. **The log shows the first 140° of motion was
+  `phase=homing`**, which is normal and gated tracking off until homing completed;
+* in a properly homed, `ready` HOLD the axis is quiet: **149.075 → 148.966° over 30 s** (0.11°), velocities mostly
+  under 0.04 rad/s.
+
+So: **not reproduced, not attributed**. What is established is narrower than "the station hunts" and I am not going
+to write more than that — a long-running, never-rehomed station in HOLD showed tens of degrees of uncommanded
+travel with no target and no source, and a freshly homed station does not. Two candidate readings remain open:
+state accumulated over many runs and restarts without re-homing, or encoder/telemetry artefacts of the kind already
+noted once (`v_yaw = -6.06` during a HOLD, round 59). The safety-relevant facts either way: the axis stayed inside
+software limits (max ≈244° against 320.2°), and the settle check is what stopped the tool from measuring garbage.
+
+Consequences to carry forward: (1) re-run the cx walk on a **freshly homed** station, which round 72's procedure did
+not specify and now must; (2) if the wander recurs on a station that is homed, `ready` and quiet, it is a real
+control finding and belongs in front of the operator immediately, not in a log file.
+
+Station restored: `MANUAL / HOLD`, `ready`, homed, yaw ≈149°, synthetic source running. Suites stand at
+**487 pytest / 57 CTest** (the new option is Python-side only, exercised by `--help` and compilation; the C++ tree
+is untouched). Nothing signed.

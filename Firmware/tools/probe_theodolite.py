@@ -212,6 +212,13 @@ def main() -> int:
     ap.add_argument("--step-deg", type=float, default=5.0, choices=[0.5, 1.0, 5.0])
     ap.add_argument("--samples", type=int, default=7)
     ap.add_argument("--axis", default="yaw", choices=["yaw", "pitch"])
+    # Round 73: the cx fit needs the angular scale measured at a COMMANDED image position, because the
+    # scale varies with u (du/dpsi = fx + (u-cx)^2/fx) and that variation is what locates the principal
+    # point. Default None keeps the historical behaviour - full width, which is right for fx/fy and
+    # useless for the fit, since it averages the very curvature being measured.
+    ap.add_argument("--strip-at-u", type=int, default=None,
+                    help="yaw only: correlate within a band centred on this image column, "
+                         "instead of across the full frame width")
     ap.add_argument("--neg-first", action="store_true",
                     help="walk the negative direction first (needed near the upper pitch limit)")
     args = ap.parse_args()
@@ -267,7 +274,17 @@ def main() -> int:
             r = int(np.argsort(rows)[-int(B.shape[0] * 0.06):].mean())
             h = max(40, int(B.shape[0] * 0.06))
             A, B = A[max(0, r - h // 2) : r + h // 2, :], B[max(0, r - h // 2) : r + h // 2, :]
-            dx, dy, _ = measure_shift(A, B, max_dx=260, max_dy=12)
+            if args.strip_at_u is not None:
+                # Keep the band narrow in u as well, so this measurement belongs to one image position.
+                # max_dx is tightened with the band: a shift larger than the retained margin cannot be
+                # distinguished from a wrap, and a silently wrong large shift is worse than no answer.
+                bu = max(32, min(int(B.shape[1]), int(args.strip_at_u)))
+                bw = max(96, int(B.shape[1] * 0.12))
+                lo, hi = max(0, bu - bw // 2), min(B.shape[1], bu + bw // 2)
+                A, B = A[:, lo:hi], B[:, lo:hi]
+                dx, dy, _ = measure_shift(A, B, max_dx=max(24, (hi - lo) // 3), max_dy=12)
+            else:
+                dx, dy, _ = measure_shift(A, B, max_dx=260, max_dy=12)
         w = samples[i]["frame"].shape[1]
         deg_per_normpx = abs(dq) / (abs(dx) / w) if abs(dx) > 0.5 else float("nan")
         per_step.append((dq, dx, dy, deg_per_normpx))
