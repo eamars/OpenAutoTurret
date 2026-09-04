@@ -4083,3 +4083,29 @@ For the record, the ingest region the acquire-direction depends on, quoted verba
 552: at_input_.target_visible = visible;
 553: at_input_.target_occluded = sel.visibility_state == tracks::Visibility::Occluded;
 ```
+
+## 2026-09-06, 12:0x — round 15b: the roam-side hand-off gate was relaxed, and the way I found out is the instructive part
+
+Two follow-ups to `504b68f`, both caught by measurement rather than by reading:
+
+**1. The gate relaxed on evidence, not on hope.** The roam→track condition was
+`has_selection && estimator_ready`, and `estimator_ready` is
+`tracking_ && tracking_->estimator_initialized()` (:526) — it depends on the **v1 estimator session existing**. I could
+not locate `request_mode`'s definition inside this round's budget to confirm whether that session survives a hand-off
+into roam, so the condition might have been **unreachable while roaming**: a feature that silently never fires. Safety
+does not live on that line — after any hand-off, AUTO_TRACK itself still refuses to move until its estimator is ready
+(:2165 returns `Hold`) — so the condition is now `has_selection` alone, with the reasoning written in place of the old
+comment. Worst case is a mode change that then **holds**: visible, and never motion nobody asked for.
+
+That also retracts the claim I shipped an hour ago — that the hand-off demands "the same evidence AUTO_TRACK itself
+demands". Unverified, and probably wrong. **Retracted.**
+
+**2. I broke the build with my own comment edit and CTest said nothing.** Replacing the comment *and* the
+`const bool held = …` line in one `old_string` deleted the declaration; `control_loop.cpp:2625` then failed to compile.
+What matters is that **`ctest` reported `100% tests passed, 0 failed` in the same command that reported the build
+error** — because the test binary was never rebuilt and the old objects ran happily. A green suite next to a failing
+build is a green suite built from stale objects. Verified properly this time: `controld` links, `test_control_loop`
+rebuilt with **0 errors**, and only then **CTest 57/57**.
+
+Standing habit worth keeping: after any edit, the build must be *seen* to recompile the changed file (I now `touch` the
+file when a build looks suspiciously quiet), and `ctest` only counts once its binaries are known-fresh.

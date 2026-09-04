@@ -2615,10 +2615,14 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   }
 
   if (m == OperatingMode::AutoRoam && cfg_.auto_track_on_acquire_ms > 0) {
-    // Same evidence AUTO_TRACK itself demands before it will move: a selection AND a ready estimator. Anything
-    // weaker and roaming would hand off to a tracker that then refuses to drive, which looks like a switch that
-    // worked and feels like one that did not.
-    const bool held = at_input_.has_selection && at_input_.estimator_ready;
+    // A selection, held. NOT `&& estimator_ready`, and the reason is worth the paragraph: estimator_ready is
+    // `tracking_ && tracking_->estimator_initialized()` (:526), so it depends on the v1 estimator session existing -
+    // and I could not confirm within this round's budget whether that session survives a hand-off into roam. A gate
+    // that may be unreachable while roaming is a gate that may never open, and a hand-off that silently never happens
+    // is the failure mode this project keeps being told about. Safety does not live in this line anyway: after the
+    // hand-off, AUTO_TRACK itself still refuses to move until its estimator is ready (:2165 returns Hold), so the
+    // worst case here is a mode change that then holds - visible, and never motion nobody asked for.
+    const bool held = at_input_.has_selection;
     if (!held) {
       acquire_since_ns_ = 0;
       return;
