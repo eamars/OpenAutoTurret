@@ -2163,6 +2163,18 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
                                   at_out_.reason[0] ? at_out_.reason : "hold");
       double az = 0.0, el = 0.0;
       tracking_->predicted_los_at_actuation(az, el);  // valid: estimator_ready
+      // Drive-mode item 3: with the key set, an aim inside the band is left alone, so the servo stops restarting
+      // corrections for detector wobble. The position loop is NOT opened - the axis servos to whatever aim is
+      // published here with unchanged authority, and the supervisor and envelope are untouched above. With the key
+      // at 0 (default) apply() returns az/el untouched, and this block is inert.
+      if (cfg_.auto_track_deadband_deg > 0.0) {
+        aim_hold_.apply(&az, &el, cfg_.auto_track_deadband_deg * kDeg2Rad,
+                        cfg_.auto_track_deadband_release_deg * kDeg2Rad);
+        snap_deadband_clamped_ = aim_hold_.config_clamped;
+      } else if (aim_hold_.armed || aim_hold_.holding) {
+        aim_hold_.reset();
+        snap_deadband_clamped_ = false;
+      }
       in.source = MotionSource::AutoTrack;
       in.type = IntentType::LosDirection;
       in.has_los = true;

@@ -247,6 +247,10 @@ struct V3Config {
   int auto_track_lost_hold_ms = 0;
   int auto_track_reacquire_window_ms = 0;
   float auto_track_medium_min = 0.0f;
+  // Drive-mode item 3 (see control/src/control/aim_deadband.hpp). 0 = disabled, which is the shipped default:
+  // a station that never names these keys aims exactly as it did before they existed.
+  double auto_track_deadband_deg = 0.0;
+  double auto_track_deadband_release_deg = 0.0;
   float auto_track_high_min = 0.0f;
   float auto_track_medium_scale = 0.0f;
   float auto_track_low_scale = 0.0f;

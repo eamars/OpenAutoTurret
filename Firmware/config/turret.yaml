@@ -28,6 +28,24 @@ schema_version: 1
 #     pitch_deg: -39.6                # one elevation for the whole sweep (§30)
 #     velocity_deg_s: 10.0            # may slow the sweep, never speed it past the limit
 #   auto_track:
+  # Drive-mode item 3 - AIM DEADBAND, opt-in, both default to 0 = OFF (behaviour byte-identical to
+  # before these keys existed; the gtest AimDeadband.DisabledByDefaultPassesTheAimThroughUntouched is what
+  # enforces that claim rather than this comment).
+  #
+  # While the predicted line-of-sight stays within deadband_release_deg of the aim we are already pointing
+  # at, the aim is NOT re-centred, so detector wobble cannot keep restarting small corrections. Two
+  # thresholds on purpose: a deviation past deadband_deg ENTERS the hold, and only one past
+  # deadband_release_deg RELEASES it - one threshold chatters at its own boundary. If release < enter the
+  # pair is clamped to 1.5x enter and reported (aim_deadband.hpp), never silently trusted.
+  #
+  # WHAT THIS DOES NOT DO: it does not open the position loop. The axis keeps servoing to the published aim
+  # with unchanged authority, so gravity sag, backlash creep and disturbance rejection all stay live, and the
+  # supervisor, envelope and safety authority are untouched. What it gives up: a target that creeps slower
+  # than the release threshold is NOT followed, so the reticle can sit slightly off-centre on it.
+  # Measured floor on this station is 0.02177 deg (smallest step the reported angle can take), so a band at
+  # or below that is indistinguishable from quantisation. First value to try on real pixels: 0.1 / 0.15.
+  # deadband_deg: 0.1
+  # deadband_release_deg: 0.15
 #     coast_ms: 300                   # §20: authority fades this long after the last frame
 #     lost_hold_ms: 2000              # when the hold is decided
 #     reacquire_window_ms: 3000       # how long a memory of the person is kept

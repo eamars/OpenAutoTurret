@@ -54,6 +54,8 @@
 #include "payload/payload_verifier.hpp"
 #include "tracking/target_measurement.hpp"
 
+#include "control/aim_deadband.hpp"
+
 namespace ota {
 
 namespace vision {
@@ -156,6 +158,12 @@ class ControlLoop {
     // inside the homed soft limits when tracking is enabled (the SearchPlanner
     // requires its bounds to leave braking margin, §36).
     double search_span_rad = 45.0 * kDeg2Rad;
+    // Drive-mode item 3: hold the aim while the line-of-sight wobbles inside this band, so detector jitter does
+    // not walk the pointing. ZERO (the default) means the aim passes straight through, exactly as before this
+    // key existed; release must exceed enter or it is clamped (see aim_deadband.hpp). Measured floor on this
+    // station is 0.02177 deg, so anything at or below that is indistinguishable from quantisation.
+    double auto_track_deadband_deg = 0.0;
+    double auto_track_deadband_release_deg = 0.0;
   };
 
   ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend);
@@ -555,6 +563,8 @@ class ControlLoop {
   static constexpr int kModeRampCycles = 60;
   int mode_ramp_cycles_ = 0;
   mutable bool mode_hold_in_place_ = false;
+  mutable AimDeadband aim_hold_;   // AUTO_TRACK aim hysteresis; reset when the session or mode changes
+  mutable bool snap_deadband_clamped_ = false;  // operator gave release < enter; stated, not hidden
   mutable bool mode_hold_latched_ = false;
   mutable double mode_hold_yaw_rad_ = 0.0;
   mutable double mode_hold_pitch_rad_ = 0.0;

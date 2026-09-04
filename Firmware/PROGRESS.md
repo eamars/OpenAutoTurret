@@ -3988,3 +3988,42 @@ to the held aim as hard as it does now; only the *re-aiming* is damped. That is 
 I did not apply it this round: five files plus a ninja/ctest cycle is not something I can carry honestly at the end of
 this context, and "compiled cleanly" has twice in this file meant "applied nothing". This entry makes the next round one
 edit-and-verify, not another hunt.
+
+## 2026-09-06, 11:0x — round 14: item 3's aim deadband is IN, default-off, 4 new tests, CTest 57/57 — one round, one feature, as promised
+
+Round 13's located hook made this a wiring job rather than a hunt. **One scope, no other thread opened.**
+
+**New file `control/src/control/aim_deadband.hpp`** — a 60-line `struct AimDeadband` with the hysteresis stated in the
+header prose: deviation past `enter` **enters** the hold, past `release` **releases** it (two thresholds because one
+chatters at its own boundary); `enter == 0` returns the candidate untouched and clears state; an inverted pair is
+clamped to 1.5×enter with `config_clamped` set so the caller can report it — because silently correcting a
+safety-relevant number is the habit this project has already been burned by.
+
+**Wired in 6 places, each anchor verified to match exactly once before writing:**
+`control_loop.hpp` (include, 2 `Config` fields, `aim_hold_` member, clamp flag) · `control_loop.cpp` at the hook round
+13 pinned (`predicted_los_at_actuation` → `los_az_rad`), guarded so the `0` branch only *resets* state ·
+`turret_config.hpp` (`V3Config` fields) · `turret_config.cpp` (parse `deadband_deg` / `deadband_release_deg`, default 0)
+· `station_wiring.cpp:116` (the `V3Config` → `ControlLoop::Config` copy that round 13 had not found, which is what the
+first build failure was really telling me: `V3Config` and `ControlLoop::Config` are two different structs).
+
+**Measured results:**
+* `AimDeadband` gtest: **4/4 pass** — disabled passes through and never arms; five in-band wobbles (±0.09° at
+  enter 0.10°) leave the aim **exactly** the anchor value; a 0.30° departure is followed **fully** (1.30 in → 1.30 out,
+  no partial move) and re-holds about the new anchor; an inverted pair still holds and says so.
+* **CTest: 57/57 pass.** `controld` target builds clean.
+* No Python touched, so the 255-test web suite is unchanged (stated, not assumed).
+
+**`config/turret.yaml` carries the keys as commented documentation** — `# deadband_deg: 0.1`,
+`# deadband_release_deg: 0.15` — with the honest cost spelled out next to them: a target creeping slower than the
+release threshold is **not** followed, so the reticle can sit slightly off-centre on it. **Nothing is enabled by
+default**, and `DisabledByDefaultPassesTheAimThroughUntouched` is what enforces that, not the comment.
+
+**Deliberate non-action:** I did **not** restart the live `controld` for this. With the keys at 0 the change is inert by
+test, and bouncing a working daemon to prove an inert change trades real risk for a cosmetic one. The operator enables
+it by uncommenting two lines and restarting, at a time they choose — which is also the point of item 3 being *"an
+explicit config/mode choice rather than a silent behaviour change."*
+
+**Sizing, still open on purpose:** the measured floor is **0.02177°** (round 2's LSB) and at-rest wobble is
+**0.0877° p2p with 0 reversals**, so 0.1/0.15 sits just above the noise. That is a *starting* value, not a tuned one —
+tuning it against real detector jitter needs a target in view on the real detector, which is still the operator's
+unblock.

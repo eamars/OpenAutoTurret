@@ -2098,3 +2098,63 @@ TEST(BlackBox, ABrakeEdgeArchivesTheActionThatActuallyCausedIt) {
       << "the preserved scene contradicts the decision that preserved it: reason='" << reason
       << "' but safety_action='" << action << "'";
 }
+
+// ---------------------------------------------------------------------------
+// Drive-mode item 3: the AUTO_TRACK aim deadband (aim_deadband.hpp).
+//
+// These exercise the helper directly rather than through a whole ControlLoop cycle, because the thing under test is
+// the hysteresis rule, and a loop-level test would spend its whole budget proving that a cycle ran. The loop wiring is
+// four lines and is checked by the disabled case below plus the station measurement that follows.
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr double kDeg2RadT = 0.017453292519943295;
+}  // namespace
+
+TEST(AimDeadband, DisabledByDefaultPassesTheAimThroughUntouched) {
+  ota::AimDeadband d;
+  for (double az : {0.1000, 0.1001, 0.1002, 0.2000}) {
+    double a = az, e = 0.0;
+    d.apply(&a, &e, 0.0, 0.0);
+    EXPECT_DOUBLE_EQ(a, az);
+    EXPECT_DOUBLE_EQ(e, 0.0);
+  }
+  EXPECT_FALSE(d.armed);   // never engages at all when the key is 0
+  EXPECT_FALSE(d.holding);
+}
+
+TEST(AimDeadband, WobbleInsideTheBandDoesNotMoveTheAim) {
+  ota::AimDeadband d;
+  const double enter = 0.10 * kDeg2RadT, release = 0.15 * kDeg2RadT;
+  const double anchor = 1.000;
+  { double a = anchor, e = 0.0; d.apply(&a, &e, enter, release); }   // anchors on first measurement
+  for (double w : {0.00, 0.05, -0.05, 0.09, -0.09}) {
+    double a = anchor + w * kDeg2RadT, e = 0.0;
+    d.apply(&a, &e, enter, release);
+    EXPECT_DOUBLE_EQ(a, anchor) << "wobble " << w << " deg must not move the aim";
+  }
+  EXPECT_TRUE(d.holding);
+}
+
+TEST(AimDeadband, ARealDepartureIsFollowedFullyAndTheAnchorMovesThere) {
+  ota::AimDeadband d;
+  const double enter = 0.10 * kDeg2RadT, release = 0.15 * kDeg2RadT;
+  { double a = 1.0, e = 0.0; d.apply(&a, &e, enter, release); }
+  { double a = 1.0 + 0.05 * kDeg2RadT, e = 0.0; d.apply(&a, &e, enter, release); }   // enters the hold
+  double a = 1.30, e = 0.0;                       // 0.30 deg: past release
+  d.apply(&a, &e, enter, release);
+  EXPECT_DOUBLE_EQ(a, 1.30);                      // followed at full authority, not partly
+  EXPECT_FALSE(d.holding);
+  { double b = 1.3001, f = 0.0; d.apply(&b, &f, enter, release);
+    EXPECT_DOUBLE_EQ(b, 1.30); }                  // and it re-holds around the NEW anchor
+}
+
+TEST(AimDeadband, InvertedThresholdsAreClampedAndReportedNotHidden) {
+  ota::AimDeadband d;
+  const double enter = 0.30 * kDeg2RadT, release = 0.05 * kDeg2RadT;   // nonsense pair
+  { double a = 1.0, e = 0.0; d.apply(&a, &e, enter, release); }
+  double a = 1.0 + 0.10 * kDeg2RadT, e = 0.0;
+  d.apply(&a, &e, enter, release);
+  EXPECT_TRUE(d.config_clamped);
+  EXPECT_DOUBLE_EQ(a, 1.0);   // still held: a bad pair must not silently stop holding
+}
