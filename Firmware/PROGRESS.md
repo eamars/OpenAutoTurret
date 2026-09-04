@@ -2310,3 +2310,36 @@ The operator now holds three cheap options, all reversible in config with the ef
 raise `hold_speed_deg_s`, size the acceptance dart to what 10 deg/s can follow, or accept C2/C3 failing as a
 documented consequence of the safety ceiling. Station homed, READY, MANUAL/HOLD, synthetic source restarted and
 verified (track sets > 0).
+
+## 2026-09-05, 05:5x — round 44: C4 does not measure ringing, and I have been reporting its failure as if it did
+
+No motion this round. `docs/evidence/c4_measurement_validity_2026-09-05_r44.md`, from round 36's recording plus
+the probe's source.
+
+Over the 91 TRACKING frames: the **target's reported rate crosses zero 21 times; the reference's, 10**, and the
+reference rate maxes at 10.00 (round 38's ceiling, reconfirmed). C4 counts sign changes in the *reference* and I
+have reported its failure as evidence of oscillation in two rounds of summaries. **The signal being followed
+crosses zero twice as often as the signal doing the following** — the reference is the smoother of the two, which
+is the opposite of what an oscillating loop looks like.
+
+Two reasons, neither of them ringing: the fixture's target genuinely holds still (the probe has no jitter term —
+grep for `jitter|noise|random|uniform|gauss|drift` returns only comments about *feedback* noise — and `--hold-s`
+means "how long the target holds still"), and **the camera is mounted on the axis that is still chasing**, so a
+fixed world target's bearing moves while the shortfall from round 38 is being repaid. On top of that sits a
+measured estimator rate noise floor near **1 deg/s p50 while the target is provably stationary**.
+
+**Consequence: "C4 FAIL" should have read "C4 inconclusive"**, and the sign-off package now says so in place. Not
+established: that the loop does *not* ring. Only that this measurement cannot tell — which matters because
+objective (b) requires smoothness to be *measurable*, and one of its four criteria currently isn't. A corrected
+C4 is sketched in the evidence file — scored in the settled window C2 already defines, on the aim **error** in
+one space (round 38's joint-vs-world warning), with a deadband derived from the measured noise floor rather than
+a constant in source, and with **overshoot amplitude** reported next to crossings — deliberately left
+unimplemented, because redefining an acceptance criterion mid-acceptance is the operator's call, and the old
+metric should keep printing beside it until they choose.
+
+**Method note, applied deliberately this round:** my first two replacement anchors missed (bold markers I had
+imagined, a `·` separator I hadn't). I read the exact bytes with `cat -A`, then replaced with a verified unique
+anchor and confirmed `count: 1 / REPLACED` **before** writing any of it up — the round-42 lesson in practice.
+
+Station untouched: homed, MANUAL/HOLD, READY, ceiling 10.0 on the panel, synthetic source running. Docs only;
+**451 pytest / 57 CTest** stand.
