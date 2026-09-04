@@ -1,5 +1,12 @@
 # Acceptance sign-off package — v3.2 Apache-HUD
 
+> **Read first — this document's dart numbers were superseded on 2026-09-05 by rounds 50-60.** Use the
+> round-61 addendum at the foot of this file. In short: **C6 does not fail** (it failed because of two defects
+> in the measuring tool - wrong ceiling, wrong units - and passes with 148 moving samples at max 10.0 deg/s,
+> 0 over the ceiling); **C2's single quoted value of 2.85 s was one run of a range**, and 1.61 s of it is a
+> baseline that breaches the 1.50 s bar before any target moves; **C3's deficit is real but not a constant
+> (five runs: 4.7 to 11.9 deg)**; **C4 is invalid as implemented**, its no-motion floor is 11 sign changes.
+
 Prepared for the operator. **Nothing in this file is signed.** The revision makes visual fidelity and hardware
 acceptance operator judgements (§24, and the acceptance ledger in the v3 architecture document), and an
 acceptance item recorded by the agent that wrote the code is worth nothing. What this file does is put every
@@ -107,3 +114,30 @@ in a 1080-px frame, so the anchor can be on the edge with ~189 px of target outs
 actually applied to the reference is the 10 deg/s now shown on the panel as `SPEED CEILING`**. Both defects point
 in the optimistic direction. The C1 and C6 rows above are left as written so the history stays visible; treat
 their verdicts as weaker than they read until the predicates are corrected and the dart is re-run.
+
+
+---
+
+## Addendum, 2026-09-05 (round 61) — the corrected verdicts, in one place, superseding the numbers above
+
+Five rounds of instrument checking (47, 49, 53-60) changed what the dart criteria mean. Recorded here so an
+operator reading the table above is not handed a verdict that has since been retracted.
+
+| criterion | what this document says above | what the corrected instruments show |
+|---|---|---|
+| C1 containment | PASS | PASS on the anchor **and** on the declared box edges (rounds 50, 53) |
+| C2 recovery | FAIL, 2.85 s | FAIL at **2.27-2.34 s** across runs, but **1.61 s of that is a reproducible baseline**: with a 0.0 deg dart the same tool reports 1.61-1.63 s, already over the 1.50 s bar. Dart-attributable recovery is roughly **0.7 s** |
+| C3 lead | FAIL, -11.6 deg | FAIL, sign stable across five runs, magnitude **4.7 to 11.9 deg** - a real deficit, no reliable single figure |
+| C4 no ringing | invalid (floor 11) | unchanged: **floor is 11 sign changes with nothing moving**, darts give 3-4, so the metric cannot judge ringing |
+| C5a accel | PASS | PASS (p95 at the 60 deg/s^2 limit, as designed) |
+| C5b jerk | FAIL, p95 525 | **FAIL, and validated**: the estimator's noise floor is **4.2 deg/s^3** on frames where jerk is zero by construction, so ~525-540 is two orders of magnitude of real violation, robust to which signal is differentiated |
+| C6 rate legality | weaker than it reads (wrong ceiling) | **PASSES**: judged on controld's published `q_ref_rate_yaw_rad_s` it reports **148 moving samples, max 10.0 deg/s against a 10.0 deg/s ceiling, 0 over**. The two earlier defects - ceiling reconstructed as ~20.1 (round 47, fixed round 49) and rad/s compared against a deg/s ceiling (round 56, fixed round 59) - were both in the tool. **The station's reference reaches its ceiling and never exceeds it** |
+
+**Net position.** The instruments now support exactly what round 40 said from source: the reference does what the
+ceiling allows and no more, the ceiling is **10.0 deg/s**, and the operator's lead criterion wants about 15.6 deg/s
+average. The options remain - raise `tracking.hold_speed_deg_s`, size the acceptance dart to what 10 deg/s can
+follow, or record C3 as a documented consequence - and none is mine to take.
+
+**And the standing disqualification of this whole package, unchanged: no item above has been accepted by a named
+person. Nothing here is signed.** 16 visual items and the 30 v3 system items remain unsigned; the camera's
+principal point is still a convention rather than a measurement, and boresight is still uncommissioned.
