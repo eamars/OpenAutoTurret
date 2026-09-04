@@ -2961,3 +2961,33 @@ crash, not just a stack trace: the cleanup was the last thing in the function.
 
 Suite: **81 tools tests pass**, `py_compile` clean; full-suite and CTest re-run next round before quoting totals.
 Synthetic source restored and running.
+
+## 2026-09-05, 20:1x — round 70: the replacement metric passes the test that invalidated C4, on three segments with known truths
+
+Round 53 killed the present C4 by running it on a segment whose truth was known — a target that never moves — and
+watching it report 11 sign changes. The same test was owed to the replacement. Three executions, same hold-window
+code, `/tmp/r70_floor.log` and `/tmp/r70_dart.log` alongside round 69's `/tmp/r69b.log`:
+
+| segment (truth known) | present C4 rule | round-66 metric |
+|---|---|---|
+| **0.0 deg dart** — nothing moves, only jitter | `FAIL (5 sign changes)` | **NO OSCILLATION DETECTED** (77 samples, all inside a 49.0 px band = 0.130 box heights) |
+| **12 deg dart** — legal at the ceiling | `FAIL (5 sign changes)` | converging (single crossing), 0 reversals above the band, peak **0.269 box heights** |
+| **25 deg dart** — the acceptance dart | `FAIL (4 sign changes)` | converging (single crossing), 0 reversals above the band, peak **0.818 box heights** |
+
+What makes this evidence rather than decoration: the old rule fails on data containing **no motion at all**, which is
+the property that made it unusable, reproduced here a fourth time; and the new metric is **monotone in difficulty** —
+0.130 → 0.269 → 0.818 box heights across still, gentle, and hard — while never once calling a motionless target
+ringing. It also refuses to overreach: the 25 deg dart's excursion is reported as **0.818 box heights, converging**,
+which is a large miss, honestly sized, and not laundered into "ringing".
+
+Incidental reproductions from the same runs, on now-trustworthy instruments: **C6 PASS** (152 moving samples, max
+10.0 deg/s against the 10.0 ceiling in force, 0 over); **C2 FAIL 2.80 s** (inside the 2.27–2.85 s spread measured
+across runs); **C3 FAIL −5.981 deg** (inside the −4.7…−11.9 deg spread). Nothing about the ceiling explanation
+changed.
+
+Still a diagnostic, not a criterion: the printed line says so and the exit code still scores C4 as written. What
+would change if adopted: C4 would become measurable — three segments say the station does **not** ring — and the
+`<= 2 sign changes` text would need rewriting, which is the operator's call.
+
+Station restored: `MANUAL / HOLD`, `at_ready`, synthetic source running; both runs completed their own cleanup this
+time, which is the difference round 69's crash made visible.
