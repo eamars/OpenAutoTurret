@@ -3755,3 +3755,36 @@ is next round's single measurement.
 
 No code changed this round. The station is untouched: real IMX500 source still running (`camera_fps 14.9656`), controld
 `AUTO_TRACK / WAIT_TARGET`, `safety_action ALLOW`.
+
+## 2026-09-06, 08:0x — round 8: the preview's 10 fps has a mechanism now, and it exposes that my round-6 "fix" was a silent no-op
+
+Freed the IMX500 and asked it directly (system python, libcamera chatter suppressed):
+
+* **The sensor offers two modes: `(2028,1520) @ 30 fps` and `(4056,3040) @ 10 fps`.**
+* `video.py`'s bare `create_video_configuration(main={"size": (1920,1080)}, buffer_count=3)` negotiates
+  `XBGR8888`, and its advertised controls are **`FrameDurationLimits`, `NoiseReductionMode` — no `FrameRate` at all**.
+* The vision path (`vision/frame_source.py:309-312`) asks differently: `main={"size": …, "format": "XRGB8888"}`,
+  `buffer_count=4`, *then* sets `controls["FrameRate"]` — and delivers ~15 fps from the same sensor.
+
+**Two conclusions, one of them about me.**
+
+1. **Round 6's change could not have done anything, and my own guard hid the evidence.** `FrameRate` is not among the
+   controls that configuration advertises, so assigning it was a no-op — inside a `try/except Exception: pass`, which
+   ate any signal that the control was unknown. I wrote a defensive guard that converted a failed change into a
+   successful-looking one, then measured the result and correctly reported "no change", while the *reason* was sitting
+   in the code I had just written. That is the round-63/65 family of failure (patches that apply nothing) arriving by a
+   new route: not a broken anchor but a **silently-ignored write**. The measurement caught the outcome; the guard
+   would have let a less honest round book a win.
+2. **The rate is chosen at mode-selection time, not by a control.** 1920x1080 fits inside the 30 fps mode's
+   2028x1520, yet both 1080p and 720p landed on ~10 fps — matching the `(4056,3040) @ 10 fps` mode. Two resolutions
+   pinned to one number, independent of encode cost (round 7), which is exactly what mode selection predicts and what
+   no per-frame cost could produce.
+
+**The fix, evidence-first:** ask for the preview the way the working path asks — **name the pixel format explicitly**
+(`XRGB8888`, as `frame_source.py` does) so the fast mode can be selected, and express any rate request through a control
+the configuration actually advertises (`FrameDurationLimits`, in microseconds), never `FrameRate`, which this pipeline
+does not expose. Then `fps_published` decides whether it worked — it is the arbiter that stopped me booking two false
+wins in this file, and it stays the arbiter.
+
+Station restored after the probe: real IMX500 source running again, controld untouched (`AUTO_TRACK / WAIT_TARGET`,
+`safety_action ALLOW`). The preview pane is intentionally still stopped; nothing is left holding the camera.
