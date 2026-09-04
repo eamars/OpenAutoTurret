@@ -67,11 +67,16 @@ bears on some of them, and where it lives:
   30. The ceiling is now visible on the panel as `RATE CEILING 10.0 DEG/S (AUTH 100%)`. **No controller
   behaviour has been changed**: raising that ceiling means raising how fast the station may swing while
   following a target, which is the operator's decision, not the agent's.
-* **Camera geometry** — effective FOV and principal point measured (69.3002 × 40.4171 deg, 24.22 px/deg);
-  **camera-to-axis boresight NOT commissioned**, and not commissionable on this station today: the real camera
-  path needs a picamera2 config and an IMX500 detector asset, and neither exists anywhere in the tree, while
-  the synthetic vision source cannot observe the world at all. This is why the tapes read
-  `JOINT TRAVEL, NOT HEADING` and no world-elevation scale is drawn.
+* **Camera geometry** — **plate scale / effective FOV measured on real optics** by encoder-as-theodolite
+  (`calibration/camera_intrinsics.yaml`: fx 1389, fy 1467 → 24.24 and 25.60 px/deg; hfov 69.3002°, vfov
+  40.4171°). **The principal point is NOT measured**: the calibration file's own line 27 says *"cx/cy are the
+  GEOMETRIC CENTRE BY CONVENTION, not a measurement"*, because on a rotating platform the principal point and the
+  camera-to-axis boresight enter as the same constant offset. So `cx 960 / cy 540` is an assumption wearing a
+  "MEASURED" header — true of fx/fy, not of cx/cy. **Consequence: centring tolerance and frame-exit margin are
+  still not computable**, which is exactly what the objective said would happen without this step. Round 32's
+  anchor test proves the HUD *follows* the calibration, not that the calibration's centre is real. The
+  **camera-to-axis boresight is not commissioned** and needs either a surveyed distant reference or a calibration
+  board at wide spans. Tapes therefore read `JOINT TRAVEL, NOT HEADING`.
 * **Data contract (§20)** — every field is supplied, including `camera.measurement_age_ms` (the calibration
   file's own mtime, aged per snapshot, null only when there is no calibration file) and the FOR envelope
   polygon; IMU is reported honestly as `ABSENT`. `test_section_20_ledger.py` reads these from the **live**

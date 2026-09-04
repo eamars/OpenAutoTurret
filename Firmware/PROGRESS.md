@@ -2004,3 +2004,42 @@ a human judgement.
 No code changed; **447 pytest / 57 CTest** stand. Station homed, ready, MANUAL/HOLD, synthetic vision still
 running (`rpicam-still` released the sensor cleanly). **§24 (16) and the v3 ledger (30): 0 accepted by a named
 person.**
+
+## 2026-09-04, 23:5x — round 34: my own record had overstated camera commissioning — the principal point was **never measured**
+
+Started by asking how the theodolite probe gets frames, and the answers compounded:
+
+* **`tools/probe_theodolite.py` already exists** and is careful: steps the axis, waits for settle, correlates a
+  **single high-contrast strip** (a row for yaw, a column for pitch) rather than the whole frame, walks forward
+  **and back** so backlash shows, and **verifies the correlation sign against a known synthetic shift before
+  reporting anything** — a calibration with the wrong sign looks identical to a right one until the turret drives
+  the wrong way.
+* **webd's video is produced from the real IMX500 inside the webd process** (`web/webd/video.py`: picamera2 /
+  libcamera, lazy, low-priority, off by default). So the probe's frames were **real optics**, not the synthetic
+  pattern. Good news, and the reason to ask.
+* **`calibration/camera_intrinsics.yaml` is genuinely measured — for fx/fy only.** Header: *"MEASURED on the
+  station, 2026-09-04, by encoder-as-theodolite"*, and it records the correction of an earlier wrong reading (the
+  "pixels are anamorphic" conclusion was whole-frame correlation averaging different elevations; strip walks
+  disagreed by up to 45%). **Line 27: *"cx/cy are the GEOMETRIC CENTRE BY CONVENTION, not a measurement"***,
+  because on a rotating platform the principal point and camera-to-axis boresight enter as the *same* constant
+  pixel offset.
+
+**So my record has been wrong.** Rounds have reported "FOV + principal point measured" and even the file's own
+header invites it. The accurate state: **plate scale and effective FOV measured (fx 1389 / fy 1467 → 24.24 and
+25.60 px/deg; hfov 69.3002°, vfov 40.4171°); principal point assumed at the centre; boresight not commissioned.**
+`cx 960, cy 540` are round numbers because they are a convention, not because they are tidy measurements.
+
+**Why that matters is the objective's own premise**: without the principal point and boresight, **centring
+tolerance and frame-exit margin are not computable** — which is precisely why item (c) was listed first. So (c)
+is **open**, and no amount of HUD work closes it. Round 32's reticle-anchor test is unaffected but must be read
+correctly: it proves the HUD *follows* `cx/cy`, and right now `cx/cy` are a convention. The test would pass
+identically on a mis-centred lens with a centred assumption.
+
+Separation path, for when someone is standing at the station: a calibration board at **wide** spans (the tan()
+curvature the probe says is only a few percent over ±16° is the only thing that splits the two constants), or a
+**surveyed distant reference** at a known bearing. `make_charuco_board.py` and `calibrate_camera_intrinsics.py`
+are already in `tools/`; the missing ingredient is physical.
+
+Sign-off package's camera bullet rewritten to say all of this — including the sentence *"an assumption wearing a
+MEASURED header"*. Docs only: **447 pytest / 57 CTest** stand, station homed, ready, MANUAL/HOLD, video stream
+left off by default (it opens on demand).
