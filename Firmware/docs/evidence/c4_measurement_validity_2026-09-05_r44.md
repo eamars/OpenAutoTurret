@@ -241,3 +241,34 @@ run this round**: what changed is the decision logic and that logic is exercised
 after this will show whether `ref_v` really is thin, and it will say so in words. That question — why round 56 saw
 max 0.2 deg/s where round 54 saw max 10.0 from the same field — is still open, and closing the escape route is not
 the same as answering it.
+
+## Round 58: the 0.2 deg/s was my code, not the station — the same run contradicts itself
+
+From the round-56 logs, same file, same run, twenty lines apart:
+
+    r56_dart.log   C6 rate legality ... PASS (max 0.2 deg/s, no sample above the ceiling plus 5%)
+    r56_dart.log   rate : p50 8.5  p95 10.0  max 10.0 deg/s   (track limit 30 deg/s)
+    r56_floor.log  C6 rate legality ... PASS (max 0.2 deg/s, ...)
+    r56_floor.log  rate : p50 5.9  p95 9.8   max 10.0 deg/s
+
+Both statements came from the analysis block that reads `rv` (defined once, line 1002, and used by the profile
+print at line 1022). A list cannot have a maximum of 0.2 and a maximum of 10.0. **So round 56's `max 0.2 deg/s`
+was a defect at my verdict site, not a thin sample set from the station** — the reference really did reach
+10.0 deg/s, exactly as the ceiling predicts, in both runs.
+
+That reverses the sign of round 57's conclusion in one respect, and it is worth being exact about which part
+survives:
+
+* **Survives:** a verdict must state its evidence and must not PASS on thin data. `rate_verdict` stays, with its
+  `INSUFFICIENT DATA` and `NO CEILING` paths and its sample counts — that is a real improvement in the tool.
+* **Does not survive:** the reading that the station's published rate was empty. It wasn't. The number printed by
+  the profile line was right all along; the verdict line was reading or transforming something else.
+
+**Next step, concrete:** the verdict site and the profile site must be made to share one accessor, and the first run
+after that should print the same maximum in both places — if it does not, the defect is visible immediately rather
+than only after a PASS has been believed. Until that equality holds, **C6 still has no working verdict from this
+tool**, whatever it prints.
+
+What the corrected reading implies for acceptance, if it holds after the fix: the reference reached but did not
+exceed its 10.0 deg/s ceiling during a 25 deg dart, which is round 40's plateau measured once more — a *ceiling*
+problem, not a *rate-limit-violation* problem. The ceiling remains the operator's decision.

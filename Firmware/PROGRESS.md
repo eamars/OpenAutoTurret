@@ -2664,3 +2664,25 @@ constant); C1 PASS on anchor and declared box; C2 FAIL with a reproducible 1.61 
 1.50 s bar before any motion; C3 FAIL, sign stable but magnitude −4.7 / −6.4 / −11.9 deg across three runs; C4
 invalid with a no-motion floor of 11; C5a PASS; C5b FAIL validated against a 4.2 deg/s^3 noise floor; C6 no working
 verdict yet. **461 pytest / 57 CTest** before this round's additions.
+
+## 2026-09-05, 13:4x — round 58: round 56's 0.2 deg/s was my code, and the same log proves it
+
+Twenty lines apart in the same file, from the same run: my C6 line said `PASS (max 0.2 deg/s, ...)`, the profile
+line said `rate : p50 8.5 p95 10.0 max 10.0 deg/s`. Same run, same `rv`, same analysis block. **A list cannot peak
+at 0.2 and at 10.0**, so the emptiness I described last round was at my verdict site, not in what the station
+published. The reference reached 10.0 deg/s — exactly the ceiling — in both runs.
+
+Which part of round 57 survives is worth stating exactly, because "the guard was the right call" and "the story
+behind the guard was wrong" are both true. `rate_verdict` stays: refusing to PASS on thin data, naming sample
+counts, `NO CEILING` rather than a pass, are improvements regardless of what prompted them. What does not survive
+is the claim that the published rate was nearly empty. It wasn't.
+
+**Next step is mechanical and I have not done it:** make the verdict site and the profile site share one accessor,
+then require the first run after the change to print the *same maximum in both places* — equality as an assertion,
+not a hope. Until then C6 has no working verdict from this tool, whatever number it prints. If the corrected
+reading holds, the acceptance picture sharpens rather than changes: the reference reached 10.0 deg/s and did not
+exceed it, which is round 40's plateau measured again — a **ceiling** question for the operator, not a rate-limit
+violation.
+
+Docs only this round. Station untouched (MANUAL/HOLD, READY, synthetic source running). **468 pytest / 57 CTest**
+stand.
