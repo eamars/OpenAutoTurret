@@ -2402,3 +2402,32 @@ and C6's ceiling comparison.
 
 Station untouched: homed, MANUAL/HOLD, READY, ceiling 10.0 on the panel, synthetic source running. Docs only;
 **451 pytest / 57 CTest** stand.
+
+## 2026-09-05, 07:2x — round 47: the last two untested instruments both fail the check, and one of them explains round 27
+
+Third pass of "check the instrument, not the number" (C4 invalidated · C5b validated · head-aim traced). Probe
+source and the existing recording only, no motion. `docs/evidence/c1_c6_measurement_validity_2026-09-05_r47.md`.
+
+**C1 tests a point, not the target.** Every containment predicate is on the anchor — `outside = not (0.0 <= un <=
+1.0 and 0.0 <= vn <= 1.0)` at line 241, `in_frame = (0.0 <= u <= FW) and (0.0 <= vv <= FH)` at line 636, consumed
+at 675 and 839. The declared box is `BOX_H_NORM = 0.35`, about **378 px of a 1080-px frame**, so the anchor may
+sit on the edge with ~189 px of target outside and C1 says PASS. The objective says *"so the target does not leave
+the frame"*; what is scored is *"so the anchor does not."* C1's PASS is an upper bound, not containment.
+
+**C6 certifies against a ceiling that is not the binding one.** Line 913: `ceiling = 30.0 * (min(scales) ...)`,
+i.e. the configured tracking speed (which `turret.yaml` doesn't even set — 30.0 is the loader default) scaled by
+the payload profile, ≈20.1 deg/s. Round 40 proved the applied ceiling is **10**; round 43 put it on the panel.
+**This is round 27's puzzle resolved**: that evidence file is named `...envelope_legal...` and then failed C2/C3
+— legal against 20.1, impossible against 10. C6 should read controld's published `effective_speed_ceiling_deg_s`
+instead of reconstructing a constant in Python.
+
+**Both defects point the optimistic way.** That is the direction worth being paranoid about, and it is the third
+round running that checking an instrument changed what I am allowed to say rather than what the station does.
+Current honest state of the dart: C1 PASS-but-point-only · C2 FAIL · C3 FAIL · C4 inconclusive · C5a PASS · C5b
+FAIL validated · C6 PASS-against-wrong-ceiling. Fixing C1/C6 is a probe change followed by one more dart run —
+and the criteria themselves are the operator's, so I have written the corrections down rather than quietly
+rescoring acceptance. The sign-off document got an append-only addendum saying its C1/C6 rows read stronger than
+they are.
+
+Station untouched: homed, MANUAL/HOLD, READY, `SPEED CEILING 10.0 DEG/S`, synthetic source running. Docs only;
+**451 pytest / 57 CTest** stand.

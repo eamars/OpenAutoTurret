@@ -95,3 +95,15 @@ plumbing evidence only; no acceptance item may be signed on them.** Until the re
 station, head-aim and lead claims are measurements of a generated target, not of the world.
 
 Prepared by the agent that wrote the code, on 2026-09-04. That is a reason to distrust every line above.
+
+---
+
+## Addendum, 2026-09-05 (round 47) — read the C1 and C6 rows in this document together with the instrument note
+
+`docs/evidence/c1_c6_measurement_validity_2026-09-05_r47.md` establishes, from the probe's own arithmetic, that
+**C1 scores frame containment on the declared anchor point rather than the target box** (the box is ~378 px tall
+in a 1080-px frame, so the anchor can be on the edge with ~189 px of target outside and still pass), and that
+**C6's pre-check compares the dart against 30 deg/s scaled by the payload profile (~20.1), while the ceiling
+actually applied to the reference is the 10 deg/s now shown on the panel as `SPEED CEILING`**. Both defects point
+in the optimistic direction. The C1 and C6 rows above are left as written so the history stays visible; treat
+their verdicts as weaker than they read until the predicates are corrected and the dart is re-run.
