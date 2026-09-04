@@ -1966,3 +1966,41 @@ not taken unbidden.
 
 Station homed, ready, MANUAL/HOLD, synthetic vision running. **§24 (16 items) and the v3 ledger (30 items): 0
 accepted by a named person.**
+
+## 2026-09-04, 23:2x — round 33: two things I had been asserting without measuring — the loop is at ~197.9 Hz with a consistent overrun, and **the camera captures**
+
+Evidence: `docs/evidence/loop_timing_and_capture_2026-09-04_r33.md`.
+
+**I checked what the number means before quoting it**, because rounds 23–25 were spent explaining a metric from
+summaries instead of from the expression that computes it. `snap.control_cycle_us = period_ns / 1000`, where
+`period_ns` is the interval the caller supplies to `step()`, and line 369 detects `period_ns > deadline_ns_` —
+which is only possible if that interval is **measured**. So the field is the loop's real wake-to-wake interval.
+Sampled 12× over ~22 s, homed and idle: **min 5052, p50 5054, max 5054 µs → ~197.9 Hz against a nominal 200,
+with ~54 µs of consistent overrun past the 5 ms deadline.** Stated with its limits: twelve peeks at the
+*latest* value is not a distribution, and the narrow spread argues against large jitter without excluding it.
+
+**The sharper finding: the overrun is computed and then thrown away.** `overrun_us` exists at line 370, and
+`grep -c overruns` is **0** in `web_server.hpp` and **0** in `protocol.py`. A station that misses its deadline on
+every cycle for a whole day shows nothing on screen, and `docs/evidence/` held **zero** timing artifacts of any
+kind before this file. So the objective's "200 Hz must stay within measured limits" is currently unseeable, not
+merely unproven. Publishing the overrun counter plus a p95/max over a window is the next concrete step.
+
+**A blocker I had asserted on the wrong grounds, for many rounds.** I recorded that camera-geometry
+commissioning was blocked because `visiond`'s real path needs an image-config JSON and an IMX500 `.rpk`, and
+neither exists. That is an argument about *assets*; **nobody had checked the hardware.** `picamera2` imports,
+`rpicam-still` is installed, four `/dev/media*` nodes exist, and a 40 s probe **captured a 1920×1080 frame
+(188,437 bytes) from the IMX500**. The missing detector package constrains automated *detection*, not *capture*.
+Real-frame deg-per-pixel and principal-point work is therefore actionable now — the probe frame's column-edge
+profile (median 824, peak 16,500 near column 826) says there is structure to phase-correlate. My first
+on-the-spot threshold ("edge energy > 2.0 ⇒ not textured") said the opposite and was wrong: the meaningful
+statistic is the peak-to-median ratio, which I invented after seeing it. Recorded so the bad verdict isn't
+mistaken for the finding.
+
+Two limits that survive the unblock: **absolute boresight still needs a distant feature at a surveyed bearing**
+— physical, the operator's — and **this model cannot look at images** (`read_image` refuses: no image input), so
+every measurement off real frames must be numeric, never "I saw the target". That is a further reason §24 stays
+a human judgement.
+
+No code changed; **447 pytest / 57 CTest** stand. Station homed, ready, MANUAL/HOLD, synthetic vision still
+running (`rpicam-still` released the sensor cleanly). **§24 (16) and the v3 ledger (30): 0 accepted by a named
+person.**
