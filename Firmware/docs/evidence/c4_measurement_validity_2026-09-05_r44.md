@@ -154,3 +154,37 @@ exceeding 10.0 deg/s. **So two fields published by the same control loop contrad
 17.8, the rate field says 10.0. C6's FAIL has therefore been measuring that contradiction, not target-following.
 Resolving it needs a comparison at the daemon's own 200 Hz timebase rather than at the web bridge's sampled one —
 a next step, recorded as open, not a conclusion.
+
+## Round 55: the contradiction is resolved, and it belongs to the probe, not to controld
+
+Same question, measured at the daemon's own publish rate (`/tmp/tel_r36_dart.jsonl`, `telemetry_stream` at 15.2 Hz,
+sample interval **65.7 ms**). For every consecutive pair of samples where the reference was actually moving, the
+rate implied by the position step is compared with the rate controld publishes for the same instant:
+
+    moving sample pairs: 88
+    ratio implied / published rate:   p50 0.96   p95 1.00   max 1.01
+    pairs exceeding +10%:             0 of 88
+
+**Published position and published rate agree to one percent.** There is no controller-side inconsistency: the
+reference does *not* outrun its own ceiling.
+
+The 17.8 vs 10.0 deg/s contradiction from round 54 was the probe's sampling. Its dart loops sample the web bridge at
+roughly **37 ms** while the bridge publishes at **65.7 ms**, so a pair can be timestamped 37 ms apart while the
+position difference spans the longer real interval. 65.7 / 37 = **1.78**, against the measured excess of **1.77** —
+the whole discrepancy is accounted for by arithmetic, which is the sign of a correct explanation.
+
+**So C6 has been wrong in both directions inside one tool.** Round 47 found its ceiling was ~20.1 instead of the
+binding 10 — too lenient, and fixed in round 49. Rounds 50/53/54 found its position-derived rate inflated by
+sampling skew — too strict, unresolved at the time. **The FAILs recorded in those runs are therefore not evidence
+about the station**: on no-motion runs they were an artifact reproducing at the bridge's sampling ratio, and the
+station's own stream shows the limiter doing its job at exactly 10.0 deg/s.
+
+**What C6 should do:** judge the ceiling against `q_ref_rate_yaw_rad_s` as published — the quantity the rate limiter
+actually bounds, sampled and reported on the daemon's timebase — and keep the position-derived figure only as a
+diagnostic, labelled with the skew bias and the ratio that produces it. A rate is not measured by differencing a
+bridge snapshot faster than the bridge publishes.
+
+Status of C6 after this: the reference **is** within its rate ceiling (0 of 88 moving samples over +10%, ratio p50
+0.96), so the criterion passes on the station's own evidence; the probe's verdict line remains a tool defect until
+it is changed to use the published rate. Not a signature, and not a claim about dart-following ability — the ceiling
+itself (10 deg/s, and the C3 lead deficit) is unchanged by all of this.

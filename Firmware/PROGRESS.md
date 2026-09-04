@@ -2599,3 +2599,27 @@ Station restored: MANUAL/HOLD, READY, synthetic source running (`track sets 7463
 C1 PASS (anchor and box) · C2 FAIL but 1.6 s of it is baseline · C3 FAIL −4.7° to −6.4°, the one criterion whose
 failure has survived every check · C4 invalid (floor 11) · C5a PASS · C5b FAIL validated · C6 measuring a
 contradiction between published position and published rate.
+
+## 2026-09-05, 12:0x — round 55: C6's contradiction resolved in controld's favour, by arithmetic that matches to two decimal places
+
+No motion, existing recording, analysed at the daemon's own 15.2 Hz publish rate (interval 65.7 ms). Across 88
+moving sample pairs, the rate implied by the position step against the rate controld publishes has **p50 ratio 0.96,
+p95 1.00, max 1.01, with 0 of 88 pairs exceeding +10 %**. Position and rate agree to one percent; the reference does
+not outrun its ceiling.
+
+The probe, meanwhile, samples the bridge at ~37 ms while the bridge publishes at 65.7 ms. **65.7 / 37 = 1.78**
+against the observed excess of **1.77**. That is the entire discrepancy, explained by arithmetic — which is what a
+correct explanation looks like when it arrives.
+
+So the C6 FAILs of rounds 50, 53 and 54 were a tool artifact, and round 47's wrong-ceiling finding was the same tool
+wrong in the *opposite* direction: too lenient about which ceiling applied, too strict about the rate reached. One
+tool, two independent defects, both now identified; the ceiling fix is in (round 49), the rate-source fix is not.
+**C6 on the station's own evidence: within its rate ceiling.** The probe's verdict line stays a defect until it
+judges `q_ref_rate_yaw_rad_s` rather than differencing bridge snapshots faster than the bridge publishes.
+
+What none of this changes: the binding ceiling is still 10 deg/s, C3's lead deficit still measures −4.7° to −6.4°
+across two dart runs, and C4's floor is still 11. Instrument work removes false verdicts; it does not move the
+station.
+
+Station: MANUAL/HOLD, READY, synthetic source running. No code or config change this round; **461 pytest / 57 CTest**
+stand.
