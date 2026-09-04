@@ -2373,3 +2373,32 @@ way the answer falls, which is the only reason either verdict is worth having. S
 
 Station untouched: homed, MANUAL/HOLD, READY, ceiling 10.0 on the panel, synthetic source running. Docs only;
 **451 pytest / 57 CTest** stand.
+
+## 2026-09-05, 06:5x — round 46: the head-aim numbers really are about the head (checked, after 40+ rounds of quoting them)
+
+Objective (a) is the tolerance I have quoted approvingly since round 12 — "aim error p50 0.002/p95 0.003 box
+heights, bar 1/3" — and it had never been checked that the measurement uses the **head** anchor rather than the
+box centre. It could have been quietly scoring the centre for every one of those rounds.
+
+Checked at both ends of the chain, from the recording and the probe source:
+
+* **Daemon:** across all **91 TRACKING frames**, `target_aim_is_head = True`, `target_aim_valid = True`,
+  `aim_point_valid = True`. The published aim point is the head anchor while tracking, not a fallback.
+* **Probe:** the aim error is `hypot(aim_u * FW - CX, aim_v * FH - CY)` — distance from frame centre to the
+  **aim point**, in pixels scaled by frame size (lines 633 and 772, for the steady and dart scenarios) — and it
+  **prints which source it used**: `"head aim"` unless the aim point is missing, in which case it says
+  `"anchor fallback"` (line 678). It would have said fallback. It didn't.
+* **Criterion text:** `S1: steady image error <= 1/3 of the declared box height (the operator's tolerance)` —
+  implemented as the objective words it, not paraphrased.
+
+**The honest limit stays where it has been:** on this station the head anchor is the position the *fixture
+declared* to be the head — there is no detector asset, so a real detector's head anchor has never been exercised.
+So the number measures "the reticle holds on the declared head anchor to 0.24 box heights while holding", which
+is a real closed-loop result and still plumbing evidence for §110, not a signable acceptance.
+
+Two of the four measurement instruments have now been tested against known truth (C4 invalidated, C5b validated)
+and the head-aim metric has been traced end to end. Remaining unchecked instruments: C1's containment arithmetic
+and C6's ceiling comparison.
+
+Station untouched: homed, MANUAL/HOLD, READY, ceiling 10.0 on the panel, synthetic source running. Docs only;
+**451 pytest / 57 CTest** stand.
