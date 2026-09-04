@@ -59,6 +59,28 @@ FX, FY, CX, CY, FW, FH = 1389.0, 1467.0, 960.0, 540.0, 1920, 1080
 TRACK_V_MAX, TRACK_A_MAX, TRACK_J_MAX = 30.0, 60.0, 300.0
 
 
+
+def published_ceiling_deg_s(url="http://127.0.0.1:8080/api/state", timeout=4.0):
+    """The speed ceiling controld says is in force, or an explicit fallback.
+
+    Round 62: the pre-flight legality check judged a dart against the configured 30 deg/s while the station applied
+    10, so it printed "achievable" for a dart the station is forbidden to follow. The analysis side had been fixed
+    in round 49; this is the same defect one function earlier. Returns (value, source) and never silently guesses:
+    if controld cannot be reached, the caller is told the fallback is in use.
+    """
+    import json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as fh:
+            st = json.load(fh)
+        v = st.get("effective_speed_ceiling_deg_s")
+        if isinstance(v, (int, float)) and v > 0.0:
+            return float(v), "controld effective_speed_ceiling_deg_s (the ceiling in force)"
+    except Exception:
+        pass
+    return TRACK_V_MAX, "FALLBACK configured track speed - controld did not report a ceiling"
+
+
 def envelope_min_time_s(deg, v_max=TRACK_V_MAX, a_max=TRACK_A_MAX, j_max=TRACK_J_MAX, dt=1.0e-3):
     """Seconds a rest-to-rest yaw move of `deg` needs under the commissioned profile limits.
 
@@ -88,6 +110,17 @@ def report_dart_feasibility(deg, ramp_s):
     """
     t_min = envelope_min_time_s(deg)
     ok = ramp_s >= t_min
+    # Round 62: legality must be judged against the ceiling actually in force. The line below
+    # this one still prints the configured-profile arithmetic, because that is the arithmetic
+    # the envelope parameters describe; it is not the station's limit and must not be read as
+    # the verdict on whether this station can follow the dart.
+    pceil, psrc = published_ceiling_deg_s()
+    t_min_now = envelope_min_time_s(deg, v_max=pceil)
+    print("  ceiling in force : %.1f deg/s [%s] -> %.1f deg needs >= %.2f s : %s"
+          % (pceil, psrc, deg, t_min_now,
+             "LEGAL" if ramp_s >= t_min_now else
+             "NOT LEGAL at the ceiling in force (the reference is capped here, so C2/C3 "
+             "would be measuring the ceiling, not the controller)"))
     print("  envelope         : %.1f deg needs >= %.2f s at %.0f deg/s, %.0f deg/s^2, %.0f deg/s^3 -> %s"
           % (deg, t_min, TRACK_V_MAX, TRACK_A_MAX, TRACK_J_MAX,
              "achievable" if ok else "NOT ACHIEVABLE - the axis cannot cover this in the requested time, "

@@ -2748,3 +2748,30 @@ one dart run is the next step, stated as outstanding.
 
 No station or controller change; station MANUAL/HOLD, READY, ceiling 10 on the panel, synthetic source running.
 **477 pytest** (473 + 4) / **57 CTest**.
+
+## 2026-09-05, 16:0x — round 63: the pre-check now names the ceiling in force, and the first ceiling-sized dart run measures the operator's option 2
+
+Wired and **watched execute**, both branches: controld reachable -> `(10.0, controld effective_speed_ceiling_deg_s
+(the ceiling in force))`; unreachable -> `(30.0, FALLBACK configured track speed - controld did not report a
+ceiling)`. Then a real run at **12 deg in 1.60 s** — the dart sized to the binding ceiling by round 62's arithmetic
+(`/tmp/r63_sized.log`):
+
+    ceiling in force : 10.0 deg/s [controld ... (the ceiling in force)] -> 12.0 deg needs >= 1.46 s : LEGAL
+    envelope         : 12.0 deg needs >= 0.99 s at 30 deg/s, 60 deg/s^2, 300 deg/s^3 -> achievable
+
+The second line stays, because it describes the envelope parameters honestly; the first is now the station's verdict,
+printed above it. Round 62's test asserting the defaulting call was still present was removed with the fix rather
+than left to rot - the file no longer contains that call.
+
+**What a dart the station can actually follow measures like:** C1 PASS on anchor and box; **C6 PASS** (147 moving
+samples, max 10.0 against a 10.0 ceiling, 0 over, reproducing round 60); C5a PASS; C3 lead deficit shrinks from
+−4.7…−11.9 deg on the 25 deg dart to **−1.744 deg**; C4 6 flips, still under the no-motion floor of 11. Two things
+still fail at this gentle a dart: **C2 at t = 1.69 s**, which is 0.08 s over its own 1.61 s baseline - the criterion
+is measuring settling, not the dart - and **C5b jerk, p95 539** (25 deg dart: 540), a violation that is now shown to
+be almost independent of dart size, pointing at the reference profile itself rather than at target following.
+
+That is the arithmetic of the operator's second option, measured rather than argued: sizing the dart to the ceiling
+largely repairs the lead deficit, and does nothing for the jerk or the recovery baseline.
+
+Station restored: MANUAL/HOLD, READY, synthetic source running, ceiling 10. **74 tools tests**, py_compile clean;
+full-suite and CTest counts re-run next round before quoting them.
