@@ -598,6 +598,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       autotrack_.reset();
       at_out_ = AutoTrackOutput{};
     }
+    // Drive-mode item 4: the automatic AUTO_TRACK <-> AUTO_ROAM hand-off, checked before the intent is built
+    // so a switch that happens now takes effect this cycle rather than being a cycle late. Inert while both
+    // keys are 0 (the shipped default), in which case evaluate_auto_switch() returns immediately.
+    evaluate_auto_switch(now_ns);
     last_intent_ = build_mode_intent(now_ns);
     // §36/§44 across every handover, not just the one the section is titled after.
     // A mode's velocity_scale is authority, and authority changes discontinuously at a
@@ -2557,6 +2561,80 @@ void ControlLoop::ack_command(const std::string& name, bool accepted,
   if (!accepted)
     spdlog::warn("command '{}' rejected: {} (state {}, safety {})", name, why,
                  last_ack_.controller_state, last_ack_.safety_state);
+}
+
+void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
+  // Drive-mode item 4, opt-in. Both keys default to 0 and this returns immediately in that case, so the shipped
+  // behaviour is the behaviour the operator has signed for: only an operator changes the mode.
+  if (cfg_.auto_roam_on_loss_ms <= 0 && cfg_.auto_track_on_acquire_ms <= 0) return;
+
+  // Only ever considered from Ready. A homing / parking / fault station is not "looking for a target", it is doing
+  // something the supervisor asked for, and stealing the mode out from under that would be a safety regression
+  // dressed up as a convenience.
+  if (mode_mgr_.supervisory() != SupervisoryState::Ready) {
+    loss_since_ns_ = 0;
+    acquire_since_ns_ = 0;
+    return;
+  }
+
+  // Anti-hunt: after any automatic hand-off, wait a full reacquire window before allowing another. Deliberately not
+  // a new tuned constant - §20's reacquire window is already the project's answer to "how long before we stop
+  // believing a track is coming back", and reusing it means one number to reason about instead of two.
+  const int64_t window_ms = cfg_.auto_track_reacquire_window_ms > 0
+                                ? cfg_.auto_track_reacquire_window_ms
+                                : 3000;
+  if (last_auto_switch_ns_ != 0 &&
+      now_ns - last_auto_switch_ns_ < window_ms * 1000000LL)
+    return;
+
+  const OperatingMode m = mode_mgr_.mode();
+  const int64_t nsec = 1000000LL;
+
+  if (m == OperatingMode::AutoTrack && cfg_.auto_roam_on_loss_ms > 0) {
+    // §20.2's LostHold: prediction has stopped and the station is holding, which is what "the session gave
+    // up" means. NOT Acquire or Coasting - a track that is still alive is not lost, and switching on those
+    // would walk away from the target mid-coast. Read from the v3 controller's published output, not from
+    // the retired v1 TrackingController.
+    const bool lost = at_out_.state == AutoTrackState::LostHold;
+    if (!lost) {
+      loss_since_ns_ = 0;  // condition must be CONTINUOUSLY true; refresh-on-sighting is the bug
+      return;
+    }
+    if (loss_since_ns_ == 0) {
+      loss_since_ns_ = now_ns;
+      return;
+    }
+    if (now_ns - loss_since_ns_ >= cfg_.auto_roam_on_loss_ms * nsec) {
+      spdlog::info("auto hand-off AUTO_TRACK -> AUTO_ROAM: target lost for {} ms",
+                   cfg_.auto_roam_on_loss_ms);
+      request_mode(OperatingMode::AutoRoam);
+      last_auto_switch_ns_ = now_ns;
+      loss_since_ns_ = 0;
+    }
+    return;
+  }
+
+  if (m == OperatingMode::AutoRoam && cfg_.auto_track_on_acquire_ms > 0) {
+    // Same evidence AUTO_TRACK itself demands before it will move: a selection AND a ready estimator. Anything
+    // weaker and roaming would hand off to a tracker that then refuses to drive, which looks like a switch that
+    // worked and feels like one that did not.
+    const bool held = at_input_.has_selection && at_input_.estimator_ready;
+    if (!held) {
+      acquire_since_ns_ = 0;
+      return;
+    }
+    if (acquire_since_ns_ == 0) {
+      acquire_since_ns_ = now_ns;
+      return;
+    }
+    if (now_ns - acquire_since_ns_ >= cfg_.auto_track_on_acquire_ms * nsec) {
+      spdlog::info("auto hand-off AUTO_ROAM -> AUTO_TRACK: target held for {} ms",
+                   cfg_.auto_track_on_acquire_ms);
+      request_mode(OperatingMode::AutoTrack);
+      last_auto_switch_ns_ = now_ns;
+      acquire_since_ns_ = 0;
+    }
+  }
 }
 
 void ControlLoop::disable_tracking() {

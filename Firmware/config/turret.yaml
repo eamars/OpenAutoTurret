@@ -44,6 +44,24 @@ schema_version: 1
   # than the release threshold is NOT followed, so the reticle can sit slightly off-centre on it.
   # Measured floor on this station is 0.02177 deg (smallest step the reported angle can take), so a band at
   # or below that is indistinguishable from quantisation. First value to try on real pixels: 0.1 / 0.15.
+  # Drive-mode item 4 - AUTOMATIC MODE HAND-OFF, opt-in, both default to 0 = NEVER (the station changes
+  # mode only when you tell it to, which is the behaviour in force today and the behaviour §45 is written
+  # around). Set a value and the hand-off happens after the condition has held continuously that long.
+  #
+  #   roam_on_loss_ms      AUTO_TRACK -> AUTO_ROAM, once the v3 session reaches LostHold (20.2: prediction
+  #                        stopped, station holding) and stays there this long. Deliberately LostHold and not
+  #                        Acquire/Coasting: walking away mid-coast would abandon a live track.
+  #   track_on_acquire_ms  AUTO_ROAM -> AUTO_TRACK, once a selection AND a ready estimator have been held
+  #                        this long - the same evidence AUTO_TRACK itself demands before it will move, so a
+  #                        hand-off cannot land in a mode that then refuses to drive.
+  #
+  # It cannot hunt: after ANY automatic hand-off, no further one is allowed for a full
+  # reacquire_window_ms (20, default 3000) - an already-tuned figure reused rather than a second number
+  # invented. The timers count from when the condition FIRST became true; a timer that refreshed on every
+  # sighting could never expire. Only considered from supervisory Ready, and the supervisor keeps its
+  # authority over every switch - safety can still take the mode away.
+  # roam_on_loss_ms: 5000
+  # track_on_acquire_ms: 1000
   # deadband_deg: 0.1
   # deadband_release_deg: 0.15
 #     coast_ms: 300                   # §20: authority fades this long after the last frame

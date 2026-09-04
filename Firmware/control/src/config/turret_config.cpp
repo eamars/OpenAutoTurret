@@ -429,6 +429,11 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
     out.auto_track_reacquire_window_ms =
         static_cast<int>(opt_double(at, "reacquire_window_ms",
                                     "v3.auto_track.reacquire_window_ms", 0.0, warn));
+    out.auto_track_roam_on_loss_ms =
+        static_cast<int64_t>(opt_double(at, "roam_on_loss_ms", "v3.auto_track.roam_on_loss_ms",
+                                        0.0, warn));
+    out.auto_track_track_on_acquire_ms = static_cast<int64_t>(opt_double(
+        at, "track_on_acquire_ms", "v3.auto_track.track_on_acquire_ms", 0.0, warn));
     out.auto_track_deadband_deg =
         opt_double(at, "deadband_deg", "v3.auto_track.deadband_deg", 0.0, warn);
     out.auto_track_deadband_release_deg = opt_double(at, "deadband_release_deg",

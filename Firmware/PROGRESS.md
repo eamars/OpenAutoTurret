@@ -4027,3 +4027,59 @@ explicit config/mode choice rather than a silent behaviour change."*
 **0.0877° p2p with 0 reversals**, so 0.1/0.15 sits just above the noise. That is a *starting* value, not a tuned one —
 tuning it against real detector jitter needs a target in view on the real detector, which is still the operator's
 unblock.
+
+## 2026-09-06, 11:3x — round 15: item 4's automatic hand-off implemented (opt-in, default never), controld green, CTest 57/57
+
+**What exists now:** `ControlLoop::evaluate_auto_switch(now_ns)`, called at `control_loop.cpp:604` — *after*
+`at_out_ = autotrack_.update(...)` (:567) and *before* `last_intent_ = build_mode_intent(now_ns)` (:605) — so a switch
+that happens takes effect **this** cycle, and the state it reads is the current cycle's, not a stale one. That ordering
+was checked rather than assumed, because a one-cycle-stale read is invisible in unit tests and shows up on hardware.
+
+Two directions, both **0 = never** (shipped default = operator-only mode changes):
+* `roam_on_loss_ms` — AUTO_TRACK → AUTO_ROAM once `at_out_.state == AutoTrackState::LostHold` (§20.2, prediction
+  stopped, holding) has persisted that long. **Not** Acquire/Coasting: leaving mid-coast would abandon a live track.
+* `track_on_acquire_ms` — AUTO_ROAM → AUTO_TRACK once `has_selection && estimator_ready` has persisted that long: the
+  same evidence AUTO_TRACK itself requires before it will move, so a hand-off can't land in a mode that then refuses to
+  drive.
+* **Anti-hunt reuses an existing tuned number:** after any automatic switch, no further one for a full
+  `reacquire_window_ms` (default 3000). Timers count from when the condition **first** became true — a timer refreshed
+  on every sighting can never expire, which is the classic way this feature silently stops working. Only from
+  supervisory `Ready`; the supervisor still outranks every switch.
+
+**Two errors the compiler caught in my own assumptions, both recorded because they are the kind I keep making:**
+1. I wrote `tracking_->state()`. `tracking_` is a `std::unique_ptr<TrackingController>` — the **retired v1** tracker.
+   The v3 session's state is the controller's published output, `at_out_.state`, and the enumerator is **`LostHold`**,
+   not `Lost`. Asking the retired FSM a question about v3 is exactly the mistake §111.5 exists to prevent, and the
+   compiler was less polite but more reliable than my notes.
+2. I gave `V3Config` the names `auto_track_roam_on_loss_ms…` and `ControlLoop::Config` the names
+   `auto_roam_on_loss_ms…`. The wiring assigned one to the other, and the error named the mismatch immediately.
+   Two structs, two naming habits — worth remembering before the next key.
+
+**Verified:** `controld` links; **CTest 57/57**; documented commented-out in `config/turret.yaml`.
+
+**Not done, stated plainly:** there is **no test for the watcher yet** (only the compile-time guarantee that both keys
+default to 0 and the function returns at once). A meaningful test needs a homed loop plus a driven detection sequence,
+and I would rather write it properly next round than claim a switch-latency number I have not measured — the objective
+asks for *measured* latency and hysteresis, and a hardware measurement of a switch needs a target in view, which is
+still the operator's unblock. The switch is therefore **implemented but unaccepted**.
+
+For the record, the ingest region the acquire-direction depends on, quoted verbatim rather than paraphrased:
+```
+537: // vision has gone quiet and the operator clears the target — the exact situation in
+538: // which they would do it. The selection is controld's own state and it has already
+539: // changed, but `at_input_` still holds the last frame's answer, in which somebody
+540: // *was* selected. Before this, CLEAR_TARGET during a vision dropout left the turret
+541: // aiming along the last line of sight it was given, and the only thing that would
+542: // stop it was another frame. Replaying a silent session is what showed it: no
+543: // detector traffic, so nothing ever told the controller the truth had changed.
+544: //
+545: // `just_reacquired` stays in the frame path on purpose. A reacquisition is an event
+546: // in the detector stream; a cycle with no frames cannot produce a new one, and
+547: // synthesising one from an age transition would be §58's forbidden fabrication.
+548: {
+549: const auto& sel = selection_.selection();
+550: const bool visible = sel.visibility_state == tracks::Visibility::Visible;
+551: at_input_.has_selection = sel.has_selection;
+552: at_input_.target_visible = visible;
+553: at_input_.target_occluded = sel.visibility_state == tracks::Visibility::Occluded;
+```

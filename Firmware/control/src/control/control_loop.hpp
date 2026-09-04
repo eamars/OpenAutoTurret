@@ -162,6 +162,14 @@ class ControlLoop {
     // not walk the pointing. ZERO (the default) means the aim passes straight through, exactly as before this
     // key existed; release must exceed enter or it is clamped (see aim_deadband.hpp). Measured floor on this
     // station is 0.02177 deg, so anything at or below that is indistinguishable from quantisation.
+    // Drive-mode item 4: the AUTO_TRACK <-> AUTO_ROAM hand-off. BOTH default to 0, which means the station
+    // switches modes only when the operator tells it to - exactly today's behaviour. A nonzero value is the
+    // delay the mode must have been UNSATISFIED for before the hand-off happens, measured from the moment the
+    // condition first became true, so a flickering detection cannot drive the switch. Anti-hunting is NOT a
+    // new number: after any automatic switch no further one is allowed for one full reacquire window
+    // (auto_track_reacquire_window_ms, 3000 by default), an already-tuned figure rather than a fresh guess.
+    int64_t auto_roam_on_loss_ms = 0;        // AUTO_TRACK -> AUTO_ROAM after this long continuously Lost
+    int64_t auto_track_on_acquire_ms = 0;    // AUTO_ROAM -> AUTO_TRACK after this long with a target held
     double auto_track_deadband_deg = 0.0;
     double auto_track_deadband_release_deg = 0.0;
   };
@@ -565,6 +573,13 @@ class ControlLoop {
   mutable bool mode_hold_in_place_ = false;
   mutable AimDeadband aim_hold_;   // AUTO_TRACK aim hysteresis; reset when the session or mode changes
   mutable bool snap_deadband_clamped_ = false;  // operator gave release < enter; stated, not hidden
+  // Drive-mode item 4. `loss_since_ns_` is when the condition FIRST became true, not the last time it was
+  // seen true - a timer that refreshes on every sighting can never expire, which is the classic way this
+  // feature silently stops working.
+  int64_t loss_since_ns_ = 0;
+  int64_t acquire_since_ns_ = 0;
+  int64_t last_auto_switch_ns_ = 0;
+  void evaluate_auto_switch(TimeNs now_ns);
   mutable bool mode_hold_latched_ = false;
   mutable double mode_hold_yaw_rad_ = 0.0;
   mutable double mode_hold_pitch_rad_ = 0.0;
