@@ -46,11 +46,20 @@ pkill -x controld 2>/dev/null; sleep 3
 ( cd "$FIRMWARE" && OTA_BLACKBOX_DIR=/var/lib/ota/blackbox setsid nohup ./build/control/controld config/turret.yaml \
     > /tmp/controld_lead-trial.log 2>&1 < /dev/null & )
 
-echo "=== waiting for supervisory Ready (up to 150 s)"
-ready=""
-for _ in $(seq 1 50); do
+# A controld restart does NOT come back ready: the second run of this script sat for 150 s on `MANUAL HOLD ALLOW
+# False` and correctly refused to move, because homing state is not restored from the drive - it is established by
+# homing. So the trial asks for it explicitly (control_loop.cpp:2973 "start_homing") and gives it room. Homing is real
+# motion to the limits by design; if that is not wanted, do not run this script.
+echo "=== waiting for supervisory Ready, homing if needed (up to 300 s)"
+ready=""; homed=0
+for _ in $(seq 1 100); do
   sleep 3; s4=$(state); echo "  $s4"
   case "$s4" in *"ALLOW True"*) ready=1; break;; esac
+  if [ "$homed" -eq 0 ]; then
+    echo "  not ready - requesting homing (verdict below)"
+    curl -s -m 10 -X POST -H "Content-Type: application/json" -d '{"command":"start_homing","arg":""}' "$S/api/command" | head -c 160; echo
+    homed=1
+  fi
 done
 if [ -z "$ready" ]; then echo "NOT READY - no motion will be commanded; restoring"; exit 3; fi
 
