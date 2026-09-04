@@ -2252,3 +2252,25 @@ just done, which is the kind of thing that should be pinned down before it hides
 The operator's decision from round 40 is unchanged and now has a number attached to it on the screen: raise the
 hold/payload ceiling, size the acceptance dart to 10 deg/s, or change line 427 to use the payload profile
 (20.1 deg/s). **449 → 451 pytest** with the two new guards; **57 CTest** on the new build.
+
+## 2026-09-05, 04:4x — round 42: chased the "flaky" label, did not catch it, and caught a false claim of mine instead
+
+**The flake stays unidentified.** Ran the full suite under four concurrent CPU hogs for its duration:
+**451 passed.** So the one failure (immediately after `cmake --build -j4` + `ctest` in the same invocation) did
+not reproduce under load. Facts kept on the table: one failure in six runs, always in the run sharing an
+invocation with a build; `web/webd/tests` contains 24 `sleep(` calls, so the wall-clock-sensitive class exists;
+nothing in the suite binds a fixed port. I am **not** calling it fixed, and I am not calling it harmless — an
+unidentified intermittent failure is the kind that later disguises a real one.
+
+**What the chase turned up instead: my own wording was false in two places.** I had written — in the operator's
+sign-off package — that `test_section_20_ledger.py` reads fields "from the live payload rather than a fixture".
+It does not: it instantiates **`FakeControld`** on its own unix socket with `WebConfig(port=0)` and drives a webd
+it spawns itself, which is good engineering and exactly why the suite is reproducible — but it is **not the
+station**, and I had used "live" to mean "the real code path" where an operator would read "the real hardware".
+Both sentences now say what is true, including where the genuine station-level checks live (`docs/evidence/`,
+curl-verified). Same failure class as round 34's principal point: an accurate number with an overstated provenance.
+
+**One genuinely useful thing came out of the greps:** no test in the suite references port 8080 or the station's
+socket, so "pytest is green" means something on a cold machine with no hardware — which is what the objective's
+green-at-every-step clause has always needed it to mean. Docs only this round; **451 pytest / 57 CTest** stand;
+station homed, READY, MANUAL/HOLD, vision running.
