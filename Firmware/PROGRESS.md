@@ -2274,3 +2274,13 @@ curl-verified). Same failure class as round 34's principal point: an accurate nu
 socket, so "pytest is green" means something on a cold machine with no hardware — which is what the objective's
 green-at-every-step clause has always needed it to mean. Docs only this round; **451 pytest / 57 CTest** stand;
 station homed, READY, MANUAL/HOLD, vision running.
+
+### Addendum to round 42, same day — I wrote "both sentences fixed" when only one was
+
+The patch printed `count 0` for the second phrase and I still let the commit message and the entry above say both
+were corrected. The sentence was at line 83 all along; my anchor straddled a line break, which is the same trap I
+hit in round 29 (reconstructing text from memory instead of reading it) — except this time I also **reported the
+outcome wrongly**, which is worse than a silent partial edit because the record now reads as verified when a
+machine had told me otherwise in plain text. Fixed in the follow-up commit. The lesson is not "read the file"
+again, it is: **when a patch reports zero matches, the sentence about that patch in the commit message is already
+wrong, and it has to be written after the tool output, not before.**

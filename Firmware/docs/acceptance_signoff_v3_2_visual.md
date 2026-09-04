@@ -80,8 +80,9 @@ bears on some of them, and where it lives:
   board at wide spans. Tapes therefore read `JOINT TRAVEL, NOT HEADING`.
 * **Data contract (§20)** — every field is supplied, including `camera.measurement_age_ms` (the calibration
   file's own mtime, aged per snapshot, null only when there is no calibration file) and the FOR envelope
-  polygon; IMU is reported honestly as `ABSENT`. `test_section_20_ledger.py` reads these from the **live**
-  payload rather than a fixture.
+  polygon; IMU is reported honestly as `ABSENT`. `test_section_20_ledger.py` drives a **FakeControld** it spawns (own
+  socket, port 0) through webd's real serving path - that is the real *code* path, not the physical
+  station; station-level evidence is the curl-verified material in `docs/evidence/`.
 * **Staleness (§25)** — verified by freezing the daemon: telemetry age climbed 858 → 2464 ms with
   `telemetry_stale` true and the cue going non-green.
 
