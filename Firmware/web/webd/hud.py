@@ -290,6 +290,14 @@ function hudDiagRows(t) {
     // ceiling in force beside it, a station held at a third of its configured tracking speed looks like a
     // sluggish controller rather than like a number on the screen. Unknown is UNKNOWN, never 0 - a zero
     // ceiling would read as "forbidden to move", which is a different claim entirely.
+    // 200 Hz as the architecture measures it: not "did a cycle take longer than the period" (this host
+    // runs ~198 Hz constantly and the design forgives that), but how many consecutive cycles blew the
+    // grace, against the grace itself and the count that triggers a Hold. "0/5" is healthy, not empty.
+    ["LOOP DEADLINE", (typeof t.control_deadline_misses === "number" &&
+                       typeof t.control_deadline_miss_limit === "number"
+      ? t.control_deadline_misses + "/" + t.control_deadline_miss_limit +
+        "  (+" + (t.control_deadline_grace_us || 0) + "us grace)"
+      : "UNKNOWN")],
     ["RATE CEILING", (typeof t.envelope_v_max_deg_s === "number"
       ? t.envelope_v_max_deg_s.toFixed(1) + " DEG/S" + (typeof t.intent_velocity_scale === "number"
           ? "  (AUTH " + Math.round(t.intent_velocity_scale * 100) + "%)" : "")

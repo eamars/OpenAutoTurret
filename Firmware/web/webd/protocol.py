@@ -203,6 +203,10 @@ class Telemetry:
     predicted_target_los_valid: bool = False
     # Declared because undeclared keys are dropped when a Telemetry is re-serialised: a field that
     # arrives from controld but is not named here simply never reaches the page.
+    # Deadline state. Declared because undeclared keys are dropped on re-serialisation.
+    control_deadline_misses: Optional[int] = None
+    control_deadline_grace_us: Optional[int] = None
+    control_deadline_miss_limit: Optional[int] = None
     envelope_v_max_deg_s: Optional[float] = None
     prediction_horizon_ms: Optional[int] = None
     target_az_rate_world_rad_s: Optional[float] = None

@@ -189,6 +189,12 @@ struct TelemetrySnapshot {
   // stated limit, which is how a station held at a third of its configured tracking speed reads as
   // sluggishness rather than as a number on the screen.
   double envelope_v_max_deg_s = 0.0;
+  // Deadline state the supervisor decides on, not the raw over-period overrun (which is forgiven by
+  // design: see control_loop.cpp 360-376, where counting every over-period cycle once held all axes).
+  // Consecutive cycles longer than deadline + grace, the grace in force, and how many make a decision.
+  int64_t control_deadline_misses = 0;
+  int64_t control_deadline_grace_us = 0;
+  int64_t control_deadline_miss_limit = 0;
   double effective_vfov_deg = 0.0;
   double camera_fps = 0.0;
 

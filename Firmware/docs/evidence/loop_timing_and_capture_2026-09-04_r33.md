@@ -72,3 +72,21 @@ Two honest limits on that optimism:
 2. Objective item (c) is **no longer blocked on assets**, only on a physical surveyed reference. Real-frame FOV
    and principal-point measurement are actionable now; the previously locked FOV figures should be re-derived
    from real optics when the sweep is run, and the synthetic-derived numbers labelled as such until then.
+
+---
+
+## Addendum, 2026-09-04 23:5x (round 35) — the next step this file recommended was the wrong one
+
+Section 2 ends with "publishing the overrun counter (and a p95/max over a window) is the next concrete step."
+**That would have put a false alarm on the operator's screen.** `control_loop.cpp:360-376` explains that the raw
+overrun past the period is forgiven on purpose: counting every over-period cycle as a miss once made a **198 Hz
+loop Hold all axes within five cycles** (recorded there as the P0 no-motion root cause), and a first fix that
+reset only on strictly on-time cycles latched a permanent Hold on a host whose period is always a hair long
+(P0f). A miss is therefore a cycle past `deadline_max_us` — **2 ms of grace** here — and only a run of them
+(threshold **5**) drives anything.
+
+So the ~54 µs figure in section 2 is not a fault to be alarmed at; it is the expected shape of this host. What
+was genuinely missing, and what round 35 published instead, is the **decision-relevant triple**: consecutive
+misses, the grace in force, and the limit — none of which reached the page. Verified live after the change:
+`misses 0, grace_us 2000, limit 5, cycle_us 5054`, and the engineering panel reads
+`LOOP DEADLINE  0/5  (+2000us grace)`. Section 2's measurement stands; only its recommendation was wrong.

@@ -315,3 +315,35 @@ class RateCeilingIsVisible(unittest.TestCase):
         window = HUD_JS[at:at + 420]
         self.assertIn("UNKNOWN", window,
                       "an unknown ceiling must not be drawn as 0, which would claim a frozen axis")
+
+
+class LoopDeadlineStateIsVisible(unittest.TestCase):
+    """"200 Hz must stay within measured limits" is only checkable if the limit is on the screen.
+
+    Round 33 measured ~197.9 Hz with a ~54 us overrun past the raw period, and the design forgives that
+    deliberately: control_loop.cpp records that counting every over-period cycle as a miss once made a 198 Hz
+    loop Hold all axes in five cycles. So what matters is consecutive cycles past the grace, the grace in
+    force, and the limit that triggers a decision - none of which reached the operator before this. The test
+    binds the three links again: daemon emits, webd declares, panel reads.
+    """
+
+    def test_daemon_and_bridge_carry_the_decision_numbers(self) -> None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "..", "..", "control", "src", "web",
+                               "web_server.hpp"), encoding="utf-8") as fh:
+            cxx = fh.read()
+        for f in ("control_deadline_misses", "control_deadline_grace_us",
+                  "control_deadline_miss_limit"):
+            self.assertIn(f, cxx, "controld must publish " + f)
+        with open(os.path.join(here, "..", "protocol.py"), encoding="utf-8") as fh:
+            proto = fh.read()
+        for f in ("control_deadline_misses", "control_deadline_grace_us",
+                  "control_deadline_miss_limit"):
+            self.assertIn(f, proto, "webd must DECLARE " + f)
+
+    def test_the_panel_shows_misses_against_the_limit_not_a_bare_overrun(self) -> None:
+        at = HUD_JS.index('"LOOP DEADLINE"')
+        window = HUD_JS[at:at + 420]
+        self.assertIn("control_deadline_miss_limit", window,
+                      "a miss count without its limit is a number with no meaning")
+        self.assertIn("UNKNOWN", window, "absent state must not be drawn as healthy zeros")

@@ -2043,3 +2043,34 @@ are already in `tools/`; the missing ingredient is physical.
 Sign-off package's camera bullet rewritten to say all of this — including the sentence *"an assumption wearing a
 MEASURED header"*. Docs only: **447 pytest / 57 CTest** stand, station homed, ready, MANUAL/HOLD, video stream
 left off by default (it opens on demand).
+
+## 2026-09-05, 00:1x — round 35: the loop's deadline state is on the screen, and round 33's recommended fix would have been a false alarm
+
+**Where round 33 went half wrong.** It reported the overrun as "computed and then dropped" and recommended
+publishing it. Reading `control_loop.cpp:360-376` first shows why that is the wrong number: the raw overrun past
+the period is forgiven **by design** — counting every over-period cycle as a miss once made a **198 Hz loop Hold
+all axes within five cycles** (the P0 no-motion root cause), and a fix that reset only on strictly on-time cycles
+latched a permanent Hold on a host whose period is always a hair long (P0f). A miss is a cycle past
+`deadline_max_us` (**2000 µs of grace**), and only **5** consecutive ones matter. Publishing "OVERRUN: ~54 µs,
+every cycle" would have manufactured an alarm the architecture deliberately does not raise — the same class of
+error as reporting the 198 Hz loop as broken.
+
+**What shipped instead:** the decision-relevant triple — consecutive misses, the grace in force, the limit —
+read at snapshot time from a counter the loop already maintains and two config constants, so **nothing was added
+to the 200 Hz path**. Verified live after restart: `/api/state` → `misses 0, grace_us 2000, limit 5,
+cycle_us 5054`, page contains the row, and the panel's own builder renders
+**`LOOP DEADLINE  0/5  (+2000us grace)`** beside `RATE CEILING 10.0 DEG/S (AUTH 100%)`, `GEOMETRY AGE 11.4 H`,
+`IMU ABSENT`. Absent state still renders UNKNOWN, never a reassuring 0. A dated addendum now corrects the
+evidence file's own recommendation rather than leaving it standing.
+
+**I broke my own restart rule and the page size caught it.** I restarted controld and the vision source but not
+**webd**, after editing `hud.py` and `protocol.py` — which my record explicitly says requires a webd restart.
+First verification returned `misses None` and a page of **78,238 bytes, byte-identical to round 29**. That
+identical size is the tell worth remembering: a changed HUD that is somehow exactly the same size means the old
+process is still serving, not that the change did nothing. After a real restart (one stray worker needed
+`kill -9`): 78,855 bytes, row present, fields populated. `errno98=0`, no fatal in the daemon log.
+
+Cycle times in this sample varied 5053–5067 µs, slightly wider than round 33's 5052–5054 — still the same
+~198 Hz, still nowhere near the 2 ms grace. **57 CTest** on the new build (grepped clean), **449 pytest**
+(447 + 2 guards), `node --check` OK — the paren discipline round 29 had to learn is now habit. Vision restarted
+and checked: `vision_track_sets 418`, `supervisory READY`, station MANUAL/HOLD, homed.

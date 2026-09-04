@@ -110,6 +110,11 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"safety_action\":\"" << safety_action_name(s.safety_action) << "\""
      << ",\"feedback_age_ms\":" << s.feedback_age_ms
      << ",\"control_cycle_us\":" << s.control_cycle_us
+     // The deadline state the supervisor acts on, so "is 200 Hz actually being met" has a number on
+     // the screen instead of an inference from a rate field.
+     << ",\"control_deadline_misses\":" << s.control_deadline_misses
+     << ",\"control_deadline_grace_us\":" << s.control_deadline_grace_us
+     << ",\"control_deadline_miss_limit\":" << s.control_deadline_miss_limit
      << ",\"payload_profile_name\":\"" << json_escape(s.payload_profile_name) << "\""
      << ",\"can_available\":" << (s.can_available ? "true" : "false")
      << ",\"can_kind\":\"" << json_escape(s.can_kind) << "\""

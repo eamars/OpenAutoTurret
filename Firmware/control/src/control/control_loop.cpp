@@ -1590,6 +1590,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // 42-hour uptime is larger than 56 years, which is always false, so the age fell through to -1.
     // Ask the realtime clock instead: the question is "how long since that measurement was written",
     // and only one clock can answer it.
+    // Read at snapshot time only: the counter is already maintained per cycle, and the two
+    // thresholds are constants, so this adds nothing to the 200 Hz path.
+    snap.control_deadline_misses = deadline_miss_count_;
+    snap.control_deadline_grace_us = static_cast<int64_t>(cfg_.deadline_max_us);
+    snap.control_deadline_miss_limit = static_cast<int64_t>(cfg_.deadline_miss_threshold);
     snap.envelope_v_max_deg_s = env_.v_max() * kRad2Deg;
     snap.camera_measurement_age_ms = -1;
     if (camera_cal_mtime_ns_ > 0) {
