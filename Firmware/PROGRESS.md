@@ -2141,3 +2141,42 @@ First patch attempt aborted cleanly on its own assert (anchor count 0): I had re
 from memory instead of reading it, and the comment block I remembered wasn't in the file. No partial damage.
 **449 pytest / 57 CTest** stand (no C++ changed), `node --check` OK. Station homed, MANUAL/HOLD, READY, vision
 running, webd restarted cleanly (`errno98=0`).
+
+## 2026-09-05, 02:1x — round 38: the 10 deg/s plateau is real and it accounts for C3 and C2 — from a file, not from new motion
+
+`docs/evidence/ref_rate_plateau_2026-09-05_r38.md`, written entirely from round 36's recording (484 frames at
+15.2 Hz, 128 fields — it carries `q_ref_accel_yaw_rad_s2`, `q_ref_rate_yaw_rad_s`, `target_az_world_rad`,
+`target_az_rate_world_rad_s`, so the dart can be rebuilt without differentiating twice and without driving the
+station again).
+
+**Through the entire dart the reference rate sits on exactly 10.00 deg/s with zero acceleration, frame after
+frame** — a clamp, not a response (a response varies and accelerates). The target demanded up to 17.4 deg/s.
+The arithmetic then closes the criterion: **10.00 deg/s covers 16° in a 1.60 s dart against a 25° target = 9°
+deficit**, measured C3 lead **−11.6°**, and the residual is the estimator's own lag (−1.4°) plus prediction
+(−0.6°) from the same run. **C3 is the plateau plus the known lag.** C2 needs no separate mechanism either: over
+the window the target swept 24.92° and the reference 23.82°, so the debt was repaid during the hold at 6–8 deg/s
+while oscillating ±8°/s — which is precisely what C2 scored as **2.85 s to recover inside tolerance**.
+
+Round 28's *number* was right all along. Round 37's *retraction* also stands: the mechanism is still not
+identified, and the file says plainly that **no limit should be raised on the strength of this** — a clamp that
+costs C2 and C3 may still be a deliberate design limit, and I have been wrong about the "why" here before.
+
+**An error worth keeping in the record:** my first pass computed `gap = q_ref_yaw_rad − target_az_world_rad` and
+reported gaps near 180°. That is subtracting a **joint angle** (2.60 rad ≈ 149°) from a **world azimuth** — the
+~179° offset is mount geometry, not a tracking error. The near-constant gap should have warned me instantly. Any
+gap metric must live in one space via the controller's own LOS conversion.
+
+Side result: deriving jerk from the **published accel** (one differentiation) gives p50 161.6 / **p95 300.0** —
+landing exactly on the configured `max_jerk_deg_s3: 300`, which is what an honoured jerk limit looks like on this
+grid (max again meaningless: 14600). So C5b's verdict depends on which signal is differentiated, and no single
+jerk number should be quoted across signals.
+
+Mechanism hunt, for the next round, started but **not concluded**: every consumer of `hold_speed_rad_s` is at
+`control_loop.cpp` lines 38 (an `ep.v_max_rad_s`), 103 and 822 (`enter_position_mode_all`), 928 (`lim[i] =
+min(hold_speed, …)`), 1714, 2095 (`l.hold_v_max_rad_s = cap`), 2192-2193 (the derate fallback round 37 covered).
+None is yet traced to the AUTO_TRACK reference — saying more now would repeat the round-28 mistake, so I stop
+here. Also still unexplained: telemetry showed `AUTH 100%` while a 10 deg/s clamp was in force, so the published
+authority scale is not the thing doing it.
+
+Station untouched by this round (analysis of a file): homed, MANUAL/HOLD, READY, vision running. No code
+changed; **449 pytest / 57 CTest** stand.
