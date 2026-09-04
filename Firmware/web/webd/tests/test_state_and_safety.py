@@ -290,31 +290,33 @@ class DerateMarksTheTapeEdge(_NodeBuilders):
 if __name__ == "__main__":
     unittest.main()
 
-class RateCeilingIsVisible(unittest.TestCase):
-    """Round 28 found AUTO_TRACK bounded at 10 deg/s while its configured tracking speed is 30.
+class EnvelopeVMaxIsNotLabelledACeiling(unittest.TestCase):
+    """The envelope's v_max is a fallback, not a ceiling, and the panel must not imply otherwise.
 
-    The number existed in the firmware and nowhere on the operator's screen, which is how a hard limit gets
-    experienced as a controller that will not try. These assertions keep the three links joined: controld
-    emits it, webd declares it (undeclared keys are dropped when telemetry is re-serialised, so a missing
-    declaration makes the row read UNKNOWN forever with every test still green), and the HUD reads it.
+    An earlier version of this test asserted the opposite - that a "RATE CEILING" row existed - because an
+    earlier round had concluded this value bounded the tracking reference. Measurement refuted that (the
+    reference ran at 18.56 deg/s while the field read 10.0) and so does the code: safety_envelope.hpp uses
+    p_.v_max_rad_s only when travel limits are invalid. The assertions are inverted deliberately: the old
+    label must be gone, and the row must state whether the value is in force at all.
     """
 
-    def test_the_daemon_and_the_bridge_both_carry_it(self) -> None:
-        here = os.path.dirname(os.path.abspath(__file__))          # web/webd/tests
-        cxx = os.path.join(here, "..", "..", "..", "control", "src", "web", "web_server.hpp")
-        with open(cxx, encoding="utf-8") as fh:
-            self.assertIn("envelope_v_max_deg_s", fh.read(),
-                          "controld must publish the ceiling in force")
+    def test_the_field_is_published_and_declared(self) -> None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "..", "..", "control", "src", "web",
+                               "web_server.hpp"), encoding="utf-8") as fh:
+            self.assertIn("envelope_v_max_deg_s", fh.read())
         with open(os.path.join(here, "..", "protocol.py"), encoding="utf-8") as fh:
             self.assertIn("envelope_v_max_deg_s", fh.read(),
-                          "webd must DECLARE it; an undeclared telemetry key never reaches the page")
+                          "an undeclared telemetry key never reaches the page")
 
-    def test_the_panel_reads_it_and_says_unknown_rather_than_zero(self) -> None:
-        self.assertIn('"RATE CEILING"', HUD_JS, "the engineering panel must show the ceiling")
-        at = HUD_JS.index('"RATE CEILING"')
-        window = HUD_JS[at:at + 420]
-        self.assertIn("UNKNOWN", window,
-                      "an unknown ceiling must not be drawn as 0, which would claim a frozen axis")
+    def test_the_row_never_claims_a_ceiling(self) -> None:
+        self.assertNotIn('"RATE CEILING"', HUD_JS,
+                         "the value is a fallback speed; calling it a ceiling contradicts the machine")
+        at = HUD_JS.index('"ENVELOPE V-MAX"')
+        window = HUD_JS[at:at + 560]
+        self.assertIn("not in force", window, "the row must say when the fallback is not binding")
+        self.assertIn("FALLBACK IN FORCE", window, "and when it is")
+        self.assertIn("UNKNOWN", window, "absent data must not be drawn as a limit of zero")
 
 
 class LoopDeadlineStateIsVisible(unittest.TestCase):

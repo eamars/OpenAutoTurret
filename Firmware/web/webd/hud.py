@@ -298,9 +298,18 @@ function hudDiagRows(t) {
       ? t.control_deadline_misses + "/" + t.control_deadline_miss_limit +
         "  (+" + (t.control_deadline_grace_us || 0) + "us grace)"
       : "UNKNOWN")],
-    ["RATE CEILING", (typeof t.envelope_v_max_deg_s === "number"
-      ? t.envelope_v_max_deg_s.toFixed(1) + " DEG/S" + (typeof t.intent_velocity_scale === "number"
-          ? "  (AUTH " + Math.round(t.intent_velocity_scale * 100) + "%)" : "")
+    // NOT a ceiling, and the wording is the point. This is SafetyEnvelope's v_max, which the code reaches
+    // only when travel limits are unknown (safety_envelope.hpp:120 - if (!lim.valid) return p_.v_max_rad_s),
+    // and it is written by apply_payload_derate(), not by any mode path. With valid soft limits the speed
+    // comes from the braking model against real travel, so this value is not binding. Round 36 measured the
+    // tracking reference at 18.56 deg/s while this field read 10.0, so calling it a "ceiling" told the
+    // operator the opposite of what the machine was doing. Unknown stays UNKNOWN, never 0.
+    ["ENVELOPE V-MAX", (typeof t.envelope_v_max_deg_s === "number"
+      ? t.envelope_v_max_deg_s.toFixed(1) + " DEG/S" +
+        (t.soft_limits_valid === true ? "  (not in force)"
+                                      : "  (FALLBACK IN FORCE: travel limits unknown)") +
+        (typeof t.intent_velocity_scale === "number"
+          ? "  AUTH " + Math.round(t.intent_velocity_scale * 100) + "%" : "")
       : "UNKNOWN")],
     ["GEOMETRY AGE", (t.camera && typeof t.camera.measurement_age_ms === "number")
       ? (t.camera.measurement_age_ms >= 86400000

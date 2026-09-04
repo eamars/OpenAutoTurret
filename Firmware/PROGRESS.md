@@ -2105,3 +2105,39 @@ state). Next round: read the generator→limiter chain end to end before saying 
 
 No code changed. **449 pytest / 57 CTest** stand. Probe verdicts unchanged (C1/C5a/C6 pass, C2/C3/C4/C5b fail).
 Station returned to MANUAL/HOLD, homed, vision restarted and verified (`vision_track_sets 8099`, READY).
+
+## 2026-09-05, 01:3x — round 37: the ceiling story is dead, and it had infected my own HUD row
+
+Read the generator→limiter chain as promised. Three findings, all of which I got wrong before reading:
+
+1. **`env_.set_v_max(cap)` is in `apply_payload_derate()` (line 2200), not on any mode path.** Round 28 grepped
+   `sed -n '2117,2300p'` believing that range was `build_mode_intent`; it ran past the end of that function into
+   the next one. A range-limited grep read as a scoped conclusion.
+2. **`SafetyEnvelope::v_max` is a *fallback*, not a limit.** `safety_envelope.hpp:70` calls it "fallback speed
+   when no limits set" and line 120 reads `if (!lim.valid) return p_.v_max_rad_s;` — it is reached only when
+   travel limits are unknown. This station is homed (`soft_limits_valid: true`), so the value never binds: speed
+   comes from the braking model against real travel. **The code comment I quoted as authority — "it bounds the
+   tracking reference, §15" — is describing the fallback case, and I read a comment as a mechanism.**
+3. So round 36's measured 18.56 deg/s reference and 20.43 deg/s actual were never in conflict with anything.
+   **AUTO_TRACK is not capped at a third of its configured speed. That was wrong for nine rounds.**
+
+**The part that matters more: the wrong idea had reached the operator's screen.** Round 29 added a DIAG row
+labelled `RATE CEILING 10.0 DEG/S`, and for all that time the panel showed a fallback constant as the limit in
+force while the axis was tracking at twice it. The number was accurate; the *label* was false, which is worse
+than no number — it turns a display into a safety statement the machine contradicts. Row renamed and now reads,
+live and verified: **`ENVELOPE V-MAX  10.0 DEG/S  (not in force)  AUTH 100%`**, flipping to
+`FALLBACK IN FORCE: travel limits unknown` when soft limits are gone. Old label confirmed absent from the served
+page (count 0; page 79,641 bytes). The guard test was **inverted deliberately** — it once asserted the false
+label existed, and now asserts it is gone and that the row states whether the value binds. The comment in the
+test says why, so nobody "restores" it.
+
+**The cost, stated plainly: C2/C3 and the C6 rate picture no longer have an explanation.** The dart still
+under-reaches (reference ~10 deg/s average against a 25°/1.6 s demand), but the mechanism is unknown, and the
+sign-off package says the fix is not to raise any envelope cap. Two constants that disagree by construction
+(hard-coded 10 deg/s hold speed versus `track_speed_deg_s` defaulting to 30) remain a real code smell — they
+just aren't shown to cause anything.
+
+First patch attempt aborted cleanly on its own assert (anchor count 0): I had reconstructed the round-29 row
+from memory instead of reading it, and the comment block I remembered wasn't in the file. No partial damage.
+**449 pytest / 57 CTest** stand (no C++ changed), `node --check` OK. Station homed, MANUAL/HOLD, READY, vision
+running, webd restarted cleanly (`errno98=0`).
