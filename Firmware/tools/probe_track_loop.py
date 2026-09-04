@@ -108,6 +108,29 @@ def box_extends_past_frame(v_px, box_h_px, frame_h_px):
     return (v_px - half < 0.0) or (v_px + half > frame_h_px)
 
 
+
+def rate_verdict(rv, ceiling_deg_s, min_moving=20, tol=1.05, idle_eps=0.5):
+    """Judge a rate ceiling honestly: refuse to pass on a sample set too thin to say anything.
+
+    Round 56's first C6 verdict printed PASS with a maximum of 0.2 deg/s, because the sampled published-rate list
+    it consumed was nearly empty. A criterion that passes on thin data is worse than one that fails: it stops
+    people looking. So this returns INSUFFICIENT DATA until at least min_moving samples actually show the axis
+    moving, and every verdict carries its sample counts so thinness is visible in the output rather than inferred
+    from a suspicious maximum. idle_eps is what counts as "moving": samples below half a degree per second say
+    nothing about a ceiling of ten.
+    """
+    moving = [x for x in rv if x > idle_eps]
+    if ceiling_deg_s is None or ceiling_deg_s <= 0.0:
+        return "NO CEILING (no ceiling value was available; %d moving samples)" % len(moving), len(moving)
+    if len(moving) < min_moving:
+        return ("INSUFFICIENT DATA (%d moving samples of %d; %d needed to judge %.1f deg/s)"
+                % (len(moving), len(rv), min_moving, ceiling_deg_s)), len(moving)
+    over = [x for x in moving if x > ceiling_deg_s * tol]
+    status = "PASS" if not over else "FAIL"
+    return ("%s (%d moving samples, max %.1f deg/s against a %.1f deg/s ceiling +5%%, %d over)"
+            % (status, len(moving), max(moving), ceiling_deg_s, len(over))), len(moving)
+
+
 def binding_ceiling_deg_s(published_deg_s, configured_track_deg_s, payload_scales):
     """The ceiling a reference is actually allowed to reach, plus where that number came from.
 
@@ -985,14 +1008,7 @@ def main() -> int:
         ceil_now, ceil_from = binding_ceiling_deg_s(
             [r.get("ceil") for r in all_rows], 30.0,
             [r.get("vs") for r in all_rows if isinstance(r.get("vs"), (int, float))])
-        rate_over = [x for x in rv if x > ceil_now * 1.05]
-        if rv and not rate_over:
-            verdict6 = "PASS (max %.1f deg/s, no sample above the ceiling plus 5%%)" % rv[-1]
-        elif rv:
-            verdict6 = "FAIL (%d of %d samples above the ceiling plus 5%%, max %.1f deg/s)" % (
-                len(rate_over), len(rv), rv[-1])
-        else:
-            verdict6 = "NO DATA (no published reference rate was sampled)"
+        verdict6, n_moving = rate_verdict(rv, ceil_now)
         print("    C6 rate legality (published q_ref_rate_yaw_rad_s; ceiling %.1f deg/s, %s): %s"
               % (ceil_now, ceil_from, verdict6))
         ra = sorted(abs(r["ref_a"]) for r in all_rows if isinstance(r.get("ref_a"), float))

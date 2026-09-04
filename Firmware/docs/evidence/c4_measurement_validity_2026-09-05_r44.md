@@ -218,3 +218,26 @@ flips, C2 **3.05 s**, C3 **-11.943 deg**. **C3's spread across three dart runs i
 sign is stable, the magnitude is not, and no single C3 number should be quoted as if it were a constant.
 
 Station: MANUAL/HOLD, READY, synthetic source running. Probe-only change; controller and HUD untouched.
+
+## Round 57: the always-pass shape is closed, and thinness is now printed instead of inferred
+
+`rate_verdict(rv, ceiling, min_moving=20, tol=1.05, idle_eps=0.5)` decides C6, and it **cannot** return PASS on
+data too thin to say anything:
+
+* fewer than 20 **moving** samples (above half a degree per second — samples at rest say nothing about a 10 deg/s
+  ceiling, which was precisely round 56's shape: ninety samples of 0.2 deg/s) → `INSUFFICIENT DATA`, with the
+  counts printed;
+* no usable ceiling value → `NO CEILING`, not a pass;
+* otherwise PASS/FAIL with the moving-sample count, the maximum, the ceiling and how many samples exceeded it.
+
+Seven unit tests in `tools/tests/test_probe_rate_verdict.py`, including the round-56 defect asserted by name
+(`assertNotIn("PASS", v)` on an empty input) and an assertion that **every** verdict names its sample count — so
+the next emptiness shows up in the output rather than as a suspicious maximum someone has to notice afterwards.
+The decision is a pure function, which is why it can be tested without moving the station; that is the only reason
+a guard like this is worth having rather than wishing for.
+
+`py_compile` clean, the print site untouched and confirmed wired at line 1011, **7 new tests pass**. **No hardware
+run this round**: what changed is the decision logic and that logic is exercised by the unit tests; the first dart
+after this will show whether `ref_v` really is thin, and it will say so in words. That question — why round 56 saw
+max 0.2 deg/s where round 54 saw max 10.0 from the same field — is still open, and closing the escape route is not
+the same as answering it.

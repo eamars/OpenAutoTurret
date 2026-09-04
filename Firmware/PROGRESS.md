@@ -2643,3 +2643,24 @@ magnitude by a factor of 2.5, so no single C3 figure may be quoted as a constant
 failure survives every instrument check, and it is noisy as well as real.
 
 Station: MANUAL/HOLD, READY, synthetic source running. Probe-only change; controller, config and HUD untouched.
+
+## 2026-09-05, 13:1x — round 57: C6 can no longer PASS on thin data
+
+`rate_verdict(...)` replaces round 56's inline judgement. Below **20 moving samples** (above 0.5 deg/s — at-rest
+samples cannot speak to a 10 deg/s ceiling, and round 56's failure was exactly ninety samples of 0.2 deg/s) it
+returns `INSUFFICIENT DATA` with its counts; with no usable ceiling, `NO CEILING`; otherwise PASS/FAIL naming the
+sample count, maximum, ceiling and exceedance count. Seven unit tests, including round 56's defect asserted by name
+(`assertNotIn("PASS", v)` on empty input) and one requiring **every** verdict to state its evidence. Helper anchor
+unique, 437-char span replaced cleanly, print site untouched, wired at line 1011, `py_compile` clean, **7 new tests
+pass**; pure function, so it is genuinely tested without moving the station.
+
+**No hardware run this round, said plainly.** The change is decision logic and the logic is covered; the first dart
+will report whether `ref_v` is thin *in words* rather than as a suspicious maximum. **Why round 56 saw max 0.2 deg/s
+where round 54 saw 10.0 from the same field is still open** — closing the escape route is not the same as answering
+the question, and the operator should not read the guard as an explanation.
+
+Standing state, unchanged by this round: binding ceiling 10 deg/s (config key available, defaulting to the old
+constant); C1 PASS on anchor and declared box; C2 FAIL with a reproducible 1.61 s baseline that already breaches the
+1.50 s bar before any motion; C3 FAIL, sign stable but magnitude −4.7 / −6.4 / −11.9 deg across three runs; C4
+invalid with a no-motion floor of 11; C5a PASS; C5b FAIL validated against a 4.2 deg/s^3 noise floor; C6 no working
+verdict yet. **461 pytest / 57 CTest** before this round's additions.
