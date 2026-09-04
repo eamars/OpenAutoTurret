@@ -3169,3 +3169,17 @@ HUD row; that check was not done this round.
 
 Station untouched this round (read-only investigation): `MANUAL / HOLD`, `ready`, homed, source running.
 **487 pytest / 57 CTest** stand. Nothing signed.
+
+### Addendum to round 75 — the grep I owed, and it *narrows* the finding rather than widening it
+
+`web/webd/protocol.py` does re-serialise `safety_action`, and `web/webd/hud.py` consumes it in `hudSafetyEdge(t)` for
+§21 deltas and §22 safety presentation — so the operator-facing HUD is built on the same field the black box got
+wrong. But that is not, on reflection, evidence that the panel shows the wrong thing live: the assignment at
+`control_loop.cpp:1366` happens in the same pass and the snapshot is published after it, so **the live value the HUD
+reads should carry the current decision**, while the archived scene captured `snap` earlier in that pass at 1242.
+
+So the defect is confined to the preserved artifact — which still matters, because the scene is what gets mailed in,
+reviewed later, and used to argue about what happened; it is just not "the panel lies during interventions", which is
+what I was reaching for before checking. The remaining piece of the ordering claim that I have still not read is
+`snap`'s lifetime between 1242 and the publish — if anything refreshes it earlier than 1366, the reasoning changes.
+Stated as open rather than resolved.
