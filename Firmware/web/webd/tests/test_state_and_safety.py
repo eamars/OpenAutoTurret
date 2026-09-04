@@ -349,3 +349,32 @@ class LoopDeadlineStateIsVisible(unittest.TestCase):
         self.assertIn("control_deadline_miss_limit", window,
                       "a miss count without its limit is a number with no meaning")
         self.assertIn("UNKNOWN", window, "absent state must not be drawn as healthy zeros")
+
+
+class EffectiveSpeedCeilingIsVisible(unittest.TestCase):
+    """The constant the acceptance criteria collide with must be readable on the panel.
+
+    Round 40 closed a thirteen-round search by finding that the tracking reference is capped at
+    hold_speed_effective() = 10 deg/s while the configured tracking speed is 30, and that the operator's own
+    lead criterion (25 deg in 1.60 s, ~15.6 deg/s average) therefore cannot pass at any tuning. The number
+    existed only in source. These assertions keep the chain joined - controld emits it, webd declares it (an
+    undeclared key silently never arrives), the panel reads it - and insist on UNKNOWN rather than a zero,
+    which would claim the station is forbidden to move.
+    """
+
+    def test_daemon_and_bridge_carry_it(self) -> None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "..", "..", "control", "src", "web",
+                               "web_server.hpp"), encoding="utf-8") as fh:
+            self.assertIn("effective_speed_ceiling_deg_s", fh.read(),
+                          "controld must publish the ceiling that binds")
+        with open(os.path.join(here, "..", "protocol.py"), encoding="utf-8") as fh:
+            self.assertIn("effective_speed_ceiling_deg_s", fh.read(),
+                          "webd must DECLARE it or it never reaches the page")
+
+    def test_the_panel_reads_it_and_distincts_the_envelope_fallback(self) -> None:
+        self.assertIn('"SPEED CEILING"', HUD_JS, "the binding ceiling needs its own row")
+        at = HUD_JS.index('"SPEED CEILING"')
+        self.assertIn("effective_speed_ceiling_deg_s", HUD_JS[at:at + 300])
+        self.assertIn('"ENVELOPE V-MAX"', HUD_JS,
+                      "the fallback stays on the panel too: the two differing numbers are the point")

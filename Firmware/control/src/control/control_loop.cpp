@@ -1592,6 +1592,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // and only one clock can answer it.
     // Read at snapshot time only: the counter is already maintained per cycle, and the two
     // thresholds are constants, so this adds nothing to the 200 Hz path.
+    snap.effective_speed_ceiling_deg_s = hold_speed_effective() * kRad2Deg;
     snap.control_deadline_misses = deadline_miss_count_;
     snap.control_deadline_grace_us = static_cast<int64_t>(cfg_.deadline_max_us);
     snap.control_deadline_miss_limit = static_cast<int64_t>(cfg_.deadline_miss_threshold);

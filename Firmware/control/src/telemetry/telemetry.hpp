@@ -195,6 +195,12 @@ struct TelemetrySnapshot {
   int64_t control_deadline_misses = 0;
   int64_t control_deadline_grace_us = 0;
   int64_t control_deadline_miss_limit = 0;
+  // The speed ceiling actually binding station motion: min(hold speed, payload profile v_max per axis).
+  // Round 40 found this is also applied to the AUTO_TRACK reference (control_loop.cpp:427) before the
+  // confidence derate, so it - not the configured track speed - is what limits how fast a dart can be
+  // followed. Published because the operator's acceptance rule and this constant are in direct conflict,
+  // and until now the constant was visible only in source.
+  double effective_speed_ceiling_deg_s = 0.0;
   double effective_vfov_deg = 0.0;
   double camera_fps = 0.0;
 

@@ -115,6 +115,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"control_deadline_misses\":" << s.control_deadline_misses
      << ",\"control_deadline_grace_us\":" << s.control_deadline_grace_us
      << ",\"control_deadline_miss_limit\":" << s.control_deadline_miss_limit
+     // The ceiling that binds, as opposed to the envelope fallback (which is not in force).
+     << ",\"effective_speed_ceiling_deg_s\":" << s.effective_speed_ceiling_deg_s
      << ",\"payload_profile_name\":\"" << json_escape(s.payload_profile_name) << "\""
      << ",\"can_available\":" << (s.can_available ? "true" : "false")
      << ",\"can_kind\":\"" << json_escape(s.can_kind) << "\""

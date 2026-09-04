@@ -2230,3 +2230,25 @@ station ceiling. The panel's `ENVELOPE V-MAX (not in force)` row is accurate and
 it keep up" — round 37 fixed the label; the right number is still missing.
 
 No code changed. **449 pytest / 57 CTest** stand. Station homed, MANUAL/HOLD, READY, vision running.
+
+## 2026-09-05, 04:0x — round 41: the binding ceiling is on the panel — `SPEED CEILING 10.0 DEG/S (min of hold + payload profile)`
+
+The number round 40 proved is the reason C2/C3 fail is now published (`effective_speed_ceiling_deg_s`, read at
+snapshot time from `hold_speed_effective()`, so nothing was added to the 200 Hz path), declared in `protocol.py`,
+and printed in DIAG. Verified against the running station, not the diff: `/api/state` returns
+`effective_speed_ceiling_deg_s: 10`; the page (80,289 bytes) carries the row; the page's own builder renders
+**`SPEED CEILING 10.0 DEG/S (min of hold + payload profile)`** above `ENVELOPE V-MAX 10.0 DEG/S (not in force)
+AUTH 100%`, beside `LOOP DEADLINE 0/5 (+2000us grace)`, `GEOMETRY AGE 12.1 H`, `IMU ABSENT`. Vision restarted and
+checked (`vision_track_sets 3150`), `errno98=0`, no fatal in the daemon log, homed/READY/MANUAL/HOLD.
+
+Two honest notes. **On this station the two ceiling numbers coincide at 10**, because the envelope fallback is
+itself set from the hold speed — so the row pair does not *demonstrate* a difference here, even though the guard
+test says the distinction is the point; the distinction is real in code and would show if the payload profile
+bound first (it would give 20.1). Second: **one pytest failure appeared in the run immediately after the build
+and did not recur in two subsequent runs (451 passed twice).** I did not identify it, and "flaky" is a label, not
+an explanation — most likely a test that binds a port or reads the live daemon contending with the restart I had
+just done, which is the kind of thing that should be pinned down before it hides a real failure.
+
+The operator's decision from round 40 is unchanged and now has a number attached to it on the screen: raise the
+hold/payload ceiling, size the acceptance dart to 10 deg/s, or change line 427 to use the payload profile
+(20.1 deg/s). **449 → 451 pytest** with the two new guards; **57 CTest** on the new build.

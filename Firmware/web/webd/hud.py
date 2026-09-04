@@ -304,6 +304,14 @@ function hudDiagRows(t) {
     // comes from the braking model against real travel, so this value is not binding. Round 36 measured the
     // tracking reference at 18.56 deg/s while this field read 10.0, so calling it a "ceiling" told the
     // operator the opposite of what the machine was doing. Unknown stays UNKNOWN, never 0.
+    // The ceiling that actually binds. Round 40 traced the tracking reference to this value: it is
+    // min(hold speed, payload profile v_max) and it is applied to the AUTO_TRACK proposal before the
+    // confidence derate, so it answers "why will it not keep up" in a way no other field on this panel can.
+    // It is a safety constant, not a tuning knob - which is precisely why it belongs where the operator can
+    // read it and disagree with it.
+    ["SPEED CEILING", (typeof t.effective_speed_ceiling_deg_s === "number"
+      ? t.effective_speed_ceiling_deg_s.toFixed(1) + " DEG/S  (min of hold + payload profile)"
+      : "UNKNOWN")],
     ["ENVELOPE V-MAX", (typeof t.envelope_v_max_deg_s === "number"
       ? t.envelope_v_max_deg_s.toFixed(1) + " DEG/S" +
         (t.soft_limits_valid === true ? "  (not in force)"

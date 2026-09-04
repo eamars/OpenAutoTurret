@@ -207,6 +207,7 @@ class Telemetry:
     control_deadline_misses: Optional[int] = None
     control_deadline_grace_us: Optional[int] = None
     control_deadline_miss_limit: Optional[int] = None
+    effective_speed_ceiling_deg_s: Optional[float] = None
     envelope_v_max_deg_s: Optional[float] = None
     prediction_horizon_ms: Optional[int] = None
     target_az_rate_world_rad_s: Optional[float] = None
