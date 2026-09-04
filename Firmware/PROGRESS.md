@@ -3346,3 +3346,30 @@ Reading the writer gave me the chain properly, and it is better than my earlier 
 Changed: the warning comment at the bridge boundary, and the wrong module pointer in the comment above it. Comment-only
 — `py_compile` clean, **250 web tests pass**, no behaviour touched, station untouched. **487 pytest / 57 CTest** stand.
 Nothing signed.
+
+## 2026-09-06, 01:4x — round 81: the artifact that this whole safety story rests on is off by default, and the installer never turns it on
+
+Round 80 read the writer's header and took away a caveat ("run webd supervised or the scene may be lost"). Round 81
+checked the supervised path and found something worse: **`tools/install_station.py` never sets `OTA_BLACKBOX_DIR` on any
+unit**, `web/webd/config.py` defaults `blackbox_dir` to `""` which means *disabled*, and no test in either suite asserts
+anything about it. So a correctly installed, correctly supervised station — exactly what the writer's own documentation
+recommends for guaranteed artifacts — **writes no §80 files at all**. The 98 scenes behind rounds 73–79 exist only
+because webd has been started by hand with the variable set, on this machine, by me.
+
+The default-off design is deliberate and the writer says why (a side effect should not arrive because code was merged),
+so this is not a bug to revert; it is an unfinished installation. The fix is a one-line env in the webd unit — and it is
+left to the operator, because it is an **unbounded write with no rotation and no delete path**: this session is **128
+scenes, 108 KiB total, ~855 B each**, which is nothing for a day and a slow leak over a year, and the right answer
+depends on the machine and on whether someone prunes them.
+
+What bothers me, and is the reason this is written down rather than just fixed: a data-contract item (§80, "preserve a
+scene that cannot be reconstructed") can be fully implemented — capture, publish, bridge, writer, tests — and still be
+inert in production, because the one line that connects it to the outside world lives in an installer no test inspects.
+Every green suite in this repo was true while the feature could never fire. That is the same shape as the round-78
+coverage question (ctest entries are per-binary, so the count proves nothing) and the round-69 one (tests passed against
+a script that could not run): **the suite tests the code, not the deployment.**
+
+Verification: greps above; `install_station.py` has no `blackbox`/`BLACKBOX` occurrence at all; `config.py:56,119` hold
+the empty default; `tools/tests/test_install_station.py` asserts unit contents elsewhere but nothing here. Docs only —
+nothing enabled, no unit changed, no disk side effect introduced without a human deciding. Station untouched;
+**487 pytest / 57 CTest** stand. Nothing signed.
