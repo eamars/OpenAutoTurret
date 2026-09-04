@@ -95,6 +95,18 @@ def report_dart_feasibility(deg, ramp_s):
     return ok
 
 BOX_H_NORM = 0.35          # declared person box height as an image fraction (~380 px of 1080)
+
+def box_extends_past_frame(v_px, box_h_px, frame_h_px):
+    """Round 47: containment must be judged on the declared box, not on the anchor point.
+
+    The fixture declares a box HEIGHT (BOX_H_NORM) and uses half of it as the vertical extent, so the top and
+    bottom edges are known exactly. No box width is declared anywhere in this tool, so the horizontal extent is
+    left unchecked rather than invented from an assumed aspect ratio: a measurement may only contain numbers
+    somebody measured. Returns True when any declared edge is outside the frame.
+    """
+    half = 0.5 * box_h_px
+    return (v_px - half < 0.0) or (v_px + half > frame_h_px)
+
 SOFT_MARGIN_RAD = 0.20     # abort before the axis gets this close to a soft limit
 
 
@@ -635,6 +647,8 @@ def main() -> int:
                 rows.append({"t": t, "ex": u - CX, "ey": vv - CY, "aim_err": aim_err,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
+                             # Round 47: the anchor can sit on the edge with half the box outside.
+                             "box_out": box_extends_past_frame(vv, BOX_H_NORM * FH, FH),
                              "v_yaw": s["v_yaw_rad_s"], "track_state": s.get("track_state"),
                              "az_err_deg": math.degrees(az_t - (s.get("target_az_world_rad") or az_t))})
             time.sleep(0.033)
@@ -673,6 +687,9 @@ def main() -> int:
             return vals[min(len(vals) - 1, int(q * len(vals)))] if vals else float("nan")
 
         c1 = not out_of_frame
+        # Reported beside c1, never instead of it: the point metric is what earlier
+        # rounds recorded. The box verdict is the one the operator's wording asks for.
+        c1_box = c1 and not any(r.get("box_out") for r in rows)
         c2 = bool(errs) and pct(errs, 0.95) <= tol_px
         print("\n  S2 result (using the aim point published by controld, %s):"
               % ("head aim" if any(r["aim_err"] is not None for r in steady) else "anchor fallback"))
@@ -684,6 +701,8 @@ def main() -> int:
         print("    commanded yaw rate p50 %.2f deg/s (target rate %.2f deg/s)"
               % (sorted(abs(r["v_yaw"]) for r in rows)[len(rows) // 2] * 180 / math.pi, rate))
         print("    states seen: %s" % sorted({str(r["track_state"]) for r in rows}))
+        print("    C1 containment, declared box edges (height only - no width is declared): %s"
+              % ("PASS" if c1_box else "FAIL - the declared box crosses a frame edge"))
         print("    C1 containment  : %s%s" % ("PASS" if c1 else "FAIL",
               "" if c1 else "  left the frame at t=%s" % ["%.2f" % x for x in out_of_frame[:6]]))
         print("    C2 following    : %s (p95 %.1f px vs bar %.1f px, n=%d)"
@@ -810,6 +829,8 @@ def main() -> int:
                              "lead_ref_est": lead_ref_vs_est,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
                              "outside": getattr(pub, "outside", False),
+                             # Round 47: the anchor can sit on the edge with half the box outside.
+                             "box_out": box_extends_past_frame(vv, BOX_H_NORM * FH, FH),
                              "track_state": s.get("track_state"), "v_yaw": s["v_yaw_rad_s"],
                              "ex": u - CX})
             time.sleep(0.033)
@@ -837,6 +858,8 @@ def main() -> int:
             return vals[min(len(vals) - 1, int(q * len(vals)))] if vals else float("nan")
 
         c1 = not any((not r["in_frame"]) or r["outside"] for r in rows)
+        # Reported beside c1, never instead of it: the point metric is what earlier rounds recorded.
+        c1_box = c1 and not any(r.get("box_out") for r in rows)
         back = next((r["t"] - dart_start for r in rows
                      if r["phase"] == "hold" and r["aim_err"] is not None and r["aim_err"] <= tol_px),
                     None)
@@ -958,7 +981,9 @@ def main() -> int:
                      "PASS" if pct(jk, .95) * r2d <= 300.0 + TOL_J else "FAIL"))
         if not rv:
             print("      no reference-rate samples: controld or webd predates q_ref_rate_*")
-        print("    C1 containment : %s" % ("PASS" if c1 else "FAIL - the target left the frame"))
+        print("    C1 containment : %s" % ("PASS" if c1 else "FAIL - the anchor left the frame"))
+        print("    C1 containment, declared box edges (height only - no width is declared): %s"
+              % ("PASS" if c1_box else "FAIL - the declared box crosses a frame edge"))
         print("    C2 recovery    : %s%s" % ("PASS" if c2 else "FAIL",
               "" if back is None else "  (t=%.2f s, bar %.2f s)" % (back, args.max_recovery_s)))
         print("    C3 leads       : %s (p50 lead %+.3f deg)"

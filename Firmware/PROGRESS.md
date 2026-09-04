@@ -2431,3 +2431,31 @@ they are.
 
 Station untouched: homed, MANUAL/HOLD, READY, `SPEED CEILING 10.0 DEG/S`, synthetic source running. Docs only;
 **451 pytest / 57 CTest** stand.
+
+## 2026-09-05, 08:0x — round 48: C1 now asks whether the box left the frame; the dart has NOT been re-run
+
+`tools/probe_track_loop.py` gains a pure helper `box_extends_past_frame(v_px, box_h_px, frame_h_px)`, both the S2
+and S3 sampling loops record `box_out`, both verdict blocks compute `c1_box`, and both print it **beside** the old
+point metric, never instead of it — silently rescoring an acceptance criterion in a test tool is as bad as
+measuring the wrong thing. `tools/tests/test_probe_box_containment.py` covers the centred case, the case the old
+predicate passed (anchor a pixel inside the edge, ~189 px of declared box outside), the exact edge in both
+directions, and a zero-height box that must degrade to the point test rather than always fail. **456 pytest / 57
+CTest**; station left untouched (MANUAL/HOLD, READY, ceiling 10).
+
+**The horizontal extent is deliberately not checked.** The fixture declares a box *height* and builds its box
+from `BOX_H_NORM * 0.5` (line 258); there is no declared width anywhere in the tool, so an aspect ratio would
+have to be invented, and a measurement may only contain numbers somebody measured. The printed label says
+"declared box edges (height only - no width is declared)" so nobody reads it as full-box containment.
+
+**Two real bugs came out of verifying state instead of trusting my own script.** First, the row patch replaced
+*both* sampling sites (count 2, not 1), so the follow-up patch aimed at "the S3 site" correctly found nothing and
+the script died mid-way — leaving the S2 print referencing `c1_box` **before any assignment existed**. That is a
+runtime NameError that `py_compile` passes happily; I found it by grepping assignments against uses and reading
+line numbers, not by reading the diff. Second, my own new test had its boundary case direction-inverted — I moved
+the anchor *inward* and expected an overflow — so the test failed for the right reason and I fixed the test, not
+the metric.
+
+**Outstanding, deliberately not touched:** C6 still compares the dart against `30.0 * payload scale` (~20.1) at
+line 913 instead of controld's published `effective_speed_ceiling_deg_s` (10). That is the next edit. And because
+**no motion ran this round**, the recorded C1 verdicts are exactly as round 47 left them: the corrected metric has
+never yet been executed against real telemetry, which is stated here rather than implied fixed.
