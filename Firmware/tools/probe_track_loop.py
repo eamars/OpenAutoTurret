@@ -1239,3 +1239,46 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def oscillation_verdict(ex_px, box_h_px, jitter_px=49.0, band_gain=1.0, min_samples=20):
+    """Judge overshoot and ringing honestly, using a band scaled to the measured jitter.
+
+    `ex_px` is a signed error series (pixels, offset from the reticle) over a window in which the target is
+    stationary by construction - for the dart scenario that is the hold phase after arrival. Returns a verdict
+    string. Round 53 measured the current 1 px rule reporting 11 sign changes on a 0.0 deg dart, so a rule that
+    counts every wiggle cannot be an acceptance criterion; the default band is a quarter of the observed p95
+    jitter, and the verdict always names its evidence (crossings, amplitude, in box heights and pixels).
+
+    `jitter_px` is the ruler: the measured no-motion jitter amplitude on this station (default 49 px, the
+    p95 of rounds 53/54). A monotone approach that crosses once is convergence, not ringing; ringing is at
+    least two reversals with amplitude beyond that ruler and beyond a third of the target box.
+    """
+    pts = [float(v) for v in ex_px if isinstance(v, (int, float))]
+    if len(pts) < min_samples:
+        return ("INSUFFICIENT DATA (%d samples in the window; %d needed to judge reversal)"
+                % (len(pts), min_samples))
+    # The band comes from a SEPARATE measurement - the no-motion hold of rounds 53/54, where a 0.0 deg
+    # dart with a locked target showed |ex| p50 24.9-26.7 px and p95 44.4-48.9 px, three times
+    # identically. Deriving it from the very window being judged would be self-referential: by
+    # definition 5% of that window exceeds its own p95, so a criterion built that way always finds
+    # 'motion' in shimmer. An external ruler is what makes the answer mean anything.
+    band = max(1.0, band_gain * float(jitter_px))
+    outside = [v for v in pts if abs(v) > band]
+    if not outside:
+        return ("NO OSCILLATION DETECTED (%d samples, all inside a %.1f px band = %.3f box heights; "
+                "sign changes under the old 1 px rule would be meaningless here)"
+                % (len(pts), band, band / box_h_px if box_h_px else float("nan")))
+    signs = [1 if v > 0 else -1 for v in outside]
+    crossings = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
+    peak = max(abs(v) for v in outside)
+    verdict = ("%d reversal%s above a %.1f px band, peak excursion %.1f px = %.3f box heights"
+               % (crossings, "" if crossings == 1 else "s", band, peak,
+                  peak / box_h_px if box_h_px else float("nan")))
+    if crossings >= 2 and peak >= 0.33 * box_h_px:
+        verdict = "RINGING SUSPECTED - " + verdict + " (bar: <=1 reversal above the band)"
+    elif crossings >= 2:
+        verdict = "reversals present but small - " + verdict
+    else:
+        verdict = "converging (single crossing) - " + verdict
+    return verdict

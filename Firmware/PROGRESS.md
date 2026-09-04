@@ -2859,3 +2859,28 @@ The remaining hazard of the same family — a test binding a *fixed* private pat
 now simply never production.
 
 Nothing signed; station untouched (MANUAL/HOLD, READY, synthetic source running, ceiling 10).
+
+## 2026-09-05, 18:0x — round 66: C4 finally has a measurement that could fail, offered rather than imposed
+
+`oscillation_verdict(ex_px, box_h_px, jitter_px=49.0, band_gain=1.0)` in `tools/probe_track_loop.py`, with seven
+tests in `tools/tests/test_probe_oscillation.py`. It counts reversals of the signed hold-window error **beyond an
+external ruler**, reports the peak excursion in pixels **and box heights**, distinguishes a single crossing
+(convergence) from repeated reversals (ringing), and returns `INSUFFICIENT DATA` for short windows.
+
+The ruler is the measured no-motion jitter of rounds 53/54 — p50 24.9–26.7 px, p95 44.4–48.9 px, reproduced three
+times — defaulting to 49 px. **The tests caught a design error of mine first:** my first draft derived the band from
+the judged window's own p95, which is self-referential — by construction 5% of any window exceeds its own p95, so a
+criterion built that way finds "motion" inside shimmer and can never fail. Two tests failed, the design was wrong,
+and the external ruler replaced it. One of those failing tests then had to be corrected in the other direction: it
+expected a ±150 px alternating swing to be forgiven as shimmer, which is exactly the self-referential behaviour
+misleading its author; the expectation, not the metric, was wrong.
+
+**Deliberately unwired.** Acceptance criteria are the operator's; a function that appears nowhere in the printed
+verdicts cannot quietly rescore anything. What is offered, in one sentence: *ringing means at least two reversals
+beyond the measured jitter ruler and beyond a third of the target box, where the present rule counts every one-pixel
+shimmer and calls a motionless target "11 sign changes".*
+
+Also tested: the old 1 px rule is asserted still to be flapping (≥10 flips) on the very series the new metric calls
+quiet — the contrast is pinned, not narrated. **Suite green after the change** (see the commit body for the exact
+counts as reported), py_compile clean, station untouched (MANUAL/HOLD, READY, synthetic source running, ceiling 10).
+Nothing signed.
