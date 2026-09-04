@@ -3648,3 +3648,47 @@ Sizing constraints recorded last round still stand: the reported angle quantises
 sub-tenth-of-a-degree with **0 reversals**, so `deadband_deg` must be > 0.02177 to mean anything; final value from
 tracking jitter on the real detector path, which still needs a target in view (blob detector reports nothing on a
 still scene).
+
+## 2026-09-06, 06:3x — round 5: item 4 is not broken, it was never built — and that makes it your decision, not mine
+
+Operator asked me to *test* the automatic switching between AUTO_TRACK and AUTO_ROAM. Testing presupposes it exists.
+It does not. Evidence, from greps in this round rather than recollection:
+
+* The **only** way the operating mode changes is `ControlLoop::request_mode()` (`control_loop.cpp:1894`, declared
+  `control_loop.hpp:226`), and its callers are: `:2568` the external **`set_mode`** command, `:2590` a developer/test
+  path, and `:2565` a fallback to **Manual** (safety). **Nothing inside the control thread ever passes
+  `OperatingMode::AutoRoam` to it.**
+* What happens today when a target is lost *stays inside AUTO_TRACK*: `lost_hold_ms` / `reacquire_window_ms` are handed
+  to the AutoTrack controller (`:1755`), producing the `LOST_HOLD` phase and a reacquire window — hold and look again,
+  not go hunting. The `AutoRoam` references elsewhere (`:480`, `:1413`, `:2041`, `:2049`, `:2056`) all presuppose the
+  mode is *already selected*.
+* Round 4 already surfaced the intent in words: *"The v1 FSM can no longer cause motion in this mode… **AUTO_ROAM owns
+  roaming, and the operator owns AUTO_ROAM**."* This is deliberate architecture, consistent with §111.5 — not an
+  oversight I tripped over.
+
+So the requested behaviour — turret starts sweeping on its own when it loses the target, and hands back when it finds
+it — is **new autonomy**. It is the first thing in this system that would make the machine decide to move without an
+operator command, and the round-4 architecture comment is the system saying it refuses to do that by design. I will not
+add it quietly under "testing".
+
+**What it would take, if you want it** (design sketched, not built):
+* an opt-in key, e.g. `v3.auto_track.auto_roam_on_loss_ms` (default **0 = off**), so today's behaviour is byte-identical
+  until asked — the same rule as the deadband, enforced by a test that 0 changes nothing;
+* a delay distinct from `lost_hold_ms` (2000 ms today) and from `reacquire_window_ms` (3000 ms): roaming while the
+  reacquire memory is alive would fight the reacquire logic;
+* **hysteresis both ways**, because the failure mode is a hunt: lost→roam after a long delay, roam→track only on a
+  confirmation streak (N detections, or confidence ≥ the existing medium band), so a two-frame ghost cannot pull the
+  mode back;
+* roam **restricted to the region the operator named**, never widened by the automatic path — §33/§72's asymmetry
+  (naming narrows, never widens) must survive this feature;
+* a visible mode-change event with the reason, through §79 like the existing `ROAM_*` events, so the operator always
+  knows the machine took the initiative, and a rule that any safety Brake **ends** the automatic arrangement until the
+  operator re-arms it.
+
+**Question for the operator, and it is genuinely yours to answer:** should the turret begin sweeping by itself when the
+target is lost? Some people want that; some consider an unmanned search on a live mount exactly what they do not want
+a machine to decide. My job here is to make sure it is not added as a side effect of a bug hunt.
+
+Nothing changed in code this round. Blocked-with-decision items right now: this one; the picamera2 AI API for the `rpk`
+detector (item 1); and a physical target in view, without which neither the deadband sizing (item 3) nor any switching
+or roam measurement (items 4, 5) can be taken on real pixels.
