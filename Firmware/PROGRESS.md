@@ -2724,3 +2724,27 @@ Left exactly as disqualifying as it was: **no item accepted by a named person** 
 unsigned - the principal point still a convention, boresight still uncommissioned. Docs only; station untouched
 (MANUAL/HOLD, READY, synthetic source running); web suite 250 pytest green, 473 full-suite and 57 CTest standing
 from rounds 59-60.
+
+## 2026-09-05, 15:2x — round 62: the pre-flight "achievable" verdict still certifies against a ceiling that is not in force
+
+Round 49 moved C6's *analysis* onto controld's published `effective_speed_ceiling_deg_s`. The **pre-check was not
+moved**: line 89 calls `envelope_min_time_s(deg)` and lets it default to `TRACK_V_MAX` (30 deg/s). That is why every
+dart run prints `envelope : 25.0 deg needs >= 1.43 s at 30 deg/s, 60 deg/s^2, 300 deg/s^3 -> achievable` above a
+station whose ceiling in force is 10 deg/s — the first operator-facing statement about the test is computed against
+a limit that does not apply, the same class of error as round 47's wrong ceiling, one function earlier in the tool.
+
+`tools/tests/test_probe_precheck_ceiling.py` pins the arithmetic as executable fact (4 passing):
+
+* 25 deg in 1.60 s **is** legal at 30 deg/s — which is what the tool checks today, hence "achievable";
+* the same dart **is not** legal at 10 deg/s (`t_min > 1.60 s`), the ceiling controld applies and the panel shows;
+* the source still contains the defaulting call, so the defect is asserted rather than remembered;
+* **a dart sized to the binding ceiling (12 deg in 1.60 s) is legal at both** — the arithmetic behind the operator's
+  second option, computed by the tool's own envelope function rather than asserted by me.
+
+**I did not change the pre-check.** The fix is to pass the published ceiling into a function that already accepts
+`v_max`, but the pre-check runs *before* motion and cannot be exercised without a run, and I am not shipping another
+change to this tool that I have not watched execute — that is precisely how rounds 56 and 57 compounded. Wiring plus
+one dart run is the next step, stated as outstanding.
+
+No station or controller change; station MANUAL/HOLD, READY, ceiling 10 on the panel, synthetic source running.
+**477 pytest** (473 + 4) / **57 CTest**.
