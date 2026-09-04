@@ -35,6 +35,17 @@ Environment=OTA_WEB_HZ=15
 # live-verified correction (0.9996 correlation; see run_webd_inspection.py).
 # Without it the web feed (and any capture from this unit) is flipped.
 Environment=OTA_VIDEO_ORIENTATION=rotate_180
+
+# §80 scene artifacts are OFF unless this names a directory, and that default is deliberate (writing
+# files is a side effect that should not arrive merely because code was merged). It is left commented
+# so enabling it stays an operator decision, but it is spelled out here because the alternative is the
+# silent case: with no path, controld still captures and webd still publishes the scene on every unsafe
+# edge, and NOTHING is ever written to disk - the feature is inert in production while every test stays
+# green. A station whose brake incidents this operator wants to review should uncomment the line.
+# Weigh it first: the writer has no rotation and no delete path (one scene is ~856 B, and a single
+# probing session on this machine produced 128 of them), and the directory must be writable by the
+# user this unit runs as.
+#Environment=OTA_BLACKBOX_DIR=/var/lib/ota/blackbox
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=15

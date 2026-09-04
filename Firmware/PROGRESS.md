@@ -3381,3 +3381,29 @@ reading the output rather than copying it. The commit message carries the measur
 from the shell variable, which is the discipline that works: **let the measurement travel into the text, do not
 retype it.** Immaterial to the finding; material to the habit, which is the entire subject of rounds 42, 54, 63 and
 65 in this file.
+
+## 2026-09-06, 02:1x — round 82: the switch that makes §80 exist in production, added as a comment
+
+Round 81 found the artifact inert because nothing set `OTA_BLACKBOX_DIR`. The reason is now visible: the environment
+lives in `systemd/turret-web.service`, whose `Environment=` lines the installer deliberately does not touch
+(`render_unit` rewrites exactly four keys — root, ExecStart paths, User/Group — and its own comment says why: *"silently
+rewriting an `After=` or a sandbox directive is how a deploy tool ends up owning someone's outage"*). So there was no
+bug to fix in the installer; the unit template simply never carried the line.
+
+`systemd/turret-web.service` now ends its environment block with a **commented**
+`#Environment=OTA_BLACKBOX_DIR=/var/lib/ota/blackbox`, above a note stating: the default-off is deliberate; with no
+path, controld still captures and webd still publishes the scene on every unsafe edge while **nothing reaches disk —
+the feature is inert in production and every test stays green**; and the cost of flipping it — the writer has no
+rotation and no delete path, ~856 B each, 128 in one probing session, directory must be writable by the unit's user.
+
+Same shape as `tracking.hold_speed_deg_s` from round 43, on purpose: a safety- or disk-relevant choice stays the
+operator's, but it is *written down where the choice is made*, not in a chat log.
+
+Verified as far as I can without touching the machine: **84 tools tests pass**, which includes the 11 places
+`test_install_station.py` asserts against the web unit — so the comment breaks no rendered-unit expectation. **I did
+not run `install_station.py` itself**: its `--root`/`--stage` default to an install root, and staging into
+`/opt/open_auto_turret` to satisfy my own curiosity is not what the operator asked for. The claim is therefore "the
+template carries the switch, and the installer's tests still pass", not "a staged unit was inspected".
+
+No behaviour changed anywhere: no env set, no directory created, no daemon restarted. Station untouched, source
+running. **487 pytest / 57 CTest** stand. Nothing signed.

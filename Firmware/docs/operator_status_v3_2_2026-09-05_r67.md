@@ -128,7 +128,9 @@ the station did and what the record said about it.
   `tools/install_station.py` **never sets that variable on any unit**, and no test asserts it, so the supervised
   install the writer's own header tells you to run for guaranteed artifacts would produce **zero scenes**. Every one
   of the 98 artifacts behind the bullets above exists only because webd was started by hand with the variable set —
-  including on this machine. Enabling it is a one-line env in the webd unit, and it is left to you because it is an
+  including on this machine. **Round 82 put the switch where it belongs**: `systemd/turret-web.service` now carries
+  `#Environment=OTA_BLACKBOX_DIR=/var/lib/ota/blackbox`, commented, so the default behaviour is byte-for-byte
+  unchanged and the decision is one keystroke away rather than undocumented. It is left to you because it is an
   unbounded write to disk with no rotation: this session alone is **128 scenes, 107 KiB total, 856 B each**, and the writer has no delete
   path. Numbers first, decision second.
 * **What I did not change:** no limit, ceiling, tolerance, or behaviour. The fix is record integrity. `§22` presentation
