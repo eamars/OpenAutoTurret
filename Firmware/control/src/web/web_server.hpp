@@ -197,6 +197,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << (s.camera_measurement_age_ms < 0 ? std::string("null")
                                         : std::to_string(s.camera_measurement_age_ms))
       << "}"
+      // The envelope ceiling in force, so "why will it not go faster" has an answer on the screen.
+      << ",\"envelope_v_max_deg_s\":" << s.envelope_v_max_deg_s
      // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
      // the calibration files, not in the control code, where the only "imu" in the tree sits inside the
      // word "simulation". `world_elevation_deg` is null rather than 0 for the reason stated on the

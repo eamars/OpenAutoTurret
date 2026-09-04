@@ -286,6 +286,14 @@ function hudDiagRows(t) {
     // Geometry staleness belongs on the engineering panel: every pixel->ray conversion the HUD draws
     // rests on this file, and "measured once, eight months ago" changes how much the centring margin
     // means. Unknown is shown as UNKNOWN, never as a fresh zero.
+    // The limit, not just the effort. "CMD RATE YAW" says what the controller asked for; without the
+    // ceiling in force beside it, a station held at a third of its configured tracking speed looks like a
+    // sluggish controller rather than like a number on the screen. Unknown is UNKNOWN, never 0 - a zero
+    // ceiling would read as "forbidden to move", which is a different claim entirely.
+    ["RATE CEILING", (typeof t.envelope_v_max_deg_s === "number"
+      ? t.envelope_v_max_deg_s.toFixed(1) + " DEG/S" + (typeof t.intent_velocity_scale === "number"
+          ? "  (AUTH " + Math.round(t.intent_velocity_scale * 100) + "%)" : "")
+      : "UNKNOWN")],
     ["GEOMETRY AGE", (t.camera && typeof t.camera.measurement_age_ms === "number")
       ? (t.camera.measurement_age_ms >= 86400000
           ? (t.camera.measurement_age_ms / 86400000).toFixed(2) + " D"

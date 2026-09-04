@@ -184,6 +184,11 @@ struct TelemetrySnapshot {
   // -1 when the geometry has no known measurement time (no calibration file). Never 0 by default:
   // 0 would mean "measured this instant".
   int64_t camera_measurement_age_ms = -1;
+  // The speed ceiling the safety envelope is enforcing right now, deg/s. AUTO_TRACK's reference is
+  // bounded by this. It is published because the operator has been shown commanded rate with no
+  // stated limit, which is how a station held at a third of its configured tracking speed reads as
+  // sluggishness rather than as a number on the screen.
+  double envelope_v_max_deg_s = 0.0;
   double effective_vfov_deg = 0.0;
   double camera_fps = 0.0;
 

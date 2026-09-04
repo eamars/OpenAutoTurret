@@ -1590,6 +1590,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // 42-hour uptime is larger than 56 years, which is always false, so the age fell through to -1.
     // Ask the realtime clock instead: the question is "how long since that measurement was written",
     // and only one clock can answer it.
+    snap.envelope_v_max_deg_s = env_.v_max() * kRad2Deg;
     snap.camera_measurement_age_ms = -1;
     if (camera_cal_mtime_ns_ > 0) {
       const int64_t realtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(

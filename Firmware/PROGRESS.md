@@ -1848,3 +1848,35 @@ Also honest about what this does not settle: C5b's jerk failure (p95 542 vs 300+
 lower bound) is a separate matter, and C1's PASS says containment held at these magnitudes — it does not say the
 lead rule is met. No code changed this round. **437 pytest / 57 CTest** stand; station homed, MANUAL/HOLD,
 vision running. **§110: 0 items accepted on hardware by a named person.**
+
+## 2026-09-04, 21:2x — round 29: the ceiling is on the screen — DIAG now reads `RATE CEILING 10.0 DEG/S (AUTH 100%)`
+
+Round 28 named a limit nobody could see. This round makes it visible (a datum, not a controller change): the
+envelope's `v_max` is published (`envelope_v_max_deg_s`, deg/s), declared in `protocol.py` — where an undeclared
+key would be dropped silently and the row would read UNKNOWN forever with every test green — and printed in the
+DIAG panel beside the authority multiplier controld already sent.
+
+Verified against the running station, not against the diff: `/api/state` returns `envelope_v_max_deg_s: 10`;
+the HTTP-served page carries the row; the page's own builder renders **`RATE CEILING  10.0 DEG/S  (AUTH 100%)`**
+beside `GEOMETRY AGE 10.8 H` and `IMU ABSENT`. Unknown renders as **UNKNOWN, never 0** — a zero ceiling would
+claim "forbidden to move", which is a different claim entirely. A guard test now checks all three links at once:
+controld emits it, webd declares it, the HUD reads it.
+
+**Two mistakes, both caught by the machinery rather than by luck.** First, the patch script reached for a parse
+site that does not exist — `Telemetry` is populated by filtering the incoming dict against declared names, which
+is precisely *why* undeclared keys vanish; declaring the field is the whole job. I had written a placeholder
+edit against an invented anchor, and it died on an assert instead of corrupting the file. Second, my DIAG row was
+missing one closing parenthesis, which broke the **entire HUD's** JavaScript. `node --check` named the line, and
+**74 tests failed** at once. That is the value of a parse check on the concatenation: a brace error in a 1,400
+line embedded script is otherwise a blank screen with no explanation. It took two more edits to get the fix in,
+because I first read the wrong region of the file and then had to locate the real one.
+
+Two standing traps re-verified rather than re-learned: my first grep for exposed telemetry fields used a
+pattern requiring a quote immediately before the identifier, and C++ emits `\"field\"` — the **third** time a
+rigid spelling in this session reported something as absent that was plainly present; and the stack restart left
+the vision source down, which is why it was restarted and verified in the same round it was needed.
+
+Counts: **57 CTest** pass on the new build (grepped clean first), **439 pytest** (437 + 2 new guards),
+`node --check` OK on the concatenated HUD, page 78,238 bytes served. Station homed, ready, MANUAL/HOLD,
+synthetic vision running. **No controller behaviour changed**: the turret moves exactly as it did; what changed
+is that its limit is now stated. **§110: 0 items accepted on hardware by a named person.**

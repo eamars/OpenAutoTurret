@@ -201,6 +201,9 @@ class Telemetry:
     predicted_target_az_world_rad: Optional[float] = None
     predicted_target_el_world_rad: Optional[float] = None
     predicted_target_los_valid: bool = False
+    # Declared because undeclared keys are dropped when a Telemetry is re-serialised: a field that
+    # arrives from controld but is not named here simply never reaches the page.
+    envelope_v_max_deg_s: Optional[float] = None
     prediction_horizon_ms: Optional[int] = None
     target_az_rate_world_rad_s: Optional[float] = None
     target_el_rate_world_rad_s: Optional[float] = None

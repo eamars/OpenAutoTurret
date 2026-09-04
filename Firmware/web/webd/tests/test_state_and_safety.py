@@ -289,3 +289,29 @@ class DerateMarksTheTapeEdge(_NodeBuilders):
 
 if __name__ == "__main__":
     unittest.main()
+
+class RateCeilingIsVisible(unittest.TestCase):
+    """Round 28 found AUTO_TRACK bounded at 10 deg/s while its configured tracking speed is 30.
+
+    The number existed in the firmware and nowhere on the operator's screen, which is how a hard limit gets
+    experienced as a controller that will not try. These assertions keep the three links joined: controld
+    emits it, webd declares it (undeclared keys are dropped when telemetry is re-serialised, so a missing
+    declaration makes the row read UNKNOWN forever with every test still green), and the HUD reads it.
+    """
+
+    def test_the_daemon_and_the_bridge_both_carry_it(self) -> None:
+        here = os.path.dirname(os.path.abspath(__file__))          # web/webd/tests
+        cxx = os.path.join(here, "..", "..", "..", "control", "src", "web", "web_server.hpp")
+        with open(cxx, encoding="utf-8") as fh:
+            self.assertIn("envelope_v_max_deg_s", fh.read(),
+                          "controld must publish the ceiling in force")
+        with open(os.path.join(here, "..", "protocol.py"), encoding="utf-8") as fh:
+            self.assertIn("envelope_v_max_deg_s", fh.read(),
+                          "webd must DECLARE it; an undeclared telemetry key never reaches the page")
+
+    def test_the_panel_reads_it_and_says_unknown_rather_than_zero(self) -> None:
+        self.assertIn('"RATE CEILING"', HUD_JS, "the engineering panel must show the ceiling")
+        at = HUD_JS.index('"RATE CEILING"')
+        window = HUD_JS[at:at + 420]
+        self.assertIn("UNKNOWN", window,
+                      "an unknown ceiling must not be drawn as 0, which would claim a frozen axis")
