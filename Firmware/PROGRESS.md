@@ -2594,7 +2594,7 @@ rate — but the tool's +10% publish-jitter allowance does not cover a 1.77x gap
 disagree, and **C6 has been measuring that disagreement rather than target-following.** It needs the daemon's own
 200 Hz timebase, not the bridge's sampled one; recorded open, not concluded.
 
-Station restored: MANUAL/HOLD, READY, synthetic source running (`track sets 74699`). No controller/config/HUD change;
+Station restored: MANUAL/HOLD, READY, synthetic source running (`track sets 74637`). No controller/config/HUD change;
 **461 pytest / 57 CTest** stand. Of the operator's acceptance criteria, after five rounds of instrument testing:
 C1 PASS (anchor and box) · C2 FAIL but 1.6 s of it is baseline · C3 FAIL −4.7° to −6.4°, the one criterion whose
 failure has survived every check · C4 invalid (floor 11) · C5a PASS · C5b FAIL validated · C6 measuring a
