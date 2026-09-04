@@ -3720,3 +3720,38 @@ Surviving hypotheses, for the next pass, with the cheap test for each:
 Two of those predict the same ~10 fps, and they need different fixes, so the next measurement must be encode duration,
 not another guess. That is the pattern this session keeps teaching: the plausible mechanism is the most dangerous
 thing I have, because it reads like an explanation.
+
+## 2026-09-06, 07:3x — round 7: encode-holding is dead too, killed by the 720p column of the same measurement
+
+I predicted last round that if the capture request were held across the encode, encode ≈36 ms on a 64.5 ms frame period
+would explain the 9.7 fps. Measured the encode directly (`array → PIL → JPEG`, median of 12), no daemon restart needed:
+
+* **1080p: 21.1 ms** median, **720p: 9.2 ms** median (2.3× cheaper).
+* Serialised-rate prediction 1/(T_frame + encode): **11.67 fps** at 1080p, **13.57 fps** at 720p.
+* Measured delivery: **9.75–10.00 fps at 1080p** and **~10.1 fps at 720p**.
+
+The 720p column is what kills it. If holding the request across the encode were the binding term, making the encode
+2.3× cheaper must move the delivered rate — it would have to go to ~13.6 fps — and it did not move at all. 1080p alone
+could still be argued (the prediction, 11.67, is already above the measured 9.75, so encode does not even account for
+it), but a mechanism that predicts a change that does not happen is simply wrong.
+
+Caveat, stated because it cuts against the hypothesis further rather than for it: those encodes used **random-noise
+images**, which are worst-case JPEG content (1352 KiB/frame against ~105 KiB for real frames here). Real 1080p encodes
+are therefore *faster* than 21 ms, which pushes the serialised prediction closer to 15 fps and makes encode explain
+**less**, not more.
+
+**Two plausible mechanisms falsified in two rounds** — "the sensor never gets a rate request" (round 6: 9.75 fps after
+requesting it) and "the request is held across the encode" (this round). Both were specific, both were defensible, both
+were wrong, and both were killed by a measurement that cost one call each. The surviving candidate is the one I flagged
+as merely plausible and refused to bank: the **turnaround of `capture_request()` itself** in this single-in-flight
+configuration (`buffer_count=3`, request → `make_array` → rotate_180 → encode → `release`), which would fix the ceiling
+near 100 ms *regardless of frame size* — the only observed behaviour that matches both resolutions landing on ~10 fps.
+
+**The decisive probe, and it needs the camera:** free the IMX500 and ask picamera2/libcamera what sensor mode and rate
+are actually negotiated for a bare `create_video_configuration(main={"size": …}, buffer_count=3)` versus what
+`vision/frame_source.py` negotiates (it reports **14.97–15.54 fps** from the same sensor). If the rates differ at the
+mode level, the preview fix is to use the same configuration path as vision — not another guess at a control name. That
+is next round's single measurement.
+
+No code changed this round. The station is untouched: real IMX500 source still running (`camera_fps 14.9656`), controld
+`AUTO_TRACK / WAIT_TARGET`, `safety_action ALLOW`.
