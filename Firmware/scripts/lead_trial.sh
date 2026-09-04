@@ -42,9 +42,27 @@ cfg.write_text(s); print(f"trial value written: position_lead_s: {lead}")
 PY
 [ $? -ne 0 ] && { echo "aborting before any motion"; exit 2; }
 
+# Validate the edited config BEFORE touching the running daemon. The first trial wrote a syntactically dead file into
+# place, killed a working controld, and the replacement refused to start ("YAML parse error: end of map not found") —
+# leaving the station under a daemon that could not come up. A trial that disables the thing it is measuring is not a
+# trial. Note this is necessary and not sufficient: Python parsing does not prove controld accepts the file, so the
+# post-start log is checked for the same class of failure below.
+python3 - "$CFG" <<'PYCHK' || { echo "INVALID YAML after edit - not restarting controld"; exit 2; }
+import sys, yaml, pathlib
+try:
+    yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+except Exception as e:
+    print(f"yaml rejected the edit: {e}", file=sys.stderr); sys.exit(1)
+print("edited config parses")
+PYCHK
+
 pkill -x controld 2>/dev/null; sleep 3
 ( cd "$FIRMWARE" && OTA_BLACKBOX_DIR=/var/lib/ota/blackbox setsid nohup ./build/control/controld config/turret.yaml \
     > /tmp/controld_lead-trial.log 2>&1 < /dev/null & )
+sleep 8
+if grep -q "parse error\|config:" /tmp/controld_lead-trial.log 2>/dev/null && ! pgrep -x controld >/dev/null; then
+  echo "controld did not survive the edited config - restoring"; exit 2
+fi
 
 # A controld restart does NOT come back ready: the second run of this script sat for 150 s on `MANUAL HOLD ALLOW
 # False` and correctly refused to move, because homing state is not restored from the drive - it is established by

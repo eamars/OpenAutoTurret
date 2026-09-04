@@ -82,7 +82,17 @@ schema_version: 1
   # 0.1 s is deliberately about a third of that, because an overshoot at the turnaround is worse than the
   # shortfall it removes. Judge it on the same numbers: following error p50 (was 3.628) and no new overshoot
   # past the sweep extremes.
-  # position_lead_s: 0.1
+  # ─── ENABLEMENT WARNING, learned the hard way 2026-09-06 ───
+  # This whole `auto_track:` block is DOCUMENTATION, not a live mapping: `auto_track` does not exist in the
+  # parsed config at all today (verified with yaml.safe_load — the top-level nodes are axes, camera, can,
+  # control, homing, homing_plan, installation, motors, payload, safety, schema_version, shutdown,
+  # tracking). So every auto_track key in force is a DEFAULT, including coast_ms and lost_hold_ms. Uncommenting
+  # one of the keys below into this block yields `YAML parse error: end of map not found` and **controld then
+  # refuses to start** — that is what happened during the first position-lead trial. To enable a key, add a
+  # real `auto_track:` mapping where the parser will find it (turret_config.cpp:423 reads it via
+  # fetch(n, "auto_track")), START controld, and confirm it reaches supervisory Ready — a config that parses
+  # in Python is not proof that controld accepts it.
+  # position_lead_s: 0.1   # example only — see the enablement warning
   # deadband_deg: 0.1
   # deadband_release_deg: 0.15
 #     coast_ms: 300                   # §20: authority fades this long after the last frame
