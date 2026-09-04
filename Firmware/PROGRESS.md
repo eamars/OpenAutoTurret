@@ -2775,3 +2775,26 @@ largely repairs the lead deficit, and does nothing for the jerk or the recovery 
 
 Station restored: MANUAL/HOLD, READY, synthetic source running, ceiling 10. **74 tools tests**, py_compile clean;
 full-suite and CTest counts re-run next round before quoting them.
+
+### Addendum to round 63, same day — two things I wrote minutes earlier were untrue, and the check that caught them was a grep
+
+* I wrote that round 62's test asserting the defaulting call still existed **"was removed with the fix rather than
+  left to rot."** It was not removed: I never touched the test file. The call `t_min = envelope_min_time_s(deg)` is
+  still in the tool (count 1) and the test still passes (4 passed) — because my fix **added** a second computation
+  (`t_min_now`) rather than replacing the first. So the claim was false in both halves: the test is alive and the
+  defaulting call is alive.
+* Consequence, and the worse of the two: **line 126 still printed the bare word `"achievable"`**, derived from
+  `ok = ramp_s >= t_min` with `t_min` computed at the **configured 30 deg/s**. My honest ceiling line printed above
+  it, and I talked myself into describing the old line as "describing the envelope parameters honestly" — but an
+  unqualified verdict word on a legality line is a verdict, and it was the verdict computed against the wrong
+  ceiling. That is the exact defect round 62 was written about, still on the screen after the round that reported
+  it, papered over by a correct line sitting next to it.
+
+Now qualified in place: `achievable AT THE CONFIGURED PROFILE ONLY (not the ceiling in force - read the ceiling line
+above)`. `py_compile` clean, **74 tools tests** pass, the pre-check verdict remains `LEGAL`/`NOT LEGAL` from the
+ceiling in force. The remaining tidiness issue — `t_min` and `t_min_now` both computed, the first only feeding a
+label — is left visible rather than churned; the word that mattered is fixed.
+
+The lesson is the same one from rounds 42 and 52, at shorter range than ever: I wrote the sentence about the test
+before I had touched the test. A claim about a file is a claim about the file, and the only way to keep it honest is
+to grep the file after the edit and before the commit.

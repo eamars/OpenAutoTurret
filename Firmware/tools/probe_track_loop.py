@@ -123,7 +123,7 @@ def report_dart_feasibility(deg, ramp_s):
              "would be measuring the ceiling, not the controller)"))
     print("  envelope         : %.1f deg needs >= %.2f s at %.0f deg/s, %.0f deg/s^2, %.0f deg/s^3 -> %s"
           % (deg, t_min, TRACK_V_MAX, TRACK_A_MAX, TRACK_J_MAX,
-             "achievable" if ok else "NOT ACHIEVABLE - the axis cannot cover this in the requested time, "
+             "achievable AT THE CONFIGURED PROFILE ONLY (not the ceiling in force - read the ceiling line above)" if ok else "NOT ACHIEVABLE - the axis cannot cover this in the requested time, "
                                      "so C2/C3 would be measuring the envelope, not the controller"))
     return ok
 
