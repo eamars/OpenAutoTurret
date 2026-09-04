@@ -2923,3 +2923,41 @@ is identical each time: read the file, or count in a way whose failure mode you 
 
 Docs only. No measurement, no code change, nothing signed. **484 pytest / 57 CTest** stand from round 66; station
 MANUAL/HOLD, READY, synthetic source running.
+
+## 2026-09-05, 19:4x — round 69: C4's replacement is wired beside the old rule and has a real number, after a placement bug of my own made the first attempt crash
+
+Wired into the S3 verdict block, **beside** C4 and explicitly labelled `DIAGNOSTIC - not the criterion`; the exit
+code still depends on C4 alone, because adopting a replacement is the operator's decision. Executed on a 12 deg dart
+that the ceiling permits (`/tmp/r69b.log`):
+
+    C1 containment : PASS
+    C2 recovery    : FAIL  (t=1.85 s, bar 1.50 s)
+    C3 leads       : FAIL (p50 lead -3.076 deg)
+    C4 no ringing  : FAIL (5 sign changes)
+    C4 alt (round 66, DIAGNOSTIC - not the criterion): converging (single crossing) - 0 reversals above
+                                                      a 49.0 px band, peak excursion 101.7 px = 0.269 box heights
+
+So on this station, in the window where the target is stationary by construction: **no oscillation** — a single
+crossing and a peak excursion of **0.269 box heights**, under the third-of-a-box tolerance the other criteria use.
+The same window makes the present rule report `FAIL (5 sign changes)`, which sits below the measured no-motion floor
+of 11 and so tells us nothing. The new line answers a question; the old one produces a number that cannot be
+interpreted. That contrast, produced by running both on the same data, is the argument for adoption — and it is
+offered, not applied.
+
+**The bug that had to be cleared first, and why the tests did not catch it.** Round 66 *appended* the function to the
+end of the file, which is after `if __name__ == "__main__": raise SystemExit(main())`. Under `python
+tools/probe_track_loop.py`, `main()` therefore ran before the `def` had ever executed: `NameError: name
+'oscillation_verdict' is not defined`. Under pytest the module is imported, the guard body never runs, the function
+is defined normally, and **all 81 tools tests passed** against a tool that could not run. An append is only
+"append-only" when the file's tail is still module scope; here the tail was a call site that fires first. The fix
+moves the definition above the guard, verified by `grep -n` showing `def oscillation_verdict` at 1248 and `__main__`
+at 1291.
+
+**Cost of the crash, stated plainly:** it died at the scoring line, after the dart, so the probe never reached its
+own cleanup (`clear_target`, `set_mode MANUAL`) and left the station in `AUTO_TRACK LOST_HOLD`. I restored it through
+the same `/api/command` path the probe uses (`clear_target`, `set_mode MANUAL`, both `ok:true`) and confirmed
+`MANUAL / HOLD`, `at_ready`, yaw 217.97 deg — inside the software limits. A crash after motion is a safety-relevant
+crash, not just a stack trace: the cleanup was the last thing in the function.
+
+Suite: **81 tools tests pass**, `py_compile` clean; full-suite and CTest re-run next round before quoting totals.
+Synthetic source restored and running.

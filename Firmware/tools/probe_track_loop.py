@@ -959,6 +959,13 @@ def main() -> int:
         signs = [1 if r["ex"] > 0 else -1 for r in hold_rows if abs(r["ex"]) > 1.0]
         flips = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
         c4 = flips <= 2
+        # Round 66's metric, wired as a DIAGNOSTIC beside C4 rather than replacing it. The 1 px rule
+        # above reported 11 sign changes on a target that was not moving (round 53, three times), so the
+        # bare flip count is not evidence of anything. This scores the same hold window against the
+        # measured jitter ruler and reports amplitude as well as frequency. Adoption would change an
+        # acceptance criterion, which is the operator's call, so C4 above stays exactly as written and
+        # the exit code below still depends on C4 alone.
+        osc_line = oscillation_verdict([r["ex"] for r in hold_rows], BOX_H_NORM * FH)
         print("\n  S3 result:")
         print("    reference lead during the dart (positive = ahead of the target in travel dir):")
         print("      n=%d  p50 %+.3f deg  min %+.3f  max %+.3f  ahead in %.0f%% of samples"
@@ -1100,6 +1107,7 @@ def main() -> int:
               % ("PASS" if c3 else ("FAIL" if leads else "UNMEASURABLE - no q_ref published"),
                  lead_p50))
         print("    C4 no ringing  : %s (%d sign changes)" % ("PASS" if c4 else "FAIL", flips))
+        print("    C4 alt (round 66, DIAGNOSTIC - not the criterion): %s" % osc_line)
         command("clear_target")
         time.sleep(0.2)
         command("set_mode", "MANUAL")
@@ -1237,10 +1245,6 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def oscillation_verdict(ex_px, box_h_px, jitter_px=49.0, band_gain=1.0, min_samples=20):
     """Judge overshoot and ringing honestly, using a band scaled to the measured jitter.
 
@@ -1282,3 +1286,7 @@ def oscillation_verdict(ex_px, box_h_px, jitter_px=49.0, band_gain=1.0, min_samp
     else:
         verdict = "converging (single crossing) - " + verdict
     return verdict
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
