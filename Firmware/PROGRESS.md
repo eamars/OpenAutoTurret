@@ -1938,3 +1938,31 @@ bracket constants live inline in `render()`, which needs a DOM.
 
 Station homed, ready, MANUAL/HOLD, synthetic vision running. **§24 visual items 16 and the v3 architecture
 ledger's 30 items both remain at 0 accepted by a named person.**
+
+## 2026-09-04, 22:5x — round 32: the reticle's anchor is proven to follow the optical axis, and the coincidence that would have hidden a wrong build is on the record
+
+`web/webd/tests/test_reticle_anchor.py` (4 tests) settles the one part of §24 row 8 that is arithmetic: §7 puts
+the centre reticle on the **optical axis**, which is the principal point — *not* the middle of the image. Those
+two coincide on this station (calibration `cx 960, cy 540` of 1920×1080), which is exactly the trap: a build that
+hard-coded the geometric centre would be indistinguishable from a correct one **on this hardware**. So the
+mapping is tested with a deliberately off-centre principal point (1010, 505), where "follows cx/cy" and "assume
+0.5" disagree.
+
+**Falsified as designed:** replacing the mapping with `{ u: 0.5, v: 0.5 }` fails the off-centre test and nothing
+else — the only test in the suite that could see that bug saw it. Restored from a plain `cp` backup.
+**447 pytest** pass (443 + 4); no C++ touched, **57 CTest** stand.
+
+Checked before testing the plumbing, per probe-first habit: **live `/api/state` carries
+`camera_intrinsics: {valid: true, fx 1389, fy 1467, cx 960, cy 540, 1920x1080}`**, so the page's anchor comes
+from the real calibration and the centred fallback is *not* engaged on this station. That matters for how much
+the fallback test is worth: it asserts the uncalibrated path emits its own on-screen note (a code-shape claim),
+but on this hardware that branch never runs, and the sign-off row says so instead of implying coverage that
+does not exist.
+
+Row 8 is now honest in both directions: the anchor is proven; **bracket separation and open centre remain
+visual**, because the bracket geometry is inline in `render()` and needs a DOM. Extracting it into a pure
+function would make that testable too, but it changes drawing code for a test's benefit — recorded as an option,
+not taken unbidden.
+
+Station homed, ready, MANUAL/HOLD, synthetic vision running. **§24 (16 items) and the v3 ledger (30 items): 0
+accepted by a named person.**
