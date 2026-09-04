@@ -2884,3 +2884,24 @@ Also tested: the old 1 px rule is asserted still to be flapping (≥10 flips) on
 quiet — the contrast is pinned, not narrated. **Suite green after the change** (see the commit body for the exact
 counts as reported), py_compile clean, station untouched (MANUAL/HOLD, READY, synthetic source running, ceiling 10).
 Nothing signed.
+
+## 2026-09-05, 18:3x — round 67: a single entry point for whoever returns, with its own citations checked before it shipped
+
+`docs/operator_status_v3_2_2026-09-05_r67.md`: per-criterion status with the number and the file it came from, the
+ceiling explanation and the three options, the two criteria awaiting a **definition** rather than hardware, the
+physically-blocked geometry work, and the machine's state.
+
+Two of its claims were wrong in draft and were fixed by checking instead of trusting the draft. **The sign-off
+package's 16 rows re-derived today by parsing the file** ✓. **The "30 v3 system items" could not be re-derived** —
+my table pattern matched one row, not thirty — so the briefing now says exactly that: the figure comes from round 30,
+I did not reproduce it today, and either way the number that matters, items accepted by a named person, is **zero**.
+Repeating a remembered count in a document whose whole purpose is to be trustworthy would have been the same error I
+have spent thirty rounds writing about.
+
+Verified live while writing: panel rows `SPEED CEILING = 10.0 DEG/S (min of hold + payload profile)`,
+`LOOP DEADLINE = 0/5 (+2000us grace)`, `IMU = ABSENT`, station `MANUAL/HOLD`, `at_ready True`; the intrinsics header
+still reads `MEASURED ... by encoder-as-theodolite` at line 1 and `cx/cy are the GEOMETRIC CENTRE BY CONVENTION, not
+a measurement` at line 27 — the document quotes both verbatim because those two lines are the honest summary of
+objective (c): half measured, half convention.
+
+No measurement, no code change, nothing signed. Suites stand at **484 pytest / 57 CTest** from round 66.
