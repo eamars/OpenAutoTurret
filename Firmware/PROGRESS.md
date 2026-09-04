@@ -2203,3 +2203,30 @@ them from source.
 
 The plateau and its cost stay established; the cause does not, and the operator-facing documents say so. No code
 changed, station untouched: homed, MANUAL/HOLD, READY, vision running. **449 pytest / 57 CTest** stand.
+
+## 2026-09-05, 03:3x — round 40: the plateau is closed — a *hold* speed is the ceiling on tracking, on purpose
+
+Thirteen rounds after round 28 first noticed "10.0 deg/s", the chain is closed with every link measured: controld
+logs `track=30.0` and payload profile `20.1/20.1`; the recording shows `track_state=tracking`,
+`confidence_band=HIGH`, `selection_ambiguous=0`, confidence 1.0 across all 34 plateau frames (so the search
+branch and the confidence derate are both excluded, as round 39 said); and `control_loop.cpp:427` caps the
+AUTO_TRACK proposal at `hold_speed_effective()` = `min(10.0, 20.1, 20.1)` = **10 deg/s**, before the confidence
+derate, with a comment saying the ordering is deliberate.
+
+**Round 28's substance was right. Round 37's retraction was right too. Both were incomplete** — 28 had the
+effect and the wrong line, 37 correctly killed the envelope story and threw the conclusion out with it. The
+mistake pattern is the same one every time: concluding from the expression nearest to hand.
+
+**What the operator owns now.** A 25° dart in 1.60 s needs ~15.6 deg/s average; the effective tracking ceiling
+is 10 deg/s, applied to the reference *before* prediction or tracker gains can matter. **C2 and C3 cannot pass
+at that dart size at any tuning.** The 10 deg/s is hard-coded in `main.cpp:133` with **no key in
+`turret.yaml`** — only the unbound `track_speed_deg_s` (30) is configurable. Raising it is a statement about how
+fast this station may swing with a payload, which is not mine to make. Note also that the comment above line 427
+says "the payload profile v_max caps station motion" while the binding term is the *hold speed* (10), not the
+profile (20.1) — the comment describes intent, the constant decides otherwise.
+
+Left undone, deliberately, because context ran out first: publish `hold_speed_effective()` as the effective
+station ceiling. The panel's `ENVELOPE V-MAX (not in force)` row is accurate and still doesn't answer "why won't
+it keep up" — round 37 fixed the label; the right number is still missing.
+
+No code changed. **449 pytest / 57 CTest** stand. Station homed, MANUAL/HOLD, READY, vision running.
