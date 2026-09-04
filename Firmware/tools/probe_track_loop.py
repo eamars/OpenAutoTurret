@@ -107,6 +107,24 @@ def box_extends_past_frame(v_px, box_h_px, frame_h_px):
     half = 0.5 * box_h_px
     return (v_px - half < 0.0) or (v_px + half > frame_h_px)
 
+
+def binding_ceiling_deg_s(published_deg_s, configured_track_deg_s, payload_scales):
+    """The ceiling a reference is actually allowed to reach, plus where that number came from.
+
+    Round 40 traced the tracking reference to controld's hold_speed_effective(), which is 10 deg/s on this
+    station; round 41 made controld publish it as effective_speed_ceiling_deg_s. Before that this tool
+    reconstructed the limit as configured tracking speed times payload derate, roughly 20.1 deg/s, and
+    certified darts the controller was forbidden to follow. The published value wins whenever it exists; the
+    old arithmetic is kept only for a daemon too old to publish anything, and the caller prints which was
+    used so no verdict can be read without its ceiling source.
+    """
+    vals = [float(x) for x in published_deg_s if isinstance(x, (int, float))]
+    if vals:
+        return min(vals), "controld effective_speed_ceiling_deg_s (the ceiling in force)"
+    scale = min(payload_scales) if payload_scales else 1.0
+    return (configured_track_deg_s * scale,
+            "FALLBACK configured x payload derate - controld published no binding ceiling")
+
 SOFT_MARGIN_RAD = 0.20     # abort before the axis gets this close to a soft limit
 
 
@@ -825,6 +843,8 @@ def main() -> int:
                 rows.append({"t": t, "phase": phase, "aim_err": aim_err, "lead": lead,
                              "ref_v": rv, "ref_a": ra, "q_ref": s.get("q_ref_yaw_rad"),
                              "vs": s.get("intent_velocity_scale"),
+                             # Round 47: the ceiling controld applies, recorded as it was seen.
+                             "ceil": s.get("effective_speed_ceiling_deg_s"),
                              "lead_tgt": lead_tgt, "lead_pred": lead_pred,
                              "lead_ref_est": lead_ref_vs_est,
                              "in_frame": (0.0 <= u <= FW) and (0.0 <= vv <= FH),
@@ -919,6 +939,12 @@ def main() -> int:
         worst = None
         over = 0
         changes = 0
+        # Printed before the verdicts, because a legality check is meaningless without its limit.
+        run_ceil, run_src = binding_ceiling_deg_s(
+            [r.get("ceil") for r in all_rows], 30.0,
+            [r.get("vs") for r in all_rows if isinstance(r.get("vs"), (int, float))])
+        print("      ceiling used for legality: %.1f deg/s  [%s]"
+              % (run_ceil, run_src))
         for i in range(1, len(qr)):
             if qr[i][1] == qr[i - 1][1]:
                 continue
@@ -933,7 +959,8 @@ def main() -> int:
             implied = dqa / dt          # deg per second over the honest interval
             scales = [all_rows[k].get("vs") for k in range(j, i + 1)]
             scales = [float(x) for x in scales if isinstance(x, (int, float))]
-            ceiling = 30.0 * (min(scales) if scales else 1.0)
+            ceiling, _ = binding_ceiling_deg_s(
+                [all_rows[k].get("ceil") for k in range(j, i + 1)], 30.0, scales)
             if implied > ceiling * 1.10:  # 10% for publish jitter in the denominator
                 over += 1
             if worst is None or implied > worst[0]:

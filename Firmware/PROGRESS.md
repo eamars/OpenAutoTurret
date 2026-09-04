@@ -2459,3 +2459,29 @@ the metric.
 line 913 instead of controld's published `effective_speed_ceiling_deg_s` (10). That is the next edit. And because
 **no motion ran this round**, the recorded C1 verdicts are exactly as round 47 left them: the corrected metric has
 never yet been executed against real telemetry, which is stated here rather than implied fixed.
+
+## 2026-09-05, 08:4x — round 49: C6 now judges the dart against controld's ceiling, and says out loud which one it used
+
+Line 913 read `ceiling = 30.0 * (min(scales) if scales else 1.0)` — the configured tracking speed (which
+`turret.yaml` never sets; 30.0 is the loader default) times the payload derate, about **20.1 deg/s**. The ceiling
+controld applies is **10** (round 40), published since round 41. That gap is the whole of round 27's confusion:
+the dart was certified "envelope legal" against a limit that was never in force, then failed C2/C3.
+
+Now `binding_ceiling_deg_s(published, configured, scales)` returns the number **and its provenance**: the
+published `effective_speed_ceiling_deg_s` wins whenever controld sends it, the old arithmetic survives only as a
+fallback for a daemon too old to publish, and the source is printed **before** the verdicts —
+`ceiling used for legality: 10.0 deg/s [controld effective_speed_ceiling_deg_s (the ceiling in force)]` — because
+a legality check is meaningless without naming its limit. The per-row ceiling is now recorded as it was seen, and
+the tightest value in each interval is used. Five tests in `tools/tests/test_probe_binding_ceiling.py`, including
+the case that matters (controld says 10, the old arithmetic says 20.1 → 10 wins) and the one that would have
+turned the fix into a always-pass (nothing published → fallback still yields the configured number).
+
+Applied cleanly this time: **all four anchors reported count 1 before replacement**, and `all_rows` was confirmed
+defined at line 862 before the new use at 943 — round 48's NameError came from exactly that class of slip, so
+scope is now checked by line number rather than by reading the diff. `py_compile` passes, **461 pytest / 57
+CTest**, station untouched (MANUAL/HOLD, READY, published ceiling 10).
+
+**Still not executed:** the corrected comparison against real telemetry. No motion ran this round, so the C6
+verdict on file is as round 47 left it — PASS-against-the-wrong-ceiling — and the first dart run after this
+change will print the ceiling it judged against, which is the observable that tells the operator whether any
+past C6 PASS was ever meaningful. Criteria themselves remain the operator's; I changed an instrument, not a rule.
