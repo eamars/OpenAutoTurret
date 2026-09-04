@@ -3020,3 +3020,32 @@ whole hold window, which includes the still-recovering seconds — so **0.818 bo
 recovery-magnitude figure, not a jitter figure**. The jitter figure is the motionless segment's 0.130 box heights.
 The metric's ringing judgement is unaffected (a single crossing is a single crossing), but the amplitude number means
 different things in the two contexts and should be quoted with which one it came from.
+
+## 2026-09-05, 21:1x — round 72: objective (c) turns out not to need a field survey for the principal point after all
+
+Thirty rounds of "OPEN — needs a surveyed distant reference or a board" rested on an unexamined assumption: that
+commissioning the geometry means the ChArUco route in `tools/calibrate_camera_intrinsics.py`, which does need someone
+to move a board. But fx/fy were already measured on the live camera by `probe_theodolite.py`, and **the same rig can
+measure cx** — `docs/principal_point_method_2026-09-05_r72.md`.
+
+The argument, with its numbers computed before being written down: `u = cx + fx·tan ψ` gives
+`du/dψ = fx + (u − cx)²/fx`, so the angular scale is a parabola in u whose vertex *is* the principal point. On this
+station's own fx = 1389:
+
+* the model predicts **24.24 px/deg** at the centre against the **24.22 px/deg the file records as measured** — 0.1%,
+  which is why the model is not speculative;
+* the predicted scale at u = 1560 is **+18.7%** over centre, while this method's worst recorded residual is 8.7%
+  (yaw out-and-back) and its best is 0.4% (pitch) — the curvature clears the noise, so the vertex is identifiable;
+* a 100 px error in cx misplaces **frame-edge bearings by ±2.9° / ∓2.7°**, asymmetrically — at 24.2 px/deg, about
+  70 px of margin that either isn't there or is claimed missing. C1 is scored against frame edges, so this error
+  lands on an acceptance criterion rather than on calibration purity.
+
+What stands between this and a measured cx is small and specific: `--strip-at-u` (strip mode currently auto-selects
+the busiest row/column, which is correct for fx/fy and wrong for a fit needing commanded u), runs at u ≈ 360/960/1560,
+and a quadratic fit. The caveats are written where they will be obeyed: the −15.8° depression couples into the scale,
+so symmetric strips or a joint fit are required — a bare parabola on one-sided data must not be called cx; and
+**boresight genuinely still needs a surveyed reference**, because the theodolite measures differences, not absolutes.
+The intrinsics header stays as it is until a run replaces it, and nothing is signed.
+
+Docs and arithmetic only; station untouched (`MANUAL / HOLD`, `at_ready`, synthetic source running). Suites stand at
+**487 pytest / 57 CTest** from round 71.

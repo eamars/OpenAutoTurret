@@ -58,8 +58,16 @@ The operator's lead criterion — 25 deg in 1.60 s — needs about **15.6 deg/s 
 
 * **Principal point and boresight** (`calibration/camera_intrinsics.yaml` says so in its own header): fx/fy are
   encoder-theodolite **measured**; cx/cy are the **geometric centre by convention**, and boresight is uncommissioned.
-  Needs a surveyed distant reference or a ChArUco board at wide spans — physical work at the station, tooling ready
-  (`tools/calibrate_camera_intrinsics.py`, `make_charuco_board.py`, `probe_theodolite.py`).
+  Needs a surveyed distant reference or a ChArUco board at wide spans for the board route — physical work at
+  the station (`tools/calibrate_camera_intrinsics.py`, `make_charuco_board.py`, `probe_theodolite.py`).
+  **Round 72 found that cx does not need the board**: `docs/principal_point_method_2026-09-05_r72.md` works
+  out that the angular scale the existing theodolite already measures is a parabola in u whose vertex *is*
+  cx, that the model reproduces this station's own 24.22 px/deg measurement to 0.1%, that the curvature at
+  the frame edge is +18.7% — well above the method's worst 8.7% residual, so the vertex is identifiable — and
+  that a 100 px error in cx puts ±2.9° of error on frame-edge bearings, which is what C1 is scored against.
+  What it needs is a `--strip-at-u` option (strip mode currently picks the busiest row/column, which is right
+  for fx/fy and wrong for this fit), runs at u ≈ 360/960/1560, and a quadratic fit. Boresight still needs a
+  surveyed reference: the theodolite measures differences, not absolutes.
 * **Real detector**: every centring and head-aim number above is against the synthetic fixture. Plumbing evidence,
   not acceptance evidence.
 * **Hardware acceptance and §24 visual fidelity**: **0 accepted by a named person.** Both counts were
