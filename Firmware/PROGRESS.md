@@ -2343,3 +2343,33 @@ anchor and confirmed `count: 1 / REPLACED` **before** writing any of it up — t
 
 Station untouched: homed, MANUAL/HOLD, READY, ceiling 10.0 on the panel, synthetic source running. Docs only;
 **451 pytest / 57 CTest** stand.
+
+## 2026-09-05, 06:2x — round 45: C5b validated by its noise floor — the opposite result to C4, from the same kind of test
+
+Same method as round 44, applied to the other smoothness criterion, on the same recording. The question was
+whether C5b's jerk figure is a differencing artifact the way C4's crossing count turned out to be.
+
+**The test:** find frames where jerk is **zero by construction** — the reference pinned at 10.00 deg/s with
+published accel under 0.5 — and see what the estimator reports there. That is the instrument's own noise floor.
+33 such frames:
+
+    jerk estimated by differencing the published rate   ->  noise floor p95 = 4.2 /s³ (p50 0.0, max 4.3)
+    jerk estimated by differencing the published accel  ->  noise floor p95 = 1.1 /s³ (max 28.1)
+
+Against that, the measured violation is **p95 525 (rate-derived) / 914 (accel-derived)** versus a configured
+300. **Two orders of magnitude above the floor.** C5b is not an artifact — it is a real ~1.75x smoothness
+violation, and unlike C4 it survives the only test that could have dismissed it.
+
+**Robust to how it is derived**, which is worth more than agreement between two samplers: single-differencing the
+limiter's own acceleration gives an even *larger* number (p95 914) than double-differencing the rate (525), so no
+choice of derivation rescues it — the two paths disagree in size and agree in direction and magnitude class. And
+for what it's worth the estimator behaves correctly at rest: jerk is exactly 0 across the plateau, which is what
+a constant-rate reference should show.
+
+**The method that produced both results in two rounds:** before believing a derived quantity, measure the
+derivation on a segment where the truth is known. It invalidated C4 and validated C5b — it does not care which
+way the answer falls, which is the only reason either verdict is worth having. Sign-off package updated in place
+(noise floor quoted, "max" still barred). Anchor was checked (`count: 1 / REPLACED`) before writing any of it up.
+
+Station untouched: homed, MANUAL/HOLD, READY, ceiling 10.0 on the panel, synthetic source running. Docs only;
+**451 pytest / 57 CTest** stand.

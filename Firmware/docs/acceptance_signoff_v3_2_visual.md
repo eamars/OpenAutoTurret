@@ -60,8 +60,10 @@ bears on some of them, and where it lives:
   misread for rounds: `dart_25deg_62degps_2026-09-04_r25.log` (25° / 0.40 s, **forbidden by the commissioned
   envelope**, which needs 1.43 s) and `dart_25deg_in_1.6s_envelope_legal_2026-09-04_r27.log` (25° / 1.60 s,
   envelope-legal). Verdicts on the legal dart: **C1 containment PASS · C2 recovery FAIL (2.85 s vs 1.50 s) ·
-  C3 lead FAIL (−11.6°) · C4 INCONCLUSIVE - its own zero-crossing count is contaminated, because the target rate signal crosses zero more often than the reference does (docs/evidence/c4_measurement_validity_2026-09-05_r44.md) · C5a PASS · C5b jerk FAIL (p95 542 vs 300+60, a lower
-  bound measured at probe rate).**
+  C3 lead FAIL (−11.6°) · C4 INCONCLUSIVE - its own zero-crossing count is contaminated, because the target rate signal crosses zero more often than the reference does (docs/evidence/c4_measurement_validity_2026-09-05_r44.md) · C5a PASS · C5b jerk FAIL (p95 525-542 against the configured 300, and now **validated**: the jerk
+  estimator's own noise floor measures **4.2 deg/s^3 at p95** on frames where jerk is zero by
+  construction, so the violation is two orders of magnitude above the instrument, not an artifact of
+  differencing; do not quote a "max" jerk figure, which is noise-dominated).**
 * **Why C2/C3 fail: explained, and the cause is a design ceiling the operator owns.** The tracking reference is pinned at exactly 10.00 deg/s (34 telemetry frames, zero acceleration) because `control_loop.cpp:427` caps the AUTO_TRACK proposal with `hold_speed_effective()` = min(hard-coded hold speed 10.0, payload profile 20.1, 20.1) = **10 deg/s** - applied before the confidence derate, deliberately, per the code's own comment. The configured tracking speed is 30 (controld logs it) and confidence measured 1.0, so neither is binding. A 25 deg dart in 1.60 s needs ~15.6 deg/s average: **C2 and C3 cannot pass at that size whatever the tracker or prediction gains do.** The 10 deg/s has no key in `turret.yaml`; raising it is a safety decision about how fast this station may swing. Full chain, including the three mechanisms ruled out by measurement: `docs/evidence/ref_rate_plateau_2026-09-05_r38.md`.
 * **Smoothness (C5b) is a measured failure, agreed by two independent instruments.** Jerk p95 is **525 °/s³**
   from the telemetry socket stream at 15.2 Hz and **542 °/s³** from the probe's own sampling path, against a
