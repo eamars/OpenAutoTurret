@@ -3086,3 +3086,43 @@ control finding and belongs in front of the operator immediately, not in a log f
 Station restored: `MANUAL / HOLD`, `ready`, homed, yaw ≈149°, synthetic source running. Suites stand at
 **487 pytest / 57 CTest** (the new option is Python-side only, exercised by `--help` and compilation; the C++ tree
 is untouched). Nothing signed.
+
+## 2026-09-05, 22:2x — round 74: the cx walk ran, and it retracted round 72. The theodolite cannot find the principal point
+
+Under round 73's precondition — freshly homed, quiet HOLD — the walk completed on all three bands
+(`/tmp/r74_u960.log`, `/tmp/r74_u1560.log`, `/tmp/r74_u360.log`):
+
+    u= 960 :  73.797 deg per normalized width  ->  26.02 px/deg   ->  cx = 584 or 1336
+    u=1560 :  65.571                           ->  29.28 px/deg   ->  cx = 927 or 2193
+    u= 360 : 245.819                           ->   7.81 px/deg   ->  no real root (unusable band)
+
+The **sign** of round 72's prediction was confirmed: the edge really does measure a larger angular scale than the
+centre (29.28 vs 26.02), and the edge band is within **1.8%** of what the pinhole model predicts for cx = 960. The
+**conclusion** did not survive, because round 72 compared +18.7% curvature against 8.7% noise as if they were the same
+kind of quantity and called the vertex identifiable. cx is recovered through a **square root of the excess over fx** —
+`cx = u − sqrt(fx·(κ − fx))` — and wherever that excess is small, scale error is amplified by that root:
+
+* at the most favourable band (u=1560, 600 px off centre) this rig's own **8.7%** scale residual moves cx by
+  **−148 px**;
+* reaching ±10 px needs a **0.5%** scale measurement — about eighteen times better than the out-and-back play of a
+  1° encoder walk;
+* the two usable bands disagree about cx by **hundreds of pixels** (927 vs 584/1336), which is the amplification
+  showing up as an inconsistency rather than as an error bar.
+
+A multi-point fit was deliberately not attempted: the residual is partly systematic (mechanical play on reversal),
+which averaging does not remove, and the single-band sensitivity already puts the target precision out of reach.
+
+**What survives:** the curvature is real and measurable in sign; `--strip-at-u` is a working capability; the
+**±2.9° of frame-edge bearing** riding on a 100 px cx error is still worth fixing. **What does not:** that this
+theodolite route can fix it. The **ChArUco board route** — ≥8 views, board moved by hand, exactly the thing round 72
+argued for and then tried to avoid — is the only path to cx at useful precision here. That is what (c) says again, now
+with measurements behind it instead of an assumption either way.
+
+One instrument lesson inside the result: the u=360 band printed **7.81 px/deg**, a third of the base scale, which no
+pinhole produces — a confident number from a band without usable texture, and the tool did **not** print NaN. "The
+tool gave me a value" is not evidence that the value means anything; it is reported as unusable rather than quietly
+dropped.
+
+Both documents carry the retraction where a reader will meet it (`docs/principal_point_method_2026-09-05_r72.md`, and
+the briefing's §4 bullet). Station restored: `MANUAL / HOLD`, `ready`, homed, yaw ≈149°, synthetic source running
+(2385 track sets after the restart). Docs and measurement only; **487 pytest / 57 CTest** stand; nothing signed.

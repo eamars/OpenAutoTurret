@@ -69,3 +69,38 @@ criterion. That is the case for commissioning cx rather than documenting it as a
   gives differences, not absolutes.
 * Nothing here is signed, and the file's own header ("cx/cy are the GEOMETRIC CENTRE BY CONVENTION, not a
   measurement") stays true until a run replaces it.
+
+
+---
+
+## RETRACTED by measurement on 2026-09-05 (round 74). The vertex is NOT identifiable on this rig.
+
+The reasoning above compared the curvature (+18.7%) to the method's noise (8.7%) and concluded "signal clears noise,
+so the vertex is identifiable". That comparison is wrong in kind. cx enters the scale through
+`excess = (u−cx)²/fx`, so it is recovered by a **square root of the excess over fx** — which amplifies scale error
+enormously wherever the excess is small. The identifiability test is the derivative, not a signal/noise ratio.
+
+Measured today on a freshly homed station (`--strip-at-u`, 1 deg steps, `/tmp/r74_u*.log`), and computed from it:
+
+| band | measured px/deg | cx it implies | what an 8.7% scale error does to cx |
+|---|---|---|---|
+| u=960 | 26.02 | 584 **or** 1336 | −410 px |
+| u=1560 | 29.28 | 927 **or** 2193 | −148 px |
+| u=360 | 7.81 | no real root | — (unusable band) |
+
+The direction was right — the edge really does measure a larger scale (29.28 vs 26.02) — and the edge band even lands
+within 1.8% of what the model predicted for cx=960. But the two bands **disagree about cx by hundreds of pixels**, and
+the sensitivity table settles it: at the most favourable band, this rig's own 8.7% scale residual moves cx by
+**148 px**, and reaching ±10 px would need a **0.5%** scale measurement — roughly eighteen times better than the out-
+and-back play of the encoder walk. Beating that with a multi-point fit was not attempted: the residual is partly
+systematic (mechanical play on reversal), which averaging does not remove.
+
+Conclusions that survive: the curvature is real and measurable in sign; `--strip-at-u` is a working capability;
+and the **±2.9° of frame-edge bearing** at stake in a 100 px cx error is still worth fixing. What does not survive is
+that this particular theodolite route can fix it. **The board route in `calibrate_camera_intrinsics.py` — ChArUco
+across ≥8 views, which needs the board placed and moved by hand — is the only path to cx at useful precision on this
+station**, which is what this document said was necessary before I tried to find a cheaper way.
+
+The u=360 band is reported as unusable rather than discarded silently: it read 7.81 px/deg, a third of the base
+scale, which no pinhole produces. The estimator returned a confident number for a band without usable texture; "the
+tool printed a value" is not evidence that the value means anything, and this time the tool did not even print NaN.

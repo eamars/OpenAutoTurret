@@ -63,11 +63,12 @@ The operator's lead criterion — 25 deg in 1.60 s — needs about **15.6 deg/s 
   **Round 72 found that cx does not need the board**: `docs/principal_point_method_2026-09-05_r72.md` works
   out that the angular scale the existing theodolite already measures is a parabola in u whose vertex *is*
   cx, that the model reproduces this station's own 24.22 px/deg measurement to 0.1%, that the curvature at
-  the frame edge is +18.7% — well above the method's worst 8.7% residual, so the vertex is identifiable — and
+  the frame edge is +18.7% — **RETRACTED by measurement in round 74: the curvature is real and its sign was confirmed, but recovering cx from it amplifies scale error through a square root — this rig's 8.7% residual moves cx by ~148 px at the best band, worse than the convention it would replace** — and
   that a 100 px error in cx puts ±2.9° of error on frame-edge bearings, which is what C1 is scored against.
-  What it needs is a `--strip-at-u` option (strip mode currently picks the busiest row/column, which is right
-  for fx/fy and wrong for this fit), runs at u ≈ 360/960/1560, and a quadratic fit. Boresight still needs a
-  surveyed reference: the theodolite measures differences, not absolutes.
+  `--strip-at-u` now exists and the walk was run; the method is what failed. **cx therefore
+  still needs the ChArUco board route** (≥8 views, board moved by hand) — there is no cheap
+  theodolite path after all. Boresight still needs a surveyed reference: the theodolite
+  measures differences, not absolutes.
 * **Real detector**: every centring and head-aim number above is against the synthetic fixture. Plumbing evidence,
   not acceptance evidence.
 * **Hardware acceptance and §24 visual fidelity**: **0 accepted by a named person.** Both counts were
