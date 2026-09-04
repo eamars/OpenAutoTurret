@@ -2991,3 +2991,32 @@ would change if adopted: C4 would become measurable — three segments say the s
 
 Station restored: `MANUAL / HOLD`, `at_ready`, synthetic source running; both runs completed their own cleanup this
 time, which is the difference round 69's crash made visible.
+
+## 2026-09-05, 20:4x — round 71: a permanent guard so that "tests green" can never again mean "the program is broken"
+
+Round 69's lesson deserves more than a memory: 81 tests passed against a probe that could not run, because pytest
+imports the module (skipping the main guard) while the operator runs it as a script. `tools/tests/
+test_probe_module_order.py` now asserts the file's shape — **the main guard must be the last top-level statement** —
+so a def appended after the call site fails the suite instead of shipping. Three tests, no hardware, no subprocess.
+
+**Two of my own mistakes while writing it, both recorded rather than quietly fixed:**
+
+* The first draft's second test resolved every name `main()` loads against the top-level defs. It reported **`zip`
+  as unresolved**, because inside a test module `__builtins__` is a *dict*, so `dir(__builtins__)` gave me an empty
+  builtin set. The checker was measuring its own bookkeeping — round 51's arity checker in a new costume. It was
+  deleted, not tuned: a structural claim ("the guard is last") is what I can actually defend here; a name-resolution
+  claim is what keeps going wrong.
+* Deleting it, I sliced the file at the first occurrence of `if __name__ == "__main__":` — which is **inside that
+  module's docstring**, since the docstring quotes the bug. The slice truncated the file mid-docstring and left an
+  unterminated string literal. An anchor that matches prose is not an anchor. Rebuilt from scratch instead of
+  patching a mangled file, then confirmed by execution.
+
+**Verified by running, not by assertion:** the new file's tests pass, and the full Python suite is green (see the
+commit body for the exact count as reported). C++ untouched. Station untouched: `MANUAL / HOLD`, `at_ready`, synthetic
+source running.
+
+One caveat on last round's numbers, so nobody misreads them: the diagnostic's *peak excursion* is measured over the
+whole hold window, which includes the still-recovering seconds — so **0.818 box heights on the 25 deg dart is a
+recovery-magnitude figure, not a jitter figure**. The jitter figure is the motionless segment's 0.130 box heights.
+The metric's ringing judgement is unaffected (a single crossing is a single crossing), but the amplitude number means
+different things in the two contexts and should be quoted with which one it came from.
