@@ -3692,3 +3692,31 @@ a machine to decide. My job here is to make sure it is not added as a side effec
 Nothing changed in code this round. Blocked-with-decision items right now: this one; the picamera2 AI API for the `rpk`
 detector (item 1); and a physical target in view, without which neither the deadband sizing (item 3) nor any switching
 or roam measurement (items 4, 5) can be taken on real pixels.
+
+## 2026-09-06, 07:0x — round 6: I fixed the thing that was not broken, and the measurement said so before I committed the claim
+
+Hypothesis was specific and cheap to test: `vision/frame_source.py:314` sets `cfg["controls"]["FrameRate"]`, while
+`web/webd/video.py` never named a frame rate at all — so the preview's sensor mode was chosen by size alone, and that
+was my explanation for 10 fps against 15 requested. Applied the same request in `video.py`, guarded the same way the
+vision path guards it, `py_compile` clean, **255 web tests pass**, restarted the daemon, measured 20 s.
+
+**Result: 195 frames in 20.0 s = 9.75 fps.** Before the change it was 200 in 20.0 s = 10.00 fps. Within noise of
+unchanged. **The hypothesis is dead**, and the only thing that would have been worse than measuring it is writing
+"fixed the video frame rate" in a commit message on the strength of a plausible mechanism.
+
+The change itself is harmless and arguably more correct (the file now asks the sensor for the rate it was given, which
+is what it always should have done), so it stays — but it stays **labelled as not the fix**, in this file, not as a
+win.
+
+Surviving hypotheses, for the next pass, with the cheap test for each:
+* **Request held across the encode.** `video.py`'s loop does `capture_request()` → encode → `release()`, and the code's
+  own comment says holding one request starves the pipeline. If encode is ~36 ms at 1080p on top of a ~64.5 ms frame
+  period, the delivered rate lands at 1/(T_frame + T_encode) ≈ **9.7** — which is uncomfortably close to both measured
+  numbers. Test: time the encode around the release, or release before encoding from a copied buffer.
+* **Different mode than the vision path.** Vision's 15.5 fps may come from a different size/format request entirely,
+  not from the FrameRate control. Test: ask the camera what mode each path actually negotiated.
+* **A single-threaded pull loop** that cannot overlap pull and encode.
+
+Two of those predict the same ~10 fps, and they need different fixes, so the next measurement must be encode duration,
+not another guess. That is the pattern this session keeps teaching: the plausible mechanism is the most dangerous
+thing I have, because it reads like an explanation.
