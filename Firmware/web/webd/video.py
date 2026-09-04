@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -150,7 +151,15 @@ class VideoSource:
     # -- lifecycle ----------------------------------------------------------
     def start(self, width: int, height: int, fps: float,
               quality: int) -> VideoState:
-        """Open the camera and begin producing frames (idempotent)."""
+        """Open the camera and begin producing frames (idempotent).
+
+        If the vision daemon is tapping frames out (OTA_VISION_FRAME_TAP, fresh file), the tap is served
+        INSTEAD of opening the camera. That is the whole point: the IMX500 has one owner, and an operator
+        must not have to choose between watching the turret and running the detector.
+        """
+        tap_path = (os.environ.get("OTA_VISION_FRAME_TAP") or "").strip()
+        if tap_path and os.path.exists(tap_path) and (time.time() - os.path.getmtime(tap_path)) < 2.0:
+            return self._start_tap(tap_path, int(width), int(height), float(fps), int(quality))
         with self._lifecycle_lock:
             if self._running:
                 return self.state()
@@ -292,6 +301,76 @@ class VideoSource:
             # One pull iteration costs about a frame period; 3 s is generous and
             # bounded on purpose — a hung join would hang webd's shutdown.
             th.join(timeout=3.0)
+
+    def _start_tap(self, path: str, width: int, height: int, fps: float,
+                   quality: int) -> VideoState:
+        """Serve visiond's tapped frames. No camera is opened, so vision keeps its one owner."""
+        with self._lifecycle_lock:
+            if self._running:
+                return self.state()
+            self._stop_evt.clear()
+            self._first_frame.clear()
+            self._open_error = ""
+            self._recent = []
+            self._arrived = []
+            self._thread = threading.Thread(
+                target=self._tap_loop, args=(path,), name="webd-video-tap", daemon=True)
+            self._thread.start()
+            if not self._first_frame.wait(timeout=5.0):
+                self._join_thread()
+                msg = self._open_error or (
+                    f"vision frame tap at {path} is not producing; is visiond running with "
+                    "OTA_VISION_FRAME_TAP set to the same path?")
+                self._open_error = msg
+                self._state = VideoState(error=msg)
+                return self.state()
+            self._running = True
+            self._state = VideoState(
+                running=True, width=width, height=height, fps=float(fps),
+                quality=int(quality), camera="vision-tap")
+            return self.state()
+
+    def _tap_loop(self, path: str) -> None:
+        """Publish the newest tapped JPEG into the same slot the camera path writes.
+
+        Keyed on mtime rather than a poll-and-decode: the tap file is replaced atomically, so a changed mtime means a
+        complete frame, and a reader can never catch half a JPEG.
+        """
+        last_mtime = 0.0
+        missing = 0
+        while not self._stop_evt.is_set():
+            try:
+                st = os.stat(path)
+            except OSError:
+                missing += 1
+                # The tap can only vanish if visiond died or the path is wrong. Say so after ~10 s rather than
+                # serving a frozen frame forever, which is how a dead camera gets mistaken for an idle room.
+                if missing > 200:
+                    self._open_error = f"vision frame tap vanished: {path}"
+                    return
+                self._stop_evt.wait(0.05)
+                continue
+            missing = 0
+            if st.st_mtime != last_mtime:
+                last_mtime = st.st_mtime
+                try:
+                    with open(path, "rb") as f:
+                        jpeg = f.read()
+                except OSError as e:
+                    self._open_error = f"vision frame tap unreadable: {e}"
+                    return
+                if jpeg:
+                    now = time.monotonic()
+                    with self._frame_lock:
+                        self._latest = jpeg
+                        self._seq += 1
+                        self._ts = now
+                        self._count += 1
+                    self._recent.append(now)
+                    self._arrived.append(now)
+                    if not self._first_frame.is_set():
+                        self._first_frame.set()
+            self._stop_evt.wait(0.02)
 
     def _pull_loop(self, cam, Image, quality: int) -> None:
         """Capture thread: pull completed requests, publish JPEGs at the cap.

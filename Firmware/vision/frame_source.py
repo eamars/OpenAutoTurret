@@ -56,6 +56,9 @@ class FrameCapture:
     image: Optional[bytes] = None  # optional raw image (not sent on control IPC, §6.1)
 
 
+from .frame_tap import publish_env
+
+
 class FrameSource(Protocol):
     """Interface for frame capture. Real (Picamera2) and synthetic both implement it."""
 
@@ -403,6 +406,12 @@ class Picamera2FrameSource:
         dets = self._parse_detections(meta)
         if self._orientation != "none":
             arr = ic.apply_orientation_image(arr, self._orientation)
+            # Share the sensor: the pane reads these same pixels off the tap, so the operator watches exactly
+            # what the detector saw instead of a second, differently-timed stream. Never fatal to detection.
+            try:
+                publish_env(arr)
+            except Exception as e:  # noqa: BLE001 - a broken tap must not stop the pipeline
+                print(f"vision: frame tap raised: {type(e).__name__}: {e}")
             dets = [self._reorient(d) for d in dets]
             meta["ImageOrientationApplied"] = self._orientation
 
