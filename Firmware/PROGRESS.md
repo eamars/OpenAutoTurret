@@ -3373,3 +3373,11 @@ Verification: greps above; `install_station.py` has no `blackbox`/`BLACKBOX` occ
 the empty default; `tools/tests/test_install_station.py` asserts unit contents elsewhere but nothing here. Docs only —
 nothing enabled, no unit changed, no disk side effect introduced without a human deciding. Station untouched;
 **487 pytest / 57 CTest** stand. Nothing signed.
+
+### Correction, same round — the numbers I typed into the entry above are not the numbers the tool printed
+
+Measured: **128 scenes, 107 KiB total, 856 B each.** The entry above says "108 KiB total, ~855 B each" — written from
+reading the output rather than copying it. The commit message carries the measured string because that one was built
+from the shell variable, which is the discipline that works: **let the measurement travel into the text, do not
+retype it.** Immaterial to the finding; material to the habit, which is the entire subject of rounds 42, 54, 63 and
+65 in this file.
