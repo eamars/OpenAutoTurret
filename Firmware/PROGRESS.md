@@ -3896,3 +3896,36 @@ booked as a win until those two numbers converge.
 
 No code changed this round (no instrumentation edits were needed once the direct pricing answered it — the two brackets
 I had started to place were never written, because the assert-before-write shape meant a failed anchor wrote nothing).
+
+## 2026-09-06, 10:0x — round 12: AUTO_ROAM measured on the real axis — and round 1's hypothesis confirmed to 0.3 degrees
+
+Entered AUTO_ROAM through `/api/command` (`{"command":"set_mode","arg":"AUTO_ROAM"}`), sampled at ~10 Hz for 55 s
+(536 samples), with a `finally` that stops motion and restores the mode no matter how the script dies. Raw rows:
+`/tmp/r88_roam.jsonl`.
+
+* **Sweep: 108.82 deg to 188.77 deg, span 79.95 deg, centre 148.79 deg.**
+* **Reference rate: median 10.00, p95 10.00, max 10.00 deg/s** — constant to telemetry resolution.
+* **7 turnarounds**, phases `AUTO_ROAM/SWEEP` and `AUTO_ROAM/TURNAROUND`, **safety `ALLOW` throughout, 0 deadline misses**.
+
+**Round 1's hypothesis — "the sweep is centred on wherever the station became ready ± the 45 deg default span, not on a
+named sector" — is confirmed: centre 148.79 deg against a ready yaw measured at 149.07/149.21 deg earlier this
+session, i.e. 0.3 deg apart.** The observed extremes sit ~4.8 deg inside the low bound and ~5.2 deg inside the high
+bound of ready±45, which is what the braking inset (soft margin + stop margin) predicts, so the envelope is behaving,
+not misbehaving.
+
+**What that means for "the roam range seems strange":** the range is *not* wrong — it is the **default**, and it is an
+accident of where the station happened to home and become ready. The `auto_roam: yaw_min_deg 100 / yaw_max_deg 190`
+sector in `turret.yaml` is **commented documentation** (round 1), so nothing names a region and `search_span_rad = 45 deg`
+governs. It lands near that documented sector only because the ready yaw sits near its middle. If the operator wants a
+specific sector, it must be **written uncommented into the config** — and per §72 naming can only narrow the sweep,
+never widen it, so it is safe to ask for.
+
+**And for "the motion seems sloppy": the sweep speed is not the culprit** — 10.00 deg/s flat with zero deadline misses is
+about as clean as telemetry can show. What is left, in order of likelihood now: the **turnaround behaviour** (7
+reversals in 55 s with a 0.25 s dwell, so the turret is turning around every ~8 s, which reads as restless), the
+**preview stutter** measured at 10 fps of 15 (rounds 6–11, the axis being 0.0877 deg/0 reversals in round 2), or the
+pitch axis during the sweep, which I did not sample this run and will not claim about.
+
+One honest gap: my restore sequence left the station in `MANUAL / HOLD` on the first attempt and the mode was set back
+to `AUTO_TRACK` afterwards — the check above shows where it actually ended up, and "restore the mode" belongs in the
+same `finally` as the measurement, which is where it now is.
