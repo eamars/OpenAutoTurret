@@ -2707,3 +2707,20 @@ Acceptance therefore stands where round 40 left it, on trustworthy instruments t
 ceiling allows, the ceiling is **10.0 deg/s**, and the lead criterion wants ~15.6 deg/s average. Raise
 `tracking.hold_speed_deg_s`, size the dart to 10 deg/s, or accept C3 as documented consequence — unmade, and
 unsigned by any named person. Station restored: MANUAL/HOLD, READY, synthetic source running. **473 pytest / 57 CTest.**
+
+## 2026-09-05, 14:5x — round 61: the sign-off package caught up with five rounds of corrections
+
+The instrument work of rounds 47 and 53-60 had outrun the document the operator actually reads: its dart table still
+quoted **C2 = 2.85 s** as if it were a constant, **C3 = -11.6 deg** likewise, and the round-47 addendum still warned
+that **C6** was measured against the wrong ceiling - true when written, superseded by round 49 and finished by
+round 59. Fixed with a read-first pointer under the title (placed by finding the top-level heading in code, not by
+guessing its text) and a closing addendum giving the corrected picture: C1 PASS on anchor and declared box; C2 FAIL
+at 2.27-2.34 s of which a reproducible **1.61 s is baseline that already breaches the bar**; C3 FAIL, sign stable,
+**magnitude 4.7-11.9 deg across five runs**; C4 invalid, **floor 11**; C5a PASS; C5b FAIL and **validated** against
+a 4.2 deg/s^3 noise floor; **C6 PASSES - 148 moving samples, max 10.0 deg/s against a 10.0 ceiling, 0 over**, the
+earlier failures having been two defects in the tool rather than in the station.
+
+Left exactly as disqualifying as it was: **no item accepted by a named person** - 16 visual and 30 system items
+unsigned - the principal point still a convention, boresight still uncommissioned. Docs only; station untouched
+(MANUAL/HOLD, READY, synthetic source running); web suite 250 pytest green, 473 full-suite and 57 CTest standing
+from rounds 59-60.
