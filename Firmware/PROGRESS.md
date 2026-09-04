@@ -4200,3 +4200,46 @@ another test bug worth remembering (the 6 near-zero samples are the honest signa
 
 **Also corrected:** the station again ended at `MANUAL / HOLD` after the `finally`, because my restore issued MANUAL then
 AUTO_TRACK and I read the state too eagerly. Restored and re-verified in this entry's commit.
+
+## 2026-09-06, 13:3x — round 18: achieved-motion baseline on the real axis — the yaw trails its reference by 3.6 degrees at 10 deg/s
+
+1501 samples over 50 s of AUTO_ROAM (`/tmp/r98_follow.json`), safety `ALLOW` throughout, no aborts. Telemetry publishes
+`q_ref_yaw_rad`, `q_ref_rate_yaw_rad_s` **and** `q_ref_accel_yaw_rad_s2`, so following error and commanded acceleration
+are read directly rather than reconstructed.
+
+**Trustworthy (direct subtraction / published fields):**
+
+| metric | value |
+|---|---|
+| following error, **SWEEP** | p50 **3.629°**, p95 **4.274°**, max **4.617°** |
+| following error, **TURNAROUND** | p50 **1.350°**, max **1.776°** |
+| signed mean error over SWEEP | **+0.190°** |
+| commanded acceleration | p50 **0.0**, p95 **23.6**, max **60.0 deg/s²** |
+
+**The finding: the yaw axis trails its reference by ~3.6° while sweeping.** At 10.00 deg/s that is **~0.36 s of travel**
+continuously lost — the axis is not keeping up with a reference it is nominally tracking. It shrinks to 1.35° once the
+axis stops (TURNAROUND, settling), which is the signature of a **velocity-proportional lag** — a following loop with no
+(or negligible) velocity feed-forward. The signed mean of only +0.19° *confirms* this rather than contradicting it: a
+lagging signal averages to about zero over a symmetric back-and-forth sweep.
+
+Why this matters for the modes: the sweep **extremes are reached ~0.36 s late**, the planner's "arrived" test is
+evaluated against that same reference, and in AUTO_TRACK the same lag means the reticle sits ~3.6° behind a target the
+turret is following at rate — which is exactly the kind of thing an operator reads as the tracking being "not good",
+entirely independent of any jitter. **Baseline before any change: 3.629° p50 / 4.274° p95.**
+
+**And corroboration for round 17's retraction:** the *published* commanded acceleration (p95 **23.6**, max **60.0
+deg/s²**) agrees with my independent finite-difference estimate of reference jerk (p95 21.1, max 75.8). Two different
+measurements, same story — **the reversal is shaped**, and there is still no unbounded-jerk corner.
+
+**What I refuse to report as a finding: the achieved-velocity figures.** My 5-point finite difference gave median
+38.75 deg/s and max 63.40 deg/s on a sweep whose reference is 10.00 deg/s — physically impossible. The cause is my own
+estimator: telemetry arrives unevenly, and dividing an encoder LSB of 0.02177° by an occasional 5 ms gap manufactures
+huge velocities. The sign-change count (8) is roughly the right order for the number of reversals, but I am not booking
+any achieved-velocity, achieved-acceleration or achieved-jerk number until I resample onto a uniform grid or fit over a
+window (Savitzky-Golay) and **sanity-check that the median lands near the 10.00 deg/s the reference says it must.**
+Reporting 38.75 would have been the fabricated-number habit wearing a different hat.
+
+**Next, on the same metric so before/after is comparable:** a velocity feed-forward term in the yaw position loop is
+the textbook answer to a velocity-proportional lag, and it is testable with exactly these numbers — target following
+error p50 well under 3.629° at the same 10 deg/s, with no overshoot introduced at the reversal. That is a controller
+change, so it goes default-off with a config key and lands only if the measured error actually moves.
