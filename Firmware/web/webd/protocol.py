@@ -132,8 +132,18 @@ class Telemetry:
     # not error here — they stop arriving, which is a much worse failure to diagnose.
     # §80: a preserved scene. The id changes only when the station stopped believing what
     # it was doing; the dict is that instant, and webd is what writes it to disk (see
-    # controld_client). Absent when nothing has gone wrong since controld started.
+    # web/webd/blackbox.py - not controld_client, which the first version of this note named; the daemon
+    # writes it precisely so the 5 ms control thread never touches a disk). Absent when nothing has
+    # gone wrong since controld started.
     blackbox_capture_id: int = 0
+    # `blackbox` is the archived scene from §80, carried whole. One field inside it deserves a warning at
+    # the boundary, because nothing renders it today and someone adding a drawer will not think to look:
+    # for every capture written before the control_loop.cpp hoist of round 76, `safety_action` inside this
+    # dict is the PREVIOUS cycle's value - and since §80 preserves on the edge into unsafe, that previous
+    # value is by construction the last permissive one (all 98 BRAKE-in-hold artifacts on this station say
+    # ALLOW). Captures taken after the fix are correct. The panel itself is unaffected today: hud.py reads
+    # the LIVE t.safety_action, never t.blackbox.safety_action. If a drawer ever shows this dict, show the
+    # capture id or the fix date alongside it, or it will re-tell the 98 interventions as 98 non-events.
     blackbox: dict = field(default_factory=dict)
     event_generation: int = 0
     events: list = field(default_factory=list)

@@ -3312,3 +3312,37 @@ the live panel path is unaffected because the assignment precedes publish — th
 Docs only this round. Station verified healthy and untouched: `MANUAL / HOLD`, `at_ready`, `safety_action ALLOW`,
 `control_deadline_misses 0`, `telemetry_stale False`, source running. **487 pytest / 57 CTest** stand from round 78.
 Nothing signed.
+
+## 2026-09-06, 01:1x — round 80: the stale-action chain, end to end — and one wrong conclusion of my own, caught before it was written down
+
+Both checks I had left open, settled: **no live Brake edge since round 76's fix** (still 128 scenes, newest still
+`blackbox_0167`), so the station-side confirmation stays open until an edge happens naturally; and **the panel does not
+render the archived field** — `hud.py:135,877` read the **live** `t.safety_action`, never `t.blackbox.safety_action`.
+But the bridge does carry the whole archived dict (`protocol.py:137`), which is where I put the warning rather than in
+a document: nothing renders it today, and whoever adds a drawer will not think to look. The warning names the
+condition (captures before the round-76 hoist), the direction of the error (always the last permissive value), the
+count on this station (98), and the escape (show the capture id beside it).
+
+**Then I got one step wrong and corrected it in the same round.** `protocol.py`'s comment said webd writes the scene
+files "(see controld_client)". My grep found no blackbox code in `controld_client.py` and I concluded the comment's
+*claim* was false. It was only its *pointer* that was wrong: **`web/webd/blackbox.py`** is the writer, with its own
+tests. A grep over one named file answered "is it that file?" and I let it answer "is the claim true?" — round 42's
+malformed-pipeline error with a narrower beam.
+
+Reading the writer gave me the chain properly, and it is better than my earlier account:
+
+* controld **captures** the scene on the §80 edge and publishes it in telemetry;
+* **webd writes** it — deliberately, in the writer's words, because "writing a file is an unbounded-time operation,
+  and the thread that owns a 5 ms deadline must not do the disk's work";
+* the filename is `blackbox_<id>_<reason>.json`, the slug taken from `body["reason"]`, which is composed at the edge
+  from the **fresh** decision — while the body's `safety_action` came from the snapshot that had not been updated yet.
+  **That is the whole contradiction in one line: the filename was always fresh and the field inside was always stale**,
+  which is why 98 files were named `BRAKE_in_hold` while saying `ALLOW` inside.
+* also from that header, a limitation the operator should know when relying on artifacts: if **webd is down** when the
+  fault happens, the scene lives only on the socket stream and in controld's memory until replaced — "a station that
+  needs the artifact guaranteed should run webd as a supervised service, not as something started by hand." My own
+  webd has been started by hand all session, which is worth saying out loud.
+
+Changed: the warning comment at the bridge boundary, and the wrong module pointer in the comment above it. Comment-only
+— `py_compile` clean, **250 web tests pass**, no behaviour touched, station untouched. **487 pytest / 57 CTest** stand.
+Nothing signed.
