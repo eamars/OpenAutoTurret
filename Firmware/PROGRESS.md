@@ -3254,3 +3254,35 @@ Two smaller lessons, both mine, both about silence:
 
 Tree restored, **57/57 CTest** green again, round 76's fix intact and in the running daemon. No behavioural change
 this round; station untouched. Nothing signed.
+
+## 2026-09-05, 00:1x — round 78: the ordering fix is now verified by a test that demonstrably fails without it
+
+Round 77 left the fix code-evident but unverified, and its attempted test dead on arrival. The blocker was that a
+natural unsafe edge never appears in steady post-homing cycles. `SimMotorBackend` has had the hook all along —
+`set_feedback_ok(AxisId, bool)` (`sim_motor_backend.hpp:32`, surfaced to the loop as `has_feedback` at line 108),
+documented in that file's own header as "test hooks (stale feedback, faults, temperature…)".
+
+`BlackBox.ABrakeEdgeArchivesTheActionThatActuallyCausedIt` silences one drive and lets the **real caller** take the
+edge. What the station-side mechanism turns out to be, from the log the test itself printed:
+
+    supervisor: BRAKE reason='stale or missing motor feedback' overrun_us=0 misses=0
+    black-box scene preserved (id 2): BRAKE in hold — mode MANUAL phase hold safety BRAKE
+
+That last line is the fix working: the scene is preserved for a BRAKE decision and **records BRAKE**, where the
+station's 98 artifacts recorded ALLOW against the same reason.
+
+**Sensitivity proved rather than argued** — the standard of this whole stretch. The hoist was temporarily removed,
+the file rebuilt, and the same test **FAILED**; the file was restored with `git checkout` (the test itself is a
+different, uncommitted file, so it survived), rebuilt, and the test **passed** again. A test that cannot fail is the
+failure mode I have been writing about since round 56; this one was shown failing on exactly the bug it guards.
+
+**Coverage confirmed, not assumed:** `ctest -N` lists 57 entries because entries are **per test binary**, not per
+gtest case — so the count staying at 57 said nothing about whether the new case ran. It does: `ctest -R control_loop -V`
+printed `ABrakeEdgeArchives` in its output. (The binary happens to contain 57 gtest cases too, which is a coincidence
+that would have hidden a missing registration; it is why I looked.) Full suite green after restoring the fix —
+**57/57 CTest**, Python see the commit body — and the fix remains the committed one from round 76, unchanged.
+
+Station untouched this round (nothing needed moving): `MANUAL / HOLD`, `ready`, homed, synthetic source running. The
+station-side check is still open in the mundane sense — no Brake edge has occurred on the live daemon since the fix,
+so `blackbox_0167` is still the newest artifact — but the mechanism is now covered deterministically in the suite,
+which is where it belongs. Nothing signed.

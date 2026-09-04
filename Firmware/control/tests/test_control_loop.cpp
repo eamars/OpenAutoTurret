@@ -2064,3 +2064,37 @@ TEST(ModeSwitchingUnderMotion, NoImpossibleStepAndNoIntentSurvivesItsMode) {
   }
 }
 
+
+// Round 76/77, closed properly. §80 preserves a scene on the EDGE into unsafe, and until round 76 the snapshot's
+// safety_action was assigned below that call - so every Brake scene archived the previous (safe) cycle's ALLOW,
+// which is what 98 of 98 artifacts on the station say. The neighbouring test calls preserve_scene() by hand and so
+// cannot fail on caller-side ordering; the round-77 attempt to wait for a natural edge failed because steady
+// post-homing cycles never lose feedback. SimMotorBackend::set_feedback_ok() is the documented stale-feedback hook,
+// so this drives the real edge through the real caller.
+TEST(BlackBox, ABrakeEdgeArchivesTheActionThatActuallyCausedIt) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const uint64_t before = h.snap().blackbox_capture_id;
+
+  h.sim->set_feedback_ok(AxisId::Yaw, false);   // the drive stops answering: the supervisor must react
+  for (int i = 0; i < 60 && h.snap().blackbox_capture_id == before; ++i) {
+    h.step(1);
+  }
+  h.sim->set_feedback_ok(AxisId::Yaw, true);
+  h.step(1);                                    // the capture is published the cycle after it is taken
+
+  const auto snap = h.snap();
+  ASSERT_GT(snap.blackbox_capture_id, before)
+      << "no unsafe edge was taken while the drive was silent for 60 cycles; if the supervisor "
+         "genuinely ignores lost feedback here, that is itself the finding, and this test must "
+         "not be left asserting nothing";
+  const std::string reason(snap.blackbox.reason);
+  const std::string action(snap.blackbox.safety_action);
+  ASSERT_FALSE(reason.empty());
+  ASSERT_FALSE(action.empty());
+  // The reason is composed as "<action> in <phase>" from the decision that triggered the capture, so the record's
+  // own action field must be that prefix. Pre-fix this read ALLOW against a BRAKE reason.
+  EXPECT_EQ(reason.rfind(action, 0), 0u)
+      << "the preserved scene contradicts the decision that preserved it: reason='" << reason
+      << "' but safety_action='" << action << "'";
+}
