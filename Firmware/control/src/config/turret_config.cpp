@@ -434,6 +434,8 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
                                         0.0, warn));
     out.auto_track_track_on_acquire_ms = static_cast<int64_t>(opt_double(
         at, "track_on_acquire_ms", "v3.auto_track.track_on_acquire_ms", 0.0, warn));
+    out.auto_track_position_lead_s =
+        opt_double(at, "position_lead_s", "v3.auto_track.position_lead_s", 0.0, warn);
     out.auto_track_deadband_deg =
         opt_double(at, "deadband_deg", "v3.auto_track.deadband_deg", 0.0, warn);
     out.auto_track_deadband_release_deg = opt_double(at, "deadband_release_deg",

@@ -251,6 +251,7 @@ struct V3Config {
   // a station that never names these keys aims exactly as it did before they existed.
   int64_t auto_track_roam_on_loss_ms = 0;    // item 4: AUTO_TRACK -> AUTO_ROAM, 0 = never
   int64_t auto_track_track_on_acquire_ms = 0;  // item 4: AUTO_ROAM -> AUTO_TRACK, 0 = never
+  double auto_track_position_lead_s = 0.0;  // item 2: seconds of position lead, 0 = off
   double auto_track_deadband_deg = 0.0;
   double auto_track_deadband_release_deg = 0.0;
   float auto_track_high_min = 0.0f;

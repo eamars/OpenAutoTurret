@@ -2158,3 +2158,38 @@ TEST(AimDeadband, InvertedThresholdsAreClampedAndReportedNotHidden) {
   EXPECT_TRUE(d.config_clamped);
   EXPECT_DOUBLE_EQ(a, 1.0);   // still held: a bad pair must not silently stop holding
 }
+
+// ---------------------------------------------------------------------------
+// Drive-mode item 2: the position lead (position_lead.hpp). Direct tests of the helper, for the same reason as the
+// deadband ones: the thing under test is an arithmetic property, and a loop-level test would spend its budget proving
+// a cycle ran. The measured motivation is p50 3.628 deg of shortfall at 10 deg/s (PROGRESS rounds 18-19).
+// ---------------------------------------------------------------------------
+
+TEST(PositionLead, DisabledReturnsTheCommandBitForBit) {
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.234, 0.175, 0.0, -3.0, 3.0), 1.234);
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.234, 0.0, 0.0, -3.0, 3.0), 1.234);
+}
+
+TEST(PositionLead, NothingIsLedAtASimpleStop) {
+  // Property 1. A hold, a park and every idle cycle must be untouched, or the lead would creep past what it stopped on.
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(2.000, 0.0, 0.25, -3.0, 3.0), 2.000);
+}
+
+TEST(PositionLead, LeadIsProportionalToRateAndPointsForward) {
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.0, 0.17453292519943295, 0.2, -3.0, 3.0),
+                   1.0 + 0.2 * 0.17453292519943295);
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.0, -0.17453292519943295, 0.2, -3.0, 3.0),
+                   1.0 - 0.2 * 0.17453292519943295);
+}
+
+TEST(PositionLead, ALeadNeverCommandsBeyondASoftLimit) {
+  // Property 2, and the reason it exists: soft limits are a safety boundary and 111.18 gives the envelope the final
+  // word on position. A huge closing rate must not push the command past it.
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(2.9, 10.0, 0.5, -3.0, 3.0), 3.0);
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(-2.9, -10.0, 0.5, -3.0, 3.0), -3.0);
+}
+
+TEST(PositionLead, InvertedLimitPairFallsBackToTheBareCommand) {
+  // A mis-loaded limit pair must degrade to today's behaviour, not throw or clamp to nonsense on the control thread.
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.5, 0.2, 0.25, 3.0, -3.0), 1.5);
+}

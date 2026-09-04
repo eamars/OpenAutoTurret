@@ -62,6 +62,27 @@ schema_version: 1
   # authority over every switch - safety can still take the mode away.
   # roam_on_loss_ms: 5000
   # track_on_acquire_ms: 1000
+  # Drive-mode item 2 - POSITION LEAD, opt-in, default 0 = OFF (the commanded position is the reference,
+  # exactly as before this key existed).
+  #
+  # Normal motion commands the DRIVE a position plus a speed limit (control_loop.cpp:1085), so the CyberGear
+  # closes its own position loop and controld cannot reach that loop's gain - the only position-gain-looking
+  # register in this codebase is Reg::MechPos, a read-back. Measured consequence on this station: while
+  # sweeping at 10.00 deg/s the axis trails its commanded position by p50 3.628 deg / p95 4.274 deg, sign
+  # following the direction of travel, zero at rest. This asks for where the reference is going instead of
+  # where it is, so the drive's own lag stops showing up as a constant shortfall.
+  #
+  # Two properties are enforced in code (position_lead.hpp), not by this comment: NO lead at zero rate, so a
+  # hold, a park and every idle cycle are bit-identical and it cannot creep past what it stopped on; and the
+  # command is CLAMPED into the soft limits, so a lead can never push past a safety boundary - the envelope
+  # keeps its final word (111.18). The rate estimate is additionally capped by the commanded speed limit, so a
+  # reference step cannot manufacture a lead.
+  #
+  # Start small. The measurement brackets the needed lead at 0.173-0.36 s, which at 10 deg/s is 1.7-3.6 deg;
+  # 0.1 s is deliberately about a third of that, because an overshoot at the turnaround is worse than the
+  # shortfall it removes. Judge it on the same numbers: following error p50 (was 3.628) and no new overshoot
+  # past the sweep extremes.
+  # position_lead_s: 0.1
   # deadband_deg: 0.1
   # deadband_release_deg: 0.15
 #     coast_ms: 300                   # §20: authority fades this long after the last frame

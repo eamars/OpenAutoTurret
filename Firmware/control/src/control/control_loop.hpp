@@ -55,6 +55,7 @@
 #include "tracking/target_measurement.hpp"
 
 #include "control/aim_deadband.hpp"
+#include "control/position_lead.hpp"
 
 namespace ota {
 
@@ -170,6 +171,12 @@ class ControlLoop {
     // (auto_track_reacquire_window_ms, 3000 by default), an already-tuned figure rather than a fresh guess.
     int64_t auto_roam_on_loss_ms = 0;        // AUTO_TRACK -> AUTO_ROAM after this long continuously Lost
     int64_t auto_track_on_acquire_ms = 0;    // AUTO_ROAM -> AUTO_TRACK after this long with a target held
+    // Drive-mode item 2: how many seconds ahead of the reference to ask the drive for, while the reference is
+    // moving. 0 = off (default): the commanded position is the reference, exactly as before this key. The
+    // measured shortfall it exists to reduce is p50 3.628 deg at 10 deg/s (PROGRESS rounds 18-19); a lead of
+    // 0.173-0.36 s is the range that measurement brackets. See position_lead.hpp for the two properties that
+    // keep it from becoming a safety problem: no lead at zero rate, and never past a soft limit.
+    double position_lead_s = 0.0;
     double auto_track_deadband_deg = 0.0;
     double auto_track_deadband_release_deg = 0.0;
   };
@@ -579,6 +586,10 @@ class ControlLoop {
   int64_t loss_since_ns_ = 0;
   int64_t acquire_since_ns_ = 0;
   int64_t last_auto_switch_ns_ = 0;
+  // Reference-rate estimate for the position lead (drive-mode item 2). One filter state per axis.
+  double lead_rate_[2] = {0.0, 0.0};
+  double lead_prev_q_[2] = {0.0, 0.0};
+  int64_t lead_prev_ns_[2] = {0, 0};
   void evaluate_auto_switch(TimeNs now_ns);
   mutable bool mode_hold_latched_ = false;
   mutable double mode_hold_yaw_rad_ = 0.0;

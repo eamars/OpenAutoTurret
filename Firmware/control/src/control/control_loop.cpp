@@ -1082,7 +1082,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         else
           backend_->keepalive(a);
       } else {
-        backend_->command(a, qr, ls);
+        // Drive-mode item 2: ask the drive for where the reference is going, not where it is, while it is moving.
+        // Default off. The hold and emergency branches above are NOT led - they set qr from measured feedback or from
+        // the emergency-stop target, and leading either of those would be aiming at a safety manoeuvre.
+        double cmd_pos = qr;
+        if (cfg_.position_lead_s > 0.0) {
+          const double dt = (lead_prev_ns_[i] > 0 && now_ns > lead_prev_ns_[i])
+                                ? static_cast<double>(now_ns - lead_prev_ns_[i]) * 1e-9
+                                : 0.0;
+          if (dt > 1e-6) {
+            double inst = (qr - lead_prev_q_[i]) / dt;
+            // A reference STEP (mode change, re-seed, a fresh waypoint) must not manufacture a lead: the axis is
+            // never asked to cover ground faster than the speed limit it has just been given.
+            if (ls > 0.0) inst = std::clamp(inst, -ls, ls);
+            lead_rate_[i] = 0.7 * lead_rate_[i] + 0.3 * inst;
+          } else {
+            lead_rate_[i] = 0.0;  // no elapsed time, no rate claim
+          }
+          cmd_pos = apply_position_lead(qr, lead_rate_[i], cfg_.position_lead_s,
+                                        limits_[i].q_soft_min_rad, limits_[i].q_soft_max_rad);
+        }
+        lead_prev_q_[i] = qr;
+        lead_prev_ns_[i] = now_ns;
+        backend_->command(a, cmd_pos, ls);
       }
     }
   }

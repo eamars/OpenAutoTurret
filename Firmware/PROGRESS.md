@@ -4400,3 +4400,42 @@ Three consequences, in order of usefulness:
 
 Stated as inference, not proof: `qr`'s definition was not traced this round; what is proven is the call signature
 (`command(axis, target_rad, speed_rad_s)`) and that it is the only actuation call outside bootstrap, homing and park.
+
+## 2026-09-06, 16:0x — round 23: position lead implemented, default-off, 5 new tests, CTest 57/57 — the after-measurement is what's left
+
+Took the declared default path from round 22 (lead `qr`, because the envelope keeps the final word on position).
+
+**New `control/src/control/position_lead.hpp`** — `apply_position_lead(cmd, rate, lead_s, soft_min, soft_max)`, with two
+properties stated as the reason the file exists rather than as comments:
+* **No lead at zero rate** — a hold, a park, every idle cycle is bit-identical to today, and it cannot creep past what
+  it stopped on.
+* **Never commanded past a soft limit** — the result is clamped into `[q_soft_min_rad, q_soft_max_rad]`; a
+  mis-loaded (inverted) limit pair falls back to the bare command rather than throwing on the control thread.
+Plus a third guard in the caller: the rate estimate is capped by the commanded speed limit `ls`, so a **reference step**
+(mode change, re-seed, a fresh waypoint) cannot manufacture a lead.
+
+**Wired at the actuation site** (`control_loop.cpp:1085`) as `qr → cmd_pos`, deliberately **after** the hold and
+emergency branches that overwrite `qr` with measured feedback or the emergency-stop target — leading a safety manoeuvre
+would be wrong, and those paths are untouched. Config `auto_track.position_lead_s`, default **0**, plumbed the way the
+deadband is (V3Config → parse → `station_wiring.cpp`).
+
+**Measured:** `controld` builds clean; **`PositionLead` 5/5 pass** (disabled returns the command bit-for-bit; nothing led
+at a stop; lead proportional and forward-pointing both ways; `2.9 + huge rate` clamps to exactly `3.0` and
+`-2.9 - huge` to `-3.0`; inverted limits fall back); **CTest 57/57** with the test binary rebuilt from fresh objects —
+the lesson from round 15b applied on purpose.
+
+**Sizing, deliberately conservative:** the measurement brackets the needed lead at **0.173–0.36 s**, which at 10 °/s is
+1.7–3.6°, and the documented first value is **0.1 s** — about a third of it, because **an overshoot at the turnaround is
+worse than the shortfall it removes.**
+
+**What is NOT claimed:** no after-number yet. The metric is defined and the before-number is fixed (**p50 3.628° /
+p95 4.274° at 10.00 °/s**, round 18), but measuring the improvement needs the key **enabled**, which means editing
+`turret.yaml` and **restarting the live `controld`**. I have not done that unilaterally: it changes pointing behaviour on
+a station that is running, and unlike the deadband and the hand-off — which are inert until enabled — this one takes
+effect the moment it is switched on, with the axis moving up to ~1° further along its sweep than it does today. The soft
+clamp means it cannot cross a limit, but "cannot cross a limit" is not the same as "the operator wants it moving
+differently." **That trial is one command away and needs a yes.**
+
+One process note on my own tooling: my build verification this round was `grep -c "Linking|error:"` returning **0** on a
+second invocation, which looks alarming and simply meant controld was already up to date from the first invocation
+(which printed no errors). Verified by the fact that the five new tests exist and ran.
