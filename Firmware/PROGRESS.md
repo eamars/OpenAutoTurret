@@ -4160,3 +4160,43 @@ sweep, and reversal count.
 `docs/` is the closest thing), the two strongest sources are behind snippets rather than full text, and **nothing here
 is measured on this turret**. It says where to look and what to try, and it demotes a guess I might otherwise have
 shipped: I came in tempted to put an S-curve on tracking, and the delay literature is the reason not to.
+
+## 2026-09-06, 13:0x — round 17: **I retract round 16's turnaround claim**, and the file I blamed was the retired one
+
+Measured the roam reference again at ~19 Hz effective telemetry for 50 s (943 samples, `/tmp/r97_roam_signed.json`), this
+time keeping the **sign** of the reference rate and finite-differencing it — which is the whole point, because in round 12
+I had taken `abs()`.
+
+**Results:** signed reference rate spans **−10.00 … +10.00 deg/s**; **reference jerk median 0.0, p95 21.1, max 75.8
+deg/s²**; 6 near-zero-rate samples at the reversals.
+
+**That contradicts what I wrote yesterday:** *"the 7 reversals are trapezoidal by construction… each turnaround is an
+acceleration step — Finding 1's exact corner."* An instantaneous +10 → −10 reversal at a 50 ms sample gap would show a
+reference jerk of order **400+ deg/s²**. The observed peak is **75.8**, typical **21.1**, with the rate passing through
+zero — so **the reversal is already rate-shaped somewhere downstream of the planner**, and there is no unbounded-jerk
+corner to fix. **Retracted.** Had I acted on round 16's inference I would have "fixed" a step that measurement says is a
+ramp — and then a jerk-limited profile would have been sold as a win with nothing to compare against.
+
+**Second error in the same record:** I attributed the behaviour to `search_planner.hpp`. That planner is **retired** —
+it survives in `control_loop.cpp` only inside a comment at :154. The live planner is **`mode/roam_planner.hpp`**, whose
+`v_max_rad_s = 0.175` (exactly the 10.00 deg/s measured) and `turnaround_dwell_rad = 0.008` are the real parameters.
+Both errors were the same habit: reasoning from the file I had just read instead of the file that is actually running.
+
+**What the code actually does**, now read rather than assumed: `RoamPlanner` names a **waypoint**
+(`IntentType::JointPosition`, :312) and the intent carries the **roam ceiling**; the safety envelope has the final word
+on rate *and* position (§111.18). So the shaping is done downstream of the planner by the reference/servo layer, which is
+why the jerk is finite. The `turnaround_dwell_rad = 0.008` (0.46 deg) and the settle check are deliberately there —
+:94-95: *"a jittery feedback signal cannot make the turret oscillate around the turnaround point at full rate."*
+
+**What that leaves for "sloppy", now that the reference is exonerated:** (a) the **axis actually following** that
+reference through the reversal — I have measured the *reference* jerk, not the achieved jerk, and those are different
+quantities; (b) the **dwell pause** at each end, which is by design and reads as hesitation; (c) the **preview stutter**
+(10 of 15 fps, rounds 6-11), which remains the likeliest thing an operator *sees*. Stated as candidates, not findings.
+
+**Caveat on my own numbers:** telemetry arrives at ~19 Hz, so a shorter-than-50 ms jerk spike would be smoothed by my
+finite difference; 75.8 deg/s² is a **lower bound on the peak**, though a step reversal would still have shown several
+hundred. And the sign-crossing count printed as 0 because the rate lands on exactly zero, which my `<0` test misses —
+another test bug worth remembering (the 6 near-zero samples are the honest signal).
+
+**Also corrected:** the station again ended at `MANUAL / HOLD` after the `finally`, because my restore issued MANUAL then
+AUTO_TRACK and I read the state too eagerly. Restored and re-verified in this entry's commit.
