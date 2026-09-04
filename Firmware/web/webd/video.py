@@ -177,21 +177,20 @@ class VideoSource:
             try:
                 cam = Picamera2()
                 cfg = cam.create_video_configuration(
-                    main={"size": (int(width), int(height))}, buffer_count=3
+                    main={"size": (int(width), int(height)), "format": "XRGB8888"}, buffer_count=3
                 )
-                # Ask the sensor for the rate we were actually given. The vision path does this
-                # (`vision/frame_source.py:314` sets controls["FrameRate"]) and it is why vision reports
-                # ~15.5 fps from the same camera while this preview published exactly 10.00 fps for
-                # every measurement taken today - 200 frames in 20.0 s, idle and under load, at 1080p
-                # and at 720p alike. Nothing in this file ever named a frame rate, so the sensor mode
-                # picked for a bare size decided the preview's cadence, and the panel still advertised
-                # the requested 15. `fps_published` was added to catch exactly this kind of wish.
-                # Guarded because the control name has differed across picamera2 builds (the vision
-                # path guards the same way); a camera that will not take it keeps its default mode.
+                # Ask for the rate on a control this configuration ACTUALLY advertises. Round 6 set
+                # controls["FrameRate"], which the probe in round 8 showed is not exposed here at all
+                # (the advertised controls are FrameDurationLimits and NoiseReductionMode) - so that
+                # change was a silent no-op, and the `except Exception: pass` wrapped around it turned
+                # a write that did nothing into a change that looked like it did something. Rate is
+                # requested in microseconds per frame, min and max pinned together; FrameDurationLimits
+                # is a paired control, and giving only one bound lets the sensor wander.
                 try:
-                    cfg["controls"]["FrameRate"] = float(fps)
-                except Exception:  # noqa: BLE001 - unsupported control, not a reason to lose video
-                    pass
+                    dur_us = int(round(1e6 / max(1.0, float(fps))))
+                    cfg["controls"]["FrameDurationLimits"] = (dur_us, dur_us)
+                except Exception as e:  # noqa: BLE001 - logged, never swallowed
+                    print(f"video: could not request frame duration at {fps} fps: {e}")
                 if self._wb_mode == "auto":
                     # Disable the camera's own auto-white-balance so it cannot
                     # drift the per-channel balance out from under our software

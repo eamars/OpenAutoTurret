@@ -3788,3 +3788,39 @@ wins in this file, and it stays the arbiter.
 
 Station restored after the probe: real IMX500 source running again, controld untouched (`AUTO_TRACK / WAIT_TARGET`,
 `safety_action ALLOW`). The preview pane is intentionally still stopped; nothing is left holding the camera.
+
+## 2026-09-06, 08:3x — round 9: third null result, and this one the change definitely applied, which makes it informative
+
+Applied the round-8 plan: `main={"size": …, "format": "XRGB8888"}` (the form the working vision path uses) and
+`FrameDurationLimits = (dur_us, dur_us)` instead of the `FrameRate` control the probe showed is not advertised — with
+the `except` now **printing** instead of swallowing, because round 6 proved a silent guard is how a no-op becomes a
+false win. `py_compile` clean, **255 web tests pass**.
+
+**Measured after restart: 190 frames in 20.0 s = 9.50 fps** (state-measured `fps_published 9.60`), against 9.75–10.00
+before. **Unchanged again.** And unlike round 6, the change is verifiably in effect: `pixel_format` now reports
+**`XRGB8888`** (it was `XBGR8888`), and the rate-request failure log has **0** lines — so the control was accepted, or
+at least not rejected, and the rate still did not move.
+
+Third plausible mechanism, third null: (1) sensor never asked for a rate — no effect; (2) request held across the
+encode — killed by the 720p column; (3) format naming selects the fast mode — **no effect, proven to have applied**.
+
+**What the three nulls jointly say:** nothing inside the per-frame path (rate request, format, encode cost) moves this
+number, across two resolutions and two pixel formats. What has never been measured is the one quantity that would
+separate the remaining candidates: **the interval between completed capture requests as the sensor delivers them**,
+independent of anything we do with the frame afterwards. If requests arrive ~100 ms apart, the ceiling is upstream of
+this file entirely (mode selection at libcamera level, or the single-in-flight `capture_request()` pattern), and the
+answer is to mirror `frame_source.py`'s *asynchronous* request discipline rather than its config arguments. If they
+arrive ~64 ms apart and only 10 fps is published, the loss is inside `_encode_request`'s full per-frame work —
+`make_array` of an 8 MB XRGB frame plus the `rotate_180` flip — which round 7 measured only for the JPEG step.
+
+That is next round's single measurement: record arrival intervals of completed requests and expose them as
+`sensor_fps`, so `fps_published` and `sensor_fps` together say where the frames go. Two numbers, one verdict. I am not
+guessing a fourth time when one instrumentation line answers it.
+
+Also honest about a check that did NOT pass: `colour_check` came back **"inconclusive: the first frame had almost no
+colour in it, which cannot tell one channel order from another"** — because the room is static and dim. So I am *not*
+claiming the format change is colour-safe; the module's own verification refused to certify it. Either the fast mode has
+to be revisited with a real scene in view, or the change stays only if the operator accepts an unverified colour path —
+which is their call, not something to bury in a commit.
+
+Station: real IMX500 vision source restored and running; controld untouched; preview left as configured.
