@@ -3407,3 +3407,30 @@ template carries the switch, and the installer's tests still pass", not "a stage
 
 No behaviour changed anywhere: no env set, no directory created, no daemon restarted. Station untouched, source
 running. **487 pytest / 57 CTest** stand. Nothing signed.
+
+## 2026-09-06, 02:4x — round 82 follow-up: the stack died under an interrupted call, which is round 80's caveat happening for real
+
+A tool call was interrupted mid-flight. Before retrying anything I looked: `git log` showed round 82's commit
+`f5cfb13` already present, tree clean, nothing unpushed — so the interruption had lost only the result echo, not the
+work, and no retry was needed (a blind retry would have created a duplicate commit). The same check turned up
+something else: **`pgrep` returned zero for controld and zero for webd**, and visiond's log ended with its clean-shutdown
+summary. The whole hand-started stack was gone. The interruption appears to have taken my process group with it,
+despite `setsid nohup`.
+
+Restored in order — controld (homed, `at_ready`), webd, then visiond as the controld-restart rule requires — and
+verified rather than assumed: `MANUAL / HOLD`, `ready True`, `effective_speed_ceiling_deg_s 10`, `safety_action ALLOW`,
+`control_deadline_misses 0`, `telemetry_stale False`, `vision_track_sets 448` and climbing, yaw 149.21° (unchanged
+across the outage), and **`GET / → 200`** on the panel.
+
+Round 80 recorded the black-box writer's warning that *"a station that needs the artifact guaranteed should run webd as
+a supervised service, not as something started by hand."* Round 82 is that sentence becoming an event: a hand-started
+stack stopped, and nothing was supervising it. Two honest consequences:
+* this session's uptime claims were always about *processes I started*, not a service — worth remembering when reading
+  any measurement above that says "the station has been running";
+* the incident cost nothing measurable here (no motion was commanded; the axis held position and telemetry resumed at
+  the same yaw), but the same loss during a tracking session would have meant a silent gap with nothing supervising or
+  reporting it. **Running the units (`tools/install_station.py`) is the operator's call, and this is an argument for it
+  that no test could have made.**
+
+No code or config changed in this follow-up. Commits unchanged: `f5cfb13` (round 82), `5bcb4a0`, `e3e902c`. Suites:
+**487 pytest** re-run green after the commit; **57 CTest** unchanged since round 78 (no C++ touched since).
