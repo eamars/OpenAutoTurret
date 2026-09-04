@@ -2074,3 +2074,34 @@ Cycle times in this sample varied 5053–5067 µs, slightly wider than round 33'
 ~198 Hz, still nowhere near the 2 ms grace. **57 CTest** on the new build (grepped clean), **449 pytest**
 (447 + 2 guards), `node --check` OK — the paren discipline round 29 had to learn is now habit. Vision restarted
 and checked: `vision_track_sets 418`, `supervisory READY`, station MANUAL/HOLD, homed.
+
+## 2026-09-05, 00:5x — round 36: measured jerk two independent ways — C5b is real, **max jerk is unquotable, and round 28's "10 deg/s cap" is contradicted**
+
+`docs/evidence/jerk_two_paths_2026-09-05_r36.md`. One scenario (s3, 25° over 1.60 s, envelope-legal, vision
+source stopped), recorded twice at once: the probe's HTTP polling path, and `tools/telemetry_stream.py --jsonl`
+against the daemon's socket — **484 frames / 32.0 s = 15.2 Hz publication**, field `ts_ns`, 128 fields per
+frame. The daemon publishes `q_ref_rate_yaw_rad_s` and `v_yaw_rad_s`, so this is the controller's own numbers,
+not differences of quantised positions.
+
+**C5b's failure survives instrument change: jerk p95 524.9 (daemon) vs 542 (probe), ~3% apart, across ~66 ms and
+~20 ms grids and two transports, against `max_jerk_deg_s3: 300`.** That is a real ~1.8× smoothness violation.
+
+**"Max jerk" is not a number and I have been printing it.** The same motion gave 576 (round 27), 1892 (round 36
+probe) and 9755 (round 36 daemon). My hedge was "a lower bound", which was the wrong hedge — it implied the
+figure had a direction. It has none. p50 and p95 do; max is the differentiation of a grid the transient doesn't
+fit. The sign-off package now says explicitly not to quote it.
+
+**The bigger correction: round 28's causal claim is contradicted by the very field it was about.** This run's
+**reference rate peaked at 18.56 deg/s and actual velocity at 20.43 deg/s**. Round 28 concluded — and commit
+`b3dd45b` states — that AUTO_TRACK's reference "can never exceed 10 deg/s" because the envelope cap is the
+hard-coded hold speed. A measured 18.56 cannot come from a 10 deg/s bound, and the probe reads
+`q_ref_rate_yaw_rad_s` at `probe_track_loop.py:804`: same source, same field. So **the explanation is withdrawn
+pending reconciliation, and the advice attached to it — raise the envelope cap — must not be acted on**: that
+would alter safety-envelope behaviour possibly for nothing. What survives from round 28 is narrower: the two
+constants really do disagree by construction. Whether that disagreement causes C2/C3 is now an open question,
+with three hypotheses ranked in the evidence file (the envelope cap bounds a different quantity than the
+reference generator; a later stage re-accelerates past it; or the earlier 10.0 was a different statistic or run
+state). Next round: read the generator→limiter chain end to end before saying anything else about it.
+
+No code changed. **449 pytest / 57 CTest** stand. Probe verdicts unchanged (C1/C5a/C6 pass, C2/C3/C4/C5b fail).
+Station returned to MANUAL/HOLD, homed, vision restarted and verified (`vision_track_sets 8099`, READY).

@@ -62,11 +62,19 @@ bears on some of them, and where it lives:
   envelope-legal). Verdicts on the legal dart: **C1 containment PASS · C2 recovery FAIL (2.85 s vs 1.50 s) ·
   C3 lead FAIL (−11.6°) · C4 FAIL (3 sign changes) · C5a PASS · C5b jerk FAIL (p95 542 vs 300+60, a lower
   bound measured at probe rate).**
-* **Why C2/C3 fail, as far as is currently known** — the tracking reference is bounded by the envelope's
-  `v_max`, which is set from the hard-coded 10 deg/s hold speed, while `tracking.track_speed_deg_s` defaults to
-  30. The ceiling is now visible on the panel as `RATE CEILING 10.0 DEG/S (AUTH 100%)`. **No controller
-  behaviour has been changed**: raising that ceiling means raising how fast the station may swing while
-  following a target, which is the operator's decision, not the agent's.
+* **Why C2/C3 fail: unresolved, and a previous explanation is contradicted by measurement.** Round 28 read the
+  envelope cap as coming from the hard-coded 10 deg/s hold speed (`tracking.track_speed_deg_s` defaults to 30)
+  and concluded the reference "can never exceed 10 deg/s". **Round 36 measured the daemon's own
+  `q_ref_rate_yaw_rad_s` peaking at 18.56 deg/s — actual velocity 20.43 — on an identical dart**, which that
+  bound cannot allow. The two constants do disagree by construction, and `RATE CEILING 10.0 DEG/S` is genuinely
+  on the panel, but **it is not established that this is why C2/C3 fail, and "raise the envelope cap" must not
+  be treated as the fix.** See `docs/evidence/jerk_two_paths_2026-09-05_r36.md`. No controller behaviour has
+  been changed.
+* **Smoothness (C5b) is a measured failure, agreed by two independent instruments.** Jerk p95 is **525 °/s³**
+  from the telemetry socket stream at 15.2 Hz and **542 °/s³** from the probe's own sampling path, against a
+  configured `max_jerk_deg_s3: 300` — roughly 1.8× over, consistent across two grids (~20 ms and 66 ms) and two
+  transports. **Do not quote "max jerk"**: the same scenario has produced 576, 1892 and 9755 °/s³, which is
+  differentiation of a grid the transient does not fit, not a property of the machine.
 * **Camera geometry** — **plate scale / effective FOV measured on real optics** by encoder-as-theodolite
   (`calibration/camera_intrinsics.yaml`: fx 1389, fy 1467 → 24.24 and 25.60 px/deg; hfov 69.3002°, vfov
   40.4171°). **The principal point is NOT measured**: the calibration file's own line 27 says *"cx/cy are the
