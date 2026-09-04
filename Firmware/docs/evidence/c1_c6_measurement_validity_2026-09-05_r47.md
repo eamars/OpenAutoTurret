@@ -49,3 +49,47 @@ change, in that order.
 
 Station untouched: homed, MANUAL/HOLD, READY, `SPEED CEILING 10.0 DEG/S` on the panel, synthetic source running.
 **451 pytest / 57 CTest** stand.
+
+## Executed at last — round 50, same day: the corrected instruments ran against real telemetry
+
+`s3`, 25.0 deg in 1.60 s then 3.0 s hold, log `/tmp/probe_r50.log`. Both corrections behaved as intended, and the
+run also produced two corrections of mine.
+
+| criterion | round 50 (corrected instruments) | previous (2026-09-04/05) |
+|---|---|---|
+| C1 containment, anchor | **PASS** | PASS |
+| C1 containment, declared box edges | **PASS** (never previously measured) | — |
+| C2 recovery | **FAIL** t = 2.32 s (bar 1.50 s) | FAIL 2.85 s |
+| C3 lead | **FAIL** p50 −6.428° (ahead in 0% of 41 samples) | FAIL −11.6° |
+| C4 no ringing | **FAIL** 4 aim-error sign changes (bar 2) | "inconclusive" (wrongly, see below) |
+| C5a accel | **PASS** p95 60.0, max 260.6 | PASS |
+| C5b jerk | **FAIL** p95 540 (bar 300+60), max 6803 | FAIL p95 525 |
+| C6 rate legality | **FAIL** 15 of 156 steps over the ceiling in force | "PASS" against ~20.1 |
+
+**C6 changed verdict because the ceiling changed source.** It printed
+`ceiling used for legality: 10.0 deg/s [controld effective_speed_ceiling_deg_s (the ceiling in force)]` and the
+worst step it objected to was **18.0 deg/s** — under the old reconstructed 20.1 that step was invisible, which is
+precisely how round 27 got a "legal" dart that could not be followed. The number that decides acceptance is the
+one controld applies, and now it is the one being used.
+
+**C1's box verdict passed**, so round 47's concern did not bite for this dart — a point worth having either way:
+the worry was real arithmetic, and the outcome is a measurement rather than an assumption.
+
+### Two corrections this run produced
+
+1. **Round 44's withdrawal of C4 was made on the wrong evidence.** C4 scores **aim-error sign changes after
+   arrival** (the criterion text says so, and the verdict line reports 4 against a bar of 2). Round 44 instead
+   analysed zero-crossings of the *reference rate* against the *target rate* and concluded the instrument was
+   contaminated. That is a different signal, so the conclusion does not belong to C4 — the sign-off sentence has
+   been restored to FAIL, with the misjudgement named where it stands. The round-44 observations about a chasing
+   camera and a ~1 deg/s rate noise floor remain true as measurements of those signals; they simply are not what
+   C4 scores. The right validity test for C4 is round 45's method — measure aim-error crossings on a segment
+   whose truth is known — and it has not been done.
+2. **The C6 print label still says `30 deg/s x live derating` while the value now comes from controld.** My
+   replacement anchor did not match the source text (count 0) and I left the file alone rather than editing blind,
+   so the label remains wrong in the printed output while the arithmetic is right. Outstanding, cosmetic in the
+   worst sense: a stale label on a safety number.
+
+Re-running the dart moved C2 from 2.85 s to 2.32 s and C3 from −11.6° to −6.4°, with the reference rate profile
+still capped at exactly 10.0 deg/s — the same plateau, the same ceiling, run to run. Station restored afterwards:
+MANUAL/HOLD, READY, synthetic source running. **461 pytest / 57 CTest** stand.

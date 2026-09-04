@@ -2485,3 +2485,28 @@ CTest**, station untouched (MANUAL/HOLD, READY, published ceiling 10).
 verdict on file is as round 47 left it — PASS-against-the-wrong-ceiling — and the first dart run after this
 change will print the ceiling it judged against, which is the observable that tells the operator whether any
 past C6 PASS was ever meaningful. Criteria themselves remain the operator's; I changed an instrument, not a rule.
+
+## 2026-09-05, 09:2x — round 50: the corrected instruments ran, C6 flipped to FAIL, and my own C4 withdrawal turned out to be on the wrong signal
+
+Dart executed (25.0 deg in 1.60 s, 3.0 s hold), log `/tmp/probe_r50.log`, verdicts in the evidence file's round-50
+section. Headline: **C6 now FAILs — 15 of 156 reference steps over the ceiling in force** — because the comparison
+uses controld's published 10 deg/s instead of the reconstructed 20.1; the worst step it objected to, 18.0 deg/s,
+was literally invisible under the old arithmetic. **C1 passed on both the anchor and the declared box edges**, so
+round 47's arithmetic worry stands but did not bite this dart. C2 2.32 s (was 2.85), C3 −6.428° (was −11.6),
+C5a PASS, C5b jerk p95 540 FAIL, rate profile still pinned at exactly 10.0 deg/s.
+
+**Round 44 was wrong about C4.** C4 scores *aim-error* sign changes after arrival (4 against a bar of 2 here);
+round 44 analysed zero-crossings of the *reference rate* versus the *target rate* and declared the instrument
+contaminated. Different signal — the conclusion never belonged to C4. The sign-off sentence is restored to FAIL
+with the misjudgement named in place, and the correct validity test for C4 is round 45's known-truth method, which
+has not been done yet. The cost of this session's most repeated lesson, again: read what the criterion actually
+scores before pronouncing on it. Two rounds of "the instrument is wrong" now stand as one right (C5b, validated)
+and one wrong (C4, withdrawn wrongly) — which is why I keep testing instruments rather than trusting the
+convenient verdict.
+
+**Left outstanding honestly:** the C6 verdict line still prints `30 deg/s x live derating` above a number that
+comes from controld. My anchor did not match (count 0) and I did not edit blind. A stale label on a safety number
+is the worst kind of cosmetic bug, and it is the first thing to fix next round.
+
+Station restored: MANUAL/HOLD, READY, synthetic source running, `SPEED CEILING 10.0 DEG/S` on the panel.
+**461 pytest / 57 CTest.**
