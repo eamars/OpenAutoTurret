@@ -3486,3 +3486,38 @@ Live after restart: `GET / → 200`, the served page carries the new code (`link
 (~1.25 MiB/s per client, and that client was reading flat out). The pane will therefore stutter slightly even when
 telemetry is perfect. Unattributed — capture/encode limited, or network — and it is a frame-rate claim I will not make
 without measuring the camera's own delivered rate.
+
+## 2026-09-06, 04:0x — round 83b: the panel said 15 fps; the station delivered 10 — plus two self-kills of my own, logged because they were avoidable
+
+Operator's next directive landed mid-round (drive modes: no more fake targets, shaky motion, HOLD dead zone +
+fixed-position, AUTO_TRACK↔AUTO_ROAM switching, roam sloppiness). Before pivoting I closed the edit I had half-landed.
+
+**What the video-rate investigation turned out to be.** Not a stall, not the network, not my counting:
+* publish was **9.99 fps idle** and **10.00 fps with a client draining ~1 MiB/s** — 200 frames in 20.0 s, twice;
+* at **1280×720** it published **121 frames in 12 s ≈ 10.1 fps**, so it was not the requested resolution;
+* `_min_publish_s` is `1/15`, so the cap was never binding, and `create_video_configuration(...)` is given a **size and
+  no frame rate at all** — **15 fps was never asked of the camera**, yet `/api/video/state` reported `fps: 15.00`.
+So a §20 field named `fps` was publishing a wish. `VideoState` now carries **`fps_published`**, measured over a short
+trailing window (`measured_fps()`, window trimmed so it falls to 0 within seconds of the stream dying — otherwise a
+frozen pane advertises the rate it had when healthy). `fps` stays as the request. Both are visible; neither is hidden.
+Live after restart: **requested 15.0, measured 10.4**. Four tests in `test_video_reports_measured_rate.py`, one of which
+exists to fail loudly if anyone re-merges the two meanings into one field.
+
+**An earlier number of mine was wrong and the record says so**: I first reported "0.00 fps at 720p". That was an
+artifact — `frames_published` resets on `start`, and I sampled across a restart. Reproduction gave 121 frames in 12 s.
+Caught because I went back and reproduced the surprising number instead of shipping it.
+
+**Two self-kills, both avoidable, both recorded.** `pkill -f "vision.visiond"` matched **my own shell's command line**,
+which contained that literal string — the call SIGTERM'd itself. Then, to relaunch in fewer calls, I put a kill by
+`webd[.]app` and the launch command `-m web.webd.app` in the **same** call: the pattern matched my own cmdline again.
+The bracket trick only protects against the pattern's own text, not against the same command line also containing the
+thing being matched. **Rule: a kill of a component and a launch of that component never share a call.** The first cost
+was a missing verification line; the second left webd down for one call until I checked rather than assumed.
+
+Station after: controld up, **synthetic source stopped and staying stopped** (operator item 1: no fake targets), panel
+`200`, video running. **255 web tests** pass (250 + the staleness test from earlier this round + 4 video). Full suite
+re-run follows with the drive-mode work.
+
+**Pivoting now to drive modes** — the operator's five items, in their order: real detector path (fake targets are
+already off, which also means the vision feed will legitimately go quiet until the real path runs), motion quality
+research per mode, HOLD dead zone + fixed position, AUTO_TRACK↔AUTO_ROAM switching tests, and roam range/slop.

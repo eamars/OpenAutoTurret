@@ -44,6 +44,14 @@ class VideoState:
     camera: str = ""
     error: str = ""
     frames_published: int = 0
+    # What the stream ACTUALLY delivers, measured over a short trailing window, kept apart from
+    # `fps`, which is what was ASKED for. They were conflated until 2026-09-06: the panel showed
+    # `fps: 15.00` while the server published exactly 10.00 fps - measured twice at 200 frames in
+    # 20.0 s (idle, and with a client draining 1 MiB/s), and again ~10.1 fps at both 1080p and
+    # 720p. No frame rate is ever requested from the camera: create_video_configuration is given
+    # only a size, so 15 was never asked for, let alone measured. Reporting a wish in a field a
+    # §20 contract calls `fps` is how a panel comes to lie quietly; both numbers are here now.
+    fps_published: float = 0.0
     wb_gains: tuple = (1.0, 1.0, 1.0)
     orientation: str = "none"
     white_balance: str = "off"
@@ -96,6 +104,8 @@ class VideoSource:
         self._colour_check = ""
         self._colour_checked = False
         self._min_publish_s = 1.0 / 15.0
+        # Publish timestamps over a trailing window, to measure the rate actually delivered.
+        self._recent: list = []
         self._last_publish = 0.0
         self._open_error = ""
         # Smoothed gray-world white-balance gains (EMA across frames: no flicker).
@@ -117,6 +127,7 @@ class VideoSource:
                 camera=self._state.camera,
                 error=self._state.error or self._open_error,
                 frames_published=self._count,
+                fps_published=self.measured_fps(),
                 wb_gains=self._wb_gains,
                 orientation=self._orientation,
                 white_balance=self._wb_mode,
@@ -143,6 +154,7 @@ class VideoSource:
 
             # Reset publish bookkeeping.
             self._min_publish_s = 1.0 / max(1.0, float(fps))
+            self._recent = []
             self._last_publish = 0.0
             self._seq = 0
             self._count = 0
@@ -292,6 +304,17 @@ class VideoSource:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def measured_fps(self, now=None, window_s: float = 5.0) -> float:
+        """Frames per second over the trailing window; 0.0 when nothing has been published.
+
+        The window is short on purpose: it must fall to zero within seconds of the stream dying, so
+        a frozen pane cannot go on advertising the rate it had when things were healthy.
+        """
+        now = time.monotonic() if now is None else now
+        cut = now - window_s
+        self._recent = [t for t in self._recent if t >= cut]
+        return (len(self._recent) / window_s) if self._recent else 0.0
+
     def _encode_request(self, request, Image, quality: int, now: float) -> None:
         """Turn one completed request into the newest JPEG in the shared slot.
 
@@ -305,6 +328,7 @@ class VideoSource:
         orientation = state._orientation
         wb_mode = state._wb_mode
         state._last_publish = now
+        self._recent.append(now)
         arr = request.make_array("main")
         # The colour-order check (below, once) needs the decode WITHOUT the install orientation:
         # request.make_image() knows nothing about how the lens is mounted, so comparing a
