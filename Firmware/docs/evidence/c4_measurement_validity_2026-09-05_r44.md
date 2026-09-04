@@ -272,3 +272,33 @@ tool**, whatever it prints.
 What the corrected reading implies for acceptance, if it holds after the fix: the reference reached but did not
 exceed its 10.0 deg/s ceiling during a 25 deg dart, which is round 40's plateau measured once more — a *ceiling*
 problem, not a *rate-limit-violation* problem. The ceiling remains the operator's decision.
+
+## Round 60: the two sites agree, and C6 has a working verdict for the first time — the reference sits exactly on its ceiling
+
+Clean run, synthetic source stopped as in every successful dart run, `/tmp/r60_dart.log`:
+
+    C6 rate legality (published q_ref_rate_yaw_rad_s; ceiling 10.0 deg/s, controld ... in force):
+        PASS (148 moving samples, max 10.0 deg/s against a 10.0 deg/s ceiling +5%, 0 over)
+    rate : p50 7.4  p95 10.0  max 10.0 deg/s   (track limit 30 deg/s)
+
+**Same maximum at both sites, 10.0, on 148 moving samples.** Round 56's hollow `PASS (max 0.2 deg/s)` was the
+missing rad→deg conversion; with the conversion in one shared accessor the verdict and the profile cannot disagree,
+and the sample count says the data were never thin. The differenced figure still prints FAIL, now labelled
+`DIAGNOSTIC ONLY ... skews high by the publish/sample ratio` — a measurement with a known bias, kept visible and no
+longer a verdict.
+
+**What C6 now says about the station:** during a 25 deg dart the reference reached **exactly 10.0 deg/s** and
+exceeded it in **0 of 148** moving samples. The limiter is doing its job; the station is not smooth-thwarted by
+overshoot but **bounded by the ceiling itself** — round 40's plateau, confirmed by a corrected instrument rather
+than inferred from a line of source. C6 was never the station's failure: it was two defects in one tool (wrong
+ceiling in round 47, wrong units in round 56), both now closed.
+
+Other verdicts from this same run, for continuity: C2 FAIL t = 2.34 s (baseline 1.61 s, so ~0.7 s attributable to
+the dart), C3 FAIL p50 lead **−5.715 deg** — the fifth dart run, whose leads read −11.6, −6.4, −4.7, −11.9, −5.7:
+**sign stable, magnitude between 4.7 and 11.9 deg**, so the deficit is real and its size is not a constant;
+C4 **4** sign changes, still below the measured no-motion floor of 11 and therefore not evidence of ringing.
+
+That leaves the acceptance question where round 40 put it, now with trustworthy instruments: the reference does
+what the ceiling allows, the ceiling is 10.0 deg/s, and the operator's lead criterion needs roughly 15.6 deg/s
+average. The choice — raise `tracking.hold_speed_deg_s`, size the dart to what 10 deg/s can follow, or accept C3
+as a documented consequence — remains unmade and unsigned.

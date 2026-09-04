@@ -2686,3 +2686,24 @@ violation.
 
 Docs only this round. Station untouched (MANUAL/HOLD, READY, synthetic source running). **468 pytest / 57 CTest**
 stand.
+
+## 2026-09-05, 14:2x — round 60: C6 works now, and what it says is that the reference sits exactly on its 10 deg/s ceiling
+
+Both print sites report **max 10.0 deg/s**; the verdict reads `PASS (148 moving samples, max 10.0 deg/s against a
+10.0 deg/s ceiling +5%, 0 over)` next to the profile's `rate : p50 7.4 p95 10.0 max 10.0`. Round 56's hollow PASS
+was the missing rad→deg conversion in full, and the sample count proves the data were never thin. The differenced
+figure prints FAIL but is labelled `DIAGNOSTIC ONLY`, biased by the publish/sample ratio, kept visible and no longer
+a verdict.
+
+**C6 was never the station's failure** — it was one tool with two defects (wrong ceiling, wrong units), both closed.
+What remains is the station's actual bound: the limiter works, the reference reaches exactly 10.0 deg/s and beats it
+in 0 of 148 samples. Round 40's plateau, now confirmed by an instrument rather than read off a line of source.
+
+Same run: C2 FAIL 2.34 s (baseline 1.61 s, ~0.7 s dart-attributable), C3 FAIL **−5.715°** — fifth dart run, leads
+−11.6 / −6.4 / −4.7 / −11.9 / −5.7: **stable in sign, 4.7–11.9° in magnitude**, so the deficit is real and its size
+is not a constant; C4 **4** flips, still under the 11 no-motion floor, so not ringing.
+
+Acceptance therefore stands where round 40 left it, on trustworthy instruments this time: the reference does what the
+ceiling allows, the ceiling is **10.0 deg/s**, and the lead criterion wants ~15.6 deg/s average. Raise
+`tracking.hold_speed_deg_s`, size the dart to 10 deg/s, or accept C3 as documented consequence — unmade, and
+unsigned by any named person. Station restored: MANUAL/HOLD, READY, synthetic source running. **473 pytest / 57 CTest.**
