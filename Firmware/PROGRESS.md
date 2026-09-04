@@ -2510,3 +2510,29 @@ is the worst kind of cosmetic bug, and it is the first thing to fix next round.
 
 Station restored: MANUAL/HOLD, READY, synthetic source running, `SPEED CEILING 10.0 DEG/S` on the panel.
 **461 pytest / 57 CTest.**
+
+## 2026-09-05, 09:5x — round 51: the stale label on the safety number is gone, and my own checker nearly broke the fix
+
+The C6 verdict line printed `30 deg/s x live derating` above a number that had come from controld since round 49.
+It reads now, rendered from the real code path:
+
+    changes over the ceiling IN FORCE (10.0 deg/s from controld effective_speed_ceiling_deg_s
+    (the ceiling in force), +10%): 15 of 156
+
+Last round my anchor missed because the source escapes the percent sign (`+10%%`) — the reason count was 0 and I
+left the file alone instead of editing blind. Same trap as round 42's line break: a label reconstructed from
+memory instead of read with `cat -A`.
+
+**Then my verification lied.** I wrote an AST check to compare `%`-placeholders against argument count; it reported
+`placeholders 3 vs arguments 4 -> MISMATCH` on **correct code** — it subtracted the `%%` escape, which its own
+regex had never counted. Trusting that output would have meant "fixing" a working print statement into a broken
+one, on the strength of a checker. The decisive move was not to read harder but to **evaluate the literal** with
+sample values through the parsed AST: it rendered, so the arity is four-and-four and the line is right. Same shape
+as the whole session's rule — execute the thing, don't inspect a description of it — applied this time to my own
+tooling rather than to the station.
+
+Verified: `py_compile` clean, the literal renders, **461 pytest / 57 CTest unchanged** (57 from round 50's build;
+no C++ touched). Station untouched: MANUAL/HOLD, READY, synthetic source running, `SPEED CEILING 10.0 DEG/S`.
+
+Outstanding, unchanged and owned by the operator: the ceiling decision (10 deg/s), the C4 known-truth validity
+test (round 45's method, applied to aim-error crossings), and the §24/§110 signatures with measured evidence.

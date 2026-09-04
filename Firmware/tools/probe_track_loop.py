@@ -968,8 +968,8 @@ def main() -> int:
         print("      reference step test (no smoothing; rate over the interval each change really "
               "took, %d changes observed)" % changes)
         if worst:
-            print("        changes over the ceiling IN FORCE (30 deg/s x live derating, +10%%): "
-                  "%d of %d" % (over, len(qr) - 1))
+            print("        changes over the ceiling IN FORCE (%.1f deg/s from %s, +10%%): "
+                  "%d of %d" % (run_ceil, run_src, over, len(qr) - 1))
             print("        worst: %.1f deg/s, from a %.3f deg reference move over %.0f ms at t=%.2f s (%s)"
                   % (worst[0], worst[2], worst[4] * 1000.0, worst[1], worst[3]))
             print("        -> C6 reference within its own rate limit: %s"
