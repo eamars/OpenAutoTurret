@@ -3571,3 +3571,41 @@ p2p **0.0435°**, sigma 0.0160°; resolution floor **0.02177°** in both. The co
 sub-tenth-of-a-degree with no reversals — but the number in the commit message was mine and it was wrong, so it is
 stated here rather than left standing. Rounds 54, 81 and 83 said the same thing about me; the fix is not resolve, it is
 that the measurement writes the text.
+
+## 2026-09-06, 05:3x — round 3: item 3 restated, because part of it already exists and one reading of it would be unsafe
+
+Two facts found by reading, not assuming:
+
+* **`mode_hold_in_place_` already implements "fixed position mode"** (`control_loop.cpp:2078-2090`). When the turret
+  stops moving in Manual / AutoTrack / AutoRoam at Ready, the pose is latched from the measured joints **once** and held
+  — the code's own words: *"no creep (it is not re-read every cycle) and no journey (it is not the ready pose)"*. So
+  HOLD does not re-chase anything today.
+* **There is no deadband or dead-zone anywhere in the control loop.** The `deadband` hits in `turret.yaml` are the
+  axis's *friction* deadband (backlash context), not a vision deadband. `control_loop.hpp` has no such config key.
+
+So the live gap is narrower and different from the wording: it is a **deadband on the vision-driven reference while a
+target is being tracked**, not a change to HOLD.
+
+**And a safety reading I will not implement without saying out loud.** "Disable the closed loop feedback and switch to
+fixed position mode" can mean two very different things:
+
+1. **Stop letting vision move the aim point** while the target sits inside a band — the encoder position servo stays
+   closed, the supervisor stays armed, and what is sacrificed is only *re-aiming* at small target motion: a slow drift
+   below the band is no longer followed, and the axis will not chase a target that genuinely crept 0.05°.
+2. **Open the position loop** — stop servoing to the reference and merely hold a commanded position with the
+   driver's own hold. Then gravity sag, backlash creep (this station has a *measured* friction deadband, which is why
+   `yaw_park_deg` sits at 176°), and disturbance rejection are all no longer corrected.
+
+I will implement **(1)**: a vision deadband with hysteresis (an enter threshold and a strictly larger release
+threshold, so the band cannot chatter), as an explicit config key defaulting to **0 = disabled** so no behaviour
+changes until you ask for it. If you actually meant (2), that is your call to make with the friction numbers in front
+of you, not mine to slip in under the word "hold".
+
+Sizing is no longer guesswork: the measured resolution floor of the angle reaching telemetry is **0.02177 deg**, and
+the measured at-rest drift is sub-tenth-of-a-degree with **0 reversals**, so the band must sit above 0.02177° to be
+meaningful at all; the upper end should stay well under the 1/3-box-height acceptance tolerance. The real number comes
+from the *tracking* jitter distribution once a real target is in view on the real detector path.
+
+Where it goes: `tracking_ref_` is read at `control_loop.cpp:841-842` and constrained at 843; the write path is through
+the reference owner rather than a direct assignment in `control_loop.cpp` (greps for a direct assignment found none), so
+the deadband belongs at the point where a measurement becomes a reference — which is the next thing to locate.
