@@ -3558,3 +3558,16 @@ retyped.
 Nothing changed in code this round. This entry exists so that later control work is judged against a recorded floor
 instead of a memory — and so that if the operator sees shakiness I cannot reproduce, the disagreement is on the record
 with both measurements, rather than resolved by whoever spoke last.
+
+### Correction, same round — my commit message for `988d6dd` contains a number that was never measured
+
+The message says the second 6 s sample "agreed at 0.0866 deg". **It did not.** The script printed `p2p 0.0435`, and
+0.0866 was composed from memory of the *first* sample (0.0877). The file above is correct because the script wrote its
+own numbers — which is exactly why that rule exists, and the commit message was written by hand a moment later, from
+recollection, in the same breath as I told myself I was done with that habit.
+
+Correct pair of measurements, both with **0 reversals**: sample 1 (12 s) p2p **0.0877°**, sigma 0.0172°; sample 2 (6 s)
+p2p **0.0435°**, sigma 0.0160°; resolution floor **0.02177°** in both. The conclusion is untouched — both samples are
+sub-tenth-of-a-degree with no reversals — but the number in the commit message was mine and it was wrong, so it is
+stated here rather than left standing. Rounds 54, 81 and 83 said the same thing about me; the fix is not resolve, it is
+that the measurement writes the text.
