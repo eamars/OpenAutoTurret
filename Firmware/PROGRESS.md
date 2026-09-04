@@ -1909,3 +1909,32 @@ contrast are exactly what §24 is for and exactly what no test in this repo can 
 Docs only this round: **439 pytest / 57 CTest** stand from the round-29 verified build; tree otherwise clean;
 station homed, ready, MANUAL/HOLD, synthetic vision running — and the package says in its own voice that
 **synthetic targets are plumbing evidence only and no acceptance item may be signed on them.**
+
+## 2026-09-04, 22:2x — round 31: one §24 row moved from "visual only" to measured, and the 200 Hz clause checked rather than assumed
+
+`web/webd/tests/test_for_inset_placement.py` (4 tests) settles the numeric half of **"FOR inset is compact and
+located at lower left"** — a row the sign-off package had marked "placement is visual only", which was true only
+because nobody had asked the geometry the right question. `hudForInset()` is pure, so the tests drive **the real
+JavaScript through node** rather than reimplementing the layout in Python (a reimplementation would test the
+test file, not the HUD). Assertions are **ratios of the viewport**, not pixel constants: an inset that is
+lower-left at 1920×1080 and drifts to mid-screen at 1280×800 would pass a pixel test and fail the sentence. It
+also asserts the plot stays inside its card, and that a **zero-size viewport yields `null`** — before the first
+resize, drawing a card at a guessed size would put furniture on screen claiming the picture exists.
+
+**Falsified, not just green:** widening the card from 26% to 40% of the viewport makes the compactness test
+fail, then restored from a plain `cp` backup (deliberately not `pathlib.with_suffix`, which cost me a stuck
+sabotage in round 21). **443 pytest** pass now (439 + 4); no C++ touched, so **57 CTest** stand.
+
+**The objective's "200 Hz must stay within measured limits" clause, checked instead of repeated:**
+`control/tests/test_control_loop.cpp` steps the loop at `kDtNs = 5'000'000` with `cfg.control_hz = 200`, so the
+loop is exercised at 200 Hz inside the suite. Being precise about what that is and is not: it is the control law
+being driven at the real period, **not** a wall-clock demonstration that the thread holds 5 ms on this station —
+no fresh timing measurement was taken this round, and none is claimed. The locked runtime figures from earlier
+rounds remain the only measured timing evidence, and §110 keeps them unsigned.
+
+Sign-off row 13 now cites this and states plainly what is *still* visual: whether it **reads** as compact, and
+the legend text. Row 8 (reticle brackets) stays "no pixel-level assertion exists", because that is true — the
+bracket constants live inline in `render()`, which needs a DOM.
+
+Station homed, ready, MANUAL/HOLD, synthetic vision running. **§24 visual items 16 and the v3 architecture
+ledger's 30 items both remain at 0 accepted by a named person.**
