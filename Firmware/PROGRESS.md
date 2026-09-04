@@ -4284,3 +4284,37 @@ instead, where nothing in the controller would have helped.
 
 Nothing on the station was touched this round; the mode was already restored and verified (`AUTO_TRACK / WAIT_TARGET`,
 `ALLOW`).
+
+## 2026-09-06, 14:3x — round 20: the authority boundary is established, and round 19's friction story is demoted
+
+**Who closes this loop — answered, because it decides whether item 2's dynamic fix is even ours to make.**
+`MotorBackend` offers both authorities: `enter_position_mode(axis, limit_spd_rad_s, …)` (the *drive* closes the loop)
+and `command_velocity(axis, velocity_rad_s)` (controld closes it). The live loop uses
+**`backend_->command_velocity(...)` during motion** (`control_loop.cpp:789` for the stepping axis, `:796` holding the
+other axis at zero, `:982` for pitch), and reaches for `enter_position_mode` at `:759` / `enter_position_mode_all`
+(`:44`, `:103`, `:826`) for the other cases. **So the ~3.6° following error measured in round 18 lives inside controld's
+own authority — it is ours to fix, and blaming it on drive parameters would have been an excuse.**
+
+**And a demotion of yesterday's conclusion, which I over-committed to.** Round 19 said kinetic friction "fits all of it
+at once". It does — but so does a **pure-rate velocity program with no proportional closing term**: command the axis at
+the waypoint's own 10 °/s and any offset that opens up never closes, which predicts *exactly* the same three facts I
+used as evidence (constant offset while moving, zero at rest, sign flipping with direction). **Those two explanations are
+indistinguishable in the data I have**, and I stated one as if it were established. Corrected claim: the offset is
+consistent with *either* kinetic/friction effects *or* a missing closing term; the fix differs (friction compensation vs a
+proportional term), so the diagnosis has to be settled by reading the velocity program, not by more of the same data.
+
+What the search says so far: outside homing, `velocity_rad_s` appears in
+  * `move_to.hpp`
+  * `park_controller.cpp`
+  * `park_controller.hpp`
+  * `can_motor_backend.cpp`
+  * `can_motor_backend.hpp`
+  * `control_loop.cpp`
+  * `motor_backend.hpp`
+  * `sim_motor_backend.hpp`
+and the scan for an assignment whose right-hand side contains an error/gain/remaining-distance term found
+**0** site(s) — i.e. no proportional closing term was located by that scan, which would make the "missing P-term" explanation the
+live one. Not yet confirmed: a closing term could be folded into a helper call whose name contains none of the tokens I
+searched for, so this is a lead, not a finding.
+
+Round 19's honest-uncertainty habit applied to myself: the tokens above are a filter, not a proof.
