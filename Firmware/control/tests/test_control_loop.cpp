@@ -2193,3 +2193,10 @@ TEST(PositionLead, InvertedLimitPairFallsBackToTheBareCommand) {
   // A mis-loaded limit pair must degrade to today's behaviour, not throw or clamp to nonsense on the control thread.
   EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.5, 0.2, 0.25, 3.0, -3.0), 1.5);
 }
+
+TEST(PositionLead, AnUnloadedEnvelopeFallsBackInsteadOfPinningTheAxesToZero) {
+  // The envelope is zero-initialised before it is loaded. Clamping into [0, 0] would command the origin on both axes
+  // the instant an operator enabled this key, so an equal min/max pair must behave exactly like an inverted one.
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.5, 0.2, 0.25, 0.0, 0.0), 1.5);
+  EXPECT_DOUBLE_EQ(ota::apply_position_lead(-0.4, -0.2, 0.25, 0.0, 0.0), -0.4);
+}

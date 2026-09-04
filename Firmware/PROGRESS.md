@@ -4489,3 +4489,69 @@ qualify tells us nothing about the tracker either way.
 
 **Operational note:** the IMX500 is single-owner, so **the HUD video pane and real vision cannot run together**. The pane
 is off now; turning it back on will starve `visiond` again with that same unhelpful error.
+
+## 2026-09-06, 18:0x — session review: what is actually shipped, what is only implemented, and what I got wrong
+
+Written as a hand-off, because the value of this file is not the count of commits but knowing which statements can be
+trusted without re-checking. New document: **`docs/STATION_RUNBOOK.md`** — one-off deployment procedure, verified
+commands, and the trap list. If you read one thing, read its §1 and §7.
+
+### Shipped, tested, and green
+
+| change | proof |
+|---|---|
+| HUD staleness flash debounce (`web/webd/hud.py`) | runs the real `updateStaleness` under a scripted clock; pre-fix verdicts reproduce, post-fix do not |
+| `fps_published` / `sensor_fps` on `/api/video/state` | 4 tests + hardware readings |
+| **Aim deadband** `auto_track.deadband_deg` + release (item 3) — `control/src/control/aim_deadband.hpp` | `AimDeadband` 4/4, incl. disabled-passes-through |
+| **Mode hand-off watcher** `roam_on_loss_ms` / `track_on_acquire_ms` (item 4) | **compiles and is inert; NO test** — see below |
+| **Position lead** `auto_track.position_lead_s` (item 2) — `position_lead.hpp` | `PositionLead` 6/6, incl. the unloaded-envelope regression |
+| **Dual feed / frame tap** (preview + detector simultaneously) | 380 pytest; hardware: pane `vision-tap` 9.8 fps **while** detector ran 9.55 fps; `/api/video` served **38 JPEG frames in 4 s** |
+| `scripts/lead_trial.sh` self-reverting hardware trial | ran 3×, each time restored config and controld |
+| Suite state | **CTest 57/57**, **pytest web+vision 380 passed** |
+
+### The bug the review found in my own code (fixed today, `01bd65e` follow-up)
+
+`apply_position_lead` clamped into `[q_soft_min_rad, q_soft_max_rad]` guarded by `soft_min <= soft_max`. An **unloaded
+envelope has both at 0.0**, and `0 <= 0` is true — so enabling the key before the envelope loaded would have clamped
+**every commanded angle into [0, 0]**, parking both axes at the origin. Inert only because the key defaults to 0. Fixed
+to require `soft_max > soft_min`, with a regression test naming the failure. This is what "default-off" hides: an inert
+feature can still contain the shape of a serious bug.
+
+### Implemented but NOT accepted (do not treat as done)
+
+* **Item 4 watcher:** no unit test, no measured switch latency, no hysteresis measurement. Default-off.
+* **Item 2 lead:** no after-number. Before-baseline is fixed — **p50 3.628°, p95 4.274° at 10.00 °/s**. Run
+  `scripts/lead_trial.sh` (needs a real `auto_track:` node and `start_homing` after the restart it performs).
+* **Item 1 acceptance:** real path runs (`visiond --real`, 15.1 fps, `--detector simple`) but **`simple` cannot engage**:
+  `select_target` is refused with **`person #1 is LOST, not CONFIRMED`**, so the intent stays `hold / "select a target"`
+  and the axis never moves. `rpk` still blocked on the picamera2 AI API.
+* **§24 (16) and §110 (30): 0 operator-signed.** Nothing here is acceptance.
+
+### What I got wrong, listed so nobody re-buys it
+
+1. Round 6: set `controls["FrameRate"]`, a control this pipeline does not expose — inside `except Exception: pass`, which
+   made a dead change look applied.
+2. Round 16: attributed live roam behaviour to `search_planner.hpp`, which is **retired**; the live planner is
+   `mode/roam_planner.hpp`.
+3. Round 16/17: claimed roam turnarounds were unbounded-jerk steps, then measured signed jerk (**max 75.8 °/s²**) —
+   **already shaped**. My round-12 `abs()` had hidden the sign.
+4. Round 18/19: reported τ = 0.019 s from a **mis-specified regression** (signed error on |rate|). Withdrawn; corrected
+   to 0.173 s. Then over-claimed kinetic friction as *the* mechanism; a missing proportional term fits the same data.
+5. Round 20: concluded controld closes the position loop, citing `command_velocity` call sites that belonged to
+   **homing and park**. Normal motion is `control_loop.cpp:1085 backend_->command(a, qr, ls)` — a **position** command;
+   the drive closes that loop and its position gain is not reachable from this codebase.
+6. Same round-20 habit twice more: a `head -12` truncation hid the real call site, and my trial script measured a
+   stationary axis and produced a triumphant **0.000** following error.
+
+Common shape: **a plausible mechanism plus one confirming artifact, without checking what actually executes.** The
+guards that work are cheap and boring — establish the executing path, keep the sign, verify the rebuild, and let a
+measurement own the conclusion.
+
+### Open decisions that block real closure (all operator-owned)
+
+1. **`rpk` path** — upgrade picamera2 (risks the working pane) or accept `simple` as diagnostic-only.
+2. **A target the detector can CONFIRM** — nothing measurable has been in view all session.
+3. **Band thresholds** — at conf ≈0.33 the diagnostic detector can never qualify, so engagement is unmeasurable either way.
+4. **Item 4 policy values** (`roam_on_loss_ms`, `track_on_acquire_ms`), and item 2's harder half — *"command a fixed
+   encoder position"* in the sense of **opening the position loop** — deliberately **not** implemented, because that
+   discards gravity-sag, backlash-creep and disturbance rejection on a station with a measured friction deadband.

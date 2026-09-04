@@ -40,7 +40,12 @@ inline double apply_position_lead(double cmd_rad, double rate_est_rad_s, double 
   const double leaded = cmd_rad + lead_s * rate_est_rad_s;
   // property 2: forward is never beyond the soft limit. std::clamp needs min<=max, which the envelope guarantees;
   // guarding anyway because a mis-loaded limit pair must not become an exception on the control thread.
-  if (soft_min_rad <= soft_max_rad)
+  // STRICT inequality, deliberately, and it is the one bug in this file worth its own paragraph: an envelope that has
+  // not been loaded yet has q_soft_min_rad == q_soft_max_rad == 0.0, and `0 <= 0` is true. Written as `<=`, this
+  // guard would have accepted that degenerate pair and clamped EVERY commanded angle into [0, 0] — a smoothness
+  // feature that parks both axes at the origin the moment an operator enables it before the envelope is loaded.
+  // Requiring a real span makes an unloaded envelope fall through to the bare command, which is today's behaviour.
+  if (soft_max_rad > soft_min_rad)
     return std::clamp(leaded, soft_min_rad, soft_max_rad);
   return cmd_rad;
 }
