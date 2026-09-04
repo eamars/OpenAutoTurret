@@ -4318,3 +4318,47 @@ live one. Not yet confirmed: a closing term could be folded into a helper call w
 searched for, so this is a lead, not a finding.
 
 Round 19's honest-uncertainty habit applied to myself: the tokens above are a filter, not a proof.
+
+## 2026-09-06, 15:0x — round 21: **round 20's authority-boundary conclusion is retracted** — I read calibration code and called it the control path
+
+Round 20's headline was *"the live loop commands velocity during motion (`:789`), so the 3.6° following error is inside
+controld's own authority and ours to fix."* Chasing the producer of that call's argument turned the claim inside out:
+
+* `:789 backend_->command_velocity(a, ds.velocity_rad_s)` takes `ds` from **`:730 DesiredState ds = homing_->step(...)`**
+  — it is the **homing** path.
+* `:982/983 backend_->command_velocity(..., po.yaw.velocity_rad_s)` takes `po` from
+  **`:972 ParkOutput po = park_->step(...)`** — it is the **park** path.
+* `move_to.hpp`, the next suspect, is `control/src/calibration/move_to.hpp` — **calibration** too.
+
+Every backend actuation call in `control_loop.cpp` is either bootstrap (`:48`, `:61`, `:141`, `:253`) or inside those two
+calibration branches (`:759`, `:768`, `:789`, `:796`, `:803`, `:982`, `:983`, `:1007`). **The normal-operation actuation
+call was not found**, and my two command_velocity witnesses were homing and park.
+
+**Retracted: "the following error is inside controld's own authority."** It may be, but it is not established, and the
+next thing I read was nearly the basis of a controller change built on the wrong loop. Note the shape of the mistake,
+because it is now the third time in this investigation: *a call site that exists and is consistent with my hypothesis,
+found without checking which branch reaches it.* Round 16's retired-planner attribution, round 17's `abs()`-hidden sign,
+and this. The guard is the same each time and costs one grep: **establish what actually executes before attributing
+behaviour to it.**
+
+**Which lever is live is therefore unknown again**, and the two candidates differ in kind:
+* if normal motion reaches the drive through a **position** command — `:768 backend_->command(a, ds.target_rad,
+  ds.speed_rad_s)` is a position command and is the structural sibling of whatever the normal path calls — then the
+  **drive closes the position loop**, and a controld-side SpdRef feed-forward would be aimed at a loop controld does not
+  own; the lever would be drive parameters (the operator's/hardware's domain) or controld shaping its own reference.
+* if it commands **speed** (`SpdRef`, and the comments at `:735-737` already describe the drive's internal velocity loop:
+  integral winding to 1.3–1.8 N·m, SpdRef Kp ≈ 0.38 N·m/(rad/s)), then controld closes position and a bounded
+  proportional term in the commanded rate is exactly the right change.
+
+**One fact that survives from round 20 and matters either way:** the drive is a CyberGear running an internal **velocity**
+loop (`SpdRef`, `can_motor_backend.cpp:229-237`, with a re-write dead-band at `:235`). So the position loop is closed by
+*someone* upstream of SpdRef — controld or the drive's own position mode — and that is precisely the open question.
+
+**Decisive probe for next round, named exactly:** in the cycle *after* `ref_mgr_->resolve(...)` and
+`last_intent_ = build_mode_intent(now_ns)` (`:605`), find the function that turns the resolved reference into backend
+calls — search the post-resolve section for the actuation call (it will not be named `ds`/`po`), and read whether the
+value it sends is an **angle** or a **rate**. The 3.628° p50 metric stays the judge whatever turns out to be true; what
+changes is which knob I am allowed to turn.
+
+Round 20's *demotion* of the friction story still stands on its own: the offset is equally consistent with kinetic
+friction and with a missing proportional term, and those need different fixes.
