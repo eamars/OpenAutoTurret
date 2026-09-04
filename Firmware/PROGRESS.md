@@ -2180,3 +2180,26 @@ authority scale is not the thing doing it.
 
 Station untouched by this round (analysis of a file): homed, MANUAL/HOLD, READY, vision running. No code
 changed; **449 pytest / 57 CTest** stand.
+
+## 2026-09-05, 02:5x — round 39: three mechanisms for the 10 deg/s plateau, all three rejected by measurement
+
+Detail in the dated addendum to `docs/evidence/ref_rate_plateau_2026-09-05_r38.md`. The chain is fully read now
+(`q_ref_rate_yaw_rad_s` = `ref_lim_[i].v_rad_s`, limited by `min(tracking_ref_.v_max_rad_s, max_speed_at(...))`),
+and **confidence looked like the answer** — `reference_manager.hpp:132` scales the configured 30 deg/s by raw
+confidence. The sentence was written before the check; the check said **`target_confidence` is 1 across all 34
+plateau frames**, which implies 30, not 10. Soft-limit braking also died on the data: at a plateau frame the
+reference sat **157.87° clear of any yaw soft limit**, so the braking model permits far more than 10 deg/s. The
+envelope fallback was already excluded in round 37, and this round's fuller read of `max_speed_at` **confirms**
+round 37 rather than overturning it (no cruise ceiling when limits are valid).
+
+Three rounds now — 28, 37, 39 — have each produced a confident mechanism from a partial read, two retracted and
+one killed by arithmetic. So this round stops at triage: the shortlist is `mode_proposal_.v_max_rad_s`
+(line 426), the 300 ms post-handover authority ramp (lines 609-615, where `30 × 1/3 = 10.00` fits the numbers but
+telemetry reported `intent_velocity_scale 1.00` throughout — so either that field is not the applied factor, or
+the factor is applied somewhere it never reaches telemetry), and the runtime value of `track_v_max_rad_s` (no
+`turret.yaml` key exists, so it takes a code default — to be confirmed from the loaded daemon, not from the
+defaulting call site). Next round measures the daemon's loaded speed and authority fraction instead of inferring
+them from source.
+
+The plateau and its cost stay established; the cause does not, and the operator-facing documents say so. No code
+changed, station untouched: homed, MANUAL/HOLD, READY, vision running. **449 pytest / 57 CTest** stand.

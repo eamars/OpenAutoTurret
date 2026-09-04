@@ -70,3 +70,47 @@ file should not claim a single number for it.
 
 Station untouched by this round (analysis of a file); homed, MANUAL/HOLD, READY, vision running. No code
 changed; **449 pytest / 57 CTest** stand from the round-37 build.
+
+---
+
+## Addendum, 2026-09-05 02:5x (round 39) — three mechanisms tested and rejected; the plateau is still unexplained
+
+The chain is now read end to end: `q_ref_rate_yaw_rad_s` is literally `ref_lim_[i].v_rad_s`
+(`control_loop.cpp:1204`), limited by `lim[i]`, and on the AUTO_TRACK path
+`lim[i] = std::min(tracking_ref_.v_max_rad_s, env_.max_speed_at(solved, limits_[i]))` (`control_loop.cpp:844`),
+with `tracking_ref_.v_max_rad_s = in.track_v_max_rad_s * c` where `c = clamp(target_confidence, 0, 1)`
+(`reference_manager.hpp:131-132`). That narrows the plateau to the two terms of that `min`. All three testable
+explanations fail against the recording:
+
+1. **Confidence scaling — rejected by measurement.** `reference_manager.hpp:132` multiplies the configured
+   30 deg/s by raw confidence, which looks like the answer the moment you see it. But during the 34 plateau
+   frames the published `target_confidence` is **1**, giving 30 deg/s, not 10. I had the sentence written before
+   I checked. A confidence of exactly 1/3 would have produced the observed clamp — which is presumably why this
+   hypothesis is attractive, and why it needed the data.
+2. **Soft-limit braking — rejected by measurement.** `max_speed_at` with valid limits is pure braking-to-soft
+   (`safety_envelope.hpp:119-127`). At a plateau frame the reference sat at yaw **162.29°** with soft limits
+   **−22.57° … 320.15°** — **157.87°** of clear travel. The braking model at that distance permits far more than
+   10 deg/s.
+3. **The envelope fallback `p_.v_max` — already excluded in round 37** (reached only when `!lim.valid`; and
+   `max_speed_at` uses no cruise ceiling in the valid case, so round 37's reading survives this round's fuller
+   read).
+
+**What remains on the shortlist**, untested and therefore not claimed:
+
+- `mode_proposal_.v_max_rad_s` (`control_loop.cpp:426`) — a mode-level speed proposal that may re-limit after
+  line 844.
+- The post-handover authority ramp: `control_loop.cpp:609-615` multiplies intent velocity/accel scale by a
+  fraction for 300 ms after a mode change (round 22 measured 0.175 → 0.524 there). If something holds that
+  fraction at ~1/3 for the whole dart, `30 × 1/3 = 10.00` exactly — the arithmetic fits, the mechanism is
+  unproven, and the published `intent_velocity_scale` read 1.00 ("AUTH 100%") throughout, so either that field is
+  not the applied factor or the factor is applied somewhere it does not feed back into telemetry.
+- `track_v_max_rad_s` itself not being 30 at runtime. It is plumbed from `tracking.track_speed_deg_s`, which has
+  **no key in `turret.yaml`** and so takes the code default of 30.0 — worth confirming from the daemon's own
+  loaded config rather than from the defaulting call site.
+
+**Why this round ends without a claim.** Rounds 28, 37 and this one each produced a confident mechanism from a
+partial read; two were retracted and a third died in thirty seconds of arithmetic. The plateau itself is
+established (34 frames at exactly 10.00 deg/s, zero acceleration), and so is its cost (round 38's C2/C3
+accounting). The cause is not. The operator-facing documents say exactly that, and no limit should be touched on
+this evidence. Next round: print the daemon's *loaded* tracking speed and the authority fraction from a
+measurement path, rather than inferring them from source.
