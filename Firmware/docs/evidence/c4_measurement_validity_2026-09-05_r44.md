@@ -121,3 +121,36 @@ from dart start against an absolute bar — is dominated by a baseline (acquisit
 fails the bar before any target moves. C2's FAIL is real but its cause has been misattributed to dart response.
 Both numbers belong in front of the operator: the bar may need to be applied to the *incremental* recovery, or the
 baseline reduced, and that is a criterion decision, not mine.
+
+## Round 54: the floor reproduced exactly, and a contradiction between two fields of the same control loop
+
+Three fresh no-dart runs (`--dart-deg 0 --hold-s 6.0`) and one repeat of the 25 deg dart. Logs
+`/tmp/r53_floor_1.log`, `/tmp/r53_floor_2.log`, `/tmp/r53_dart.log`, plus round 53's original.
+
+| | round 53 | floor run 1 | floor run 2 | dart repeat |
+|---|---|---|---|---|
+| C4 sign changes | **11** | **11** | **11** | 4 |
+| hold aim error p50 (px) | 26.7 | 24.9 | 25.5 | 34.2 |
+| C2 recovery (s, bar 1.50) | 1.63 | **1.61** | **1.61** | 2.27 |
+| C3 lead (deg) | — | −0.275 | −0.229 | −4.702 |
+
+**C4's floor is 11 on every no-motion run, identically** — and the real dart produced 4 both times, *below* its own
+floor. The metric does not measure ringing; it measures jitter, and it did so reproducibly.
+
+**C2's baseline is 1.61 s, reproducibly** — already past the 1.50 s bar with no dart commanded. Subtracting it, the
+25 deg dart costs about **0.66 s**, not 2.27 s.
+
+**And C6 fails with nothing moving at all.** All three no-dart runs report the reference outside its rate ceiling,
+worst **17.8 deg/s from a 0.653 deg reference move over 37 ms at t = 7.79 s (hold)** and 16.9 deg/s at t = 3.82 s
+(hold). Two readings of that, not yet resolved, and the difference matters:
+
+* the published reference **position** really can outrun the station's 10 deg/s ceiling inside one sample interval,
+  which would be a controller-side defect and directly relevant to smoothness; or
+* the probe's sampled `dt` is biased enough to inflate the implied rate — but the tool already allows +10 %, and
+  this is 1.77x, which that allowance does not cover.
+
+Against both readings sits the daemon's own `q_ref_rate_yaw_rad_s`, which the same dart run reports as never
+exceeding 10.0 deg/s. **So two fields published by the same control loop contradict each other**: position steps say
+17.8, the rate field says 10.0. C6's FAIL has therefore been measuring that contradiction, not target-following.
+Resolving it needs a comparison at the daemon's own 200 Hz timebase rather than at the web bridge's sampled one —
+a next step, recorded as open, not a conclusion.

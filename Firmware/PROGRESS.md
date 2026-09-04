@@ -2578,3 +2578,24 @@ heights**, p95 44.4 px, so the lock sat demonstrably near centre, with **0.0 deg
 Station restored afterwards: MANUAL/HOLD, READY, synthetic source running (`vision_track_sets 70399`). No
 controller, config or HUD change; **461 pytest / 57 CTest** stand. This round changed what two of the four smoothness
 and recovery criteria are allowed to mean — which is the point of measuring instruments before trusting verdicts.
+
+## 2026-09-05, 11:3x — round 54: the floor reproduced identically, and C6 turns out to fail with nothing moving
+
+Three fresh no-dart runs plus a dart repeat. **C4's sign-change floor is 11 on every no-motion run, identically**,
+with the real dart producing 4 both times — below its own floor. Round 53's finding was not a one-off.
+**C2's baseline is 1.61 s reproducibly**, already over the 1.50 s bar with zero commanded motion, so the 25 deg dart
+costs roughly **0.66 s** rather than the headline 2.27 s.
+
+**New, and unresolved on purpose:** C6 FAILs in all three no-dart runs — worst **17.8 deg/s, a 0.653 deg reference
+move over 37 ms at t = 7.79 s, during the hold** — while the same dart run reports `q_ref_rate_yaw_rad_s` never
+exceeding 10.0 deg/s. Either the published reference position really does outrun the station ceiling in one sample
+interval (a controller-side defect, squarely relevant to smoothness), or the probe's sampled `dt` inflates implied
+rate — but the tool's +10% publish-jitter allowance does not cover a 1.77x gap. Two fields of the same control loop
+disagree, and **C6 has been measuring that disagreement rather than target-following.** It needs the daemon's own
+200 Hz timebase, not the bridge's sampled one; recorded open, not concluded.
+
+Station restored: MANUAL/HOLD, READY, synthetic source running (`track sets 74699`). No controller/config/HUD change;
+**461 pytest / 57 CTest** stand. Of the operator's acceptance criteria, after five rounds of instrument testing:
+C1 PASS (anchor and box) · C2 FAIL but 1.6 s of it is baseline · C3 FAIL −4.7° to −6.4°, the one criterion whose
+failure has survived every check · C4 invalid (floor 11) · C5a PASS · C5b FAIL validated · C6 measuring a
+contradiction between published position and published rate.
