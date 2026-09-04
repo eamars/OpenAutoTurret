@@ -64,7 +64,26 @@ def cmd(c, a=""):
                               headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(r, timeout=8) as f: return json.load(f)
 rows = []; bad = None
-cmd("set_mode", "AUTO_ROAM")
+# The first run of this script produced 1501 samples of a STATION THAT NEVER MOVED: measured and reference were both
+# pinned at 148.27 deg, and following error came out a triumphant 0.000. The reason is that nothing checked whether
+# AUTO_ROAM had actually been entered - a mode request that is refused still returns a JSON body, so the loop just
+# politely sampled a stationary axis and reported a perfect score. Verifying the mode is not optional here; without it
+# the script can report success on a turret that did nothing, which is worse than reporting nothing.
+v = cmd("set_mode", "AUTO_ROAM")
+print("set_mode(AUTO_ROAM) verdict:", v)
+entered = None
+for _ in range(30):
+    time.sleep(0.5)
+    d = st()
+    if d.get("operating_mode") == "AUTO_ROAM":
+        entered = d.get("mode_phase"); break
+if entered is None:
+    print("!! AUTO_ROAM was never entered - REFUSING to measure. Current state:", st())
+    sys.exit(4)
+print(f"AUTO_ROAM entered (phase {entered}); sweeping before sampling so the reference is genuinely moving")
+for _ in range(20):
+    time.sleep(0.5)
+    if st().get("mode_phase") == "SWEEP": break
 t0 = time.time() + 50
 try:
     while time.time() < t0:
