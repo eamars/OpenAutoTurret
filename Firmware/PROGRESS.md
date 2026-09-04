@@ -3824,3 +3824,36 @@ to be revisited with a real scene in view, or the change stays only if the opera
 which is their call, not something to bury in a commit.
 
 Station: real IMX500 vision source restored and running; controld untouched; preview left as configured.
+
+## 2026-09-06, 09:0x — round 10: verdict at last, three rounds after I started guessing — the camera gives 15.00, we publish 10.00
+
+Instrumented the one quantity nobody had measured, then restarted and read it:
+
+* **`sensor_fps` (completed requests arriving, before any processing): 15.00**
+* **`fps_published` (after our per-frame work): 10.00**
+* `pixel_format: 'XBGR8888'` — the unverified format change is **reverted** (it bought nothing measurable and
+  `colour_check` refused to certify it, so it went back rather than staying as an unowned risk).
+
+**That settles the argument three rounds should have ended with numbers instead of rhetoric.** Rounds 6, 7 and 9 each
+applied a plausible mechanism and each moved nothing; the joint conclusion I wrote last round — that nothing in the
+per-frame path could explain it — was *half right*: nothing in the per-frame path explains it **in the way I proposed**,
+but the loss is nevertheless **inside our per-frame work**, at ~100 ms of it, because the arrival rate proves the
+sensor is not the limit. The camera sends 15; we hand the browsers 10. A third of the picture is thrown away by this
+file, which is exactly the kind of thing that reads as "the motion is shaky" to someone watching the pane while the
+encoder next to it is dead still (round 2's 0.0877°/0-reversals).
+
+Budget of that ~100 ms, from what is already measured: JPEG encode ≈ **21 ms** at 1080p on *worst-case* noise content
+(real frames are ~105 KiB against 1352 KiB, so less), leaving roughly **70-80 ms unaccounted** in
+`request.make_array()` on an 8 MB XRGB/XBGR frame plus the `rotate_180` orientation flip and the white-balance path —
+all of it on the critical path of a single pull loop that also holds the request open.
+
+Next measurement, and it is the same shape as this one: time the phases around the loop and expose them, so the fix
+attacks the 70-80 ms rather than the 21 ms. Candidate fixes then rank themselves — release the request before encoding
+(from a copied buffer), skip work rather than whole frames when behind, or lift the decode off the pull thread. None of
+them is worth writing before the phase timings say which number to attack; I have already spent three rounds writing
+plausible ones.
+
+Also worth keeping: `sensor_fps` vs `fps_published` is now a permanent pair on `/api/video/state`. It is the kind of
+instrument that would have made rounds 6-9 unnecessary, and it costs two list appends per frame.
+
+Station: real IMX500 vision source restored; controld untouched; preview running at the reverted (verified) colour path.

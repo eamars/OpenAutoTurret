@@ -52,6 +52,8 @@ class VideoState:
     # only a size, so 15 was never asked for, let alone measured. Reporting a wish in a field a
     # §20 contract calls `fps` is how a panel comes to lie quietly; both numbers are here now.
     fps_published: float = 0.0
+    # Rate at which completed requests ARRIVE from the camera - see measured_arrival_fps().
+    sensor_fps: float = 0.0
     wb_gains: tuple = (1.0, 1.0, 1.0)
     orientation: str = "none"
     white_balance: str = "off"
@@ -106,6 +108,9 @@ class VideoSource:
         self._min_publish_s = 1.0 / 15.0
         # Publish timestamps over a trailing window, to measure the rate actually delivered.
         self._recent: list = []
+        # When each COMPLETED REQUEST arrived from the camera, before any processing. Separates
+        # 'the sensor delivers 10 fps to this path' from 'we process at 10 fps'.
+        self._arrived: list = []
         self._last_publish = 0.0
         self._open_error = ""
         # Smoothed gray-world white-balance gains (EMA across frames: no flicker).
@@ -128,6 +133,7 @@ class VideoSource:
                 error=self._state.error or self._open_error,
                 frames_published=self._count,
                 fps_published=self.measured_fps(),
+                sensor_fps=self.measured_arrival_fps(),
                 wb_gains=self._wb_gains,
                 orientation=self._orientation,
                 white_balance=self._wb_mode,
@@ -155,6 +161,7 @@ class VideoSource:
             # Reset publish bookkeeping.
             self._min_publish_s = 1.0 / max(1.0, float(fps))
             self._recent = []
+            self._arrived = []
             self._last_publish = 0.0
             self._seq = 0
             self._count = 0
@@ -177,7 +184,7 @@ class VideoSource:
             try:
                 cam = Picamera2()
                 cfg = cam.create_video_configuration(
-                    main={"size": (int(width), int(height)), "format": "XRGB8888"}, buffer_count=3
+                    main={"size": (int(width), int(height))}, buffer_count=3
                 )
                 # Ask for the rate on a control this configuration ACTUALLY advertises. Round 6 set
                 # controls["FrameRate"], which the probe in round 8 showed is not exposed here at all
@@ -302,6 +309,7 @@ class VideoSource:
                 self._open_error = f"camera request failed: {e}"
                 return
             now = time.monotonic()
+            self._arrived.append(now)
             try:
                 # FPS cap: only JPEG-encode a frame when one is due. Skipping is
                 # cheap — and the request is ALWAYS released (the main §42.3
@@ -315,6 +323,19 @@ class VideoSource:
                     request.release()
                 except Exception:  # noqa: BLE001
                     pass
+
+    def measured_arrival_fps(self, now=None, window_s: float = 5.0) -> float:
+        """Rate at which COMPLETED REQUESTS arrive from the camera, before any processing.
+
+        Compared against measured_fps() this is the whole diagnosis in two numbers: arrival ~15 and published ~10 puts
+        the loss inside this file's per-frame work; arrival ~10 puts it upstream (mode selection, or the single-
+        in-flight capture_request pattern), where copying a config argument could never have helped - as rounds 6 and
+        9 already hinted by applying changes that moved nothing.
+        """
+        now = time.monotonic() if now is None else now
+        cut = now - window_s
+        self._arrived = [t for t in self._arrived if t >= cut]
+        return (len(self._arrived) / window_s) if self._arrived else 0.0
 
     def measured_fps(self, now=None, window_s: float = 5.0) -> float:
         """Frames per second over the trailing window; 0.0 when nothing has been published.
