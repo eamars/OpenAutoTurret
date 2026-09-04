@@ -2536,3 +2536,24 @@ no C++ touched). Station untouched: MANUAL/HOLD, READY, synthetic source running
 
 Outstanding, unchanged and owned by the operator: the ceiling decision (10 deg/s), the C4 known-truth validity
 test (round 45's method, applied to aim-error crossings), and the §24/§110 signatures with measured evidence.
+
+## 2026-09-05, 10:2x — round 52: my C4 known-truth experiment failed on its own premise, and I labelled the window before I measured it
+
+Read C4 properly first: it is `ex = anchor px − centre px` with a **1 px deadband**, not "aim error" as printed and
+not the reference-rate signal round 44 analysed.
+
+Then the failed experiment: engage AUTO_TRACK on the live synthetic source, settle, sample, count flips. **The
+premise was false** — the synthetic source's targets move, and the sampled window sat 595–1070 px off centre, so
+nothing was settled and nothing was static. The printed heading claimed "target static in world, axis settled"
+**before any data existed**: the label described the experiment I planned, not the one I ran. Struck in the
+evidence file rather than deleted.
+
+What survives: only that a 1 px deadband on a signal with excursions of hundreds of pixels cannot separate ringing
+from ordinary motion or re-selection — suggestive, explicitly not a calibration. **The test C4 needs has to live
+inside the dart fixture**, where the probe's target is static by construction: hold it with **no dart**, count
+flips under the current rule, and require the post-dart count to exceed that floor. Small scenario addition plus
+one motion run — the next step for C4. Until then round 50's FAIL (4 sign changes) measures a confounded quantity,
+neither confirmed nor withdrawn.
+
+Station: MANUAL/HOLD, READY, within limits, synthetic source running throughout (nothing killed this round); the
+transient AUTO_TRACK engagement was reverted. No controller, config, or HUD change; **461 pytest / 57 CTest** stand.

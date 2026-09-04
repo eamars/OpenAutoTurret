@@ -61,3 +61,32 @@ evidence against it.
 
 Station untouched and healthy: homed, MANUAL/HOLD, READY, ceiling 10.0 deg/s on the panel, synthetic source
 running. No code changed; **451 pytest / 57 CTest** stand.
+
+## Round 52: a failed attempt at the known-truth test, recorded because the failure is the finding
+
+C4 was read properly this round, and round 44's description of it was wrong in a way worth repeating: it scores
+
+    signs = [1 if r["ex"] > 0 else -1 for r in hold_rows if abs(r["ex"]) > 1.0]      # ex = anchor px - centre px
+    flips = sum(1 for a, b in zip(signs, signs[1:]) if a != b);   c4 = flips <= 2
+
+so it is the **anchor's horizontal offset from frame centre**, with a **1 px deadband** — not "aim error" as the
+printout calls it, and not the reference-rate signal round 44 analysed.
+
+**The attempt:** engage AUTO_TRACK against the running synthetic source, let it settle, sample 8 s, and count
+flips where the truth is "nothing moves". **The premise was false.** Result: |ex| p50 595 px, p95 1045 px, max
+1070 px — half a frame width from centre — with 6 flips. Either re-selection or non-engagement, but plainly not a
+settled lock; and in any case the synthetic source's targets **move**, so the window was never a known-truth
+segment. The analysis line printed "target static in world, axis settled" **before** the data existed: I wrote the
+label for the experiment I had planned, not the one I ran. It is struck here rather than quietly deleted.
+
+**What this does and does not establish.** It does not calibrate C4. It shows only that on a signal whose
+excursions run to hundreds of pixels, a 1 px deadband cannot separate ringing from ordinary target motion or
+re-selection — suggestive, not measured. **The test C4 actually needs** has to be run inside the dart probe's own
+fixture, where the target is static by construction: hold the probe's static target with **no dart**, count flips
+under the current rule, and use that count as the noise floor the post-dart count must exceed. That is a small
+scenario addition plus one motion run; it is the next step for C4, and until it exists round 50's "FAIL (4 sign
+changes)" stands as a measurement of a confounded quantity, neither confirmed nor withdrawn.
+
+Station after the attempt: MANUAL/HOLD, READY, homed limits respected, synthetic source never stopped this round.
+The brief AUTO_TRACK engagement moved the axis toward a synthetic target and was reverted to MANUAL; no controller
+or config change was made.
