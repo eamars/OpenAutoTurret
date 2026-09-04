@@ -4362,3 +4362,41 @@ changes is which knob I am allowed to turn.
 
 Round 20's *demotion* of the friction story still stands on its own: the offset is equally consistent with kinetic
 friction and with a missing proportional term, and those need different fixes.
+
+## 2026-09-06, 15:3x — round 22: the lever question is settled — normal motion sends a POSITION, so the 3.6° is the drive's error, not controld's
+
+Round 21's named probe answered, and round 20's retraction is now confirmed rather than merely suspected. Two things I
+had to fix in my own method first: my round-21 listing was **truncated by `head -12`** on a file with **21**
+`backend_->` sites, and a cross-file search for actuation calls returned nothing — because the call was in
+`control_loop.cpp` all along, past where I had stopped looking.
+
+**The normal-operation actuation is `control_loop.cpp:1085`: `backend_->command(a, qr, ls);`** — the `else` arm of the
+safety branch (`:1080-1083`: not-Allow → `command_velocity(a, 0.0)`, Allow-but-nothing-to-say → `keepalive(a)`). Given
+`MotorBackend::command(axis, target_rad, speed_rad_s)`, that is a **position command with a speed limit**, not a rate.
+
+**So the 3.6° following error is the CyberGear's internal position-mode error at that speed limit.** A controld-side
+SpdRef feed-forward — the change I was lining up in round 20 — would have been aimed at a loop controld does not close.
+`head -12` was two-thirds of the way to a wrong controller change.
+
+**What controld can and cannot reach, from the actual plumbing:**
+* **Can:** the commanded angle `qr` (shape it / lead it), the **speed limit** `ls`, and the drive's **speed-loop gains**
+  — `set_speed_loop_gains` is fully plumbed (`:2253` → `can_motor_backend.cpp:357`).
+* **Cannot:** the drive's **position-loop gain**. A search for any position-gain register reference returns only
+  `Reg::MechPos`, which is a position *read-back*, not a gain. **There is no path in this codebase to the drive's
+  position-loop P term.**
+
+Three consequences, in order of usefulness:
+
+1. **Item 2's dynamic half has to be argued at the levers that exist.** Lowering the commanded speed trades sweep time
+   for fidelity; leading `qr` pre-compensates the trail in software; retuning the speed loop is measurable but changes
+   control behaviour and is the operator's to sign. **Tuning the position loop is not available from here** — which is
+   worth stating flatly, because "increase the position gain" is the reflex answer and it is not a thing this code can do.
+2. **This is very likely the real mechanism behind "the roam range seems strange."** Round 12 measured the *encoder*
+   sweep at 108.82–188.77° while the envelope is ready±45°; the axis **trails its commanded position by ~3.6° in the
+   direction of travel**, so it reaches each extreme late and partly short, then closes the gap during the dwell. Item 5
+   and item 2 are the same defect seen from two ends — not two bugs.
+3. **AUTO_TRACK is affected in the worse way.** A ~3.6° trail while following a target at rate is a reticle sitting
+   3.6° behind, with no controller knob in controld to shorten it except leading the command or slowing down.
+
+Stated as inference, not proof: `qr`'s definition was not traced this round; what is proven is the call signature
+(`command(axis, target_rad, speed_rad_s)`) and that it is the only actuation call outside bootstrap, homing and park.
