@@ -4439,3 +4439,53 @@ differently." **That trial is one command away and needs a yes.**
 One process note on my own tooling: my build verification this round was `grep -c "Linking|error:"` returning **0** on a
 second invocation, which looks alarming and simply meant controld was already up to date from the first invocation
 (which printed no errors). Verified by the fact that the five new tests exist and ran.
+
+## 2026-09-06, 17:0x — AUTO_TRACK enabled on the real path and monitored: it correctly refused to track, and that is the finding
+
+Operator instruction: enable auto tracking, monitor performance, comment. Done — and **AUTO_TRACK is left enabled**
+(`AUTO_TRACK / WAIT_TARGET / ALLOW`) with the real IMX500 source feeding it.
+
+**What had to be fixed first.** `visiond` was not running and `camera_fps` was 0; starting it failed with
+`RuntimeError: Camera __init__ sequence did not complete` — **the preview pane was holding the single-owner IMX500**
+(`running True, fps 10.0`, left over from the round-15 video test). Stopped the pane, source came up: **15.13 fps**,
+`vision_track_sets` 443+.
+
+**Monitored 70 s / 140 samples at 2 Hz, after issuing `select_target`:**
+
+| | |
+|---|---|
+| mode phase | `WAIT_TARGET` for all 140 samples |
+| safety action | **`ALLOW` always**; `control_deadline_misses` **0** |
+| track count | fluctuating **0–3** blobs, `class_name='person'` at **conf 0.31–0.36** |
+| `selected_confidence` | **0** in every sample |
+| `confidence_band` | **`INVALID` in 140/140** |
+| motion over 70 s | yaw **0.175°**, pitch **0.546°** total travel |
+
+**The honest comment: there is no tracking-performance number from this run, because nothing was tracked** — and the
+station's refusal is *correct behaviour*, not a fault. `predicted_target_los_valid` went `True` after selection, but the
+confidence band never left `INVALID`, so the controller held. 0.175° of yaw in 70 s on a station watching a static room
+through a noise-level detector is what a well-behaved tracker looks like. **Quoting those degrees as "tracking
+performance" would be the fabricated-number habit again.**
+
+**Why it cannot engage on this detector**, with the identity evidence: blob uuid `0:77` persisted across all 12 samples
+while `0:75` vanished after ~3 s, and `selectable` oscillated **True → False → True** on the surviving blob. The blob I
+selected was one of the transient ones, which is why `select_target` was accepted (`ok/submitted`) yet never became
+`selected`. So selection instability here is mostly *the detector's*, not the selection logic's: threshold blobs appear
+and disappear, and `selectable` correctly follows that.
+
+**Two things that deserve naming as defects/risks, not as news:**
+1. **`track_state` reports `tracking`, `coasting` and `brake_to_hold` while the band is `INVALID` and nothing is
+   selected.** An operator watching the HUD sees "tracking" on a station that is holding and has no target. The
+   telemetry next to it (`confidence_band INVALID`, `selected_uuid_valid False`) tells the truth; the label does not.
+2. **The blob detector stamps `class_name='person'`.** That is a threshold blob wearing a class label — precisely the
+   *appearance* of a fake target this project was told to stop producing. It is non-production by design, but the label
+   should say so.
+
+**What this settles for item 1:** the synthetic fixtures are gone and the real path is running, but **the `simple`
+detector at conf ~0.33 cannot reach a confidence band, so AUTO_TRACK engagement cannot be measured on it at all.** Real
+tracking performance needs either the `rpk` path (blocked on the picamera2 AI/`postprocessing_config` API) or a genuinely
+detectable target in view — and possibly a look at the band thresholds, since a diagnostic detector that can never
+qualify tells us nothing about the tracker either way.
+
+**Operational note:** the IMX500 is single-owner, so **the HUD video pane and real vision cannot run together**. The pane
+is off now; turning it back on will starve `visiond` again with that same unhelpful error.
