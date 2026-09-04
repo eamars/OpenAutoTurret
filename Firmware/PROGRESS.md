@@ -3609,3 +3609,42 @@ from the *tracking* jitter distribution once a real target is in view on the rea
 Where it goes: `tracking_ref_` is read at `control_loop.cpp:841-842` and constrained at 843; the write path is through
 the reference owner rather than a direct assignment in `control_loop.cpp` (greps for a direct assignment found none), so
 the deadband belongs at the point where a measurement becomes a reference — which is the next thing to locate.
+
+## 2026-09-06, 06:0x — round 4: the plumbing map for the vision deadband, so implementation is one clean pass and not a hunt
+
+Discovery this round was expensive and mostly context, so the result is a map rather than code. Every site below was
+read or grepped in this round, not recalled.
+
+**Where the aim actually comes from.** `ControlLoop::build_mode_intent()` (`control_loop.cpp:601`, defined just after
+line ~600 in the switch) does **not** compute the aim: for `AutoTrack` it defers entirely to **AutoTrackController**
+(`at_out_.follow_los`, `at_input_.estimator_ready`) — the comment there says so explicitly: *"this answer comes from
+AutoTrackController, not from the v1 FSM"*. `tracking_ref_` is then `ref_mgr_->resolve(last_intent_, …)`
+(`control_loop.cpp:619`) and is **cleared at the top of every cycle** (`:399`; there is a comment at `:443` about a bug
+that came from reading it in the wrong place). So a deadband on the *reference* would be applied after the aim is
+already decided — the correct place is **before the intent is formed**.
+
+**The controller is header-only:** `control/src/tracking/auto_track_controller.hpp` (no `.cpp` exists — the `ls` for one
+returned nothing). It already owns prediction: `predicted_los_at_actuation()` is what feeds
+`snap.predicted_target_az_world_rad` (`control_loop.cpp:1623`), alongside `estimator_initialized()`,
+`prediction_horizon_ns()`, `target_az_rate_rad_s()`. **Lead/prediction already exists** — item 2's "must LEAD" is not a
+missing feature, it is a tuning/measurement question.
+
+**The four edits, in order:**
+1. `control/src/config/turret_config.cpp` (~426, where `coast_ms` / `lost_hold_ms` / `reacquire_window_ms` are parsed
+   via `opt_double(at, …)`) — add `deadband_deg` **and** `deadband_release_deg`, default **0.0** meaning disabled.
+2. `control/src/control/control_loop.hpp` `Config` struct (near `search_span_rad`, `:158`) — the two fields.
+3. `auto_track_controller.hpp` — apply the band where its aim output is formed: hold the last commanded LOS while
+   |candidate − held| < enter; release (resume following) once it exceeds the strictly larger release threshold.
+   Mutable state lives in the controller, not `ControlLoop`, so `reset()/start()` clears it with the session.
+4. `control/tests/test_control_loop.cpp` (or a controller-level test) — in-band wobble must not move the aim; a step
+   past the release threshold must; **and a test that the default of 0.0 leaves today's behaviour byte-identical**, so
+   "explicit config choice, not a silent change" is enforced by a test rather than by promise.
+
+**Why I stopped here rather than editing now:** four files plus a build-and-test cycle is not responsible work at the
+end of an exhausted context — that is the shape of the round-63/65 damage in this file (patches that "compiled" while
+applying nothing). A map that took one round to produce is cheaper than a bad edit that takes two to undo.
+
+Sizing constraints recorded last round still stand: the reported angle quantises at **0.02177°**, at-rest drift is
+sub-tenth-of-a-degree with **0 reversals**, so `deadband_deg` must be > 0.02177 to mean anything; final value from
+tracking jitter on the real detector path, which still needs a target in view (blob detector reports nothing on a
+still scene).
