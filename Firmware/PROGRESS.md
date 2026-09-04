@@ -4555,3 +4555,46 @@ measurement own the conclusion.
 4. **Item 4 policy values** (`roam_on_loss_ms`, `track_on_acquire_ms`), and item 2's harder half — *"command a fixed
    encoder position"* in the sense of **opening the position loop** — deliberately **not** implemented, because that
    discards gravity-sag, backlash-creep and disturbance rejection on a station with a measured friction deadband.
+
+## 2026-09-05, 00:3x — the prediction box, and a station that had been dark for twenty minutes
+
+Operator: *"multiple issues with your web ui, like the predict box just doesn't work. I need you to fix it."* Fixed, and
+the route there was instructive.
+
+**First: nothing was running.** `/api/state` returned nothing because **the station had rebooted 31 minutes earlier**
+(uptime 31 min, all `/tmp` evidence gone). Bringing it up reproduced the trap in full: `web server did not start: bind:
+No such file or directory` — `/run/ota` does not exist until systemd makes it — logged as a **warning**, after which
+controld ran, homed and tracked with **no operator interface whatsoever**. Now fixed in `main.cpp`: controld creates the
+socket's parent directory (verified live: `created /run/ota for the web socket`, then `web server listening`). Still a
+warning rather than a fatal exit — killing the control loop because the UI cannot bind would trade a visible fault for a
+hidden one — but the fault can no longer be silent in the way it was.
+
+**The predict box, root cause.** `control_loop.cpp:1497-1522` decided *for itself* whether a prediction existed
+(estimator initialised? intrinsics sized like the frame? `r_cam.z > 0.05`? in frame?) while the motion the cue was
+supposed to forecast came from `build_mode_intent` under `follow_los && estimator_ready` (`:2187`). Two copies of one
+decision, and the block's own comment even warned that a second copy of those guards "would be free to drift". Measured
+while the station reported `tracking`: **cue invalid in 53 of 55 samples**. The fix makes the cue the thing it claims to
+be — projected from `last_intent_`, the ray actually commanded this cycle, deadband included — and makes every way it
+can fail say so in a new `prediction.reason`, surfaced on the page (`PREDICTION: LIVE / <reason>`).
+
+**Verified, on the documented synthetic bench source** (a UI-path test, *not* tracking acceptance — item 1 still needs a
+real target): while `intent_type == los_direction`, **94/95** samples produced a cue, and the one that did not correctly
+reported *"the predicted ray points behind the camera"*; while not aiming, **0 of 19** produced a cue. That second half
+is the point: drawing a prediction while the controller holds was the lie, and it now measures zero.
+
+**Two more of my own defects, both caught by the tests I wrote for the fix, not by me:**
+1. **Stale tap served forever.** `_tap_loop` noticed a tap file *vanishing* but not one going stale. After a controld
+   restart brought visiond back without `OTA_VISION_FRAME_TAP`, the pane reported `running True, error ''` while
+   serving a JPEG **80 minutes old**. It now refuses to publish a stale frame and names the cause.
+2. **Worse: the fallback was wrong.** With a stale tap, `start()` fell through to **opening the camera** — the exact
+   sensor visiond holds, which is where `Camera __init__ sequence did not complete` comes from. Routing is now by
+   *existence*; freshness decides only whether frames are served.
+
+**And a near-miss worth recording.** `/api/video/state` showed `frames_published 1057` with `fps_published 0.0`, which
+looked like a broken rate counter — I had already diagnosed a deque/list mismatch in my own `_start_tap`. It was
+**wrong**: `_recent` is a plain list by design, and 0.0 was *truthful* — the last publish genuinely was 80 minutes ago,
+so a 5-second window held nothing. I nearly "fixed" a correct measurement to agree with a story I liked. The lesson is
+the same one from the following-error `0.000`: check what a number measures before you repair it.
+
+Suite: **CTest 57/57** (fresh binary), **pytest web+vision 383 passed** (+3 tap tests). Left running: controld homed
+`MANUAL/HOLD/ALLOW`, real vision with the tap at ~10 fps, pane on `vision-tap` at 9.8 fps.
