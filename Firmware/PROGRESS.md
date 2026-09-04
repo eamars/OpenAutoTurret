@@ -2829,3 +2829,33 @@ station up several times and see the bad-fd failure cannot recur. That is a real
 step" clause, not a relabelling.
 
 No code changed this round; nothing signed.
+
+## 2026-09-05, 17:2x — round 65: the test publisher can no longer land on the running station's socket, after two failed patches of my own
+
+`tools/fake_vision.py` no longer defaults to `/tmp/ota_vision.sock`. The flag must be given, or `OTA_VISION_SOCKET`
+set (the installed services address it that way, so their behaviour is unchanged); otherwise the tool refuses:
+`no --socket given and OTA_VISION_SOCKET unset - refusing to default to the live station's vision socket`. Dry runs
+are exempt, because line 178 already shows `sock = None if a.dry_run else connect_vision(a.socket)` — a dry run never
+touches a socket, and my first guard wrongly demanded one anyway. Verified: **74 tools tests pass**, and **403 more**
+across `web vision common` (**477** total, matching every prior full-suite count), `py_compile` clean.
+
+**How it went wrong twice before it went right, because that is the part worth keeping:**
+
+1. The validation block's anchor was `    args = ap.parse_args(argv)\n` — the file says `a = ap.parse_args(argv)`.
+   **Anchor count 0, nothing inserted**, and the script still reported `py_compile OK` because `--socket` defaulting
+   to `None` is perfectly valid Python that fails later with `TypeError: stat: path should be string … not NoneType`.
+   A clean compile is not evidence: the change was a crash dressed as a fix, and my own print line said the change
+   had landed.
+2. The retry located the real site by regex but crashed computing the dry-run attribute name (`m.group(1)` was an
+   optional group, so `None.replace` blew up) — **so that run applied nothing at all**, and I nearly read "74 passed"
+   from an unchanged file as progress.
+
+The fix that worked needed no cleverness: line 178 of the actual source already said `a.dry_run`, so the guard is
+`if not a.socket and not a.dry_run:`. Two rounds of guessing at the file lost to one grep of it.
+
+Consequence for the round-64 finding: a test run alongside a live controld can no longer silently attach to (or
+clobber) its vision socket, which is the mechanism behind the `Bad file descriptor` failures of rounds 42 and 64.
+The remaining hazard of the same family — a test binding a *fixed* private path — is not addressed; the default is
+now simply never production.
+
+Nothing signed; station untouched (MANUAL/HOLD, READY, synthetic source running, ceiling 10).

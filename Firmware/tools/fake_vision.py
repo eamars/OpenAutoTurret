@@ -138,8 +138,12 @@ def _sleep_until(deadline: float) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("mode", choices=("sweep", "hold", "none"))
-    ap.add_argument("--socket", default=os.environ.get("OTA_VISION_SOCKET",
-                                                       "/tmp/ota_vision.sock"))
+    # Round 64: the default used to be the live station's socket path. A test publisher that
+    # silently points at a running controld is worse than one that refuses to start: it appears to
+    # work, contends for the real vision input, and can hand a test a closed descriptor. The
+    # environment override stays (that is how the installed services address it); an implicit
+    # default to production does not.
+    ap.add_argument("--socket", default=None)
     ap.add_argument("--hz", type=float, default=30.0,
                     help="publish rate (visiond runs ~30 Hz; §6.2 freshness "
                          "thresholds are tuned for that)")
@@ -158,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="print the frames instead of sending them")
     a = ap.parse_args(argv)
+    a.socket = a.socket or os.environ.get("OTA_VISION_SOCKET")
+    if not a.socket and not a.dry_run:   # dry runs never touch a socket (see a.dry_run below)
+        # Loud beats silent: refusing names the problem, whereas defaulting onto the running
+        # station's socket hides it inside an unrelated failure several frames later.
+        ap.error("no --socket given and OTA_VISION_SOCKET unset - refusing to default to the "
+                 "live station's vision socket (round 64: that default made test runs "
+                 "contend with a running controld)")
 
     t0 = time.monotonic()
     period = 1.0 / a.hz
