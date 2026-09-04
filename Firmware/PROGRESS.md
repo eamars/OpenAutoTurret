@@ -2905,3 +2905,21 @@ a measurement` at line 27 — the document quotes both verbatim because those tw
 objective (c): half measured, half convention.
 
 No measurement, no code change, nothing signed. Suites stand at **484 pytest / 57 CTest** from round 66.
+
+## 2026-09-05, 19:0x — round 68: the two counts the briefing depends on are measured, not remembered
+
+Round 67 flagged that it could not re-derive the §110 count. Today it was derived: **§24 holds 16 checklist items**
+and **§110 holds 30 items**, both by parsing the specs, and `docs/operator_status_v3_2_2026-09-05_r67.md` now states
+the counted values with their provenance. Round 30's memory of "30" happens to be right — which is beside the point:
+the number in the operator's document now comes from the file it describes rather than from my recollection of
+reading it 38 rounds ago.
+
+Why round 67's search failed is worth one line, because it is the same trap in a new costume: **§24 is an H1**
+(`# 24. Acceptance criteria — visual fidelity`), and my pattern looked for `^##\s*24`. A heading level is not a fact
+about the document, it is a fact about my regex, and "section 24 heading not matched" was my pattern reporting on
+itself while sounding like a statement about the spec. That is the third distinct way a grep has lied to me in this
+session (round 30's invented citations, round 42's malformed pipeline, round 64's silent-absence proof), and the fix
+is identical each time: read the file, or count in a way whose failure mode you can distinguish from an empty result.
+
+Docs only. No measurement, no code change, nothing signed. **484 pytest / 57 CTest** stand from round 66; station
+MANUAL/HOLD, READY, synthetic source running.
