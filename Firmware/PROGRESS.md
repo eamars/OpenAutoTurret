@@ -3857,3 +3857,42 @@ Also worth keeping: `sensor_fps` vs `fps_published` is now a permanent pair on `
 instrument that would have made rounds 6-9 unnecessary, and it costs two list appends per frame.
 
 Station: real IMX500 vision source restored; controld untouched; preview running at the reverted (verified) colour path.
+
+## 2026-09-06, 09:3x — round 11: the missing 70–80 ms now has names and prices, measured for 5 ms of daemon churn avoided
+
+Round 10 proved 15 arriving / 10 published and blamed "the rest of the per-frame work" — true but not actionable.
+Instead of instrumenting the loop and doing another kill-restart-measure cycle, I priced the operations directly on
+this machine (1920×1080×4 `uint8`, median of 10):
+
+| operation | cost |
+|---|---|
+| `np.rot90(arr, 2, axes=(0,1))` — **view** | **0.0 ms** |
+| that view + `ascontiguousarray` (the copy) | **18.0 ms** |
+| horizontal flip + contiguous | 18.0 ms |
+| BGR→RGB as a slice (`arr[:,:, [2,1,0]]`) | 5.0 ms |
+| BGR→RGB slice + contiguous copy | 20.3 ms |
+| `np.asarray(..., dtype=np.int16)` of a 1080p RGB view | **15.3 ms** |
+
+Plus what was already measured: JPEG encode **≈21 ms** at 1080p (worst-case content; real frames ~105 KiB vs 1352 KiB,
+so less), and `request.make_array()` handing back an 8 MB array.
+
+**So the ~100 ms is accounted for without guessing at all**: an 8 MB copy in, a rotate copy (18 ms), a channel-order
+copy (20 ms), an int16 conversion (15 ms), and an encode (~21 ms) — each individually plausible, summing to the deficit
+between 15 in and 10 out. The fix list, ranked by measured price rather than by taste:
+
+1. **Stop paying 15.3 ms for `int16` when white balance is off.** The state has reported `white_balance: "off"` all
+   session ("the sensor feed is already neutral once the BGRX byte order is decoded correctly"). If the conversion runs
+   regardless, that is 15 ms per frame bought for arithmetic nobody uses. *Check before changing — I have been wrong
+   three rounds running on this file.*
+2. **Fold rotate and channel-reorder into ONE copy instead of two.** Two full-frame copies cost 18 + 20 = 38 ms; one
+   fused copy costs ~20. A `rot90` view is free; it is the materialisation that costs, so materialise once.
+   `PIL.Image.transpose(ROTATE_180)` is a candidate since it is C code over the buffer we are about to encode anyway.
+3. Only after those: move the work off the pull thread, or release the request before processing from a copy.
+
+Two things to hold onto. First, this is the first explanation in this investigation that is assembled entirely from
+measured prices rather than from a mechanism I found persuasive — rounds 6, 7 and 9 each had a story and each moved
+nothing. Second, `sensor_fps` vs `fps_published` is already in place to *judge* the fix, so nothing on this list gets
+booked as a win until those two numbers converge.
+
+No code changed this round (no instrumentation edits were needed once the direct pricing answered it — the two brackets
+I had started to place were never written, because the assert-before-write shape meant a failed anchor wrote nothing).
