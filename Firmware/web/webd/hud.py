@@ -723,6 +723,12 @@ const C = {
 
 let lastTelemetry = null;
 let lastTelemetryAt = 0;
+// Consecutive ticks on which only the PAGE's own clock said 'quiet'. The §25 verdict is the
+// station's condition; a browser that stalled decoding 1080p MJPEG is not the station losing
+// telemetry, and a WebSocket that closed one second before its scheduled reconnect never said
+// the station stopped. Both used to paint the overlay instantly or on a single tick, which is
+// the flash the operator reported seeing.
+let linkOverdue = 0;
 let transportOk = true;      // false => show the stale/disconnected state (§25)
 let healthAgeMs = null;      // webd's own age of controld's data, from /api/health (§25)
 
@@ -998,8 +1004,14 @@ function updateStaleness(t) {
   // draw. Re-rendering is how "stops visual interpolation" is enforced rather than merely asserted:
   // the overlay is rebuilt from the payload that is on hand, and when that payload is old the whole
   // viewport desaturates and declares itself - nothing keeps drifting on numbers that died.
-  const verdict = hudStale({
-    transportOk: transportOk,
+  const serverStaleNow = !!(t && t.telemetry_stale === true)
+      || (typeof healthAgeMs === "number" && healthAgeMs > STALE_AFTER_MS);
+  const msgAgeMs = lastTelemetryAt ? (Date.now() - lastTelemetryAt) : null;
+  const rawVerdict = hudStale({
+    // A closed socket is the page's condition, not the station's. While the last message is still
+    // inside the quiet grace the reconnect is already in flight, so it must not assert §25 staleness;
+    // if the link really is gone, the message-age path below declares it within the same grace.
+    transportOk: transportOk || (msgAgeMs !== null && msgAgeMs < QUIET_AFTER_MS),
     telemetryStale: !!(t && t.telemetry_stale === true),
     telemetryAgeMs: healthAgeMs,
     msgAgeMs: lastTelemetryAt ? (Date.now() - lastTelemetryAt) : null,
@@ -1009,6 +1021,13 @@ function updateStaleness(t) {
     trackAfterMs: TRACK_AFTER_MS
   });
   const vp = document.getElementById("viewport");
+  // Server-clock verdicts act at once - they are the station's own words. Verdicts resting only on
+  // this page's clock need two consecutive ticks, because a stalled main thread drains its queued
+  // messages the moment it resumes and so can never produce two, while a dead link produces all of
+  // them. Detection of a real loss is therefore delayed by at most one 250 ms tick, not hidden.
+  if (rawVerdict && !serverStaleNow) { linkOverdue += 1; }
+  else if (!rawVerdict) { linkOverdue = 0; }
+  const verdict = serverStaleNow || (rawVerdict && linkOverdue >= 2);
   if (vp) vp.classList.toggle("stale", verdict);   // a no-op when the verdict did not change
   return verdict;
 }

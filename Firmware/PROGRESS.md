@@ -3434,3 +3434,55 @@ stack stopped, and nothing was supervising it. Two honest consequences:
 
 No code or config changed in this follow-up. Commits unchanged: `f5cfb13` (round 82), `5bcb4a0`, `e3e902c`. Suites:
 **487 pytest** re-run green after the commit; **57 CTest** unchanged since round 78 (no C++ touched since).
+
+## 2026-09-06, 03:2x — round 83: the operator reported the page flashing "telemetry lost", and it was the page lying about the station
+
+Operator, back on the line: *"I can still see the web interface flashes from time to time due to telemetry lost."*
+First rule applied — measure before touching:
+
+* **Bridge and station are clean.** 19,335 samples of `/api/state` over 25 s: `telemetry_stale` true **zero** times,
+  `telemetry_age_ms` p50 33 / max **66 ms**, `feedback_age_ms` max 48, `track_list_age_ms` max 30, zero fetch errors.
+* **The push path is clean too.** Over `/ws`: **p50 66 ms, max 80 ms**, *while another client simultaneously drained
+  1.25 MiB/s of MJPEG video*. Server-side, nothing ever approached the 500 ms the page uses.
+
+So the flash was being **decided inside the browser**, and reading `hudStale` + `updateStaleness` showed exactly two
+ways to do it while the station was healthy:
+
+1. `ws.onclose` sets `transportOk = false` and reconnects after **1000 ms** — and the predicate treated a closed socket
+   as §25 staleness **instantly**. One dropped socket = one second of "TELEMETRY STALE / DISCONNECTED", then retraction.
+2. `msgAgeMs > 1500` on a **single** 250 ms tick. A main thread stalled decoding 1080p MJPEG simply stops running
+   `onmessage` for as long as it likes, and one late tick was enough to accuse the station.
+
+Fix at the caller, `updateStaleness`, leaving the pure predicate and its existing tests untouched: a closed socket
+inside the quiet grace no longer asserts staleness (the reconnect is already in flight, and if the link really died the
+message-age path says so within the same grace); and verdicts resting **only on the page's clock** need **two
+consecutive** overdue ticks, while anything controld itself reported — `telemetry_stale`, or its own
+`telemetry_age_ms > 500` — still acts on the first tick, because that is the station's own word and must never be
+softened. A stalled thread drains its queued messages the moment it resumes and so can never produce two ticks in a
+row; a dead link produces all of them. Cost: a genuine loss is declared one 250 ms tick later.
+
+**The test could have failed, and did.** `web/webd/tests/test_stale_flash_is_debounced.py` runs the page's real
+`updateStaleness` in node against a scripted clock — stub world only as wide as the surface it touches. Same harness,
+both versions of the page:
+
+| case | pre-fix | post-fix | wanted |
+|---|---|---|---|
+| socket closed, message 200 ms old | **true** ← the flash | false | false |
+| 1600 ms silent, first tick | **true** ← the flash | false | false |
+| second tick | true | true | true |
+| controld says stale | true | true | true |
+| link dead 4 s, first tick / second | true / true | false / **true** | one-tick delay, then declare |
+| fresh message again | false | false | false |
+
+Two harness bugs of my own on the way, both caught by running it instead of trusting it: a stub element that returned
+itself for every id (the page wires docks and drawers at load, so `dock.addEventListener` blew up), and `window`
+without `addEventListener`. Neither state produced a *passing* run, so neither could slip through as false evidence.
+
+Live after restart: `GET / → 200`, the served page carries the new code (`linkOverdue` appears 4×), controld
+`ready`, `telemetry_stale False`, `telemetry_age_ms 6`, `control_deadline_misses 0`, and `/ws` back to p50 66 / max
+84 ms with the video pane running. **488 pytest** (487 + the new one); CTest 57 untouched, no C++ changed.
+
+**Separate finding, not the flash:** the video stream delivers **11.7 fps** against 15 requested at 1080p
+(~1.25 MiB/s per client, and that client was reading flat out). The pane will therefore stutter slightly even when
+telemetry is perfect. Unattributed — capture/encode limited, or network — and it is a frame-rate claim I will not make
+without measuring the camera's own delivered rate.
