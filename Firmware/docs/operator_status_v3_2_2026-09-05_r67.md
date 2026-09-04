@@ -89,3 +89,39 @@ The operator's lead criterion — 25 deg in 1.60 s — needs about **15.6 deg/s 
   200 Hz loop overrun (~54 µs) is forgiven by design and its state is visible as `LOOP DEADLINE 0/5 (+2000us grace)`.
 * The controller's behaviour, limits, and dart defaults were **never changed** by me: every change in this stretch was
   instrumentation, tests, telemetry, the config key, and documentation.
+
+## 6. Safety findings from rounds 73–78 — this section postdates everything above
+
+Written last because it is the part that should be read first. No acceptance criterion is involved; it is about what
+the station did and what the record said about it.
+
+* **Uncommanded motion in `MANUAL / HOLD`, not attributed.** Round 73, during a theodolite walk: after a probe aborted,
+  yaw travelled tens of degrees and then wandered ±6° between samples with the target cleared and the synthetic source
+  stopped — nothing I could point at was commanding it. `at_ready` flickered. I stopped motion authority and rebooted;
+  the first ~140° of motion after boot was **`phase=homing`**, which is normal. **A properly homed, `ready` HOLD is
+  quiet: 149.075 → 148.966° over 30 s.** The episode has not recurred and I am not claiming a cause — but a long-running
+  never-rehomed station moved without a command, and that asymmetry (unhomed moves, homed does not) is worth more than
+  my speculation. The axis stayed inside software limits throughout (max ≈244° against 320.2°).
+* **Motion authority was cut 98 times while holding.** `/var/lib/ota/blackbox` holds **98 `BRAKE_in_hold`** scenes
+  (plus 30 in homing) from one session, 08:11→15:46. This is not log spam: §80 preserves a scene on the **edge** into
+  unsafe only, by explicit design ("a station sitting in a brake for a minute should hold one record, not twelve
+  hundred"). The supervisor's own reason, printed by the round-78 test: **`stale or missing motor feedback`**. The
+  mechanism is documented at `can_motor_backend.cpp:250-261`, where a keepalive ping exists precisely to stop this —
+  and it says each BRAKE **"stomps the other axis's reference"**, which is a credible account of the ±6° above.
+  **For the operator to judge:** is 98 feedback-loss brakes in a day of probing acceptable, or is the keepalive
+  under-powered? That is a safety-margin question on hardware I do not own the risk of.
+* **The record said the opposite of what happened — fixed, and the fix is tested.** Every one of those 98 scenes
+  recorded `safety_action: ALLOW` while its reason said BRAKE. Cause: `preserve_scene(snap, …)` ran at
+  `control_loop.cpp:1242` while `snap.safety_action` was assigned at 1366 — later in the same pass — and since an
+  edge is a transition *from* safe, the archived action was always the last permissive one. Round 76 hoisted the
+  assignment (same value, same cycle, now before its first reader; nothing else reads the field; published value
+  unchanged). Round 78 added `BlackBox.ABrakeEdgeArchivesTheActionThatActuallyCausedIt`, which silences a drive through
+  the documented sim hook and takes the real edge — and **the test was shown to FAIL with the fix removed and PASS
+  with it restored**, then confirmed to run under `ctest` (whose entries are per-binary, so the count of 57 proves
+  nothing on its own).
+* **Therefore: do not trust `safety_action` in scenes written before the fix.** The 128 existing artifacts still carry
+  the previous cycle's action; they are otherwise usable (selection, candidates, phase, q_ref/q_actual are all
+  genuine). Only that one field is systematically stale.
+* **What I did not change:** no limit, ceiling, tolerance, or behaviour. The fix is record integrity. `§22` presentation
+  and `§25` staleness behaviour are unaffected on the live path — the assignment happens before publish, so the panel
+  saw the right thing; it was the archived evidence that lied, which is what gets mailed in and argued over later.

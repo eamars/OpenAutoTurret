@@ -3286,3 +3286,29 @@ Station untouched this round (nothing needed moving): `MANUAL / HOLD`, `ready`, 
 station-side check is still open in the mundane sense — no Brake edge has occurred on the live daemon since the fix,
 so `blackbox_0167` is still the newest artifact — but the mechanism is now covered deterministically in the suite,
 which is where it belongs. Nothing signed.
+
+## 2026-09-06, 00:4x — round 79: the safety findings of rounds 73–78 are now in the document that gets read
+
+`docs/operator_status_v3_2_2026-09-05_r67.md` gained **§6, explicitly marked as postdating everything above it**, so a
+reader meets it rather than tripping over it: the unattributed uncommanded motion in a long-running `MANUAL/HOLD`
+(±6°, target cleared, source stopped, axis inside limits, **not reproduced on a freshly homed station**, which is quiet
+at 0.11° over 30 s); the **98 `BRAKE_in_hold`** authority cuts in one session and why that is not log spam (§80 stores
+edges, not levels); the supervisor's own stated reason `stale or missing motor feedback`; the mechanism documented at
+`can_motor_backend.cpp:250-261` including that each BRAKE "stomps the other axis's reference"; the §80 record bug, its
+round-76 fix, and the round-78 test **shown failing with the fix removed and passing with it restored**.
+
+The bullet I most wanted in front of a human is the operational one: **`safety_action` in the 128 artifacts already on
+disk is systematically stale** — previous cycle's value, always permissive — while every other field in those scenes
+(selection, candidates, phase, q_ref/q_actual) is genuine. Anyone reviewing this station's history would otherwise read
+98 supervisor interventions as 98 non-events. That is a warning about evidence, not a claim about behaviour.
+
+Two things deliberately left to the operator rather than reasoned about here: whether 98 feedback-loss brakes in a day
+of probing is acceptable or the keepalive is under-powered — a safety-margin judgement on hardware whose risk I do not
+carry — and whether the unhomed-versus-homed asymmetry in round 73 is worth chasing before the next long session.
+
+Statement of scope kept inside the section, not in a footnote: no limit, ceiling, tolerance or behaviour was changed;
+the live panel path is unaffected because the assignment precedes publish — the archived evidence was what lied.
+
+Docs only this round. Station verified healthy and untouched: `MANUAL / HOLD`, `at_ready`, `safety_action ALLOW`,
+`control_deadline_misses 0`, `telemetry_stale False`, source running. **487 pytest / 57 CTest** stand from round 78.
+Nothing signed.
