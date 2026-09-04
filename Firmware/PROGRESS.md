@@ -1880,3 +1880,32 @@ Counts: **57 CTest** pass on the new build (grepped clean first), **439 pytest**
 `node --check` OK on the concatenated HUD, page 78,238 bytes served. Station homed, ready, MANUAL/HOLD,
 synthetic vision running. **No controller behaviour changed**: the turret moves exactly as it did; what changed
 is that its limit is now stated. **§110: 0 items accepted on hardware by a named person.**
+
+## 2026-09-04, 21:5x — round 30: an operator sign-off package, and a count I had been reporting wrongly for months
+
+`docs/acceptance_signoff_v3_2_visual.md`: every §24 item with what implements it, what automated evidence
+exists, and — where none does — the word **`No evidence`** rather than a shrug. Signed by nobody, and signed off
+as untrustworthy on its own face: *"Prepared by the agent that wrote the code… That is a reason to distrust
+every line above."*
+
+**The correction: §24 of the v3.2 revision holds 16 items, not 30.** The 30 boxes are the v3 architecture
+document's system/hardware ledger, which lives in its own file and is left unchecked **in place** rather than
+copied here, so it cannot drift. The running record has said "30 items, 0 accepted" as if that were §24 for
+many rounds — two different ledgers counted as one. Accurate statement: **16 visual items + 30 system items, 0
+accepted by a named person on either.**
+
+Every pointer in the package was checked rather than remembered, and two were wrong before commit: the palette
+class is `PaletteDiscipline`, not a "PaletteMatchesSection15 family" I had invented from the naming pattern, and
+`hudChip()` does not exist at all — the health chips are covered by the `.chip` CSS rule, which is what the
+citation now says. A citation to a test that does not exist is worse than no citation, because it makes the
+package look verified.
+
+Two facts are stated on the record for whoever signs item 16, because no screenshot carries them: every SVG text
+class is asserted declared *and* used (an undeclared token once deleted three rules with every test green), and
+**no real browser has ever been asserted to have painted this HUD** — `node --check` plus assertions on the
+HTTP-served page are the ceiling of what has been verified here, and font fallback, sub-pixel placement and real
+contrast are exactly what §24 is for and exactly what no test in this repo can settle.
+
+Docs only this round: **439 pytest / 57 CTest** stand from the round-29 verified build; tree otherwise clean;
+station homed, ready, MANUAL/HOLD, synthetic vision running — and the package says in its own voice that
+**synthetic targets are plumbing evidence only and no acceptance item may be signed on them.**

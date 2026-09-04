@@ -1,0 +1,88 @@
+# Acceptance sign-off package — v3.2 Apache-HUD
+
+Prepared for the operator. **Nothing in this file is signed.** The revision makes visual fidelity and hardware
+acceptance operator judgements (§24, and the acceptance ledger in the v3 architecture document), and an
+acceptance item recorded by the agent that wrote the code is worth nothing. What this file does is put every
+item, the evidence that exists for it, and the evidence that does **not** exist, in one place, so signing is a
+matter of looking at the screen and writing a name.
+
+Verified counts as of this writing, correcting a figure that had been repeated loosely for many rounds:
+
+* **§24 of the v3.2 revision holds 16 unchecked items** — the visual ledger, listed one by one below.
+* **The v3 architecture document holds a separate 30-item ledger** — `docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md`, unchecked in place. Those are system and hardware acceptance items, not visual ones. For months the running record quoted "30 items, 0 accepted" as though that were §24; it was the other ledger. Both are recorded honestly below: **0 items on either ledger have been accepted by a named person.**
+
+## How to use this
+
+For each row: look at the station, decide, and fill in the three blanks. `Automated evidence` names a test file
+under `web/webd/tests/` or a served-page check — a green test means the structure is as specified, never that
+it *looks* right, which is precisely why §24 is a human call. `No evidence` is written plainly where there is
+none, so the absence is not mistaken for a pass.
+
+## §24 — visual acceptance (16 items)
+
+| # | Item (as the revision words it) | What implements it | Automated evidence | Operator signature / date / what was observed |
+|---|---|---|---|
+| 1 | camera feed fills essentially the whole viewport | letterbox-fit math in `hudLayout()` + `#video` CSS | `test_travel_tapes.py` measures the fitted rect; page served at `/` carries the layout | |
+| 2 | no conventional top navigation bar is visible | no nav element in `HUD_HTML`; strip is bottom-only | markup inspection; `test_dock_drawers.py` asserts the dock is the only pressed surface | |
+| 3 | top-left mode block resembles the reference location and density | `#mode-block`, three lines, §16 tiers | `test_state_and_safety.py` (state wording), `test_visual_discipline.py::TypographyMatchesSection16` | |
+| 4 | yaw tape occupies the upper centre and clearly shows total safe travel | `hudTravelTape()` / `hudTravelTapeSvg()` | `test_travel_tapes.py` | |
+| 5 | current yaw value is boxed beneath its marker | tape value box, `text.tval` at 12px (strongest numeric) | `test_visual_discipline.py` (tier ordering), `test_travel_tapes.py` | |
+| 6 | pitch tape sits on the right edge and clearly shows total safe travel | same builders, vertical orientation | `test_travel_tapes.py` | |
+| 7 | yaw/pitch values are the strongest numeric text | 12px `text.tval` vs 11px scale / 10px candidate / 9px FOR legend | `TypographyMatchesSection16::test_the_current_axis_value_is_the_strongest_numeric_text`, `…_candidate_labels_sit_below_scale_labels` | |
+| 8 | center reticle uses separated sensor-style brackets and open centre space | reticle brackets in `render()` | drawn on the served page; **no pixel-level assertion exists** — a human has to say whether the brackets read as specified | |
+| 9 | top-right health indicators are small chips, not a large card | `.chip` CSS rule (no verified builder name is cited here) | `test_visual_discipline.py` (tokens, sizes) | |
+| 10 | selected target is bright green | `stroke = C.green` when `selected` | `test_visual_discipline.py::PaletteDiscipline` (red restricted to fault/stop) | |
+| 11 | candidate targets are dim green | `stroke = C.dim` for unselected | same as above | |
+| 12 | prediction is amber and dashed | `hudPredictionSvg()`, `stroke-dasharray="6 4"`, amber | `test_state_and_safety.py` prediction tests | |
+| 13 | FOR inset is compact and located at lower left | `hudForInsetSvg()`, legend at 9px `text.flbl` | `test_section_20_ledger.py` reads the FOR polygon from the live payload; placement is visual only | |
+| 14 | bottom status strip is thin and subordinate | `#strip`, 10px | `test_visual_discipline.py` | |
+| 15 | five compact context buttons sit at lower right | `hudDockSpecs()` → TARGETS / MODE / MANUAL / DIAG / MENU, z=30 | `test_dock_drawers.py` (five buttons, drawer contents, command payloads) | |
+| 16 | drawers overlay the camera instead of resizing it, and the whole impression is a coherent sensor HUD | `#drawer` positioned absolute, z=40; §18 layer order | `test_dock_drawers.py`; `LayeringMatchesSection18`; **the "coherent HUD" half of this item has no automated evidence at all and cannot have** | |
+
+Two structural facts the operator may want to know before signing item 16, because no screenshot conveys them:
+
+* Every SVG text class is asserted to be *both declared and used*. An undeclared token once deleted three font
+  rules while every test stayed green, so `test_visual_discipline.py` now fails on tokens read but not declared.
+* **No real browser has ever been asserted to have painted this HUD.** The strongest available check is
+  `node --check` on the concatenated JavaScript plus assertions on the page served over HTTP. Anything a real
+  browser would catch — font fallback, sub-pixel placement, actual contrast — is exactly what §24 is for.
+
+## The v3 architecture ledger (30 items)
+
+Left **in place** rather than copied here, so it cannot drift from its document: all 30 boxes in
+`docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md` remain unchecked. Measured evidence that
+bears on some of them, and where it lives:
+
+* **Head-aim while holding** — `docs/evidence/dart_25deg_in_1.6s_envelope_legal_2026-09-04_r27.log`: hold-window
+  aim error p50 **0.244 box heights** against the 1/3 bar. Holding inside tolerance is met on this station;
+  holding it *through* a sharp dart is not (see below).
+* **Following a sharp dart** — two runs, recorded with their motion parameters because the first was
+  misread for rounds: `dart_25deg_62degps_2026-09-04_r25.log` (25° / 0.40 s, **forbidden by the commissioned
+  envelope**, which needs 1.43 s) and `dart_25deg_in_1.6s_envelope_legal_2026-09-04_r27.log` (25° / 1.60 s,
+  envelope-legal). Verdicts on the legal dart: **C1 containment PASS · C2 recovery FAIL (2.85 s vs 1.50 s) ·
+  C3 lead FAIL (−11.6°) · C4 FAIL (3 sign changes) · C5a PASS · C5b jerk FAIL (p95 542 vs 300+60, a lower
+  bound measured at probe rate).**
+* **Why C2/C3 fail, as far as is currently known** — the tracking reference is bounded by the envelope's
+  `v_max`, which is set from the hard-coded 10 deg/s hold speed, while `tracking.track_speed_deg_s` defaults to
+  30. The ceiling is now visible on the panel as `RATE CEILING 10.0 DEG/S (AUTH 100%)`. **No controller
+  behaviour has been changed**: raising that ceiling means raising how fast the station may swing while
+  following a target, which is the operator's decision, not the agent's.
+* **Camera geometry** — effective FOV and principal point measured (69.3002 × 40.4171 deg, 24.22 px/deg);
+  **camera-to-axis boresight NOT commissioned**, and not commissionable on this station today: the real camera
+  path needs a picamera2 config and an IMX500 detector asset, and neither exists anywhere in the tree, while
+  the synthetic vision source cannot observe the world at all. This is why the tapes read
+  `JOINT TRAVEL, NOT HEADING` and no world-elevation scale is drawn.
+* **Data contract (§20)** — every field is supplied, including `camera.measurement_age_ms` (the calibration
+  file's own mtime, aged per snapshot, null only when there is no calibration file) and the FOR envelope
+  polygon; IMU is reported honestly as `ABSENT`. `test_section_20_ledger.py` reads these from the **live**
+  payload rather than a fixture.
+* **Staleness (§25)** — verified by freezing the daemon: telemetry age climbed 858 → 2464 ms with
+  `telemetry_stale` true and the cue going non-green.
+
+## Standing statement
+
+The station is homed and ready, in MANUAL/HOLD, with a synthetic vision source running. **Synthetic targets are
+plumbing evidence only; no acceptance item may be signed on them.** Until the real detector path exists on this
+station, head-aim and lead claims are measurements of a generated target, not of the world.
+
+Prepared by the agent that wrote the code, on 2026-09-04. That is a reason to distrust every line above.
