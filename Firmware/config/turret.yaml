@@ -216,6 +216,13 @@ homing_plan:
     precision: fine
 
 tracking:
+  # The ceiling that actually binds station motion, and (control_loop.cpp:427) the AUTO_TRACK reference
+  # too - applied before the confidence derate, so no tracker or prediction tuning can exceed it.
+  # Defaulted to 10.0 deg/s, the value previously hard-coded in main.cpp. Round 40 measured the tracking
+  # reference pinned at exactly this number; the operator's lead criterion needs ~15.6 deg/s average, so
+  # raising it is a decision about how fast this station may swing under payload, not a tuning knob. It
+  # is shown live on the panel as SPEED CEILING. Left commented out deliberately: no behaviour change.
+  # hold_speed_deg_s: 10.0
   # The operator's acceptance rule is the reticle on the target's HEAD, within one third of the
   # box height. The §9 anchor a detector reports is the box centroid, which on a standing person
   # is a torso - so the rule has to be stated as a station setting, not left to a code default

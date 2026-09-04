@@ -2284,3 +2284,29 @@ outcome wrongly**, which is worse than a silent partial edit because the record 
 machine had told me otherwise in plain text. Fixed in the follow-up commit. The lesson is not "read the file"
 again, it is: **when a patch reports zero matches, the sentence about that patch in the commit message is already
 wrong, and it has to be written after the tool output, not before.**
+
+## 2026-09-05, 05:2x — round 43: the safety ceiling that blocked acceptance now has a config key, and the default changes nothing
+
+Round 40 left the operator with a decision that required editing C++ and rebuilding — a safety ceiling that
+looks like a code change stops looking like a decision. `tracking.hold_speed_deg_s` is now parsed with
+`opt_double(..., 10.0, warn)`, **defaulting to exactly the constant it replaces**, and `main.cpp:133` reads the
+config instead of hard-coding 10.0. The `turret.yaml` entry is written but **left commented out**, so nothing
+moves on this station until someone chooses.
+
+Proved, not assumed, at both ends:
+- **Parser, permanent test** (`control/tests/test_config.cpp`): absent key ⇒ 10.0 exactly; explicit `12.5` ⇒ 12.5.
+  The default being exact is the point — adding the knob must not quietly change a station that never mentions it.
+- **Live station, unchanged behaviour**: the new binary boots with
+  `warning config: tracking.hold_speed_deg_s: not specified; using conservative default` (the parser path is
+  demonstrably the one running) and the panel still reads **`SPEED CEILING 10.0 DEG/S (min of hold + payload
+  profile)`**, with `/api/state` = 10. Daemon ready, no fatal. **57 CTest / 451 pytest** pass.
+
+What is **not** yet exercised: setting the key to a real alternative on hardware and watching the reference stop
+plateauing there. The unit test covers yaml→struct and the boot above covers default→panel; the middle link
+(main.cpp → envelope → reference plateau) is one line and one measurement away, and belongs to the operator's
+decision anyway. Recording the gap rather than implying the whole path was run.
+
+The operator now holds three cheap options, all reversible in config with the effect visible on the panel:
+raise `hold_speed_deg_s`, size the acceptance dart to what 10 deg/s can follow, or accept C2/C3 failing as a
+documented consequence of the safety ceiling. Station homed, READY, MANUAL/HOLD, synthetic source restarted and
+verified (track sets > 0).

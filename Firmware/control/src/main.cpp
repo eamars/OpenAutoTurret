@@ -130,7 +130,10 @@ TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
   t.search.v_max_rad_s = cfg.tracking.search_speed_deg_s * kDeg2Rad;
   t.track_v_max_rad_s = cfg.tracking.track_speed_deg_s * kDeg2Rad;
   t.search_v_max_rad_s = cfg.tracking.search_speed_deg_s * kDeg2Rad;
-  t.hold_v_max_rad_s = 10.0 * kDeg2Rad;  // = ControlLoop::Config.hold_speed_rad_s
+  // Was hard-coded at 10.0 deg/s. The default in the config loader is the same number, so nothing
+  // moves until an operator writes the key - which is the point: round 40 showed this constant is
+  // what the acceptance criteria collide with, and a safety ceiling should not require a rebuild.
+  t.hold_v_max_rad_s = cfg.tracking.hold_speed_deg_s * kDeg2Rad;
   t.control_delay_ns = static_cast<int64_t>(cfg.tracking.control_delay_ms) * 1000000;
   t.motor_response_ns =
       static_cast<int64_t>(cfg.tracking.motor_response_ms) * 1000000;

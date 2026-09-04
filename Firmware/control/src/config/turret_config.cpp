@@ -712,6 +712,8 @@ LoadResult load_turret_config(const std::string& path) {
 
     c.tracking.track_speed_deg_s = opt_double(
         trk, "track_speed_deg_s", "tracking.track_speed_deg_s", 30.0, warn);
+    c.tracking.hold_speed_deg_s = opt_double(
+        trk, "hold_speed_deg_s", "tracking.hold_speed_deg_s", 10.0, warn);
     if (c.tracking.track_speed_deg_s <= 0.0) {
       warn.push_back("tracking.track_speed_deg_s <= 0: using the 30 deg/s default");
       c.tracking.track_speed_deg_s = 30.0;

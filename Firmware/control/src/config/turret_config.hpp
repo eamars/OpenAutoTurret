@@ -114,6 +114,10 @@ struct TrackingConfig {
   std::string target_lost_behavior = "hold";  // "hold" | "search"
   // §16 tracking speed limit (deg/s). The architecture caps tracking at 30 deg/s.
   double track_speed_deg_s = 30.0;
+  // §28.5/§31.3 plus round 40: the speed ceiling applied to station motion AND, at
+  // control_loop.cpp:427, to the AUTO_TRACK reference before the confidence derate. Defaulted to the
+  // constant this replaced (10.0 deg/s) so behaviour is unchanged until an operator writes the key.
+  double hold_speed_deg_s = 10.0;
   // §36/§49 search sweep speed (deg/s) — reduced relative to tracking.
   double search_speed_deg_s = 10.0;
   // §49 search sweep half-span (deg) around the ready pose. The loop clamps it

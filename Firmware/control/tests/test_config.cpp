@@ -419,3 +419,24 @@ TEST(Config, PayloadCheckSpeedLoopGainsInvalidClamped) {
   EXPECT_DOUBLE_EQ(r.config.payload.check_spd_kp, 5.0);
   EXPECT_DOUBLE_EQ(r.config.payload.check_spd_ki, 0.02);
 }
+
+TEST(Config, HoldSpeedCeilingDefaultsAndLoads) {
+  // The ceiling that binds tracking (round 40) must default to the constant it replaced, and an explicit
+  // operator decision must be honoured. The default being exact is the whole point: adding the key must not
+  // silently change how fast a station that never mentions it is allowed to swing.
+  {
+    auto r = ota::config::load_turret_config(write_file("hold_default.yaml", kFullConfig));
+    ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
+    EXPECT_DOUBLE_EQ(r.config.tracking.hold_speed_deg_s, 10.0);
+  }
+  {
+    std::string y = kFullConfig;
+    auto pos = y.find("\ntracking:\n");
+    ASSERT_NE(pos, std::string::npos);
+    y = y.substr(0, pos + std::string("\ntracking:\n").size()) +
+        "  hold_speed_deg_s: 12.5\n" + y.substr(pos + std::string("\ntracking:\n").size());
+    auto r = ota::config::load_turret_config(write_file("hold_explicit.yaml", y));
+    ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
+    EXPECT_DOUBLE_EQ(r.config.tracking.hold_speed_deg_s, 12.5);
+  }
+}
