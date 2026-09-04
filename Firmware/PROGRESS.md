@@ -4243,3 +4243,44 @@ Reporting 38.75 would have been the fabricated-number habit wearing a different 
 the textbook answer to a velocity-proportional lag, and it is testable with exactly these numbers — target following
 error p50 well under 3.629° at the same 10 deg/s, with no overshoot introduced at the reversal. That is a controller
 change, so it goes default-off with a config key and lands only if the measured error actually moves.
+
+## 2026-09-06, 14:0x — round 19: the 3.6 degrees is real, but it is not the lag I described — and one of my own numbers this round was mis-specified garbage
+
+Re-examined `/tmp/r98_follow.json` with no new motion, because round 18's claim deserved to be attacked before I
+"fixed" anything.
+
+**First doubt, then elimination.** `q_ref_yaw_rad` is not a smooth setpoint: **738 distinct values over 1476 sweep
+samples, half the samples unchanged, median step 0.658°, max 1.045°** — a **stepping waypoint**. If the error were
+waypoint-lead quantisation, it would appear only on the samples where the waypoint jumped. It does not:
+
+* **|error| when the waypoint MOVED this sample: p50 3.631°** (n=740)
+* **|error| when the waypoint was UNCHANGED: p50 3.626°** (n=735)
+
+Indistinguishable → **waypoint quantisation eliminated.** And `error` opposes nothing: its sign matches the direction of
+motion **733 times out of 740**, so the axis genuinely trails the reference while moving. **At rest (`WAIT_TARGET`) the
+error is exactly 0.0000°** — though only 3 samples landed in that phase, so treat that as indicative, not established.
+
+**A number of mine that was wrong on the page before it was wrong in the record: τ = 0.019 s.** I had regressed the
+**signed** error against **|rate|**, which cancels the two sweep directions against each other — arithmetically
+meaningless, and it produced a lag estimate 20× smaller than the raw data. Redone as signed-on-signed:
+**τ = 0.173 s** (n=734). **Withdrawn: the 0.019 s figure.** The two estimates still disagree (a 0.173 s linear
+component versus 3.6°/10 °/s = 0.36 s of steady-state offset), and that disagreement is itself the clue — the error is
+**not purely proportional to rate.**
+
+**What fits all of it at once: a constant error while moving in either direction, zero error at rest, sign flipping with
+direction.** That is the classic signature of **kinetic friction** (or equivalently a low velocity-loop gain), not of a
+pure transport lag — and this station already carries independent evidence of friction: the measured friction deadband
+that `yaw_park_deg: 176` exists to work around. Conditioned on the reference actually moving faster than 8 deg/s, the
+error is p50 **3.647°**, max **4.617°** — a **steady-state** offset that does not grow over the sweep, i.e. the axis
+keeps pace at 10 °/s but sits a fixed distance behind, which implies an effective velocity gain of about
+**Kv ≈ 10 / 3.6 ≈ 2.8 s⁻¹**.
+
+**Net for the record: round 18's headline magnitude stands (3.6° p50 / 4.27° p95 at 10 °/s, zero at rest), but its
+mechanism is revised — finite velocity authority against friction, not a 0.36 s transport delay.** That changes the fix
+in one respect and not in another: **velocity feed-forward is still the right first change** (it cancels the
+rate-proportional demand regardless of which of the two dominates), while a friction/deadband compensation term would be
+the second lever — and the distinction matters because a pure transport-lag story would have pointed at pipeline delay
+instead, where nothing in the controller would have helped.
+
+Nothing on the station was touched this round; the mode was already restored and verified (`AUTO_TRACK / WAIT_TARGET`,
+`ALLOW`).
