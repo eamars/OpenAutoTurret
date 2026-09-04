@@ -131,6 +131,19 @@ def rate_verdict(rv, ceiling_deg_s, min_moving=20, tol=1.05, idle_eps=0.5):
             % (status, len(moving), max(moving), ceiling_deg_s, len(over))), len(moving)
 
 
+
+def ref_rate_deg_s(row):
+    """The published reference rate in deg/s, in the unit the criterion is written in.
+
+    controld publishes q_ref_rate_yaw_rad_s in RADIANS per second. Round 56 built a sorted list of those raw
+    values and compared them against a ceiling stated in degrees, so the check could not fail (0.17 rad/s is
+    always under 10.5 deg/s); round 57's guard then read the same raw list as nearly stationary. One accessor,
+    converting once, so the verdict and the profile print cannot disagree by a factor of 57.3 again.
+    """
+    v = row.get("ref_v")
+    return abs(v) * (180.0 / math.pi) if isinstance(v, (int, float)) else None
+
+
 def binding_ceiling_deg_s(published_deg_s, configured_track_deg_s, payload_scales):
     """The ceiling a reference is actually allowed to reach, plus where that number came from.
 
@@ -999,7 +1012,7 @@ def main() -> int:
                   % ("PASS" if over == 0 else "FAIL"))
         else:
             print("        no consecutive reference pair to compare")
-        rv = sorted(abs(r["ref_v"]) for r in all_rows if isinstance(r.get("ref_v"), float))
+        rv = sorted(x for x in (ref_rate_deg_s(r) for r in all_rows) if x is not None)
         # Round 55: C6 is about the rate the limiter bounds, so it is judged on the rate controld
         # publishes - not on position differenced at a bridge rate faster than the bridge publishes,
         # which inflated implied rates by the publish/sample ratio (65.7 ms vs ~37 ms, 1.78x against
@@ -1019,8 +1032,11 @@ def main() -> int:
         r2d = 180.0 / math.pi
         print("    reference profile (what the controller ASKED FOR; limits 60 deg/s^2, 300 deg/s^3):")
         if rv:
+            # Already deg/s: rv comes from ref_rate_deg_s, which converts once. Round 56 printed
+            # "0.2 deg/s" from this same list at the verdict site because that site skipped the
+            # conversion; the two sites now cannot disagree.
             print("      rate : p50 %.1f  p95 %.1f  max %.1f deg/s   (track limit 30 deg/s)"
-                  % (pct(rv, .5) * r2d, pct(rv, .95) * r2d, rv[-1] * r2d))
+                  % (pct(rv, .5), pct(rv, .95), rv[-1]))
         # These two figures are DERIVED by differencing webd's ~15 Hz payload, so they carry the
         # resolution of that differencing and no more. The profile's own acceleration can only move
         # by j*dt = 300 deg/s^3 x 5 ms = 1.5 deg/s^2 per control cycle, so a figure 1.5 deg/s^2 over
