@@ -3929,3 +3929,62 @@ pitch axis during the sweep, which I did not sample this run and will not claim 
 One honest gap: my restore sequence left the station in `MANUAL / HOLD` on the first attempt and the mode was set back
 to `AUTO_TRACK` afterwards — the check above shows where it actually ended up, and "restore the mode" belongs in the
 same `finally` as the measurement, which is where it now is.
+
+## 2026-09-06, 10:3x — round 13: the deadband hook is now located to the line, and I am recording that instead of pretending I shipped the feature
+
+Two discovery attempts landed on the wrong switch (there are several `case OperatingMode::AutoTrack` sites in
+`control_loop.cpp` — a bare grep keeps hitting the hold-pose latching helper near :2087). Located it properly with a
+function-scoped search: **`build_mode_intent()` begins at `control_loop.cpp:2132` and its AutoTrack case at :2149.**
+
+The hook is **lines 2164–2170**, precisely:
+
+```
+2164      double az = 0.0, el = 0.0;
+2165      tracking_->predicted_los_at_actuation(az, el);  // valid: estimator_ready
+        <<< the deadband goes HERE >>>
+2166      in.source = MotionSource::AutoTrack;
+2167      in.type   = IntentType::LosDirection;
+2168      in.has_los = true;
+2169      in.los_az_rad = az;
+2170      in.los_el_rad = el;
+```
+
+**Two facts corrected this round, both worth keeping:**
+
+* `AutoTrackController` does **not** produce the aim. `AutoTrackOutput` (`auto_track_controller.hpp:117-126`) carries
+  `follow_los` (a *permission*), `velocity_scale`, confidence, band, reason — the aim is the **predicted LOS**, obtained
+  at :2165 and handed to the resolver as an `IntentType::LosDirection`. So a deadband belongs in `control_loop.cpp` at
+  the hook above, not in the controller. That is the third different place I have guessed for this feature across
+  rounds 3-13 (reference → controller → intent), which is exactly why I stopped editing and located it.
+* Round 3's reading is confirmed at :2074-2090 again: HOLD latches *the last commanded reference*, not the measured
+  feedback — "so the hold target does not wander with encoder noise" — and the comment there records why it matters: a
+  STOP MOTION 14 deg into a sweep used to move the turret 14 deg on the way to the ready pose.
+
+**The change, ready to apply, sized so it cannot change anything until asked** (5 files, one edit each):
+
+1. `control_loop.hpp` Config: `double auto_track_deadband_deg = 0.0; double auto_track_deadband_release_deg = 0.0;`
+2. `turret_config.cpp` (~426, beside `coast_ms`): parse both, default 0.
+3. `control_loop.cpp` :2164 hook, holding the **last accepted LOS** in two new mutable members:
+   ```cpp
+   // deadband: while |delta| < release, keep pointing where we already point.
+   // deadband_deg == 0  =>  pass az/el straight through (today's behaviour, exactly).
+   // re-anchor whenever the target leaves the release threshold, so a real move is followed
+   // at full authority; hold while it is inside, so detector jitter cannot walk the aim.
+   ```
+   Enter and release must be distinct, release >= enter; `release == 0` with `deadband > 0` should clamp to
+   `1.5 x deadband` and log once — an accidental config where enter > release must not silently disable holding.
+4. A gtest: in-band wobble does not move `in.los_az_rad` across N cycles; a step past release does, and the
+   re-anchored aim equals the new target (not a partial move); **and `deadband_deg == 0` reproduces the current
+   numbers**, which is the test that makes "explicit opt-in, not a silent change" enforced rather than promised.
+5. Sizing floor from round 2: **0.02177 deg** quantisation, so anything below that is indistinguishable; suggested
+   first real value 0.1 deg with release 0.15 deg, to be revised once a target is in view on the real detector.
+
+**What stopped being corrected, for the operator's benefit, when this is enabled:** the aim stops re-centring on small
+target motion, so a slow drift below the release threshold is not followed, and the reticle will sit slightly off a
+target that crept. The **encoder position loop stays closed and the supervisor stays armed** — the axis keeps servoing
+to the held aim as hard as it does now; only the *re-aiming* is damped. That is the (1) reading from round 3, not the
+(2) reading that would open the position loop.
+
+I did not apply it this round: five files plus a ninja/ctest cycle is not something I can carry honestly at the end of
+this context, and "compiled cleanly" has twice in this file meant "applied nothing". This entry makes the next round one
+edit-and-verify, not another hunt.
