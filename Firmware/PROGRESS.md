@@ -4109,3 +4109,54 @@ rebuilt with **0 errors**, and only then **CTest 57/57**.
 
 Standing habit worth keeping: after any edit, the build must be *seen* to recompile the changed file (I now `touch` the
 file when a build looks suspiciously quiet), and `ctest` only counts once its binaries are known-fresh.
+
+## 2026-09-06, 12:3x — round 16: item 2's research gate, done in the open — and the answer is per-mode, not one profile
+
+Sixteen rounds in, the operator's instruction *"do your research, including searching online and manual to see what is
+the best moving mode for each mode"* gets an answer. Sources are cited so every claim below can be checked rather than
+trusted. **What they do NOT do is substitute for measurement on this station** — the numbers still have to come from the
+axis.
+
+**Finding 1 — trapezoidal has an acceleration discontinuity; jerk-limited profiles exist to remove it.**
+A trapezoidal velocity profile "always accelerates or decelerates at the maximum defined acceleration rate", which means
+acceleration steps from 0 to full in one sample: finite acceleration, **unbounded jerk at the corners**
+([US20130307459A1](https://patents.google.com/patent/US20130307459A1/en#5)). Jerk is what you feel as a jolt and what
+excites a compliant structure. The 7-segment S-curve ramps acceleration up and down instead of stepping it
+([Frontiers, improved S-curve a/de algorithm](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2026.1786455/full#3#3#2)),
+at the price of a longer transition for the same peak acceleration — you trade sharpness for smoothness, which is why it
+is a choice and not a default upgrade
+([Technosoft on S-curve for high-inertia loads](https://technosoftmotion.com/en/the-s-curve-profile-available-in-technosoft-drives-allows-smooth-starting-and-stopping-of-high-inertia-loads/),
+[motion-profile guidance](http://machinebuilding.net/mastering-motion-profiles-to-boost-precision-and-throughput),
+[min-jerk trajectory generation](https://www.crowdsupply.com/iq-motion-control/iq-fortiq-bls42/updates/the-iq-minimum-jerk-trajectory-generator)).
+
+**Finding 2 — for a *vision-following* axis, the limit is the camera's delay and sample rate, not the profile.**
+Slow sampling and camera delay are the stated central problem of feature-based visual servoing
+([Okayama Univ.](https://ousar.lib.okayama-u.ac.jp/en/search/p/9?all=sensor&download_id=1%3As&sort=title#20)),
+and the rigorous treatment is a **sampled-data** model of the loop
+([IEEE Trans. Control Systems Technology, Modeling and Control of Sampled-Data IBVS](https://www.x-mol.com/paper/1753676290649198592#1)).
+Practical consequence: raising the control rate above the sensor rate buys nothing but noise amplification, and
+acting on every raw measurement is how jitter becomes motion. **This is the literature's justification for exactly the
+two things already in this codebase** — the estimator's prediction/lead (`predicted_los_at_actuation`) and round 14's
+aim deadband — and for NOT putting an S-curve on the tracking axis, where lag is the enemy and a slower ramp makes the
+reticle sit further behind a moving target.
+
+**Therefore the per-mode answer, which is what was actually asked:**
+
+| mode | right motion behaviour | why |
+|---|---|---|
+| **HOLD / MANUAL-idle** | hold a **fixed encoder setpoint**, no re-aiming | nothing is being followed; every re-aim of a stationary axis is pure disturbance |
+| **AUTO_TRACK** | **keep prediction + deadband; do NOT add an S-curve** | the loop is bandwidth/delay-limited (Finding 2); a ramp adds lag and pulls the reticle further behind |
+| **AUTO_ROAM** | **this is where a jerk-limited profile belongs**, especially at the turnarounds | a sweep is a *programmed* move with no target to follow — a high-inertia load being stopped and reversed every ~8 s, which is precisely Technosoft's stated case for S-curve |
+
+**That redirects item 5's "sloppy".** Round 12 measured the sweep at a flat 10.00 deg/s with zero deadline misses —
+cruising is clean. **The 7 reversals in 55 s are the part that is trapezoidal by construction**: `search_planner.hpp`
+sets `v_max_rad_s = 10 deg/s` and a `dwell_s = 0.25` and names no acceleration or jerk limit at all, so each turnaround
+is an acceleration step — Finding 1's exact corner. So the candidate fix is not "tune gains" (the axis measured 0
+reversals at rest) but **give the roam planner an acceleration and jerk limit and shape the turnaround**.
+Measurable before/after in the terms the operator named: peak |jerk| at turnaround, position overshoot past the end of
+sweep, and reversal count.
+
+**Honest limits of this research.** No controller manual for this specific drive is in hand (the station's own
+`docs/` is the closest thing), the two strongest sources are behind snippets rather than full text, and **nothing here
+is measured on this turret**. It says where to look and what to try, and it demotes a guess I might otherwise have
+shipped: I came in tempted to put an S-curve on tracking, and the delay literature is the reason not to.
