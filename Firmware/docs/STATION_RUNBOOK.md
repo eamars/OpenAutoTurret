@@ -106,7 +106,10 @@ opening the camera.
 
 * Set `OTA_VISION_FRAME_TAP` to the **same path in both processes.** Different paths = the pane opens the camera =
   visiond cannot start.
-* The file must be **fresher than 2 s** when the pane starts, or webd falls back to the camera.
+* **A tap file that exists routes the pane to the tap, even if it is stale** — freshness decides *whether frames are
+  served*, not *which source is used*. Falling back to the camera on staleness is the worst available answer, because
+  that camera is exactly what the tap's (now dead) owner was holding. A stale tap now reports
+  `vision frame tap is stale: … last written N s ago` and publishes nothing.
 * `OTA_VISION_FRAME_TAP_FPS` (default **12**) is the cost knob: measured on this station, tapping at 12 fps took the
   detector from **15.13 → 9.55 fps**, because the encode runs on the vision thread. Use 6–8 when detection rate matters
   more than preview smoothness.
@@ -171,18 +174,29 @@ controld accepts it. Because every `auto_track` key is currently a default, `coa
 9. **`install_station.py` does not set `OTA_BLACKBOX_DIR`**, and `systemd/turret-web.service` carries it commented
    (line 48). Without it the station writes **no §80 artifacts**, so the evidence the sign-off process depends on
    silently does not exist. Set it explicitly in both units and in any hand-run launch.
-10. **`docs/` has no other deployment runbook.** `operator_status_v3_2_2026-09-05_r67.md` is a status report, not a
+11. **`/run/ota/` does not exist after a reboot unless systemd creates it.** controld's web server then fails to bind
+    with `No such file or directory` — **as a `warning`** — and the station runs, homes and tracks with **no operator
+    interface at all** (`/api/state` → 503, commands → `controld not connected`) while the console log looks healthy.
+    controld now creates the parent directory itself (verified: `created /run/ota for the web socket`).
+12. **A tap whose owner died leaves a readable file behind.** Serving it is how a frozen picture gets watched for
+    twenty minutes as a still room: observed `running True, error ''` over a JPEG 80 minutes old. The pane now refuses
+    to serve a stale tap and says why. Beware the related trap: `fps_published 0.0` **was correct** in that moment —
+    it measured a 5 s window that genuinely held nothing. Check what a number means before "fixing" it. `operator_status_v3_2_2026-09-05_r67.md` is a status report, not a
     procedure.
 
 ---
 
 ## 8. Known defects, open at the time of writing (not fixed, do not assume they are)
 
-1. **HUD prediction is untethered from the box.** `control_loop.cpp:1649-1650` fills
-   `predicted_target_{az,el}_world_rad` from `tracking_` — the **v1** estimator — not from the v3 selection. Observed in
-   one sample: `predicted_target_los_valid: true` with `selected_uuid_valid: false`, `el = -27.3974` in a `_rad` field,
-   and a separate `prediction.valid: false`. Fix direction: publish prediction only when a uuid is selected, and only
-   from the estimator that produced it.
+1. **HUD prediction cue — FIXED.** It used to decide for itself whether a prediction existed (estimator initialised?
+   intrinsics sized like the frame? ray in front?) while the motion it forecast came from `build_mode_intent` under
+   `follow_los && estimator_ready` — two copies of one decision, which drifted: the cue was invalid in 53 of 55 samples
+   taken while the station reported `tracking`. The cue is now projected from `last_intent_` — the ray actually
+   commanded this cycle, deadband included — and every failure names itself in `prediction.reason`. Measured on the
+   bench source: **94/95** samples with a `los_direction` intent produced a cue (the exception correctly said *"the
+   predicted ray points behind the camera"*), and **0 of 19** samples without one did.
+   Still open: `predicted_target_{az,el}_world_rad` remain sourced from `tracking_`, and `el = -27.3974` in a `_rad`
+   field was observed — **that field is still suspect**, and the flat and nested blocks can still disagree.
 2. **`track_state` reports `tracking` / `coasting` while `confidence_band` is `INVALID`** and nothing is selected. The
    neighbouring fields are honest; the label is not.
 3. **The `simple` detector stamps `class_name='person'`** on threshold blobs at conf ≈0.31–0.36. Non-production by

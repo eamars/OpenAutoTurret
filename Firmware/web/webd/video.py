@@ -117,6 +117,10 @@ class VideoSource:
         # Smoothed gray-world white-balance gains (EMA across frames: no flicker).
         self._wb_gains = (1.0, 1.0, 1.0)
         self._wb_alpha = 0.2
+        # How long a tapped frame may sit unwritten before the tap is declared dead. Two seconds is
+        # four missed frames at the tap's own default rate: enough not to flinch at one slow encode,
+        # short enough that a frozen picture is reported while the operator is still looking at it.
+        self._tap_stale_s = 2.0
 
     # -- introspection ------------------------------------------------------
     def is_running(self) -> bool:
@@ -158,7 +162,12 @@ class VideoSource:
         must not have to choose between watching the turret and running the detector.
         """
         tap_path = (os.environ.get("OTA_VISION_FRAME_TAP") or "").strip()
-        if tap_path and os.path.exists(tap_path) and (time.time() - os.path.getmtime(tap_path)) < 2.0:
+        # EXISTENCE routes, not freshness. Falling back to opening the camera because the tap file has
+        # gone stale is the worst answer available: that camera is precisely what the tap's owner was
+        # holding, so the operator would get either a misleading `Camera __init__ sequence did not
+        # complete` or a silent grab of a sensor somebody else still owns. The tap loop judges freshness
+        # and reports it by name, so a stale frame is never published but the cause is never hidden.
+        if tap_path and os.path.exists(tap_path):
             return self._start_tap(tap_path, int(width), int(height), float(fps), int(quality))
         with self._lifecycle_lock:
             if self._running:
@@ -351,6 +360,17 @@ class VideoSource:
                 self._stop_evt.wait(0.05)
                 continue
             missing = 0
+            # A tap whose owner died leaves a perfectly readable file behind, and serving that is how
+            # a frozen picture gets watched for twenty minutes as if it were a still room. Measured
+            # here, not hypothesised: controld was restarted and visiond came back without the tap
+            # env, and the pane reported running with no error over a file 80 minutes old. Check the
+            # age BEFORE publishing, so a stale frame is never shown even once.
+            age = time.time() - st.st_mtime
+            if age > self._tap_stale_s:
+                self._open_error = (
+                    f"vision frame tap is stale: {path} last written {age:.1f} s ago; visiond has "
+                    "stopped or was started without OTA_VISION_FRAME_TAP")
+                return
             if st.st_mtime != last_mtime:
                 last_mtime = st.st_mtime
                 try:
