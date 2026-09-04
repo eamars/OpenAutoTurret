@@ -2798,3 +2798,34 @@ label — is left visible rather than churned; the word that mattered is fixed.
 The lesson is the same one from rounds 42 and 52, at shorter range than ever: I wrote the sentence about the test
 before I had touched the test. A claim about a file is a claim about the file, and the only way to keep it honest is
 to grep the file after the edit and before the commit.
+
+## 2026-09-05, 16:4x — round 64: an audit round found the intermittent failure's source, and it makes a round-42 claim of mine false
+
+Full suite came up **1 failed / 476 passed**; rerun **477 passed**. The failure was not an assertion — 
+`OSError: [Errno 9] Bad file descriptor`, the signature of a socket/fd race. CTest **57/57**, git clean and fully
+pushed, station MANUAL/HOLD ready with ceiling 10 and the synthetic source running.
+
+Then the mechanism: **`tools/fake_vision.py:142` defaults to `/tmp/ota_vision.sock`** — the very path the live
+`visiond` owns on this machine (`srwxr-xr-x root root ... /tmp/ota_vision.sock`, alive since the round-43 restart).
+A test that exercises `fake_vision` without passing `--socket` is therefore pointed at the running station's vision
+socket, not a private one. Some tests do pass an explicit path (`test_fake_vision.py` uses `/nonexistent/...`,
+`test_install_station.py` asserts and substitutes it); the default is the exposure.
+
+**This falsifies a claim I wrote in round 42:** "nothing in the suite references port 8080 or the station's socket,
+so 'pytest is green' means something on a cold machine." The port half survives — no test binds 8080. **The socket
+half is wrong**, and it was wrong because my round-42 grep was a malformed pipeline (`grep -rn "socket|/run/ota|
+tmp/ota" … | grep -c unix`) that answered a question I never asked, and I accepted its silence as proof of absence.
+Twenty-two rounds later the same class of error — a conclusion from a grep that could not have found the thing — is
+still the failure mode. The honest form of the round-42 claim: *the suite does not touch the station's HTTP port;
+at least one component defaults to the station's vision socket, so a green run alongside a live station is not
+guaranteed to be a private test.*
+
+Which also explains the round-42 mystery failure (one in six, always in a busy invocation) far better than "load":
+contend for a live socket, occasionally lose, get a bad file descriptor.
+
+**Next mechanical step, not taken this round:** make `fake_vision`'s socket default to a per-process temporary path
+(or require `--socket` outright) so a test run can never reach the running station, then re-run the suite with the
+station up several times and see the bad-fd failure cannot recur. That is a real hardening of the "green at every
+step" clause, not a relabelling.
+
+No code changed this round; nothing signed.
