@@ -2557,3 +2557,24 @@ neither confirmed nor withdrawn.
 
 Station: MANUAL/HOLD, READY, within limits, synthetic source running throughout (nothing killed this round); the
 transient AUTO_TRACK engagement was reverted. No controller, config, or HUD change; **461 pytest / 57 CTest** stand.
+
+## 2026-09-05, 10:5x — round 53: C4's floor measured at 11 with no motion at all; and C2 has been failing on a baseline constant
+
+One command, no new code: `s3 --dart-deg 0 --hold-s 6.0` — a static hold on the probe's own stationary target.
+**Premise verified from the data this time** (round 52's lesson): hold-window aim error p50 **26.7 px = 0.071 box
+heights**, p95 44.4 px, so the lock sat demonstrably near centre, with **0.0 deg of motion commanded**.
+
+* **C4: 11 sign changes → FAIL.** The real 25 deg dart of round 50 produced **4**, *fewer than the no-motion floor*,
+  against a bar of 2. A metric whose no-motion baseline is 11 cannot judge counts near 11. C4 is now recorded as
+  **invalid as implemented, floor = 11**, and the mechanism is arithmetic: a 1 px deadband on a signal with tens of
+  pixels of jitter counts every wiggle. Round 44 had the right conclusion by the wrong route; this is the evidence
+  that supports it, and the sign-off line was corrected only after the measurement.
+* **C2 has been read wrong.** With no dart at all, recovery is reported at **1.63 s** — already past the 1.50 s
+  bar. Round 50's dart gave 2.32 s, so the dart-attributable part is about **0.7 s**. The criterion measures from
+  dart start against an absolute bar, so it is dominated by acquisition plus estimator convergence, a constant that
+  fails the bar before any target moves. Whether the bar should apply to incremental recovery or the baseline should
+  shrink is a criterion decision, and it is the operator's.
+
+Station restored afterwards: MANUAL/HOLD, READY, synthetic source running (`vision_track_sets 70399`). No
+controller, config or HUD change; **461 pytest / 57 CTest** stand. This round changed what two of the four smoothness
+and recovery criteria are allowed to mean — which is the point of measuring instruments before trusting verdicts.

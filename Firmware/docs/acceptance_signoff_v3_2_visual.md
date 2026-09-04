@@ -60,7 +60,7 @@ bears on some of them, and where it lives:
   misread for rounds: `dart_25deg_62degps_2026-09-04_r25.log` (25° / 0.40 s, **forbidden by the commissioned
   envelope**, which needs 1.43 s) and `dart_25deg_in_1.6s_envelope_legal_2026-09-04_r27.log` (25° / 1.60 s,
   envelope-legal). Verdicts on the legal dart: **C1 containment PASS · C2 recovery FAIL (2.85 s vs 1.50 s) ·
-  C3 lead FAIL (−11.6°) · C4 FAIL (aim-error sign changes after arrival: 4 vs bar 2, measured again on 2026-09-05 round 50; **round 44 withdrew this verdict on the wrong evidence** - it analysed reference-rate crossings, which is not the signal C4 scores, see the round-50 note below) · C5a PASS · C5b jerk FAIL (p95 525-542 against the configured 300, and now **validated**: the jerk
+  C3 lead FAIL (−11.6°) · C4 **INVALID AS IMPLEMENTED** - with a 0.0 deg dart (nothing to ring) and the target locked at p50 26.7 px from centre, the same rule reported **11 sign changes**, more than the real 25 deg dart produced (4), against a bar of 2. The floor is 11, so no post-dart count near it means anything (round 53, /tmp/probe_r53_floor.log) · C5a PASS · C5b jerk FAIL (p95 525-542 against the configured 300, and now **validated**: the jerk
   estimator's own noise floor measures **4.2 deg/s^3 at p95** on frames where jerk is zero by
   construction, so the violation is two orders of magnitude above the instrument, not an artifact of
   differencing; do not quote a "max" jerk figure, which is noise-dominated).**

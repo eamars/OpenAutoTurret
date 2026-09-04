@@ -90,3 +90,34 @@ changes)" stands as a measurement of a confounded quantity, neither confirmed no
 Station after the attempt: MANUAL/HOLD, READY, homed limits respected, synthetic source never stopped this round.
 The brief AUTO_TRACK engagement moved the axis toward a synthetic target and was reverted to MANUAL; no controller
 or config change was made.
+
+## Round 53: the floor, measured — C4's bar of 2 is below its own noise
+
+No new code: run the existing dart scenario with `--dart-deg 0`, which is a static hold on the fixture's own
+stationary target. `/tmp/probe_r53_floor.log`.
+
+    motion : 0.0 deg of azimuth in 1.60 s (0 deg/s), then hold 6.0 s
+    hold-window aim error: p50 26.7 px / p95 44.4 px (0.071 / 0.118 of box height)
+    aim-error sign changes after arrival: 11        -> C4 FAIL (bar 2)
+    C1 containment: PASS (anchor and declared box edges)
+    C2 recovery   : FAIL (t = 1.63 s, bar 1.50 s)
+
+**Premise checked from the data, not asserted** — the lesson from round 52, where I printed "target static, axis
+settled" before any measurement existed. Here the lock is demonstrably near centre (p50 26.7 px = 0.071 box
+heights, comfortably inside the acceptance tolerance) with **no motion commanded at all**.
+
+**Therefore: the flip metric reports 11 sign changes on a stationary, well-centred target.** The real 25 deg dart
+of round 50 produced 4 — *fewer* than the no-dart floor — against a bar of 2. A criterion whose no-motion baseline
+is 11 cannot certify or condemn anything near that number; C4's verdict is noise, and it is now quantified: **any
+post-dart flip count must be judged against 11, not 2.** The mechanism is plain from the arithmetic: a 1 px
+deadband on a signal whose jitter amplitude runs to tens of pixels (p50 26.7, p95 44.4) counts every wiggle.
+Round 44 reached the right conclusion by the wrong route; this is the measurement that supports it.
+
+### C2 carries a constant that has been read as a defect
+
+With no dart whatsoever, recovery is reported at **t = 1.63 s**, already over the 1.50 s bar. Round 50's dart run
+reported 2.32 s. So the part attributable to the dart is roughly **0.7 s**, and the criterion as written — measured
+from dart start against an absolute bar — is dominated by a baseline (acquisition plus estimator convergence) that
+fails the bar before any target moves. C2's FAIL is real but its cause has been misattributed to dart response.
+Both numbers belong in front of the operator: the bar may need to be applied to the *incremental* recovery, or the
+baseline reduced, and that is a criterion decision, not mine.
