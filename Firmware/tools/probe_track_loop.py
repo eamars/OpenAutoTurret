@@ -972,11 +972,29 @@ def main() -> int:
                   "%d of %d" % (run_ceil, run_src, over, len(qr) - 1))
             print("        worst: %.1f deg/s, from a %.3f deg reference move over %.0f ms at t=%.2f s (%s)"
                   % (worst[0], worst[2], worst[4] * 1000.0, worst[1], worst[3]))
-            print("        -> C6 reference within its own rate limit: %s"
+            print("        -> DIAGNOSTIC ONLY (position differenced at bridge rate, which skews high by the publish/sample ratio; see docs/evidence/c4_measurement_validity_2026-09-05_r44.md): %s"
                   % ("PASS" if over == 0 else "FAIL"))
         else:
             print("        no consecutive reference pair to compare")
         rv = sorted(abs(r["ref_v"]) for r in all_rows if isinstance(r.get("ref_v"), float))
+        # Round 55: C6 is about the rate the limiter bounds, so it is judged on the rate controld
+        # publishes - not on position differenced at a bridge rate faster than the bridge publishes,
+        # which inflated implied rates by the publish/sample ratio (65.7 ms vs ~37 ms, 1.78x against
+        # an observed 1.77x). The +5% allowance here only covers float dust and cross-tick sampling,
+        # because there is no denominator left to be wrong.
+        ceil_now, ceil_from = binding_ceiling_deg_s(
+            [r.get("ceil") for r in all_rows], 30.0,
+            [r.get("vs") for r in all_rows if isinstance(r.get("vs"), (int, float))])
+        rate_over = [x for x in rv if x > ceil_now * 1.05]
+        if rv and not rate_over:
+            verdict6 = "PASS (max %.1f deg/s, no sample above the ceiling plus 5%%)" % rv[-1]
+        elif rv:
+            verdict6 = "FAIL (%d of %d samples above the ceiling plus 5%%, max %.1f deg/s)" % (
+                len(rate_over), len(rv), rv[-1])
+        else:
+            verdict6 = "NO DATA (no published reference rate was sampled)"
+        print("    C6 rate legality (published q_ref_rate_yaw_rad_s; ceiling %.1f deg/s, %s): %s"
+              % (ceil_now, ceil_from, verdict6))
         ra = sorted(abs(r["ref_a"]) for r in all_rows if isinstance(r.get("ref_a"), float))
         series = [(r["t"], r["ref_a"]) for r in all_rows
                   if isinstance(r.get("ref_a"), float)]

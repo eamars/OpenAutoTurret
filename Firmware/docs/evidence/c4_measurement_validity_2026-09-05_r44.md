@@ -188,3 +188,33 @@ Status of C6 after this: the reference **is** within its rate ceiling (0 of 88 m
 0.96), so the criterion passes on the station's own evidence; the probe's verdict line remains a tool defect until
 it is changed to use the published rate. Not a signature, and not a claim about dart-following ability — the ceiling
 itself (10 deg/s, and the C3 lead deficit) is unchanged by all of this.
+
+## Round 56: C6 reworked to the published rate — and the new verdict is not trustworthy yet either
+
+Change applied and executed: the differenced figure is demoted to `DIAGNOSTIC ONLY ... skews high by the
+publish/sample ratio`, and a new line judges the ceiling against controld's published `q_ref_rate_yaw_rad_s`,
++5% for float dust since there is no denominator left to be wrong. Both anchors matched exactly once, the file
+compiles, **461 pytest** pass, and the path was executed rather than admired — two runs, floor and dart.
+
+    C6 rate legality (published q_ref_rate_yaw_rad_s; ceiling 10.0 deg/s, controld ... ):
+        floor: PASS (max 0.2 deg/s, no sample above the ceiling plus 5%)
+        dart : PASS (max 0.2 deg/s, no sample above the ceiling plus 5%)
+
+**Those PASSes are hollow and are not offered as evidence.** A 25 deg dart against a 10 deg/s ceiling must show a
+reference rate near 10, as round 54's run of this same tool printed from the same field
+(`rate : p50 8.4  p95 10.0  max 10.0 deg/s`). Here the maximum of the collected list is **0.2 deg/s**, which means
+the sample set my new line consumes is nearly empty or nearly zero — precisely the always-pass shape round 48's
+zero-height test was written to fear. The verdict is technically what the data say and useless as a measurement.
+
+Open, named: why `ref_v` yielded a different population this run than in round 54. Candidates are sampling density
+(fewer samples, mostly at rest), the row field being absent in the window that happens to be retained, or my
+block reading `all_rows` at a point where it holds fewer rows than the profile print does. Whichever it is, the fix
+needs a **minimum-sample guard** — a rate-legality verdict on fewer than some number of moving samples must print
+`INSUFFICIENT DATA`, not `PASS`. Until then C6 has no working verdict from this tool at all: too strict when
+differenced (rounds 50/53/54), too lenient on ceiling (round 47), now too empty.
+
+Other numbers from the same two runs, for the record: floor C4 **11 flips** again, C2 **1.62 s**; dart C4 **3**
+flips, C2 **3.05 s**, C3 **-11.943 deg**. **C3's spread across three dart runs is -4.7, -6.4 and -11.9 deg** — the
+sign is stable, the magnitude is not, and no single C3 number should be quoted as if it were a constant.
+
+Station: MANUAL/HOLD, READY, synthetic source running. Probe-only change; controller and HUD untouched.

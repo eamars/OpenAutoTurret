@@ -2623,3 +2623,23 @@ station.
 
 Station: MANUAL/HOLD, READY, synthetic source running. No code or config change this round; **461 pytest / 57 CTest**
 stand.
+
+## 2026-09-05, 12:4x — round 56: C6 now judges the published rate, and its own first PASS turned out to be hollow
+
+Applied, compiled, executed (not admired): differenced rate demoted to `DIAGNOSTIC ONLY ... skews high by the
+publish/sample ratio`; new line judges controld's `q_ref_rate_yaw_rad_s` against the binding ceiling, +5% for float
+dust. Both anchors unique, **461 pytest**.
+
+Both runs then printed **PASS with max 0.2 deg/s** — where round 54's run of the same tool printed `rate : p50 8.4
+p95 10.0 max 10.0` from the same field. A 25 deg dart against a 10 deg/s ceiling does not peak at 0.2: the input to
+my new verdict is nearly empty, which is the always-pass shape round 48's zero-height test exists to fear. **The PASS
+is not evidence and is not offered as any.** C6 therefore still has no working verdict from this tool — too strict
+differenced, too lenient on ceiling, now too empty — and the named fix is a **minimum-sample guard** that prints
+`INSUFFICIENT DATA` rather than `PASS`, plus finding why `ref_v`'s population changed between runs.
+
+Same two runs, recorded because they matter independently: floor C4 **11** flips, C2 **1.62 s**; dart C4 **3**, C2
+**3.05 s**, C3 **-11.943 deg**. **C3 across three dart runs: -4.7, -6.4, -11.9 deg** — stable in sign, unstable in
+magnitude by a factor of 2.5, so no single C3 figure may be quoted as a constant. That is the one criterion whose
+failure survives every instrument check, and it is noisy as well as real.
+
+Station: MANUAL/HOLD, READY, synthetic source running. Probe-only change; controller, config and HUD untouched.
