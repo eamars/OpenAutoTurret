@@ -167,7 +167,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"predicted_anchor_norm\":[" << s.prediction_anchor_x_norm << ","
      << s.prediction_anchor_y_norm << "]"
      << ",\"anchor_in_frame\":" << (s.prediction_anchor_in_frame ? "true" : "false")
-     << ",\"horizon_ms\":" << s.prediction_horizon_ms << "}"
+     << ",\"horizon_ms\":" << s.prediction_horizon_ms
+     << ",\"reason\":\"" << s.prediction_reason << "\"}"
      // §20's field_of_regard block. Degrees of logical joint travel (§11.3), points as
      // [yaw_deg, pitch_deg] pairs counter-clockwise from the minimum corner, emitted in the order the
      // control loop produced them. `coordinate_frame` is published rather than assumed: the page must

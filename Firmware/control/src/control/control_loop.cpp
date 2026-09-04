@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 #include "vision/vision_ingest.hpp"
 
@@ -1494,7 +1495,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     //
     // Four things must hold, and each is a different reason to say nothing:
     snap.aim_point_valid = false;
-    if (tracking_ && tracking_->estimator_initialized()) {
+    // The cue IS the commanded aim, or the page is making a claim the controller is not.
+    // This block used to decide for itself whether a prediction existed - estimator initialised?
+    // intrinsics sized like the frame? ray in front? - while the motion it was supposed to
+    // forecast came from build_mode_intent under follow_los && estimator_ready. Two copies of
+    // one decision, free to drift, and they did: the box sat still while the turret chased, and
+    // the comment below even warned that a second copy of the same guards would be free to
+    // drift. So the az/el projected here is now read from last_intent_ - the same ray the axes
+    // were commanded along this cycle, deadband included - and every way this can fail names
+    // itself instead of painting nothing.
+    const bool aiming_los = last_intent_.type == IntentType::LosDirection && last_intent_.has_los;
+    if (!aiming_los) {
+      snap.prediction_reason = "controller is not aiming at a target";
+    } else if (!tracking_) {
+      snap.prediction_reason = "no tracker";
+    }
+    if (aiming_los && tracking_ && tracking_->estimator_initialized()) {
       //   1. there must be an estimate. No state, no aim point — and not a stale one from a
       //      session that ended, which the page would draw as though it were live.
       const tracks::TrackSet& frame = selection_.last_set();
@@ -1505,9 +1521,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       //      scaled by the wrong size is off by a few per cent — which reads as tracking
       //      error rather than as a configuration mistake. Say nothing instead (§72's rule
       //      in a different costume).
+      if (!intr.valid()) {
+        snap.prediction_reason = "camera intrinsics are not loaded";
+      } else if (frame.width != intr.width || frame.height != intr.height) {
+        // Stated with both numbers, because the only way this guard trips is somebody changing
+        // one side, and an operator should not have to open two files to find which.
+        char rb[112];
+        std::snprintf(rb, sizeof rb, "intrinsics %dx%d do not match the vision frame %dx%d",
+                      static_cast<int>(intr.width), static_cast<int>(intr.height),
+                      static_cast<int>(frame.width), static_cast<int>(frame.height));
+        snap.prediction_reason = rb;
+      }
       if (intr.valid() && frame.width == intr.width && frame.height == intr.height) {
-        double az_act = 0.0, el_act = 0.0;
-        tracking_->predicted_los_at_actuation(az_act, el_act);
+        double az_act = last_intent_.los_az_rad, el_act = last_intent_.los_el_rad;
         // The camera is bolted to the axes, so the projection uses the *measured* joint
         // angles: what the picture shows depends on where the hardware actually is, not on
         // where it was told to be.
@@ -1519,6 +1545,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         //      target astern during a roam sweep would be drawn dead centre, on the very
         //      mark that reads "here is where we are aiming". 0.05 is ~86 deg off axis,
         //      past which the projection carries no information anyway.
+        if (r_cam.z <= 0.05) {
+          snap.prediction_reason = "the predicted ray points behind the camera";
+        }
         if (r_cam.z > 0.05) {
           double u = 0.0, v = 0.0;
           geo::CameraModel(intr).ray_to_pixel(r_cam, u, v);
@@ -1539,6 +1568,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           snap.aim_point_valid = (snap.aim_point_x >= 0.0 && snap.aim_point_x <= 1.0 &&
                                   snap.aim_point_y >= 0.0 && snap.aim_point_y <= 1.0);
           snap.prediction_anchor_in_frame = snap.aim_point_valid;
+          snap.prediction_reason = snap.aim_point_valid ? std::string()
+              : "the predicted point is outside the frame";
         }
       }
     }

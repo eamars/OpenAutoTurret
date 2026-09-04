@@ -248,6 +248,11 @@ struct TelemetrySnapshot {
   double prediction_anchor_x_norm = 0.0;
   double prediction_anchor_y_norm = 0.0;
   bool prediction_anchor_in_frame = false;
+  // Why there is NO cue. The absence used to be unexplained, which made a configuration
+  // mismatch indistinguishable from 'nothing to track' - and the operator's only tool was to
+  // guess. Kept ASCII and quote-free because web_server.hpp inlines it into JSON without
+  // escaping; a reason carrying a quote would corrupt the document, so it may not.
+  std::string prediction_reason;
 
   // §20's `field_of_regard.safe_envelope_points[]` and §11's inset, in DEGREES of logical joint
   // travel (§11.3: "FOR coordinates use yaw/pitch degrees", not image coordinates). That choice is

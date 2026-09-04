@@ -44,6 +44,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/async.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <filesystem>
 
 using namespace ota;
 
@@ -362,9 +363,28 @@ int main(int argc, char** argv) {
                      [&loop](const std::string& n, const std::string& a) {
                        return loop.submit_command(n, a);
                      });
+  // The socket's parent directory does not survive a reboot by itself: systemd's RuntimeDirectory
+  // makes it for the units, but a hand-run controld has nothing, and the bind then fails with
+  // "No such file or directory" — which leaves a station that is running, homed and tracking with
+  // **no operator interface at all**. That is what happened on 2026-09-04 after this station
+  // rebooted: one line at `warning`, /api/state answering 503 for twenty minutes, and a console
+  // log that looked perfectly healthy. Making the parent is cheap; a dark station is not.
+  std::error_code mk_ec;
+  const std::filesystem::path sock{web_cfg.socket_path};
+  if (sock.has_parent_path() && !std::filesystem::exists(sock.parent_path())) {
+    std::filesystem::create_directories(sock.parent_path(), mk_ec);
+    if (mk_ec)
+      spdlog::warn("could not create {} for the web socket: {}",
+                   sock.parent_path().string(), mk_ec.message());
+    else
+      spdlog::info("created {} for the web socket", sock.parent_path().string());
+  }
   if (!web.start(err)) {
-    spdlog::warn("web server did not start: {} (continuing without web UI)",
-                 err);
+    // Still a warning rather than a fatal exit — refusing to run the control loop because the
+    // UI cannot bind would trade a visible fault for a hidden one — but stated at a level that
+    // matches the consequence: nobody can see or command this station.
+    spdlog::warn("web server did not start: {} (continuing without web UI)", err);
+
   } else {
     spdlog::info("web server listening: UDS {} @ {} Hz", web_cfg.socket_path,
                  web_cfg.telemetry_hz);

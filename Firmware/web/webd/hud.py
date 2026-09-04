@@ -283,6 +283,12 @@ function hudDiagRows(t) {
                         ? Math.round(t.selected_confidence * 100) + "%" : "--")],
     ["PREDICTION HORIZON", (typeof t.prediction_horizon_ms === "number"
                             ? String(t.prediction_horizon_ms) + " MS" : "--")],
+    // §10: with no cue the page used to say nothing, and "nothing" is how a broken intrinsics
+    // match hid until somebody noticed the box was missing. The controller states a reason, so
+    // the page shows it. LIVE rather than OK: §10 reserves unambiguous words for observations.
+    ["PREDICTION", (t.prediction && t.prediction.valid === true) ? "LIVE"
+                    : ((t.prediction && t.prediction.reason)
+                       ? String(t.prediction.reason) : "--")],
     // Geometry staleness belongs on the engineering panel: every pixel->ray conversion the HUD draws
     // rests on this file, and "measured once, eight months ago" changes how much the centring margin
     // means. Unknown is shown as UNKNOWN, never as a fresh zero.
