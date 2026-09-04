@@ -3183,3 +3183,34 @@ reviewed later, and used to argue about what happened; it is just not "the panel
 what I was reaching for before checking. The remaining piece of the ordering claim that I have still not read is
 `snap`'s lifetime between 1242 and the publish — if anything refreshes it earlier than 1366, the reasoning changes.
 Stated as open rather than resolved.
+
+## 2026-09-05, 23:2x — round 76: the ordering bug is fixed in the safety record, and the test that "covers" this path could never have caught it
+
+`ControlLoop::step()` begins at line 243 and contains no other definition until past 1450, so the §80 preserver at
+1242 and `snap.safety_action = last_decision_.action` at 1366 execute **in that order, in the same pass**. The
+preserved scene therefore carried the *previous* cycle's action while its reason named *this* cycle's decision — and
+since the trigger is an **edge**, the previous cycle is by construction the last safe one. **98 of 98 `BRAKE in hold`
+scenes saying ALLOW is not a coincidence to argue with; it is the arithmetic of the ordering.**
+
+Fix: the assignment hoisted above the §80 block, with the reason written at the site. Nothing else in the file reads
+`snap.safety_action`, and the published value is the same value in the same cycle — only now it is set before its
+first reader. Build clean (`error:`-free, controld relinked), **57/57 CTest**, **pytest after: see commit body**,
+daemon restarted onto the new binary and healthy.
+
+**What is NOT verified, stated plainly:** no new black-box scene has been produced since the restart (still 128
+files; the newest is still the pre-fix `blackbox_0167`, reason `BRAKE in hold` / action `ALLOW`). The fix is
+code-evident and the suites are green, but the *symptom has not been observed to disappear*, because that needs a
+Brake edge and none has occurred. The check that will settle it is one line on the next scene that appears:
+`reason` and `safety_action` must agree.
+
+**And the reason the bug survived a green suite, which is the more transferable finding:** the test that covers this
+record — `BlackBox.APreservedSceneCarriesWhatTheOperatorWasTold`, `test_control_loop.cpp:1168` — calls
+`h.loop->preserve_scene(h.snap(), "brake in Ready")` **directly**. It asserts candidate_count, selection agreement,
+uuid text, phase, non-empty reason — everything except `blackbox.safety_action` — and because it bypasses the call
+site, **no caller-side ordering bug could ever make it fail**. A test that invokes the callee by hand cannot protect
+the ordering of the code that invokes it. The gap to close (not closed this round): drive the loop to a *natural*
+unsafe edge — the file's own comment says this rig passes through a real brake on ~110 ms recipe-sleep cycles, so the
+edge is reachable — and assert agreement between the reason and the recorded action.
+
+Station after restart: `MANUAL / HOLD`, `ready`, homed, synthetic source running again (required after a controld
+restart). Nothing signed; this is a record-integrity fix, not a limit or behaviour change.

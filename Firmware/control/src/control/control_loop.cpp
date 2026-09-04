@@ -1227,6 +1227,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // selection manager holds, so it is by construction the same list the selection was
     // validated against — a UI built on a different copy could offer a label controld
     // would refuse, which is the dead-button problem again.
+    // Round 76: this assignment used to live below the §80 block, so the scene preserved on an
+    // unsafe EDGE recorded the *previous* cycle's action while its reason named this cycle's
+    // decision - and because the trigger is an edge, the previous cycle is by construction the
+    // last safe one. Every archived Brake scene therefore said ALLOW: 98 of 98 in this station's
+    // black box, which is not a coincidence to be argued about but the arithmetic of the ordering.
+    // The function is one pass (step() begins at 243), nothing else reads snap.safety_action, and
+    // the published value is unchanged - same assignment, same cycle, moved above its first reader.
+    snap.safety_action = last_decision_.action;
     // §80: preserve the scene when the station stops believing what it was doing. The
     // edge, not the level — a station sitting in a brake for a minute should hold one
     // record, not twelve hundred, or the artifact that arrives by mail is mostly the
@@ -1363,7 +1371,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       snap.reacquisition_score = sel.reacquisition_score;
       snap.ambiguity_margin = sel.ambiguity_margin;
     }
-    snap.safety_action = last_decision_.action;
+    // (safety_action is assigned above, before the §80 scene preserver — see the note there.)
     snap.feedback_age_ms = rec.feedback_age_ms;
     snap.control_cycle_us = period_ns / 1000;
     // CAN link health (§55/§54.4): read the transport's own counters. Same
