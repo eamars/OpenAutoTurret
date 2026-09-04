@@ -3126,3 +3126,46 @@ dropped.
 Both documents carry the retraction where a reader will meet it (`docs/principal_point_method_2026-09-05_r72.md`, and
 the briefing's §4 bullet). Station restored: `MANUAL / HOLD`, `ready`, homed, yaw ≈149°, synthetic source running
 (2385 track sets after the restart). Docs and measurement only; **487 pytest / 57 CTest** stand; nothing signed.
+
+## 2026-09-05, 22:5x — round 75: round 73's wander has a cause in the black box, and the black box contradicts itself about it
+
+Durable evidence beat further observation. `/var/lib/ota/blackbox` holds **98 scenes named `BRAKE_in_hold`** and 30
+`BRAKE_in_homing`, spanning 08:11 → 15:46 — including several at 15:46, the window of round 73's uncommanded motion.
+Three things are measured, not inferred:
+
+1. **The trigger is an edge, so 98 is not noise.** `control_loop.cpp:1234-1243` preserves a scene only when
+   `unsafe && !was_unsafe_`, with `unsafe = last_decision_.action ∈ {Brake, FaultStop} or phase == Fault`, and the
+   reason string is composed from that same decision. A scene named `BRAKE in hold` therefore *proves* the supervisor
+   decided **Brake while in phase hold** at that instant: **motion authority was cut 98 times while holding.** The
+   comment next to it is explicit that levels are not recorded ("a station sitting in a brake for a minute should hold
+   one record, not twelve hundred").
+2. **Every one of the 98 records says `safety_action: ALLOW`.** The scene that a Brake edge created reports the
+   supervisor allowing motion. The mechanism is visible in line numbers: `preserve_scene(snap, why)` is called at
+   **1242**, while `snap.safety_action = last_decision_.action` happens at **1366** — later in the same pass. The
+   preserved scene therefore carries the *previous* cycle's action by construction. (`rec.safety_action = ...` at
+   1113 sets the field on the event-feed record, which is a different object from the snapshot passed in at 1242.)
+   I am asserting the ordering from those two line numbers; the remaining check is `snap`'s lifetime — whether anything
+   refreshes it between 1242 and 1366 — which I did not read.
+3. **The hold error in those same records is large and intermittent**: consecutive scenes alternate between
+   `|q_ref − q_actual| = 0.00°` and **~6°** (5.84°, 6.01°, 6.69°), and 22 of 97 consecutive scene intervals are under a
+   second, the fastest at **10–20 ms**. `can_motor_backend.cpp:250-261` documents the mechanism in the past tense of a
+   wire-verified fault: when feedback age crosses `feedback_max_age_ms`, "the supervisor **flaps BRAKE/ALLOW** … each
+   **BRAKE stomping the other axis's reference** (p0p hold phase; p3e fault-phase flap)", mitigated by a keepalive ping
+   at 30 ms age.
+
+Put together: round 73's ±6° in a MANUAL/HOLD with no target and no source is consistent with a real
+supervisor-flap episode — authority cut, reference stomped, axis recovering — and the ~6° figures in the scenes match
+what I watched on the panel. I am not claiming the flap is *proven* to be that episode; I am claiming the station cut
+authority 98 times in hold this session, that a documented mechanism produces exactly this signature, and that the
+artifact meant to record those events **states the opposite of the decision that caused it**.
+
+Why that matters beyond the one anomaly: §25 makes the operator's trust the thing being engineered, and §22 governs how
+safety state is presented. A black box that prints `ALLOW` on the scene created by its own Brake decision is a small,
+concrete instance of the panel being wrong precisely when the supervisor intervenes. Fix direction is one line of
+ordering — pass the decision into `preserve_scene` rather than reading it off a snapshot that has not been updated
+yet — but it is C++ in the safety path, so it is offered, not applied: **this needs the operator's eyes, and a scene
+write to verify against.** A grep is also owed to answer whether the web bridge re-serialises this same field into a
+HUD row; that check was not done this round.
+
+Station untouched this round (read-only investigation): `MANUAL / HOLD`, `ready`, homed, source running.
+**487 pytest / 57 CTest** stand. Nothing signed.
