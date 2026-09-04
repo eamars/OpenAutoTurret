@@ -41,9 +41,16 @@ The operator's lead criterion — 25 deg in 1.60 s — needs about **15.6 deg/s 
 ## 3. Two criteria are waiting on a definition, not on hardware
 
 * **C4** cannot be scored until a replacement is adopted. `oscillation_verdict()` is implemented, tested (7 tests),
-  and **deliberately unwired** (round 66): it counts reversals beyond the *measured* jitter ruler (49 px, the p95 of
-  a motionless hold) and reports peak excursion in box heights, so "ringing" has amplitude as well as frequency.
-  Adopting it changes an acceptance criterion — the operator's call.
+  is implemented, tested (7 tests), and **printed beside C4 as a labelled diagnostic** (wired in round 69; the
+  exit code still scores C4 exactly as written). It counts reversals beyond the *measured* jitter ruler (49 px,
+  the p95 of a motionless hold) and reports peak excursion in box heights, so "ringing" would have amplitude
+  as well as frequency. **Round 70 gave it the test that killed the present rule — a segment whose truth is
+  known.** On a 0.0 deg dart, where nothing moves, the present rule reports `FAIL (5 sign changes)` while this
+  one reports NO OSCILLATION DETECTED (0.130 box heights); on a 12 deg dart, converging, peak 0.269 box
+  heights; on the 25 deg acceptance dart, converging, peak 0.818 box heights. Monotone in difficulty, never
+  ringing on a motionless target, and it does not launder a large miss into ringing either. On the evidence so
+  far this station does **not** ring; what adoption changes is the `<= 2 sign changes` text, which is the
+  operator's call (`/tmp/r70_floor.log`, `/tmp/r70_dart.log`, `/tmp/r69b.log`).
 * **C2** should probably be scored on the **incremental** recovery (dart-attributable ≈ 0.7 s) or its 1.61 s
   settling baseline reduced. Either is a criteria decision.
 
