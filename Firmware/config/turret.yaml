@@ -111,7 +111,6 @@ schema_version: 1
 #     jog_keepalive_ms: 100           # the page renews at this rate (§38)
 #     jog_lease_timeout_ms: 300       # must fit three renewals
 #     step_sizes_deg: [0.5, 1.0, 5.0] # may narrow §41's set, never widen it
-
 can:
   # PHY swap point (can_transport.hpp). "socketcan" = MCP2515 HAT on can0;
   # "yousee" = USB-CAN AT adapter on a serial device. Swap freely — nothing
@@ -131,10 +130,8 @@ motors:
   yaw:
     can_id: 101           # 0x65 (discovery ground truth).
     direction_sign: -1    # logical -> mechanical sense; verify at commissioning.
-
 control:
   loop_hz: 200            # frozen by §59.4; profiled.
-
 axes:
   pitch:
     # Refined after the first speed-mode homing (p0p): the measured full-range
@@ -171,7 +168,6 @@ axes:
     # true mechanical end-stop latches as a stop. Do NOT raise this: a higher
     # current makes the notches hold and produce false stops.
     limit_cur_a: 1.0
-
 homing:
   contact:
     # Speed-mode (velocity) homing: the drive's own velocity loop holds these
@@ -237,7 +233,6 @@ homing:
     # CONSERVATIVE first-run value (measured end-stop push is 0.43-0.73 N.m);
     # the run logs peak + at-contact torque so we dial this in together.
     torque_safety_nm: 10.0
-
 # §25.2 executable multi-axis homing plan. Default for the simple pitch/yaw
 # gimbal: home each axis across its full mechanical range, PITCH then YAW
 # (matches the POC zero_all order; pitch is a bounded axis and homes reliably
@@ -281,7 +276,6 @@ homing_plan:
   - action: home_full_range
     axis: pitch
     precision: fine
-
 tracking:
   # The ceiling that actually binds station motion, and (control_loop.cpp:427) the AUTO_TRACK reference
   # too - applied before the confidence derate, so no tracker or prediction tuning can exceed it.
@@ -299,7 +293,6 @@ tracking:
   head_fraction_from_top: 0.22
   search_enabled_by_default: false
   target_lost_behavior: hold    # hold | search (§58 params 19-20)
-
 shutdown:
   # §33.1 safe in-travel park pose: the no-dangle mid-travel pose (the same
   # pose the homing plan uses to park each axis between homes). Logical degrees
@@ -338,7 +331,6 @@ shutdown:
   # the 0.5 deg window; a 10 deg/s hold would limit-cycle ~1.3 deg, outside
   # it.
   verify_speed_deg_s: 2.0
-
 # §38/§39 safety supervisor + watchdog tuning.
 safety:
   # §39.2 stale motor feedback -> no open-loop.
@@ -353,14 +345,11 @@ safety:
   deadline_max_us: 2000         # §39.3 cycle longer than this counts as a miss
   deadline_miss_threshold: 5    # misses in the window before a derate
   motor_overtemp_c: 75.0        # §38 over-temperature fault threshold
-
 camera:
   intrinsics_file: calibration/camera_intrinsics.yaml
   extrinsics_file: calibration/camera_extrinsics.yaml
-
 installation:
   pose_file: calibration/installation_pose.yaml
-
 payload:
   active_profile: conservative
   profile_dir: config/payload_profiles
@@ -390,3 +379,9 @@ payload:
   # gravity-dominated creep. Still bounded by the current/torque limits.
   check_spd_kp: 5.0
   check_spd_ki: 0.02
+# v3 auto_track: the automatic roam<->track hand-off. 0 = never (the shipped default).
+auto_track:
+  roam_on_loss_ms: 5000
+  track_on_acquire_ms: 1000
+  coast_ms: 0
+  lost_hold_ms: 0

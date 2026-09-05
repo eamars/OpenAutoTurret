@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Manifest for the installed artefact imx500_network_efficientdet_lite0_pp.rpk (imx500-models 1:1.0.0-1).",
+    "",
+    "Machine-measured 2026-09-05 on station rpi-turret: sha256 over the file, and",
+    "inference_rate/task/labels read out of the metadata JSON embedded in the .rpk",
+    "itself. license is the imx500-models copyright file's entry for this artefact.",
+    "Re-measure and re-review after any package upgrade - \u00a79.3 exists so a changed",
+    "artefact stops startup instead of changing what 'person' means mid-run.",
+    "",
+    "layout. The .rpk metadata does not declare them, so \u00a79.2's probe is the",
+    "authority; run `visiond --probe-model <path> --emit-manifest <path>` on the",
+    "bbox_order, bbox_normalized and the output layout were measured on 2026-09-05 and are",
+    "no longer provisional. row_layout/output_tensors describe the four-tensor on-sensor",
+    "output; a package upgrade that changes the firmware layout is caught at startup by \u00a79.3",
+    "only if the manifest is re-verified \u2014 rerun the probe + a sample capture before trusting",
+    "a new imx500-models release."
+  ],
+  "bbox_normalized": false,
+  "bbox_order": "yxyx",
+  "inference_rate_hz": 23.0,
+  "input_height": 320,
+  "input_width": 320,
+  "labels": "coco_rpk",
+  "license": "Apache-2.0 (per /usr/share/doc/imx500-models/copyright)",
+  "model_id": "imx500-efficientdet-lite0-pp-coco",
+  "notes": [
+    "sha256 and inference_rate_hz=23 measured from the artefact on 2026-09-05; labels resolved",
+    "to the embedded 90-entry list (coco_rpk).",
+    "the artefact's own metadata declares cpu.bbox_normalization = true and a 1:1 input aspect",
+    "ratio - the only layout fields evidenced by the file rather than by the probe.",
+    "320x320 is this export's published input size; if the device reports otherwise the",
+    "adapter adopts the device's value and records a warning instead of guessing twice.",
+    "A 320x320-class input sees a person as roughly 20x60 pixels at moderate range: \u00a736's",
+    "measurement_quality and \u00a737.1's selectability floor are what keep that from being",
+    "mistaken for a good lock, not the detector score alone.",
+    "Measured on this station 2026-09-05: on-sensor PP output is four tensors (boxes (100,4), scores (100,), classes (100,), count (1,)); boxes are yxyx in the 320x320 NETWORK-INPUT PIXEL space, not normalized \u2014 the .rpk's declared 'bbox_normalization' refers to the compiled model's coordinate handling, not the output scale, and output values up to ~314 are what settle the question."
+  ],
+  "output_tensors": {
+    "boxes": 0,
+    "classes": 2,
+    "count": 3,
+    "format": "imx500_pp_split",
+    "max_rows": 100,
+    "scores": 1
+  },
+  "path": "/usr/share/imx500-models/imx500_network_efficientdet_lite0_pp.rpk",
+  "permitted_classes": [
+    "person"
+  ],
+  "postprocess": "on_sensor",
+  "preserve_aspect_ratio": true,
+  "row_layout": {
+    "box_index": 2,
+    "class_index": 1,
+    "columns": 6,
+    "score_index": 0
+  },
+  "schema_version": 1,
+  "sha256": "0699c988a9c27fc8450a1e3080719fbb15d16e62b8d383ea0becaa0816567b58",
+  "task": "object_detection"
+}

@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "Manifest for the installed artefact imx500_network_nanodet_plus_416x416_pp.rpk (imx500-models 1:1.0.0-1).",
+    "",
+    "Machine-measured 2026-09-05 on station rpi-turret: sha256 over the file, and",
+    "inference_rate/task/labels read out of the metadata JSON embedded in the .rpk",
+    "itself. license is the imx500-models copyright file's entry for this artefact.",
+    "Re-measure and re-review after any package upgrade - \u00a79.3 exists so a changed",
+    "artefact stops startup instead of changing what 'person' means mid-run.",
+    "",
+    "layout. The .rpk metadata does not declare them, so \u00a79.2's probe is the",
+    "authority; run `visiond --probe-model <path> --emit-manifest <path>` on the",
+    "bbox_order, bbox_normalized and the output layout were measured on 2026-09-05 and are",
+    "no longer provisional. row_layout/output_tensors describe the four-tensor on-sensor",
+    "output; a package upgrade that changes the firmware layout is caught at startup by \u00a79.3",
+    "only if the manifest is re-verified \u2014 rerun the probe + a sample capture before trusting",
+    "a new imx500-models release."
+  ],
+  "bbox_normalized": true,
+  "bbox_order": "yxyx",
+  "inference_rate_hz": 23.0,
+  "input_height": 416,
+  "input_width": 416,
+  "labels": "coco_rpk",
+  "license": "Apache-2.0 (per /usr/share/doc/imx500-models/copyright)",
+  "model_id": "imx500-nanodet-plus-416x416-pp-coco",
+  "notes": [
+    "sha256 and inference_rate_hz=23 measured from the artefact",
+    "on 2026-09-05; labels resolved to the embedded 90-entry list (coco_rpk).",
+    "A 320x320-class input sees a person as roughly 20x60 pixels at moderate range:",
+    "\u00a736's measurement_quality and \u00a737.1's selectability floor are what keep that from",
+    "being mistaken for a good lock, not the detector score alone.",
+    "Measured on this station 2026-09-05: on-sensor PP output is four tensors (boxes (300,4), scores (300,), classes (300,), count (1,)); boxes are NORMALIZED yxyx. The 416x416 input sees a person at ~25x60 px at moderate range."
+  ],
+  "output_tensors": {
+    "boxes": 0,
+    "classes": 2,
+    "count": 3,
+    "format": "imx500_pp_split",
+    "max_rows": 300,
+    "scores": 1
+  },
+  "path": "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rpk",
+  "permitted_classes": [
+    "person"
+  ],
+  "postprocess": "on_sensor",
+  "preserve_aspect_ratio": true,
+  "row_layout": {
+    "box_index": 2,
+    "class_index": 1,
+    "columns": 6,
+    "score_index": 0
+  },
+  "schema_version": 1,
+  "sha256": "0dfc568ce685771adce364a08d329801d125b9358a3275a75bcd2de51bff92a1",
+  "task": "object_detection"
+}

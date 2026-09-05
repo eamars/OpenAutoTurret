@@ -1,0 +1,273 @@
+{
+  "vision": {
+    "_comment": [
+      "Vision 1.0 perception configuration (\u00a750, \u00a753). JSON so the shipped artefact loads on an",
+      "interpreter without PyYAML; .yaml is accepted when PyYAML is present.",
+      "",
+      "The score thresholds and the \u00a716 dedup thresholds are COMMISSION on purpose: nobody has",
+      "commissioned them on this station. validate(production=True) therefore refuses to start",
+      "for EVERY profile, offline_replay included - and validate(production=False), the mode",
+      "replays and acceptance tests use, reports them as work items instead of silently running.",
+      "Filling them in from a demo script's numbers is the drift \u00a73.5 documents: the retired",
+      "pipeline's 'confidence' meant something else entirely.",
+      "",
+      "profiles: person_detect (\u00a76's baseline; the .rpk is not installed here),",
+      "person_detect_available (a post-processed COCO detector that IS installed, so \u00a79.2's",
+      "oracle and the real adapter can be exercised today), offline_replay (mock adapter).",
+      "",
+      "manifest_path is resolved by perception.model.adapter.resolve_artifact(): package",
+      "directory first, then next to this file, then the working directory - because a relative",
+      "manifest_path is resolved by perception.model.adapter.resolve_artifact(): the perception package directory first, then the Firmware root, then next to this file, then the working directory - because a relative path resolved against whatever directory systemd launched from is a silent wrong-file bug.",
+      "Bake-off profiles (\u00a77/Vision-6): person_detect_available (ssd-mobilenetv2 fpnlite 320, 26 Hz),",
+      "bakeoff_nanodet416 (nanodet+ 416, 23 Hz), bakeoff_efficientdet320 (efficientdet-lite0, 23 Hz).",
+      "All three name an artefact that is installed, and each manifest's sha256, license and rate",
+      "were measured from the .rpk rather than written by hand; their score thresholds stay",
+      "COMMISSION, so `--production` still refuses them until the numbers are commissioned (\u00a750).",
+      "Run `python -m perception.tools.bakeoff --recording REC` to compare them on one recording.",
+      "camera.width/height = 1920x1080 so the published TrackSet pixel geometry matches the",
+      "calibrated camera_intrinsics (calibration/camera_intrinsics.yaml is valid ONLY for the",
+      "1920x1080 tracker frame). If visiond publishes a different size, controld's aim-point check",
+      "(frame.width != intr.width) forces aim_point_valid=false and the turret never moves. The",
+      "IMX500's",
+      "on-sensor network runs on its own fixed crop regardless; this is the size \u00a714",
+      "maps boxes into, and it is the size a 320x320 main stream turned out not to",
+      "deliver frames at (measured: configured fine, never a frame \u2014 the sensor has no",
+      "3xx-width main mode on this rp1-cfe/pisp stack).",
+      "selection.policy = AUTO_SELECT_SINGLE is the core feature (the turret auto-",
+      "selects the one person in view and follows it). auto_select_min_* are PROVISIONAL",
+      "values from the measured person detections (~0.9) vs clutter (<0.3); they are not",
+      "claimed \u00a750-commissioned \u2014 recompute from a real person recording before a",
+      "production run, or the auto-select dwell cannot be trusted.",
+      "tracking thresholds are COMMISSION in the shipped file; the values set here are",
+      "PROVISIONAL (person ~0.9, clutter <0.3, the tracker's nominal bands). They close the",
+      "loop so the turret can track, but \u00a750 still needs a real calibration recording before",
+      "a production run.",
+      "tracking/auto-select thresholds are set from the MEASURED person score (0.27-0.32 on",
+      "this sensor): selectable 0.30, auto_select_min_detector_score 0.27, etc. A floor above",
+      "0.32 excluded every actual person \u2014 this is the calibration fact commissioning exists to",
+      "surface. Recompute from a real labelled recording before a production run.",
+      "\u00a716 dedup commissioned (nms_iou 0.45, containment_ratio 0.85, center_distance_norm 0.05):",
+      "without it the duplicate resolver declines, the 2:1 tensor cadence fragments the person",
+      "into 4-5 overlapping CONFIRMED tracks, and auto-select never sees a single candidate."
+    ],
+    "anchor": {
+      "min_keypoint_score": 0.3,
+      "torso_fraction": 0.45,
+      "use_pose_anchors": true
+    },
+    "camera": {
+      "frame_rate": "model_intrinsics",
+      "height": 1080,
+      "preserve_aspect_ratio": true,
+      "width": 1920
+    },
+    "dedup": {
+      "center_distance_norm": 0.05,
+      "class_aware_nms": true,
+      "containment": true,
+      "containment_max_scale_ratio": 4.0,
+      "containment_ratio": 0.85,
+      "nms_iou": 0.45,
+      "pose_nms": false,
+      "pose_oks_sigma": 0.1
+    },
+    "models": {
+      "bakeoff_efficientdet320": {
+        "adapter": "imx500",
+        "bbox_normalized": false,
+        "bbox_order": "yxyx",
+        "inference_rate_hz": 23,
+        "input_height": 320,
+        "input_width": 320,
+        "labels": "coco_rpk",
+        "license": "",
+        "manifest": "model/manifests/imx500_efficientdet_lite0_pp_coco.json",
+        "model_id": "imx500-efficientdet-lite0-pp-coco",
+        "path": "/usr/share/imx500-models/imx500_network_efficientdet_lite0_pp.rpk",
+        "permitted_classes": [
+          "person"
+        ],
+        "postprocess": "on_sensor",
+        "sha256": "",
+        "task": "object_detection",
+        "thresholds": {
+          "confirmed_update": 0.25,
+          "low_association": 0.15,
+          "new_track": 0.25,
+          "selectable": 0.3
+        }
+      },
+      "bakeoff_nanodet416": {
+        "adapter": "imx500",
+        "bbox_normalized": true,
+        "bbox_order": "yxyx",
+        "inference_rate_hz": 23,
+        "input_height": 416,
+        "input_width": 416,
+        "labels": "coco_rpk",
+        "license": "",
+        "manifest": "model/manifests/imx500_nanodet_plus_416x416_pp_coco.json",
+        "model_id": "imx500-nanodet-plus-416x416-pp-coco",
+        "path": "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rpk",
+        "permitted_classes": [
+          "person"
+        ],
+        "postprocess": "on_sensor",
+        "sha256": "",
+        "task": "object_detection",
+        "thresholds": {
+          "confirmed_update": 0.25,
+          "low_association": 0.15,
+          "new_track": 0.25,
+          "selectable": 0.3
+        }
+      },
+      "offline_replay": {
+        "adapter": "mock",
+        "bbox_normalized": true,
+        "bbox_order": "xy",
+        "inference_rate_hz": 16,
+        "input_height": 640,
+        "input_width": 640,
+        "labels": "coco",
+        "license": "",
+        "manifest": "",
+        "model_id": "offline-mock",
+        "path": "",
+        "permitted_classes": [
+          "person"
+        ],
+        "postprocess": "on_sensor",
+        "sha256": "",
+        "task": "object_detection",
+        "thresholds": {
+          "confirmed_update": 0.5,
+          "low_association": 0.1,
+          "new_track": 0.3,
+          "selectable": 0.5
+        }
+      },
+      "person_detect": {
+        "adapter": "imx500",
+        "bbox_normalized": true,
+        "bbox_order": "xy",
+        "inference_rate_hz": 16,
+        "input_height": 640,
+        "input_width": 640,
+        "labels": "coco",
+        "license": "",
+        "manifest": "model/manifests/imx500_yolo11n_pp_coco.json",
+        "model_id": "imx500-yolo11n-pp-coco",
+        "path": "/usr/share/imx500-models/imx500_network_yolo11n_pp.rpk",
+        "permitted_classes": [
+          "person"
+        ],
+        "postprocess": "on_sensor",
+        "sha256": "",
+        "task": "object_detection",
+        "thresholds": {
+          "confirmed_update": "COMMISSION",
+          "low_association": "COMMISSION",
+          "new_track": "COMMISSION",
+          "selectable": "COMMISSION"
+        }
+      },
+      "person_detect_available": {
+        "adapter": "imx500",
+        "bbox_normalized": true,
+        "bbox_order": "yxyx",
+        "inference_rate_hz": 26,
+        "input_height": 320,
+        "input_width": 320,
+        "labels": "coco_rpk",
+        "license": "",
+        "manifest": "model/manifests/imx500_ssd_mobilenetv2_fpnlite_320x320_pp_coco.json",
+        "model_id": "imx500-ssd-mobilenetv2-fpnlite320-pp-coco",
+        "path": "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk",
+        "permitted_classes": [
+          "person"
+        ],
+        "postprocess": "on_sensor",
+        "sha256": "",
+        "task": "object_detection",
+        "thresholds": {
+          "confirmed_update": 0.25,
+          "low_association": 0.15,
+          "new_track": 0.25,
+          "selectable": 0.30
+        }
+      }
+    },
+    "preview": {
+      "enabled": true,
+      "fps": 10.0,
+      "latest_queue_depth": 1,
+      "tap_path": ""
+    },
+    "profile": "person_detect",
+    "record": {
+      "dataset_path": "",
+      "event_log_path": "",
+      "flush_every": 32,
+      "record_detections": true,
+      "record_images": false,
+      "replay_path": ""
+    },
+    "selection": {
+      "auto_select_min_detector_score": 0.27,
+      "auto_select_min_identity_confidence": 0.4,
+      "auto_select_single_dwell_ms": 250.0,
+      "policy": "AUTO_SELECT_SINGLE",
+      "select_min_identity_confidence": 0.5
+    },
+    "timing_window": 512,
+    "tracking": {
+      "appearance": {
+        "enabled": false,
+        "max_distance": 0.35,
+        "persist": false,
+        "type": "hsv_upper_lower"
+      },
+      "camera_motion": {
+        "focal_px": "COMMISSION",
+        "gmc_max_features": 200,
+        "gmc_min_inliers": 12,
+        "hint_max_age_ms": 150.0,
+        "provider": "none"
+      },
+      "diagnostics_capacity": 512,
+      "diagnostics_enabled": false,
+      "duplicate_dwell_ms": 300.0,
+      "engine": "byte_style",
+      "gates": {
+        "ambiguity_margin": 0.15,
+        "max_aspect_change": 1.0,
+        "max_scale_ratio": 3.0,
+        "max_speed_norm_s": 2.5,
+        "reacquire_margin": 1.6
+      },
+      "lost": {
+        "retain_ms": 3000.0
+      },
+      "max_predict_dt_ms": 250.0,
+      "max_tracks": 16,
+      "occluded": {
+        "max_ms": 350.0
+      },
+      "protect_selected": true,
+      "tentative": {
+        "max_gap_ms": 180.0,
+        "min_observations": 3,
+        "min_visible_ms": 120.0
+      },
+      "weights": {
+        "appearance": 0.0,
+        "iou": 0.4,
+        "motion": 1.0,
+        "pose": 0.0,
+        "scale": 0.25,
+        "shape": 0.15
+      }
+    }
+  }
+}

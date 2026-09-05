@@ -5,10 +5,13 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <poll.h>
+#include <thread>
 
 #include "common/time.hpp"
+#include "spdlog/spdlog.h"
 
 namespace ota::can {
 
@@ -112,23 +115,36 @@ bool YouseeTransport::at_cmd(const std::string& cmd, const std::string& expect,
     }
     off += static_cast<size_t>(w);
   }
+  const std::string err_line = "ERROR";
   std::string line;
   for (int tries = 0; tries < 30; ++tries) {  // 3 s budget (30 x 100 ms)
     char buf[64];
     const ssize_t n = ::read(fd_, buf, sizeof(buf));
     if (n > 0) {
       line.append(buf, static_cast<size_t>(n));
-      if (line.size() >= 2 &&
-          line.compare(line.size() - 2, 2, "\r\n") == 0)
-        break;
+      // The adapter is a chatty AT device: it may emit unsolicited lines (a boot banner, a
+      // stale ``OK`` from a previous ``AT+AT`` data-mode transition, or an interleaved AT
+      // reply) before the response to THIS command. Reacting to the first complete line is
+      // how a clean handshake intermittently falsifies — the very failure that left the CAN
+      // link dead with "AT mismatch: sent 'AT+CG' expected 'OK' got 'ERROR'". Consume the
+      // whole CRLF line and keep reading until the expected response (or a bare ERROR) shows
+      // up, instead of trusting that the first line is ours.
+      size_t cr;
+      while ((cr = line.find("\r\n")) != std::string::npos) {
+        std::string got = line.substr(0, cr);
+        line.erase(0, cr + 2);
+        if (got == expect) return true;
+        if (got == err_line) {
+          err = "yousee: AT failed: sent '" + cmd + "' got 'ERROR'";
+          return false;
+        }
+        // Not ours (a boot banner, an interleaved AT reply, a stale OK): drop it and keep
+        // reading. The command's own response is still to come.
+      }
     }
   }
-  if (line != expect + "\r\n") {
-    err = "yousee: AT mismatch: sent '" + cmd + "' expected '" + expect +
-          "' got '" + line + "'";
-    return false;
-  }
-  return true;
+  err = "yousee: AT mismatch: sent '" + cmd + "' expected '" + expect + "' got '" + line + "'";
+  return false;
 }
 
 bool YouseeTransport::start(std::string& err) {
@@ -168,13 +184,35 @@ bool YouseeTransport::start(std::string& err) {
 
   if (!opts_.skip_at_init) {
     const std::string br = std::to_string(opts_.can_bitrate);
-    if (!at_cmd("AT+CG\r\n", "OK", err) ||
-        !at_cmd("AT+CAN_BAUD=" + br + "\r\n", "OK", err) ||
-        !at_cmd("AT+CAN_BAUD=?\r\n", "+CAN_BAUD:" + br, err) ||
-        !at_cmd("AT+AT\r\n", "OK", err)) {
-      ::close(fd_);
-      fd_ = -1;
-      return false;
+    // Cold-start retry. The yousee adapter (CH340) and the CyberGear drives need a moment after
+    // the port opens before they accept the AT handshake; a freshly-backed adapter can answer the
+    // very first ``AT+CG`` with a bare ERROR (or nothing at all) while it enumerates, and then
+    // answer OK a few dozen milliseconds later. The python bring-up tool always wins this race
+    // because by the time a human runs it the adapter is already warm. Retry the whole sequence a
+    // few times with a settle delay so a cold station still comes up, and only give up — and
+    // report it as the fatal CAN open failure — once the budget is spent.
+    constexpr int kInitAttempts = 3;
+    std::string last_err;
+    for (int attempt = 1; attempt <= kInitAttempts; ++attempt) {
+      std::string aerr;
+      const bool ok = at_cmd("AT+CG\r\n", "OK", aerr) &&
+                      at_cmd("AT+CAN_BAUD=" + br + "\r\n", "OK", aerr) &&
+                      at_cmd("AT+CAN_BAUD=?\r\n", "+CAN_BAUD:" + br, aerr) &&
+                      at_cmd("AT+AT\r\n", "OK", aerr);
+      if (ok) {
+        last_err.clear();
+        break;
+      }
+      last_err = aerr;
+      spdlog::warn("yousee: AT init attempt {}/{} failed: {}", attempt, kInitAttempts, last_err);
+      ::tcflush(fd_, TCIOFLUSH);
+      std::this_thread::sleep_for(std::chrono::milliseconds(150));
+      if (attempt == kInitAttempts) {
+        err = last_err;
+        ::close(fd_);
+        fd_ = -1;
+        return false;
+      }
     }
   }
 

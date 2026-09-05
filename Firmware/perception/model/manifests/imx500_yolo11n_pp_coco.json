@@ -1,0 +1,54 @@
+{
+  "_comment": [
+    "\u00a79.3 model manifest. JSON, not YAML, on purpose: the acceptance tests (\u00a755.18) load",
+    "the shipped artefacts on an interpreter that has no PyYAML, and a manifest that only",
+    "the station can read is not a check. load_mapping_document() still accepts .yaml.",
+    "",
+    "This is the Vision 1.0 production baseline (\u00a76): YOLO11n with on-sensor post-processing.",
+    "It is a DECLARATION, and \u00a79.3's whole rule is that the declaration is checked against the",
+    "device: probe_model() + ModelManifest.require_agreement() at open(), before the first",
+    "inference. Values here are what the export is expected to be, not what was measured here.",
+    "",
+    "NOT INSTALLED on this station (rpi-turret, imx500-models 1:1.0.0-1 ships 23 .rpk files,",
+    "none of them yolo11n). Install it, or run the offline profile. The adapter refuses to open",
+    "a missing model path rather than substituting something else - \u00a79.2."
+  ],
+  "schema_version": 1,
+  "model_id": "imx500-yolo11n-pp-coco",
+  "task": "object_detection",
+  "input_width": 640,
+  "input_height": 640,
+  "bbox_order": "xy",
+  "bbox_normalized": true,
+  "postprocess": "on_sensor",
+  "inference_rate_hz": 16,
+  "labels": "coco",
+  "permitted_classes": [
+    "person"
+  ],
+  "preserve_aspect_ratio": true,
+  "row_layout": {
+    "score_index": 0,
+    "class_index": 1,
+    "box_index": 2
+  },
+  "path": "/usr/share/imx500-models/imx500_network_yolo11n_pp.rpk",
+  "sha256": "COMMISSION",
+  "license": "COMMISSION",
+  "notes": [
+    "inference_rate_hz = 16 is \u00a76's expected rate; it sizes \u00a740's per-stage budgets and",
+    "\u00a719's frame-interval assumptions. The .rpk reports its own rate, and a mismatch beyond",
+    "\u00b135% is reported as a warning at open() - not fatal, because the declared figure is a",
+    "nominal capability, but the budgets were derived from it and should be re-derived.",
+    "sha256: record with perception.model.environment.sha256_file(path) at commissioning.",
+    "license: unknown to this checkout. Do not ship 'Apache-2.0' because a sibling model",
+    "carried that; verify the artefact's own licence and fill this in.",
+    "bbox_normalized: true means the on-sensor post-processor emits fractions of the network",
+    "input. Read those four numbers as pixels instead and every box is wrong by 640x - which",
+    "is why the flag is declared, checked, and re-checked at open() (\u00a714).",
+    "labels are declared as the 80-entry contiguous COCO list only because the artefact is",
+    "not installed to inspect. The installed imx500-models detectors emit a 90-entry list",
+    "with '-' placeholders (coco_rpk); when this .rpk arrives, read its embedded metadata",
+    "(or run --probe-model --emit-manifest) and correct this file from the answer."
+  ]
+}
