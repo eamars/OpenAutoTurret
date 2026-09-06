@@ -1,0 +1,105 @@
+{
+  "source": "restored-tracking-service.json",
+  "samples": 310,
+  "homing_samples": 0,
+  "faults": [],
+  "stages": {
+    "automatic_before_manual": {
+      "modes": [
+        "AUTO_TRACK"
+      ],
+      "samples": 1,
+      "duration_s": 0.0,
+      "yaw": {
+        "travel_deg": 0.0,
+        "reference_error_p95_deg": 0.12221189770140437,
+        "max_tracking_profile_accel_deg_s2": 0.5701898360225461
+      },
+      "pitch": {
+        "travel_deg": 0.0,
+        "reference_error_p95_deg": 0.20620751046758437,
+        "max_tracking_profile_accel_deg_s2": 0.6788862322946098
+      }
+    },
+    "manual_hold": {
+      "modes": [
+        "MANUAL"
+      ],
+      "samples": 46,
+      "duration_s": 2.979638748,
+      "yaw": {
+        "travel_deg": 0.15297973129993012,
+        "reference_error_p95_deg": 0.15297973129993012,
+        "max_tracking_profile_accel_deg_s2": null
+      },
+      "pitch": {
+        "travel_deg": 0.0437166797684826,
+        "reference_error_p95_deg": 0.02188698777399707,
+        "max_tracking_profile_accel_deg_s2": null
+      }
+    },
+    "yaw+5": {
+      "modes": [
+        "MANUAL"
+      ],
+      "samples": 77,
+      "duration_s": 5.03314819,
+      "yaw": {
+        "travel_deg": 5.02707439869833,
+        "reference_error_p95_deg": 0.32400763314648096,
+        "max_tracking_profile_accel_deg_s2": null,
+        "target_overshoot_deg": 0.04893059570417194,
+        "final_error_deg": -0.2789158546696854
+      },
+      "pitch": {
+        "travel_deg": 0.0437166797684826,
+        "reference_error_p95_deg": 0.021829691994485523,
+        "max_tracking_profile_accel_deg_s2": null
+      }
+    },
+    "yaw-5": {
+      "modes": [
+        "MANUAL"
+      ],
+      "samples": 77,
+      "duration_s": 5.027760261,
+      "yaw": {
+        "travel_deg": 5.092672336662857,
+        "reference_error_p95_deg": 0.36400008724661187,
+        "max_tracking_profile_accel_deg_s2": null,
+        "target_overshoot_deg": 0.11453426324665161,
+        "final_error_deg": 0.32262680486021494
+      },
+      "pitch": {
+        "travel_deg": 0.0437166797684826,
+        "reference_error_p95_deg": 0.021829691994485523,
+        "max_tracking_profile_accel_deg_s2": null
+      }
+    }
+  },
+  "tracking_reference_samples": 1,
+  "tracking_motor_reference_error_p95_deg": {
+    "yaw": 0.12221189770140437,
+    "pitch": 0.20620751046758437
+  },
+  "last_state": {
+    "phase": "hold",
+    "operating_mode": "MANUAL",
+    "mode_phase": "HOLD",
+    "fault": "",
+    "soft_limits_valid": true,
+    "effective_speed_ceiling_deg_s": 20,
+    "camera_fps": 26.0122,
+    "control_deadline_misses": 0
+  },
+  "soft_limits_deg": {
+    "yaw": [
+      -161.93219684884892,
+      180.7842271820384
+    ],
+    "pitch": [
+      -74.71197761167396,
+      -4.836073188113519
+    ]
+  }
+}

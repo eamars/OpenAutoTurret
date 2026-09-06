@@ -1,0 +1,51 @@
+{
+  "source": "restored-tracking-readonly.json",
+  "samples": 1397,
+  "homing_samples": 0,
+  "faults": [],
+  "stages": {
+    "automatic_observation": {
+      "modes": [
+        "AUTO_ROAM",
+        "AUTO_TRACK"
+      ],
+      "samples": 905,
+      "duration_s": 59.927126745,
+      "yaw": {
+        "travel_deg": 155.51191827551045,
+        "reference_error_p95_deg": 2.4379354182816706,
+        "max_tracking_profile_accel_deg_s2": 24.999982066502238
+      },
+      "pitch": {
+        "travel_deg": 18.49095233069803,
+        "reference_error_p95_deg": 0.5851045003875966,
+        "max_tracking_profile_accel_deg_s2": 24.999982066502238
+      }
+    }
+  },
+  "tracking_reference_samples": 545,
+  "tracking_motor_reference_error_p95_deg": {
+    "yaw": 2.870518553605426,
+    "pitch": 0.6174193200329724
+  },
+  "last_state": {
+    "phase": "hold",
+    "operating_mode": "AUTO_ROAM",
+    "mode_phase": "SWEEP",
+    "fault": "",
+    "soft_limits_valid": true,
+    "effective_speed_ceiling_deg_s": 20,
+    "camera_fps": 26.0123,
+    "control_deadline_misses": 0
+  },
+  "soft_limits_deg": {
+    "yaw": [
+      -161.93219684884892,
+      180.7842271820384
+    ],
+    "pitch": [
+      -74.71197761167396,
+      -4.836073188113519
+    ]
+  }
+}

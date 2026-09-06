@@ -11,6 +11,7 @@
 //
 // Pure geometry — no CAN, no camera, no motor driver.
 #include <cmath>
+#include <algorithm>
 
 #include "geometry/turret_kinematics.hpp"
 #include "tracking/target_estimator.hpp"  // wrap_angle
@@ -39,6 +40,21 @@ inline double wrap_near(double angle_rad, double reference_rad) {
   return a;
 }
 
+// Choose an equivalent angle that physically exists in this joint's travel.
+// The shortest angular representation may be across a mechanical end stop.
+inline bool equivalent_in_range(double angle, double reference, double low, double high,
+                                double& result) {
+  if (!std::isfinite(angle) || !std::isfinite(reference) ||
+      !std::isfinite(low) || !std::isfinite(high) || low>high) return false;
+  const double period=2*M_PI;
+  const double first=std::ceil((low-angle-1e-10)/period);
+  const double last=std::floor((high-angle+1e-10)/period);
+  if(first>last) return false;
+  const double turn=std::clamp(std::round((reference-angle)/period),first,last);
+  result=std::clamp(angle+period*turn,low,high);
+  return true;
+}
+
 class LosJointSolver {
  public:
   explicit LosJointSolver(TurretKinematics kin) : kin_(std::move(kin)) {}
@@ -48,6 +64,31 @@ class LosJointSolver {
     const Vec3 v = (Mat3::rot_z(q_yaw_rad) * Mat3::rot_y(q_pitch_rad) *
                     kin_.R_PC * Vec3(0.0, 0.0, 1.0));
     return v.normalized();
+  }
+
+  // Enumerate the two optical-axis pitch branches, then choose only joint
+  // representations inside calibrated travel. This also works for a target
+  // opposite the current view, where a local gradient can vanish.
+  bool solve_within_limits(double az, double el, double seed_yaw, double seed_pitch,
+      double yaw_low, double yaw_high, double pitch_low, double pitch_high,
+      double& yaw, double& pitch) const {
+    if(!std::isfinite(az) || !std::isfinite(el) || std::abs(el)>M_PI/2) return false;
+    const Vec3 body=(kin_.R_PC*Vec3(0,0,1)).normalized();
+    const double radius=std::hypot(body.x,body.z);
+    if(radius<1e-9 || std::abs(std::sin(el))>radius+1e-9) return false;
+    const double root=std::acos(std::clamp(std::sin(el)/radius,-1.0,1.0));
+    const double offset=std::atan2(body.x,body.z);
+    double best=1e100; bool found=false;
+    for(double sign : {-1.,1.}) {
+      double qp,qy;
+      if(!equivalent_in_range(sign*root-offset,seed_pitch,pitch_low,pitch_high,qp)) continue;
+      const double x=body.x*std::cos(qp)+body.z*std::sin(qp);
+      const double raw_yaw=std::hypot(x,body.y)<1e-9 ? seed_yaw : az-std::atan2(body.y,x);
+      if(!equivalent_in_range(raw_yaw,seed_yaw,yaw_low,yaw_high,qy)) continue;
+      const double cost=(qy-seed_yaw)*(qy-seed_yaw)+(qp-seed_pitch)*(qp-seed_pitch);
+      if(cost<best) { best=cost; yaw=qy; pitch=qp; found=true; }
+    }
+    return found;
   }
 
   // Solve for the joints that point the optical axis at (azimuth, elevation).

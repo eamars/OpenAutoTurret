@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "calibration/homing_plan.hpp"
+#include "config/station_wiring.hpp"
 
 namespace {
 
@@ -302,6 +303,40 @@ TEST(HomingPlan, FullRangeHappyPath) {
   EXPECT_NEAR(m.q_raw_reference_rad, -1.0, 0.02);
   EXPECT_NEAR(m.q_reference_logical_deg, 0.0, 1e-9);
   SUCCEED();
+}
+
+TEST(HomingPlan, SlowStationProfileCapsBackoffAndMovesAndAllowsFullYawTravel) {
+  ota::config::TurretConfig cfg;
+  cfg.homing.contact.coarse_speed_deg_s=5;
+  cfg.homing.contact.fine_speed_deg_s=3;
+  cfg.homing.contact.max_rotation_deg=360;
+  cfg.homing.contact.v_move_threshold=.04;
+  cfg.homing.contact.motion_history_velocity=.025;
+  cfg.axes[0].expected_travel_deg={-70,70};
+  cfg.axes[1].expected_travel_deg={-175,175};
+  cfg.axes[0].limit_cur_a=5;cfg.axes[1].limit_cur_a=1;
+  cfg.homing_plan.actions={{"home_full_range","pitch"},{"move","pitch","lower","fine",40},
+                           {"home_full_range","yaw"},{"move","yaw","lower","fine",176}};
+  std::string error;
+  auto plan=ota::wire::make_homing_plan(cfg,error);
+  ASSERT_TRUE(error.empty());
+  VelPlant plant;
+  plant.pitch.reset(0,-1.39,0);plant.yaw.reset(0,-2.92,3.25);
+  plant.pitch.noise=plant.yaw.noise=0;
+  bool saw_backoff=false,saw_move=false;
+  for(int i=0;i<100000 && !plan.complete() && !plan.failed();++i) {
+    const auto axis=plan.active_axis();
+    const auto ds=plan.step(plant.feedback(axis,1000000000LL+i*kDtNs));
+    ASSERT_LE(ds.speed_rad_s,5*kDeg2Rad+1e-9);
+    if(ds.position_move || ds.message=="moving to target") {
+      EXPECT_LE(ds.speed_rad_s,3*kDeg2Rad+1e-9);
+      saw_backoff |= ds.position_move;saw_move |= ds.message=="moving to target";
+    }
+    plant.step(axis,ds);
+  }
+  EXPECT_TRUE(plan.complete())<<plan.fail_reason();
+  EXPECT_TRUE(saw_backoff);EXPECT_TRUE(saw_move);
+  EXPECT_GT(plan.raw_high(AxisId::Yaw)-plan.raw_low(AxisId::Yaw),350*kDeg2Rad);
 }
 
 TEST(HomingPlan, TwoAxisPlanYawThenPitch) {

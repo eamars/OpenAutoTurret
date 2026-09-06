@@ -21,16 +21,17 @@ constexpr double kJMax = 300.0 * kDeg;  // jerk, same station file and the same 
 constexpr double kDt = 0.005;           // the 200 Hz control period
 
 TEST(TrackingReference, BothDirectionsSettleWithoutARepeatedOrbit) {
+  for(double acceleration:{15.,25.}) {
   for (double degrees : {-25., -5., -1., 1., 5., 25.}) {
     ota::control::ReferenceLimiter state;
     state.reset_at(0);
     double overshoot=0, late_error=0, late_rate=0;
     for (int i=0; i<2400; ++i) {
       const double previous_a=state.a_rad_s2;
-      ota::control::track_reference(state,degrees*kDeg,0,kDt,15*kDeg,15*kDeg,60*kDeg);
+      ota::control::track_reference(state,degrees*kDeg,0,kDt,15*kDeg,acceleration*kDeg,4*acceleration*kDeg);
       EXPECT_LE(std::abs(state.v_rad_s),15*kDeg+1e-10);
-      EXPECT_LE(std::abs(state.a_rad_s2),15*kDeg+1e-10);
-      EXPECT_LE(std::abs(state.a_rad_s2-previous_a),60*kDeg*kDt+1e-10);
+      EXPECT_LE(std::abs(state.a_rad_s2),acceleration*kDeg+1e-10);
+      EXPECT_LE(std::abs(state.a_rad_s2-previous_a),4*acceleration*kDeg*kDt+1e-10);
       overshoot=std::max(overshoot,(state.q_rad-degrees*kDeg)*std::copysign(1.,degrees));
       if(i>2000) {
         late_error=std::max(late_error,std::abs(state.q_rad-degrees*kDeg));
@@ -40,6 +41,7 @@ TEST(TrackingReference, BothDirectionsSettleWithoutARepeatedOrbit) {
     EXPECT_LT(overshoot,.2*kDeg) << degrees;
     EXPECT_LT(late_error,.01*kDeg) << degrees;
     EXPECT_LT(late_rate,.01*kDeg) << degrees;
+  }
   }
 }
 

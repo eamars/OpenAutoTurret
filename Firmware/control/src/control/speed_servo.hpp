@@ -11,7 +11,8 @@ struct SpeedServo {
   bool quiet = false;
   void reset() { velocity = acceleration = 0; quiet = false; }
   double step(double reference, double feed_forward, double measured,
-              double cap, double dt, double a_max, double j_max) {
+              double cap, double dt, double a_max, double j_max,
+              double negative_acceleration_scale=1, double positive_acceleration_scale=1) {
     if (!(dt > 0 && dt < .1) || cap <= 0) { reset(); return 0; }
     const double error = reference - measured;
     const bool still_reference = std::abs(feed_forward) < .02 * kDeg2Rad;
@@ -19,7 +20,11 @@ struct SpeedServo {
     else if (std::abs(error) < .08*kDeg2Rad) quiet = true;
     const double desired = quiet ? 0.0 : std::clamp(
         feed_forward + 3.0 * std::clamp(error, -2*kDeg2Rad, 2*kDeg2Rad), -cap, cap);
-    const double desired_a = std::clamp((desired-velocity)/dt, -a_max, a_max);
+    // Reduce only acceleration that builds outward speed. Never reduce the
+    // acceleration available to brake motion already heading toward a stop.
+    const double lo=velocity<=0 ? a_max*std::clamp(negative_acceleration_scale,0.0,1.0) : a_max;
+    const double hi=velocity>=0 ? a_max*std::clamp(positive_acceleration_scale,0.0,1.0) : a_max;
+    const double desired_a = std::clamp((desired-velocity)/dt, -lo, hi);
     acceleration += std::clamp(desired_a-acceleration, -j_max*dt, j_max*dt);
     const double next = velocity + acceleration*dt;
     if ((desired-velocity)*(desired-next) <= 0) { velocity=desired; acceleration=0; }

@@ -135,6 +135,24 @@ TEST(LosJointSolver, SeededFromTheCurrentPoseItReproducesThatPose) {
       << "got a " << (ty - qy) << " rad yaw demand";
 }
 
+TEST(LosJointSolver, BoundedBranchesRoundTripAcrossYawEndsAndRejectForbiddenGap) {
+  constexpr double deg=M_PI/180;
+  for(double roll : {0.,.12}) {
+    TurretKinematics kin;
+    kin.R_PC=Mat3::rot_y(-.86)*Mat3::rot_z(-M_PI/2)*Mat3::rot_x(roll);
+    LosJointSolver solver(kin);
+    for(double start : {-159.,0.,178.}) for(double target : {-159.,0.,178.}) {
+      double az,el,qy,qp;
+      TurretKinematics::base_ray_to_los(solver.optical_axis(target*deg,-.5),az,el);
+      ASSERT_TRUE(solver.solve_within_limits(az,el,start*deg,-.5,-162*deg,181*deg,-1.3,-.08,qy,qp));
+      EXPECT_NEAR(qy,target*deg,1e-8); EXPECT_NEAR(qp,-.5,1e-8);
+    }
+    double az,el,qy,qp;
+    TurretKinematics::base_ray_to_los(solver.optical_axis(190*deg,-.5),az,el);
+    EXPECT_FALSE(solver.solve_within_limits(az,el,178*deg,-.5,-162*deg,181*deg,-1.3,-.08,qy,qp));
+  }
+}
+
 TEST(LosJointSolver, LiveOffCentreTargetRetainsTheNegativePitchBranch) {
   TurretKinematics kin;
   kin.R_PC = Mat3{0,1,0,-1,0,0,0,0,1};

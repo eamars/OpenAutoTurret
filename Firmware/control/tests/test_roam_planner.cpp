@@ -293,5 +293,17 @@ TEST_F(RoamTest, IdlePlannerInventsNothing) {
       << "even a hold is attributed, so the screen can say which mode is holding";
 }
 
+TEST_F(RoamTest, RepositionCrossesLegalInteriorInsteadOfReturningToNearestEnd) {
+  r_.enter_toward(54*kDeg,-5*kDeg,-1);
+  run(2,54*kDeg);
+  EXPECT_EQ(out_.direction,-1);
+  EXPECT_NEAR(out_.target_yaw_rad,-55*kDeg,1e-9);
+  r_.exit();
+  r_.enter_toward(-54*kDeg,-5*kDeg,1);
+  run(2,-54*kDeg);
+  EXPECT_EQ(out_.direction,1);
+  EXPECT_NEAR(out_.target_yaw_rad,55*kDeg,1e-9);
+}
+
 }  // namespace
 }  // namespace ota

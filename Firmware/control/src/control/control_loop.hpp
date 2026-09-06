@@ -48,6 +48,7 @@
 #include "control/reference_limiter.hpp"
 #include "control/tracking_reference.hpp"
 #include "control/speed_servo.hpp"
+#include "control/boundary_governor.hpp"
 #include "control/safety_envelope.hpp"
 #include "control/safety_supervisor.hpp"
 #include "control/tracking_controller.hpp"
@@ -102,9 +103,13 @@ class ControlLoop {
   struct Config {
     bool start_in_auto_roam = false;
     bool service_speed_control = false;
+    double homing_speed_kp = 1.0;
+    double homing_speed_ki = .002;
     double service_speed_ki = .002;
     double service_speed_kp = 1.0;
     double service_max_speed_rad_s = 3.0 * kDeg2Rad;
+    double track_acceleration_rad_s2 = 15.0 * kDeg2Rad;
+    double track_jerk_rad_s3 = 60.0 * kDeg2Rad;
     int control_hz = 200;
     // Braking model (must match the SafetyEnvelope the supervisor uses).
     double a_brake_rad_s2 = 60.0 * kDeg2Rad;
@@ -146,6 +151,7 @@ class ControlLoop {
     // behaviour exactly — derived region, built-in 300 ms lease, sanctioned step sizes.
     // The distinction is deliberate: an omitted value is not a value.
     bool roam_region_named = false;
+    bool roam_full_yaw_travel = false;
     double roam_yaw_min_deg = 0.0;
     double roam_yaw_max_deg = 0.0;
     bool roam_pitch_named = false;
@@ -609,6 +615,7 @@ class ControlLoop {
   char mode_refusal_reason_[224] = {};
   RoamPlanner roam_;
   RoamOutput roam_out_;
+  bool yaw_reposition_active_ = false;
   // §80: the preserved scene, held so it can be published until someone takes it. Kept
   // here rather than only in the snapshot because each cycle fills a fresh snapshot.
   telemetry::BlackBoxCapture blackbox_{};

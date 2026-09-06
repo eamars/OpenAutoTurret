@@ -540,7 +540,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const bool was_active = last_roam_active_;
       const int was_dir = last_roam_dir_;
       const bool was_turn = last_roam_turnaround_;
+      const int planned_dir = roam_.direction();
       roam_out_ = roam_.update(qy, qp, now_ns, period_ns);
+      if (yaw_reposition_active_ && planned_dir != 0 && roam_out_.direction != planned_dir)
+        yaw_reposition_active_ = false;
       // §79's ROAM_* set, all derived from what the planner actually did rather than
       // from the request that started it. A sweep that stops because the envelope said
       // so must be distinguishable from a sweep that was never asked for.
@@ -793,7 +796,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         const auto axis = static_cast<AxisId>(homing_init_axis_);
         std::string e;
         const auto status = backend_->transition_mode(axis, false, homing_->initial_current_limit(axis), now_ns, e,
-            cfg_.service_speed_control ? .002 : -1);
+            cfg_.homing_speed_ki,cfg_.homing_speed_kp);
         if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
         else if (status == MotorBackend::Transition::Complete) ++homing_init_axis_;
         break;
@@ -827,9 +830,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       //  enter_pos_mode: the position-mode entry recipe before a backoff
       //    move (de-energize, RunMode=1, re-energize, LimitSpd, pin LocRef to
       //    the current position). The backoff then runs on the drive's own
-      //    position loop (p3c fix, 2026-09-02 — see HomingParams backoff
-      //    comment): full current-limit torque from the first cycle, no
-      //    integral to wind up.
+      //    position loop. Its cascaded speed loop still affects delivered
+      //    torque: the slow loaded trial stalled at the stock speed gains,
+      //    despite a 5 A cap. Use the independent homing gains here too.
       // The recipe advances across cycles while feedback and the watchdog
       // stay active. The backoff starts from the fresh pose after re-enable;
       // the fine approach re-measures the endpoint.
@@ -838,7 +841,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         std::string e;
         const auto status = backend_->transition_mode(a, ds.enter_pos_mode,
             ds.enter_pos_mode ? ds.speed_rad_s : ds.limit_cur_a, now_ns, e,
-            cfg_.service_speed_control ? .002 : -1);
+            cfg_.homing_speed_ki,cfg_.homing_speed_kp);
         if (status == MotorBackend::Transition::Pending) { pending_homing_ds_ = ds; break; }
         pending_homing_ds_.reset();
         rearmed = status == MotorBackend::Transition::Complete;
@@ -926,6 +929,16 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double solved = env_.constrain_reference(r, limits_[i]);
           lim[i] = std::min(tracking_ref_.v_max_rad_s,
                             env_.max_speed_at(solved, limits_[i]));
+          if (cfg_.service_speed_control) {
+            const control::BoundaryGovernor boundary{
+                std::min(cfg_.a_brake_rad_s2,30*kDeg2Rad),
+                std::min(cfg_.j_brake_rad_s3,120*kDeg2Rad),.20,cfg_.stop_margin_rad};
+            const auto b = boundary.at(sp[i].q_rad, limits_[i], tracking_ref_.v_max_rad_s,
+                                       speed_servo_[i].acceleration, v_est_[i]);
+            // Slow when the moving axis approaches an end, rather than making
+            // an entire long traversal crawl because its destination is near it.
+            lim[i] = solved >= sp[i].q_rad ? b.positive_speed : b.negative_speed;
+          }
           // The resolver's answer is a REQUEST for where the axes should point, not a trajectory, and
           // publishing it directly is what made the reference step: measured at 99 Hz, the reference
           // moved at up to 105 deg/s against a 30 deg/s ceiling with a median acceleration of
@@ -939,11 +952,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // permits at that pose. Position stays inside constrain_reference either way.
           if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
           const double dt = static_cast<double>(period_ns)*1e-9;
+          // Tracking response is configured independently of slow contact
+          // homing and the established manual/roam reference profile.
+          const double service_a = damped_tracking ?
+              std::min(cfg_.track_acceleration_rad_s2,30*kDeg2Rad) : 15*kDeg2Rad;
+          const double service_j = damped_tracking ?
+              std::min(cfg_.track_jerk_rad_s3,120*kDeg2Rad) : 60*kDeg2Rad;
           const double acceleration = (cfg_.service_speed_control
-              ? std::min(cfg_.a_brake_rad_s2,15*kDeg2Rad) : cfg_.a_brake_rad_s2)
+              ? std::min(cfg_.a_brake_rad_s2,service_a) : cfg_.a_brake_rad_s2)
               * std::clamp(last_intent_.acceleration_scale,0.0,1.0);
           const double jerk = (cfg_.service_speed_control
-              ? std::min(cfg_.j_brake_rad_s3,60*kDeg2Rad) : cfg_.j_brake_rad_s3)
+              ? std::min(cfg_.j_brake_rad_s3,service_j) : cfg_.j_brake_rad_s3)
               * std::clamp(last_intent_.jerk_scale,0.0,1.0);
           if (damped_tracking) {
             q_ref[i] = control::track_reference(ref_lim_[i], solved,
@@ -1177,13 +1196,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             (last_decision_.action == SafetyAction::Allow || last_decision_.action == SafetyAction::Derate)) {
           // Commissioning ceiling for the initial speed-servo profile. Bounds
           // apply at the measured pose as well as the requested reference.
-          const double midpoint = .5*(limits_[i].q_soft_min_rad + limits_[i].q_soft_max_rad);
-          // Direction matters when returning inward from a homing endpoint:
-          // the nearest boundary lies behind the move and must not freeze it.
-          const double speed_budget_pose = qr >= sp[i].q_rad
-              ? std::max(sp[i].q_rad, midpoint) : std::min(sp[i].q_rad, midpoint);
-          double cap = std::min({hold_speed_effective(), cfg_.service_max_speed_rad_s,
-                                 env_.max_speed_at(speed_budget_pose, limits_[i])});
+          double cap = std::min(hold_speed_effective(), cfg_.service_max_speed_rad_s);
           if (ref_lim_engaged_) {
             // Autonomous reference speed is a planning rate. The position
             // servo needs bounded headroom to recover lag; clipping it to
@@ -1196,13 +1209,25 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           }
           if (last_decision_.action == SafetyAction::Derate) cap *= cfg_.derate_factor;
           const double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+          const control::BoundaryGovernor boundary{
+              std::min(cfg_.a_brake_rad_s2,30*kDeg2Rad),
+              std::min(cfg_.j_brake_rad_s3,120*kDeg2Rad),.20,cfg_.stop_margin_rad};
+          const auto b = boundary.at(sp[i].q_rad,limits_[i],cap,
+                                     speed_servo_[i].acceleration,v_est_[i]);
           double velocity = speed_servo_[i].step(qr, ff, sp[i].q_rad, cap,
               static_cast<double>(period_ns)*1e-9,
-              // Allow the servo to follow the 15/60 reference profile and
+              // Allow the servo to follow the bounded reference profile and
               // recover position error without a second identical ramp delay.
-              std::min(cfg_.a_brake_rad_s2, 30*kDeg2Rad), std::min(cfg_.j_brake_rad_s3, 120*kDeg2Rad));
-          if ((sp[i].q_rad <= limits_[i].q_soft_min_rad && velocity < 0) ||
-              (sp[i].q_rad >= limits_[i].q_soft_max_rad && velocity > 0)) velocity = 0;
+              boundary.acceleration, boundary.jerk,
+              b.negative_acceleration_scale,b.positive_acceleration_scale);
+          // Clamp the actual signed command, independently of the goal's
+          // direction: a goal reversal cannot remove the old end's brake limit.
+          const double safe_velocity = std::clamp(velocity,-b.negative_speed,b.positive_speed);
+          if (safe_velocity != velocity) {
+            if (speed_servo_[i].acceleration * velocity > 0) speed_servo_[i].acceleration = 0;
+            speed_servo_[i].velocity = safe_velocity;
+            velocity = safe_velocity;
+          }
           if (tracking_ref_.is_tracking_reference) {
             tracking_velocity_control = true;
             tracking_command_rate[i] = velocity;
@@ -1600,7 +1625,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.supervisory_state = supervisory_state_name(mode_mgr_.supervisory());
     snap.mode_phase =
         mode_mgr_.mode() == OperatingMode::AutoRoam
-            ? roam_state_name(roam_.state())
+            ? (yaw_reposition_active_ ? "YAW_REPOSITION" : roam_state_name(roam_.state()))
             : mode_mgr_.mode() == OperatingMode::AutoTrack
                   ? auto_track_state_name(at_out_.state)
                   : mode_phase_label();
@@ -2049,7 +2074,13 @@ RoamConfig ControlLoop::roam_config() const {
   const AxisLimits& pl = limits_[ix(AxisId::Pitch)];
   const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
-  if (cfg_.roam_region_named) {
+  if (cfg_.roam_full_yaw_travel) {
+    c.envelope.yaw_min_rad = yl.q_soft_min_rad + c.min_inside_safe_rad;
+    c.envelope.yaw_max_rad = yl.q_soft_max_rad - c.min_inside_safe_rad;
+    // Full usable travel still leaves a stopping reserve before each soft end.
+    c.braking_margin_rad = std::max(0.0,cfg_.stop_margin_rad + .5*kDeg2Rad - c.min_inside_safe_rad);
+    c.reach_tol_rad = .4*kDeg2Rad;
+  } else if (cfg_.roam_region_named) {
     // §72: a named region is a request, not an override. It is still clamped inside the
     // homed soft limits minus the braking inset, and validate_envelope() below still has
     // to pass — so the file can narrow where the turret sweeps and can never widen where
@@ -2264,6 +2295,7 @@ void ControlLoop::preserve_scene(const telemetry::TelemetrySnapshot& live,
 }
 
 void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
+  yaw_reposition_active_ = false;
   mode_hold_latched_ = false;  // §44: "here" is re-decided at a handover, not inherited
   mode_ramp_cycles_ = kModeRampCycles;  // §36/§44: see the ramp in step()
   // `mode_has_moved_` deliberately survives a handover. It is cleared only when the
@@ -2839,6 +2871,7 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   // something the supervisor asked for, and stealing the mode out from under that would be a safety regression
   // dressed up as a convenience.
   if (mode_mgr_.supervisory() != SupervisoryState::Ready) {
+    yaw_reposition_active_ = false;
     loss_since_ns_ = 0;
     acquire_since_ns_ = 0;
     return;
@@ -2857,13 +2890,56 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   const OperatingMode m = mode_mgr_.mode();
   const int64_t nsec = 1000000LL;
 
+  const auto& set = selection_.last_set();
+  const bool fresh = set.sensor_timestamp_ns > 0 && now_ns >= set.sensor_timestamp_ns &&
+      now_ns - set.sensor_timestamp_ns <= 250000000LL &&
+      now_ns - last_set_receive_ns_ <= 250000000LL && last_measurement_ns_ > 0 &&
+      now_ns - last_measurement_ns_ <= 250000000LL;
+  const bool visible = fresh && at_input_.has_selection && at_input_.target_visible &&
+                       !at_input_.ambiguous;
+  bool reachable = false;
+  double yaw_delta = 0;
+  if (visible && tracking_ && tracking_->prediction_valid() && ref_mgr_) {
+    const auto q = last_positions();
+    MotionIntent probe;
+    probe.source = MotionSource::AutoTrack;
+    probe.type = IntentType::LosDirection;
+    probe.has_los = true;
+    tracking_->predicted_los_at_actuation(probe.los_az_rad,probe.los_el_rad);
+    ReferenceManager::IntentLimits bounds;
+    bounds.now_ns = now_ns;
+    bounds.q_yaw_hold_rad = q[ix(AxisId::Yaw)];
+    bounds.q_pitch_hold_rad = q[ix(AxisId::Pitch)];
+    bounds.axis_limits = limits_;
+    const auto resolved = ref_mgr_->resolve(probe,bounds);
+    reachable = !resolved.target_unreachable;
+    yaw_delta = resolved.q_yaw_rad - q[ix(AxisId::Yaw)];
+  }
+  // A bounded axis cannot take the circular shortest path across its stop.
+  // Traverse the legal interior under Roam ownership; target loss during the
+  // turn must not restart a nearest-end search and trap it at the old end.
+  if ((m == OperatingMode::AutoTrack || m == OperatingMode::AutoRoam) &&
+      reachable && std::abs(yaw_delta) > 180*kDeg2Rad && !yaw_reposition_active_) {
+    const auto q = last_positions();
+    if (request_mode(OperatingMode::AutoRoam).ok) {
+      roam_.set_config(roam_config());
+      roam_.enter_toward(q[ix(AxisId::Yaw)],q[ix(AxisId::Pitch)],yaw_delta < 0 ? -1 : 1);
+      yaw_reposition_active_ = true;
+      last_auto_switch_ns_ = now_ns;
+      acquire_since_ns_ = loss_since_ns_ = 0;
+      spdlog::info("YAW_REPOSITION: legal interior direction {}",yaw_delta < 0 ? -1 : 1);
+    }
+    return;
+  }
+
   if (m == OperatingMode::AutoTrack && cfg_.auto_roam_on_loss_ms > 0) {
     // §20.2's LostHold: prediction has stopped and the station is holding, which is what "the session gave
     // up" means. NOT Acquire or Coasting - a track that is still alive is not lost, and switching on those
     // would walk away from the target mid-coast. Read from the v3 controller's published output, not from
     // the retired v1 TrackingController.
     const bool lost = at_out_.state == AutoTrackState::LostHold ||
-                      at_out_.state == AutoTrackState::WaitTarget;
+                      at_out_.state == AutoTrackState::WaitTarget ||
+                      at_out_.state == AutoTrackState::TargetUnreachable;
     if (!lost) {
       loss_since_ns_ = 0;  // condition must be CONTINUOUSLY true; refresh-on-sighting is the bug
       return;
@@ -2884,15 +2960,7 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   if (m == OperatingMode::AutoRoam && cfg_.auto_track_on_acquire_ms > 0) {
     // Require a fresh visible selection and accepted measurement throughout
     // the dwell. A retained UUID alone cannot pull roam back into lost tracking.
-    const auto& set = selection_.last_set();
-    const bool fresh = set.sensor_timestamp_ns > 0 &&
-                       now_ns >= set.sensor_timestamp_ns &&
-                       now_ns - set.sensor_timestamp_ns <= 250000000LL &&
-                       now_ns - last_set_receive_ns_ <= 250000000LL;
-    const bool held = fresh && at_input_.has_selection &&
-                      at_input_.target_visible && !at_input_.ambiguous &&
-                      last_measurement_ns_ > 0 &&
-                      now_ns - last_measurement_ns_ <= 250000000LL;
+    const bool held = visible && reachable && std::abs(yaw_delta) < 180*kDeg2Rad;
     if (!held) {
       acquire_since_ns_ = 0;
       return;

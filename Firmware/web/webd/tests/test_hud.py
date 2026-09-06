@@ -174,6 +174,22 @@ class HudProjectionTest(unittest.TestCase):
         self.assertGreater(got["pts"][4]["x"], ox + w)
         self.assertLess(got["pts"][4]["y"], oy)
 
+    def test_pitch_display_centers_calibrated_travel_and_never_fakes_missing_calibration(self):
+        got = self.run_geometry('''
+          const t={soft_limits_valid:true,q_soft_min_pitch_rad:-1.3,q_soft_max_pitch_rad:-.1};
+          console.log(JSON.stringify({center:hudPitchCenter(t),
+            low:hudPitch(t,-1.3),mid:hudPitch(t,-.7),high:hudPitch(t,-.1),
+            missing:hudPitch({},0),raw:t.q_soft_min_pitch_rad,
+            rows:hudDiagRows({...t,q_pitch_rad:-.7,q_yaw_rad:0})}));
+        ''')
+        self.assertAlmostEqual(got['center'], -.7)
+        self.assertAlmostEqual(got['low'], -.6)
+        self.assertAlmostEqual(got['mid'], 0)
+        self.assertAlmostEqual(got['high'], .6)
+        self.assertIsNone(got['missing'])
+        self.assertEqual(got['raw'], -1.3)
+        self.assertIn('0.00 / 0.00 DEG', dict(got['rows'])['Q YAW / PITCH'])
+
     def test_optical_axis_is_the_principal_point_not_the_viewport_centre(self):
         """s7 depends on this. Today cx/cy happen to be the centre; a measured principal
         point that is not must move the reticle, and must not be replaced by 0.5."""

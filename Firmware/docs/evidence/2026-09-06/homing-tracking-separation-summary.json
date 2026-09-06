@@ -1,0 +1,32 @@
+{
+  "source": "homing-tracking-separation.json",
+  "samples": 6054,
+  "homing_samples": 4788,
+  "faults": [],
+  "stages": {},
+  "homing_duration_s": 316.780941497,
+  "homing_max_window_speed_deg_s": {
+    "pitch": 7.275681549778069,
+    "yaw": 6.428669123623966
+  },
+  "last_state": {
+    "phase": "hold",
+    "operating_mode": "MANUAL",
+    "mode_phase": "HOLD",
+    "fault": "",
+    "soft_limits_valid": true,
+    "effective_speed_ceiling_deg_s": 20,
+    "camera_fps": 26.0124,
+    "control_deadline_misses": 0
+  },
+  "soft_limits_deg": {
+    "yaw": [
+      -161.93219684884892,
+      180.7842271820384
+    ],
+    "pitch": [
+      -74.71197761167396,
+      -4.836073188113519
+    ]
+  }
+}

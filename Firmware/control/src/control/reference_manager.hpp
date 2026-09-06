@@ -197,8 +197,15 @@ class ReferenceManager {
       case IntentType::LosDirection: {
         if (!in.has_los) return hold_reference(lim, "los intent without los");
         double qy, qp;
-        if (!solver_.solve_from_pose(in.los_az_rad, in.los_el_rad,
-                                     lim.q_yaw_hold_rad, lim.q_pitch_hold_rad, qy, qp)) {
+        const auto& pitch = lim.axis_limits[static_cast<int>(AxisId::Pitch)];
+        const auto& yaw = lim.axis_limits[static_cast<int>(AxisId::Yaw)];
+        const bool bounded=pitch.valid && yaw.valid;
+        const bool solved=bounded ? solver_.solve_within_limits(in.los_az_rad,in.los_el_rad,
+            lim.q_yaw_hold_rad,lim.q_pitch_hold_rad,yaw.q_soft_min_rad,yaw.q_soft_max_rad,
+            pitch.q_soft_min_rad,pitch.q_soft_max_rad,qy,qp) :
+            solver_.solve_from_pose(in.los_az_rad,in.los_el_rad,
+                lim.q_yaw_hold_rad,lim.q_pitch_hold_rad,qy,qp);
+        if (!solved) {
           // §67: an unreachable target is reported, not pressed into a hold.
           req = hold_reference(lim, "target outside travel");
           req.target_unreachable = true;
@@ -207,10 +214,8 @@ class ReferenceManager {
         // Same direction, nearer branch. Without this the wrapped answer can land below
         // q_soft_min_yaw_rad, get clamped to that limit, and AUTO_TRACK will hold there
         // reporting "tracking" - which is what happened on the station 2026-09-04.
-        req.q_yaw_rad = geo::wrap_near(qy, lim.q_yaw_hold_rad);
+        req.q_yaw_rad = bounded ? qy : geo::wrap_near(qy, lim.q_yaw_hold_rad);
         req.q_pitch_rad = qp;
-        const auto& pitch = lim.axis_limits[static_cast<int>(AxisId::Pitch)];
-        const auto& yaw = lim.axis_limits[static_cast<int>(AxisId::Yaw)];
         if ((pitch.valid && !pitch.in_soft(qp)) ||
             (yaw.valid && !yaw.in_soft(req.q_yaw_rad))) {
           req = hold_reference(lim, "target outside travel");

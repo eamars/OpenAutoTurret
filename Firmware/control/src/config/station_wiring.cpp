@@ -1,5 +1,6 @@
 #include "config/station_wiring.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -70,8 +71,20 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
   if (cc.max_rotation_deg > 0) hp.max_rotation_rad = cc.max_rotation_deg * kDeg2Rad;
   if (cc.torque_safety_nm > 0) hp.torque_safety_nm = cc.torque_safety_nm;
 
+  // A slow homing profile must also slow backoff and between-axis moves.
+  // Allow a full capped rotation at that speed, with a bounded settle budget.
+  hp.backoff_speed_rad_s = std::min({hp.backoff_speed_rad_s,
+                                    hp.coarse_speed_rad_s,hp.fine_speed_rad_s});
+  hp.approach_timeout_s = std::clamp(
+      std::max(hp.approach_timeout_s,hp.max_rotation_rad/hp.coarse_speed_rad_s+10.0),
+      30.0,120.0);
+
   HomingPlanConfig hpc;
   hpc.homing = hp;
+  hpc.move_speed_rad_s = std::min(hpc.move_speed_rad_s,hp.backoff_speed_rad_s);
+  hpc.move_timeout_s = std::clamp(
+      std::max(hpc.move_timeout_s,hp.max_rotation_rad/hpc.move_speed_rad_s+10.0),
+      30.0,180.0);
   for (int i = 0; i < kAxisCount; ++i) {
     hpc.travel_bands[i].min_deg = cfg.axes[i].expected_travel_deg.min;
     hpc.travel_bands[i].max_deg = cfg.axes[i].expected_travel_deg.max;
@@ -101,9 +114,13 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   ControlLoop::Config c;
   c.start_in_auto_roam = cfg.v3.default_mode == "AUTO_ROAM";
   c.service_speed_control = cfg.v3.service_speed_control;
+  c.homing_speed_kp = cfg.homing.speed_kp;
+  c.homing_speed_ki = cfg.homing.speed_ki;
   c.service_speed_ki = cfg.v3.service_speed_ki;
   c.service_speed_kp = cfg.v3.service_speed_kp;
   c.service_max_speed_rad_s = cfg.v3.service_max_speed_deg_s * kDeg2Rad;
+  c.track_acceleration_rad_s2 = cfg.tracking.track_acceleration_deg_s2 * kDeg2Rad;
+  c.track_jerk_rad_s3 = cfg.tracking.track_jerk_deg_s3 * kDeg2Rad;
   c.hold_speed_rad_s = cfg.tracking.hold_speed_deg_s * kDeg2Rad;
   c.control_hz = cfg.control_loop_hz;
   // §72: the named values. Each is passed through only when the file named it; an
@@ -111,6 +128,7 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   // measured. Degrees here, radians in the loop — the same convention the rest of this
   // function obeys, and the reason the conversion happens here rather than in the file.
   c.roam_region_named = cfg.v3.has_roam_region;
+  c.roam_full_yaw_travel = cfg.v3.roam_full_yaw_travel;
   c.roam_yaw_min_deg = cfg.v3.roam_yaw_min_deg;
   c.roam_yaw_max_deg = cfg.v3.roam_yaw_max_deg;
   c.roam_pitch_named = cfg.v3.has_roam_pitch;

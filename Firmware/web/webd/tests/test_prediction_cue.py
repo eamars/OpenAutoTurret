@@ -151,7 +151,7 @@ class PredictionCueExecuted(unittest.TestCase):
         self.assertIn(">PRED<", svg, "§10: small PRED label")
         self.assertIn("<rect", svg)
         # the small amber + at the centre is two short strokes crossing at the cue's centre
-        self.assertEqual(svg.count('stroke-width="1.2"'), 3,
+        self.assertEqual(svg.count('stroke-width="3"'), 3,
                          "square + two cross strokes; a missing stroke is a missing '+'")
 
     def test_cue_stays_at_controller_prediction_even_when_boxes_overlap(self) -> None:

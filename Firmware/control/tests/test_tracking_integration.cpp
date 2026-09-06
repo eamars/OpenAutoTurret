@@ -85,13 +85,18 @@ HomingPlan make_plan() {
   return HomingPlan(std::move(actions), hcfg);
 }
 
-ControlLoop::Config make_cfg(bool speed_control = false) {
+ControlLoop::Config make_cfg(bool speed_control = false, bool full_travel = false,
+                             double track_acceleration = 15) {
   ControlLoop::Config cfg;
   cfg.control_hz = 200;
   cfg.hold_speed_rad_s = 30.0 * kDeg;
   cfg.emergency_speed_rad_s = 10.0 * kDeg;
   cfg.soft_margin_rad = 2.0 * kDeg;
   cfg.service_speed_control = speed_control;
+  cfg.track_acceleration_rad_s2 = track_acceleration*kDeg;
+  cfg.track_jerk_rad_s3 = 4*track_acceleration*kDeg;
+  cfg.roam_full_yaw_travel = full_travel;
+  if(full_travel) cfg.service_max_speed_rad_s = 20*kDeg;
   return cfg;
 }
 
@@ -116,11 +121,12 @@ TrackingController::Config make_tracking_cfg(bool search_enabled) {
 // synthetic camera/kinematics. Yaw stops +/-90 deg, pitch stops -20..+40 deg.
 class TrackingRig {
  public:
-  explicit TrackingRig(bool speed_control = false)
+  explicit TrackingRig(bool speed_control = false, bool full_travel = false,
+                       double track_acceleration = 15)
       : backend_(std::make_unique<SimMotorBackend>(0.005)),
         sim_(backend_.get()),
         cam_(make_intrinsics()), kin_(TurretKinematics::aligned()),
-        loop_(std::make_unique<ControlLoop>(make_cfg(speed_control), std::move(backend_))) {
+        loop_(std::make_unique<ControlLoop>(make_cfg(speed_control,full_travel,track_acceleration), std::move(backend_))) {
     sim_->set_stops(AxisId::Pitch, pitch_low_, pitch_high_);
     sim_->set_stops(AxisId::Yaw, yaw_low_, yaw_high_);
     sim_->set_position(AxisId::Pitch, 10.0 * kDeg);
@@ -270,7 +276,8 @@ TEST(TrackingTimestamps, UsesFeedbackTimeAndDoesNotInventNewerPoseSamples) {
 }
 
 TEST(TrackingIntegration, VelocityServiceConvergesThenHonorsManualHold) {
-  TrackingRig r(true);
+  for(double acceleration:{15.,25.}) {
+  TrackingRig r(true,true,acceleration);
   int64_t t = 0;
   ASSERT_TRUE(run_to_ready(r, t));
   enter_mode(r, make_tracking_cfg(false), OperatingMode::AutoTrack);
@@ -297,11 +304,31 @@ TEST(TrackingIntegration, VelocityServiceConvergesThenHonorsManualHold) {
   actual_los(r.kin(),r.loop().last_positions()[1],r.loop().last_positions()[0],az,el);
   EXPECT_NEAR(az,5*kDeg,.5*kDeg);
   EXPECT_NEAR(el,5*kDeg,.5*kDeg);
+  }
 }
 
 // The core Phase 6 deliverable: a target rotating in the base frame is tracked
 // closed-loop — the gimbal's optical axis converges on the target and tracks it,
 // all against the simulated plant (no CAN).
+TEST(TrackingIntegration, FullTravelRoamReversesAtBothEndsWithoutTouchingReserve) {
+  TrackingRig r(true,true);
+  int64_t t=0;
+  ASSERT_TRUE(run_to_ready(r,t));
+  enter_mode(r,make_tracking_cfg(true),OperatingMode::AutoRoam);
+  double lo=100,hi=-100;
+  for(int i=0;i<16000;++i,t+=kDtNs) {
+    r.loop().step(t,kDtNs);
+    ASSERT_NE(r.loop().phase(),Phase::Fault);
+    const auto s=r.loop().telemetry().snapshot();
+    lo=std::min(lo,s.q_yaw_rad);hi=std::max(hi,s.q_yaw_rad);
+    EXPECT_GE(s.soft_limit_distance_yaw_rad,.05-1e-4);
+  }
+  const auto s=r.loop().telemetry().snapshot();
+  EXPECT_LT(lo-s.q_soft_min_yaw_rad,4*kDeg);
+  EXPECT_LT(s.q_soft_max_yaw_rad-hi,4*kDeg);
+  EXPECT_GT(hi-lo,95*kDeg);
+}
+
 TEST(TrackingIntegration, TracksRotatingTarget) {
   TrackingRig r;
   int64_t t0 = 0;

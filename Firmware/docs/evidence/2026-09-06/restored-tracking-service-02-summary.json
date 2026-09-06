@@ -1,0 +1,124 @@
+{
+  "source": "restored-tracking-service-02.json",
+  "samples": 1729,
+  "homing_samples": 0,
+  "faults": [],
+  "stages": {
+    "automatic_before_manual": {
+      "modes": [
+        "AUTO_ROAM"
+      ],
+      "samples": 1,
+      "duration_s": 0.0,
+      "yaw": {
+        "travel_deg": 0.0,
+        "reference_error_p95_deg": 2.394390625851697,
+        "max_tracking_profile_accel_deg_s2": null
+      },
+      "pitch": {
+        "travel_deg": 0.0,
+        "reference_error_p95_deg": 0.07104676659622317,
+        "max_tracking_profile_accel_deg_s2": null
+      }
+    },
+    "automatic_service": {
+      "modes": [
+        "AUTO_ROAM",
+        "AUTO_TRACK",
+        "MANUAL"
+      ],
+      "samples": 919,
+      "duration_s": 60.038179748,
+      "yaw": {
+        "travel_deg": 162.37509322448503,
+        "reference_error_p95_deg": 1.7923265747282415,
+        "max_tracking_profile_accel_deg_s2": 24.999982066502238
+      },
+      "pitch": {
+        "travel_deg": 14.884584080806087,
+        "reference_error_p95_deg": 0.9686424484481684,
+        "max_tracking_profile_accel_deg_s2": 24.999982066502238
+      }
+    },
+    "manual_hold": {
+      "modes": [
+        "MANUAL"
+      ],
+      "samples": 46,
+      "duration_s": 2.976281078,
+      "yaw": {
+        "travel_deg": 1.0926305153144626,
+        "reference_error_p95_deg": 0.9396507840145484,
+        "max_tracking_profile_accel_deg_s2": null
+      },
+      "pitch": {
+        "travel_deg": 0.02188698777399707,
+        "reference_error_p95_deg": 0.02188698777399707,
+        "max_tracking_profile_accel_deg_s2": null
+      }
+    },
+    "pitch+5": {
+      "modes": [
+        "MANUAL"
+      ],
+      "samples": 32,
+      "duration_s": 2.008514321,
+      "yaw": {
+        "travel_deg": 0.044117750225082526,
+        "reference_error_p95_deg": 0.021772396214961253,
+        "max_tracking_profile_accel_deg_s2": null
+      },
+      "pitch": {
+        "travel_deg": 5.048961386472327,
+        "reference_error_p95_deg": 0.3201688159191062,
+        "max_tracking_profile_accel_deg_s2": null,
+        "target_overshoot_deg": 0.04893059570417353,
+        "final_error_deg": 0.027100903709691187
+      }
+    },
+    "pitch-5": {
+      "modes": [
+        "MANUAL"
+      ],
+      "samples": 76,
+      "duration_s": 4.961710363,
+      "yaw": {
+        "travel_deg": 0.10943493886996628,
+        "reference_error_p95_deg": 0.10943493886999173,
+        "max_tracking_profile_accel_deg_s2": null
+      },
+      "pitch": {
+        "travel_deg": 5.136394746009293,
+        "reference_error_p95_deg": 0.4015288228276817,
+        "max_tracking_profile_accel_deg_s2": null,
+        "target_overshoot_deg": 0.1364212510206471,
+        "final_error_deg": 0.12587882759024213
+      }
+    }
+  },
+  "tracking_reference_samples": 53,
+  "tracking_motor_reference_error_p95_deg": {
+    "yaw": 1.4851066049790906,
+    "pitch": 1.5939112902744392
+  },
+  "last_state": {
+    "phase": "hold",
+    "operating_mode": "AUTO_TRACK",
+    "mode_phase": "TRACKING",
+    "fault": "",
+    "soft_limits_valid": true,
+    "effective_speed_ceiling_deg_s": 20,
+    "camera_fps": 26.0127,
+    "control_deadline_misses": 0
+  },
+  "soft_limits_deg": {
+    "yaw": [
+      -161.93219684884892,
+      180.7842271820384
+    ],
+    "pitch": [
+      -74.71197761167396,
+      -4.836073188113519
+    ]
+  }
+}

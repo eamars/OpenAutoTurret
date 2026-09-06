@@ -48,6 +48,43 @@ TEST(V3Config, AbsentMeansTodayBehaviourExactly) {
   EXPECT_EQ(r.config.v3.jog_lease_ms, 0);
 }
 
+TEST(V3Config, FullTravelIsExplicitAndCannotConflictWithNamedRegion) {
+  TempYaml y("v3:\n  auto_roam:\n    full_yaw_travel: true\n");
+  const auto r=config::load_turret_config(y.path);
+  EXPECT_FALSE(any_error_contains(r,"v3"));
+  EXPECT_TRUE(wire::make_control_cfg(r.config).roam_full_yaw_travel);
+  TempYaml bad("v3:\n  auto_roam:\n    full_yaw_travel: true\n    yaw_min_deg: 70\n    yaw_max_deg: 230\n");
+  EXPECT_TRUE(any_error_contains(config::load_turret_config(bad.path),"cannot be combined"));
+}
+
+TEST(StationWiring, SlowHomingDoesNotDerateTrackingResponse) {
+  TempYaml y("homing:\n  speed_kp: 4\n  speed_ki: 0.05\n  contact:\n    coarse_speed_deg_s: 5\n    fine_speed_deg_s: 3\ntracking:\n  track_speed_deg_s: 15\n  hold_speed_deg_s: 20\n  track_acceleration_deg_s2: 25\n  track_jerk_deg_s3: 100\nv3:\n  default_mode: AUTO_ROAM\n  service_max_speed_deg_s: 20\n  auto_roam:\n    velocity_deg_s: 10\n");
+  const auto r=config::load_turret_config(y.path);
+  ASSERT_FALSE(any_error_contains(r,"tracking."));
+  ASSERT_FALSE(any_error_contains(r,"homing."));
+  const auto cfg=wire::make_control_cfg(r.config);
+  EXPECT_DOUBLE_EQ(cfg.track_acceleration_rad_s2,25*kDeg2Rad);
+  EXPECT_DOUBLE_EQ(cfg.track_jerk_rad_s3,100*kDeg2Rad);
+  EXPECT_DOUBLE_EQ(cfg.service_max_speed_rad_s,20*kDeg2Rad);
+  EXPECT_DOUBLE_EQ(cfg.hold_speed_rad_s,20*kDeg2Rad);
+  EXPECT_DOUBLE_EQ(cfg.roam_velocity_deg_s,10);
+  EXPECT_TRUE(cfg.start_in_auto_roam);
+  EXPECT_DOUBLE_EQ(r.config.tracking.track_speed_deg_s,15);
+  EXPECT_DOUBLE_EQ(r.config.homing.contact.coarse_speed_deg_s,5);
+  EXPECT_DOUBLE_EQ(r.config.homing.contact.fine_speed_deg_s,3);
+}
+
+TEST(V3Config, TrackingResponseRejectsNonfiniteAndBeyondServoAuthority) {
+  for(const auto& value:{"0","-1","31",".nan",".inf"}) {
+    TempYaml y(std::string("tracking:\n  track_acceleration_deg_s2: ")+value+"\n");
+    EXPECT_TRUE(any_error_contains(config::load_turret_config(y.path),"track_acceleration_deg_s2"));
+  }
+  for(const auto& value:{"0","-1","121",".nan",".inf"}) {
+    TempYaml y(std::string("tracking:\n  track_jerk_deg_s3: ")+value+"\n");
+    EXPECT_TRUE(any_error_contains(config::load_turret_config(y.path),"track_jerk_deg_s3"));
+  }
+}
+
 TEST(V3Config, ServiceSpeedGainsAreExplicitAndBounded) {
   TempYaml y("v3:\n  service_speed_control: true\n  service_speed_kp: 4\n  service_speed_ki: 0.05\n");
   auto r = config::load_turret_config(y.path);
@@ -57,6 +94,19 @@ TEST(V3Config, ServiceSpeedGainsAreExplicitAndBounded) {
   EXPECT_DOUBLE_EQ(cfg.service_speed_ki, .05);
   TempYaml bad("v3:\n  service_speed_kp: 6\n");
   EXPECT_TRUE(any_error_contains(config::load_turret_config(bad.path), "service_speed_kp"));
+}
+
+TEST(StationWiring, HomingSpeedGainsAreIndependentAndBounded) {
+  TempYaml y("homing:\n  speed_kp: 4\n  speed_ki: 0.05\nv3:\n  service_speed_kp: 2\n  service_speed_ki: 0.01\n");
+  const auto r=config::load_turret_config(y.path);
+  EXPECT_FALSE(any_error_contains(r,"homing.speed"));
+  const auto c=wire::make_control_cfg(r.config);
+  EXPECT_DOUBLE_EQ(c.homing_speed_kp,4);EXPECT_DOUBLE_EQ(c.homing_speed_ki,.05);
+  EXPECT_DOUBLE_EQ(c.service_speed_kp,2);EXPECT_DOUBLE_EQ(c.service_speed_ki,.01);
+  for(const auto* bad : {"speed_kp: 6","speed_ki: 0.1","speed_ki: .nan","speed_kp: .inf"}) {
+    TempYaml invalid(std::string("homing:\n  ")+bad+"\n");
+    EXPECT_TRUE(any_error_contains(config::load_turret_config(invalid.path),"homing.speed"));
+  }
 }
 
 TEST(StationWiring, ServiceAndHoldCeilingsReachTheActuatorInRadians) {

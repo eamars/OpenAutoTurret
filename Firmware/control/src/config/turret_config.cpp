@@ -226,6 +226,10 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
 void load_contact(const YAML::Node& hc, HomingConfig& out, std::vector<std::string>& warn,
                   std::vector<std::string>& err) {
   const std::string p = "homing.contact.";
+  out.speed_kp = opt_double(hc,"speed_kp","homing.speed_kp",1.0,warn);
+  out.speed_ki = opt_double(hc,"speed_ki","homing.speed_ki",.002,warn);
+  if (!(out.speed_kp >= 1 && out.speed_kp <= 5)) err.push_back("homing.speed_kp must be in [1,5]");
+  if (!(out.speed_ki >= .002 && out.speed_ki <= .05)) err.push_back("homing.speed_ki must be in [0.002,0.05]");
   const YAML::Node ct = fetch(hc, "contact");
   auto& cc = out.contact;
   cc.coarse_speed_deg_s = opt_double(ct, "coarse_speed_deg_s", p + "coarse_speed_deg_s",
@@ -371,6 +375,7 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
 
   const YAML::Node roam = fetch(n, "auto_roam");
   if (roam.IsDefined()) {
+    out.roam_full_yaw_travel = opt_bool(roam, "full_yaw_travel", "v3.auto_roam.full_yaw_travel", false, warn);
     const YAML::Node lo = fetch(roam, "yaw_min_deg");
     const YAML::Node hi = fetch(roam, "yaw_max_deg");
     if (!unspecified(lo) && !unspecified(hi)) {
@@ -385,6 +390,8 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
       err.push_back("v3.auto_roam needs both yaw_min_deg and yaw_max_deg, or neither");
     }
     const YAML::Node pit = fetch(roam, "pitch_deg");
+    if (out.roam_full_yaw_travel && out.has_roam_region)
+      err.push_back("v3.auto_roam.full_yaw_travel cannot be combined with a named yaw region");
     if (!unspecified(pit)) {
       out.has_roam_pitch = true;
       out.roam_pitch_deg = pit.as<double>();
@@ -733,6 +740,15 @@ LoadResult load_turret_config(const std::string& path) {
 
     c.tracking.track_speed_deg_s = opt_double(
         trk, "track_speed_deg_s", "tracking.track_speed_deg_s", 30.0, warn);
+    c.tracking.track_acceleration_deg_s2 = opt_double(trk, "track_acceleration_deg_s2",
+        "tracking.track_acceleration_deg_s2", 15.0, warn);
+    c.tracking.track_jerk_deg_s3 = opt_double(trk, "track_jerk_deg_s3",
+        "tracking.track_jerk_deg_s3", 60.0, warn);
+    // Keep planning within the existing service servo's 30/120 authority.
+    if (!(c.tracking.track_acceleration_deg_s2 > 0 && c.tracking.track_acceleration_deg_s2 <= 30))
+      err.push_back("tracking.track_acceleration_deg_s2 must be in (0,30]");
+    if (!(c.tracking.track_jerk_deg_s3 > 0 && c.tracking.track_jerk_deg_s3 <= 120))
+      err.push_back("tracking.track_jerk_deg_s3 must be in (0,120]");
     c.tracking.hold_speed_deg_s = opt_double(
         trk, "hold_speed_deg_s", "tracking.hold_speed_deg_s", 10.0, warn);
     if (c.tracking.track_speed_deg_s <= 0.0) {

@@ -35,7 +35,10 @@ using namespace ota;
 namespace {
 
 constexpr int64_t kDtNs = 5'000'000;  // 200 Hz, the period the loop expects
-constexpr int kMaxHomeSteps = 60000;  // 300 s of simulated homing
+// A slow full-range pitch/yaw/pitch plan takes more than 300 simulated seconds.
+// This is the offline replay budget; per-action motor safety deadlines remain
+// enforced by the production homing controller.
+constexpr int kMaxHomeSteps = 120000;  // 600 s of simulated homing
 
 void usage() {
   std::cout <<

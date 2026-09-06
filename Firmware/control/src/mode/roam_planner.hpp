@@ -217,6 +217,16 @@ class RoamPlanner {
     reversal_armed_ = false;
   }
 
+  // Explicit bounded reposition after a target crosses the forbidden yaw gap.
+  // The waypoint is still inside the same validated sweep envelope.
+  void enter_toward(double q_yaw_rad, double q_pitch_rad, int direction) {
+    enter(q_yaw_rad, q_pitch_rad);
+    if (!active()) return;
+    direction_ = direction < 0 ? -1 : 1;
+    target_yaw_ = direction_ < 0 ? sweep_lo_rad() : sweep_hi_rad();
+    state_ = RoamState::Sweep;
+  }
+
   void exit() {
     state_ = RoamState::Idle;
     direction_ = 0;

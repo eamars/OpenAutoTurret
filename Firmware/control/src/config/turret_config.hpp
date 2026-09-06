@@ -84,6 +84,8 @@ struct ContactConfig {
 
 struct HomingConfig {
   ContactConfig contact;
+  double speed_kp = 1.0;
+  double speed_ki = .002;
 };
 
 // One step of the multi-axis homing plan (§25.2). Units are degrees for
@@ -114,6 +116,9 @@ struct TrackingConfig {
   std::string target_lost_behavior = "hold";  // "hold" | "search"
   // §16 tracking speed limit (deg/s). The architecture caps tracking at 30 deg/s.
   double track_speed_deg_s = 30.0;
+  // Service tracking reference only; independent of homing and other modes.
+  double track_acceleration_deg_s2 = 15.0;
+  double track_jerk_deg_s3 = 60.0;
   // §28.5/§31.3 plus round 40: the speed ceiling applied to station motion AND, at
   // control_loop.cpp:427, to the AUTO_TRACK reference before the confidence derate. Defaulted to the
   // constant this replaced (10.0 deg/s) so behaviour is unchanged until an operator writes the key.
@@ -240,6 +245,7 @@ struct V3Config {
   // the pitch reference is a single pose, not a range, because the sweep holds pitch and
   // walks yaw. Unset means "derive it from what the station proved during homing".
   bool has_roam_region = false;
+  bool roam_full_yaw_travel = false;
   double roam_yaw_min_deg = 0.0;
   double roam_yaw_max_deg = 0.0;
   bool has_roam_pitch = false;

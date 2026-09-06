@@ -265,6 +265,18 @@ function hudDrawerActions(name, t) {
 }
 
 
+// Display origin only. Control, calibration and API joint angles stay raw.
+function hudPitchCenter(t) {
+  if (!t || t.soft_limits_valid !== true || !Number.isFinite(t.q_soft_min_pitch_rad) ||
+      !Number.isFinite(t.q_soft_max_pitch_rad) ||
+      !(t.q_soft_max_pitch_rad > t.q_soft_min_pitch_rad)) return null;
+  return .5 * (t.q_soft_min_pitch_rad + t.q_soft_max_pitch_rad);
+}
+function hudPitch(t, raw) {
+  const center = hudPitchCenter(t);
+  return center !== null && Number.isFinite(raw) ? raw - center : null;
+}
+
 function hudDiagRows(t) {
   // §13: DIAG is "engineering telemetry". Read-only, and deliberately the fields an operator is asked to
   // quote when something behaves oddly - rates and limits rather than impressions. Anything the snapshot
@@ -274,12 +286,12 @@ function hudDiagRows(t) {
   const num = (v, dp) => (typeof v === "number" ? d(v).toFixed(dp === undefined ? 2 : dp) : "--");
   return [
     ["MODE / PHASE", String(t.operating_mode || "--") + " / " + String(t.mode_phase || "--")],
-    ["Q YAW / PITCH", num(t.q_yaw_rad) + " / " + num(t.q_pitch_rad) + " DEG"],
-    ["REF YAW / PITCH", num(t.q_ref_yaw_rad) + " / " + num(t.q_ref_pitch_rad)],
+    ["Q YAW / PITCH", num(t.q_yaw_rad) + " / " + num(hudPitch(t, t.q_pitch_rad)) + " DEG"],
+    ["REF YAW / PITCH", num(t.q_ref_yaw_rad) + " / " + num(hudPitch(t, t.q_ref_pitch_rad))],
     ["CMD RATE YAW", num(t.q_ref_rate_yaw_rad_s) + " DEG/S"],
     ["CMD ACCEL YAW", num(t.q_ref_accel_yaw_rad_s2) + " DEG/S2"],
     ["LIMITS YAW", num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
-    ["LIMITS PITCH", num(t.q_soft_min_pitch_rad, 1) + " ... " + num(t.q_soft_max_pitch_rad, 1) + " DEG"],
+    ["LIMITS PITCH", num(hudPitch(t, t.q_soft_min_pitch_rad), 1) + " ... " + num(hudPitch(t, t.q_soft_max_pitch_rad), 1) + " DEG"],
     ["TRACK RATE", (typeof t.camera_fps === "number" ? t.camera_fps.toFixed(1) : "--") + " HZ"],
     ["SELECTED CONF", (typeof t.selected_confidence === "number"
                         ? Math.round(t.selected_confidence * 100) + "%" : "--")],
@@ -359,11 +371,11 @@ function hudPredictionSvg(b, C, o) {
   const amber = C.amber;
   const parts = [
     '<rect x="' + b.x + '" y="' + b.y + '" width="' + b.w + '" height="' + b.h +
-      '" fill="none" stroke="' + amber + '" stroke-width="1.2" stroke-dasharray="6 4" opacity=".92"/>',
-    '<line x1="' + (b.cx - 5) + '" y1="' + b.cy + '" x2="' + (b.cx + 5) + '" y2="' + b.cy +
-      '" stroke="' + amber + '" stroke-width="1.2"/>',
-    '<line x1="' + b.cx + '" y1="' + (b.cy - 5) + '" x2="' + b.cx + '" y2="' + (b.cy + 5) +
-      '" stroke="' + amber + '" stroke-width="1.2"/>',
+      '" fill="none" stroke="' + amber + '" stroke-width="3" stroke-dasharray="6 4" opacity=".92"/>',
+    '<line x1="' + (b.cx - 7) + '" y1="' + b.cy + '" x2="' + (b.cx + 7) + '" y2="' + b.cy +
+      '" stroke="' + amber + '" stroke-width="3"/>',
+    '<line x1="' + b.cx + '" y1="' + (b.cy - 7) + '" x2="' + b.cx + '" y2="' + (b.cy + 7) +
+      '" stroke="' + amber + '" stroke-width="3"/>',
     '<text class="tlbl" x="' + (b.x + b.w / 2) + '" y="' + (b.y - 5) +
       '" text-anchor="middle" fill="' + amber + '">PRED</text>'
   ];
@@ -595,6 +607,7 @@ function hudTravelTape(o) {
 }
 
 function hudDegLabel(deg, withDegree) {
+  if (!Number.isFinite(deg)) return "--";
   const v = Math.abs(deg) < 1e-9 ? 0 : deg;
   const txt = (v > 0 ? "+" : (v < 0 ? "-" : "")) + Math.abs(v).toFixed(Math.abs(v) % 1 ? 1 : 0);
   return txt + (withDegree ? "\u00b0" : "");
@@ -705,7 +718,7 @@ function fmt(v, digits, suffix) {
   return v.toFixed(digits) + (suffix || "");
 }
 
-function deg(rad) { return rad * 180.0 / Math.PI; }
+function deg(rad) { return Number.isFinite(rad) ? rad * 180.0 / Math.PI : NaN; }
 
 // §15 color tokens, verbatim from the revision.
 const C = {
@@ -814,17 +827,17 @@ function render(t) {
     const corner = (sx, sy) =>
       '<path d="M ' + (c.x + sx * r) + ' ' + (c.y + sy * gap) + ' L ' + (c.x + sx * r) + ' ' +
       (c.y + sy * r) + ' L ' + (c.x + sx * gap) + ' ' + (c.y + sy * r) + '" fill="none" ' +
-      'stroke="' + g + '" stroke-width="1.5"/>';
+      'stroke="' + g + '" stroke-width="3"/>';
     layers.reticle =
       corner(-1, -1) + corner(1, -1) + corner(-1, 1) + corner(1, 1) +
       '<line x1="' + c.x + '" y1="' + (c.y - r - 12) + '" x2="' + c.x + '" y2="' + (c.y - gap) +
-      '" stroke="' + g + '" stroke-width="1"/>' +
+      '" stroke="' + g + '" stroke-width="3"/>' +
       '<line x1="' + c.x + '" y1="' + (c.y + gap) + '" x2="' + c.x + '" y2="' + (c.y + r + 12) +
-      '" stroke="' + g + '" stroke-width="1"/>' +
+      '" stroke="' + g + '" stroke-width="3"/>' +
       '<line x1="' + (c.x - r - 12) + '" y1="' + c.y + '" x2="' + (c.x - gap - 8) + '" y2="' + c.y +
-      '" stroke="' + g + '" stroke-width="1"/>' +
+      '" stroke="' + g + '" stroke-width="3"/>' +
       '<line x1="' + (c.x + gap + 8) + '" y1="' + c.y + '" x2="' + (c.x + r + 12) + '" y2="' + c.y +
-      '" stroke="' + g + '" stroke-width="1"/>' +
+      '" stroke="' + g + '" stroke-width="3"/>' +
       (intr ? "" : '<text x="' + (c.x + r + 18) + '" y="' + (c.y + 4) + '" class="lbl" ' +
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
   }
@@ -872,11 +885,11 @@ function render(t) {
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({
     horizontal: false, x: vw - Math.max(78.0, vw * 0.055), y: vh / 2 - pitchLen / 2,
-    length: pitchLen, minDeg: deg(t.q_soft_min_pitch_rad), maxDeg: deg(t.q_soft_max_pitch_rad),
+    length: pitchLen, minDeg: deg(hudPitch(t, t.q_soft_min_pitch_rad)), maxDeg: deg(hudPitch(t, t.q_soft_max_pitch_rad)),
     markDeg: (dEdge && dEdge.axis === "PITCH")
-      ? (dEdge.side === "MIN" ? deg(t.q_soft_min_pitch_rad) : deg(t.q_soft_max_pitch_rad))
+      ? (dEdge.side === "MIN" ? deg(hudPitch(t, t.q_soft_min_pitch_rad)) : deg(hudPitch(t, t.q_soft_max_pitch_rad)))
       : undefined,
-    valueDeg: deg(t.q_pitch_rad), valid: t.soft_limits_valid === true
+    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), valid: t.soft_limits_valid === true
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
   // ceremony - if the server ever starts sending a polygon in a different frame, drawing it as joint
@@ -884,7 +897,7 @@ function render(t) {
   // once by a number whose frame was assumed.
   const forB = (t.field_of_regard && typeof t.field_of_regard === "object") ? t.field_of_regard : null;
   layers.for = "";
-  if (forB && forB.valid === true && forB.coordinate_frame === "joint_deg" &&
+  if (hudPitchCenter(t) !== null && forB && forB.valid === true && forB.coordinate_frame === "joint_deg" &&
       Array.isArray(forB.safe_envelope_points) && t.effective_hfov_deg > 0 &&
       t.effective_vfov_deg > 0 && typeof t.q_yaw_rad === "number" &&
       typeof t.q_pitch_rad === "number") {
@@ -895,11 +908,11 @@ function render(t) {
     const hasAim = !stale && pred && pred.valid === true && t.tracking_aim_joint_valid === true &&
                    Number.isFinite(t.tracking_aim_yaw_rad) && Number.isFinite(t.tracking_aim_pitch_rad);
     const gi = hudForInset({
-      vw: vw, vh: vh, pts: forB.safe_envelope_points,
+      vw: vw, vh: vh, pts: forB.safe_envelope_points.map(p => [p[0], p[1] - deg(hudPitchCenter(t))]),
       hfovDeg: t.effective_hfov_deg, vfovDeg: t.effective_vfov_deg,
-      los: [deg(t.q_yaw_rad), deg(t.q_pitch_rad)],
-      target: hasIntent ? [deg(t.intent_q_yaw_rad), deg(t.intent_q_pitch_rad)] : null,
-      pred: hasAim ? [deg(t.tracking_aim_yaw_rad), deg(t.tracking_aim_pitch_rad)] : null
+      los: [deg(t.q_yaw_rad), deg(hudPitch(t, t.q_pitch_rad))],
+      target: hasIntent ? [deg(t.intent_q_yaw_rad), deg(hudPitch(t, t.intent_q_pitch_rad))] : null,
+      pred: hasAim ? [deg(t.tracking_aim_yaw_rad), deg(hudPitch(t, t.tracking_aim_pitch_rad))] : null
     });
     layers.for = hudForInsetSvg(gi, C);
   }
@@ -909,8 +922,8 @@ function render(t) {
                                    value: hudDegLabel(deg(t.q_yaw_rad), true),
                                    note: "JOINT TRAVEL, NOT HEADING" }) +
     hudTravelTapeSvg(pitchTape, C, { title: "PITCH", vw: vw, vh: vh,
-                                     value: hudDegLabel(deg(t.q_pitch_rad), true),
-                                     note: "JOINT, NOT ELEVATION" }) +
+                                     value: hudDegLabel(deg(hudPitch(t, t.q_pitch_rad)), true),
+                                     note: "0 = TRAVEL MIDPOINT" }) +
     ((yawTape || pitchTape) ? ""
      : hudUnrangedNote(vw / 2, vh * 0.125, "YAW / PITCH"));
 
@@ -1336,6 +1349,11 @@ document.addEventListener("DOMContentLoaded", () => {
 """
 
 HUD_CSS = r"""
+#g-reticle, #g-prediction {
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000);
+}
+#g-prediction .tlbl { font-weight: 700; paint-order: stroke; stroke: #000; stroke-width: 3px; }
+
 :root {
   --hud-green: #95f58b;
   --hud-green-dim: rgba(149,245,139,.56);
