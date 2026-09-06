@@ -1,5 +1,8 @@
 # Camera, guidance and motor boundary review — 2026-09-06
 
+Historical unloaded trial. For current operations see [the station runbook](STATION_OPERATIONS.md);
+for subsequent loaded validation see [the travel review](travel_boundary_review_2026_09_06.md).
+
 **Status: partially verified.** Camera-coordinate and Manual-axis defects were
 reproduced and corrected. A new tracking reference generator passes offline
 closed-loop probes and is running on the unloaded station. Post-change live

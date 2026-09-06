@@ -1,5 +1,9 @@
 # OpenAutoTurret — As-Built on the v1 Architecture
 
+**Historical snapshot.** For current deployment and start/stop instructions, read
+[STATION_OPERATIONS.md](STATION_OPERATIONS.md). This document predates the native
+perception pipeline, automatic launcher and retained-calibration validation.
+
 **Snapshot: 2026-09-03.** What is implemented, how it was verified, and what was
 measured on the real station — the starting point for the next architecture revision.
 It says what was measured, not what was intended, and where something is unproven it

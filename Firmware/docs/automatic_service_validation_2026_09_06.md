@@ -1,8 +1,8 @@
 # Automatic camera station: implementation and validation
 
-Latest status: [motion boundary review](motion_boundary_review_2026_09_06.md).
-The new tracking candidate is running in automatic service. Physical tracking
-convergence remains unverified pending a visible-person capture.
+Historical validation record. Current operation:
+[station runbook](STATION_OPERATIONS.md). Later loaded-control evidence:
+[travel boundary review](travel_boundary_review_2026_09_06.md).
 
 This continues [the initial takeover review](implementation_takeover_2026_09_06.md).
 The user confirmed an unloaded camera/sensor station, attended the physical trials,
@@ -13,7 +13,7 @@ and asked to prioritize smooth rotation over further acoustic tuning.
 On `rpi-turret`, from `/home/eamars/workspace/OpenAutoTurret/Firmware`:
 
 ```bash
-bash scripts/run_application.sh        # foreground start; no mode arguments
+bash scripts/run_application.sh        # detached start; no mode arguments
 bash scripts/run_application.sh status # from another shell
 bash scripts/run_application.sh stop   # park, disable, and stop owned processes
 ```
@@ -34,7 +34,8 @@ Use **http://rpi-turret:8080/** for the real camera feed and controls.
   Jog commands have a 300 ms lease, renewed by the page. Focus loss also stops jog.
 - **Auto** explicitly resumes automatic roaming and acquisition.
 - **MENU → Home → Confirm Home** recalibrates both axes. The second press must
-  occur while the confirmation is displayed. Manual / Hold can interrupt homing.
+  occur while the confirmation is displayed. Use the launcher stop command for
+  full shutdown; Manual / Hold does not abort supervisory homing.
 - Green boxes are camera detections. The small amber prediction cross is the
   controller's actual projected tracking point, without decorative displacement.
 

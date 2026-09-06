@@ -1,15 +1,18 @@
 # Documentation Map
 
-**Read [`AS_BUILT_v1.md`](AS_BUILT_v1.md) first.** It is the current record of what is
-implemented, what was measured on the physical turret, and which defects are shipped.
-Everything else in this directory is either the specification, a vendor manual, or an
-operational how-to.
+**For deployment/start/stop, read [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md)
+first.** It is the current operating runbook. The default station mode is automatic
+roam/track. Read [`travel_boundary_review_2026_09_06.md`](travel_boundary_review_2026_09_06.md)
+for the latest loaded homing/tracking evidence and remaining gaps.
+`AS_BUILT_v1.md` is the September 3 snapshot and predates the current pipeline.
 
 ## The project's own documents
 
 | Document | What it is | Status |
 |---|---|---|
-| [`AS_BUILT_v1.md`](AS_BUILT_v1.md) | Implemented features with their evidence, measured station numbers, shipped defects | **Authoritative for "what does the code do today"** |
+| [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) | Deploy, start, status, stop, default Auto mode, prerequisites and diagnostics | **Current operating procedure** |
+| [`travel_boundary_review_2026_09_06.md`](travel_boundary_review_2026_09_06.md) | Loaded homing, tracking response, travel limits and HUD verification | Latest measured control status; explicitly lists gaps |
+| [`AS_BUILT_v1.md`](AS_BUILT_v1.md) | Features and evidence as of September 3 | Historical snapshot |
 | [`open_auto_turret_software_control_architecture_v1.md`](open_auto_turret_software_control_architecture_v1.md) | The v1 architecture spec (the §-numbers every source file cites) | Frozen reference. The next revision replaces it; `§` references in code point here until then |
 | [`../../PROGRESS.md`](../../PROGRESS.md) | Phase-level status: what is coded, what has been verified on hardware | Tracker only — no feature detail lives there anymore |
 
@@ -33,7 +36,7 @@ Not project status, and not mine to summarise:
 [`SH2_SHTP_AI_Reference.md`](SH2_SHTP_AI_Reference.md).
 
 Where the vendor manual and the measured station disagree, the measurements in
-`AS_BUILT_v1.md` win, and both are named: the manual's ±4π feedback angle mapping is
+the dated station evidence apply to the tested configuration, and both are named: the manual's ±4π feedback angle mapping is
 wrong for these drives (±12.5 rad), and its speed mode does not move a loaded axis at
 the commanded rate on default gains.
 
@@ -56,7 +59,8 @@ rejected.
 One exception, learned the hard way today: **a document that live code names is not archived**, however stale it is — three of the moved files turned out to be cited by running tools and source comments, and a pointer that resolves to nothing is how a future session re-investigates a problem somebody already solved. Dated rationale stays visible; it is labelled dated instead of being hidden.
 
 **Rules for adding documents here.** One fact, one home: measured results go in
-`AS_BUILT_v1.md`, requirements go in the architecture spec, procedures go in a how-to.
+dated validation reports, requirements go in the architecture spec, and current
+operating procedures go in `STATION_OPERATIONS.md`.
 A run log that earns a permanent claim gets the claim extracted and the log archived.
 When a document stops describing today, it moves to `archive/` with a row above saying
 why — that is a cleanup, not a deletion.

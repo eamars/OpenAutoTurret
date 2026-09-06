@@ -1,7 +1,8 @@
 # Implementation takeover and station evidence — 2026-09-06
 
-**Historical first-cycle report.** Current deployment, operating instructions and
-validation are in [Automatic station validation](automatic_service_validation_2026_09_06.md).
+**Historical first-cycle report.** Current deployment and operation are in
+[the station runbook](STATION_OPERATIONS.md); later loaded-control evidence is in
+[the travel review](travel_boundary_review_2026_09_06.md).
 Neither architecture plan is fully accepted. The operating-state descriptions below
 record the earlier cycle and are superseded by that follow-up.
 
