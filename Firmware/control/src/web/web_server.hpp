@@ -135,6 +135,10 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"vision_frames\":" << s.vision_frames
      << ",\"vision_dropped\":" << s.vision_dropped
      << ",\"vision_last_frame_sequence\":" << s.vision_last_frame_sequence
+     << ",\"perception_native\":" << (s.perception_native ? "true" : "false")
+     << ",\"perception_session_uuid\":\"" << s.perception_session_uuid << "\""
+     << ",\"perception_track_set_sequence\":" << s.perception_track_set_sequence
+     << ",\"selection_generation\":" << s.selection_generation
      << ",\"vision_measurement_age_ms\":" << s.vision_measurement_age_ms
      // v3.2 section 20: the camera geometry the HUD draws with. The reticle's position IS the
      // measured principal point (section 7) - never the viewport centre, never the target - and
@@ -157,6 +161,14 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"predicted_target_el_world_rad\":" << s.predicted_target_el_world_rad
      << ",\"predicted_target_los_valid\":" << (s.predicted_target_los_valid ? "true" : "false")
      << ",\"prediction_horizon_ms\":" << s.prediction_horizon_ms
+     << ",\"estimator_innovation_az_rad\":" << s.estimator_innovation_az_rad
+     << ",\"estimator_innovation_el_rad\":" << s.estimator_innovation_el_rad
+     << ",\"estimator_mahalanobis\":" << s.estimator_mahalanobis
+     << ",\"estimator_process_noise_scale\":" << s.estimator_process_noise_scale
+     << ",\"estimator_variance_az_rad2\":" << s.estimator_variance_az_rad2
+     << ",\"estimator_variance_el_rad2\":" << s.estimator_variance_el_rad2
+     << ",\"estimator_rejected\":" << s.estimator_rejected
+     << ",\"estimator_measurement_accepted\":" << (s.estimator_measurement_accepted ? "true" : "false")
      // §20's `prediction.*`. Assembled from the same snapshot fields the flat aim_point_ and
      // predicted_target_ fields use, not recomputed: the nested block exists because that is how the
      // contract names these values, and two spellings of one number are only safe when there is

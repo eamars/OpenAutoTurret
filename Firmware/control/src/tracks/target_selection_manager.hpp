@@ -196,6 +196,7 @@ class TargetSelectionManager {
   // test_track_wire.ArrivalDoesNotReassociateAnything holds.
   const TrackSet& last_set() const { return last_set_; }
   bool have_set() const { return have_set_; }
+  bool native() const { return last_set_.observation.native; }
 
   // Age of the most recent TrackSet, in ms, measured against `now`.
   //
@@ -208,18 +209,20 @@ class TargetSelectionManager {
   // it last heard it.
   int64_t list_age_ms(TimeNs now) const {
     if (!have_set_ || last_set_ns_ == 0) return -1;
-    if (now < last_set_ns_) return 0;  // clock moved backwards; treat as fresh, never negative
-    return static_cast<int64_t>((now - last_set_ns_) / 1000000);
+    const auto stamp = native() ? static_cast<TimeNs>(last_sensor_ns_) : last_set_ns_;
+    if (now < stamp) return -1;
+    return static_cast<int64_t>((now - stamp) / 1000000);
   }
 
   // Empty when the list is fresh enough to point at; otherwise the refusal, with the age in
   // it — a refusal that does not carry its number is a shrug (§52).
   std::string list_too_stale(TimeNs now) const {
     const int64_t age = list_age_ms(now);
-    if (age < 0 || age <= cfg_.candidate_list_max_age_ms) return {};
+    const auto maximum = native() ? 250 : cfg_.candidate_list_max_age_ms;
+    if (age >= 0 && age <= maximum) return {};
     return "the candidate list is " + std::to_string(age) +
            " ms old and nothing has been seen since, so there is nothing visible to select "
-           "(the limit is " + std::to_string(cfg_.candidate_list_max_age_ms) +
+           "(the limit is " + std::to_string(maximum) +
            " ms) — start the detector again, or roam until something is seen";
   }
 
@@ -261,6 +264,9 @@ class TargetSelectionManager {
 
   SelectionResult select_track(TrackUuid uuid, TimeNs now) {
     if (!uuid.valid()) return {false, false, "target id must not be zero"};
+    // A retry is inert even after visibility or list freshness changes.
+    if (sel_.has_selection && sel_.selected == uuid)
+      return {true, false, "already selected"};
 
     const Track* t = find_in_last(uuid);
     if (t != nullptr) {
@@ -355,6 +361,27 @@ class TargetSelectionManager {
     last_set_ns_ = now;  // see list_age_ms(): the point is that this is the LAST time it
                          // happened to be true, which is a fact only a query can use later.
 
+    if (set.observation.native) {
+      const auto& obs = set.observation;
+      if (!(sel_.selected == obs.selected)) sel_ = {};
+      sel_.has_selection = obs.selected.valid();
+      sel_.selected = obs.selected;
+      sel_.ambiguous_reacquisition = obs.state == 4 || obs.ambiguity > 0;
+      sel_.visibility_state = !sel_.has_selection ? Visibility::None :
+          obs.state == 1 && obs.valid ? Visibility::Visible :
+          obs.state == 2 ? Visibility::Occluded :
+          obs.state == 5 ? Visibility::Stale : Visibility::LostReacquirable;
+      sel_.match_confidence = obs.identity_confidence;
+      if (obs.valid) sel_.last_seen_timestamp = set.sensor_timestamp_ns;
+      if (const Track* t = find_in_last(obs.selected)) {
+        sel_.selected_display_index = t->display_index;
+        sel_.selected_class = t->class_id;
+        fill_descriptor(sel_.selected_descriptor, sizeof sel_.selected_descriptor,
+                        t->class_name, t->display_index);
+      }
+      return; // mirror the authoritative result; no independent association
+    }
+
     for (int i = 0; i < set.count; ++i) remember(set.tracks[i], now);
 
     if (!sel_.has_selection) return;
@@ -363,7 +390,7 @@ class TargetSelectionManager {
     if (t != nullptr && t->state == TrackState::Confirmed) {
       sel_.visibility_state = Visibility::Visible;
       sel_.match_confidence = t->track_confidence;
-      sel_.last_seen_timestamp = now;
+      sel_.last_seen_timestamp = last_sensor_ns_;
       sel_.ambiguous_reacquisition = false;
       sel_.reacquisition_score = 0.0f;
       sel_.ambiguity_margin = 0.0f;
@@ -439,8 +466,9 @@ class TargetSelectionManager {
     sel_.ambiguous_reacquisition = false;
     sel_.reacquisition_score = best;
     sel_.ambiguity_margin = best - second;
-    sel_.selected = best_uuid;  // §21: reacquired under the same selection
-    sel_.visibility_state = Visibility::Visible;
+    // Scores remain diagnostic only. The perception architecture makes vision's
+    // tracker the owner of association: geometry cannot transfer a selection to
+    // another UUID, even when it is the only nearby candidate.
   }
 
   // The track to feed to the tracker, or nullptr when the selected target is not

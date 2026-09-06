@@ -36,7 +36,7 @@ namespace telemetry {
 // Long enough for "18446744073709551615:18446744073709551615" plus the NUL, which is the whole
 // 128-bit identifier in decimal. One constant, so the listing, the snapshot and the capture all
 // carry the same width and the formatter cannot be handed an array it would overflow.
-inline constexpr std::size_t kUuidTextLen = 41;
+inline constexpr std::size_t kUuidTextLen = 42;
 
 // Both halves of a track identifier as text, in one place, so the live page and a post-incident
 // capture cannot drift into describing the same track with two different strings.
@@ -163,6 +163,10 @@ struct TelemetrySnapshot {
   uint64_t vision_frames = 0;         // decoded measurements since boot
   uint64_t vision_dropped = 0;        // datagrams with a bad size / decode
   uint64_t vision_last_frame_sequence = 0;
+  bool perception_native = false;
+  std::string perception_session_uuid;
+  uint64_t perception_track_set_sequence = 0;
+  uint64_t selection_generation = 0;
   int64_t vision_measurement_age_ms = -1;
 
   // v3.2 §20 - camera geometry the operator-facing HUD has to have.
@@ -229,6 +233,11 @@ struct TelemetrySnapshot {
   double predicted_target_el_world_rad = 0.0;
   bool predicted_target_los_valid = false;
   int64_t prediction_horizon_ms = 0;
+  double estimator_innovation_az_rad = 0, estimator_innovation_el_rad = 0;
+  double estimator_mahalanobis = 0, estimator_process_noise_scale = 1;
+  double estimator_variance_az_rad2 = 0, estimator_variance_el_rad2 = 0;
+  uint64_t estimator_rejected = 0;
+  bool estimator_measurement_accepted = false;
 
   // §20 prediction block. This is NOT a second prediction: it is the same ray that
   // predicted_target_*_world_rad and aim_point_* already describe - the line of sight the axis will

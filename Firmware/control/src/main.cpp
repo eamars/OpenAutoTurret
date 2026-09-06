@@ -123,6 +123,9 @@ TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
   TrackingController::Config t;
   t.estimator.alpha = cfg.tracking.estimator_alpha;
   t.estimator.beta = cfg.tracking.estimator_beta;
+  t.estimator.use_kalman = cfg.tracking.estimator_model == "constant_velocity";
+  t.estimator.measurement_sigma_rad = cfg.tracking.estimator_measurement_sigma_rad;
+  t.estimator.angular_accel_sigma_rad_s2 = cfg.tracking.estimator_accel_sigma_rad_s2;
   t.fsm.coast_max_ns = static_cast<int64_t>(cfg.tracking.coast_timeout_ms) * 1000000;
   t.fsm.lost_ns = static_cast<int64_t>(cfg.tracking.lost_timeout_ms) * 1000000;
   t.fsm.search_enabled =

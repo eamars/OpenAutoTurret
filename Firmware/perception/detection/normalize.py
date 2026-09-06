@@ -137,7 +137,7 @@ def parse_row_box(values: Sequence[float], order: str, *, input_width: int,
     """Four box coordinates in a model row → ``(x_min, y_min, x_max, y_max)`` in input px.
 
     ``normalized`` says whether the row carries fractions of the model input or pixels of
-    it — §6's YOLO11n ``_pp`` baseline is the former, several older zoo exports the latter,
+    it — the measured YOLO11n ``_pp`` emits input pixels, while SSD emits fractions,
     and mixing the two up scales every box by 640 in one direction or 1/640 in the other.
     The order names which pair comes first, and an unknown name raises rather than being
     treated as ``"xy"``: guessing a coordinate convention is how an impossible value ends

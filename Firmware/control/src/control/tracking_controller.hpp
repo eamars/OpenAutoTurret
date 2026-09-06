@@ -84,7 +84,14 @@ class TrackingController {
   // a NEW valid measurement that advanced the estimator.
   bool set_measurement(const vision::TargetMeasurement& m) {
     if (!m.valid) return false;
-    if (m.frame_sequence <= last_frame_sequence_) return false;  // stale/repeat
+    if (!std::isfinite(m.confidence) || !std::isfinite(m.association_quality) ||
+        !std::isfinite(m.identity_confidence)) return false;
+    // Capture time is authoritative across visiond restarts (sequence restarts at zero).
+    if (has_measurement_ && m.sensor_timestamp_ns <= last_capture_ns_) return false;
+    if (!std::isfinite(m.anchor_u_px) || !std::isfinite(m.anchor_v_px) ||
+        m.anchor_u_px < 0 || m.anchor_v_px < 0 ||
+        m.anchor_u_px > cfg_.intrinsics.width || m.anchor_v_px > cfg_.intrinsics.height)
+      return false;
     // §11: interpolate the motor pose at the CAPTURE time. If the history
     // cannot cover it, the measurement is timing-invalid — do NOT update with
     // a newer pose.
@@ -98,16 +105,37 @@ class TrackingController {
     // on a standing person is a torso. With no usable box the two are the same point and
     // last_aim_point_.head_applied says which case the operator is looking at.
     const tracking::AimPoint ap =
+        m.authoritative_anchor ? tracking::AimPoint{m.anchor_u_px, m.anchor_v_px, false} :
         tracking::aim_point_px(m.anchor_u_px, m.anchor_v_px, m.bbox_x_min_norm, m.bbox_y_min_norm,
                               m.bbox_x_max_norm, m.bbox_y_max_norm, cfg_.intrinsics, cfg_.aim);
-    last_aim_point_ = ap;
-    aim_valid_ = true;
     const geo::Vec3 r_cam = camera_.pixel_to_ray(ap.u_px, ap.v_px);
     const geo::Vec3 r_base =
         cfg_.kinematics.ray_to_base(r_cam, sy.q, sp.q);
     double az, el;
     geo::TurretKinematics::base_ray_to_los(r_base, az, el);
-    estimator_.update(az, el, m.sensor_timestamp_ns);
+    // An operator selection change must not carry the previous subject's velocity.
+    if (m.has_track_id && (!has_identity_ || last_identity_ != m.visual_track_id)) {
+      estimator_.reset();
+      fsm_.reset();
+    }
+    // A conservative diagonal angular covariance from anchor/box scale and
+    // independent detector/association/identity qualities. The 2 px floor and
+    // 2% box jitter are provisional priors to fit from stationary recordings.
+    const double quality = std::clamp(static_cast<double>(m.confidence) *
+        m.association_quality * m.identity_confidence, 0.05, 1.0);
+    const double sigma_x = std::max(2.0, 0.02 * (m.bbox_x_max_norm-m.bbox_x_min_norm) *
+                              cfg_.intrinsics.width) / cfg_.intrinsics.fx;
+    const double sigma_y = std::max(2.0, 0.02 * (m.bbox_y_max_norm-m.bbox_y_min_norm) *
+                              cfg_.intrinsics.height) / cfg_.intrinsics.fy;
+    // Use the larger image-axis variance for both base axes so camera rotation
+    // cannot turn a small image-axis variance into false base-axis certainty.
+    const double variance = std::max(sigma_x*sigma_x, sigma_y*sigma_y)/quality;
+    if (!estimator_.update(az, el, m.sensor_timestamp_ns, variance, variance)) return false;
+    last_aim_point_ = ap;
+    aim_valid_ = true;
+    has_identity_ = m.has_track_id;
+    last_identity_ = m.visual_track_id;
+    last_capture_ns_ = m.sensor_timestamp_ns;
     last_frame_sequence_ = m.frame_sequence;
     last_valid_arrival_ns_ = now_ns_;
     has_measurement_ = true;
@@ -120,7 +148,7 @@ class TrackingController {
     now_ns_ = now_ns;
     // §35 confidence-aware: is the target still "detected"?
     const bool detected =
-        has_measurement_ && (now_ns - last_valid_arrival_ns_) <
+        has_measurement_ && (now_ns - last_capture_ns_) <
                                 cfg_.fresh_threshold_ns;
     const tracking::TrackState st = fsm_.update(now_ns, detected);
 
@@ -173,6 +201,9 @@ class TrackingController {
   double confidence() const { return fsm_.confidence(); }
   bool has_measurement() const { return has_measurement_; }
   bool estimator_initialized() const { return estimator_.initialized(); }
+  bool prediction_valid() const {
+    return estimator_.prediction_valid(now_ns_ + cfg_.control_delay_ns + cfg_.motor_response_ns);
+  }
   void predicted_los(double& az, double& el) const {
     az = estimator_.azimuth();
     el = estimator_.elevation();
@@ -191,8 +222,17 @@ class TrackingController {
   // could not slew that fast". These three numbers say what was actually requested.
   double target_az_rate_rad_s() const { return estimator_.azimuth_rate(); }
   double target_el_rate_rad_s() const { return estimator_.elevation_rate(); }
+  const tracking::TargetEstimator::Diagnostics& estimator_diagnostics() const {
+    return estimator_.diagnostics();
+  }
+  double target_position_variance(int axis) const {
+    return estimator_.position_variance(axis, now_ns_ + cfg_.control_delay_ns + cfg_.motor_response_ns);
+  }
   int64_t prediction_horizon_ns() const {
-    return cfg_.control_delay_ns + cfg_.motor_response_ns;
+    if (!estimator_.initialized()) return 0;
+    return std::clamp<int64_t>(now_ns_ + cfg_.control_delay_ns + cfg_.motor_response_ns
+                             - estimator_.state_timestamp_ns(), 0,
+                             static_cast<int64_t>(cfg_.estimator.max_prediction_s * 1e9));
   }
   telemetry::Telemetry& telemetry() { return telemetry_; }
   const telemetry::Telemetry& telemetry() const { return telemetry_; }
@@ -209,6 +249,10 @@ class TrackingController {
     has_measurement_ = false;
     last_frame_sequence_ = 0;
     last_valid_arrival_ns_ = 0;
+    last_capture_ns_ = 0;
+    has_identity_ = false;
+    aim_valid_ = false;
+    predicted_az_act_rad_ = predicted_el_act_rad_ = 0.0;
     telemetry_.clear();
   }
 
@@ -248,6 +292,9 @@ class TrackingController {
   bool has_measurement_ = false;
   uint64_t last_frame_sequence_ = 0;
   TimeNs last_valid_arrival_ns_ = 0;
+  uint64_t last_capture_ns_ = 0;
+  bool has_identity_ = false;
+  uint64_t last_identity_ = 0;
   TimeNs now_ns_ = 0;
   double last_q_yaw_ = 0.0;
   double predicted_az_act_rad_ = 0.0;

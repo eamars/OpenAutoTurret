@@ -1,6 +1,7 @@
 #include "can/yousee_transport.hpp"
 
 #include <fcntl.h>
+#include <sys/file.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -154,6 +155,14 @@ bool YouseeTransport::start(std::string& err) {
     err = "yousee: open " + opts_.port + ": " + std::strerror(errno);
     return false;
   }
+  // Acquire ownership before changing UART settings, flushing, or issuing AT
+  // commands. A second owner could otherwise consume the first owner's replies.
+  if (::flock(fd_, LOCK_EX | LOCK_NB) != 0) {
+    err = "yousee: device already owned: " + opts_.port;
+    ::close(fd_);
+    fd_ = -1;
+    return false;
+  }
   termios tio{};
   if (::tcgetattr(fd_, &tio) != 0) {
     err = "yousee: tcgetattr: " + std::string(std::strerror(errno));
@@ -216,6 +225,15 @@ bool YouseeTransport::start(std::string& err) {
     }
   }
 
+  // Runtime TX must not block behind a stalled USB/TTY queue. Setup above uses
+  // bounded VTIME reads; the RX loop below polls after switching to nonblocking.
+  const int flags = ::fcntl(fd_, F_GETFL);
+  if (flags < 0 || ::fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
+    err = "yousee: cannot enable nonblocking runtime I/O";
+    ::close(fd_);
+    fd_ = -1;
+    return false;
+  }
   running_.store(true);
   rx_thread_ = std::thread([this] { rx_loop(); });
   return true;
@@ -248,9 +266,21 @@ bool YouseeTransport::send(uint32_t ext_id, const uint8_t data[8],
   std::vector<uint8_t> buf;
   YouseeCodec::encode(ext_id, data, 8, buf);
   size_t off = 0;
+  const auto deadline = ota::now_monotonic_ns() + 2'000'000;
   while (off < buf.size()) {
+    if (ota::now_monotonic_ns() >= deadline) {
+      if (err) *err = "yousee: TX deadline exceeded";
+      std::lock_guard<std::mutex> sl(stats_mtx_);
+      ++stats_.tx_failed;
+      return false;
+    }
     const ssize_t w = ::write(fd_, buf.data() + off, buf.size() - off);
     if (w < 0 && (errno == EINTR)) continue;
+    if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      pollfd out{fd_, POLLOUT, 0};
+      ::poll(&out, 1, 1);
+      continue;
+    }
     if (w <= 0) {
       if (err) *err = std::string("yousee: write: ") + std::strerror(errno);
       std::lock_guard<std::mutex> sl(stats_mtx_);
@@ -267,7 +297,7 @@ bool YouseeTransport::send(uint32_t ext_id, const uint8_t data[8],
 BusStats YouseeTransport::stats() const {
   std::lock_guard<std::mutex> lk(stats_mtx_);
   BusStats s = stats_;
-  s.rx_error_frames += codec_.resyncs();  // RX-thread value; benign race
+  s.rx_error_frames += codec_.resyncs();
   return s;
 }
 
@@ -288,6 +318,13 @@ void YouseeTransport::on_frame(const RawFrame& f) {
 void YouseeTransport::rx_loop() {
   uint8_t buf[512];
   while (running_.load()) {
+    pollfd input{fd_, POLLIN, 0};
+    const int ready = ::poll(&input, 1, 100);
+    if (ready == 0 || (ready < 0 && errno == EINTR)) continue;
+    if (ready < 0 || (input.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+      running_.store(false);
+      break;
+    }
     const ssize_t n = ::read(fd_, buf, sizeof(buf));
     if (n > 0) {
       codec_.feed(buf, static_cast<size_t>(n), ota::now_monotonic_ns());

@@ -48,6 +48,7 @@ bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
     std::string e;
     if (!backend_->enter_position_mode(a, limit_spd, e)) {
       err = std::string(axis_name(a)) + ": " + e;
+      deenergize_all();
       return false;
     }
   }
@@ -61,6 +62,7 @@ bool ControlLoop::enter_speed_mode_all(
     std::string e;
     if (!backend_->enter_speed_mode(a, limit_cur_a[i], e)) {
       err = std::string(axis_name(a)) + ": " + e;
+      deenergize_all();
       return false;
     }
   }
@@ -80,9 +82,16 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   // constant SpdRef is smooth. The per-axis homing current (pitch 3 A / yaw
   // 1 A) is carried by the HomingController and applied on its first cycle
   // (set_current_limit); here we enter speed mode with a hold default so the
-  // non-active axis has a sane current until the active axis is switched.
+  // non-active axis retains its own configured initial current limit.
   double limit_cur[kAxisCount];
-  for (int i = 0; i < kAxisCount; ++i) limit_cur[i] = 5.0;
+  for (int i = 0; i < kAxisCount; ++i) {
+    limit_cur[i] = homing_->initial_current_limit(static_cast<AxisId>(i));
+    if (!std::isfinite(limit_cur[i]) || limit_cur[i] <= 0.0) {
+      err = "homing requires a positive initial current limit for each axis";
+      deenergize_all();
+      return false;
+    }
+  }
   std::string e;
   if (!enter_speed_mode_all(limit_cur, e)) {
     err = e;
@@ -312,6 +321,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       if (has_pending_set_) {
         set = pending_set_;
         has_pending_set_ = false;
+        // A v3 publisher may also emit a legacy copy. Discard it atomically;
+        // leaving it pending applies a second measurement on the next cycle.
+        has_pending_measurement_ = false;
         have_set = true;
       } else if (has_pending_measurement_) {
         m = pending_measurement_;
@@ -344,7 +356,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       selected_track_id_ =
           (tracking_ && acting != nullptr) ? acting->uuid.lo : 0;
     } else if (have && tracking_) {
-      tracking_->set_measurement(m);
+      if (tracking_->set_measurement(m))
+        last_measurement_ns_ = static_cast<TimeNs>(m.sensor_timestamp_ns);
       selected_track_id_ = m.has_track_id ? m.visual_track_id : 0;
     } else if (!tracking_) {
       selected_track_id_ = 0;
@@ -524,7 +537,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
       at_input_.measurement_age_ms =
           last_measurement_ns_ > 0 ? (now_ns - last_measurement_ns_) / 1000000 : -1;
-      at_input_.estimator_ready = tracking_ && tracking_->estimator_initialized();
+      at_input_.measurement_timestamp_ns = last_measurement_ns_;
+      at_input_.estimator_ready = tracking_ && tracking_->prediction_valid();
       // §22 via §67: the converter reports what it could not satisfy and this decides
       // what to do about it. One cycle of lag — the refused request was built from the
       // previous cycle's view. Removing the lag would mean the intent builder consulting
@@ -757,7 +771,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
       } else if (ds.enter_pos_mode) {
         std::string e;
-        if (!backend_->enter_position_mode(a, ds.speed_rad_s, e)) {
+        rearmed = backend_->enter_position_mode(a, ds.speed_rad_s, e);
+        if (!rearmed) {
           fault("homing backoff position mode failed: " + e);
         }
       }
@@ -887,9 +902,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // pose is the place it stopped, latched on the stopping cycle; everywhere else it is
       // the ready pose, exactly as v1 had it.
       //
-      // Everything below is unchanged on purpose, including the arrived case's lim = 0:
-      // on this station that is the difference between a parked arm and one whose position
-      // loop fights static friction forever (§33.2's lesson, from metal).
+      // Keep the latched destination through encoder noise inside the arrival tolerance.
+      // The arrival speed cap remains the existing configured behavior until separate
+      // yaw/pitch quiet-hold profiles have been measured on the installed payload.
       const double hold_pose[2] = {
           mode_hold_in_place_ ? mode_hold_pitch_rad_ : ready_raw_[0],
           mode_hold_in_place_ ? mode_hold_yaw_rad_ : ready_raw_[1]};
@@ -904,12 +919,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           at_ready_ = false;
           continue;
         }
+        q_ref[i] = hold_pose[i];
         if (std::fabs(sp[i].q_rad - hold_pose[i]) > kReadyPosTolRad) {
-          q_ref[i] = hold_pose[i];
           lim[i] = hold_speed_effective();
           at_ready_ = false;
         } else {
-          q_ref[i] = sp[i].q_rad;
           lim[i] = 0.0;
         }
       }
@@ -1319,7 +1333,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                                 : -1;
     {
       const tracks::TrackSet& shown = selection_.last_set();
-      const tracks::Track* chosen = selection_.selected_track();
+      snap.perception_native = shown.observation.native;
+      if (shown.observation.native) {
+        char session_text[telemetry::kUuidTextLen] = {};
+        telemetry::format_uuid_text(session_text, shown.observation.session.hi,
+                                   shown.observation.session.lo);
+        snap.perception_session_uuid = session_text;
+        snap.perception_track_set_sequence = shown.observation.track_set_sequence;
+        snap.selection_generation = shown.observation.generation;
+      }
+      const auto& selected = selection_.selection();
+      const bool stale_list = !selection_.list_too_stale(now_ns).empty();
       for (int i = 0; i < shown.count && snap.track_count < telemetry::TelemetrySnapshot::kMaxTrackList;
            ++i) {
         const tracks::Track& t = shown.tracks[i];
@@ -1342,7 +1366,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // right where they live, and a page that compares one against the other needs
         // the conversion said out loud rather than a mix of cases to debug.
         std::snprintf(out.state, sizeof out.state, "%s",
-                      tracks::track_state_name(t.state));
+                      stale_list ? "STALE" : tracks::track_state_name(t.state));
         for (char* c = out.state; *c; ++c)
           if (*c >= 'a' && *c <= 'z') *c = static_cast<char>(*c - 32);
         out.confidence = t.detector_confidence;
@@ -1352,8 +1376,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         out.bbox[3] = t.bbox.y_max;
         out.anchor_x = t.anchor_x;
         out.anchor_y = t.anchor_y;
-        out.selectable = t.state == tracks::TrackState::Confirmed;
-        out.selected = chosen != nullptr && chosen->uuid.lo == t.uuid.lo;
+        out.selectable = !stale_list && t.state == tracks::TrackState::Confirmed;
+        out.selected = selected.has_selection && selected.selected == t.uuid;
       }
     }
     snap.selected_track_id = selected_track_id_;
@@ -1361,10 +1385,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // §50/§78: the identity, not the label. `selected_track()` is the same pointer the
       // selection manager acts on, so what the page prints and what the controller followed are
       // the same track by construction rather than by two lookups agreeing by luck.
-      const tracks::Track* who = selection_.selected_track();
-      snap.selected_uuid_valid = who != nullptr && who->uuid.valid();
+      const auto& selected = selection_.selection();
+      snap.selected_uuid_valid = selected.has_selection && selected.selected.valid();
       if (snap.selected_uuid_valid)
-        telemetry::format_uuid_text(snap.selected_uuid_text, who->uuid.hi, who->uuid.lo);
+        telemetry::format_uuid_text(snap.selected_uuid_text, selected.selected.hi, selected.selected.lo);
     }
     {
       const auto& sel = selection_.selection();
@@ -1679,10 +1703,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // construction, and the difference between them IS the prediction being applied.
       tracking_->predicted_los_at_actuation(snap.predicted_target_az_world_rad,
                                            snap.predicted_target_el_world_rad);
-      snap.predicted_target_los_valid = tracking_->estimator_initialized();
+      snap.predicted_target_los_valid = tracking_->prediction_valid();
       snap.prediction_horizon_ms = tracking_->prediction_horizon_ns() / 1000000;
       snap.target_az_rate_world_rad_s = tracking_->target_az_rate_rad_s();
       snap.target_el_rate_world_rad_s = tracking_->target_el_rate_rad_s();
+      const auto& ed = tracking_->estimator_diagnostics();
+      snap.estimator_innovation_az_rad = ed.innovation_az;
+      snap.estimator_innovation_el_rad = ed.innovation_el;
+      snap.estimator_mahalanobis = ed.mahalanobis;
+      snap.estimator_process_noise_scale = ed.process_noise_scale;
+      snap.estimator_measurement_accepted = ed.last_accepted;
+      snap.estimator_rejected = ed.rejected;
+      snap.estimator_variance_az_rad2 = tracking_->target_position_variance(0);
+      snap.estimator_variance_el_rad2 = tracking_->target_position_variance(1);
       snap.target_aim_x_norm = as.u_norm;
       snap.target_aim_y_norm = as.v_norm;
       snap.target_aim_valid = as.valid;
@@ -2469,6 +2502,27 @@ void ControlLoop::feed_track_set(const tracks::TrackSet& set, TimeNs receive_ns)
 
 const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
                                                   TimeNs now) {
+  const auto& previous = selection_.last_set();
+  const auto& obs = set.observation;
+  if (previous.observation.native && !obs.native) return nullptr;
+  if (obs.native) {
+    // The native anchor is in stream pixels. A different calibrated raster needs
+    // an explicit intrinsics transform; never silently interpret it with this K.
+    if (set.width != static_cast<uint32_t>(tracking_cfg_.intrinsics.width) ||
+        set.height != static_cast<uint32_t>(tracking_cfg_.intrinsics.height)) return nullptr;
+    if (set.sensor_timestamp_ns > static_cast<int64_t>(now) ||
+        set.sensor_timestamp_ns <= previous.sensor_timestamp_ns) return nullptr;
+    if (previous.observation.native && obs.session == previous.observation.session &&
+        (obs.track_set_sequence <= previous.observation.track_set_sequence ||
+         obs.generation < previous.observation.generation)) return nullptr;
+    if (!previous.observation.native || !(obs.session == previous.observation.session) ||
+        obs.generation != previous.observation.generation) {
+      if (tracking_) tracking_->reset();
+      autotrack_.reset();
+      at_input_ = {};
+      at_was_visible_ = false;
+    }
+  }
   last_set_receive_ns_ = now;
   // §17's chain, entered from the v3 door: the set is observed, a track is chosen, and
   // the result is handed to the v1 estimator as a pixel measurement. Everything from
@@ -2494,7 +2548,7 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
   // would be a wider target appetite than v1 ever had.
   const tracks::Track* pick = selection_.selected_track();
   const bool from_selection = pick != nullptr;
-  if (!from_selection && !selection_.has_selection()) {
+  if (!obs.native && !from_selection && !selection_.has_selection()) {
     constexpr int32_t kPreferredClassId = 1;  // v1 preferred_class_id: 'person'
     constexpr float kMinConfidence = 0.5f;    // v1 confidence_threshold
     double best_area = -1.0;
@@ -2521,6 +2575,11 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
   vision::TargetMeasurement m;  // invalid == "no target this frame" (§6.2)
   m.frame_sequence = set.frame_sequence;
   m.sensor_timestamp_ns = set.sensor_timestamp_ns;
+  m.authoritative_anchor = obs.native;
+  if (obs.native) {
+    m.association_quality = obs.association_quality;
+    m.identity_confidence = obs.identity_confidence;
+  }
   if (pick != nullptr) {
     if (set.width == 0 || set.height == 0) {
       // The §9 anchor is normalized (§60), so turning it into a pixel needs the
@@ -2555,6 +2614,7 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
     const auto& sel = selection_.selection();
     const bool visible = sel.visibility_state == tracks::Visibility::Visible;
     at_input_.just_reacquired =
+        obs.native ? obs.just_reacquired :
         visible && !at_was_visible_ && sel.reacquisition_score > 0.0f;
     at_was_visible_ = visible;
     at_input_.has_selection = sel.has_selection;
@@ -2577,7 +2637,6 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
       at_input_.missing_frames = 0;
     }
   }
-  if (m.valid) last_measurement_ns_ = now;
 
   if (pick != nullptr && from_selection) {
     static tracks::TrackUuid logged{};
@@ -2597,7 +2656,8 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
   //
   // Nothing is applied while tracking is off, matching the rule the v1 path has always
   // enforced: a stale frame must not be waiting to fire the instant tracking starts.
-  if (tracking_ && m.valid) tracking_->set_measurement(m);
+  if (tracking_ && m.valid && tracking_->set_measurement(m))
+    last_measurement_ns_ = static_cast<TimeNs>(m.sensor_timestamp_ns);
   return pick;
 }
 
@@ -2953,6 +3013,10 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "select_target" || name == "clear_target") {
+    if (selection_.native()) {
+      ack_command(name, false, "selection is owned by perception; use the UUID selection API");
+      return;
+    }
     // §14. Validation is controld's, and this is the thread that can do it honestly:
     // the answer is computed against the TrackSet actually in hand, not against what
     // the web thread happened to see a moment ago. Reasons are the operator's — they

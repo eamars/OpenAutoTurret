@@ -438,6 +438,45 @@ class TestImx500Adapter(unittest.TestCase):
         self.assertEqual(adapter.camera_num, 0)
         self.assertEqual(adapter.warnings, [])
 
+    def test_adapter_reuses_the_camera_owners_network_device(self):
+        device = FakeDevice()
+        adapter = self._adapter()
+        def cannot_reopen(path):
+            self.fail("the camera owner's network must not be opened twice")
+        adapter.factory = cannot_reopen
+        adapter.open(device=device)
+        self.assertIs(adapter.device, device)
+        self.assertTrue(adapter.opened)
+
+    def test_live_coordinates_use_capture_crop_without_a_second_letterbox(self):
+        device = FakeDevice()
+        metadata = {'ScalerCrop': (0, 380, 4056, 2280)}
+        camera = object()
+        calls = []
+        def convert(box, capture, owner):
+            calls.append((capture, owner))
+            return (191, 108, 1343, 719)
+        device.convert_inference_coords = convert
+        adapter = self._adapter(device)
+        adapter.open(device=device, camera=camera)
+        output = adapter.infer(None, metadata, frame_sequence=1,
+                               sensor_timestamp_ns=1, publish_timestamp_ns=2)
+        self.assertTrue(calls)
+        self.assertTrue(all(capture is metadata and owner is camera for capture, owner in calls))
+        self.assertTrue(output.detections)
+        self.assertAlmostEqual(output.detections[0].bbox.y_min, .1)
+        self.assertAlmostEqual(output.detections[0].bbox.y_max, 827/1080)
+
+    def test_absent_nn_metadata_is_distinct_from_a_broken_model(self):
+        from perception.errors import NoInferenceForFrame
+        device = FakeDevice()
+        device.get_outputs = lambda metadata: None
+        adapter = self._adapter(device)
+        adapter.open()
+        with self.assertRaises(NoInferenceForFrame):
+            adapter.infer(None, {}, frame_sequence=1, sensor_timestamp_ns=1, publish_timestamp_ns=2)
+        self.assertEqual(adapter.failures, 0)
+
     def test_a_missing_model_path_stops_startup(self):
         adapter = Imx500YoloAdapter(manifest(), imx500_factory=lambda path: FakeDevice())
         with self.assertRaises(ModelRejected) as caught:

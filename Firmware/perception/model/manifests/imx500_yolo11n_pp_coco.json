@@ -1,17 +1,8 @@
 {
   "_comment": [
-    "\u00a79.3 model manifest. JSON, not YAML, on purpose: the acceptance tests (\u00a755.18) load",
-    "the shipped artefacts on an interpreter that has no PyYAML, and a manifest that only",
-    "the station can read is not a check. load_mapping_document() still accepts .yaml.",
-    "",
-    "This is the Vision 1.0 production baseline (\u00a76): YOLO11n with on-sensor post-processing.",
-    "It is a DECLARATION, and \u00a79.3's whole rule is that the declaration is checked against the",
-    "device: probe_model() + ModelManifest.require_agreement() at open(), before the first",
-    "inference. Values here are what the export is expected to be, not what was measured here.",
-    "",
-    "NOT INSTALLED on this station (rpi-turret, imx500-models 1:1.0.0-1 ships 23 .rpk files,",
-    "none of them yolo11n). Install it, or run the offline profile. The adapter refuses to open",
-    "a missing model path rather than substituting something else - \u00a79.2."
+    "Official YOLO11n model with a hash-pinned external contract; this RPK has no network_intrinsics.",
+    "Measured with Raspberry Pi reference parsing on 2026-09-06: four output tensors (300,4), (300,), (300,), (1,); boxes in 640x640 INPUT PIXELS, order xyxy.",
+    "Reference run at camera 16 fps produced 241 tensor-bearing frames / 482 camera frames. Inference rate is still under commissioning."
   ],
   "schema_version": 1,
   "model_id": "imx500-yolo11n-pp-coco",
@@ -19,36 +10,35 @@
   "input_width": 640,
   "input_height": 640,
   "bbox_order": "xy",
-  "bbox_normalized": true,
+  "bbox_normalized": false,
   "postprocess": "on_sensor",
   "inference_rate_hz": 16,
   "labels": "coco",
   "permitted_classes": [
     "person"
   ],
-  "preserve_aspect_ratio": true,
+  "preserve_aspect_ratio": false,
   "row_layout": {
     "score_index": 0,
     "class_index": 1,
     "box_index": 2
   },
-  "path": "/usr/share/imx500-models/imx500_network_yolo11n_pp.rpk",
-  "sha256": "COMMISSION",
-  "license": "COMMISSION",
+  "path": "../run/models/imx500_network_yolo11n_pp.rpk",
+  "sha256": "c8e53dd9208debff3cd72044600095624952d6fb4e67910e2e8098251e0307fa",
+  "license": "AGPL-3.0",
   "notes": [
-    "inference_rate_hz = 16 is \u00a76's expected rate; it sizes \u00a740's per-stage budgets and",
-    "\u00a719's frame-interval assumptions. The .rpk reports its own rate, and a mismatch beyond",
-    "\u00b135% is reported as a warning at open() - not fatal, because the declared figure is a",
-    "nominal capability, but the budgets were derived from it and should be re-derived.",
-    "sha256: record with perception.model.environment.sha256_file(path) at commissioning.",
-    "license: unknown to this checkout. Do not ship 'Apache-2.0' because a sibling model",
-    "carried that; verify the artefact's own licence and fill this in.",
-    "bbox_normalized: true means the on-sensor post-processor emits fractions of the network",
-    "input. Read those four numbers as pixels instead and every box is wrong by 640x - which",
-    "is why the flag is declared, checked, and re-checked at open() (\u00a714).",
-    "labels are declared as the 80-entry contiguous COCO list only because the artefact is",
-    "not installed to inspect. The installed imx500-models detectors emit a 90-entry list",
-    "with '-' placeholders (coco_rpk); when this .rpk arrives, read its embedded metadata",
-    "(or run --probe-model --emit-manifest) and correct this file from the answer."
-  ]
+    "Artifact: raspberrypi/imx500-models commit ddfe4c7ec96c0289e5f2d5996894311a218b2e1c. Download under project run/models; do not substitute a different hash.",
+    "Only person class 0 has been exercised. Non-person label mapping and labeled-scene quality acceptance remain unverified.",
+    "bbox_normalized=false is this repository contract: boxes arrive as pixels. Upstream --bbox-normalization means divide those pixels by input height.",
+    "This is a supported comparison profile, not a commissioned production model."
+  ],
+  "output_tensors": {
+    "format": "imx500_pp_split",
+    "boxes": 0,
+    "max_rows": 300,
+    "classes": 2,
+    "count": 3,
+    "scores": 1
+  },
+  "external_contract_source": "https://github.com/raspberrypi/picamera2-examples/blob/28c016d1ddabbacc6098cbaa93ec4cfdfb1532f8/examples/imx500/imx500_object_detection_demo.py"
 }

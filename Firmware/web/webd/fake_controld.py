@@ -154,8 +154,8 @@ class FakeControld:
 
         while not self._stop_evt.is_set():
             # Read commands (non-blocking-ish via timeout).
-            cfd.settimeout(0.05)
             try:
+                cfd.settimeout(0.05)
                 raw = cfd.recv(65536)
             except socket.timeout:
                 raw = b""

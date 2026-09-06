@@ -462,6 +462,19 @@ class FakeCamera:
 
 
 class TestCameraOwner(unittest.TestCase):
+    def test_receive_timestamp_is_after_the_blocking_capture_and_first_frame_is_not_a_stall(self):
+        clock = FakeClock(start=at(0), step_ns=0)
+        camera = FakeCamera([FakeRequest(b"pixels", {SENSOR_TIMESTAMP_KEY: at(0)})])
+        capture = camera.capture_request
+        def delayed_capture():
+            clock.now += 3_000_000_000
+            return capture()
+        camera.capture_request = delayed_capture
+        owner = CameraOwner(camera, stream_size=(1920, 1080), clock=clock)
+        frame = owner.next_frame()
+        self.assertEqual(frame.metadata_receive_ns, at(0) + 3_000_000_000)
+        self.assertEqual(owner.stats.stalled, 0)
+
     def owner(self, requests, **kwargs):
         kwargs.setdefault("stream_size", (1920, 1080))
         kwargs.setdefault("clock", FakeClock(start=at(0), step_ns=ms(0.06)))

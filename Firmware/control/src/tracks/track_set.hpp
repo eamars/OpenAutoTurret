@@ -108,6 +108,14 @@ struct Track {
 // mandatory: without it, "how old is this observation?" becomes a guess, and §61
 // exists precisely so that question has a measured answer.
 struct TrackSet {
+  struct Observation {
+    bool native = false;
+    TrackUuid session{}, selected{};
+    uint64_t generation = 0, track_set_sequence = 0;
+    uint8_t state = 0; // NO_TARGET, VISIBLE, OCCLUDED, LOST, AMBIGUOUS, STALE
+    bool valid = false, just_reacquired = false;
+    float association_quality = 0, identity_confidence = 0, ambiguity = 0;
+  } observation;
   uint64_t frame_sequence = 0;
   int64_t sensor_timestamp_ns = 0;
   int64_t publish_timestamp_ns = 0;  // §61: when visiond let go of it

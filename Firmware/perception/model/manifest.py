@@ -151,6 +151,7 @@ class ModelManifest:
     license: str = ""
     notes: str = ""
     source_path: str = ""
+    external_contract_source: str = ""
 
     # -- loading ------------------------------------------------------------
     @classmethod
@@ -184,7 +185,8 @@ class ModelManifest:
             sha256=str(raw.get("sha256", "")),
             license=str(raw.get("license", "")),
             notes=_notes(raw.get("notes", "")),
-            source_path=source_path)
+            source_path=source_path,
+            external_contract_source=str(raw.get('external_contract_source', '')))
 
     @classmethod
     def from_file(cls, path: str) -> "ModelManifest":
@@ -434,6 +436,7 @@ class ModelManifest:
             "path": self.path,
             "sha256": self.sha256,
             "license": self.license,
+            "external_contract_source": self.external_contract_source,
             "notes": self.notes,
         }
 
@@ -447,3 +450,24 @@ class ModelManifest:
         a manifest stops being a check and becomes a transcription of whatever was loaded.
         """
         return replace(self, **overrides)
+
+    def verified_external_intrinsics(self):
+        """An explicitly recorded reference-example contract for metadata-free RPKs.
+
+        The downloaded bytes must match the reviewed manifest; this is never a
+        fallback for arbitrary models or for contradictory embedded metadata.
+        """
+        import hashlib
+        import re
+        from types import SimpleNamespace
+        from ..errors import ModelRejected
+        if not self.external_contract_source or not re.fullmatch('[0-9a-f]{64}', self.sha256):
+            raise ModelRejected('missing verified external contract for metadata-free RPK')
+        with open(self.path, 'rb') as source:
+            actual = hashlib.file_digest(source, 'sha256').hexdigest()
+        if actual != self.sha256:
+            raise ModelRejected('external model contract SHA256 mismatch')
+        self.validate()
+        return SimpleNamespace(task='object detection', inference_rate=self.inference_rate_hz,
+            labels=list(self.label_map().names), bbox_order=self.bbox_order,
+            preserve_aspect_ratio=self.preserve_aspect_ratio)

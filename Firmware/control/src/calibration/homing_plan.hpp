@@ -125,6 +125,11 @@ class HomingPlan {
   size_t action_index() const { return static_cast<size_t>(idx_); }
   size_t action_count() const { return actions_.size(); }
 
+  double initial_current_limit(AxisId a) const {
+    const double value = cfg_.limit_cur_initial_a[ix(a)];
+    return value > 0.0 ? value : cfg_.homing.limit_cur_initial_a;
+  }
+
   // Per-axis results (valid once that axis is homed).
   bool axis_homed(AxisId a) const { return states_[ix(a)].homed; }
   const AxisLogicalModel& model(AxisId a) const { return states_[ix(a)].model; }

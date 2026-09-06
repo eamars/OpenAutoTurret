@@ -107,7 +107,7 @@ class ModelAdapter:
 
     def _rows_to_set(self, rows: Sequence[Sequence[float]], *, frame_sequence: int,
                      sensor_timestamp_ns: int, publish_timestamp_ns: int,
-                     anchor_cfg: Any = None) -> DetectionSet:
+                     anchor_cfg: Any = None, geometry: Any = None) -> DetectionSet:
         """The single normalization path (§14, §9.2's oracle compares exactly this output).
 
         It also owns the one timing the pipeline cannot measure itself: §40 asks for
@@ -118,7 +118,7 @@ class ModelAdapter:
         score_index, class_index, box_index = self.manifest.score_indices()
         started = time.monotonic_ns()
         out = normalize_rows(
-            rows, geometry=self.geometry(), model_id=self.manifest.model_id,
+            rows, geometry=geometry or self.geometry(), model_id=self.manifest.model_id,
             model_generation=self.generation, frame_sequence=int(frame_sequence),
             sensor_timestamp_ns=int(sensor_timestamp_ns),
             publish_timestamp_ns=int(publish_timestamp_ns),

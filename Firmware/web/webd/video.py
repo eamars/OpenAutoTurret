@@ -370,8 +370,12 @@ class VideoSource:
                 self._open_error = (
                     f"vision frame tap is stale: {path} last written {age:.1f} s ago; visiond has "
                     "stopped or was started without OTA_VISION_FRAME_TAP")
-                return
+                if not self._first_frame.is_set():
+                    return  # startup still refuses a stale source
+                self._stop_evt.wait(0.05)
+                continue  # a later fresh frame can recover a running stream
             if st.st_mtime != last_mtime:
+                self._open_error = ""
                 last_mtime = st.st_mtime
                 try:
                     with open(path, "rb") as f:

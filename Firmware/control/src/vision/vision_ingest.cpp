@@ -1,5 +1,6 @@
 // OpenAutoTurret — vision ingest implementation (§6.1). See vision_ingest.hpp.
 #include "vision/vision_ingest.hpp"
+#include "tracks/perception_wire.hpp"
 
 #include "common/time.hpp"
 
@@ -113,6 +114,8 @@ void VisionIngest::client_loop(int cfd) {
   static_assert(kMaxDatagram > tracks::kTrackSetWireSize,
                 "receive buffer must exceed the largest valid message");
   uint8_t buf[kMaxDatagram];
+  bool track_set_publisher = false;
+  bool native_publisher = false;
   while (running_.load()) {
     pollfd pfd{cfd, POLLIN, 0};
     int pr = ::poll(&pfd, 1, 100);
@@ -132,19 +135,29 @@ void VisionIngest::client_loop(int cfd) {
       continue;  // truncated: larger than the buffer, see above
     }
     const TimeNs arrival_ns = now_monotonic_ns();
-    if (static_cast<std::size_t>(n) == tracks::kTrackSetWireSize) {
+    if (static_cast<std::size_t>(n) == tracks::kPerceptionWireSize ||
+        (!native_publisher && static_cast<std::size_t>(n) == tracks::kTrackSetWireSize)) {
       tracks::TrackSet set;
-      if (!tracks::decode_track_set(buf, static_cast<std::size_t>(n), set)) {
+      if (!(tracks::decode_perception_frame(buf, static_cast<std::size_t>(n), set) ||
+            tracks::decode_track_set(buf, static_cast<std::size_t>(n), set))) {
         if (link_) link_->note_dropped();
         continue;
       }
       if (link_)
         link_->note_track_set(set.sensor_timestamp_ns, set.publish_timestamp_ns,
                              set.frame_sequence, arrival_ns);
+      track_set_publisher = true;
+      native_publisher = native_publisher || set.observation.native;
       if (track_set_handler_) track_set_handler_(set, arrival_ns);
       continue;
     }
     TargetMeasurement m;
+    if (track_set_publisher) {
+      // A stream has one measurement authority. Legacy copies can arrive a
+      // control cycle later than their TrackSet and name a different subject.
+      if (link_) link_->note_dropped();
+      continue;
+    }
     if (!TargetMeasurement::decode(buf, static_cast<std::size_t>(n), m)) {
       // v1's 58-byte message, and anything else: counted, never silently parsed.
       if (link_) link_->note_dropped();

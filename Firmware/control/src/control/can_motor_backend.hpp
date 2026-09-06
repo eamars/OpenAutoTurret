@@ -63,11 +63,22 @@ class CanMotorBackend : public MotorBackend {
   std::array<bool, kAxisCount> in_speed_mode_{};
   // The last current limit applied per axis (A); set_current_limit writes
   // LimitCur only on change (avoids a redundant CAN TX every cycle).
-  std::array<double, kAxisCount> last_limit_cur_a_{};
+  // Unknown after construction/disable; a keepalive must never invent a limit.
+  std::array<double, kAxisCount> last_limit_cur_a_{{-1.0, -1.0}};
   // The last SpdRef written per axis (rad/s); command_velocity writes only on
   // change (re-arming a speed reference every cycle would needlessly re-trigger
   // the drive, mirroring the position-mode write-on-change policy).
   std::array<double, kAxisCount> last_spd_ref_{{-1e30, -1e30}};
+  std::array<double, kAxisCount> last_limit_spd_{{-1e30, -1e30}};
+  std::array<double, kAxisCount> last_loc_ref_{{-1e30, -1e30}};
+  std::array<TimeNs, kAxisCount> last_ping_ns_{};
+  void invalidate_commands(AxisId axis) {
+    const auto a = static_cast<size_t>(axis);
+    last_spd_ref_[a] = last_limit_spd_[a] = last_loc_ref_[a] = -1e30;
+    last_limit_cur_a_[a] = -1.0;
+    last_ping_ns_[a] = 0;
+    in_position_mode_[a] = in_speed_mode_[a] = false;
+  }
 };
 
 }  // namespace ota

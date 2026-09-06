@@ -4,14 +4,10 @@ controld binds ``/tmp/ota_vision.sock`` (SOCK_SEQPACKET) and reads fixed-size da
 accepts two, distinguished by length: the 58-byte v1 :class:`TargetMeasurement` (a single target
 visiond chose) or the 2562-byte v3 ``TrackSet`` (a frame's tracks).
 
-Which one drives the motor? ``AutoTrackController`` (auto_track_controller.hpp) holds the turret
-in ``WAIT_TARGET``/``LOST_HOLD`` unless a target is **selected**, and that selection is controld's
-own ``SelectionManager`` state, fed by ``select_target <display_index>`` against the **TrackSet**.
-The v1 measurement only seeds the estimator (``tracking_->set_measurement``); it never sets
-``has_selection``, so a v1-only publisher cannot make the turret leave LOST_HOLD. That is the
-concrete reason the camera→motor loop never worked: nobody published a TrackSet carrying a
-selected track and issued the matching ``select_target``. So the autonomous path is: publish a v3
-TrackSet (tracks with display indices), and select the confirmed person with ``select_target``.
+The live daemon defaults to :mod:`native_wire`, which wraps the candidate list and
+authoritative selected observation in one datagram. These encoders remain for
+explicit legacy compatibility and boundary probes. A native connection cannot
+downgrade to either legacy authority.
 
 The format must stay in lockstep with ``control/src/tracking/target_measurement.hpp`` (v1) and
 ``control/src/tracks/track_wire.hpp`` (v3), both of which assert the sizes at compile time. The
@@ -22,6 +18,7 @@ from __future__ import annotations
 
 import socket
 import struct
+import math
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Tuple
 
@@ -85,9 +82,16 @@ class TargetMeasurement:
         """58 bytes in controld's wire layout. Raise on malformed input rather than send it."""
         for name in ("bbox_x_min_norm", "bbox_y_min_norm", "bbox_x_max_norm", "bbox_y_max_norm",
                      "confidence", "anchor_u_px", "anchor_v_px"):
-            value = getattr(self, name)
-            if not (0.0 <= float(value) <= 1.0 or float(value) < 0.0 or float(value) > 1.0):
-                pass                      # coordinates may be any real; checked individually below
+            if not math.isfinite(float(getattr(self, name))):
+                raise ValueError(f"{name} must be finite")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be in [0, 1]")
+        if self.valid:
+            if not (0 <= self.bbox_x_min_norm < self.bbox_x_max_norm <= 1
+                    and 0 <= self.bbox_y_min_norm < self.bbox_y_max_norm <= 1):
+                raise ValueError("valid measurement requires a normalized, nonempty box")
+            if self.sensor_timestamp_ns <= 0 or min(self.anchor_u_px, self.anchor_v_px) < 0:
+                raise ValueError("valid measurement requires capture time and nonnegative pixels")
         track_id = int(self.visual_track_id or 0)
         if track_id < 0 or track_id > 0xFFFFFFFFFFFFFFFF:
             raise ValueError(f"visual_track_id out of range: {track_id}")
@@ -143,24 +147,42 @@ class SocketPublisher:
     def __init__(self, path: str = "/tmp/ota_vision.sock") -> None:
         self.path = path
         self._sock: Optional[socket.socket] = None
+        self.sent = 0
+        self.failures = 0
+        self.last_error = ""
 
     def connect(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        sock.connect(self.path)
+        # Bound a slow/disconnected consumer; it must not stall the camera indefinitely.
+        sock.settimeout(0.05)
+        try:
+            sock.connect(self.path)
+        except OSError:
+            sock.close()
+            raise
         self._sock = sock
 
     def send(self, payload: bytes) -> bool:
         if self._sock is None:
             try:
                 self.connect()
-            except OSError:
+            except OSError as exc:
+                self.failures += 1
+                self.last_error = str(exc)
                 return False
         try:
             self._sock.send(payload)
+            self.sent += 1
+            self.last_error = ""
             return True
-        except OSError:
+        except OSError as exc:
+            self.failures += 1
+            self.last_error = str(exc)
             self.close()
             return False
+
+    def stats(self) -> dict:
+        return {"sent": self.sent, "failures": self.failures, "last_error": self.last_error}
 
     def close(self) -> None:
         if self._sock is not None:
@@ -194,13 +216,11 @@ def measurement_from_selection(selection: Any, *, frame_sequence: int,
     state_name = _field(selection, "target_state_name", "target_state") or ""
     if hasattr(state_name, "name"):                       # a TargetState enum, not a str
         state_name = state_name.name
-    # "No target" and "identity unresolved" stop the turret. But an OCCLUDED selected target is a
-    # *present* target being held (§34 — the selection survives loss, bounded by §31's TTL), so it
-    # stays a valid measurement: the tracker keeps the identity's last-known box, and the
-    # controller should keep coasting toward that rather than being told "no target" and dropping
-    # it. This is exactly the difference a 2:1 on-sensor tensor cadence exposes: publishing
-    # NO_TARGET on every gap frame makes the turret forget the person between measurements.
-    if state_name in ("NO_TARGET", "NONE", "AMBIGUOUS", ""):
+    # Retaining an identity does not create a new camera measurement. In particular, a
+    # missing-tensor frame must not stamp the old box with this frame's capture time.
+    if (not _field(selection, "measurement_valid", default=False)
+            or state_name not in ("CONFIRMED_VISIBLE", "CONFIRMED_TARGET", "OCCLUDED")
+            or bool(_field(selection, "ambiguity", default=0.0))):
         return TargetMeasurement(frame_sequence=int(frame_sequence),
                                  sensor_timestamp_ns=int(sensor_timestamp_ns), valid=False)
 
@@ -233,10 +253,12 @@ def encode_track_set(tracks: Sequence[Any], *, frame_sequence: int, sensor_times
     The wire struct is a FIXED 2562 bytes: a 34-byte header plus 32 ``TrackWire`` slots, never
     fewer. Unused slots are zeroed and ``count`` says how many are real — an oversized *variable*
     datagram is refused by controld and a crowded scene becomes blindness, so the length is sacred.
-    RETIRED tracks are dropped (they no longer exist); past the 32-track cap the rest are dropped.
+    RETIRED tracks are omitted. Exceeding the 32-track capacity is an explicit error.
     """
-    real = [track for track in list(tracks)[:_MAX_TRACKS]
+    real = [track for track in tracks
             if _wire_state(getattr(track, "state", None)) != _WIRE_STATE_RETIRED]
+    if len(real) > _MAX_TRACKS:
+        raise ValueError("TrackSet exceeds the controller's 32-track capacity")
     head = struct.pack(_TRACKSET_HEADER,
                        int(frame_sequence) & 0xFFFFFFFFFFFFFFFF,
                        int(sensor_timestamp_ns) & 0xFFFFFFFFFFFFFFFF,
@@ -253,8 +275,12 @@ def _pack_track(track: Any) -> bytes:
     uuid_text = str(getattr(track, "track_uuid", "") or "").replace("-", "")
     hi = int(uuid_text[:16], 16) if len(uuid_text) >= 16 else 0
     lo = int(uuid_text[16:32], 16) if len(uuid_text) >= 32 else 0
-    state_name = getattr(track.state, "name", str(getattr(track, "state", "")))
     wire_state = _wire_state(track.state)
+    # v3 has no measurement-valid or ambiguity bits. Withhold visibility so the
+    # legacy controller cannot consume an ambiguous or retained box as fresh data.
+    if wire_state == 1 and (not getattr(track, "measurement_valid", False)
+                            or getattr(track, "ambiguous", False)):
+        wire_state = 2
     bbox = getattr(track, "bbox", None)
     anchor = getattr(track, "anchor", None)
     # Translate the perception class index to controld's selectable class id (person = 1) so
@@ -263,10 +289,13 @@ def _pack_track(track: Any) -> bytes:
     # rather than silently becoming "person".
     class_id = _WIRE_CLASS_ID.get(str(getattr(track, "class_name", "") or "").lower(),
                                   int(getattr(track, "class_id", 0) or 0))
+    display_index = int(getattr(track, "display_index", 0) or 0)
+    if not 0 <= display_index <= 0xFFFF:
+        raise ValueError("display index exceeds legacy wire capacity; refusing label reuse")
     return struct.pack(
         _TRACK_LAYOUT,
         hi & 0xFFFFFFFFFFFFFFFF, lo & 0xFFFFFFFFFFFFFFFF,
-        int(getattr(track, "display_index", 0) or 0) & 0xFFFF,
+        display_index,
         class_id & 0xFFFF,
         tname, wire_state,
         float(getattr(track, "detector_score", 0.0) or 0.0),
@@ -274,11 +303,12 @@ def _pack_track(track: Any) -> bytes:
         float(getattr(bbox, "x_min", 0.0)), float(getattr(bbox, "y_min", 0.0)),
         float(getattr(bbox, "x_max", 0.0)), float(getattr(bbox, "y_max", 0.0)),
         float(getattr(anchor, "x", 0.5)), float(getattr(anchor, "y", 0.5)),
-        float(getattr(track, "velocity_x_norm_s", 0.0) or 0.0),
-        float(getattr(track, "velocity_y_norm_s", 0.0) or 0.0),
-        int(getattr(track, "age_frames", 0) or 0) & 0xFFFF,
-        int(getattr(track, "visible_frames", 0) or 0) & 0xFFFF,
-        int(getattr(track, "missing_frames", 0) or 0) & 0xFFFF)
+        float(getattr(track, "velocity_x", 0.0) or 0.0),
+        float(getattr(track, "velocity_y", 0.0) or 0.0),
+        min(0xFFFF, int(getattr(track, "observations", 0) or 0)
+            + int(getattr(track, "miss_observations", 0) or 0)),
+        min(0xFFFF, int(getattr(track, "observations", 0) or 0)),
+        min(0xFFFF, int(getattr(track, "miss_observations", 0) or 0)))
 
 
 def _bbox_value(selection: Any) -> Tuple[float, float, float, float]:
@@ -332,7 +362,8 @@ def _track_u64(selection: Any) -> Optional[int]:
     text = str(track_id).replace("-", "").strip()
     if len(text) >= 16:
         try:
-            return int(text[:16], 16) & 0xFFFFFFFFFFFFFFFF
+            # The controller's TrackSet adapter uses uuid.lo for the legacy estimator.
+            return int(text[-16:], 16) & 0xFFFFFFFFFFFFFFFF
         except ValueError:
             pass
     # Not a hex UUID; fold it to a stable u64 so identical UUIDs map to the same id.

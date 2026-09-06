@@ -19,6 +19,10 @@ class PerceptionError(Exception):
     """Base class for every failure raised by this subsystem."""
 
 
+class NoInferenceForFrame(PerceptionError):
+    """A camera frame arrived without new NN metadata; retain capture provenance."""
+
+
 class ValidationError(PerceptionError):
     """A value failed a §14 sanity check (out of range, non-finite, wrong dimensions).
 

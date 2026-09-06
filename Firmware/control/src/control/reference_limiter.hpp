@@ -58,10 +58,10 @@ struct ReferenceLimiter {
 
 // Distance needed to bring the profile to a stop from speed `v_rad_s` while its acceleration is
 // currently `a_rad_s2`, given both ceilings. With bounded jerk this is strictly more than v^2/2a,
-// because the profile first has to spend TIME turning its acceleration around, and it travels while
-// doing so. The closed form is short: ramp a to -a_max over t1 = (a + a_max)/j, then coast down at
-// -a_max. Where the ramp alone would already have stopped it, the ramp expression is used as-is,
-// which overestimates - and overestimating here means braking earlier, which is the safe direction.
+// because the profile first has to spend time turning its acceleration around.
+// Ramp toward -a_max, stopping the integral at the first zero of velocity if it
+// occurs sooner; otherwise finish under constant -a_max. This is distance to
+// zero velocity, not an assertion that acceleration has also reached zero.
 //
 // This function exists because omitting it is not a small error: with the plain v^2/2a rule the
 // profile entered every final approach with the turnaround still to pay, overshot by 0.16 deg, and
@@ -74,7 +74,11 @@ inline double stopping_distance_rad(double v_rad_s, double a_rad_s2, double a_ma
 
   const double sgn = (v_rad_s >= 0.0) ? 1.0 : -1.0;
   const double a_on = std::max(-a_max_rad_s2, std::min(a_max_rad_s2, a_rad_s2 * sgn));  // along motion
-  const double t1 = (a_on + a_max_rad_s2) / j_max_rad_s3;
+  // Integrate only to the first zero of velocity. Continuing to -a_max after
+  // velocity crosses zero subtracts fictitious reverse travel. At the 2 deg/s
+  // trial limit that returned zero distance and delayed braking indefinitely.
+  const double stop_t = (a_on + std::sqrt(a_on*a_on + 2*j_max_rad_s3*av)) / j_max_rad_s3;
+  const double t1 = std::min(stop_t, (a_on + a_max_rad_s2) / j_max_rad_s3);
   const double d1 = av * t1 + 0.5 * a_on * t1 * t1 - j_max_rad_s3 * t1 * t1 * t1 / 6.0;
   const double v1 = av + a_on * t1 - 0.5 * j_max_rad_s3 * t1 * t1;
   if (v1 <= 0.0) return std::max(0.0, d1);

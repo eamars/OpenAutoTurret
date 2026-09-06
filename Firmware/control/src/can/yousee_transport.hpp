@@ -43,12 +43,12 @@ class YouseeCodec {
   static void encode(uint32_t ext_id, const uint8_t* data, uint8_t dlc,
                      std::vector<uint8_t>& out);
 
-  uint64_t resyncs() const { return resyncs_; }
+  uint64_t resyncs() const { return resyncs_.load(); }
 
  private:
   std::vector<uint8_t> buf_;
   FrameOut out_;
-  uint64_t resyncs_{0};
+  std::atomic<uint64_t> resyncs_{0};
 };
 
 class YouseeTransport : public CanTransport {

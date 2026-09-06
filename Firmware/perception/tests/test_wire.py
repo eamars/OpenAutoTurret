@@ -94,17 +94,28 @@ class TestMeasurementFromSelection(unittest.TestCase):
         self.assertAlmostEqual(message.anchor_u_px, (0.1 + 0.4) / 2 * 1280)
         self.assertAlmostEqual(message.anchor_v_px, (0.2 + 0.8) / 2 * 720)
 
-    def test_an_occluded_selected_target_is_still_a_valid_measurement(self):
-        # §34: the selection survives loss; OCCLUDED is a held, present target (the tracker keeps
-        # its last-known box). Publishing NO_TARGET on a skip-frame would make the controller forget
-        # the person between every other measurement.
+    def test_a_retained_identity_does_not_invent_a_measurement(self):
         message = measurement_from_selection(
             {"target_state_name": "OCCLUDED", "measurement_valid": False,
              "bbox_norm": [0.1, 0.2, 0.4, 0.8], "confidence": 0.8},
             frame_sequence=1, sensor_timestamp_ns=2, stream_size=(1280, 720))
-        self.assertTrue(message.valid,
-                        "an OCCLUDED selected target is still a target the controller should hold")
-        self.assertAlmostEqual(message.bbox_x_min_norm, 0.1)
+        self.assertFalse(message.valid)
+
+    def test_validity_and_lifecycle_both_gate_measurements(self):
+        for state, valid in (("CONFIRMED_VISIBLE", False), ("LOST", False),
+                             ("LOST", True), ("AMBIGUOUS", True)):
+            with self.subTest(state=state, valid=valid):
+                message = measurement_from_selection(
+                    {"target_state_name": state, "measurement_valid": valid},
+                    frame_sequence=2, sensor_timestamp_ns=3, stream_size=(1920, 1080))
+                self.assertFalse(TargetMeasurement.decode(message.encode()).valid)
+
+    def test_a_low_score_occlusion_measurement_remains_valid_when_measured(self):
+        message = measurement_from_selection(
+            {"target_state_name": "OCCLUDED", "measurement_valid": True,
+             "bbox_norm": [.1, .2, .4, .8], "confidence": .2},
+            frame_sequence=1, sensor_timestamp_ns=2, stream_size=(1280, 720))
+        self.assertTrue(message.valid)
 
     def test_an_unresolved_identity_stops_the_turret(self):
         message = measurement_from_selection(
@@ -172,10 +183,53 @@ class TestTrackSetWire(unittest.TestCase):
         payload = encode_track_set(tracks, frame_sequence=1, sensor_timestamp_ns=2,
                                    publish_timestamp_ns=3, width=1920, height=1080)
         # TrackWire: uuid_hi(8) uuid_lo(8) display_index(2) class_id(2) name(12) ...
-        class_id = struct.unpack("<H", payload[34 + 16:34 + 18])[0]
+        class_id = struct.unpack("<H", payload[34 + 18:34 + 20])[0]
         self.assertEqual(class_id, 1,
                          "person must be published as controld's selectable class id (1), "
                          "not the raw COCO index (0)")
+
+    def test_motion_and_observation_history_survive_the_boundary(self):
+        track = self._tracks(1)[0]
+        track.observations = 12
+        track.miss_observations = 2
+        track.velocity_x = .08
+        track.velocity_y = -.04
+        payload = encode_track_set([track], frame_sequence=1, sensor_timestamp_ns=2,
+                                   publish_timestamp_ns=3, width=1920, height=1080)
+        from perception.protocol.wire import _TRACK_LAYOUT
+        values = struct.unpack(_TRACK_LAYOUT, payload[34:113])
+        self.assertAlmostEqual(values[-5], .08)
+        self.assertAlmostEqual(values[-4], -.04)
+        self.assertEqual(values[-3:], (14, 12, 2))
+
+    def test_ambiguous_or_unmeasured_tracks_cannot_claim_visible_on_legacy_wire(self):
+        from perception.protocol.wire import _TRACK_LAYOUT
+        for measured, ambiguous in ((False, False), (True, True)):
+            track = self._tracks(1)[0]
+            track.measurement_valid = measured
+            track.ambiguous = ambiguous
+            payload = encode_track_set([track], frame_sequence=1, sensor_timestamp_ns=2,
+                                       publish_timestamp_ns=3, width=1920, height=1080)
+            values = struct.unpack(_TRACK_LAYOUT, payload[34:113])
+            self.assertEqual(values[5], 2, "v3 can only express withheld measurements as occlusion")
+
+    def test_trackset_and_legacy_measurement_use_the_same_identity(self):
+        track = self._tracks(1)[0]
+        track.track_uuid = "01234567-89ab-cdef-fedc-ba9876543210"
+        payload = encode_track_set([track], frame_sequence=1, sensor_timestamp_ns=2,
+                                   publish_timestamp_ns=3, width=1920, height=1080)
+        message = measurement_from_selection(
+            {"track_uuid": track.track_uuid, "target_state_name": "CONFIRMED_VISIBLE",
+             "measurement_valid": True, "bbox_norm": [.1, .2, .4, .8]},
+            frame_sequence=1, sensor_timestamp_ns=2, stream_size=(1920, 1080))
+        self.assertEqual(message.visual_track_id, struct.unpack_from("<Q", payload, 42)[0])
+
+    def test_counter_saturation_does_not_recycle_a_display_label(self):
+        track = self._tracks(1)[0]
+        track.display_index = 65536
+        with self.assertRaises(ValueError):
+            encode_track_set([track], frame_sequence=1, sensor_timestamp_ns=2,
+                             publish_timestamp_ns=3, width=1920, height=1080)
 
     def test_a_person_measurement_is_encoded_with_class_id_1(self):
         message = measurement_from_selection(

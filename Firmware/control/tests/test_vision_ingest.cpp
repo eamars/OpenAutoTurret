@@ -79,6 +79,32 @@ class VisionIngestTest : public ::testing::Test {
   vision::VisionLink link_;
 };
 
+TEST_F(VisionIngestTest, TrackSetPublisherCannotFeedCompetingLegacyMeasurements) {
+  std::atomic<int> sets{0}, measurements{0};
+  vision::VisionIngest ingest(cfg_, &link_, [&](const vision::TargetMeasurement&) {
+    ++measurements;
+  }, [&](const tracks::TrackSet&, TimeNs) { ++sets; });
+  std::string err;
+  ASSERT_TRUE(ingest.start(err)) << err;
+  const int fd = connect_client(cfg_.socket_path);
+  ASSERT_GE(fd, 0);
+  tracks::TrackSet set;
+  set.frame_sequence = 1;
+  set.sensor_timestamp_ns = 1'000'000'000;
+  set.publish_timestamp_ns = 1'010'000'000;
+  set.width = 1920;
+  set.height = 1080;
+  std::array<uint8_t, tracks::kTrackSetWireSize> packet{};
+  ASSERT_EQ(tracks::encode_track_set(set, packet.data(), packet.size()), packet.size());
+  ASSERT_GT(::send(fd, packet.data(), packet.size(), 0), 0);
+  ASSERT_TRUE(wait_for([&] { return sets == 1; }));
+  const auto legacy = make_measurement(1).encode();
+  ASSERT_GT(::send(fd, legacy.data(), legacy.size(), 0), 0);
+  EXPECT_TRUE(wait_for([&] { return link_.stats().dropped == 1; }));
+  EXPECT_EQ(measurements, 0);
+  ::close(fd);
+}
+
 TEST_F(VisionIngestTest, DeliversDecodedMeasurementToHandler) {
   std::atomic<int> received{0};
   vision::TargetMeasurement got{};

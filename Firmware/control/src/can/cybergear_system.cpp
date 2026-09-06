@@ -13,12 +13,15 @@ namespace {
 constexpr uint8_t kDiscoveryResponseTarget = 0xFE;
 }  // namespace
 
-bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err) {
+bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err,
+                           std::unique_ptr<CanTransport> transport) {
   close();
   cfg_ = cfg;
 
   // PHY factory: everything below this point is transport-agnostic.
-  if (cfg_.transport == "yousee") {
+  if (transport) {
+    bus_ = std::move(transport);
+  } else if (cfg_.transport == "yousee") {
     YouseeTransport::Options yo{};
     yo.port = cfg_.iface;
     yo.uart_baud = cfg_.uart_baud;
@@ -79,23 +82,24 @@ void CyberGearSystem::on_frame(const RawFrame& f) {
     }
   }
 
-  // Synchronous setup-path request/response. Single-flight: only one
-  // pending request exists at a time, so matching on comm type (plus the
-  // discovery target byte) is unambiguous.
+  // Delayed or unrelated responses must not verify another motor's write.
   {
     std::lock_guard lk(pend_mtx_);
-    if (!pending_.active) return;
+    if (!pending_.active || pending_.received || cf.dlc != 8) return;
     if (e.comm_type != pending_.comm) return;
-    if (pending_.match_target != 0 && e.target != pending_.match_target) return;
+    if (e.target != pending_.match_target) return;
+    if ((e.data2 & 0xff) != pending_.motor) return;
+    if (pending_.comm == static_cast<uint8_t>(cybergear::CommType::ReadReg) &&
+        (uint16_t(cf.data[0]) | (uint16_t(cf.data[1]) << 8)) != pending_.address) return;
     pending_.frame = cf;
-    pending_.active = false;
+    pending_.received = true;
   }
   pend_cv_.notify_all();
 }
 
-bool CyberGearSystem::wait_response(uint8_t comm_type, uint8_t match_target,
-                                    cybergear::CanFrame& out, int timeout_ms,
-                                    std::string* err) {
+bool CyberGearSystem::transact(const cybergear::CanFrame& request, uint8_t reply_target,
+                               cybergear::CanFrame& out, int timeout_ms,
+                               std::string* err) {
   {
     std::lock_guard lk(pend_mtx_);
     if (pending_.active) {
@@ -103,16 +107,25 @@ bool CyberGearSystem::wait_response(uint8_t comm_type, uint8_t match_target,
       return false;
     }
     pending_.active = true;
-    pending_.motor = 0;  // reserved
-    pending_.comm = comm_type;
-    pending_.match_target = match_target;
+    pending_.received = false;
+    const auto id = cybergear::unpack_ext_id(request.id);
+    pending_.motor = id.target;
+    pending_.comm = id.comm_type;
+    pending_.match_target = reply_target;
+    pending_.address = uint16_t(request.data[0]) | (uint16_t(request.data[1]) << 8);
     pending_.frame = cybergear::CanFrame{};
+  }
+  // Arm before TX: an immediate response can arrive inside send().
+  if (!send(request.id, request.data, err)) {
+    std::lock_guard lk(pend_mtx_);
+    pending_.active = false;
+    return false;
   }
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   std::unique_lock lk(pend_mtx_);
   const bool ok =
-      pend_cv_.wait_until(lk, deadline, [this] { return !pending_.active; });
+      pend_cv_.wait_until(lk, deadline, [this] { return pending_.received; });
   if (!ok) {
     pending_.active = false;
     if (err) *err = "timeout waiting for CAN response";
@@ -127,11 +140,8 @@ bool CyberGearSystem::discover(AxisId axis, uint64_t& unique_id, int timeout_ms,
                                std::string* err) {
   const uint8_t motor = motor_id(axis);
   auto f = cybergear::make_discovery_request(cfg_.host_can_id, motor);
-  if (!send(f.id, f.data, err)) return false;
-
   cybergear::CanFrame resp;
-  if (!wait_response(static_cast<uint8_t>(cybergear::CommType::Discovery),
-                     kDiscoveryResponseTarget, resp, timeout_ms, err)) {
+  if (!transact(f, kDiscoveryResponseTarget, resp, timeout_ms, err)) {
     return false;
   }
   cybergear::DiscoveryResponse dr;
@@ -153,11 +163,8 @@ bool CyberGearSystem::read_register(AxisId axis, cybergear::Reg reg, double& val
                                     int timeout_ms, std::string* err) {
   const uint8_t motor = motor_id(axis);
   auto f = cybergear::make_read_reg(reg, cfg_.host_can_id, motor);
-  if (!send(f.id, f.data, err)) return false;
-
   cybergear::CanFrame resp;
-  if (!wait_response(static_cast<uint8_t>(cybergear::CommType::ReadReg), 0, resp,
-                     timeout_ms, err)) {
+  if (!transact(f, cfg_.host_can_id, resp, timeout_ms, err)) {
     return false;
   }
   cybergear::Reg r = cybergear::Reg::RunMode;
@@ -171,6 +178,17 @@ bool CyberGearSystem::read_register(AxisId axis, cybergear::Reg reg, double& val
     return false;
   }
   value = v;
+  return true;
+}
+
+bool CyberGearSystem::read_parameter_raw(AxisId axis, uint16_t address,
+                                         std::array<uint8_t, 4>& value,
+                                         int timeout_ms, std::string* err) {
+  const auto request = cybergear::make_read_reg(static_cast<cybergear::Reg>(address),
+                                               cfg_.host_can_id, motor_id(axis));
+  cybergear::CanFrame response;
+  if (!transact(request, cfg_.host_can_id, response, timeout_ms, err)) return false;
+  std::memcpy(value.data(), response.data + 4, value.size());
   return true;
 }
 

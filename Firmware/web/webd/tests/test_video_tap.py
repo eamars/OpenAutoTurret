@@ -65,6 +65,14 @@ class TapStaleness(unittest.TestCase):
         while time.time() < deadline and not src._open_error:
             time.sleep(0.05)
         self.assertIn("stale", (src._open_error or "").lower())
+        previous = src.state().frames_published
+        os.utime(self.path, None)
+        deadline = time.monotonic()+2
+        while time.monotonic() < deadline and src.state().frames_published == previous:
+            time.sleep(.01)
+        self.assertGreater(src.state().frames_published, previous)
+        self.assertFalse(src._open_error)
+        src.stop()
 
 
 if __name__ == "__main__":

@@ -64,7 +64,7 @@ def filter_measurement_size(detection_set: Any, min_height: float, max_area: flo
     return out
 from .detection.dedup import DetectionDeduplicator
 from .detection.types import DetectionSet
-from .errors import PerceptionError
+from .errors import NoInferenceForFrame, PerceptionError
 from .events import EventLog, EventType
 from .measure import RingStats
 from .protocol.jsonio import atomic_write_text, dumps
@@ -191,7 +191,7 @@ class PreviewTap:
 
 
 class JsonPublisher:
-    """Write the two authoritative documents (§38) so another process can read them.
+    """Write diagnostic JSON snapshots. Control uses the atomic native datagram.
 
     ``atomic_write_text`` is a rename, so a reader never sees half a TrackSet: the failure mode
     this replaces was a controller parsing a file that was still being written, and concluding
@@ -212,15 +212,67 @@ class JsonPublisher:
 
     def publish(self, track_set: TrackSet,
                 observation: Optional[SelectedTargetObservation]) -> None:
+        self._write(dumps(track_set.to_dict()),
+                    dumps(observation.to_dict()) if observation is not None else None)
+
+    def _write(self, tracks: str, selected: Optional[str]) -> None:
         try:
-            atomic_write_text(self.track_set_path, dumps(track_set.to_dict()))
-            if observation is not None:
-                atomic_write_text(self.selected_path, dumps(observation.to_dict()))
+            atomic_write_text(self.track_set_path, tracks, durable=False)
+            if selected is not None:
+                atomic_write_text(self.selected_path, selected, durable=False)
         except OSError as exc:
             self.failures += 1
             self.last_error = str(exc)
             raise
         self.published += 1
+
+
+class LatestJsonPublisher(JsonPublisher):
+    """Bounded diagnostic snapshots: slow storage cannot delay control publication.
+
+    Serialize on the owner thread before tracks mutate. Only the newest pending
+    snapshot is retained; complete history belongs in the separate recorder.
+    """
+    def __init__(self, directory: str):
+        super().__init__(directory)
+        self._condition = threading.Condition()
+        self._pending = None
+        self._closed = False
+        self.overwritten = 0
+        self._thread = threading.Thread(target=self._run, name='perception-json', daemon=True)
+        self._thread.start()
+
+    def publish(self, track_set, observation):
+        pair = (dumps(track_set.to_dict()),
+                dumps(observation.to_dict()) if observation is not None else None)
+        with self._condition:
+            if self._closed:
+                raise OSError('JSON publisher is closed')
+            self.overwritten += int(self._pending is not None)
+            self._pending = pair
+            self._condition.notify()
+
+    def _run(self):
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._pending is not None or self._closed)
+                if self._pending is None:
+                    return
+                pair, self._pending = self._pending, None
+            try:
+                self._write(*pair)
+            except OSError:
+                pass  # failures and last_error are exposed in the run report
+
+    def close(self):
+        with self._condition:
+            self._closed = True
+            self._condition.notify()
+        self._thread.join(timeout=2)
+
+    def stats(self):
+        return dict(written=self.published, failures=self.failures, last_error=self.last_error,
+                    overwritten=self.overwritten, running=self._thread.is_alive())
 
 
 @dataclass
@@ -230,8 +282,10 @@ class PipelineCounters:
     #: can complete (``FrameOutcome.published``) while the write fails, and the two numbers mean
     #: different things to the person debugging a controller that stopped seeing targets.
     documents_written: int = 0
+    documents_enqueued: int = 0
     failures: int = 0
     inference_failures: int = 0
+    no_inference_frames: int = 0
     publish_failures: int = 0
     frames_with_detections: int = 0
     frames_with_tracks: int = 0
@@ -241,7 +295,9 @@ class PipelineCounters:
 
     def to_dict(self) -> Dict[str, Any]:
         return {"frames": self.frames, "documents_written": self.documents_written,
+                "documents_enqueued": self.documents_enqueued,
                 "failures": self.failures, "inference_failures": self.inference_failures,
+                "no_inference_frames": self.no_inference_frames,
                 "publish_failures": self.publish_failures,
                 "frames_with_detections": self.frames_with_detections,
                 "frames_with_tracks": self.frames_with_tracks,
@@ -274,7 +330,10 @@ class PerceptionPipeline:
         self.session_uuid = session_uuid
         self.manager = TrackManager(config, session_uuid=session_uuid,
                                     event_log=self.events, diagnostics=diagnostics)
-        self.selector = TargetSelectionManager(config, event_log=self.events)
+        self.selector = TargetSelectionManager(config, event_log=self.events,
+            alias_map=self.manager.aliases, on_selected=self.manager.set_selected_uuid)
+        self.selection_service = None
+        self.controller_context = None
         # §36's degenerate-box floor (fraction of stream height). 0 = off. A sliver at
         # the frame edge is not a target; without this it blocks selection of the real one.
         self.min_measure_height = float(getattr(config, 'min_measure_height_norm', 0.03)
@@ -309,13 +368,20 @@ class PerceptionPipeline:
         try:
             mark("inference_start")
             if capture_started_ns is not None:
-                self._record("capture_to_metadata_ms", marks["inference_start"] -
-                             int(capture_started_ns))
+                self._record("capture_to_metadata_ms", int(capture_started_ns) -
+                             int(sensor_timestamp_ns))
             try:
                 dset = self.adapter.infer(
                     image, metadata, frame_sequence=int(frame_sequence),
                     sensor_timestamp_ns=int(sensor_timestamp_ns),
                     publish_timestamp_ns=self.clock())
+            except NoInferenceForFrame as exc:
+                self.counters.no_inference_frames += 1
+                outcome.failure, outcome.stage = str(exc), 'inference_pending'
+                # Do not relabel old tensors or fabricate an empty detection.
+                if self.preview is not None:
+                    self.preview.offer(image, now_ns=self.clock())
+                return outcome
             except PerceptionError as exc:
                 self.counters.inference_failures += 1
                 self.counters.failures += 1
@@ -368,6 +434,7 @@ class PerceptionPipeline:
                 self.recorder.record_frame(dset, camera={
                     "width": int(dset.stream_width), "height": int(dset.stream_height),
                     "roi": list(dset.roi) if dset.roi else None,
+                    "sensor_scaler_crop": list(metadata.get('ScalerCrop', ())) if metadata else None,
                     "preserve_aspect_ratio": bool(dset.preserve_aspect_ratio)})
 
             mark("association_start")
@@ -379,7 +446,17 @@ class PerceptionPipeline:
             self.counters.frames_with_tracks += 1 if track_set.tracks else 0
 
             mark("selection_start")
-            observation = self.selector.update(track_set, int(sensor_timestamp_ns))
+            if self.selection_service is not None:
+                self.selection_service.process(self.selector, track_set, self.clock())
+            auto_allowed = bool(self.controller_context and self.controller_context.allows_auto_select(
+                track_set.session_uuid, self.clock()))
+            observation = self.selector.update(track_set, int(sensor_timestamp_ns),
+                                               auto_track_enabled=auto_allowed)
+            # Lifecycle uses sensor time, but publication has its own host clock.
+            # The two timestamps must not become identical by construction.
+            published_ns = self.clock()
+            track_set.publish_timestamp_ns = published_ns
+            observation.publish_timestamp_ns = published_ns
             mark("selection_end")
             self._record("selection_update_ms",
                          marks["selection_end"] - marks["selection_start"])
@@ -396,7 +473,10 @@ class PerceptionPipeline:
             elif self.publisher is not None:
                 try:
                     self.publisher.publish(track_set, observation)
-                    self.counters.documents_written += 1
+                    if isinstance(self.publisher, LatestJsonPublisher):
+                        self.counters.documents_enqueued += 1
+                    else:
+                        self.counters.documents_written += 1
                 except OSError as exc:
                     self.counters.publish_failures += 1
                     self._note_publish_failure(str(exc))
@@ -469,6 +549,7 @@ class PerceptionPipeline:
                 "preview": self.preview.stats() if self.preview is not None else None,
                 "adapter": self.adapter.describe() if hasattr(self.adapter, "describe") else {},
                 "selection": self.selector.state_dict(),
+                "recorder": self.recorder.stats() if self.recorder is not None else None,
                 "events": self.events.counts()}
 
     def start(self) -> "PerceptionPipeline":

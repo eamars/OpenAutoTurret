@@ -47,6 +47,10 @@ struct TargetMeasurement {
   float anchor_v_px = 0.0f;
   bool has_track_id = false;
   uint64_t visual_track_id = 0;
+  // Local adapter metadata, not part of the legacy 58-byte wire contract.
+  bool authoritative_anchor = false;
+  float association_quality = 1.0f;
+  float identity_confidence = 1.0f;
 
   static constexpr std::size_t kWireSize = sizeof(TargetMeasurementWire);
 
@@ -89,6 +93,8 @@ struct TargetMeasurement {
     out.anchor_v_px = w.anchor_v_px;
     out.has_track_id = (w.has_track_id != 0);
     out.visual_track_id = w.visual_track_id;
+    out.authoritative_anchor = false;
+    out.association_quality = out.identity_confidence = 1.0f;
     return true;
   }
 

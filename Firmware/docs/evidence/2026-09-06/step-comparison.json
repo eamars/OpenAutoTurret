@@ -1,0 +1,42 @@
+[
+  {
+    "axis": "yaw",
+    "revision": "01",
+    "reference_p2p_4_to_15s_deg": 0.42896383816664024,
+    "encoder_median_12_to_15s_deg": 0.6038911754762986,
+    "encoder_final_deg": 0.5103312442407385,
+    "watchdog_reason": "none",
+    "restoration_verified": true,
+    "ended_disabled": true
+  },
+  {
+    "axis": "yaw",
+    "revision": "02",
+    "reference_p2p_4_to_15s_deg": 0.0,
+    "encoder_median_12_to_15s_deg": 0.6605979673038772,
+    "encoder_final_deg": 0.17719858584852044,
+    "watchdog_reason": "none",
+    "restoration_verified": true,
+    "ended_disabled": true
+  },
+  {
+    "axis": "pitch",
+    "revision": "01",
+    "reference_p2p_4_to_15s_deg": 0.4269505948797454,
+    "encoder_median_12_to_15s_deg": 0.0680457595823597,
+    "encoder_final_deg": 0.09639445977372398,
+    "watchdog_reason": "none",
+    "restoration_verified": true,
+    "ended_disabled": true
+  },
+  {
+    "axis": "pitch",
+    "revision": "02",
+    "reference_p2p_4_to_15s_deg": 0.0,
+    "encoder_median_12_to_15s_deg": 0.0567008154028186,
+    "encoder_final_deg": 0.05953534389900398,
+    "watchdog_reason": "none",
+    "restoration_verified": true,
+    "ended_disabled": true
+  }
+]

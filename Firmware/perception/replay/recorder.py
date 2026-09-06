@@ -31,7 +31,7 @@ from ..config import VisionConfig
 from ..detection.types import DetectionSet
 from ..errors import ValidationError
 from ..events import Event
-from ..protocol.jsonio import JsonlWriter, atomic_write_text, dumps
+from ..protocol.jsonio import AsyncJsonlWriter, JsonlWriter, atomic_write_text, dumps
 from ..protocol.selected_target import SelectedTargetObservation
 from ..protocol.track_set import TrackSet
 
@@ -63,6 +63,7 @@ class RecordingManifest:
     stream: Dict[str, Any] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
     frames_written: int = 0
+    io_stats: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"schema_version": int(self.schema_version),
@@ -74,7 +75,7 @@ class RecordingManifest:
                 "configuration_source": self.configuration_source,
                 "environment": dict(self.environment),
                 "stream": dict(self.stream), "notes": list(self.notes),
-                "frames_written": int(self.frames_written)}
+                "frames_written": int(self.frames_written), "io_stats": dict(self.io_stats)}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RecordingManifest":
@@ -92,7 +93,7 @@ class RecordingManifest:
             environment=dict(data.get("environment", {})),
             stream=dict(data.get("stream", {})),
             notes=[str(note) for note in data.get("notes", [])],
-            frames_written=int(data.get("frames_written", 0)))
+            frames_written=int(data.get("frames_written", 0)), io_stats=dict(data.get("io_stats", {})))
 
 
 class Recorder:
@@ -104,7 +105,7 @@ class Recorder:
                  record_detections: bool = True, record_images: bool = False,
                  record_observations: bool = True, record_events: bool = True,
                  flush_every: int = 32, notes: Optional[List[str]] = None,
-                 allow_existing: bool = False) -> None:
+                 allow_existing: bool = False, asynchronous: bool = False) -> None:
         if not directory:
             raise ValueError("Recorder needs a target directory")
         self.directory = directory
@@ -115,6 +116,7 @@ class Recorder:
         self.record_events = bool(record_events)
         self.flush_every = max(1, int(flush_every))
         self.allow_existing = bool(allow_existing)
+        self._writer_type = AsyncJsonlWriter if asynchronous else JsonlWriter
         levels = ["level_b"] if record_detections else []
         if record_images:
             levels.append("level_a")
@@ -150,16 +152,16 @@ class Recorder:
                 f"Choose a new directory, or pass allow_existing=True to append deliberately.")
         self._write_manifest()
         if self.record_detections:
-            self._detections = JsonlWriter(self.path(DETECTIONS_FILE), self.flush_every)
+            self._detections = self._writer_type(self.path(DETECTIONS_FILE), self.flush_every)
         if self.record_detections or self.record_images:
             # The camera/index file is written for image-only recordings too: without it the
             # pixels on disk have no sensor stamp and no frame link, which is §43's Level A
             # turned into a folder of JPEGs nobody can replay.
-            self._camera = JsonlWriter(self.path(CAMERA_FILE), self.flush_every)
+            self._camera = self._writer_type(self.path(CAMERA_FILE), self.flush_every)
         if self.record_observations:
-            self._observations = JsonlWriter(self.path(OBSERVATIONS_FILE), self.flush_every)
+            self._observations = self._writer_type(self.path(OBSERVATIONS_FILE), self.flush_every)
         if self.record_events:
-            self._events = JsonlWriter(self.path(EVENTS_FILE), self.flush_every)
+            self._events = self._writer_type(self.path(EVENTS_FILE), self.flush_every)
         return self
 
     def path(self, name: str) -> str:
@@ -178,6 +180,11 @@ class Recorder:
             if writer is not None:
                 writer.close()
         self.manifest.frames_written = self.frames
+        self.manifest.io_stats = self.io_stats()
+        if 'detections' in self.manifest.io_stats:
+            self.manifest.frames_written = self.manifest.io_stats['detections']['written']
+        if any(s['dropped'] or s['failures'] or s['running'] for s in self.manifest.io_stats.values()):
+            self.manifest.notes.append('INCOMPLETE RECORDING: inspect io_stats before evaluation')
         self._write_manifest()
 
     def __enter__(self) -> "Recorder":
@@ -268,7 +275,13 @@ class Recorder:
     def stats(self) -> Dict[str, Any]:
         return {"directory": self.directory, "frames": int(self.frames),
                 "images": int(self.images), "levels": list(self.manifest.levels),
-                "closed": bool(self._closed)}
+                "closed": bool(self._closed), 'io_stats': self.io_stats()}
+
+    def io_stats(self):
+        return {name: writer.stats() for name, writer in
+                [('detections', self._detections), ('camera', self._camera),
+                 ('observations', self._observations), ('events', self._events)]
+                if isinstance(writer, AsyncJsonlWriter)}
 
 
 def write_ground_truth(directory: str, records: List[Dict[str, Any]]) -> str:

@@ -95,6 +95,15 @@ TEST(ReferenceLimiter, LandsExactlyRatherThanAsymptotically) {
   EXPECT_NEAR(st.v_rad_s, 0.0, 1e-12);
 }
 
+TEST(ReferenceLimiter, BrakingDistanceExcludesTravelAfterVelocityReverses) {
+  // v(t)=v0-j*t^2/2 reaches zero before the acceleration ceiling in this case.
+  // Its integral is (2/3)*v0*sqrt(2*v0/j), approximately 0.154 degrees.
+  const double speed = 2*kDeg;
+  const double expected = (2.0/3)*speed*std::sqrt(2*speed/kJMax);
+  EXPECT_NEAR(ota::control::stopping_distance_rad(speed, 0, kAMax, kJMax), expected, 1e-12);
+  EXPECT_NEAR(ota::control::stopping_distance_rad(-speed, 0, kAMax, kJMax), expected, 1e-12);
+}
+
 TEST(ReferenceLimiter, WithoutAnAccelLimitItStillRateLimitsAndDoesNotCross) {
   // a_max = 0 means "no acceleration figure configured for this axis". The honest fallback is a
   // plain rate limit that still refuses to cross the target, not the old step behaviour.

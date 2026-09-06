@@ -28,6 +28,18 @@ add_subdirectory(control)
 # Commissioning / probe CLI (architecture §50 tools/).
 add_executable(turret-can tools/turret_can.cpp)
 target_link_libraries(turret-can PRIVATE ota_core)
+add_executable(cybergear-diagnostics tools/cybergear_diagnostics.cpp)
+target_link_libraries(cybergear-diagnostics PRIVATE ota_core)
+add_executable(probe-commissioning-watchdog tools/probe_commissioning_watchdog.cpp)
+target_link_libraries(probe-commissioning-watchdog PRIVATE ota_core)
+add_test(NAME commissioning_watchdog_probe COMMAND probe-commissioning-watchdog ${CMAKE_CURRENT_SOURCE_DIR}/config/turret.yaml)
+add_executable(probe-yousee-backpressure tools/probe_yousee_backpressure.cpp)
+target_link_libraries(probe-yousee-backpressure PRIVATE ota_core)
+add_test(NAME yousee_backpressure_probe COMMAND probe-yousee-backpressure)
+set_tests_properties(commissioning_watchdog_probe yousee_backpressure_probe PROPERTIES TIMEOUT 10)
+add_executable(probe-reference-settling tools/probe_reference_settling.cpp)
+target_link_libraries(probe-reference-settling PRIVATE ota_core)
+add_test(NAME reference_settling_probe COMMAND probe-reference-settling)
 
 # Phase 9: payload profiling / verification commissioning CLI (§28.5/§31/§44).
 add_executable(turret-payload tools/turret_payload.cpp)
@@ -46,6 +58,17 @@ add_test(NAME cycle_cost_gate
          COMMAND cycle-cost --cycles 2000 --assert-p99-us 4000)
 
 add_executable(replay-session tools/replay_session.cpp)
+add_executable(inspect-perception-wire tools/inspect_perception_wire.cpp)
+target_link_libraries(inspect-perception-wire PRIVATE ota_core)
+add_executable(probe-estimator-boundary tools/probe_estimator_boundary.cpp)
+target_link_libraries(probe-estimator-boundary PRIVATE ota_core)
+add_test(NAME estimator_boundary_probe COMMAND probe-estimator-boundary)
+add_executable(probe-command-cache tools/probe_command_cache.cpp)
+target_link_libraries(probe-command-cache PRIVATE ota_core)
+add_test(NAME command_cache_probe COMMAND probe-command-cache)
+add_executable(probe-register-boundary tools/probe_register_boundary.cpp)
+target_link_libraries(probe-register-boundary PRIVATE ota_core)
+add_test(NAME register_boundary_probe COMMAND probe-register-boundary)
 target_link_libraries(replay-session PRIVATE ota_core)
 # The same session against the station's own configuration file. Two entries, not one
 # parametrised loop, because the interesting difference between them is the station: if the

@@ -31,6 +31,8 @@ void print_usage(const char* prog) {
       "usage: %s [options] <command> [args]\n"
       "\n"
       "options:\n"
+      "  --transport NAME    socketcan or yousee (default socketcan)\n"
+      "  --uart-baud N       yousee UART baud (default 921600)\n"
       "  --iface NAME        CAN interface (default can0)\n"
       "  --bitrate N         bitrate, only applied if iface is DOWN\n"
       "  --bring-up          bring a DOWN interface up at the given bitrate\n"
@@ -272,7 +274,9 @@ int main(int argc, char** argv) {
   int i = 1;
   for (; i < argc; ++i) {
     const std::string a = argv[i];
-    if (a == "--iface" && i + 1 < argc) cfg.iface = argv[++i];
+    if (a == "--transport" && i + 1 < argc) cfg.transport = argv[++i];
+    else if (a == "--uart-baud" && i + 1 < argc) cfg.uart_baud = std::stoi(argv[++i]);
+    else if (a == "--iface" && i + 1 < argc) cfg.iface = argv[++i];
     else if (a == "--bitrate" && i + 1 < argc) cfg.bitrate = std::stoul(argv[++i]);
     else if (a == "--bring-up") cfg.bring_up_if_down = true;
     else if (a == "--pitch-id" && i + 1 < argc) cfg.pitch_motor_id = static_cast<uint8_t>(std::stoul(argv[++i]));

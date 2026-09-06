@@ -40,6 +40,7 @@ from .dashboard import dashboard_html
 from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
 from .video import VideoSource, mjpeg_frame
+from .selection_client import request_selection
 
 
 @dataclass
@@ -211,6 +212,11 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     @app.post("/api/command")
     async def command(req: CommandRequest) -> ResponseMessage:
         return client.send_command(req.command, req.arg)
+
+    @app.post("/api/selection")
+    async def selection(request: dict) -> dict:
+        return await asyncio.to_thread(request_selection,
+            os.environ.get('OTA_SELECTION_SOCKET', '/tmp/ota-selection.sock'), request)
 
     @app.get("/api/payload_profiles")
     async def payload_profiles() -> dict:

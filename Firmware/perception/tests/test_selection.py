@@ -193,21 +193,21 @@ class TestLossAndTtl(unittest.TestCase):
         self.assertEqual(observation.track_uuid, self.track.track_uuid)
         self.assertEqual(self.events.count(EventType.TARGET_STALE), 0)
 
-    def test_expiry_publishes_one_stale_event_and_an_explicit_no_target(self):
+    def test_expiry_retains_selection_and_publishes_one_stale_event(self):
         observation = self._update(TrackState.LOST_REACQUIRABLE, sensor_ns=SENSOR,
                                    last_measurement_ns=SENSOR - ms(3.1))
-        self.assertIs(observation.target_state, TargetState.NO_TARGET)
+        self.assertIs(observation.target_state, TargetState.SELECTED_STALE)
         self.assertFalse(observation.measurement_valid)
-        self.assertEqual(observation.track_uuid, "")
+        self.assertEqual(observation.track_uuid, self.track.track_uuid)
         self.assertEqual(self.events.count(EventType.TARGET_STALE), 1,
                          "§31: exactly one event for the moment the subject disappeared")
-        self.assertEqual(observation.selection_generation, 2)
+        self.assertEqual(observation.selection_generation, 1)
 
         again = self._update(TrackState.LOST_REACQUIRABLE, sequence=3,
                              sensor_ns=SENSOR + ms(0.06))
         self.assertEqual(self.events.count(EventType.TARGET_STALE), 1,
                          "the same expiry must not re-report every frame")
-        self.assertEqual(again.selection_generation, 2)
+        self.assertEqual(again.selection_generation, 1)
 
     def test_an_unmeasurable_age_does_not_end_the_selection(self):
         # ``ms_from_ns`` answers -1.0 ("unknown") for a missing stamp rather than 0, and §31
@@ -219,10 +219,19 @@ class TestLossAndTtl(unittest.TestCase):
         self.assertEqual(self.events.count(EventType.TARGET_STALE), 0)
         self.assertTrue(self.selector.state.has_selection)
 
-    def test_a_vanished_identity_ends_the_selection_once(self):
-        self.selector.update(track_set_of([], sequence=2, sensor_ns=SENSOR), SENSOR)
+    def test_a_vanished_identity_remains_selected_until_operator_action(self):
+        gone = track_set_of([], sequence=2, sensor_ns=SENSOR)
+        observation = self.selector.update(gone, SENSOR)
         self.assertEqual(self.events.count(EventType.TARGET_STALE), 1)
+        self.assertTrue(self.selector.state.has_selection)
+        self.assertEqual(observation.track_uuid, self.track.track_uuid)
+        self.assertIs(observation.target_state, TargetState.SELECTED_STALE)
+        ack = self.selector.select(request(self.track.track_uuid), gone, SENSOR)
+        self.assertTrue(ack.selection_unchanged)
+        self.assertEqual(ack.selection_generation, 1)
+        self.selector.clear(ClearTargetRequest(), gone, SENSOR)
         self.assertFalse(self.selector.state.has_selection)
+        self.assertEqual(self.selector.state.generation, 2)
 
     def test_a_merge_moves_the_selection_without_a_generation_bump(self):
         survivor = track_at(0.52, index=1, display_index=1)
@@ -308,7 +317,7 @@ class TestAutoSelect(unittest.TestCase):
         observations = []
         for index, tracks in enumerate(tracks_by_frame):
             subset = track_set_of(tracks, sequence=index + 1, sensor_ns=at(index))
-            observations.append(selector.update(subset, at(index)))
+            observations.append(selector.update(subset, at(index), auto_track_enabled=True))
         return observations
 
     def test_explicit_only_policy_never_selects_on_its_own(self):
@@ -337,23 +346,27 @@ class TestAutoSelect(unittest.TestCase):
                          "§28.2: a second eligible person is a real ambiguity, not a "
                          "hardware cadence — exactly-one must not be traded for a best pick")
 
-    def test_a_brief_gap_does_not_cancel_the_dwell(self):
-        # The IMX500 on-sensor tensor lands on every other frame (camera ~30 fps, network
-        # ~15 fps), so between measurements the sole candidate reads as OCCLUDED. §23 holds the
-        # identity and retires it only after the window — so a skipped tensor is a hardware
-        # cadence, not evidence, and must not reset the dwell or the turret never acquires.
+    def test_occlusion_cannot_complete_a_visible_candidate_dwell(self):
         selector = self._selector()
         candidate = track_at(0.5, index=1)
-        frames = []
         for index in range(15):
-            candidate.state = (TrackState.OCCLUDED if 6 <= index <= 8
+            candidate.state = (TrackState.OCCLUDED if 6 <= index
                                else TrackState.CONFIRMED_VISIBLE)
             candidate.measurement_valid = candidate.state is TrackState.CONFIRMED_VISIBLE
-            frames.append([candidate])                   # the same identity every frame
-        self._drive(selector, frames)
-        self.assertTrue(selector.state.has_selection,
-                        "an OCCLUDED sole candidate must keep its dwell across a skipped tensor")
-        self.assertEqual(selector.state.selected_uuid, candidate.track_uuid)
+            subset = track_set_of([candidate], sequence=index+1, sensor_ns=at(index))
+            selector.update(subset, at(index), auto_track_enabled=True)
+        self.assertFalse(selector.state.has_selection)
+
+    def test_missing_mode_context_cannot_select_or_accumulate_dwell(self):
+        selector = self._selector()
+        candidate = track_at(0.5, index=1)
+        for index in range(20):
+            subset = track_set_of([candidate], sequence=index+1, sensor_ns=at(index))
+            selector.update(subset, at(index))
+        self.assertFalse(selector.state.has_selection)
+        subset = track_set_of([candidate], sequence=21, sensor_ns=at(21))
+        selector.update(subset, at(21), auto_track_enabled=True)
+        self.assertFalse(selector.state.has_selection)
 
     def test_a_lost_candidate_really_cancels_the_dwell(self):
         selector = self._selector()

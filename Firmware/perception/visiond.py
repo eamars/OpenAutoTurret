@@ -17,13 +17,13 @@ The CLI is where the document's rules become behaviour that cannot be argued wit
   a recording (§43 Level B), prints §45's metrics, and with ``--gates`` exits non-zero when §46
   is not met — so the same command line works as a CI step.
 
-Selection is not taken from the command line in capture mode (an operator chooses targets through
-the UI, §28) except as an explicit ``--select-uuid`` for testing; in replay it is the mechanism
+Selection in capture mode uses the UUID API (§28); ``--select-uuid`` is replay-only, the mechanism
 for re-asking §46's "requesting UUID A selects A or rejects, never B".
 
 Nothing here imports ``picamera2``, ``CAN``, or the retired ``vision``/``control`` modules: the
 camera path is reached through :mod:`perception.camera`, which is import-guarded, and the
-subsystem's output is two JSON documents (§38) that controld reads.
+subsystem publishes an atomic native observation/candidate datagram to controld.
+Optional JSON snapshots are diagnostics, written outside the capture thread.
 """
 from __future__ import annotations
 
@@ -41,31 +41,17 @@ from .model import (OFFLINE_ADAPTERS, EnvironmentManifest, build_adapter, manife
                     probe_model,
                     resolve_artifact)
 from .model.adapter import MockAdapter
-from .pipeline import JsonPublisher, PerceptionPipeline, PreviewTap
+from .pipeline import LatestJsonPublisher, PerceptionPipeline, PreviewTap
+from .preview import JpegPreviewWorker
 from .protocol.jsonio import atomic_write_text, dumps as json_dumps
-from .protocol.selected_target import TargetState
-from .protocol.wire import (SocketPublisher, encode_track_set,
-                            measurement_from_selection)
-import json as _json
-import urllib.request as _urllib
+from .protocol.wire import SocketPublisher, encode_track_set
+from .protocol.native_wire import encode_perception_frame
+from .selection.service import SelectionService
+from .selection.control_context import ControllerContext
 from .replay import (Recorder, ReplaySource, compare_ground_truth, compare_runs,
                      engineering_gates, run_level_b)
 from .selection.protocol import SelectTargetRequest
 
-#: Which selected identities have already been handed to the controller (per-process). Re-issuing
-#: `select_target` every frame would spam the ack channel; the selection persists until the
-#: identity is retired and re-selected, so one issuance per identity is enough.
-_issued_selections: set = set()
-
-
-def _selected_display_index(track_set: Any, track_uuid: str) -> int:
-    """The display index controld's `select_target` wants, for a selected track uuid."""
-    if track_set is None or not track_uuid:
-        return 0
-    for track in getattr(track_set, "tracks", ()):
-        if getattr(track, "track_uuid", "") == track_uuid:
-            return int(getattr(track, "display_index", 0) or 0)
-    return 0
 from .tracking.diagnostics import AssociationDiagnostics
 
 DEFAULT_CONFIG = "configs/perception_v1.json"
@@ -102,13 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--publish-dir", default="", metavar="DIR",
                         help="write track_set.json / selected_target.json here (§38)")
     parser.add_argument("--select-controller", default="", metavar="URL",
-                        help="controld's HTTP API (e.g. http://127.0.0.1:8080): when the subsystem "
-                             "auto-selects a confirmed person, issue `select_target <display_index>` "
-                             "once so the turret leaves LOST_HOLD and follows it")
+                        help="retired; use the native UUID selection API")
     parser.add_argument("--publish-socket", default="", metavar="PATH",
-                        help="publish the selected target to controld's SOCK_SEQPACKET socket "
-                             "each frame as a 58-byte TargetMeasurement (§6.2). This is the "
-                             "live-tracking path; without it visiond only records/publishes JSON")
+                        help="publish atomic native observation and candidate-list frames to controld")
+    parser.add_argument("--selection-socket", default="/tmp/ota-selection.sock",
+                        help="local UUID selection/ACK socket; empty disables the service")
+    parser.add_argument('--controller-state-url', default='',
+                        help='read-only controller /api/state for optional AUTO_SELECT_SINGLE')
+    parser.add_argument("--legacy-track-wire", action="store_true",
+                        help="compatibility bridge: publish only the old TrackSet contract")
     parser.add_argument("--session-uuid", default="",
                         help="stamp the published TrackSets with this session id (§33)")
     parser.add_argument("--probe-model", default="", metavar="RPK",
@@ -120,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--environment-manifest", default="", metavar="PATH",
                         help="write §9.1's environment manifest here")
     parser.add_argument("--select-uuid", default="",
-                        help="issue one selection request by identity UUID (capture mode)")
+                        help="replay-only UUID selection request; live selection uses the UUID API")
     parser.add_argument("--select-label", default="", metavar="LABEL",
                         help='replay: select the identity shown as e.g. "Person #2". UUIDs are '
                              f'per-run (§17), so a recorded UUID names nothing in a replay')
@@ -333,6 +321,12 @@ def run_replay(args: argparse.Namespace, config: VisionConfig) -> int:
 
 def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
     """The station path: one camera owner, one adapter, one publish target."""
+    if args.select_controller:
+        print('visiond: --select-controller is retired; use the UUID selection API', file=sys.stderr)
+        return EXIT_CONFIG
+    if args.select_uuid:
+        print('visiond: --select-uuid is replay-only; use the live UUID selection API', file=sys.stderr)
+        return EXIT_CONFIG
     manifest = manifest_for(config, config.profile)
     try:
         manifest.validate()
@@ -370,6 +364,10 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
     preview = PreviewTap(enabled=not args.disable_preview,
                          fps=(args.preview_fps or config.preview.fps),
                          latest_queue_depth=config.preview.latest_queue_depth)
+    preview_worker = None
+    tap_path = os.environ.get("OTA_VISION_FRAME_TAP", "").strip()
+    if preview.enabled and tap_path:
+        preview_worker = JpegPreviewWorker(preview, tap_path)
     diagnostics = AssociationDiagnostics(
         capacity=int(config.tracking.diagnostics_capacity),
         # Asking for a dump on disk is an instruction to fill it: `--diagnostics` overrides the
@@ -382,6 +380,7 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
                             record_detections=config.record.record_detections,
                             record_images=bool(args.record_images or
                                               config.record.record_images),
+                            asynchronous=True,
                             flush_every=max(1, int(config.record.flush_every)))
         recorder.open()
         print(f"visiond: recording dataset to {args.record_dataset}", file=sys.stderr)
@@ -392,25 +391,36 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         print(f"visiond: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
-    publisher = JsonPublisher(args.publish_dir) if args.publish_dir else None
+    publisher = LatestJsonPublisher(args.publish_dir) if args.publish_dir else None
     wire_publisher = SocketPublisher(args.publish_socket) if args.publish_socket else None
     pipeline = PerceptionPipeline(config, adapter=adapter, event_log=events,
                                   diagnostics=diagnostics, recorder=recorder,
                                   publisher=publisher, preview=preview,
                                   session_uuid=args.session_uuid or "")
+    if args.selection_socket and not args.legacy_track_wire:
+        pipeline.selection_service = SelectionService(args.selection_socket)
+    if args.controller_state_url and pipeline.selector.auto.enabled:
+        pipeline.controller_context = ControllerContext(args.controller_state_url)
     camera: Optional[CameraOwner] = None
     try:
+        if pipeline.selection_service is not None:
+            pipeline.selection_service.start()
+        if pipeline.controller_context is not None:
+            pipeline.controller_context.start()
+        if preview_worker is not None:
+            preview_worker.start()
         if isinstance(adapter, MockAdapter):
             # No camera on a mock profile: synthetic frames, so the daemon's own wiring can be
             # exercised on a machine with no sensor attached (§55.18's offline acceptance run).
             return _run_synthetic(args, pipeline, adapter, config, wire_publisher=wire_publisher)
         requested_stream = ((int(config.camera.width), int(config.camera.height))
                             if config.camera.width and config.camera.height else None)
-        imx500, picam2, info = open_picamera2(manifest.path, stream_size=requested_stream)
-        adapter.open()
+        imx500, picam2, info = open_picamera2(manifest.path, stream_size=requested_stream,
+                                            external_manifest=manifest)
         stream = (int(info["stream_size"][0]), int(info["stream_size"][1]))
         adapter.configure_stream(*stream)
-        camera = CameraOwner(picam2, stream_size=stream, preview=preview, events=events)
+        camera = CameraOwner(picam2, stream_size=stream, events=events)
+        adapter.open(device=imx500, camera=picam2)
         pipeline.start()
         return _run_camera(args, pipeline, adapter, camera, info,
                         wire_publisher=wire_publisher)
@@ -421,11 +431,28 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         print(f"visiond: {exc}", file=sys.stderr)
         return EXIT_CONFIG
     finally:
-        report = pipeline.report()
+        if pipeline.controller_context is not None:
+            pipeline.controller_context.close()
+        if pipeline.selection_service is not None:
+            pipeline.selection_service.close()
+        if preview_worker is not None:
+            preview_worker.stop()
+        if wire_publisher is not None:
+            wire_publisher.close()
+        if publisher is not None:
+            publisher.close()
         if camera is not None:
-            report["camera"] = camera.stats.to_dict()
             camera.close()
         pipeline.stop()
+        report = pipeline.report()
+        if publisher is not None:
+            report['json_publisher'] = publisher.stats()
+        if wire_publisher is not None:
+            report["wire_publisher"] = wire_publisher.stats()
+        if preview_worker is not None:
+            report["preview_worker"] = preview_worker.stats()
+        if camera is not None:
+            report["camera"] = camera.stats.to_dict()
         if args.diagnostics:
             _dump_diagnostics(args.diagnostics, diagnostics)
         payload = {"mode": "capture", **report}
@@ -433,6 +460,22 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         if not args.quiet:
             print(json.dumps(payload, indent=2))
         events.close()
+
+
+def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False) -> bool:
+    """One measurement authority per frame, shared by live and offline daemon runs."""
+    if publisher is None or outcome.track_set is None:
+        return False
+    track_set = outcome.track_set
+    if not legacy:
+        if outcome.observation is None:
+            return False
+        return publisher.send(encode_perception_frame(track_set, outcome.observation))
+    return publisher.send(encode_track_set(
+        track_set.tracks, frame_sequence=track_set.frame_sequence,
+        sensor_timestamp_ns=track_set.sensor_timestamp_ns,
+        publish_timestamp_ns=track_set.publish_timestamp_ns,
+        width=track_set.stream_width, height=track_set.stream_height))
 
 
 def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter: Any,
@@ -454,51 +497,12 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             print(f"visiond: frame {frame.frame_sequence} tracks {tracks} "
                   f"target {outcome.observation.target_state.name if outcome.observation else 'NO_TARGET'}",
                   file=sys.stderr)
-        if not outcome.published and not args.quiet:
+        if not outcome.published and outcome.stage != 'inference_pending' and not args.quiet:
             print(f"visiond: frame {frame.frame_sequence} failed in {outcome.stage}: "
                   f"{outcome.failure}", file=sys.stderr)
-        if wire_publisher is not None:
-            # The live-tracking handoff. TWO messages, because they do two different jobs:
-            #   * the v3 TrackSet populates controld's SelectionManager (tracks + display indices),
-            #     which is what `select_target` and the AutoTrack controller actually read;
-            #   * the v1 measurement keeps the estimator fed and is the legacy path.
-            # The v1 message alone never sets controld's has_selection — the exact reason the
-            # camera→motor loop never closed before.
-            stream_w, stream_h = int(info["stream_size"][0]), int(info["stream_size"][1])
-            if outcome.track_set is not None:
-                ts = encode_track_set(
-                    outcome.track_set.tracks, frame_sequence=frame.frame_sequence,
-                    sensor_timestamp_ns=frame.sensor_timestamp_ns,
-                    publish_timestamp_ns=frame.metadata_receive_ns or frame.sensor_timestamp_ns,
-                    width=stream_w, height=stream_h)
-                if ts:
-                    wire_publisher.send(ts)
-            sent = wire_publisher.send(measurement_from_selection(
-                outcome.observation, frame_sequence=frame.frame_sequence,
-                sensor_timestamp_ns=frame.sensor_timestamp_ns,
-                stream_size=(stream_w, stream_h)).encode())
-            if not sent and not args.quiet:
-                print("visiond: publish-socket send failed (controld down?)", file=sys.stderr)
-            # When the subsystem auto-selects a confirmed person, tell controld to track it. A
-            # v3 publisher is supposed to hand the target to the operator; for the autonomous
-            # core feature the subsystem selects and the turret follows, so we issue the one
-            # `select_target` command per identity (the selection survives until the identity is
-            # retired, and re-issuing it every frame would just spam the ack channel).
-            obs = outcome.observation
-            if obs is not None and obs.target_state is not TargetState.NO_TARGET                     and obs.track_uuid and args.select_controller is not None:
-                displayed = _selected_display_index(outcome.track_set, obs.track_uuid)
-                if displayed and obs.track_uuid not in _issued_selections:
-                    try:
-                        req = _urllib.Request(args.select_controller,
-                                              data=_json.dumps({"command": "select_target",
-                                                                "arg": str(displayed)}).encode(),
-                                              headers={"Content-Type": "application/json"})
-                        _urllib.urlopen(req, timeout=2).read()
-                        _issued_selections.add(obs.track_uuid)
-                        if not args.quiet:
-                            print(f"visiond: select_target {displayed} -> control", file=sys.stderr)
-                    except Exception:                                            # noqa: BLE001
-                        pass
+        if wire_publisher is not None and outcome.stage != 'inference_pending':
+            if not _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire) and not args.quiet:
+                print("visiond: TrackSet publish failed", file=sys.stderr)
     return EXIT_OK
 
 
@@ -525,8 +529,9 @@ def _run_synthetic(args: argparse.Namespace, pipeline: PerceptionPipeline,
     # comparable instead of turning into a clock-domain mismatch on every frame.
     base = int(pipeline.clock()) - frames * interval_ns
     for index in range(frames):
-        pipeline.process_frame(None, None, frame_sequence=index,
-                               sensor_timestamp_ns=base + index * interval_ns)
+        outcome = pipeline.process_frame(None, None, frame_sequence=index,
+                                         sensor_timestamp_ns=base + index * interval_ns)
+        _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire)
     counters = pipeline.counters
     if not args.quiet:
         print(f"visiond: synthetic {frames} frames, "

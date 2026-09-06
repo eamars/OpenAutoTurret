@@ -112,23 +112,22 @@ class CameraOwner:
         """Take one frame. Never raises for a missing stamp; reports it instead."""
         self.stats.requested += 1
         receive_ns = int(self.clock())
-        gap_ms = ms_from_ns(receive_ns, self._previous_receive_ns) if self._previous_receive_ns \
-            else 0.0
-        if gap_ms > self.stall_timeout_ms > 0.0:
-            self.stats.stalled += 1
-            self.events.emit(EventType.CAMERA_FRAME_STALLED, gap_ms=round(gap_ms, 3),
-                             threshold_ms=self.stall_timeout_ms)
-        if gap_ms:
-            self.stats.last_frame_gap_ms = gap_ms
-            self.stats.max_gap_ms = max(self.stats.max_gap_ms, gap_ms)
-        self._previous_receive_ns = receive_ns
-
         if self._closed:
             return CapturedFrame(None, None, 0, receive_ns, self.frame_sequence,
                                  self.stream_size, unusable_reason="camera is closed")
 
         request = self.device.capture_request()
         try:
+            receive_ns = int(self.clock())
+            gap_ms = ms_from_ns(receive_ns, self._previous_receive_ns) \
+                if self._previous_receive_ns else 0.0
+            if gap_ms > self.stall_timeout_ms > 0.0:
+                self.stats.stalled += 1
+                self.events.emit(EventType.CAMERA_FRAME_STALLED, gap_ms=round(gap_ms, 3),
+                                 threshold_ms=self.stall_timeout_ms)
+            self.stats.last_frame_gap_ms = gap_ms
+            self.stats.max_gap_ms = max(self.stats.max_gap_ms, gap_ms)
+            self._previous_receive_ns = receive_ns
             image = request.make_array(self.main_stream)
             metadata = request.get_metadata() or {}
             sensor_ns = _sensor_timestamp_ns(metadata)
@@ -255,7 +254,8 @@ def _sensor_timestamp_ns(metadata: Any) -> int:
 
 
 def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = None,
-                   preview_size: Optional[Tuple[int, int]] = None) -> Tuple[Any, Any, Dict[str, Any]]:
+                   preview_size: Optional[Tuple[int, int]] = None,
+                   external_manifest=None) -> Tuple[Any, Any, Dict[str, Any]]:
     """Build ``(imx500, picam2, info)`` for a model on this station. Import-guarded.
 
     The construction order is §9's, from the current upstream example: ask the model first, then
@@ -273,7 +273,9 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
     imx500 = IMX500(model_path)
     intrinsics = imx500.network_intrinsics
     if intrinsics is None:
-        raise ConfigError(f"{model_path} reports no network_intrinsics (§9.2)")
+        if external_manifest is None:
+            raise ConfigError(f"{model_path} reports no network_intrinsics (§9.2)")
+        intrinsics = external_manifest.verified_external_intrinsics()
     input_size = imx500.get_input_size()
     camera_num = getattr(imx500, "camera_num", 0)
     main_size = tuple(stream_size) if stream_size else (int(input_size[0]), int(input_size[1]))
@@ -282,7 +284,8 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
         # Uppercase: this picamera2 build's stream validator is case-sensitive and rejects the
         # lowercase alias, which the first on-device run hit as "Bad format rgb888 in stream main".
         main={"size": main_size, "format": "RGB888"},
-        buffer_count=2)
+        controls={"FrameRate": float(intrinsics.inference_rate)},
+        buffer_count=12)
     picam2.configure(configuration)
     info = {"camera_num": int(camera_num), "input_size": (int(input_size[0]),
                                                           int(input_size[1])),

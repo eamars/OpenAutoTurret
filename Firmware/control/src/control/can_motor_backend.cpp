@@ -66,6 +66,7 @@ bool CanMotorBackend::read_register(AxisId axis, cybergear::Reg reg,
 //   LimitSpd -> read MechPos (pin current) -> LocRef=current (hold in place).
 bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
                                           std::string& err) {
+  invalidate_commands(axis);
   for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
     std::string rerr;
     if (!system_.send_stop(axis, &rerr)) {
@@ -133,6 +134,8 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
     // supervisor flaps ALLOW/BRAKE every feedback_max_age_ms (p0p hold
     // phase).
     in_speed_mode_[static_cast<size_t>(axis)] = false;
+    last_loc_ref_[static_cast<size_t>(axis)] = current;
+    last_limit_spd_[static_cast<size_t>(axis)] = limit_spd_rad_s;
     return true;
   }
   return false;
@@ -144,6 +147,7 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
 // the current position against any load up to LimitCur.
 bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
                                        std::string& err) {
+  invalidate_commands(axis);
   for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
     std::string rerr;
     if (!system_.send_stop(axis, &rerr)) {
@@ -201,6 +205,7 @@ bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
 }
 
 void CanMotorBackend::deenergize(AxisId axis) {
+  invalidate_commands(axis);
   std::string err;
   system_.send_stop(axis, &err);
   in_position_mode_[static_cast<size_t>(axis)] = false;
@@ -240,8 +245,9 @@ void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
     if (!system_.send(f.id, f.data, &err)) {
       spdlog::warn("send SpdRef FAIL axis={} v={:+.4f} err={}", a,
                    velocity_rad_s, err);
+    } else {
+      last_spd_ref_[a] = velocity_rad_s;
     }
-    last_spd_ref_[a] = velocity_rad_s;
   }
   // Keepalive ping: see keepalive() below.
   keepalive(axis);
@@ -262,17 +268,17 @@ void CanMotorBackend::keepalive(AxisId axis) {
   // Rate-limited: only when the age is already >30 ms and at most every
   // 50 ms (20 pings/s), so steady-state costs one CAN frame per ~50 ms.
   const int a = static_cast<int>(axis);
-  static TimeNs last_ping_ns[2] = {0, 0};
   constexpr int64_t kPingWhenAgeNs = 30'000'000;   // ping at 30 ms age
   constexpr int64_t kPingIntervalNs = 50'000'000;  // at most 20 pings/s
   const TimeNs now_ns = now_monotonic_ns();
   can::AxisLatest fb{};
   bool stale = !system_.axis(axis).latest(fb) || !fb.has_feedback;
   if (!stale && (now_ns - fb.rx_ns) > kPingWhenAgeNs) stale = true;
-  if (stale && (now_ns - last_ping_ns[a]) >= kPingIntervalNs) {
-    write_reg_float(cybergear::Reg::LimitCur,
-                    static_cast<float>(last_limit_cur_a_[a]), axis);
-    last_ping_ns[a] = now_ns;
+  if (stale && last_limit_cur_a_[a] >= 0.0 &&
+      (now_ns - last_ping_ns_[a]) >= kPingIntervalNs) {
+    if (write_reg_float(cybergear::Reg::LimitCur,
+                       static_cast<float>(last_limit_cur_a_[a]), axis))
+      last_ping_ns_[a] = now_ns;
   }
 }
 
@@ -288,26 +294,25 @@ void CanMotorBackend::command(AxisId axis, double q_ref_rad,
   // compared with a small epsilon so sensor quantisation (25/65535 rad) does
   // not count as a change and re-arm a hold.
   constexpr double kQRefEpsilonRad = 1e-3;
-  static double last_ls[2] = {-1e30, -1e30};
-  static double last_qr[2] = {-1e30, -1e30};
   const int a = static_cast<int>(axis);
-  const bool ls_changed = (limit_spd_rad_s != last_ls[a]);
-  const bool qr_changed = std::fabs(q_ref_rad - last_qr[a]) > kQRefEpsilonRad;
+  const bool ls_changed = (limit_spd_rad_s != last_limit_spd_[a]);
+  const bool qr_changed = std::fabs(q_ref_rad - last_loc_ref_[a]) > kQRefEpsilonRad;
   // Preserve ordering: set the speed limit before a new position reference so
   // the drive never chases a new target without its (possibly reduced) limit.
   if (ls_changed) {
-    write_reg_float(cybergear::Reg::LimitSpd,
-                    static_cast<float>(limit_spd_rad_s), axis);
-    last_ls[a] = limit_spd_rad_s;
+    if (!write_reg_float(cybergear::Reg::LimitSpd,
+                         static_cast<float>(limit_spd_rad_s), axis)) return;
+    last_limit_spd_[a] = limit_spd_rad_s;
   }
   if (qr_changed) {
     std::string err;
     const bool pin_ok =
         system_.send_position_ref(axis, static_cast<float>(q_ref_rad), &err);
-    last_qr[a] = q_ref_rad;
     if (!pin_ok) {
       spdlog::warn("send_position_ref FAIL axis={} q_ref={:+.6f} err={}",
                    a, q_ref_rad, err);
+    } else {
+      last_loc_ref_[a] = q_ref_rad;
     }
   }
   // Keepalive ping: the CyberGear emits COMM_TYPE_2 feedback ONLY in
@@ -323,17 +328,16 @@ void CanMotorBackend::command(AxisId axis, double q_ref_rad,
   // below ~40 ms so feedback_max_age_ms remains a genuine
   // loss-of-feedback detector.
   {
-    static TimeNs last_ping_ns[2] = {0, 0};
     constexpr int64_t kPingWhenAgeNs = 30'000'000;   // ping at 30 ms age
     constexpr int64_t kPingIntervalNs = 50'000'000;  // at most 20 pings/s
     const TimeNs now_ns = now_monotonic_ns();
     can::AxisLatest fb{};
     bool stale = !system_.axis(axis).latest(fb) || !fb.has_feedback;
     if (!stale && (now_ns - fb.rx_ns) > kPingWhenAgeNs) stale = true;
-    if (stale && (now_ns - last_ping_ns[a]) >= kPingIntervalNs) {
-      write_reg_float(cybergear::Reg::LimitSpd,
-                      static_cast<float>(limit_spd_rad_s), axis);
-      last_ping_ns[a] = now_ns;
+    if (stale && (now_ns - last_ping_ns_[a]) >= kPingIntervalNs) {
+      if (write_reg_float(cybergear::Reg::LimitSpd,
+                         static_cast<float>(limit_spd_rad_s), axis))
+        last_ping_ns_[a] = now_ns;
       // Do not touch last_ls[a]: the value written equals
       // limit_spd_rad_s, so the write-on-change bookkeeping stays exact.
     }

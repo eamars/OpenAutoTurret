@@ -30,6 +30,7 @@ import time
 from typing import Any, Callable, List, Optional, Tuple
 
 import numpy as _np
+from ..errors import NoInferenceForFrame
 
 from ..config import AnchorConfig
 from ..detection.types import DetectionSet
@@ -105,7 +106,8 @@ class Imx500YoloAdapter(ModelAdapter):
         self.probe: Any = None
 
     # -- lifecycle ----------------------------------------------------------
-    def open(self) -> None:
+    def open(self, *, device: Any = None, camera: Any = None) -> None:
+        self.camera = camera
         self.manifest.validate()
         if not self.manifest.path:
             raise ModelRejected(
@@ -116,7 +118,7 @@ class Imx500YoloAdapter(ModelAdapter):
             from .compatibility_probe import default_imx500_factory
             self.factory = default_imx500_factory
         try:
-            self.device = self.factory(self.manifest.path)
+            self.device = device if device is not None else self.factory(self.manifest.path)
         except ModelRejected:
             raise
         except Exception as exc:                                # noqa: BLE001
@@ -125,9 +127,7 @@ class Imx500YoloAdapter(ModelAdapter):
 
         self.intrinsics = getattr(self.device, "network_intrinsics", None)
         if self.intrinsics is None:
-            raise ModelRejected(
-                f"{self.manifest.path} reports no network_intrinsics (§9.2): its output "
-                f"convention cannot be verified, so nothing downstream can be trusted.")
+            self.intrinsics = self.manifest.verified_external_intrinsics()
 
         num = getattr(self.device, "camera_num", None)
         self.camera_num = int(num) if num is not None else None
@@ -136,6 +136,9 @@ class Imx500YoloAdapter(ModelAdapter):
         probe = self._probe_without_reopening()
         self.probe = probe
         self.warnings = self._admit(probe)
+        if getattr(self.device, 'network_intrinsics', None) is None:
+            self.warnings.append('metadata-free model: hash-verified external reference contract ' +
+                                 self.manifest.external_contract_source)
 
         # ``network_intrinsics`` does not always carry the input dimensions, but
         # ``get_input_size()`` always answers. The device wins — §14 normalizes against these
@@ -205,6 +208,8 @@ class Imx500YoloAdapter(ModelAdapter):
         read_started = time.monotonic_ns()
         outputs = self.device.get_outputs(metadata)
         self.last_read_ms = (time.monotonic_ns() - read_started) / 1_000_000.0
+        if outputs is None:
+            raise NoInferenceForFrame('camera frame has no new inference tensors')
         if not outputs:
             self.failures += 1
             raise ModelRejected("get_outputs() returned no tensors for this request")
@@ -223,16 +228,49 @@ class Imx500YoloAdapter(ModelAdapter):
             raise ModelRejected(
                 f"output rows carry {len(rows[0])} columns; the manifest expects at least "
                 f"6 (§9.3 disagreement discovered at runtime)")
+        geometry = None
+        if self.camera is not None:
+            rows = self._map_rows_to_stream(rows, metadata)
+            from ..detection.normalize import InferenceGeometry
+            width, height = self.stream_size
+            geometry = InferenceGeometry(width, height, width, height,
+                                         bbox_order='xy', bbox_normalized=True)
         self.inferences += 1
         return self._rows_to_set(rows, frame_sequence=int(frame_sequence),
                                  sensor_timestamp_ns=int(sensor_timestamp_ns),
                                  publish_timestamp_ns=int(publish_timestamp_ns),
-                                 anchor_cfg=self.anchor_cfg)
+                                 anchor_cfg=self.anchor_cfg, geometry=geometry)
+
+    def _map_rows_to_stream(self, rows, metadata):
+        from ..detection.normalize import parse_row_box
+        from ..errors import ValidationError
+        width, height = self.stream_size
+        iw, ih = self.manifest.input_width, self.manifest.input_height
+        score, category, box_index = self.manifest.score_indices()
+        mapped = []
+        for row in rows:
+            try:
+                x0, y0, x1, y1 = parse_row_box(row[box_index:box_index+4], self.manifest.bbox_order,
+                    input_width=iw, input_height=ih, normalized=self.manifest.bbox_normalized)
+                if x1 <= x0 or y1 <= y0:
+                    raise ValidationError('inverted input box')
+                # Same captured ScalerCrop and sensor ROI transform as the official
+                # example. The ISP preview is not a generic letterbox of the NN input.
+                x, y, w, h = self.device.convert_inference_coords(
+                    (y0/ih, x0/iw, y1/ih, x1/iw), metadata, self.camera)
+                coords = [x/width, y/height, (x+w)/width, (y+h)/height]
+            except ValidationError:
+                coords = [float('nan')]*4  # normalizer counts the invalid detection
+            mapped_row = list(row)
+            mapped_row[box_index:box_index+4] = coords
+            mapped.append(mapped_row)
+        return mapped
 
     # -- reporting ----------------------------------------------------------
     def describe(self) -> dict:
         payload = super().describe()
         payload["camera_num"] = self.camera_num
+        payload['coordinate_mapping'] = 'sdk_capture_metadata' if self.camera is not None else 'offline_geometry'
         payload["intrinsics_task"] = getattr(self.intrinsics, "task", None)
         payload["warnings"] = list(self.warnings)
         payload["probe"] = self.probe.to_dict() if self.probe is not None else None

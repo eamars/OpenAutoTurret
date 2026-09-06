@@ -26,6 +26,12 @@ TEST(Telemetry, SnapshotIsOverwrittenEachCycle) {
   EXPECT_NEAR(t.snapshot().q_pitch_rad, -0.25, 1e-9);
 }
 
+TEST(Telemetry, FullWidthUuidTextPreservesBothHalves) {
+  char text[ota::telemetry::kUuidTextLen] = {};
+  ota::telemetry::format_uuid_text(text, UINT64_MAX, UINT64_MAX);
+  EXPECT_STREQ(text, "18446744073709551615:18446744073709551615");
+}
+
 TEST(Telemetry, ControlLogKeepsLastN) {
   Telemetry t;
   const auto cap = Telemetry::kControlLogCap;

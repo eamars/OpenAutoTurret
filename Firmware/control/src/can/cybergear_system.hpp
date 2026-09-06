@@ -40,7 +40,8 @@ struct CyberGearSystemConfig {
 
 class CyberGearSystem {
  public:
-  bool open(const CyberGearSystemConfig& cfg, std::string& err);
+  bool open(const CyberGearSystemConfig& cfg, std::string& err,
+            std::unique_ptr<CanTransport> transport = {});
   void close();
 
   // --- Setup / diagnostics (blocking, bounded) -----------------------------
@@ -48,6 +49,9 @@ class CyberGearSystem {
                 std::string* err = nullptr);
   bool read_register(AxisId axis, cybergear::Reg reg, double& value,
                      int timeout_ms = 500, std::string* err = nullptr);
+  // Read-only diagnostic access. Unknown firmware parameters remain raw bytes.
+  bool read_parameter_raw(AxisId axis, uint16_t address, std::array<uint8_t, 4>& value,
+                          int timeout_ms = 500, std::string* err = nullptr);
 
   // --- Fire-and-forget command TX (control loop safe) ----------------------
   bool send(uint32_t ext_id, const uint8_t data[8], std::string* err = nullptr);
@@ -76,10 +80,8 @@ class CyberGearSystem {
 
  private:
   void on_frame(const can::RawFrame& f);
-  // Single-flight synchronous wait. match_target == 0 means "don't care".
-  bool wait_response(uint8_t comm_type, uint8_t match_target,
-                     cybergear::CanFrame& out, int timeout_ms,
-                     std::string* err);
+  bool transact(const cybergear::CanFrame& request, uint8_t reply_target,
+                cybergear::CanFrame& out, int timeout_ms, std::string* err);
 
   CyberGearSystemConfig cfg_{};
   std::unique_ptr<CanTransport> bus_;
@@ -90,9 +92,11 @@ class CyberGearSystem {
   std::condition_variable pend_cv_;
   struct Pending {
     bool active{false};
+    bool received{false};
     uint8_t motor{0};
     uint8_t comm{0};
     uint8_t match_target{0};
+    uint16_t address{0};
     cybergear::CanFrame frame;
   } pending_;
 };

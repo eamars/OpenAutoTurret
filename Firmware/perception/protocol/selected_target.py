@@ -47,6 +47,7 @@ class TargetState(IntEnum):
     OCCLUDED = 2           # identity held, no fresh high-score measurement (§18.3)
     LOST = 3               # identity retained for reacquisition, no measurement (§31)
     AMBIGUOUS = 4          # §32: two plausible reacquisition candidates, chose neither
+    SELECTED_STALE = 5     # §31: retired identity remains selected until operator action
 
 
 _STATE_NAMES: Dict[int, str] = {int(state): state.name for state in TargetState}
@@ -149,6 +150,8 @@ class SelectedTargetObservation:
             raise ValidationError(
                 f"unsupported observation protocol {self.protocol_version}")
         if self.measurement_valid:
+            if self.target_state not in (TargetState.CONFIRMED_VISIBLE, TargetState.OCCLUDED):
+                raise ValidationError("target state cannot carry a valid measurement")
             if not self.track_uuid:
                 raise ValidationError(
                     "measurement_valid with no track_uuid: a measurement nobody owns")

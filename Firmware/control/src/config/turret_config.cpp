@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <cmath>
 
 #include <yaml-cpp/yaml.h>
 
@@ -763,6 +764,17 @@ LoadResult load_turret_config(const std::string& path) {
         opt_double(trk, "estimator_alpha", "tracking.estimator_alpha", 0.8, warn);
     c.tracking.estimator_beta =
         opt_double(trk, "estimator_beta", "tracking.estimator_beta", 0.3, warn);
+    c.tracking.estimator_model = opt_string(trk, "estimator_model", "tracking.estimator_model",
+                                            "constant_velocity", warn);
+    c.tracking.estimator_measurement_sigma_rad = opt_double(trk, "estimator_measurement_sigma_rad",
+        "tracking.estimator_measurement_sigma_rad", 0.004, warn);
+    c.tracking.estimator_accel_sigma_rad_s2 = opt_double(trk, "estimator_accel_sigma_rad_s2",
+        "tracking.estimator_accel_sigma_rad_s2", 0.35, warn);
+    if (c.tracking.estimator_model != "constant_velocity" && c.tracking.estimator_model != "alpha_beta")
+      err.push_back("tracking.estimator_model must be constant_velocity or alpha_beta");
+    for (const double noise : {c.tracking.estimator_measurement_sigma_rad, c.tracking.estimator_accel_sigma_rad_s2})
+      if (!std::isfinite(noise) || noise <= 0 || noise > 10)
+        err.push_back("tracking estimator noise must be finite, > 0 and <= 10 in radian units");
     // Structural sanity: fresh < coast < lost (§34 state ordering).
     if (!(c.tracking.fresh_threshold_ms > 0 && c.tracking.coast_timeout_ms > 0 &&
           c.tracking.lost_timeout_ms > 0))

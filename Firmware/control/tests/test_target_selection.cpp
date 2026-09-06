@@ -151,7 +151,7 @@ TEST_F(SelectionTest, VisibilityWalksVisibleOccludedLost) {
       << "§12: losing sight of it does not unselect it";
 }
 
-TEST_F(SelectionTest, ReacquiresUnambiguouslyAndRefusesWhenItCannot) {
+TEST_F(SelectionTest, NearbyDifferentUuidCannotReplaceTheSelectedIdentity) {
   observe(b_.frame({{kOne, 1, 1, "person", tracks::TrackState::Confirmed, 0.9f, 0.5f,
                      0.5f, 0.1f, 0.2f, 0.02f}}));
   ASSERT_TRUE(mgr_.select_by_display_index(1, b_.now).ok);
@@ -160,14 +160,30 @@ TEST_F(SelectionTest, ReacquiresUnambiguouslyAndRefusesWhenItCannot) {
   observe(b_.frame({}));
   ASSERT_EQ(mgr_.selection().visibility_state, tracks::Visibility::LostReacquirable);
 
-  // One candidate where the target was heading. §21's score must be allowed to bring
-  // the selection back — this is the difference between a turret that pauses at a
-  // pillar and one that has lost the day.
+  // The perception plan supersedes v3's geometric identity reassignment. Only
+  // vision's tracker may associate detections with an existing UUID.
   observe(b_.frame({{kTwo, 1, 1, "person", tracks::TrackState::Confirmed, 0.88f, 0.53f,
                      0.5f, 0.1f, 0.2f, 0.02f}}));
-  EXPECT_EQ(mgr_.selection().visibility_state, tracks::Visibility::Visible);
-  EXPECT_EQ(mgr_.selection().selected, kTwo);
+  EXPECT_EQ(mgr_.selection().visibility_state, tracks::Visibility::LostReacquirable);
+  EXPECT_EQ(mgr_.selection().selected, kOne);
+  EXPECT_EQ(mgr_.selected_track(), nullptr);
   EXPECT_FALSE(mgr_.selection().ambiguous_reacquisition);
+
+  observe(b_.frame({{kOne, 1}}));
+  EXPECT_EQ(mgr_.selection().visibility_state, tracks::Visibility::Visible);
+  EXPECT_EQ(mgr_.selection().selected, kOne);
+}
+
+TEST_F(SelectionTest, RepeatedSelectionDoesNotRefreshItsTimestampOrVisibility) {
+  observe(b_.frame({{kOne, 1}}));
+  ASSERT_TRUE(mgr_.select_track(kOne, b_.now).ok);
+  const auto selected_at = mgr_.selection().selection_timestamp;
+  observe(b_.frame({{kOne, 1, 1, "person", tracks::TrackState::Occluded}}));
+  const auto reply = mgr_.select_track(kOne, b_.now);
+  EXPECT_TRUE(reply.ok);
+  EXPECT_FALSE(reply.changed);
+  EXPECT_EQ(mgr_.selection().selection_timestamp, selected_at);
+  EXPECT_EQ(mgr_.selection().visibility_state, tracks::Visibility::Occluded);
 }
 
 TEST_F(SelectionTest, AmbiguousReacquisitionStopsAndAsks) {
@@ -208,7 +224,10 @@ TEST_F(SelectionTest, StaleAndRetiredSelectionsAreRefusedNotHonoured) {
   EXPECT_EQ(mgr_.selection().visibility_state, tracks::Visibility::Stale);
   EXPECT_EQ(mgr_.selected_track(), nullptr);
 
-  // And once the memory of it ages out entirely, selecting it is refused outright.
+  // Repeating a retained selection is inert. After clearing it, a new selection
+  // of that expired identity is refused.
+  EXPECT_TRUE(mgr_.select_track(kOne, b_.now).ok);
+  mgr_.clear(b_.now);
   auto r = mgr_.select_track(kOne, b_.now + 10'000'000'000);
   EXPECT_FALSE(r.ok) << "selecting something nobody has seen for seconds must not be "
                         "possible by remembering its number";
@@ -234,7 +253,8 @@ TEST_F(SelectionTest, ASilentProducerAgesTheWholeListAndNotJustTheSelectedTarget
       << "a refusal that will not say how old the list is, is a shrug: " << r.reason;
 
   auto r2 = mgr_.select_track(kOne, four_seconds_later);
-  EXPECT_FALSE(r2.ok) << "knowing the identifier must not be a way around the age limit";
+  EXPECT_TRUE(r2.ok);
+  EXPECT_FALSE(r2.changed);
 
   EXPECT_EQ(mgr_.effective_visibility(four_seconds_later), tracks::Visibility::Stale)
       << "the page must not go on saying VISIBLE for something unseen since before the crash";

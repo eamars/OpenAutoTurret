@@ -66,6 +66,27 @@ TEST_F(AutoTrackTest, Case1VisibleTargetAcquiresThenTracks) {
   EXPECT_TRUE(out_.follow_los);
 }
 
+TEST_F(AutoTrackTest, AcquisitionCountsNewCapturesDespiteCameraDelay) {
+  make_visible(in_);
+  in_.measurement_age_ms = 60;
+  for (int i = 0; i < 3; ++i) {
+    in_.measurement_timestamp_ns = now_ - 60*kMs;
+    advance();
+    advance(6); // repeated control cycles must not invent new observations
+  }
+  EXPECT_EQ(out_.state, AutoTrackState::Tracking);
+}
+
+TEST_F(AutoTrackTest, AmbiguityRemovesMotionAuthorityImmediately) {
+  make_visible(in_);
+  advance(3);
+  ASSERT_TRUE(out_.follow_los);
+  in_.ambiguous = true;
+  advance();
+  EXPECT_FALSE(out_.follow_los);
+  EXPECT_EQ(out_.state, AutoTrackState::LostHold);
+}
+
 TEST_F(AutoTrackTest, Case2TrackingAtHighConfidenceAsksForFullAuthority) {
   make_visible(in_);
   advance(3);

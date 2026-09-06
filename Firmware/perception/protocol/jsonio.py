@@ -131,9 +131,9 @@ def read_jsonl(path: str) -> Tuple[List[Dict[str, Any]], ScanStats]:
 class JsonlWriter:
     """Append-only JSONL writer with an explicit flush policy.
 
-    ``flush_every`` bounds how much data a crash can lose without making every frame a
-    filesystem sync: recordings are written on the frame path, and a daemon that blocks
-    on fsync at 17 Hz has been given a latency problem it did not need.
+    ``flush_every`` drains Python buffers to the OS; close synchronizes to storage.
+    Periodic fsync on the frame path caused multi-second stalls on the station.
+    A power failure can therefore lose records still in the OS page cache.
     """
 
     def __init__(self, path: str, flush_every: int = 32) -> None:
@@ -159,12 +159,14 @@ class JsonlWriter:
     def flush(self) -> None:
         if self._pending:
             self._handle.flush()
-            os.fsync(self._handle.fileno())
             self._pending = 0
 
     def close(self) -> None:
+        if self._handle.closed:
+            return
         try:
             self.flush()
+            os.fsync(self._handle.fileno())
         finally:
             if not self._handle.closed:
                 self._handle.close()
@@ -176,7 +178,65 @@ class JsonlWriter:
         self.close()
 
 
-def atomic_write_text(path: str, text: str) -> None:
+class AsyncJsonlWriter:
+    """Bounded live recorder I/O. Overflow is reported, never stalls capture."""
+    def __init__(self, path: str, flush_every: int = 32, capacity: int = 512):
+        import queue
+        import threading
+        self._queue = queue.Queue(maxsize=capacity)
+        self._writer = JsonlWriter(path, flush_every)
+        self._closed = threading.Event()
+        self.dropped = 0
+        self.failures = 0
+        self.last_error = ''
+        self._thread = threading.Thread(target=self._run, name='perception-record', daemon=True)
+        self._thread.start()
+
+    def write(self, record):
+        import queue
+        if self._closed.is_set():
+            raise RuntimeError('recorder is closed')
+        line = dumps(record) if not isinstance(record, str) else record
+        try:
+            self._queue.put_nowait(line)
+        except queue.Full:
+            self.dropped += 1
+
+    def _run(self):
+        import queue
+        try:
+            while not self._closed.is_set() or not self._queue.empty():
+                try:
+                    line = self._queue.get(timeout=.05)
+                except queue.Empty:
+                    continue
+                try:
+                    self._writer.write(line)
+                except OSError as exc:
+                    self.failures += 1
+                    self.last_error = str(exc)
+        finally:
+            try:
+                self._writer.close()
+            except OSError as exc:
+                self.failures += 1
+                self.last_error = str(exc)
+
+    def flush(self):
+        # The worker owns the file. Periodic flushing follows JsonlWriter's policy.
+        pass
+
+    def close(self):
+        self._closed.set()
+        self._thread.join(timeout=5)
+
+    def stats(self):
+        return dict(written=self._writer.records_written, dropped=self.dropped,
+                    failures=self.failures, last_error=self.last_error,
+                    queued=self._queue.qsize(), running=self._thread.is_alive())
+
+
+def atomic_write_text(path: str, text: str, *, durable: bool = True) -> None:
     """Write a whole file atomically (temp in the same directory, then rename)."""
     parent = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(parent, exist_ok=True)
@@ -187,7 +247,8 @@ def atomic_write_text(path: str, text: str) -> None:
         with handle:
             handle.write(text)
             handle.flush()
-            os.fsync(handle.fileno())
+            if durable:
+                os.fsync(handle.fileno())
         os.replace(handle.name, path)
     except BaseException:
         try:

@@ -336,6 +336,22 @@ TEST(CommandAck, StopMotionAnswersAndWorksFromAnyMode) {
       << "it should say what it cancelled: " << h.loop->last_command_ack().reason;
 }
 
+TEST(ControlLoop, HoldKeepsItsLatchedReferenceAcrossEncoderJitter) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.step(20);
+  const auto held = h.snap();
+  for (double offset : {0.00038, -0.00038, 0.00019}) {
+    h.sim->set_position(AxisId::Yaw, held.q_ref_yaw_rad + offset);
+    h.sim->set_position(AxisId::Pitch, held.q_ref_pitch_rad - offset);
+    h.step(1);
+    ASSERT_EQ(h.loop->last_decision().action, SafetyAction::Allow);
+    const auto after = h.snap();
+    EXPECT_DOUBLE_EQ(after.q_ref_yaw_rad, held.q_ref_yaw_rad);
+    EXPECT_DOUBLE_EQ(after.q_ref_pitch_rad, held.q_ref_pitch_rad);
+  }
+}
+
 TEST(TelemetryV3, ModeAndIntentArePublishedEveryCycle) {
   HomedLoop h;
   ASSERT_TRUE(h.ready);
@@ -466,6 +482,65 @@ TEST(FeedTrackSet, V1sClassAndConfidenceLimitsSurviveTheMove) {
         << "class " << pair.first << " at confidence " << pair.second
         << " would have been refused by v1's selector; controld must refuse it too";
   }
+}
+
+TEST(FeedTrackSet, NativeSelectionOwnsIdentityClearAndMeasurementValidity) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_TRACK");
+  auto frame = make_set_with(tracks::TrackState::Confirmed, 1, .9f);
+  frame.width = 1920;
+  frame.height = 1080;
+  frame.observation.native = true;
+  frame.observation.session = {UINT64_MAX, UINT64_MAX};
+  frame.observation.selected = frame.tracks[0].uuid;
+  frame.observation.generation = 1;
+  frame.observation.state = 1;
+  frame.observation.valid = true;
+  auto publish = [&] {
+    ++frame.observation.track_set_sequence;
+    ++frame.frame_sequence;
+    frame.sensor_timestamp_ns = h.t;
+    frame.publish_timestamp_ns = h.t;
+    h.loop->feed_track_set(frame, h.t);
+    h.step(2);
+  };
+  for (int i = 0; i < 4; ++i) publish();
+  ASSERT_TRUE(h.snap().perception_native);
+  ASSERT_TRUE(h.snap().selected_uuid_valid);
+  EXPECT_EQ(h.snap().selection_generation, 1u);
+  EXPECT_EQ(h.snap().perception_session_uuid, "18446744073709551615:18446744073709551615");
+  EXPECT_NEAR(h.loop->tracking_controller().aim_status().v_norm, .55, 1e-6);
+  h.run("clear_target");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_TRUE(h.snap().selected_uuid_valid);
+
+  // A still-confirmed display candidate must not override an invalid observation.
+  frame.observation.state = 4;
+  frame.observation.valid = false;
+  publish();
+  EXPECT_TRUE(h.snap().selected_uuid_valid);
+  EXPECT_EQ(h.snap().selection_visibility, "LOST_REACQUIRABLE");
+  EXPECT_TRUE(h.snap().selection_ambiguous);
+  h.step(100);
+  EXPECT_FALSE(h.snap().predicted_target_los_valid);
+  EXPECT_FALSE(h.snap().tracks[0].selectable);
+
+  frame.observation.selected = {};
+  frame.observation.state = 0;
+  frame.observation.generation = 2;
+  publish();
+  EXPECT_FALSE(h.snap().selected_uuid_valid);
+  EXPECT_FALSE(h.loop->tracking_controller().estimator_initialized());
+  EXPECT_EQ(h.snap().selection_generation, 2u);
+
+  frame.observation.generation = 1; // old generation cannot restore a cleared target
+  frame.observation.selected = frame.tracks[0].uuid;
+  frame.observation.state = 1;
+  frame.observation.valid = true;
+  publish();
+  EXPECT_FALSE(h.snap().selected_uuid_valid);
+  EXPECT_EQ(h.snap().selection_generation, 2u);
 }
 
 TEST(FeedTrackSet, MissingResolutionIsRefusedRatherThanGuessed) {

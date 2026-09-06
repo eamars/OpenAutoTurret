@@ -186,6 +186,10 @@ class Telemetry:
     vision_frames: int = 0                  # decoded measurements since boot
     vision_dropped: int = 0                 # bad-size / undecodable datagrams
     vision_last_frame_sequence: int = 0
+    perception_native: bool = False
+    perception_session_uuid: str = ""
+    perception_track_set_sequence: int = 0
+    selection_generation: int = 0
     vision_measurement_age_ms: int = -1     # since the last measurement
     # v3.2 section 20 camera geometry, which the HUD draws with. `camera_intrinsics` is the
     # calibration the DAEMON loaded, as an object {"valid","fx","fy","cx","cy","width","height"}.
@@ -220,6 +224,14 @@ class Telemetry:
     effective_speed_ceiling_deg_s: Optional[float] = None
     envelope_v_max_deg_s: Optional[float] = None
     prediction_horizon_ms: Optional[int] = None
+    estimator_innovation_az_rad: Optional[float] = None
+    estimator_innovation_el_rad: Optional[float] = None
+    estimator_mahalanobis: Optional[float] = None
+    estimator_process_noise_scale: Optional[float] = None
+    estimator_variance_az_rad2: Optional[float] = None
+    estimator_variance_el_rad2: Optional[float] = None
+    estimator_rejected: Optional[int] = None
+    estimator_measurement_accepted: Optional[bool] = None
     target_az_rate_world_rad_s: Optional[float] = None
     target_el_rate_world_rad_s: Optional[float] = None
     # The reference profile's own rate/accel: what "smooth" has to be judged on. The motion log's

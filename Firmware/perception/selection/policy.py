@@ -126,10 +126,13 @@ class AutoSelector:
         self._sole_since_ns = 0
 
     def evaluate(self, tracks: Sequence[Track], sensor_timestamp_ns: int,
-                 *, selection_active: bool) -> AutoDecision:
+                 *, selection_active: bool, auto_track_enabled: bool = False) -> AutoDecision:
         """One step of the machine. Returns the identity to auto-select, if any."""
         if not self.enabled:
             return AutoDecision(reason="explicit_only_policy")
+        if not auto_track_enabled:
+            self.reset()
+            return AutoDecision(reason="auto_track_context_required")
         if selection_active:
             # §28.2's auto-selection never takes the target away from an operator. If that
             # ever needs to change, the change belongs in a policy the operator opted into,
@@ -149,24 +152,8 @@ class AutoSelector:
         candidates = [track for track in tracks if _auto_eligible(
             track, thresholds=self.thresholds, selection=self.cfg)]
         if len(candidates) != 1:
-            # A single OCCLUDED sole candidate is a skipped tensor (gap), not a lost one: §23
-            # retires a track only after its window, so keep the dwell. But a genuine SECOND
-            # candidate (len >= 2) still cancels — §28.2's rule is "exactly one, alone", and a
-            # second person entering the frame is a real ambiguity, not a hardware cadence.
-            if len(candidates) >= 2:
-                self.reset()
-                return AutoDecision(reason="not_a_single_candidate",
-                                    candidates=len(candidates))
-            # len(candidates) == 0 and the previous sole candidate is still alive.
-            ongoing = next((t for t in tracks if t.track_uuid == self._sole_uuid), None)
-            bar_ok = ongoing is not None and (
-                ongoing.detector_score >= self.cfg.auto_select_min_detector_score
-                and ongoing.identity_confidence >= self.cfg.auto_select_min_identity_confidence
-                and ongoing.state in (TrackState.CONFIRMED_VISIBLE, TrackState.OCCLUDED))
-            if not bar_ok:
-                self.reset()
-                return AutoDecision(reason="no_candidate", candidates=0)
-            candidates = [ongoing]
+            self.reset()
+            return AutoDecision(reason="not_a_single_candidate", candidates=len(candidates))
 
         sole = candidates[0]
         if sole.track_uuid != self._sole_uuid:

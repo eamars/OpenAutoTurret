@@ -562,6 +562,12 @@ function render(t) {
           (tr.selectable ? "" : " (not selectable, \u00a78)") +
           (stale ? " \u2014 list is " + age + " ms old" : "");
         b.addEventListener("click", () => {
+          if (t.perception_native) {
+            sendCommand("select_uuid", JSON.stringify({track_uuid: tr.uuid,
+              session_uuid: t.perception_session_uuid,
+              track_set_sequence_seen_by_ui: t.perception_track_set_sequence}), null);
+            return;
+          }
           sendCommand("select_target", String(tr.display_index), null);
         });
         list.appendChild(b);
@@ -688,6 +694,23 @@ function logline(msg, kind) {
 }
 
 async function sendCommand(cmd, arg, btn) {
+  if (cmd === "select_uuid" || (cmd === "clear_target" && LAST_T && LAST_T.perception_native)) {
+    try {
+      const body = cmd === "select_uuid" ? JSON.parse(arg) :
+        {session_uuid: LAST_T.perception_session_uuid};
+      body.type = cmd === "select_uuid" ? "select_target" : "clear_target";
+      body.request_id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
+        String(Date.now()) + "-" + String(Math.random());
+      const response = await fetch("/api/selection", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const ack = await response.json();
+      logline(body.type + " -> " + String(ack.reason || "NO ACK"), ack.accepted ? "ok" : "err");
+      return ack;
+    } catch (e) {
+      logline("SELECTION NOT ACKNOWLEDGED: " + String(e), "err");
+      return {accepted: false};
+    }
+  }
   if (btn) btn.disabled = true;
   try {
     const r = await fetch("/api/command", {

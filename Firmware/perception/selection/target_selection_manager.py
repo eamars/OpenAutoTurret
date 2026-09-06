@@ -23,12 +23,9 @@ change of target.
 identity is gone *and* that the UI's advertised sequence is older than the daemon's. Blaming
 stale UI for a track that never existed would teach everyone to ignore the reason code.
 
-**A selection survives loss, bounded by the identity TTL** (§31). ``OCCLUDED`` and ``LOST``
-keep the selection — that is the whole point of §18's reacquirable state — and the controller
-is told which of the two it is looking at with ``measurement_valid``. When the TTL expires and
-the identity is retired, the selection ends exactly once: one ``TARGET_STALE`` event, one
-generation bump, an explicit ``NO_TARGET`` publish. Silence is the failure mode §34 exists to
-prevent.
+**A selection survives loss and identity retirement** (§31). When its TTL expires the
+selection becomes ``SELECTED_STALE``, emits one event, and keeps its UUID and generation.
+Only an operator clear or a different explicit selection releases it.
 
 **Ambiguity retains and disables** (§32). Two identities could explain the one box: the
 selection is not guessed at and not cleared; it is retained with ``target_state=AMBIGUOUS``
@@ -200,7 +197,8 @@ class TargetSelectionManager:
         return ack
 
     # -- the frame ----------------------------------------------------------
-    def update(self, track_set: TrackSet, now_ns: int) -> SelectedTargetObservation:
+    def update(self, track_set: TrackSet, now_ns: int, *,
+               auto_track_enabled: bool = False) -> SelectedTargetObservation:
         """Recompute the observation for one published ``TrackSet``."""
         track_set.validate()
         self._observe_sequence(track_set)
@@ -211,7 +209,8 @@ class TargetSelectionManager:
         # already exists: its state must be "reset while the operator holds the target", not
         # "paused", or it would resume a dwell that started before the operator intervened.
         decision = self.auto.evaluate(track_set.tracks, sensor_ns,
-                                      selection_active=self.state.has_selection)
+                                      selection_active=self.state.has_selection,
+                                      auto_track_enabled=auto_track_enabled)
         if not self.state.has_selection and decision.track_uuid:
             self._auto_select(track_set, decision.track_uuid, now_ns, decision)
             return self._publish(track_set, now_ns)
@@ -232,8 +231,7 @@ class TargetSelectionManager:
         track = track_set.by_uuid(self.state.selected_uuid)
         if track is None:
             # Gone, and not by merging: §31's TTL has elapsed and the tracker retired it.
-            self._clear_selection(reason="identity_retired", event=EventType.TARGET_STALE,
-                                  detail="selected identity exceeded its TTL and retired")
+            self._mark_stale("selected identity exceeded its TTL and retired")
             return self._publish(track_set, now_ns)
 
         target_state, measurement_valid = _project_state(track)
@@ -255,8 +253,6 @@ class TargetSelectionManager:
             self.state.last_valid_measurement_ns = sensor_ns
             self.state.stale_reported = False
         elif self._check_ttl(track, sensor_ns):
-            # The selection ended under us; writing state onto the fresh (empty) selection
-            # object would publish a LOST target with no subject.
             return self._publish(track_set, now_ns)
 
         self.state.target_state = target_state
@@ -265,11 +261,7 @@ class TargetSelectionManager:
         return self._publish(track_set, now_ns)
 
     def _check_ttl(self, track: Track, sensor_ns: int) -> bool:
-        """§31: a selection may coast on LOST, but not past the identity's own TTL.
-
-        Returns whether the selection ended, so the caller does not go on to publish a state
-        belonging to an identity that no longer owns the turret.
-        """
+        """Return whether the selected identity has become stale (§31)."""
         retain_ms = self.config.tracking.lost.retain_ms
         reference = track.last_measurement_ns or track.created_ns
         if reference <= 0:
@@ -277,10 +269,17 @@ class TargetSelectionManager:
         miss_ms = ms_from_ns(sensor_ns, reference)
         if miss_ms <= retain_ms:
             return False
-        self._clear_selection(
-            reason="selection_ttl_expired", event=EventType.TARGET_STALE,
-            detail=f"no measurement for {miss_ms:.0f} ms (TTL {retain_ms:.0f} ms)")
+        self._mark_stale(f"no measurement for {miss_ms:.0f} ms (TTL {retain_ms:.0f} ms)")
         return True
+
+    def _mark_stale(self, detail: str) -> None:
+        if not self.state.stale_reported:
+            self._emit(EventType.TARGET_STALE, track_uuid=self.state.selected_uuid,
+                       sensor_ns=self.last_sensor_timestamp_ns, detail=detail,
+                       display_label=self.state.display_label)
+        self.state.stale_reported = True
+        self.state.target_state = TargetState.SELECTED_STALE
+        self.state.measurement_valid = False
 
     def _auto_select(self, track_set: TrackSet, track_uuid: str, now_ns: int,
                      decision) -> None:
@@ -309,8 +308,19 @@ class TargetSelectionManager:
                 publish_timestamp_ns=now_ns)
         else:
             track = track_set.by_uuid(self.state.selected_uuid)
-            if track is None:                    # cleared above; belt and braces
-                return self._publish_empty(track_set, now_ns)
+            if self.state.stale_reported or track is None:
+                observation = SelectedTargetObservation(
+                    selection_generation=self.state.generation,
+                    session_uuid=track_set.session_uuid,
+                    track_uuid=self.state.selected_uuid,
+                    frame_sequence=track_set.frame_sequence,
+                    sensor_timestamp_ns=track_set.sensor_timestamp_ns,
+                    publish_timestamp_ns=now_ns,
+                    target_state=TargetState.SELECTED_STALE,
+                    measurement_valid=False)
+                observation.validate()
+                self._last_observation = observation
+                return observation
             state, valid = _project_state(track)
             observation = SelectedTargetObservation.from_track(
                 track, selection_generation=self.state.generation,

@@ -80,10 +80,9 @@ struct AutoTrackConfig {
   // §19's authority ceilings: "modest derating" and "do not accelerate aggressively".
   float medium_scale = 0.60f;
   float low_scale = 0.30f;
-  // How old an estimate may be before it stops counting as evidence. One and a half
-  // frames at the design rate (30 Hz), so a normally-behaving publisher is never
-  // mistaken for a lost target, and a publisher that has actually stalled is.
-  int64_t fresh_ms = 50;
+  // Capture age includes camera/processing delay as well as inter-frame spacing.
+  // The station's ~26 Hz stream commonly arrives about 50-75 ms after capture.
+  int64_t fresh_ms = 150; // capture-to-publish delay plus the measured ~38 ms frame interval
   // §20.1: authority at the start of a coast, and the floor it decays to.
   float coast_scale_start = 0.60f;
   float coast_scale_floor = 0.20f;
@@ -104,6 +103,7 @@ struct AutoTrackInput {
   // and resume continuously — and the first draft of this class did exactly that, until
   // a test tried to sit in COASTING and found itself back in TRACKING.
   int64_t measurement_age_ms = -1;
+  TimeNs measurement_timestamp_ns = 0; // accepted capture identity; zero for legacy callers
   bool estimator_ready = false;        // §17: prediction exists to follow
   bool los_feasible = true;            // §22: the envelope could satisfy the request
   float detector_confidence = 0.0f;    // §19's five inputs, as §9 publishes them
@@ -167,11 +167,21 @@ class AutoTrackController {
     AutoTrackOutput out;
     const bool fresh = in.measurement_age_ms >= 0 &&
                        in.measurement_age_ms <= cfg_.fresh_ms;
-    const bool this_cycle = in.measurement_age_ms == 0;
+    const bool this_cycle = in.measurement_timestamp_ns > 0
+        ? in.measurement_timestamp_ns > last_capture_ns_
+        : in.measurement_age_ms == 0;
+    if (this_cycle) last_capture_ns_ = in.measurement_timestamp_ns;
     out.state = state_;
     out.selected_confidence = selected_confidence(in, in.track_confidence);
     out.band = band_for(out.selected_confidence);
     out.reason = "hold";
+
+    if (!in.has_selection || in.ambiguous) {
+      enter(in.has_selection ? AutoTrackState::LostHold : AutoTrackState::WaitTarget, now_ns);
+      out.state = state_;
+      out.reason = in.has_selection ? "ambiguous identity: holding" : "select a target";
+      return out;
+    }
 
     switch (state_) {
       case AutoTrackState::WaitTarget:
@@ -188,7 +198,7 @@ class AutoTrackController {
           // Never acquired, so there is nothing to coast toward. Back to waiting.
           enter(AutoTrackState::WaitTarget, now_ns);
           out.reason = "target gone before acquisition";
-        } else if (!this_cycle || !in.estimator_ready) {
+        } else if (!fresh || !this_cycle || !in.estimator_ready) {
           out.reason = "acquiring: no measurement yet";
         } else if (out.band == ConfidenceBand::Invalid) {
           out.reason = "acquiring: confidence invalid";
@@ -226,7 +236,7 @@ class AutoTrackController {
           // target is how the coast timer never gets to run.
           enter(AutoTrackState::Tracking, now_ns);
           out.reason = "target returned";
-        } else if ((now_ns - entered_state_ns_) / 1000000 >= cfg_.coast_ms) {
+        } else if (!in.estimator_ready || (now_ns - entered_state_ns_) / 1000000 >= cfg_.coast_ms) {
           enter(AutoTrackState::LostHold, now_ns);
           out.reason = "coast timeout: holding";
         } else {
@@ -333,6 +343,7 @@ class AutoTrackController {
     state_ = to;
     entered_state_ns_ = 0;
     cycles_in_state_ = 0;
+    last_capture_ns_ = 0;
   }
 
  private:
@@ -361,6 +372,7 @@ class AutoTrackController {
   AutoTrackState state_ = AutoTrackState::WaitTarget;
   TimeNs entered_state_ns_ = 0;
   int32_t cycles_in_state_ = 0;
+  TimeNs last_capture_ns_ = 0;
 };
 
 }  // namespace ota

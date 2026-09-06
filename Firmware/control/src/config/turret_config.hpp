@@ -143,6 +143,9 @@ struct TrackingConfig {
   // §13 alpha-beta gains.
   double estimator_alpha = 0.8;
   double estimator_beta = 0.3;
+  std::string estimator_model = "constant_velocity";
+  double estimator_measurement_sigma_rad = 0.004;
+  double estimator_accel_sigma_rad_s2 = 0.35;
 };
 
 // §5.1/§6.1 vision ingest (Part 2, S1): what controld binds so visiond can

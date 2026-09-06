@@ -202,12 +202,16 @@ function hudDrawerActions(name, t) {
       // renderer that only remembers to disable by kind would otherwise still hold a real command for a
       // row that must not send one. The data is the contract the tests read, so it says what is true.
       rows.push({ label: "#" + di + " " + String(tr.label || tr.class_name || "TRACK").toUpperCase(),
-                  command: tr.selected ? null : "select_target", arg: String(di),
-                  kind: tr.selected ? "current" : "act",
+                  command: tr.selected || tr.selectable === false ? null :
+                    (t.perception_native ? "select_uuid" : "select_target"),
+                  arg: t.perception_native ? JSON.stringify({track_uuid: tr.uuid,
+                    session_uuid: t.perception_session_uuid,
+                    track_set_sequence_seen_by_ui: t.perception_track_set_sequence}) : String(di),
+                  kind: tr.selected ? "current" : tr.selectable === false ? "gated" : "act",
                   note: (typeof tr.confidence === "number" ? Math.round(tr.confidence * 100) + "%" : "") });
     });
     if (!rows.length) rows.push({ label: "NO TARGETS", command: null, kind: "current", note: "" });
-    if (tracks.some((x) => x && x.selected)) {
+    if (t.selected_uuid_valid || tracks.some((x) => x && x.selected)) {
       rows.push({ label: "CLEAR SELECTION", command: "clear_target", arg: "", kind: "act", note: "" });
     }
     return rows;
@@ -283,6 +287,9 @@ function hudDiagRows(t) {
                         ? Math.round(t.selected_confidence * 100) + "%" : "--")],
     ["PREDICTION HORIZON", (typeof t.prediction_horizon_ms === "number"
                             ? String(t.prediction_horizon_ms) + " MS" : "--")],
+    ["ESTIMATOR NIS", Number.isFinite(t.estimator_mahalanobis) ? t.estimator_mahalanobis.toFixed(2) : "--"],
+    ["PROCESS NOISE SCALE", Number.isFinite(t.estimator_process_noise_scale) ? t.estimator_process_noise_scale.toFixed(2) : "--"],
+    ["ESTIMATOR REJECTS", Number.isFinite(t.estimator_rejected) ? String(t.estimator_rejected) : "--"],
     // §10: with no cue the page used to say nothing, and "nothing" is how a broken intrinsics
     // match hid until somebody noticed the box was missing. The controller states a reason, so
     // the page shows it. LIVE rather than OK: §10 reserves unambiguous words for observations.
@@ -990,19 +997,24 @@ function render(t) {
   // limited number and is not what this cell claims..
   const cell = (k, v, cls) => '<span class="k">' + k + '</span><span class="' + (cls || "v") + '">' + v + '</span>';
   $("strip").innerHTML =
-    cell("MODE", mode, "v") + '<span class="sep">|</span>' +
+    cell("MODE", String(t.operating_mode || "--"), "v") + '<span class="sep">|</span>' +
     cell("STATE", String(t.track_state || "--").toUpperCase(), "v") + '<span class="sep">|</span>' +
     cell("TARGETS", String(t.track_count == null ? "--" : t.track_count), "v") + '<span class="sep">|</span>' +
     cell("FPS", fmt(t.camera_fps, 0), "v") + '<span class="sep">|</span>' +
     cell("AGE", fmt(t.vision_measurement_age_ms, 0, " ms"), stale ? "warn" : "v") + '<span class="sep">|</span>' +
-    cell("SAFETY", safe && safe !== "NONE" ? safe : "ALLOW", "v");
+    cell("SAFETY", String(t.safety_action || "UNKNOWN"), "v");
 }
 
 function paint(t) {
+  const drawerKey = value => JSON.stringify([value && value.operating_mode,
+    value && value.selected_uuid, value && value.perception_session_uuid,
+    ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
+  const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   resolveAckFromTelemetry(t);
   render(t);
+  if (drawerOpen && drawerChanged) renderDrawer();
 }
 
 function updateStaleness(t) {
@@ -1149,6 +1161,11 @@ function resolveAckFromTelemetry(t) {
   }
 }
 
+function escapeMarkup(value) {
+  return String(value).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+}
+
 function renderDrawer() {
   if (!drawerOpen) { drawer.hidden = true; drawer.innerHTML = ""; return; }
   let rows;
@@ -1163,14 +1180,14 @@ function renderDrawer() {
                              a.kind === "gated" ? "gated" : a.kind === "current" ? "on" : "");
       const waiting = pendingConfirm === a.label;
       return '<button type="button" class="' + cls + (waiting ? " confirm" : "") + '" data-cmd="' +
-             (a.command || "") + '" data-arg="' + (a.arg || "") + '" data-kind="' + a.kind + '"' +
+             escapeMarkup(a.command || "") + '" data-arg="' + escapeMarkup(a.arg || "") + '" data-kind="' + a.kind + '"' +
              (inert ? " disabled" : "") + '><span class="rl">' +
-             (waiting ? "CONFIRM " + a.label : a.label) + '</span><span class="rn">' +
-             (waiting ? "PRESS AGAIN" : (a.note || "")) + "</span></button>";
+             escapeMarkup(waiting ? "CONFIRM " + a.label : a.label) + '</span><span class="rn">' +
+             escapeMarkup(waiting ? "PRESS AGAIN" : (a.note || "")) + "</span></button>";
     }).join("");
   }
   drawer.innerHTML = '<div class="dtitle">' + drawerOpen + "</div>" + rows +
-    '<div class="dack ' + lastAck.kind + '" role="status">' + (lastAck.text || "&nbsp;") + "</div>";
+    '<div class="dack ' + lastAck.kind + '" role="status">' + escapeMarkup(lastAck.text || " ") + "</div>";
   drawer.hidden = false;
 }
 
@@ -1186,6 +1203,26 @@ function setDrawer(key) {
 }
 
 async function sendCommand(cmd, arg) {
+  if (cmd === "select_uuid" || (cmd === "clear_target" && lastTelemetry && lastTelemetry.perception_native)) {
+    try {
+      const body = cmd === "select_uuid" ? JSON.parse(arg) :
+        {session_uuid: lastTelemetry.perception_session_uuid};
+      body.type = cmd === "select_uuid" ? "select_target" : "clear_target";
+      body.request_id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
+        String(Date.now()) + "-" + String(Math.random());
+      const response = await fetch("/api/selection", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const ack = await response.json();
+      lastAck = {text: body.type + "  " + String(ack.reason || "NO ACK"),
+        kind: ack.accepted ? "" : "bad"};
+    } catch (e) {
+      lastAck = {text: "SELECTION NOT ACKNOWLEDGED", kind: "bad"};
+    }
+    pendingAck = null;
+    pendingConfirm = null;
+    renderDrawer();
+    return;
+  }
   let j = null;
   try {
     const r = await fetch("/api/command", {

@@ -653,13 +653,26 @@ TEST(ModeTransitions, AutoRoamToAutoTrackWithASelectedTargetRedirectsSmoothly) {
 
   // A target appears off to one side and the operator names it, both while roaming
   // (§34: selection stays usable during a sweep; pursuing it is a mode switch).
+  // Place it within the CURRENT camera view. A fixed base elevation of zero can
+  // project above this homed/pitched camera and used to test tracking invisible pixels.
+  double target_az, target_el;
+  actual_los(r.kin(), r.loop().last_positions()[1], r.loop().last_positions()[0],
+             target_az, target_el);
+  target_az = ota::tracking::wrap_angle(target_az + 0.15);
+  double u, v;
+  base_los_to_pixel(r.cam(), r.kin(), target_az, target_el,
+                    r.loop().last_positions()[1], r.loop().last_positions()[0], u, v);
+  ASSERT_GT(u, 40.0);
+  ASSERT_LT(u, 1880.0);
+  ASSERT_GT(v, 80.0);
+  ASSERT_LT(v, 1000.0);
   for (int i = 0; i < 30; ++i) {
-    step_with_track(r, t, 2000 + i, 0.35, 0.0);
+    step_with_track(r, t, 2000 + i, target_az, target_el);
     t += kDtNs;
   }
   r.loop().submit_command("select_target", "1");
   for (int i = 0; i < 5; ++i) {
-    step_with_track(r, t, 2100 + i, 0.35, 0.0);
+    step_with_track(r, t, 2100 + i, target_az, target_el);
     t += kDtNs;
   }
   ASSERT_NE(snap_of(r).selected_track_id, 0u) << "the selection did not take";
@@ -674,7 +687,7 @@ TEST(ModeTransitions, AutoRoamToAutoTrackWithASelectedTargetRedirectsSmoothly) {
   const double yaw_before = r.loop().last_positions()[1];
   enter_mode(r, make_tracking_cfg(false), ota::OperatingMode::AutoTrack);
   for (int i = 0; i < 400; ++i) {
-    step_with_track(r, t, 2200 + i, 0.35, 0.0);
+    step_with_track(r, t, 2200 + i, target_az, target_el);
     t += kDtNs;
     if (i < 80)
       handover.sample(r.loop().last_positions()[1], r.loop().last_positions()[0]);
