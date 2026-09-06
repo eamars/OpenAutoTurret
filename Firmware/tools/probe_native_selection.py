@@ -21,6 +21,8 @@ from perception.protocol.native_wire import encode_perception_frame
 from perception.protocol.wire import SocketPublisher
 from perception.selection.service import SelectionService
 from perception.selection.target_selection_manager import TargetSelectionManager
+from perception.selection.control_context import ControllerContext
+from perception.config import SelectionPolicy
 
 
 def main():
@@ -28,6 +30,7 @@ def main():
     parser.add_argument('--duration-s', type=float, default=180)
     parser.add_argument('--port', type=int, default=8081)
     parser.add_argument('--camera', action='store_true', help='use real IMX500 perception')
+    parser.add_argument('--auto-cycle', action='store_true', help='exercise autonomous selection with fixtures')
     parser.add_argument('--profile', default='person_detect_available')
     parser.add_argument('--control-file', type=Path,
                         help='optional probe-only JSON: visible_indices and pause_publish')
@@ -45,14 +48,21 @@ def main():
         root = Path(directory)
         env = dict(os.environ, OTA_VISION_SOCKET=str(root/'vision.sock'),
                    OTA_WEB_SOCKET=str(root/'web.sock'), OTA_SELECTION_SOCKET=str(root/'selection.sock'),
-                   OTA_WEB_PORT=str(args.port), OTA_VIDEO_ENABLE='1' if args.camera else '0',
+                   OTA_WEB_PORT=str(args.port), OTA_WEB_HOST='0.0.0.0', OTA_VIDEO_ENABLE='1' if args.camera else '0',
                    OTA_VISION_FRAME_TAP=str(root/'preview.jpg'))
-        selector = TargetSelectionManager(commissioned_config())
+        config = commissioned_config()
+        if args.auto_cycle:
+            config.selection.policy = SelectionPolicy.AUTO_SELECT_SINGLE
+            config.selection.auto_select_min_detector_score = .7
+            config.selection.auto_select_min_identity_confidence = .7
+        selector = TargetSelectionManager(config)
+        context = ControllerContext(f'http://127.0.0.1:{args.port}/api/state')
         service = SelectionService(env['OTA_SELECTION_SOCKET'])
         publisher = SocketPublisher(env['OTA_VISION_SOCKET'])
         try:
             if not args.camera:
                 service.start()
+                context.start()
             for name, command in [
                 ('controller', ['build/control/controld', 'config/turret.yaml', '--sim']),
                 ('web', [sys.executable, '-m', 'web.webd.app'])]:
@@ -74,8 +84,8 @@ def main():
                               'simulated_motors': True}), flush=True)
             tracks = [track_at(.35, index=1), track_at(.65, index=2)]
             for index, track in enumerate(tracks):
-                track.track_uuid = str(uuid.UUID(int=17+index))
-            session = str(uuid.uuid4())
+                track.track_uuid = uuid.UUID(int=17+index).hex
+            session = uuid.uuid4().hex
             started = time.monotonic(); sequence = 0
             while not stop and time.monotonic()-started < args.duration_s:
                 if any(child.poll() is not None for child in children):
@@ -87,14 +97,16 @@ def main():
                     continue
                 now = time.monotonic_ns(); sequence += 1
                 control = json.loads(args.control_file.read_text()) if args.control_file and args.control_file.exists() else {}
-                visible = control.get('visible_indices', [1, 2])
+                visible = control.get('visible_indices', [1] if args.auto_cycle else [1, 2])
                 for track in tracks:
                     track.last_measurement_ns = now-60_000_000
                 frame = track_set_of([t for t in tracks if t.display_index in visible],
                     sequence=sequence, frame_index=sequence,
                     sensor_ns=now-60_000_000, session_uuid=session)
                 service.process(selector, frame, now)
-                observation = selector.update(frame, frame.sensor_timestamp_ns)
+                mode = context.operating_mode(session, now) if args.auto_cycle else ''
+                observation = selector.update(frame, frame.sensor_timestamp_ns,
+                    auto_track_enabled=mode == 'AUTO_TRACK', auto_roam_enabled=mode == 'AUTO_ROAM')
                 frame.publish_timestamp_ns = observation.publish_timestamp_ns = time.monotonic_ns()
                 if control.get('pause_publish'):
                     publisher.close()
@@ -104,6 +116,7 @@ def main():
         finally:
             if not args.camera:
                 service.close()
+                context.close()
             publisher.close()
             for child in children:
                 child.send_signal(signal.SIGINT)

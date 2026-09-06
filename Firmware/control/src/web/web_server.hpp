@@ -236,6 +236,20 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"q_ref_accel_yaw_rad_s2\":" << s.q_ref_accel_yaw_rad_s2
      << ",\"q_ref_accel_pitch_rad_s2\":" << s.q_ref_accel_pitch_rad_s2
      << ",\"q_ref_rate_valid\":" << (s.q_ref_rate_valid ? "true" : "false")
+     << ",\"tracking_velocity_control\":" << (s.tracking_velocity_control ? "true" : "false")
+     << ",\"tracking_reference_damped\":" << (s.tracking_reference_damped ? "true" : "false")
+     << ",\"tracking_aim_joint_valid\":" << (s.tracking_aim_joint_valid ? "true" : "false")
+     << ",\"tracking_aim_yaw_rad\":" << s.tracking_aim_yaw_rad
+     << ",\"tracking_aim_pitch_rad\":" << s.tracking_aim_pitch_rad
+     << ",\"guidance_target_rate_yaw_rad_s\":" << s.guidance_target_rate_yaw_rad_s
+     << ",\"guidance_target_rate_pitch_rad_s\":" << s.guidance_target_rate_pitch_rad_s
+     << ",\"service_velocity_control\":" << (s.service_velocity_control ? "true" : "false")
+     << ",\"feedback_timestamp_yaw_ns\":" << s.feedback_timestamp_yaw_ns
+     << ",\"feedback_timestamp_pitch_ns\":" << s.feedback_timestamp_pitch_ns
+     << ",\"service_command_rate_yaw_rad_s\":" << s.service_command_rate_yaw_rad_s
+     << ",\"service_command_rate_pitch_rad_s\":" << s.service_command_rate_pitch_rad_s
+     << ",\"tracking_command_rate_yaw_rad_s\":" << s.tracking_command_rate_yaw_rad_s
+     << ",\"tracking_command_rate_pitch_rad_s\":" << s.tracking_command_rate_pitch_rad_s
      // v3 §50/§52: the mode, the intent, and the answer to the last command.
      << ",\"vision_track_sets\":" << s.vision_track_sets
      << ",\"vision_sensor_age_ms\":" << s.vision_sensor_age_ms

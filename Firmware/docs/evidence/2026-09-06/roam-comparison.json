@@ -1,0 +1,66 @@
+{
+  "Kp 1 / Ki .05": {
+    "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-01.json",
+    "sha256": "f8b6b374e75e6118b36cf16f01a0b4e39f5892279b6faa15101c989c82f502c7",
+    "duration_s": 94.98452615799033,
+    "unique_samples": 1436,
+    "steady_samples": 1460,
+    "velocity_window_s": 0.2,
+    "rate_error_rms_deg_s": 0.9288204505392973,
+    "absolute_reference_error_p95_deg": 2.8286496627262387,
+    "faults": [
+      ""
+    ],
+    "safety_actions": [
+      "ALLOW"
+    ]
+  },
+  "Kp 4 / Ki .05": {
+    "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-kp4-02.json",
+    "sha256": "9530d0efa45453a1ce296cd3f7780f1f8a9df503889a8a728657bfdcbe32f927",
+    "duration_s": 94.97637343799579,
+    "unique_samples": 1436,
+    "steady_samples": 1505,
+    "velocity_window_s": 0.2,
+    "rate_error_rms_deg_s": 0.6882642375419273,
+    "absolute_reference_error_p95_deg": 2.4206320928687015,
+    "faults": [
+      ""
+    ],
+    "safety_actions": [
+      "ALLOW"
+    ]
+  },
+  "Kp 4 / Ki .02": {
+    "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-kp4-ki02-02.json",
+    "sha256": "b793ed2b2344ed7b63a44e3d8768ba878cda323f29be842a37071edcd2a97eb4",
+    "duration_s": 94.98100204297225,
+    "unique_samples": 1436,
+    "steady_samples": 1452,
+    "velocity_window_s": 0.2,
+    "rate_error_rms_deg_s": 0.952009875843401,
+    "absolute_reference_error_p95_deg": 6.009181355332075,
+    "faults": [
+      ""
+    ],
+    "safety_actions": [
+      "ALLOW"
+    ]
+  },
+  "Kp 5 / Ki .05": {
+    "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-kp5.json",
+    "sha256": "f33c84326a85aa784b7b43237636e46c83243abe03c6ecb452ea73528a686a35",
+    "duration_s": 94.97536636999575,
+    "unique_samples": 1436,
+    "steady_samples": 1497,
+    "velocity_window_s": 0.2,
+    "rate_error_rms_deg_s": 0.6810643323986106,
+    "absolute_reference_error_p95_deg": 3.4530662298322503,
+    "faults": [
+      ""
+    ],
+    "safety_actions": [
+      "ALLOW"
+    ]
+  }
+}

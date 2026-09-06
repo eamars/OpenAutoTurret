@@ -354,11 +354,19 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
   if (!n.IsDefined()) return;  // today's behaviour, unchanged
 
   out.default_mode = opt_string(n, "default_mode", "v3.default_mode", "MANUAL", warn);
-  if (out.default_mode != "MANUAL") {
-    err.push_back("v3.default_mode must be MANUAL (got '" + out.default_mode +
-                  "'). controld boots in MANUAL and stays there until an operator asks "
-                  "for a mode (§16/§52): the machine does not choose to move because a "
-                  "file said so.");
+  out.service_speed_control = opt_bool(n, "service_speed_control", "v3.service_speed_control", false, warn);
+  out.service_max_speed_deg_s = opt_double(n, "service_max_speed_deg_s", "v3.service_max_speed_deg_s", 3.0, warn);
+  if (!std::isfinite(out.service_max_speed_deg_s) || out.service_max_speed_deg_s <= 0 || out.service_max_speed_deg_s > 20)
+    err.push_back("v3.service_max_speed_deg_s must be within (0, 20]");
+  out.service_speed_kp = opt_double(n, "service_speed_kp", "v3.service_speed_kp", 1.0, warn);
+  if (!std::isfinite(out.service_speed_kp) || out.service_speed_kp < 1 || out.service_speed_kp > 5)
+    err.push_back("v3.service_speed_kp must be within the commissioning range [1, 5]");
+  out.service_speed_ki = opt_double(n, "service_speed_ki", "v3.service_speed_ki", .002, warn);
+  if (!std::isfinite(out.service_speed_ki) || out.service_speed_ki < .002 || out.service_speed_ki > .05)
+    err.push_back("v3.service_speed_ki must be within the tested range [0.002, 0.05]");
+  if (out.default_mode != "MANUAL" && out.default_mode != "AUTO_ROAM") {
+    err.push_back("v3.default_mode must be MANUAL or AUTO_ROAM (got '" +
+                  out.default_mode + "')");
   }
 
   const YAML::Node roam = fetch(n, "auto_roam");

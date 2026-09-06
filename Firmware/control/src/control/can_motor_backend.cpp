@@ -66,6 +66,7 @@ bool CanMotorBackend::read_register(AxisId axis, cybergear::Reg reg,
 //   LimitSpd -> read MechPos (pin current) -> LocRef=current (hold in place).
 bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
                                           std::string& err) {
+  invalidate_calibration();
   invalidate_commands(axis);
   for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
     std::string rerr;
@@ -147,6 +148,7 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
 // the current position against any load up to LimitCur.
 bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
                                        std::string& err) {
+  invalidate_calibration();
   invalidate_commands(axis);
   for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
     std::string rerr;
@@ -204,7 +206,144 @@ bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
   return false;
 }
 
+MotorBackend::Transition CanMotorBackend::transition_mode(
+    AxisId axis, bool position, double limit, TimeNs now, std::string& err, double speed_ki, double speed_kp) {
+  auto& t = transition_;
+  const auto i = static_cast<size_t>(axis);
+  auto fail = [&](const char* why) {
+    err = why;
+    system_.cancel_register_read();
+    t = ModeTransition{};
+    deenergize(axis);
+    return Transition::Failed;
+  };
+  auto complete = [&]() {
+    in_position_mode_[i] = position; in_speed_mode_[i] = !position;
+    if (position) { last_loc_ref_[i] = t.pin; last_limit_spd_[i] = limit; }
+    else { last_spd_ref_[i] = 0; last_limit_cur_a_[i] = limit; }
+    t = ModeTransition{};
+    return Transition::Complete;
+  };
+  can::AxisLatest s;
+  system_.axis(axis).latest(s);
+  if (t.stage == 0) {
+    invalidate_calibration();
+    if (!std::isfinite(limit) || limit <= 0) return fail("invalid mode limit");
+    if (!std::isfinite(speed_kp) || speed_kp < 1 || speed_kp > 5)
+      return fail("speed proportional gain outside commissioning range");
+    if (!std::isfinite(speed_ki) || (speed_ki != -1 && (speed_ki < .002 || speed_ki > .05)))
+      return fail("speed integral gain outside commissioned range");
+    t.axis = axis; t.position = position; t.limit = limit; t.speed_ki = speed_ki; t.speed_kp = speed_kp;
+    t.started = t.sampled = t.still_since = now;
+    t.last_q = t.pin = s.q_rad;
+    // Neutralize both reference registers before braking; only the active mode
+    // consumes its register. An unknown or disabled drive is stopped directly.
+    if (s.has_feedback && s.mode == 2 && now - s.rx_ns < 100000000LL) {
+      if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis) ||
+          !write_reg_float(cybergear::Reg::LocRef, s.q_rad, axis)) return fail("neutral brake write failed");
+    } else if (!system_.send_stop(axis, &err)) return fail("initial stop failed");
+    t.stage = 1;
+    return Transition::Pending;
+  }
+  if (t.axis != axis || t.position != position || t.limit != limit || t.speed_ki != speed_ki || t.speed_kp != speed_kp)
+    return fail("mode transition request changed while pending");
+  if (now - t.started > 2500000000LL) return fail("mode transition timed out");
+  if (s.has_feedback && s.faults) return fail("motor fault during mode transition");
+  switch (t.stage) {
+    case 1: // Stationary dwell measured from encoder position, not noisy velocity.
+      if (!s.has_feedback || now - s.rx_ns > 100000000LL) return fail("feedback lost while braking");
+      if (now - t.sampled >= 50000000LL) {
+        if (std::abs(s.q_rad - t.last_q) > .04 * kDeg2Rad) t.still_since = now;
+        t.last_q = s.q_rad; t.sampled = now;
+        if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis)) return fail("brake keepalive failed");
+      }
+      if (now - t.still_since < 150000000LL) break;
+      if (!system_.send_stop(axis, &err)) return fail("mode stop failed");
+      invalidate_commands(axis);
+      t.deadline = now + 50000000LL; t.stage = 2;
+      break;
+    case 2:
+      if (now < t.deadline) break;
+      if (!s.has_feedback || now - s.rx_ns > 100000000LL) return fail("no stopped feedback");
+      t.pin = s.q_rad;
+      if (!write_reg_u8(cybergear::Reg::RunMode, position ? 1 : 2, axis)) return fail("mode write failed");
+      t.stage = 3;
+      break;
+    case 3:
+      if (!write_reg_float(position ? cybergear::Reg::LimitSpd : cybergear::Reg::LimitCur,
+                           position ? 0.0f : static_cast<float>(limit), axis)) return fail("limit write failed");
+      t.stage = 4;
+      break;
+    case 4:
+      if (!write_reg_float(position ? cybergear::Reg::LocRef : cybergear::Reg::SpdRef,
+                           position ? t.pin : 0.0, axis)) return fail("neutral reference failed");
+      if (speed_ki >= 0 &&
+          (!write_reg_float(cybergear::Reg::SpdKp, speed_kp, axis) ||
+           !write_reg_float(cybergear::Reg::SpdKi, speed_ki, axis))) return fail("speed gains write failed");
+      t.stage = 5;
+      break;
+    case 5:
+    case 9: {
+      const cybergear::Reg regs[] = {cybergear::Reg::RunMode,
+          position ? cybergear::Reg::LimitSpd : cybergear::Reg::LimitCur,
+          position ? cybergear::Reg::LocRef : cybergear::Reg::SpdRef,
+          cybergear::Reg::SpdKp, cybergear::Reg::SpdKi};
+      const double expected[] = {position ? 1.0 : 2.0,
+          position && t.stage == 5 ? 0.0 : limit, position ? t.pin : 0.0, speed_kp, speed_ki};
+      if (!t.waiting) {
+        if (!system_.begin_register_read(axis, regs[t.read_index], err)) return fail("register request failed");
+        t.waiting = true; t.deadline = now + 100000000LL;
+        break;
+      }
+      double value = 0;
+      const int result = system_.poll_register_read(value, err);
+      if (result < 0 || (result == 0 && now > t.deadline)) return fail("mode readback timed out");
+      if (result == 0) break;
+      // LocRef readback is quantized by this firmware (observed 29 urad
+      // difference from the written float). Allow one feedback encoder count.
+      const double tolerance = position && t.read_index == 2 ? 0.0004 : 1e-5;
+      if (!std::isfinite(value) || std::abs(value - expected[t.read_index]) > tolerance)
+        return fail(("mode readback mismatch at register " +
+            std::to_string(static_cast<uint16_t>(regs[t.read_index])) + " got " +
+            std::to_string(value) + " expected " + std::to_string(expected[t.read_index])).c_str());
+      t.waiting = false;
+      ++t.read_index;
+      if (position && t.stage == 5 && t.read_index == 2) ++t.read_index;
+      if (t.read_index == (speed_ki >= 0 ? 5 : 3)) {
+        if (t.stage == 9) return complete();
+        t.read_index = 0; t.stage = 6;
+      }
+      break;
+    }
+    case 6:
+      if (!system_.send_enable(axis, &err)) return fail("enable failed");
+      t.deadline = now + 50000000LL; t.stage = 7;
+      break;
+    case 7:
+      if (now < t.deadline) break;
+      if (!s.has_feedback || s.mode != 2 || s.rx_ns < t.deadline - 50000000LL ||
+          now - s.rx_ns > 100000000LL) return fail("enabled feedback missing");
+      if (!position) return complete();
+      // This firmware re-pins LocRef while disabled. Enable with LimitSpd=0,
+      // then pin the fresh encoder position before restoring movement authority.
+      t.pin = s.q_rad;
+      if (!write_reg_float(cybergear::Reg::LocRef, t.pin, axis)) return fail("enabled pin failed");
+      t.stage = 8;
+      break;
+    case 8:
+      if (!write_reg_float(cybergear::Reg::LimitSpd, limit, axis)) return fail("restore speed limit failed");
+      t.stage = 9;
+      break;
+  }
+  return Transition::Pending;
+}
+
 void CanMotorBackend::deenergize(AxisId axis) {
+  invalidate_calibration();
+  if (transition_.stage && transition_.axis == axis) {
+    system_.cancel_register_read();
+    transition_ = ModeTransition{};
+  }
   invalidate_commands(axis);
   std::string err;
   system_.send_stop(axis, &err);
@@ -213,6 +352,32 @@ void CanMotorBackend::deenergize(AxisId axis) {
 }
 
 // --- Control loop (fast, non-blocking) --------------------------------------
+bool CanMotorBackend::adopt_running_mode(AxisId axis, bool position, std::string& err, double speed_ki, double speed_kp) {
+  double mode=0, q=0, current=0, speed=0;
+  if (speed_ki >= 0) {
+    double kp=0, ki=0;
+    if (!read_register(axis, cybergear::Reg::SpdKp, kp, 100, err) ||
+        !read_register(axis, cybergear::Reg::SpdKi, ki, 100, err) ||
+        std::abs(kp-speed_kp)>1e-5 || std::abs(ki-speed_ki)>1e-5) return false;
+  }
+  if (!read_register(axis, cybergear::Reg::RunMode, mode, 100, err) ||
+      mode != (position ? 1.0 : 2.0) ||
+      !read_register(axis, cybergear::Reg::MechPos, q, 100, err) || !std::isfinite(q)) return false;
+  // Neutral references do not enable a disabled motor. Fresh feedback from
+  // these writes must independently confirm it was already energized.
+  if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis) ||
+      !write_reg_float(cybergear::Reg::LocRef, q, axis) ||
+      !read_register(axis, cybergear::Reg::LimitCur, current, 100, err) ||
+      !read_register(axis, cybergear::Reg::LimitSpd, speed, 100, err)) return false;
+  const auto now = now_monotonic_ns();
+  can::AxisLatest s;
+  if (!system_.axis(axis).latest(s) || !s.has_feedback || s.mode != 2 || s.faults ||
+      now - s.rx_ns > 100000000LL || !(current > 0 && current <= 23) || !std::isfinite(speed)) return false;
+  const auto i=static_cast<size_t>(axis);
+  in_position_mode_[i]=position; in_speed_mode_[i]=!position;
+  last_loc_ref_[i]=q; last_spd_ref_[i]=0; last_limit_cur_a_[i]=current; last_limit_spd_[i]=speed;
+  return true;
+}
 
 AxisSnapshot CanMotorBackend::snapshot(AxisId axis, TimeNs now_ns) {
   AxisSnapshot s;
@@ -232,6 +397,7 @@ AxisSnapshot CanMotorBackend::snapshot(AxisId axis, TimeNs now_ns) {
 }
 
 void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
+  if (transition_.stage && transition_.axis == axis) return;
   // Write SpdRef only when it actually changes (mirrors the position-mode
   // write-on-change policy: a same-value rewrite is inert but we avoid the
   // needless CAN TX). The drive holds the written speed with its internal
@@ -254,6 +420,7 @@ void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
 }
 
 void CanMotorBackend::keepalive(AxisId axis) {
+  if (transition_.stage && transition_.axis == axis) return;
   // The CyberGear emits COMM_TYPE_2 feedback ONLY in response to a command
   // (no periodic telemetry, CyberGear_AI_Reference.md §21). On cycles where
   // no reference is commanded (speed-mode axis + supervisor Allow — the
@@ -268,8 +435,12 @@ void CanMotorBackend::keepalive(AxisId axis) {
   // Rate-limited: only when the age is already >30 ms and at most every
   // 50 ms (20 pings/s), so steady-state costs one CAN frame per ~50 ms.
   const int a = static_cast<int>(axis);
-  constexpr int64_t kPingWhenAgeNs = 30'000'000;   // ping at 30 ms age
-  constexpr int64_t kPingIntervalNs = 50'000'000;  // at most 20 pings/s
+  // Keep feedback sampling separate from reference changes. The 20 Hz hold
+  // cadence left almost no retry margin before the independent 100 ms watchdog
+  // (station capture: healthy host, yaw feedback 100.031 ms old). Request at
+  // 50 Hz when otherwise silent; the watchdog deadline remains unchanged.
+  constexpr int64_t kPingWhenAgeNs = 15'000'000;
+  constexpr int64_t kPingIntervalNs = 20'000'000;
   const TimeNs now_ns = now_monotonic_ns();
   can::AxisLatest fb{};
   bool stale = !system_.axis(axis).latest(fb) || !fb.has_feedback;
@@ -284,6 +455,7 @@ void CanMotorBackend::keepalive(AxisId axis) {
 
 void CanMotorBackend::command(AxisId axis, double q_ref_rad,
                               double limit_spd_rad_s) {
+  if (transition_.stage && transition_.axis == axis) return;
   // Write each register only when its value actually changes. Re-sending an
   // *unchanged* reference every control cycle re-arms the drive's motion
   // profile each time, which (observed on the CyberGear) prevents the
@@ -328,8 +500,8 @@ void CanMotorBackend::command(AxisId axis, double q_ref_rad,
   // below ~40 ms so feedback_max_age_ms remains a genuine
   // loss-of-feedback detector.
   {
-    constexpr int64_t kPingWhenAgeNs = 30'000'000;   // ping at 30 ms age
-    constexpr int64_t kPingIntervalNs = 50'000'000;  // at most 20 pings/s
+    constexpr int64_t kPingWhenAgeNs = 15'000'000;
+    constexpr int64_t kPingIntervalNs = 20'000'000;
     const TimeNs now_ns = now_monotonic_ns();
     can::AxisLatest fb{};
     bool stale = !system_.axis(axis).latest(fb) || !fb.has_feedback;

@@ -88,19 +88,32 @@ class LosJointSolver {
   // determines WHICH solution is found, so prefer solve_from_pose() over solve().
   bool refine_to_los(double az_rad, double el_rad, double& q_yaw_rad,
                      double& q_pitch_rad, double max_residual_rad) const {
+    if (!std::isfinite(az_rad) || !std::isfinite(el_rad) ||
+        !std::isfinite(q_yaw_rad) || !std::isfinite(q_pitch_rad)) return false;
     const Vec3 target{std::cos(el_rad) * std::cos(az_rad),
                       std::cos(el_rad) * std::sin(az_rad), std::sin(el_rad)};
-    // Gradient refinement against the actual transform (a few steps; the gimbal
-    // is well-conditioned for small extrinsic misalignment).
+    // Damped Gauss-Newton accounts for the different joint sensitivities. The
+    // previous unscaled gradient converged too slowly at this station's pitch:
+    // a reachable live target failed after 12 iterations and the caller's
+    // analytic fallback selected the opposite yaw / positive-pitch branch.
     for (int i = 0; i < 12; ++i) {
       const Vec3 r = optical_axis(q_yaw_rad, q_pitch_rad);
       const Vec3 e = target - r;
       if (e.norm() < 1e-10) break;
       const double h = 1e-4;
-      const Vec3 rp = optical_axis(q_yaw_rad, q_pitch_rad + h);
-      const Vec3 rq = optical_axis(q_yaw_rad + h, q_pitch_rad);
-      q_yaw_rad += e.dot(rq - r) / h;
-      q_pitch_rad += e.dot(rp - r) / h;
+      const Vec3 jp = (optical_axis(q_yaw_rad, q_pitch_rad + h) - r) / h;
+      const Vec3 jy = (optical_axis(q_yaw_rad + h, q_pitch_rad) - r) / h;
+      const double a = jy.dot(jy) + 1e-8, b = jy.dot(jp), c = jp.dot(jp) + 1e-8;
+      const double det = a*c - b*b;
+      if (!(det > 1e-12)) return false;
+      const double ey = e.dot(jy), ep = e.dot(jp);
+      double dy = (c*ey-b*ep)/det, dp = (a*ep-b*ey)/det;
+      // Bound each numerical step near a singular pose. Motion is separately
+      // bounded by the trajectory generator and the calibrated envelope.
+      const double step = std::hypot(dy, dp);
+      if (step > .35) { dy *= .35/step; dp *= .35/step; }
+      q_yaw_rad += dy;
+      q_pitch_rad += dp;
     }
     const Vec3 r = optical_axis(q_yaw_rad, q_pitch_rad);
     double c = r.dot(target.normalized());

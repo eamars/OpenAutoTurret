@@ -81,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="persist critical events (§42) to this JSONL file")
     parser.add_argument("--record-images", action="store_true",
                         help="also record encoded frames (Level A, large; default off)")
+    parser.add_argument("--input-tensor-probe", default=os.environ.get('OTA_VISION_INPUT_TENSOR_PROBE', ''),
+                        metavar="JPEG", help="capture one paired network input/ISP frame, then disable tensor output")
     parser.add_argument("--disable-preview", action="store_true",
                         help="do not offer frames to the preview tap (§39)")
     parser.add_argument("--preview-fps", type=float, default=0.0,
@@ -393,10 +395,13 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
 
     publisher = LatestJsonPublisher(args.publish_dir) if args.publish_dir else None
     wire_publisher = SocketPublisher(args.publish_socket) if args.publish_socket else None
+    from common.image_corrections import read_install_orientation
+    orientation, source = read_install_orientation()
+    print(f"visiond: camera orientation {orientation} ({source})", file=sys.stderr)
     pipeline = PerceptionPipeline(config, adapter=adapter, event_log=events,
                                   diagnostics=diagnostics, recorder=recorder,
                                   publisher=publisher, preview=preview,
-                                  session_uuid=args.session_uuid or "")
+                                  session_uuid=args.session_uuid or "", orientation=orientation)
     if args.selection_socket and not args.legacy_track_wire:
         pipeline.selection_service = SelectionService(args.selection_socket)
     if args.controller_state_url and pipeline.selector.auto.enabled:
@@ -416,7 +421,10 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         requested_stream = ((int(config.camera.width), int(config.camera.height))
                             if config.camera.width and config.camera.height else None)
         imx500, picam2, info = open_picamera2(manifest.path, stream_size=requested_stream,
-                                            external_manifest=manifest)
+                                            external_manifest=manifest, orientation=orientation)
+        # Sensor orientation also corrects the neural-network input. Both its
+        # boxes and the image now arrive upright; do not rotate either again.
+        pipeline.orientation = 'none'
         stream = (int(info["stream_size"][0]), int(info["stream_size"][1]))
         adapter.configure_stream(*stream)
         camera = CameraOwner(picam2, stream_size=stream, events=events)
@@ -485,24 +493,38 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
           f"{info['stream_size'][0]}x{info['stream_size'][1]} model {info['task']} "
           f"@ {info['inference_rate_hz']} Hz", file=sys.stderr)
     camera.start()
-    delivered = 0
-    for frame in camera.frames(max_frames=args.max_frames):
-        outcome = pipeline.process_frame(frame.image, frame.metadata,
-                                         frame_sequence=frame.frame_sequence,
-                                         sensor_timestamp_ns=frame.sensor_timestamp_ns,
-                                         capture_started_ns=frame.metadata_receive_ns)
-        delivered += 1
-        if not args.quiet and delivered % 30 == 0:
-            tracks = len(outcome.track_set.tracks) if outcome.track_set else 0
-            print(f"visiond: frame {frame.frame_sequence} tracks {tracks} "
-                  f"target {outcome.observation.target_state.name if outcome.observation else 'NO_TARGET'}",
-                  file=sys.stderr)
-        if not outcome.published and outcome.stage != 'inference_pending' and not args.quiet:
-            print(f"visiond: frame {frame.frame_sequence} failed in {outcome.stage}: "
-                  f"{outcome.failure}", file=sys.stderr)
-        if wire_publisher is not None and outcome.stage != 'inference_pending':
-            if not _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire) and not args.quiet:
-                print("visiond: TrackSet publish failed", file=sys.stderr)
+    tensor_probe = None
+    try:
+        if args.input_tensor_probe:
+            from .tensor_probe import InputTensorProbe
+            tensor_probe = InputTensorProbe(args.input_tensor_probe, camera.device, adapter.device)
+            tensor_probe.start()
+        delivered = 0
+        for frame in camera.frames(max_frames=args.max_frames):
+            outcome = pipeline.process_frame(frame.image, frame.metadata,
+                                             frame_sequence=frame.frame_sequence,
+                                             sensor_timestamp_ns=frame.sensor_timestamp_ns,
+                                             capture_started_ns=frame.metadata_receive_ns)
+            delivered += 1
+            if tensor_probe is not None:
+                tensor_probe.offer(frame, outcome)
+                if tensor_probe.done:
+                    tensor_probe.close()
+                    tensor_probe = None
+            if not args.quiet and delivered % 30 == 0:
+                tracks = len(outcome.track_set.tracks) if outcome.track_set else 0
+                print(f"visiond: frame {frame.frame_sequence} tracks {tracks} "
+                      f"target {outcome.observation.target_state.name if outcome.observation else 'NO_TARGET'}",
+                      file=sys.stderr)
+            if not outcome.published and outcome.stage != 'inference_pending' and not args.quiet:
+                print(f"visiond: frame {frame.frame_sequence} failed in {outcome.stage}: "
+                      f"{outcome.failure}", file=sys.stderr)
+            if wire_publisher is not None and outcome.stage != 'inference_pending':
+                if not _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire) and not args.quiet:
+                    print("visiond: TrackSet publish failed", file=sys.stderr)
+    finally:
+        if tensor_probe is not None:
+            tensor_probe.close()
     return EXIT_OK
 
 
@@ -580,4 +602,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":                                       # pragma: no cover
+    import signal
+    def _shutdown(*_):
+        raise SystemExit(EXIT_OK)
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
     raise SystemExit(main())

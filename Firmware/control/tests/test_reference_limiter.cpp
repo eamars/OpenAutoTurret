@@ -5,6 +5,7 @@
 // to cross the middle, and 0.5 s to stop again - 1.333 s. If someone later tunes the limiter to be
 // cleverer, these tests say which promise is being broken.
 #include "control/reference_limiter.hpp"
+#include "control/tracking_reference.hpp"
 
 #include <gtest/gtest.h>
 
@@ -18,6 +19,44 @@ constexpr double kAMax = 60.0 * kDeg;   // yaw axis, config/turret.yaml
 constexpr double kJMax = 300.0 * kDeg;  // jerk, same station file and the same figure the
                                         // safety envelope brakes with
 constexpr double kDt = 0.005;           // the 200 Hz control period
+
+TEST(TrackingReference, BothDirectionsSettleWithoutARepeatedOrbit) {
+  for (double degrees : {-25., -5., -1., 1., 5., 25.}) {
+    ota::control::ReferenceLimiter state;
+    state.reset_at(0);
+    double overshoot=0, late_error=0, late_rate=0;
+    for (int i=0; i<2400; ++i) {
+      const double previous_a=state.a_rad_s2;
+      ota::control::track_reference(state,degrees*kDeg,0,kDt,15*kDeg,15*kDeg,60*kDeg);
+      EXPECT_LE(std::abs(state.v_rad_s),15*kDeg+1e-10);
+      EXPECT_LE(std::abs(state.a_rad_s2),15*kDeg+1e-10);
+      EXPECT_LE(std::abs(state.a_rad_s2-previous_a),60*kDeg*kDt+1e-10);
+      overshoot=std::max(overshoot,(state.q_rad-degrees*kDeg)*std::copysign(1.,degrees));
+      if(i>2000) {
+        late_error=std::max(late_error,std::abs(state.q_rad-degrees*kDeg));
+        late_rate=std::max(late_rate,std::abs(state.v_rad_s));
+      }
+    }
+    EXPECT_LT(overshoot,.2*kDeg) << degrees;
+    EXPECT_LT(late_error,.01*kDeg) << degrees;
+    EXPECT_LT(late_rate,.01*kDeg) << degrees;
+  }
+}
+
+TEST(TrackingReference, PositionNoiseDoesNotBecomeVelocityFeedForward) {
+  ota::control::ReferenceLimiter state;
+  state.reset_at(0);
+  double late_excursion=0;
+  for(int i=0;i<8000;++i) {
+    // 25 Hz observation corrections, 200 Hz output. A stationary target's
+    // noisy position must not be differentiated into an invented motion rate.
+    const double observed_t=(i/8)*8*kDt;
+    const double observation=.5*kDeg*std::sin(5*observed_t);
+    ota::control::track_reference(state,observation,0,kDt,15*kDeg,15*kDeg,60*kDeg);
+    if(i>2000) late_excursion=std::max(late_excursion,std::abs(state.q_rad));
+  }
+  EXPECT_LT(late_excursion,.2*kDeg);
+}
 
 // Run the limiter until it reports arrival, or until the budget runs out.
 double run_to_arrival(ota::control::ReferenceLimiter& st, double target, double v_max, double a_max,
@@ -56,6 +95,23 @@ double run_to_arrival(ota::control::ReferenceLimiter& st, double target, double 
   if (max_jerk_out) *max_jerk_out = max_jerk;
   if (max_overshoot_out) *max_overshoot_out = max_over;
   return t;
+}
+
+TEST(ReferenceLimiter, MovingTargetStopSettlesUnderServiceLimits) {
+  ota::control::ReferenceLimiter state;
+  state.reset_at(0);
+  double late_error = 0, late_rate = 0;
+  for (int i=0; i<2400; ++i) {
+    const double t=i*kDt;
+    const double target=3*kDeg*std::clamp(t-1.,0.,4.);
+    const double q=ota::control::limit_reference(state,target,kDt,15*kDeg,15*kDeg,60*kDeg);
+    if (t>10) {
+      late_error=std::max(late_error,std::abs(q-target));
+      late_rate=std::max(late_rate,std::abs(state.v_rad_s));
+    }
+  }
+  EXPECT_LT(late_error,.01*kDeg);
+  EXPECT_LT(late_rate,.01*kDeg);
 }
 
 TEST(ReferenceLimiter, RespectsBothConfiguredLimitsOnAStep) {

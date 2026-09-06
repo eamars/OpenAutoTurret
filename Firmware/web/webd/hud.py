@@ -77,6 +77,8 @@ function hudStateLabel(o) {
   const phase = String(o.phase || "").toUpperCase();
   const auto = mode === "AUTO_TRACK";
   const roam = mode === "AUTO_ROAM";
+  if (o.supervisory && o.supervisory !== "hold") return {
+    line1: String(o.supervisory).toUpperCase(), line2: "", named: true };
 
   if (auto && phase === "TRACK") return { line1: "AUTO TRACK", line2: "TRACKING", named: true };
   if (auto && phase === "COAST") return { line1: "AUTO TRACK", line2: "COASTING", named: true };
@@ -237,10 +239,6 @@ function hudDrawerActions(name, t) {
     const gate = inManual ? "act" : "gated";
     const note = inManual ? "" : "MANUAL MODE ONLY";
     const rows = [
-      { label: "YAW LEFT", command: "manual_jog_start", arg: "yaw-", kind: gate, note: note },
-      { label: "YAW RIGHT", command: "manual_jog_start", arg: "yaw+", kind: gate, note: note },
-      { label: "PITCH UP", command: "manual_jog_start", arg: "pitch+", kind: gate, note: note },
-      { label: "PITCH DOWN", command: "manual_jog_start", arg: "pitch-", kind: gate, note: note },
       { label: "STEP YAW +1", command: "manual_step", arg: "yaw+1", kind: gate, note: note },
       { label: "STEP YAW -1", command: "manual_step", arg: "yaw-1", kind: gate, note: note },
       { label: "STEP PITCH +1", command: "manual_step", arg: "pitch+1", kind: gate, note: note },
@@ -256,7 +254,7 @@ function hudDrawerActions(name, t) {
     // twice. §14 reserves red for stop and fault, so the confirm state - not colour alone - is what
     // signals danger here.
     return [
-      { label: "HOME", command: "start_homing", arg: "", kind: "act", note: "" },
+      { label: "HOME", command: "start_homing", arg: "", kind: "danger", note: "Recalibrate both axes" },
       { label: "HOLD / PARK", command: "request_park", arg: "", kind: "danger", note: "CONFIRM TWICE" },
       { label: "SUPERVISORY SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
         note: "CONFIRM TWICE" }
@@ -348,32 +346,11 @@ function hudDiagRows(t) {
 // prediction drawn in green is an intention wearing the uniform of an observation, and the operator
 // cannot tell them apart at a glance. So the colour assertions below are not decoration.
 function hudPredictionBox(o) {
-  // Where the dashed square goes. o = { cx, cy, w, h, box: [x0,y0,x1,y1], gap }
-  //
-  // "Placed near the selected target but not touching its box" is a geometric rule, so it is
-  // implemented as one: the cue is centred on the predicted anchor, and if that overlaps the
-  // measured box it is shoved outward along the direction the prediction is pointing - the
-  // direction the operator needs to read anyway - until the gap clears. When the prediction is
-  // almost exactly on the target (a still target, a settled loop) there is no meaningful direction,
-  // so it goes right and up, and says so by reporting shifted.
-  if (!o || typeof o.cx !== "number" || typeof o.cy !== "number" || !(o.w > 0) || !(o.h > 0)) return null;
-  const box = (Array.isArray(o.box) && o.box.length === 4) ? o.box : null;
-  let x = o.cx - o.w / 2, y = o.cy - o.h / 2;
-  const gap = (typeof o.gap === "number") ? o.gap : 8.0;
-  let shifted = false;
-  if (box) {
-    const bx0 = Math.min(box[0], box[2]), bx1 = Math.max(box[0], box[2]);
-    const by0 = Math.min(box[1], box[3]), by1 = Math.max(box[1], box[3]);
-    const bcx = (bx0 + bx1) / 2, bcy = (by0 + by1) / 2;
-    let guard = 0;
-    while (x < bx1 + gap && x + o.w > bx0 - gap && y < by1 + gap && y + o.h > by0 - gap && guard < 400) {
-      let dx = o.cx - bcx, dy = o.cy - bcy;
-      if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) { dx = 1.0; dy = -0.5; }   // no direction to use
-      const n = Math.hypot(dx, dy) || 1.0;
-      x += (dx / n) * 4.0; y += (dy / n) * 4.0; shifted = true; ++guard;
-    }
-  }
-  return { x: x, y: y, w: o.w, h: o.h, cx: x + o.w / 2, cy: y + o.h / 2, shifted: shifted };
+  // This is a geometric prediction used by the controller. Overlap with the
+  // measured target is valid; moving the cue to clear a box invents an offset.
+  if (!o || !Number.isFinite(o.cx) || !Number.isFinite(o.cy) || !(o.w > 0) || !(o.h > 0)) return null;
+  return { x: o.cx - o.w / 2, y: o.cy - o.h / 2, w: o.w, h: o.h,
+           cx: o.cx, cy: o.cy, shifted: false };
 }
 
 function hudPredictionSvg(b, C, o) {
@@ -446,7 +423,10 @@ function hudForInset(o) {
   const k = Math.min(plot.w / spanY, plot.h / spanP);          // the one shared scale
   const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
   const midY = (minY + maxY) / 2, midP = (minP + maxP) / 2;
-  const toPx = (yawDeg, pitchDeg) => [cx + (yawDeg - midY) * k, cy - (pitchDeg - midP) * k];
+  // This is joint travel: positive pitch on the station tilts the camera down.
+  // The stopped +5 degree probe moved background features upward by 135 px.
+  // Do not treat the encoder value as positive-up world elevation.
+  const toPx = (yawDeg, pitchDeg) => [cx + (yawDeg - midY) * k, cy + (pitchDeg - midP) * k];
 
   const clampMark = (pt) => {
     // Off-map is information, not an error: a target the axis cannot reach is exactly what an
@@ -764,6 +744,7 @@ function chip(label, state, value) {
 }
 
 function render(t) {
+  renderManualPad(t);
   const video = $("video"), svg = $("overlay");
   if (!video || !svg) return;
 
@@ -861,24 +842,11 @@ function render(t) {
       Array.isArray(pred.predicted_anchor_norm) && pred.predicted_anchor_norm.length === 2 && !stale) {
     const a = hudProject(pred.predicted_anchor_norm[0], pred.predicted_anchor_norm[1], lay);
     if (a.ok) {
-      // The cue is the size of the target it predicts, so the operator is comparing like with like:
-      // a dashed box where the same body will be, against the solid box where it is.
-      const sel = tracks.filter((x) => x && x.selected && Array.isArray(x.bbox) &&
-                                      x.bbox.length === 4)[0] || null;
-      let w = 48.0, h = 48.0, near = null;
-      if (sel) {
-        const p0 = hudProject(sel.bbox[0], sel.bbox[1], lay);
-        const p1 = hudProject(sel.bbox[2], sel.bbox[3], lay);
-        if (p0.ok && p1.ok) {
-          w = Math.max(24.0, p1.x - p0.x);
-          h = Math.max(24.0, p1.y - p0.y);
-          near = [(p0.x + p1.x) / 2, (p0.y + p1.y) / 2];
-        }
-      }
+      const sel = tracks.find(x => x && x.selected);
+      const measured = sel ? hudProject(sel.anchor_x, sel.anchor_y, lay) : null;
       layers.pred = hudPredictionSvg(
-        hudPredictionBox({ cx: a.x, cy: a.y, w: w, h: h, box: near ? [
-          near[0] - w / 2, near[1] - h / 2, near[0] + w / 2, near[1] + h / 2] : null }), C,
-        { near: near });
+        hudPredictionBox({ cx: a.x, cy: a.y, w: 28, h: 28 }), C,
+        { near: measured && measured.ok ? [measured.x, measured.y] : null });
     }
   }
 
@@ -922,13 +890,16 @@ function render(t) {
       typeof t.q_pitch_rad === "number") {
     const hasIntent = t.intent_has_joint_target === true &&
                       typeof t.intent_q_yaw_rad === "number" && typeof t.intent_q_pitch_rad === "number";
-    const hasRef = typeof t.q_ref_yaw_rad === "number" && typeof t.q_ref_pitch_rad === "number";
+    // PRED is the controller's resolved predicted aim, not the intermediate
+    // trajectory reference. Hide it when there is no active prediction.
+    const hasAim = !stale && pred && pred.valid === true && t.tracking_aim_joint_valid === true &&
+                   Number.isFinite(t.tracking_aim_yaw_rad) && Number.isFinite(t.tracking_aim_pitch_rad);
     const gi = hudForInset({
       vw: vw, vh: vh, pts: forB.safe_envelope_points,
       hfovDeg: t.effective_hfov_deg, vfovDeg: t.effective_vfov_deg,
       los: [deg(t.q_yaw_rad), deg(t.q_pitch_rad)],
       target: hasIntent ? [deg(t.intent_q_yaw_rad), deg(t.intent_q_pitch_rad)] : null,
-      pred: hasRef ? [deg(t.q_ref_yaw_rad), deg(t.q_ref_pitch_rad)] : null
+      pred: hasAim ? [deg(t.tracking_aim_yaw_rad), deg(t.tracking_aim_pitch_rad)] : null
     });
     layers.for = hudForInsetSvg(gi, C);
   }
@@ -958,12 +929,12 @@ function render(t) {
   // The field stays in telemetry for measurement and for the DIAG drawer.
 
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
-  const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase,
+  const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
                              jogging: !!t.manual_lease_active });
   $("mode-block").innerHTML =
     '<div class="m1">' + st.line1 + '</div>' +
     '<div class="m2' + (st.named ? "" : " raw") + '">' + st.line2 + '</div>' +
-    '<div class="m3">' + (t.selected_label || (t.selected_uuid_valid ? String(t.selected_uuid) : "--")) +
+    '<div class="m3">' + escapeMarkup(t.selected_label || t.selected_descriptor || (t.selected_display_index ? "Person #" + t.selected_display_index : "--")) +
     '</div>';
 
   // §8 health chips. Anything the snapshot does not carry is shown as absent, because
@@ -972,7 +943,8 @@ function render(t) {
   hs.innerHTML = "";
   const connected = !!t.controld_connected;
   hs.appendChild(chip("CONNECTED", connected ? "ok" : "red"));
-  hs.appendChild(chip("HOMED", t.at_ready ? "ok" : "amber"));
+  const serviceReady = t.phase === "hold" && t.soft_limits_valid && t.supervisory_state === "READY";
+  hs.appendChild(chip(serviceReady ? "HOMED" : "NOT READY", serviceReady ? "ok" : "amber"));
   const vis = (typeof t.vision_track_sets === "number" && t.vision_track_sets > 0) ? "ok" : "amber";
   hs.appendChild(chip("VISION", vis, vis === "ok" ? "" : "NO SETS"));
   hs.appendChild(chip("IMU", "amber", "ABSENT"));
@@ -1082,6 +1054,10 @@ async function ensureVideo() {
       return false;
     }
     notice("");
+    // The initial img request can precede video/start and receive 409. Starting
+    // the source does not cause the browser to retry that failed image request.
+    const video = $("video");
+    if (video) video.src = "/api/video?stream=" + Date.now();
     return true;
   } catch (e) {
     notice("VIDEO UNAVAILABLE: " + e);
@@ -1136,7 +1112,8 @@ function dockIcon(k) {
 }
 
 function renderDock() {
-  dock.innerHTML = hudDockSpecs({ open: drawerOpen }).map((b) =>
+  dock.innerHTML = hudDockSpecs({ open: drawerOpen }).filter((b) =>
+    b.key !== "MANUAL" || (lastTelemetry && lastTelemetry.operating_mode === "MANUAL")).map((b) =>
     '<button type="button" class="dockbtn' + (b.active ? " on" : "") + '" data-key="' + b.key +
     '" aria-pressed="' + (b.active ? "true" : "false") + '">' + dockIcon(b.key) +
     "<span>" + b.key + "</span></button>").join("");
@@ -1178,7 +1155,7 @@ function renderDrawer() {
       const inert = a.command === null || a.kind === "current" || a.kind === "gated";
       const cls = "drow " + (a.kind === "stop" ? "stop" : a.kind === "danger" ? "danger" :
                              a.kind === "gated" ? "gated" : a.kind === "current" ? "on" : "");
-      const waiting = pendingConfirm === a.label;
+      const waiting = pendingConfirm === a.command;
       return '<button type="button" class="' + cls + (waiting ? " confirm" : "") + '" data-cmd="' +
              escapeMarkup(a.command || "") + '" data-arg="' + escapeMarkup(a.arg || "") + '" data-kind="' + a.kind + '"' +
              (inert ? " disabled" : "") + '><span class="rl">' +
@@ -1257,6 +1234,64 @@ async function sendCommand(cmd, arg) {
   renderDrawer();
 }
 
+// The pad's DOM stays in place while telemetry updates, preserving pointer capture.
+// Requests are serialized so a released pointer cannot be followed by a late start.
+let jogActive = false, jogTimer = null, jogBusy = false;
+let jogRequests = Promise.resolve();
+function jogRequest(command, arg) {
+  jogRequests = jogRequests.then(() => sendCommand(command, arg)).catch(() => {});
+  return jogRequests;
+}
+function stopPadJog() {
+  if (!jogActive) return;
+  jogActive = false;
+  clearInterval(jogTimer);
+  document.querySelectorAll("#manual-pad button").forEach(b => b.classList.remove("pressed"));
+  jogRequest("manual_jog_stop", "");
+}
+function padReady(t) {
+  return t && t.operating_mode === "MANUAL" && t.phase === "hold" &&
+    !t.telemetry_stale && transportOk && Date.now() - lastTelemetryAt < 300 &&
+    (t.safety_action === "ALLOW" || t.safety_action === "DERATE");
+}
+function renderManualPad(t) {
+  const pad = $("manual-pad");
+  if (!pad) return;
+  const hidden = !(t && t.operating_mode === "MANUAL" && t.phase === "hold");
+  if (pad.hidden !== hidden) { pad.hidden = hidden; renderDock(); }
+  const enabled = padReady(t);
+  $("manual-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode === "MANUAL"));
+  $("auto-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode !== "MANUAL"));
+  $("auto-mode").disabled = !(t && t.phase === "hold" && t.soft_limits_valid && !t.telemetry_stale);
+  pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
+  if (!enabled) stopPadJog();
+  if (drawerOpen === "MANUAL" && pad.hidden) { drawerOpen = null; renderDrawer(); }
+}
+const manualPad = $("manual-pad");
+manualPad.addEventListener("pointerdown", (e) => {
+  const b = e.target.closest("button[data-jog]");
+  if (!b || b.disabled || !padReady(lastTelemetry) || jogActive || (e.pointerType === "mouse" && e.button !== 0)) return;
+  e.preventDefault();
+  b.setPointerCapture(e.pointerId);
+  jogActive = true;
+  b.classList.add("pressed");
+  jogBusy = true;
+  jogRequest("manual_jog_start", b.dataset.jog + ":normal").finally(() => { jogBusy = false; });
+  jogTimer = setInterval(() => {
+    if (!padReady(lastTelemetry)) { stopPadJog(); return; }
+    if (!jogActive || jogBusy) return;
+    jogBusy = true;
+    jogRequest("manual_jog_keepalive", "").finally(() => { jogBusy = false; });
+  }, 75);
+});
+["pointerup", "pointercancel", "lostpointercapture"].forEach(event => manualPad.addEventListener(event, stopPadJog));
+window.addEventListener("blur", stopPadJog);
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopPadJog(); });
+$("pad-hold").addEventListener("click", () => { stopPadJog(); sendCommand("stop_motion", ""); });
+$("manual-mode").addEventListener("click", () => { stopPadJog(); sendCommand("stop_motion", ""); });
+$("auto-mode").addEventListener("click", () => { stopPadJog(); sendCommand("set_mode", "AUTO_ROAM"); });
+setInterval(() => renderManualPad(lastTelemetry), 100);
+
 dock.addEventListener("click", (e) => {
   const b = e.target && e.target.closest ? e.target.closest("button[data-key]") : null;
   if (b) setDrawer(b.getAttribute("data-key"));
@@ -1270,9 +1305,9 @@ drawer.addEventListener("click", (e) => {
   if (b.getAttribute("data-kind") === "danger") {
     // Two presses for the actions that move the turret somewhere it was not just asked to go. The label
     // changes and the row says PRESS AGAIN, so the waiting state is on screen, not in someone's memory.
-    const label = String((b.querySelector && b.querySelector(".rl")) ?
-                         b.querySelector(".rl").textContent : b.textContent);
-    if (pendingConfirm !== label) { pendingConfirm = label; renderDrawer(); return; }
+    // Match a stable command, since the displayed label changes to CONFIRM …
+    // after the first press. Comparing that label made confirmation impossible.
+    if (pendingConfirm !== cmd) { pendingConfirm = cmd; renderDrawer(); return; }
   }
   sendCommand(cmd, b.getAttribute("data-arg") || "");
 });
@@ -1368,6 +1403,22 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 
 /* --- §13.1 dock, §14 drawer ------------------------------------------------- */
 #dock { position:absolute; right:1.2%; bottom:8.5%; display:flex; gap:6px; z-index:30; }
+#manual-pad { position:absolute; left:24px; top:calc(50% - 95px); z-index:30; display:grid;
+  grid-template-columns:repeat(3,48px); gap:5px; padding:10px; border:1px solid var(--hud-line);
+  border-radius:12px; background:var(--hud-black); touch-action:none; user-select:none; }
+#manual-pad[hidden] { display:none; }
+#manual-pad button { height:46px; border:1px solid var(--hud-green-dim); border-radius:7px;
+  background:rgba(149,245,139,.08); color:var(--hud-green); font:22px var(--hud-mono); touch-action:none; }
+#manual-pad button.pressed { background:var(--hud-green); color:#05070a; }
+#manual-pad button:disabled { opacity:.3; }
+#manual-pad .pad-label { grid-column:1/4; text-align:center; font-size:10px; color:var(--hud-white); }
+#manual-pad #pad-hold { font-size:10px; }
+#mode-controls { position:absolute; bottom:65px; left:50%; transform:translateX(-50%);
+  display:flex; gap:8px; z-index:30; }
+#mode-controls button { padding:10px 16px; background:rgba(3,6,5,.9); border:1px solid var(--hud-green-dim);
+  border-radius:7px; color:var(--hud-green); font:13px var(--hud-mono); cursor:pointer; }
+#mode-controls button[aria-pressed="true"] { border-color:var(--hud-green); }
+#mode-controls button:disabled { opacity:.35; cursor:default; }
 .dockbtn { display:flex; flex-direction:column; align-items:center; gap:3px; width:46px;
            padding:5px 2px 4px; background:rgba(3,6,5,.62); border:1px solid rgba(230,245,230,.22);
            border-radius:2px; color:#edf2eb; font:500 8.5px/1 var(--hud-mono); letter-spacing:.06em;
@@ -1467,6 +1518,16 @@ HUD_HTML = """<!DOCTYPE html>
        painted geometry. They come last in document order, which on this page IS the z-order (§18: dock
        30, drawer 40); the z-index in the CSS states it rather than relying on it. -->
   <div id="dock" role="toolbar" aria-label="context controls"></div>
+  <div id="mode-controls" role="group" aria-label="Operating mode">
+    <button id="manual-mode" type="button">Manual / Hold</button>
+    <button id="auto-mode" type="button">Auto</button>
+  </div>
+  <div id="manual-pad" hidden role="group" aria-label="Manual direction pad">
+    <span class="pad-label">HOLD TO MOVE</span>
+    <span></span><button data-jog="pitch-" aria-label="Pitch up">↑</button><span></span>
+    <button data-jog="yaw-" aria-label="Yaw left">←</button><button id="pad-hold" aria-label="Hold position">HOLD</button><button data-jog="yaw+" aria-label="Yaw right">→</button>
+    <span></span><button data-jog="pitch+" aria-label="Pitch down">↓</button><span></span>
+  </div>
   <!-- §22 safety indication. Outside the health chips, because BRAKING and FAULT are asked to be more
        prominent than a chip and a fault to interrupt normal operation. -->
   <div id="safety" hidden role="status" aria-live="assertive"></div>

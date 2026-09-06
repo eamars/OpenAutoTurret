@@ -228,10 +228,13 @@ struct PayloadConfig {
 // a value is how an operator takes responsibility for it; not naming one is not the same
 // as naming a default, and the two must not look alike in the file.
 struct V3Config {
-  // Boot mode. Only MANUAL is accepted (§16/§52): a station that starts sweeping or
-  // tracking by itself on power-up has made a decision the operator never authorised,
-  // and no config file in this project gets to make one.
+  // AUTO_ROAM starts only after calibration and ready gates. MANUAL remains
+  // available for commissioning and as an explicit web override.
   std::string default_mode = "MANUAL";
+  bool service_speed_control = false;
+  double service_speed_ki = .002;
+  double service_speed_kp = 1.0;
+  double service_max_speed_deg_s = 3.0;
 
   // §33: a named sweep region, in the same degrees the rest of the file uses. Yaw only —
   // the pitch reference is a single pose, not a range, because the sweep holds pitch and

@@ -65,6 +65,9 @@ class TargetEstimator {
   };
   const Diagnostics& diagnostics() const { return diagnostics_; }
   double position_variance(int axis, std::int64_t t_ns) const;
+  double rate_variance(int axis) const {
+    return initialized_ && axis >= 0 && axis < 2 ? covariance_[axis].vv : 0.0;
+  }
 
   // Predict the LOS at (future or current) time t_ns.
   void predict(std::int64_t t_ns, double& azimuth_rad, double& elevation_rad) const;

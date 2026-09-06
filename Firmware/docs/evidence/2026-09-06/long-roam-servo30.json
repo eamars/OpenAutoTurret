@@ -1,0 +1,24 @@
+{
+  "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-servo30.json",
+  "samples": 1437,
+  "duration_s": 95.03505530999973,
+  "reference_error_deg_p50_p95_max": [
+    0.07293752732015335,
+    0.7296846704109038,
+    1.174219705341109
+  ],
+  "straight_samples": 1238,
+  "straight_velocity_error_deg_s_p05_p50_p95": [
+    -0.8659212751095536,
+    -0.0016995260347103525,
+    0.8054558358620137
+  ],
+  "straight_velocity_error_rms_deg_s": 0.5526336408369282,
+  "velocity_window_s": 0.2,
+  "faults": [
+    ""
+  ],
+  "safety_actions": [
+    "ALLOW"
+  ]
+}

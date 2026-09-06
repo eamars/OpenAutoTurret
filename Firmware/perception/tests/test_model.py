@@ -467,6 +467,28 @@ class TestImx500Adapter(unittest.TestCase):
         self.assertAlmostEqual(output.detections[0].bbox.y_min, .1)
         self.assertAlmostEqual(output.detections[0].bbox.y_max, 827/1080)
 
+    def test_anchor_is_mapped_before_the_visible_box_is_cropped(self):
+        adapter = self._adapter()
+        adapter.camera = object()
+        adapter.device = FakeDevice()
+        width, height = adapter.stream_size
+        def crop(coords, metadata, camera):
+            y0, x0, y1, x1 = coords
+            y0, y1 = (y0-.125)/.75, (y1-.125)/.75
+            left, top = max(0, x0), max(0, y0)
+            right, bottom = min(1, x1), min(1, y1)
+            return (left*width, top*height, max(0, right-left)*width,
+                    max(0, bottom-top)*height)
+        adapter.device.convert_inference_coords = crop
+        rows, anchors = adapter._map_rows_to_stream([[.8, 0, .3, 0, .7, .8]], {})
+        point, valid, _ = anchors[0]
+        self.assertTrue(valid)
+        self.assertAlmostEqual(point.y, (.8*.45-.125)/.75)
+        old = rows[0][3]+.45*(rows[0][5]-rows[0][3])
+        self.assertGreater(abs(point.y-old)*height, 90)
+        _, anchors = adapter._map_rows_to_stream([[.8, 0, .3, .85, .7, 1.]], {})
+        self.assertFalse(anchors[0][1], 'an out-of-crop aim point must not guide motion')
+
     def test_absent_nn_metadata_is_distinct_from_a_broken_model(self):
         from perception.errors import NoInferenceForFrame
         device = FakeDevice()

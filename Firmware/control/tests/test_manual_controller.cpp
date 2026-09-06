@@ -170,6 +170,23 @@ TEST_F(ManualTest, StepIsARelativeMoveThatCompletes) {
   EXPECT_STREQ(out_.reason, "step complete");
 }
 
+TEST_F(ManualTest, InactiveAxisDoesNotFollowFeedbackNoiseDuringStepsOrJogs) {
+  q_[0] = -.4;
+  q_[1] = .2;
+  ASSERT_TRUE(m_.step_move(0, 5 * kDeg, q_[0], now_));
+  step();
+  q_[1] += .01;
+  step();
+  EXPECT_DOUBLE_EQ(out_.intent.q_yaw_rad, .2);
+  m_.cancel(now_);
+  ASSERT_TRUE(m_.jog_start(JogDirection{0, 1}, ManualProfile::Normal, now_));
+  step();
+  const double held_yaw = q_[1];
+  q_[1] -= .02;
+  step();
+  EXPECT_DOUBLE_EQ(out_.intent.q_yaw_rad, held_yaw);
+}
+
 TEST_F(ManualTest, StepThatNeverArrivesIsDroppedAndSaidSo) {
   // A step refused or blocked must not leave a position target pushing against a limit
   // forever.

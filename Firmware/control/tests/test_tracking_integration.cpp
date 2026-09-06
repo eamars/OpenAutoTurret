@@ -85,12 +85,13 @@ HomingPlan make_plan() {
   return HomingPlan(std::move(actions), hcfg);
 }
 
-ControlLoop::Config make_cfg() {
+ControlLoop::Config make_cfg(bool speed_control = false) {
   ControlLoop::Config cfg;
   cfg.control_hz = 200;
   cfg.hold_speed_rad_s = 30.0 * kDeg;
   cfg.emergency_speed_rad_s = 10.0 * kDeg;
   cfg.soft_margin_rad = 2.0 * kDeg;
+  cfg.service_speed_control = speed_control;
   return cfg;
 }
 
@@ -115,11 +116,11 @@ TrackingController::Config make_tracking_cfg(bool search_enabled) {
 // synthetic camera/kinematics. Yaw stops +/-90 deg, pitch stops -20..+40 deg.
 class TrackingRig {
  public:
-  TrackingRig()
+  explicit TrackingRig(bool speed_control = false)
       : backend_(std::make_unique<SimMotorBackend>(0.005)),
         sim_(backend_.get()),
         cam_(make_intrinsics()), kin_(TurretKinematics::aligned()),
-        loop_(std::make_unique<ControlLoop>(make_cfg(), std::move(backend_))) {
+        loop_(std::make_unique<ControlLoop>(make_cfg(speed_control), std::move(backend_))) {
     sim_->set_stops(AxisId::Pitch, pitch_low_, pitch_high_);
     sim_->set_stops(AxisId::Yaw, yaw_low_, yaw_high_);
     sim_->set_position(AxisId::Pitch, 10.0 * kDeg);
@@ -242,6 +243,61 @@ void enter_mode(TrackingRig& r, const TrackingController::Config& cfg,
 }
 
 }  // namespace
+
+TEST(TrackingTimestamps, UsesFeedbackTimeAndDoesNotInventNewerPoseSamples) {
+  const auto cfg = make_tracking_cfg(false);
+  TrackingController tracker(cfg);
+  const TimeNs t0 = 1000000000, t1 = t0 + 100000000;
+  tracker.update_snapshots(t0 + 30000000, 0, 0, t0, t0);
+  tracker.update_snapshots(t1 + 30000000, 0, .1, t1, t1);
+  TargetMeasurement m;
+  m.valid = m.authoritative_anchor = true;
+  m.confidence = 1;
+  m.sensor_timestamp_ns = t0 + 50000000;
+  double u, v;
+  base_los_to_pixel(CameraModel(cfg.intrinsics), cfg.kinematics, .2, .1, .05, 0, u, v);
+  m.anchor_u_px = u;
+  m.anchor_v_px = v;
+  ASSERT_TRUE(tracker.set_measurement(m));
+  double az, el;
+  tracker.predicted_los(az, el);
+  EXPECT_NEAR(az, .2, 1e-6);
+  EXPECT_NEAR(el, .1, 1e-6);
+  // Re-reading the old feedback cannot make a later camera exposure coverable.
+  tracker.update_snapshots(t1 + 50000000, 0, .1, t1, t1);
+  m.sensor_timestamp_ns = t1 + 20000000;
+  EXPECT_FALSE(tracker.set_measurement(m));
+}
+
+TEST(TrackingIntegration, VelocityServiceConvergesThenHonorsManualHold) {
+  TrackingRig r(true);
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, make_tracking_cfg(false), OperatingMode::AutoTrack);
+  for (int i=0;i<4;++i,t+=kDtNs) step_with_track(r,t,i,5*kDeg,5*kDeg);
+  r.loop().submit_command("select_target","1");
+  double max_late_error=0;
+  bool saw_velocity_control=false;
+  for (int i=0;i<2400;++i,t+=kDtNs) {
+    step_with_track(r,t,10+i,5*kDeg,5*kDeg);
+    ASSERT_NE(r.loop().phase(),Phase::Fault);
+    const auto s=r.loop().telemetry().snapshot();
+    saw_velocity_control |= s.tracking_velocity_control;
+    double az,el;
+    actual_los(r.kin(),r.loop().last_positions()[1],r.loop().last_positions()[0],az,el);
+    if(i>1600) max_late_error=std::max(max_late_error,std::hypot(az-5*kDeg,el-5*kDeg));
+  }
+  EXPECT_TRUE(saw_velocity_control);
+  EXPECT_LT(max_late_error,.5*kDeg) << "fixed target must settle, not orbit";
+  ASSERT_TRUE(r.loop().request_mode(OperatingMode::Manual).ok);
+  for(int i=0;i<600;++i,t+=kDtNs) step_with_track(r,t,3000+i,-5*kDeg,-5*kDeg);
+  const auto s=r.loop().telemetry().snapshot();
+  EXPECT_FALSE(s.tracking_velocity_control);
+  double az,el;
+  actual_los(r.kin(),r.loop().last_positions()[1],r.loop().last_positions()[0],az,el);
+  EXPECT_NEAR(az,5*kDeg,.5*kDeg);
+  EXPECT_NEAR(el,5*kDeg,.5*kDeg);
+}
 
 // The core Phase 6 deliverable: a target rotating in the base frame is tracked
 // closed-loop — the gimbal's optical axis converges on the target and tracks it,

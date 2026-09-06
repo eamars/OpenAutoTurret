@@ -1,12 +1,12 @@
 {
   "vision": {
     "_comment": [
-      "Vision 1.0: EXPLICIT_ONLY is the default operator-selection policy (section 28).",
+      "This station uses AUTO_SELECT_SINGLE during automatic service; manual mode preserves explicit operator selection.",
       "The installed SSD, NanoDet and EfficientDet values are provisional test settings.",
       "They have not passed labelled station acceptance or model comparison; numeric values alone do not establish commissioning.",
       "YOLO11n is the required reference baseline and is not installed on the reviewed station.",
       "The 1920x1080 stream matches calibration/camera_intrinsics.yaml; sensor inference has its own model input geometry.",
-      "Automatic selection additionally requires fresh AUTO_TRACK mode context and a stable sole visible candidate.",
+      "Automatic selection requires fresh AUTO_ROAM or AUTO_TRACK context and a stable sole visible candidate.",
       "Use recorded, labelled scenes to commission each profile independently before production deployment."
     ],
     "anchor": {
@@ -176,7 +176,7 @@
       "auto_select_min_detector_score": 0.27,
       "auto_select_min_identity_confidence": 0.4,
       "auto_select_single_dwell_ms": 500.0,
-      "policy": "EXPLICIT_ONLY",
+      "policy": "AUTO_SELECT_SINGLE",
       "select_min_identity_confidence": 0.5
     },
     "timing_window": 512,

@@ -273,6 +273,9 @@ class Detection:
     anchor_source: AnchorSource = AnchorSource.BBOX_CENTER_FALLBACK
     keypoints: Tuple[Keypoint, ...] = ()
     pose_score: Optional[float] = None
+    # A visible identity box can remain in frame while its anatomical aim point
+    # is outside the ISP crop. Such a box may associate, but cannot guide motion.
+    anchor_valid: bool = True
 
     # -- validity -----------------------------------------------------------
     def is_valid(self) -> bool:
@@ -307,6 +310,7 @@ class Detection:
             "bbox": self.bbox.to_dict(),
             "measured_anchor": self.measured_anchor.to_dict(),
             "anchor_source": self.anchor_source.value,
+            "anchor_valid": bool(self.anchor_valid),
         }
         if self.keypoints:
             out["keypoints"] = [k.to_dict() for k in self.keypoints]
@@ -331,6 +335,7 @@ class Detection:
                              if data.get("measured_anchor")
                              else PointNorm(0.5, 0.5)),
             anchor_source=anchor_source,
+            anchor_valid=bool(data.get('anchor_valid', True)),
             keypoints=tuple(Keypoint.from_dict(k) for k in data.get("keypoints") or ()),
             pose_score=(None if data.get("pose_score") is None
                         else float(data["pose_score"])),

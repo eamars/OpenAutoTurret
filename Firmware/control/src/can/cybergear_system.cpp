@@ -1,6 +1,7 @@
 #include "can/cybergear_system.hpp"
 
 #include <chrono>
+#include <spdlog/spdlog.h>
 
 #include "can/socketcan_bus.hpp"
 #include "can/yousee_transport.hpp"
@@ -52,6 +53,8 @@ bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err,
 }
 
 void CyberGearSystem::close() {
+  watchdog_stop_.store(true);
+  if (watchdog_.joinable()) watchdog_.join();
   if (bus_) {
     bus_->stop();
     bus_.reset();
@@ -107,6 +110,7 @@ bool CyberGearSystem::transact(const cybergear::CanFrame& request, uint8_t reply
       return false;
     }
     pending_.active = true;
+    pending_.asynchronous = false;
     pending_.received = false;
     const auto id = cybergear::unpack_ext_id(request.id);
     pending_.motor = id.target;
@@ -181,6 +185,80 @@ bool CyberGearSystem::read_register(AxisId axis, cybergear::Reg reg, double& val
   return true;
 }
 
+void CyberGearSystem::start_watchdog() {
+  if (watchdog_.joinable()) return;
+  watchdog_stop_.store(false);
+  heartbeat();
+  watchdog_ = std::thread([this] {
+    while (!watchdog_stop_.load()) {
+      const auto now = now_monotonic_ns();
+      const auto heartbeat_age = now - heartbeat_ns_.load();
+      bool trip = heartbeat_age > 100000000LL;
+      std::array<AxisLatest, 2> observed{};
+      for (auto axis_id : {AxisId::Pitch, AxisId::Yaw}) {
+        auto& s = observed[static_cast<int>(axis_id)];
+        if (axis(axis_id).latest(s) && s.has_feedback && s.mode == 2 &&
+            (now - s.rx_ns > 100000000LL || s.faults || s.temp_c > 75.0)) trip = true;
+      }
+      bool first_trip = false;
+      if (trip) {
+        std::lock_guard lock(command_mutex_);
+        first_trip = !motion_inhibited_.exchange(true);
+      }
+      if (motion_inhibited_.load()) {
+        send_stop(AxisId::Pitch);
+        send_stop(AxisId::Yaw);
+      }
+      if (first_trip) {
+        // Record the evidence after issuing both stops. A generic fault label
+        // cannot distinguish a stalled host from lost feedback or a drive fault.
+        for (int i = 0; i < 2; ++i) {
+          const auto& s = observed[i];
+          spdlog::error("motor watchdog: heartbeat_age_ms={:.3f} axis={} feedback_age_ms={:.3f} mode={} faults={} temp_c={:.1f}",
+              heartbeat_age/1e6, i, s.has_feedback ? (now-s.rx_ns)/1e6 : -1.0,
+              s.mode, s.faults, s.temp_c);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+}
+
+bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err) {
+  const auto f = cybergear::make_read_reg(reg, cfg_.host_can_id, motor_id(axis));
+  {
+    std::lock_guard lk(pend_mtx_);
+    if (pending_.active) { err = "register request already active"; return false; }
+    pending_ = Pending{};
+    pending_.active = pending_.asynchronous = true;
+    pending_.motor = motor_id(axis);
+    pending_.comm = static_cast<uint8_t>(cybergear::CommType::ReadReg);
+    pending_.match_target = cfg_.host_can_id;
+    pending_.address = static_cast<uint16_t>(reg);
+  }
+  if (send(f.id, f.data, &err)) return true;
+  cancel_register_read();
+  return false;
+}
+
+int CyberGearSystem::poll_register_read(double& value, std::string& err) {
+  std::lock_guard lk(pend_mtx_);
+  if (!pending_.active || !pending_.asynchronous) { err = "no asynchronous read"; return -1; }
+  if (!pending_.received) return 0;
+  pending_.active = false;
+  cybergear::Reg reg{};
+  if (!cybergear::parse_reg_response(pending_.frame, reg, value) ||
+      static_cast<uint16_t>(reg) != pending_.address) {
+    err = "malformed register response"; return -1;
+  }
+  return 1;
+}
+
+void CyberGearSystem::cancel_register_read() {
+  std::lock_guard lk(pend_mtx_);
+  if (pending_.asynchronous) pending_.active = false;
+}
+
 bool CyberGearSystem::read_parameter_raw(AxisId axis, uint16_t address,
                                          std::array<uint8_t, 4>& value,
                                          int timeout_ms, std::string* err) {
@@ -193,6 +271,14 @@ bool CyberGearSystem::read_parameter_raw(AxisId axis, uint16_t address,
 }
 
 bool CyberGearSystem::send(uint32_t ext_id, const uint8_t data[8], std::string* err) {
+  std::lock_guard lock(command_mutex_);
+  const auto comm = cybergear::unpack_ext_id(ext_id).comm_type;
+  // Type 4 is STOP; type 0 discovery and type 17 reads remain available.
+  // The latch and TX share this gate so a delayed enable cannot follow a trip.
+  if (motion_inhibited_.load() && comm != 4 && comm != 0 && comm != 17) {
+    if (err) *err = "independent motor watchdog inhibited motion";
+    return false;
+  }
   if (!bus_) {
     if (err) *err = "can transport closed";
     return false;

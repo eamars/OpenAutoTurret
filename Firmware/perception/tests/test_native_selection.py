@@ -15,8 +15,9 @@ from web.webd.selection_client import request_selection
 
 def fixture():
     track = track_at(.5, index=1)
-    track.track_uuid = str(uuid.UUID(int=17))
-    frame = track_set_of([track], sequence=12, session_uuid=str(uuid.UUID(int=2**128-1)))
+    # Production identity factories use .hex; hyphenated fixtures hid an IPC bug.
+    track.track_uuid = uuid.UUID(int=17).hex
+    frame = track_set_of([track], sequence=12, session_uuid=uuid.UUID(int=2**128-1).hex)
     frame.sensor_timestamp_ns = frame.publish_timestamp_ns = time.monotonic_ns()
     return TargetSelectionManager(commissioned_config()), frame, track
 

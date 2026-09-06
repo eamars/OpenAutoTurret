@@ -33,7 +33,7 @@ import numpy as _np
 from ..errors import NoInferenceForFrame
 
 from ..config import AnchorConfig
-from ..detection.types import DetectionSet
+from ..detection.types import DetectionSet, PointNorm, AnchorSource
 from ..errors import ModelRejected
 from .adapter import ModelAdapter
 
@@ -229,17 +229,33 @@ class Imx500YoloAdapter(ModelAdapter):
                 f"output rows carry {len(rows[0])} columns; the manifest expects at least "
                 f"6 (§9.3 disagreement discovered at runtime)")
         geometry = None
+        anchors = {}
         if self.camera is not None:
-            rows = self._map_rows_to_stream(rows, metadata)
+            rows, anchors = self._map_rows_to_stream(rows, metadata)
             from ..detection.normalize import InferenceGeometry
             width, height = self.stream_size
             geometry = InferenceGeometry(width, height, width, height,
                                          bbox_order='xy', bbox_normalized=True)
         self.inferences += 1
-        return self._rows_to_set(rows, frame_sequence=int(frame_sequence),
+        result = self._rows_to_set(rows, frame_sequence=int(frame_sequence),
                                  sensor_timestamp_ns=int(sensor_timestamp_ns),
                                  publish_timestamp_ns=int(publish_timestamp_ns),
                                  anchor_cfg=self.anchor_cfg, geometry=geometry)
+        self.last_anchor_mapping = []
+        for detection in result.detections:
+            mapped = anchors.get(detection.detection_id_in_frame)
+            if mapped is None:
+                continue
+            anchor, valid, original_box = mapped
+            self.last_anchor_mapping.append({'detection_id': detection.detection_id_in_frame,
+                'model_bbox_xyxy_norm': original_box,
+                'post_crop_anchor': detection.measured_anchor.to_dict(),
+                'mapped_anchor': anchor.to_dict(), 'anchor_valid': valid})
+            detection.anchor_valid = valid
+            if valid:
+                detection.measured_anchor = anchor
+                detection.anchor_source = AnchorSource.BBOX_TORSO
+        return result
 
     def _map_rows_to_stream(self, rows, metadata):
         from ..detection.normalize import parse_row_box
@@ -248,7 +264,9 @@ class Imx500YoloAdapter(ModelAdapter):
         iw, ih = self.manifest.input_width, self.manifest.input_height
         score, category, box_index = self.manifest.score_indices()
         mapped = []
-        for row in rows:
+        anchors = {}
+        fraction = (self.anchor_cfg or AnchorConfig()).torso_fraction
+        for index, row in enumerate(rows):
             try:
                 x0, y0, x1, y1 = parse_row_box(row[box_index:box_index+4], self.manifest.bbox_order,
                     input_width=iw, input_height=ih, normalized=self.manifest.bbox_normalized)
@@ -259,12 +277,24 @@ class Imx500YoloAdapter(ModelAdapter):
                 x, y, w, h = self.device.convert_inference_coords(
                     (y0/ih, x0/iw, y1/ih, x1/iw), metadata, self.camera)
                 coords = [x/width, y/height, (x+w)/width, (y+h)/height]
+                # Calculate the anatomical point BEFORE the SDK clips the identity
+                # box to the ISP crop. A taller detector view means these operations
+                # do not commute: the station SDK probe reproduced 99 px of bias.
+                # Map a one-input-pixel neighbourhood through the same SDK geometry;
+                # its centre keeps the point independent of box clipping. Integer
+                # rectangle rounding contributes only about one ISP pixel.
+                u, v = .5*(x0+x1), y0 + fraction*(y1-y0)
+                ax, ay, aw, ah = self.device.convert_inference_coords(
+                    ((v-.5)/ih, (u-.5)/iw, (v+.5)/ih, (u+.5)/iw), metadata, self.camera)
+                anchor = PointNorm((ax+.5*aw)/width, (ay+.5*ah)/height)
+                anchors[index] = (anchor, aw > 0 and ah > 0 and anchor.is_valid(),
+                                  [x0/iw, y0/ih, x1/iw, y1/ih])
             except ValidationError:
                 coords = [float('nan')]*4  # normalizer counts the invalid detection
             mapped_row = list(row)
             mapped_row[box_index:box_index+4] = coords
             mapped.append(mapped_row)
-        return mapped
+        return mapped, anchors
 
     # -- reporting ----------------------------------------------------------
     def describe(self) -> dict:

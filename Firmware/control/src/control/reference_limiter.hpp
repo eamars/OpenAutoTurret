@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace ota::control {
 
@@ -85,6 +86,34 @@ inline double stopping_distance_rad(double v_rad_s, double a_rad_s2, double a_ma
   return std::max(0.0, d1 + (v1 * v1) / (2.0 * a_max_rad_s2));
 }
 
+// A planned arrival must finish with zero acceleration as well as zero
+// velocity. Reserve all three braking phases: ramp down, optional constant
+// deceleration, ramp back to zero. The first-zero distance above remains the
+// appropriate contract for emergency travel bounds.
+inline double settling_distance_rad(double velocity, double acceleration,
+                                    double a_max, double j_max) {
+  const double speed = std::abs(velocity);
+  if (speed <= 0 || a_max <= 0 || j_max <= 0)
+    return stopping_distance_rad(velocity, acceleration, a_max, j_max);
+  const double along = std::clamp(acceleration * (velocity >= 0 ? 1.0 : -1.0), -a_max, a_max);
+  // This state cannot stop monotonically before its acceleration is released.
+  // Report travel to the first reversal; the limiter must release the braking
+  // acceleration immediately rather than invent a negative ramp duration.
+  if (along < 0 && speed <= along * along / (2 * j_max))
+    return stopping_distance_rad(velocity, acceleration, a_max, j_max);
+  const double peak = std::min(a_max, std::sqrt(j_max * speed + .5 * along * along));
+  double q = 0, v = speed, a = along;
+  const auto integrate = [&](double duration, double jerk) {
+    q += v * duration + .5 * a * duration * duration + jerk * duration * duration * duration / 6;
+    v += a * duration + .5 * jerk * duration * duration;
+    a += jerk * duration;
+  };
+  integrate((along + peak) / j_max, -j_max);
+  integrate(std::max(0.0, (v - .5 * peak * peak / j_max) / peak), 0);
+  integrate(peak / j_max, j_max);
+  return std::max(0.0, q);
+}
+
 // Advance one control period toward `target_rad`, never exceeding `v_max_rad_s` or `a_max_rad_s2`,
 // and return the reference to publish this cycle.
 //
@@ -100,7 +129,8 @@ inline double stopping_distance_rad(double v_rad_s, double a_rad_s2, double a_ma
 // configured for this axis", which falls back to ramping acceleration no further than a_max itself -
 // the previous behaviour, not an unlimited jump.
 inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt_s,
-                              double v_max_rad_s, double a_max_rad_s2, double j_max_rad_s3) {
+                              double v_max_rad_s, double a_max_rad_s2, double j_max_rad_s3,
+                              std::optional<double> target_velocity_rad_s = std::nullopt) {
   if (!st.initialised) {
     st.reset_at(target_rad);
     return st.q_rad;
@@ -110,7 +140,9 @@ inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt
   // What the target is doing, measured over the same period the reference is advanced over.
   {
     const double k_target_v = 0.25;
-    if (st.have_prev_target) {
+    if (target_velocity_rad_s) {
+      st.target_v_rad_s = *target_velocity_rad_s;
+    } else if (st.have_prev_target) {
       const double raw = (target_rad - st.prev_target_rad) / dt_s;
       st.target_v_rad_s += k_target_v * (raw - st.target_v_rad_s);
     }
@@ -159,7 +191,7 @@ inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt
     // then brake against what is left. Omitting this is what made the profile arrive too fast to
     // stop and never land.
     const double reserve =
-        std::max(0.0, stopping_distance_rad(st.v_rad_s, st.a_rad_s2, a_max_rad_s2, j_max_rad_s3) -
+        std::max(0.0, settling_distance_rad(st.v_rad_s, st.a_rad_s2, a_max_rad_s2, j_max_rad_s3) -
                           (st.v_rad_s * st.v_rad_s) / (2.0 * a_max_rad_s2));
     u_want += std::sqrt(2.0 * a_max_rad_s2 * std::max(0.0, dist_ahead - reserve));
   } else {
@@ -198,6 +230,15 @@ inline double limit_reference(ReferenceLimiter& st, double target_rad, double dt
                ((st.v_rad_s != 0.0) ? (st.v_rad_s > 0.0 ? 1.0 : -1.0)
                                     : (a_want > 0.0 ? 1.0 : -1.0));
     }
+    // Release braking acceleration before velocity reaches zero. A jerk bound
+    // requires a^2/(2j) of remaining speed to ramp acceleration back to zero.
+    // Waiting for a velocity sign change leaves negative acceleration at rest
+    // and starts another correction. A clean 3 deg/s target stopping under
+    // the service 15/60 limits reproduced a persistent limit cycle without
+    // any detector, estimator or motor in the loop.
+    if (st.a_rad_s2 * st.v_rad_s < 0.0 &&
+        std::abs(st.v_rad_s) <= st.a_rad_s2 * st.a_rad_s2 / (2.0 * j_max_rad_s3))
+      a_want = 0.0;
     const double da_cap = j_max_rad_s3 * dt_s;
     st.a_rad_s2 += std::max(-da_cap, std::min(da_cap, a_want - st.a_rad_s2));
     // No clamp here any more, and that is deliberate. The head-room cap above reserves a^2/2j of

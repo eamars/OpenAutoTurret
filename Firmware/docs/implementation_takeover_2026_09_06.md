@@ -1,6 +1,9 @@
 # Implementation takeover and station evidence — 2026-09-06
 
-**Status: partially verified. Neither architecture plan is fully accepted.**
+**Historical first-cycle report.** Current deployment, operating instructions and
+validation are in [Automatic station validation](automatic_service_validation_2026_09_06.md).
+Neither architecture plan is fully accepted. The operating-state descriptions below
+record the earlier cycle and are superseded by that follow-up.
 
 Scope: the perception/selection architecture v1 and CyberGear control hardening v3.2.
 The user confirmed that the station was unloaded and safe to disable, and was present

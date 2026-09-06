@@ -26,6 +26,7 @@
 
 #include "calibration/camera_calibration.hpp"
 #include "calibration/homing_plan.hpp"
+#include "calibration/retained_homing.hpp"
 #include "calibration/park_controller.hpp"
 #include "can/cybergear_system.hpp"
 #include "common/time.hpp"
@@ -176,6 +177,8 @@ TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  std::signal(SIGINT, on_signal);
+  std::signal(SIGTERM, on_signal);
   const std::string config_path = (argc > 1) ? argv[1] : "config/turret.yaml";
   const bool sim_mode = has_flag(argc, argv, "--sim");
   init_async_logging();
@@ -223,10 +226,11 @@ int main(int argc, char** argv) {
   }
 
   // 3. Boot FSM: discover + self-test (slow, blocking, boot-only, §27).
+  std::array<uint64_t, 2> motor_ids{};
   {
     BootFsm boot(*backend, BootConfig{});
-    while (!boot.ready_to_home() && !boot.faulted()) boot.step();
-    if (boot.faulted()) {
+    while (!g_shutdown.load() && !boot.ready_to_home() && !boot.faulted()) boot.step();
+    if (boot.faulted() || g_shutdown.load()) {
       spdlog::error("boot fault: {} — station will NOT home or move", boot.error());
       backend->deenergize(AxisId::Pitch);
       backend->deenergize(AxisId::Yaw);
@@ -234,13 +238,21 @@ int main(int argc, char** argv) {
     }
     spdlog::info("boot OK: pitch uid=0x{:016x} yaw uid=0x{:016x}",
                  boot.unique_ids()[0], boot.unique_ids()[1]);
+    motor_ids = boot.unique_ids();
   }
 
-  // 4. SIGINT/SIGTERM -> safe park (§33), not a hard stop.
-  std::signal(SIGINT, on_signal);
-  std::signal(SIGTERM, on_signal);
-
   // 5. Control loop: homing -> safe hold -> park on shutdown.
+  std::unique_ptr<RetainedHoming> retained;
+  if (!sim_mode) {
+    retained = std::make_unique<RetainedHoming>(config_path, motor_ids);
+    backend->set_calibration_invalidator([&retained]() {
+      const auto begin = now_monotonic_ns();
+      retained->invalidate();
+      const auto elapsed = now_monotonic_ns() - begin;
+      if (elapsed > 1000000)
+        spdlog::warn("calibration invalidation stalled for {:.3f} ms", elapsed/1e6);
+    });
+  }
   ControlLoop loop(make_control_cfg(cfg), std::move(backend));
 
   // §20: tell the loop when the geometry it is using was measured, read from the file the
@@ -341,15 +353,19 @@ int main(int argc, char** argv) {
     loop.deenergize_all();
     return 1;
   }
-  if (!loop.start_homing(std::move(plan), err)) {
+  std::array<AxisLogicalModel, 2> saved_models;
+  std::array<AxisLimits, 2> saved_limits;
+  const bool reused = retained && retained->load(saved_models, saved_limits) &&
+      loop.restore_retained_homing(saved_models, saved_limits, err);
+  if (!reused && !loop.start_homing(std::move(plan), err)) {
     spdlog::error("start homing failed: {}", err);
     loop.deenergize_all();
     return 1;
   }
-  spdlog::info("homing started; tracking {} (§38.1: enabled only after the "
-               "homing gates pass)",
-               cfg.tracking.enabled ? "auto-enables after homing"
-                                    : "stays OFF until start_tracking");
+  loop.set_homing_factory([cfg]() { std::string e; return make_homing_plan(cfg, e); });
+  spdlog::info("calibration: {}", reused ? "retained calibration validated; homing skipped" : "homing required");
+  spdlog::info("service startup: {} after calibration and ready gates",
+               cfg.v3.default_mode == "AUTO_ROAM" ? "automatic roam" : "manual hold");
 
   // 5c. Phase 8: web server (webd-facing, §5.3/§42.2). Publishes the §6.3
   //     snapshot at 10-20 Hz and relays developer commands through the
@@ -401,6 +417,7 @@ int main(int argc, char** argv) {
   int cycles = 0;
 
   // Steady-state 200 Hz loop (no slow work inside).
+  if (system) system->start_watchdog();
   while (!g_shutdown.load()) {
     if (loop.shutdown_requested()) {
       spdlog::info("safe shutdown requested via web UI");
@@ -411,6 +428,8 @@ int main(int argc, char** argv) {
     const TimeNs period = t0 - t_prev;
     t_prev = t0;
     const Phase ph = loop.step(t0, period);
+    if (retained && ph == Phase::Hold && loop.homed() && !retained->valid())
+      retained->save(loop.models(), loop.limits());
     stats.record_period(period);
     // Stall attribution for the supervisor's Brake/Derate (§39.2/§39.3): a
     // cycle longer than the 5 ms period by more than 3 ms is logged with the
@@ -468,14 +487,8 @@ int main(int argc, char** argv) {
     if (tnow < next) std::this_thread::sleep_for(std::chrono::nanoseconds(next - tnow));
   }
 
-  // 6. Shutdown: stop the web server (no more clients) and the vision ingest
-  //    (no more measurements), then safe park (if homed and not faulted), else
-  //    de-energize. The park move runs with tracking stopped by the loop.
-  web.stop();
-  if (vision) {
-    vision->stop();
-    vision.reset();
-  }
+  // Park before joining I/O workers: their shutdown can exceed the independent
+  // watchdog's heartbeat deadline. No web commands are consumed in this loop.
   loop.set_vision_link(nullptr);
   spdlog::info("shutdown requested; {}", loop.homed() ? "parking" : "de-energizing");
   if (loop.homed() && loop.phase() != Phase::Fault &&
@@ -496,6 +509,8 @@ int main(int argc, char** argv) {
                  loop.fault_reason());
   }
   if (system) system->close();
+  web.stop();
+  if (vision) vision->stop();
   spdlog::info("controld stopped cleanly");
   spdlog::shutdown();  // drain + drop the async log queue (no lost tail)
   return 0;

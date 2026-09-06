@@ -17,6 +17,7 @@
 #include "can/cybergear_system.hpp"
 #include "control/can_motor_backend.hpp"
 #include "control/reference_limiter.hpp"
+#include "control/speed_servo.hpp"
 #include "config/turret_config.hpp"
 #include "commissioning_watchdog.hpp"
 
@@ -154,9 +155,10 @@ void trial(CyberGearSystem& system, const config::TurretConfig& cfg,
   const auto axis = axis_name_text == "pitch" ? AxisId::Pitch : AxisId::Yaw;
   const auto& limits = cfg.axes[static_cast<int>(axis)];
   const auto kind = profile["kind"].as<std::string>();
-  const bool speed_mode = kind == "speed-sine";
+  const bool servo_step = kind == "speed-servo-step";
+  const bool speed_mode = kind == "speed-sine" || servo_step;
   const bool current_mode = kind == "zero-current";
-  const bool position_step = kind == "position-step";
+  const bool position_step = kind == "position-step" || servo_step;
   require(kind == "fixed-hold" || kind == "chasing-hold" || kind == "position-sine" ||
           position_step || speed_mode || current_mode, "unknown trial kind");
   const double seconds = profile["duration_s"].as<double>();
@@ -199,11 +201,13 @@ void trial(CyberGearSystem& system, const config::TurretConfig& cfg,
   const bool change_gain = bool(profile["gain"]);
   if (change_gain) {
     const auto name = profile["gain"].as<std::string>();
-    require(name == "spd_ki" || name == "loc_kp", "only spd_ki or loc_kp gain trials are admitted");
-    gain = name == "spd_ki" ? cg::Reg::SpdKi : cg::Reg::LocKp;
+    require(name == "spd_ki" || name == "loc_kp" || name == "spd_kp", "unsupported gain trial");
+    gain = name == "spd_ki" ? cg::Reg::SpdKi : (name == "spd_kp" ? cg::Reg::SpdKp : cg::Reg::LocKp);
     gain_value = profile["gain_value"].as<double>();
     require(std::isfinite(gain_value) && gain_value >= 0 &&
-            gain_value <= original[name].as<double>(), "first gain trials may only reduce a gain");
+            gain_value <= (name == "spd_kp" && servo_step ? 5.0 :
+                           name == "spd_ki" && servo_step ? 0.05 : original[name].as<double>()),
+            "gain exceeds bounded commissioning range");
     changed.push_back(gain);
   }
   YAML::Node result;
@@ -284,6 +288,7 @@ void trial(CyberGearSystem& system, const config::TurretConfig& cfg,
     require(read(system, axis, cg::Reg::LimitCur) == static_cast<float>(current_limit),
             "backend current-limit cache disagrees with trial");
     control::ReferenceLimiter reference;
+    control::SpeedServo servo;
     reference.reset_at(q0);
     std::ofstream csv(output / "samples.csv");
     csv << "t_ns,q_rad,v_rad_s,iq_a,temperature_c,feedback_mode,fault_bits,q_ref_rad,loc_ref_rad,velocity_command_rad_s\n";
@@ -306,8 +311,10 @@ void trial(CyberGearSystem& system, const config::TurretConfig& cfg,
       const double shaped = control::limit_reference(reference, target, dt, speed_limit,
           limits.max_acceleration_deg_s2*kDeg2Rad, limits.max_jerk_deg_s3*kDeg2Rad);
       const double q_ref = kind == "chasing-hold" ? q : ((sine || position_step) ? shaped : q0);
-      const double velocity = speed_mode ? reference.v_rad_s : 0;
       latest = feedback(system, axis);
+      const double velocity = servo_step ? servo.step(q_ref, reference.v_rad_s, latest.q_rad,
+          speed_limit, dt, limits.max_acceleration_deg_s2*kDeg2Rad,
+          limits.max_jerk_deg_s3*kDeg2Rad) : (speed_mode ? reference.v_rad_s : 0);
       require(latest.faults == 0 && latest.mode == 2, "drive fault or unexpected mode during trial");
       require(latest.temp_c < cfg.safety.motor_overtemp_c && latest.temp_c < initial_temp+5,
               "temperature trial limit reached");

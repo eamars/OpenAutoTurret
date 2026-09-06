@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import threading
 from pathlib import Path
@@ -40,13 +41,28 @@ class JpegPreviewWorker:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            frame = self.tap.take()
+            frame, metadata = self.tap.take_packet()
             if frame is None:
                 self._stop.wait(.01)
                 continue
             temporary = None
             try:
                 jpeg = self._encode(frame)
+                if metadata is not None:
+                    # One atomic JPEG contains both pixels and their sensor stamp.
+                    # A separately renamed sidecar could pair a new pose with old pixels.
+                    payload = b'OTA_FRAME\x00' + json.dumps(
+                        metadata, separators=(',', ':'), allow_nan=False).encode('utf-8')
+                    if len(payload) > 65533:
+                        # A crowded scene must not stop the live feed. Preserve
+                        # capture identity and explicitly flag incomplete diagnostics.
+                        metadata = {key: value for key, value in metadata.items()
+                                    if key in ('sensor_timestamp_ns', 'frame_sequence',
+                                               'metadata_receive_ns', 'camera')}
+                        metadata['detections_omitted'] = 'JPEG comment size limit'
+                        payload = b'OTA_FRAME\x00' + json.dumps(
+                            metadata, separators=(',', ':'), allow_nan=False).encode('utf-8')
+                    jpeg = jpeg[:2] + b'\xff\xfe' + (len(payload) + 2).to_bytes(2, 'big') + payload + jpeg[2:]
                 with tempfile.NamedTemporaryFile(dir=self.path.parent, suffix=".jpg.part",
                                                  delete=False) as output:
                     temporary = output.name

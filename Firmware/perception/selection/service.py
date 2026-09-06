@@ -118,7 +118,9 @@ class SelectionService:
                 item['done'].set()
 
     def _decide(self, selector, track_set, now_ns, data):
-        if str(data.get('session_uuid', '')) != track_set.session_uuid:
+        # The web relay uses hyphenated UUIDs; the tracker creates uuid4().hex.
+        # Compare identities, not their textual spelling.
+        if uuid.UUID(str(data.get('session_uuid', ''))) != uuid.UUID(track_set.session_uuid):
             return {'accepted': False, 'reason': 'STALE_SESSION'}
         if not 0 <= now_ns-track_set.sensor_timestamp_ns <= 250_000_000:
             return {'accepted': False, 'reason': 'STALE_PERCEPTION_FRAME'}
@@ -133,7 +135,7 @@ class SelectionService:
                 raise ValueError('request_id reused for a different command')
             return reply
         if data.get('type') == 'select_target':
-            requested = str(uuid.UUID(data['track_uuid']))
+            requested = uuid.UUID(data['track_uuid']).hex
             request = SelectTargetRequest(request_id=request_id, track_uuid=requested,
                 track_set_sequence_seen_by_ui=int(data['track_set_sequence_seen_by_ui']))
             if request.track_set_sequence_seen_by_ui > track_set.track_set_sequence:

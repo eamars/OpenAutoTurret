@@ -1,0 +1,24 @@
+{
+  "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-kp5.json",
+  "samples": 1436,
+  "duration_s": 94.97536636999575,
+  "reference_error_deg_p50_p95_max": [
+    2.053566681418139,
+    3.4530662298322503,
+    3.763874347773406
+  ],
+  "straight_samples": 1497,
+  "straight_velocity_error_deg_s_p05_p50_p95": [
+    -1.0623219902070666,
+    -0.012974219094848305,
+    1.1335455395849567
+  ],
+  "straight_velocity_error_rms_deg_s": 0.6810643323986106,
+  "velocity_window_s": 0.2,
+  "faults": [
+    ""
+  ],
+  "safety_actions": [
+    "ALLOW"
+  ]
+}

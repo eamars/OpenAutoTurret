@@ -24,6 +24,7 @@
 #include <array>
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -45,6 +46,8 @@
 #include "control/motor_backend.hpp"
 #include "control/reference_manager.hpp"
 #include "control/reference_limiter.hpp"
+#include "control/tracking_reference.hpp"
+#include "control/speed_servo.hpp"
 #include "control/safety_envelope.hpp"
 #include "control/safety_supervisor.hpp"
 #include "control/tracking_controller.hpp"
@@ -97,6 +100,11 @@ class ControlLoop {
   // second implementation. Tests call this one.
   void preserve_scene(const telemetry::TelemetrySnapshot& live, const char* reason);
   struct Config {
+    bool start_in_auto_roam = false;
+    bool service_speed_control = false;
+    double service_speed_ki = .002;
+    double service_speed_kp = 1.0;
+    double service_max_speed_rad_s = 3.0 * kDeg2Rad;
     int control_hz = 200;
     // Braking model (must match the SafetyEnvelope the supervisor uses).
     double a_brake_rad_s2 = 60.0 * kDeg2Rad;
@@ -185,6 +193,9 @@ class ControlLoop {
 
   // --- phase setup (slow; called by the boot FSM / main, not per cycle) ---
   bool start_homing(HomingPlan plan, std::string& err);
+  void set_homing_factory(std::function<HomingPlan()> factory) { homing_factory_ = std::move(factory); }
+  bool restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
+                              const std::array<AxisLimits, 2>& limits, std::string& err);
   bool start_hold(std::string& err);
   bool start_parking(std::string& err);  // requires homed_ (valid limits/models)
   void deenergize_all();
@@ -398,6 +409,7 @@ class ControlLoop {
   void abort_payload_check(TimeNs now_ns, const std::string& reason);
   void apply_payload_derate(bool derated);
   void fault(const std::string& reason) {
+    if (phase_ == Phase::Homing || phase_ == Phase::Parking) deenergize_all();
     if (phase_ != Phase::Fault) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;
@@ -666,6 +678,12 @@ class ControlLoop {
   std::string ack_in_flight_;        // command being executed right now
   ReferenceRequest mode_proposal_;   // the controller's proposal, before the mode
   bool tracking_auto_enable_ = false;
+  bool startup_mode_applied_ = false;
+  std::function<HomingPlan()> homing_factory_;
+  int homing_init_axis_ = 0, homing_final_axis_ = 0;
+  int park_init_axis_ = 0, park_verify_axis_ = 0;
+  std::optional<DesiredState> pending_homing_ds_;
+  std::array<control::SpeedServo, kAxisCount> speed_servo_;
   // Observe-only view of the vision transport (owned by main / VisionIngest).
   const vision::VisionLink* vision_link_ = nullptr;
 };

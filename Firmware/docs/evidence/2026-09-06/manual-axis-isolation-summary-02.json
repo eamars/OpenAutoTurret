@@ -1,0 +1,66 @@
+{
+  "feedback_age_ms_percentiles": [
+    6.0,
+    17.0,
+    18.0
+  ],
+  "camera_fps_min": 26.01,
+  "steps": [
+    {
+      "stage": "yaw+5_0",
+      "goal_deg": 14.278280141998655,
+      "final_error_deg": -0.19142519935321012,
+      "overshoot_deg": 0.07081758347817058,
+      "inactive_axis_span_deg": 0.24041309083689213
+    },
+    {
+      "stage": "yaw+5_1",
+      "goal_deg": 19.064998745639606,
+      "final_error_deg": -0.10416372715478772,
+      "overshoot_deg": 0.0,
+      "inactive_axis_span_deg": 0.10926305153144754
+    },
+    {
+      "stage": "yaw-5_2",
+      "goal_deg": 13.939031831501694,
+      "final_error_deg": 0.3226325344381653,
+      "overshoot_deg": 0.0,
+      "inactive_axis_span_deg": 0.0874333595369652
+    },
+    {
+      "stage": "yaw-5_3",
+      "goal_deg": 9.283520562945704,
+      "final_error_deg": 0.06033245582727531,
+      "overshoot_deg": 0.0,
+      "inactive_axis_span_deg": 0.043716679768485776
+    },
+    {
+      "stage": "pitch+5_4",
+      "goal_deg": -34.26597012091693,
+      "final_error_deg": -0.19148249513272475,
+      "overshoot_deg": 0.13636395524112999,
+      "inactive_axis_span_deg": 0.0874333595369636
+    },
+    {
+      "stage": "pitch+5_5",
+      "goal_deg": -29.457479121061013,
+      "final_error_deg": -0.2570288668956877,
+      "overshoot_deg": 0.0927045712521668,
+      "inactive_axis_span_deg": 0.06554637176296653
+    },
+    {
+      "stage": "pitch-5_6",
+      "goal_deg": -34.692651790950855,
+      "final_error_deg": 0.25708616267519346,
+      "overshoot_deg": 0.1363639552411442,
+      "inactive_axis_span_deg": 0.24041309083689213
+    },
+    {
+      "stage": "pitch-5_7",
+      "goal_deg": -39.43559641904382,
+      "final_error_deg": 0.08216214782176223,
+      "overshoot_deg": 0.0489305957041708,
+      "inactive_axis_span_deg": 0.15297973129993012
+    }
+  ]
+}

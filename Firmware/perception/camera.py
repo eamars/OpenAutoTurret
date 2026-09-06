@@ -255,7 +255,7 @@ def _sensor_timestamp_ns(metadata: Any) -> int:
 
 def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = None,
                    preview_size: Optional[Tuple[int, int]] = None,
-                   external_manifest=None) -> Tuple[Any, Any, Dict[str, Any]]:
+                   external_manifest=None, orientation: str = 'none') -> Tuple[Any, Any, Dict[str, Any]]:
     """Build ``(imx500, picam2, info)`` for a model on this station. Import-guarded.
 
     The construction order is §9's, from the current upstream example: ask the model first, then
@@ -265,6 +265,7 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
     try:
         from picamera2 import Picamera2                            # type: ignore
         from picamera2.devices.imx500.imx500 import IMX500         # type: ignore
+        from libcamera import Transform
     except Exception as exc:                                      # noqa: BLE001
         raise ConfigError(
             f"cannot import Picamera2/IMX500 on this interpreter ({exc}). The IMX500 path needs "
@@ -280,14 +281,19 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
     camera_num = getattr(imx500, "camera_num", 0)
     main_size = tuple(stream_size) if stream_size else (int(input_size[0]), int(input_size[1]))
     picam2 = Picamera2(int(camera_num))
+    from common.image_corrections import validate_orientation
+    validate_orientation(orientation)
+    transform = Transform(hflip=orientation in ('rotate_180', 'flip_horizontal'),
+                          vflip=orientation in ('rotate_180', 'flip_vertical'))
     configuration = picam2.create_preview_configuration(
         # Uppercase: this picamera2 build's stream validator is case-sensitive and rejects the
         # lowercase alias, which the first on-device run hit as "Bad format rgb888 in stream main".
         main={"size": main_size, "format": "RGB888"},
+        transform=transform,
         controls={"FrameRate": float(intrinsics.inference_rate)},
         buffer_count=12)
     picam2.configure(configuration)
-    info = {"camera_num": int(camera_num), "input_size": (int(input_size[0]),
+    info = {"orientation": orientation, "camera_num": int(camera_num), "input_size": (int(input_size[0]),
                                                           int(input_size[1])),
             "stream_size": (int(main_size[0]), int(main_size[1])),
             "task": getattr(intrinsics, "task", None),

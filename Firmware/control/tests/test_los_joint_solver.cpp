@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "geometry/los_joint_solver.hpp"
 
@@ -132,4 +133,30 @@ TEST(LosJointSolver, SeededFromTheCurrentPoseItReproducesThatPose) {
   ASSERT_TRUE(solver.solve_from_pose(az + 12.0 * M_PI / 180.0, el, qy, qp, ty, tp));
   EXPECT_NEAR(std::fabs(ty - qy), 12.0 * M_PI / 180.0, 2e-3)
       << "got a " << (ty - qy) << " rad yaw demand";
+}
+
+TEST(LosJointSolver, LiveOffCentreTargetRetainsTheNegativePitchBranch) {
+  TurretKinematics kin;
+  kin.R_PC = Mat3{0,1,0,-1,0,0,0,0,1};
+  LosJointSolver solver(kin);
+  double yaw, pitch;
+  // Captured from service-default-start.json. The old seeded gradient failed;
+  // its analytic fallback returned yaw +2.906 / pitch +0.643, beyond travel.
+  ASSERT_TRUE(solver.solve_from_pose(2.90598, .927651, .590715, -.69295, yaw, pitch));
+  EXPECT_NEAR(yaw, 2.90598-M_PI, 1e-5);
+  EXPECT_NEAR(pitch, .927651-M_PI/2, 1e-5);
+
+  for (double elevation : {-70.0, -40.0, -10.0}) {
+    for (double offset : {-45.0, -20.0, 20.0, 45.0}) {
+      const double target_yaw = .5 + offset*M_PI/180;
+      const double target_pitch = elevation*M_PI/180;
+      double az, el;
+      TurretKinematics::base_ray_to_los(solver.optical_axis(target_yaw,target_pitch),az,el);
+      ASSERT_TRUE(solver.solve_from_pose(az,el,.5,target_pitch-.04,yaw,pitch));
+      EXPECT_NEAR(yaw,target_yaw,1e-4);
+      EXPECT_NEAR(pitch,target_pitch,1e-4);
+    }
+  }
+  EXPECT_FALSE(solver.solve_from_pose(std::numeric_limits<double>::quiet_NaN(),
+                                     .5,.5,-.5,yaw,pitch));
 }

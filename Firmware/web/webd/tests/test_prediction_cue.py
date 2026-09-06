@@ -154,30 +154,13 @@ class PredictionCueExecuted(unittest.TestCase):
         self.assertEqual(svg.count('stroke-width="1.2"'), 3,
                          "square + two cross strokes; a missing stroke is a missing '+'")
 
-    def test_it_does_not_touch_the_measured_box(self) -> None:
-        # §10: "placed near the selected target but not touching its box". Tested at the worst case -
-        # the prediction landing exactly on the target, which is what a settled loop does.
-        box = [560, 340, 640, 460]
-        gap = 8.0
-
-        def touching(b):
-            # Rectangles inflated by the gap. The rule is "not touching", which is true in any
-            # direction: the first version of this test demanded that the cue end up to the RIGHT of
-            # the box, and failed on an anchor a tenth of a pixel above the box centre, where the cue
-            # correctly moved straight up and cleared the box vertically. That assertion was testing
-            # my expectation of how the rule should be implemented rather than the rule.
-            return (b["x"] < box[2] + gap and b["x"] + b["w"] > box[0] - gap and
-                    b["y"] < box[3] + gap and b["y"] + b["h"] > box[1] - gap)
-
-        for anchor in ([600, 400], [600, 400.0001], [600, 399.9], [600, 400.0], [599.99, 400.02]):
+    def test_cue_stays_at_controller_prediction_even_when_boxes_overlap(self) -> None:
+        for anchor in ([600, 400], [600, 399.9], [599.99, 400.02]):
             b = self._node("console.log(JSON.stringify(T.hudPredictionBox(%s)));"
-                           % json.dumps({"cx": anchor[0], "cy": anchor[1], "w": 80, "h": 120,
-                                         "box": box, "gap": gap}))
-            self.assertFalse(touching(b), "cue %r touches or overlaps the measured box" % b)
-            self.assertTrue(b["shifted"])
-            # and it must still be a cue of the size it was given, not collapsed by the shove
-            self.assertAlmostEqual(b["w"], 80.0)
-            self.assertAlmostEqual(b["h"], 120.0)
+                           % json.dumps({"cx": anchor[0], "cy": anchor[1], "w": 28, "h": 28,
+                                         "box": [560, 340, 640, 460]}))
+            self.assertEqual([b["cx"], b["cy"]], anchor)
+            self.assertFalse(b["shifted"])
 
     def test_a_far_prediction_gets_no_error_vector(self) -> None:
         # §10: "a long error vector across the image is not shown by default", so a distant cue draws

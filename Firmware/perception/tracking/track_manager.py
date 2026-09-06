@@ -323,7 +323,7 @@ class TrackManager:
             return                                    # the age clock stays where it was
 
         self._accumulate_visible_ms(track, sensor_ns)
-        track.measurement_valid = True
+        track.measurement_valid = detection.anchor_valid
         if track.last_measurement_ns <= 0:
             track.first_measurement_ns = sensor_ns
         track.last_measurement_ns = sensor_ns
@@ -393,6 +393,8 @@ class TrackManager:
         imply the same pointing accuracy, and one blended "confidence" hid that difference
         before (§3.5).
         """
+        if not detection.anchor_valid:
+            return 0.0
         height = detection.bbox.height
         if height <= 0.0:
             return 0.0

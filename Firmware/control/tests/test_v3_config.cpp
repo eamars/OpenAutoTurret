@@ -48,6 +48,30 @@ TEST(V3Config, AbsentMeansTodayBehaviourExactly) {
   EXPECT_EQ(r.config.v3.jog_lease_ms, 0);
 }
 
+TEST(V3Config, ServiceSpeedGainsAreExplicitAndBounded) {
+  TempYaml y("v3:\n  service_speed_control: true\n  service_speed_kp: 4\n  service_speed_ki: 0.05\n");
+  auto r = config::load_turret_config(y.path);
+  ASSERT_FALSE(any_error_contains(r, "v3"));
+  auto cfg = wire::make_control_cfg(r.config);
+  EXPECT_DOUBLE_EQ(cfg.service_speed_kp, 4);
+  EXPECT_DOUBLE_EQ(cfg.service_speed_ki, .05);
+  TempYaml bad("v3:\n  service_speed_kp: 6\n");
+  EXPECT_TRUE(any_error_contains(config::load_turret_config(bad.path), "service_speed_kp"));
+}
+
+TEST(StationWiring, ServiceAndHoldCeilingsReachTheActuatorInRadians) {
+  TempYaml y("tracking:\n  hold_speed_deg_s: 18\nv3:\n  service_max_speed_deg_s: 20\n");
+  auto loaded = config::load_turret_config(y.path);
+  ASSERT_FALSE(any_error_contains(loaded, "service_max_speed"));
+  const auto cfg = wire::make_control_cfg(loaded.config);
+  EXPECT_NEAR(cfg.service_max_speed_rad_s, 20*kDeg2Rad, 1e-12);
+  EXPECT_NEAR(cfg.hold_speed_rad_s, 18*kDeg2Rad, 1e-12);
+  for (const auto* invalid : {"0", "-1", "21", ".nan", ".inf"}) {
+    TempYaml bad(std::string("v3:\n  service_max_speed_deg_s: ") + invalid + "\n");
+    EXPECT_TRUE(any_error_contains(config::load_turret_config(bad.path), "service_max_speed")) << invalid;
+  }
+}
+
 TEST(V3Config, ARegionInsideTheLimitsIsTakenAtItsWord) {
   TempYaml y(R"(v3:
   auto_roam:
@@ -81,13 +105,13 @@ TEST(V3Config, ARegionOutsideTheSafeTravelIsRefusedWithNumbers) {
       << "the limit it crossed is not named, so the operator has to go and re-derive it";
 }
 
-TEST(V3Config, BootingIntoAnAutomaticModeIsRefusedNotClamped) {
+TEST(V3Config, ConfiguredAutomaticStartupIsAccepted) {
   TempYaml y(R"(v3:
   default_mode: AUTO_ROAM
 )");
   auto r = config::load_turret_config(y.path);
-  EXPECT_TRUE(any_error_contains(r, "MANUAL"))
-      << "a config file can make the station sweep at power-up, and nothing said so";
+  EXPECT_FALSE(any_error_contains(r, "default_mode"));
+  EXPECT_EQ(r.config.v3.default_mode, "AUTO_ROAM");
 }
 
 TEST(V3Config, StepSizesMayNarrowTheSanctionedSetButNotWidenIt) {

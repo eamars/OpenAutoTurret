@@ -37,6 +37,11 @@ class CanMotorBackend : public MotorBackend {
   bool enter_speed_mode(AxisId axis, double limit_cur_a,
                         std::string& err) override;
   void deenergize(AxisId axis) override;
+  bool adopt_running_mode(AxisId axis, bool position, std::string& err, double speed_ki = -1, double speed_kp = 1) override;
+  void heartbeat() override { system_.heartbeat(); }
+  bool watchdog_fault() const override { return system_.motion_inhibited(); }
+  Transition transition_mode(AxisId axis, bool position, double limit,
+                             TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1) override;
 
   // --- MotorBackend: control loop (fast, non-blocking) ----------------------
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
@@ -57,6 +62,15 @@ class CanMotorBackend : public MotorBackend {
 
   can::CyberGearSystem& system_;
   int timeout_ms_;
+  struct ModeTransition {
+    int stage = 0;
+    AxisId axis = AxisId::Pitch;
+    bool position = false;
+    double limit = 0, pin = 0, last_q = 0, speed_ki = -1, speed_kp = 1;
+    TimeNs started = 0, deadline = 0, still_since = 0, sampled = 0;
+    int read_index = 0;
+    bool waiting = false;
+  } transition_;
   // Position mode is tracked locally: the feedback "mode" field is the motor
   // state (reset/cali/running), not the RunMode register we set.
   std::array<bool, kAxisCount> in_position_mode_{};

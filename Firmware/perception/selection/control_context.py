@@ -30,8 +30,7 @@ class ControllerContext:
                 if not (0 <= hi < 2**64 and 0 <= lo < 2**64):
                     raise ValueError('invalid session')
                 sample = (observed, stamp, str(uuid.UUID(int=(hi << 64) | lo)),
-                          state['operating_mode'] == 'AUTO_TRACK' and
-                          state.get('perception_native', False))
+                          state['operating_mode'] if state.get('perception_native', False) else '')
             except (OSError, ValueError, KeyError, TypeError):
                 sample = None
             with self._lock:
@@ -39,14 +38,22 @@ class ControllerContext:
             self._stop.wait(.1)
 
     def allows_auto_select(self, session_uuid, now_ns):
+        return self.operating_mode(session_uuid, now_ns) in ('AUTO_TRACK', 'AUTO_ROAM')
+
+    def operating_mode(self, session_uuid, now_ns):
         with self._lock:
             sample = self._state
         if sample is None:
-            return False
-        received, stamp, session, enabled = sample
-        return bool(enabled and session == session_uuid and
-                    0 <= now_ns-received <= 250_000_000 and
-                    0 <= now_ns-stamp <= 250_000_000)
+            return ''
+        received, stamp, session, mode = sample
+        try:
+            same_session = uuid.UUID(session) == uuid.UUID(session_uuid)
+        except (ValueError, TypeError, AttributeError):
+            return ''
+        if (same_session and 0 <= now_ns-received <= 250_000_000 and
+                0 <= now_ns-stamp <= 250_000_000):
+            return mode
+        return ''
 
     def close(self):
         self._stop.set()

@@ -1,6 +1,7 @@
 """Preview output is usable, atomic, and independent of a slow encoder."""
 import threading
 import time
+import json
 
 import numpy as np
 from PIL import Image
@@ -24,12 +25,15 @@ def test_preview_writes_a_complete_jpeg_with_picamera_channel_order(tmp_path):
     try:
         frame = np.zeros((32, 32, 3), dtype=np.uint8)
         frame[..., 2] = 255  # RGB888's byte order is BGR on Picamera2.
-        tap.offer(frame)
+        tap.offer(frame, metadata={'sensor_timestamp_ns': 123456789, 'frame_sequence': 7})
         wait_until(lambda: worker.published == 1)
         with Image.open(path) as result:
             result.load()
             red, green, blue = result.getpixel((16, 16))
             assert red > 240 and green < 10 and blue < 10
+            comment = result.info['comment']
+            assert comment.startswith(b'OTA_FRAME\x00')
+            assert json.loads(comment[10:]) == {'sensor_timestamp_ns': 123456789, 'frame_sequence': 7}
         assert not list(tmp_path.glob('*.part'))
     finally:
         worker.stop()
@@ -56,6 +60,28 @@ def test_slow_encoding_does_not_hold_the_latest_frame_slot(tmp_path):
         assert np.all(tap.take() == 99)
     finally:
         release.set()
+        worker.stop()
+
+
+def test_crowded_diagnostics_cannot_overflow_the_jpeg_comment(tmp_path):
+    tap = PreviewTap(fps=0)
+    path = tmp_path / 'crowded.jpg'
+    worker = JpegPreviewWorker(tap, str(path))
+    worker.start()
+    try:
+        tap.offer(np.zeros((8, 8, 3), dtype=np.uint8), metadata={
+            'sensor_timestamp_ns': 123, 'frame_sequence': 9,
+            'anchor_mapping': ['x' * 1000] * 100})
+        wait_until(lambda: worker.published == 1)
+        with Image.open(path) as result:
+            result.load()
+            info = json.loads(result.info['comment'][10:])
+            assert info['sensor_timestamp_ns'] == 123
+            assert info['frame_sequence'] == 9
+            assert info['detections_omitted'] == 'JPEG comment size limit'
+            assert 'anchor_mapping' not in info
+        assert worker.failures == 0
+    finally:
         worker.stop()
 
 

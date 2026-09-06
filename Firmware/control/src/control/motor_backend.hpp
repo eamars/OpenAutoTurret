@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "can/cybergear_protocol.hpp"  // cybergear::Reg
@@ -62,6 +63,18 @@ struct CanHealth {
 class MotorBackend {
  public:
   virtual ~MotorBackend() = default;
+  void set_calibration_invalidator(std::function<void()> callback) { invalidate_ = std::move(callback); }
+  void invalidate_calibration() { if (invalidate_) invalidate_(); }
+  virtual bool adopt_running_mode(AxisId, bool, std::string&, double = -1, double = 1) { return false; }
+  virtual void heartbeat() {}
+  virtual bool watchdog_fault() const { return false; }
+  enum class Transition { Pending, Complete, Failed };
+  // Repeated from the control loop. Hardware implements a nonblocking recipe.
+  virtual Transition transition_mode(AxisId axis, bool position, double limit,
+                                     TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1) {
+    return (position ? enter_position_mode(axis, limit, err) : enter_speed_mode(axis, limit, err))
+        ? Transition::Complete : Transition::Failed;
+  }
 
   // --- setup (slow; boot / phase transitions only) ------------------------
   // Discover the motor on the bus (returns its unique id). Boot only.
@@ -129,6 +142,8 @@ class MotorBackend {
   // (sim: its plant is a fixed time constant, not a tuned velocity loop).
   virtual void set_speed_loop_gains(AxisId axis, double spd_kp,
                                     double spd_ki) {}
+ private:
+  std::function<void()> invalidate_;
 };
 
 }  // namespace ota

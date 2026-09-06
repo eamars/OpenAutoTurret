@@ -1,0 +1,40 @@
+{
+  "pitch_offset_rad": -0.86,
+  "method": "Stopped yaw moves at pitch about -0.697 rad; independent yaw moves at pitch about -0.64 rad. Background feature reprojection, 1920x1080 pixel units.",
+  "training_yaw_median_residual_px_before_after": [
+    [
+      56.4142,
+      12.5513
+    ],
+    [
+      37.028,
+      9.0926
+    ]
+  ],
+  "holdout_yaw_median_residual_px_before_after": [
+    [
+      72.5391,
+      8.2314
+    ],
+    [
+      53.4546,
+      10.8045
+    ]
+  ],
+  "pitch_median_residual_px_before_after": [
+    [
+      5.9377,
+      5.3289
+    ],
+    [
+      5.7818,
+      4.2985
+    ]
+  ],
+  "limitations": [
+    "Small two-pose sample",
+    "Some moves retained only 10-17 background features",
+    "Parallax, translation and lens distortion not fitted"
+  ],
+  "raw_pi_path": "/home/eamars/workspace/OpenAutoTurret/run/dwell-projection-geometry.json"
+}

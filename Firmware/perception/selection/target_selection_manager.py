@@ -198,19 +198,31 @@ class TargetSelectionManager:
 
     # -- the frame ----------------------------------------------------------
     def update(self, track_set: TrackSet, now_ns: int, *,
-               auto_track_enabled: bool = False) -> SelectedTargetObservation:
+               auto_track_enabled: bool = False,
+               auto_roam_enabled: bool = False) -> SelectedTargetObservation:
         """Recompute the observation for one published ``TrackSet``."""
         track_set.validate()
         self._observe_sequence(track_set)
         self.frames_processed += 1
         sensor_ns = track_set.sensor_timestamp_ns
 
+        # Once the controller has returned to search, release a missing identity.
+        # Retain the identity through short occlusions and all manual operation.
+        selected = track_set.by_uuid(self.state.selected_uuid)
+        if auto_roam_enabled and self.auto.enabled and self.state.has_selection:
+            last_seen = selected.last_measurement_ns if selected else 0
+            reference = max(last_seen, self.state.selected_since_ns)
+            if sensor_ns - reference > 1_000_000_000:
+                self._clear_selection(reason="auto_roam_target_lost",
+                                      event=EventType.TARGET_CLEARED,
+                                      detail="search resumed after target loss")
+
         # The dwell machine is stepped every frame, including the ones where a selection
         # already exists: its state must be "reset while the operator holds the target", not
         # "paused", or it would resume a dwell that started before the operator intervened.
         decision = self.auto.evaluate(track_set.tracks, sensor_ns,
                                       selection_active=self.state.has_selection,
-                                      auto_track_enabled=auto_track_enabled)
+                                      auto_track_enabled=auto_track_enabled or auto_roam_enabled)
         if not self.state.has_selection and decision.track_uuid:
             self._auto_select(track_set, decision.track_uuid, now_ns, decision)
             return self._publish(track_set, now_ns)

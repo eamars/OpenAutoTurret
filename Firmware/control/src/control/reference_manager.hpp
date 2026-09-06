@@ -25,6 +25,7 @@
 
 #include "common/types.hpp"
 #include "control/motion_intent.hpp"
+#include "control/safety_envelope.hpp"
 #include "control/search_planner.hpp"
 #include "geometry/los_joint_solver.hpp"
 #include "tracking/tracking_state_machine.hpp"
@@ -121,8 +122,7 @@ class ReferenceManager {
       // Seed from where the turret actually is: the analytic seed is 180 deg wrong in
       // yaw throughout this station's (always negative) pitch range - see solve_from_pose.
       if (solver_.solve_from_pose(in.predicted_az_rad, in.predicted_el_rad,
-                                  in.q_yaw_hold_rad, in.q_pitch_hold_rad, qy, qp) ||
-          solver_.solve(in.predicted_az_rad, in.predicted_el_rad, qy, qp)) {
+                                  in.q_yaw_hold_rad, in.q_pitch_hold_rad, qy, qp)) {
         // Same direction, nearer branch: see geo::wrap_near. Pitch is untouched.
         req.q_yaw_rad = geo::wrap_near(qy, in.q_yaw_hold_rad);
         req.q_pitch_rad = qp;
@@ -175,6 +175,7 @@ class ReferenceManager {
     double roam_v_max_rad_s = 10.0 * kDeg2Rad;
     double manual_v_max_rad_s = 30.0 * kDeg2Rad;
     double hold_v_max_rad_s = 10.0 * kDeg2Rad;
+    std::array<AxisLimits, kAxisCount> axis_limits{};
   };
 
   ReferenceRequest resolve(const MotionIntent& in, const IntentLimits& lim) const {
@@ -197,8 +198,7 @@ class ReferenceManager {
         if (!in.has_los) return hold_reference(lim, "los intent without los");
         double qy, qp;
         if (!solver_.solve_from_pose(in.los_az_rad, in.los_el_rad,
-                                     lim.q_yaw_hold_rad, lim.q_pitch_hold_rad, qy, qp) &&
-            !solver_.solve(in.los_az_rad, in.los_el_rad, qy, qp)) {
+                                     lim.q_yaw_hold_rad, lim.q_pitch_hold_rad, qy, qp)) {
           // §67: an unreachable target is reported, not pressed into a hold.
           req = hold_reference(lim, "target outside travel");
           req.target_unreachable = true;
@@ -209,6 +209,14 @@ class ReferenceManager {
         // reporting "tracking" - which is what happened on the station 2026-09-04.
         req.q_yaw_rad = geo::wrap_near(qy, lim.q_yaw_hold_rad);
         req.q_pitch_rad = qp;
+        const auto& pitch = lim.axis_limits[static_cast<int>(AxisId::Pitch)];
+        const auto& yaw = lim.axis_limits[static_cast<int>(AxisId::Yaw)];
+        if ((pitch.valid && !pitch.in_soft(qp)) ||
+            (yaw.valid && !yaw.in_soft(req.q_yaw_rad))) {
+          req = hold_reference(lim, "target outside travel");
+          req.target_unreachable = true;
+          return req;
+        }
         req.source = ReferenceSource::Tracking;
         req.is_tracking_reference = true;
         req.v_max_rad_s = lim.track_v_max_rad_s * vs;

@@ -241,6 +241,20 @@ class Telemetry:
     q_ref_accel_yaw_rad_s2: Optional[float] = None
     q_ref_accel_pitch_rad_s2: Optional[float] = None
     q_ref_rate_valid: bool = False
+    tracking_velocity_control: bool = False
+    tracking_reference_damped: bool = False
+    tracking_aim_joint_valid: bool = False
+    tracking_aim_yaw_rad: float = 0.0
+    tracking_aim_pitch_rad: float = 0.0
+    guidance_target_rate_yaw_rad_s: float = 0.0
+    guidance_target_rate_pitch_rad_s: float = 0.0
+    service_velocity_control: bool = False
+    feedback_timestamp_yaw_ns: int = 0
+    feedback_timestamp_pitch_ns: int = 0
+    service_command_rate_yaw_rad_s: float = 0.0
+    service_command_rate_pitch_rad_s: float = 0.0
+    tracking_command_rate_yaw_rad_s: float = 0.0
+    tracking_command_rate_pitch_rad_s: float = 0.0
     # §25: "stale telemetry stops visual interpolation and indicates stale/disconnected state".
     # Age is computed by webd when the snapshot is READ, not when it was received, because a cached
     # frame that is served for ten seconds is ten seconds old at the moment the operator sees it.

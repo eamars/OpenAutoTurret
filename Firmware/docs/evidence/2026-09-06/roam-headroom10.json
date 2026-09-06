@@ -1,0 +1,20 @@
+{
+  "Corrected 10 deg/s": {
+    "source": "run\\takeover-evidence\\automatic-service\\service-long-roam-headroom10.json",
+    "sha256": "0c58838a21679d412c3601c6973bb2977135343f3e3c2dd828fb968d3f042e00",
+    "duration_s": 94.9711816009949,
+    "unique_samples": 1436,
+    "steady_samples": 1237,
+    "velocity_window_s": 0.2,
+    "reference_speed_deg_s": 10.0,
+    "observed_reference_max_deg_s": 10.000004285756797,
+    "rate_error_rms_deg_s": 1.7322780895434633,
+    "absolute_reference_error_p95_deg": 2.902962288754705,
+    "faults": [
+      ""
+    ],
+    "safety_actions": [
+      "ALLOW"
+    ]
+  }
+}

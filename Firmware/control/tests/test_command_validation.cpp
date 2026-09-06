@@ -99,9 +99,9 @@ TEST(CommandValidation, SelectionIsShapeCheckedBecauseModeIsIrrelevant) {
   EXPECT_FALSE(validate_command(s, "clear_target", "2").ok);
 }
 
-TEST(CommandValidation, HomingOnlyWhenNotHomed) {
-  auto s = homed_state();  // already homed
-  EXPECT_FALSE(validate_command(s, "start_homing").ok);
+TEST(CommandValidation, HomingAndExplicitRehomingAreAllowed) {
+  auto s = homed_state();  // explicit rehoming is also supported
+  EXPECT_TRUE(validate_command(s, "start_homing").ok);
   s.homed = false;
   EXPECT_TRUE(validate_command(s, "start_homing").ok);  // can start when not homed
 }

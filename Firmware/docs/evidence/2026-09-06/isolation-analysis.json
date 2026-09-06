@@ -1,0 +1,339 @@
+{
+  "sources": {
+    "isolation-fixed-camera-01.json": "9825b4c4b30552d34b160982e507abcbaf0fcd2ded4c2fb0f04d6a26bc8fc96e",
+    "isolation-clean-reference-before.csv": "ab30cce307ca812781677ad66b58ef3133cd227c7b99e6e3b0ab71c2a8834483",
+    "isolation-clean-reference-after.csv": "1db473219bc0ea35bb886bfd57c53d0a0092a8edd62ef20f0b3ff5ca632c2047",
+    "isolation-estimator-held.csv": "cbcebd25e46991ec27d7ff6beb632a206db9ec28ae3a50546cd09c7a38917462",
+    "isolation-held-move-stop-native-01.json": "a74bfc86d056b080ecacfcad96a266b0d5dcc2bd84bb8bf748a76927424a3a31",
+    "isolation-dwell-geometry-02.json": "838a21945c09e43fcbcb681ae4d56df971cc457b6393ece7db6e197d5e0c7192",
+    "dwell-projection-geometry.json": "d2fe5cc0fe5e04f177787de55f801f92885cbdef91a8aa3699952ff5a7c3bbb3",
+    "isolation-held-move-stop-01.json": "f3e8792205d25656276a7df176ea63ea16bcbdf880d4128271515a319a53c8b5",
+    "isolation-planner-live-01.json": "d9f1fe6d7a04cd55e2226588d42fb780c30f9272d764c59728199fe0e20f067a",
+    "isolation-planner-auto-01.json": "4aca36006b29138f08d41b7038277194a19e92c4962e43d9cb5fbd2474707b44"
+  },
+  "held_stationary": {
+    "unique_states": 681,
+    "duration_s": 45.011128262,
+    "anchor_std_px": [
+      12.16149398328137,
+      11.955755419033167
+    ],
+    "anchor_span_px": [
+      100.99968000000013,
+      72.65052000000003
+    ],
+    "encoder_std_deg": [
+      0.051426922242373864,
+      0.023412095927385336
+    ],
+    "encoder_span_deg": [
+      0.3059594625998594,
+      0.1311500393054441
+    ],
+    "selected_track_id_count": 1,
+    "tentative_track_id_count": 6
+  },
+  "planner": {
+    "before": [
+      {
+        "target_speed_deg_s": 3,
+        "stop_overshoot_deg": 0.5129570263000005,
+        "crossings_beyond_005deg": 14,
+        "final_error_deg": -0.07576242630000074,
+        "last_2s_max_error_deg": 0.40828889700000026
+      },
+      {
+        "target_speed_deg_s": 10,
+        "stop_overshoot_deg": 4.220815000000002,
+        "crossings_beyond_005deg": 1,
+        "final_error_deg": 0.0,
+        "last_2s_max_error_deg": 0.0
+      },
+      {
+        "target_speed_deg_s": 15,
+        "stop_overshoot_deg": 0.7077477022000025,
+        "crossings_beyond_005deg": 1,
+        "final_error_deg": 0.0,
+        "last_2s_max_error_deg": 0.0
+      }
+    ],
+    "after": [
+      {
+        "target_speed_deg_s": 3,
+        "stop_overshoot_deg": 0.4835700000000003,
+        "crossings_beyond_005deg": 1,
+        "final_error_deg": 0.0,
+        "last_2s_max_error_deg": 0.0
+      },
+      {
+        "target_speed_deg_s": 10,
+        "stop_overshoot_deg": 4.215060000000001,
+        "crossings_beyond_005deg": 1,
+        "final_error_deg": 0.0,
+        "last_2s_max_error_deg": 0.0
+      },
+      {
+        "target_speed_deg_s": 15,
+        "stop_overshoot_deg": 0.7467477021999969,
+        "crossings_beyond_005deg": 1,
+        "final_error_deg": 0.0,
+        "last_2s_max_error_deg": 0.0
+      }
+    ]
+  },
+  "estimator_replay": {
+    "rows": 909,
+    "valid_measurements": 329,
+    "accepted": 324,
+    "same_frame_prediction_displacement_px_p50_p95_max": [
+      27.575569739215034,
+      117.52452660737394,
+      175.87737046356125
+    ],
+    "limitation": "Prediction displacement is not future-ground-truth accuracy; API pose interpolation and publication-time arrival are approximate."
+  },
+  "native_move_capture": {
+    "frames": 921,
+    "states": {
+      "CONFIRMED_VISIBLE": 334,
+      "OCCLUDED": 49,
+      "LOST": 120,
+      "SELECTED_STALE": 418
+    },
+    "limitation": "The subject left the fixed field of view; invalid observations are not a detector failure rate."
+  },
+  "geometry": [
+    {
+      "move": "yaw+5",
+      "features": 52,
+      "median_observed_shift_px": 145.86103620750652,
+      "residual_median_px": 18.993298529482598,
+      "residual_xy_median_px": [
+        18.724932136786606,
+        2.628166183040861
+      ]
+    },
+    {
+      "move": "yaw-5",
+      "features": 64,
+      "median_observed_shift_px": 150.73182523947793,
+      "residual_median_px": 18.49938250239613,
+      "residual_xy_median_px": [
+        -18.419071743263714,
+        -1.166224047370072
+      ]
+    },
+    {
+      "move": "pitch+5",
+      "features": 54,
+      "median_observed_shift_px": 135.4816867704451,
+      "residual_median_px": 10.939691079066467,
+      "residual_xy_median_px": [
+        6.039861326238963,
+        9.108299866696086
+      ]
+    },
+    {
+      "move": "yaw+5",
+      "features": 42,
+      "median_observed_shift_px": 131.41825939238788,
+      "residual_median_px": 17.34710213113015,
+      "residual_xy_median_px": [
+        17.213119414367043,
+        2.4527464674409885
+      ]
+    },
+    {
+      "move": "yaw-5",
+      "features": 38,
+      "median_observed_shift_px": 129.48426816179708,
+      "residual_median_px": 16.758683643328823,
+      "residual_xy_median_px": [
+        -16.178991334777038,
+        -4.020944797926859
+      ]
+    },
+    {
+      "move": "pitch-5",
+      "features": 52,
+      "median_observed_shift_px": 133.9404742440878,
+      "residual_median_px": 7.216725721324883,
+      "residual_xy_median_px": [
+        1.0094455950089838,
+        -6.993849600759347
+      ]
+    }
+  ],
+  "geometry_cross_validation": [
+    {
+      "fit_on": "old",
+      "fx": 1519.2679695337483,
+      "fy": 1481.2455299453945,
+      "pitch_offset_rad": -0.9161365919839193,
+      "evaluations": [
+        {
+          "dataset": "old",
+          "baseline_median_by_move_px": [
+            12.551256411392812,
+            9.092563657926632,
+            5.3288587681726725,
+            8.231362482633061,
+            10.80450311298565,
+            4.29850207882195
+          ],
+          "candidate_median_by_move_px": [
+            6.879108349624158,
+            4.332301406267818,
+            5.788115783711032,
+            6.832977857484353,
+            6.861694532586734,
+            2.954456236834163
+          ]
+        },
+        {
+          "dataset": "new",
+          "baseline_median_by_move_px": [
+            18.993298529482516,
+            18.49938250239579,
+            10.939691079066467,
+            17.347102131129915,
+            16.758683643328716,
+            7.216725721325197
+          ],
+          "candidate_median_by_move_px": [
+            6.685936034871046,
+            8.457144503331824,
+            10.245568383354353,
+            5.114228400113959,
+            5.0552704062051665,
+            6.172285210028047
+          ]
+        }
+      ]
+    },
+    {
+      "fit_on": "new",
+      "fx": 1621.468509491814,
+      "fy": 1566.6908184976103,
+      "pitch_offset_rad": -0.8914481631610576,
+      "evaluations": [
+        {
+          "dataset": "old",
+          "baseline_median_by_move_px": [
+            12.551256411392812,
+            9.092563657926632,
+            5.3288587681726725,
+            8.231362482633061,
+            10.80450311298565,
+            4.29850207882195
+          ],
+          "candidate_median_by_move_px": [
+            10.393271671468785,
+            8.54403924748678,
+            10.43001352586462,
+            12.186133852251803,
+            10.331355554194182,
+            4.258307137920898
+          ]
+        },
+        {
+          "dataset": "new",
+          "baseline_median_by_move_px": [
+            18.993298529482516,
+            18.49938250239579,
+            10.939691079066467,
+            17.347102131129915,
+            16.758683643328716,
+            7.216725721325197
+          ],
+          "candidate_median_by_move_px": [
+            2.630031041437377,
+            3.2504074224806114,
+            6.093782502475551,
+            3.120537048080828,
+            3.7344828942740227,
+            2.4660420185540355
+          ]
+        }
+      ]
+    },
+    {
+      "fit_on": "both",
+      "fx": 1558.3330667527653,
+      "fy": 1560.0495195728156,
+      "pitch_offset_rad": -0.9424412665702434,
+      "evaluations": [
+        {
+          "dataset": "old",
+          "baseline_median_by_move_px": [
+            12.551256411392812,
+            9.092563657926632,
+            5.3288587681726725,
+            8.231362482633061,
+            10.80450311298565,
+            4.29850207882195
+          ],
+          "candidate_median_by_move_px": [
+            6.632645090906142,
+            4.304654695746824,
+            10.142002575613647,
+            9.300539551244599,
+            7.205590139629226,
+            3.9005726649643075
+          ]
+        },
+        {
+          "dataset": "new",
+          "baseline_median_by_move_px": [
+            18.993298529482516,
+            18.49938250239579,
+            10.939691079066467,
+            17.347102131129915,
+            16.758683643328716,
+            7.216725721325197
+          ],
+          "candidate_median_by_move_px": [
+            3.5382423439099893,
+            6.100619046380426,
+            6.180478239849618,
+            1.9058851699491681,
+            2.166873372652521,
+            2.417476980188165
+          ]
+        }
+      ]
+    }
+  ],
+  "live_verification": {
+    "isolation-planner-live-01.json": {
+      "unique_states": 436,
+      "modes": {
+        "MANUAL": 434,
+        "AUTO_ROAM": 2
+      },
+      "safety": {
+        "ALLOW": 436
+      },
+      "faults": []
+    },
+    "isolation-planner-auto-01.json": {
+      "unique_states": 681,
+      "modes": {
+        "AUTO_TRACK": 681
+      },
+      "safety": {
+        "ALLOW": 681
+      },
+      "faults": []
+    }
+  },
+  "implementation_sources": {
+    "Firmware\\control\\src\\control\\reference_limiter.hpp": "d3351f5ba10b51aa528612d77c9e4231223003af24cb875b95e35097a0dca8e9",
+    "Firmware\\control\\tests\\test_reference_limiter.cpp": "a9705e05cb09be379ebd50fec5cef38169c3609f26a0a61babfaf8847cbefe4b",
+    "Firmware\\tools\\probe_tracking_boundaries.cpp": "86d4b893720fe2f72fc2cb156d9eef6a78ac22952b0bbbbcdfd61a91f55a22e2",
+    "Firmware\\tools\\prepare_tracking_replay.py": "f7646d80c0c104408754fefd97bde02ea9323ff7befa8cc0497cc39235c0a2ec",
+    "Firmware\\config\\turret.yaml": "801de3a47e59321c8ab01245447d75decc491293b06f9408697e21b332ecd0db",
+    "Firmware\\calibration\\camera_intrinsics.yaml": "578319483d9eb8e0f93b3302a33111cf2c650b3b39dec1fe041cd56861220728",
+    "Firmware\\calibration\\camera_extrinsics.yaml": "597d2c0fe06603b30c30d8e21277a06e3938bf607bb3d8ea1133ba24beeabba7"
+  }
+}

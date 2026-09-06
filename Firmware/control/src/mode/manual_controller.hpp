@@ -197,6 +197,7 @@ class ManualController {
                     // refusing the whole jog with no explanation is not.
     }
     dir_ = dir;
+    hold_latched_ = false;
     profile_ = profile;
     lease_until_ns_ = now_ns + cfg_.lease_ms * 1000000;
     step_active_ = false;
@@ -227,6 +228,7 @@ class ManualController {
     lease_until_ns_ = 0;
     dir_ = {};
     step_active_ = true;
+    hold_latched_ = false;
     step_started_ns_ = now_ns;
     step_axis_ = axis;
     step_target_rad_ = q_now_rad + delta_rad;
@@ -283,6 +285,7 @@ class ManualController {
     }
 
     if (lease_until_ns_ != 0 && dir_.any()) {
+      latch_hold(q_now);
       const ManualProfileLimits lim = limits(profile_);
       out.lease_active = true;
       out.lease_remaining_ms = (lease_until_ns_ - now_ns) / 1000000;
@@ -301,8 +304,8 @@ class ManualController {
                               lim.velocity_scale;
       out.intent.v_pitch_rad_s = static_cast<double>(dir_.pitch) * v_max_rad_s[0] *
                                 lim.velocity_scale;
-      out.intent.q_yaw_rad = q_now[1] + out.intent.v_yaw_rad_s * horizon;
-      out.intent.q_pitch_rad = q_now[0] + out.intent.v_pitch_rad_s * horizon;
+      out.intent.q_yaw_rad = dir_.yaw ? q_now[1] + out.intent.v_yaw_rad_s * horizon : hold_q_[1];
+      out.intent.q_pitch_rad = dir_.pitch ? q_now[0] + out.intent.v_pitch_rad_s * horizon : hold_q_[0];
       out.intent.velocity_scale = lim.velocity_scale;
       out.intent.acceleration_scale = lim.acceleration_scale;
       out.intent.jerk_scale = lim.jerk_scale;
@@ -318,6 +321,7 @@ class ManualController {
     }
 
     if (step_active_) {
+      latch_hold(q_now);
       const double err = step_target_rad_ - q_now[step_axis_];
       const bool arrived = std::fabs(err) <= cfg_.step_done_tol_rad;
       const bool timed_out =
@@ -336,8 +340,8 @@ class ManualController {
       out.step_in_progress = true;
       out.intent.type = IntentType::JointPosition;
       out.intent.has_joint_target = true;
-      out.intent.q_pitch_rad = q_now[0];
-      out.intent.q_yaw_rad = q_now[1];
+      out.intent.q_pitch_rad = hold_q_[0];
+      out.intent.q_yaw_rad = hold_q_[1];
       out.intent.v_pitch_rad_s = 0.0;
       out.intent.v_yaw_rad_s = 0.0;
       if (step_axis_ == 0) out.intent.q_pitch_rad = step_target_rad_;
@@ -351,6 +355,7 @@ class ManualController {
       out.intent.jerk_scale = lim.jerk_scale;
       out.intent.valid_until_ns = now_ns + 2 * period_ns;
       out.reason = "stepping";
+      out.intent.set_reason(out.reason);
       return out;
     }
 
@@ -373,6 +378,16 @@ class ManualController {
   void clear_step_rejection() { step_rejected_ = false; }
 
  private:
+  void latch_hold(const double q_now[2]) {
+    if (hold_latched_) return;
+    hold_q_[0] = q_now[0];
+    hold_q_[1] = q_now[1];
+    hold_latched_ = true;
+  }
+  // The inactive axis holds a fixed destination. Re-seeding it from feedback
+  // every cycle turned encoder noise/drift into target velocity feed-forward.
+  double hold_q_[2]{};
+  bool hold_latched_ = false;
   ManualConfig cfg_;
   JogDirection dir_{};
   ManualProfile profile_ = ManualProfile::Normal;

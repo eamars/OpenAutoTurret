@@ -99,6 +99,12 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
 
 ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   ControlLoop::Config c;
+  c.start_in_auto_roam = cfg.v3.default_mode == "AUTO_ROAM";
+  c.service_speed_control = cfg.v3.service_speed_control;
+  c.service_speed_ki = cfg.v3.service_speed_ki;
+  c.service_speed_kp = cfg.v3.service_speed_kp;
+  c.service_max_speed_rad_s = cfg.v3.service_max_speed_deg_s * kDeg2Rad;
+  c.hold_speed_rad_s = cfg.tracking.hold_speed_deg_s * kDeg2Rad;
   c.control_hz = cfg.control_loop_hz;
   // §72: the named values. Each is passed through only when the file named it; an
   // omitted value stays zero/false so the loop keeps deriving it from what the station

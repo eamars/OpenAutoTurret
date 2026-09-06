@@ -28,6 +28,7 @@
 #include "common/motor_state_history.hpp"
 #include "geometry/camera_model.hpp"
 #include "geometry/los_joint_solver.hpp"
+#include "geometry/los_uncertainty.hpp"
 #include "telemetry/telemetry.hpp"
 #include "tracking/target_estimator.hpp"
 #include "tracking/aim_point.hpp"
@@ -59,6 +60,9 @@ class TrackingController {
     double hold_v_max_rad_s = 10.0 * kDeg2Rad;
     // Motor history capacity (~1 s at feedback rate).
     size_t history_capacity = 512;
+    // Subtract the two-sigma rate uncertainty before prediction/feed-forward.
+    // Enabled by speed-mode service; configurable here for offline ablation.
+    bool uncertainty_gated_motion = false;
   };
 
   explicit TrackingController(Config cfg)
@@ -74,9 +78,21 @@ class TrackingController {
 
   // Feed the latest pose (rad) each cycle (maintains the motor history for §11
   // and the current pose).
-  void update_snapshots(TimeNs now_ns, double q_pitch_rad, double q_yaw_rad) {
-    history_pitch_.add(now_ns, static_cast<float>(q_pitch_rad), 0.0f);
-    history_yaw_.add(now_ns, static_cast<float>(q_yaw_rad), 0.0f);
+  void update_snapshots(TimeNs now_ns, double q_pitch_rad, double q_yaw_rad,
+                        TimeNs pitch_sample_ns = -1, TimeNs yaw_sample_ns = -1) {
+    // A 200 Hz read of a 50 Hz feedback sample is not a new measurement.
+    // Use each axis's receive timestamp and append it once. Stamping repeated
+    // poses with now created a delayed staircase in capture-time interpolation.
+    if (pitch_sample_ns < 0) pitch_sample_ns = now_ns;
+    if (yaw_sample_ns < 0) yaw_sample_ns = now_ns;
+    if (pitch_sample_ns > last_pitch_sample_ns_ && pitch_sample_ns <= now_ns) {
+      history_pitch_.add(pitch_sample_ns, static_cast<float>(q_pitch_rad), 0.0f);
+      last_pitch_sample_ns_ = pitch_sample_ns;
+    }
+    if (yaw_sample_ns > last_yaw_sample_ns_ && yaw_sample_ns <= now_ns) {
+      history_yaw_.add(yaw_sample_ns, static_cast<float>(q_yaw_rad), 0.0f);
+      last_yaw_sample_ns_ = yaw_sample_ns;
+    }
     now_ns_ = now_ns;
   }
 
@@ -123,14 +139,14 @@ class TrackingController {
     // 2% box jitter are provisional priors to fit from stationary recordings.
     const double quality = std::clamp(static_cast<double>(m.confidence) *
         m.association_quality * m.identity_confidence, 0.05, 1.0);
-    const double sigma_x = std::max(2.0, 0.02 * (m.bbox_x_max_norm-m.bbox_x_min_norm) *
-                              cfg_.intrinsics.width) / cfg_.intrinsics.fx;
-    const double sigma_y = std::max(2.0, 0.02 * (m.bbox_y_max_norm-m.bbox_y_min_norm) *
-                              cfg_.intrinsics.height) / cfg_.intrinsics.fy;
-    // Use the larger image-axis variance for both base axes so camera rotation
-    // cannot turn a small image-axis variance into false base-axis certainty.
-    const double variance = std::max(sigma_x*sigma_x, sigma_y*sigma_y)/quality;
-    if (!estimator_.update(az, el, m.sensor_timestamp_ns, variance, variance)) return false;
+    const double sigma_x = std::max({2.0, cfg_.estimator.measurement_sigma_rad*cfg_.intrinsics.fx,
+        0.02*(m.bbox_x_max_norm-m.bbox_x_min_norm)*cfg_.intrinsics.width});
+    const double sigma_y = std::max({2.0, cfg_.estimator.measurement_sigma_rad*cfg_.intrinsics.fy,
+        0.02*(m.bbox_y_max_norm-m.bbox_y_min_norm)*cfg_.intrinsics.height});
+    const auto variance = geo::pixel_los_variance(camera_, cfg_.kinematics,
+        sy.q, sp.q, ap.u_px, ap.v_px, sigma_x, sigma_y);
+    if (!estimator_.update(az, el, m.sensor_timestamp_ns,
+                           variance[0]/quality, variance[1]/quality)) return false;
     last_aim_point_ = ap;
     aim_valid_ = true;
     has_identity_ = m.has_track_id;
@@ -157,6 +173,11 @@ class TrackingController {
     if (estimator_.initialized()) {
       estimator_.predict(now_ns + cfg_.control_delay_ns + cfg_.motor_response_ns,
                          az, el);
+      if (cfg_.uncertainty_gated_motion && cfg_.estimator.use_kalman) {
+        const double horizon = prediction_horizon_ns() * 1e-9;
+        az = tracking::wrap_angle(estimator_.azimuth() + target_motion_rate(0)*horizon);
+        el = std::clamp(estimator_.elevation() + target_motion_rate(1)*horizon, -M_PI/2, M_PI/2);
+      }
     } else {
       az = el = 0.0;
     }
@@ -222,6 +243,23 @@ class TrackingController {
   // could not slew that fast". These three numbers say what was actually requested.
   double target_az_rate_rad_s() const { return estimator_.azimuth_rate(); }
   double target_el_rate_rad_s() const { return estimator_.elevation_rate(); }
+  double target_rate_variance(int axis) const { return estimator_.rate_variance(axis); }
+  double target_motion_rate(int axis) const {
+    const double rate=axis==0?estimator_.azimuth_rate():estimator_.elevation_rate();
+    if (!cfg_.uncertainty_gated_motion || !cfg_.estimator.use_kalman) return rate;
+    const double uncertainty=2*std::sqrt(std::max(0.0,estimator_.rate_variance(axis)));
+    return std::copysign(std::max(0.0,std::abs(rate)-uncertainty),rate);
+  }
+  // Transform credible world angular velocity through the same solver as the
+  // pointing request. Joint pitch is not generally negative world elevation.
+  std::array<double,2> joint_motion_rates(double yaw, double pitch) const {
+    constexpr double h=.001;
+    if (target_motion_rate(0)==0 && target_motion_rate(1)==0) return {0,0};
+    double next_yaw=yaw,next_pitch=pitch;
+    if (!solver_.solve_from_pose(predicted_az_act_rad_+target_motion_rate(0)*h,
+        predicted_el_act_rad_+target_motion_rate(1)*h,yaw,pitch,next_yaw,next_pitch)) return {0,0};
+    return {(geo::wrap_near(next_yaw,yaw)-yaw)/h,(next_pitch-pitch)/h};
+  }
   const tracking::TargetEstimator::Diagnostics& estimator_diagnostics() const {
     return estimator_.diagnostics();
   }
@@ -284,6 +322,8 @@ class TrackingController {
   tracking::TargetEstimator estimator_;
   MotorStateHistory history_pitch_;
   MotorStateHistory history_yaw_;
+  TimeNs last_pitch_sample_ns_ = -1;
+  TimeNs last_yaw_sample_ns_ = -1;
   tracking::TrackingStateMachine fsm_;
   SearchPlanner search_;
   ReferenceManager refman_;

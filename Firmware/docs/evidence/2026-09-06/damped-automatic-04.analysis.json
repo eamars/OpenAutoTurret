@@ -1,0 +1,19 @@
+{
+  "duration_s": 299.937794033,
+  "unique_samples": 4045,
+  "tracking_fraction": 0.0,
+  "start_q_deg": [
+    7.551526444044737,
+    -32.490373913806515
+  ],
+  "end_q_deg": [
+    22.610977243924754,
+    -32.42477024626403
+  ],
+  "selection_uuids": [
+    ""
+  ],
+  "faults": [],
+  "max_telemetry_gap_s": 3.24168530999998,
+  "damped_reference_samples": 0
+}

@@ -115,10 +115,16 @@ int main(int argc, char** argv) {
   auto* observe = backend.get();
   ControlLoop loop({}, std::move(backend));
   const bool homing_started = loop.start_homing(wire::make_homing_plan(config.config, error), error);
+  const auto t = now_monotonic_ns();
+  loop.step(t, 5000000LL);
+  loop.step(t + 5000000LL, 5000000LL);
   const bool per_axis_limits = homing_started && observe->entry_current[0] == config.config.axes[0].limit_cur_a &&
       observe->entry_current[1] == config.config.axes[1].limit_cur_a;
   observe->fail_yaw = true;
-  const bool rejected = !loop.start_homing(wire::make_homing_plan(config.config, error), error);
+  loop.start_homing(wire::make_homing_plan(config.config, error), error);
+  loop.step(t + 10000000LL, 5000000LL);
+  loop.step(t + 15000000LL, 5000000LL);
+  const bool rejected = loop.phase() == Phase::Fault;
   const bool partial_failure_disabled = rejected &&
       !observe->snapshot(AxisId::Pitch, 0).in_speed_mode &&
       !observe->snapshot(AxisId::Yaw, 0).in_speed_mode;

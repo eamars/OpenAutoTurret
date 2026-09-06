@@ -48,6 +48,33 @@ TEST(MotionIntent, NoIntentHoldsAtTheSafePose) {
   EXPECT_STREQ(req.reason, "no intent");
 }
 
+TEST(MotionIntent, LiveStationTargetSolvesNearbyAndRefusesOutsideTravel) {
+  TurretKinematics kin;
+  kin.R_PC = ota::geo::Mat3{0,1,0,-1,0,0,0,0,1};
+  ReferenceManager rm{LosJointSolver(kin)};
+  auto lim = limits();
+  lim.q_yaw_hold_rad = .590715; lim.q_pitch_hold_rad = -.69295;
+  auto& pitch = lim.axis_limits[static_cast<int>(ota::AxisId::Pitch)];
+  auto& yaw = lim.axis_limits[static_cast<int>(ota::AxisId::Yaw)];
+  pitch.valid = yaw.valid = true;
+  pitch.q_soft_min_rad = -1.3; pitch.q_soft_max_rad = -.09;
+  yaw.q_soft_min_rad = -2.8; yaw.q_soft_max_rad = 3.15;
+  MotionIntent in;
+  in.source = MotionSource::AutoTrack; in.type = IntentType::LosDirection;
+  in.has_los = true; in.los_az_rad = 2.90598; in.los_el_rad = .927651;
+  auto req = rm.resolve(in,lim);
+  ASSERT_FALSE(req.target_unreachable);
+  EXPECT_EQ(req.source,ReferenceSource::Tracking);
+  EXPECT_LT(req.q_yaw_rad,0);
+  EXPECT_NEAR(req.q_pitch_rad,-.643145,1e-5);
+
+  in.los_el_rad = .1; // requires pitch below the calibrated soft minimum
+  req = rm.resolve(in,lim);
+  EXPECT_TRUE(req.target_unreachable);
+  EXPECT_EQ(req.source,ReferenceSource::Hold);
+  EXPECT_DOUBLE_EQ(req.q_pitch_rad,lim.q_pitch_hold_rad);
+}
+
 TEST(MotionIntent, ExpiredIntentHoldsWhateverItWasAskingFor) {
   // §93: "no stale mode intent survives a transition". Handled where the
   // timestamp lives, so it cannot be forgotten by a later caller.

@@ -20,6 +20,18 @@ from perception.tracking.track import Track, TrackState
 from perception.tracking.track_manager import TrackManager
 
 
+def test_visible_identity_with_out_of_crop_anchor_cannot_guide_motion():
+    from dataclasses import replace
+    manager = TrackManager(commissioned_config())
+    detection = replace(det(1), anchor_valid=False)
+    result = advance(manager, [[detection], [detection], [detection]])[-1]
+    assert result.tracks[0].state == TrackState.CONFIRMED_VISIBLE
+    assert not result.tracks[0].measurement_valid
+    assert result.tracks[0].measurement_quality == 0
+    restored = type(detection).from_dict(detection.to_dict())
+    assert not restored.anchor_valid
+
+
 class TestConfirmation(unittest.TestCase):
     def setUp(self):
         self.config = commissioned_config()

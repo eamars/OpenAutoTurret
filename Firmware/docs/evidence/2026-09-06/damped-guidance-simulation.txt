@@ -1,0 +1,9 @@
+case 0 stationary p95=0.190484587564 px; initial overshoot=0 deg; moving RMS=0.138679253261 px
+case 1 stationary p95=4.02266662819 px; initial overshoot=0.127418025288 deg; moving RMS=1.82201764408 px
+case 2 stationary p95=0.121425473116 px; initial overshoot=0.0351904147568 deg; moving RMS=0.0480619415252 px
+case 3 stationary p95=4.57083060464 px; initial overshoot=0.278556560338 deg; moving RMS=2.22191043812 px
+case 4 stationary p95=4.53625700302 px; initial overshoot=0.325598052751 deg; moving RMS=2.14365764372 px
+case 5 stationary p95=4.70299282846 px; initial overshoot=0.806600440039 deg; moving RMS=2.20944273077 px
+case 6 stationary p95=4.57083774159 px; initial overshoot=0.278556560338 deg; moving RMS=47.7268120291 px
+case 7 stationary p95=4.57102272499 px; initial overshoot=0.278556560338 deg; moving RMS=320.09863662 px
+case 8 stationary p95=13.1948021581 px; initial overshoot=0.372173536492 deg; moving RMS=6.90964636989 px

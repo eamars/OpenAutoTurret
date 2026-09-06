@@ -12,6 +12,8 @@
 //    synchronous register-query chain in the loop);
 //  - fire-and-forget command TX for the control loop.
 #include <array>
+#include <atomic>
+#include <thread>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -40,6 +42,10 @@ struct CyberGearSystemConfig {
 
 class CyberGearSystem {
  public:
+  ~CyberGearSystem() { close(); }
+  void start_watchdog();
+  void heartbeat() { heartbeat_ns_.store(now_monotonic_ns()); }
+  bool motion_inhibited() const { return motion_inhibited_.load(); }
   bool open(const CyberGearSystemConfig& cfg, std::string& err,
             std::unique_ptr<CanTransport> transport = {});
   void close();
@@ -49,6 +55,9 @@ class CyberGearSystem {
                 std::string* err = nullptr);
   bool read_register(AxisId axis, cybergear::Reg reg, double& value,
                      int timeout_ms = 500, std::string* err = nullptr);
+  bool begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err);
+  int poll_register_read(double& value, std::string& err); // 0 pending, 1 received, -1 failed
+  void cancel_register_read();
   // Read-only diagnostic access. Unknown firmware parameters remain raw bytes.
   bool read_parameter_raw(AxisId axis, uint16_t address, std::array<uint8_t, 4>& value,
                           int timeout_ms = 500, std::string* err = nullptr);
@@ -84,6 +93,10 @@ class CyberGearSystem {
                 cybergear::CanFrame& out, int timeout_ms, std::string* err);
 
   CyberGearSystemConfig cfg_{};
+  std::mutex command_mutex_;
+  std::atomic<bool> watchdog_stop_{false}, motion_inhibited_{false};
+  std::atomic<TimeNs> heartbeat_ns_{0};
+  std::thread watchdog_;
   std::unique_ptr<CanTransport> bus_;
   std::array<AxisRuntime, 2> axes_{};
 
@@ -93,6 +106,7 @@ class CyberGearSystem {
   struct Pending {
     bool active{false};
     bool received{false};
+    bool asynchronous{false};
     uint8_t motor{0};
     uint8_t comm{0};
     uint8_t match_target{0};

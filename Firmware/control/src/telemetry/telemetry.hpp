@@ -312,6 +312,20 @@ struct TelemetrySnapshot {
   double q_ref_accel_yaw_rad_s2 = 0.0;
   double q_ref_accel_pitch_rad_s2 = 0.0;
   bool q_ref_rate_valid = false;
+  bool tracking_velocity_control = false;
+  bool tracking_reference_damped = false;
+  bool tracking_aim_joint_valid = false;
+  double tracking_aim_yaw_rad = 0.0;
+  double tracking_aim_pitch_rad = 0.0;
+  double guidance_target_rate_yaw_rad_s = 0.0;
+  double guidance_target_rate_pitch_rad_s = 0.0;
+  bool service_velocity_control = false;
+  TimeNs feedback_timestamp_yaw_ns = 0;
+  TimeNs feedback_timestamp_pitch_ns = 0;
+  double service_command_rate_yaw_rad_s = 0.0;
+  double service_command_rate_pitch_rad_s = 0.0;
+  double tracking_command_rate_yaw_rad_s = 0.0;
+  double tracking_command_rate_pitch_rad_s = 0.0;
   // v3 §61: publisher generation, the two latency intervals, and which candidate is
   // being followed. Ages are -1 for "never", never 0 — same rule as the CAN family.
   uint64_t vision_track_sets = 0;

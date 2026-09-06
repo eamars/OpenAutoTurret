@@ -107,10 +107,6 @@ inline CommandResult validate_command(const SystemCommandState& s,
   // Homing is the command that ESTABLISHES position validity, so it is the one
   // command allowed while NOT homed (it requires not-yet-homed).
   if (command == "start_homing") {
-    if (s.homed) {
-      r.error = "already homed; re-homing requires a manual reset";
-      return r;
-    }
     r.ok = true;
     return r;
   }

@@ -10,6 +10,7 @@
 #include <cstdio>
 
 #include "vision/vision_ingest.hpp"
+#include "common/time.hpp"
 
 namespace ota {
 
@@ -70,6 +71,7 @@ bool ControlLoop::enter_speed_mode_all(
 }
 
 bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
+  backend_->invalidate_calibration();
   if (phase_ == Phase::Fault) {
     err = "in fault; reset required";
     return false;
@@ -92,14 +94,15 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
       return false;
     }
   }
-  std::string e;
-  if (!enter_speed_mode_all(limit_cur, e)) {
-    err = e;
-    return false;
-  }
+  homing_init_axis_ = homing_final_axis_ = 0;
+  pending_homing_ds_.reset();
+  disable_tracking();
+  manual_.cancel(now_ns_);
   homed_ = false;
   at_ready_ = false;
   homing_log_cycle_ = 0;
+  limits_ = {};
+  models_ = {};
   phase_ = Phase::Homing;
   return true;
 }
@@ -137,18 +140,36 @@ bool ControlLoop::start_parking(std::string& err) {
   // de-energized 1.4 deg short of the 180 deg target; rehome1: 3.96 deg
   // short). Position mode is entered once, at the ParkController's Verify
   // state, for the §33.2 target-hold (executor, Phase::Parking).
-  std::string e;
-  if (!enter_speed_mode_all(cfg_.park.limit_cur_a.data(), e)) {
-    err = e;
-    return false;
-  }
+  park_init_axis_ = park_verify_axis_ = 0;
   park_pos_mode_entered_ = false;
   phase_ = Phase::Parking;
   return true;
 }
 
 void ControlLoop::deenergize_all() {
+  backend_->invalidate_calibration();
+  homed_ = false;
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
+}
+
+bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
+                                         const std::array<AxisLimits, 2>& limits, std::string& err) {
+  for (int i=0; i<kAxisCount; ++i) {
+    const auto& m=models[i]; const auto& l=limits[i];
+    if (!m.has_reference || (m.direction_sign != 1 && m.direction_sign != -1) ||
+        !std::isfinite(m.q_raw_reference_rad) || !std::isfinite(m.q_reference_logical_deg) ||
+        !l.valid || !std::isfinite(l.q_hard_min_rad) || !std::isfinite(l.q_hard_max_rad) ||
+        !(l.q_hard_min_rad < l.q_soft_min_rad && l.q_soft_min_rad < l.q_soft_max_rad &&
+          l.q_soft_max_rad < l.q_hard_max_rad)) return false;
+    const auto axis=static_cast<AxisId>(i);
+    if (!backend_->adopt_running_mode(axis, !cfg_.service_speed_control, err,
+            cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp)) return false;
+    const auto s=backend_->snapshot(axis, now_monotonic_ns());
+    if (!s.has_feedback || !l.in_soft(s.q_rad)) return false;
+    ready_raw_[i]=s.q_rad;
+  }
+  models_=models; limits_=limits; homed_=true; at_ready_=true; phase_=Phase::Hold;
+  return true;
 }
 
 bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
@@ -168,6 +189,9 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   // AND the envelope's stop margin on top. A narrow-travel station therefore
   // gets a narrow sweep, never a sweep that reaches for a stop.
   TrackingController::Config cfg = cfg_in;
+  // Speed-mode tracking consumes velocity explicitly. Do not interpret a
+  // rate inside the observer's uncertainty as established target motion.
+  if (cfg_.service_speed_control) cfg.uncertainty_gated_motion = true;
   const AxisLimits& yl = limits_[ix(AxisId::Yaw)];
   const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
@@ -251,6 +275,11 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
 }
 
 Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
+  backend_->heartbeat();
+  if (backend_->watchdog_fault()) {
+    deenergize_all();
+    fault("independent motor watchdog: control deadline, feedback, or motor health");
+  }
   now_ns_ = now_ns;
   // Commands are executed inside the cycle and need a timestamp to record a selection
   // against (§13's selection_timestamp). It is this cycle's clock, not the instant the
@@ -302,14 +331,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   //     Auto-enable (§38.1): tracking is HARD-disabled until the homing gates
   //     pass — this branch is unreachable before homed_ is set by
   //     finalize_homing(), and enable_tracking() re-checks it.
-  if (tracking_auto_enable_ && !tracking_ && homed_) {
+  if (tracking_auto_enable_ && !tracking_ && homed_ &&
+      mode_mgr_.mode() != OperatingMode::Manual) {
     std::string terr;
     if (!enable_tracking(tracking_cfg_, terr))
       spdlog::warn("auto-enable tracking failed: {}", terr);
   }
   if (tracking_) {
     tracking_->update_snapshots(now_ns, sp[ix(AxisId::Pitch)].q_rad,
-                                sp[ix(AxisId::Yaw)].q_rad);
+                                sp[ix(AxisId::Yaw)].q_rad,
+                                sp[ix(AxisId::Pitch)].has_feedback ? sp[ix(AxisId::Pitch)].rx_ns : 0,
+                                sp[ix(AxisId::Yaw)].has_feedback ? sp[ix(AxisId::Yaw)].rx_ns : 0);
   }
   {
     vision::TargetMeasurement m;
@@ -414,6 +446,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   mode_proposal_ = ReferenceRequest{};
   last_intent_ = MotionIntent{};
   if (phase_ == Phase::Hold) {
+    // Service starts only after the homing return reaches the ready pose.
+    // An explicit operator mode/STOP cancels this one-shot startup request.
+    if (!startup_mode_applied_ && cfg_.start_in_auto_roam && at_ready_) {
+      if (request_mode(OperatingMode::AutoRoam).ok) startup_mode_applied_ = true;
+    }
     // §25/§53: the intent path belongs to the modes, not to the tracking session. It
     // used to be gated on `tracking_`, which was harmless while AUTO_TRACK was the only
     // mode that could move anything — and it is why MANUAL motion did nothing at all the
@@ -539,14 +576,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           last_measurement_ns_ > 0 ? (now_ns - last_measurement_ns_) / 1000000 : -1;
       at_input_.measurement_timestamp_ns = last_measurement_ns_;
       at_input_.estimator_ready = tracking_ && tracking_->prediction_valid();
-      // §22 via §67: the converter reports what it could not satisfy and this decides
-      // what to do about it. One cycle of lag — the refused request was built from the
-      // previous cycle's view. Removing the lag would mean the intent builder consulting
-      // the envelope mid-construction, which is the coupling the layer split exists to
-      // prevent.
-      at_input_.los_feasible = !tracking_ref_.target_unreachable;
-      if (tracking_ref_.target_unreachable && manual_out_.step_in_progress)
-        manual_.notify_step_refused();  // §41: say so, do not push against a limit
+      // Check the predicted direction independently of the motion policy. The
+      // old check read tracking_ref_ after it had been cleared this cycle, so
+      // an unreachable target always appeared feasible. Checking even while
+      // holding also lets a target recover when it returns inside travel.
+      at_input_.los_feasible = false;
+      if (at_input_.estimator_ready && ref_mgr_) {
+        MotionIntent probe;
+        probe.source = MotionSource::AutoTrack;
+        probe.type = IntentType::LosDirection;
+        probe.has_los = true;
+        tracking_->predicted_los_at_actuation(probe.los_az_rad, probe.los_el_rad);
+        ReferenceManager::IntentLimits bounds;
+        bounds.now_ns = now_ns;
+        bounds.q_yaw_hold_rad = sp[ix(AxisId::Yaw)].q_rad;
+        bounds.q_pitch_hold_rad = sp[ix(AxisId::Pitch)].q_rad;
+        bounds.axis_limits = limits_;
+        at_input_.los_feasible = !ref_mgr_->resolve(probe, bounds).target_unreachable;
+      }
       // §13/§16, once per cycle and not once per frame. The block that normally refreshes
       // these facts runs when a TrackSet arrives, and this is the case it cannot cover:
       // vision has gone quiet and the operator clears the target — the exact situation in
@@ -731,6 +778,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   // it is starting fresh without needing a separate "engagement started" event from every caller.
   const bool ref_lim_was_engaged = ref_lim_engaged_;
   ref_lim_engaged_ = false;
+  bool tracking_velocity_control = false;
+  double tracking_command_rate[kAxisCount]{};
+  bool service_velocity_control = false;
+  double service_command_rate[kAxisCount]{};
   double q_ref[kAxisCount], lim[kAxisCount];
   for (int i = 0; i < kAxisCount; ++i) {
     q_ref[i] = sp[i].q_rad;
@@ -738,11 +789,34 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
   switch (phase_) {
     case Phase::Homing: {
+      if (homing_init_axis_ < kAxisCount) {
+        const auto axis = static_cast<AxisId>(homing_init_axis_);
+        std::string e;
+        const auto status = backend_->transition_mode(axis, false, homing_->initial_current_limit(axis), now_ns, e,
+            cfg_.service_speed_control ? .002 : -1);
+        if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+        else if (status == MotorBackend::Transition::Complete) ++homing_init_axis_;
+        break;
+      }
+      if (homing_->complete()) {
+        if (homing_final_axis_ < kAxisCount) {
+          std::string e;
+          const auto status = backend_->transition_mode(static_cast<AxisId>(homing_final_axis_),
+              !cfg_.service_speed_control, cfg_.service_speed_control
+                  ? cfg_.park.limit_cur_a[homing_final_axis_] : cfg_.hold_speed_rad_s, now_ns, e,
+              cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp);
+          if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+          else if (status == MotorBackend::Transition::Complete) ++homing_final_axis_;
+        } else if (finalize_homing()) phase_ = Phase::Hold;
+        else { deenergize_all(); fault("homing results invalid"); }
+        break;
+      }
       const AxisId a = homing_->active_axis();
       // Position-derived velocity (v_est_), not the drive's noisy self-
       // reported v: the MoveTo arrival test and the contact detector's
       // motion/stall logic need a trustworthy velocity (P0j).
-      DesiredState ds = homing_->step(to_feedback(sp[ix(a)], v_est_[ix(a)]));
+      DesiredState ds = pending_homing_ds_ ? *pending_homing_ds_ :
+          homing_->step(to_feedback(sp[ix(a)], v_est_[ix(a)]));
       // One-shot mode entries (see HomingController):
       //  rearm_speed_mode: de-energize/re-energize with the verified
       //    speed-mode recipe before a fine re-approach (after a position-mode
@@ -756,25 +830,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       //    position loop (p3c fix, 2026-09-02 — see HomingParams backoff
       //    comment): full current-limit torque from the first cycle, no
       //    integral to wind up.
-      // Both are blocking (~150-250 ms): one deadline miss (a single Derate;
-      // Hold needs a 5-streak) and a brief feedback gap on the non-active
-      // axis (benign — the supervisor does not act during homing). The axis
-      // bounces/slides slightly during the de-energize; the backoff starts
-      // from wherever it lands and the fine re-approach re-measures the
-      // end-stop.
+      // The recipe advances across cycles while feedback and the watchdog
+      // stay active. The backoff starts from the fresh pose after re-enable;
+      // the fine approach re-measures the endpoint.
       bool rearmed = true;
-      if (ds.rearm_speed_mode) {
+      if (ds.rearm_speed_mode || ds.enter_pos_mode) {
         std::string e;
-        rearmed = backend_->enter_speed_mode(a, ds.limit_cur_a, e);
-        if (!rearmed) {
-          fault("homing re-arm speed mode failed: " + e);
-        }
-      } else if (ds.enter_pos_mode) {
-        std::string e;
-        rearmed = backend_->enter_position_mode(a, ds.speed_rad_s, e);
-        if (!rearmed) {
-          fault("homing backoff position mode failed: " + e);
-        }
+        const auto status = backend_->transition_mode(a, ds.enter_pos_mode,
+            ds.enter_pos_mode ? ds.speed_rad_s : ds.limit_cur_a, now_ns, e,
+            cfg_.service_speed_control ? .002 : -1);
+        if (status == MotorBackend::Transition::Pending) { pending_homing_ds_ = ds; break; }
+        pending_homing_ds_.reset();
+        rearmed = status == MotorBackend::Transition::Complete;
+        if (!rearmed) { deenergize_all(); fault("homing mode transition: " + e); }
       }
       if (rearmed) {
         if (ds.position_move) {
@@ -835,17 +903,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             sp[ix(a)].torque_nm, ds.velocity_rad_s, ds.message);
       }
       if (homing_->failed()) {
+        deenergize_all();
         fault("homing failed: " + homing_->fail_reason());
-      } else if (homing_->complete()) {
-        if (finalize_homing()) {
-          std::string e;
-          if (enter_position_mode_all(cfg_.hold_speed_rad_s, e))
-            phase_ = Phase::Hold;  // one-time re-pin, then ready-hold
-          else
-            fault(e);
-        } else {
-          fault("homing plan incomplete");
-        }
       }
       break;
     }
@@ -857,6 +916,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // Nothing below this line runs for a moving mode.
         at_ready_ = false;  // "at the ready pose" and "a mode is pointing
                             // elsewhere" are exclusive by definition
+        const bool damped_tracking = cfg_.service_speed_control &&
+            tracking_ref_.is_tracking_reference && tracking_;
+        const auto tracking_rates = damped_tracking ? tracking_->joint_motion_rates(
+            tracking_ref_.q_yaw_rad, tracking_ref_.q_pitch_rad) : std::array<double,2>{};
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
@@ -875,9 +938,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // pose is near a boundary, so the profile can never ask for more speed than the envelope
           // permits at that pose. Position stays inside constrain_reference either way.
           if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
-          q_ref[i] = ota::control::limit_reference(
-              ref_lim_[i], solved, static_cast<double>(period_ns) * 1.0e-9, lim[i],
-              cfg_.a_brake_rad_s2, cfg_.j_brake_rad_s3);
+          const double dt = static_cast<double>(period_ns)*1e-9;
+          const double acceleration = (cfg_.service_speed_control
+              ? std::min(cfg_.a_brake_rad_s2,15*kDeg2Rad) : cfg_.a_brake_rad_s2)
+              * std::clamp(last_intent_.acceleration_scale,0.0,1.0);
+          const double jerk = (cfg_.service_speed_control
+              ? std::min(cfg_.j_brake_rad_s3,60*kDeg2Rad) : cfg_.j_brake_rad_s3)
+              * std::clamp(last_intent_.jerk_scale,0.0,1.0);
+          if (damped_tracking) {
+            q_ref[i] = control::track_reference(ref_lim_[i], solved,
+                tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk);
+          } else {
+            q_ref[i] = control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
+          }
         }
         ref_lim_engaged_ = true;
         break;
@@ -984,6 +1057,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Parking: {
+      if (park_init_axis_ < kAxisCount) {
+        std::string e;
+        const auto status = backend_->transition_mode(static_cast<AxisId>(park_init_axis_), false,
+            cfg_.park.limit_cur_a[park_init_axis_], now_ns, e, cfg_.service_speed_control ? .002 : -1);
+        if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+        else if (status == MotorBackend::Transition::Complete) ++park_init_axis_;
+        break;
+      }
       ParkOutput po = park_->step(
           to_feedback(sp[ix(AxisId::Pitch)], v_est_[ix(AxisId::Pitch)]),
           to_feedback(sp[ix(AxisId::Yaw)], v_est_[ix(AxisId::Yaw)]));
@@ -1007,12 +1088,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // overshoot point). One-time blocking mode entry = a single Derate.
         if (!park_pos_mode_entered_) {
           std::string e;
-          if (enter_position_mode_all(cfg_.park.verify_speed_deg_s * kDeg2Rad,
-                                      e)) {
+          const auto status = backend_->transition_mode(static_cast<AxisId>(park_verify_axis_), true,
+              cfg_.park.verify_speed_deg_s * kDeg2Rad, now_ns, e, cfg_.service_speed_control ? .002 : -1);
+          if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+          else if (status == MotorBackend::Transition::Complete && ++park_verify_axis_ == kAxisCount)
             park_pos_mode_entered_ = true;
-          } else {
-            fault(e);
-          }
+          if (!park_pos_mode_entered_) break;
         }
         q_ref[ix(AxisId::Pitch)] = po.pitch.target_rad;
         lim[ix(AxisId::Pitch)] = cfg_.park.verify_speed_deg_s * kDeg2Rad;
@@ -1092,9 +1173,47 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // crosses feedback_max_age_ms after ~5 quiet cycles and the supervisor
         // flaps BRAKE/ALLOW forever, each BRAKE stomping the other axis's
         // reference (p0p hold phase; p3e fault phase, wire-verified B/C 1:1).
-        if (last_decision_.action != SafetyAction::Allow)
+        if (cfg_.service_speed_control && phase_ == Phase::Hold && homed_ &&
+            (last_decision_.action == SafetyAction::Allow || last_decision_.action == SafetyAction::Derate)) {
+          // Commissioning ceiling for the initial speed-servo profile. Bounds
+          // apply at the measured pose as well as the requested reference.
+          const double midpoint = .5*(limits_[i].q_soft_min_rad + limits_[i].q_soft_max_rad);
+          // Direction matters when returning inward from a homing endpoint:
+          // the nearest boundary lies behind the move and must not freeze it.
+          const double speed_budget_pose = qr >= sp[i].q_rad
+              ? std::max(sp[i].q_rad, midpoint) : std::min(sp[i].q_rad, midpoint);
+          double cap = std::min({hold_speed_effective(), cfg_.service_max_speed_rad_s,
+                                 env_.max_speed_at(speed_budget_pose, limits_[i])});
+          if (ref_lim_engaged_) {
+            // Autonomous reference speed is a planning rate. The position
+            // servo needs bounded headroom to recover lag; clipping it to
+            // that same rate leaves a permanent error during every sweep.
+            // Retain manual profile limits and tracking confidence authority.
+            if (mode_mgr_.mode() == OperatingMode::Manual) cap = std::min(cap, ls);
+            else if (mode_mgr_.mode() == OperatingMode::AutoTrack)
+              cap = std::min(cap, cfg_.service_max_speed_rad_s *
+                  std::clamp(last_intent_.velocity_scale, 0.0, 1.0));
+          }
+          if (last_decision_.action == SafetyAction::Derate) cap *= cfg_.derate_factor;
+          const double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+          double velocity = speed_servo_[i].step(qr, ff, sp[i].q_rad, cap,
+              static_cast<double>(period_ns)*1e-9,
+              // Allow the servo to follow the 15/60 reference profile and
+              // recover position error without a second identical ramp delay.
+              std::min(cfg_.a_brake_rad_s2, 30*kDeg2Rad), std::min(cfg_.j_brake_rad_s3, 120*kDeg2Rad));
+          if ((sp[i].q_rad <= limits_[i].q_soft_min_rad && velocity < 0) ||
+              (sp[i].q_rad >= limits_[i].q_soft_max_rad && velocity > 0)) velocity = 0;
+          if (tracking_ref_.is_tracking_reference) {
+            tracking_velocity_control = true;
+            tracking_command_rate[i] = velocity;
+          }
+          service_velocity_control = true;
+          service_command_rate[i] = velocity;
+          backend_->command_velocity(a, velocity);
+        } else if (last_decision_.action != SafetyAction::Allow) {
+          speed_servo_[i].reset();
           backend_->command_velocity(a, 0.0);
-        else
+        } else
           backend_->keepalive(a);
       } else {
         // Drive-mode item 2: ask the drive for where the reference is going, not where it is, while it is moving.
@@ -1171,6 +1290,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.fault_reason = fault_reason_;
     snap.at_ready = at_ready_;
     snap.q_yaw_rad = sp[ix(AxisId::Yaw)].q_rad;
+    snap.feedback_timestamp_yaw_ns = sp[ix(AxisId::Yaw)].rx_ns;
+    snap.feedback_timestamp_pitch_ns = sp[ix(AxisId::Pitch)].rx_ns;
+    snap.service_velocity_control = service_velocity_control;
+    snap.service_command_rate_yaw_rad_s = service_command_rate[ix(AxisId::Yaw)];
+    snap.service_command_rate_pitch_rad_s = service_command_rate[ix(AxisId::Pitch)];
     snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
     snap.effort_yaw = sp[ix(AxisId::Yaw)].torque_nm;
     snap.q_pitch_rad = sp[ix(AxisId::Pitch)].q_rad;
@@ -1248,6 +1372,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       snap.q_ref_accel_pitch_rad_s2 = ref_lim_[ix(AxisId::Pitch)].a_rad_s2;
       snap.q_ref_rate_valid = true;
     }
+    snap.tracking_velocity_control = tracking_velocity_control;
+    snap.tracking_aim_joint_valid = tracking_ref_.is_tracking_reference;
+    if (snap.tracking_aim_joint_valid) {
+      snap.tracking_aim_yaw_rad = tracking_ref_.q_yaw_rad;
+      snap.tracking_aim_pitch_rad = tracking_ref_.q_pitch_rad;
+    }
+    snap.tracking_reference_damped = cfg_.service_speed_control &&
+        tracking_ref_.is_tracking_reference && ref_lim_engaged_;
+    if (snap.tracking_reference_damped) {
+      snap.guidance_target_rate_yaw_rad_s = ref_lim_[ix(AxisId::Yaw)].target_v_rad_s;
+      snap.guidance_target_rate_pitch_rad_s = ref_lim_[ix(AxisId::Pitch)].target_v_rad_s;
+    }
+    snap.tracking_command_rate_yaw_rad_s = tracking_command_rate[ix(AxisId::Yaw)];
+    snap.tracking_command_rate_pitch_rad_s = tracking_command_rate[ix(AxisId::Pitch)];
     if (snap.tracking_active && (tracking_log_cycle_++ & 1) == 0) {
       spdlog::info(
           "track-motion t={:.2f}ms q={:+.5f} v={:+.4f} qref={:+.5f} vref={:+.4f} "
@@ -1811,6 +1949,9 @@ void ControlLoop::set_payload_profile(payload::PayloadProfile pr,
 
 double ControlLoop::hold_speed_effective() const {
   double v = cfg_.hold_speed_rad_s;
+  // The trajectory and actuator must share the commissioned service ceiling.
+  // A faster planner accumulates a stale position error during every sweep.
+  if (cfg_.service_speed_control) v = std::min(v, cfg_.service_max_speed_rad_s);
   if (payload_profile_) {
     // §28.5: the profiled safe v_max caps station motion.
     if (payload_profile_->pitch.v_max_rad_s > 0.0)
@@ -1982,6 +2123,7 @@ ModeRequestContext ControlLoop::mode_context() const {
 }
 
 ModeResult ControlLoop::request_mode(OperatingMode target) {
+  if (!ack_in_flight_.empty()) startup_mode_applied_ = true;
   const std::string who = ack_in_flight_.empty() ? "request_mode" : ack_in_flight_;
   const ModeRequestContext ctx = mode_context();
   const ModeResult r = mode_mgr_.request(target, ctx);
@@ -2027,6 +2169,12 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
 }
 
 ModeResult ControlLoop::stop_motion() {
+  startup_mode_applied_ = true;
+  if (phase_ == Phase::Homing || phase_ == Phase::Parking) {
+    deenergize_all();
+    phase_ = Phase::Idle;
+    pending_homing_ds_.reset();
+  }
   const OperatingMode was = mode_mgr_.mode();
   const ModeResult r = mode_mgr_.stop_motion(mode_context());
   ack_command(ack_in_flight_.empty() ? "stop_motion" : ack_in_flight_, true,
@@ -2152,6 +2300,7 @@ void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
 ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   ReferenceManager::IntentLimits l;
   l.now_ns = now_ns;
+  l.axis_limits = limits_;
   // "Hold" has two meanings and v1 used only the first. v1's hold was *return to the
   // ready pose* — correct for the end of homing and for a tracking session winding down.
   // For the three operating modes it has to mean "stay where you are", and the
@@ -2195,6 +2344,11 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   l.manual_v_max_rad_s = cap;
   l.track_v_max_rad_s = std::min(tracking_cfg_.track_v_max_rad_s, cap);
   l.roam_v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, cap);
+  // The roam intent carries its endpoint, not its configured speed. Preserve
+  // the named sweep rate through conversion into a shaped joint reference.
+  if (cfg_.roam_velocity_deg_s > 0.0)
+    l.roam_v_max_rad_s = std::min(l.roam_v_max_rad_s,
+                                 cfg_.roam_velocity_deg_s * kDeg2Rad);
   return l;
 }
 
@@ -2677,8 +2831,8 @@ void ControlLoop::ack_command(const std::string& name, bool accepted,
 }
 
 void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
-  // Drive-mode item 4, opt-in. Both keys default to 0 and this returns immediately in that case, so the shipped
-  // behaviour is the behaviour the operator has signed for: only an operator changes the mode.
+  // The deployed profile enables automatic acquisition and loss recovery.
+  // A zero dwell disables the corresponding hand-off for commissioning.
   if (cfg_.auto_roam_on_loss_ms <= 0 && cfg_.auto_track_on_acquire_ms <= 0) return;
 
   // Only ever considered from Ready. A homing / parking / fault station is not "looking for a target", it is doing
@@ -2708,7 +2862,8 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     // up" means. NOT Acquire or Coasting - a track that is still alive is not lost, and switching on those
     // would walk away from the target mid-coast. Read from the v3 controller's published output, not from
     // the retired v1 TrackingController.
-    const bool lost = at_out_.state == AutoTrackState::LostHold;
+    const bool lost = at_out_.state == AutoTrackState::LostHold ||
+                      at_out_.state == AutoTrackState::WaitTarget;
     if (!lost) {
       loss_since_ns_ = 0;  // condition must be CONTINUOUSLY true; refresh-on-sighting is the bug
       return;
@@ -2720,22 +2875,24 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     if (now_ns - loss_since_ns_ >= cfg_.auto_roam_on_loss_ms * nsec) {
       spdlog::info("auto hand-off AUTO_TRACK -> AUTO_ROAM: target lost for {} ms",
                    cfg_.auto_roam_on_loss_ms);
-      request_mode(OperatingMode::AutoRoam);
-      last_auto_switch_ns_ = now_ns;
+      if (request_mode(OperatingMode::AutoRoam).ok) last_auto_switch_ns_ = now_ns;
       loss_since_ns_ = 0;
     }
     return;
   }
 
   if (m == OperatingMode::AutoRoam && cfg_.auto_track_on_acquire_ms > 0) {
-    // A selection, held. NOT `&& estimator_ready`, and the reason is worth the paragraph: estimator_ready is
-    // `tracking_ && tracking_->estimator_initialized()` (:526), so it depends on the v1 estimator session existing -
-    // and I could not confirm within this round's budget whether that session survives a hand-off into roam. A gate
-    // that may be unreachable while roaming is a gate that may never open, and a hand-off that silently never happens
-    // is the failure mode this project keeps being told about. Safety does not live in this line anyway: after the
-    // hand-off, AUTO_TRACK itself still refuses to move until its estimator is ready (:2165 returns Hold), so the
-    // worst case here is a mode change that then holds - visible, and never motion nobody asked for.
-    const bool held = at_input_.has_selection;
+    // Require a fresh visible selection and accepted measurement throughout
+    // the dwell. A retained UUID alone cannot pull roam back into lost tracking.
+    const auto& set = selection_.last_set();
+    const bool fresh = set.sensor_timestamp_ns > 0 &&
+                       now_ns >= set.sensor_timestamp_ns &&
+                       now_ns - set.sensor_timestamp_ns <= 250000000LL &&
+                       now_ns - last_set_receive_ns_ <= 250000000LL;
+    const bool held = fresh && at_input_.has_selection &&
+                      at_input_.target_visible && !at_input_.ambiguous &&
+                      last_measurement_ns_ > 0 &&
+                      now_ns - last_measurement_ns_ <= 250000000LL;
     if (!held) {
       acquire_since_ns_ = 0;
       return;
@@ -2747,8 +2904,7 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     if (now_ns - acquire_since_ns_ >= cfg_.auto_track_on_acquire_ms * nsec) {
       spdlog::info("auto hand-off AUTO_ROAM -> AUTO_TRACK: target held for {} ms",
                    cfg_.auto_track_on_acquire_ms);
-      request_mode(OperatingMode::AutoTrack);
-      last_auto_switch_ns_ = now_ns;
+      if (request_mode(OperatingMode::AutoTrack).ok) last_auto_switch_ns_ = now_ns;
       acquire_since_ns_ = 0;
     }
   }
@@ -3004,6 +3160,11 @@ void ControlLoop::execute_command(const std::string& name,
     // to joint zero, so a station at 90 degrees asked for "+1" would be driven to 1
     // degree — and in a simulation that starts near zero, both numbers look the same.
     const double q_logical = last_positions()[axis];
+    const double requested = q_logical + sign * deg * kDeg2Rad;
+    if (!limits_[axis].in_soft(requested) || env_.max_speed_at(requested, limits_[axis]) <= 0) {
+      ack_command(name, false, "step target enters the braking margin; choose a smaller inward step");
+      return;
+    }
     if (!manual_.step_move(axis, sign * deg * 0.017453292519943295, q_logical,
                            now_ns_)) {
       ack_command(name, false, "step was malformed");
@@ -3065,7 +3226,18 @@ void ControlLoop::execute_command(const std::string& name,
     ack_command(name, r.ok, r.reason);
     return;
   }
-  if (name == "start_homing" || name == "start_installation_calibration") {
+  if (name == "start_homing") {
+    if (!homing_factory_ || phase_ == Phase::Homing || phase_ == Phase::Parking || phase_ == Phase::Fault) {
+      ack_command(name, false, "homing unavailable or supervisory routine already active");
+      return;
+    }
+    startup_mode_applied_ = mode_mgr_.mode() == OperatingMode::Manual;
+    std::string e;
+    const bool ok = start_homing(homing_factory_(), e);
+    ack_command(name, ok, ok ? "homing started" : e);
+    return;
+  }
+  if (name == "start_installation_calibration") {
     // Both are advertised on the dashboard and neither is acted on: homing comes
     // from the boot sequence, and visual calibration is an offline tool that needs
     // a printed board (§29, P9). Acking them as accepted would keep a button that

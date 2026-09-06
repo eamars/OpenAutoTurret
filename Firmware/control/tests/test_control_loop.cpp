@@ -815,6 +815,35 @@ TEST(RoamMode, AutoRoamSweepsAndReportsWhereItIsGoing) {
       << "a waypoint at " << snap.roam_target_yaw_rad << " rad is not inside anything";
 }
 
+TEST(RoamMode, NamedSweepRateSurvivesTheWholeReferencePath) {
+  auto backend = std::make_unique<sim::SimMotorBackend>(.005);
+  auto* sim = backend.get();
+  sim->set_stops(AxisId::Pitch, -1, 1);
+  sim->set_stops(AxisId::Yaw, -1, 1);
+  auto cfg = make_cfg();
+  cfg.hold_speed_rad_s = 20*kDeg2Rad;
+  cfg.roam_velocity_deg_s = 4;
+  ControlLoop loop(cfg, std::move(backend));
+  TrackingController::Config tracking;
+  tracking.search_v_max_rad_s = 20*kDeg2Rad;
+  loop.set_tracking_config(tracking, true);
+  std::string error;
+  ASSERT_TRUE(loop.start_homing(make_plan(), error)) << error;
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(loop, *sim, t)) << loop.fault_reason();
+  ASSERT_TRUE(loop.request_mode(OperatingMode::AutoRoam).ok);
+  double peak = 0;
+  for (int i=0; i<2000; ++i, t+=kDtNs) {
+    loop.step(t, kDtNs);
+    const auto s = loop.telemetry().snapshot();
+    peak = std::max(peak, std::abs(s.q_ref_rate_yaw_rad_s));
+  }
+  EXPECT_EQ(loop.phase(), Phase::Hold) << loop.fault_reason();
+  EXPECT_GT(peak, 3.9*kDeg2Rad);
+  EXPECT_LE(peak, 4.001*kDeg2Rad)
+      << "the resolver must not replace the named roam rate with the search ceiling";
+}
+
 TEST(RoamMode, StopMotionEndsTheSweepAndLeavesItInManualHold) {
   // §35: "any operator STOP -> MANUAL/HOLD". The sweep is the most autonomous thing this
   // machine does, so this is the button whose behaviour matters most — and the part that

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -127,9 +128,11 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     def test_jog_and_step_arguments_match_the_daemon(self) -> None:
         rows = self._rows("MANUAL", {"operating_mode": "MANUAL"})
-        self.assertEqual([r["arg"] for r in rows if r["command"] == "manual_jog_start"],
-                         ["yaw-", "yaw+", "pitch+", "pitch-"],
+        self.assertEqual(set(re.findall(r'data-jog="([^"]+)"', HUD_HTML)),
+                         {"yaw-", "yaw+", "pitch+", "pitch-"},
                          "parse_jog_arg accepts exactly these four directions")
+        self.assertIn('data-jog="pitch-" aria-label="Pitch up"', HUD_HTML)
+        self.assertIn('data-jog="pitch+" aria-label="Pitch down"', HUD_HTML)
         for r in [r for r in rows if r["command"] == "manual_step"]:
             self.assertRegex(r["arg"], r"^(yaw|pitch)[+-][0-9.]+$")
 
@@ -141,20 +144,17 @@ class DockAndDrawerBehaviour(unittest.TestCase):
             self.assertEqual(stop[0]["command"], "hold")
             self.assertEqual(stop[0]["kind"], "stop", "§14 reserves red for stop and fault")
 
-    def test_jogs_are_shown_gated_rather_than_hidden_outside_manual(self) -> None:
+    def test_jogs_are_not_duplicated_as_click_actions_in_the_drawer(self) -> None:
         rows = self._rows("MANUAL", {"operating_mode": "AUTO_TRACK"})
         jogs = [r for r in rows if r["command"] == "manual_jog_start"]
-        self.assertTrue(all(r["kind"] == "gated" for r in jogs))
-        self.assertTrue(all("MANUAL" in r["note"] for r in jogs),
-                        "the reason belongs on the row; a control that silently greys out teaches "
-                        "guessing")
+        self.assertEqual(jogs, [])
 
     # -- MENU / DIAG -------------------------------------------------------------------
 
     def test_supervisory_actions_need_two_presses(self) -> None:
         rows = self._rows("MENU", {})
         danger = [r for r in rows if r["kind"] == "danger"]
-        self.assertEqual({r["command"] for r in danger}, {"request_park", "request_shutdown"})
+        self.assertEqual({r["command"] for r in danger}, {"start_homing", "request_park", "request_shutdown"})
         self.assertIn("two-press", HUD_JS.lower().replace("two press", "two-press"),
                       "the handler's confirm path must exist, not just the data")
 

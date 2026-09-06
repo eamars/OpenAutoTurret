@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from .config import VisionConfig
+from common.image_corrections import apply_orientation_image, validate_orientation
+from .detection.orientation import orient_detections
 from .detection.class_filter import filter_permitted
 
 
@@ -141,6 +143,7 @@ class PreviewTap:
         self._minimum_interval_ns = (1_000_000_000.0 / self.fps) if self.fps > 0 else 0.0
         self._lock = threading.Lock()
         self._frame: Any = None
+        self._frame_metadata: Optional[dict] = None
         # -1, not 0: "no frame yet" must not be expressible as a timestamp, or a clock that
         # happens to read 0 (a fake clock in a test, a monotonic clock at boot) would leave the
         # tap permanently un-rate-limited by falsiness rather than by measurement.
@@ -155,7 +158,8 @@ class PreviewTap:
         self.no_pixels = 0
         self.taken = 0
 
-    def offer(self, frame: Any, *, now_ns: Optional[int] = None) -> bool:
+    def offer(self, frame: Any, *, now_ns: Optional[int] = None,
+              metadata: Optional[dict] = None) -> bool:
         """Put the newest frame in the slot. Never blocks, never raises on a full buffer."""
         if not self.enabled:
             return False
@@ -172,16 +176,22 @@ class PreviewTap:
             if self._frame is not None:
                 self.overwritten += 1            # the old frame is discarded, §39's rule
             self._frame = frame
+            self._frame_metadata = metadata
             self._enqueued_ns = now
             self.enqueued += 1
             return True
 
     def take(self) -> Any:
+        return self.take_packet()[0]
+
+    def take_packet(self) -> tuple:
+        """Take pixels and their capture metadata from the same atomic slot."""
         with self._lock:
             frame, self._frame = self._frame, None
+            metadata, self._frame_metadata = self._frame_metadata, None
             if frame is not None:
                 self.taken += 1
-            return frame
+            return frame, metadata
 
     def stats(self) -> Dict[str, Any]:
         return {"enabled": bool(self.enabled), "fps": float(self.fps), "offered": self.offered,
@@ -317,7 +327,10 @@ class PerceptionPipeline:
                  preview: Optional[PreviewTap] = None,
                  clock: Optional[Callable[[], int]] = None,
                  session_uuid: str = "",
-                 publish_selection: bool = True) -> None:
+                 publish_selection: bool = True,
+                 orientation: str = "none") -> None:
+        validate_orientation(orientation)
+        self.orientation = orientation
         self.config = config
         self.adapter = adapter
         self.events = event_log if event_log is not None else EventLog()
@@ -380,7 +393,9 @@ class PerceptionPipeline:
                 outcome.failure, outcome.stage = str(exc), 'inference_pending'
                 # Do not relabel old tensors or fabricate an empty detection.
                 if self.preview is not None:
-                    self.preview.offer(image, now_ns=self.clock())
+                    corrected = (apply_orientation_image(image, self.orientation)
+                                 if image is not None else None)
+                    self.preview.offer(corrected, now_ns=self.clock())
                 return outcome
             except PerceptionError as exc:
                 self.counters.inference_failures += 1
@@ -402,6 +417,9 @@ class PerceptionPipeline:
                 else:
                     self._unmeasured.add(stage)
 
+            dset = orient_detections(dset, self.orientation, self.config.anchor)
+            if image is not None and self.orientation != 'none':
+                image = apply_orientation_image(image, self.orientation)
             outcome.detection_set = dset
             self.counters.frames_with_detections += 1 if dset.detections else 0
             self.counters.empty_frames += 1 if not dset.detections else 0
@@ -451,7 +469,10 @@ class PerceptionPipeline:
             auto_allowed = bool(self.controller_context and self.controller_context.allows_auto_select(
                 track_set.session_uuid, self.clock()))
             observation = self.selector.update(track_set, int(sensor_timestamp_ns),
-                                               auto_track_enabled=auto_allowed)
+                                               auto_track_enabled=auto_allowed,
+                                               auto_roam_enabled=bool(auto_allowed and
+                                                   self.controller_context.operating_mode(
+                                                       track_set.session_uuid, self.clock()) == 'AUTO_ROAM'))
             # Lifecycle uses sensor time, but publication has its own host clock.
             # The two timestamps must not become identical by construction.
             published_ns = self.clock()
@@ -464,7 +485,19 @@ class PerceptionPipeline:
             outcome.track_set, outcome.observation = track_set, observation
 
             if self.preview is not None:
-                self.preview.offer(image, now_ns=self.clock())
+                self.preview.offer(image, now_ns=self.clock(), metadata={
+                    "frame_sequence": int(frame_sequence),
+                    "sensor_timestamp_ns": int(sensor_timestamp_ns),
+                    "metadata_receive_ns": int(capture_started_ns or 0),
+                    "camera": {key: metadata[key] for key in (
+                        "ExposureTime", "AnalogueGain", "DigitalGain", "Lux",
+                        "ColourGains", "ColourTemperature", "FrameDuration",
+                        "ScalerCrop", "SensorTemperature") if metadata and key in metadata},
+                    "detection_set": dset.to_dict(),
+                    "anchor_mapping": [row for row in getattr(self.adapter, 'last_anchor_mapping', ())
+                                       if row['detection_id'] in {d.detection_id_in_frame for d in filtered.detections}],
+                    "track_set": track_set.to_dict(),
+                })
                 mark("preview_enqueue")
 
             mark("publish_start")
