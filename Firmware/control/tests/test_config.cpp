@@ -2,20 +2,25 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <stdlib.h>
 #include <string>
-
-#include <sys/stat.h>
 
 #include "config/turret_config.hpp"
 #include "config/station_wiring.hpp"
 
 namespace {
 
-const char* kDir = "/tmp/ota_config_test";
+const std::string& config_test_dir() {
+  static const std::string dir = [] {
+    char pattern[] = "/tmp/ota_config_test_XXXXXX";
+    if (::mkdtemp(pattern) == nullptr) ::abort();
+    return std::string(pattern);
+  }();
+  return dir;
+}
 
 std::string write_file(const std::string& name, const std::string& body) {
-  ::mkdir(kDir, 0755);  // /tmp is tmpfs: the dir may simply not exist yet
-  std::string p = std::string(kDir) + "/" + name;
+  std::string p = config_test_dir() + "/" + name;
   std::ofstream f(p);
   f << body;
   f.close();
