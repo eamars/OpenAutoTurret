@@ -151,6 +151,13 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     # -- MENU / DIAG -------------------------------------------------------------------
 
+    def test_home_is_visibly_gated_during_parking(self) -> None:
+        for phase in ("parking", "parked"):
+            home = next(r for r in self._rows("MENU", {"phase": phase})
+                        if r["command"] == "start_homing")
+            self.assertEqual(home["kind"], "gated")
+            self.assertIn("HOME UNAVAILABLE", home["note"])
+
     def test_supervisory_actions_need_two_presses(self) -> None:
         rows = self._rows("MENU", {})
         danger = [r for r in rows if r["kind"] == "danger"]

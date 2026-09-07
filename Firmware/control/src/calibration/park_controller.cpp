@@ -1,5 +1,6 @@
 // OpenAutoTurret — safe park / shutdown controller (architecture §33).
 #include "calibration/park_controller.hpp"
+#include <algorithm>
 
 namespace ota {
 
@@ -32,6 +33,12 @@ ParkController::ParkController(ParkParams p,
       return;
     }
   }
+  // At 3 deg/s a full-travel return can exceed the old fixed 30 s limit.
+  // Budget each move for the calibrated travel plus settling, still bounded.
+  for (int i = 0; i < kAxisCount; ++i)
+    p_.move_timeout_s = std::max(p_.move_timeout_s, 10.0 +
+        1.5 * (limits[i].q_soft_max_rad - limits[i].q_soft_min_rad) /
+        (p_.speed_deg_s * kDeg2Rad));
   // Prepare the first park move (yaw, per the §33 sequence).
   yaw_move_.emplace(AxisId::Yaw, park_raw_[ix(AxisId::Yaw)], p_.speed_deg_s * kDeg2Rad,
                     p_.move_pos_tol_rad, p_.move_vel_tol_rad_s, p_.move_timeout_s);
@@ -58,6 +65,9 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
 
     case ParkState::MoveYaw:
       out.yaw = yaw_move_->step(yaw_fb);
+      out.yaw.velocity_rad_s = std::clamp(out.yaw.velocity_rad_s,
+          -2.0 * std::abs(park_raw_[ix(AxisId::Yaw)] - yaw_fb.pos_rad),
+           2.0 * std::abs(park_raw_[ix(AxisId::Yaw)] - yaw_fb.pos_rad));
       out.speed_mode = true;  // SpdRef-driven move (velocity_rad_s, signed)
       out.message = "move yaw to park";
       if (yaw_move_->terminal()) {
@@ -76,6 +86,9 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
                             p_.move_vel_tol_rad_s, p_.move_timeout_s);
       }
       out.pitch = pitch_move_->step(pitch_fb);
+      out.pitch.velocity_rad_s = std::clamp(out.pitch.velocity_rad_s,
+          -2.0 * std::abs(park_raw_[ix(AxisId::Pitch)] - pitch_fb.pos_rad),
+           2.0 * std::abs(park_raw_[ix(AxisId::Pitch)] - pitch_fb.pos_rad));
       out.speed_mode = true;  // SpdRef-driven move (velocity_rad_s, signed)
       out.message = "move pitch to park";
       if (pitch_move_->terminal()) {

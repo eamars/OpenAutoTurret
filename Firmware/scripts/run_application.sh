@@ -31,6 +31,13 @@ owned_launcher() {
   [ -r "/proc/$launcher_pid/stat" ] || return 1
   [ "$(awk '{print $22}' "/proc/$launcher_pid/stat")" = "$launcher_start" ]
 }
+stopped_status() {
+  if [ -r "$RUN/shutdown.result" ]; then
+    cat "$RUN/shutdown.result"
+  else
+    echo 'Stopped (last park outcome unavailable)'
+  fi
+}
 if [ "$ACTION" = status ]; then
   if owned_launcher; then
     echo "Running (launcher $launcher_pid); checkout: $(readlink "/proc/$launcher_pid/cwd")"
@@ -45,14 +52,14 @@ if [ "$ACTION" = status ]; then
         echo
       fi
     fi
-  else echo 'Stopped'; exit 1; fi
+  else stopped_status; exit 1; fi
   exit 0
 fi
 if [ "$ACTION" = stop ]; then
-  if ! owned_launcher; then echo 'Already stopped'; exit 0; fi
+  if ! owned_launcher; then echo 'Already stopped'; stopped_status; exit 0; fi
   kill -TERM "$launcher_pid"
   for ((attempt=0; attempt<120; attempt++)); do
-    if ! owned_launcher; then echo 'Stopped'; exit 0; fi
+    if ! owned_launcher; then stopped_status; exit 0; fi
     sleep 1
   done
   echo "Controller shutdown is still in progress; inspect $RUN/controller.log" >&2
@@ -141,6 +148,17 @@ cleanup() {
   for pid in "${children[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
   # Never force-kill the motor controller. Its own deadlines supervise park.
   if [ -n "$controller_pid" ]; then wait "$controller_pid" || true; fi
+  # Keep the terminal controller outcome after ownership metadata is removed.
+  # A clean process exit alone does not prove that the motors reached park.
+  if [ -n "$controller_pid" ]; then
+    if grep -q 'PARKED (motors de-energized' "$RUN/controller.log"; then
+      echo 'Stopped: PARKED (both axes de-energized)' > "$RUN/shutdown.result"
+    else
+      { echo 'Stopped: PARK FAILED or park not confirmed';
+        tail -n 8 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    fi
+    cat "$RUN/shutdown.result"
+  fi
   for pid in "${children[@]}"; do
     [ "$pid" != "$controller_pid" ] || continue
     for ((attempt=0; attempt<50; attempt++)); do
@@ -155,6 +173,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
 export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"

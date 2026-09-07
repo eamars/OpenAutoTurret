@@ -71,6 +71,10 @@ bool ControlLoop::enter_speed_mode_all(
 }
 
 bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
+  if (shutdown_requested() || phase_ == Phase::Parking || phase_ == Phase::Parked) {
+    err = "Home unavailable: shutdown/parking already accepted";
+    return false;
+  }
   backend_->invalidate_calibration();
   if (phase_ == Phase::Fault) {
     err = "in fault; reset required";
@@ -122,11 +126,18 @@ bool ControlLoop::start_hold(std::string& err) {
 }
 
 bool ControlLoop::start_parking(std::string& err) {
+  if (phase_ == Phase::Parking || phase_ == Phase::Parked) return true;
   if (!homed_) {
     err = "cannot park: not homed (position validity unknown, §38.1)";
     return false;
   }
-  park_.reset(new ParkController(cfg_.park, limits_, models_));
+  auto params = cfg_.park;
+  // The entire verification window must remain reachable with the same
+  // stopping reserve as the supervisor, including the drive's response lag.
+  params.min_soft_margin_deg = std::max(params.min_soft_margin_deg,
+      (env_.stop_distance(params.verify_speed_deg_s * kDeg2Rad) +
+       .20 * params.verify_speed_deg_s * kDeg2Rad) * kRad2Deg + params.pos_tol_deg);
+  park_.reset(new ParkController(params, limits_, models_));
   if (park_->failed()) {
     err = park_->fail_reason();
     fault(err);
@@ -142,6 +153,8 @@ bool ControlLoop::start_parking(std::string& err) {
   // state, for the §33.2 target-hold (executor, Phase::Parking).
   park_init_axis_ = park_verify_axis_ = 0;
   park_pos_mode_entered_ = false;
+  park_log_ns_ = 0;
+  disable_tracking();
   phase_ = Phase::Parking;
   return true;
 }
@@ -767,6 +780,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
 
   // 4. Safety decision (authoritative).
   last_decision_ = supervisor_.evaluate(in);
+  if (phase_ == Phase::Parking && (park_log_ns_ == 0 || now_ns - park_log_ns_ >= 500'000'000)) {
+    for (int i = 0; i < kAxisCount; ++i) {
+      const auto& ax = in.axes[i];
+      spdlog::info("parking state={} axis={} q={:.6f} target={:.6f} v_est={:.6f} "
+                   "soft=[{:.6f},{:.6f}] stop_distance={:.6f} available={:.6f} "
+                   "action={} reason='{}' (rad,s)", park_state_name(park_->state()),
+                   axis_name(static_cast<AxisId>(i)), ax.q_raw_rad,
+                   park_->park_raw_rad(static_cast<AxisId>(i)), ax.v_rad_s,
+                   ax.limits.q_soft_min_rad, ax.limits.q_soft_max_rad,
+                   env_.stop_distance(ax.v_rad_s),
+                   ax.v_rad_s >= 0 ? ax.limits.q_soft_max_rad - ax.q_raw_rad
+                                      : ax.q_raw_rad - ax.limits.q_soft_min_rad,
+                   safety_action_name(last_decision_.action), last_decision_.reason);
+    }
+    park_log_ns_ = now_ns;
+  }
   // Low-rate observation of the safety ladder: log an action *transition*
   // (rate-limited to at most once per 100 ms). High-frequency per-command
   // logging in this loop (the P0 [DBG] change-detector) drove the cycle over
@@ -1096,6 +1125,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Parking: {
+      // Do not send even a transient movement or mode-enable command before
+      // the authoritative stop/disable below. Keep watchdogs active throughout.
+      if (last_decision_.action != SafetyAction::Allow &&
+          last_decision_.action != SafetyAction::Derate) break;
       if (park_init_axis_ < kAxisCount) {
         std::string e;
         const auto status = backend_->transition_mode(static_cast<AxisId>(park_init_axis_), false,
@@ -1114,8 +1147,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // axis holds at SpdRef=0. The generic command path below sees
         // in_speed_mode and only issues a controlled stop (SpdRef=0) on a
         // safety action, which is issued after this and therefore wins.
-        backend_->command_velocity(AxisId::Pitch, po.pitch.velocity_rad_s);
-        backend_->command_velocity(AxisId::Yaw, po.yaw.velocity_rad_s);
+        const control::BoundaryGovernor boundary{cfg_.a_brake_rad_s2,
+            cfg_.j_brake_rad_s3, .20, cfg_.stop_margin_rad};
+        const DesiredState moves[] = {po.pitch, po.yaw};
+        for (int i = 0; i < kAxisCount; ++i) {
+          const double cap = cfg_.park.speed_deg_s * kDeg2Rad *
+              (last_decision_.action == SafetyAction::Derate ? cfg_.derate_factor : 1.0);
+          const auto bounds = boundary.at(sp[i].q_rad, limits_[i], cap, 0, v_est_[i]);
+          const double velocity = std::clamp(moves[i].velocity_rad_s,
+              -bounds.negative_speed, bounds.positive_speed);
+          backend_->command_velocity(static_cast<AxisId>(i), velocity);
+        }
       } else {
         // §33.2 target-hold (Verify/Dwell/Disable): position mode holding AT
         // THE PARK TARGET (the drive's position loop pulls the axis back to
@@ -1141,7 +1183,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
       if (po.disable_pitch) backend_->deenergize(AxisId::Pitch);
       if (po.disable_yaw) backend_->deenergize(AxisId::Yaw);
-      if (po.failed) fault("park failed: " + po.message);
+      if (po.failed) fault(po.message);
       if (po.complete) phase_ = Phase::Parked;
       break;
     }
@@ -1277,7 +1319,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           service_velocity_control = true;
           service_command_rate[i] = velocity;
           backend_->command_velocity(a, velocity);
-        } else if (last_decision_.action != SafetyAction::Allow) {
+        } else if (last_decision_.action != SafetyAction::Allow &&
+                   !(phase_ == Phase::Parking && last_decision_.action == SafetyAction::Derate)) {
           speed_servo_[i].reset();
           backend_->command_velocity(a, 0.0);
         } else
@@ -1994,6 +2037,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   {
     std::lock_guard<std::mutex> lk(command_mutex_);
     command_state_.homed = homed_;
+    command_state_.shutdown_or_parking = shutdown_requested() ||
+        phase_ == Phase::Parking || phase_ == Phase::Parked;
     command_state_.fault = (phase_ == Phase::Fault);
     // Homing is a sequence: between stages the phase is Hold while the station
     // is still travelling to the ready pose. `moving` alone cannot see that, and
@@ -3112,6 +3157,11 @@ void ControlLoop::disable_tracking() {
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
   std::string err;
+  if ((shutdown_requested() || phase_ == Phase::Parking || phase_ == Phase::Parked) &&
+      name != "request_shutdown") {
+    ack_command(name, false, "shutdown/parking already accepted; Home and motion commands unavailable");
+    return;
+  }
   if (name == "hold") {
     // v3 §2: HOLD is not a mode, it is what MANUAL does when nothing is asked of
     // it. The command stays — every script and habit uses it — but it now has to

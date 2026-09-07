@@ -55,6 +55,8 @@ def test_launcher_lifecycle(tmp_path):
      assert (base/'runtime/launcher.pid').read_text()==pid
      assert 'Running' in call('status').stdout
      call('stop');assert (base/'disabled').exists()
+     assert 'PARK FAILED or park not confirmed' in call('status', ok=False).stdout
+     assert 'Killed' not in (base/'runtime/launcher.log').read_text()
      assert all((base/(role+'.term')).exists() for role in ('control','web.webd.app','perception.visiond'))
      assert call('status',ok=False).returncode==1
      assert 'Already stopped' in call('stop').stdout

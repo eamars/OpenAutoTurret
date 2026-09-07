@@ -455,6 +455,7 @@ class ControlLoop {
   // (Verify/Dwell/Disable). The blocking enter_position_mode recipe (~100-200
   // ms) would otherwise re-run every cycle. Reset in start_parking().
   bool park_pos_mode_entered_ = false;
+  TimeNs park_log_ns_ = 0;
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};

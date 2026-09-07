@@ -27,6 +27,7 @@ struct SystemCommandState {
   bool tracking_active = false;   // a tracking reference is being produced
   bool search_enabled = false;
   bool moving = false;            // currently executing a motion phase
+  bool shutdown_or_parking = false;
   // Holding the safe ready pose (homing sequence finished). Homing passes
   // through Hold between stages, so `moving` alone is not enough for checks
   // that start from wherever the station happens to be.
@@ -64,6 +65,10 @@ inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
                                       const std::string& arg = "") {
   CommandResult r;
+  if (s.shutdown_or_parking && command != "request_shutdown") {
+    r.error = "shutdown/parking already accepted; Home and motion commands unavailable";
+    return r;
+  }
   if (command == "hold") {
     // Always allowed: hold is the safe default.
     r.ok = true;

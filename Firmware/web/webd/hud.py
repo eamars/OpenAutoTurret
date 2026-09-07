@@ -277,10 +277,12 @@ function hudDrawerActions(name, t) {
     // twice. §14 reserves red for stop and fault, so the confirm state - not colour alone - is what
     // signals danger here.
     return [
-      { label: "HOME", command: "start_homing", arg: "", kind: "danger", note: "Recalibrate both axes" },
+      { label: "HOME", command: "start_homing", arg: "",
+        kind: t && ["parking", "parked"].includes(t.phase) ? "gated" : "danger",
+        note: t && ["parking", "parked"].includes(t.phase) ? "SHUTDOWN / PARKING — HOME UNAVAILABLE" : "Recalibrate both axes" },
       { label: "HOLD / PARK", command: "request_park", arg: "", kind: "danger", note: "CONFIRM TWICE" },
       { label: "SUPERVISORY SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
-        note: "CONFIRM TWICE" }
+        note: "Parks and stops the entire stack; Home becomes unavailable" }
     ];
   }
 

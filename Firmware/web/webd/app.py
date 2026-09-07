@@ -24,6 +24,7 @@ import json
 import dataclasses
 import queue
 import threading
+import uvicorn
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Optional
@@ -57,6 +58,7 @@ class TelemetryHub:
     def __init__(self) -> None:
         self._sessions: list[ClientSession] = []
         self._lock = threading.Lock()
+        self.stopping = threading.Event()
 
     def add(self, ws: WebSocket) -> ClientSession:
         s = ClientSession(ws=ws)
@@ -92,9 +94,9 @@ class TelemetryHub:
         try:
             if latest is not None:
                 await s.ws.send_text(telemetry_to_json(latest))
-            while True:
+            while not self.stopping.is_set():
                 try:
-                    data = await asyncio.to_thread(s.q.get, True, 1.0)
+                    data = await asyncio.to_thread(s.q.get, True, 0.1)
                 except queue.Empty:
                     continue
                 await s.ws.send_text(data)
@@ -104,6 +106,10 @@ class TelemetryHub:
             pass
         finally:
             self.remove(s)
+            try:
+                await s.ws.close(code=1001)
+            except (WebSocketDisconnect, RuntimeError):
+                pass
 
 
 class CommandRequest(BaseModel):
@@ -151,10 +157,12 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         client.start()
         yield
         # Release the camera on shutdown (blocking; keep it off the loop).
-        await asyncio.to_thread(video.stop)
-        client.stop()
+        hub.stopping.set()
+        await asyncio.gather(asyncio.to_thread(video.stop), asyncio.to_thread(client.stop))
 
     app = FastAPI(title=f"{config.title} webd", lifespan=lifespan)
+    # Set BEFORE Uvicorn drains connections, not in the post-drain lifespan.
+    app.state.begin_shutdown = hub.stopping.set
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -288,7 +296,7 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
                 # the lifespan shutdown that releases the IMX500, so a browser left
                 # open could hold the camera away from visiond until TimeoutStopSec
                 # SIGKILLs us.
-                if not video.is_running():
+                if hub.stopping.is_set() or not video.is_running():
                     break
                 jpeg, seq, _ts = video.latest()
                 if seq != last_seq and jpeg:
@@ -317,6 +325,20 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     return app
 
 
+class WebdServer(uvicorn.Server):
+    async def shutdown(self, sockets=None):
+        self.config.app.state.begin_shutdown()
+        # A client that stopped reading can be blocked inside ASGI send(),
+        # before the generator gets to observe the stop flag. Close only the
+        # MJPEG transports so Uvicorn delivers disconnect and cancels the send.
+        for connection in list(self.server_state.connections):
+            scope = getattr(connection, "scope", {})
+            if scope.get("type") == "http" and scope.get("path") == "/api/video":
+                # close() itself waits for a blocked output buffer to drain.
+                connection.transport.abort()
+        await super().shutdown(sockets=sockets)
+
+
 class WebdApp:
     """Lifecycle wrapper: config + client + app (+ optional uvicorn server)."""
 
@@ -328,20 +350,17 @@ class WebdApp:
 
     def run(self) -> int:
         """Run uvicorn in-process (blocking). Used by the daemon entry point."""
-        import uvicorn
-
-        uvicorn.run(
+        config = uvicorn.Config(
             self.app,
             host=self.config.host,
             port=self.config.port,
             log_level="info",
-            # Bounded graceful exit. A browser holding the MJPEG stream must not
-            # decide when webd stops: the stream now ends when video stops, but a
-            # stuck client would otherwise keep uvicorn in "Waiting for
-            # connections to close" — past the lifespan shutdown that releases
-            # the camera — until systemd's TimeoutStopSec (15 s) kills the unit.
-            timeout_graceful_shutdown=5,
+            # Reserve up to 3 seconds for source cleanup inside the launcher's
+            # 5-second window. WebdServer ends streams before connection drain.
+            timeout_graceful_shutdown=0.75,
         )
+        self._server = WebdServer(config)
+        self._server.run()
         return 0
 
 

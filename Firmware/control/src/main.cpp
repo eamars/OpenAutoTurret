@@ -473,30 +473,37 @@ int main(int argc, char** argv) {
   }
 
   // Park before joining I/O workers: their shutdown can exceed the independent
-  // watchdog's heartbeat deadline. No web commands are consumed in this loop.
+  // watchdog's heartbeat deadline. Commands remain gated by parking/shutdown.
   loop.set_vision_link(nullptr);
   spdlog::info("shutdown requested; {}", loop.homed() ? "parking" : "de-energizing");
   if (loop.homed() && loop.phase() != Phase::Fault &&
       loop.phase() != Phase::Parked && loop.start_parking(err)) {
     t_prev = now_monotonic_ns();
-    for (int i = 0; i < 8000 && loop.phase() != Phase::Parked; ++i) {
+    double budget_s = 20.0;
+    for (const auto& limit : loop.limits())
+      budget_s += 1.5 * (limit.q_soft_max_rad - limit.q_soft_min_rad) /
+          (cfg.shutdown.speed_deg_s * kDeg2Rad);
+    const TimeNs park_deadline = t_prev + static_cast<TimeNs>(budget_s * 1e9);
+    while (now_monotonic_ns() < park_deadline && loop.phase() != Phase::Parked &&
+           loop.phase() != Phase::Fault) {
       const TimeNs t0 = now_monotonic_ns();
       loop.step(t0, t0 - t_prev);
       t_prev = t0;
       std::this_thread::sleep_for(std::chrono::nanoseconds(period_ns));
     }
   }
-  if (loop.phase() == Phase::Parked) {
+  const bool shutdown_failed = loop.phase() != Phase::Parked;
+  if (!shutdown_failed) {
     spdlog::info("PARKED (motors de-energized at the park pose)");
   } else {
     loop.deenergize_all();
-    spdlog::info("de-energized (phase={}, fault='{}')", phase_name(loop.phase()),
-                 loop.fault_reason());
+    spdlog::error("PARK FAILED: de-energized (phase={}, fault='{}')", phase_name(loop.phase()),
+                 loop.fault_reason().empty() ? "park unavailable or shutdown deadline exceeded" : loop.fault_reason());
   }
   if (system) system->close();
   web.stop();
   if (vision) vision->stop();
   spdlog::info("controld stopped cleanly");
   spdlog::shutdown();  // drain + drop the async log queue (no lost tail)
-  return 0;
+  return shutdown_failed ? 2 : 0;
 }
