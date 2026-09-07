@@ -17,7 +17,7 @@ class AlignmentHudTest(unittest.TestCase):
             "alignment": {"mode": "manual_depth", "valid": True, "range_source": "manual",
                           "range_measured": False, "assumed_depth_m": 10,
                           "x_norm": 949.5825/1920, "y_norm": 551.0025/1080,
-                          "camera_from_laser_mm": {"right": 75, "up": 75, "forward": 0}},
+                          "camera_from_bore_mm": {"right": 75, "up": 75, "forward": 0}},
             "aim_point_policy": {"revision": 1, "mode": "box_fraction", "x_fraction": .5, "y_fraction": .22},
             "target_aim_valid": True, "target_aim_source": "box_fraction",
             "target_aim_x_norm": .5, "target_aim_y_norm": .276,
@@ -28,7 +28,7 @@ class AlignmentHudTest(unittest.TestCase):
         self.program.write_text(HUD_GEOMETRY_JS + '''
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const lay = hudLayout(input.width || 960, input.height || 540, 1920, 1080);
-const mark = hudLaserMark(input.t, !!input.stale);
+const mark = hudBoreMark(input.t, !!input.stale);
 console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) : null,
   point: hudMeasurementPointSvg(input.t, lay, !!input.stale)}));
 ''', encoding="utf-8")
@@ -55,7 +55,7 @@ console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) 
         self.assertAlmostEqual(rendered["pixel"]["y"], 130+551.0025/2)
         self.assertIn("MEASURE", rendered["point"])
 
-    def test_no_virtual_laser_claim_when_disabled_invalid_or_stale(self):
+    def test_no_virtual_bore_claim_when_disabled_invalid_or_stale(self):
         for key, value in (("mode", "off"), ("valid", False), ("x_norm", 1.1),
                            ("y_norm", None), ("assumed_depth_m", 0),
                            ("range_measured", True), ("range_source", "sensor")):

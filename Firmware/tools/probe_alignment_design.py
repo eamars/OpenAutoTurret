@@ -67,10 +67,10 @@ def beam_point(origin, direction, depth):
     if not all(math.isfinite(v) for v in (*origin, *direction, depth)):
         raise ValueError('geometry must be finite')
     if direction[2] <= 0:
-        raise ValueError('laser must point forward')
+        raise ValueError('bore must point forward')
     along = (depth - origin[2]) / direction[2]
     if depth <= 0 or along <= 0:
-        raise ValueError('reference plane must be in front of camera and laser')
+        raise ValueError('reference plane must be in front of camera and bore')
     return tuple(o + along * d for o, d in zip(origin, direction))
 
 
@@ -125,31 +125,31 @@ def validate_config(config):
         if not 0 <= aim[key] <= 1:
             raise ValueError(f'{key} must be in [0,1]')
     alignment = config['alignment']
-    keys(alignment, 'mode camera_from_laser_mm laser_axis_deg assumed_depth_m', 'alignment')
+    keys(alignment, 'mode camera_from_bore_mm bore_axis_deg assumed_depth_m', 'alignment')
     if alignment['mode'] not in ('off', 'manual_depth'):
         raise ValueError('alignment mode must be off or manual_depth; no sensor is available')
-    mount = alignment['camera_from_laser_mm']
-    keys(mount, 'right up forward', 'camera_from_laser_mm')
+    mount = alignment['camera_from_bore_mm']
+    keys(mount, 'right up forward', 'camera_from_bore_mm')
     for key, value in mount.items():
         number(value, key)
-    angles = alignment['laser_axis_deg']
-    keys(angles, 'right up', 'laser_axis_deg')
+    angles = alignment['bore_axis_deg']
+    keys(angles, 'right up', 'bore_axis_deg')
     for key, value in angles.items():
         number(value, key)
         if abs(value) >= 45:
             raise ValueError('reference model supports alignment angles strictly inside +/-45 deg')
     number(alignment['assumed_depth_m'], 'assumed_depth_m')
-    origin, direction = laser_geometry(config)
+    origin, direction = bore_geometry(config)
     beam_point(origin, direction, alignment['assumed_depth_m'])
     return config
 
 
-def laser_geometry(config):
+def bore_geometry(config):
     alignment = config['alignment']
-    mount = alignment['camera_from_laser_mm']
+    mount = alignment['camera_from_bore_mm']
     # C is the corrected detector frame: x right, y down, z forward.
     origin = (-mount['right']/1000, mount['up']/1000, -mount['forward']/1000)
-    angles = alignment['laser_axis_deg']
+    angles = alignment['bore_axis_deg']
     direction = unit((math.tan(math.radians(angles['right'])),
                       -math.tan(math.radians(angles['up'])), 1))
     return origin, direction
@@ -170,7 +170,7 @@ def aim_point(bbox, anchor, aim):
 def configured_sight(config):
     if config['alignment']['mode'] == 'off':
         return (0, 0, 1)
-    origin, direction = laser_geometry(config)
+    origin, direction = bore_geometry(config)
     return unit(beam_point(origin, direction, config['alignment']['assumed_depth_m']))
 
 
@@ -207,13 +207,13 @@ def solve_direction(target_world, sight_camera, camera_to_pitch, seed):
 
 
 def miss_mm(target, world_rotation, origin, direction):
-    laser_origin = mv(world_rotation, origin)
-    laser_direction = mv(world_rotation, direction)
-    delta = tuple(t - o for t, o in zip(target, laser_origin))
-    along = dot(delta, laser_direction)
+    bore_origin = mv(world_rotation, origin)
+    bore_direction = mv(world_rotation, direction)
+    delta = tuple(t - o for t, o in zip(target, bore_origin))
+    along = dot(delta, bore_direction)
     if along <= 0:
-        raise ValueError('target behind laser')
-    residual = tuple(x - along * d for x, d in zip(delta, laser_direction))
+        raise ValueError('target behind bore')
+    residual = tuple(x - along * d for x, d in zip(delta, bore_direction))
     return math.sqrt(dot(residual, residual)) * 1000
 
 
@@ -231,12 +231,12 @@ def probe_geometry(extrinsics, intrinsics, origin, direction):
                 uncompensated = solve_direction(target, (0, 0, 1), extrinsics, seed)
                 solved_rotation = rotation(*solved, extrinsics)
                 observed_pixel = project(mv(transpose(solved_rotation), target), intrinsics)
-                laser_pixel = project(point, intrinsics)
+                bore_pixel = project(point, intrinsics)
                 rows.append({
                     'depth_m': depth, 'yaw_deg': yaw_deg, 'pitch_deg': pitch_deg,
                     'compensated_miss_mm': miss_mm(target, solved_rotation, origin, direction),
                     'uncompensated_miss_mm': miss_mm(target, rotation(*uncompensated, extrinsics), origin, direction),
-                    'crosshair_error_px': math.dist(observed_pixel, laser_pixel),
+                    'crosshair_error_px': math.dist(observed_pixel, bore_pixel),
                 })
     if max(row['compensated_miss_mm'] for row in rows) > 1e-5:
         raise ValueError('FAIL: generalized sight ray does not align the beam')
@@ -246,14 +246,14 @@ def probe_geometry(extrinsics, intrinsics, origin, direction):
 
 
 def distance_sweep(config, intrinsics):
-    origin, direction = laser_geometry(config)
+    origin, direction = bore_geometry(config)
     sight = configured_sight(config)
     identity = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     rows = []
     for depth in (2, 5, 10, 30, 100):
         target = tuple(v * depth/sight[2] for v in sight)
-        laser_pixel = project(beam_point(origin, direction, depth), intrinsics)
-        rows.append({'true_depth_m': depth, 'physical_laser_pixel': laser_pixel,
+        bore_pixel = project(beam_point(origin, direction, depth), intrinsics)
+        rows.append({'true_depth_m': depth, 'physical_bore_pixel': bore_pixel,
                      'miss_at_configured_sight_mm': miss_mm(target, identity, origin, direction)})
     return rows
 
@@ -286,7 +286,7 @@ def run(config, firmware):
     validate_config(config)
     extrinsics = load_rotation(firmware / 'calibration/camera_extrinsics.yaml')
     intrinsics = load_intrinsics(firmware / 'calibration/camera_intrinsics.yaml')
-    origin, direction = laser_geometry(config)
+    origin, direction = bore_geometry(config)
     fixtures = [
         ('configured_mount', origin, direction),
         ('zero_offset', (0, 0, 0), (0, 0, 1)),
@@ -300,7 +300,7 @@ def run(config, firmware):
     sight = configured_sight(config)
     mark = project(sight, intrinsics)
     if enabled and not (0 <= mark[0] <= intrinsics['width'] and 0 <= mark[1] <= intrinsics['height']):
-        raise ValueError('configured laser sight falls outside the camera frame')
+        raise ValueError('configured bore sight falls outside the camera frame')
     all_rows = [row for rows in scenarios.values() for row in rows]
     return {
         'status': 'reference_geometry_passed; firmware_and_hardware_unverified',
@@ -309,7 +309,7 @@ def run(config, firmware):
                         'stationary targets and perfect joint positioning', 'no detector or sensor emulation'],
         'configured_example': {
             'aim_point_norm': chosen, 'aim_source': source,
-            'sight_ray_camera': sight, 'laser_reticle_px': mark if enabled else None,
+            'sight_ray_camera': sight, 'bore_reticle_px': mark if enabled else None,
             'alignment_status': 'assumed_depth' if enabled else 'disabled',
             'range_source': 'manual' if enabled else 'none', 'range_measured': False,
         },

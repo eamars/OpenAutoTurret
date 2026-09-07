@@ -13,7 +13,7 @@ for the latest loaded homing/tracking evidence and remaining gaps.
 | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) | Deploy, start, status, stop, default Auto mode, prerequisites and diagnostics | **Current operating procedure** |
 | [`travel_boundary_review_2026_09_06.md`](travel_boundary_review_2026_09_06.md) | Loaded homing, tracking response, travel limits and HUD verification | Latest measured control status; explicitly lists gaps |
 | [`AS_BUILT_v1.md`](AS_BUILT_v1.md) | Features and evidence as of September 3 | Historical snapshot |
-| [`configurable_alignment_design.md`](configurable_alignment_design.md) | Startup aim-point and camera-to-laser configuration, tuning and offline verification | Implemented; native observations and simulated motors verified, physical alignment unverified |
+| [`configurable_alignment_design.md`](configurable_alignment_design.md) | Startup aim-point and camera-to-bore configuration, tuning and offline verification | Implemented; native observations and simulated motors verified, physical alignment unverified |
 | [`open_auto_turret_software_control_architecture_v1.md`](open_auto_turret_software_control_architecture_v1.md) | The v1 architecture spec (the §-numbers every source file cites) | Frozen reference. The next revision replaces it; `§` references in code point here until then |
 | [`../../PROGRESS.md`](../../PROGRESS.md) | Phase-level status: what is coded, what has been verified on hardware | Tracker only — no feature detail lives there anymore |
 

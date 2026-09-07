@@ -1,4 +1,4 @@
-# Configurable measurement point and virtual laser alignment
+# Configurable measurement point and virtual bore alignment
 
 Implemented 2026-09-07: startup configuration, native/legacy aiming policy,
 production C++ geometry and reference integration, telemetry and HUD rendering.
@@ -18,8 +18,8 @@ tracking:
 
 alignment:
   mode: off
-  camera_from_laser_mm: {right: 75, up: 75, forward: 0}
-  laser_axis_deg: {right: 0, up: 0}
+  camera_from_bore_mm: {right: 75, up: 75, forward: 0}
+  bore_axis_deg: {right: 0, up: 0}
   assumed_depth_m: 10
 ~~~
 
@@ -33,17 +33,17 @@ setting and followed perception's anchor (45% box fallback, or pose anchor).
 | tracking.aim_point.mode | box_fraction selects a point in the detected box. perception_anchor follows the point supplied by perception. |
 | x_fraction | Fraction from the box's left edge; [0,1]. 0.50 is horizontally centred. |
 | y_fraction | Fraction down from its top edge; [0,1]. 0.22 is the requested head/framing approximation. |
-| alignment.mode | off points the camera optical axis. manual_depth points a virtual laser sight at an assumed depth. No measured-range mode exists yet. |
-| camera_from_laser_mm.right/up/forward | Camera displacement from the laser, expressed in corrected camera axes; positive right/up/forward. The 75/75/0 values are provisional mounting inputs. |
-| laser_axis_deg.right/up | Independent horizontal/vertical laser angles relative to the optical axis. Positive projects right/up. Each must be strictly inside +/-45 degrees. Zero assumes parallel axes. |
+| alignment.mode | off points the camera optical axis. manual_depth points a virtual bore sight at an assumed depth. No measured-range mode exists yet. |
+| camera_from_bore_mm.right/up/forward | Camera displacement from the bore, expressed in corrected camera axes; positive right/up/forward. The 75/75/0 values are provisional mounting inputs. |
+| bore_axis_deg.right/up | Independent horizontal/vertical bore angles relative to the optical axis. Positive projects right/up. Each must be strictly inside +/-45 degrees. Zero assumes parallel axes. |
 | assumed_depth_m | Positive distance to a plane along the camera optical axis. **10 m is an example, not a measured range or recommended operating distance.** |
 
-The absent laser is why compensation ships off. To exercise compensation in
+The absent bore is why compensation ships off. To exercise compensation in
 simulation or a later controlled trial, use manual_depth and deliberately choose
-the reference depth. The HUD shows an amber laser crosshair labelled
+the reference depth. The HUD shows an amber bore crosshair labelled
 **ASSUMED 10.0 m** (or the configured value), a small camera-centre marker and a
 white diamond at the requested measurement point. Invalid/stale alignment does
-not produce a valid laser marker. Telemetry always reports range_measured=false.
+not produce a valid bore marker. Telemetry always reports range_measured=false.
 
 Tuning is **startup-only**. No live settings editor, Apply command or Save endpoint
 is implemented. File edits take effect on the next normal restart. This avoids
@@ -78,13 +78,13 @@ marker expires when its measurement becomes stale.
 
 A percentage is **not anatomical head localization**. Moving toward 50% balances
 framing above and below the object but changes the measurement location. Because
-camera and laser are rigidly mounted, software cannot independently centre the
-complete object and place the laser at an arbitrary location on it.
+camera and bore are rigidly mounted, software cannot independently centre the
+complete object and place the bore at an arbitrary location on it.
 
 Missing new blocks preserve legacy behavior. An explicit tracking.aim_point
 block overrides aim_at_head/head_fraction_from_top, with a warning when both
 old and new keys are present. Malformed, incomplete or unknown new settings
-are rejected. Explicit aim policies require valid camera intrinsics; active laser
+are rejected. Explicit aim policies require valid camera intrinsics; active bore
 alignment additionally requires valid camera extrinsics and an in-frame projected
 sight. The daemon checks these before opening its motor transport.
 
@@ -94,12 +94,12 @@ The corrected detector frame is C = (right, down, forward). In metres:
 
 ~~~
 o_C = (-camera_right_mm, +camera_up_mm, -camera_forward_mm) / 1000
-d_C = normalize(tan(laser_right_angle), -tan(laser_up_angle), 1)
+d_C = normalize(tan(bore_right_angle), -tan(bore_up_angle), 1)
 s = (assumed_depth_m - o_C.z) / d_C.z
 p_C = o_C + s * d_C
 r_sight_C = normalize(p_C)
-u_laser = cx + fx * p_C.x / p_C.z
-v_laser = cy + fy * p_C.y / p_C.z
+u_bore = cx + fx * p_C.x / p_C.z
+v_bore = cy + fy * p_C.y / p_C.z
 ~~~
 
 The reference plane must be ahead of both devices. Geometry uses the corrected
@@ -139,10 +139,10 @@ Simulation assumes the camera origin is at the rotation pivot and uses ideal
 pinhole projection. Camera-to-pivot translation, axis-origin translation, mount
 flex and lens distortion are not established here. Stored calibration includes
 provisional values. The t_P_C camera-to-mechanism translation is not repurposed as
-the camera-to-laser offset.
+the camera-to-bore offset.
 
 No IMU is needed for base-relative encoder geometry. This does not provide
-inertial stabilization of a moving base. A future rangefinder return is laser
+inertial stabilization of a moving base. A future rangefinder return is bore
 slant range rho, giving p_C = o_C + rho*d_C; its camera depth is p_C.z. That
 integration also needs timestamps, validity and association with the selected
 object, since a background return is not the object's distance.
@@ -153,10 +153,10 @@ object, since a background return is not the object's distance.
 |---|---|
 | config/turret_config.*, config/tracking_setup.hpp, main.cpp | Strict YAML parsing, legacy precedence, shared boot setup and validation before opening motors. |
 | tracking/aim_point.hpp, control/tracking_controller.hpp | Explicit measurement point on native/legacy paths; point source, clipping and freshness. |
-| geometry/laser_alignment.hpp | Pure geometry for mounting offsets, assumed depth and projected virtual laser marker. |
+| geometry/bore_alignment.hpp | Pure geometry for mounting offsets, assumed depth and projected virtual bore marker. |
 | geometry/los_joint_solver.hpp, control/motion_intent.hpp, control/reference_manager.hpp, control/control_loop.cpp | Configured sight through the active control path and bounded motion references. |
 | telemetry/telemetry.hpp, web/web_server.hpp, webd/protocol.py | Policy revision, effective parameters, marker projection, validity/source and assumed-depth status. Available even without a vision transport. |
-| webd/hud.py | Controller-projected laser crosshair, measurement-point diamond and separate optical-axis marker. |
+| webd/hud.py | Controller-projected bore crosshair, measurement-point diamond and separate optical-axis marker. |
 
 ## Simulation and regression evidence
 
@@ -238,7 +238,7 @@ real camera. The probes above never start the station stack.
 ## Remaining physical verification
 
 Simulation verifies implemented software behavior within the stated model. It
-does not establish actual laser accuracy, detector visibility, real motor
+does not establish actual bore accuracy, detector visibility, real motor
 stability or video-overlay registration. Later commissioning needs nonliving
 calibration targets at known depths and measured mounting angles/translations.
 The provisional camera calibration, IMU absence and missing range sensor remain

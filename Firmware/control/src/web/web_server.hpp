@@ -164,16 +164,16 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"x_fraction\":" << s.aim_options.x_fraction
      << ",\"y_fraction\":" << s.aim_options.y_fraction << "}"
      << ",\"alignment\":{\"mode\":\"" << (s.alignment_config.enabled ? "manual_depth" : "off")
-     << "\",\"valid\":" << (s.laser_alignment.valid ? "true" : "false")
-     << ",\"reason\":\"" << s.laser_alignment.reason << "\""
+     << "\",\"valid\":" << (s.bore_alignment.valid ? "true" : "false")
+     << ",\"reason\":\"" << s.bore_alignment.reason << "\""
      << ",\"revision\":" << s.tracking_config_revision
      << ",\"range_source\":\"" << (s.alignment_config.enabled ? "manual" : "none") << "\""
      << ",\"range_measured\":false,\"assumed_depth_m\":" << s.alignment_config.assumed_depth_m
-     << ",\"x_norm\":" << s.laser_alignment.u_norm << ",\"y_norm\":" << s.laser_alignment.v_norm
-     << ",\"camera_from_laser_mm\":{\"right\":" << s.alignment_config.camera_right_mm
+     << ",\"x_norm\":" << s.bore_alignment.u_norm << ",\"y_norm\":" << s.bore_alignment.v_norm
+     << ",\"camera_from_bore_mm\":{\"right\":" << s.alignment_config.camera_right_mm
      << ",\"up\":" << s.alignment_config.camera_up_mm << ",\"forward\":" << s.alignment_config.camera_forward_mm << "}"
-     << ",\"laser_axis_deg\":{\"right\":" << s.alignment_config.laser_right_deg
-     << ",\"up\":" << s.alignment_config.laser_up_deg << "}}"
+     << ",\"bore_axis_deg\":{\"right\":" << s.alignment_config.bore_right_deg
+     << ",\"up\":" << s.alignment_config.bore_up_deg << "}}"
      << ",\"predicted_target_az_world_rad\":" << s.predicted_target_az_world_rad
      << ",\"predicted_target_el_world_rad\":" << s.predicted_target_el_world_rad
      << ",\"predicted_target_los_valid\":" << (s.predicted_target_los_valid ? "true" : "false")

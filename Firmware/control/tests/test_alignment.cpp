@@ -53,7 +53,7 @@ TEST(AlignmentConfig, ManualDepthProducesExpectedReticle) {
   auto parsed = load_text(text);
   ASSERT_TRUE(parsed.ok);
   auto cfg = config::make_tracking_config(parsed.config);
-  const auto a = geo::laser_alignment(cfg.alignment, cfg.intrinsics);
+  const auto a = geo::bore_alignment(cfg.alignment, cfg.intrinsics);
   ASSERT_TRUE(a.valid);
   EXPECT_NEAR(a.u_norm*1920, 949.5825, 1e-9);
   EXPECT_NEAR(a.v_norm*1080, 551.0025, 1e-9);
@@ -70,8 +70,8 @@ TEST(AlignmentConfig, RejectsBadValuesInsteadOfDefaulting) {
       {"y_fraction: 0.22", "y_fraction: 1.1"}, {"mode: box_fraction", "mode: typo"},
       {"x_fraction: 0.50", "x_fracton: 0.50"}, {"mode: off", "mode: measured"},
       {"assumed_depth_m: 10", "assumed_depth_m: 0"}, {"right: 75", "right: .inf"},
-      {"laser_axis_deg: {right: 0, up: 0}", "laser_axis_deg: {right: 90, up: 0}"},
-      {"camera_from_laser_mm: {right: 75, up: 75, forward: 0}", "camera_from_laser_mm: null"}}) {
+      {"bore_axis_deg: {right: 0, up: 0}", "bore_axis_deg: {right: 90, up: 0}"},
+      {"camera_from_bore_mm: {right: 75, up: 75, forward: 0}", "camera_from_bore_mm: null"}}) {
     SCOPED_TRACE(value);
     auto text = source_config(); replace(text, old, value);
     EXPECT_FALSE(load_text(text).ok);
@@ -87,8 +87,11 @@ TEST(AlignmentConfig, MissingNewBlocksPreservesLegacyAndExplicitModeWins) {
   const auto begin = text.find("  aim_point:");
   const auto end = text.find("  search_enabled_by_default:", begin);
   text.replace(begin, end-begin, "  aim_at_head: true\n  head_fraction_from_top: 0.3\n");
-  const auto alignment = text.find("alignment:\n");
-  text.erase(alignment, text.find("shutdown:", alignment)-alignment);
+  const auto alignment = text.find("alignment:");
+  const auto shutdown = text.find("shutdown:", alignment);
+  ASSERT_NE(alignment, std::string::npos);
+  ASSERT_NE(shutdown, std::string::npos);
+  text.erase(alignment, shutdown-alignment);
   auto parsed = load_text(text);
   ASSERT_TRUE(parsed.ok);
   auto cfg = config::make_tracking_config(parsed.config);
@@ -109,22 +112,22 @@ TEST(AlignmentConfig, MissingNewBlocksPreservesLegacyAndExplicitModeWins) {
 }
 
 TEST(AlignmentGeometry, SignsDepthAndAngles) {
-  geo::LaserAlignmentConfig c;
+  geo::BoreAlignmentConfig c;
   c.enabled = true; c.camera_right_mm = c.camera_up_mm = 75;
   const geo::CameraIntrinsics in;
-  auto a = geo::laser_alignment(c, in);
+  auto a = geo::bore_alignment(c, in);
   c.assumed_depth_m = 20;
-  auto far = geo::laser_alignment(c, in);
+  auto far = geo::bore_alignment(c, in);
   EXPECT_NEAR((a.u_norm-.5)/2, far.u_norm-.5, 1e-12);
   c.camera_right_mm = -75; c.camera_up_mm = -75;
-  a = geo::laser_alignment(c, in);
+  a = geo::bore_alignment(c, in);
   EXPECT_GT(a.u_norm, .5); EXPECT_LT(a.v_norm, .5);
   c.camera_right_mm = c.camera_up_mm = 0;
-  c.laser_right_deg = 1; c.laser_up_deg = 2;
-  a = geo::laser_alignment(c, in);
+  c.bore_right_deg = 1; c.bore_up_deg = 2;
+  a = geo::bore_alignment(c, in);
   EXPECT_GT(a.u_norm, .5); EXPECT_LT(a.v_norm, .5);
   c.camera_forward_mm = -30000;
-  EXPECT_FALSE(geo::laser_alignment(c, in).valid);
+  EXPECT_FALSE(geo::bore_alignment(c, in).valid);
 }
 
 TEST(AlignmentGeometry, BoundedAndIterativeSolversUseSameSight) {
