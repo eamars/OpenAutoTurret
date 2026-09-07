@@ -305,5 +305,56 @@ TEST_F(RoamTest, RepositionCrossesLegalInteriorInsteadOfReturningToNearestEnd) {
   EXPECT_NEAR(out_.target_yaw_rad,55*kDeg,1e-9);
 }
 
+TEST_F(RoamTest, ResumeDirectionOverridesNearestEndInBothDirections) {
+  for (const int dir : {-1, 1}) {
+    const double q = -dir * 30*kDeg;
+    r_.enter(q, pitch_, dir);
+    run(1, q);
+    EXPECT_EQ(out_.direction, dir);
+    EXPECT_NEAR(out_.target_yaw_rad, dir * 55*kDeg, 1e-9);
+    EXPECT_NEAR(out_.intent.q_pitch_rad, cfg_.pitch_ref_rad, 1e-12);
+    r_.exit();
+    r_.enter(q, pitch_);  // a fresh entry must not inherit the preference
+    run(1, q);
+    EXPECT_EQ(out_.direction, -dir);
+  }
+}
+
+TEST_F(RoamTest, ResumeAtCompletedEndStartsTheInwardLeg) {
+  for (const int end : {-1, 1}) {
+    for (const double inset : {0.0, .5 * cfg_.reach_tol_rad}) {
+      const double q = end * (55*kDeg - inset);
+      r_.enter(q, pitch_, end);
+      run(3, q);
+      EXPECT_EQ(out_.direction, -end);
+      EXPECT_NEAR(out_.target_yaw_rad, -end * 55*kDeg, 1e-9);
+    }
+  }
+}
+
+TEST_F(RoamTest, ResumeOutsideSweepApproachesThenContinuesInward) {
+  for (const int end : {-1, 1}) {
+    r_.enter(end * 80*kDeg, pitch_, end);
+    run(1, end * 80*kDeg);
+    EXPECT_EQ(out_.state, RoamState::MoveToScanStart);
+    EXPECT_EQ(out_.direction, -end);
+    EXPECT_NEAR(out_.target_yaw_rad, end * 55*kDeg, 1e-9);
+    run(3, end * 55*kDeg);
+    EXPECT_EQ(out_.state, RoamState::Sweep);
+    EXPECT_EQ(out_.direction, -end);
+    EXPECT_NEAR(out_.target_yaw_rad, -end * 55*kDeg, 1e-9);
+  }
+}
+
+TEST_F(RoamTest, ResumeUsesCurrentEnvelopeInsteadOfAnOldWaypoint) {
+  r_.enter(-30*kDeg, pitch_, +1);
+  r_.exit();
+  cfg_.envelope.yaw_max_rad = 40*kDeg;
+  r_.set_config(cfg_);
+  r_.enter(-20*kDeg, pitch_, +1);
+  run(1, -20*kDeg);
+  EXPECT_NEAR(out_.target_yaw_rad, 35*kDeg, 1e-9);
+}
+
 }  // namespace
 }  // namespace ota

@@ -213,13 +213,19 @@ struct HomedLoop {
   // the edge of the picture asks for a yaw the station cannot reach. The tracker is built once,
   // at the homing gate, from whatever configuration is current there — which is why this has to
   // happen here rather than from inside a test body.
-  HomedLoop(bool home = true, float confidence_high_min = 0.0f, bool wide_lens = false) {
+  HomedLoop(bool home = true, float confidence_high_min = 0.0f, bool wide_lens = false,
+            bool automatic_handoffs = false) {
     sim_owner = std::make_unique<sim::SimMotorBackend>(0.005);
     sim = sim_owner.get();
     sim->set_stops(AxisId::Pitch, -1.0, 1.0);
     sim->set_stops(AxisId::Yaw, -1.0, 1.0);
     auto cfg = make_cfg();
     cfg.auto_track_high_min = confidence_high_min;  // 0 = the default
+    if (automatic_handoffs) {
+      cfg.auto_roam_on_loss_ms = 1000;
+      cfg.auto_track_on_acquire_ms = 250;
+      cfg.auto_track_reacquire_window_ms = 1000;
+    }
     loop = std::make_unique<ControlLoop>(cfg, std::move(sim_owner));
     if (wide_lens) {
       TrackingController::Config tcfg;
@@ -842,6 +848,142 @@ TEST(RoamMode, NamedSweepRateSurvivesTheWholeReferencePath) {
   EXPECT_GT(peak, 3.9*kDeg2Rad);
   EXPECT_LE(peak, 4.001*kDeg2Rad)
       << "the resolver must not replace the named roam rate with the search ceiling";
+}
+
+// Design probe: execute the actual loss timer, hand-off, planner and reference
+// path. Interrupt each direction while still on the opposite half of the sweep,
+// where nearest-boundary reseeding would reverse it.
+TEST(RoamMode, AutomaticLossResumesInterruptedSweep) {
+  auto backend = std::make_unique<sim::SimMotorBackend>(.005);
+  auto* sim = backend.get();
+  sim->set_stops(AxisId::Pitch, -1, 1);
+  sim->set_stops(AxisId::Yaw, -1, 1);
+  auto cfg = make_cfg();
+  cfg.auto_roam_on_loss_ms = 1000;
+  ControlLoop loop(cfg, std::move(backend));
+  std::string error;
+  ASSERT_TRUE(loop.start_homing(make_plan(), error)) << error;
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(loop, *sim, t)) << loop.fault_reason();
+  auto step = [&] { loop.step(t, kDtNs); t += kDtNs; };
+  ASSERT_TRUE(loop.request_mode(OperatingMode::AutoRoam).ok);
+  for (const int dir : {1, -1, 1}) {
+    bool found = false;
+    for (int i = 0; i < 20000; ++i) {
+      step();
+      const auto s = loop.telemetry().snapshot();
+      const double q = loop.last_positions()[1];
+      if (s.roam_sweep_direction == dir && q * dir < -.15 &&
+          q * dir > -.4 && s.mode_phase == "SWEEP") {
+        found = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(found) << "never reached interruption pose, direction=" << dir;
+    ASSERT_TRUE(loop.request_mode(OperatingMode::AutoTrack).ok);
+    // No target: the real WAIT_TARGET -> automatic loss recovery path.
+    for (int i = 0; i < 1200 && loop.operating_mode() != OperatingMode::AutoRoam; ++i)
+      step();
+    ASSERT_EQ(loop.operating_mode(), OperatingMode::AutoRoam);
+    step();  // planner consumes the new mode on the next cycle
+    const auto s = loop.telemetry().snapshot();
+    EXPECT_EQ(s.roam_sweep_direction, dir) << "yaw=" << loop.last_positions()[1];
+    EXPECT_GT(s.roam_target_yaw_rad * dir, 0);
+    EXPECT_EQ(loop.phase(), Phase::Hold) << loop.fault_reason();
+    const double resumed_yaw = loop.last_positions()[1];
+    for (int i = 0; i < 200; ++i) step();
+    EXPECT_GT((loop.last_positions()[1] - resumed_yaw) * dir, .01)
+        << "the simulated plant must follow the resumed waypoint";
+  }
+}
+
+namespace {
+bool reach_interrupted_leg(HomedLoop& h) {
+  h.run("set_mode", "AUTO_ROAM");
+  for (int i = 0; i < 20000; ++i) {
+    h.step(1);
+    const double q = h.loop->last_positions()[1];
+    if (h.snap().roam_sweep_direction == 1 && q < -.15 && q > -.4 &&
+        h.snap().mode_phase == "SWEEP") return true;
+  }
+  return false;
+}
+
+bool wait_for_auto_roam(HomedLoop& h) {
+  for (int i = 0; i < 2000 && h.loop->operating_mode() != OperatingMode::AutoRoam; ++i)
+    h.step(1);
+  h.step(2);
+  return h.loop->operating_mode() == OperatingMode::AutoRoam;
+}
+}  // namespace
+
+TEST(RoamMode, AutomaticAcquisitionAndStaleTargetLossPreserveSweep) {
+  HomedLoop h(true, 0, false, true);
+  ASSERT_TRUE(h.ready);
+  ASSERT_TRUE(reach_interrupted_leg(h));
+  // Fresh frames of a single centered subject pass through production selection,
+  // geometry and estimation, then the acquisition dwell changes the mode.
+  uint32_t seq = 0;
+  bool acquired = false;
+  for (int i = 0; i < 400; ++i) {
+    if (i % 8 == 0) {
+      auto set = two_people(++seq, h.t, 1, 2, .95f, .3f, .5f, .8f);
+      set.count = 1;
+      set.width = 1920;
+      set.height = 1080;
+      set.tracks[0].visible_frames = 20;
+      set.observation.native = true;
+      set.observation.session = {1, 1};
+      set.observation.selected = set.tracks[0].uuid;
+      set.observation.generation = 1;
+      set.observation.track_set_sequence = seq;
+      set.observation.state = 1;
+      set.observation.valid = true;
+      set.observation.association_quality = 1;
+      set.observation.identity_confidence = 1;
+      h.loop->feed_track_set(set, h.t);
+    }
+    h.step(1);
+    if (h.loop->operating_mode() == OperatingMode::AutoTrack &&
+        h.snap().mode_phase == "TRACKING") {
+      acquired = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(acquired) << h.snap().mode_phase;
+  ASSERT_EQ(h.snap().selected_display_index, 1);
+  // Stop delivering frames: retained identity must not cause stale reacquisition.
+  ASSERT_TRUE(wait_for_auto_roam(h));
+  EXPECT_EQ(h.snap().roam_sweep_direction, 1);
+  EXPECT_GT(h.snap().roam_target_yaw_rad, 0);
+  h.step(300);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(RoamMode, ManualAndStopDiscardInterruptedDirection) {
+  for (const char* command : {"set_mode", "stop_motion"}) {
+    HomedLoop h(true, 0, false, true);
+    ASSERT_TRUE(h.ready);
+    ASSERT_TRUE(reach_interrupted_leg(h));
+    h.run("set_mode", "AUTO_TRACK");
+    h.run(command, std::string(command) == "set_mode" ? "MANUAL" : "");
+    ASSERT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+    EXPECT_EQ(h.snap().roam_sweep_direction, 0);
+    h.run("set_mode", "AUTO_TRACK");
+    ASSERT_TRUE(wait_for_auto_roam(h));
+    ASSERT_LT(h.loop->last_positions()[1], 0);
+    EXPECT_EQ(h.snap().roam_sweep_direction, -1) << command;
+  }
+}
+
+TEST(RoamMode, ExplicitRoamEntryUsesCurrentPose) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  ASSERT_TRUE(reach_interrupted_leg(h));
+  h.run("set_mode", "AUTO_TRACK");
+  h.run("set_mode", "AUTO_ROAM");
+  EXPECT_EQ(h.snap().roam_sweep_direction, -1);
 }
 
 TEST(RoamMode, StopMotionEndsTheSweepAndLeavesItInManualHold) {

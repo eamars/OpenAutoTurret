@@ -615,6 +615,10 @@ class ControlLoop {
   char mode_refusal_reason_[224] = {};
   RoamPlanner roam_;
   RoamOutput roam_out_;
+  // Coverage memory for one autonomous session, independent of event telemetry.
+  // Captured at the accepted ROAM -> TRACK transition; cleared by Manual or
+  // supervision. Used only by automatic loss recovery, never operator entry.
+  int interrupted_roam_dir_ = 0;
   bool yaw_reposition_active_ = false;
   // §80: the preserved scene, held so it can be published until someone takes it. Kept
   // here rather than only in the snapshot because each cycle fills a fresh snapshot.

@@ -186,8 +186,10 @@ class RoamPlanner {
     return true;
   }
 
-  // §36, entry. Called on the cycle the mode becomes AUTO_ROAM.
-  void enter(double q_yaw_rad, double q_pitch_rad) {
+  // §36, entry. A direction supplied by automatic loss recovery resumes an
+  // interrupted sweep. Zero starts a fresh sweep toward the nearest boundary.
+  // This is a waypoint preference, never permission to exceed the envelope.
+  void enter(double q_yaw_rad, double q_pitch_rad, int resume_direction = 0) {
     const double lo = sweep_lo_rad();
     const double hi = sweep_hi_rad();
     // §30: the elevation a sweep holds is the configured one, not whatever the operator
@@ -204,13 +206,16 @@ class RoamPlanner {
       target_yaw_ = (q_yaw_rad < lo) ? lo : hi;
       direction_ = (q_yaw_rad < lo) ? +1 : -1;
     } else {
-      // Inside: start toward the nearer boundary. §36.3's "nearest sensible sweep
-      // direction" is not a style preference — entering at 170 degrees and driving to
-      // -60 first is a several-second crossing of the room that nobody asked for, and
-      // it is the first thing the turret does after an operator clicks.
       const bool to_low_first = (q_yaw_rad - lo) <= (hi - q_yaw_rad);
-      target_yaw_ = to_low_first ? lo : hi;
       direction_ = to_low_first ? -1 : +1;
+      if (resume_direction != 0) {
+        direction_ = resume_direction < 0 ? -1 : +1;
+        // Tracking may have carried us to the end of the interrupted leg.
+        // That leg is complete: resume inward rather than command outward.
+        if (q_yaw_rad <= lo + cfg_.reach_tol_rad) direction_ = +1;
+        else if (q_yaw_rad >= hi - cfg_.reach_tol_rad) direction_ = -1;
+      }
+      target_yaw_ = direction_ < 0 ? lo : hi;
       state_ = RoamState::Sweep;
     }
     reversing_ = false;
@@ -273,7 +278,12 @@ class RoamPlanner {
     const double hi = sweep_hi_rad();
     const double dist = std::fabs(q_yaw_rad - target_yaw_);
 
-    if (dist <= cfg_.reach_tol_rad) {
+    if (dist <= cfg_.reach_tol_rad && state_ == RoamState::MoveToScanStart) {
+      // The approach direction already points inward. Arrival completes the
+      // recovery leg; reversing it here would point back toward the same end.
+      target_yaw_ = direction_ < 0 ? lo : hi;
+      state_ = RoamState::Sweep;
+    } else if (dist <= cfg_.reach_tol_rad) {
       if (!reversing_) {
         // Reached an end. Arm the reversal; do not flip the waypoint on the same cycle,
         // which is what turns a sweep into a vibration at the turnaround point.
@@ -302,8 +312,6 @@ class RoamPlanner {
       reversing_ = false;
       reversal_armed_ = false;
       state_ = RoamState::MoveToScanStart;
-    } else if (state_ == RoamState::MoveToScanStart && dist <= cfg_.reach_tol_rad * 4) {
-      state_ = RoamState::Sweep;
     }
 
     if (target_yaw_ < lo || target_yaw_ > hi) {

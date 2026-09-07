@@ -435,6 +435,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                                : (phase_ == Phase::Idle || phase_ == Phase::Parked)
                                    ? SupervisoryState::Unhomed
                                    : SupervisoryState::Ready);
+  if (mode_mgr_.supervisory() != SupervisoryState::Ready ||
+      mode_mgr_.mode() == OperatingMode::Manual)
+    interrupted_roam_dir_ = 0;
 
   // 2b. v3 §53: exactly one mode owns motion. The mode's controller *proposes*
   //     (the v1 TrackingController still produces the numbers: its FSM,
@@ -2157,6 +2160,7 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
   if (!ack_in_flight_.empty()) startup_mode_applied_ = true;
   const std::string who = ack_in_flight_.empty() ? "request_mode" : ack_in_flight_;
   const ModeRequestContext ctx = mode_context();
+  const OperatingMode previous = mode_mgr_.mode();
   const ModeResult r = mode_mgr_.request(target, ctx);
   if (!r.ok && target == OperatingMode::AutoRoam && !ctx.roam_envelope_valid) {
     // The mode manager's reason is true and useless: "roam envelope invalid". Which
@@ -2184,6 +2188,8 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
   ack_command(who, true,
               std::string(r.changed ? "entered " : "already in ") +
                   operating_mode_name(target));
+  if (r.changed && previous == OperatingMode::AutoRoam && target == OperatingMode::AutoTrack)
+    interrupted_roam_dir_ = roam_.active() ? roam_.direction() : 0;
   sync_controllers_to_mode(target);
   if (r.changed) {
     // §79. The mode is *who is driving*, and every question about an afternoon of
@@ -2295,6 +2301,7 @@ void ControlLoop::preserve_scene(const telemetry::TelemetrySnapshot& live,
 }
 
 void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
+  if (mode == OperatingMode::Manual) interrupted_roam_dir_ = 0;
   yaw_reposition_active_ = false;
   mode_hold_latched_ = false;  // §44: "here" is re-decided at a handover, not inherited
   mode_ramp_cycles_ = kModeRampCycles;  // §36/§44: see the ramp in step()
@@ -2950,7 +2957,15 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     if (now_ns - loss_since_ns_ >= cfg_.auto_roam_on_loss_ms * nsec) {
       spdlog::info("auto hand-off AUTO_TRACK -> AUTO_ROAM: target lost for {} ms",
                    cfg_.auto_roam_on_loss_ms);
-      if (request_mode(OperatingMode::AutoRoam).ok) last_auto_switch_ns_ = now_ns;
+      if (request_mode(OperatingMode::AutoRoam).ok) {
+        const auto q = last_positions();
+        roam_.set_config(roam_config());
+        roam_.enter(q[ix(AxisId::Yaw)], q[ix(AxisId::Pitch)], interrupted_roam_dir_);
+        last_auto_switch_ns_ = now_ns;
+        spdlog::info("ROAM_RECOVERY: source={} requested_direction={} effective_direction={}",
+                     interrupted_roam_dir_ == 0 ? "nearest_boundary" : "interrupted_sweep",
+                     interrupted_roam_dir_, roam_.direction());
+      }
       loss_since_ns_ = 0;
     }
     return;

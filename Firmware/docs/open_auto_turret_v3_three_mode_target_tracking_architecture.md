@@ -1315,11 +1315,25 @@ On mode switch to `AUTO_ROAM`:
 
 1. cancel old mode intent;
 2. use current actual/planned state as trajectory start;
-3. initialize roam direction based on nearest sensible sweep direction;
+3. on automatic target-loss recovery, resume the direction of the interrupted roam
+   leg when available; on startup, explicit operator entry, or without an interrupted
+   leg, initialize toward the nearest sweep boundary;
 4. do not jump to a distant scan-start position unnecessarily;
 5. begin smooth scan.
 
 This makes mode switching feel continuous.
+
+The direction is coverage state, separate from active planner state and telemetry.
+Capture it on an accepted `AUTO_ROAM -> AUTO_TRACK` transition. Manual, STOP,
+or leaving supervisory Ready clears it. Re-entry rebuilds the waypoint from the
+current pose and current validated envelope; it does not restore a stale position
+or trajectory. At a completed end, continue inward. Outside the sweep bounds,
+approach the nearest end, then sweep inward. Explicit forbidden-gap repositioning
+has priority over ordinary loss recovery.
+
+Target-motion heading does not override this policy: identity/detection confidence
+does not establish confidence in a travel direction. See the decision and validation
+contract in [roam recovery design](roam_recovery_design.md).
 
 ---
 
@@ -1584,6 +1598,10 @@ stop roam -> WAIT_TARGET/HOLD
 Invalidate target motion intent.
 
 RoamPlanner initializes from current pose.
+
+Automatic loss recovery resumes the interrupted roam direction, subject to the
+current sweep bounds. Explicit operator entry uses the nearest boundary. Manual,
+STOP, and supervisory interruption end the previous coverage session.
 
 Selection is preserved.
 

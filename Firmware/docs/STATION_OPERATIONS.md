@@ -54,6 +54,10 @@ The shipped `Firmware/config/turret.yaml` sets `v3.default_mode: AUTO_ROAM`.
 The normal launcher checks this before enabling motors. No `--auto` flag or web
 command is needed. After calibration validation/homing, the station roams,
 acquires an eligible target, tracks, and returns to roaming after target loss.
+Automatic loss recovery resumes the interrupted sweep direction. At a sweep end
+it continues inward; outside the sweep region it first approaches the nearest end.
+Manual/STOP clears that direction memory, and explicit Auto starts a fresh sweep.
+See [roam recovery design](roam_recovery_design.md) for the policy and validation.
 
 **Manual / Hold** is an explicit web override. Its D-pad appears only in Manual
 service; hold an arrow to jog, release to stop. **Auto** resumes automatic
