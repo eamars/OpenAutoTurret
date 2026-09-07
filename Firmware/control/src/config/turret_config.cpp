@@ -41,6 +41,80 @@ YAML::Node fetch(const YAML::Node& node, const std::string& key) {
   return YAML::Node();
 }
 
+// New alignment policy is strict: typoed or incomplete calibration must not become defaults.
+bool strict_map(const YAML::Node& n, std::initializer_list<const char*> allowed,
+                const std::string& path, std::vector<std::string>& errors) {
+  if (!n.IsDefined() || !n.IsMap()) { errors.push_back(path + " must be a mapping"); return false; }
+  for (const auto& entry : n) {
+    if (!entry.first.IsScalar()) { errors.push_back(path + ": invalid key"); continue; }
+    const auto key = entry.first.Scalar();
+    if (std::none_of(allowed.begin(), allowed.end(), [&](const char* k) { return key == k; }))
+      errors.push_back(path + ": unknown key " + key);
+  }
+  return true;
+}
+
+double alignment_number(const YAML::Node& n, const char* key, const std::string& path,
+                        std::vector<std::string>& errors) {
+  try {
+    const double v = n[key].as<double>();
+    if (std::isfinite(v)) return v;
+  } catch (const YAML::Exception&) {}
+  errors.push_back(path + "." + key + " must be a finite number");
+  return 0;
+}
+
+std::string alignment_mode(const YAML::Node& n, const std::string& path,
+                           std::vector<std::string>& errors) {
+  try { return n["mode"].as<std::string>(); } catch (const YAML::Exception&) {}
+  errors.push_back(path + ".mode is required");
+  return "";
+}
+
+void parse_alignment_policy(const YAML::Node& root, TurretConfig& c,
+                            std::vector<std::string>& errors, std::vector<std::string>& warnings) {
+  const auto tracking = fetch(root, "tracking");
+  if (tracking.IsDefined() && tracking.IsMap() && tracking["aim_point"].IsDefined()) {
+    const auto aim = tracking["aim_point"];
+    if (strict_map(aim, {"mode", "x_fraction", "y_fraction"}, "tracking.aim_point", errors)) {
+      const auto mode = alignment_mode(aim, "tracking.aim_point", errors);
+      if (mode == "box_fraction") c.tracking.aim_point.mode = ota::tracking::AimMode::BoxFraction;
+      else if (mode == "perception_anchor") c.tracking.aim_point.mode = ota::tracking::AimMode::PerceptionAnchor;
+      else errors.push_back("tracking.aim_point.mode must be box_fraction or perception_anchor");
+      auto& a = c.tracking.aim_point;
+      a.x_fraction = alignment_number(aim, "x_fraction", "tracking.aim_point", errors);
+      a.y_fraction = alignment_number(aim, "y_fraction", "tracking.aim_point", errors);
+      if (a.x_fraction < 0 || a.x_fraction > 1 || a.y_fraction < 0 || a.y_fraction > 1)
+        errors.push_back("tracking.aim_point fractions must be in [0,1]");
+      if (tracking["aim_at_head"].IsDefined() || tracking["head_fraction_from_top"].IsDefined())
+        warnings.push_back("tracking.aim_point overrides legacy aim_at_head/head_fraction_from_top");
+    }
+  }
+  if (!root.IsMap() || !root["alignment"].IsDefined()) return;
+  const auto a = root["alignment"];
+  if (!strict_map(a, {"mode", "camera_from_laser_mm", "laser_axis_deg", "assumed_depth_m"},
+                  "alignment", errors)) return;
+  auto& c_align = c.alignment;
+  const auto mode = alignment_mode(a, "alignment", errors);
+  if (mode == "manual_depth") c_align.enabled = true;
+  else if (mode != "off") errors.push_back("alignment.mode must be off or manual_depth (no range sensor)");
+  c_align.assumed_depth_m = alignment_number(a, "assumed_depth_m", "alignment", errors);
+  const auto mount = a["camera_from_laser_mm"], axis = a["laser_axis_deg"];
+  if (strict_map(mount, {"right", "up", "forward"}, "alignment.camera_from_laser_mm", errors)) {
+    c_align.camera_right_mm = alignment_number(mount, "right", "alignment.camera_from_laser_mm", errors);
+    c_align.camera_up_mm = alignment_number(mount, "up", "alignment.camera_from_laser_mm", errors);
+    c_align.camera_forward_mm = alignment_number(mount, "forward", "alignment.camera_from_laser_mm", errors);
+  }
+  if (strict_map(axis, {"right", "up"}, "alignment.laser_axis_deg", errors)) {
+    c_align.laser_right_deg = alignment_number(axis, "right", "alignment.laser_axis_deg", errors);
+    c_align.laser_up_deg = alignment_number(axis, "up", "alignment.laser_axis_deg", errors);
+  }
+  if (c_align.assumed_depth_m <= 0 || c_align.assumed_depth_m + c_align.camera_forward_mm/1000 <= 0)
+    errors.push_back("alignment reference depth must be positive and in front of laser");
+  if (std::abs(c_align.laser_right_deg) >= 45 || std::abs(c_align.laser_up_deg) >= 45)
+    errors.push_back("alignment laser angles must be strictly inside +/-45 degrees");
+}
+
 // Conservative defaults for the §58 commissioning parameters. These keep the
 // daemon safe (slow, wide bands) until the real values are measured; the pitch
 // band is wide enough to contain the observed ~-86 deg position so nothing is
@@ -877,6 +951,7 @@ LoadResult load_turret_config(const std::string& path) {
   }
 
   // §72. Last, so it can see the axis limits it has to be checked against.
+  parse_alignment_policy(root, c, err, warn);
   parse_v3(root, c.v3, err, warn, c.axes);
 
   r.ok = err.empty();

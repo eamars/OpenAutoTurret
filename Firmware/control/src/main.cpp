@@ -25,6 +25,7 @@
 #include <thread>
 
 #include "calibration/camera_calibration.hpp"
+#include "config/tracking_setup.hpp"
 #include "calibration/homing_plan.hpp"
 #include "calibration/retained_homing.hpp"
 #include "calibration/park_controller.hpp"
@@ -121,56 +122,24 @@ std::unique_ptr<sim::SimMotorBackend> make_sim_backend() {
 // NON-fatal: the aligned defaults stand and the boot log says UNCALIBRATED, so
 // the geometry is never silently pretended to be known (Part 3, items 14/15).
 TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
-  TrackingController::Config t;
-  t.estimator.alpha = cfg.tracking.estimator_alpha;
-  t.estimator.beta = cfg.tracking.estimator_beta;
-  t.estimator.use_kalman = cfg.tracking.estimator_model == "constant_velocity";
-  t.estimator.measurement_sigma_rad = cfg.tracking.estimator_measurement_sigma_rad;
-  t.estimator.angular_accel_sigma_rad_s2 = cfg.tracking.estimator_accel_sigma_rad_s2;
-  t.fsm.coast_max_ns = static_cast<int64_t>(cfg.tracking.coast_timeout_ms) * 1000000;
-  t.fsm.lost_ns = static_cast<int64_t>(cfg.tracking.lost_timeout_ms) * 1000000;
-  t.fsm.search_enabled =
-      cfg.tracking.search_enabled_by_default ||
-      cfg.tracking.target_lost_behavior == "search";
-  t.search.v_max_rad_s = cfg.tracking.search_speed_deg_s * kDeg2Rad;
-  t.track_v_max_rad_s = cfg.tracking.track_speed_deg_s * kDeg2Rad;
-  t.search_v_max_rad_s = cfg.tracking.search_speed_deg_s * kDeg2Rad;
-  // Was hard-coded at 10.0 deg/s. The default in the config loader is the same number, so nothing
-  // moves until an operator writes the key - which is the point: round 40 showed this constant is
-  // what the acceptance criteria collide with, and a safety ceiling should not require a rebuild.
-  t.hold_v_max_rad_s = cfg.tracking.hold_speed_deg_s * kDeg2Rad;
-  t.control_delay_ns = static_cast<int64_t>(cfg.tracking.control_delay_ms) * 1000000;
-  t.motor_response_ns =
-      static_cast<int64_t>(cfg.tracking.motor_response_ms) * 1000000;
-  t.fresh_threshold_ns =
-      static_cast<int64_t>(cfg.tracking.fresh_threshold_ms) * 1000000;
-
-  // §28.2 intrinsics (pixel -> camera ray).
-  const IntrinsicsLoad il = load_camera_intrinsics(cfg.camera.intrinsics_file);
-  if (il.found) {
-    t.intrinsics = il.intrinsics;
-    // Where to aim inside the target. Handed over here rather than defaulted inside the
-    // controller, so the station file remains the single place the operator's rule is set.
-    t.aim.aim_at_head = cfg.tracking.aim_at_head;
-    t.aim.head_fraction_from_top = cfg.tracking.head_fraction_from_top;
-    if (cfg.tracking.aim_at_head) {
-      spdlog::info("tracking aim point: head, {:.0f}% below the top of the target box",
-                   cfg.tracking.head_fraction_from_top * 100.0);
-    } else {
-      spdlog::info("tracking aim point: anchor (the detector's box centroid)");
-    }
-    spdlog::info("camera intrinsics: {} ({})", il.detail,
+  config::TrackingSetupDiagnostics diagnostics;
+  auto t = config::make_tracking_config(cfg, &diagnostics);
+  if (diagnostics.intrinsics.found)
+    spdlog::info("camera intrinsics: {} ({})", diagnostics.intrinsics.detail, cfg.camera.intrinsics_file);
+  else
+    spdlog::warn("camera intrinsics: {} ({}) — UNCALIBRATED", diagnostics.intrinsics.detail,
                  cfg.camera.intrinsics_file);
-  } else {
-    spdlog::warn("camera intrinsics: {} ({}) — tracking geometry is "
-                 "UNCALIBRATED until the §28.2 commissioning pass (P9)",
-                 il.detail, cfg.camera.intrinsics_file);
-  }
-  // §28.3 extrinsics (camera -> pitch frame, R_P_C).
-  std::string xdetail;
-  t.kinematics = load_camera_extrinsics(cfg.camera.extrinsics_file, xdetail);
-  spdlog::info("camera extrinsics: {} ({})", xdetail,
-               cfg.camera.extrinsics_file);
+  spdlog::info("camera extrinsics: {} ({})", diagnostics.extrinsics, cfg.camera.extrinsics_file);
+  spdlog::info("aim point policy: {}", tracking::aim_mode_name(t.aim.mode));
+  if (t.aim.mode == tracking::AimMode::BoxFraction)
+    spdlog::info("measurement point: {:.0f}% right, {:.0f}% down inside box",
+                 t.aim.x_fraction*100, t.aim.y_fraction*100);
+  else if (t.aim.mode == tracking::AimMode::Legacy)
+    spdlog::info("legacy aim: native anchor; legacy head override={} at {:.0f}% from top",
+                 t.aim.aim_at_head, t.aim.head_fraction_from_top*100);
+  const auto alignment = geo::laser_alignment(t.alignment, t.intrinsics);
+  spdlog::info("laser alignment: {}, assumed depth={} m (no range measurement)",
+      alignment.reason, t.alignment.assumed_depth_m);
   return t;
 }
 
@@ -198,6 +167,13 @@ int main(int argc, char** argv) {
   }
   for (const auto& w : lr.warnings) spdlog::warn("config: {}", w);
   const config::TurretConfig& cfg = lr.config;
+  // Reject invalid explicit alignment before opening a motor transport.
+  TrackingController::Config tracking_cfg;
+  try { tracking_cfg = make_tracking_cfg(cfg); }
+  catch (const std::exception& e) {
+    spdlog::error("tracking configuration: {}", e.what());
+    return 1;
+  }
 
   // 2. The motor backend. Real: open the CAN bus (this process is the sole
   //    owner). Sim: a first-order plant, no transport object at all.
@@ -306,7 +282,7 @@ int main(int argc, char** argv) {
   //     config decision (default FALSE); the enable itself is gated on homing
   //     inside the loop (§38.1), and the `start_tracking` command (§42.2) uses
   //     the same commissioned values.
-  loop.set_tracking_config(make_tracking_cfg(cfg), cfg.tracking.enabled);
+  loop.set_tracking_config(tracking_cfg, cfg.tracking.enabled);
   spdlog::info("tracking: auto_enable={} (§38.1 gate: homing), speeds "
                "track={:.1f} search={:.1f} deg/s, lost_behavior={}",
                cfg.tracking.enabled ? "yes" : "NO",

@@ -22,6 +22,8 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
+#include "geometry/laser_alignment.hpp"
 
 #include "control/reference_manager.hpp"
 #include "control/search_planner.hpp"
@@ -47,6 +49,7 @@ class TrackingController {
     geo::CameraIntrinsics intrinsics;
     // Which point inside the target the axis is aimed at (head vs anchor). See aim_point.hpp.
     tracking::AimOptions aim;
+    geo::LaserAlignmentConfig alignment;
     // §13.3 actuation horizon: how far ahead to predict so the setpoint
     // matters when it reaches the motor.
     int64_t control_delay_ns = 20 * 1000 * 1000;      // 20 ms
@@ -68,13 +71,17 @@ class TrackingController {
   explicit TrackingController(Config cfg)
       : cfg_(std::move(cfg)),
         camera_(cfg_.intrinsics),
-        solver_(cfg_.kinematics),
+        alignment_(geo::laser_alignment(cfg_.alignment, cfg_.intrinsics)),
+        solver_(cfg_.kinematics, alignment_.sight_camera),
         estimator_(cfg_.estimator),
         history_pitch_(cfg_.history_capacity),
         history_yaw_(cfg_.history_capacity),
         fsm_(cfg_.fsm),
         search_(cfg_.search),
-        refman_(solver_) {}
+        refman_(solver_) {
+    if (alignment_.enabled && !alignment_.valid) throw std::invalid_argument(alignment_.reason);
+    if (!tracking::valid_aim_options(cfg_.aim)) throw std::invalid_argument("invalid aim point policy");
+  }
 
   // Feed the latest pose (rad) each cycle (maintains the motor history for §11
   // and the current pose).
@@ -121,9 +128,9 @@ class TrackingController {
     // on a standing person is a torso. With no usable box the two are the same point and
     // last_aim_point_.head_applied says which case the operator is looking at.
     const tracking::AimPoint ap =
-        m.authoritative_anchor ? tracking::AimPoint{m.anchor_u_px, m.anchor_v_px, false} :
         tracking::aim_point_px(m.anchor_u_px, m.anchor_v_px, m.bbox_x_min_norm, m.bbox_y_min_norm,
-                              m.bbox_x_max_norm, m.bbox_y_max_norm, cfg_.intrinsics, cfg_.aim);
+                              m.bbox_x_max_norm, m.bbox_y_max_norm, cfg_.intrinsics, cfg_.aim,
+                              m.authoritative_anchor);
     const geo::Vec3 r_cam = camera_.pixel_to_ray(ap.u_px, ap.v_px);
     const geo::Vec3 r_base =
         cfg_.kinematics.ray_to_base(r_cam, sy.q, sp.q);
@@ -302,15 +309,23 @@ class TrackingController {
     double v_norm = 0.0;
     bool valid = false;
     bool head = false;
+    const char* source = "perception_anchor";
+    bool box_clipped = false;
   };
   AimStatus aim_status() const {
     AimStatus a;
     a.u_norm = last_aim_point_.u_px / static_cast<double>(cfg_.intrinsics.width);
     a.v_norm = last_aim_point_.v_px / static_cast<double>(cfg_.intrinsics.height);
-    a.valid = aim_valid_ && cfg_.intrinsics.width > 0 && cfg_.intrinsics.height > 0;
+    a.valid = aim_valid_ && cfg_.intrinsics.width > 0 && cfg_.intrinsics.height > 0 &&
+              has_measurement_ && now_ns_ >= static_cast<TimeNs>(last_capture_ns_) &&
+              now_ns_ - static_cast<TimeNs>(last_capture_ns_) < cfg_.fresh_threshold_ns;
     a.head = last_aim_point_.head_applied;
+    a.source = last_aim_point_.source;
+    a.box_clipped = last_aim_point_.box_clipped;
     return a;
   }
+
+  const geo::LaserAlignment& alignment() const { return alignment_; }
 
 
  private:
@@ -318,6 +333,7 @@ class TrackingController {
   geo::CameraModel camera_;
   tracking::AimPoint last_aim_point_;
   bool aim_valid_ = false;
+  geo::LaserAlignment alignment_;
   geo::LosJointSolver solver_;
   tracking::TargetEstimator estimator_;
   MotorStateHistory history_pitch_;

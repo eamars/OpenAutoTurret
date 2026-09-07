@@ -57,12 +57,16 @@ inline bool equivalent_in_range(double angle, double reference, double low, doub
 
 class LosJointSolver {
  public:
-  explicit LosJointSolver(TurretKinematics kin) : kin_(std::move(kin)) {}
+  explicit LosJointSolver(TurretKinematics kin, Vec3 sight_camera = Vec3{0, 0, 1})
+      : kin_(std::move(kin)), sight_camera_(sight_camera.normalized()),
+        sight_valid_(std::isfinite(sight_camera.x) && std::isfinite(sight_camera.y) &&
+                     std::isfinite(sight_camera.z) && sight_camera.z > 0 &&
+                     std::isfinite(sight_camera.norm()) && sight_camera.norm() > 0) {}
 
-  // Base-frame optical axis for the given joints (unit vector).
+  // Base-frame configured sight axis (optical axis by default).
   Vec3 optical_axis(double q_yaw_rad, double q_pitch_rad) const {
     const Vec3 v = (Mat3::rot_z(q_yaw_rad) * Mat3::rot_y(q_pitch_rad) *
-                    kin_.R_PC * Vec3(0.0, 0.0, 1.0));
+                    kin_.R_PC * sight_camera_);
     return v.normalized();
   }
 
@@ -72,8 +76,8 @@ class LosJointSolver {
   bool solve_within_limits(double az, double el, double seed_yaw, double seed_pitch,
       double yaw_low, double yaw_high, double pitch_low, double pitch_high,
       double& yaw, double& pitch) const {
-    if(!std::isfinite(az) || !std::isfinite(el) || std::abs(el)>M_PI/2) return false;
-    const Vec3 body=(kin_.R_PC*Vec3(0,0,1)).normalized();
+    if(!sight_valid_ || !std::isfinite(az) || !std::isfinite(el) || std::abs(el)>M_PI/2) return false;
+    const Vec3 body=(kin_.R_PC*sight_camera_).normalized();
     const double radius=std::hypot(body.x,body.z);
     if(radius<1e-9 || std::abs(std::sin(el))>radius+1e-9) return false;
     const double root=std::acos(std::clamp(std::sin(el)/radius,-1.0,1.0));
@@ -129,7 +133,7 @@ class LosJointSolver {
   // determines WHICH solution is found, so prefer solve_from_pose() over solve().
   bool refine_to_los(double az_rad, double el_rad, double& q_yaw_rad,
                      double& q_pitch_rad, double max_residual_rad) const {
-    if (!std::isfinite(az_rad) || !std::isfinite(el_rad) ||
+    if (!sight_valid_ || !std::isfinite(az_rad) || !std::isfinite(el_rad) ||
         !std::isfinite(q_yaw_rad) || !std::isfinite(q_pitch_rad)) return false;
     const Vec3 target{std::cos(el_rad) * std::cos(az_rad),
                       std::cos(el_rad) * std::sin(az_rad), std::sin(el_rad)};
@@ -175,6 +179,8 @@ class LosJointSolver {
 
  private:
   TurretKinematics kin_;
+  Vec3 sight_camera_;
+  bool sight_valid_;
 };
 
 }  // namespace geo

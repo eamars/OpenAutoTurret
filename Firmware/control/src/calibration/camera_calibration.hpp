@@ -37,6 +37,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <limits>
 
 #include "geometry/camera_model.hpp"
 #include "geometry/turret_kinematics.hpp"
@@ -79,7 +80,7 @@ inline void parse_key_values(const std::string& text,
     if (k.empty() || n >= 64) continue;
     keys[n] = k;
     std::istringstream vs(v);
-    vs >> vals[n];
+    if (!(vs >> vals[n])) vals[n] = std::numeric_limits<double>::quiet_NaN();
     ++n;
   }
 }
@@ -106,6 +107,13 @@ inline IntrinsicsLoad load_camera_intrinsics(const std::string& path) {
   bool have[6] = {false, false, false, false, false, false};
   for (int i = 0; i < n; ++i) {
     const std::string& k = keys[i];
+    if ((k == "fx" || k == "fy" || k == "cx" || k == "cy" || k == "width" || k == "height") &&
+        (!std::isfinite(vals[i]) ||
+         ((k == "width" || k == "height") &&
+          (vals[i] <= 0 || vals[i] > std::numeric_limits<int>::max() || std::floor(vals[i]) != vals[i])))) {
+      out.detail = "invalid numeric intrinsics";
+      return out;
+    }
     if (k == "fx") { in.fx = vals[i]; have[0] = true; }
     else if (k == "fy") { in.fy = vals[i]; have[1] = true; }
     else if (k == "cx") { in.cx = vals[i]; have[2] = true; }

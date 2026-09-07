@@ -218,8 +218,13 @@ class ControlLoop {
   // loop turns tracking on by itself once the homing gate passes (§38.1).
   void set_tracking_config(const TrackingController::Config& cfg,
                            bool auto_enable) {
+    if (tracking_ && (!(cfg.aim == tracking_cfg_.aim) || !(cfg.alignment == tracking_cfg_.alignment)))
+      throw std::logic_error("aim/alignment configuration is startup-only; tracking is active");
+    // Validate before publishing a new snapshot of startup configuration.
+    TrackingController checked(cfg);
     tracking_cfg_ = cfg;
     tracking_auto_enable_ = auto_enable;
+    ++tracking_config_revision_;
   }
   const TrackingController::Config& tracking_config() const {
     return tracking_cfg_;
@@ -533,6 +538,7 @@ class ControlLoop {
   // Commissioned tracking configuration (from turret.yaml + the calibration
   // files). Used by the `start_tracking` command and the auto-enable path.
   TrackingController::Config tracking_cfg_;
+  uint64_t tracking_config_revision_ = 0;
   // Last published reference, to derive its rate and acceleration (see telemetry fields).
   double ref_prev_q_yaw_ = 0.0;
   double ref_prev_q_pitch_ = 0.0;

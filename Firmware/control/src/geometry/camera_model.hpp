@@ -17,7 +17,10 @@ struct CameraIntrinsics {
   int width = 1920;
   int height = 1080;
 
-  bool valid() const { return fx > 0.0 && fy > 0.0 && width > 0 && height > 0; }
+  bool valid() const {
+    return std::isfinite(fx) && std::isfinite(fy) && std::isfinite(cx) && std::isfinite(cy) &&
+           fx > 0.0 && fy > 0.0 && width > 0 && height > 0;
+  }
 };
 
 // Field of view implied by an intrinsics set, in degrees.

@@ -13,13 +13,10 @@ the acceptance margin for the lead requirement. Cropping would hide the true fra
 boundary that is not the camera's. So the whole frame is always visible and the letterbox bars are
 the cost, taken deliberately.
 
-**The reticle is drawn at the measured principal point, not at the viewport centre.** §7 says the
-reticle is the actual camera optical axis and never the target, prediction or requested LOS. With
-today's calibration `cx=960 cy=540` of 1920x1080, which happens to be the centre; the instant a real
-principal-point measurement disagrees, the reticle must move and the target boxes must keep mapping
-through the same numbers. If telemetry does not carry the intrinsics, the reticle says so out loud
-instead of quietly guessing the centre - a HUD symbology that silently relocates itself is worse than
-one that admits it is unclosed.
+The optical-axis marker uses the camera principal point. With virtual laser alignment
+enabled, the main reticle uses the controller's projected laser sight and is amber,
+labelled with its assumed depth; the camera centre remains a small separate marker.
+The requested measurement point is a white diamond. No laser range is measured here.
 """
 from __future__ import annotations
 
@@ -58,6 +55,32 @@ function hudAxisNorm(intr) {
     return null;
   }
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
+}
+
+// Controller-owned projection; the browser never reconstructs mounting geometry.
+function hudLaserMark(t, stale) {
+  const a = t && t.alignment;
+  if (stale || !a || a.mode !== "manual_depth" || a.valid !== true ||
+      a.range_source !== "manual" || a.range_measured !== false ||
+      !Number.isFinite(a.assumed_depth_m) || a.assumed_depth_m <= 0 ||
+      !Number.isFinite(a.x_norm) || !Number.isFinite(a.y_norm) ||
+      a.x_norm < 0 || a.x_norm > 1 || a.y_norm < 0 || a.y_norm > 1) return null;
+  return { u: a.x_norm, v: a.y_norm, label: "ASSUMED " + a.assumed_depth_m.toFixed(1) + " m" };
+}
+
+function hudMeasurementPointSvg(t, lay, stale) {
+  if (stale || !t || t.target_aim_valid !== true ||
+      !Number.isFinite(t.target_aim_x_norm) || !Number.isFinite(t.target_aim_y_norm) ||
+      t.target_aim_x_norm < 0 || t.target_aim_x_norm > 1 ||
+      t.target_aim_y_norm < 0 || t.target_aim_y_norm > 1) return "";
+  const p = hudProject(t.target_aim_x_norm, t.target_aim_y_norm, lay);
+  if (!p.ok) return "";
+  const label = t.target_aim_source === "box_fraction" ? "MEASURE" : "ANCHOR";
+  return '<g class="measurement-point"><path d="M ' + p.x + ' ' + (p.y-5) + ' L ' +
+    (p.x+5) + ' ' + p.y + ' L ' + p.x + ' ' + (p.y+5) + ' L ' + (p.x-5) + ' ' + p.y +
+    ' Z" fill="none" stroke="#edf2eb" stroke-width="1.5"/>' +
+    '<text x="' + (p.x+9) + '" y="' + (p.y-9) + '" class="lbl" fill="#edf2eb">' +
+    label + (t.target_aim_box_clipped ? " / BOX CLIPPED" : "") + '</text></g>';
 }
 
 
@@ -821,9 +844,10 @@ function render(t) {
   // left and right, open centre - and never on the target.
   const intr = t.camera_intrinsics;
   const axis = hudAxisNorm(intr) || { u: 0.5, v: 0.5 };
-  const c = hudProject(axis.u, axis.v, lay);
+  const laser = hudLaserMark(t, stale);
+  const c = hudProject(laser ? laser.u : axis.u, laser ? laser.v : axis.v, lay);
   if (c.ok) {
-    const g = C.green, r = 26, gap = 8, len = 12;
+    const g = laser ? C.amber : C.green, r = 26, gap = 8, len = 12;
     const corner = (sx, sy) =>
       '<path d="M ' + (c.x + sx * r) + ' ' + (c.y + sy * gap) + ' L ' + (c.x + sx * r) + ' ' +
       (c.y + sy * r) + ' L ' + (c.x + sx * gap) + ' ' + (c.y + sy * r) + '" fill="none" ' +
@@ -840,7 +864,18 @@ function render(t) {
       '" stroke="' + g + '" stroke-width="3"/>' +
       (intr ? "" : '<text x="' + (c.x + r + 18) + '" y="' + (c.y + 4) + '" class="lbl" ' +
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
+    if (laser) {
+      const optical = hudProject(axis.u, axis.v, lay);
+      if (optical.ok) layers.reticle += '<circle cx="' + optical.x + '" cy="' + optical.y +
+        '" r="3" fill="none" stroke="' + C.dim + '" stroke-width="1"/>';
+      layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
+        '" class="lbl" fill="' + C.amber + '">' + laser.label + '</text>';
+    } else if (t.alignment && t.alignment.mode === "manual_depth") {
+      layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
+        '" class="lbl" fill="' + C.amber + '">LASER ALIGNMENT UNAVAILABLE</text>';
+    }
   }
+  layers.sel += hudMeasurementPointSvg(t, lay, stale);
 
   // §10: the prediction cue, from webd's `prediction` block. Absent when invalid - the revision says
   // prediction disappears when invalid or stale (§661's rule), and an empty group is the honest
@@ -934,12 +969,8 @@ function render(t) {
   $("g-for").innerHTML = layers.for;
   $("g-tapes").innerHTML = layers.tape;
 
-  // target_aim_x/y_norm (the point inside the target the controller is driving onto the axis) is
-  // deliberately NOT drawn. v3.2 mentions an aiming marker exactly once - §7's open centre, which
-  // IS the optical axis - and inventing a second marker would put an unspecced symbol on the
-  // operator's screen. It is also unnecessary: the controller aims the head AT the axis, so what
-  // the operator sees is the reticle sitting on the head, which is the acceptance rule as stated.
-  // The field stays in telemetry for measurement and for the DIAG drawer.
+  // The requested measurement point is a white diamond; the assumed laser sight
+  // is an amber reticle. The optical axis remains a separate camera-centre mark.
 
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,

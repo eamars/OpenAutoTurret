@@ -209,6 +209,10 @@ class Telemetry:
     target_aim_y_norm: float = 0.0
     target_aim_valid: bool = False
     target_aim_is_head: bool = False
+    target_aim_source: str = "none"
+    target_aim_box_clipped: bool = False
+    aim_point_policy: Dict[str, Any] = field(default_factory=dict)
+    alignment: Dict[str, Any] = field(default_factory=dict)
     # The direction the AUTO_TRACK intent is built from, its horizon, and the rates that give it
     # value. Without these, lead cannot be measured: q_ref is post-slew-limiter, so it cannot tell
     # "no lead requested" from "lead requested and the reference could not slew" - opposite fixes.

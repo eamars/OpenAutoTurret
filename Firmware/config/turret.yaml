@@ -189,15 +189,22 @@ tracking:
   track_acceleration_deg_s2: 25.0
   track_jerk_deg_s3: 100.0
   search_speed_deg_s: 20.0
-  # The operator's acceptance rule is the reticle on the target's HEAD, within one third of the
-  # box height. The §9 anchor a detector reports is the box centroid, which on a standing person
-  # is a torso - so the rule has to be stated as a station setting, not left to a code default
-  # that was chosen before the rule existed. head_fraction_from_top is an assumption about this
-  # detector's box, which is why it is here and not a constant.
-  aim_at_head: true
-  head_fraction_from_top: 0.22
+  # Applies on native and legacy observation paths. Perception's association
+  # anchor remains independent. A fraction is a box position, not a detected head.
+  # Startup-only: edit these values and restart through the normal launcher.
+  aim_point:
+    mode: box_fraction        # box_fraction | perception_anchor
+    x_fraction: 0.50          # left -> right inside the detected box
+    y_fraction: 0.22          # top -> bottom; tune the head/framing compromise here
   search_enabled_by_default: false
   target_lost_behavior: hold    # hold | search (§58 params 19-20)
+alignment:
+  # The laser/rangefinder is absent. Enable manual_depth only for an explicitly
+  # assumed reference plane; the displayed mark is virtual, never a measurement.
+  mode: off                  # off | manual_depth
+  camera_from_laser_mm: {right: 75, up: 75, forward: 0}
+  laser_axis_deg: {right: 0, up: 0}  # unmeasured parallel-axis assumption
+  assumed_depth_m: 10         # example camera-axis depth, NOT a measured range
 shutdown:
   # §33.1 safe in-travel park pose: the no-dangle mid-travel pose (the same
   # pose the homing plan uses to park each axis between homes). Logical degrees

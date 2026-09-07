@@ -196,14 +196,16 @@ class ReferenceManager {
     switch (in.type) {
       case IntentType::LosDirection: {
         if (!in.has_los) return hold_reference(lim, "los intent without los");
+        const geo::LosJointSolver sight_solver(solver_.kinematics(),
+            in.source == MotionSource::AutoTrack ? in.sight_camera : geo::Vec3{0, 0, 1});
         double qy, qp;
         const auto& pitch = lim.axis_limits[static_cast<int>(AxisId::Pitch)];
         const auto& yaw = lim.axis_limits[static_cast<int>(AxisId::Yaw)];
         const bool bounded=pitch.valid && yaw.valid;
-        const bool solved=bounded ? solver_.solve_within_limits(in.los_az_rad,in.los_el_rad,
+        const bool solved=bounded ? sight_solver.solve_within_limits(in.los_az_rad,in.los_el_rad,
             lim.q_yaw_hold_rad,lim.q_pitch_hold_rad,yaw.q_soft_min_rad,yaw.q_soft_max_rad,
             pitch.q_soft_min_rad,pitch.q_soft_max_rad,qy,qp) :
-            solver_.solve_from_pose(in.los_az_rad,in.los_el_rad,
+            sight_solver.solve_from_pose(in.los_az_rad,in.los_el_rad,
                 lim.q_yaw_hold_rad,lim.q_pitch_hold_rad,qy,qp);
         if (!solved) {
           // §67: an unreachable target is reported, not pressed into a hold.

@@ -24,6 +24,8 @@
 #include "calibration/homing_plan.hpp"
 #include "control/control_loop.hpp"
 #include "sim/sim_motor_backend.hpp"
+#include "tracks/perception_wire.hpp"
+#include "web/web_server.hpp"
 
 using namespace ota;
 using ota::geo::CameraIntrinsics;
@@ -249,6 +251,93 @@ void enter_mode(TrackingRig& r, const TrackingController::Config& cfg,
 }
 
 }  // namespace
+
+TEST(AlignmentSimulation, NativeWireToSimulatedMotorsAndTelemetry) {
+  for (bool enabled : {false, true}) for (double fraction : {.22, .45, .6}) {
+    SCOPED_TRACE(::testing::Message() << "alignment=" << enabled << " fraction=" << fraction);
+    TrackingRig r(true);
+    int64_t t = 0;
+    ASSERT_TRUE(run_to_ready(r, t));
+    auto cfg = make_tracking_cfg(false);
+    cfg.aim.mode = tracking::AimMode::BoxFraction;
+    cfg.aim.y_fraction = fraction;
+    cfg.alignment.enabled = enabled;
+    cfg.alignment.camera_right_mm = cfg.alignment.camera_up_mm = 75;
+    cfg.alignment.assumed_depth_m = 2;
+    const auto align = geo::laser_alignment(cfg.alignment, cfg.intrinsics);
+    enter_mode(r, cfg, OperatingMode::AutoTrack);
+    // Ground truth is a fixed point, independently projected into each synthetic frame.
+    const Mat3 goal = Mat3::rot_z(.10)*Mat3::rot_y(-.05)*cfg.kinematics.R_PC;
+    const Vec3 target = goal*(align.sight_camera*(2/align.sight_camera.z));
+    for (int i = 0; i < 4000; ++i, t += kDtNs) {
+      if (i % 8 == 0) {
+        const auto& q = r.loop().last_positions();
+        const Mat3 camera = Mat3::rot_z(q[1])*Mat3::rot_y(q[0])*cfg.kinematics.R_PC;
+        double u, v;
+        r.cam().ray_to_pixel(camera.transposed()*target, u, v);
+        tracks::TrackSetWire wire;
+        wire.frame_sequence = i+1;
+        wire.sensor_timestamp_ns = t;
+        wire.publish_timestamp_ns = t;
+        wire.width = 1920; wire.height = 1080; wire.count = 1;
+        auto& tr = wire.tracks[0];
+        tr.uuid_lo = 7; tr.display_index = 1; tr.state = 1; tr.class_id = 1;
+        std::memcpy(tr.class_name, "person", 6);
+        tr.detector_confidence = tr.track_confidence = .99;
+        tr.visible_frames = 30;
+        tr.bbox[0] = (u-40)/1920; tr.bbox[2] = (u+40)/1920;
+        tr.bbox[1] = (v-fraction*160)/1080; tr.bbox[3] = tr.bbox[1]+160./1080;
+        tr.anchor[0] = u/1920; tr.anchor[1] = (v+(.45-fraction)*160)/1080;
+        tracks::PerceptionHeader h{};
+        std::memcpy(h.magic, "OTP1", 4); h.version = 1; h.header_size = sizeof(h);
+        h.session_lo = 123; h.track_lo = 7; h.generation = 1; h.track_set_sequence = i+1;
+        h.state = h.valid = 1;
+        std::copy(std::begin(tr.bbox), std::end(tr.bbox), h.bbox);
+        std::copy(std::begin(tr.anchor), std::end(tr.anchor), h.anchor);
+        h.detector_score = h.association_quality = h.identity_confidence = .99;
+        std::array<uint8_t, tracks::kPerceptionWireSize> bytes{};
+        std::memcpy(bytes.data(), &h, sizeof(h));
+        std::memcpy(bytes.data()+sizeof(h), &wire, sizeof(wire));
+        tracks::TrackSet decoded;
+        ASSERT_TRUE(tracks::decode_perception_frame(bytes.data(), bytes.size(), decoded));
+        ASSERT_TRUE(decoded.observation.native);
+        r.loop().feed_track_set(decoded, t);
+      }
+      r.loop().step(t, kDtNs);
+      ASSERT_NE(r.loop().phase(), Phase::Fault) << r.loop().fault_reason();
+    }
+    const auto& q = r.loop().last_positions();
+    const Mat3 actual = Mat3::rot_z(q[1])*Mat3::rot_y(q[0])*cfg.kinematics.R_PC;
+    double u, v;
+    r.cam().ray_to_pixel(actual.transposed()*target, u, v);
+    const double expected_u = enabled ? align.u_norm*1920 : cfg.intrinsics.cx;
+    const double expected_v = enabled ? align.v_norm*1080 : cfg.intrinsics.cy;
+    EXPECT_LT(std::hypot(u-expected_u, v-expected_v), 2.0);
+    if (enabled) {
+      const Vec3 delta = target-actual*align.origin_camera;
+      const Vec3 direction = actual*align.direction_camera;
+      EXPECT_LT((delta-direction*delta.dot(direction)).norm()*1000, 4.0);
+    }
+    const auto snap = r.loop().telemetry().snapshot();
+    RecordProperty("alignment_telemetry", web::format_telemetry(snap));
+    std::cout << "alignment scenario enabled=" << enabled << " fraction=" << fraction
+              << " final_image_error_px=" << std::hypot(u-expected_u, v-expected_v) << '\n';
+    EXPECT_TRUE(snap.target_aim_valid);
+    EXPECT_STREQ(snap.target_aim_source, "box_fraction");
+    EXPECT_EQ(snap.laser_alignment.valid, enabled);
+    EXPECT_DOUBLE_EQ(snap.aim_options.y_fraction, fraction);
+    EXPECT_GT(snap.tracking_config_revision, 0u);
+    EXPECT_NE(web::format_telemetry(snap).find("\"range_measured\":false"), std::string::npos);
+    // A startup setter must not silently disagree with an already-active tracker.
+    EXPECT_NO_THROW(r.loop().set_tracking_config(cfg, false));
+    auto changed = cfg;
+    changed.aim.y_fraction = .3;
+    EXPECT_THROW(r.loop().set_tracking_config(changed, false), std::logic_error);
+    for (int i = 0; i < 600; ++i, t += kDtNs) r.loop().step(t, kDtNs);
+    EXPECT_NE(r.loop().telemetry().snapshot().mode_phase, "TRACK");
+    EXPECT_NE(r.loop().phase(), Phase::Fault);
+  }
+}
 
 TEST(TrackingTimestamps, UsesFeedbackTimeAndDoesNotInventNewerPoseSamples) {
   const auto cfg = make_tracking_cfg(false);

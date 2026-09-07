@@ -18,6 +18,8 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include "geometry/laser_alignment.hpp"
+#include "tracking/aim_point.hpp"
 #include <vector>
 
 #include "common/types.hpp"
@@ -220,6 +222,12 @@ struct TelemetrySnapshot {
   double target_aim_y_norm = 0.0;
   bool target_aim_valid = false;
   bool target_aim_is_head = false;
+  const char* target_aim_source = "none";
+  bool target_aim_box_clipped = false;
+  uint64_t tracking_config_revision = 0;
+  tracking::AimOptions aim_options;
+  geo::LaserAlignmentConfig alignment_config;
+  geo::LaserAlignment laser_alignment;
 
   // The direction the AUTO_TRACK intent is actually built from, and what it is worth.
   //

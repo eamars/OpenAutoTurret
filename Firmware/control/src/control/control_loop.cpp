@@ -174,6 +174,11 @@ bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>&
 
 bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
                                   std::string& err) {
+  const auto alignment = geo::laser_alignment(cfg_in.alignment, cfg_in.intrinsics);
+  if ((alignment.enabled && !alignment.valid) || !tracking::valid_aim_options(cfg_in.aim)) {
+    err = alignment.enabled && !alignment.valid ? alignment.reason : "invalid aim point policy";
+    return false;
+  }
   if (tracking_) {
     err = "tracking already enabled";
     return false;
@@ -1816,8 +1821,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.cmd_ack_safety_state = last_ack_.safety_state;
     snap.cmd_ack_seq = last_ack_.seq;
     // Vision transport (observe-only; the ingest thread owns these counters).
-    if (vision_link_) {
-      const vision::VisionLink::Stats vs = vision_link_->stats();
+    {
+      // Calibration and controller state exist without a transport (offline simulation,
+      // or a disconnected camera). Only transport counters depend on VisionLink.
+      const vision::VisionLink::Stats vs = vision_link_ ? vision_link_->stats() : vision::VisionLink::Stats{};
       snap.vision_connected = vs.connected;
       snap.vision_frames = vs.frames;
       snap.vision_dropped = vs.dropped;
@@ -1831,6 +1838,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // stays false and the page says the reticle is unclosed rather than drawing it anyway.
     const geo::CameraIntrinsics& ci = tracking_cfg_.intrinsics;
     snap.camera_intrinsics_valid = ci.valid();
+    snap.tracking_config_revision = tracking_config_revision_;
+    snap.aim_options = tracking_cfg_.aim;
+    snap.alignment_config = tracking_cfg_.alignment;
+    snap.laser_alignment = geo::laser_alignment(tracking_cfg_.alignment, ci);
     snap.camera_fx_px = ci.fx;
     snap.camera_fy_px = ci.fy;
     snap.camera_cx_px = ci.cx;
@@ -1886,6 +1897,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       snap.target_aim_y_norm = as.v_norm;
       snap.target_aim_valid = as.valid;
       snap.target_aim_is_head = as.head;
+      snap.target_aim_source = as.source;
+      snap.target_aim_box_clipped = as.box_clipped;
     }
     snap.vision_sensor_age_ms =
         (vs.last_sensor_ns > 0 && now_ns >= vs.last_sensor_ns)
@@ -2463,6 +2476,7 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
       in.has_los = true;
       in.los_az_rad = az;
       in.los_el_rad = el;
+      in.sight_camera = tracking_->alignment().sight_camera;
       // §19: the derating rides on the intent, so telemetry shows what was asked for
       // beside what was allowed, and an operator can see the turret was deliberately
       // gentle rather than wondering whether it was failing.

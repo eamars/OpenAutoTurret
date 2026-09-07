@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "tracking/aim_point.hpp"
+#include "geometry/laser_alignment.hpp"
 
 namespace ota::config {
 
@@ -135,6 +137,7 @@ struct TrackingConfig {
   // behaviour that has been measured, and this changes the point the loop servos against.
   bool aim_at_head = false;
   double head_fraction_from_top = 0.22;  // fraction of box height below the top edge
+  tracking::AimOptions aim_point;  // Legacy mode means no new policy block was supplied.
   // §13.3 actuation horizon: control + motor-response latency the estimator
   // predicts across (ms each).
   int control_delay_ms = 20;
@@ -288,6 +291,7 @@ struct TurretConfig {
   HomingConfig homing;
   HomingPlanConfig homing_plan;
   TrackingConfig tracking;
+  geo::LaserAlignmentConfig alignment;
   VisionConfig vision;
   ShutdownConfig shutdown;
   SafetyConfig safety;
