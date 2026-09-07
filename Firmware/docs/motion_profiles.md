@@ -88,7 +88,7 @@ are not competing tuning controls in a new configuration.
 Homing, parking, payload verification and fault stopping are supervisory
 operations, not additional operator modes. Their existing commissioned
 settings and execution paths are preserved, including coarse/fine/backoff
-homing speeds 5/3/3°/s and park/verification speeds 10/2°/s. Giving their
+homing speeds 5/3/3°/s and park/verification speeds 3/2°/s. Giving their
 position-mode/direct-velocity paths a new acceleration contract is the next
 stage and requires separate physical validation; this change does not pretend
 they already enforce the service profile contract.

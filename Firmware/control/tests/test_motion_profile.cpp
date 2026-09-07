@@ -42,7 +42,7 @@ TEST(MotionConfig, StationTargetsUseServiceMaximumAndKeepOtherModesIndependent) 
   }
   EXPECT_DOUBLE_EQ(loaded.config.homing.contact.coarse_speed_deg_s,5);
   EXPECT_DOUBLE_EQ(loaded.config.homing.contact.fine_speed_deg_s,3);
-  EXPECT_DOUBLE_EQ(loaded.config.shutdown.speed_deg_s,10);
+  EXPECT_DOUBLE_EQ(loaded.config.shutdown.speed_deg_s,3);
   EXPECT_DOUBLE_EQ(loaded.config.shutdown.verify_speed_deg_s,2);
 }
 

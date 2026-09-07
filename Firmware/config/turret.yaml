@@ -222,7 +222,7 @@ shutdown:
   pos_tolerance_deg: 0.5
   vel_tolerance_deg_s: 1.0
   dwell_ms: 500
-  speed_deg_s: 10
+  speed_deg_s: 3
   # Verify/Dwell position-mode hold speed limit (deg/s). MUST be non-zero:
   # the CyberGear position loop is PINNED at LimitSpd=0, so a 0-limit hold
   # can never pull an axis back into the §33.2 window. Evidence (p3,
