@@ -449,7 +449,9 @@ TEST(Config, ParkModesReachTheControllerAndRejectInvalidChoices) {
     y.insert(at, "  yaw_park_mode: soft_center\n  pitch_park_mode: " +
                  std::string(mode) + "\n  park_end_clearance_deg: 5\n");
     auto r = ota::config::load_turret_config(write_file("park_modes.yaml", y));
-    ASSERT_TRUE(r.ok);
+    std::string errors;
+    for (const auto& error : r.errors) errors += error + "; ";
+    ASSERT_TRUE(r.ok) << "mode=" << mode << " errors: " << errors;
     const auto cfg = ota::wire::make_control_cfg(r.config);
     EXPECT_EQ(cfg.park.target_mode[0], mode);
     EXPECT_EQ(cfg.park.target_mode[1], "soft_center");
