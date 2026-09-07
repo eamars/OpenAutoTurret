@@ -29,6 +29,8 @@ struct SystemCommandState {
   bool moving = false;            // currently executing a motion phase
   bool shutdown_or_parking = false;
   bool recoverable_park_failure = false;
+  bool motor_recovery_active = false;
+  bool motor_recovery_allowed = false;
   // Holding the safe ready pose (homing sequence finished). Homing passes
   // through Hold between stages, so `moving` alone is not enough for checks
   // that start from wherever the station happens to be.
@@ -66,6 +68,9 @@ inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
                                       const std::string& arg = "") {
   CommandResult r;
+  if (s.motor_recovery_active && command != "hold" && command != "stop_motion") {
+    r.error = "motor recovery active; wait or Stop Motion to cancel"; return r;
+  }
   if (s.shutdown_or_parking && command != "request_shutdown") {
     r.error = "shutdown/parking already accepted; Home and motion commands unavailable";
     return r;
@@ -103,6 +108,11 @@ inline CommandResult validate_command(const SystemCommandState& s,
   if (command == "request_park" || command == "request_shutdown") {
     // Safe operations: always allowed (parking is the recovery path).
     r.ok = true;
+    return r;
+  }
+  if (command == "recover_motors") {
+    r.ok = s.motor_recovery_allowed;
+    if (!r.ok) r.error = "motor recovery requires Fault, Idle or Parked";
     return r;
   }
   // Motion/calibration commands are locked out while faulted.

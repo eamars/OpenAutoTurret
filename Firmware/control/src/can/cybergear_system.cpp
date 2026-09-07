@@ -1,6 +1,7 @@
 #include "can/cybergear_system.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <spdlog/spdlog.h>
 
 #include "can/socketcan_bus.hpp"
@@ -191,6 +192,9 @@ void CyberGearSystem::start_watchdog() {
   heartbeat();
   watchdog_ = std::thread([this] {
     while (!watchdog_stop_.load()) {
+      // Assessment, latching and STOP writes share the re-arm/command gate.
+      // A watchdog decision made before recovery must not stop a later enable.
+      std::unique_lock command_lock(command_mutex_);
       const auto now = now_monotonic_ns();
       const auto heartbeat_age = now - heartbeat_ns_.load();
       bool trip = heartbeat_age > 100000000LL;
@@ -202,13 +206,15 @@ void CyberGearSystem::start_watchdog() {
       }
       bool first_trip = false;
       if (trip) {
-        std::lock_guard lock(command_mutex_);
         first_trip = !motion_inhibited_.exchange(true);
       }
       if (motion_inhibited_.load()) {
-        send_stop(AxisId::Pitch);
-        send_stop(AxisId::Yaw);
+        for (auto a : {AxisId::Pitch, AxisId::Yaw}) {
+          const auto f = cybergear::make_stop(cfg_.host_can_id, motor_id(a));
+          if (bus_) bus_->send(f.id, f.data, nullptr);
+        }
       }
+      command_lock.unlock();
       if (first_trip) {
         // Record the evidence after issuing both stops. A generic fault label
         // cannot distinguish a stalled host from lost feedback or a drive fault.
@@ -294,6 +300,37 @@ bool CyberGearSystem::send_enable(AxisId axis, std::string* err) {
 bool CyberGearSystem::send_stop(AxisId axis, std::string* err) {
   auto f = cybergear::make_stop(cfg_.host_can_id, motor_id(axis));
   return send(f.id, f.data, err);
+}
+
+bool CyberGearSystem::send_clear_fault(AxisId axis, std::string* err) {
+  auto f = cybergear::make_stop(cfg_.host_can_id, motor_id(axis));
+  f.data[0] = 1;  // official COMM_TYPE_4 fault clear; does not enable or set zero
+  return send(f.id, f.data, err);
+}
+
+void CyberGearSystem::inhibit_motion() {
+  std::lock_guard lock(command_mutex_);
+  motion_inhibited_.store(true);
+}
+
+bool CyberGearSystem::finish_motor_recovery(double max_temp, std::string& err) {
+  std::lock_guard lock(command_mutex_);
+  const auto now = now_monotonic_ns();
+  if (!bus_ || !bus_->is_up() || !std::isfinite(max_temp) || max_temp > 75 || max_temp <= 0 ||
+      now - heartbeat_ns_.load() > 100'000'000) {
+    err = "re-arm rejected: transport or control heartbeat unhealthy"; return false;
+  }
+  for (auto a : {AxisId::Pitch, AxisId::Yaw}) {
+    AxisLatest s;
+    if (!axis(a).latest(s) || !s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now ||
+        now - s.rx_ns > 50'000'000 || s.mode != 0 || s.faults ||
+        !std::isfinite(s.q_rad) || !std::isfinite(s.temp_c) || s.temp_c > max_temp) {
+      err = std::string(axis_name(a)) + ": re-arm rejected; stopped feedback changed";
+      return false;
+    }
+  }
+  motion_inhibited_.store(false);
+  return true;
 }
 
 bool CyberGearSystem::send_set_zero(AxisId axis, std::string* err) {

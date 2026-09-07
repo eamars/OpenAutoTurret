@@ -48,10 +48,55 @@ The web/API action `request_shutdown` is **motor parking**, not launcher stop.
 It leaves `controld`, webd and perception running after success or failure.
 Home is rejected while parking runs, and can start a new calibration after
 PARKED or a park-only failure if both drives have fresh, healthy, stationary
-feedback. Hard faults and a latched watchdog still require operator service;
-Home does not clear those safety faults. An explicit launcher stop terminates
+feedback. For a drive fault or latched watchdog, use **MENU → RECOVER MOTORS →
+Confirm**, then **HOME → Confirm Home** after recovery succeeds. Home alone
+does not clear a latched controller fault. An explicit launcher stop terminates
 the services and retains its emergency-disable fallback, reported as PARK FAILED
 when the park was not verified. It must not be mistaken for a successful release.
+
+### Motor fault recovery
+
+`recover_motors` is an explicit operator action, available in Fault, Idle or
+Parked. It inhibits motion, invalidates retained calibration, stops both drives,
+and sends the documented CyberGear `COMM_TYPE_4` fault-clear command (`data[0]=1`)
+once to each motor. This is fault clearing, not a firmware reboot or encoder-zero
+command. It does not automatically retry or resume previous tracking/roaming.
+
+The controller remains online in `phase=recovering`. Before releasing its
+watchdog latch it requires both motors to report disabled, fault-free feedback
+no older than 50 ms, temperatures within the configured limit, and at least ten
+distinct samples per axis spanning a one-second position window of at most
+0.25 degrees. A five-second deadline bounds the attempt. Failure reports
+`RECOVERY FAILED` with the affected feedback gate and keeps motion disabled.
+Missing communication, continuing drive faults, heat, or movement must resolve
+before recovery can succeed; repeatedly resetting cannot repair those causes.
+
+Successful operator recovery leaves `phase=idle`, Manual, motors disabled and
+calibration invalid. Home is a separate confirmed action. Hardware Home also
+runs the same clear/verify sequence before starting the homing plan. Normal
+startup runs it when homing is required; a validated retained calibration still
+avoids unnecessary motor disable and homing. Recovery does not certify a park
+pose or the stability of an unpowered load.
+
+Home and other motion commands are rejected while recovery is running. Stop
+Motion (or Hold during recovery) cancels the attempt and leaves Fault; an
+explicit Recover Motors action can retry later. The 100 ms watchdog remains
+enabled and unchanged. Resetting is not evidence that the recurring feedback
+outage has been repaired. Preserve runtime logs before any launcher restart.
+
+Offline verification, with no physical motors or camera:
+
+```bash
+build/probe-motor-recovery
+PYTHONPATH=. ../run/station-venv/bin/python tools/probe_motor_recovery_service.py \
+  --controld build/control/controld --output ../run/motor-recovery-service
+```
+
+The first probe runs the actual watchdog/backend/UART path against a PTY motor
+emulator, including an existing watchdog latch, silent pitch timeout and retry.
+The second runs the actual controller/web services with simulated motors and
+checks HTTP recovery, command rejection, cancellation, retry and re-homing.
+Neither establishes that the physical feedback-loss mechanism is resolved.
 
 Parking targets are configurable under `shutdown` in `config/turret.yaml`:
 

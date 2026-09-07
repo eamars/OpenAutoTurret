@@ -75,6 +75,7 @@ enum class Phase {
   Parking,  // executing the safe park / shutdown sequence (§33)
   Parked,   // de-energized at the park pose (power-safe)
   Fault,    // fault-locked: controlled stop commanded, no further motion
+  Recovering, // disabled motor fault clear and feedback verification
   // Phase 9: payload response check (§27, §31.3) — small moves in the safe
   // central region, one axis at a time.
   PayloadCheck,
@@ -88,6 +89,7 @@ inline const char* phase_name(Phase p) {
     case Phase::Parking: return "parking";
     case Phase::Parked:  return "parked";
     case Phase::Fault:   return "fault";
+    case Phase::Recovering: return "recovering";
     case Phase::PayloadCheck: return "payload_check";
   }
   return "?";
@@ -201,6 +203,7 @@ class ControlLoop {
 
   // --- phase setup (slow; called by the boot FSM / main, not per cycle) ---
   bool start_homing(HomingPlan plan, std::string& err);
+  bool start_motor_recovery(std::string& err, bool then_home = false);
   void set_homing_factory(std::function<HomingPlan()> factory) { homing_factory_ = std::move(factory); }
   bool restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
                               const std::array<AxisLimits, 2>& limits, std::string& err);
@@ -460,6 +463,7 @@ class ControlLoop {
   TimeNs park_log_ns_ = 0;
   TimeNs park_deadline_ns_ = 0;
   bool park_failed_ = false;
+  bool recovery_then_home_ = false;
   void fail_parking(const std::string& reason);
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).

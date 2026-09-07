@@ -13,12 +13,27 @@
 #include <cmath>
 
 #include "control/motor_backend.hpp"
+#include "control/motor_recovery_check.hpp"
 
 namespace ota::sim {
 
 class SimMotorBackend : public MotorBackend {
  public:
   explicit SimMotorBackend(double dt_s = 0.005) : dt_(dt_s) {}
+  void set_recovery_before_homing(bool enabled) { pre_home_recovery_ = enabled; }
+  bool recovery_before_homing() const override { return pre_home_recovery_; }
+  bool begin_motor_recovery(std::string&) override {
+    for (auto a : {AxisId::Pitch, AxisId::Yaw}) deenergize(a);
+    recovery_begin_pending_ = true;
+    return true;
+  }
+  Transition poll_motor_recovery(TimeNs now, double max_temp, std::string& err) override {
+    if (recovery_begin_pending_) { recovery_.begin(now); recovery_begin_pending_ = false; }
+    std::array<AxisSnapshot, kAxisCount> samples;
+    for (int i = 0; i < kAxisCount; ++i) samples[i] = snapshot(static_cast<AxisId>(i), now);
+    return recovery_.observe(now, samples, max_temp, err);
+  }
+  void cancel_motor_recovery() override { recovery_begin_pending_ = false; recovery_.cancel(); }
 
   // --- configuration / test hooks -----------------------------------------
   void set_stops(AxisId a, double low, double high) {
@@ -115,6 +130,7 @@ class SimMotorBackend : public MotorBackend {
     s.torque_nm = ax.torque;
     s.temp_c = ax.temp_c;
     s.faults = ax.faults;
+    s.disabled = ax.deenergized;
     s.in_position_mode = ax.in_position_mode;
     s.in_speed_mode = ax.in_speed_mode;
     return s;
@@ -139,6 +155,9 @@ class SimMotorBackend : public MotorBackend {
   bool in_speed_mode(AxisId a) const { return axes_[ix(a)].in_speed_mode; }
 
  private:
+  MotorRecoveryCheck recovery_;
+  bool recovery_begin_pending_ = false;
+  bool pre_home_recovery_ = false;
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   // Advance the plant by dt_. Models a position-mode CyberGear: the position
   // converges smoothly to the reference (first-order, tau ~ 50 ms) subject to

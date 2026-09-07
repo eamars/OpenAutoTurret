@@ -71,7 +71,7 @@ bool ControlLoop::enter_speed_mode_all(
 }
 
 bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
-  if (phase_ == Phase::Parking) {
+  if (phase_ == Phase::Parking || phase_ == Phase::Recovering) {
     err = "Home unavailable: shutdown/parking already accepted";
     return false;
   }
@@ -129,6 +129,41 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   limits_ = {};
   models_ = {};
   phase_ = Phase::Homing;
+  if (backend_->recovery_before_homing()) return start_motor_recovery(err, true);
+  return true;
+}
+
+bool ControlLoop::start_motor_recovery(std::string& err, bool then_home) {
+  if (phase_ == Phase::Recovering || phase_ == Phase::Parking ||
+      (!then_home && phase_ != Phase::Fault && phase_ != Phase::Idle && phase_ != Phase::Parked)) {
+    err = "motor recovery requires Fault, Idle or Parked; another routine must finish first";
+    return false;
+  }
+  spdlog::warn("motor recovery requested: previous phase={} fault='{}'; clear and verify disabled drives{}",
+               phase_name(phase_), fault_reason_, then_home ? " before homing" : "");
+  disable_tracking();
+  manual_.cancel(now_ns_);
+  homed_ = at_ready_ = false;
+  limits_ = {}; models_ = {};
+  pending_homing_ds_.reset();
+  park_.reset(); park_failed_ = false;
+  shutdown_requested_.store(false);
+  backend_->invalidate_calibration();
+  recovery_then_home_ = then_home;
+  if (!then_home) {
+    homing_.reset();
+    startup_mode_applied_ = true;
+    mode_mgr_.stop_motion(mode_context());
+    sync_controllers_to_mode(OperatingMode::Manual);
+  }
+  if (!backend_->begin_motor_recovery(err)) {
+    deenergize_all();
+    fault_reason_ = "RECOVERY FAILED: " + err;
+    phase_ = Phase::Fault;
+    return false;
+  }
+  fault_reason_.clear();
+  phase_ = Phase::Recovering;
   return true;
 }
 
@@ -148,7 +183,7 @@ bool ControlLoop::start_hold(std::string& err) {
 
 bool ControlLoop::start_parking(std::string& err) {
   if (phase_ == Phase::Parking || phase_ == Phase::Parked) return true;
-  if (phase_ == Phase::Homing || phase_ == Phase::Fault) {
+  if (phase_ == Phase::Homing || phase_ == Phase::Fault || phase_ == Phase::Recovering) {
     err = "parking unavailable during homing or fault; Home is required for recovery";
     return false;
   }
@@ -344,9 +379,10 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
 
 Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   backend_->heartbeat();
-  if (backend_->watchdog_fault()) {
+  if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
     deenergize_all();
-    fault("independent motor watchdog: control deadline, feedback, or motor health");
+    if (phase_ != Phase::Fault)
+      fault("independent motor watchdog: control deadline, feedback, or motor health");
   }
   now_ns_ = now_ns;
   // Commands are executed inside the cycle and need a timestamp to record a selection
@@ -497,7 +533,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   // pose, §27 verification at rest, then READY_HOLD), so "hold" reverts to its v1
   // meaning until a mode moves it somewhere else.
   if (mode_mgr_.supervisory() != SupervisoryState::Ready) mode_has_moved_ = false;
-  mode_mgr_.notify_supervisory(phase_ == Phase::Homing    ? SupervisoryState::Homing
+  mode_mgr_.notify_supervisory((phase_ == Phase::Homing || phase_ == Phase::Recovering) ? SupervisoryState::Homing
                                : phase_ == Phase::Parking ? SupervisoryState::Parking
                                : phase_ == Phase::Fault   ? SupervisoryState::Fault
                                : (phase_ == Phase::Idle || phase_ == Phase::Parked)
@@ -892,7 +928,33 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     q_ref[i] = sp[i].q_rad;
     lim[i] = 0.0;
   }
+  const bool recovery_cycle = phase_ == Phase::Recovering;
   switch (phase_) {
+    case Phase::Recovering: {
+      std::string detail;
+      const auto result = backend_->poll_motor_recovery(now_ns, cfg_.motor_overtemp_c, detail);
+      if (result == MotorBackend::Transition::Failed) {
+        backend_->cancel_motor_recovery();
+        deenergize_all();
+        phase_ = Phase::Fault;
+        fault_reason_ = "RECOVERY FAILED: " + detail;
+        recovery_then_home_ = false;
+        spdlog::error("{}; motion remains disabled", fault_reason_);
+        ack_command("recover_motors", false, fault_reason_);
+      } else if (result == MotorBackend::Transition::Complete) {
+        fault_reason_.clear();
+        v_est_ = {}; a_est_ = {};
+        for (auto& servo : speed_servo_) servo.reset();
+        phase_ = recovery_then_home_ ? Phase::Homing : Phase::Idle;
+        spdlog::info("motor recovery complete: {}; {}", detail,
+                     recovery_then_home_ ? "starting requested homing" : "Home required; motors remain disabled");
+        ack_command("recover_motors", true, recovery_then_home_
+            ? "motor recovery verified; starting homing"
+            : "motor recovery verified; disabled and unhomed; select Home to recalibrate");
+        recovery_then_home_ = false;
+      }
+      break;
+    }
     case Phase::Homing: {
       if (homing_init_axis_ < kAxisCount) {
         const auto axis = static_cast<AxisId>(homing_init_axis_);
@@ -1304,6 +1366,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   for (int i = 0; i < kAxisCount; ++i) {
     const AxisId a = static_cast<AxisId>(i);
     double qr = q_ref[i], ls = lim[i];
+    if (recovery_cycle) continue;  // never command from pre-recovery snapshots
     bool do_command = true;
     switch (last_decision_.action) {
       case SafetyAction::Allow:
@@ -1442,9 +1505,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
 
   // 7. Fault transitions (a fault is sticky; it needs a manual reset).
-  if (any_disable) {
+  if (!recovery_cycle && any_disable) {
     fault(last_decision_.reason);
-  } else if (last_decision_.action == SafetyAction::FaultStop) {
+  } else if (!recovery_cycle && last_decision_.action == SafetyAction::FaultStop) {
     fault(last_decision_.reason);
   }
 
@@ -2125,6 +2188,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     std::lock_guard<std::mutex> lk(command_mutex_);
     command_state_.homed = homed_;
     command_state_.shutdown_or_parking = phase_ == Phase::Parking;
+    command_state_.motor_recovery_active = phase_ == Phase::Recovering;
+    command_state_.motor_recovery_allowed = phase_ == Phase::Fault || phase_ == Phase::Idle || phase_ == Phase::Parked;
     command_state_.recoverable_park_failure = park_failed_ && !backend_->watchdog_fault();
     command_state_.fault = (phase_ == Phase::Fault);
     // Homing is a sequence: between stages the phase is Hold while the station
@@ -2435,6 +2500,13 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
 
 ModeResult ControlLoop::stop_motion() {
   startup_mode_applied_ = true;
+  if (phase_ == Phase::Recovering) {
+    backend_->cancel_motor_recovery();
+    recovery_then_home_ = false;
+    deenergize_all();
+    phase_ = Phase::Fault;
+    fault_reason_ = "motor recovery cancelled; retry Recover Motors when ready";
+  }
   if (phase_ == Phase::Homing || phase_ == Phase::Parking) {
     deenergize_all();
     phase_ = Phase::Idle;
@@ -3244,6 +3316,16 @@ void ControlLoop::disable_tracking() {
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
   std::string err;
+  if (phase_ == Phase::Recovering) {
+    if (name == "stop_motion" || name == "hold") stop_motion();
+    else ack_command(name, false, "motor recovery active; wait or Stop Motion to cancel");
+    return;
+  }
+  if (name == "recover_motors") {
+    const bool ok = start_motor_recovery(err);
+    ack_command(name, ok, ok ? "motor recovery accepted; verifying disabled feedback" : err);
+    return;
+  }
   if (phase_ == Phase::Parking &&
       name != "request_shutdown") {
     ack_command(name, false, "shutdown/parking already accepted; Home and motion commands unavailable");

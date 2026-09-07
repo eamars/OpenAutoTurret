@@ -342,6 +342,86 @@ TEST(CommandAck, StopMotionAnswersAndWorksFromAnyMode) {
       << "it should say what it cancelled: " << h.loop->last_command_ack().reason;
 }
 
+TEST(MotorRecovery, FaultRecoveryStaysDisabledUntilExplicitHome) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.loop->set_homing_factory([] { return make_plan(); });
+  h.sim->set_faults(AxisId::Pitch, 1);
+  h.step(3);
+  ASSERT_EQ(h.loop->phase(), Phase::Fault);
+  h.sim->set_faults(AxisId::Pitch, 0);  // transient drive fault no longer present
+  h.run("recover_motors");
+  ASSERT_EQ(h.loop->phase(), Phase::Recovering);
+  EXPECT_FALSE(h.loop->homed());
+  h.run("start_homing");
+  EXPECT_FALSE(h.loop->last_command_ack().accepted);
+  h.step(230);
+  EXPECT_EQ(h.loop->phase(), Phase::Idle);
+  EXPECT_TRUE(h.loop->fault_reason().empty());
+  EXPECT_FALSE(h.loop->homed());
+  EXPECT_FALSE(h.sim->in_speed_mode(AxisId::Pitch));
+  EXPECT_FALSE(h.sim->in_position_mode(AxisId::Yaw));
+  h.run("start_homing");
+  EXPECT_TRUE(h.loop->last_command_ack().accepted);
+  EXPECT_TRUE(run_to_ready(*h.loop, *h.sim, h.t));
+}
+
+TEST(MotorRecovery, SilencePersistentFaultAndHeatCannotBeClearedBySoftware) {
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    HomedLoop h(false);
+    if (scenario == 0) h.sim->set_feedback_ok(AxisId::Pitch, false);
+    if (scenario == 1) h.sim->set_faults(AxisId::Pitch, 1);
+    if (scenario == 2) h.sim->set_temp(AxisId::Pitch, 90);
+    h.step(3);  // publish the authoritative state before the web submission
+    h.run("recover_motors");
+    ASSERT_EQ(h.loop->phase(), Phase::Recovering);
+    h.step(1100);
+    EXPECT_EQ(h.loop->phase(), Phase::Fault);
+    EXPECT_NE(h.loop->fault_reason().find("RECOVERY FAILED"), std::string::npos);
+    EXPECT_FALSE(h.sim->in_speed_mode(AxisId::Pitch));
+    EXPECT_FALSE(h.loop->homed());
+  }
+}
+
+TEST(MotorRecovery, StopCancelsAndDoesNotCompleteLater) {
+  HomedLoop h(false);
+  h.step(3);
+  h.run("recover_motors");
+  ASSERT_EQ(h.loop->phase(), Phase::Recovering);
+  h.run("stop_motion");
+  h.step(1100);
+  EXPECT_EQ(h.loop->phase(), Phase::Fault);
+  EXPECT_NE(h.loop->fault_reason().find("cancelled"), std::string::npos);
+  h.run("recover_motors");
+  h.step(230);
+  EXPECT_EQ(h.loop->phase(), Phase::Idle);
+}
+
+TEST(MotorRecovery, DriftingDisabledFeedbackDoesNotRearm) {
+  HomedLoop h(false);
+  h.step(3);
+  h.run("recover_motors");
+  for (int i = 0; i < 1100; ++i) {
+    h.sim->set_position(AxisId::Pitch, .01 * i);
+    h.step(1);
+  }
+  EXPECT_EQ(h.loop->phase(), Phase::Fault);
+  EXPECT_NE(h.loop->fault_reason().find("RECOVERY FAILED"), std::string::npos);
+  EXPECT_FALSE(h.loop->homed());
+}
+
+TEST(MotorRecovery, PreHomingRecoveryDoesNotEnableBeforeVerification) {
+  HomedLoop h(false);
+  h.sim->set_recovery_before_homing(true);
+  std::string error;
+  ASSERT_TRUE(h.loop->start_homing(make_plan(), error));
+  EXPECT_EQ(h.loop->phase(), Phase::Recovering);
+  h.step(100);
+  EXPECT_EQ(h.loop->phase(), Phase::Recovering);
+  EXPECT_FALSE(h.sim->in_speed_mode(AxisId::Yaw));
+  EXPECT_TRUE(run_to_ready(*h.loop, *h.sim, h.t));
+}
+
 TEST(ControlLoop, HoldKeepsItsLatchedReferenceAcrossEncoderJitter) {
   HomedLoop h;
   ASSERT_TRUE(h.ready);

@@ -19,6 +19,7 @@
 
 #include "can/cybergear_system.hpp"
 #include "control/motor_backend.hpp"
+#include "control/motor_recovery_check.hpp"
 
 namespace ota {
 
@@ -40,6 +41,10 @@ class CanMotorBackend : public MotorBackend {
   bool adopt_running_mode(AxisId axis, bool position, std::string& err, double speed_ki = -1, double speed_kp = 1) override;
   void heartbeat() override { system_.heartbeat(); }
   bool watchdog_fault() const override { return system_.motion_inhibited(); }
+  bool recovery_before_homing() const override { return true; }
+  bool begin_motor_recovery(std::string& err) override;
+  Transition poll_motor_recovery(TimeNs now, double max_temp, std::string& err) override;
+  void cancel_motor_recovery() override { recovery_.cancel(); system_.inhibit_motion(); }
   Transition transition_mode(AxisId axis, bool position, double limit,
                              TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1) override;
 
@@ -62,6 +67,7 @@ class CanMotorBackend : public MotorBackend {
 
   can::CyberGearSystem& system_;
   int timeout_ms_;
+  MotorRecoveryCheck recovery_;
   struct ModeTransition {
     int stage = 0;
     AxisId axis = AxisId::Pitch;

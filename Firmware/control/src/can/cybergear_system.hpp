@@ -46,6 +46,8 @@ class CyberGearSystem {
   void start_watchdog();
   void heartbeat() { heartbeat_ns_.store(now_monotonic_ns()); }
   bool motion_inhibited() const { return motion_inhibited_.load(); }
+  void inhibit_motion();
+  bool finish_motor_recovery(double max_temp, std::string& err);
   bool open(const CyberGearSystemConfig& cfg, std::string& err,
             std::unique_ptr<CanTransport> transport = {});
   void close();
@@ -72,6 +74,7 @@ class CyberGearSystem {
   }
   bool send_enable(AxisId axis, std::string* err = nullptr);
   bool send_stop(AxisId axis, std::string* err = nullptr);
+  bool send_clear_fault(AxisId axis, std::string* err = nullptr);
   bool send_set_zero(AxisId axis, std::string* err = nullptr);
 
   // --- State access ---------------------------------------------------------

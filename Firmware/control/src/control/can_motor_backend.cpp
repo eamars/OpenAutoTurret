@@ -11,6 +11,32 @@
 
 namespace ota {
 
+bool CanMotorBackend::begin_motor_recovery(std::string& err) {
+  system_.inhibit_motion();
+  system_.cancel_register_read();
+  deenergize(AxisId::Pitch); deenergize(AxisId::Yaw);
+  recovery_.begin(now_monotonic_ns());
+  bool ok = true;
+  for (auto a : {AxisId::Pitch, AxisId::Yaw}) {
+    std::string e;
+    if (!system_.send_clear_fault(a, &e)) {
+      ok = false; err = std::string(axis_name(a)) + ": fault-clear write failed: " + e;
+    }
+  }
+  if (!ok) recovery_.cancel();
+  return ok;
+}
+
+MotorBackend::Transition CanMotorBackend::poll_motor_recovery(
+    TimeNs now, double max_temp, std::string& err) {
+  std::array<AxisSnapshot, kAxisCount> samples;
+  for (int i = 0; i < kAxisCount; ++i) samples[i] = snapshot(static_cast<AxisId>(i), now);
+  const auto result = recovery_.observe(now, samples, max_temp, err);
+  if (result == Transition::Complete && !system_.finish_motor_recovery(max_temp, err))
+    return Transition::Failed;
+  return result;
+}
+
 namespace {
 constexpr int kRecipeDelayMs = 50;  // CyberGear needs ~50 ms after a stop.
 // Every recipe frame is fire-and-forget: the CyberGear does not ACK register
@@ -390,6 +416,7 @@ AxisSnapshot CanMotorBackend::snapshot(AxisId axis, TimeNs now_ns) {
     s.torque_nm = l.torque_nm;
     s.temp_c = l.temp_c;
     s.faults = l.faults;
+    s.disabled = l.mode == 0;
   }
   s.in_position_mode = in_position_mode_[static_cast<size_t>(axis)];
   s.in_speed_mode = in_speed_mode_[static_cast<size_t>(axis)];

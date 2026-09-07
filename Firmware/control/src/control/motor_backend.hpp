@@ -33,6 +33,7 @@ struct AxisSnapshot {
   double torque_nm = 0.0;
   double temp_c = 25.0;
   uint16_t faults = 0;     // non-zero = hard fault
+  bool disabled = false;  // confirmed by feedback, not by a sent STOP command
   bool in_position_mode = false;  // energized in position mode right now
   bool in_speed_mode = false;     // energized in speed (velocity) mode right now
 };
@@ -71,6 +72,14 @@ class MotorBackend {
   virtual bool watchdog_fault() const { return false; }
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
+  virtual bool recovery_before_homing() const { return false; }
+  virtual bool begin_motor_recovery(std::string& err) {
+    err = "motor recovery unsupported by this backend"; return false;
+  }
+  virtual Transition poll_motor_recovery(TimeNs, double, std::string& err) {
+    err = "motor recovery unsupported by this backend"; return Transition::Failed;
+  }
+  virtual void cancel_motor_recovery() {}
   // Repeated from the control loop. Hardware implements a nonblocking recipe.
   virtual Transition transition_mode(AxisId axis, bool position, double limit,
                                      TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1) {

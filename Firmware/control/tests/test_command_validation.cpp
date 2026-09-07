@@ -38,6 +38,21 @@ TEST(CommandValidation, FaultLocksMotion) {
   EXPECT_FALSE(validate_command(s, "run_test_motion", "1.0").ok);
 }
 
+TEST(CommandValidation, RecoveryDoesNotUnlockMotionAndCannotOverlapRoutines) {
+  SystemCommandState s;
+  s.fault = true; s.motor_recovery_allowed = true;
+  EXPECT_TRUE(validate_command(s, "recover_motors").ok);
+  EXPECT_FALSE(validate_command(s, "start_homing").ok);
+  s.motor_recovery_active = true;
+  EXPECT_FALSE(validate_command(s, "recover_motors").ok);
+  EXPECT_FALSE(validate_command(s, "start_homing").ok);
+  EXPECT_FALSE(validate_command(s, "set_mode", "AUTO_ROAM").ok);
+  EXPECT_TRUE(validate_command(s, "stop_motion").ok);
+  EXPECT_TRUE(validate_command(s, "hold").ok);
+  s.motor_recovery_active = false; s.shutdown_or_parking = true;
+  EXPECT_FALSE(validate_command(s, "recover_motors").ok);
+}
+
 TEST(CommandValidation, NotHomedLocksTracking) {
   SystemCommandState s;  // homed=false
   EXPECT_FALSE(validate_command(s, "start_tracking").ok);

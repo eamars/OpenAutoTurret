@@ -277,9 +277,13 @@ function hudDrawerActions(name, t) {
     // twice. §14 reserves red for stop and fault, so the confirm state - not colour alone - is what
     // signals danger here.
     return [
+      { label: "RECOVER MOTORS", command: "recover_motors", arg: "",
+        kind: t && ["fault", "idle", "parked"].includes(t.phase) ? "danger" : "gated",
+        note: t && t.phase === "recovering" ? "Verifying stopped motor feedback" : "Clear motor faults; stays disabled; Home required afterward" },
       { label: "HOME", command: "start_homing", arg: "",
-        kind: t && t.phase === "parking" ? "gated" : "danger",
-        note: t && t.phase === "parking" ? "PARKING — HOME UNAVAILABLE" : "Recalibrate both axes; recover after parking" },
+        kind: t && ["parking", "recovering"].includes(t.phase) ? "gated" : "danger",
+        note: t && ["parking", "recovering"].includes(t.phase) ? "BUSY — HOME UNAVAILABLE" :
+          t && t.phase === "fault" ? "For motor/watchdog faults, use Recover Motors first" : "Clear/check motors, then recalibrate both axes" },
       { label: "HOLD / PARK", command: "request_park", arg: "", kind: "danger", note: "CONFIRM TWICE" },
       { label: "PARK / MOTOR SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
         note: "Parks motors; web stays online for Home and recovery" }
