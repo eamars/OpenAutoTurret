@@ -23,7 +23,7 @@
 
 #include <cstdint>
 #include <stdexcept>
-#include "geometry/laser_alignment.hpp"
+#include "geometry/bore_alignment.hpp"
 
 #include "control/reference_manager.hpp"
 #include "control/search_planner.hpp"
@@ -49,7 +49,7 @@ class TrackingController {
     geo::CameraIntrinsics intrinsics;
     // Which point inside the target the axis is aimed at (head vs anchor). See aim_point.hpp.
     tracking::AimOptions aim;
-    geo::LaserAlignmentConfig alignment;
+    geo::BoreAlignmentConfig alignment;
     // §13.3 actuation horizon: how far ahead to predict so the setpoint
     // matters when it reaches the motor.
     int64_t control_delay_ns = 20 * 1000 * 1000;      // 20 ms
@@ -71,7 +71,7 @@ class TrackingController {
   explicit TrackingController(Config cfg)
       : cfg_(std::move(cfg)),
         camera_(cfg_.intrinsics),
-        alignment_(geo::laser_alignment(cfg_.alignment, cfg_.intrinsics)),
+        alignment_(geo::bore_alignment(cfg_.alignment, cfg_.intrinsics)),
         solver_(cfg_.kinematics, alignment_.sight_camera),
         estimator_(cfg_.estimator),
         history_pitch_(cfg_.history_capacity),
@@ -325,7 +325,7 @@ class TrackingController {
     return a;
   }
 
-  const geo::LaserAlignment& alignment() const { return alignment_; }
+  const geo::BoreAlignment& alignment() const { return alignment_; }
 
 
  private:
@@ -333,7 +333,7 @@ class TrackingController {
   geo::CameraModel camera_;
   tracking::AimPoint last_aim_point_;
   bool aim_valid_ = false;
-  geo::LaserAlignment alignment_;
+  geo::BoreAlignment alignment_;
   geo::LosJointSolver solver_;
   tracking::TargetEstimator estimator_;
   MotorStateHistory history_pitch_;

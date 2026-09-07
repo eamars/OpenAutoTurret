@@ -13,10 +13,10 @@ the acceptance margin for the lead requirement. Cropping would hide the true fra
 boundary that is not the camera's. So the whole frame is always visible and the letterbox bars are
 the cost, taken deliberately.
 
-The optical-axis marker uses the camera principal point. With virtual laser alignment
-enabled, the main reticle uses the controller's projected laser sight and is amber,
+The optical-axis marker uses the camera principal point. With virtual bore alignment
+enabled, the main reticle uses the controller's projected bore sight and is amber,
 labelled with its assumed depth; the camera centre remains a small separate marker.
-The requested measurement point is a white diamond. No laser range is measured here.
+The requested measurement point is a white diamond. No bore range is measured here.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ function hudAxisNorm(intr) {
 }
 
 // Controller-owned projection; the browser never reconstructs mounting geometry.
-function hudLaserMark(t, stale) {
+function hudBoreMark(t, stale) {
   const a = t && t.alignment;
   if (stale || !a || a.mode !== "manual_depth" || a.valid !== true ||
       a.range_source !== "manual" || a.range_measured !== false ||
@@ -844,10 +844,10 @@ function render(t) {
   // left and right, open centre - and never on the target.
   const intr = t.camera_intrinsics;
   const axis = hudAxisNorm(intr) || { u: 0.5, v: 0.5 };
-  const laser = hudLaserMark(t, stale);
-  const c = hudProject(laser ? laser.u : axis.u, laser ? laser.v : axis.v, lay);
+  const bore = hudBoreMark(t, stale);
+  const c = hudProject(bore ? bore.u : axis.u, bore ? bore.v : axis.v, lay);
   if (c.ok) {
-    const g = laser ? C.amber : C.green, r = 26, gap = 8, len = 12;
+    const g = bore ? C.amber : C.green, r = 26, gap = 8, len = 12;
     const corner = (sx, sy) =>
       '<path d="M ' + (c.x + sx * r) + ' ' + (c.y + sy * gap) + ' L ' + (c.x + sx * r) + ' ' +
       (c.y + sy * r) + ' L ' + (c.x + sx * gap) + ' ' + (c.y + sy * r) + '" fill="none" ' +
@@ -864,15 +864,15 @@ function render(t) {
       '" stroke="' + g + '" stroke-width="3"/>' +
       (intr ? "" : '<text x="' + (c.x + r + 18) + '" y="' + (c.y + 4) + '" class="lbl" ' +
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
-    if (laser) {
+    if (bore) {
       const optical = hudProject(axis.u, axis.v, lay);
       if (optical.ok) layers.reticle += '<circle cx="' + optical.x + '" cy="' + optical.y +
         '" r="3" fill="none" stroke="' + C.dim + '" stroke-width="1"/>';
       layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
-        '" class="lbl" fill="' + C.amber + '">' + laser.label + '</text>';
+        '" class="lbl" fill="' + C.amber + '">' + bore.label + '</text>';
     } else if (t.alignment && t.alignment.mode === "manual_depth") {
       layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
-        '" class="lbl" fill="' + C.amber + '">LASER ALIGNMENT UNAVAILABLE</text>';
+        '" class="lbl" fill="' + C.amber + '">BORE ALIGNMENT UNAVAILABLE</text>';
     }
   }
   layers.sel += hudMeasurementPointSvg(t, lay, stale);
@@ -969,7 +969,7 @@ function render(t) {
   $("g-for").innerHTML = layers.for;
   $("g-tapes").innerHTML = layers.tape;
 
-  // The requested measurement point is a white diamond; the assumed laser sight
+  // The requested measurement point is a white diamond; the assumed bore sight
   // is an amber reticle. The optical axis remains a separate camera-centre mark.
 
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.

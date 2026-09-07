@@ -17,7 +17,7 @@ class AlignmentDesignTest(unittest.TestCase):
         self.intrinsics = model.load_intrinsics(FIRMWARE / 'calibration/camera_intrinsics.yaml')
 
     def test_mount_sign_and_pixel_scale(self):
-        origin, direction = model.laser_geometry(self.config)
+        origin, direction = model.bore_geometry(self.config)
         self.assertEqual(origin, (-0.075, 0.075, 0))
         u, v = model.project(model.beam_point(origin, direction, 10), self.intrinsics)
         self.assertAlmostEqual(u, 949.5825)
@@ -33,7 +33,7 @@ class AlignmentDesignTest(unittest.TestCase):
         self.config['alignment']['mode'] = 'off'
         self.assertEqual(model.configured_sight(self.config), (0, 0, 1))
         report = model.run(self.config, FIRMWARE)
-        self.assertIsNone(report['configured_example']['laser_reticle_px'])
+        self.assertIsNone(report['configured_example']['bore_reticle_px'])
         self.assertFalse(report['configured_example']['range_measured'])
 
     def test_fraction_changes_measurement_without_mutating_anchor(self):
@@ -63,8 +63,8 @@ class AlignmentDesignTest(unittest.TestCase):
             (('alignment', 'assumed_depth_m'), math.nan),
             (('alignment', 'assumed_depth_m'), True),
             (('alignment', 'mode'), 'measured'),
-            (('alignment', 'camera_from_laser_mm', 'right'), math.inf),
-            (('alignment', 'laser_axis_deg', 'up'), 90),
+            (('alignment', 'camera_from_bore_mm', 'right'), math.inf),
+            (('alignment', 'bore_axis_deg', 'up'), 90),
             (('tracking', 'aim_point', 'y_fraction'), 1.1),
             (('tracking', 'aim_point', 'mode'), 'typo'),
         ]
@@ -77,16 +77,16 @@ class AlignmentDesignTest(unittest.TestCase):
             with self.subTest(path=path, value=value), self.assertRaises(ValueError):
                 model.validate_config(config)
 
-    def test_no_projection_for_behind_camera_or_laser(self):
+    def test_no_projection_for_behind_camera_or_bore(self):
         with self.assertRaises(ValueError):
             model.project((0, 0, -1), self.intrinsics)
         with self.assertRaises(ValueError):
             model.beam_point((0, 0, 5), (0, 0, 1), 2)
 
-    def test_positive_laser_angle_projects_right_and_up(self):
-        self.config['alignment']['camera_from_laser_mm'] = dict(right=0, up=0, forward=0)
-        self.config['alignment']['laser_axis_deg'] = dict(right=1, up=2)
-        origin, direction = model.laser_geometry(self.config)
+    def test_positive_bore_angle_projects_right_and_up(self):
+        self.config['alignment']['camera_from_bore_mm'] = dict(right=0, up=0, forward=0)
+        self.config['alignment']['bore_axis_deg'] = dict(right=1, up=2)
+        origin, direction = model.bore_geometry(self.config)
         near = model.project(model.beam_point(origin, direction, 2), self.intrinsics)
         far = model.project(model.beam_point(origin, direction, 100), self.intrinsics)
         self.assertGreater(near[0], self.intrinsics['cx'])

@@ -44,7 +44,7 @@ inline TrackingController::Config make_tracking_config(const TurretConfig& cfg,
   if (cfg.alignment.enabled && detail != "R_P_C loaded from file")
     throw std::invalid_argument("alignment requires valid camera extrinsics: " + detail);
   t.alignment = cfg.alignment;
-  const auto alignment = geo::laser_alignment(t.alignment, t.intrinsics);
+  const auto alignment = geo::bore_alignment(t.alignment, t.intrinsics);
   if (alignment.enabled && !alignment.valid) throw std::invalid_argument(alignment.reason);
   return t;
 }

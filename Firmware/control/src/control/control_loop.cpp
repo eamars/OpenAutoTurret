@@ -174,7 +174,7 @@ bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>&
 
 bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
                                   std::string& err) {
-  const auto alignment = geo::laser_alignment(cfg_in.alignment, cfg_in.intrinsics);
+  const auto alignment = geo::bore_alignment(cfg_in.alignment, cfg_in.intrinsics);
   if ((alignment.enabled && !alignment.valid) || !tracking::valid_aim_options(cfg_in.aim)) {
     err = alignment.enabled && !alignment.valid ? alignment.reason : "invalid aim point policy";
     return false;
@@ -1841,7 +1841,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.tracking_config_revision = tracking_config_revision_;
     snap.aim_options = tracking_cfg_.aim;
     snap.alignment_config = tracking_cfg_.alignment;
-    snap.laser_alignment = geo::laser_alignment(tracking_cfg_.alignment, ci);
+    snap.bore_alignment = geo::bore_alignment(tracking_cfg_.alignment, ci);
     snap.camera_fx_px = ci.fx;
     snap.camera_fy_px = ci.fy;
     snap.camera_cx_px = ci.cx;

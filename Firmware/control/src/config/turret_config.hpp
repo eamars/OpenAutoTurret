@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 #include "tracking/aim_point.hpp"
-#include "geometry/laser_alignment.hpp"
+#include "geometry/bore_alignment.hpp"
 
 namespace ota::config {
 
@@ -291,7 +291,7 @@ struct TurretConfig {
   HomingConfig homing;
   HomingPlanConfig homing_plan;
   TrackingConfig tracking;
-  geo::LaserAlignmentConfig alignment;
+  geo::BoreAlignmentConfig alignment;
   VisionConfig vision;
   ShutdownConfig shutdown;
   SafetyConfig safety;

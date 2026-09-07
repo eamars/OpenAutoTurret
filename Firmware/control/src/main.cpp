@@ -137,8 +137,8 @@ TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
   else if (t.aim.mode == tracking::AimMode::Legacy)
     spdlog::info("legacy aim: native anchor; legacy head override={} at {:.0f}% from top",
                  t.aim.aim_at_head, t.aim.head_fraction_from_top*100);
-  const auto alignment = geo::laser_alignment(t.alignment, t.intrinsics);
-  spdlog::info("laser alignment: {}, assumed depth={} m (no range measurement)",
+  const auto alignment = geo::bore_alignment(t.alignment, t.intrinsics);
+  spdlog::info("bore alignment: {}, assumed depth={} m (no range measurement)",
       alignment.reason, t.alignment.assumed_depth_m);
   return t;
 }

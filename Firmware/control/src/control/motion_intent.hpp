@@ -92,7 +92,7 @@ struct MotionIntent {
   bool has_los = false;
   double los_az_rad = 0.0;
   double los_el_rad = 0.0;
-  // AutoTrack may align a virtual laser sight. All other sources retain optical-axis semantics.
+  // AutoTrack may align a virtual bore sight. All other sources retain optical-axis semantics.
   geo::Vec3 sight_camera{0, 0, 1};
 
   // Joint target (raw rad), for JointPosition and as the fallback for

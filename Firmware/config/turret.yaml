@@ -199,11 +199,11 @@ tracking:
   search_enabled_by_default: false
   target_lost_behavior: hold    # hold | search (§58 params 19-20)
 alignment:
-  # The laser/rangefinder is absent. Enable manual_depth only for an explicitly
+  # The bore/rangefinder is absent. Enable manual_depth only for an explicitly
   # assumed reference plane; the displayed mark is virtual, never a measurement.
   mode: off                  # off | manual_depth
-  camera_from_laser_mm: {right: 75, up: 75, forward: 0}
-  laser_axis_deg: {right: 0, up: 0}  # unmeasured parallel-axis assumption
+  camera_from_bore_mm: {right: 75, up: 75, forward: 0}
+  bore_axis_deg: {right: 0, up: 0}  # unmeasured parallel-axis assumption
   assumed_depth_m: 10         # example camera-axis depth, NOT a measured range
 shutdown:
   # §33.1 safe in-travel park pose: the no-dangle mid-travel pose (the same

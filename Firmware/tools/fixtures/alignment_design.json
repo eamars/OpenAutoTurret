@@ -9,12 +9,12 @@
   },
   "alignment": {
     "mode": "manual_depth",
-    "camera_from_laser_mm": {
+    "camera_from_bore_mm": {
       "right": 75.0,
       "up": 75.0,
       "forward": 0.0
     },
-    "laser_axis_deg": {
+    "bore_axis_deg": {
       "right": 0.0,
       "up": 0.0
     },
