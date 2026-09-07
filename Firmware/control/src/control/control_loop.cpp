@@ -71,14 +71,35 @@ bool ControlLoop::enter_speed_mode_all(
 }
 
 bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
-  if (shutdown_requested() || phase_ == Phase::Parking || phase_ == Phase::Parked) {
+  if (phase_ == Phase::Parking) {
     err = "Home unavailable: shutdown/parking already accepted";
     return false;
   }
   backend_->invalidate_calibration();
-  if (phase_ == Phase::Fault) {
+  if (phase_ == Phase::Fault && !park_failed_) {
     err = "in fault; reset required";
     return false;
+  }
+  if (phase_ == Phase::Parked || park_failed_) {
+    if (backend_->watchdog_fault()) {
+      err = "Home blocked: watchdog is latched; operator service required";
+      return false;
+    }
+    for (int i = 0; i < kAxisCount; ++i) {
+      const auto s = backend_->snapshot(static_cast<AxisId>(i), now_ns_);
+      if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now_ns_ ||
+          now_ns_ - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
+          s.faults || !std::isfinite(s.q_rad) || !std::isfinite(s.temp_c) ||
+          s.temp_c > cfg_.motor_overtemp_c || !std::isfinite(v_est_[i]) ||
+          std::abs(v_est_[i]) > .5*kDeg2Rad) {
+        err = "Home blocked: fresh, healthy, stationary feedback required on both axes";
+        return false;
+      }
+    }
+    fault_reason_.clear();
+    park_failed_ = false;
+    park_.reset();
+    shutdown_requested_.store(false);
   }
   homing_.reset(new HomingPlan(std::move(plan)));
   // Speed mode (velocity) for homing: the drive's own velocity loop holds the
@@ -127,6 +148,10 @@ bool ControlLoop::start_hold(std::string& err) {
 
 bool ControlLoop::start_parking(std::string& err) {
   if (phase_ == Phase::Parking || phase_ == Phase::Parked) return true;
+  if (phase_ == Phase::Homing || phase_ == Phase::Fault) {
+    err = "parking unavailable during homing or fault; Home is required for recovery";
+    return false;
+  }
   if (!homed_) {
     err = "cannot park: not homed (position validity unknown, §38.1)";
     return false;
@@ -140,7 +165,7 @@ bool ControlLoop::start_parking(std::string& err) {
   park_.reset(new ParkController(params, limits_, models_));
   if (park_->failed()) {
     err = park_->fail_reason();
-    fault(err);
+    fail_parking(err);
     return false;
   }
   // The park MOVES run in speed mode (SpdRef, per-axis current limit from
@@ -151,12 +176,37 @@ bool ControlLoop::start_parking(std::string& err) {
   // de-energized 1.4 deg short of the 180 deg target; rehome1: 3.96 deg
   // short). Position mode is entered once, at the ParkController's Verify
   // state, for the §33.2 target-hold (executor, Phase::Parking).
+  double budget_s = 20;
+  for (int i = 0; i < kAxisCount; ++i) {
+    budget_s += 1.5*(limits_[i].q_soft_max_rad-limits_[i].q_soft_min_rad) /
+        (params.speed_deg_s*kDeg2Rad);
+    spdlog::info("park target axis={} mode={} raw={:.6f} logical_deg={:.3f} "
+                 "soft=[{:.6f},{:.6f}] required_margin_deg={:.3f} end_clearance_deg={:.3f}",
+                 axis_name(static_cast<AxisId>(i)), params.target_mode[i],
+                 park_->park_raw_rad(static_cast<AxisId>(i)),
+                 models_[i].raw_to_logical_deg(park_->park_raw_rad(static_cast<AxisId>(i))),
+                 limits_[i].q_soft_min_rad, limits_[i].q_soft_max_rad,
+                 params.min_soft_margin_deg, params.end_clearance_deg);
+  }
+  park_deadline_ns_ = now_ns_ + static_cast<TimeNs>(budget_s*1e9);
+  park_failed_ = false;
   park_init_axis_ = park_verify_axis_ = 0;
   park_pos_mode_entered_ = false;
   park_log_ns_ = 0;
   disable_tracking();
   phase_ = Phase::Parking;
   return true;
+}
+
+void ControlLoop::fail_parking(const std::string& reason) {
+  // Verification failure withholds automatic release. Emergency safety
+  // actions retain their independent disable authority.
+  park_failed_ = true;
+  shutdown_requested_.store(false);
+  phase_ = Phase::Fault;
+  fault_reason_ = "PARK FAILED: " + reason;
+  disable_tracking();
+  spdlog::error("{}; automatic park release withheld; services remain online", fault_reason_);
 }
 
 void ControlLoop::deenergize_all() {
@@ -783,6 +833,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   if (phase_ == Phase::Parking && (park_log_ns_ == 0 || now_ns - park_log_ns_ >= 500'000'000)) {
     for (int i = 0; i < kAxisCount; ++i) {
       const auto& ax = in.axes[i];
+      const auto ev = backend_->park_position_evidence(static_cast<AxisId>(i), now_ns);
+      spdlog::info("park verification axis={} motor_age_ms={} observed_travel_deg={:.3f} independent_travel_deg={:.3f} "
+                   "error_deg={:.3f} guarded_tolerance_deg={:.3f} independent_trusted={} "
+                   "simulated={} independent_age_ms={} independent_q={:.6f} uncertainty_deg={:.3f}",
+                   axis_name(static_cast<AxisId>(i)), ax.feedback_age_ms,
+                   park_->observed_travel()[i]*kRad2Deg,
+                   park_->independent_travel()[i]*kRad2Deg,
+                   (ax.q_raw_rad-park_->park_raw_rad(static_cast<AxisId>(i)))*kRad2Deg,
+                   .5*cfg_.park.pos_tol_deg, ev.trusted, ev.simulated,
+                   ev.sampled_ns > 0 ? (now_ns-ev.sampled_ns)/1'000'000 : -1,
+                   ev.q_raw_rad, ev.uncertainty_rad*kRad2Deg);
       spdlog::info("parking state={} axis={} q={:.6f} target={:.6f} v_est={:.6f} "
                    "soft=[{:.6f},{:.6f}] stop_distance={:.6f} available={:.6f} "
                    "action={} reason='{}' (rad,s)", park_state_name(park_->state()),
@@ -1125,10 +1186,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Parking: {
+      if (last_decision_.action == SafetyAction::Disable ||
+          last_decision_.action == SafetyAction::FaultStop) break;
+      bool invalid_feedback = false;
+      for (int i = 0; i < kAxisCount; ++i)
+        invalid_feedback |= !in.axes[i].has_feedback || in.axes[i].feedback_age_ms < 0 ||
+            in.axes[i].feedback_age_ms > cfg_.feedback_max_age_ms ||
+            !std::isfinite(sp[i].q_rad) || !std::isfinite(v_est_[i]);
+      if (invalid_feedback) {
+        fail_parking("stale or untrusted motor feedback during parking");
+        break;
+      }
+      if (now_ns >= park_deadline_ns_) {
+        fail_parking("parking deadline exceeded");
+        break;
+      }
       // Do not send even a transient movement or mode-enable command before
       // the authoritative stop/disable below. Keep watchdogs active throughout.
       if (last_decision_.action != SafetyAction::Allow &&
-          last_decision_.action != SafetyAction::Derate) break;
+          last_decision_.action != SafetyAction::Derate) {
+        if (park_->state() >= ParkState::Verify)
+          fail_parking("safety interrupted park verification: " + last_decision_.reason);
+        break;
+      }
       if (park_init_axis_ < kAxisCount) {
         std::string e;
         const auto status = backend_->transition_mode(static_cast<AxisId>(park_init_axis_), false,
@@ -1139,7 +1219,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
       ParkOutput po = park_->step(
           to_feedback(sp[ix(AxisId::Pitch)], v_est_[ix(AxisId::Pitch)]),
-          to_feedback(sp[ix(AxisId::Yaw)], v_est_[ix(AxisId::Yaw)]));
+          to_feedback(sp[ix(AxisId::Yaw)], v_est_[ix(AxisId::Yaw)]),
+          {backend_->park_position_evidence(AxisId::Pitch, now_ns),
+           backend_->park_position_evidence(AxisId::Yaw, now_ns)}, now_ns);
+      if (po.failed) { fail_parking(park_->fail_reason()); break; }
       if (po.speed_mode) {
         // Speed-mode park move (MoveYaw/MovePitch): SpdRef-driven, mirroring
         // the Homing phase (P0o). MoveTo emits the signed velocity for the
@@ -1183,8 +1266,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
       if (po.disable_pitch) backend_->deenergize(AxisId::Pitch);
       if (po.disable_yaw) backend_->deenergize(AxisId::Yaw);
-      if (po.failed) fault(po.message);
-      if (po.complete) phase_ = Phase::Parked;
+      if (po.complete) {
+        phase_ = Phase::Parked;
+        homed_ = false;
+        at_ready_ = false;
+        shutdown_requested_.store(false);
+        spdlog::info("PARKED: guarded per-axis and post-disable confirmation complete; services remain online");
+      }
       break;
     }
     case Phase::Fault: {
@@ -1319,8 +1407,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           service_velocity_control = true;
           service_command_rate[i] = velocity;
           backend_->command_velocity(a, velocity);
-        } else if (last_decision_.action != SafetyAction::Allow &&
-                   !(phase_ == Phase::Parking && last_decision_.action == SafetyAction::Derate)) {
+        } else if (phase_ == Phase::Fault || (last_decision_.action != SafetyAction::Allow &&
+                   !(phase_ == Phase::Parking && last_decision_.action == SafetyAction::Derate))) {
           speed_servo_[i].reset();
           backend_->command_velocity(a, 0.0);
         } else
@@ -1356,8 +1444,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   // 7. Fault transitions (a fault is sticky; it needs a manual reset).
   if (any_disable) {
     fault(last_decision_.reason);
-  } else if (last_decision_.action == SafetyAction::FaultStop &&
-             phase_ != Phase::Fault) {
+  } else if (last_decision_.action == SafetyAction::FaultStop) {
     fault(last_decision_.reason);
   }
 
@@ -2037,8 +2124,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   {
     std::lock_guard<std::mutex> lk(command_mutex_);
     command_state_.homed = homed_;
-    command_state_.shutdown_or_parking = shutdown_requested() ||
-        phase_ == Phase::Parking || phase_ == Phase::Parked;
+    command_state_.shutdown_or_parking = phase_ == Phase::Parking;
+    command_state_.recoverable_park_failure = park_failed_ && !backend_->watchdog_fault();
     command_state_.fault = (phase_ == Phase::Fault);
     // Homing is a sequence: between stages the phase is Hold while the station
     // is still travelling to the ready pose. `moving` alone cannot see that, and
@@ -3157,7 +3244,7 @@ void ControlLoop::disable_tracking() {
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
   std::string err;
-  if ((shutdown_requested() || phase_ == Phase::Parking || phase_ == Phase::Parked) &&
+  if (phase_ == Phase::Parking &&
       name != "request_shutdown") {
     ack_command(name, false, "shutdown/parking already accepted; Home and motion commands unavailable");
     return;
@@ -3206,7 +3293,12 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "request_shutdown") {
-    shutdown_requested_.store(true);
+    if (!start_parking(err)) {
+      ack_command(name, false, "park rejected: " + err);
+    } else {
+      shutdown_requested_.store(phase_ == Phase::Parking);
+      ack_command(name, true, "motor parking accepted; controller and web remain online");
+    }
     return;
   }
   if (name == "run_test_motion") {
@@ -3471,7 +3563,8 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "start_homing") {
-    if (!homing_factory_ || phase_ == Phase::Homing || phase_ == Phase::Parking || phase_ == Phase::Fault) {
+    if (!homing_factory_ || phase_ == Phase::Homing || phase_ == Phase::Parking ||
+        (phase_ == Phase::Fault && !park_failed_)) {
       ack_command(name, false, "homing unavailable or supervisory routine already active");
       return;
     }

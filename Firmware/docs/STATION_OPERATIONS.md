@@ -38,11 +38,63 @@ and `operating_mode` of `AUTO_ROAM` or `AUTO_TRACK` after startup. `phase=hold`
 is the controller's service phase; it does not mean the user selected Manual.
 The web shows homing progress and the current mode.
 
-Stop requests controlled parking and motor disable, then waits for the owned
+The launcher `stop` command requests controlled parking and motor disable, then waits for the owned
 camera and web processes to exit. It never force-kills the motor controller.
 If the caller's 120-second wait expires, shutdown remains in progress: inspect
 the log and status. Do not start another controller or use `pkill`/`kill -9`.
 Repeated stop is harmless. A failed child also shuts down its sibling processes.
+
+The web/API action `request_shutdown` is **motor parking**, not launcher stop.
+It leaves `controld`, webd and perception running after success or failure.
+Home is rejected while parking runs, and can start a new calibration after
+PARKED or a park-only failure if both drives have fresh, healthy, stationary
+feedback. Hard faults and a latched watchdog still require operator service;
+Home does not clear those safety faults. An explicit launcher stop terminates
+the services and retains its emergency-disable fallback, reported as PARK FAILED
+when the park was not verified. It must not be mistaken for a successful release.
+
+Parking targets are configurable under `shutdown` in `config/turret.yaml`:
+
+- `yaw_park_mode` and `pitch_park_mode`: `logical_degrees`, `soft_center`,
+  `soft_min`, or `soft_max`.
+- `logical_degrees` uses the corresponding `yaw_park_deg` / `pitch_park_deg`.
+- The other modes use calibrated **raw** soft limits. `soft_min` / `soft_max`
+  are inset by `park_end_clearance_deg`; inadequate braking clearance is rejected.
+
+The selected front-heavy-load pose is yaw `soft_center`, pitch `soft_min`,
+with a 5-degree inset from the pitch soft minimum (in addition to the homing
+soft-limit margin). The resolved raw and logical targets are logged after
+homing. Configuration alone does not establish load stability at this pose.
+
+Automatic parking release requires observed travel of at least 0.25 degrees
+on each axis during its own park move, fresh motor feedback, and a trusted
+independent output-position measurement including its uncertainty. The release
+window is half the configured position tolerance: 0.25 degrees for a configured
+0.5 degrees. Both axes are checked during dwell, before each disable, and for
+another dwell after disable. No-motion, borderline, missing or stale evidence
+reports PARK FAILED; no artificial movement is introduced to satisfy the gate.
+
+**The current CAN backend has no independent position source connected.**
+It therefore cannot satisfy the automatic release gate. Park verification
+failure leaves healthy drives under fault-hold and keeps the services online;
+hard-fault, temperature and watchdog emergency-disable authority remains.
+The simulator supplies explicitly labelled simulated plant-position evidence;
+its success is not physical verification. Integrate and validate an independent
+sensor before claiming hardware PARKED or post-disable stability.
+
+Offline lifecycle verification (from `Firmware`, after building):
+
+```bash
+PYTHONPATH=. ../run/station-venv/bin/python tools/probe_park_service.py \
+  --controld build/control/controld --output ../run/park-service-probe
+```
+
+This starts the real controller and web processes with simulated motors and
+video disabled. It uses a disposable fast-homing Manual configuration, exercises
+park success and no-motion failure through HTTP, verifies Home rejection during
+parking and recovery afterward, and checks both processes remain alive. Its
+final cleanup explicitly terminates those simulator processes; it does not
+operate the physical station or inspect a camera feed.
 
 The script in any release can stop the active stack because ownership is shared
 by account/runtime directory, not by checkout. It reports the active checkout

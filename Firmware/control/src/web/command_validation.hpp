@@ -28,6 +28,7 @@ struct SystemCommandState {
   bool search_enabled = false;
   bool moving = false;            // currently executing a motion phase
   bool shutdown_or_parking = false;
+  bool recoverable_park_failure = false;
   // Holding the safe ready pose (homing sequence finished). Homing passes
   // through Hold between stages, so `moving` alone is not enough for checks
   // that start from wherever the station happens to be.
@@ -105,7 +106,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
     return r;
   }
   // Motion/calibration commands are locked out while faulted.
-  if (s.fault) {
+  if (s.fault && !(s.recoverable_park_failure && command == "start_homing")) {
     r.error = "system faulted; motion/calibration commands are locked out";
     return r;
   }

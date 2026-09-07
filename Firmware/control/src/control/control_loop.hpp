@@ -359,7 +359,7 @@ class ControlLoop {
 
   web::CommandResult submit_command(const std::string& name,
                                     const std::string& arg);
-  // True once the web UI requested a safe shutdown (main() polls this).
+  // A web motor-shutdown request is in progress; this does not stop services.
   bool shutdown_requested() const { return shutdown_requested_.load(); }
   const web::SystemCommandState& command_state() const {
     std::lock_guard<std::mutex> lk(command_mutex_);
@@ -424,8 +424,10 @@ class ControlLoop {
   void abort_payload_check(TimeNs now_ns, const std::string& reason);
   void apply_payload_derate(bool derated);
   void fault(const std::string& reason) {
+    const bool replace_park_failure = park_failed_;
+    park_failed_ = false;  // a safety fault cannot be cleared as a park-only failure
     if (phase_ == Phase::Homing || phase_ == Phase::Parking) deenergize_all();
-    if (phase_ != Phase::Fault) {
+    if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;
     }
@@ -456,6 +458,9 @@ class ControlLoop {
   // ms) would otherwise re-run every cycle. Reset in start_parking().
   bool park_pos_mode_entered_ = false;
   TimeNs park_log_ns_ = 0;
+  TimeNs park_deadline_ns_ = 0;
+  bool park_failed_ = false;
+  void fail_parking(const std::string& reason);
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};

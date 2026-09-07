@@ -811,6 +811,18 @@ LoadResult load_turret_config(const std::string& path) {
   {
     const std::string p = "shutdown.";
     const YAML::Node sh = fetch(root, "shutdown");
+    c.shutdown.yaw_park_mode = opt_string(sh, "yaw_park_mode", p + "yaw_park_mode",
+                                         "logical_degrees", warn);
+    c.shutdown.pitch_park_mode = opt_string(sh, "pitch_park_mode", p + "pitch_park_mode",
+                                           "logical_degrees", warn);
+    for (const auto& mode : {c.shutdown.pitch_park_mode, c.shutdown.yaw_park_mode})
+      if (mode != "logical_degrees" && mode != "soft_center" &&
+          mode != "soft_min" && mode != "soft_max")
+        err.push_back(p + "park mode must be logical_degrees, soft_center, soft_min or soft_max");
+    c.shutdown.park_end_clearance_deg = opt_double(sh, "park_end_clearance_deg",
+        p + "park_end_clearance_deg", 5.0, warn);
+    if (!std::isfinite(c.shutdown.park_end_clearance_deg) || c.shutdown.park_end_clearance_deg <= 0)
+      err.push_back(p + "park_end_clearance_deg must be finite and > 0");
     c.shutdown.yaw_park_deg = opt_double(sh, "yaw_park_deg", p + "yaw_park_deg",
                                          Defaults().yaw_park_deg, warn);
     c.shutdown.pitch_park_deg = opt_double(sh, "pitch_park_deg", p + "pitch_park_deg",

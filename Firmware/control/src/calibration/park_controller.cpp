@@ -8,6 +8,17 @@ ParkController::ParkController(ParkParams p,
                                const std::array<AxisLimits, kAxisCount>& limits,
                                const std::array<AxisLogicalModel, kAxisCount>& models)
     : p_(std::move(p)), dwell_ns_(static_cast<TimeNs>(p_.dwell_ms * 1e6)) {
+  if (!std::isfinite(p_.pos_tol_deg) || p_.pos_tol_deg <= 0 ||
+      !std::isfinite(p_.vel_tol_deg_s) || p_.vel_tol_deg_s <= 0 ||
+      !std::isfinite(p_.min_observed_travel_deg) || p_.min_observed_travel_deg <= 0 ||
+      !std::isfinite(p_.speed_deg_s) || p_.speed_deg_s <= 0 ||
+      !std::isfinite(p_.verify_speed_deg_s) || p_.verify_speed_deg_s <= 0 ||
+      !std::isfinite(p_.min_soft_margin_deg) || p_.min_soft_margin_deg <= 0 ||
+      !std::isfinite(p_.end_clearance_deg) || p_.end_clearance_deg <= 0 ||
+      p_.dwell_ms <= 0 || p_.evidence_max_age_ms <= 0) {
+    fail("invalid parking verification parameters");
+    return;
+  }
   // Validate every axis BEFORE committing to the sequence (§33.1). The park pose
   // must be strictly inside the calibrated soft limit with a margin — never
   // directly against a mechanical stop.
@@ -18,15 +29,28 @@ ParkController::ParkController(ParkParams p,
       fail(std::string(axis_name(a)) + " park: axis not referenced (not homed)");
       return;
     }
-    if (!limits[i].valid) {
+    if (!limits[i].valid || !std::isfinite(limits[i].q_soft_min_rad) ||
+        !std::isfinite(limits[i].q_soft_max_rad) ||
+        limits[i].q_soft_min_rad >= limits[i].q_soft_max_rad) {
       fail(std::string(axis_name(a)) + " park: axis limits not valid (not homed)");
       return;
     }
-    const double raw = models[i].logical_to_raw_rad(p_.park_logical_deg[i]);
+    double raw = models[i].logical_to_raw_rad(p_.park_logical_deg[i]);
+    const auto& mode = p_.target_mode[i];
+    if (mode == "soft_center")
+      raw = .5 * (limits[i].q_soft_min_rad + limits[i].q_soft_max_rad);
+    else if (mode == "soft_min")
+      raw = limits[i].q_soft_min_rad + p_.end_clearance_deg * kDeg2Rad;
+    else if (mode == "soft_max")
+      raw = limits[i].q_soft_max_rad - p_.end_clearance_deg * kDeg2Rad;
+    else if (mode != "logical_degrees") {
+      fail(std::string(axis_name(a)) + " park: unknown target mode '" + mode + "'");
+      return;
+    }
     park_raw_[i] = raw;
     const double lo = limits[i].q_soft_min_rad + margin_rad;
     const double hi = limits[i].q_soft_max_rad - margin_rad;
-    if (raw <= lo || raw >= hi) {
+    if (!std::isfinite(raw) || raw <= lo || raw >= hi) {
       fail(std::string(axis_name(a)) +
            " park: park position not strictly inside the soft limit with margin "
            "(§33.1)");
@@ -40,15 +64,82 @@ ParkController::ParkController(ParkParams p,
         1.5 * (limits[i].q_soft_max_rad - limits[i].q_soft_min_rad) /
         (p_.speed_deg_s * kDeg2Rad));
   // Prepare the first park move (yaw, per the §33 sequence).
+  // Move arrival must fit inside the stricter release window as well.
+  p_.move_pos_tol_rad = std::min(p_.move_pos_tol_rad, .25*p_.pos_tol_deg*kDeg2Rad);
   yaw_move_.emplace(AxisId::Yaw, park_raw_[ix(AxisId::Yaw)], p_.speed_deg_s * kDeg2Rad,
                     p_.move_pos_tol_rad, p_.move_vel_tol_rad_s, p_.move_timeout_s);
 }
 
+bool ParkController::release_gate(const HomingFeedback& pitch_fb,
+    const HomingFeedback& yaw_fb,
+    const std::array<ParkPositionEvidence, kAxisCount>& evidence, TimeNs now_ns) {
+  const HomingFeedback feedback[] = {pitch_fb, yaw_fb};
+  for (int i = 0; i < kAxisCount; ++i) {
+    const auto& fb = feedback[i];
+    const auto& ev = evidence[i];
+    std::string reason;
+    const auto age = now_ns - fb.t_ns;
+    const auto independent_age = now_ns - ev.sampled_ns;
+    const double tolerance = .5 * p_.pos_tol_deg * kDeg2Rad;
+    if (fb.motor_fault || !std::isfinite(fb.pos_rad) || !std::isfinite(fb.vel_rad_s) ||
+        fb.t_ns <= 0 || age < 0 || age > p_.evidence_max_age_ms * 1'000'000LL)
+      reason = "stale or untrusted motor feedback";
+    else if (observed_travel_[i] < p_.min_observed_travel_deg * kDeg2Rad)
+      reason = "no parking motion observed; no automatic release";
+    else if (!at_park(fb, static_cast<AxisId>(i)))
+      reason = "position/velocity outside guarded park tolerance";
+    else if (!ev.trusted || ev.sampled_ns <= 0 || independent_age < 0 ||
+             independent_age > p_.evidence_max_age_ms * 1'000'000LL ||
+             !std::isfinite(ev.q_raw_rad) || !std::isfinite(ev.uncertainty_rad) ||
+             ev.uncertainty_rad < 0)
+      reason = "independent physical position confirmation unavailable or stale";
+    else if (std::abs(ev.q_raw_rad - park_raw_[i]) + ev.uncertainty_rad >= tolerance)
+      reason = "independent position outside guarded park tolerance";
+    else if (independent_travel_[i] < p_.min_observed_travel_deg*kDeg2Rad)
+      reason = "no independent parking motion observed; no automatic release";
+    if (!reason.empty()) {
+      fail(std::string(axis_name(static_cast<AxisId>(i))) + " park: " + reason);
+      return false;
+    }
+  }
+  return true;
+}
+
 ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
-                                const HomingFeedback& yaw_fb) {
+    const HomingFeedback& yaw_fb,
+    const std::array<ParkPositionEvidence, kAxisCount>& evidence, TimeNs now_ns) {
+  if (now_ns == 0) now_ns = std::max(pitch_fb.t_ns, yaw_fb.t_ns);
   ParkOutput out;
   out.pitch = hold(pitch_fb);
   out.yaw = hold(yaw_fb);
+  const double q[] = {pitch_fb.pos_rad, yaw_fb.pos_rad};
+  const int moving_axis = state_ == ParkState::MoveYaw ? ix(AxisId::Yaw) :
+                          state_ == ParkState::MovePitch ? ix(AxisId::Pitch) : -1;
+  if (moving_axis >= 0) {
+    const auto i = static_cast<size_t>(moving_axis);
+    if (!observed_initial_[i]) {
+      initial_q_[i] = q[i];
+      observed_initial_[i] = true;
+    }
+    const double direction = park_raw_[i] >= initial_q_[i] ? 1 : -1;
+    observed_travel_[i] = std::max(observed_travel_[i], direction * (q[i]-initial_q_[i]));
+    const auto& ev = evidence[i];
+    if (ev.trusted && ev.sampled_ns > 0 && ev.sampled_ns <= now_ns &&
+        now_ns-ev.sampled_ns <= p_.evidence_max_age_ms*1'000'000LL &&
+        std::isfinite(ev.q_raw_rad) && std::isfinite(ev.uncertainty_rad) && ev.uncertainty_rad >= 0) {
+      if (!independent_initial_valid_[i]) {
+        independent_initial_valid_[i] = true;
+        independent_initial_q_[i] = ev.q_raw_rad;
+        independent_initial_uncertainty_[i] = ev.uncertainty_rad;
+      }
+      independent_travel_[i] = std::max(independent_travel_[i],
+          direction*(ev.q_raw_rad-independent_initial_q_[i]) - ev.uncertainty_rad -
+          independent_initial_uncertainty_[i]);
+    }
+  }
+
+  if (state_ >= ParkState::Verify && state_ <= ParkState::VerifyDisabled)
+    release_gate(pitch_fb, yaw_fb, evidence, now_ns);
 
   switch (state_) {
     case ParkState::StopTracking:
@@ -120,7 +211,7 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
                              "hold at park target"};
       out.message = "verify park pose";
       if (at_park(pitch_fb, AxisId::Pitch) && at_park(yaw_fb, AxisId::Yaw)) {
-        dwell_start_ns_ = pitch_fb.t_ns;
+        dwell_start_ns_ = now_ns;
         state_ = ParkState::Dwell;
       }
       break;
@@ -141,7 +232,7 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
         state_ = ParkState::Verify;  // drifted — re-verify before de-energizing
         break;
       }
-      if (pitch_fb.t_ns - dwell_start_ns_ >= dwell_ns_) {
+      if (now_ns - dwell_start_ns_ >= dwell_ns_) {
         state_ = ParkState::DisablePitch;
       }
       break;
@@ -156,7 +247,13 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
     case ParkState::DisableYaw:
       out.disable_yaw = true;
       out.message = "disable yaw";
-      state_ = ParkState::Parked;
+      dwell_start_ns_ = now_ns;
+      state_ = ParkState::VerifyDisabled;
+      break;
+
+    case ParkState::VerifyDisabled:
+      out.message = "verify independent position after disable";
+      if (now_ns - dwell_start_ns_ >= dwell_ns_) state_ = ParkState::Parked;
       break;
 
     case ParkState::Parked:
@@ -168,6 +265,11 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
       out.failed = true;
       out.message = "park failed: " + fail_reason_;
       break;
+  }
+  if (state_ == ParkState::Failed) {
+    out.failed = true;
+    out.message = "park failed: " + fail_reason_;
+    out.disable_pitch = out.disable_yaw = out.complete = false;
   }
   return out;
 }

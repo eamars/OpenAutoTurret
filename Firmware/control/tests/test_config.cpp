@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 
 #include "config/turret_config.hpp"
+#include "config/station_wiring.hpp"
 
 namespace {
 
@@ -439,4 +440,22 @@ TEST(Config, HoldSpeedCeilingDefaultsAndLoads) {
     ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
     EXPECT_DOUBLE_EQ(r.config.tracking.hold_speed_deg_s, 12.5);
   }
+}
+
+TEST(Config, ParkModesReachTheControllerAndRejectInvalidChoices) {
+  for (const auto& mode : {"soft_min", "soft_max", "soft_center", "logical_degrees"}) {
+    std::string y = kFullConfig;
+    const auto at = y.find("shutdown:\n") + std::string("shutdown:\n").size();
+    y.insert(at, "  yaw_park_mode: soft_center\n  pitch_park_mode: " +
+                 std::string(mode) + "\n  park_end_clearance_deg: 5\n");
+    auto r = ota::config::load_turret_config(write_file("park_modes.yaml", y));
+    ASSERT_TRUE(r.ok);
+    const auto cfg = ota::wire::make_control_cfg(r.config);
+    EXPECT_EQ(cfg.park.target_mode[0], mode);
+    EXPECT_EQ(cfg.park.target_mode[1], "soft_center");
+    EXPECT_DOUBLE_EQ(cfg.park.end_clearance_deg, 5);
+  }
+  std::string y = kFullConfig;
+  y.insert(y.find("shutdown:\n") + 10, "  pitch_park_mode: hard_stop\n");
+  EXPECT_FALSE(ota::config::load_turret_config(write_file("bad_park_mode.yaml", y)).ok);
 }

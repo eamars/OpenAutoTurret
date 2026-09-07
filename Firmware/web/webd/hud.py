@@ -278,11 +278,11 @@ function hudDrawerActions(name, t) {
     // signals danger here.
     return [
       { label: "HOME", command: "start_homing", arg: "",
-        kind: t && ["parking", "parked"].includes(t.phase) ? "gated" : "danger",
-        note: t && ["parking", "parked"].includes(t.phase) ? "SHUTDOWN / PARKING — HOME UNAVAILABLE" : "Recalibrate both axes" },
+        kind: t && t.phase === "parking" ? "gated" : "danger",
+        note: t && t.phase === "parking" ? "PARKING — HOME UNAVAILABLE" : "Recalibrate both axes; recover after parking" },
       { label: "HOLD / PARK", command: "request_park", arg: "", kind: "danger", note: "CONFIRM TWICE" },
-      { label: "SUPERVISORY SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
-        note: "Parks and stops the entire stack; Home becomes unavailable" }
+      { label: "PARK / MOTOR SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
+        note: "Parks motors; web stays online for Home and recovery" }
     ];
   }
 

@@ -404,11 +404,6 @@ int main(int argc, char** argv) {
   // Steady-state 200 Hz loop (no slow work inside).
   if (system) system->start_watchdog();
   while (!g_shutdown.load()) {
-    if (loop.shutdown_requested()) {
-      spdlog::info("safe shutdown requested via web UI");
-      g_shutdown.store(true);
-      break;
-    }
     const TimeNs t0 = now_monotonic_ns();
     const TimeNs period = t0 - t_prev;
     t_prev = t0;

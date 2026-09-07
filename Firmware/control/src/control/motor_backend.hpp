@@ -20,6 +20,7 @@
 
 #include "can/cybergear_protocol.hpp"  // cybergear::Reg
 #include "common/types.hpp"
+#include "control/park_position_evidence.hpp"
 
 namespace ota {
 
@@ -68,6 +69,7 @@ class MotorBackend {
   virtual bool adopt_running_mode(AxisId, bool, std::string&, double = -1, double = 1) { return false; }
   virtual void heartbeat() {}
   virtual bool watchdog_fault() const { return false; }
+  virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
   // Repeated from the control loop. Hardware implements a nonblocking recipe.
   virtual Transition transition_mode(AxisId axis, bool position, double limit,

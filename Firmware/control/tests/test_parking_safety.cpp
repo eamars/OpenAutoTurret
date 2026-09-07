@@ -8,6 +8,11 @@ namespace {
 // Only simulation may establish an already-referenced fixture this way.
 class ReferencedPlant : public sim::SimMotorBackend {
  public:
+  bool independent_available = true;
+  ParkPositionEvidence park_position_evidence(AxisId a, TimeNs now) const override {
+    return independent_available ? sim::SimMotorBackend::park_position_evidence(a, now)
+                                 : ParkPositionEvidence{};
+  }
   bool adopt_running_mode(AxisId a, bool position, std::string& err,
                           double = -1, double = 1) override {
     return position ? enter_position_mode(a, .1, err) : enter_speed_mode(a, 1, err);
@@ -97,5 +102,42 @@ TEST_F(Parking, BoundaryViolationStillBrakes) {
   plant->set_position(AxisId::Yaw, 354.9*kDeg2Rad);
   tick();
   EXPECT_EQ(loop->last_decision().action, SafetyAction::Brake);
+}
+TEST_F(Parking, MissingIndependentConfirmationFailsWithoutReleasingAndHomeCanRecover) {
+  setup(43, 179);
+  plant->independent_available = false;
+  for (int i=0; i<10000 && loop->phase()==Phase::Parking; ++i) tick();
+  ASSERT_EQ(loop->phase(), Phase::Fault);
+  EXPECT_NE(loop->fault_reason().find("independent physical"), std::string::npos);
+  EXPECT_TRUE(plant->snapshot(AxisId::Pitch, now).in_speed_mode);
+  EXPECT_TRUE(plant->snapshot(AxisId::Yaw, now).in_speed_mode);
+  for (int i=0; i<200; ++i) tick();
+  std::string err;
+  HomingPlanConfig config;
+  ASSERT_TRUE(loop->start_homing(HomingPlan({}, config), err)) << err;
+  EXPECT_EQ(loop->phase(), Phase::Homing);
+}
+TEST_F(Parking, HomeAfterParkedStartsNewCalibration) {
+  setup(43, 179);
+  for (int i=0; i<10000 && loop->phase()==Phase::Parking; ++i) tick();
+  ASSERT_EQ(loop->phase(), Phase::Parked) << loop->fault_reason();
+  EXPECT_FALSE(loop->homed());
+  tick();
+  std::string err;
+  HomingPlanConfig config;
+  ASSERT_TRUE(loop->start_homing(HomingPlan({}, config), err)) << err;
+  EXPECT_EQ(loop->phase(), Phase::Homing);
+}
+TEST_F(Parking, UntrustedFeedbackBlocksHomeRecovery) {
+  setup(43, 179);
+  plant->independent_available = false;
+  for (int i=0; i<10000 && loop->phase()==Phase::Parking; ++i) tick();
+  ASSERT_EQ(loop->phase(), Phase::Fault);
+  plant->set_feedback_ok(AxisId::Pitch, false);
+  tick();
+  std::string err;
+  HomingPlanConfig config;
+  EXPECT_FALSE(loop->start_homing(HomingPlan({}, config), err));
+  EXPECT_EQ(loop->phase(), Phase::Fault);
 }
 }  // namespace

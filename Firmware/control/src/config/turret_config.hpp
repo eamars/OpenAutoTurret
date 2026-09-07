@@ -167,6 +167,9 @@ struct VisionConfig {
 // The park positions (deg, in the homed logical frame) must lie inside the
 // calibrated soft limits, not against the mechanical stop (§33.1).
 struct ShutdownConfig {
+  std::string yaw_park_mode = "logical_degrees";
+  std::string pitch_park_mode = "logical_degrees";
+  double park_end_clearance_deg = 5.0;
   double yaw_park_deg = 0.0;
   double pitch_park_deg = 0.0;
   // §33.2 verification before the motors are de-energized.

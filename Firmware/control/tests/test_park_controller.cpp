@@ -171,7 +171,9 @@ ParkRunResult run_park(ParkController& park, Plant& plant, int max_steps) {
     r.states.push_back(park.state());  // the state processed this cycle
     HomingFeedback pfb = plant.pitch.feedback(t);
     HomingFeedback yfb = plant.yaw.feedback(t);
-    ParkOutput out = park.step(pfb, yfb);
+    ParkOutput out = park.step(pfb, yfb,
+        {ota::ParkPositionEvidence{true, true, pfb.t_ns, pfb.pos_rad, 0},
+         ota::ParkPositionEvidence{true, true, yfb.t_ns, yfb.pos_rad, 0}}, t);
     plant.pitch.step(out.pitch);
     plant.yaw.step(out.yaw);
     t += kDtNs;
@@ -227,7 +229,7 @@ TEST(ParkController, HappyPath) {
   const std::vector<ParkState> expected = {
       ParkState::StopTracking, ParkState::MoveYaw, ParkState::MovePitch,
       ParkState::Verify,       ParkState::Dwell,   ParkState::DisablePitch,
-      ParkState::DisableYaw,   ParkState::Parked};
+      ParkState::DisableYaw,   ParkState::VerifyDisabled, ParkState::Parked};
   EXPECT_EQ(unique_states(r.states), expected);
 }
 
@@ -268,8 +270,8 @@ TEST(ParkController, NotHomedFails) {
       << park.fail_reason();
 }
 
-// If the axes already sit at their park poses, the moves arrive immediately and
-// the controller still verifies, dwells, and de-energizes.
+// The conservative release policy requires observed parking travel on BOTH
+// axes. Starting at the target is not permission to manufacture a movement.
 TEST(ParkController, AlreadyAtPark) {
   Plant plant;
   plant.pitch.reset(-0.4764, -1.0, 1.0);  // pitch park
@@ -282,12 +284,95 @@ TEST(ParkController, AlreadyAtPark) {
   EXPECT_FALSE(park.failed());
 
   ParkRunResult r = run_park(park, plant, 1000);
-  EXPECT_TRUE(r.complete) << r.fail_reason;
-  EXPECT_FALSE(r.failed);
-  EXPECT_NEAR(r.pitch_q, -0.4764, 0.01);
-  EXPECT_NEAR(r.yaw_q, 0.0472, 0.01);
-  EXPECT_TRUE(r.saw_disable_pitch);
-  EXPECT_TRUE(r.saw_disable_yaw);
+  EXPECT_FALSE(r.complete);
+  EXPECT_TRUE(r.failed);
+  EXPECT_NE(r.fail_reason.find("no parking motion"), std::string::npos);
+  EXPECT_FALSE(r.saw_disable_pitch);
+  EXPECT_FALSE(r.saw_disable_yaw);
   // Should be quick (no long moves) — dominated by the 500 ms dwell (~100 cycles).
   EXPECT_LT(r.steps, 400);
+}
+
+namespace {
+struct ReleaseFixture {
+  ParkController park{make_params(), {make_limits(), make_limits()}, {make_model(), make_model()}};
+  HomingFeedback pitch{1'000'000'000, -.3, 0, 0, false};
+  HomingFeedback yaw{1'000'000'000, .3, 0, 0, false};
+  std::array<ota::ParkPositionEvidence, 2> evidence{};
+  bool freeze_independent_position = false;
+  ParkOutput step() {
+    evidence = {ota::ParkPositionEvidence{true, true, pitch.t_ns, pitch.pos_rad, 0},
+                ota::ParkPositionEvidence{true, true, yaw.t_ns, yaw.pos_rad, 0}};
+    if (freeze_independent_position) {
+      evidence[0].q_raw_rad = park.park_raw_rad(AxisId::Pitch);
+      evidence[1].q_raw_rad = park.park_raw_rad(AxisId::Yaw);
+    }
+    auto out = park.step(pitch, yaw, evidence, pitch.t_ns);
+    pitch.pos_rad += out.pitch.velocity_rad_s * .005;
+    yaw.pos_rad += out.yaw.velocity_rad_s * .005;
+    pitch.t_ns += kDtNs; yaw.t_ns += kDtNs;
+    return out;
+  }
+  void reach(ParkState target) {
+    for (int n=0; n<10000 && park.state()!=target && !park.failed(); ++n) step();
+  }
+  ParkOutput tampered() { return park.step(pitch, yaw, evidence, pitch.t_ns); }
+};
+}
+
+TEST(ParkRelease, BorderlineReportedPitchIsNotReleased) {
+  ReleaseFixture f; f.reach(ParkState::DisablePitch);
+  ASSERT_EQ(f.park.state(), ParkState::DisablePitch) << f.park.fail_reason();
+  f.pitch.pos_rad = f.park.park_raw_rad(AxisId::Pitch) + .479*kDeg2Rad;
+  const auto out = f.tampered();
+  EXPECT_TRUE(out.failed);
+  EXPECT_FALSE(out.disable_pitch);
+  EXPECT_FALSE(out.disable_yaw);
+}
+TEST(ParkRelease, ChangingMotorFeedbackDoesNotProveIndependentMotion) {
+  ReleaseFixture f; f.freeze_independent_position = true;
+  f.reach(ParkState::Parked);
+  EXPECT_TRUE(f.park.failed());
+  EXPECT_NE(f.park.fail_reason().find("no independent parking motion"), std::string::npos);
+}
+TEST(ParkRelease, MissingOrStaleIndependentEvidencePreventsRelease) {
+  for (bool stale : {false, true}) {
+    ReleaseFixture f; f.reach(ParkState::DisablePitch);
+    ASSERT_EQ(f.park.state(), ParkState::DisablePitch) << f.park.fail_reason();
+    if (stale) f.evidence[0].sampled_ns -= 200'000'000;
+    else f.evidence[0].trusted = false;
+    const auto out = f.tampered();
+    EXPECT_TRUE(out.failed);
+    EXPECT_FALSE(out.disable_pitch);
+  }
+}
+TEST(ParkRelease, PitchLossBeforeYawReleaseDoesNotDisableYaw) {
+  ReleaseFixture f; f.reach(ParkState::DisableYaw);
+  ASSERT_EQ(f.park.state(), ParkState::DisableYaw) << f.park.fail_reason();
+  f.evidence[0].q_raw_rad += 1*kDeg2Rad;
+  const auto out = f.tampered();
+  EXPECT_TRUE(out.failed);
+  EXPECT_FALSE(out.disable_yaw);
+}
+TEST(ParkRelease, MovementAfterDisableNeverReportsParked) {
+  ReleaseFixture f; f.reach(ParkState::VerifyDisabled);
+  ASSERT_EQ(f.park.state(), ParkState::VerifyDisabled) << f.park.fail_reason();
+  f.evidence[1].q_raw_rad += 1*kDeg2Rad;
+  const auto out = f.tampered();
+  EXPECT_TRUE(out.failed);
+  EXPECT_FALSE(out.complete);
+  EXPECT_FALSE(f.park.complete());
+}
+TEST(ParkController, RelativeTargetsUseRawSoftLimitsAndPreserveClearance) {
+  for (auto mode : {"soft_min", "soft_max"}) {
+    auto p = make_params(); p.target_mode = {mode, "soft_center"};
+    ParkController park(p, {make_limits(), make_limits()}, {make_model(), make_model()});
+    ASSERT_FALSE(park.failed()) << park.fail_reason();
+    EXPECT_DOUBLE_EQ(park.park_raw_rad(AxisId::Yaw), 0);
+    EXPECT_NEAR(std::abs(park.park_raw_rad(AxisId::Pitch)), .9-5*kDeg2Rad, 1e-9);
+  }
+  auto p = make_params(); p.target_mode = {"soft_min", "soft_center"};
+  p.end_clearance_deg = 1;
+  ParkController invalid(p, {make_limits(), make_limits()}, {make_model(), make_model()});
+  EXPECT_TRUE(invalid.failed());
 }

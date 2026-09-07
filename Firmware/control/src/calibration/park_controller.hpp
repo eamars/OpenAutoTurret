@@ -32,6 +32,7 @@
 #include "common/logical_coordinates.hpp"
 #include "common/types.hpp"
 #include "control/safety_envelope.hpp"
+#include "control/park_position_evidence.hpp"
 
 namespace ota {
 
@@ -43,6 +44,7 @@ enum class ParkState {
   Dwell,
   DisablePitch,
   DisableYaw,
+  VerifyDisabled,
   Parked,
   Failed,
 };
@@ -56,6 +58,7 @@ inline const char* park_state_name(ParkState s) {
     case ParkState::Dwell:        return "dwell";
     case ParkState::DisablePitch: return "disable_pitch";
     case ParkState::DisableYaw:   return "disable_yaw";
+    case ParkState::VerifyDisabled: return "verify_disabled";
     case ParkState::Parked:       return "parked";
     case ParkState::Failed:       return "failed";
   }
@@ -63,12 +66,20 @@ inline const char* park_state_name(ParkState s) {
 }
 
 struct ParkParams {
+  // Resolve after homing. End targets are inset from the RAW soft limits;
+  // they never request contact with the mechanical stop.
+  std::array<std::string, kAxisCount> target_mode{"logical_degrees", "logical_degrees"};
+  double end_clearance_deg = 5.0;
   // Park targets in the LOGICAL frame (deg), one per axis.
   std::array<double, kAxisCount> park_logical_deg{};
   // §33.2 verification required before de-energizing.
   double pos_tol_deg = 0.5;
   double vel_tol_deg_s = 1.0;
   int dwell_ms = 500;
+  // Reserve half the requested position tolerance at the release gate.
+  // No automatic dither: if travel was not observed, require intervention.
+  double min_observed_travel_deg = 0.25;
+  int evidence_max_age_ms = 100;
   // Speed limit for the park moves.
   double speed_deg_s = 10.0;
   // Speed limit for the Verify/Dwell POSITION-MODE hold (LimitSpd, deg/s).
@@ -121,7 +132,9 @@ class ParkController {
   ParkController(ParkParams p, const std::array<AxisLimits, kAxisCount>& limits,
                  const std::array<AxisLogicalModel, kAxisCount>& models);
 
-  ParkOutput step(const HomingFeedback& pitch_fb, const HomingFeedback& yaw_fb);
+  ParkOutput step(const HomingFeedback& pitch_fb, const HomingFeedback& yaw_fb,
+                  const std::array<ParkPositionEvidence, kAxisCount>& evidence = {},
+                  TimeNs now_ns = 0);
 
   ParkState state() const { return state_; }
   bool complete() const { return state_ == ParkState::Parked; }
@@ -129,6 +142,8 @@ class ParkController {
   const std::string& fail_reason() const { return fail_reason_; }
   // The raw park target for an axis (valid once construction succeeded).
   double park_raw_rad(AxisId a) const { return park_raw_[ix(a)]; }
+  const std::array<double, kAxisCount>& observed_travel() const { return observed_travel_; }
+  const std::array<double, kAxisCount>& independent_travel() const { return independent_travel_; }
 
  private:
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
@@ -137,7 +152,7 @@ class ParkController {
     fail_reason_ = reason;
   }
   bool at_park(const HomingFeedback& fb, AxisId a) const {
-    const double pos_tol_rad = p_.pos_tol_deg * kDeg2Rad;
+    const double pos_tol_rad = 0.5 * p_.pos_tol_deg * kDeg2Rad;
     const double vel_tol_rad_s = p_.vel_tol_deg_s * kDeg2Rad;
     return std::fabs(fb.pos_rad - park_raw_[ix(a)]) < pos_tol_rad &&
            std::fabs(fb.vel_rad_s) < vel_tol_rad_s;
@@ -156,6 +171,16 @@ class ParkController {
   std::optional<MoveTo> pitch_move_;
   TimeNs dwell_ns_ = 0;
   TimeNs dwell_start_ns_ = 0;
+  std::array<double, kAxisCount> initial_q_{};
+  std::array<double, kAxisCount> observed_travel_{};
+  std::array<bool, kAxisCount> observed_initial_{};
+  std::array<bool, kAxisCount> independent_initial_valid_{};
+  std::array<double, kAxisCount> independent_initial_q_{};
+  std::array<double, kAxisCount> independent_initial_uncertainty_{};
+  std::array<double, kAxisCount> independent_travel_{};
+  bool release_gate(const HomingFeedback& pitch_fb, const HomingFeedback& yaw_fb,
+                    const std::array<ParkPositionEvidence, kAxisCount>& evidence,
+                    TimeNs now_ns);
 };
 
 }  // namespace ota

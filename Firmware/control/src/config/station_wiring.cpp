@@ -172,6 +172,8 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.soft_margin_rad = cfg.axes[0].soft_margin_deg * kDeg2Rad;
   c.park.park_logical_deg[0] = cfg.shutdown.pitch_park_deg;
   c.park.park_logical_deg[1] = cfg.shutdown.yaw_park_deg;
+  c.park.target_mode = {cfg.shutdown.pitch_park_mode, cfg.shutdown.yaw_park_mode};
+  c.park.end_clearance_deg = cfg.shutdown.park_end_clearance_deg;
   c.park.pos_tol_deg = cfg.shutdown.pos_tolerance_deg;
   c.park.vel_tol_deg_s = cfg.shutdown.vel_tolerance_deg_s;
   c.park.dwell_ms = cfg.shutdown.dwell_ms;

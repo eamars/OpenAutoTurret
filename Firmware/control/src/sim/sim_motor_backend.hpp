@@ -44,6 +44,9 @@ class SimMotorBackend : public MotorBackend {
     axes_[ix(a)].tau_pos = tau_s;
   }
   double position(AxisId a) const { return axes_[ix(a)].q; }
+  ParkPositionEvidence park_position_evidence(AxisId a, TimeNs now) const override {
+    return {true, true, now, axes_[ix(a)].q, 0};
+  }
   double velocity(AxisId a) const { return axes_[ix(a)].v; }
   bool in_position_mode(AxisId a) const { return axes_[ix(a)].in_position_mode; }
 
