@@ -112,6 +112,7 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
 
 ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   ControlLoop::Config c;
+  c.motion = cfg.motion;
   c.start_in_auto_roam = cfg.v3.default_mode == "AUTO_ROAM";
   c.service_speed_control = cfg.v3.service_speed_control;
   c.homing_speed_kp = cfg.homing.speed_kp;
@@ -134,6 +135,19 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.roam_pitch_named = cfg.v3.has_roam_pitch;
   c.roam_pitch_deg = cfg.v3.roam_pitch_deg;
   c.roam_velocity_deg_s = cfg.v3.roam_velocity_deg_s;
+  if (cfg.motion.configured) {
+    // Legacy auxiliary consumers (search setup, pre-ready hold) receive
+    // resolved values, never the obsolete YAML defaults.
+    c.hold_speed_rad_s = 0;
+    for (const auto& mode : cfg.motion.modes)
+      for (const auto& p : mode) c.hold_speed_rad_s = std::max(c.hold_speed_rad_s,p.maximum.speed);
+    c.service_max_speed_rad_s = c.hold_speed_rad_s;
+    c.track_acceleration_rad_s2 = std::max(cfg.motion.modes[1][0].target.acceleration,
+                                          cfg.motion.modes[1][1].target.acceleration);
+    c.track_jerk_rad_s3 = std::max(cfg.motion.modes[1][0].target.jerk,cfg.motion.modes[1][1].target.jerk);
+    c.roam_velocity_deg_s = std::max(cfg.motion.modes[2][0].target.speed,
+                                    cfg.motion.modes[2][1].target.speed)*kRad2Deg;
+  }
   c.auto_track_coast_ms = cfg.v3.auto_track_coast_ms;
   c.auto_track_lost_hold_ms = cfg.v3.auto_track_lost_hold_ms;
   c.auto_track_reacquire_window_ms = cfg.v3.auto_track_reacquire_window_ms;

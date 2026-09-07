@@ -507,7 +507,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // "did it move at all" passed.
       double q_logical[2] = {sp[ix(AxisId::Pitch)].q_rad, sp[ix(AxisId::Yaw)].q_rad};
       const double vmax = hold_speed_effective();
-      const double v_max[2] = {vmax, vmax};
+      const double v_max[2] = {
+          cfg_.motion.configured ? motion_profile(0,OperatingMode::Manual).target.speed : vmax,
+          cfg_.motion.configured ? motion_profile(1,OperatingMode::Manual).target.speed : vmax};
       const bool was_leased = manual_.lease_active();
       const bool was_expired = std::string(manual_out_.reason) == "jog lease expired";
       manual_out_ = manual_.update(q_logical, v_max, now_ns, period_ns);
@@ -792,6 +794,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   bool tracking_velocity_control = false;
   double tracking_command_rate[kAxisCount]{};
   bool service_velocity_control = false;
+  control::MotionProfile effective_motion[kAxisCount];
+  double motion_negative_speed[kAxisCount]{}, motion_positive_speed[kAxisCount]{};
   double service_command_rate[kAxisCount]{};
   double q_ref[kAxisCount], lim[kAxisCount];
   for (int i = 0; i < kAxisCount; ++i) {
@@ -935,13 +939,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
           const double solved = env_.constrain_reference(r, limits_[i]);
-          lim[i] = std::min(tracking_ref_.v_max_rad_s,
+          const auto profile = motion_profile(i,mode_mgr_.mode());
+          double reference_cap = cfg_.motion.configured
+              ? std::min(tracking_ref_.v_max_rad_s,profile.target.speed *
+                  std::clamp(last_intent_.velocity_scale,0.0,1.0))
+              : tracking_ref_.v_max_rad_s;
+          if (cfg_.motion.configured && last_decision_.action == SafetyAction::Derate)
+            reference_cap *= cfg_.derate_factor;
+          lim[i] = std::min(reference_cap,
                             env_.max_speed_at(solved, limits_[i]));
           if (cfg_.service_speed_control) {
             const control::BoundaryGovernor boundary{
-                std::min(cfg_.a_brake_rad_s2,30*kDeg2Rad),
-                std::min(cfg_.j_brake_rad_s3,120*kDeg2Rad),.20,cfg_.stop_margin_rad};
-            const auto b = boundary.at(sp[i].q_rad, limits_[i], tracking_ref_.v_max_rad_s,
+                std::min(cfg_.a_brake_rad_s2,profile.maximum.acceleration),
+                std::min(cfg_.j_brake_rad_s3,profile.maximum.jerk),.20,cfg_.stop_margin_rad};
+            const auto b = boundary.at(sp[i].q_rad, limits_[i], reference_cap,
                                        speed_servo_[i].acceleration, v_est_[i]);
             // Slow when the moving axis approaches an end, rather than making
             // an entire long traversal crawl because its destination is near it.
@@ -962,13 +973,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double dt = static_cast<double>(period_ns)*1e-9;
           // Tracking response is configured independently of slow contact
           // homing and the established manual/roam reference profile.
-          const double service_a = damped_tracking ?
+          const double service_a = cfg_.motion.configured ? profile.target.acceleration : damped_tracking ?
               std::min(cfg_.track_acceleration_rad_s2,30*kDeg2Rad) : 15*kDeg2Rad;
-          const double service_j = damped_tracking ?
+          const double service_j = cfg_.motion.configured ? profile.target.jerk : damped_tracking ?
               std::min(cfg_.track_jerk_rad_s3,120*kDeg2Rad) : 60*kDeg2Rad;
           const double acceleration = (cfg_.service_speed_control
               ? std::min(cfg_.a_brake_rad_s2,service_a) : cfg_.a_brake_rad_s2)
-              * std::clamp(last_intent_.acceleration_scale,0.0,1.0);
+              * std::clamp(last_intent_.acceleration_scale,0.0,1.0)
+              * (cfg_.motion.configured && last_decision_.action == SafetyAction::Derate ? cfg_.derate_factor : 1.0);
           const double jerk = (cfg_.service_speed_control
               ? std::min(cfg_.j_brake_rad_s3,service_j) : cfg_.j_brake_rad_s3)
               * std::clamp(last_intent_.jerk_scale,0.0,1.0);
@@ -1205,29 +1217,51 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // Commissioning ceiling for the initial speed-servo profile. Bounds
           // apply at the measured pose as well as the requested reference.
           double cap = std::min(hold_speed_effective(), cfg_.service_max_speed_rad_s);
+          const auto profile = motion_profile(i,mode_mgr_.mode());
+          if (cfg_.motion.configured) cap = profile.maximum.speed;
           if (ref_lim_engaged_) {
             // Autonomous reference speed is a planning rate. The position
             // servo needs bounded headroom to recover lag; clipping it to
             // that same rate leaves a permanent error during every sweep.
             // Retain manual profile limits and tracking confidence authority.
-            if (mode_mgr_.mode() == OperatingMode::Manual) cap = std::min(cap, ls);
+            if (mode_mgr_.mode() == OperatingMode::Manual) cap = cfg_.motion.configured
+                ? std::min(cap,profile.target.speed * std::clamp(last_intent_.velocity_scale,0.0,1.0))
+                : std::min(cap, ls);
             else if (mode_mgr_.mode() == OperatingMode::AutoTrack)
-              cap = std::min(cap, cfg_.service_max_speed_rad_s *
+              cap = std::min(cap, (cfg_.motion.configured ? profile.maximum.speed : cfg_.service_max_speed_rad_s) *
                   std::clamp(last_intent_.velocity_scale, 0.0, 1.0));
           }
           if (last_decision_.action == SafetyAction::Derate) cap *= cfg_.derate_factor;
           const double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
           const control::BoundaryGovernor boundary{
-              std::min(cfg_.a_brake_rad_s2,30*kDeg2Rad),
-              std::min(cfg_.j_brake_rad_s3,120*kDeg2Rad),.20,cfg_.stop_margin_rad};
-          const auto b = boundary.at(sp[i].q_rad,limits_[i],cap,
+              std::min(cfg_.a_brake_rad_s2,profile.maximum.acceleration),
+              std::min(cfg_.j_brake_rad_s3,profile.maximum.jerk),.20,cfg_.stop_margin_rad};
+          // Retain the carried command during deceleration into a lower mode
+          // ceiling. This transient may exceed the incoming mode's speed;
+          // the fixed service envelope and physical boundary still apply.
+          const double boundary_cap = cfg_.motion.configured
+              ? std::min(control::kServiceSpeed,std::max(cap,std::abs(speed_servo_[i].velocity) +
+                  std::abs(speed_servo_[i].acceleration)*static_cast<double>(period_ns)*1e-9)) : cap;
+          const auto b = boundary.at(sp[i].q_rad,limits_[i],boundary_cap,
                                      speed_servo_[i].acceleration,v_est_[i]);
+          effective_motion[i] = profile;
+          effective_motion[i].maximum = {cap,boundary.acceleration,boundary.jerk};
+          const double authority = std::clamp(last_intent_.velocity_scale,0.0,1.0);
+          effective_motion[i].target.speed *= authority;
+          effective_motion[i].target.acceleration *= std::clamp(last_intent_.acceleration_scale,0.0,1.0);
+          effective_motion[i].target.jerk *= std::clamp(last_intent_.jerk_scale,0.0,1.0);
+          if (last_decision_.action == SafetyAction::Derate) {
+            effective_motion[i].target.speed *= cfg_.derate_factor;
+            effective_motion[i].target.acceleration *= cfg_.derate_factor;
+          }
+          motion_negative_speed[i] = b.negative_speed;
+          motion_positive_speed[i] = b.positive_speed;
           double velocity = speed_servo_[i].step(qr, ff, sp[i].q_rad, cap,
               static_cast<double>(period_ns)*1e-9,
               // Allow the servo to follow the bounded reference profile and
               // recover position error without a second identical ramp delay.
               boundary.acceleration, boundary.jerk,
-              b.negative_acceleration_scale,b.positive_acceleration_scale);
+              b.negative_acceleration_scale,b.positive_acceleration_scale,cfg_.motion.configured);
           // Clamp the actual signed command, independently of the goal's
           // direction: a goal reversal cannot remove the old end's brake limit.
           const double safe_velocity = std::clamp(velocity,-b.negative_speed,b.positive_speed);
@@ -1859,6 +1893,33 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // Read at snapshot time only: the counter is already maintained per cycle, and the two
     // thresholds are constants, so this adds nothing to the 200 Hz path.
     snap.effective_speed_ceiling_deg_s = hold_speed_effective() * kRad2Deg;
+    snap.motion_profiles_active = cfg_.motion.configured && service_velocity_control;
+    if (snap.motion_profiles_active) {
+      for (int i=0; i<kAxisCount; ++i) {
+        const auto& configured = cfg_.motion.modes[static_cast<int>(mode_mgr_.mode())][i];
+        snap.configured_motion[i] = configured;
+        snap.effective_motion[i] = effective_motion[i];
+        snap.motion_negative_speed[i] = motion_negative_speed[i];
+        snap.motion_positive_speed[i] = motion_positive_speed[i];
+        const auto& a = cfg_.motion.axis_maximum[i];
+        const bool axis_cap = a.speed < configured.maximum.speed ||
+            a.acceleration < configured.maximum.acceleration || a.jerk < configured.maximum.jerk;
+        bool payload_cap = false;
+        if (payload_profile_) {
+          const auto& p = i == 0 ? payload_profile_->pitch : payload_profile_->yaw;
+          payload_cap = (p.v_max_rad_s > 0 && p.v_max_rad_s < std::min(a.speed,configured.maximum.speed)) ||
+              (p.a_max_rad_s2 > 0 && p.a_max_rad_s2 < std::min(a.acceleration,configured.maximum.acceleration)) ||
+              (p.j_max_rad_s3 > 0 && p.j_max_rad_s3 < std::min(a.jerk,configured.maximum.jerk));
+        }
+        const double cap = effective_motion[i].maximum.speed;
+        std::snprintf(snap.motion_limit_reason[i],sizeof(snap.motion_limit_reason[i]),
+            "mode%s%s%s%s%s%s", axis_cap ? ",axis" : "", payload_cap ? ",payload" : "",
+            payload_derated_ || last_decision_.action == SafetyAction::Derate ? ",derate" : "",
+            last_intent_.velocity_scale < 1 || last_intent_.acceleration_scale < 1 ? ",intent" : "",
+            std::min(motion_negative_speed[i],motion_positive_speed[i])+1e-8 < cap ? ",boundary" : "",
+            std::abs(service_command_rate[i]) > cap+1e-8 ? ",decelerating" : "");
+      }
+    }
     snap.control_deadline_misses = deadline_miss_count_;
     snap.control_deadline_grace_us = static_cast<int64_t>(cfg_.deadline_max_us);
     snap.control_deadline_miss_limit = static_cast<int64_t>(cfg_.deadline_miss_threshold);
@@ -1989,6 +2050,7 @@ void ControlLoop::set_payload_profile(payload::PayloadProfile pr,
 }
 
 double ControlLoop::hold_speed_effective() const {
+  if (cfg_.motion.configured) return motion_speed(mode_mgr_.mode(),true);
   double v = cfg_.hold_speed_rad_s;
   // The trajectory and actuator must share the commissioned service ceiling.
   // A faster planner accumulates a stale position error during every sweep.
@@ -2002,6 +2064,26 @@ double ControlLoop::hold_speed_effective() const {
   }
   if (payload_derated_) v *= cfg_.derate_factor;  // §31.3 conservative path
   return v;
+}
+
+control::MotionProfile ControlLoop::motion_profile(int axis, OperatingMode mode) const {
+  if (!cfg_.motion.configured) return {};  // existing service servo bounds
+  auto payload = control::MotionRates{};
+  if (payload_profile_) {
+    const auto& p = axis == ix(AxisId::Pitch) ? payload_profile_->pitch : payload_profile_->yaw;
+    if (p.v_max_rad_s > 0) payload.speed = p.v_max_rad_s;
+    if (p.a_max_rad_s2 > 0) payload.acceleration = p.a_max_rad_s2;
+    if (p.j_max_rad_s3 > 0) payload.jerk = p.j_max_rad_s3;
+  }
+  return control::resolve_motion(cfg_.motion.modes[static_cast<int>(mode)][axis],
+      cfg_.motion.axis_maximum[axis], payload, payload_derated_ ? cfg_.derate_factor : 1.0);
+}
+
+double ControlLoop::motion_speed(OperatingMode mode, bool maximum) const {
+  const auto pitch = motion_profile(ix(AxisId::Pitch),mode);
+  const auto yaw = motion_profile(ix(AxisId::Yaw),mode);
+  return maximum ? std::max(pitch.maximum.speed,yaw.maximum.speed)
+                 : std::max(pitch.target.speed,yaw.target.speed);
 }
 
 // --- v3 mode plumbing (§43/§44/§53) ---------------------------------------
@@ -2118,6 +2200,7 @@ RoamConfig ControlLoop::roam_config() const {
   // lets a station name its own; the named value is still checked against the safe
   // envelope below, so naming an elevation cannot put the sweep somewhere unsafe.
   const double derived_v =
+      cfg_.motion.configured ? motion_speed(OperatingMode::AutoRoam) :
       std::min(tracking_cfg_.search_v_max_rad_s, hold_speed_effective());
   c.pitch_ref_rad = cfg_.roam_pitch_named ? cfg_.roam_pitch_deg * kDeg2Rad
                                          : ready_raw_[ix(AxisId::Pitch)];
@@ -2401,6 +2484,12 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   if (cfg_.roam_velocity_deg_s > 0.0)
     l.roam_v_max_rad_s = std::min(l.roam_v_max_rad_s,
                                  cfg_.roam_velocity_deg_s * kDeg2Rad);
+  if (cfg_.motion.configured) {
+    l.manual_v_max_rad_s = motion_speed(OperatingMode::Manual);
+    l.track_v_max_rad_s = motion_speed(OperatingMode::AutoTrack);
+    l.roam_v_max_rad_s = motion_speed(OperatingMode::AutoRoam);
+    l.hold_v_max_rad_s = motion_speed(mode_mgr_.mode());
+  }
   return l;
 }
 
@@ -2481,6 +2570,7 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
       // beside what was allowed, and an operator can see the turret was deliberately
       // gentle rather than wondering whether it was failing.
       in.velocity_scale = at_out_.velocity_scale;
+      if (cfg_.motion.configured) in.acceleration_scale = at_out_.velocity_scale;
       in.confidence = at_out_.selected_confidence;
       in.set_reason(at_out_.reason);
       return in;
@@ -2505,6 +2595,14 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
 
 void ControlLoop::apply_payload_derate(bool derated) {
   payload_derated_ = derated;
+  if (cfg_.motion.configured) {
+    // The shared geometric envelope must not couple different axes/modes.
+    // Their individual payload caps are enforced by motion_profile().
+    env_.set_v_max(std::max({motion_speed(OperatingMode::Manual,true),
+                            motion_speed(OperatingMode::AutoTrack,true),
+                            motion_speed(OperatingMode::AutoRoam,true)}));
+    return;
+  }
   // Cap the safety-envelope v_max (it bounds the tracking reference, §15):
   // derated -> profile-capped hold speed * derate factor.
   double cap = derated ? cfg_.derate_factor * cfg_.hold_speed_rad_s

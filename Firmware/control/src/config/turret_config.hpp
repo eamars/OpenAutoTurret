@@ -11,6 +11,7 @@
 #include <vector>
 #include "tracking/aim_point.hpp"
 #include "geometry/bore_alignment.hpp"
+#include "control/motion_profile.hpp"
 
 namespace ota::config {
 
@@ -299,6 +300,7 @@ struct TurretConfig {
   InstallationConfig installation;
   PayloadConfig payload;
   V3Config v3;   // §72
+  control::MotionConfig motion;
 };
 
 struct LoadResult {

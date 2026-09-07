@@ -14,6 +14,7 @@
 #pragma once
 
 #include <array>
+#include "control/motion_profile.hpp"
 #include <cstddef>
 #include <cstdio>
 #include <mutex>
@@ -207,6 +208,12 @@ struct TelemetrySnapshot {
   // followed. Published because the operator's acceptance rule and this constant are in direct conflict,
   // and until now the constant was visible only in source.
   double effective_speed_ceiling_deg_s = 0.0;
+  bool motion_profiles_active = false;
+  control::MotionProfile configured_motion[kAxisCount];
+  control::MotionProfile effective_motion[kAxisCount];
+  double motion_negative_speed[kAxisCount]{};
+  double motion_positive_speed[kAxisCount]{};
+  char motion_limit_reason[kAxisCount][96]{};
   double effective_vfov_deg = 0.0;
   double camera_fps = 0.0;
 

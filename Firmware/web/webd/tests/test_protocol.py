@@ -16,6 +16,15 @@ from ..protocol import (
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_motion_limits_survive_controller_to_web_round_trip(self) -> None:
+        pair = {"speed_deg_s": 20, "acceleration_deg_s2": 30, "jerk_deg_s3": 100}
+        profile = {"pitch": {"configured": {"target": pair, "maximum": pair},
+                             "effective": {"target": pair, "maximum": pair},
+                             "limit_reason": "mode,axis"}}
+        telemetry = telemetry_from_json({"type": "telemetry", "motion_profile": profile})
+        self.assertEqual(json.loads(telemetry_to_json(telemetry))["motion_profile"], profile)
+        self.assertIsNone(telemetry_from_json({"type": "telemetry"}).motion_profile)
+
     def test_command_round_trip(self) -> None:
         raw = command_to_json("start_tracking")
         mtype, msg = parse_message(raw)

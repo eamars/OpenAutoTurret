@@ -226,6 +226,7 @@ class Telemetry:
     control_deadline_grace_us: Optional[int] = None
     control_deadline_miss_limit: Optional[int] = None
     effective_speed_ceiling_deg_s: Optional[float] = None
+    motion_profile: Optional[dict] = None  # configured/effective pairs by axis, or unavailable
     envelope_v_max_deg_s: Optional[float] = None
     prediction_horizon_ms: Optional[int] = None
     estimator_innovation_az_rad: Optional[float] = None

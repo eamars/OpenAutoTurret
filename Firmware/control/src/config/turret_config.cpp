@@ -115,6 +115,89 @@ void parse_alignment_policy(const YAML::Node& root, TurretConfig& c,
     errors.push_back("alignment bore angles must be strictly inside +/-45 degrees");
 }
 
+void parse_motion(const YAML::Node& root, TurretConfig& c,
+                  std::vector<std::string>& err, std::vector<std::string>& warn) {
+  if (!root.IsMap() || !root["motion"].IsDefined()) return;
+  const auto motion = root["motion"];
+  c.motion.configured = true;
+  if (!strict_map(motion, {"modes"}, "motion", err)) return;
+  const auto modes = motion["modes"];
+  if (!strict_map(modes, {"manual", "auto_track", "auto_roam"}, "motion.modes", err)) return;
+  const auto rates = [&](const YAML::Node& n, const std::string& path,
+                         control::MotionRates defaults) {
+    if (!strict_map(n, {"speed_deg_s", "acceleration_deg_s2", "jerk_deg_s3"}, path, err))
+      return defaults;
+    defaults.speed = alignment_number(n, "speed_deg_s", path, err)*kDeg2Rad;
+    defaults.acceleration = alignment_number(n, "acceleration_deg_s2", path, err)*kDeg2Rad;
+    if (n["jerk_deg_s3"].IsDefined())
+      defaults.jerk = alignment_number(n, "jerk_deg_s3", path, err)*kDeg2Rad;
+    if (!(defaults.speed > 0 && defaults.acceleration > 0 && defaults.jerk > 0))
+      err.push_back(path + " rates must be > 0 (hold is a zero-motion intent)");
+    return defaults;
+  };
+  const auto profile = [&](const YAML::Node& n, const std::string& path,
+                           control::MotionProfile p, bool axis_override) {
+    if (axis_override) strict_map(n, {"maximum", "target"}, path, err);
+    else strict_map(n, {"maximum", "target", "axes"}, path, err);
+    p.maximum = rates(fetch(n,"maximum"),path+".maximum",p.maximum);
+    p.target = rates(fetch(n,"target"),path+".target",p.target);
+    if (p.target.speed > p.maximum.speed || p.target.acceleration > p.maximum.acceleration ||
+        p.target.jerk > p.maximum.jerk)
+      err.push_back(path + " target must not exceed maximum");
+    if (p.maximum.speed > control::kServiceSpeed ||
+        p.maximum.acceleration > control::kServiceAcceleration ||
+        p.maximum.jerk > control::kServiceJerk)
+      err.push_back(path + " maximum exceeds service envelope (20 deg/s, 30 deg/s2, 120 deg/s3)");
+    return p;
+  };
+  const char* names[] = {"manual", "auto_track", "auto_roam"};
+  for (int m=0; m<3; ++m) {
+    const auto n = fetch(modes,names[m]);
+    const std::string path = std::string("motion.modes.")+names[m];
+    control::MotionProfile defaults;
+    if (m==1) defaults.target.jerk = 100*kDeg2Rad;
+    const auto p = profile(n,path,defaults,false);
+    for (int i=0; i<kAxisCount; ++i) c.motion.modes[m][i] = p;
+    const auto axes = fetch(n,"axes");
+    if (axes.IsDefined() && !axes.IsNull() && strict_map(axes,{"pitch","yaw"},path+".axes",err)) {
+      for (int i=0; i<kAxisCount; ++i) {
+        const auto name = axis_name(static_cast<AxisId>(i));
+        if (axes[name].IsDefined())
+          c.motion.modes[m][i] = profile(axes[name],path+".axes."+name,p,true);
+      }
+    }
+  }
+  for (int i=0; i<kAxisCount; ++i) {
+    const auto& a = c.axes[i];
+    c.motion.axis_maximum[i] = {a.max_velocity_deg_s*kDeg2Rad,
+        a.max_acceleration_deg_s2*kDeg2Rad,a.max_jerk_deg_s3*kDeg2Rad};
+    for (double value : {a.max_velocity_deg_s,a.max_acceleration_deg_s2,a.max_jerk_deg_s3})
+      if (!std::isfinite(value) || value <= 0)
+        err.push_back(std::string("axes.")+axis_name(static_cast<AxisId>(i))+" motion limits must be finite and > 0");
+  }
+  if (!c.v3.service_speed_control)
+    err.push_back("motion requires v3.service_speed_control: true for acceleration enforcement");
+  // One source of authority. Old files remain loadable, but mixed new/old
+  // motion controls are an error rather than silently ignored tuning.
+  const auto named = [](const YAML::Node& n) { return n.IsDefined() && !n.IsNull(); };
+  for (const char* key : {"hold_speed_deg_s","track_speed_deg_s","track_acceleration_deg_s2",
+                          "track_jerk_deg_s3","search_speed_deg_s"})
+    if (named(fetch(fetch(root,"tracking"),key)))
+      err.push_back(std::string("tracking.")+key+" conflicts with motion.modes");
+  if (named(fetch(fetch(root,"v3"),"service_max_speed_deg_s")) ||
+      named(fetch(fetch(fetch(root,"v3"),"auto_roam"),"velocity_deg_s")))
+    err.push_back("legacy v3 service/roam speed conflicts with motion.modes");
+  warn.erase(std::remove_if(warn.begin(),warn.end(),[](const std::string& w) {
+    return w.find("tracking.track_speed_deg_s") != std::string::npos ||
+           w.find("tracking.hold_speed_deg_s") != std::string::npos ||
+           w.find("tracking.search_speed_deg_s") != std::string::npos ||
+           w.find("tracking.track_acceleration_deg_s2") != std::string::npos ||
+           w.find("tracking.track_jerk_deg_s3") != std::string::npos ||
+           w.find("v3.service_max_speed_deg_s") != std::string::npos ||
+           w.find("v3.auto_roam.velocity_deg_s") != std::string::npos;
+  }),warn.end());
+}
+
 // Conservative defaults for the §58 commissioning parameters. These keep the
 // daemon safe (slow, wide bands) until the real values are measured; the pitch
 // band is wide enough to contain the observed ~-86 deg position so nothing is
@@ -953,6 +1036,7 @@ LoadResult load_turret_config(const std::string& path) {
   // §72. Last, so it can see the axis limits it has to be checked against.
   parse_alignment_policy(root, c, err, warn);
   parse_v3(root, c.v3, err, warn, c.axes);
+  parse_motion(root, c, err, warn);
 
   r.ok = err.empty();
   return r;

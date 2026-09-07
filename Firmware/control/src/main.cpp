@@ -286,8 +286,17 @@ int main(int argc, char** argv) {
   spdlog::info("tracking: auto_enable={} (§38.1 gate: homing), speeds "
                "track={:.1f} search={:.1f} deg/s, lost_behavior={}",
                cfg.tracking.enabled ? "yes" : "NO",
-               cfg.tracking.track_speed_deg_s, cfg.tracking.search_speed_deg_s,
+               tracking_cfg.track_v_max_rad_s*kRad2Deg, tracking_cfg.search_v_max_rad_s*kRad2Deg,
                cfg.tracking.target_lost_behavior);
+  if (cfg.motion.configured) {
+    const char* names[] = {"MANUAL","AUTO_TRACK","AUTO_ROAM"};
+    for (int m=0; m<3; ++m) for (int i=0; i<kAxisCount; ++i) {
+      const auto& p=cfg.motion.modes[m][i];
+      spdlog::info("motion {} {}: target {:.1f} deg/s {:.1f} deg/s2; maximum {:.1f} deg/s {:.1f} deg/s2 (before axis/payload/intent/boundary caps)",
+          names[m],axis_name(static_cast<AxisId>(i)),p.target.speed*kRad2Deg,
+          p.target.acceleration*kRad2Deg,p.maximum.speed*kRad2Deg,p.maximum.acceleration*kRad2Deg);
+    }
+  }
 
   // Phase 7: load the stored installation orientation (base -> world, §29/§30).
   // No calibration file => identity pose (assumed-level base); the telemetry

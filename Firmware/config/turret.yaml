@@ -180,15 +180,7 @@ tracking:
   estimator_measurement_sigma_rad: 0.012
   estimator_accel_sigma_rad_s2: 0.20
   motor_response_ms: 120.0
-  # Service speed is independent of homing. Leave recovery headroom above tracking.
-  # Payload and measured-pose safety limits still cap every motor command.
-  hold_speed_deg_s: 20.0
-  track_speed_deg_s: 15.0
-  # Tracking-only reference limits, below the unchanged 30/120 motor servo.
-  # Preserve damping and prediction horizon when increasing acceleration.
-  track_acceleration_deg_s2: 25.0
-  track_jerk_deg_s3: 100.0
-  search_speed_deg_s: 20.0
+  # Motion targets and maximums for EACH service mode are under motion.modes.
   # Applies on native and legacy observation paths. Perception's association
   # anchor remains independent. A fraction is a box position, not a detected head.
   # Startup-only: edit these values and restart through the normal launcher.
@@ -295,15 +287,31 @@ payload:
 v3:
   default_mode: AUTO_ROAM
   service_speed_control: true
-  service_max_speed_deg_s: 20.0
   service_speed_ki: 0.05
   service_speed_kp: 4.0
   auto_roam:
     full_yaw_travel: true
-    velocity_deg_s: 10.0
   auto_track:
     roam_on_loss_ms: 1000
     track_on_acquire_ms: 250
     coast_ms: 250
     lost_hold_ms: 500
     reacquire_window_ms: 1000
+
+# Independent reference targets and actuator maximums. Deg/s, deg/s², deg/s³.
+# These preserve the established service command envelope; full-speed loaded
+# stopping remains a physical verification gap. Homing/parking retain their
+# separately commissioned profiles above. Manual presets scale this base.
+motion:
+  modes:
+    manual:
+      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+      target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+    auto_roam:
+      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+      target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+    auto_track:
+      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+      # Requested maximum target speed/acceleration; jerk retains its 100 cap.
+      # At full target speed there is no additional speed correction headroom.
+      target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}

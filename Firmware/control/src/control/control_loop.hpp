@@ -48,6 +48,7 @@
 #include "control/reference_limiter.hpp"
 #include "control/tracking_reference.hpp"
 #include "control/speed_servo.hpp"
+#include "control/motion_profile.hpp"
 #include "control/boundary_governor.hpp"
 #include "control/safety_envelope.hpp"
 #include "control/safety_supervisor.hpp"
@@ -101,6 +102,7 @@ class ControlLoop {
   // second implementation. Tests call this one.
   void preserve_scene(const telemetry::TelemetrySnapshot& live, const char* reason);
   struct Config {
+    control::MotionConfig motion;
     bool start_in_auto_roam = false;
     bool service_speed_control = false;
     double homing_speed_kp = 1.0;
@@ -333,6 +335,8 @@ class ControlLoop {
   // v_max when present, scaled by the derate factor while derated
   // (§28.5/§31.3).
   double hold_speed_effective() const;
+  control::MotionProfile motion_profile(int axis, OperatingMode mode) const;
+  double motion_speed(OperatingMode mode, bool maximum = false) const;
 
   // --- telemetry (§6.3, §43) --------------------------------------------
   // The loop fills the §6.3 snapshot EVERY cycle (webd/logd read it at 10-20 Hz

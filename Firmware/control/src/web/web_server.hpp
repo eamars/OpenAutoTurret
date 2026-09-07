@@ -72,6 +72,32 @@ inline std::string json_escape(const std::string& s) {
   return o;
 }
 
+inline std::string format_motion_profiles(const telemetry::TelemetrySnapshot& s) {
+  if (!s.motion_profiles_active) return "null";
+  std::ostringstream os;
+  const auto rates = [&](const control::MotionRates& r) {
+    os << "{\"speed_deg_s\":" << r.speed*kRad2Deg
+       << ",\"acceleration_deg_s2\":" << r.acceleration*kRad2Deg
+       << ",\"jerk_deg_s3\":" << r.jerk*kRad2Deg << '}';
+  };
+  const auto profile = [&](const control::MotionProfile& p) {
+    os << "{\"maximum\":"; rates(p.maximum);
+    os << ",\"target\":"; rates(p.target); os << '}';
+  };
+  os << '{';
+  for (int i=0; i<kAxisCount; ++i) {
+    if (i) os << ',';
+    os << '"' << axis_name(static_cast<AxisId>(i)) << "\":{\"configured\":";
+    profile(s.configured_motion[i]);
+    os << ",\"effective\":"; profile(s.effective_motion[i]);
+    os << ",\"negative_speed_deg_s\":" << s.motion_negative_speed[i]*kRad2Deg
+       << ",\"positive_speed_deg_s\":" << s.motion_positive_speed[i]*kRad2Deg
+       << ",\"limit_reason\":\"" << s.motion_limit_reason[i] << "\"}";
+  }
+  os << '}';
+  return os.str();
+}
+
 // Format a TelemetrySnapshot as the published JSON telemetry object (§6.3).
 // A two-element joint vector as JSON. Named short because it is used four times in the
 // black-box object and each use is the same pair of numbers; the alternative was four
@@ -117,6 +143,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"control_deadline_miss_limit\":" << s.control_deadline_miss_limit
      // The ceiling that binds, as opposed to the envelope fallback (which is not in force).
      << ",\"effective_speed_ceiling_deg_s\":" << s.effective_speed_ceiling_deg_s
+     << ",\"motion_profile\":" << format_motion_profiles(s)
      << ",\"payload_profile_name\":\"" << json_escape(s.payload_profile_name) << "\""
      << ",\"can_available\":" << (s.can_available ? "true" : "false")
      << ",\"can_kind\":\"" << json_escape(s.can_kind) << "\""

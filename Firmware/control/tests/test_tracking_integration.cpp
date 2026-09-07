@@ -18,10 +18,12 @@
 
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 
 #include "calibration/homing_plan.hpp"
+#include "config/turret_config.hpp"
 #include "control/control_loop.hpp"
 #include "sim/sim_motor_backend.hpp"
 #include "tracks/perception_wire.hpp"
@@ -88,8 +90,9 @@ HomingPlan make_plan() {
 }
 
 ControlLoop::Config make_cfg(bool speed_control = false, bool full_travel = false,
-                             double track_acceleration = 15) {
+                             double track_acceleration = 15, const control::MotionConfig& motion = {}) {
   ControlLoop::Config cfg;
+  cfg.motion = motion;
   cfg.control_hz = 200;
   cfg.hold_speed_rad_s = 30.0 * kDeg;
   cfg.emergency_speed_rad_s = 10.0 * kDeg;
@@ -124,11 +127,11 @@ TrackingController::Config make_tracking_cfg(bool search_enabled) {
 class TrackingRig {
  public:
   explicit TrackingRig(bool speed_control = false, bool full_travel = false,
-                       double track_acceleration = 15)
+                       double track_acceleration = 15, const control::MotionConfig& motion = {})
       : backend_(std::make_unique<SimMotorBackend>(0.005)),
         sim_(backend_.get()),
         cam_(make_intrinsics()), kin_(TurretKinematics::aligned()),
-        loop_(std::make_unique<ControlLoop>(make_cfg(speed_control,full_travel,track_acceleration), std::move(backend_))) {
+        loop_(std::make_unique<ControlLoop>(make_cfg(speed_control,full_travel,track_acceleration,motion), std::move(backend_))) {
     sim_->set_stops(AxisId::Pitch, pitch_low_, pitch_high_);
     sim_->set_stops(AxisId::Yaw, yaw_low_, yaw_high_);
     sim_->set_position(AxisId::Pitch, 10.0 * kDeg);
@@ -394,6 +397,78 @@ TEST(TrackingIntegration, VelocityServiceConvergesThenHonorsManualHold) {
   EXPECT_NEAR(az,5*kDeg,.5*kDeg);
   EXPECT_NEAR(el,5*kDeg,.5*kDeg);
   }
+}
+
+TEST(MotionIntegration, ConfiguredLimitsReachMotorCommandsAndRemainIndependentPerAxis) {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"config/turret.yaml";
+  auto loaded = config::load_turret_config(path.string());
+  ASSERT_TRUE(loaded.ok);
+  for (bool slow_pitch : {false,true}) {
+    SCOPED_TRACE(slow_pitch);
+    auto motion = loaded.config.motion;
+    if (slow_pitch) motion.axis_maximum[0] = {6*kDeg,10*kDeg,60*kDeg};
+    TrackingRig r(true,true,30,motion);
+    int64_t t=0;
+    ASSERT_TRUE(run_to_ready(r,t));
+    enter_mode(r,make_tracking_cfg(false),OperatingMode::AutoTrack);
+    for (int i=0; i<4; ++i,t+=kDtNs) step_with_track(r,t,i,35*kDeg,10*kDeg);
+    r.loop().submit_command("select_target","1");
+    double peak_speed=0,peak_acceleration=0,peak_pitch_speed=0;
+    for (int i=0; i<2400; ++i,t+=kDtNs) {
+      step_with_track(r,t,10+i,35*kDeg,10*kDeg);
+      ASSERT_NE(r.loop().phase(),Phase::Fault);
+      const auto s = r.loop().telemetry().snapshot();
+      peak_speed = std::max(peak_speed,std::abs(s.service_command_rate_yaw_rad_s));
+      peak_pitch_speed = std::max(peak_pitch_speed,std::abs(s.service_command_rate_pitch_rad_s));
+      peak_acceleration = std::max(peak_acceleration,std::abs(s.q_ref_accel_yaw_rad_s2));
+      EXPECT_LE(std::abs(s.service_command_rate_yaw_rad_s),20*kDeg+1e-8);
+      EXPECT_LE(std::abs(s.service_command_rate_pitch_rad_s),(slow_pitch?6:20)*kDeg+1e-8);
+      if (s.q_ref_rate_valid) EXPECT_LE(std::abs(s.q_ref_accel_yaw_rad_s2),30*kDeg+1e-8);
+    }
+    EXPECT_GT(peak_speed,19*kDeg);
+    EXPECT_GT(peak_acceleration,29*kDeg);
+    EXPECT_GT(peak_pitch_speed,5*kDeg);
+    const auto s = r.loop().telemetry().snapshot();
+    ASSERT_TRUE(s.motion_profiles_active);
+    RecordProperty(slow_pitch ? "motion_slow_pitch" : "motion_full",web::format_telemetry(s));
+    EXPECT_DOUBLE_EQ(s.effective_motion[0].maximum.speed,(slow_pitch?6:20)*kDeg);
+    EXPECT_DOUBLE_EQ(s.effective_motion[1].maximum.acceleration,30*kDeg);
+    EXPECT_NE(web::format_telemetry(s).find("\"motion_profile\":{\"pitch\""),std::string::npos);
+    if (slow_pitch) EXPECT_NE(std::string(s.motion_limit_reason[0]).find("axis"),std::string::npos);
+  }
+}
+
+TEST(MotionIntegration, LowerManualLimitBrakesSmoothlyAfterRoamAndLeaseExpiryStops) {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"config/turret.yaml";
+  auto loaded = config::load_turret_config(path.string());
+  ASSERT_TRUE(loaded.ok);
+  auto motion = loaded.config.motion;
+  for (auto& p : motion.modes[0]) p.maximum.speed = p.target.speed = 3*kDeg;
+  TrackingRig r(true,true,30,motion);
+  int64_t t=0;
+  ASSERT_TRUE(run_to_ready(r,t));
+  enter_mode(r,make_tracking_cfg(true),OperatingMode::AutoRoam);
+  bool moving=false;
+  for (int i=0; i<3000; ++i,t+=kDtNs) {
+    r.loop().step(t,kDtNs);
+    if (std::abs(r.sim().velocity(AxisId::Yaw))>9*kDeg) { moving=true; break; }
+  }
+  ASSERT_TRUE(moving);
+  // Read the actual simulated motor commands, not downsampled telemetry.
+  double prior=r.sim().velocity(AxisId::Yaw);
+  ASSERT_TRUE(r.loop().request_mode(OperatingMode::Manual).ok);
+  r.loop().submit_command("manual_jog_start","yaw+:fast");
+  for (int i=0; i<400; ++i,t+=kDtNs) {
+    if (i%20==0) r.loop().submit_command("manual_jog_keepalive","");
+    r.loop().step(t,kDtNs);
+    ASSERT_NE(r.loop().phase(),Phase::Fault);
+    const double v=r.sim().velocity(AxisId::Yaw);
+    EXPECT_LE(std::abs(v-prior)/.005,30*kDeg+1e-7);
+    prior=v;
+  }
+  EXPECT_LE(std::abs(prior),3*kDeg+1e-6);
+  for (int i=0; i<800; ++i,t+=kDtNs) r.loop().step(t,kDtNs);
+  EXPECT_LT(std::abs(r.sim().velocity(AxisId::Yaw)),.1*kDeg);
 }
 
 // The core Phase 6 deliverable: a target rotating in the base frame is tracked

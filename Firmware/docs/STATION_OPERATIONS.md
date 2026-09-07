@@ -70,8 +70,13 @@ only when retained calibration and live energized motor state validate. Never
 copy a retained homing file, manually mark axes homed, or bypass validation.
 Slow loaded homing currently takes about 5–6 minutes: coarse 5°/s, fine/backoff
 and between-axis moves 3°/s. This does not cap tracking speed. Tracking is
-15°/s with 20°/s service headroom; track acceleration is 25°/s². Config and
-safety limits remain authoritative. Moving-target overshoot is not fully verified.
+configured with target and maximum pairs of 20°/s and 30°/s² under
+`motion.modes.auto_track`. These are the existing service command ceilings,
+not verified installed-load maxima. At full target speed there is no extra
+speed headroom for correcting lag. Axis, payload, confidence and boundary
+limits remain authoritative. Full-speed loaded stopping and moving-target
+overshoot remain unverified. See [motion profiles](motion_profiles.md) for the
+configuration contract and offline validation.
 
 ## Deploy a committed revision from Windows or Linux
 

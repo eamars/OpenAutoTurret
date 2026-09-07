@@ -12,7 +12,8 @@ struct SpeedServo {
   void reset() { velocity = acceleration = 0; quiet = false; }
   double step(double reference, double feed_forward, double measured,
               double cap, double dt, double a_max, double j_max,
-              double negative_acceleration_scale=1, double positive_acceleration_scale=1) {
+              double negative_acceleration_scale=1, double positive_acceleration_scale=1,
+              bool smooth_cap_reduction=false) {
     if (!(dt > 0 && dt < .1) || cap <= 0) { reset(); return 0; }
     const double error = reference - measured;
     const bool still_reference = std::abs(feed_forward) < .02 * kDeg2Rad;
@@ -26,9 +27,16 @@ struct SpeedServo {
     const double hi=velocity>=0 ? a_max*std::clamp(positive_acceleration_scale,0.0,1.0) : a_max;
     const double desired_a = std::clamp((desired-velocity)/dt, -lo, hi);
     acceleration += std::clamp(desired_a-acceleration, -j_max*dt, j_max*dt);
+    // A newly reduced hard acceleration cap takes precedence over jerk
+    // continuity. Velocity remains continuous; steady-limit jerk is unchanged.
+    if (smooth_cap_reduction) acceleration = std::clamp(acceleration,-a_max,a_max);
     const double next = velocity + acceleration*dt;
     if ((desired-velocity)*(desired-next) <= 0) { velocity=desired; acceleration=0; }
-    else velocity=std::clamp(next, -cap, cap);
+    // A lower mode/preset limit is a braking request. Clipping carried speed
+    // immediately would violate acceleration by orders of magnitude. The
+    // measured-pose boundary governor still has independent final authority.
+    else velocity=smooth_cap_reduction && std::abs(velocity)>cap
+        ? next : std::clamp(next, -cap, cap);
     return velocity;
   }
 };
