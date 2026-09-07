@@ -63,12 +63,9 @@ axes:
     max_velocity_deg_s: 30
     max_acceleration_deg_s2: 60
     max_jerk_deg_s3: 300
-    # Speed-mode homing: the drive current limit (A) for yaw. The POC reference
-    # (zero_yaw_axis) runs yaw at just 1 A — the friction notches SLIP at this
-    # current (they never stay stable over the 1.5 s stop window), so only the
-    # true mechanical end-stop latches as a stop. Do NOT raise this: a higher
-    # current makes the notches hold and produce false stops.
-    limit_cur_a: 1.0
+    # Speed-mode homing: the drive current limit (A) for yaw. Current base
+    # commissioning value: 3 A, raised from the earlier 1 A POC value.
+    limit_cur_a: 3.0
 homing:
   # Independent of service gains: the stock 1/.002 loop stalled in the slow
   # backoff at the same 5 A cap. 4/.05 completed both axes and pitch repeat.
@@ -81,9 +78,9 @@ homing:
     coarse_speed_deg_s: 5
     fine_speed_deg_s: 3
     # Pushing-confirmation threshold (N.m): the drive's stop-push torque scales
-    # with LimitCur, so at the POC homing currents (yaw 1 A / pitch 3 A) it is
+    # with LimitCur, so at the homing currents (yaw 3 A / pitch 5 A) it is
     # far below the 0.25 N.m measured at higher currents (P0e). Set low so the
-    # "drive is pushing" gate is satisfied at 1 A while a true stop's sustained
+    # "drive is pushing" gate is satisfied at 3 A while a true stop's sustained
     # stall (1.5 s) does the real discrimination. Calibrate on the supervised run.
     current_or_effort_limit: 0.05
     stall_velocity_threshold: 0.5   # rad/s; contact-gate stall (above approach
@@ -119,7 +116,7 @@ homing:
     repeatability_retries: 2
     # --- Speed-mode homing safety limits ---
     # No adaptive current raise: the homing runs at the per-axis limit_cur_a
-    # (pitch 5 A / yaw 1 A) for the whole approach. At these currents the
+    # (pitch 5 A / yaw 3 A) for the whole approach. At these currents the
     # friction notches slip (never stable over the stop window), so a latched
     # contact is the true mechanical end-stop. (limit_cur_step_a /
     # limit_cur_max_a are legacy position-mode push-through parameters; 0 =
@@ -272,7 +269,7 @@ payload:
   # both axes.
   check_region_half_span_deg: 10.0
   # Drive current limit (A) applied to BOTH axes for the payload check. The
-  # post-homing LimitCur (3 A pitch / 1 A yaw) is marginal for a 2 deg
+  # post-homing LimitCur (5 A pitch / 3 A yaw) is marginal for a 2 deg
   # position-mode step, so the check raises both to this value (5 A, under
   # the 10 A station cap) and leaves it there (the position holds are more
   # authoritative at 5 A).

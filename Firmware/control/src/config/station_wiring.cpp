@@ -167,7 +167,7 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   // overshoot point, the 0-limit hold could not pull the axis back).
   c.park.verify_speed_deg_s = cfg.shutdown.verify_speed_deg_s;
   // Park moves run in speed mode: reuse the per-axis homing current limits
-  // (pitch 3 A / yaw 1 A — under the 10 A safe cap) as the drive LimitCur for
+  // (pitch 5 A / yaw 3 A — under the 10 A safe cap) as the drive LimitCur for
   // the park moves.
   c.park.limit_cur_a[0] = cfg.axes[0].limit_cur_a > 0.0 ? cfg.axes[0].limit_cur_a
                                                         : c.park.limit_cur_a[0];

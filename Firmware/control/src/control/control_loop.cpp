@@ -81,8 +81,8 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   // constant approach speed (SpdRef) — the smooth source of motion. This is
   // the root-cause fix for the position-mode stick-slip (P0o): a host-regenerated
   // moving LocRef at 200 Hz executes as stick-slip on this CyberGear, while a
-  // constant SpdRef is smooth. The per-axis homing current (pitch 3 A / yaw
-  // 1 A) is carried by the HomingController and applied on its first cycle
+  // constant SpdRef is smooth. The per-axis homing current (pitch 5 A / yaw
+  // 3 A) is carried by the HomingController and applied on its first cycle
   // (set_current_limit); here we enter speed mode with a hold default so the
   // non-active axis retains its own configured initial current limit.
   double limit_cur[kAxisCount];
@@ -133,7 +133,7 @@ bool ControlLoop::start_parking(std::string& err) {
     return false;
   }
   // The park MOVES run in speed mode (SpdRef, per-axis current limit from
-  // config — pitch 3 A / yaw 1 A, under the 10 A cap): the drive's velocity
+  // config — pitch 5 A / yaw 3 A, under the 10 A cap): the drive's velocity
   // loop is the strong, smooth motion source (P0o). The old position-mode
   // park move crawled ~0.07 deg/s against gravity + friction and never
   // landed at the real station (rehome4: full 40 s park timeout, yaw
@@ -2504,8 +2504,7 @@ void ControlLoop::start_payload_check(TimeNs now_ns, bool manual,
   // The check takes over the axes: drop any tracking reference first.
   if (tracking_) disable_tracking();
   // The position-mode check needs real torque authority: the post-homing
-  // LimitCur (3 A pitch / 1 A yaw) is marginal for a 2 deg step (the yaw
-  // creeps at 1 A; the 3 A pitch hold only just holds). Raise BOTH axes to
+  // LimitCur (5 A pitch / 3 A yaw) is marginal for a 2 deg step. Raise BOTH axes to
   // the check current (5 A, under the 10 A station cap) for the check and
   // LEAVE it there — the §33.2/Hold position holds are more authoritative
   // at 5 A, and the boot speed-mode hold already uses this same 5 A.

@@ -208,9 +208,9 @@ struct PayloadConfig {
   // homed soft limits.
   double check_region_half_span_deg = 10.0;
   // Drive current limit (A) applied to BOTH axes for the duration of the
-  // check. The post-homing LimitCur (3 A pitch / 1 A yaw) is marginal for a
-  // 2 deg position-mode step (the yaw creeps at 1 A), so the check raises
-  // both to this value (5 A, well under the 10 A station cap) and leaves it
+  // check. The post-homing LimitCur (5 A pitch / 3 A yaw) is marginal for a
+  // 2 deg position-mode step, so the check raises both axes to this value
+  // (5 A, well under the 10 A station cap) and leaves it
   // there — the §33.2/hold position holds are MORE authoritative at 5 A, and
   // the boot speed-mode hold already uses this same 5 A default.
   double check_current_a = 5.0;
