@@ -62,7 +62,9 @@ def analyze(path):
             if np.all(inside[i:]):
                 settled=round(float(t[i]*1000),2); break
         trial=dict(arg=ack['arg'],axis=axis,delta_deg=delta,omega=float(omega),
-            position_gain=float(gain[0]) if gain else 3.0,
+            # An omitted gain uses the deployed controller configuration; it
+            # cannot be reconstructed as a constant from the command string.
+            position_gain=float(gain[0]) if gain else None,
             seq=seq,samples=len(samples),duration_s=round(float(t[-1]),3),
             valid_full_trial=bool(t[-1]>=5.8 and all(r['safety']==0 for r in samples)),
             start_deg=round(base,4),goal_deg=round(goal,4),

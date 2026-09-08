@@ -5,13 +5,36 @@ Physical experiments use fixed angular commands and numeric motor telemetry.
 No camera image or video is inspected and no detected subject drives a trial.
 
 **Physical result:** homing completed on `adf447e0b5c5.cmdOMu` in approximately
-6.3 minutes, with valid soft limits, Manual readiness and no fault. Forty
+6.4 minutes, with valid soft limits, Manual readiness and no fault. Forty
 target-free step trials then exercised 0.5/1/5-degree commands in both axes and
 directions. Thirty-eight completed their full six-second measurement interval;
 one was interrupted by a cycle-timing intervention and one by excessive reverse
 yaw excursion. The selected operating profile is adaptive reference omega 4,
 position-servo gain 4. Homing speeds, current limits and inner drive gains are
 unchanged by this tuning selection.
+
+**Deployed confirmation:** release `96d3cd713c8c.qK3aUY` completed a second
+physical home in 359.83 seconds. Five further 1-degree trials used its deployed
+position gain of 4 without a trial gain override. Three completed; positive
+pitch was interrupted twice by single-cycle timing Derate, after 4.18/4.19
+seconds (8.187/7.678 ms control periods). These are excluded from completed-trial
+claims. Overall: 45 attempted, 41 complete, three timing interruptions and one
+excessive-excursion cancellation. This is partial verification of the final
+profile, with full four-direction evidence on the preceding release using
+the same selected gains.
+
+The completed deployed yaw +/-1-degree steps reached t90 in 1.178/1.104 seconds,
+with 0.158/0.115-degree observed overshoot. Negative pitch reached t90 in 1.614
+seconds, overshot by 0.268 degrees, and settled inside +/-0.2 degrees after
+3.793 seconds. Overshoot includes the captured post-trial interval. Positive
+pitch reached t90 before interruption in both attempts, but neither establishes
+an uninterrupted six-second response. Timing interruptions and pitch settling
+variability remain unresolved; repeat-until-pass is not evidence of reliability.
+
+Final numeric readback: Manual, ALLOW, valid limits, empty fault, zero commanded
+rates on both axes, feedback age 11 ms. The station remains running and energized
+with the disposable Manual configuration. The shipped startup mode is still
+AUTO_ROAM. No further shutdown or homing was performed for documentation.
 
 | Physical test | Encoder t90 | Active overshoot | Result |
 |---|---:|---:|---|
@@ -140,6 +163,30 @@ required motion or holding performance cannot be achieved within installed
 drive limits. Neither purchase can substitute for evidence about the other.
 
 ## Evidence
+
+The successful physical runs and tuning captures are archived locally under
+`run/optimization-homing-20260908e/` and `run/optimization-homing-20260908f/`.
+Each response capture has a corresponding `*-analysis.json`; the final directory
+also contains `startup-result.json`, `final-state.json`, and
+`post-proof-ctest.txt`. The analyzer leaves omitted trial gain as null because
+the command alone does not identify the deployed setting; the final release's
+configuration establishes gain 4.
+
+The [numeric response comparison](../../run/optimization-homing-20260908e/response-comparison.png)
+plots all four 5-degree directions against the conservative comparison profile.
+It is generated from encoder/reference data, not camera imagery.
+
+After physical viability and tuning, all 74 existing local CTest entries passed
+in 12.44 seconds. They ran alongside the final restart and did not gate the first
+physical probe. Deployment used the explicit runtime-only `--probe-build` path;
+these local regression results are not a claim that all tests ran on the Pi.
+
+SHA-256 and size checks verified local copies before removing 95,723,629 bytes
+of response captures from the Pi. Both directories retain archive manifests.
+This cycle also removed 195,903,993 bytes of obsolete release builds and archived
+the 72,886,406-byte Pi CTest log locally before removing its remote copy. Active
+source, retained calibration and fallback sources were preserved. Final storage:
+2.4 GB available, 83% used. Runtime captures remain outside Git.
 
 The first attempt's ignored local directory is
 `run/optimization-homing-20260908b/`. `analyze_attempt.py` derives the motor-only

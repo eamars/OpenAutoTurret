@@ -1,5 +1,12 @@
 # Tracking latency and hardware priorities — 8 September 2026
 
+**Latest results:** the [response tuning follow-up](response_tuning_followup_2026_09_08.md)
+records successful homing, physical gain comparisons, the current deployed
+profile and unresolved timing/settling behavior. Its AI hardware discussion
+also limits the recommendation below: optical appearance-to-prediction and
+person detection quality were not measured and can independently justify an
+upgrade.
+
 **Historical baseline within this day's work.** Later physical trials,
 separate DNN/DSP measurements, endpoint failures, storage cleanup and the current
 stopped state are recorded in the [optimization-cycle follow-up](optimization_cycle_2026_09_08.md).

@@ -336,7 +336,11 @@ The deployed `v3.tracking_reference_omega` controls small-correction response
 until the requested acceleration fits the configured profile. A constant faster
 gain produced excessive reference and encoder overshoot in physical 5-degree
 steps, so it is not the production algorithm. `v3.position_servo_kp` defaults to
-3 per second; probe overrides are not retained. Current, speed, acceleration,
+3 per second; the station configuration selects the physically evaluated value
+4 per second. Probe overrides are not retained. See the
+[response tuning follow-up](response_tuning_followup_2026_09_08.md) for measured
+response, final deployment and remaining timing/settling limitations.
+Current, speed, acceleration,
 jerk, thermal, boundary and watchdog limits remain authoritative.
 
 The automatic hand-off wait is 50 ms after a fresh selected measurement, followed
