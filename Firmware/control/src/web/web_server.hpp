@@ -481,13 +481,15 @@ class WebServer {
     int max_clients = 8;
   };
   using SnapshotProvider = std::function<telemetry::TelemetrySnapshot()>;
+  using TraceProvider = std::function<std::vector<telemetry::ControlLogRecord>()>;
   using CommandHandler =
       std::function<CommandResult(const std::string& command,
                                   const std::string& arg)>;
 
-  WebServer(Config cfg, SnapshotProvider provider, CommandHandler handler)
+  WebServer(Config cfg, SnapshotProvider provider, CommandHandler handler,
+            TraceProvider trace_provider = {})
       : cfg_(cfg), provider_(std::move(provider)),
-        handler_(std::move(handler)) {}
+        handler_(std::move(handler)), trace_provider_(std::move(trace_provider)) {}
 
   ~WebServer() { stop(); }
 
@@ -631,6 +633,30 @@ class WebServer {
     std::string command, arg;
     json_get_string(json, "command", command);
     json_get_string(json, "arg", arg);
+    if (command == "read_control_trace" && arg.empty() && trace_provider_) {
+      const auto rows = trace_provider_();
+      std::ostringstream out;
+      out.precision(12);
+      out << "{\"type\":\"control_trace\",\"axes\":[\"pitch\",\"yaw\"],\"rows\":[";
+      bool comma = false;
+      for (const auto& r : rows) {
+        if (comma) out << ',';
+        comma = true;
+        out << "{\"t\":" << r.timestamp_ns << ",\"ack\":" << r.command_seq
+            << ",\"omega\":" << r.probe_omega
+            << ",\"safety\":" << static_cast<int>(r.safety_action)
+            << ",\"period_us\":" << r.cycle_duration_us;
+        const auto pair = [&](const char* key, const auto* a) {
+          out << ",\"" << key << "\":[" << a[0] << ',' << a[1] << ']';
+        };
+        pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
+        pair("cmd",r.v_command); pair("effort",r.effort); pair("rx",r.feedback_ns);
+        pair("goal",r.probe_goal);
+        out << '}';
+      }
+      out << "]}";
+      return send_frame(cfd,out.str(),"control trace");
+    }
     CommandResult result;
     if (handler_) result = handler_(command, arg);
     else {
@@ -695,6 +721,7 @@ class WebServer {
   Config cfg_;
   SnapshotProvider provider_;
   CommandHandler handler_;
+  TraceProvider trace_provider_;
   int listen_fd_ = -1;
   std::thread accept_thread_;
   std::atomic<bool> running_{false};

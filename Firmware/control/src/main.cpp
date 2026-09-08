@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
                      [&loop]() { return loop.telemetry().snapshot(); },
                      [&loop](const std::string& n, const std::string& a) {
                        return loop.submit_command(n, a);
-                     });
+                     }, [&loop]() { return loop.telemetry().control_trace(); });
   // The socket's parent directory does not survive a reboot by itself: systemd's RuntimeDirectory
   // makes it for the units, but a hand-run controld has nothing, and the bind then fails with
   // "No such file or directory" — which leaves a station that is running, homed and tracking with

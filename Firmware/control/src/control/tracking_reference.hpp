@@ -9,12 +9,13 @@ namespace ota::control {
 // with a critically damped reference. In particular, do not differentiate
 // frame-to-frame position corrections into another target velocity estimate.
 inline double track_reference(ReferenceLimiter& st, double target, double target_velocity,
-                              double dt, double v_max, double a_max, double j_max) {
+                              double dt, double v_max, double a_max, double j_max,
+                              double omega = 2.5) {
   if (!st.initialised) st.reset_at(target);
   if (!(dt > 0 && dt < .1)) return st.q_rad;
   if (!(v_max > 0 && a_max > 0 && j_max > 0))
     return limit_reference(st, target, dt, v_max, a_max, j_max, target_velocity);
-  constexpr double omega = 2.5;  // s^-1; critically damped before limit saturation
+  omega = std::isfinite(omega) ? std::clamp(omega,2.5,6.0) : 2.5;
   st.target_v_rad_s = std::clamp(target_velocity, -v_max, v_max);
   double wanted = std::clamp(omega*omega*(target-st.q_rad) +
       2*omega*(st.target_v_rad_s-st.v_rad_s), -a_max, a_max);

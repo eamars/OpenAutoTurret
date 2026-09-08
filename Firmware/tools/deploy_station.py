@@ -49,6 +49,7 @@ def main():
         run(["git", "archive", "--format=tar", f"--output={archive}", revision], cwd=repo)
         run(["scp", str(archive), f"{args.host}:{release}/source.tar"])
     remote(f"tar -xf {quote(release + '/source.tar')} -C {quote(release)} && "
+           f"rm -- {quote(release + '/source.tar')} && "
            f"mkdir -p {quote(release + '/run')} && "
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
            f"printf '%s\\n' {quote(revision)} > {quote(release + '/REVISION')}")

@@ -247,6 +247,7 @@ class LatestJsonPublisher(JsonPublisher):
         super().__init__(directory)
         self._condition = threading.Condition()
         self._pending = None
+        self._timing = None
         self._closed = False
         self.overwritten = 0
         self._thread = threading.Thread(target=self._run, name='perception-json', daemon=True)
@@ -265,14 +266,26 @@ class LatestJsonPublisher(JsonPublisher):
     def _run(self):
         while True:
             with self._condition:
-                self._condition.wait_for(lambda: self._pending is not None or self._closed)
-                if self._pending is None:
+                self._condition.wait_for(lambda: self._pending is not None or self._timing is not None or self._closed)
+                if self._pending is None and self._timing is None:
                     return
                 pair, self._pending = self._pending, None
+                timing, self._timing = self._timing, None
             try:
-                self._write(*pair)
+                if pair is not None:
+                    self._write(*pair)
+                if timing is not None:
+                    atomic_write_text(os.path.join(self.directory,'timing.json'),timing,durable=False)
             except OSError:
                 pass  # failures and last_error are exposed in the run report
+
+    def publish_timing(self, timing):
+        """Numeric metadata only; one pending snapshot, written off the camera thread."""
+        encoded = dumps(timing)
+        with self._condition:
+            if not self._closed:
+                self._timing = encoded
+                self._condition.notify()
 
     def close(self):
         with self._condition:

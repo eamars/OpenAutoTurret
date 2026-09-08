@@ -696,6 +696,10 @@ class ControlLoop {
 
   ManualController manual_;
   ManualOutput manual_out_;
+  // Explicit target-free bench step; never persisted and never uses vision input.
+  TimeNs response_probe_until_ns_ = 0;
+  double response_probe_q_[2]{};
+  double response_probe_omega_ = 2.5;
   AutoTrackController autotrack_;
   AutoTrackInput at_input_;
   AutoTrackOutput at_out_;

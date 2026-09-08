@@ -552,6 +552,12 @@ struct ControlLogRecord {
   double jerk_actual[kAxisCount] = {0.0, 0.0}; // position-derived jerk (rad/s^3)
   double effort[kAxisCount] = {0.0, 0.0};
   double q_ref[kAxisCount] = {0.0, 0.0};
+  double v_ref[kAxisCount] = {0.0, 0.0};
+  double v_command[kAxisCount] = {0.0, 0.0};
+  TimeNs feedback_ns[kAxisCount] = {0, 0};
+  uint64_t command_seq = 0;
+  double probe_omega = 0;
+  double probe_goal[kAxisCount] = {0.0, 0.0};
   double soft_limit_distance[kAxisCount] = {0.0, 0.0};
   SafetyAction safety_action = SafetyAction::Allow;
   int64_t feedback_age_ms = 0;
@@ -722,7 +728,16 @@ class Telemetry {
   }
 
   // §43.1 high-rate control log.
-  void push_control(const ControlLogRecord& r) { control_log_.push(r); }
+  void push_control(const ControlLogRecord& r) {
+    control_log_.push(r);
+    // A diagnostic reader may lose samples; it must never delay motor control.
+    std::unique_lock<std::mutex> lk(trace_mu_, std::try_to_lock);
+    if (lk.owns_lock()) trace_.push(r);
+  }
+  std::vector<ControlLogRecord> control_trace() const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    return trace_.all();
+  }
   const RingBuffer<ControlLogRecord, kControlLogCap>& control_log() const {
     return control_log_;
   }
@@ -749,6 +764,10 @@ class Telemetry {
 
   // Clear everything (e.g. on reset).
   void clear() {
+    {
+      std::lock_guard<std::mutex> lk(trace_mu_);
+      trace_.clear();
+    }
     control_log_.clear();
     event_log_.clear();
     blackbox_.clear();
@@ -757,6 +776,8 @@ class Telemetry {
 
  private:
   mutable std::mutex snapshot_mu_;
+  mutable std::mutex trace_mu_;
+  RingBuffer<ControlLogRecord, 256> trace_;  // 1.28 s; timestamp gaps expose drops
   TelemetrySnapshot snapshot_;
   RingBuffer<ControlLogRecord, kControlLogCap> control_log_;
   RingBuffer<EventRecord, kEventCap> event_log_;

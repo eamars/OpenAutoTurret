@@ -130,6 +130,7 @@ class CameraOwner:
             self._previous_receive_ns = receive_ns
             image = request.make_array(self.main_stream)
             metadata = request.get_metadata() or {}
+            metadata['_ota_image_copy_ms'] = (int(self.clock())-receive_ns)/1e6
             sensor_ns = _sensor_timestamp_ns(metadata)
             if sensor_ns <= 0:
                 self.stats.missing_sensor_timestamp += 1

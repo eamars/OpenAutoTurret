@@ -163,6 +163,11 @@ inline CommandResult validate_command(const SystemCommandState& s,
     r.ok = true;
     return r;
   }
+  if (command == "response_probe") {
+    r.ok = !arg.empty();
+    if (!r.ok) r.error = "response probe needs axis:signed_degrees:omega";
+    return r;  // Full state/shape/clearance validation on the controller thread.
+  }
   if (command == "manual_jog_start" || command == "manual_jog_keepalive" ||
       command == "manual_jog_stop" || command == "manual_step") {
     // Shape only. Which mode is allowed, whether a lease exists to renew, and whether a

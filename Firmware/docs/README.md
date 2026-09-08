@@ -11,6 +11,7 @@ for the latest loaded homing/tracking evidence and remaining gaps.
 | Document | What it is | Status |
 |---|---|---|
 | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) | Deploy, start, status, stop, default Auto mode, prerequisites and diagnostics | **Current operating procedure** |
+| [`latency_bottleneck_analysis_2026_09_08.md`](latency_bottleneck_analysis_2026_09_08.md) | Closed-loop latency, target-free physical response, camera timing and AI hardware priorities | Measured component boundaries; optical end-to-end timing remains unverified |
 | [`travel_boundary_review_2026_09_06.md`](travel_boundary_review_2026_09_06.md) | Loaded homing, tracking response, travel limits and HUD verification | Latest measured control status; explicitly lists gaps |
 | [`AS_BUILT_v1.md`](AS_BUILT_v1.md) | Features and evidence as of September 3 | Historical snapshot |
 | [`configurable_alignment_design.md`](configurable_alignment_design.md) | Startup aim-point and camera-to-bore configuration, tuning and offline verification | Implemented; native observations and simulated motors verified, physical alignment unverified |

@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 from .camera import CameraOwner, open_picamera2
@@ -522,6 +523,20 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             if wire_publisher is not None and outcome.stage != 'inference_pending':
                 if not _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire) and not args.quiet:
                     print("visiond: TrackSet publish failed", file=sys.stderr)
+            if isinstance(pipeline.publisher, LatestJsonPublisher):
+                wire_done_ns = time.monotonic_ns()
+                kpi = None
+                try:
+                    kpi = adapter.device.get_kpi_info(frame.metadata)
+                except (AttributeError, KeyError, TypeError):
+                    pass
+                pipeline.publisher.publish_timing(dict(
+                    frame_sequence=frame.frame_sequence, sensor_timestamp_ns=frame.sensor_timestamp_ns,
+                    metadata_receive_ns=frame.metadata_receive_ns, wire_done_ns=wire_done_ns,
+                    published=outcome.published, stages_ms=outcome.timings_ms,
+                    camera={k: frame.metadata[k] for k in ('ExposureTime','FrameDuration',
+                        'AnalogueGain','DigitalGain','_ota_image_copy_ms') if k in frame.metadata},
+                    imx500_kpi_ms=kpi))
     finally:
         if tensor_probe is not None:
             tensor_probe.close()

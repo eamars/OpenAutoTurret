@@ -45,6 +45,10 @@ TEST(Telemetry, ControlLogKeepsLastN) {
   // Oldest kept record is (cap+100) - cap = 100.
   EXPECT_EQ(all.front().timestamp_ns, 100);
   EXPECT_EQ(all.back().timestamp_ns, cap + 99);
+  const auto trace = t.control_trace();
+  ASSERT_EQ(trace.size(),256u);
+  EXPECT_EQ(trace.back().timestamp_ns,cap+99);
+  EXPECT_EQ(trace.front().timestamp_ns,cap+100-256);
 }
 
 TEST(Telemetry, EventLogRecordsEvents) {
@@ -82,6 +86,7 @@ TEST(Telemetry, ClearResetsEverything) {
   EXPECT_EQ(t.control_log().size(), 0u);
   EXPECT_EQ(t.event_log().size(), 0u);
   EXPECT_EQ(t.snapshot().timestamp_ns, 0);
+  EXPECT_TRUE(t.control_trace().empty());
 }
 
 }  // namespace

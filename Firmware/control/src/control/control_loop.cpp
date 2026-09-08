@@ -612,6 +612,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const bool was_leased = manual_.lease_active();
       const bool was_expired = std::string(manual_out_.reason) == "jog lease expired";
       manual_out_ = manual_.update(q_logical, v_max, now_ns, period_ns);
+      if (response_probe_until_ns_ && (now_ns >= response_probe_until_ns_ ||
+          phase_ != Phase::Hold || !homed_ || last_decision_.action != SafetyAction::Allow))
+        response_probe_until_ns_ = 0;
+      if (response_probe_until_ns_) {
+        auto& intent = manual_out_.intent;
+        intent.type = IntentType::JointPosition;
+        intent.has_joint_target = true;
+        intent.q_pitch_rad = response_probe_q_[0];
+        intent.q_yaw_rad = response_probe_q_[1];
+        intent.velocity_scale = intent.acceleration_scale = intent.jerk_scale = 1.0;
+        intent.valid_until_ns = response_probe_until_ns_;
+        intent.set_reason("target-free response probe");
+      }
       if (was_leased && !manual_.lease_active() && !was_expired) {
         // §79's MANUAL_JOG_EXPIRED, as a log line until the event bus lands. This is the
         // one MANUAL event that is not the operator's deliberate act, so it is the one
@@ -1083,6 +1096,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // Nothing below this line runs for a moving mode.
         at_ready_ = false;  // "at the ready pose" and "a mode is pointing
                             // elsewhere" are exclusive by definition
+        const bool response_probe = response_probe_until_ns_ > now_ns &&
+            mode_mgr_.mode() == OperatingMode::Manual;
         const bool damped_tracking = cfg_.service_speed_control &&
             tracking_ref_.is_tracking_reference && tracking_;
         const auto tracking_rates = damped_tracking ? tracking_->joint_motion_rates(
@@ -1091,7 +1106,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
           const double solved = env_.constrain_reference(r, limits_[i]);
-          const auto profile = motion_profile(i,mode_mgr_.mode());
+          const auto profile = motion_profile(i,response_probe ? OperatingMode::AutoTrack : mode_mgr_.mode());
           double reference_cap = cfg_.motion.configured
               ? std::min(tracking_ref_.v_max_rad_s,profile.target.speed *
                   std::clamp(last_intent_.velocity_scale,0.0,1.0))
@@ -1136,9 +1151,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double jerk = (cfg_.service_speed_control
               ? std::min(cfg_.j_brake_rad_s3,service_j) : cfg_.j_brake_rad_s3)
               * std::clamp(last_intent_.jerk_scale,0.0,1.0);
-          if (damped_tracking) {
+          if (damped_tracking || response_probe) {
             q_ref[i] = control::track_reference(ref_lim_[i], solved,
-                tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk);
+                tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk,
+                response_probe ? response_probe_omega_ : 2.5);
           } else {
             q_ref[i] = control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
           }
@@ -1410,7 +1426,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // Commissioning ceiling for the initial speed-servo profile. Bounds
           // apply at the measured pose as well as the requested reference.
           double cap = std::min(hold_speed_effective(), cfg_.service_max_speed_rad_s);
-          const auto profile = motion_profile(i,mode_mgr_.mode());
+          const auto profile = motion_profile(i,response_probe_until_ns_ > now_ns &&
+              mode_mgr_.mode() == OperatingMode::Manual ? OperatingMode::AutoTrack : mode_mgr_.mode());
           if (cfg_.motion.configured) cap = profile.maximum.speed;
           if (ref_lim_engaged_) {
             // Autonomous reference speed is a planning rate. The position
@@ -1537,8 +1554,16 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.cycle_duration_us = period_ns / 1000;
     rec.track_state = tracking_ ? tracking_->track_state()
                                 : tracking::TrackState::ReadyHold;
-    for (int i = 0; i < kAxisCount; ++i)
+    rec.command_seq = ack_seq_;
+    rec.probe_omega = response_probe_until_ns_ > now_ns ? response_probe_omega_ : 0;
+    for (int i = 0; i < kAxisCount; ++i) {
+      rec.effort[i] = sp[i].torque_nm;
+      rec.probe_goal[i] = response_probe_q_[i];
+      rec.feedback_ns[i] = sp[i].rx_ns;
+      rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+      rec.v_command[i] = service_command_rate[i];
       rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
+    }
     telemetry_.push_control(rec);
     telemetry_.push_blackbox(rec);
 
@@ -2450,6 +2475,7 @@ ModeRequestContext ControlLoop::mode_context() const {
 }
 
 ModeResult ControlLoop::request_mode(OperatingMode target) {
+  response_probe_until_ns_ = 0;
   if (!ack_in_flight_.empty()) startup_mode_applied_ = true;
   const std::string who = ack_in_flight_.empty() ? "request_mode" : ack_in_flight_;
   const ModeRequestContext ctx = mode_context();
@@ -2499,6 +2525,7 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
 }
 
 ModeResult ControlLoop::stop_motion() {
+  response_probe_until_ns_ = 0;
   startup_mode_applied_ = true;
   if (phase_ == Phase::Recovering) {
     backend_->cancel_motor_recovery();
@@ -3315,6 +3342,9 @@ void ControlLoop::disable_tracking() {
 
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
+  // Every new motion/mode command cancels a bench trial. Read-only trace requests
+  // are handled on the web thread and never enter this queue.
+  response_probe_until_ns_ = 0;
   std::string err;
   if (phase_ == Phase::Recovering) {
     if (name == "stop_motion" || name == "hold") stop_motion();
@@ -3454,6 +3484,47 @@ void ControlLoop::execute_command(const std::string& name,
       spdlog::info("search mode {} for the next start_tracking (§36)",
                    want ? "ARMED" : "disarmed");
     }
+    return;
+  }
+  if (name == "response_probe") {
+    if (phase_ != Phase::Hold || !homed_ || mode_mgr_.mode() != OperatingMode::Manual ||
+        last_decision_.action != SafetyAction::Allow || !cfg_.service_speed_control) {
+      ack_command(name,false,"response probe requires homed, healthy Manual service");
+      return;
+    }
+    const size_t colon = arg.find(':');
+    const size_t second = arg.find(':', colon == std::string::npos ? 0 : colon+1);
+    int axis = arg.substr(0,colon) == "pitch" ? 0 : arg.substr(0,colon) == "yaw" ? 1 : -1;
+    double delta = 0, omega = 0;
+    bool parsed = false;
+    if (axis >= 0 && colon != std::string::npos && second != std::string::npos) {
+      try {
+        const auto d = arg.substr(colon+1,second-colon-1), w = arg.substr(second+1);
+        size_t nd = 0, nw = 0;
+        delta = std::stod(d,&nd); omega = std::stod(w,&nw);
+        parsed = nd == d.size() && nw == w.size();
+      } catch (...) {}
+    }
+    if (!parsed || !std::isfinite(delta) || !std::isfinite(omega) || omega < 2.5 || omega > 6 ||
+        !(std::abs(delta) == .5 || std::abs(delta) == 1 || std::abs(delta) == 5)) {
+      ack_command(name,false,"probe syntax axis:signed_degrees:omega; steps 0.5/1/5, omega 2.5..6");
+      return;
+    }
+    for (int i=0; i<2; ++i) {
+      const auto s = backend_->snapshot(static_cast<AxisId>(i),now_ns_);
+      response_probe_q_[i] = s.q_rad + (i == axis ? delta*kDeg2Rad : 0.0);
+      if (!s.has_feedback || now_ns_-s.rx_ns > 50'000'000 || s.rx_ns > now_ns_ ||
+          !limits_[i].valid || limits_[i].distance_to_soft(s.q_rad) < 15*kDeg2Rad ||
+          limits_[i].distance_to_soft(response_probe_q_[i]) < 15*kDeg2Rad ||
+          std::abs(speed_servo_[i].velocity) > .2*kDeg2Rad) {
+        ack_command(name,false,"probe needs fresh stationary drives and 15 degree endpoint clearance");
+        return;
+      }
+    }
+    manual_.cancel(now_ns_);
+    response_probe_omega_ = omega;
+    response_probe_until_ns_ = now_ns_ + 6'000'000'000LL;
+    ack_command(name,true,"six second target-free step accepted through normal motion limits");
     return;
   }
   if (name == "manual_jog_start" || name == "manual_jog_keepalive" ||

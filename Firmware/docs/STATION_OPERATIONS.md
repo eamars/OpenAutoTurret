@@ -259,6 +259,33 @@ commissioned `person_detect_available` profile is the ordinary default.
 
 ## Evidence and historical documents
 
+### Numeric response diagnostics
+
+The controller socket accepts the read-only `read_control_trace` command. It
+returns at most 256 recent control records (about 1.28 seconds at 200 Hz), with
+pitch/yaw encoder position, reference position/rate, commanded speed, reported
+torque, feedback timestamps, command acknowledgement sequence and cycle interval.
+The diagnostic writer uses a nonblocking lock: a reader can cause a missing
+diagnostic sample, never a wait in motor control. Deduplicate by timestamp and
+report gaps. Encoder readings do not certify independent platform angle.
+
+Perception writes a latest-only `perception/timing.json` in the runtime directory.
+It contains numeric capture/publication timestamps, exposure, frame duration,
+image-copy time and available IMX500 DNN/DSP KPI values. No image access is needed.
+
+`tools/measure_response_cycle.py --output ../run/response.jsonl` captures these
+diagnostics without moving the station. Explicit `--probe yaw:1:2.5` requests a
+target-free six-second fixed angular step using the tracking reference filter and
+the existing AUTO_TRACK motion profile through the normal safety envelope. This
+is a Manual commissioning command, not an automatic tracking mode. It requires
+healthy homed speed-mode service, fresh feedback, near-zero commanded speed, and
+15 degrees clearance at both endpoints. Allowed signed steps are 0.5, 1 and 5
+degrees; the filter response rate is bounded to 2.5–6 per second. Any subsequent
+controller command cancels it, as do expiry, mode change and a safety intervention.
+The tool also sends Stop Motion on exit. The trial does not alter deployed gains,
+current limits, homing, calibration, or startup mode. Move captures off the Pi
+after analysis; runtime data does not belong in Git.
+
 See [travel and loaded-control validation](travel_boundary_review_2026_09_06.md)
 for measured motion limits and remaining verification gaps. The September 3
 as-built document and earlier run reports are historical snapshots, not operating
