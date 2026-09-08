@@ -94,6 +94,10 @@ the software lifecycle across processes; the plant/drive behavior is simulated.
 Regression fixtures were corrected to model a slowing position-loop backoff
 instead of a constant-speed relay, and to retain monotonic simulated time during
 re-homing after recovery. Production thresholds were not relaxed for those tests.
+The first Pi deployment also exposed a race in the existing commissioning
+watchdog probe: the published trip reason preceded its stop-frame side effect.
+The probe now waits for the stop effect within its original bounded timeout.
+The production watchdog and its deadlines are unchanged.
 
 ## Next physical proof and hardware decision
 

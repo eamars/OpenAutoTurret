@@ -90,7 +90,10 @@ int main(int argc, char** argv) {
     Watchdog guard(system, {AxisId::Pitch, -1, 1, 50, 2'000'000'000});
     guard.command([&] { system.send_enable(AxisId::Pitch); });
     io->publish_feedback = false;
-    for (int i=0; i<40 && guard.reason() == Watchdog::Reason::None; ++i) {
+    // A trip publishes its reason before sending the stop frames. Observe the
+    // complete external effect within the same bounded wait; sampling only
+    // the reason races the watchdog's subsequent transport send on the Pi.
+    for (int i=0; i<40 && (guard.reason() == Watchdog::Reason::None || io->enabled[0]); ++i) {
       guard.heartbeat();
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -102,7 +105,7 @@ int main(int argc, char** argv) {
   {
     Watchdog guard(system, {AxisId::Pitch, -1, 1, 50, 60'000'000});
     guard.command([&] { system.send_enable(AxisId::Pitch); });
-    for (int i=0; i<30 && guard.reason() == Watchdog::Reason::None; ++i) {
+    for (int i=0; i<30 && (guard.reason() == Watchdog::Reason::None || io->enabled[0]); ++i) {
       guard.heartbeat();
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
