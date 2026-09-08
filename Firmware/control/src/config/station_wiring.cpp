@@ -182,6 +182,7 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.park.pos_tol_deg = cfg.shutdown.pos_tolerance_deg;
   c.park.vel_tol_deg_s = cfg.shutdown.vel_tolerance_deg_s;
   c.park.dwell_ms = cfg.shutdown.dwell_ms;
+  c.park.require_independent_position = cfg.shutdown.require_independent_position;
   c.park.speed_deg_s = cfg.shutdown.speed_deg_s;
   // Verify/Dwell position-mode hold speed limit (deg/s). Non-zero: LimitSpd=0
   // pins the drive's position loop (p3 2026-09-02: 40 s stall at the

@@ -17,6 +17,11 @@ class ObservedPlant : public sim::SimMotorBackend {
   int transitions = 0;
   bool replay_only = false;
   bool delay_setup = false;
+  int disables = 0;
+  void deenergize(AxisId a) override {
+    ++disables;
+    SimMotorBackend::deenergize(a);
+  }
   std::array<double, 2> command_rate{};
   bool adopt_running_mode(AxisId a, bool position, std::string& err,
                           double = -1, double = 1) override {
@@ -88,10 +93,10 @@ int main(int argc, char** argv) {
   bool pass = true;
   {
     Fixture f;
-    for (int i=0;i<10;++i) f.tick();
-    bool ok = f.plant->gain_kp == 4 && f.plant->gain_ki == .05;
-    std::cout << "parking_drive_gains=" << f.plant->gain_kp << ',' << f.plant->gain_ki
-              << " configured_gains_preserved=" << ok << '\n';
+    for (int i=0;i<50;++i) f.tick();
+    bool ok = f.plant->transitions == 0 && f.plant->disables == 0;
+    std::cout << "parking_entry_transitions=" << f.plant->transitions
+              << " disables=" << f.plant->disables << " uninterrupted_power=" << ok << '\n';
     pass &= ok;
     // A half-degree/second disturbance must not be allowed to accumulate
     // while the other axis traverses its parking path.
@@ -134,7 +139,7 @@ int main(int argc, char** argv) {
   }
   {
     Fixture f;
-    for (int i=0;i<10;++i) f.tick();
+    for (int i=0;i<50;++i) f.tick();
     int cycles=0;
     // Position evidence simulates a drive outrunning its 3 deg/s request.
     while (f.loop.phase()==Phase::Parking && cycles++<100) {
@@ -155,13 +160,12 @@ int main(int argc, char** argv) {
   }
   {
     Fixture f;
-    f.plant->delay_setup = true;
     f.tick();
     f.loop.submit_command("stop_motion", ""); f.tick();
     const bool ok = f.stopped_and_latched() &&
-        f.plant->snapshot(AxisId::Pitch,f.now).disabled &&
-        f.plant->snapshot(AxisId::Yaw,f.now).disabled;
-    std::cout << "operator_stop_during_mode_setup_disables_and_latches=" << ok << '\n';
+        !f.plant->snapshot(AxisId::Pitch,f.now).disabled &&
+        !f.plant->snapshot(AxisId::Yaw,f.now).disabled && f.plant->transitions == 0;
+    std::cout << "operator_stop_during_park_entry_retains_power_and_latches=" << ok << '\n';
     pass &= ok;
   }
   std::cout << "simulated_motion_supervision=" << (pass ? "PASS" : "FAIL") << '\n';

@@ -481,3 +481,14 @@ TEST(Config, ParkModesReachTheControllerAndRejectInvalidChoices) {
   y.insert(y.find("shutdown:\n") + 10, "  pitch_park_mode: hard_stop\n");
   EXPECT_FALSE(ota::config::load_turret_config(write_file("bad_park_mode.yaml", y)).ok);
 }
+
+TEST(Config, ApprovedParkUsesMotorFeedbackOnlyWhenExplicitlyConfigured) {
+  auto baseline = ota::config::load_turret_config(write_file("park_default.yaml", kFullConfig));
+  ASSERT_TRUE(baseline.ok);
+  EXPECT_TRUE(ota::wire::make_control_cfg(baseline.config).park.require_independent_position);
+  std::string y = kFullConfig;
+  y.insert(y.find("shutdown:\n") + 10, "  require_independent_position: false\n");
+  auto approved = ota::config::load_turret_config(write_file("park_approved.yaml", y));
+  ASSERT_TRUE(approved.ok);
+  EXPECT_FALSE(ota::wire::make_control_cfg(approved.config).park.require_independent_position);
+}

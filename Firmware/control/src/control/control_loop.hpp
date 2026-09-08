@@ -461,11 +461,9 @@ class ControlLoop {
   std::unique_ptr<HomingPlan> homing_;
   HomingMotionGuard homing_motion_;
   std::unique_ptr<ParkController> park_;
-  // Park: position mode is entered once, when the ParkController leaves the
-  // speed-mode move states (MoveYaw/MovePitch) for the §33.2 target-hold
-  // (Verify/Dwell/Disable). The blocking enter_position_mode recipe (~100-200
-  // ms) would otherwise re-run every cycle. Reset in start_parking().
-  bool park_pos_mode_entered_ = false;
+  // Parking retains running drive modes. Movement starts after the powered
+  // braking dwell; target verification never invokes a mode-change recipe.
+  bool park_motion_started_ = false;
   TimeNs park_log_ns_ = 0;
   TimeNs park_deadline_ns_ = 0;
   bool park_failed_ = false;
@@ -727,7 +725,8 @@ class ControlLoop {
   bool startup_mode_applied_ = false;
   std::function<HomingPlan()> homing_factory_;
   int homing_init_axis_ = 0, homing_final_axis_ = 0;
-  int park_init_axis_ = 0, park_verify_axis_ = 0;
+  TimeNs park_still_since_ns_ = 0;
+  TimeNs park_stop_deadline_ns_ = 0;
   std::optional<DesiredState> pending_homing_ds_;
   std::array<control::SpeedServo, kAxisCount> speed_servo_;
   // Observe-only view of the vision transport (owned by main / VisionIngest).

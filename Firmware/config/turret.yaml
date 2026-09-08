@@ -206,7 +206,10 @@ shutdown:
   # Resolve targets from calibrated RAW soft limits after homing.
   # Front-heavy load: yaw center, pitch lower end with stopping clearance.
   # Available modes: logical_degrees, soft_center, soft_min, soft_max.
-  # These choices are requested poses, not proof of physical stability.
+  # Operator-approved safe pose (9 September 2026): middle yaw, lowest pitch,
+  # retaining the calibrated soft-limit and braking clearance below.
+  # Fresh motor arrival + settling authorize power release at this pose.
+  require_independent_position: false
   yaw_park_mode: soft_center
   pitch_park_mode: soft_min
   park_end_clearance_deg: 5

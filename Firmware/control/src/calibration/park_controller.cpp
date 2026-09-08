@@ -84,10 +84,12 @@ bool ParkController::release_gate(const HomingFeedback& pitch_fb,
     if (fb.motor_fault || !std::isfinite(fb.pos_rad) || !std::isfinite(fb.vel_rad_s) ||
         fb.t_ns <= 0 || age < 0 || age > p_.evidence_max_age_ms * 1'000'000LL)
       reason = "stale or untrusted motor feedback";
-    else if (observed_travel_[i] < p_.min_observed_travel_deg * kDeg2Rad)
+    else if (p_.require_independent_position && observed_travel_[i] < p_.min_observed_travel_deg * kDeg2Rad)
       reason = "no parking motion observed; no automatic release";
     else if (!at_park(fb, static_cast<AxisId>(i)))
       reason = "position/velocity outside guarded park tolerance";
+    else if (!p_.require_independent_position)
+      continue;  // Operator-approved pose; motor arrival/dwell is authoritative.
     else if (!ev.trusted || ev.sampled_ns <= 0 || independent_age < 0 ||
              independent_age > p_.evidence_max_age_ms * 1'000'000LL ||
              !std::isfinite(ev.q_raw_rad) || !std::isfinite(ev.uncertainty_rad) ||
@@ -144,11 +146,9 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
   switch (state_) {
     case ParkState::StopTracking:
       // Phase 2: there is no tracking/search to stop (the caller has already
-      // disabled it). Hold for one cycle, then begin the park moves. Still in
-      // speed mode (both axes at SpdRef=0): position mode is entered only at
-      // Verify, when the §33.2 target-hold begins — the executor enters it on
-      // the first !speed_mode cycle, so a premature position-mode entry here
-      // would swallow the SpdRef park moves.
+      // disabled it). Hold for one cycle, then begin the park moves.
+      // speed_mode selects signed move velocity versus target correction;
+      // the executor preserves the actual drive mode through both stages.
       out.speed_mode = true;
       out.message = "stop tracking (no-op in phase 2)";
       state_ = ParkState::MoveYaw;
@@ -192,17 +192,9 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
       break;
 
     case ParkState::Verify: {
-      // POSITION-MODE HOLD AT THE PARK TARGET (not at the current position):
-      // the drive's position loop pulls the axis back to the target while the
-      // §33.2 check runs. Re-pinning to the current position (the old
-      // behavior, shared with the ready-hold) has NO outer correction — at
-      // the real station the yaw gravity balance sits ~4 deg off the 180 deg
-      // park pose, so the axis drifted back out of the 0.5 deg window and the
-      // park timed out at the 40 s shutdown window (rehome4; the yaw also
-      // de-energized 1.4 deg short of target, rehome1 3.96 deg short).
-      // The hold carries a NON-ZERO speed limit: the position loop needs a
-      // non-zero LimitSpd to be able to pull an axis back to the target
-      // (p3: a 0-limit hold pinned the overshoot in place for 40 s).
+      // Hold the park target throughout verification. The executor uses the
+      // existing drive mode: bounded speed correction or position reference.
+      // Re-pinning the target to current feedback would allow accumulated drift.
       out.pitch = DesiredState{park_raw_[ix(AxisId::Pitch)],
                                p_.verify_speed_deg_s * kDeg2Rad, 0.0, true,
                                "hold at park target"};

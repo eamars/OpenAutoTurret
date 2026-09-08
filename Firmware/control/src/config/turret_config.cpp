@@ -819,6 +819,8 @@ LoadResult load_turret_config(const std::string& path) {
   {
     const std::string p = "shutdown.";
     const YAML::Node sh = fetch(root, "shutdown");
+    c.shutdown.require_independent_position = opt_bool(sh, "require_independent_position",
+        p + "require_independent_position", true, warn);
     c.shutdown.yaw_park_mode = opt_string(sh, "yaw_park_mode", p + "yaw_park_mode",
                                          "logical_degrees", warn);
     c.shutdown.pitch_park_mode = opt_string(sh, "pitch_park_mode", p + "pitch_park_mode",

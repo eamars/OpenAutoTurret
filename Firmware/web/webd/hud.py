@@ -1028,9 +1028,13 @@ function render(t) {
 }
 
 function paint(t) {
-  const drawerKey = value => JSON.stringify([value && value.operating_mode,
-    value && value.selected_uuid, value && value.perception_session_uuid,
-    ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
+  // Track churn must not replace MENU buttons between pointer-down and click.
+  // Phase changes must refresh their Home/recovery gates even with no tracks.
+  const drawerKey = value => JSON.stringify(drawerOpen === "MENU"
+    ? [value && value.phase, value && value.cmd_ack_seq]
+    : [value && value.operating_mode, value && value.cmd_ack_seq,
+      value && value.selected_uuid, value && value.perception_session_uuid,
+      ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
   const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;

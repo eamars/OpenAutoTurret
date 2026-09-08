@@ -196,7 +196,20 @@ bool ControlLoop::start_parking(std::string& err) {
     err = "cannot park: not homed (position validity unknown, §38.1)";
     return false;
   }
+  // Never remove torque to prepare a park. Retain each drive's verified
+  // running mode; a disabled/unknown drive needs explicit recovery and Home.
+  for (int i = 0; i < kAxisCount; ++i) {
+    const auto s = backend_->snapshot(static_cast<AxisId>(i), now_ns_);
+    if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now_ns_ ||
+        now_ns_ - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
+        s.faults || s.disabled || (!s.in_speed_mode && !s.in_position_mode)) {
+      err = "cannot park: fresh healthy running drives required; Recover Motors then Home";
+      return false;
+    }
+  }
   auto params = cfg_.park;
+  spdlog::info("parking release confirmation={} (both axes must arrive and dwell)",
+      params.require_independent_position ? "independent_position" : "operator_approved_motor_position");
   // The entire verification window must remain reachable with the same
   // stopping reserve as the supervisor, including the drive's response lag.
   params.min_soft_margin_deg = std::max(params.min_soft_margin_deg,
@@ -208,14 +221,9 @@ bool ControlLoop::start_parking(std::string& err) {
     fail_parking(err);
     return false;
   }
-  // The park MOVES run in speed mode (SpdRef, per-axis current limit from
-  // config — pitch 5 A / yaw 3 A, under the 10 A cap): the drive's velocity
-  // loop is the strong, smooth motion source (P0o). The old position-mode
-  // park move crawled ~0.07 deg/s against gravity + friction and never
-  // landed at the real station (rehome4: full 40 s park timeout, yaw
-  // de-energized 1.4 deg short of the 180 deg target; rehome1: 3.96 deg
-  // short). Position mode is entered once, at the ParkController's Verify
-  // state, for the §33.2 target-hold (executor, Phase::Parking).
+  // Normal service uses speed mode. Keep it through movement and target
+  // verification, using bounded position correction during dwell. A drive
+  // mode recipe disables the loaded axis and must never prepare a park.
   double budget_s = 20;
   for (int i = 0; i < kAxisCount; ++i) {
     budget_s += 1.5*(limits_[i].q_soft_max_rad-limits_[i].q_soft_min_rad) /
@@ -230,11 +238,13 @@ bool ControlLoop::start_parking(std::string& err) {
   }
   park_deadline_ns_ = now_ns_ + static_cast<TimeNs>(budget_s*1e9);
   park_failed_ = false;
-  park_init_axis_ = park_verify_axis_ = 0;
-  park_pos_mode_entered_ = false;
+  park_motion_started_ = false;
+  park_still_since_ns_ = 0;
+  park_stop_deadline_ns_ = now_ns_ + 2'500'000'000LL;
   park_log_ns_ = 0;
   park_command_rate_ = {};
   disable_tracking();
+  manual_.cancel(now_ns_);
   phase_ = Phase::Parking;
   return true;
 }
@@ -242,13 +252,6 @@ bool ControlLoop::start_parking(std::string& err) {
 void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   // Verification failure withholds automatic release. Emergency safety
   // actions retain their independent disable authority.
-  const bool interrupted_setup = motion_fault &&
-      (park_init_axis_ < kAxisCount ||
-       (park_ && park_->state() >= ParkState::Verify && !park_pos_mode_entered_));
-  // A pending CAN mode recipe suppresses ordinary reference writes. Cancel
-  // it via the backend's disable path; do not leave an unpollable recipe
-  // blocking the stop command or capable of a later enable.
-  if (interrupted_setup) deenergize_all();
   // A motion failure cannot use the park-verification-only Home shortcut.
   // It requires explicit motor recovery and never resumes on a later ALLOW.
   park_failed_ = !motion_fault;
@@ -263,7 +266,7 @@ void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
                    "soft=[{:.6f},{:.6f}] (rad,s); stop={} physical stop unverified",
           axis_name(static_cast<AxisId>(i)), last_q_[i], v_est_[i], park_command_rate_[i],
           limits_[i].q_soft_min_rad, limits_[i].q_soft_max_rad,
-          interrupted_setup ? "disable interrupted mode setup" : "zero-speed request");
+          "zero-speed request");
   }
 }
 
@@ -1346,9 +1349,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       for (int i = 0; i < kAxisCount && motion_error.empty(); ++i) {
         const auto axis = static_cast<AxisId>(i);
         const std::string prefix = std::string(axis_name(axis)) + " parking: ";
-        if (!limits_[i].in_soft(sp[i].q_rad)) {
+        if (park_->state() < ParkState::DisablePitch &&
+            (sp[i].disabled || (!sp[i].in_speed_mode && !sp[i].in_position_mode))) {
+          motion_error = prefix + "drive stopped before verified release";
+        } else if (!limits_[i].in_soft(sp[i].q_rad)) {
           motion_error = prefix + "measured position outside soft limits";
-        } else if (park_init_axis_ == kAxisCount) {
+        } else if (park_motion_started_) {
           const double speed_ceiling = (std::max(cfg_.park.speed_deg_s,
               cfg_.park.verify_speed_deg_s) + 2.0) * kDeg2Rad;
           if (std::abs(v_est_[i]) > speed_ceiling) {
@@ -1387,19 +1393,28 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         fail_parking("safety interrupted parking: " + last_decision_.reason, true);
         break;
       }
-      if (park_init_axis_ < kAxisCount) {
-        // Neutralize BOTH axes while the sequential drive setup is pending;
-        // the other axis must not retain its previous tracking command.
-        for (int i = 0; i < kAxisCount; ++i)
-          if (sp[i].in_speed_mode)
-            backend_->command_velocity(static_cast<AxisId>(i), 0.0);
-        std::string e;
-        const auto status = backend_->transition_mode(static_cast<AxisId>(park_init_axis_), false,
-            cfg_.park.limit_cur_a[park_init_axis_], now_ns, e,
-            cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp);
-        if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
-        else if (status == MotorBackend::Transition::Complete && ++park_init_axis_ == kAxisCount)
-          for (int i = 0; i < kAxisCount; ++i) park_motion_origin_[i] = sp[i].q_rad;
+      if (!park_motion_started_) {
+        if (now_ns >= park_stop_deadline_ns_) {
+          fail_parking("drives did not settle before parking", true);
+          break;
+        }
+        bool still = true;
+        for (int i = 0; i < kAxisCount; ++i) {
+          const auto axis = static_cast<AxisId>(i);
+          if (sp[i].in_speed_mode) backend_->command_velocity(axis, 0.0);
+          q_ref[i] = sp[i].q_rad;
+          lim[i] = cfg_.park.verify_speed_deg_s * kDeg2Rad;
+          still &= std::abs(v_est_[i]) < .5 * kDeg2Rad;
+        }
+        if (!still) park_still_since_ns_ = 0;
+        else if (park_still_since_ns_ == 0) park_still_since_ns_ = now_ns;
+        if (park_still_since_ns_ && now_ns - park_still_since_ns_ >= 150'000'000) {
+          park_motion_started_ = true;
+          for (int i = 0; i < kAxisCount; ++i) {
+            park_motion_origin_[i] = sp[i].q_rad;
+            backend_->set_current_limit(static_cast<AxisId>(i), cfg_.park.limit_cur_a[i]);
+          }
+        }
         break;
       }
       ParkOutput po = park_->step(
@@ -1408,50 +1423,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           {backend_->park_position_evidence(AxisId::Pitch, now_ns),
            backend_->park_position_evidence(AxisId::Yaw, now_ns)}, now_ns);
       if (po.failed) { fail_parking(park_->fail_reason()); break; }
-      if (po.speed_mode) {
-        // Speed-mode park move (MoveYaw/MovePitch): SpdRef-driven, mirroring
-        // the Homing phase (P0o). MoveTo emits the signed velocity for the
-        // active axis (capped by the stop-distance profile); the inactive
-        // axis holds at SpdRef=0. The generic command path below sees
-        // in_speed_mode and only issues a controlled stop (SpdRef=0) on a
-        // safety action, which is issued after this and therefore wins.
+      {
+        // Preserve the running drive mode until the release gate authorizes
+        // disable. Speed-mode dwell holds the actual park target with bounded
+        // position correction, without a torque-breaking mode transition.
         const control::BoundaryGovernor boundary{cfg_.a_brake_rad_s2,
             cfg_.j_brake_rad_s3, .20, cfg_.stop_margin_rad};
         const DesiredState moves[] = {po.pitch, po.yaw};
         for (int i = 0; i < kAxisCount; ++i) {
-          const double cap = cfg_.park.speed_deg_s * kDeg2Rad *
+          const double cap = (po.speed_mode ? cfg_.park.speed_deg_s : cfg_.park.verify_speed_deg_s) * kDeg2Rad *
               (last_decision_.action == SafetyAction::Derate ? cfg_.derate_factor : 1.0);
           const auto bounds = boundary.at(sp[i].q_rad, limits_[i], cap, 0, v_est_[i]);
-          const double velocity = std::clamp(moves[i].velocity_rad_s,
+          const double requested = po.speed_mode ? moves[i].velocity_rad_s :
+              2.0 * (park_->park_raw_rad(static_cast<AxisId>(i)) - sp[i].q_rad);
+          const double velocity = std::clamp(requested,
               -bounds.negative_speed, bounds.positive_speed);
-          park_command_rate_[i] = service_command_rate[i] = velocity;
-          service_velocity_control = true;
-          q_ref[i] = moves[i].target_rad;
-          backend_->command_velocity(static_cast<AxisId>(i), velocity);
+          q_ref[i] = po.speed_mode ? moves[i].target_rad : park_->park_raw_rad(static_cast<AxisId>(i));
+          lim[i] = cap;
+          if (sp[i].in_speed_mode) {
+            park_command_rate_[i] = service_command_rate[i] = velocity;
+            service_velocity_control = true;
+            backend_->command_velocity(static_cast<AxisId>(i), velocity);
+          }
         }
-      } else {
-        // §33.2 target-hold (Verify/Dwell/Disable): position mode holding AT
-        // THE PARK TARGET (the drive's position loop pulls the axis back to
-        // the target — no re-pin to the current position; see
-        // ParkController::step for the real-station evidence). The hold
-        // carries a NON-ZERO speed limit (verify_speed_deg_s): the CyberGear
-        // position loop is pinned at LimitSpd=0, so a 0-limit hold can never
-        // pull an axis back into the §33.2 window (p3: 40 s stall at the
-        // overshoot point). One-time blocking mode entry = a single Derate.
-        if (!park_pos_mode_entered_) {
-          std::string e;
-          const auto status = backend_->transition_mode(static_cast<AxisId>(park_verify_axis_), true,
-              cfg_.park.verify_speed_deg_s * kDeg2Rad, now_ns, e,
-              cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp);
-          if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
-          else if (status == MotorBackend::Transition::Complete && ++park_verify_axis_ == kAxisCount)
-            park_pos_mode_entered_ = true;
-          if (!park_pos_mode_entered_) break;
-        }
-        q_ref[ix(AxisId::Pitch)] = po.pitch.target_rad;
-        lim[ix(AxisId::Pitch)] = cfg_.park.verify_speed_deg_s * kDeg2Rad;
-        q_ref[ix(AxisId::Yaw)] = po.yaw.target_rad;
-        lim[ix(AxisId::Yaw)] = cfg_.park.verify_speed_deg_s * kDeg2Rad;
       }
       if (po.disable_pitch) backend_->deenergize(AxisId::Pitch);
       if (po.disable_yaw) backend_->deenergize(AxisId::Yaw);

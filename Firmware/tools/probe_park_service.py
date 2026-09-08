@@ -82,10 +82,10 @@ def main():
         web = subprocess.Popen([sys.executable, "-m", "web.webd.app"],
                                cwd=firmware, env=env, stdout=wl, stderr=wl)
         try:
-            for expect_success in (True, False):
+            for move_yaw in (True, False):
                 state = wait_for(lambda s: s.get("phase") == "hold" and s.get("at_ready"))
                 time.sleep(3)
-                if expect_success:
+                if move_yaw:
                     before = api("/api/state")["q_yaw_rad"]
                     assert command("manual_step", "yaw+5")["ok"]
                     wait_for(lambda s: s.get("cmd_ack_command") == "manual_step" and
@@ -97,7 +97,7 @@ def main():
                 rejected = command("start_homing")
                 assert not rejected["ok"], rejected
                 state = wait_for(lambda s: s.get("phase") in ("parked", "fault"), timeout=90)
-                assert state["phase"] == ("parked" if expect_success else "fault"), state.get("fault")
+                assert state["phase"] == "parked", state.get("fault")
                 assert api("/api/health")["controld_connected"]
                 assert controller.poll() is None and web.poll() is None
                 time.sleep(1)

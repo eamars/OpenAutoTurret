@@ -295,7 +295,12 @@ TEST(ParkController, AlreadyAtPark) {
 
 namespace {
 struct ReleaseFixture {
-  ParkController park{make_params(), {make_limits(), make_limits()}, {make_model(), make_model()}};
+  static ParkParams params(bool independent) {
+    auto p = make_params(); p.require_independent_position = independent; return p;
+  }
+  explicit ReleaseFixture(bool independent = true)
+      : park(params(independent), {make_limits(), make_limits()}, {make_model(), make_model()}) {}
+  ParkController park;
   HomingFeedback pitch{1'000'000'000, -.3, 0, 0, false};
   HomingFeedback yaw{1'000'000'000, .3, 0, 0, false};
   std::array<ota::ParkPositionEvidence, 2> evidence{};
@@ -328,6 +333,22 @@ TEST(ParkRelease, BorderlineReportedPitchIsNotReleased) {
   EXPECT_TRUE(out.failed);
   EXPECT_FALSE(out.disable_pitch);
   EXPECT_FALSE(out.disable_yaw);
+}
+TEST(ParkRelease, ApprovedPoseStillRequiresHealthyStationaryMotorArrival) {
+  for (int violation=0; violation<4; ++violation) {
+    ReleaseFixture f(false); f.reach(ParkState::DisablePitch);
+    ASSERT_EQ(f.park.state(), ParkState::DisablePitch) << f.park.fail_reason();
+    f.evidence = {};
+    const auto now = f.pitch.t_ns;
+    if (violation == 0) f.pitch.pos_rad += kDeg2Rad;
+    if (violation == 1) f.pitch.vel_rad_s = 2*kDeg2Rad;
+    if (violation == 2) f.pitch.motor_fault = true;
+    if (violation == 3) f.pitch.t_ns -= 200'000'000;
+    const auto out = f.park.step(f.pitch, f.yaw, f.evidence, now);
+    EXPECT_TRUE(out.failed);
+    EXPECT_FALSE(out.disable_pitch);
+    EXPECT_FALSE(out.disable_yaw);
+  }
 }
 TEST(ParkRelease, ChangingMotorFeedbackDoesNotProveIndependentMotion) {
   ReleaseFixture f; f.freeze_independent_position = true;

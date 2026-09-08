@@ -22,11 +22,11 @@ struct Parking : testing::Test {
   ReferencedPlant* plant;
   std::unique_ptr<ControlLoop> loop;
   TimeNs now = 1'000'000'000;
-  void setup(double pitch_deg = 65, double yaw_deg = 330) {
+  void setup(double pitch_deg = 65, double yaw_deg = 330, bool speed_mode = true) {
     auto backend = std::make_unique<ReferencedPlant>();
     plant = backend.get();
     ControlLoop::Config cfg;
-    cfg.service_speed_control = true;
+    cfg.service_speed_control = speed_mode;
     cfg.park.park_logical_deg = {40, 176};
     cfg.park.speed_deg_s = 3;
     std::array<AxisLogicalModel, 2> models;
@@ -71,6 +71,21 @@ TEST_F(Parking, HomeAfterShutdownIsRejectedBeforeNextPhase) {
   EXPECT_TRUE(loop->shutdown_requested());
   EXPECT_EQ(loop->phase(), Phase::Parking);
   EXPECT_EQ(s.cmd_ack_accepted, 0);
+}
+TEST_F(Parking, ExistingPositionModeParksWithoutChangingMode) {
+  setup(43, 179, false);
+  for (int i=0; i<10000 && loop->phase()==Phase::Parking; ++i) tick();
+  EXPECT_EQ(loop->phase(), Phase::Parked) << loop->fault_reason();
+}
+TEST_F(Parking, UnexpectedDriveDisableLatchesWithoutRestartingIt) {
+  setup(43, 179);
+  plant->deenergize(AxisId::Pitch);
+  tick();
+  EXPECT_EQ(loop->phase(), Phase::Fault);
+  EXPECT_NE(loop->fault_reason().find("drive stopped before verified release"), std::string::npos);
+  for (int i=0; i<100; ++i) tick();
+  EXPECT_TRUE(plant->snapshot(AxisId::Pitch, now).disabled);
+  EXPECT_FALSE(plant->snapshot(AxisId::Yaw, now).disabled);
 }
 TEST_F(Parking, StaleFeedbackStopsBeforeAnyParkingMovement) {
   setup();

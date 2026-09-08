@@ -169,6 +169,7 @@ struct VisionConfig {
 // The park positions (deg, in the homed logical frame) must lie inside the
 // calibrated soft limits, not against the mechanical stop (§33.1).
 struct ShutdownConfig {
+  bool require_independent_position = true;
   std::string yaw_park_mode = "logical_degrees";
   std::string pitch_park_mode = "logical_degrees";
   double park_end_clearance_deg = 5.0;

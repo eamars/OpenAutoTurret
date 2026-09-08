@@ -87,10 +87,14 @@ latches a controlled-stop fault. Parking overspeed, unexpected travel, stale
 feedback and BRAKE/HOLD interventions also latch; a later ALLOW cannot resume
 the park. These motion failures require Recover Motors before Home. Ordinary
 verification-only failures retain the separate Home recovery described above.
-The zero-speed command does not certify a stopped or supported load. The
-controller cancels an interrupted drive mode-setup recipe through the existing
-disable path because ordinary speed writes are suppressed while it is pending.
-An offline pass does not establish physical validation of the corrected release.
+The zero-speed command does not certify a stopped or supported load. Parking
+retains each drive's existing running mode throughout braking, movement and
+verification. It never runs a disable/re-enable mode recipe to prepare a park
+or enter its verification dwell. It first requires 150 ms of stationary feedback,
+with a 2.5-second braking deadline. Speed-mode verification uses bounded position
+correction at the park target. Stop/Hold during this entry dwell retains power
+and latches the stop. Unexpected drive disable before the release stages also
+latches a fault. An offline pass does not establish physical validation.
 
 ### Motor fault recovery
 
@@ -140,6 +144,18 @@ Parking motion supervision can be probed without hardware with
 `build/probe-parking-motion`. The numeric control trace includes actual parking
 speed commands and position-derived estimated speed (`vest`), both in rad/s.
 
+`build/probe-park-power` runs the production controller and CAN backend against
+a simulated loaded plant and counts protocol frames. It requires no STOP,
+enable or mode-write frames before reaching the park pose. It checks independent
+sensor policy and the operator-approved motor-feedback policy, including starting
+already parked. Successful release sends two STOP frames after both axes arrive.
+This is protocol evidence, not physical load verification.
+
+`PYTHONPATH=. ../run/station-venv/bin/python tools/probe_menu_lifecycle.py`
+executes the production menu update logic in Node without a browser or video.
+It checks Home/recovery availability across controller phases and ensures
+unrelated target updates do not replace open MENU buttons during a click.
+
 Parking targets are configurable under `shutdown` in `config/turret.yaml`:
 
 - `yaw_park_mode` and `pitch_park_mode`: `logical_degrees`, `soft_center`,
@@ -148,26 +164,26 @@ Parking targets are configurable under `shutdown` in `config/turret.yaml`:
 - The other modes use calibrated **raw** soft limits. `soft_min` / `soft_max`
   are inset by `park_end_clearance_deg`; inadequate braking clearance is rejected.
 
-The selected front-heavy-load pose is yaw `soft_center`, pitch `soft_min`,
-with a 5-degree inset from the pitch soft minimum (in addition to the homing
-soft-limit margin). The resolved raw and logical targets are logged after
-homing. Configuration alone does not establish load stability at this pose.
+**Operator-approved parking contract, 9 September 2026:** middle of yaw and
+lowest pitch. The station resolves this as yaw `soft_center`, pitch `soft_min`,
+retaining the 5-degree braking inset from the pitch soft minimum (in addition
+to the homing soft-limit margin). The resolved raw and logical targets are logged.
+The operator explicitly authorized release at this pose and deployment.
 
-Automatic parking release requires observed travel of at least 0.25 degrees
-on each axis during its own park move, fresh motor feedback, and a trusted
-independent output-position measurement including its uncertainty. The release
-window is half the configured position tolerance: 0.25 degrees for a configured
-0.5 degrees. Both axes are checked during dwell, before each disable, and for
-another dwell after disable. No-motion, borderline, missing or stale evidence
-reports PARK FAILED; no artificial movement is introduced to satisfy the gate.
+`shutdown.require_independent_position: false` selects motor-feedback verification
+for this approved pose. The controller keeps power through the yaw move, pitch
+move and settling dwell. Both axes must have fresh fault-free motor feedback,
+position inside the guarded tolerance (0.25 degrees for the configured 0.5 degrees),
+and speed below the configured tolerance. It checks these conditions during the
+dwell, before each disable, and for another dwell afterward. An axis already at
+its target can pass without artificial travel. Failed verification reports PARK
+FAILED; hard-fault, temperature and watchdog emergency authority remains active.
 
-**The current CAN backend has no independent position source connected.**
-It therefore cannot satisfy the automatic release gate. Park verification
-failure leaves healthy drives under fault-hold and keeps the services online;
-hard-fault, temperature and watchdog emergency-disable authority remains.
-The simulator supplies explicitly labelled simulated plant-position evidence;
-its success is not physical verification. Integrate and validate an independent
-sensor before claiming hardware PARKED or post-disable stability.
+The parameter defaults to true when omitted. That separate policy additionally
+requires an independent output-position measurement and observed travel on each
+axis. The CAN backend has no independent position source, and therefore only
+the explicitly selected motor-feedback policy can complete on this station.
+Motor feedback is not relabelled as an independent sensor measurement.
 
 Offline lifecycle verification (from `Firmware`, after building):
 
@@ -178,7 +194,7 @@ PYTHONPATH=. ../run/station-venv/bin/python tools/probe_park_service.py \
 
 This starts the real controller and web processes with simulated motors and
 video disabled. It uses a disposable fast-homing Manual configuration, exercises
-park success and no-motion failure through HTTP, verifies Home rejection during
+park success with and without an initial yaw displacement through HTTP, verifies Home rejection during
 parking and recovery afterward, and checks both processes remain alive. Its
 final cleanup explicitly terminates those simulator processes; it does not
 operate the physical station or inspect a camera feed.

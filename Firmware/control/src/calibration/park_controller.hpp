@@ -76,6 +76,9 @@ struct ParkParams {
   double pos_tol_deg = 0.5;
   double vel_tol_deg_s = 1.0;
   int dwell_ms = 500;
+  // False for an operator-approved park pose: fresh motor position/velocity
+  // plus dwell authorize release, including when already at the target.
+  bool require_independent_position = true;
   // Reserve half the requested position tolerance at the release gate.
   // No automatic dither: if travel was not observed, require intervention.
   double min_observed_travel_deg = 0.25;
@@ -113,9 +116,9 @@ struct ParkParams {
 struct ParkOutput {
   DesiredState pitch;  // desired state for pitch (hold if not the active move axis)
   DesiredState yaw;    // desired state for yaw
-  // True while MoveYaw/MovePitch: the executor drives via SpdRef (speed mode,
-  // velocity_rad_s is the signed command). False from Verify on: the executor
-  // enters position mode once and holds target_rad (the §33.2 hold).
+  // True during moves: velocity_rad_s is the signed motion request. False
+  // during verification: hold the park target. The executor preserves the
+  // running drive mode and implements target correction without disabling it.
   bool speed_mode = false;
   bool disable_pitch = false;  // request to de-energize pitch now
   bool disable_yaw = false;    // request to de-energize yaw now
