@@ -44,6 +44,7 @@ HomingAction parse_action(const config::HomingPlanActionConfig& c,
 
 HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
   HomingParams hp;  // start from the safe defaults...
+  hp.motion_checks_abort = cfg.homing.motion_checks_abort;
   const config::ContactConfig& cc = cfg.homing.contact;  // ...override from YAML
   if (cc.coarse_speed_deg_s > 0)
     hp.coarse_speed_rad_s = cc.coarse_speed_deg_s * kDeg2Rad;

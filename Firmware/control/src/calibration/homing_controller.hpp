@@ -28,6 +28,8 @@ namespace ota {
 
 // Per-axis homing parameters (§58 params 8-13, all config-driven).
 struct HomingParams {
+  // False retains the previously commissioned arrival/settling procedure.
+  bool motion_checks_abort = true;
   double coarse_speed_rad_s = 10.0 * kDeg2Rad;  // coarse approach
   // The CyberGear position loop crawls/stick-slips below ~10 deg/s (tiny spd_ki
   // can't beat static friction at low speed-ref; characterized 2026-09-01:

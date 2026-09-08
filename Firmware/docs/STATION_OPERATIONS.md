@@ -12,6 +12,11 @@ The next attempt at 21:16 stopped on the separate speed gate. The operator then
 required the added motion checks to warn and continue homing. The station now
 also sets `homing.motion_checks_abort: false`: speed, corridor and reverse-motion
 observations log warnings without changing the homing state or motor commands.
+The same switch restores the preceding arrival/settling procedure in the endpoint
+FSM: timed settling, the prior backoff arrival window and fine-approach travel
+bounds. Added stationary-window, clearance and coarse/fine comparison gates do
+not abort this procedure. Existing contact, repeatability and drive-health
+requirements remain.
 Both fields default to true if omitted. Feedback/drive-fault checks,
 current/torque limits, the watchdog and parking checks remain active.
 The backend still verifies disabled state, mode
