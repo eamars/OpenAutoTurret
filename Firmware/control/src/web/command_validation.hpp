@@ -71,7 +71,8 @@ inline CommandResult validate_command(const SystemCommandState& s,
   if (s.motor_recovery_active && command != "hold" && command != "stop_motion") {
     r.error = "motor recovery active; wait or Stop Motion to cancel"; return r;
   }
-  if (s.shutdown_or_parking && command != "request_shutdown") {
+  if (s.shutdown_or_parking && command != "request_shutdown" &&
+      command != "stop_motion" && command != "hold") {
     r.error = "shutdown/parking already accepted; Home and motion commands unavailable";
     return r;
   }
@@ -83,9 +84,8 @@ inline CommandResult validate_command(const SystemCommandState& s,
   if (command == "stop_motion") {
     // §27. No gate at all, on either layer. STOP MOTION is the button an operator
     // reaches for when something is already wrong; a state check standing between
-    // them and a stop is worse than no button. It changes no safety state,
-    // disables nothing, and parks nothing — it cancels the active intent and
-    // lands in MANUAL/HOLD, which is the only thing that reliably stays stopped.
+    // them and a stop is worse than no button. During parking it cancels the
+    // sequence and latches a controlled-stop fault; it never initiates a park.
     r.ok = true;
     return r;
   }

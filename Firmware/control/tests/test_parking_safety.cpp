@@ -102,6 +102,30 @@ TEST_F(Parking, BoundaryViolationStillBrakes) {
   plant->set_position(AxisId::Yaw, 354.9*kDeg2Rad);
   tick();
   EXPECT_EQ(loop->last_decision().action, SafetyAction::Brake);
+  EXPECT_EQ(loop->phase(), Phase::Fault);
+  // A return to healthy feedback cannot restart the move or allow Home to
+  // bypass explicit fault recovery.
+  plant->set_position(AxisId::Yaw, 330*kDeg2Rad);
+  for (int i=0; i<200; ++i) tick();
+  EXPECT_EQ(loop->phase(), Phase::Fault);
+  std::string err;
+  EXPECT_FALSE(loop->start_homing(HomingPlan({}, {}), err));
+}
+TEST_F(Parking, StationaryOutsideSoftLimitCannotReturnAllowAndContinueParking) {
+  setup();
+  plant->set_position(AxisId::Pitch, 77*kDeg2Rad);
+  tick();
+  EXPECT_EQ(loop->phase(), Phase::Fault);
+  EXPECT_NE(loop->fault_reason().find("outside soft limits"), std::string::npos);
+}
+TEST_F(Parking, BrakeInsideSoftLimitsLatchesBeforeAnotherMove) {
+  setup();
+  // Still inside the soft limit but the measured outward motion cannot stop
+  // within the remaining reserve.
+  plant->set_position(AxisId::Yaw, 354.8*kDeg2Rad);
+  tick();
+  EXPECT_EQ(loop->phase(), Phase::Fault);
+  EXPECT_NE(loop->fault_reason().find("safety interrupted parking"), std::string::npos);
 }
 TEST_F(Parking, MissingIndependentConfirmationFailsWithoutReleasingAndHomeCanRecover) {
   setup(43, 179);

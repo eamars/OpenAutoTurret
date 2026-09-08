@@ -554,6 +554,7 @@ struct ControlLogRecord {
   double q_ref[kAxisCount] = {0.0, 0.0};
   double v_ref[kAxisCount] = {0.0, 0.0};
   double v_command[kAxisCount] = {0.0, 0.0};
+  double v_estimated[kAxisCount] = {0.0, 0.0};  // feedback-position derivative
   TimeNs feedback_ns[kAxisCount] = {0, 0};
   uint64_t command_seq = 0;
   double probe_omega = 0;

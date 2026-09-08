@@ -1,5 +1,11 @@
 # Tracking latency and hardware priorities — 8 September 2026
 
+**Historical baseline within this day's work.** Later physical trials,
+separate DNN/DSP measurements, endpoint failures, storage cleanup and the current
+stopped state are recorded in the [optimization-cycle follow-up](optimization_cycle_2026_09_08.md).
+Its operational status supersedes the running-state and Pi artifact locations
+at the end of this baseline report.
+
 **Finding:** The measurements do not support buying a faster Pi or an AI HAT as the first response to slow tracking. The largest identifiable contributors are acquisition policy, the tracking trajectory filter, and the installed drive/load response. Camera delivery and host perception processing are tens of milliseconds; software acquisition and substantial physical movement are hundreds of milliseconds to seconds.
 
 **Status: partially verified across the complete optical loop.** Real target-free motor response and live camera/publication timing were measured. Production selection and reference-generation code were exercised independently with synthetic inputs. No person or other real target was required to move, and detections never controlled the physical tests. Photon-to-recognition timing, independent output-angle metrology, and tracking under full-speed load remain unverified. These are component measurements, not a measured end-to-end optical acquisition time.

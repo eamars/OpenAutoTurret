@@ -51,6 +51,10 @@ TEST(CommandValidation, RecoveryDoesNotUnlockMotionAndCannotOverlapRoutines) {
   EXPECT_TRUE(validate_command(s, "hold").ok);
   s.motor_recovery_active = false; s.shutdown_or_parking = true;
   EXPECT_FALSE(validate_command(s, "recover_motors").ok);
+  EXPECT_TRUE(validate_command(s, "stop_motion").ok);
+  EXPECT_TRUE(validate_command(s, "hold").ok);
+  EXPECT_FALSE(validate_command(s, "start_homing").ok);
+  EXPECT_FALSE(validate_command(s, "set_mode", "AUTO_ROAM").ok);
 }
 
 TEST(CommandValidation, NotHomedLocksTracking) {

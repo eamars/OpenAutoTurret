@@ -228,20 +228,38 @@ bool ControlLoop::start_parking(std::string& err) {
   park_init_axis_ = park_verify_axis_ = 0;
   park_pos_mode_entered_ = false;
   park_log_ns_ = 0;
+  park_command_rate_ = {};
   disable_tracking();
   phase_ = Phase::Parking;
   return true;
 }
 
-void ControlLoop::fail_parking(const std::string& reason) {
+void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   // Verification failure withholds automatic release. Emergency safety
   // actions retain their independent disable authority.
-  park_failed_ = true;
+  const bool interrupted_setup = motion_fault &&
+      (park_init_axis_ < kAxisCount ||
+       (park_ && park_->state() >= ParkState::Verify && !park_pos_mode_entered_));
+  // A pending CAN mode recipe suppresses ordinary reference writes. Cancel
+  // it via the backend's disable path; do not leave an unpollable recipe
+  // blocking the stop command or capable of a later enable.
+  if (interrupted_setup) deenergize_all();
+  // A motion failure cannot use the park-verification-only Home shortcut.
+  // It requires explicit motor recovery and never resumes on a later ALLOW.
+  park_failed_ = !motion_fault;
   shutdown_requested_.store(false);
   phase_ = Phase::Fault;
   fault_reason_ = "PARK FAILED: " + reason;
   disable_tracking();
   spdlog::error("{}; automatic park release withheld; services remain online", fault_reason_);
+  if (motion_fault) {
+    for (int i = 0; i < kAxisCount; ++i)
+      spdlog::error("park motion latched axis={} q={:.6f} v_est={:.6f} previous_command={:.6f} "
+                   "soft=[{:.6f},{:.6f}] (rad,s); stop={} physical stop unverified",
+          axis_name(static_cast<AxisId>(i)), last_q_[i], v_est_[i], park_command_rate_[i],
+          limits_[i].q_soft_min_rad, limits_[i].q_soft_max_rad,
+          interrupted_setup ? "disable interrupted mode setup" : "zero-speed request");
+  }
 }
 
 void ControlLoop::deenergize_all() {
@@ -1272,7 +1290,43 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             in.axes[i].feedback_age_ms > cfg_.feedback_max_age_ms ||
             !std::isfinite(sp[i].q_rad) || !std::isfinite(v_est_[i]);
       if (invalid_feedback) {
-        fail_parking("stale or untrusted motor feedback during parking");
+        fail_parking("stale or untrusted motor feedback during parking", true);
+        break;
+      }
+      // Supervise measured motion, not just the commanded speed. The drive
+      // may outrun SpdRef; a zero-speed command is not proof of a physical stop.
+      std::string motion_error;
+      for (int i = 0; i < kAxisCount && motion_error.empty(); ++i) {
+        const auto axis = static_cast<AxisId>(i);
+        const std::string prefix = std::string(axis_name(axis)) + " parking: ";
+        if (!limits_[i].in_soft(sp[i].q_rad)) {
+          motion_error = prefix + "measured position outside soft limits";
+        } else if (park_init_axis_ == kAxisCount) {
+          const double speed_ceiling = (std::max(cfg_.park.speed_deg_s,
+              cfg_.park.verify_speed_deg_s) + 2.0) * kDeg2Rad;
+          if (std::abs(v_est_[i]) > speed_ceiling) {
+            motion_error = prefix + "measured overspeed " +
+                std::to_string(v_est_[i]*kRad2Deg) + " deg/s";
+          } else {
+            double lo = park_motion_origin_[i], hi = lo;
+            if (park_->state() == ParkState::MoveYaw && axis == AxisId::Yaw) {
+              lo = std::min(lo, park_->park_raw_rad(axis));
+              hi = std::max(hi, park_->park_raw_rad(axis));
+            } else if (park_->state() == ParkState::MovePitch && axis == AxisId::Pitch) {
+              lo = std::min(lo, park_->park_raw_rad(axis));
+              hi = std::max(hi, park_->park_raw_rad(axis));
+            } else if (park_->state() >= ParkState::MovePitch && axis == AxisId::Yaw) {
+              lo = hi = park_->park_raw_rad(axis);
+            } else if (park_->state() >= ParkState::Verify) {
+              lo = hi = park_->park_raw_rad(axis);
+            }
+            if (sp[i].q_rad < lo - kDeg2Rad || sp[i].q_rad > hi + kDeg2Rad)
+              motion_error = prefix + "unexpected travel outside 1-degree path tolerance";
+          }
+        }
+      }
+      if (!motion_error.empty()) {
+        fail_parking(motion_error, true);
         break;
       }
       if (now_ns >= park_deadline_ns_) {
@@ -1283,16 +1337,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // the authoritative stop/disable below. Keep watchdogs active throughout.
       if (last_decision_.action != SafetyAction::Allow &&
           last_decision_.action != SafetyAction::Derate) {
-        if (park_->state() >= ParkState::Verify)
-          fail_parking("safety interrupted park verification: " + last_decision_.reason);
+        fail_parking("safety interrupted parking: " + last_decision_.reason, true);
         break;
       }
       if (park_init_axis_ < kAxisCount) {
+        // Neutralize BOTH axes while the sequential drive setup is pending;
+        // the other axis must not retain its previous tracking command.
+        for (int i = 0; i < kAxisCount; ++i)
+          if (sp[i].in_speed_mode)
+            backend_->command_velocity(static_cast<AxisId>(i), 0.0);
         std::string e;
         const auto status = backend_->transition_mode(static_cast<AxisId>(park_init_axis_), false,
-            cfg_.park.limit_cur_a[park_init_axis_], now_ns, e, cfg_.service_speed_control ? .002 : -1);
+            cfg_.park.limit_cur_a[park_init_axis_], now_ns, e,
+            cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp);
         if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
-        else if (status == MotorBackend::Transition::Complete) ++park_init_axis_;
+        else if (status == MotorBackend::Transition::Complete && ++park_init_axis_ == kAxisCount)
+          for (int i = 0; i < kAxisCount; ++i) park_motion_origin_[i] = sp[i].q_rad;
         break;
       }
       ParkOutput po = park_->step(
@@ -1317,6 +1377,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const auto bounds = boundary.at(sp[i].q_rad, limits_[i], cap, 0, v_est_[i]);
           const double velocity = std::clamp(moves[i].velocity_rad_s,
               -bounds.negative_speed, bounds.positive_speed);
+          park_command_rate_[i] = service_command_rate[i] = velocity;
+          service_velocity_control = true;
+          q_ref[i] = moves[i].target_rad;
           backend_->command_velocity(static_cast<AxisId>(i), velocity);
         }
       } else {
@@ -1331,7 +1394,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         if (!park_pos_mode_entered_) {
           std::string e;
           const auto status = backend_->transition_mode(static_cast<AxisId>(park_verify_axis_), true,
-              cfg_.park.verify_speed_deg_s * kDeg2Rad, now_ns, e, cfg_.service_speed_control ? .002 : -1);
+              cfg_.park.verify_speed_deg_s * kDeg2Rad, now_ns, e,
+              cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp);
           if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
           else if (status == MotorBackend::Transition::Complete && ++park_verify_axis_ == kAxisCount)
             park_pos_mode_entered_ = true;
@@ -1491,6 +1555,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         } else if (phase_ == Phase::Fault || (last_decision_.action != SafetyAction::Allow &&
                    !(phase_ == Phase::Parking && last_decision_.action == SafetyAction::Derate))) {
           speed_servo_[i].reset();
+          service_command_rate[i] = 0;
+          service_velocity_control = true;
           backend_->command_velocity(a, 0.0);
         } else
           backend_->keepalive(a);
@@ -1563,6 +1629,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       rec.feedback_ns[i] = sp[i].rx_ns;
       rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
       rec.v_command[i] = service_command_rate[i];
+      rec.v_estimated[i] = v_est_[i];
       rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
     }
     telemetry_.push_control(rec);
@@ -2528,6 +2595,12 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
 ModeResult ControlLoop::stop_motion() {
   response_probe_until_ns_ = 0;
   startup_mode_applied_ = true;
+  if (phase_ == Phase::Parking) {
+    fail_parking("operator cancelled parking motion", true);
+    ack_command(ack_in_flight_.empty() ? "stop_motion" : ack_in_flight_, true,
+        "parking cancelled; controlled stop latched; motor recovery required");
+    return {true, true, "parking cancelled; recovery required"};
+  }
   if (phase_ == Phase::Recovering) {
     backend_->cancel_motor_recovery();
     recovery_then_home_ = false;
@@ -2535,7 +2608,7 @@ ModeResult ControlLoop::stop_motion() {
     phase_ = Phase::Fault;
     fault_reason_ = "motor recovery cancelled; retry Recover Motors when ready";
   }
-  if (phase_ == Phase::Homing || phase_ == Phase::Parking) {
+  if (phase_ == Phase::Homing) {
     deenergize_all();
     phase_ = Phase::Idle;
     pending_homing_ds_.reset();
@@ -3355,6 +3428,11 @@ void ControlLoop::execute_command(const std::string& name,
   if (name == "recover_motors") {
     const bool ok = start_motor_recovery(err);
     ack_command(name, ok, ok ? "motor recovery accepted; verifying disabled feedback" : err);
+    return;
+  }
+  if (phase_ == Phase::Parking &&
+      (name == "stop_motion" || name == "hold")) {
+    stop_motion();
     return;
   }
   if (phase_ == Phase::Parking &&

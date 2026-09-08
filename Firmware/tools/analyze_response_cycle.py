@@ -16,8 +16,9 @@ def stats(values):
 def analyze(path):
     rows=[json.loads(line) for line in path.read_text().splitlines()]
     traces=[r for r in rows if r['kind']=='trace']
+    acknowledgements=[r for r in rows if r['kind']=='trial_ack']
     trials=[]
-    for ack in (r for r in rows if r['kind']=='trial_ack'):
+    for ack in acknowledgements:
         axis,delta,omega,*gain=ack['arg'].split(':')
         axis_i=['pitch','yaw'].index(axis)
         delta=float(delta); direction=np.sign(delta)
@@ -33,6 +34,21 @@ def analyze(path):
         ref=np.array([r['ref'][axis_i] for r in samples])*180/np.pi
         cmd=np.array([r['cmd'][axis_i] for r in samples])*180/np.pi
         vref=np.array([r['vref'][axis_i] for r in samples])*180/np.pi
+        # Cancellation ends the commanded trial, not physical motion. Include
+        # post-cancel encoder evidence up to the next trial, including state
+        # samples retained when the trace observer itself aborted.
+        begin=samples[0]['t']; active_end=samples[-1]['t']
+        later=[r['t'] for r in traces if r.get('omega',0)>0 and r['ack']>seq]
+        end=min(later) if later else float('inf')
+        observed=[(r['t'],r['q'][axis_i]*180/np.pi) for r in traces if begin<=r['t']<end]
+        for row in rows:
+            if row['kind']!='state':
+                continue
+            state=row['data']
+            timestamp=state.get(f'feedback_timestamp_{axis}_ns',state['ts_ns'])
+            if begin<=timestamp<end:
+                observed.append((timestamp,state[f'q_{axis}_rad']*180/np.pi))
+        post_active=[point for point in observed if point[0]>active_end]
         def crossing(signal,fraction):
             passed=direction*(signal-base) >= abs(delta)*fraction
             for i in np.flatnonzero(passed):
@@ -54,6 +70,11 @@ def analyze(path):
             reference_t50_ms=crossing(ref,.5),reference_t90_ms=crossing(ref,.9),
             settling_within_point2_deg_ms=settled,
             overshoot_deg=round(float(max(0,np.max(direction*(q-goal)))),4),
+            observed_overshoot_including_stop_deg=round(max(0,max(direction*(p[1]-goal) for p in observed)),4),
+            observed_peak_excursion_deg=round(max(abs(p[1]-base) for p in observed),4),
+            observation_end_s=round((max(p[0] for p in observed)-begin)/1e9,3),
+            post_active_samples=len(post_active),
+            post_active_overshoot_deg=round(max(0,max(direction*(p[1]-goal) for p in post_active)),4) if post_active else None,
             late_error_deg=round(float(np.median(q[t>=4]-goal)),4) if np.any(t>=4) else None,
             late_span_deg=round(float(np.ptp(q[t>=4])),4) if np.any(t>=4) else None,
             peak_command_deg_s=round(float(np.max(abs(cmd))),3),

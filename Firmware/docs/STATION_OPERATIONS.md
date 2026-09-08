@@ -3,6 +3,14 @@
 This is the current operating runbook. Use this procedure rather than dated
 commissioning scripts or the legacy individual systemd units.
 
+**Current physical-operation hold (8 September 2026):** repeated endpoint
+impacts were reported; shutdown motor logs crossed both pitch soft limits and
+showed approximately 65 degrees/second during a 3-degree/second parking move.
+The stack is stopped. Do not activate a staged release, restart or home until
+the installed load, possible damage and stopping/support arrangements have
+been physically checked. See the [incident and optimization evidence](optimization_cycle_2026_09_08.md).
+Offline tests establish command supervision only, not physical braking.
+
 ## Station and ownership
 
 - SSH: `eamars@rpi-turret`; use the configured SSH key. Do not put passwords in scripts or Git.
@@ -54,6 +62,16 @@ does not clear a latched controller fault. An explicit launcher stop terminates
 the services and retains its emergency-disable fallback, reported as PARK FAILED
 when the park was not verified. It must not be mistaken for a successful release.
 
+The corrected controller accepts **Stop Motion / Hold during parking** and
+latches a controlled-stop fault. Parking overspeed, unexpected travel, stale
+feedback and BRAKE/HOLD interventions also latch; a later ALLOW cannot resume
+the park. These motion failures require Recover Motors before Home. Ordinary
+verification-only failures retain the separate Home recovery described above.
+The zero-speed command does not certify a stopped or supported load. The
+controller cancels an interrupted drive mode-setup recipe through the existing
+disable path because ordinary speed writes are suppressed while it is pending.
+An offline pass does not establish physical validation of the corrected release.
+
 ### Motor fault recovery
 
 `recover_motors` is an explicit operator action, available in Fault, Idle or
@@ -97,6 +115,10 @@ emulator, including an existing watchdog latch, silent pitch timeout and retry.
 The second runs the actual controller/web services with simulated motors and
 checks HTTP recovery, command rejection, cancellation, retry and re-homing.
 Neither establishes that the physical feedback-loss mechanism is resolved.
+
+Parking motion supervision can be probed without hardware with
+`build/probe-parking-motion`. The numeric control trace includes actual parking
+speed commands and position-derived estimated speed (`vest`), both in rad/s.
 
 Parking targets are configurable under `shutdown` in `config/turret.yaml`:
 

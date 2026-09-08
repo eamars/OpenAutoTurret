@@ -40,6 +40,9 @@ set_tests_properties(commissioning_watchdog_probe yousee_backpressure_probe PROP
 add_executable(probe-reference-settling tools/probe_reference_settling.cpp)
 target_link_libraries(probe-reference-settling PRIVATE ota_core)
 add_test(NAME reference_settling_probe COMMAND probe-reference-settling)
+add_executable(probe-parking-motion tools/probe_parking_motion.cpp)
+target_link_libraries(probe-parking-motion PRIVATE ota_core)
+add_test(NAME parking_motion_probe COMMAND probe-parking-motion)
 
 # Phase 9: payload profiling / verification commissioning CLI (§28.5/§31/§44).
 add_executable(turret-payload tools/turret_payload.cpp)

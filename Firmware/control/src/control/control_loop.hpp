@@ -465,8 +465,10 @@ class ControlLoop {
   TimeNs park_log_ns_ = 0;
   TimeNs park_deadline_ns_ = 0;
   bool park_failed_ = false;
+  std::array<double, kAxisCount> park_motion_origin_{};
+  std::array<double, kAxisCount> park_command_rate_{};
   bool recovery_then_home_ = false;
-  void fail_parking(const std::string& reason);
+  void fail_parking(const std::string& reason, bool motion_fault = false);
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};

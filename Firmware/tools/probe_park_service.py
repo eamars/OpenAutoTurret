@@ -104,6 +104,21 @@ def main():
                 assert command("start_homing")["ok"]
                 wait_for(lambda s: s.get("phase") == "homing", timeout=5)
                 print(f"PASS: {state['phase']} keeps both services alive; Home rejected during parking and accepted afterward", flush=True)
+            wait_for(lambda s: s.get("phase") == "hold" and s.get("at_ready"))
+            time.sleep(1)
+            assert command("request_shutdown")["ok"]
+            wait_for(lambda s: s.get("phase") == "parking", timeout=5)
+            assert command("stop_motion")["ok"]
+            state = wait_for(lambda s: s.get("phase") == "fault", timeout=5)
+            assert "operator cancelled parking" in state.get("fault", ""), state.get("fault")
+            assert not command("start_homing")["ok"]
+            time.sleep(1)
+            state = api("/api/state")
+            assert state["phase"] == "fault"
+            assert state["service_command_rate_pitch_rad_s"] == 0
+            assert state["service_command_rate_yaw_rad_s"] == 0
+            assert api("/api/health")["controld_connected"]
+            print("PASS: HTTP Stop Motion cancels parking, commands zero speed and remains latched; Home cannot bypass recovery", flush=True)
         finally:
             controller.terminate()
             controller.wait(timeout=30)
