@@ -22,13 +22,14 @@ constexpr double kDt = 0.005;           // the 200 Hz control period
 
 TEST(TrackingReference, BothDirectionsSettleWithoutARepeatedOrbit) {
   for(double acceleration:{15.,25.}) {
+  for(double omega:{2.5,4.0}) {
   for (double degrees : {-25., -5., -1., 1., 5., 25.}) {
     ota::control::ReferenceLimiter state;
     state.reset_at(0);
     double overshoot=0, late_error=0, late_rate=0;
     for (int i=0; i<2400; ++i) {
       const double previous_a=state.a_rad_s2;
-      ota::control::track_reference(state,degrees*kDeg,0,kDt,15*kDeg,acceleration*kDeg,4*acceleration*kDeg);
+      ota::control::track_reference(state,degrees*kDeg,0,kDt,15*kDeg,acceleration*kDeg,4*acceleration*kDeg,omega);
       EXPECT_LE(std::abs(state.v_rad_s),15*kDeg+1e-10);
       EXPECT_LE(std::abs(state.a_rad_s2),acceleration*kDeg+1e-10);
       EXPECT_LE(std::abs(state.a_rad_s2-previous_a),4*acceleration*kDeg*kDt+1e-10);
@@ -43,9 +44,11 @@ TEST(TrackingReference, BothDirectionsSettleWithoutARepeatedOrbit) {
     EXPECT_LT(late_rate,.01*kDeg) << degrees;
   }
   }
+  }
 }
 
 TEST(TrackingReference, PositionNoiseDoesNotBecomeVelocityFeedForward) {
+  for(double omega:{2.5,4.0}) {
   ota::control::ReferenceLimiter state;
   state.reset_at(0);
   double late_excursion=0;
@@ -54,10 +57,25 @@ TEST(TrackingReference, PositionNoiseDoesNotBecomeVelocityFeedForward) {
     // noisy position must not be differentiated into an invented motion rate.
     const double observed_t=(i/8)*8*kDt;
     const double observation=.5*kDeg*std::sin(5*observed_t);
-    ota::control::track_reference(state,observation,0,kDt,15*kDeg,15*kDeg,60*kDeg);
+    ota::control::track_reference(state,observation,0,kDt,15*kDeg,15*kDeg,60*kDeg,omega);
     if(i>2000) late_excursion=std::max(late_excursion,std::abs(state.q_rad));
   }
   EXPECT_LT(late_excursion,.2*kDeg);
+  }
+}
+
+TEST(TrackingReference, FasterSmallCorrectionDoesNotOvershootLargerStep) {
+  for (double degrees : {-5.,5.}) {
+    ota::control::ReferenceLimiter state;
+    state.reset_at(0);
+    double over=0;
+    for (int i=0;i<1200;++i) {
+      ota::control::track_reference(state,degrees*kDeg,0,kDt,20*kDeg,30*kDeg,100*kDeg,4.0);
+      over=std::max(over,(state.q_rad-degrees*kDeg)*std::copysign(1.,degrees));
+    }
+    EXPECT_LT(over,.1*kDeg);
+    EXPECT_NEAR(state.q_rad,degrees*kDeg,.01*kDeg);
+  }
 }
 
 // Run the limiter until it reports arrival, or until the budget runs out.

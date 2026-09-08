@@ -280,11 +280,16 @@ v3:
   service_speed_control: true
   service_speed_ki: 0.05
   service_speed_kp: 4.0
+  # Faster small corrections; large-error stiffness remains at the original rate.
+  tracking_reference_omega: 4.0
+  position_servo_kp: 3.0
   auto_roam:
     full_yaw_travel: true
   auto_track:
     roam_on_loss_ms: 1000
-    track_on_acquire_ms: 250
+    # Perception already requires confirmation and 500 ms of a single candidate.
+    # Keep a short fresh-selection hand-off; AUTO_TRACK still needs distinct frames.
+    track_on_acquire_ms: 50
     coast_ms: 250
     lost_hold_ms: 500
     reacquire_window_ms: 1000

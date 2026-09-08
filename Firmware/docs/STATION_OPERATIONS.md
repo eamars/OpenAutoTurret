@@ -280,11 +280,27 @@ the existing AUTO_TRACK motion profile through the normal safety envelope. This
 is a Manual commissioning command, not an automatic tracking mode. It requires
 healthy homed speed-mode service, fresh feedback, near-zero commanded speed, and
 15 degrees clearance at both endpoints. Allowed signed steps are 0.5, 1 and 5
-degrees; the filter response rate is bounded to 2.5–6 per second. Any subsequent
+degrees; the filter response rate is bounded to 2.5–6 per second. An optional
+fourth argument (`yaw:1:4:3`) sets the host position correction gain for that
+trial only, within 2–6 per second. The drive's internal gains are not changed.
+Any subsequent
 controller command cancels it, as do expiry, mode change and a safety intervention.
 The tool also sends Stop Motion on exit. The trial does not alter deployed gains,
 current limits, homing, calibration, or startup mode. Move captures off the Pi
 after analysis; runtime data does not belong in Git.
+
+The deployed `v3.tracking_reference_omega` controls small-correction response
+(allowed 2.5–4 per second). Large corrections retain the original stiffness
+until the requested acceleration fits the configured profile. A constant faster
+gain produced excessive reference and encoder overshoot in physical 5-degree
+steps, so it is not the production algorithm. `v3.position_servo_kp` defaults to
+3 per second; probe overrides are not retained. Current, speed, acceleration,
+jerk, thermal, boundary and watchdog limits remain authoritative.
+
+The automatic hand-off wait is 50 ms after a fresh selected measurement, followed
+by AUTO_TRACK's distinct-frame acquisition checks. Perception's confirmation and
+500 ms single-candidate selection dwell remain in force. This changes response
+to a fresh selection; it does not establish detector accuracy on new scenes.
 
 See [travel and loaded-control validation](travel_boundary_review_2026_09_06.md)
 for measured motion limits and remaining verification gaps. The September 3

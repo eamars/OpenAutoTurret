@@ -13,14 +13,15 @@ struct SpeedServo {
   double step(double reference, double feed_forward, double measured,
               double cap, double dt, double a_max, double j_max,
               double negative_acceleration_scale=1, double positive_acceleration_scale=1,
-              bool smooth_cap_reduction=false) {
+              bool smooth_cap_reduction=false, double position_gain=3.0) {
     if (!(dt > 0 && dt < .1) || cap <= 0) { reset(); return 0; }
     const double error = reference - measured;
+    position_gain = std::isfinite(position_gain) ? std::clamp(position_gain,2.0,6.0) : 3.0;
     const bool still_reference = std::abs(feed_forward) < .02 * kDeg2Rad;
     if (!still_reference || std::abs(error) > .15*kDeg2Rad) quiet = false;
     else if (std::abs(error) < .08*kDeg2Rad) quiet = true;
     const double desired = quiet ? 0.0 : std::clamp(
-        feed_forward + 3.0 * std::clamp(error, -2*kDeg2Rad, 2*kDeg2Rad), -cap, cap);
+        feed_forward + position_gain * std::clamp(error, -2*kDeg2Rad, 2*kDeg2Rad), -cap, cap);
     // Reduce only acceleration that builds outward speed. Never reduce the
     // acceleration available to brake motion already heading toward a stop.
     const double lo=velocity<=0 ? a_max*std::clamp(negative_acceleration_scale,0.0,1.0) : a_max;

@@ -104,6 +104,8 @@ class Imx500YoloAdapter(ModelAdapter):
         self.camera_num: Optional[int] = None
         self.warnings: List[str] = []
         self.probe: Any = None
+        self._batch_geometry_verified = False
+        self._batch_geometry_rejected = False
 
     # -- lifecycle ----------------------------------------------------------
     def open(self, *, device: Any = None, camera: Any = None) -> None:
@@ -230,17 +232,21 @@ class Imx500YoloAdapter(ModelAdapter):
                 f"6 (§9.3 disagreement discovered at runtime)")
         geometry = None
         anchors = {}
+        mapping_started = time.monotonic_ns()
         if self.camera is not None:
             rows, anchors = self._map_rows_to_stream(rows, metadata)
             from ..detection.normalize import InferenceGeometry
             width, height = self.stream_size
             geometry = InferenceGeometry(width, height, width, height,
                                          bbox_order='xy', bbox_normalized=True)
+        mapping_ms = (time.monotonic_ns()-mapping_started)/1e6
         self.inferences += 1
         result = self._rows_to_set(rows, frame_sequence=int(frame_sequence),
                                  sensor_timestamp_ns=int(sensor_timestamp_ns),
                                  publish_timestamp_ns=int(publish_timestamp_ns),
                                  anchor_cfg=self.anchor_cfg, geometry=geometry)
+        if self.camera is not None:
+            self.last_timings_ms['coordinate_mapping_ms'] = mapping_ms
         self.last_anchor_mapping = []
         for detection in result.detections:
             mapped = anchors.get(detection.detection_id_in_frame)
@@ -266,6 +272,8 @@ class Imx500YoloAdapter(ModelAdapter):
         mapped = []
         anchors = {}
         fraction = (self.anchor_cfg or AnchorConfig()).torso_fraction
+        coordinates = []
+        originals = {}
         for index, row in enumerate(rows):
             try:
                 x0, y0, x1, y1 = parse_row_box(row[box_index:box_index+4], self.manifest.bbox_order,
@@ -274,9 +282,7 @@ class Imx500YoloAdapter(ModelAdapter):
                     raise ValidationError('inverted input box')
                 # Same captured ScalerCrop and sensor ROI transform as the official
                 # example. The ISP preview is not a generic letterbox of the NN input.
-                x, y, w, h = self.device.convert_inference_coords(
-                    (y0/ih, x0/iw, y1/ih, x1/iw), metadata, self.camera)
-                coords = [x/width, y/height, (x+w)/width, (y+h)/height]
+                coordinates.append((y0/ih, x0/iw, y1/ih, x1/iw))
                 # Calculate the anatomical point BEFORE the SDK clips the identity
                 # box to the ISP crop. A taller detector view means these operations
                 # do not commute: the station SDK probe reproduced 99 px of bias.
@@ -284,13 +290,39 @@ class Imx500YoloAdapter(ModelAdapter):
                 # its centre keeps the point independent of box clipping. Integer
                 # rectangle rounding contributes only about one ISP pixel.
                 u, v = .5*(x0+x1), y0 + fraction*(y1-y0)
-                ax, ay, aw, ah = self.device.convert_inference_coords(
-                    ((v-.5)/ih, (u-.5)/iw, (v+.5)/ih, (u+.5)/iw), metadata, self.camera)
-                anchor = PointNorm((ax+.5*aw)/width, (ay+.5*ah)/height)
-                anchors[index] = (anchor, aw > 0 and ah > 0 and anchor.is_valid(),
-                                  [x0/iw, y0/ih, x1/iw, y1/ih])
+                coordinates.append(((v-.5)/ih, (u-.5)/iw, (v+.5)/ih, (u+.5)/iw))
+                originals[index] = [x0/iw, y0/ih, x1/iw, y1/ih]
             except ValidationError:
-                coords = [float('nan')]*4  # normalizer counts the invalid detection
+                pass  # normalizer still counts the invalid row below
+
+        converted = None
+        # This accelerated path is specific to the installed IMX500 SDK. Compare
+        # every real coordinate on the first frame, and fall back on disagreement.
+        # Rebuild crop/ROI geometry every frame from that request's metadata.
+        if (type(self.device).__module__.startswith('picamera2.devices.imx500') and
+                not getattr(self,'_batch_geometry_rejected',False)):
+            from .sdk_geometry import Imx500FrameMapper
+            try:
+                converted = Imx500FrameMapper(self.device,self.camera,metadata).convert_many(coordinates)
+            except (AttributeError,KeyError,TypeError,ValueError,ImportError):
+                self._batch_geometry_rejected = True
+            if converted is not None and not getattr(self,'_batch_geometry_verified',False):
+                expected = [self.device.convert_inference_coords(c,metadata,self.camera) for c in coordinates]
+                if converted != expected:
+                    self._batch_geometry_rejected = True
+                    converted = expected
+                self._batch_geometry_verified = bool(coordinates) and not getattr(self,'_batch_geometry_rejected',False)
+        if converted is None:
+            converted = [self.device.convert_inference_coords(c,metadata,self.camera) for c in coordinates]
+        rectangles = iter(converted)
+        for index,row in enumerate(rows):
+            coords = [float('nan')]*4
+            if index in originals:
+                x,y,w,h = next(rectangles)
+                ax,ay,aw,ah = next(rectangles)
+                coords = [x/width,y/height,(x+w)/width,(y+h)/height]
+                anchor = PointNorm((ax+.5*aw)/width,(ay+.5*ah)/height)
+                anchors[index] = (anchor,aw > 0 and ah > 0 and anchor.is_valid(),originals[index])
             mapped_row = list(row)
             mapped_row[box_index:box_index+4] = coords
             mapped.append(mapped_row)
@@ -301,6 +333,8 @@ class Imx500YoloAdapter(ModelAdapter):
         payload = super().describe()
         payload["camera_num"] = self.camera_num
         payload['coordinate_mapping'] = 'sdk_capture_metadata' if self.camera is not None else 'offline_geometry'
+        payload['batch_geometry_verified'] = getattr(self,'_batch_geometry_verified',False)
+        payload['batch_geometry_rejected'] = getattr(self,'_batch_geometry_rejected',False)
         payload["intrinsics_task"] = getattr(self.intrinsics, "task", None)
         payload["warnings"] = list(self.warnings)
         payload["probe"] = self.probe.to_dict() if self.probe is not None else None

@@ -111,6 +111,8 @@ class ControlLoop {
     double homing_speed_ki = .002;
     double service_speed_ki = .002;
     double service_speed_kp = 1.0;
+    double tracking_reference_omega = 2.5;
+    double position_servo_kp = 3.0;
     double service_max_speed_rad_s = 3.0 * kDeg2Rad;
     double track_acceleration_rad_s2 = 15.0 * kDeg2Rad;
     double track_jerk_rad_s3 = 60.0 * kDeg2Rad;
@@ -700,6 +702,7 @@ class ControlLoop {
   TimeNs response_probe_until_ns_ = 0;
   double response_probe_q_[2]{};
   double response_probe_omega_ = 2.5;
+  double response_probe_position_gain_ = 3.0;
   AutoTrackController autotrack_;
   AutoTrackInput at_input_;
   AutoTrackOutput at_out_;

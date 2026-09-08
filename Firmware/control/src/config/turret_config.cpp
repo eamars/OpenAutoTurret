@@ -520,6 +520,12 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
   if (!std::isfinite(out.service_max_speed_deg_s) || out.service_max_speed_deg_s <= 0 || out.service_max_speed_deg_s > 20)
     err.push_back("v3.service_max_speed_deg_s must be within (0, 20]");
   out.service_speed_kp = opt_double(n, "service_speed_kp", "v3.service_speed_kp", 1.0, warn);
+  out.tracking_reference_omega = opt_double(n,"tracking_reference_omega","v3.tracking_reference_omega",2.5,warn);
+  if (!std::isfinite(out.tracking_reference_omega) || out.tracking_reference_omega < 2.5 || out.tracking_reference_omega > 4)
+    err.push_back("v3.tracking_reference_omega must be within [2.5, 4]");
+  out.position_servo_kp = opt_double(n,"position_servo_kp","v3.position_servo_kp",3.0,warn);
+  if (!std::isfinite(out.position_servo_kp) || out.position_servo_kp < 2 || out.position_servo_kp > 6)
+    err.push_back("v3.position_servo_kp must be within [2, 6]");
   if (!std::isfinite(out.service_speed_kp) || out.service_speed_kp < 1 || out.service_speed_kp > 5)
     err.push_back("v3.service_speed_kp must be within the commissioning range [1, 5]");
   out.service_speed_ki = opt_double(n, "service_speed_ki", "v3.service_speed_ki", .002, warn);

@@ -246,6 +246,8 @@ struct V3Config {
   bool service_speed_control = false;
   double service_speed_ki = .002;
   double service_speed_kp = 1.0;
+  double tracking_reference_omega = 2.5;
+  double position_servo_kp = 3.0;
   double service_max_speed_deg_s = 3.0;
 
   // §33: a named sweep region, in the same degrees the rest of the file uses. Yaw only —

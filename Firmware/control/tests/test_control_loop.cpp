@@ -214,7 +214,7 @@ struct HomedLoop {
   // at the homing gate, from whatever configuration is current there — which is why this has to
   // happen here rather than from inside a test body.
   HomedLoop(bool home = true, float confidence_high_min = 0.0f, bool wide_lens = false,
-            bool automatic_handoffs = false) {
+            bool automatic_handoffs = false, int acquisition_dwell_ms = 250) {
     sim_owner = std::make_unique<sim::SimMotorBackend>(0.005);
     sim = sim_owner.get();
     sim->set_stops(AxisId::Pitch, -1.0, 1.0);
@@ -223,7 +223,7 @@ struct HomedLoop {
     cfg.auto_track_high_min = confidence_high_min;  // 0 = the default
     if (automatic_handoffs) {
       cfg.auto_roam_on_loss_ms = 1000;
-      cfg.auto_track_on_acquire_ms = 250;
+      cfg.auto_track_on_acquire_ms = acquisition_dwell_ms;
       cfg.auto_track_reacquire_window_ms = 1000;
     }
     loop = std::make_unique<ControlLoop>(cfg, std::move(sim_owner));
@@ -998,13 +998,15 @@ bool wait_for_auto_roam(HomedLoop& h) {
 }  // namespace
 
 TEST(RoamMode, AutomaticAcquisitionAndStaleTargetLossPreserveSweep) {
-  HomedLoop h(true, 0, false, true);
+  for (int dwell_ms : {250,50}) {
+  HomedLoop h(true, 0, false, true,dwell_ms);
   ASSERT_TRUE(h.ready);
   ASSERT_TRUE(reach_interrupted_leg(h));
   // Fresh frames of a single centered subject pass through production selection,
   // geometry and estimation, then the acquisition dwell changes the mode.
   uint32_t seq = 0;
   bool acquired = false;
+  int tracking_after_ms = 0;
   for (int i = 0; i < 400; ++i) {
     if (i % 8 == 0) {
       auto set = two_people(++seq, h.t, 1, 2, .95f, .3f, .5f, .8f);
@@ -1027,10 +1029,14 @@ TEST(RoamMode, AutomaticAcquisitionAndStaleTargetLossPreserveSweep) {
     if (h.loop->operating_mode() == OperatingMode::AutoTrack &&
         h.snap().mode_phase == "TRACKING") {
       acquired = true;
+      tracking_after_ms = (i+1)*5;
       break;
     }
   }
   ASSERT_TRUE(acquired) << h.snap().mode_phase;
+  EXPECT_GE(tracking_after_ms,dwell_ms);
+  EXPECT_LE(tracking_after_ms,dwell_ms+150);
+  std::cout << "acquisition dwell=" << dwell_ms << " tracking_after_ms=" << tracking_after_ms << '\n';
   ASSERT_EQ(h.snap().selected_display_index, 1);
   // Stop delivering frames: retained identity must not cause stale reacquisition.
   ASSERT_TRUE(wait_for_auto_roam(h));
@@ -1039,6 +1045,7 @@ TEST(RoamMode, AutomaticAcquisitionAndStaleTargetLossPreserveSweep) {
   h.step(300);
   EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
   EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+  }
 }
 
 TEST(RoamMode, ManualAndStopDiscardInterruptedDirection) {

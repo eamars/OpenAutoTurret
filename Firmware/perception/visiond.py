@@ -534,6 +534,10 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
                     frame_sequence=frame.frame_sequence, sensor_timestamp_ns=frame.sensor_timestamp_ns,
                     metadata_receive_ns=frame.metadata_receive_ns, wire_done_ns=wire_done_ns,
                     published=outcome.published, stages_ms=outcome.timings_ms,
+                    detections=len(outcome.detection_set.detections) if outcome.detection_set else 0,
+                    tracks=len(outcome.track_set.tracks) if outcome.track_set else 0,
+                    batch_geometry_verified=getattr(adapter,'_batch_geometry_verified',False),
+                    batch_geometry_rejected=getattr(adapter,'_batch_geometry_rejected',False),
                     camera={k: frame.metadata[k] for k in ('ExposureTime','FrameDuration',
                         'AnalogueGain','DigitalGain','_ota_image_copy_ms') if k in frame.metadata},
                     imx500_kpi_ms=kpi))

@@ -16,6 +16,12 @@ inline double track_reference(ReferenceLimiter& st, double target, double target
   if (!(v_max > 0 && a_max > 0 && j_max > 0))
     return limit_reference(st, target, dt, v_max, a_max, j_max, target_velocity);
   omega = std::isfinite(omega) ? std::clamp(omega,2.5,6.0) : 2.5;
+  // Large corrections must release acceleration before the final approach.
+  // Raising a fixed gain made 5-degree steps overshoot under the jerk bound.
+  // Retain the original large-error stiffness and allow the faster response
+  // only where the requested acceleration fits the configured motion profile.
+  omega = std::min(omega,std::max(2.5,std::sqrt(a_max /
+      std::max(std::abs(target-st.q_rad),1e-9))));
   st.target_v_rad_s = std::clamp(target_velocity, -v_max, v_max);
   double wanted = std::clamp(omega*omega*(target-st.q_rad) +
       2*omega*(st.target_v_rad_s-st.v_rad_s), -a_max, a_max);

@@ -1154,7 +1154,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           if (damped_tracking || response_probe) {
             q_ref[i] = control::track_reference(ref_lim_[i], solved,
                 tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk,
-                response_probe ? response_probe_omega_ : 2.5);
+                response_probe ? response_probe_omega_ : cfg_.tracking_reference_omega);
           } else {
             q_ref[i] = control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
           }
@@ -1471,7 +1471,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
               // Allow the servo to follow the bounded reference profile and
               // recover position error without a second identical ramp delay.
               boundary.acceleration, boundary.jerk,
-              b.negative_acceleration_scale,b.positive_acceleration_scale,cfg_.motion.configured);
+              b.negative_acceleration_scale,b.positive_acceleration_scale,cfg_.motion.configured,
+              response_probe_until_ns_ > now_ns ? response_probe_position_gain_ : cfg_.position_servo_kp);
           // Clamp the actual signed command, independently of the goal's
           // direction: a goal reversal cannot remove the old end's brake limit.
           const double safe_velocity = std::clamp(velocity,-b.negative_speed,b.positive_speed);
@@ -3494,20 +3495,30 @@ void ControlLoop::execute_command(const std::string& name,
     }
     const size_t colon = arg.find(':');
     const size_t second = arg.find(':', colon == std::string::npos ? 0 : colon+1);
+    const size_t third = arg.find(':', second == std::string::npos ? 0 : second+1);
     int axis = arg.substr(0,colon) == "pitch" ? 0 : arg.substr(0,colon) == "yaw" ? 1 : -1;
     double delta = 0, omega = 0;
+    double position_gain = cfg_.position_servo_kp;
     bool parsed = false;
     if (axis >= 0 && colon != std::string::npos && second != std::string::npos) {
       try {
-        const auto d = arg.substr(colon+1,second-colon-1), w = arg.substr(second+1);
+        const auto d = arg.substr(colon+1,second-colon-1);
+        const auto w = arg.substr(second+1,third == std::string::npos ? std::string::npos : third-second-1);
         size_t nd = 0, nw = 0;
         delta = std::stod(d,&nd); omega = std::stod(w,&nw);
         parsed = nd == d.size() && nw == w.size();
+        if (third != std::string::npos) {
+          const auto gain = arg.substr(third+1);
+          size_t ng = 0;
+          position_gain = std::stod(gain,&ng);
+          parsed = parsed && ng == gain.size();
+        }
       } catch (...) {}
     }
     if (!parsed || !std::isfinite(delta) || !std::isfinite(omega) || omega < 2.5 || omega > 6 ||
+        !std::isfinite(position_gain) || position_gain < 2 || position_gain > 6 ||
         !(std::abs(delta) == .5 || std::abs(delta) == 1 || std::abs(delta) == 5)) {
-      ack_command(name,false,"probe syntax axis:signed_degrees:omega; steps 0.5/1/5, omega 2.5..6");
+      ack_command(name,false,"probe syntax axis:degrees:omega[:position_gain]; steps 0.5/1/5, omega 2.5..6, gain 2..6");
       return;
     }
     for (int i=0; i<2; ++i) {
@@ -3523,6 +3534,7 @@ void ControlLoop::execute_command(const std::string& name,
     }
     manual_.cancel(now_ns_);
     response_probe_omega_ = omega;
+    response_probe_position_gain_ = position_gain;
     response_probe_until_ns_ = now_ns_ + 6'000'000'000LL;
     ack_command(name,true,"six second target-free step accepted through normal motion limits");
     return;

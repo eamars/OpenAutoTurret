@@ -84,6 +84,7 @@ from .tracking.track_manager import TrackManager
 _PLAUSIBLE_END_TO_END_NS = 60_000_000_000
 
 STAGES: Tuple[str, ...] = (
+    "coordinate_mapping_ms",
     "capture_to_metadata_ms",
     "model_output_parse_ms",
     "coordinate_normalization_ms",
@@ -424,7 +425,7 @@ class PerceptionPipeline:
             # "this stage is fast", which is exactly the wrong conclusion to draw from "this
             # stage was never measured".
             reported = dict(getattr(self.adapter, "last_timings_ms", {}) or {})
-            for stage in ("model_output_parse_ms", "coordinate_normalization_ms"):
+            for stage in ("model_output_parse_ms", "coordinate_normalization_ms", "coordinate_mapping_ms"):
                 if stage in reported:
                     self._record(stage, float(reported[stage]) * 1_000_000.0)
                 else:

@@ -220,6 +220,7 @@ class TestPipelineFrame(PipelineCase):
         clock = FakeClock(start=at(0) + ms(1.0), step_ns=200_000)
         adapter = StubAdapter([dset([det(0, cx=0.4)], frame_index=0)],
                               timings={"model_output_parse_ms": 1.5,
+                                       "coordinate_mapping_ms": 2.0,
                                        "coordinate_normalization_ms": 0.4}, clock=clock)
         pipeline = self.make(adapter=adapter, clock=clock)
         outcomes = self.frames(3, pipeline=pipeline)
@@ -245,7 +246,7 @@ class TestPipelineFrame(PipelineCase):
         # The default fake clock is not in the stamps' domain, so §40's end-to-end stage is
         # legitimately refused here as well — see the cross-domain test for that on its own.
         self.assertEqual(sorted(set(timing["stages_unmeasured"]) - {"sensor_to_publish_ms"}),
-                         ["coordinate_normalization_ms", "model_output_parse_ms"])
+                         ["coordinate_mapping_ms", "coordinate_normalization_ms", "model_output_parse_ms"])
         self.assertNotIn("model_output_parse_ms", timing,
                          "an unmeasured stage must not appear with a percentile table")
 
