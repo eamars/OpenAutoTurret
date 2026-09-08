@@ -8,9 +8,13 @@ home stopped on approximately 0.39 degrees of pitch encoder recoil during mode
 setup, the operator requested disabling that check and proceeding to response
 tuning. `homing.mode_displacement_check: false` now omits the optional 0.25-degree
 displacement gate in homing mode recipes, including final service-mode setup.
-Omitting the field defaults to true. This setting does not disable both-axis
-speed/path supervision, feedback/drive-fault checks, current/torque limits, the
-watchdog, or parking checks. The backend still verifies disabled state, mode
+The next attempt at 21:16 stopped on the separate speed gate. The operator then
+required the added motion checks to warn and continue homing. The station now
+also sets `homing.motion_checks_abort: false`: speed, corridor and reverse-motion
+observations log warnings without changing the homing state or motor commands.
+Both fields default to true if omitted. Feedback/drive-fault checks,
+current/torque limits, the watchdog and parking checks remain active.
+The backend still verifies disabled state, mode
 registers and fresh finite encoder readback before enabling. No load direction
 is assumed. See the [both-axis homing review](homing_failure_review_2026_09_08.md),
 [prior restart](monitored_restart_2026_09_08.md) and
@@ -27,6 +31,12 @@ is assumed. See the [both-axis homing review](homing_failure_review_2026_09_08.m
   Vision alone owns the IMX500 camera; web reads its preview.
 
 ## Start, inspect and stop
+
+For an early physical design probe, `Firmware/tools/deploy_station.py --probe-build`
+uses the launcher to build only the runtime controller and run read-only preflight.
+It defers the regression suite and labels the release probe-ready. The normal
+deployment path still builds and tests all targets. This option does not start
+motors unless activation is separately requested.
 
 On the Pi, from the checkout or deployed release directory:
 

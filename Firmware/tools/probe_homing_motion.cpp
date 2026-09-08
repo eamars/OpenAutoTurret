@@ -27,9 +27,15 @@ class DisturbedPlant : public sim::SimMotorBackend {
 };
 struct Fixture {
   DisturbedPlant* plant = new DisturbedPlant;
-  ControlLoop loop{ControlLoop::Config{}, std::unique_ptr<MotorBackend>(plant)};
+  ControlLoop loop;
+  static ControlLoop::Config config(bool abort) {
+    ControlLoop::Config cfg;
+    cfg.homing_motion_checks_abort=abort;
+    return cfg;
+  }
   TimeNs now = 1'000'000'000;
-  Fixture(AxisId active, int dir, bool pending) {
+  Fixture(AxisId active, int dir, bool pending, bool abort=true)
+      : loop(config(abort),std::unique_ptr<MotorBackend>(plant)) {
     plant->pending = pending;
     for (auto a : {AxisId::Pitch,AxisId::Yaw}) plant->set_stops(a,-2,2);
     HomingPlanConfig c;
@@ -60,8 +66,8 @@ struct Fixture {
         !loop.start_homing(HomingPlan({},{}),err);
   }
 };
-bool run(AxisId active, int dir, const std::string& condition) {
-  Fixture f(active,dir,condition=="pending drift");
+bool run(AxisId active, int dir, const std::string& condition, bool abort=true) {
+  Fixture f(active,dir,condition=="pending drift",abort);
   const AxisId other=active==AxisId::Yaw ? AxisId::Pitch : AxisId::Yaw;
   const AxisId disturbed=condition=="inactive drift" ? other : active;
   int cycles=0;
@@ -80,9 +86,11 @@ bool run(AxisId active, int dir, const std::string& condition) {
     }
     f.tick();
   }
-  const bool ok=condition=="normal" ? f.loop.phase()==Phase::Homing : f.latched();
+  const bool motion=condition=="pending drift" || condition=="inactive drift" ||
+      condition=="overspeed" || condition=="wrong direction";
+  const bool ok=(condition=="normal" || (!abort && motion)) ? f.loop.phase()==Phase::Homing : f.latched();
   std::cout<<axis_name(active)<<" dir="<<dir<<" condition="<<condition
-           <<" ms="<<cycles*5<<" pass="<<ok<<" reason='"<<f.loop.fault_reason()<<"'\n";
+           <<" abort="<<abort<<" ms="<<cycles*5<<" pass="<<ok<<" reason='"<<f.loop.fault_reason()<<"'\n";
   return ok;
 }
 bool backoff_clearance(AxisId axis, int dir) {
@@ -129,7 +137,7 @@ int main() {
     ok=backoff_clearance(axis,dir)&&ok;
     ok=known_contact_bound(axis,dir)&&ok;
     for(const auto* condition:{"normal","pending drift","inactive drift","overspeed","wrong direction","nonfinite","stale","future","regressing","hot","fault"})
-      ok=run(axis,dir,condition)&&ok;
+      for (bool abort : {true,false}) ok=run(axis,dir,condition,abort)&&ok;
   }
   return ok ? 0 : 1;
 }

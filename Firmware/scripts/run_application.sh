@@ -14,6 +14,7 @@ case "${1:-}" in
     echo 'Usage: run_application.sh [deploy|check|start|run|status|stop] [options]'
     echo 'No action: background start, using config/turret.yaml (AUTO_ROAM).'
     echo 'deploy: build, test and preflight this checkout; does not start motors.'
+    echo 'deploy --probe-build: build only controld and preflight; defer regression tests.'
     echo 'run: foreground supervision; stop: controlled park/disable and full stack cleanup.'
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
@@ -70,6 +71,7 @@ FRAMES=0
 MODE=hardware
 START_WEB=1
 PRODUCTION=0
+PROBE_BUILD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
@@ -80,9 +82,13 @@ while [ $# -gt 0 ]; do
     --profile) PROFILE="${2:?--profile requires a name}"; shift 2 ;;
     --frames) FRAMES="${2:?--frames requires a count}"; shift 2 ;;
     --dev) set -x; shift ;;
+    --probe-build) PROBE_BUILD=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
+  echo '--probe-build is only valid for deploy' >&2; exit 2
+fi
 [[ "$FRAMES" =~ ^[0-9]+$ ]] || { echo '--frames must be non-negative' >&2; exit 2; }
 [ -x "$PY" ] || { echo "Project Python missing: $PY; set OTA_PYTHON" >&2; exit 2; }
 umask 077
@@ -96,8 +102,13 @@ if [ "$ACTION" = deploy ]; then
     exit 1
   fi
   cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
-  cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
-  ctest --test-dir "$APP/build" --output-on-failure
+  if [ "$PROBE_BUILD" = 1 ]; then
+    cmake --build "$APP/build" --target controld -j"${OTA_BUILD_JOBS:-2}"
+    echo 'Probe build: regression tests deferred until runtime viability is established.'
+  else
+    cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
+    ctest --test-dir "$APP/build" --output-on-failure
+  fi
   ACTION=check
 fi
 if [ "$ACTION" = start ]; then

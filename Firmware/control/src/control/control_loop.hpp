@@ -111,6 +111,7 @@ class ControlLoop {
     double homing_speed_kp = 1.0;
     double homing_speed_ki = .002;
     bool homing_mode_displacement_check = true;
+    bool homing_motion_checks_abort = true;
     double service_speed_ki = .002;
     double service_speed_kp = 1.0;
     double tracking_reference_omega = 2.5;
@@ -479,6 +480,7 @@ class ControlLoop {
   // Phase::Homing case). Reset in start_homing().
   int homing_log_cycle_ = 0;
   TimeNs homing_observe_ns_ = 0;
+  std::array<TimeNs, kAxisCount> homing_warning_ns_{};
   // Position-derived velocity for at-rest decisions (P0j): the drive's
   // self-reported v is a ±0.05 rad/s noise band at rest that chatters the
   // fault phase's |v|>kAtRestVelRadS gate, ping-ponging the emergency-stop

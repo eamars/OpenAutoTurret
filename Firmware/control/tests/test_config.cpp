@@ -122,11 +122,12 @@ TEST(Config, HomingModeDisplacementOverrideIsWired) {
   std::string yaml = kFullConfig;
   const auto at = yaml.find("homing:\n");
   ASSERT_NE(at, std::string::npos);
-  yaml.insert(at + std::string("homing:\n").size(), "  mode_displacement_check: false\n");
+  yaml.insert(at + std::string("homing:\n").size(), "  mode_displacement_check: false\n  motion_checks_abort: false\n");
   auto loaded = ota::config::load_turret_config(write_file("homing_override.yaml", yaml));
   ASSERT_TRUE(loaded.ok);
   EXPECT_FALSE(loaded.config.homing.mode_displacement_check);
   EXPECT_FALSE(ota::wire::make_control_cfg(loaded.config).homing_mode_displacement_check);
+  EXPECT_FALSE(ota::wire::make_control_cfg(loaded.config).homing_motion_checks_abort);
 }
 
 TEST(Config, ValidFullConfigLoads) {
@@ -145,6 +146,7 @@ TEST(Config, ValidFullConfigLoads) {
   EXPECT_EQ(r.config.control_loop_hz, 200);
   EXPECT_TRUE(r.config.homing.mode_displacement_check);
   EXPECT_TRUE(ota::wire::make_control_cfg(r.config).homing_mode_displacement_check);
+  EXPECT_TRUE(ota::wire::make_control_cfg(r.config).homing_motion_checks_abort);
   EXPECT_DOUBLE_EQ(r.config.axes[0].expected_travel_deg.min, -45.0);
   EXPECT_DOUBLE_EQ(r.config.axes[0].expected_travel_deg.max, 45.0);
   EXPECT_DOUBLE_EQ(r.config.axes[0].max_velocity_deg_s, 40.0);

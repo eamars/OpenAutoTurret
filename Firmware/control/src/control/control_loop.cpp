@@ -41,8 +41,8 @@ ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
   env_ = SafetyEnvelope(ep);
 
   deadline_ns_ = 1000000000LL / std::max(1, cfg_.control_hz);
-  spdlog::info("homing mode_displacement_check={}; both-axis motion supervision remains enabled",
-               cfg_.homing_mode_displacement_check);
+  spdlog::info("homing mode_displacement_check={} motion_checks_abort={}",
+               cfg_.homing_mode_displacement_check, cfg_.homing_motion_checks_abort);
 }
 
 bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
@@ -130,6 +130,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   at_ready_ = false;
   homing_log_cycle_ = 0;
   homing_observe_ns_ = 0;
+  homing_warning_ns_ = {};
   limits_ = {};
   models_ = {};
   phase_ = Phase::Homing;
@@ -1003,10 +1004,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // Check both axes before any command or mode recipe advances. No load
       // direction, balance pose, or zero-speed command certifies a held axis.
       std::string motion_error;
-      for (int i=0; i<kAxisCount && motion_error.empty(); ++i)
-        motion_error = homing_motion_.observe(static_cast<AxisId>(i), sp[i], now_ns,
+      for (int i=0; i<kAxisCount; ++i) {
+        const auto observation = homing_motion_.observe(static_cast<AxisId>(i), sp[i], now_ns,
             homing_->motion_speed_ceiling(), cfg_.feedback_max_age_ms*1'000'000LL,
             cfg_.motor_overtemp_c);
+        if (observation.reason.empty()) continue;
+        if (observation.motion_only && !cfg_.homing_motion_checks_abort) {
+          if (!homing_warning_ns_[i] || now_ns-homing_warning_ns_[i]>=1'000'000'000LL) {
+            spdlog::warn("{}; continuing homing (motion_checks_abort=false)", observation.reason);
+            homing_warning_ns_[i]=now_ns;
+          }
+        } else {
+          motion_error=observation.reason;
+          break;
+        }
+      }
       if (!motion_error.empty()) { fault(motion_error); break; }
       if (last_decision_.action != SafetyAction::Allow &&
           last_decision_.action != SafetyAction::Derate) {

@@ -20,6 +20,8 @@ def main():
     parser.add_argument("--root", default="/home/eamars/workspace/OpenAutoTurret")
     parser.add_argument("--activate", action="store_true",
                         help="after successful build/check, park/stop the old stack and start this release")
+    parser.add_argument("--probe-build", action="store_true",
+                        help="build only the runtime controller and preflight; defer regression tests")
     args = parser.parse_args()
     if args.host.startswith("-") or not args.root.startswith("/"):
         parser.error("host must not be an option; root must be an absolute remote path")
@@ -54,8 +56,9 @@ def main():
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
            f"printf '%s\\n' {quote(revision)} > {quote(release + '/REVISION')}")
     script = release + "/Firmware/scripts/run_application.sh"
-    remote(f"bash {quote(script)} deploy")
-    print(f"Verified release: {release}\nRevision: {revision}", flush=True)
+    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else ""))
+    label = "Probe-ready release (regression tests deferred)" if args.probe_build else "Verified release"
+    print(f"{label}: {release}\nRevision: {revision}", flush=True)
     if args.activate:
         # stop uses common PID+start-time ownership, even across release paths.
         remote(f"bash {quote(script)} stop && bash {quote(script)} start")

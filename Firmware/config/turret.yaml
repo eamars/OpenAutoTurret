@@ -74,6 +74,8 @@ homing:
   # Operator override: omit only the 0.25-degree drive-mode displacement gate.
   # Both-axis speed/travel supervision, feedback/fault gates and watchdog remain.
   mode_displacement_check: false
+  # Continue homing on added speed/corridor/reverse-motion warnings.
+  motion_checks_abort: false
   contact:
     # Slow loaded homing only. Wiring also caps backoffs and between-axis
     # moves at 3 deg/s and derives bounded timeouts for the full yaw travel.

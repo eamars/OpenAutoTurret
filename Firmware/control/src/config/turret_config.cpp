@@ -386,6 +386,7 @@ void load_contact(const YAML::Node& hc, HomingConfig& out, std::vector<std::stri
   out.speed_kp = opt_double(hc,"speed_kp","homing.speed_kp",1.0,warn);
   out.speed_ki = opt_double(hc,"speed_ki","homing.speed_ki",.002,warn);
   out.mode_displacement_check = opt_bool(hc, "mode_displacement_check", "homing.mode_displacement_check", true, warn);
+  out.motion_checks_abort = opt_bool(hc, "motion_checks_abort", "homing.motion_checks_abort", true, warn);
   if (!(out.speed_kp >= 1 && out.speed_kp <= 5)) err.push_back("homing.speed_kp must be in [1,5]");
   if (!(out.speed_ki >= .002 && out.speed_ki <= .05)) err.push_back("homing.speed_ki must be in [0.002,0.05]");
   const YAML::Node ct = fetch(hc, "contact");

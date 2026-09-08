@@ -90,6 +90,7 @@ struct HomingConfig {
   double speed_kp = 1.0;
   double speed_ki = .002;
   bool mode_displacement_check = true;
+  bool motion_checks_abort = true;
 };
 
 // One step of the multi-axis homing plan (§25.2). Units are degrees for

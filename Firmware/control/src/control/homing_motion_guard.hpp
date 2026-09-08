@@ -11,6 +11,10 @@ namespace ota {
 // These are abort thresholds, not certified braking distances or load ratings.
 class HomingMotionGuard {
  public:
+  struct Observation {
+    std::string reason;
+    bool motion_only = false;
+  };
   void expect(AxisId axis, const DesiredState& ds, double q) {
     auto& s = axes_[static_cast<size_t>(axis)];
     const bool moving = !ds.hold && (ds.position_move || ds.velocity_rad_s != 0);
@@ -27,10 +31,12 @@ class HomingMotionGuard {
       s.expected = true;
     }
   }
-  std::string observe(AxisId axis, const AxisSnapshot& fb, TimeNs now,
+  Observation observe(AxisId axis, const AxisSnapshot& fb, TimeNs now,
                       double speed_cap, TimeNs max_age, double max_temp) {
     auto& s = axes_[static_cast<size_t>(axis)];
-    const auto fail = [axis](const char* why) { return std::string(axis_name(axis))+" homing: "+why; };
+    const auto fail = [axis](const char* why, bool motion_only = false) {
+      return Observation{std::string(axis_name(axis))+" homing: "+why, motion_only};
+    };
     // A concurrently received frame can be newer than the cycle start by a
     // fraction of one tick. Larger future timestamps remain invalid.
     if (!fb.has_feedback || fb.rx_ns < 0 || fb.rx_ns > now+5'000'000 ||
@@ -40,11 +46,12 @@ class HomingMotionGuard {
         !std::isfinite(fb.temp_c) || fb.faults || fb.temp_c > max_temp)
       return fail("invalid encoder or unhealthy drive");
     if (!s.expected) { DesiredState hold; hold.hold=true; expect(axis,hold,fb.q_rad); }
+    Observation motion;
     if (s.sampled && fb.rx_ns > s.window_ns) {
       const double dt = (fb.rx_ns-s.window_ns)*1e-9;
       // Position quantization allowance; do not trust the noisy drive velocity.
       if (std::abs(fb.q_rad-s.window_q) > speed_cap*dt + .05*kDeg2Rad)
-        return fail("encoder motion exceeds homing speed ceiling");
+        motion = fail("encoder motion exceeds homing speed ceiling", true);
     }
     if (!s.sampled || fb.rx_ns-s.window_ns >= 50'000'000) {
       s.window_ns=fb.rx_ns; s.window_q=fb.q_rad; s.sampled=true;
@@ -54,13 +61,13 @@ class HomingMotionGuard {
     const double low=std::min(s.origin,s.target)-tolerance;
     const double high=std::max(s.origin,s.target)+tolerance;
     if (fb.q_rad < low || fb.q_rad > high)
-      return fail("encoder left commanded corridor or stationary hold");
+      motion = fail("encoder left commanded corridor or stationary hold", true);
     if (s.moving && !s.position) {
       if ((fb.q_rad-s.extreme)*s.direction < -tolerance)
-        return fail("encoder reversed against approach command");
+        motion = fail("encoder reversed against approach command", true);
       if ((fb.q_rad-s.extreme)*s.direction > 0) s.extreme=fb.q_rad;
     }
-    return {};
+    return motion;
   }
  private:
   struct Axis {
