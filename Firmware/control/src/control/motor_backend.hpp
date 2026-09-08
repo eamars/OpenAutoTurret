@@ -82,7 +82,8 @@ class MotorBackend {
   virtual void cancel_motor_recovery() {}
   // Repeated from the control loop. Hardware implements a nonblocking recipe.
   virtual Transition transition_mode(AxisId axis, bool position, double limit,
-                                     TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1) {
+                                     TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1,
+                                     bool check_displacement = true) {
     return (position ? enter_position_mode(axis, limit, err) : enter_speed_mode(axis, limit, err))
         ? Transition::Complete : Transition::Failed;
   }

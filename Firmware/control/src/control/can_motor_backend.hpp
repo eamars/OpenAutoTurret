@@ -46,7 +46,8 @@ class CanMotorBackend : public MotorBackend {
   Transition poll_motor_recovery(TimeNs now, double max_temp, std::string& err) override;
   void cancel_motor_recovery() override { recovery_.cancel(); system_.inhibit_motion(); }
   Transition transition_mode(AxisId axis, bool position, double limit,
-                             TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1) override;
+                             TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1,
+                             bool check_displacement = true) override;
 
   // --- MotorBackend: control loop (fast, non-blocking) ----------------------
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
@@ -72,6 +73,7 @@ class CanMotorBackend : public MotorBackend {
     int stage = 0;
     AxisId axis = AxisId::Pitch;
     bool position = false;
+    bool check_displacement = true;
     double limit = 0, pin = 0, last_q = 0, speed_ki = -1, speed_kp = 1;
     double stopped_q = 0;  // position immediately before removing torque
     TimeNs started = 0, deadline = 0, still_since = 0, sampled = 0;

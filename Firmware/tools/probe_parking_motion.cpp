@@ -23,10 +23,10 @@ class ObservedPlant : public sim::SimMotorBackend {
     return position ? enter_position_mode(a, .1, err) : enter_speed_mode(a, 1, err);
   }
   Transition transition_mode(AxisId a, bool position, double limit, TimeNs now,
-      std::string& err, double ki = -1, double kp = 1) override {
+      std::string& err, double ki = -1, double kp = 1, bool check_displacement = true) override {
     ++transitions; gain_kp = kp; gain_ki = ki;
     if (delay_setup) return Transition::Pending;
-    return SimMotorBackend::transition_mode(a, position, limit, now, err, ki, kp);
+    return SimMotorBackend::transition_mode(a, position, limit, now, err, ki, kp,check_displacement);
   }
   void command_velocity(AxisId a, double velocity) override {
     command_rate[static_cast<int>(a)] = velocity;

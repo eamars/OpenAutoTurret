@@ -233,7 +233,8 @@ bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
 }
 
 MotorBackend::Transition CanMotorBackend::transition_mode(
-    AxisId axis, bool position, double limit, TimeNs now, std::string& err, double speed_ki, double speed_kp) {
+    AxisId axis, bool position, double limit, TimeNs now, std::string& err, double speed_ki, double speed_kp,
+    bool check_displacement) {
   auto& t = transition_;
   const auto i = static_cast<size_t>(axis);
   auto fail = [&](const char* why) {
@@ -263,6 +264,7 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
     if (!std::isfinite(speed_ki) || (speed_ki != -1 && (speed_ki < .002 || speed_ki > .05)))
       return fail("speed integral gain outside commissioned range");
     t.axis = axis; t.position = position; t.limit = limit; t.speed_ki = speed_ki; t.speed_kp = speed_kp;
+    t.check_displacement = check_displacement;
     t.started = t.sampled = t.still_since = now;
     t.last_q = t.pin = s.q_rad;
     // Neutralize both reference registers before braking; only the active mode
@@ -274,7 +276,8 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
     t.stage = 1;
     return Transition::Pending;
   }
-  if (t.axis != axis || t.position != position || t.limit != limit || t.speed_ki != speed_ki || t.speed_kp != speed_kp)
+  if (t.axis != axis || t.position != position || t.limit != limit || t.speed_ki != speed_ki || t.speed_kp != speed_kp ||
+      t.check_displacement != check_displacement)
     return fail("mode transition request changed while pending");
   if (now - t.started > 2500000000LL) return fail("mode transition timed out");
   if (s.has_feedback && s.faults) return fail("motor fault during mode transition");
@@ -282,7 +285,7 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   if (t.stage >= 2) {
     if (!s.has_feedback || now - s.rx_ns > 100000000LL)
       return fail("feedback lost during disabled mode setup");
-    if (!std::isfinite(s.q_rad) || std::abs(s.q_rad-t.stopped_q) > kModeDriftLimit)
+    if (!std::isfinite(s.q_rad) || (check_displacement && std::abs(s.q_rad-t.stopped_q) > kModeDriftLimit))
       return fail("axis moved more than 0.25 degrees during mode setup; load holding unverified");
   }
   switch (t.stage) {
@@ -372,7 +375,7 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
         return fail("pre-enable position readback timed out");
       if (result == 0) break;
       t.waiting = false;
-      if (!std::isfinite(position_now) || std::abs(position_now-t.stopped_q) > kModeDriftLimit)
+      if (!std::isfinite(position_now) || (check_displacement && std::abs(position_now-t.stopped_q) > kModeDriftLimit))
         return fail("pre-enable encoder moved more than 0.25 degrees; load holding unverified");
       if (!system_.send_enable(axis, &err)) return fail("enable failed");
       t.deadline = now + 50000000LL; t.stage = 7;

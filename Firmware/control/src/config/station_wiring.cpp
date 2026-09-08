@@ -117,6 +117,7 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.service_speed_control = cfg.v3.service_speed_control;
   c.homing_speed_kp = cfg.homing.speed_kp;
   c.homing_speed_ki = cfg.homing.speed_ki;
+  c.homing_mode_displacement_check = cfg.homing.mode_displacement_check;
   c.service_speed_ki = cfg.v3.service_speed_ki;
   c.service_speed_kp = cfg.v3.service_speed_kp;
   c.tracking_reference_omega = cfg.v3.tracking_reference_omega;

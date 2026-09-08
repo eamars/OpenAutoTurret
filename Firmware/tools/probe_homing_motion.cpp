@@ -19,10 +19,10 @@ class DisturbedPlant : public sim::SimMotorBackend {
     return fb;
   }
   Transition transition_mode(AxisId a, bool pos, double limit, TimeNs now,
-      std::string& err, double ki = -1, double kp = 1) override {
+      std::string& err, double ki = -1, double kp = 1, bool check_displacement = true) override {
     ++transitions;
     if (pending) return Transition::Pending;
-    return SimMotorBackend::transition_mode(a,pos,limit,now,err,ki,kp);
+    return SimMotorBackend::transition_mode(a,pos,limit,now,err,ki,kp,check_displacement);
   }
 };
 struct Fixture {

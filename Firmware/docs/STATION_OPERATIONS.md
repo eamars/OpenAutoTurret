@@ -3,17 +3,18 @@
 This is the current operating runbook. Use this procedure rather than dated
 commissioning scripts or the legacy individual systemd units.
 
-**Current physical-operation hold (8 September 2026, after 20:01):** the operator
-cleared a monitored restart following the earlier endpoint incident. During
-homing, pitch moved about 2.9 degrees during drive-mode setup; the monitor
-estimated 17.5 degrees/second and stopped the stack. The station is stopped
-again. The operator attributes the excursion to load-assisted motion near the
-endpoint and inadequate braking distance; do not assume the same load direction
-on either axis. Establish bounded setup motion and adequate clearance before
-another restart or home. See the [both-axis homing review](homing_failure_review_2026_09_08.md), the
-[monitored restart evidence](monitored_restart_2026_09_08.md) and
-[earlier incident](optimization_cycle_2026_09_08.md). Offline tests establish
-command supervision only, not physical braking or unpowered load holding.
+**Current commissioning setting (8 September 2026):** after the 20:58 monitored
+home stopped on approximately 0.39 degrees of pitch encoder recoil during mode
+setup, the operator requested disabling that check and proceeding to response
+tuning. `homing.mode_displacement_check: false` now omits the optional 0.25-degree
+displacement gate in homing mode recipes, including final service-mode setup.
+Omitting the field defaults to true. This setting does not disable both-axis
+speed/path supervision, feedback/drive-fault checks, current/torque limits, the
+watchdog, or parking checks. The backend still verifies disabled state, mode
+registers and fresh finite encoder readback before enabling. No load direction
+is assumed. See the [both-axis homing review](homing_failure_review_2026_09_08.md),
+[prior restart](monitored_restart_2026_09_08.md) and
+[earlier incident](optimization_cycle_2026_09_08.md) for historical evidence.
 
 ## Station and ownership
 

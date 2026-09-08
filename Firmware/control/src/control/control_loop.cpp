@@ -41,6 +41,8 @@ ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
   env_ = SafetyEnvelope(ep);
 
   deadline_ns_ = 1000000000LL / std::max(1, cfg_.control_hz);
+  spdlog::info("homing mode_displacement_check={}; both-axis motion supervision remains enabled",
+               cfg_.homing_mode_displacement_check);
 }
 
 bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
@@ -1015,7 +1017,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         const auto axis = static_cast<AxisId>(homing_init_axis_);
         std::string e;
         const auto status = backend_->transition_mode(axis, false, homing_->initial_current_limit(axis), now_ns, e,
-            cfg_.homing_speed_ki,cfg_.homing_speed_kp);
+            cfg_.homing_speed_ki,cfg_.homing_speed_kp,cfg_.homing_mode_displacement_check);
         if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
         else if (status == MotorBackend::Transition::Complete) ++homing_init_axis_;
         break;
@@ -1029,7 +1031,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const auto status = backend_->transition_mode(static_cast<AxisId>(homing_final_axis_),
               !cfg_.service_speed_control, cfg_.service_speed_control
                   ? cfg_.park.limit_cur_a[homing_final_axis_] : cfg_.hold_speed_rad_s, now_ns, e,
-              cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp);
+              cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp,
+              cfg_.homing_mode_displacement_check);
           if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
           else if (status == MotorBackend::Transition::Complete) ++homing_final_axis_;
         } else if (finalize_homing()) phase_ = Phase::Hold;
@@ -1063,7 +1066,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         std::string e;
         const auto status = backend_->transition_mode(a, ds.enter_pos_mode,
             ds.enter_pos_mode ? ds.speed_rad_s : ds.limit_cur_a, now_ns, e,
-            cfg_.homing_speed_ki,cfg_.homing_speed_kp);
+            cfg_.homing_speed_ki,cfg_.homing_speed_kp,cfg_.homing_mode_displacement_check);
         if (status == MotorBackend::Transition::Pending) {
           DesiredState hold; hold.hold=true;
           homing_motion_.expect(a,hold,sp[ix(a)].q_rad);

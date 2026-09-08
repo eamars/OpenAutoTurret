@@ -65,7 +65,8 @@ class MotorReplies : public can::CanTransport {
   const char* kind() const override { return "offline-motor-replies"; }
   std::string device() const override { return "no-hardware"; }
 };
-bool run(AxisId axis, double drift, bool frozen, bool silent, bool position, bool ignore_stop=false) {
+bool run(AxisId axis, double drift, bool frozen, bool silent, bool position, bool ignore_stop=false,
+         bool check_displacement=true) {
   auto transport=std::make_unique<MotorReplies>(); auto* motor=transport.get();
   motor->drift=drift; motor->frozen_feedback=frozen; motor->silent_position=silent;
   motor->motor_id=axis==AxisId::Pitch ? 100 : 101; motor->ignore_stop=ignore_stop;
@@ -75,14 +76,15 @@ bool run(AxisId axis, double drift, bool frozen, bool silent, bool position, boo
   auto status=MotorBackend::Transition::Pending;
   const auto begin=now_monotonic_ns();
   while(status==MotorBackend::Transition::Pending && now_monotonic_ns()-begin<3'000'000'000) {
-    status=backend.transition_mode(axis,position,position ? .05 : 5,now_monotonic_ns(),error,.05,4);
+    status=backend.transition_mode(axis,position,position ? .05 : 5,now_monotonic_ns(),error,.05,4,check_displacement);
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
-  const bool expected_failure=drift!=0 || silent || ignore_stop;
+  const bool expected_failure=(check_displacement && std::abs(drift)>.25*kDeg2Rad) || silent || ignore_stop;
   const bool ok=expected_failure
       ? status==MotorBackend::Transition::Failed && motor->enables==0 && (!ignore_stop || motor->mode_writes==0)
       : status==MotorBackend::Transition::Complete && motor->enables==1 && motor->position_reads>0;
   std::cout << "axis=" << axis_name(axis) << " ignore_stop=" << ignore_stop
+            << " check_displacement=" << check_displacement
             << " drift_deg=" << drift*kRad2Deg << " frozen_feedback=" << frozen
             << " silent_position=" << silent << " position_mode=" << position
             << " enable_frames=" << motor->enables << " position_reads=" << motor->position_reads
@@ -99,6 +101,12 @@ int main() {
     }
     ok=run(axis,0,true,true,position) && ok;
     ok=run(axis,0,false,false,position,true) && ok;
+    // Installed contact recoil can exceed the optional quarter-degree gate.
+    // The calling control loop still supervises both-axis speed and corridors.
+    for (int dir : {-1,1})
+      ok=run(axis,dir*.4*kDeg2Rad,false,false,position,false,false) && ok;
+    ok=run(axis,0,true,true,position,false,false) && ok;
+    ok=run(axis,0,false,false,position,true,false) && ok;
   }
   return ok ? 0 : 1;
 }

@@ -110,6 +110,7 @@ class ControlLoop {
     bool service_speed_control = false;
     double homing_speed_kp = 1.0;
     double homing_speed_ki = .002;
+    bool homing_mode_displacement_check = true;
     double service_speed_ki = .002;
     double service_speed_kp = 1.0;
     double tracking_reference_omega = 2.5;
