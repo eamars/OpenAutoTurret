@@ -1,12 +1,19 @@
 # Optimization cycle and endpoint incident — 8 September 2026
 
+**Later update:** the operator subsequently cleared a monitored restart. It
+was stopped on pitch movement during drive-mode setup; see the
+[restart evidence and current stopped state](monitored_restart_2026_09_08.md).
+The staged release described below was used for that short restart only.
+The [subsequent homing review](homing_failure_review_2026_09_08.md) applies
+supervision to both axes and directions without assuming a front-heavy load.
+
 **Physical operation suspended.** The launcher finished stopping the station at
 19:25:33 NZST after parking failed. The subsequent investigation used saved
 numeric logs, offline replay and simulated motors. No camera image or video feed
 was inspected during this cycle. Do not activate the staged optimization release
 or restart homing until the installed load and stopping arrangements have been
 physically checked. A commanded zero speed or motor disable does not certify
-that this front-heavy mechanism has stopped or will remain supported.
+that the mechanism has stopped or will remain supported under other load conditions.
 
 **Status: partially verified.** The controller corrections pass executable
 software probes. Their physical braking behavior and the proposed faster

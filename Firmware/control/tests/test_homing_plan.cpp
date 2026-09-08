@@ -58,8 +58,13 @@ struct TwoStopAxis {
   }
 
   void step(const DesiredState& ds) {
-    const double v_cmd =
+    double v_cmd =
         ds.hold ? 0.0 : ((ds.target_rad > q ? 1.0 : -1.0) * ds.speed_rad_s);
+    // The production position-mode backoff slows as its error closes. The
+    // old constant-speed relay oscillated at the target and could not provide
+    // the stationary encoder window now required before a mode transition.
+    if (ds.position_move && !ds.hold)
+      v_cmd=std::clamp((ds.target_rad-q)/.05,-ds.speed_rad_s,ds.speed_rad_s);
     const double alpha = kDtS / (0.05 + kDtS);
     v += alpha * (v_cmd - v);
     if (at_stop) {

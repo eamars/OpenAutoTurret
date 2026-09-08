@@ -120,12 +120,14 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
     }
   }
   homing_init_axis_ = homing_final_axis_ = 0;
+  homing_motion_ = HomingMotionGuard{};
   pending_homing_ds_.reset();
   disable_tracking();
   manual_.cancel(now_ns_);
   homed_ = false;
   at_ready_ = false;
   homing_log_cycle_ = 0;
+  homing_observe_ns_ = 0;
   limits_ = {};
   models_ = {};
   phase_ = Phase::Homing;
@@ -987,6 +989,28 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Homing: {
+      if (homing_observe_ns_==0 || now_ns-homing_observe_ns_>=500'000'000) {
+        for(int i=0;i<kAxisCount;++i)
+          spdlog::info("homing supervision axis={} q={:.6f} v_est={:.6f} tq={:.3f} "
+                      "age_ms={} disabled={} init={} final={} setup_pending={}",
+              axis_name(static_cast<AxisId>(i)),sp[i].q_rad,v_est_[i],sp[i].torque_nm,
+              (now_ns-sp[i].rx_ns)/1'000'000,sp[i].disabled,homing_init_axis_,
+              homing_final_axis_,pending_homing_ds_.has_value());
+        homing_observe_ns_=now_ns;
+      }
+      // Check both axes before any command or mode recipe advances. No load
+      // direction, balance pose, or zero-speed command certifies a held axis.
+      std::string motion_error;
+      for (int i=0; i<kAxisCount && motion_error.empty(); ++i)
+        motion_error = homing_motion_.observe(static_cast<AxisId>(i), sp[i], now_ns,
+            homing_->motion_speed_ceiling(), cfg_.feedback_max_age_ms*1'000'000LL,
+            cfg_.motor_overtemp_c);
+      if (!motion_error.empty()) { fault(motion_error); break; }
+      if (last_decision_.action != SafetyAction::Allow &&
+          last_decision_.action != SafetyAction::Derate) {
+        fault("safety interrupted homing: " + last_decision_.reason);
+        break;
+      }
       if (homing_init_axis_ < kAxisCount) {
         const auto axis = static_cast<AxisId>(homing_init_axis_);
         std::string e;
@@ -997,6 +1021,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         break;
       }
       if (homing_->complete()) {
+        DesiredState hold; hold.hold=true;
+        for (int i=0; i<kAxisCount; ++i)
+          homing_motion_.expect(static_cast<AxisId>(i),hold,sp[i].q_rad);
         if (homing_final_axis_ < kAxisCount) {
           std::string e;
           const auto status = backend_->transition_mode(static_cast<AxisId>(homing_final_axis_),
@@ -1037,12 +1064,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         const auto status = backend_->transition_mode(a, ds.enter_pos_mode,
             ds.enter_pos_mode ? ds.speed_rad_s : ds.limit_cur_a, now_ns, e,
             cfg_.homing_speed_ki,cfg_.homing_speed_kp);
-        if (status == MotorBackend::Transition::Pending) { pending_homing_ds_ = ds; break; }
+        if (status == MotorBackend::Transition::Pending) {
+          DesiredState hold; hold.hold=true;
+          homing_motion_.expect(a,hold,sp[ix(a)].q_rad);
+          pending_homing_ds_ = ds; break;
+        }
         pending_homing_ds_.reset();
         rearmed = status == MotorBackend::Transition::Complete;
         if (!rearmed) { deenergize_all(); fault("homing mode transition: " + e); }
       }
       if (rearmed) {
+        homing_motion_.expect(a,ds,sp[ix(a)].q_rad);
         if (ds.position_move) {
           // Position mode (backoff): pin LocRef = target, LimitSpd = speed
           // (both write-on-change — a fixed target costs one CAN write per
@@ -1070,11 +1102,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           // motion, not a host-regenerated moving LocRef.
           backend_->command_velocity(a, ds.velocity_rad_s);
         }
-        // Hold the non-active axis in place (SpdRef=0). It is in speed mode
-        // too (entered in start_homing); holding at its (low) homing current
-        // is fine — the axes are orthogonal, so a little drift doesn't affect
-        // the homing.
+        // Request a hold on the other axis and retain its measured origin.
+        // The guard above verifies that it holds, including while setup waits.
         const AxisId other = (a == AxisId::Pitch) ? AxisId::Yaw : AxisId::Pitch;
+        DesiredState hold; hold.hold=true;
+        homing_motion_.expect(other,hold,sp[ix(other)].q_rad);
         backend_->command_velocity(other, 0.0);
         // The homing carries the drive current limit on the cycle it changes
         // it (the initial per-axis value; also on a re-arm cycle — the

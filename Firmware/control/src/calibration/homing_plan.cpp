@@ -65,7 +65,7 @@ DesiredState CoarseEndpointHome::step(const HomingFeedback& fb) {
     // Drive toward a far point in the approach direction; the axis actually stops
     // on contact (or the timeout/travel limit), well short of this target. The
     // speed is a positive magnitude; the direction is implied by the target.
-    const double target = fb.pos_rad + p_.max_travel_rad * dir_;
+    const double target = start_pos_rad_ + p_.max_travel_rad * dir_;
     // The velocity-mode executor commands ds.velocity_rad_s, so it must carry
     // the SIGNED approach speed (magnitude * direction), not just the magnitude.
     const double v = p_.coarse_speed_rad_s * static_cast<double>(dir_);

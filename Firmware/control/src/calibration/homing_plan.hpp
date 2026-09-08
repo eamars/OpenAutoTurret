@@ -21,6 +21,7 @@
 // unit-testable against a simulated plant with no CAN (§54).
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -128,6 +129,10 @@ class HomingPlan {
   double initial_current_limit(AxisId a) const {
     const double value = cfg_.limit_cur_initial_a[ix(a)];
     return value > 0.0 ? value : cfg_.homing.limit_cur_initial_a;
+  }
+  double motion_speed_ceiling() const {
+    return std::max({cfg_.homing.coarse_speed_rad_s, cfg_.homing.fine_speed_rad_s,
+                     cfg_.homing.backoff_speed_rad_s, cfg_.move_speed_rad_s}) + 2*kDeg2Rad;
   }
 
   // Per-axis results (valid once that axis is homed).

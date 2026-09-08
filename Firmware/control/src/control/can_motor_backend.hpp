@@ -73,6 +73,7 @@ class CanMotorBackend : public MotorBackend {
     AxisId axis = AxisId::Pitch;
     bool position = false;
     double limit = 0, pin = 0, last_q = 0, speed_ki = -1, speed_kp = 1;
+    double stopped_q = 0;  // position immediately before removing torque
     TimeNs started = 0, deadline = 0, still_since = 0, sampled = 0;
     int read_index = 0;
     bool waiting = false;

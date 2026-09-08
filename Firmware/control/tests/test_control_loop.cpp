@@ -72,7 +72,7 @@ TEST(ControlLoopSim, SimulatedBackendClaimsNoCanLink) {
 }
 
 bool run_to_ready(ControlLoop& loop, sim::SimMotorBackend& sim, int64_t& t_out) {
-  int64_t t = 0;
+  int64_t t = t_out;  // recovery/re-home continues the same monotonic clock
   for (int i = 0; i < kMaxSteps; ++i) {
     loop.step(t, kDtNs);
     t += kDtNs;

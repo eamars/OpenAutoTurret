@@ -11,6 +11,8 @@ for the latest loaded homing/tracking evidence and remaining gaps.
 | Document | What it is | Status |
 |---|---|---|
 | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) | Deploy, start, status, stop, default Auto mode, prerequisites and diagnostics | **Current operating procedure** |
+| [`homing_failure_review_2026_09_08.md`](homing_failure_review_2026_09_08.md) | Both-axis homing supervision, unknown load direction, clearance and failure coverage | **Software verified offline; physical braking/setup motion unverified** |
+| [`monitored_restart_2026_09_08.md`](monitored_restart_2026_09_08.md) | Restart after operator clearance, pitch movement during mode setup and added pre-enable position check | **Station stopped again; torque-off support unresolved** |
 | [`optimization_cycle_2026_09_08.md`](optimization_cycle_2026_09_08.md) | Endpoint incident, latched parking supervision, optimization trials and hardware decision | **Physical station stopped; corrected release requires secured physical verification** |
 | [`latency_bottleneck_analysis_2026_09_08.md`](latency_bottleneck_analysis_2026_09_08.md) | Closed-loop latency, target-free physical response, camera timing and AI hardware priorities | Measured component boundaries; optical end-to-end timing remains unverified |
 | [`travel_boundary_review_2026_09_06.md`](travel_boundary_review_2026_09_06.md) | Loaded homing, tracking response, travel limits and HUD verification | Latest measured control status; explicitly lists gaps |

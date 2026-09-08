@@ -3,13 +3,17 @@
 This is the current operating runbook. Use this procedure rather than dated
 commissioning scripts or the legacy individual systemd units.
 
-**Current physical-operation hold (8 September 2026):** repeated endpoint
-impacts were reported; shutdown motor logs crossed both pitch soft limits and
-showed approximately 65 degrees/second during a 3-degree/second parking move.
-The stack is stopped. Do not activate a staged release, restart or home until
-the installed load, possible damage and stopping/support arrangements have
-been physically checked. See the [incident and optimization evidence](optimization_cycle_2026_09_08.md).
-Offline tests establish command supervision only, not physical braking.
+**Current physical-operation hold (8 September 2026, after 20:01):** the operator
+cleared a monitored restart following the earlier endpoint incident. During
+homing, pitch moved about 2.9 degrees during drive-mode setup; the monitor
+estimated 17.5 degrees/second and stopped the stack. The station is stopped
+again. The operator attributes the excursion to load-assisted motion near the
+endpoint and inadequate braking distance; do not assume the same load direction
+on either axis. Establish bounded setup motion and adequate clearance before
+another restart or home. See the [both-axis homing review](homing_failure_review_2026_09_08.md), the
+[monitored restart evidence](monitored_restart_2026_09_08.md) and
+[earlier incident](optimization_cycle_2026_09_08.md). Offline tests establish
+command supervision only, not physical braking or unpowered load holding.
 
 ## Station and ownership
 

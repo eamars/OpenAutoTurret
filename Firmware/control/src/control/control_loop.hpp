@@ -44,6 +44,7 @@
 #include "tracks/track_set.hpp"
 #include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
+#include "control/homing_motion_guard.hpp"
 #include "control/reference_manager.hpp"
 #include "control/reference_limiter.hpp"
 #include "control/tracking_reference.hpp"
@@ -456,6 +457,7 @@ class ControlLoop {
   std::string fault_reason_;
   SupervisorDecision last_decision_;
   std::unique_ptr<HomingPlan> homing_;
+  HomingMotionGuard homing_motion_;
   std::unique_ptr<ParkController> park_;
   // Park: position mode is entered once, when the ParkController leaves the
   // speed-mode move states (MoveYaw/MovePitch) for the §33.2 target-hold
@@ -475,6 +477,7 @@ class ControlLoop {
   // Homing high-rate motion-log cycle counter (gates the 100 Hz log; see the
   // Phase::Homing case). Reset in start_homing().
   int homing_log_cycle_ = 0;
+  TimeNs homing_observe_ns_ = 0;
   // Position-derived velocity for at-rest decisions (P0j): the drive's
   // self-reported v is a ±0.05 rad/s noise band at rest that chatters the
   // fault phase's |v|>kAtRestVelRadS gate, ping-ponging the emergency-stop

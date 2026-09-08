@@ -44,7 +44,7 @@ struct HomingParams {
   double fine_speed_rad_s = 20.0 * kDeg2Rad;
   double backoff_speed_rad_s = 10.0 * kDeg2Rad; // speed cap (LimitSpd) for back-off moves
   double backoff_rad = 5.0 * kDeg2Rad;          // back-off after the coarse contact
-  double small_backoff_rad = 2.0 * kDeg2Rad;    // back-off for the repeatability pass
+  double small_backoff_rad = 2.0 * kDeg2Rad;    // repeat pass uses max(this, backoff_rad)
   double repeatability_rad = 0.5 * kDeg2Rad;    // max allowed |fine_1 - fine_2|
   // p3f (2026-09-02): the second fine approach can STALL in the drive's
   // static-friction zone short of the stop (0.1-0.44 N.m, v~0.02 — measured
@@ -81,10 +81,9 @@ struct HomingParams {
   // LimitCur) — no I build-up, no bursts, no momentum overshoot (P shrinks
   // as the error closes and self-corrects any slip). It can still stall
   // 0.5-1.5 deg short of the exact target inside the zone (P falls below
-  // F_s as the error closes), which is why arrival uses a wide window:
-  // anywhere inside it is a valid backoff, because the fine re-approach
-  // re-measures the end-stop precisely from whatever position the axis
-  // settles at.
+  // F_s as the error closes). Previously a wide window accepted that shortfall.
+  // That spent the clearance needed during mode setup. The current algorithm
+  // instead requires near-target arrival and faults if the backoff stalls short.
   //
   // Live drive profile (quiet bus, 2026-09-02, pitch 5 deg backoff from the
   // +stop zone, LimitSpd = 10 deg/s): ~3.5-4 s of breakaway creep against
@@ -107,12 +106,9 @@ struct HomingParams {
   // 15 s keeps >=2x margin over a bad-luck breakaway while still catching a
   // genuinely stuck drive quickly.
   double backoff_timeout_s = 15.0;      // hard timeout for a backoff move
-  // Arrival window = max(0.5 deg, backoff_arrive_frac * backoff distance).
-  // The coarse 5 deg backoff accepts arrival from ~3 deg out (target 5 deg
-  // from the stop -> the axis ends >=3 deg clear of it); the 2 deg small
-  // backoff accepts from ~1.2 deg out — far enough that the second fine
-  // approach starts its 1.5 s contact dwell well clear of the stop.
-  double backoff_arrive_frac = 0.4;
+  // Absolute arrival tolerance, capped at 0.25 degrees by the controller.
+  // A backoff that stalls short must fail, not silently spend its clearance.
+  double backoff_arrival_tol_rad = 0.25 * kDeg2Rad;
   double backoff_arrive_vel_rad_s = 0.1;  // |v| below this to accept arrival
   // Re-arm the drive (de-energize/re-energize, the verified speed-mode
   // recipe) at the start of the coarse approach, before any motion.
@@ -170,8 +166,8 @@ struct DesiredState {
   // of torque that NO SpdRef can overcome (rehome3 root cause: the backoff
   // command was on the bus and ignored — the axis stayed pinned to the
   // stop, tq +0.8..+1.4, v jitter only, until the 10 s backoff timeout).
-  // The axis bounces slightly off the stop during the de-energize; the
-  // target-seeking backoff and the fine re-approach are unaffected.
+  // Torque-off movement can occur in either direction on either axis. It must
+  // be supervised; endpoint repeatability is not evidence that setup was safe.
   bool rearm_speed_mode = false;
   // Position-mode move: the executor drives the drive's own position loop
   // (LocRef = target_rad, LimitSpd = speed_rad_s) instead of commanding a
@@ -244,19 +240,17 @@ class HomingController {
                           const std::string& msg) const;
   bool arrived(const HomingFeedback& fb) const;
   bool timed_out(const HomingFeedback& fb) const;
-  bool settled(const HomingFeedback& fb) const;
-  // target_distance_rad < 0 = use p_.max_travel_rad (the fine approaches).
+  bool settled(const HomingFeedback& fb);
+  bool stationary_window(const HomingFeedback& fb, double seconds);
+  // target_distance_rad < 0 = bound fine approach to the observed contact.
   void begin_approach(double speed_rad_s, TimeNs now, double current_pos_rad,
                       double target_distance_rad = -1.0);
   // start_rad is the position the backoff begins from (the contact position);
-  // it sizes the arrival window (see backoff_arrive_frac).
+  // it caps the absolute arrival tolerance relative to the requested distance.
   void begin_backoff_to(TimeNs now, double target_rad, double start_rad);
-  // Backoff arrival: within the wide arrival window of the target AND slow
-  // enough to hold there. The window is wide on purpose — the position loop
-  // can stall 0.5-1.5 deg short of the exact target inside the detent zone,
-  // and any position inside the window is a valid backoff (the fine
-  // re-approach re-measures the end-stop precisely).
-  bool backoff_arrived(const HomingFeedback& fb) const;
+  // Backoff arrival requires near-target clearance and a stationary encoder
+  // window. Failure to break static friction is a bounded homing failure.
+  bool backoff_arrived(const HomingFeedback& fb);
   void begin_settle(TimeNs now);
   void begin_hold();
   void fail(const std::string& reason);
@@ -274,8 +268,11 @@ class HomingController {
   Phase phase_;
 
   // Backoff arrival window (rad), sized from the backoff distance in
-  // begin_backoff_to (see HomingParams::backoff_arrive_frac).
+  // begin_backoff_to; never more than 0.25 degrees.
   double arrive_tol_rad_ = 0.0;
+  TimeNs still_since_ns_ = 0;
+  double still_q_rad_ = 0.0;
+  bool still_window_valid_ = false;
 
   // VerifyRepeatability sub-phase: 0 = back-off, 1 = second fine approach.
   int verify_phase_ = 0;

@@ -252,6 +252,9 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   };
   can::AxisLatest s;
   system_.axis(axis).latest(s);
+  if (!s.has_feedback || s.rx_ns<=0 || s.rx_ns>now+5000000LL || now-s.rx_ns>100000000LL ||
+      !std::isfinite(s.q_rad) || s.faults)
+    return fail("fresh finite fault-free feedback required for mode setup");
   if (t.stage == 0) {
     invalidate_calibration();
     if (!std::isfinite(limit) || limit <= 0) return fail("invalid mode limit");
@@ -275,15 +278,25 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
     return fail("mode transition request changed while pending");
   if (now - t.started > 2500000000LL) return fail("mode transition timed out");
   if (s.has_feedback && s.faults) return fail("motor fault during mode transition");
+  constexpr double kModeDriftLimit = .25 * kDeg2Rad;
+  if (t.stage >= 2) {
+    if (!s.has_feedback || now - s.rx_ns > 100000000LL)
+      return fail("feedback lost during disabled mode setup");
+    if (!std::isfinite(s.q_rad) || std::abs(s.q_rad-t.stopped_q) > kModeDriftLimit)
+      return fail("axis moved more than 0.25 degrees during mode setup; load holding unverified");
+  }
   switch (t.stage) {
     case 1: // Stationary dwell measured from encoder position, not noisy velocity.
       if (!s.has_feedback || now - s.rx_ns > 100000000LL) return fail("feedback lost while braking");
       if (now - t.sampled >= 50000000LL) {
-        if (std::abs(s.q_rad - t.last_q) > .04 * kDeg2Rad) t.still_since = now;
-        t.last_q = s.q_rad; t.sampled = now;
+        if (std::abs(s.q_rad - t.last_q) > .04 * kDeg2Rad) {
+          t.still_since = now; t.last_q = s.q_rad;
+        }
+        t.sampled = now;
         if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis)) return fail("brake keepalive failed");
       }
       if (now - t.still_since < 150000000LL) break;
+      t.stopped_q = s.q_rad;
       if (!system_.send_stop(axis, &err)) return fail("mode stop failed");
       invalidate_commands(axis);
       t.deadline = now + 50000000LL; t.stage = 2;
@@ -291,6 +304,8 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
     case 2:
       if (now < t.deadline) break;
       if (!s.has_feedback || now - s.rx_ns > 100000000LL) return fail("no stopped feedback");
+      if (s.mode != 0 || s.rx_ns < t.deadline-50000000LL)
+        return fail("drive did not confirm disabled before mode write");
       t.pin = s.q_rad;
       if (!write_reg_u8(cybergear::Reg::RunMode, position ? 1 : 2, axis)) return fail("mode write failed");
       t.stage = 3;
@@ -341,10 +356,28 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
       }
       break;
     }
-    case 6:
+    case 6: {
+      // The last COMM_TYPE_2 can describe the pose at disable, before the
+      // suspended load moved. Read the actual encoder register after setup,
+      // immediately before enable; register/gain readback is not position proof.
+      if (!t.waiting) {
+        if (!system_.begin_register_read(axis, cybergear::Reg::MechPos, err))
+          return fail("pre-enable position request failed");
+        t.waiting = true; t.deadline = now + 100000000LL;
+        break;
+      }
+      double position_now = 0;
+      const int result = system_.poll_register_read(position_now, err);
+      if (result < 0 || (result == 0 && now > t.deadline))
+        return fail("pre-enable position readback timed out");
+      if (result == 0) break;
+      t.waiting = false;
+      if (!std::isfinite(position_now) || std::abs(position_now-t.stopped_q) > kModeDriftLimit)
+        return fail("pre-enable encoder moved more than 0.25 degrees; load holding unverified");
       if (!system_.send_enable(axis, &err)) return fail("enable failed");
       t.deadline = now + 50000000LL; t.stage = 7;
       break;
+    }
     case 7:
       if (now < t.deadline) break;
       if (!s.has_feedback || s.mode != 2 || s.rx_ns < t.deadline - 50000000LL ||

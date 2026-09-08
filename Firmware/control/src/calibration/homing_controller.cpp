@@ -25,7 +25,9 @@ DesiredState HomingController::move_state(double target, double speed,
 }
 
 bool HomingController::arrived(const HomingFeedback& fb) const {
-  return std::fabs(fb.pos_rad - phase_.target_rad) < p_.arrival_tol_rad;
+  // A travel cap must still trip if a feedback step skips past it. Unlike a
+  // position arrival window, it must not stop a fine approach before contact.
+  return (fb.pos_rad-phase_.target_rad)*dir_ >= 0;
 }
 
 bool HomingController::timed_out(const HomingFeedback& fb) const {
@@ -33,8 +35,15 @@ bool HomingController::timed_out(const HomingFeedback& fb) const {
          static_cast<TimeNs>(p_.approach_timeout_s * 1e9);
 }
 
-bool HomingController::settled(const HomingFeedback& fb) const {
-  return (fb.t_ns - phase_.start_ns) >= static_cast<TimeNs>(p_.settle_time_s * 1e9);
+bool HomingController::stationary_window(const HomingFeedback& fb, double seconds) {
+  if (!still_window_valid_ || std::abs(fb.pos_rad-still_q_rad_) > .04*kDeg2Rad) {
+    still_window_valid_=true; still_q_rad_=fb.pos_rad; still_since_ns_=fb.t_ns;
+  }
+  return fb.t_ns-still_since_ns_ >= static_cast<TimeNs>(seconds*1e9);
+}
+
+bool HomingController::settled(const HomingFeedback& fb) {
+  return stationary_window(fb,p_.settle_time_s);
 }
 
 void HomingController::begin_approach(double speed_rad_s, TimeNs now,
@@ -54,9 +63,14 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
   // on contact (or the timeout), well short of this target. The coarse
   // approach passes the rotation cap (max_rotation_rad + margin) so the
   // `arrived` travel-limit check never trips before the rotation cap does.
-  const double dist =
-      (target_distance_rad < 0.0) ? p_.max_travel_rad : target_distance_rad;
-  phase_.target_rad = current_pos_rad + dist * dir_;
+  if (target_distance_rad < 0.0) {
+    // A fine pass has already observed this endpoint. Bound it to that
+    // observation plus the repeatability allowance, not another full traverse.
+    const double contact = fine_samples_>0 ? fine_contact1_rad_ : coarse_contact_rad_;
+    phase_.target_rad=contact+p_.repeatability_rad*dir_;
+  } else {
+    phase_.target_rad=current_pos_rad+target_distance_rad*dir_;
+  }
   phase_.start_ns = now;
   detector_.reset();
   detector_.set_approach_direction(dir_);
@@ -80,14 +94,11 @@ void HomingController::begin_backoff_to(TimeNs now, double target_rad,
   phase_.velocity_rad_s = 0.0;
   phase_.target_rad = target_rad;
   phase_.start_ns = now;
-  // Wide arrival window (see HomingParams::backoff_arrive_frac): the
-  // position loop can stall 0.5-1.5 deg short of the exact target inside
-  // the detent zone (P falls below F_s as the error closes); anywhere inside
-  // the window is a valid backoff. The window is always well below the
-  // backoff distance, so the axis has actually left the stop.
+  // Preserve nearly the entire requested clearance, on either axis and in
+  // either direction. Friction or load can prevent arrival; timeout then wins.
   const double dist = std::fabs(target_rad - start_rad);
-  arrive_tol_rad_ =
-      std::max(0.5 * kDeg2Rad, p_.backoff_arrive_frac * dist);
+  arrive_tol_rad_ = std::min({.25*kDeg2Rad,p_.backoff_arrival_tol_rad,dist*.1});
+  still_window_valid_=false;
   // One-shot position-mode entry (the executor runs the blocking
   // de-energize/RunMode=1/re-energize/LimitSpd/pin-LocRef recipe before
   // this cycle's command). The de-energize also resets the drive's
@@ -95,19 +106,24 @@ void HomingController::begin_backoff_to(TimeNs now, double target_rad,
   // contact dwell pushes the stop (rehome3 root cause, wire-measured) —
   // in position mode that residual is inert (the velocity loop is not in
   // the control path), but the reset keeps the controller clean. The brief
-  // de-energize lets the axis bounce off the stop toward the gravity
-  // balance; the position move simply starts from wherever it lands.
+  // de-energize can let either axis move in either direction. The executor
+  // must reject setup drift; re-measuring the stop cannot make that drift safe.
   pos_enter_pending_ = true;
 }
 
-bool HomingController::backoff_arrived(const HomingFeedback& fb) const {
-  return std::fabs(fb.pos_rad - phase_.target_rad) < arrive_tol_rad_ &&
-         std::fabs(fb.vel_rad_s) < p_.backoff_arrive_vel_rad_s;
+bool HomingController::backoff_arrived(const HomingFeedback& fb) {
+  if (std::fabs(fb.pos_rad-phase_.target_rad) >= arrive_tol_rad_ ||
+      std::fabs(fb.vel_rad_s) >= p_.backoff_arrive_vel_rad_s) {
+    still_window_valid_=false;
+    return false;
+  }
+  return stationary_window(fb,.15);
 }
 
 void HomingController::begin_settle(TimeNs now) {
   phase_.kind = PhaseKind::Settle;
   phase_.start_ns = now;
+  still_window_valid_=false;
 }
 
 void HomingController::begin_hold() {
@@ -142,6 +158,24 @@ std::string HomingController::jitter_suffix() const {
 }
 
 DesiredState HomingController::step(const HomingFeedback& fb) {
+  if (terminal()) return hold_state(state_==AxisHomeState::Failed ? "homing failed" : "homing complete");
+  // Apply health/effort gates during backoff and settling too, not only contact
+  // detection. No current increase or automatic retry can clear this failure.
+  if (fb.motor_fault || !std::isfinite(fb.pos_rad) || !std::isfinite(fb.vel_rad_s) ||
+      !std::isfinite(fb.torque_nm) ||
+      std::abs(fb.torque_nm)>std::min(p_.torque_safety_nm,p_.contact.effort_hard_abort_nm)) {
+    fail("homing: hard abort or motor fault; invalid feedback or torque safety limit");
+    return hold_state("homing failed");
+  }
+  if (phase_.kind==PhaseKind::Settle && fb.t_ns-phase_.start_ns>
+      static_cast<TimeNs>((p_.settle_time_s+3.0)*1e9)) {
+    fail("settle: no stationary encoder window before deadline");
+    return hold_state("homing failed");
+  }
+  if (phase_.approach && phase_.kind==PhaseKind::Move && arrived(fb)) {
+    fail("approach: exceeded travel bound without validated contact");
+    return hold_state("homing failed");
+  }
   // 1. Run the contact detector if the current phase is an approach move.
   bool contact = false;
   bool hard_abort = false;
@@ -256,15 +290,16 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       break;
 
     case AxisHomeState::Settle:
-      if (settled(fb)) {
+      if (std::abs(fb.pos_rad-phase_.target_rad)>=arrive_tol_rad_) {
+        fail("backoff: clearance lost during settle");
+      } else if (settled(fb)) {
         begin_approach(p_.fine_speed_rad_s, fb.t_ns, fb.pos_rad);
         // The backoff left the axis in position mode; the fine approach is
         // speed mode. Re-arm (de-energize/re-energize, the speed-mode
         // recipe) so the approach starts from a clean velocity controller
         // — the same re-arm endpoint B uses before its coarse approach.
-        // The de-energize lets the axis slide slightly off its backoff
-        // settle position; the approach is "move until contact", so the
-        // start position doesn't matter (the end-stop re-measures).
+        // Clearance and stationary feedback are required before re-arm;
+        // the backend separately rejects movement while drive torque is off.
         rearm_pending_ = true;
         state_ = AxisHomeState::ApproachFine;
       }
@@ -274,6 +309,10 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       if (hard_abort || fb.motor_fault) {
         fail("fine approach: hard abort or motor fault");
       } else if (contact) {
+        if (std::abs(fb.pos_rad-coarse_contact_rad_)>p_.repeatability_rad) {
+          fail("fine contact inconsistent with coarse contact; obstruction or load stall unverified");
+          break;
+        }
         fine_contact1_rad_ = fb.pos_rad;
         fine_samples_ = 1;
         begin_settle(fb.t_ns);
@@ -289,7 +328,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
     case AxisHomeState::ContactFine:
       if (settled(fb)) {
         verify_phase_ = 0;
-        begin_backoff_to(fb.t_ns, fine_contact1_rad_ - p_.small_backoff_rad * dir_,
+        begin_backoff_to(fb.t_ns, fine_contact1_rad_ - std::max(p_.small_backoff_rad,p_.backoff_rad) * dir_,
                          fine_contact1_rad_);
         state_ = AxisHomeState::VerifyRepeatability;
       }
@@ -351,7 +390,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
             // restarts, so each pass gets a fresh backoff timeout.
             ++verify_retries_;
             begin_backoff_to(fb.t_ns,
-                             fine_contact1_rad_ - p_.small_backoff_rad * dir_,
+                             fine_contact1_rad_ - std::max(p_.small_backoff_rad,p_.backoff_rad) * dir_,
                              fine_contact1_rad_);
             verify_phase_ = 0;
           } else {
