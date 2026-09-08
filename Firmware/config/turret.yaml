@@ -287,7 +287,7 @@ v3:
   service_speed_kp: 4.0
   # Faster small corrections; large-error stiffness remains at the original rate.
   tracking_reference_omega: 4.0
-  position_servo_kp: 3.0
+  position_servo_kp: 4.0
   auto_roam:
     full_yaw_travel: true
   auto_track:

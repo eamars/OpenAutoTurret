@@ -4,13 +4,56 @@ This follows the [optimization cycle](optimization_cycle_2026_09_08.md).
 Physical experiments use fixed angular commands and numeric motor telemetry.
 No camera image or video is inspected and no detected subject drives a trial.
 
-**Latest configuration:** the 21:16 attempt on `da2f55eeb787.KcQiPy` tripped
+**Physical result:** homing completed on `adf447e0b5c5.cmdOMu` in approximately
+6.3 minutes, with valid soft limits, Manual readiness and no fault. Forty
+target-free step trials then exercised 0.5/1/5-degree commands in both axes and
+directions. Thirty-eight completed their full six-second measurement interval;
+one was interrupted by a cycle-timing intervention and one by excessive reverse
+yaw excursion. The selected operating profile is adaptive reference omega 4,
+position-servo gain 4. Homing speeds, current limits and inner drive gains are
+unchanged by this tuning selection.
+
+| Physical test | Encoder t90 | Active overshoot | Result |
+|---|---:|---:|---|
+| 0.5 degrees, original omega 2.5 / gain 3, four directions | 1.57–3.02 s | 0.09–0.22 degrees | Baseline |
+| 0.5 degrees, omega 4 / gain 3, four directions | 1.20–2.37 s | 0.05–0.13 degrees | Faster reference helps |
+| 0.5 degrees, omega 6 / gain 6, four directions | 0.85–1.40 s | 0.07–0.18 degrees | Insufficient basis for general deployment |
+| 1 degree, selected omega 4 / gain 4, four directions | 1.03–1.56 s | 0.11–0.20 degrees | Completed |
+| 5 degrees, conservative omega 2.5 / gain 2, four directions | 1.52–1.96 s | 0.05–0.27 degrees | Comparison baseline |
+| 5 degrees, selected omega 4 / gain 4, four directions | 1.20–1.54 s | 0.14–0.18 degrees | Completed |
+| Repeated reverse 5-degree yaw / pitch at selected profile | 1.41 / 1.29 s | 0.11 / 0.18 degrees | Completed |
+
+These are individual observed ranges, not statistical p95 estimates. The final
+0.5-degree positive yaw/pitch checks at gain 4 took 2.08/0.94 s respectively,
+showing residual pose/friction sensitivity. Settling uses a separate +/-0.2-degree
+window; t90 only means sustained crossing of 90% displacement, not settlement.
+
+The aggressive omega 6 / gain 6 profile is rejected: a repeated 1-degree pitch
+move overshot by 0.75 degrees, and the reverse 5-degree yaw move exceeded the
+seven-degree excursion observer. Stop Motion retained Manual service; subsequent
+readback showed zero service-rate commands, healthy feedback and valid limits.
+Recorded yaw overshoot including post-cancellation motion was 3.28 degrees, with
+8.28 degrees total excursion. This is a tuning failure, not a successful fast
+response. No inference or target selection drove these angular commands.
+
+The selected 5-degree reference itself reached t90 at about 1.36 s, close to the
+1.20–1.54 s encoder response. The remaining response is substantially shaped by
+the command trajectory and installed drive/load dynamics. These tests do not
+establish that all software optimization is exhausted or that new hardware is
+mandatory. Faster aggressive gains already lose overshoot control. Detection
+quality and appearance latency require the separate evidence described below.
+
+**Configuration history:** the 21:16 attempt on `da2f55eeb787.KcQiPy` tripped
 the added homing speed gate during coarse approach; the homing fault path
 disabled both drives. The operator then required these checks to warn and
 continue. `homing.motion_checks_abort: false` now makes added speed, corridor
 and reverse-motion findings warnings, while feedback and drive health remain
 fatal. The separate mode displacement switch remains false. The next physical
-probe, rather than another broad test suite, is the acceptance gate.
+probe, rather than another broad test suite, was the acceptance gate. That
+attempt reached yaw's second endpoint but exposed another added stationary-window
+deadline. `adf447e0b5c5` extends the same override to endpoint arrival/settling,
+restoring the earlier timed-settling and backoff procedure; its physical home
+then completed.
 
 ## Homing configuration and first result
 
