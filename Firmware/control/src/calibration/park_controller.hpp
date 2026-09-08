@@ -183,7 +183,7 @@ class ParkController {
   std::array<double, kAxisCount> independent_travel_{};
   bool release_gate(const HomingFeedback& pitch_fb, const HomingFeedback& yaw_fb,
                     const std::array<ParkPositionEvidence, kAxisCount>& evidence,
-                    TimeNs now_ns);
+                    TimeNs now_ns, bool allow_settling = false);
 };
 
 }  // namespace ota

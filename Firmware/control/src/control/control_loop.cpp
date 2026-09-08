@@ -1343,6 +1343,18 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         fail_parking("stale or untrusted motor feedback during parking", true);
         break;
       }
+      if (!cfg_.park.require_independent_position && park_->complete()) {
+        // The pose was verified while powered. After release, only confirm
+        // disabled feedback; normal mechanical settling is not a motion fault.
+        if (sp[0].disabled && sp[1].disabled) {
+          phase_ = Phase::Parked;
+          shutdown_requested_.store(false);
+          spdlog::info("PARKED: approved pose reached; both motors confirmed disabled; services remain online");
+        } else if (now_ns >= park_deadline_ns_) {
+          fail_parking("motor disable was not confirmed");
+        }
+        break;
+      }
       // Supervise measured motion, not just the commanded speed. The drive
       // may outrun SpdRef; a zero-speed command is not proof of a physical stop.
       std::string motion_error;
@@ -1449,6 +1461,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
       if (po.disable_pitch) backend_->deenergize(AxisId::Pitch);
       if (po.disable_yaw) backend_->deenergize(AxisId::Yaw);
+      if (po.disable_pitch && po.disable_yaw && !cfg_.park.require_independent_position) {
+        homed_ = at_ready_ = false;
+        park_deadline_ns_ = now_ns + 500'000'000;
+      }
       if (po.complete) {
         phase_ = Phase::Parked;
         homed_ = false;

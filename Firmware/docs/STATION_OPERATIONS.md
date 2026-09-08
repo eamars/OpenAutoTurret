@@ -174,8 +174,12 @@ The operator explicitly authorized release at this pose and deployment.
 for this approved pose. The controller keeps power through the yaw move, pitch
 move and settling dwell. Both axes must have fresh fault-free motor feedback,
 position inside the guarded tolerance (0.25 degrees for the configured 0.5 degrees),
-and speed below the configured tolerance. It checks these conditions during the
-dwell, before each disable, and for another dwell afterward. An axis already at
+and speed below the configured tolerance. Powered correction is allowed to
+settle; leaving tolerance restarts the dwell. After both axes dwell inside
+tolerance it releases both motors in the same cycle and confirms disabled
+feedback before reporting PARKED. Normal unpowered settling, including a
+0.3-degree shift, does not cause FAULT or invalidate the completed park.
+An axis already at
 its target can pass without artificial travel. Failed verification reports PARK
 FAILED; hard-fault, temperature and watchdog emergency authority remains active.
 

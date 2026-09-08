@@ -24,6 +24,7 @@ class ParkPlant final : public can::CanTransport {
   FrameCallback callback;
   int stops = 0, enables = 0, mode_writes = 0;
   bool early_stop = false;
+  bool recoil = false;
   double maximum_travel[2]{};
   const double targets[2] = {-2*kDeg2Rad, 2*kDeg2Rad};
   bool start(std::string&) override { return true; }
@@ -53,12 +54,14 @@ class ParkPlant final : public can::CanTransport {
     auto& m = motors[i];
     const uint16_t reg = uint16_t(data[0]) | (uint16_t(data[1])<<8);
     if (e.comm_type == 4) {
+      if (stops == 0)
+        for (int j=0; j<2; ++j)
+          early_stop |= std::abs(motors[j].q - targets[j]) >= .25*kDeg2Rad;
       ++stops;
-      for (int j=0; j<2; ++j)
-        early_stop |= std::abs(motors[j].q - targets[j]) >= .25*kDeg2Rad;
       // Reproduce the real defect: removing torque away from the park pose
       // lets a loaded axis move, then the old mode recipe faults on that drift.
       if (early_stop && m.enabled) m.q += .4*kDeg2Rad;
+      if (recoil && m.enabled) m.q += .3*kDeg2Rad;
       m.enabled = false;
     }
     if (e.comm_type == 3) { ++enables; m.enabled = true; }
@@ -102,8 +105,10 @@ class ParkBackend final : public CanMotorBackend {
   bool independent;
 };
 
-bool run(bool independent, bool approved = false, bool already_parked = false) {
+bool run(bool independent, bool approved = false, bool already_parked = false,
+         bool residual = false, bool recoil = false) {
   auto transport = std::make_unique<ParkPlant>(); auto* plant = transport.get();
+  plant->recoil = recoil;
   can::CyberGearSystem system; std::string error;
   if (!system.open({}, error, std::move(transport))) return false;
   if (already_parked)
@@ -127,10 +132,16 @@ bool run(bool independent, bool approved = false, bool already_parked = false) {
   loop.step(now,5'000'000);
   if (!loop.start_parking(error)) { std::cerr << error << '\n'; return false; }
   const auto began = now;
+  bool injected = false;
   while (loop.phase() == Phase::Parking && now-began < 12'000'000'000LL) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     const auto next = now_monotonic_ns();
     plant->advance(double(next-now)/1e9);
+    if (residual && !injected && plant->motors[0].q < plant->targets[0] + .1*kDeg2Rad) {
+      plant->motors[1].q += .35*kDeg2Rad;
+      plant->feedback(1);
+      injected = true;
+    }
     now = now_monotonic_ns();  // Feedback must precede this control sample.
     loop.step(now,5'000'000);
   }
@@ -141,7 +152,9 @@ bool run(bool independent, bool approved = false, bool already_parked = false) {
                  : loop.phase() == Phase::Fault && plant->stops == 0 &&
                    loop.fault_reason().find("independent physical") != std::string::npos);
   std::cout << "independent=" << independent << " approved=" << approved
-    << " already_parked=" << already_parked << " both_axes_at_target=" << moved
+    << " already_parked=" << already_parked << " residual_injected=" << injected
+    << " release_recoil=" << recoil
+    << " both_axes_at_target=" << moved
     << " stop_frames=" << plant->stops << " early_stop=" << plant->early_stop
     << " enable_frames=" << plant->enables << " mode_writes=" << plant->mode_writes
     << " fault='" << loop.fault_reason() << "' pass=" << ok << '\n';
@@ -154,5 +167,8 @@ int main() {
   const bool with_simulated_sensor = run(true);
   const bool approved_pose = run(false, true);
   const bool already_parked = run(false, true, true);
-  return without_sensor && with_simulated_sensor && approved_pose && already_parked ? 0 : 1;
+  const bool settles_residual = run(false, true, false, true);
+  const bool accepts_recoil = run(false, true, false, false, true);
+  return without_sensor && with_simulated_sensor && approved_pose && already_parked &&
+         settles_residual && accepts_recoil ? 0 : 1;
 }

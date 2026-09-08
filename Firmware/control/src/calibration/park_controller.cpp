@@ -72,7 +72,8 @@ ParkController::ParkController(ParkParams p,
 
 bool ParkController::release_gate(const HomingFeedback& pitch_fb,
     const HomingFeedback& yaw_fb,
-    const std::array<ParkPositionEvidence, kAxisCount>& evidence, TimeNs now_ns) {
+    const std::array<ParkPositionEvidence, kAxisCount>& evidence, TimeNs now_ns,
+    bool allow_settling) {
   const HomingFeedback feedback[] = {pitch_fb, yaw_fb};
   for (int i = 0; i < kAxisCount; ++i) {
     const auto& fb = feedback[i];
@@ -86,6 +87,8 @@ bool ParkController::release_gate(const HomingFeedback& pitch_fb,
       reason = "stale or untrusted motor feedback";
     else if (p_.require_independent_position && observed_travel_[i] < p_.min_observed_travel_deg * kDeg2Rad)
       reason = "no parking motion observed; no automatic release";
+    else if (allow_settling && !at_park(fb, static_cast<AxisId>(i)))
+      continue;  // Keep powered target correction; dwell starts/restarts at arrival.
     else if (!at_park(fb, static_cast<AxisId>(i)))
       reason = "position/velocity outside guarded park tolerance";
     else if (!p_.require_independent_position)
@@ -141,7 +144,8 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
   }
 
   if (state_ >= ParkState::Verify && state_ <= ParkState::VerifyDisabled)
-    release_gate(pitch_fb, yaw_fb, evidence, now_ns);
+    release_gate(pitch_fb, yaw_fb, evidence, now_ns,
+                 state_ == ParkState::Verify || state_ == ParkState::Dwell);
 
   switch (state_) {
     case ParkState::StopTracking:
@@ -232,6 +236,14 @@ ParkOutput ParkController::step(const HomingFeedback& pitch_fb,
 
     case ParkState::DisablePitch:
       out.disable_pitch = true;
+      if (!p_.require_independent_position) {
+        // Both axes have arrived and dwelled. Release together; unpowered
+        // settling is normal for the operator-approved pose.
+        out.disable_yaw = true;
+        out.message = "disable both motors at approved park pose";
+        state_ = ParkState::Parked;
+        break;
+      }
       out.message = "disable pitch";
       state_ = ParkState::DisableYaw;
       break;
