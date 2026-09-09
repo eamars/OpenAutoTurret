@@ -82,6 +82,19 @@ def readiness_gaps(state: dict) -> list[str]:
     return gaps
 
 
+def smoke_once(base: str, timeout: float) -> dict:
+    page = get_bytes(base + "/", timeout)
+    if b"OpenAutoTurret" not in page:
+        raise RuntimeError("station page did not contain the OpenAutoTurret dashboard")
+    get_json(base + "/api/health", timeout)
+    telemetry = receive_telemetry(base, timeout)
+    print(
+        "HTTP/WebSocket smoke passed: "
+        f"phase={telemetry.get('phase')} fault={telemetry.get('fault', '')!r}"
+    )
+    return telemetry
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:8080")
@@ -98,20 +111,33 @@ def main() -> int:
         parser.error("--timeout must be positive and --wait-ready cannot be negative")
 
     base = base_url(args.url)
-    page = get_bytes(base + "/", args.timeout)
-    if b"OpenAutoTurret" not in page:
-        raise RuntimeError("station page did not contain the OpenAutoTurret dashboard")
-    get_json(base + "/api/health", args.timeout)
-    telemetry = receive_telemetry(base, args.timeout)
-    print(
-        "HTTP/WebSocket smoke passed: "
-        f"phase={telemetry.get('phase')} fault={telemetry.get('fault', '')!r}"
-    )
+    deadline = time.monotonic() + args.wait_ready if args.wait_ready else None
+    next_report = 0.0
+    while True:
+        try:
+            smoke_once(base, args.timeout)
+            break
+        except Exception as error:
+            if deadline is None:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "station HTTP/WebSocket smoke did not become available before "
+                    f"timeout: {error}"
+                ) from error
+            now = time.monotonic()
+            if now >= next_report:
+                print(
+                    "Waiting for station HTTP/WebSocket service "
+                    f"({int(remaining)}s left): {error}"
+                )
+                next_report = now + 10.0
+            time.sleep(min(2.0, remaining))
 
-    if args.wait_ready == 0:
+    if deadline is None:
         return 0
 
-    deadline = time.monotonic() + args.wait_ready
     next_report = 0.0
     while True:
         state = get_json(base + "/api/state", args.timeout)
