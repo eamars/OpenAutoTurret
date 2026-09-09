@@ -1,0 +1,9 @@
+# Python runtime dependencies for the station venv.
+# picamera2 and libcamera are OS packages and must remain available through
+# the system-site-packages venv; they are not pip dependencies.
+fastapi
+uvicorn
+websockets
+PyYAML
+numpy
+Pillow

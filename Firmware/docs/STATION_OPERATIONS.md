@@ -258,15 +258,18 @@ From a Linux checkout with a project-local venv:
 The command archives `HEAD`, uploads it into a new directory under
 `/home/eamars/workspace/OpenAutoTurret/run/releases/`, records `REVISION`,
 reuses the station's project-local `run/station-venv`, builds C++, runs CTest,
-and performs read-only preflight. It does not overwrite the Pi checkout,
+installs `Firmware/requirements-station.txt`, and performs read-only preflight.
+It does not overwrite the Pi checkout,
 discard dirty files, or change the running station. It prints the exact
 release path and activation/status commands.
 
 To deploy and activate in one command, append **`--activate`**. Only after
 build/tests/preflight succeed does it stop the old stack and start the new one.
-Activation may home and move the station. If build/preflight fails, the running
-release remains active; if activation fails, inspect the retained release and
-runtime logs. There is no automatic rollback that unexpectedly starts motors.
+Activation may home and move the station. After starting, the command performs
+an HTTP/WebSocket smoke test and waits for `READY` automatic operation before
+reporting success. If build/preflight or activation verification fails, inspect
+the retained release and runtime logs. There is no automatic rollback that
+unexpectedly starts motors.
 
 For an existing inactive checkout directly on the Pi:
 
@@ -300,7 +303,7 @@ the OS camera bindings:
 
 ```bash
 python3 -m venv --system-site-packages run/station-venv
-run/station-venv/bin/python -m pip install fastapi uvicorn PyYAML numpy Pillow
+run/station-venv/bin/python -m pip install -r Firmware/requirements-station.txt
 ```
 
 Reuse an existing venv; never install pip dependencies globally. Run `check`

@@ -14,7 +14,8 @@ def main():
     default = config.get("v3", {}).get("default_mode", "MANUAL")
     if config_path == firmware / "config/turret.yaml" and default != "AUTO_ROAM":
         raise RuntimeError("Normal station config must set v3.default_mode: AUTO_ROAM")
-    for module in ("numpy", "PIL", "fastapi", "uvicorn", "picamera2", "libcamera"):
+    for module in ("numpy", "PIL", "fastapi", "uvicorn", "websockets.sync.client",
+                   "picamera2", "libcamera"):
         importlib.import_module(module)
     from picamera2.devices.imx500 import IMX500  # noqa: F401
     from perception.visiond import build_parser, load_config
