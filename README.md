@@ -17,8 +17,8 @@ Web: **http://rpi-turret:8080/**. See the runbook for deployment from Windows/Li
 without overwriting the Pi's existing files, and [the documentation map](Firmware/docs/README.md)
 for architecture and measurement records.
 
-## Zeroing in Action
-[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/rVH_zREhYrE/0.jpg)](https://www.youtube.com/watch?v=rVH_zREhYrE)
-
 ## Preview
+
 ![preview](resources/preview.png)
+
+
