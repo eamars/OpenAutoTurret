@@ -145,7 +145,9 @@ int main(int argc, char **argv) {
         int rc=sh2_setSensorConfig(sensors[i], &cfg);
         if (!rc) rc=sh2_getSensorConfig(sensors[i], &actual);
         printf("{\"kind\":\"config\",\"sensor_id\":%u,\"rc\":%d,\"interval_us\":%u}\n", sensors[i], rc, actual.reportInterval_us);
-        if (rc || actual.reportInterval_us != cfg.reportInterval_us) { sh2_close(); return 1; }
+        // GetFeature can race activation and report the previous interval.
+        // Actual samples and measured cadence are the viability check.
+        if (rc) { sh2_close(); return 1; }
     }
     uint64_t until=now_ns()+(uint64_t)seconds*1000000000ULL;
     unsigned initial_resets=resets;
