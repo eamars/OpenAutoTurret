@@ -58,6 +58,8 @@ static int hal_read(sh2_Hal_t *self, uint8_t *out, unsigned len, uint32_t *time_
         if (wanted > sizeof chunk) wanted = sizeof chunk;
         ssize_t n = read(fd, chunk, wanted);
         if (n != (ssize_t)wanted || n < 4 || chunk[2] != header[2] || chunk[3] != header[3]) {
+            if (read_errors < 5) fprintf(stderr, "I2C packet read n=%zd wanted=%u got=%u header=%02x%02x/%u/%u chunk=%02x%02x/%u/%u\n",
+                n,wanted,got,header[0],header[1],header[2],header[3],chunk[0],chunk[1],chunk[2],chunk[3]);
             ++read_errors; return 0;
         }
         unsigned skip = got ? 4 : 0;
@@ -117,7 +119,8 @@ int main(int argc, char **argv) {
     signal(SIGINT, stop); signal(SIGTERM, stop);
     if (sh2_open(&hal, event, NULL) != SH2_OK) { fprintf(stderr,"sh2_open failed\n"); return 1; }
     sh2_ProductIds_t ids = {0};
-    if (sh2_getProdIds(&ids) != SH2_OK) { fprintf(stderr,"product identity failed\n"); sh2_close(); return 1; }
+    int identity_rc = sh2_getProdIds(&ids);
+    if (identity_rc != SH2_OK) { fprintf(stderr,"product identity failed rc=%d read_errors=%u resets=%u\n",identity_rc,read_errors,resets); sh2_close(); return 1; }
     for (int i=0; i<ids.numEntries; ++i) {
         sh2_ProductId_t *p = &ids.entry[i];
         printf("{\"kind\":\"product\",\"part\":%u,\"version\":\"%u.%u.%u\",\"build\":%u,\"reset_cause\":%u}\n",
