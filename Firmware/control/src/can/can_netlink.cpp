@@ -193,8 +193,8 @@ bool netlink_query_can(const std::string& iface, CanIfInfo& out,
           auto* ia = reinterpret_cast<struct rtattr*>(RTA_DATA(r));
           for (; RTA_OK(ia, ilen); ia = RTA_NEXT(ia, ilen)) {
             if (ia->rta_type == IFLA_INFO_KIND) {
-              out.is_can =
-                  std::string(reinterpret_cast<char*>(RTA_DATA(ia))) == "can";
+              const std::string kind(reinterpret_cast<char*>(RTA_DATA(ia)));
+              out.is_can = i->ifi_type == ARPHRD_CAN && (kind == "can" || kind == "vcan");
             } else if (ia->rta_type == IFLA_INFO_DATA) {
               // Walk IFLA_CAN_* data attributes.
               std::size_t dlen = ia->rta_len - sizeof(struct rtattr);
