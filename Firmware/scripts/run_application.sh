@@ -21,6 +21,7 @@ case "${1:-}" in
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
+    echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -82,6 +83,7 @@ PULSE_MS=100
 OBSERVE_MS=2000
 APPLY_PITCH_LIMIT=0
 IMU_SECONDS=10
+WITH_IMU=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
@@ -89,6 +91,7 @@ while [ $# -gt 0 ]; do
     --hardware) MODE=hardware; shift ;;
     --commission-hardware) MODE=commission; START_WEB=0; shift ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
+    --with-imu) WITH_IMU=1; shift ;;
     --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
@@ -104,6 +107,9 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ "$WITH_IMU" = 1 ] && [ "$MODE" != commission ]; then
+  echo '--with-imu requires --commission-hardware' >&2; exit 2
+fi
 if ! [[ "$IMU_SECONDS" =~ ^[0-9]+$ ]] || ((IMU_SECONDS < 1 || IMU_SECONDS > 120)); then
   echo '--imu-seconds must be 1..120' >&2; exit 2
 fi
@@ -129,6 +135,8 @@ if [ "$ACTION" = deploy ]; then
   if [ "$PROBE_BUILD" = 1 ]; then
     if [ "$MODE" = imu ]; then
     cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    elif [ "$MODE" = commission ]; then
+    cmake --build "$APP/build" --target probe-mixed-hardware imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     else
     cmake --build "$APP/build" --target controld probe-mixed-hardware -j"${OTA_BUILD_JOBS:-2}"
     fi
@@ -244,6 +252,29 @@ if [ "$MODE" = commission ]; then
     echo 'A controller already runs outside this launcher; refusing hardware probe.' >&2; exit 1
   fi
   PROBE="$APP/build/probe-mixed-hardware"
+  imu_pid=''
+  if [ "$WITH_IMU" = 1 ]; then
+    if pgrep -x imu_main >/dev/null; then echo 'Legacy IMU consumer still running' >&2; exit 1; fi
+    "$APP/build/imu-bno085" 120 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+    imu_pid=$!; children+=("$imu_pid")
+    # Observe a stationary host tare before starting the independent motor probe.
+    for ((attempt=0; attempt<50; attempt++)); do
+      kill -0 "$imu_pid" 2>/dev/null || { echo 'IMU startup failed' >&2; exit 1; }
+      if grep -q '"kind":"tare"' "$RUN/imu.ndjson"; then break; fi
+      sleep 0.1
+    done
+    "$PY" - "$RUN/imu.ndjson" <<'PY'
+import json, sys, time
+rows = []
+for line in open(sys.argv[1]):
+    try: rows.append(json.loads(line))
+    except json.JSONDecodeError: pass  # writer may be halfway through its last row
+tares = [r for r in rows if r.get('kind') == 'tare']
+samples = [r for r in rows if r.get('sensor') == 'game_rv']
+if not tares or not samples or tares[-1]['generation'] != samples[-1]['generation'] or not 0 <= time.monotonic_ns() - samples[-1]['rx_ns'] < 100_000_000:
+    raise SystemExit('Fresh, tared IMU required before commissioning motion')
+PY
+  fi
   probe_options=()
   if [ "$APPLY_PITCH_LIMIT" = 1 ]; then probe_options+=(--apply-pitch-limit); fi
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
@@ -253,7 +284,12 @@ if [ "$MODE" = commission ]; then
   controller_pid=$!; children+=("$controller_pid")
   printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
   cp "$RUN/launcher.pid" "$RUN/started"
-  wait "$controller_pid"
+  if [ -n "$imu_pid" ]; then
+    # An IMU process failure ends the probe through the same cleanup/zero path.
+    wait -n "$controller_pid" "$imu_pid"
+  else
+    wait "$controller_pid"
+  fi
   exit $?
 fi
 export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
