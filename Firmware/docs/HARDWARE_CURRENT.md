@@ -1,6 +1,6 @@
 # Current station hardware
 
-Updated **26 September 2026** with the later pitch-limit and Hailo checks. This is
+Updated **27 September 2026** with post-upgrade pitch-limit and Hailo checks. This is
 the current hardware inventory; dated September 3-9 reports describe the previous
 mechanism. Operation is governed by [STATION_OPERATIONS.md](STATION_OPERATIONS.md).
 Bounded mixed-bus probes, non-motion pitch current-limit application, and a first
@@ -110,7 +110,7 @@ is not proof of a new HAT fault or proof of sustained-load health.
 
 The owner-set pitch CyberGear current ceiling is **5 A maximum**. This applies
 to every software path that can configure the pitch drive; backend/config
-enforcement is being verified. Do not treat a YAML setting or a successful
+enforcement now passes the regression suite. Do not treat a YAML setting or a successful
 register write as proof that a later reset or mode change preserved it.
 
 The bounded commissioning probe's explicit `--apply-pitch-limit` operation was

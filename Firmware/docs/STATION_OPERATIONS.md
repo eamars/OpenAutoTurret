@@ -1,6 +1,6 @@
 # Operate and adapt the camera station
 
-Current operating runbook, **26 September 2026**. Read this before deploying,
+Current operating runbook, **27 September 2026**. Read this before deploying,
 starting, stopping or diagnosing the station. Dated run reports are historical.
 
 ## Current deployment gate
@@ -27,6 +27,18 @@ an experimental IMX477-to-Hailo detector probe also passed finite-output and
 timing checks. This does not establish detection accuracy, tracking identity or
 production perception integration. See the [hardware inventory](HARDWARE_CURRENT.md)
 and [AI plan](AI_HAT_PERCEPTION_PLAN.md).
+
+With the launcher stopped and camera ownership clear, the separate no-motion
+probe exercises the pinned Hailo model without starting the controller/web:
+
+```bash
+run/station-venv/bin/python Firmware/tools/probe_hailo_camera.py \
+  --hef /home/eamars/workspace/OpenAutoTurret/run/hailo-probe/yolov8n.hef --frames 30
+```
+
+Run from a committed release with the station project venv. It holds that
+runtime directory's launcher lock, verifies the model SHA and HAILO8 identity,
+and saves no images. Do not use another `OTA_RUN_DIR` to bypass ownership.
 
 ## Account, ownership and preserved operating contract
 
@@ -214,8 +226,12 @@ Do not combine limit setup with yaw actuation.
 `config/hardware_probe.yaml` is a separate probe schema, **not** a production
 controller configuration. Fixed ceilings are |voltage| <= 3000 raw, pulse <=
 500 ms, travel <= 5 degrees, speed <= 20 degrees/s, feedback age <= 20 ms and
-heartbeat gap <= 40 ms. Tested motion is narrower: +/-1000 for 150 ms plus a
-launcher-interrupted positive pulse. These are raw motor commands, not amperes.
+heartbeat gap <= 40 ms. Recorded trials include +/-1000 and +/-1500 raw for
+150 ms, +2000 raw for 100 ms, and bounded +/-3 deg/s PI requests for 500 ms.
+The PI trial stayed within the guards but did not achieve its requested speed;
+its 1500 raw ceiling and gains are not production-qualified. See the
+[continuation evidence](HARDWARE_CONTINUATION_2026_09_26.md). These raw voltage
+commands are not amperes.
 
 The probe verifies SPI parents, bitrate, ERROR-ACTIVE state, UID and stationary
 yaw baseline before output. The 200 Hz pulse loop and separate in-process guard

@@ -52,6 +52,27 @@ with only one encoder-count variation. Neither run reported a CAN error or
 failed zero transmission. This motivated another bounded gain trial, rather
 than adopting the initial gains for production.
 
+The revised loop (Kp=35000, Ki=20000, output ceiling 1500 raw) was exercised
+on September 27 using +/-3 deg/s requests for 500 ms, followed by four seconds
+of observation:
+
+| Request | Peak absolute travel | Final displacement | Peak raw-rpm speed | Stationary afterward |
+|---|---:|---:|---:|---|
+| +3 deg/s | 0.176 deg | +0.132 deg | 0 deg/s | Yes |
+| -3 deg/s | 0.747 deg | -0.483 deg | 12 deg/s | Yes |
+| +2000 raw voltage, 100 ms characterization | 1.143 deg | +1.099 deg | 12 deg/s | Yes |
+
+All reported zero CAN error frames and no failed zero-output requests. The
+positive velocity trial spent most of its active interval near the output
+ceiling (mean 1455 raw), yet still fell short of its requested speed. This is
+evidence that the current commissioning gains/ceiling do **not** establish
+usable speed regulation. The stronger short pulse establishes another bounded
+response point; friction, direction asymmetry and voltage-to-motion behavior
+need characterization before choosing production feedforward/gains. The source
+retains the 1500 raw velocity ceiling; the 2000 pulse did not raise it.
+Traces are `yaw-speed-positive-revised.csv`, `yaw-speed-negative-revised.csv`
+and `yaw-positive-2000.csv` in the ignored evidence directory.
+
 ## Hailo: installed and exercised with the actual camera
 
 Minimal OS packages installed: `dkms` 3.2.2, `hailort` and
@@ -80,6 +101,40 @@ driver change was required. No boxes exceeded 0.5 confidence in the observed
 view, so this establishes transport/inference viability, not person/head
 detection accuracy or identity recognition. No camera images were retained.
 Representative scene evaluation and application integration are next.
+
+The committed reusable probe passed a second 30-frame IMX477 run while the Pi
+was compiling the controller: inference p50/p95 **8.47/12.41 ms**, sensor to
+result **26.18/31.02 ms**. These timings include CPU contention and startup;
+its aggregate run rate of 10.42 FPS is not steady-state camera throughput.
+The probe verified the live HAILO8 identity and pinned model hash, then released
+the camera. Numeric output is in `hailo-camera-repeat.json`.
+
+## Regression verification
+
+All **77 CTest targets passed on Linux/WSL and on the actual Pi** after the
+current-guard changes (Pi: 49.93 s). Both Linux launcher pytest tests also
+passed on the Pi (4.19 s).
+The mode-transition probe additionally simulates a drive ignoring the limit
+write and retaining 27 A: both pitch modes must refuse enable. The regression
+run also exposed and corrected an initial-stop displacement check and a
+redundant post-park STOP. Neither was tested by energizing the real pitch motor.
+Software verification does not certify the upgraded motor's loaded response.
+
+Tested runtime revision: `1003bdc894f1b0176e32c8156c0898b085927767`, deployed
+from committed source, without activation, into:
+
+```text
+/home/eamars/workspace/OpenAutoTurret/run/releases/1003bdc894f1.UREuRU
+```
+
+After testing, that release repeated the non-motion pitch setup successfully:
+same UID, valid MechPos, three 5 A readbacks, mode 0/faults 0. The launcher was
+stopped, both CAN links restored DOWN/STOPPED at 1 Mbps, cameras closed, and
+no controller/perception/probe process remained. Both buses had zero kernel
+error counters. Yaw's zero request and observed stationarity do not certify
+electrical disable or process-loss stopping. The original Pi checkout remained
+clean. See `pitch-limit-final.log`, `final-host-state.log`,
+`deploy-five-amp.log` and `launcher-five-amp.log` in the ignored evidence folder.
 
 ## Host and evidence
 
