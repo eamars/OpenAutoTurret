@@ -66,7 +66,9 @@ static int hal_read(sh2_Hal_t *self, uint8_t *out, unsigned len, uint32_t *time_
         unsigned wanted = size - got + (got ? 4 : 0);
         if (wanted > sizeof chunk) wanted = sizeof chunk;
         ssize_t n = read(fd, chunk, wanted);
-        if (n != (ssize_t)wanted || n < 4 || chunk[2] != header[2] || chunk[3] != header[3]) {
+        // BNO085 advances the transfer sequence on each I2C transaction,
+        // including the header peek. It is not constant across chunk reads.
+        if (n != (ssize_t)wanted || n < 4 || chunk[2] != header[2]) {
             if (read_errors < 5) fprintf(stderr, "I2C packet read n=%zd wanted=%u got=%u header=%02x%02x/%u/%u chunk=%02x%02x/%u/%u\n",
                 n,wanted,got,header[0],header[1],header[2],header[3],chunk[0],chunk[1],chunk[2],chunk[3]);
             ++read_errors; return 0;
