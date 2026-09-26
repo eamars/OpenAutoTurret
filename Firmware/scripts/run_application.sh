@@ -162,11 +162,19 @@ if [ "$ACTION" = check ]; then
 fi
 exec 9>"$RUN/launcher.lock"
 flock -n 9 || { echo "A stack already owns $RUN" >&2; exit 1; }
+if [ "$MODE" = hardware ] || [ "$MODE" = commission ]; then
+  exec 8>"/tmp/ota-motion-$(id -u).lock"
+  flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
+fi
 children=()
 controller_pid=''
 cleanup() {
   trap - EXIT INT TERM
-  echo 'Stopping this stack; controller performs its own park/disable sequence.'
+  if [ "$MODE" = commission ]; then
+    echo 'Ending commissioning; an active yaw probe requests zero voltage.'
+  else
+    echo 'Stopping this stack; controller performs its own park/disable sequence.'
+  fi
   for pid in "${children[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
   # Never force-kill the motor controller. Its own deadlines supervise park.
   if [ -n "$controller_pid" ]; then wait "$controller_pid" || true; fi

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <charconv>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,9 @@
 #include <numbers>
 #include <thread>
 #include <string_view>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 
 #include "can/cybergear_protocol.hpp"
@@ -23,6 +27,28 @@ using namespace std::chrono_literals;
 static volatile std::sig_atomic_t interrupted = 0;
 static void stop_signal(int) { interrupted = 1; }
 static constexpr double degrees = 180.0 / std::numbers::pi;
+
+static int integer(const std::string& value) {
+  int result{};
+  const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
+  if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+    throw std::runtime_error("invalid integer: " + value);
+  return result;
+}
+
+struct ProbeOwnership {
+  int fd{-1};
+  ProbeOwnership() {
+    const auto path = "/tmp/ota-mixed-can-" + std::to_string(getuid()) + ".lock";
+    fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) throw std::runtime_error("cannot open commissioning ownership lock");
+    if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+      ::close(fd); fd = -1;
+      throw std::runtime_error("another mixed-CAN probe owns the station");
+    }
+  }
+  ~ProbeOwnership() { if (fd >= 0) ::close(fd); }
+};
 
 struct Sample {
   ota::gm6020::Feedback feedback;
@@ -40,9 +66,9 @@ int main(int argc, char** argv) {
     if (i + 1 >= argc) throw std::runtime_error("option requires a value: " + arg);
     const std::string value = argv[++i];
     if (arg == "--config") config = value;
-    else if (arg == "--yaw-voltage") voltage = std::stoi(value);
-    else if (arg == "--pulse-ms") pulse_ms = std::stoi(value);
-    else if (arg == "--observe-ms") observe_ms = std::stoi(value);
+    else if (arg == "--yaw-voltage") voltage = integer(value);
+    else if (arg == "--pulse-ms") pulse_ms = integer(value);
+    else if (arg == "--observe-ms") observe_ms = integer(value);
     else if (arg == "--trace") trace_path = value;
     else throw std::runtime_error("unknown option: " + arg);
   }
@@ -55,7 +81,7 @@ int main(int argc, char** argv) {
   const double speed_limit = limit["yaw_speed_deg_s"].as<double>();
   const double age_limit = limit["feedback_age_ms"].as<double>();
   const double heartbeat_limit = limit["heartbeat_age_ms"].as<double>();
-  if (voltage_limit < 1 || voltage_limit > 3000 || std::abs(voltage) > voltage_limit ||
+  if (voltage_limit < 1 || voltage_limit > 3000 || voltage < -voltage_limit || voltage > voltage_limit ||
       duration_limit < 1 || duration_limit > 500 || pulse_ms < 1 || pulse_ms > duration_limit ||
       !std::isfinite(travel_limit) || travel_limit <= 0 || travel_limit > 5 ||
       !std::isfinite(speed_limit) || speed_limit <= 0 || speed_limit > 20 ||
@@ -70,6 +96,9 @@ int main(int argc, char** argv) {
   const auto expected_uid = std::stoull(cfg["pitch"]["unique_id_hex"].as<std::string>(), nullptr, 16);
   const auto bitrate = cfg["bitrate"].as<uint32_t>();
   if (bitrate != 1000000) throw std::runtime_error("expected classical CAN 1 Mbps");
+  if (cfg["yaw"]["interface"].as<std::string>() == cfg["pitch"]["interface"].as<std::string>())
+    throw std::runtime_error("yaw and pitch require separate interfaces");
+  ProbeOwnership ownership;
   std::ofstream trace;
   if (!trace_path.empty()) {
     trace.open(trace_path);
@@ -82,6 +111,7 @@ int main(int argc, char** argv) {
   ota::gm6020::UnwrappedEncoder encoder;
   std::atomic<uint64_t> uid{0}, pitch_frames{0};
   std::atomic<bool> pitch_position_valid{false};
+  std::atomic<unsigned> pitch_register_status{255};
   std::atomic<double> pitch_position{0};
   ota::can::SocketCanBus yaw, pitch;
   yaw.set_frame_callback([&](const ota::can::RawFrame& f) {
@@ -101,6 +131,10 @@ int main(int argc, char** argv) {
       uid.store(response.unique_id); ++pitch_frames;
     }
     const auto ident = ota::cybergear::unpack_ext_id(f.id);
+    if (ident.comm_type == static_cast<uint8_t>(ota::cybergear::CommType::ReadReg) &&
+        (ident.data2 & 0xff) == pitch_id && ident.target == 0 &&
+        f.data[0] == 0x19 && f.data[1] == 0x70)
+      pitch_register_status.store(ident.data2 >> 8);
     ota::cybergear::Reg reg; double value;
     if ((ident.data2 & 0xff) == pitch_id && ident.target == 0 &&
         ota::cybergear::parse_reg_response(frame, reg, value) &&
@@ -115,7 +149,8 @@ int main(int argc, char** argv) {
     const auto parent = std::filesystem::canonical("/sys/class/net/" + options.iface + "/device").filename().string();
     if (parent != cfg[axis]["spi_parent"].as<std::string>()) throw std::runtime_error("wrong SPI parent for " + options.iface);
     std::string error;
-    if (!bus.open(options, error) || !bus.is_up() || bus.bitrate() != bitrate || !bus.start_rx(error))
+    if (!bus.open(options, error) || !bus.is_up() || bus.bitrate() != bitrate ||
+        bus.can_state() != ota::can::CanIfState::ErrorActive || !bus.start_rx(error))
       throw std::runtime_error("open " + options.iface + ": " + error);
   };
   open(yaw, "yaw"); open(pitch, "pitch");
@@ -127,20 +162,32 @@ int main(int argc, char** argv) {
   std::this_thread::sleep_for(50ms);
   if (!pitch.send(request.id, request.data, &error)) throw std::runtime_error(error);
   std::this_thread::sleep_for(450ms);
+  // Potentially blocking diagnostics happen before arming, never in the pulse loop.
+  for (auto* bus : {&yaw, &pitch}) {
+    if (!bus->refresh_health(&error) || !bus->is_up() || bus->bitrate() != bitrate ||
+        bus->can_state() != ota::can::CanIfState::ErrorActive)
+      throw std::runtime_error("CAN health invalid before arming: " + bus->iface() + " " + error);
+  }
   auto read = [&] { std::lock_guard lock(sample_mutex); return sample; };
   const auto baseline = read();
-  if (uid.load() != expected_uid || !pitch_position_valid.load() || !baseline.valid || baseline.count < 100 ||
+  if (uid.load() != expected_uid || !baseline.valid || baseline.count < 100 ||
       (ota::now_monotonic_ns() - baseline.feedback.rx_ns) * 1e-6 > age_limit ||
       std::abs(baseline.feedback.speed_rad_s() * degrees) > 1.0)
     throw std::runtime_error("identity/freshness/stationary baseline failed before any yaw output");
   std::cout << "IDENTIFIED yaw_standard_id=0x" << std::hex << 0x204 + yaw_id
             << " pitch_uid=0x" << uid.load() << std::dec
-            << " pitch_mech_pos_rad=" << pitch_position.load() << " yaw_samples=" << baseline.count << std::endl;
+            << " pitch_position_valid=" << pitch_position_valid.load()
+            << " pitch_register_status=" << pitch_register_status.load()
+            << " yaw_samples=" << baseline.count << std::endl;
+  if (pitch_position_valid.load()) std::cout << "PITCH mech_pos_rad=" << pitch_position.load() << std::endl;
+  else std::cout << "PITCH position unavailable; pitch actuation is not supported by this probe" << std::endl;
   const auto zero = ota::gm6020::voltage_frame(static_cast<uint8_t>(yaw_id), 0);
   const auto command = ota::gm6020::voltage_frame(static_cast<uint8_t>(yaw_id), voltage);
   std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
   std::atomic<bool> trip{false}, zero_failed{false};
   std::mutex command_mutex;
+  const auto start = ota::now_monotonic_ns();
+  const auto pulse_deadline = start + uint64_t(pulse_ms) * 1000000;
   // Independent of the probe loop, but not independent of this process/OS.
   std::jthread guard;
   if (voltage != 0) guard = std::jthread([&](std::stop_token stop) {
@@ -148,7 +195,7 @@ int main(int argc, char** argv) {
       {
         std::lock_guard lock(command_mutex);
         if (interrupted || (ota::now_monotonic_ns() - heartbeat.load()) * 1e-6 > heartbeat_limit) trip.store(true);
-        if (trip.load() && !yaw.send_frame(zero)) zero_failed.store(true);
+        if ((trip.load() || ota::now_monotonic_ns() >= pulse_deadline) && !yaw.send_frame(zero)) zero_failed.store(true);
       }
       std::this_thread::sleep_for(5ms);
     }
@@ -159,29 +206,31 @@ int main(int argc, char** argv) {
     }
   });
   // After this point, no throwing work until the zero-output cleanup completes.
-  const auto start = ota::now_monotonic_ns();
   auto next = std::chrono::steady_clock::now();
   double peak_speed = 0, peak_travel = 0;
   bool stopped = false;
   ota::TimeNs still_since = 0;
   const char* reason = "completed";
   for (;;) {
+    const auto current = read();
     const auto now = ota::now_monotonic_ns();
     const auto elapsed_ms = (now - start) * 1e-6;
-    const auto current = read();
     const double age_ms = (now - current.feedback.rx_ns) * 1e-6;
     const double speed = std::abs(current.feedback.speed_rad_s() * degrees);
     const double travel = std::abs(current.position - baseline.position) * degrees;
     peak_speed = std::max(peak_speed, speed); peak_travel = std::max(peak_travel, travel);
     if (interrupted) { trip.store(true); reason = "interrupted"; }
     if (!current.valid || age_ms > age_limit) { trip.store(true); reason = "feedback_invalid_or_stale"; }
+    if (yaw.stats().rx_error_frames || pitch.stats().rx_error_frames) { trip.store(true); reason = "CAN_error_frame"; }
     if (speed > speed_limit || travel > travel_limit) { trip.store(true); reason = "speed_or_travel_guard"; }
     if (trip.load() && std::string_view(reason) == "completed") reason = "heartbeat_guard";
     bool active = false;
     heartbeat.store(now);
     {
       std::lock_guard lock(command_mutex);
-      active = voltage != 0 && elapsed_ms < pulse_ms && !trip.load();
+      const auto send_time = ota::now_monotonic_ns();
+      if ((send_time - current.feedback.rx_ns) * 1e-6 > age_limit) { trip.store(true); reason = "feedback_invalid_or_stale"; }
+      active = voltage != 0 && send_time < pulse_deadline && !trip.load();
       if (voltage != 0 && !yaw.send_frame(active ? command : zero)) { trip.store(true); reason = "tx_failed"; }
     }
     if (trace) trace << now << ',' << (active ? "pulse" : "observe") << ',' << (active ? voltage : 0)
