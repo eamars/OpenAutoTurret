@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "model_id": "hailo-yolov8n-coco-hailo8-v2.17.0",
+  "task": "object_detection",
+  "input_width": 640,
+  "input_height": 640,
+  "bbox_order": "yxyx",
+  "bbox_normalized": true,
+  "preserve_aspect_ratio": true,
+  "postprocess": "on_device",
+  "inference_rate_hz": 15,
+  "labels": "coco",
+  "permitted_classes": ["person"],
+  "sha256": "e893b0f9dcae366fe1bc9ebce25e32ad889acf2bc58cfe1f73a572f78f7ec055",
+  "license": "AGPL-3.0",
+  "nms_output": {
+    "format": "Hailo class-grouped NMS",
+    "class_count": 80,
+    "row": ["ymin", "xmin", "ymax", "xmax", "score"],
+    "label_order": "COCO-80 contiguous; class index 0 is person"
+  },
+  "preprocessing": {
+    "capture_format": "Picamera2 RGB888 byte order converted from BGR to RGB",
+    "capture_size": [640, 480],
+    "canvas_size": [640, 640],
+    "padding_rgb": [114, 114, 114],
+    "paste_xy": [0, 80],
+    "resize": "none",
+    "input_dtype": "uint8"
+  },
+  "hailo": {
+    "architecture": "HAILO8",
+    "runtime_version": "4.23.0",
+    "model_zoo_version": "2.17.0",
+    "dataflow_compiler_version": "3.33.0",
+    "hef_url": "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.17.0/hailo8/yolov8n.hef",
+    "source_config": "https://raw.githubusercontent.com/hailo-ai/hailo_model_zoo/v2.17/hailo_model_zoo/cfg/networks/yolov8n.yaml"
+  },
+  "notes": [
+    "This manifest describes the exact SHA-256 pinned Hailo-8 YOLOv8n COCO HEF.",
+    "The RGB 640x480 source is pasted without resize at y=80 into a 640x640 canvas; the standard geometry unmaps normalized NMS boxes back to the full 640x480 stream.",
+    "The IMX477 camera transform is explicitly none until its installed orientation is verified; the IMX500 install transform is not inherited.",
+    "Class 0 person follows the COCO-80 order and the model's 80-class Hailo NMS output."
+  ]
+}

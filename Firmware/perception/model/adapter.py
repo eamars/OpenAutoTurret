@@ -313,9 +313,12 @@ def build_adapter(config: VisionConfig, *, profile: Optional[str] = None,
     if kind in ("imx500", "imx500_yolo", "imx500_yolo_pp"):
         return Imx500YoloAdapter(manifest, roi=None, imx500_factory=imx500_factory,
                                  anchor_cfg=config.anchor)
+    if kind in ("hailo", "hailo8"):
+        from .hailo_yolo import HailoYoloAdapter
+        return HailoYoloAdapter(manifest)
     raise ConfigError(
         f"unknown adapter {model.adapter!r} for profile {model.profile_name!r}. "
-        f"known: mock, imx500. A typo here must stop startup: an adapter chosen by "
+        f"known: mock, imx500, hailo. A typo here must stop startup: an adapter chosen by "
         f"fallback would silently change what 'detection' means.")
 
 

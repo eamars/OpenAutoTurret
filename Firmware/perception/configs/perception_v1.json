@@ -81,6 +81,36 @@
           "selectable": 0.3
         }
       },
+      "hailo_yolov8n": {
+        "adapter": "hailo",
+        "bbox_normalized": true,
+        "bbox_order": "yxyx",
+        "camera_frame_rate_hz": 15,
+        "camera_height": 480,
+        "camera_model": "imx477",
+        "camera_orientation": "none",
+        "camera_width": 640,
+        "inference_rate_hz": 15,
+        "input_height": 640,
+        "input_width": 640,
+        "labels": "coco",
+        "license": "AGPL-3.0",
+        "manifest": "model/manifests/hailo_yolov8n_hailo8_coco.json",
+        "model_id": "hailo-yolov8n-coco-hailo8-v2.17.0",
+        "path": "../run/hailo-probe/yolov8n.hef",
+        "permitted_classes": [
+          "person"
+        ],
+        "postprocess": "on_device",
+        "sha256": "e893b0f9dcae366fe1bc9ebce25e32ad889acf2bc58cfe1f73a572f78f7ec055",
+        "task": "object_detection",
+        "thresholds": {
+          "confirmed_update": 0.25,
+          "low_association": 0.15,
+          "new_track": 0.25,
+          "selectable": 0.3
+        }
+      },
       "offline_replay": {
         "adapter": "mock",
         "bbox_normalized": true,

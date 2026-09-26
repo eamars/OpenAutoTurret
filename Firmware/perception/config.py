@@ -589,6 +589,13 @@ class ModelConfig:
     permitted_classes: Tuple[str, ...] = ("person",)
     sha256: str = ""
     license: str = ""
+    #: Optional camera selection/settings for profiles whose model is not camera-mounted.
+    #: IMX500 profiles continue to take their camera from the model's own camera_num.
+    camera_model: str = ""
+    camera_width: Optional[int] = None
+    camera_height: Optional[int] = None
+    camera_frame_rate_hz: Optional[float] = None
+    camera_orientation: str = "none"
     thresholds: ScoreThresholds = field(default_factory=ScoreThresholds)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -600,6 +607,10 @@ class ModelConfig:
                 "inference_rate_hz": self.inference_rate_hz, "labels": self.labels,
                 "permitted_classes": list(self.permitted_classes),
                 "sha256": self.sha256, "license": self.license,
+                "camera_model": self.camera_model,
+                "camera_width": self.camera_width, "camera_height": self.camera_height,
+                "camera_frame_rate_hz": self.camera_frame_rate_hz,
+                "camera_orientation": self.camera_orientation,
                 "thresholds": self.thresholds.to_dict()}
 
     @classmethod
@@ -628,6 +639,15 @@ class ModelConfig:
             permitted_classes=tuple(str(c) for c in permitted),
             sha256=str(data.get("sha256", "")),
             license=str(data.get("license", "")),
+            camera_model=str(data.get("camera_model", "")).strip().lower(),
+            camera_width=(None if data.get("camera_width") is None else
+                          _as_int(data.get("camera_width"), "camera_width", 0)),
+            camera_height=(None if data.get("camera_height") is None else
+                           _as_int(data.get("camera_height"), "camera_height", 0)),
+            camera_frame_rate_hz=(None if data.get("camera_frame_rate_hz") is None else
+                                  _as_float(data.get("camera_frame_rate_hz"),
+                                            "camera_frame_rate_hz", 0.0)),
+            camera_orientation=str(data.get("camera_orientation", "none")).strip().lower(),
             thresholds=ScoreThresholds.from_dict(data.get("thresholds")))
 
     def validate(self) -> List[str]:
@@ -644,6 +664,17 @@ class ModelConfig:
         if not self.permitted_classes:
             problems.append(f"models.{self.profile_name}.permitted_classes is empty; "
                             f"§15 requires an explicit class list")
+        if self.camera_model and self.camera_model not in ("imx477", "imx500"):
+            problems.append(f"models.{self.profile_name}.camera_model must be imx477 or imx500")
+        if (self.camera_width is None) != (self.camera_height is None):
+            problems.append(f"models.{self.profile_name}: camera_width and camera_height "
+                            "must be configured together")
+        if self.camera_width is not None and min(self.camera_width, self.camera_height or 0) <= 0:
+            problems.append(f"models.{self.profile_name}: camera dimensions must be positive")
+        if self.camera_frame_rate_hz is not None and self.camera_frame_rate_hz <= 0:
+            problems.append(f"models.{self.profile_name}.camera_frame_rate_hz must be positive")
+        if self.camera_orientation not in ("none", "rotate_180", "flip_horizontal", "flip_vertical"):
+            problems.append(f"models.{self.profile_name}.camera_orientation is not supported")
         problems.extend(self.thresholds.validate(f"models.{self.profile_name}.thresholds"))
         return problems
 
