@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(20ms);
     std::cout<<"PITCH identified_uid=0x"<<std::hex<<uid<<std::dec<<" q0_rad="<<initial.q_rad
              <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=0.5 current_ceiling_a=5\n"<<std::flush;
+    if (tune) std::cout<<"PITCH_TRIAL_GAINS kp=4 ki=0.05; restore original gains before stop\n";
     std::mutex commands;
     std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
     std::atomic<bool> trip{false}, stop_failed{false};
@@ -117,7 +118,7 @@ int main(int argc, char** argv) {
       {
         std::lock_guard lock(commands);
         heartbeat=ota::now_monotonic_ns();
-        if (!trip) mode=backend.transition_mode(axis,true,0.5*rad,heartbeat.load(),error,tune ? .02:-1,tune ? 2:1,true);
+        if (!trip) mode=backend.transition_mode(axis,true,0.5*rad,heartbeat.load(),error,tune ? .05:-1,tune ? 4:1,true);
       }
       record("setup"); std::this_thread::sleep_for(5ms);
     }
