@@ -15,6 +15,9 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 
+MAX_AXIS_SAMPLE_AGE_NS = 100_000_000
+MAX_AXIS_SAMPLE_GAP_NS = 250_000_000
+
 
 def percentile(xs, p):
     if not xs:
@@ -72,9 +75,11 @@ def relative_rotation(first, last):
 
 def read_imu(path):
     by_sensor = defaultdict(list)
+    rejected_by_sensor = Counter()
     ignored = malformed = 0
     with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, 1):
+            row = None
             try:
                 row = json.loads(line)
                 if row.get("kind") != "sample" or row.get("sensor") not in ("accel", "gyro", "rv", "game_rv"):
@@ -84,18 +89,25 @@ def read_imu(path):
                 expected = 4 if row["sensor"] in ("rv", "game_rv") else 3
                 if len(vals) != expected:
                     raise ValueError("wrong values length")
+                if not all(math.isfinite(x) for x in vals):
+                    raise ValueError("nonfinite sample value")
                 row["values"] = vals
                 row["rx_ns"] = int(row["rx_ns"])
                 row["sample_ns"] = int(row["sample_ns"])
                 row["sequence"] = int(row["sequence"]) & 0xff
                 row["status"] = int(row["status"])
+                if not 0 <= row["status"] <= 3:
+                    raise ValueError("status outside 0..3")
                 by_sensor[row["sensor"]].append(row)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 malformed += 1
+                if isinstance(row, dict) and row.get("kind") == "sample" and row.get("sensor") in ("accel", "gyro", "rv", "game_rv"):
+                    rejected_by_sensor[row["sensor"]] += 1
                 print(f"warning: skipped malformed IMU line {line_no}", file=sys.stderr)
     for rows in by_sensor.values():
         rows.sort(key=lambda r: r["sample_ns"])
-    return by_sensor, {"ignored_lines": ignored, "malformed_lines": malformed}
+    return by_sensor, {"ignored_lines": ignored, "malformed_lines": malformed,
+                       "rejected_samples_by_sensor": dict(sorted(rejected_by_sensor.items()))}
 
 
 def summarize_imu(by_sensor):
@@ -148,7 +160,31 @@ def trapezoid_gyro(rows):
     return total
 
 
-def compare_motor(by_sensor, path):
+def axis_sample_quality(rows, rejected_samples=0):
+    """Require valid accuracy, quaternion norms, freshness and sample ordering."""
+    reasons = []
+    if len(rows) < 2:
+        return False, ["fewer_than_two_samples"]
+    if rejected_samples:
+        reasons.append("invalid_samples_rejected_from_stream")
+    ages = [r["rx_ns"] - r["sample_ns"] for r in rows]
+    sample_gaps = [b["sample_ns"] - a["sample_ns"] for a, b in zip(rows, rows[1:])]
+    rx_gaps = [b["rx_ns"] - a["rx_ns"] for a, b in zip(rows, rows[1:])]
+    if any(r["status"] == 0 for r in rows):
+        reasons.append("unreliable_accuracy_status")
+    if any(not .9 <= qnorm(r["values"]) <= 1.1 for r in rows):
+        reasons.append("quaternion_norm_out_of_range")
+    if any(age < 0 or age > MAX_AXIS_SAMPLE_AGE_NS for age in ages):
+        reasons.append("sample_age_out_of_range")
+    if any(gap <= 0 or gap > MAX_AXIS_SAMPLE_GAP_NS for gap in sample_gaps):
+        reasons.append("sample_time_not_monotonic_or_gap_too_large")
+    if any(gap <= 0 for gap in rx_gaps):
+        reasons.append("receive_time_not_monotonic")
+    return not reasons, reasons
+
+
+def compare_motor(by_sensor, path, rejected_by_sensor=None):
+    rejected_by_sensor = rejected_by_sensor or {}
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     parsed = []
@@ -156,6 +192,8 @@ def compare_motor(by_sensor, path):
         try:
             r["time_ns"] = int(r["time_ns"])
             r["yaw_relative_deg"] = float(r["yaw_relative_deg"])
+            if not math.isfinite(r["yaw_relative_deg"]):
+                continue
             if r.get("angle_count") not in (None, ""):
                 r["angle_count"] = int(r["angle_count"])
             parsed.append(r)
@@ -192,25 +230,43 @@ def compare_motor(by_sensor, path):
     counts = [r["angle_count"] for r in same_window_motor if isinstance(r.get("angle_count"), int)]
     out["angle_count_delta"] = counts[-1] - counts[0] if len(counts) >= 2 else None
     imu = {}
+    axis_candidates = {}
     for sensor in ("rv", "game_rv"):
         subset = [r for r in by_sensor.get(sensor, []) if lo <= r["sample_ns"] <= hi]
         if len(subset) >= 2:
-            imu[sensor] = {"samples": len(subset), "relative_rotation": relative_rotation(subset[0]["values"], subset[-1]["values"])}
+            quality_ok, quality_reasons = axis_sample_quality(
+                subset, rejected_by_sensor.get(sensor, 0))
+            rot = relative_rotation(subset[0]["values"], subset[-1]["values"])
+            imu[sensor] = {"samples": len(subset), "relative_rotation": rot,
+                           "axis_sample_quality": "usable" if quality_ok else "rejected",
+                           "axis_sample_quality_reasons": quality_reasons}
+            axis_candidates[sensor] = (quality_ok and rot is not None and
+                                       rot["angle_deg"] >= .2)
     gyros = [r for r in by_sensor.get("gyro", []) if lo <= r["sample_ns"] <= hi]
     if len(gyros) >= 2:
         imu["gyro_integral_rad_input"] = trapezoid_gyro(gyros)
         imu["gyro_samples"] = len(gyros)
     out["imu_same_window"] = imu
-    motion = abs(out["yaw_relative_delta_deg"]) >= .5
-    out["yaw_motion_sufficient_for_axis_estimate"] = motion
-    if motion:
+    encoder_motion = abs(out["yaw_relative_delta_deg"]) >= .5
+    out["encoder_yaw_motion_sufficient"] = encoder_motion
+    out["yaw_motion_sufficient_for_axis_estimate"] = False
+    if encoder_motion:
+        # Normalize the observed attitude axis to the positive motor-yaw basis.
+        sign = 1.0 if out["yaw_relative_delta_deg"] > 0 else -1.0
         for name in ("rv", "game_rv"):
             rot = imu.get(name, {}).get("relative_rotation")
-            if rot:
-                rot["yaw_axis_estimate_initial_sensor"] = rot["axis_initial_sensor"]
-                rot["axis_estimate_note"] = "observed during >=0.5 deg encoder yaw excursion; relative axis is in initial sensor coordinates"
-    else:
+            if not rot:
+                continue
+            if axis_candidates.get(name, False):
+                out["yaw_motion_sufficient_for_axis_estimate"] = True
+                rot["yaw_axis_estimate_initial_sensor"] = [sign*x for x in rot["axis_initial_sensor"]]
+                rot["axis_estimate_note"] = "positive-yaw basis from >=0.5 deg encoder motion and >=0.2 deg usable IMU rotation; expressed in initial sensor coordinates"
+            else:
+                rot["axis_estimate_note"] = "withheld: requires >=0.2 deg IMU relative rotation and valid accuracy, quaternion and timing"
+    if not encoder_motion:
         out["axis_estimate_note"] = "insufficient encoder yaw excursion (<0.5 deg); no yaw-axis/alignment inference"
+    elif not out["yaw_motion_sufficient_for_axis_estimate"]:
+        out["axis_estimate_note"] = "withheld: IMU rotation below 0.2 deg or IMU samples have unreliable quaternion, accuracy or timing"
     return out
 
 
@@ -222,7 +278,8 @@ def main():
     by_sensor, parse = read_imu(args.imu)
     report = {"imu_file": args.imu, "parse": parse, "sensors": summarize_imu(by_sensor)}
     if args.motor_csv:
-        report["motor_comparison"] = compare_motor(by_sensor, args.motor_csv)
+        report["motor_comparison"] = compare_motor(
+            by_sensor, args.motor_csv, parse.get("rejected_samples_by_sensor"))
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
 
 
