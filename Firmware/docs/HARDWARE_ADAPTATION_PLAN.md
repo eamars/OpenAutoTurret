@@ -1,7 +1,7 @@
 # Plan: split CAN buses, mixed motors and continuous yaw
 
 Status: **execution started; transport and bounded yaw commissioning implemented;
-automatic mixed-drive operation still pending**. 26 September 2026.
+automatic mixed-drive operation still pending**. Updated 27 September 2026.
 Ground truth is [the hardware inventory](HARDWARE_CURRENT.md); the operator
 confirmed GM6020 on yaw and CyberGear on pitch. Follow with the
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
@@ -15,6 +15,13 @@ stage exit gates or qualify automatic tracking. The probe sends no pitch motion
 commands. The initial pitch `mechPos` failure was resolved after the owner's
 September 27 upgrade: the same UID now returns valid position with status 0.
 Pitch homing and load support remain uncommissioned.
+
+The owner has now confirmed the camera sits roughly at the pitch assembly's
+center of mass and disabling pitch presents no current support risk. The
+[versioned IMU acquisition and stationary tare](IMU_COMMISSIONING_2026_09_27.md)
+have passed live runs and independently observed bounded yaw movement. The next
+motion slice is a small current-limited pitch movement with paired IMU capture,
+then measured two-axis mounting alignment; the raw IMU is not a base pose.
 
 The next commissioning slice adds a hard **5 A pitch command ceiling** and
 requires current-limit and supported-mode readback before enable. A non-motion

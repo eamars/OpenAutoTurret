@@ -57,9 +57,10 @@ and saves no images. Do not use another `OTA_RUN_DIR` to bypass ownership.
 - The web address is `http://rpi-turret:8080/` when the stack is running. During
   this audit no web service was listening there.
 - Each physical camera has one owner; preview reads that owner's frames.
-  Production currently owns only IMX500. The experimental Hailo camera probe
-  releases camera ownership when it exits; dual-camera/Hailo/IMU application
-  integration remains unimplemented production behavior.
+  Normal production still selects IMX500. The explicit `hailo_yolov8n` profile
+  has passed a 60-frame IMX477 run through visiond in `--hold-motion` mode.
+  IMU acquisition/tare runs through the launcher; simultaneous dual-camera
+  operation and IMU/controller fusion remain unimplemented.
 
 ## Inspect the stopped installation
 
@@ -98,6 +99,26 @@ and README beside it. It soft-resets the IMU and enables three sensor reports;
 it is not a passive bus read. Run it only when it owns the sensor and its reset
 cannot disrupt a running consumer. Its gyro output label is wrong: values are
 rad/s, not deg/s. See the inventory for measured results and remaining gaps.
+
+Use the versioned replacement for further IMU work:
+
+```bash
+bash Firmware/scripts/run_application.sh run --probe-imu --imu-seconds 30
+```
+
+Deploy it with `deploy_station.py --probe-build --probe-imu`. It needs only
+unprivileged I2C access, records `/tmp/ota-stack-1000/imu.ndjson`, and opens no
+camera or motor transport. It establishes a stationary **host reference**, not
+a mounting calibration. `--commission-hardware --with-imu` adds the same capture
+to bounded motor probes. See [IMU evidence and coordinate meaning](IMU_COMMISSIONING_2026_09_27.md).
+Do not assign the pitch-mounted IMU pose directly to the base orientation.
+
+For the tested camera-only Hailo application slice, use
+`run --hold-motion --profile hailo_yolov8n --frames 60 --no-web`.
+The shared model remains under the original checkout's `run/hailo-probe` and is
+linked into releases, with SHA verification before use. IMX477 camera-to-axis
+calibration is still required before its detections may guide physical motion;
+the existing 1920x1080 camera calibration does not certify this 640x480 profile.
 
 ## Stop and preserve evidence
 

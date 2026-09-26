@@ -78,6 +78,11 @@ def main():
            f"mkdir -p {quote(release + '/run')} && "
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
            f"printf '%s\\n' {quote(revision)} > {quote(release + '/REVISION')}")
+    # Model binaries stay outside Git/release source. The adapter checks the
+    # pinned SHA before opening the shared artifact.
+    models = args.root.rstrip("/") + "/run/hailo-probe"
+    remote(f"if [ -d {quote(models)} ]; then "
+           f"ln -s {quote(models)} {quote(release + '/run/hailo-probe')}; fi")
     remote(f"{quote(venv + '/bin/python')} -m pip install --disable-pip-version-check --no-input "
            f"-r {quote(release + '/Firmware/requirements-station.txt')}")
     script = release + "/Firmware/scripts/run_application.sh"

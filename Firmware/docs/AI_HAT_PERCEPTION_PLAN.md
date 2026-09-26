@@ -1,10 +1,22 @@
 # Plan: Hailo-assisted people and head tracking
 
-Status: **Hailo provisioning and a first camera-to-inference probe are verified;
-production perception integration and accuracy evaluation remain proposed**.
-Updated 26 September 2026. Uses the [verified hardware inventory](HARDWARE_CURRENT.md).
+Status: **Hailo provisioning and the camera-only visiond path are verified;
+motion integration and accuracy evaluation remain incomplete**.
+Updated 27 September 2026. Uses the [verified hardware inventory](HARDWARE_CURRENT.md).
 Motor integration and continuous-yaw readiness are separate gates in the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md).
+
+The explicit `hailo_yolov8n` profile now runs IMX477 640x480 through the existing
+DetectionSet, tracker, selection and preview path. A real 60-frame launcher run
+delivered all frames with no inference, publishing or clock-domain errors, at
+the configured 15 Hz. Model inference p50/p95 was 7.09/8.60 ms; sensor-to-publish
+p50/p95 was 22.19/25.79 ms. One frame contained a permitted detection and no
+track was confirmed, so the scene does not qualify person/head accuracy.
+
+Use `--hold-motion --profile hailo_yolov8n` for this profile until IMX477
+intrinsics and camera-to-axis geometry are commissioned. The controller's old
+1920x1080 calibration does not cover this sensor/stream. Simultaneous dual-camera
+ownership and head localization remain follow-up work.
 
 ## Requested behavior and scope
 

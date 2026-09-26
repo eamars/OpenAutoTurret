@@ -1,6 +1,6 @@
 # Current station hardware
 
-Updated **27 September 2026** with post-upgrade pitch-limit and Hailo checks. This is
+Updated **27 September 2026** with pitch-limit, Hailo application and IMU motion checks. This is
 the current hardware inventory; dated September 3-9 reports describe the previous
 mechanism. Operation is governed by [STATION_OPERATIONS.md](STATION_OPERATIONS.md).
 Bounded mixed-bus probes, non-motion pitch current-limit application, and a first
@@ -217,12 +217,23 @@ sign-off do not transfer to the new mechanism.
 
 ## Installed BNO085 and existing host probe
 
+**Current integration:** versioned `tools/imu_bno085.c` and the SH-2 library now
+run through the station launcher. A 30-second whole-packet I2C capture delivered
+1,481 samples per gyro/orientation stream with no sequence gaps or I2C errors.
+Game RV reported status 3; magnetic RV and gyro accuracy remained 0. A stationary
+host tare and paired yaw/encoder measurements passed, including 1.01074° encoder
+peak versus 1.01360° game-RV peak. This is relative-motion evidence, not a completed
+mount calibration or controller fusion. Product part 10004148 reported version
+3.2.13/build 6. See [the IMU commissioning record](IMU_COMMISSIONING_2026_09_27.md).
+
+The following describes the earlier host-lab audit, retained as provenance.
+
 The owner confirmed that the previously proposed BNO085 is now installed.
 The working probe is **`/home/eamars/workspace/imu-lab/imu_main`**, with
 `main.c`, `README.md` and an SH-2/SHTP library copy in `rd/`. Earlier experiments
 `probe2.py`, `imu_read.py`, `imu_sh2.py` and `raw_dump.py` are also present.
 The lab's project-local `.venv` is separate from OpenAutoTurret's runtime.
-No probe files were copied into production.
+No probe files had been copied into production at that initial audit.
 
 Source inspection shows the C probe opens `/dev/i2c-1`, selects `0x4A`, issues
 an IMU soft reset, and configures acceleration, calibrated gyro and rotation
@@ -270,11 +281,13 @@ remains design input, with hardware absence superseded by this evidence.
 
 - GM6020 firmware and Assistant settings, especially voltage/current mode;
   command-loss behavior and an independently effective stop path.
-- Pitch endstop geometry and load support, new direction signs and transmission
+- Pitch endstop geometry, new direction signs and transmission
   ratios, yaw mechanical reference, supply/termination and slip-ring ratings.
+  The owner confirms the camera is near the pitch center of mass and disabling
+  pitch presents no current support risk.
 - Camera lenses, focus/FOV, mounts/orientation, intrinsics/extrinsics and overlap.
 - HAT label/SKU and sustained Hailo/camera performance under production load.
-- IMU product/firmware identity, mount/lever arm, accuracy and timestamp quality,
+- IMU mount/lever arm, accuracy and timestamp quality,
   magnetic behavior with motors energized, and long-run I2C reliability.
 
 No runtime captures, credentials, retained calibration or virtual environments

@@ -23,7 +23,7 @@ static int fd = -1;
 static volatile sig_atomic_t stopping;
 static unsigned counts[4], read_errors, resets;
 static unsigned generation, tare_samples;
-static int io_failed, invalid_sample, tared;
+static int io_failed, invalid_sample, tared, sh2_is_open;
 static uint64_t last_sample_ns, last_accel_ns, last_gyro_ns, stable_since_ns;
 static float accel_norm, gyro_norm;
 static double tare_sum[4], tare_ref[4];
@@ -107,6 +107,7 @@ static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
     default: return;
     }
     for (int i=0; i<n; ++i) if (!isfinite(a[i])) { invalid_sample=1; return; }
+    if (n==4 && (norm(a,4)<0.99 || norm(a,4)>1.01)) { invalid_sample=1; return; }
     uint64_t rx = now_ns(), rx_us = rx / 1000;
     // Lift the SDK's host-derived 32-bit time onto CLOCK_MONOTONIC's full epoch.
     int64_t sample_us = (int64_t)rx_us + (int32_t)((uint32_t)v.timestamp - (uint32_t)rx_us);
@@ -151,6 +152,7 @@ static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
 }
 static int open_stream(void) {
     if (sh2_open(&hal, event, NULL) != SH2_OK) { fprintf(stderr,"sh2_open failed\n"); return 1; }
+    sh2_is_open=1;
     sh2_ProductIds_t ids = {0};
     int identity_rc = sh2_getProdIds(&ids);
     if (identity_rc != SH2_OK) { fprintf(stderr,"product identity failed rc=%d read_errors=%u resets=%u\n",identity_rc,read_errors,resets); return 1; }
@@ -194,7 +196,7 @@ int main(int argc, char **argv) {
             usleep(1000);
         }
         failed=opened || invalid_sample || io_failed || resets!=initial_resets;
-        sh2_close();
+        if (sh2_is_open) { sh2_close(); sh2_is_open=0; }
         if (!failed || stopping || invalid_sample || recoveries>=1 || now_ns()>=until) break;
         // Recover at the session boundary, not recursively inside SH-2's read
         // callback. Consumers must discard pre-reset tare/continuity.

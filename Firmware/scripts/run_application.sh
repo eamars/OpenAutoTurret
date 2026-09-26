@@ -166,7 +166,7 @@ if [ "$ACTION" = start ]; then
     if owned_launcher && [ -r "$RUN/started" ] &&
         [ "$(cat "$RUN/started")" = "$launcher_pid $launcher_start" ]; then
       echo "Started (launcher $launcher_pid). Inspect status for mode and readiness."
-      if [ "$MODE" != commission ]; then echo "Web: http://$(hostname):${OTA_WEB_PORT:-8080}/; logs: $RUN"; fi
+      if [ "$START_WEB" = 1 ] && [ "$MODE" != perception ]; then echo "Web: http://$(hostname):${OTA_WEB_PORT:-8080}/; logs: $RUN"; fi
       exit 0
     fi
     if ! kill -0 "$child" 2>/dev/null; then
@@ -198,6 +198,9 @@ cleanup() {
   if [ "$MODE" = imu ]; then
     echo 'Ending IMU acquisition; no motor process was started.'
     echo 'Stopped: IMU capture ended; motors were not commanded' > "$RUN/shutdown.result"
+  elif [ "$MODE" = perception ]; then
+    echo 'Ending perception capture; no motor process was started.'
+    echo 'Stopped: perception capture ended; motors were not commanded' > "$RUN/shutdown.result"
   elif [ "$MODE" = commission ]; then
     echo 'Ending commissioning; an active yaw probe requests zero voltage.'
   else
