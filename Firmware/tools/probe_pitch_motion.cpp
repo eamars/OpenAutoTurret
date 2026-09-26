@@ -25,7 +25,9 @@ static volatile std::sig_atomic_t interrupted;
 static void stop(int) { interrupted=1; }
 
 int main(int argc, char** argv) {
-  if (argc!=3) { std::cerr<<"Usage: probe-pitch-motion STEP_MILLIDEGREES TRACE.csv\n"; return 2; }
+  if (argc!=3 && argc!=4) { std::cerr<<"Usage: probe-pitch-motion STEP_MILLIDEGREES TRACE.csv [tuned]\n"; return 2; }
+  const bool tune=argc==4 && std::string(argv[3])=="tuned";
+  if (argc==4 && !tune) return 2;
   int step=0;
   const std::string arg=argv[1];
   auto parsed=std::from_chars(arg.data(),arg.data()+arg.size(),step);
@@ -63,11 +65,14 @@ int main(int argc, char** argv) {
     if (!initial.has_feedback || !initial.disabled || initial.faults || !std::isfinite(initial.q_rad))
       throw std::runtime_error("disabled fault-free pitch feedback required");
     using Reg=ota::cybergear::Reg;
+    double original_kp=0, original_ki=0;
     for (const auto r : {Reg::RunMode,Reg::LocRef,Reg::LimitSpd,Reg::LimitCur,Reg::MechPos,
                          Reg::LocKp,Reg::SpdKp,Reg::SpdKi,Reg::Iqf,Reg::VBus}) {
       double value=0;
       if (!backend.read_register(axis,r,value,200,error)) throw std::runtime_error("diagnostic read failed: "+error);
       std::cout<<"PITCH_REG name="<<ota::cybergear::reg_name(r)<<" value="<<value<<'\n';
+      if (r==Reg::SpdKp) original_kp=value;
+      if (r==Reg::SpdKi) original_ki=value;
     }
     if (step==0) {
       backend.deenergize(axis); system.close(); ::close(ownership);
@@ -112,7 +117,7 @@ int main(int argc, char** argv) {
       {
         std::lock_guard lock(commands);
         heartbeat=ota::now_monotonic_ns();
-        if (!trip) mode=backend.transition_mode(axis,true,0.5*rad,heartbeat.load(),error,-1,1,true);
+        if (!trip) mode=backend.transition_mode(axis,true,0.5*rad,heartbeat.load(),error,tune ? .02:-1,tune ? 2:1,true);
       }
       record("setup"); std::this_thread::sleep_for(5ms);
     }
@@ -128,7 +133,7 @@ int main(int argc, char** argv) {
         heartbeat=ota::now_monotonic_ns();
         if (!trip) backend.command(axis,q0+step*rad/1000.0,0.5*rad);
       }
-      if (observed<4) {
+      {
         if (!waiting) {
           if (!system.begin_register_read(axis,observed_regs[observed],error)) throw std::runtime_error(error);
           waiting=true; read_deadline=ota::now_monotonic_ns()+100000000LL;
@@ -139,11 +144,27 @@ int main(int argc, char** argv) {
             std::cout<<"PITCH_ACTIVE_REG name="<<ota::cybergear::reg_name(observed_regs[observed])<<" value="<<value<<'\n';
             if (observed_regs[observed]==Reg::Iqf && (!std::isfinite(value) || std::abs(value)>5))
               throw std::runtime_error("observed filtered current exceeds 5 A");
-            waiting=false; ++observed;
+            waiting=false; observed=(observed+1)%4;
           }
         }
       }
       record("step"); std::this_thread::sleep_for(5ms);
+    }
+    system.cancel_register_read();
+    if (tune && !trip) {
+      {
+        std::lock_guard lock(commands);
+        heartbeat=ota::now_monotonic_ns();
+        backend.command(axis,backend.snapshot(axis,heartbeat.load()).q_rad,0);
+        backend.set_speed_loop_gains(axis,original_kp,original_ki);
+      }
+      for (const auto r:{Reg::SpdKp,Reg::SpdKi}) {
+        heartbeat=ota::now_monotonic_ns(); double actual=0;
+        const double expected=r==Reg::SpdKp ? original_kp:original_ki;
+        if (!backend.read_register(axis,r,actual,80,error) || std::abs(actual-expected)>1e-6)
+          throw std::runtime_error("trial gains restore not verified");
+      }
+      std::cout<<"PITCH_GAINS restored_kp="<<original_kp<<" restored_ki="<<original_ki<<'\n';
     }
     {
       std::lock_guard lock(commands); system.cancel_register_read(); backend.deenergize(axis);
