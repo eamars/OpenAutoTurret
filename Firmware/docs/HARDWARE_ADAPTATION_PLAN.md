@@ -12,8 +12,22 @@ records typed SocketCAN, GM6020 decoding/voltage framing, session-relative encod
 unwrapping, the launcher-owned probe and real bidirectional yaw motion. This
 completes an initial Stage 1 slice and starts Stage 2; it does not complete the
 stage exit gates or qualify automatic tracking. The probe sends no pitch motion
-commands. Installed pitch rejects `mechPos` reads with a nonzero response status;
-resolve its supported feedback/firmware before pitch homing.
+commands. The initial pitch `mechPos` failure was resolved after the owner's
+September 27 upgrade: the same UID now returns valid position with status 0.
+Pitch homing and load support remain uncommissioned.
+
+The next commissioning slice adds a hard **5 A pitch command ceiling** and
+requires current-limit and supported-mode readback before enable. A non-motion
+probe has written 5 A and obtained three matching readbacks. This setting is
+volatile and applies to speed/position modes; raw MIT/current mode is excluded.
+It does not measure current transients. The owner has upgraded pitch to
+1.2.1.5; the agent verified position compatibility and reapplied/read back 5 A.
+See the [upgrade reference](CYBERGEAR_FIRMWARE_UPGRADE.md).
+
+Hailo-8 provisioning and a real IMX477-to-YOLOv8n inference probe have passed.
+The next perception gate is representative person/head detection accuracy and
+camera geometry, followed by application integration. The automatic stack stays
+stopped until the mixed-drive and continuous-yaw gates below pass.
 
 ## Intended result
 
@@ -61,6 +75,11 @@ Define a versioned production configuration concept (not currently accepted by
   topology `continuous`; verify command mode before selecting its driver.
 - Pitch: protocol CyberGear, motor ID `0x7F`, expected UID bytes
   `7216313130333105`, topology `bounded`; no ID renumbering is necessary.
+- Pitch current: finite positive limits no greater than **5 A**, including
+  homing, payload checks, parking, recovery, adoption and diagnostic paths.
+  Write/read back the volatile limit before every supported-mode enable after
+  reset; reject unsupported current/torque modes and failed readback. Do not
+  raise this ceiling to overcome load or an endpoint.
 - Camera and mechanism calibration carry an installation revision, device
   identities, units, direction/ratio, origin policy and calibration validity.
 

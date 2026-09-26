@@ -22,7 +22,7 @@ class VelocityLoop {
     velocity_ += dt / (.050 + dt) * (measured - velocity_);
     previous_position_ = position; previous_time_ = now;
     const double error = reference_rad_s - velocity_;
-    constexpr double kp = 8500.0, ki = 1500.0, ceiling = 1000.0;
+    constexpr double kp = 35000.0, ki = 20000.0, ceiling = 1500.0;
     const double candidate = std::clamp(integral_ + ki * error * dt, -ceiling, ceiling);
     const double output = kp * error + candidate;
     // Integrate only when unsaturated or moving the saturated output inward.

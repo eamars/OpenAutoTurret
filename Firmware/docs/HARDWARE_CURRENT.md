@@ -1,9 +1,11 @@
 # Current station hardware
 
-Updated **26 September 2026**. This is the current hardware inventory; dated
-September 3-9 reports describe the previous mechanism. Operation is governed by
-[STATION_OPERATIONS.md](STATION_OPERATIONS.md). Initial transport/yaw commissioning
-is now implemented; automatic adaptation remains pending:
+Updated **26 September 2026** with the later pitch-limit and Hailo checks. This is
+the current hardware inventory; dated September 3-9 reports describe the previous
+mechanism. Operation is governed by [STATION_OPERATIONS.md](STATION_OPERATIONS.md).
+Bounded mixed-bus probes, non-motion pitch current-limit application, and a first
+IMX477/Hailo measurement now have evidence; production motor/perception adaptation
+remains pending:
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) and
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
 
@@ -16,10 +18,11 @@ Both local and Pi source were at
 clean. The station launcher reported `Stopped (last park outcome unavailable)`.
 No controller, perception daemon or web daemon was running.
 
-The subsequent authorized mechanical session built a project-local runtime and
-separate committed release, verified bidirectional low-output GM6020 motion and
-launcher stop. See [the implementation record](HARDWARE_COMMISSIONING_2026_09_26.md).
-The identification-only observations below retain their original scope.
+The authorized mechanical session built a project-local runtime and separate
+committed release, verified bidirectional low-output GM6020 motion and launcher
+stop. Later non-motion pitch-limit and Hailo checks are recorded below. See
+[the implementation record](HARDWARE_COMMISSIONING_2026_09_26.md) for the earlier
+commissioning session; this document records only current distilled evidence.
 
 **Verified** below means observed on this host during this audit.
 **Owner-confirmed** means supplied by the owner, without physical inspection.
@@ -38,7 +41,7 @@ The identification-only observations below retain their original scope.
 | Pitch mechanics | Bounded pitch with mechanical endstops | Endstops owner-confirmed; exact limits, direction, load/support and homing pending commissioning |
 | Camera A | Sony IMX500, index 0 at this boot | Enumerated and simultaneous capture verified |
 | Camera B | Sony IMX477, index 1 at this boot | Enumerated and simultaneous capture verified; lens/FOV/mount geometry unknown |
-| Accelerator | Owner reports 26 TOPS AI HAT, implying Hailo-8; PCIe Hailo presence verified | PCI `1e60:2864` at `0001:01:00.0`; PCI ID/description alone cannot distinguish H8 from H8L; runtime architecture/SKU pending |
+| Accelerator | Hailo-8 AI HAT | `hailortcli fw-control identify` reported HAILO8, firmware 4.23.0, through `/dev/hailo0` after reboot |
 | IMU | One BNO085 on I2C-1, address `0x4A` | Model owner-confirmed; SH-2 acceleration/gyro/rotation reports verified using the installed probe |
 | Retired adapter | yousee/YouCee USB-to-CAN | Owner-confirmed retirement; no `/dev/ttyUSB*`, `lsusb` showed only root hubs |
 
@@ -72,8 +75,8 @@ Both kernel initialization messages identify **MCP2518FD** through the
 subsequent deployments; an interface name alone is not a hardware identity.
 
 The owner's later authorization of elevated access was used only for temporary
-CAN link up/down during this audit. Station commands remained unprivileged.
-Both links started and ended `DOWN` / `STOPPED`.
+CAN link up/down during the original audit. Station commands remained unprivileged.
+Both links started and ended `DOWN` / `STOPPED` in that audit.
 
 ## Live motor identification, without motor actuation
 
@@ -102,6 +105,32 @@ over a separate SSH command. GM6020 TX counter stayed 0; CyberGear TX rose by
 one frame. Both bus-error counters remained 0. `can0` already had 10,649 RX
 drops before this audit and still had 10,649 afterward; that historical counter
 is not proof of a new HAT fault or proof of sustained-load health.
+
+## Pitch current ceiling and non-motion limit application
+
+The owner-set pitch CyberGear current ceiling is **5 A maximum**. This applies
+to every software path that can configure the pitch drive; backend/config
+enforcement is being verified. Do not treat a YAML setting or a successful
+register write as proof that a later reset or mode change preserved it.
+
+The bounded commissioning probe's explicit `--apply-pitch-limit` operation was
+run without yaw actuation. It wrote volatile `LimitCur=5 A` and obtained three
+matching readbacks. Pitch raw feedback reported mode 0 and faults 0. Before
+upgrade, `MechPos` (`0x7019`) returned error reply `0x11017F00`; stale payload
+was rejected. On September 27 the owner confirmed upgrading **pitch CyberGear
+to 1.2.1.5**. A new live probe matched the same UID and read valid `MechPos`
+at -0.710777 rad with response status 0. It reapplied 5 A and verified three
+readbacks; feedback remained mode 0/faults 0. No pitch enable or motion command
+was sent. This verifies register compatibility and limit setup, not homing or
+loaded behavior; the version number itself is owner-reported.
+
+The limit is volatile. Reapply and verify it after reset and before any enable.
+Volatile speed/position settings also require verification before enable and
+reapplication after reset. The CLI rejects combining pitch-limit setup with yaw
+actuation. The owner's upgrade resolves the observed position-register blocker.
+The agent did not flash firmware. The candidate image and vendor procedure remain
+in [the upgrade reference](CYBERGEAR_FIRMWARE_UPGRADE.md); no further flash is
+needed to repeat the now-passing register check.
 
 ## Cameras and capture evidence
 
@@ -132,6 +161,31 @@ exposure synchronization, detection performance, full-resolution throughput,
 optical alignment or the previous station's calibration. First-frame timestamps
 differed by about 25.1 ms; no synchronization was configured.
 
+## Hailo provisioning and first camera benchmark
+
+The minimal Hailo-8 core was installed on the existing kernel
+`6.18.39+rpt-rpi-2712`, which was not changed: DKMS 3.2.2, HailoRT and
+`hailort-pcie-driver` 4.23.0, and `python3-hailort` 4.23.0-1. The package
+transaction added 8 packages and upgraded/removed none. Neither `hailo-all` nor
+Tappas/full Hailo applications were installed. A reboot passed: `/dev/hailo0`
+returned, HailoRT identified HAILO8 firmware 4.23.0, and the project's venv
+could import the Hailo binding.
+
+An official Hailo Model Zoo 2.17.0 YOLOv8n HEF was used for a first hardware
+measurement. Its SHA-256 is
+`e893b0f9dcae366fe1bc9ebce25e32ad889acf2bc58cfe1f73a572f78f7ec055`; the HEF
+and run artifacts are under ignored `run/hailo-probe/`, not source control.
+The 30-frame hardware benchmark reported 3.36 ms inference latency. A separate
+real IMX477 pipeline captured 30 RGB 640 x 480 frames at 15 fps, letterboxed to
+640 x 640, and produced finite 80-class outputs with valid timestamps. Measured
+inference p50/p95 was 6.86/7.05 ms; sensor-to-result p50/p95 was
+20.99/21.69 ms. No detection score reached 0.5 for the current view. These
+results prove pipeline execution and timing only: they are not accuracy evidence,
+do not establish useful person recall, and do not implement person identity or
+tracking. The camera was released after the probe. A repeatable
+`Firmware/tools/probe_hailo_camera.py` and its pinned configuration manifest
+provide the repeatable camera-only probe.
+
 The repository's existing `Firmware/tools/camera_bringup_probe.py` is present
 on the Pi. It exercises the older single-camera `vision` path and a synthetic
 bright patch over a real frame; it cannot establish human-recognition accuracy.
@@ -145,17 +199,9 @@ Installed camera packages include Picamera2 0.3.37-1, libcamera
 
 ## Hailo and application readiness
 
-PCIe prints `Hailo Technologies Ltd. Hailo-8 AI Processor [1e60:2864]`.
-This is the PCI database's family label, not definitive H8-versus-H8L
-identification: the official Pi documentation also shows this PCI ID for an
-H8L example. The owner's 26 TOPS specification implies H8, but verify
-`Device Architecture` using `hailortcli fw-control identify` before choosing a
-HEF. [Official identify example](https://www.raspberrypi.com/documentation/computers/ai.html).
-However, no driver is bound at its PCI function, `/dev/hailo*` is absent,
-`hailortcli` is absent, and `/sbin/modinfo hailo_pci` reports module not found.
-Package queries found no `hailo-all`, `hailort`, `hailo-dkms`,
-`python3-hailort` or `rpicam-apps-hailo-postprocess` installation.
-**Physical enumeration is verified; usable Hailo inference is not.**
+Earlier PCI-only evidence was insufficient to identify the SKU. The later
+`hailortcli fw-control identify` result resolves the runtime architecture as
+HAILO8; see the installed stack and benchmark above.
 
 Initial audit: launcher `check` failed at missing project Python; no station/CAN
 systemd unit files were listed. Subsequent implementation provisioned
@@ -164,10 +210,10 @@ requirements there. Separate releases now contain working C++ builds and the
 commissioning probe. The original Pi checkout was preserved. Normal hardware
 preflight now rejects the legacy motor configuration on this installation.
 
-The source still selects `yousee`, `/dev/ttyUSB0`, pitch ID 100 and yaw ID 101,
-both CyberGears, endpoint yaw homing and soft-center yaw parking. It cannot run
-this installation by changing the bus name alone. Old calibration, gains,
-loaded limits and parking sign-off do not transfer to the new mechanism.
+The current production controller still lacks the commissioned mixed-drive,
+continuous-yaw topology and pitch-only homing behavior. The normal automatic
+startup gate remains closed. Old calibration, gains, loaded limits and parking
+sign-off do not transfer to the new mechanism.
 
 ## Installed BNO085 and existing host probe
 
@@ -227,7 +273,7 @@ remains design input, with hardware absence superseded by this evidence.
 - Pitch endstop geometry and load support, new direction signs and transmission
   ratios, yaw mechanical reference, supply/termination and slip-ring ratings.
 - Camera lenses, focus/FOV, mounts/orientation, intrinsics/extrinsics and overlap.
-- HAT label/SKU and Hailo runtime architecture after driver provisioning.
+- HAT label/SKU and sustained Hailo/camera performance under production load.
 - IMU product/firmware identity, mount/lever arm, accuracy and timestamp quality,
   magnetic behavior with motors energized, and long-run I2C reliability.
 

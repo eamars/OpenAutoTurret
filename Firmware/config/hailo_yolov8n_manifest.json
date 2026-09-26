@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "model_id": "hailo_yolov8n_coco_hailo8_v2_17_0",
+  "artifact": {
+    "filename": "yolov8n.hef",
+    "url": "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.17.0/hailo8/yolov8n.hef",
+    "sha256": "e893b0f9dcae366fe1bc9ebce25e32ad889acf2bc58cfe1f73a572f78f7ec055",
+    "architecture": "HAILO8",
+    "hailo_model_zoo_version": "2.17.0",
+    "dataflow_compiler_version": "3.33.0",
+    "license": "AGPL-3.0"
+  },
+  "runtime": {
+    "hailort_version": "4.23.0",
+    "api": "pyhailort InferVStreams",
+    "device_interface": "PCIe"
+  },
+  "task": "COCO object detection",
+  "input": {
+    "shape_nhwc": [1, 640, 640, 3],
+    "dtype": "uint8",
+    "color_order": "RGB",
+    "camera_stream": {
+      "format": "RGB888",
+      "size": [640, 480],
+      "frame_rate_hz": 15
+    },
+    "preprocessing": {
+      "operation": "paste camera image onto an RGB canvas; do not rescale",
+      "canvas_size": [640, 640],
+      "canvas_fill_rgb": [114, 114, 114],
+      "paste_xy": [0, 80],
+      "normalization": "none; feed UINT8 pixels"
+    }
+  },
+  "output": {
+    "nms": true,
+    "class_count": 80,
+    "detections_per_class_max": 100,
+    "hailo_format": "class-indexed list; each detection row is [ymin, xmin, ymax, xmax, score]",
+    "reported_score_threshold": 0.5,
+    "class_label_mapping": "Numeric output slots only; verify any person label/index convention before application integration."
+  },
+  "provenance": {
+    "model_config": "https://raw.githubusercontent.com/hailo-ai/hailo_model_zoo/v2.17/hailo_model_zoo/cfg/networks/yolov8n.yaml",
+    "official_hailo8_model_table": "https://github.com/hailo-ai/hailo_model_zoo/blob/v2.17/docs/public_models/HAILO8/HAILO8_object_detection.rst",
+    "hailort_4_23_python_api": "https://github.com/hailo-ai/hailort/blob/v4.23.0/hailort/libhailort/bindings/python/platform/hailo_platform/pyhailort/pyhailort.py",
+    "known_camera_probe": {
+      "camera_model": "imx477",
+      "frames": 30,
+      "inference_ms_p50": 6.86,
+      "inference_ms_p95": 7.05,
+      "sensor_to_result_ms_p50": 20.99,
+      "sensor_to_result_ms_p95": 21.69,
+      "detections_at_or_above_score_threshold": 0,
+      "interpretation": "One observed view had no detections at score >= 0.5. Timing is a single-run measurement, not an accuracy or FPS guarantee."
+    }
+  }
+}

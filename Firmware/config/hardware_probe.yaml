@@ -1,5 +1,6 @@
 # Standalone commissioning only. This is NOT a controld configuration.
-# Volatile commands only; no enable, zero, parameter writes or homing on pitch.
+# No enable, zero or homing on pitch. Explicit --apply-pitch-limit writes only
+# volatile LimitCur and requires three matching readbacks before reporting success.
 schema_version: 1
 yaw:
   interface: can0

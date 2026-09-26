@@ -1,8 +1,9 @@
 # Plan: Hailo-assisted people and head tracking
 
-Status: **proposed, not implemented or benchmarked**. 26 September 2026.
-Uses the [verified hardware inventory](HARDWARE_CURRENT.md). Motor integration
-and continuous-yaw readiness are separate gates in the
+Status: **Hailo provisioning and a first camera-to-inference probe are verified;
+production perception integration and accuracy evaluation remain proposed**.
+Updated 26 September 2026. Uses the [verified hardware inventory](HARDWARE_CURRENT.md).
+Motor integration and continuous-yaw readiness are separate gates in the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md).
 
 ## Requested behavior and scope
@@ -43,6 +44,18 @@ IMX477 sensor has 4056 x 3040 pixels; its actual lens determines whether it sees
 a narrower view. Resolution alone does not establish that it is the detail
 camera. [Raspberry Pi camera specifications](https://www.raspberrypi.com/documentation/accessories/camera.html#high-quality-camera).
 
+Current executable evidence is a single-camera probe, not application
+integration: the minimal Hailo-8 runtime survives reboot, the project venv
+imports HailoRT, and a real IMX477 stream produced finite YOLOv8n outputs with
+valid capture timestamps. Thirty 640 x 480 RGB frames ran at 15 fps after
+letterboxing to 640 x 640; inference p50/p95 was 6.86/7.05 ms and
+sensor-to-result p50/p95 was 20.99/21.69 ms. No box reached 0.5 confidence in
+the current view, so these timings say nothing about person accuracy or useful
+recall. The camera was released after the probe. The HEF and raw run artifacts
+are retained only under ignored `run/hailo-probe/`; a repeatable probe script
+and configuration manifest are now available in `Firmware/tools/probe_hailo_camera.py`
+and `Firmware/config/hailo_yolov8n_manifest.json`.
+
 ```mermaid
 flowchart LR
   A[IMX500 owner and sensor inference] --> N[Normalized observations with camera ID and capture time]
@@ -67,14 +80,16 @@ detector class accuracy by itself.
 
 ## Phase A: provision and prove the accelerator
 
-Host evidence currently stops at PCIe enumeration: no bound Hailo driver,
-device node or runtime is installed. Provision the matching Raspberry Pi OS
-Hailo-8 stack, including kernel support for the actual running kernel. The
-official AI HAT+ dependency family is `hailo-all`, distinct from the Hailo-10
-package. Complete the required reboot with the motion stack stopped, then run
-`hailortcli fw-control identify` and a small official inference example as
-`eamars`. Record architecture, firmware, driver/runtime versions and device
-permissions. [Official Pi setup and package compatibility](https://www.raspberrypi.com/documentation/computers/ai.html).
+The minimal Hailo-8 stack is now provisioned on the existing
+`6.18.39+rpt-rpi-2712` kernel: DKMS 3.2.2, HailoRT and
+`hailort-pcie-driver` 4.23.0, and `python3-hailort` 4.23.0-1. The package
+transaction added 8 packages and upgraded/removed none; `hailo-all` and Tappas
+were not installed. After reboot, `/dev/hailo0` returned, `hailortcli
+fw-control identify` reported HAILO8 firmware 4.23.0, and the project venv
+import worked. This satisfies basic device/runtime identification for this
+kernel, not long-run health or production service integration. A repeatable
+`Firmware/tools/probe_hailo_camera.py` and config manifest are being added.
+[Official Pi setup and package compatibility](https://www.raspberrypi.com/documentation/computers/ai.html).
 
 Use project-local environments for added Python dependencies, with system camera
 and supported OS-packaged Hailo bindings available (for example, a compatible
@@ -89,17 +104,23 @@ for the first executable probe. Hailo Model Zoo **v2.x** and Dataflow Compiler
 Compile custom models on a supported development host only when necessary.
 [Official Model Zoo compatibility notice](https://github.com/hailo-ai/hailo_model_zoo).
 
-**Exit:** identify reports the actual device architecture; real image inference
-works from the production project interpreter with a recorded compatible HEF
-and finite outputs. PCI identity and the
-26 TOPS rating alone do not pass this gate.
+**Basic runtime exit passed:** the runtime identifies HAILO8 and a real camera
+pipeline produced finite outputs using a compatible recorded HEF. The repeatable
+probe/manifest and sustained-run checks remain. PCI identity and the 26 TOPS
+rating alone do not pass this gate.
 
 ## Phase B: choose models using representative evidence
 
-Start with a compatible Hailo YOLOv8m person detector as one candidate and a
-smaller detector from the same supported model family as the throughput
-comparison. Hailo's Pi examples include H8 detection and pose pipelines; these
-are starting points for evaluation, not station acceptance.
+An official Hailo Model Zoo 2.17.0 YOLOv8n HEF has now run on the HAILO8 device
+as an execution candidate. SHA-256:
+`e893b0f9dcae366fe1bc9ebce25e32ad889acf2bc58cfe1f73a572f78f7ec055`.
+The 30-frame hardware benchmark reported 3.36 ms inference latency. The real
+IMX477 pipeline measurements above are useful for timing only; no output reached
+0.5 confidence in the current view. No person/head accuracy has been measured.
+Continue with a compatible Hailo YOLOv8m person detector and a smaller model
+comparison on representative labelled scenes. Hailo's Pi examples include H8
+detection and pose pipelines; these are starting points for evaluation, not
+station acceptance.
 [Official Pi example pipelines](https://github.com/hailo-ai/hailo-rpi5-examples/blob/main/doc/basic-pipelines.md).
 
 For head position compare two approaches: a person pose model with confident

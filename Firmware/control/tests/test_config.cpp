@@ -130,6 +130,41 @@ TEST(Config, HomingModeDisplacementOverrideIsWired) {
   EXPECT_FALSE(ota::wire::make_control_cfg(loaded.config).homing_motion_checks_abort);
 }
 
+TEST(Config, PitchAndPayloadCurrentLimitsFailClosedAtFiveAmps) {
+  auto defaults = ota::config::load_turret_config(
+      write_file("pitch_current_default.yaml", kFullConfig));
+  ASSERT_TRUE(defaults.ok) << "errors: " << defaults.errors.size();
+  EXPECT_DOUBLE_EQ(defaults.config.axes[0].limit_cur_a, 5.0);
+  std::string wiring_err;
+  auto plan = ota::wire::make_homing_plan(defaults.config, wiring_err);
+  EXPECT_TRUE(wiring_err.empty()) << wiring_err;
+  EXPECT_DOUBLE_EQ(plan.initial_current_limit(ota::AxisId::Pitch), 5.0);
+  EXPECT_DOUBLE_EQ(plan.maximum_current_limit(ota::AxisId::Pitch), 5.0);
+  EXPECT_DOUBLE_EQ(plan.maximum_current_limit(ota::AxisId::Yaw), 10.0);
+
+  const auto with_pitch_limit = [](const std::string& value) {
+    std::string body = kFullConfig;
+    const auto anchor = body.find("  pitch:\n");
+    EXPECT_NE(anchor, std::string::npos);
+    body.insert(anchor + std::string("  pitch:\n").size(),
+                "    limit_cur_a: " + value + "\n");
+    return body;
+  };
+  auto at_ceiling = ota::config::load_turret_config(
+      write_file("pitch_current_5.yaml", with_pitch_limit("5")));
+  EXPECT_TRUE(at_ceiling.ok) << "errors: " << at_ceiling.errors.size();
+  auto above_ceiling = ota::config::load_turret_config(
+      write_file("pitch_current_5_1.yaml", with_pitch_limit("5.1")));
+  EXPECT_FALSE(above_ceiling.ok);
+  auto zero = ota::config::load_turret_config(
+      write_file("pitch_current_zero.yaml", with_pitch_limit("0")));
+  EXPECT_FALSE(zero.ok);
+
+  auto payload = ota::config::load_turret_config(write_file(
+      "payload_current_5_1.yaml", kFullConfig + "\npayload:\n  check_current_a: 5.1\n"));
+  EXPECT_FALSE(payload.ok);
+}
+
 TEST(Config, ValidFullConfigLoads) {
   const std::string p = write_file("full.yaml", kFullConfig);
   auto r = ota::config::load_turret_config(p);

@@ -19,7 +19,7 @@ case "${1:-}" in
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
     echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
-    echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1000 raw),'
+    echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac

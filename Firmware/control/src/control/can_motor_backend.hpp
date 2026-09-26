@@ -74,10 +74,12 @@ class CanMotorBackend : public MotorBackend {
     AxisId axis = AxisId::Pitch;
     bool position = false;
     bool check_displacement = true;
+    bool pitch_brake_with_stop = false;
     double limit = 0, pin = 0, last_q = 0, speed_ki = -1, speed_kp = 1;
     double stopped_q = 0;  // position immediately before removing torque
     TimeNs started = 0, deadline = 0, still_since = 0, sampled = 0;
     int read_index = 0;
+    double pitch_limit_cur = 0;
     bool waiting = false;
   } transition_;
   // Position mode is tracked locally: the feedback "mode" field is the motor

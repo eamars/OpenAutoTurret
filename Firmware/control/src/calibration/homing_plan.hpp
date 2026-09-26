@@ -64,6 +64,9 @@ struct HomingPlanConfig {
   // (§22). 0.0 = use the HomingParams default. Set on homing.limit_cur_initial_a
   // for the active axis in start_action().
   std::array<double, kAxisCount> limit_cur_initial_a{};
+  // Optional per-axis ceiling for adaptive current changes. Zero preserves
+  // HomingParams::limit_cur_max_a for that axis.
+  std::array<double, kAxisCount> limit_cur_max_a{};
   double move_speed_rad_s = 10.0 * kDeg2Rad;          // speed for Move actions
   double move_pos_tol_rad = 0.01;                     // "arrived" position tol
   double move_vel_tol_rad_s = 0.1 * kDeg2Rad;         // "arrived" velocity tol
@@ -129,6 +132,10 @@ class HomingPlan {
   double initial_current_limit(AxisId a) const {
     const double value = cfg_.limit_cur_initial_a[ix(a)];
     return value > 0.0 ? value : cfg_.homing.limit_cur_initial_a;
+  }
+  double maximum_current_limit(AxisId a) const {
+    const double value = cfg_.limit_cur_max_a[ix(a)];
+    return value > 0.0 ? value : cfg_.homing.limit_cur_max_a;
   }
   double motion_speed_ceiling() const {
     return std::max({cfg_.homing.coarse_speed_rad_s, cfg_.homing.fine_speed_rad_s,

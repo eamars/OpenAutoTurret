@@ -4,6 +4,7 @@ Builds a separate release; --activate opts into stopping the old stack and
 starting the new one. Never resets, cleans or overwrites the target checkout.
 """
 import argparse
+import ipaddress
 from pathlib import Path
 import shlex
 import subprocess
@@ -17,6 +18,8 @@ def run(args, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="eamars@rpi-turret")
+    parser.add_argument("--connect-address", type=ipaddress.ip_address,
+                        help="optional discovered IP; retains --host's known SSH identity")
     parser.add_argument("--root", default="/home/eamars/workspace/OpenAutoTurret")
     parser.add_argument("--activate", action="store_true",
                         help="after successful build/check, park/stop the old stack and start this release")
@@ -44,9 +47,13 @@ def main():
     revision = run(["git", "rev-parse", "HEAD"], cwd=repo,
                    capture_output=True, text=True).stdout.strip()
     quote = shlex.quote
+    connection = []
+    if args.connect_address:
+        connection = ["-o", f"HostName={args.connect_address}",
+                      "-o", f"HostKeyAlias={args.host.rsplit('@', 1)[-1]}"]
 
     def remote(command, **kwargs):
-        return run(["ssh", "-o", "ConnectTimeout=10", args.host, command], **kwargs)
+        return run(["ssh", "-o", "ConnectTimeout=10", *connection, args.host, command], **kwargs)
 
     releases = args.root.rstrip("/") + "/run/releases"
     # Reuse the station's existing project-local runtime, including libcamera
@@ -61,7 +68,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ota-deploy-") as temporary:
         archive = Path(temporary) / "source.tar"
         run(["git", "archive", "--format=tar", f"--output={archive}", revision], cwd=repo)
-        run(["scp", str(archive), f"{args.host}:{release}/source.tar"])
+        run(["scp", *connection, str(archive), f"{args.host}:{release}/source.tar"])
     remote(f"tar -xf {quote(release + '/source.tar')} -C {quote(release)} && "
            f"rm -- {quote(release + '/source.tar')} && "
            f"mkdir -p {quote(release + '/run')} && "

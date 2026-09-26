@@ -24,6 +24,8 @@
 #include "can/cybergear_protocol.hpp"
 #include "common/types.hpp"
 
+namespace ota { class CanMotorBackend; }
+
 namespace ota::can {
 
 struct CyberGearSystemConfig {
@@ -80,23 +82,31 @@ class CyberGearSystem {
   // --- State access ---------------------------------------------------------
   AxisRuntime& axis(AxisId a) { return axes_[static_cast<size_t>(a)]; }
   const AxisRuntime& axis(AxisId a) const { return axes_[static_cast<size_t>(a)]; }
-  CanTransport& bus() { return *bus_; }
   // Read-only view for the CAN health report (§55): stats()/is_up()/can_state()
   // are const on the transport, so reporting bus health needs no mutable access
   // and must never be the reason the control thread touches the bus.
-  CanTransport& bus() const { return *bus_; }
+  const CanTransport& bus() const { return *bus_; }
   uint8_t motor_id(AxisId a) const {
     return (a == AxisId::Pitch) ? cfg_.pitch_motor_id : cfg_.yaw_motor_id;
   }
   uint8_t host_id() const { return cfg_.host_can_id; }
 
  private:
+  friend class ::ota::CanMotorBackend;
+  // Only the backend may promote pitch setup after it has read back both a
+  // safe LimitCur value and a supported RunMode. Raw diagnostics cannot arm it.
+  bool confirm_pitch_limit(double current_limit_a);
+  bool confirm_pitch_setup(double current_limit_a, int run_mode);
+  bool pitch_setup_verified();
+
   void on_frame(const can::RawFrame& f);
   bool transact(const cybergear::CanFrame& request, uint8_t reply_target,
                 cybergear::CanFrame& out, int timeout_ms, std::string* err);
 
   CyberGearSystemConfig cfg_{};
   std::mutex command_mutex_;
+  bool pitch_current_limit_verified_{false};
+  bool pitch_run_mode_verified_{false};
   std::atomic<bool> watchdog_stop_{false}, motion_inhibited_{false};
   std::atomic<TimeNs> heartbeat_ns_{0};
   std::thread watchdog_;

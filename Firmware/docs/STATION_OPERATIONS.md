@@ -21,17 +21,23 @@ transport now supports both frame types, but the automatic backend still assumes
 CyberGear control/feedback on both axes. Follow the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) before activation.
 
-The project venv and a separate commissioning release are now built on the Pi.
-The Hailo driver/runtime remains absent. Simultaneous camera capture and the
-standalone IMU probe passed their basic data-delivery checks; neither
-establishes complete application, orientation-calibration or AI readiness.
-Follow the [AI plan](AI_HAT_PERCEPTION_PLAN.md).
+The project venv and a separate commissioning release are built on the Pi.
+The minimal Hailo-8 kernel/runtime stack is now installed and passed a reboot;
+an experimental IMX477-to-Hailo detector probe also passed finite-output and
+timing checks. This does not establish detection accuracy, tracking identity or
+production perception integration. See the [hardware inventory](HARDWARE_CURRENT.md)
+and [AI plan](AI_HAT_PERCEPTION_PLAN.md).
 
 ## Account, ownership and preserved operating contract
 
 - SSH as `eamars@rpi-turret` using the existing key. Run station operations
   without `sudo`; uid 1000 owns `/tmp/ota-stack-1000` when the launcher runs.
 - Checkout: `/home/eamars/workspace/OpenAutoTurret`. Preserve its local changes.
+- After the Pi reboot, Windows DNS resolution for `rpi-turret` failed. The
+  observed address was `192.168.2.100`; when needed, deploy with
+  `--connect-address 192.168.2.100`. This is an observed address, not a static
+  network setting. The option preserves the known `rpi-turret` SSH host-key
+  identity while connecting to that address.
 - One `Firmware/scripts/run_application.sh` launcher owns controller,
   `perception.visiond` and `web.webd.app`. Do not run old systemd services beside it.
 - The future normal startup remains AUTO_ROAM -> target tracking -> AUTO_ROAM
@@ -39,8 +45,9 @@ Follow the [AI plan](AI_HAT_PERCEPTION_PLAN.md).
 - The web address is `http://rpi-turret:8080/` when the stack is running. During
   this audit no web service was listening there.
 - Each physical camera has one owner; preview reads that owner's frames.
-  Production currently owns only IMX500. Dual-camera/Hailo/IMU integration is
-  planned, not implemented production behavior.
+  Production currently owns only IMX500. The experimental Hailo camera probe
+  releases camera ownership when it exits; dual-camera/Hailo/IMU application
+  integration remains unimplemented production behavior.
 
 ## Inspect the stopped installation
 
@@ -104,6 +111,12 @@ operation. The web's parking request is not equivalent to full launcher stop.
 Commissioning stop requests zero GM6020 voltage and observes feedback; its
 terminal result explicitly says **not a park/disable certification**. It never
 enables or moves pitch. Do not interpret a zero-voltage request as power removal.
+The separate `--apply-pitch-limit` option only writes the configured volatile
+CyberGear `LimitCur` value (5 A maximum) and checks three matching readbacks; it
+does not enable or move pitch. It cannot be combined with yaw voltage or speed
+actuation. Reapply and verify volatile pitch settings after reset and before
+enable; the production position/speed mode paths must establish and verify the
+current cap before enabling the drive.
 
 Preserve numeric logs before restarting. Never overwrite retained homing data,
 manually mark axes homed or bypass validation. Invalidate old calibration by
@@ -116,11 +129,12 @@ secondary observation, not a replacement for motor/reference validity.
 The following remains the deployment path, but **activation is deferred until
 hardware adaptation and physical commissioning gates pass**.
 
-Provision a project-local virtual environment with OS camera bindings and install
-station requirements there. Never install pip dependencies globally or commit
-the environment. `run/station-venv` now exists with system camera bindings;
-builds live in separate `run/releases/.../Firmware/build` directories. Hailo OS
-driver/runtime provisioning is separately planned.
+Use the existing project-local virtual environment with OS camera bindings and
+install station requirements there. Never install pip dependencies globally or
+commit the environment. `run/station-venv` exists with system camera bindings;
+builds live in separate `run/releases/.../Firmware/build` directories. The
+minimal Hailo-8 driver/runtime is installed and verified after reboot; do not
+replace it with `hailo-all` or install Tappas as part of this minimal profile.
 
 Deploy committed source with `Firmware/tools/deploy_station.py`. It archives
 `HEAD`, creates a separate release under `run/releases`, records `REVISION`,
@@ -164,11 +178,22 @@ with the local project Python:
 python Firmware/tools/deploy_station.py --probe-build --commission-hardware
 ```
 
+If `rpi-turret` does not resolve from Windows after reboot, the observed
+connection workaround is:
+
+```bash
+python Firmware/tools/deploy_station.py --connect-address 192.168.2.100 --probe-build --commission-hardware
+```
+
+The address is evidence from this session, not a static configuration promise.
+
 On that release, as `eamars`, with both links already at 1 Mbps and UP:
 
 ```bash
 bash Firmware/scripts/run_application.sh check --commission-hardware
 bash Firmware/scripts/run_application.sh run --commission-hardware
+# Optional non-motion operation: apply and verify the pitch LimitCur ceiling.
+bash Firmware/scripts/run_application.sh run --commission-hardware --apply-pitch-limit
 # Explicit motion: repeat only within the commissioned envelope and clear mechanism.
 bash Firmware/scripts/run_application.sh run --commission-hardware --yaw-voltage 1000 --pulse-ms 150
 bash Firmware/scripts/run_application.sh status
@@ -177,9 +202,14 @@ bash Firmware/scripts/run_application.sh stop
 
 The default probe only receives yaw and queries pitch discovery/mechanical
 position. A rejected pitch register read is reported unavailable, never treated
-as a position. The probe does not home, enable, zero or write parameters on
-pitch. Its position interface is currently incompatible with the installed
-motor's replies and must be resolved before pitch commissioning.
+as a position. The probe does not home, enable, zero or actuate pitch. With
+`--apply-pitch-limit`, it writes only volatile `LimitCur=5 A`, requires three
+matching readbacks, and leaves pitch disabled; this must be reapplied and
+verified after a reset before any enable. Following the owner's September 27
+CyberGear 1.2.1.5 upgrade, the same UID returned valid `MechPos` (-0.710777 rad)
+with status 0, and raw feedback reported mode 0/faults 0. The earlier rejected
+register read is historical; pitch motion/homing still needs commissioning.
+Do not combine limit setup with yaw actuation.
 
 `config/hardware_probe.yaml` is a separate probe schema, **not** a production
 controller configuration. Fixed ceilings are |voltage| <= 3000 raw, pulse <=

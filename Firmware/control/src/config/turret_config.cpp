@@ -8,6 +8,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include "can/pitch_current_policy.hpp"
+
 namespace ota::config {
 namespace {
 
@@ -369,8 +371,15 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
                  Defaults().max_acceleration_deg_s2, warn);
   out.max_jerk_deg_s3 = opt_double(anode, "max_jerk_deg_s3", p + "max_jerk_deg_s3",
                                    Defaults().max_jerk_deg_s3, warn);
-  out.limit_cur_a = opt_double(anode, "limit_cur_a", p + "limit_cur_a", 0.0, warn);
-  if (out.limit_cur_a < 0.0) err.push_back(p + "limit_cur_a must be >= 0");
+  out.limit_cur_a = opt_double(anode, "limit_cur_a", p + "limit_cur_a",
+                                name == "pitch" ? can::kPitchCurrentCeilingA : 0.0,
+                                warn);
+  if (name == "pitch") {
+    if (!can::valid_pitch_current_limit(out.limit_cur_a))
+      err.push_back(p + "limit_cur_a must be finite and in (0, 5 A]");
+  } else if (out.limit_cur_a < 0.0) {
+    err.push_back(p + "limit_cur_a must be >= 0");
+  }
   if (out.expected_travel_deg.min >= out.expected_travel_deg.max)
     err.push_back(p + "expected_travel_deg.min must be < max");
   if (out.soft_margin_deg < 0.0) err.push_back(p + "soft_margin_deg must be >= 0");
@@ -935,7 +944,7 @@ LoadResult load_turret_config(const std::string& path) {
       c.tracking.track_speed_deg_s = 30.0;
     }
     // §16: tracking never exceeds the architecture's 30 deg/s cap. Clamp rather
-    // than trust the file (same policy as the 10 A current cap).
+    // than trust the file.
     if (c.tracking.track_speed_deg_s > 30.0) {
       warn.push_back("tracking.track_speed_deg_s > 30 deg/s: clamped to the "
                      "§16 tracking speed cap");
@@ -1032,16 +1041,8 @@ LoadResult load_turret_config(const std::string& path) {
   }
   c.payload.check_current_a =
       opt_double(pay, "check_current_a", "payload.check_current_a", 5.0, warn);
-  // The station current cap is 10 A (safety boundary): clamp, don't trust.
-  if (c.payload.check_current_a > 10.0) {
-    warn.push_back("payload.check_current_a > 10 A: clamped to the 10 A "
-                   "station cap");
-    c.payload.check_current_a = 10.0;
-  }
-  if (c.payload.check_current_a <= 0.0) {
-    warn.push_back("payload.check_current_a <= 0 A: using the 5 A default");
-    c.payload.check_current_a = 5.0;
-  }
+  if (!can::valid_pitch_current_limit(c.payload.check_current_a))
+    err.push_back("payload.check_current_a must be finite and in (0, 5 A]");
   c.payload.check_spd_kp =
       opt_double(pay, "check_spd_kp", "payload.check_spd_kp", 5.0, warn);
   c.payload.check_spd_ki =

@@ -7,6 +7,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include "can/pitch_current_policy.hpp"
 #include "common/time.hpp"
 
 namespace ota {
@@ -88,8 +89,9 @@ bool CanMotorBackend::read_register(AxisId axis, cybergear::Reg reg,
 }
 
 // The verified-live position-mode recipe:
-//   stop (de-energizes) -> 50 ms -> RunMode=1 -> enable -> 50 ms ->
-//   LimitSpd -> read MechPos (pin current) -> LocRef=current (hold in place).
+//   stop (de-energizes) -> 50 ms -> RunMode=1 -> verified current cap and
+//   pre-enable encoder pin at LimitSpd=0 -> enable -> pin fresh encoder ->
+//   restore LimitSpd. Pitch never enables when its encoder read is invalid.
 bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
                                           std::string& err) {
   invalidate_calibration();
@@ -105,12 +107,41 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
       err = "write RunMode=1 failed";
       continue;
     }
+    if (axis == AxisId::Pitch) {
+      constexpr double kPitchSetupCurrentA = can::kPitchCurrentCeilingA;
+      double mode = 0.0, current = 0.0;
+      if (!write_reg_float(cybergear::Reg::LimitCur,
+                           static_cast<float>(kPitchSetupCurrentA), axis) ||
+          !read_register(axis, cybergear::Reg::RunMode, mode, timeout_ms_, rerr) ||
+          !read_register(axis, cybergear::Reg::LimitCur, current, timeout_ms_, rerr) ||
+          mode != 1.0 || std::fabs(current - kPitchSetupCurrentA) > 1e-6 ||
+          !system_.confirm_pitch_setup(current, 1)) {
+        err = "pitch current limit / position mode readback failed before enable";
+        continue;
+      }
+      // A supported encoder read is a prerequisite to applying position mode.
+      // Pin it with zero speed authority before enabling so stale retained
+      // LocRef state cannot move the suspended pitch axis.
+      double pin = 0.0, zero_speed = -1.0, pinned = 0.0;
+      if (!read_register(axis, cybergear::Reg::MechPos, pin, timeout_ms_, rerr) ||
+          !std::isfinite(pin) ||
+          !write_reg_float(cybergear::Reg::LimitSpd, 0.0f, axis) ||
+          !system_.send_position_ref(axis, static_cast<float>(pin), &rerr) ||
+          !read_register(axis, cybergear::Reg::LimitSpd, zero_speed, timeout_ms_, rerr) ||
+          !read_register(axis, cybergear::Reg::LocRef, pinned, timeout_ms_, rerr) ||
+          !std::isfinite(zero_speed) || !std::isfinite(pinned) ||
+          std::abs(zero_speed) > 1e-6 || std::abs(pinned - pin) > 0.0004) {
+        err = "pitch pre-enable encoder pin / zero-speed verification failed";
+        continue;
+      }
+    }
     if (!system_.send_enable(axis, &rerr)) {
       err = rerr;
       continue;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
-    if (!write_reg_float(cybergear::Reg::LimitSpd,
+    if (axis != AxisId::Pitch &&
+        !write_reg_float(cybergear::Reg::LimitSpd,
                          static_cast<float>(limit_spd_rad_s), axis)) {
       err = "write LimitSpd failed";
       continue;
@@ -125,6 +156,12 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
         system_.send_position_ref(axis, static_cast<float>(current), &rerr);
     if (!pin_ok) {
       err = "pin position ref failed: " + rerr;
+      continue;
+    }
+    if (axis == AxisId::Pitch &&
+        !write_reg_float(cybergear::Reg::LimitSpd,
+                         static_cast<float>(limit_spd_rad_s), axis)) {
+      err = "write LimitSpd failed";
       continue;
     }
     // Verify the recipe actually took: RunMode, LimitSpd and the LocRef pin
@@ -163,8 +200,11 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
     in_speed_mode_[static_cast<size_t>(axis)] = false;
     last_loc_ref_[static_cast<size_t>(axis)] = current;
     last_limit_spd_[static_cast<size_t>(axis)] = limit_spd_rad_s;
+    if (axis == AxisId::Pitch)
+      last_limit_cur_a_[static_cast<size_t>(axis)] = can::kPitchCurrentCeilingA;
     return true;
   }
+  deenergize(axis);
   return false;
 }
 
@@ -176,6 +216,11 @@ bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
                                        std::string& err) {
   invalidate_calibration();
   invalidate_commands(axis);
+  if (axis == AxisId::Pitch && !can::valid_pitch_current_limit(limit_cur_a)) {
+    err = "pitch speed mode current limit must be finite and in (0, 5 A]";
+    deenergize(axis);
+    return false;
+  }
   for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
     std::string rerr;
     if (!system_.send_stop(axis, &rerr)) {
@@ -187,17 +232,45 @@ bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
       err = "write RunMode=2 failed";
       continue;
     }
+    if (axis == AxisId::Pitch) {
+      double mode = 0.0, current = 0.0;
+      if (!write_reg_float(cybergear::Reg::LimitCur,
+                           static_cast<float>(limit_cur_a), axis) ||
+          !read_register(axis, cybergear::Reg::RunMode, mode, timeout_ms_, rerr) ||
+          !read_register(axis, cybergear::Reg::LimitCur, current, timeout_ms_, rerr) ||
+          mode != 2.0 || std::fabs(current - limit_cur_a) > 1e-6 ||
+          !can::valid_pitch_current_limit(current) ||
+          !system_.confirm_pitch_setup(current, 2)) {
+        err = "pitch current limit / speed mode readback failed before enable";
+        continue;
+      }
+    }
+    // Pitch must enter speed mode with a neutral reference already installed;
+    // a retained SpdRef must never take effect at the enable edge.
+    if (axis == AxisId::Pitch) {
+      double reference = 0.0, position = 0.0;
+      if (!write_reg_float(cybergear::Reg::SpdRef, 0.0f, axis) ||
+          !read_register(axis, cybergear::Reg::SpdRef, reference, timeout_ms_, rerr) ||
+          !read_register(axis, cybergear::Reg::MechPos, position, timeout_ms_, rerr) ||
+          !std::isfinite(reference) || std::abs(reference) > 1e-6 ||
+          !std::isfinite(position)) {
+        err = "pitch neutral speed / encoder verification failed before enable";
+        continue;
+      }
+    }
     if (!system_.send_enable(axis, &rerr)) {
       err = rerr;
       continue;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(kRecipeDelayMs));
-    if (!write_reg_float(cybergear::Reg::LimitCur,
+    if (axis != AxisId::Pitch &&
+        !write_reg_float(cybergear::Reg::LimitCur,
                          static_cast<float>(limit_cur_a), axis)) {
       err = "write LimitCur failed";
       continue;
     }
-    if (!write_reg_float(cybergear::Reg::SpdRef, 0.0f, axis)) {
+    if (axis != AxisId::Pitch &&
+        !write_reg_float(cybergear::Reg::SpdRef, 0.0f, axis)) {
       err = "write SpdRef=0 failed";
       continue;
     }
@@ -229,6 +302,7 @@ bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
     in_speed_mode_[static_cast<size_t>(axis)] = true;
     return true;
   }
+  deenergize(axis);
   return false;
 }
 
@@ -246,7 +320,12 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   };
   auto complete = [&]() {
     in_position_mode_[i] = position; in_speed_mode_[i] = !position;
-    if (position) { last_loc_ref_[i] = t.pin; last_limit_spd_[i] = limit; }
+    if (position) {
+      last_loc_ref_[i] = t.pin;
+      last_limit_spd_[i] = limit;
+      if (axis == AxisId::Pitch)
+        last_limit_cur_a_[i] = t.pitch_limit_cur;
+    }
     else { last_spd_ref_[i] = 0; last_limit_cur_a_[i] = limit; }
     t = ModeTransition{};
     return Transition::Complete;
@@ -259,17 +338,24 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   if (t.stage == 0) {
     invalidate_calibration();
     if (!std::isfinite(limit) || limit <= 0) return fail("invalid mode limit");
+    if (axis == AxisId::Pitch && !position &&
+        !can::valid_pitch_current_limit(limit))
+      return fail("pitch speed mode current limit must be finite and in (0, 5 A]");
     if (!std::isfinite(speed_kp) || speed_kp < 1 || speed_kp > 5)
       return fail("speed proportional gain outside commissioning range");
     if (!std::isfinite(speed_ki) || (speed_ki != -1 && (speed_ki < .002 || speed_ki > .05)))
       return fail("speed integral gain outside commissioned range");
     t.axis = axis; t.position = position; t.limit = limit; t.speed_ki = speed_ki; t.speed_kp = speed_kp;
     t.check_displacement = check_displacement;
+    t.pitch_brake_with_stop = axis == AxisId::Pitch &&
+                              (!system_.pitch_setup_verified() || s.mode != 2);
     t.started = t.sampled = t.still_since = now;
     t.last_q = t.pin = s.q_rad;
+    t.stopped_q = s.q_rad;
     // Neutralize both reference registers before braking; only the active mode
     // consumes its register. An unknown or disabled drive is stopped directly.
-    if (s.has_feedback && s.mode == 2 && now - s.rx_ns < 100000000LL) {
+    if (s.has_feedback && s.mode == 2 && now - s.rx_ns < 100000000LL &&
+        !t.pitch_brake_with_stop) {
       if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis) ||
           !write_reg_float(cybergear::Reg::LocRef, s.q_rad, axis)) return fail("neutral brake write failed");
     } else if (!system_.send_stop(axis, &err)) return fail("initial stop failed");
@@ -282,7 +368,7 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   if (now - t.started > 2500000000LL) return fail("mode transition timed out");
   if (s.has_feedback && s.faults) return fail("motor fault during mode transition");
   constexpr double kModeDriftLimit = .25 * kDeg2Rad;
-  if (t.stage >= 2) {
+  if (t.stage >= 2 || (t.stage == 1 && t.pitch_brake_with_stop)) {
     if (!s.has_feedback || now - s.rx_ns > 100000000LL)
       return fail("feedback lost during disabled mode setup");
     if (!std::isfinite(s.q_rad) || (check_displacement && std::abs(s.q_rad-t.stopped_q) > kModeDriftLimit))
@@ -296,10 +382,15 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
           t.still_since = now; t.last_q = s.q_rad;
         }
         t.sampled = now;
-        if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis)) return fail("brake keepalive failed");
+        const bool ping_ok = axis == AxisId::Pitch && t.pitch_brake_with_stop
+            ? system_.send_stop(axis, &err)
+            : write_reg_float(cybergear::Reg::SpdRef, 0, axis);
+        if (!ping_ok) return fail("brake keepalive failed");
       }
       if (now - t.still_since < 150000000LL) break;
-      t.stopped_q = s.q_rad;
+      // An unverified pitch mode was stopped at stage 0. Preserve its
+      // pre-stop pose so the dwell cannot hide movement of an unsupported load.
+      if (!t.pitch_brake_with_stop) t.stopped_q = s.q_rad;
       if (!system_.send_stop(axis, &err)) return fail("mode stop failed");
       invalidate_commands(axis);
       t.deadline = now + 50000000LL; t.stage = 2;
@@ -314,11 +405,25 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
       t.stage = 3;
       break;
     case 3:
+      if (axis == AxisId::Pitch) {
+        t.pitch_limit_cur = position ? can::kPitchCurrentCeilingA : limit;
+        if (!can::valid_pitch_current_limit(t.pitch_limit_cur) ||
+            !write_reg_float(cybergear::Reg::LimitCur,
+                             static_cast<float>(t.pitch_limit_cur), axis))
+          return fail("pitch LimitCur write failed or exceeds 5 A");
+        t.read_index = 0;
+        t.waiting = false;
+        t.stage = 10;
+        break;
+      }
       if (!write_reg_float(position ? cybergear::Reg::LimitSpd : cybergear::Reg::LimitCur,
                            position ? 0.0f : static_cast<float>(limit), axis)) return fail("limit write failed");
       t.stage = 4;
       break;
     case 4:
+      if (axis == AxisId::Pitch && position &&
+          !write_reg_float(cybergear::Reg::LimitSpd, 0.0f, axis))
+        return fail("pitch zero LimitSpd write failed before position pin");
       if (!write_reg_float(position ? cybergear::Reg::LocRef : cybergear::Reg::SpdRef,
                            position ? t.pin : 0.0, axis)) return fail("neutral reference failed");
       if (speed_ki >= 0 &&
@@ -396,6 +501,38 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
       if (!write_reg_float(cybergear::Reg::LimitSpd, limit, axis)) return fail("restore speed limit failed");
       t.stage = 9;
       break;
+    case 10: {
+      // Pitch refs and enable are forbidden until both the installed current
+      // ceiling and selected speed/position mode have been read back. This
+      // poll state keeps the 200 Hz controller path non-blocking.
+      const cybergear::Reg regs[] = {cybergear::Reg::LimitCur,
+                                     cybergear::Reg::RunMode};
+      const double expected[] = {t.pitch_limit_cur, position ? 1.0 : 2.0};
+      if (!t.waiting) {
+        if (!system_.begin_register_read(axis, regs[t.read_index], err))
+          return fail("pitch safety setup read request failed");
+        t.waiting = true;
+        t.deadline = now + 100000000LL;
+        break;
+      }
+      double value = 0.0;
+      const int result = system_.poll_register_read(value, err);
+      if (result < 0 || (result == 0 && now > t.deadline))
+        return fail("pitch current/mode safety readback timed out");
+      if (result == 0) break;
+      if (!std::isfinite(value) || std::abs(value - expected[t.read_index]) > 1e-6)
+        return fail("pitch current/mode readback mismatch before motion");
+      t.waiting = false;
+      ++t.read_index;
+      if (t.read_index == 2) {
+        if (!system_.confirm_pitch_setup(t.pitch_limit_cur,
+                                         position ? 1 : 2))
+          return fail("pitch safety setup confirmation failed");
+        t.read_index = 0;
+        t.stage = 4;
+      }
+      break;
+    }
   }
   return Transition::Pending;
 }
@@ -415,26 +552,61 @@ void CanMotorBackend::deenergize(AxisId axis) {
 
 // --- Control loop (fast, non-blocking) --------------------------------------
 bool CanMotorBackend::adopt_running_mode(AxisId axis, bool position, std::string& err, double speed_ki, double speed_kp) {
+  const auto fail_pitch = [&](const std::string& why) {
+    err = why;
+    if (axis == AxisId::Pitch) deenergize(axis);
+    return false;
+  };
   double mode=0, q=0, current=0, speed=0;
   if (speed_ki >= 0) {
     double kp=0, ki=0;
     if (!read_register(axis, cybergear::Reg::SpdKp, kp, 100, err) ||
         !read_register(axis, cybergear::Reg::SpdKi, ki, 100, err) ||
-        std::abs(kp-speed_kp)>1e-5 || std::abs(ki-speed_ki)>1e-5) return false;
+        std::abs(kp-speed_kp)>1e-5 || std::abs(ki-speed_ki)>1e-5)
+      return axis == AxisId::Pitch ? fail_pitch("pitch speed gains could not be verified for adoption") : false;
   }
   if (!read_register(axis, cybergear::Reg::RunMode, mode, 100, err) ||
       mode != (position ? 1.0 : 2.0) ||
-      !read_register(axis, cybergear::Reg::MechPos, q, 100, err) || !std::isfinite(q)) return false;
-  // Neutral references do not enable a disabled motor. Fresh feedback from
-  // these writes must independently confirm it was already energized.
-  if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis) ||
-      !write_reg_float(cybergear::Reg::LocRef, q, axis) ||
-      !read_register(axis, cybergear::Reg::LimitCur, current, 100, err) ||
-      !read_register(axis, cybergear::Reg::LimitSpd, speed, 100, err)) return false;
+      !read_register(axis, cybergear::Reg::MechPos, q, 100, err) || !std::isfinite(q))
+    return axis == AxisId::Pitch ? fail_pitch("pitch RunMode / position feedback invalid for adoption") : false;
+  if (!read_register(axis, cybergear::Reg::LimitCur, current, 100, err) ||
+      !read_register(axis, cybergear::Reg::LimitSpd, speed, 100, err) ||
+      !std::isfinite(speed))
+    return axis == AxisId::Pitch ? fail_pitch("pitch current/speed limit readback failed during adoption") : false;
+
   const auto now = now_monotonic_ns();
   can::AxisLatest s;
   if (!system_.axis(axis).latest(s) || !s.has_feedback || s.mode != 2 || s.faults ||
-      now - s.rx_ns > 100000000LL || !(current > 0 && current <= 23) || !std::isfinite(speed)) return false;
+      now - s.rx_ns > 100000000LL || !(current > 0 && current <= 23) ||
+      !std::isfinite(current))
+    return axis == AxisId::Pitch ? fail_pitch("pitch running feedback/limit invalid for adoption") : false;
+
+  if (axis == AxisId::Pitch) {
+    if (current > can::kPitchCurrentCeilingA) {
+      // A retained run-mode with a higher stored cap is not adoptable. Stop
+      // first, lower and read back the cap, then require a fresh controlled
+      // mode setup before any new reference or enable.
+      deenergize(axis);
+      double lowered = 0.0;
+      std::string lower_err;
+      if (!write_reg_float(cybergear::Reg::LimitCur,
+                           static_cast<float>(can::kPitchCurrentCeilingA), axis) ||
+          !read_register(axis, cybergear::Reg::LimitCur, lowered, 100, lower_err) ||
+          std::abs(lowered - can::kPitchCurrentCeilingA) > 1e-6 ||
+          !system_.confirm_pitch_limit(lowered))
+        return fail_pitch("pitch stored LimitCur exceeded 5 A and safe reduction could not be verified");
+      return fail_pitch("pitch stored LimitCur exceeded 5 A; reduced and verified, controlled mode setup required");
+    }
+    if (!can::valid_pitch_current_limit(current) ||
+        !system_.confirm_pitch_setup(current, position ? 1 : 2))
+      return fail_pitch("pitch LimitCur / RunMode did not satisfy the 5 A adoption policy");
+  }
+
+  // Neutral references are written only after the pitch cap and supported
+  // mode have been confirmed (the system TX guard enforces the same order).
+  if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis) ||
+      !write_reg_float(cybergear::Reg::LocRef, q, axis))
+    return axis == AxisId::Pitch ? fail_pitch("pitch neutral reference failed during adoption") : false;
   const auto i=static_cast<size_t>(axis);
   in_position_mode_[i]=position; in_speed_mode_[i]=!position;
   last_loc_ref_[i]=q; last_spd_ref_[i]=0; last_limit_cur_a_[i]=current; last_limit_spd_[i]=speed;
@@ -498,6 +670,17 @@ void CanMotorBackend::keepalive(AxisId axis) {
   // Rate-limited: only when the age is already >30 ms and at most every
   // 50 ms (20 pings/s), so steady-state costs one CAN frame per ~50 ms.
   const int a = static_cast<int>(axis);
+  if (axis == AxisId::Pitch &&
+      !can::valid_pitch_current_limit(last_limit_cur_a_[a])) {
+    can::AxisLatest stopped;
+    const auto now = now_monotonic_ns();
+    if (system_.axis(axis).latest(stopped) && stopped.has_feedback &&
+        stopped.mode == 0 && stopped.rx_ns > 0 && stopped.rx_ns <= now &&
+        now - stopped.rx_ns < 100000000LL) return;
+    spdlog::error("pitch keepalive blocked: cached LimitCur is not verified within 5 A");
+    deenergize(axis);
+    return;
+  }
   // Keep feedback sampling separate from reference changes. The 20 Hz hold
   // cadence left almost no retry margin before the independent 100 ms watchdog
   // (station capture: healthy host, yaw feedback 100.031 ms old). Request at
@@ -584,6 +767,12 @@ void CanMotorBackend::set_current_limit(AxisId axis, double limit_cur_a) {
   // this on the cycle it raises the drive current (§22); a same-value rewrite
   // is inert but would needlessly add a CAN TX, so track the last value.
   const int a = static_cast<int>(axis);
+  if (axis == AxisId::Pitch &&
+      !can::valid_pitch_current_limit(limit_cur_a)) {
+    spdlog::error("pitch current-limit request rejected outside (0, 5 A]; stopping pitch");
+    deenergize(axis);
+    return;
+  }
   if (std::fabs(limit_cur_a - last_limit_cur_a_[a]) < 1e-6) return;
   if (write_reg_float(cybergear::Reg::LimitCur, static_cast<float>(limit_cur_a),
                       axis)) {
@@ -617,7 +806,7 @@ CanHealth CanMotorBackend::can_health() const {
   // anything (§55). An empty answer here would be a lie in the other direction,
   // so `available` is set only after the bus object is actually reached.
   CanHealth h;
-  can::CanTransport& bus = system_.bus();
+  const can::CanTransport& bus = system_.bus();
   const can::BusStats s = bus.stats();
   h.available = true;
   h.kind = bus.kind();
