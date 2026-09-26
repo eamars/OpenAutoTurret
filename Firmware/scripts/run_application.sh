@@ -22,7 +22,7 @@ case "${1:-}" in
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
-    echo '         --pitch-step-mdeg N (commissioning with IMU; +/-500 max, 5 A, 0.5 deg/s),'
+    echo '         --pitch-step-mdeg N (commissioning with IMU; +/-3000 max, 5 A, 10 deg/s),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -125,8 +125,8 @@ if [ "$PITCH_PROBE" = 1 ]; then
   if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
     echo 'Pitch steps require commissioning with IMU, without yaw motion or separate limit setup' >&2; exit 2
   fi
-  if ! [[ "$PITCH_STEP_MDEG" =~ ^-?[0-9]+$ ]] || ((PITCH_STEP_MDEG < -500 || PITCH_STEP_MDEG > 500)); then
-    echo 'Pitch step outside +/-500 millidegrees' >&2; exit 2
+  if ! [[ "$PITCH_STEP_MDEG" =~ ^-?[0-9]+$ ]] || ((PITCH_STEP_MDEG < -3000 || PITCH_STEP_MDEG > 3000)); then
+    echo 'Pitch step outside +/-3000 millidegrees' >&2; exit 2
   fi
 fi
 if [ "$WITH_IMU" = 1 ] && [ "$MODE" != commission ]; then

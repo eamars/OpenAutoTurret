@@ -21,6 +21,7 @@
 using namespace std::chrono_literals;
 constexpr auto axis=ota::AxisId::Pitch;
 constexpr double rad=std::numbers::pi/180.0;
+constexpr double commanded_speed=10*rad;
 static volatile std::sig_atomic_t interrupted;
 static void stop(int) { interrupted=1; }
 
@@ -32,7 +33,7 @@ int main(int argc, char** argv) {
   int step=0;
   const std::string arg=argv[1];
   auto parsed=std::from_chars(arg.data(),arg.data()+arg.size(),step);
-  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step < -500 || step > 500) return 2;
+  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step < -3000 || step > 3000) return 2;
   std::signal(SIGINT,stop); std::signal(SIGTERM,stop);
   int ownership=-1;
   ota::can::CyberGearSystem system;
@@ -85,7 +86,7 @@ int main(int argc, char** argv) {
     if (!system.send_stop(axis,&error)) throw std::runtime_error(error);
     std::this_thread::sleep_for(20ms);
     std::cout<<"PITCH identified_uid=0x"<<std::hex<<uid<<std::dec<<" q0_rad="<<initial.q_rad
-             <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=0.5 current_ceiling_a=5\n"<<std::flush;
+             <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=10 current_ceiling_a=5\n"<<std::flush;
     if (tune) std::cout<<"PITCH_TRIAL_GAINS kp=4 ki=0.05; restore original gains before stop\n";
     std::mutex commands;
     std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
@@ -112,8 +113,8 @@ int main(int argc, char** argv) {
           else if (now-heartbeat.load()>100000000LL) reason=3;
           else if (!s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL) reason=4;
           else if (s.faults) reason=5;
-          else if (!std::isfinite(s.q_rad) || std::abs(s.q_rad-initial.q_rad)>rad) reason=6;
-          else if (!std::isfinite(measured_speed) || std::abs(measured_speed)>10*rad) reason=7;
+          else if (!std::isfinite(s.q_rad) || std::abs(s.q_rad-initial.q_rad)>4*rad) reason=6;
+          else if (!std::isfinite(measured_speed) || std::abs(measured_speed)>20*rad) reason=7;
           else if (!std::isfinite(s.temp_c) || s.temp_c>45) reason=8;
           else if (system.bus().stats().rx_error_frames) reason=9;
           if (reason && !trip) { trip_reason=reason; trip=true; }
@@ -133,23 +134,23 @@ int main(int argc, char** argv) {
       {
         std::lock_guard lock(commands);
         heartbeat=ota::now_monotonic_ns();
-        if (!trip) mode=backend.transition_mode(axis,true,0.5*rad,heartbeat.load(),error,tune ? .05:-1,tune ? 4:1,true);
+        if (!trip) mode=backend.transition_mode(axis,true,commanded_speed,heartbeat.load(),error,tune ? .05:-1,tune ? 4:1,true);
       }
       record("setup"); std::this_thread::sleep_for(5ms);
     }
     if (trip || mode!=ota::MotorBackend::Transition::Complete)
       throw std::runtime_error("pitch setup stopped: "+error);
     const auto q0=backend.snapshot(axis,ota::now_monotonic_ns()).q_rad;
-    // Slow loaded response needs time to settle; the target offset/speed and
-    // independent 8-second whole-session deadline remain fixed bounds.
-    const auto until=ota::now_monotonic_ns()+4000000000LL;
+    // Owner's probe-first contract: full authorized current headroom (5 A),
+    // sufficient demand to prove motion, and a short bounded experiment.
+    const auto until=ota::now_monotonic_ns()+1000000000LL;
     const Reg observed_regs[]={Reg::LocRef,Reg::LimitSpd,Reg::Iqf,Reg::MechVel};
     unsigned observed=0; bool waiting=false; ota::TimeNs read_deadline=0;
     while (!trip && ota::now_monotonic_ns()<until) {
       {
         std::lock_guard lock(commands);
         heartbeat=ota::now_monotonic_ns();
-        if (!trip) backend.command(axis,q0+step*rad/1000.0,0.5*rad);
+        if (!trip) backend.command(axis,q0+step*rad/1000.0,commanded_speed);
       }
       {
         if (!waiting) {
