@@ -5,9 +5,10 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 
 ## Current deployment gate
 
-**The station is stopped, and the checked-in motor stack does not yet support
-the installed hardware. Do not start it on the new mechanism.** This is a
-documented deployment restriction, not a guard already implemented in software.
+**The automatic station remains stopped. Only the explicit, bounded
+`--commission-hardware` path is qualified for the current motor probes.**
+Normal hardware preflight rejects the legacy yousee configuration when the
+split-bus installation is present. This is not a complete mixed-drive backend.
 
 The installation has GM6020 yaw on `can0`, CyberGear pitch on `can1`, continuous
 yaw without an endstop, IMX500 + IMX477 cameras, a PCIe Hailo device, and a
@@ -15,14 +16,14 @@ BNO085 on I2C. See [verified hardware and probes](HARDWARE_CURRENT.md).
 
 The source still selects the retired `/dev/ttyUSB0` yousee adapter and CyberGear
 IDs 100/101. Its yaw endpoint homing, soft limits and soft-center parking describe
-the old mechanism. Changing only `can.backend` or IDs is insufficient: SocketCAN
-currently transmits extended frames only, and the backend assumes CyberGear
-control/feedback on both axes. Follow the
+the old mechanism. Changing only `can.backend` or IDs is insufficient: the
+transport now supports both frame types, but the automatic backend still assumes
+CyberGear control/feedback on both axes. Follow the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) before activation.
 
-The Pi also lacks the project runtime/build and Hailo driver/runtime. Launcher
-`check` currently stops at missing project Python. Simultaneous camera capture
-and the standalone IMU probe passed their basic data-delivery checks; neither
+The project venv and a separate commissioning release are now built on the Pi.
+The Hailo driver/runtime remains absent. Simultaneous camera capture and the
+standalone IMU probe passed their basic data-delivery checks; neither
 establishes complete application, orientation-calibration or AI readiness.
 Follow the [AI plan](AI_HAT_PERCEPTION_PLAN.md).
 
@@ -55,16 +56,18 @@ lspci -nn
 ```
 
 `check` inspects imports/config/files; it does not open motors or cameras and
-does not prove motion readiness. Missing Python is a real failure, not evidence
-that the old configuration would otherwise pass for this hardware. Logs under
+does not prove motion readiness. Use `check --commission-hardware` on the new
+release for commissioning preflight. Normal `check` deliberately rejects the old
+motor configuration. Logs under
 `/tmp/ota-stack-1000` exist only after a run.
 
 At audit completion both CAN links were restored `DOWN` / `STOPPED` at 1 Mbps;
 both cameras were closed and the IMU probe exited. A future probe must inspect
 current ownership/state rather than assume these conditions persist.
 
-The owner's September 26 one-off elevation authorization was used only to bring
-up/down CAN links for identification. It does not change launcher ownership.
+The owner's September 26 elevation authorization covers temporary CAN link
+setup for these probes; mechanical tests were subsequently authorized explicitly.
+This does not change unprivileged launcher ownership.
 Never put credentials in scripts or Git. For motor probes, identify the exact
 protocol first; discovery must not enable, zero, home or actuate a motor.
 GM6020 `0x1FF` is a voltage command, not a discovery request. See the
@@ -98,6 +101,10 @@ verification do not transfer to GM6020. A zero GM6020 command does not certify
 power removal or a supported load. Commission the new stop/park contract before
 operation. The web's parking request is not equivalent to full launcher stop.
 
+Commissioning stop requests zero GM6020 voltage and observes feedback; its
+terminal result explicitly says **not a park/disable certification**. It never
+enables or moves pitch. Do not interpret a zero-voltage request as power removal.
+
 Preserve numeric logs before restarting. Never overwrite retained homing data,
 manually mark axes homed or bypass validation. Invalidate old calibration by
 installation identity. Yaw needs reference initialization instead of endpoint
@@ -111,8 +118,9 @@ hardware adaptation and physical commissioning gates pass**.
 
 Provision a project-local virtual environment with OS camera bindings and install
 station requirements there. Never install pip dependencies globally or commit
-the environment. This Pi has neither the expected runtime venv nor
-`Firmware/build`. Hailo OS driver/runtime provisioning is separately planned.
+the environment. `run/station-venv` now exists with system camera bindings;
+builds live in separate `run/releases/.../Firmware/build` directories. Hailo OS
+driver/runtime provisioning is separately planned.
 
 Deploy committed source with `Firmware/tools/deploy_station.py`. It archives
 `HEAD`, creates a separate release under `run/releases`, records `REVISION`,
@@ -120,7 +128,7 @@ builds/tests and performs preflight while preserving the Pi checkout. It refuses
 dirty source. Use a project-local Python interpreter; no push is required.
 
 Without `--activate`, deployment does not start motors. `--probe-build` builds
-only the controller and runs preflight while deferring regression tests; it is
+the controller and commissioning probe and runs preflight while deferring regression tests; it is
 probe-ready evidence only. `--activate` additionally stops/starts through the
 launcher and verifies readiness. It can move motors and is inappropriate for
 unadapted source.
@@ -145,6 +153,52 @@ opens it. Neither replaces camera ownership checks or verifies the new backend.
 Keep trial mode/speed/gain overrides out of normal releases. Rollback must select
 a release qualified for this hardware or leave the station stopped; never
 restart a dual-CyberGear build on the new mechanism.
+
+## Bounded commissioning, without automatic startup
+
+See [the September 26 implementation and test record](HARDWARE_COMMISSIONING_2026_09_26.md)
+for the tested revision and release path. Deploy a committed commissioning build
+with the local project Python:
+
+```bash
+python Firmware/tools/deploy_station.py --probe-build --commission-hardware
+```
+
+On that release, as `eamars`, with both links already at 1 Mbps and UP:
+
+```bash
+bash Firmware/scripts/run_application.sh check --commission-hardware
+bash Firmware/scripts/run_application.sh run --commission-hardware
+# Explicit motion: repeat only within the commissioned envelope and clear mechanism.
+bash Firmware/scripts/run_application.sh run --commission-hardware --yaw-voltage 1000 --pulse-ms 150
+bash Firmware/scripts/run_application.sh status
+bash Firmware/scripts/run_application.sh stop
+```
+
+The default probe only receives yaw and queries pitch discovery/mechanical
+position. A rejected pitch register read is reported unavailable, never treated
+as a position. The probe does not home, enable, zero or write parameters on
+pitch. Its position interface is currently incompatible with the installed
+motor's replies and must be resolved before pitch commissioning.
+
+`config/hardware_probe.yaml` is a separate probe schema, **not** a production
+controller configuration. Fixed ceilings are |voltage| <= 3000 raw, pulse <=
+500 ms, travel <= 5 degrees, speed <= 20 degrees/s, feedback age <= 20 ms and
+heartbeat gap <= 40 ms. Tested motion is narrower: +/-1000 for 150 ms plus a
+launcher-interrupted positive pulse. These are raw motor commands, not amperes.
+
+The probe verifies SPI parents, bitrate, ERROR-ACTIVE state, UID and stationary
+yaw baseline before output. The 200 Hz pulse loop and separate in-process guard
+serialize commands, stop on stale/invalid feedback or CAN error frames, and
+request zero after pulse deadline/interruption. This guard cannot survive loss
+of the process or Pi. Automatic operation and process-loss behavior remain
+unqualified. No independent power-cutoff capability has been established.
+
+The launcher and probe hold station-wide locks independent of `OTA_RUN_DIR`.
+Do not run other motor transmitters alongside them. Numeric evidence is written
+to `/tmp/ota-stack-1000/hardware-probe.csv` and `controller.log`; copy it into
+ignored `run/` before the next probe replaces it. No camera or web process is
+started in commissioning mode.
 
 ## Historical procedures
 

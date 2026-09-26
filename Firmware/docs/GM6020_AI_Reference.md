@@ -16,7 +16,7 @@ Page references below are the printed page numbers in the guide. The PDF include
 - DIP switch bits 0-2 set motor ID. `000` is invalid; `001` through `111` are IDs 1 through 7. The fourth DIP switch enables the motor's CAN terminal resistor when ON. (printed p. 6)
 - Feedback identifier is `0x204 + motor_id`: ID 1 sends feedback on `0x205`, ID 2 on `0x206`, through ID 7 on `0x20B`. **ID 1 feedback is `0x205`.** (printed p. 6)
 - The controller-to-motor voltage-command identifiers are `0x1FF` and `0x2FF`; they are group frames, not per-motor feedback IDs. (printed pp. 6-7)
-- Installation: the owner confirms GM6020 yaw, a slip ring and no yaw endstop. On 26 September a receive-only probe verified standard `0x205` feedback at approximately 1 kHz on `can0` via `spi0.0` / `mcp251xfd`, with a 40 MHz clock and 1 Mbps CAN. Both links were restored DOWN afterward. No GM6020 actuation or firmware-mode verification was performed; see [current evidence](HARDWARE_CURRENT.md).
+- Installation: the owner confirms GM6020 yaw, a slip ring and no yaw endstop. On 26 September a receive-only probe verified standard `0x205` feedback at approximately 1 kHz on `can0` via `spi0.0` / `mcp251xfd`, with a 40 MHz clock and 1 Mbps CAN. Subsequent authorized `0x1FF` pulses at +/-1000 raw voltage units produced small motions in matching encoder directions; launcher stop requested zero and observed stationarity. Firmware version and current-mode support remain unknown. See [commissioning evidence and limits](HARDWARE_COMMISSIONING_2026_09_26.md).
 
 ## Integer encoding
 

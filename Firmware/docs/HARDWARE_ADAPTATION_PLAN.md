@@ -1,9 +1,19 @@
 # Plan: split CAN buses, mixed motors and continuous yaw
 
-Status: **proposed, not implemented or commissioned**. 26 September 2026.
+Status: **execution started; transport and bounded yaw commissioning implemented;
+automatic mixed-drive operation still pending**. 26 September 2026.
 Ground truth is [the hardware inventory](HARDWARE_CURRENT.md); the operator
 confirmed GM6020 on yaw and CyberGear on pitch. Follow with the
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
+
+The owner has now confirmed that pitch retains mechanical endstops and authorized
+mechanical tests. [Implementation and evidence](HARDWARE_COMMISSIONING_2026_09_26.md)
+records typed SocketCAN, GM6020 decoding/voltage framing, session-relative encoder
+unwrapping, the launcher-owned probe and real bidirectional yaw motion. This
+completes an initial Stage 1 slice and starts Stage 2; it does not complete the
+stage exit gates or qualify automatic tracking. The probe sends no pitch motion
+commands. Installed pitch rejects `mechPos` reads with a nonzero response status;
+resolve its supported feedback/firmware before pitch homing.
 
 ## Intended result
 
@@ -23,7 +33,7 @@ while the station is stopped. Do not deploy the old configuration as a trial.
 |---|---|---|
 | `config/turret.yaml`, `control/src/config/turret_config.*` | One transport/device; IDs 100/101; finite travel on both axes | Explicit buses, per-axis protocol/ID/topology, validated migration schema |
 | `control/src/main.cpp`, `can/cybergear_system.*` | One CyberGearSystem supplies both axes | Compose independent axis drivers over independently owned buses |
-| `can/can_transport.hpp`, `can/socketcan_bus.*` | TX always adds CAN_EFF_FLAG; RX strips frame type; filters select CyberGear extended messages | Preserve standard/extended, RTR/error flags and DLC; protocol-specific filters and correct error subscription |
+| `can/can_transport.hpp`, `can/socketcan_bus.*` | Previously EFF-only; typed frames and independent error subscription now implemented | Integrate per-protocol filtering and refreshed health into the future production composition |
 | `control/motor_backend.hpp`, `can_motor_backend.*` | CyberGear registers, mode transitions, torque/fault/disabled feedback | Protocol-neutral capabilities and explicit availability of each feedback field |
 | `calibration/*`, `control/boot_fsm.*` | Endpoint homing/finite soft limits define both axes' readiness | Continuous yaw reference initialization separate from pitch homing |
 | `mode/roam_planner.hpp`, control/geometry/safety paths | Yaw sweep ends, soft-center park, bounded target representation | Continuous-angle planning, wrap-safe observation/control, explicit search and park policies |
@@ -42,7 +52,8 @@ load support, supply and termination, and what passes through the slip ring.
 Its rating and routing, including camera connections, must support the proposed
 rotation. A slip ring alone does not prove collision-free travel at every pitch.
 
-Define a versioned configuration concept (not currently accepted YAML):
+Define a versioned production configuration concept (not currently accepted by
+`controld`; `hardware_probe.yaml` implements only the separate commissioning subset):
 
 - Bus `yaw_bus`: SocketCAN `can0`, expected parent `spi0.0`, 1 Mbps classical CAN.
 - Bus `pitch_bus`: SocketCAN `can1`, expected parent `spi1.0`, 1 Mbps classical CAN.

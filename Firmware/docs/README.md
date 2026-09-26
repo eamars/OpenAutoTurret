@@ -14,6 +14,7 @@ September 3-9 loaded homing/tracking evidence belongs to the retired hardware.
 | [`HARDWARE_CURRENT.md`](HARDWARE_CURRENT.md) | Hardware, live CAN identities, simultaneous camera capture, BNO085 probe and missing runtime prerequisites |
 | [`GM6020_AI_Reference.md`](GM6020_AI_Reference.md) | Agent-readable protocol/firmware reference and official archived manual |
 | [`HARDWARE_ADAPTATION_PLAN.md`](HARDWARE_ADAPTATION_PLAN.md) | Two buses, distinct motor drivers, continuous yaw, IMU observer, commissioning and release gates |
+| [`HARDWARE_COMMISSIONING_2026_09_26.md`](HARDWARE_COMMISSIONING_2026_09_26.md) | Implemented transport, real yaw pulse/stop evidence, pitch register incompatibility and verification gaps |
 | [`AI_HAT_PERCEPTION_PLAN.md`](AI_HAT_PERCEPTION_PLAN.md) | Hailo, person/head detection, selected-person tracking and dual-camera/IMU evaluation |
 
 ## The project's own documents

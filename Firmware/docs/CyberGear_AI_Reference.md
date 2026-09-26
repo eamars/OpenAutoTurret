@@ -837,6 +837,14 @@ data[4..7] = parameter data
 
 For a 1-byte parameter, the value is in `data[4]`.
 
+`[STATION-OBSERVATION, 2026-09-26]` The installed ID `0x7F` motor replies to
+`0x7019` with `0x11017F00` and stale payload bytes, while supported reads use
+`0x11007F00`. Treat a nonzero byte in identifier bits 23..16 as an unrecognized
+or unsuccessful register response; do not publish its payload as a position.
+Its exact status encoding and firmware revision are not established by this
+observation. The production parser now requires the documented zero reserved
+bits/bytes and DLC 8. See [captured examples](HARDWARE_COMMISSIONING_2026_09_26.md#pitch-compatibility-defect-found-on-hardware).
+
 See `RUNTIME_PARAMETER_TABLE`.
 
 ---

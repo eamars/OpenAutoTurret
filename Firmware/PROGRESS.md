@@ -4,8 +4,9 @@
 > **26 September 2026:** GM6020 continuous yaw, CyberGear pitch on separate CAN,
 > two cameras, Hailo and an I2C BNO085 are now installed. See
 > [current inventory](docs/HARDWARE_CURRENT.md), [hardware plan](docs/HARDWARE_ADAPTATION_PLAN.md)
-> and [AI plan](docs/AI_HAT_PERCEPTION_PLAN.md). The station is stopped; production
-> adaptation is pending. Historical status below does not certify the new hardware.
+> and [AI plan](docs/AI_HAT_PERCEPTION_PLAN.md). Typed CAN and bounded yaw probes
+> now run on the Pi; see [commissioning results](docs/HARDWARE_COMMISSIONING_2026_09_26.md).
+> Automatic operation remains gated. Historical status below does not certify the new hardware.
 
 ## 2026-09-04, 00:20 — a ghost on the candidate list was selectable, and now it is not
 

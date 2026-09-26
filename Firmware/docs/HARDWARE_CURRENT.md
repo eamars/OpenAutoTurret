@@ -2,7 +2,8 @@
 
 Updated **26 September 2026**. This is the current hardware inventory; dated
 September 3-9 reports describe the previous mechanism. Operation is governed by
-[STATION_OPERATIONS.md](STATION_OPERATIONS.md). Implementation remains pending:
+[STATION_OPERATIONS.md](STATION_OPERATIONS.md). Initial transport/yaw commissioning
+is now implemented; automatic adaptation remains pending:
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) and
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
 
@@ -14,6 +15,11 @@ Both local and Pi source were at
 `6a47f1dd696d75b878b8138dcaceb9f455ab9147` (`Add v2 CAD`). The Pi checkout was
 clean. The station launcher reported `Stopped (last park outcome unavailable)`.
 No controller, perception daemon or web daemon was running.
+
+The subsequent authorized mechanical session built a project-local runtime and
+separate committed release, verified bidirectional low-output GM6020 motion and
+launcher stop. See [the implementation record](HARDWARE_COMMISSIONING_2026_09_26.md).
+The identification-only observations below retain their original scope.
 
 **Verified** below means observed on this host during this audit.
 **Owner-confirmed** means supplied by the owner, without physical inspection.
@@ -28,8 +34,8 @@ No controller, perception daemon or web daemon was running.
 | CAN transport | Two independent SocketCAN interfaces; `mcp251xfd`; 40 MHz controller clock | Verified netlink, sysfs, kernel log |
 | Yaw drive | RoboMaster GM6020, ID 1, `can0` | Axis owner-confirmed; standard `0x205` feedback verified |
 | Pitch drive | Xiaomi CyberGear, ID `0x7F`, `can1` | Axis owner-confirmed; extended discovery and UID verified |
-| Yaw mechanics | Continuous rotation, slip ring, no yaw endstop | Owner-confirmed; no motion/clearance inspection performed |
-| Pitch mechanics | Intended bounded pitch axis | Exact new limits, direction, load/support and endstop arrangement pending commissioning |
+| Yaw mechanics | Continuous rotation, slip ring, no yaw endstop | Owner-confirmed; later sub-degree motor motion verified; full-turn clearance unverified |
+| Pitch mechanics | Bounded pitch with mechanical endstops | Endstops owner-confirmed; exact limits, direction, load/support and homing pending commissioning |
 | Camera A | Sony IMX500, index 0 at this boot | Enumerated and simultaneous capture verified |
 | Camera B | Sony IMX477, index 1 at this boot | Enumerated and simultaneous capture verified; lens/FOV/mount geometry unknown |
 | Accelerator | Owner reports 26 TOPS AI HAT, implying Hailo-8; PCIe Hailo presence verified | PCI `1e60:2864` at `0001:01:00.0`; PCI ID/description alone cannot distinguish H8 from H8L; runtime architecture/SKU pending |
@@ -84,10 +90,12 @@ Record the UID unambiguously as **hexadecimal bytes `72 16 31 31 30 33 31 05`**,
 or `0x7216313130333105` in the repository parser's big-endian representation.
 Do not interpret the digits as a decimal serial number.
 
-No enable, zero, homing, register-write, speed, current or voltage command was
+In this initial identification probe, no enable, zero, homing, register-write, speed, current or voltage command was
 sent. `0x1FF` is the GM6020's documented voltage-command group for ID 1; it was
-not exercised. Motor firmware, torque/voltage response, direction and loaded
-stopping behavior remain unverified. See [GM6020 reference](GM6020_AI_Reference.md).
+not exercised until the subsequent [commissioning session](HARDWARE_COMMISSIONING_2026_09_26.md).
+That session establishes limited voltage response and encoder direction, not
+motor firmware, full-load behavior or physical clockwise sign.
+See [GM6020 reference](GM6020_AI_Reference.md).
 
 The links were restored down in the probe's `finally` block and checked again
 over a separate SSH command. GM6020 TX counter stayed 0; CyberGear TX rose by
@@ -149,11 +157,12 @@ Package queries found no `hailo-all`, `hailort`, `hailo-dkms`,
 `python3-hailort` or `rpicam-apps-hailo-postprocess` installation.
 **Physical enumeration is verified; usable Hailo inference is not.**
 
-The launcher `check` fails at missing project Python
-`/home/eamars/workspace/OpenAutoTurret/.venv/bin/python`. Neither
-`run/station-venv` nor `Firmware/build` exists on this Pi checkout. No station/CAN
-systemd unit files were listed. Re-provisioning and build are needed in addition
-to the code adaptation. No package installation was performed in this audit.
+Initial audit: launcher `check` failed at missing project Python; no station/CAN
+systemd unit files were listed. Subsequent implementation provisioned
+`run/station-venv` with system camera bindings and installed station Python
+requirements there. Separate releases now contain working C++ builds and the
+commissioning probe. The original Pi checkout was preserved. Normal hardware
+preflight now rejects the legacy motor configuration on this installation.
 
 The source still selects `yousee`, `/dev/ttyUSB0`, pitch ID 100 and yaw ID 101,
 both CyberGears, endpoint yaw homing and soft-center yaw parking. It cannot run
@@ -166,8 +175,8 @@ The owner confirmed that the previously proposed BNO085 is now installed.
 The working probe is **`/home/eamars/workspace/imu-lab/imu_main`**, with
 `main.c`, `README.md` and an SH-2/SHTP library copy in `rd/`. Earlier experiments
 `probe2.py`, `imu_read.py`, `imu_sh2.py` and `raw_dump.py` are also present.
-The lab's project-local `.venv` exists; this does not provision OpenAutoTurret's
-missing venv. No probe files were copied into production.
+The lab's project-local `.venv` is separate from OpenAutoTurret's runtime.
+No probe files were copied into production.
 
 Source inspection shows the C probe opens `/dev/i2c-1`, selects `0x4A`, issues
 an IMU soft reset, and configures acceleration, calibrated gyro and rotation
