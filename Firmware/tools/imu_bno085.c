@@ -47,10 +47,17 @@ static int hal_read(sh2_Hal_t *self, uint8_t *out, unsigned len, uint32_t *time_
     // This is polling time, not an interrupt edge timestamp. SH-2 subtracts its
     // report delays; consumers still must tolerate polling/transport latency.
     *time_us = (uint32_t)(now_ns() / 1000);
-    if (read(fd, header, 4) != 4) { ++read_errors; return 0; }
+    ssize_t header_n = read(fd, header, 4);
+    if (header_n != 4) {
+        if (read_errors < 3) fprintf(stderr,"I2C header n=%zd errno=%d (%s)\n",header_n,errno,strerror(errno));
+        ++read_errors; usleep(1000); return 0;
+    }
     unsigned size = (header[0] | (header[1] << 8)) & 0x7fff;
     if (size == 0) return 0;
-    if (size < 4 || size > len) { ++read_errors; return 0; }
+    if (size < 4 || size > len) {
+        if (read_errors < 3) fprintf(stderr,"I2C packet size=%u buffer=%u header=%02x%02x/%u/%u\n",size,len,header[0],header[1],header[2],header[3]);
+        ++read_errors; return 0;
+    }
     unsigned got = 0;
     while (got < size) {
         uint8_t chunk[60];
