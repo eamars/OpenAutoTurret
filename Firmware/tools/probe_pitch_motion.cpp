@@ -1,0 +1,140 @@
+// First small pitch steps using the production mode/current interlock.
+// No homing, encoder zero, calibration persistence, or yaw transmitter.
+#include <atomic>
+#include <charconv>
+#include <chrono>
+#include <cmath>
+#include <csignal>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <mutex>
+#include <numbers>
+#include <thread>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#include "can/cybergear_system.hpp"
+#include "can/socketcan_bus.hpp"
+#include "control/can_motor_backend.hpp"
+
+using namespace std::chrono_literals;
+constexpr auto axis=ota::AxisId::Pitch;
+constexpr double rad=std::numbers::pi/180.0;
+static volatile std::sig_atomic_t interrupted;
+static void stop(int) { interrupted=1; }
+
+int main(int argc, char** argv) {
+  if (argc!=3) { std::cerr<<"Usage: probe-pitch-motion STEP_MILLIDEGREES TRACE.csv\n"; return 2; }
+  int step=0;
+  const std::string arg=argv[1];
+  auto parsed=std::from_chars(arg.data(),arg.data()+arg.size(),step);
+  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step==0 || step < -500 || step > 500) return 2;
+  std::signal(SIGINT,stop); std::signal(SIGTERM,stop);
+  int ownership=-1;
+  ota::can::CyberGearSystem system;
+  ota::CanMotorBackend backend(system);
+  bool identified=false;
+  try {
+    const auto lock="/tmp/ota-mixed-can-"+std::to_string(getuid())+".lock";
+    ownership=::open(lock.c_str(),O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
+    if (ownership<0 || flock(ownership,LOCK_EX|LOCK_NB)) throw std::runtime_error("CAN probe ownership unavailable");
+    if (std::filesystem::canonical("/sys/class/net/can1/device").filename()!="spi1.0")
+      throw std::runtime_error("can1 SPI parent mismatch");
+    std::ofstream trace(argv[2]);
+    if (!trace) throw std::runtime_error("trace unavailable");
+    trace<<"time_ns,phase,pitch_relative_deg,q_rad,speed_deg_s,temperature_c,disabled,feedback_age_ms\n";
+    ota::can::CyberGearSystemConfig cfg;
+    cfg.iface="can1"; cfg.pitch_motor_id=127; cfg.bring_up_if_down=false;
+    // The unused logical yaw slot is never queried or commanded by this probe.
+    std::string error;
+    if (!system.open(cfg,error)) throw std::runtime_error(error);
+    const auto* can=dynamic_cast<const ota::can::SocketCanBus*>(&system.bus());
+    if (!can || !system.bus().is_up() || can->bitrate()!=1000000 ||
+        system.bus().can_state()!=ota::can::CanIfState::ErrorActive)
+      throw std::runtime_error("can1 health/bitrate mismatch");
+    uint64_t uid=0;
+    if (!backend.discover(axis,uid,error) || uid!=0x7216313130333105ULL)
+      throw std::runtime_error("pitch identity mismatch: "+error);
+    identified=true;
+    if (!system.send_stop(axis,&error)) throw std::runtime_error(error);
+    std::this_thread::sleep_for(20ms);
+    const auto initial=backend.snapshot(axis,ota::now_monotonic_ns());
+    if (!initial.has_feedback || !initial.disabled || initial.faults || !std::isfinite(initial.q_rad))
+      throw std::runtime_error("disabled fault-free pitch feedback required");
+    std::cout<<"PITCH identified_uid=0x"<<std::hex<<uid<<std::dec<<" q0_rad="<<initial.q_rad
+             <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=0.5 current_ceiling_a=5\n"<<std::flush;
+    std::mutex commands;
+    std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
+    std::atomic<bool> trip{false}, stop_failed{false};
+    const auto started=ota::now_monotonic_ns();
+    // Guard owns only the pitch stop and serializes it with every setup/target
+    // command. It cannot survive process/Pi loss; this is bounded commissioning.
+    std::jthread guard([&](std::stop_token done) {
+      while (!done.stop_requested()) {
+        {
+          std::lock_guard lock(commands);
+          const auto now=ota::now_monotonic_ns();
+          const auto s=backend.snapshot(axis,now);
+          if (interrupted || now-started>8000000000LL || now-heartbeat.load()>100000000LL ||
+              !s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL || s.faults ||
+              !std::isfinite(s.q_rad) || std::abs(s.q_rad-initial.q_rad)>rad ||
+              !std::isfinite(s.v_rad_s) || std::abs(s.v_rad_s)>10*rad ||
+              !std::isfinite(s.temp_c) || s.temp_c>45 || system.bus().stats().rx_error_frames)
+            trip=true;
+          if (trip && !system.send_stop(axis)) stop_failed=true;
+        }
+        std::this_thread::sleep_for(5ms);
+      }
+      for (int i=0;i<5;++i) { if (!system.send_stop(axis)) stop_failed=true; std::this_thread::sleep_for(10ms); }
+    });
+    auto record=[&](const char* phase) {
+      const auto now=ota::now_monotonic_ns(); const auto s=backend.snapshot(axis,now);
+      trace<<now<<','<<phase<<','<<(s.q_rad-initial.q_rad)/rad<<','<<s.q_rad<<','<<s.v_rad_s/rad
+           <<','<<s.temp_c<<','<<s.disabled<<','<<(now-s.rx_ns)*1e-6<<'\n';
+    };
+    auto mode=ota::MotorBackend::Transition::Pending;
+    while (!trip && mode==ota::MotorBackend::Transition::Pending) {
+      {
+        std::lock_guard lock(commands);
+        heartbeat=ota::now_monotonic_ns();
+        if (!trip) mode=backend.transition_mode(axis,true,0.5*rad,heartbeat.load(),error,-1,1,true);
+      }
+      record("setup"); std::this_thread::sleep_for(5ms);
+    }
+    if (trip || mode!=ota::MotorBackend::Transition::Complete)
+      throw std::runtime_error("pitch setup stopped: "+error);
+    const auto q0=backend.snapshot(axis,ota::now_monotonic_ns()).q_rad;
+    const auto until=ota::now_monotonic_ns()+static_cast<ota::TimeNs>(300+std::abs(step)*2)*1000000LL;
+    while (!trip && ota::now_monotonic_ns()<until) {
+      {
+        std::lock_guard lock(commands);
+        heartbeat=ota::now_monotonic_ns();
+        if (!trip) backend.command(axis,q0+step*rad/1000.0,0.5*rad);
+      }
+      record("step"); std::this_thread::sleep_for(5ms);
+    }
+    {
+      std::lock_guard lock(commands); backend.deenergize(axis);
+    }
+    const auto observe_until=ota::now_monotonic_ns()+2000000000LL;
+    while (ota::now_monotonic_ns()<observe_until) {
+      heartbeat=ota::now_monotonic_ns();
+      if (!system.send_stop(axis)) stop_failed=true;
+      record("observe"); std::this_thread::sleep_for(20ms);
+    }
+    guard.request_stop(); guard.join();
+    const auto final=backend.snapshot(axis,ota::now_monotonic_ns());
+    double cap=0;
+    const bool cap_ok=backend.read_register(axis,ota::cybergear::Reg::LimitCur,cap,200,error) && cap>0 && cap<=5;
+    std::cout<<"PITCH_RESULT guard_trip="<<trip<<" stop_failed="<<stop_failed<<" disabled="<<final.disabled
+             <<" faults="<<final.faults<<" delta_deg="<<(final.q_rad-initial.q_rad)/rad
+             <<" final_limit_a="<<cap<<" current_limit_verified="<<cap_ok<<std::endl;
+    system.close(); ::close(ownership);
+    return !trip && !stop_failed && final.disabled && !final.faults && cap_ok ? 0:1;
+  } catch (const std::exception& e) {
+    if (identified) backend.deenergize(axis);
+    std::cerr<<"PITCH_PROBE_FAILED "<<e.what()<<std::endl;
+    system.close(); if (ownership>=0) ::close(ownership); return 1;
+  }
+}

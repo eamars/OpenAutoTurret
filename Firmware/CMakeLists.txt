@@ -68,6 +68,8 @@ set_tests_properties(homing_motion_probe PROPERTIES TIMEOUT 15)
 # Phase 9: payload profiling / verification commissioning CLI (§28.5/§31/§44).
 add_executable(turret-payload tools/turret_payload.cpp)
 target_link_libraries(turret-payload PRIVATE ota_core)
+add_executable(probe-pitch-motion tools/probe_pitch_motion.cpp)
+target_link_libraries(probe-pitch-motion PRIVATE ota_core)
 
 # §81: replay a recorded session through the real controller. Registered as a test with
 # --expect, so the tool's own behaviour is checked by the same `ctest` run as everything
