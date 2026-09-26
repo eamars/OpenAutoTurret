@@ -24,11 +24,15 @@ def main():
                         help="seconds to wait for automatic readiness after --activate (default: 420)")
     parser.add_argument("--probe-build", action="store_true",
                         help="build only the runtime controller and preflight; defer regression tests")
+    parser.add_argument("--commission-hardware", action="store_true",
+                        help="build/check the bounded mixed-hardware probe; does not start motors")
     args = parser.parse_args()
     if args.host.startswith("-") or not args.root.startswith("/"):
         parser.error("host must not be an option; root must be an absolute remote path")
     if args.ready_timeout <= 0:
         parser.error("--ready-timeout must be positive")
+    if args.commission_hardware and args.activate:
+        parser.error("commissioning activation uses an explicit bounded launcher run, not --activate")
     repo = Path(__file__).resolve().parents[2]
     requirements = repo / "Firmware" / "requirements-station.txt"
     if not requirements.is_file():
@@ -67,7 +71,8 @@ def main():
            f"-r {quote(release + '/Firmware/requirements-station.txt')}")
     script = release + "/Firmware/scripts/run_application.sh"
     smoke = release + "/Firmware/tools/station_smoke.py"
-    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else ""))
+    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
+           + (" --commission-hardware" if args.commission_hardware else ""))
     label = "Probe-ready release (regression tests deferred)" if args.probe_build else "Verified release"
     print(f"{label}: {release}\nRevision: {revision}", flush=True)
     if args.activate:
@@ -79,8 +84,11 @@ def main():
         print(f"Active and ready: {release}", flush=True)
     else:
         print("Build only; the running station was not changed.")
-        print("Activate: rerun the deploy command with --activate to perform the "
-              "HTTP/WebSocket smoke test and readiness wait.")
+        if args.commission_hardware:
+            print(f"Receive/discovery probe: ssh {args.host} \"bash {script} run --commission-hardware\"")
+        else:
+            print("Activate: rerun the deploy command with --activate to perform the "
+                  "HTTP/WebSocket smoke test and readiness wait.")
     print(f"Status: ssh {args.host} \"bash {script} status\"")
 
 

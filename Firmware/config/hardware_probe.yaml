@@ -1,0 +1,20 @@
+# Standalone commissioning only. This is NOT a controld configuration.
+# Volatile commands only; no enable, zero, parameter writes or homing on pitch.
+schema_version: 1
+yaw:
+  interface: can0
+  spi_parent: spi0.0
+  motor_id: 1
+pitch:
+  interface: can1
+  spi_parent: spi1.0
+  motor_id: 127
+  unique_id_hex: '7216313130333105'
+bitrate: 1000000
+limits:
+  voltage_raw: 3000
+  pulse_ms: 500
+  yaw_travel_deg: 5
+  yaw_speed_deg_s: 20
+  feedback_age_ms: 20
+  heartbeat_age_ms: 40

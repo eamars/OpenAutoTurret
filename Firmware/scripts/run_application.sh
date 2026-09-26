@@ -17,6 +17,7 @@ case "${1:-}" in
     echo 'deploy --probe-build: build only controld and preflight; defer regression tests.'
     echo 'run: foreground supervision; stop: controlled park/disable and full stack cleanup.'
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
+    echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -72,11 +73,18 @@ MODE=hardware
 START_WEB=1
 PRODUCTION=0
 PROBE_BUILD=0
+YAW_VOLTAGE=0
+PULSE_MS=100
+OBSERVE_MS=2000
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
     --sim) MODE=sim; shift ;;
     --hardware) MODE=hardware; shift ;;
+    --commission-hardware) MODE=commission; START_WEB=0; shift ;;
+    --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
+    --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
+    --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
     --no-web) START_WEB=0; shift ;;
     --production) PRODUCTION=1; shift ;;
     --profile) PROFILE="${2:?--profile requires a name}"; shift 2 ;;
@@ -86,6 +94,9 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ "$MODE" != commission ] && { [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
+  echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
+fi
 if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
   echo '--probe-build is only valid for deploy' >&2; exit 2
 fi
@@ -103,7 +114,7 @@ if [ "$ACTION" = deploy ]; then
   fi
   cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
   if [ "$PROBE_BUILD" = 1 ]; then
-    cmake --build "$APP/build" --target controld -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target controld probe-mixed-hardware -j"${OTA_BUILD_JOBS:-2}"
     echo 'Probe build: regression tests deferred until runtime viability is established.'
   else
     cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
@@ -129,7 +140,7 @@ if [ "$ACTION" = start ]; then
   for ((attempt=0; attempt<200; attempt++)); do
     if owned_launcher && [ -r "$RUN/started" ] &&
         [ "$(cat "$RUN/started")" = "$launcher_pid $launcher_start" ]; then
-      echo "Started (launcher $launcher_pid). Homing may take about six minutes."
+      echo "Started (launcher $launcher_pid). Inspect status for mode and readiness."
       echo "Web: http://$(hostname):${OTA_WEB_PORT:-8080}/; logs: $RUN"
       exit 0
     fi
@@ -162,7 +173,10 @@ cleanup() {
   # Keep the terminal controller outcome after ownership metadata is removed.
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
-    if grep -q 'PARKED (motors de-energized' "$RUN/controller.log"; then
+    if [ "$MODE" = commission ]; then
+      { echo 'Stopped: commissioning probe ended; not a park/disable certification';
+        tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif grep -q 'PARKED (motors de-energized' "$RUN/controller.log"; then
       echo 'Stopped: PARKED (both axes de-energized)' > "$RUN/shutdown.result"
     else
       { echo 'Stopped: PARK FAILED or park not confirmed';
@@ -186,6 +200,20 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
+if [ "$MODE" = commission ]; then
+  if pgrep -x controld >/dev/null; then
+    echo 'A controller already runs outside this launcher; refusing hardware probe.' >&2; exit 1
+  fi
+  PROBE="$APP/build/probe-mixed-hardware"
+  "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
+    --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
+    --trace "$RUN/hardware-probe.csv" >"$RUN/controller.log" 2>&1 &
+  controller_pid=$!; children+=("$controller_pid")
+  printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
+  cp "$RUN/launcher.pid" "$RUN/started"
+  wait "$controller_pid"
+  exit $?
+fi
 export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"

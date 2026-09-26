@@ -63,6 +63,7 @@ void CyberGearSystem::close() {
 }
 
 void CyberGearSystem::on_frame(const RawFrame& f) {
+  if (!f.extended || f.rtr || f.error || f.dlc != 8) return;
   cybergear::CanFrame cf;
   cf.id = f.id;
   cf.dlc = f.dlc;

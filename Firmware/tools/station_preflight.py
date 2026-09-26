@@ -11,6 +11,25 @@ def main():
     config_path = Path(sys.argv[1]).resolve()
     mode = sys.argv[2]
     config = yaml.safe_load(config_path.read_text())
+    if mode == "commission":
+        probe_config = Path(os.environ.get("OTA_HARDWARE_PROBE_CONFIG", firmware / "config/hardware_probe.yaml"))
+        probe = yaml.safe_load(probe_config.read_text())
+        if probe.get("schema_version") != 1:
+            raise RuntimeError("Unsupported commissioning schema")
+        if probe["yaw"]["interface"] == probe["pitch"]["interface"]:
+            raise RuntimeError("Commissioning requires two independent CAN interfaces")
+        for axis in ("yaw", "pitch"):
+            interface = probe[axis]["interface"]
+            parent = Path("/sys/class/net") / interface / "device"
+            if not parent.exists() or parent.resolve().name != probe[axis]["spi_parent"]:
+                raise RuntimeError(f"{axis}: interface/SPI mapping mismatch: {interface}")
+        binary = firmware / "build/probe-mixed-hardware"
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise RuntimeError("Commissioning probe missing; run deploy --probe-build --commission-hardware")
+        print(f"Preflight: bounded mixed-hardware commissioning; {probe_config}; {sys.executable}")
+        return
+    if mode == "hardware" and Path("/sys/class/net/can1/device").exists() and config.get("can", {}).get("backend") == "yousee":
+        raise RuntimeError("Legacy dual-CyberGear configuration cannot start on the split-bus station; use the explicit commissioning mode until adaptation is complete")
     default = config.get("v3", {}).get("default_mode", "MANUAL")
     if config_path == firmware / "config/turret.yaml" and default != "AUTO_ROAM":
         raise RuntimeError("Normal station config must set v3.default_mode: AUTO_ROAM")

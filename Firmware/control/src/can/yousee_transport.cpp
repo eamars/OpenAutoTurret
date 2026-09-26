@@ -62,7 +62,12 @@ void YouseeCodec::feed(const uint8_t* data, size_t n, ota::TimeNs now_ns) {
                          (static_cast<uint32_t>(buf_[i + 3]) << 16) |
                          (static_cast<uint32_t>(buf_[i + 4]) << 8) |
                          static_cast<uint32_t>(buf_[i + 5]);
-    f.id = cid >> 3;  // adapter packs (id << 3 | ext)
+    f.id = cid >> 3;
+    // Only the extended data-frame flag is established for this legacy adapter.
+    f.extended = (cid & (1u << 2)) != 0;
+    // Ignore unsupported adapter flag combinations rather than inventing
+    // error/RTR semantics for a retired and unprobed serial transport.
+    if (cid & 3u) { i += need; ++resyncs_; continue; }
     f.dlc = dlc;
     std::memcpy(f.data, &buf_[i + 7], dlc);
     f.rx_ns = now_ns;
@@ -74,7 +79,7 @@ void YouseeCodec::feed(const uint8_t* data, size_t n, ota::TimeNs now_ns) {
 
 void YouseeCodec::encode(uint32_t ext_id, const uint8_t* data, uint8_t dlc,
                          std::vector<uint8_t>& out) {
-  const uint32_t cid = (ext_id << 3) | (1u << 2);  // extended frame
+  const uint32_t cid = (ext_id << 3) | (1u << 2);
   out.clear();
   out.reserve(2 + 4 + 1 + dlc + 2);
   out.push_back('A');
@@ -256,15 +261,34 @@ void YouseeTransport::set_frame_callback(FrameCallback cb) {
 
 bool YouseeTransport::send(uint32_t ext_id, const uint8_t data[8],
                            std::string* err) {
+  RawFrame frame{};
+  frame.id = ext_id;
+  frame.dlc = 8;
+  frame.extended = true;
+  if (data) std::memcpy(frame.data, data, sizeof(frame.data));
+  return send_frame(frame, err);
+}
+
+bool YouseeTransport::send_frame(const RawFrame& frame, std::string* err) {
   std::lock_guard<std::mutex> lk(tx_mtx_);
-  if (fd_ < 0 || !running_.load()) {
-    if (err) *err = "yousee: transport not open";
+  auto fail = [&](const char* why) {
+    if (err) *err = why;
     std::lock_guard<std::mutex> sl(stats_mtx_);
     ++stats_.tx_failed;
     return false;
+  };
+  if (!frame.extended)
+    return fail("yousee: standard CAN transmit is unsupported");
+  if (frame.rtr || frame.error)
+    return fail("yousee: RTR and error-frame transmit are unsupported");
+  if (frame.id > 0x1FFFFFFFu)
+    return fail("yousee: extended CAN arbitration ID out of range");
+  if (frame.dlc > 8) return fail("yousee: CAN DLC exceeds 8 bytes");
+  if (fd_ < 0 || !running_.load()) {
+    return fail("yousee: transport not open");
   }
   std::vector<uint8_t> buf;
-  YouseeCodec::encode(ext_id, data, 8, buf);
+  YouseeCodec::encode(frame.id, frame.data, frame.dlc, buf);
   size_t off = 0;
   const auto deadline = ota::now_monotonic_ns() + 2'000'000;
   while (off < buf.size()) {

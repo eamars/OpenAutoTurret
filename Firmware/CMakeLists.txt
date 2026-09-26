@@ -25,6 +25,9 @@ find_package(spdlog REQUIRED)
 
 add_subdirectory(control)
 
+add_executable(probe-mixed-hardware tools/probe_mixed_hardware.cpp)
+target_link_libraries(probe-mixed-hardware PRIVATE ota_core)
+
 # Commissioning / probe CLI (architecture §50 tools/).
 add_executable(turret-can tools/turret_can.cpp)
 target_link_libraries(turret-can PRIVATE ota_core)
