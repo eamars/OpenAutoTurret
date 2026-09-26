@@ -57,6 +57,9 @@ class CanMotorBackend : public MotorBackend {
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp,
                             double spd_ki) override;
+  // Commissioning cleanup only: verify disabled state/current/mode, restore
+  // volatile gains without enabling, then revoke setup authority with STOP.
+  bool restore_stopped_pitch_gains(double kp, double ki, std::string& err);
 
   // Bus health straight from the transport counters (§55).
   CanHealth can_health() const override;

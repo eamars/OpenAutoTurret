@@ -799,6 +799,32 @@ void CanMotorBackend::set_speed_loop_gains(AxisId axis, double spd_kp,
     spdlog::warn("write SpdKi FAIL axis={} ki={:.6f}", a, spd_ki);
 }
 
+bool CanMotorBackend::restore_stopped_pitch_gains(double kp, double ki, std::string& err) {
+  constexpr auto axis=AxisId::Pitch;
+  auto fail=[&](const char* why) { deenergize(axis); err=why; return false; };
+  if (!std::isfinite(kp) || kp<1 || kp>5 || !std::isfinite(ki) || ki<.002 || ki>.05)
+    return fail("restored pitch gains outside supported commissioning bounds");
+  deenergize(axis);
+  double cap=0, mode=0;
+  if (!read_register(axis,cybergear::Reg::LimitCur,cap,100,err) ||
+      !read_register(axis,cybergear::Reg::RunMode,mode,100,err)) return fail("pitch setup readback failed during gain restore");
+  can::AxisLatest s{};
+  const auto now=now_monotonic_ns();
+  if (!system_.axis(axis).latest(s) || !s.has_feedback || s.mode!=0 || s.faults ||
+      s.rx_ns>now || now-s.rx_ns>100000000LL || !can::valid_pitch_current_limit(cap) ||
+      (mode!=1 && mode!=2)) return fail("fresh disabled feedback and safe limit/mode required for gain restore");
+  if (!system_.confirm_pitch_setup(cap,static_cast<int>(mode)) ||
+      !write_reg_float(cybergear::Reg::SpdKp,kp,axis) ||
+      !write_reg_float(cybergear::Reg::SpdKi,ki,axis)) return fail("disabled gain restore write failed");
+  for (auto reg:{cybergear::Reg::SpdKp,cybergear::Reg::SpdKi}) {
+    double actual=0, expected=reg==cybergear::Reg::SpdKp ? kp:ki;
+    if (!read_register(axis,reg,actual,100,err) || !std::isfinite(actual) || std::abs(actual-expected)>1e-6)
+      return fail("disabled gain restore readback mismatch");
+  }
+  deenergize(axis);
+  return true;
+}
+
 
 CanHealth CanMotorBackend::can_health() const {
   // Pure counter read: the transport keeps these under its own lock and the

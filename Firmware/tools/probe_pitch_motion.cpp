@@ -27,7 +27,8 @@ static void stop(int) { interrupted=1; }
 int main(int argc, char** argv) {
   if (argc!=3 && argc!=4) { std::cerr<<"Usage: probe-pitch-motion STEP_MILLIDEGREES TRACE.csv [tuned]\n"; return 2; }
   const bool tune=argc==4 && std::string(argv[3])=="tuned";
-  if (argc==4 && !tune) return 2;
+  const bool restore=argc==4 && std::string(argv[3])=="restore";
+  if (argc==4 && !tune && !restore) return 2;
   int step=0;
   const std::string arg=argv[1];
   auto parsed=std::from_chars(arg.data(),arg.data()+arg.size(),step);
@@ -75,6 +76,8 @@ int main(int argc, char** argv) {
       if (r==Reg::SpdKi) original_ki=value;
     }
     if (step==0) {
+      if (restore && !backend.restore_stopped_pitch_gains(1,.002,error)) throw std::runtime_error(error);
+      if (restore) std::cout<<"PITCH_GAINS restored_kp=1 restored_ki=0.002 without_enable=1\n";
       backend.deenergize(axis); system.close(); ::close(ownership);
       std::cout<<"PITCH_DIAGNOSTICS completed; no enable or movement command\n"; return 0;
     }
@@ -88,20 +91,32 @@ int main(int argc, char** argv) {
     std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
     std::atomic<bool> trip{false}, stop_failed{false};
     const auto started=ota::now_monotonic_ns();
+    std::atomic<int> trip_reason{0};
     // Guard owns only the pitch stop and serializes it with every setup/target
     // command. It cannot survive process/Pi loss; this is bounded commissioning.
     std::jthread guard([&](std::stop_token done) {
+      double last_q=initial.q_rad, measured_speed=0;
+      auto last_q_ns=started;
       while (!done.stop_requested()) {
         {
           std::lock_guard lock(commands);
           const auto now=ota::now_monotonic_ns();
           const auto s=backend.snapshot(axis,now);
-          if (interrupted || now-started>8000000000LL || now-heartbeat.load()>100000000LL ||
-              !s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL || s.faults ||
-              !std::isfinite(s.q_rad) || std::abs(s.q_rad-initial.q_rad)>rad ||
-              !std::isfinite(s.v_rad_s) || std::abs(s.v_rad_s)>10*rad ||
-              !std::isfinite(s.temp_c) || s.temp_c>45 || system.bus().stats().rx_error_frames)
-            trip=true;
+          if (s.has_feedback && s.rx_ns-last_q_ns>=50000000LL) {
+            measured_speed=(s.q_rad-last_q)/((s.rx_ns-last_q_ns)*1e-9);
+            last_q=s.q_rad; last_q_ns=s.rx_ns;
+          }
+          int reason=0;
+          if (interrupted) reason=1;
+          else if (now-started>8000000000LL) reason=2;
+          else if (now-heartbeat.load()>100000000LL) reason=3;
+          else if (!s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL) reason=4;
+          else if (s.faults) reason=5;
+          else if (!std::isfinite(s.q_rad) || std::abs(s.q_rad-initial.q_rad)>rad) reason=6;
+          else if (!std::isfinite(measured_speed) || std::abs(measured_speed)>10*rad) reason=7;
+          else if (!std::isfinite(s.temp_c) || s.temp_c>45) reason=8;
+          else if (system.bus().stats().rx_error_frames) reason=9;
+          if (reason && !trip) { trip_reason=reason; trip=true; }
           if (trip && !system.send_stop(axis)) stop_failed=true;
         }
         std::this_thread::sleep_for(5ms);
@@ -179,10 +194,12 @@ int main(int argc, char** argv) {
       record("observe"); std::this_thread::sleep_for(20ms);
     }
     guard.request_stop(); guard.join();
+    if (tune && trip && !backend.restore_stopped_pitch_gains(original_kp,original_ki,error))
+      throw std::runtime_error("stopped trial gain restoration failed: "+error);
     const auto final=backend.snapshot(axis,ota::now_monotonic_ns());
     double cap=0;
     const bool cap_ok=backend.read_register(axis,ota::cybergear::Reg::LimitCur,cap,200,error) && cap>0 && cap<=5;
-    std::cout<<"PITCH_RESULT guard_trip="<<trip<<" stop_failed="<<stop_failed<<" disabled="<<final.disabled
+    std::cout<<"PITCH_RESULT guard_trip="<<trip<<" trip_reason="<<trip_reason<<" stop_failed="<<stop_failed<<" disabled="<<final.disabled
              <<" faults="<<final.faults<<" delta_deg="<<(final.q_rad-initial.q_rad)/rad
              <<" final_limit_a="<<cap<<" current_limit_verified="<<cap_ok<<std::endl;
     system.close(); ::close(ownership);
