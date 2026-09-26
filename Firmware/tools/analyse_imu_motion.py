@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 
 MAX_AXIS_SAMPLE_AGE_NS = 100_000_000
 MAX_AXIS_SAMPLE_GAP_NS = 250_000_000
+MIN_AXIS_WINDOW_NS = 1_000_000_000  # the hardware probe requires >=1 s observe time
 
 
 def percentile(xs, p):
@@ -40,6 +41,14 @@ def vec_stats(vectors):
 
 def qnorm(q):
     return math.sqrt(sum(x * x for x in q))
+
+
+def qangle_deg(q):
+    n = qnorm(q)
+    if not math.isfinite(n) or n < 1e-9:
+        return None
+    x, y, z, w = [v / n for v in q]
+    return math.degrees(2.0 * math.atan2(math.sqrt(x*x + y*y + z*z), abs(w)))
 
 
 def qmul(a, b):
@@ -76,15 +85,43 @@ def relative_rotation(first, last):
 def read_imu(path):
     by_sensor = defaultdict(list)
     rejected_by_sensor = Counter()
+    rejected_by_segment = Counter()
+    tares = []
+    gap_events = []
+    continuity = 0
+    current_generation = None
     ignored = malformed = 0
     with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, 1):
             row = None
             try:
                 row = json.loads(line)
+                if row.get("kind") == "gap":
+                    continuity += 1
+                    current_generation = None
+                    gap_events.append({"rx_ns": int(row["rx_ns"]), "continuity": continuity,
+                                       "reason": row.get("reason", "unspecified")})
+                    continue
+                if row.get("kind") == "tare":
+                    qref = [float(x) for x in row["q_ref_xyzw"]]
+                    if len(qref) != 4 or not all(math.isfinite(x) for x in qref):
+                        raise ValueError("invalid tare quaternion")
+                    gen = int(row["generation"]) if "generation" in row else None
+                    if current_generation is not None and gen != current_generation:
+                        continuity += 1
+                    current_generation = gen
+                    tares.append({"rx_ns": int(row["rx_ns"]), "generation": gen,
+                                  "continuity": continuity, "q_ref_xyzw": qref})
+                    continue
                 if row.get("kind") != "sample" or row.get("sensor") not in ("accel", "gyro", "rv", "game_rv"):
                     ignored += 1
                     continue
+                gen = int(row["generation"]) if "generation" in row else None
+                if current_generation is not None and gen != current_generation:
+                    continuity += 1
+                current_generation = gen
+                row["_generation"] = gen
+                row["_continuity"] = continuity
                 vals = [float(x) for x in row["values"]]
                 expected = 4 if row["sensor"] in ("rv", "game_rv") else 3
                 if len(vals) != expected:
@@ -102,12 +139,65 @@ def read_imu(path):
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 malformed += 1
                 if isinstance(row, dict) and row.get("kind") == "sample" and row.get("sensor") in ("accel", "gyro", "rv", "game_rv"):
-                    rejected_by_sensor[row["sensor"]] += 1
+                    sensor = row["sensor"]
+                    rejected_by_sensor[sensor] += 1
+                    generation = row.get("_generation")
+                    continuity_id = row.get("_continuity", continuity)
+                    rejected_by_segment[(sensor, continuity_id, generation)] += 1
                 print(f"warning: skipped malformed IMU line {line_no}", file=sys.stderr)
     for rows in by_sensor.values():
         rows.sort(key=lambda r: r["sample_ns"])
     return by_sensor, {"ignored_lines": ignored, "malformed_lines": malformed,
-                       "rejected_samples_by_sensor": dict(sorted(rejected_by_sensor.items()))}
+                       "rejected_samples_by_sensor": dict(sorted(rejected_by_sensor.items())),
+                       "gap_events": gap_events}, tares, rejected_by_segment
+
+
+def segment_groups(rows):
+    groups = defaultdict(list)
+    for row in rows:
+        groups[(row.get("_continuity", 0), row.get("_generation"))].append(row)
+    for group in groups.values():
+        group.sort(key=lambda r: r["sample_ns"])
+    return groups
+
+
+def summarize_tare(tares, by_sensor):
+    result = []
+    samples = by_sensor.get("game_rv", [])
+    for tare in tares:
+        qref = tare["q_ref_xyzw"]
+        if not .9 <= qnorm(qref) <= 1.1:
+            result.append({"generation": tare["generation"], "continuity": tare["continuity"],
+                           "valid_reference": False, "note": "tare quaternion norm outside 0.9..1.1"})
+            continue
+        angles = []
+        for row in samples:
+            if (row.get("_continuity") != tare["continuity"] or
+                    row.get("_generation") != tare["generation"] or
+                    row["rx_ns"] < tare["rx_ns"] or row["status"] == 0 or
+                    "relative_xyzw" not in row):
+                continue
+            try:
+                qrel = [float(x) for x in row["relative_xyzw"]]
+            except (ValueError, TypeError):
+                continue
+            if len(qrel) != 4 or not all(math.isfinite(x) for x in qrel):
+                continue
+            angle = qangle_deg(qrel)
+            if angle is not None:
+                angles.append((row["sample_ns"], angle))
+        angles.sort()
+        if angles:
+            values = [x[1] for x in angles]
+            result.append({"generation": tare["generation"], "continuity": tare["continuity"],
+                           "method": "post-tare relative quaternion; not a base pose",
+                           "samples": len(values), "angle_deg": {"min": min(values),
+                               "max": max(values), "final": values[-1]}})
+        else:
+            result.append({"generation": tare["generation"], "continuity": tare["continuity"],
+                           "valid_reference": True, "samples": 0,
+                           "note": "no valid post-tare game_rv relative quaternions"})
+    return result
 
 
 def summarize_imu(by_sensor):
@@ -139,8 +229,17 @@ def summarize_imu(by_sensor):
             norms = [qnorm(r["values"]) for r in rows]
             item["quaternion_norm"] = {"median": percentile(norms, .5),
                                        "max_abs_error_from_1": max(abs(x-1) for x in norms)}
-            if len(rows) > 1:
-                item["relative_rotation"] = relative_rotation(rows[0]["values"], rows[-1]["values"])
+            segments = []
+            for (continuity, generation), group in sorted(segment_groups(rows).items()):
+                segment = {"continuity": continuity, "generation": generation,
+                           "samples": len(group)}
+                if len(group) > 1:
+                    segment["relative_rotation"] = relative_rotation(
+                        group[0]["values"], group[-1]["values"])
+                segments.append(segment)
+            item["continuous_segments"] = segments
+            if len(segments) == 1 and "relative_rotation" in segments[0]:
+                item["relative_rotation"] = segments[0]["relative_rotation"]
         else:
             item["vector"] = vec_stats([r["values"] for r in rows])
             if sensor == "gyro":
@@ -183,8 +282,8 @@ def axis_sample_quality(rows, rejected_samples=0):
     return not reasons, reasons
 
 
-def compare_motor(by_sensor, path, rejected_by_sensor=None):
-    rejected_by_sensor = rejected_by_sensor or {}
+def compare_motor(by_sensor, path, rejected_by_segment=None):
+    rejected_by_segment = rejected_by_segment or {}
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     parsed = []
@@ -206,18 +305,29 @@ def compare_motor(by_sensor, path, rejected_by_sensor=None):
     trace_lo, trace_hi = parsed[0]["time_ns"], parsed[-1]["time_ns"]
     out["phase_counts"] = dict(Counter(r.get("phase", "") for r in parsed))
     out["trace_span_ms"] = (trace_hi-trace_lo)/1e6
-    sample_times = [r["sample_ns"] for rows_for_sensor in by_sensor.values() for r in rows_for_sensor]
-    if not sample_times:
-        out["warning"] = "no IMU samples to align with motor trace"
+    selected = None
+    for source in ("game_rv", "rv"):
+        candidates = []
+        for key, group in segment_groups(by_sensor.get(source, [])).items():
+            if len(group) < 2:
+                continue
+            lo_candidate = max(trace_lo, group[0]["sample_ns"])
+            hi_candidate = min(trace_hi, group[-1]["sample_ns"])
+            if hi_candidate > lo_candidate:
+                candidates.append((hi_candidate-lo_candidate, len(group), group[-1]["sample_ns"], key, group))
+        if candidates:
+            selected = max(candidates, key=lambda x: (x[0], x[1], x[2]))
+            break
+    if selected is None:
+        out["warning"] = "no continuous RV/game-RV segment overlaps motor trace"
         out["yaw_motion_sufficient_for_axis_estimate"] = False
-        out["axis_estimate_note"] = "no common IMU/motor time window"
+        out["axis_estimate_note"] = "no common IMU/motor continuity window"
         return out
-    lo, hi = max(trace_lo, min(sample_times)), min(trace_hi, max(sample_times))
-    if hi <= lo:
-        out["warning"] = "IMU and motor traces do not overlap in host-monotonic time"
-        out["yaw_motion_sufficient_for_axis_estimate"] = False
-        out["axis_estimate_note"] = "no common IMU/motor time window"
-        return out
+    _, _, _, selected_key, selected_group = selected
+    lo = max(trace_lo, selected_group[0]["sample_ns"])
+    hi = min(trace_hi, selected_group[-1]["sample_ns"])
+    out["imu_continuity"] = selected_key[0]
+    out["imu_generation"] = selected_key[1]
     same_window_motor = [r for r in parsed if lo <= r["time_ns"] <= hi]
     if len(same_window_motor) < 2:
         out["warning"] = "fewer than two motor samples in common time window"
@@ -232,25 +342,29 @@ def compare_motor(by_sensor, path, rejected_by_sensor=None):
     imu = {}
     axis_candidates = {}
     for sensor in ("rv", "game_rv"):
-        subset = [r for r in by_sensor.get(sensor, []) if lo <= r["sample_ns"] <= hi]
+        subset = [r for r in segment_groups(by_sensor.get(sensor, [])).get(selected_key, [])
+                  if lo <= r["sample_ns"] <= hi]
         if len(subset) >= 2:
             quality_ok, quality_reasons = axis_sample_quality(
-                subset, rejected_by_sensor.get(sensor, 0))
+                subset, rejected_by_segment.get((sensor, selected_key[0], selected_key[1]), 0))
             rot = relative_rotation(subset[0]["values"], subset[-1]["values"])
             imu[sensor] = {"samples": len(subset), "relative_rotation": rot,
                            "axis_sample_quality": "usable" if quality_ok else "rejected",
                            "axis_sample_quality_reasons": quality_reasons}
             axis_candidates[sensor] = (quality_ok and rot is not None and
                                        rot["angle_deg"] >= .2)
-    gyros = [r for r in by_sensor.get("gyro", []) if lo <= r["sample_ns"] <= hi]
+    gyros = [r for r in segment_groups(by_sensor.get("gyro", [])).get(selected_key, [])
+             if lo <= r["sample_ns"] <= hi]
     if len(gyros) >= 2:
         imu["gyro_integral_rad_input"] = trapezoid_gyro(gyros)
         imu["gyro_samples"] = len(gyros)
     out["imu_same_window"] = imu
     encoder_motion = abs(out["yaw_relative_delta_deg"]) >= .5
     out["encoder_yaw_motion_sufficient"] = encoder_motion
+    window_long_enough = hi - lo >= MIN_AXIS_WINDOW_NS
+    out["axis_window_long_enough"] = window_long_enough
     out["yaw_motion_sufficient_for_axis_estimate"] = False
-    if encoder_motion:
+    if encoder_motion and window_long_enough:
         # Normalize the observed attitude axis to the positive motor-yaw basis.
         sign = 1.0 if out["yaw_relative_delta_deg"] > 0 else -1.0
         for name in ("rv", "game_rv"):
@@ -265,8 +379,12 @@ def compare_motor(by_sensor, path, rejected_by_sensor=None):
                 rot["axis_estimate_note"] = "withheld: requires >=0.2 deg IMU relative rotation and valid accuracy, quaternion and timing"
     if not encoder_motion:
         out["axis_estimate_note"] = "insufficient encoder yaw excursion (<0.5 deg); no yaw-axis/alignment inference"
+    elif not window_long_enough:
+        out["axis_estimate_note"] = "withheld: common window is shorter than the probe's 1 s minimum observe interval"
     elif not out["yaw_motion_sufficient_for_axis_estimate"]:
         out["axis_estimate_note"] = "withheld: IMU rotation below 0.2 deg or IMU samples have unreliable quaternion, accuracy or timing"
+    else:
+        out["axis_estimate_note"] = "positive yaw basis estimated from continuous game-RV/RV attitude; expressed in initial sensor coordinates, not a base pose"
     return out
 
 
@@ -275,11 +393,13 @@ def main():
     ap.add_argument("--imu", required=True, help="IMU probe NDJSON")
     ap.add_argument("--motor-csv", help="optional probe_mixed_hardware trace CSV")
     args = ap.parse_args()
-    by_sensor, parse = read_imu(args.imu)
+    by_sensor, parse, tares, rejected_by_segment = read_imu(args.imu)
     report = {"imu_file": args.imu, "parse": parse, "sensors": summarize_imu(by_sensor)}
+    if tares:
+        report["post_tare_relative_rotation"] = summarize_tare(tares, by_sensor)
     if args.motor_csv:
         report["motor_comparison"] = compare_motor(
-            by_sensor, args.motor_csv, parse.get("rejected_samples_by_sensor"))
+            by_sensor, args.motor_csv, rejected_by_segment)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
 
 
