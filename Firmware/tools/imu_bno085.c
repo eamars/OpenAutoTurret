@@ -22,6 +22,14 @@
 static int fd = -1;
 static volatile sig_atomic_t stopping;
 static unsigned counts[4], read_errors, resets;
+static unsigned generation, tare_samples;
+static int io_failed, invalid_sample, tared;
+static uint64_t last_sample_ns, last_accel_ns, last_gyro_ns, stable_since_ns;
+static float accel_norm, gyro_norm;
+static double tare_sum[4], tare_ref[4];
+static double norm(const float *v, unsigned n) {
+    double sum=0; for (unsigned i=0; i<n; ++i) sum+=(double)v[i]*v[i]; return sqrt(sum);
+}
 static uint64_t now_ns(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -38,7 +46,7 @@ static int hal_open(sh2_Hal_t *self) {
         // Match the upstream Adafruit SH-2 I2C reset settling interval. The
         // original lab's 20 ms delay races the sensor's reset/advertisements.
         if (write(fd, reset, sizeof reset) == sizeof reset) { usleep(300000); return 0; }
-        usleep(30000);
+        usleep(300000);
     }
     perror("IMU soft reset"); close(fd); fd = -1; return -1;
 }
@@ -52,36 +60,28 @@ static int hal_read(sh2_Hal_t *self, uint8_t *out, unsigned len, uint32_t *time_
     ssize_t header_n = read(fd, header, 4);
     if (header_n != 4) {
         if (read_errors < 3) fprintf(stderr,"I2C header n=%zd errno=%d (%s)\n",header_n,errno,strerror(errno));
-        ++read_errors; usleep(1000); return 0;
+        ++read_errors; io_failed=1; usleep(1000); return 0;
     }
     unsigned size = (header[0] | (header[1] << 8)) & 0x7fff;
     if (size == 0) return 0;
     if (size < 4 || size > len) {
         if (read_errors < 3) fprintf(stderr,"I2C packet size=%u buffer=%u header=%02x%02x/%u/%u\n",size,len,header[0],header[1],header[2],header[3]);
-        ++read_errors; return 0;
+        ++read_errors; io_failed=1; return 0;
     }
-    unsigned got = 0;
-    while (got < size) {
-        uint8_t chunk[60];
-        unsigned wanted = size - got + (got ? 4 : 0);
-        if (wanted > sizeof chunk) wanted = sizeof chunk;
-        ssize_t n = read(fd, chunk, wanted);
-        // BNO085 advances the transfer sequence on each I2C transaction,
-        // including the header peek. It is not constant across chunk reads.
-        if (n != (ssize_t)wanted || n < 4 || chunk[2] != header[2]) {
-            if (read_errors < 5) fprintf(stderr, "I2C packet read n=%zd wanted=%u got=%u header=%02x%02x/%u/%u chunk=%02x%02x/%u/%u\n",
-                n,wanted,got,header[0],header[1],header[2],header[3],chunk[0],chunk[1],chunk[2],chunk[3]);
-            ++read_errors; return 0;
-        }
-        unsigned skip = got ? 4 : 0;
-        memcpy(out + got, chunk + skip, (unsigned)n - skip);
-        got += (unsigned)n - skip;
+    // Linux accepts the entire bounded packet. Match the owner's earlier
+    // ESP-IDF port: header peek, then one complete receive, no chunk joins.
+    // Transfer sequence advances after the peek; do not require equality.
+    ssize_t n=read(fd, out, size);
+    if (n != (ssize_t)size || out[2] != header[2]) {
+        fprintf(stderr,"I2C packet n=%zd expected=%u errno=%d\n",n,size,errno);
+        ++read_errors; io_failed=1; return 0;
     }
-    return (int)got;
+    return (int)size;
 }
 static int hal_write(sh2_Hal_t *self, uint8_t *data, unsigned len) {
     (void)self;
-    return write(fd, data, len) == (ssize_t)len ? (int)len : 0;
+    if (write(fd, data, len) == (ssize_t)len) return (int)len;
+    io_failed=1; return 0;
 }
 static uint32_t hal_time(sh2_Hal_t *self) { (void)self; return (uint32_t)(now_ns() / 1000); }
 static sh2_Hal_t hal = {.open=hal_open, .close=hal_close, .read=hal_read, .write=hal_write, .getTimeUs=hal_time};
@@ -92,7 +92,7 @@ static void event(void *cookie, sh2_AsyncEvent_t *ev) {
 }
 static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
     (void)cookie;
-    sh2_SensorValue_t v;
+    sh2_SensorValue_t v = {0};
     if (sh2_decodeSensorEvent(&v, ev) != SH2_OK) return;
     const char *name; float a[4]; int n = 3, index;
     switch (v.sensorId) {
@@ -106,16 +106,68 @@ static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
         name="game_rv"; index=3; n=4; a[0]=v.un.gameRotationVector.i; a[1]=v.un.gameRotationVector.j; a[2]=v.un.gameRotationVector.k; a[3]=v.un.gameRotationVector.real; break;
     default: return;
     }
-    for (int i=0; i<n; ++i) if (!isfinite(a[i])) { stopping=1; return; }
+    for (int i=0; i<n; ++i) if (!isfinite(a[i])) { invalid_sample=1; return; }
     uint64_t rx = now_ns(), rx_us = rx / 1000;
     // Lift the SDK's host-derived 32-bit time onto CLOCK_MONOTONIC's full epoch.
     int64_t sample_us = (int64_t)rx_us + (int32_t)((uint32_t)v.timestamp - (uint32_t)rx_us);
+    last_sample_ns=rx;
+    if (index==0) { accel_norm=norm(a,3); last_accel_ns=rx; }
+    if (index==1) { gyro_norm=norm(a,3); last_gyro_ns=rx; }
+    if (index==3 && !tared) {
+        double qn=norm(a,4);
+        int stationary=rx-last_accel_ns<100000000ULL && rx-last_gyro_ns<100000000ULL &&
+            accel_norm>8.5 && accel_norm<11.0 && gyro_norm<0.03 && (v.status&3)>=2 &&
+            qn>0.99 && qn<1.01 && (int64_t)rx-sample_us*1000>=0 && (int64_t)rx-sample_us*1000<100000000;
+        if (!stationary) { stable_since_ns=0; tare_samples=0; memset(tare_sum,0,sizeof tare_sum); }
+        else {
+            if (!stable_since_ns) stable_since_ns=rx;
+            double dot=0; for (int i=0; i<4; ++i) dot+=tare_sum[i]*a[i];
+            double sign=dot<0 ? -1 : 1;
+            for (int i=0; i<4; ++i) tare_sum[i]+=sign*a[i]/qn;
+            ++tare_samples;
+            if (rx-stable_since_ns>=2000000000ULL && tare_samples>=80) {
+                double sn=0; for (int i=0; i<4; ++i) sn+=tare_sum[i]*tare_sum[i]; sn=sqrt(sn);
+                for (int i=0; i<4; ++i) tare_ref[i]=tare_sum[i]/sn;
+                tared=1;
+                printf("{\"kind\":\"tare\",\"rx_ns\":%" PRIu64 ",\"generation\":%u,\"method\":\"host_stationary_game_rv\",\"q_ref_xyzw\":[%.9g,%.9g,%.9g,%.9g],\"mount_alignment_valid\":false}\n",
+                       rx,generation,tare_ref[0],tare_ref[1],tare_ref[2],tare_ref[3]);
+            }
+        }
+    }
     ++counts[index];
     printf("{\"kind\":\"sample\",\"sensor\":\"%s\",\"rx_ns\":%" PRIu64 ",\"sample_ns\":%" PRId64
-           ",\"sh2_us\":%" PRIu64 ",\"delay_us\":%u,\"sequence\":%u,\"status\":%u,\"values\":[",
-           name, rx, sample_us*1000, v.timestamp, v.delay, v.sequence, v.status & 3);
+           ",\"sh2_us\":%" PRIu64 ",\"generation\":%u,\"sequence\":%u,\"status\":%u,\"values\":[",
+           name, rx, sample_us*1000, v.timestamp, generation, v.sequence, v.status & 3);
     for (int i=0; i<n; ++i) printf("%s%.9g", i ? "," : "", a[i]);
-    puts("]}");
+    printf("]");
+    if (index==3 && tared) {
+        // q_ref^-1 * q_current, relative to initial sensor axes; not base pose.
+        double x=-tare_ref[0],y=-tare_ref[1],z=-tare_ref[2],w=tare_ref[3], qn=norm(a,4);
+        printf(",\"relative_xyzw\":[%.9g,%.9g,%.9g,%.9g]",
+            (w*a[0]+x*a[3]+y*a[2]-z*a[1])/qn, (w*a[1]-x*a[2]+y*a[3]+z*a[0])/qn,
+            (w*a[2]+x*a[1]-y*a[0]+z*a[3])/qn, (w*a[3]-x*a[0]-y*a[1]-z*a[2])/qn);
+    }
+    puts("}");
+}
+static int open_stream(void) {
+    if (sh2_open(&hal, event, NULL) != SH2_OK) { fprintf(stderr,"sh2_open failed\n"); return 1; }
+    sh2_ProductIds_t ids = {0};
+    int identity_rc = sh2_getProdIds(&ids);
+    if (identity_rc != SH2_OK) { fprintf(stderr,"product identity failed rc=%d read_errors=%u resets=%u\n",identity_rc,read_errors,resets); return 1; }
+    for (int i=0; i<ids.numEntries; ++i) {
+        sh2_ProductId_t *p = &ids.entry[i];
+        printf("{\"kind\":\"product\",\"part\":%u,\"version\":\"%u.%u.%u\",\"build\":%u,\"reset_cause\":%u}\n",
+               p->swPartNumber, p->swVersionMajor, p->swVersionMinor, p->swVersionPatch, p->swBuildNumber, p->resetCause);
+    }
+    sh2_setSensorCallback(sensor, NULL);
+    const sh2_SensorId_t sensors[] = {SH2_ACCELEROMETER, SH2_GYROSCOPE_CALIBRATED, SH2_ROTATION_VECTOR, SH2_GAME_ROTATION_VECTOR};
+    sh2_SensorConfig_t cfg = {0}; cfg.reportInterval_us = 20000;
+    for (unsigned i=0; i<4; ++i) {
+        int rc=sh2_setSensorConfig(sensors[i], &cfg);
+        printf("{\"kind\":\"config\",\"sensor_id\":%u,\"rc\":%d,\"requested_interval_us\":%u}\n", sensors[i], rc, cfg.reportInterval_us);
+        if (rc) return 1;
+    }
+    return 0;
 }
 int main(int argc, char **argv) {
     char *end = NULL;
@@ -128,33 +180,29 @@ int main(int argc, char **argv) {
     if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB) < 0) { perror("IMU ownership"); return 2; }
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGINT, stop); signal(SIGTERM, stop);
-    if (sh2_open(&hal, event, NULL) != SH2_OK) { fprintf(stderr,"sh2_open failed\n"); return 1; }
-    sh2_ProductIds_t ids = {0};
-    int identity_rc = sh2_getProdIds(&ids);
-    if (identity_rc != SH2_OK) { fprintf(stderr,"product identity failed rc=%d read_errors=%u resets=%u\n",identity_rc,read_errors,resets); sh2_close(); return 1; }
-    for (int i=0; i<ids.numEntries; ++i) {
-        sh2_ProductId_t *p = &ids.entry[i];
-        printf("{\"kind\":\"product\",\"part\":%u,\"version\":\"%u.%u.%u\",\"build\":%u,\"reset_cause\":%u}\n",
-               p->swPartNumber, p->swVersionMajor, p->swVersionMinor, p->swVersionPatch, p->swBuildNumber, p->resetCause);
-    }
-    sh2_setSensorCallback(sensor, NULL);
-    const sh2_SensorId_t sensors[] = {SH2_ACCELEROMETER, SH2_GYROSCOPE_CALIBRATED, SH2_ROTATION_VECTOR, SH2_GAME_ROTATION_VECTOR};
-    sh2_SensorConfig_t cfg = {0}; cfg.reportInterval_us = 20000;
-    for (unsigned i=0; i<4; ++i) {
-        sh2_SensorConfig_t actual = {0};
-        int rc=sh2_setSensorConfig(sensors[i], &cfg);
-        if (!rc) rc=sh2_getSensorConfig(sensors[i], &actual);
-        printf("{\"kind\":\"config\",\"sensor_id\":%u,\"rc\":%d,\"interval_us\":%u}\n", sensors[i], rc, actual.reportInterval_us);
-        // GetFeature can race activation and report the previous interval.
-        // Actual samples and measured cadence are the viability check.
-        if (rc) { sh2_close(); return 1; }
-    }
     uint64_t until=now_ns()+(uint64_t)seconds*1000000000ULL;
-    unsigned initial_resets=resets;
-    while (!stopping && now_ns()<until && resets==initial_resets) { sh2_service(); usleep(1000); }
-    sh2_close();
-    printf("{\"kind\":\"summary\",\"counts\":[%u,%u,%u,%u],\"read_errors\":%u,\"unexpected_resets\":%u}\n",
-           counts[0],counts[1],counts[2],counts[3],read_errors,resets-initial_resets);
+    int failed=0; unsigned recoveries=0;
+    for (;;) {
+        io_failed=0; tared=0; stable_since_ns=0; tare_samples=0; memset(tare_sum,0,sizeof tare_sum);
+        last_accel_ns=last_gyro_ns=0;
+        int opened=open_stream();
+        unsigned initial_resets=resets;
+        last_sample_ns=now_ns();
+        while (!opened && !stopping && !invalid_sample && !io_failed && resets==initial_resets && now_ns()<until) {
+            sh2_service();
+            if (now_ns()-last_sample_ns>500000000ULL) { io_failed=1; fprintf(stderr,"IMU stream stale >500ms\n"); }
+            usleep(1000);
+        }
+        failed=opened || invalid_sample || io_failed || resets!=initial_resets;
+        sh2_close();
+        if (!failed || stopping || invalid_sample || recoveries>=1 || now_ns()>=until) break;
+        // Recover at the session boundary, not recursively inside SH-2's read
+        // callback. Consumers must discard pre-reset tare/continuity.
+        printf("{\"kind\":\"gap\",\"rx_ns\":%" PRIu64 ",\"reason\":\"reset_recovery\",\"tare_invalidated\":true}\n",now_ns());
+        ++recoveries; ++generation;
+    }
+    printf("{\"kind\":\"summary\",\"counts\":[%u,%u,%u,%u],\"read_errors\":%u,\"recoveries\":%u,\"failed\":%s,\"tared\":%s}\n",
+           counts[0],counts[1],counts[2],counts[3],read_errors,recoveries,failed ? "true":"false",tared ? "true":"false");
     close(lock);
-    return counts[0]>0 && counts[1]>0 && counts[2]>0 && counts[3]>0 && resets==initial_resets ? 0 : 1;
+    return !failed && counts[0]>0 && counts[1]>0 && counts[2]>0 && counts[3]>0 ? 0 : 1;
 }
