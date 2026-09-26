@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
   int step=0;
   const std::string arg=argv[1];
   auto parsed=std::from_chars(arg.data(),arg.data()+arg.size(),step);
-  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step==0 || step < -500 || step > 500) return 2;
+  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step < -500 || step > 500) return 2;
   std::signal(SIGINT,stop); std::signal(SIGTERM,stop);
   int ownership=-1;
   ota::can::CyberGearSystem system;
@@ -62,6 +62,20 @@ int main(int argc, char** argv) {
     const auto initial=backend.snapshot(axis,ota::now_monotonic_ns());
     if (!initial.has_feedback || !initial.disabled || initial.faults || !std::isfinite(initial.q_rad))
       throw std::runtime_error("disabled fault-free pitch feedback required");
+    using Reg=ota::cybergear::Reg;
+    for (const auto r : {Reg::RunMode,Reg::LocRef,Reg::LimitSpd,Reg::LimitCur,Reg::MechPos,
+                         Reg::LocKp,Reg::SpdKp,Reg::SpdKi,Reg::Iqf,Reg::VBus}) {
+      double value=0;
+      if (!backend.read_register(axis,r,value,200,error)) throw std::runtime_error("diagnostic read failed: "+error);
+      std::cout<<"PITCH_REG name="<<ota::cybergear::reg_name(r)<<" value="<<value<<'\n';
+    }
+    if (step==0) {
+      backend.deenergize(axis); system.close(); ::close(ownership);
+      std::cout<<"PITCH_DIAGNOSTICS completed; no enable or movement command\n"; return 0;
+    }
+    // Diagnostic reads do not elicit COMM_TYPE_2; refresh stopped feedback.
+    if (!system.send_stop(axis,&error)) throw std::runtime_error(error);
+    std::this_thread::sleep_for(20ms);
     std::cout<<"PITCH identified_uid=0x"<<std::hex<<uid<<std::dec<<" q0_rad="<<initial.q_rad
              <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=0.5 current_ceiling_a=5\n"<<std::flush;
     std::mutex commands;
@@ -106,16 +120,33 @@ int main(int argc, char** argv) {
       throw std::runtime_error("pitch setup stopped: "+error);
     const auto q0=backend.snapshot(axis,ota::now_monotonic_ns()).q_rad;
     const auto until=ota::now_monotonic_ns()+static_cast<ota::TimeNs>(300+std::abs(step)*2)*1000000LL;
+    const Reg observed_regs[]={Reg::LocRef,Reg::LimitSpd,Reg::Iqf,Reg::MechVel};
+    unsigned observed=0; bool waiting=false; ota::TimeNs read_deadline=0;
     while (!trip && ota::now_monotonic_ns()<until) {
       {
         std::lock_guard lock(commands);
         heartbeat=ota::now_monotonic_ns();
         if (!trip) backend.command(axis,q0+step*rad/1000.0,0.5*rad);
       }
+      if (observed<4) {
+        if (!waiting) {
+          if (!system.begin_register_read(axis,observed_regs[observed],error)) throw std::runtime_error(error);
+          waiting=true; read_deadline=ota::now_monotonic_ns()+100000000LL;
+        } else {
+          double value=0; const int result=system.poll_register_read(value,error);
+          if (result<0 || (result==0 && ota::now_monotonic_ns()>read_deadline)) throw std::runtime_error("active diagnostic read failed");
+          if (result==1) {
+            std::cout<<"PITCH_ACTIVE_REG name="<<ota::cybergear::reg_name(observed_regs[observed])<<" value="<<value<<'\n';
+            if (observed_regs[observed]==Reg::Iqf && (!std::isfinite(value) || std::abs(value)>5))
+              throw std::runtime_error("observed filtered current exceeds 5 A");
+            waiting=false; ++observed;
+          }
+        }
+      }
       record("step"); std::this_thread::sleep_for(5ms);
     }
     {
-      std::lock_guard lock(commands); backend.deenergize(axis);
+      std::lock_guard lock(commands); system.cancel_register_read(); backend.deenergize(axis);
     }
     const auto observe_until=ota::now_monotonic_ns()+2000000000LL;
     while (ota::now_monotonic_ns()<observe_until) {

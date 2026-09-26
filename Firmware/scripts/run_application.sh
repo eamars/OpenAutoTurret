@@ -86,6 +86,7 @@ APPLY_PITCH_LIMIT=0
 IMU_SECONDS=10
 WITH_IMU=0
 PITCH_STEP_MDEG=0
+PITCH_PROBE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
@@ -94,7 +95,7 @@ while [ $# -gt 0 ]; do
     --commission-hardware) MODE=commission; START_WEB=0; shift ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
     --with-imu) WITH_IMU=1; shift ;;
-    --pitch-step-mdeg) PITCH_STEP_MDEG="${2:?--pitch-step-mdeg requires a value}"; shift 2 ;;
+    --pitch-step-mdeg) PITCH_PROBE=1; PITCH_STEP_MDEG="${2:?--pitch-step-mdeg requires a value}"; shift 2 ;;
     --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
@@ -110,7 +111,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
-if [ "$PITCH_STEP_MDEG" != 0 ]; then
+if [ "$PITCH_PROBE" = 1 ]; then
   if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
     echo 'Pitch steps require commissioning with IMU, without yaw motion or separate limit setup' >&2; exit 2
   fi
@@ -291,7 +292,7 @@ PY
   fi
   probe_options=()
   if [ "$APPLY_PITCH_LIMIT" = 1 ]; then probe_options+=(--apply-pitch-limit); fi
-  if [ "$PITCH_STEP_MDEG" != 0 ]; then
+  if [ "$PITCH_PROBE" = 1 ]; then
   "$APP/build/probe-pitch-motion" "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" >"$RUN/controller.log" 2>&1 &
   else
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
