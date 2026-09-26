@@ -125,7 +125,9 @@ int main(int argc, char** argv) {
     if (trip || mode!=ota::MotorBackend::Transition::Complete)
       throw std::runtime_error("pitch setup stopped: "+error);
     const auto q0=backend.snapshot(axis,ota::now_monotonic_ns()).q_rad;
-    const auto until=ota::now_monotonic_ns()+static_cast<ota::TimeNs>(300+std::abs(step)*2)*1000000LL;
+    // Slow loaded response needs time to settle; the target offset/speed and
+    // independent 8-second whole-session deadline remain fixed bounds.
+    const auto until=ota::now_monotonic_ns()+4000000000LL;
     const Reg observed_regs[]={Reg::LocRef,Reg::LimitSpd,Reg::Iqf,Reg::MechVel};
     unsigned observed=0; bool waiting=false; ota::TimeNs read_deadline=0;
     while (!trip && ota::now_monotonic_ns()<until) {
