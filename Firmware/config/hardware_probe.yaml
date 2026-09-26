@@ -10,6 +10,7 @@ pitch:
   spi_parent: spi1.0
   motor_id: 127
   unique_id_hex: '7216313130333105'
+  current_limit_a: 5.0  # Owner's hard ceiling; reapply/read back after any reset.
 bitrate: 1000000
 limits:
   voltage_raw: 3000

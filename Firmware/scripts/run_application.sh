@@ -18,6 +18,7 @@ case "${1:-}" in
     echo 'run: foreground supervision; stop: controlled park/disable and full stack cleanup.'
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
     echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
+    echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -76,12 +77,14 @@ PROBE_BUILD=0
 YAW_VOLTAGE=0
 PULSE_MS=100
 OBSERVE_MS=2000
+APPLY_PITCH_LIMIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
     --sim) MODE=sim; shift ;;
     --hardware) MODE=hardware; shift ;;
     --commission-hardware) MODE=commission; START_WEB=0; shift ;;
+    --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
     --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
@@ -94,7 +97,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
-if [ "$MODE" != commission ] && { [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
+if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
   echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
 fi
 if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
@@ -141,7 +144,7 @@ if [ "$ACTION" = start ]; then
     if owned_launcher && [ -r "$RUN/started" ] &&
         [ "$(cat "$RUN/started")" = "$launcher_pid $launcher_start" ]; then
       echo "Started (launcher $launcher_pid). Inspect status for mode and readiness."
-      echo "Web: http://$(hostname):${OTA_WEB_PORT:-8080}/; logs: $RUN"
+      if [ "$MODE" != commission ]; then echo "Web: http://$(hostname):${OTA_WEB_PORT:-8080}/; logs: $RUN"; fi
       exit 0
     fi
     if ! kill -0 "$child" 2>/dev/null; then
@@ -213,9 +216,11 @@ if [ "$MODE" = commission ]; then
     echo 'A controller already runs outside this launcher; refusing hardware probe.' >&2; exit 1
   fi
   PROBE="$APP/build/probe-mixed-hardware"
+  probe_options=()
+  if [ "$APPLY_PITCH_LIMIT" = 1 ]; then probe_options+=(--apply-pitch-limit); fi
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
     --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
-    --trace "$RUN/hardware-probe.csv" >"$RUN/controller.log" 2>&1 &
+    --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   controller_pid=$!; children+=("$controller_pid")
   printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
   cp "$RUN/launcher.pid" "$RUN/started"
