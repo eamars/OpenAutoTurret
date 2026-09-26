@@ -19,6 +19,7 @@ case "${1:-}" in
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
     echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
+    echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1000 raw),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -75,6 +76,7 @@ START_WEB=1
 PRODUCTION=0
 PROBE_BUILD=0
 YAW_VOLTAGE=0
+YAW_SPEED_DEG_S=0
 PULSE_MS=100
 OBSERVE_MS=2000
 APPLY_PITCH_LIMIT=0
@@ -86,6 +88,7 @@ while [ $# -gt 0 ]; do
     --commission-hardware) MODE=commission; START_WEB=0; shift ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
+    --yaw-speed-deg-s) YAW_SPEED_DEG_S="${2:?--yaw-speed-deg-s requires a signed value}"; shift 2 ;;
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
     --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
     --no-web) START_WEB=0; shift ;;
@@ -97,7 +100,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
-if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
+if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
   echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
 fi
 if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
@@ -220,6 +223,7 @@ if [ "$MODE" = commission ]; then
   if [ "$APPLY_PITCH_LIMIT" = 1 ]; then probe_options+=(--apply-pitch-limit); fi
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
     --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
+    --yaw-speed-deg-s "$YAW_SPEED_DEG_S" \
     --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   controller_pid=$!; children+=("$controller_pid")
   printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"

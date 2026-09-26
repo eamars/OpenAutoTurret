@@ -21,6 +21,7 @@
 
 #include "can/cybergear_protocol.hpp"
 #include "can/gm6020_protocol.hpp"
+#include "can/gm6020_velocity.hpp"
 #include "can/socketcan_bus.hpp"
 #include "can/pitch_current_policy.hpp"
 
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
  try {
   std::string config = "config/hardware_probe.yaml", trace_path;
   int voltage = 0, pulse_ms = 100, observe_ms = 2000;
+  int speed_reference_deg_s = 0;
   bool apply_pitch_limit = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -70,6 +72,7 @@ int main(int argc, char** argv) {
     const std::string value = argv[++i];
     if (arg == "--config") config = value;
     else if (arg == "--yaw-voltage") voltage = integer(value);
+    else if (arg == "--yaw-speed-deg-s") speed_reference_deg_s = integer(value);
     else if (arg == "--pulse-ms") pulse_ms = integer(value);
     else if (arg == "--observe-ms") observe_ms = integer(value);
     else if (arg == "--trace") trace_path = value;
@@ -100,7 +103,11 @@ int main(int argc, char** argv) {
   const auto pitch_limit = cfg["pitch"]["current_limit_a"].as<double>();
   if (!ota::can::valid_pitch_current_limit(pitch_limit))
     throw std::runtime_error("pitch current limit must be positive and at most 5 A");
-  if (apply_pitch_limit && voltage != 0)
+  if (speed_reference_deg_s < -5 || speed_reference_deg_s > 5 ||
+      (speed_reference_deg_s != 0 && voltage != 0))
+    throw std::runtime_error("velocity probe requires integer target within +/-5 deg/s and no fixed voltage");
+  const bool yaw_motion = voltage != 0 || speed_reference_deg_s != 0;
+  if (apply_pitch_limit && yaw_motion)
     throw std::runtime_error("pitch limit setup must run without yaw actuation");
   const auto bitrate = cfg["bitrate"].as<uint32_t>();
   if (bitrate != 1000000) throw std::runtime_error("expected classical CAN 1 Mbps");
@@ -111,7 +118,7 @@ int main(int argc, char** argv) {
   if (!trace_path.empty()) {
     trace.open(trace_path);
     if (!trace) throw std::runtime_error("cannot open trace");
-    trace << "time_ns,phase,voltage_raw,angle_count,yaw_relative_deg,speed_deg_s,current_raw,temperature_raw,feedback_age_ms\n";
+    trace << "time_ns,phase,voltage_raw,angle_count,yaw_relative_deg,speed_deg_s,current_raw,temperature_raw,feedback_age_ms,estimated_speed_deg_s\n";
   }
   std::signal(SIGTERM, stop_signal); std::signal(SIGINT, stop_signal);
   std::mutex sample_mutex;
@@ -249,7 +256,8 @@ int main(int argc, char** argv) {
     std::cout << "PITCH_SETUP no_enable_no_motion_command=1; limit applies only to position/speed modes" << std::endl;
   }
   const auto zero = ota::gm6020::voltage_frame(static_cast<uint8_t>(yaw_id), 0);
-  const auto command = ota::gm6020::voltage_frame(static_cast<uint8_t>(yaw_id), voltage);
+  ota::gm6020::VelocityLoop velocity_loop;
+  velocity_loop.reset(baseline.position, ota::now_monotonic_ns());
   std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
   std::atomic<bool> trip{false}, zero_failed{false};
   std::mutex command_mutex;
@@ -257,7 +265,7 @@ int main(int argc, char** argv) {
   const auto pulse_deadline = start + uint64_t(pulse_ms) * 1000000;
   // Independent of the probe loop, but not independent of this process/OS.
   std::jthread guard;
-  if (voltage != 0) guard = std::jthread([&](std::stop_token stop) {
+  if (yaw_motion) guard = std::jthread([&](std::stop_token stop) {
     while (!stop.stop_requested()) {
       {
         std::lock_guard lock(command_mutex);
@@ -292,18 +300,28 @@ int main(int argc, char** argv) {
     if (speed > speed_limit || travel > travel_limit) { trip.store(true); reason = "speed_or_travel_guard"; }
     if (trip.load() && std::string_view(reason) == "completed") reason = "heartbeat_guard";
     bool active = false;
+    int applied_voltage = 0;
     heartbeat.store(now);
     {
       std::lock_guard lock(command_mutex);
       const auto send_time = ota::now_monotonic_ns();
       if ((send_time - current.feedback.rx_ns) * 1e-6 > age_limit) { trip.store(true); reason = "feedback_invalid_or_stale"; }
-      active = voltage != 0 && send_time < pulse_deadline && !trip.load();
-      if (voltage != 0 && !yaw.send_frame(active ? command : zero)) { trip.store(true); reason = "tx_failed"; }
+      active = yaw_motion && send_time < pulse_deadline && !trip.load();
+      const int regulated = speed_reference_deg_s
+          ? velocity_loop.update(active ? speed_reference_deg_s / degrees : 0, current.position, send_time) : 0;
+      if (active) {
+        applied_voltage = std::clamp(speed_reference_deg_s ? regulated : voltage, -voltage_limit, voltage_limit);
+        if (speed_reference_deg_s && !velocity_loop.valid()) {
+          trip.store(true); active = false; applied_voltage = 0; reason = "velocity_loop_invalid";
+        }
+      }
+      const auto command = ota::gm6020::voltage_frame(static_cast<uint8_t>(yaw_id), applied_voltage);
+      if (yaw_motion && !yaw.send_frame(active ? command : zero)) { trip.store(true); reason = "tx_failed"; }
     }
-    if (trace) trace << now << ',' << (active ? "pulse" : "observe") << ',' << (active ? voltage : 0)
+    if (trace) trace << now << ',' << (active ? "pulse" : "observe") << ',' << applied_voltage
                      << ',' << current.feedback.angle_count << ',' << current.position * degrees << ','
                      << current.feedback.speed_rad_s() * degrees << ',' << current.feedback.current_raw << ','
-                     << int(current.feedback.temperature_raw) << ',' << age_ms << '\n';
+                     << int(current.feedback.temperature_raw) << ',' << age_ms << ',' << velocity_loop.velocity_rad_s() * degrees << '\n';
     if (!active && current.valid && age_ms <= age_limit && speed <= 1.0) {
       if (!still_since) still_since = now;
       stopped = now - still_since >= 250000000;
@@ -311,7 +329,7 @@ int main(int argc, char** argv) {
     if (elapsed_ms >= pulse_ms + observe_ms || (trip.load() && stopped)) break;
     next += 5ms; std::this_thread::sleep_until(next);
   }
-  if (voltage != 0) {
+  if (yaw_motion) {
     for (int i = 0; i < 20; ++i) {
       if (!yaw.send_frame(zero)) zero_failed.store(true);
       std::this_thread::sleep_for(5ms);
@@ -322,6 +340,7 @@ int main(int argc, char** argv) {
   const auto yaw_stats = yaw.stats(); const auto pitch_stats = pitch.stats();
   yaw.close(); pitch.close();
   std::cout << "RESULT reason=" << reason << " yaw_voltage=" << voltage
+            << " yaw_speed_target_deg_s=" << speed_reference_deg_s
             << " peak_speed_deg_s=" << peak_speed << " peak_travel_deg=" << peak_travel
             << " final_displacement_deg=" << (final.position - baseline.position) * degrees
             << " yaw_frames=" << final.count << " yaw_tx=" << yaw_stats.tx_frames
@@ -330,7 +349,8 @@ int main(int argc, char** argv) {
             << " yaw_errors=" << yaw_stats.rx_error_frames << " pitch_errors=" << pitch_stats.rx_error_frames
             << std::endl;
   // This is deliberately not the production PARKED/de-energized marker.
-  std::cout << "COMMISSIONING FINISHED; " << (voltage ? "zero output requested; disabled state unavailable" : "receive/discovery only") << std::endl;
+  std::cout << "COMMISSIONING FINISHED; " << (yaw_motion ? "zero output requested; disabled state unavailable" :
+      apply_pitch_limit ? "pitch current limit verified; no motion command" : "receive/discovery only") << std::endl;
   return trip.load() || !stopped || zero_failed.load() ? 2 : 0;
  } catch (const std::exception& error) {
    std::cerr << "Probe refused: " << error.what() << std::endl; return 1;
