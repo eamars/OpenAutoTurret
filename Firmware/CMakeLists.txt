@@ -2,7 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 project(open_auto_turret
         VERSION 0.1.0
         DESCRIPTION "OpenAutoTurret vision tracking station (control stack)"
-        LANGUAGES CXX)
+        LANGUAGES C CXX)
+
+add_executable(imu-bno085 tools/imu_bno085.c
+  third_party/sh2/sh2.c third_party/sh2/sh2_util.c
+  third_party/sh2/sh2_SensorValue.c third_party/sh2/shtp.c)
+target_include_directories(imu-bno085 PRIVATE third_party/sh2)
+target_link_libraries(imu-bno085 PRIVATE m)
 
 # The whole production stack builds from Firmware/ (see PROGRESS.md location
 # rule). C++20 per architecture doc §5.2/§51.

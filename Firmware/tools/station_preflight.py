@@ -11,6 +11,13 @@ def main():
     config_path = Path(sys.argv[1]).resolve()
     mode = sys.argv[2]
     config = yaml.safe_load(config_path.read_text())
+    if mode == "imu":
+        if not os.access("/dev/i2c-1", os.R_OK | os.W_OK):
+            raise RuntimeError("BNO085 requires unprivileged read/write access to /dev/i2c-1")
+        if not os.access(firmware / "build/imu-bno085", os.X_OK):
+            raise RuntimeError("IMU executable missing; deploy --probe-build --probe-imu")
+        print("Preflight: BNO085 capture only; no motor or camera process")
+        return
     if mode == "commission":
         probe_config = Path(os.environ.get("OTA_HARDWARE_PROBE_CONFIG", firmware / "config/hardware_probe.yaml"))
         probe = yaml.safe_load(probe_config.read_text())

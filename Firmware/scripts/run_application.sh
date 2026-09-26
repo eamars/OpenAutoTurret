@@ -20,6 +20,7 @@ case "${1:-}" in
     echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
+    echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -80,12 +81,15 @@ YAW_SPEED_DEG_S=0
 PULSE_MS=100
 OBSERVE_MS=2000
 APPLY_PITCH_LIMIT=0
+IMU_SECONDS=10
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
     --sim) MODE=sim; shift ;;
     --hardware) MODE=hardware; shift ;;
     --commission-hardware) MODE=commission; START_WEB=0; shift ;;
+    --probe-imu) MODE=imu; START_WEB=0; shift ;;
+    --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
     --yaw-speed-deg-s) YAW_SPEED_DEG_S="${2:?--yaw-speed-deg-s requires a signed value}"; shift 2 ;;
@@ -100,6 +104,9 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if ! [[ "$IMU_SECONDS" =~ ^[0-9]+$ ]] || ((IMU_SECONDS < 1 || IMU_SECONDS > 120)); then
+  echo '--imu-seconds must be 1..120' >&2; exit 2
+fi
 if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
   echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
 fi
@@ -120,7 +127,11 @@ if [ "$ACTION" = deploy ]; then
   fi
   cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
   if [ "$PROBE_BUILD" = 1 ]; then
+    if [ "$MODE" = imu ]; then
+    cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    else
     cmake --build "$APP/build" --target controld probe-mixed-hardware -j"${OTA_BUILD_JOBS:-2}"
+    fi
     echo 'Probe build: regression tests deferred until runtime viability is established.'
   else
     cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
@@ -168,7 +179,7 @@ if [ "$ACTION" = check ]; then
 fi
 exec 9>"$RUN/launcher.lock"
 flock -n 9 || { echo "A stack already owns $RUN" >&2; exit 1; }
-if [ "$MODE" = hardware ] || [ "$MODE" = commission ]; then
+if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ]; then
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
@@ -176,7 +187,10 @@ children=()
 controller_pid=''
 cleanup() {
   trap - EXIT INT TERM
-  if [ "$MODE" = commission ]; then
+  if [ "$MODE" = imu ]; then
+    echo 'Ending IMU acquisition; no motor process was started.'
+    echo 'Stopped: IMU capture ended; motors were not commanded' > "$RUN/shutdown.result"
+  elif [ "$MODE" = commission ]; then
     echo 'Ending commissioning; an active yaw probe requests zero voltage.'
   else
     echo 'Stopping this stack; controller performs its own park/disable sequence.'
@@ -214,6 +228,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
+if [ "$MODE" = imu ]; then
+  if pgrep -x controld >/dev/null || pgrep -x imu_main >/dev/null; then
+    echo 'Existing controller or legacy IMU consumer; refusing capture.' >&2; exit 1
+  fi
+  "$APP/build/imu-bno085" "$IMU_SECONDS" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+  imu_pid=$!; children+=("$imu_pid")
+  printf 'Mode: IMU capture\nTrace: %s\n' "$RUN/imu.ndjson" > "$RUN/stack.info"
+  cp "$RUN/launcher.pid" "$RUN/started"
+  wait "$imu_pid"
+  exit $?
+fi
 if [ "$MODE" = commission ]; then
   if pgrep -x controld >/dev/null; then
     echo 'A controller already runs outside this launcher; refusing hardware probe.' >&2; exit 1
