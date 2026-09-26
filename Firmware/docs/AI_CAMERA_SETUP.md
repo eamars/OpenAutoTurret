@@ -1,5 +1,9 @@
 # Raspberry Pi AI Camera Setup Record
 
+> **Historical single-camera setup.** The current Pi has IMX500 and IMX477,
+> plus a Hailo accelerator awaiting its software stack. See
+> [current verification](HARDWARE_CURRENT.md) and [the AI plan](AI_HAT_PERCEPTION_PLAN.md).
+
 Date: 2026-08-30
 Guide: [Raspberry Pi AI Camera documentation](https://www.raspberrypi.com/documentation/accessories/ai-camera.html)
 

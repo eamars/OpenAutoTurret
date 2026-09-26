@@ -1,6 +1,12 @@
 
 ---
 
+> **26 September 2026:** GM6020 continuous yaw, CyberGear pitch on separate CAN,
+> two cameras, Hailo and an I2C BNO085 are now installed. See
+> [current inventory](docs/HARDWARE_CURRENT.md), [hardware plan](docs/HARDWARE_ADAPTATION_PLAN.md)
+> and [AI plan](docs/AI_HAT_PERCEPTION_PLAN.md). The station is stopped; production
+> adaptation is pending. Historical status below does not certify the new hardware.
+
 ## 2026-09-04, 00:20 — a ghost on the candidate list was selectable, and now it is not
 
 Chasing one of the tracking items on the station turned up something better than the item.

@@ -1,5 +1,10 @@
 # Station runbook — one-off deployment of the OpenAutoTurret stack
 
+> **Historical only.** These commands predate the launcher and September 26
+> mixed-motor installation. Do not execute the process kills or independent
+> service launches below. Use [STATION_OPERATIONS.md](STATION_OPERATIONS.md)
+> and [HARDWARE_CURRENT.md](HARDWARE_CURRENT.md).
+
 **Audience:** an engineer or agent deploying this station from a cold start, with motor authority already granted.
 Every command below was executed on this station and the expected output is what was actually observed, not what the
 code suggests it should be. Where something is *not* verified, the document says so instead of implying otherwise.

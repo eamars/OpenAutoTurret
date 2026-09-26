@@ -1,4 +1,11 @@
 # OpenAutoTurret BNO085 IMU Expansion
+
+> **26 September 2026 update:** a BNO085 is now installed on I2C-1 at 0x4A and
+> a standalone host probe receives acceleration, gyro and rotation-vector reports.
+> This remains historical design input: production integration, calibration and
+> observer acceptance are not complete. The two-CyberGear/bounded-yaw assumptions
+> below are superseded by [current hardware](../HARDWARE_CURRENT.md) and
+> [the current adaptation plan](../HARDWARE_ADAPTATION_PLAN.md).
 ## Architecture and Control Design Addendum to v1
 
 **Document status:** Implementation handover / v1 expansion  

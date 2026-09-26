@@ -1,5 +1,14 @@
 # OpenAutoTurret — Phase Status
 
+> **26 September 2026 hardware refresh:** live probes confirm GM6020 yaw on
+> can0, CyberGear pitch ID 0x7F on can1, concurrent IMX500/IMX477 capture and
+> BNO085 reports on I2C. Hailo enumerates but lacks its driver/runtime. The
+> station is stopped; mixed-motor/continuous-yaw/IMU integration remains pending.
+> See [current inventory](Firmware/docs/HARDWARE_CURRENT.md),
+> [hardware plan](Firmware/docs/HARDWARE_ADAPTATION_PLAN.md) and
+> [AI plan](Firmware/docs/AI_HAT_PERCEPTION_PLAN.md). Earlier physical acceptance
+> below describes the retired mechanism and does not transfer to this one.
+
 **Tracks** [`Firmware/docs/open_auto_turret_software_control_architecture_v1.md`](Firmware/docs/open_auto_turret_software_control_architecture_v1.md).
 
 This file answers one question: **how far along is each phase, counting only what has

@@ -1,5 +1,9 @@
 # Waveshare RS485 CAN HAT Setup Record
 
+> **Retired hardware.** This is the old MCP2515/RS485 HAT, not the current
+> dual-channel MCP2518FD HAT. Do not reuse these overlays. See
+> [current hardware](HARDWARE_CURRENT.md).
+
 Date: 2026-08-30
 Guide: [Waveshare RS485 CAN HAT Wiki](https://www.waveshare.com/wiki/RS485_CAN_HAT)
 

@@ -1,5 +1,9 @@
 # CAN Bus `ERROR-PASSIVE` — Root-Cause Report (P6 blocker) — v2, corrected
 
+> **Historical MCP2515 investigation.** The September 26 installation uses a
+> different dual-channel MCP2518FD HAT. This report does not diagnose that HAT.
+> See [current CAN probe results](HARDWARE_CURRENT.md).
+
 **Status: CAN normal-mode ERROR-PASSIVE fault reproduced. Root cause
 remains unresolved.** HAT/transceiver damage, MCP2515 RX-path damage,
 external wiring, CyberGear transceiver behaviour, and motor-induced
