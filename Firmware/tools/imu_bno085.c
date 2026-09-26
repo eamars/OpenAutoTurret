@@ -35,8 +35,10 @@ static int hal_open(sh2_Hal_t *self) {
     if (ioctl(fd, I2C_SLAVE, 0x4a) < 0) { perror("I2C_SLAVE"); close(fd); fd = -1; return -1; }
     uint8_t reset[] = {5, 0, 1, 0, 1};
     for (int attempt = 0; attempt < 6; ++attempt) {
-        if (write(fd, reset, sizeof reset) == sizeof reset) { usleep(20000); return 0; }
-        usleep(1000);
+        // Match the upstream Adafruit SH-2 I2C reset settling interval. The
+        // original lab's 20 ms delay races the sensor's reset/advertisements.
+        if (write(fd, reset, sizeof reset) == sizeof reset) { usleep(300000); return 0; }
+        usleep(30000);
     }
     perror("IMU soft reset"); close(fd); fd = -1; return -1;
 }
