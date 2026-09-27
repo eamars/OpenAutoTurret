@@ -59,3 +59,23 @@
 3. **启动时打印 `BOOTTIME − MONOTONIC`**（三行）：将来谁让这台 Pi 睡了觉，日志里第一眼就能看见。
 4. **`t=` 状态行的单位**在 runbook 里没写死是哪把钟（我这次是**推断** BOOTTIME 与 `/proc/uptime` 一致）
    ⇒ 与 1) 一起补一句"哪把钟 + 锚点在哪"。
+
+## 5. 现场结账（07:4x，release `e7c8cee749b6`）
+
+在站上拉一次 `read_control_trace`（不需要跳闸就能验 live 那条路）：
+
+```
+帧头： {'type':'control_trace','axes':['pitch','yaw'],'frozen':False,'frozen_t_ns':'0',
+        'clock':'CLOCK_MONOTONIC','boot_id':'ed65e7b6-4e32-43f7-afe5-41fb532eb200',
+        'mono_to_wall_ns':'1790478027063700826'}
+用锚点换算最新一行的 t  → 2026-09-27T18:46:32.678Z，与本机墙上钟差 **0.056 秒**
+boot_id 与 /proc/sys/kernel/random/boot_id **一致**
+```
+
+⇒ **验收通过的标准不是"键存在"，是"拿着锚点能把行放到墙上钟上"**：差 56 ms。
+这 56 ms 是量移（两次 syscall 在锁外）＋ 序列化＋socket 传输的和，
+**在 200 Hz（5 ms 一周期）的尺度上是 ~11 个周期**——谁要拿痕迹去对相机帧，得知道这个量级；
+要更准就得把锚点测在**快照那一刻**（锁内），那是一次 syscall 换 11 个周期，现在不值。
+
+**仍待现场**：文件头（跳闸才写）。`$RUN/traces/` 现在为空；下一次跳闸后
+`head -1` 那个 ndjson 就该看到同样的四个键。命令与判据在 §4-1。
