@@ -122,8 +122,17 @@ def test_launcher_lifecycle(tmp_path):
      assert (base/'disabled').exists()
      print('PASS failed camera process shuts down its controller and web siblings',flush=True)
      (base/'fail-vision').unlink()
-     call('start','--hold-motion');call('stop')
+     for role in ('control','web.webd.app','perception.visiond'):
+      (base/(role+'.pid')).unlink(missing_ok=True)
+      (base/(role+'.term')).unlink(missing_ok=True)
+     call('start','--hold-motion')
+     wait_for(lambda:(base/'perception.visiond.pid').exists())
+     assert not (base/'control.pid').exists()
+     assert not (base/'web.webd.app.pid').exists()
+     assert 'Mode: perception' in call('status').stdout
+     call('stop')
      assert not (base/'runtime/launcher.pid').exists()
+     assert (base/'perception.visiond.term').exists()
      print('PASS perception-only process remains stoppable through the same script',flush=True)
      env['PROBE_FAIL_PREFLIGHT']='1'
      assert call('start','--sim',ok=False).returncode!=0

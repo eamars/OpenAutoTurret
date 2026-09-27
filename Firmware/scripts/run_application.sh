@@ -495,8 +495,10 @@ if [ "$START_WEB" -eq 1 ]; then
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
   vision_args+=(--controller-state-url "http://127.0.0.1:$OTA_WEB_PORT/api/state")
 fi
-if [ "$MODE" != perception ] && [ "$MODE" != mixed-controller-commission ]; then
-  vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
+if [ "$MODE" != mixed-controller-commission ]; then
+  if [ "$MODE" != perception ]; then
+    vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
+  fi
   "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
   children+=("$!")
 elif [ "$MODE" = mixed-controller-commission ]; then
