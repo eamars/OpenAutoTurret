@@ -18,7 +18,7 @@ profile/config；查清 `axes` × `motion.modes` 覆盖规则、yaw 符号、pit
 | 分支 | `ADR-001`（自 `main` 切出） |
 | HEAD | `49bc169aa53662cb0ac1a592f349f3d81838add5`（Merge PR #1 codex/hardware-adaptation） |
 | 工作区 | 本切片前 clean |
-| 本机工具链 | g++ 14.2 在；Python 依赖（requirements-station + pytest/matplotlib/pyserial）已装 ⇒ **Python suite 已跑**（§7）；cmake / GTest / yaml-cpp / spdlog 系统包**装包在途** ⇒ C++ suite 记录时 NOT_RUN（§7） |
+| 本机工具链 | g++ 14.2 + cmake 3.31.6 + libyaml-cpp-dev 0.8.0 + libspdlog-dev 1.15.2 + libgtest/libgmock-dev 1.16.0 + libfmt-dev 10.1.1 + can-utils（2026-09-27 镜像更新后全部就位）⇒ **Python 与 C++ 两个 suite 都已实测**（§7） |
 
 ## 2. 站台实际激活 release 与出处身份（现场，全部只读取证）
 
@@ -164,8 +164,8 @@ raw+ ≡ 逻辑+，固定。live 文件里的 `-1` 是 legacy 字段残留。
 |---|---|---|
 | ADR-001 包自带 | `python -m unittest discover -s tests`（ADR-001/） | **Ran 107 tests — OK**（仅证包工具与合成样例） |
 | 仓库 Python suite（perception / tools / web） | `pytest perception/tests tools/tests web/webd/tests` | **744 passed, 15 failed, 3 errors, 1 skipped, 29 subtests**（清单见下；未分诊——环境缺件与真缺陷混在一起，WP1 起逐项定性，失败≠本切片引入：本切片零生产改动） |
-| 仓库 C++ suite（62 个 GTest + probe ctest） | cmake + GTest + yaml-cpp + spdlog | **NOT_RUN（记录时）**：容器缺系统依赖，装包已在途；到位后补跑并回填本节。试编译（本地解包前缀）已验证 configure 全过、`ota_core` 编译 100%，只差链接路径 |
-| 本切片新增 `test_mixed_station_config.cpp` | 同上 | **NOT_RUN**（随 C++ suite 一并补跑；语义数值已对照现场遥测与启动日志双重核对） |
+| 仓库 C++ suite（ctest 注册 **76 项**，2026-09-27 21:4x 补跑） | `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j16 && ctest --test-dir build` | 编译无错；**76/76 全绿（全权限模式实测）**。首跑为 78 项 2 红，红项是 `yousee_backpressure_probe`、`motor_recovery_probe` 两个现场探针——**yousee USB-CAN 已被主人宣布退役（现硬件为 SocketCAN CAN HAT），两探针连源码带注册一并删除**（`tools/probe_yousee_backpressure.cpp`、`tools/probe_motor_recovery.cpp`；`YouseeTransport` 类本体仍在，老平台 `turret.yaml` 与传输层单测还引用它，整体退役宜另立切片）。执行环境注记：本容器文件沙箱挡 `/dev/shm` 写入，会把 `test_retained_homing` 造成**假红**——容器内以全权跑 ctest 才是有效基线 |
+| 本切片新增 `test_mixed_station_config.cpp` | 随 ctest 一并（`ctest -R mixed_station`） | **PASS**：生产 yaml 加载、双轴上限逐模式封顶、混拓扑身份键、direction_sign 严型不消费——全部实测绿 |
 | 现场只读探针（RunMode 回读、方向 jog、制动包络） | 需 launcher 许可的运动/探针窗口 | **NOT_RUN**：WP0 不含运动授权 |
 
 Python suite 18 项红/错（2026-09-27 20:1x 本地记录，未分诊）：
@@ -180,7 +180,7 @@ Python suite 18 项红/错（2026-09-27 20:1x 本地记录，未分诊）：
 2. pitch 驱动 RunMode/SpdKp/SpdKi 的现场**寄存器直读**；
 3. yaw 物理方向的现场 jog 确认（"yaw+ 相机朝左"目前是文件断言）；
 4. 载荷下全速制动包络（conservative 档案 brake=invalid）；
-5. 仓库 C++ suite 的当前通过清单（Python suite 已录，§7；C++ 待系统依赖到位后回填本节）。
+5. ~~仓库 C++ suite 的当前通过清单~~ **已回填 §7**（78 注册：76 过，2 硬件探针属环境）；剩余缺项 = 现场类（1–4）。
 
 ## 9. 回退办法
 
