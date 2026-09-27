@@ -30,6 +30,7 @@ APP = Path(__file__).resolve().parents[1]
 SCRIPT = APP / "scripts" / "run_application.sh"
 RUN = Path(os.environ.get("OTA_RUN_DIR", f"/tmp/ota-stack-{os.getuid()}"))
 CAUSE = RUN / "shutdown.cause"
+READY: list[str] = []  # one entry per scenario: did that stack actually come up
 
 
 def bash(*args: str) -> subprocess.CompletedProcess:
@@ -68,27 +69,32 @@ def child_pid(name: str) -> int:
 
 
 def wait_ready(timeout_s: int) -> str:
+    # /api/state, not /api/health: health answers before the controller has a
+    # phase, and a rehearsal that cannot prove the stack actually came up would
+    # be rehearsing nothing. Readiness is an assertion, reported per scenario.
     port = read(RUN / "web.port").strip()
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if port.isdigit():
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as reply:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=2) as reply:
                     body = json.loads(reply.read().decode())
-                    if body.get("phase") in ("hold", "parked", "idle"):
-                        return f"ready phase={body['phase']}"
+                    if body.get("phase") in ("hold", "parked", "idle") and not body.get("fault"):
+                        return f"ready phase={body['phase']} mode={body.get('operating_mode')}"
             except Exception:  # noqa: BLE001 - during startup any failure means "not yet"
                 pass
         port = read(RUN / "web.port").strip() or port
         time.sleep(1)
-    return "ready timeout"
+    return "NOT READY"
 
 
 def start(timeout_s: int) -> str:
     result = bash("start")
     if result.returncode != 0:
         raise SystemExit(f"rehearsal: start failed rc={result.returncode}: {result.stdout}{result.stderr}")
-    return wait_ready(timeout_s)
+    ready = wait_ready(timeout_s)
+    READY.append(ready)
+    return ready
 
 
 def archive_count() -> int:
@@ -113,6 +119,10 @@ def check(scenario: str, cause: str, extra: str = "") -> tuple[bool, str]:
     if scenario == "archive":
         ok = "archives=" in extra and int(re.sub(r"\D", "", extra) or 0) >= 2
         return ok, f"previous rounds kept on disk ({extra})" if ok else f"got: {extra}"
+    if scenario == "ready":
+        want, got = int(extra.split("/")[0]), int(extra.split("/")[1])
+        ok = want == got and want > 0
+        return ok, f"every scenario's stack came up ({extra})" if ok else f"got: {extra}"
     return False, f"unknown scenario {scenario}"
 
 
@@ -124,6 +134,8 @@ SELFTEST_CASES = [
     ("operator", "cause=child_exit utc=x launcher=1 uptime_s=9 exited_child=visiond exited_pid=7 wait_status=137(signal 9)", "", False),
     ("archive", "", "archives=3", True),
     ("archive", "", "archives=1", False),
+    ("ready", "", "3/3", True),
+    ("ready", "", "2/3", False),
     # A credential outranks the signal label: an operator stop *is* a SIGTERM, and
     # naming the person beats naming the syscall. Pinned here so precedence changes
     # out loud instead of quietly rewriting history.
@@ -183,6 +195,11 @@ def main() -> int:
     extra = f"archives={archive_count()}"
     results.append(("archive", "", extra))
     print("  " + extra)
+
+    up = sum(1 for entry in READY if not entry.startswith("NOT READY"))
+    results.append(("ready", "", f"{up}/{len(READY)}"))
+    for index, entry in enumerate(READY, start=1):
+        print(f"  scenario {index}: {entry}")
 
     print("=== verdict ===")
     failed = 0

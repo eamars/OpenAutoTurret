@@ -65,8 +65,25 @@ launcher 结束 → controld 受控停车 → `MIXED STOPPED`（pitch disable �
 
 ## 7. 现场排练结果
 
-NOT_RUN（写报告时新 release 尚未部署）。运行方法与输出粘贴在本节回填；
-排练会在每个场景各起一次栈，结束时站点处于停止态。
+**已跑（本地 03:12–03:27，release `9ee0285fab37`，站点被我起停 4 次，每次含归零）**：
+
+| 场景 | 触发 | 站点写下的 `shutdown.cause`（摘录） | 判定 |
+|---|---|---|---|
+| 1 | `run_application.sh stop` | `cause=operator_stop … operator="who=operator pid=3615811 uid=1000 …" signal=TERM` | PASS |
+| 2 | 裸 `kill -TERM launcher` | `cause=external_signal … signal=TERM`（**没有 operator 凭证**） | PASS |
+| 3 | `kill -KILL visiond` | `cause=child_exit … exited_child=visiond exited_pid=3678233 wait_status=137(signal 9)` | PASS |
+| 4 | 连续重启后查归档 | `logs-history/` 存 5 轮，每轮带自己那份 cause | PASS |
+
+四次停车结果都是 `STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)`——
+**包括子进程被 SIGKILL 那次**。⇒ 本切片的主张成立：**归因变清楚了，停车行为一点没动。**
+另有一次真实部署停机也留下了完整凭证（`uptime_s=653`，pid/uid 全在）。
+
+**我自己不老实的一处（已改）**：排练里的 ready 判定打的是 `/api/health`，而那份回答**不含 `phase`** ⇒
+三个场景各把 300 s 超时**等满**才继续——排练"通过"了，但"栈确实起来了"当时并没被证明。
+已改打 `/api/state`，并把 ready 变成一条真断言（selftest 10/10）；**带断言的重跑记 NOT_RUN，随下一次部署。**
+
+**顺带的复发观察**：这 4 轮合计约 15 分钟的 AUTO_ROAM/AUTO_TRACK 里，`no_progress` **一次都没复现**。
+见 `OBS_NO_PROGRESS_TRIP_2026-09-28.md`。
 
 ## 8. 剩余限制与下一步
 
