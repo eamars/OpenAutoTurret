@@ -1096,6 +1096,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
 
   // 3. Build the supervisor input.
+  AxisLimits parking_yaw_stop_limits = cycle_limits[ix(AxisId::Yaw)];
+  if (phase_ == Phase::Parking && mixed_stop_park_ &&
+      parking_yaw_stop_limits.valid) {
+    // Normal references stop at the inner sector (+/-80 deg). Once shutdown
+    // requests zero speed, the unused 10-degree inset is braking reserve.
+    // Evaluate stopping against the outer session policy sector, not the
+    // roaming target boundary. Neither limit is a physical yaw endstop.
+    parking_yaw_stop_limits.set_from_endpoints(
+        parking_yaw_stop_limits.q_hard_min_rad,
+        parking_yaw_stop_limits.q_hard_max_rad, 0.0);
+  }
   SupervisorInput in;
   for (int i = 0; i < kAxisCount; ++i) {
     in.axes[i].q_raw_rad = sp[i].q_rad;
@@ -1114,7 +1125,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     in.axes[i].temperature_known = sp[i].temperature_known;
     in.axes[i].motor_faults = sp[i].faults;
     in.axes[i].motor_faults_known = sp[i].faults_known;
-    in.axes[i].limits = cycle_limits[i];
+    in.axes[i].limits = i == static_cast<int>(AxisId::Yaw) &&
+                        phase_ == Phase::Parking && mixed_stop_park_
+        ? parking_yaw_stop_limits : cycle_limits[i];
   }
   in.homing_valid = position_ready();
   // §38.1: the supervisor applies the stricter tracking checks only when the

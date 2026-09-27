@@ -1,4 +1,4 @@
-# OpenAutoTurret — opt-in split-bus production configuration.
+# OpenAutoTurret — split-bus hardware configuration.
 #
 # Commissioning values (§58) below are CONSERVATIVE PLACEHOLDERS: they keep the
 # daemon safe (slow speeds, wide soft-limit bands) until the real numbers are
@@ -7,8 +7,7 @@
 # "TBD" as "use the built-in conservative default" and records a warning.
 schema_version: 1
 # The application entry point loads the split-bus topology from this profile.
-# Keep explicitly selected with OTA_CONTROL_CONFIG until mixed-backend readiness
-# gates are enabled in the deployed controller.
+# Normal hardware launcher default after mixed-drive motion and stop validation.
 hardware_profile: config/mixed_hardware.yaml
 # The active v3 mapping is near the end of this file. The station
 # starts in AUTO_ROAM after validated calibration/homing. Web Manual / Hold
@@ -195,8 +194,8 @@ payload:
   check_spd_ki: 0.02
 # Automatic service cycle. Manual/Hold is an explicit web override.
 v3:
-  # Preserves normal station intent. station_preflight.py currently blocks this
-  # profile from normal startup until mixed yaw and pitch homing gates pass.
+  # Preserves the station's automatic service cycle after pitch-only homing and
+  # establishment of a fresh stationary yaw session reference.
   default_mode: AUTO_ROAM
   service_speed_control: true
   service_speed_ki: 0.05

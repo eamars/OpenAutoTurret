@@ -12,7 +12,7 @@ case "${1:-}" in
   start|run|stop|status|check|deploy) ACTION="$1"; shift ;;
   -h|--help)
     echo 'Usage: run_application.sh [deploy|check|start|run|status|stop] [options]'
-    echo 'No action: background start, using config/turret.yaml (AUTO_ROAM).'
+    echo 'No action: background start, using config/turret_mixed.yaml (AUTO_ROAM) on hardware.'
     echo 'deploy: build, test and preflight this checkout; does not start motors.'
     echo 'deploy --probe-build: build only controld and preflight; defer regression tests.'
     echo 'run: foreground supervision; stop: controlled park/disable and full stack cleanup.'
@@ -178,7 +178,11 @@ fi
 umask 077
 mkdir -p "$RUN"
 cd "$APP"
-ACTIVE_CONTROL_CONFIG="${OTA_CONTROL_CONFIG:-$APP/config/turret.yaml}"
+DEFAULT_CONTROL_CONFIG="$APP/config/turret.yaml"
+if [ "$MODE" = hardware ]; then
+  DEFAULT_CONTROL_CONFIG="$APP/config/turret_mixed.yaml"
+fi
+ACTIVE_CONTROL_CONFIG="${OTA_CONTROL_CONFIG:-$DEFAULT_CONTROL_CONFIG}"
 if [ "$MIXED_CONTROLLER_COMMISSION" = 1 ]; then
   ACTIVE_CONTROL_CONFIG="$APP/config/turret_mixed.yaml"
 fi
