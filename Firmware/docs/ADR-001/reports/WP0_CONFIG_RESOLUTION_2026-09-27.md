@@ -163,16 +163,20 @@ raw+ ≡ 逻辑+，固定。live 文件里的 `-1` 是 legacy 字段残留。
 | 套件 | 命令 | 结果 |
 |---|---|---|
 | ADR-001 包自带 | `python -m unittest discover -s tests`（ADR-001/） | **Ran 107 tests — OK**（仅证包工具与合成样例） |
-| 仓库 Python suite（perception / tools / web） | `pytest perception/tests tools/tests web/webd/tests` | **744 passed, 15 failed, 3 errors, 1 skipped, 29 subtests**（清单见下；未分诊——环境缺件与真缺陷混在一起，WP1 起逐项定性，失败≠本切片引入：本切片零生产改动） |
+| 仓库 Python suite（perception / tools / web） | `pytest perception/tests tools/tests web/webd/tests` | **744 passed, 15 failed, 3 errors, 1 skipped, 29 subtests**；18 项红/错**已分诊**（表见下：真腐化 14 / 环境缺件 4，无一由本切片引入） |
 | 仓库 C++ suite（ctest 注册 **76 项**，2026-09-27 21:4x 补跑） | `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j16 && ctest --test-dir build` | 编译无错；**76/76 全绿（全权限模式实测）**。首跑为 78 项 2 红，红项是 `yousee_backpressure_probe`、`motor_recovery_probe` 两个现场探针——**yousee USB-CAN 已被主人宣布退役（现硬件为 SocketCAN CAN HAT），两探针连源码带注册一并删除**（`tools/probe_yousee_backpressure.cpp`、`tools/probe_motor_recovery.cpp`；`YouseeTransport` 类本体仍在，老平台 `turret.yaml` 与传输层单测还引用它，整体退役宜另立切片）。执行环境注记：本容器文件沙箱挡 `/dev/shm` 写入，会把 `test_retained_homing` 造成**假红**——容器内以全权跑 ctest 才是有效基线 |
 | 本切片新增 `test_mixed_station_config.cpp` | 随 ctest 一并（`ctest -R mixed_station`） | **PASS**：生产 yaml 加载、双轴上限逐模式封顶、混拓扑身份键、direction_sign 严型不消费——全部实测绿 |
 | 现场只读探针（RunMode 回读、方向 jog、制动包络） | 需 launcher 许可的运动/探针窗口 | **NOT_RUN**：WP0 不含运动授权 |
 
-Python suite 18 项红/错（2026-09-27 20:1x 本地记录，未分诊）：
-`perception/test_model.py::TestFactory`（manifest 与已装 artefact 一致性 ×2，疑与 HEF 缺件相关）、
-`perception/test_pipeline.py::TestPipelineFrame` ×2、`tools/test_install_station.py::CheckTest::test_a_consistent_install_passes`、
-`tools/test_v3_acceptance.py` ×7（验收工具全组）、`web/webd` dashboard/telemetry 文档映射 ×3、
-`web/webd/test_section_20_ledger.py` setup ERROR ×3。
+Python suite 18 项红/错 **已分诊**（2026-09-27 22:3x 本地，逐族复跑取断言现场）：
+
+| 定性 | 数量 | 族 | 根因 | 修复方向 |
+|---|---|---|---|---|
+| **真腐化：文档搬移断引用** | 13 | `tools/test_v3_acceptance.py` ×7、`web/webd` doc-mapping ×3、`test_section_20_ledger.py` ERROR ×3 | `da0dc6d "Organize legacy documentation archive"` 把 `open_auto_turret_v3_three_mode…md` 与 `…v3_2_apache_hud_ui_revision.md` 移入 `docs/archive/`，测试与工具仍读 `docs/` 老路径（FileNotFoundError 全链一致） | 更新引用路径（或归档处留指针）；13 红共用 2 个根因 |
+| **真腐化：期望清单过期** | 1 | `test_model.py::TestFactory::test_the_shipped_config_and_manifests_are_coherent` | `perception_v1.json` 实含 6 模型（新增 `hailo_yolov8n`），测试仍按 5 模型硬列表 | 更新期望集或由 manifest 推导 |
+| **环境缺件（站上专属，无 skip 守卫）** | 4 | `test_model` artefact ×1（需 `/usr/share/imx500-models`）、`test_pipeline` ×2（离线假模型量不出 `model_inference_ms`，`stages_unmeasured` 如实上报反而触红）、`test_install_station` ×1（容器无用户 `eamars`） | 检查本身正确，缺的是"站外环境跳过"的守卫——红得诚实但不该拦站外 CI | 各加 skip 守卫（凭据路径/用户/后端存在性） |
+
+⇒ **本切片零生产改动，18 红无一由 WP0 引入**；真腐化 14 项全部源自 3 个根因，修复是 ~6 行级别的补丁，落点待主人定（本分支追加小 commit 或并给 WP1）。
 
 ## 8. 尚缺证据
 
