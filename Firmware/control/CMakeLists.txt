@@ -4,6 +4,13 @@
 file(GLOB_RECURSE OTA_CORE_SRCS CONFIGURE_DEPENDS
      ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 list(FILTER OTA_CORE_SRCS EXCLUDE REGEX "/main\\.cpp$")
+# Keep the mixed production-profile parser in the shared library even if the
+# source collection is changed from a recursive glob in a future build cleanup.
+set(MIXED_HARDWARE_PROFILE_SOURCE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/config/mixed_hardware_profile.cpp)
+if(NOT MIXED_HARDWARE_PROFILE_SOURCE IN_LIST OTA_CORE_SRCS)
+  list(APPEND OTA_CORE_SRCS ${MIXED_HARDWARE_PROFILE_SOURCE})
+endif()
 
 add_library(ota_core STATIC ${OTA_CORE_SRCS})
 target_include_directories(ota_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
