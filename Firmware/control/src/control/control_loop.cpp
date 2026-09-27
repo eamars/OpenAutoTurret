@@ -1,4 +1,5 @@
 // OpenAutoTurret — ControlLoop implementation (§46 per-cycle engine).
+#include "control/stop_evidence.hpp"
 #include "control/control_loop.hpp"
 
 #include <spdlog/spdlog.h>
@@ -331,6 +332,27 @@ bool ControlLoop::start_parking(std::string& err) {
                            (cfg_.park.speed_deg_s * kDeg2Rad) +
                            yaw_speed / yaw_brake_rad_s2 + 5.0) * 1e9);
     mixed_stop_park_ = true;
+    {
+      StopEvidence ev;
+      mixed_stop_id_ = "stop-" + std::to_string(now_ns_);
+      ev.stop_id = mixed_stop_id_;
+      ev.reason = fault_reason_.empty() ? "stop_or_park" : "fault_stop";
+      ev.requested_at_ns = now_ns_;
+      ev.stage = "requested";
+      ev.axes[0].axis = "pitch";
+      ev.axes[1].axis = "yaw";
+      for (int i = 0; i < kAxisCount; ++i) {
+        ev.axes[i].zero_requested = Evidence::Requested;
+        ev.axes[i].feedback_age_ms = -1.0;  // nothing observed yet at request time
+      }
+      ev.axes[0].disable_requested = Evidence::Requested;
+      ev.axes[0].disable_confirmed = Evidence::Absent;   // not yet; asked, unproven
+      // The GM6020 has no disable to request: what we send is neutral, not de-energise.
+      ev.axes[1].disable_requested = Evidence::Unsupported;
+      ev.axes[1].disable_confirmed = Evidence::Unsupported;
+      ev.finalise();
+      telemetry_.append_stop_evidence(ev.to_json_line());
+    }
     park_.reset();
     park_failed_ = false;
     disable_tracking();
@@ -1805,6 +1827,42 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           shutdown_requested_.store(false);
           spdlog::info("MIXED STOPPED: pitch disable confirmed by fresh feedback at {} ns; GM6020 received repeated zero-speed requests and final zero-voltage request; yaw disable state unavailable",
                        mixed_pitch_disabled_confirmed_ns_);
+          {
+            // "stationary_observed" here is the dwell and pose verification this branch
+            // already required: position held inside a tolerance for a stated window. A
+            // weaker claim than "de-torqued", and the contract is right that only the
+            // weaker one is available from a frame with no enable bit.
+            StopEvidence ev;
+            ev.stop_id = mixed_stop_id_.empty() ? "stop-" + std::to_string(now_ns)
+                                               : mixed_stop_id_;
+            ev.reason = fault_reason_.empty() ? "stop_or_park" : "fault_stop";
+            ev.requested_at_ns = now_ns;
+            ev.stage = "parked";
+            ev.axes[0].axis = "pitch";
+            ev.axes[1].axis = "yaw";
+            ev.axes[0].zero_requested = Evidence::Requested;
+            ev.axes[0].disable_requested = Evidence::Requested;
+            ev.axes[0].disable_confirmed = Evidence::Confirmed;   // fresh feedback said so
+            ev.axes[1].zero_requested = Evidence::Requested;
+            ev.axes[1].disable_requested = Evidence::Unsupported;
+            ev.axes[1].disable_confirmed = Evidence::Unsupported; // no such bit to read
+            ev.axes[0].feedback_age_ms = static_cast<double>(now_ns - pitch.rx_ns) / 1e6;
+            ev.axes[1].feedback_age_ms = static_cast<double>(now_ns - yaw.rx_ns) / 1e6;
+            ev.axes[0].last_neutral_request_ns = mixed_pitch_disable_requested_ns_;
+            ev.axes[1].last_neutral_request_ns = mixed_yaw_zero_requested_ns_;
+            const long long pitch_window = now_ns - mixed_pitch_disable_requested_ns_;
+            const long long yaw_window = now_ns - mixed_park_yaw_dwell_since_ns_;
+            if (pitch_window > 0) {
+              ev.axes[0].stationary_observed = Evidence::Observed;
+              ev.axes[0].stationary_window_ns = pitch_window;
+            }
+            if (yaw_window > 0) {   // yaw_dwell_complete is a precondition of this branch
+              ev.axes[1].stationary_observed = Evidence::Observed;
+              ev.axes[1].stationary_window_ns = yaw_window;
+            }
+            ev.finalise();
+            telemetry_.append_stop_evidence(ev.to_json_line());
+          }
         }
         break;
       }

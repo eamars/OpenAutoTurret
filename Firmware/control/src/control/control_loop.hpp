@@ -468,6 +468,10 @@ class ControlLoop {
   double yaw_reference_candidate_rad_ = 0.0;
   TimeNs yaw_reference_stationary_since_ns_ = 0;
   bool mixed_stop_park_ = false;
+  // Shared by the two stop-evidence records (request and completion) so a reader can
+  // see a requested stop with no completion after it -- the interesting case --
+  // rather than two unrelated lines.
+  std::string mixed_stop_id_;
   bool mixed_pitch_disable_requested_ = false;
   double mixed_park_yaw_origin_rad_ = 0.0;
   double mixed_park_yaw_corridor_rad_ = 0.0;

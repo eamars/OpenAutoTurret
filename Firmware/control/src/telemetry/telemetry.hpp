@@ -907,6 +907,18 @@ class Telemetry {
   // Where a frozen window is also written to disk, derived once at startup from
   // the web socket's own directory so the launcher archives it with the logs.
   // Best-effort by design: a full /tmp must not be able to break a trip.
+  // One line per controlled stop, appended beside the traces so the launcher's rotation
+  // takes it away with the round it describes. Best-effort for the same reason the trip
+  // file is best-effort: a full disk may not become a new way to fail a stop.
+  void append_stop_evidence(const std::string& line) {
+    if (archive_dir_.empty()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir_, ec);
+    std::ofstream out(std::filesystem::path(archive_dir_) / "stop-evidence.ndjson",
+                      std::ios::app);
+    if (!out) return;
+    out << line;
+  }
   void set_trace_archive_dir(const std::string& dir) {
     observe_clock_mapping();  // the first artifact could be written at any moment
     std::ifstream id("/proc/sys/kernel/random/boot_id");
