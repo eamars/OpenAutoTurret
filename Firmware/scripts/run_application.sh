@@ -25,6 +25,7 @@ case "${1:-}" in
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
     echo '         --pitch-step-mdeg N (enabled +/-15 deg session; 5 A ceiling),'
     echo '         --mixed-backend-check (commissioning + IMU tare; observe-only),'
+    echo '         --commission-mixed-controller (manual-mode mixed controller; no vision/web),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -93,11 +94,13 @@ PITCH_PROBE=0
 PITCH_TEST_GAINS=0
 PITCH_RESTORE_GAINS=0
 MIXED_BACKEND_CHECK=0
+MIXED_CONTROLLER_COMMISSION=0
 COMMISSION_REQUESTED=0
+SIM_REQUESTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
-    --sim) MODE=sim; shift ;;
+    --sim) MODE=sim; SIM_REQUESTED=1; shift ;;
     --hardware) MODE=hardware; shift ;;
     --commission-hardware) MODE=commission; COMMISSION_REQUESTED=1; START_WEB=0; shift ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
@@ -106,6 +109,7 @@ while [ $# -gt 0 ]; do
     --pitch-test-gains) PITCH_TEST_GAINS=1; shift ;;
     --pitch-restore-gains) PITCH_RESTORE_GAINS=1; shift ;;
     --mixed-backend-check) MIXED_BACKEND_CHECK=1; shift ;;
+    --commission-mixed-controller) MIXED_CONTROLLER_COMMISSION=1; MODE=mixed-controller-commission; START_WEB=0; shift ;;
     --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
@@ -143,6 +147,14 @@ if [ "$MIXED_BACKEND_CHECK" = 1 ] && {
 }; then
   echo '--mixed-backend-check requires --commission-hardware --with-imu and no other motor probe' >&2; exit 2
 fi
+if [ "$MIXED_CONTROLLER_COMMISSION" = 1 ] && {
+  [ "$MODE" != mixed-controller-commission ] || [ "$MIXED_BACKEND_CHECK" != 0 ] ||
+  [ "$COMMISSION_REQUESTED" != 0 ] || [ "$SIM_REQUESTED" != 0 ] ||
+  [ "$WITH_IMU" != 0 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] ||
+  [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ];
+}; then
+  echo '--commission-mixed-controller cannot be combined with another motor probe or --with-imu' >&2; exit 2
+fi
 if [ "$YAW_STEP_DEG" != 0 ]; then
   if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
      ! [[ "$YAW_STEP_DEG" =~ ^[0-9]+$ ]] || ((YAW_STEP_DEG < 15 || YAW_STEP_DEG > 45)); then
@@ -167,6 +179,9 @@ umask 077
 mkdir -p "$RUN"
 cd "$APP"
 ACTIVE_CONTROL_CONFIG="${OTA_CONTROL_CONFIG:-$APP/config/turret.yaml}"
+if [ "$MIXED_CONTROLLER_COMMISSION" = 1 ]; then
+  ACTIVE_CONTROL_CONFIG="$APP/config/turret_mixed.yaml"
+fi
 MIXED_CONFIG_ACTIVE="$($PY - "$ACTIVE_CONTROL_CONFIG" <<'PY'
 import sys, yaml
 config = yaml.safe_load(open(sys.argv[1]))
@@ -186,6 +201,8 @@ if [ "$ACTION" = deploy ]; then
     cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     elif [ "$MODE" = commission ]; then
     cmake --build "$APP/build" --target probe-mixed-hardware probe-mixed-backend probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    elif [ "$MIXED_CONTROLLER_COMMISSION" = 1 ]; then
+    cmake --build "$APP/build" --target controld probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     else
     cmake --build "$APP/build" --target controld probe-mixed-hardware probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     fi
@@ -229,14 +246,14 @@ if [ "$ACTION" = start ]; then
   exit 1
 fi
 # Check is read-only: no camera open, CAN connection, or motor enable.
-"$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK"
+"$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK" "$MIXED_CONTROLLER_COMMISSION"
 if [ "$ACTION" = check ]; then
   echo 'Preflight passed. deploy/check do not start the station.'
   exit 0
 fi
 exec 9>"$RUN/launcher.lock"
 flock -n 9 || { echo "A stack already owns $RUN" >&2; exit 1; }
-if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ]; then
+if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ]; then
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
@@ -403,7 +420,9 @@ vision_args=(--config perception/configs/perception_v1.json --profile "$PROFILE"
              --selection-socket "$OTA_SELECTION_SOCKET")
 if [ "$PRODUCTION" -eq 1 ]; then vision_args+=(--production); fi
 # Validate before any controller can home or enable motors.
-"$PY" -c 'import sys; from perception.visiond import build_parser,load_config; load_config(build_parser().parse_args(sys.argv[1:]))' "${vision_args[@]}"
+if [ "$MODE" != mixed-controller-commission ]; then
+  "$PY" -c 'import sys; from perception.visiond import build_parser,load_config; load_config(build_parser().parse_args(sys.argv[1:]))' "${vision_args[@]}"
+fi
 CONTROLD="$APP/build/control/controld"
 controller_args=("$ACTIVE_CONTROL_CONFIG")
 if [ "$MODE" = sim ]; then
@@ -411,13 +430,16 @@ if [ "$MODE" = sim ]; then
   echo 'SIMULATED motors; camera and web are real.'
 elif [ "$MODE" = hardware ]; then
   echo 'HARDWARE station: homing establishes calibration, then automatic roam/track begins. Web Manual overrides autonomy.'
+elif [ "$MODE" = mixed-controller-commission ]; then
+  export OTA_MIXED_COMMISSION_MANUAL=1
+  echo 'MIXED CONTROLLER COMMISSION: manual startup only; no vision/web; supervise pitch homing and controlled stop.'
 fi
 if [ "$MODE" != perception ]; then
-if [ "$MODE" = hardware ] && pgrep -x controld >/dev/null; then
+if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && pgrep -x controld >/dev/null; then
   echo 'A controller already runs outside this launcher. Resolve its owner; do not start a second CAN owner.' >&2
   exit 1
 fi
-if [ "$MODE" = hardware ] && [ "$MIXED_CONFIG_ACTIVE" = 1 ]; then
+if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [ "$MIXED_CONFIG_ACTIVE" = 1 ]; then
   if pgrep -x imu_main >/dev/null; then
     echo 'Legacy IMU consumer still running; refusing BNO085 continuous capture.' >&2; exit 1
   fi
@@ -465,9 +487,13 @@ if [ "$START_WEB" -eq 1 ]; then
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
   vision_args+=(--controller-state-url "http://127.0.0.1:$OTA_WEB_PORT/api/state")
 fi
-if [ "$MODE" != perception ]; then vision_args+=(--publish-socket "$OTA_VISION_SOCKET"); fi
-"$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
-children+=("$!")
+if [ "$MODE" != perception ] && [ "$MODE" != mixed-controller-commission ]; then
+  vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
+  "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
+  children+=("$!")
+elif [ "$MODE" = mixed-controller-commission ]; then
+  echo 'Mixed controller commissioning: vision and web are not started.'
+fi
 
 printf 'Mode: %s\nConfig: %s\nPython: %s\nChildren: %s\n' "$MODE" "${controller_args[0]}" "$PY" "${children[*]}" > "$RUN/stack.info"
 cp "$RUN/launcher.pid" "$RUN/started"

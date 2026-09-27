@@ -11,6 +11,7 @@ def main():
     config_path = Path(sys.argv[1]).resolve()
     mode = sys.argv[2]
     mixed_backend_check = len(sys.argv) > 5 and sys.argv[5] == "1"
+    mixed_controller_commission = len(sys.argv) > 6 and sys.argv[6] == "1"
     config = yaml.safe_load(config_path.read_text())
     if mode == "imu":
         if not os.access("/dev/i2c-1", os.R_OK | os.W_OK):
@@ -47,6 +48,25 @@ def main():
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise RuntimeError("Commissioning probe missing; run deploy --probe-build --commission-hardware")
         print(f"Preflight: bounded mixed-hardware commissioning; {probe_config}; {sys.executable}")
+        return
+    if mode == "mixed-controller-commission":
+        if not mixed_controller_commission or config_path != firmware / "config/turret_mixed.yaml":
+            raise RuntimeError("Mixed controller commissioning requires the explicit launcher mode and config/turret_mixed.yaml")
+        profile_path = Path(config.get("hardware_profile", ""))
+        if not profile_path.is_absolute():
+            profile_path = firmware / profile_path
+        profile_path = profile_path.resolve()
+        profile = yaml.safe_load(profile_path.read_text())
+        _validate_mixed_profile(profile, profile_path)
+        for axis in ("yaw", "pitch"):
+            _validate_can_spi_mapping(profile["buses"][axis], axis, require_up=True)
+        if not os.access("/dev/i2c-1", os.R_OK | os.W_OK):
+            raise RuntimeError("Mixed commissioning needs unprivileged read/write access to /dev/i2c-1 for the BNO085 observer")
+        if not os.access(firmware / "build/imu-bno085", os.X_OK):
+            raise RuntimeError("BNO085 executable missing; run deploy --probe-build")
+        if not os.access(firmware / "build/control/controld", os.X_OK):
+            raise RuntimeError("Controller missing; run deploy --probe-build --commission-mixed-controller")
+        print("Preflight: explicit manual mixed-controller commissioning; both CAN links mapped/up, BNO085 available; no vision/web")
         return
     hardware_profile = config.get("hardware_profile")
     split_bus = Path("/sys/class/net/can1/device").exists()
