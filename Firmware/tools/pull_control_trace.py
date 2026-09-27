@@ -58,8 +58,13 @@ def summarise(reply: dict) -> tuple[str, list[dict]]:
     phases = Counter(r.get("phase", "?") for r in rows)
     temps = [r["temp_raw"][1] for r in rows if "temp_raw" in r]
     span_ns = (rows[-1]["t"] - rows[0]["t"]) if len(rows) > 1 else 0
+    # The flag belongs in the summary line: 256 live rows and 1024 frozen ones both
+    # look like "a trace", and only one of them is the trip's own window.
+    freeze = ""
+    if reply.get("frozen"):
+        freeze = f"FROZEN_AT={reply.get('frozen_t_ns')} "
     head = (
-        f"rows={len(rows)} span={span_ns / 1e9:.3f}s "
+        f"{freeze}rows={len(rows)} span={span_ns / 1e9:.3f}s "
         f"phases={dict(phases)} "
         f"yaw_temp_raw={('none' if not temps else f'{min(temps)}..{max(temps)}')}"
     )
@@ -102,6 +107,8 @@ def selftest() -> int:
     checks.append(("command_seq stays exact", first["ack"] == "18446744073709551615"))
     checks.append(("per-axis ns stays exact", first["rx"] == ["1", "2"]))
     checks.append(("no row is dropped", len(ndjson.strip().splitlines()) == 2))
+    frozen_head, _ = summarise({**synthetic, "frozen": True, "frozen_t_ns": "123"})
+    checks.append(("a frozen window announces itself", frozen_head.startswith("FROZEN_AT=123")))
     for name, ok in checks:
         print(f"[{'ok' if ok else 'FAIL'}] {name}")
     return 0 if all(ok for _, ok in checks) else 1
