@@ -142,3 +142,19 @@ Live acquisition/paired-motion release:
 `/home/eamars/workspace/OpenAutoTurret/run/releases/f3accc6d096b.5muAaf`.
 Numeric captures are ignored under `run/hardware-adaptation/imu-*.ndjson`,
 paired `.csv`/`.log` files and analysis JSON. Captures are not committed.
+
+## Repeat during normal automatic motion
+
+After the station was moved, release `cae41d0` acquired a fresh stationary
+BNO085 host tare during normal startup. During the subsequent AUTO_ROAM sweep,
+the retained IMU trace and one-second controller log have a common, constant-
+pitch window from monotonic 56613.79 to 56618.85 s. GM6020 encoder yaw changed
+13.8885 degrees while CyberGear pitch changed 0.0229 degrees. The angular
+separation of the two nearest game-RV quaternions was 14.1539 degrees (ratio
+1.0191); their receipt times were 2.8 and 4.8 ms from the motor log samples.
+The trace had rotated its bounded retention file just before this window, so
+earlier samples cannot support a longer paired comparison. This agrees with
+direct-drive 1:1 angular motion over this window, but it still does not
+establish a sensor-to-camera mounting transform or absolute orientation.
+Ignored evidence is under `run/mixed-stack-2026-09-27/` as the repeat-stop
+controller log, IMU trace and comparison script.

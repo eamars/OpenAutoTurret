@@ -1,15 +1,36 @@
 # Current station hardware
 
-Updated **27 September 2026** with large pitch/yaw and paired IMU motion checks. This is
-the current hardware inventory; dated September 3-9 reports describe the previous
+Updated **27 September 2026** with a sustained mixed-stack run. This is the
+current hardware inventory; dated September 3-9 reports describe the previous
 mechanism. Operation is governed by [STATION_OPERATIONS.md](STATION_OPERATIONS.md).
-Bounded mixed-bus probes, non-motion pitch current-limit application, and a first
-IMX477/Hailo measurement now have evidence; production motor/perception adaptation
-remains pending:
+The normal split-bus profile, continuous BNO085 observer and web telemetry path
+have run together. Release `cae41d0` completed two controlled moving stops, but
+broader stop qualification and a homing-guard gap remain open. See the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) and
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
 
+The normal launcher run used release `1a473ab` for five minutes in AUTO_ROAM.
+IMX500 delivered 8,061 frames with zero drops; CAN0/CAN1 error counters stayed
+at zero; BNO085 game-RV status was 3 with fresh samples and no gaps. Repeated
+sector sweeps and AUTO_ROAM ↔ AUTO_TRACK/loss handoffs were observed. The web
+fix serializes unavailable GM6020 yaw effort as JSON `null` rather than NaN,
+allowing `/api/state` to return successfully and the dashboard to show an em
+dash. The run ended with `STOP FAILED` during stop verification. These are
+integration and service observations, not detection-accuracy results. Two later
+controlled stops on release `cae41d0` succeeded: after AUTO_TRACK near +46° yaw
+and after AUTO_ROAM near +76° yaw, each with fresh pitch-disabled feedback and a
+final GM6020 zero request. GM6020 disable state remains unavailable. Intermittent
+feedback-readiness rejection seen on the prior release has not been shown
+eliminated. The latest normal homing completed but logged repeated encoder-speed
+ceiling and commanded-corridor warnings; `homing.motion_checks_abort: false`
+means these guards did not abort. Do not treat these results as final stop or
+homing qualification.
+
 ## Evidence and status
+
+The facts in the initial-audit paragraph below are historical baseline
+observations. Current runtime evidence, including the later normal-stack run,
+is recorded separately above and below.
 
 Verification ran over key-based SSH as `eamars@rpi-turret`, beginning at
 21:02 NZST (UTC+12), with an additional IMU probe later in the same audit.
@@ -38,7 +59,7 @@ commissioning session; this document records only current distilled evidence.
 | Yaw drive | RoboMaster GM6020, ID 1, `can0` | Axis owner-confirmed; standard `0x205` feedback verified |
 | Pitch drive | Xiaomi CyberGear, ID `0x7F`, `can1` | Axis owner-confirmed; extended discovery and UID verified |
 | Yaw mechanics | Direct drive, continuous rotation, slip ring, no yaw endstop | Owner-confirmed; +29.356° and return verified with IMU; full-turn clearance unverified |
-| Pitch mechanics | Direct drive, bounded pitch with mechanical endstops | Owner-confirmed; ±15° and return verified with 5 A cap; exact endpoints and homing pending |
+| Pitch mechanics | Direct drive, bounded pitch with mechanical endstops | Owner-confirmed; ±15° and return verified with 5 A cap; normal pitch-only homing completed, but non-aborting encoder-speed/corridor warnings leave guard qualification open; exact endpoints remain unqualified |
 | Camera A | Sony IMX500, index 0 at this boot | Enumerated and simultaneous capture verified |
 | Camera B | Sony IMX477, index 1 at this boot | Enumerated and simultaneous capture verified; lens/FOV/mount geometry unknown |
 | Accelerator | Hailo-8 AI HAT | `hailortcli fw-control identify` reported HAILO8, firmware 4.23.0, through `/dev/hailo0` after reboot |
@@ -206,19 +227,23 @@ HAILO8; see the installed stack and benchmark above.
 Initial audit: launcher `check` failed at missing project Python; no station/CAN
 systemd unit files were listed. Subsequent implementation provisioned
 `run/station-venv` with system camera bindings and installed station Python
-requirements there. Separate releases now contain working C++ builds and the
-commissioning probe. The original Pi checkout was preserved. Normal hardware
-preflight now rejects the legacy motor configuration on this installation.
-
-The current production controller still lacks the commissioned mixed-drive,
-continuous-yaw topology and pitch-only homing behavior. The normal automatic
-startup gate remains closed. Old calibration, gains, loaded limits and parking
-sign-off do not transfer to the new mechanism.
+requirements there. Separate releases contain the mixed controller and probes;
+the original Pi checkout was preserved. Commit `56a28fe` made the split-bus
+mixed profile the normal launcher default. The mixed topology is GM6020 yaw on
+CAN0 and CyberGear pitch on CAN1, with a 5 A pitch current ceiling and pitch-only
+homing. The AUTO_ROAM run establishes that this controller/profile can operate
+with the perception and web processes. Two later stops passed observed
+pitch-disable and yaw-zero checks, but do not qualify broader stop behavior or
+resolve the earlier intermittent readiness rejection. The latest homing's
+guard warnings and non-aborting policy remain to be qualified. Old calibration,
+gains, loaded limits and parking behavior are not qualified for reuse.
 
 ## Installed BNO085 and existing host probe
 
-**Current integration:** versioned `tools/imu_bno085.c` and the SH-2 library now
-run through the station launcher. A 30-second whole-packet I2C capture delivered
+**Current integration:** versioned `tools/imu_bno085.c` and the SH-2 library run
+as one continuous, launcher-supervised observer alongside the mixed controller.
+It remains observe-only and does not command motion or certify stop. A 30-second
+whole-packet I2C capture delivered
 1,481 samples per gyro/orientation stream with no sequence gaps or I2C errors.
 Game RV reported status 3; magnetic RV and gyro accuracy remained 0. A stationary
 host tare and paired yaw/encoder measurements passed, including 1.01074° encoder

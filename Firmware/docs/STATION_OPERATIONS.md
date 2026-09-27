@@ -5,21 +5,28 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 
 ## Current deployment gate
 
-**The automatic station remains stopped. Only the explicit, bounded
-`--commission-hardware` path is qualified for the current motor probes.**
-Normal hardware preflight rejects the legacy yousee configuration when the
-split-bus installation is present. This is not a complete mixed-drive backend.
+**The normal launcher selects the mixed split-bus profile. On release `cae41d0`,
+two controlled stops succeeded after motion: one from AUTO_TRACK near +46° yaw,
+and one from AUTO_ROAM near +76° yaw. Both confirmed fresh pitch-disabled
+feedback and issued the final GM6020 zero request; GM6020 disable state remains
+unavailable. These two observations do not complete stop qualification. An
+intermittent feedback-readiness rejection seen on the previous release has not
+yet been shown eliminated. Normal pitch homing completed, but repeated encoder
+speed-ceiling/corridor warnings did not abort with
+`homing.motion_checks_abort: false`; that guard behavior also remains
+unqualified.**
 
 The installation has GM6020 yaw on `can0`, CyberGear pitch on `can1`, continuous
 yaw without an endstop, IMX500 + IMX477 cameras, a PCIe Hailo device, and a
 BNO085 on I2C. See [verified hardware and probes](HARDWARE_CURRENT.md).
 
-The source still selects the retired `/dev/ttyUSB0` yousee adapter and CyberGear
-IDs 100/101. Its yaw endpoint homing, soft limits and soft-center parking describe
-the old mechanism. Changing only `can.backend` or IDs is insufficient: the
-transport now supports both frame types, but the automatic backend still assumes
-CyberGear control/feedback on both axes. Follow the
-[hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) before activation.
+The mixed runtime uses GM6020 yaw on CAN0 and CyberGear pitch on CAN1, with
+pitch limited to 5 A. Yaw has no confirmed disable state; a zero request is not
+proof of motor de-energization. The September 27 run confirms the mixed control,
+perception and web path operated together; two subsequent controlled stops
+passed the observed pitch-disable/yaw-zero checks, while broader stop
+qualification and the intermittent readiness-rejection question remain open.
+See the [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md).
 
 The project venv and a separate commissioning release are built on the Pi.
 The minimal Hailo-8 kernel/runtime stack is now installed and passed a reboot;
@@ -52,15 +59,20 @@ and saves no images. Do not use another `OTA_RUN_DIR` to bypass ownership.
   identity while connecting to that address.
 - One `Firmware/scripts/run_application.sh` launcher owns controller,
   `perception.visiond` and `web.webd.app`. Do not run old systemd services beside it.
-- The future normal startup remains AUTO_ROAM -> target tracking -> AUTO_ROAM
-  after loss. Manual/Hold is an explicit web override, not a saved trial default.
-- The web address is `http://rpi-turret:8080/` when the stack is running. During
-  this audit no web service was listening there.
+- Normal startup uses AUTO_ROAM -> target tracking -> AUTO_ROAM after loss.
+  Manual/Hold is an explicit web override, not a saved trial default.
+- The web address is `http://rpi-turret:8080/` when the stack is running. A
+  telemetry serialization fix now represents unavailable GM6020 torque as JSON
+  `null`; the dashboard displays an em dash, and `/api/state` no longer fails on
+  NaN yaw effort.
 - Each physical camera has one owner; preview reads that owner's frames.
-  Normal production still selects IMX500. The explicit `hailo_yolov8n` profile
-  has passed a 60-frame IMX477 run through visiond in `--hold-motion` mode.
-  IMU acquisition/tare runs through the launcher; simultaneous dual-camera
-  operation and IMU/controller fusion remain unimplemented.
+  The observed five-minute normal run used IMX500 and delivered 8,061 frames
+  with zero drops while AUTO_ROAM and AUTO_TRACK/loss handoffs repeated. This is
+  integration evidence, not an accuracy benchmark. The explicit
+  `hailo_yolov8n` profile has passed a 60-frame IMX477 run through visiond in
+  `--hold-motion` mode. A continuous BNO085 observer is launcher-supervised and
+  observe-only; it has no motion-control authority. Simultaneous dual-camera
+  operation remains unqualified.
 
 ## Inspect the stopped installation
 
@@ -76,9 +88,8 @@ lspci -nn
 ```
 
 `check` inspects imports/config/files; it does not open motors or cameras and
-does not prove motion readiness. Use `check --commission-hardware` on the new
-release for commissioning preflight. Normal `check` deliberately rejects the old
-motor configuration. Logs under
+does not prove motion readiness. The normal profile is now the mixed profile;
+use `check --commission-hardware` for bounded commissioning preflight. Logs under
 `/tmp/ota-stack-1000` exist only after a run.
 
 The latest September 27 large-motion sessions left both CAN links UP at
@@ -131,21 +142,29 @@ bash Firmware/scripts/run_application.sh stop
 bash Firmware/scripts/run_application.sh status
 ```
 
-The launcher requests controlled parking and motor disable, then shuts down its
-children. It never force-kills the controller. If its 120-second caller wait
+The launcher requests the controller's axis-specific safe stop action, then
+shuts down its children. It never force-kills the controller. Pitch disable is
+feedback-confirmed when fresh; GM6020 receives a zero request but its disable
+state is unavailable. If its 120-second caller wait
 expires, inspect status/logs; shutdown may still be in progress. Do not start a
 second controller or use broad process kills. Stop can be issued from another
 checkout because ownership is shared by account/runtime directory.
 
-**The old stack's parking/disable result is not validated on this hardware.**
+**Stop qualification remains limited to two successful observations on release
+`cae41d0`; broader qualification remains open.**
 The previous middle-yaw/lowest-pitch release contract and CyberGear disabled-bit
 verification do not transfer to GM6020. A zero GM6020 command does not certify
-power removal or a supported load. Commission the new stop/park contract before
-operation. The web's parking request is not equivalent to full launcher stop.
+power removal or a supported load. Complete stop/park qualification before
+unattended operation. The web's parking request is not equivalent to full
+launcher stop.
 
-The default mixed-probe stop requests zero GM6020 voltage and observes feedback; its
-terminal result explicitly says **not a park/disable certification**. It never
-enables or moves pitch. The explicit pitch session below does enable pitch.
+On `cae41d0`, controlled stop completed successfully after AUTO_TRACK motion at
+about +46° yaw and after AUTO_ROAM motion at about +76° yaw. Both recorded fresh
+pitch-disabled feedback and a final GM6020 zero request. GM6020 disable state
+remains unknown; zero request is never power-removal certification. The prior
+release had intermittent feedback-readiness rejection. The two successes do
+not prove that issue is eliminated or establish full stop/recovery/park
+qualification.
 Do not interpret a zero-voltage request as power removal.
 The separate `--apply-pitch-limit` option only writes the configured volatile
 CyberGear `LimitCur` value (5 A maximum) and checks three matching readbacks; it
@@ -157,13 +176,19 @@ current cap before enabling the drive.
 Preserve numeric logs before restarting. Never overwrite retained homing data,
 manually mark axes homed or bypass validation. Invalidate old calibration by
 installation identity. Yaw needs reference initialization instead of endpoint
-homing; pitch homing/support must be re-commissioned. IMU orientation is a
-secondary observation, not a replacement for motor/reference validity.
+homing. Pitch homing has completed in the normal mixed controller, but repeated
+speed-ceiling/corridor warnings did not abort with
+`homing.motion_checks_abort: false`; this guard behavior remains unqualified.
+IMU orientation is a secondary observation, not a replacement for
+motor/reference validity.
 
-## Deployment after adaptation gates pass
+## Deployment and operation
 
-The following remains the deployment path, but **activation is deferred until
-hardware adaptation and physical commissioning gates pass**.
+Use the following launcher path for the mixed profile. Two controlled stops
+have passed on `cae41d0`; do not regard normal operation as fully commissioned
+until broader stop/recovery evidence and remaining acceptance gates are
+reviewed, including the intermittent readiness rejection seen on the prior
+release.
 
 Use the existing project-local virtual environment with OS camera bindings and
 install station requirements there. Never install pip dependencies globally or
@@ -192,11 +217,10 @@ bash Firmware/scripts/run_application.sh status
 bash Firmware/scripts/run_application.sh stop
 ```
 
-Start returns after child launch, not after homing/reference establishment. The
-revised implementation must require per-axis valid reference/calibration, fresh
-feedback, empty faults, both bus identities and valid perception before normal
-operation. The old finite-yaw `soft_limits_valid` check does not prove continuous
-yaw readiness.
+Start returns after child launch, not after readiness. Current runtime uses a
+session-relative continuous-yaw reference, pitch-only homing, fresh feedback,
+bus identity checks and valid perception. A successful AUTO_ROAM run does not
+prove stop behavior, tracking accuracy or final station readiness.
 
 `--sim` still opens the real camera; `--hold-motion` is perception-only and also
 opens it. Neither replaces camera ownership checks or verifies the new backend.
@@ -244,7 +268,10 @@ matching readbacks, and leaves pitch disabled; this must be reapplied and
 verified after a reset before any enable. Following the owner's September 27
 CyberGear 1.2.1.5 upgrade, the same UID returned valid `MechPos` (-0.710777 rad)
 with status 0, and raw feedback reported mode 0/faults 0. The earlier rejected
-register read is historical; pitch motion/homing still needs commissioning.
+register read is historical. Later normal mixed runtime completed pitch-only
+homing, but repeated encoder-speed-ceiling and commanded-corridor warnings were
+non-aborting under `homing.motion_checks_abort: false`; treat the guard behavior
+as unresolved.
 Do not combine limit setup with yaw actuation.
 
 ### Pitch motion session

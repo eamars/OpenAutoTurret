@@ -1,7 +1,8 @@
 # Plan: split CAN buses, mixed motors and continuous yaw
 
-Status: **execution started; transport and bounded yaw/pitch motion verified;
-automatic mixed-drive operation still pending**. Updated 27 September 2026.
+Status: **mixed controller/AUTO_ROAM integration observed; two controlled moving
+stops succeeded on `cae41d0`; broader stop and homing-guard qualification remain
+open**. Updated 27 September 2026.
 Ground truth is [the hardware inventory](HARDWARE_CURRENT.md); the operator
 confirmed GM6020 on yaw and CyberGear on pitch. Follow with the
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
@@ -15,7 +16,10 @@ stage exit gates or qualify automatic tracking. The default mixed probe sends no
 pitch motion commands; the explicit pitch session now exercises position mode.
 The initial pitch `mechPos` failure was resolved after the owner's
 September 27 upgrade: the same UID now returns valid position with status 0.
-Pitch endstop homing remains uncommissioned.
+Pitch-only homing has since completed in the normal mixed runtime. However,
+repeated encoder-speed-ceiling and commanded-corridor warnings were not aborting
+because `homing.motion_checks_abort` is false; homing-guard behavior remains
+unqualified.
 
 The owner has now confirmed the camera sits roughly at the pitch assembly's
 center of mass, both axes are direct drive, and disabling pitch presents no
@@ -46,9 +50,17 @@ See the [upgrade reference](CYBERGEAR_FIRMWARE_UPGRADE.md).
 
 Hailo-8 provisioning and a real IMX477-to-YOLOv8n inference probe have passed.
 The Hailo profile also passed a 60-frame application run through visiond with
-motion held. The next perception gate is representative person/head detection
-accuracy and camera geometry. The automatic stack stays
-stopped until the mixed-drive and continuous-yaw gates below pass.
+motion held. Separately, the normal mixed profile completed a five-minute
+AUTO_ROAM run with IMX500 (8,061 frames, zero drops), repeated AUTO_TRACK/loss
+handoffs and fresh observe-only BNO085 samples. This demonstrates runtime
+integration, not person/head accuracy or stop qualification. Two later controlled
+stops on `cae41d0` succeeded after AUTO_TRACK near +46° yaw and AUTO_ROAM near
++76° yaw, each with fresh pitch-disabled feedback and a final GM6020 zero
+request. The GM6020 disable state remains unknown, and intermittent feedback-
+readiness rejection on the previous release is not proven eliminated. The
+latest normal homing also completed with repeated encoder-speed-ceiling and
+commanded-corridor warnings while `homing.motion_checks_abort` was false; this
+is an open homing-guard qualification gap.
 
 ## Intended result
 
@@ -58,9 +70,9 @@ bounded pitch axis, and preserve the service sequence
 AUTO_ROAM -> selected-person tracking -> AUTO_ROAM after loss. Manual/Hold
 remains an explicit web override. Camera tracking is the application here.
 
-Deliver the motor/geometry changes before enabling automatic motion on this
-mechanism. Hailo provisioning and camera-only evaluation can proceed separately
-while the station is stopped. Do not deploy the old configuration as a trial.
+The mixed motor/controller and geometry changes are now in the normal profile.
+Do not roll back to the old configuration on this mechanism. Hailo provisioning
+and camera-only evaluation remain separate from the IMX500-backed normal run.
 
 ## Why this needs code changes
 
@@ -68,13 +80,13 @@ while the station is stopped. Do not deploy the old configuration as a trial.
 |---|---|---|
 | `config/turret.yaml`, `control/src/config/turret_config.*` | One transport/device; IDs 100/101; finite travel on both axes | Explicit buses, per-axis protocol/ID/topology, validated migration schema |
 | `control/src/main.cpp`, `can/cybergear_system.*` | One CyberGearSystem supplies both axes | Compose independent axis drivers over independently owned buses |
-| `can/can_transport.hpp`, `can/socketcan_bus.*` | Previously EFF-only; typed frames and independent error subscription now implemented | Integrate per-protocol filtering and refreshed health into the future production composition |
-| `control/motor_backend.hpp`, `can_motor_backend.*` | CyberGear registers, mode transitions, torque/fault/disabled feedback | Protocol-neutral capabilities and explicit availability of each feedback field |
-| `calibration/*`, `control/boot_fsm.*` | Endpoint homing/finite soft limits define both axes' readiness | Continuous yaw reference initialization separate from pitch homing |
-| `mode/roam_planner.hpp`, control/geometry/safety paths | Yaw sweep ends, soft-center park, bounded target representation | Continuous-angle planning, wrap-safe observation/control, explicit search and park policies |
-| Web telemetry, recovery and launcher/preflight | Single CAN panel; both motors acknowledge disable/fault-clear | Per-bus health, per-drive capabilities and honest stop/recovery evidence |
+| `can/can_transport.hpp`, `can/socketcan_bus.*` | Typed frames and independent error subscription | Per-protocol filtering and refreshed health are implemented for the mixed composition |
+| `control/motor_backend.hpp`, `can_motor_backend.*` | CyberGear registers, mode transitions, torque/fault/disabled feedback | Mixed backend exposes protocol capabilities and field availability; yaw disable state remains unknown |
+| `calibration/*`, `control/boot_fsm.*` | Endpoint homing/finite soft limits define both axes' readiness | Continuous yaw session reference and pitch-only homing are implemented; physical stop acceptance remains open |
+| `mode/roam_planner.hpp`, control/geometry/safety paths | Yaw sweep ends, soft-center park, bounded target representation | Continuous-angle planning and wrap-safe search are implemented; broader stop/park qualification remains open |
+| Web telemetry, recovery and launcher/preflight | Single CAN panel; both motors acknowledge disable/fault-clear | Per-bus health, capability-aware telemetry and mixed split-bus launcher selection are implemented; two stop observations passed, prior intermittent readiness rejection remains unexplained |
 | `perception/camera.py`, model adapter | IMX500-specific single camera creation | Later explicit sensor/provider selection; see AI plan |
-| Host `imu-lab` versus production | Standalone BNO085 data probe outside this repository | Versioned SH-2 acquisition, sensor timing and calibrated secondary observer |
+| Host `imu-lab` versus production | Standalone BNO085 data probe outside this repository | Versioned SH-2 acquisition now runs as a launcher-supervised observe-only stream; sensor-to-camera calibration and any fusion remain open |
 
 Paths in this table are relative to `Firmware/`. Treat the current simulated
 backend as another capability implementation, rather than making it return
@@ -87,10 +99,10 @@ load support, supply and termination, and what passes through the slip ring.
 Its rating and routing, including camera connections, must support the proposed
 rotation. A slip ring alone does not prove collision-free travel at every pitch.
 
-The new `config/mixed_hardware.yaml` defines a versioned production topology
-and `config/turret_mixed.yaml` selects it explicitly. The mixed backend and
-controller startup are still being integrated and tested; the old
-`hardware_probe.yaml` remains a separate commissioning schema:
+The new `config/mixed_hardware.yaml` defines the production topology and
+`config/turret_mixed.yaml` selects it; commit `56a28fe` made that mixed profile
+the normal launcher default. The old `hardware_probe.yaml` remains a separate
+commissioning schema:
 
 - Bus `yaw_bus`: SocketCAN `can0`, expected parent `spi0.0`, 1 Mbps classical CAN.
 - Bus `pitch_bus`: SocketCAN `can1`, expected parent `spi1.0`, 1 Mbps classical CAN.
@@ -214,20 +226,26 @@ yaw. Pitch retains finite bounds and braking margins.
 Old retained calibration is rejected by installation fingerprint. Preserve its
 file as historical evidence; do not overwrite it to make startup pass.
 
-**Exit:** reference and wrap probes pass through multiple turns and failures;
-Home never seeks a yaw stop; pitch failure still prevents automatic operation.
+**Exit:** Continuous yaw reference, wrap-safe sector motion and pitch-only
+homing have operated in the normal run. Two moving-stop observations passed on
+`cae41d0`, but broader stop acceptance remains open. The normal homing emitted
+repeated encoder-speed/corridor warnings without aborting because
+`homing.motion_checks_abort` is false; this guard policy must be validated or
+resolved before calling homing qualified.
 
 ## Stage 3B: integrate the installed BNO085 as a secondary observer
 
-Hardware installation is complete enough for SH-2 data delivery: the existing
-host `imu-lab/imu_main` probe passed on I2C-1, `0x4A`. Production integration is
-still open. Use the [old IMU addendum](archive/open_auto_turret_bno085_imu_expansion_v1_1.md)
+Hardware installation is complete enough for SH-2 data delivery. Versioned
+`imu-bno085` runs continuously under launcher supervision and the controller
+consumes its timestamped trace as an observe-only source. The five-minute run
+reported fresh game-RV status 3 without gaps. This is not calibrated fusion or
+motion-control authority. Use the [old IMU addendum](archive/open_auto_turret_bno085_imu_expansion_v1_1.md)
 as design input after replacing its two-CyberGear/finite-yaw assumptions, and
 the [BNO08X](BNO08X_AI_Reference.md), [SH-2](SH2_AI_Reference.md) and
 [SHTP](SH2_SHTP_AI_Reference.md) references as protocol inputs.
 
-First make a bounded executable acquisition probe from a pinned, licensed SH-2
-source and reviewed Linux HAL. Log product IDs/firmware, report ID, sequence,
+The bounded, versioned executable acquisition path exists. Continue checking
+product IDs/firmware, report ID, sequence,
 sensor status, quaternion order, SI units, sensor timestamp and monotonic receipt
 time. The existing lab probe is evidence, not production code: fix its rad/s
 label, elapsed-time accounting, short-read/continuation handling and error
@@ -267,11 +285,22 @@ An unhealthy optional IMU must be visibly excluded while encoder/camera operatio
 retains its own limits. Never use IMU data to bypass pitch limits, certify motor
 disabled state or substitute for independent park/support evidence.
 
-**Exit:** bounded timestamped reporting with known units and mount transform;
-measured disagreement/age thresholds; observe-only evidence before any feedback
-or image-motion compensation is enabled. A short data probe is not this gate.
+**Exit:** timestamped observe-only reporting is running with known units and
+status; calibrated mount transform and measured disagreement/age thresholds
+remain open before any feedback or image-motion compensation is enabled.
 
 ## Stage 4: roaming, parking, recovery and operator controls
+
+The normal mixed runtime has exercised repeated sector sweeps and AUTO_ROAM ↔
+AUTO_TRACK/loss handoffs. The web `/api/state` failure caused by NaN GM6020 yaw
+effort was fixed by serializing unavailable effort as `null`; the dashboard
+renders it as unavailable. The five-minute run on the previous release ended
+with `STOP FAILED`. On `cae41d0`, two later controlled stops succeeded, one after
+AUTO_TRACK near +46° yaw and one after AUTO_ROAM near +76° yaw, with fresh pitch-
+disabled feedback and a final GM6020 zero request. Yaw disable state is unknown,
+and intermittent feedback-readiness rejection on the previous release is not
+proven eliminated. The earlier 176-degree yaw/lowest-pitch approval remains
+historical and is not an acceptance basis.
 
 Specify a continuous-yaw search policy: bounded speed/acceleration, chosen scan
 direction, pitch coverage and optional sectors. Initially preserve the direction
@@ -299,32 +328,39 @@ recovery, bus failure and process restart. No trial settings become defaults.
 
 ## Stage 5: controlled commissioning and release
 
-Provision the missing local venv/build tools, then build a committed separate
-release using `tools/deploy_station.py`; preserve the Pi checkout. Update
-preflight to validate the mixed profile before any activation. Keep the stack
-stopped until the preceding motion contracts have evidence.
+Committed separate releases, mixed-profile preflight and normal launcher
+selection are in place. The five-minute run demonstrated the normal control,
+perception and web processes running together. Two controlled stops passed on
+`cae41d0`; broader stop qualification and the homing-guard gap remain open.
 
-Proceed from secured single-axis low-output trials to pitch commissioning,
-multi-turn yaw, stationary-person framing, slow moving-person tracking and
-finally automatic scan/acquisition/loss. Record command and feedback timing,
-angular error, overshoot, stopping distance, temperatures and both bus drop/error
-deltas. Run camera/Hailo CPU-load trials as well as motor-only trials.
+Bounded pitch commissioning and a 30° yaw session have been completed; the
+five-minute AUTO_ROAM run exercised sector sweeps and tracking/loss handoffs.
+Remaining evidence includes reviewed stop behavior, additional controlled
+framing/tracking cases, command/feedback timing, stopping distance, temperatures
+and bus error/drop deltas under sustained load. Run camera/Hailo CPU-load trials
+as well as motor-only trials before any performance claims.
 
 Acceptance requires fresh per-axis feedback, no silent saturation or stale
 command continuation, no turn discontinuity, verified stop/recovery/park behavior,
-and measured payload limits. Retain unresolved measurements as blockers rather
+and measured payload limits. Two stop observations passed, but intermittent
+feedback-readiness rejection and homing guard warnings remain to be resolved or
+qualified.
+Retain unresolved measurements as blockers rather
 than reusing September 3-9 acceptance. Use the launcher for activation/status/
 stop. Do not roll back to a dual-CyberGear release on this mechanism; rollback
 means stopped state or a release verified for this hardware.
 
 ## Suggested implementation batches
 
-1. Configuration/preflight + typed two-bus transport + diagnostic probe.
-2. Capability-based axis drivers + GM6020 bench control/stop contract.
-3. Continuous yaw reference, topology-aware boot/safety/geometry and replay;
-   BNO085 acquisition and observe-only validation can run as a separate batch.
-4. Roam/park/recovery/web integration and simulated lifecycle validation.
-5. Physical commissioning, measured defaults and release documentation.
+1. Configuration/preflight, typed two-bus transport and diagnostic probes: implemented.
+2. Capability-based mixed drivers and bounded pitch/yaw commissioning: implemented;
+   two moving stops succeeded; broader stop/homing-guard acceptance remains open.
+3. Continuous-yaw reference, topology-aware boot/safety/geometry and observe-only
+   BNO085 acquisition: integrated; IMU calibration/fusion is not enabled.
+4. Roam/tracking/loss and web integration: exercised in the five-minute run;
+   park/recovery, intermittent readiness rejection and homing-guard acceptance
+   still require evidence.
+5. Physical commissioning and final release qualification: in progress.
 
 Each batch records its executable evidence before adding broad tests or
 optimization. No schedule or tracking-speed improvement is claimed until the

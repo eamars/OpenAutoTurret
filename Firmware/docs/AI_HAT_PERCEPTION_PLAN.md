@@ -1,9 +1,11 @@
 # Plan: Hailo-assisted people and head tracking
 
-Status: **Hailo provisioning and the camera-only visiond path are verified;
-motion integration and accuracy evaluation remain incomplete**.
+Status: **Hailo camera-only visiond and normal IMX500 mixed-stack operation are
+observed; head/person accuracy evaluation, dual-camera operation and stop
+qualification remain incomplete**.
 Updated 27 September 2026. Uses the [verified hardware inventory](HARDWARE_CURRENT.md).
-Motor integration and continuous-yaw readiness are separate gates in the
+Mixed motor and continuous-yaw runtime integration are now observed; physical
+stop and homing-guard qualification remain open in the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md).
 
 The explicit `hailo_yolov8n` profile now runs IMX477 640x480 through the existing
@@ -12,6 +14,21 @@ delivered all frames with no inference, publishing or clock-domain errors, at
 the configured 15 Hz. Model inference p50/p95 was 7.09/8.60 ms; sensor-to-publish
 p50/p95 was 22.19/25.79 ms. One frame contained a permitted detection and no
 track was confirmed, so the scene does not qualify person/head accuracy.
+
+The normal mixed profile separately completed a five-minute AUTO_ROAM run using
+the IMX500 stream: 8,061 frames, zero frame drops, repeated AUTO_ROAM ↔
+AUTO_TRACK/loss handoffs, and fresh BNO085 observer samples (game-RV status 3,
+no gaps). The run establishes integration/throughput for that scene, not
+detector precision/recall, head localization, selected-person continuity or
+stop qualification. That earlier release ended with stop verification failed.
+On release `cae41d0`, two later controlled stops succeeded after AUTO_TRACK near
++46° yaw and AUTO_ROAM near +76° yaw, each confirming fresh pitch-disabled
+feedback and issuing the final GM6020 zero request. GM6020 disable state remains
+unknown, and intermittent feedback-readiness rejection from the previous release
+is not proven eliminated. Final station readiness remains pending. A web
+telemetry bug that made NaN GM6020 yaw effort
+break `/api/state` was fixed by encoding unavailable effort as JSON `null`; the
+dashboard now shows it as unavailable.
 
 Use `--hold-motion --profile hailo_yolov8n` for this profile until IMX477
 intrinsics and camera-to-axis geometry are commissioned. The controller's old
@@ -37,17 +54,17 @@ are outside this plan.
 
 ## Baseline and recommended architecture
 
-The launcher currently defaults to `person_detect_available`: IMX500
-SSD MobileNetV2 FPN Lite 320 x 320, configured at 26 inference Hz. The JSON's
+The launcher uses `person_detect_available` for the default perception profile:
+IMX500 SSD MobileNetV2 FPN Lite 320 x 320, configured at 26 inference Hz. The JSON's
 standalone default `person_detect` instead names YOLO11n PP, 640 x 640 at 16 Hz,
 with uncommissioned thresholds. Record the actual launched profile, model hash
 and settings in every comparison; neither configured rate is an achieved rate.
 
-`perception/model/adapter.py` supports IMX500 and mock adapters. The camera
-factory in `perception/camera.py` constructs IMX500 and uses its camera index.
-Hailo needs an explicit new adapter and a generic camera-provider boundary.
-Keep the current normalized detections, BYTE-style association, UUID selection,
-latest-only preview and sensor-time contracts wherever they remain suitable.
+The vision service has an explicit Hailo/IMX477 adapter profile in addition to
+the IMX500 and mock paths. Keep the current normalized detections, BYTE-style
+association, UUID selection, latest-only preview and sensor-time contracts
+wherever they remain suitable. The default station run remains IMX500; Hailo's
+camera-only test does not promote it to the motion-authoritative stream.
 
 Recommended experiment: retain IMX500 as the baseline/person search stream and
 evaluate IMX477 + Hailo as a person/head-detail stream. Determine their final
@@ -56,8 +73,9 @@ IMX477 sensor has 4056 x 3040 pixels; its actual lens determines whether it sees
 a narrower view. Resolution alone does not establish that it is the detail
 camera. [Raspberry Pi camera specifications](https://www.raspberrypi.com/documentation/accessories/camera.html#high-quality-camera).
 
-Current executable evidence is a single-camera probe, not application
-integration: the minimal Hailo-8 runtime survives reboot, the project venv
+Current Hailo executable evidence includes both a single-camera probe and a
+60-frame visiond integration run: the minimal Hailo-8 runtime survives reboot,
+the project venv
 imports HailoRT, and a real IMX477 stream produced finite YOLOv8n outputs with
 valid capture timestamps. Thirty 640 x 480 RGB frames ran at 15 fps after
 letterboxing to 640 x 640; inference p50/p95 was 6.86/7.05 ms and
@@ -86,9 +104,10 @@ This is a staged design: first prove one Hailo camera path. The diagram's
 cross-camera combination is enabled only after time and geometry validation.
 Each camera has one owner; web preview consumes those owners' frames.
 
-The installed BNO085 is an additional motion observation source, subject to
-the acquisition/mount/calibration gate in the hardware plan. It does not increase
-detector class accuracy by itself.
+The installed BNO085 is an additional launcher-supervised, observe-only motion
+source. A fresh timestamped trace ran alongside the five-minute normal stack,
+but mount calibration and image-motion compensation are not qualified. It does
+not increase detector class accuracy by itself.
 
 ## Phase A: provision and prove the accelerator
 
@@ -116,10 +135,11 @@ for the first executable probe. Hailo Model Zoo **v2.x** and Dataflow Compiler
 Compile custom models on a supported development host only when necessary.
 [Official Model Zoo compatibility notice](https://github.com/hailo-ai/hailo_model_zoo).
 
-**Basic runtime exit passed:** the runtime identifies HAILO8 and a real camera
-pipeline produced finite outputs using a compatible recorded HEF. The repeatable
-probe/manifest and sustained-run checks remain. PCI identity and the 26 TOPS
-rating alone do not pass this gate.
+**Basic runtime exit passed:** the runtime identifies HAILO8 and real camera
+pipelines produced finite outputs using the compatible recorded HEF. The
+repeatable probe/manifest and camera-only visiond run exist. Longer sustained
+health and person/head quality remain open. PCI identity and the 26 TOPS rating
+alone do not establish useful accuracy or frame rate.
 
 ## Phase B: choose models using representative evidence
 
@@ -241,7 +261,9 @@ Otherwise retain one motion-authoritative stream and a secondary operator view.
 
 ## Phase F: use the IMU to distinguish camera motion from subject motion
 
-After observe-only validation, interpolate calibrated BNO085 orientation/rates
+The BNO085 observer now runs alongside the normal mixed controller, but it is
+not yet calibrated or used for compensation. Once its observe-only validation
+and mount calibration pass, interpolate BNO085 orientation/rates
 to each camera's sensor timestamp and project camera rotation into the image.
 Use this as a motion-compensation hint for the existing
 `perception/tracking/camera_motion.py` path, combined with encoder kinematics.
