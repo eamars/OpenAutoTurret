@@ -149,6 +149,7 @@ int main(int argc, char** argv) {
     std::atomic<int> trip_reason{0};
     std::atomic<double> target_position{baseline.position + target_deg * kRad};
     std::atomic<double> estimate_deg_s{0.0};
+    std::atomic<int> applied_voltage{0};
     std::atomic<double> peak_excursion_deg{0.0}, peak_speed_deg_s{0.0}, outbound_position_deg{0.0};
     const auto session_start = armed_at;
 
@@ -157,6 +158,8 @@ int main(int argc, char** argv) {
     std::jthread guard([&](std::stop_token stop) {
       auto last_position = baseline.position;
       auto last_position_ns = baseline.feedback.rx_ns;
+      auto progress_position = baseline.position;
+      auto progress_ns = baseline.feedback.rx_ns;
       double measured_speed = 0;
       while (!stop.stop_requested()) {
         const auto now = ota::now_monotonic_ns();
@@ -176,6 +179,14 @@ int main(int argc, char** argv) {
           last_position = current.position;
           last_position_ns = current.feedback.rx_ns;
         }
+        if (current.valid && current.feedback.rx_ns > progress_ns &&
+            std::abs(current.position - progress_position) >= 0.25 * kRad) {
+          progress_position = current.position;
+          progress_ns = current.feedback.rx_ns;
+        }
+        if (!reason && std::abs(target_position.load() - current.position) > 1.0 * kRad &&
+            std::abs(applied_voltage.load()) > 5000 && now - progress_ns > 1'500'000'000)
+          reason = 11;  // Full-demand effort without encoder progress.
         estimate_deg_s.store(measured_speed * kDeg);
         peak_speed_deg_s.store(std::max(peak_speed_deg_s.load(), std::abs(measured_speed * kDeg)));
         peak_excursion_deg.store(std::max(peak_excursion_deg.load(),
@@ -253,6 +264,7 @@ int main(int argc, char** argv) {
         voltage = velocity.update(shaped_reference_rad_s, position, now,
                                   kMaxReferenceDegS * kRad, kMaxOutputRaw,
                                   kVelocityKp, kVelocityKi);
+        applied_voltage.store(voltage);
         if (!velocity.valid()) {
           trip_reason.store(8); trip.store(true); voltage = 0;
         }
