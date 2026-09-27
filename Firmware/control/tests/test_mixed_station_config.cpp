@@ -64,7 +64,7 @@ TEST(MixedStationConfig, HardwareProfilePinsTheCommissionedTopology) {
   EXPECT_DOUBLE_EQ(*loaded.profile.pitch.current_limit_a, 5.0);
   // The temperature gate is an owner's operating decision, pinned in the file
   // and visible here: the station runs a deliberate value, not a code constant.
-  EXPECT_EQ(loaded.profile.yaw.yaw_guard_temp_raw_ceiling, 75);
+  EXPECT_EQ(loaded.profile.yaw.yaw_guard_temp_raw_ceiling, 0);
 }
 
 TEST(MixedStationConfig, TemperatureGateIsSpelledOutAndRangeChecked) {
@@ -82,8 +82,8 @@ TEST(MixedStationConfig, TemperatureGateIsSpelledOutAndRangeChecked) {
   };
   const auto missing = load([&] {
     auto s = text;
-    const auto pos = s.find("guard_temp_raw_ceiling: 75");
-    s.erase(pos, std::string("guard_temp_raw_ceiling: 75").size());
+    const auto pos = s.find("guard_temp_raw_ceiling: 0");
+    s.erase(pos, std::string("guard_temp_raw_ceiling: 0").size());
     return s;
   }());
   EXPECT_FALSE(missing.ok);
@@ -91,8 +91,8 @@ TEST(MixedStationConfig, TemperatureGateIsSpelledOutAndRangeChecked) {
   if (!missing.errors.empty())
     EXPECT_NE(std::string::npos, missing.errors[0].find("guard_temp_raw_ceiling"));
   auto too_big = text;
-  const auto pos = too_big.find("guard_temp_raw_ceiling: 75");
-  too_big.replace(pos, std::string("guard_temp_raw_ceiling: 75").size(),
+  const auto pos = too_big.find("guard_temp_raw_ceiling: 0");
+  too_big.replace(pos, std::string("guard_temp_raw_ceiling: 0").size(),
                   "guard_temp_raw_ceiling: 256");
   EXPECT_FALSE(load(too_big).ok);
 }

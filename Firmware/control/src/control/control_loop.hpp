@@ -407,6 +407,13 @@ class ControlLoop {
   const std::array<double, kAxisCount>& last_temps() const {
     return last_temp_;
   }
+  // Raw thermal byte per axis with a validity bit; -1 means "no byte seen".
+  std::array<int, kAxisCount> last_temp_raw() const {
+    std::array<int, kAxisCount> out{};
+    for (int i = 0; i < kAxisCount; ++i)
+      out[i] = last_temp_raw_valid_[i] ? static_cast<int>(last_temp_raw_[i]) : -1;
+    return out;
+  }
   // Position-derived acceleration (rad/s^2) per axis — the filtered derivative
   // of v_est_ (see kATauS). Exposed so the 1 Hz log shows motion quality
   // (jitter / stuck-slip) at a glance.
@@ -509,6 +516,12 @@ class ControlLoop {
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};
+  // Same reading as the opaque wire byte, plus whether any byte arrived at all.
+  // The GM6020 status frame carries no unit and no fault bit (official guide
+  // v1.4; see docs/references/gm6020/), so yaw has no degC to report — printing
+  // only NaN there throws away the one number that does exist.
+  std::array<uint8_t, kAxisCount> last_temp_raw_{};
+  std::array<bool, kAxisCount> last_temp_raw_valid_{};
   // Homing high-rate motion-log cycle counter (gates the 100 Hz log; see the
   // Phase::Homing case). Reset in start_homing().
   int homing_log_cycle_ = 0;

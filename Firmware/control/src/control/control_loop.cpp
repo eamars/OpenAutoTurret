@@ -629,6 +629,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     last_q_[i] = sp[i].q_rad;  // for telemetry
     last_temp_[i] = sp[i].temperature_known
         ? sp[i].temp_c : std::numeric_limits<double>::quiet_NaN();
+    last_temp_raw_[i] = sp[i].temperature_raw;
+    last_temp_raw_valid_[i] = sp[i].temperature_raw_valid;
     // Position-derived velocity (see header): refresh only when fresh
     // feedback arrives so the 200 Hz loop does not average in zeros.
     if (sp[i].has_feedback && sp[i].rx_ns > v_est_t_prev_[i]) {

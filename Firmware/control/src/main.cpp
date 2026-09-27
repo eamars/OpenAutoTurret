@@ -564,10 +564,12 @@ int main(int argc, char** argv) {
       const TimingReport tr = stats.report();
       spdlog::info(
           "t={:.2f}s phase={} q_pitch={:+.4f} q_yaw={:+.4f} rad "
-          "temp_pitch={:.1f} temp_yaw={:.1f} C a_pitch={:+.2f} a_yaw={:+.2f}",
+          "temp_pitch={:.1f} temp_yaw={:.1f} C temp_raw_pitch={} temp_raw_yaw={} "
+          "a_pitch={:+.2f} a_yaw={:+.2f}",
           ns_to_ms(t0) / 1e3, phase_name(ph),
           loop.last_positions()[0], loop.last_positions()[1],
           loop.last_temps()[0], loop.last_temps()[1],
+          loop.last_temp_raw()[0], loop.last_temp_raw()[1],
           loop.last_accels()[0], loop.last_accels()[1]);
       spdlog::info(
           "loop: target={} Hz p50={:.3f} p95={:.3f} p99={:.3f} worst={:.3f} ms "
