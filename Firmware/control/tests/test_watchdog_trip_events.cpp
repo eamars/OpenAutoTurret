@@ -96,4 +96,21 @@ TEST(WatchdogTripEvents, SeveralConditionsReportTheFirstInGuardOrder) {
   EXPECT_STREQ("no_progress", MotorBackend::select_trip_condition(in));
 }
 
+// Three trips this morning were read as "commanded 10 deg/s and the axis refused". The
+// backend had in fact sent a zero -- the command was refused upstream -- while the
+// requested-speed field still quoted the last accepted cycle. An inference must not
+// outrank the more specific fact available, so a refused command names itself.
+TEST(WatchdogTripEvents, ARefusedCommandOutranksTheParalysisInference) {
+  MotorBackend::TripInputs in;
+  in.command_not_sent = true;
+  in.no_progress = true;          // both are literally true; the specific one speaks first
+  EXPECT_STREQ("command_not_sent", MotorBackend::select_trip_condition(in));
+  in.no_progress = false;
+  EXPECT_STREQ("command_not_sent", MotorBackend::select_trip_condition(in));
+  // A refusal is still not allowed to masquerade as a bus or thermal problem.
+  in.can_down = true;
+  EXPECT_STREQ("can_down", MotorBackend::select_trip_condition(in));
+}
+
+
 }  // namespace

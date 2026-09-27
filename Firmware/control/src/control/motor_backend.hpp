@@ -101,6 +101,11 @@ class MotorBackend {
     bool speed_over_ceiling = false;
     bool temp_raw_over = false;
     bool no_progress = false;
+    // The command reached the backend but was not allowed out on the wire (non-finite,
+    // motion not permitted, heartbeat stale). Zero gets sent and the previous requested
+    // speed is no longer a description of anything, so it must not be the field a
+    // `no_progress` verdict rests on -- 2026-09-28 read three trips that way.
+    bool command_not_sent = false;
     bool heartbeat_stale = false;
     bool reference_valid = true;
     double feedback_age_ms = 0.0;
@@ -117,6 +122,10 @@ class MotorBackend {
     if (in.speed_not_finite) return "speed_nan";
     if (in.speed_over_ceiling) return "speed_over_ceiling";
     if (in.temp_raw_over) return "temp_raw_over";
+    // Before `no_progress` and on purpose: "we asked for 10 deg/s and nothing happened"
+    // is a different accusation when we know the frame was never sent. The specific
+    // truth outranks the inference.
+    if (in.command_not_sent) return "command_not_sent";
     if (in.no_progress) return "no_progress";
     if (in.heartbeat_stale) return "heartbeat_stale";
     return "unknown";

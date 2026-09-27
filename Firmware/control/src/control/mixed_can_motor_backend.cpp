@@ -470,6 +470,7 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           in.speed_over_ceiling = std::abs(measured_speed) > 25.0 * kRadiansPerDegree;
           in.temp_raw_over = yaw_temp_guard > 0 &&
                              yaw_state_.feedback.temperature_raw >= yaw_temp_guard;
+          in.command_not_sent = yaw_command_not_sent_.load();
           in.no_progress = std::abs(requested_speed) >= kNoProgressCommandRadS &&
                            now - progress_at > kNoProgressLimitNs;
           in.heartbeat_stale = heartbeat_seen_.load() &&
@@ -690,13 +691,21 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
       !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
       now - heartbeat_ns_.load() > kHeartbeatLimitNs || !buses_healthy()) {
     if (!yaw_trip_.load() && (!yaw_feedback_safe_locked(now) || !buses_healthy())) trip_yaw_locked();
-    else send_yaw_zero_locked();
+    else {
+      // Nothing went out but a zero. Say so, and stop quoting the last accepted
+      // velocity as if it described this cycle -- that stale 10 deg/s is what made
+      // three no_progress trips read as "commanded and blocked".
+      yaw_requested_velocity_rad_s_.store(0);
+      yaw_command_not_sent_.store(true);
+      send_yaw_zero_locked();
+    }
     return;
   }
   const double dt = std::clamp((now - yaw_velocity_loop_previous_command_ns_) * 1e-9, 0.0, .020);
   const double step = kYawMaxAccelerationRadS2 * dt;
   yaw_shaped_speed_rad_s_ += std::clamp(desired - yaw_shaped_speed_rad_s_, -step, step);
   yaw_requested_velocity_rad_s_.store(desired);
+  yaw_command_not_sent_.store(false);  // a real frame follows below
   yaw_velocity_loop_previous_command_ns_ = now;
   const int voltage = yaw_velocity_loop_.update(yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now,
       kYawMaxSpeedRadS, kYawOutputCeiling, kYawVelocityKp, kYawVelocityKi);

@@ -120,6 +120,10 @@ class MixedCanMotorBackend final : public MotorBackend {
   std::atomic<TimeNs> heartbeat_ns_{0};
   TimeNs yaw_velocity_loop_previous_command_ns_{0};
   std::atomic<double> yaw_requested_velocity_rad_s_{0};
+  // True while the newest command was refused (non-finite, motion not permitted, stale
+  // heartbeat): a zero went out instead, so `requested` describes the last accepted
+  // cycle and must not be quoted as this one's demand.
+  std::atomic<bool> yaw_command_not_sent_{false};
   std::jthread yaw_guard_;
 };
 
