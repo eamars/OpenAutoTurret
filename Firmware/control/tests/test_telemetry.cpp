@@ -103,7 +103,17 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   EXPECT_NE(row.find("\"ack\":\"18446744073709551615\""), std::string::npos) << row;
   EXPECT_NE(row.find("\"phase\":\"fault\""), std::string::npos) << row;
   EXPECT_NE(row.find("\"mode\":\"AUTO_ROAM\""), std::string::npos) << row;
-  EXPECT_NE(row.find("\"track\":\"" ), std::string::npos) << row;
+  // Adjacency, not mere presence: the first on-station trip file had
+  // "track":"search,"phase" -- the key was there and every substring test passed
+  // while the line was not parseable JSON. Pin the boundary, or the test is decoration.
+  EXPECT_NE(row.find("\"track\":\""), std::string::npos) << row;
+  EXPECT_NE(row.find("\",\"phase\":\""), std::string::npos) << row;
+  {
+    int quotes = 0;
+    for (char c : row) if (c == '"') ++quotes;
+    EXPECT_EQ(quotes % 2, 0) << "unbalanced quotes (a missing closing quote is how "
+                                "the first field after track broke): " << row;
+  }
   EXPECT_NE(row.find("[0,null]"), std::string::npos) << row;
   EXPECT_EQ(row.find("nan"), std::string::npos) << row;
   EXPECT_NE(header.find("\"frozen_t_ns\":\"12345678901234567\""), std::string::npos) << header;

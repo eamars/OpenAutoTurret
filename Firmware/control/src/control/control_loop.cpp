@@ -3379,7 +3379,16 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   if (cfg_.motion.configured) {
     l.manual_v_max_rad_s = motion_speed(OperatingMode::Manual);
     l.track_v_max_rad_s = motion_speed(OperatingMode::AutoTrack);
-    l.roam_v_max_rad_s = motion_speed(OperatingMode::AutoRoam);
+    // A roam sweep moves yaw and holds pitch, so the sweep may not ask for more
+    // than the yaw's own profiled speed. `motion_speed()` is one scalar across both
+    // axes -- the max of the two, i.e. pitch's -- which was harmless only while
+    // something else kept the yaw slow. With the yaw envelope declared away
+    // (2026-09-28) the long approach into the sweep region drove the yaw past the
+    // mixed backend's own speed_over_ceiling guard on the station: the guard was
+    // right, the ask was wrong. Capping the ask is the fix; raising the guard would
+    // have bought a green log by moving the goalposts.
+    l.roam_v_max_rad_s =
+        motion_profile(ix(AxisId::Yaw), OperatingMode::AutoRoam).target.speed;
     l.hold_v_max_rad_s = motion_speed(mode_mgr_.mode());
   }
   return l;

@@ -828,7 +828,7 @@ class Telemetry {
       out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
           << "\",\"mode\":\"" << operating_mode_name(r.mode)
           << "\",\"track\":\"" << tracking::track_state_name(r.track_state)
-          << ",\"phase\":\"" << phase_name(r.phase)
+          << "\",\"phase\":\"" << phase_name(r.phase)
           << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
           << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
           << ",\"cmd\":" << pair(r.v_command) << ",\"effort\":" << pair(r.effort)
