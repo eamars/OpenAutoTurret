@@ -20,9 +20,10 @@ case "${1:-}" in
     echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
+    echo '         --yaw-step-deg N (commissioning with IMU; continuous 15..45 deg out/return),'
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
-    echo '         --pitch-step-mdeg N (two enabled step/return pairs; +/-3000 max, 5 A, 10 deg/s),'
+    echo '         --pitch-step-mdeg N (enabled +/-15 deg session; 5 A ceiling),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -80,6 +81,7 @@ PRODUCTION=0
 PROBE_BUILD=0
 YAW_VOLTAGE=0
 YAW_SPEED_DEG_S=0
+YAW_STEP_DEG=0
 PULSE_MS=100
 OBSERVE_MS=2000
 APPLY_PITCH_LIMIT=0
@@ -104,6 +106,7 @@ while [ $# -gt 0 ]; do
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
     --yaw-speed-deg-s) YAW_SPEED_DEG_S="${2:?--yaw-speed-deg-s requires a signed value}"; shift 2 ;;
+    --yaw-step-deg) YAW_STEP_DEG="${2:?--yaw-step-deg requires a value}"; shift 2 ;;
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
     --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
     --no-web) START_WEB=0; shift ;;
@@ -122,11 +125,17 @@ if [ "$PITCH_TEST_GAINS" = 1 ] && [ "$PITCH_PROBE" != 1 ]; then
   echo '--pitch-test-gains requires a pitch probe' >&2; exit 2
 fi
 if [ "$PITCH_PROBE" = 1 ]; then
-  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
+  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
     echo 'Pitch steps require commissioning with IMU, without yaw motion or separate limit setup' >&2; exit 2
   fi
-  if ! [[ "$PITCH_STEP_MDEG" =~ ^-?[0-9]+$ ]] || ((PITCH_STEP_MDEG < -3000 || PITCH_STEP_MDEG > 3000)); then
-    echo 'Pitch step outside +/-3000 millidegrees' >&2; exit 2
+  if ! [[ "$PITCH_STEP_MDEG" =~ ^-?[0-9]+$ ]] || ((PITCH_STEP_MDEG < -15000 || PITCH_STEP_MDEG > 15000)); then
+    echo 'Pitch step outside +/-15000 millidegrees' >&2; exit 2
+  fi
+fi
+if [ "$YAW_STEP_DEG" != 0 ]; then
+  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
+     ! [[ "$YAW_STEP_DEG" =~ ^[0-9]+$ ]] || ((YAW_STEP_DEG < 15 || YAW_STEP_DEG > 45)); then
+    echo 'Yaw step requires commissioning with IMU, 15..45 degrees, and no other motor probe' >&2; exit 2
   fi
 fi
 if [ "$WITH_IMU" = 1 ] && [ "$MODE" != commission ]; then
@@ -135,7 +144,7 @@ fi
 if ! [[ "$IMU_SECONDS" =~ ^[0-9]+$ ]] || ((IMU_SECONDS < 1 || IMU_SECONDS > 120)); then
   echo '--imu-seconds must be 1..120' >&2; exit 2
 fi
-if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
+if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
   echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
 fi
 if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
@@ -158,7 +167,7 @@ if [ "$ACTION" = deploy ]; then
     if [ "$MODE" = imu ]; then
     cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     elif [ "$MODE" = commission ]; then
-    cmake --build "$APP/build" --target probe-mixed-hardware probe-pitch-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target probe-mixed-hardware probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     else
     cmake --build "$APP/build" --target controld probe-mixed-hardware -j"${OTA_BUILD_JOBS:-2}"
     fi
@@ -307,6 +316,8 @@ PY
   if [ "$PITCH_TEST_GAINS" = 1 ]; then pitch_options+=(tuned); fi
   if [ "$PITCH_RESTORE_GAINS" = 1 ]; then pitch_options+=(restore); fi
   "$APP/build/probe-pitch-motion" "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" "${pitch_options[@]}" >"$RUN/controller.log" 2>&1 &
+  elif [ "$YAW_STEP_DEG" != 0 ]; then
+  "$APP/build/probe-yaw-motion" "$YAW_STEP_DEG" "$RUN/yaw-probe.csv" >"$RUN/controller.log" 2>&1 &
   else
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
     --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
@@ -316,6 +327,8 @@ PY
   controller_pid=$!; children+=("$controller_pid")
   if [ "$PITCH_PROBE" = 1 ]; then
     printf 'Mode: pitch commissioning\nStep millidegrees: %s\nTrace: %s\n' "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" > "$RUN/stack.info"
+  elif [ "$YAW_STEP_DEG" != 0 ]; then
+    printf 'Mode: yaw commissioning\nStep degrees: %s\nTrace: %s\n' "$YAW_STEP_DEG" "$RUN/yaw-probe.csv" > "$RUN/stack.info"
   else
     printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
   fi
