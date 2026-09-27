@@ -1234,9 +1234,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           if (!yaw.has_feedback || yaw.rx_ns <= 0 || yaw.rx_ns > now_ns ||
               now_ns-yaw.rx_ns > cfg_.feedback_max_age_ms*1'000'000LL ||
               !std::isfinite(yaw.q_rad) || !std::isfinite(yaw.v_rad_s) ||
-              std::abs(yaw.v_rad_s) > kYawReferenceStationaryRadS ||
+              !std::isfinite(v_est_[i]) ||
+              std::abs(v_est_[i]) > 2.0*kDeg2Rad ||
               std::abs(yaw.q_rad-yaw_session_reference_rad_) >
                   kYawReferencePositionToleranceRad) {
+            spdlog::error("continuous yaw homing hold rejected: age_ms={} delta_deg={:.3f} encoder_speed_deg_s={:.3f} motor_speed_deg_s={:.3f}",
+                         (now_ns-yaw.rx_ns)/1'000'000,
+                         (yaw.q_rad-yaw_session_reference_rad_)*kRad2Deg,
+                         v_est_[i]*kRad2Deg, yaw.v_rad_s*kRad2Deg);
             motion_error = "continuous yaw moved or lost fresh stationary feedback during pitch homing";
             break;
           }
