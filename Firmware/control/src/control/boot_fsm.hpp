@@ -54,6 +54,7 @@ inline const char* boot_state_name(BootState s) {
 struct BootConfig {
   int discovery_timeout_ms = 500;
   int register_timeout_ms = 500;
+  int feedback_max_age_ms = 100;
   // The self-test reads this register from each motor to confirm it responds.
   cybergear::Reg self_test_register = cybergear::Reg::MechPos;
 };
