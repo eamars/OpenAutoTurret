@@ -17,3 +17,8 @@ It is the current operating runbook; dated as-built reports are historical.
   overwrite retained calibration, or run legacy controller/camera services beside it.
 - Python dependencies belong in project-local virtual environments. Never put
   credentials, virtual environments or runtime captures into commits.
+- Run the test suite where the hardware is. A workstation container has no
+  station and no `sudo`: run `ctest -E "retained_homing"` there for fast
+  feedback (that one test writes `/dev/shm`), and let `deploy_station.py`
+  run the full suite, hardware included, on the station itself. Do not
+  escalate privileges to make the local suite green.
