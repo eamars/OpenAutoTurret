@@ -272,11 +272,23 @@ int main(int argc, char** argv) {
                  yaw_axis.expected_travel_deg.max) * kDeg2Rad;
     control_cfg.continuous_yaw_sector_inset_rad =
         yaw_axis.soft_margin_deg * kDeg2Rad;
-    if (control_cfg.continuous_yaw_sector_half_span_rad <=
-        control_cfg.continuous_yaw_sector_inset_rad) {
+    if (yaw_axis.position_envelope_none)
+      control_cfg.continuous_yaw_sector_half_span_rad = 0.0;
+    if (control_cfg.continuous_yaw_sector_half_span_rad < 0.0 ||
+        (control_cfg.continuous_yaw_sector_half_span_rad > 0.0 &&
+         control_cfg.continuous_yaw_sector_half_span_rad <=
+             control_cfg.continuous_yaw_sector_inset_rad)) {
       spdlog::error("mixed continuous-yaw software sector is invalid");
       mixed_backend->close();
       return 1;
+    }
+    if (control_cfg.continuous_yaw_sector_half_span_rad == 0.0) {
+      // `position_envelope: none`. That is a declaration that continuous yaw runs
+      // without a position envelope, not a missing number -- said out loud here so a
+      // log reader never has to infer it from the absence of a limit.
+      spdlog::warn("continuous yaw declared WITHOUT a position envelope; the "
+                   "sector is gone, not merely unmeasured (AUTO_ROAM still sweeps "
+                   "a declared region, and every other guard is unchanged)");
     }
     // GM6020 has no reported fault/disable status and its temperature byte
     // has no documented unit. The mixed backend instead independently bounds

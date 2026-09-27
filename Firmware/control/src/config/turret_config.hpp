@@ -40,6 +40,10 @@ struct AxisLimitsConfig {
     double max = 0.0;
   };
   TravelDeg expected_travel_deg;
+  // True when the file declares `position_envelope: none` -- this axis runs with no
+  // position envelope at runtime. Parsed and validated in load_axis; see the comment
+  // there for why absence is a declaration and not a missing number.
+  bool position_envelope_none = false;
   double soft_margin_deg = 0.0;
   double max_velocity_deg_s = 0.0;
   double max_acceleration_deg_s2 = 0.0;

@@ -46,9 +46,22 @@ axes:
     # Written to LimitCur (0x7018); no adaptive current increase.
     limit_cur_a: 5.0
   yaw:
-    # Provisional +/-90 degree session-relative software operating sector, with
-    # 10 degree inset. These are not physical endpoints; GM6020 yaw is
-    # continuous and is never homed against a stop.
+    # No position envelope (decided 2026-09-28, owner asked for the virtual limits
+    # gone). GM6020 yaw is continuous, has a slip ring, no endstop and is never
+    # homed against a stop, so the +/-90 degree sector that used to be enforced here
+    # was a provisional policy number, not a physical fact -- and the log line at
+    # startup now says out loud when it is not being enforced.
+    #
+    # `none` is a declaration, not an absent number: the axis is bounded by nothing,
+    # and every consumer is told so instead of being handed an unmeasured limit set
+    # it would read as "cannot move". AUTO_ROAM still sweeps a bounded region (the
+    # region comes from the search span and this band below, never from a wall),
+    # pitch keeps its measured soft limits, and all other guards are untouched.
+    #
+    # To revert: delete this key. The band below is then enforced again as before.
+    position_envelope: none
+    # Kept as the policy band the named roam region is validated inside (see
+    # turret_config.cpp); with `none` above it is NOT a runtime limit.
     expected_travel_deg: { min: -90, max: 90 }
     soft_margin_deg: 10
     max_velocity_deg_s: 10

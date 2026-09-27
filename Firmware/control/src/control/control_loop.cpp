@@ -503,8 +503,15 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   double yaw_high = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
   if (backend_->supports_continuous_yaw()) {
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
-    yaw_low = virtual_yaw.q_soft_min_rad;
-    yaw_high = virtual_yaw.q_soft_max_rad;
+    if (virtual_yaw.unbounded()) {
+      // Nothing to clamp against: the search span is the whole answer, and it is
+      // already centred on the ready pose, so it stays finite either way.
+      yaw_low = ready_yaw - cfg_.search_span_rad;
+      yaw_high = ready_yaw + cfg_.search_span_rad;
+    } else {
+      yaw_low = virtual_yaw.q_soft_min_rad;
+      yaw_high = virtual_yaw.q_soft_max_rad;
+    }
   }
   double lo = std::max(ready_yaw - cfg_.search_span_rad, yaw_low + inset);
   double hi = std::min(ready_yaw + cfg_.search_span_rad, yaw_high - inset);
@@ -2159,7 +2166,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
       rec.v_command[i] = service_command_rate[i];
       rec.v_estimated[i] = v_est_[i];
-      rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
+      rec.soft_limit_distance[i] = limits_[i].declared()
+        ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
       rec.temp_raw[i] = sp[i].temperature_raw_valid ? static_cast<int>(sp[i].temperature_raw) : -1;
     }
     telemetry_.push_control(rec);
@@ -2624,8 +2632,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // turret was near an end without knowing which end, or whether an end existed yet.
     const AxisLimits published_limits[kAxisCount] = {
         runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
-    snap.soft_limits_valid = published_limits[ix(AxisId::Pitch)].valid &&
-                             published_limits[ix(AxisId::Yaw)].valid;
+    // "Declared" and "bounded" are different questions. An axis declared
+    // unbounded is ready; an axis whose envelope nobody has written down yet is
+    // not -- conflating them is how removing a limit silently un-readies a station.
+    snap.soft_limits_valid = published_limits[ix(AxisId::Pitch)].declared() &&
+                             published_limits[ix(AxisId::Yaw)].declared();
 
     // §20/§11: publish the same per-cycle limits used by planning and safety.
     // Continuous GM6020 yaw has a session-relative policy sector, not measured
@@ -2650,11 +2661,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.q_soft_min_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
     snap.q_soft_max_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.soft_limit_distance_pitch_rad =
-        published_limits[ix(AxisId::Pitch)].valid
+        published_limits[ix(AxisId::Pitch)].declared()
             ? published_limits[ix(AxisId::Pitch)].distance_to_soft(sp[ix(AxisId::Pitch)].q_rad)
             : 0.0;
     snap.soft_limit_distance_yaw_rad =
-        published_limits[ix(AxisId::Yaw)].valid
+        published_limits[ix(AxisId::Yaw)].declared()
             ? published_limits[ix(AxisId::Yaw)].distance_to_soft(sp[ix(AxisId::Yaw)].q_rad)
             : 0.0;
     snap.intent_has_joint_target = last_intent_.has_joint_target;
@@ -2922,6 +2933,7 @@ RoamEnvelope ControlLoop::safe_envelope() const {
     // This planner sector is the same transient session policy used by safety;
     // it is not a measured motor endpoint or retained homing.
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
+    e.yaw_unbounded = virtual_yaw.unbounded();
     e.yaw_min_rad = virtual_yaw.q_soft_min_rad;
     e.yaw_max_rad = virtual_yaw.q_soft_max_rad;
   } else {
@@ -3012,8 +3024,17 @@ RoamConfig ControlLoop::roam_config() const {
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
   if (backend_->supports_continuous_yaw()) {
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
-    const double virtual_min = virtual_yaw.q_soft_min_rad;
-    const double virtual_max = virtual_yaw.q_soft_max_rad;
+    double virtual_min = virtual_yaw.q_soft_min_rad;
+    double virtual_max = virtual_yaw.q_soft_max_rad;
+    if (virtual_yaw.unbounded()) {
+      // No outer wall to inherit a sweep from, so the region is declared around
+      // the session reference: the same span a lost-target search already uses,
+      // narrowed further if the file names a roam region. The centre is the
+      // session reference, not where the last sweep ended, so nothing wanders.
+      virtual_min = ready_yaw - cfg_.search_span_rad;
+      virtual_max = ready_yaw + cfg_.search_span_rad;
+      c.envelope.yaw_unbounded = false;  // the region has two ends even if the axis does not
+    }
     c.envelope.yaw_min_rad = virtual_min + c.min_inside_safe_rad;
     c.envelope.yaw_max_rad = virtual_max - c.min_inside_safe_rad;
     if (cfg_.roam_region_named) {
@@ -3374,12 +3395,18 @@ AxisLimits ControlLoop::runtime_limits(AxisId axis) const {
   // and is never persisted as homing. Invalid policy config fails closed.
   const double half_span = cfg_.continuous_yaw_sector_half_span_rad;
   const double inset = cfg_.continuous_yaw_sector_inset_rad;
+  if (half_span == 0.0) {
+    // The station file declared no sector at all. That is a position, not a gap:
+    // the axis is bounded by nothing, and every consumer must be told so rather
+    // than handed an unestablished limit set it will read as "cannot move".
+    return AxisLimits::no_envelope();
+  }
   if (!yaw_session_reference_valid_ || !std::isfinite(yaw_session_reference_rad_) ||
-      !std::isfinite(half_span) || !std::isfinite(inset) || half_span <= 0.0 ||
+      !std::isfinite(half_span) || !std::isfinite(inset) || half_span < 0.0 ||
       inset < 0.0 || inset >= half_span)
     return {};
   AxisLimits sector;
-  sector.set_from_endpoints(yaw_session_reference_rad_ - half_span,
+  sector.set_virtual_sector(yaw_session_reference_rad_ - half_span,
                             yaw_session_reference_rad_ + half_span, inset);
   return sector;
 }

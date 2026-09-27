@@ -32,11 +32,38 @@ namespace ota {
 
 // §18.1 per-axis limits, raw mechanical radians.
 struct AxisLimits {
-  bool valid = false;  // false until homing measures the hard limits.
+  // Four states, and the difference between the last two is the whole point.
+  //
+  //   Unestablished  nothing has been measured or declared yet: no motion
+  //                  authority, and the readiness gate is supposed to stay shut.
+  //   Measured       homing found the two endpoints.
+  //   Virtual        a declared software sector (what continuous yaw has had).
+  //   Unbounded      declared policy: this axis has no position envelope.
+  //
+  // `Unbounded` must not be spelled `!valid`, because every consumer reads that
+  // as the first state: readiness stays shut, a manual step is refused, and the
+  // telemetry distance to a boundary reports zero -- "at the boundary", where
+  // there is no boundary at all. Absence of a limit is a position, not a gap.
+  enum class Envelope : uint8_t { Unestablished, Measured, Virtual, Unbounded };
+  // "There is no boundary" is not a distance of zero to one. Consumers map this to
+  // their own kind of absence (JSON null, the word "unbounded"), never to 0.
+  static constexpr double kNoBoundary = -1.0;
+
+  static AxisLimits no_envelope() {
+    AxisLimits l;
+    l.envelope = Envelope::Unbounded;
+    return l;
+  }
+
+  Envelope envelope = Envelope::Unestablished;
+  bool valid = false;  // a *bounded* envelope has been established
   double q_hard_min_rad = 0.0;
   double q_hard_max_rad = 0.0;
   double q_soft_min_rad = 0.0;
   double q_soft_max_rad = 0.0;
+
+  bool declared() const { return envelope != Envelope::Unestablished; }
+  bool unbounded() const { return envelope == Envelope::Unbounded; }
 
   // Set from the two measured raw endpoints (the homing stops) plus the soft
   // margin. `raw_low_rad` must be < `raw_high_rad`.
@@ -47,16 +74,26 @@ struct AxisLimits {
     q_soft_min_rad = raw_low_rad + soft_margin_rad;
     q_soft_max_rad = raw_high_rad - soft_margin_rad;
     valid = (q_soft_min_rad < q_soft_max_rad);
+    if (valid) envelope = Envelope::Measured;
+  }
+  // A software sector is the same shape with a different provenance, and the
+  // provenance is what the operator is owed: the numbers came from a file.
+  void set_virtual_sector(double low_rad, double high_rad, double inset_rad) {
+    set_from_endpoints(low_rad, high_rad, inset_rad);
+    if (valid) envelope = Envelope::Virtual;
   }
 
   bool in_soft(double q_rad) const {
+    if (unbounded()) return true;  // nothing to be outside of
     return valid && q_rad >= q_soft_min_rad && q_rad <= q_soft_max_rad;
   }
   bool in_hard(double q_rad) const {
+    if (unbounded()) return true;
     return valid && q_rad >= q_hard_min_rad && q_rad <= q_hard_max_rad;
   }
-  // Distance (>= 0 when inside) to the nearer soft boundary.
+  // Distance (>= 0 when inside) to the nearer soft boundary, or kNoBoundary.
   double distance_to_soft(double q_rad) const {
+    if (unbounded()) return kNoBoundary;
     if (!valid) return 0.0;
     return std::min(q_rad - q_soft_min_rad, q_soft_max_rad - q_rad);
   }

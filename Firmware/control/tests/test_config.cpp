@@ -527,3 +527,43 @@ TEST(Config, ApprovedParkUsesMotorFeedbackOnlyWhenExplicitlyConfigured) {
   ASSERT_TRUE(approved.ok);
   EXPECT_FALSE(ota::wire::make_control_cfg(approved.config).park.require_independent_position);
 }
+
+// `position_envelope` exists so that "this axis is bounded by nothing" is something a
+// station file SAYS. Three things must not be conflated: a declaration (accepted, and
+// only legal on the continuous yaw), a typo (rejected, never read as permission), and
+// silence (the historical meaning: the travel band is enforced).
+TEST(Config, PositionEnvelopeIsDeclaredNotImplied) {
+  const std::string yaw_key = "  yaw:\n";
+  const auto insert_after = [](std::string y, const std::string& key,
+                               const std::string& add) {
+    const auto pos = y.find(key);
+    EXPECT_NE(pos, std::string::npos) << key;
+    return y.substr(0, pos + key.size()) + add + y.substr(pos + key.size());
+  };
+  {
+    auto r = ota::config::load_turret_config(write_file(
+        "pe_none.yaml", insert_after(kFullConfig, yaw_key,
+                                     "    position_envelope: none\n")));
+    ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
+    EXPECT_TRUE(r.config.axes[1].position_envelope_none);
+    EXPECT_FALSE(r.config.axes[0].position_envelope_none);
+  }
+  {
+    // An axis with two measured endstops cannot declare itself unbounded.
+    auto r = ota::config::load_turret_config(write_file(
+        "pe_pitch.yaml", insert_after(kFullConfig, "  pitch:\n",
+                                      "    position_envelope: none\n")));
+    EXPECT_FALSE(r.ok);
+  }
+  {
+    auto r = ota::config::load_turret_config(write_file(
+        "pe_bad.yaml", insert_after(kFullConfig, yaw_key,
+                                    "    position_envelope: unbounded_please\n")));
+    EXPECT_FALSE(r.ok);
+  }
+  {
+    auto r = ota::config::load_turret_config(write_file("pe_absent.yaml", kFullConfig));
+    ASSERT_TRUE(r.ok) << "errors: " << r.errors.size();
+    EXPECT_FALSE(r.config.axes[1].position_envelope_none);
+  }
+}

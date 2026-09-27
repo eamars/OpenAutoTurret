@@ -382,6 +382,29 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
   }
   if (out.expected_travel_deg.min >= out.expected_travel_deg.max)
     err.push_back(p + "expected_travel_deg.min must be < max");
+  // `position_envelope` states what bounds this axis, because "no limit" has to be
+  // something a file can SAY rather than something a number implies. `sector` is the
+  // default and what every existing file means: expected_travel_deg inset by
+  // soft_margin_deg is enforced at runtime. `none` is a declaration, legal only on
+  // the continuous GM6020 yaw, that the axis has no position envelope at runtime.
+  // The travel band keeps its other job either way -- it is the band the named roam
+  // region and the homing sanity check are validated against -- so naming a region
+  // stays safe with no wall to stop you: the region is still finite in the file.
+  out.position_envelope_none = false;
+  if (anode["position_envelope"].IsDefined()) {
+    std::string pe;
+    try { pe = trim(anode["position_envelope"].as<std::string>()); }
+    catch (const YAML::Exception&) {}
+    if (pe == "sector") {
+      // the default, spelled out
+    } else if (pe == "none") {
+      if (name != "yaw")
+        err.push_back(p + "position_envelope: none is only meaningful on the continuous yaw axis");
+      out.position_envelope_none = true;
+    } else {
+      err.push_back(p + "position_envelope must be 'sector' or 'none'");
+    }
+  }
   if (out.soft_margin_deg < 0.0) err.push_back(p + "soft_margin_deg must be >= 0");
   if (out.max_velocity_deg_s <= 0.0) err.push_back(p + "max_velocity_deg_s must be > 0");
   if (out.max_acceleration_deg_s2 <= 0.0)

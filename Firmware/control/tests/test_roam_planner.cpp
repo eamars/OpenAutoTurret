@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
 #include <string>
 
 #include "mode/roam_planner.hpp"
@@ -358,3 +359,30 @@ TEST_F(RoamTest, ResumeUsesCurrentEnvelopeInsteadOfAnOldWaypoint) {
 
 }  // namespace
 }  // namespace ota
+
+// An axis with no outer yaw wall still needs a sweep with two ends. If "unbounded"
+// were allowed to mean "nothing to check", the planner would accept a region with no
+// turnaround and AUTO_ROAM would stop being "a deterministic bounded sweep a person
+// watching can predict" -- which is the one promise the mode exists to keep.
+TEST(RoamEnvelopeValidation, NoOuterYawWallDoesNotExcuseAnEndlessSweep) {
+  ota::RoamEnvelope safe;  // yaw: declared unbounded. pitch: a real region.
+  safe.yaw_unbounded = true;
+  safe.pitch_min_rad = -20.0 * ota::kDeg;
+  safe.pitch_max_rad = +20.0 * ota::kDeg;
+  char why[256] = {};
+
+  ota::RoamEnvelope region;
+  region.yaw_min_rad = -30.0 * ota::kDeg;
+  region.yaw_max_rad = +30.0 * ota::kDeg;
+  region.pitch_min_rad = -10.0 * ota::kDeg;
+  region.pitch_max_rad = +5.0 * ota::kDeg;
+  EXPECT_TRUE(ota::RoamPlanner::validate_envelope(region, safe, -2.0 * ota::kDeg, 0.01, why,
+                                             sizeof why))
+      << why;
+
+  ota::RoamEnvelope endless = region;
+  endless.yaw_min_rad = endless.yaw_max_rad = 0.0;
+  EXPECT_FALSE(ota::RoamPlanner::validate_envelope(endless, safe, -2.0 * ota::kDeg, 0.01, why,
+                                              sizeof why));
+  EXPECT_NE(std::strstr(why, "empty"), nullptr) << why;
+}
