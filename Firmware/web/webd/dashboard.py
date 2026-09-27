@@ -451,12 +451,16 @@ function render(t) {
   // and "which way do I stop jogging" is decided by the direction, not the distance. Before
   // homing there is no range to report — and reporting zeros would name a limit that was never
   // measured, which on this station is the difference between a wide sweep and a stopped one.
-  const slText = (valid, lo, hi, away) => !valid
+  const slText = (valid, lo, hi, away, envelope) => !valid
     ? "not measured yet (needs homing)"
-    : rad(lo) + " … " + rad(hi) + "  ·  " + rad(away) + " to limit";
-  const slNear = (valid, away) => valid && away < 0.0524;   // ~3 degrees
+    : envelope === "none"
+      ? "no boundary (continuous rotation)"
+      : rad(lo) + " … " + rad(hi) + "  ·  " + rad(away) + " to limit";
+  // null < 0.0524 在 JS 里是真的（null 被当成 0）：不写 typeof，"没有边界"会亮成"贴着边界"。
+  const slNear = (valid, away) => valid && typeof away === "number" && away < 0.0524;   // ~3 degrees
   $("sly").textContent = slText(t.soft_limits_valid, t.q_soft_min_yaw_rad,
-                                t.q_soft_max_yaw_rad, t.soft_limit_distance_yaw_rad);
+                                t.q_soft_max_yaw_rad, t.soft_limit_distance_yaw_rad,
+                                t.yaw_envelope);
   $("sly").className = slNear(t.soft_limits_valid, t.soft_limit_distance_yaw_rad) ? "warn" : "";
   $("slp").textContent = slText(t.soft_limits_valid, t.q_soft_min_pitch_rad,
                                 t.q_soft_max_pitch_rad, t.soft_limit_distance_pitch_rad);

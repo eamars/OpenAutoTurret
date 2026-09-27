@@ -321,7 +321,10 @@ function hudDiagRows(t) {
     ["REF YAW / PITCH", num(t.q_ref_yaw_rad) + " / " + num(hudPitch(t, t.q_ref_pitch_rad))],
     ["CMD RATE YAW", num(t.q_ref_rate_yaw_rad_s) + " DEG/S"],
     ["CMD ACCEL YAW", num(t.q_ref_accel_yaw_rad_s2) + " DEG/S2"],
-    ["LIMITS YAW", num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
+    ["LIMITS YAW", t.yaw_envelope === "none"
+      ? "BAND " + num(t.yaw_band_min_rad, 1) + " ... " + num(t.yaw_band_max_rad, 1)
+        + " DEG (no boundary)"
+      : num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
     ["LIMITS PITCH", num(hudPitch(t, t.q_soft_min_pitch_rad), 1) + " ... " + num(hudPitch(t, t.q_soft_max_pitch_rad), 1) + " DEG"],
     ["TRACK RATE", (typeof t.camera_fps === "number" ? t.camera_fps.toFixed(1) : "--") + " HZ"],
     ["SELECTED CONF", (typeof t.selected_confidence === "number"
@@ -924,12 +927,19 @@ function render(t) {
   // "DERATE YAW MAX" text cannot drift apart - which matters more than it sounds, because an amber
   // highlight pointing at the wrong end of the tape is worse than no highlight at all.
   const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
-  const yawMin = deg(t.q_soft_min_yaw_rad), yawMax = deg(t.q_soft_max_yaw_rad);
+  // 无包线时带子照画，只是两端换成"参考带"（文件里声明过的那条，以归零点为 0）：
+  // 他喜欢这条刻度，而一条尺子并不妨碍自由旋转。
+  const unboundedYaw = t.yaw_envelope === "none";
+  const yawMin = deg(unboundedYaw ? t.yaw_band_min_rad : t.q_soft_min_yaw_rad);
+  const yawMax = deg(unboundedYaw ? t.yaw_band_max_rad : t.q_soft_max_yaw_rad);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
     minDeg: yawMin, maxDeg: yawMax,
     markDeg: (dEdge && dEdge.axis === "YAW") ? (dEdge.side === "MIN" ? yawMin : yawMax) : undefined,
-    valueDeg: deg(t.q_yaw_rad), valid: t.soft_limits_valid === true
+    valueDeg: deg(t.q_yaw_rad),
+    valid: t.soft_limits_valid === true &&
+      (unboundedYaw ? Number.isFinite(yawMin) && Number.isFinite(yawMax) && yawMax > yawMin
+                     : true)
   });
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({

@@ -82,6 +82,34 @@ telemetry::TelemetrySnapshot sample_snapshot() {
   return s;
 }
 
+// An axis with no declared envelope must not borrow the shape of an axis whose limits
+// happen to sit at zero. Before this, an unbounded yaw published 0/0 and 0.0-to-limit,
+// which is the same sentence as "the wall is exactly where you are standing" -- and the
+// dashboard then highlighted it as "near the limit", because in JS null < 0.05 is true.
+TEST(WebServer, AnUnboundedAxisSaysSoInsteadOfPublishingZeros) {
+  telemetry::TelemetrySnapshot s;
+  s.soft_limits_valid = true;              // pitch still has real limits
+  s.yaw_envelope_declared = false;
+  s.q_soft_min_yaw_rad = -1.5708;          // the carried reference band, a ruler
+  s.q_soft_max_yaw_rad = 1.5708;
+  s.yaw_band_min_rad = -1.5708;
+  s.yaw_band_max_rad = 1.5708;
+  s.soft_limit_distance_yaw_rad = 0.0;     // must not reach the wire as a number
+  s.q_soft_min_pitch_rad = -0.5;
+  s.q_soft_max_pitch_rad = 0.5;
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"yaw_envelope\":\"none\""), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"q_soft_min_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"q_soft_max_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"soft_limit_distance_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_EQ(wire.find("\"q_soft_min_yaw_rad\":-1.5708"), std::string::npos) << wire;
+  // The ruler survives: the operator keeps a scale centred on the homing origin, and the
+  // word `none` is what says it is not a wall.
+  EXPECT_NE(wire.find("\"yaw_band_min_rad\":-1.5708"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"yaw_band_max_rad\":1.5708"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"q_soft_min_pitch_rad\":-0.5"), std::string::npos) << wire;
+}
+
 TEST(WebServer, UnknownYawTorqueIsValidJsonNull) {
   telemetry::TelemetrySnapshot s;
   s.effort_yaw = std::numeric_limits<double>::quiet_NaN();

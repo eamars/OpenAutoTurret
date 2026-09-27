@@ -432,10 +432,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"soft_limits_valid\":" << (s.soft_limits_valid ? "true" : "false")
      << ",\"q_soft_min_pitch_rad\":" << s.q_soft_min_pitch_rad
      << ",\"q_soft_max_pitch_rad\":" << s.q_soft_max_pitch_rad
-     << ",\"q_soft_min_yaw_rad\":" << s.q_soft_min_yaw_rad
-     << ",\"q_soft_max_yaw_rad\":" << s.q_soft_max_yaw_rad
+     << ",\"yaw_band_min_rad\":" << s.yaw_band_min_rad
+     << ",\"yaw_band_max_rad\":" << s.yaw_band_max_rad
+     << ",\"yaw_envelope\":\"" << (s.yaw_envelope_declared ? "sector" : "none") << "\""
+     << ",\"q_soft_min_yaw_rad\":" << (s.yaw_envelope_declared ? std::to_string(s.q_soft_min_yaw_rad) : std::string("null"))
+     << ",\"q_soft_max_yaw_rad\":" << (s.yaw_envelope_declared ? std::to_string(s.q_soft_max_yaw_rad) : std::string("null"))
      << ",\"soft_limit_distance_pitch_rad\":" << s.soft_limit_distance_pitch_rad
-     << ",\"soft_limit_distance_yaw_rad\":" << s.soft_limit_distance_yaw_rad
+     << ",\"soft_limit_distance_yaw_rad\":" << (s.yaw_envelope_declared ? std::to_string(s.soft_limit_distance_yaw_rad) : std::string("null"))
      << ",\"aim_point_valid\":" << (s.aim_point_valid ? "true" : "false")
      << ",\"aim_point_x\":" << (s.aim_point_valid ? s.aim_point_x : 0.0)
      << ",\"aim_point_y\":" << (s.aim_point_valid ? s.aim_point_y : 0.0)

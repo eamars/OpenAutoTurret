@@ -2716,6 +2716,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
     snap.q_soft_min_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_min_rad;
     snap.q_soft_max_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_max_rad;
+    snap.yaw_envelope_declared = published_limits[ix(AxisId::Yaw)].declared();
+    snap.yaw_band_min_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
+    snap.yaw_band_max_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.q_soft_min_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
     snap.q_soft_max_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.soft_limit_distance_pitch_rad =
@@ -3473,7 +3476,14 @@ AxisLimits ControlLoop::runtime_limits(AxisId axis) const {
     // The station file declared no sector at all. That is a position, not a gap:
     // the axis is bounded by nothing, and every consumer must be told so rather
     // than handed an unestablished limit set it will read as "cannot move".
-    return AxisLimits::no_envelope();
+    AxisLimits l = AxisLimits::no_envelope();
+    // Carry the declared band as a reference scale (see continuous_yaw_band_half_span_rad).
+    // The envelope label is what makes this safe to read: `Unbounded` means these two
+    // numbers are a ruler, not a wall -- and the display layer is the only consumer.
+    const double band = cfg_.continuous_yaw_band_half_span_rad;
+    l.q_soft_min_rad = -band;
+    l.q_soft_max_rad = band;
+    return l;
   }
   if (!yaw_session_reference_valid_ || !std::isfinite(yaw_session_reference_rad_) ||
       !std::isfinite(half_span) || !std::isfinite(inset) || half_span < 0.0 ||

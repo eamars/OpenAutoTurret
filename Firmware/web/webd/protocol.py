@@ -89,10 +89,15 @@ class Telemetry:
     soft_limits_valid: bool = False
     q_soft_min_pitch_rad: float = 0.0
     q_soft_max_pitch_rad: float = 0.0
-    q_soft_min_yaw_rad: float = 0.0
-    q_soft_max_yaw_rad: float = 0.0
+    # 无包线的轴发 null（不是 0，也不是大数）：0 是一个读数，"无"不是。
+    yaw_envelope: str = "sector"
+    # 参考带（不是限位）：无包线时 HUD 那条刻度带照画，以归零点为 0。
+    yaw_band_min_rad: float = 0.0
+    yaw_band_max_rad: float = 0.0
+    q_soft_min_yaw_rad: float | None = 0.0
+    q_soft_max_yaw_rad: float | None = 0.0
     soft_limit_distance_pitch_rad: float = 0.0
-    soft_limit_distance_yaw_rad: float = 0.0
+    soft_limit_distance_yaw_rad: float | None = 0.0   # 无包线 ⇒ null
     aim_point_valid: bool = False
     aim_point_x: float = 0.0
     aim_point_y: float = 0.0

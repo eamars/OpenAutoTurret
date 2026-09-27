@@ -164,6 +164,11 @@ class ControlLoop {
     // for roam/web policy. It is independent of the narrower search sweep and
     // is never represented as a measured mechanical endpoint.
     double continuous_yaw_sector_half_span_rad = 90.0 * kDeg2Rad;
+    // The band the station file declared, kept even when the envelope is `none`, so
+    // the operator still has a scale under the yaw travel tape -- centred on the homing
+    // origin, and labelled a reference because it stops being a limit. Display only:
+    // nothing in the control path reads this.
+    double continuous_yaw_band_half_span_rad = 90.0 * kDeg2Rad;
     double continuous_yaw_sector_inset_rad = 10.0 * kDeg2Rad;
     // Drive-mode item 3: hold the aim while the line-of-sight wobbles inside this band, so detector jitter does
     // not walk the pointing. ZERO (the default) means the aim passes straight through, exactly as before this

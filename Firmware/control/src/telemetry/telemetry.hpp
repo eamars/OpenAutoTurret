@@ -528,6 +528,13 @@ struct TelemetrySnapshot {
   double q_soft_max_pitch_rad = 0.0;
   double q_soft_min_yaw_rad = 0.0;
   double q_soft_max_yaw_rad = 0.0;
+  // Whether yaw has a declared envelope at all. Without this a reader cannot tell
+  // "no boundary" from "boundary at zero", and the wire used to answer 0/0 for both.
+  bool yaw_envelope_declared = true;
+  // 参考带：文件里声明过的那条带（±90），无包线时给操作手留一把以归零点为 0 的尺。
+  // 它不是限位——`yaw_envelope` 那个词才是说这话的地方。
+  double yaw_band_min_rad = 0.0;
+  double yaw_band_max_rad = 0.0;
   // Distance to the nearer soft limit on each axis, in radians — the same expression the
   // black-box capture records, so the number on the page and the number in an investigation
   // artifact cannot disagree about how close the turret came to the end of its travel.

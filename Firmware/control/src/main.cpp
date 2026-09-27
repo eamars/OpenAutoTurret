@@ -272,6 +272,12 @@ int main(int argc, char** argv) {
                  yaw_axis.expected_travel_deg.max) * kDeg2Rad;
     control_cfg.continuous_yaw_sector_inset_rad =
         yaw_axis.soft_margin_deg * kDeg2Rad;
+    // The declared band survives the envelope being removed, for exactly one purpose:
+    // the yaw tape on the HUD. It is the same number the named roam region is validated
+    // inside, so showing it is not inventing a limit -- and it is centred on the homing
+    // origin, which is what "0" has always meant for a session-relative yaw.
+    control_cfg.continuous_yaw_band_half_span_rad =
+        control_cfg.continuous_yaw_sector_half_span_rad;
     if (yaw_axis.position_envelope_none)
       control_cfg.continuous_yaw_sector_half_span_rad = 0.0;
     if (control_cfg.continuous_yaw_sector_half_span_rad < 0.0 ||
