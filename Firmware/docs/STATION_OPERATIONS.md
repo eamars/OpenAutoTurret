@@ -247,7 +247,8 @@ caller beats naming the syscall. A clean-looking stop with `cause=unattributed`
 is treated as an open question, not as a normal stop.
 
 Because every run reuses `$RUN`, the previous round's `*.log`, `shutdown.result`,
-`shutdown.cause` and `stack.info` are moved to `$RUN/logs-history/<utc>Z-launcher<pid>/`
+`shutdown.cause`, `stack.info` and the whole `traces/` directory (trip files and
+`stop-evidence.ndjson`) are moved to `$RUN/logs-history/<utc>Z-launcher<pid>/`
 before anything is truncated; the newest ten rounds are kept and older ones are
 pruned, since `$RUN` lives in `/tmp`. Read the archived round, not the fresh one,
 when investigating a stop.
@@ -262,6 +263,44 @@ ssh eamars@rpi-turret "<release-venv>/bin/python <release>/Firmware/tools/rehear
 
 `--selftest` exercises only the pass/fail logic, for machines with no station.
 The rehearsal leaves the station stopped.
+
+### What a stop proved, per axis (2026-09-28)
+
+`shutdown.cause` says **who** stopped it. It cannot say **what we can prove about the
+outcome**, so controld appends one line per stop to `$RUN/traces/stop-evidence.ndjson`
+(archived with its round, like everything else in `traces/`):
+
+```bash
+ssh eamars@rpi-turret "cat /tmp/ota-stack-1000/traces/stop-evidence.ndjson"   # or the archived copy
+```
+
+Read it by `stage`, in pairs sharing one `stop_id`:
+
+| `stage` | what it can claim |
+|---|---|
+| `requested` | we asked. Usually `completion_quality=unverified` with `missing_evidence` naming the gaps — that is the point, not a defect. |
+| `parked` | what was observed: per axis `zero_requested` / `disable_requested` / `disable_confirmed` / `stationary_observed` over a stated `stationary_window_ms`, plus `feedback_age_ms`. |
+
+Three vocabulary rules, because a stop is read later by someone who wasn't there:
+
+- **`unsupported` is not `false`.** The GM6020 feedback frame has no enable bit, so yaw's
+  `disable_requested`/`disable_confirmed` are `unsupported` forever. It neither helps nor
+  hurts `completion_quality`: it is a fact about the drive, not a gap in this stop.
+- **`stationary_observed` is the weakest claim on the sheet.** It means position held
+  inside a tolerance for the stated window — not "de-torqued", and not "safe to put a hand
+  on". The window is published so the claim's strength is visible.
+- **No green for the pair.** There is no merged boolean; `completion_quality` is computed
+  from the two axes' claims and `missing_evidence` names what is absent.
+
+First real record (`stop-60378202284708`, 2026-09-28 08:46, release `c9b4ffb1282e`):
+pitch `disable_confirmed=confirmed`, stationary 557.9 ms, feedback age 4.573 ms;
+yaw stationary 502.2 ms (the dwell), age 0.265 ms, `disable_confirmed=unsupported`;
+`completion_quality=verified`, `missing_evidence=[]`.
+
+Not yet covered: a stop that **fails** writes only its `requested` line — `fail_parking()`
+does not emit, so "requested with no completion" is currently the signal for a failed
+stop. Linking `stop_id` to `shutdown.cause` (so you can tell who asked *and* what it
+proved from one file) is an open item.
 
 ## Deployment and operation
 
