@@ -712,6 +712,26 @@ function hudTravelTapeSvg(t, C, opts) {
   return parts.join("");
 }
 
+function hudYawTapeRange(t) {
+  // Where the yaw tape's endpoints come from, as a function so it can be executed instead of
+  // read. Two sources, and the difference between them is stated by `ruler`:
+  //   · an axis with a declared envelope -- the soft limits themselves;
+  //   · `yaw_envelope: "none"` -- the *reference band* the station file still declares, centred
+  //     on the homing origin. Free rotation needs nothing to stop it; an operator still wants
+  //     to know how far the barrel has travelled since it was zeroed, and a ruler is not a wall.
+  // Nothing to show (no homing, or a band that isn't a band) and the page falls back to the
+  // unranged note rather than drawing a tape out of zeros.
+  const toDeg = (r) => (Number.isFinite(r) ? r * 180.0 / Math.PI : NaN);
+  const unbounded = String(t && t.yaw_envelope || "") === "none";
+  const minDeg = toDeg(unbounded ? t.yaw_band_min_rad : t.q_soft_min_yaw_rad);
+  const maxDeg = toDeg(unbounded ? t.yaw_band_max_rad : t.q_soft_max_yaw_rad);
+  return {
+    minDeg: minDeg, maxDeg: maxDeg, ruler: unbounded,
+    valid: Boolean(t && t.soft_limits_valid === true) &&
+      Number.isFinite(minDeg) && Number.isFinite(maxDeg) && maxDeg > minDeg
+  };
+}
+
 function hudUnrangedNote(x, y, label) {
   // What replaces a tape that has no endpoints to show. Silence here would read as a target-free
   // sky rather than as an un-commissioned axis.
@@ -927,19 +947,13 @@ function render(t) {
   // "DERATE YAW MAX" text cannot drift apart - which matters more than it sounds, because an amber
   // highlight pointing at the wrong end of the tape is worse than no highlight at all.
   const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
-  // 无包线时带子照画，只是两端换成"参考带"（文件里声明过的那条，以归零点为 0）：
-  // 他喜欢这条刻度，而一条尺子并不妨碍自由旋转。
-  const unboundedYaw = t.yaw_envelope === "none";
-  const yawMin = deg(unboundedYaw ? t.yaw_band_min_rad : t.q_soft_min_yaw_rad);
-  const yawMax = deg(unboundedYaw ? t.yaw_band_max_rad : t.q_soft_max_yaw_rad);
+  const yawRange = hudYawTapeRange(t);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
-    minDeg: yawMin, maxDeg: yawMax,
-    markDeg: (dEdge && dEdge.axis === "YAW") ? (dEdge.side === "MIN" ? yawMin : yawMax) : undefined,
-    valueDeg: deg(t.q_yaw_rad),
-    valid: t.soft_limits_valid === true &&
-      (unboundedYaw ? Number.isFinite(yawMin) && Number.isFinite(yawMax) && yawMax > yawMin
-                     : true)
+    minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg,
+    markDeg: (dEdge && dEdge.axis === "YAW")
+      ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
+    valueDeg: deg(t.q_yaw_rad), valid: yawRange.valid
   });
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({

@@ -22,7 +22,7 @@ import unittest
 from ..hud import HUD_CSS, HUD_GEOMETRY_JS, HUD_HTML, HUD_JS
 
 _EXPORTS = (
-    "\nmodule.exports = { hudTravelTape, hudTravelTapeSvg, hudTickSteps, hudDegLabel,"
+    "\nmodule.exports = { hudTravelTape, hudYawTapeRange, hudTravelTapeSvg, hudTickSteps, hudDegLabel,"
     " hudUnrangedNote };\n"
 )
 
@@ -230,3 +230,46 @@ class TapesWiredIntoThePage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    # --- yaw without an envelope: the ruler stays, the wall does not ---------------------------
+
+    # 2026-09-28, the morning the software sector came off. The tape is the one thing he asked to
+    # keep, in his words: it does not stand in the way of free rotation and 0 is the homing origin.
+    # So the endpoints move to the reference band the station file still declares -- and the pair
+    # of cases below is the whole claim: a ruler keeps the tape, nothing-to-show still does not.
+    def _yaw_range(self, payload):
+        return self._node("console.log(JSON.stringify(T.hudYawTapeRange(%s)));" % json.dumps(payload))
+
+    def test_yaw_tape_keeps_a_reference_band_when_the_envelope_is_gone(self) -> None:
+        got = self._yaw_range({"yaw_envelope": "none", "soft_limits_valid": True,
+                               "q_soft_min_yaw_rad": None, "q_soft_max_yaw_rad": None,
+                               "yaw_band_min_rad": -1.5707963, "yaw_band_max_rad": 1.5707963})
+        self.assertTrue(got["valid"], "losing a wall is not a reason to lose the scale")
+        self.assertTrue(got["ruler"], "and the page must know it is drawing a ruler, not a limit")
+        self.assertAlmostEqual(got["minDeg"], -90.0, places=3)
+        self.assertAlmostEqual(got["maxDeg"], 90.0, places=3)
+        tape = self._node(
+            "console.log(JSON.stringify(T.hudTravelTape({horizontal:true,x:120,y:135,"
+            "length:1104,minDeg:%s,maxDeg:%s,valueDeg:12.5,valid:true})));"
+            % (got["minDeg"], got["maxDeg"]))
+        zero = self._node('console.log(T.hudDegLabel(0, false));')
+        labels = [t["label"] for t in tape["ticks"] if t.get("label")]
+        self.assertIn(zero, labels, "the band is centred on the homing origin, so 0 must be on it")
+        centre = [t for t in tape["ticks"] if t.get("label") == zero]
+        self.assertAlmostEqual((centre[0]["pos"] - tape["x"]) / (tape["x1"] - tape["x"]), 0.5,
+                               places=6, msg="0 at the middle of the tape, not off to one side")
+
+    def test_yaw_tape_still_gives_up_when_there_is_genuinely_nothing_to_show(self) -> None:
+        # Envelope none and a band of nothing (never homed, or a file with no band): the page draws
+        # the unranged note. That note exists precisely so silence cannot read as open sky.
+        got = self._yaw_range({"yaw_envelope": "none", "soft_limits_valid": True,
+                               "yaw_band_min_rad": 0.0, "yaw_band_max_rad": 0.0})
+        self.assertFalse(got["valid"])
+
+    def test_a_bounded_yaw_still_draws_its_limits_and_calls_them_limits(self) -> None:
+        got = self._yaw_range({"yaw_envelope": "sector", "soft_limits_valid": True,
+                               "q_soft_min_yaw_rad": -1.5707963, "q_soft_max_yaw_rad": 1.5707963,
+                               "yaw_band_min_rad": 0.0, "yaw_band_max_rad": 0.0})
+        self.assertTrue(got["valid"])
+        self.assertFalse(got["ruler"], "with an envelope the endpoints are the soft limits")
+        self.assertAlmostEqual(got["minDeg"], -90.0, places=3)
