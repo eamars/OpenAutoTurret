@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include "sh2.h"
@@ -24,6 +25,9 @@ static volatile sig_atomic_t stopping;
 static unsigned counts[4], read_errors, resets;
 static unsigned generation, tare_samples;
 static int io_failed, invalid_sample, tared, sh2_is_open;
+static int continuous_mode;
+static unsigned long retain_lines;
+static uint64_t output_lines, tare_rx_ns;
 static uint64_t last_sample_ns, last_accel_ns, last_gyro_ns, stable_since_ns;
 static float accel_norm, gyro_norm;
 static double tare_sum[4], tare_ref[4];
@@ -34,6 +38,34 @@ static uint64_t now_ns(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000000000ULL + t.tv_nsec;
+}
+static void emit_tare(uint64_t rx_ns, int checkpoint) {
+    printf("{\"kind\":\"tare\",\"rx_ns\":%" PRIu64 ",\"generation\":%u,\"method\":\"host_stationary_game_rv\",\"q_ref_xyzw\":[%.9g,%.9g,%.9g,%.9g],\"mount_alignment_valid\":false%s}\n",
+           rx_ns,generation,tare_ref[0],tare_ref[1],tare_ref[2],tare_ref[3],
+           checkpoint ? ",\"checkpoint\":true" : "");
+    ++output_lines;
+}
+static void maybe_rotate_trace(void) {
+    if (!continuous_mode || retain_lines == 0 || output_lines < retain_lines) return;
+    struct stat st;
+    if (fflush(stdout) != 0 || fstat(STDOUT_FILENO, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr,"IMU trace retention disabled: stdout is not a seekable regular file\n");
+        retain_lines = 0;
+        return;
+    }
+    if (ftruncate(STDOUT_FILENO, 0) != 0 || lseek(STDOUT_FILENO, 0, SEEK_SET) < 0) {
+        fprintf(stderr,"IMU trace retention failed: %s\n",strerror(errno));
+        retain_lines = 0;
+        return;
+    }
+    clearerr(stdout);
+    output_lines = 0;
+    printf("{\"kind\":\"trace_reset\",\"rx_ns\":%" PRIu64 ",\"generation\":%u,\"reason\":\"retained_lines\",\"tare_invalidated\":false}\n",
+           now_ns(),generation);
+    ++output_lines;
+    // This is a checkpoint of the still-live reference, not a new tare.
+    // Preserve its original timestamp and mark the row explicitly.
+    if (tared) emit_tare(tare_rx_ns, 1);
 }
 static void stop(int sig) { (void)sig; stopping = 1; }
 static int hal_open(sh2_Hal_t *self) {
@@ -89,6 +121,7 @@ static void event(void *cookie, sh2_AsyncEvent_t *ev) {
     (void)cookie;
     if (ev->eventId == SH2_RESET) ++resets;
     printf("{\"kind\":\"event\",\"rx_ns\":%" PRIu64 ",\"event_id\":%d}\n", now_ns(), ev->eventId);
+    ++output_lines;
 }
 static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
     (void)cookie;
@@ -108,6 +141,7 @@ static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
     }
     for (int i=0; i<n; ++i) if (!isfinite(a[i])) { invalid_sample=1; return; }
     if (n==4 && (norm(a,4)<0.99 || norm(a,4)>1.01)) { invalid_sample=1; return; }
+    maybe_rotate_trace();
     uint64_t rx = now_ns(), rx_us = rx / 1000;
     // Lift the SDK's host-derived 32-bit time onto CLOCK_MONOTONIC's full epoch.
     int64_t sample_us = (int64_t)rx_us + (int32_t)((uint32_t)v.timestamp - (uint32_t)rx_us);
@@ -130,8 +164,8 @@ static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
                 double sn=0; for (int i=0; i<4; ++i) sn+=tare_sum[i]*tare_sum[i]; sn=sqrt(sn);
                 for (int i=0; i<4; ++i) tare_ref[i]=tare_sum[i]/sn;
                 tared=1;
-                printf("{\"kind\":\"tare\",\"rx_ns\":%" PRIu64 ",\"generation\":%u,\"method\":\"host_stationary_game_rv\",\"q_ref_xyzw\":[%.9g,%.9g,%.9g,%.9g],\"mount_alignment_valid\":false}\n",
-                       rx,generation,tare_ref[0],tare_ref[1],tare_ref[2],tare_ref[3]);
+                tare_rx_ns=rx;
+                emit_tare(rx, 0);
             }
         }
     }
@@ -149,6 +183,7 @@ static void sensor(void *cookie, sh2_SensorEvent_t *ev) {
             (w*a[2]+x*a[1]-y*a[0]+z*a[3])/qn, (w*a[3]-x*a[0]-y*a[1]-z*a[2])/qn);
     }
     puts("}");
+    ++output_lines;
 }
 static int open_stream(void) {
     if (sh2_open(&hal, event, NULL) != SH2_OK) { fprintf(stderr,"sh2_open failed\n"); return 1; }
@@ -160,6 +195,7 @@ static int open_stream(void) {
         sh2_ProductId_t *p = &ids.entry[i];
         printf("{\"kind\":\"product\",\"part\":%u,\"version\":\"%u.%u.%u\",\"build\":%u,\"reset_cause\":%u}\n",
                p->swPartNumber, p->swVersionMajor, p->swVersionMinor, p->swVersionPatch, p->swBuildNumber, p->resetCause);
+        ++output_lines;
     }
     sh2_setSensorCallback(sensor, NULL);
     const sh2_SensorId_t sensors[] = {SH2_ACCELEROMETER, SH2_GYROSCOPE_CALIBRATED, SH2_ROTATION_VECTOR, SH2_GAME_ROTATION_VECTOR};
@@ -167,25 +203,41 @@ static int open_stream(void) {
     for (unsigned i=0; i<4; ++i) {
         int rc=sh2_setSensorConfig(sensors[i], &cfg);
         printf("{\"kind\":\"config\",\"sensor_id\":%u,\"rc\":%d,\"requested_interval_us\":%u}\n", sensors[i], rc, cfg.reportInterval_us);
+        ++output_lines;
         if (rc) return 1;
     }
     return 0;
 }
 int main(int argc, char **argv) {
     char *end = NULL;
-    long seconds = argc == 2 ? strtol(argv[1], &end, 10) : 0;
-    if (argc != 2 || *end || seconds < 1 || seconds > 120) {
-        fprintf(stderr, "Usage: imu-bno085 SECONDS (1..120); owns/resets BNO085 I2C1:0x4a\n"); return 2;
+    int continuous = argc >= 2 && strcmp(argv[1], "--continuous") == 0;
+    long seconds = continuous ? 0 : (argc >= 2 ? strtol(argv[1], &end, 10) : -1);
+    if (continuous && argc == 4 && strcmp(argv[2], "--retain-lines") == 0) {
+        char *retain_end = NULL;
+        errno = 0;
+        unsigned long parsed = strtoul(argv[3], &retain_end, 10);
+        if (!errno && retain_end != argv[3] && *retain_end == '\0' && parsed >= 64 && parsed <= 1000000)
+            retain_lines = parsed;
+        else {
+            fprintf(stderr, "--retain-lines must be 64..1000000\n"); return 2;
+        }
+    } else if ((continuous && argc != 2) || (!continuous && argc != 2)) {
+        fprintf(stderr, "Usage: imu-bno085 SECONDS (0 or 1..120) | --continuous [--retain-lines N]; owns/resets BNO085 I2C1:0x4a\n"); return 2;
     }
+    if (!continuous && (*end || seconds < 0 || seconds > 120)) {
+        fprintf(stderr, "Usage: imu-bno085 SECONDS (0 or 1..120) | --continuous [--retain-lines N]; owns/resets BNO085 I2C1:0x4a\n"); return 2;
+    }
+    continuous_mode = continuous || seconds == 0;
     char lock_path[80]; snprintf(lock_path, sizeof lock_path, "/tmp/ota-imu-%u.lock", getuid());
     int lock = open(lock_path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
     if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB) < 0) { perror("IMU ownership"); return 2; }
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGINT, stop); signal(SIGTERM, stop);
-    uint64_t until=now_ns()+(uint64_t)seconds*1000000000ULL;
+    uint64_t until=continuous_mode ? UINT64_MAX : now_ns()+(uint64_t)seconds*1000000000ULL;
     int failed=0; unsigned recoveries=0;
     for (;;) {
         io_failed=0; tared=0; stable_since_ns=0; tare_samples=0; memset(tare_sum,0,sizeof tare_sum);
+        tare_rx_ns=0;
         last_accel_ns=last_gyro_ns=0;
         int opened=open_stream();
         unsigned initial_resets=resets;
@@ -201,10 +253,12 @@ int main(int argc, char **argv) {
         // Recover at the session boundary, not recursively inside SH-2's read
         // callback. Consumers must discard pre-reset tare/continuity.
         printf("{\"kind\":\"gap\",\"rx_ns\":%" PRIu64 ",\"reason\":\"reset_recovery\",\"tare_invalidated\":true}\n",now_ns());
+        ++output_lines;
         ++recoveries; ++generation;
     }
     printf("{\"kind\":\"summary\",\"counts\":[%u,%u,%u,%u],\"read_errors\":%u,\"recoveries\":%u,\"failed\":%s,\"tared\":%s}\n",
            counts[0],counts[1],counts[2],counts[3],read_errors,recoveries,failed ? "true":"false",tared ? "true":"false");
+    ++output_lines;
     close(lock);
     return !failed && counts[0]>0 && counts[1]>0 && counts[2]>0 && counts[3]>0 ? 0 : 1;
 }
