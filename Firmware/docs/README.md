@@ -17,6 +17,7 @@ September 3-9 loaded homing/tracking evidence belongs to the retired hardware.
 | [`HARDWARE_COMMISSIONING_2026_09_26.md`](HARDWARE_COMMISSIONING_2026_09_26.md) | Implemented transport, real yaw pulse/stop evidence, pitch register incompatibility and verification gaps |
 | [`HARDWARE_CONTINUATION_2026_09_26.md`](HARDWARE_CONTINUATION_2026_09_26.md) | 5 A pitch limit, bounded yaw velocity experiments, Hailo installation and camera inference evidence |
 | [`IMU_COMMISSIONING_2026_09_27.md`](IMU_COMMISSIONING_2026_09_27.md) | Working BNO085 acquisition/tare, paired yaw/pitch evidence and continuous energized pitch session |
+| [`LARGE_MOTION_COMMISSIONING_2026_09_27.md`](LARGE_MOTION_COMMISSIONING_2026_09_27.md) | Direct-drive ±15° pitch and 30° yaw commissioning, IMU comparisons and remaining release gates |
 | [`CYBERGEAR_FIRMWARE_UPGRADE.md`](CYBERGEAR_FIRMWARE_UPGRADE.md) | Identified firmware artifact, supported vendor update connection and post-update checks |
 | [`AI_HAT_PERCEPTION_PLAN.md`](AI_HAT_PERCEPTION_PLAN.md) | Hailo, person/head detection, selected-person tracking and dual-camera/IMU evaluation |
 

@@ -81,10 +81,11 @@ release for commissioning preflight. Normal `check` deliberately rejects the old
 motor configuration. Logs under
 `/tmp/ota-stack-1000` exist only after a run.
 
-The earlier audit left both CAN links DOWN. After the September 27 continuous
-pitch session, CAN1 was retained UP at 1 Mbps for further work; CAN0 was DOWN.
-The session ended with pitch disabled and its IMU process closed. Inspect current
-ownership/state before another session; do not cycle CAN links between tests.
+The latest September 27 large-motion sessions left both CAN links UP at
+1 Mbps. Pitch ended with verified disabled feedback; yaw ended with zero
+voltage requested and stationary feedback, but its disable state is unknown.
+Inspect current ownership/state before another session; do not cycle CAN links
+between tests.
 
 The owner's September 26 elevation authorization covers temporary CAN link
 setup for these probes; mechanical tests were subsequently authorized explicitly.
@@ -258,25 +259,45 @@ Keep pitch enabled between movements, and keep CAN and IMU acquisition live
 through the session. Do not cycle the stack, lower the CAN links or disable the
 motor between individual stages. Stop on a fault or explicit session completion.
 No persistent gain, homing, encoder-zero or calibration writes are part of this
-probe. The current single-axis commissioning session is:
+probe. The commissioned ±15° pitch session is:
 
 ```bash
 bash Firmware/scripts/run_application.sh run --commission-hardware --with-imu \
-  --pitch-step-mdeg 3000 --pitch-test-gains
+  --pitch-step-mdeg 15000 --pitch-test-gains
 ```
 
 It verifies the 5 A cap and position mode, then enables once for two step/return
-pairs: +3°, start, +3°, start, each 1.5 seconds at a requested 10°/s. Pitch remains
+pairs: +15°, start, −15°, start, at a requested 10°/s. Pitch remains
 energized while settling and between all four stages. The explicit gain trial
 uses speed-loop Kp=4, Ki=0.05 and restores nominal 1/0.002 at session completion.
 The final stop is not a parking/homing certification. Numeric traces are
 `pitch-probe.csv`, `controller.log` and `imu.ndjson` in the launcher runtime.
 
-The probe bounds excursion from initial position to 4°, encoder-derived speed
+The probe bounds excursion from initial position to 17°, encoder-derived speed
 over at least 50 ms to 20°/s, feedback/heartbeat age to 100 ms, and temperature
 to 45°C. The firmware's raw speed field has shown noise inconsistent with small
 encoder changes; it remains logged but does not alone establish actual speed.
 These bounds do not qualify an unknown pitch endpoint or automatic homing.
+See [the paired large-motion and IMU record](LARGE_MOTION_COMMISSIONING_2026_09_27.md).
+
+### Yaw motion session
+
+The commissioned yaw excursion is 30° out and back in one continuous CAN0
+session with a fresh BNO085 host tare:
+
+```bash
+bash Firmware/scripts/run_application.sh run --commission-hardware --with-imu \
+  --yaw-step-deg 30
+```
+
+The successful run moved 29.356° outbound and returned to +0.659° relative to
+its start; the IMU independently measured +29.183° and −28.446° on the two
+legs. The GM6020 voltage output ceiling is the vendor-documented ±25,000 raw,
+while actual commands stayed within −4,268..+5,643 raw. It guards travel,
+speed, stale feedback and stalled progress, then requests zero voltage and
+observes a stationary motor. GM6020 zero voltage is not a verified disable or
+mechanical park. See the [large-motion record](LARGE_MOTION_COMMISSIONING_2026_09_27.md)
+for bounds, failures and raw evidence.
 
 `config/hardware_probe.yaml` is a separate probe schema, **not** a production
 controller configuration. Fixed ceilings are |voltage| <= 3000 raw, pulse <=
