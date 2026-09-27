@@ -499,10 +499,17 @@ What to expect, measured on this station rather than assumed:
   coded). That trip was correct; the ask was wrong, and the fix capped the sweep at the
   yaw's declared maximum instead of widening the guard. The ceiling itself remains the
   operator's parameter.
-- **Known cosmetic gap**: `q_soft_min_yaw_rad`/`q_soft_max_yaw_rad` publish 0/0 for this
-  axis, so the HUD draws a zero-width envelope; the field needs to become `null` plus a
-  word across `controld`, `webd`'s model and the HUD. `soft_limit_distance_yaw_rad` already
-  reports -1 (`kNoBoundary`) instead of claiming to be at a boundary.
+- **What the telemetry says about it** (fixed the morning after, 2026-09-28): the wire
+  carries `yaw_envelope:"none"` and publishes `q_soft_min_yaw_rad`, `q_soft_max_yaw_rad`
+  and `soft_limit_distance_yaw_rad` as `null` -- not 0/0, and not the internal -1
+  (`kNoBoundary`) walking around as if it were a distance. Consumers map "no boundary" to
+  their own kind of absence; a zero there reads as "the wall is where you are standing",
+  and the dashboard then lit it as near-limit, because `null < 0.05` is true in JS.
+- **The yaw travel tape stays.** It is drawn from `yaw_band_min_rad`/`yaw_band_max_rad`,
+  the band the station file still declares, centred on the homing origin -- a ruler, not a
+  limit, which is why removing the sector never had to take the scale with it. With no band
+  to show (never homed) the tape gives up to the `TRAVEL UNRANGED` note rather than drawing
+  a tape out of zeros.
 
 To revert: delete the `position_envelope: none` line. The +/-90 degree band with its 10
 degree inset is enforced again on the next start, and nothing else about this change needs
