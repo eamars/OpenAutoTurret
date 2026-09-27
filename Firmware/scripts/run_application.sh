@@ -22,7 +22,7 @@ case "${1:-}" in
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
-    echo '         --pitch-step-mdeg N (commissioning with IMU; +/-3000 max, 5 A, 10 deg/s),'
+    echo '         --pitch-step-mdeg N (two enabled step/return pairs; +/-3000 max, 5 A, 10 deg/s),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -224,7 +224,7 @@ cleanup() {
     echo 'Ending perception capture; no motor process was started.'
     echo 'Stopped: perception capture ended; motors were not commanded' > "$RUN/shutdown.result"
   elif [ "$MODE" = commission ]; then
-    echo 'Ending commissioning; an active yaw probe requests zero voltage.'
+    echo 'Ending commissioning session; pitch disables, yaw requests zero if its probe was active.'
   else
     echo 'Stopping this stack; controller performs its own park/disable sequence.'
   fi
@@ -314,7 +314,11 @@ PY
     --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   fi
   controller_pid=$!; children+=("$controller_pid")
-  printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
+  if [ "$PITCH_PROBE" = 1 ]; then
+    printf 'Mode: pitch commissioning\nStep millidegrees: %s\nTrace: %s\n' "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" > "$RUN/stack.info"
+  else
+    printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
+  fi
   cp "$RUN/launcher.pid" "$RUN/started"
   if [ -n "$imu_pid" ]; then
     # An IMU process failure ends the probe through the same cleanup/zero path.

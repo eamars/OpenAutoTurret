@@ -1,4 +1,4 @@
-// First small pitch steps using the production mode/current interlock.
+// Continuous pitch step/return session using the production current interlock.
 // No homing, encoder zero, calibration persistence, or yaw transmitter.
 #include <atomic>
 #include <charconv>
@@ -67,6 +67,10 @@ int main(int argc, char** argv) {
     if (!initial.has_feedback || !initial.disabled || initial.faults || !std::isfinite(initial.q_rad))
       throw std::runtime_error("disabled fault-free pitch feedback required");
     using Reg=ota::cybergear::Reg;
+    // Clear volatile gains left by an interrupted earlier commissioning trial
+    // during the single disabled setup; no disable between movement stages.
+    if (tune && !backend.restore_stopped_pitch_gains(1,.002,error))
+      throw std::runtime_error("initial trial gain restoration failed: "+error);
     double original_kp=0, original_ki=0;
     for (const auto r : {Reg::RunMode,Reg::LocRef,Reg::LimitSpd,Reg::LimitCur,Reg::MechPos,
                          Reg::LocKp,Reg::SpdKp,Reg::SpdKi,Reg::Iqf,Reg::VBus}) {
@@ -109,7 +113,7 @@ int main(int argc, char** argv) {
           }
           int reason=0;
           if (interrupted) reason=1;
-          else if (now-started>8000000000LL) reason=2;
+          else if (now-started>15000000000LL) reason=2;
           else if (now-heartbeat.load()>100000000LL) reason=3;
           else if (!s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL) reason=4;
           else if (s.faults) reason=5;
@@ -143,14 +147,21 @@ int main(int argc, char** argv) {
     const auto q0=backend.snapshot(axis,ota::now_monotonic_ns()).q_rad;
     // Owner's probe-first contract: full authorized current headroom (5 A),
     // sufficient demand to prove motion, and a short bounded experiment.
-    const auto until=ota::now_monotonic_ns()+1000000000LL;
     const Reg observed_regs[]={Reg::LocRef,Reg::LimitSpd,Reg::Iqf,Reg::MechVel};
     unsigned observed=0; bool waiting=false; ota::TimeNs read_deadline=0;
+    // Two outward/return pairs in one enabled session. Each stage includes
+    // settling at its target; CAN, IMU and feedback stay live throughout.
+    for (int stage=0;stage<4 && !trip;++stage) {
+    const double target=q0+(stage%2==0 ? step*rad/1000.0:0);
+    const auto phase="stage"+std::to_string(stage+1);
+    std::cout<<"PITCH_STAGE stage="<<stage+1<<" target_rad="<<target
+             <<" enabled_continuously=1\n"<<std::flush;
+    const auto until=ota::now_monotonic_ns()+1500000000LL;
     while (!trip && ota::now_monotonic_ns()<until) {
       {
         std::lock_guard lock(commands);
         heartbeat=ota::now_monotonic_ns();
-        if (!trip) backend.command(axis,q0+step*rad/1000.0,commanded_speed);
+        if (!trip) backend.command(axis,target,commanded_speed);
       }
       {
         if (!waiting) {
@@ -167,7 +178,11 @@ int main(int argc, char** argv) {
           }
         }
       }
-      record("step"); std::this_thread::sleep_for(5ms);
+      record(phase.c_str()); std::this_thread::sleep_for(5ms);
+    }
+    const auto reached=backend.snapshot(axis,ota::now_monotonic_ns());
+    std::cout<<"PITCH_STAGE_RESULT stage="<<stage+1<<" error_deg="<<(reached.q_rad-target)/rad
+             <<" disabled="<<reached.disabled<<" faults="<<reached.faults<<'\n';
     }
     system.cancel_register_read();
     if (tune && !trip) {
