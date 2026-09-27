@@ -293,6 +293,9 @@ struct V3Config {
 
 struct TurretConfig {
   int schema_version = 1;
+  // Optional path to a hardware-topology profile (resolved by the application
+  // entry point). Empty preserves the legacy single-CAN configuration path.
+  std::string hardware_profile;
   CanConfig can;
   // Indexed by AxisId: [0] = pitch, [1] = yaw.
   MotorConfig motors[2];

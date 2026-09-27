@@ -24,6 +24,7 @@ case "${1:-}" in
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
     echo '         --pitch-step-mdeg N (enabled +/-15 deg session; 5 A ceiling),'
+    echo '         --mixed-backend-check (commissioning + IMU tare; observe-only),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -91,17 +92,20 @@ PITCH_STEP_MDEG=0
 PITCH_PROBE=0
 PITCH_TEST_GAINS=0
 PITCH_RESTORE_GAINS=0
+MIXED_BACKEND_CHECK=0
+COMMISSION_REQUESTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
     --sim) MODE=sim; shift ;;
     --hardware) MODE=hardware; shift ;;
-    --commission-hardware) MODE=commission; START_WEB=0; shift ;;
+    --commission-hardware) MODE=commission; COMMISSION_REQUESTED=1; START_WEB=0; shift ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
     --with-imu) WITH_IMU=1; shift ;;
     --pitch-step-mdeg) PITCH_PROBE=1; PITCH_STEP_MDEG="${2:?--pitch-step-mdeg requires a value}"; shift 2 ;;
     --pitch-test-gains) PITCH_TEST_GAINS=1; shift ;;
     --pitch-restore-gains) PITCH_RESTORE_GAINS=1; shift ;;
+    --mixed-backend-check) MIXED_BACKEND_CHECK=1; shift ;;
     --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
@@ -132,6 +136,13 @@ if [ "$PITCH_PROBE" = 1 ]; then
     echo 'Pitch step outside +/-15000 millidegrees' >&2; exit 2
   fi
 fi
+if [ "$MIXED_BACKEND_CHECK" = 1 ] && {
+  [ "$MODE" != commission ] || [ "$COMMISSION_REQUESTED" != 1 ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] ||
+  [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] ||
+  [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$PITCH_TEST_GAINS" != 0 ] || [ "$PITCH_RESTORE_GAINS" != 0 ];
+}; then
+  echo '--mixed-backend-check requires --commission-hardware --with-imu and no other motor probe' >&2; exit 2
+fi
 if [ "$YAW_STEP_DEG" != 0 ]; then
   if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
      ! [[ "$YAW_STEP_DEG" =~ ^[0-9]+$ ]] || ((YAW_STEP_DEG < 15 || YAW_STEP_DEG > 45)); then
@@ -155,6 +166,13 @@ fi
 umask 077
 mkdir -p "$RUN"
 cd "$APP"
+ACTIVE_CONTROL_CONFIG="${OTA_CONTROL_CONFIG:-$APP/config/turret.yaml}"
+MIXED_CONFIG_ACTIVE="$($PY - "$ACTIVE_CONTROL_CONFIG" <<'PY'
+import sys, yaml
+config = yaml.safe_load(open(sys.argv[1]))
+print("1" if config.get("hardware_profile") else "0")
+PY
+)"
 if [ "$ACTION" = deploy ]; then
   # Build in place only while this checkout is inactive. Other release trees
   # may be built without replacing the executable/config of a running stack.
@@ -167,9 +185,9 @@ if [ "$ACTION" = deploy ]; then
     if [ "$MODE" = imu ]; then
     cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     elif [ "$MODE" = commission ]; then
-    cmake --build "$APP/build" --target probe-mixed-hardware probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target probe-mixed-hardware probe-mixed-backend probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     else
-    cmake --build "$APP/build" --target controld probe-mixed-hardware -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target controld probe-mixed-hardware probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
     fi
     echo 'Probe build: regression tests deferred until runtime viability is established.'
   else
@@ -211,7 +229,7 @@ if [ "$ACTION" = start ]; then
   exit 1
 fi
 # Check is read-only: no camera open, CAN connection, or motor enable.
-"$PY" "$APP/tools/station_preflight.py" "${OTA_CONTROL_CONFIG:-$APP/config/turret.yaml}" "$MODE" "$PROFILE" "$PRODUCTION"
+"$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK"
 if [ "$ACTION" = check ]; then
   echo 'Preflight passed. deploy/check do not start the station.'
   exit 0
@@ -224,6 +242,7 @@ if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ]; then
 fi
 children=()
 controller_pid=''
+imu_pid=''
 cleanup() {
   trap - EXIT INT TERM
   if [ "$MODE" = imu ]; then
@@ -232,14 +251,26 @@ cleanup() {
   elif [ "$MODE" = perception ]; then
     echo 'Ending perception capture; no motor process was started.'
     echo 'Stopped: perception capture ended; motors were not commanded' > "$RUN/shutdown.result"
+  elif [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
+    echo 'Ending mixed-backend observe-only probe; no motor command was requested.'
   elif [ "$MODE" = commission ]; then
     echo 'Ending commissioning session; pitch disables, yaw requests zero if its probe was active.'
   else
     echo 'Stopping this stack; controller performs its own park/disable sequence.'
   fi
-  for pid in "${children[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  for pid in "${children[@]}"; do
+    [ "$pid" != "$controller_pid" ] || continue
+    [ -n "$imu_pid" ] && [ "$pid" = "$imu_pid" ] && continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done
   # Never force-kill the motor controller. Its own deadlines supervise park.
   if [ -n "$controller_pid" ]; then wait "$controller_pid" || true; fi
+  # Keep the single BNO085 owner alive through the controller's controlled
+  # stop, then release I2C ownership.
+  if [ -n "$imu_pid" ]; then
+    kill -TERM "$imu_pid" 2>/dev/null || true
+    wait "$imu_pid" || true
+  fi
   # If a commissioning child exited abnormally, its in-process guard cannot
   # send again. The launcher still owns the station lock here and requests a
   # final zero/STOP on the selected bus after the child has exited.
@@ -251,9 +282,16 @@ cleanup() {
   # Keep the terminal controller outcome after ownership metadata is removed.
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
-    if [ "$MODE" = commission ]; then
+    if [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
+      { echo 'Stopped: mixed-backend observe-only probe ended; no motion or park/disable certification';
+        tail -n 8 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif [ "$MODE" = commission ]; then
       { echo 'Stopped: commissioning probe ended; not a park/disable certification';
         tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif grep -Fq 'STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)' "$RUN/controller.log"; then
+      echo 'Stopped: STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)' > "$RUN/shutdown.result"
+    elif grep -Fq 'STOP FAILED:' "$RUN/controller.log"; then
+      { echo 'Stopped: STOP FAILED'; tail -n 8 "$RUN/controller.log"; } > "$RUN/shutdown.result"
     elif grep -q 'PARKED (motors de-energized' "$RUN/controller.log"; then
       echo 'Stopped: PARKED (both axes de-energized)' > "$RUN/shutdown.result"
     else
@@ -326,6 +364,9 @@ PY
   "$APP/build/probe-pitch-motion" "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" "${pitch_options[@]}" >"$RUN/controller.log" 2>&1 &
   elif [ "$YAW_STEP_DEG" != 0 ]; then
   "$APP/build/probe-yaw-motion" "$YAW_STEP_DEG" "$RUN/yaw-probe.csv" >"$RUN/controller.log" 2>&1 &
+  elif [ "$MIXED_BACKEND_CHECK" = 1 ]; then
+  "$APP/build/probe-mixed-backend" --config "${OTA_MIXED_HARDWARE_CONFIG:-$APP/config/mixed_hardware.yaml}" \
+    --observe-seconds 10 >"$RUN/controller.log" 2>&1 &
   else
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
     --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
@@ -337,6 +378,8 @@ PY
     printf 'Mode: pitch commissioning\nStep millidegrees: %s\nTrace: %s\n' "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" > "$RUN/stack.info"
   elif [ "$YAW_STEP_DEG" != 0 ]; then
     printf 'Mode: yaw commissioning\nStep degrees: %s\nTrace: %s\n' "$YAW_STEP_DEG" "$RUN/yaw-probe.csv" > "$RUN/stack.info"
+  elif [ "$MIXED_BACKEND_CHECK" = 1 ]; then
+    printf 'Mode: mixed backend observe-only check\nOutput: %s\n' "$RUN/controller.log" > "$RUN/stack.info"
   else
     printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
   fi
@@ -362,7 +405,7 @@ if [ "$PRODUCTION" -eq 1 ]; then vision_args+=(--production); fi
 # Validate before any controller can home or enable motors.
 "$PY" -c 'import sys; from perception.visiond import build_parser,load_config; load_config(build_parser().parse_args(sys.argv[1:]))' "${vision_args[@]}"
 CONTROLD="$APP/build/control/controld"
-controller_args=("${OTA_CONTROL_CONFIG:-$APP/config/turret.yaml}")
+controller_args=("$ACTIVE_CONTROL_CONFIG")
 if [ "$MODE" = sim ]; then
   controller_args+=(--sim)
   echo 'SIMULATED motors; camera and web are real.'
@@ -373,6 +416,41 @@ if [ "$MODE" != perception ]; then
 if [ "$MODE" = hardware ] && pgrep -x controld >/dev/null; then
   echo 'A controller already runs outside this launcher. Resolve its owner; do not start a second CAN owner.' >&2
   exit 1
+fi
+if [ "$MODE" = hardware ] && [ "$MIXED_CONFIG_ACTIVE" = 1 ]; then
+  if pgrep -x imu_main >/dev/null; then
+    echo 'Legacy IMU consumer still running; refusing BNO085 continuous capture.' >&2; exit 1
+  fi
+  export OTA_IMU_TRACE="$RUN/imu.ndjson"
+  "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+  imu_pid=$!; children+=("$imu_pid")
+  # Require a fresh host tare and same-generation game rotation sample before
+  # the controller starts. The IMU residual remains observe-only.
+  imu_ready=0
+  for ((attempt=0; attempt<50; attempt++)); do
+    kill -0 "$imu_pid" 2>/dev/null || { echo 'Continuous BNO085 startup failed' >&2; exit 1; }
+    if "$PY" - "$RUN/imu.ndjson" <<'PY'
+import json, sys, time
+try:
+    rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+tares = [r for r in rows if r.get('kind') == 'tare']
+samples = [r for r in rows if r.get('sensor') == 'game_rv']
+if not tares or not samples:
+    raise SystemExit(1)
+tare, sample = tares[-1], samples[-1]
+if (tare.get('generation') != sample.get('generation') or sample.get('rx_ns', 0) < tare.get('rx_ns', 0)
+        or not 0 <= time.monotonic_ns() - sample.get('rx_ns', 0) < 100_000_000):
+    raise SystemExit(1)
+PY
+    then imu_ready=1; break; fi
+    sleep 0.1
+  done
+  if [ "$imu_ready" != 1 ]; then
+    echo 'Fresh same-generation BNO085 host tare/sample unavailable; controller not started.' >&2
+    exit 1
+  fi
 fi
 "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
 controller_pid=$!

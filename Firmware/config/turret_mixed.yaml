@@ -1,0 +1,236 @@
+# OpenAutoTurret — opt-in split-bus production configuration.
+#
+# Commissioning values (§58) below are CONSERVATIVE PLACEHOLDERS: they keep the
+# daemon safe (slow speeds, wide soft-limit bands) until the real numbers are
+# measured on this mechanism. Update them during commissioning — they are config,
+# never compile-time assumptions. The loader treats a missing key or the literal
+# "TBD" as "use the built-in conservative default" and records a warning.
+schema_version: 1
+# The application entry point loads the split-bus topology from this profile.
+# Keep explicitly selected with OTA_CONTROL_CONFIG until mixed-backend readiness
+# gates are enabled in the deployed controller.
+hardware_profile: config/mixed_hardware.yaml
+# The active v3 mapping is near the end of this file. The station
+# starts in AUTO_ROAM after validated calibration/homing. Web Manual / Hold
+# overrides automatic behavior; web Auto resumes it. Service speed control,
+# planner limits and automatic hand-off delays are explicit in that mapping.
+# Roam bounds remain constrained by homed travel and the safety envelope.
+# See docs/automatic_service_validation_2026_09_06.md for measured settings.
+
+can:
+  # Compatibility fields; mixed transport is selected by hardware_profile.
+  backend: socketcan
+  interface: can1
+  uart_baud: 921600
+  bitrate: 1000000
+  host_can_id: 0
+motors:
+  pitch:
+    can_id: 127
+    direction_sign: 1     # logical -> mechanical sense; verify before motion.
+  yaw:
+    can_id: 1
+    direction_sign: -1    # inherited placeholder; GM6020 sign is not qualified.
+control:
+  loop_hz: 200            # frozen by §59.4; profiled.
+axes:
+  pitch:
+    # Existing pitch-axis homing sanity range; retain pending mixed-profile
+    # homing validation.
+    expected_travel_deg: { min: -70, max: 70 }
+    soft_margin_deg: 5
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
+    # Fixed pitch current limit for the added 3 kg payload. Slow loaded homing
+    # completed at 5 A with the dedicated homing gains below (2026-09-06).
+    # Written to LimitCur (0x7018); no adaptive current increase.
+    limit_cur_a: 5.0
+  yaw:
+    # Provisional +/-90 degree session-relative software operating sector, with
+    # 10 degree inset. These are not physical endpoints; GM6020 yaw is
+    # continuous and is never homed against a stop.
+    expected_travel_deg: { min: -90, max: 90 }
+    soft_margin_deg: 10
+    max_velocity_deg_s: 10
+    max_acceleration_deg_s2: 15
+    max_jerk_deg_s3: 60
+    limit_cur_a: 0.0
+homing:
+  # Pitch CyberGear gains retained from the successful 5 A pitch homing run.
+  speed_kp: 4.0
+  speed_ki: 0.05
+  # Retained pitch homing option; yaw is not in this plan.
+  mode_displacement_check: false
+  # Continue homing on added speed/corridor/reverse-motion warnings.
+  motion_checks_abort: false
+  contact:
+    # Slow loaded pitch homing only. Tracking and roaming retain their separate
+    # service speeds below.
+    coarse_speed_deg_s: 5
+    fine_speed_deg_s: 3
+    # Pitch contact threshold from its existing 5 A homing profile. Revalidate
+    # on the supervised mixed-profile homing run.
+    current_or_effort_limit: 0.05
+    stall_velocity_threshold: 0.5   # rad/s; contact-gate stall (above approach
+                                    # speed, so position-progress is the real
+                                    # discriminator). Do NOT use for jitter.
+    # Below the 3 deg/s fine speed (0.052 rad/s); actual position progress
+    # and the sustained contact window distinguish motion from contact.
+    v_move_threshold: 0.04
+    # P0j: reject the drive's slow-start ramp (creeps 0.5-1.6 deg/s while
+    # pushing 0.2-0.45 N.m against local loads, misread as contact 37 deg
+    # short of the true end-stop). Contact now also requires the axis to have
+    # reached motion_history_velocity since the approach began, OR a sustained
+    # push of at least effort_hard_contact_nm (the measured end-stop plateau
+    # 0.43-0.73 N.m). A true coarse stop is reached at ~10 deg/s (0.17 rad/s),
+    # well above the ramp's 0.028 rad/s peak.
+    effort_hard_contact_nm: 0.40
+    motion_history_velocity: 0.025   # rad/s, below the slow fine approach
+    # POC stability window: a genuine mechanical stop stays stable; a friction
+    # notch SLIPS before 1.5 s. Require the stalled+pushing candidate to persist
+    # for 1.5 s (matching the POC zero_axis 3x0.5 s position-span window) so a
+    # briefly-holding notch cannot false-positive as a stop. This is the speed-
+    # mode analogue of the POC's "position steady ~1.5 s + drive pushing" test.
+    contact_dwell_ms: 1500
+    backoff_deg: 5
+    repeatability_deg: 0.5
+    # p3f: the second fine approach can stall in the drive's static-friction
+    # zone short of the stop (measured 75-79 deg pitch: 0.1-0.44 N.m,
+    # v~0.02) and the detector latches that stall as a false contact, so the
+    # (correct) repeatability check rejects a non-repeatable q2. The
+    # breakaway is stochastic, so the (small backoff + second approach) pass
+    # is re-run this many times on a non-repeatable q2 before faulting. A
+    # genuinely non-repeatable stop still faults after the retries.
+    repeatability_retries: 2
+    # --- Speed-mode homing safety limits ---
+    # No adaptive current raise: pitch remains capped at its fixed 5 A limit.
+    # These CyberGear contact parameters do not apply to continuous GM6020 yaw.
+    limit_cur_step_a: 0.0
+    limit_cur_max_a: 0.0
+    max_rotation_deg: 360.0  # required by shared schema; yaw is not homed here
+    # |tau| above this aborts the push to protect the mechanical end-stop.
+    # CONSERVATIVE first-run value (measured end-stop push is 0.43-0.73 N.m);
+    # the run logs peak + at-contact torque so we dial this in together.
+    torque_safety_nm: 10.0
+# Pitch is bounded and uses the established pitch-only full-range homing flow.
+# GM6020 yaw is continuous/registerless and is never endpoint-homed.
+homing_plan:
+  - action: home_full_range
+    axis: pitch
+    precision: fine
+  - action: move
+    axis: pitch
+    position_deg: 40
+tracking:
+  # Camera measurements are noisier than the encoder. Smooth the measured LOS
+  # before prediction; the displayed prediction comes from this same estimator.
+  estimator_measurement_sigma_rad: 0.012
+  estimator_accel_sigma_rad_s2: 0.20
+  motor_response_ms: 120.0
+  # Motion targets and maximums for EACH service mode are under motion.modes.
+  # Applies on native and legacy observation paths. Perception's association
+  # anchor remains independent. A fraction is a box position, not a detected head.
+  # Startup-only: edit these values and restart through the normal launcher.
+  aim_point:
+    mode: box_fraction        # box_fraction | perception_anchor
+    x_fraction: 0.50          # left -> right inside the detected box
+    y_fraction: 0.22          # top -> bottom; tune the head/framing compromise here
+  search_enabled_by_default: false
+  target_lost_behavior: hold    # hold | search (§58 params 19-20)
+alignment:
+  # The bore/rangefinder is absent. Enable manual_depth only for an explicitly
+  # assumed reference plane; the displayed mark is virtual, never a measurement.
+  mode: off                  # off | manual_depth
+  camera_from_bore_mm: {right: 75, up: 75, forward: 0}
+  bore_axis_deg: {right: 0, up: 0}  # unmeasured parallel-axis assumption
+  assumed_depth_m: 10         # example camera-axis depth, NOT a measured range
+shutdown:
+  # Shutdown requests the continuous yaw session reference (zero), but the
+  # GM6020 interface has no disable confirmation and this is not a physical
+  # park pose. The application must report yaw-zero-requested separately from
+  # pitch disable-confirmed.
+  require_independent_position: true
+  yaw_park_mode: logical_degrees
+  pitch_park_mode: logical_degrees
+  park_end_clearance_deg: 5
+  # Used only when that axis selects logical_degrees:
+  yaw_park_deg: 0
+  pitch_park_deg: 40
+  # §33.2 verification before the motors are de-energized (commanded shutdown
+  # only; see §33.3 for uncontrolled power loss).
+  pos_tolerance_deg: 0.5
+  vel_tolerance_deg_s: 1.0
+  dwell_ms: 500
+  speed_deg_s: 3
+  # Retained pitch park-verification parameter; GM6020 yaw disable cannot be
+  # confirmed and its session zero is not a physical parked orientation.
+  verify_speed_deg_s: 2.0
+# §38/§39 safety supervisor + watchdog tuning.
+safety:
+  # §39.2 stale motor feedback -> no open-loop.
+  # 100 ms freshness limit. Verify mixed-backend GM6020 periodic feedback and
+  # command-triggered CyberGear pitch feedback under load.
+  feedback_max_age_ms: 100
+  deadline_max_us: 2000         # §39.3 cycle longer than this counts as a miss
+  deadline_miss_threshold: 5    # misses in the window before a derate
+  motor_overtemp_c: 75.0        # §38 over-temperature fault threshold
+camera:
+  intrinsics_file: calibration/camera_intrinsics.yaml
+  extrinsics_file: calibration/camera_extrinsics.yaml
+installation:
+  pose_file: calibration/installation_pose.yaml
+payload:
+  active_profile: conservative
+  profile_dir: config/payload_profiles
+  # Disabled pending mixed-backend support for this response check.
+  auto_verify: false
+  # Retained configuration value; ignored while auto_verify is false.
+  check_region_half_span_deg: 10.0
+  # If enabled later, apply only to CyberGear pitch; GM6020 has no matching
+  # CyberGear LimitCur register.
+  check_current_a: 5.0
+  # Dormant CyberGear pitch values while auto_verify is false.
+  check_spd_kp: 5.0
+  check_spd_ki: 0.02
+# Automatic service cycle. Manual/Hold is an explicit web override.
+v3:
+  # Preserves normal station intent. station_preflight.py currently blocks this
+  # profile from normal startup until mixed yaw and pitch homing gates pass.
+  default_mode: AUTO_ROAM
+  service_speed_control: true
+  service_speed_ki: 0.05
+  service_speed_kp: 4.0
+  # Faster small corrections; large-error stiffness remains at the original rate.
+  tracking_reference_omega: 4.0
+  position_servo_kp: 4.0
+  auto_roam:
+    # Bounded to the session-relative software envelope above. This is not a
+    # claim about GM6020 mechanical endpoints.
+    full_yaw_travel: false
+  auto_track:
+    roam_on_loss_ms: 1000
+    # Perception already requires confirmation and 500 ms of a single candidate.
+    # Keep a short fresh-selection hand-off; AUTO_TRACK still needs distinct frames.
+    track_on_acquire_ms: 50
+    coast_ms: 250
+    lost_hold_ms: 500
+    reacquire_window_ms: 1000
+
+# Independent reference targets and actuator maximums. Deg/s, deg/s², deg/s³.
+# These preserve the established service command envelope; full-speed loaded
+# stopping remains a physical verification gap. Homing/parking retain their
+# separately commissioned profiles above. Manual presets scale this base.
+motion:
+  modes:
+    manual:
+      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+      target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+    auto_roam:
+      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+      target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+    auto_track:
+      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+      # Requested maximum target speed/acceleration; jerk retains its 100 cap.
+      # At full target speed there is no additional speed correction headroom.
+      target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}

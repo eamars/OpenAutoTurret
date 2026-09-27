@@ -763,6 +763,16 @@ LoadResult load_turret_config(const std::string& path) {
     return r;
   }
 
+  const YAML::Node hardware_profile = fetch(root, "hardware_profile");
+  if (!unspecified(hardware_profile)) {
+    try {
+      c.hardware_profile = hardware_profile.as<std::string>();
+      if (c.hardware_profile.empty()) err.push_back("hardware_profile must be non-empty when specified");
+    } catch (const YAML::Exception&) {
+      err.push_back("hardware_profile must be a string path");
+    }
+  }
+
   // schema_version (required, must be 1).
   const YAML::Node sv = fetch(root, "schema_version");
   if (unspecified(sv)) {
