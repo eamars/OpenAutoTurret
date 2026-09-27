@@ -97,6 +97,22 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   std::string header, row;
   std::getline(in, header);
   std::getline(in, row);
+  // The header has to carry its own translation to wall clock. Rows are CLOCK_MONOTONIC
+  // nanoseconds and a monotonic clock restarts at every boot, so a file that outlives the
+  // boot it describes is otherwise unplaceable in time. The first two on-station files had
+  // none of this and no test noticed: the archive directory's name was quietly doing the
+  // job, which is exactly the kind of dependency that breaks during an incident.
+  EXPECT_NE(header.find("\"clock\":\"CLOCK_MONOTONIC\""), std::string::npos) << header;
+  EXPECT_NE(header.find("\"boot_id\":\""), std::string::npos) << header;
+  EXPECT_NE(header.find("\"mono_to_wall_ns\":\""), std::string::npos) << header;
+  const std::string wall_key = "\"wall_t_ns\":\"";
+  const auto wall_at = header.find(wall_key);
+  ASSERT_NE(wall_at, std::string::npos) << header;
+  // Quoted, because an ns-class wall clock exceeds 2^53; and a real wall clock, because
+  // 0 -- the shape of "nobody set it" -- must fail here, not three weeks later in an
+  // incident review that wonders what hour the turret stopped at.
+  const long long wall = std::stoll(header.substr(wall_at + wall_key.size()));
+  EXPECT_GT(wall, 1000000000000000000LL) << header;
   // ns and the 64-bit sequence are decimal strings here (§2): this file outlives
   // the process, and uptime-class timestamps must not lose their low digits.
   EXPECT_NE(row.find("\"t\":\"12345678901234567\""), std::string::npos) << row;

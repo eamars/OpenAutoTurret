@@ -20,6 +20,7 @@
 #include "control/phase.hpp"
 #include "mode/operating_mode.hpp"
 #include <cstddef>
+#include <chrono>
 #include <cstdio>
 #include <mutex>
 #include <sstream>
@@ -821,8 +822,26 @@ class Telemetry {
     auto pairi = [&](const int64_t* a) {
       return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
     };
+    // Every row's `t` is CLOCK_MONOTONIC nanoseconds (see common/time.hpp), and a
+    // monotonic clock says nothing by itself once the machine has rebooted -- it
+    // restarts. A file that outlives the boot it describes has to carry its own
+    // translation, measured in the same instant it was written, rather than leaving
+    // the reader to infer wall time from the name of the directory it was rotated
+    // into. Measured on this station 2026-09-28: BOOTTIME minus MONOTONIC = 15 us
+    // (this Pi has never suspended), so the two are interchangeable *here*; the
+    // declared name is what stops that from being an assumption next year.
+    const long long mono_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    const long long wall_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
     out << "{\"kind\":\"trip_trace\",\"rows\":" << frozen_count_
-        << ",\"frozen_t_ns\":\"" << frozen_t_ns_ << "\"}\n";
+        << ",\"frozen_t_ns\":\"" << frozen_t_ns_ << "\""
+        << ",\"clock\":\"CLOCK_MONOTONIC\""
+        << ",\"boot_id\":\"" << boot_id_ << "\""
+        << ",\"wall_t_ns\":\"" << wall_ns << "\""
+        << ",\"mono_to_wall_ns\":\"" << (wall_ns - mono_ns) << "\"}\n";
     for (std::size_t i = 0; i < frozen_count_; ++i) {
       const ControlLogRecord& r = frozen_trace_[i];
       out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
@@ -853,6 +872,14 @@ class Telemetry {
   // the web socket's own directory so the launcher archives it with the logs.
   // Best-effort by design: a full /tmp must not be able to break a trip.
   void set_trace_archive_dir(const std::string& dir) {
+    std::ifstream id("/proc/sys/kernel/random/boot_id");
+    if (id) {
+      std::string line;
+      std::getline(id, line);
+      while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+      if (!line.empty()) boot_id_ = line;
+    }
+
     std::lock_guard<std::mutex> lk(trace_mu_);
     archive_dir_ = dir;
     // Made now rather than at the latch: the launcher moves this directory into
@@ -921,6 +948,10 @@ class Telemetry {
   std::size_t frozen_count_ = 0;
   int64_t frozen_t_ns_ = 0;
   std::string archive_dir_;
+  // The identity of THIS boot, read once at startup. Two files written by two
+  // different boots can carry identical monotonic timestamps; without this, a
+  // reader cannot tell them apart.
+  std::string boot_id_ = "unknown";
   std::string archive_path_;  // set only when a freeze actually reached disk
   RingBuffer<EventRecord, kEventCap> event_log_;
   uint64_t event_pushes_ = 0;  // does not saturate where size() does
