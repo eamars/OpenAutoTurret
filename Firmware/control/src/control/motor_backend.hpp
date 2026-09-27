@@ -76,6 +76,16 @@ class MotorBackend {
   virtual bool adopt_running_mode(AxisId, bool, std::string&, double = -1, double = 1) { return false; }
   virtual void heartbeat() {}
   virtual bool watchdog_fault() const { return false; }
+  // The reason a guard latched, captured by the guard itself at trip time. Fixed-size
+  // POD because the thread describing a fault must not allocate to do it; detail is
+  // truncated rather than grown. `condition` is the machine-readable token the fault
+  // string and the MOTOR_WATCHDOG_TRIP event both carry.
+  struct TripDetail {
+    bool valid = false;
+    char condition[24] = {};
+    char detail[96] = {};
+  };
+  virtual TripDetail watchdog_trip_detail() const { return {}; }
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
   virtual bool recovery_before_homing() const { return false; }

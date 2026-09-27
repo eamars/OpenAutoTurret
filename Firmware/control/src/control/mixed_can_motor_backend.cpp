@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <limits>
 #include <numbers>
@@ -254,6 +255,7 @@ void MixedCanMotorBackend::close() {
   yaw_bus_.close();
   yaw_opened_.store(false);
   yaw_trip_.store(false);
+  yaw_trip_detail_ = {};
   yaw_requested_velocity_rad_s_.store(0);
   heartbeat_seen_.store(false);
   heartbeat_ns_.store(0);
@@ -445,6 +447,35 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
            now - progress_at > kNoProgressLimitNs) ||
           (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs);
       if (should_stop && !yaw_trip_.load()) {
+        // Capture *why* the guard latched, as a machine-readable token plus the
+        // field matrix, before the trip is published. Without this the operator
+        // sees one string shared by ten causes — the 2026-09-27 yaw trip looked
+        // identical whether the cause was CAN, the encoder, or the raw temp byte.
+        {
+          MotorBackend::TripDetail td{};
+          td.valid = true;
+          const char* cond = "unknown";
+          const double fb_age_ms = (now - yaw_state_.feedback.rx_ns) / 1e6;
+          if (!yaw_feedback_safe_locked(now)) cond = "feedback_unsafe";
+          else if (!yaw_reference_valid_.load()) cond = "reference_invalid";
+          else if (!health.up) cond = "can_down";
+          else if (health.state != static_cast<int>(can::CanIfState::ErrorActive)) cond = "can_state";
+          else if (health.rx_error_frames != 0 || health.tx_failed != 0) cond = "can_counters";
+          else if (!bus_health_ok_.load()) cond = "bus_unhealthy";
+          else if (!std::isfinite(measured_speed)) cond = "speed_nan";
+          else if (std::abs(measured_speed) > 25.0 * kRadiansPerDegree) cond = "speed_over_ceiling";
+          else if (yaw_state_.feedback.temperature_raw >= kYawTemperatureRawCeiling) cond = "temp_raw_over";
+          else if (std::abs(requested_speed) >= kNoProgressCommandRadS &&
+                   now - progress_at > kNoProgressLimitNs) cond = "no_progress";
+          else if (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs)
+            cond = "heartbeat_stale";
+          std::snprintf(td.condition, sizeof(td.condition), "%s", cond);
+          std::snprintf(td.detail, sizeof(td.detail),
+                        "cond=%s fb_age_ms=%.3f temp_raw=%u speed_deg_s=%.3f can_up=%d",
+                        cond, fb_age_ms, yaw_state_.feedback.temperature_raw,
+                        measured_speed * kDegreesPerRadian, health.up ? 1 : 0);
+          yaw_trip_detail_ = td;
+        }
         spdlog::error("GM6020 guard trip: feedback_safe={} reference_valid={} received={} encoder_valid={} feedback_age_ms={:.3f} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} heartbeat_seen={} heartbeat_age_ms={}",
                       yaw_feedback_safe_locked(now), yaw_reference_valid_.load(),
                       yaw_state_.received, yaw_state_.encoder_valid,
@@ -516,6 +547,12 @@ void MixedCanMotorBackend::heartbeat() {
 
 bool MixedCanMotorBackend::watchdog_fault() const {
   return yaw_trip_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault());
+}
+
+MotorBackend::TripDetail MixedCanMotorBackend::watchdog_trip_detail() const {
+  // yaw_trip_ (a seq_cst atomic) is published by the guard thread *after* filling
+  // the detail, so an acquire load that sees the trip also sees the reason.
+  return yaw_trip_.load() ? yaw_trip_detail_ : TripDetail{};
 }
 
 bool MixedCanMotorBackend::discover(AxisId axis, uint64_t& unique_id,

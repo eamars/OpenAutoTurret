@@ -610,6 +610,9 @@ enum class Event : uint8_t {
   ManualJogStopped,
   ManualStep,
   StopMotion,
+  // Appended after the 2026-09-27 yaw guard trip: a watchdog trip reaches the operator
+  // with the condition that fired it, never as the one bare string shared by eight causes.
+  MotorWatchdogTrip,
 };
 
 // The name is the wire format. Numbers are for storage; a log, a dashboard and a person
@@ -655,6 +658,7 @@ inline const char* event_name(Event e) {
     case Event::ManualJogStopped: return "MANUAL_JOG_STOPPED";
     case Event::ManualStep: return "MANUAL_STEP";
     case Event::StopMotion: return "STOP_MOTION";
+    case Event::MotorWatchdogTrip: return "MOTOR_WATCHDOG_TRIP";
   }
   return "UNKNOWN";
 }

@@ -601,8 +601,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   backend_->heartbeat();
   if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
     deenergize_all();
-    if (phase_ != Phase::Fault)
-      fault("independent motor watchdog: control deadline, feedback, or motor health");
+    if (phase_ != Phase::Fault) {
+      // The trip reason is published by the guard that latched it, when there is
+      // one. "control deadline, feedback, or motor health" is a family of ten
+      // causes; an operator cannot act on a family, so the condition token and a
+      // MOTOR_WATCHDOG_TRIP event carry the specific cause whenever a backend has it.
+      const auto trip = backend_->watchdog_trip_detail();
+      if (trip.valid) {
+        telemetry_.push_event(now_ns, telemetry::Event::MotorWatchdogTrip,
+                              std::string(trip.detail));
+        fault(std::string("independent motor watchdog trip: ") + trip.condition);
+      } else {
+        fault("independent motor watchdog: control deadline, feedback, or motor health");
+      }
+    }
   }
   now_ns_ = now_ns;
   // Commands are executed inside the cycle and need a timestamp to record a selection
