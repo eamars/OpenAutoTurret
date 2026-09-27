@@ -230,6 +230,39 @@ speed-ceiling/corridor warnings did not abort with
 IMU orientation is a secondary observation, not a replacement for
 motor/reference validity.
 
+### Who stopped it
+
+`status` on a stopped stack prints `shutdown.cause` before the park outcome. The
+cause line names the trigger, and the labels are deliberately not interchangeable:
+
+| `cause=` | meaning | extra fields |
+|---|---|---|
+| `operator_stop` | someone ran `run_application.sh stop`; the stopper left a credential | `operator="who=operator pid=… uid=… utc=… launcher=…"` |
+| `child_exit` | a supervised child died first, so cleanup followed; the child is blamed by name | `exited_child=… exited_pid=… wait_status=…` (`137(signal 9)` = SIGKILL; `wait_status=0` = that child ended by itself, e.g. a finite capture) |
+| `external_signal` | the launcher was signalled with no stop credential | `signal=INT`/`TERM` |
+| `unattributed` | cleanup ran and nothing above applies | — |
+
+A credential outranks a signal: an operator stop *is* a SIGTERM, and naming the
+caller beats naming the syscall. A clean-looking stop with `cause=unattributed`
+is treated as an open question, not as a normal stop.
+
+Because every run reuses `$RUN`, the previous round's `*.log`, `shutdown.result`,
+`shutdown.cause` and `stack.info` are moved to `$RUN/logs-history/<utc>Z-launcher<pid>/`
+before anything is truncated; the newest ten rounds are kept and older ones are
+pruned, since `$RUN` lives in `/tmp`. Read the archived round, not the fresh one,
+when investigating a stop.
+
+The claims above are rehearsed against a real stack (each scenario homes the
+station, so this is a motion-bearing test):
+
+```bash
+ssh eamars@rpi-turret "bash <release>/Firmware/scripts/run_application.sh status"   # context
+ssh eamars@rpi-turret "<release-venv>/bin/python <release>/Firmware/tools/rehearse_stop_cause.py"
+```
+
+`--selftest` exercises only the pass/fail logic, for machines with no station.
+The rehearsal leaves the station stopped.
+
 ## Deployment and operation
 
 Use the following launcher path for the mixed profile. Two controlled stops

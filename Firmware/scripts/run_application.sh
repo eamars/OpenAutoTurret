@@ -42,6 +42,9 @@ owned_launcher() {
   [ "$(awk '{print $22}' "/proc/$launcher_pid/stat")" = "$launcher_start" ]
 }
 stopped_status() {
+  # A stop that cannot name its trigger is a forensics hole: show the recorded
+  # cause first, then how the motors were brought down.
+  [ ! -r "$RUN/shutdown.cause" ] || cat "$RUN/shutdown.cause"
   if [ -r "$RUN/shutdown.result" ]; then
     cat "$RUN/shutdown.result"
   else
@@ -67,6 +70,11 @@ if [ "$ACTION" = status ]; then
 fi
 if [ "$ACTION" = stop ]; then
   if ! owned_launcher; then echo 'Already stopped'; stopped_status; exit 0; fi
+  # An operator stop leaves a credential, so the launcher can later tell "someone
+  # asked for this" apart from "a child died and cleanup followed". Without it a
+  # clean-looking stop is unattributable, and /tmp logs get truncated on restart.
+  printf 'who=operator pid=%s uid=%s utc=%s launcher=%s\n' \
+    "$$" "$(id -u)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$launcher_pid" > "$RUN/stop.request"
   kill -TERM "$launcher_pid"
   for ((attempt=0; attempt<120; attempt++)); do
     if ! owned_launcher; then stopped_status; exit 0; fi
@@ -261,11 +269,75 @@ if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ 
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
+# A restart must not erase the previous stack's evidence. Every run reuses the
+# same $RUN, so the previous round is archived before anything is truncated.
+rotate_stack_logs() {
+  local keep="${1:-10}" stamp src old
+  ls "$RUN"/*.log >/dev/null 2>&1 || return 0
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  src="$RUN/logs-history/$stamp-launcher$$"
+  mkdir -p "$src" || return 0
+  for f in "$RUN"/*.log "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
+    [ -f "$f" ] && mv -f "$f" "$src/" 2>/dev/null || true
+  done
+  # $RUN lives in /tmp: keep the newest $keep rounds and no more.
+  ( cd "$RUN/logs-history" 2>/dev/null || exit 0
+    ls -1dt */ 2>/dev/null | tail -n +"$((keep + 1))" | while IFS= read -r old; do
+      rm -rf -- "$old" || true
+    done ) || true
+}
+rotate_stack_logs 10
 children=()
+declare -A child_name=()
 controller_pid=''
 imu_pid=''
+cause_signal=''
+first_child_status=''
+exited_pid=''
+exited_name=''
+# wait -n reports a status but not the child it belongs to; record both while the
+# siblings are still alive to point at, i.e. before cleanup signals anyone.
+note_child_exit() {
+  local pid gone=()
+  for pid in "${children[@]}"; do
+    kill -0 "$pid" 2>/dev/null || gone+=("$pid")
+  done
+  for pid in "${gone[@]}"; do
+    if [ -n "${child_name[$pid]:-}" ]; then exited_pid="$pid"; exited_name="${child_name[$pid]}"; return 0; fi
+  done
+  if [ "${#gone[@]}" -gt 0 ]; then exited_pid="${gone[0]}"; exited_name=unknown; fi
+}
+describe_status() {
+  local s="$1"
+  if [[ "$s" =~ ^[0-9]+$ ]] && [ "$s" -gt 128 ]; then
+    printf '%s(signal %s)' "$s" "$((s - 128))"
+  else
+    printf '%s' "$s"
+  fi
+}
+stop_cause_line() {
+  local reason="$1" operator=''
+  printf 'cause=%s utc=%s launcher=%s uptime_s=%s' "$reason" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$SECONDS"
+  if [ -r "$RUN/stop.request" ]; then
+    read -r operator < "$RUN/stop.request" || true
+    [ -n "$operator" ] && printf ' operator="%s"' "$operator"
+  fi
+  [ -z "$exited_pid" ] || printf ' exited_child=%s exited_pid=%s wait_status=%s' \
+    "$exited_name" "$exited_pid" "$(describe_status "${first_child_status:-unset}")"
+  [ -z "$cause_signal" ] || printf ' signal=%s' "$cause_signal"
+  printf '\n'
+}
 cleanup() {
   trap - EXIT INT TERM
+  local reason
+  if [ -r "$RUN/stop.request" ]; then reason=operator_stop
+  elif [ -n "$exited_pid" ]; then reason=child_exit
+  elif [ -n "$cause_signal" ]; then reason=external_signal
+  else reason=unattributed; fi
+  stop_cause_line "$reason" > "$RUN/shutdown.cause"
+  cat "$RUN/shutdown.cause"
+  rm -f -- "$RUN/stop.request"
   if [ "$MODE" = imu ]; then
     echo 'Ending IMU acquisition; no motor process was started.'
     echo 'Stopped: IMU capture ended; motors were not commanded' > "$RUN/shutdown.result"
@@ -337,8 +409,8 @@ cleanup() {
   rm -f -- "$RUN/launcher.pid" "$RUN/started" "$RUN/stack.info" "$RUN/web.port"
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cause_signal=INT; exit 130' INT
+trap 'cause_signal=TERM; exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
 if [ "$MODE" = imu ]; then
@@ -346,11 +418,13 @@ if [ "$MODE" = imu ]; then
     echo 'Existing controller or legacy IMU consumer; refusing capture.' >&2; exit 1
   fi
   "$APP/build/imu-bno085" "$IMU_SECONDS" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-  imu_pid=$!; children+=("$imu_pid")
+  imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   printf 'Mode: IMU capture\nTrace: %s\n' "$RUN/imu.ndjson" > "$RUN/stack.info"
   cp "$RUN/launcher.pid" "$RUN/started"
-  wait "$imu_pid"
-  exit $?
+  first_child_status=0
+  wait "$imu_pid" || first_child_status=$?
+  note_child_exit
+  exit "$first_child_status"
 fi
 if [ "$MODE" = commission ]; then
   if pgrep -x controld >/dev/null; then
@@ -361,7 +435,7 @@ if [ "$MODE" = commission ]; then
   if [ "$WITH_IMU" = 1 ]; then
     if pgrep -x imu_main >/dev/null; then echo 'Legacy IMU consumer still running' >&2; exit 1; fi
     "$APP/build/imu-bno085" 120 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-    imu_pid=$!; children+=("$imu_pid")
+    imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
     # Observe a stationary host tare before starting the independent motor probe.
     for ((attempt=0; attempt<50; attempt++)); do
       kill -0 "$imu_pid" 2>/dev/null || { echo 'IMU startup failed' >&2; exit 1; }
@@ -398,7 +472,7 @@ PY
     --yaw-speed-deg-s "$YAW_SPEED_DEG_S" \
     --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   fi
-  controller_pid=$!; children+=("$controller_pid")
+  controller_pid=$!; children+=("$controller_pid"); child_name[$controller_pid]=probe-mixed-hardware
   if [ "$PITCH_PROBE" = 1 ]; then
     printf 'Mode: pitch commissioning\nStep millidegrees: %s\nTrace: %s\n' "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" > "$RUN/stack.info"
   elif [ "$YAW_STEP_DEG" != 0 ]; then
@@ -411,11 +485,12 @@ PY
   cp "$RUN/launcher.pid" "$RUN/started"
   if [ -n "$imu_pid" ]; then
     # An IMU process failure ends the probe through the same cleanup/zero path.
-    wait -n "$controller_pid" "$imu_pid"
+    first_child_status=0; wait -n "$controller_pid" "$imu_pid" || first_child_status=$?
   else
-    wait "$controller_pid"
+    first_child_status=0; wait "$controller_pid" || first_child_status=$?
   fi
-  exit $?
+  note_child_exit
+  exit "$first_child_status"
 fi
 export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
@@ -453,7 +528,7 @@ if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [
   fi
   export OTA_IMU_TRACE="$RUN/imu.ndjson"
   "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-  imu_pid=$!; children+=("$imu_pid")
+  imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   # Require a fresh host tare and same-generation game rotation sample before
   # the controller starts. The IMU residual remains observe-only.
   imu_ready=0
@@ -485,13 +560,16 @@ fi
 "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
 controller_pid=$!
 children+=("$controller_pid")
+child_name[$controller_pid]=controld
 else
   echo 'Perception only: no controller connection.'
   START_WEB=0
 fi
 if [ "$START_WEB" -eq 1 ]; then
   "$PY" -m web.webd.app >"$RUN/web.log" 2>&1 &
-  children+=("$!")
+  web_pid=$!
+  children+=("$web_pid")
+  child_name[$web_pid]=webd
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
   vision_args+=(--controller-state-url "http://127.0.0.1:$OTA_WEB_PORT/api/state")
 fi
@@ -500,7 +578,9 @@ if [ "$MODE" != mixed-controller-commission ]; then
     vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
   fi
   "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
-  children+=("$!")
+  vision_pid=$!
+  children+=("$vision_pid")
+  child_name[$vision_pid]=visiond
 elif [ "$MODE" = mixed-controller-commission ]; then
   echo 'Mixed controller commissioning: vision and web are not started.'
 fi
@@ -509,4 +589,6 @@ printf 'Mode: %s\nConfig: %s\nPython: %s\nChildren: %s\n' "$MODE" "${controller_
 cp "$RUN/launcher.pid" "$RUN/started"
 echo "Stack logs: $RUN; web port: $OTA_WEB_PORT. Ctrl-C stops this stack."
 # A failed child or finite capture ends its own stack; unrelated processes are untouched.
-wait -n "${children[@]}"
+first_child_status=0
+wait -n "${children[@]}" || first_child_status=$?
+note_child_exit
