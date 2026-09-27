@@ -8,6 +8,8 @@
 #include <numbers>
 #include <thread>
 
+#include <spdlog/spdlog.h>
+
 #include "common/time.hpp"
 
 namespace ota {
@@ -413,7 +415,18 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           (std::abs(yaw_requested_velocity_rad_s_.load()) >= kNoProgressCommandRadS &&
            now - progress_at > kNoProgressLimitNs) ||
           (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs);
-      if (should_stop && !yaw_trip_.load()) trip_yaw_locked();
+      if (should_stop && !yaw_trip_.load()) {
+        spdlog::error("GM6020 guard trip: feedback_safe={} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} heartbeat_seen={} heartbeat_age_ms={}",
+                      yaw_feedback_safe_locked(now), health.up, health.state,
+                      health.rx_error_frames, health.tx_failed,
+                      bus_health_ok_.load(), measured_speed * kDegreesPerRadian,
+                      yaw_state_.feedback.temperature_raw,
+                      yaw_requested_velocity_rad_s_.load() * kDegreesPerRadian,
+                      (now - progress_at) / 1'000'000,
+                      heartbeat_seen_.load(),
+                      heartbeat_seen_.load() ? (now - heartbeat_ns_.load()) / 1'000'000 : 0);
+        trip_yaw_locked();
+      }
       if (yaw_trip_.load()) send_yaw_zero_locked();
     }
     std::this_thread::sleep_for(5ms);

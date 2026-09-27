@@ -104,7 +104,10 @@ int main(int argc, char** argv) {
         }
         std::cout << '\n';
         if (!yaw.has_feedback || !backend.buses_healthy() || backend.watchdog_fault())
-          throw std::runtime_error("feedback, bus health, or watchdog changed during observation");
+          throw std::runtime_error("observation gate changed: yaw_feedback=" +
+              std::to_string(yaw.has_feedback) + " buses_healthy=" +
+              std::to_string(backend.buses_healthy()) + " watchdog_fault=" +
+              std::to_string(backend.watchdog_fault()));
       }
       std::this_thread::sleep_for(20ms);
     }
