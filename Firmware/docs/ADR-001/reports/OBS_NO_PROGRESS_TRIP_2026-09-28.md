@@ -221,3 +221,31 @@ q_yaw  +75.10° → +70.14 → +46.89 → +18.02 → −11.51 → −37.49 → �
 
 **现场现状（11:0x）**：`AUTO_TRACK / hold`，`fault=''`，`yaw_envelope:none`，`traces/` 空，
 被丢帧 0，`clock_epoch=1`、锚点界 ~40 ns。**全程无 sudo。**
+
+## §7｜11:40 那一闸把"区间之外"这个收窄也打掉了（同一 release，新词表在场）
+
+```
+GM6620 guard trip: feedback_safe=true reference_valid=true received=true encoder_valid=true
+feedback_age_ms=0.413 can_up=true can_state=0 rxerr=0 txfail=0
+requested_speed_deg_s=-10.000  no_progress_ms=1502  temp_raw=29
+跳闸后 /api/state：q_yaw=+0.31°（就在原点附近）  yaw_envelope=none
+```
+
+- **轴不在区间外**（它就在 home 附近）⇒ §5/§6 的"起点落在扫掠区间交集之外"**不是充分条件**，
+  今天第三次被现场推翻。**教训同一颗**：我每次都是拿一个能自圆其说的形状当结论，而现场只回一句"你看这条"。
+- `command_not_sent` **没有抢先署名**：说明后端**接受过**这个 −10 °/s，`requested` 不是拒发分支留下的。
+- 但**环那一侧**的痕迹是 `phase=hold`、`cmd=0.00`。两个事实放在一起只剩一个解释：
+  **调用方后来不再给后端发命令了**（hold 那侧不再调 `command_yaw_velocity*`），
+  于是后端里那个 `yaw_requested_velocity_rad_s_` **停在最后一次被接受的值上**。
+  我今天上午批评守卫"拿过期字段指控"，改的是拒发分支清零——**只补了一半**：
+  **调用方停手**与**后端拒发**会造成同一个过期字段，而守卫分不清这两件事。
+
+**下一步唯一该做的判据改动**（小、可测，明天或今晚做）：后端记一个
+`yaw_last_command_ns_`（每次接受命令就盖时间戳），守卫里
+`now - yaw_last_command_ns_ > 一个环周期级上限（~50 ms）` 就算 **`command_not_sent`**
+（同族：需求不是这一周期的）。于是"没人再命令它"与"命令了但轴没动"当场分开，
+`no_progress` 只在**命令持续在场而位置不动**时才说出口——那才是它字面意思的堵转。
+
+**现场现状（11:5x）**：`no_progress` 挂着（这后端解不了锁，只能重启）；`yaw_envelope=none`；
+被丢帧 0；页面带 FOV 滑窗（`windowSource` 在场）。今天全部断电事件都发生在 AUTO_ROAM 自扫期间，
+**manual 的实测速度对齐因此还没测到**（两次尝试都被先到的 latch 挡在门外）。

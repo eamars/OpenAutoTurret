@@ -264,7 +264,34 @@ ssh eamars@rpi-turret "<release-venv>/bin/python <release>/Firmware/tools/rehear
 `--selftest` exercises only the pass/fail logic, for machines with no station.
 The rehearsal leaves the station stopped.
 
-### What a stop proved, per axis (2026-09-28)
+### Owner rulings of 2026-09-28 (midday), and what they changed
+
+Four rulings, all of them about over-design inherited from the first pass. The reasoning
+and the full list of sites that can remove motor power are in
+[AUDIT_POWER_REMOVAL_2026-09-28.md](ADR-001/reports/AUDIT_POWER_REMOVAL_2026-09-28.md);
+what an operator needs from them:
+
+- **Removing power is the last resort, not a routine response.** The payload is an
+  unbalanced load: if power goes, it drops onto a hard stop, and that collision costs
+  more than never cutting power. So the yaw speed ceiling is a clamp on the ASK
+  (`min(ceiling, requested)`, `kYawSpeedCeilingDegS = 30`), not a trip on a reading -- the
+  `speed_over_ceiling` condition is deleted, not tuned. A non-finite feedback reading is
+  still trusted-nothing; a fast one is not.
+- **MANUAL is one gesture across both axes.** `axes.yaw` used to declare 10 deg/s against
+  pitch's 30 under a shared `motion.modes` block asking both for 20, which is why manual
+  felt like two different sticks. Both now declare 30; the config test asserts the
+  invariant ("both axes resolve to the same speeds in every mode") instead of numbers.
+- **The slip ring has no constraint** (owner, confirmed): free rotation, no turn counting.
+  The cable-loop caution that used to sit around the yaw travel argument is retired --
+  there is no mechanical objection left to unbounded yaw.
+- **AUTO_ROAM's redesign waits for ADR-001.** Its bounded sweep was written for a station
+  with hardware endstops; "keep turning one way" or "turn toward the person" is more
+  sensible now, but the data for choosing is thin, so it is parked, not forgotten.
+  Meanwhile: a `no_progress` trip with the axis parked outside its computed sweep interval
+  is a known open case (see the case file §4-§6), and on this backend a latch still means a
+  process restart -- `recover_motors` answers `unsupported`.
+
+## What a stop proved, per axis (2026-09-28)
 
 `shutdown.cause` says **who** stopped it. It cannot say **what we can prove about the
 outcome**, so controld appends one line per stop to `$RUN/traces/stop-evidence.ndjson`

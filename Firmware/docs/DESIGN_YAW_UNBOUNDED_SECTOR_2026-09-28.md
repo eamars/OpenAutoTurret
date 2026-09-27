@@ -204,3 +204,17 @@ roam_progress 0.0008                                   ← 0.08%，不涨
 | 跳停/停止证据不变 | **PASS** | 部署重启留 `cause=operator_stop`；06:41 那次跳闸留 `BRAKE`＋black-box scene 1 |
 | **扫掠在两端都掉头**（一轮完整来回） | **NOT_RUN** | 单腿跑通即被 vision 的 `target held for 50 ms` 自动交接进 AUTO_TRACK；要一个**无目标窗口**才验得到 |
 | 遥测把"无包线"说成 `null` | **未做（跨三层）** | 见 §10 与 TODO 第 3 条：`protocol.py` 字段是 `float = 0.0` |
+
+
+---
+
+## 后补（09-28 中午，主人确认与改动）
+
+- **滑环无限制**（自由移动、不计圈数）⇒ 本文所有以"线缆会绕"为名的保守自动作废；无限制 yaw
+  剩下的唯一论据是我们自己的会话角与其它软件判据。
+- **travel tape 回来了，而且改成滑尺**：光标定在中央不动，刻度在它下面滑（战斗机/直升机 HUD 的
+  读法），两端渐隐而不是硬切。窗口宽度取**该轴自己的 effective FOV**（与安全包线多边形同一对数），
+  不再用我随手取的常数；FOV 没报时用 1/4 行程兜底，`windowSource` 字段如实说明用的哪一种。
+  值框下面那两行说明文字（"JOINT TRAVEL, NOT HEADING" / "0 = TRAVEL MIDPOINT"）按主人要求删掉。
+- 上限从"测量超速就断电"改成"对请求夹紧"；manual 两轴速度对齐。理由与全部断电入口见
+  `ADR-001/reports/AUDIT_POWER_REMOVAL_2026-09-28.md`。
