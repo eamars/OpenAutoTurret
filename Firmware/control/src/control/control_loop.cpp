@@ -23,6 +23,10 @@ constexpr double kReadyPosTolRad = 0.01;
 constexpr TimeNs kYawReferenceStationaryNs = 500'000'000;
 constexpr double kYawReferenceStationaryRadS = 0.5 * kDeg2Rad;
 constexpr double kYawReferencePositionToleranceRad = 0.5 * kDeg2Rad;
+// Pitch homing can nudge the free yaw axis while its GM6020 output is zero.
+// A 0.527-degree displacement tripped the reference tolerance despite fresh,
+// stationary feedback. Keep the tighter tolerance for reference/stop dwell.
+constexpr double kYawPitchHomingHoldToleranceRad = 2.0 * kDeg2Rad;
 }  // namespace
 
 bool ControlLoop::position_ready() const {
@@ -1261,7 +1265,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
               !std::isfinite(v_est_[i]) ||
               std::abs(v_est_[i]) > 2.0*kDeg2Rad ||
               std::abs(yaw.q_rad-yaw_session_reference_rad_) >
-                  kYawReferencePositionToleranceRad) {
+                  kYawPitchHomingHoldToleranceRad) {
             spdlog::error("continuous yaw homing hold rejected: age_ms={} delta_deg={:.3f} encoder_speed_deg_s={:.3f} motor_speed_deg_s={:.3f}",
                          (now_ns-yaw.rx_ns)/1'000'000,
                          (yaw.q_rad-yaw_session_reference_rad_)*kRad2Deg,

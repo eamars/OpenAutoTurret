@@ -84,6 +84,7 @@ def test_launcher_lifecycle(tmp_path):
     fakepy=base/'fake-python'
     fakepy.write_text('''#!/usr/bin/env bash
     if [ "${PROBE_FAIL_PREFLIGHT:-0}" = 1 ]; then exit 17; fi
+    if [ "$1" = - ]; then echo 0; exit 0; fi
     if [[ "$1" = -c || "$1" = *.py ]]; then exit 0; fi
     exec "$PROBE_PY" "$PROBE_ROOT/worker.py" "$2"
     ''');fakepy.chmod(0o755)
