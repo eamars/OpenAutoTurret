@@ -39,7 +39,7 @@ class YouseeCodec {
   // resync accounting; AT text replies are consumed silently.
   void feed(const uint8_t* data, size_t n, ota::TimeNs now_ns);
 
-  // Append the adapter framing for one CAN frame (dlc<=8) to `out`.
+  // Append legacy extended data-frame adapter framing (dlc<=8).
   static void encode(uint32_t ext_id, const uint8_t* data, uint8_t dlc,
                      std::vector<uint8_t>& out);
 
@@ -74,6 +74,8 @@ class YouseeTransport : public CanTransport {
   void set_frame_callback(FrameCallback cb) override;
   bool send(uint32_t ext_id, const uint8_t data[8],
             std::string* err = nullptr) override;
+  bool send_frame(const RawFrame& frame,
+                  std::string* err = nullptr) override;
 
   BusStats stats() const override;
   bool is_up() const override { return fd_ >= 0 && running_.load(); }

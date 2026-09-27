@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenAutoTurret split CAN links (1 Mbps classical CAN)
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
+AssertPathExists=/sys/class/net/can0
+AssertPathExists=/sys/class/net/can1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/ota-configure-can-links
+
+[Install]
+WantedBy=multi-user.target

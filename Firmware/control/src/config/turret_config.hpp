@@ -47,7 +47,8 @@ struct AxisLimitsConfig {
   // Adaptive-current homing (push-through, §22): the INITIAL drive current
   // limit (A) for this axis. The homing raises it by limit_cur_step_a on each
   // false-contact latch, up to limit_cur_max_a. Written to LimitCur (0x7018)
-  // on boot and as the homing pushes it up. 0 = use the HomingParams default.
+  // on boot and as the homing pushes it up. Pitch is validated against its
+  // installation-specific 5 A ceiling; an omitted pitch value defaults to 5 A.
   double limit_cur_a = 0.0;
 };
 
@@ -220,9 +221,9 @@ struct PayloadConfig {
   // Drive current limit (A) applied to BOTH axes for the duration of the
   // check. The post-homing LimitCur (5 A pitch / 3 A yaw) is marginal for a
   // 2 deg position-mode step, so the check raises both axes to this value
-  // (5 A, well under the 10 A station cap) and leaves it
-  // there — the §33.2/hold position holds are MORE authoritative at 5 A, and
-  // the boot speed-mode hold already uses this same 5 A default.
+  // (at most 5 A) and leaves it there. Pitch is limited to 5 A by the
+  // installation policy; the boot
+  // speed-mode hold already uses this same safe default.
   double check_current_a = 5.0;
   // Drive inner speed-loop gains (both axes) applied at check start. The stock
   // CyberGear gains (SpdKp=1.0, SpdKi=0.002) are too weak to hold the
@@ -292,6 +293,9 @@ struct V3Config {
 
 struct TurretConfig {
   int schema_version = 1;
+  // Optional path to a hardware-topology profile (resolved by the application
+  // entry point). Empty preserves the legacy single-CAN configuration path.
+  std::string hardware_profile;
   CanConfig can;
   // Indexed by AxisId: [0] = pitch, [1] = yaw.
   MotorConfig motors[2];

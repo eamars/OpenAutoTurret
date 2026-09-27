@@ -57,6 +57,9 @@ class CanMotorBackend : public MotorBackend {
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp,
                             double spd_ki) override;
+  // Commissioning cleanup only: verify disabled state/current/mode, restore
+  // volatile gains without enabling, then revoke setup authority with STOP.
+  bool restore_stopped_pitch_gains(double kp, double ki, std::string& err);
 
   // Bus health straight from the transport counters (§55).
   CanHealth can_health() const override;
@@ -74,10 +77,12 @@ class CanMotorBackend : public MotorBackend {
     AxisId axis = AxisId::Pitch;
     bool position = false;
     bool check_displacement = true;
+    bool pitch_brake_with_stop = false;
     double limit = 0, pin = 0, last_q = 0, speed_ki = -1, speed_kp = 1;
     double stopped_q = 0;  // position immediately before removing torque
     TimeNs started = 0, deadline = 0, still_since = 0, sampled = 0;
     int read_index = 0;
+    double pitch_limit_cur = 0;
     bool waiting = false;
   } transition_;
   // Position mode is tracked locally: the feedback "mode" field is the motor

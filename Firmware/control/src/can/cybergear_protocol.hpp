@@ -1,7 +1,7 @@
 #pragma once
 // Xiaomi CyberGear CAN protocol (1 Mbit/s, CAN 2.0, 29-bit extended frames).
 //
-// Authoritative source: Firmware/docs/CyberGear_AI_Reference.md
+// Authoritative source: Firmware/docs/references/cybergear/CyberGear_AI_Reference.md
 // (trust-labeled; official-manual sections take precedence).
 //
 // Frame identifier layout (29-bit extended ID):

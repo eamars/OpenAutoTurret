@@ -170,6 +170,11 @@ CanFrame make_write_reg_u8(Reg r, uint8_t v, uint8_t host_id, uint8_t motor_id) 
 
 bool parse_reg_response(const CanFrame& f, Reg& reg_out, double& value_out) {
   const ExtId e = unpack_ext_id(f.id);
+  // Only the documented successful reply layout is a value. The installed
+  // factory motor returns bit 16 set and stale payload bytes for unsupported
+  // reads (observed 0x11017F00 for mechPos). Never decode that as a position.
+  if (f.dlc != 8 || (e.data2 & 0xff00) != 0 || f.data[2] != 0 || f.data[3] != 0)
+    return false;
   const uint8_t ct = e.comm_type;
   if (ct != static_cast<uint8_t>(CommType::ReadReg) &&
       ct != static_cast<uint8_t>(CommType::WriteReg)) {

@@ -50,8 +50,11 @@ int main() {
   second.command(ota::AxisId::Yaw, 0.3, 0.1);
   const bool independent = trace->count(ota::cybergear::Reg::LocRef) == 4;
   trace->fail_next = true;
-  second.command_velocity(ota::AxisId::Pitch, 0.05);
-  second.command_velocity(ota::AxisId::Pitch, 0.05);
+  // Exercise the generic command-cache retry on yaw. Pitch's installed policy
+  // now correctly blocks direct references until its safe mode is verified;
+  // pitch gate behavior is covered by the focused safety test and mode probe.
+  second.command_velocity(ota::AxisId::Yaw, 0.05);
+  second.command_velocity(ota::AxisId::Yaw, 0.05);
   const bool retried_speed = trace->count(ota::cybergear::Reg::SpdRef) == 2;
   // Failure to lower the speed limit must prevent publishing a new destination.
   trace->fail_next = true;

@@ -23,8 +23,8 @@ namespace ota::can {
 namespace {
 constexpr uint32_t kEffFlag = CAN_EFF_FLAG;
 
-// Build the default filter set: CyberGear comm types 0/2/17/18 (any motor)
-// plus CAN error frames.
+// Build the default normal-frame filter set: CyberGear comm types 0/2/17/18
+// (any motor). Error frames use CAN_RAW_ERR_FILTER, not CAN_RAW_FILTER.
 std::vector<struct can_filter> default_filters() {
   auto type_filter = [](uint8_t comm_type) {
     struct can_filter f{};
@@ -38,10 +38,6 @@ std::vector<struct can_filter> default_filters() {
   v.push_back(type_filter(2));   // motor feedback
   v.push_back(type_filter(17));  // read-reg responses
   v.push_back(type_filter(18));  // write-reg echoes
-  struct can_filter errf{};
-  errf.can_id = CAN_ERR_FLAG;
-  errf.can_mask = CAN_ERR_FLAG;
-  v.push_back(errf);
   return v;
 }
 }  // namespace
@@ -85,9 +81,12 @@ bool SocketCanBus::configure_interface(std::string& err) {
 
     // Re-read actual state after any bring-up.
     if (!netlink_query_can(opts_.iface, info, err)) return false;
-    up_state_ = info.up;
-    bitrate_state_ = info.bitrate;
-    can_state_ = info.state;
+    {
+      std::lock_guard<std::mutex> lk(health_mtx_);
+      up_state_ = info.up;
+      bitrate_state_ = info.bitrate;
+      can_state_ = info.state;
+    }
     return true;
   }
 
@@ -128,6 +127,18 @@ bool SocketCanBus::configure_interface(std::string& err) {
       close();
       return false;
     }
+  }
+
+  // CAN_RAW_FILTER selects arbitration IDs and does not subscribe to error
+  // frames. Kernel error reporting is a separate option with its own mask.
+  const can_err_mask_t err_mask =
+      opts_.receive_error_frames ? CAN_ERR_MASK : can_err_mask_t{0};
+  if (::setsockopt(fd_, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &err_mask,
+                   sizeof(err_mask)) < 0) {
+    err = std::string("setsockopt(CAN_RAW_ERR_FILTER) failed: ") +
+          std::strerror(errno);
+    close();
+    return false;
   }
 
   // Non-blocking for TX; RX uses poll() on the same fd.
@@ -206,6 +217,12 @@ void SocketCanBus::rx_loop() {
       }
       if (n < static_cast<ssize_t>(sizeof(struct can_frame))) break;
 
+      if (f.can_dlc > 8) {
+        std::lock_guard<std::mutex> lk(stats_mtx_);
+        stats_.rx_error_frames++;
+        continue;
+      }
+
       if (f.can_id & CAN_ERR_FLAG) {
         std::lock_guard<std::mutex> lk(stats_mtx_);
         stats_.rx_error_frames++;
@@ -214,9 +231,13 @@ void SocketCanBus::rx_loop() {
       }
 
       RawFrame rf;
-      rf.id = f.can_id & 0x1FFFFFFFu;  // strip EFF/RTR flags
+      rf.extended = (f.can_id & CAN_EFF_FLAG) != 0;
+      rf.rtr = (f.can_id & CAN_RTR_FLAG) != 0;
+      rf.error = false;
+      rf.id = f.can_id & (rf.extended ? CAN_EFF_MASK : CAN_SFF_MASK);
       rf.dlc = f.can_dlc;
-      std::memcpy(rf.data, f.data, 8);
+      if (!rf.rtr && rf.dlc <= sizeof(rf.data))
+        std::memcpy(rf.data, f.data, rf.dlc);
       rf.rx_ns = ota::now_monotonic_ns();
 
       {
@@ -236,14 +257,36 @@ void SocketCanBus::rx_loop() {
 }
 
 bool SocketCanBus::send(uint32_t ext_id, const uint8_t data[8], std::string* err) {
-  if (fd_ < 0) {
-    if (err) *err = "bus not open";
+  RawFrame frame{};
+  frame.id = ext_id;
+  frame.dlc = 8;
+  frame.extended = true;
+  if (data) std::memcpy(frame.data, data, 8);
+  return send_frame(frame, err);
+}
+
+bool SocketCanBus::send_frame(const RawFrame& frame, std::string* err) {
+  auto fail = [&](const char* why) {
+    {
+      std::lock_guard<std::mutex> lk(stats_mtx_);
+      stats_.tx_failed++;
+    }
+    if (err) *err = why;
     return false;
-  }
+  };
+  if (fd_ < 0) return fail("bus not open");
+  if (frame.error) return fail("SocketCAN error frames cannot be transmitted");
+  if (frame.dlc > 8) return fail("CAN DLC exceeds 8 bytes");
+  if ((frame.extended && frame.id > CAN_EFF_MASK) ||
+      (!frame.extended && frame.id > CAN_SFF_MASK))
+    return fail("CAN arbitration ID out of range for frame type");
+
   struct can_frame f{};
-  f.can_id = (ext_id & 0x1FFFFFFFu) | CAN_EFF_FLAG;
-  f.can_dlc = 8;
-  std::memcpy(f.data, data, 8);
+  f.can_id = frame.id;
+  if (frame.extended) f.can_id |= CAN_EFF_FLAG;
+  if (frame.rtr) f.can_id |= CAN_RTR_FLAG;
+  f.can_dlc = frame.dlc;
+  if (!frame.rtr && frame.dlc) std::memcpy(f.data, frame.data, frame.dlc);
 
   for (int attempt = 0; attempt < 2; ++attempt) {
     const ssize_t n = ::send(fd_, &f, sizeof(f), 0);
@@ -266,9 +309,42 @@ BusStats SocketCanBus::stats() const {
   return stats_;
 }
 
-bool SocketCanBus::is_up() const { return up_state_; }
-CanIfState SocketCanBus::can_state() const { return can_state_; }
-uint32_t SocketCanBus::bitrate() const { return bitrate_state_; }
+bool SocketCanBus::is_up() const {
+  std::lock_guard<std::mutex> lk(health_mtx_);
+  return up_state_;
+}
+CanIfState SocketCanBus::can_state() const {
+  std::lock_guard<std::mutex> lk(health_mtx_);
+  return can_state_;
+}
+uint32_t SocketCanBus::bitrate() const {
+  std::lock_guard<std::mutex> lk(health_mtx_);
+  return bitrate_state_;
+}
+
+bool SocketCanBus::refresh_health(std::string* err) {
+  CanIfInfo info{};
+  std::string query_err;
+  const bool queried = netlink_query_can(opts_.iface, info, query_err);
+  {
+    std::lock_guard<std::mutex> lk(health_mtx_);
+    up_state_ = queried && info.exists && info.is_can && info.up;
+    can_state_ = queried && info.exists && info.is_can ? info.state
+                                                       : CanIfState::Unknown;
+    bitrate_state_ = queried && info.exists && info.is_can ? info.bitrate : 0;
+  }
+  if (!queried || !info.exists || !info.is_can || !info.up) {
+    if (err) {
+      if (!query_err.empty()) *err = query_err;
+      else if (!info.exists) *err = "CAN interface is unavailable";
+      else if (!info.is_can) *err = "interface is not a CAN interface";
+      else *err = "CAN interface is down";
+    }
+    return false;
+  }
+  if (err) err->clear();
+  return true;
+}
 
 // --- CanTransport interface -------------------------------------------------
 bool SocketCanBus::start(std::string& err) {

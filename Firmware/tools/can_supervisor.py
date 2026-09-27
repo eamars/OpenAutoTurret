@@ -27,7 +27,7 @@ Failure classification (the 2026-09-02 P6 incident):
   If can0 cannot hold ERROR-ACTIVE on an idle bus after L2 and L3 (fresh
   driver re-probe), the controller cannot be software-recovered — classify as
   a hardware/controller fault (e.g. MCP2515 CAN engine dead; see
-  docs/can_hardware_fault_report.md) and require operator action (power-cycle
+  docs/archive/superseded/hardware/can_hardware_fault_report.md) and require operator action (power-cycle
   the drives, replace/repair the HAT). Do NOT reboot-loop.
 
 Python 3 stdlib only (no third-party deps -> no venv required).
@@ -493,7 +493,7 @@ class Supervisor:
                     "consistent with an external CAN fault: no other node "
                     "responding (drives powered off / fault-latched) and/or "
                     "an external receive-error source on CANH/CANL. Root "
-                    "cause unresolved (see docs/can_hardware_fault_report.md "
+                    "cause unresolved (see docs/archive/superseded/hardware/can_hardware_fault_report.md "
                     "v2; run the physical isolation ladder). Operator action: "
                     "run Test A (HAT disconnected, 5 min), then power-cycle "
                     "the drives.")
@@ -502,7 +502,7 @@ class Supervisor:
                     "can0 cannot hold ERROR-ACTIVE even after driver re-probe; "
                     "not software-recoverable. Likely external CAN fault "
                     "(receive-error source on the wire or HAT RX path; root "
-                    "cause unresolved — see docs/can_hardware_fault_report.md "
+                    "cause unresolved — see docs/archive/superseded/hardware/can_hardware_fault_report.md "
                     "v2, isolation ladder). Operator action: Test A (HAT "
                     "disconnected), then power-cycle the drives.")
         else:

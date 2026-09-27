@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "N1 最小离线 trace-event（完整站台 trace 需扩展）",
+  "type": "object",
+  "properties": {
+    "station_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "boot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "camera_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "frame_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "ota.n1.draft.trace-event/1"
+    },
+    "fixture_only": {
+      "type": "boolean"
+    },
+    "clock_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "camera_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "clock_id": {
+      "const": "CLOCK_MONOTONIC"
+    },
+    "event": {
+      "enum": [
+        "observation_reference",
+        "capture_received",
+        "inference_start",
+        "inference_end",
+        "publish",
+        "controller_receive"
+      ]
+    },
+    "t_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "time_quality": {
+      "enum": [
+        "verified",
+        "modelled",
+        "unknown"
+      ]
+    }
+  },
+  "required": [
+    "station_session_id",
+    "boot_id",
+    "camera_id",
+    "frame_id",
+    "schema_version",
+    "fixture_only",
+    "clock_epoch",
+    "camera_generation",
+    "clock_id",
+    "event",
+    "t_ns"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "observation_reference"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "time_quality"
+        ]
+      }
+    }
+  ]
+}

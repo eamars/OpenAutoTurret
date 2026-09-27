@@ -42,7 +42,7 @@ WorkingDirectory=/opt/open_auto_turret
 # --detector chooses what produces detections (10.1):
 #   none   -> stream frames only; measurements stay valid=false and controld
 #             never tracks. SAFE default for today: this platform has no
-#             RPK/Hailo AI stack (docs/research_vision_readiness_p7.md).
+#             RPK/Hailo AI stack (docs/archive/superseded/vision/research_vision_readiness_p7.md).
 #   simple -> classical bridge detector for P8 bring-up only (largest moving
 #             blob, no target CLASS; see vision/simple_detector.py).
 #   rpk    -> the production IMX500 AI path once the stack exists (also pass

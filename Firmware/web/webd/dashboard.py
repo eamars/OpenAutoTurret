@@ -11,7 +11,10 @@ authority of its own. The video preview (§42.3) is a real IMX500 MJPEG feed on 
 separate low-priority path (its own HTTP stream, never the control IPC); the on/off switch
 opens/releases the camera, so the feed costs no CPU while off.
 """
+
 from __future__ import annotations
+
+from .direction_contract import DIRECTION_JS
 
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -276,7 +279,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <script>
 const $ = (id) => document.getElementById(id);
 const rad = (x) => (isFinite(x) ? (x * 57.29577951308232).toFixed(2) + "°" : "—");
-const num = (x, d=4) => (isFinite(x) ? Number(x).toFixed(d) : "—");
+const num = (x, d=4) => (x !== null && x !== undefined && isFinite(x) ? Number(x).toFixed(d) : "—");
 
 function badge(el, text, kind) {
   el.textContent = text;
@@ -468,7 +471,7 @@ function render(t) {
   $("roam").textContent = !roaming
     ? "not in AUTO_ROAM"
     : (t.roam_pattern || "unknown pattern") +
-      " " + (Number(t.roam_sweep_direction) < 0 ? "\u2190" : "\u2192") +
+      " " + otaAxisArrow("yaw", Number(t.roam_sweep_direction)) +
       "  waypoint " + rad(t.roam_target_yaw_rad) +
       "  " + Math.round((Number(t.roam_progress) || 0) * 100) + "% of region";
 
@@ -1081,6 +1084,7 @@ refreshVideoState();
 </body>
 </html>
 """
+DASHBOARD_HTML = DASHBOARD_HTML.replace("<script>\n", "<script>\n" + DIRECTION_JS + "\n", 1)
 
 
 def dashboard_html(title: str = "OpenAutoTurret") -> str:

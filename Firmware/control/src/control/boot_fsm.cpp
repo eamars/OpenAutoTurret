@@ -1,5 +1,8 @@
 // BootFsm — see boot_fsm.hpp.
 #include "control/boot_fsm.hpp"
+#include "common/time.hpp"
+
+#include <cmath>
 
 namespace ota {
 
@@ -40,6 +43,13 @@ BootState BootFsm::step() {
     }
 
     case BootState::DiscoverYaw: {
+      if (backend_.yaw_feedback_registerless()) {
+        // GM6020 has no CyberGear discovery/UID transaction. Keep the ID empty
+        // instead of manufacturing a device identity for retained calibration.
+        unique_ids_[static_cast<size_t>(AxisId::Yaw)] = 0;
+        state_ = BootState::SelfTestPitch;
+        break;
+      }
       std::string err;
       if (!backend_.discover(AxisId::Yaw, unique_ids_[1], err)) {
         fail("discovery failed (yaw): " + err);
@@ -62,6 +72,23 @@ BootState BootFsm::step() {
     }
 
     case BootState::SelfTestYaw: {
+      if (backend_.supports_continuous_yaw() || backend_.yaw_feedback_registerless()) {
+        const TimeNs now = now_monotonic_ns();
+        const AxisSnapshot feedback = backend_.snapshot(AxisId::Yaw, now);
+        const TimeNs max_age = static_cast<TimeNs>(cfg_.feedback_max_age_ms) * 1000000LL;
+        if (feedback.faults_known && feedback.faults != 0) {
+          fail("motor self-test failed (yaw): backend reports a motor fault");
+          break;
+        }
+        if (!feedback.has_feedback || feedback.rx_ns <= 0 || feedback.rx_ns > now ||
+            max_age <= 0 || now - feedback.rx_ns > max_age ||
+            !std::isfinite(feedback.q_rad) || !std::isfinite(feedback.v_rad_s)) {
+          fail("motor self-test failed (yaw): no fresh finite session-relative feedback");
+          break;
+        }
+        state_ = BootState::Unhomed;
+        break;
+      }
       double v = 0;
       std::string err;
       if (!backend_.read_register(AxisId::Yaw, cfg_.self_test_register, v,

@@ -1,6 +1,6 @@
 """The v3.2 Apache-HUD operator page.
 
-`docs/open_auto_turret_v3_2_apache_hud_ui_revision.md` governs presentation and overrides the v3
+`docs/archive/implemented/design/open_auto_turret_v3_2_apache_hud_ui_revision.md` governs presentation and overrides the v3
 dashboard, whose engineering cards are the exact "header plus cards" layout §3 forbids. The
 engineering numbers are not lost: the old page stays reachable at `/dashboard` until the DIAG
 drawer replaces it, and `/api/*` is untouched, so nothing downstream changes.
@@ -20,12 +20,14 @@ The requested measurement point is a white diamond. No bore range is measured he
 """
 from __future__ import annotations
 
+from .direction_contract import DIRECTION_JS
+
 # ---------------------------------------------------------------------------
 # Pure geometry, kept in one string so a test can execute THESE BYTES under node
 # and compare them against an independent Python computation. The page and the
 # test cannot drift apart, because the test does not reimplement this.
 # ---------------------------------------------------------------------------
-HUD_GEOMETRY_JS = r"""
+HUD_GEOMETRY_JS = DIRECTION_JS + r"""
 // Contain-fit layout of a natural-size image inside a viewport: scale down to fit,
 // centre the remainder. Returns the scale and the top-left corner of the image
 // inside the viewport, in CSS pixels.
@@ -262,10 +264,10 @@ function hudDrawerActions(name, t) {
     const gate = inManual ? "act" : "gated";
     const note = inManual ? "" : "MANUAL MODE ONLY";
     const rows = [
-      { label: "STEP YAW +1", command: "manual_step", arg: "yaw+1", kind: gate, note: note },
-      { label: "STEP YAW -1", command: "manual_step", arg: "yaw-1", kind: gate, note: note },
-      { label: "STEP PITCH +1", command: "manual_step", arg: "pitch+1", kind: gate, note: note },
-      { label: "STEP PITCH -1", command: "manual_step", arg: "pitch-1", kind: gate, note: note }
+      { label: "STEP YAW +1 " + otaAxisArrow("yaw", 1), command: "manual_step", arg: "yaw+1", kind: gate, note: note },
+      { label: "STEP YAW -1 " + otaAxisArrow("yaw", -1), command: "manual_step", arg: "yaw-1", kind: gate, note: note },
+      { label: "STEP PITCH +1 " + otaAxisArrow("pitch", 1), command: "manual_step", arg: "pitch+1", kind: gate, note: note },
+      { label: "STEP PITCH -1 " + otaAxisArrow("pitch", -1), command: "manual_step", arg: "pitch-1", kind: gate, note: note }
     ];
     rows.push({ label: "STOP MOTION", command: "hold", arg: "", kind: "stop",
                 note: inManual ? "" : "ALWAYS AVAILABLE" });
@@ -464,10 +466,13 @@ function hudForInset(o) {
   const k = Math.min(plot.w / spanY, plot.h / spanP);          // the one shared scale
   const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
   const midY = (minY + maxY) / 2, midP = (minP + maxP) / 2;
-  // This is joint travel: positive pitch on the station tilts the camera down.
-  // The stopped +5 degree probe moved background features upward by 135 px.
-  // Do not treat the encoder value as positive-up world elevation.
-  const toPx = (yawDeg, pitchDeg) => [cx + (yawDeg - midY) * k, cy + (pitchDeg - midP) * k];
+  // The inset is spatial: left/right/up/down match the camera aim and D-pad.
+  // Numeric labels remain joint degrees. Both conversions use the same measured
+  // signs as the D-pad and travel tapes.
+  const toPx = (yawDeg, pitchDeg) => [
+    cx + (yawDeg - midY) * k * otaJointScreenSign.yaw,
+    cy + (pitchDeg - midP) * k * otaJointScreenSign.pitch
+  ];
 
   const clampMark = (pt) => {
     // Off-map is information, not an error: a target the axis cannot reach is exactly what an
@@ -583,9 +588,12 @@ function hudTravelTape(o) {
 
   const span = o.maxDeg - o.minDeg;
   const steps = hudTickSteps(span, o.length);
-  const at = (deg) => o.horizontal
-    ? o.x + ((deg - o.minDeg) / span) * o.length          // left = min
-    : o.y + ((o.maxDeg - deg) / span) * o.length;         // top = max, so up is up (§6.2)
+  const screenSign = o.horizontal ? otaJointScreenSign.yaw : otaJointScreenSign.pitch;
+  const at = (deg) => {
+    const fraction = screenSign > 0
+      ? (deg - o.minDeg) / span : (o.maxDeg - deg) / span;
+    return (o.horizontal ? o.x : o.y) + fraction * o.length;
+  };
 
   const ticks = [];
   const firstIdx = Math.ceil(o.minDeg / steps.fine - 1e-9);
@@ -597,8 +605,8 @@ function hudTravelTape(o) {
                  label: coarse ? hudDegLabel(deg, false) : "" });
   }
   // Endpoints are always present and always labelled (§5.2), whether or not they fall on a step.
-  [{ deg: o.minDeg, pos: o.horizontal ? o.x : o.y + o.length },
-   { deg: o.maxDeg, pos: o.horizontal ? o.x + o.length : o.y }].forEach((e) => {
+  [{ deg: o.minDeg, pos: at(o.minDeg) },
+   { deg: o.maxDeg, pos: at(o.maxDeg) }].forEach((e) => {
     const dupe = ticks.some((t) => Math.abs(t.deg - e.deg) < 1e-6);
     if (dupe) { ticks.filter((t) => Math.abs(t.deg - e.deg) < 1e-6).forEach((t) => {
       t.endpoint = true; t.coarse = true; t.label = hudDegLabel(e.deg, true); }); }
@@ -1322,6 +1330,9 @@ function renderManualPad(t) {
   if (drawerOpen === "MANUAL" && pad.hidden) { drawerOpen = null; renderDrawer(); }
 }
 const manualPad = $("manual-pad");
+manualPad.querySelectorAll("button[data-direction]").forEach(b => {
+  b.dataset.jog = otaJogForArrow(b.dataset.direction);
+});
 manualPad.addEventListener("pointerdown", (e) => {
   const b = e.target.closest("button[data-jog]");
   if (!b || b.disabled || !padReady(lastTelemetry) || jogActive || (e.pointerType === "mouse" && e.button !== 0)) return;
@@ -1582,10 +1593,10 @@ HUD_HTML = """<!DOCTYPE html>
     <button id="auto-mode" type="button">Auto</button>
   </div>
   <div id="manual-pad" hidden role="group" aria-label="Manual direction pad">
-    <span class="pad-label">HOLD TO MOVE</span>
-    <span></span><button data-jog="pitch-" aria-label="Pitch up">↑</button><span></span>
-    <button data-jog="yaw-" aria-label="Yaw left">←</button><button id="pad-hold" aria-label="Hold position">HOLD</button><button data-jog="yaw+" aria-label="Yaw right">→</button>
-    <span></span><button data-jog="pitch+" aria-label="Pitch down">↓</button><span></span>
+    <span class="pad-label">HOLD TO AIM</span>
+    <span></span><button data-direction="up" aria-label="Aim camera up">↑</button><span></span>
+    <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-hold" aria-label="Hold position">HOLD</button><button data-direction="right" aria-label="Aim camera right">→</button>
+    <span></span><button data-direction="down" aria-label="Aim camera down">↓</button><span></span>
   </div>
   <!-- §22 safety indication. Outside the health chips, because BRAKING and FAULT are asked to be more
        prominent than a chip and a fault to interrupt normal operation. -->

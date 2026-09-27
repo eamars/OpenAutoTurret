@@ -2,9 +2,11 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <spdlog/spdlog.h>
 
 #include "can/socketcan_bus.hpp"
+#include "can/pitch_current_policy.hpp"
 #include "can/yousee_transport.hpp"
 
 namespace ota::can {
@@ -13,12 +15,32 @@ namespace {
 // Discovery responses carry the motor ID in data2 and 0xFE in the target
 // byte (CyberGear_AI_Reference.md §13).
 constexpr uint8_t kDiscoveryResponseTarget = 0xFE;
+
+uint16_t read_le16(const uint8_t* p) {
+  return static_cast<uint16_t>(p[0]) |
+         (static_cast<uint16_t>(p[1]) << 8);
+}
+
+float read_le_float(const uint8_t* p) {
+  const uint32_t bits = static_cast<uint32_t>(p[0]) |
+                        (static_cast<uint32_t>(p[1]) << 8) |
+                        (static_cast<uint32_t>(p[2]) << 16) |
+                        (static_cast<uint32_t>(p[3]) << 24);
+  float value = 0;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
 }  // namespace
 
 bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err,
                            std::unique_ptr<CanTransport> transport) {
   close();
   cfg_ = cfg;
+  {
+    std::lock_guard lock(command_mutex_);
+    pitch_current_limit_verified_ = false;
+    pitch_run_mode_verified_ = false;
+  }
 
   // PHY factory: everything below this point is transport-agnostic.
   if (transport) {
@@ -60,9 +82,15 @@ void CyberGearSystem::close() {
     bus_->stop();
     bus_.reset();
   }
+  {
+    std::lock_guard lock(command_mutex_);
+    pitch_current_limit_verified_ = false;
+    pitch_run_mode_verified_ = false;
+  }
 }
 
 void CyberGearSystem::on_frame(const RawFrame& f) {
+  if (!f.extended || f.rtr || f.error || f.dlc != 8) return;
   cybergear::CanFrame cf;
   cf.id = f.id;
   cf.dlc = f.dlc;
@@ -278,7 +306,8 @@ bool CyberGearSystem::read_parameter_raw(AxisId axis, uint16_t address,
 
 bool CyberGearSystem::send(uint32_t ext_id, const uint8_t data[8], std::string* err) {
   std::lock_guard lock(command_mutex_);
-  const auto comm = cybergear::unpack_ext_id(ext_id).comm_type;
+  const auto decoded = cybergear::unpack_ext_id(ext_id);
+  const auto comm = decoded.comm_type;
   // Type 4 is STOP; type 0 discovery and type 17 reads remain available.
   // The latch and TX share this gate so a delayed enable cannot follow a trip.
   if (motion_inhibited_.load() && comm != 4 && comm != 0 && comm != 17) {
@@ -289,7 +318,92 @@ bool CyberGearSystem::send(uint32_t ext_id, const uint8_t data[8], std::string* 
     if (err) *err = "can transport closed";
     return false;
   }
+
+  // The pitch drive has an installation-specific 5 A ceiling. Enforce it at
+  // the last public TX boundary as well as in CanMotorBackend: diagnostics or
+  // a future caller must not bypass the cap with MIT torque or IqRef writes.
+  if (decoded.target == cfg_.pitch_motor_id) {
+    const auto reject = [&](const char* why) {
+      if (err) *err = why;
+      return false;
+    };
+    switch (static_cast<cybergear::CommType>(comm)) {
+      case cybergear::CommType::Discovery:
+      case cybergear::CommType::ReadReg:
+        break;  // read-only setup/diagnostic traffic
+      case cybergear::CommType::Stop:
+        // A stop terminates the verified run-mode session. A fresh, supported
+        // mode setup must be read back before the next enable.
+        pitch_run_mode_verified_ = false;
+        break;
+      case cybergear::CommType::Enable:
+        if (!pitch_current_limit_verified_ || !pitch_run_mode_verified_)
+          return reject("pitch enable rejected: 5 A limit and supported mode must be read back first");
+        break;
+      case cybergear::CommType::Mit:
+        return reject("pitch MIT commands are unsupported; use the verified speed/position modes");
+      case cybergear::CommType::WriteReg: {
+        if (!data) return reject("pitch register write has no payload");
+        const uint16_t address = read_le16(data);
+        if (address == static_cast<uint16_t>(cybergear::Reg::IqRef))
+          return reject("pitch IqRef writes are unsupported by the 5 A current-limit policy");
+        if (address == static_cast<uint16_t>(cybergear::Reg::LimitCur)) {
+          const double requested = read_le_float(data + 4);
+          if (!valid_pitch_current_limit(requested))
+            return reject("pitch LimitCur must be finite and in (0, 5 A]");
+          break;  // A valid limit write cannot raise a previously safe value.
+        }
+        if (address == static_cast<uint16_t>(cybergear::Reg::RunMode)) {
+          if (data[2] != 0 || data[3] != 0 || data[5] != 0 || data[6] != 0 || data[7] != 0 ||
+              (data[4] != 1 && data[4] != 2))
+            return reject("pitch supports only verified position or speed RunMode writes");
+          pitch_run_mode_verified_ = false;
+          break;
+        }
+        if (!pitch_current_limit_verified_ || !pitch_run_mode_verified_)
+          return reject("pitch motion/configuration write rejected before safe mode verification");
+        if (address != static_cast<uint16_t>(cybergear::Reg::LocRef) &&
+            address != static_cast<uint16_t>(cybergear::Reg::SpdRef) &&
+            address != static_cast<uint16_t>(cybergear::Reg::LimitSpd) &&
+            address != static_cast<uint16_t>(cybergear::Reg::SpdKp) &&
+            address != static_cast<uint16_t>(cybergear::Reg::SpdKi))
+          return reject("unsupported raw pitch register write");
+        break;
+      }
+      default:
+        return reject("unsupported raw pitch command");
+    }
+  }
   return bus_->send(ext_id, data, err);
+}
+
+bool CyberGearSystem::confirm_pitch_limit(double current_limit_a) {
+  std::lock_guard lock(command_mutex_);
+  if (!valid_pitch_current_limit(current_limit_a)) {
+    pitch_current_limit_verified_ = false;
+    pitch_run_mode_verified_ = false;
+    return false;
+  }
+  pitch_current_limit_verified_ = true;
+  return true;
+}
+
+bool CyberGearSystem::confirm_pitch_setup(double current_limit_a, int run_mode) {
+  std::lock_guard lock(command_mutex_);
+  if (!valid_pitch_current_limit(current_limit_a) ||
+      (run_mode != 1 && run_mode != 2)) {
+    pitch_current_limit_verified_ = false;
+    pitch_run_mode_verified_ = false;
+    return false;
+  }
+  pitch_current_limit_verified_ = true;
+  pitch_run_mode_verified_ = true;
+  return true;
+}
+
+bool CyberGearSystem::pitch_setup_verified() {
+  std::lock_guard lock(command_mutex_);
+  return pitch_current_limit_verified_ && pitch_run_mode_verified_;
 }
 
 bool CyberGearSystem::send_enable(AxisId axis, std::string* err) {

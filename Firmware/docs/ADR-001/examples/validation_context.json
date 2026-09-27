@@ -1,0 +1,31 @@
+{
+  "fixture_only": true,
+  "hardware_authorization": false,
+  "station_session_id": "SYNTHETIC-session-001",
+  "boot_id": "SYNTHETIC-boot-001",
+  "clock_id": "CLOCK_MONOTONIC",
+  "clock_epoch": 0,
+  "now_ns": "1050000000",
+  "max_observation_age_ns": "150000000",
+  "max_timestamp_uncertainty_ns": "5000000",
+  "cameras": {
+    "SYNTHETIC-wide": {
+      "camera_generation": 1,
+      "model_id": "SYNTHETIC-person-model",
+      "calibration_id": "SYNTHETIC-calibration-NOT-FOR-HARDWARE",
+      "sensor_mode_id": "SYNTHETIC-mode-640x480",
+      "transform_chain_id": "SYNTHETIC-transform-001",
+      "motion_qualified": true,
+      "last_frame_sequence": "42"
+    }
+  },
+  "allowed_camera_ids": [
+    "SYNTHETIC-wide"
+  ],
+  "selection": {
+    "target_session_id": "SYNTHETIC-target-session-1",
+    "selection_generation": 3,
+    "policy": "EXPLICIT_TRACK",
+    "global_track_id": "SYNTHETIC-person-A"
+  }
+}

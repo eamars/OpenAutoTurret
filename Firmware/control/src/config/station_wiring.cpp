@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "calibration/homing_plan.hpp"
+#include "can/pitch_current_policy.hpp"
 #include "config/turret_config.hpp"
 #include "control/control_loop.hpp"
 
@@ -43,6 +44,11 @@ HomingAction parse_action(const config::HomingPlanActionConfig& c,
 }
 
 HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
+  if (cfg.axes[0].limit_cur_a != 0.0 &&
+      !can::valid_pitch_current_limit(cfg.axes[0].limit_cur_a)) {
+    err = "axes.pitch.limit_cur_a must be finite and in (0, 5 A]";
+    return HomingPlan({}, HomingPlanConfig{});
+  }
   HomingParams hp;  // start from the safe defaults...
   hp.motion_checks_abort = cfg.homing.motion_checks_abort;
   const config::ContactConfig& cc = cfg.homing.contact;  // ...override from YAML
@@ -89,8 +95,16 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
   for (int i = 0; i < kAxisCount; ++i) {
     hpc.travel_bands[i].min_deg = cfg.axes[i].expected_travel_deg.min;
     hpc.travel_bands[i].max_deg = cfg.axes[i].expected_travel_deg.max;
-    hpc.limit_cur_initial_a[i] = cfg.axes[i].limit_cur_a;
+    hpc.limit_cur_initial_a[i] =
+        (i == 0 && cfg.axes[i].limit_cur_a == 0.0)
+            ? can::kPitchCurrentCeilingA
+            : cfg.axes[i].limit_cur_a;
   }
+  // The adaptive homing parameters are shared for both axes, but the installed
+  // pitch current policy is axis-specific. Keep yaw's configured ceiling
+  // intact while preventing the plan from requesting above 5 A for pitch.
+  hpc.limit_cur_max_a[static_cast<size_t>(AxisId::Pitch)] =
+      std::min(hp.limit_cur_max_a, can::kPitchCurrentCeilingA);
 
   std::vector<HomingAction> actions;
   for (const auto& c : cfg.homing_plan.actions) {
@@ -189,10 +203,10 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   // overshoot point, the 0-limit hold could not pull the axis back).
   c.park.verify_speed_deg_s = cfg.shutdown.verify_speed_deg_s;
   // Park moves run in speed mode: reuse the per-axis homing current limits
-  // (pitch 5 A / yaw 3 A — under the 10 A safe cap) as the drive LimitCur for
+  // (pitch is capped at 5 A) as the drive LimitCur for
   // the park moves.
   c.park.limit_cur_a[0] = cfg.axes[0].limit_cur_a > 0.0 ? cfg.axes[0].limit_cur_a
-                                                        : c.park.limit_cur_a[0];
+                                                        : can::kPitchCurrentCeilingA;
   c.park.limit_cur_a[1] = cfg.axes[1].limit_cur_a > 0.0 ? cfg.axes[1].limit_cur_a
                                                         : c.park.limit_cur_a[1];
   // Phase 9: payload verification (§27, §31.3).

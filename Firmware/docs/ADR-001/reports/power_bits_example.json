@@ -1,0 +1,17 @@
+{
+  "raw_hex": "0x50005",
+  "current": {
+    "undervoltage": true,
+    "frequency_capped": false,
+    "throttled": true,
+    "soft_temperature_limit": false
+  },
+  "history": {
+    "undervoltage": true,
+    "frequency_capped": false,
+    "throttled": true,
+    "soft_temperature_limit": false
+  },
+  "unknown_bits_hex": "0x0",
+  "state": "current_fault"
+}

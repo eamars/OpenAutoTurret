@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "N1 最小离线停止证据；并非断电证明",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "ota.n1.draft.stop-evidence/1"
+    },
+    "fixture_only": {
+      "type": "boolean"
+    },
+    "stop_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "yaw": {
+      "type": "object",
+      "properties": {
+        "feedback_age_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "stationary_observed": {
+          "type": "boolean"
+        },
+        "zero_requested": {
+          "type": "boolean"
+        },
+        "disable_confirmed": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "feedback_age_ms",
+        "stationary_observed",
+        "zero_requested",
+        "disable_confirmed"
+      ],
+      "additionalProperties": false
+    },
+    "pitch": {
+      "type": "object",
+      "properties": {
+        "feedback_age_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "stationary_observed": {
+          "type": "boolean"
+        },
+        "disable_requested": {
+          "type": "boolean"
+        },
+        "disable_confirmed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "feedback_age_ms",
+        "stationary_observed",
+        "disable_requested",
+        "disable_confirmed"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "fixture_only",
+    "stop_id",
+    "yaw",
+    "pitch"
+  ],
+  "additionalProperties": false
+}

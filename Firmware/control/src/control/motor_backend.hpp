@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "can/cybergear_protocol.hpp"  // cybergear::Reg
 #include "common/types.hpp"
@@ -32,8 +33,13 @@ struct AxisSnapshot {
   double v_rad_s = 0.0;
   double torque_nm = 0.0;
   double temp_c = 25.0;
+  bool temperature_known = true;  // false when the protocol has no established °C scale
+  bool temperature_raw_valid = false;
+  uint8_t temperature_raw = 0;    // opaque wire value; never interpret as °C by itself
   uint16_t faults = 0;     // non-zero = hard fault
-  bool disabled = false;  // confirmed by feedback, not by a sent STOP command
+  bool faults_known = true;       // false when the feedback protocol has no fault field
+  bool disabled = false;          // confirmed by feedback, not by a sent STOP command
+  bool disabled_known = true;     // false when the protocol cannot confirm disable state
   bool in_position_mode = false;  // energized in position mode right now
   bool in_speed_mode = false;     // energized in speed (velocity) mode right now
 };
@@ -73,6 +79,13 @@ class MotorBackend {
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
   virtual bool recovery_before_homing() const { return false; }
+  // Topology/protocol capabilities. Legacy CyberGear and simulation retain
+  // the original finite-yaw, register-backed, feedback-confirmed defaults.
+  // A mixed backend can opt into continuous yaw and session-relative yaw
+  // feedback without inventing a CyberGear UID or register response.
+  virtual bool supports_continuous_yaw() const { return false; }
+  virtual bool yaw_feedback_registerless() const { return false; }
+  virtual bool requires_disable_confirmation(AxisId) const { return true; }
   virtual bool begin_motor_recovery(std::string& err) {
     err = "motor recovery unsupported by this backend"; return false;
   }
@@ -136,6 +149,9 @@ class MotorBackend {
   // report time, never to decide anything. Backends without a CAN link (the
   // simulated plant) keep the default, which says "nothing to report".
   virtual CanHealth can_health() const { return {}; }
+  // A mixed topology may have independent CAN links. Existing single-bus
+  // backends keep their legacy health result through this default adapter.
+  virtual std::vector<CanHealth> can_health_all() const { return {can_health()}; }
   // Set the drive current limit (A, 0..23) for this axis (LimitCur, 0x7018).
   // Fire-and-forget; safe from the control loop — the adaptive-current homing
   // raises it on each false-contact latch (§22).

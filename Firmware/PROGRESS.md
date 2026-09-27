@@ -1,6 +1,13 @@
 
 ---
 
+> **26 September 2026:** GM6020 continuous yaw, CyberGear pitch on separate CAN,
+> two cameras, Hailo and an I2C BNO085 are now installed. See
+> [current inventory](docs/archive/partially-implemented/hardware/HARDWARE_CURRENT.md), [hardware plan](docs/archive/partially-implemented/hardware/HARDWARE_ADAPTATION_PLAN.md)
+> and [AI plan](docs/archive/partially-implemented/vision/AI_HAT_PERCEPTION_PLAN.md). Typed CAN and bounded yaw probes
+> now run on the Pi; see [commissioning results](docs/archive/partially-implemented/commissioning/HARDWARE_COMMISSIONING_2026_09_26.md).
+> Automatic operation remains gated. Historical status below does not certify the new hardware.
+
 ## 2026-09-04, 00:20 — a ghost on the candidate list was selectable, and now it is not
 
 Chasing one of the tracking items on the station turned up something better than the item.
@@ -1883,7 +1890,7 @@ is that its limit is now stated. **§110: 0 items accepted on hardware by a name
 
 ## 2026-09-04, 21:5x — round 30: an operator sign-off package, and a count I had been reporting wrongly for months
 
-`docs/acceptance_signoff_v3_2_visual.md`: every §24 item with what implements it, what automated evidence
+`docs/archive/partially-implemented/acceptance/acceptance_signoff_v3_2_visual.md`: every §24 item with what implements it, what automated evidence
 exists, and — where none does — the word **`No evidence`** rather than a shrug. Signed by nobody, and signed off
 as untrustworthy on its own face: *"Prepared by the agent that wrote the code… That is a reason to distrust
 every line above."*
@@ -2887,7 +2894,7 @@ Nothing signed.
 
 ## 2026-09-05, 18:3x — round 67: a single entry point for whoever returns, with its own citations checked before it shipped
 
-`docs/operator_status_v3_2_2026-09-05_r67.md`: per-criterion status with the number and the file it came from, the
+`docs/archive/superseded/status/operator_status_v3_2_2026-09-05_r67.md`: per-criterion status with the number and the file it came from, the
 ceiling explanation and the three options, the two criteria awaiting a **definition** rather than hardware, the
 physically-blocked geometry work, and the machine's state.
 
@@ -2909,7 +2916,7 @@ No measurement, no code change, nothing signed. Suites stand at **484 pytest / 5
 ## 2026-09-05, 19:0x — round 68: the two counts the briefing depends on are measured, not remembered
 
 Round 67 flagged that it could not re-derive the §110 count. Today it was derived: **§24 holds 16 checklist items**
-and **§110 holds 30 items**, both by parsing the specs, and `docs/operator_status_v3_2_2026-09-05_r67.md` now states
+and **§110 holds 30 items**, both by parsing the specs, and `docs/archive/superseded/status/operator_status_v3_2_2026-09-05_r67.md` now states
 the counted values with their provenance. Round 30's memory of "30" happens to be right — which is beside the point:
 the number in the operator's document now comes from the file it describes rather than from my recollection of
 reading it 38 rounds ago.
@@ -3026,7 +3033,7 @@ different things in the two contexts and should be quoted with which one it came
 Thirty rounds of "OPEN — needs a surveyed distant reference or a board" rested on an unexamined assumption: that
 commissioning the geometry means the ChArUco route in `tools/calibrate_camera_intrinsics.py`, which does need someone
 to move a board. But fx/fy were already measured on the live camera by `probe_theodolite.py`, and **the same rig can
-measure cx** — `docs/principal_point_method_2026-09-05_r72.md`.
+measure cx** — `docs/archive/partially-implemented/calibration/principal_point_method_2026-09-05_r72.md`.
 
 The argument, with its numbers computed before being written down: `u = cx + fx·tan ψ` gives
 `du/dψ = fx + (u − cx)²/fx`, so the angular scale is a parabola in u whose vertex *is* the principal point. On this
@@ -3123,7 +3130,7 @@ pinhole produces — a confident number from a band without usable texture, and 
 tool gave me a value" is not evidence that the value means anything; it is reported as unusable rather than quietly
 dropped.
 
-Both documents carry the retraction where a reader will meet it (`docs/principal_point_method_2026-09-05_r72.md`, and
+Both documents carry the retraction where a reader will meet it (`docs/archive/partially-implemented/calibration/principal_point_method_2026-09-05_r72.md`, and
 the briefing's §4 bullet). Station restored: `MANUAL / HOLD`, `ready`, homed, yaw ≈149°, synthetic source running
 (2385 track sets after the restart). Docs and measurement only; **487 pytest / 57 CTest** stand; nothing signed.
 
@@ -3289,7 +3296,7 @@ which is where it belongs. Nothing signed.
 
 ## 2026-09-06, 00:4x — round 79: the safety findings of rounds 73–78 are now in the document that gets read
 
-`docs/operator_status_v3_2_2026-09-05_r67.md` gained **§6, explicitly marked as postdating everything above it**, so a
+`docs/archive/superseded/status/operator_status_v3_2_2026-09-05_r67.md` gained **§6, explicitly marked as postdating everything above it**, so a
 reader meets it rather than tripping over it: the unattributed uncommanded motion in a long-running `MANUAL/HOLD`
 (±6°, target cleared, source stopped, axis inside limits, **not reproduced on a freshly homed station**, which is quiet
 at 0.11° over 30 s); the **98 `BRAKE_in_hold`** authority cuts in one session and why that is not log spam (§80 stores
@@ -4493,7 +4500,7 @@ is off now; turning it back on will starve `visiond` again with that same unhelp
 ## 2026-09-06, 18:0x — session review: what is actually shipped, what is only implemented, and what I got wrong
 
 Written as a hand-off, because the value of this file is not the count of commits but knowing which statements can be
-trusted without re-checking. New document: **`docs/STATION_RUNBOOK.md`** — one-off deployment procedure, verified
+trusted without re-checking. New document: **`docs/archive/superseded/operations/STATION_RUNBOOK.md`** — one-off deployment procedure, verified
 commands, and the trap list. If you read one thing, read its §1 and §7.
 
 ### Shipped, tested, and green

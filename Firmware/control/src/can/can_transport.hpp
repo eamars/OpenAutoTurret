@@ -15,7 +15,8 @@
 // can be swapped at will without touching control code.
 //
 // Contract (identical for every implementation):
-//   * frames carry 29-bit extended ids WITHOUT any flag bits in .id;
+//   * .id contains the arbitration id without Linux CAN flag bits; frame type
+//     is carried separately. Legacy RawFrame constructions default to EFF.
 //   * the frame callback runs on an internal RX thread and must be fast;
 //   * send() is thread-safe and never blocks the caller for long;
 //   * stats() must count rx/tx/failures — supervision depends on it;
@@ -35,6 +36,9 @@ struct RawFrame {
   uint8_t dlc{8};
   uint8_t data[8]{};
   ota::TimeNs rx_ns{0};  // monotonic timestamp at receipt
+  bool extended{true};
+  bool rtr{false};
+  bool error{false};
 };
 
 struct BusStats {
@@ -59,6 +63,17 @@ class CanTransport {
 
   virtual bool send(uint32_t ext_id, const uint8_t data[8],
                     std::string* err = nullptr) = 0;
+
+  // Send a fully-described CAN frame. Transports that cannot represent a
+  // frame type must reject it rather than silently changing its arbitration.
+  virtual bool send_frame(const RawFrame& frame,
+                          std::string* err = nullptr) {
+    if (!frame.extended || frame.rtr || frame.error || frame.dlc != 8 || frame.id > 0x1fffffff) {
+      if (err) *err = "frame type unsupported by legacy CAN transport";
+      return false;
+    }
+    return send(frame.id, frame.data, err);
+  }
 
   virtual BusStats stats() const = 0;
   virtual bool is_up() const = 0;

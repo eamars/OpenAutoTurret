@@ -6,9 +6,9 @@
 //  - one RX thread reads raw frames and invokes a callback (the RX path is
 //    never blocked by control work);
 //  - TX is a plain non-blocking send from any thread (control thread);
-//  - RAW filters are installed so we only receive CyberGear traffic of
-//    interest plus CAN error frames for diagnostics (§8.2);
-//  - Frame.id is the 29-bit extended identifier WITHOUT CAN_EFF_FLAG.
+//  - RAW filters can select CyberGear traffic or be disabled for generic
+//    mixed-protocol use; CAN error subscription is configured independently;
+//  - RawFrame.id has no SocketCAN flag bits; frame type is explicit.
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -34,8 +34,10 @@ class SocketCanBus : public CanTransport {
     // If it is already UP, never reconfigure it (report a mismatch instead).
     bool bring_up_if_down = false;
     // Install the default CyberGear RAW filters (feedback/discovery/reg
-    // responses for any motor + error frames).
+    // responses for any motor). Set false to receive all normal CAN frames.
     bool install_filters = true;
+    // Subscribe to kernel CAN error frames through CAN_RAW_ERR_FILTER.
+    bool receive_error_frames = true;
   };
 
   SocketCanBus() = default;
@@ -65,9 +67,15 @@ class SocketCanBus : public CanTransport {
   // Non-blocking transmit. Returns false (and counts) on failure.
   bool send(uint32_t ext_id, const uint8_t data[8],
             std::string* err = nullptr) override;
+  bool send_frame(const RawFrame& frame,
+                  std::string* err = nullptr) override;
 
   BusStats stats() const override;
   bool is_up() const override;
+  // Refresh the cached interface status with netlink. This query can take up
+  // to the netlink helper's bounded timeout and must run on a diagnostic path,
+  // never the 200 Hz control path. Getters remain fast and non-blocking.
+  bool refresh_health(std::string* err = nullptr);
   uint32_t bitrate() const;  // 0 if unknown
   CanIfState can_state() const override;  // driver state (CAN_ERROR_ACTIVE etc.)
   const std::string& iface() const { return opts_.iface; }
@@ -87,6 +95,7 @@ class SocketCanBus : public CanTransport {
   mutable std::mutex stats_mtx_;
   BusStats stats_{};
 
+  mutable std::mutex health_mtx_;
   bool up_state_ = false;
   uint32_t bitrate_state_ = 0;
   CanIfState can_state_ = CanIfState::Unknown;

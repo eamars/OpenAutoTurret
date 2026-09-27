@@ -129,6 +129,9 @@ void HomingPlan::start_action() {
   if (cfg_.limit_cur_initial_a[i] > 0.0) {
     axis_homing.limit_cur_initial_a = cfg_.limit_cur_initial_a[i];
   }
+  if (cfg_.limit_cur_max_a[i] > 0.0) {
+    axis_homing.limit_cur_max_a = cfg_.limit_cur_max_a[i];
+  }
   switch (a.type) {
     case HomingActionType::HomeEndpoint: {
       const int dir = (a.endpoint == Endpoint::Lower) ? -1 : +1;

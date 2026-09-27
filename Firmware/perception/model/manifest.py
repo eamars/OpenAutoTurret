@@ -43,7 +43,7 @@ TASK_ALIASES: Dict[str, str] = {
     "classification": "classification",
 }
 SUPPORTED_TASKS = ("object_detection", "pose_estimation")
-POSTPROCESS_MODES = ("on_sensor", "host")
+POSTPROCESS_MODES = ("on_sensor", "on_device", "host")
 BBOX_ORDERS = ("xy", "yxyx", "cxcywh")
 
 

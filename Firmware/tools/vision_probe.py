@@ -5,7 +5,7 @@ Run with the sensor free (stop webd first). Does two things:
   stream : configure 1920x1080 preview, start/stop — proves the IMX500 path.
   survey : dump the detection-related API surface actually installed
            (detect_objects attr, postprocessors dir, dnf/hailo SDKs).
-Docs: docs/research_vision_readiness_p7.md
+Docs: docs/archive/superseded/vision/research_vision_readiness_p7.md
 """
 import sys, time
 

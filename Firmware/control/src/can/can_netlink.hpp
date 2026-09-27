@@ -30,7 +30,7 @@ struct CanIfInfo {
   bool up{false};          // IFF_UP
   CanIfState state{CanIfState::Unknown};
   uint32_t bitrate{0};     // 0 if the driver does not report one (e.g. vcan)
-  bool is_can{false};      // IFLA_INFO_KIND == "can"
+  bool is_can{false};      // ARPHRD_CAN and kind "can" or isolated Linux "vcan"
 };
 
 // Query one interface. `exists` stays false if the interface is not there.

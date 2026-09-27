@@ -34,7 +34,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-from .camera import CameraOwner, open_picamera2
+from .camera import CameraOwner, open_picamera2, open_picamera2_sensor
 from .config import VisionConfig
 from .errors import ConfigError, ConfigPlaceholderError, ModelRejected, PerceptionError
 from .events import EventLog
@@ -419,17 +419,35 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             # No camera on a mock profile: synthetic frames, so the daemon's own wiring can be
             # exercised on a machine with no sensor attached (§55.18's offline acceptance run).
             return _run_synthetic(args, pipeline, adapter, config, wire_publisher=wire_publisher)
-        requested_stream = ((int(config.camera.width), int(config.camera.height))
-                            if config.camera.width and config.camera.height else None)
-        imx500, picam2, info = open_picamera2(manifest.path, stream_size=requested_stream,
-                                            external_manifest=manifest, orientation=orientation)
-        # Sensor orientation also corrects the neural-network input. Both its
-        # boxes and the image now arrive upright; do not rotate either again.
-        pipeline.orientation = 'none'
+        model = config.active_model
+        if (model.adapter or "").strip().lower() in ("hailo", "hailo8"):
+            # The Hailo profile names its independent camera and capture geometry. The
+            # current IMX500 installation orientation is not presumed to describe IMX477.
+            adapter.open()
+            width = int(model.camera_width or 640)
+            height = int(model.camera_height or 480)
+            rate_hz = float(model.camera_frame_rate_hz or 15.0)
+            picam2, info = open_picamera2_sensor(
+                model.camera_model,
+                stream_size=(width, height),
+                frame_rate_hz=rate_hz,
+                orientation=model.camera_orientation,
+            )
+            # The configured libcamera transform applies to pixels before Hailo inference.
+            pipeline.orientation = 'none'
+        else:
+            requested_stream = ((int(config.camera.width), int(config.camera.height))
+                                if config.camera.width and config.camera.height else None)
+            imx500, picam2, info = open_picamera2(manifest.path, stream_size=requested_stream,
+                                                external_manifest=manifest, orientation=orientation)
+            # Sensor orientation also corrects the neural-network input. Both its
+            # boxes and the image now arrive upright; do not rotate either again.
+            pipeline.orientation = 'none'
         stream = (int(info["stream_size"][0]), int(info["stream_size"][1]))
         adapter.configure_stream(*stream)
         camera = CameraOwner(picam2, stream_size=stream, events=events)
-        adapter.open(device=imx500, camera=picam2)
+        if (model.adapter or "").strip().lower() not in ("hailo", "hailo8"):
+            adapter.open(device=imx500, camera=picam2)
         pipeline.start()
         return _run_camera(args, pipeline, adapter, camera, info,
                         wire_publisher=wire_publisher)
@@ -452,6 +470,7 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             publisher.close()
         if camera is not None:
             camera.close()
+        adapter.close()
         pipeline.stop()
         report = pipeline.report()
         if publisher is not None:

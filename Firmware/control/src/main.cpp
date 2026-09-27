@@ -1,4 +1,4 @@
-// controld — sole owner of can0 and the motors (architecture §4.1).
+// controld — sole owner of the station motor CAN links (architecture §4.1).
 //
 // The Phase-2 daemon. Sequence (§27):
 //   load+validate config -> open CAN -> boot FSM (discover + self-test)
@@ -16,9 +16,11 @@
 // blocking video, no synchronous register-query chain, and no unbounded
 // allocation. The only slow (blocking) paths are boot-only (discovery,
 // register reads) and the one-time enter-position-mode transition.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -34,10 +36,13 @@
 #include "common/timing_stats.hpp"
 #include "common/types.hpp"
 #include "config/station_wiring.hpp"
+#include "config/mixed_hardware_profile.hpp"
 #include "config/turret_config.hpp"
 #include "control/boot_fsm.hpp"
 #include "control/can_motor_backend.hpp"
+#include "control/mixed_can_motor_backend.hpp"
 #include "control/control_loop.hpp"
+#include "control/imu_trace_ingest.hpp"
 #include "payload/payload_profile.hpp"
 #include "sim/sim_motor_backend.hpp"
 #include "vision/vision_ingest.hpp"
@@ -167,6 +172,26 @@ int main(int argc, char** argv) {
   }
   for (const auto& w : lr.warnings) spdlog::warn("config: {}", w);
   const config::TurretConfig& cfg = lr.config;
+  const bool mixed_mode = !sim_mode && !cfg.hardware_profile.empty();
+  const char* mixed_commission_env = std::getenv("OTA_MIXED_COMMISSION_MANUAL");
+  const bool mixed_commission_manual = mixed_mode && mixed_commission_env &&
+      std::strcmp(mixed_commission_env, "1") == 0;
+  if (!sim_mode && !mixed_mode &&
+      std::filesystem::exists("/sys/class/net/can1/device")) {
+    spdlog::error("split-bus station detected; explicit mixed hardware profile required before motor startup");
+    return 1;
+  }
+  config::mixed::Profile mixed_profile;
+  if (mixed_mode) {
+    const auto result = config::mixed::load_mixed_hardware_profile(cfg.hardware_profile);
+    if (!result.ok) {
+      for (const auto& e : result.errors) spdlog::error("mixed hardware profile: {}", e);
+      return 1;
+    }
+    mixed_profile = result.profile;
+    spdlog::info("mixed hardware: continuous GM6020 yaw on {}, bounded CyberGear pitch on {}",
+                 mixed_profile.yaw_bus.interface, mixed_profile.pitch_bus.interface);
+  }
   // Reject invalid explicit alignment before opening a motor transport.
   TrackingController::Config tracking_cfg;
   try { tracking_cfg = make_tracking_cfg(cfg); }
@@ -179,8 +204,18 @@ int main(int argc, char** argv) {
   //    owner). Sim: a first-order plant, no transport object at all.
   std::unique_ptr<can::CyberGearSystem> system;
   std::unique_ptr<MotorBackend> backend;
+  MixedCanMotorBackend* mixed_backend = nullptr;
   if (sim_mode) {
     backend = make_sim_backend();
+  } else if (mixed_mode) {
+    auto mixed = std::make_unique<MixedCanMotorBackend>();
+    std::string cerr;
+    if (!mixed->open(mixed_profile, cerr)) {
+      spdlog::error("mixed CAN open failed: {}", cerr);
+      return 1;
+    }
+    mixed_backend = mixed.get();
+    backend = std::move(mixed);
   } else {
     system = std::make_unique<can::CyberGearSystem>();
     can::CyberGearSystemConfig scfg;
@@ -219,7 +254,7 @@ int main(int argc, char** argv) {
 
   // 5. Control loop: homing -> safe hold -> park on shutdown.
   std::unique_ptr<RetainedHoming> retained;
-  if (!sim_mode) {
+  if (!sim_mode && !mixed_mode) {
     retained = std::make_unique<RetainedHoming>(config_path, motor_ids);
     backend->set_calibration_invalidator([&retained]() {
       const auto begin = now_monotonic_ns();
@@ -229,7 +264,70 @@ int main(int argc, char** argv) {
         spdlog::warn("calibration invalidation stalled for {:.3f} ms", elapsed/1e6);
     });
   }
-  ControlLoop loop(make_control_cfg(cfg), std::move(backend));
+  auto control_cfg = make_control_cfg(cfg);
+  if (mixed_mode) {
+    const auto& yaw_axis = cfg.axes[static_cast<int>(AxisId::Yaw)];
+    control_cfg.continuous_yaw_sector_half_span_rad =
+        std::min(-yaw_axis.expected_travel_deg.min,
+                 yaw_axis.expected_travel_deg.max) * kDeg2Rad;
+    control_cfg.continuous_yaw_sector_inset_rad =
+        yaw_axis.soft_margin_deg * kDeg2Rad;
+    if (control_cfg.continuous_yaw_sector_half_span_rad <=
+        control_cfg.continuous_yaw_sector_inset_rad) {
+      spdlog::error("mixed continuous-yaw software sector is invalid");
+      mixed_backend->close();
+      return 1;
+    }
+    // GM6020 has no reported fault/disable status and its temperature byte
+    // has no documented unit. The mixed backend instead independently bounds
+    // raw temperature, encoder-derived speed, feedback age and CAN health;
+    // do not report those missing fields as known values.
+    control_cfg.allow_unknown_motor_health = true;
+    spdlog::warn("mixed motor health: GM6020 fault/temperature units unavailable; independent raw-temperature/speed/freshness guard active");
+  }
+  if (mixed_commission_manual) {
+    control_cfg.start_in_auto_roam = false;
+    spdlog::warn("mixed commissioning: manual/hold only; AUTO_ROAM startup and tracking auto-enable suppressed");
+  }
+  ControlLoop loop(std::move(control_cfg), std::move(backend));
+
+  // The BNO085 is mounted on the moving pitch assembly. It observes gimbal
+  // motion independently of motor feedback; it is not the fixed base pose.
+  // The launcher owns its sole I2C process and publishes a tare-scoped trace.
+  std::unique_ptr<control::ImuTraceIngest> imu_observer;
+  if (mixed_mode) {
+    const char* trace_path = std::getenv("OTA_IMU_TRACE");
+    if (!trace_path || !*trace_path) {
+      spdlog::error("mixed startup requires launcher-owned BNO085 trace (OTA_IMU_TRACE)");
+      loop.deenergize_all();
+      return 1;
+    }
+    imu_observer = std::make_unique<control::ImuTraceIngest>();
+    std::string imu_error;
+    if (!imu_observer->start(trace_path, imu_error)) {
+      spdlog::error("BNO085 trace ingest failed: {}", imu_error);
+      loop.deenergize_all();
+      return 1;
+    }
+    const auto deadline = now_monotonic_ns() + 2'000'000'000LL;
+    bool ready = false;
+    while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
+      const auto state = imu_observer->snapshot(now_monotonic_ns());
+      if (state.game_rv_fresh && state.game_rv_tared &&
+          state.gyro_fresh && state.game_rv_accuracy >= 2) {
+        ready = true;
+        spdlog::info("BNO085 observer ready: generation={} game-RV status={} tare_rx_ns={}",
+                     state.generation, state.game_rv_accuracy, state.tare_rx_ns);
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!ready) {
+      spdlog::error("BNO085 has no fresh same-generation host tare, game-RV and gyro; mixed startup blocked");
+      loop.deenergize_all();
+      return 1;
+    }
+  }
 
   // §20: tell the loop when the geometry it is using was measured, read from the file the
   // intrinsics were actually loaded from, so the number describes the values in force.
@@ -282,10 +380,11 @@ int main(int argc, char** argv) {
   //     config decision (default FALSE); the enable itself is gated on homing
   //     inside the loop (§38.1), and the `start_tracking` command (§42.2) uses
   //     the same commissioned values.
-  loop.set_tracking_config(tracking_cfg, cfg.tracking.enabled);
+  loop.set_tracking_config(tracking_cfg,
+                           cfg.tracking.enabled && !mixed_commission_manual);
   spdlog::info("tracking: auto_enable={} (§38.1 gate: homing), speeds "
                "track={:.1f} search={:.1f} deg/s, lost_behavior={}",
-               cfg.tracking.enabled ? "yes" : "NO",
+               cfg.tracking.enabled && !mixed_commission_manual ? "yes" : "NO",
                tracking_cfg.track_v_max_rad_s*kRad2Deg, tracking_cfg.search_v_max_rad_s*kRad2Deg,
                cfg.tracking.target_lost_behavior);
   if (cfg.motion.configured) {
@@ -350,6 +449,7 @@ int main(int argc, char** argv) {
   loop.set_homing_factory([cfg]() { std::string e; return make_homing_plan(cfg, e); });
   spdlog::info("calibration: {}", reused ? "retained calibration validated; homing skipped" : "homing required");
   spdlog::info("service startup: {} after calibration and ready gates",
+               mixed_commission_manual ? "manual commissioning hold" :
                cfg.v3.default_mode == "AUTO_ROAM" ? "automatic roam" : "manual hold");
 
   // 5c. Phase 8: web server (webd-facing, §5.3/§42.2). Publishes the §6.3
@@ -394,6 +494,32 @@ int main(int argc, char** argv) {
                  web_cfg.telemetry_hz);
   }
 
+  if (mixed_backend) {
+    // Register discovery and IMU startup can leave the disabled CyberGear's
+    // last status frame stale. A STOP request elicits a fresh, explicit
+    // disabled frame before the homing loop begins; it sends no motion target.
+    mixed_backend->deenergize(AxisId::Pitch);
+    const TimeNs deadline = now_monotonic_ns() + 2'000'000'000LL;
+    bool pitch_stopped = false;
+    while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
+      const TimeNs now = now_monotonic_ns();
+      const auto pitch = mixed_backend->snapshot(AxisId::Pitch, now);
+      if (pitch.has_feedback && pitch.disabled_known && pitch.disabled &&
+          pitch.rx_ns > 0 && pitch.rx_ns <= now &&
+          now - pitch.rx_ns < 100'000'000LL) {
+        pitch_stopped = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!pitch_stopped) {
+      spdlog::error("mixed startup blocked: no fresh CyberGear disabled feedback after STOP");
+      loop.deenergize_all();
+      return 1;
+    }
+    spdlog::info("mixed startup: fresh pitch STOP feedback confirmed immediately before homing");
+  }
+
   const TimeNs period_ns = static_cast<TimeNs>(1e9) / cfg.control_loop_hz;
   TimingStats stats;
   TimeNs t_prev = now_monotonic_ns();
@@ -403,6 +529,7 @@ int main(int argc, char** argv) {
 
   // Steady-state 200 Hz loop (no slow work inside).
   if (system) system->start_watchdog();
+  if (mixed_backend) mixed_backend->start_watchdog();
   while (!g_shutdown.load()) {
     const TimeNs t0 = now_monotonic_ns();
     const TimeNs period = t0 - t_prev;
@@ -424,8 +551,8 @@ int main(int argc, char** argv) {
       spdlog::error("control fault: {}", loop.fault_reason());
       logged_fault = true;
     }
-    if (ph == Phase::Hold && loop.homed() && loop.at_ready() && !logged_ready) {
-      spdlog::info("homed + at ready pose; holding (Ctrl-C to park)");
+    if (ph == Phase::Hold && loop.position_ready() && loop.at_ready() && !logged_ready) {
+      spdlog::info("position reference ready + at ready pose; holding (Ctrl-C to stop)");
       logged_ready = true;
     }
     ++cycles;
@@ -447,6 +574,21 @@ int main(int argc, char** argv) {
           "(n={})",
           cfg.control_loop_hz, tr.p50_ns / 1e6, tr.p95_ns / 1e6,
           tr.p99_ns / 1e6, tr.worst_ns / 1e6, tr.samples);
+      if (mixed_backend) {
+        for (const auto& bus : mixed_backend->can_health_all()) {
+          spdlog::info("CAN {}: up={} state={} rx={} rx_errors={} tx={} tx_failed={}",
+                       bus.device, bus.up, bus.state, bus.rx_frames,
+                       bus.rx_error_frames, bus.tx_frames, bus.tx_failed);
+        }
+      }
+      if (imu_observer) {
+        const auto imu_state = imu_observer->snapshot(t0);
+        spdlog::info("BNO085 observer: generation={} tare={} game_rv_fresh={} gyro_fresh={} status={} gap={} trace_ended={}",
+                     imu_state.generation, imu_state.game_rv_tared,
+                     imu_state.game_rv_fresh, imu_state.gyro_fresh,
+                     imu_state.game_rv_accuracy, imu_state.gap_seen,
+                     imu_state.trace_ended);
+      }
       // 1 Hz vision/tracking status line (§6.1/§6.3): makes "visiond is not
       // publishing", "measurements are stale" and "the tracker is not
       // acquiring" distinguishable from the log alone.
@@ -470,14 +612,22 @@ int main(int argc, char** argv) {
   // Park before joining I/O workers: their shutdown can exceed the independent
   // watchdog's heartbeat deadline. Commands remain gated by parking/shutdown.
   loop.set_vision_link(nullptr);
-  spdlog::info("shutdown requested; {}", loop.homed() ? "parking" : "de-energizing");
-  if (loop.homed() && loop.phase() != Phase::Fault &&
-      loop.phase() != Phase::Parked && loop.start_parking(err)) {
+  spdlog::info("shutdown requested; {}", loop.position_ready() ? "controlled stop" : "zero/STOP requests");
+  bool parking_started = false;
+  if (loop.position_ready() && loop.phase() != Phase::Fault &&
+      loop.phase() != Phase::Parked) {
+    parking_started = loop.start_parking(err);
+    if (!parking_started) spdlog::error("shutdown park rejected: {}", err);
+  }
+  if (parking_started) {
     t_prev = now_monotonic_ns();
     double budget_s = 20.0;
-    for (const auto& limit : loop.limits())
+    for (int i = 0; i < kAxisCount; ++i) {
+      if (mixed_mode && i == static_cast<int>(AxisId::Yaw)) continue;
+      const auto& limit = loop.limits()[i];
       budget_s += 1.5 * (limit.q_soft_max_rad - limit.q_soft_min_rad) /
           (cfg.shutdown.speed_deg_s * kDeg2Rad);
+    }
     const TimeNs park_deadline = t_prev + static_cast<TimeNs>(budget_s * 1e9);
     while (now_monotonic_ns() < park_deadline && loop.phase() != Phase::Parked &&
            loop.phase() != Phase::Fault) {
@@ -489,13 +639,23 @@ int main(int argc, char** argv) {
   }
   const bool shutdown_failed = loop.phase() != Phase::Parked;
   if (!shutdown_failed) {
-    spdlog::info("PARKED (motors de-energized at the park pose)");
+    if (mixed_mode)
+      spdlog::info("STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)");
+    else
+      spdlog::info("PARKED (motors de-energized at the park pose)");
   } else {
     loop.deenergize_all();
-    spdlog::error("PARK FAILED: de-energized (phase={}, fault='{}')", phase_name(loop.phase()),
-                 loop.fault_reason().empty() ? "park unavailable or shutdown deadline exceeded" : loop.fault_reason());
+    if (mixed_mode)
+      spdlog::error("STOP FAILED: pitch STOP and yaw zero requested (phase={}, fault='{}')",
+                    phase_name(loop.phase()),
+                    loop.fault_reason().empty() ? "stop unavailable or shutdown deadline exceeded" : loop.fault_reason());
+    else
+      spdlog::error("PARK FAILED: de-energized (phase={}, fault='{}')", phase_name(loop.phase()),
+                   loop.fault_reason().empty() ? "park unavailable or shutdown deadline exceeded" : loop.fault_reason());
   }
   if (system) system->close();
+  if (mixed_backend) mixed_backend->close();
+  if (imu_observer) imu_observer->stop();
   web.stop();
   if (vision) vision->stop();
   spdlog::info("controld stopped cleanly");

@@ -5,6 +5,62 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux process and signal integration')
 
+
+def test_commissioning_ownership_and_stop(tmp_path):
+    """Exercise supervision and cross-runtime ownership without CAN or cameras."""
+    firmware = tmp_path / 'Firmware'
+    (firmware / 'scripts').mkdir(parents=True)
+    (firmware / 'build').mkdir()
+    script = firmware / 'scripts/run_application.sh'
+    shutil.copy(pathlib.Path(__file__).resolve().parents[2] / 'scripts/run_application.sh', script)
+    fake_python = tmp_path / 'preflight'
+    fake_python.write_text('#!/usr/bin/env bash\nexit 0\n')
+    fake_python.chmod(0o755)
+    worker = tmp_path / 'worker.py'
+    worker.write_text(textwrap.dedent('''\
+        import os, signal, time
+        from pathlib import Path
+        root = Path(os.environ['PROBE_ROOT'])
+        def stop(*_):
+            (root / 'zero-requested').touch()
+            print('COMMISSIONING FINISHED; zero output requested; disabled state unavailable', flush=True)
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, stop)
+        (root / 'probe-ready').touch()
+        while True: time.sleep(.01)
+        '''))
+    probe = firmware / 'build/probe-mixed-hardware'
+    probe.write_text('#!/usr/bin/env bash\nexec "$PROBE_PY" "$PROBE_ROOT/worker.py"\n')
+    probe.chmod(0o755)
+    env = os.environ.copy()
+    env.update(OTA_RUN_DIR=str(tmp_path / 'runtime'), OTA_PYTHON=str(fake_python),
+               PROBE_ROOT=str(tmp_path), PROBE_PY=sys.executable)
+
+    def call(action, *options, environment=None):
+        return subprocess.run(['bash', str(script), action, *options], env=environment or env,
+                              capture_output=True, text=True, timeout=25)
+    try:
+        result = call('start', '--commission-hardware')
+        assert result.returncode == 0, result.stdout + result.stderr
+        for _ in range(100):
+            if (tmp_path / 'probe-ready').exists(): break
+            time.sleep(.02)
+        assert (tmp_path / 'probe-ready').exists()
+        assert 'Mode: commissioning' in call('status').stdout
+        other_env = dict(env, OTA_RUN_DIR=str(tmp_path / 'other-runtime'))
+        refused = call('run', '--commission-hardware', environment=other_env)
+        assert refused.returncode != 0
+        assert 'Another launcher owns station motion' in refused.stderr
+        assert not (tmp_path / 'other-runtime/launcher.pid').exists()
+        stopped = call('stop')
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        assert (tmp_path / 'zero-requested').exists()
+        assert 'not a park/disable certification' in call('status').stdout
+        assert 'PARKED' not in call('status').stdout
+        assert call('run', '--yaw-voltage', '10').returncode == 2
+    finally:
+        call('stop')
+
 def test_launcher_lifecycle(tmp_path):
     source=pathlib.Path(__file__).resolve().parents[2]/'scripts/run_application.sh'
     base=tmp_path
@@ -28,6 +84,7 @@ def test_launcher_lifecycle(tmp_path):
     fakepy=base/'fake-python'
     fakepy.write_text('''#!/usr/bin/env bash
     if [ "${PROBE_FAIL_PREFLIGHT:-0}" = 1 ]; then exit 17; fi
+    if [ "$1" = - ]; then echo 0; exit 0; fi
     if [[ "$1" = -c || "$1" = *.py ]]; then exit 0; fi
     exec "$PROBE_PY" "$PROBE_ROOT/worker.py" "$2"
     ''');fakepy.chmod(0o755)
@@ -66,8 +123,17 @@ def test_launcher_lifecycle(tmp_path):
      assert (base/'disabled').exists()
      print('PASS failed camera process shuts down its controller and web siblings',flush=True)
      (base/'fail-vision').unlink()
-     call('start','--hold-motion');call('stop')
+     for role in ('control','web.webd.app','perception.visiond'):
+      (base/(role+'.pid')).unlink(missing_ok=True)
+      (base/(role+'.term')).unlink(missing_ok=True)
+     call('start','--hold-motion')
+     wait_for(lambda:(base/'perception.visiond.pid').exists())
+     assert not (base/'control.pid').exists()
+     assert not (base/'web.webd.app.pid').exists()
+     assert 'Mode: perception' in call('status').stdout
+     call('stop')
      assert not (base/'runtime/launcher.pid').exists()
+     assert (base/'perception.visiond.term').exists()
      print('PASS perception-only process remains stoppable through the same script',flush=True)
      env['PROBE_FAIL_PREFLIGHT']='1'
      assert call('start','--sim',ok=False).returncode!=0

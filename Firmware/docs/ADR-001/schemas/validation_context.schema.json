@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "仅离线 fixture 的验证上下文",
+  "type": "object",
+  "properties": {
+    "fixture_only": {
+      "const": true
+    },
+    "hardware_authorization": {
+      "const": false
+    },
+    "station_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "boot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "clock_id": {
+      "const": "CLOCK_MONOTONIC"
+    },
+    "clock_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "now_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "max_observation_age_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "max_timestamp_uncertainty_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "cameras": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "calibration_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sensor_mode_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "transform_chain_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "camera_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "motion_qualified": {
+            "type": "boolean"
+          },
+          "last_frame_sequence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "model_id",
+          "calibration_id",
+          "sensor_mode_id",
+          "transform_chain_id",
+          "camera_generation",
+          "motion_qualified",
+          "last_frame_sequence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "allowed_camera_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "target_session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selection_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy": {
+          "enum": [
+            "AUTO_SINGLE",
+            "EXPLICIT_TRACK",
+            "EXPLICIT_TAG"
+          ]
+        },
+        "global_track_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "target_session_id",
+        "selection_generation",
+        "policy",
+        "global_track_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "fixture_only",
+    "hardware_authorization",
+    "station_session_id",
+    "boot_id",
+    "clock_id",
+    "clock_epoch",
+    "now_ns",
+    "max_observation_age_ns",
+    "max_timestamp_uncertainty_ns",
+    "cameras",
+    "allowed_camera_ids",
+    "selection"
+  ],
+  "additionalProperties": false
+}

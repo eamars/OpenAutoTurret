@@ -2,7 +2,7 @@
 
 Two things this is trying to be honest about:
 
-1. `docs/open_auto_turret_v3_2_apache_hud_ui_revision.md` s3 forbids the header-plus-card
+1. `docs/archive/implemented/design/open_auto_turret_v3_2_apache_hud_ui_revision.md` s3 forbids the header-plus-card
    layout and makes the camera dominant. Checking that means asserting on what the served
    document contains and omits, not on how it looks to me.
 

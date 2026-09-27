@@ -1,0 +1,14 @@
+{
+  "package": "OpenAutoTurret N1",
+  "created_date": "2026-09-27",
+  "user_handoff_sha256": "63d33dce466dd54fa8c7b77cd8381268bd45197d98850f7e4a7b5d009cb814a3",
+  "requested_branch": "codex/hardware-adaptation",
+  "reported_last_activated_revision": "8901808",
+  "branch_tip_full_sha": null,
+  "branch_tip_status": "not_independently_resolved",
+  "repository_cloned": false,
+  "repository_archive_downloaded": false,
+  "hardware_connected": false,
+  "repository_contents_bundled": false,
+  "note": "Only user-supplied handoff is copied. Public sources were read selectively through web; no byte-level public-source snapshot hashes are claimed."
+}

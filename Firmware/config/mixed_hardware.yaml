@@ -1,0 +1,32 @@
+# Dedicated production topology for the split-bus installation.
+# This profile is validated independently; it is not a migration fallback for
+# the legacy single-bus config/turret.yaml.
+schema_version: 1
+
+buses:
+  yaw:
+    interface: can0
+    spi_parent: spi0.0
+    bitrate: 1000000
+  pitch:
+    interface: can1
+    spi_parent: spi1.0
+    bitrate: 1000000
+
+axes:
+  yaw:
+    protocol: gm6020
+    bus: yaw
+    motor_id: 1
+    topology: continuous
+    control_mode: voltage
+    feedback_frame_id: 0x205
+    command_frame_id: 0x1FF
+  pitch:
+    protocol: cybergear
+    bus: pitch
+    motor_id: 127
+    topology: bounded
+    control_mode: position
+    expected_unique_id_hex: "7216313130333105"
+    current_limit_a: 5.0

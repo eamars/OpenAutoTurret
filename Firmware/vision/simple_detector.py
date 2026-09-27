@@ -1,6 +1,6 @@
 """Classical bridge detector — P8 bring-up ONLY, not the production detector.
 
-Rationale (`docs/research_vision_readiness_p7.md` option 3): the station can
+Rationale (`docs/archive/superseded/vision/research_vision_readiness_p7.md` option 3): the station can
 stream IMX500 frames today, but the installed picamera2 has no detection API and
 the platform has no RPK/Hailo stack, so no NN detector runs on the box. Closed
 loop tracking (P8) still needs *something* that turns a frame into a

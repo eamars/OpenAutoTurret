@@ -11,13 +11,13 @@ schema_version: 1
 # overrides automatic behavior; web Auto resumes it. Service speed control,
 # planner limits and automatic hand-off delays are explicit in that mapping.
 # Roam bounds remain constrained by homed travel and the safety envelope.
-# See docs/automatic_service_validation_2026_09_06.md for measured settings.
+# See docs/archive/partially-implemented/validation/automatic_service_validation_2026_09_06.md for measured settings.
 
 can:
   # PHY swap point (can_transport.hpp). "socketcan" = MCP2515 HAT on can0;
   # "yousee" = USB-CAN AT adapter on a serial device. Swap freely — nothing
   # else changes. 2026-09-02: HAT field-sick (see
-  # docs/archive/research_can_bus_error_passive.md); running on the yousee adapter
+  # docs/archive/superseded/research/research_can_bus_error_passive.md); running on the yousee adapter
   # until the replacement HAT lands. To revert: backend socketcan +
   # interface can0.
   backend: yousee

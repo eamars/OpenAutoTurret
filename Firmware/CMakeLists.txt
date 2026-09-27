@@ -2,7 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 project(open_auto_turret
         VERSION 0.1.0
         DESCRIPTION "OpenAutoTurret vision tracking station (control stack)"
-        LANGUAGES CXX)
+        LANGUAGES C CXX)
+
+add_executable(imu-bno085 tools/imu_bno085.c
+  third_party/sh2/sh2.c third_party/sh2/sh2_util.c
+  third_party/sh2/sh2_SensorValue.c third_party/sh2/shtp.c)
+target_include_directories(imu-bno085 PRIVATE third_party/sh2)
+target_link_libraries(imu-bno085 PRIVATE m)
 
 # The whole production stack builds from Firmware/ (see PROGRESS.md location
 # rule). C++20 per architecture doc §5.2/§51.
@@ -24,6 +30,9 @@ find_package(yaml-cpp REQUIRED)
 find_package(spdlog REQUIRED)
 
 add_subdirectory(control)
+
+add_executable(probe-mixed-hardware tools/probe_mixed_hardware.cpp)
+target_link_libraries(probe-mixed-hardware PRIVATE ota_core)
 
 # Commissioning / probe CLI (architecture §50 tools/).
 add_executable(turret-can tools/turret_can.cpp)
@@ -59,6 +68,12 @@ set_tests_properties(homing_motion_probe PROPERTIES TIMEOUT 15)
 # Phase 9: payload profiling / verification commissioning CLI (§28.5/§31/§44).
 add_executable(turret-payload tools/turret_payload.cpp)
 target_link_libraries(turret-payload PRIVATE ota_core)
+add_executable(probe-pitch-motion tools/probe_pitch_motion.cpp)
+target_link_libraries(probe-pitch-motion PRIVATE ota_core)
+add_executable(probe-yaw-motion tools/probe_yaw_motion.cpp)
+target_link_libraries(probe-yaw-motion PRIVATE ota_core)
+add_executable(probe-mixed-backend tools/probe_mixed_backend.cpp)
+target_link_libraries(probe-mixed-backend PRIVATE ota_core)
 
 # §81: replay a recorded session through the real controller. Registered as a test with
 # --expect, so the tool's own behaviour is checked by the same `ctest` run as everything

@@ -13,6 +13,7 @@ class MotorReplies : public can::CanTransport {
   double drift = 0, q = 0;
   bool frozen_feedback = false, enabled = true, silent_position = false;
   bool ignore_stop = false;
+  bool ignore_current_limit = false;
   uint8_t motor_id = 100;
   int enables = 0, position_reads = 0, mode_writes = 0;
   std::map<uint16_t,double> regs;
@@ -42,7 +43,8 @@ class MotorReplies : public can::CanTransport {
     if (e.comm_type==18) {
       if (reg==uint16_t(cybergear::Reg::RunMode)) ++mode_writes;
       float value=0; std::memcpy(&value,data+4,4);
-      regs[reg]=reg==uint16_t(cybergear::Reg::RunMode) ? data[4] : value;
+      if (!(ignore_current_limit && reg==uint16_t(cybergear::Reg::LimitCur)))
+        regs[reg]=reg==uint16_t(cybergear::Reg::RunMode) ? data[4] : value;
     }
     feedback();
     if (e.comm_type==17) {
@@ -66,10 +68,12 @@ class MotorReplies : public can::CanTransport {
   std::string device() const override { return "no-hardware"; }
 };
 bool run(AxisId axis, double drift, bool frozen, bool silent, bool position, bool ignore_stop=false,
-         bool check_displacement=true) {
+         bool check_displacement=true, bool ignore_current_limit=false) {
   auto transport=std::make_unique<MotorReplies>(); auto* motor=transport.get();
   motor->drift=drift; motor->frozen_feedback=frozen; motor->silent_position=silent;
   motor->motor_id=axis==AxisId::Pitch ? 100 : 101; motor->ignore_stop=ignore_stop;
+  motor->ignore_current_limit=ignore_current_limit;
+  if (ignore_current_limit) motor->regs[uint16_t(cybergear::Reg::LimitCur)]=27;
   can::CyberGearSystem system; std::string error;
   if (!system.open({},error,std::move(transport))) return false;
   motor->feedback(); CanMotorBackend backend(system);
@@ -79,11 +83,12 @@ bool run(AxisId axis, double drift, bool frozen, bool silent, bool position, boo
     status=backend.transition_mode(axis,position,position ? .05 : 5,now_monotonic_ns(),error,.05,4,check_displacement);
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
-  const bool expected_failure=(check_displacement && std::abs(drift)>.25*kDeg2Rad) || silent || ignore_stop;
+  const bool expected_failure=(check_displacement && std::abs(drift)>.25*kDeg2Rad) || silent || ignore_stop || ignore_current_limit;
   const bool ok=expected_failure
       ? status==MotorBackend::Transition::Failed && motor->enables==0 && (!ignore_stop || motor->mode_writes==0)
       : status==MotorBackend::Transition::Complete && motor->enables==1 && motor->position_reads>0;
   std::cout << "axis=" << axis_name(axis) << " ignore_stop=" << ignore_stop
+            << " ignore_current_limit=" << ignore_current_limit
             << " check_displacement=" << check_displacement
             << " drift_deg=" << drift*kRad2Deg << " frozen_feedback=" << frozen
             << " silent_position=" << silent << " position_mode=" << position
@@ -95,6 +100,8 @@ int main() {
   bool ok=true;
   for (auto axis : {AxisId::Pitch,AxisId::Yaw}) for (bool position : {false,true}) {
     ok=run(axis,0,false,false,position) && ok;
+    if (axis==AxisId::Pitch)
+      ok=run(axis,0,false,false,position,false,true,true) && ok;
     for (int dir : {-1,1}) {
       ok=run(axis,dir*2.9*kDeg2Rad,false,false,position) && ok;
       ok=run(axis,dir*2.9*kDeg2Rad,true,false,position) && ok;

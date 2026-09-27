@@ -4,6 +4,7 @@ Builds a separate release; --activate opts into stopping the old stack and
 starting the new one. Never resets, cleans or overwrites the target checkout.
 """
 import argparse
+import ipaddress
 from pathlib import Path
 import shlex
 import subprocess
@@ -17,6 +18,8 @@ def run(args, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="eamars@rpi-turret")
+    parser.add_argument("--connect-address", type=ipaddress.ip_address,
+                        help="optional discovered IP; retains --host's known SSH identity")
     parser.add_argument("--root", default="/home/eamars/workspace/OpenAutoTurret")
     parser.add_argument("--activate", action="store_true",
                         help="after successful build/check, park/stop the old stack and start this release")
@@ -24,11 +27,21 @@ def main():
                         help="seconds to wait for automatic readiness after --activate (default: 420)")
     parser.add_argument("--probe-build", action="store_true",
                         help="build only the runtime controller and preflight; defer regression tests")
+    parser.add_argument("--commission-hardware", action="store_true",
+                        help="build/check the bounded mixed-hardware probe; does not start motors")
+    parser.add_argument("--commission-mixed-controller", action="store_true",
+                        help="build/check the manual mixed controller commissioning path; does not start motors")
+    parser.add_argument("--probe-imu", action="store_true",
+                        help="build/check only the timestamped BNO085 acquisition probe")
     args = parser.parse_args()
     if args.host.startswith("-") or not args.root.startswith("/"):
         parser.error("host must not be an option; root must be an absolute remote path")
     if args.ready_timeout <= 0:
         parser.error("--ready-timeout must be positive")
+    if (args.commission_hardware or args.commission_mixed_controller or args.probe_imu) and args.activate:
+        parser.error("commissioning activation uses an explicit bounded launcher run, not --activate")
+    if sum((args.commission_hardware, args.commission_mixed_controller, args.probe_imu)) > 1:
+        parser.error("choose one commissioning or IMU-only deployment mode")
     repo = Path(__file__).resolve().parents[2]
     requirements = repo / "Firmware" / "requirements-station.txt"
     if not requirements.is_file():
@@ -40,9 +53,13 @@ def main():
     revision = run(["git", "rev-parse", "HEAD"], cwd=repo,
                    capture_output=True, text=True).stdout.strip()
     quote = shlex.quote
+    connection = []
+    if args.connect_address:
+        connection = ["-o", f"HostName={args.connect_address}",
+                      "-o", f"HostKeyAlias={args.host.rsplit('@', 1)[-1]}"]
 
     def remote(command, **kwargs):
-        return run(["ssh", "-o", "ConnectTimeout=10", args.host, command], **kwargs)
+        return run(["ssh", "-o", "ConnectTimeout=10", *connection, args.host, command], **kwargs)
 
     releases = args.root.rstrip("/") + "/run/releases"
     # Reuse the station's existing project-local runtime, including libcamera
@@ -57,17 +74,25 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ota-deploy-") as temporary:
         archive = Path(temporary) / "source.tar"
         run(["git", "archive", "--format=tar", f"--output={archive}", revision], cwd=repo)
-        run(["scp", str(archive), f"{args.host}:{release}/source.tar"])
+        run(["scp", *connection, str(archive), f"{args.host}:{release}/source.tar"])
     remote(f"tar -xf {quote(release + '/source.tar')} -C {quote(release)} && "
            f"rm -- {quote(release + '/source.tar')} && "
            f"mkdir -p {quote(release + '/run')} && "
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
            f"printf '%s\\n' {quote(revision)} > {quote(release + '/REVISION')}")
+    # Model binaries stay outside Git/release source. The adapter checks the
+    # pinned SHA before opening the shared artifact.
+    models = args.root.rstrip("/") + "/run/hailo-probe"
+    remote(f"if [ -d {quote(models)} ]; then "
+           f"ln -s {quote(models)} {quote(release + '/run/hailo-probe')}; fi")
     remote(f"{quote(venv + '/bin/python')} -m pip install --disable-pip-version-check --no-input "
            f"-r {quote(release + '/Firmware/requirements-station.txt')}")
     script = release + "/Firmware/scripts/run_application.sh"
     smoke = release + "/Firmware/tools/station_smoke.py"
-    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else ""))
+    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
+           + (" --commission-hardware" if args.commission_hardware else "")
+           + (" --commission-mixed-controller" if args.commission_mixed_controller else "")
+           + (" --probe-imu" if args.probe_imu else ""))
     label = "Probe-ready release (regression tests deferred)" if args.probe_build else "Verified release"
     print(f"{label}: {release}\nRevision: {revision}", flush=True)
     if args.activate:
@@ -79,8 +104,15 @@ def main():
         print(f"Active and ready: {release}", flush=True)
     else:
         print("Build only; the running station was not changed.")
-        print("Activate: rerun the deploy command with --activate to perform the "
-              "HTTP/WebSocket smoke test and readiness wait.")
+        if args.commission_hardware:
+            print(f"Receive/discovery probe: ssh {args.host} \"bash {script} run --commission-hardware\"")
+        elif args.commission_mixed_controller:
+            print(f"Mixed controller commissioning: ssh {args.host} \"bash {script} start --commission-mixed-controller\"")
+        elif args.probe_imu:
+            print(f"IMU capture: ssh {args.host} \"bash {script} run --probe-imu\"")
+        else:
+            print("Activate: rerun the deploy command with --activate to perform the "
+                  "HTTP/WebSocket smoke test and readiness wait.")
     print(f"Status: ssh {args.host} \"bash {script} status\"")
 
 

@@ -15,6 +15,7 @@
 // command handler callback, so it is unit-testable without CAN / a motor / a
 // camera. The controld wires the real ControlLoop + Telemetry into those.
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <poll.h>
 #include <sstream>
@@ -72,6 +73,13 @@ inline std::string json_escape(const std::string& s) {
   return o;
 }
 
+inline std::string json_finite_or_null(double value) {
+  if (!std::isfinite(value)) return "null";
+  std::ostringstream os;
+  os << value;
+  return os.str();
+}
+
 inline std::string format_motion_profiles(const telemetry::TelemetrySnapshot& s) {
   if (!s.motion_profiles_active) return "null";
   std::ostringstream os;
@@ -122,7 +130,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"q_pitch_rad\":" << s.q_pitch_rad
      << ",\"v_pitch_rad_s\":" << s.v_pitch_rad_s
      << ",\"q_ref_pitch_rad\":" << s.q_ref_pitch_rad
-     << ",\"effort_yaw\":" << s.effort_yaw
+     << ",\"effort_yaw\":" << json_finite_or_null(s.effort_yaw)
      << ",\"effort_pitch\":" << s.effort_pitch
      << ",\"target_az_world_rad\":" << s.target_az_world_rad
      << ",\"target_el_world_rad\":" << s.target_el_world_rad

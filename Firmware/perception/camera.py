@@ -300,3 +300,64 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
             "task": getattr(intrinsics, "task", None),
             "inference_rate_hz": getattr(intrinsics, "inference_rate", None)}
     return imx500, picam2, info
+
+
+def open_picamera2_sensor(camera_model: str, *, stream_size: Tuple[int, int],
+                          frame_rate_hz: float, orientation: str = "none",
+                          buffer_count: int = 6) -> Tuple[Any, Dict[str, Any]]:
+    """Open one explicitly selected camera for a host-side inference provider.
+
+    Unlike :func:`open_picamera2`, this path does not construct an IMX500 or let a
+    camera-mounted model choose the camera. The profile names the sensor explicitly,
+    so an accelerator profile cannot silently bind whichever camera libcamera lists first.
+    """
+    try:
+        from picamera2 import Picamera2  # type: ignore
+        from libcamera import Transform
+    except Exception as exc:  # noqa: BLE001 - camera bindings are station-only
+        raise ConfigError(f"cannot import Picamera2/libcamera: {exc}") from exc
+
+    model = str(camera_model or "").strip().lower()
+    if model not in ("imx477", "imx500"):
+        raise ConfigError(f"camera_model must explicitly name imx477 or imx500, got {model!r}")
+    width, height = (int(stream_size[0]), int(stream_size[1]))
+    if min(width, height) <= 0 or float(frame_rate_hz) <= 0:
+        raise ConfigError("host-inference camera needs positive stream dimensions and frame rate")
+    from common.image_corrections import validate_orientation
+    orientation = validate_orientation(orientation)
+    transform = Transform(hflip=orientation in ("rotate_180", "flip_horizontal"),
+                          vflip=orientation in ("rotate_180", "flip_vertical"))
+
+    cameras = Picamera2.global_camera_info()
+    matches = [info for info in cameras
+               if model in str(info.get("Model", info.get("model", ""))).lower()]
+    if len(matches) != 1:
+        available = [(item.get("Num"), item.get("Model", item.get("model")))
+                     for item in cameras]
+        raise ConfigError(f"expected exactly one {model} camera, found {len(matches)}; "
+                          f"enumerated cameras: {available}")
+    camera_num = matches[0].get("Num", matches[0].get("num"))
+    if camera_num is None:
+        raise ConfigError(f"camera enumeration has no numeric index: {matches[0]}")
+
+    camera = None
+    try:
+        camera = Picamera2(int(camera_num))
+        configuration = camera.create_video_configuration(
+            main={"size": (width, height), "format": "RGB888"},
+            transform=transform,
+            controls={"FrameRate": float(frame_rate_hz)},
+            buffer_count=int(buffer_count))
+        camera.configure(configuration)
+    except Exception as exc:  # noqa: BLE001 - turn station API mismatch into config failure
+        if camera is not None:
+            try:
+                camera.close()
+            except Exception:
+                pass
+        raise ConfigError(f"cannot configure {model} camera {camera_num}: {exc}") from exc
+
+    info = {"camera_num": int(camera_num), "camera_model": model,
+            "stream_size": (width, height), "task": "object_detection",
+            "inference_rate_hz": float(frame_rate_hz), "orientation": orientation}
+    return camera, info

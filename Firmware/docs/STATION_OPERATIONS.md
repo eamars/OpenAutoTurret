@@ -1,379 +1,408 @@
-# Deploy and operate the camera station
+# Operate and adapt the camera station
 
-This is the current operating runbook. Use this procedure rather than dated
-commissioning scripts or the legacy individual systemd units.
+Current operating runbook, **27 September 2026**. Read this before deploying,
+starting, stopping or diagnosing the station. Dated run reports are historical.
 
-**Current commissioning setting (8 September 2026):** after the 20:58 monitored
-home stopped on approximately 0.39 degrees of pitch encoder recoil during mode
-setup, the operator requested disabling that check and proceeding to response
-tuning. `homing.mode_displacement_check: false` now omits the optional 0.25-degree
-displacement gate in homing mode recipes, including final service-mode setup.
-The next attempt at 21:16 stopped on the separate speed gate. The operator then
-required the added motion checks to warn and continue homing. The station now
-also sets `homing.motion_checks_abort: false`: speed, corridor and reverse-motion
-observations log warnings without changing the homing state or motor commands.
-The same switch restores the preceding arrival/settling procedure in the endpoint
-FSM: timed settling, the prior backoff arrival window and fine-approach travel
-bounds. Added stationary-window, clearance and coarse/fine comparison gates do
-not abort this procedure. Existing contact, repeatability and drive-health
-requirements remain.
-Both fields default to true if omitted. Feedback/drive-fault checks,
-current/torque limits, the watchdog and parking checks remain active.
-The backend still verifies disabled state, mode
-registers and fresh finite encoder readback before enabling. No load direction
-is assumed. See the [both-axis homing review](homing_failure_review_2026_09_08.md),
-[prior restart](monitored_restart_2026_09_08.md) and
-[earlier incident](optimization_cycle_2026_09_08.md) for historical evidence.
+## Current deployment gate
 
-## Station and ownership
+**Current station state:** release `f8bcdb6` is running in operator-selected
+MANUAL/HOLD after bounded D-pad tests. The owner raised the Pi input to 5.25 V
+after release `8901808` reported active undervoltage/throttling (`0x50005`).
+The subsequent normal IMX500/CAN/IMU run lasted about 5.5 minutes in
+AUTO_ROAM/AUTO_TRACK with repeated `get_throttled=0x0`; a 60-frame IMX477/Hailo
+camera-only run and a release build beside the active stack also returned 0x0.
+PMIC EXT5V samples under these loads were about 4.87–5.11 V. This clears the
+observed current power fault for those loads, but simultaneous dual-camera +
+Hailo + motor peaks remain unmeasured. See [Raspberry Pi's bit definitions](https://www.raspberrypi.com/documentation/usage/raspberry-pi-os/raspberry-pi.html#get_throttled).
 
-- SSH: `eamars@rpi-turret`; use the configured SSH key. Do not put passwords in scripts or Git.
-- Main checkout: `/home/eamars/workspace/OpenAutoTurret`.
-- Web control and live camera: **http://rpi-turret:8080/**.
-- Runtime: `/tmp/ota-stack-1000` for `eamars`. Use that account for all operations;
-  running the script under `sudo` selects a different runtime and is not the operating procedure.
-- One launcher owns `controld`, `perception.visiond`, and `web.webd.app`.
-  Vision alone owns the IMX500 camera; web reads its preview.
+The latest full startup completed pitch homing and reached READY after the
+continuous-yaw *pitch-homing-only* displacement tolerance was changed from
+0.5° to 2°. An earlier attempt faulted at 0.527° yaw drift with fresh CAN
+feedback; its launcher stop sent pitch STOP/yaw zero but could not confirm the
+normal stopped state because the controller was already faulted. Preserve that
+case for stop-path qualification. The latest manual yaw tests moved about 7.5°
+in six seconds and 17.3° in twelve seconds, with no fault. A pitch manual
+out/return test reached 15.63° above its initial pose after release at about
+12° and transiently overshot 3.3° past its initial pose on return, then settled
+within about 0.6°. Do not interpret working D-pad motion as pitch overshoot
+qualification; see the [architect handoff](archive/partially-implemented/handoffs/ARCHITECTURE_HANDOFF_2026_09_27.md).
 
-## Start, inspect and stop
+**The normal launcher selects the mixed split-bus profile. On release `cae41d0`,
+two controlled stops succeeded after motion: one from AUTO_TRACK near +46° yaw,
+and one from AUTO_ROAM near +76° yaw. Both confirmed fresh pitch-disabled
+feedback and issued the final GM6020 zero request; GM6020 disable state remains
+unavailable. These two observations do not complete stop qualification. An
+intermittent feedback-readiness rejection seen on the previous release has not
+yet been shown eliminated. Normal pitch homing completed, but repeated encoder
+speed-ceiling/corridor warnings did not abort with
+`homing.motion_checks_abort: false`; that guard behavior also remains
+unqualified.**
 
-For an early physical design probe, `Firmware/tools/deploy_station.py --probe-build`
-uses the launcher to build only the runtime controller and run read-only preflight.
-It defers the regression suite and labels the release probe-ready. The normal
-deployment path still builds and tests all targets. This option does not start
-motors unless activation is separately requested.
+**Current release:** `f8bcdb6` passed committed-source probe build and mixed
+preflight, then was started through the launcher and reached READY. Its full
+regression suite was deferred by `--probe-build`. The 13 targeted manual
+controller tests and the isolated launcher lifecycle test passed; the
+commissioning-ownership test cannot acquire the global station lock while the
+live stack owns it. Release `43193dc` passed the
+earlier 77-test suite, before these control changes. Current D-pad evidence
+comes from the web command API and controller feedback, not a browser pointer
+event trace. The live API reports valid pitch limits and a session-relative
+±80° yaw operating sector; CAN errors are zero and BNO085 observation is fresh.
 
-On the Pi, from the checkout or deployed release directory:
+The installation has GM6020 yaw on `can0`, CyberGear pitch on `can1`, continuous
+yaw without an endstop, IMX500 + IMX477 cameras, a PCIe Hailo device, and a
+BNO085 on I2C. See [verified hardware and probes](archive/partially-implemented/hardware/HARDWARE_CURRENT.md).
+
+The mixed runtime uses GM6020 yaw on CAN0 and CyberGear pitch on CAN1, with
+pitch limited to 5 A. Yaw has no confirmed disable state; a zero request is not
+proof of motor de-energization. The September 27 run confirms the mixed control,
+perception and web path operated together; two subsequent controlled stops
+passed the observed pitch-disable/yaw-zero checks, while broader stop
+qualification and the intermittent readiness-rejection question remain open.
+See the [hardware adaptation plan](archive/partially-implemented/hardware/HARDWARE_ADAPTATION_PLAN.md).
+
+The project venv and a separate commissioning release are built on the Pi.
+The minimal Hailo-8 kernel/runtime stack is now installed and passed a reboot;
+an experimental IMX477-to-Hailo detector probe also passed finite-output and
+timing checks. This does not establish detection accuracy, tracking identity or
+production perception integration. See the [hardware inventory](archive/partially-implemented/hardware/HARDWARE_CURRENT.md)
+and [AI plan](archive/partially-implemented/vision/AI_HAT_PERCEPTION_PLAN.md).
+
+With the launcher stopped and camera ownership clear, the separate no-motion
+probe exercises the pinned Hailo model without starting the controller/web:
 
 ```bash
-bash Firmware/scripts/run_application.sh          # detached start; same as start
+run/station-venv/bin/python Firmware/tools/probe_hailo_camera.py \
+  --hef /home/eamars/workspace/OpenAutoTurret/run/hailo-probe/yolov8n.hef --frames 30
+```
+
+Run from a committed release with the station project venv. It holds that
+runtime directory's launcher lock, verifies the model SHA and HAILO8 identity,
+and saves no images. Do not use another `OTA_RUN_DIR` to bypass ownership.
+
+## Account, ownership and preserved operating contract
+
+- SSH as `eamars@rpi-turret` using the existing key. Run station operations
+  without `sudo`; uid 1000 owns `/tmp/ota-stack-1000` when the launcher runs.
+- Checkout: `/home/eamars/workspace/OpenAutoTurret`. Preserve its local changes.
+- After the Pi reboot, Windows DNS resolution for `rpi-turret` failed. The
+  observed address was `192.168.2.100`; when needed, deploy with
+  `--connect-address 192.168.2.100`. This is an observed address, not a static
+  network setting. The option preserves the known `rpi-turret` SSH host-key
+  identity while connecting to that address.
+- One `Firmware/scripts/run_application.sh` launcher owns controller,
+  `perception.visiond` and `web.webd.app`. Do not run old systemd services beside it.
+- Normal startup uses AUTO_ROAM -> target tracking -> AUTO_ROAM after loss.
+  Manual/Hold is an explicit web override, not a saved trial default.
+- The web address is `http://rpi-turret:8080/` when the stack is running. A
+  telemetry serialization fix now represents unavailable GM6020 torque as JSON
+  `null`; the dashboard displays an em dash, and `/api/state` no longer fails on
+  NaN yaw effort.
+- Each physical camera has one owner; preview reads that owner's frames.
+  The observed five-minute normal run used IMX500 and delivered 8,061 frames
+  with zero drops while AUTO_ROAM and AUTO_TRACK/loss handoffs repeated. This is
+  integration evidence, not an accuracy benchmark. The explicit
+  `hailo_yolov8n` profile has passed a 60-frame IMX477 run through visiond in
+  `--hold-motion` mode. A continuous BNO085 observer is launcher-supervised and
+  observe-only; it has no motion-control authority. Simultaneous dual-camera
+  operation remains unqualified.
+
+## Inspect the stopped installation
+
+Run from the Pi checkout/release as `eamars`:
+
+```bash
+bash Firmware/scripts/run_application.sh status
+bash Firmware/scripts/run_application.sh check
+ip -details -statistics link show can0
+ip -details -statistics link show can1
+rpicam-hello --list-cameras
+lspci -nn
+```
+
+`check` inspects imports/config/files; it does not open motors or cameras and
+does not prove motion readiness. The normal profile is now the mixed profile;
+use `check --commission-hardware` for bounded commissioning preflight. Logs under
+`/tmp/ota-stack-1000` exist only after a run.
+
+After the September 27 reboot, both CAN links were DOWN; neither NetworkManager
+nor the previous installation had a CAN startup profile. The one-time authorized
+administrator setup installed and enabled `ota-can-links.service` from
+[`../systemd/ota-can-links.service`](../systemd/ota-can-links.service) and its
+[`../scripts/configure_can_links.sh`](../scripts/configure_can_links.sh) helper.
+It brings `can0` and `can1` up at 1 Mbps classical CAN on boot, or validates an
+already-up link without cycling it. It opens no motor transport. Check it as
+`eamars` with `systemctl is-enabled ota-can-links.service` and
+`systemctl is-active ota-can-links.service`, then inspect both links above.
+Routine station operation remains unprivileged and uses the launcher. The
+service also completed successfully at monotonic 5.76–5.82 s on the next
+observed boot, and both links were UP, ERROR-ACTIVE, 1 Mbps. One successful
+boot does not establish long-term recovery reliability. The Pi's idle
+`get_throttled=0x0` after that boot does not replace a loaded power check.
+
+Earlier September 27 large-motion sessions left both CAN links UP at 1 Mbps.
+Their pitch drives ended with verified disabled feedback; yaw ended with zero
+voltage requested and stationary feedback, but its disable state is unknown.
+The current release is running in MANUAL/HOLD after D-pad tests. Inspect live
+ownership/state before another session; do not cycle CAN links between tests.
+
+The owner authorized the September 27 one-time privileged CAN boot setup after
+the reboot. This does not change unprivileged launcher ownership.
+Never put credentials in scripts or Git. For motor probes, identify the exact
+protocol first; discovery must not enable, zero, home or actuate a motor.
+GM6020 `0x1FF` is a voltage command, not a discovery request. See the
+[GM6020 reference](references/gm6020/GM6020_AI_Reference.md) and
+[CyberGear reference](references/cybergear/CyberGear_AI_Reference.md).
+
+The existing IMU probe is `/home/eamars/workspace/imu-lab/imu_main`, with source
+and README beside it. It soft-resets the IMU and enables three sensor reports;
+it is not a passive bus read. Run it only when it owns the sensor and its reset
+cannot disrupt a running consumer. Its gyro output label is wrong: values are
+rad/s, not deg/s. See the inventory for measured results and remaining gaps.
+
+Use the versioned replacement for further IMU work:
+
+```bash
+bash Firmware/scripts/run_application.sh run --probe-imu --imu-seconds 30
+```
+
+Deploy it with `deploy_station.py --probe-build --probe-imu`. It needs only
+unprivileged I2C access, records `/tmp/ota-stack-1000/imu.ndjson`, and opens no
+camera or motor transport. It establishes a stationary **host reference**, not
+a mounting calibration. `--commission-hardware --with-imu` adds the same capture
+to bounded motor probes. See [IMU evidence and coordinate meaning](archive/partially-implemented/commissioning/IMU_COMMISSIONING_2026_09_27.md).
+Do not assign the pitch-mounted IMU pose directly to the base orientation.
+
+For the tested camera-only Hailo application slice, use
+`run --hold-motion --profile hailo_yolov8n --frames 60 --no-web`.
+The shared model remains under the original checkout's `run/hailo-probe` and is
+linked into releases, with SHA verification before use. IMX477 camera-to-axis
+calibration is still required before its detections may guide physical motion;
+the existing 1920x1080 camera calibration does not certify this 640x480 profile.
+
+## Stop and preserve evidence
+
+If a launcher-owned stack is running, stop it through the launcher:
+
+```bash
+bash Firmware/scripts/run_application.sh stop
+bash Firmware/scripts/run_application.sh status
+```
+
+The launcher requests the controller's axis-specific safe stop action, then
+shuts down its children. It never force-kills the controller. Pitch disable is
+feedback-confirmed when fresh; GM6020 receives a zero request but its disable
+state is unavailable. If its 120-second caller wait
+expires, inspect status/logs; shutdown may still be in progress. Do not start a
+second controller or use broad process kills. Stop can be issued from another
+checkout because ownership is shared by account/runtime directory.
+
+**Stop qualification includes two successful moving-stop observations on release
+`cae41d0` and one further stop on release `8901808`; broader qualification
+remains open.**
+The previous middle-yaw/lowest-pitch release contract and CyberGear disabled-bit
+verification do not transfer to GM6020. A zero GM6020 command does not certify
+power removal or a supported load. Complete stop/park qualification before
+unattended operation. The web's parking request is not equivalent to full
+launcher stop.
+
+On `cae41d0`, controlled stop completed successfully after AUTO_TRACK motion at
+about +46° yaw and after AUTO_ROAM motion at about +76° yaw. Both recorded fresh
+pitch-disabled feedback and a final GM6020 zero request. GM6020 disable state
+remains unknown; zero request is never power-removal certification. The prior
+release had intermittent feedback-readiness rejection. The two successes do
+not prove that issue is eliminated or establish full stop/recovery/park
+qualification.
+Do not interpret a zero-voltage request as power removal.
+The separate `--apply-pitch-limit` option only writes the configured volatile
+CyberGear `LimitCur` value (5 A maximum) and checks three matching readbacks; it
+does not enable or move pitch. It cannot be combined with yaw voltage or speed
+actuation. Reapply and verify volatile pitch settings after reset and before
+enable; the production position/speed mode paths must establish and verify the
+current cap before enabling the drive.
+
+Preserve numeric logs before restarting. Never overwrite retained homing data,
+manually mark axes homed or bypass validation. Invalidate old calibration by
+installation identity. Yaw needs reference initialization instead of endpoint
+homing. Pitch homing has completed in the normal mixed controller, but repeated
+speed-ceiling/corridor warnings did not abort with
+`homing.motion_checks_abort: false`; this guard behavior remains unqualified.
+IMU orientation is a secondary observation, not a replacement for
+motor/reference validity.
+
+## Deployment and operation
+
+Use the following launcher path for the mixed profile. Two controlled stops
+have passed on `cae41d0`; do not regard normal operation as fully commissioned
+until broader stop/recovery evidence and remaining acceptance gates are
+reviewed, including the intermittent readiness rejection seen on the prior
+release.
+
+Use the existing project-local virtual environment with OS camera bindings and
+install station requirements there. Never install pip dependencies globally or
+commit the environment. `run/station-venv` exists with system camera bindings;
+builds live in separate `run/releases/.../Firmware/build` directories. The
+minimal Hailo-8 driver/runtime is installed and verified after reboot; do not
+replace it with `hailo-all` or install Tappas as part of this minimal profile.
+
+Deploy committed source with `Firmware/tools/deploy_station.py`. It archives
+`HEAD`, creates a separate release under `run/releases`, records `REVISION`,
+builds/tests and performs preflight while preserving the Pi checkout. It refuses
+dirty source. Use a project-local Python interpreter; no push is required.
+
+Without `--activate`, deployment does not start motors. `--probe-build` builds
+the controller and commissioning probe and runs preflight while deferring regression tests; it is
+probe-ready evidence only. `--activate` additionally stops/starts through the
+launcher and verifies readiness. It can move motors and is inappropriate for
+unadapted source.
+
+After implementation and commissioning, the usual entry points are:
+
+```bash
+bash Firmware/scripts/run_application.sh deploy  # inactive checkout: build/test/check
+bash Firmware/scripts/run_application.sh start   # also the no-argument default
 bash Firmware/scripts/run_application.sh status
 bash Firmware/scripts/run_application.sh stop
 ```
 
-Start returns after the supervisor has launched its children, **not after
-homing**. It survives SSH disconnection. Repeating start in the same checkout
-reports the existing launcher. Starting another release while one is running
-is refused. For interactive logs and Ctrl-C shutdown:
+Start returns after child launch, not after readiness. Current runtime uses a
+session-relative continuous-yaw reference, pitch-only homing, fresh feedback,
+bus identity checks and valid perception. A successful AUTO_ROAM run does not
+prove stop behavior, tracking accuracy or final station readiness.
+
+`--sim` still opens the real camera; `--hold-motion` is perception-only and also
+opens it. Neither replaces camera ownership checks or verifies the new backend.
+Keep trial mode/speed/gain overrides out of normal releases. Rollback must select
+a release qualified for this hardware or leave the station stopped; never
+restart a dual-CyberGear build on the new mechanism.
+
+## Bounded commissioning, without automatic startup
+
+See [the September 26 implementation and test record](archive/partially-implemented/commissioning/HARDWARE_COMMISSIONING_2026_09_26.md)
+for the tested revision and release path. Deploy a committed commissioning build
+with the local project Python:
 
 ```bash
-bash Firmware/scripts/run_application.sh run
+python Firmware/tools/deploy_station.py --probe-build --commission-hardware
 ```
 
-`status` reports the active checkout, configuration, process IDs and live JSON
-telemetry. Verify `controld_connected`, `soft_limits_valid`, an empty `fault`,
-and `operating_mode` of `AUTO_ROAM` or `AUTO_TRACK` after startup. `phase=hold`
-is the controller's service phase; it does not mean the user selected Manual.
-The web shows homing progress and the current mode.
-
-The launcher `stop` command requests controlled parking and motor disable, then waits for the owned
-camera and web processes to exit. It never force-kills the motor controller.
-If the caller's 120-second wait expires, shutdown remains in progress: inspect
-the log and status. Do not start another controller or use `pkill`/`kill -9`.
-Repeated stop is harmless. A failed child also shuts down its sibling processes.
-
-The web/API action `request_shutdown` is **motor parking**, not launcher stop.
-It leaves `controld`, webd and perception running after success or failure.
-Home is rejected while parking runs, and can start a new calibration after
-PARKED or a park-only failure if both drives have fresh, healthy, stationary
-feedback. For a drive fault or latched watchdog, use **MENU → RECOVER MOTORS →
-Confirm**, then **HOME → Confirm Home** after recovery succeeds. Home alone
-does not clear a latched controller fault. An explicit launcher stop terminates
-the services and retains its emergency-disable fallback, reported as PARK FAILED
-when the park was not verified. It must not be mistaken for a successful release.
-
-The corrected controller accepts **Stop Motion / Hold during parking** and
-latches a controlled-stop fault. Parking overspeed, unexpected travel, stale
-feedback and BRAKE/HOLD interventions also latch; a later ALLOW cannot resume
-the park. These motion failures require Recover Motors before Home. Ordinary
-verification-only failures retain the separate Home recovery described above.
-The zero-speed command does not certify a stopped or supported load. Parking
-retains each drive's existing running mode throughout braking, movement and
-verification. It never runs a disable/re-enable mode recipe to prepare a park
-or enter its verification dwell. It first requires 150 ms of stationary feedback,
-with a 2.5-second braking deadline. Speed-mode verification uses bounded position
-correction at the park target. Stop/Hold during this entry dwell retains power
-and latches the stop. Unexpected drive disable before the release stages also
-latches a fault. An offline pass does not establish physical validation.
-
-### Motor fault recovery
-
-`recover_motors` is an explicit operator action, available in Fault, Idle or
-Parked. It inhibits motion, invalidates retained calibration, stops both drives,
-and sends the documented CyberGear `COMM_TYPE_4` fault-clear command (`data[0]=1`)
-once to each motor. This is fault clearing, not a firmware reboot or encoder-zero
-command. It does not automatically retry or resume previous tracking/roaming.
-
-The controller remains online in `phase=recovering`. Before releasing its
-watchdog latch it requires both motors to report disabled, fault-free feedback
-no older than 50 ms, temperatures within the configured limit, and at least ten
-distinct samples per axis spanning a one-second position window of at most
-0.25 degrees. A five-second deadline bounds the attempt. Failure reports
-`RECOVERY FAILED` with the affected feedback gate and keeps motion disabled.
-Missing communication, continuing drive faults, heat, or movement must resolve
-before recovery can succeed; repeatedly resetting cannot repair those causes.
-
-Successful operator recovery leaves `phase=idle`, Manual, motors disabled and
-calibration invalid. Home is a separate confirmed action. Hardware Home also
-runs the same clear/verify sequence before starting the homing plan. Normal
-startup runs it when homing is required; a validated retained calibration still
-avoids unnecessary motor disable and homing. Recovery does not certify a park
-pose or the stability of an unpowered load.
-
-Home and other motion commands are rejected while recovery is running. Stop
-Motion (or Hold during recovery) cancels the attempt and leaves Fault; an
-explicit Recover Motors action can retry later. The 100 ms watchdog remains
-enabled and unchanged. Resetting is not evidence that the recurring feedback
-outage has been repaired. Preserve runtime logs before any launcher restart.
-
-Offline verification, with no physical motors or camera:
+If `rpi-turret` does not resolve from Windows after reboot, the observed
+connection workaround is:
 
 ```bash
-build/probe-motor-recovery
-PYTHONPATH=. ../run/station-venv/bin/python tools/probe_motor_recovery_service.py \
-  --controld build/control/controld --output ../run/motor-recovery-service
+python Firmware/tools/deploy_station.py --connect-address 192.168.2.100 --probe-build --commission-hardware
 ```
 
-The first probe runs the actual watchdog/backend/UART path against a PTY motor
-emulator, including an existing watchdog latch, silent pitch timeout and retry.
-The second runs the actual controller/web services with simulated motors and
-checks HTTP recovery, command rejection, cancellation, retry and re-homing.
-Neither establishes that the physical feedback-loss mechanism is resolved.
+The address is evidence from this session, not a static configuration promise.
 
-Parking motion supervision can be probed without hardware with
-`build/probe-parking-motion`. The numeric control trace includes actual parking
-speed commands and position-derived estimated speed (`vest`), both in rad/s.
-
-`build/probe-park-power` runs the production controller and CAN backend against
-a simulated loaded plant and counts protocol frames. It requires no STOP,
-enable or mode-write frames before reaching the park pose. It checks independent
-sensor policy and the operator-approved motor-feedback policy, including starting
-already parked. Successful release sends two STOP frames after both axes arrive.
-This is protocol evidence, not physical load verification.
-
-`PYTHONPATH=. ../run/station-venv/bin/python tools/probe_menu_lifecycle.py`
-executes the production menu update logic in Node without a browser or video.
-It checks Home/recovery availability across controller phases and ensures
-unrelated target updates do not replace open MENU buttons during a click.
-
-Parking targets are configurable under `shutdown` in `config/turret.yaml`:
-
-- `yaw_park_mode` and `pitch_park_mode`: `logical_degrees`, `soft_center`,
-  `soft_min`, or `soft_max`.
-- `logical_degrees` uses the corresponding `yaw_park_deg` / `pitch_park_deg`.
-- The other modes use calibrated **raw** soft limits. `soft_min` / `soft_max`
-  are inset by `park_end_clearance_deg`; inadequate braking clearance is rejected.
-
-**Operator-approved parking contract, 9 September 2026:** middle of yaw and
-lowest pitch. The station resolves this as yaw `soft_center`, pitch `soft_min`,
-retaining the 5-degree braking inset from the pitch soft minimum (in addition
-to the homing soft-limit margin). The resolved raw and logical targets are logged.
-The operator explicitly authorized release at this pose and deployment.
-
-`shutdown.require_independent_position: false` selects motor-feedback verification
-for this approved pose. The controller keeps power through the yaw move, pitch
-move and settling dwell. Both axes must have fresh fault-free motor feedback,
-position inside the guarded tolerance (0.25 degrees for the configured 0.5 degrees),
-and speed below the configured tolerance. Powered correction is allowed to
-settle; leaving tolerance restarts the dwell. After both axes dwell inside
-tolerance it releases both motors in the same cycle and confirms disabled
-feedback before reporting PARKED. Normal unpowered settling, including a
-0.3-degree shift, does not cause FAULT or invalidate the completed park.
-An axis already at
-its target can pass without artificial travel. Failed verification reports PARK
-FAILED; hard-fault, temperature and watchdog emergency authority remains active.
-
-The parameter defaults to true when omitted. That separate policy additionally
-requires an independent output-position measurement and observed travel on each
-axis. The CAN backend has no independent position source, and therefore only
-the explicitly selected motor-feedback policy can complete on this station.
-Motor feedback is not relabelled as an independent sensor measurement.
-
-Offline lifecycle verification (from `Firmware`, after building):
+On that release, as `eamars`, with both links already at 1 Mbps and UP:
 
 ```bash
-PYTHONPATH=. ../run/station-venv/bin/python tools/probe_park_service.py \
-  --controld build/control/controld --output ../run/park-service-probe
+bash Firmware/scripts/run_application.sh check --commission-hardware
+bash Firmware/scripts/run_application.sh run --commission-hardware
+# Optional non-motion operation: apply and verify the pitch LimitCur ceiling.
+bash Firmware/scripts/run_application.sh run --commission-hardware --apply-pitch-limit
+# Explicit motion: repeat only within the commissioned envelope and clear mechanism.
+bash Firmware/scripts/run_application.sh run --commission-hardware --yaw-voltage 1000 --pulse-ms 150
+bash Firmware/scripts/run_application.sh status
+bash Firmware/scripts/run_application.sh stop
 ```
 
-This starts the real controller and web processes with simulated motors and
-video disabled. It uses a disposable fast-homing Manual configuration, exercises
-park success with and without an initial yaw displacement through HTTP, verifies Home rejection during
-parking and recovery afterward, and checks both processes remain alive. Its
-final cleanup explicitly terminates those simulator processes; it does not
-operate the physical station or inspect a camera feed.
+The default probe only receives yaw and queries pitch discovery/mechanical
+position. A rejected pitch register read is reported unavailable, never treated
+as a position. The probe does not home, enable, zero or actuate pitch. With
+`--apply-pitch-limit`, it writes only volatile `LimitCur=5 A`, requires three
+matching readbacks, and leaves pitch disabled; this must be reapplied and
+verified after a reset before any enable. Following the owner's September 27
+CyberGear 1.2.1.5 upgrade, the same UID returned valid `MechPos` (-0.710777 rad)
+with status 0, and raw feedback reported mode 0/faults 0. The earlier rejected
+register read is historical. Later normal mixed runtime completed pitch-only
+homing, but repeated encoder-speed-ceiling and commanded-corridor warnings were
+non-aborting under `homing.motion_checks_abort: false`; treat the guard behavior
+as unresolved.
+Do not combine limit setup with yaw actuation.
 
-The script in any release can stop the active stack because ownership is shared
-by account/runtime directory, not by checkout. It reports the active checkout
-so an agent can find it without reconstructing past commands.
+### Pitch motion session
 
-## Automatic mode and homing
+The owner's tuning preference is to establish meaningful motion using the full
+authorized output headroom first. For pitch that means **5 A maximum**, never the
+motor's larger factory limit. Use a clear bounded target instead of escalating
+from tiny current/speed commands. A current limit is available headroom; it does
+not mean the controller must draw 5 A continuously.
 
-The shipped `Firmware/config/turret.yaml` sets `v3.default_mode: AUTO_ROAM`.
-The normal launcher checks this before enabling motors. No `--auto` flag or web
-command is needed. After calibration validation/homing, the station roams,
-acquires an eligible target, tracks, and returns to roaming after target loss.
-Automatic loss recovery resumes the interrupted sweep direction. At a sweep end
-it continues inward; outside the sweep region it first approaches the nearest end.
-Manual/STOP clears that direction memory, and explicit Auto starts a fresh sweep.
-See [roam recovery design](roam_recovery_design.md) for the policy and validation.
-
-**Manual / Hold** is an explicit web override. Its D-pad appears only in Manual
-service; hold an arrow to jog, release to stop. **Auto** resumes automatic
-roaming/acquisition. **MENU → Home → Confirm Home** requests homing.
-Manual/Hold is not an emergency stop or a reliable way to abort supervisory
-homing; use the normal stop command for full controlled shutdown.
-
-Motor disable invalidates retained calibration. Application restart skips homing
-only when retained calibration and live energized motor state validate. Never
-copy a retained homing file, manually mark axes homed, or bypass validation.
-Slow loaded homing currently takes about 5–6 minutes: coarse 5°/s, fine/backoff
-and between-axis moves 3°/s. This does not cap tracking speed. Tracking is
-configured with target and maximum pairs of 20°/s and 30°/s² under
-`motion.modes.auto_track`. These are the existing service command ceilings,
-not verified installed-load maxima. At full target speed there is no extra
-speed headroom for correcting lag. Axis, payload, confidence and boundary
-limits remain authoritative. Full-speed loaded stopping and moving-target
-overshoot remain unverified. See [motion profiles](motion_profiles.md) for the
-configuration contract and offline validation.
-
-## Deploy a committed revision from Windows or Linux
-
-Deployment requires Git, OpenSSH (`ssh`, `scp`), and a local Python interpreter.
-It uses only Python's standard library. Commit first; deployment refuses a dirty
-source tree. No push to GitHub is required.
-
-From this Windows workspace (using its existing project-local interpreter):
-
-```powershell
-run/takeover-analysis-venv/Scripts/python.exe Firmware/tools/deploy_station.py
-```
-
-From a Linux checkout with a project-local venv:
+Keep pitch enabled between movements, and keep CAN and IMU acquisition live
+through the session. Do not cycle the stack, lower the CAN links or disable the
+motor between individual stages. Stop on a fault or explicit session completion.
+No persistent gain, homing, encoder-zero or calibration writes are part of this
+probe. The commissioned ±15° pitch session is:
 
 ```bash
-.venv/bin/python Firmware/tools/deploy_station.py
+bash Firmware/scripts/run_application.sh run --commission-hardware --with-imu \
+  --pitch-step-mdeg 15000 --pitch-test-gains
 ```
 
-The command archives `HEAD`, uploads it into a new directory under
-`/home/eamars/workspace/OpenAutoTurret/run/releases/`, records `REVISION`,
-reuses the station's project-local `run/station-venv`, builds C++, runs CTest,
-installs `Firmware/requirements-station.txt`, and performs read-only preflight.
-It does not overwrite the Pi checkout,
-discard dirty files, or change the running station. It prints the exact
-release path and activation/status commands.
+It verifies the 5 A cap and position mode, then enables once for two step/return
+pairs: +15°, start, −15°, start, at a requested 10°/s. Pitch remains
+energized while settling and between all four stages. The explicit gain trial
+uses speed-loop Kp=4, Ki=0.05 and restores nominal 1/0.002 at session completion.
+The final stop is not a parking/homing certification. Numeric traces are
+`pitch-probe.csv`, `controller.log` and `imu.ndjson` in the launcher runtime.
 
-To deploy and activate in one command, append **`--activate`**. Only after
-build/tests/preflight succeed does it stop the old stack and start the new one.
-Activation may home and move the station. After starting, the command performs
-an HTTP/WebSocket smoke test and waits for `READY` automatic operation before
-reporting success. If build/preflight or activation verification fails, inspect
-the retained release and runtime logs. There is no automatic rollback that
-unexpectedly starts motors.
+The probe bounds excursion from initial position to 17°, encoder-derived speed
+over at least 50 ms to 20°/s, feedback/heartbeat age to 100 ms, and temperature
+to 45°C. The firmware's raw speed field has shown noise inconsistent with small
+encoder changes; it remains logged but does not alone establish actual speed.
+These bounds do not qualify an unknown pitch endpoint or automatic homing.
+See [the paired large-motion and IMU record](archive/partially-implemented/commissioning/LARGE_MOTION_COMMISSIONING_2026_09_27.md).
 
-For an existing inactive checkout directly on the Pi:
+### Yaw motion session
+
+The commissioned yaw excursion is 30° out and back in one continuous CAN0
+session with a fresh BNO085 host tare:
 
 ```bash
-bash Firmware/scripts/run_application.sh deploy  # build, CTest, preflight; no start
-bash Firmware/scripts/run_application.sh start
+bash Firmware/scripts/run_application.sh run --commission-hardware --with-imu \
+  --yaw-step-deg 30
 ```
 
-In-place deployment is refused while that checkout runs. A separate release can
-be built while the old release runs. To roll back, use the printed path of the
-previous release with `stop`, then `start`; normal homing validity rules apply.
-Never merge/reset the Pi's dirty checkout merely to make a deployment command pass.
+The successful run moved 29.356° outbound and returned to +0.659° relative to
+its start; the IMU independently measured +29.183° and −28.446° on the two
+legs. The GM6020 voltage output ceiling is the vendor-documented ±25,000 raw,
+while actual commands stayed within −4,268..+5,643 raw. It guards travel,
+speed, stale feedback and stalled progress, then requests zero voltage and
+observes a stationary motor. GM6020 zero voltage is not a verified disable or
+mechanical park. See the [large-motion record](archive/partially-implemented/commissioning/LARGE_MOTION_COMMISSIONING_2026_09_27.md)
+for bounds, failures and raw evidence.
 
-## Preflight, prerequisites and diagnostics
+`config/hardware_probe.yaml` is a separate probe schema, **not** a production
+controller configuration. Fixed ceilings are |voltage| <= 3000 raw, pulse <=
+500 ms, travel <= 5 degrees, speed <= 20 degrees/s, feedback age <= 20 ms and
+heartbeat gap <= 40 ms. Recorded trials include +/-1000 and +/-1500 raw for
+150 ms, +2000 raw for 100 ms, and bounded +/-3 deg/s PI requests for 500 ms.
+The PI trial stayed within the guards but did not achieve its requested speed;
+its 1500 raw ceiling and gains are not production-qualified. See the
+[continuation evidence](archive/partially-implemented/commissioning/HARDWARE_CONTINUATION_2026_09_26.md). These raw voltage
+commands are not amperes.
 
-```bash
-bash Firmware/scripts/run_application.sh check  # imports/config/files only; no motor or camera open
-tail -n 80 /tmp/ota-stack-1000/controller.log
-tail -n 80 /tmp/ota-stack-1000/vision.log
-tail -n 80 /tmp/ota-stack-1000/web.log
-tail -n 80 /tmp/ota-stack-1000/launcher.log
-```
+The probe verifies SPI parents, bitrate, ERROR-ACTIVE state, UID and stationary
+yaw baseline before output. The 200 Hz pulse loop and separate in-process guard
+serialize commands, stop on stale/invalid feedback or CAN error frames, and
+request zero after pulse deadline/interruption. This guard cannot survive loss
+of the process or Pi. Automatic operation and process-loss behavior remain
+unqualified. No independent power-cutoff capability has been established.
 
-The commissioned Pi already has CMake, a C++20 compiler, yaml-cpp, spdlog, GTest,
-RPi libcamera/Picamera2, the IMX500 model files named by the perception profile,
-and permission for `eamars` to access `/dev/ttyUSB0` and the camera devices.
-Deployment does not install OS packages or change hardware permissions.
-For a replacement Pi, follow [AI camera setup](AI_CAMERA_SETUP.md) for OS/camera
-packages. Create the project runtime with system-site-packages so it can import
-the OS camera bindings:
+The launcher and probe hold station-wide locks independent of `OTA_RUN_DIR`.
+Do not run other motor transmitters alongside them. Numeric evidence is written
+to `/tmp/ota-stack-1000/hardware-probe.csv` and `controller.log`; copy it into
+ignored `run/` before the next probe replaces it. No camera or web process is
+started in commissioning mode.
 
-```bash
-python3 -m venv --system-site-packages run/station-venv
-run/station-venv/bin/python -m pip install -r Firmware/requirements-station.txt
-```
+## Historical procedures
 
-Reuse an existing venv; never install pip dependencies globally. Run `check`
-after provisioning. Missing model/calibration files or imports must be resolved
-before startup. `check` does not prove camera/CAN device availability or physical
-motion; live startup and telemetry provide those checks.
-
-Advanced overrides: `OTA_PYTHON`, `OTA_CONTROL_CONFIG`, `OTA_RUN_DIR`,
-`OTA_WEB_HOST`, `OTA_WEB_PORT`, `OTA_BUILD_JOBS` (default 2). Keep normal operation
-free of commissioning overrides. A custom control config may explicitly select
-Manual; preflight prints the chosen startup mode. Status/stop require the same
-account and `OTA_RUN_DIR`, and obtain the active web port from runtime metadata.
-
-`--sim` simulates motors but still uses the real camera. `--hold-motion` starts
-only perception and is stopped by the same script. Neither is the normal default.
-`--production` invokes the perception model's production-readiness gate; the
-commissioned `person_detect_available` profile is the ordinary default.
-
-## Evidence and historical documents
-
-### Numeric response diagnostics
-
-The controller socket accepts the read-only `read_control_trace` command. It
-returns at most 256 recent control records (about 1.28 seconds at 200 Hz), with
-pitch/yaw encoder position, reference position/rate, commanded speed, reported
-torque, feedback timestamps, command acknowledgement sequence and cycle interval.
-The diagnostic writer uses a nonblocking lock: a reader can cause a missing
-diagnostic sample, never a wait in motor control. Deduplicate by timestamp and
-report gaps. Encoder readings do not certify independent platform angle.
-
-Perception writes a latest-only `perception/timing.json` in the runtime directory.
-It contains numeric capture/publication timestamps, exposure, frame duration,
-image-copy time and available IMX500 DNN/DSP KPI values. No image access is needed.
-
-`tools/measure_response_cycle.py --output ../run/response.jsonl` captures these
-diagnostics without moving the station. Explicit `--probe yaw:1:2.5` requests a
-target-free six-second fixed angular step using the tracking reference filter and
-the existing AUTO_TRACK motion profile through the normal safety envelope. This
-is a Manual commissioning command, not an automatic tracking mode. It requires
-healthy homed speed-mode service, fresh feedback, near-zero commanded speed, and
-15 degrees clearance at both endpoints. Allowed signed steps are 0.5, 1 and 5
-degrees; the filter response rate is bounded to 2.5–6 per second. An optional
-fourth argument (`yaw:1:4:3`) sets the host position correction gain for that
-trial only, within 2–6 per second. The drive's internal gains are not changed.
-Any subsequent
-controller command cancels it, as do expiry, mode change and a safety intervention.
-The tool also sends Stop Motion on exit. The trial does not alter deployed gains,
-current limits, homing, calibration, or startup mode. Move captures off the Pi
-after analysis; runtime data does not belong in Git.
-
-The deployed `v3.tracking_reference_omega` controls small-correction response
-(allowed 2.5–4 per second). Large corrections retain the original stiffness
-until the requested acceleration fits the configured profile. A constant faster
-gain produced excessive reference and encoder overshoot in physical 5-degree
-steps, so it is not the production algorithm. `v3.position_servo_kp` defaults to
-3 per second; the station configuration selects the physically evaluated value
-4 per second. Probe overrides are not retained. See the
-[response tuning follow-up](response_tuning_followup_2026_09_08.md) for measured
-response, final deployment and remaining timing/settling limitations.
-Current, speed, acceleration,
-jerk, thermal, boundary and watchdog limits remain authoritative.
-
-The automatic hand-off wait is 50 ms after a fresh selected measurement, followed
-by AUTO_TRACK's distinct-frame acquisition checks. Perception's confirmation and
-500 ms single-candidate selection dwell remain in force. This changes response
-to a fresh selection; it does not establish detector accuracy on new scenes.
-
-See [travel and loaded-control validation](travel_boundary_review_2026_09_06.md)
-for measured motion limits and remaining verification gaps. The September 3
-as-built document and earlier run reports are historical snapshots, not operating
-instructions. The individual systemd templates use an older vision path; do not
-run them alongside this launcher. Boot-time systemd activation is not installed
-by this workflow.
+Detailed September 8-9 homing, recovery, tuning and parking instructions are
+preserved in the [retired dual-CyberGear runbook](archive/superseded/operations/station_operations_dual_cybergear_2026_09_09.md).
+Their measurements remain background, not certification of this mechanism.
+`STATION_RUNBOOK.md`, MCP2515 setup/fault reports and `AS_BUILT_v1.md` describe
+prior installations. The earlier BNO085 proposal is also historical design
+input; its hardware-absent status is superseded, while integration remains open.
+See [the documentation map](README.md).

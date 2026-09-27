@@ -238,7 +238,7 @@ class Picamera2FrameSource:
     """Real IMX500 frame source via Picamera2 (architecture §5.1).
 
     Written against the picamera2 that is actually installed on the station
-    (0.3.37 — measured, not assumed; see `docs/research_vision_readiness_p7.md`).
+    (0.3.37 — measured, not assumed; see `docs/archive/superseded/vision/research_vision_readiness_p7.md`).
     The camera is STARTED once and each ``capture()`` PULLS the next completed
     request (``capture_request()`` -> ``make_array`` + ``get_metadata`` ->
     ``release``): one array and its own metadata, no copying, no file I/O, one
