@@ -673,6 +673,13 @@ inline const char* event_name(Event e) {
   return "UNKNOWN";
 }
 
+// A trace reply, and whether it is the trip's own window or the running ring.
+struct TraceWindow {
+  std::vector<ControlLogRecord> rows;
+  bool frozen = false;
+  int64_t frozen_t_ns = 0;
+};
+
 struct EventRecord {
   TimeNs timestamp_ns = 0;
   Event event = Event::TargetAcquired;
@@ -729,6 +736,15 @@ class Telemetry {
   static constexpr std::size_t kControlLogCap = 4096;   // ~20 s at 200 Hz
   static constexpr std::size_t kEventCap = 512;
   static constexpr std::size_t kBlackBoxCap = 8192;     // ~40 s at 200 Hz
+  // What a reader can ask for while the station is running: 1.28 s. Named because
+  // the argument below depends on it.
+  static constexpr std::size_t kTraceCap = 256;
+  // What a trip is allowed to keep. The live window is 1.28 s and the loop keeps
+  // publishing while the station sits fault-locked, so without a freeze the cycles
+  // that explain a trip are overwritten by the cycles that merely follow it.
+  // Taken from the deep ring, not the export ring, so the frozen window is longer
+  // than anything a live reader could have caught.
+  static constexpr std::size_t kFrozenTraceCap = 1024;  // ~5.1 s at 200 Hz
 
   // §6.3 the current-cycle snapshot (overwritten each cycle). The web/log
   // processes read this from a non-real-time thread, so the snapshot is
@@ -752,6 +768,34 @@ class Telemetry {
   std::vector<ControlLogRecord> control_trace() const {
     std::lock_guard<std::mutex> lk(trace_mu_);
     return trace_.all();
+  }
+  // Freeze the per-cycle history at the moment a fault latches. Blocking, and
+  // deliberately so: the reader's critical section is a bounded copy of 256 rows,
+  // and this runs once, on a path that has already decided to stop the mechanism.
+  // The hot path's try_lock above stays as it is — dropping a sample every cycle
+  // and blocking once at a trip are different trades, and only one of them was
+  // agreed to.
+  void freeze_control_trace() {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    const int have = control_log_.latest(frozen_trace_,
+                                        static_cast<int>(kFrozenTraceCap));
+    frozen_count_ = have > 0 ? static_cast<std::size_t>(have) : 0;
+    frozen_t_ns_ = frozen_count_ ? frozen_trace_[frozen_count_ - 1].timestamp_ns : 0;
+  }
+  // What a trace reader gets: the frozen trip window when there is one, because
+  // that is the answer to the question anybody asks after a trip. `frozen` is on
+  // the wire so a reader is never told "this is what happened" about live cycles.
+  TraceWindow control_window() const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    if (frozen_count_)
+      return TraceWindow{std::vector<ControlLogRecord>(
+                             frozen_trace_, frozen_trace_ + frozen_count_),
+                         true, frozen_t_ns_};
+    return TraceWindow{trace_.all(), false, 0};
+  }
+  bool trace_frozen() const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    return frozen_count_ != 0;
   }
   const RingBuffer<ControlLogRecord, kControlLogCap>& control_log() const {
     return control_log_;
@@ -786,15 +830,21 @@ class Telemetry {
     control_log_.clear();
     event_log_.clear();
     blackbox_.clear();
+    frozen_count_ = 0;
+    frozen_t_ns_ = 0;
     snapshot_ = TelemetrySnapshot{};
   }
 
  private:
   mutable std::mutex snapshot_mu_;
   mutable std::mutex trace_mu_;
-  RingBuffer<ControlLogRecord, 256> trace_;  // 1.28 s; timestamp gaps expose drops
+  RingBuffer<ControlLogRecord, kTraceCap> trace_;  // 1.28 s; timestamp gaps expose drops
   TelemetrySnapshot snapshot_;
   RingBuffer<ControlLogRecord, kControlLogCap> control_log_;
+  // Guarded by trace_mu_ with everything else a reader touches here.
+  ControlLogRecord frozen_trace_[kFrozenTraceCap];
+  std::size_t frozen_count_ = 0;
+  int64_t frozen_t_ns_ = 0;
   RingBuffer<EventRecord, kEventCap> event_log_;
   uint64_t event_pushes_ = 0;  // does not saturate where size() does
   RingBuffer<ControlLogRecord, kBlackBoxCap> blackbox_;

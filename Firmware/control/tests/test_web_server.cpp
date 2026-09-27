@@ -527,7 +527,7 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   WebServer server(
       cfg, [] { return telemetry::TelemetrySnapshot{}; },
       [](const std::string&, const std::string&) { return CommandResult{}; },
-      [&rec] { return std::vector<telemetry::ControlLogRecord>{rec}; });
+      [&rec] { return telemetry::TraceWindow{{rec}, true, 123456789000000}; });
   std::string err;
   ASSERT_TRUE(server.start(err)) << err;
 
@@ -542,6 +542,9 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   ASSERT_TRUE(got) << "no control_trace frame arrived";
   EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"temp_raw\":[-1,28]"), std::string::npos) << frame;
+  // A reader must be able to tell "the trip's own window" from "whatever the ring
+  // holds right now"; the two answers look identical and mean different things.
+  EXPECT_NE(frame.find("\"frozen\":true"), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"effort\":[null,null]"), std::string::npos) << frame;
   EXPECT_EQ(frame.find("nan"), std::string::npos) << frame;
   ::close(cfd);

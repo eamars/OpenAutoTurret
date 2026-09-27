@@ -492,7 +492,7 @@ class WebServer {
     int max_clients = 8;
   };
   using SnapshotProvider = std::function<telemetry::TelemetrySnapshot()>;
-  using TraceProvider = std::function<std::vector<telemetry::ControlLogRecord>()>;
+  using TraceProvider = std::function<telemetry::TraceWindow()>;
   using CommandHandler =
       std::function<CommandResult(const std::string& command,
                                   const std::string& arg)>;
@@ -645,10 +645,13 @@ class WebServer {
     json_get_string(json, "command", command);
     json_get_string(json, "arg", arg);
     if (command == "read_control_trace" && arg.empty() && trace_provider_) {
-      const auto rows = trace_provider_();
+      const telemetry::TraceWindow win = trace_provider_();
+      const std::vector<telemetry::ControlLogRecord>& rows = win.rows;
       std::ostringstream out;
       out.precision(12);
-      out << "{\"type\":\"control_trace\",\"axes\":[\"pitch\",\"yaw\"],\"rows\":[";
+      out << "{\"type\":\"control_trace\",\"axes\":[\"pitch\",\"yaw\"],"
+             "\"frozen\":" << (win.frozen ? "true" : "false")
+          << ",\"frozen_t_ns\":" << win.frozen_t_ns << ",\"rows\":[";
       bool comma = false;
       for (const auto& r : rows) {
         if (comma) out << ',';

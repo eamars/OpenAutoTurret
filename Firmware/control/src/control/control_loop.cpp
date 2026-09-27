@@ -419,6 +419,11 @@ void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   shutdown_requested_.store(false);
   phase_ = Phase::Fault;
   fault_reason_ = "PARK FAILED: " + reason;
+  // A park that could not be verified is its own mechanism mystery, so it earns a
+  // window too — but the first latch wins: if a guard already froze the cycles
+  // that led to this, overwriting them with the aftermath of the stop would trade
+  // the evidence for a picture of the wreckage.
+  if (!telemetry_.trace_frozen()) telemetry_.freeze_control_trace();
   disable_tracking();
   spdlog::error("{}; automatic park release withheld; services remain online", fault_reason_);
   if (motion_fault) {

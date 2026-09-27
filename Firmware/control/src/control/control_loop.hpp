@@ -436,6 +436,9 @@ class ControlLoop {
     if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;
+      // The window a live reader could have caught is 1.28 s and the loop keeps
+      // publishing from here on; keep the cycles that led up to this.
+      telemetry_.freeze_control_trace();
     }
   }
   // vel_rad_s is passed in (the position-derived v_est_) rather than read from

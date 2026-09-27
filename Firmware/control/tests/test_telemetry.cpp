@@ -33,6 +33,40 @@ TEST(Telemetry, ControlTraceRowCarriesItsPhaseAndThermalByte) {
   EXPECT_EQ(back.temp_raw[1], 28);
 }
 
+TEST(Telemetry, AFreezeKeepsTheCyclesThatLedToTheTrip) {
+  // The export ring is 256 rows (1.28 s) and the loop keeps publishing while the
+  // station sits fault-locked, so a trip that nobody reads within a second and a
+  // half loses the very cycles that explain it. The freeze takes its rows from the
+  // deep ring, so it holds more than any live reader could have caught.
+  Telemetry t;
+  for (int i = 0; i < 900; ++i) {
+    ControlLogRecord r;
+    r.timestamp_ns = 1000 + i;
+    t.push_control(r);
+  }
+  t.freeze_control_trace();
+  ASSERT_TRUE(t.trace_frozen());
+  const int64_t frozen_last = t.control_window().frozen_t_ns;
+  EXPECT_EQ(frozen_last, 1000 + 899);
+  EXPECT_TRUE(t.control_window().frozen);
+  EXPECT_EQ(t.control_window().rows.size(), 900u);
+
+  // Two full live windows of noise later, the answer must not have moved.
+  for (int i = 0; i < 600; ++i) {
+    ControlLogRecord r;
+    r.timestamp_ns = 5000000 + i;
+    t.push_control(r);
+  }
+  EXPECT_EQ(t.control_window().rows.size(), 900u);
+  EXPECT_EQ(t.control_window().frozen_t_ns, frozen_last);
+  // The live ring moved on, which is the whole reason the freeze exists.
+  EXPECT_GT(t.control_trace().back().timestamp_ns, 1000 + 899);
+
+  t.clear();
+  EXPECT_FALSE(t.trace_frozen());
+  EXPECT_TRUE(t.control_window().frozen == false);
+}
+
 TEST(Telemetry, SnapshotIsOverwrittenEachCycle) {
   Telemetry t;
   TelemetrySnapshot s;
