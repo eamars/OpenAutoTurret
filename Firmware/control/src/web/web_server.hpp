@@ -20,6 +20,7 @@
 #include <poll.h>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <sys/socket.h>
 #include "spdlog/spdlog.h"  // a torn frame has to be said out loud
 #include <sys/un.h>
@@ -111,7 +112,9 @@ inline std::string format_motion_profiles(const telemetry::TelemetrySnapshot& s)
 // black-box object and each use is the same pair of numbers; the alternative was four
 // copies of the same concatenation, which is how one of them ends up wrong.
 inline std::string js(const double v[2]) {
-  return "[" + std::to_string(v[0]) + "," + std::to_string(v[1]) + "]";
+  // Same rule as every other unknown on this socket: null, not `nan`.
+  // `std::to_string` happily emits `nan` and `inf`, which are not JSON.
+  return "[" + json_finite_or_null(v[0]) + "," + json_finite_or_null(v[1]) + "]";
 }
 
 inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
@@ -651,11 +654,21 @@ class WebServer {
         if (comma) out << ',';
         comma = true;
         out << "{\"t\":" << r.timestamp_ns << ",\"ack\":" << r.command_seq
-            << ",\"omega\":" << r.probe_omega
+            << ",\"omega\":" << json_finite_or_null(r.probe_omega)
             << ",\"safety\":" << static_cast<int>(r.safety_action)
             << ",\"period_us\":" << r.cycle_duration_us;
-        const auto pair = [&](const char* key, const auto* a) {
-          out << ",\"" << key << "\":[" << a[0] << ',' << a[1] << ']';
+        // A double on this wire can be genuinely unknown — there is no torque figure in
+// a GM6020 status frame — and the rule for that is `null`, already stated and
+// tested for the telemetry path. A tick counter has no such state, so it keeps
+// its digits; a null age would be a different kind of lie.
+const auto jn = [](auto x) {
+  if constexpr (std::is_floating_point_v<decltype(x)>)
+    return json_finite_or_null(static_cast<double>(x));
+  else
+    return std::to_string(x);
+};
+const auto pair = [&](const char* key, const auto* a) {
+          out << ",\"" << key << "\":[" << jn(a[0]) << ',' << jn(a[1]) << ']';
         };
         pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
         pair("cmd",r.v_command); pair("effort",r.effort); pair("rx",r.feedback_ns);

@@ -509,6 +509,44 @@ TEST(WebServer, NoBusIsPublishedAsAbsenceNotAsZeroHealth) {
   server.stop();
 }
 
+TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
+  // Nobody in the stack asked for the per-cycle trace until 2026-09-28, and the
+  // first reader that did found a frame that Python's json module rejected: yaw
+  // has no torque figure, so `effort` was NaN, and this serializer — unlike the
+  // telemetry one tested above — had never been told that `std::to_string` emits a
+  // bare `nan`, which is not JSON. The lesson was already in this file; a second
+  // hand-rolled path 500 lines away simply had not inherited it.
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_trace.sock";
+  telemetry::ControlLogRecord rec;
+  rec.phase = Phase::Hold;
+  rec.temp_raw[0] = -1;   // CyberGear sends no thermal byte
+  rec.temp_raw[1] = 28;   // unit-less GM6020 byte
+  rec.effort[0] = rec.effort[1] = std::numeric_limits<double>::quiet_NaN();
+  rec.v_estimated[1] = std::numeric_limits<double>::quiet_NaN();
+  WebServer server(
+      cfg, [] { return telemetry::TelemetrySnapshot{}; },
+      [](const std::string&, const std::string&) { return CommandResult{}; },
+      [&rec] { return std::vector<telemetry::ControlLogRecord>{rec}; });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+
+  int cfd = connect_client(cfg.socket_path);
+  ASSERT_TRUE(send_message(cfd, R"({"type":"command","command":"read_control_trace"})"));
+  std::string frame;
+  bool got = false;
+  for (int i = 0; i < 6 && !got; ++i) {
+    if (!read_message(cfd, frame)) break;
+    got = frame.find("\"type\":\"control_trace\"") != std::string::npos;
+  }
+  ASSERT_TRUE(got) << "no control_trace frame arrived";
+  EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"temp_raw\":[-1,28]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"effort\":[null,null]"), std::string::npos) << frame;
+  EXPECT_EQ(frame.find("nan"), std::string::npos) << frame;
+  ::close(cfd);
+}
+
 TEST(WebServer, CommandRoundTripOk) {
   WebServer::Config cfg;
   cfg.socket_path = "/tmp/ota_web_test2.sock";
