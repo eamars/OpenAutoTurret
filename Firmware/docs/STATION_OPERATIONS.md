@@ -81,9 +81,10 @@ release for commissioning preflight. Normal `check` deliberately rejects the old
 motor configuration. Logs under
 `/tmp/ota-stack-1000` exist only after a run.
 
-At audit completion both CAN links were restored `DOWN` / `STOPPED` at 1 Mbps;
-both cameras were closed and the IMU probe exited. A future probe must inspect
-current ownership/state rather than assume these conditions persist.
+The earlier audit left both CAN links DOWN. After the September 27 continuous
+pitch session, CAN1 was retained UP at 1 Mbps for further work; CAN0 was DOWN.
+The session ended with pitch disabled and its IMU process closed. Inspect current
+ownership/state before another session; do not cycle CAN links between tests.
 
 The owner's September 26 elevation authorization covers temporary CAN link
 setup for these probes; mechanical tests were subsequently authorized explicitly.
@@ -141,9 +142,10 @@ verification do not transfer to GM6020. A zero GM6020 command does not certify
 power removal or a supported load. Commission the new stop/park contract before
 operation. The web's parking request is not equivalent to full launcher stop.
 
-Commissioning stop requests zero GM6020 voltage and observes feedback; its
+The default mixed-probe stop requests zero GM6020 voltage and observes feedback; its
 terminal result explicitly says **not a park/disable certification**. It never
-enables or moves pitch. Do not interpret a zero-voltage request as power removal.
+enables or moves pitch. The explicit pitch session below does enable pitch.
+Do not interpret a zero-voltage request as power removal.
 The separate `--apply-pitch-limit` option only writes the configured volatile
 CyberGear `LimitCur` value (5 A maximum) and checks three matching readbacks; it
 does not enable or move pitch. It cannot be combined with yaw voltage or speed
@@ -243,6 +245,38 @@ CyberGear 1.2.1.5 upgrade, the same UID returned valid `MechPos` (-0.710777 rad)
 with status 0, and raw feedback reported mode 0/faults 0. The earlier rejected
 register read is historical; pitch motion/homing still needs commissioning.
 Do not combine limit setup with yaw actuation.
+
+### Pitch motion session
+
+The owner's tuning preference is to establish meaningful motion using the full
+authorized output headroom first. For pitch that means **5 A maximum**, never the
+motor's larger factory limit. Use a clear bounded target instead of escalating
+from tiny current/speed commands. A current limit is available headroom; it does
+not mean the controller must draw 5 A continuously.
+
+Keep pitch enabled between movements, and keep CAN and IMU acquisition live
+through the session. Do not cycle the stack, lower the CAN links or disable the
+motor between individual stages. Stop on a fault or explicit session completion.
+No persistent gain, homing, encoder-zero or calibration writes are part of this
+probe. The current single-axis commissioning session is:
+
+```bash
+bash Firmware/scripts/run_application.sh run --commission-hardware --with-imu \
+  --pitch-step-mdeg 3000 --pitch-test-gains
+```
+
+It verifies the 5 A cap and position mode, then enables once for two step/return
+pairs: +3°, start, +3°, start, each 1.5 seconds at a requested 10°/s. Pitch remains
+energized while settling and between all four stages. The explicit gain trial
+uses speed-loop Kp=4, Ki=0.05 and restores nominal 1/0.002 at session completion.
+The final stop is not a parking/homing certification. Numeric traces are
+`pitch-probe.csv`, `controller.log` and `imu.ndjson` in the launcher runtime.
+
+The probe bounds excursion from initial position to 4°, encoder-derived speed
+over at least 50 ms to 20°/s, feedback/heartbeat age to 100 ms, and temperature
+to 45°C. The firmware's raw speed field has shown noise inconsistent with small
+encoder changes; it remains logged but does not alone establish actual speed.
+These bounds do not qualify an unknown pitch endpoint or automatic homing.
 
 `config/hardware_probe.yaml` is a separate probe schema, **not** a production
 controller configuration. Fixed ceilings are |voltage| <= 3000 raw, pulse <=

@@ -226,6 +226,12 @@ peak versus 1.01360° game-RV peak. This is relative-motion evidence, not a comp
 mount calibration or controller fusion. Product part 10004148 reported version
 3.2.13/build 6. See [the IMU commissioning record](IMU_COMMISSIONING_2026_09_27.md).
 
+A subsequent continuous energized pitch session completed two +3°/return pairs
+at requested 10°/s and a verified 5 A cap. Encoder endpoint errors were within
+0.022°; no fault or guard trip occurred. IMU directions agreed on all four
+movements, but reported 2.34–2.78° versus roughly 3° at the encoder, so calibrated
+angle agreement remains open. Filtered-current samples peaked at 0.729 A.
+
 The following describes the earlier host-lab audit, retained as provenance.
 
 The owner confirmed that the previously proposed BNO085 is now installed.

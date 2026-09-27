@@ -1,6 +1,6 @@
 # Plan: split CAN buses, mixed motors and continuous yaw
 
-Status: **execution started; transport and bounded yaw commissioning implemented;
+Status: **execution started; transport and bounded yaw/pitch motion verified;
 automatic mixed-drive operation still pending**. Updated 27 September 2026.
 Ground truth is [the hardware inventory](HARDWARE_CURRENT.md); the operator
 confirmed GM6020 on yaw and CyberGear on pitch. Follow with the
@@ -11,19 +11,28 @@ mechanical tests. [Implementation and evidence](HARDWARE_COMMISSIONING_2026_09_2
 records typed SocketCAN, GM6020 decoding/voltage framing, session-relative encoder
 unwrapping, the launcher-owned probe and real bidirectional yaw motion. This
 completes an initial Stage 1 slice and starts Stage 2; it does not complete the
-stage exit gates or qualify automatic tracking. The probe sends no pitch motion
-commands. The initial pitch `mechPos` failure was resolved after the owner's
+stage exit gates or qualify automatic tracking. The default mixed probe sends no
+pitch motion commands; the explicit pitch session now exercises position mode.
+The initial pitch `mechPos` failure was resolved after the owner's
 September 27 upgrade: the same UID now returns valid position with status 0.
-Pitch homing and load support remain uncommissioned.
+Pitch endstop homing remains uncommissioned.
 
 The owner has now confirmed the camera sits roughly at the pitch assembly's
 center of mass and disabling pitch presents no current support risk. The
 [versioned IMU acquisition and stationary tare](IMU_COMMISSIONING_2026_09_27.md)
-have passed live runs and independently observed bounded yaw movement. The next
-motion slice is a small current-limited pitch movement with paired IMU capture,
-then measured two-axis mounting alignment; the raw IMU is not a base pose.
+have passed live runs and independently observed yaw and pitch movement. A
+continuous pitch session completed two +3°/return pairs at requested 10°/s,
+with all four encoder endpoint errors within 0.022°, no guard trip and the 5 A
+cap verified. The IMU magnitude differed and still needs qualification before
+measured two-axis mounting alignment; the raw IMU is not a base pose.
 
-The next commissioning slice adds a hard **5 A pitch command ceiling** and
+For motion tuning, use the full authorized current/torque headroom from the first
+meaningful bounded test rather than walking up from negligible outputs. Pitch
+remains limited to 5 A. Keep the motor energized between movement stages with
+continuous feedback and IMU capture; avoid repeated stack/CAN shutdowns between
+tests. Fault stops and an explicit end-of-session stop remain required.
+
+The implemented commissioning slice adds a hard **5 A pitch command ceiling** and
 requires current-limit and supported-mode readback before enable. A non-motion
 probe has written 5 A and obtained three matching readbacks. This setting is
 volatile and applies to speed/position modes; raw MIT/current mode is excluded.
@@ -32,8 +41,9 @@ It does not measure current transients. The owner has upgraded pitch to
 See the [upgrade reference](CYBERGEAR_FIRMWARE_UPGRADE.md).
 
 Hailo-8 provisioning and a real IMX477-to-YOLOv8n inference probe have passed.
-The next perception gate is representative person/head detection accuracy and
-camera geometry, followed by application integration. The automatic stack stays
+The Hailo profile also passed a 60-frame application run through visiond with
+motion held. The next perception gate is representative person/head detection
+accuracy and camera geometry. The automatic stack stays
 stopped until the mixed-drive and continuous-yaw gates below pass.
 
 ## Intended result

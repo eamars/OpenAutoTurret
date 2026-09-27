@@ -1,6 +1,6 @@
 # BNO085 acquisition, tare and motion evidence
 
-Status: **verified acquisition and relative yaw observation; mounting calibration
+Status: **verified acquisition and relative yaw/pitch observation; mounting calibration
 and controller integration remain incomplete**. 27 September 2026.
 
 The launcher now owns a versioned SH-2 Linux acquisition executable on I2C1,
@@ -68,6 +68,60 @@ motion estimate, not a qualified mounting matrix. The peak displacement agrees
 closely; final displacement differs by about 0.060°. Repeatability, pitch-axis
 measurement, timestamp alignment under load and IMU drift remain to be qualified.
 Do not raise the motor guards based on this result.
+
+## Continuous energized pitch session
+
+After the owner confirmed that the centered camera assembly is safe with pitch
+disabled, early 0.1–0.5° trials at 0.5°/s produced little useful motion. Every
+trial already had a verified 5 A cap; small demand and weak speed-loop response
+were the issue. The owner requested meaningful demand with full authorized
+headroom and no disable/restart between movements.
+
+Revision `0c8af6b` therefore enabled pitch once for +3°, return, +3°, return,
+each lasting 1.5 seconds at requested 10°/s, with speed gains Kp=4/Ki=0.05.
+CAN, feedback and IMU acquisition stayed live throughout. This used the production
+mode/current interlock, not direct MIT or Iq commands. All 1,188 movement-stage
+CSV samples reported enabled; all four stage endpoints reported no faults.
+
+| Stage | Encoder movement | Encoder endpoint target error | Game-RV rotation magnitude |
+|---|---:|---:|---:|
+| First outward | +2.994° | +0.0163° | 2.339° |
+| First return | −3.038° | 0° | 2.776° |
+| Second outward | +2.973° | −0.0056° | 2.651° |
+| Second return | −3.016° | −0.0219° | 2.596° |
+
+All IMU directions agreed with the encoder. Each stage included 75 game-RV
+samples at accuracy 3 in one uninterrupted generation. The full capture returned
+534 samples per gyro/orientation stream and 699 acceleration samples, with zero
+I2C errors, recovery or missing sequences. Sign-corrected pitch axis estimates
+differed by 0.32–1.54°; their mean was approximately
+`[-0.0314, +0.0780, -0.9965]` in that session's initial sensor frame.
+
+**This proves motion and repeatable direction, not calibrated angle agreement.**
+Game-RV/encoder angle ratios ranged 0.781–0.913. Projected gyro integrals were
+approximately +2.629°, −2.662°, +2.733°, −2.644°. The last 300 ms of each stage
+showed only 0.010–0.055° additional game-RV change. Mounting, fusion behavior,
+sensor scale and encoder/register agreement need further qualification; no
+correction factor or mounting matrix was persisted from these measurements.
+
+Among 148 filtered-current readbacks, maximum absolute Iq was 0.72854 A.
+`LimitCur=5 A` was verified before enable and after the session; those samples
+do not certify instantaneous current transients. Raw speed feedback showed
+14.1–16.7°/s peaks despite the requested 10°/s, and noise while settled. The guard
+uses encoder-derived speed over at least 50 ms instead. Requested speed must
+not be presented as a proven instantaneous speed ceiling.
+
+The session completed with guard trip 0, stop failure 0, disabled 1 and faults 0;
+nominal speed gains 1/0.002 were restored/read back at its end. CAN1 remained UP
+at 1 Mbps for subsequent work; there was no between-stage stack or link cycling.
+The two launcher lifecycle tests and two pitch-current safety tests passed on
+the Pi against the same release after the physical probe.
+
+Tested release:
+`/home/eamars/workspace/OpenAutoTurret/run/releases/0c8af6b6bfa5.sf95sM`.
+Ignored evidence prefix: `run/hardware-adaptation/imu-pitch-continuous-p3000`
+(`.csv`, `.ndjson`, `.log`, `.analysis.json`). Pitch endstop homing, production
+mixed-drive integration and automatic operation remain unqualified.
 
 ## Running and retaining evidence
 
