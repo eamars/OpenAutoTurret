@@ -21,7 +21,7 @@ class VelocityLoop {
     if (!valid_ || now <= previous_time_ || !std::isfinite(reference_rad_s) ||
         !std::isfinite(position) || !std::isfinite(max_reference_rad_s) ||
         !std::isfinite(output_ceiling) || !std::isfinite(kp) || !std::isfinite(ki) ||
-        max_reference_rad_s <= 0 || output_ceiling <= 0 || output_ceiling > 3000.0 ||
+        max_reference_rad_s <= 0 || output_ceiling <= 0 || output_ceiling > 25000.0 ||
         kp <= 0 || ki < 0 || dt > .020 ||
         std::abs(reference_rad_s) > max_reference_rad_s) {
       valid_ = false; return 0;

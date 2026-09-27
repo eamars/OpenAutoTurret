@@ -30,10 +30,14 @@ constexpr int kMotorId = 1;
 constexpr ota::TimeNs kFeedbackAgeLimit = 100'000'000;
 constexpr ota::TimeNs kHeartbeatLimit = 100'000'000;
 constexpr double kSpeedLimitDegS = 25.0;
-constexpr double kMaxOutputRaw = 3000.0;
+// GM6020 v1.4 voltage mode accepts +/-25000. The first 30-degree trial
+// reached only 3.96 degrees because the former low gains demanded at most
+// 2170 raw; provide full permitted headroom while the speed/position loops
+// and independent guard bound the actual motion.
+constexpr double kMaxOutputRaw = 25000.0;
 constexpr double kMaxReferenceDegS = 15.0;
-constexpr double kVelocityKp = 4500.0;
-constexpr double kVelocityKi = 250.0;
+constexpr double kVelocityKp = 35000.0;
+constexpr double kVelocityKi = 20000.0;
 constexpr double kMaxReferenceAccelerationDegS2 = 30.0;
 constexpr uint8_t kTemperatureLimitC = 70;
 constexpr ota::TimeNs kMotionLimit = 15'000'000'000;
