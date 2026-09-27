@@ -2963,7 +2963,8 @@ void ControlLoop::apply_v3_config_once() {
 void ControlLoop::ensure_manual_cfg() {
   if (manual_cfg_applied_) return;
   manual_cfg_applied_ = true;
-  if (cfg_.manual_lease_ms <= 0 && cfg_.manual_keepalive_ms <= 0) return;  // defaults
+  if (cfg_.manual_lease_ms <= 0 && cfg_.manual_keepalive_ms <= 0 &&
+      !backend_->supports_continuous_yaw()) return;  // defaults
   ManualConfig mc = manual_.config();
   if (cfg_.manual_lease_ms > 0) mc.lease_ms = cfg_.manual_lease_ms;
   if (cfg_.manual_keepalive_ms > 0) mc.keepalive_ms = cfg_.manual_keepalive_ms;
