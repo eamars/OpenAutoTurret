@@ -284,12 +284,12 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"world_elevation_deg\":"
      << (s.imu_world_elevation_valid ? std::to_string(s.imu_world_elevation_deg) : "null")
      << ",\"basis\":\"no inertial sensor on this station\"}"
-     << ",\"target_az_rate_world_rad_s\":" << s.target_az_rate_world_rad_s
-     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
-     << ",\"q_ref_rate_yaw_rad_s\":" << s.q_ref_rate_yaw_rad_s
-     << ",\"q_ref_rate_pitch_rad_s\":" << s.q_ref_rate_pitch_rad_s
-     << ",\"q_ref_accel_yaw_rad_s2\":" << s.q_ref_accel_yaw_rad_s2
-     << ",\"q_ref_accel_pitch_rad_s2\":" << s.q_ref_accel_pitch_rad_s2
+     << ",\"target_az_rate_world_rad_s\":" << json_finite_or_null(s.target_az_rate_world_rad_s)
+     << ",\"target_el_rate_world_rad_s\":" << json_finite_or_null(s.target_el_rate_world_rad_s)
+     << ",\"q_ref_rate_yaw_rad_s\":" << json_finite_or_null(s.q_ref_rate_yaw_rad_s)
+     << ",\"q_ref_rate_pitch_rad_s\":" << json_finite_or_null(s.q_ref_rate_pitch_rad_s)
+     << ",\"q_ref_accel_yaw_rad_s2\":" << json_finite_or_null(s.q_ref_accel_yaw_rad_s2)
+     << ",\"q_ref_accel_pitch_rad_s2\":" << json_finite_or_null(s.q_ref_accel_pitch_rad_s2)
      << ",\"q_ref_rate_valid\":" << (s.q_ref_rate_valid ? "true" : "false")
      << ",\"tracking_velocity_control\":" << (s.tracking_velocity_control ? "true" : "false")
      << ",\"tracking_reference_damped\":" << (s.tracking_reference_damped ? "true" : "false")

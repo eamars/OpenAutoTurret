@@ -926,3 +926,28 @@ TEST(WebServer, TheCommandResponseSaysWhichQuestionItAnswered) {
   EXPECT_TRUE(strict::Check(sub, &where)) << "submitted response is malformed: " << where << " in " << sub;
   EXPECT_TRUE(strict::Check(rej, &where)) << "rejected response is malformed: " << where << " in " << rej;
 }
+
+// One non-finite double printed by ostream as bare `nan` invalidates the WHOLE frame for
+// the web server, and it does so silently per-frame: the station ran for twenty minutes
+// with `rejected a frame from controld (9975 so far)` in the log while /api/state kept
+// serving its last good snapshot -- stale, not obviously dead. Reference rates are the
+// family most likely to be non-finite (no envelope, no sweep, no target), so they go
+// through the house helper like everything else, and this test prints a snapshot where
+// every one of them is NaN and demands the line stay parseable JSON.
+TEST(WebServer, ANonFiniteRateCannotTakeTheFrameDownWithIt) {
+  telemetry::TelemetrySnapshot s;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  s.target_az_rate_world_rad_s = nan;
+  s.target_el_rate_world_rad_s = nan;
+  s.q_ref_rate_yaw_rad_s = nan;
+  s.q_ref_rate_pitch_rad_s = nan;
+  s.q_ref_accel_yaw_rad_s2 = nan;
+  s.q_ref_accel_pitch_rad_s2 = nan;
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"q_ref_rate_yaw_rad_s\":null"), std::string::npos) << wire;
+  // Blanket guard, not a per-field wish: ostream spells these `nan`/`inf`, and Python's
+  // json accepts `NaN` but not `nan`, so a single lowercase one is a whole lost frame.
+  EXPECT_EQ(wire.find(":nan"), std::string::npos) << "裸 nan 会整帧被 webd 丢弃";
+  EXPECT_EQ(wire.find(":-inf"), std::string::npos) << wire;
+  EXPECT_EQ(wire.find(":inf"), std::string::npos) << wire;
+}
