@@ -49,10 +49,12 @@ lineage、合成回放（§2/§5 of `docs/04_CONTRACTS.md`）——那些仍在�
    `read_control_trace` 用它作答并带 `"frozen":true,"frozen_t_ns":…`；**先落定者赢**——后来的 park 失败
    不许拿残骸覆盖守卫自己那份窗口。冻结处**允许阻塞**（一次、有界），而每周期发布仍是 try-locks 丢样本：
    **每秒丢一个样本和为一台已经决定停机的机器阻塞一次，是两个不同的交易。**
-1. **谁在跳闸那一刻把它抄下来**：现在 `read_control_trace` 是"有人来问才有"。
-   要的是一个**有界、非阻塞、故障触发**的落盘（`$OTA_RUN_DIR/traces/…ndjson`，
-   与 `logs-history` 同一个归档策略），并且**行内 ns 用十进制字符串**（`04_CONTRACTS.md` §2 末：
-   64 位 ns/seq 不许在 JS 里变 Number）。
+1. ~~**谁在跳闸那一刻把它抄下来**~~ **已做**（commit 见文末）：`freeze_control_trace()` 在内存之外
+   **再写一份** `$RUN/traces/trip-<frozen_t_ns>.ndjson`（表头一行 + 每周期一行），
+   `run_application.sh` 的轮转把整个 `traces/` 目录一起归档，**重新部署洗不掉它**。
+   **尽力而为**：目录不可写 ⇒ 不抛、不影响跳闸、内存里那份照样答（测试钉住的是这半条）。
+   - **一处我明着记下的偏离**：文件里 ns/seq 是**十进制字符串**（§2），**socket 那一侧仍是数字**。
+     我没有在凌晨五点顺手改线形状——**改协议是两端一起升的事**，它该跟 dashboard 一起改，不该跟一个取证切片混在一起。
 2. **lineage**：一行 trace 要能指回当轮的 session_id / release / config 摘要。
    `stack.info` 已有 release 与 config 路径，缺一个把三者钉成一行的 id。
 3. **时钟语义**：控制域继续 `CLOCK_MONOTONIC`；BOOTTIME 偏移、跳变检测、`clock_epoch` 提升——**未做**。
