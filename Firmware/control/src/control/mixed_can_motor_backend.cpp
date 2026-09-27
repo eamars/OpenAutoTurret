@@ -18,7 +18,8 @@ namespace {
 using namespace std::chrono_literals;
 constexpr double kRadiansPerDegree = std::numbers::pi / 180.0;
 constexpr double kDegreesPerRadian = 180.0 / std::numbers::pi;
-constexpr double kYawMaxSpeedRadS = 15.0 * kRadiansPerDegree;
+// The yaw speed ceiling lives in the header as apply_yaw_speed_ceiling(): a CLAMP on
+// the ask, not a verdict on a reading -- see the ruling recorded there.
 constexpr double kYawMaxAccelerationRadS2 = 20.0 * kRadiansPerDegree;
 constexpr double kYawPositionGain = 2.0;
 // The first automatic sweep requested 10 deg/s but reached 26.34 deg/s and
@@ -448,7 +449,7 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           health.state != static_cast<int>(can::CanIfState::ErrorActive) ||
           health.rx_error_frames != 0 || health.tx_failed != 0 ||
           !bus_health_ok_.load() ||
-          !std::isfinite(measured_speed) || std::abs(measured_speed) > 25.0 * kRadiansPerDegree ||
+          !std::isfinite(measured_speed) ||  // a fast reading stays powered; a nonsense one cannot be trusted
           (yaw_temp_guard > 0 &&
            yaw_state_.feedback.temperature_raw >= yaw_temp_guard) ||
           (std::abs(requested_speed) >= kNoProgressCommandRadS &&
@@ -467,7 +468,6 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           in.can_counters_bad = health.rx_error_frames != 0 || health.tx_failed != 0;
           in.bus_unhealthy = !bus_health_ok_.load();
           in.speed_not_finite = !std::isfinite(measured_speed);
-          in.speed_over_ceiling = std::abs(measured_speed) > 25.0 * kRadiansPerDegree;
           in.temp_raw_over = yaw_temp_guard > 0 &&
                              yaw_state_.feedback.temperature_raw >= yaw_temp_guard;
           in.command_not_sent = yaw_command_not_sent_.load();
@@ -703,12 +703,16 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   }
   const double dt = std::clamp((now - yaw_velocity_loop_previous_command_ns_) * 1e-9, 0.0, .020);
   const double step = kYawMaxAccelerationRadS2 * dt;
-  yaw_shaped_speed_rad_s_ += std::clamp(desired - yaw_shaped_speed_rad_s_, -step, step);
+  // The ceiling bites the REQUEST here. An axis reading faster than the ceiling is a
+  // question about the reading or the load, and the answer to that is not to drop the
+  // payload (see apply_yaw_speed_ceiling).
+  const double ceiling_applied = apply_yaw_speed_ceiling(desired);
+  yaw_shaped_speed_rad_s_ += std::clamp(ceiling_applied - yaw_shaped_speed_rad_s_, -step, step);
   yaw_requested_velocity_rad_s_.store(desired);
   yaw_command_not_sent_.store(false);  // a real frame follows below
   yaw_velocity_loop_previous_command_ns_ = now;
   const int voltage = yaw_velocity_loop_.update(yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now,
-      kYawMaxSpeedRadS, kYawOutputCeiling, kYawVelocityKp, kYawVelocityKi);
+      kYawSpeedCeilingRadS, kYawOutputCeiling, kYawVelocityKp, kYawVelocityKi);
   if (!yaw_velocity_loop_.valid()) {
     trip_yaw_locked();
     return;
@@ -730,7 +734,7 @@ void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
     return;
   }
   yaw_position_target_rad_ = q_ref_rad;
-  const double speed_cap = std::clamp(std::abs(limit_spd_rad_s), 0.0, kYawMaxSpeedRadS);
+  const double speed_cap = std::clamp(std::abs(limit_spd_rad_s), 0.0, kYawSpeedCeilingRadS);
   const double error = yaw_position_target_rad_ - yaw_state_.position_rad;
   const double desired = std::clamp(error * kYawPositionGain, -speed_cap, speed_cap);
   command_yaw_velocity_locked(desired, now);
@@ -747,7 +751,7 @@ void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) 
     trip_yaw_locked();
     return;
   }
-  yaw_speed_target_rad_s_ = std::clamp(velocity_rad_s, -kYawMaxSpeedRadS, kYawMaxSpeedRadS);
+  yaw_speed_target_rad_s_ = std::clamp(velocity_rad_s, -kYawSpeedCeilingRadS, kYawSpeedCeilingRadS);
   command_yaw_velocity_locked(yaw_speed_target_rad_s_, now);
 }
 

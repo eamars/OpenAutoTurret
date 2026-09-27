@@ -3447,9 +3447,11 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     // axes -- the max of the two, i.e. pitch's -- which was harmless only while
     // something else kept the yaw slow. With the yaw envelope declared away
     // (2026-09-28) the long approach into the sweep region drove the yaw past the
-    // mixed backend's own speed_over_ceiling guard on the station: the guard was
-    // right, the ask was wrong. Capping the ask is the fix; raising the guard would
-    // have bought a green log by moving the goalposts.
+    // mixed backend's own speed ceiling on the station. Read that day as "the guard was
+    // right, the ask was wrong" -- half right. Capping the ask was correct; the guard
+    // itself was the wrong shape, because a ceiling that removes power from an
+    // unbalanced payload punishes the mount for a fast reading. Owner ruling
+    // 2026-09-28: the ceiling clamps the command and never trips on a measurement.
     // The cap is the axis's DECLARED maximum, not the roam profile's target speed:
     // the first cut used `.target.speed` and the sweep froze on the station (intent
     // published, `roam_progress` stuck at 0.08%, `phase=hold`) because the station

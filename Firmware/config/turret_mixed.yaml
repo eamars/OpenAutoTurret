@@ -64,9 +64,13 @@ axes:
     # turret_config.cpp); with `none` above it is NOT a runtime limit.
     expected_travel_deg: { min: -90, max: 90 }
     soft_margin_deg: 10
-    max_velocity_deg_s: 10
-    max_acceleration_deg_s2: 15
-    max_jerk_deg_s3: 60
+    # Matched to pitch (owner ruling 2026-09-28): MANUAL is one gesture across both
+    # axes, and yaw felt broken because this file declared it three times slower than
+    # pitch while motion.modes asks both for the same 20 deg/s. Acceleration stays under
+    # pitch's because yaw carries the whole payload.
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 30
+    max_jerk_deg_s3: 120
     limit_cur_a: 0.0
 homing:
   # Pitch CyberGear gains retained from the successful 5 A pitch homing run.

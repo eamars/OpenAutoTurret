@@ -18,6 +18,22 @@ namespace ota {
 // Production adapter for GM6020 continuous yaw on can0 and CyberGear pitch
 // on can1. The GM6020 has session-relative feedback and voltage control; it
 // does not expose the CyberGear UID/register/fault/disable interface.
+// The one yaw speed ceiling, applied to the ask: `commanded = min(ceiling, requested)`.
+// It used to be a 15 deg/s clamp here AND a 25 deg/s trip on the MEASURED reading, so a
+// heavy axis that momentarily overshot cut power to the payload -- and an unpowered
+// unbalanced payload drops onto a hard stop, which costs more than never cutting it
+// (owner ruling, 2026-09-28). One number, one job. Exposed as a free function so the
+// behaviour is testable without a CAN bus: a ceiling that only exists inside a private
+// member is a claim, not a guarantee.
+inline constexpr double kYawSpeedCeilingDegS = 30.0;  // matched to pitch, see the ruling above
+inline constexpr double kYawSpeedCeilingRadS =
+    kYawSpeedCeilingDegS * 3.14159265358979323846 / 180.0;
+inline double apply_yaw_speed_ceiling(double requested_rad_s) {
+  return requested_rad_s > kYawSpeedCeilingRadS ? kYawSpeedCeilingRadS
+         : requested_rad_s < -kYawSpeedCeilingRadS ? -kYawSpeedCeilingRadS
+                                                   : requested_rad_s;
+}
+
 class MixedCanMotorBackend final : public MotorBackend {
  public:
   MixedCanMotorBackend();

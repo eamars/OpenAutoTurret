@@ -11,6 +11,7 @@ in front of them.
 """
 
 from __future__ import annotations
+import re
 
 import json
 import os
@@ -92,14 +93,41 @@ class TravelTapesExecuted(unittest.TestCase):
 
     # --- §5.2 / §6.2 content ------------------------------------------------------------------
 
-    def test_endpoints_always_show_the_soft_travel_limits(self) -> None:
+    def test_a_travel_limit_is_labelled_when_the_window_can_show_it(self) -> None:
+        # §5.2 used to read "endpoints always shown", which was written for a fixed ruler.
+        # Under a sliding window the two ends are usually off-window, and drawing them at
+        # the tape's edge would be a lie about where they are; hiding them is the truth,
+        # and the fade at each end is what says "there is more travel this way".
+        # What survives unchanged: whenever a limit IS in view, it is labelled with its
+        # own number and a degree sign -- never a rounded approximation.
         got = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));" % json.dumps(YAW))
-        ends = [t for t in got["ticks"] if t["endpoint"]]
-        self.assertEqual(len(ends), 2, "§5.2: endpoints always shown")
-        self.assertEqual({t["deg"] for t in ends}, {-80.0, 80.0})
-        for t in ends:
-            self.assertTrue(t["label"].endswith("\u00b0"),
-                            "the reference draws the endpoints with a degree sign: %r" % t["label"])
+        self.assertGreater(got["hiddenTicks"], 0, "a centred window must actually hide off-window ticks")
+        self.assertEqual([t for t in got["ticks"] if t["endpoint"]], [])
+        near = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));"
+                          % json.dumps(dict(YAW, valueDeg=78.0)))["ticks"]
+        ends = [t for t in near if t["endpoint"]]
+        self.assertEqual([t["deg"] for t in ends], [80.0], "the limit being approached is the one shown")
+        self.assertTrue(ends[0]["label"].endswith("\u00b0"),
+                        "the reference draws the endpoints with a degree sign: %r" % ends[0]["label"])
+        self.assertAlmostEqual(ends[0]["pos"], 408.0, places=6,
+                               msg="yaw+ is screen-left, so +80 sits at the tape's left end")
+
+    def test_the_window_is_the_camera_field_of_view_not_a_number_i_chose(self) -> None:
+        # The tape window decides what "off the end" means, so its source has to be a
+        # fact and not a taste: the commissioned effective H/VFOV, the same pair the
+        # safe-envelope polygon is sized from. The source is returned rather than
+        # implied, and a tape with no FOV to inherit says so instead of inventing one.
+        got = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));"
+                         % json.dumps(dict(YAW, windowDeg=69.3002)))
+        self.assertEqual(got["windowSource"], "fov")
+        self.assertAlmostEqual(got["windowDeg"], 69.3002, places=4)
+        nofov = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));" % json.dumps(YAW))
+        self.assertEqual(nofov["windowSource"], "fallback")
+        # A lens wider than the travel cannot show more travel than exists.
+        wide = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));"
+                          % json.dumps(dict(YAW, windowDeg=400.0)))
+        self.assertEqual(wide["windowSource"], "travel")
+        self.assertAlmostEqual(wide["windowDeg"], 160.0, places=6)
 
     def test_limited_travel_is_not_invented(self) -> None:
         # Before homing, soft_limits_valid is false and the bounds are unset. Drawing a tape with
@@ -129,14 +157,20 @@ class TravelTapesExecuted(unittest.TestCase):
     def test_marker_maps_the_current_value_and_clamps_within_the_tape(self) -> None:
         # Physical direction: yaw+ turns the camera left, so +22.4 lies left
         # of centre on the travel tape despite the joint value increasing.
-        want = 408.0 + (80.0 - 22.4) / 160.0 * 1104.0
+        # Mid-travel the caret does not move at all: it sits at the tape's centre and the
+        # ruler slides under it (owner's revision, 2026-09-28, after fighter/helicopter
+        # HUDs). Both axes, one rule -- so both fixtures expect their own midpoint.
         got = self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(YAW))
-        self.assertAlmostEqual(got, want, places=6)
+        self.assertAlmostEqual(got, 408.0 + 1104.0 / 2, places=6)
         self.assertAlmostEqual(
             self._node("console.log(T.hudTravelTape(%s).marker);"
                        % json.dumps(dict(PITCH, valueDeg=-6.8))),
-            310.1 + (-6.8 + 45.0) / 100.0 * 459.0, places=6,
-            msg="pitch+ aims down, so the marker moves down as joint pitch increases")
+            310.1 + 459.0 / 2, places=6)
+        # Only near a limit -- where the window can no longer stay centred -- does the
+        # caret leave the middle, and that off-centre IS the proximity cue. yaw+ is
+        # screen-left, so approaching +80 pushes the caret toward the tape's left end.
+        near = self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(dict(YAW, valueDeg=78.0)))
+        self.assertLess(near, 408.0 + 1104.0 / 2, "approaching the screen-left limit moves the caret left")
         # Out of range (a value beyond the soft limit, or an un-homed zero) must not point off the
         # tape into empty sky.
         self.assertAlmostEqual(
@@ -173,20 +207,29 @@ class TravelTapesExecuted(unittest.TestCase):
         caret = seg[:seg.index("/>") + 2]
         self.assertIn('fill="%s"' % C_TOKENS["green"], caret)
 
-    def test_each_tape_states_what_its_scale_is(self) -> None:
-        # §5.3 says logical joint travel, not heading - and on this station the joint numbers are
-        # surprising enough to be misread (yaw -22.6..+320.2 on a continuous axis; pitch entirely
-        # negative, which is not elevation). The camera-to-axis boresight is not separable from the
-        # principal point at the spans the theodolite probe has, so no world-elevation offset has
-        # ever been measured. The tape has to say which scale it is on.
+    def test_the_tapes_carry_no_captions_and_the_ruler_is_the_thing_that_moves(self) -> None:
+        # Owner, 2026-09-28: the two captions ("JOINT TRAVEL, NOT HEADING", "0 = TRAVEL
+        # MIDPOINT") bought nothing, so they are gone -- and this test is what stops them
+        # creeping back as "helpful" labels. The scale's meaning is carried by the design
+        # instead: no compass letters anywhere, and joint numbers, not elevation.
         yaw = self._node(
-            "console.log(T.hudTravelTapeSvg(T.hudTravelTape(%s), %s, {title:'YAW', value:'x',"
-            " note:'JOINT TRAVEL, NOT HEADING'}));" % (json.dumps(YAW), json.dumps(C_TOKENS)))
-        pitch = self._node(
-            "console.log(T.hudTravelTapeSvg(T.hudTravelTape(%s), %s, {title:'PITCH', value:'x',"
-            " note:'JOINT, NOT ELEVATION'}));" % (json.dumps(PITCH), json.dumps(C_TOKENS)))
-        self.assertIn("NOT HEADING", yaw)
-        self.assertIn("NOT ELEVATION", pitch)
+            "console.log(T.hudTravelTapeSvg(T.hudTravelTape(%s), %s, {title:'YAW', value:'x'}));"
+            % (json.dumps(YAW), json.dumps(C_TOKENS)))
+        for banned in ("HEADING", "MIDPOINT", "NOT ELEVATION"):
+            self.assertNotIn(banned, yaw, "captions were removed on purpose: " + banned)
+        # And the reason the caret is worth holding still: the ruler, not the caret, is
+        # what answers "where am I". Same label, different pixel, as the value changes.
+        def label_pos(value_deg, want_label):
+            ticks = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));"
+                               % json.dumps(dict(YAW, valueDeg=value_deg)))["ticks"]
+            return [t["pos"] for t in ticks if t["label"] == want_label]
+        # ±10 deg apart, so the two windows still share the middle of the scale.
+        at_plus22 = label_pos(10.0, "0")
+        at_minus22 = label_pos(-10.0, "0")
+        self.assertTrue(at_plus22 and at_minus22, "the +10 label should be in view in both")
+        self.assertNotAlmostEqual(at_plus22[0], at_minus22[0], places=1,
+                                  msg="a ruler that does not slide is a fixed scale wearing a new name")
+
 
     def test_the_renderer_draws_caret_ticks_and_box(self) -> None:
         svg = self._node(
@@ -197,7 +240,16 @@ class TravelTapesExecuted(unittest.TestCase):
         self.assertIn("<rect", svg, "§5.2: the numeric value sits in an outlined box")
         self.assertIn("YAW", svg)
         self.assertIn("+22.4", svg)
-        self.assertGreater(svg.count("<text"), 10, "endpoint and coarse labels should all be present")
+        self.assertGreater(svg.count("<text"), 4,
+                           "the coarse labels inside the window must be present (the window is a "
+                           "quarter of the travel by design, so this is no longer the full-travel count)")
+        # A gradient must actually exist in the drawn output. Asserting one magic opacity
+        # would tie the test to a tick landing on one exact pixel, which is how the first
+        # version of this line broke; the property worth holding is "some ticks are
+        # dimmer than others, and the dimming is gradual".
+        opacities = [float(x) for x in re.findall(r'opacity="([0-9.]+)"', svg) if float(x) > 0]
+        self.assertTrue(any(o < 1 for o in opacities), "no fade at all: ticks are being cut, not dissolved")
+        self.assertTrue(any(o == 1 for o in opacities), "everything faded means no readable middle")
 
 
 class TapesWiredIntoThePage(unittest.TestCase):

@@ -590,12 +590,45 @@ function hudTravelTape(o) {
   if (!o || !o.valid || !(o.maxDeg > o.minDeg) || !(o.length > 0)) return null;
 
   const span = o.maxDeg - o.minDeg;
-  const steps = hudTickSteps(span, o.length);
+  // How much travel the window shows. The owner's question -- "why 40 deg? that is
+  // neither bigger nor smaller than the FOV on purpose" -- was the whole objection: a
+  // made-up window size makes the tape a decorative ruler. The window is therefore the
+  // CAMERA'S OWN FIELD OF VIEW on that axis (the commissioned `effective_hfov_deg` /
+  // `effective_vfov_deg` the safe-envelope polygon already uses), so the tape shows
+  // exactly the arc the operator can see, the caret is the boresight at its centre, and
+  // the ruler slides under it as the view sweeps past the travel. Before the camera has
+  // reported a usable FOV there is nothing to inherit, and the tape says which source it
+  // used rather than quietly picking a number.
+  const fov = Number.isFinite(o.windowDeg) ? o.windowDeg : 0;
+  const windowDeg = Math.min(span, fov > 0 ? fov : Math.max(30, span / 4));
+  const windowSource = fov > 0 ? (fov >= span ? "travel" : "fov") : "fallback";
+  const steps = hudTickSteps(windowDeg, o.length);
   const screenSign = o.horizontal ? otaJointScreenSign.yaw : otaJointScreenSign.pitch;
-  const at = (deg) => {
-    const fraction = screenSign > 0
-      ? (deg - o.minDeg) / span : (o.maxDeg - deg) / span;
-    return (o.horizontal ? o.x : o.y) + fraction * o.length;
+
+  // The SCALE slides, the MARKER does not (owner's revision, 2026-09-28, pointing at
+  // fighter and helicopter HUDs: a caret that jumps every cycle is the thing your eye has
+  // to re-find; a ruler that moves under a still caret is read without searching). The
+  // visible window is as wide as the tape and centred on where the axis actually is.
+  // Near an end the window can no longer stay centred, so it stops at the travel limit
+  // and the caret slides off centre -- and that off-centre IS the "close to the limit"
+  // cue, so it is deliberately not clamped away.
+  const lo = o.horizontal ? o.x : o.y;
+  const hi = o.horizontal ? o.x + o.length : o.y + o.length;
+  const mid = (lo + hi) / 2;
+  const half = windowDeg / 2;
+  const slope = screenSign * o.length / windowDeg;   // px per degree, direction included
+  const centreDeg = Number.isFinite(o.valueDeg)
+    ? Math.max(o.minDeg + half, Math.min(o.maxDeg - half, o.valueDeg))
+    : (o.minDeg + o.maxDeg) / 2;
+  const at = (deg) => mid + (deg - centreDeg) * slope;
+  // Ticks dissolve into the last stretch of each end rather than being cut off: that is
+  // how a tape says "there is more of this" without spending an element on the idea.
+  const FADE = Math.max(18, o.length * 0.09);  // proportional: an absolute px band would
+  // appear or vanish depending on how wide the browser made the tape
+  const opacityAt = (pos) => {
+    const d = Math.min(pos - lo, hi - pos);
+    if (d <= 0) return 0;
+    return d >= FADE ? 1 : Math.round((0.15 + 0.85 * d / FADE) * 100) / 100;
   };
 
   const ticks = [];
@@ -627,17 +660,22 @@ function hudTravelTape(o) {
     ticks.forEach((tk) => { tk.marked = Math.abs(tk.deg - o.markDeg) < 1e-6; });
   }
 
+  // Only what the window can show is drawn -- a label past an end would land on whatever
+  // HUD element lives beside the tape. Survivors carry their own opacity.
+  const shown = ticks.filter((tk) => tk.pos >= lo - 0.5 && tk.pos <= hi + 0.5)
+                     .map((tk) => { tk.opacity = opacityAt(tk.pos); return tk; });
+
   // Clamped along the tape's own axis. The first version clamped the vertical case between o.x and
   // o.x - the line's own column - because the horizontal variable was reused without being thought
   // about, and every pitch marker collapsed onto the tape's x-coordinate. Hand arithmetic caught it
   // (expected 593.7, produced 1842.0); a test now carries that arithmetic.
-  const lo = o.horizontal ? o.x : o.y;
-  const hi = o.horizontal ? o.x + o.length : o.y + o.length;
-  const marker = Math.max(lo, Math.min(hi, at(o.valueDeg)));   // never point off the tape
+  const marker = Math.max(lo, Math.min(hi, at(o.valueDeg)));   // centrested until a limit forbids it
   return {
     horizontal: !!o.horizontal, x: o.x, y: o.y, length: o.length,
     x1: o.horizontal ? o.x + o.length : o.x, y1: o.horizontal ? o.y : o.y + o.length,
-    minDeg: o.minDeg, maxDeg: o.maxDeg, steps: steps, ticks: ticks, marker: marker,
+    minDeg: o.minDeg, maxDeg: o.maxDeg, steps: steps, ticks: shown, marker: marker,
+    centreDeg: centreDeg, hiddenTicks: ticks.length - shown.length,
+    windowDeg: windowDeg, windowSource: windowSource,
     valueDeg: o.valueDeg,
     // §6.3: the value box is a dark translucent fill with a thin green outline. Sized for
     // "PITCH -12.3 deg" at the label size, and always placed where it cannot leave the viewport.
@@ -668,12 +706,14 @@ function hudTravelTapeSvg(t, C, opts) {
     const col = tk.marked ? C.amber : (tk.coarse ? base : fine);   // §22: caution is amber
     parts.push('<line ' + (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
                            : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos) +
-               '" stroke="' + col + '" stroke-width="1"/>');
+               '" stroke="' + col + '" stroke-width="1" opacity="' +
+                (typeof tk.opacity === "number" ? tk.opacity : 1) + '"/>');
     if (tk.label) {
       parts.push('<text class="tlbl" ' +
         (w ? 'x="' + tk.pos + '" y="' + (t.y - 7) + '" text-anchor="middle"'
            : 'x="' + (t.x + 8) + '" y="' + (tk.pos + 4) + '" text-anchor="start"') +
-        ' fill="' + (tk.marked ? C.amber : lbl) + '">' + tk.label + '</text>');
+        ' fill="' + (tk.marked ? C.amber : lbl) + '" opacity="' +
+         (typeof tk.opacity === "number" ? tk.opacity : 1) + '">' + tk.label + '</text>');
     }
   });
   // Current-position caret (§5.2) and its value box. Drawn last inside the group so it sits over the
@@ -705,10 +745,12 @@ function hudTravelTapeSvg(t, C, opts) {
   // that camera-to-axis boresight is NOT separable from the principal point at the spans available
   // here, so the world elevation of this scale's zero has never been measured, and the tape says so
   // rather than borrowing an offset from somebody's recollection - mine included.
-  if (opts && opts.note) {
-    parts.push('<text class="tlbl" x="' + (bx + t.box.w / 2) + '" y="' + (by + t.box.h + 13) +
-               '" text-anchor="middle" fill="' + C.dim + '">' + opts.note + '</text>');
-  }
+  // No caption under the value box (owner, 2026-09-28: "简单就是更好"). What used to sit here
+  // read "JOINT TRAVEL, NOT HEADING" and "0 = TRAVEL MIDPOINT"; neither changed how anyone
+  // read the tape. The knowledge stays where it is acted on: no compass letters are drawn
+  // anywhere on this HUD, and pitch is joint travel -- not elevation, because the theodolite
+  // probe never separated camera-to-axis boresight from the principal point, so there is no
+  // measured offset to borrow. Say that in the design doc, not on the glass.
   return parts.join("");
 }
 
@@ -953,7 +995,7 @@ function render(t) {
     minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg,
     markDeg: (dEdge && dEdge.axis === "YAW")
       ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
-    valueDeg: deg(t.q_yaw_rad), valid: yawRange.valid
+    valueDeg: deg(t.q_yaw_rad), windowDeg: t.effective_hfov_deg, valid: yawRange.valid
   });
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({
@@ -962,7 +1004,8 @@ function render(t) {
     markDeg: (dEdge && dEdge.axis === "PITCH")
       ? (dEdge.side === "MIN" ? deg(hudPitch(t, t.q_soft_min_pitch_rad)) : deg(hudPitch(t, t.q_soft_max_pitch_rad)))
       : undefined,
-    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), valid: t.soft_limits_valid === true
+    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), windowDeg: t.effective_vfov_deg,
+    valid: t.soft_limits_valid === true
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
   // ceremony - if the server ever starts sending a polygon in a different frame, drawing it as joint
@@ -992,11 +1035,9 @@ function render(t) {
 
   layers.tape =
     hudTravelTapeSvg(yawTape, C, { title: "YAW", vw: vw, vh: vh,
-                                   value: hudDegLabel(deg(t.q_yaw_rad), true),
-                                   note: "JOINT TRAVEL, NOT HEADING" }) +
+                                   value: hudDegLabel(deg(t.q_yaw_rad), true) }) +
     hudTravelTapeSvg(pitchTape, C, { title: "PITCH", vw: vw, vh: vh,
-                                     value: hudDegLabel(deg(hudPitch(t, t.q_pitch_rad)), true),
-                                     note: "0 = TRAVEL MIDPOINT" }) +
+                                     value: hudDegLabel(deg(hudPitch(t, t.q_pitch_rad)), true) }) +
     ((yawTape || pitchTape) ? ""
      : hudUnrangedNote(vw / 2, vh * 0.125, "YAW / PITCH"));
 

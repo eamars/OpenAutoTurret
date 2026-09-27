@@ -40,7 +40,12 @@ TEST(MixedStationConfig, StationFileLoadsAndNamesTheSplitBusProfile) {
   ASSERT_TRUE(station().ok);
   for (const auto& e : station().errors) RecordProperty("errors", e);
   EXPECT_EQ(station().config.hardware_profile, "config/mixed_hardware.yaml");
-  EXPECT_DOUBLE_EQ(station().config.axes[1].max_velocity_deg_s, 10);  // yaw
+  // The two axes declare the same top speed (owner ruling 2026-09-28). MANUAL is one
+  // gesture across both axes, and yaw felt broken because this file declared it three
+  // times slower than pitch while motion.modes asked both for the same number.
+  EXPECT_DOUBLE_EQ(station().config.axes[1].max_velocity_deg_s,
+                   station().config.axes[0].max_velocity_deg_s);
+  EXPECT_DOUBLE_EQ(station().config.axes[1].max_velocity_deg_s, 30);  // yaw
   EXPECT_DOUBLE_EQ(station().config.axes[0].max_velocity_deg_s, 30);  // pitch
 }
 
@@ -101,13 +106,20 @@ TEST(MixedStationConfig, AxisMaximumsCapEveryServiceModePerAxis) {
   ASSERT_TRUE(station().ok);
   const auto& m = station().config.motion;
   ASSERT_TRUE(m.configured);
-  // No file uses motion.modes.<mode>.axes today: both axes share the mode pair,
-  // and the axis layer then trims yaw. AUTO_TRACK must resolve to
-  // pitch 20/30/100 and yaw 10/15/60 deg/s (boot log, 2026-09-27).
+  // No file uses motion.modes.<mode>.axes today: both axes share the mode pair. Until
+  // 2026-09-28 the axis layer then trimmed yaw back to 10 deg/s in every mode, which is
+  // why manual felt like two different sticks. The trim is gone, so what is asserted is
+  // the invariant the owner asked for rather than a pair of numbers: in every mode the
+  // two axes resolve to the SAME speeds. A future per-axis override must fail here and
+  // be argued about, not arrive quietly through the axis maximum.
   for (int mode=0; mode<3; ++mode) {
     const auto yaw = control::resolve_motion(m.modes[mode][1], m.axis_maximum[1], {});
-    EXPECT_DOUBLE_EQ(yaw.target.speed, 10*kDeg2Rad);
-    EXPECT_DOUBLE_EQ(yaw.maximum.speed, 10*kDeg2Rad);
+    const auto pitch = control::resolve_motion(m.modes[mode][0], m.axis_maximum[0], {});
+    EXPECT_DOUBLE_EQ(yaw.target.speed, pitch.target.speed) << "mode " << mode;
+    EXPECT_DOUBLE_EQ(yaw.maximum.speed, pitch.maximum.speed) << "mode " << mode;
+    // 20 deg/s: what motion.modes declares for every mode. The axis maximum (30) only
+    // trims above the ask; asserting 30 here would confuse the cap with the request.
+    EXPECT_DOUBLE_EQ(yaw.maximum.speed, 20*kDeg2Rad) << "mode " << mode;
   }
   const auto track_pitch = control::resolve_motion(m.modes[1][0], m.axis_maximum[0], {});
   EXPECT_DOUBLE_EQ(track_pitch.target.speed, 20*kDeg2Rad);

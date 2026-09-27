@@ -98,7 +98,6 @@ class MotorBackend {
     bool can_counters_bad = false;
     bool bus_unhealthy = false;
     bool speed_not_finite = false;
-    bool speed_over_ceiling = false;
     bool temp_raw_over = false;
     bool no_progress = false;
     // The command reached the backend but was not allowed out on the wire (non-finite,
@@ -120,7 +119,10 @@ class MotorBackend {
     if (in.can_counters_bad) return "can_counters";
     if (in.bus_unhealthy) return "bus_unhealthy";
     if (in.speed_not_finite) return "speed_nan";
-    if (in.speed_over_ceiling) return "speed_over_ceiling";
+    // `speed_over_ceiling` was deleted from this vocabulary, not lowered: it fired on a
+    // READING, so a momentary overshoot removed power from an unbalanced payload. The
+    // ceiling now clamps the command instead. Non-finite stays -- a NaN feedback is not
+    // a fast axis, it is an axis we cannot see.
     if (in.temp_raw_over) return "temp_raw_over";
     // Before `no_progress` and on purpose: "we asked for 10 deg/s and nothing happened"
     // is a different accusation when we know the frame was never sent. The specific

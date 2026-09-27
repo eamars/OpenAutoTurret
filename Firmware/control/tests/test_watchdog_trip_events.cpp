@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "control/mixed_can_motor_backend.hpp"
 #include "control/motor_backend.hpp"
 #include "telemetry/telemetry.hpp"
 
@@ -110,6 +111,20 @@ TEST(WatchdogTripEvents, ARefusedCommandOutranksTheParalysisInference) {
   // A refusal is still not allowed to masquerade as a bus or thermal problem.
   in.can_down = true;
   EXPECT_STREQ("can_down", MotorBackend::select_trip_condition(in));
+}
+
+
+// A ceiling's job is to clamp the ask, not to punish a reading (owner ruling 2026-09-28:
+// power removal is the last resort, and an unpowered unbalanced payload drops onto a
+// hard stop). So the numbers that used to trip now pass through a clamp -- and a request
+// inside the ceiling passes through untouched, which is the half that paralysis bugs hide.
+TEST(WatchdogTripEvents, TheCeilingClampsTheAskAndPowersNothingOff) {
+  const double d2r = 3.14159265358979323846 / 180.0;
+  EXPECT_DOUBLE_EQ(30.0 * d2r, apply_yaw_speed_ceiling(45.0 * d2r));
+  EXPECT_DOUBLE_EQ(-30.0 * d2r, apply_yaw_speed_ceiling(-90.0 * d2r));
+  EXPECT_DOUBLE_EQ(10.0 * d2r, apply_yaw_speed_ceiling(10.0 * d2r));
+  EXPECT_DOUBLE_EQ(0.0, apply_yaw_speed_ceiling(0.0));
+  EXPECT_EQ(30.0, kYawSpeedCeilingDegS);  // matched to pitch's declared maximum
 }
 
 
