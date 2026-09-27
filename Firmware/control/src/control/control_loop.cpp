@@ -2596,13 +2596,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // as it has existed (§52 refuses a step that leaves the range), and the page has shown the
     // distance to them without ever showing where they are — so the operator could see the
     // turret was near an end without knowing which end, or whether an end existed yet.
-    snap.soft_limits_valid = limits_[ix(AxisId::Pitch)].valid &&
-                             limits_[ix(AxisId::Yaw)].valid;
+    const AxisLimits published_limits[kAxisCount] = {
+        runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
+    snap.soft_limits_valid = published_limits[ix(AxisId::Pitch)].valid &&
+                             published_limits[ix(AxisId::Yaw)].valid;
 
-    // §20/§11: the safe region, published in joint degrees. These are the SAME measured soft limits
-    // the loop hands to the collision envelope a little further down this file (it is constructed as
-    // RectangularEnvelopeConfig from limits_[].q_soft_*_rad), so what the operator sees as the field of
-    // regard is the region the safety checker actually permits, not a second copy that can drift.
+    // §20/§11: publish the same per-cycle limits used by planning and safety.
+    // Continuous GM6020 yaw has a session-relative policy sector, not measured
+    // mechanical endpoints; pitch retains its measured soft limits.
     // Four corners, ordered counter-clockwise from the lowest yaw and pitch, closed by repetition at
     // the page's convenience rather than here.
     snap.for_envelope_valid = snap.soft_limits_valid;
@@ -2610,25 +2611,25 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.for_envelope_count = 0;
     if (snap.for_envelope_valid) {
       const double kRad2Deg = 57.29577951308232;
-      const double y0 = limits_[ix(AxisId::Yaw)].q_soft_min_rad * kRad2Deg;
-      const double y1 = limits_[ix(AxisId::Yaw)].q_soft_max_rad * kRad2Deg;
-      const double p0 = limits_[ix(AxisId::Pitch)].q_soft_min_rad * kRad2Deg;
-      const double p1 = limits_[ix(AxisId::Pitch)].q_soft_max_rad * kRad2Deg;
+      const double y0 = published_limits[ix(AxisId::Yaw)].q_soft_min_rad * kRad2Deg;
+      const double y1 = published_limits[ix(AxisId::Yaw)].q_soft_max_rad * kRad2Deg;
+      const double p0 = published_limits[ix(AxisId::Pitch)].q_soft_min_rad * kRad2Deg;
+      const double p1 = published_limits[ix(AxisId::Pitch)].q_soft_max_rad * kRad2Deg;
       const double corners[8] = {y0, p0, y1, p0, y1, p1, y0, p1};
       for (int k = 0; k < 8; ++k) snap.for_envelope_deg[k] = corners[k];
       snap.for_envelope_count = 4;
     }
-    snap.q_soft_min_pitch_rad = limits_[ix(AxisId::Pitch)].q_soft_min_rad;
-    snap.q_soft_max_pitch_rad = limits_[ix(AxisId::Pitch)].q_soft_max_rad;
-    snap.q_soft_min_yaw_rad = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
-    snap.q_soft_max_yaw_rad = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+    snap.q_soft_min_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_min_rad;
+    snap.q_soft_max_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_max_rad;
+    snap.q_soft_min_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
+    snap.q_soft_max_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.soft_limit_distance_pitch_rad =
-        limits_[ix(AxisId::Pitch)].valid
-            ? limits_[ix(AxisId::Pitch)].distance_to_soft(sp[ix(AxisId::Pitch)].q_rad)
+        published_limits[ix(AxisId::Pitch)].valid
+            ? published_limits[ix(AxisId::Pitch)].distance_to_soft(sp[ix(AxisId::Pitch)].q_rad)
             : 0.0;
     snap.soft_limit_distance_yaw_rad =
-        limits_[ix(AxisId::Yaw)].valid
-            ? limits_[ix(AxisId::Yaw)].distance_to_soft(sp[ix(AxisId::Yaw)].q_rad)
+        published_limits[ix(AxisId::Yaw)].valid
+            ? published_limits[ix(AxisId::Yaw)].distance_to_soft(sp[ix(AxisId::Yaw)].q_rad)
             : 0.0;
     snap.intent_has_joint_target = last_intent_.has_joint_target;
     snap.intent_q_pitch_rad = last_intent_.q_pitch_rad;
