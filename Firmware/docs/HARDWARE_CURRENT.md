@@ -26,6 +26,16 @@ ceiling and commanded-corridor warnings; `homing.motion_checks_abort: false`
 means these guards did not abort. Do not treat these results as final stop or
 homing qualification.
 
+The host became unreachable while a new release was compiling beside the active
+station. After the owner's reboot, both CAN links were DOWN. A one-time
+authorized setup installed and enabled the versioned `ota-can-links.service`;
+its first start verified both links UP, ERROR-ACTIVE, classical CAN at 1 Mbps
+without cycling them. A reboot with the service installed has not yet been
+observed. `vcgencmd get_throttled` returned `0x50000`, indicating historical
+undervoltage and throttling flags; this does not by itself identify the cause of
+the lost host connection. Avoid building a release beside active motor control
+until power and load behavior have been checked.
+
 ## Evidence and status
 
 The facts in the initial-audit paragraph below are historical baseline

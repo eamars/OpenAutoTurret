@@ -92,15 +92,27 @@ does not prove motion readiness. The normal profile is now the mixed profile;
 use `check --commission-hardware` for bounded commissioning preflight. Logs under
 `/tmp/ota-stack-1000` exist only after a run.
 
+After the September 27 reboot, both CAN links were DOWN; neither NetworkManager
+nor the previous installation had a CAN startup profile. The one-time authorized
+administrator setup installed and enabled `ota-can-links.service` from
+[`../systemd/ota-can-links.service`](../systemd/ota-can-links.service) and its
+[`../scripts/configure_can_links.sh`](../scripts/configure_can_links.sh) helper.
+It brings `can0` and `can1` up at 1 Mbps classical CAN on boot, or validates an
+already-up link without cycling it. It opens no motor transport. Check it as
+`eamars` with `systemctl is-enabled ota-can-links.service` and
+`systemctl is-active ota-can-links.service`, then inspect both links above.
+Routine station operation remains unprivileged and uses the launcher. The
+service has been started successfully; its next-boot behavior has not yet been
+observed.
+
 The latest September 27 large-motion sessions left both CAN links UP at
 1 Mbps. Pitch ended with verified disabled feedback; yaw ended with zero
 voltage requested and stationary feedback, but its disable state is unknown.
 Inspect current ownership/state before another session; do not cycle CAN links
 between tests.
 
-The owner's September 26 elevation authorization covers temporary CAN link
-setup for these probes; mechanical tests were subsequently authorized explicitly.
-This does not change unprivileged launcher ownership.
+The owner authorized the September 27 one-time privileged CAN boot setup after
+the reboot. This does not change unprivileged launcher ownership.
 Never put credentials in scripts or Git. For motor probes, identify the exact
 protocol first; discovery must not enable, zero, home or actuate a motor.
 GM6020 `0x1FF` is a voltage command, not a discovery request. See the
