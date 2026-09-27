@@ -520,6 +520,7 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   cfg.socket_path = "/tmp/ota_web_test_trace.sock";
   telemetry::ControlLogRecord rec;
   rec.phase = Phase::Hold;
+  rec.mode = OperatingMode::AutoTrack;
   rec.temp_raw[0] = -1;   // CyberGear sends no thermal byte
   rec.temp_raw[1] = 28;   // unit-less GM6020 byte
   rec.effort[0] = rec.effort[1] = std::numeric_limits<double>::quiet_NaN();
@@ -541,6 +542,11 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   }
   ASSERT_TRUE(got) << "no control_trace frame arrived";
   EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
+  // The two context fields the 2026-09-28 case actually needs; `phase` on its own
+  // was shown, by a jog that moved the axis for 11 s while every row said `hold`,
+  // not to carry the distinction.
+  EXPECT_NE(frame.find("\"mode\":\"AUTO_TRACK\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"track\":\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"temp_raw\":[-1,28]"), std::string::npos) << frame;
   // A reader must be able to tell "the trip's own window" from "whatever the ring
   // holds right now"; the two answers look identical and mean different things.

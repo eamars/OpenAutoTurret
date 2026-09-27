@@ -2149,6 +2149,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.track_state = tracking_ ? tracking_->track_state()
                                 : tracking::TrackState::ReadyHold;
     rec.phase = phase_;
+    rec.mode = mode_mgr_.mode();
     rec.command_seq = ack_seq_;
     rec.probe_omega = response_probe_until_ns_ > now_ns ? response_probe_omega_ : 0;
     for (int i = 0; i < kAxisCount; ++i) {

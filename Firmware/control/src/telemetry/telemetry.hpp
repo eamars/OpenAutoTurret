@@ -18,6 +18,7 @@
 #include <fstream>
 #include "control/motion_profile.hpp"
 #include "control/phase.hpp"
+#include "mode/operating_mode.hpp"
 #include <cstddef>
 #include <cstdio>
 #include <mutex>
@@ -573,6 +574,12 @@ struct ControlLogRecord {
   // request and a stalled mechanism — the 2026-09-28 no-progress case could not be
   // classified from the 1 Hz line for exactly this missing bit.
   Phase phase = Phase::Idle;
+  // Which mode owned the axis for this row. `phase` alone is not enough: a manual
+  // jog and a tracking correction both run inside Phase::Hold, so a row that says
+  // only "hold" cannot distinguish a stale request from a live mode commanding a
+  // move -- which is the exact distinction the 2026-09-28 case turns on. Proved by
+  // an 11 s jog on 2026-09-28: the axis moved 0.12 rad/s and every row said `hold`.
+  OperatingMode mode = OperatingMode::Manual;
   // Thermal byte per axis as the wire sends it, -1 when no byte has arrived. No
   // unit, no fault meaning (docs/references/gm6020/); it is here because an
   // observation you can plot beats a NaN you have to explain.
@@ -819,7 +826,9 @@ class Telemetry {
     for (std::size_t i = 0; i < frozen_count_; ++i) {
       const ControlLogRecord& r = frozen_trace_[i];
       out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
-          << "\",\"phase\":\"" << phase_name(r.phase)
+          << "\",\"mode\":\"" << operating_mode_name(r.mode)
+          << "\",\"track\":\"" << tracking::track_state_name(r.track_state)
+          << ",\"phase\":\"" << phase_name(r.phase)
           << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
           << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
           << ",\"cmd\":" << pair(r.v_command) << ",\"effort\":" << pair(r.effort)

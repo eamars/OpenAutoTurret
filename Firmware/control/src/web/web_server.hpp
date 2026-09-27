@@ -679,6 +679,9 @@ const auto pair = [&](const char* key, const auto* a) {
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';
         pair("goal",r.probe_goal);
+        out << ",\"mode\":\"" << operating_mode_name(r.mode)
+            << "\",\"track\":\"" << tracking::track_state_name(r.track_state) << "\"";
+
         out << '}';
       }
       out << "]}";

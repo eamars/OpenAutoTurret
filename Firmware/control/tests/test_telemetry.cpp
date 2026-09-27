@@ -85,6 +85,7 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   r.timestamp_ns = 12345678901234567LL;
   r.command_seq = 18446744073709551615ULL;
   r.phase = ota::Phase::Fault;
+  r.mode = ota::OperatingMode::AutoRoam;
   r.effort[1] = std::numeric_limits<double>::quiet_NaN();
   t.push_control(r);
   t.freeze_control_trace();
@@ -101,6 +102,8 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   EXPECT_NE(row.find("\"t\":\"12345678901234567\""), std::string::npos) << row;
   EXPECT_NE(row.find("\"ack\":\"18446744073709551615\""), std::string::npos) << row;
   EXPECT_NE(row.find("\"phase\":\"fault\""), std::string::npos) << row;
+  EXPECT_NE(row.find("\"mode\":\"AUTO_ROAM\""), std::string::npos) << row;
+  EXPECT_NE(row.find("\"track\":\"" ), std::string::npos) << row;
   EXPECT_NE(row.find("[0,null]"), std::string::npos) << row;
   EXPECT_EQ(row.find("nan"), std::string::npos) << row;
   EXPECT_NE(header.find("\"frozen_t_ns\":\"12345678901234567\""), std::string::npos) << header;
