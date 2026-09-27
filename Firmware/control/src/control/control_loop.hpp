@@ -485,6 +485,7 @@ class ControlLoop {
   TimeNs mixed_park_deadline_ns_ = 0;
   TimeNs mixed_park_pitch_dwell_since_ns_ = 0;
   TimeNs mixed_park_yaw_dwell_since_ns_ = 0;
+  double mixed_park_yaw_dwell_position_rad_ = 0.0;
   TimeNs mixed_yaw_zero_requested_ns_ = 0;
   TimeNs mixed_pitch_disable_requested_ns_ = 0;
   TimeNs mixed_pitch_disabled_confirmed_ns_ = 0;

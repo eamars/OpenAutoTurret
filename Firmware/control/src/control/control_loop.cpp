@@ -310,6 +310,7 @@ bool ControlLoop::start_parking(std::string& err) {
         yaw_speed * yaw_speed / (2.0 * yaw_brake_rad_s2) +
         yaw_speed * .10 + 1.0 * kDeg2Rad);
     mixed_park_pitch_dwell_since_ns_ = mixed_park_yaw_dwell_since_ns_ = 0;
+    mixed_park_yaw_dwell_position_rad_ = yaw.q_rad;
     mixed_yaw_zero_requested_ns_ = 0;
     mixed_pitch_disable_requested_ns_ = 0;
     mixed_pitch_disabled_confirmed_ns_ = 0;
@@ -1617,6 +1618,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         };
         const TimeNs pitch_disable_ack_grace_ns = std::max<TimeNs>(
             500'000'000LL, 2 * cfg_.feedback_max_age_ms * 1'000'000LL);
+        if (mixed_pitch_disable_requested_ && fresh(pitch) && pitch.disabled_known &&
+            pitch.disabled && pitch.rx_ns > mixed_pitch_disable_requested_ns_) {
+          // A STOP request is not evidence of disable. Only a newer drive
+          // feedback sample can acknowledge it. Refresh the evidence as later
+          // disabled reports arrive while yaw's independent dwell completes.
+          mixed_pitch_disabled_confirmed_ns_ = pitch.rx_ns;
+        }
         const bool awaiting_pitch_disable_ack = mixed_pitch_disable_requested_ &&
             mixed_pitch_disabled_confirmed_ns_ == 0;
         const bool pitch_ack_timed_out = awaiting_pitch_disable_ack &&
@@ -1632,14 +1640,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           fail_parking("pitch health/disable or fresh yaw-stop feedback became unknown", true);
           break;
         }
-        if (awaiting_pitch_disable_ack && fresh(pitch) && pitch.disabled_known &&
-            pitch.disabled && pitch.rx_ns > mixed_pitch_disable_requested_ns_) {
-          // A STOP request is not evidence of disable. Only a newer drive
-          // feedback sample can acknowledge it; retain that evidence while
-          // the yaw's independent stationary dwell completes.
-          mixed_pitch_disabled_confirmed_ns_ = pitch.rx_ns;
+        if (mixed_pitch_disabled_confirmed_ns_ > 0 && fresh(pitch) &&
+            pitch.disabled_known && !pitch.disabled) {
+          fail_parking("pitch returned to enabled feedback after STOP confirmation", true);
+          break;
         }
         if (now_ns >= mixed_park_deadline_ns_) {
+          spdlog::error("mixed stop deadline: pitch_disable_requested={} pitch_disabled_known={} pitch_disabled={} pitch_ack_age_ms={} yaw_zero_count={} yaw_dwell_ms={} yaw_raw_speed_deg_s={:.3f} yaw_encoder_speed_deg_s={:.3f} yaw_position_deg={:.3f}",
+              mixed_pitch_disable_requested_, pitch.disabled_known, pitch.disabled,
+              mixed_pitch_disabled_confirmed_ns_ > 0
+                  ? (now_ns - mixed_pitch_disabled_confirmed_ns_) / 1'000'000 : -1,
+              mixed_yaw_zero_request_count_,
+              mixed_park_yaw_dwell_since_ns_ > 0
+                  ? (now_ns - mixed_park_yaw_dwell_since_ns_) / 1'000'000 : -1,
+              yaw.v_rad_s * kRad2Deg, v_est_[ix(AxisId::Yaw)] * kRad2Deg,
+              yaw.q_rad * kRad2Deg);
           fail_parking("mixed pitch stop/yaw zero confirmation deadline exceeded");
           break;
         }
@@ -1656,16 +1671,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         lim[ix(AxisId::Yaw)] = 0.0;
         const bool yaw_in_corridor =
             std::abs(yaw.q_rad - mixed_park_yaw_origin_rad_) <= mixed_park_yaw_corridor_rad_;
+        // GM6020's integer RPM field jumps in 6 deg/s steps at rest. Use the
+        // encoder-derived estimate and a bounded position span for the dwell.
         const bool yaw_still = yaw.rx_ns > mixed_yaw_zero_requested_ns_ &&
-            yaw_in_corridor && std::abs(yaw.v_rad_s) <= kYawReferenceStationaryRadS &&
+            yaw_in_corridor &&
             std::abs(v_est_[ix(AxisId::Yaw)]) <= kYawReferenceStationaryRadS;
         if (!yaw_in_corridor) {
           fail_parking("continuous yaw left the bounded zero-request stop corridor", true);
           break;
         }
-        if (!yaw_still) mixed_park_yaw_dwell_since_ns_ = 0;
-        else if (mixed_park_yaw_dwell_since_ns_ == 0)
+        if (!yaw_still ||
+            (mixed_park_yaw_dwell_since_ns_ != 0 &&
+             std::abs(yaw.q_rad - mixed_park_yaw_dwell_position_rad_) >
+                 kYawReferencePositionToleranceRad)) {
+          mixed_park_yaw_dwell_since_ns_ = 0;
+        } else if (mixed_park_yaw_dwell_since_ns_ == 0) {
           mixed_park_yaw_dwell_since_ns_ = yaw.rx_ns;
+          mixed_park_yaw_dwell_position_rad_ = yaw.q_rad;
+        }
 
         const double pitch_tol = .5 * cfg_.park.pos_tol_deg * kDeg2Rad;
         const bool pitch_at_target =
@@ -1722,6 +1745,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         const bool pitch_disable_confirmed = mixed_pitch_disabled_confirmed_ns_ > 0 &&
             now_ns - mixed_pitch_disabled_confirmed_ns_ <= pitch_disable_evidence_max_ns;
         if (mixed_pitch_disable_requested_ && pitch_disable_confirmed &&
+            fresh(pitch) && pitch.disabled_known && pitch.disabled &&
             yaw_dwell_complete && mixed_yaw_zero_request_count_ >= 20) {
           backend_->deenergize(AxisId::Yaw);  // final zero-voltage request; not disable proof
           phase_ = Phase::Parked;
