@@ -120,3 +120,50 @@
 （§4），这是我唯一真正改变行为语义的地方，也是我给它单独写测试（`NoOuterYawWallDoesNotExcuseAnEndlessSweep`）的原因。
 **撤回 = 删掉 `position_envelope: none` 一行**，其余全部保留（第四态、roam 区域、遥测 `null` 都不白做：
 它们描述的是"包线是什么"，不是"包线有多大"）。
+
+---
+
+## 10. 现场结果（09-28 06:3x–06:5x，release `9027791` → 修复版）
+
+**先说要紧的：它转过了 ±180°，而且是拿手推过去的。**
+
+| 时刻(NZDT) | 我看到什么 | 它证明了什么 |
+|---|---|---|
+| 06:34:01 | 启动日志 `[warning] continuous yaw declared WITHOUT a position envelope` | 声明在日志里说出口，不靠"少了个限制"去猜 |
+| 06:34 | 部署的就绪轮询点名等 `soft_limits_valid` ⇒ 点亮 | **无包线不等于不可用**（readiness 的新语义在真机上成立） |
+| 06:36–06:37 | 手动 jog `yaw+`：`q_yaw` **−0.3° → +274.1°**，单调、跨 +180° **无跳变**、无 fault、≈10.6 °/s | 会话连续角跨编码器缝不失真；**同一根探针昨晚只能到 +74.3°**（扇区挡的）——这是拆之前/之后的天然对照 |
+| 06:40:46 | 我交回 AUTO_ROAM，`ROAM_RECOVERY interrupted_sweep dir=−1`，`roam_target_yaw=+41.6°`，`roam_pattern=BOUNDED_SWEEP` | **没有墙，扫掠区域照样存在且有两条边**（§4 的设计成立） |
+| 06:41:01 | `GM6020 guard trip … speed_over_ceiling` → `supervisor: BRAKE` → `phase=fault` | **见下面那条坏消息** |
+| 06:41 | `$RUN/traces/trip-52834529264141.ndjson`：375 KB / 1024 行 / 5.173 s / header 带 `frozen_t_ns` | **WP1b 事件记录器的现场端到端证据到手**（整晚欠的 `"frozen":true` 那条，就此销账） |
+
+### 坏消息（一次我自己开门放进来的跳闸，以及三个互相矛盾的数）
+
+长接近（164° → 41.6°）把 yaw 驱动到超过后端自带的 **25 °/s** 硬闸 ⇒ `speed_over_ceiling` 跳闸。
+追下去发现**三个数各说各话，谁都没错在一起**：
+
+| 谁 | 依据 | 值 |
+|---|---|---|
+| 站文件 `axes.yaw.max_velocity_deg_s` | 操作者写的声明 | **10 °/s** |
+| roam 意图的速度上限 `motion_speed(AutoRoam)` | **两轴取 max** ⇒ 拿到的是 **pitch 的 30 °/s** | 30 °/s |
+| 后端独立守卫 | 硬编码常量 | 25 °/s |
+
+**这道缝本来就在，我的改动只是把它照出来**：扇区还在的时候，长扫掠根本不存在，靠近边界时逐轴治理器也会自动降速——**"没人超速"一直是包线在偷偷代劳的**。包线一拆，代劳没了，守卫立刻接管。
+⇒ **修法 = 把"求值"收到声明底下**（roam 扫的是 yaw，就按 yaw 自己的轮廓限速；`l.roam_v_max = motion_profile(yaw, AutoRoam).target.speed`），
+**不修 = 不动守卫**：把 25 抬到 30 就叫"把门柱往后搬换一条绿日志"，而那个上限是他的参数。
+剩下的缝（守卫的 25 是硬编码、`motion_speed()` 的跨轴 max 用在 manual/track 上也同样可疑）**留给他拍板**，见文末。
+
+### 我自己写的东西里被抓出来的两个缺陷（都是读了现场文件才看见的）
+
+1. **跳闸文件不是合法 JSON**：`"track":"search,"phase"`——少一个收尾引号。
+   我的测试当时**通过**了，因为它只查"键在不在"。⇒ 测试改成钉**相邻关系＋引号配平**。
+   **记这条的理由**：`find("\"track\":\"")` 这种断言是装饰品，它恰好放过了真实发生的坏法。
+2. **遥测的形状还没跟上**：`q_soft_min_yaw_rad/q_soft_max_yaw_rad` 在无包线时报 **0/0**，
+   `soft_limit_distance_yaw_rad` 报 **−1**（我的哨兵）。readiness 与判断都对了，
+   但**dashboard 若照 0/0 画，会画出一个零宽包线**——正是这次要消灭的那种歧义。
+   ⇒ 下一片：这两个字段在无包线时报 `null` ＋ 一个 `envelope:"none"` 的词，`for_envelope`  corners 同理。
+
+### 现在的立场
+
+`position_envelope: none` **保留**（它做到了要做的事，而且守卫一次都没被放松）。
+两件事等主人：① **25 °/s 那个硬编码守卫**要不要读站文件（我倾向读，但那是安全参数）；
+② 无包线之后 AUTO_ROAM 的**扫掠区域**默认取 `search_span`（现在 ±37.1°，日志里可见），要不要单独给一个键。
