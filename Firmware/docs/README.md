@@ -1,16 +1,19 @@
 # Documentation Map
 
 **For deployment/start/stop, read [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md)
-first.** The September 26 hardware refresh is verified in
-[`HARDWARE_CURRENT.md`](HARDWARE_CURRENT.md). The station is stopped; the old
-dual-CyberGear stack cannot operate the mixed-motor continuous-yaw mechanism.
-Automatic roam/track remains the intended normal mode after adaptation.
+first.** The current mixed-hardware inventory and evidence are in
+[`HARDWARE_CURRENT.md`](HARDWARE_CURRENT.md). The station reached automatic
+roam/track on the mixed controller, then was stopped after active undervoltage
+and throttling. Do not resume motion until the power path passes a loaded check.
+The architect's GitHub-readable handoff is
+[`ARCHITECTURE_HANDOFF_2026_09_27.md`](ARCHITECTURE_HANDOFF_2026_09_27.md).
 September 3-9 loaded homing/tracking evidence belongs to the retired hardware.
 
 ## Hardware refresh and next implementation
 
 | Document | Purpose |
 |---|---|
+| [`ARCHITECTURE_HANDOFF_2026_09_27.md`](ARCHITECTURE_HANDOFF_2026_09_27.md) | Current architecture, every feedback loop, dual-camera/IMU/UI state and architect decision requests |
 | [`HARDWARE_CURRENT.md`](HARDWARE_CURRENT.md) | Hardware, live CAN identities, simultaneous camera capture, BNO085 probe and missing runtime prerequisites |
 | [`GM6020_AI_Reference.md`](GM6020_AI_Reference.md) | Agent-readable protocol/firmware reference and official archived manual |
 | [`HARDWARE_ADAPTATION_PLAN.md`](HARDWARE_ADAPTATION_PLAN.md) | Two buses, distinct motor drivers, continuous yaw, IMU observer, commissioning and release gates |

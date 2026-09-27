@@ -3,6 +3,16 @@
 Status: **mixed controller/AUTO_ROAM integration observed; two controlled moving
 stops succeeded on `cae41d0`; broader stop and homing-guard qualification remain
 open**. Updated 27 September 2026.
+Release `8901808` reached READY/AUTO_ROAM after mixed preflight and
+HTTP/WebSocket smoke. Its API published the valid session-relative ±80° yaw
+sector and pitch limits; both CAN buses and the launcher-supervised BNO085 were
+healthy in the observed activation window. The previous release passed all 77
+regression tests; the active revision used a targeted probe build, with full
+regression tests deferred. Historical undervoltage/throttling flags and the
+host loss during a concurrent build made power/load verification an additional
+release gate. A later live `vcgencmd get_throttled=0x50005` during AUTO_TRACK
+confirmed current undervoltage and throttling. The launcher then completed a
+controlled stop; the station remains stopped pending power-path correction.
 Ground truth is [the hardware inventory](HARDWARE_CURRENT.md); the operator
 confirmed GM6020 on yaw and CyberGear on pitch. Follow with the
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).

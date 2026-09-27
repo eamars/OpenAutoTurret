@@ -36,6 +36,26 @@ undervoltage and throttling flags; this does not by itself identify the cause of
 the lost host connection. Avoid building a release beside active motor control
 until power and load behavior have been checked.
 
+Release `8901808` was built while the station was stopped, passed mixed-profile
+preflight and HTTP/WebSocket activation smoke, then reached READY/AUTO_ROAM.
+The live API exposed valid pitch limits and the session-relative ±80° yaw
+operating sector/field of regard. An observed sample showed 1,714 IMX500 frames,
+zero drops and about 26 fps; CAN0/CAN1 error counters were zero, and the BNO085
+observer remained fresh with game-RV status 3 and no gap. This is runtime
+health evidence, not object-detection accuracy or longer-term reliability.
+The preceding release `43193dc` passed all 77 regression tests; `8901808`
+used the targeted probe build and live activation gate after a telemetry-only
+fix and CAN startup service were added.
+During subsequent AUTO_TRACK, `vcgencmd get_throttled` returned `0x50005`:
+the Pi reported **current undervoltage and current throttling**, in addition to
+the earlier historical flags. SoC temperature was 49.9°C. The launcher
+completed a controlled stop with fresh pitch-disabled feedback and GM6020 yaw
+zero requested; the station is now stopped with both CAN links UP. This active
+power fault is a blocker for further automatic motion and Hailo load trials
+until the supply/cable/HAT power path is corrected and a bounded loaded run
+shows no current power flags. The earlier host loss is consistent with a power
+problem but is not proven to have been caused by it.
+
 ## Evidence and status
 
 The facts in the initial-audit paragraph below are historical baseline
@@ -71,7 +91,7 @@ commissioning session; this document records only current distilled evidence.
 | Yaw mechanics | Direct drive, continuous rotation, slip ring, no yaw endstop | Owner-confirmed; +29.356° and return verified with IMU; full-turn clearance unverified |
 | Pitch mechanics | Direct drive, bounded pitch with mechanical endstops | Owner-confirmed; ±15° and return verified with 5 A cap; normal pitch-only homing completed, but non-aborting encoder-speed/corridor warnings leave guard qualification open; exact endpoints remain unqualified |
 | Camera A | Sony IMX500, index 0 at this boot | Enumerated and simultaneous capture verified |
-| Camera B | Sony IMX477, index 1 at this boot | Enumerated and simultaneous capture verified; lens/FOV/mount geometry unknown |
+| Camera B | Sony IMX477 HQ Camera, index 1 at the audited boot, with owner-reported 25 mm F1.4 lens | Sensor and simultaneous capture verified; lens identity owner-reported, effective stream FOV/mount geometry uncalibrated |
 | Accelerator | Hailo-8 AI HAT | `hailortcli fw-control identify` reported HAILO8, firmware 4.23.0, through `/dev/hailo0` after reboot |
 | IMU | One BNO085 on I2C-1, address `0x4A` | Model owner-confirmed; SH-2 acceleration/gyro/rotation reports verified using the installed probe |
 | Retired adapter | yousee/YouCee USB-to-CAN | Owner-confirmed retirement; no `/dev/ttyUSB*`, `lsusb` showed only root hubs |
@@ -192,6 +212,15 @@ exposure synchronization, detection performance, full-resolution throughput,
 optical alignment or the previous station's calibration. First-frame timestamps
 differed by about 25.1 ms; no synchronization was configured.
 
+The owner subsequently identified the HQ Camera lens as **25 mm F1.4**. Using
+Raspberry Pi's listed IMX477 full sensor area, 6.287 × 4.712 mm, and a 25 mm
+rectilinear focal-length approximation gives nominal full-area FOV about
+**14.33° horizontal × 10.77° vertical**. This is a calculation, not a measured
+FOV for the configured 640 × 480 Hailo stream: sensor crop, lens distortion,
+focus and mounting remain unmeasured. The existing IMX500 1920 × 1080
+intrinsics file reports about 69.2° × 40.4° for that stream and is not valid
+for the HQ stream. [Raspberry Pi camera specifications](https://www.raspberrypi.com/documentation/accessories/camera.html#hardware-specifications).
+
 ## Hailo provisioning and first camera benchmark
 
 The minimal Hailo-8 core was installed on the existing kernel
@@ -309,8 +338,9 @@ and decoded reports establish SH-2 communication, not qualified orientation.
 The lab README records placement at the top of the pitch stage, off-axis, and
 polling without an INT connection. Confirm the current physical placement,
 sensor-to-camera rotation and lever arm before using it for motion compensation.
-The sensor probe exited; its volatile report configuration may remain active
-until reconfigured/reset. No production IMU process is installed.
+The historical lab probe exited; its volatile report configuration may remain
+active until reconfigured/reset. The current production launcher now starts the
+versioned continuous IMU observer described above.
 
 Inspected-source SHA-256:
 `2da7fee0de0b6c7831bf4c52950b4230033be559a738532af3ebbd3c9d3c9fc8`.
@@ -329,7 +359,9 @@ remains design input, with hardware absence superseded by this evidence.
   supply/termination and slip-ring ratings. Both axes are owner-confirmed direct drive.
   The owner confirms the camera is near the pitch center of mass and disabling
   pitch presents no current support risk.
-- Camera lenses, focus/FOV, mounts/orientation, intrinsics/extrinsics and overlap.
+- Verified HQ lens model/focus, effective FOV in each selected sensor mode,
+  mounts/orientation, intrinsics/extrinsics and cross-camera overlap. The owner
+  reports 25 mm F1.4 on the HQ Camera; this is not an optical calibration.
 - HAT label/SKU and sustained Hailo/camera performance under production load.
 - IMU mount/lever arm, accuracy and timestamp quality,
   magnetic behavior with motors energized, and long-run I2C reliability.

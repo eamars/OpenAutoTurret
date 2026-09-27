@@ -5,6 +5,17 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 
 ## Current deployment gate
 
+**The station is stopped after an observed Pi power fault.** Release `8901808`
+reached READY/AUTO_ROAM and AUTO_TRACK, but `vcgencmd get_throttled` changed to
+`0x50005` while the motors and camera were active: undervoltage and throttling
+were current, with their history bits also set. The launcher then completed a
+controlled stop with fresh pitch-disable feedback and GM6020 yaw zero requested;
+both CAN links remain UP. Do not resume automatic motion until the Pi supply,
+cable and HAT power path have been checked and the current undervoltage bits
+remain clear under a bounded loaded run. Historical `0x50000` bits alone do not
+mean a present fault. See [Raspberry Pi's bit definitions](https://www.raspberrypi.com/documentation/usage/raspberry-pi-os/raspberry-pi.html#get_throttled)
+and [Pi 5 supply guidance](https://www.raspberrypi.com/documentation/computers/getting-started.html#power-supply).
+
 **The normal launcher selects the mixed split-bus profile. On release `cae41d0`,
 two controlled stops succeeded after motion: one from AUTO_TRACK near +46° yaw,
 and one from AUTO_ROAM near +76° yaw. Both confirmed fresh pitch-disabled
@@ -15,6 +26,17 @@ yet been shown eliminated. Normal pitch homing completed, but repeated encoder
 speed-ceiling/corridor warnings did not abort with
 `homing.motion_checks_abort: false`; that guard behavior also remains
 unqualified.**
+
+**Last activated release:** `8901808` passed committed-source probe build,
+mixed-hardware preflight, HTTP/WebSocket smoke and the automatic READY/AUTO_ROAM
+activation gate after the host reboot. The live API reported valid pitch limits
+and a session-relative ±80° yaw operating sector, with IMX500 near 26 fps and
+zero frame drops; both CAN buses reported zero errors and the BNO085 observer
+was fresh. Release `43193dc` passed all 77 regression tests before the later
+telemetry-only yaw-limit publication fix and CAN boot-service addition. The
+active release used `--probe-build`, so its full regression suite was deferred.
+These checks established an operating stack before the active power fault;
+they do not close the stop/homing/power qualification items above.
 
 The installation has GM6020 yaw on `can0`, CyberGear pitch on `can1`, continuous
 yaw without an endstop, IMX500 + IMX477 cameras, a PCIe Hailo device, and a
@@ -162,8 +184,9 @@ expires, inspect status/logs; shutdown may still be in progress. Do not start a
 second controller or use broad process kills. Stop can be issued from another
 checkout because ownership is shared by account/runtime directory.
 
-**Stop qualification remains limited to two successful observations on release
-`cae41d0`; broader qualification remains open.**
+**Stop qualification includes two successful moving-stop observations on release
+`cae41d0` and one further stop on release `8901808`; broader qualification
+remains open.**
 The previous middle-yaw/lowest-pitch release contract and CyberGear disabled-bit
 verification do not transfer to GM6020. A zero GM6020 command does not certify
 power removal or a supported load. Complete stop/park qualification before

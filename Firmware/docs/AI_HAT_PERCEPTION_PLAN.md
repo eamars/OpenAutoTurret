@@ -69,9 +69,12 @@ camera-only test does not promote it to the motion-authoritative stream.
 Recommended experiment: retain IMX500 as the baseline/person search stream and
 evaluate IMX477 + Hailo as a person/head-detail stream. Determine their final
 roles from measured lens FOV, head pixel size, blur and inference quality. The
-IMX477 sensor has 4056 x 3040 pixels; its actual lens determines whether it sees
-a narrower view. Resolution alone does not establish that it is the detail
-camera. [Raspberry Pi camera specifications](https://www.raspberrypi.com/documentation/accessories/camera.html#high-quality-camera).
+owner reports a 25 mm F1.4 lens on the IMX477 HQ Camera. Its 6.287 × 4.712 mm
+full sensor area gives a nominal rectilinear FOV near 14.33° × 10.77°, much
+narrower than the existing IMX500 1920 × 1080 calibration (~69.2° × 40.4°).
+Measure the effective FOV and crop for the actual 640 × 480 Hailo stream before
+using these approximate angles in association or control.
+[Raspberry Pi camera specifications](https://www.raspberrypi.com/documentation/accessories/camera.html#hardware-specifications).
 
 Current Hailo executable evidence includes both a single-camera probe and a
 60-frame visiond integration run: the minimal Hailo-8 runtime survives reboot,
@@ -301,7 +304,7 @@ provides initial tracking gates. Keep the following measurements distinct:
 | First valid detection to selectable | Existing preferred p95 <=250 ms; measure separately from automatic selection dwell |
 | Actual automatic acquisition | Report full exposure-to-selection and selection-to-motion delay; current 500 ms single-candidate dwell cannot meet a 250 ms automatic-acquisition target unchanged |
 | Latency and throughput | Capture-to-publication p50/p95/p99, achieved inference/publication rates, queue age and drops for each camera/model; no growing backlog |
-| System load | Sustained dual-camera/Hailo run, including motor control once commissioned; no controller deadline/watchdog regression or unexplained CAN drop growth |
+| System load | Sustained dual-camera/Hailo run, including motor control once commissioned; no controller deadline/watchdog regression, unexplained CAN drop growth or active undervoltage/throttling. The host was lost during a concurrent release build and subsequently reported active `0x50005` undervoltage/throttling during AUTO_TRACK. Correct and requalify the Pi/HAT power path before adding accelerator load to normal motion. |
 | IMU contribution | Compare compensation enabled/disabled; only calibrated, correctly timestamped hints may be used, and bad/stale IMU data must revert visibly to the validated fallback |
 
 Historical IMX500 sensor-to-publication measurements were median 58.34 ms /
