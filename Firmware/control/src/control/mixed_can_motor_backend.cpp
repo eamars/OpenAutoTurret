@@ -18,11 +18,15 @@ using namespace std::chrono_literals;
 constexpr double kRadiansPerDegree = std::numbers::pi / 180.0;
 constexpr double kDegreesPerRadian = 180.0 / std::numbers::pi;
 constexpr double kYawMaxSpeedRadS = 15.0 * kRadiansPerDegree;
-constexpr double kYawMaxAccelerationRadS2 = 30.0 * kRadiansPerDegree;
+constexpr double kYawMaxAccelerationRadS2 = 20.0 * kRadiansPerDegree;
 constexpr double kYawPositionGain = 2.0;
-constexpr double kYawOutputCeiling = 25000.0;
-constexpr double kYawVelocityKp = 35000.0;
-constexpr double kYawVelocityKi = 20000.0;
+// The first automatic sweep requested 10 deg/s but reached 26.34 deg/s and
+// correctly tripped the independent 25 deg/s guard. The earlier 30-degree
+// motor probe needed at most 5,643 raw voltage, so retain voltage headroom
+// while reducing the service-loop drive and acceleration for this payload.
+constexpr double kYawOutputCeiling = 9000.0;
+constexpr double kYawVelocityKp = 20000.0;
+constexpr double kYawVelocityKi = 10000.0;
 constexpr TimeNs kFreshnessLimitNs = 100'000'000;
 constexpr TimeNs kHeartbeatLimitNs = 100'000'000;
 constexpr TimeNs kStationaryWindowNs = 500'000'000;

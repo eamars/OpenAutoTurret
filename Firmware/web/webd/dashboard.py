@@ -276,7 +276,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <script>
 const $ = (id) => document.getElementById(id);
 const rad = (x) => (isFinite(x) ? (x * 57.29577951308232).toFixed(2) + "°" : "—");
-const num = (x, d=4) => (isFinite(x) ? Number(x).toFixed(d) : "—");
+const num = (x, d=4) => (x !== null && x !== undefined && isFinite(x) ? Number(x).toFixed(d) : "—");
 
 function badge(el, text, kind) {
   el.textContent = text;

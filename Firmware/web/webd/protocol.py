@@ -57,7 +57,7 @@ class Telemetry:
     q_pitch_rad: float = 0.0
     v_pitch_rad_s: float = 0.0
     q_ref_pitch_rad: float = 0.0
-    effort_yaw: float = 0.0
+    effort_yaw: float | None = None  # GM6020 has no verified torque scaling
     effort_pitch: float = 0.0
     target_az_world_rad: float = 0.0
     target_el_world_rad: float = 0.0

@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <limits>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -79,6 +80,14 @@ telemetry::TelemetrySnapshot sample_snapshot() {
   s.can_tx_failed = 1;
   s.can_last_rx_age_ms = 4;
   return s;
+}
+
+TEST(WebServer, UnknownYawTorqueIsValidJsonNull) {
+  telemetry::TelemetrySnapshot s;
+  s.effort_yaw = std::numeric_limits<double>::quiet_NaN();
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"effort_yaw\":null"), std::string::npos);
+  EXPECT_EQ(wire.find("nan"), std::string::npos);
 }
 
 TEST(WebServer, ATrackIdentifierCrossesTheWireAsTextNotAsARoundNumber) {
