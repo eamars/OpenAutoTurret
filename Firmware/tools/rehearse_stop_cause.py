@@ -152,6 +152,10 @@ def main() -> int:
         return selftest()
 
     results = []
+    # Normalise: the scenarios each own one start, so whatever is running now goes
+    # down first and every cause line below belongs to this run.
+    if read(RUN / "launcher.pid").strip():
+        bash("stop")
     print("=== scenario 1: operator stop leaves a credential ===")
     print(start(args.ready_timeout))
     bash("stop")

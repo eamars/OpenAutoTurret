@@ -255,8 +255,13 @@ void MixedCanMotorBackend::close() {
   }
   yaw_bus_.close();
   yaw_opened_.store(false);
-  yaw_trip_.store(false);
-  yaw_trip_detail_ = {};
+  {
+    // The guard is joined by now, but the control loop may still be reading a trip it
+    // observed, so the rewrite happens under the reader's mutex.
+    const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
+    yaw_trip_.store(false);
+    yaw_trip_detail_ = {};
+  }
   yaw_requested_velocity_rad_s_.store(0);
   heartbeat_seen_.store(false);
   heartbeat_ns_.store(0);
@@ -455,29 +460,27 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
         // sees one string shared by ten causes — the 2026-09-27 yaw trip looked
         // identical whether the cause was CAN, the encoder, or the raw temp byte.
         {
+          MotorBackend::TripInputs in;
+          in.feedback_unsafe = !yaw_feedback_safe_locked(now);
+          in.can_down = !health.up;
+          in.can_state_wrong = health.state != static_cast<int>(can::CanIfState::ErrorActive);
+          in.can_counters_bad = health.rx_error_frames != 0 || health.tx_failed != 0;
+          in.bus_unhealthy = !bus_health_ok_.load();
+          in.speed_not_finite = !std::isfinite(measured_speed);
+          in.speed_over_ceiling = std::abs(measured_speed) > 25.0 * kRadiansPerDegree;
+          in.temp_raw_over = yaw_temp_guard > 0 &&
+                             yaw_state_.feedback.temperature_raw >= yaw_temp_guard;
+          in.no_progress = std::abs(requested_speed) >= kNoProgressCommandRadS &&
+                           now - progress_at > kNoProgressLimitNs;
+          in.heartbeat_stale = heartbeat_seen_.load() &&
+                               now - heartbeat_ns_.load() > kHeartbeatLimitNs;
+          in.reference_valid = yaw_reference_valid_.load();
+          in.feedback_age_ms = (now - yaw_state_.feedback.rx_ns) / 1e6;
+          in.temp_raw = yaw_state_.feedback.temperature_raw;
+          in.speed_deg_s = measured_speed * kDegreesPerRadian;
           MotorBackend::TripDetail td{};
-          td.valid = true;
-          const char* cond = "unknown";
-          const double fb_age_ms = (now - yaw_state_.feedback.rx_ns) / 1e6;
-          if (!yaw_feedback_safe_locked(now)) cond = "feedback_unsafe";
-          else if (!yaw_reference_valid_.load()) cond = "reference_invalid";
-          else if (!health.up) cond = "can_down";
-          else if (health.state != static_cast<int>(can::CanIfState::ErrorActive)) cond = "can_state";
-          else if (health.rx_error_frames != 0 || health.tx_failed != 0) cond = "can_counters";
-          else if (!bus_health_ok_.load()) cond = "bus_unhealthy";
-          else if (!std::isfinite(measured_speed)) cond = "speed_nan";
-          else if (std::abs(measured_speed) > 25.0 * kRadiansPerDegree) cond = "speed_over_ceiling";
-          else if (yaw_temp_guard > 0 &&
-                   yaw_state_.feedback.temperature_raw >= yaw_temp_guard) cond = "temp_raw_over";
-          else if (std::abs(requested_speed) >= kNoProgressCommandRadS &&
-                   now - progress_at > kNoProgressLimitNs) cond = "no_progress";
-          else if (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs)
-            cond = "heartbeat_stale";
-          std::snprintf(td.condition, sizeof(td.condition), "%s", cond);
-          std::snprintf(td.detail, sizeof(td.detail),
-                        "cond=%s fb_age_ms=%.3f temp_raw=%u speed_deg_s=%.3f can_up=%d",
-                        cond, fb_age_ms, yaw_state_.feedback.temperature_raw,
-                        measured_speed * kDegreesPerRadian, health.up ? 1 : 0);
+          MotorBackend::format_trip_detail(in, MotorBackend::select_trip_condition(in), td);
+          const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
           yaw_trip_detail_ = td;
         }
         spdlog::error("GM6020 guard trip: feedback_safe={} reference_valid={} received={} encoder_valid={} feedback_age_ms={:.3f} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} heartbeat_seen={} heartbeat_age_ms={}",
@@ -554,8 +557,13 @@ bool MixedCanMotorBackend::watchdog_fault() const {
 }
 
 MotorBackend::TripDetail MixedCanMotorBackend::watchdog_trip_detail() const {
-  // yaw_trip_ (a seq_cst atomic) is published by the guard thread *after* filling
-  // the detail, so an acquire load that sees the trip also sees the reason.
+  // The guard fills the detail under yaw_trip_detail_mutex_ and only then publishes
+  // yaw_trip_, so there is nothing to read until the flag says there is. Reading it
+  // still takes that mutex: close() and the next trip both rewrite the detail, and a
+  // flag check alone does not make a struct copy atomic. Untripped callers — every
+  // healthy 200 Hz cycle — pay one atomic load and no lock.
+  if (!yaw_trip_.load()) return TripDetail{};
+  const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
   return yaw_trip_.load() ? yaw_trip_detail_ : TripDetail{};
 }
 

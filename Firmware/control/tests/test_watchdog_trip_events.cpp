@@ -46,18 +46,54 @@ TEST(WatchdogTripEvents, ABackendWithoutAGuardReportsNoCause) {
 }
 
 TEST(WatchdogTripEvents, DetailBuffersHoldTheFullestHonestLine) {
-  // The guard writes with snprintf, which truncates rather than overruns; the
-  // fullest field matrix must still fit its declared purpose of naming the
-  // cause and the axis. This is the exact string the trip event will carry.
+  // The guard writes through format_trip_detail, which truncates rather than
+  // overruns; the fullest field matrix must still fit its declared purpose of
+  // naming the cause and the context. 88 characters into a 96-byte buffer is
+  // honest but not roomy, so the exact line is pinned here.
+  MotorBackend::TripInputs in;
+  in.temp_raw_over = true;
+  in.temp_raw = 45;
+  in.feedback_age_ms = 4.863;
+  in.speed_deg_s = -3.217;
+  in.reference_valid = false;
   MotorBackend::TripDetail td{};
-  td.valid = true;
-  std::snprintf(td.condition, sizeof(td.condition), "%s", "temp_raw_over");
-  std::snprintf(td.detail, sizeof(td.detail),
-                "cond=%s fb_age_ms=%.3f temp_raw=%u speed_deg_s=%.3f can_up=%d",
-                "temp_raw_over", 4.863, 45, -3.217, 1);
+  MotorBackend::format_trip_detail(in, MotorBackend::select_trip_condition(in), td);
+  EXPECT_TRUE(td.valid);
   EXPECT_STREQ("temp_raw_over", td.condition);
-  EXPECT_STREQ("cond=temp_raw_over fb_age_ms=4.863 temp_raw=45 speed_deg_s=-3.217 can_up=1",
+  EXPECT_STREQ("cond=temp_raw_over fb_age_ms=4.863 temp_raw=45 speed_deg_s=-3.217 "
+               "can_down=0 ref_valid=0",
                td.detail);
+}
+
+TEST(WatchdogTripEvents, AStateThatCannotLatchIsNeverNamedAsTheCause) {
+  // reference_valid is not one of the guard's should_stop disjuncts. Naming it as
+  // a cause would blame a bystander, so with nothing latching the answer is
+  // "unknown" — the selector must not invent a culprit from context fields.
+  MotorBackend::TripInputs in;
+  in.reference_valid = false;
+  EXPECT_STREQ("unknown", MotorBackend::select_trip_condition(in));
+}
+
+TEST(WatchdogTripEvents, ABystanderDoesNotShadowTheConditionThatFired) {
+  // The failure this replaces: an invalid reference used to be tested before the
+  // CAN checks, so a bus that fell off the network was reported as a reference
+  // problem. Order now follows the guard, and context cannot win.
+  MotorBackend::TripInputs in;
+  in.reference_valid = false;
+  in.can_down = true;
+  EXPECT_STREQ("can_down", MotorBackend::select_trip_condition(in));
+}
+
+TEST(WatchdogTripEvents, SeveralConditionsReportTheFirstInGuardOrder) {
+  // The matrix carries the rest; the token is the first condition the guard would
+  // have stopped on, so the order is part of the contract, not an accident.
+  MotorBackend::TripInputs in;
+  in.no_progress = true;
+  in.heartbeat_stale = true;
+  in.temp_raw_over = true;
+  EXPECT_STREQ("temp_raw_over", MotorBackend::select_trip_condition(in));
+  in.temp_raw_over = false;
+  EXPECT_STREQ("no_progress", MotorBackend::select_trip_condition(in));
 }
 
 }  // namespace

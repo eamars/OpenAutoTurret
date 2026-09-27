@@ -44,8 +44,9 @@ class MixedCanMotorBackend final : public MotorBackend {
   }
   void heartbeat() override;
   bool watchdog_fault() const override;
-  // Written by the guard thread before yaw_trip_ is published; a reader that acquires
-  // yaw_trip_ (release) may copy this without taking the guard's mutex.
+  // The guard fills this under yaw_trip_detail_mutex_ and then publishes yaw_trip_.
+  // A reader must hold that mutex too: a flag check makes the value visible, not a
+  // struct copy atomic. Nesting order is always yaw_mutex_ → yaw_trip_detail_mutex_.
   TripDetail watchdog_trip_detail() const override;
   bool recovery_before_homing() const override { return false; }
   bool discover(AxisId axis, uint64_t& unique_id, std::string& err) override;
@@ -113,7 +114,8 @@ class MixedCanMotorBackend final : public MotorBackend {
   std::atomic<bool> yaw_reference_valid_{false};
   std::atomic<bool> yaw_motion_allowed_{false};
   std::atomic<bool> yaw_trip_{false};
-  TripDetail yaw_trip_detail_{};  // visibility rides on yaw_trip_ (see watchdog_trip_detail)
+  TripDetail yaw_trip_detail_{};  // guarded by yaw_trip_detail_mutex_; validity rides on yaw_trip_
+  mutable std::mutex yaw_trip_detail_mutex_;
   std::atomic<bool> heartbeat_seen_{false};
   std::atomic<TimeNs> heartbeat_ns_{0};
   TimeNs yaw_velocity_loop_previous_command_ns_{0};

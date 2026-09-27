@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <string>
 #include <vector>
@@ -85,6 +86,51 @@ class MotorBackend {
     char condition[24] = {};
     char detail[96] = {};
   };
+  // The guard's condition inputs, flattened so naming a cause is testable without a
+  // CAN bus. Every flag mirrors exactly one disjunct of the guard's own should_stop:
+  // a state that is not in should_stop must not appear as a candidate cause, or it
+  // shadows the condition that actually fired. `reference_valid` travels as context
+  // for exactly that reason.
+  struct TripInputs {
+    bool feedback_unsafe = false;
+    bool can_down = false;
+    bool can_state_wrong = false;
+    bool can_counters_bad = false;
+    bool bus_unhealthy = false;
+    bool speed_not_finite = false;
+    bool speed_over_ceiling = false;
+    bool temp_raw_over = false;
+    bool no_progress = false;
+    bool heartbeat_stale = false;
+    bool reference_valid = true;
+    double feedback_age_ms = 0.0;
+    unsigned temp_raw = 0;
+    double speed_deg_s = 0.0;
+  };
+  // The first condition, in the guard's evaluation order, that would have latched it.
+  static const char* select_trip_condition(const TripInputs& in) {
+    if (in.feedback_unsafe) return "feedback_unsafe";
+    if (in.can_down) return "can_down";
+    if (in.can_state_wrong) return "can_state";
+    if (in.can_counters_bad) return "can_counters";
+    if (in.bus_unhealthy) return "bus_unhealthy";
+    if (in.speed_not_finite) return "speed_nan";
+    if (in.speed_over_ceiling) return "speed_over_ceiling";
+    if (in.temp_raw_over) return "temp_raw_over";
+    if (in.no_progress) return "no_progress";
+    if (in.heartbeat_stale) return "heartbeat_stale";
+    return "unknown";
+  }
+  // The compact matrix that travels with the token. The full field dump stays in the
+  // log; this is what the event and the fault string can carry. Truncated, never grown.
+  static void format_trip_detail(const TripInputs& in, const char* condition, TripDetail& out) {
+    out.valid = true;
+    std::snprintf(out.condition, sizeof(out.condition), "%s", condition);
+    std::snprintf(out.detail, sizeof(out.detail),
+                  "cond=%s fb_age_ms=%.3f temp_raw=%u speed_deg_s=%.3f can_down=%d ref_valid=%d",
+                  condition, in.feedback_age_ms, in.temp_raw, in.speed_deg_s,
+                  in.can_down ? 1 : 0, in.reference_valid ? 1 : 0);
+  }
   virtual TripDetail watchdog_trip_detail() const { return {}; }
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
