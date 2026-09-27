@@ -89,7 +89,7 @@ telemetry::TelemetrySnapshot sample_snapshot() {
 TEST(WebServer, AnUnboundedAxisSaysSoInsteadOfPublishingZeros) {
   telemetry::TelemetrySnapshot s;
   s.soft_limits_valid = true;              // pitch still has real limits
-  s.yaw_envelope_declared = false;
+  s.yaw_envelope_bounded = false;
   s.q_soft_min_yaw_rad = -1.5708;          // the carried reference band, a ruler
   s.q_soft_max_yaw_rad = 1.5708;
   s.yaw_band_min_rad = -1.5708;

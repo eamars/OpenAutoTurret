@@ -530,7 +530,9 @@ struct TelemetrySnapshot {
   double q_soft_max_yaw_rad = 0.0;
   // Whether yaw has a declared envelope at all. Without this a reader cannot tell
   // "no boundary" from "boundary at zero", and the wire used to answer 0/0 for both.
-  bool yaw_envelope_declared = true;
+  // Bounded 才是关键：`declared()` 对 Unbounded 也是真的（"没有边界"本身就是一个立场，
+  // 见 safety_envelope.hpp），所以这里问的是"有没有一条能量出来的边界"。
+  bool yaw_envelope_bounded = true;
   // 参考带：文件里声明过的那条带（±90），无包线时给操作手留一把以归零点为 0 的尺。
   // 它不是限位——`yaw_envelope` 那个词才是说这话的地方。
   double yaw_band_min_rad = 0.0;

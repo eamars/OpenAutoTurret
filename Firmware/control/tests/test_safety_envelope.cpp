@@ -225,3 +225,16 @@ TEST(SafetyEnvelope, VirtualSectorSaysWhereItCameFrom) {
   EXPECT_FALSE(bad.declared());
   EXPECT_FALSE(bad.valid);
 }
+
+// "Is there a boundary?" and "was one declared?" are different questions, and the wire has
+// to ask the first one. This distinction was written down in this file and then used wrong
+// one layer up: an unbounded yaw published `yaw_envelope:"sector"` because the snapshot
+// asked `declared()`, which is true by design for an axis that declares no envelope. The
+// field that reads `unbounded()` is the only one that cannot make that mistake.
+TEST(SafetyEnvelope, DeclaredIsNotTheSameQuestionAsBounded) {
+  const AxisLimits l = AxisLimits::no_envelope();
+  EXPECT_TRUE(l.declared());
+  EXPECT_TRUE(l.unbounded());
+  EXPECT_DOUBLE_EQ(l.distance_to_soft(0.3), AxisLimits::kNoBoundary);
+  EXPECT_TRUE(l.in_soft(9.0));   // nowhere to be outside of
+}

@@ -2716,7 +2716,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
     snap.q_soft_min_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_min_rad;
     snap.q_soft_max_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_max_rad;
-    snap.yaw_envelope_declared = published_limits[ix(AxisId::Yaw)].declared();
+    // `!unbounded()`, not `declared()`: an axis that declares no envelope is declared.
+    // Asking the wrong predicate here is what made an unbounded yaw answer "sector".
+    snap.yaw_envelope_bounded = !published_limits[ix(AxisId::Yaw)].unbounded();
     snap.yaw_band_min_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
     snap.yaw_band_max_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.q_soft_min_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
