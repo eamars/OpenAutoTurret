@@ -167,3 +167,19 @@
 `position_envelope: none` **保留**（它做到了要做的事，而且守卫一次都没被放松）。
 两件事等主人：① **25 °/s 那个硬编码守卫**要不要读站文件（我倾向读，但那是安全参数）；
 ② 无包线之后 AUTO_ROAM 的**扫掠区域**默认取 `search_span`（现在 ±37.1°，日志里可见），要不要单独给一个键。
+
+### 补：我把"没有再跳闸"错当成"修好了"，被抓第三次（07:0x）
+
+按 yaw 轮廓限速之后，`speed_over_ceiling` 确实不再出现——**但我没有只看这一条**。读状态读到的是：
+
+```
+operating_mode AUTO_ROAM   phase hold   q_yaw +41.6°   ← 12 秒不动
+intent_has_joint_target True  intent_q_yaw −41.6°      ← 意图明明在对面那条边
+roam_progress 0.0008                                   ← 0.08%，不涨
+```
+
+**根因是我自己写的那一行**：我拿 `motion_profile(yaw, AUTO_ROAM).target.speed` 当上限，
+而站文件**没给 yaw 写 AUTO_ROAM 的 target** ⇒ 上限 = 0 ⇒ **扫掠被一个"数字"瘫痪了**。
+守卫没响，是因为**根本没动**——**"没跳闸"和"在干活"是两件事**；今晚第三次撞上同一句教训
+（前两次：`reference_invalid` 多报、ready 检查查错端点）。
+⇒ 上限改取**该轴声明的最大速度**（`maximum.speed`，解析器保证 > 0），并且 **0 一律视作"没有这个上限"而不是"限速为零"**。
