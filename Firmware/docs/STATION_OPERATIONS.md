@@ -124,8 +124,10 @@ already-up link without cycling it. It opens no motor transport. Check it as
 `eamars` with `systemctl is-enabled ota-can-links.service` and
 `systemctl is-active ota-can-links.service`, then inspect both links above.
 Routine station operation remains unprivileged and uses the launcher. The
-service has been started successfully; its next-boot behavior has not yet been
-observed.
+service also completed successfully at monotonic 5.76–5.82 s on the next
+observed boot, and both links were UP, ERROR-ACTIVE, 1 Mbps. One successful
+boot does not establish long-term recovery reliability. The Pi's idle
+`get_throttled=0x0` after that boot does not replace a loaded power check.
 
 The latest September 27 large-motion sessions left both CAN links UP at
 1 Mbps. Pitch ended with verified disabled feedback; yaw ended with zero

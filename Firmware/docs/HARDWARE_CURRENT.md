@@ -30,8 +30,7 @@ The host became unreachable while a new release was compiling beside the active
 station. After the owner's reboot, both CAN links were DOWN. A one-time
 authorized setup installed and enabled the versioned `ota-can-links.service`;
 its first start verified both links UP, ERROR-ACTIVE, classical CAN at 1 Mbps
-without cycling them. A reboot with the service installed has not yet been
-observed. `vcgencmd get_throttled` returned `0x50000`, indicating historical
+without cycling them. `vcgencmd get_throttled` returned `0x50000`, indicating historical
 undervoltage and throttling flags; this does not by itself identify the cause of
 the lost host connection. Avoid building a release beside active motor control
 until power and load behavior have been checked.
@@ -55,6 +54,13 @@ power fault is a blocker for further automatic motion and Hailo load trials
 until the supply/cable/HAT power path is corrected and a bounded loaded run
 shows no current power flags. The earlier host loss is consistent with a power
 problem but is not proven to have been caused by it.
+
+At the next observed boot (27 September, about 16:00 NZDT),
+`ota-can-links.service` started and finished at monotonic 5.76–5.82 s;
+`can0`/`can1` were both UP, ERROR-ACTIVE, classical 1 Mbps, with zero bus-error
+counters. The launcher remained stopped and idle `get_throttled` read `0x0`.
+This verifies one boot-time CAN recovery; idle power health does **not** close
+the loaded undervoltage gate.
 
 ## Evidence and status
 
