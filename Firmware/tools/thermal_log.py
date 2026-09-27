@@ -18,29 +18,32 @@ import subprocess
 import time
 import urllib.request
 
-CAN_RAW, CAN_RAW_FILTER = 3, 1
-POLLIN = 1
-import select
+CAN_RAW, CAN_RAW_FILTER = 1, 1  # linux/can.h: raw protocol and its first sockopt
 
 
 def yaw_sample(iface: str, timeout_s: float):
     s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, CAN_RAW)
-    s.bind((iface, 0))
+    s.bind((iface,))  # Python AF_CAN takes a one-tuple; the C habit is wrong here
     s.setsockopt(socket.SOL_CAN_RAW, CAN_RAW_FILTER, struct.pack("=II", 0x200, 0x7F0))
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if not select.select([s], [], [], 0.2)[0]:
-            continue
-        data = s.recv(16)
-        can_id, dlc = struct.unpack_from("=IB3x", data)
-        can_id &= socket.CAN_ERR_FLAG
-        if can_id in (0x205, 0x206, 0x207, 0x208) and dlc == 8:
-            body = data[8:16]
-            speed = struct.unpack_from(">h", body, 2)[0]
-            current = struct.unpack_from(">h", body, 4)[0]
-            return {"frame_id": hex(can_id), "speed_rpm": speed,
-                    "current_raw": current, "temp_raw": body[6]}
-    return None
+    s.settimeout(timeout_s)
+    deadline = time.monotonic() + timeout_s + 0.5  # a fast non-matching stream must not hang us
+    try:
+        while time.monotonic() < deadline:
+            data = s.recv(72)  # classic frames arrive at 16; FD-era kernels pad to 72
+            if len(data) < 16:
+                continue
+            can_id, dlc = struct.unpack_from("=IB3x", data)
+            can_id &= 0x1FFFFFFF  # strip EFF/ERR flags, keep the id
+            if can_id in (0x205, 0x206, 0x207, 0x208) and dlc == 8:
+                body = data[8:16]
+                speed = struct.unpack_from(">h", body, 2)[0]
+                current = struct.unpack_from(">h", body, 4)[0]
+                return {"frame_id": hex(can_id), "speed_rpm": speed,
+                        "current_raw": current, "temp_raw": body[6]}
+    except OSError:
+        return None
+    finally:
+        s.close()
 
 
 def pitch_and_mode(log_path: str):
@@ -89,6 +92,7 @@ def main():
     p.add_argument("--log", default="/tmp/ota-stack-1000/controller.log")
     p.add_argument("--state-url", default="http://127.0.0.1:8080/api/state")
     p.add_argument("--interval", type=float, default=60.0)
+    p.add_argument("--bus-timeout", type=float, default=3.0)
     p.add_argument("--out", default="/tmp/ota-stack-1000/thermal_experiment.jsonl")
     p.add_argument("--once", action="store_true", help="self-test: one sample, stdout")
     a = p.parse_args()
