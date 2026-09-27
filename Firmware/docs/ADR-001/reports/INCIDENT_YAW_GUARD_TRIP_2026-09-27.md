@@ -90,3 +90,30 @@ requested_speed_deg_s=0.000 no_progress_ms=0 heartbeat_seen=true heartbeat_age_m
 - 黑匣子场景 3668 的落盘位置与格式——待查 webd/controld。
 - launcher 重启是否自动触发归零——读 `run_application.sh` 流程可答，未读。
 - Pi 端无 can-utils，未做 CAN 帧直读复核（本容器同缺，装在途）。
+
+## 9. 同日深夜勘误与补证（UTC 10:0x，官方手册 v1.4 在手之后）
+
+`docs/references/gm6020/GM6020_AI_Reference.md` 是官方 v1.4（2023.10）指南的仓库
+结构化抄本（PDF 同目录，官方 CDN 原件可对照）。三个事实修正本报告：
+
+1. **温度字节官方无单位**——反馈表原文 "unit/scale is not stated alongside the
+   protocol table"。`kYawTemperatureRawCeiling = 45` 没有任何官方依据。因此
+   "§2 跳闸是真的"应读作**条件真、危险假**：DJI 官方数字是 **>100 °C 温度警告、
+   >125 °C 驱动器自行切断输出**（LED 状态表，printed pp.5-6）。45 即便按 °C 解
+   也够不着警告点；§7.4 的"阈值本身不降"改为**整条拆掉**（见第 3 点）。
+2. **反馈帧没有使能位/故障码/报警位**——手册同时写明驱动器异常时切输出但
+   "未定义 CAN 故障上报与清除流程"。"只认 motor 自报过温"（主人裁决）在 CAN 上的
+   唯一真形态 = 驱动器 125 °C 自切之后的行为异常（limp）；既有八项行为守卫
+   就是它的事实捕获器，无需新造报警。
+3. 手册明确 "Do not depend on an assumed timeout for safety"（指令超时行为未定义），
+   佐证站端不得依赖 ESC 内部看门狗。
+
+**治理片（WP1c）据此定稿**：拆裸字节跳闸条件（官方文档背书，非推断）；硬熔断 =
+DJI 125 °C 自切 + 既有行为守卫兜底；软警告按官方警告点 ~100 °C，发事件不断电，
+建议松闸休息；温度以 raw 值 + "未校准"旗上遥测，单点校准锚 = LED 进警告态瞬间的
+raw 值（现场可采，无需设备）。§8 第 1 条（单位问题）就此关闭：官方永远不给，
+只能现场标定；第 5 条由自建 SocketCAN 白听工具完成（无 can-utils 依赖）。
+
+**当晚活体补证**（UTC 09:5x，MANUAL/HOLD 带电平推 40 分钟）：总线白听五帧一致
+`id=0x205 转速=0 电流裸值≈2127 temp_raw=41`——带电保持=热源的第一手数据，
+且距"45 熔断线"仅差 4，昨天的剧本正在重演。
