@@ -446,8 +446,10 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
     std::this_thread::sleep_for(5ms);
   }
   for (int i = 0; i < 20; ++i) {
-    std::lock_guard lock(yaw_mutex_);
-    send_yaw_zero_locked();
+    {
+      std::lock_guard lock(yaw_mutex_);
+      send_yaw_zero_locked();
+    }
     std::this_thread::sleep_for(5ms);
   }
 }

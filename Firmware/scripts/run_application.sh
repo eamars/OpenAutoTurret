@@ -280,8 +280,12 @@ cleanup() {
     [ -n "$imu_pid" ] && [ "$pid" = "$imu_pid" ] && continue
     kill -TERM "$pid" 2>/dev/null || true
   done
-  # Never force-kill the motor controller. Its own deadlines supervise park.
-  if [ -n "$controller_pid" ]; then wait "$controller_pid" || true; fi
+  # Ask the exact owned controller child to run its own controlled shutdown.
+  # Waiting without signaling it leaves the launcher stuck in cleanup.
+  if [ -n "$controller_pid" ]; then
+    kill -TERM "$controller_pid" 2>/dev/null || true
+    wait "$controller_pid" || true
+  fi
   # Keep the single BNO085 owner alive through the controller's controlled
   # stop, then release I2C ownership.
   if [ -n "$imu_pid" ]; then

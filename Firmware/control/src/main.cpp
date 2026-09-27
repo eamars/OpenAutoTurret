@@ -449,6 +449,7 @@ int main(int argc, char** argv) {
   loop.set_homing_factory([cfg]() { std::string e; return make_homing_plan(cfg, e); });
   spdlog::info("calibration: {}", reused ? "retained calibration validated; homing skipped" : "homing required");
   spdlog::info("service startup: {} after calibration and ready gates",
+               mixed_commission_manual ? "manual commissioning hold" :
                cfg.v3.default_mode == "AUTO_ROAM" ? "automatic roam" : "manual hold");
 
   // 5c. Phase 8: web server (webd-facing, §5.3/§42.2). Publishes the §6.3
@@ -491,6 +492,32 @@ int main(int argc, char** argv) {
   } else {
     spdlog::info("web server listening: UDS {} @ {} Hz", web_cfg.socket_path,
                  web_cfg.telemetry_hz);
+  }
+
+  if (mixed_backend) {
+    // Register discovery and IMU startup can leave the disabled CyberGear's
+    // last status frame stale. A STOP request elicits a fresh, explicit
+    // disabled frame before the homing loop begins; it sends no motion target.
+    mixed_backend->deenergize(AxisId::Pitch);
+    const TimeNs deadline = now_monotonic_ns() + 2'000'000'000LL;
+    bool pitch_stopped = false;
+    while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
+      const TimeNs now = now_monotonic_ns();
+      const auto pitch = mixed_backend->snapshot(AxisId::Pitch, now);
+      if (pitch.has_feedback && pitch.disabled_known && pitch.disabled &&
+          pitch.rx_ns > 0 && pitch.rx_ns <= now &&
+          now - pitch.rx_ns < 100'000'000LL) {
+        pitch_stopped = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!pitch_stopped) {
+      spdlog::error("mixed startup blocked: no fresh CyberGear disabled feedback after STOP");
+      loop.deenergize_all();
+      return 1;
+    }
+    spdlog::info("mixed startup: fresh pitch STOP feedback confirmed immediately before homing");
   }
 
   const TimeNs period_ns = static_cast<TimeNs>(1e9) / cfg.control_loop_hz;
