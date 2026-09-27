@@ -18,13 +18,17 @@ September 27 upgrade: the same UID now returns valid position with status 0.
 Pitch endstop homing remains uncommissioned.
 
 The owner has now confirmed the camera sits roughly at the pitch assembly's
-center of mass and disabling pitch presents no current support risk. The
-[versioned IMU acquisition and stationary tare](IMU_COMMISSIONING_2026_09_27.md)
+center of mass, both axes are direct drive, and disabling pitch presents no
+current support risk. The [versioned IMU acquisition and stationary tare](IMU_COMMISSIONING_2026_09_27.md)
 have passed live runs and independently observed yaw and pitch movement. A
-continuous pitch session completed two +3°/return pairs at requested 10°/s,
-with all four encoder endpoint errors within 0.022°, no guard trip and the 5 A
-cap verified. The IMU magnitude differed and still needs qualification before
-measured two-axis mounting alignment; the raw IMU is not a base pose.
+continuous pitch session completed +15°/return and −15°/return at requested
+10°/s with 5 A cap readback and no guard trip. A separate yaw session completed
+29.356° outbound and returned to +0.659° with no guard trip. Paired BNO085
+game-RV movement was 0.994 and 0.990 of yaw encoder travel on the two legs;
+pitch's four-leg mean ratio was 0.985. See the
+[large-motion record](LARGE_MOTION_COMMISSIONING_2026_09_27.md). Earlier
+small-motion ratios did not persist, so no IMU scale correction is retained.
+The raw IMU is not a base pose and its mounting alignment remains provisional.
 
 For motion tuning, use the full authorized current/torque headroom from the first
 meaningful bounded test rather than walking up from negligible outputs. Pitch
@@ -83,8 +87,10 @@ load support, supply and termination, and what passes through the slip ring.
 Its rating and routing, including camera connections, must support the proposed
 rotation. A slip ring alone does not prove collision-free travel at every pitch.
 
-Define a versioned production configuration concept (not currently accepted by
-`controld`; `hardware_probe.yaml` implements only the separate commissioning subset):
+The new `config/mixed_hardware.yaml` defines a versioned production topology
+and `config/turret_mixed.yaml` selects it explicitly. The mixed backend and
+controller startup are still being integrated and tested; the old
+`hardware_probe.yaml` remains a separate commissioning schema:
 
 - Bus `yaw_bus`: SocketCAN `can0`, expected parent `spi0.0`, 1 Mbps classical CAN.
 - Bus `pitch_bus`: SocketCAN `can1`, expected parent `spi1.0`, 1 Mbps classical CAN.
