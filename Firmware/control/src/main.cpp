@@ -16,6 +16,7 @@
 // blocking video, no synchronous register-query chain, and no unbounded
 // allocation. The only slow (blocking) paths are boot-only (discovery,
 // register reads) and the one-time enter-position-mode transition.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -265,6 +266,18 @@ int main(int argc, char** argv) {
   }
   auto control_cfg = make_control_cfg(cfg);
   if (mixed_mode) {
+    const auto& yaw_axis = cfg.axes[static_cast<int>(AxisId::Yaw)];
+    control_cfg.continuous_yaw_sector_half_span_rad =
+        std::min(-yaw_axis.expected_travel_deg.min,
+                 yaw_axis.expected_travel_deg.max) * kDeg2Rad;
+    control_cfg.continuous_yaw_sector_inset_rad =
+        yaw_axis.soft_margin_deg * kDeg2Rad;
+    if (control_cfg.continuous_yaw_sector_half_span_rad <=
+        control_cfg.continuous_yaw_sector_inset_rad) {
+      spdlog::error("mixed continuous-yaw software sector is invalid");
+      mixed_backend->close();
+      return 1;
+    }
     // GM6020 has no reported fault/disable status and its temperature byte
     // has no documented unit. The mixed backend instead independently bounds
     // raw temperature, encoder-derived speed, feedback age and CAN health;

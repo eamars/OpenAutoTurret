@@ -29,6 +29,8 @@ def main():
                         help="build only the runtime controller and preflight; defer regression tests")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
+    parser.add_argument("--commission-mixed-controller", action="store_true",
+                        help="build/check the manual mixed controller commissioning path; does not start motors")
     parser.add_argument("--probe-imu", action="store_true",
                         help="build/check only the timestamped BNO085 acquisition probe")
     args = parser.parse_args()
@@ -36,10 +38,10 @@ def main():
         parser.error("host must not be an option; root must be an absolute remote path")
     if args.ready_timeout <= 0:
         parser.error("--ready-timeout must be positive")
-    if (args.commission_hardware or args.probe_imu) and args.activate:
+    if (args.commission_hardware or args.commission_mixed_controller or args.probe_imu) and args.activate:
         parser.error("commissioning activation uses an explicit bounded launcher run, not --activate")
-    if args.commission_hardware and args.probe_imu:
-        parser.error("choose either commissioning or IMU-only deployment")
+    if sum((args.commission_hardware, args.commission_mixed_controller, args.probe_imu)) > 1:
+        parser.error("choose one commissioning or IMU-only deployment mode")
     repo = Path(__file__).resolve().parents[2]
     requirements = repo / "Firmware" / "requirements-station.txt"
     if not requirements.is_file():
@@ -89,6 +91,7 @@ def main():
     smoke = release + "/Firmware/tools/station_smoke.py"
     remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
            + (" --commission-hardware" if args.commission_hardware else "")
+           + (" --commission-mixed-controller" if args.commission_mixed_controller else "")
            + (" --probe-imu" if args.probe_imu else ""))
     label = "Probe-ready release (regression tests deferred)" if args.probe_build else "Verified release"
     print(f"{label}: {release}\nRevision: {revision}", flush=True)
@@ -103,6 +106,8 @@ def main():
         print("Build only; the running station was not changed.")
         if args.commission_hardware:
             print(f"Receive/discovery probe: ssh {args.host} \"bash {script} run --commission-hardware\"")
+        elif args.commission_mixed_controller:
+            print(f"Mixed controller commissioning: ssh {args.host} \"bash {script} start --commission-mixed-controller\"")
         elif args.probe_imu:
             print(f"IMU capture: ssh {args.host} \"bash {script} run --probe-imu\"")
         else:
