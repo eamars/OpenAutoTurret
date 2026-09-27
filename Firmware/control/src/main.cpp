@@ -462,6 +462,16 @@ int main(int argc, char** argv) {
   if (const char* hz = std::getenv("OTA_WEB_HZ")) {
     try { web_cfg.telemetry_hz = std::stoi(hz); } catch (...) {}
   }
+  // Trip traces land beside the socket, i.e. inside the launcher's run dir, where
+  // the next start archives them together with the logs instead of truncating them.
+  {
+    std::filesystem::path tr{web_cfg.socket_path};
+    if (tr.has_parent_path()) {
+      tr = tr.parent_path();
+      tr /= "traces";
+      loop.set_trace_archive_dir(tr.string());
+    }
+  }
   web::WebServer web(web_cfg,
                      [&loop]() { return loop.telemetry().snapshot(); },
                      [&loop](const std::string& n, const std::string& a) {

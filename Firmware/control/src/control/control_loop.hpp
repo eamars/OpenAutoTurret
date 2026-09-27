@@ -334,6 +334,12 @@ class ControlLoop {
   // from a non-RT thread; guarded by the store's mutex). Tracking fields are
   // populated only while tracking mode is enabled.
   const telemetry::Telemetry& telemetry() const { return telemetry_; }
+  // Where a trip's frozen window is additionally written. Deliberately a setter on
+  // the loop rather than a mutable telemetry() accessor: the store stays read-only
+  // to everyone except the one thing that owns it.
+  void set_trace_archive_dir(std::string dir) {
+    telemetry_.set_trace_archive_dir(std::move(dir));
+  }
 
   // --- developer commands (§42.2) ----------------------------------------
   // Submit a high-level developer command from the web UI. Validates against

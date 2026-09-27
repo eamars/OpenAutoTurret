@@ -14,11 +14,14 @@
 #pragma once
 
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include "control/motion_profile.hpp"
 #include "control/phase.hpp"
 #include <cstddef>
 #include <cstdio>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include "geometry/bore_alignment.hpp"
 #include "tracking/aim_point.hpp"
@@ -781,6 +784,50 @@ class Telemetry {
                                         static_cast<int>(kFrozenTraceCap));
     frozen_count_ = have > 0 ? static_cast<std::size_t>(have) : 0;
     frozen_t_ns_ = frozen_count_ ? frozen_trace_[frozen_count_ - 1].timestamp_ns : 0;
+    archive_path_.clear();
+    if (!frozen_count_ || archive_dir_.empty()) return;
+    // A trip nobody is watching still has to leave evidence: the socket answer is
+    // only there for someone who asks, and asking is exactly what nobody can
+    // promise at 03:00. Written once, from the latch, after the copy is taken.
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir_, ec);
+    if (ec) return;
+    const std::string path =
+        archive_dir_ + "/trip-" + std::to_string(frozen_t_ns_) + ".ndjson";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return;
+    // Numbers that are not finite are `null`, the same rule the telemetry line
+    // already follows. Absolute ns and the 64-bit command sequence are decimal
+    // strings here (docs/04_CONTRACTS.md §2): this file outlives the process, and
+    // a consumer that parses it in a language whose number is a double would
+    // otherwise quietly lose the low digits of a uptime-class timestamp.
+    auto num = [](double v) -> std::string {
+      if (!std::isfinite(v)) return "null";
+      std::ostringstream os;
+      os.precision(17);
+      os << v;
+      return os.str();
+    };
+    auto pair = [&](const double* a) {
+      return "[" + num(a[0]) + "," + num(a[1]) + "]";
+    };
+    auto pairi = [&](const int64_t* a) {
+      return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
+    };
+    out << "{\"kind\":\"trip_trace\",\"rows\":" << frozen_count_
+        << ",\"frozen_t_ns\":\"" << frozen_t_ns_ << "\"}\n";
+    for (std::size_t i = 0; i < frozen_count_; ++i) {
+      const ControlLogRecord& r = frozen_trace_[i];
+      out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
+          << "\",\"phase\":\"" << phase_name(r.phase)
+          << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
+          << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
+          << ",\"cmd\":" << pair(r.v_command) << ",\"effort\":" << pair(r.effort)
+          << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
+          << ",\"safety\":" << static_cast<int>(r.safety_action)
+          << ",\"period_us\":" << r.cycle_duration_us << "}\n";
+    }
+    if (out.good()) archive_path_ = path;
   }
   // What a trace reader gets: the frozen trip window when there is one, because
   // that is the answer to the question anybody asks after a trip. `frozen` is on
@@ -792,6 +839,24 @@ class Telemetry {
                              frozen_trace_, frozen_trace_ + frozen_count_),
                          true, frozen_t_ns_};
     return TraceWindow{trace_.all(), false, 0};
+  }
+  // Where a frozen window is also written to disk, derived once at startup from
+  // the web socket's own directory so the launcher archives it with the logs.
+  // Best-effort by design: a full /tmp must not be able to break a trip.
+  void set_trace_archive_dir(const std::string& dir) {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    archive_dir_ = dir;
+    // Made now rather than at the latch: the launcher moves this directory into
+    // the archive on every restart, and a trip is a bad moment to discover that
+    // the place you meant to write to has been moved out from under you.
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir_, ec);
+  }
+  bool trace_archive_path(std::string& out) const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    if (archive_path_.empty()) return false;
+    out = archive_path_;
+    return true;
   }
   bool trace_frozen() const {
     std::lock_guard<std::mutex> lk(trace_mu_);
@@ -832,6 +897,7 @@ class Telemetry {
     blackbox_.clear();
     frozen_count_ = 0;
     frozen_t_ns_ = 0;
+    archive_path_.clear();
     snapshot_ = TelemetrySnapshot{};
   }
 
@@ -845,6 +911,8 @@ class Telemetry {
   ControlLogRecord frozen_trace_[kFrozenTraceCap];
   std::size_t frozen_count_ = 0;
   int64_t frozen_t_ns_ = 0;
+  std::string archive_dir_;
+  std::string archive_path_;  // set only when a freeze actually reached disk
   RingBuffer<EventRecord, kEventCap> event_log_;
   uint64_t event_pushes_ = 0;  // does not saturate where size() does
   RingBuffer<ControlLogRecord, kBlackBoxCap> blackbox_;

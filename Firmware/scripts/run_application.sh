@@ -280,6 +280,10 @@ rotate_stack_logs() {
   for f in "$RUN"/*.log "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
     [ -f "$f" ] && mv -f "$f" "$src/" 2>/dev/null || true
   done
+  # Trip traces are evidence of the round that faulted, so the directory moves
+  # whole: a redeploy must not be able to truncate the thing it is there to explain.
+  # controld recreates it on the next freeze.
+  [ -d "$RUN/traces" ] && mv -f "$RUN/traces" "$src/traces" 2>/dev/null || true
   # $RUN lives in /tmp: keep the newest $keep rounds and no more.
   ( cd "$RUN/logs-history" 2>/dev/null || exit 0
     ls -1dt */ 2>/dev/null | tail -n +"$((keep + 1))" | while IFS= read -r old; do

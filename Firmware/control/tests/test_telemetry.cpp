@@ -5,6 +5,12 @@
 
 #include "telemetry/telemetry.hpp"
 
+#include <unistd.h>
+#include <cstdio>
+#include <fstream>
+#include <limits>
+#include <string>
+
 namespace {
 using ota::telemetry::ControlLogRecord;
 using ota::telemetry::Event;
@@ -65,6 +71,48 @@ TEST(Telemetry, AFreezeKeepsTheCyclesThatLedToTheTrip) {
   t.clear();
   EXPECT_FALSE(t.trace_frozen());
   EXPECT_TRUE(t.control_window().frozen == false);
+}
+
+TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
+  // The socket answer is only there for someone who asks, and asking is exactly
+  // what nobody can promise at three in the morning. The freeze therefore also
+  // lands a file — and if the disk refuses, that must be a shrug, not a new way
+  // for a trip to fail.
+  const std::string dir = "/tmp/ota_trace_archive_test_" + std::to_string(::getpid());
+  Telemetry t;
+  t.set_trace_archive_dir(dir);
+  ControlLogRecord r;
+  r.timestamp_ns = 12345678901234567LL;
+  r.command_seq = 18446744073709551615ULL;
+  r.phase = ota::Phase::Fault;
+  r.effort[1] = std::numeric_limits<double>::quiet_NaN();
+  t.push_control(r);
+  t.freeze_control_trace();
+
+  std::string path;
+  ASSERT_TRUE(t.trace_archive_path(path));
+  std::ifstream in(path);
+  ASSERT_TRUE(in.good()) << path;
+  std::string header, row;
+  std::getline(in, header);
+  std::getline(in, row);
+  // ns and the 64-bit sequence are decimal strings here (§2): this file outlives
+  // the process, and uptime-class timestamps must not lose their low digits.
+  EXPECT_NE(row.find("\"t\":\"12345678901234567\""), std::string::npos) << row;
+  EXPECT_NE(row.find("\"ack\":\"18446744073709551615\""), std::string::npos) << row;
+  EXPECT_NE(row.find("\"phase\":\"fault\""), std::string::npos) << row;
+  EXPECT_NE(row.find("[0,null]"), std::string::npos) << row;
+  EXPECT_EQ(row.find("nan"), std::string::npos) << row;
+  EXPECT_NE(header.find("\"frozen_t_ns\":\"12345678901234567\""), std::string::npos) << header;
+  ::remove(path.c_str());
+
+  Telemetry blocked;
+  blocked.set_trace_archive_dir("/proc/definitely-not-writable/traces");
+  blocked.push_control(r);
+  blocked.freeze_control_trace();          // must not throw
+  EXPECT_TRUE(blocked.trace_frozen());     // the in-memory answer still works
+  std::string none;
+  EXPECT_FALSE(blocked.trace_archive_path(none));
 }
 
 TEST(Telemetry, SnapshotIsOverwrittenEachCycle) {
