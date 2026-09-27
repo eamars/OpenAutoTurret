@@ -255,9 +255,16 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
   gm6020::Feedback decoded;
   if (!gm6020::decode(frame, profile_.yaw.motor_id ? profile_.yaw.motor_id : 1, decoded)) return;
   std::lock_guard lock(yaw_mutex_);
+  const auto previous_rx_ns = yaw_state_.feedback.rx_ns;
+  const auto previous_count = yaw_state_.feedback.angle_count;
+  const bool encoder_was_valid = yaw_state_.encoder_valid;
   yaw_state_.feedback = decoded;
   yaw_state_.received = true;
   yaw_state_.encoder_valid = yaw_encoder_.update(decoded.angle_count, decoded.rx_ns);
+  if (encoder_was_valid && !yaw_state_.encoder_valid)
+    spdlog::error("GM6020 encoder invalidated: dt_ms={:.3f} previous_count={} count={} speed_rpm={}",
+                  (decoded.rx_ns - previous_rx_ns) / 1e6,
+                  previous_count, decoded.angle_count, decoded.speed_rpm);
   yaw_state_.position_rad = yaw_encoder_.relative_rad() - yaw_origin_rad_;
   ++yaw_state_.count;
   if (!yaw_reference_valid_.load() && yaw_encoder_.valid()) {
@@ -416,8 +423,10 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
            now - progress_at > kNoProgressLimitNs) ||
           (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs);
       if (should_stop && !yaw_trip_.load()) {
-        spdlog::error("GM6020 guard trip: feedback_safe={} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} heartbeat_seen={} heartbeat_age_ms={}",
-                      yaw_feedback_safe_locked(now), health.up, health.state,
+        spdlog::error("GM6020 guard trip: feedback_safe={} reference_valid={} received={} encoder_valid={} feedback_age_ms={:.3f} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} heartbeat_seen={} heartbeat_age_ms={}",
+                      yaw_feedback_safe_locked(now), yaw_reference_valid_.load(),
+                      yaw_state_.received, yaw_state_.encoder_valid,
+                      (now - yaw_state_.feedback.rx_ns) / 1e6, health.up, health.state,
                       health.rx_error_frames, health.tx_failed,
                       bus_health_ok_.load(), measured_speed * kDegreesPerRadian,
                       yaw_state_.feedback.temperature_raw,
