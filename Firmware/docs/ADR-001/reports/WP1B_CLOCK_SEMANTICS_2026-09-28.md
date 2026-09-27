@@ -133,3 +133,27 @@ existing station CSV"**——**"消费真格式"这件事确实还没人做**。
 | 运行期间禁止 suspend | ✅ 可证：今日 BOOTTIME−MONOTONIC = 15 µs；**界**要长期测才谈得上 |
 
 ⇒ **WP1b 时间戳语义的"未做"从整块变成了三条**：误差界、周期复测/跳变判定、`clock_epoch` 发布与旧观测撤销。
+
+## 8. 三条剩余项关掉（`f6527fa6fe54`，08:2x 现场）
+
+| 契约要求 | 现在 |
+|---|---|
+| offset **带误差界** | ✅ `mono_to_wall_err_ns`：mono→wall→mono 三次读、取最紧一对、半跨度算界。**现场实测 29 ns（0.029 ms）** |
+| 运行前后查漂移/跳变 | ✅ 每次发布工件都复测；两次真实样本相隔约 40 分钟：`…700826` → `…700891`，**差 65 ns**（跳变判定阈 10 ms，差三个数量级）⇒ 这台机器的映射稳；界与阈都不是装饰 |
+| 提升 `clock_epoch` 撤销旧观测 | ✅ 发布头带 `clock_epoch`（本机现在 =1，从未跳变）；跳变走 `clock_epoch_after()`——**抽成纯函数按算术测**（本服务不调 `settimeofday`，今晚也不 sudo）；旧行留在旧 epoch，不悄悄重定基 |
+| 禁止跨 boot 拼接统计 | ✅ `trip_trace_checks.py` 一次传两枚：跨 boot / 跨 epoch 直接拒；自检 **9/9** |
+
+**现场那一帧**（`read_control_trace`，release `f6527fa6fe54`）：
+
+```
+clock: CLOCK_MONOTONIC  epoch: 1  界: 29 ns  boot: ed65e7b6
+偏移: 1790478027063700891
+```
+
+**一处测试写法上的收获**：我给帧断言写死了 `"clock_epoch":1`，红了一次——因为 web 那条测试
+是**手搓的 TraceWindow**，它从没见过映射，于是老老实实写 `epoch 0 / boot "unknown" / 界 0`。
+**断言错的不是代码，是断言的对象**：帧测试该管"键在不在、缺席是不是写成缺席"，
+"值对不对"归 telemetry 那个真写了文件的测试。⇒ 改完 76/76。
+
+**这一片还剩**：文件头锚点与 epoch 的**现场证据**（要等下一次真跳闸写文件；`$RUN/traces/` 现在空着）
+——判据：`head -1` 那枚 ndjson 应看到 `clock/boot_id/wall_t_ns/mono_to_wall_ns/mono_to_wall_err_ns/clock_epoch` 六样齐。
