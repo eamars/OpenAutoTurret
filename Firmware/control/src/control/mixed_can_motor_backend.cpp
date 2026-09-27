@@ -505,8 +505,8 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
         ++yaw_guard_events_;
         send_yaw_zero_locked();
       } else {
-        const bool any_doubt = in.can_counters_bad || in.bus_unhealthy || in.speed_not_finite ||
-                               in.command_not_sent || in.no_progress;
+        const bool wants_motion = std::abs(requested_speed) >= kNoProgressCommandRadS;
+        const bool any_doubt = yaw_guard_doubt(in, wants_motion);
         if (any_doubt) {
           yaw_degraded_.store(true);
           ++yaw_guard_events_;

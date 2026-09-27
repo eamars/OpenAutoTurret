@@ -44,6 +44,16 @@ enum class GuardResponse { Run, Hold, Fault };
 // A stall is not a collision risk: a stalled axis is by definition not going anywhere.
 // Repeated stalls earn a Hold (zero voltage, still powered, dynamic braking), never a Fault.
 inline constexpr int kYawStallHoldStreak = 3;
+// What is worth SAYING while we keep driving. A refused command only matters if somebody
+// actually wanted to move: `command_not_sent` with a zero demand is the loop saying "hold",
+// which is the normal state of a turret with nothing to do -- the first version of this
+// line logged one a second while the station was simply parked, and called it a limp.
+inline bool yaw_guard_doubt(const MotorBackend::TripInputs& in, bool wants_motion) {
+  if (in.can_counters_bad || in.bus_unhealthy || in.speed_not_finite) return true;
+  if (in.no_progress) return true;
+  return in.command_not_sent && wants_motion;
+}
+
 inline GuardResponse yaw_guard_response(const MotorBackend::TripInputs& in, int stall_streak) {
   if (in.feedback_unsafe || in.can_down || in.can_state_wrong || in.heartbeat_stale)
     return GuardResponse::Fault;  // cannot see it, cannot reach it, or it stopped answering

@@ -164,4 +164,19 @@ TEST(WatchdogTripEvents, AStaleDemandIsNotThisCyclesDemand) {
 }
 
 
+// A turret with nothing to do refuses commands with a zero demand every cycle. That is
+// parked, not limping -- and the first version of the degraded line said so once a second
+// while the station sat at q=0.003 rad pushing nothing. `vout=0` is what showed me.
+TEST(WatchdogTripEvents, RefusingAZeroDemandIsParkedNotLimping) {
+  MotorBackend::TripInputs parked; parked.command_not_sent = true;
+  EXPECT_FALSE(yaw_guard_doubt(parked, false));
+  MotorBackend::TripInputs pushing = parked; 
+  EXPECT_TRUE(yaw_guard_doubt(pushing, true));
+  MotorBackend::TripInputs can_hiccup; can_hiccup.can_counters_bad = true;
+  EXPECT_TRUE(yaw_guard_doubt(can_hiccup, false));  // a CAN error is worth saying regardless
+  MotorBackend::TripInputs quiet;
+  EXPECT_FALSE(yaw_guard_doubt(quiet, false));
+}
+
+
 }  // namespace
