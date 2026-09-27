@@ -4,15 +4,16 @@ Status: **mixed controller/AUTO_ROAM integration observed; two controlled moving
 stops succeeded on `cae41d0`; broader stop and homing-guard qualification remain
 open**. Updated 27 September 2026.
 Release `8901808` reached READY/AUTO_ROAM after mixed preflight and
-HTTP/WebSocket smoke. Its API published the valid session-relative ±80° yaw
-sector and pitch limits; both CAN buses and the launcher-supervised BNO085 were
-healthy in the observed activation window. The previous release passed all 77
-regression tests; the active revision used a targeted probe build, with full
-regression tests deferred. Historical undervoltage/throttling flags and the
-host loss during a concurrent build made power/load verification an additional
-release gate. A later live `vcgencmd get_throttled=0x50005` during AUTO_TRACK
-confirmed current undervoltage and throttling. The launcher then completed a
-controlled stop; the station remains stopped pending power-path correction.
+HTTP/WebSocket smoke, but later showed active undervoltage/throttling
+(`get_throttled=0x50005`). After the owner raised Pi input to 5.25 V, a
+5.5-minute IMX500/CAN/IMU automatic run, a 60-frame IMX477/Hailo camera-only
+run and a concurrent release build showed `get_throttled=0x0`. Full combined
+dual-camera/Hailo/motor power testing is still open. Current release `f8bcdb6`
+completed pitch homing, reached READY, and remains in MANUAL/HOLD after bounded
+web-command D-pad tests. The yaw jog moved 17.3° in twelve seconds; pitch moved
+but showed several degrees of release overshoot. Full regression tests are
+deferred on this probe build. The earlier 77-test result does not cover these
+changes. The [operating runbook](STATION_OPERATIONS.md) has current details.
 Ground truth is [the hardware inventory](HARDWARE_CURRENT.md); the operator
 confirmed GM6020 on yaw and CyberGear on pitch. Follow with the
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).

@@ -9,6 +9,15 @@ broader stop qualification and a homing-guard gap remain open. See the
 [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md) and
 [AI perception plan](AI_HAT_PERCEPTION_PLAN.md).
 
+After the owner raised the Pi input to 5.25 V, a roughly 5.5-minute normal
+IMX500/CAN/IMU run, a 60-frame IMX477/Hailo camera-only run, and a release build
+alongside the active stack showed `get_throttled=0x0`. Measured PMIC EXT5V was
+about 4.87–5.11 V across the observed loads; combined dual-camera/Hailo/motor
+peak load remains untested. Current release `f8bcdb6` reached READY and is in
+MANUAL/HOLD after web-command D-pad tests. Yaw moved 17.3° on a sustained jog;
+pitch moved but overshot the release pose by several degrees. These are current
+functional observations, not precision-control acceptance.
+
 The normal launcher run used release `1a473ab` for five minutes in AUTO_ROAM.
 IMX500 delivered 8,061 frames with zero drops; CAN0/CAN1 error counters stayed
 at zero; BNO085 game-RV status was 3 with fresh samples and no gaps. Repeated
@@ -32,8 +41,9 @@ authorized setup installed and enabled the versioned `ota-can-links.service`;
 its first start verified both links UP, ERROR-ACTIVE, classical CAN at 1 Mbps
 without cycling them. `vcgencmd get_throttled` returned `0x50000`, indicating historical
 undervoltage and throttling flags; this does not by itself identify the cause of
-the lost host connection. Avoid building a release beside active motor control
-until power and load behavior have been checked.
+the lost host connection. A later concurrent release build after the input
+adjustment completed with `get_throttled=0x0`; combined peak-load margin still
+needs measurement.
 
 Release `8901808` was built while the station was stopped, passed mixed-profile
 preflight and HTTP/WebSocket activation smoke, then reached READY/AUTO_ROAM.
@@ -45,15 +55,14 @@ health evidence, not object-detection accuracy or longer-term reliability.
 The preceding release `43193dc` passed all 77 regression tests; `8901808`
 used the targeted probe build and live activation gate after a telemetry-only
 fix and CAN startup service were added.
-During subsequent AUTO_TRACK, `vcgencmd get_throttled` returned `0x50005`:
+During the earlier AUTO_TRACK run, `vcgencmd get_throttled` returned `0x50005`:
 the Pi reported **current undervoltage and current throttling**, in addition to
 the earlier historical flags. SoC temperature was 49.9°C. The launcher
 completed a controlled stop with fresh pitch-disabled feedback and GM6020 yaw
-zero requested; the station is now stopped with both CAN links UP. This active
-power fault is a blocker for further automatic motion and Hailo load trials
-until the supply/cable/HAT power path is corrected and a bounded loaded run
-shows no current power flags. The earlier host loss is consistent with a power
-problem but is not proven to have been caused by it.
+zero requested; both CAN links remained UP. The owner then raised the input to
+5.25 V, and the bounded loaded runs above showed no current power flags. The
+earlier host loss is consistent with a power problem but is not proven to have
+been caused by it.
 
 At the next observed boot (27 September, about 16:00 NZDT),
 `ota-can-links.service` started and finished at monotonic 5.76–5.82 s;

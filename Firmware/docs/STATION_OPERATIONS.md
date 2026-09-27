@@ -5,16 +5,27 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 
 ## Current deployment gate
 
-**The station is stopped after an observed Pi power fault.** Release `8901808`
-reached READY/AUTO_ROAM and AUTO_TRACK, but `vcgencmd get_throttled` changed to
-`0x50005` while the motors and camera were active: undervoltage and throttling
-were current, with their history bits also set. The launcher then completed a
-controlled stop with fresh pitch-disable feedback and GM6020 yaw zero requested;
-both CAN links remain UP. Do not resume automatic motion until the Pi supply,
-cable and HAT power path have been checked and the current undervoltage bits
-remain clear under a bounded loaded run. Historical `0x50000` bits alone do not
-mean a present fault. See [Raspberry Pi's bit definitions](https://www.raspberrypi.com/documentation/usage/raspberry-pi-os/raspberry-pi.html#get_throttled)
-and [Pi 5 supply guidance](https://www.raspberrypi.com/documentation/computers/getting-started.html#power-supply).
+**Current station state:** release `f8bcdb6` is running in operator-selected
+MANUAL/HOLD after bounded D-pad tests. The owner raised the Pi input to 5.25 V
+after release `8901808` reported active undervoltage/throttling (`0x50005`).
+The subsequent normal IMX500/CAN/IMU run lasted about 5.5 minutes in
+AUTO_ROAM/AUTO_TRACK with repeated `get_throttled=0x0`; a 60-frame IMX477/Hailo
+camera-only run and a release build beside the active stack also returned 0x0.
+PMIC EXT5V samples under these loads were about 4.87–5.11 V. This clears the
+observed current power fault for those loads, but simultaneous dual-camera +
+Hailo + motor peaks remain unmeasured. See [Raspberry Pi's bit definitions](https://www.raspberrypi.com/documentation/usage/raspberry-pi-os/raspberry-pi.html#get_throttled).
+
+The latest full startup completed pitch homing and reached READY after the
+continuous-yaw *pitch-homing-only* displacement tolerance was changed from
+0.5° to 2°. An earlier attempt faulted at 0.527° yaw drift with fresh CAN
+feedback; its launcher stop sent pitch STOP/yaw zero but could not confirm the
+normal stopped state because the controller was already faulted. Preserve that
+case for stop-path qualification. The latest manual yaw tests moved about 7.5°
+in six seconds and 17.3° in twelve seconds, with no fault. A pitch manual
+out/return test reached 15.63° above its initial pose after release at about
+12° and transiently overshot 3.3° past its initial pose on return, then settled
+within about 0.6°. Do not interpret working D-pad motion as pitch overshoot
+qualification; see the [architect handoff](ARCHITECTURE_HANDOFF_2026_09_27.md).
 
 **The normal launcher selects the mixed split-bus profile. On release `cae41d0`,
 two controlled stops succeeded after motion: one from AUTO_TRACK near +46° yaw,
@@ -27,16 +38,16 @@ speed-ceiling/corridor warnings did not abort with
 `homing.motion_checks_abort: false`; that guard behavior also remains
 unqualified.**
 
-**Last activated release:** `8901808` passed committed-source probe build,
-mixed-hardware preflight, HTTP/WebSocket smoke and the automatic READY/AUTO_ROAM
-activation gate after the host reboot. The live API reported valid pitch limits
-and a session-relative ±80° yaw operating sector, with IMX500 near 26 fps and
-zero frame drops; both CAN buses reported zero errors and the BNO085 observer
-was fresh. Release `43193dc` passed all 77 regression tests before the later
-telemetry-only yaw-limit publication fix and CAN boot-service addition. The
-active release used `--probe-build`, so its full regression suite was deferred.
-These checks established an operating stack before the active power fault;
-they do not close the stop/homing/power qualification items above.
+**Current release:** `f8bcdb6` passed committed-source probe build and mixed
+preflight, then was started through the launcher and reached READY. Its full
+regression suite was deferred by `--probe-build`. The 13 targeted manual
+controller tests and the isolated launcher lifecycle test passed; the
+commissioning-ownership test cannot acquire the global station lock while the
+live stack owns it. Release `43193dc` passed the
+earlier 77-test suite, before these control changes. Current D-pad evidence
+comes from the web command API and controller feedback, not a browser pointer
+event trace. The live API reports valid pitch limits and a session-relative
+±80° yaw operating sector; CAN errors are zero and BNO085 observation is fresh.
 
 The installation has GM6020 yaw on `can0`, CyberGear pitch on `can1`, continuous
 yaw without an endstop, IMX500 + IMX477 cameras, a PCIe Hailo device, and a
@@ -129,11 +140,11 @@ observed boot, and both links were UP, ERROR-ACTIVE, 1 Mbps. One successful
 boot does not establish long-term recovery reliability. The Pi's idle
 `get_throttled=0x0` after that boot does not replace a loaded power check.
 
-The latest September 27 large-motion sessions left both CAN links UP at
-1 Mbps. Pitch ended with verified disabled feedback; yaw ended with zero
+Earlier September 27 large-motion sessions left both CAN links UP at 1 Mbps.
+Their pitch drives ended with verified disabled feedback; yaw ended with zero
 voltage requested and stationary feedback, but its disable state is unknown.
-Inspect current ownership/state before another session; do not cycle CAN links
-between tests.
+The current release is running in MANUAL/HOLD after D-pad tests. Inspect live
+ownership/state before another session; do not cycle CAN links between tests.
 
 The owner authorized the September 27 one-time privileged CAN boot setup after
 the reboot. This does not change unprivileged launcher ownership.
