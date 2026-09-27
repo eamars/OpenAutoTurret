@@ -1,7 +1,7 @@
 """OpenAutoTurret perception & target-selection subsystem (Vision 1.0).
 
 The independent subsystem defined by
-``docs/open_auto_turret_perception_target_selection_architecture_v1.md``:
+``docs/archive/not-implemented/vision/open_auto_turret_perception_target_selection_architecture_v1.md``:
 
     IMX500 model adapter -> DetectionNormalizer -> class filter ->
     DetectionDeduplicator -> (CameraMotionCompensator) -> TrackManager ->

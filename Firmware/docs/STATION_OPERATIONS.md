@@ -25,7 +25,7 @@ in six seconds and 17.3° in twelve seconds, with no fault. A pitch manual
 out/return test reached 15.63° above its initial pose after release at about
 12° and transiently overshot 3.3° past its initial pose on return, then settled
 within about 0.6°. Do not interpret working D-pad motion as pitch overshoot
-qualification; see the [architect handoff](ARCHITECTURE_HANDOFF_2026_09_27.md).
+qualification; see the [architect handoff](archive/partially-implemented/handoffs/ARCHITECTURE_HANDOFF_2026_09_27.md).
 
 **The normal launcher selects the mixed split-bus profile. On release `cae41d0`,
 two controlled stops succeeded after motion: one from AUTO_TRACK near +46° yaw,
@@ -51,7 +51,7 @@ event trace. The live API reports valid pitch limits and a session-relative
 
 The installation has GM6020 yaw on `can0`, CyberGear pitch on `can1`, continuous
 yaw without an endstop, IMX500 + IMX477 cameras, a PCIe Hailo device, and a
-BNO085 on I2C. See [verified hardware and probes](HARDWARE_CURRENT.md).
+BNO085 on I2C. See [verified hardware and probes](archive/partially-implemented/hardware/HARDWARE_CURRENT.md).
 
 The mixed runtime uses GM6020 yaw on CAN0 and CyberGear pitch on CAN1, with
 pitch limited to 5 A. Yaw has no confirmed disable state; a zero request is not
@@ -59,14 +59,14 @@ proof of motor de-energization. The September 27 run confirms the mixed control,
 perception and web path operated together; two subsequent controlled stops
 passed the observed pitch-disable/yaw-zero checks, while broader stop
 qualification and the intermittent readiness-rejection question remain open.
-See the [hardware adaptation plan](HARDWARE_ADAPTATION_PLAN.md).
+See the [hardware adaptation plan](archive/partially-implemented/hardware/HARDWARE_ADAPTATION_PLAN.md).
 
 The project venv and a separate commissioning release are built on the Pi.
 The minimal Hailo-8 kernel/runtime stack is now installed and passed a reboot;
 an experimental IMX477-to-Hailo detector probe also passed finite-output and
 timing checks. This does not establish detection accuracy, tracking identity or
-production perception integration. See the [hardware inventory](HARDWARE_CURRENT.md)
-and [AI plan](AI_HAT_PERCEPTION_PLAN.md).
+production perception integration. See the [hardware inventory](archive/partially-implemented/hardware/HARDWARE_CURRENT.md)
+and [AI plan](archive/partially-implemented/vision/AI_HAT_PERCEPTION_PLAN.md).
 
 With the launcher stopped and camera ownership clear, the separate no-motion
 probe exercises the pinned Hailo model without starting the controller/web:
@@ -151,8 +151,8 @@ the reboot. This does not change unprivileged launcher ownership.
 Never put credentials in scripts or Git. For motor probes, identify the exact
 protocol first; discovery must not enable, zero, home or actuate a motor.
 GM6020 `0x1FF` is a voltage command, not a discovery request. See the
-[GM6020 reference](GM6020_AI_Reference.md) and
-[CyberGear reference](CyberGear_AI_Reference.md).
+[GM6020 reference](references/gm6020/GM6020_AI_Reference.md) and
+[CyberGear reference](references/cybergear/CyberGear_AI_Reference.md).
 
 The existing IMU probe is `/home/eamars/workspace/imu-lab/imu_main`, with source
 and README beside it. It soft-resets the IMU and enables three sensor reports;
@@ -170,7 +170,7 @@ Deploy it with `deploy_station.py --probe-build --probe-imu`. It needs only
 unprivileged I2C access, records `/tmp/ota-stack-1000/imu.ndjson`, and opens no
 camera or motor transport. It establishes a stationary **host reference**, not
 a mounting calibration. `--commission-hardware --with-imu` adds the same capture
-to bounded motor probes. See [IMU evidence and coordinate meaning](IMU_COMMISSIONING_2026_09_27.md).
+to bounded motor probes. See [IMU evidence and coordinate meaning](archive/partially-implemented/commissioning/IMU_COMMISSIONING_2026_09_27.md).
 Do not assign the pitch-mounted IMU pose directly to the base orientation.
 
 For the tested camera-only Hailo application slice, use
@@ -278,7 +278,7 @@ restart a dual-CyberGear build on the new mechanism.
 
 ## Bounded commissioning, without automatic startup
 
-See [the September 26 implementation and test record](HARDWARE_COMMISSIONING_2026_09_26.md)
+See [the September 26 implementation and test record](archive/partially-implemented/commissioning/HARDWARE_COMMISSIONING_2026_09_26.md)
 for the tested revision and release path. Deploy a committed commissioning build
 with the local project Python:
 
@@ -353,7 +353,7 @@ over at least 50 ms to 20°/s, feedback/heartbeat age to 100 ms, and temperature
 to 45°C. The firmware's raw speed field has shown noise inconsistent with small
 encoder changes; it remains logged but does not alone establish actual speed.
 These bounds do not qualify an unknown pitch endpoint or automatic homing.
-See [the paired large-motion and IMU record](LARGE_MOTION_COMMISSIONING_2026_09_27.md).
+See [the paired large-motion and IMU record](archive/partially-implemented/commissioning/LARGE_MOTION_COMMISSIONING_2026_09_27.md).
 
 ### Yaw motion session
 
@@ -371,7 +371,7 @@ legs. The GM6020 voltage output ceiling is the vendor-documented ±25,000 raw,
 while actual commands stayed within −4,268..+5,643 raw. It guards travel,
 speed, stale feedback and stalled progress, then requests zero voltage and
 observes a stationary motor. GM6020 zero voltage is not a verified disable or
-mechanical park. See the [large-motion record](LARGE_MOTION_COMMISSIONING_2026_09_27.md)
+mechanical park. See the [large-motion record](archive/partially-implemented/commissioning/LARGE_MOTION_COMMISSIONING_2026_09_27.md)
 for bounds, failures and raw evidence.
 
 `config/hardware_probe.yaml` is a separate probe schema, **not** a production
@@ -381,7 +381,7 @@ heartbeat gap <= 40 ms. Recorded trials include +/-1000 and +/-1500 raw for
 150 ms, +2000 raw for 100 ms, and bounded +/-3 deg/s PI requests for 500 ms.
 The PI trial stayed within the guards but did not achieve its requested speed;
 its 1500 raw ceiling and gains are not production-qualified. See the
-[continuation evidence](HARDWARE_CONTINUATION_2026_09_26.md). These raw voltage
+[continuation evidence](archive/partially-implemented/commissioning/HARDWARE_CONTINUATION_2026_09_26.md). These raw voltage
 commands are not amperes.
 
 The probe verifies SPI parents, bitrate, ERROR-ACTIVE state, UID and stationary
@@ -400,7 +400,7 @@ started in commissioning mode.
 ## Historical procedures
 
 Detailed September 8-9 homing, recovery, tuning and parking instructions are
-preserved in the [retired dual-CyberGear runbook](archive/station_operations_dual_cybergear_2026_09_09.md).
+preserved in the [retired dual-CyberGear runbook](archive/superseded/operations/station_operations_dual_cybergear_2026_09_09.md).
 Their measurements remain background, not certification of this mechanism.
 `STATION_RUNBOOK.md`, MCP2515 setup/fault reports and `AS_BUILT_v1.md` describe
 prior installations. The earlier BNO085 proposal is also historical design

@@ -14,7 +14,7 @@ hardware_profile: config/mixed_hardware.yaml
 # overrides automatic behavior; web Auto resumes it. Service speed control,
 # planner limits and automatic hand-off delays are explicit in that mapping.
 # Roam bounds remain constrained by homed travel and the safety envelope.
-# See docs/automatic_service_validation_2026_09_06.md for measured settings.
+# See docs/archive/partially-implemented/validation/automatic_service_validation_2026_09_06.md for measured settings.
 
 can:
   # Compatibility fields; mixed transport is selected by hardware_profile.

@@ -19,7 +19,7 @@
 # Refit from stationary-background flow and verify live target convergence;
 # these two sign probes alone do not establish subpixel calibration. Translation,
 # parallax, and lens distortion remain unmeasured. Translation below is unused
-# by LOS. Historical old-mechanism fit: docs/automatic_service_validation_2026_09_06.md.
+# by LOS. Historical old-mechanism fit: docs/archive/partially-implemented/validation/automatic_service_validation_2026_09_06.md.
 #
 # Format: t_P_C key followed by three row-major rotation rows.
 t_P_C=0 0 0

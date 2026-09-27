@@ -1,6 +1,6 @@
 """The v3.2 Apache-HUD operator page.
 
-`docs/open_auto_turret_v3_2_apache_hud_ui_revision.md` governs presentation and overrides the v3
+`docs/archive/implemented/design/open_auto_turret_v3_2_apache_hud_ui_revision.md` governs presentation and overrides the v3
 dashboard, whose engineering cards are the exact "header plus cards" layout §3 forbids. The
 engineering numbers are not lost: the old page stays reachable at `/dashboard` until the DIAG
 drawer replaces it, and `/api/*` is untouched, so nothing downstream changes.

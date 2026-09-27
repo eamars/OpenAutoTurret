@@ -4,17 +4,17 @@
 > can0, CyberGear pitch ID 0x7F on can1, concurrent IMX500/IMX477 capture and
 > BNO085 reports on I2C. Hailo enumerates but lacks its driver/runtime. The
 > station is stopped; mixed-motor/continuous-yaw/IMU integration remains pending.
-> See [current inventory](Firmware/docs/HARDWARE_CURRENT.md),
-> [hardware plan](Firmware/docs/HARDWARE_ADAPTATION_PLAN.md) and
-> [AI plan](Firmware/docs/AI_HAT_PERCEPTION_PLAN.md). Earlier physical acceptance
+> See [current inventory](Firmware/docs/archive/partially-implemented/hardware/HARDWARE_CURRENT.md),
+> [hardware plan](Firmware/docs/archive/partially-implemented/hardware/HARDWARE_ADAPTATION_PLAN.md) and
+> [AI plan](Firmware/docs/archive/partially-implemented/vision/AI_HAT_PERCEPTION_PLAN.md). Earlier physical acceptance
 > below describes the retired mechanism and does not transfer to this one.
 
-**Tracks** [`Firmware/docs/open_auto_turret_software_control_architecture_v1.md`](Firmware/docs/open_auto_turret_software_control_architecture_v1.md).
+**Tracks** [`Firmware/docs/archive/superseded/architecture/open_auto_turret_software_control_architecture_v1.md`](Firmware/docs/archive/superseded/architecture/open_auto_turret_software_control_architecture_v1.md).
 
 This file answers one question: **how far along is each phase, counting only what has
 been observed doing what it claims.** It carries no feature detail, no file lists and
 no measurements — those live in
-[`Firmware/docs/AS_BUILT_v1.md`](Firmware/docs/AS_BUILT_v1.md), which is also where the
+[`Firmware/docs/archive/superseded/baselines/AS_BUILT_v1.md`](Firmware/docs/archive/superseded/baselines/AS_BUILT_v1.md), which is also where the
 shipped defects are named. Where the two disagree, `AS_BUILT_v1.md` is the one that was
 updated against the running code.
 
@@ -57,7 +57,7 @@ should pick which of the two it means and mean it.
 
 ## v3 — three-mode target tracking (spec §101)
 
-**Tracks** [`Firmware/docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md`](Firmware/docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md).
+**Tracks** [`Firmware/docs/archive/implemented/architecture/open_auto_turret_v3_three_mode_target_tracking_architecture.md`](Firmware/docs/archive/implemented/architecture/open_auto_turret_v3_three_mode_target_tracking_architecture.md).
 
 Same two columns, same rule. **`controld` running on the station today is the pre-v3
 binary** — every v3 row below is simulation, and no number of green tests changes the
@@ -203,12 +203,12 @@ during a sweep, and §110's acceptance walk is where that happens.
 
 # OpenAutoTurret — Phase Status
 
-**Tracks** [`Firmware/docs/open_auto_turret_software_control_architecture_v1.md`](Firmware/docs/open_auto_turret_software_control_architecture_v1.md).
+**Tracks** [`Firmware/docs/archive/superseded/architecture/open_auto_turret_software_control_architecture_v1.md`](Firmware/docs/archive/superseded/architecture/open_auto_turret_software_control_architecture_v1.md).
 
 This file answers one question: **how far along is each phase, counting only what has
 been observed doing what it claims.** It carries no feature detail, no file lists and
 no measurements — those live in
-[`Firmware/docs/AS_BUILT_v1.md`](Firmware/docs/AS_BUILT_v1.md), which is also where the
+[`Firmware/docs/archive/superseded/baselines/AS_BUILT_v1.md`](Firmware/docs/archive/superseded/baselines/AS_BUILT_v1.md), which is also where the
 shipped defects are named. Where the two disagree, `AS_BUILT_v1.md` is the one that was
 updated against the running code.
 
@@ -241,7 +241,7 @@ should pick which of the two it means and mean it.
 
 ## v3 — three-mode target tracking (spec §101)
 
-**Tracks** [`Firmware/docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md`](Firmware/docs/open_auto_turret_v3_three_mode_target_tracking_architecture.md).
+**Tracks** [`Firmware/docs/archive/implemented/architecture/open_auto_turret_v3_three_mode_target_tracking_architecture.md`](Firmware/docs/archive/implemented/architecture/open_auto_turret_v3_three_mode_target_tracking_architecture.md).
 
 Same two columns, same rule. **`controld` running on the station today is the pre-v3
 binary** — every v3 row below is simulation, and no number of green tests changes the
@@ -625,8 +625,8 @@ still running; v3's cost per cycle has not been measured on metal, and the recip
 above is a known 109–113 ms excursion that no v3 measurement will hide.
 
 Same day earlier: cleaned for the next architecture revision. The detailed per-phase
-item lists moved to `Firmware/docs/AS_BUILT_v1.md`; the session log and the six items
-still open moved to `Firmware/docs/archive/progress_before_v3.md`. Same day before that:
+item lists moved to `Firmware/docs/archive/superseded/baselines/AS_BUILT_v1.md`; the session log and the six items
+still open moved to `Firmware/docs/archive/superseded/handoffs/progress_before_v3.md`. Same day before that:
 first live homing, first live cold-start roaming, and `enable_search` made to actually do
 something.
 

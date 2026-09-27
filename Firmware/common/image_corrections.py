@@ -171,7 +171,7 @@ def apply_white_balance(rgb, gains: Sequence[float]):
 # command-line flag for the detector — and forgetting it does not crash anything, which is
 # precisely the problem: the preview looks entirely normal while the geometry the controller
 # reasons about is 180 degrees away from the picture, and the archive notes record somebody
-# losing hours that way (docs/archive/post_homing_test_queue.md). A parameter that only
+# losing hours that way (docs/archive/superseded/validation/post_homing_test_queue.md). A parameter that only
 # exists if the person launching a process remembers it is not a parameter. So the mount is
 # described once, in one file, and read by every process that turns sensor pixels into
 # geometry: webd's preview and visiond's detector. An explicit flag still wins, and says so
