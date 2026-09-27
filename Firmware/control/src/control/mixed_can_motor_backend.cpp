@@ -34,7 +34,8 @@ constexpr TimeNs kStationaryWindowNs = 500'000'000;
 constexpr TimeNs kNoProgressLimitNs = 1'500'000'000;
 constexpr double kStationaryToleranceRad = 0.5 * kRadiansPerDegree;
 constexpr double kNoProgressCommandRadS = 5.0 * kRadiansPerDegree;
-constexpr uint8_t kYawTemperatureRawCeiling = 45;
+// The temperature gate has no constant: the guide gives the feedback byte no
+// scale, so the profile decides (0 = no gate). See axes.yaw.guard_temp_raw_ceiling.
 
 CanHealth socketcan_health(const can::SocketCanBus& bus) {
   const auto stats = bus.stats();
@@ -437,12 +438,14 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
         progress_position = yaw_state_.position_rad;
         progress_at = now;
       }
+      const int yaw_temp_guard = profile_.yaw.yaw_guard_temp_raw_ceiling;
       should_stop = !yaw_feedback_safe_locked(now) || !health.up ||
           health.state != static_cast<int>(can::CanIfState::ErrorActive) ||
           health.rx_error_frames != 0 || health.tx_failed != 0 ||
           !bus_health_ok_.load() ||
           !std::isfinite(measured_speed) || std::abs(measured_speed) > 25.0 * kRadiansPerDegree ||
-          yaw_state_.feedback.temperature_raw >= kYawTemperatureRawCeiling ||
+          (yaw_temp_guard > 0 &&
+           yaw_state_.feedback.temperature_raw >= yaw_temp_guard) ||
           (std::abs(requested_speed) >= kNoProgressCommandRadS &&
            now - progress_at > kNoProgressLimitNs) ||
           (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs);
@@ -464,7 +467,8 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           else if (!bus_health_ok_.load()) cond = "bus_unhealthy";
           else if (!std::isfinite(measured_speed)) cond = "speed_nan";
           else if (std::abs(measured_speed) > 25.0 * kRadiansPerDegree) cond = "speed_over_ceiling";
-          else if (yaw_state_.feedback.temperature_raw >= kYawTemperatureRawCeiling) cond = "temp_raw_over";
+          else if (yaw_temp_guard > 0 &&
+                   yaw_state_.feedback.temperature_raw >= yaw_temp_guard) cond = "temp_raw_over";
           else if (std::abs(requested_speed) >= kNoProgressCommandRadS &&
                    now - progress_at > kNoProgressLimitNs) cond = "no_progress";
           else if (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs)

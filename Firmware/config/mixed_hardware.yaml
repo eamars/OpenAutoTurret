@@ -22,6 +22,12 @@ axes:
     control_mode: voltage
     feedback_frame_id: 0x205
     command_frame_id: 0x1FF
+    # Thermal-equilibrium experiment (owner, 2026-09-27): cut yaw at raw 75 —
+    # an operating choice for the ABS enclosure and +20 C summer ambient, not a
+    # manufacturer limit: the guide gives this feedback byte no unit. 0 removes
+    # the gate entirely; calibrate the byte against the driver's own 100 C LED
+    # warning before ever trusting this number as degrees.
+    guard_temp_raw_ceiling: 75
   pitch:
     protocol: cybergear
     bus: pitch

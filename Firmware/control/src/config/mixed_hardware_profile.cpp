@@ -153,7 +153,8 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
     check_keys(axes, "axes", {"yaw", "pitch"}, result);
     const auto yaw = axes["yaw"];
     check_keys(yaw, "axes.yaw", {"protocol", "bus", "motor_id", "topology",
-                                  "control_mode", "feedback_frame_id", "command_frame_id"}, result);
+                                  "control_mode", "feedback_frame_id", "command_frame_id",
+                                  "guard_temp_raw_ceiling"}, result);
     check_axis_string(yaw["protocol"], "gm6020", "axes.yaw", "protocol", result);
     check_axis_string(yaw["bus"], "yaw", "axes.yaw", "bus", result);
     check_axis_string(yaw["topology"], "continuous", "axes.yaw", "topology", result);
@@ -172,6 +173,13 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
     const auto yaw_command = unsigned_value(yaw["command_frame_id"], "axes.yaw.command_frame_id", result);
     if (yaw_command != 0x1ff) error(result, "axes.yaw.command_frame_id must be 0x1FF");
     yaw_axis.command_frame_id = static_cast<uint32_t>(yaw_command);
+    if (yaw["guard_temp_raw_ceiling"]) {
+      const int ceiling = yaw["guard_temp_raw_ceiling"].as<int>();
+      if (ceiling < 0 || ceiling > 255)
+        error(result, "axes.yaw.guard_temp_raw_ceiling must be 0..255 (0 disables the gate)");
+      else
+        yaw_axis.yaw_guard_temp_raw_ceiling = ceiling;
+    }
 
     const auto pitch = axes["pitch"];
     check_keys(pitch, "axes.pitch", {"protocol", "bus", "motor_id", "topology",

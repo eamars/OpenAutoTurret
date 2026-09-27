@@ -27,6 +27,10 @@ struct Axis {
   std::optional<uint32_t> feedback_frame_id;
   std::optional<uint32_t> command_frame_id;
   std::optional<double> current_limit_a;
+  // Gate on the unitless feedback temperature byte, 0 = no gate. The official
+  // guide gives byte 6 no scale, so a nonzero ceiling is an owner's operating
+  // decision (enclosure, ambient, duty), never a manufacturer limit.
+  int yaw_guard_temp_raw_ceiling = 0;
 };
 
 struct Profile {
