@@ -46,7 +46,8 @@ class DockAndDrawerBehaviour(unittest.TestCase):
     def setUp(self) -> None:
         self._geo = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False)
         self._geo.write(HUD_GEOMETRY_JS +
-                        "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows };\n")
+                        "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows,"
+                        " otaJogForArrow, otaAxisArrow };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -128,11 +129,18 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     def test_jog_and_step_arguments_match_the_daemon(self) -> None:
         rows = self._rows("MANUAL", {"operating_mode": "MANUAL"})
-        self.assertEqual(set(re.findall(r'data-jog="([^"]+)"', HUD_HTML)),
-                         {"yaw-", "yaw+", "pitch+", "pitch-"},
-                         "parse_jog_arg accepts exactly these four directions")
-        self.assertIn('data-jog="pitch-" aria-label="Pitch up"', HUD_HTML)
-        self.assertIn('data-jog="pitch+" aria-label="Pitch down"', HUD_HTML)
+        self.assertEqual(set(re.findall(r'data-direction="([^"]+)"', HUD_HTML)),
+                         {"left", "right", "up", "down"})
+        # Station probes established yaw+ = camera left, pitch+ = camera down.
+        # The button and every other spatial indicator use one conversion.
+        self.assertEqual(self._node("console.log(JSON.stringify(["
+                                     "'left','right','up','down'].map(T.otaJogForArrow)));"),
+                         ["yaw+", "yaw-", "pitch-", "pitch+"])
+        self.assertIn('b.dataset.jog = otaJogForArrow(b.dataset.direction)', HUD_JS)
+        self.assertEqual(self._node("console.log(JSON.stringify(["
+                                     "T.otaAxisArrow('yaw',1),T.otaAxisArrow('yaw',-1),"
+                                     "T.otaAxisArrow('pitch',1),T.otaAxisArrow('pitch',-1)]));"),
+                         ["←", "→", "↓", "↑"])
         for r in [r for r in rows if r["command"] == "manual_step"]:
             self.assertRegex(r["arg"], r"^(yaw|pitch)[+-][0-9.]+$")
 

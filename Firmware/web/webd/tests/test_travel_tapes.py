@@ -127,25 +127,25 @@ class TravelTapesExecuted(unittest.TestCase):
                         "§5.2: fine ticks carry no labels")
 
     def test_marker_maps_the_current_value_and_clamps_within_the_tape(self) -> None:
-        # Hand arithmetic, not a re-run of the function: -80..80 across x=412..1516 puts +22.4 deg at
-        # 62.75%% of the span.
-        want = 408.0 + (22.4 + 80.0) / 160.0 * 1104.0
+        # Physical direction: yaw+ turns the camera left, so +22.4 lies left
+        # of centre on the travel tape despite the joint value increasing.
+        want = 408.0 + (80.0 - 22.4) / 160.0 * 1104.0
         got = self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(YAW))
         self.assertAlmostEqual(got, want, places=6)
         self.assertAlmostEqual(
             self._node("console.log(T.hudTravelTape(%s).marker);"
                        % json.dumps(dict(PITCH, valueDeg=-6.8))),
-            310.1 + (55.0 + 6.8) / 100.0 * 459.0, places=6,
-            msg="§6.2: pitch increases upward, so +55 is the top of the tape")
+            310.1 + (-6.8 + 45.0) / 100.0 * 459.0, places=6,
+            msg="pitch+ aims down, so the marker moves down as joint pitch increases")
         # Out of range (a value beyond the soft limit, or an un-homed zero) must not point off the
         # tape into empty sky.
         self.assertAlmostEqual(
             self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(dict(YAW, valueDeg=-999.0))),
-            408.0, places=9)
+            1512.0, places=9)
         self.assertAlmostEqual(
             self._node("console.log(T.hudTravelTape(%s).marker);"
                        % json.dumps(dict(PITCH, valueDeg=120.0))),
-            310.1, places=9)
+            769.1, places=9)
 
     def test_no_cardinal_letters_appear_anywhere(self) -> None:
         # §5.3: logical joint travel, not compass heading; N/E/S/W forbidden without a validated
