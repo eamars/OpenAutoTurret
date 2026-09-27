@@ -103,6 +103,8 @@ class MixedCanMotorBackend final : public MotorBackend {
   std::atomic<bool> opened_{false};
   std::atomic<bool> pitch_opened_{false};
   std::atomic<bool> pitch_enabled_owned_{false};
+  std::atomic<bool> pitch_transition_active_{false};
+  std::atomic<TimeNs> pitch_stop_ping_ns_{0};
   std::atomic<bool> yaw_opened_{false};
   std::atomic<bool> bus_health_ok_{false};
   std::atomic<bool> yaw_reference_valid_{false};

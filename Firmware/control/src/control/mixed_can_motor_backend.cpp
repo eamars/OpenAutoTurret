@@ -131,6 +131,9 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
     }
     yaw_reference_valid_.store(false);
     yaw_trip_.store(false);
+    pitch_enabled_owned_.store(false);
+    pitch_transition_active_.store(false);
+    pitch_stop_ping_ns_.store(0);
     const auto yaw_parent = std::filesystem::canonical("/sys/class/net/can0/device").filename().string();
     const auto pitch_parent = std::filesystem::canonical("/sys/class/net/can1/device").filename().string();
     if (yaw_parent != profile_.yaw_bus.spi_parent || pitch_parent != profile_.pitch_bus.spi_parent) {
@@ -240,7 +243,9 @@ void MixedCanMotorBackend::close() {
     if (pitch_enabled_owned_.exchange(false))
       pitch_backend_.deenergize(AxisId::Pitch);
     pitch_system_.close();
-    pitch_opened_.store(false);
+  pitch_opened_.store(false);
+  pitch_transition_active_.store(false);
+  pitch_stop_ping_ns_.store(0);
   }
   yaw_bus_.close();
   yaw_opened_.store(false);
@@ -479,9 +484,22 @@ void MixedCanMotorBackend::start_watchdog() {
 }
 
 void MixedCanMotorBackend::heartbeat() {
-  heartbeat_ns_.store(now_monotonic_ns());
+  const auto now = now_monotonic_ns();
+  heartbeat_ns_.store(now);
   heartbeat_seen_.store(true);
-  if (pitch_opened_.load()) pitch_backend_.heartbeat();
+  if (pitch_opened_.load()) {
+    pitch_backend_.heartbeat();
+    // A disabled CyberGear sends no periodic status. Until a mode transition
+    // starts, an idempotent STOP at 50 Hz supplies fresh disabled feedback for
+    // the homing supervisor without enabling or moving the pitch axis.
+    if (!pitch_enabled_owned_.load() && !pitch_transition_active_.load() &&
+        now - pitch_stop_ping_ns_.load() >= 20'000'000LL) {
+      pitch_stop_ping_ns_.store(now);
+      std::string error;
+      if (!pitch_system_.send_stop(AxisId::Pitch, &error))
+        spdlog::error("CyberGear disabled-status STOP request failed: {}", error);
+    }
+  }
 }
 
 bool MixedCanMotorBackend::watchdog_fault() const {
@@ -518,8 +536,10 @@ bool MixedCanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad
                                                std::string& err) {
   if (axis == AxisId::Pitch) {
     if (pitch_opened_.load()) {
+      pitch_transition_active_.store(true);
       const bool ok = pitch_backend_.enter_position_mode(axis, limit_spd_rad_s, err);
       if (ok) pitch_enabled_owned_.store(true);
+      pitch_transition_active_.store(false);
       return ok;
     }
     err = "mixed backend is not open";
@@ -532,8 +552,10 @@ bool MixedCanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
                                             std::string& err) {
   if (axis == AxisId::Pitch) {
     if (pitch_opened_.load()) {
+      pitch_transition_active_.store(true);
       const bool ok = pitch_backend_.enter_speed_mode(axis, limit_cur_a, err);
       if (ok) pitch_enabled_owned_.store(true);
+      pitch_transition_active_.store(false);
       return ok;
     }
     err = "mixed backend is not open";
@@ -549,9 +571,11 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
     double speed_ki, double speed_kp, bool check_displacement) {
   if (axis == AxisId::Pitch) {
     if (pitch_opened_.load()) {
+      pitch_transition_active_.store(true);
       const auto result = pitch_backend_.transition_mode(axis, position, limit, now, err,
                                                          speed_ki, speed_kp, check_displacement);
       if (result == Transition::Complete) pitch_enabled_owned_.store(true);
+      if (result != Transition::Pending) pitch_transition_active_.store(false);
       return result;
     }
     err = "mixed backend is not open";
@@ -577,6 +601,7 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
 
 void MixedCanMotorBackend::deenergize(AxisId axis) {
   if (axis == AxisId::Pitch) {
+    pitch_transition_active_.store(false);
     if (pitch_opened_.load()) pitch_backend_.deenergize(axis);
     pitch_enabled_owned_.store(false);
     return;
