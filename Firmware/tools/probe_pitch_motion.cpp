@@ -26,19 +26,21 @@ static volatile std::sig_atomic_t interrupted;
 static void stop(int) { interrupted=1; }
 
 int main(int argc, char** argv) {
-  if (argc!=3 && argc!=4) { std::cerr<<"Usage: probe-pitch-motion STEP_MILLIDEGREES TRACE.csv [tuned]\n"; return 2; }
+  if (argc!=3 && argc!=4) { std::cerr<<"Usage: probe-pitch-motion STEP_MILLIDEGREES TRACE.csv [tuned|restore] (max +/-15000 mdeg)\n"; return 2; }
   const bool tune=argc==4 && std::string(argv[3])=="tuned";
   const bool restore=argc==4 && std::string(argv[3])=="restore";
   if (argc==4 && !tune && !restore) return 2;
   int step=0;
   const std::string arg=argv[1];
   auto parsed=std::from_chars(arg.data(),arg.data()+arg.size(),step);
-  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step < -3000 || step > 3000) return 2;
+  if (parsed.ec!=std::errc{} || parsed.ptr!=arg.data()+arg.size() || step < -15000 || step > 15000) return 2;
   std::signal(SIGINT,stop); std::signal(SIGTERM,stop);
   int ownership=-1;
   ota::can::CyberGearSystem system;
   ota::CanMotorBackend backend(system);
   bool identified=false;
+  bool original_gains_read=false;
+  double original_kp=0, original_ki=0;
   try {
     const auto lock="/tmp/ota-mixed-can-"+std::to_string(getuid())+".lock";
     ownership=::open(lock.c_str(),O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
@@ -71,7 +73,6 @@ int main(int argc, char** argv) {
     // during the single disabled setup; no disable between movement stages.
     if (tune && !backend.restore_stopped_pitch_gains(1,.002,error))
       throw std::runtime_error("initial trial gain restoration failed: "+error);
-    double original_kp=0, original_ki=0;
     for (const auto r : {Reg::RunMode,Reg::LocRef,Reg::LimitSpd,Reg::LimitCur,Reg::MechPos,
                          Reg::LocKp,Reg::SpdKp,Reg::SpdKi,Reg::Iqf,Reg::VBus}) {
       double value=0;
@@ -80,6 +81,7 @@ int main(int argc, char** argv) {
       if (r==Reg::SpdKp) original_kp=value;
       if (r==Reg::SpdKi) original_ki=value;
     }
+    original_gains_read=true;
     if (step==0) {
       if (restore && !backend.restore_stopped_pitch_gains(1,.002,error)) throw std::runtime_error(error);
       if (restore) std::cout<<"PITCH_GAINS restored_kp=1 restored_ki=0.002 without_enable=1\n";
@@ -90,13 +92,21 @@ int main(int argc, char** argv) {
     if (!system.send_stop(axis,&error)) throw std::runtime_error(error);
     std::this_thread::sleep_for(20ms);
     std::cout<<"PITCH identified_uid=0x"<<std::hex<<uid<<std::dec<<" q0_rad="<<initial.q_rad
-             <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=10 current_ceiling_a=5\n"<<std::flush;
+             <<" step_deg="<<step/1000.0<<" speed_limit_deg_s=10 current_ceiling_a=5\n"
+             <<"PITCH_LIMITS trusted_pitch_endpoints=0 limitation=unhomed_pitch_mechanical_envelope_uncommissioned "
+               "direct_targets=1 operator_clearance_check_required=1\n"<<std::flush;
     if (tune) std::cout<<"PITCH_TRIAL_GAINS kp=4 ki=0.05; restore original gains before stop\n";
     std::mutex commands;
     std::atomic<ota::TimeNs> heartbeat{ota::now_monotonic_ns()};
     std::atomic<bool> trip{false}, stop_failed{false};
     const auto started=ota::now_monotonic_ns();
     std::atomic<int> trip_reason{0};
+    std::atomic<double> active_target{initial.q_rad};
+    std::atomic<double> progress_q{initial.q_rad};
+    std::atomic<ota::TimeNs> progress_ns{started};
+    std::atomic<double> sampled_iqf{NAN};
+    std::atomic<ota::TimeNs> sampled_iqf_ns{0};
+    std::atomic<bool> target_move_active{false};
     // Guard owns only the pitch stop and serializes it with every setup/target
     // command. It cannot survive process/Pi loss; this is bounded commissioning.
     std::jthread guard([&](std::stop_token done) {
@@ -111,17 +121,45 @@ int main(int argc, char** argv) {
             measured_speed=(s.q_rad-last_q)/((s.rx_ns-last_q_ns)*1e-9);
             last_q=s.q_rad; last_q_ns=s.rx_ns;
           }
+          if (target_move_active && s.has_feedback && s.rx_ns>progress_ns.load() &&
+              std::abs(s.q_rad-progress_q.load())>=0.12*rad) {
+            progress_q=s.q_rad;
+            progress_ns=s.rx_ns;
+          }
           int reason=0;
           if (interrupted) reason=1;
-          else if (now-started>15000000000LL) reason=2;
+          else if (now-started>40000000000LL) reason=2;
           else if (now-heartbeat.load()>100000000LL) reason=3;
           else if (!s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL) reason=4;
           else if (s.faults) reason=5;
-          else if (!std::isfinite(s.q_rad) || std::abs(s.q_rad-initial.q_rad)>4*rad) reason=6;
+          // This is a bounded excursion guard, not a trusted mechanical limit. The
+          // station's pitch soft endpoints are uncommissioned until homing; do not
+          // pretend expected_travel_deg is an absolute coordinate envelope.
+          else if (!std::isfinite(s.q_rad) ||
+                   std::abs(s.q_rad-initial.q_rad)>(std::abs(step)/1000.0+2.0)*rad) reason=6;
           else if (!std::isfinite(measured_speed) || std::abs(measured_speed)>20*rad) reason=7;
           else if (!std::isfinite(s.temp_c) || s.temp_c>45) reason=8;
           else if (system.bus().stats().rx_error_frames) reason=9;
-          if (reason && !trip) { trip_reason=reason; trip=true; }
+          else if (target_move_active && std::abs(active_target.load()-s.q_rad)>0.75*rad &&
+                   now-progress_ns.load()>1500000000LL &&
+                   now-sampled_iqf_ns.load()>500000000LL) reason=12;
+          else if (target_move_active && std::abs(active_target.load()-s.q_rad)>0.75*rad &&
+                   now-progress_ns.load()>1500000000LL &&
+                   std::abs(sampled_iqf.load())>=4.5) reason=10;
+          else if (target_move_active && std::abs(active_target.load()-s.q_rad)>0.75*rad &&
+                   now-progress_ns.load()>2500000000LL) reason=11;
+          if (reason && !trip) {
+            trip_reason=reason;
+            trip=true;
+            if (reason==10 || reason==11 || reason==12) {
+              std::cerr<<"PITCH_STALL target_error_deg="
+                       <<std::abs(active_target.load()-s.q_rad)/rad
+                       <<" encoder_no_progress_ms="<<(now-progress_ns.load())/1e6
+                       <<" iqf_a="<<sampled_iqf.load()
+                       <<" iqf_age_ms="<<(now-sampled_iqf_ns.load())/1e6
+                       <<" trip_reason="<<reason<<'\n'<<std::flush;
+            }
+          }
           if (trip && !system.send_stop(axis)) stop_failed=true;
         }
         std::this_thread::sleep_for(5ms);
@@ -145,44 +183,103 @@ int main(int argc, char** argv) {
     if (trip || mode!=ota::MotorBackend::Transition::Complete)
       throw std::runtime_error("pitch setup stopped: "+error);
     const auto q0=backend.snapshot(axis,ota::now_monotonic_ns()).q_rad;
-    // Owner's probe-first contract: full authorized current headroom (5 A),
-    // sufficient demand to prove motion, and a short bounded experiment.
+    // The production transition writes and reads back exactly 5 A before the
+    // position-mode enable. The pitch endpoints are not homed/commissioned.
+    std::cout<<"PITCH_CURRENT_LIMIT verified_a=5 source=production_backend_pre_enable_readback\n"
+             <<std::flush;
+    // This is a bounded motion check, not a homing or limit-calibration run.
     const Reg observed_regs[]={Reg::LocRef,Reg::LimitSpd,Reg::Iqf,Reg::MechVel};
     unsigned observed=0; bool waiting=false; ota::TimeNs read_deadline=0;
-    // Two outward/return pairs in one enabled session. Each stage includes
-    // settling at its target; CAN, IMU and feedback stay live throughout.
+    // The absolute pitch envelope is not commissioned; don't misrepresent the
+    // homing expected_travel range as an absolute soft limit. The operator must
+    // check clearance. Runtime supervision is by feedback/fault/temperature,
+    // encoder-derived speed, lack of progress under a nonzero target, and a
+    // hard excursion ceiling of requested amplitude + 2 degrees.
+    const double amplitude=std::abs(step)*rad/1000.0;
+    const double first_direction=step<0 ? -1.0:1.0;
+    const double endpoints[]={q0+first_direction*amplitude,q0,
+                              q0-first_direction*amplitude,q0};
+    const char* legs[]={"outbound_first","return_origin",
+                        "outbound_opposite","return_origin"};
+    int stage_number=0;
     for (int stage=0;stage<4 && !trip;++stage) {
-    const double target=q0+(stage%2==0 ? step*rad/1000.0:0);
-    const auto phase="stage"+std::to_string(stage+1);
-    std::cout<<"PITCH_STAGE stage="<<stage+1<<" target_rad="<<target
-             <<" enabled_continuously=1\n"<<std::flush;
-    const auto until=ota::now_monotonic_ns()+1500000000LL;
-    while (!trip && ota::now_monotonic_ns()<until) {
-      {
-        std::lock_guard lock(commands);
-        heartbeat=ota::now_monotonic_ns();
-        if (!trip) backend.command(axis,target,commanded_speed);
-      }
-      {
-        if (!waiting) {
-          if (!system.begin_register_read(axis,observed_regs[observed],error)) throw std::runtime_error(error);
-          waiting=true; read_deadline=ota::now_monotonic_ns()+100000000LL;
+      const double target=endpoints[stage];
+      const std::string phase=legs[stage];
+      ++stage_number;
+      const auto before=backend.snapshot(axis,ota::now_monotonic_ns());
+      active_target=target;
+      progress_q=before.q_rad;
+      progress_ns=before.rx_ns;
+      target_move_active=(std::abs(target-before.q_rad)>0.5*rad);
+      std::cout<<"PITCH_STAGE stage="<<stage_number<<" leg="<<legs[stage]
+               <<" target_rad="<<target<<" target_delta_deg="<<(target-before.q_rad)/rad
+               <<" speed_limit_deg_s=10 enabled_continuously=1 hold_until_settled=1\n"
+               <<std::flush;
+      const auto stage_started=ota::now_monotonic_ns();
+      const auto stage_timeout=10000000000LL;
+      ota::TimeNs settled_since=0;
+      double settled_q=before.q_rad;
+      while (!trip && ota::now_monotonic_ns()-stage_started<stage_timeout) {
+        const auto now=ota::now_monotonic_ns();
+        const auto sample=backend.snapshot(axis,now);
+        // Encoder position is the stillness measure. CyberGear's raw speed
+        // estimate is noisy at rest, so it is deliberately not a settling gate.
+        if (sample.has_feedback && sample.rx_ns<=now && now-sample.rx_ns<=100000000LL &&
+            std::abs(sample.q_rad-target)<=0.5*rad) {
+          if (!settled_since) { settled_since=now; settled_q=sample.q_rad; }
+          else if (std::abs(sample.q_rad-settled_q)>0.12*rad) {
+            settled_since=now; settled_q=sample.q_rad;
+          }
         } else {
-          double value=0; const int result=system.poll_register_read(value,error);
-          if (result<0 || (result==0 && ota::now_monotonic_ns()>read_deadline)) throw std::runtime_error("active diagnostic read failed");
-          if (result==1) {
-            std::cout<<"PITCH_ACTIVE_REG name="<<ota::cybergear::reg_name(observed_regs[observed])<<" value="<<value<<'\n';
-            if (observed_regs[observed]==Reg::Iqf && (!std::isfinite(value) || std::abs(value)>5))
-              throw std::runtime_error("observed filtered current exceeds 5 A");
-            waiting=false; observed=(observed+1)%4;
+          settled_since=0;
+        }
+        if (settled_since && now-settled_since>=200000000LL) break;
+        {
+          std::lock_guard lock(commands);
+          heartbeat=now;
+          if (!trip) backend.command(axis,target,commanded_speed);
+        }
+        {
+          if (!waiting) {
+            if (!system.begin_register_read(axis,observed_regs[observed],error))
+              throw std::runtime_error(error);
+            waiting=true;
+            read_deadline=ota::now_monotonic_ns()+100000000LL;
+          } else {
+            double value=0;
+            const int result=system.poll_register_read(value,error);
+            if (result<0 || (result==0 && ota::now_monotonic_ns()>read_deadline))
+              throw std::runtime_error("active diagnostic read failed");
+            if (result==1) {
+              std::cout<<"PITCH_ACTIVE_REG name="
+                       <<ota::cybergear::reg_name(observed_regs[observed])
+                       <<" value="<<value<<'\n';
+              if (observed_regs[observed]==Reg::Iqf &&
+                  (!std::isfinite(value) || std::abs(value)>5))
+                throw std::runtime_error("observed filtered current exceeds 5 A");
+              if (observed_regs[observed]==Reg::Iqf) {
+                sampled_iqf=value;
+                sampled_iqf_ns=ota::now_monotonic_ns();
+              }
+              waiting=false;
+              observed=(observed+1)%4;
+            }
           }
         }
+        record(phase.c_str());
+        if (settled_since && ota::now_monotonic_ns()-settled_since>=200000000LL) break;
+        std::this_thread::sleep_for(5ms);
       }
-      record(phase.c_str()); std::this_thread::sleep_for(5ms);
-    }
-    const auto reached=backend.snapshot(axis,ota::now_monotonic_ns());
-    std::cout<<"PITCH_STAGE_RESULT stage="<<stage+1<<" error_deg="<<(reached.q_rad-target)/rad
-             <<" disabled="<<reached.disabled<<" faults="<<reached.faults<<'\n';
+      const auto reached=backend.snapshot(axis,ota::now_monotonic_ns());
+      const auto reached_at=ota::now_monotonic_ns();
+      const bool arrived=reached.has_feedback && std::abs(reached.q_rad-target)<=0.5*rad &&
+                         reached.rx_ns<=reached_at && reached_at-reached.rx_ns<=100000000LL &&
+                         settled_since!=0 && reached_at-settled_since>=200000000LL;
+      std::cout<<"PITCH_STAGE_RESULT stage="<<stage_number<<" error_deg="<<(reached.q_rad-target)/rad
+               <<" speed_deg_s="<<reached.v_rad_s/rad<<" arrived_settled="<<arrived
+               <<" disabled="<<reached.disabled<<" faults="<<reached.faults<<'\n'<<std::flush;
+      target_move_active=false;
+      if (!trip && !arrived) throw std::runtime_error("pitch target failed to settle before timeout");
     }
     system.cancel_register_read();
     if (tune && !trip) {
@@ -214,14 +311,22 @@ int main(int argc, char** argv) {
       throw std::runtime_error("stopped trial gain restoration failed: "+error);
     const auto final=backend.snapshot(axis,ota::now_monotonic_ns());
     double cap=0;
-    const bool cap_ok=backend.read_register(axis,ota::cybergear::Reg::LimitCur,cap,200,error) && cap>0 && cap<=5;
+    const bool cap_ok=backend.read_register(axis,ota::cybergear::Reg::LimitCur,cap,200,error) &&
+                      std::isfinite(cap) && std::abs(cap-5.0)<=1e-6;
     std::cout<<"PITCH_RESULT guard_trip="<<trip<<" trip_reason="<<trip_reason<<" stop_failed="<<stop_failed<<" disabled="<<final.disabled
              <<" faults="<<final.faults<<" delta_deg="<<(final.q_rad-initial.q_rad)/rad
              <<" final_limit_a="<<cap<<" current_limit_verified="<<cap_ok<<std::endl;
     system.close(); ::close(ownership);
     return !trip && !stop_failed && final.disabled && !final.faults && cap_ok ? 0:1;
   } catch (const std::exception& e) {
-    if (identified) backend.deenergize(axis);
+    if (identified) {
+      backend.deenergize(axis);
+      if (tune && original_gains_read) {
+        std::string restore_error;
+        if (!backend.restore_stopped_pitch_gains(original_kp,original_ki,restore_error))
+          std::cerr<<"PITCH_GAINS_EXCEPTION_RESTORE_FAILED "<<restore_error<<'\n';
+      }
+    }
     std::cerr<<"PITCH_PROBE_FAILED "<<e.what()<<std::endl;
     system.close(); if (ownership>=0) ::close(ownership); return 1;
   }
