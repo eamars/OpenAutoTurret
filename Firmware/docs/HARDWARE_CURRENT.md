@@ -1,6 +1,6 @@
 # Current station hardware
 
-Updated **27 September 2026** with pitch-limit, Hailo application and IMU motion checks. This is
+Updated **27 September 2026** with large pitch/yaw and paired IMU motion checks. This is
 the current hardware inventory; dated September 3-9 reports describe the previous
 mechanism. Operation is governed by [STATION_OPERATIONS.md](STATION_OPERATIONS.md).
 Bounded mixed-bus probes, non-motion pitch current-limit application, and a first
@@ -37,8 +37,8 @@ commissioning session; this document records only current distilled evidence.
 | CAN transport | Two independent SocketCAN interfaces; `mcp251xfd`; 40 MHz controller clock | Verified netlink, sysfs, kernel log |
 | Yaw drive | RoboMaster GM6020, ID 1, `can0` | Axis owner-confirmed; standard `0x205` feedback verified |
 | Pitch drive | Xiaomi CyberGear, ID `0x7F`, `can1` | Axis owner-confirmed; extended discovery and UID verified |
-| Yaw mechanics | Continuous rotation, slip ring, no yaw endstop | Owner-confirmed; later sub-degree motor motion verified; full-turn clearance unverified |
-| Pitch mechanics | Bounded pitch with mechanical endstops | Endstops owner-confirmed; exact limits, direction, load/support and homing pending commissioning |
+| Yaw mechanics | Direct drive, continuous rotation, slip ring, no yaw endstop | Owner-confirmed; +29.356° and return verified with IMU; full-turn clearance unverified |
+| Pitch mechanics | Direct drive, bounded pitch with mechanical endstops | Owner-confirmed; ±15° and return verified with 5 A cap; exact endpoints and homing pending |
 | Camera A | Sony IMX500, index 0 at this boot | Enumerated and simultaneous capture verified |
 | Camera B | Sony IMX477, index 1 at this boot | Enumerated and simultaneous capture verified; lens/FOV/mount geometry unknown |
 | Accelerator | Hailo-8 AI HAT | `hailortcli fw-control identify` reported HAILO8, firmware 4.23.0, through `/dev/hailo0` after reboot |
@@ -226,11 +226,14 @@ peak versus 1.01360° game-RV peak. This is relative-motion evidence, not a comp
 mount calibration or controller fusion. Product part 10004148 reported version
 3.2.13/build 6. See [the IMU commissioning record](IMU_COMMISSIONING_2026_09_27.md).
 
-A subsequent continuous energized pitch session completed two +3°/return pairs
-at requested 10°/s and a verified 5 A cap. Encoder endpoint errors were within
-0.022°; no fault or guard trip occurred. IMU directions agreed on all four
-movements, but reported 2.34–2.78° versus roughly 3° at the encoder, so calibrated
-angle agreement remains open. Filtered-current samples peaked at 0.729 A.
+A later continuous energized pitch session completed +15°/return and
+−15°/return at requested 10°/s and a verified 5 A cap, with no fault or guard
+trip. The four paired game-RV/encoder angle ratios were 0.967, 0.995, 0.995
+and 0.984; filtered current peaked at 1.034 A. The earlier +3° magnitude
+shortfall did not persist and no scale correction is stored. A subsequent
+30° yaw session reached +29.356° and returned to +0.659°; game-RV observed
++29.183° and −28.446° on the two legs against encoder +29.356° and
+−28.740°. See the [large-motion record](LARGE_MOTION_COMMISSIONING_2026_09_27.md).
 
 The following describes the earlier host-lab audit, retained as provenance.
 
@@ -287,8 +290,8 @@ remains design input, with hardware absence superseded by this evidence.
 
 - GM6020 firmware and Assistant settings, especially voltage/current mode;
   command-loss behavior and an independently effective stop path.
-- Pitch endstop geometry, new direction signs and transmission
-  ratios, yaw mechanical reference, supply/termination and slip-ring ratings.
+- Pitch endstop geometry, new direction signs, yaw mechanical reference,
+  supply/termination and slip-ring ratings. Both axes are owner-confirmed direct drive.
   The owner confirms the camera is near the pitch center of mass and disabling
   pitch presents no current support risk.
 - Camera lenses, focus/FOV, mounts/orientation, intrinsics/extrinsics and overlap.
