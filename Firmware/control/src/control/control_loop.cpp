@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 
 #include "vision/vision_ingest.hpp"
 #include "common/time.hpp"
@@ -19,7 +20,15 @@ namespace {
 constexpr double kAtRestVelRadS = 0.05;
 // Position tolerance for "at the ready pose".
 constexpr double kReadyPosTolRad = 0.01;
+constexpr TimeNs kYawReferenceStationaryNs = 500'000'000;
+constexpr double kYawReferenceStationaryRadS = 0.5 * kDeg2Rad;
+constexpr double kYawReferencePositionToleranceRad = 0.5 * kDeg2Rad;
 }  // namespace
+
+bool ControlLoop::position_ready() const {
+  return homed_ || (backend_->supports_continuous_yaw() && pitch_homed_ &&
+                    yaw_session_reference_valid_);
+}
 
 ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
     : cfg_(std::move(cfg)), backend_(std::move(backend)) {
@@ -49,7 +58,10 @@ bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
   for (int i = 0; i < kAxisCount; ++i) {
     const AxisId a = static_cast<AxisId>(i);
     std::string e;
-    if (!backend_->enter_position_mode(a, limit_spd, e)) {
+    const bool ok = backend_->supports_continuous_yaw() && a == AxisId::Yaw
+        ? backend_->transition_mode(a, true, limit_spd, now_ns_, e) == MotorBackend::Transition::Complete
+        : backend_->enter_position_mode(a, limit_spd, e);
+    if (!ok) {
       err = std::string(axis_name(a)) + ": " + e;
       deenergize_all();
       return false;
@@ -62,6 +74,7 @@ bool ControlLoop::enter_speed_mode_all(
     const double limit_cur_a[kAxisCount], std::string& err) {
   for (int i = 0; i < kAxisCount; ++i) {
     const AxisId a = static_cast<AxisId>(i);
+    if (backend_->supports_continuous_yaw() && a == AxisId::Yaw) continue;
     std::string e;
     if (!backend_->enter_speed_mode(a, limit_cur_a[i], e)) {
       err = std::string(axis_name(a)) + ": " + e;
@@ -88,11 +101,16 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
       return false;
     }
     for (int i = 0; i < kAxisCount; ++i) {
-      const auto s = backend_->snapshot(static_cast<AxisId>(i), now_ns_);
+      const AxisId axis = static_cast<AxisId>(i);
+      const auto s = backend_->snapshot(axis, now_ns_);
+      const bool mixed_yaw = backend_->supports_continuous_yaw() && axis == AxisId::Yaw;
       if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now_ns_ ||
           now_ns_ - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
-          s.faults || !std::isfinite(s.q_rad) || !std::isfinite(s.temp_c) ||
-          s.temp_c > cfg_.motor_overtemp_c || !std::isfinite(v_est_[i]) ||
+          (s.faults_known && s.faults) || !std::isfinite(s.q_rad) ||
+          (!mixed_yaw && (!s.temperature_known || !std::isfinite(s.temp_c) ||
+                          s.temp_c > cfg_.motor_overtemp_c)) ||
+          (mixed_yaw && !cfg_.allow_unknown_motor_health) ||
+          !std::isfinite(v_est_[i]) ||
           std::abs(v_est_[i]) > .5*kDeg2Rad) {
         err = "Home blocked: fresh, healthy, stationary feedback required on both axes";
         return false;
@@ -102,6 +120,10 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
     park_failed_ = false;
     park_.reset();
     shutdown_requested_.store(false);
+  }
+  if (backend_->supports_continuous_yaw() && !cfg_.allow_unknown_motor_health) {
+    err = "Home blocked: GM6020 temperature/fault status is unavailable and no reviewed runtime health policy is enabled";
+    return false;
   }
   homing_.reset(new HomingPlan(std::move(plan)));
   // Speed mode (velocity) for homing: the drive's own velocity loop holds the
@@ -114,6 +136,10 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   // non-active axis retains its own configured initial current limit.
   double limit_cur[kAxisCount];
   for (int i = 0; i < kAxisCount; ++i) {
+    if (backend_->supports_continuous_yaw() && i == ix(AxisId::Yaw)) {
+      limit_cur[i] = 0.0;  // continuous yaw has no CyberGear LimitCur/speed mode
+      continue;
+    }
     limit_cur[i] = homing_->initial_current_limit(static_cast<AxisId>(i));
     if (!std::isfinite(limit_cur[i]) || limit_cur[i] <= 0.0) {
       err = "homing requires a positive initial current limit for each axis";
@@ -127,12 +153,17 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   disable_tracking();
   manual_.cancel(now_ns_);
   homed_ = false;
+  pitch_homed_ = false;
   at_ready_ = false;
   homing_log_cycle_ = 0;
   homing_observe_ns_ = 0;
   homing_warning_ns_ = {};
   limits_ = {};
   models_ = {};
+  if (backend_->supports_continuous_yaw()) {
+    yaw_session_reference_valid_ = false;
+    yaw_reference_stationary_since_ns_ = 0;
+  }
   phase_ = Phase::Homing;
   if (backend_->recovery_before_homing()) return start_motor_recovery(err, true);
   return true;
@@ -149,6 +180,9 @@ bool ControlLoop::start_motor_recovery(std::string& err, bool then_home) {
   disable_tracking();
   manual_.cancel(now_ns_);
   homed_ = at_ready_ = false;
+  pitch_homed_ = false;
+  yaw_session_reference_valid_ = false;
+  yaw_reference_stationary_since_ns_ = 0;
   limits_ = {}; models_ = {};
   pending_homing_ds_.reset();
   park_.reset(); park_failed_ = false;
@@ -173,8 +207,8 @@ bool ControlLoop::start_motor_recovery(std::string& err, bool then_home) {
 }
 
 bool ControlLoop::start_hold(std::string& err) {
-  if (!homed_) {
-    err = "not homed";
+  if (!position_ready()) {
+    err = "position not ready (pitch homing/session yaw reference incomplete)";
     return false;
   }
   std::string e;
@@ -187,10 +221,109 @@ bool ControlLoop::start_hold(std::string& err) {
 }
 
 bool ControlLoop::start_parking(std::string& err) {
+  if (backend_->supports_continuous_yaw()) {
+    // A shutdown request is also a stop request, even when later preconditions
+    // refuse the park. Send bounded zero-speed commands immediately; no API
+    // claim is made that the GM6020 is electrically disabled.
+    backend_->command_velocity(AxisId::Yaw, 0.0);
+    const auto pitch_stop = backend_->snapshot(AxisId::Pitch, now_ns_);
+    if (pitch_stop.has_feedback && std::isfinite(pitch_stop.q_rad)) {
+      if (pitch_stop.in_speed_mode)
+        backend_->command_velocity(AxisId::Pitch, 0.0);
+      else if (pitch_stop.in_position_mode)
+        backend_->command(AxisId::Pitch, pitch_stop.q_rad,
+                          cfg_.park.verify_speed_deg_s * kDeg2Rad);
+    }
+  }
   if (phase_ == Phase::Parking || phase_ == Phase::Parked) return true;
   if (phase_ == Phase::Homing || phase_ == Phase::Fault || phase_ == Phase::Recovering) {
     err = "parking unavailable during homing or fault; Home is required for recovery";
     return false;
+  }
+  if (backend_->supports_continuous_yaw()) {
+    if (!position_ready() || !limits_[ix(AxisId::Pitch)].valid ||
+        !models_[ix(AxisId::Pitch)].has_reference ||
+        !yaw_session_reference_valid_) {
+      err = "cannot stop/park: pitch homing and stationary session-yaw reference are required";
+      return false;
+    }
+    if (!cfg_.allow_unknown_motor_health) {
+      err = "cannot stop/park: GM6020 temperature/fault status is unavailable and no reviewed runtime health policy is enabled";
+      return false;
+    }
+    const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
+    const auto yaw = backend_->snapshot(AxisId::Yaw, now_ns_);
+    const auto fresh = [&](const AxisSnapshot& s) {
+      return s.has_feedback && s.rx_ns > 0 && s.rx_ns <= now_ns_ &&
+          now_ns_ - s.rx_ns <= cfg_.feedback_max_age_ms * 1'000'000LL &&
+          std::isfinite(s.q_rad) && std::isfinite(s.v_rad_s);
+    };
+    if (!fresh(pitch) || !pitch.temperature_known || !pitch.faults_known ||
+        pitch.faults != 0 || pitch.temp_c > cfg_.motor_overtemp_c ||
+        !pitch.disabled_known || pitch.disabled ||
+        (!pitch.in_speed_mode && !pitch.in_position_mode) ||
+        !fresh(yaw)) {
+      err = "cannot stop/park: require fresh yaw and healthy running pitch feedback";
+      return false;
+    }
+    const double yaw_speed = std::max(std::abs(yaw.v_rad_s),
+                                      std::abs(v_est_[ix(AxisId::Yaw)]));
+    if (!std::isfinite(yaw_speed) || yaw_speed > 25.0 * kDeg2Rad) {
+      err = "cannot stop/park: yaw speed exceeds the independent 25 deg/s stop guard";
+      return false;
+    }
+    const auto& pl = limits_[ix(AxisId::Pitch)];
+    const auto& model = models_[ix(AxisId::Pitch)];
+    double target = model.logical_to_raw_rad(cfg_.park.park_logical_deg[ix(AxisId::Pitch)]);
+    const auto& target_mode = cfg_.park.target_mode[ix(AxisId::Pitch)];
+    if (target_mode == "soft_center")
+      target = .5 * (pl.q_soft_min_rad + pl.q_soft_max_rad);
+    else if (target_mode == "soft_min")
+      target = pl.q_soft_min_rad + cfg_.park.end_clearance_deg * kDeg2Rad;
+    else if (target_mode == "soft_max")
+      target = pl.q_soft_max_rad - cfg_.park.end_clearance_deg * kDeg2Rad;
+    else if (target_mode != "logical_degrees") {
+      err = "cannot stop/park: unknown pitch target mode '" + target_mode + "'";
+      return false;
+    }
+    const double margin = std::max(cfg_.park.min_soft_margin_deg,
+        (env_.stop_distance(cfg_.park.speed_deg_s * kDeg2Rad) +
+         .20 * cfg_.park.speed_deg_s * kDeg2Rad) * kRad2Deg + cfg_.park.pos_tol_deg) * kDeg2Rad;
+    if (!std::isfinite(target) || target <= pl.q_soft_min_rad + margin ||
+        target >= pl.q_soft_max_rad - margin) {
+      err = "cannot stop/park: configured pitch target lacks bounded stopping margin";
+      return false;
+    }
+    if (!std::isfinite(cfg_.park.speed_deg_s) || cfg_.park.speed_deg_s <= 0.0 ||
+        cfg_.park.dwell_ms <= 0) {
+      err = "cannot stop/park: invalid bounded pitch stop parameters";
+      return false;
+    }
+    mixed_park_pitch_target_rad_ = target;
+    mixed_park_yaw_origin_rad_ = yaw.q_rad;
+    constexpr double yaw_brake_rad_s2 = 30.0 * kDeg2Rad;
+    mixed_park_yaw_corridor_rad_ = std::min(20.0 * kDeg2Rad,
+        yaw_speed * yaw_speed / (2.0 * yaw_brake_rad_s2) +
+        yaw_speed * .10 + 1.0 * kDeg2Rad);
+    mixed_park_pitch_dwell_since_ns_ = mixed_park_yaw_dwell_since_ns_ = 0;
+    mixed_yaw_zero_requested_ns_ = 0;
+    mixed_pitch_disable_requested_ns_ = 0;
+    mixed_pitch_disabled_confirmed_ns_ = 0;
+    mixed_yaw_zero_request_count_ = 0;
+    mixed_pitch_disable_requested_ = false;
+    mixed_park_deadline_ns_ = now_ns_ + static_cast<TimeNs>(
+        std::max(10.0, 2.0 * std::abs(target - pitch.q_rad) /
+                           (cfg_.park.speed_deg_s * kDeg2Rad) +
+                           yaw_speed / yaw_brake_rad_s2 + 5.0) * 1e9);
+    mixed_stop_park_ = true;
+    park_.reset();
+    park_failed_ = false;
+    disable_tracking();
+    manual_.cancel(now_ns_);
+    phase_ = Phase::Parking;
+    spdlog::warn("mixed stop/park: holding continuous yaw at its current session pose and stopping pitch at {:.3f} rad; yaw disable state is unavailable",
+                 mixed_park_pitch_target_rad_);
+    return true;
   }
   if (!homed_) {
     err = "cannot park: not homed (position validity unknown, §38.1)";
@@ -252,9 +385,22 @@ bool ControlLoop::start_parking(std::string& err) {
 void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   // Verification failure withholds automatic release. Emergency safety
   // actions retain their independent disable authority.
+  if (backend_->supports_continuous_yaw()) {
+    backend_->command_velocity(AxisId::Yaw, 0.0);
+    const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
+    if (pitch.has_feedback && std::isfinite(pitch.q_rad)) {
+      if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+      else if (pitch.in_position_mode)
+        backend_->command(AxisId::Pitch, pitch.q_rad,
+                          cfg_.park.verify_speed_deg_s * kDeg2Rad);
+      if (last_decision_.action == SafetyAction::Disable)
+        backend_->deenergize(AxisId::Pitch);
+    }
+  }
   // A motion failure cannot use the park-verification-only Home shortcut.
   // It requires explicit motor recovery and never resumes on a later ALLOW.
   park_failed_ = !motion_fault;
+  mixed_stop_park_ = false;
   shutdown_requested_.store(false);
   phase_ = Phase::Fault;
   fault_reason_ = "PARK FAILED: " + reason;
@@ -273,11 +419,20 @@ void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
 void ControlLoop::deenergize_all() {
   backend_->invalidate_calibration();
   homed_ = false;
+  pitch_homed_ = false;
+  if (backend_->supports_continuous_yaw()) {
+    yaw_session_reference_valid_ = false;
+    yaw_reference_stationary_since_ns_ = 0;
+  }
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
 }
 
 bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
                                          const std::array<AxisLimits, 2>& limits, std::string& err) {
+  if (backend_->supports_continuous_yaw()) {
+    err = "retained two-axis homing cannot be restored for continuous yaw; physically home pitch and establish a fresh yaw session reference";
+    return false;
+  }
   for (int i=0; i<kAxisCount; ++i) {
     const auto& m=models[i]; const auto& l=limits[i];
     if (!m.has_reference || (m.direction_sign != 1 && m.direction_sign != -1) ||
@@ -293,6 +448,7 @@ bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>&
     ready_raw_[i]=s.q_rad;
   }
   models_=models; limits_=limits; homed_=true; at_ready_=true; phase_=Phase::Hold;
+  pitch_homed_ = true;
   return true;
 }
 
@@ -307,8 +463,8 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
     err = "tracking already enabled";
     return false;
   }
-  if (!homed_) {
-    err = "cannot enable tracking: not homed (position validity unknown, §38.1)";
+  if (!position_ready()) {
+    err = "cannot enable tracking: pitch homing/session yaw reference incomplete";
     return false;
   }
   // §36/§49: the SearchPlanner requires its yaw bounds to be STRICTLY inside
@@ -321,11 +477,17 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   // Speed-mode tracking consumes velocity explicitly. Do not interpret a
   // rate inside the observer's uncertainty as established target motion.
   if (cfg_.service_speed_control) cfg.uncertainty_gated_motion = true;
-  const AxisLimits& yl = limits_[ix(AxisId::Yaw)];
   const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
-  double lo = std::max(ready_yaw - cfg_.search_span_rad, yl.q_soft_min_rad + inset);
-  double hi = std::min(ready_yaw + cfg_.search_span_rad, yl.q_soft_max_rad - inset);
+  double yaw_low = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
+  double yaw_high = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+  if (backend_->supports_continuous_yaw()) {
+    const auto virtual_yaw = runtime_limits(AxisId::Yaw);
+    yaw_low = virtual_yaw.q_soft_min_rad;
+    yaw_high = virtual_yaw.q_soft_max_rad;
+  }
+  double lo = std::max(ready_yaw - cfg_.search_span_rad, yaw_low + inset);
+  double hi = std::min(ready_yaw + cfg_.search_span_rad, yaw_high - inset);
   if (!(hi > lo)) {  // degenerate: no room to sweep — hold the ready yaw
     spdlog::warn("search sweep clamped to the ready pose (no yaw room inside "
                  "the soft limits)");
@@ -377,7 +539,8 @@ void ControlLoop::feed_measurement(const vision::TargetMeasurement& m) {
 }
 
 bool ControlLoop::finalize_homing() {
-  for (int i = 0; i < kAxisCount; ++i) {
+  const int axis_count = backend_->supports_continuous_yaw() ? 1 : kAxisCount;
+  for (int i = 0; i < axis_count; ++i) {
     const AxisId a = static_cast<AxisId>(i);
     if (!homing_->axis_homed(a)) return false;
     models_[i] = homing_->model(a);
@@ -388,7 +551,23 @@ bool ControlLoop::finalize_homing() {
     const double lh = models_[i].raw_to_logical_deg(homing_->raw_high(a));
     ready_raw_[i] = models_[i].logical_to_raw_rad(0.5 * (ll + lh));
   }
-  homed_ = true;
+  pitch_homed_ = true;
+  if (backend_->supports_continuous_yaw()) {
+    if (!yaw_session_reference_valid_) return false;
+    ready_raw_[ix(AxisId::Yaw)] = yaw_session_reference_rad_;
+    // Establish the GM6020 voltage-position session only after the bounded
+    // pitch axis has completed real physical homing.
+    std::string err;
+    if (backend_->transition_mode(AxisId::Yaw, true,
+                                  cfg_.hold_speed_rad_s, now_ns_, err) !=
+        MotorBackend::Transition::Complete) {
+      spdlog::error("continuous yaw session enable failed after pitch homing: {}", err);
+      return false;
+    }
+    homed_ = false;  // yaw has no mechanical endpoint or retained homing claim
+  } else {
+    homed_ = true;
+  }
   at_ready_ = false;
   return true;
 }
@@ -399,7 +578,7 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
   fb.pos_rad = s.q_rad;
   fb.vel_rad_s = vel_rad_s;
   fb.torque_nm = s.torque_nm;
-  fb.motor_fault = (s.faults != 0);
+  fb.motor_fault = !s.faults_known || (s.faults != 0);
   return fb;
 }
 
@@ -421,7 +600,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   for (int i = 0; i < kAxisCount; ++i) {
     sp[i] = backend_->snapshot(static_cast<AxisId>(i), now_ns);
     last_q_[i] = sp[i].q_rad;  // for telemetry
-    last_temp_[i] = sp[i].temp_c;  // for telemetry (drive NTC, degC)
+    last_temp_[i] = sp[i].temperature_known
+        ? sp[i].temp_c : std::numeric_limits<double>::quiet_NaN();
     // Position-derived velocity (see header): refresh only when fresh
     // feedback arrives so the 200 Hz loop does not average in zeros.
     if (sp[i].has_feedback && sp[i].rx_ns > v_est_t_prev_[i]) {
@@ -449,6 +629,40 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
   }
 
+  // The mixed backend's GM6020 position is session-relative. Do not regard
+  // that reference as usable until fresh feedback has remained stationary for
+  // a complete window; never seek a yaw endpoint to manufacture a reference.
+  if (backend_->supports_continuous_yaw() && !yaw_session_reference_valid_) {
+    const auto& yaw = sp[ix(AxisId::Yaw)];
+    const bool fresh = yaw.has_feedback && yaw.rx_ns > 0 && yaw.rx_ns <= now_ns &&
+        now_ns - yaw.rx_ns <= cfg_.feedback_max_age_ms * 1'000'000LL &&
+        std::isfinite(yaw.q_rad) && std::isfinite(yaw.v_rad_s) &&
+        std::isfinite(v_est_[ix(AxisId::Yaw)]);
+    const bool stationary = fresh &&
+        std::abs(yaw.v_rad_s) <= kYawReferenceStationaryRadS &&
+        std::abs(v_est_[ix(AxisId::Yaw)]) <= kYawReferenceStationaryRadS;
+    if (!stationary) {
+      yaw_reference_stationary_since_ns_ = 0;
+    } else if (yaw_reference_stationary_since_ns_ == 0) {
+      yaw_reference_candidate_rad_ = yaw.q_rad;
+      yaw_reference_stationary_since_ns_ = yaw.rx_ns;
+    } else if (std::abs(yaw.q_rad - yaw_reference_candidate_rad_) >
+               kYawReferencePositionToleranceRad) {
+      yaw_reference_candidate_rad_ = yaw.q_rad;
+      yaw_reference_stationary_since_ns_ = yaw.rx_ns;
+    } else if (yaw.rx_ns - yaw_reference_stationary_since_ns_ >=
+               kYawReferenceStationaryNs) {
+      yaw_session_reference_rad_ = yaw_reference_candidate_rad_;
+      yaw_session_reference_valid_ = true;
+      ready_raw_[ix(AxisId::Yaw)] = yaw_session_reference_rad_;
+      spdlog::info("continuous yaw session reference established from fresh stationary feedback at {:.6f} rad; no endpoint home or finite yaw limits",
+                   yaw_session_reference_rad_);
+    }
+  }
+  last_q_[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].q_rad;
+  const AxisLimits cycle_limits[kAxisCount] = {
+      runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
+
   // 1a. Phase 8: execute any developer commands submitted via the web UI
   //     (§42.2). They were validated against the previous cycle's state on the
   //     web thread; execution happens HERE on the control thread so all state
@@ -461,7 +675,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   //     Auto-enable (§38.1): tracking is HARD-disabled until the homing gates
   //     pass — this branch is unreachable before homed_ is set by
   //     finalize_homing(), and enable_tracking() re-checks it.
-  if (tracking_auto_enable_ && !tracking_ && homed_ &&
+  if (tracking_auto_enable_ && !tracking_ && position_ready() &&
       mode_mgr_.mode() != OperatingMode::Manual) {
     std::string terr;
     if (!enable_tracking(tracking_cfg_, terr))
@@ -639,7 +853,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const bool was_expired = std::string(manual_out_.reason) == "jog lease expired";
       manual_out_ = manual_.update(q_logical, v_max, now_ns, period_ns);
       if (response_probe_until_ns_ && (now_ns >= response_probe_until_ns_ ||
-          phase_ != Phase::Hold || !homed_ || last_decision_.action != SafetyAction::Allow))
+          phase_ != Phase::Hold || !position_ready() || last_decision_.action != SafetyAction::Allow))
         response_probe_until_ns_ = 0;
       if (response_probe_until_ns_) {
         auto& intent = manual_out_.intent;
@@ -742,7 +956,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         bounds.now_ns = now_ns;
         bounds.q_yaw_hold_rad = sp[ix(AxisId::Yaw)].q_rad;
         bounds.q_pitch_hold_rad = sp[ix(AxisId::Pitch)].q_rad;
-        bounds.axis_limits = limits_;
+        bounds.axis_limits = {runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
         at_input_.los_feasible = !ref_mgr_->resolve(probe, bounds).target_unreachable;
       }
       // §13/§16, once per cycle and not once per frame. The block that normally refreshes
@@ -892,20 +1106,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     in.axes[i].feedback_age_ms =
         sp[i].has_feedback ? (now_ns - sp[i].rx_ns) / 1000000 : INT64_MAX;
     in.axes[i].temp_c = sp[i].temp_c;
+    in.axes[i].temperature_known = sp[i].temperature_known;
     in.axes[i].motor_faults = sp[i].faults;
-    in.axes[i].limits = limits_[i];
+    in.axes[i].motor_faults_known = sp[i].faults_known;
+    in.axes[i].limits = cycle_limits[i];
   }
-  in.homing_valid = homed_;
+  in.homing_valid = position_ready();
   // §38.1: the supervisor applies the stricter tracking checks only when the
   // reference is actually a tracking reference (position validity is known
   // because tracking requires a valid homing).
   in.tracking_enabled = tracking_ref_.is_tracking_reference;
   in.cycle_overrun_us = overrun_us;
   in.deadline_miss_count = deadline_miss_count_;
+  in.allow_unknown_motor_health = cfg_.allow_unknown_motor_health;
 
   // 4. Safety decision (authoritative).
   last_decision_ = supervisor_.evaluate(in);
-  if (phase_ == Phase::Parking && (park_log_ns_ == 0 || now_ns - park_log_ns_ >= 500'000'000)) {
+  if (park_ && phase_ == Phase::Parking &&
+      (park_log_ns_ == 0 || now_ns - park_log_ns_ >= 500'000'000)) {
     for (int i = 0; i < kAxisCount; ++i) {
       const auto& ax = in.axes[i];
       const auto ev = backend_->park_position_evidence(static_cast<AxisId>(i), now_ns);
@@ -968,6 +1186,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     lim[i] = 0.0;
   }
   const bool recovery_cycle = phase_ == Phase::Recovering;
+  bool mixed_parking_handled = false;
   switch (phase_) {
     case Phase::Recovering: {
       std::string detail;
@@ -1008,6 +1227,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // direction, balance pose, or zero-speed command certifies a held axis.
       std::string motion_error;
       for (int i=0; i<kAxisCount; ++i) {
+        const AxisId axis = static_cast<AxisId>(i);
+        if (backend_->supports_continuous_yaw() && axis == AxisId::Yaw) {
+          if (!yaw_session_reference_valid_) continue;
+          const auto& yaw = sp[i];
+          if (!yaw.has_feedback || yaw.rx_ns <= 0 || yaw.rx_ns > now_ns ||
+              now_ns-yaw.rx_ns > cfg_.feedback_max_age_ms*1'000'000LL ||
+              !std::isfinite(yaw.q_rad) || !std::isfinite(yaw.v_rad_s) ||
+              std::abs(yaw.v_rad_s) > kYawReferenceStationaryRadS ||
+              std::abs(yaw.q_rad-yaw_session_reference_rad_) >
+                  kYawReferencePositionToleranceRad) {
+            motion_error = "continuous yaw moved or lost fresh stationary feedback during pitch homing";
+            break;
+          }
+          continue;  // GM6020 has no temperature/fault/torque scale for the legacy guard.
+        }
         const auto observation = homing_motion_.observe(static_cast<AxisId>(i), sp[i], now_ns,
             homing_->motion_speed_ceiling(), cfg_.feedback_max_age_ms*1'000'000LL,
             cfg_.motor_overtemp_c);
@@ -1028,8 +1262,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         fault("safety interrupted homing: " + last_decision_.reason);
         break;
       }
+      if (backend_->supports_continuous_yaw() && !yaw_session_reference_valid_)
+        break;  // wait for a fresh stationary session baseline before any pitch motion
       if (homing_init_axis_ < kAxisCount) {
         const auto axis = static_cast<AxisId>(homing_init_axis_);
+        if (backend_->supports_continuous_yaw() && axis == AxisId::Yaw) {
+          ++homing_init_axis_;
+          break;
+        }
         std::string e;
         const auto status = backend_->transition_mode(axis, false, homing_->initial_current_limit(axis), now_ns, e,
             cfg_.homing_speed_ki,cfg_.homing_speed_kp,cfg_.homing_mode_displacement_check);
@@ -1042,6 +1282,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         for (int i=0; i<kAxisCount; ++i)
           homing_motion_.expect(static_cast<AxisId>(i),hold,sp[i].q_rad);
         if (homing_final_axis_ < kAxisCount) {
+          if (backend_->supports_continuous_yaw() &&
+              homing_final_axis_ == ix(AxisId::Yaw)) {
+            ++homing_final_axis_;
+            break;
+          }
           std::string e;
           const auto status = backend_->transition_mode(static_cast<AxisId>(homing_final_axis_),
               !cfg_.service_speed_control, cfg_.service_speed_control
@@ -1055,6 +1300,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         break;
       }
       const AxisId a = homing_->active_axis();
+      if (backend_->supports_continuous_yaw() && a == AxisId::Yaw) {
+        deenergize_all();
+        fault("continuous yaw cannot be endpoint homed; configure a pitch-only homing plan");
+        break;
+      }
       // Position-derived velocity (v_est_), not the drive's noisy self-
       // reported v: the MoveTo arrival test and the contact detector's
       // motion/stall logic need a trustworthy velocity (P0j).
@@ -1125,7 +1375,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         const AxisId other = (a == AxisId::Pitch) ? AxisId::Yaw : AxisId::Pitch;
         DesiredState hold; hold.hold=true;
         homing_motion_.expect(other,hold,sp[ix(other)].q_rad);
-        backend_->command_velocity(other, 0.0);
+        if (!(backend_->supports_continuous_yaw() && other == AxisId::Yaw))
+          backend_->command_velocity(other, 0.0);
         // The homing carries the drive current limit on the cycle it changes
         // it (the initial per-axis value; also on a re-arm cycle — the
         // backend de-duplicates). 0.0 = leave it unchanged. (Redundant with
@@ -1173,7 +1424,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
                                                   : tracking_ref_.q_pitch_rad;
-          const double solved = env_.constrain_reference(r, limits_[i]);
+          const double solved = env_.constrain_reference(r, cycle_limits[i]);
           const auto profile = motion_profile(i,response_probe ? OperatingMode::AutoTrack : mode_mgr_.mode());
           double reference_cap = cfg_.motion.configured
               ? std::min(tracking_ref_.v_max_rad_s,profile.target.speed *
@@ -1182,12 +1433,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           if (cfg_.motion.configured && last_decision_.action == SafetyAction::Derate)
             reference_cap *= cfg_.derate_factor;
           lim[i] = std::min(reference_cap,
-                            env_.max_speed_at(solved, limits_[i]));
+                            env_.max_speed_at(solved, cycle_limits[i]));
           if (cfg_.service_speed_control) {
             const control::BoundaryGovernor boundary{
                 std::min(cfg_.a_brake_rad_s2,profile.maximum.acceleration),
                 std::min(cfg_.j_brake_rad_s3,profile.maximum.jerk),.20,cfg_.stop_margin_rad};
-            const auto b = boundary.at(sp[i].q_rad, limits_[i], reference_cap,
+            const auto b = boundary.at(sp[i].q_rad, cycle_limits[i], reference_cap,
                                        speed_servo_[i].acceleration, v_est_[i]);
             // Slow when the moving axis approaches an end, rather than making
             // an entire long traversal crawl because its destination is near it.
@@ -1260,10 +1511,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       for (int i = 0; i < kAxisCount; ++i) {
         if (test_motion && i == (int)ix(AxisId::Yaw)) {
           const double target =
-              env_.constrain_reference(test_motion_target_rad_, limits_[i]);
+              env_.constrain_reference(test_motion_target_rad_, cycle_limits[i]);
           q_ref[i] = target;
           lim[i] = std::min(hold_speed_effective(),
-                            env_.max_speed_at(target, limits_[i]));
+                            env_.max_speed_at(target, cycle_limits[i]));
           at_ready_ = false;
           continue;
         }
@@ -1332,6 +1583,149 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Parking: {
+      if (mixed_stop_park_) {
+        mixed_parking_handled = true;
+        const auto& pitch = sp[ix(AxisId::Pitch)];
+        const auto& yaw = sp[ix(AxisId::Yaw)];
+        if (last_decision_.action == SafetyAction::Disable ||
+            last_decision_.action == SafetyAction::FaultStop ||
+            (last_decision_.action != SafetyAction::Allow &&
+             last_decision_.action != SafetyAction::Derate)) {
+          backend_->command_velocity(AxisId::Yaw, 0.0);
+          if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+          else if (pitch.in_position_mode && std::isfinite(pitch.q_rad))
+            backend_->command(AxisId::Pitch, pitch.q_rad,
+                              cfg_.park.verify_speed_deg_s * kDeg2Rad);
+          if (last_decision_.action == SafetyAction::Disable)
+            backend_->deenergize(AxisId::Pitch);
+          fail_parking("safety interrupted mixed stop/park: " + last_decision_.reason, true);
+          break;
+        }
+        const auto fresh = [&](const AxisSnapshot& s) {
+          return s.has_feedback && s.rx_ns > 0 && s.rx_ns <= now_ns &&
+              now_ns - s.rx_ns <= cfg_.feedback_max_age_ms * 1'000'000LL &&
+              std::isfinite(s.q_rad) && std::isfinite(s.v_rad_s);
+        };
+        const TimeNs pitch_disable_ack_grace_ns = std::max<TimeNs>(
+            500'000'000LL, 2 * cfg_.feedback_max_age_ms * 1'000'000LL);
+        const bool awaiting_pitch_disable_ack = mixed_pitch_disable_requested_ &&
+            mixed_pitch_disabled_confirmed_ns_ == 0;
+        const bool pitch_ack_timed_out = awaiting_pitch_disable_ack &&
+            now_ns - mixed_pitch_disable_requested_ns_ > pitch_disable_ack_grace_ns;
+        if ((!mixed_pitch_disable_requested_ &&
+             (!fresh(pitch) || !pitch.temperature_known || !pitch.faults_known ||
+              pitch.faults != 0 || pitch.temp_c > cfg_.motor_overtemp_c ||
+              !pitch.disabled_known)) ||
+            pitch_ack_timed_out ||
+            (pitch.faults_known && pitch.faults != 0) ||
+            (pitch.temperature_known && pitch.temp_c > cfg_.motor_overtemp_c) ||
+            !fresh(yaw) || !std::isfinite(v_est_[ix(AxisId::Yaw)])) {
+          fail_parking("pitch health/disable or fresh yaw-stop feedback became unknown", true);
+          break;
+        }
+        if (awaiting_pitch_disable_ack && fresh(pitch) && pitch.disabled_known &&
+            pitch.disabled && pitch.rx_ns > mixed_pitch_disable_requested_ns_) {
+          // A STOP request is not evidence of disable. Only a newer drive
+          // feedback sample can acknowledge it; retain that evidence while
+          // the yaw's independent stationary dwell completes.
+          mixed_pitch_disabled_confirmed_ns_ = pitch.rx_ns;
+        }
+        if (now_ns >= mixed_park_deadline_ns_) {
+          fail_parking("mixed pitch stop/yaw zero confirmation deadline exceeded");
+          break;
+        }
+
+        // This topology has no GM6020 disable command or confirmation. Keep
+        // the yaw loop at zero speed at its current session pose and require a
+        // fresh stationary encoder sample after that request before reporting
+        // the distinct mixed STOPPED state.
+        backend_->command_velocity(AxisId::Yaw, 0.0);
+        if (mixed_yaw_zero_requested_ns_ == 0)
+          mixed_yaw_zero_requested_ns_ = now_ns;
+        ++mixed_yaw_zero_request_count_;
+        q_ref[ix(AxisId::Yaw)] = yaw.q_rad;
+        lim[ix(AxisId::Yaw)] = 0.0;
+        const bool yaw_in_corridor =
+            std::abs(yaw.q_rad - mixed_park_yaw_origin_rad_) <= mixed_park_yaw_corridor_rad_;
+        const bool yaw_still = yaw.rx_ns > mixed_yaw_zero_requested_ns_ &&
+            yaw_in_corridor && std::abs(yaw.v_rad_s) <= kYawReferenceStationaryRadS &&
+            std::abs(v_est_[ix(AxisId::Yaw)]) <= kYawReferenceStationaryRadS;
+        if (!yaw_in_corridor) {
+          fail_parking("continuous yaw left the bounded zero-request stop corridor", true);
+          break;
+        }
+        if (!yaw_still) mixed_park_yaw_dwell_since_ns_ = 0;
+        else if (mixed_park_yaw_dwell_since_ns_ == 0)
+          mixed_park_yaw_dwell_since_ns_ = yaw.rx_ns;
+
+        const double pitch_tol = .5 * cfg_.park.pos_tol_deg * kDeg2Rad;
+        const bool pitch_at_target =
+            std::abs(pitch.q_rad - mixed_park_pitch_target_rad_) <= pitch_tol &&
+            std::abs(v_est_[ix(AxisId::Pitch)]) <= cfg_.park.vel_tol_deg_s * kDeg2Rad;
+        if (!mixed_pitch_disable_requested_) {
+          if (pitch.disabled) {
+            fail_parking("pitch drive disabled before bounded stop target was verified", true);
+            break;
+          }
+          const double derate = last_decision_.action == SafetyAction::Derate
+              ? cfg_.derate_factor : 1.0;
+          const double cap = cfg_.park.speed_deg_s * kDeg2Rad * derate;
+          const control::BoundaryGovernor boundary{cfg_.a_brake_rad_s2,
+              cfg_.j_brake_rad_s3, .20, cfg_.stop_margin_rad};
+          const auto bounds = boundary.at(pitch.q_rad,
+              limits_[ix(AxisId::Pitch)], cap, 0, v_est_[ix(AxisId::Pitch)]);
+          const double velocity = std::clamp(
+              2.0 * (mixed_park_pitch_target_rad_ - pitch.q_rad),
+              -bounds.negative_speed, bounds.positive_speed);
+          q_ref[ix(AxisId::Pitch)] = mixed_park_pitch_target_rad_;
+          lim[ix(AxisId::Pitch)] = cap;
+          if (pitch.in_speed_mode) {
+            backend_->command_velocity(AxisId::Pitch, velocity);
+            service_velocity_control = true;
+            service_command_rate[ix(AxisId::Pitch)] = velocity;
+          } else if (!pitch.in_position_mode) {
+            fail_parking("pitch drive left its verified running mode during mixed stop", true);
+            break;
+          }
+          if (!pitch_at_target) mixed_park_pitch_dwell_since_ns_ = 0;
+          else if (mixed_park_pitch_dwell_since_ns_ == 0)
+            mixed_park_pitch_dwell_since_ns_ = now_ns;
+          if (mixed_park_pitch_dwell_since_ns_ != 0 &&
+              now_ns - mixed_park_pitch_dwell_since_ns_ >=
+                  static_cast<TimeNs>(cfg_.park.dwell_ms) * 1'000'000LL) {
+          backend_->deenergize(AxisId::Pitch);
+          mixed_pitch_disable_requested_ = true;
+          mixed_pitch_disable_requested_ns_ = now_ns;
+          spdlog::info("mixed stop/park: bounded pitch pose verified; requesting pitch disable, yaw remains zero-requested");
+        }
+        } else if (mixed_pitch_disabled_confirmed_ns_ == 0) {
+          // Feedback may continue to report enabled for a bounded transition
+          // after STOP. Keep retrying, then require a fresh disabled ACK.
+          backend_->deenergize(AxisId::Pitch);
+        }
+
+        const bool yaw_dwell_complete = mixed_park_yaw_dwell_since_ns_ != 0 &&
+            now_ns - mixed_park_yaw_dwell_since_ns_ >=
+                static_cast<TimeNs>(cfg_.park.dwell_ms) * 1'000'000LL;
+        const TimeNs pitch_disable_evidence_max_ns = std::min<TimeNs>(2'000'000'000LL,
+            std::max<TimeNs>(cfg_.feedback_max_age_ms * 1'000'000LL,
+                static_cast<TimeNs>(cfg_.park.dwell_ms + 100) * 1'000'000LL));
+        const bool pitch_disable_confirmed = mixed_pitch_disabled_confirmed_ns_ > 0 &&
+            now_ns - mixed_pitch_disabled_confirmed_ns_ <= pitch_disable_evidence_max_ns;
+        if (mixed_pitch_disable_requested_ && pitch_disable_confirmed &&
+            yaw_dwell_complete && mixed_yaw_zero_request_count_ >= 20) {
+          backend_->deenergize(AxisId::Yaw);  // final zero-voltage request; not disable proof
+          phase_ = Phase::Parked;
+          homed_ = false;
+          pitch_homed_ = false;
+          at_ready_ = false;
+          mixed_stop_park_ = false;
+          shutdown_requested_.store(false);
+          spdlog::info("MIXED STOPPED: pitch disable confirmed by fresh feedback at {} ns; GM6020 received repeated zero-speed requests and final zero-voltage request; yaw disable state unavailable",
+                       mixed_pitch_disabled_confirmed_ns_);
+        }
+        break;
+      }
       if (last_decision_.action == SafetyAction::Disable ||
           last_decision_.action == SafetyAction::FaultStop) break;
       bool invalid_feedback = false;
@@ -1445,7 +1839,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         for (int i = 0; i < kAxisCount; ++i) {
           const double cap = (po.speed_mode ? cfg_.park.speed_deg_s : cfg_.park.verify_speed_deg_s) * kDeg2Rad *
               (last_decision_.action == SafetyAction::Derate ? cfg_.derate_factor : 1.0);
-          const auto bounds = boundary.at(sp[i].q_rad, limits_[i], cap, 0, v_est_[i]);
+        const auto bounds = boundary.at(sp[i].q_rad, cycle_limits[i], cap, 0, v_est_[i]);
           const double requested = po.speed_mode ? moves[i].velocity_rad_s :
               2.0 * (park_->park_raw_rad(static_cast<AxisId>(i)) - sp[i].q_rad);
           const double velocity = std::clamp(requested,
@@ -1483,7 +1877,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       for (int i = 0; i < kAxisCount; ++i) {
         if (std::fabs(v_est_[i]) > kAtRestVelRadS) {
           q_ref[i] = env_.emergency_stop_target(sp[i].q_rad, v_est_[i],
-                                                limits_[i]);
+                                                cycle_limits[i]);
           lim[i] = cfg_.emergency_speed_rad_s;
         } else {
           q_ref[i] = sp[i].q_rad;
@@ -1504,6 +1898,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     const AxisId a = static_cast<AxisId>(i);
     double qr = q_ref[i], ls = lim[i];
     if (recovery_cycle) continue;  // never command from pre-recovery snapshots
+    if (mixed_parking_handled) continue;  // mixed stop issued direct, topology-specific safe outputs above
     bool do_command = true;
     switch (last_decision_.action) {
       case SafetyAction::Allow:
@@ -1520,7 +1915,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // Position-derived velocity (v_est_), as in the Fault phase: the
         // drive's self-reported v is a noise band at rest (P0j) that would
         // ping-pong the stop reference each cycle.
-        qr = env_.emergency_stop_target(sp[i].q_rad, v_est_[i], limits_[i]);
+        qr = env_.emergency_stop_target(sp[i].q_rad, v_est_[i], cycle_limits[i]);
         ls = cfg_.emergency_speed_rad_s;
         break;
       case SafetyAction::Disable:
@@ -1542,7 +1937,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         // crosses feedback_max_age_ms after ~5 quiet cycles and the supervisor
         // flaps BRAKE/ALLOW forever, each BRAKE stomping the other axis's
         // reference (p0p hold phase; p3e fault phase, wire-verified B/C 1:1).
-        if (cfg_.service_speed_control && phase_ == Phase::Hold && homed_ &&
+        if (cfg_.service_speed_control && phase_ == Phase::Hold && position_ready() &&
             (last_decision_.action == SafetyAction::Allow || last_decision_.action == SafetyAction::Derate)) {
           // Commissioning ceiling for the initial speed-servo profile. Bounds
           // apply at the measured pose as well as the requested reference.
@@ -1573,7 +1968,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double boundary_cap = cfg_.motion.configured
               ? std::min(control::kServiceSpeed,std::max(cap,std::abs(speed_servo_[i].velocity) +
                   std::abs(speed_servo_[i].acceleration)*static_cast<double>(period_ns)*1e-9)) : cap;
-          const auto b = boundary.at(sp[i].q_rad,limits_[i],boundary_cap,
+          const auto b = boundary.at(sp[i].q_rad,cycle_limits[i],boundary_cap,
                                      speed_servo_[i].acceleration,v_est_[i]);
           effective_motion[i] = profile;
           effective_motion[i].maximum = {cap,boundary.acceleration,boundary.jerk};
@@ -2336,7 +2731,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   //     can validate developer commands against the authoritative state.
   {
     std::lock_guard<std::mutex> lk(command_mutex_);
-    command_state_.homed = homed_;
+    // This is the command validator's position-valid gate. Public physical
+    // homing telemetry remains `homed_` and is false for continuous yaw.
+    command_state_.homed = position_ready();
     command_state_.shutdown_or_parking = phase_ == Phase::Parking;
     command_state_.motor_recovery_active = phase_ == Phase::Recovering;
     command_state_.motor_recovery_allowed = phase_ == Phase::Fault || phase_ == Phase::Idle || phase_ == Phase::Parked;
@@ -2358,14 +2755,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                             (phase_ == Phase::PayloadCheck) ||
                             (last_decision_.action != SafetyAction::Allow &&
                              last_decision_.action != SafetyAction::Hold);
-    command_state_.limits_valid =
-        limits_[ix(AxisId::Pitch)].valid && limits_[ix(AxisId::Yaw)].valid;
+    command_state_.limits_valid = limits_[ix(AxisId::Pitch)].valid &&
+        (limits_[ix(AxisId::Yaw)].valid ||
+         (backend_->supports_continuous_yaw() && yaw_session_reference_valid_));
     command_state_.q_min_rad[web::kPitchIx] =
         limits_[ix(AxisId::Pitch)].q_soft_min_rad;
     command_state_.q_max_rad[web::kPitchIx] =
         limits_[ix(AxisId::Pitch)].q_soft_max_rad;
-    command_state_.q_min_rad[web::kYawIx] = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
-    command_state_.q_max_rad[web::kYawIx] = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+    command_state_.q_min_rad[web::kYawIx] = backend_->supports_continuous_yaw() && yaw_session_reference_valid_
+        ? runtime_limits(AxisId::Yaw).q_soft_min_rad
+        : limits_[ix(AxisId::Yaw)].q_soft_min_rad;
+    command_state_.q_max_rad[web::kYawIx] = backend_->supports_continuous_yaw() && yaw_session_reference_valid_
+        ? runtime_limits(AxisId::Yaw).q_soft_max_rad
+        : limits_[ix(AxisId::Yaw)].q_soft_max_rad;
   }
 
   return phase_;
@@ -2437,8 +2839,16 @@ double ControlLoop::motion_speed(OperatingMode mode, bool maximum) const {
 
 RoamEnvelope ControlLoop::safe_envelope() const {
   RoamEnvelope e;
-  e.yaw_min_rad = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
-  e.yaw_max_rad = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+  if (backend_->supports_continuous_yaw() && yaw_session_reference_valid_) {
+    // This planner sector is the same transient session policy used by safety;
+    // it is not a measured motor endpoint or retained homing.
+    const auto virtual_yaw = runtime_limits(AxisId::Yaw);
+    e.yaw_min_rad = virtual_yaw.q_soft_min_rad;
+    e.yaw_max_rad = virtual_yaw.q_soft_max_rad;
+  } else {
+    e.yaw_min_rad = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
+    e.yaw_max_rad = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
+  }
   e.pitch_min_rad = limits_[ix(AxisId::Pitch)].q_soft_min_rad;
   e.pitch_max_rad = limits_[ix(AxisId::Pitch)].q_soft_max_rad;
   return e;
@@ -2519,7 +2929,21 @@ RoamConfig ControlLoop::roam_config() const {
   const AxisLimits& pl = limits_[ix(AxisId::Pitch)];
   const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
-  if (cfg_.roam_full_yaw_travel) {
+  if (backend_->supports_continuous_yaw()) {
+    const auto virtual_yaw = runtime_limits(AxisId::Yaw);
+    const double virtual_min = virtual_yaw.q_soft_min_rad;
+    const double virtual_max = virtual_yaw.q_soft_max_rad;
+    c.envelope.yaw_min_rad = virtual_min + c.min_inside_safe_rad;
+    c.envelope.yaw_max_rad = virtual_max - c.min_inside_safe_rad;
+    if (cfg_.roam_region_named) {
+      c.envelope.yaw_min_rad = std::max(c.envelope.yaw_min_rad,
+                                        cfg_.roam_yaw_min_deg * kDeg2Rad);
+      c.envelope.yaw_max_rad = std::min(c.envelope.yaw_max_rad,
+                                        cfg_.roam_yaw_max_deg * kDeg2Rad);
+    }
+    c.braking_margin_rad = std::max(0.0,cfg_.stop_margin_rad + .5*kDeg2Rad - c.min_inside_safe_rad);
+    c.reach_tol_rad = .4*kDeg2Rad;
+  } else if (cfg_.roam_full_yaw_travel) {
     c.envelope.yaw_min_rad = yl.q_soft_min_rad + c.min_inside_safe_rad;
     c.envelope.yaw_max_rad = yl.q_soft_max_rad - c.min_inside_safe_rad;
     // Full usable travel still leaves a stopping reserve before each soft end.
@@ -2575,7 +2999,7 @@ ModeRequestContext ControlLoop::mode_context() const {
   // §44's "position valid": homed, *and* not being told the feedback is stale.
   // A station that cannot see its own encoders does not know where it is, however
   // homed its bookkeeping claims.
-  c.position_valid = homed_ && allowed;
+  c.position_valid = position_ready() && allowed;
   // V3-1: the roam region is still v1's search band (computed at enable_tracking
   // from the homed soft limits minus margins). It counts as valid when that band
   // is non-empty. V3-6 replaces this with the configured inner roam envelope of
@@ -2590,7 +3014,9 @@ ModeRequestContext ControlLoop::mode_context() const {
     char unused[1] = {};
     const RoamConfig rc = roam_config();
     c.roam_envelope_valid =
-        homed_ && RoamPlanner::validate_envelope(rc.envelope, safe_envelope(),
+        position_ready() &&
+            (!backend_->supports_continuous_yaw() || yaw_session_reference_valid_) &&
+            RoamPlanner::validate_envelope(rc.envelope, safe_envelope(),
                                                  rc.pitch_ref_rad,
                                                  rc.min_inside_safe_rad, unused,
                                                  sizeof unused);
@@ -2611,9 +3037,9 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
     // bound, by how much? Say it here, where the numbers are in scope, because this is
     // the message someone acts on from the other end of a network connection.
     char why[192] = {};
-    if (!homed_) {
+    if (!position_ready()) {
       std::snprintf(why, sizeof why,
-                    "not homed, so the roam region is not known (home first)");
+                    "not homed / position not ready, so the roam region is not known (home first)");
     } else {
       const RoamConfig rc = roam_config();
       RoamPlanner::validate_envelope(rc.envelope, safe_envelope(), rc.pitch_ref_rad,
@@ -2798,6 +3224,8 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   ReferenceManager::IntentLimits l;
   l.now_ns = now_ns;
   l.axis_limits = limits_;
+  if (backend_->supports_continuous_yaw())
+    l.axis_limits[ix(AxisId::Yaw)] = runtime_limits(AxisId::Yaw);
   // "Hold" has two meanings and v1 used only the first. v1's hold was *return to the
   // ready pose* — correct for the end of homing and for a tracking session winding down.
   // For the three operating modes it has to mean "stay where you are", and the
@@ -2853,6 +3281,26 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     l.hold_v_max_rad_s = motion_speed(mode_mgr_.mode());
   }
   return l;
+}
+
+AxisLimits ControlLoop::runtime_limits(AxisId axis) const {
+  const auto i = ix(axis);
+  if (!backend_->supports_continuous_yaw() || axis != AxisId::Yaw)
+    return limits_[i];
+
+  // A session-relative virtual policy sector is shared by planning, the
+  // supervisor and operator-visible limits. It is not a mechanical endpoint
+  // and is never persisted as homing. Invalid policy config fails closed.
+  const double half_span = cfg_.continuous_yaw_sector_half_span_rad;
+  const double inset = cfg_.continuous_yaw_sector_inset_rad;
+  if (!yaw_session_reference_valid_ || !std::isfinite(yaw_session_reference_rad_) ||
+      !std::isfinite(half_span) || !std::isfinite(inset) || half_span <= 0.0 ||
+      inset < 0.0 || inset >= half_span)
+    return {};
+  AxisLimits sector;
+  sector.set_from_endpoints(yaw_session_reference_rad_ - half_span,
+                            yaw_session_reference_rad_ + half_span, inset);
+  return sector;
 }
 
 const char* ControlLoop::mode_phase_label() const {
@@ -3797,7 +4245,8 @@ void ControlLoop::execute_command(const std::string& name,
     // degree — and in a simulation that starts near zero, both numbers look the same.
     const double q_logical = last_positions()[axis];
     const double requested = q_logical + sign * deg * kDeg2Rad;
-    if (!limits_[axis].in_soft(requested) || env_.max_speed_at(requested, limits_[axis]) <= 0) {
+    const auto limits = runtime_limits(static_cast<AxisId>(axis));
+    if (!limits.in_soft(requested) || env_.max_speed_at(requested, limits) <= 0) {
       ack_command(name, false, "step target enters the braking margin; choose a smaller inward step");
       return;
     }

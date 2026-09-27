@@ -36,7 +36,9 @@ struct AxisSafetyInput {
   bool has_feedback = false;
   int64_t feedback_age_ms = 0;  // age of last motor feedback (0 = fresh)
   double temp_c = 25.0;
+  bool temperature_known = true;
   uint16_t motor_faults = 0;    // non-zero = hard fault
+  bool motor_faults_known = true;
   AxisLimits limits;            // valid only after this axis is homed
 };
 
@@ -47,6 +49,10 @@ struct SupervisorInput {
   bool tracking_enabled = false; // reference is currently a tracking reference
   int64_t cycle_overrun_us = 0;  // this cycle's overrun past the deadline (§39.3)
   int deadline_miss_count = 0;   // consecutive/recent missed deadlines (§39.3)
+  // Unknown temperature/fault data is not healthy data. A station with a
+  // protocol that omits these fields may proceed only under an explicit,
+  // separately reviewed health policy; default behavior is HOLD.
+  bool allow_unknown_motor_health = false;
 };
 
 struct SupervisorParams {
@@ -79,17 +85,23 @@ class SafetySupervisor {
   SupervisorDecision evaluate(const SupervisorInput& in) const {
     // Layer 4: hard motor fault -> disable.
     for (const auto& ax : in.axes)
-      if (ax.motor_faults != 0)
+      if (ax.motor_faults_known && ax.motor_faults != 0)
         return {SafetyAction::Disable, "motor fault (faults=0x" +
                                           std::to_string(ax.motor_faults) + ")"};
     // Over-temperature -> fault stop.
     for (const auto& ax : in.axes)
-      if (ax.temp_c > p_.motor_overtemp_c)
+      if (ax.temperature_known && ax.temp_c > p_.motor_overtemp_c)
         return {SafetyAction::FaultStop, "motor over-temperature"};
     // §39.2 stale/missing feedback -> safe stop, never open-loop.
     for (const auto& ax : in.axes)
       if (!ax.has_feedback || ax.feedback_age_ms > p_.feedback_max_age_ms)
         return {SafetyAction::Brake, "stale or missing motor feedback"};
+    if (!in.allow_unknown_motor_health) {
+      for (const auto& ax : in.axes)
+        if (!ax.temperature_known || !ax.motor_faults_known)
+          return {SafetyAction::Hold,
+                  "motor temperature/fault status unknown; motion health gate closed"};
+    }
     // Layer 3: stop-feasibility violation -> brake.
     for (int i = 0; i < kAxisCount; ++i)
       if (!env_.stop_feasible(in.axes[i].q_raw_rad, in.axes[i].v_rad_s,

@@ -129,6 +129,10 @@ class ControlLoop {
     int deadline_max_us = 2000;
     int deadline_miss_threshold = 5;
     double motor_overtemp_c = 75.0;
+    // A protocol that omits motor temperature/fault status cannot prove those
+    // health properties. Keep motion disabled by default; only enable this
+    // after a separately validated backend guard supplies an equivalent bound.
+    bool allow_unknown_motor_health = false;
     // Speeds.
     double hold_speed_rad_s = 10.0 * kDeg2Rad;
     double emergency_speed_rad_s = 5.0 * kDeg2Rad;
@@ -182,6 +186,11 @@ class ControlLoop {
     // inside the homed soft limits when tracking is enabled (the SearchPlanner
     // requires its bounds to leave braking margin, §36).
     double search_span_rad = 45.0 * kDeg2Rad;
+    // Mixed continuous yaw uses a separate, session-relative software sector
+    // for roam/web policy. It is independent of the narrower search sweep and
+    // is never represented as a measured mechanical endpoint.
+    double continuous_yaw_sector_half_span_rad = 90.0 * kDeg2Rad;
+    double continuous_yaw_sector_inset_rad = 10.0 * kDeg2Rad;
     // Drive-mode item 3: hold the aim while the line-of-sight wobbles inside this band, so detector jitter does
     // not walk the pointing. ZERO (the default) means the aim passes straight through, exactly as before this
     // key existed; release must exceed enter or it is clamped (see aim_deadband.hpp). Measured floor on this
@@ -380,6 +389,10 @@ class ControlLoop {
 
   Phase phase() const { return phase_; }
   bool homed() const { return homed_; }
+  // Position-ready means every bounded axis has physical homing/calibration
+  // and a continuous yaw backend has a fresh stationary session reference.
+  // `homed()` intentionally remains false for that topology.
+  bool position_ready() const;
   bool at_ready() const { return at_ready_; }
   const std::array<AxisLimits, kAxisCount>& limits() const { return limits_; }
   const std::array<AxisLogicalModel, kAxisCount>& models() const { return models_; }
@@ -423,6 +436,10 @@ class ControlLoop {
   const char* mode_phase_label() const;
   MotionIntent build_mode_intent(TimeNs now_ns) const;
   ReferenceManager::IntentLimits intent_limits(TimeNs now_ns) const;
+  // Runtime-only policy limits for a continuous drive. Its session-relative
+  // sector is shared by reference planning and safety, but is never stored or
+  // presented as a measured mechanical endpoint.
+  AxisLimits runtime_limits(AxisId axis) const;
   // Phase 9: payload verification (§27, §31.3). `sp` holds the current
   // axis snapshots: the per-axis safe region is centered on each axis's
   // current pose (the check starts where the station holds).
@@ -455,6 +472,23 @@ class ControlLoop {
   std::array<double, kAxisCount> ready_raw_{};     // safe ready pose (raw rad)
   Phase phase_ = Phase::Idle;
   bool homed_ = false;
+  bool pitch_homed_ = false;
+  bool yaw_session_reference_valid_ = false;
+  double yaw_session_reference_rad_ = 0.0;
+  double yaw_reference_candidate_rad_ = 0.0;
+  TimeNs yaw_reference_stationary_since_ns_ = 0;
+  bool mixed_stop_park_ = false;
+  bool mixed_pitch_disable_requested_ = false;
+  double mixed_park_yaw_origin_rad_ = 0.0;
+  double mixed_park_yaw_corridor_rad_ = 0.0;
+  double mixed_park_pitch_target_rad_ = 0.0;
+  TimeNs mixed_park_deadline_ns_ = 0;
+  TimeNs mixed_park_pitch_dwell_since_ns_ = 0;
+  TimeNs mixed_park_yaw_dwell_since_ns_ = 0;
+  TimeNs mixed_yaw_zero_requested_ns_ = 0;
+  TimeNs mixed_pitch_disable_requested_ns_ = 0;
+  TimeNs mixed_pitch_disabled_confirmed_ns_ = 0;
+  uint64_t mixed_yaw_zero_request_count_ = 0;
   bool at_ready_ = false;
   std::string fault_reason_;
   SupervisorDecision last_decision_;
