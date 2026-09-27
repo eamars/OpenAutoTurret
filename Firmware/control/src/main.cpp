@@ -613,8 +613,13 @@ int main(int argc, char** argv) {
   // watchdog's heartbeat deadline. Commands remain gated by parking/shutdown.
   loop.set_vision_link(nullptr);
   spdlog::info("shutdown requested; {}", loop.position_ready() ? "controlled stop" : "zero/STOP requests");
+  bool parking_started = false;
   if (loop.position_ready() && loop.phase() != Phase::Fault &&
-      loop.phase() != Phase::Parked && loop.start_parking(err)) {
+      loop.phase() != Phase::Parked) {
+    parking_started = loop.start_parking(err);
+    if (!parking_started) spdlog::error("shutdown park rejected: {}", err);
+  }
+  if (parking_started) {
     t_prev = now_monotonic_ns();
     double budget_s = 20.0;
     for (int i = 0; i < kAxisCount; ++i) {

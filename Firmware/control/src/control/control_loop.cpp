@@ -253,9 +253,13 @@ bool ControlLoop::start_parking(std::string& err) {
     }
     const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
     const auto yaw = backend_->snapshot(AxisId::Yaw, now_ns_);
+    // CAN feedback can arrive after the last control step but before this
+    // shutdown request. Judge both snapshots against a clock sample taken
+    // after reading them, rather than the previous step's timestamp.
+    const TimeNs stop_observation_now = now_monotonic_ns();
     const auto fresh = [&](const AxisSnapshot& s) {
-      return s.has_feedback && s.rx_ns > 0 && s.rx_ns <= now_ns_ &&
-          now_ns_ - s.rx_ns <= cfg_.feedback_max_age_ms * 1'000'000LL &&
+      return s.has_feedback && s.rx_ns > 0 && s.rx_ns <= stop_observation_now &&
+          stop_observation_now - s.rx_ns <= cfg_.feedback_max_age_ms * 1'000'000LL &&
           std::isfinite(s.q_rad) && std::isfinite(s.v_rad_s);
     };
     if (!fresh(pitch) || !pitch.temperature_known || !pitch.faults_known ||
