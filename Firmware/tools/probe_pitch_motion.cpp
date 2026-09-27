@@ -132,6 +132,7 @@ int main(int argc, char** argv) {
           else if (now-heartbeat.load()>100000000LL) reason=3;
           else if (!s.has_feedback || s.rx_ns>now || now-s.rx_ns>100000000LL) reason=4;
           else if (s.faults) reason=5;
+          else if (target_move_active && s.disabled) reason=13;
           // This is a bounded excursion guard, not a trusted mechanical limit. The
           // station's pitch soft endpoints are uncommissioned until homing; do not
           // pretend expected_travel_deg is an absolute coordinate envelope.
@@ -274,7 +275,8 @@ int main(int argc, char** argv) {
       const auto reached_at=ota::now_monotonic_ns();
       const bool arrived=reached.has_feedback && std::abs(reached.q_rad-target)<=0.5*rad &&
                          reached.rx_ns<=reached_at && reached_at-reached.rx_ns<=100000000LL &&
-                         settled_since!=0 && reached_at-settled_since>=200000000LL;
+                         settled_since!=0 && reached_at-settled_since>=200000000LL &&
+                         !reached.disabled && !reached.faults;
       std::cout<<"PITCH_STAGE_RESULT stage="<<stage_number<<" error_deg="<<(reached.q_rad-target)/rad
                <<" speed_deg_s="<<reached.v_rad_s/rad<<" arrived_settled="<<arrived
                <<" disabled="<<reached.disabled<<" faults="<<reached.faults<<'\n'<<std::flush;
