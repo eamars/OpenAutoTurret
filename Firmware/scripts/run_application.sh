@@ -240,6 +240,14 @@ cleanup() {
   for pid in "${children[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
   # Never force-kill the motor controller. Its own deadlines supervise park.
   if [ -n "$controller_pid" ]; then wait "$controller_pid" || true; fi
+  # If a commissioning child exited abnormally, its in-process guard cannot
+  # send again. The launcher still owns the station lock here and requests a
+  # final zero/STOP on the selected bus after the child has exited.
+  if [ "$MODE" = commission ] && [ "$YAW_STEP_DEG" != 0 ]; then
+    "$PY" "$APP/tools/commissioning_fallback_stop.py" yaw || echo 'Yaw fallback zero request failed' >&2
+  elif [ "$MODE" = commission ] && [ "$PITCH_PROBE" = 1 ] && [ "$PITCH_STEP_MDEG" != 0 ]; then
+    "$PY" "$APP/tools/commissioning_fallback_stop.py" pitch || echo 'Pitch fallback STOP request failed' >&2
+  fi
   # Keep the terminal controller outcome after ownership metadata is removed.
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
