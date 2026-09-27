@@ -660,6 +660,8 @@ class WebServer {
         pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
         pair("cmd",r.v_command); pair("effort",r.effort); pair("rx",r.feedback_ns);
         pair("vest",r.v_estimated);
+        out << ",\"phase\":\"" << phase_name(r.phase) << "\""
+            << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';
         pair("goal",r.probe_goal);
         out << '}';
       }

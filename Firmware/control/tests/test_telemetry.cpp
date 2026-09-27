@@ -11,6 +11,28 @@ using ota::telemetry::Event;
 using ota::telemetry::Telemetry;
 using ota::telemetry::TelemetrySnapshot;
 
+TEST(Telemetry, ControlTraceRowCarriesItsPhaseAndThermalByte) {
+  // A row that cannot say which phase it came from is the reason the 2026-09-28
+  // no-progress trip could not be classified: "held with a stale request" and
+  // "commanded against the envelope" look identical without the phase, and the
+  // fixes those two need are opposites. -1 must survive too: it means "no such
+  // byte on this axis", which is information, not absence of information.
+  Telemetry t;
+  ControlLogRecord r;
+  r.timestamp_ns = 12345;
+  r.phase = ota::Phase::Hold;
+  r.temp_raw[0] = -1;   // pitch: CyberGear has no raw thermal byte
+  r.temp_raw[1] = 28;   // yaw: the GM6020 byte, unit-less by contract
+  t.push_control(r);
+  const auto rows = t.control_log().all();
+  ASSERT_EQ(rows.size(), 1u);
+  const ControlLogRecord& back = t.control_log().newest();
+  EXPECT_EQ(rows[0].timestamp_ns, 12345);
+  EXPECT_EQ(back.phase, ota::Phase::Hold);
+  EXPECT_EQ(back.temp_raw[0], -1);
+  EXPECT_EQ(back.temp_raw[1], 28);
+}
+
 TEST(Telemetry, SnapshotIsOverwrittenEachCycle) {
   Telemetry t;
   TelemetrySnapshot s;

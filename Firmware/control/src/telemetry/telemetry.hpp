@@ -15,6 +15,7 @@
 
 #include <array>
 #include "control/motion_profile.hpp"
+#include "control/phase.hpp"
 #include <cstddef>
 #include <cstdio>
 #include <mutex>
@@ -564,6 +565,15 @@ struct ControlLogRecord {
   int64_t feedback_age_ms = 0;
   int64_t cycle_duration_us = 0;
   tracking::TrackState track_state = tracking::TrackState::ReadyHold;
+  // The phase this row was captured in. Without it a cycle cannot say whether the
+  // axis was being held or commanded, which is the difference between a stale
+  // request and a stalled mechanism — the 2026-09-28 no-progress case could not be
+  // classified from the 1 Hz line for exactly this missing bit.
+  Phase phase = Phase::Idle;
+  // Thermal byte per axis as the wire sends it, -1 when no byte has arrived. No
+  // unit, no fault meaning (docs/references/gm6020/); it is here because an
+  // observation you can plot beats a NaN you have to explain.
+  int temp_raw[kAxisCount] = {-1, -1};
 };
 
 // §43.3 structured event.

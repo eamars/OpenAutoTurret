@@ -2143,6 +2143,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.cycle_duration_us = period_ns / 1000;
     rec.track_state = tracking_ ? tracking_->track_state()
                                 : tracking::TrackState::ReadyHold;
+    rec.phase = phase_;
     rec.command_seq = ack_seq_;
     rec.probe_omega = response_probe_until_ns_ > now_ns ? response_probe_omega_ : 0;
     for (int i = 0; i < kAxisCount; ++i) {
@@ -2153,6 +2154,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       rec.v_command[i] = service_command_rate[i];
       rec.v_estimated[i] = v_est_[i];
       rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
+      rec.temp_raw[i] = sp[i].temperature_raw_valid ? static_cast<int>(sp[i].temperature_raw) : -1;
     }
     telemetry_.push_control(rec);
     telemetry_.push_blackbox(rec);
