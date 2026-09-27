@@ -79,3 +79,25 @@ boot_id 与 /proc/sys/kernel/random/boot_id **一致**
 
 **仍待现场**：文件头（跳闸才写）。`$RUN/traces/` 现在为空；下一次跳闸后
 `head -1` 那个 ndjson 就该看到同样的四个键。命令与判据在 §4-1。
+
+## 6. 合成回放（`tools/offline_checks.py`，本轮补上）
+
+ADR-001 README 第 33 行一直写着 `python tools/offline_checks.py summarize examples/synthetic_trace.ndjson`——
+**这条命令此前指向一个不存在的文件**。这一支把它变成真的，顺带把昨天那次"文件不是合法 JSON"焊成规矩：
+
+> **离线检查器的每一条线都必须真解析。** `find(键名)` 型断言就是放过那次事故的元凶。
+
+- `make-example` 写一段**合成**痕迹（形状取自今早 06:59 那次 `no_progress`：`AUTO_ROAM/search`、
+  参考点在走、`cmd=[0,0]`、`effort` 一路 `null`、`temp_raw=[-1,27]`）；
+  例子头部用的是**那一次真实的锚点数**，所以 `summarize` 把它放到墙上钟正好是 **17:59:38Z＝06:59:38 NZDT**。
+  **为什么必须合成**：仓库规矩不许把现场抓取物提交进库——所以能提交的只有合成件。
+- `check`：逐行解析、头部四要素齐不齐、ns 是不是字符串（number 就拒——超 2^53 会掉低位）、
+  `t`/`ack` 单调、`temp_raw` 不许拿 0 当缺席，还能 `--source .` **拿 C++ 源码里的词表**核对
+  文件里的 `phase`/`mode`/`track`——**词表漂移当场红**。
+- `--selftest`：**6/6**，六个坏件全被拒，其中包括**现场真发生过的那次**（少一个收尾引号）。
+
+**现场一侧的两个副产品**：
+1. 拿今早 06:59 那枚**真**文件跑 `check`：它因"缺 clock/boot_id/wall_t_ns"被拒——**正确**，
+   那文件写于加锚点之前（头部只有 `kind/rows/frozen_t_ns`），**来源规矩从此有机可查**。
+2. 同一枚真文件 1024 行**全部解析成功**，行内是 `"track":"search","phase":"hold"`
+   ⇒ **今早那个收尾引号的修复，在真机写的文件上验过了**（不是只在单元里绿）。
