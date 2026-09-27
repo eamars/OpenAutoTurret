@@ -46,10 +46,13 @@
 
 ## 4. 还欠的（按能验的程度排）
 
-1. **live 那条路同样没有锚点**：`read_control_trace` 的帧里行内 `t` 也是单调 ns，
-   帧头只有 `frozen`/`frozen_t_ns`。⇒ 下一小片：把 `clock`/`boot_id`/`mono_to_wall_ns` 也放进帧头。
-   （现场状态：本次部署后**头部锚点 = 单元已验、现场待下一次跳闸**——`$RUN/traces/` 现在是空的，
-   我不拿单元格算现场。命令：`python3 <release>/Firmware/tools/pull_control_trace.py`。）
+1. ~~live 那条路没有锚点~~ **已补（`e7c8cee`）**：帧头现在也带
+   `clock`/`boot_id`/`mono_to_wall_ns`，`frozen_t_ns` 同时改成十进制字符串（对齐 §2；
+   它一直是 number，ns 级会掉低位——`pull_control_trace.py` 的自检本来就按字符串写）。
+   **现场结账分两条**：
+   - **帧头（live）= 当场可验**，不需要跳闸：拉一次 `read_control_trace` 就能看到 ⇒ 本轮现场验。
+   - **文件头（freeze）= 单元已验、现场待下一次跳闸**：`$RUN/traces/` 现在是空的，
+     我不拿单元格的功劳算现场的。命令：`python3 <release>/Firmware/tools/pull_control_trace.py`。
 2. **NTP/同步状态没有落实**：今早 `timedatectl show -p NTPSynchronized` 取不到值。
    墙上钟锚点若机器自己没对时，只是"这台机器以为的墙上钟"。⇒ 启动时把同步状态一并写进行，
    或在 runbook 里写明"锚点是本机时钟，跨机比对要另加纪律"。
