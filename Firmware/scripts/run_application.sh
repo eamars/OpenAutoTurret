@@ -269,7 +269,7 @@ cleanup() {
     echo 'Ending perception capture; no motor process was started.'
     echo 'Stopped: perception capture ended; motors were not commanded' > "$RUN/shutdown.result"
   elif [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
-    echo 'Ending mixed-backend observe-only probe; no motor command was requested.'
+    echo 'Ending mixed-backend no-motion probe; yaw zero and pitch STOP were requested.'
   elif [ "$MODE" = commission ]; then
     echo 'Ending commissioning session; pitch disables, yaw requests zero if its probe was active.'
   else
@@ -300,7 +300,7 @@ cleanup() {
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
     if [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
-      { echo 'Stopped: mixed-backend observe-only probe ended; no motion or park/disable certification';
+      { echo 'Stopped: mixed-backend no-motion probe ended; inspect STOP feedback result below';
         tail -n 8 "$RUN/controller.log"; } > "$RUN/shutdown.result"
     elif [ "$MODE" = commission ]; then
       { echo 'Stopped: commissioning probe ended; not a park/disable certification';

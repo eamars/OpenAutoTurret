@@ -1,5 +1,5 @@
 // No-motion runtime check for the production split-CAN motor adapter.
-// Startup only requests zero GM6020 voltage; this tool sends no motion targets.
+// Startup requests zero GM6020 voltage and CyberGear STOP; no motion targets.
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -55,9 +55,24 @@ int main(int argc, char** argv) {
     if (!boot.ready_to_home()) throw std::runtime_error("production boot probe did not reach UNHOMED");
     if (!backend.yaw_reference_valid()) throw std::runtime_error("yaw session reference was not established");
     if (!backend.buses_healthy()) throw std::runtime_error("one or both CAN buses are unhealthy");
-    const auto initial_pitch = backend.snapshot(ota::AxisId::Pitch, ota::now_monotonic_ns());
-    if (!initial_pitch.has_feedback || !initial_pitch.disabled_known || !initial_pitch.disabled)
-      throw std::runtime_error("observe-only probe requires fresh pitch feedback confirming disabled state");
+    // Discovery/register replies do not carry CyberGear's enabled/disabled
+    // feedback. A STOP request is idempotent on this stopped station and asks
+    // the drive for an explicit status frame before declaring it safe.
+    backend.deenergize(ota::AxisId::Pitch);
+    bool pitch_stop_confirmed = false;
+    const auto pitch_deadline = ota::now_monotonic_ns() + 2'000'000'000LL;
+    while (ota::now_monotonic_ns() < pitch_deadline) {
+      const auto now = ota::now_monotonic_ns();
+      const auto pitch = backend.snapshot(ota::AxisId::Pitch, now);
+      if (pitch.has_feedback && pitch.rx_ns > 0 && pitch.rx_ns <= now &&
+          now - pitch.rx_ns < 100'000'000LL && pitch.disabled_known && pitch.disabled) {
+        pitch_stop_confirmed = true;
+        break;
+      }
+      std::this_thread::sleep_for(10ms);
+    }
+    if (!pitch_stop_confirmed)
+      throw std::runtime_error("CyberGear STOP did not yield fresh disabled feedback");
 
     std::cout << "MIXED_BACKEND_READY yaw_continuous=" << backend.supports_continuous_yaw()
               << " yaw_registerless=" << backend.yaw_feedback_registerless()
@@ -94,7 +109,7 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(20ms);
     }
 
-    std::cout << "MIXED_BACKEND_PROBE_PASS no_motion_targets=1 startup_yaw_zero_only=1"
+    std::cout << "MIXED_BACKEND_PROBE_PASS no_motion_targets=1 startup_yaw_zero=1 pitch_stop_confirmed=1"
               << " observation_seconds=" << observe_seconds
               << " pitch_disabled_confirmation_required="
               << backend.requires_disable_confirmation(ota::AxisId::Pitch) << '\n';
