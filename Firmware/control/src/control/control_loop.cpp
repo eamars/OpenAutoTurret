@@ -3387,8 +3387,15 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     // mixed backend's own speed_over_ceiling guard on the station: the guard was
     // right, the ask was wrong. Capping the ask is the fix; raising the guard would
     // have bought a green log by moving the goalposts.
-    l.roam_v_max_rad_s =
-        motion_profile(ix(AxisId::Yaw), OperatingMode::AutoRoam).target.speed;
+    // The cap is the axis's DECLARED maximum, not the roam profile's target speed:
+    // the first cut used `.target.speed` and the sweep froze on the station (intent
+    // published, `roam_progress` stuck at 0.08%, `phase=hold`) because the station
+    // file names no AUTO_ROAM target for yaw -- a zero cap is paralysis wearing a
+    // number, which is exactly the failure this whole change is about. `maximum`
+    // comes from the per-axis declared ceiling, which the parser guarantees > 0.
+    const double yaw_cap =
+        motion_profile(ix(AxisId::Yaw), OperatingMode::AutoRoam).maximum.speed;
+    if (yaw_cap > 0.0) l.roam_v_max_rad_s = std::min(l.roam_v_max_rad_s, yaw_cap);
     l.hold_v_max_rad_s = motion_speed(mode_mgr_.mode());
   }
   return l;
