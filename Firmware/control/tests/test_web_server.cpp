@@ -546,6 +546,13 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   // was shown, by a jog that moved the axis for 11 s while every row said `hold`,
   // not to carry the distinction.
   EXPECT_NE(frame.find("\"mode\":\"AUTO_TRACK\""), std::string::npos) << frame;
+  // The frame's own clock declaration. A live reader is in the same position as a
+  // file read weeks later: without the clock name, the boot identity and the offset,
+  // the rows' `t` values are unplaceable -- and "the socket knows less than the file"
+  // is precisely the asymmetry that hides itself until an incident.
+  EXPECT_NE(frame.find("\"clock\":\"CLOCK_MONOTONIC\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"boot_id\":\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"mono_to_wall_ns\":\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"track\":\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"temp_raw\":[-1,28]"), std::string::npos) << frame;
   // A reader must be able to tell "the trip's own window" from "whatever the ring

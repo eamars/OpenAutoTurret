@@ -689,6 +689,14 @@ struct TraceWindow {
   std::vector<ControlLogRecord> rows;
   bool frozen = false;
   int64_t frozen_t_ns = 0;
+  // A live reader over the socket is in the same position as a file read three weeks
+  // later: the rows' `t` is CLOCK_MONOTONIC nanoseconds, which restarts at every boot.
+  // So the window carries the same four things the trip file's header does, measured
+  // when the window was taken. Absence here would mean the socket knows less than the
+  // file -- and the file is the copy nobody is watching when it breaks.
+  const char* clock = "CLOCK_MONOTONIC";
+  std::string boot_id = "unknown";
+  long long mono_to_wall_ns = 0;
 };
 
 struct EventRecord {
@@ -861,12 +869,26 @@ class Telemetry {
   // that is the answer to the question anybody asks after a trip. `frozen` is on
   // the wire so a reader is never told "this is what happened" about live cycles.
   TraceWindow control_window() const {
-    std::lock_guard<std::mutex> lk(trace_mu_);
-    if (frozen_count_)
-      return TraceWindow{std::vector<ControlLogRecord>(
-                             frozen_trace_, frozen_trace_ + frozen_count_),
-                         true, frozen_t_ns_};
-    return TraceWindow{trace_.all(), false, 0};
+    TraceWindow w;
+    {
+      std::lock_guard<std::mutex> lk(trace_mu_);
+      if (frozen_count_) {
+        w.rows.assign(frozen_trace_, frozen_trace_ + frozen_count_);
+        w.frozen = true;
+        w.frozen_t_ns = frozen_t_ns_;
+      } else {
+        w.rows = trace_.all();
+      }
+    }
+    // Measured outside the lock: two syscalls, and the answer is only used to place
+    // these rows on the wall clock, not to make a control decision.
+    w.boot_id = boot_id_;
+    w.mono_to_wall_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count() -
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    return w;
   }
   // Where a frozen window is also written to disk, derived once at startup from
   // the web socket's own directory so the launcher archives it with the logs.

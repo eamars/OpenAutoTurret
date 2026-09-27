@@ -651,7 +651,11 @@ class WebServer {
       out.precision(12);
       out << "{\"type\":\"control_trace\",\"axes\":[\"pitch\",\"yaw\"],"
              "\"frozen\":" << (win.frozen ? "true" : "false")
-          << ",\"frozen_t_ns\":" << win.frozen_t_ns << ",\"rows\":[";
+          << ",\"frozen_t_ns\":\"" << win.frozen_t_ns << "\""
+          << ",\"clock\":\"" << win.clock << "\""
+          << ",\"boot_id\":\"" << win.boot_id << "\""
+          << ",\"mono_to_wall_ns\":\"" << win.mono_to_wall_ns << "\""
+          << ",\"rows\":[";
       bool comma = false;
       for (const auto& r : rows) {
         if (comma) out << ',';
