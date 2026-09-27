@@ -430,6 +430,45 @@ to `/tmp/ota-stack-1000/hardware-probe.csv` and `controller.log`; copy it into
 ignored `run/` before the next probe replaces it. No camera or web process is
 started in commissioning mode.
 
+### Yaw runs without a position envelope (2026-09-28)
+
+`config/turret_mixed.yaml` declares `axes.yaw.position_envelope: none`. Continuous GM6020
+yaw therefore enforces **no position limit at runtime**: the provisional +/-90 degree
+session sector is gone, and the travel band that used to define it stays only as the band
+automatic regions are validated inside. The startup log says so rather than leaving it to
+be inferred from a missing limit:
+
+```
+[warning] continuous yaw declared WITHOUT a position envelope; the sector is gone,
+not merely unmeasured (AUTO_ROAM still sweeps a declared region, and every other
+guard is unchanged)
+```
+
+What to expect, measured on this station rather than assumed:
+
+- **Readiness still lights.** `soft_limits_valid` now means "every axis has a declared
+  envelope state", and a declared-unbounded axis satisfies it. An axis nobody has written
+  down yet does not.
+- **Angles run past the encoder seam.** A manual jog took yaw from -0.3 to **+274.1 degrees**
+  with no fault; the session angle is unwrapped, so it does not jump at 180 degrees.
+- **AUTO_ROAM still sweeps a bounded region.** With no wall to inherit one, the region is
+  declared: it is centred on the session reference and sized by the search span (the log
+  reports `search sweep clamped to [-37.1, 37.1] deg`), so the mode keeps its promise of a
+  deterministic bounded sweep that a person watching can predict.
+- **The independent guards are untouched.** After the envelope went away, the first long
+  approach drove yaw past the backend's own `speed_over_ceiling` guard (25 deg/s, hard
+  coded). That trip was correct; the ask was wrong, and the fix capped the sweep at the
+  yaw's declared maximum instead of widening the guard. The ceiling itself remains the
+  operator's parameter.
+- **Known cosmetic gap**: `q_soft_min_yaw_rad`/`q_soft_max_yaw_rad` publish 0/0 for this
+  axis, so the HUD draws a zero-width envelope; the field needs to become `null` plus a
+  word across `controld`, `webd`'s model and the HUD. `soft_limit_distance_yaw_rad` already
+  reports -1 (`kNoBoundary`) instead of claiming to be at a boundary.
+
+To revert: delete the `position_envelope: none` line. The +/-90 degree band with its 10
+degree inset is enforced again on the next start, and nothing else about this change needs
+undoing -- the fourth envelope state describes what an envelope is, not how big it is.
+
 ## Historical procedures
 
 Detailed September 8-9 homing, recovery, tuning and parking instructions are
