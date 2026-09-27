@@ -101,3 +101,35 @@ ADR-001 README 第 33 行一直写着 `python tools/offline_checks.py summarize 
    那文件写于加锚点之前（头部只有 `kind/rows/frozen_t_ns`），**来源规矩从此有机可查**。
 2. 同一枚真文件 1024 行**全部解析成功**，行内是 `"track":"search","phase":"hold"`
    ⇒ **今早那个收尾引号的修复，在真机写的文件上验过了**（不是只在单元里绿）。
+
+## 7. 更正与对齐（写完后才发现我读错了 ADR 的那行引用）
+
+**我上一版说错了一句**：我说 README 的
+`python tools/offline_checks.py summarize examples/synthetic_trace.ndjson` "指向一个不存在的文件"。
+**错**——那条命令是**相对 `docs/ADR-001/`** 的，包内 `tools/offline_checks.py` 与
+`examples/synthetic_trace.ndjson` **一直都在**，还被 `SHA256SUMS.txt` 校着。
+**我把包内路径当成了仓库根路径。**（今日第四处"我以为"，仍然写在这里不抹。）
+
+而且包内那个 `synthetic_trace.ndjson` 与我的**不是一个东西**：它是**观测谱系**痕迹
+（`ota.n1.draft.trace-event/1`：capture→inference→publish→controller_receive），
+它自己的 `summarize` 文档字符串明说 **"requires proposed event names; it is not an adapter for
+existing station CSV"**——**"消费真格式"这件事确实还没人做**。⇒ 我这份的定位是**真格式适配器**，
+为避免两处同名互相冒充，**改名**：`tools/trip_trace_checks.py` ＋ `examples/trip_trace_sample.ndjson`。
+
+**对齐契约（`docs/04_CONTRACTS.md:22,32`、`docs/08_ACCEPTANCE.md:42`）**：契约早就定义了词——
+`clock_epoch / clock_mapping_id`＝**时钟转换的有效期与映射身份**；要求是
+"控制域继续 `CLOCK_MONOTONIC`；读 BOOTTIME/MONOTONIC 建 **offset 并带误差界**；
+运行前后查漂移与跳变；**运行期间禁止 suspend**；跳变/换 boot/映射失效 ⇒ **提升 clock_epoch 并撤销旧观测**；
+**禁止跨 boot 拼接统计**"。逐条对：
+
+| 契约要求 | 我现在做到哪 |
+|---|---|
+| 控制域继续 `CLOCK_MONOTONIC` | ✅ 本来如此，且工件现在**声明**了钟名 |
+| 建立 offset | ✅ `mono_to_wall_ns`（冻结/取窗那一刻测）＋ 现场实测残差 **0.056 s** |
+| **带误差界** | ❌ 我只报了一次单点，**没声明界** ⇒ 待做：offset 界随头部发布 |
+| 运行前后查漂移与跳变 | ❌ 单次读数 ⇒ 待做：启动＋周期性复测，超界即判定跳变 |
+| 提升 `clock_epoch` 并撤销旧观测 | ❌ 我发的是 `boot_id`（覆盖"换 boot"这一种），**没有 epoch** ⇒ 待做 |
+| 禁止跨 boot 拼接统计 | ✅ **可被查了**：`boot_id` 在头部；`trip_trace_checks.py` 拿到两枚不同 boot 的文件就该拒绝合并（这条下一步加） |
+| 运行期间禁止 suspend | ✅ 可证：今日 BOOTTIME−MONOTONIC = 15 µs；**界**要长期测才谈得上 |
+
+⇒ **WP1b 时间戳语义的"未做"从整块变成了三条**：误差界、周期复测/跳变判定、`clock_epoch` 发布与旧观测撤销。
