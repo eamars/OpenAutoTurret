@@ -267,6 +267,12 @@ bool ControlLoop::start_parking(std::string& err) {
         !pitch.disabled_known || pitch.disabled ||
         (!pitch.in_speed_mode && !pitch.in_position_mode) ||
         !fresh(yaw)) {
+      spdlog::error("mixed stop readiness rejected: pitch_fresh={} age_ms={:.3f} temp_known={} temp_c={:.1f} faults_known={} faults={} disabled_known={} disabled={} speed_mode={} position_mode={} yaw_fresh={} yaw_age_ms={:.3f} yaw_q_deg={:.3f}",
+          fresh(pitch), (stop_observation_now - pitch.rx_ns) / 1e6,
+          pitch.temperature_known, pitch.temp_c, pitch.faults_known, pitch.faults,
+          pitch.disabled_known, pitch.disabled, pitch.in_speed_mode,
+          pitch.in_position_mode, fresh(yaw),
+          (stop_observation_now - yaw.rx_ns) / 1e6, yaw.q_rad * kRad2Deg);
       err = "cannot stop/park: require fresh yaw and healthy running pitch feedback";
       return false;
     }
