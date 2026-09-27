@@ -325,7 +325,11 @@ bool MixedCanMotorBackend::establish_yaw_reference(std::string& err) {
 bool MixedCanMotorBackend::yaw_feedback_safe_locked(TimeNs now) const {
   if (!yaw_reference_valid_.load() || !yaw_state_.received || !yaw_state_.encoder_valid) return false;
   const auto age = now - yaw_state_.feedback.rx_ns;
-  return age >= 0 && age <= kFreshnessLimitNs && std::isfinite(yaw_state_.position_rad) &&
+  // A CAN receive callback can publish a frame after the caller sampled its
+  // cycle timestamp but before it acquired yaw_mutex_. Allow only that small
+  // clock-order race; the exported snapshot timestamp is clamped below.
+  return age >= -5'000'000LL && age <= kFreshnessLimitNs &&
+      std::isfinite(yaw_state_.position_rad) &&
       std::isfinite(yaw_state_.feedback.speed_rad_s());
 }
 
@@ -342,12 +346,12 @@ AxisSnapshot MixedCanMotorBackend::yaw_snapshot_locked(TimeNs now) const {
   snapshot.in_speed_mode = yaw_speed_mode_;
   if (yaw_feedback_safe_locked(now)) {
     snapshot.has_feedback = true;
-    snapshot.rx_ns = yaw_state_.feedback.rx_ns;
+    snapshot.rx_ns = std::min(yaw_state_.feedback.rx_ns, now);
     snapshot.q_rad = yaw_state_.position_rad;
     snapshot.v_rad_s = yaw_state_.feedback.speed_rad_s();
     snapshot.torque_nm = std::numeric_limits<double>::quiet_NaN();
   } else {
-    snapshot.rx_ns = yaw_state_.received ? yaw_state_.feedback.rx_ns : 0;
+    snapshot.rx_ns = yaw_state_.received ? std::min(yaw_state_.feedback.rx_ns, now) : 0;
     snapshot.q_rad = std::numeric_limits<double>::quiet_NaN();
     snapshot.v_rad_s = std::numeric_limits<double>::quiet_NaN();
     snapshot.torque_nm = std::numeric_limits<double>::quiet_NaN();
@@ -380,8 +384,8 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
   TimeNs progress_at = now_monotonic_ns();
   TimeNs last_bus_health_check = 0;
   while (!stop.stop_requested()) {
-    const auto now = now_monotonic_ns();
-    if (now - last_bus_health_check >= 500'000'000LL) {
+    const auto poll_now = now_monotonic_ns();
+    if (poll_now - last_bus_health_check >= 500'000'000LL) {
       std::string health_error;
       bool healthy = yaw_bus_.refresh_health(&health_error) && yaw_bus_.is_up() &&
           yaw_bus_.bitrate() == profile_.yaw_bus.bitrate &&
@@ -393,11 +397,12 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
             bus->can_state() == can::CanIfState::ErrorActive;
       } else healthy = false;
       bus_health_ok_.store(healthy);
-      last_bus_health_check = now;
+      last_bus_health_check = poll_now;
     }
     bool should_stop = false;
     {
       std::lock_guard lock(yaw_mutex_);
+      const auto now = now_monotonic_ns();
       const auto health = socketcan_health(yaw_bus_);
       if (yaw_state_.received && yaw_state_.encoder_valid &&
           yaw_state_.feedback.rx_ns - prior_sample_ns >= 50'000'000) {

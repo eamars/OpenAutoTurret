@@ -62,7 +62,11 @@ class UnwrappedEncoder {
       previous_ = count; stamp_ = stamp; initialized_ = true; return true;
     }
     const double dt = (stamp - stamp_) * 1e-9;
-    if (dt <= 0 || dt > 0.05) return invalidate();
+    // At the rated 320 rpm, an 80 ms observation gap spans under half a
+    // revolution, so the modulo direction remains unambiguous. The Pi has
+    // exhibited a 65.8 ms receive scheduling gap while the motor was still;
+    // the old 50 ms ceiling latched a false encoder failure.
+    if (dt <= 0 || dt > 0.08) return invalidate();
     int delta = int(count) - int(previous_);
     if (delta > 4096) delta -= 8192;
     if (delta < -4096) delta += 8192;

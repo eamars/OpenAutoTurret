@@ -142,8 +142,13 @@ TEST(GM6020Encoder, RejectsAmbiguousOrReorderedSamplesAndLatchesInvalidity) {
 
   UnwrappedEncoder stale_gap;
   ASSERT_TRUE(stale_gap.update(10, 3'000'000'000));
-  EXPECT_FALSE(stale_gap.update(10, 3'051'000'000));
+  EXPECT_FALSE(stale_gap.update(10, 3'081'000'000));
   EXPECT_FALSE(stale_gap.valid());
+
+  UnwrappedEncoder scheduled_gap;
+  ASSERT_TRUE(scheduled_gap.update(10, 3'000'000'000));
+  EXPECT_TRUE(scheduled_gap.update(10, 3'066'000'000));
+  EXPECT_TRUE(scheduled_gap.valid());
 
   UnwrappedEncoder impossible_delta;
   ASSERT_TRUE(impossible_delta.update(10, 4'000'000'000));
