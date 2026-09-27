@@ -23,8 +23,10 @@ import sys
 
 KIND = "trip_trace"
 # ns 级时间戳必须是十进制字符串：墙上钟 ns 超过 2^53，JSON number 会掉低位。
-NS_FIELDS = ("frozen_t_ns", "wall_t_ns", "mono_to_wall_ns")
-HEADER_KEYS = ("clock", "boot_id") + NS_FIELDS
+NS_FIELDS = ("frozen_t_ns", "wall_t_ns", "mono_to_wall_ns", "mono_to_wall_err_ns")
+# clock_epoch / clock_mapping_id 是 ADR-001 契约里的词（docs/04_CONTRACTS.md:22）：
+# 偏移的有效期与身份。跨 epoch / 跨 boot 拼接统计是被契约禁止的，所以这里查。
+HEADER_KEYS = ("clock", "boot_id", "clock_epoch") + NS_FIELDS
 
 
 # ---------------------------------------------------------------- 例子（合成的）
@@ -58,7 +60,8 @@ def make_example(out: pathlib.Path, wall_ns: int = 1_790_533_381_711_056_000,
                  off_ns: int = 1_790_478_027_063_700_826) -> None:
     head = {"kind": KIND, "rows": len(make_rows()), "frozen_t_ns": "53951250656072",
             "clock": "CLOCK_MONOTONIC", "boot_id": "00000000-0000-4000-8000-000000000001",
-            "wall_t_ns": str(wall_ns), "mono_to_wall_ns": str(off_ns)}
+            "wall_t_ns": str(wall_ns), "mono_to_wall_ns": str(off_ns),
+            "mono_to_wall_err_ns": "412", "clock_epoch": 1}
     lines = [json.dumps(head, ensure_ascii=False)]
     lines += [json.dumps(r, ensure_ascii=False) for r in make_rows()]
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -134,8 +137,24 @@ def place_on_wall_clock(head, t_first, t_last):
     return fmt(t_first), fmt(t_last)
 
 
-def cmd_check(path: pathlib.Path, firmware: pathlib.Path | None) -> int:
-    head, rows = read_ndjson(path)
+def cmd_check(paths, firmware: pathlib.Path | None) -> int:
+    """多个文件一起查：契约（08_ACCEPTANCE.md:42）**禁止跨 boot 拼接统计**，
+    所以同一批文件必须同一 boot、同一 epoch，否则拒绝——拒绝要现在拒，别等复盘。"""
+    if not isinstance(paths, (list, tuple)):
+        paths = [paths]
+    heads = [read_ndjson(p)[0] for p in paths]
+    rows_all = [read_ndjson(p)[1] for p in paths]
+    if len(paths) > 1:
+        boots = {h.get("boot_id") for h in heads}
+        epochs = {h.get("clock_epoch") for h in heads}
+        if len(boots) > 1:
+            print(f"✗ 这批文件跨了 boot（{sorted(boots)}）：契约禁止跨 boot 拼接统计")
+            return 1
+        if len(epochs) > 1:
+            print(f"✗ 这批文件跨了 clock_epoch（{sorted(epochs)}）：跨 epoch 拼接要写明换算")
+            return 1
+    head, rows = heads[0], rows_all[0]
+    path = paths[0]
     bad = []
     for k in HEADER_KEYS:
         if not head.get(k):
@@ -146,6 +165,18 @@ def cmd_check(path: pathlib.Path, firmware: pathlib.Path | None) -> int:
             bad.append(f"头部 {k} 是 number：ns 级超过 2^53 会掉低位，必须是十进制字符串")
         elif v is None:
             bad.append(f"头部缺 {k}，行内 t 无法换算到墙上钟")
+    try:
+        if int(head["clock_epoch"]) < 1:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        bad.append("头部 clock_epoch 不是 ≥1 的整数：映射身份缺失，跨文件拼统计无从判断")
+    try:
+        bound = int(head["mono_to_wall_err_ns"])
+        if not 0 < bound < 100_000_000:
+            bad.append(f"头部 mono_to_wall_err_ns={bound}：界必须是正数且小于 100 ms，"
+                       f"否则这个偏移等于没有界")
+    except (KeyError, TypeError, ValueError):
+        bad.append("头部 mono_to_wall_err_ns 不是整数：偏移没带误差界就等于没带偏移")
     prev_t = prev_ack = None
     for no, r in rows:
         if not isinstance(r.get("t"), str) or not r["t"].isdigit():
@@ -199,8 +230,14 @@ def cmd_selftest() -> int:
         ("temp_raw 拿 0 当缺席被抓住", text.replace('"temp_raw": [-1, 27]',
                                                   '"temp_raw": [0, 27]', 1), False),
         ("头部没 boot_id 被抓住", re.sub(r'"boot_id": "[^"]*", ', '', text, count=1), False),
+        ("没 clock_epoch 被抓住", re.sub(r'"clock_epoch": 1, ', '', text.replace(
+            '"mono_to_wall_err_ns": "412", "clock_epoch": 1',
+            '"mono_to_wall_err_ns": "412"'), count=1), False),
+        ("界是 0 被抓住", text.replace('"mono_to_wall_err_ns": "412"',
+                                     '"mono_to_wall_err_ns": "0"', 1), False),
     ]
     failed = 0
+    total = len(cases)
     for i, (name, body, want_ok) in enumerate(cases):
         p = tmp / f"case{i}.ndjson"
         p.write_text(body, encoding="utf-8")
@@ -211,10 +248,17 @@ def cmd_selftest() -> int:
         verdict = "✓" if ok == want_ok else "✗"
         failed += 0 if ok == want_ok else 1
         print(f"  {verdict} {name}（期望{'通过' if want_ok else '被拒'}，实际{'通过' if ok else '被拒'}）")
+    other = tmp / "other_boot.ndjson"
+    other.write_text(text.replace("00000000-0000-4000-8000-000000000001",
+                                  "00000000-0000-4000-8000-000000000002"), encoding="utf-8")
+    refused = cmd_check([good, other], None) != 0
+    print(f"  {'✓' if refused else '✗'} 跨 boot 的两枚被拒绝拼接（期望被拒，实际{'被拒' if refused else '通过'}）")
+    failed += 0 if refused else 1
+    total += 1
     # summarize 也要能跑（它比 check 宽松，但同样必须真解析）
     cmd_summarize(good)
-    print(("✓ 自检 %d/%d" % (len(cases) - failed, len(cases))) if not failed
-          else ("✗ 自检 %d/%d 失败" % (failed, len(cases))))
+    print(("✓ 自检 %d/%d" % (total - failed, total)) if not failed
+          else ("✗ 自检 %d/%d 失败" % (failed, total)))
     return 0 if not failed else 1
 
 
@@ -222,6 +266,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cmd", nargs="?", choices=["summarize", "check", "make-example"])
     ap.add_argument("file", nargs="?", type=pathlib.Path)
+    ap.add_argument("files", nargs="*", type=pathlib.Path)
     ap.add_argument("--source", type=pathlib.Path, help="Firmware 目录，用源码词表校验文件里的词")
     ap.add_argument("--out", type=pathlib.Path)
     ap.add_argument("--selftest", action="store_true")
@@ -239,7 +284,7 @@ def main() -> int:
     if a.file is None:
         print("✗ 要一个 ndjson 路径", file=sys.stderr)
         return 2
-    return cmd_check(a.file, a.source) if a.cmd == "check" else cmd_summarize(a.file)
+    return cmd_check(a.files, a.source) if a.cmd == "check" else cmd_summarize(a.file)
 
 
 if __name__ == "__main__":

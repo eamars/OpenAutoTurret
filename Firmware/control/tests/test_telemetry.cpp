@@ -223,3 +223,50 @@ TEST(Telemetry, ClearResetsEverything) {
 }
 
 }  // namespace
+
+// The clock-jump rule, tested as arithmetic rather than as a clock: this service does
+// not call settimeofday (and under tonight's no-sudo rule could not), so the bump
+// decision has to be reachable without moving the world clock. A missed bump is a
+// silent re-basing of history; a false one is a statistic that stops being joinable.
+TEST(ClockEpoch, OnlyAStepBumpsIt) {
+  EXPECT_EQ(1u, ota::telemetry::Telemetry::clock_epoch_after(1, 100, 140, false));
+  EXPECT_EQ(1u, ota::telemetry::Telemetry::clock_epoch_after(1, 100, 100, true));
+  // Scheduler movement, not a clock step.
+  EXPECT_EQ(1u, ota::telemetry::Telemetry::clock_epoch_after(
+                   1, 0, 9 * ota::telemetry::Telemetry::kClockJumpResolutionNs / 10, true));
+  // An NTP-class step bumps, and only once per observation.
+  EXPECT_EQ(2u, ota::telemetry::Telemetry::clock_epoch_after(
+                    1, 0, 11 * ota::telemetry::Telemetry::kClockJumpResolutionNs / 10, true));
+  EXPECT_EQ(7u, ota::telemetry::Telemetry::clock_epoch_after(
+                    6, 0, 50 * ota::telemetry::Telemetry::kClockJumpResolutionNs, true));
+}
+
+// The published header must carry the epoch and the error bound, not just the offset:
+// an offset without a bound is a number without a warranty, and the contract says the
+// mapping needs an identity so cross-epoch joins can be refused instead of noticed late.
+TEST(TripFileHeader, DeclaresEpochAndErrorBound) {
+  namespace fs = std::filesystem;
+  const auto dir = fs::temp_directory_path() / "ota-clock-epoch";
+  fs::remove_all(dir);
+  ota::telemetry::Telemetry t;
+  t.set_trace_archive_dir(dir.string());
+  ota::telemetry::ControlLogRecord r;
+  r.timestamp_ns = 1;
+  t.push_control(r);
+  t.freeze_control_trace();
+  std::string path;
+  ASSERT_TRUE(t.trace_archive_path(path));
+  std::ifstream in(path);
+  std::string header;
+  std::getline(in, header);
+  EXPECT_NE(header.find("\"clock_epoch\":1"), std::string::npos) << header;
+  const std::string key = "\"mono_to_wall_err_ns\":\"";
+  const auto at = header.find(key);
+  ASSERT_NE(at, std::string::npos) << header;
+  // A bound big enough to be useless (or zero, which would claim we know the wall
+  // clock to the nanosecond) both fail here: the honest answer is tens of microseconds.
+  const long long bound = std::stoll(header.substr(at + key.size()));
+  EXPECT_GT(bound, 0);
+  EXPECT_LT(bound, 100 * 1000 * 1000);
+  fs::remove_all(dir);
+}

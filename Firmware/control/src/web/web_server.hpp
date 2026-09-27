@@ -655,6 +655,8 @@ class WebServer {
           << ",\"clock\":\"" << win.clock << "\""
           << ",\"boot_id\":\"" << win.boot_id << "\""
           << ",\"mono_to_wall_ns\":\"" << win.mono_to_wall_ns << "\""
+          << ",\"mono_to_wall_err_ns\":\"" << win.mono_to_wall_err_ns << "\""
+          << ",\"clock_epoch\":" << win.clock_epoch
           << ",\"rows\":[";
       bool comma = false;
       for (const auto& r : rows) {

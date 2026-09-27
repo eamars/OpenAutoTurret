@@ -21,6 +21,8 @@
 #include "mode/operating_mode.hpp"
 #include <cstddef>
 #include <chrono>
+#include <cstdlib>
+#include "spdlog/spdlog.h"
 #include <cstdio>
 #include <mutex>
 #include <sstream>
@@ -697,6 +699,8 @@ struct TraceWindow {
   const char* clock = "CLOCK_MONOTONIC";
   std::string boot_id = "unknown";
   long long mono_to_wall_ns = 0;
+  long long mono_to_wall_err_ns = 0;
+  unsigned clock_epoch = 0;
 };
 
 struct EventRecord {
@@ -743,6 +747,7 @@ class RingBuffer {
   bool empty() const { return count_ == 0; }
   void clear() { write_ = 0; count_ = 0; }
 
+
  private:
   std::array<T, N> buf_{};
   std::size_t write_ = 0;
@@ -751,6 +756,20 @@ class RingBuffer {
 
 // The telemetry store, filled by the control loop.
 class Telemetry {
+ public:
+  // The bump rule on its own, so it can be tested without settimeofday (which this
+  // service has no business calling, let alone under the no-sudo rule of this shift).
+  static unsigned clock_epoch_after(unsigned epoch, long long prev_offset_ns,
+                                    long long new_offset_ns, bool seen) {
+    if (!seen) return epoch;                     // first observation establishes, never bumps
+    if (std::abs(new_offset_ns - prev_offset_ns) > kClockJumpResolutionNs) return epoch + 1;
+    return epoch;
+  }
+
+  // Detector resolution, not a safety parameter: below this, a difference between two
+  // measurements is the scheduler moving, not the clock. Ten milliseconds is well
+  // above anything the Pi has shown under load and far below a real NTP step.
+  static constexpr long long kClockJumpResolutionNs = 10000000;
  public:
   static constexpr std::size_t kControlLogCap = 4096;   // ~20 s at 200 Hz
   static constexpr std::size_t kEventCap = 512;
@@ -838,18 +857,16 @@ class Telemetry {
     // into. Measured on this station 2026-09-28: BOOTTIME minus MONOTONIC = 15 us
     // (this Pi has never suspended), so the two are interchangeable *here*; the
     // declared name is what stops that from being an assumption next year.
-    const long long mono_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-    const long long wall_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
+    observe_clock_mapping();
+    const long long wall_ns = mono_to_wall_ns_ + mono_now_ns();
     out << "{\"kind\":\"trip_trace\",\"rows\":" << frozen_count_
         << ",\"frozen_t_ns\":\"" << frozen_t_ns_ << "\""
         << ",\"clock\":\"CLOCK_MONOTONIC\""
         << ",\"boot_id\":\"" << boot_id_ << "\""
         << ",\"wall_t_ns\":\"" << wall_ns << "\""
-        << ",\"mono_to_wall_ns\":\"" << (wall_ns - mono_ns) << "\"}\n";
+        << ",\"mono_to_wall_ns\":\"" << mono_to_wall_ns_ << "\""
+        << ",\"mono_to_wall_err_ns\":\"" << mono_to_wall_err_ns_ << "\""
+        << ",\"clock_epoch\":" << clock_epoch_ << "}\n";
     for (std::size_t i = 0; i < frozen_count_; ++i) {
       const ControlLogRecord& r = frozen_trace_[i];
       out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
@@ -869,6 +886,7 @@ class Telemetry {
   // that is the answer to the question anybody asks after a trip. `frozen` is on
   // the wire so a reader is never told "this is what happened" about live cycles.
   TraceWindow control_window() const {
+    observe_clock_mapping();   // a live reader is exactly as much a consumer as a file
     TraceWindow w;
     {
       std::lock_guard<std::mutex> lk(trace_mu_);
@@ -880,20 +898,17 @@ class Telemetry {
         w.rows = trace_.all();
       }
     }
-    // Measured outside the lock: two syscalls, and the answer is only used to place
-    // these rows on the wall clock, not to make a control decision.
     w.boot_id = boot_id_;
-    w.mono_to_wall_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count() -
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+    w.mono_to_wall_ns = mono_to_wall_ns_;
+    w.mono_to_wall_err_ns = mono_to_wall_err_ns_;
+    w.clock_epoch = clock_epoch_;
     return w;
   }
   // Where a frozen window is also written to disk, derived once at startup from
   // the web socket's own directory so the launcher archives it with the logs.
   // Best-effort by design: a full /tmp must not be able to break a trip.
   void set_trace_archive_dir(const std::string& dir) {
+    observe_clock_mapping();  // the first artifact could be written at any moment
     std::ifstream id("/proc/sys/kernel/random/boot_id");
     if (id) {
       std::string line;
@@ -974,6 +989,66 @@ class Telemetry {
   // different boots can carry identical monotonic timestamps; without this, a
   // reader cannot tell them apart.
   std::string boot_id_ = "unknown";
+  // The offset to wall clock with its error bound and the epoch of the mapping it was
+  // measured under (see observe_clock_mapping). Epoch 1 is "this boot, no jump seen".
+  // A cache of "the last time anybody published an artifact, what was the mapping".
+  // Mutable and lock-free on purpose: readers on the web thread may refresh it, and a
+  // stale-by-one-sample bound or epoch is not a control decision -- each of these is an
+  // aligned word, so a reader sees one measurement or the previous one, never a splice.
+  mutable long long mono_to_wall_ns_ = 0;
+  mutable long long mono_to_wall_err_ns_ = 0;
+  mutable unsigned clock_epoch_ = 1;
+  mutable bool mapping_seen_ = false;
+
+  // --------------------------------------------------------------------------
+  // Clock mapping (ADR-001 contracts §"时钟语义"): the control domain stays on
+  // CLOCK_MONOTONIC, so every artifact that outlives a cycle must carry the offset
+  // to wall clock, HOW WELL THAT OFFSET IS KNOWN, and the epoch of the mapping it
+  // was measured under. A bare offset is a number without a warranty.
+  //
+  // The offset is measured the only way it can be measured from one place: read
+  // monotonic, read wall, read monotonic again; keep the sample with the smallest
+  // spread and call half that spread the error. Re-measured whenever an artifact is
+  // published, so a mapping nobody has looked at for an hour cannot be silently
+  // quoted from a stale value; a change larger than the detector resolution bumps
+  // the epoch and says so, which is how "禁止跨 boot 拼接统计" gets teeth.
+  void observe_clock_mapping() const {
+    long long best_spread = -1;
+    long long best_offset = 0;
+    for (int i = 0; i < 3; ++i) {
+      const long long m1 = mono_now_ns();
+      const long long wall = wall_now_ns();
+      const long long m2 = mono_now_ns();
+      const long long spread = m2 - m1;
+      if (best_spread < 0 || spread < best_spread) {
+        best_spread = spread;
+        best_offset = wall - ((m1 + m2) / 2);
+      }
+    }
+    const unsigned bumped =
+        clock_epoch_after(clock_epoch_, mono_to_wall_ns_, best_offset, mapping_seen_);
+    if (bumped != clock_epoch_) {
+      // Anything this large is a step, not drift: an NTP correction, a settimeofday,
+      // or a suspend we were told not to do. Rows published under the old mapping
+      // belong to the old epoch, so the epoch travels with them and the old ones are
+      // quoted as what they are -- not silently re-based.
+      spdlog::warn("clock mapping moved by {} ms; clock_epoch -> {} (rows published "
+                   "under the previous epoch stay in that epoch)",
+                   std::abs(best_offset - mono_to_wall_ns_) / 1000000, bumped);
+      clock_epoch_ = bumped;
+    }
+    mono_to_wall_ns_ = best_offset;
+    mono_to_wall_err_ns_ = best_spread / 2 + 1;
+    mapping_seen_ = true;
+  }
+  static long long mono_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+  static long long wall_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::system_clock::now().time_since_epoch()).count();
+  }
   std::string archive_path_;  // set only when a freeze actually reached disk
   RingBuffer<EventRecord, kEventCap> event_log_;
   uint64_t event_pushes_ = 0;  // does not saturate where size() does

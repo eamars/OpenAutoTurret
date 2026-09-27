@@ -553,6 +553,13 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   EXPECT_NE(frame.find("\"clock\":\"CLOCK_MONOTONIC\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"boot_id\":\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"mono_to_wall_ns\":\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"mono_to_wall_err_ns\":\""), std::string::npos) << frame;
+  // The key must be there; the *value* is this fixture's own business. A window built
+  // by hand rather than by Telemetry has never observed a clock mapping, and it says so
+  // as boot_id "unknown" / epoch 0 / bound 0 -- absence spelled as absence, which is the
+  // same rule the effort field obeys. Asserting 1 here would pin the fixture, not the code.
+  EXPECT_NE(frame.find("\"clock_epoch\":"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"boot_id\":\"unknown\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"track\":\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"temp_raw\":[-1,28]"), std::string::npos) << frame;
   // A reader must be able to tell "the trip's own window" from "whatever the ring
