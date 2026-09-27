@@ -37,7 +37,12 @@
 各语义在 `Unbounded` 下的定义（**逐条可测**）：
 `in_soft()=true`、`in_hard()=true`（不可能越界）、`distance_to_soft()=无`（不是 0）、
 `max_speed_at()=v_max`（不受边界调制）、Layer-2/3 停止可行性**天然成立**、
-`soft_limit_distance_*_rad` 与 trace 的同名字段 ⇒ **`null`**（与 `temp_raw=-1` 同一套"缺席要说缺席"的纪律）。
+`soft_limit_distance_*_rad`（遥测快照里那两个）⇒ **`null`**（与 `temp_raw=-1` 同一套"缺席要说缺席"的纪律）。
+> **这一句最初写错过**：我写的是"遥测**与 trace 的同名字段**"。收口时拿真跳闸文件核了一遍——
+> 冻结窗口的行只有 `t/ack/mode/track/phase/temp_raw/q/ref/vref/cmd/effort/vest/rx/safety/period_us/goal`，
+> **痕迹里从来没有距离这一列**（`ControlLogRecord::soft_limit_distance[]` 这个字段存在，但写文件不发它）。
+> 所以：遥测那格确实要发 `null`（已发、已现场验）；trace 那格**没有需要新语义的东西**，
+> 代价是事后复盘查不到"当时离边界多远"——**这是一个被命名的缺口，不是一句已完成的承诺**。
 
 ## 3. 九个调用点逐个交代（这是"广"的实情）
 
@@ -50,7 +55,7 @@
 | 5 | `command_state_.q_min/max` 2845 | 给 dashboard 显示可命令区间 | 发 `null`（＋`envelope:"unbounded"` 及其**来源**） | webd 测试：UI 不许显示 ±0 |
 | 6 | supervisor 698/993/2626 | 硬界越界 ⇒ BRAKE | yaw 永不越界；**其余九项守卫一项不动** | 单元：注入无包线不产生 DERATE/BRAKE |
 | 7 | `manual_step` 4329 | 目标出软界/进制动余量 ⇒ 拒 | yaw 不设限（pitch 照旧拒） | 单元＋现场：跨 ±180° 迈一步 |
-| 8 | 遥测/trace 3309 | 距离（0＝贴界） | `null` | 现场拉一行原文 |
+| 8 | 遥测快照 3309 | 距离（0＝贴界） | `null` ＋ `yaw_envelope:"none"`（**已发已验**：`/api/state` 三个字段 `None`）；**trace 行不带这一列**（真跳闸文件的键清单为证）⇒ 事后复盘查不到，缺口见 §2 注 |
 | 9 | `soft_limits_valid`（readiness） | 两轴都要 valid | **改语义为"每个轴的包线状态都已声明"**（Measured/Virtual/Unbounded 都算声明） | 现场：部署后 readiness 必须照旧点亮 |
 
 ## 4. roam 怎么办（我认为最容易做错的一处）
