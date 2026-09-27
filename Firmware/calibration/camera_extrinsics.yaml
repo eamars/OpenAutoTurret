@@ -1,26 +1,28 @@
 # ota-camera-extrinsics v1
-# Camera-to-pitch-frame rotation for the unloaded station, 2026-09-06.
+# Camera-to-pitch-frame rotation for the current mixed-drive station, 2026-09-27.
 #
-# The previous rot_z(-90 deg) matrix got the image axes' signs right but omitted
-# the pitch boresight offset. It predicted substantial image roll during a
-# horizontal roam. A 136-pair stationary-background flow recording measured
-# median reprojection error 15.89 px with that matrix.
+# The 2026-09-06 extrinsic was measured on the previous mechanism. The current
+# GM6020 yaw / CyberGear pitch mechanism retains its measured pitch boresight
+# offset, but the camera optical and image-down axes are opposite that old
+# installation. This is a proper half-turn around the camera-right axis:
+# R_P_C(current) = R_P_C(2026-09-06) * rot_x(pi).
 #
-# Correction: R_P_C = rot_y(-0.860 rad) * rot_z(-pi/2).
-# The pitch offset was fitted to two stopped yaw moves at q_pitch ~= -0.697 rad.
-# Independent yaw moves at q_pitch ~= -0.64 rad reduced median feature error
-# from 72.54 / 53.45 px to 8.23 / 10.80 px. Pitch moves retained their correct
-# sign and had 4.30--5.33 px residuals. The offset includes the encoder's pitch
-# zero relative to the optical axis; it is not a camera image rotation.
+# Direct station probes in MANUAL/HOLD: yaw encoder +17.71 deg shifted fixed
+# features RIGHT in the corrected 1920x1080 preview (camera turned left), and
+# pitch encoder +11.04 deg shifted them UP (camera pointed down). Projecting a
+# fixed yaw landmark through the old matrix predicts x=397 from x=846; this
+# matrix predicts x=1273, in the observed rightward direction. Both matrices
+# predict the observed upward pitch displacement. Detection-box x coordinates
+# also match the upright preview, so do not flip detector coordinates again.
 #
-# Evidence: docs/automatic_service_validation_2026_09_06.md and the Pi's
-# run/{roam,dwell}-projection-geometry.json. Features exclude detected people.
-# This is a provisional direction-only calibration, not a full extrinsic fit:
-# translation/parallax and lens distortion remain unmeasured. Do not infer
-# their values from this rotational walk. Translation below is unused by LOS.
+# The inherited 0.860 rad pitch offset is provisional on this new mechanism.
+# Refit from stationary-background flow and verify live target convergence;
+# these two sign probes alone do not establish subpixel calibration. Translation,
+# parallax, and lens distortion remain unmeasured. Translation below is unused
+# by LOS. Historical old-mechanism fit: docs/automatic_service_validation_2026_09_06.md.
 #
 # Format: t_P_C key followed by three row-major rotation rows.
 t_P_C=0 0 0
-0 0.6524374681640519 -0.757842562895277
+0 -0.6524374681640519 0.757842562895277
 -1 0 0
-0 0.757842562895277 0.6524374681640519
+0 -0.757842562895277 -0.6524374681640519

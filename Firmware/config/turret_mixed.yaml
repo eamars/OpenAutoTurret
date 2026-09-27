@@ -29,7 +29,7 @@ motors:
     direction_sign: 1     # logical -> mechanical sense; verify before motion.
   yaw:
     can_id: 1
-    direction_sign: -1    # inherited placeholder; GM6020 sign is not qualified.
+    direction_sign: -1    # legacy field ignored by mixed GM backend; live yaw+ turned camera left.
 control:
   loop_hz: 200            # frozen by §59.4; profiled.
 axes:
