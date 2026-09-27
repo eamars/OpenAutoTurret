@@ -84,6 +84,9 @@ struct ManualConfig {
   // commanded rate on default gains — which is why the intent converter refuses
   // JointVelocity outright (§25) and ManualController integrates instead.
   int64_t jog_horizon_ms = 150;
+  // The GM6020 yaw position loop needs a longer bounded lead to break static
+  // friction. Pitch keeps the short CyberGear lead above.
+  int64_t yaw_jog_horizon_ms = 150;
   // §39: diagonal combined jog is allowed, because the v1 reference interface takes both
   // axes in one request and the envelope limits them together. Two independent
   // single-axis requests would not be the same thing: each would be limited as if the
@@ -298,13 +301,14 @@ class ManualController {
       // bank up a debt during the block and spend it the instant the limit moved —
       // a lurch at exactly the moment the operator was told to be careful.
       const double horizon = static_cast<double>(cfg_.jog_horizon_ms) / 1000.0;
+      const double yaw_horizon = static_cast<double>(cfg_.yaw_jog_horizon_ms) / 1000.0;
       out.intent.type = IntentType::JointPosition;
       out.intent.has_joint_target = true;
       out.intent.v_yaw_rad_s = static_cast<double>(dir_.yaw) * v_max_rad_s[1] *
                               lim.velocity_scale;
       out.intent.v_pitch_rad_s = static_cast<double>(dir_.pitch) * v_max_rad_s[0] *
                                 lim.velocity_scale;
-      out.intent.q_yaw_rad = dir_.yaw ? q_now[1] + out.intent.v_yaw_rad_s * horizon : hold_q_[1];
+      out.intent.q_yaw_rad = dir_.yaw ? q_now[1] + out.intent.v_yaw_rad_s * yaw_horizon : hold_q_[1];
       out.intent.q_pitch_rad = dir_.pitch ? q_now[0] + out.intent.v_pitch_rad_s * horizon : hold_q_[0];
       out.intent.velocity_scale = lim.velocity_scale;
       out.intent.acceleration_scale = lim.acceleration_scale;

@@ -2967,6 +2967,7 @@ void ControlLoop::ensure_manual_cfg() {
   ManualConfig mc = manual_.config();
   if (cfg_.manual_lease_ms > 0) mc.lease_ms = cfg_.manual_lease_ms;
   if (cfg_.manual_keepalive_ms > 0) mc.keepalive_ms = cfg_.manual_keepalive_ms;
+  if (backend_->supports_continuous_yaw()) mc.yaw_jog_horizon_ms = 1500;
   // The ratio the config loader already refused to accept, checked again where it
   // matters. The lease is what stops the turret; a keepalive that cannot fit inside it
   // three times means a held jog dies on an ordinary network hiccup, which the operator

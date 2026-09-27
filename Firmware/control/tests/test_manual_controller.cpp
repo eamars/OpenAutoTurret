@@ -187,6 +187,23 @@ TEST_F(ManualTest, InactiveAxisDoesNotFollowFeedbackNoiseDuringStepsOrJogs) {
   EXPECT_DOUBLE_EQ(out_.intent.q_yaw_rad, held_yaw);
 }
 
+TEST_F(ManualTest, MixedYawUsesLongerBoundedLeadWithoutChangingPitch) {
+  ManualConfig cfg = m_.config();
+  cfg.yaw_jog_horizon_ms = 1500;
+  m_.set_config(cfg);
+  ASSERT_TRUE(m_.jog_start(JogDirection{-1, +1}, ManualProfile::Normal, now_));
+  step();
+  const double yaw_lead = v_max_[1] * cfg.normal.velocity_scale * 1.5;
+  const double pitch_lead = v_max_[0] * cfg.normal.velocity_scale * .15;
+  EXPECT_NEAR(out_.intent.q_yaw_rad, -yaw_lead, 1e-12);
+  EXPECT_NEAR(out_.intent.q_pitch_rad, pitch_lead, 1e-12);
+  step(20);
+  EXPECT_NEAR(out_.intent.q_yaw_rad, -yaw_lead, 1e-12);
+  m_.jog_stop(now_);
+  step();
+  EXPECT_EQ(out_.intent.type, IntentType::Hold);
+}
+
 TEST_F(ManualTest, StepThatNeverArrivesIsDroppedAndSaidSo) {
   // A step refused or blocked must not leave a position target pushing against a limit
   // forever.
