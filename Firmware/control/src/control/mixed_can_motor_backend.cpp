@@ -496,8 +496,9 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
         // mildest answer to "keep pushing a stalled axis". Deliberately not a fault -- a
         // stalled axis is by definition not on its way to an endstop.
         if (now - last_degrade_log_ns_ > 1'000'000'000) {
-          spdlog::warn("GM6020 guard hold: stall #{} at requested {:.3f} deg/s; holding, not faulting",
-                       yaw_stall_streak_, requested_speed * kDegreesPerRadian);
+          spdlog::warn("GM6020 guard hold: stall #{} at requested {:.3f} deg/s, vout={} last; holding, not faulting",
+                       yaw_stall_streak_, requested_speed * kDegreesPerRadian,
+                       yaw_last_voltage_.load());
           last_degrade_log_ns_ = now;
         }
         yaw_degraded_.store(true);
@@ -512,10 +513,11 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           yaw_stall_streak_ = in.no_progress ? yaw_stall_streak_ + 1 : 0;
           if (now - last_degrade_log_ns_ > 1'000'000'000) {  // at most one line a second
             spdlog::warn("GM6020 degraded, still driving: cond={} rxerr={} txfail={} cmd_stale={} "
-                         "requested={:.3f} measured={:.3f} deg/s ms_since_command={:.1f}",
+                         "requested={:.3f} measured={:.3f} deg/s ms_since_command={:.1f} vout={} q={:.3f}rad",
                          MotorBackend::select_trip_condition(in), health.rx_error_frames,
                          health.tx_failed, command_stale ? 1 : 0, requested_speed * kDegreesPerRadian,
-                         measured_speed * kDegreesPerRadian, (now - yaw_last_command_ns_) * 1e-6);
+                         measured_speed * kDegreesPerRadian, (now - yaw_last_command_ns_) * 1e-6,
+                         yaw_last_voltage_.load(), yaw_state_.position_rad);
             last_degrade_log_ns_ = now;
           }
         } else {
@@ -748,6 +750,7 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
     trip_yaw_locked();
     return;
   }
+  yaw_last_voltage_.store(voltage);  // the frame's own magnitude, kept for the next paralysis log
   const auto command = gm6020::voltage_frame(profile_.yaw.motor_id, voltage);
   if (!yaw_bus_.send_frame(command)) trip_yaw_locked();
 }

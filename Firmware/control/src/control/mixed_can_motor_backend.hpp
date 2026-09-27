@@ -173,12 +173,18 @@ class MixedCanMotorBackend final : public MotorBackend {
   // have to ssh in to learn the axis has been limping for an hour.
   std::atomic<bool> yaw_degraded_{false};
   std::atomic<int> yaw_guard_events_{0};
+  // What we last actually put on the wire, in drive units. Without this a paralysis log
+  // can only say "asked for 10 deg/s, got none" and cannot distinguish pushing with 0 V
+  // (our bug) from pushing hard against something solid (a fact about the world). Named as
+  // the missing evidence in the 2026-09-28 case file and still missing an hour later.
+  std::atomic<int> yaw_last_voltage_{0};
   int yaw_stall_streak_ = 0;
   int64_t last_degrade_log_ns_ = 0;
   // Public: an axis that has been limping is worth a strip indicator, and a counter is the
   // difference between "it happened once" and "it happens every sweep".
  public:
   bool yaw_degraded() const { return yaw_degraded_.load(); }
+  int yaw_last_voltage() const { return yaw_last_voltage_.load(); }
   int yaw_guard_events() const { return yaw_guard_events_.load(); }
  private:
   // When the loop last put a demand in front of this backend (guarded by yaw_mutex_).

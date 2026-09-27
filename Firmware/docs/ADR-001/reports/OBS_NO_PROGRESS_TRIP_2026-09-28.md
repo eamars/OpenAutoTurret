@@ -249,3 +249,33 @@ requested_speed_deg_s=-10.000  no_progress_ms=1502  temp_raw=29
 **现场现状（11:5x）**：`no_progress` 挂着（这后端解不了锁，只能重启）；`yaw_envelope=none`；
 被丢帧 0；页面带 FOV 滑窗（`windowSource` 在场）。今天全部断电事件都发生在 AUTO_ROAM 自扫期间，
 **manual 的实测速度对齐因此还没测到**（两次尝试都被先到的 latch 挡在门外）。
+
+## §8｜主人给了排序之后：守卫分级上线，站第一次连续跑起来
+
+排序（覆盖我 §1–§7 里所有逐条判决）：**能跑 > hold > fault**；
+Fault 只许三种——**不受控制 / 电机自己报热 / 与之同级的危险**。
+实现：`yaw_guard_response()`（纯函数＋测试表），守卫从"一串 OR 的 latch"变成一张分级表
+（详见 `AUDIT_POWER_REMOVAL_2026-09-28.md` 末尾那张）。
+
+**真站第一轮（release `8aab92e7c4e1`，AUTO_TRACK→AUTO_ROAM 连跑 102 s）**：
+
+```
+跳闸文件 0 ｜ fault='' ｜ degraded 行 66 ｜ guard hold 行 0
+```
+
+**同一轮里捞到两行关键降级**（`ms_since_command` 是今天第一次在场）：
+
+```
+cond=command_not_sent  cmd_stale=0  requested=0.000   measured=0.000  ms_since_command=0.4
+cond=no_progress       cmd_stale=0  requested=-10.000 measured=0.000  ms_since_command=1.5
+```
+
+⇒ **我 §7 的"调用方停手了"也被这条打掉**：命令是 1.5 ms 之前的、后端接受、CAN 干净、反馈新鲜，
+轴就是不动。**今天我被现场推翻三次**（扇区边顶 → 区间之外 → 调用方停手），每一次都是拿一个
+能自圆其说的形状当结论。**剩下的唯一未知**：我们到底用多大力在推。
+下一版日志已经带上 `vout=`（帧里那个电压）与 `q=`（当前位置）——
+**"用 0 V 推"（我们的 bug）与"使劲推但被现实顶住"（世界的事实）从这一行起可以分开**。
+
+**仍未测到**：manual 两轴速度对齐的现场实测。我的探针每命令开一条新 socket，
+jog 是带租约的 dead-man（300 ms，租约大概跟着连接走），所以 jog 都被接受而轴不动 ——
+**NOT_RUN，方法错了不是没测到**；下次用一条**常驻连接**或干脆用页面自己那套按钮量。
