@@ -445,58 +445,85 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
         progress_at = now;
       }
       const int yaw_temp_guard = profile_.yaw.yaw_guard_temp_raw_ceiling;
-      should_stop = !yaw_feedback_safe_locked(now) || !health.up ||
-          health.state != static_cast<int>(can::CanIfState::ErrorActive) ||
-          health.rx_error_frames != 0 || health.tx_failed != 0 ||
-          !bus_health_ok_.load() ||
-          !std::isfinite(measured_speed) ||  // a fast reading stays powered; a nonsense one cannot be trusted
-          (yaw_temp_guard > 0 &&
-           yaw_state_.feedback.temperature_raw >= yaw_temp_guard) ||
-          (std::abs(requested_speed) >= kNoProgressCommandRadS &&
-           now - progress_at > kNoProgressLimitNs) ||
-          (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs);
-      if (should_stop && !yaw_trip_.load()) {
-        // Capture *why* the guard latched, as a machine-readable token plus the
-        // field matrix, before the trip is published. Without this the operator
-        // sees one string shared by ten causes — the 2026-09-27 yaw trip looked
-        // identical whether the cause was CAN, the encoder, or the raw temp byte.
-        {
-          MotorBackend::TripInputs in;
-          in.feedback_unsafe = !yaw_feedback_safe_locked(now);
-          in.can_down = !health.up;
-          in.can_state_wrong = health.state != static_cast<int>(can::CanIfState::ErrorActive);
-          in.can_counters_bad = health.rx_error_frames != 0 || health.tx_failed != 0;
-          in.bus_unhealthy = !bus_health_ok_.load();
-          in.speed_not_finite = !std::isfinite(measured_speed);
-          in.temp_raw_over = yaw_temp_guard > 0 &&
-                             yaw_state_.feedback.temperature_raw >= yaw_temp_guard;
-          in.command_not_sent = yaw_command_not_sent_.load();
-          in.no_progress = std::abs(requested_speed) >= kNoProgressCommandRadS &&
-                           now - progress_at > kNoProgressLimitNs;
-          in.heartbeat_stale = heartbeat_seen_.load() &&
-                               now - heartbeat_ns_.load() > kHeartbeatLimitNs;
-          in.reference_valid = yaw_reference_valid_.load();
-          in.feedback_age_ms = (now - yaw_state_.feedback.rx_ns) / 1e6;
-          in.temp_raw = yaw_state_.feedback.temperature_raw;
-          in.speed_deg_s = measured_speed * kDegreesPerRadian;
-          MotorBackend::TripDetail td{};
-          MotorBackend::format_trip_detail(in, MotorBackend::select_trip_condition(in), td);
-          const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
-          yaw_trip_detail_ = td;
-        }
-        spdlog::error("GM6020 guard trip: feedback_safe={} reference_valid={} received={} encoder_valid={} feedback_age_ms={:.3f} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} heartbeat_seen={} heartbeat_age_ms={}",
+      // The verdict and its record are built from ONE object, EVERY cycle. The first version
+      // assembled the record only after deciding to stop, so a condition that never faults
+      // left no trace at all -- "it limped for an hour" was unauditable -- and the fields
+      // describing a fault were assembled after the fault instead of of it.
+      MotorBackend::TripInputs in;
+      in.feedback_unsafe = !yaw_feedback_safe_locked(now);
+      in.can_down = !health.up;
+      in.can_state_wrong = health.state != static_cast<int>(can::CanIfState::ErrorActive);
+      in.can_counters_bad = health.rx_error_frames != 0 || health.tx_failed != 0;
+      in.bus_unhealthy = !bus_health_ok_.load();
+      in.speed_not_finite = !std::isfinite(measured_speed);
+      in.temp_raw_over = yaw_temp_guard > 0 &&
+                         yaw_state_.feedback.temperature_raw >= yaw_temp_guard;
+      // A demand left standing in the field from the last accepted cycle is not this
+      // cycle's demand. Without this, "the caller stopped asking" and "the axis will not
+      // move" are the same log line, and 2026-09-28 spent its afternoon between those two.
+      const bool command_stale = yaw_command_is_stale(now, yaw_last_command_ns_);
+      in.command_not_sent = yaw_command_not_sent_.load() || command_stale;
+      in.no_progress = std::abs(requested_speed) >= kNoProgressCommandRadS &&
+                       !command_stale && now - progress_at > kNoProgressLimitNs;
+      in.heartbeat_stale = heartbeat_seen_.load() &&
+                           now - heartbeat_ns_.load() > kHeartbeatLimitNs;
+      in.reference_valid = yaw_reference_valid_.load();
+      in.feedback_age_ms = (now - yaw_state_.feedback.rx_ns) / 1e6;
+      in.temp_raw = yaw_state_.feedback.temperature_raw;
+      in.speed_deg_s = measured_speed * kDegreesPerRadian;
+
+      // Owner's ordering, 2026-09-28: running beats holding, holding beats faulting, and a
+      // fault is reserved for a motor we cannot control, a motor reporting its own heat, or
+      // something equally dangerous. Everything else is driven through and said out loud.
+      const GuardResponse response = yaw_guard_response(in, yaw_stall_streak_);
+      if (response == GuardResponse::Fault && !yaw_trip_.load()) {
+        MotorBackend::TripDetail td{};
+        MotorBackend::format_trip_detail(in, MotorBackend::select_trip_condition(in), td);
+        const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
+        yaw_trip_detail_ = td;
+        spdlog::error("GM6020 guard fault: feedback_safe={} reference_valid={} received={} encoder_valid={} feedback_age_ms={:.3f} can_up={} can_state={} rxerr={} txfail={} both_buses_healthy={} measured_speed_deg_s={:.3f} temp_raw={} requested_speed_deg_s={:.3f} no_progress_ms={} ms_since_command={:.1f} heartbeat_seen={} heartbeat_age_ms={}",
                       yaw_feedback_safe_locked(now), yaw_reference_valid_.load(),
                       yaw_state_.received, yaw_state_.encoder_valid,
                       (now - yaw_state_.feedback.rx_ns) / 1e6, health.up, health.state,
-                      health.rx_error_frames, health.tx_failed,
-                      bus_health_ok_.load(), measured_speed * kDegreesPerRadian,
-                      yaw_state_.feedback.temperature_raw,
-                      yaw_requested_velocity_rad_s_.load() * kDegreesPerRadian,
-                      (now - progress_at) / 1'000'000,
-                      heartbeat_seen_.load(),
+                      health.rx_error_frames, health.tx_failed, bus_health_ok_.load(),
+                      measured_speed * kDegreesPerRadian, yaw_state_.feedback.temperature_raw,
+                      requested_speed * kDegreesPerRadian, (now - progress_at) / 1'000'000,
+                      (now - yaw_last_command_ns_) * 1e-6, heartbeat_seen_.load(),
                       heartbeat_seen_.load() ? (now - heartbeat_ns_.load()) / 1'000'000 : 0);
         trip_yaw_locked();
+      } else if (response == GuardResponse::Hold) {
+        // Powered and not pushing: zero voltage is dynamic braking on this drive, the
+        // mildest answer to "keep pushing a stalled axis". Deliberately not a fault -- a
+        // stalled axis is by definition not on its way to an endstop.
+        if (now - last_degrade_log_ns_ > 1'000'000'000) {
+          spdlog::warn("GM6020 guard hold: stall #{} at requested {:.3f} deg/s; holding, not faulting",
+                       yaw_stall_streak_, requested_speed * kDegreesPerRadian);
+          last_degrade_log_ns_ = now;
+        }
+        yaw_degraded_.store(true);
+        ++yaw_guard_events_;
+        send_yaw_zero_locked();
+      } else {
+        const bool any_doubt = in.can_counters_bad || in.bus_unhealthy || in.speed_not_finite ||
+                               in.command_not_sent || in.no_progress;
+        if (any_doubt) {
+          yaw_degraded_.store(true);
+          ++yaw_guard_events_;
+          yaw_stall_streak_ = in.no_progress ? yaw_stall_streak_ + 1 : 0;
+          if (now - last_degrade_log_ns_ > 1'000'000'000) {  // at most one line a second
+            spdlog::warn("GM6020 degraded, still driving: cond={} rxerr={} txfail={} cmd_stale={} "
+                         "requested={:.3f} measured={:.3f} deg/s ms_since_command={:.1f}",
+                         MotorBackend::select_trip_condition(in), health.rx_error_frames,
+                         health.tx_failed, command_stale ? 1 : 0, requested_speed * kDegreesPerRadian,
+                         measured_speed * kDegreesPerRadian, (now - yaw_last_command_ns_) * 1e-6);
+            last_degrade_log_ns_ = now;
+          }
+        } else {
+          yaw_degraded_.store(false);
+          yaw_stall_streak_ = 0;
+        }
       }
+      should_stop = response == GuardResponse::Fault;
       if (yaw_trip_.load()) send_yaw_zero_locked();
     }
     std::this_thread::sleep_for(5ms);
@@ -687,6 +714,10 @@ AxisSnapshot MixedCanMotorBackend::snapshot(AxisId axis, TimeNs now) {
 }
 
 void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs now) {
+  // Stamped before every gate, including the refusals: "the loop put a demand in front of
+  // me this cycle" and "that frame went out" are two facts, and reading them as one is
+  // what made five trips today unreadable. Nothing sets this field but a call.
+  yaw_last_command_ns_ = now;
   if (!std::isfinite(desired) || !yaw_feedback_safe_locked(now) || yaw_trip_.load() ||
       !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
       now - heartbeat_ns_.load() > kHeartbeatLimitNs || !buses_healthy()) {

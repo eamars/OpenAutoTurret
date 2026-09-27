@@ -128,4 +128,40 @@ TEST(WatchdogTripEvents, TheCeilingClampsTheAskAndPowersNothingOff) {
 }
 
 
+// The owner's ordering of 2026-09-28, as a table instead of a paragraph: running beats
+// holding, holding beats faulting, and Fault is only ever "not under control", "the motor
+// says it is hot", or something as dangerous. Every row below is a condition that used to
+// latch -- and on a station whose payload drops onto a hard stop whenever power goes, the
+// latch was the expensive part, not the diagnosis.
+static ota::GuardResponse resp(std::function<void(MotorBackend::TripInputs&)> set, int streak = 0) {
+  MotorBackend::TripInputs in; set(in); return yaw_guard_response(in, streak);
+}
+TEST(WatchdogTripEvents, OnlyLossOfControlOrHeatMayFault) {
+  EXPECT_EQ(ota::GuardResponse::Fault, resp([](MotorBackend::TripInputs& i){ i.feedback_unsafe = true; }));
+  EXPECT_EQ(ota::GuardResponse::Fault, resp([](MotorBackend::TripInputs& i){ i.can_down = true; }));
+  EXPECT_EQ(ota::GuardResponse::Fault, resp([](MotorBackend::TripInputs& i){ i.heartbeat_stale = true; }));
+  EXPECT_EQ(ota::GuardResponse::Fault, resp([](MotorBackend::TripInputs& i){ i.temp_raw_over = true; }));
+  // Everything that used to cost a power cut now costs a log line.
+  EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs& i){ i.can_counters_bad = true; }));
+  EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs& i){ i.bus_unhealthy = true; }));
+  EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs& i){ i.speed_not_finite = true; }));
+  EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs& i){ i.command_not_sent = true; }));
+  EXPECT_EQ(ota::GuardResponse::Run,
+            resp([](MotorBackend::TripInputs& i){ i.no_progress = true; }, ota::kYawStallHoldStreak - 1));
+  // A stall repeated becomes a Hold -- powered, not pushing -- and never a Fault: an axis
+  // that is not moving is not on its way to an endstop.
+  EXPECT_EQ(ota::GuardResponse::Hold,
+            resp([](MotorBackend::TripInputs& i){ i.no_progress = true; }, ota::kYawStallHoldStreak));
+  EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs&){}));
+}
+
+// Freshness is a number, so it gets numbers: ten cycles of a 200 Hz loop.
+TEST(WatchdogTripEvents, AStaleDemandIsNotThisCyclesDemand) {
+  EXPECT_TRUE(yaw_command_is_stale(1'000'000'000, 0));                    // never commanded
+  EXPECT_FALSE(yaw_command_is_stale(1'000'000'000, 999'990'000));          // 10 ms ago
+  EXPECT_FALSE(yaw_command_is_stale(1'000'000'000, 950'000'000));          // exactly at the limit
+  EXPECT_TRUE(yaw_command_is_stale(1'000'000'000, 949'999'000));           // one ns past it
+}
+
+
 }  // namespace
