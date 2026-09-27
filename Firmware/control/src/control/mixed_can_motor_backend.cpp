@@ -427,13 +427,21 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           progress_at = now;
         }
       }
+      // A sector turnaround intentionally dwells at zero speed. Start the
+      // no-progress window with the next substantial request, rather than
+      // charging that stationary dwell against the new reverse command.
+      const double requested_speed = yaw_requested_velocity_rad_s_.load();
+      if (std::abs(requested_speed) < kNoProgressCommandRadS) {
+        progress_position = yaw_state_.position_rad;
+        progress_at = now;
+      }
       should_stop = !yaw_feedback_safe_locked(now) || !health.up ||
           health.state != static_cast<int>(can::CanIfState::ErrorActive) ||
           health.rx_error_frames != 0 || health.tx_failed != 0 ||
           !bus_health_ok_.load() ||
           !std::isfinite(measured_speed) || std::abs(measured_speed) > 25.0 * kRadiansPerDegree ||
           yaw_state_.feedback.temperature_raw >= kYawTemperatureRawCeiling ||
-          (std::abs(yaw_requested_velocity_rad_s_.load()) >= kNoProgressCommandRadS &&
+          (std::abs(requested_speed) >= kNoProgressCommandRadS &&
            now - progress_at > kNoProgressLimitNs) ||
           (heartbeat_seen_.load() && now - heartbeat_ns_.load() > kHeartbeatLimitNs);
       if (should_stop && !yaw_trip_.load()) {
