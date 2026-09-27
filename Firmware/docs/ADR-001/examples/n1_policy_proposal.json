@@ -1,0 +1,68 @@
+{
+  "schema_version": "ota.n1.draft.policy/1",
+  "status": "DESIGN_PROPOSAL_NOT_RUNTIME_CONFIG",
+  "hardware_authorization": false,
+  "station_baseline": {
+    "branch": "codex/hardware-adaptation",
+    "last_activated_short_revision": "8901808",
+    "branch_tip_full_sha": null,
+    "loaded_retest_qualified": false
+  },
+  "feature_defaults": {
+    "dual_shadow": false,
+    "detail_motion_authority": false,
+    "imu_control_fusion": false,
+    "face_detection_roi": false,
+    "persistent_biometric_identity": false
+  },
+  "invariants": {
+    "motor_command_owner": "controld",
+    "normal_modes": [
+      "MANUAL",
+      "AUTO_TRACK",
+      "AUTO_ROAM"
+    ],
+    "pitch_current_limit_A": 5.0,
+    "yaw_disable_confirmation_supported": false,
+    "preserve_explicit_selection_on_roam": true
+  },
+  "proposals": {
+    "exposure_to_controller_p95_ms": 80,
+    "exposure_to_controller_p99_ms": 120,
+    "publish_to_controller_p95_ms": 5,
+    "max_observation_age_ms": 150,
+    "detail_handoff_max_age_ms": 100,
+    "initial_timestamp_uncertainty_budget_ms": 5,
+    "max_pose_extrapolation_ms": 20,
+    "pose_history_seconds": 2,
+    "application_pending_frames_per_camera": 1,
+    "application_inflight_inferences_per_camera": 1,
+    "preview_pending_frames_per_camera": 1,
+    "detail_enter_distinct_frames": 3,
+    "detail_enter_min_span_ms": 120,
+    "detail_enter_fov_inset_fraction": 0.1,
+    "detail_exit_fov_inset_fraction": 0.05,
+    "detail_target_rate_hz_initial": 15,
+    "wide_min_observed_rate_hz": 20,
+    "worker_restart_limit_per_supervised_session": 2,
+    "power_idle_minutes": 5,
+    "power_each_single_camera_minutes": 10,
+    "power_dual_camera_hailo_minutes": 30
+  },
+  "unknown_until_measured": {
+    "effective_yaw_velocity_limit_deg_s": null,
+    "effective_pitch_velocity_limit_deg_s": null,
+    "measured_motor_response_ms": null,
+    "actual_imx500_mode_calibration_id": null,
+    "actual_imx477_mode_calibration_id": null,
+    "camera_extrinsics_id": null,
+    "imu_mount_calibration_id": null,
+    "yaw_torque_off_proof": null,
+    "loaded_stopping_envelope_id": null
+  },
+  "notes": [
+    "本文件不匹配现有 YAML parser；不得覆盖 turret_mixed.yaml。",
+    "数值均为设计目标或已声明不变量，非实测资格。",
+    "fixture 中 motion_qualified=true 只用于演示语义校验，不可用于站台。"
+  ]
+}

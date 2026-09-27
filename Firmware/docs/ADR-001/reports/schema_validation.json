@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "scope": "PACKAGE_SCHEMAS_AND_SYNTHETIC_FIXTURES_ONLY",
+  "jsonschema_version": "4.26.0",
+  "schemas_checked": 5,
+  "positive_fixture_records_checked": 27,
+  "negative_cases_rejected": 6,
+  "hardware_qualification": "NOT_RUN",
+  "repository_compatibility": "NOT_RUN"
+}

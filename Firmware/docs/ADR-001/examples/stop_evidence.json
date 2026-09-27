@@ -1,0 +1,17 @@
+{
+  "schema_version": "ota.n1.draft.stop-evidence/1",
+  "fixture_only": true,
+  "stop_id": "SYNTHETIC-stop-1",
+  "yaw": {
+    "feedback_age_ms": 5,
+    "stationary_observed": true,
+    "zero_requested": true,
+    "disable_confirmed": null
+  },
+  "pitch": {
+    "feedback_age_ms": 20,
+    "stationary_observed": true,
+    "disable_requested": true,
+    "disable_confirmed": true
+  }
+}

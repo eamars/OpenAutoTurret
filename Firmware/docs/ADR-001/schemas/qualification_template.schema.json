@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "空白资格报告模板，不是完成报告的 schema",
+  "type": "object",
+  "properties": {
+    "station_session_id": {
+      "type": "null"
+    },
+    "boot_id": {
+      "type": "null"
+    },
+    "actual_commit_sha": {
+      "type": "null"
+    },
+    "hardware_manifest_id": {
+      "type": "null"
+    },
+    "approved_by": {
+      "type": "null"
+    },
+    "schema_version": {
+      "const": "ota.n1.draft.qualification/1"
+    },
+    "status": {
+      "const": "NOT_RUN"
+    },
+    "hardware_motion_authorized": {
+      "const": false
+    },
+    "configuration_hashes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "power_load_retest": {
+          "type": "null"
+        },
+        "stop_evidence": {
+          "type": "null"
+        },
+        "homing": {
+          "type": "null"
+        },
+        "axis_identification": {
+          "type": "null"
+        },
+        "camera_calibrations": {
+          "type": "null"
+        },
+        "dual_camera_timing": {
+          "type": "null"
+        },
+        "perception_quality": {
+          "type": "null"
+        },
+        "explicit_selection": {
+          "type": "null"
+        },
+        "fault_injection": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "power_load_retest",
+        "stop_evidence",
+        "homing",
+        "axis_identification",
+        "camera_calibrations",
+        "dual_camera_timing",
+        "perception_quality",
+        "explicit_selection",
+        "fault_injection"
+      ],
+      "additionalProperties": false
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "capture_to_controller_p95_ms": {
+          "type": "null"
+        },
+        "capture_to_controller_p99_ms": {
+          "type": "null"
+        },
+        "yaw_overshoot_deg": {
+          "type": "null"
+        },
+        "pitch_overshoot_deg": {
+          "type": "null"
+        },
+        "id_switches": {
+          "type": "null"
+        },
+        "n_independent_handoff_episodes": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "capture_to_controller_p95_ms",
+        "capture_to_controller_p99_ms",
+        "yaw_overshoot_deg",
+        "pitch_overshoot_deg",
+        "id_switches",
+        "n_independent_handoff_episodes"
+      ],
+      "additionalProperties": false
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "source_record_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "station_session_id",
+    "boot_id",
+    "actual_commit_sha",
+    "hardware_manifest_id",
+    "approved_by",
+    "schema_version",
+    "status",
+    "hardware_motion_authorized",
+    "configuration_hashes",
+    "evidence",
+    "metrics",
+    "limitations",
+    "source_record_paths"
+  ],
+  "additionalProperties": false
+}

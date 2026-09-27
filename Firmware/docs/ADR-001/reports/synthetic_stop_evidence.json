@@ -1,0 +1,7 @@
+{
+  "completion_quality": "limited_complete",
+  "missing_evidence": [],
+  "yaw_disable_confirmed": null,
+  "power_isolated_confirmed": null,
+  "note": "Stationarity and command evidence do not certify de-energization or load support."
+}

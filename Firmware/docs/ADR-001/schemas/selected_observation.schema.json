@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "N1 拟议 SelectedObservation 语义（不是现有 wire ABI）",
+  "type": "object",
+  "properties": {
+    "station_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "boot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "camera_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "frame_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "calibration_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sensor_mode_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transform_chain_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "ota.n1.draft.selected/1"
+    },
+    "clock_id": {
+      "const": "CLOCK_MONOTONIC"
+    },
+    "clock_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "camera_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_frame_sequence": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "t_observation_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "t_capture_received_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "t_publish_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "valid_until_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "timestamp_uncertainty_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "十进制 int64 非负字符串；语义层仍须检查 <= 9223372036854775807。"
+    },
+    "observation_time_quality": {
+      "enum": [
+        "verified",
+        "modelled",
+        "unknown"
+      ]
+    },
+    "geometry_valid": {
+      "type": "boolean"
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "target_session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selection_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy": {
+          "enum": [
+            "AUTO_SINGLE",
+            "EXPLICIT_TRACK",
+            "EXPLICIT_TAG"
+          ]
+        },
+        "global_track_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "target_session_id",
+        "selection_generation",
+        "policy",
+        "global_track_id"
+      ],
+      "additionalProperties": false
+    },
+    "anchor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "face_box",
+            "head_box",
+            "body_upper",
+            "torso",
+            "marker_center"
+          ]
+        },
+        "raster_width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "raster_height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "u_px": {
+          "type": "number",
+          "minimum": 0
+        },
+        "v_px": {
+          "type": "number",
+          "minimum": 0
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "kind",
+        "raster_width",
+        "raster_height",
+        "u_px",
+        "v_px",
+        "confidence"
+      ],
+      "additionalProperties": false
+    },
+    "person_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "association_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "station_session_id",
+    "boot_id",
+    "camera_id",
+    "frame_id",
+    "model_id",
+    "calibration_id",
+    "sensor_mode_id",
+    "transform_chain_id",
+    "schema_version",
+    "clock_id",
+    "clock_epoch",
+    "camera_generation",
+    "source_frame_sequence",
+    "t_observation_ns",
+    "t_capture_received_ns",
+    "t_publish_ns",
+    "valid_until_ns",
+    "timestamp_uncertainty_ns",
+    "observation_time_quality",
+    "geometry_valid",
+    "selection",
+    "anchor",
+    "person_confidence",
+    "association_confidence"
+  ],
+  "additionalProperties": false
+}

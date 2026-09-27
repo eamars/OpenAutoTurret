@@ -1,0 +1,34 @@
+{
+  "schema_version": "ota.n1.draft.qualification/1",
+  "status": "NOT_RUN",
+  "hardware_motion_authorized": false,
+  "station_session_id": null,
+  "boot_id": null,
+  "actual_commit_sha": null,
+  "configuration_hashes": {},
+  "hardware_manifest_id": null,
+  "evidence": {
+    "power_load_retest": null,
+    "stop_evidence": null,
+    "homing": null,
+    "axis_identification": null,
+    "camera_calibrations": null,
+    "dual_camera_timing": null,
+    "perception_quality": null,
+    "explicit_selection": null,
+    "fault_injection": null
+  },
+  "metrics": {
+    "capture_to_controller_p95_ms": null,
+    "capture_to_controller_p99_ms": null,
+    "yaw_overshoot_deg": null,
+    "pitch_overshoot_deg": null,
+    "id_switches": null,
+    "n_independent_handoff_episodes": null
+  },
+  "limitations": [
+    "空模板：null 表示未测，不表示 0 或通过。"
+  ],
+  "approved_by": null,
+  "source_record_paths": []
+}

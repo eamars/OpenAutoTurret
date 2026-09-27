@@ -1,0 +1,38 @@
+{
+  "schema_version": "ota.n1.draft.selected/1",
+  "station_session_id": "SYNTHETIC-session-001",
+  "boot_id": "SYNTHETIC-boot-001",
+  "clock_id": "CLOCK_MONOTONIC",
+  "clock_epoch": 0,
+  "camera_id": "SYNTHETIC-wide",
+  "camera_generation": 1,
+  "source_frame_sequence": "43",
+  "frame_id": "SYNTHETIC-frame-43",
+  "model_id": "SYNTHETIC-person-model",
+  "calibration_id": "SYNTHETIC-calibration-NOT-FOR-HARDWARE",
+  "sensor_mode_id": "SYNTHETIC-mode-640x480",
+  "transform_chain_id": "SYNTHETIC-transform-001",
+  "t_observation_ns": "1000000000",
+  "t_capture_received_ns": "1010000000",
+  "t_publish_ns": "1025000000",
+  "valid_until_ns": "1150000000",
+  "timestamp_uncertainty_ns": "1000000",
+  "observation_time_quality": "verified",
+  "geometry_valid": true,
+  "selection": {
+    "target_session_id": "SYNTHETIC-target-session-1",
+    "selection_generation": 3,
+    "policy": "EXPLICIT_TRACK",
+    "global_track_id": "SYNTHETIC-person-A"
+  },
+  "anchor": {
+    "kind": "body_upper",
+    "raster_width": 640,
+    "raster_height": 480,
+    "u_px": 319.5,
+    "v_px": 160.0,
+    "confidence": 0.8
+  },
+  "person_confidence": 0.9,
+  "association_confidence": 0.92
+}
