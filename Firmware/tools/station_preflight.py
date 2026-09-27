@@ -85,7 +85,8 @@ def main():
             raise RuntimeError("Mixed station needs unprivileged read/write access to /dev/i2c-1 for the BNO085 host reference")
         if not os.access(firmware / "build/imu-bno085", os.X_OK):
             raise RuntimeError("BNO085 executable missing; deploy --probe-build")
-        raise RuntimeError("Normal mixed startup remains gated pending qualified pitch homing/stop and continuous-yaw runtime validation; use --mixed-backend-check for observe-only commissioning")
+        if config.get("v3", {}).get("default_mode") != "AUTO_ROAM":
+            raise RuntimeError("Normal mixed station must start in AUTO_ROAM; Manual/Hold is an explicit override")
     default = config.get("v3", {}).get("default_mode", "MANUAL")
     if config_path == firmware / "config/turret.yaml" and default != "AUTO_ROAM":
         raise RuntimeError("Normal station config must set v3.default_mode: AUTO_ROAM")
