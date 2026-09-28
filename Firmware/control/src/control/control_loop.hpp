@@ -343,6 +343,7 @@ class ControlLoop {
   // request and an outcome per stop, and the log has a line saying how the process ended, and
   // nothing joins them. `stop_id` is the join key. docs/ADR-001/docs/07, WP2.
   void note_shutdown(bool parked, const std::string& cause);
+  void stop_and_record_unverified(const std::string& why);
   // Where a trip's frozen window is additionally written. Deliberately a setter on
   // the loop rather than a mutable telemetry() accessor: the store stays read-only
   // to everyone except the one thing that owns it.

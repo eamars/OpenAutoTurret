@@ -278,14 +278,29 @@ bool ControlLoop::start_parking(std::string& err) {
           pitch.disabled_known, pitch.disabled, pitch.in_speed_mode,
           pitch.in_position_mode, fresh(yaw),
           (stop_observation_now - yaw.rx_ns) / 1e6, yaw.q_rad * kRad2Deg);
-      err = "cannot stop/park: require fresh yaw and healthy running pitch feedback";
-      return false;
+      // "cannot stop" is the wrong answer to a request to stop. Refusing here keeps the axes
+      // energised exactly when the evidence about them is weakest, and docs/ADR-001/docs/07
+      // (WP2: "stale 时可请求停止但不盲 park") plus 08/S0 ("无 readiness 拒绝停止请求") say the
+      // same thing in the spec's own words. So the readiness gate now downgrades the *claim*,
+      // never the *request*: send neutral, ask for the pitch disable, write a record that says
+      // it cannot be verified, and accept. Not fail_parking() -- that latches a Fault, and
+      // "stopped while I could not read myself" is not the owner's definition of a fault.
+      const std::string why = "incomplete evidence at the stop request (see the readiness line above)";
+      spdlog::warn("mixed stop accepted unverified: the station stops, the claim is withheld");
+      stop_and_record_unverified(why);
+      err = "stop accepted without verification: " + why;
+      return true;
     }
     const double yaw_speed = std::max(std::abs(yaw.v_rad_s),
                                       std::abs(v_est_[ix(AxisId::Yaw)]));
     if (!std::isfinite(yaw_speed) || yaw_speed > 25.0 * kDeg2Rad) {
-      err = "cannot stop/park: yaw speed exceeds the independent 25 deg/s stop guard";
-      return false;
+      // Same reasoning, and the case that reads best as a bug: a yaw moving faster than 25 deg/s
+      // used to be told it may not stop -- too fast to be allowed to slow down.
+      const std::string why = "yaw outside the verified-stop envelope at the request";
+      spdlog::warn("mixed stop accepted unverified: yaw_speed={:.3f} deg/s", yaw_speed * kRad2Deg);
+      stop_and_record_unverified(why);
+      err = "stop accepted without verification: " + why;
+      return true;
     }
     const auto& pl = limits_[ix(AxisId::Pitch)];
     const auto& model = models_[ix(AxisId::Pitch)];
@@ -417,6 +432,38 @@ bool ControlLoop::start_parking(std::string& err) {
   manual_.cancel(now_ns_);
   phase_ = Phase::Parking;
   return true;
+}
+
+void ControlLoop::stop_and_record_unverified(const std::string& why) {
+  // The action a stop request always performs, and the one record shape that says "we asked and
+  // cannot certify". Deliberately not a Fault: the axes are being driven to neutral, which is
+  // what the caller asked for; what is withheld is the park claim, not the power.
+  if (mixed_stop_id_.empty()) mixed_stop_id_ = "stop-" + std::to_string(now_ns_);
+  backend_->command_velocity(AxisId::Yaw, 0.0);
+  const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
+  if (pitch.has_feedback && std::isfinite(pitch.q_rad)) {
+    if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+    else if (pitch.in_position_mode)
+      backend_->command(AxisId::Pitch, pitch.q_rad, cfg_.park.verify_speed_deg_s * kDeg2Rad);
+  }
+  mixed_yaw_zero_requested_ns_ = now_ns_;
+  StopEvidence ev;
+  ev.stop_id = mixed_stop_id_;
+  ev.reason = "stop_or_park";
+  ev.requested_at_ns = now_ns_;
+  ev.stage = "requested_unverified: " + why;
+  ev.axes[0].axis = "pitch";
+  ev.axes[1].axis = "yaw";
+  for (int i = 0; i < kAxisCount; ++i) {
+    ev.axes[i].zero_requested = Evidence::Requested;
+    ev.axes[i].feedback_age_ms = -1.0;   // unknown here; a 0 would be a reading we did not take
+  }
+  ev.axes[0].disable_requested = Evidence::Requested;
+  ev.axes[0].disable_confirmed = Evidence::Absent;
+  ev.axes[1].disable_requested = Evidence::Unsupported;
+  ev.axes[1].disable_confirmed = Evidence::Unsupported;
+  ev.finalise();
+  telemetry_.append_stop_evidence(ev.to_json_line());
 }
 
 void ControlLoop::note_shutdown(bool parked, const std::string& cause) {
