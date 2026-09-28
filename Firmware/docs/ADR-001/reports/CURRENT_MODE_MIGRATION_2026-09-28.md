@@ -95,3 +95,19 @@ control_mode==Voltage && feedback_frame_id==0x205 && command_frame_id==0x1ff`，
 并**在此处**追加 `current_ring_verified` 与 `0 < host_current_limit_a <= 1.62` 两项检查；
 错误信息也要一分为二（电压说电压、电流说**缺的是哪一项**），否则"没开 Current Ring"会伪装成
 "你的 profile 形状不对"。
+
+### 解析器站点 3＋4 已试、已回退（本轮，带证据）
+
+试了就把红跑出来：把 `"current_ring_verified"`/`"host_current_limit_a"` 加进
+`check_keys(axes["yaw"], ...)` 的列表之后，**`test_mixed_station_config` 立刻红**——
+它用一份缺 `guard_temp_raw_ceiling` 的 YAML 断言"第一条错误点名该项"，而新键**也变成了必填**，
+于是第一条错误改点名新键。**这说明 `check_keys` 那份列表同时承担两件事：拒绝未知键 **和** 要求全部存在。**
+⇒ 出厂 `turret_mixed.yaml` 里没有这两个新键，若照那样合进去，**整份站配置会变成"缺键"**。
+
+正确做法（下一刀）：新键必须**可选**——要么给 `check_keys` 一份"允许但可缺省"的第二列表，
+要么在读取处用显式默认值 + 单独的未知键豁免。**不能靠把键塞进必填列表蒙过去**，那是把兼容性弄坏。
+
+顺带两个自我纠正：
+- 我一度把"构建失败"读成"ctest 77/77 所以没事"——**ctest 在旧二进制上照样全绿**，
+  这条陷阱我自己上一轮刚点名，这一轮就踩到了；已改成用 `grep -c "error:"` 判构建。
+- 插入点也错了第一次：分支引用 `yaw_axis` 却插在 `auto& yaw_axis = ...` **之前**。
