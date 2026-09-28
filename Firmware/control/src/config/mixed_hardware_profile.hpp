@@ -9,7 +9,10 @@ namespace ota::config::mixed {
 
 enum class Protocol { Gm6020, CyberGear };
 enum class Topology { Continuous, Bounded };
-enum class ControlMode { Voltage, Position, Speed };
+// Current is the GM6020 torque-current mode: the drive closes its own current loop and the host
+// commands amperes. It is only valid when the operator has recorded that the firmware and the
+// Current Ring setting were verified -- the fields below fail closed until then.
+enum class ControlMode { Voltage, Current, Position, Speed };
 
 struct CanBus {
   std::string interface;
@@ -23,6 +26,8 @@ struct Axis {
   uint8_t motor_id = 0;
   Topology topology = Topology::Bounded;
   ControlMode control_mode = ControlMode::Position;
+  bool current_ring_verified = false;   // external precondition: firmware >= v1.0.11.2 and Current Ring enabled
+  double host_current_limit_a = 0.0;      // host-side command clamp, amperes; 0 = unset, which current mode rejects
   std::optional<uint64_t> expected_unique_id;
   std::optional<uint32_t> feedback_frame_id;
   std::optional<uint32_t> command_frame_id;

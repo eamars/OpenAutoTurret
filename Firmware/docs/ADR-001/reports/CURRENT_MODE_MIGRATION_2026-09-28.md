@@ -75,3 +75,23 @@ NaN / 上限 0 / 上限负 / 上限 3.0 / ID 2 全部抛（失败关闭）。
 
 **验收形状**（与 WP3/WP4/WP5 同一套路）：profile 测试里加"选 current 但缺确认位 ⇒ 被拒且信息点名该项"、
 "上限 1.63 ⇒ 被拒"、"`command_frame_id: 0x1FF` 配 current ⇒ 被拒"三条，**每条都得能红**。
+
+## 本轮实地做掉与查到的
+
+**已改（惰性、已验证）**：`mixed_hardware_profile.hpp:12` 的 `ControlMode` 加 `Current`；结构体加两个
+**失败关闭**字段 `current_ring_verified = false`、`host_current_limit_a = 0.0`。
+构建干净、**77/77**。**没有产生任何 unhandled-switch 警告** ⇒ 全仓库不存在对 `ControlMode` 的穷尽 `switch`，
+所以编译器不会替我列清单——**站点得自己找**，这就是一定要读代码、不能靠加枚举蒙混的原因。
+
+**我错了一次并当场纠**：我一度怀疑 `control_mode` 除解析器外无人读（"配置里的模式是装饰品"）。
+grep 证伪：`control/src/control/mixed_can_motor_backend.cpp:76-82` 就读它。
+
+**Layer 3 的靶心（精确到行）**：`mixed_can_motor_backend.cpp:76-82` 是一道**准入合取**——
+`protocol==Gm6020 && bus=="yaw" && motor_id==1 && topology==Continuous &&
+control_mode==Voltage && feedback_frame_id==0x205 && command_frame_id==0x1ff`，
+否则 `err = "mixed profile yaw must be GM6020 ID 1 with continuous voltage control"`。
+
+⇒ 电流模式要进来，改的就是这一处：允许 `Current` 时把 `command_frame_id` 要求换成 **`0x1fe`**，
+并**在此处**追加 `current_ring_verified` 与 `0 < host_current_limit_a <= 1.62` 两项检查；
+错误信息也要一分为二（电压说电压、电流说**缺的是哪一项**），否则"没开 Current Ring"会伪装成
+"你的 profile 形状不对"。
