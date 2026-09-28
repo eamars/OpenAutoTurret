@@ -502,15 +502,13 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
                        yaw_last_voltage_.load());
           last_degrade_log_ns_ = now;
         }
-        yaw_degraded_.store(true);
-        ++yaw_guard_events_;
+        if (!yaw_degraded_.exchange(true)) ++yaw_guard_events_;  // one episode, one count
         send_yaw_zero_locked();
       } else {
         const bool wants_motion = std::abs(requested_speed) >= kNoProgressCommandRadS;
         const bool any_doubt = yaw_guard_doubt(in, wants_motion);
         if (any_doubt) {
-          yaw_degraded_.store(true);
-          ++yaw_guard_events_;
+          if (!yaw_degraded_.exchange(true)) ++yaw_guard_events_;  // one episode, one count
           yaw_stall_streak_ = in.no_progress ? yaw_stall_streak_ + 1 : 0;
           if (now - last_degrade_log_ns_ > 1'000'000'000) {  // at most one line a second
             spdlog::warn("GM6020 degraded, still driving: cond={} rxerr={} txfail={} cmd_stale={} "
