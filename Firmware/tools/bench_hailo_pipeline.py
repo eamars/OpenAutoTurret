@@ -147,8 +147,8 @@ def read_per_core() -> dict[str, tuple[int, int]]:
 
 
 class CameraStats:
-    STAGES = ("capture_wait", "map_into_python", "resize", "pad_copy", "contiguous",
-              "queue_wait", "infer", "postprocess")
+    STAGES = ("capture_wait", "map_into_python", "resize", "pad_copy", "letterbox_total",
+              "contiguous", "queue_wait", "infer", "postprocess")
 
     def __init__(self, model: str, number: int, opened_model: str, spec: dict[str, Any],
                  inference_source: str, source_wh: tuple[int, int]) -> None:
@@ -328,40 +328,77 @@ def main() -> int:
                 config = cam.create_video_configuration(
                     main={"size": main_wh, "format": "RGB888"})
             cam.configure(config)
-            # What the stack *actually* built, not what was asked for: a role silently dropped or
-            # re-derived would turn cell B into cell A with an extra label on it.
-            # `stream_configuration` is a bound method on the installed Picamera2 (0.3.37) and a
-            # property on newer ones; take whichever it is, and if it hands back nothing useful,
-            # the role check below fails loudly rather than measuring the wrong path.
+            # Verify what the stack accepted and what it reports back, rather than assuming the
+            # role exists: `stream_configuration()` on this Picamera2 reports only the main stream
+            # (with stride/framesize, which is what the copy accounting below needs), so role
+            # presence comes from the accepted configuration and the byte size from the API report.
             configured = cam.stream_configuration
+            reported: dict[str, Any] = {}
             if callable(configured):
-                configured = configured()
-            roles = {role: {"size": [int(x) for x in cfg.get("size", [])],
-                            "format": str(cfg.get("format"))}
-                     for role, cfg in (configured or {}).items()
-                     if isinstance(cfg, dict)}
-            if not roles:
-                cam.close()
-                raise SystemExit(f"{spec['model']}: Picamera2 reported no stream configuration, "
-                                 "so the inference stream cannot be verified — refusing to guess "
-                                 "which stream the frames came from")
-            if args.inference_stream == "lores":
-                got = tuple(roles.get("lores", {}).get("size", []))
-                if got != lores_wh:
+                try:
+                    flat = configured()
+                    if isinstance(flat, dict):
+                        reported["main"] = {"size": [int(x) for x in flat.get("size", [])],
+                                            "format": str(flat.get("format")),
+                                            "stride": flat.get("stride"),
+                                            "framesize": flat.get("framesize"),
+                                            "verified_via": "stream_configuration()"}
+                except Exception as exc:  # noqa: BLE001
                     cam.close()
-                    raise SystemExit(f"{spec['model']}: asked for a lores inference stream of "
-                                     f"{lores_wh[0]}x{lores_wh[1]} but the configured streams are "
-                                     f"{roles}; refusing to measure the baseline path under a "
-                                     "'lores' label")
+                    raise SystemExit(f"{spec['model']}: stream_configuration() failed: "
+                                     f"{type(exc).__name__}: {exc}")
+                for role in ("lores", "raw"):
+                    if role not in config:
+                        continue
+                    try:
+                        per_role = configured(role)
+                    except TypeError:
+                        reported[role] = {"verified_via": "accepted configuration only "
+                                                          "(this Picamera2 reports main alone)"}
+                        continue
+                    except Exception as exc:  # noqa: BLE001
+                        cam.close()
+                        raise SystemExit(f"{spec['model']}: stream_configuration({role!r}) failed: "
+                                         f"{type(exc).__name__}: {exc}")
+                    if isinstance(per_role, dict):
+                        reported[role] = {"size": [int(x) for x in per_role.get("size", [])],
+                                          "format": str(per_role.get("format")),
+                                          "stride": per_role.get("stride"),
+                                          "framesize": per_role.get("framesize"),
+                                          "verified_via": f"stream_configuration({role!r})"}
+            roles = {role: {"size": [int(x) for x in cfg["size"]], "format": str(cfg["format"])}
+                     for role, cfg in config.items()
+                     if role in ("main", "lores", "raw") and isinstance(cfg, dict) and cfg}
+            if args.inference_stream == "lores" and "lores" not in roles:
+                cam.close()
+                raise SystemExit(f"{spec['model']}: the stack accepted a configuration with no "
+                                 f"lores role ({roles}); refusing to measure the baseline path "
+                                 "under a 'lores' label")
+            actual_lores = reported.get("lores", {}).get("size", [])
+            if args.inference_stream == "lores" and actual_lores and tuple(actual_lores) != lores_wh:
+                cam.close()
+                raise SystemExit(f"{spec['model']}: asked for lores {lores_wh} but the stack built "
+                                 f"{tuple(actual_lores)}; not measuring that under this label")
+            if args.inference_stream == "main":
+                # The bytes the baseline path really maps: main framesize, from the API itself.
+                main_framesize = reported.get("main", {}).get("framesize")
+                if main_framesize:
+                    mapped_bytes = int(main_framesize)
+                else:
+                    mapped_bytes = spec["width"] * spec["height"] * 3
+            else:
+                mapped_bytes = int(reported.get("lores", {}).get("framesize")
+                                   or lores_wh[0] * lores_wh[1] * 3)
             dur_us = int(round(1e6 / spec["fps"]))
             cam.set_controls({"FrameDurationLimits": (dur_us, dur_us)})
             canvas = np.full((1, in_h, in_w, 3), PAD_VALUE, dtype=np.uint8)
             st = CameraStats(spec["model"], number, opened, spec,
                              "isp_lores" if args.inference_stream == "lores" else "python_main",
                              lores_wh)
-            st.stream_roles = roles
+            st.stream_roles = {"requested": roles, "reported": reported}
             streams.append({"spec": spec, "cam": cam, "stats": st, "canvas": canvas,
                             "role": "lores" if args.inference_stream == "lores" else "main",
+                            "mapped_bytes": mapped_bytes,
                             "queue": collections.deque(maxlen=args.queue_depth)})
             stats[spec["model"]] = st
         for s in streams:
@@ -391,7 +428,9 @@ def main() -> int:
                             arr_bytes = int(arr.nbytes)
                         else:
                             image = request.make_image("main")
-                            arr_bytes = int(image.size[0] * image.size[1] * 3)
+                            # The main buffer's real size comes from the API's own framesize, not
+                            # from width*height*3, so the copy accounting cannot drift from reality.
+                            arr_bytes = int(entry["mapped_bytes"])
                     finally:
                         request.release()
                     st.add("map_into_python", (time.monotonic() - t0) * 1000.0)
@@ -404,11 +443,17 @@ def main() -> int:
                     if role == "lores":
                         pad_into(canvas, arr, in_w)
                         frame = canvas
+                        st.add("pad_copy", (time.monotonic() - t0) * 1000.0)
                     else:
-                        timings: dict[str, float] = {}
+                        timings = {}
                         frame = letterbox_via_pil(image, (in_w, in_h), timings)
+                        # Two separate stages, not one nested number: `resize` is the PIL
+                        # downscale, `pad_copy` is canvas + paste + the NumPy handoff. A previous
+                        # version recorded the whole letterbox as pad_copy, which made the two
+                        # stages look additive when one was inside the other.
                         st.add("resize", timings.get("resize_ms", 0.0))
-                    st.add("pad_copy", (time.monotonic() - t0) * 1000.0)
+                        st.add("pad_copy", timings.get("pad_ms", 0.0))
+                        st.add("letterbox_total", (time.monotonic() - t0) * 1000.0)
                     st.python_bytes_copied += arr_bytes + int(frame.nbytes)
                     t0 = time.monotonic()
                     frame = np.ascontiguousarray(frame)
