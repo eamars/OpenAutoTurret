@@ -157,3 +157,23 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 
 我那个"每相机一个跟踪器"的东西已改名为本来的名字：`perception/tracking/camera_registry.py` /
 `CameraTrackRegistry`（自检 10/10）。
+
+### 撤回 F-WP3-1（我错了，错因写在这）
+
+上面那条"276 个测试从未被收集 / 17 红是低报的绿"**因果不成立**，撤回。实情：
+
+- `perception/tracking/` 与真文件 `track_manager.py`（758 行）**一直存在且被跟踪**；
+- 我用 `cat >` 建自己的文件时**把真文件覆盖了**，又 `git mv` 把覆盖后的版本改名成 `camera_registry.py`；
+  于是出现"122 failed"——那是**我造成的 API 不合**，不是把隐藏失败暴露出来；
+- 我从 `e85c3ce` 恢复的版本与被我覆盖前**逐字相同**（`git diff e5ad6d3 HEAD -- .../track_manager.py` 为空），
+  所以真文件无损；
+- 基线本来、现在也还是：**1026 collected / 17 failed / 985 passed / 24 skipped**。
+
+教训落成动作：在既有目录里**新建同名文件之前先查它是否已被跟踪**（`git ls-tree`/`git status`），
+`cat >` 是破坏性写入；`mkdir -p` 静默存在不报错，会让人以为目录是自己新建的。
+
+### 增量②重述
+
+真 `TrackManager` 一直可用，所以增量②**不是移植、也不是删导入**，而是：`camera_registry.py`
+（每相机一个跟踪器，自检 10/10）**尚未接线**，因此它现在**不构成任何主张**。接线属于增量③
+（`visiond` 双 worker），届时用 `test_visiond` 作闸门——它是绿的。
