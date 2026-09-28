@@ -751,6 +751,7 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
     trip_yaw_locked();
     return;
   }
+  yaw_last_shaped_rad_s_.store(yaw_shaped_speed_rad_s_);  // what the loop was told to track
   yaw_last_voltage_.store(voltage);  // the frame's own magnitude, kept for the next paralysis log
   const auto command = gm6020::voltage_frame(profile_.yaw.motor_id, voltage);
   if (!yaw_bus_.send_frame(command)) trip_yaw_locked();

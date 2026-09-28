@@ -91,6 +91,17 @@ class MotorBackend {
   // a state that is not in should_stop must not appear as a candidate cause, or it
   // shadows the condition that actually fired. `reference_valid` travels as context
   // for exactly that reason.
+  // What the axis was actually ASKED to do last cycle, and what came out of the actuator
+  // law. On a voltage-mode yaw these are visible nowhere else: the drive reports position
+  // and temperature only. Measured today, manual yaw peaked at 5.3 deg/s while pitch reached
+  // 17.6, and the station could not tell me whether we asked for 5 or asked for 20 and were
+  // slow getting there -- which is the difference between a settings bug and an actuator
+  // bug. Zero by default: an axis that does not track its own ask says so by being silent.
+  virtual double diag_commanded_speed_rad_s() const { return 0.0; }
+  virtual double diag_output() const { return 0.0; }
+  virtual bool diag_degraded() const { return false; }
+  virtual int diag_guard_events() const { return 0; }
+
   struct TripInputs {
     bool feedback_unsafe = false;
     bool can_down = false;

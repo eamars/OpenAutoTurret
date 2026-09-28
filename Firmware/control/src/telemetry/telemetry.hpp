@@ -332,6 +332,13 @@ struct TelemetrySnapshot {
   // on, and labelled as derived rather than as a measured motor quantity.
   double q_ref_rate_yaw_rad_s = 0.0;
   double q_ref_rate_pitch_rad_s = 0.0;
+  // The yaw axis's own ask, in the units the operator reads the tape in, plus the drive
+  // output that went with it and the tiered guard's non-latching observations. Without
+  // these, a slow axis cannot be classified from the page.
+  double yaw_cmd_shaped_deg_s = 0.0;
+  double yaw_cmd_output = 0.0;
+  bool yaw_guard_degraded = false;
+  int yaw_guard_events = 0;
   double q_ref_accel_yaw_rad_s2 = 0.0;
   double q_ref_accel_pitch_rad_s2 = 0.0;
   bool q_ref_rate_valid = false;

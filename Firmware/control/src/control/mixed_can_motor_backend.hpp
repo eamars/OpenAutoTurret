@@ -195,6 +195,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   // (our bug) from pushing hard against something solid (a fact about the world). Named as
   // the missing evidence in the 2026-09-28 case file and still missing an hour later.
   std::atomic<int> yaw_last_voltage_{0};
+  std::atomic<double> yaw_last_shaped_rad_s_{0};
   int yaw_stall_streak_ = 0;
   int64_t last_degrade_log_ns_ = 0;
   // Public: an axis that has been limping is worth a strip indicator, and a counter is the
@@ -202,6 +203,12 @@ class MixedCanMotorBackend final : public MotorBackend {
  public:
   bool yaw_degraded() const { return yaw_degraded_.load(); }
   int yaw_last_voltage() const { return yaw_last_voltage_.load(); }
+  // The ramp's own value: what the velocity loop was told to track last cycle, as opposed
+  // to what the caller asked for (accepted, then shaped) and what the axis measured.
+  double diag_commanded_speed_rad_s() const override { return yaw_last_shaped_rad_s_.load(); }
+  double diag_output() const override { return static_cast<double>(yaw_last_voltage_.load()); }
+  bool diag_degraded() const override { return yaw_degraded_.load(); }
+  int diag_guard_events() const override { return yaw_guard_events_.load(); }
   int yaw_guard_events() const { return yaw_guard_events_.load(); }
  private:
   // When the loop last put a demand in front of this backend (guarded by yaw_mutex_).

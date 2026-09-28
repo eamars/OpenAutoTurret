@@ -290,6 +290,12 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"q_ref_rate_pitch_rad_s\":" << json_finite_or_null(s.q_ref_rate_pitch_rad_s)
      << ",\"q_ref_accel_yaw_rad_s2\":" << json_finite_or_null(s.q_ref_accel_yaw_rad_s2)
      << ",\"q_ref_accel_pitch_rad_s2\":" << json_finite_or_null(s.q_ref_accel_pitch_rad_s2)
+     // The yaw axis's own ask and effort, through json_finite_or_null like every other
+     // double: a bare nan here once poisoned the whole frame for twenty minutes.
+     << ",\"yaw_cmd_shaped_deg_s\":" << json_finite_or_null(s.yaw_cmd_shaped_deg_s)
+     << ",\"yaw_cmd_output\":" << json_finite_or_null(s.yaw_cmd_output)
+     << ",\"yaw_guard_degraded\":" << (s.yaw_guard_degraded ? "true" : "false")
+     << ",\"yaw_guard_events\":" << s.yaw_guard_events
      << ",\"q_ref_rate_valid\":" << (s.q_ref_rate_valid ? "true" : "false")
      << ",\"tracking_velocity_control\":" << (s.tracking_velocity_control ? "true" : "false")
      << ",\"tracking_reference_damped\":" << (s.tracking_reference_damped ? "true" : "false")

@@ -2815,6 +2815,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.control_deadline_grace_us = static_cast<int64_t>(cfg_.deadline_max_us);
     snap.control_deadline_miss_limit = static_cast<int64_t>(cfg_.deadline_miss_threshold);
     snap.envelope_v_max_deg_s = env_.v_max() * kRad2Deg;
+    snap.yaw_cmd_shaped_deg_s = backend_->diag_commanded_speed_rad_s() * kRad2Deg;
+    snap.yaw_cmd_output = backend_->diag_output();
+    snap.yaw_guard_degraded = backend_->diag_degraded();
+    snap.yaw_guard_events = backend_->diag_guard_events();
     snap.camera_measurement_age_ms = -1;
     if (camera_cal_mtime_ns_ > 0) {
       const int64_t realtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
