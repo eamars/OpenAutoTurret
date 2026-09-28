@@ -603,3 +603,26 @@ shaped speed forward so the loop only closes the error). The owner accepts the c
 slowness for now — "如果是PID导致的速度缓慢那我可以接受。目前先不改" — and wants to tune it
 afterwards. `yaw_cmd_shaped_deg_s` / `yaw_cmd_output` in `/api/state` are the instruments for
 that session: the measurement is the lag between ask and measured, in milliseconds.
+
+## The station's SSH identity is passed in, not hoped for
+
+Measured 2026-09-28: after the DSH container image was rebuilt, every `ssh` in
+`tools/deploy_station.py` started failing with status 255 — the container's home is not durable, and the
+ambient `~/.ssh/known_hosts` that earlier deploys had silently relied on went away with the old container.
+A deploy that only works while one container's home directory survives is not a deploy.
+
+So the station's key is pinned in a file and handed to the tool explicitly:
+
+```bash
+OTA_KNOWN_HOSTS=/workspace/general_purpose/.secrets/ssh/known_hosts_station \
+  python3 "$PWD/Firmware/tools/deploy_station.py" \
+  --host eamars@rpi-turret --connect-address 192.168.2.100 --activate --ready-timeout 420
+```
+
+`--known-hosts` sets `StrictHostKeyChecking=yes` and blanks `GlobalKnownHostsFile`, so a different box
+wearing that address cannot be accepted silently. The pinned line is
+
+    256 SHA256:ll1B6KKdmry4daddh4fMxJ4ecnLS7zp9hBH+3DO0fQw rpi-turret,192.168.2.100 (ED25519)
+
+which was checked against the host answering today (`hostname` = `rpi-turret`, `uname -m` = `aarch64`).
+If that fingerprint ever changes, that is a finding to investigate, not a line to update.

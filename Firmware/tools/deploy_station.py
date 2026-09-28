@@ -5,6 +5,8 @@ starting the new one. Never resets, cleans or overwrites the target checkout.
 """
 import argparse
 import ipaddress
+import pathlib
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -27,6 +29,14 @@ def main():
                         help="seconds to wait for automatic readiness after --activate (default: 420)")
     parser.add_argument("--probe-build", action="store_true",
                         help="build only the runtime controller and preflight; defer regression tests")
+    parser.add_argument("--known-hosts", type=pathlib.Path,
+                        default=(pathlib.Path(os.environ["OTA_KNOWN_HOSTS"])
+                                 if os.environ.get("OTA_KNOWN_HOSTS") else None),
+                        help="explicit known_hosts for the station. The container's home is "
+                             "not durable (measured 2026-09-28: an image rebuild took the "
+                             "ambient ~/.ssh/known_hosts with it and every ssh here died with "
+                             "status 255), so the station's identity is passed in, not hoped "
+                             "for. Env OTA_KNOWN_HOSTS does the same for scripts.")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
     parser.add_argument("--commission-mixed-controller", action="store_true",
@@ -57,6 +67,11 @@ def main():
     if args.connect_address:
         connection = ["-o", f"HostName={args.connect_address}",
                       "-o", f"HostKeyAlias={args.host.rsplit('@', 1)[-1]}"]
+    if args.known_hosts is not None:
+        # Pinned identity, checked strictly: a silent yes would let a different box wearing
+        # this address -- or an ARP neighbour -- take over the station's role mid-deploy.
+        connection += ["-o", f"UserKnownHostsFile={args.known_hosts}",
+                       "-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null"]
 
     def remote(command, **kwargs):
         return run(["ssh", "-o", "ConnectTimeout=10", *connection, args.host, command], **kwargs)
