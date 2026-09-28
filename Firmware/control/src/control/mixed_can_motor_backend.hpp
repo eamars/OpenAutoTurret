@@ -205,8 +205,14 @@ class MixedCanMotorBackend final : public MotorBackend {
   int yaw_last_voltage() const { return yaw_last_voltage_.load(); }
   // The ramp's own value: what the velocity loop was told to track last cycle, as opposed
   // to what the caller asked for (accepted, then shaped) and what the axis measured.
-  double diag_commanded_speed_rad_s() const override { return yaw_last_shaped_rad_s_.load(); }
-  double diag_output() const override { return static_cast<double>(yaw_last_voltage_.load()); }
+  double diag_commanded_speed_rad_s(AxisId axis) const override {
+    return axis == AxisId::Yaw ? yaw_last_shaped_rad_s_.load()
+                              : std::numeric_limits<double>::quiet_NaN();
+  }
+  double diag_output(AxisId axis) const override {
+    return axis == AxisId::Yaw ? static_cast<double>(yaw_last_voltage_.load())
+                               : std::numeric_limits<double>::quiet_NaN();
+  }
   bool diag_degraded() const override { return yaw_degraded_.load(); }
   int diag_guard_events() const override { return yaw_guard_events_.load(); }
   int yaw_guard_events() const { return yaw_guard_events_.load(); }

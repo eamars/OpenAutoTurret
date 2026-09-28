@@ -73,6 +73,38 @@ TEST(Telemetry, AFreezeKeepsTheCyclesThatLedToTheTrip) {
   EXPECT_TRUE(t.control_window().frozen == false);
 }
 
+TEST(Telemetry, AStopRecordCarriesWhatTheBackendWasToldAndHowHardItPushed) {
+  // `cmd` is the loop's intent; these two are the last hops before the motor. Without them a
+  // stop record cannot separate "we never asked for speed" from "we asked and the axis did
+  // not answer" -- the question the 2026-09-28 manual-jog measurement hinged on, when the
+  // station could show a slow yaw and no number anywhere said what had been requested.
+  // An axis whose drive does not report answers null, which is the truth; a zero would
+  // claim we asked for nothing.
+  const std::string dir = "/tmp/ota_trace_be_test_" + std::to_string(::getpid());
+  Telemetry t;
+  t.set_trace_archive_dir(dir);
+  ControlLogRecord r;
+  r.timestamp_ns = 5550001112223334445LL % 555000111222333444LL;
+  r.backend_cmd[0] = 0.5;                                        // exactly representable
+  r.backend_cmd[1] = std::numeric_limits<double>::quiet_NaN();   // drive silent about it
+  r.drive_out[0] = 4662.0;
+  r.drive_out[1] = std::numeric_limits<double>::quiet_NaN();
+  r.phase = ota::Phase::Fault;
+  t.push_control(r);
+  t.freeze_control_trace();
+  std::string path;
+  ASSERT_TRUE(t.trace_archive_path(path));
+  std::ifstream in(path);
+  ASSERT_TRUE(in.good()) << path;
+  std::string header, row;
+  std::getline(in, header);
+  std::getline(in, row);
+  EXPECT_NE(std::string::npos, row.find("\"be_cmd\":[0.5,null]")) << row;
+  EXPECT_NE(std::string::npos, row.find("\"vout\":[4662,null]")) << row;
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
 TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   // The socket answer is only there for someone who asks, and asking is exactly
   // what nobody can promise at three in the morning. The freeze therefore also

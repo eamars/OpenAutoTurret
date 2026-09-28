@@ -2214,6 +2214,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.q_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].q_rad;
     rec.v_actual[ix(AxisId::Pitch)] = sp[ix(AxisId::Pitch)].v_rad_s;
     rec.v_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].v_rad_s;
+    // The two hops closest to the motor, per axis: what the backend accepted after its own
+    // gates, and what the actuator law put on the wire. NaN (null in the file) where the
+    // drive does not report it, which is honest rather than a flattering zero.
+    for (int i = 0; i < kAxisCount; ++i) {
+      const AxisId axis = static_cast<AxisId>(i);
+      rec.backend_cmd[i] = backend_->diag_commanded_speed_rad_s(axis);
+      rec.drive_out[i] = backend_->diag_output(axis);
+    }
     // Position-derived acceleration / jerk (C1, A.1): the trustworthy motion
     // derivatives for smoothness observation and jitter-threshold tuning.
     rec.a_actual[ix(AxisId::Pitch)] = a_est_[ix(AxisId::Pitch)];
@@ -2831,8 +2839,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.control_deadline_grace_us = static_cast<int64_t>(cfg_.deadline_max_us);
     snap.control_deadline_miss_limit = static_cast<int64_t>(cfg_.deadline_miss_threshold);
     snap.envelope_v_max_deg_s = env_.v_max() * kRad2Deg;
-    snap.yaw_cmd_shaped_deg_s = backend_->diag_commanded_speed_rad_s() * kRad2Deg;
-    snap.yaw_cmd_output = backend_->diag_output();
+    snap.yaw_cmd_shaped_deg_s = backend_->diag_commanded_speed_rad_s(AxisId::Yaw) * kRad2Deg;
+    snap.yaw_cmd_output = backend_->diag_output(AxisId::Yaw);
     snap.yaw_guard_degraded = backend_->diag_degraded();
     snap.yaw_guard_events = backend_->diag_guard_events();
     snap.camera_measurement_age_ms = -1;

@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -97,8 +98,15 @@ class MotorBackend {
   // 17.6, and the station could not tell me whether we asked for 5 or asked for 20 and were
   // slow getting there -- which is the difference between a settings bug and an actuator
   // bug. Zero by default: an axis that does not track its own ask says so by being silent.
-  virtual double diag_commanded_speed_rad_s() const { return 0.0; }
-  virtual double diag_output() const { return 0.0; }
+  // Per axis, because one backend may own axes it cannot speak for. Unknown is NaN, not 0:
+  // zero reads as "asked for nothing", while the truth is often "this drive does not tell
+  // us", and both the telemetry line and the trip trace already render non-finite as null.
+  virtual double diag_commanded_speed_rad_s(AxisId axis) const {
+    (void)axis; return std::numeric_limits<double>::quiet_NaN();
+  }
+  virtual double diag_output(AxisId axis) const {
+    (void)axis; return std::numeric_limits<double>::quiet_NaN();
+  }
   virtual bool diag_degraded() const { return false; }
   virtual int diag_guard_events() const { return 0; }
 

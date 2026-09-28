@@ -578,6 +578,16 @@ struct ControlLogRecord {
   double q_ref[kAxisCount] = {0.0, 0.0};
   double v_ref[kAxisCount] = {0.0, 0.0};
   double v_command[kAxisCount] = {0.0, 0.0};
+  // What the backend accepted after its own gating and shaping, and what the actuator law
+  // put on the wire. `cmd` above is the loop's intent; these two are the last two hops
+  // before the motor, and without them a stop record cannot distinguish "we never asked for
+  // speed" from "we asked and the axis did not answer" -- the exact question the 2026-09-28
+  // manual-jog measurement turned on. NaN (rendered null) means the backend does not report
+  // it: pitch's CyberGear is such a drive today.
+  double backend_cmd[kAxisCount] = {std::numeric_limits<double>::quiet_NaN(),
+                                    std::numeric_limits<double>::quiet_NaN()};
+  double drive_out[kAxisCount] = {std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::quiet_NaN()};
   double v_estimated[kAxisCount] = {0.0, 0.0};  // feedback-position derivative
   TimeNs feedback_ns[kAxisCount] = {0, 0};
   uint64_t command_seq = 0;
@@ -891,7 +901,8 @@ class Telemetry {
           << "\",\"phase\":\"" << phase_name(r.phase)
           << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
           << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
-          << ",\"cmd\":" << pair(r.v_command) << ",\"effort\":" << pair(r.effort)
+          << ",\"cmd\":" << pair(r.v_command) << ",\"be_cmd\":" << pair(r.backend_cmd)
+          << ",\"vout\":" << pair(r.drive_out) << ",\"effort\":" << pair(r.effort)
           << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
           << ",\"safety\":" << static_cast<int>(r.safety_action)
           << ",\"period_us\":" << r.cycle_duration_us << "}\n";
