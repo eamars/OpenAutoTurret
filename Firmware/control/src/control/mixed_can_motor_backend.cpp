@@ -27,7 +27,16 @@ constexpr double kYawPositionGain = 2.0;
 // correctly tripped the independent 25 deg/s guard. The earlier 30-degree
 // motor probe needed at most 5,643 raw voltage, so retain voltage headroom
 // while reducing the service-loop drive and acceleration for this payload.
-constexpr double kYawOutputCeiling = 9000.0;
+// Yaw drive ceiling in raw GM6020 voltage counts; the protocol accepts up to 25,000 (validated by
+// the velocity controller). 9,000 came from a 30-degree probe that moved the bare yaw with at most
+// 5,643 counts, i.e. it was already 60% of what the rig then needed. With the 3 kg payload written
+// into the pitch section of turret_mixed.yaml, roam and manual jog commanded up to 10 deg/s, the
+// output pinned at 9,000, and the axis made stall-whine without moving (`v_yaw=0`, `stall #3`
+// repeated in controller.log at 19:14-19:15). Raised to 15,000 -- 60% of full scale, not the whole
+// range, so the stall guard still has authority to catch a genuinely blocked axis.
+// DEBT (WP6, single-axis identification): this number belongs in turret_mixed.yaml as
+// axes.yaw.max_output_counts with the measured stall boundary beside it, not in a constant.
+constexpr double kYawOutputCeiling = 15000.0;
 constexpr double kYawVelocityKp = 20000.0;
 constexpr double kYawVelocityKi = 10000.0;
 constexpr TimeNs kFreshnessLimitNs = 100'000'000;
