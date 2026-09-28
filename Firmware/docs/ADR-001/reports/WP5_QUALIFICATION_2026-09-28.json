@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "work_package": "WP5",
+  "title": "Hailo manifest single source; detection semantics; offline accuracy",
+  "actual_commit_sha": "1d97765（本报告随下一提交入库）",
+  "approved_by": "待主人签",
+  "status": "PARTIAL —— 清单一致性问题已收口；检测语义与精度评估需要 Hailo 运行时，NOT_RUN",
+  "station_session_id": null,
+  "boot_id": null,
+  "hardware_manifest_id": null,
+  "hardware_motion_authorized": false,
+  "configuration_hashes": {},
+  "source_record_paths": [
+    "Firmware/docs/ADR-001/reports/WP5_HAILO_MANIFEST_2026-09-28.md",
+    "Firmware/tools/tests/test_manifest_single_truth.py"
+  ],
+  "metrics": {
+    "manifest_tripwire_tests": {
+      "passed": 2,
+      "total": 2
+    },
+    "local_suite": {
+      "passed": 991,
+      "failed": 17,
+      "skipped": 24
+    }
+  },
+  "evidence": [
+    {
+      "claim": "两份清单的同名标量必须相等，且比较不会静默通过",
+      "how": "pytest tools/tests/test_manifest_single_truth.py",
+      "observed": "2 passed；变异检验：把 config 侧 model_id 改成漂移值 ⇒ 1 failed，还原 ⇒ 绿"
+    },
+    {
+      "claim": "对齐只改了工具上报里的一个字符串（无读者受影响）",
+      "how": "读 tools/probe_hailo_camera.py:296 的用法（model_id 仅打印；task 无读者）",
+      "observed": "model_id 现为包内权威值 hailo-yolov8n-coco-hailo8-v2.17.0；task 已从 config 侧删除"
+    },
+    {
+      "claim": "分叉是量出来的、不是推测的",
+      "how": "对四个包内清单逐一比对同名标量",
+      "observed": "每份都是同样两项不一致（model_id 拼写、task 词表）"
+    }
+  ],
+  "limitations": [
+    "结构性问题未解：两份事实仍并存（工具需要 artifact.sha256/architecture 与 runtime.hailort_version）。本绊线只防再分叉，不等于单一事实；真收口要么生成那份文件、要么让工具直接读包内清单",
+    "NMS/label/色序行为 NOT_RUN：需要 Hailo 运行时与真 HEF；本容器无 hailort",
+    "离线精度分数分布 NOT_RUN：无数据集与运行时（07 的 Done 条件'实际返回分数分布可解释'因此未满足）",
+    "model_id 命名风格（连字符 vs 下划线）未裁决，随单一来源收口自然消失",
+    "本轮零硬件动作、未部署；全部验证在本地（09-28 令）"
+  ]
+}
