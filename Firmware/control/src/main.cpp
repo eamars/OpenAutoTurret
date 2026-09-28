@@ -457,6 +457,17 @@ int main(int argc, char** argv) {
   }
   std::array<AxisLogicalModel, 2> saved_models;
   std::array<AxisLimits, 2> saved_limits;
+  if (!retained) {
+    // Say out loud why every boot on this profile homes: the retained-homing store is not built
+    // for the mixed backend, so `reused` below is false by construction -- not because a saved
+    // record failed validation. The owner's ruling of 2026-09-28 ("no re-home while the drives
+    // demonstrably kept power and position") cannot be honoured until retention exists per axis
+    // here: pitch CyberGear is multi-turn absolute, and yaw GM6020 needs the persisted count to
+    // agree with the live encoder before we may skip. Logging the reason is the precondition for
+    // flipping that switch with evidence, instead of discovering it during an incident.
+    spdlog::info("homing retention: unavailable on this profile (mixed/sim); homing at boot is "
+                 "therefore mandatory, zero_source=homing");
+  }
   const bool reused = retained && retained->load(saved_models, saved_limits) &&
       loop.restore_retained_homing(saved_models, saved_limits, err);
   if (!reused && !loop.start_homing(std::move(plan), err)) {
