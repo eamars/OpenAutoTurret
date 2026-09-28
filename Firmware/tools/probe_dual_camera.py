@@ -111,7 +111,9 @@ def _run_window(streams: list[dict[str, Any]], seconds: float) -> None:
                     stream["last_t"] = now
                     stream["last_seq"] = seq
                 finally:
-                    request.dispose()
+                    # The buffer goes back to the sensor, or the pipeline stalls after
+                    # buffer_count frames and the probe reports a confident, wrong trickle.
+                    cam.done(request)
     finally:
         for stream in streams:
             try:
