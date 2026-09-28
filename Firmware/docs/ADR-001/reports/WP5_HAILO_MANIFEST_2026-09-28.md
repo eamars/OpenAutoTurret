@@ -33,3 +33,20 @@
 
 Hailo 真机运行、NMS/label/色序行为、离线精度分布（都需要真模型/Hailo，站离线）；
 `model_id` 命名风格的裁决（下划线 vs 连字符，等主人或等运行时真相统一后自然消失）。
+
+### F-WP5-1 关闭（本轮，本地）
+
+- **先读后用**：`tools/probe_hailo_camera.py` 用 `artifact.sha256`、`artifact.architecture`、
+  `runtime.hailort_version`（真需要 config 侧那份）；`model_id` **只在 :296 被打印上报**；
+  `task` **没有任何读者**。
+- 于是安全动作是：`model_id` 对齐为包内权威值 **`hailo-yolov8n-coco-hailo8-v2.17.0`**
+  （**唯一可观察变化是工具上报里的那个字符串**，说在这儿，不悄悄变）；`task` 从 config 侧**删除**
+  （无人读、且是散文式值，留着等于留一条会走错路不报错的分支）。
+- **绊线**：`tools/tests/test_manifest_single_truth.py` —— 两份清单**同名标量必须相等**，
+  并断言"共享字段非空"（否则比较会**静默通过**）。
+  **变异检验**：把 config 侧改成漂移值 ⇒ `1 failed`；还原 ⇒ 绿。断言有牙齿。
+- 套件：**17 failed / 991 passed**（+2 为本次新增），无回归。
+
+**仍未做**：Hailo 真机、NMS/label/色序、离线精度分数分布 ⇒ `NOT_RUN`（站离线、无 Hailo 运行时）。
+**结构性问题还在**：两份事实并存（工具确实需要 artifact/runtime 那几项），本绊线只防再分叉，
+不等于单一事实。真正的单一来源要么生成那份文件，要么让工具直接读包内清单——留给清醒的一轮。
