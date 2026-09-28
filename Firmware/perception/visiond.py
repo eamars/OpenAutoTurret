@@ -395,6 +395,12 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         print(f"visiond: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
+    # ``info`` only becomes real once a sensor is actually open, but the report path at the end of
+    # this function reads it unconditionally. Binding it before the try means a camera that never
+    # opened still produces that report -- which is the one thing telling an operator why nothing
+    # is streaming. An empty dict degrades the identity to ``/dev/video?`` with source ``index`` and
+    # durable=False: the honest claim for "we could not open a camera, so we cannot name it".
+    info: Dict[str, Any] = {}
     publisher = LatestJsonPublisher(args.publish_dir) if args.publish_dir else None
     wire_publisher = SocketPublisher(args.publish_socket) if args.publish_socket else None
     from common.image_corrections import read_install_orientation
