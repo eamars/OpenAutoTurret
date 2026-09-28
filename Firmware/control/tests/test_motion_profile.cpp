@@ -46,23 +46,37 @@ TEST(MotionConfig, StationTargetsUseServiceMaximumAndKeepOtherModesIndependent) 
   EXPECT_DOUBLE_EQ(loaded.config.shutdown.verify_speed_deg_s,2);
 }
 
+template <class R> std::string why2(const R& r) {
+  std::string out; for (const auto& e : r.errors) { out += out.empty() ? " → " : " | "; out += e; }
+  return out;
+}
+
 TEST(MotionConfig, RejectsMissingPairsTypoesNonfiniteAndExcessiveRates) {
   for (int scenario=0; scenario<11; ++scenario) {
     SCOPED_TRACE(scenario);
     auto root = YAML::LoadFile(station_config());
     auto mode = root["motion"]["modes"]["auto_track"];
-    if (scenario==0) mode.remove("target");
-    if (scenario==1) mode["target"].remove("acceleration_deg_s2");
-    if (scenario==2) mode["target"]["speed_deg_s"] = ".nan";
-    if (scenario==3) mode["maximum"]["acceleration_deg_s2"] = 31;
-    if (scenario==4) mode["target"]["speed_deg_s"] = 21;
-    if (scenario==5) mode["target"]["acceleration_deg_s2"] = -1;
-    if (scenario==6) mode["target"]["speed_degs"] = 10;
+    // The station file declares rates per axis (owner, 2026-09-28), so the mode node itself
+    // carries no pair to break: every scenario below cuts into one axis's own block. Same
+    // intents -- a missing pair, a typo, a non-finite, an excessive rate -- now aimed at the
+    // level where the numbers actually live.
+    // Two station files are loaded here: the mixed one declares rates per axis, the legacy
+    // single-bus one declares them at mode level. Break the pair wherever this file wrote it,
+    // because the point of every scenario is "a rates block missing something is rejected",
+    // not "the mode node specifically is the place".
+    auto yaw = mode["axes"].IsDefined() ? mode["axes"]["yaw"] : mode;
+    if (scenario==0) yaw.remove("target");
+    if (scenario==1) yaw["target"].remove("acceleration_deg_s2");
+    if (scenario==2) yaw["target"]["speed_deg_s"] = ".nan";
+    if (scenario==3) yaw["maximum"]["acceleration_deg_s2"] = 31;
+    if (scenario==4) yaw["target"]["speed_deg_s"] = 21;
+    if (scenario==5) yaw["target"]["acceleration_deg_s2"] = -1;
+    if (scenario==6) yaw["target"]["speed_degs"] = 10;
     if (scenario==7) root["motion"]["modes"].remove("manual");
     if (scenario==8) root["tracking"]["hold_speed_deg_s"] = 20;
     if (scenario==9) root["axes"]["pitch"]["max_acceleration_deg_s2"] = ".inf";
     if (scenario==10) root["v3"]["service_speed_control"] = false;
-    EXPECT_FALSE(load(root).ok);
+    EXPECT_FALSE(load(root).ok) << "scenario " << scenario << " 被接受了" << why2(load(root));
   }
 }
 

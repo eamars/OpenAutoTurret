@@ -582,3 +582,24 @@ session zero is wherever it happened to be when the process started (or the reta
 means the tape's "0 = where I was zeroed" is not reproducible across restarts. The change is
 small and named: where homing establishes the pitch origin, set the yaw session reference to the
 yaw angle at that instant. Until then, treat yaw degree readings as relative, not as position.
+
+### Rates are declared per axis (owner, 2026-09-28), and PID tuning is parked
+
+> 「我建议还是两轴单独设置。我不能确保 yaw 和 pitch 真的能做到等同的加速度。所以分开设置（但是值可以设置成一样）。」
+
+`motion.modes.<mode>.axes.{yaw,pitch}.{maximum,target}` — six numbers per mode, spelled out,
+even where yaw and pitch agree. The loader accepts a mode-level shared pair only for older
+files; a new file that omits it must cover **both** axes, and anything else is an error rather
+than a fall-through onto `MotionRates`' service-cap defaults (20/30/120 nobody wrote).
+`test_mixed_station_config` fails if an axis stops declaring its own six numbers.
+
+Why the distinction matters on this station: yaw closes its own velocity loop in voltage mode
+and was measured (2026-09-28) trailing its reference by ~1 s and settling ~8 deg/s low under the
+3 kg payload, while pitch's drive closes its own loop internally. Declaring them jointly would
+have encoded a claim about the hardware that nobody had measured.
+
+**Parked until ADR-001 is done:** re-tuning the yaw velocity loop (Kp/Ki, and/or feeding the
+shaped speed forward so the loop only closes the error). The owner accepts the current
+slowness for now — "如果是PID导致的速度缓慢那我可以接受。目前先不改" — and wants to tune it
+afterwards. `yaw_cmd_shaped_deg_s` / `yaw_cmd_output` in `/api/state` are the instruments for
+that session: the measurement is the lag between ask and measured, in milliseconds.

@@ -238,15 +238,37 @@ v3:
 # stopping remains a physical verification gap. Homing/parking retain their
 # separately commissioned profiles above. Manual presets scale this base.
 motion:
+  # Each axis declares its own rates, even where the numbers are the same today. Owner's
+  # ruling of 2026-09-28: "我建议还是两轴单独设置。我不能确保yaw和pitch真的能做到等同的加速度。
+  # 所以分开设置（但是值可以设置成一样）" -- yaw closes its own velocity loop in voltage mode
+  # and lags its reference by about a second under the 3 kg payload, while pitch's drive
+  # closes its own internally, so declaring them jointly would be a claim about the hardware
+  # that nobody has measured. Equal values here are a choice, restated per axis, and
+  # test_mixed_station_config fails if an axis stops spelling itself out.
   modes:
     manual:
-      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-      target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+      axes:
+        yaw:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+        pitch:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
     auto_roam:
-      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-      target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+      axes:
+        yaw:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+        pitch:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
     auto_track:
-      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-      # Requested maximum target speed/acceleration; jerk retains its 100 cap.
-      # At full target speed there is no additional speed correction headroom.
-      target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+      axes:
+        yaw:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+          # Requested maximum target speed/acceleration; jerk retains its 100 cap. At full
+          # target speed there is no additional speed correction headroom.
+          target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+        pitch:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+          target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}

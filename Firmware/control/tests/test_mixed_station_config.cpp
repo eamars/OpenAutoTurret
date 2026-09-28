@@ -20,6 +20,14 @@ const std::filesystem::path& firmware_root() {
       std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
   return root;
 }
+const char* kNope = nullptr;  // 只为下面那个 helper 有个锚
+template <class R>
+std::string why(const R& r) {
+  // 失败必须吵、而且带原因：以前这里只说 ok==false，加载器怎么想的要人手跑一遍才知道。
+  std::string out;
+  for (const auto& e : r.errors) { out += out.empty() ? "" : " | "; out += e; }
+  return out.empty() ? std::string("(no reason given)") : out;
+}
 config::LoadResult load_from(YAML::Node root) {
   char path[] = "/tmp/ota_mixed_cfg_XXXXXX";
   const int fd = mkstemp(path);
@@ -38,7 +46,7 @@ const config::LoadResult& station() {
 }
 
 TEST(MixedStationConfig, StationFileLoadsAndNamesTheSplitBusProfile) {
-  ASSERT_TRUE(station().ok);
+  ASSERT_TRUE(station().ok) << why(station());
   for (const auto& e : station().errors) RecordProperty("errors", e);
   EXPECT_EQ(station().config.hardware_profile, "config/mixed_hardware.yaml");
   // The two axes declare the same top speed (owner ruling 2026-09-28). MANUAL is one
@@ -63,10 +71,30 @@ TEST(MixedStationConfig, StationFileLoadsAndNamesTheSplitBusProfile) {
                    axes["yaw"]["max_acceleration_deg_s2"].as<double>());
 }
 
+TEST(MixedStationConfig, EveryAxisDeclaresItsOwnRatesInEveryMode) {
+  // Owner's ruling of 2026-09-28: "我建议还是两轴单独设置。我不能确保yaw和pitch真的能做到
+  // 等同的加速度。所以分开设置（但是值可以设置成一样）". A shared declaration makes the two
+  // axes' equality a side effect of the file's shape; per-axis blocks make it a value someone
+  // wrote down, which is the only version that can disagree with the measured plant later.
+  const YAML::Node modes = YAML::LoadFile((firmware_root() / "config/turret_mixed.yaml").string())
+                              ["motion"]["modes"];
+  for (const char* mode : {"manual", "auto_track", "auto_roam"}) {
+    const auto axes = modes[mode]["axes"];
+    ASSERT_TRUE(axes.IsDefined()) << mode << " declares rates at mode level instead of per axis";
+    for (const char* axis : {"yaw", "pitch"}) {
+      ASSERT_TRUE(axes[axis].IsDefined()) << mode << "." << axis << " is missing its own block";
+      for (const char* which : {"maximum", "target"})
+        for (const char* key : {"speed_deg_s", "acceleration_deg_s2", "jerk_deg_s3"})
+          EXPECT_TRUE(axes[axis][which][key].IsDefined()) << mode << "." << axis << "." << which
+                                                          << "." << key << " not spelled out";
+    }
+  }
+}
+
 TEST(MixedStationConfig, HardwareProfilePinsTheCommissionedTopology) {
   const auto loaded = config::mixed::load_mixed_hardware_profile(
       (firmware_root()/"config/mixed_hardware.yaml").string());
-  ASSERT_TRUE(loaded.ok);
+  ASSERT_TRUE(loaded.ok) << why(loaded);
   EXPECT_EQ(loaded.profile.yaw.protocol, config::mixed::Protocol::Gm6020);
   EXPECT_EQ(loaded.profile.yaw.topology, config::mixed::Topology::Continuous);
   EXPECT_EQ(loaded.profile.yaw.control_mode, config::mixed::ControlMode::Voltage);
@@ -117,7 +145,7 @@ TEST(MixedStationConfig, TemperatureGateIsSpelledOutAndRangeChecked) {
 }
 
 TEST(MixedStationConfig, AxisMaximumsCapEveryServiceModePerAxis) {
-  ASSERT_TRUE(station().ok);
+  ASSERT_TRUE(station().ok) << why(station());
   const auto& m = station().config.motion;
   ASSERT_TRUE(m.configured);
   // No file uses motion.modes.<mode>.axes today: both axes share the mode pair. Until

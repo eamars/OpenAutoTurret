@@ -129,6 +129,12 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
                          control::MotionRates defaults) {
     if (!strict_map(n, {"speed_deg_s", "acceleration_deg_s2", "jerk_deg_s3"}, path, err))
       return defaults;
+    // strict_map guards against unknown names; it does not insist on the ones that must be
+    // there, and until today that was covered up by a mode-level block always being required.
+    // With rates declared per axis, a block missing its acceleration would silently inherit
+    // a struct default -- a number nobody wrote, which is the thing this file is for.
+    for (const char* key : {"speed_deg_s", "acceleration_deg_s2"})
+      if (!n[key].IsDefined()) err.push_back(path + " is missing " + key);
     defaults.speed = alignment_number(n, "speed_deg_s", path, err)*kDeg2Rad;
     defaults.acceleration = alignment_number(n, "acceleration_deg_s2", path, err)*kDeg2Rad;
     if (n["jerk_deg_s3"].IsDefined())
@@ -141,8 +147,19 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
                            control::MotionProfile p, bool axis_override) {
     if (axis_override) strict_map(n, {"maximum", "target"}, path, err);
     else strict_map(n, {"maximum", "target", "axes"}, path, err);
-    p.maximum = rates(fetch(n,"maximum"),path+".maximum",p.maximum);
-    p.target = rates(fetch(n,"target"),path+".target",p.target);
+    // A mode may declare its rates once per axis instead of sharing one pair. When it does,
+    // the shared pair is not merely optional-but-allowed: writing it anyway would put two
+    // numbers in the file for one fact, and the owner's ruling of 2026-09-28 ("两轴单独设置…
+    // 值可以设置成一样") is precisely that the two axes are separate declarations whose
+    // equality is stated, not inherited. So at mode level a missing block is left alone --
+    // the per-axis blocks below are validated with everything else.
+    const bool shared_here = fetch(n, "maximum").IsDefined() && fetch(n, "target").IsDefined();
+    if (axis_override && !(fetch(n,"maximum").IsDefined() && fetch(n,"target").IsDefined()))
+      err.push_back(path + " must declare both maximum and target (an axis block cannot inherit)");
+    if (axis_override || shared_here) {
+      p.maximum = rates(fetch(n,"maximum"),path+".maximum",p.maximum);
+      p.target = rates(fetch(n,"target"),path+".target",p.target);
+    }
     if (p.target.speed > p.maximum.speed || p.target.acceleration > p.maximum.acceleration ||
         p.target.jerk > p.maximum.jerk)
       err.push_back(path + " target must not exceed maximum");
@@ -161,6 +178,14 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
     const auto p = profile(n,path,defaults,false);
     for (int i=0; i<kAxisCount; ++i) c.motion.modes[m][i] = p;
     const auto axes = fetch(n,"axes");
+    // A mode has to get its numbers from somewhere: either it declares the pair itself, or
+    // every axis declares its own. Anything else used to fall through onto MotionRates'
+    // service-cap defaults -- 20/30/120 that no operator wrote, and the reason a "target
+    // removed" config stopped being rejected when the shared block became optional.
+    const bool axes_complete = axes.IsDefined() && !axes.IsNull() &&
+        axes["pitch"].IsDefined() && axes["yaw"].IsDefined();
+    if (!axes_complete && !(fetch(n,"maximum").IsDefined() && fetch(n,"target").IsDefined()))
+      err.push_back(path + " must declare maximum/target, or an axes block covering both axes");
     if (axes.IsDefined() && !axes.IsNull() && strict_map(axes,{"pitch","yaw"},path+".axes",err)) {
       for (int i=0; i<kAxisCount; ++i) {
         const auto name = axis_name(static_cast<AxisId>(i));
@@ -168,6 +193,11 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
           c.motion.modes[m][i] = profile(axes[name],path+".axes."+name,p,true);
       }
     }
+    // Something has to be said about every axis. A mode that spells out only pitch, with no
+    // shared block to fall back on, used to leave yaw on a built-in default in silence.
+    for (int i=0; i<kAxisCount; ++i)
+      if (!(c.motion.modes[m][i].target.speed > 0 && c.motion.modes[m][i].maximum.speed > 0))
+        err.push_back(path + " declares no rates for " + axis_name(static_cast<AxisId>(i)));
   }
   for (int i=0; i<kAxisCount; ++i) {
     const auto& a = c.axes[i];
