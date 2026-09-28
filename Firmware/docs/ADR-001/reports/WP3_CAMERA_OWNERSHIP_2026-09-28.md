@@ -49,3 +49,17 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 所以下一刀要动的是 controld 那条上报通路（视觉上报 → controld 遥测 → web_server.hpp 的 JSON），
 而不是给 webd 加白名单；改完期望值仍然是 `cam-f45ad188 / by-path`。下一刀：把两键加进 `webd/app.py` 的合并清单，
 再把 `by-path` 节点配进 `open_picamera2`（那之后期望值＝`cam-f45ad188 / by-path`）。
+
+## 下一刀的施工清单（追证人字段 `vision_frames` 得到的五个落点，别重新调查一遍）
+
+| 落点 | 位置 | 要做什么 |
+|---|---|---|
+| 感知上报解析 | `control/src/control/control_loop.cpp:2559`（`snap.perception_session_uuid = session_text;` 同段） | 从同一份 JSON 里读 `camera_id` / `camera_identity_source` |
+| 快照赋值 | 同文件 `:2885`（`snap.vision_frames = vs.frames;` 同段） | 一并赋值 |
+| 遥测结构 | `control/src/telemetry/telemetry.hpp:174` 附近 | 加两个字段，**默认空串**（空＝"未上报"，不是"没相机"） |
+| Web 序列化 | `control/src/web/web_server.hpp:173` 附近 | 紧跟 `vision_frames` 输出两键 |
+| 日志行 | `control/src/main.cpp:630` | 顺手带上，现场一眼能看到 |
+
+验收（写死，不接受口头）：`/api/state` 里 `camera_id` 非空；配好 `by-path` 节点之后必须等于
+**`cam-f45ad188`** 且 `camera_identity_source="by-path"`；webd 套件与 C++ 套件全绿；
+`--prebuilt` 部署，站上零编译。
