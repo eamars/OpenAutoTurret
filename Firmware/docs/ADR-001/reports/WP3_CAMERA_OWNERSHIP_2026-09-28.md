@@ -96,3 +96,16 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 启动器把 **stderr** 收进 `vision.log`；我那句 `print` 走 **stdout**，等于打进黑洞——
 所以"代码明显在跑（帧号 8430）、日志里却没有它"。修法：加 `file=sys.stderr`。
 教训写死：**在这个仓库里，守护进程的可观测输出 = stderr；stdout 的 print 不会被采集。**
+
+## 耐久身份上线（第 29 轮）——**但我预告的期望值错了**
+
+部署后站上打印：`visiond: camera identity cam-baa28c2a source=by-path durable=True`
+⇒ 实质目标达成：**身份现在来自端口名、可跨重编号**（不再是 `index/durable=False`）。
+**但我上一轮写死的期望值 `cam-f45ad188` 没出现。** 不偷偷改期望值：原因是同一个节点在
+`/dev/v4l/by-path` 下可能有多个名字，`resolve_durable_id` 取 `sorted()` 的第一个，
+而我当初手工验证用的是我自己从 `ls` 里挑的那一个名字。
+⇒ 该验的性质（durable、端口身份、两节点同一相机）都已成立；**"到底在哈希哪个名字"是我欠的下一个核对**
+（一行打印即可），如果它落在一个含枚举顺序的后缀上，耐久声明就得再收一档。
+
+另记：**WP2 ③（CAN1 断、CAN0 有效）需要 `ip link set can1 down`＝sudo**，我这环境无 sudo，
+得主人方便时配合一次，或由他给一条免密规则。
