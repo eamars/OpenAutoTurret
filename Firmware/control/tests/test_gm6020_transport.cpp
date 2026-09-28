@@ -5,7 +5,9 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <filesystem>
 #include <iterator>
 #include <mutex>
@@ -314,3 +316,47 @@ TEST(SocketCanTypedFrames, VcanRoutesSffEffAndRtrWithoutLosingFlags) {
 }
 
 }  // namespace
+
+
+// Torque-current command path (migration from voltage). Encoding is checked against the
+// documented endpoints, the clamp is checked in amperes, and the unused slots are checked to be
+// zero because a leftover byte there would command a motor this turret does not have.
+TEST(Gm6020Current, Id1FrameIsStandardDlc8On0x1FEWithZeroedUnusedSlots) {
+  const auto f = ota::gm6020::current_frame(1, 0.8, 0.8);
+  EXPECT_EQ(f.id, 0x1feu);
+  EXPECT_FALSE(f.extended);
+  EXPECT_EQ(f.dlc, 8);
+  EXPECT_EQ(f.data[0], 0x11);   // 0.8 A -> 4369 raw -> 0x1111, big-endian
+  EXPECT_EQ(f.data[1], 0x11);
+  for (int i = 2; i < 8; ++i) EXPECT_EQ(f.data[i], 0) << "unused slot " << i;
+}
+
+TEST(Gm6020Current, NegativeCurrentIsTwoSComplementBigEndian) {
+  const auto f = ota::gm6020::current_frame(1, -0.5, 0.8);
+  EXPECT_EQ(f.data[0], 0xF5);   // -2731 -> 0xF555
+  EXPECT_EQ(f.data[1], 0x55);
+}
+
+TEST(Gm6020Current, ScaleMatchesTheDocumentedEndpoints) {
+  EXPECT_EQ(ota::gm6020::current_raw_uncapped(0.0), 0);
+  EXPECT_EQ(ota::gm6020::current_raw_uncapped(3.0), 16384);
+  EXPECT_EQ(ota::gm6020::current_raw_uncapped(-3.0), -16384);
+}
+
+TEST(Gm6020Current, HostLimitClampsBeforeEncoding) {
+  // 2.0 A demanded against a 0.8 A ceiling must arrive at the motor as 0.8 A, not as 2.0 A and
+  // not as a saturated surprise -- and not as 0 either.
+  EXPECT_EQ(ota::gm6020::current_raw_from_amps(2.0, 0.8), ota::gm6020::current_raw_uncapped(0.8));
+  EXPECT_EQ(ota::gm6020::current_raw_from_amps(-2.0, 0.8), ota::gm6020::current_raw_uncapped(-0.8));
+}
+
+TEST(Gm6020Current, UnreasonableCommandsAndLimitsFailClosed) {
+  EXPECT_THROW(ota::gm6020::current_frame(1, NAN, 0.8), std::invalid_argument);
+  EXPECT_THROW(ota::gm6020::current_frame(1, 0.5, 0.0), std::invalid_argument);
+  EXPECT_THROW(ota::gm6020::current_frame(1, 0.5, -1.0), std::invalid_argument);
+  // Above the continuous rating the software refuses rather than quietly agreeing.
+  EXPECT_THROW(ota::gm6020::current_frame(1, 0.5, 3.0), std::invalid_argument);
+  // Only ID 1 is qualified; a second yaw motor is an assumption, not a fact.
+  EXPECT_THROW(ota::gm6020::current_frame(2, 0.5, 0.8), std::invalid_argument);
+  EXPECT_THROW(ota::gm6020::current_raw_uncapped(4.0), std::invalid_argument);
+}
