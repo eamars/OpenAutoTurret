@@ -88,3 +88,19 @@ GM6020 温度/故障策略（:255）、反馈不新鲜、以及 `yaw_speed > 25 
 站回来后的验收（写死）：park 途中连发两次 `stop_motion`/`request_shutdown`，
 读 `stop-evidence.ndjson` 期望 **同一 `stop_id`、`deadline` 不被后推**；
 若第二次请求换出了新 id，这条就还是 FAIL。
+
+## WP2 ② 站上验收 · PASS（断电重启后一次天然样本）
+
+站因电源被断而硬重启（＝WP2-N1 的"凭证断掉"分支：本次必须归零，且冒烟确实看到 `phase=homing`）。
+`--prebuilt` 部署后（65 binaries / 0 failed）：
+
+    ① 观测两行都到位
+       controld: "homing retention: unavailable on this profile (mixed/sim); homing at boot is …"
+       visiond : "camera identity cam-eab9807c source=index durable=False"
+    ② 双发停止探针：AUTO_ROAM 运动中连发两次 request_shutdown
+       第1发 {"ok":true,"verdict":"submitted"}   第2发 {"ok":true,"verdict":"submitted"}
+       新增 2 行，不同 stop_id 数 = 1（stop-582715549569）
+
+⇒ **重复 stop 不再另铸身份、不再后推 deadline**：修复前第二次请求会换出新 `stop_id`，现在只有一把。
+诚实边界：API 的 ack 里没带上我那句 "stop already in progress"（中继只回 `verdict`），
+所以我验的是**可观测后果（一个 stop_id）**，不是那句文案；且这是**一次**样本，不是统计。
