@@ -150,3 +150,20 @@ Expected: (std::string::npos) != (missing.errors[0].find("guard_temp_raw_ceiling
 ⇒ 新键合法、可缺省，**出厂 `turret_mixed.yaml` 不会因为这次改动变成"缺键"**。
 
 **还剩**：站点 4（`control_mode: current` 的解析）——它与这次红**无关**，可以单独做。
+
+### 三条用例为什么还没写：**测试面不存在**（本轮查清，不是拖延）
+
+- `grep 'validate_profile' control/tests/*.cpp` **零命中**——不是没人想起来，是**调不到**：
+  `mixed_can_motor_backend.hpp:140` 起是 `private:`，**`validate_profile(...) const` 在 :149**，
+  而调用它的路径要打开 CAN 套接字 ⇒ 在容器里只能等到真机。
+- 于是"门无人守"是**结构问题**，修法按优先级：
+  1. **把 yaw 的准入规则抽成配置层自由函数**（例如 `config::mixed::validate_yaw_axis(profile, err)`），
+     backend 与测试都调它——**规则回到解析器旁边**，成为"清单级不变量"，测试面自然出现；
+  2. 或把 `validate_profile` 提为 `public static`（最小改动，但把一个实现细节为测试外露）；
+  3. `friend`（最不推荐：测试与类的私有布局焊死）。
+  **我选 1**：它同时解决"这道门只能真机验"的问题，而 2 只是让红能出现。
+- **本轮实测到的可复用件**（下一刀写测试直接用，别再造 fixture）：
+  `control/tests/test_mixed_station_config.cpp` 里有 `firmware_root()`、`why(loaded)`、
+  `config::mixed::load_mixed_hardware_profile(path)`，混合硬件清单文件是
+  **`Firmware/config/mixed_hardware.yaml`**（不是 `turret_mixed.yaml`——后者是运行时总配置）；
+  `:95-109` 已在断言"出厂拓扑钉死为 Voltage / 0x205 / 0x1FF"，**这正是我要防被误删的那条**。
