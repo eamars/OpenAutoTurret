@@ -197,3 +197,32 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 
 中途我自己踩的第二个坑也记一笔：先写了 `config.camera.device`，而 `CameraConfig` 只有几何字段
 （`width/height/frame_rate/preserve_aspect_ratio`），**属性访问直接抛**，`or` 兜不住——16 个测试当场红给我看。
+
+### F-WP3-2 关闭：出厂配置补了 `_mock` 模型项，离线路径可达了
+
+`vision.models._mock`（`adapter: mock`，速率与站点一致以免时序窗口表现得像在 PC 上）。
+名字带下划线是故意的：它不是候选模型，是**离线验收用的选择项**。理由写在项内的 `_what` 里——
+"离线"必须是操作者**能选**的东西，不能是"模型没装好时恰好会发生的事"。
+
+验证（本地，无相机、无 picamera2）：
+
+```
+$ .venv/bin/python -m perception.visiond --config perception/configs/perception_v1.json \
+    --profile _mock --max-frames 6
+visiond: synthetic 6 frames, 0 with tracks, 0 document pairs written
+visiond: worker cam-385fcd67 state=stopped frames=6 dropped=5 generation=1
+```
+
+读法：`state=stopped`＝干净收尾（不是 dead）；`generation=1`＝未被重启过；
+**`dropped=5` 是正确行为**——latest-tap 只有一格且这条路径上**尚无消费者**，故除首帧外每帧覆盖上一帧。
+这个数字现在就是"第二路消费者还没接"的现场证据，而不是一个看起来像 bug 的计数。
+
+套件：**17 failed / 985 passed / 1026 collected**（与改前逐项一致）。
+
+### WP3 剩余（下一轮）
+
+1. **把上面那条人工验证变成断言**：`test_visiond` 里加一例跑 `--profile _mock`（须 `quiet=False`，
+   因为那行受 `--quiet` 抑制），断言出现 `state=stopped` 且 `frames == max_frames`。
+   没有它，这行输出随时可以被人悄悄删掉而没人红。
+2. **A3/T2 仍是 NOT_RUN**：站离线（主人刷 GM6020 固件），且需要真相机帧率。
+3. 双相机（wide/detail）真接入属硬件到位后的事；`CameraTrackRegistry` 与 worker 已就位但**只有单路消费者**。
