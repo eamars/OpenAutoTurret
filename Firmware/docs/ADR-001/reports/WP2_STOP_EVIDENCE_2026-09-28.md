@@ -42,3 +42,22 @@
    串起来要 cause 传进 controld（web 命令加一字段即可），下一片可做。
 3. **`main.cpp` 的 `STOP FAILED` 路径不产出轴证据**——那条路径本来就没有轴级凭据（phase 已是 fault），
    记录缺席是诚实的；但值得在 runbook 里明说（已写进 STATION_OPERATIONS 的"未覆盖"段）。
+
+## 深夜增补：关机会落一行，但 join 还没成（现场证据）
+
+`--prebuilt` 部署（rc=0，站上 65 测试 0 失败）之后现场读到：
+
+    {"kind":"shutdown","stop_id":"stop-none","parked":false,"phase":"fault",
+     "cause":"safety interrupted homing: stale or missing motor feedback"}
+
+**好消息**：结构化关机记录真的落盘了，`json.loads` 一行就解析过；而且它没粉饰——`parked=false`、
+`phase=fault`。
+**没成的**：`stop_id=stop-none` 是**诚实值**——这个进程不是被 stop/park 停的，它死在**归零被安全层
+打断**（反馈陈旧）。于是问题从一件变成两件：① 归零途中反馈变陈旧就直接判 fault，正是 `08 §3` 点名的
+边界（"反馈陈旧"、"park 中反馈丢失"），也和主人"能跑 > hold > fault、看不新鲜≠失控"那条同族；
+② 停机与归零各走各的路径，`stop_id` 只覆盖前者，所以一个进程可以带着完整的一生结束而文件里只有末行。
+⇒ 下一刀明确：把"请求停止"与"有资格宣称 parked"拆开（readiness 只能否定后者，不能拒绝停止本身）；
+`control_loop.cpp` 里 mixed 分支现在有四处会**拒绝停**：需要 pitch 归零 + yaw 会话基准（:249）、
+GM6020 温度/故障策略（:255）、反馈不新鲜、以及 `yaw_speed > 25 °/s`（太快反而不许停）。
+`07` 的 Done 条写的是"stale 时可请求停止但不盲 park"，`08/S0` 要求"无 readiness 拒绝停止请求"——
+现在这四条都和它对不上。这是行为缺陷，不是缺测试。
