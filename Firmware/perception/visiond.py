@@ -518,6 +518,15 @@ def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False
 def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter: Any,
                 camera: CameraOwner, info: Dict[str, Any],
                 wire_publisher: Optional[SocketPublisher] = None) -> int:
+    # WP3: the owner announces which camera it owns, and how durable that claim is. This is the
+    # layer where ownership lives -- carrying it into controld needs a v3 wire-schema bump (the
+    # perception report is a typed structure, not a dict), which belongs to the dual-worker cut
+    # that reworks that header anyway. Saying it here, now, means every boot leaves a record of
+    # the identity it was given -- including when that identity is only a kernel number.
+    _ident = derive_camera_id(str(info.get("device_path")
+                                  or f"/dev/video{info.get('camera_num', '?')}"))
+    print(f"visiond: camera identity {_ident.id} source={_ident.source} "
+          f"durable={_ident.durable}")
     print(f"visiond: camera {info['camera_num']} stream "
           f"{info['stream_size'][0]}x{info['stream_size'][1]} model {info['task']} "
           f"@ {info['inference_rate_hz']} Hz", file=sys.stderr)

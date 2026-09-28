@@ -63,3 +63,15 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 验收（写死，不接受口头）：`/api/state` 里 `camera_id` 非空；配好 `by-path` 节点之后必须等于
 **`cam-f45ad188`** 且 `camera_identity_source="by-path"`；webd 套件与 C++ 套件全绿；
 `--prebuilt` 部署，站上零编译。
+
+## 施工前的发现：那张五步图前提错了（已改道）
+
+五个落点是量出来的没错，但**前提是"感知上报是 JSON 字典"——错了**：`snap.perception_*` 来自
+`selection_.last_set().observation`（`session`/`generation`/`native`，v3 **带类型线格式**），
+`vision_frames` 来自 `VisionLink::Stats`。要往 controld 遥测里加 `camera_id`，就得给 **v3 线格式加字段**
+（Python 写方 + C++ 读方 + 版本/兼容语义），不是加一个键那么简单。
+
+改道（本轮）：**身份先落在 owner 自报这一层**——`visiond` 启动即打印
+`camera identity <id> source=<by-path|index> durable=<…>`，每次开都留一行身份记录；
+上行载荷里的两个键保留为 best-effort。controld 那一份**等 dual-worker 那刀必然 bump 线格式时一起带**，
+那时五步图仍然有效，只是它属于那一刀。
