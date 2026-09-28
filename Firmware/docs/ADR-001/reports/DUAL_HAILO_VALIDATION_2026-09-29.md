@@ -9,7 +9,8 @@
 
 Pi 5 Model B Rev 1.1 / Debian 13 / kernel `6.18.39+rpt-rpi-2712` / rpicam-apps 1.13.0 / libcamera 0.7.2 / Picamera2 0.3.37 / 4 核 / 8062 MB。
 **Hailo-8**（`Board Name: Hailo-8`、`HAILO8`）在 PCIe `0001:01:00.0`，HailoRT 4.23.0；**链路协商到 Gen3 但宽度只有 x1**（`current_link_width=1`，max 4——Pi5 FPC 只给一条 lane；按指示只报告、不动 boot 配置）。
-`hailortcli` 有 `benchmark`/`run2`；**没有 GStreamer（`ldconfig -p | grep -c gstreamer` = 0）、没有 hailoapp/hailomux、`HailoMultiStreamPipeline` 不可导入、没有 `hailortc`、没有 sudo**。
+`hailortcli` 有 `benchmark`/`run2`；**`hailoapp`/`hailomux` 没有、`HailoMultiStreamPipeline` 不可导入、没有 `hailortc`**。
+**更正一处**：我原先写「这台机零 GStreamer」是**错的**——那条 `ldconfig -p | grep -c gstreamer = 0` 是`ldconfig` 不在 ssh PATH 上、`grep -c` 对着空输入数的 0。`dpkg` 里 GStreamer 包有 11 个，**`hailort` 4.23.0 自带 `hailonet`/`synchailonet`/`hailodevicestats` 三个 GStreamer 元素**。详见 `DUAL_HAILO_PHASE1` §2.9。
 身份：`i2c@88000/imx500@1a`（广角）、`i2c@80000/imx477@1a`（窄角）。**所有传感器模式都是 30 fps ⇒ 这台机器上不存在 >30 fps 的模式可测**；广角无原生 1080p（1080p 是 ISP 缩放）。
 
 ## 2. 管线说明（推荐形状 = 今天测出来的 B 路）
@@ -76,8 +77,12 @@ $P $R/Firmware/tools/bench_hailo_pipeline.py --hef $H --seconds 600 --queue-dept
 - **推荐生产点**：**两路 `main 1920×1080`（预览）+ `lores 640×360`（推理）、队列 depth=2 新帧赢、batch-1 单设备**。
   实测 10 分钟：60.04 聚合、**零丢帧**、广角 p99 **55.7 ms**、窄角 p99 **39.8 ms**、CPU 15 %。
 - **不要两台都要 1080p 再在主机缩放**：那一格实测各 ~26 fps、广角 p99 **129 ms**、CPU 43 %。
-- **热/供电约束（真实存在）**：满载出现过 `throttled=0x50000`（bit16 曾欠压 + bit18 曾触发软温度限）；长跑本身没新增事件，但**满载余量不大**，值得查 5V 电源。
-- **延迟口径**：`capture_timestamp_ns = SensorTimestamp = 曝光开始`，所以表里的 e2e **含曝光积分**（当时 AE 顶到 **33.0 ms**）⇒ 对运动目标**偏保守约 16 ms**，且光照变亮会等量下降；EOF 不经 `get_metadata()` 暴露，"读出+ISP 交付"那段**明说没量**。
+- **热/供电约束（真实存在）**：满载出现过 `throttled=0x50000`（bit16 曾欠压 + bit18 曾触发软温度限）；长跑本身没新增事件。
+  主人给的硬件背景把这条解释清楚了：**5V 走很长的链路并且经过滑环，电源端 5.35 V、到 RPi 空载只剩 5.2 V**
+  ⇒ 余量本来就薄，**满载时不要指望它还有一点**。所以：不重启、不加瞬时大电流设备，是这台站的运行前提之一。
+- **延迟口径**：`capture_timestamp_ns = SensorTimestamp = 曝光开始(SOF)` ⇒ 表里的 e2e **已包含**曝光积分（当时 AE 顶到 **33.0 ms**）、
+  传感器读出、ISP、用户态交付、预处理、排队与推理；**"读出 + ISP + 交付"只是没被单独拆分计时，不是没被计入**。
+  相对"画面所代表的时刻"（曝光中心）本表**偏保守约半个曝光**；光照变亮会等量下降（详见 §7 的改写说明）。
 
 ## 6. IMX500 片上 NN：只作辅助，量化如下（默认 OFF 是对的）
 
@@ -118,6 +123,21 @@ $P $R/Firmware/tools/bench_hailo_pipeline.py --hef $H --seconds 600 --queue-dept
    **顺带一条给架构师的副产品**：`/api/state` 的 `camera_id` 与 `camera_identity_source` **是空串**，而 visiond 日志里有
    `identity cam-… source=by-path durable=True` —— 站点**知道**身份却没把它抬到 HTTP 面上，属该修的小缺陷。
 
-2. **"Python 完全不碰像素"的形状没测**：需要 hailort 的 GStreamer element，这台机零 GStreamer、无 sudo。B 是"ISP 做缩放 + Python 一次 691 KB 拷贝"。
+2. **"Python 完全不碰像素"的形状本轮没测**。原因已不是"装不了"：主人授权 sudo 后装了 `gstreamer1.0-tools` 与 `gstreamer1.0-libcamera`（与已装 libcamera **同版本配套**，没碰内核/PCIe 驱动、没重启），`libcamerasrc` + `hailonet` 现在都在，`libcamerasrc → videoconvert → hailonet` 这条路**可以搭**。没测它是因为**架构师判定它不再是必要目标**——那一次 691 KB 拷贝没表现成性能问题。B 仍是"ISP 做缩放 + Python 一次 691 KB 拷贝"。
 3. **>30 fps 的一切**：这台机的模式表里没有。
 4. `perception/tests/test_pipeline.py` 有 2 条红（`model_inference_ms` 记为 unmeasured）**在我动工之前就红**（移开我的两个新文件后同样红）；`vision/tests/test_ipc_publisher.py` 的重连那条也是既有波动。
+
+## 架构师复核结论（09-29）与生产基线
+
+**硬件与 perception transport architecture 验收通过；B 路就是生产基线。**
+
+> **production target：`2 × 1080p main + 2 × 640×360 ISP lores → Hailo，30+30 fps，depth=2/latest-wins，IMX500 片上 NN 默认 OFF`。**
+
+三条他明确"不算 blocker"的：
+1. **B 路没有两路同时有人**：B 已证明两路都实际完成 inference、identity 与 timestamp 贯穿、变量只有 inference source；
+   没检出是镜头里没有合适目标，不是 pipeline 没跑。**补这张"照片"属人到场，不属重测系统**（主人 09-29：延后）。
+2. **`/api/state` 不暴露已有的 durable `camera_id`/`camera_identity_source`**：**明确的小 bug，另开 issue 修**，不阻挡本次验收。
+3. **"Python 完全不碰像素"不再是必要目标**：除非升级到更多相机/更高 FPS/更重的预处理，否则没有证据支持为消灭那次拷贝做 C++/GStreamer 重构。
+
+我这边改了他点的那一处表述（`ISP_INFERENCE_STREAM` §7）：**e2e 已包含曝光、读出、ISP、交付、预处理、排队、推理；
+只是"读出 + ISP + 交付"没有被单独拆分计时**——原话"明说没量"容易被读成"没算进去"，是我的措辞错。

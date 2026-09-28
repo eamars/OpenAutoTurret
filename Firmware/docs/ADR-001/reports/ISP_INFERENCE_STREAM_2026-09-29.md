@@ -81,14 +81,14 @@ cell B 每帧：`make_array("lores")`（**映射 691 KB**）0.89 / 0.99 ms（p50
 `capture_timestamp_ns` 到底是什么时刻——**`SensorTimestamp`，libcamera 语义 = 该帧"曝光开始(SOF)"，单调时钟域**。
 本轮实测到的同一帧元数据里有：`ExposureTime`（**33,044 µs / 33,013 µs——AE 已经打到帧周期上限**）、`FrameDuration`、
 `FrameWallClock`、`ScalerCrop`、`SensorTemperature`，imx500 另有 `CnnOutputTensor` / `CnnInputTensorInfo` / `CnnKpiInfo`
-（片上 NN 自己的输出，Phase 6 要用）。元数据里**没有** `Timestamp`（buffer 的 EOF 时间不经 `get_metadata()` 暴露），
-所以我**不声称**能分解"读出+ISP 交付"那一段。
+（片上 NN 自己的输出，Phase 6 要用）。元数据里**没有** `Timestamp`（buffer 的 EOF 时间不经 `get_metadata()` 暴露）。
 
-诚实口径：**我的 e2e = 曝光开始 → 推理完成**，因此它**包含**曝光积分（这里 33 ms）、ISP、交付、预处理、排队、推理。
-SOF 之前只有光子飞行（可忽略），**没有藏着没量的传感器/ISP 段**。
-反过来还有个偏保守的方向：运动目标的"那一瞬间"实际是曝光中心（SOF + ~16.5 ms），
-⇒ **对运动目标，我报的 e2e 高估约 16 ms。**
-另外：33 ms 曝光说明现场偏暗（AE 顶格）；**亮一点这套 e2e 会等量下降**——本表是"最暗情况"下的数。
+**口径（架构师 09-29 复核后改写，原先那句"明说没量"容易被误读）**：
+`capture_timestamp_ns` 是传感器的 **SOF** 时间戳，因此实测 `e2e = 推理完成时刻 − SensorTimestamp(SOF)`
+**已经包含**曝光积分（这里 33 ms）、传感器读出、ISP 处理、用户态交付、预处理、排队与推理；
+**"读出 + ISP + 交付"这一段只是没有被单独拆分计时，不是没有被计入**。SOF 之前只有光子飞行（可忽略）。
+AE 顶在 33 ms 还带来一个方向明确的方向盘：运动目标的"那一瞬"实际在曝光中心（SOF + ~16.5 ms），
+⇒ **相对画面所代表的时刻，我报的 e2e 偏保守约半个曝光**；光照变亮、曝光缩短，这套数会等量下降——本表是"最暗情况"下的数。
 
 ## 8. 长跑
 
