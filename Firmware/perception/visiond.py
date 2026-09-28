@@ -27,7 +27,7 @@ Optional JSON snapshots are diagnostics, written outside the capture thread.
 """
 from __future__ import annotations
 
-from perception.camera_id import derive_camera_id
+from perception.camera_id import derive_camera_id, resolve_durable_id
 import argparse
 import json
 import os
@@ -523,8 +523,8 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
     # perception report is a typed structure, not a dict), which belongs to the dual-worker cut
     # that reworks that header anyway. Saying it here, now, means every boot leaves a record of
     # the identity it was given -- including when that identity is only a kernel number.
-    _ident = derive_camera_id(str(info.get("device_path")
-                                  or f"/dev/video{info.get('camera_num', '?')}"))
+    _node = str(info.get("device_path") or f"/dev/video{info.get('camera_num', '?')}")
+    _ident = resolve_durable_id(_node)   # prefers a by-path name for the same node, when present
     # file=sys.stderr, like every other line here: the launcher captures stderr into vision.log,
     # so a plain stdout print in this daemon is a print into the void. That is why this line was
     # missing from the station's log even though the code demonstrably ran (frames were flowing).

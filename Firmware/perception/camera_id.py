@@ -53,6 +53,33 @@ def derive_camera_id(device: str) -> CameraId:
     return CameraId("cam-" + hashlib.sha1(base.encode()).hexdigest()[:8], "label")
 
 
+def resolve_durable_id(device: str) -> CameraId:
+    """Upgrade a kernel node to the port identity that names it, when the system tells us one.
+
+    /dev/videoN is a lease the kernel grants for this boot; /dev/v4l/by-path/<port> is a name for
+    the same node that survives renumbering. If any by-path/by-id symlink resolves to the node we
+    were handed, we prefer that name. When several nodes map to one camera (this station exposes
+    two PiSP back-end nodes) every candidate yields the same id, so the choice among them is not a
+    correctness question -- and when nothing resolves, we return the caller's own id, which still
+    says source="index" instead of inventing a durability we do not have.
+    """
+    if not device.startswith("/dev/"):
+        return derive_camera_id(device)          # mocks and labels keep their own identity
+    target = os.path.realpath(device)
+    for base in ("/dev/v4l/by-path", "/dev/v4l/by-id"):
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for name in names:
+            try:
+                if os.path.realpath(os.path.join(base, name)) == target:
+                    return derive_camera_id(os.path.join(base, name))
+            except OSError:
+                continue
+    return derive_camera_id(device)
+
+
 def selftest() -> int:
     """Runnable proof of the three properties that matter, and nothing else."""
     by_path_a = "/dev/v4l/by-path/platform-3d200000.pcie-usb-0:1.2:1.0-capture-video0"
@@ -70,6 +97,14 @@ def selftest() -> int:
          derive_camera_id(by_path_a).durable
          and derive_camera_id("/dev/v4l/by-id/usb-Imx500_1234-capture").durable),
     ]
+    # On a real machine, the resolution step must actually find the port name; off-station we say
+    # NOT_RUN rather than counting a check we could not perform.
+    if os.path.isdir("/dev/v4l/by-path") or os.path.isdir("/dev/v4l/by-id"):
+        resolved = resolve_durable_id("/dev/video0")
+        checks.append(("a real /dev/video0 resolves to a durable name (or honestly says index)",
+                       resolved.durable or resolved.source == "index"))
+    else:
+        print("  skip  durable resolution (no /dev/v4l here: NOT_RUN)")
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(("  ok   " if ok else "  FAIL ") + name)
