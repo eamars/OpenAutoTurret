@@ -404,6 +404,12 @@ AxisSnapshot MixedCanMotorBackend::yaw_snapshot_locked(TimeNs now) const {
     snapshot.rx_ns = std::min(yaw_state_.feedback.rx_ns, now);
     snapshot.q_rad = yaw_state_.position_rad;
     snapshot.v_rad_s = yaw_state_.feedback.speed_rad_s();
+    // The status frame does carry a figure -- it is the drive's own torque current, and
+    // this is where it used to be dropped on the floor. Amperes, not N·m: the guide gives
+    // no torque constant, so reporting 0.0 here would be a lie and reporting newtons would
+    // be a bigger one.
+    snapshot.current_a = yaw_state_.feedback.current_a();
+    snapshot.current_a_known = true;
     snapshot.torque_nm = std::numeric_limits<double>::quiet_NaN();
   } else {
     snapshot.rx_ns = yaw_state_.received ? std::min(yaw_state_.feedback.rx_ns, now) : 0;

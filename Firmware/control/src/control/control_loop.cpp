@@ -2360,6 +2360,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.probe_omega = response_probe_until_ns_ > now_ns ? response_probe_omega_ : 0;
     for (int i = 0; i < kAxisCount; ++i) {
       rec.effort[i] = sp[i].torque_nm;
+      // Straight through, no zero substitution: a drive that reports no current leaves the
+      // snapshot's NaN here, and the serializer renders that as null.
+      rec.current_a[i] = sp[i].current_a;
       rec.probe_goal[i] = response_probe_q_[i];
       rec.feedback_ns[i] = sp[i].rx_ns;
       rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
@@ -2387,9 +2390,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.service_command_rate_pitch_rad_s = service_command_rate[ix(AxisId::Pitch)];
     snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
     snap.effort_yaw = sp[ix(AxisId::Yaw)].torque_nm;
+    snap.current_a_yaw = sp[ix(AxisId::Yaw)].current_a;
     snap.q_pitch_rad = sp[ix(AxisId::Pitch)].q_rad;
     snap.v_pitch_rad_s = sp[ix(AxisId::Pitch)].v_rad_s;
     snap.effort_pitch = sp[ix(AxisId::Pitch)].torque_nm;
+    snap.current_a_pitch = sp[ix(AxisId::Pitch)].current_a;
     snap.q_ref_yaw_rad = q_ref[ix(AxisId::Yaw)];
     snap.q_ref_pitch_rad = q_ref[ix(AxisId::Pitch)];
     {

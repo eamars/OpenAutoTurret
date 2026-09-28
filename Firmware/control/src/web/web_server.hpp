@@ -135,6 +135,11 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"q_ref_pitch_rad\":" << s.q_ref_pitch_rad
      << ",\"effort_yaw\":" << json_finite_or_null(s.effort_yaw)
      << ",\"effort_pitch\":" << s.effort_pitch
+     // The drive's own torque current, in amperes. A separate column from effort_* because
+     // it is a different measurement: the GM6020 answers with a current, the CyberGear with
+     // a torque, and neither borrows the other's unit. Null means that drive reports neither.
+     << ",\"current_a_yaw\":" << json_finite_or_null(s.current_a_yaw)
+     << ",\"current_a_pitch\":" << json_finite_or_null(s.current_a_pitch)
      << ",\"target_az_world_rad\":" << s.target_az_world_rad
      << ",\"target_el_world_rad\":" << s.target_el_world_rad
      << ",\"base_roll_rad\":" << s.base_roll_rad
@@ -675,21 +680,26 @@ class WebServer {
             << ",\"omega\":" << json_finite_or_null(r.probe_omega)
             << ",\"safety\":" << static_cast<int>(r.safety_action)
             << ",\"period_us\":" << r.cycle_duration_us;
-        // A double on this wire can be genuinely unknown — there is no torque figure in
-// a GM6020 status frame — and the rule for that is `null`, already stated and
-// tested for the telemetry path. A tick counter has no such state, so it keeps
-// its digits; a null age would be a different kind of lie.
-const auto jn = [](auto x) {
-  if constexpr (std::is_floating_point_v<decltype(x)>)
-    return json_finite_or_null(static_cast<double>(x));
-  else
-    return std::to_string(x);
-};
-const auto pair = [&](const char* key, const auto* a) {
+        // A double on this wire can be genuinely unknown, and the rule for that is `null`
+        // -- already stated and tested for the telemetry path. Two of these columns are
+        // genuinely per-drive: `effort` is N·m and the GM6020 reports no torque, while
+        // `cur` is the current the GM6020 does report and the CyberGear does not. What used
+        // to be written here -- that a GM6020 status frame carries no figure at all -- was
+        // measured against on 2026-09-29 and did not survive: the frame carries its current,
+        // we parsed it, and then dropped it. A tick counter has no such state, so it keeps
+        // its digits; a null age would be a different kind of lie.
+        const auto jn = [](auto x) {
+          if constexpr (std::is_floating_point_v<decltype(x)>)
+            return json_finite_or_null(static_cast<double>(x));
+          else
+            return std::to_string(x);
+        };
+        const auto pair = [&](const char* key, const auto* a) {
           out << ",\"" << key << "\":[" << jn(a[0]) << ',' << jn(a[1]) << ']';
         };
         pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
-        pair("cmd",r.v_command); pair("effort",r.effort); pair("rx",r.feedback_ns);
+        pair("cmd",r.v_command); pair("effort",r.effort); pair("cur",r.current_a);
+        pair("rx",r.feedback_ns);
         pair("vest",r.v_estimated);
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';

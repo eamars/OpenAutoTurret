@@ -57,8 +57,13 @@ class Telemetry:
     q_pitch_rad: float = 0.0
     v_pitch_rad_s: float = 0.0
     q_ref_pitch_rad: float = 0.0
-    effort_yaw: float | None = None  # GM6020 has no verified torque scaling
+    effort_yaw: float | None = None  # N·m: the GM6020 reports a current, not a torque
     effort_pitch: float = 0.0
+    # The drive's own torque current, in amperes. Its own column because it is a different
+    # measurement from effort_*: the yaw drive answers with amperes, the pitch drive with
+    # N·m, and neither one borrows the other's unit. None means that drive reports neither.
+    current_a_yaw: float | None = None
+    current_a_pitch: float | None = None
     target_az_world_rad: float = 0.0
     target_el_world_rad: float = 0.0
     base_roll_rad: float = 0.0

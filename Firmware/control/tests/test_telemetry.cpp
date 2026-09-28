@@ -105,6 +105,34 @@ TEST(Telemetry, AStopRecordCarriesWhatTheBackendWasToldAndHowHardItPushed) {
   std::filesystem::remove_all(dir, ec);
 }
 
+TEST(Telemetry, ATraceRowCarriesTheCurrentTheDriveReported) {
+  // Until 2026-09-29 the station parsed the GM6020's torque current and threw it away, so
+  // `effort` read null on yaw and a friction investigation had no number to look at. Null
+  // on that column was honest; null on this one would be a gap. Pitch answers null because
+  // its drive reports a torque and no current -- the two columns are two measurements, and
+  // neither borrows the other's unit.
+  const std::string dir = "/tmp/ota_trace_cur_test_" + std::to_string(::getpid());
+  Telemetry t;
+  t.set_trace_archive_dir(dir);
+  ControlLogRecord r;
+  r.timestamp_ns = 444000111222333;
+  r.current_a[0] = std::numeric_limits<double>::quiet_NaN();  // pitch: no current field
+  r.current_a[1] = 1.0;                                       // yaw: exactly 1 A (exact in binary)
+  r.phase = ota::Phase::Hold;
+  t.push_control(r);
+  t.freeze_control_trace();
+  std::string path;
+  ASSERT_TRUE(t.trace_archive_path(path));
+  std::string header, row;
+  std::ifstream in(path);
+  ASSERT_TRUE(in.good()) << path;
+  std::getline(in, header);
+  std::getline(in, row);
+  EXPECT_NE(std::string::npos, row.find("\"cur\":[null,1]")) << row;
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
 TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   // The socket answer is only there for someone who asks, and asking is exactly
   // what nobody can promise at three in the morning. The freeze therefore also

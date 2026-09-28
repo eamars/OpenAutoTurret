@@ -49,6 +49,20 @@ TEST(GM6020Codec, DecodesStandardFeedbackAndRejectsWrongFrameTypes) {
   EXPECT_EQ(decoded.current_raw, -32767);
   EXPECT_EQ(decoded.temperature_raw, 42);
   EXPECT_EQ(decoded.rx_ns, 123456);
+  // Amperes, by the same scale the command side uses. The accessor is a unit conversion
+  // and not a clamp: this frame reports -32767, beyond the +-16384 the command side can
+  // ask for, and inventing a ceiling here would hide exactly the overload a friction
+  // investigation goes looking for.
+  EXPECT_DOUBLE_EQ(decoded.current_a(), -32767 * (3.0 / 16384.0));
+  auto at_full = valid;
+  at_full.data[4] = 0x40;
+  at_full.data[5] = 0x00;  // raw +16384
+  ASSERT_TRUE(ota::gm6020::decode(at_full, 1, decoded));
+  EXPECT_DOUBLE_EQ(decoded.current_a(), 3.0);  // the documented endpoint, exactly
+  at_full.data[4] = 0xC0;
+  at_full.data[5] = 0x00;  // raw -16384
+  ASSERT_TRUE(ota::gm6020::decode(at_full, 1, decoded));
+  EXPECT_DOUBLE_EQ(decoded.current_a(), -3.0);
 
   auto wrong = valid;
   wrong.extended = true;  // Same numeric ID, wrong CAN frame type.

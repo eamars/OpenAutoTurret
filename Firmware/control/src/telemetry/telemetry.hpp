@@ -14,6 +14,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <filesystem>
 #include <fstream>
 #include "control/motion_profile.hpp"
@@ -158,6 +159,11 @@ struct TelemetrySnapshot {
   double q_pitch_rad = 0.0;
   double v_pitch_rad_s = 0.0;
   double effort_pitch = 0.0;
+  // The drive's own torque current, in amperes, where the protocol reports one. NaN -- and
+  // so `null` on the wire -- for a drive that does not; this is not the same question as
+  // effort_*, which is a torque in N·m where one is known at all.
+  double current_a_yaw = std::numeric_limits<double>::quiet_NaN();
+  double current_a_pitch = std::numeric_limits<double>::quiet_NaN();
   // Per-axis references.
   double q_ref_yaw_rad = 0.0;
   double q_ref_pitch_rad = 0.0;
@@ -575,6 +581,11 @@ struct ControlLogRecord {
   double a_actual[kAxisCount] = {0.0, 0.0};    // position-derived accel (rad/s^2)
   double jerk_actual[kAxisCount] = {0.0, 0.0}; // position-derived jerk (rad/s^3)
   double effort[kAxisCount] = {0.0, 0.0};
+  // The drive's own torque current, in amperes, NaN where the protocol has no such field.
+  // Deliberately not folded into `effort`: that column is N·m where one is known at all, and
+  // the GM6020 answers with a current. Two different measurements, two different columns.
+  double current_a[kAxisCount] = {std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::quiet_NaN()};
   double q_ref[kAxisCount] = {0.0, 0.0};
   double v_ref[kAxisCount] = {0.0, 0.0};
   double v_command[kAxisCount] = {0.0, 0.0};
@@ -740,6 +751,14 @@ struct EventRecord {
 template <typename T, std::size_t N>
 class RingBuffer {
  public:
+  // The cap exists so nothing allocates on a control-cycle path -- not so the bytes have
+  // to live on the owner's stack. They used to: the telemetry store holds three of these
+  // (4096 + 8192 + 1024 records), so every object owning one carried four megabytes of
+  // stack, and on 2026-09-29 adding one 16-byte column to a record tipped an 8 MB test
+  // stack. That made a size limit look like a bug, in the process threatening controld
+  // itself, whose ControlLoop has always held this on main()'s stack.
+  RingBuffer() : buf_(std::make_unique<T[]>(N)) {}
+
   void push(const T& item) {
     buf_[write_ % N] = item;
     ++write_;
@@ -775,7 +794,8 @@ class RingBuffer {
 
 
  private:
-  std::array<T, N> buf_{};
+  // Owned, not embedded: see the constructor. A value-initialized array of N.
+  std::unique_ptr<T[]> buf_;
   std::size_t write_ = 0;
   std::size_t count_ = 0;
 };
@@ -841,7 +861,7 @@ class Telemetry {
   // agreed to.
   void freeze_control_trace() {
     std::lock_guard<std::mutex> lk(trace_mu_);
-    const int have = control_log_.latest(frozen_trace_,
+    const int have = control_log_.latest(frozen_trace_.get(),
                                         static_cast<int>(kFrozenTraceCap));
     frozen_count_ = have > 0 ? static_cast<std::size_t>(have) : 0;
     frozen_t_ns_ = frozen_count_ ? frozen_trace_[frozen_count_ - 1].timestamp_ns : 0;
@@ -903,6 +923,10 @@ class Telemetry {
           << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
           << ",\"cmd\":" << pair(r.v_command) << ",\"be_cmd\":" << pair(r.backend_cmd)
           << ",\"vout\":" << pair(r.drive_out) << ",\"effort\":" << pair(r.effort)
+          // Amperes, from the drive that reports them; null where a drive reports no
+          // current. The same column name as the socket answer, so a reader does not have
+          // to learn two vocabularies for the same ring.
+          << ",\"cur\":" << pair(r.current_a)
           << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
           << ",\"safety\":" << static_cast<int>(r.safety_action)
           << ",\"period_us\":" << r.cycle_duration_us << "}\n";
@@ -918,7 +942,7 @@ class Telemetry {
     {
       std::lock_guard<std::mutex> lk(trace_mu_);
       if (frozen_count_) {
-        w.rows.assign(frozen_trace_, frozen_trace_ + frozen_count_);
+        w.rows.assign(frozen_trace_.get(), frozen_trace_.get() + frozen_count_);
         w.frozen = true;
         w.frozen_t_ns = frozen_t_ns_;
       } else {
@@ -1020,7 +1044,10 @@ class Telemetry {
   TelemetrySnapshot snapshot_;
   RingBuffer<ControlLogRecord, kControlLogCap> control_log_;
   // Guarded by trace_mu_ with everything else a reader touches here.
-  ControlLogRecord frozen_trace_[kFrozenTraceCap];
+  // Same lesson as RingBuffer: this one is 320 KB, and it used to sit inside the
+  // store, so the store's owner paid for it on its stack.
+  std::unique_ptr<ControlLogRecord[]> frozen_trace_ =
+      std::make_unique<ControlLogRecord[]>(kFrozenTraceCap);
   std::size_t frozen_count_ = 0;
   int64_t frozen_t_ns_ = 0;
   std::string archive_dir_;

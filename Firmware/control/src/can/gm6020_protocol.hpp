@@ -1,7 +1,10 @@
 #pragma once
 
 // GM6020 guide v1.4: standard CAN, signed big-endian voltage, modulo encoder.
-// Current/temperature remain raw: the guide does not establish feedback scaling.
+// Temperature stays raw: the guide establishes no °C scale. Current does not -- see
+// current_a() below, whose scale is quoted from the same guide line the command side
+// uses, and which was confirmed on this station's wire on 2026-09-29 (a 0.25 A command
+// returned current_raw 1365; 0.25/3.0*16384 = 1365.3).
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
@@ -19,6 +22,9 @@ struct Feedback {
   uint8_t temperature_raw{};
   TimeNs rx_ns{};
   double speed_rad_s() const { return speed_rpm * (2.0 * std::numbers::pi / 60.0); }
+  // Amperes of torque current as reported by the drive, not an inferred N·m.
+  // Defined below, next to the scale, so the two cannot drift apart.
+  double current_a() const;
 };
 
 inline uint16_t be16(const uint8_t* p) { return (uint16_t(p[0]) << 8) | p[1]; }
@@ -58,8 +64,18 @@ inline can::RawFrame voltage_frame(uint8_t motor_id, int voltage) {
 // Amperes are the unit everywhere above this boundary; raw int16 counts exist only here.
 inline constexpr double kRawFullScale = 16384.0;      // documented numeric full scale
 inline constexpr double kAmpsFullScale = 3.0;         // ... which is +-3.0 A of torque current
-inline constexpr double kMaxContinuousA = 1.62;       // DJI maximum continuous rated current
+// Provenance, since this number has been argued about: guide v1.4 states a 1.2 N·m
+// maximum continuous rated *torque* and no continuous *current*. Owner ruling
+// 2026-09-29: keep the constant and keep the 0.8 A profile limit unchanged -- a host
+// envelope gets re-derived after a thermal run, not before one.
+inline constexpr double kMaxContinuousA = 1.62;       // host envelope, not a wire limit
 inline constexpr double kAmpsPerRaw = kAmpsFullScale / kRawFullScale;
+
+// The drive reports its own torque current in the units it accepts on the command side, so
+// the scale is shared by construction instead of repeated. Amperes, deliberately: turning
+// this into N·m needs a torque constant the guide does not give, and an inferred N·m would
+// be a different physical claim wearing a familiar label.
+inline double Feedback::current_a() const { return current_raw * kAmpsPerRaw; }
 
 // Pure encoding: no clamp, so the scale itself can be tested against the documented endpoints.
 inline int current_raw_uncapped(double amps) {

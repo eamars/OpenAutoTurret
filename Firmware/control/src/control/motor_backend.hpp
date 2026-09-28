@@ -34,6 +34,13 @@ struct AxisSnapshot {
   double q_rad = 0.0;
   double v_rad_s = 0.0;
   double torque_nm = 0.0;
+  // Torque current as the drive itself reports it, in amperes. Kept apart from torque_nm on
+  // purpose: the GM6020's status frame carries a current, not a torque, and the guide gives
+  // no torque constant to divide by -- so an N·m figure from it would be an inference
+  // wearing a familiar label. Drives reporting neither leave this NaN with
+  // current_a_known=false; the rule is null, never a flattering zero.
+  double current_a = std::numeric_limits<double>::quiet_NaN();
+  bool current_a_known = false;
   double temp_c = 25.0;
   bool temperature_known = true;  // false when the protocol has no established °C scale
   bool temperature_raw_valid = false;
