@@ -207,7 +207,35 @@ if [ "$ACTION" = deploy ]; then
     echo 'Stop this checkout before deployment, or build a separate release directory.' >&2
     exit 1
   fi
-  cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
+  if [ "${OTA_PREBUILT:-0}" = 1 ] && [ -x "$APP/build-arm64/control/controld" ]; then
+    # The binaries were cross-compiled by the deploying machine (Firmware/tools/cross_build.py)
+    # and uploaded beside this source. Compiling them again here bought nothing: the station has
+    # no knowledge of this code that the machine which built it lacks. Running the suite is the
+    # part that needs the hardware, so that part stays here -- each test binary is executed
+    # directly rather than through ctest, because a CTest cache would point back at the machine
+    # that built it. The symlink keeps every later path in this script unchanged.
+    ln -sfn "$APP/build-arm64" "$APP/build"
+    tests_run=0
+    tests_failed=0
+    while IFS= read -r t; do
+      case "$t" in */_deps/*) continue ;; esac
+      tests_run=$((tests_run + 1))
+      if ! "$t" >"$APP/build-arm64/last-test.log" 2>&1; then
+        tests_failed=$((tests_failed + 1))
+        echo "FAILED $t" >&2
+        tail -n 15 "$APP/build-arm64/last-test.log" >&2
+      fi
+    done < <(find "$APP/build-arm64" -type f -name 'test_*' -perm -u+x)
+    echo "Prebuilt suite on station: $tests_run binaries, $tests_failed failed"
+    if [ "$tests_run" -lt 40 ] || [ "$tests_failed" -ne 0 ]; then
+      # A count that small means the upload lost targets, which would otherwise read as a pass.
+      echo "refusing to call that a green suite" >&2
+      exit 1
+    fi
+  else
+    cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
+  fi
+  if [ "${OTA_PREBUILT:-0}" != 1 ] || [ ! -x "$APP/build-arm64/control/controld" ]; then
   if [ "$PROBE_BUILD" = 1 ]; then
     if [ "$MODE" = imu ]; then
     cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
@@ -222,6 +250,7 @@ if [ "$ACTION" = deploy ]; then
   else
     cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
     ctest --test-dir "$APP/build" --output-on-failure
+  fi
   fi
   ACTION=check
 fi

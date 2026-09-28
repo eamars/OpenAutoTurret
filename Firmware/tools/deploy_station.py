@@ -7,6 +7,7 @@ import argparse
 import ipaddress
 import pathlib
 import os
+import sys
 from pathlib import Path
 import shlex
 import subprocess
@@ -45,6 +46,10 @@ def main():
                              "ambient key went with it and ssh answered 255 -- an auth failure "
                              "that looks exactly like a host-key failure. Passed in, like the "
                              "known_hosts. Env OTA_SSH_IDENTITY does the same for scripts.")
+    parser.add_argument("--prebuilt", action="store_true",
+                        help="cross-compile here with tools/cross_build.py and ship the "
+                             "binaries: the station runs the suite rather than building it. "
+                             "Compiling needs no hardware; only running the tests does.")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
     parser.add_argument("--commission-mixed-controller", action="store_true",
@@ -114,9 +119,21 @@ def main():
            f"ln -s {quote(models)} {quote(release + '/run/hailo-probe')}; fi")
     remote(f"{quote(venv + '/bin/python')} -m pip install --disable-pip-version-check --no-input "
            f"-r {quote(release + '/Firmware/requirements-station.txt')}")
+    if args.prebuilt:
+        # The build machine is this one; see tools/cross_build.py for what it links against and
+        # why that is the station's own library set rather than an approximation of it.
+        run([sys.executable, repo / "Firmware" / "tools" / "cross_build.py"], cwd=repo)
+        artifacts = Path(temporary) / "arm64.tar"
+        run(["tar", "-C", str(repo / "Firmware"), "-cf", str(artifacts),
+             "--exclude=*.o", "--exclude=.ninja_deps", "--exclude=.ninja_log",
+             "--exclude=_deps", "build-arm64"])
+        run(["scp", *connection, str(artifacts), f"{args.host}:{release}/build-arm64.tar"])
+        remote(f"tar -xf {quote(release + '/build-arm64.tar')} -C {quote(release + '/Firmware')} "
+               f"&& rm -- {quote(release + '/build-arm64.tar')}")
     script = release + "/Firmware/scripts/run_application.sh"
     smoke = release + "/Firmware/tools/station_smoke.py"
-    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
+    remote(("OTA_PREBUILT=1 " if args.prebuilt else "")
+           + f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
            + (" --commission-hardware" if args.commission_hardware else "")
            + (" --commission-mixed-controller" if args.commission_mixed_controller else "")
            + (" --probe-imu" if args.probe_imu else ""))

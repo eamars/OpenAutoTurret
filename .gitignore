@@ -12,3 +12,4 @@ __pycache__/
 # Runtime / generated data
 *.log
 run/
+Firmware/build-arm64/
