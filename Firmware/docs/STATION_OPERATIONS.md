@@ -631,3 +631,16 @@ auth failure -- both halves of "the container's home is not durable" were measur
 
 which was checked against the host answering today (`hostname` = `rpi-turret`, `uname -m` = `aarch64`).
 If that fingerprint ever changes, that is a finding to investigate, not a line to update.
+
+## 站从网络上消失（2026-09-28 深夜，第九次 activate 期间）
+
+现象：`--prebuilt` 部署跑到远端 ssh 那一步抛 `CalledProcessError`，随后
+`ssh: connect to host 192.168.2.100 port 22: No route to host`，ping 100% 丢包。
+
+排除网络侧：同一时刻 192.168.2.4（Synology）、.53（打印机）、.40（NVR）**全部 ping 通**，
+默认路由正常；全 /24 广播探测后 `ip neigh` 里 `192.168.2.100` 为 `FAILED`，
+且**没有任何地址带 MAC `88:A2:9E:D9:C9:DF`** ⇒ 不是换了 IP，是主机不在线。
+
+未定原因（不猜成结论）：内核挂死 / 掉电 / 网络栈死。现场处置需要人（我无 sudo、也没有它的电源控制权）。
+待回来后要查的第一样东西：`journalctl -b -1 | tail`（上一次 boot 的末尾）——**如果它是重启过的，
+这段会告诉我们是谁干的；如果它被拔过电，这段会直接断掉。**
