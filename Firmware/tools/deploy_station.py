@@ -123,7 +123,10 @@ def main():
         # The build machine is this one; see tools/cross_build.py for what it links against and
         # why that is the station's own library set rather than an approximation of it.
         run([sys.executable, repo / "Firmware" / "tools" / "cross_build.py"], cwd=repo)
-        artifacts = Path(temporary) / "arm64.tar"
+        # Beside the build tree, not in a temporary directory: the deploying sandbox gave a
+        # freshly created /tmp path to the parent and ENOENT to tar for the same string, which is
+        # the kind of failure that reads like a broken toolchain and is really a writable-path.
+        artifacts = repo / "Firmware" / "build-arm64.tar"
         run(["tar", "-C", str(repo / "Firmware"), "-cf", str(artifacts),
              "--exclude=*.o", "--exclude=.ninja_deps", "--exclude=.ninja_log",
              "--exclude=_deps", "build-arm64"])

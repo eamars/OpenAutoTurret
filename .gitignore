@@ -13,3 +13,5 @@ __pycache__/
 *.log
 run/
 Firmware/build-arm64/
+Firmware/build-arm64.tar
+
