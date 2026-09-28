@@ -119,3 +119,18 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 我上一轮的期望值 `cam-f45ad188` 来自 `platform-1000880000.pisp_be-*`——那是 **PiSP 后端节点**，
 而 owner 打开的是 **CSI 前端节点**：我手工挑错了设备，身份语义本身没错（身份＝owner 实际打开的那个节点所在端口）。
 双节点若将来同时被打开，各自有各自的身份，这正是我们想要的（节点≠相机时，身份也该分开）。
+
+
+---
+
+## 增量台账（2026-09-28 晚，站离线刷机中：全部本地验证）
+
+| 增量 | 内容 | 本地验收 | 状态 |
+|---|---|---|---|
+| 1 | `perception/camera_worker.py`：每相机一个 worker（自有线程、自有 latest tap、代次标注、失败隔离）＋ `WorkerSupervisor` | `python -m perception.camera_worker` **9/9**（死亡隔离／挂起不拖人／洪泛有界且计数／重启换代／旧代次被拒） | **完成**（`6ccd94a`） |
+| 2 | `perception/tracking/track_manager.py`：按 `camera_id` 归置的 pipeline 实例（跟踪状态今日长在 `PerceptionPipeline` 实例里，仓库无 `*Tracker` 类），一个相机的跟踪器抛错不得波及兄弟 | 待做：同形状自检 | 未开始 |
+| 3 | `visiond.py` 真正改用 worker＋manager（现在仍是 `pipeline.py:255` 那一个线程）；预览 latest tap 按相机归置 | 待做：`visiond --selftest` 增加双 worker 断言 | 未开始 |
+| 4 | 资格报告 A3/T2 | **NOT_RUN：站离线（主人刷 GM6020 固件），且 08 的 A3/T2 需真相机帧率** | 押后 |
+
+`LatestTap` 与 `pipeline.PreviewTap` 的分工已写进 `camera_worker.py`：预览那份带 fps 限速与预览计数
+（§39：预览不上关键路径）；跟踪这份带代次、不限速——**把限速套到跟踪路径会悄悄丢跟踪帧**。

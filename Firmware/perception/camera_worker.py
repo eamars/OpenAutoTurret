@@ -28,6 +28,12 @@ from typing import Any, Callable, Dict, Optional
 from perception.camera_id import CameraId
 
 
+# Why this is not ``pipeline.PreviewTap``. That tap belongs to the preview path: it is rate-limited
+# to ``fps`` and carries preview-specific counters, because §39's whole point is that preview must
+# not sit on the control critical path. Applying that limiter to the tracking hand-off would
+# silently discard frames the tracker has not seen yet -- turning a throughput problem into a
+# tracking problem. Different path, different policy; the shared shape (depth one, counted
+# overwrites) is deliberate and stays that way.
 class LatestTap:
     """One-slot hand-off: the newest frame wins and every overwrite is counted."""
 
