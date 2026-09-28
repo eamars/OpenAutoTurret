@@ -422,6 +422,33 @@ bool ControlLoop::start_parking(std::string& err) {
 void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   // Verification failure withholds automatic release. Emergency safety
   // actions retain their independent disable authority.
+  {
+    // A stop that failed still has to close its own record. Before this, the file held a
+    // `requested` line and then silence, so a reader could not tell "the stop was never asked
+    // for" from "we asked, drove it, and could not prove it stopped" -- and the second one is
+    // the case anybody reads the file for. Same stop_id as the request, which is the only
+    // thing that ties the two lines together.
+    StopEvidence ev;
+    if (mixed_stop_id_.empty())
+      mixed_stop_id_ = "stop-" + std::to_string(now_ns_);   // failed before a request was logged
+    ev.stop_id = mixed_stop_id_;
+    ev.reason = fault_reason_.empty() ? "stop_or_park" : "fault_stop";
+    ev.requested_at_ns = now_ns_;
+    ev.stage = "failed: " + reason;
+    ev.axes[0].axis = "pitch";
+    ev.axes[1].axis = "yaw";
+    for (int i = 0; i < kAxisCount; ++i) {
+      // We did send a neutral this function, whatever happened afterwards.
+      ev.axes[i].zero_requested = Evidence::Requested;
+      ev.axes[i].feedback_age_ms = -1.0;   // not measured here; -1 is "unknown", not "instant"
+    }
+    ev.axes[0].disable_requested = Evidence::Requested;
+    ev.axes[0].disable_confirmed = Evidence::Absent;
+    ev.axes[1].disable_requested = Evidence::Unsupported;  // the GM6020 has no disable to confirm
+    ev.axes[1].disable_confirmed = Evidence::Unsupported;
+    ev.finalise();
+    telemetry_.append_stop_evidence(ev.to_json_line());
+  }
   if (backend_->supports_continuous_yaw()) {
     backend_->command_velocity(AxisId::Yaw, 0.0);
     const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
