@@ -26,7 +26,7 @@
 
 - C++：`ctest -E "retained_homing"` **77/77**（`retained_homing` 写 `/dev/shm`，容器内按仓库 AGENTS.md 排除）。
 - Python：`cd Firmware && .venv/bin/python -m pytest -q --ignore=legacy` → **17 failed / 991 passed / 24 skipped**（17 为既有红；**跑子集会因测试内 `os.chdir` 给出假计数**）。
-- 已具名飘红：`vision/tests/test_ipc_receiver…` 不，准确是 `vision/tests/test_ipc_publisher.py::test_reconnect_after_the_daemon_dies_is_caller_policy`（跨运行翻转）。
+- 已具名飘红：`vision/tests/test_ipc_publisher.py::test_reconnect_after_the_daemon_dies_is_caller_policy`（跨运行翻转，推到 MVP 后的测试轮）。
 
 ## 这一晚的三条方法教训（已写进各报告，这里只留骨头）
 
