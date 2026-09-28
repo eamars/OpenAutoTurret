@@ -134,3 +134,26 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 
 `LatestTap` 与 `pipeline.PreviewTap` 的分工已写进 `camera_worker.py`：预览那份带 fps 限速与预览计数
 （§39：预览不上关键路径）；跟踪这份带代次、不限速——**把限速套到跟踪路径会悄悄丢跟踪帧**。
+
+### 发现 F-WP3-1：本地套件先前有 276 个测试**从未被收集**（不是"17 个红"）
+
+`perception/pipeline.py:78`、`perception/replay/evaluator.py:41`、`perception/tests/test_track_manager.py:20`
+都从 `perception.tracking.track_manager` 导入，而**该包在仓库里不存在**（真货在 `vision/track_manager.py`）。
+缺包导致多个测试文件采集期失败，连带**静默丢弃 276 个测试**（`--co` 计数：建包前 750，建包后 1026）。
+因此本报告上方"34→17 failed"的基线是**低报的**；建包后的真实画面是 **122 failed / 880 passed / 1026 collected**，
+其中绝大多数失败是**一直存在、只是不可见**。
+
+推论：`--co` 计数应作为套件的常规断言之一（收集的测试数下降就是红），否则"绿"只反映被收集的那部分。
+
+### 增量②的真正内容（下一刀）
+
+不是"我发明一个 TrackManager"。`pipeline.py:359` 的调用处就是规格：
+`TrackManager(config, session_uuid=..., event_log=..., diagnostics=...)`，带 `.aliases` 与 `.set_selected_uuid`。
+真货 `vision/track_manager.py` 有 `TrackManager/Track/TrackManagerConfig` 但**不满足该签名**（28 个
+`test_track_manager` 在 0.1s 内即失败＝API 不合）。两条路待 V3 文档裁定：
+(a) 把 `vision/track_manager.py` 移植成满足调用处的 `perception/tracking/track_manager.py`；
+(b) 若 V3-2（`12fe12b`：轨道在 visiond 内形成）已让 `pipeline.py` 的 TrackManager 用法成为遗留，则删该导入。
+**先定方向再动手**，不两边都做。
+
+我那个"每相机一个跟踪器"的东西已改名为本来的名字：`perception/tracking/camera_registry.py` /
+`CameraTrackRegistry`（自检 10/10）。
