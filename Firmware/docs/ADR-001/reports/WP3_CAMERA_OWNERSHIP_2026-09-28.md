@@ -23,3 +23,13 @@ video0                                     cam-eab9807c  index    durable=False
 ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚举顺序都不会变，
 而 `/dev/videoN` 会——下一刀接进 visiond 与 protocol 之后，HUD 上应同时看到
 `camera_id` 与 `camera_identity_source`。
+
+## 接线落地（本轮）与它的诚实边界
+
+`visiond` 的上行载荷现在带 `camera_id` + `camera_identity_source`，`webd/protocol.py` 已声明
+（中继带类型，不声明就"存在但到不了页面"）；webd 套件 **269 passed / 1 skipped** 仍绿。
+边界要说清：**平台今天只把 `camera_num`（内核编号）交给我们**，所以线上会读到的多半是
+`source=index, durable=False` —— 不是失败，是**页面第一次诚实地写着"这个身份不耐久"**。
+升级动作是配置层面的：把 `/dev/v4l/by-path/platform-1000880000.pisp_be-video-index0` 交给
+`open_picamera2`，`camera_id` 就变成已在现场验证过的 `cam-f45ad188 / by-path`。
+下一刀之后要做的是 backpressure 显式策略与丢弃计数（A3 的"队列有界"需要可数的东西）。
