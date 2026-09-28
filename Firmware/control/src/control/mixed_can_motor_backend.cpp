@@ -27,20 +27,11 @@ constexpr double kYawPositionGain = 2.0;
 // correctly tripped the independent 25 deg/s guard. The earlier 30-degree
 // motor probe needed at most 5,643 raw voltage, so retain voltage headroom
 // while reducing the service-loop drive and acceleration for this payload.
-// Yaw drive ceiling in raw GM6020 voltage counts; the protocol accepts up to 25,000 (validated by
-// the velocity controller). 9,000 came from a 30-degree probe that moved the bare yaw with at most
-// 5,643 counts, i.e. it was already 60% of what the rig then needed. Tonight roam and manual jog
-// commanded up to 10 deg/s, the output pinned at 9,000, and the axis whined without moving
-// (`v_yaw=0`, `stall #3` repeated in controller.log at 19:14-19:15). Raised to 15,000 -- 60% of
-// full scale, not the whole range, so the stall guard still catches a genuinely blocked axis.
-// WHY the rig needs more than it did is NOT established: the owner says no payload was added, so
-// the config's older "3 kg payload" line is not the explanation. Open candidates -- breakaway
-// friction (harness drag, belt tension, bearing), a reference that ramps faster than breakaway
-// (accel 60 deg/s^2, jerk 300, unchanged today per git), or a drive that was already marginal.
-// WP6's single-axis sweep answers this; guessing at 19:20 does not.
-// DEBT (WP6, single-axis identification): this number belongs in turret_mixed.yaml as
-// axes.yaw.max_output_counts with the measured stall boundary beside it, not in a constant.
-constexpr double kYawOutputCeiling = 15000.0;
+// The yaw drive ceiling is now `yaw_output_ceiling_`, set from turret_mixed.yaml. Its history, kept
+// because it is the reason: it was 9000 because a 30-degree probe moved the bare axis with at most
+// 5,643 counts, and tonight the axis would not move at all with the output pinned there (the rig has
+// a slip ring, so the resistance varies with angle and the old number was headroom measured at one
+// lucky angle). WP6 replaces the single ceiling with a measured vout-vs-angle profile.
 constexpr double kYawVelocityKp = 20000.0;
 constexpr double kYawVelocityKi = 10000.0;
 constexpr TimeNs kFreshnessLimitNs = 100'000'000;
@@ -757,7 +748,7 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   yaw_command_not_sent_.store(false);  // a real frame follows below
   yaw_velocity_loop_previous_command_ns_ = now;
   const int voltage = yaw_velocity_loop_.update(yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now,
-      kYawSpeedCeilingRadS, kYawOutputCeiling, kYawVelocityKp, kYawVelocityKi);
+      kYawSpeedCeilingRadS, yaw_output_ceiling_, kYawVelocityKp, kYawVelocityKi);
   if (!yaw_velocity_loop_.valid()) {
     trip_yaw_locked();
     return;

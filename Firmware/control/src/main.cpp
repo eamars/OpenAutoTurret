@@ -209,6 +209,8 @@ int main(int argc, char** argv) {
     backend = make_sim_backend();
   } else if (mixed_mode) {
     auto mixed = std::make_unique<MixedCanMotorBackend>();
+    mixed->set_yaw_output_ceiling(
+        cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
     std::string cerr;
     if (!mixed->open(mixed_profile, cerr)) {
       spdlog::error("mixed CAN open failed: {}", cerr);

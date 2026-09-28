@@ -83,6 +83,14 @@ class MixedCanMotorBackend final : public MotorBackend {
  public:
   MixedCanMotorBackend();
   ~MixedCanMotorBackend() override;
+
+  // Drive authority for the yaw velocity loop, in raw GM6020 voltage counts (the controller
+  // accepts up to 25000). Public, and written exactly once, by whoever builds this backend: the
+  // backend has no config access of its own, which is why the number used to be a constant here
+  // -- and why the axis stalled at 9000 with the output pinned and no operator way to raise it.
+  // The default keeps the behaviour that shipped on 2026-09-28.
+  void set_yaw_output_ceiling(double counts) { yaw_output_ceiling_ = counts; }
+  double yaw_output_ceiling_ = 15000.0;
   MixedCanMotorBackend(const MixedCanMotorBackend&) = delete;
   MixedCanMotorBackend& operator=(const MixedCanMotorBackend&) = delete;
 

@@ -71,6 +71,10 @@ axes:
     max_velocity_deg_s: 30
     max_acceleration_deg_s2: 60
     max_jerk_deg_s3: 300
+    # Yaw drive authority in raw GM6020 counts (controller accepts <= 25000). 9000 stalled the
+    # axis with the output pinned; 15000 moves it. The slip ring makes resistance angle-dependent,
+    # so WP6 replaces one number with a measured profile -- until then this is the operator's knob.
+    max_output_counts: 15000
     limit_cur_a: 0.0
 homing:
   # Pitch CyberGear gains retained from the successful 5 A pitch homing run.

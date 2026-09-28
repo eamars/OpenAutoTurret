@@ -207,6 +207,14 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
       if (!std::isfinite(value) || value <= 0)
         err.push_back(std::string("axes.")+axis_name(static_cast<AxisId>(i))+" motion limits must be finite and > 0");
   }
+  for (int i = 0; i < kAxisCount; ++i) {
+    // The bounds are the velocity controller's own (`output_ceiling > 25000.0` invalidates it),
+    // so the config rejects them here rather than discovering it as a dead axis at runtime.
+    const double counts = c.axes[i].max_output_counts;
+    if (!std::isfinite(counts) || counts <= 0 || counts > 25000.0)
+      err.push_back(std::string("axes.") + axis_name(static_cast<AxisId>(i)) +
+                    ".max_output_counts must be in (0, 25000] raw drive counts");
+  }
   if (!c.v3.service_speed_control)
     err.push_back("motion requires v3.service_speed_control: true for acceleration enforcement");
   // One source of authority. Old files remain loadable, but mixed new/old
@@ -243,6 +251,7 @@ struct Defaults {
   double max_velocity_deg_s = 30.0;
   double max_acceleration_deg_s2 = 60.0;
   double max_jerk_deg_s3 = 300.0;
+  double max_output_counts = 15000.0;
   double coarse_speed_deg_s = 10.0;
   // Fine approach speed (deg/s). Characterized (drive_current_friction_tuning.md
   // §1, P0j-P0m): at the current friction/load the yaw stick-slips with
@@ -401,6 +410,9 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
                  Defaults().max_acceleration_deg_s2, warn);
   out.max_jerk_deg_s3 = opt_double(anode, "max_jerk_deg_s3", p + "max_jerk_deg_s3",
                                    Defaults().max_jerk_deg_s3, warn);
+  out.max_output_counts =
+      opt_double(anode, "max_output_counts", p + "max_output_counts",
+                 Defaults().max_output_counts, warn);
   out.limit_cur_a = opt_double(anode, "limit_cur_a", p + "limit_cur_a",
                                 name == "pitch" ? can::kPitchCurrentCeilingA : 0.0,
                                 warn);
