@@ -27,6 +27,7 @@ Optional JSON snapshots are diagnostics, written outside the capture thread.
 """
 from __future__ import annotations
 
+from perception.camera_id import derive_camera_id
 import argparse
 import json
 import os
@@ -483,7 +484,15 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             report["camera"] = camera.stats.to_dict()
         if args.diagnostics:
             _dump_diagnostics(args.diagnostics, diagnostics)
-        payload = {"mode": "capture", **report}
+        # WP3: every frame says which camera it came from, and how much that claim is worth.
+        # Today the platform hands us `camera_num`, a kernel number, so the source tag reads
+        # "index" and durable=False -- the HUD shows that instead of my promising durability.
+        # Upgrading it means handing open_picamera2 a /dev/v4l/by-path node, which is a config
+        # change, not a code change; the tag is what makes that difference visible on the page.
+        ident = derive_camera_id(str(info.get("device_path")
+                                   or f"/dev/video{info.get('camera_num', '?')}"))
+        payload = {"mode": "capture", "camera_id": ident.id,
+                   "camera_identity_source": ident.source, **report}
         _write_report(args, payload)
         if not args.quiet:
             print(json.dumps(payload, indent=2))

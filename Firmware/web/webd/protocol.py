@@ -193,6 +193,10 @@ class Telemetry:
     vision_last_frame_sequence: int = 0
     perception_native: bool = False
     perception_session_uuid: str = ""
+    # Which camera produced this, and how durable that claim is: "by-path"/"by-id" survive a
+    # re-number, "index" does not. Declared here or it exists and never reaches the page.
+    camera_id: str = ""
+    camera_identity_source: str = ""
     perception_track_set_sequence: int = 0
     selection_generation: int = 0
     vision_measurement_age_ms: int = -1     # since the last measurement
