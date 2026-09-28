@@ -29,11 +29,15 @@ constexpr double kYawPositionGain = 2.0;
 // while reducing the service-loop drive and acceleration for this payload.
 // Yaw drive ceiling in raw GM6020 voltage counts; the protocol accepts up to 25,000 (validated by
 // the velocity controller). 9,000 came from a 30-degree probe that moved the bare yaw with at most
-// 5,643 counts, i.e. it was already 60% of what the rig then needed. With the 3 kg payload written
-// into the pitch section of turret_mixed.yaml, roam and manual jog commanded up to 10 deg/s, the
-// output pinned at 9,000, and the axis made stall-whine without moving (`v_yaw=0`, `stall #3`
-// repeated in controller.log at 19:14-19:15). Raised to 15,000 -- 60% of full scale, not the whole
-// range, so the stall guard still has authority to catch a genuinely blocked axis.
+// 5,643 counts, i.e. it was already 60% of what the rig then needed. Tonight roam and manual jog
+// commanded up to 10 deg/s, the output pinned at 9,000, and the axis whined without moving
+// (`v_yaw=0`, `stall #3` repeated in controller.log at 19:14-19:15). Raised to 15,000 -- 60% of
+// full scale, not the whole range, so the stall guard still catches a genuinely blocked axis.
+// WHY the rig needs more than it did is NOT established: the owner says no payload was added, so
+// the config's older "3 kg payload" line is not the explanation. Open candidates -- breakaway
+// friction (harness drag, belt tension, bearing), a reference that ramps faster than breakaway
+// (accel 60 deg/s^2, jerk 300, unchanged today per git), or a drive that was already marginal.
+// WP6's single-axis sweep answers this; guessing at 19:20 does not.
 // DEBT (WP6, single-axis identification): this number belongs in turret_mixed.yaml as
 // axes.yaw.max_output_counts with the measured stall boundary beside it, not in a constant.
 constexpr double kYawOutputCeiling = 15000.0;
