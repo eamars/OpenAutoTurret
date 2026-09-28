@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "work_package": "WP4",
+  "title": "Mode-bound calibration manifest and tooling",
+  "status": "PARTIAL —— 本地可做的完成；闭合资格仍为拒绝（诚实），真机项 NOT_RUN",
+  "station_session_id": null,
+  "boot_id": null,
+  "hardware_manifest_id": null,
+  "hardware_motion_authorized": false,
+  "configuration_hashes": {},
+  "source_record_paths": [
+    "Firmware/docs/ADR-001/reports/WP4_CALIBRATION_2026-09-28.md",
+    "Firmware/calibration/manifest.yaml"
+  ],
+  "metrics": {
+    "manifest_selftest": {
+      "passed": 8,
+      "total": 8
+    },
+    "preview_closure_tests": {
+      "passed": 3,
+      "total": 3
+    },
+    "local_suite": {
+      "collected": 1030,
+      "passed": 989,
+      "failed": 17,
+      "skipped": 24
+    }
+  },
+  "evidence": [
+    {
+      "claim": "清单不复制标定数字，只登记出处（路径＋哈希＋会话＋模式＋闭合），且拒绝是有原因的",
+      "how": "python -m calibration.manifest",
+      "observed": "8/8；坏清单（漂移/无会话/闭合未证/文件缺失/schema 不符）逐条被点名拒绝"
+    },
+    {
+      "claim": "真清单今天不给资格",
+      "how": "load('calibration/manifest.yaml')",
+      "observed": "qualified=False：intrinsics/extrinsics closure=claimed；install 无会话且 closure=unknown"
+    },
+    {
+      "claim": "预览半程闭合：画面与几何同语义、且中间态不出画框",
+      "how": "pytest perception/tests/test_preview_closure.py",
+      "observed": "3 passed（四种朝向均自逆）"
+    },
+    {
+      "claim": "本站无 letterbox：模型→原始为平凡换算",
+      "how": "读 perception/model/imx500_yolo.py:240",
+      "observed": "InferenceGeometry(w,h,w,h, bbox_normalized=True) ⇒ 承重不变量 input_size==stream_size"
+    }
+  ],
+  "limitations": [
+    "C1（跨镜留出集、LOS 残差 p95≤0.5°）NOT_RUN：站离线（主人刷 GM6020 固件）且需真机真相机",
+    "input_size==stream_size 的绊线未写：正确的归宿是检测器路径（需 mock harness）；在测试里复制构造等于制造虚假安全感",
+    "F-WP4-1 未裁决：朝向词表宽于实现（图像路径无 rotate_90/270）；我倾向收窄词表，等主人定",
+    "本轮零硬件动作、未部署；全部验证在本地（09-28 令：开发一律本地）",
+    "本地套件仍有 17 个既有红与一个已具名的飘红（vision/test_ipc_publisher 重连用例）"
+  ]
+}
