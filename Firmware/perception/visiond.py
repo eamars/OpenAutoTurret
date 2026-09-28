@@ -615,10 +615,39 @@ def _run_synthetic(args: argparse.Namespace, pipeline: PerceptionPipeline,
     # anchored *behind* the host clock by a whole run, so §40's sensor→publish span stays
     # comparable instead of turning into a clock-domain mismatch on every frame.
     base = int(pipeline.clock()) - frames * interval_ns
-    for index in range(frames):
+    # WP3: the frames are driven by a per-camera worker rather than by this function's own stack,
+    # so the offline path exercises the same lifecycle the second camera will use -- start, retire,
+    # die alone -- instead of only the real-sensor path. The identity is derived from the configured
+    # device, so the identity below is a label rather than a durable path.
+    from perception.camera_id import derive_camera_id
+    from perception.camera_worker import CameraWorker, WorkerSupervisor
+
+    state = {"index": 0}
+
+    def step():
+        index = state["index"]
+        if index >= frames:
+            return None
+        state["index"] += 1
         outcome = pipeline.process_frame(None, None, frame_sequence=index,
                                          sensor_timestamp_ns=base + index * interval_ns)
         _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire)
+        return index
+
+    # The mock profile has no device to name -- ``CameraConfig`` carries geometry, not a path -- so
+    # the identity is a label. ``source=label`` and ``durable=False`` in the report are the truth
+    # about a synthetic run, not a shortfall to apologise for.
+    worker = CameraWorker(derive_camera_id("mock://synthetic"), step)
+    supervisor = WorkerSupervisor().add(worker)
+    supervisor.start_all()
+    deadline = time.monotonic() + max(10.0, frames * (interval_ns / 1e9) * 20)
+    while worker.frames < frames and time.monotonic() < deadline:
+        time.sleep(0.002)
+    worker.stop(join_s=1.0)
+    if worker.frames < frames:
+        print(f"visiond: synthetic worker delivered {worker.frames} of {frames} frames "
+              f"(state {worker.state}) before the deadline", file=sys.stderr)
+    synthetic_worker_status = supervisor.status()
     counters = pipeline.counters
     if not args.quiet:
         print(f"visiond: synthetic {frames} frames, "
@@ -626,6 +655,15 @@ def _run_synthetic(args: argparse.Namespace, pipeline: PerceptionPipeline,
               f"{counters.documents_written} document pairs written"
               + (f", {counters.failures} frame failures" if counters.failures else ""),
               file=sys.stderr)
+        # One line per camera worker: what it delivered, what it dropped, and how it ended. The
+        # state is the point -- "44 of 60 frames" with a dead worker is a different incident than
+        # "60 of 60" with a clean stop, and the difference is only visible if it is said.
+        for key, status in sorted(synthetic_worker_status.items()):
+            print(f"visiond: worker {key[:12]} state={status['state']} "
+                  f"frames={status['frames']} dropped={status['dropped']} "
+                  f"generation={status['generation']}"
+                  + (f" error={status['error']}" if status['error'] else ""),
+                  file=sys.stderr)
     return EXIT_OK
 
 

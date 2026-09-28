@@ -177,3 +177,23 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 真 `TrackManager` 一直可用，所以增量②**不是移植、也不是删导入**，而是：`camera_registry.py`
 （每相机一个跟踪器，自检 10/10）**尚未接线**，因此它现在**不构成任何主张**。接线属于增量③
 （`visiond` 双 worker），届时用 `test_visiond` 作闸门——它是绿的。
+
+### 增量③（本轮）：synthetic 路径改跑在 CameraWorker 上——**已接线，未被行为验证**
+
+`_run_synthetic` 的帧循环从"在守护自己的栈上直接 for 循环"改为跑进 `CameraWorker`＋`WorkerSupervisor`，
+每相机的 `state/frames/dropped/generation/error` 打进 stderr 摘要（本站的日志是从 stderr 采的）。
+
+- 已证：**不破坏既有**——`test_visiond` 25 passed，全量 **17 failed / 985 passed / 1026 collected** 与改前一致。
+- **未证**：新那行 `visiond: worker …` **本地没有任何东西能跑出来**。原因是出厂配置
+  `perception/configs/perception_v1.json` **没有 mock profile**（`--profile mock` 直接被拒），
+  而本容器无 `picamera2`，所以 `isinstance(adapter, MockAdapter)` 那条分支到不了。
+
+### 发现 F-WP3-2：§55.18 的离线验收**按出厂配置跑不起来**
+
+`_run_synthetic` 的注释声称"无传感器、同一条代码路径（recorder/publisher/preview/timings）"，
+但唯一出厂配置里没有能选出 `MockAdapter` 的 profile ⇒ 在没有相机、也没有 picamera2 的机器上，
+这条"离线验收路径"**不可达**。要么配置里补一个 mock profile，要么这条路径等第二台相机才第一次被执行。
+**倾向补配置**（数字进配置，不往代码里塞默认），属于 WP5 清单收口的邻域。
+
+中途我自己踩的第二个坑也记一笔：先写了 `config.camera.device`，而 `CameraConfig` 只有几何字段
+（`width/height/frame_rate/preserve_aspect_ratio`），**属性访问直接抛**，`or` 兜不住——16 个测试当场红给我看。
