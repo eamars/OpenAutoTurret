@@ -51,6 +51,22 @@ C1 的任何数值结论；FOV 的任何补值；detail 相机的标定（硬件
 需要裁决（不在本轮擅自做）：**两边都支持 90/270**，还是**把词表收窄到实现支持的四种**。
 倾向后者：本站实测安装是 `rotate_180`，没人需要 90/270，而词表每宽一项就多一条没人走过的路。
 
+**结案（09-29 03:5x，主人裁决「我听你的」⇒ 收窄词表）**
+
+裁决落地时先复现，**结果与本节原文不符**：`common/image_corrections.py:23` 的 `ORIENTATIONS` 早已只含
+`none`／`rotate_180`／`flip_horizontal`／`flip_vertical` 四种，`validate_orientation("rotate_90")` 本来就被
+点名拒绝（`common/tests/test_image_corrections.py:20` 就是那条断言）。**⇒ 「词表更宽」在本节写作时已经
+过期；引用不优先于复现。**
+
+真正的第二份词表在**测试自己手里**：`perception/tests/test_preview_closure.py` 抄了一份元组
+`("none","rotate_90","rotate_180","rotate_270")`——含两个代码会拒绝的值、漏两个代码支持的值。
+后果两头都坏：合法安装写 `flip_horizontal` 会在这里被误报成「会被当空转」；而真把 `rotate_90` 写成出厂值
+反倒通过，可它在第一帧就抛——**这条测试恰好以反的方式漏掉了它声称要防的那类事故。**
+
+**已做**：两处循环改为遍历 `ORIENTATIONS` 本体，出厂朝向那一条改为问模块一次（`validate_orientation`）。
+**红检**：临时把 `rotate_90` 塞回词表 ⇒ 闭合与几何两条当场翻红（2 failed / 1 passed）；还原后 3/3 绿。
+所以词表哪天再变宽，这里会当场喊，而不是安静地只测老四个。
+
 ### 本轮已证
 
 `perception/tests/test_preview_closure.py`：图像路径实现的四种朝向**都能自我撤销**（预览半程闭合成立）。

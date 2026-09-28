@@ -27,7 +27,7 @@
 ## 测试基线（勿跨 boot 拼统计）
 
 - C++：`ctest -E "retained_homing"` **77/77**（`retained_homing` 写 `/dev/shm`，容器内按仓库 AGENTS.md 排除）。
-- Python：`cd Firmware && .venv/bin/python -m pytest -q --ignore=legacy` → **17 failed / 991 passed / 24 skipped**（17 为既有红；**跑子集会因测试内 `os.chdir` 给出假计数**）。
+- Python：`cd Firmware && .venv/bin/python -m pytest -q --ignore=legacy` → **17 failed / 991 passed / 24 skipped**（**09-29 更正：今天同一棵树两次连跑都是 18 failed / 990 passed，两次 FAILED 集合完全相同**。多出来的那条就是下面这条具名飘红——它单跑 3/3 全红，在套件里也跟着红。**别再把它当「偶尔红」，它现在是常红**，随测试轮一起结）（17 为既有红；**跑子集会因测试内 `os.chdir` 给出假计数**）。
 - 已具名飘红：`vision/tests/test_ipc_publisher.py::test_reconnect_after_the_daemon_dies_is_caller_policy`（跨运行翻转，推到 MVP 后的测试轮）。
 
 ## 这一晚的三条方法教训（已写进各报告，这里只留骨头）
