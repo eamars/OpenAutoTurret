@@ -76,3 +76,15 @@ GM6020 温度/故障策略（:255）、反馈不新鲜、以及 `yaw_speed > 25 
 > ① 上次会话零点已落盘（pitch 绝对角 + yaw 会话计数）；② 驱动器通电连续性可证（同 boot 且记录新鲜）；
 > ③ 落盘值与当前 encoder 一致（不一致＝中途断过电，立即退回归零）。
 > 验收：热重启一次 ⇒ 日志 `zero_source=retained` 且**无归零动作**；拔驱动器电再上电 ⇒ `zero_source=homing`。
+
+## WP2 ② 已落码（站离线，未部署）：重复 stop 幂等
+
+`control_loop.cpp` mixed 分支在重置 park 状态前**没有守卫**，所以 park 途中第二次 STOP 会重算
+`mixed_park_deadline_ns_`（＝反复按停止 ⇒ park 永不超时）**并重铸 `mixed_stop_id_`**
+（＝第一次请求的证据链被丢在新身份之外）。现改为：`mixed_stop_park_` 为真 ⇒ 接受请求、直接返回，
+**deadline / park 状态 / stop_id 三者都不动**。
+
+诚实边界：容器里 **77/77 只证明没编译回归**——仓库里没有构造 `ControlLoop` 的测试，所以这条**没有单测钉住**。
+站回来后的验收（写死）：park 途中连发两次 `stop_motion`/`request_shutdown`，
+读 `stop-evidence.ndjson` 期望 **同一 `stop_id`、`deadline` 不被后推**；
+若第二次请求换出了新 id，这条就还是 FAIL。
