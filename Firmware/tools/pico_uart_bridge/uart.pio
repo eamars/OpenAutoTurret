@@ -1,0 +1,27 @@
+; UART timing adapted from Raspberry Pi pico-examples, copyright (c) 2020
+; Raspberry Pi (Trading) Ltd. SPDX-License-Identifier: BSD-3-Clause
+.program bridge_tx
+.side_set 1 opt
+.wrap_target
+    pull block side 1 [7]
+    set x, 7 side 0 [7]
+tx_bits:
+    out pins, 1
+    jmp x-- tx_bits [6]
+.wrap
+
+.program bridge_rx
+.wrap_target
+rx_start:
+    wait 0 pin 0
+    set x, 7 [10]
+rx_bits:
+    in pins, 1
+    jmp x-- rx_bits [6]
+    jmp pin rx_stop
+    irq 0
+    wait 1 pin 0
+    jmp rx_start
+rx_stop:
+    push block
+.wrap
