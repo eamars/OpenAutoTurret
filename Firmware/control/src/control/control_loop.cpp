@@ -241,8 +241,24 @@ bool ControlLoop::start_parking(std::string& err) {
     }
   }
   if (phase_ == Phase::Parking || phase_ == Phase::Parked) return true;
-  if (phase_ == Phase::Homing || phase_ == Phase::Fault || phase_ == Phase::Recovering) {
-    err = "parking unavailable during homing or fault; Home is required for recovery";
+  if (phase_ == Phase::Homing) {
+    // The seam that mattered most, and it was upstream of today's other fix. Homing is precisely
+    // when feedback is least likely to be readable, and this used to answer "no" to a request to
+    // stop -- which means the one command that must always work was refused for lack of evidence,
+    // while the owner's ruling of today already decided that a hold during homing is a warning
+    // and not a fault. So: accept, drive to neutral, record it as unverified, and let the park
+    // claim stay withheld (the shutdown line will say parked=false, which is the truth).
+    spdlog::warn("stop requested during homing: homing loses, the stop wins; park claim withheld");
+    stop_and_record_unverified("stop arrived while homing");
+    shutdown_requested_.store(true);
+    err = "stop accepted during homing: park claim withheld";
+    return true;
+  }
+  if (phase_ == Phase::Fault || phase_ == Phase::Recovering) {
+    // Still a refusal, and deliberately so: in these phases no motion is being commanded -- the
+    // guard has already taken motion authority away -- so "cannot park" is not a station that
+    // keeps moving. Recovery needs Home, and pretending otherwise would erase that.
+    err = "parking unavailable during fault or recovery; Home is required for recovery";
     return false;
   }
   if (backend_->supports_continuous_yaw()) {
