@@ -18,7 +18,11 @@ void error(LoadResult& result, const std::string& message) {
 
 bool check_keys(const YAML::Node& node, const std::string& path,
                 std::initializer_list<std::string_view> allowed,
-                LoadResult& result) {
+                LoadResult& result,
+                // Keys that are legal but may be absent: presence is still enforced for `allowed`,
+                // so a new optional key cannot quietly turn the shipped station file into a file
+                // with missing required keys.
+                std::initializer_list<std::string_view> optional = {}) {
   if (!node.IsMap()) {
     error(result, path + " must be a mapping");
     return false;
@@ -33,6 +37,7 @@ bool check_keys(const YAML::Node& node, const std::string& path,
     const auto key = entry.first.as<std::string>();
     bool known = false;
     for (const auto candidate : allowed) known |= key == candidate;
+    for (const auto candidate : optional) known |= key == candidate;
     if (!known) {
       error(result, path + " has unknown key '" + key + "'");
       valid = false;
@@ -154,7 +159,7 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
     const auto yaw = axes["yaw"];
     check_keys(yaw, "axes.yaw", {"protocol", "bus", "motor_id", "topology",
                                   "control_mode", "feedback_frame_id", "command_frame_id",
-                                  "guard_temp_raw_ceiling"}, result);
+                                  "guard_temp_raw_ceiling"}, result, {"current_ring_verified", "host_current_limit_a"});
     check_axis_string(yaw["protocol"], "gm6020", "axes.yaw", "protocol", result);
     check_axis_string(yaw["bus"], "yaw", "axes.yaw", "bus", result);
     check_axis_string(yaw["topology"], "continuous", "axes.yaw", "topology", result);

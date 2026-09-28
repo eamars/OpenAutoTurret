@@ -132,3 +132,21 @@ Expected: (std::string::npos) != (missing.errors[0].find("guard_temp_raw_ceiling
 "只上站点 3（白名单）"与"只上站点 4"分别单独跑一次开始，两步分离就能定位。
 
 这也是今晚反复出现的那个模式：**看到红就急着给解释**。红先复现、再二分，因果要跑出来。
+
+### 二分结果：罪魁是站点 3；我第 50 轮的判断成立，第 51 轮的"更正"作废
+
+**做法**：只上站点 3（白名单加两键）→ 构建 0 error、**ctest 1 红**，错误原文
+`axes.yaw.current_ring_verified is required | axes.yaw.host_current_limit_a is required`。
+⇒ 不需要站点 4 参与就能复现，**因果由二分给出，不再靠猜**。
+
+**机制**（读全了，`mixed_hardware_profile.cpp:19-48`）：`check_keys` 先拒绝未知键，
+**再遍历 `allowed` 要求每个键存在**（第 41-46 行，报 `X is required`）。
+所以那份列表**确实同时承担两件事**——这正是我第 50 轮写的；第 51 轮我**只读了 19-38 行**
+就宣布"它不要求存在"，于是把对的判成错的。**教训：读函数要读到 `return`，别按半截实现下结论。**
+
+**修法（本轮已落地，构建 0 error、77/77）**：`check_keys` 增加第 5 个参数
+`optional = {}`——**默认空 ⇒ 既有调用点一字未改**；未知键判定把 optional 也算已知；
+存在性检查仍只看 `allowed`。yaw 处把 `current_ring_verified` / `host_current_limit_a` 放进 optional。
+⇒ 新键合法、可缺省，**出厂 `turret_mixed.yaml` 不会因为这次改动变成"缺键"**。
+
+**还剩**：站点 4（`control_mode: current` 的解析）——它与这次红**无关**，可以单独做。
