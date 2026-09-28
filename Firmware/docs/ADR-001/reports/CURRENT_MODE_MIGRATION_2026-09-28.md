@@ -111,3 +111,24 @@ control_mode==Voltage && feedback_frame_id==0x205 && command_frame_id==0x1ff`，
 - 我一度把"构建失败"读成"ctest 77/77 所以没事"——**ctest 在旧二进制上照样全绿**，
   这条陷阱我自己上一轮刚点名，这一轮就踩到了；已改成用 `grep -c "error:"` 判构建。
 - 插入点也错了第一次：分支引用 `yaw_axis` 却插在 `auto& yaw_axis = ...` **之前**。
+
+### 更正：上一轮我对那次红的**因果解释是错的**
+
+我写的是"`check_keys` 那份列表同时承担未知键拒绝**与**必填要求，所以新键变必填 ⇒ 出厂 YAML 会缺键"。
+读了 `mixed_hardware_profile.cpp:19-38` 才知道不成立：**`check_keys` 只遍历 YAML 里出现的键、
+只报 `has unknown key`，它不要求任何键存在。**
+
+所以那次 `test_mixed_station_config` 的红**原因未定**（`NOT_VERIFIED`），现场证据留在这里：
+
+```
+Value of: loaded.ok     Actual: false   Expected: true
+Expected: (std::string::npos) != (missing.errors[0].find("guard_temp_raw_ceiling"))
+```
+
+两个断言同时出现，说明**至少有一个本应加载成功的 fixture 变成不 ok**，并且**缺键用例的第一条错误**
+不再点名 `guard_temp_raw_ceiling`。**首要嫌疑是站点 4**——我把 `check_axis_string(...,"voltage",...)`
+换成 `string_value(...)` 加分支，并删掉了紧随其后的硬编码赋值；嫌疑点是 `string_value` 对缺失/类型
+的处理与原检查不同，或我删除赋值的那条正则**误删了他处**。**不再凭想象补因果**——下一刀从
+"只上站点 3（白名单）"与"只上站点 4"分别单独跑一次开始，两步分离就能定位。
+
+这也是今晚反复出现的那个模式：**看到红就急着给解释**。红先复现、再二分，因果要跑出来。
