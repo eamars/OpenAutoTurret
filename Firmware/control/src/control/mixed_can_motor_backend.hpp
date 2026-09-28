@@ -25,6 +25,13 @@ namespace ota {
 // (owner ruling, 2026-09-28). One number, one job. Exposed as a free function so the
 // behaviour is testable without a CAN bus: a ceiling that only exists inside a private
 // member is a claim, not a guarantee.
+// Manual jog felt "明显偏慢" beside pitch for the same reason yaw felt slow before its
+// velocity ceiling was fixed: this ramp limit was picked small in the codex era and never
+// revisited, while the pitch drive runs its own profile at 60 deg/s^2. The owner's ruling of
+// 2026-09-28 is that the axes accelerate together in manual, so this is the declared
+// axes.yaw.max_acceleration_deg_s2 and test_mixed_station_config fails if the two drift.
+inline constexpr double kYawMaxAccelerationRadS2 = 60.0 * 3.14159265358979323846 / 180.0;
+
 inline constexpr double kYawSpeedCeilingDegS = 30.0;  // matched to pitch, see the ruling above
 inline constexpr double kYawSpeedCeilingRadS =
     kYawSpeedCeilingDegS * 3.14159265358979323846 / 180.0;

@@ -605,22 +605,28 @@ function hudTravelTape(o) {
   const steps = hudTickSteps(windowDeg, o.length);
   const screenSign = o.horizontal ? otaJointScreenSign.yaw : otaJointScreenSign.pitch;
 
-  // The SCALE slides, the MARKER does not (owner's revision, 2026-09-28, pointing at
-  // fighter and helicopter HUDs: a caret that jumps every cycle is the thing your eye has
-  // to re-find; a ruler that moves under a still caret is read without searching). The
-  // visible window is as wide as the tape and centred on where the axis actually is.
-  // Near an end the window can no longer stay centred, so it stops at the travel limit
-  // and the caret slides off centre -- and that off-centre IS the "close to the limit"
-  // cue, so it is deliberately not clamped away.
+  // The MARKER never moves and the SCALE always slides (owner, 2026-09-28, second pass:
+  // "在一定角度之后 marker 就会动 —— 我希望 marker 永远不动，只动条带"). The first pass clamped
+  // the window inside the travel, which held the caret centred mid-travel but shoved it aside
+  // near an end. He rejected that, and with it the dead region I would have had to draw past
+  // the end: past the end this tape simply ROLLS OVER, which is what a cyclic axis's ruler
+  // is. The window is pinned to the value and never clamped, and the degrees beyond an
+  // endpoint are the degrees at the other end -- the seam is a real place on a real axis.
   const lo = o.horizontal ? o.x : o.y;
   const hi = o.horizontal ? o.x + o.length : o.y + o.length;
   const mid = (lo + hi) / 2;
   const half = windowDeg / 2;
   const slope = screenSign * o.length / windowDeg;   // px per degree, direction included
-  const centreDeg = Number.isFinite(o.valueDeg)
-    ? Math.max(o.minDeg + half, Math.min(o.maxDeg - half, o.valueDeg))
-    : (o.minDeg + o.maxDeg) / 2;
+  const centreDeg = Number.isFinite(o.valueDeg) ? o.valueDeg : (o.minDeg + o.maxDeg) / 2;
   const at = (deg) => mid + (deg - centreDeg) * slope;
+  // Cyclic coordinates: the declared travel is one cycle of this ruler, period `span`. yaw
+  // is a continuous axis so wrapping is what the world already does; pitch is physically
+  // blocked and usually never reaches the seam, but it is drawn by the same rule -- one
+  // widget, one behaviour, no second design somebody has to remember.
+  const wrap = (deg) => {
+    const w = (deg - o.minDeg) % span;
+    return o.minDeg + (w < 0 ? w + span : w);
+  };
   // Ticks dissolve into the last stretch of each end rather than being cut off: that is
   // how a tape says "there is more of this" without spending an element on the idea.
   const FADE = Math.max(18, o.length * 0.09);  // proportional: an absolute px band would
@@ -632,23 +638,32 @@ function hudTravelTape(o) {
   };
 
   const ticks = [];
-  const firstIdx = Math.ceil(o.minDeg / steps.fine - 1e-9);
-  const lastIdx = Math.floor(o.maxDeg / steps.fine + 1e-9);
-  for (let k = firstIdx; k <= lastIdx; ++k) {
-    const deg = k * steps.fine;
-    const coarse = Math.abs(deg / steps.coarse - Math.round(deg / steps.coarse)) < 1e-9;
-    ticks.push({ deg: deg, pos: at(deg), coarse: coarse, endpoint: false,
-                 label: coarse ? hudDegLabel(deg, false) : "" });
+  const onGrid = (deg, step) => Math.abs(deg / step - Math.round(deg / step)) < 1e-9;
+  const push = (deg, forced) => {
+    const pos = at(deg), w = wrap(deg);
+    const atSeam = Math.abs(w - o.minDeg) < 1e-6 || Math.abs(w - o.maxDeg) < 1e-6;
+    const dup = ticks.filter((t) => Math.abs(t.pos - pos) < 1e-6);   // the seam is ONE place
+    if (dup.length) {
+      if (forced || atSeam) dup.forEach((t) => {
+        t.endpoint = true; t.coarse = true; t.label = hudDegLabel(w, true); });
+      return;
+    }
+    const coarse = forced || atSeam || onGrid(w, steps.coarse);
+    ticks.push({ deg: w, pos: pos, coarse: coarse, endpoint: !!(forced || atSeam),
+                 label: coarse ? hudDegLabel(w, !!atSeam || !!forced) : "" });
+  };
+  // Every fine step the window shows, indexed in window coordinates, labelled in cycle ones.
+  for (let k = Math.floor((centreDeg - half) / steps.fine) - 1;
+       k <= Math.ceil((centreDeg + half) / steps.fine) + 1; ++k) push(k * steps.fine, false);
+  // The seam itself, drawn even when it misses the grid: where the ruler rolls over is
+  // information, and on a continuous axis it is the only "endpoint" there ever is.
+  for (let cyc = -2; cyc <= 2; ++cyc) {
+    [o.minDeg, o.maxDeg].forEach((lim) => {
+      const cand = lim + cyc * span;
+      if (cand >= centreDeg - half - steps.fine && cand <= centreDeg + half + steps.fine)
+        push(cand, true);
+    });
   }
-  // Endpoints are always present and always labelled (§5.2), whether or not they fall on a step.
-  [{ deg: o.minDeg, pos: at(o.minDeg) },
-   { deg: o.maxDeg, pos: at(o.maxDeg) }].forEach((e) => {
-    const dupe = ticks.some((t) => Math.abs(t.deg - e.deg) < 1e-6);
-    if (dupe) { ticks.filter((t) => Math.abs(t.deg - e.deg) < 1e-6).forEach((t) => {
-      t.endpoint = true; t.coarse = true; t.label = hudDegLabel(e.deg, true); }); }
-    else ticks.push({ deg: e.deg, pos: e.pos, coarse: true, endpoint: true,
-                      label: hudDegLabel(e.deg, true) });
-  });
   ticks.sort((a, b) => a.pos - b.pos);
 
   // §22 asks a DERATE indication to include the relevant travel-tape edge. The tape's ends ARE the soft
@@ -657,24 +672,47 @@ function hudTravelTape(o) {
   // Matched on the degree value rather than on index, because which tick is an endpoint depends on
   // whether the limit happened to fall on a fine step.
   if (typeof o.markDeg === "number") {
-    ticks.forEach((tk) => { tk.marked = Math.abs(tk.deg - o.markDeg) < 1e-6; });
+    // §22: a DERATE indication names the tape edge it is about, and the tape lights that
+    // end amber. Matching on the degree value broke the day the ruler became cyclic --
+    // +100 wraps to -100, so the mark matched nothing and the amber vanished silently.
+    // What survives the wrap is the PIXEL a limit maps to, plus its whole-cycle images.
+    const eps = steps.fine * Math.abs(slope) / 2;
+    ticks.forEach((tk) => {
+      for (let cyc = -2; cyc <= 2; ++cyc) {
+        if (Math.abs(tk.pos - at(o.markDeg + cyc * span)) < eps) {
+          // Name the limit that was named: the tick at the seam may have been labelled from
+          // the other end of the cycle, and an amber highlight about +100 that reads "-100"
+          // is worse than no highlight.
+          tk.marked = true; tk.deg = o.markDeg; tk.label = hudDegLabel(o.markDeg, true); break;
+        }
+      }
+    });
   }
 
   // Only what the window can show is drawn -- a label past an end would land on whatever
   // HUD element lives beside the tape. Survivors carry their own opacity.
   const shown = ticks.filter((tk) => tk.pos >= lo - 0.5 && tk.pos <= hi + 0.5)
-                     .map((tk) => { tk.opacity = opacityAt(tk.pos); return tk; });
+                     .map((tk) => {
+                       // The fade is for the middle of the scale running out of view. An
+                       // endpoint never fades to nothing: the limit you are approaching is
+                       // the one label that has to stay readable, and the first version of
+                       // this painted it to opacity 0 exactly where it mattered.
+                       tk.opacity = tk.endpoint ? Math.max(0.6, opacityAt(tk.pos))
+                                                : opacityAt(tk.pos);
+                       return tk;
+                     });
+  const seams = shown.filter((tk) => tk.endpoint).length;
 
   // Clamped along the tape's own axis. The first version clamped the vertical case between o.x and
   // o.x - the line's own column - because the horizontal variable was reused without being thought
   // about, and every pitch marker collapsed onto the tape's x-coordinate. Hand arithmetic caught it
   // (expected 593.7, produced 1842.0); a test now carries that arithmetic.
-  const marker = Math.max(lo, Math.min(hi, at(o.valueDeg)));   // centrested until a limit forbids it
+  const marker = mid;   // literally always: the caret is the vehicle, the world moves
   return {
     horizontal: !!o.horizontal, x: o.x, y: o.y, length: o.length,
     x1: o.horizontal ? o.x + o.length : o.x, y1: o.horizontal ? o.y : o.y + o.length,
     minDeg: o.minDeg, maxDeg: o.maxDeg, steps: steps, ticks: shown, marker: marker,
-    centreDeg: centreDeg, hiddenTicks: ticks.length - shown.length,
+    centreDeg: centreDeg, seams: seams, cyclic: true,
     windowDeg: windowDeg, windowSource: windowSource,
     valueDeg: o.valueDeg,
     // §6.3: the value box is a dark translucent fill with a thin green outline. Sized for

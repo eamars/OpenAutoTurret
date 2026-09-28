@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 #include "config/mixed_hardware_profile.hpp"
+#include "control/mixed_can_motor_backend.hpp"  // kYawMaxAccelerationRadS2, pinned below
 #include "config/turret_config.hpp"
 #include "control/motion_profile.hpp"
 
@@ -47,6 +48,19 @@ TEST(MixedStationConfig, StationFileLoadsAndNamesTheSplitBusProfile) {
                    station().config.axes[0].max_velocity_deg_s);
   EXPECT_DOUBLE_EQ(station().config.axes[1].max_velocity_deg_s, 30);  // yaw
   EXPECT_DOUBLE_EQ(station().config.axes[0].max_velocity_deg_s, 30);  // pitch
+
+  // Owner, 2026-09-28: "yaw和pitch在manual模式下速度应该保持匹配…yaw的速度明显偏慢了", and
+  // on the second pass about the acceleration specifically. Velocity parity was pinned
+  // above; the ramp behind it was the actual culprit, because a hard-coded 20 deg/s^2 sat
+  // in the yaw backend while the pitch drive accelerated under its own profile. Read from
+  // the YAML rather than the parsed struct so the gate is on the number he edits.
+  const YAML::Node axes = YAML::LoadFile((firmware_root() / "config/turret_mixed.yaml").string())["axes"];
+  for (const char* key : {"max_acceleration_deg_s2", "max_jerk_deg_s3"}) {
+    EXPECT_DOUBLE_EQ(axes["yaw"][key].as<double>(), axes["pitch"][key].as<double>()) << key;
+  }
+  // And the constant that actually shapes the ramp is the declared one, not a fourth opinion.
+  EXPECT_DOUBLE_EQ(kYawMaxAccelerationRadS2 * 180.0 / 3.14159265358979323846,
+                   axes["yaw"]["max_acceleration_deg_s2"].as<double>());
 }
 
 TEST(MixedStationConfig, HardwareProfilePinsTheCommissionedTopology) {

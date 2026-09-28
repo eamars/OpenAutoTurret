@@ -20,7 +20,8 @@ constexpr double kRadiansPerDegree = std::numbers::pi / 180.0;
 constexpr double kDegreesPerRadian = 180.0 / std::numbers::pi;
 // The yaw speed ceiling lives in the header as apply_yaw_speed_ceiling(): a CLAMP on
 // the ask, not a verdict on a reading -- see the ruling recorded there.
-constexpr double kYawMaxAccelerationRadS2 = 20.0 * kRadiansPerDegree;
+// kYawMaxAccelerationRadS2 lives in the header, next to the ceiling, where the station
+// config test can pin it to axes.yaw.max_acceleration_deg_s2.
 constexpr double kYawPositionGain = 2.0;
 // The first automatic sweep requested 10 deg/s but reached 26.34 deg/s and
 // correctly tripped the independent 25 deg/s guard. The earlier 30-degree

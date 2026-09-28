@@ -353,7 +353,7 @@ def test_every_event_the_document_asks_for_has_a_name():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3]
-    doc = (root / "docs" / "open_auto_turret_v3_three_mode_target_tracking_architecture.md").read_text(
+    doc = (root / "docs" / "archive" / "implemented" / "architecture" / "open_auto_turret_v3_three_mode_target_tracking_architecture.md").read_text(
         encoding="utf-8"
     )
     section = doc.split("# 79. Event logging", 1)

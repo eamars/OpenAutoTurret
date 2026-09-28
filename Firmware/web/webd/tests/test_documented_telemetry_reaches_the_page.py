@@ -30,7 +30,7 @@ import pathlib
 import re
 
 REPO = pathlib.Path(__file__).resolve().parents[4]
-DOC = REPO / "Firmware" / "docs" / "open_auto_turret_v3_three_mode_target_tracking_architecture.md"
+DOC = REPO / "Firmware" / "docs" / "archive" / "implemented" / "architecture" / "open_auto_turret_v3_three_mode_target_tracking_architecture.md"
 SNAPSHOT = REPO / "Firmware" / "control" / "src" / "telemetry" / "telemetry.hpp"
 WIRE = REPO / "Firmware" / "control" / "src" / "web" / "web_server.hpp"
 PROTOCOL = REPO / "Firmware" / "web" / "webd" / "protocol.py"

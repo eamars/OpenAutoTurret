@@ -69,8 +69,8 @@ axes:
     # pitch while motion.modes asks both for the same 20 deg/s. Acceleration stays under
     # pitch's because yaw carries the whole payload.
     max_velocity_deg_s: 30
-    max_acceleration_deg_s2: 30
-    max_jerk_deg_s3: 120
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
     limit_cur_a: 0.0
 homing:
   # Pitch CyberGear gains retained from the successful 5 A pitch homing run.

@@ -551,3 +551,34 @@ Their measurements remain background, not certification of this mechanism.
 prior installations. The earlier BNO085 proposal is also historical design
 input; its hardware-absent status is superseded, while integration remains open.
 See [the documentation map](README.md).
+
+## Owner rulings of 2026-09-28 (afternoon) — tapes, acceleration, and where yaw's zero comes from
+
+**Tapes are cyclic, and the caret never moves.** Both axes, one widget: the marker sits at the
+tape's midpoint always; the ruler slides under it; and past the end of the declared travel the
+ruler **rolls over** instead of showing a dead region (`不需要死区，如果超过了值，就直接 roll over`).
+yaw is a continuous axis, so the wrap is what the world already does; pitch is physically blocked
+and rarely reaches the seam, but is drawn by the same rule. The window is the camera's own field
+of view on that axis (`effective_hfov_deg` / `effective_vfov_deg`), and the tape says which source
+it used. The seam — where the ruler wraps — is labelled with the endpoint's own number, in amber
+when a DERATE names that end, and it never fades to zero opacity (an earlier draft painted the
+approaching limit invisible exactly when it mattered most).
+
+**Manual acceleration parity is a requirement, not a tuning opinion.** The complaint
+("yaw的加速度在manual模式下…比pitch低得多") traced to `kYawMaxAccelerationRadS2 = 20 deg/s²`, a
+codex-era constant living inside the yaw backend — the station file said 30 and pitch's drive ran
+60. All three are now 60, and `test_mixed_station_config` pins the ramp constant to
+`axes.yaw.max_acceleration_deg_s2` so a fourth opinion cannot appear again.
+
+**Non-finite reference rate ⇒ hold and report; the session angle is never re-zeroed.** My ruling,
+delegated by the owner ("#3，你来决定"): the division-by-zero theory does not survive the code
+(the reference-rate path divides only under `dt > 1 ms`), and on a continuous axis a wrong zero
+silently rewrites every number on his tape. A nonsense rate is a reason to stop and say so, not a
+reason to move the origin.
+
+**yaw's zero will come from the IMU; until then, the pitch homing origin is yaw's 0.** Recorded as
+the owner's intent. **As built today this is NOT true**: yaw is not homed on this station, so its
+session zero is wherever it happened to be when the process started (or the retained pose), which
+means the tape's "0 = where I was zeroed" is not reproducible across restarts. The change is
+small and named: where homing establishes the pitch origin, set the yaw session reference to the
+yaw angle at that instant. Until then, treat yaw degree readings as relative, not as position.

@@ -100,17 +100,30 @@ class TravelTapesExecuted(unittest.TestCase):
         # and the fade at each end is what says "there is more travel this way".
         # What survives unchanged: whenever a limit IS in view, it is labelled with its
         # own number and a degree sign -- never a rounded approximation.
-        got = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));" % json.dumps(YAW))
-        self.assertGreater(got["hiddenTicks"], 0, "a centred window must actually hide off-window ticks")
-        self.assertEqual([t for t in got["ticks"] if t["endpoint"]], [])
+        # Mid-travel the window sits inside one cycle, so there is no seam to show; near an
+        # end the seam appears -- and past the end the ruler ROLLS OVER, so a degree beyond
+        # the declared maximum is labelled with the other end's number (owner, 2026-09-28:
+        # "不需要死区，如果超过了值，就直接 roll over"). This widget is cyclic by contract.
+        mid = 408.0 + 1104.0 / 2
+        slope = -1104.0 / 40.0          # yaw+ is screen-left; fallback window = span/4 = 40
+        mid_travel = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));" % json.dumps(YAW))
+        self.assertEqual(mid_travel["cyclic"], True)
+        self.assertEqual(mid_travel["seams"], 0, "a window inside one cycle has no seam to draw")
         near = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));"
-                          % json.dumps(dict(YAW, valueDeg=78.0)))["ticks"]
-        ends = [t for t in near if t["endpoint"]]
-        self.assertEqual([t["deg"] for t in ends], [80.0], "the limit being approached is the one shown")
-        self.assertTrue(ends[0]["label"].endswith("\u00b0"),
-                        "the reference draws the endpoints with a degree sign: %r" % ends[0]["label"])
-        self.assertAlmostEqual(ends[0]["pos"], 408.0, places=6,
-                               msg="yaw+ is screen-left, so +80 sits at the tape's left end")
+                          % json.dumps(dict(YAW, valueDeg=78.0)))
+        self.assertEqual(near["seams"], 1, "approaching +80 must put the seam in view")
+        seam = [t for t in near["ticks"] if t["endpoint"]][0]
+        self.assertTrue(seam["label"].endswith("\u00b0"),
+                        "the seam is labelled as an endpoint: %r" % seam["label"])
+        self.assertGreaterEqual(seam["opacity"], 0.6, "the limit you are approaching never fades away")
+        self.assertAlmostEqual(seam["pos"], mid + (80.0 - 78.0) * slope, places=6)
+        # PAST the end: +90 is +90 on a continuous axis, and on this ruler it is labelled -70.
+        past = self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));"
+                          % json.dumps(dict(YAW, valueDeg=84.0)))["ticks"]
+        wrapped = [t for t in past if t["label"] == "-70"]
+        self.assertTrue(wrapped, "past the maximum the ruler rolls over to the other end's numbers")
+        self.assertAlmostEqual(wrapped[0]["pos"], mid + (90.0 - 84.0) * slope, places=6,
+                               msg="the wrapped label sits where the window puts it, not at an edge")
 
     def test_the_window_is_the_camera_field_of_view_not_a_number_i_chose(self) -> None:
         # The tape window decides what "off the end" means, so its source has to be a
@@ -157,29 +170,19 @@ class TravelTapesExecuted(unittest.TestCase):
     def test_marker_maps_the_current_value_and_clamps_within_the_tape(self) -> None:
         # Physical direction: yaw+ turns the camera left, so +22.4 lies left
         # of centre on the travel tape despite the joint value increasing.
-        # Mid-travel the caret does not move at all: it sits at the tape's centre and the
-        # ruler slides under it (owner's revision, 2026-09-28, after fighter/helicopter
-        # HUDs). Both axes, one rule -- so both fixtures expect their own midpoint.
-        got = self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(YAW))
-        self.assertAlmostEqual(got, 408.0 + 1104.0 / 2, places=6)
-        self.assertAlmostEqual(
-            self._node("console.log(T.hudTravelTape(%s).marker);"
-                       % json.dumps(dict(PITCH, valueDeg=-6.8))),
-            310.1 + 459.0 / 2, places=6)
-        # Only near a limit -- where the window can no longer stay centred -- does the
-        # caret leave the middle, and that off-centre IS the proximity cue. yaw+ is
-        # screen-left, so approaching +80 pushes the caret toward the tape's left end.
-        near = self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(dict(YAW, valueDeg=78.0)))
-        self.assertLess(near, 408.0 + 1104.0 / 2, "approaching the screen-left limit moves the caret left")
-        # Out of range (a value beyond the soft limit, or an un-homed zero) must not point off the
-        # tape into empty sky.
-        self.assertAlmostEqual(
-            self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(dict(YAW, valueDeg=-999.0))),
-            1512.0, places=9)
-        self.assertAlmostEqual(
-            self._node("console.log(T.hudTravelTape(%s).marker);"
-                       % json.dumps(dict(PITCH, valueDeg=120.0))),
-            769.1, places=9)
+        # The caret never moves -- not mid-travel, not near an end, not off the map. That is
+        # the owner's second-pass ruling ("我希望 marker 永远不动，只动条带"), and it holds for
+        # both axes because both go through this one function.
+        for fx in (YAW, dict(PITCH, valueDeg=-6.8), dict(YAW, valueDeg=78.0),
+                   dict(YAW, valueDeg=84.0), dict(YAW, valueDeg=-999.0),
+                   dict(PITCH, valueDeg=120.0)):
+            key = "y" if fx.get("horizontal") is False else "x"
+            got = self._node("console.log(T.hudTravelTape(%s).marker);" % json.dumps(fx))
+            self.assertAlmostEqual(got, (fx["y"] if key == "y" else fx["x"]) + fx["length"] / 2,
+                                   places=9, msg="marker must sit at the tape midpoint: %r" % fx)
+        # (an out-of-range value is covered in the loop above: the caret does not move, and the
+        #  ruler rolls over, so there is nothing left for the caret to point off.)
+
 
     def test_no_cardinal_letters_appear_anywhere(self) -> None:
         # §5.3: logical joint travel, not compass heading; N/E/S/W forbidden without a validated
