@@ -163,12 +163,24 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
     check_axis_string(yaw["protocol"], "gm6020", "axes.yaw", "protocol", result);
     check_axis_string(yaw["bus"], "yaw", "axes.yaw", "bus", result);
     check_axis_string(yaw["topology"], "continuous", "axes.yaw", "topology", result);
-    check_axis_string(yaw["control_mode"], "voltage", "axes.yaw", "control_mode", result);
     auto& yaw_axis = result.profile.yaw;
     yaw_axis.protocol = Protocol::Gm6020;
     yaw_axis.bus_name = "yaw";
     yaw_axis.topology = Topology::Continuous;
-    yaw_axis.control_mode = ControlMode::Voltage;
+    // Voltage is still the only mode that ships. `current` parses so the profile can be staged,
+    // but validate_profile refuses it until the operator has recorded the external preconditions.
+    // Presence is enforced here by hand rather than via string_value, whose missing-node behaviour
+    // I have not verified -- an absent key must not become a silent default.
+    const auto yaw_mode = yaw["control_mode"];
+    if (!yaw_mode.IsScalar()) {
+      error(result, "axes.yaw.control_mode is required ('voltage' or 'current')");
+    } else if (yaw_mode.as<std::string>() == "voltage") {
+      yaw_axis.control_mode = ControlMode::Voltage;
+    } else if (yaw_mode.as<std::string>() == "current") {
+      yaw_axis.control_mode = ControlMode::Current;
+    } else {
+      error(result, "axes.yaw.control_mode must be 'voltage' or 'current'");
+    }
     const auto yaw_id = unsigned_value(yaw["motor_id"], "axes.yaw.motor_id", result);
     if (yaw_id != 1) error(result, "axes.yaw.motor_id must be 1");
     if (yaw_id <= UINT8_MAX) yaw_axis.motor_id = static_cast<uint8_t>(yaw_id);
