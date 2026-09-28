@@ -709,8 +709,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     } else if (yaw_reference_stationary_since_ns_ == 0) {
       yaw_reference_candidate_rad_ = yaw.q_rad;
       yaw_reference_stationary_since_ns_ = yaw.rx_ns;
-    } else if (std::abs(yaw.q_rad - yaw_reference_candidate_rad_) >
+    } else if (!std::isfinite(yaw_reference_candidate_rad_) ||
+               std::abs(yaw.q_rad - yaw_reference_candidate_rad_) >
                kYawReferencePositionToleranceRad) {
+      // A nan candidate used to survive forever here: every comparison with nan is false, so
+      // "has it moved?" said no, the stationary timer ran out, and a nan became the session
+      // zero with valid=true attached -- which is what made every later homing check fire on
+      // delta_deg=nan. Re-seed instead; the angle we are reading now is a real number.
       yaw_reference_candidate_rad_ = yaw.q_rad;
       yaw_reference_stationary_since_ns_ = yaw.rx_ns;
     } else if (yaw.rx_ns - yaw_reference_stationary_since_ns_ >=
@@ -1314,12 +1319,23 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
               std::abs(v_est_[i]) > 2.0*kDeg2Rad ||
               std::abs(yaw.q_rad-yaw_session_reference_rad_) >
                   kYawPitchHomingHoldToleranceRad) {
-            spdlog::error("continuous yaw homing hold rejected: age_ms={} delta_deg={:.3f} encoder_speed_deg_s={:.3f} motor_speed_deg_s={:.3f}",
-                         (now_ns-yaw.rx_ns)/1'000'000,
-                         (yaw.q_rad-yaw_session_reference_rad_)*kRad2Deg,
-                         v_est_[i]*kRad2Deg, yaw.v_rad_s*kRad2Deg);
-            motion_error = "continuous yaw moved or lost fresh stationary feedback during pitch homing";
-            break;
+            // Owner's ruling of 2026-09-28, applied here: "pitch 归零期间 yaw 动了 -> 这条也不
+            // 应该作为 fault 的理由，根据之前约定的，这条不影响安全操作，所以应该当作 warning，
+            // 而不是直接让 turret 掉电 fault". Pitch homes against its own endstop; a yaw that
+            // drifts, or that we cannot read for a moment, is not pushing anything. The yaw
+            // still earns a fault from the guard's own loss-of-control conditions (feedback
+            // unsafe, bus down, drive silent, motor hot) -- that is where "we cannot control
+            // it" lives, and it is not this line. It aborted a deploy today over
+            // delta_deg=nan: arithmetic on our side, a power cut on the payload's account.
+            if (!homing_warning_ns_[i] || now_ns-homing_warning_ns_[i] >= 1'000'000'000LL) {
+              spdlog::warn("continuous yaw moved or lost fresh stationary feedback during pitch "
+                           "homing: age_ms={} delta_deg={:.3f} encoder_speed_deg_s={:.3f} "
+                           "motor_speed_deg_s={:.3f}; continuing (not a fault)",
+                           (now_ns-yaw.rx_ns)/1'000'000,
+                           (yaw.q_rad-yaw_session_reference_rad_)*kRad2Deg,
+                           v_est_[i]*kRad2Deg, yaw.v_rad_s*kRad2Deg);
+              homing_warning_ns_[i] = now_ns;
+            }
           }
           continue;  // GM6020 has no temperature/fault/torque scale for the legacy guard.
         }
