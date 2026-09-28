@@ -26,6 +26,8 @@ import queue
 import threading
 import uvicorn
 from contextlib import asynccontextmanager
+
+from common.control_trace import TraceUnavailable, request_trace
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -249,6 +251,27 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             names, error = [], f"cannot read {os.path.abspath(directory)}: {e.strerror}"
         return {"dir": os.path.abspath(directory), "profiles": names,
                 "error": error}
+
+    @app.get("/api/control_trace")
+    async def control_trace() -> JSONResponse:
+        """controld's per-cycle ring, handed to the browser as-is.
+
+        The ring is the only witness the station has of a per-cycle fault, and it
+        wraps in about twenty seconds -- which is exactly the window an operator
+        is inside while deciding what to do. Until now the only way to read it was
+        a shell on the station (``tools/pull_control_trace.py``); both readers now
+        share ``common/control_trace.py`` so the frame-size floor and the
+        "skip telemetry until the frame that says so" rule cannot drift apart.
+
+        503 rather than an empty window when the trace cannot be read: "no
+        anomalies in the ring" and "the ring was unreadable" have to stay two
+        different sentences during an incident.
+        """
+        try:
+            frame = await asyncio.to_thread(request_trace, config.socket_path)
+        except TraceUnavailable as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
+        return JSONResponse(frame)
 
     # -- video preview (separate low-priority path, §42.3) ------------------
 

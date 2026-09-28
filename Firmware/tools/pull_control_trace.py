@@ -24,33 +24,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
 import sys
 from collections import Counter
 from pathlib import Path
 
+# Same as the other tools in this directory: run as a script, the repo root is
+# not on sys.path on its own, and ``common`` is where the shared reader lives.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from common.control_trace import (MAX_FRAME, TraceUnavailable,  # noqa: E402
+                                  request_trace)
+
 DEFAULT_SOCKET = "/tmp/ota-stack-1000/control-web.sock"
-# One row is ~250 B of JSON and the ring is 4096 deep, so a full reply is on the
-# order of a megabyte. Asking for less silently truncates a SEQPACKET.
-MAX_FRAME = 32 * 1024 * 1024
 
-
-def request_trace(socket_path: str, timeout_s: float) -> dict:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-    s.settimeout(timeout_s)
-    s.connect(socket_path)
-    try:
-        s.send(json.dumps({"type": "command", "command": "read_control_trace"}).encode())
-        # A telemetry frame is published at ~15 Hz on the same socket and may
-        # arrive first; the reply we want is the one that says so.
-        deadline = timeout_s
-        s.settimeout(deadline)
-        while True:
-            frame = json.loads(s.recv(MAX_FRAME).decode())
-            if frame.get("type") in ("control_trace", "response"):
-                return frame
-    finally:
-        s.close()
+# The reader lives in ``common/control_trace.py``, shared with webd's
+# ``/api/control_trace``: the frame-size floor and the "skip telemetry until the
+# frame that says so" rule must not exist twice, because twice is how one copy
+# starts returning a truncated megabyte while the other refuses to. MAX_FRAME is
+# re-exported here so `--dump` users can still reason about the ceiling.
 
 
 def summarise(reply: dict) -> tuple[str, list[dict]]:
@@ -126,12 +117,11 @@ def main() -> int:
         return selftest()
     try:
         reply = request_trace(args.socket, args.timeout)
-    except (OSError, ValueError) as exc:
-        print(f"unreadable: {type(exc).__name__}: {exc} (socket={args.socket})", file=sys.stderr)
+    except TraceUnavailable as exc:
+        # Every reason already names the socket it tried, which is the one thing
+        # an operator on the station needs first.
+        print(f"unreadable: {exc}", file=sys.stderr)
         return 2
-    if reply.get("type") == "response" and not reply.get("ok", False):
-        print(f"controld refused: {reply.get('error', 'no reason given')}", file=sys.stderr)
-        return 3
     head, rows = summarise(reply)
     print(head)
     if rows:

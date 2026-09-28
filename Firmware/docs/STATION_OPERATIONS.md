@@ -648,3 +648,18 @@ If that fingerprint ever changes, that is a finding to investigate, not a line t
 补：站上 journald **没有跨 boot 持久化**（`journalctl -b -1` 为空）。硬断电之后"上次 boot 的末尾"就查不到了，
 也就是说这台站现在**无法自证死因**。要么开 `Storage=persistent`（要 sudo，等主人方便时），
 要么承认崩溃取证只能靠 controld 自己落盘的 trace/evidence——这反过来正是 WP2 那些记录的价值所在。
+
+## Reading the per-cycle control trace
+
+`GET /api/control_trace` on webd returns controld's ring as-is; on the station
+the same read is `Firmware/tools/pull_control_trace.py`. Both share
+`Firmware/common/control_trace.py`, which is why neither has its own idea of how
+big a reply can be: controld answers with a `control_trace` frame on a
+`SOCK_SEQPACKET` socket, a full ring is on the order of a megabyte, and an
+oversized datagram is truncated rather than split -- so a small receive buffer
+turns evidence into a parse error.
+
+Read it inside about twenty seconds of a trip: the ring wraps. A `frozen` window
+is the trip's own snapshot and its summary line starts with `FROZEN_AT=`. The
+route answers 503 with the socket path when controld is not reachable, which is
+deliberately a different shape from a ring with no rows in it.

@@ -87,3 +87,35 @@ newest: {"t":45663870996110,"ack":2,...,"effort":[0.0357056,null],
 但**今夜真站没发生一次跳闸**，所以现场那行 `FROZEN_AT=…` 我**没亲眼看到**。
 下次任何 `fault()`/park-failure 落定时跑一次 `pull_control_trace.py`，摘要行就会以 `FROZEN_AT=` 开头；
 看到之前，这条就记 NOT_RUN。
+
+
+---
+
+## 09-29 04:2x 补：ring 现在有两个读者，其中一个在网页后面
+
+本片原文写「全栈里**没有任何调用者**」——**这句在 09-28 是成立的**，但只写了一半：`read_control_trace`
+其实**今天就能用 `POST /api/command` 发出去**（webd 不筛命令名），所以缺的不是通路，是**收了之后没人认得回帧**：
+
+- controld 的回帧是 `{"type":"control_trace", …}`，而 `common`→`web/webd/protocol.py:373` 的
+  `parse_message` 只认 `telemetry`／`command`／`response`，**其余一律 `raise ValueError`**；
+  `_dispatch` 把这个 ValueError 记进 `malformed_frames`。**⇒ 一条完全合法的 trace 回帧被算成"对端在说胡话"。**
+- 更糟的一层：主连接的 `sock.recv(65536)`。**SEQPACKET 对超过缓冲的报文是截断，不是分片**
+  （ring 4096 行 × ~250 B ⇒ 满环约 1 MB）。截断的报文连 JSON 都不是，于是同一个数被记成 malformed，
+  日志还会说"rejected a frame from controld"——**把操作者指向一个并不存在的协议故障。**
+
+**这一片改了什么（三处，都不碰控制路径）**：
+
+| 位置 | 改动 | 为什么在这儿而不是别处 |
+|---|---|---|
+| `common/control_trace.py`（新） | ring 的读侧只留一份：`MAX_FRAME = 32 MiB`、`request_trace()`、`TraceUnavailable`；先跳 `telemetry` 再等那条说自己是 `control_trace` 的帧；用 `recvmsg` 看 `MSG_TRUNC` ⇒ **截断就点名拒绝，不当"完整的环"交出去** | 站点工具和 webd 都要读；两份拷贝迟早一份开始返回半截一兆 |
+| `web/webd/app.py` → `GET /api/control_trace` | 独立连接读、原样转发；读不到给 **503 + 带 socket 路径的原因**，不给"空环" | 环 ~20 s 就回卷，操作者在决策窗口里；"无异常"与"读不到"必须是两句话 |
+| `web/webd/controld_client.py` | `recv` 用共享的 `MAX_FRAME`；新计数器 `unrouted_frames` 与 `malformed_frames` **分开** | 前者是"有人问我消费不了的帧"，后者是"对端语法坏了"——混在一起就会在真故障时指错方向 |
+
+**验收（都跑过）**：`common/tests/test_control_trace.py` 4 条——含**把 `MAX_FRAME` 临时压到 64 字节**
+逼出真截断（红检方式：不是"我写了个 if"，是"报文真的被截了"）；`web/webd/tests/test_control_trace_route.py` 2 条
+——50 Hz telemetry 与回帧挤在同一条 socket 上仍拿得到回帧、以及controld 不在时 503 里带得出那个路径。
+`tools/pull_control_trace.py --selftest` 7/7 不退；全套 `17 failed / 997 passed`（既有红，见夜班账本 09-29 更正）；
+`ctest -E retained_homing` 77/77。**C++ 一行没动**，所以现场不必重新部署也说得通——但 webd 要重启才有这条路由。
+
+**仍然 NOT_RUN**：上面那条「`FROZEN_AT=` 的现场证据」不变——现在多了 `/api/control_trace` 一条路可以拿到它，
+但**今晚没有跳闸发生，我还是没亲眼看到那一行**。
