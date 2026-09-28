@@ -19,10 +19,14 @@ pitch:
 bitrate: 1000000
 limits:
   voltage_raw: 3000
-  # Ceiling for a commissioning pulse in amperes, and it is deliberately below the station's own
-  # 0.8 A production envelope: this tool runs with the payload hand-disassembled twice a night,
-  # and the first question is "which way does it move", not "how hard can it push".
-  yaw_current_a: 0.30
+  # Ceiling for a commissioning pulse in amperes. It is deliberately above the station's own
+  # 0.8 A production envelope, and the two numbers are not in conflict: this tool only ever
+  # applies it for --pulse-ms (<=500 ms, then a zero frame on 0x1FE), while controld holds 0.8 A
+  # indefinitely through the closed loop. It went up on 09-29 because 0.25 A and 0.8 A both gave
+  # 4 counts of elastic wind-up and 0 deg/s, and the guide states +/-16384 == +/-3 A maximum
+  # torque current -- so 0.8 A was 27% of what the drive is allowed to source, and "the axis is
+  # blocked" was a conclusion drawn without ever asking the motor near its nameplate.
+  yaw_current_a: 1.20
   # The regulated (--yaw-speed-deg-s) path uses the same amperes gains as production, so a probe
   # result transfers instead of being a second tuning mystery.
   current_kp_a_per_rad_s: 1.0
@@ -32,3 +36,13 @@ limits:
   yaw_speed_deg_s: 20
   feedback_age_ms: 20
   heartbeat_age_ms: 40
+  # Drag-sweep envelope (first WP6 measurement). A sweep drags the axis under speed regulation for
+  # tens of degrees and tens of seconds, so it cannot borrow the pulse limits above: those answer
+  # "how hard may a 500 ms pulse push", these answer "how far and how long may we take a map".
+  # sweep_ff_a_max is the breakaway assist: static drag on a crossed-roller bearing is larger than
+  # running drag, so the current a sweep needs to start is not the current it needs to keep going,
+  # and a sweep with no feedforward would spend seconds of integrator windup discovering that.
+  sweep_travel_deg: 400
+  sweep_duration_ms: 60000
+  sweep_speed_deg_s: 25
+  sweep_ff_a_max: 1.20

@@ -22,6 +22,8 @@ case "${1:-}" in
     echo '          --yaw-voltage only on a voltage one; the probe refuses the wrong one)'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
+    echo '         --yaw-sweep-deg N --yaw-sweep-ff-a A (drag sweep: drag the axis N deg under speed'
+    echo '          regulation with A amperes of breakaway feedforward; current mode only),'
     echo '         --yaw-step-deg N (commissioning with IMU; continuous 15..45 deg out/return),'
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
@@ -94,6 +96,8 @@ PROBE_BUILD=0
 YAW_VOLTAGE=0
 YAW_CURRENT_A=0
 YAW_SPEED_DEG_S=0
+YAW_SWEEP_DEG=0
+YAW_SWEEP_FF_A=0
 YAW_STEP_DEG=0
 PULSE_MS=100
 OBSERVE_MS=2000
@@ -126,6 +130,8 @@ while [ $# -gt 0 ]; do
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
     --yaw-current-a) YAW_CURRENT_A="${2:?--yaw-current-a requires a signed ampere value}"; shift 2 ;;
     --yaw-speed-deg-s) YAW_SPEED_DEG_S="${2:?--yaw-speed-deg-s requires a signed value}"; shift 2 ;;
+    --yaw-sweep-deg) YAW_SWEEP_DEG="${2:?--yaw-sweep-deg requires a signed travel in degrees}"; shift 2 ;;
+    --yaw-sweep-ff-a) YAW_SWEEP_FF_A="${2:?--yaw-sweep-ff-a requires an ampere magnitude}"; shift 2 ;;
     --yaw-step-deg) YAW_STEP_DEG="${2:?--yaw-step-deg requires a value}"; shift 2 ;;
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
     --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
@@ -142,7 +148,8 @@ done
 # (--yaw-voltage in raw counts, --yaw-current-a in amperes), and every "no other motor probe" rule
 # below needs to see both. A request this list misses is two processes driving one CAN bus.
 YAW_PUSH=0
-if [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_CURRENT_A" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ]; then
+if [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_CURRENT_A" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] ||
+   [ "$YAW_SWEEP_DEG" != 0 ] || [ "$YAW_SWEEP_FF_A" != 0 ]; then
   YAW_PUSH=1
 fi
 if [ "$PITCH_RESTORE_GAINS" = 1 ] && { [ "$PITCH_PROBE" != 1 ] || [ "$PITCH_STEP_MDEG" != 0 ] || [ "$PITCH_TEST_GAINS" != 0 ]; }; then
@@ -518,6 +525,7 @@ PY
     --yaw-voltage "$YAW_VOLTAGE" --yaw-current-a "$YAW_CURRENT_A" \
     --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
     --yaw-speed-deg-s "$YAW_SPEED_DEG_S" \
+    --yaw-sweep-deg "$YAW_SWEEP_DEG" --yaw-sweep-ff-a "$YAW_SWEEP_FF_A" \
     --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   fi
   controller_pid=$!; children+=("$controller_pid"); child_name[$controller_pid]=probe-mixed-hardware

@@ -78,6 +78,10 @@ int main(int argc, char** argv) {
   int voltage = 0, pulse_ms = 100, observe_ms = 2000;
   int speed_reference_deg_s = 0;
   double current_a = 0;
+  // Drag sweep: drag the axis a signed number of degrees under speed regulation, with an optional
+  // constant torque-current feedforward. The trace is the deliverable; the map is computed offline.
+  int sweep_deg = 0;
+  double sweep_ff_a = 0;
   bool apply_pitch_limit = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -88,6 +92,8 @@ int main(int argc, char** argv) {
     else if (arg == "--yaw-voltage") voltage = integer(value);
     else if (arg == "--yaw-current-a") current_a = number(value);
     else if (arg == "--yaw-speed-deg-s") speed_reference_deg_s = integer(value);
+    else if (arg == "--yaw-sweep-deg") sweep_deg = integer(value);
+    else if (arg == "--yaw-sweep-ff-a") sweep_ff_a = number(value);
     else if (arg == "--pulse-ms") pulse_ms = integer(value);
     else if (arg == "--observe-ms") observe_ms = integer(value);
     else if (arg == "--trace") trace_path = value;
@@ -112,6 +118,22 @@ int main(int argc, char** argv) {
   const double speed_limit = limit["yaw_speed_deg_s"].as<double>();
   const double age_limit = limit["feedback_age_ms"].as<double>();
   const double heartbeat_limit = limit["heartbeat_age_ms"].as<double>();
+  // The drag sweep gets its own envelope instead of borrowing the pulse-shaped one: it runs for
+  // tens of seconds and hundreds of degrees, and "how hard may a 500 ms pulse push" is a different
+  // approval from "how long may we take a drag map". One key answering both would be a lie in one
+  // of the two directions. Absence is a named refusal, not a default that nobody chose.
+  auto need = [&](const char* key) {
+    const auto node = limit[key];
+    if (!node) throw std::runtime_error(std::string("probe config is missing limits.") + key);
+    return node;
+  };
+  const double sweep_travel_cap = need("sweep_travel_deg").as<double>();
+  const int sweep_duration_cap = need("sweep_duration_ms").as<int>();
+  const double sweep_speed_cap = need("sweep_speed_deg_s").as<double>();
+  const double sweep_ff_cap = need("sweep_ff_a_max").as<double>();
+  const bool sweeping = sweep_deg != 0;
+  const int pulse_cap = sweeping ? sweep_duration_cap : duration_limit;
+  const double speed_cap = sweeping ? sweep_speed_cap : 5.0;
   if (voltage_limit < 1 || voltage_limit > 3000 || voltage < -voltage_limit || voltage > voltage_limit ||
       // A first probe asks for much less than the station's own envelope, and the probe's ceiling
       // is the smaller of the two: this tool must not be the place where 0.8 A becomes 3 A.
@@ -122,11 +144,19 @@ int main(int argc, char** argv) {
       // One kind of push per run: --yaw-voltage is not a spelling of --yaw-current-a, and letting
       // both through would let a stale launcher flag decide which frame the motor never saw.
       (yaw_current && voltage != 0) || (!yaw_current && current_a != 0) ||
-      duration_limit < 1 || duration_limit > 500 || pulse_ms < 1 || pulse_ms > duration_limit ||
+      duration_limit < 1 || duration_limit > 500 || pulse_ms < 1 || pulse_ms > pulse_cap ||
       !std::isfinite(travel_limit) || travel_limit <= 0 || travel_limit > 5 ||
       !std::isfinite(speed_limit) || speed_limit <= 0 || speed_limit > 20 ||
       !std::isfinite(age_limit) || age_limit <= 0 || age_limit > 20 ||
       !std::isfinite(heartbeat_limit) || heartbeat_limit <= 0 || heartbeat_limit > 40 ||
+      // Sweep envelope: 400 degrees so a requested 360 plus settle is allowed, two minutes so a
+      // stalled sweep still ends by itself, and the feedforward may not out-push the ceiling.
+      !std::isfinite(sweep_travel_cap) || sweep_travel_cap <= 0 || sweep_travel_cap > 400 ||
+      sweep_duration_cap < 1000 || sweep_duration_cap > 120000 ||
+      !std::isfinite(sweep_speed_cap) || sweep_speed_cap <= 0 || sweep_speed_cap > 40 ||
+      !std::isfinite(sweep_ff_cap) || sweep_ff_cap <= 0 || sweep_ff_cap > ota::gm6020::kMaxContinuousA ||
+      (sweeping && (!yaw_current || speed_reference_deg_s == 0 || sweep_ff_a < 0 ||
+                    std::abs(sweep_deg) > sweep_travel_cap || sweep_ff_a > sweep_ff_cap)) ||
       observe_ms < 1000 || observe_ms > 10000) {
     std::string why = "probe limits outside fixed commissioning envelope";
     if (yaw_current && voltage != 0)
@@ -134,6 +164,15 @@ int main(int argc, char** argv) {
             "use --yaw-current-a (max " + std::to_string(current_limit) + " A)";
     if (!yaw_current && current_a != 0)
       why = "--yaw-current-a requires yaw.control_mode: current in the probe config";
+    if (sweeping && !yaw_current)
+      why = "a drag sweep is a torque-current measurement; this probe profile is not in current mode";
+    if (sweeping && speed_reference_deg_s == 0)
+      why = "--yaw-sweep-deg drags the axis under speed regulation; add --yaw-speed-deg-s";
+    if (sweeping && sweep_ff_a < 0)
+      why = "--yaw-sweep-ff-a is a magnitude; the direction comes from the sign of --yaw-sweep-deg";
+    if (sweeping && (std::abs(sweep_deg) > sweep_travel_cap || sweep_ff_a > sweep_ff_cap))
+      why = "sweep outside the configured envelope (max " + std::to_string(sweep_travel_cap) +
+            " deg, feedforward up to " + std::to_string(sweep_ff_cap) + " A)";
     throw std::runtime_error(why);
   }
   const auto yaw_id = cfg["yaw"]["motor_id"].as<int>();
@@ -150,9 +189,11 @@ int main(int argc, char** argv) {
   const auto pitch_limit = cfg["pitch"]["current_limit_a"].as<double>();
   if (!ota::can::valid_pitch_current_limit(pitch_limit))
     throw std::runtime_error("pitch current limit must be positive and at most 5 A");
-  if (speed_reference_deg_s < -5 || speed_reference_deg_s > 5 ||
+  if (speed_reference_deg_s < -speed_cap || speed_reference_deg_s > speed_cap ||
       (speed_reference_deg_s != 0 && (voltage != 0 || current_a != 0)))
-    throw std::runtime_error("velocity probe requires integer target within +/-5 deg/s and no fixed open-loop push");
+    throw std::runtime_error("velocity probe requires integer target within +/-" +
+                             std::to_string(static_cast<int>(speed_cap)) +
+                             " deg/s and no fixed open-loop push");
   const bool yaw_motion = voltage != 0 || current_a != 0 || speed_reference_deg_s != 0;
   if (apply_pitch_limit && yaw_motion)
     throw std::runtime_error("pitch limit setup must run without yaw actuation");
@@ -338,6 +379,12 @@ int main(int argc, char** argv) {
   bool stopped = false;
   ota::TimeNs still_since = 0;
   const char* reason = "completed";
+  // Breakaway assist: static drag on a crossed-roller bearing is larger than the drag once the
+  // axis is turning, so a sweep that only asks the integrator for current spends seconds winding
+  // up before it can measure anything. The feedforward is a magnitude whose sign follows the drag
+  // direction, so a negative sweep cannot quietly fight its own PI.
+  const double sweep_ff_signed =
+      sweeping ? (speed_reference_deg_s < 0 ? -sweep_ff_a : sweep_ff_a) : 0.0;
   for (;;) {
     const auto current = read();
     const auto now = ota::now_monotonic_ns();
@@ -349,7 +396,8 @@ int main(int argc, char** argv) {
     if (interrupted) { trip.store(true); reason = "interrupted"; }
     if (!current.valid || age_ms > age_limit) { trip.store(true); reason = "feedback_invalid_or_stale"; }
     if (yaw.stats().rx_error_frames || pitch.stats().rx_error_frames) { trip.store(true); reason = "CAN_error_frame"; }
-    if (speed > speed_limit || travel > travel_limit) { trip.store(true); reason = "speed_or_travel_guard"; }
+    if (speed > (sweeping ? sweep_speed_cap : speed_limit) ||
+        travel > (sweeping ? sweep_travel_cap : travel_limit)) { trip.store(true); reason = "speed_or_travel_guard"; }
     if (trip.load() && std::string_view(reason) == "completed") reason = "heartbeat_guard";
     bool active = false;
     // One number, two units: raw counts in voltage mode, amperes in current mode. The frame
@@ -369,11 +417,11 @@ int main(int argc, char** argv) {
           ? velocity_loop.update(reference, current.position, send_time) : 0;
       const double regulated_amps = (speed_reference_deg_s && yaw_current)
           ? velocity_loop.update_amps(reference, current.position, send_time,
-                                      5.0 / degrees, current_limit, loop_kp_a, loop_ki_a)
+                                      speed_cap / degrees, current_limit, loop_kp_a, loop_ki_a)
           : 0.0;
       if (active) {
         applied_output = yaw_current
-            ? std::clamp(speed_reference_deg_s ? regulated_amps : current_a,
+            ? std::clamp(speed_reference_deg_s ? regulated_amps + sweep_ff_signed : current_a,
                          -current_limit, current_limit)
             : std::clamp(static_cast<double>(speed_reference_deg_s ? regulated_counts : voltage),
                          static_cast<double>(-voltage_limit), static_cast<double>(voltage_limit));
@@ -395,10 +443,24 @@ int main(int argc, char** argv) {
       if (!still_since) still_since = now;
       stopped = now - still_since >= 250000000;
     } else { still_since = 0; stopped = false; }
+    // A sweep ends when it has dragged the requested angle, or the moment anything trips: the
+    // guard is already forcing zeros, and sitting out the rest of the window watching zeros cannot
+    // teach us anything the trace has not already written down.
+    if (sweeping && (trip.load() || travel >= std::abs(static_cast<double>(sweep_deg)))) {
+      if (!trip.load()) reason = "sweep_target_reached";
+      break;
+    }
     if (elapsed_ms >= pulse_ms + observe_ms || (trip.load() && stopped)) break;
     next += 5ms; std::this_thread::sleep_until(next);
   }
   if (yaw_motion) {
+    // Retire the guard before the trailing burst, not after it. The guard's trip condition is a
+    // stale feedback heartbeat, and only the observation loop refreshes that heartbeat: while this
+    // 100 ms burst ran with the loop already finished, every yaw_motion run tripped on its own
+    // cleanup and exited 2 no matter what the drive did. A gate that cannot go green is not a
+    // gate, and the reason field could no longer be renamed, so the failure was also nameless.
+    guard.request_stop();
+    if (guard.joinable()) guard.join();
     for (int i = 0; i < 20; ++i) {
       if (!yaw.send_frame(zero)) zero_failed.store(true);
       std::this_thread::sleep_for(5ms);
@@ -408,7 +470,11 @@ int main(int argc, char** argv) {
   const auto final = read();
   const auto yaw_stats = yaw.stats(); const auto pitch_stats = pitch.stats();
   yaw.close(); pitch.close();
-  std::cout << "RESULT reason=" << reason
+  const std::string sweep_text = sweeping
+      ? " sweep_target_deg=" + std::to_string(sweep_deg) +
+        " sweep_ff_a=" + std::to_string(sweep_ff_a)
+      : "";
+  std::cout << "RESULT reason=" << reason << sweep_text
             << (yaw_current ? " yaw_mode=current yaw_current_a=" : " yaw_mode=voltage yaw_voltage=")
             << (yaw_current ? current_a : voltage)
             << " current_ceiling_a=" << current_limit
