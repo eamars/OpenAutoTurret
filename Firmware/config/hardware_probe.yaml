@@ -44,9 +44,10 @@ limits:
   # and a sweep with no feedforward would spend seconds of integrator windup discovering that.
   sweep_travel_deg: 400
   sweep_duration_ms: 60000
-  # 40, not 15: with a breakaway feedforward the axis is allowed to overshoot its own speed target
-  # while it is still crossing a binding point, and a guard that trips on a legitimate transient
-  # ends the sweep at 36 ms and measures nothing. Measured on the station: 1.0 A of feedforward
-  # broke static friction in 10 ms and the axis was at ~35 deg/s 25 ms later.
+  # Both of these are argument bounds, not runtime guards: they say how big a sweep may be asked
+  # for, and neither one is allowed to end a sweep that is already running. A sweep measures torque,
+  # not speed (owner, 09-29), and the first two attempts tripped speed_or_travel_guard 36 ms and
+  # 5 s in -- at 1.0 A the axis broke static friction in 10 ms and was at ~35 deg/s 25 ms later --
+  # so a speed cap defended a number nobody asked for and cost the map.
   sweep_speed_deg_s: 40
   sweep_ff_a_max: 1.20

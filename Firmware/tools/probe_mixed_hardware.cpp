@@ -396,8 +396,16 @@ int main(int argc, char** argv) {
     if (interrupted) { trip.store(true); reason = "interrupted"; }
     if (!current.valid || age_ms > age_limit) { trip.store(true); reason = "feedback_invalid_or_stale"; }
     if (yaw.stats().rx_error_frames || pitch.stats().rx_error_frames) { trip.store(true); reason = "CAN_error_frame"; }
-    if (speed > (sweeping ? sweep_speed_cap : speed_limit) ||
-        travel > (sweeping ? sweep_travel_cap : travel_limit)) { trip.store(true); reason = "speed_or_travel_guard"; }
+    // A drag sweep measures torque, not speed, and the owner's ruling on 09-29 is that nothing
+    // shaped like a motion limit may end one: "this is a torque test, not a speed test", and
+    // anything that can fail the test has to come out. So while sweeping there is no speed cap and
+    // no travel guard — the requested angle is the whole point of the run, and a breakaway is
+    // allowed to be violent. What is still able to stop a sweep is not a safety margin but the
+    // measurement's own validity, three lines above: if the drive stopped answering, the map we
+    // are drawing is fiction and the PI is integrating a position we no longer have.
+    if (!sweeping && (speed > speed_limit || travel > travel_limit)) {
+      trip.store(true); reason = "speed_or_travel_guard";
+    }
     if (trip.load() && std::string_view(reason) == "completed") reason = "heartbeat_guard";
     bool active = false;
     // One number, two units: raw counts in voltage mode, amperes in current mode. The frame
