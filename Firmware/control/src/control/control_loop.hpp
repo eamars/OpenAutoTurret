@@ -339,6 +339,10 @@ class ControlLoop {
   // from a non-RT thread; guarded by the store's mutex). Tracking fields are
   // populated only while tracking mode is enabled.
   const telemetry::Telemetry& telemetry() const { return telemetry_; }
+  // The shutdown outcome belongs in the same file as the stop it closes: today the file has a
+  // request and an outcome per stop, and the log has a line saying how the process ended, and
+  // nothing joins them. `stop_id` is the join key. docs/ADR-001/docs/07, WP2.
+  void note_shutdown(bool parked, const std::string& cause);
   // Where a trip's frozen window is additionally written. Deliberately a setter on
   // the loop rather than a mutable telemetry() accessor: the store stays read-only
   // to everyone except the one thing that owns it.

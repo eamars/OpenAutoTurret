@@ -683,6 +683,12 @@ int main(int argc, char** argv) {
       spdlog::error("PARK FAILED: de-energized (phase={}, fault='{}')", phase_name(loop.phase()),
                    loop.fault_reason().empty() ? "park unavailable or shutdown deadline exceeded" : loop.fault_reason());
   }
+  // One closing line in the stop-evidence file, carrying the stop_id the earlier records used:
+  // the log says what we printed to a terminal, this says how the process ended.
+  loop.note_shutdown(!shutdown_failed,
+                     loop.fault_reason().empty()
+                         ? (mixed_mode ? "stop requested" : "park requested")
+                         : loop.fault_reason());
   if (system) system->close();
   if (mixed_backend) mixed_backend->close();
   if (imu_observer) imu_observer->stop();

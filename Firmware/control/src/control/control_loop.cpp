@@ -419,6 +419,23 @@ bool ControlLoop::start_parking(std::string& err) {
   return true;
 }
 
+void ControlLoop::note_shutdown(bool parked, const std::string& cause) {
+  // Written once, at process end, from the point where the outcome is known: the third line
+  // of a stop's story -- the request, the per-axis evidence, and here whether the process
+  // actually reached Parked and why it is going away. Without it "we asked" and "it stopped"
+  // stay two claims rather than one record.
+  std::string reason = cause;
+  for (char& ch : reason) {
+    if (ch == '"' || ch == '\\' || ch == '\n') ch = ' ';   // one record per line, parseable always
+  }
+  // Raw strings because this line is JSON: with escapes it was rewritten wrong twice today.
+  telemetry_.append_stop_evidence(
+      std::string(R"({"kind":"shutdown","stop_id":")") +
+      (mixed_stop_id_.empty() ? "stop-none" : mixed_stop_id_) +
+      R"(","parked":)" + std::string(parked ? "true" : "false") + R"(,"phase":")" +
+      std::string(phase_name(phase())) + R"(","cause":")" + reason + R"("})" + "\n");
+}
+
 void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   // Verification failure withholds automatic release. Emergency safety
   // actions retain their independent disable authority.
