@@ -1,3 +1,4 @@
+#include "ota_test_paths.hpp"
 #include <filesystem>
 #include <fstream>
 #include <unistd.h>
@@ -12,7 +13,7 @@
 using namespace ota;
 namespace {
 std::string station_config() {
-  return (std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"config/turret.yaml").string();
+  return ota_test_config("config/turret.yaml", (std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"config/turret.yaml").string());
 }
 config::LoadResult load(YAML::Node root) {
   char path[] = "/tmp/ota_motion_XXXXXX";

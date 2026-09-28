@@ -1,3 +1,4 @@
+#include "ota_test_paths.hpp"
 #include <filesystem>
 #include <fstream>
 #include <unistd.h>
@@ -17,7 +18,7 @@ using namespace ota;
 namespace {
 const std::filesystem::path& firmware_root() {
   static const std::filesystem::path root =
-      std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+      ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path());
   return root;
 }
 const char* kNope = nullptr;  // 只为下面那个 helper 有个锚

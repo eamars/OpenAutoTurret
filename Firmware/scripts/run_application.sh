@@ -215,6 +215,9 @@ if [ "$ACTION" = deploy ]; then
     # directly rather than through ctest, because a CTest cache would point back at the machine
     # that built it. The symlink keeps every later path in this script unchanged.
     ln -sfn "$APP/build-arm64" "$APP/build"
+    # The tests resolve their config against this: the binary was compiled elsewhere, so its
+    # compiled-in source path describes a machine this station has never been.
+    export OTA_FIRMWARE_ROOT="$APP"
     tests_run=0
     tests_failed=0
     while IFS= read -r t; do
