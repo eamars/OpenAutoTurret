@@ -56,3 +56,23 @@ C1 的任何数值结论；FOV 的任何补值；detail 相机的标定（硬件
 `perception/tests/test_preview_closure.py`：图像路径实现的四种朝向**都能自我撤销**（预览半程闭合成立）。
 我自己先写错过一次——断言"所有朝向都是对合"，被 `rotate_90` 连做两次等于 180° 当场推翻；
 闭合来自**互逆**，而这里恰好四种都是自逆。**是测试抓住了我，不是我把测试改成能过。**
+
+### 交接：`模型 ↔ 原始` 半程闭合（WP4 最后一件，未做）
+
+**本轮探明的现状**（不是推测）：
+
+- `common/image_corrections.py` 只有**正向** `apply_orientation_bbox`，无逆变换；但已实现的四种朝向
+  对 bbox 同样**自逆**，所以预览半程闭合已用真函数测掉（`test_preview_closure.py`，3 passed）。
+- `perception/model/` 里**没有** `unmap`／`to_raw`／`to_frame`；只有 `input_size` 上报
+  （`model/adapter.py:103`）与 `compatibility_probe` 的 `input_width` 字段。
+
+**唯一挡住结论的问题**：检测器返回的框是**相对模型输入的归一化**（配置项 `bbox_normalized`），
+还是**已按 letterbox 撤过缩放与补边**？
+- 若是前者：`模型→原始` = 撤补边 → 除以 scale → 乘帧尺寸，需要一个小函数；
+- 若是后者：那步已经在检测器里做完，闭合测试应改为**验证它真的做过**（否则框会整体偏移）。
+
+**不猜的理由**：这两种情况下"闭合成立"的断言完全不同；而我这一晚已有三次因仓促写下、后来自己拆的结论。
+读 `perception/model/imx500_yolo.py` 的解码段即可判定——**下一刀从那里起**。
+
+**当前 WP4 资格姿态不变**：manifest 仍然**拒绝给资格**（`closure=claimed`／install 无会话），
+所以这块没做完**不会让任何东西被错误地放行**——这正是清单存在的意义。
