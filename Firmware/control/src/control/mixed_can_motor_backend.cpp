@@ -73,14 +73,35 @@ bool MixedCanMotorBackend::validate_profile(const config::mixed::Profile& p,
     err = "mixed profile must describe can0/spi0.0 and can1/spi1.0 at 1 Mbps";
     return false;
   }
+  // Current mode is admitted here rather than assumed downstream: the frame ids differ, and the
+  // two preconditions belong to the operator's record, not to our optimism. The error is split so
+  // "Current Ring is not enabled" cannot arrive dressed up as "your profile is the wrong shape".
+  const bool yaw_current = p.yaw.control_mode == config::mixed::ControlMode::Current;
   if (p.yaw.protocol != config::mixed::Protocol::Gm6020 ||
       p.yaw.bus_name != "yaw" || p.yaw.motor_id != 1 ||
       p.yaw.topology != config::mixed::Topology::Continuous ||
-      p.yaw.control_mode != config::mixed::ControlMode::Voltage ||
+      (!yaw_current && p.yaw.control_mode != config::mixed::ControlMode::Voltage) ||
       p.yaw.feedback_frame_id != std::optional<uint32_t>{0x205} ||
-      p.yaw.command_frame_id != std::optional<uint32_t>{0x1ff}) {
-    err = "mixed profile yaw must be GM6020 ID 1 with continuous voltage control";
+      (!yaw_current && p.yaw.command_frame_id != std::optional<uint32_t>{0x1ff}) ||
+      (yaw_current && p.yaw.command_frame_id != std::optional<uint32_t>{0x1fe})) {
+    err = yaw_current
+        ? "mixed profile yaw must be GM6020 ID 1 continuous current control with feedback 0x205 "
+          "and command 0x1FE"
+        : "mixed profile yaw must be GM6020 ID 1 with continuous voltage control";
     return false;
+  }
+  if (yaw_current) {
+    if (!p.yaw.current_ring_verified) {
+      err = "axes.yaw: current mode requires current_ring_verified: true (firmware >= v1.0.11.2 "
+            "and Current Ring enabled in RoboMaster Assistant v2.7+)";
+      return false;
+    }
+    // Negated comparison so a NaN limit fails closed instead of slipping through both bounds.
+    if (!(p.yaw.host_current_limit_a > 0.0) || p.yaw.host_current_limit_a > 1.62) {
+      err = "axes.yaw: current mode needs host_current_limit_a in (0, 1.62] A -- 1.62 A is the "
+            "motor's maximum continuous rating and the software will not exceed it on its own";
+      return false;
+    }
   }
   if (p.pitch.protocol != config::mixed::Protocol::CyberGear ||
       p.pitch.bus_name != "pitch" || p.pitch.motor_id != 127 ||
