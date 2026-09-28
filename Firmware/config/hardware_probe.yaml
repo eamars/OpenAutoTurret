@@ -26,7 +26,7 @@ limits:
   # 4 counts of elastic wind-up and 0 deg/s, and the guide states +/-16384 == +/-3 A maximum
   # torque current -- so 0.8 A was 27% of what the drive is allowed to source, and "the axis is
   # blocked" was a conclusion drawn without ever asking the motor near its nameplate.
-  yaw_current_a: 1.20
+  yaw_current_a: 3.00
   # The regulated (--yaw-speed-deg-s) path uses the same amperes gains as production, so a probe
   # result transfers instead of being a second tuning mystery.
   current_kp_a_per_rad_s: 1.0
@@ -50,4 +50,4 @@ limits:
   # 5 s in -- at 1.0 A the axis broke static friction in 10 ms and was at ~35 deg/s 25 ms later --
   # so a speed cap defended a number nobody asked for and cost the map.
   sweep_speed_deg_s: 40
-  sweep_ff_a_max: 1.20
+  sweep_ff_a_max: 3.00

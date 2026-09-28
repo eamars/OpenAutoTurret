@@ -72,6 +72,26 @@ struct Sample {
   bool valid{};
 };
 
+// ---- test-tool torque current, copied and not reused -------------------------------------------
+// Production encodes current through gm6020::current_frame(), which refuses a host limit above the
+// 1.62 A continuous rating. That bound is production's business and stays where it is. This tool
+// exists to ask the motor for more than that rating and to be deleted once the answer is written
+// down, so it carries its own builder, bounded only by the guide's full scale. Hardcoded on
+// purpose: the owner's instruction for this code is "runs, verifies, fast" -- no policy, no reuse,
+// no safety margin. It may fail the motor. It may not quietly fail to ask.
+constexpr double kProbeMaxAmps = 3.0;  // guide v1.4: +-16384 raw == +-3.0 A of torque current
+ota::can::RawFrame probe_current_frame(double amps) {
+  const int raw = ota::gm6020::current_raw_uncapped(std::clamp(amps, -kProbeMaxAmps, kProbeMaxAmps));
+  ota::can::RawFrame frame;  // zero-initialised, so the unused slots command nothing
+  frame.extended = false;
+  frame.dlc = 8;
+  frame.id = 0x1fe;
+  const auto value = static_cast<uint16_t>(static_cast<int16_t>(raw));
+  frame.data[0] = static_cast<uint8_t>(value >> 8);
+  frame.data[1] = static_cast<uint8_t>(value);
+  return frame;
+}
+
 int main(int argc, char** argv) {
  try {
   std::string config = "config/hardware_probe.yaml", trace_path;
@@ -137,7 +157,7 @@ int main(int argc, char** argv) {
   if (voltage_limit < 1 || voltage_limit > 3000 || voltage < -voltage_limit || voltage > voltage_limit ||
       // A first probe asks for much less than the station's own envelope, and the probe's ceiling
       // is the smaller of the two: this tool must not be the place where 0.8 A becomes 3 A.
-      !std::isfinite(current_limit) || current_limit <= 0 || current_limit > ota::gm6020::kMaxContinuousA ||
+      !std::isfinite(current_limit) || current_limit <= 0 || current_limit > kProbeMaxAmps ||
       !std::isfinite(current_a) || current_a < -current_limit || current_a > current_limit ||
       !std::isfinite(loop_kp_a) || loop_kp_a <= 0 || loop_kp_a > 10.0 ||
       !std::isfinite(loop_ki_a) || loop_ki_a < 0 || loop_ki_a > 20.0 ||
@@ -154,7 +174,7 @@ int main(int argc, char** argv) {
       !std::isfinite(sweep_travel_cap) || sweep_travel_cap <= 0 || sweep_travel_cap > 400 ||
       sweep_duration_cap < 1000 || sweep_duration_cap > 120000 ||
       !std::isfinite(sweep_speed_cap) || sweep_speed_cap <= 0 || sweep_speed_cap > 40 ||
-      !std::isfinite(sweep_ff_cap) || sweep_ff_cap <= 0 || sweep_ff_cap > ota::gm6020::kMaxContinuousA ||
+      !std::isfinite(sweep_ff_cap) || sweep_ff_cap <= 0 || sweep_ff_cap > kProbeMaxAmps ||
       (sweeping && (!yaw_current || speed_reference_deg_s == 0 || sweep_ff_a < 0 ||
                     std::abs(sweep_deg) > sweep_travel_cap || sweep_ff_a > sweep_ff_cap)) ||
       observe_ms < 1000 || observe_ms > 10000) {
@@ -438,7 +458,7 @@ int main(int argc, char** argv) {
         }
       }
       const auto command = yaw_current
-          ? ota::gm6020::current_frame(static_cast<uint8_t>(yaw_id), applied_output, current_limit)
+          ? probe_current_frame(applied_output)  // the copied builder above, not production's bound
           : ota::gm6020::voltage_frame(static_cast<uint8_t>(yaw_id),
                                        static_cast<int>(applied_output));
       if (yaw_motion && !yaw.send_frame(active ? command : zero)) { trip.store(true); reason = "tx_failed"; }
