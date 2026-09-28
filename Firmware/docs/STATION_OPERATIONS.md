@@ -614,6 +614,7 @@ A deploy that only works while one container's home directory survives is not a 
 So the station's key is pinned in a file and handed to the tool explicitly:
 
 ```bash
+OTA_SSH_IDENTITY=/workspace/general_purpose/.secrets/ssh/id_ed25519 \
 OTA_KNOWN_HOSTS=/workspace/general_purpose/.secrets/ssh/known_hosts_station \
   python3 "$PWD/Firmware/tools/deploy_station.py" \
   --host eamars@rpi-turret --connect-address 192.168.2.100 --activate --ready-timeout 420
@@ -623,6 +624,10 @@ OTA_KNOWN_HOSTS=/workspace/general_purpose/.secrets/ssh/known_hosts_station \
 wearing that address cannot be accepted silently. The pinned line is
 
     256 SHA256:ll1B6KKdmry4daddh4fMxJ4ecnLS7zp9hBH+3DO0fQw rpi-turret,192.168.2.100 (ED25519)
+
+`--identity` (env `OTA_SSH_IDENTITY`) does the same for the private key, with `IdentitiesOnly=yes`:
+the same rebuild took `~/.ssh` away, and the resulting 255 reads like a host-key failure but is an
+auth failure -- both halves of "the container's home is not durable" were measured this way.
 
 which was checked against the host answering today (`hostname` = `rpi-turret`, `uname -m` = `aarch64`).
 If that fingerprint ever changes, that is a finding to investigate, not a line to update.
