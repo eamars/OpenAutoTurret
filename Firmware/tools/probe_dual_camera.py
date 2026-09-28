@@ -211,6 +211,16 @@ def main() -> int:
                     if hasattr(cam, "camera_properties") else "?"
                 cfg = cam.create_video_configuration(main={"size": (args.width, args.height)})
                 cam.configure(cfg)
+                # Ask for the rate on the control the configuration actually advertises --
+                # the single-camera probe learned that the hard way. Without this the run
+                # silently happens at the sensor's default 30 fps, and "requested 15,
+                # measured 30" reads like a finding instead of a missing pin.
+                dur_us = int(round(1e6 / max(1.0, float(args.fps))))
+                try:
+                    cam.set_controls({"FrameDurationLimits": (dur_us, dur_us)})
+                    entry["rate_pinned_us"] = dur_us
+                except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+                    entry["error"] = f"rate not pinned: {type(exc).__name__}: {exc}"
                 entry["camera"] = cam
                 opened.append(entry)
             except Exception as exc:  # noqa: BLE001 - an open failure IS the answer
@@ -250,6 +260,7 @@ def main() -> int:
         report["sensors"].append({
             "model": stream["model"],
             "camera_num": stream["camera_num"],
+            "rate_pinned_us": stream.get("rate_pinned_us"),
             "frames": stream["frames"],
             "measured_fps": round(stream["frames"] / span, 3) if span > 0.5 else None,
             "interval_p50_ms": (round(_percentile(stream["intervals_ms"], 50) or 0, 3)
