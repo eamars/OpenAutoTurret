@@ -181,6 +181,36 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
     } else {
       error(result, "axes.yaw.control_mode must be 'voltage' or 'current'");
     }
+
+    // The two preconditions current mode depends on are configuration facts, not runtime facts:
+    // they are the operator's record of the drive. Checked here, where the test surface already
+    // exists offline, rather than behind a CAN socket. Absent key => limit stays 0.0 => refused.
+    if (yaw_axis.control_mode == ControlMode::Current) {
+      // Recorded, not merely checked: a field that stays false while the file says true would make
+      // every consumer read a lie. The first red caught by these very tests.
+      yaw_axis.current_ring_verified = false;
+      yaw_axis.host_current_limit_a = 0.0;
+      bool acknowledged = false;
+      try {
+        const auto ack = yaw["current_ring_verified"];
+        acknowledged = ack.IsScalar() && ack.as<bool>();
+      } catch (const std::exception&) { acknowledged = false; }
+      if (!acknowledged)
+        error(result, "axes.yaw: current mode requires current_ring_verified: true "
+                      "(firmware >= v1.0.11.2 and Current Ring enabled in "
+                      "RoboMaster Assistant v2.7+)");
+      double limit = 0.0;
+      try {
+        const auto lim = yaw["host_current_limit_a"];
+        if (lim.IsScalar()) limit = lim.as<double>();
+      } catch (const std::exception&) { limit = 0.0; }
+      // Negated compare so a non-finite limit fails closed instead of slipping both bounds.
+      if (!(limit > 0.0) || limit > 1.62)
+        error(result, "axes.yaw: current mode needs host_current_limit_a in (0, 1.62] A "
+                      "-- 1.62 A is the motor's maximum continuous rating");
+      yaw_axis.current_ring_verified = acknowledged;
+      yaw_axis.host_current_limit_a = limit;
+    }
     const auto yaw_id = unsigned_value(yaw["motor_id"], "axes.yaw.motor_id", result);
     if (yaw_id != 1) error(result, "axes.yaw.motor_id must be 1");
     if (yaw_id <= UINT8_MAX) yaw_axis.motor_id = static_cast<uint8_t>(yaw_id);

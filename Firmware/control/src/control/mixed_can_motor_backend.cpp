@@ -90,19 +90,8 @@ bool MixedCanMotorBackend::validate_profile(const config::mixed::Profile& p,
         : "mixed profile yaw must be GM6020 ID 1 with continuous voltage control";
     return false;
   }
-  if (yaw_current) {
-    if (!p.yaw.current_ring_verified) {
-      err = "axes.yaw: current mode requires current_ring_verified: true (firmware >= v1.0.11.2 "
-            "and Current Ring enabled in RoboMaster Assistant v2.7+)";
-      return false;
-    }
-    // Negated comparison so a NaN limit fails closed instead of slipping through both bounds.
-    if (!(p.yaw.host_current_limit_a > 0.0) || p.yaw.host_current_limit_a > 1.62) {
-      err = "axes.yaw: current mode needs host_current_limit_a in (0, 1.62] A -- 1.62 A is the "
-            "motor's maximum continuous rating and the software will not exceed it on its own";
-      return false;
-    }
-  }
+  // The acknowledgement and the host clamp are validated by the profile parser, which owns them
+  // and is testable without a CAN socket; the backend keeps the frame-identity rule above.
   if (p.pitch.protocol != config::mixed::Protocol::CyberGear ||
       p.pitch.bus_name != "pitch" || p.pitch.motor_id != 127 ||
       p.pitch.topology != config::mixed::Topology::Bounded ||

@@ -1,6 +1,8 @@
 #include "ota_test_paths.hpp"
 #include <filesystem>
+#include <algorithm>
 #include <fstream>
+#include <sstream>
 #include <unistd.h>
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
@@ -189,4 +191,66 @@ TEST(MixedStationConfig, DirectionSignIsStrictlyTypedButNotConsumedByMixed) {
   EXPECT_TRUE(load_from(root).ok);    // loads either sense: the mixed backend
   root["motors"]["yaw"]["direction_sign"] = 1;   // HEAD pins +1 and both run
   EXPECT_TRUE(load_from(root).ok);    // on the same physical wiring (WP0 §4.2)
+}
+
+// Current mode is refused unless the operator has recorded the drive's preconditions. The rule
+// lives in the parser precisely so this test can exist without a CAN socket; if someone moves the
+// checks behind the backend again, these three cases are the tripwire that says so.
+namespace {
+std::string write_variant(const char* tag, const std::string& yaml) {
+  const auto path = (std::filesystem::temp_directory_path() /
+                     ("ota_mixed_" + std::string(tag) + ".yaml")).string();
+  std::ofstream out(path);
+  out << yaml;
+  out.close();
+  return path;
+}
+
+std::string current_mode_yaml(const std::string& extra) {
+  std::ifstream in((firmware_root() / "config/mixed_hardware.yaml").string());
+  std::stringstream buf;
+  buf << in.rdbuf();
+  auto text = buf.str();
+  const auto at = text.find("control_mode: voltage");
+  EXPECT_NE(at, std::string::npos) << "the commissioned profile no longer pins yaw to voltage";
+  text.replace(at, std::string("control_mode: voltage").size(),
+               "control_mode: current" + extra);
+  return text;
+}
+}  // namespace
+
+TEST(MixedCurrentMode, RefusedWithoutRecordedAcknowledgement) {
+  const auto path = write_variant("no_ack", current_mode_yaml(""));
+  const auto loaded = config::mixed::load_mixed_hardware_profile(path);
+  EXPECT_FALSE(loaded.ok);
+  const bool named = std::any_of(loaded.errors.begin(), loaded.errors.end(),
+                                 [](const std::string& e) {
+                                   return e.find("current_ring_verified") != std::string::npos;
+                                 });
+  EXPECT_TRUE(named) << "refusal must name the missing acknowledgement, not just say 'invalid'";
+}
+
+TEST(MixedCurrentMode, RefusedWhenTheHostClampExceedsTheMotorRating) {
+  const auto path = write_variant(
+      "hot_limit", current_mode_yaml(
+          "\n    current_ring_verified: true\n    host_current_limit_a: 1.63"));
+  const auto loaded = config::mixed::load_mixed_hardware_profile(path);
+  EXPECT_FALSE(loaded.ok);
+  const bool named = std::any_of(loaded.errors.begin(), loaded.errors.end(),
+                                 [](const std::string& e) {
+                                   return e.find("host_current_limit_a") != std::string::npos &&
+                                          e.find("1.62") != std::string::npos;
+                                 });
+  EXPECT_TRUE(named) << "the refusal must say which bound was broken and what the rating is";
+}
+
+TEST(MixedCurrentMode, AcceptedWhenBothPreconditionsAreRecorded) {
+  const auto path = write_variant(
+      "ok", current_mode_yaml(
+          "\n    current_ring_verified: true\n    host_current_limit_a: 0.8"));
+  const auto loaded = config::mixed::load_mixed_hardware_profile(path);
+  EXPECT_TRUE(loaded.ok) << why(loaded);
+  EXPECT_EQ(loaded.profile.yaw.control_mode, config::mixed::ControlMode::Current);
+  EXPECT_TRUE(loaded.profile.yaw.current_ring_verified);
+  EXPECT_DOUBLE_EQ(loaded.profile.yaw.host_current_limit_a, 0.8);
 }
