@@ -319,3 +319,20 @@ class TestProbeCommand(CliCase):
 
 if __name__ == "__main__":                                       # pragma: no cover
     unittest.main()
+
+
+class TestSyntheticWorker(CliCase):
+    """The offline path's worker has to report its own lifecycle, or the abstraction is decorative.
+
+    Asserted on the emitted line rather than on internals: whoever removes it should have to
+    change a test. ``quiet=False`` because the line is emitted only by a non-quiet daemon.
+    """
+
+    def test_the_offline_worker_reports_its_own_lifecycle(self):
+        code, _, err = run(*self.args("--profile", "_mock", "--max-frames", "6", quiet=False))
+        self.assertEqual(code, 0, err[-400:])
+        line = next((entry for entry in err.splitlines() if "visiond: worker " in entry), "")
+        self.assertTrue(line, f"no worker line in: {err[-400:]}")
+        self.assertIn("state=stopped", line)      # ended clean -- not dead, not hung
+        self.assertIn("frames=6", line)           # delivered what it was asked to deliver
+        self.assertIn("generation=1", line)       # one owner, never restarted
