@@ -110,7 +110,14 @@ $P $R/Firmware/tools/bench_hailo_pipeline.py --hef $H --seconds 600 --queue-dept
 
 ### 没验到的、别当成验过的
 
-1. **最终候选长跑里两路检出都是 0**——那 10 分钟没人在这台机器前。"两路各自产生过检出"在基线长跑（广角 85 / 窄角 55 帧）与矩阵第 5 格里证过，但**在 B 配置上还欠一次有人入镜的短窗**。
+1. **最终候选(B)配置下"两路同一窗内都产生检出"还没证到。** 我在 B 配置上又跑了三个窗口去够这条，全空：
+   60 s（广角 **134** 帧有检出 / 窄角 0）、120 s（**0 / 0**）、60 s 且把阈值降到 **0.30**（**0 / 0**，`is_B_thr03.json`）。
+   现场照片（`logs/drag/station_preview_now.jpg`）里没有人，只有一张黑色电竞椅——那些零星检出就是它压在阈值上的框。
+   **归属机制本身已经证过**（基线长跑同一 10 分钟窗：广角 85 / 窄角 55 帧；矩阵第 5 格：广角 100 / 窄角 74 帧），
+   但那两格是"主图进 Python"的形状。**⇒ 欠的是一条人在镜头前的 2 分钟短窗**，用哪条路径、阈值多少都能复现（命令见 §3）。
+   **顺带一条给架构师的副产品**：`/api/state` 的 `camera_id` 与 `camera_identity_source` **是空串**，而 visiond 日志里有
+   `identity cam-… source=by-path durable=True` —— 站点**知道**身份却没把它抬到 HTTP 面上，属该修的小缺陷。
+
 2. **"Python 完全不碰像素"的形状没测**：需要 hailort 的 GStreamer element，这台机零 GStreamer、无 sudo。B 是"ISP 做缩放 + Python 一次 691 KB 拷贝"。
 3. **>30 fps 的一切**：这台机的模式表里没有。
 4. `perception/tests/test_pipeline.py` 有 2 条红（`model_inference_ms` 记为 unmeasured）**在我动工之前就红**（移开我的两个新文件后同样红）；`vision/tests/test_ipc_publisher.py` 的重连那条也是既有波动。

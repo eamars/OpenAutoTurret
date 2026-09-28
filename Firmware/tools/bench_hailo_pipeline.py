@@ -266,6 +266,8 @@ def main() -> int:
     parser.add_argument("--inference-stream", choices=("main", "lores"), default="main",
                         help="main = 基线（整帧进 Python 再缩放）；lores = 让 ISP 出第二条小流")
     parser.add_argument("--lores-width", default=640, type=int)
+    parser.add_argument("--score-threshold", default=SCORE_THRESHOLD, type=float,
+                        help="验收格用 0.5；归属证明可以另开一格降低阈值，标签要写清楚")
     parser.add_argument("--label", default="")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--no-lock", action="store_true")
@@ -503,7 +505,7 @@ def main() -> int:
                 if payload is not None:
                     batch = payload[0] if isinstance(payload, (list, tuple)) and payload else payload
                     try:
-                        counts = _detection_counts(batch, score_threshold=SCORE_THRESHOLD)
+                        counts = _detection_counts(batch, score_threshold=args.score_threshold)
                     except Exception as exc:  # noqa: BLE001
                         st.errors.append(f"postprocess: {type(exc).__name__}: {exc}")
                 t2 = time.monotonic()
@@ -520,8 +522,13 @@ def main() -> int:
                 st.inferred += 1
                 if counts:
                     st.with_detection += 1
-                if len(main_samples) < 8:
+                # Evidence has to contain an actual detection: eight results that all say
+                # `detections: {}` prove plumbing and nothing about attribution. Two empty ones are
+                # kept too, so the sample is not cherry-picked.
+                if (counts and len([x for x in main_samples if x["detections"]]) < 8) or \
+                        (not counts and len(main_samples) < 10):
                     main_samples.append({"camera_id": st.model, "capture_timestamp_ns": capture_ns,
+                                         "inference_timestamp_ns": int(t2 * 1e9),
                                          "detections": counts})
 
         with VDevice(device_ids=Device.scan()) as device:
@@ -560,6 +567,7 @@ def main() -> int:
         report = {
             "label": args.label, "seconds": args.seconds, "queue_depth": args.queue_depth,
             "inference_stream": args.inference_stream, "model_input": [in_h, in_w, 3],
+            "score_threshold": args.score_threshold,
             "spec": specs,
             "aggregate": {
                 "inferences_total": sum(st.inferred for st in stats.values()),
