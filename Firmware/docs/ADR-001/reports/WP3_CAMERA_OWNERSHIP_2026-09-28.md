@@ -75,3 +75,17 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 `camera identity <id> source=<by-path|index> durable=<…>`，每次开都留一行身份记录；
 上行载荷里的两个键保留为 best-effort。controld 那一份**等 dual-worker 那刀必然 bump 线格式时一起带**，
 那时五步图仍然有效，只是它属于那一刀。
+
+## 现场未通过：身份行没出现在 vision.log（本轮，未验证）
+
+站上 release `1091b03a4dd8` 的 `perception/visiond.py` **确实含有**我加的身份打印（远端 grep 到），
+`vision.log` 里 `visiond: camera 0 stream 1920x1080 …` 在（第 16 行），
+但**它前面没有 `camera identity …` 那一行**。 ⇒ 有两种解释，未分辨之前我不说"已上线"：
+
+1. 运行时 import 的 `perception` **不是这份 release 源码**（station-venv 里可能装了包，遮蔽了 release 目录）
+   —— 若成立，则第 15 轮 `camera_id` 为空的真正原因**根本不是中继**，而是**我改的代码没在跑**；
+2. 打印被 stdout 缓冲/重排（可能性低：同一 print 流里的后续行都在）。
+
+分辨探针已备：用 station-venv 的 python 打印 `perception.__file__` 看它解析到哪个路径。
+在分辨出来之前，WP3 的"身份已上线"降级为 **NOT_VERIFIED**；已验证的仍只有
+`camera_id.py` 的 4/4 自检与真路径映射（`cam-f45ad188 / by-path`）。
