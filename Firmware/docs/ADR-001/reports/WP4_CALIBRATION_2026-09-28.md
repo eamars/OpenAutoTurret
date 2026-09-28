@@ -76,3 +76,25 @@ C1 的任何数值结论；FOV 的任何补值；detail 相机的标定（硬件
 
 **当前 WP4 资格姿态不变**：manifest 仍然**拒绝给资格**（`closure=claimed`／install 无会话），
 所以这块没做完**不会让任何东西被错误地放行**——这正是清单存在的意义。
+
+### 悬问已答（读了 `imx500_yolo.py:236-241`，不是推测）
+
+本站检测器路径构造的是：
+
+```python
+geometry = InferenceGeometry(width, height, width, height,
+                             bbox_order='xy', bbox_normalized=True)   # 输入尺寸 == 流尺寸
+```
+
+⇒ **这条路径没有 letterbox**：框是**相对帧归一化**的，`模型→原始` 就是"归一化 × 帧尺寸"，
+**没有缩放或补边要撤**。二选一因此收敛为一个**承重不变量**：
+
+> `input_size == stream_size`，且框按帧归一化。
+
+**下一刀的绊线（小而致命）**：测试断言 IMX500 路径的几何确实声明"输入尺寸＝流尺寸"；
+若有人引入 letterbox（输入≠流）却仍按等尺寸归一化声明，**框会整体偏移而闭合测试不会红**——
+那正是这条绊线要拦的东西。写它需要读 `perception/detection/normalize.py` 的 `InferenceGeometry` 真接口
+（本轮上下文不足以再读一份 API 并写对断言，**宁可交接也不写一条可能说谎的断言**）。
+
+**WP4 剩余清单就此只剩两件**：① 上面那根绊线；② C1 真机留出集（`NOT_RUN`）。
+manifest 依旧拒绝给资格 ⇒ 这两件没做完，没有任何东西被错误放行。
