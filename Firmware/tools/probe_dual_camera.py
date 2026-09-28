@@ -283,7 +283,11 @@ def main() -> int:
     if silent:
         print(f"ANSWER: no -- {' '.join(silent)} opened and delivered zero frames", file=sys.stderr)
         return 1
-    print("ANSWER: yes -- both sensors streamed simultaneously")
+    # Counted, not asserted: `--models imx477` is one sensor on purpose (the cross-process
+    # test), and "both streamed" about a run that only asked for one is an overclaim with
+    # a friendly face.
+    print(f"ANSWER: yes -- {report['both_open']}/{len(models)} requested sensor(s) "
+          f"streamed simultaneously")
     return 0
 
 
