@@ -143,6 +143,29 @@ def _validate_mixed_profile(profile, path):
         raise RuntimeError("Mixed pitch current_limit_a must remain exactly 5 A")
     if buses["yaw"]["interface"] == buses["pitch"]["interface"]:
         raise RuntimeError("Mixed profile requires independent yaw and pitch CAN interfaces")
+    # Current mode is the commissioned state, and preflight must not be more permissive than the
+    # loader: controld refuses the same things, and a station that boots into a refused profile
+    # hands the operator a dead stack instead of a sentence. The 1.62 A figure is
+    # gm6020::kMaxContinuousA in control/src/can/gm6020_protocol.hpp, quoted here only because
+    # Python cannot include a C++ header -- change it there and here together. The amperes GAINS
+    # are not re-checked here: the loader owns them, and a wrong gain is loud at open() rather
+    # than silent, which is the only asymmetry worth spending a preflight line on.
+    if yaw.get("control_mode") == "current":
+        if yaw.get("current_ring_verified") is not True:
+            raise RuntimeError("Mixed yaw current mode requires current_ring_verified: true "
+                               "(firmware >= v1.0.11.2 and Current Ring enabled)")
+        try:
+            yaw_limit = float(yaw["host_current_limit_a"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(
+                "Mixed yaw current mode requires host_current_limit_a in amperes") from error
+        if not 0 < yaw_limit <= 1.62:
+            raise RuntimeError("Mixed yaw host_current_limit_a must be in (0, 1.62] A")
+        if yaw.get("command_frame_id") != 0x1FE:
+            raise RuntimeError("Mixed yaw current mode must command 0x1FE; "
+                               "a drive with the current ring on ignores 0x1FF")
+    elif yaw.get("control_mode") != "voltage":
+        raise RuntimeError("Mixed yaw control_mode must be 'current' or 'voltage'")
 
 def _validate_can_spi_mapping(bus, axis, require_up):
     interface = bus["interface"]

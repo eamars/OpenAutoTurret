@@ -226,3 +226,71 @@ Expected: (std::string::npos) != (missing.errors[0].find("guard_temp_raw_ceiling
 **我这边被推翻的三条（都记着，别抹）**：
 ① 我把他手推的 jog 当成跟踪成绩；② 我把 `TARGET_UNREACHABLE` 解释成载荷帽追不上；
 ③ 我先说"你的设置无罪"，实际驱动侧参数正是病因——**只有"你手没拆坏"这一条从头到尾成立。**
+
+---
+
+# 2026-09-29 01:0x｜layer 3 落刀：后端有了"安培"这个语义
+
+chatGPT 写的迁移指令 + 我实地核对（**先读后用、先核后认**）。核对结论：**指令里的每条硬事实都成立**，
+但有一处它不知道、我必须先说：官方 v1.4 同时列了 `0x2FE`（ID 1-3）与 `0x1FE`（ID 1-4）两张电流帧表却
+没讲怎么选（参考文件第 58 行的"文档含糊"警告）。**本包用 0x1FE 不是照表抄，是因为今晚的台架实测就是
+用它动的**（±0.40 A → ±300 字、反馈电流差 1%）。`0x2FE` 至今零证据。
+
+## 改了哪些文件（只碰 GM6020 yaw / mixed CAN 这一条路）
+
+| 文件 | 动了什么 |
+|---|---|
+| `control/src/can/gm6020_protocol.hpp` | 新增 `current_zero_frame(id)`：0x1FE、DLC 8、整帧全零、**不钳位也不该抛**（故障路径上没人接得住抛出） |
+| `control/src/can/gm6020_velocity.hpp` | PI 本体改成**单位无关**的私有 `step()`；`update()`=电压计数（**25000 这条边界从公共体挪进电压壳**，它本来就是电压帧的事实）、`update_amps()`=安培 |
+| `control/src/config/mixed_hardware_profile.{hpp,cpp}` | 电流模式新增 `current_kp_a_per_rad_s` / `current_ki_a_per_rad_s`（必填、有界、**拒绝电压形状的数**）；1.62 改为引用 `gm6020::kMaxContinuousA`（全站只此一处）；**模式↔帧号一致性在解析层就拒**；电压档案里残留的电流键=作废声明，直接拒 |
+| `config/mixed_hardware.yaml` | yaw 翻到 `control_mode: current` / `0x1FE`，写进 `current_ring_verified: true`、`host_current_limit_a: 0.8`、`current_kp_a_per_rad_s: 1.0`、`current_ki_a_per_rad_s: 0.6`（数字只在这里） |
+| `control/src/control/mixed_can_motor_backend.{hpp,cpp}` | 零帧决策收成一个自由函数 `yaw_zero_frame(profile)`，启动/HOLD/trip/关机四条路共用；命令路径按模式分岔（安培 PI → `current_frame`）；`yaw_last_voltage_`→`yaw_last_output_`（带单位），日志 `vout=…`→`+0.000 A` / `… counts`；`set_yaw_output_ceiling`→`set_yaw_voltage_ceiling` |
+| `control/src/main.cpp` | 启动打印一行"yaw 用什么单位驱动"，并明说 `max_output_counts` 在本模式不适用 |
+| `control/src/control/control_loop.cpp` | STOPPED 措辞：`zero-voltage` → `zero-output（电流模式下即零电流）`，**"yaw disable state unavailable" 原样保留** |
+| `tools/probe_mixed_hardware.cpp` | 新增 `--yaw-current-a`（严格浮点解析）；探针配置**必须声明** `yaw.control_mode`；错单位直接拒（`--yaw-voltage` 不当电流用）；归零帧按模式；trace 列名 `voltage_raw`→`drive_output` |
+| `config/hardware_probe.yaml` | `yaw.control_mode: current` + `yaw_current_a: 0.30` 探针帽 + 与产线同单位的调节增益 |
+| `scripts/run_application.sh` | 转发 `--yaw-current-a`；派生一个 `YAW_PUSH`，五处"不许有别的电机探针"的规则同时看得见两种单位 |
+| `tools/commissioning_fallback_stop.py` | 兜底归零**两帧都发**（0x1FF+0x1FE）——这是最后一道，猜错帧等于没停 |
+| `tools/probe_yaw_motion.cpp` | 三处归零都发两帧；打印明说"本探针发的是电压，驱动开了电流环就会忽略它——静止是关于帧的事实，不是关于机械" |
+| `tools/station_preflight.py` | 预检不再比对控更宽松：电流模式要有确认位、限值、0x1FE，否则一句话拦在开栈之前 |
+
+## 0x1FE 编码（实现即此）
+
+`raw = round(amps * 16384 / 3)`，**先钳位后编码**；`id=0x1FE`、DLC 8、DATA[0:1]=大端 int16、
+DATA[2:7]=0（别的槽不指挥没装的电机）。非有限输入抛 `invalid_argument`；限值必须有限、>0 且
+**≤1.62 A**——超限是拒绝，不是悄悄夹紧。
+
+## 限值与增益（都是"起始值"，不是标定值）
+
+- 主机侧 `host_current_limit_a: 0.8`（额定 1.62、帧满量程 3.0；PI 天花板=这个数，编码器再钳一次）。
+- `kp 1.0 A/(rad/s)`、`ki 0.6`：30 deg/s 天花板处 P 项要 0.52 A——与今晚**实测能让轴动的 0.40 A 同量级**，
+  且落在钳位内。**没有从电压增益换算过来**：驱动自己闭电流环，计数与安培不在一条直线上。
+- 探针自己的帽更低：`yaw_current_a: 0.30`，首帧建议 0.25 A。
+
+## 拿掉的"电压假设"
+
+`voltage_frame` 仍在（CyberGear 之外的电压模式留着），但 yaw 路径上不再有：写死 0x1FF 的归零、
+`yaw_output_ceiling_`（改名并宣布只在电压模式生效）、公共 PI 里的 `output_ceiling > 25000`、
+日志里的 `vout=`、兜底脚本里唯一的 `0x1FF`、探针 trace 的 `voltage_raw` 列名。
+**遥测字段 `vout` 的名字暂留**（它是跨轴共享的 UI 字段，改名要连前端与 test_telemetry 一起动）——
+现在它的单位随模式走，日志行里已明写。
+
+## 跑了什么
+
+- 本地原生：`ctest -E "retained_homing"` ⇒ **77/77 全绿**（先红后绿：翻 YAML 那一刻
+  `HardwareProfilePinsTheCommissionedTopology` 与三条 `MixedCurrentMode` 按预期红，理由都对）。
+  新增测试 10 条：帧号↔模式、缺增益、电压形状增益、电压档案残留键、两模式零帧、
+  `current_zero_frame`、安培 PI（幅度/饱和/反号/坏输入锁死）、电压壳自持 25000 边界。
+- Python：`pytest tools/tests` ⇒ 改动前后**同为 9 红 88 绿**（红的全是容器里没有 eamars 用户、
+  没有 launcher.log、v3 文档清单——与本次无关，baseline 用 `git stash` 实测对过）。
+- **硬件零验证**：站台按令停着、不许重启。以上全是 x86 容器里的证据。
+
+## 首帧硬件探针（等他点头，或他自己跑）
+
+```
+# 站台必须停着（controld 不在），Firmware 目录下：
+bash Firmware/scripts/run_application.sh run --commission-hardware --yaw-current-a 0.25 --pulse-ms 200
+```
+判据照台架那次：`RESULT reason=completed`、`peak_travel_deg` 与符号同号、`zero_tx_failed=0`、
+`yaw_errors=0`、`stationary_observed=1`。反号再打一次。**0.25 A 是探针帽 0.30 以内、
+远低于产线 0.8 A 的第一问。**

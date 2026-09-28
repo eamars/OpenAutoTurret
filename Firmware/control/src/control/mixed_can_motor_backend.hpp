@@ -16,8 +16,22 @@
 namespace ota {
 
 // Production adapter for GM6020 continuous yaw on can0 and CyberGear pitch
-// on can1. The GM6020 has session-relative feedback and voltage control; it
-// does not expose the CyberGear UID/register/fault/disable interface.
+// on can1. The GM6020 has session-relative feedback and no CyberGear-style
+// UID/register/fault/disable interface; what we command it with -- torque
+// current on 0x1FE, or voltage on 0x1FF -- is one configuration decision
+// (`axes.yaw.control_mode`), and every frame this file sends is chosen by it.
+//
+// The one yaw output decision that must be readable from the outside: given this profile, what
+// does "make it stop" put on the wire? One function, so a startup zero, a hold, a fault zero and
+// a shutdown zero cannot drift apart into four subtly different claims. Free (not a member)
+// because a guarantee that needs an open CAN socket to be tested is a claim, not a guarantee.
+inline can::RawFrame yaw_zero_frame(const config::mixed::Axis& yaw) {
+  const auto id = yaw.motor_id ? yaw.motor_id : uint8_t{1};
+  if (yaw.control_mode == config::mixed::ControlMode::Current)
+    return gm6020::current_zero_frame(id);  // 0x1FE, payload all zero
+  return gm6020::voltage_frame(id, 0);      // 0x1FF, this motor's slot zero
+}
+
 // The one yaw speed ceiling, applied to the ask: `commanded = min(ceiling, requested)`.
 // It used to be a 15 deg/s clamp here AND a 25 deg/s trip on the MEASURED reading, so a
 // heavy axis that momentarily overshot cut power to the payload -- and an unpowered
@@ -49,7 +63,8 @@ inline constexpr int64_t kNoCommandLimitNs = 50'000'000;  // ten cycles of a 200
 // three is a thing to keep driving through and say out loud.
 enum class GuardResponse { Run, Hold, Fault };
 // A stall is not a collision risk: a stalled axis is by definition not going anywhere.
-// Repeated stalls earn a Hold (zero voltage, still powered, dynamic braking), never a Fault.
+// Repeated stalls earn a Hold (zero output -- zero current in current mode -- still powered,
+// dynamic braking), never a Fault.
 inline constexpr int kYawStallHoldStreak = 3;
 // What is worth SAYING while we keep driving. A refused command only matters if somebody
 // actually wanted to move: `command_not_sent` with a zero demand is the loop saying "hold",
@@ -84,20 +99,23 @@ class MixedCanMotorBackend final : public MotorBackend {
   MixedCanMotorBackend();
   ~MixedCanMotorBackend() override;
 
-  // Drive authority for the yaw velocity loop, in raw GM6020 voltage counts (the controller
-  // accepts up to 25000). Public, and written exactly once, by whoever builds this backend: the
-  // backend has no config access of its own, which is why the number used to be a constant here
-  // -- and why the axis stalled at 9000 with the output pinned and no operator way to raise it.
-  // The default keeps the behaviour that shipped on 2026-09-28.
-  void set_yaw_output_ceiling(double counts) { yaw_output_ceiling_ = counts; }
-  double yaw_output_ceiling_ = 15000.0;
+  // Drive authority for the yaw velocity loop WHILE IN VOLTAGE MODE, in raw GM6020 voltage counts
+  // (the controller accepts up to 25000). Public, and written exactly once, by whoever builds this
+  // backend: the backend has no config access of its own, which is why the number used to be a
+  // constant here -- and why the axis stalled at 9000 with the output pinned and no operator way to
+  // raise it. The default keeps the behaviour that shipped on 2026-09-28.
+  // Current mode ignores it entirely: there the envelope is axes.yaw.host_current_limit_a, in
+  // amperes. A counts ceiling says nothing about amperes, so it is not applied "converted".
+  void set_yaw_voltage_ceiling(double counts) { yaw_voltage_ceiling_ = counts; }
+  double yaw_voltage_ceiling_ = 15000.0;
   MixedCanMotorBackend(const MixedCanMotorBackend&) = delete;
   MixedCanMotorBackend& operator=(const MixedCanMotorBackend&) = delete;
 
   // Opens already-UP interfaces without changing link state, validates their
   // topology and health, verifies the pitch UID, and establishes a stationary
   // session-relative yaw reference. It does not enable, home, or zero either
-  // drive. The GM startup stop is a zero-voltage request, not disable proof.
+  // drive. The GM startup stop is a zero-output request (zero current in current
+  // mode), not disable proof: this drive reports no enable bit to prove otherwise.
   bool open(const config::mixed::Profile& profile, std::string& err);
   void close();
   bool yaw_reference_valid() const { return yaw_reference_valid_.load(); }
@@ -198,11 +216,12 @@ class MixedCanMotorBackend final : public MotorBackend {
   // have to ssh in to learn the axis has been limping for an hour.
   std::atomic<bool> yaw_degraded_{false};
   std::atomic<int> yaw_guard_events_{0};
-  // What we last actually put on the wire, in drive units. Without this a paralysis log
-  // can only say "asked for 10 deg/s, got none" and cannot distinguish pushing with 0 V
-  // (our bug) from pushing hard against something solid (a fact about the world). Named as
+  // What we last actually put on the wire, in the unit of the configured mode: raw voltage counts
+  // in voltage mode, amperes in current mode (see yaw_output_is_amperes). Without this a paralysis
+  // log can only say "asked for 10 deg/s, got none" and cannot distinguish pushing with zero
+  // output (our bug) from pushing hard against something solid (a fact about the world). Named as
   // the missing evidence in the 2026-09-28 case file and still missing an hour later.
-  std::atomic<int> yaw_last_voltage_{0};
+  std::atomic<double> yaw_last_output_{0};
   std::atomic<double> yaw_last_shaped_rad_s_{0};
   int yaw_stall_streak_ = 0;
   int64_t last_degrade_log_ns_ = 0;
@@ -210,7 +229,12 @@ class MixedCanMotorBackend final : public MotorBackend {
   // difference between "it happened once" and "it happens every sweep".
  public:
   bool yaw_degraded() const { return yaw_degraded_.load(); }
-  int yaw_last_voltage() const { return yaw_last_voltage_.load(); }
+  double yaw_last_output() const { return yaw_last_output_.load(); }
+  // Which unit yaw_last_output()/diag_output() are in. A bare number in a log line is how `vout=0`
+  // got read as "we are not pushing" on 2026-09-28 while the mode had already changed under it.
+  bool yaw_output_is_amperes() const {
+    return profile_.yaw.control_mode == config::mixed::ControlMode::Current;
+  }
   // The ramp's own value: what the velocity loop was told to track last cycle, as opposed
   // to what the caller asked for (accepted, then shaped) and what the axis measured.
   double diag_commanded_speed_rad_s(AxisId axis) const override {
@@ -218,7 +242,7 @@ class MixedCanMotorBackend final : public MotorBackend {
                               : std::numeric_limits<double>::quiet_NaN();
   }
   double diag_output(AxisId axis) const override {
-    return axis == AxisId::Yaw ? static_cast<double>(yaw_last_voltage_.load())
+    return axis == AxisId::Yaw ? yaw_last_output_.load()
                                : std::numeric_limits<double>::quiet_NaN();
   }
   bool diag_degraded() const override { return yaw_degraded_.load(); }

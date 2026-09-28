@@ -76,6 +76,19 @@ int parse_target(const char* text) {
 }
 }  // namespace
 
+// Every stop this tool asks for, in both frames. The probe commands voltage -- it predates the
+// current ring -- but the yaw drive is now switched to torque current and ignores a bare 0x1FF.
+// A cleanup that reaches only one of the two frames is a cleanup that silently did nothing, so
+// the zero goes out on 0x1FF and 0x1FE: an all-zero payload commands nothing in either.
+bool send_yaw_zero(ota::can::SocketCanBus& bus, std::string* err = nullptr) {
+  bool ok = true;
+  for (const auto& frame : {ota::gm6020::voltage_frame(kMotorId, 0),
+                            ota::gm6020::current_zero_frame(kMotorId)}) {
+    if (!bus.send_frame(frame, err)) ok = false;
+  }
+  return ok;
+}
+
 int main(int argc, char** argv) {
   ota::can::SocketCanBus yaw;
   bool opened = false;
@@ -122,11 +135,11 @@ int main(int argc, char** argv) {
         yaw.can_state() != ota::can::CanIfState::ErrorActive)
       throw std::runtime_error("can0 health check failed: " + error);
 
-    const auto zero = ota::gm6020::voltage_frame(kMotorId, 0);
     // Establish a bounded startup stop request before accepting a baseline.
-    // GM6020 voltage mode has no verified disable-state feedback.
+    // GM6020 has no verified disable-state feedback in either command mode, so this is a request
+    // and the printed line says so.
     for (int i = 0; i < 20; ++i) {
-      if (!yaw.send_frame(zero, &error)) throw std::runtime_error("startup zero command failed: " + error);
+      if (!send_yaw_zero(yaw, &error)) throw std::runtime_error("startup zero command failed: " + error);
       std::this_thread::sleep_for(5ms);
     }
     auto read = [&] { std::lock_guard lock(sample_mutex); return sample; };
@@ -195,13 +208,13 @@ int main(int argc, char** argv) {
         if (reason && !trip.load()) { trip_reason.store(reason); trip.store(true); }
         if (trip.load()) {
           std::lock_guard lock(command_mutex);
-          if (!yaw.send_frame(zero)) zero_failed.store(true);
+          if (!send_yaw_zero(yaw)) zero_failed.store(true);
         }
         std::this_thread::sleep_for(5ms);
       }
       for (int i = 0; i < 20; ++i) {
         std::lock_guard lock(command_mutex);
-        if (!yaw.send_frame(zero)) zero_failed.store(true);
+        if (!send_yaw_zero(yaw)) zero_failed.store(true);
         std::this_thread::sleep_for(5ms);
       }
     });
@@ -289,7 +302,7 @@ int main(int argc, char** argv) {
     }
 
     if (trip.load()) phase = "guard_stop";
-    // Finish the session with repeated explicit zero voltage and fresh feedback.
+    // Finish the session with repeated explicit zero output, on both frames, and fresh feedback.
     const auto zero_until = std::chrono::steady_clock::now() + 2s;
     auto zero_tick = std::chrono::steady_clock::now();
     ota::TimeNs final_still_since = 0;
@@ -301,7 +314,7 @@ int main(int argc, char** argv) {
       heartbeat.store(now);
       {
         std::lock_guard lock(command_mutex);
-        if (!yaw.send_frame(zero)) zero_failed.store(true);
+        if (!send_yaw_zero(yaw)) zero_failed.store(true);
       }
       trace << now << ',' << (trip.load() ? "guard_stop" : "zero_observe") << ",0,"
             << current.feedback.angle_count << ',' << (current.position - baseline.position) * kDeg
@@ -331,13 +344,14 @@ int main(int argc, char** argv) {
               << " zero_tx_failed=" << zero_failed.load()
               << " rx_errors=" << stats.rx_error_frames << " tx_failed=" << stats.tx_failed
               << " max_speed_guard_deg_s=" << kSpeedLimitDegS << '\n'
-              << "COMMISSIONING FINISHED; zero voltage requested; motor disable state unavailable\n";
+              << "COMMISSIONING FINISHED; zero output requested on 0x1FF and 0x1FE; motor disable state unavailable\n"
+              << "NOTE this probe commands VOLTAGE. If the drive's Current Ring is enabled it ignores\n"
+              << "     0x1FF, and a still axis here is a fact about the frame, not about the mechanic.\n";
     return trip.load() || !returning || !final_stationary || zero_failed.load() ||
            stats.rx_error_frames || stats.tx_failed ? 2 : 0;
   } catch (const std::exception& error) {
     if (opened) {
-      const auto zero = ota::gm6020::voltage_frame(kMotorId, 0);
-      for (int i = 0; i < 20; ++i) { yaw.send_frame(zero); std::this_thread::sleep_for(5ms); }
+      for (int i = 0; i < 20; ++i) { send_yaw_zero(yaw); std::this_thread::sleep_for(5ms); }
       yaw.close();
     }
     std::cerr << "YAW_PROBE_REFUSED " << error.what() << '\n';

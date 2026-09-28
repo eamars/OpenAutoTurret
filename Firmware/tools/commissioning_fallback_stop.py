@@ -14,16 +14,23 @@ def main() -> None:
         raise SystemExit("usage: commissioning_fallback_stop.py yaw|pitch")
     axis = sys.argv[1]
     if axis == "yaw":
-        interface, can_id = "can0", 0x1FF  # GM6020 group 0, slot 1: zero voltage.
+        # Both zeros, every time. This is the last line of defence after a child died, and which
+        # frame the drive listens to depends on a switch in the drive itself: 0x1FF carries zero
+        # voltage, 0x1FE carries zero torque current. A fallback stop that guessed would report
+        # success over a motor that was never told to stop -- an all-zero payload commands nothing
+        # either way, so sending both costs one frame and removes the guess.
+        interface, can_ids = "can0", (0x1FF, 0x1FE)
     else:
-        interface, can_id = "can1", socket.CAN_EFF_FLAG | 0x0400007F  # CyberGear STOP, ID 0x7f.
-    frame = struct.pack("=IB3x8s", can_id, 8, bytes(8))
+        interface, can_ids = "can1", (socket.CAN_EFF_FLAG | 0x0400007F,)  # CyberGear STOP, ID 0x7f.
+    frames = [struct.pack("=IB3x8s", can_id, 8, bytes(8)) for can_id in can_ids]
     with socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW) as bus:
         bus.bind((interface,))
         for _ in range(20):
-            bus.send(frame)
+            for frame in frames:
+                bus.send(frame)
             time.sleep(0.005)
-    print(f"Commissioning fallback {axis} stop requested over {interface}; no disable confirmation")
+    print(f"Commissioning fallback {axis} stop requested over {interface} on "
+          f"{'/'.join(hex(can_id) for can_id in can_ids)}; zero output requested, no disable confirmation")
 
 
 if __name__ == "__main__":

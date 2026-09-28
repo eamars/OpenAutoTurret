@@ -209,8 +209,23 @@ int main(int argc, char** argv) {
     backend = make_sim_backend();
   } else if (mixed_mode) {
     auto mixed = std::make_unique<MixedCanMotorBackend>();
-    mixed->set_yaw_output_ceiling(
+    // The voltage ceiling travels from turret_mixed.yaml (max_output_counts) and applies only in
+    // voltage mode; in current mode the envelope is axes.yaw.host_current_limit_a, which the
+    // profile already carries. Both are handed over, and one line says which one this station is
+    // driving with -- after 2026-09-28 I do not want a unit change discovered from a still axis.
+    mixed->set_yaw_voltage_ceiling(
         cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
+    if (mixed_profile.yaw.control_mode == config::mixed::ControlMode::Current) {
+      spdlog::info(
+          "yaw commanded in torque current: host limit {} A, gains kp {} / ki {} A per rad/s "
+          "(max_output_counts {} is a voltage-mode number and does not apply here)",
+          mixed_profile.yaw.host_current_limit_a, mixed_profile.yaw.current_kp_a_per_rad_s,
+          mixed_profile.yaw.current_ki_a_per_rad_s,
+          cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
+    } else {
+      spdlog::info("yaw commanded in voltage: ceiling {} raw counts",
+                   cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
+    }
     std::string cerr;
     if (!mixed->open(mixed_profile, cerr)) {
       spdlog::error("mixed CAN open failed: {}", cerr);

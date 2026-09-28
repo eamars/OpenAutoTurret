@@ -2,6 +2,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <fstream>
+#include <initializer_list>
+#include <stdexcept>
 #include <sstream>
 #include <unistd.h>
 #include <gtest/gtest.h>
@@ -100,11 +102,18 @@ TEST(MixedStationConfig, HardwareProfilePinsTheCommissionedTopology) {
   ASSERT_TRUE(loaded.ok) << why(loaded);
   EXPECT_EQ(loaded.profile.yaw.protocol, config::mixed::Protocol::Gm6020);
   EXPECT_EQ(loaded.profile.yaw.topology, config::mixed::Topology::Continuous);
-  EXPECT_EQ(loaded.profile.yaw.control_mode, config::mixed::ControlMode::Voltage);
+  EXPECT_EQ(loaded.profile.yaw.control_mode, config::mixed::ControlMode::Current);
   ASSERT_TRUE(loaded.profile.yaw.feedback_frame_id.has_value());
   EXPECT_EQ(*loaded.profile.yaw.feedback_frame_id, 0x205);
   ASSERT_TRUE(loaded.profile.yaw.command_frame_id.has_value());
-  EXPECT_EQ(*loaded.profile.yaw.command_frame_id, 0x1FF);
+  EXPECT_EQ(*loaded.profile.yaw.command_frame_id, 0x1FE);
+  // The torque-current envelope is a written number, not a code constant, and it is NOT the
+  // motor's rating: 0.8 A is the envelope we choose to command on 2026-09-28, against a 1.62 A
+  // continuous rating and a 3.0 A frame. If someone raises it, this test is where they say so.
+  EXPECT_TRUE(loaded.profile.yaw.current_ring_verified);
+  EXPECT_DOUBLE_EQ(loaded.profile.yaw.host_current_limit_a, 0.8);
+  EXPECT_DOUBLE_EQ(loaded.profile.yaw.current_kp_a_per_rad_s, 1.0);
+  EXPECT_DOUBLE_EQ(loaded.profile.yaw.current_ki_a_per_rad_s, 0.6);
   EXPECT_EQ(loaded.profile.pitch.protocol, config::mixed::Protocol::CyberGear);
   EXPECT_EQ(loaded.profile.pitch.topology, config::mixed::Topology::Bounded);
   ASSERT_TRUE(loaded.profile.pitch.expected_unique_id.has_value());
@@ -193,9 +202,12 @@ TEST(MixedStationConfig, DirectionSignIsStrictlyTypedButNotConsumedByMixed) {
   EXPECT_TRUE(load_from(root).ok);    // on the same physical wiring (WP0 §4.2)
 }
 
-// Current mode is refused unless the operator has recorded the drive's preconditions. The rule
-// lives in the parser precisely so this test can exist without a CAN socket; if someone moves the
-// checks behind the backend again, these three cases are the tripwire that says so.
+// Current mode is refused unless the operator has recorded the drive's preconditions and written
+// down an ampere envelope. The rules live in the parser precisely so these cases can exist without
+// a CAN socket; if someone moves them behind the backend again, this suite is the tripwire.
+// The variants are built by mutating the shipped profile's nodes rather than by editing its text:
+// the shipped file now IS current mode, and a helper that searched for "control_mode: voltage" to
+// derive a variant was one rename away from passing while testing nothing.
 namespace {
 std::string write_variant(const char* tag, const std::string& yaml) {
   const auto path = (std::filesystem::temp_directory_path() /
@@ -206,51 +218,130 @@ std::string write_variant(const char* tag, const std::string& yaml) {
   return path;
 }
 
-std::string current_mode_yaml(const std::string& extra) {
-  std::ifstream in((firmware_root() / "config/mixed_hardware.yaml").string());
-  std::stringstream buf;
-  buf << in.rdbuf();
-  auto text = buf.str();
-  const auto at = text.find("control_mode: voltage");
-  EXPECT_NE(at, std::string::npos) << "the commissioned profile no longer pins yaw to voltage";
-  text.replace(at, std::string("control_mode: voltage").size(),
-               "control_mode: current" + extra);
-  return text;
+template <class Fn>
+config::mixed::LoadResult yaw_variant(const char* tag, Fn mutate) {
+  YAML::Node root = YAML::LoadFile((firmware_root() / "config/mixed_hardware.yaml").string());
+  if (!root["axes"]["yaw"].IsDefined())
+    throw std::runtime_error(std::string("shipped profile has no axes.yaw to mutate: ") + tag);
+  mutate(root["axes"]["yaw"]);
+  return config::mixed::load_mixed_hardware_profile(write_variant(tag, YAML::Dump(root)));
+}
+
+bool names(const config::mixed::LoadResult& r, std::initializer_list<const char*> needles) {
+  for (const auto* needle : needles) {
+    const bool found = std::any_of(r.errors.begin(), r.errors.end(),
+                                   [needle](const std::string& e) {
+                                     return e.find(needle) != std::string::npos;
+                                   });
+    if (!found) return false;
+  }
+  return true;
 }
 }  // namespace
 
 TEST(MixedCurrentMode, RefusedWithoutRecordedAcknowledgement) {
-  const auto path = write_variant("no_ack", current_mode_yaml(""));
-  const auto loaded = config::mixed::load_mixed_hardware_profile(path);
+  const auto loaded = yaw_variant("no_ack", [](YAML::Node yaw) {
+    yaw.remove("current_ring_verified");
+  });
   EXPECT_FALSE(loaded.ok);
-  const bool named = std::any_of(loaded.errors.begin(), loaded.errors.end(),
-                                 [](const std::string& e) {
-                                   return e.find("current_ring_verified") != std::string::npos;
-                                 });
-  EXPECT_TRUE(named) << "refusal must name the missing acknowledgement, not just say 'invalid'";
+  EXPECT_TRUE(names(loaded, {"current_ring_verified"}))
+      << "refusal must name the missing acknowledgement, not just say 'invalid': " << why(loaded);
 }
 
 TEST(MixedCurrentMode, RefusedWhenTheHostClampExceedsTheMotorRating) {
-  const auto path = write_variant(
-      "hot_limit", current_mode_yaml(
-          "\n    current_ring_verified: true\n    host_current_limit_a: 1.63"));
-  const auto loaded = config::mixed::load_mixed_hardware_profile(path);
+  const auto loaded = yaw_variant("hot_limit", [](YAML::Node yaw) {
+    yaw["host_current_limit_a"] = 1.63;
+  });
   EXPECT_FALSE(loaded.ok);
-  const bool named = std::any_of(loaded.errors.begin(), loaded.errors.end(),
-                                 [](const std::string& e) {
-                                   return e.find("host_current_limit_a") != std::string::npos &&
-                                          e.find("1.62") != std::string::npos;
-                                 });
-  EXPECT_TRUE(named) << "the refusal must say which bound was broken and what the rating is";
+  EXPECT_TRUE(names(loaded, {"host_current_limit_a", "1.62"}))
+      << "the refusal must say which bound was broken and what the rating is: " << why(loaded);
 }
 
-TEST(MixedCurrentMode, AcceptedWhenBothPreconditionsAreRecorded) {
-  const auto path = write_variant(
-      "ok", current_mode_yaml(
-          "\n    current_ring_verified: true\n    host_current_limit_a: 0.8"));
-  const auto loaded = config::mixed::load_mixed_hardware_profile(path);
+TEST(MixedCurrentMode, AcceptedWhenEveryCurrentModeNumberIsRecorded) {
+  const auto loaded = yaw_variant("ok", [](YAML::Node) {});
   EXPECT_TRUE(loaded.ok) << why(loaded);
   EXPECT_EQ(loaded.profile.yaw.control_mode, config::mixed::ControlMode::Current);
   EXPECT_TRUE(loaded.profile.yaw.current_ring_verified);
   EXPECT_DOUBLE_EQ(loaded.profile.yaw.host_current_limit_a, 0.8);
+}
+
+TEST(MixedCurrentMode, RefusedWhenCurrentModeStillCommandsTheVoltageFrame) {
+  // The failure this exists to prevent is the silent one: profile says current, the frame says
+  // 0x1FF, everything loads, the drive ignores every byte and the axis looks broken.
+  const auto loaded = yaw_variant("wrong_frame", [](YAML::Node yaw) {
+    yaw["command_frame_id"] = 0x1ff;
+  });
+  EXPECT_FALSE(loaded.ok);
+  EXPECT_TRUE(names(loaded, {"command_frame_id", "0x1FE"}))
+      << "the refusal must name the frame it wanted and the mode it was in: " << why(loaded);
+}
+
+TEST(MixedCurrentMode, RefusedWhenTheAmperesGainsAreMissingOrVoltageShaped) {
+  const auto missing = yaw_variant("no_gains", [](YAML::Node yaw) {
+    yaw.remove("current_kp_a_per_rad_s");
+  });
+  EXPECT_FALSE(missing.ok);
+  EXPECT_TRUE(names(missing, {"current_kp_a_per_rad_s"})) << why(missing);
+
+  // 20000 is the voltage-mode Kp. Amperes and counts do not convert through a constant here, so a
+  // number that size is not a small current, it is somebody's volts wearing an ampere's coat.
+  const auto inherited = yaw_variant("voltage_gains", [](YAML::Node yaw) {
+    yaw["current_kp_a_per_rad_s"] = 20000.0;
+  });
+  EXPECT_FALSE(inherited.ok);
+  EXPECT_TRUE(names(inherited, {"current_kp_a_per_rad_s", "amperes"})) << why(inherited);
+}
+
+TEST(MixedCurrentMode, VoltageProfileRefusesStrayCurrentKeys) {
+  // Roll the mode back for an A/B and the ampere lines go with it: a 0.8 A sitting under a voltage
+  // profile would be read as the envelope of an axis that is actually commanding counts.
+  const auto loaded = yaw_variant("stale_current_keys", [](YAML::Node yaw) {
+    yaw["control_mode"] = "voltage";
+    yaw["command_frame_id"] = 0x1ff;
+  });
+  EXPECT_FALSE(loaded.ok);
+  EXPECT_TRUE(names(loaded, {"host_current_limit_a", "only meaningful"})) << why(loaded);
+}
+
+TEST(MixedCurrentMode, VoltageProfileLoadsWithoutTheCurrentKeys) {
+  const auto loaded = yaw_variant("voltage_clean", [](YAML::Node yaw) {
+    yaw["control_mode"] = "voltage";
+    yaw["command_frame_id"] = 0x1ff;
+    yaw.remove("current_ring_verified");
+    yaw.remove("host_current_limit_a");
+    yaw.remove("current_kp_a_per_rad_s");
+    yaw.remove("current_ki_a_per_rad_s");
+  });
+  EXPECT_TRUE(loaded.ok) << why(loaded);
+  EXPECT_EQ(loaded.profile.yaw.control_mode, config::mixed::ControlMode::Voltage);
+}
+
+// The single decision behind every zero path -- startup, hold, fault, shutdown, tool cleanup.
+// These are the "startup/fault/shutdown zero uses 0x1FE" cases: all four call sites funnel through
+// yaw_zero_frame(), which is free of the backend precisely so it can be asserted here.
+TEST(MixedCurrentMode, ZeroFrameIsZeroCurrentOn0x1FEInCurrentMode) {
+  const auto loaded = yaw_variant("zero_frame", [](YAML::Node) {});
+  ASSERT_TRUE(loaded.ok) << why(loaded);
+  const auto frame = yaw_zero_frame(loaded.profile.yaw);
+  EXPECT_EQ(frame.id, 0x1FEu);
+  EXPECT_EQ(frame.dlc, 8);
+  EXPECT_FALSE(frame.extended);
+  for (const auto byte : frame.data) EXPECT_EQ(byte, 0);  // no slot commands anything
+}
+
+TEST(MixedCurrentMode, ZeroFrameStaysOn0x1FFInVoltageMode) {
+  const auto loaded = yaw_variant("zero_frame_v", [](YAML::Node yaw) {
+    yaw["control_mode"] = "voltage";
+    yaw["command_frame_id"] = 0x1ff;
+    yaw.remove("current_ring_verified");
+    yaw.remove("host_current_limit_a");
+    yaw.remove("current_kp_a_per_rad_s");
+    yaw.remove("current_ki_a_per_rad_s");
+  });
+  ASSERT_TRUE(loaded.ok) << why(loaded);
+  const auto frame = yaw_zero_frame(loaded.profile.yaw);
+  EXPECT_EQ(frame.id, 0x1FFu);
+  EXPECT_EQ(frame.dlc, 8);
+  EXPECT_EQ(frame.data[0], 0);  // motor 1's slot: zero
+  EXPECT_EQ(frame.data[1], 0);
 }

@@ -19,9 +19,34 @@ axes:
     bus: yaw
     motor_id: 1
     topology: continuous
-    control_mode: voltage
+    # Torque current, not voltage. Two facts decided this on 2026-09-28, both measured on this
+    # motor with controld stopped (reports/CURRENT_MODE_MIGRATION_2026-09-28.md):
+    #   0x1FE +-0.40 A -> rotor moved +-300 counts, feedback current within 1 % of command;
+    #   0x1FF +-8000   -> nothing moved, and the drive still reported 0 A and 0 rpm.
+    # The drive was never ignoring the axis, it was ignoring our frames. Voltage mode still
+    # parses so this can be rolled back for an A/B -- but a rollback also needs the drive's
+    # Current Ring switched back off, so it is not a one-line revert.
+    control_mode: current
     feedback_frame_id: 0x205
-    command_frame_id: 0x1FF
+    command_frame_id: 0x1FE
+    # The operator's record of the drive, which no CAN frame can establish: current mode needs
+    # firmware >= v1.0.11.2 (the owner flashed it on 2026-09-28) and the Current Ring switch
+    # enabled in RoboMaster Assistant v2.7 (sources/GM6020_DRIVE_CONFIG_2026-09-28.md).
+    current_ring_verified: true
+    # Host-side clamp on commanded torque current. 0.8 A is a deliberately small first envelope,
+    # not the limit of the machine: the motor's continuous rating is 1.62 A and the raw frame
+    # reaches 3.0 A. Nothing here is identified against the payload yet -- WP6 owns that number.
+    # 1.2 N.m of continuous shaft torque costs about 1.2 A on this scale, so 0.8 A is real
+    # authority rather than a stub: on the bench 0.40 A was enough to move the axis.
+    host_current_limit_a: 0.8
+    # The yaw velocity loop's OUTPUT gains while in current mode, in amperes. Deliberately not
+    # derived from the voltage gains: with the drive closing its own current loop, counts and
+    # amperes are not two labels on one straight line. Chosen conservative: kp 1.0 A per rad/s
+    # asks 0.52 A at the 30 deg/s ceiling -- the same order as the 0.40 A that moved this axis on
+    # the bench, and inside the clamp above. Re-derive against a measured step before calling it
+    # tuned; the old voltage ceilings (max_output_counts) do not apply in this mode at all.
+    current_kp_a_per_rad_s: 1.0
+    current_ki_a_per_rad_s: 0.6
     # 0 = this gate is removed, and that is a documented position, not an absence
     # of one. Three things settled it: (a) the official guide gives this feedback
     # byte no unit and the payload no fault bit, so a host-side number here is not

@@ -81,6 +81,22 @@ inline int current_raw_from_amps(double amps, double limit_a) {
   return current_raw_uncapped(std::clamp(amps, -limit_a, limit_a));
 }
 
+// The zero request every startup, hold, fault and shutdown path must put on the wire. It carries
+// no host clamp, because zero is inside every positive limit -- and it must not throw, because the
+// fault path calls it with nothing above it to catch anything: a throwing zero frame turns a
+// guard into std::terminate. A zeroed payload commands zero current to this motor and nothing at
+// all to the other slots, which is exactly the claim we are willing to make about a motor that is
+// not fitted on this turret.
+inline can::RawFrame current_zero_frame(uint8_t motor_id) {
+  if (motor_id < 1 || motor_id > 4)
+    throw std::invalid_argument("GM6020 current frame 0x1FE covers IDs 1-4");
+  can::RawFrame frame;
+  frame.extended = false;
+  frame.dlc = 8;
+  frame.id = 0x1fe;
+  return frame;
+}
+
 inline can::RawFrame current_frame(uint8_t motor_id, double amps, double limit_a) {
   if (motor_id != 1)
     throw std::invalid_argument("GM6020 current mode is qualified for motor ID 1 only");

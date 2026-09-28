@@ -1951,14 +1951,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         if (mixed_pitch_disable_requested_ && pitch_disable_confirmed &&
             fresh(pitch) && pitch.disabled_known && pitch.disabled &&
             yaw_dwell_complete && mixed_yaw_zero_request_count_ >= 20) {
-          backend_->deenergize(AxisId::Yaw);  // final zero-voltage request; not disable proof
+          backend_->deenergize(AxisId::Yaw);  // final zero-output request; not disable proof
           phase_ = Phase::Parked;
           homed_ = false;
           pitch_homed_ = false;
           at_ready_ = false;
           mixed_stop_park_ = false;
           shutdown_requested_.store(false);
-          spdlog::info("MIXED STOPPED: pitch disable confirmed by fresh feedback at {} ns; GM6020 received repeated zero-speed requests and final zero-voltage request; yaw disable state unavailable",
+          spdlog::info("MIXED STOPPED: pitch disable confirmed by fresh feedback at {} ns; GM6020 received repeated zero-speed requests and a final zero-output request (zero current where the profile commands current); yaw disable state unavailable",
                        mixed_pitch_disabled_confirmed_ns_);
           {
             // "stationary_observed" here is the dwell and pose verification this branch

@@ -27,11 +27,14 @@ constexpr double kYawPositionGain = 2.0;
 // correctly tripped the independent 25 deg/s guard. The earlier 30-degree
 // motor probe needed at most 5,643 raw voltage, so retain voltage headroom
 // while reducing the service-loop drive and acceleration for this payload.
-// The yaw drive ceiling is now `yaw_output_ceiling_`, set from turret_mixed.yaml. Its history, kept
+// The yaw drive ceiling is now `yaw_voltage_ceiling_`, set from turret_mixed.yaml. Its history, kept
 // because it is the reason: it was 9000 because a 30-degree probe moved the bare axis with at most
 // 5,643 counts, and tonight the axis would not move at all with the output pinned there (the rig has
 // a slip ring, so the resistance varies with angle and the old number was headroom measured at one
 // lucky angle). WP6 replaces the single ceiling with a measured vout-vs-angle profile.
+// THESE TWO ARE VOLTAGE-MODE GAINS. The current-mode gains are a separate pair of numbers
+// (axes.yaw.current_kp_a_per_rad_s / _ki_...) in the profile, because counts and torque amperes do
+// not convert through a constant here; see gm6020::VelocityLoop.
 constexpr double kYawVelocityKp = 20000.0;
 constexpr double kYawVelocityKi = 10000.0;
 constexpr TimeNs kFreshnessLimitNs = 100'000'000;
@@ -42,6 +45,16 @@ constexpr double kStationaryToleranceRad = 0.5 * kRadiansPerDegree;
 constexpr double kNoProgressCommandRadS = 5.0 * kRadiansPerDegree;
 // The temperature gate has no constant: the guide gives the feedback byte no
 // scale, so the profile decides (0 = no gate). See axes.yaw.guard_temp_raw_ceiling.
+
+// How to SAY what we are pushing at the motor. The unit travels with the configured mode, and a
+// log line that says `vout=0` after the station has switched to torque current is the kind of
+// sentence that gets a still axis diagnosed as a dead backend (2026-09-28 did exactly that, twice).
+std::string yaw_output_text(bool amperes, double value) {
+  char buf[32];
+  if (amperes) std::snprintf(buf, sizeof buf, "%+.3f A", value);
+  else std::snprintf(buf, sizeof buf, "%.0f counts", value);
+  return std::string(buf);
+}
 
 CanHealth socketcan_health(const can::SocketCanBus& bus) {
   const auto stats = bus.stats();
@@ -200,10 +213,16 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
     }
     bus_health_ok_.store(true);
 
-    const auto startup_zero = gm6020::voltage_frame(profile_.yaw.motor_id, 0);
+    // Startup stop: zero in whatever unit this profile commands. Sending a zero the drive ignores
+    // is worse than sending nothing, because it looks like a stopped motor in every later log.
+    const auto startup_zero = yaw_zero_frame(profile_.yaw);
     for (int i = 0; i < 20; ++i) {
       if (!yaw_bus_.send_frame(startup_zero, &err)) {
-        err = "GM6020 startup zero request failed: " + err;
+        err = std::string("GM6020 startup ") +
+              (profile_.yaw.control_mode == config::mixed::ControlMode::Current
+                   ? "zero-current"
+                   : "zero-voltage") +
+              " request failed: " + err;
         close();
         return false;
       }
@@ -255,7 +274,10 @@ void MixedCanMotorBackend::close() {
   yaw_motion_allowed_.store(false);
   yaw_reference_valid_.store(false);
   if (yaw_opened_.load()) {
-    const auto zero = gm6020::voltage_frame(profile_.yaw.motor_id ? profile_.yaw.motor_id : 1, 0);
+    // Shutdown zero, same single decision as startup and fault: zero current where the profile
+    // commands current. This is a request, not a de-energised claim -- the drive reports no
+    // enable bit, so `disable state unavailable` is the honest words for it downstream.
+    const auto zero = yaw_zero_frame(profile_.yaw);
     for (int i = 0; i < 20; ++i) {
       yaw_bus_.send_frame(zero);
       std::this_thread::sleep_for(5ms);
@@ -403,10 +425,11 @@ void MixedCanMotorBackend::trip_yaw_locked() {
   send_yaw_zero_locked();
 }
 
+// Every "stop asking" path funnels here: hold, trip, deenergize, and the guard thread's final
+// flush. One decision, one frame builder (yaw_zero_frame), so a fault zero cannot quietly still be
+// a voltage frame after the profile moved to current.
 bool MixedCanMotorBackend::send_yaw_zero_locked() {
-  const auto id = profile_.yaw.motor_id ? profile_.yaw.motor_id : 1;
-  const auto zero = gm6020::voltage_frame(id, 0);
-  return yaw_bus_.send_frame(zero);
+  return yaw_bus_.send_frame(yaw_zero_frame(profile_.yaw));
 }
 
 void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
@@ -507,13 +530,13 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
                       heartbeat_seen_.load() ? (now - heartbeat_ns_.load()) / 1'000'000 : 0);
         trip_yaw_locked();
       } else if (response == GuardResponse::Hold) {
-        // Powered and not pushing: zero voltage is dynamic braking on this drive, the
-        // mildest answer to "keep pushing a stalled axis". Deliberately not a fault -- a
-        // stalled axis is by definition not on its way to an endstop.
+        // Powered and not pushing: a zero output -- zero current in current mode -- is dynamic
+        // braking on this drive, the mildest answer to "keep pushing a stalled axis".
+        // Deliberately not a fault -- a stalled axis is by definition not on its way to an endstop.
         if (now - last_degrade_log_ns_ > 1'000'000'000) {
-          spdlog::warn("GM6020 guard hold: stall #{} at requested {:.3f} deg/s, vout={} last; holding, not faulting",
+          spdlog::warn("GM6020 guard hold: stall #{} at requested {:.3f} deg/s, {} last; holding, not faulting",
                        yaw_stall_streak_, requested_speed * kDegreesPerRadian,
-                       yaw_last_voltage_.load());
+                       yaw_output_text(yaw_output_is_amperes(), yaw_last_output_.load()));
           last_degrade_log_ns_ = now;
         }
         if (!yaw_degraded_.exchange(true)) ++yaw_guard_events_;  // one episode, one count
@@ -526,11 +549,12 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           yaw_stall_streak_ = in.no_progress ? yaw_stall_streak_ + 1 : 0;
           if (now - last_degrade_log_ns_ > 1'000'000'000) {  // at most one line a second
             spdlog::warn("GM6020 degraded, still driving: cond={} rxerr={} txfail={} cmd_stale={} "
-                         "requested={:.3f} measured={:.3f} deg/s ms_since_command={:.1f} vout={} q={:.3f}rad",
+                         "requested={:.3f} measured={:.3f} deg/s ms_since_command={:.1f} {} q={:.3f}rad",
                          MotorBackend::select_trip_condition(in), health.rx_error_frames,
                          health.tx_failed, command_stale ? 1 : 0, requested_speed * kDegreesPerRadian,
                          measured_speed * kDegreesPerRadian, (now - yaw_last_command_ns_) * 1e-6,
-                         yaw_last_voltage_.load(), yaw_state_.position_rad);
+                         yaw_output_text(yaw_output_is_amperes(), yaw_last_output_.load()),
+                         yaw_state_.position_rad);
             last_degrade_log_ns_ = now;
           }
         } else {
@@ -757,15 +781,37 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   yaw_requested_velocity_rad_s_.store(desired);
   yaw_command_not_sent_.store(false);  // a real frame follows below
   yaw_velocity_loop_previous_command_ns_ = now;
-  const int voltage = yaw_velocity_loop_.update(yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now,
-      kYawSpeedCeilingRadS, yaw_output_ceiling_, kYawVelocityKp, kYawVelocityKi);
-  if (!yaw_velocity_loop_.valid()) {
-    trip_yaw_locked();
-    return;
+  // The velocity loop produces an EFFORT, and only this last step knows which unit this station
+  // asked for. Everything above it -- position target, the acceleration ramp, encoder unwrap, the
+  // speed ceiling, every guard -- is shared, so switching the axis from volts to amperes changes
+  // the frame and the gains, not the control architecture.
+  can::RawFrame command{};
+  if (yaw_output_is_amperes()) {
+    // Amperes in, amperes out, clamped twice over: the PI ceiling IS the host limit, and
+    // current_frame clamps again against the same number before it encodes.
+    const double amps = yaw_velocity_loop_.update_amps(
+        yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now, kYawSpeedCeilingRadS,
+        profile_.yaw.host_current_limit_a, profile_.yaw.current_kp_a_per_rad_s,
+        profile_.yaw.current_ki_a_per_rad_s);
+    if (!yaw_velocity_loop_.valid()) {
+      trip_yaw_locked();
+      return;
+    }
+    yaw_last_shaped_rad_s_.store(yaw_shaped_speed_rad_s_);  // what the loop was told to track
+    yaw_last_output_.store(amps);  // kept for the next paralysis log, in amperes
+    command = gm6020::current_frame(profile_.yaw.motor_id, amps, profile_.yaw.host_current_limit_a);
+  } else {
+    const int voltage = yaw_velocity_loop_.update(
+        yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now, kYawSpeedCeilingRadS,
+        yaw_voltage_ceiling_, kYawVelocityKp, kYawVelocityKi);
+    if (!yaw_velocity_loop_.valid()) {
+      trip_yaw_locked();
+      return;
+    }
+    yaw_last_shaped_rad_s_.store(yaw_shaped_speed_rad_s_);
+    yaw_last_output_.store(static_cast<double>(voltage));
+    command = gm6020::voltage_frame(profile_.yaw.motor_id, voltage);
   }
-  yaw_last_shaped_rad_s_.store(yaw_shaped_speed_rad_s_);  // what the loop was told to track
-  yaw_last_voltage_.store(voltage);  // the frame's own magnitude, kept for the next paralysis log
-  const auto command = gm6020::voltage_frame(profile_.yaw.motor_id, voltage);
   if (!yaw_bus_.send_frame(command)) trip_yaw_locked();
 }
 

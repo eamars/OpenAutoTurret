@@ -17,7 +17,9 @@ case "${1:-}" in
     echo 'deploy --probe-build: build only controld and preflight; defer regression tests.'
     echo 'run: foreground supervision; stop: controlled park/disable and full stack cleanup.'
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
-    echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
+    echo '         --commission-hardware [--yaw-current-a A --yaw-voltage N --pulse-ms N --observe-ms N],'
+    echo '         (yaw push unit follows axes.yaw.control_mode: --yaw-current-a on a current drive,'
+    echo '          --yaw-voltage only on a voltage one; the probe refuses the wrong one)'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
     echo '         --yaw-step-deg N (commissioning with IMU; continuous 15..45 deg out/return),'
@@ -90,6 +92,7 @@ START_WEB=1
 PRODUCTION=0
 PROBE_BUILD=0
 YAW_VOLTAGE=0
+YAW_CURRENT_A=0
 YAW_SPEED_DEG_S=0
 YAW_STEP_DEG=0
 PULSE_MS=100
@@ -121,6 +124,7 @@ while [ $# -gt 0 ]; do
     --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
+    --yaw-current-a) YAW_CURRENT_A="${2:?--yaw-current-a requires a signed ampere value}"; shift 2 ;;
     --yaw-speed-deg-s) YAW_SPEED_DEG_S="${2:?--yaw-speed-deg-s requires a signed value}"; shift 2 ;;
     --yaw-step-deg) YAW_STEP_DEG="${2:?--yaw-step-deg requires a value}"; shift 2 ;;
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
@@ -134,6 +138,13 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+# One derived fact: did anything ask the yaw axis to move? There are now two spellings of the push
+# (--yaw-voltage in raw counts, --yaw-current-a in amperes), and every "no other motor probe" rule
+# below needs to see both. A request this list misses is two processes driving one CAN bus.
+YAW_PUSH=0
+if [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_CURRENT_A" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ]; then
+  YAW_PUSH=1
+fi
 if [ "$PITCH_RESTORE_GAINS" = 1 ] && { [ "$PITCH_PROBE" != 1 ] || [ "$PITCH_STEP_MDEG" != 0 ] || [ "$PITCH_TEST_GAINS" != 0 ]; }; then
   echo '--pitch-restore-gains requires a zero-step diagnostic probe without test gains' >&2; exit 2
 fi
@@ -141,7 +152,7 @@ if [ "$PITCH_TEST_GAINS" = 1 ] && [ "$PITCH_PROBE" != 1 ]; then
   echo '--pitch-test-gains requires a pitch probe' >&2; exit 2
 fi
 if [ "$PITCH_PROBE" = 1 ]; then
-  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
+  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_PUSH" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
     echo 'Pitch steps require commissioning with IMU, without yaw motion or separate limit setup' >&2; exit 2
   fi
   if ! [[ "$PITCH_STEP_MDEG" =~ ^-?[0-9]+$ ]] || ((PITCH_STEP_MDEG < -15000 || PITCH_STEP_MDEG > 15000)); then
@@ -150,7 +161,7 @@ if [ "$PITCH_PROBE" = 1 ]; then
 fi
 if [ "$MIXED_BACKEND_CHECK" = 1 ] && {
   [ "$MODE" != commission ] || [ "$COMMISSION_REQUESTED" != 1 ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] ||
-  [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] ||
+  [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_PUSH" != 0 ] ||
   [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$PITCH_TEST_GAINS" != 0 ] || [ "$PITCH_RESTORE_GAINS" != 0 ];
 }; then
   echo '--mixed-backend-check requires --commission-hardware --with-imu and no other motor probe' >&2; exit 2
@@ -159,12 +170,12 @@ if [ "$MIXED_CONTROLLER_COMMISSION" = 1 ] && {
   [ "$MODE" != mixed-controller-commission ] || [ "$MIXED_BACKEND_CHECK" != 0 ] ||
   [ "$COMMISSION_REQUESTED" != 0 ] || [ "$SIM_REQUESTED" != 0 ] ||
   [ "$WITH_IMU" != 0 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] ||
-  [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ];
+  [ "$YAW_PUSH" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ];
 }; then
   echo '--commission-mixed-controller cannot be combined with another motor probe or --with-imu' >&2; exit 2
 fi
 if [ "$YAW_STEP_DEG" != 0 ]; then
-  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
+  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_PUSH" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
      ! [[ "$YAW_STEP_DEG" =~ ^[0-9]+$ ]] || ((YAW_STEP_DEG < 15 || YAW_STEP_DEG > 45)); then
     echo 'Yaw step requires commissioning with IMU, 15..45 degrees, and no other motor probe' >&2; exit 2
   fi
@@ -175,8 +186,8 @@ fi
 if ! [[ "$IMU_SECONDS" =~ ^[0-9]+$ ]] || ((IMU_SECONDS < 1 || IMU_SECONDS > 120)); then
   echo '--imu-seconds must be 1..120' >&2; exit 2
 fi
-if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
-  echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
+if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_PUSH" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
+  echo 'Commissioning push/pulse options require --commission-hardware' >&2; exit 2
 fi
 if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
   echo '--probe-build is only valid for deploy' >&2; exit 2
@@ -504,7 +515,8 @@ PY
     --observe-seconds 10 >"$RUN/controller.log" 2>&1 &
   else
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
-    --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
+    --yaw-voltage "$YAW_VOLTAGE" --yaw-current-a "$YAW_CURRENT_A" \
+    --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
     --yaw-speed-deg-s "$YAW_SPEED_DEG_S" \
     --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   fi
@@ -516,7 +528,7 @@ PY
   elif [ "$MIXED_BACKEND_CHECK" = 1 ]; then
     printf 'Mode: mixed backend observe-only check\nOutput: %s\n' "$RUN/controller.log" > "$RUN/stack.info"
   else
-    printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
+    printf 'Mode: commissioning\nYaw push: %s V / %s A (unit follows the probe profile control_mode)\nTrace: %s\n' "$YAW_VOLTAGE" "$YAW_CURRENT_A" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
   fi
   cp "$RUN/launcher.pid" "$RUN/started"
   if [ -n "$imu_pid" ]; then

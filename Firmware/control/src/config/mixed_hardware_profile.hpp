@@ -28,6 +28,11 @@ struct Axis {
   ControlMode control_mode = ControlMode::Position;
   bool current_ring_verified = false;   // external precondition: firmware >= v1.0.11.2 and Current Ring enabled
   double host_current_limit_a = 0.0;      // host-side command clamp, amperes; 0 = unset, which current mode rejects
+  // The yaw velocity loop's OUTPUT gains while in current mode, in amperes. They are separate
+  // fields from anything voltage-shaped on purpose: a voltage ceiling in counts says nothing about
+  // amperes, and reusing the voltage number silently re-tunes the axis. 0 = unset, refused.
+  double current_kp_a_per_rad_s = 0.0;
+  double current_ki_a_per_rad_s = 0.0;
   std::optional<uint64_t> expected_unique_id;
   std::optional<uint32_t> feedback_frame_id;
   std::optional<uint32_t> command_frame_id;

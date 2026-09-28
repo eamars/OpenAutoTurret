@@ -30,7 +30,11 @@ def test_commissioning_ownership_and_stop(tmp_path):
         while True: time.sleep(.01)
         '''))
     probe = firmware / 'build/probe-mixed-hardware'
-    probe.write_text('#!/usr/bin/env bash\nexec "$PROBE_PY" "$PROBE_ROOT/worker.py"\n')
+    # The fake probe records the argv it was handed, so "the launcher forwarded the ampere option"
+    # is asserted rather than assumed -- the whole point of --yaw-current-a is that a silently
+    # dropped option would look exactly like a probe that ran and saw nothing.
+    probe.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$PROBE_ROOT/last-args.txt"\n'
+                     'exec "$PROBE_PY" "$PROBE_ROOT/worker.py"\n')
     probe.chmod(0o755)
     env = os.environ.copy()
     env.update(OTA_RUN_DIR=str(tmp_path / 'runtime'), OTA_PYTHON=str(fake_python),
@@ -40,8 +44,11 @@ def test_commissioning_ownership_and_stop(tmp_path):
         return subprocess.run(['bash', str(script), action, *options], env=environment or env,
                               capture_output=True, text=True, timeout=25)
     try:
-        result = call('start', '--commission-hardware')
+        result = call('start', '--commission-hardware', '--yaw-current-a', '0.25')
         assert result.returncode == 0, result.stdout + result.stderr
+        forwarded = (tmp_path / 'last-args.txt').read_text().split()
+        assert '--yaw-current-a' in forwarded, forwarded
+        assert forwarded[forwarded.index('--yaw-current-a') + 1] == '0.25'
         for _ in range(100):
             if (tmp_path / 'probe-ready').exists(): break
             time.sleep(.02)
@@ -57,7 +64,13 @@ def test_commissioning_ownership_and_stop(tmp_path):
         assert (tmp_path / 'zero-requested').exists()
         assert 'not a park/disable certification' in call('status').stdout
         assert 'PARKED' not in call('status').stdout
+        # Either spelling of a yaw push is commissioning-only, and the ampere one must be caught by
+        # the same rule as the voltage one -- not because 0.25 A is gentle, but because a push
+        # outside commissioning means two processes on one CAN bus.
         assert call('run', '--yaw-voltage', '10').returncode == 2
+        refused_push = call('run', '--yaw-current-a', '0.25')
+        assert refused_push.returncode == 2
+        assert 'require --commission-hardware' in refused_push.stderr
     finally:
         call('stop')
 

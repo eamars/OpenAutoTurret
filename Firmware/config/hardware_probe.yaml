@@ -6,6 +6,10 @@ yaw:
   interface: can0
   spi_parent: spi0.0
   motor_id: 1
+  # Declared, never guessed: a drive with the current ring enabled ignores a voltage frame, so a
+  # probe that assumed voltage here would report "the axis does not move" about a drive that is
+  # simply not listening. Must match axes.yaw.control_mode in config/mixed_hardware.yaml.
+  control_mode: current
 pitch:
   interface: can1
   spi_parent: spi1.0
@@ -15,6 +19,14 @@ pitch:
 bitrate: 1000000
 limits:
   voltage_raw: 3000
+  # Ceiling for a commissioning pulse in amperes, and it is deliberately below the station's own
+  # 0.8 A production envelope: this tool runs with the payload hand-disassembled twice a night,
+  # and the first question is "which way does it move", not "how hard can it push".
+  yaw_current_a: 0.30
+  # The regulated (--yaw-speed-deg-s) path uses the same amperes gains as production, so a probe
+  # result transfers instead of being a second tuning mystery.
+  current_kp_a_per_rad_s: 1.0
+  current_ki_a_per_rad_s: 0.6
   pulse_ms: 500
   yaw_travel_deg: 5
   yaw_speed_deg_s: 20
