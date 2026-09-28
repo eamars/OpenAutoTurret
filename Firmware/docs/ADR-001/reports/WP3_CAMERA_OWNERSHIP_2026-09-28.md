@@ -42,6 +42,10 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 
 **两个键存在（中继不再吞它们）但值为空** ⇒ 链上还有第三处关卡：`webd/app.py` 合并视觉上行时
 用的是**显式键清单**，我没把新键加进去（`vision_frames` 能到页面就是走那张清单）。
-这是同一族陷阱的第三种打扮：协议声明了、发送方发了，**合并层没放行**——今天下午协议层是这一族，
-`be_cmd` 那次是没声明，这次是合并白名单。下一刀：把两键加进 `webd/app.py` 的合并清单，
+这是同一族陷阱的第三种打扮：协议声明了、发送方发了，中间还有一层没放行。
+**但我上一轮把那一层认错成"webd 合并白名单"**：`vision_frames` 在 `webd` 里只有声明与显示两处
+（`protocol.py`、`dashboard.py`），也就是说感知字段是 **controld 从视觉 IPC 收到上报后，由它自己的
+遥测序列化（`control/src/web/web_server.hpp`）发出去的**——真正的关卡在那儿，不在 webd。
+所以下一刀要动的是 controld 那条上报通路（视觉上报 → controld 遥测 → web_server.hpp 的 JSON），
+而不是给 webd 加白名单；改完期望值仍然是 `cam-f45ad188 / by-path`。下一刀：把两键加进 `webd/app.py` 的合并清单，
 再把 `by-path` 节点配进 `open_picamera2`（那之后期望值＝`cam-f45ad188 / by-path`）。
