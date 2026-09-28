@@ -226,3 +226,9 @@ visiond: worker cam-385fcd67 state=stopped frames=6 dropped=5 generation=1
    没有它，这行输出随时可以被人悄悄删掉而没人红。
 2. **A3/T2 仍是 NOT_RUN**：站离线（主人刷 GM6020 固件），且需要真相机帧率。
 3. 双相机（wide/detail）真接入属硬件到位后的事；`CameraTrackRegistry` 与 worker 已就位但**只有单路消费者**。
+
+### 飘红定位（更新上面那条"未定位"）
+
+具名：**`vision/tests/test_ipc_publisher.py::test_reconnect_after_the_daemon_dies_is_caller_policy`**。
+两次连跑分别红/绿，其余失败集合完全一致。名字指向"守护死后重连"这类**依赖真实时钟/调度**的断言。
+处置：记为**待修测试**（MVP 之后的测试轮），不当成通过、也不当噪音——**它会让人在真回归时误读红**。
