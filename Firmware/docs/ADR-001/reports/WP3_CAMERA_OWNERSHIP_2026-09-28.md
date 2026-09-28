@@ -33,3 +33,15 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 升级动作是配置层面的：把 `/dev/v4l/by-path/platform-1000880000.pisp_be-video-index0` 交给
 `open_picamera2`，`camera_id` 就变成已在现场验证过的 `cam-f45ad188 / by-path`。
 下一刀之后要做的是 backpressure 显式策略与丢弃计数（A3 的"队列有界"需要可数的东西）。
+
+## 部署后现场读到的结果（不粉饰）
+
+`--prebuilt` 落地（65 binaries / 0 failed、冒烟 `phase=homing fault=''`）之后 `/api/state`：
+
+    {'camera_id': '', 'camera_identity_source': '', 'phase': 'hold', 'vision_frames': 6520}
+
+**两个键存在（中继不再吞它们）但值为空** ⇒ 链上还有第三处关卡：`webd/app.py` 合并视觉上行时
+用的是**显式键清单**，我没把新键加进去（`vision_frames` 能到页面就是走那张清单）。
+这是同一族陷阱的第三种打扮：协议声明了、发送方发了，**合并层没放行**——今天下午协议层是这一族，
+`be_cmd` 那次是没声明，这次是合并白名单。下一刀：把两键加进 `webd/app.py` 的合并清单，
+再把 `by-path` 节点配进 `open_picamera2`（那之后期望值＝`cam-f45ad188 / by-path`）。
