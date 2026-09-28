@@ -525,8 +525,11 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
     # the identity it was given -- including when that identity is only a kernel number.
     _ident = derive_camera_id(str(info.get("device_path")
                                   or f"/dev/video{info.get('camera_num', '?')}"))
+    # file=sys.stderr, like every other line here: the launcher captures stderr into vision.log,
+    # so a plain stdout print in this daemon is a print into the void. That is why this line was
+    # missing from the station's log even though the code demonstrably ran (frames were flowing).
     print(f"visiond: camera identity {_ident.id} source={_ident.source} "
-          f"durable={_ident.durable}")
+          f"durable={_ident.durable}", file=sys.stderr)
     print(f"visiond: camera {info['camera_num']} stream "
           f"{info['stream_size'][0]}x{info['stream_size'][1]} model {info['task']} "
           f"@ {info['inference_rate_hz']} Hz", file=sys.stderr)

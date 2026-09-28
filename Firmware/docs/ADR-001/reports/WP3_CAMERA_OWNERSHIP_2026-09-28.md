@@ -89,3 +89,10 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 分辨探针已备：用 station-venv 的 python 打印 `perception.__file__` 看它解析到哪个路径。
 在分辨出来之前，WP3 的"身份已上线"降级为 **NOT_VERIFIED**；已验证的仍只有
 `camera_id.py` 的 4/4 自检与真路径映射（`cam-f45ad188 / by-path`）。
+
+## 分辨完成（本轮）：身份行进了没人接的 stdout
+
+不是包遮蔽，也不是分支没执行：`visiond` 的所有日志行都以 **`file=sys.stderr`** 结尾，
+启动器把 **stderr** 收进 `vision.log`；我那句 `print` 走 **stdout**，等于打进黑洞——
+所以"代码明显在跑（帧号 8430）、日志里却没有它"。修法：加 `file=sys.stderr`。
+教训写死：**在这个仓库里，守护进程的可观测输出 = stderr；stdout 的 print 不会被采集。**
