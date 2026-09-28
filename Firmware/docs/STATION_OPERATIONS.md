@@ -644,3 +644,7 @@ If that fingerprint ever changes, that is a finding to investigate, not a line t
 未定原因（不猜成结论）：内核挂死 / 掉电 / 网络栈死。现场处置需要人（我无 sudo、也没有它的电源控制权）。
 待回来后要查的第一样东西：`journalctl -b -1 | tail`（上一次 boot 的末尾）——**如果它是重启过的，
 这段会告诉我们是谁干的；如果它被拔过电，这段会直接断掉。**
+
+补：站上 journald **没有跨 boot 持久化**（`journalctl -b -1` 为空）。硬断电之后"上次 boot 的末尾"就查不到了，
+也就是说这台站现在**无法自证死因**。要么开 `Storage=persistent`（要 sudo，等主人方便时），
+要么承认崩溃取证只能靠 controld 自己落盘的 trace/evidence——这反过来正是 WP2 那些记录的价值所在。
