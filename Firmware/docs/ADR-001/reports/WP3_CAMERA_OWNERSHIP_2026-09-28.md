@@ -109,3 +109,13 @@ ID `cam-f45ad188` 从此是这台站 wide 相机的身份，换 USB 口/换枚�
 
 另记：**WP2 ③（CAN1 断、CAN0 有效）需要 `ip link set can1 down`＝sudo**，我这环境无 sudo，
 得主人方便时配合一次，或由他给一条免密规则。
+
+## 核对完成（第 30 轮）：耐久身份成立，期望值是我挑错了设备
+
+站上实跑：`realpath(/dev/video0) = /dev/video0`，`/dev/v4l/by-path` 下**唯一**命中它的名字是
+`platform-1f00128000.csi-video-index0` → `cam-baa28c2a`，与 visiond 打印**完全一致**；
+候选唯一（无"挑哪个"的歧义），名字里除每接口计数器（已被剥掉）外无枚举顺序残留。
+⇒ **`source=by-path, durable=True` 的声明成立。**
+我上一轮的期望值 `cam-f45ad188` 来自 `platform-1000880000.pisp_be-*`——那是 **PiSP 后端节点**，
+而 owner 打开的是 **CSI 前端节点**：我手工挑错了设备，身份语义本身没错（身份＝owner 实际打开的那个节点所在端口）。
+双节点若将来同时被打开，各自有各自的身份，这正是我们想要的（节点≠相机时，身份也该分开）。
