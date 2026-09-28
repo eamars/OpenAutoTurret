@@ -111,9 +111,12 @@ def _run_window(streams: list[dict[str, Any]], seconds: float) -> None:
                     stream["last_t"] = now
                     stream["last_seq"] = seq
                 finally:
-                    # The buffer goes back to the sensor, or the pipeline stalls after
-                    # buffer_count frames and the probe reports a confident, wrong trickle.
-                    cam.done(request)
+                    # The buffer goes back, or the pipeline stalls after buffer_count frames
+                    # and the probe reports a confident, wrong trickle. Named from the
+                    # installed module rather than guessed: this line shipped wrong twice
+                    # (`request.dispose()`, then `camera.done()`), and only the pin below
+                    # turns that class of mistake into a red selftest instead of a field crash.
+                    request.release()
     finally:
         for stream in streams:
             try:
@@ -149,6 +152,17 @@ def _selftest() -> int:
     assert _percentile([1.0, 2.0, 3.0], 95) == 3.0
     assert _percentile([], 50) is None
     checks += 1
+    # The frame loop's whole contract is one method name. Where picamera2 is importable,
+    # selftest checks it exists; where it is not, say so instead of passing silently --
+    # a workstation container has no picamera2, and "no hardware touched" must not read as
+    # "the API was verified" on the machine that cannot verify it.
+    try:
+        from picamera2.request import CompletedRequest  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        print(f"  (picamera2 不可导入，request API 这一跳本机钉不住: {type(exc).__name__})")
+    else:
+        assert hasattr(CompletedRequest, "release"), dir(CompletedRequest)
+        checks += 1
     print(f"dual-camera probe selftest: {checks}/{checks} checks passed (no hardware touched)")
     return 0
 
