@@ -1,0 +1,29 @@
+# mode-bound calibration manifest (WP4).
+#
+# This file deliberately contains no calibration numbers: the measured values live in the
+# files it references, and a second copy of a number is a second way to be wrong. What is
+# Paths are relative to this file, so the manifest can be moved with its siblings.
+# What is
+# recorded here is provenance -- which file, hashed, from which session, applying to which
+# modes, and whether coordinate closure was ever demonstrated. That is what lets a
+# qualification be refused rather than assumed.
+schema: ota-calibration-manifest-v1
+entries:
+  - id: intrinsics
+    path: camera_intrinsics.yaml
+    sha256: 68fb0ff3fde86c0547ace45f365c4147a04f04baaad777f2f0f20d07c274e6bc
+    session: "cal-2026-09-04-theodolite-1deg"
+    applies_to: [auto_roam, tracking, manual]
+    closure: claimed
+  - id: extrinsics
+    path: camera_extrinsics.yaml
+    sha256: 5e562734f0fc61fb64363e9bcb124dd739ce684c714e7543cbc0e3899a5c5dd8
+    session: "cal-2026-09-06-mixed-mechanism"
+    applies_to: [auto_roam, tracking, manual]
+    closure: claimed
+  - id: install
+    path: ../config/camera_install.yaml
+    sha256: 54b5e536dfeff380a41d24b528917e1c7a03fdbba92c413e91ef9542249a4c54
+    session: ""
+    applies_to: [auto_roam, tracking, manual]
+    closure: unknown
