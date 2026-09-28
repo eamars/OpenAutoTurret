@@ -176,6 +176,12 @@ def main() -> int:
     parser.add_argument("--height", default=720, type=int)
     parser.add_argument("--fps", default=15.0, type=float)
     parser.add_argument("--selftest", action="store_true", help="run the selection logic with no hardware")
+    parser.add_argument("--no-lock", action="store_true",
+                        help="open sensors while the stack holds the launcher lock. This is the "
+                             "cross-process question, and it is a different one from the two-in-one-"
+                             "process test: the stack owns one sensor in visiond, and a second "
+                             "process asking for the other is exactly what a preview tap would do. "
+                             "Fewer than the requested models must still be a loud failure.")
     args = parser.parse_args()
 
     if args.selftest:
@@ -197,7 +203,7 @@ def main() -> int:
              for info in Picamera2.global_camera_info()]
     wanted = _camera_numbers(infos, models)
 
-    lock = _acquire_station_launcher_lock()
+    lock = -1 if args.no_lock else _acquire_station_launcher_lock()
     opened: list[dict[str, Any]] = []
     try:
         for model, number in wanted.items():
@@ -229,7 +235,7 @@ def main() -> int:
 
         before = {"load_1m": os.getloadavg()[0], "soc_temp_c": _soc_temp_c()}
         live = [s for s in opened if s.get("camera") is not None]
-        if len(live) < 2:
+        if len(live) < len(models):
             raise SystemExit("fewer than two sensors opened: "
                              + "; ".join(f"{s['model']}#{s['camera_num']} {s['error'] or 'open'}"
                                         for s in opened))
@@ -245,7 +251,8 @@ def main() -> int:
                     # Cannot change the answer, but it must not be silence either: a leaked
                     # sensor makes the NEXT opener fail with a message that blames itself.
                     stream.setdefault("close_error", f"{type(exc).__name__}: {exc}")
-        os.close(lock)
+        if lock >= 0:
+            os.close(lock)
 
     report: dict[str, Any] = {
         "requested": {"models": list(models), "size": f"{args.width}x{args.height}",
