@@ -59,3 +59,19 @@ NaN / 上限 0 / 上限负 / 上限 3.0 / ID 2 全部抛（失败关闭）。
 
 建议的探针调用形式（**待实现，不是已可用命令**）：
 `Firmware/tools/probe_yaw_motion --yaw-current-a 0.2 --travel-deg 30`（其余边界沿用现有默认）。
+
+## 配置层补丁契约（本轮实地读到行号，下一刀照抄即可）
+
+| 站 | 位置 | 要做什么 |
+|---|---|---|
+| 1 | `control/src/config/mixed_hardware_profile.hpp:12` | `enum class ControlMode { Voltage, Position, Speed }` → 加 `Current` |
+| 2 | 同文件结构体内（`control_mode` 字段旁，约 :25） | 加 `bool current_ring_verified = false;` 与 `double host_current_limit_a = 0.0;`（**缺省即失败关闭**） |
+| 3 | `mixed_hardware_profile.cpp:186` 的**已知键白名单** | 加 `"current_ring_verified"`、`"host_current_limit_a"`——**漏这一步会被"未知键"拒绝**，是整刀最容易漏的站 |
+| 4 | `cpp` 的 **yaw 分支**（约 :150-170，pitch 分支的模式映射在 :194-197 可作形状参考） | 接受 `"current"`；选 current 时校验：`command_frame_id == 0x1FE`（电压/电流 ID 不得混用）、`current_ring_verified == true`、`0 < host_current_limit_a <= 1.62` |
+| 5 | 校验失败的信息 | 要**点名缺哪一项**（红要带原因）：例如 `axes.yaw: current mode requires current_ring_verified: true (firmware >= v1.0.11.2, RoboMaster Assistant v2.7+)` |
+
+**注意别顺手做的事**：YAML 里生产仍是 `control_mode: voltage`——**固件与 Current Ring 未验证前不切**，
+所以本次改动**不改变任何现有行为**（新键只在选了 current 时才生效），这也让它可以安全地先合进去。
+
+**验收形状**（与 WP3/WP4/WP5 同一套路）：profile 测试里加"选 current 但缺确认位 ⇒ 被拒且信息点名该项"、
+"上限 1.63 ⇒ 被拒"、"`command_frame_id: 0x1FF` 配 current ⇒ 被拒"三条，**每条都得能红**。
