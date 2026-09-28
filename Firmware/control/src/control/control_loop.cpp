@@ -345,6 +345,16 @@ bool ControlLoop::start_parking(std::string& err) {
       err = "cannot stop/park: invalid bounded pitch stop parameters";
       return false;
     }
+    // WP2 ②: a repeated stop must not restart the clock. Everything above this line only reads;
+    // from here down the function rewrites park state and mints a fresh stop_id. Without a guard,
+    // a second request while a park is already in flight (a) pushed the deadline out -- press
+    // STOP repeatedly and the park is forever in progress, never timing out -- and (b) abandoned
+    // the first request's evidence chain under a new identity. Idempotence, per 07's "重复 stop
+    // 不得重置 deadline": accept the request, leave the in-flight park and its stop_id alone.
+    if (mixed_stop_park_) {
+      err = "stop already in progress; the park, its deadline and its stop_id are unchanged";
+      return true;
+    }
     mixed_park_pitch_target_rad_ = target;
     mixed_park_yaw_origin_rad_ = yaw.q_rad;
     constexpr double yaw_brake_rad_s2 = 30.0 * kDeg2Rad;
