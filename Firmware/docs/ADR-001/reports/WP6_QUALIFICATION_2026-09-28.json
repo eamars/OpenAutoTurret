@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "work_package": "WP6",
+  "title": "Single-axis identification, stop envelope, current-mode admission",
+  "status": "PARTIAL —— 电流模式准入与配置层已落地并有离线测试；一切需要运动的验收 NOT_RUN（站由主人停机刷固件，09-28 令：一律本地）",
+  "station_session_id": null,
+  "boot_id": null,
+  "hardware_manifest_id": null,
+  "hardware_motion_authorized": false,
+  "configuration_hashes": {},
+  "source_record_paths": [
+    "Firmware/docs/ADR-001/reports/CURRENT_MODE_MIGRATION_2026-09-28.md"
+  ],
+  "metrics": {
+    "cpp_suite": {
+      "passed": 77,
+      "failed": 0,
+      "excluded": "retained_homing（写 /dev/shm，容器内跑法见仓库 AGENTS.md）"
+    },
+    "new_offline_tests": {
+      "passed": 3,
+      "total": 3
+    },
+    "local_python_suite": {
+      "passed": 991,
+      "failed": 17,
+      "skipped": 24
+    }
+  },
+  "evidence": [
+    {
+      "claim": "电流模式必须记录外部前置条件，且拒绝时点名缺哪一项",
+      "how": "ctest -R mixed_station --output-on-failure（gtest 层）",
+      "observed": "MixedCurrentMode 三例：缺确认位被拒（点名 current_ring_verified）／限流 1.63 被拒（点名 host_current_limit_a 与 1.62）／两项齐备则通过"
+    },
+    {
+      "claim": "测试有效——不是装饰：它当场抓到解析器只校验不存值",
+      "how": "同一批用例的首次运行",
+      "observed": "ok=true 但 yaw.current_ring_verified=false ⇒ 字段会说谎；已修（值写入结构体）后三例转绿"
+    },
+    {
+      "claim": "1.62 A 这个数只有一处",
+      "how": "把两条前置条件从 backend 移入解析器，backend 只留帧身份规则",
+      "observed": "准入门仍要求电流模式配 command_frame_id=0x1FE；构建 0 error、77/77"
+    },
+    {
+      "claim": "电压路径行为未变（生产仍是 voltage）",
+      "how": "既有 HardwareProfilePinsTheCommissionedTopology 等断言仍钉 0x205/0x1FF/Voltage",
+      "observed": "全绿 ⇒ 这一整层可先合入而不改变现网行为"
+    }
+  ],
+  "limitations": [
+    "单轴辨识、停止包络（含 yaw 滑环 vout-角度剖面）、anti-windup：NOT_RUN——需要电机通电运动；本轮起主人禁止任何实机测试",
+    "S0 30 次 moving stop、M0 归零 10 次 ≤0.5°、WP2③、WP2-N1：全部 NOT_RUN（同上／需 sudo）",
+    "电流层 layer 4（探针 --yaw-current-a）未做；上线前还需主人确认固件 ≥ v1.0.11.2 且 Current Ring 已开——09-28 实测：GM6020 对 ±0.6 A 电流帧**统计无响应**（编码器 Δ0、反馈电流与 0 A 同分布）",
+    "已具名飘红：vision/test_ipc_publisher 重连用例（跨运行翻转），推给 MVP 后的测试轮"
+  ]
+}
