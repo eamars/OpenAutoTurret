@@ -44,5 +44,9 @@ limits:
   # and a sweep with no feedforward would spend seconds of integrator windup discovering that.
   sweep_travel_deg: 400
   sweep_duration_ms: 60000
-  sweep_speed_deg_s: 25
+  # 40, not 15: with a breakaway feedforward the axis is allowed to overshoot its own speed target
+  # while it is still crossing a binding point, and a guard that trips on a legitimate transient
+  # ends the sweep at 36 ms and measures nothing. Measured on the station: 1.0 A of feedforward
+  # broke static friction in 10 ms and the axis was at ~35 deg/s 25 ms later.
+  sweep_speed_deg_s: 40
   sweep_ff_a_max: 1.20
