@@ -250,6 +250,17 @@ class Telemetry:
     q_ref_rate_pitch_rad_s: Optional[float] = None
     q_ref_accel_yaw_rad_s2: Optional[float] = None
     q_ref_accel_pitch_rad_s2: Optional[float] = None
+    # What the yaw axis was actually asked to do, and with how much force, straight from the
+    # backend that closes its own velocity loop. Measured manual yaw reached 5.3 deg/s while
+    # manual pitch reached 17.6, and neither the tape nor the log could say whether the ask
+    # was 5 or the ask was 20 and the axis was slow -- a settings bug and an actuator bug
+    # look identical without these. webd is a typed relay: an undeclared field is dropped
+    # here rather than passed through, which is how a field can be "published" by controld
+    # and still never reach the page.
+    yaw_cmd_shaped_deg_s: Optional[float] = None
+    yaw_cmd_output: Optional[float] = None
+    yaw_guard_degraded: Optional[bool] = None
+    yaw_guard_events: Optional[int] = None
     q_ref_rate_valid: bool = False
     tracking_velocity_control: bool = False
     tracking_reference_damped: bool = False

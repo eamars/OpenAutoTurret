@@ -282,3 +282,63 @@ def test_nothing_in_the_document_is_unmapped_without_being_absent():
         + "\n  ".join(unmapped)
         + "\n  (add it to MAPPED with the code name and why, or to ABSENT with the reason "
           "this station cannot publish it)")
+
+
+# The station promises these to whoever is diagnosing it. Adding a diagnostic means adding
+# its name here as well; that is the whole discipline, and it costs one line.
+PROMISED_DIAGNOSTICS = (
+    "q_ref_rate_yaw_rad_s", "q_ref_rate_pitch_rad_s",
+    "q_ref_accel_yaw_rad_s2", "q_ref_accel_pitch_rad_s2",
+    "yaw_cmd_shaped_deg_s",   # what the yaw velocity loop was told to track
+    "yaw_cmd_output",         # and with how much drive output
+    "yaw_guard_degraded", "yaw_guard_events",   # the tiered guard's non-latching observations
+)
+
+
+def test_the_diagnostics_the_station_promises_are_relayed_by_webd():
+    """webd is a typed relay: a field controld emits and webd does not declare is dropped.
+
+    Found the hard way today. Four diagnostics went into the C++ writer, the station suite
+    passed, the page looked healthy, and /api/state had never heard of them -- because the
+    gap between "published" and "reaches the operator" is one dataclass, and nothing watched
+    it. The blanket "every emitted field" version of this test is unusable (the writer also
+    emits nested structures webd maps elsewhere), so the promise is spelled out instead.
+    """
+    from webd import protocol
+    declared = set(protocol.Telemetry.__dataclass_fields__)
+    missing = [n for n in PROMISED_DIAGNOSTICS if n not in declared]
+    assert not missing, "webd will silently drop: %s" % ", ".join(missing)
+
+
+def test_every_field_the_page_reads_is_declared_by_the_relay():
+    """The same gap from the other side: hud code that reads t.<field> of an undeclared name
+    gets None forever, which renders as a blank rather than as an error."""
+    from webd import protocol
+    from webd.hud import HUD_JS
+    here = pathlib.Path(protocol.__file__).parent
+    src = "".join((here / n).read_text(encoding="utf-8") for n in ("protocol.py", "app.py"))
+    # webd also stamps a few keys onto the outgoing dict outside the record (connection
+    # state is webd's own knowledge, not controld's), so those count as declared too.
+    declared = set(protocol.Telemetry.__dataclass_fields__)
+    declared |= set(re.findall(r"\[\s*\"([a-z0-9_]+)\"\s*\] *=", src))
+    # ...and app.py adds some as dict-literal keys while building the response, which is the
+    # same promise written a different way.
+    declared |= set(re.findall(r"[\"']([a-z0-9_]+)[\"'] *:", src))
+    # Not every `t.` in the renderer is telemetry: the tape's own tick and box objects are
+    # also named t inside their helpers, and their fields are not telemetry reads.
+    # Only names the writer actually emits are candidate telemetry reads; everything else
+    # the renderer calls `t.something` is a tick, a box, or a label, and listing those by
+    # hand turned into whack-a-mole. The intersection is the honest question: controld emits
+    # it, the page reads it, and the relay drops it.
+    cpp = (pathlib.Path(__file__).resolve().parents[3] / "control" / "src" / "web" / "web_server.hpp")
+    emitted = set(re.findall(r',\\"([a-z0-9_]+)\\":', cpp.read_text(encoding="utf-8")))
+    read = set(re.findall(r"\bt\.([a-z0-9_]+)", HUD_JS)) & emitted
+    # Two names collide with telemetry vocabulary but are not telemetry: `label` is a tick's
+    # own text inside the tape helper, and `selected_label` is a string the dock layer composes
+    # beside the frame. Both are also emitted somewhere in the C++ writer for unrelated
+    # reasons, so the intersection alone does not separate them -- they are named, with the
+    # reason, rather than the whole check being loosened.
+    read -= {"label", "selected_label"}
+    assert read, "no emitted field is read by the page -- either the pattern or the page moved"
+    missing = sorted(read - declared)
+    assert not missing, "the page reads fields webd never declares: %s" % ", ".join(missing[:8])
