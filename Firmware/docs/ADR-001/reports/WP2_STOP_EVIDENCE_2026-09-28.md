@@ -61,3 +61,18 @@
 GM6020 温度/故障策略（:255）、反馈不新鲜、以及 `yaw_speed > 25 °/s`（太快反而不许停）。
 `07` 的 Done 条写的是"stale 时可请求停止但不盲 park"，`08/S0` 要求"无 readiness 拒绝停止请求"——
 现在这四条都和它对不上。这是行为缺陷，不是缺测试。
+
+## 否证 · 免归零不能复用 RetainedHoming（2026-09-28 深夜，第 25 轮）
+
+主人的裁决（相机测试不需每次归零；电机持续通电时免归零，代价是必须证明中间没断电、encoder 还记得）
+**不能靠现成的 `RetainedHoming` 落地**：`control_loop.cpp:581` 里 `restore_retained_homing()` 遇到
+`backend_->supports_continuous_yaw()` **直接 return false**，因为它要求两轴归零 + 软/硬限位结构
+（`q_soft_max_rad`/`q_hard_max_rad`）——那是有限行程双轴的模型；本站 yaw 是 GM6020 连续旋转无 endstop。
+`main.cpp:257` 的 `!mixed_mode` 门只是表象。
+
+新立条目（下一场做，按 07 的格式补进 WP2/WP3 的 Done 条）：
+
+> **WP2-N1 免归零凭证**：`zero_source ∈ {retained, homing}`，`retained` 需三条同时成立——
+> ① 上次会话零点已落盘（pitch 绝对角 + yaw 会话计数）；② 驱动器通电连续性可证（同 boot 且记录新鲜）；
+> ③ 落盘值与当前 encoder 一致（不一致＝中途断过电，立即退回归零）。
+> 验收：热重启一次 ⇒ 日志 `zero_source=retained` 且**无归零动作**；拔驱动器电再上电 ⇒ `zero_source=homing`。
