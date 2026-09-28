@@ -40,3 +40,19 @@
 
 C1 的任何数值结论；FOV 的任何补值；detail 相机的标定（硬件尚不存在）；
 `tracking/` 与协议侧改动（等 manifest 立住再说）。
+
+### F-WP4-1：朝向**词表**宽于**实现**（图像路径没有 rotate_90/270）
+
+`common/image_corrections.py:46` 的 `apply_orientation_image` 只实现 `none`／`rotate_180`／
+`flip_horizontal`／`flip_vertical`，其余 `raise ValueError`；而 `validate_orientation` 的词表更宽
+（含 90/270）。⇒ 配置里写 `rotate_90` 时，**画面会抛、几何（`apply_orientation_bbox`）却可能已按 90 校正**，
+正是这份文件开头警告的那类事故的反面："画面看起来正常而几何差 180°"——这里会是"几何转了、画面没转"。
+
+需要裁决（不在本轮擅自做）：**两边都支持 90/270**，还是**把词表收窄到实现支持的四种**。
+倾向后者：本站实测安装是 `rotate_180`，没人需要 90/270，而词表每宽一项就多一条没人走过的路。
+
+### 本轮已证
+
+`perception/tests/test_preview_closure.py`：图像路径实现的四种朝向**都能自我撤销**（预览半程闭合成立）。
+我自己先写错过一次——断言"所有朝向都是对合"，被 `rotate_90` 连做两次等于 180° 当场推翻；
+闭合来自**互逆**，而这里恰好四种都是自逆。**是测试抓住了我，不是我把测试改成能过。**
