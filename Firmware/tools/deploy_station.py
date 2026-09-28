@@ -37,6 +37,14 @@ def main():
                              "ambient ~/.ssh/known_hosts with it and every ssh here died with "
                              "status 255), so the station's identity is passed in, not hoped "
                              "for. Env OTA_KNOWN_HOSTS does the same for scripts.")
+    parser.add_argument("--identity", type=pathlib.Path,
+                        default=(pathlib.Path(os.environ["OTA_SSH_IDENTITY"])
+                                 if os.environ.get("OTA_SSH_IDENTITY") else None),
+                        help="private key for the station, with IdentitiesOnly. The container's "
+                             "home is not durable: when the image was rebuilt 2026-09-28 the "
+                             "ambient key went with it and ssh answered 255 -- an auth failure "
+                             "that looks exactly like a host-key failure. Passed in, like the "
+                             "known_hosts. Env OTA_SSH_IDENTITY does the same for scripts.")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
     parser.add_argument("--commission-mixed-controller", action="store_true",
@@ -67,6 +75,10 @@ def main():
     if args.connect_address:
         connection = ["-o", f"HostName={args.connect_address}",
                       "-o", f"HostKeyAlias={args.host.rsplit('@', 1)[-1]}"]
+    if args.identity is not None:
+        # IdentitiesOnly: without it ssh also offers anything an agent is holding, and an
+        # offered-but-wrong key can itself be the reason the station says no.
+        connection += ["-i", str(args.identity), "-o", "IdentitiesOnly=yes"]
     if args.known_hosts is not None:
         # Pinned identity, checked strictly: a silent yes would let a different box wearing
         # this address -- or an ARP neighbour -- take over the station's role mid-deploy.
