@@ -332,36 +332,50 @@ int main(int argc, char** argv) {
   std::unique_ptr<control::ImuTraceIngest> imu_observer;
   const char* const imu_trace = std::getenv("OTA_IMU_TRACE");
   const bool imu_trace_configured = imu_trace && *imu_trace;
+  // The BNO085 is an instrument, not a precondition: no IMU condition may fault the station. What
+  // it can do is report itself absent, which §20's fields are for -- `present:false` on the wire is
+  // the honest answer to "is there usable inertial data", and a page that renders that as "no
+  // sensor" is telling the operator the truth. A daemon that exited because the sensor was quiet
+  // would replace a true statement with a station that has no telemetry at all.
+  //
+  // The one exception is an explicit commissioning session (OTA_MIXED_COMMISSION_MANUAL=1), where
+  // the tare-scoped trace is the thing under qualification: there an unmet gate refuses to *start*
+  // the session, before any motion, in the same class as a config that fails to load. It is not a
+  // runtime fault, and nothing has moved when it happens.
   if (mixed_mode) {
     if (!imu_trace_configured) {
-      spdlog::error("mixed startup requires launcher-owned BNO085 trace (OTA_IMU_TRACE)");
-      loop.deenergize_all();
-      return 1;
-    }
-    imu_observer = std::make_unique<control::ImuTraceIngest>();
-    std::string imu_error;
-    if (!imu_observer->start(imu_trace, imu_error)) {
-      spdlog::error("BNO085 trace ingest failed: {}", imu_error);
-      loop.deenergize_all();
-      return 1;
-    }
-    const auto deadline = now_monotonic_ns() + 2'000'000'000LL;
-    bool ready = false;
-    while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
-      const auto state = imu_observer->snapshot(now_monotonic_ns());
-      if (state.game_rv_fresh && state.game_rv_tared &&
-          state.gyro_fresh && state.game_rv_accuracy >= 2) {
-        ready = true;
-        spdlog::info("BNO085 observer ready: generation={} game-RV status={} tare_rx_ns={}",
-                     state.generation, state.game_rv_accuracy, state.tare_rx_ns);
-        break;
+      spdlog::warn("no launcher BNO085 trace (OTA_IMU_TRACE unset or the capture did not start); "
+                   "the imu block will report absent");
+    } else {
+      imu_observer = std::make_unique<control::ImuTraceIngest>();
+      std::string imu_error;
+      if (!imu_observer->start(imu_trace, imu_error)) {
+        spdlog::warn("BNO085 trace not ingestable ({}): continuing without an observer", imu_error);
+        imu_observer.reset();
+      } else if (mixed_commission_manual) {
+        const auto deadline = now_monotonic_ns() + 2'000'000'000LL;
+        bool ready = false;
+        while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
+          const auto state = imu_observer->snapshot(now_monotonic_ns());
+          if (state.game_rv_fresh && state.game_rv_tared &&
+              state.gyro_fresh && state.game_rv_accuracy >= 2) {
+            ready = true;
+            spdlog::info("BNO085 observer ready: generation={} game-RV status={} tare_rx_ns={}",
+                         state.generation, state.game_rv_accuracy, state.tare_rx_ns);
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (!ready) {
+          spdlog::error("BNO085 has no fresh same-generation host tare, game-RV and gyro; "
+                        "commissioning session refused before any motion");
+          loop.deenergize_all();
+          return 1;
+        }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    if (!ready) {
-      spdlog::error("BNO085 has no fresh same-generation host tare, game-RV and gyro; mixed startup blocked");
-      loop.deenergize_all();
-      return 1;
+      // A normal mixed start does not wait for the sensor at all: the 1 Hz publisher below reports
+      // freshness as it finds it, so a slow-starting IMU shows up as `present:false` for a second
+      // rather than as a station that refused to boot.
     }
   }
 
