@@ -213,3 +213,18 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 `create_preview_configuration` 的 kwargs 里 `lores.size == (640,360)` 且 `info["inference_input"]=="lores"`。
 **H3 才见真章**：把生产 profile 切 `hailo_yolov8n` 并填 `camera_lores_width/height`，芯片应变绿
 `NN HAILO 640x360`。
+
+### H3 已上线（release `6e11098ab330.uL2Wd3`），但有一个明确的未完项
+
+**成了的部分（现读）**：`adapter=hailo`、`stream=[640,360]`、`inferences=1955`、`failures=0`、
+`model_inference_ms=7.9`（与 Phase 5 的 7.0–8.2 ms 相符）、`hailo_device_id=0001:01:00.0`、
+`device_architecture=HAILO8`、artifact SHA 与 profile 声明一致；广角 main 仍 1920×1080；
+`detections_raw = detections_emitted = 5175` ⇒ **类别过滤无罪**。
+
+**未完项：`tracks=0`、`track_list_age_ms=None`（controld 自启动没收到过一次 TrackSet）。**
+根因已定位，且是本轮我自己种的：**解码端不减 letterbox pad**。HEF 的 on-device NMS 给的是
+**含 pad 的张量坐标**；探针用 pad=80（480 腿）时，不减只是位置偏移、框仍在画面内；
+640×360 腿 pad=140 ⇒ 纵向偏移 21.9%、尺度错 1.78× ⇒ 框落到画面之外 ⇒ 跟踪永不确认。
+**正解（不是 workaround）**：pad 必须**双向走完整回路**——编码时算出来，解码时按同一条映射还原
+（`leg_y = tensor_y − pad`，再除以腿高；x 除以 640）。因此 `pad` 不能是 `infer()` 的局部变量，
+要成为解码映射的一部分。**先别动跟踪门限**：在坐标正确之前，任何"把 `new_track` 调低"都是拿参数盖 bug。
