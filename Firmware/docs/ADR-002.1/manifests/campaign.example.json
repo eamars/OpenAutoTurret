@@ -1,7 +1,7 @@
 {
-  "_what": "一份冻结设计的样板。levels 是现网 boot 值（Kp=1、Ki=0.6、上限 0.8 A，取自 parameter_inventory.json 的 actual_value）的乘子，不是凭空的数字。payload_profile 必须用站自己的词（它答 no_profile / 具体档案名）——真跑第一枪就是被这条挡下的：我原先写 no_payload，runner 一条命令都没发就 BLOCKED 了。真战役的锁由 tools/adr0021_plan.py --freeze 生成；改设计=换战役，不是改文件。",
+  "_what": "\u4e00\u4efd\u51bb\u7ed3\u8bbe\u8ba1\u7684\u6837\u677f\u3002levels \u662f\u73b0\u7f51 boot \u503c\uff08Kp=1\u3001Ki=0.6\u3001\u4e0a\u9650 0.8 A\uff0c\u53d6\u81ea parameter_inventory.json \u7684 actual_value\uff09\u7684\u4e58\u5b50\uff0c\u4e0d\u662f\u51ed\u7a7a\u7684\u6570\u5b57\u3002payload_profile \u5fc5\u987b\u7528\u7ad9\u81ea\u5df1\u7684\u8bcd\uff08\u5b83\u7b54 no_profile / \u5177\u4f53\u6863\u6848\u540d\uff09\u2014\u2014\u771f\u8dd1\u7b2c\u4e00\u67aa\u5c31\u662f\u88ab\u8fd9\u6761\u6321\u4e0b\u7684\uff1a\u6211\u539f\u5148\u5199 no_payload\uff0crunner \u4e00\u6761\u547d\u4ee4\u90fd\u6ca1\u53d1\u5c31 BLOCKED \u4e86\u3002\u771f\u6218\u5f79\u7684\u9501\u7531 tools/adr0021_plan.py --freeze \u751f\u6210\uff1b\u6539\u8bbe\u8ba1=\u6362\u6218\u5f79\uff0c\u4e0d\u662f\u6539\u6587\u4ef6\u3002",
   "campaign_id": "yaw-current-example",
-  "objective": "在固定速度下比较 yaw 电流环增益对抖动的影响",
+  "objective": "\u5728\u56fa\u5b9a\u901f\u5ea6\u4e0b\u6bd4\u8f83 yaw \u7535\u6d41\u73af\u589e\u76ca\u5bf9\u6296\u52a8\u7684\u5f71\u54cd",
   "dimensions": [
     {
       "name": "yaw.current_kp_a_per_rad_s",
@@ -24,7 +24,7 @@
   ],
   "refine": {
     "max_candidates": 8,
-    "gate": "相对改进 > 0.15 才进 refine（D4：refine 是条件阶段）",
+    "gate": "\u76f8\u5bf9\u6539\u8fdb > 0.15 \u624d\u8fdb refine\uff08D4\uff1arefine \u662f\u6761\u4ef6\u9636\u6bb5\uff09",
     "levels_per_dimension": 2
   },
   "confirm": {
@@ -40,7 +40,18 @@
   },
   "scorer": {
     "metric": "jitter_rad_s_pp",
-    "worse_is_better": false
+    "worse_is_better": false,
+    "module": "adr0021_scorer.py",
+    "metrics_version": "adr0021-metrics-1",
+    "metrics_sha256": "94477f6456da782bf8bfe1eb79fa19e0921971989028e348e0dafe5986aa156f"
   },
-  "payload_profile": "no_profile"
+  "payload_profile": "no_profile",
+  "seed": 20260930,
+  "geometry_calibration": "BLOCKED_geometry_identity_not_measured_this_session",
+  "retry": {
+    "allowed": 1,
+    "same_parameters": true,
+    "same_conditions": true,
+    "reason": "00_CODEX_START.md:50 \u2014 one retry, identical parameters and conditions"
+  }
 }
