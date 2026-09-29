@@ -304,3 +304,13 @@ webd **279 passed / 1 skipped**、doc-tree 绿、arch_lint 无新红、`camera_r
 栈从**已删除的目录**里继续服务（`readlink /proc/<pid>/cwd` 里挂着 `(deleted)`）。修法不是猜指针，是**问进程**：
 `pgrep -af visiond` 的 argv 里就写着它在哪个 release。同一 revision 重新部署一次即恢复，现在 `releases` 里恰好一份
 `0c3a917b7c62.JnxFSk`。教训归到 `docs/operations/deploy.md` 的已知故障清单里。
+
+### H5 之前必须先定的一条：汇流要按新鲜度收，不按"最近一次成功"收
+
+`merge_track_sets` 拿到的是**两份文档**，而两路各自的 worker 快慢不同（广角 30 fps，窄角今天只有 9 fps 的
+预览）。如果汇流照单全收"每路最近一次的 TrackSet"，一条 1.5 秒前的窄角 track 会被当成现在有人在——**而
+控制环会朝它转**。这不是精度问题，是文档在说一句它没测过的事。
+
+所以 H5 的汇流带一条闸：**超过 `merge_max_age_ns` 的贡献不参与合并**，并且被丢掉的那一路要写进合并文档
+（`stale_sources: [camera_id]`）——丢掉是要被看见的，不是悄悄少了一路。阈值取自配置（AGENTS 规矩①），
+不写在函数体里。**没测过的延迟不许当健康**，这一条与 §40 "unmeasured 不等于 0" 同源。
