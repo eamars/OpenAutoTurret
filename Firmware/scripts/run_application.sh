@@ -259,17 +259,17 @@ if [ "$ACTION" = deploy ]; then
   if [ "${OTA_PREBUILT:-0}" != 1 ] || [ ! -x "$APP/build-arm64/control/controld" ]; then
   if [ "$PROBE_BUILD" = 1 ]; then
     if [ "$MODE" = imu ]; then
-    cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     elif [ "$MODE" = commission ]; then
-    cmake --build "$APP/build" --target probe-mixed-hardware probe-mixed-backend probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target probe-mixed-hardware probe-mixed-backend probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     elif [ "$MIXED_CONTROLLER_COMMISSION" = 1 ]; then
-    cmake --build "$APP/build" --target controld probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target controld probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     else
-    cmake --build "$APP/build" --target controld probe-mixed-hardware probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target controld probe-mixed-hardware probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     fi
     echo 'Probe build: regression tests deferred until runtime viability is established.'
   else
-    cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-$(nproc)}"
     ctest --test-dir "$APP/build" --output-on-failure
   fi
   fi

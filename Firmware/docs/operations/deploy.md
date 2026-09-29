@@ -43,6 +43,15 @@ They are not alternatives picked by taste: the first is how a release gets a rev
 separate directory; the second is how you check out a tree in place. Both leave motors alone unless
 you ask for more.
 
+## How hard to build
+
+Builds are expected to use **every core**: `cross_build.py` builds with `--parallel $(nproc)`
+already, and the launcher's native path defaults to `-j$(nproc)` as of 2026-09-29 (it was pinned to
+`-j2` when a native build beside a running stack risked the station's 5 V headroom -- lower it with
+`OTA_BUILD_JOBS=2` if you are compiling on the Pi *while* the cameras, the Hailo and the axes are all
+loaded, which is still an unmeasured combination). A cold arm64 tree is a full rebuild of the
+controller and takes minutes; that is expected, not a hang, and it is the reason `--prebuilt` exists.
+
 ## The command
 
 ```bash
