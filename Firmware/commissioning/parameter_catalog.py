@@ -111,10 +111,33 @@ def catalog(nq=5):
         "external_constraint","applicability","operator description plus independent response/temperature/supply records",
         "canonical identity; residual checks decide reuse","same label is not same physical state; uncovered changes require update",
         "no extrapolation; unknown optional physical descriptors remain null",uncertainty="covered domain and model residual distribution")
+    for name,unit,shape,meaning,classification,method,bounds in (
+        ('execution.mode','enum',(),'Verified actual drive input mode','external_constraint','capability and mode readback','current; other modes cannot supply current-model evidence'),
+        ('execution.current_feedback_cap_A','A',(),'Independent actual-current supervision cap','external_constraint','approved electrical/thermal evidence','positive; distinct from requested-current clamp'),
+        ('execution.tx_quantum_A','A',(),'Successful-command encoding/readback resolution','constant','verified codec scale and rounding','positive'),
+        ('execution.latency_p99_s','s',(),'Measured 99th percentile end-to-end latency for controller calculation','estimated','matched timestamped command/response events after clock calibration','nonnegative; unknown is not zero'),
+        ('identification.delay_search_bound_s','s',(),'Verified finite search domain for equivalent input delay','external_constraint','capability/timing coverage','strictly positive; not a fitted nominal delay'),
+        ('measurement.max_gap_s','s',(4,),'Accepted maximum encoder/gyro/current/TX gaps in that order','external_constraint','coverage and valid-band constraints','four positive bounds'),
+        ('measurement.sigma_q_rad','rad',(),'Position residual whitening scale','derived','stationary/repeated calibrated position including quantization','positive and <= one third of position quality limit'),
+        ('measurement.sigma_v_rad_s','rad/s',(),'Axis-rate residual whitening scale','derived','stationary/repeated calibrated rate','positive and <= one third of rate quality limit'),
+        ('imu.gyro_noise_rad_s','rad/s',(3,),'Stationary sensor-axis gyro standard deviations','derived','stationary bias removal and sample covariance','positive; no fabricated zero-noise sensor'),
+        ('envelope.stop_verified','bool',(),'Injected evidence that the current mode has an applicable stop/support bound','external_constraint','capability/stop verification or explicitly synthetic fixture','true required for stimulus prediction; never inferred from zero current'),
+        ('protection.current_A','A',(2,),'Independent actual-current protection interval','external_constraint','current capability and operating-point evidence','ordered finite interval'),
+        ('protection.temperature_C','degC',(2,),'Approved motor temperature interval','external_constraint','sensor validity and thermal evidence','ordered finite interval'),
+        ('protection.bus_V','V',(2,),'Approved bus voltage interval','external_constraint','supply evidence','ordered finite interval'),
+        ('protection.position_rad','rad',(2,),'Physical stop/protection interval','external_constraint','recoverable coordinate and mechanical envelope','ordered finite interval'),
+        ('protection.approved_duration_s','s',(),'Approved qualification duration','external_constraint','current operating-point thermal/supply authorization','positive'),
+        ('protection.approved_unknown_temperature_window_s','s',(),'Separate finite-window authorization when temperature is unavailable','external_constraint','explicit finite-window approval','nonnegative; unknown grants no such window'),
+        ('protection.required_margin_C','degC',(),'Required temperature headroom for thermal equilibrium','external_constraint','approved thermal qualification requirement','nonnegative')):
+        add(name,meaning,unit,shape,classification,'execution/measurement/protection',
+            'verified interface records, raw feedback, timestamps and applicable boundary evidence',method,
+            'same H/C/O; measured/approved source must resolve this quantity',bounds,
+            uncertainty='source resolution, observed distribution or explicit approval margin')
     result['imu.body_to_sensor']['coordinate']='rotation mapping pitch-body vectors into IMU sensor coordinates'
     result['imu.gyro_bias_rad_s']['coordinate']='IMU sensor axes'
     result['imu.accel_bias_m_s2']['coordinate']='IMU sensor axes'
     result['imu.lever_arm_m']['coordinate']='pitch-body axes, from body origin to IMU; transform gravity into this frame per sample'
+    result['imu.gyro_noise_rad_s']['coordinate']='IMU sensor axes'
     for name in ('clock.scale','clock.offset_s','clock.residual_p99_s'):
         result[name]['coordinate']='source sample clock to host monotonic clock; per source/session/generation'
     return result

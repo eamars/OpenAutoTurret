@@ -70,6 +70,10 @@ def audit(matrix_path,local_root):
         require(found is not None and int(found[1])>=minimum and contents.rstrip().endswith('OK') and
                 'FAILED (' not in contents,Reason.DATA_INVALID,f'{name} test suite did not pass completely')
         logs[name]=file_evidence(path);test_counts[name]=int(found[1])
+    path=local_root/'catalog-tests.log';contents=path.read_text(encoding='utf-8')
+    require('Ran 11 tests' in contents and contents.rstrip().endswith('OK'),
+            Reason.DATA_INVALID,'final expanded parameter catalog tests did not pass')
+    logs['parameter_catalog_final']=file_evidence(path)
     path=local_root/'ctest.log';contents=path.read_text(encoding='utf-8')
     require('100% tests passed, 0 tests failed out of 82' in contents,Reason.DATA_INVALID,'local native regression suite failed')
     logs['native_regression']=file_evidence(path);test_counts['native_regression']=82

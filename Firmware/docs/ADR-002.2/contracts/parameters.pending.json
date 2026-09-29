@@ -526,6 +526,154 @@
       "shape": [],
       "source_hash": null,
       "uncertainty": null
+    },
+    "execution.mode": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "enum",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.current_feedback_cap_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.tx_quantum_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.latency_p99_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "identification.delay_search_bound_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.max_gap_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [
+        4
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.sigma_q_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.sigma_v_rad_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "imu.gyro_noise_rad_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.stop_verified": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "bool",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.current_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.temperature_C": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "degC",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.bus_V": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "V",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.position_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.approved_duration_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.approved_unknown_temperature_window_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.required_margin_C": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "degC",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
     }
   }
 }
