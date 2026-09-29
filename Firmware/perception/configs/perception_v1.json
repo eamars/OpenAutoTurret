@@ -31,20 +31,20 @@
       "pose_oks_sigma": 0.1
     },
     "models": {
-    "_mock": {
-      "_what": "Offline acceptance path (ADR-001 §55.18): the mock adapter drives the daemon's real wiring with no sensor attached. Kept in config rather than as a code default so 'offline' is something an operator can select, not something that happens by accident when a model is missing. Rates mirror the station's cadence so timing windows behave as they would on the Pi.",
-      "adapter": "mock",
-      "bbox_normalized": false,
-      "bbox_order": "yxyx",
-      "inference_rate_hz": 23,
-      "input_height": 320,
-      "input_width": 320,
-      "labels": "coco_rpk",
-      "license": "",
-      "model_id": "mock-synthetic",
-      "path": "",
-      "manifest": ""
-    },
+      "_mock": {
+        "_what": "Offline acceptance path (ADR-001 §55.18): the mock adapter drives the daemon's real wiring with no sensor attached. Kept in config rather than as a code default so 'offline' is something an operator can select, not something that happens by accident when a model is missing. Rates mirror the station's cadence so timing windows behave as they would on the Pi.",
+        "adapter": "mock",
+        "bbox_normalized": false,
+        "bbox_order": "yxyx",
+        "inference_rate_hz": 23,
+        "input_height": 320,
+        "input_width": 320,
+        "labels": "coco_rpk",
+        "license": "",
+        "model_id": "mock-synthetic",
+        "path": "",
+        "manifest": ""
+      },
       "bakeoff_efficientdet320": {
         "adapter": "imx500",
         "bbox_normalized": false,
@@ -271,14 +271,14 @@
         "scale": 0.25,
         "shape": 0.15
       }
+    },
+    "secondary": {
+      "model": "imx477",
+      "width": 1280,
+      "height": 720,
+      "frame_rate_hz": 30.0,
+      "preview_fps": 10.0,
+      "orientation": "rotate_180"
     }
-  },
-  "secondary": {
-    "model": "imx477",
-    "width": 1280,
-    "height": 720,
-    "frame_rate_hz": 30.0,
-    "preview_fps": 10.0,
-    "orientation": "rotate_180"
   }
 }

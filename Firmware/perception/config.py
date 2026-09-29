@@ -886,6 +886,10 @@ def _snake(name: str) -> str:
 # Root
 # --------------------------------------------------------------------------
 
+_KNOWN_SECTIONS = {"camera", "preview", "secondary", "models", "dedup",
+                   "tracking", "anchor", "selection", "record"}
+
+
 @dataclass
 class VisionConfig:
     """§50's ``vision:`` document as a typed object."""
@@ -913,6 +917,16 @@ class VisionConfig:
         root = dict(data or {})
         vision = root.get("vision")
         if isinstance(vision, Mapping):
+            # A section written next to `vision` rather than inside it is invisible to every reader
+            # below, and "invisible" here means the default is used silently -- which is how a
+            # configured rotate_180 became a stream that arrived upside down with nothing logged.
+            # The section names the parser knows are listed here so a misplaced one can name itself.
+            stranded = sorted(k for k in root if k != "vision" and k in _KNOWN_SECTIONS)
+            if stranded:
+                import sys
+                where = f" (in {source_path})" if source_path else ""
+                print(f"config: sections {stranded} sit beside 'vision' and are ignored; "
+                      f"move them inside 'vision'{where}", file=sys.stderr)
             root = dict(vision)
         models_raw = root.get("models") or {}
         if not isinstance(models_raw, Mapping):
