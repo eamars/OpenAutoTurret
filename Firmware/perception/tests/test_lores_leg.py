@@ -9,6 +9,20 @@ import unittest
 from perception.camera import CapturedFrame, CameraOwner
 
 
+class Pixels:
+    """Stands in for a decoded frame: any boolean test on it is an error, like a numpy array."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def __bool__(self):
+        raise ValueError("The truth value of an array with more than one element is ambiguous. "
+                         "Use a.any() or a.all()")
+
+    def __repr__(self):
+        return "pixels:" + self.stream
+
+
 class FakeRequest:
     def __init__(self, names, stamp_ns):
         self.names = names
@@ -16,7 +30,8 @@ class FakeRequest:
 
     def make_array(self, stream):
         self.names.append(stream)
-        return f"pixels:{stream}"
+        # A pixel buffer, not a string: it must behave like numpy under `image or x`.
+        return Pixels(stream)
 
     def get_metadata(self):
         return {"SensorTimestamp": self.stamp_ns}
@@ -53,9 +68,9 @@ class TwoLegCapture(unittest.TestCase):
         if not frame.usable:
             self.skipTest(f"this libcamera shape needs another metadata key: "
                           f"{frame.unusable_reason}")
-        self.assertEqual(frame.inference_image, "pixels:lores",
+        self.assertEqual(repr(frame.inference_image), "pixels:lores",
                          "inference must be handed the small leg, not the display leg")
-        self.assertEqual(frame.image, "pixels:main",
+        self.assertEqual(repr(frame.image), "pixels:main",
                          "the display keeps the big leg: the operator's picture does not shrink")
         self.assertEqual(frame.inference_size, (640, 360))
 
@@ -65,6 +80,22 @@ class TwoLegCapture(unittest.TestCase):
         self.assertIsNone(owner.inference_stream)
         self.assertIsNone(frame.inference_image,
                           "with no second leg the caller falls back to frame.image")
+
+    def test_a_pixel_buffer_never_meets_a_boolean_test(self):
+        """Whatever picks between the legs must use `is not None`.
+
+        The first Hailo boot died on `frame.inference_image or frame.image`: numpy refuses a truth
+        value for an array, and the daemon exited six seconds in. Strings hid that for a round.
+        """
+        owner = CameraOwner(FakeCamera(), stream_size=(1920, 1080),
+                            inference_stream="lores", inference_size=(640, 360))
+        frame = owner.next_frame()
+        if not frame.usable:
+            self.skipTest(f"metadata shape: {frame.unusable_reason}")
+        with self.assertRaises(ValueError):
+            bool(frame.inference_image)
+        chosen = (frame.inference_image if frame.inference_image is not None else frame.image)
+        self.assertEqual(repr(chosen), "pixels:lores", "the spelled-out choice must not raise")
         self.assertEqual(FakeCamera().names if False else [], [])
 
 

@@ -803,7 +803,12 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             tensor_probe.start()
         delivered = 0
         for frame in camera.frames(max_frames=args.max_frames):
-            outcome = pipeline.process_frame(frame.inference_image or frame.image, frame.metadata,
+            # `is not None`, never `or`: the leg is a numpy array, and `array or x` asks numpy for a
+            # truth value -- which is exactly the ValueError that killed visiond six seconds into
+            # the first Hailo boot. A pixel buffer is never falsy, so the intent has to be spelled.
+            outcome = pipeline.process_frame(
+                frame.inference_image if frame.inference_image is not None else frame.image,
+                frame.metadata,
                                              frame_sequence=frame.frame_sequence,
                                              sensor_timestamp_ns=frame.sensor_timestamp_ns,
                                              capture_started_ns=frame.metadata_receive_ns)
