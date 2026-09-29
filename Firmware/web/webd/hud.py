@@ -1121,7 +1121,16 @@ function render(t) {
   // an HUD that invents health is worse than one that admits a gap.
   const hs = $("health");
   hs.innerHTML = "";
-  const connected = !!t.controld_connected;
+  // `controld_connected` is a /api/health field, not a field of the telemetry snapshot: reading it off
+  // `t` asked for a key that is never published there, so the chip was red since the day it shipped
+  // (it is red in the owner's screenshot from before any of today's changes). transportOk is the page's
+  // own verdict, computed from /api/health and the socket, and it is the honest source.
+  // The field is published on this payload now (webd's decorate), so the chip reads it as the ledger
+  // says it does; transportOk is the fallback for a snapshot that predates the field, not a second
+  // opinion. Before this, the expression was `!!t.controld_connected` against a key that was never
+  // published here -- which is why the chip was red in every screenshot since it shipped.
+  const connected = (typeof t.controld_connected === "boolean") ? t.controld_connected
+                                                                : (transportOk === true);
   hs.appendChild(chip("CONNECTED", connected ? "ok" : "red"));
   const serviceReady = t.phase === "hold" && t.soft_limits_valid && t.supervisory_state === "READY";
   hs.appendChild(chip(serviceReady ? "HOMED" : "NOT READY", serviceReady ? "ok" : "amber"));
@@ -1133,26 +1142,21 @@ function render(t) {
   {
     const lbl = imuLabel(t.imu);
     const st = lbl.indexOf("FRESH") === 0 ? "ok" : "amber";
-    const att = (t.imu || {}).sensor_attitude_deg;
-    hs.appendChild(chip("IMU", st, lbl + (att
-      // The sensor's own measured attitude, shown because the sensor measured it. Labelled R/P and
-      // never called elevation: it is the sensor frame, and the base frame has no transform yet.
-      ? ("  R" + att.roll_deg.toFixed(1) + "\u00b0 P" + att.pitch_deg.toFixed(1) + "\u00b0") : "")));
+    // State, not details (owner, 2026-09-29): the row is a glance, and rate / accuracy / the sensor's
+    // own attitude are still on the wire and in the drawer for anyone who asks.
+    hs.appendChild(chip("IMU", st, lbl.split(" ")[0]));
   }
   {
     // Which network is actually producing the tracks -- the fact the whole Hailo switch turns on, and
     // the one thing a station running the other backend would otherwise hide behind a working picture.
     const nf = t.inference || {};
     const state = !nf.present ? "red" : (nf.fresh ? (String(nf.adapter || "").toLowerCase() === "hailo" ? "ok" : "amber") : "amber");
+    // Only the backend's name (owner, 2026-09-29): HAILO or IMX500. The model id, the leg it reads and
+    // the produced-versus-kept counters stay on the wire, where I read them to diagnose exactly what
+    // is wrong tonight (emitted 91 671 frames' worth, tracks 0), without spending the operator's row.
     const shown = !nf.present ? "NO REPORT"
-      : (!nf.fresh ? ("STALE " + Math.round(nf.age_ms) + "ms")
-                   : (String(nf.adapter || "?").toUpperCase() + " " + String(nf.model_id || "?")
-                      + " " + (Array.isArray(nf.stream) ? nf.stream.join("x") : (Array.isArray(nf.input_size) ? nf.input_size.join("x") : "?"))
-                      + (nf.opened === false ? " CLOSED" : ""
-                         // "D<what the network produced>/<what survived the label map and the
-                         // permitted classes>": the one glance that separates "there was nothing to
-                         // see" from "we dropped what we saw", which no picture can answer.
-                         + " D" + (nf.detections_raw || 0) + "/" + (nf.detections_emitted || 0))));
+      : (!nf.fresh ? "STALE"
+                   : String(nf.adapter || "?").toUpperCase());
     hs.appendChild(chip("NN", state, shown));
   }
   // §22. Normal is green and compact; anything heavier gets its own element, sized by tier, and the

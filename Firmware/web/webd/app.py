@@ -311,6 +311,11 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         except (OSError, ValueError):
             payload["inference"] = {"present": False,
                                     "reason": f"no health file at {path}"}
+        # The dashboard's CONNECTED chip claims `system.connected`, and the ledger maps that claim to
+        # `controld_connected` -- which until now lived only in /api/health, so the page read a key the
+        # snapshot never carried and the chip was red forever. Publish it beside everything else the
+        # page reads, from the same `client.connected()` the health endpoint uses.
+        payload["controld_connected"] = bool(client.connected())
         imu = dict(payload.get("imu") or {})
         imu.update(imu_cache["reading"])
         payload["imu"] = imu
