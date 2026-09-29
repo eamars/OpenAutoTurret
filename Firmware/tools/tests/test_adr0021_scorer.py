@@ -19,16 +19,17 @@ def test_the_rules_the_scorer_must_never_break():
     assert scorer.selftest() == 0
 
 
-def test_a_metric_cannot_lose_its_fields_by_renaming_them_in_the_firmware():
-    """If controld renames a field, the scorer would report NOT_RUN forever and look honest doing it.
+def test_the_frame_the_scorer_reads_still_carries_the_keys_it_is_told_to_read():
+    """What is proven about the record, and only that, until a captured record is filed beside the module.
 
-    That is the failure mode this file can catch cheaply, so it does: every name a metric needs must
-    still be emitted by the record, or this test fails where someone will notice.
+    Measured on the station: the trace frame emits `rows`, names the axes, and carries `safety` at frame
+    level. The per-field names *inside* a row are not yet verified against a capture, so the metrics
+    declare no fields and say why — the alternative is a scorer that quietly reads a field that does not
+    exist and reports NOT_RUN forever while looking honest.
     """
     emitted = open(FIRMWARE_RECORD, encoding="utf-8").read()
-    for name, spec in scorer.METRICS.items():
-        for field in spec["fields"]:
-            assert '"' + field + '"' in emitted, (name, field)
+    for key in ("rows", "axes", "safety", "control_trace"):
+        assert '"' + key + '"' in emitted, key
 
 
 def test_the_frozen_table_hashes_to_something_the_lock_can_carry():
@@ -41,8 +42,7 @@ def test_a_window_with_nothing_measurable_is_not_run_and_says_which_field():
     verdict = scorer.score_window([{"phase": "hold"}])
     assert verdict["classification"] == "NOT_RUN"
     reasons = [row["reason"] for row in verdict["metrics"].values()]
-    assert any("do not carry" in reason for reason in reasons), verdict
-    assert any("raw byte" in reason for reason in reasons), verdict
+    assert any("row field names" in reason for reason in reasons), verdict
 
 
 def test_jitter_quiet_alone_cannot_carry_a_candidate_over_the_line():

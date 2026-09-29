@@ -29,14 +29,14 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:85",
         "requirement": "no guard-competing zero current in normal 200 Hz control; a stale command may "
                        "not write after emergency takeover",
-        "fields": ["output_requested", "output_reason", "safety"],
+        "fields": [],
         "decides": True,
     },
     "start_latency": {
         "line": "03_TUNING_PROTOCOL.md:86",
         "requirement": "at a qualified current bound, from a >=5 deg/s request to confirmed displacement "
                        "p95 <= 200 ms, reporting raw movement and confirmation delay separately",
-        "fields": ["ref", "encoder_raw", "wall_t_ns"],
+        "fields": [],
         "decides": True,
         "threshold_ms": 200.0,
     },
@@ -71,7 +71,7 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:90",
         "requirement": "mid-travel friction is not mistaken for an end stop; repeatability no worse than "
                        "the existing 0.5 deg target; no unexplained mode-transition offset",
-        "fields": ["phase", "encoder_raw"],
+        "fields": [],
         "decides": True,
         "repeatability_deg": 0.5,
     },
@@ -87,7 +87,7 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:92",
         "requirement": "a brief recoverable problem does not drop power; a real loss of control or an "
                        "e-stop does stop it; hold-current and disable conclusions each have evidence",
-        "fields": ["safety", "enabled_state"],
+        "fields": [],
         "decides": True,
     },
     "thermal_electrical": {
@@ -158,6 +158,18 @@ def compute(rows, axis="yaw"):
     results = {}
     for name, spec in sorted(METRICS.items()):
         missing = _absent_fields(rows, spec["fields"])
+        if name == "thermal_electrical":
+            # Documented, not unverified: this metric's answer does not depend on any field name.
+            results[name] = _evaluate(name, spec, rows, axis)
+            continue
+        if not spec["fields"]:
+            # Nothing is claimed computable until a captured record's field names are filed with this
+            # file: reading `row["ref"]` when the value lives inside the axis sub-object would silently
+            # score nothing and call it a measurement.
+            results[name] = {"status": "NOT_RUN", "reason": "needs a captured trace record filed beside "
+                              "this module to confirm the row field names; guessing them would score "
+                              "nothing and report it as evidence"}
+            continue
         if missing:
             results[name] = {"status": "NOT_RUN",
                              "reason": "trace records do not carry " + "+".join(missing) +
