@@ -641,9 +641,13 @@ int main(int argc, char** argv) {
         }
       }
       if (!imu_observer && imu_trace_configured) {
-        // Normal startup observes the BNO085 rather than gating on it: a sensor that has not
-        // produced a line yet must not hold the whole station down, which is what the commissioning
-        // path deliberately does. The trace is the launcher's process; we only read it.
+        // Reached by a start whose profile carries no hardware profile, so no strict ingest was
+        // built above: the trace is then observed rather than gated -- a sensor that has not
+        // produced a line yet must not hold the station down, which is what the mixed path
+        // deliberately does. On this station's mixed profile imu_observer already exists and this
+        // block stays dormant; what runs there is the publish below. Measured 09-29: the mixed
+        // profile has been ingesting and logging this trace at 1 Hz all along; what was missing was
+        // the §20 fields, not the reader.
         imu_observer = std::make_unique<control::ImuTraceIngest>();
         std::string observe_error;
         if (imu_observer->start(imu_trace, observe_error)) {
