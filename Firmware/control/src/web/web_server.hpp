@@ -717,6 +717,13 @@ class WebServer {
         pair("rx_velocity_40",r.rx_velocity_40); pair("velocity_window_ms",r.velocity_window_ms);
         pair("friction_a",r.friction_a); pair("friction_state",r.friction_state);
         pair("friction_exhausted",r.friction_exhausted);
+        out << ",\"pitch_registers\":[";
+        for (int j=0;j<6;++j) {
+          if(j) out << ',';
+          out << '[' << json_finite_or_null(r.pitch_register_value[j]) << ',' << r.pitch_register_request_ns[j]
+              << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
+        }
+        out << ']';
         pair("vest",r.v_estimated);
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';

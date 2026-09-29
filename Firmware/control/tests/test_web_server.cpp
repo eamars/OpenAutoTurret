@@ -606,6 +606,12 @@ TEST(WebServer, FullFrozenEvidenceWindowCrossesTheRealPacketSocket) {
   cfg.socket_path = "/tmp/ota_web_test_frozen_trace.sock";
   telemetry::ControlLogRecord rec;
   rec.timestamp_ns = 9876543210123456;
+  for(int i=0;i<6;++i) {
+    rec.pitch_register_value[i]=.123456789012;
+    rec.pitch_register_request_ns[i]=rec.timestamp_ns-1'000'000;
+    rec.pitch_register_rx_ns[i]=rec.timestamp_ns;
+    rec.pitch_register_status[i]=1;
+  }
   for (int i = 0; i < 2; ++i) {
     rec.tx_ns[i] = rec.feedback_ns[i] = rec.timestamp_ns;
     rec.tx_seq[i] = rec.rx_seq[i] = 12345678;

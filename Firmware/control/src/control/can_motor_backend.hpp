@@ -44,7 +44,11 @@ class CanMotorBackend : public MotorBackend {
   bool recovery_before_homing() const override { return true; }
   bool begin_motor_recovery(std::string& err) override;
   Transition poll_motor_recovery(TimeNs now, double max_temp, std::string& err) override;
-  void cancel_motor_recovery() override { recovery_.cancel(); system_.inhibit_motion(); }
+  void cancel_motor_recovery() override {
+    cancel_pitch_diagnostic("motor recovery cancelled");
+    cancel_pitch_gain_update("motor recovery cancelled");
+    recovery_.cancel(); system_.inhibit_motion();
+  }
   Transition transition_mode(AxisId axis, bool position, double limit,
                              TimeNs now_ns, std::string& err, double speed_ki = -1, double speed_kp = 1,
                              bool check_displacement = true) override;
@@ -57,6 +61,15 @@ class CanMotorBackend : public MotorBackend {
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp,
                             double spd_ki) override;
+  void poll_pitch_register_diagnostics(TimeNs now_ns) override;
+  bool uses_monotonic_feedback_clock() const override { return true; }
+  PitchRegisterDiagnostics pitch_register_diagnostics() const override {
+    return pitch_diagnostics_;
+  }
+  Transition begin_pitch_speed_loop_gain_update(double kp, double ki,
+                                                 std::string& err) override;
+  Transition poll_pitch_speed_loop_gain_update(TimeNs now_ns,
+                                                std::string& err) override;
   // Commissioning cleanup only: verify disabled state/current/mode, restore
   // volatile gains without enabling, then revoke setup authority with STOP.
   bool restore_stopped_pitch_gains(double kp, double ki, std::string& err);
@@ -70,11 +83,25 @@ class CanMotorBackend : public MotorBackend {
   bool write_reg_float(cybergear::Reg reg, float value, AxisId axis);
   bool write_reg_u8(cybergear::Reg reg, uint8_t value, AxisId axis);
   void record_output(AxisId axis, double value, int kind, bool sent);
+  void cancel_pitch_diagnostic(const char* reason);
+  void cancel_pitch_gain_update(const char* reason);
 
   can::CyberGearSystem& system_;
   int timeout_ms_;
   MotorRecoveryCheck recovery_;
   std::array<OutputEvidence, kAxisCount> output_evidence_{};
+  PitchRegisterDiagnostics pitch_diagnostics_{};
+  int pitch_diag_index_ = 0;
+  bool pitch_diag_waiting_ = false;
+  TimeNs pitch_diag_deadline_ns_ = 0;
+  TimeNs pitch_diag_next_request_ns_ = 0;
+  struct GainUpdate {
+    int stage = 0;  // 0 idle, 1 waiting for SpdKp, 2 waiting for SpdKi
+    bool waiting = false;
+    double kp = 0.0, ki = 0.0;
+    TimeNs request_ns = 0, deadline_ns = 0;
+    std::string error;
+  } gain_update_;
   struct ModeTransition {
     int stage = 0;
     AxisId axis = AxisId::Pitch;

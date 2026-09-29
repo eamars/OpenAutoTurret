@@ -124,6 +124,7 @@ void CyberGearSystem::on_frame(const RawFrame& f) {
     if (pending_.comm == static_cast<uint8_t>(cybergear::CommType::ReadReg) &&
         (uint16_t(cf.data[0]) | (uint16_t(cf.data[1]) << 8)) != pending_.address) return;
     pending_.frame = cf;
+    pending_.rx_ns = f.rx_ns;
     pending_.received = true;
   }
   pend_cv_.notify_all();
@@ -258,7 +259,8 @@ void CyberGearSystem::start_watchdog() {
   });
 }
 
-bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err) {
+bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err,
+                                          TimeNs* request_ns) {
   const auto f = cybergear::make_read_reg(reg, cfg_.host_can_id, motor_id(axis));
   {
     std::lock_guard lk(pend_mtx_);
@@ -270,12 +272,14 @@ bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::
     pending_.match_target = cfg_.host_can_id;
     pending_.address = static_cast<uint16_t>(reg);
   }
+  if (request_ns) *request_ns = now_monotonic_ns();
   if (send(f.id, f.data, &err)) return true;
   cancel_register_read();
   return false;
 }
 
-int CyberGearSystem::poll_register_read(double& value, std::string& err) {
+int CyberGearSystem::poll_register_read(double& value, std::string& err,
+                                        TimeNs* response_ns) {
   std::lock_guard lk(pend_mtx_);
   if (!pending_.active || !pending_.asynchronous) { err = "no asynchronous read"; return -1; }
   if (!pending_.received) return 0;
@@ -285,6 +289,7 @@ int CyberGearSystem::poll_register_read(double& value, std::string& err) {
       static_cast<uint16_t>(reg) != pending_.address) {
     err = "malformed register response"; return -1;
   }
+  if (response_ns) *response_ns = pending_.rx_ns;
   return 1;
 }
 

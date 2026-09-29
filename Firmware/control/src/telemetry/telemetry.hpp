@@ -625,6 +625,9 @@ struct ControlLogRecord {
   double friction_a[kAxisCount] = {NAN, NAN};
   int friction_state[kAxisCount] = {};
   int friction_exhausted[kAxisCount] = {};
+  double pitch_register_value[6] = {NAN,NAN,NAN,NAN,NAN,NAN};
+  TimeNs pitch_register_request_ns[6] = {}, pitch_register_rx_ns[6] = {};
+  int pitch_register_status[6] = {-1,-1,-1,-1,-1,-1};
   int output_reason[kAxisCount] = {};
   int command_kind[kAxisCount] = {};
   uint64_t command_seq = 0;
@@ -987,7 +990,14 @@ class Telemetry {
           << ",\"friction_state\":" << pairi(r.friction_state)
           << ",\"friction_exhausted\":" << pairi(r.friction_exhausted)
           << ",\"safety\":" << static_cast<int>(r.safety_action)
-          << ",\"period_us\":" << r.cycle_duration_us << "}\n";
+          << ",\"period_us\":" << r.cycle_duration_us;
+      out << ",\"pitch_registers\":[";
+      for (int j=0;j<6;++j) {
+        if(j) out << ',';
+        out << '[' << num(r.pitch_register_value[j]) << ',' << r.pitch_register_request_ns[j]
+            << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
+      }
+      out << "]}\n";
     }
     if (out.good()) archive_path_ = path;
   }

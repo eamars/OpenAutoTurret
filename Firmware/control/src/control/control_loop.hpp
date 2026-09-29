@@ -774,6 +774,7 @@ class ControlLoop {
   ManualOutput manual_out_;
   // Explicit target-free bench step; never persisted and never uses vision input.
   TimeNs response_probe_until_ns_ = 0;
+  bool pitch_gain_trial_pending_ = false;
   double response_probe_q_[2]{};
   double response_probe_omega_ = 2.5;
   double response_probe_position_gain_ = 3.0;

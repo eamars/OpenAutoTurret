@@ -132,6 +132,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   void start_watchdog();
 
   bool supports_continuous_yaw() const override { return true; }
+  bool uses_monotonic_feedback_clock() const override { return true; }
   bool yaw_feedback_registerless() const override { return true; }
   bool requires_disable_confirmation(AxisId axis) const override {
     return axis != AxisId::Yaw;
@@ -164,6 +165,18 @@ class MixedCanMotorBackend final : public MotorBackend {
   void command_velocity(AxisId axis, double velocity_rad_s) override;
   void set_motion_intent(AxisId axis, bool moving) override;
   bool apply_yaw_trial(const YawTrialSettings& settings, std::string& error) override;
+  void poll_pitch_register_diagnostics(TimeNs now) override {
+    if (pitch_opened_.load()) pitch_backend_.poll_pitch_register_diagnostics(now);
+  }
+  PitchRegisterDiagnostics pitch_register_diagnostics() const override {
+    return pitch_backend_.pitch_register_diagnostics();
+  }
+  Transition begin_pitch_speed_loop_gain_update(double kp, double ki, std::string& error) override {
+    return pitch_backend_.begin_pitch_speed_loop_gain_update(kp,ki,error);
+  }
+  Transition poll_pitch_speed_loop_gain_update(TimeNs now, std::string& error) override {
+    return pitch_backend_.poll_pitch_speed_loop_gain_update(now,error);
+  }
   void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;

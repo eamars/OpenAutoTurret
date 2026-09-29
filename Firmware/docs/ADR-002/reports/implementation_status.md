@@ -261,3 +261,30 @@ gain-change effort regressions passed in the two focused CTest entries after
 their final rebuild (`session-trial-focused-tests.log`). Document links passed.
 The command's real socket/backend application and physical stop are still
 pending the next station run; local tests do not establish those results.
+
+## Owner-requested stop and work-in-progress snapshot (2026-09-30)
+
+The owner stopped further tuning and implementation, then requested a commit
+of the current work and removal of the WSL environment installed for this task.
+The detailed operation history, parameter trials, errors and remaining work are
+in [the agent behavior review](AGENT_BEHAVIOR_REVIEW_2026-09-30.md).
+
+The PR3 snapshot adds six asynchronous pitch register observations with request
+and actual RX timestamps, transaction cancellation before mode changes, verified
+pitch gain application, trace fields, and a commissioning-only command. Payload
+response checks now measure installed gains rather than silently writing gains
+through the old void setter. Homing jitter diagnostics no longer infer that
+current must be increased. Hardware-clock shutdown checks are also corrected.
+
+This is **unfinished work, not a release qualification**. The transport probe
+passed; the last complete native run passed 79/81 entries excluding retained
+homing. A subsequent focused run passed 5/6 entries, with `park_power_probe`
+still failing on stale/untrusted feedback. No further repair or build was run
+after the owner stopped work. The PR3 snapshot has not been deployed.
+
+The last deployed revision remains `bad742dddba6a95d3d055e43998adfd0506b0a6e`.
+At 00:12 NZDT its launcher reported STOPPED, pitch disable confirmed, and yaw
+zero requested with disable state unavailable. No rollback occurred. Trial
+gains were volatile; production configuration still has its original defaults.
+Runtime captures and unintegrated PR4 drafts remain under ignored `run/adr002`;
+they are not included as runtime artifacts in this commit.

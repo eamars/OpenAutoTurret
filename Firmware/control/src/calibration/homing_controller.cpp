@@ -156,8 +156,8 @@ std::string HomingController::jitter_suffix() const {
   char buf[192];
   std::snprintf(buf, sizeof(buf),
                 " [jitter: stall_recoveries=%d, max_a=%.1f rad/s^2, "
-                "max_j=%.1f rad/s^3, effort_std=%.2f N.m — insufficient "
-                "torque authority, raise limit_cur]",
+                "max_j=%.1f rad/s^3, effort_std=%.2f N.m; diagnostic only, "
+                "not contact evidence or a current-limit recommendation]",
                 last_cr_.total_stall_recoveries, last_cr_.max_accel_since_reset,
                 last_cr_.max_jerk_since_reset, last_cr_.effort_std_nm);
   return buf;

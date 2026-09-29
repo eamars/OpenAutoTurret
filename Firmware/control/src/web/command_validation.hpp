@@ -168,7 +168,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
     if (!r.ok) r.error = "response probe needs axis:signed_degrees:omega";
     return r;  // Full state/shape/clearance validation on the controller thread.
   }
-  if (command == "yaw_control_trial") {
+  if (command == "yaw_control_trial" || command == "pitch_control_trial") {
     r.ok = !arg.empty() && arg.size() < 192;
     if (!r.ok) r.error = "yaw trial requires bounded session settings";
     return r; // Only an explicit Manual commissioning launch may apply it.

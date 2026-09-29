@@ -229,7 +229,7 @@ bool ControlLoop::start_parking(std::string& err) {
   // This entry can run between ticks after the main loop exits. Passing its
   // previous cycle clock to the mixed backend can reject a NEWER CAN frame
   // before the freshness check below ever sees a finite position.
-  const auto stop_snapshot_clock = backend_->supports_continuous_yaw() ? now_monotonic_ns() : now_ns_;
+  const auto stop_snapshot_clock = backend_->uses_monotonic_feedback_clock() ? now_monotonic_ns() : now_ns_;
   if (backend_->supports_continuous_yaw()) {
     // A shutdown request is also a stop request, even when later preconditions
     // refuse the park. Send bounded zero-speed commands immediately; no API
@@ -414,9 +414,10 @@ bool ControlLoop::start_parking(std::string& err) {
   // Never remove torque to prepare a park. Retain each drive's verified
   // running mode; a disabled/unknown drive needs explicit recovery and Home.
   for (int i = 0; i < kAxisCount; ++i) {
-    const auto s = backend_->snapshot(static_cast<AxisId>(i), now_ns_);
-    if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now_ns_ ||
-        now_ns_ - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
+    const auto s = backend_->snapshot(static_cast<AxisId>(i), stop_snapshot_clock);
+    const auto freshness_clock=backend_->uses_monotonic_feedback_clock() ? now_monotonic_ns() : now_ns_;
+    if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > freshness_clock ||
+        freshness_clock - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
         s.faults || s.disabled || (!s.in_speed_mode && !s.in_position_mode)) {
       err = "cannot park: fresh healthy running drives required; Recover Motors then Home";
       return false;
@@ -755,6 +756,16 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
 
 Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   backend_->heartbeat();
+  if (pitch_gain_trial_pending_) {
+    std::string error;
+    const auto result=backend_->poll_pitch_speed_loop_gain_update(now_ns,error);
+    if (result != MotorBackend::Transition::Pending) {
+      pitch_gain_trial_pending_=false;
+      ack_command("pitch_control_trial",result==MotorBackend::Transition::Complete,
+          result==MotorBackend::Transition::Complete ? "pitch speed gains read back and verified; session only, unqualified" : error);
+    }
+  }
+  backend_->poll_pitch_register_diagnostics(now_ns);
   if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
     for (auto axis : {AxisId::Pitch, AxisId::Yaw})
       if (backend_->watchdog_fault_axis(axis)) backend_->deenergize(axis);
@@ -2382,6 +2393,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       rec.current_raw[i] = sp[i].current_raw_valid ? sp[i].current_raw : NAN;
       rec.enabled_state[i] = sp[i].enabled_state;
     }
+    const auto pitch_registers = backend_->pitch_register_diagnostics();
+    for (int i=0;i<6;++i) {
+      const auto& sample=pitch_registers.registers[i];
+      rec.pitch_register_value[i]=sample.valid ? sample.value : NAN;
+      rec.pitch_register_request_ns[i]=sample.request_ns;
+      rec.pitch_register_rx_ns[i]=sample.rx_ns;
+      rec.pitch_register_status[i]=sample.status;
+    }
     // Position-derived acceleration / jerk (C1, A.1): the trustworthy motion
     // derivatives for smoothness observation and jitter-threshold tuning.
     rec.a_actual[ix(AxisId::Pitch)] = a_est_[ix(AxisId::Pitch)];
@@ -3846,19 +3865,9 @@ void ControlLoop::start_payload_check(TimeNs now_ns, bool manual,
   for (int i = 0; i < kAxisCount; ++i)
     backend_->set_current_limit(static_cast<AxisId>(i),
                                 cfg_.payload_check_current_a);
-  // The stock drive speed-loop gains (SpdKp=1.0, SpdKi=0.002) are too weak to
-  // hold the position-mode speed limit against a gravity load: on the pitch
-  // axis the "against-gravity" half of the 2 deg check step creeps at a
-  // fraction of the commanded rate (a few hundred milliamps, ~0.08 deg/s) and
-  // never settles in the move budget, while the "with-gravity" half is
-  // assisted and is fast. Raise the inner speed loop so it builds the torque
-  // needed to hold the commanded rate against gravity and the step response is
-  // the drive's controlled (mass-sensitive) response, not a gravity-dominated
-  // creep. Capped by the current/torque limits, so safe. No-op in sim.
-  for (int i = 0; i < kAxisCount; ++i)
-    backend_->set_speed_loop_gains(static_cast<AxisId>(i),
-                                   cfg_.payload_check_spd_kp,
-                                   cfg_.payload_check_spd_ki);
+  // Measure the installed configuration. A response check must not silently
+  // replace gains through a fire-and-forget setter (or a yaw no-op). Explicit
+  // commissioning changes use the readback-confirmed pitch transaction.
   payload_check_cfg_ = payload::PayloadCheckConfig{};
   payload_check_cfg_.step_amplitude_rad = cfg_.payload_check_step_deg * kDeg2Rad;
   payload_check_cfg_.speed_rad_s = cfg_.payload_check_speed_deg_s * kDeg2Rad;
@@ -4327,10 +4336,17 @@ void ControlLoop::disable_tracking() {
 
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
+  if ((name=="yaw_control_trial" || name=="pitch_control_trial") && response_probe_until_ns_) {
+    ack_command(name,false,"response probe active; wait before changing gains"); return;
+  }
   // Every new motion/mode command cancels a bench trial. Read-only trace requests
   // are handled on the web thread and never enter this queue.
   response_probe_until_ns_ = 0;
   std::string err;
+  if (pitch_gain_trial_pending_ && (name=="response_probe" || name=="manual_jog_start" ||
+      name=="manual_step" || name=="start_payload_verification" || name=="start_tracking")) {
+    ack_command(name,false,"pitch gain readback pending; wait before motion"); return;
+  }
   if (phase_ == Phase::Recovering) {
     if (name == "stop_motion" || name == "hold") stop_motion();
     else ack_command(name, false, "motor recovery active; wait or Stop Motion to cancel");
@@ -4481,10 +4497,39 @@ void ControlLoop::execute_command(const std::string& name,
     }
     return;
   }
+  if (name == "pitch_control_trial") {
+    if (!cfg_.manual_commissioning || !cfg_.service_speed_control || !position_ready() ||
+        phase_!=Phase::Hold || mode_mgr_.mode()!=OperatingMode::Manual ||
+        last_decision_.action!=SafetyAction::Allow || manual_out_.lease_active ||
+        response_probe_until_ns_ || pitch_gain_trial_pending_) {
+      ack_command(name,false,"pitch tuning requires idle healthy Manual commissioning"); return;
+    }
+    for(int i=0;i<kAxisCount;++i) {
+      if(std::abs(v_est_[i])>.5*kDeg2Rad || std::abs(speed_servo_[i].velocity)>.2*kDeg2Rad) {
+        ack_command(name,false,"pitch tuning requires stationary axes"); return;
+      }
+    }
+    double kp=0,ki=0; bool parsed=false;
+    try {
+      const auto colon=arg.find(':');
+      const auto a=arg.substr(0,colon),b=arg.substr(colon+1);
+      size_t na=0,nb=0; kp=std::stod(a,&na);ki=std::stod(b,&nb);
+      parsed=colon!=std::string::npos && na==a.size() && nb==b.size();
+    } catch(...) {}
+    if(!parsed || !std::isfinite(kp) || !std::isfinite(ki) || kp<1 || kp>5 || ki<.002 || ki>.05) {
+      ack_command(name,false,"pitch trial syntax kp:ki; kp [1,5], ki [0.002,0.05]"); return;
+    }
+    const auto result=backend_->begin_pitch_speed_loop_gain_update(kp,ki,err);
+    pitch_gain_trial_pending_=result==MotorBackend::Transition::Pending;
+    ack_command(name,result!=MotorBackend::Transition::Failed,
+        pitch_gain_trial_pending_ ? "pitch writes queued; NOT verified yet, wait for readback acknowledgement" :
+        result==MotorBackend::Transition::Complete ? "pitch speed gains verified" : err);
+    return;
+  }
   if (name == "yaw_control_trial") {
     if (!cfg_.manual_commissioning || !cfg_.service_speed_control || !position_ready() ||
         phase_ != Phase::Hold || mode_mgr_.mode() != OperatingMode::Manual ||
-        last_decision_.action != SafetyAction::Allow || manual_out_.lease_active || response_probe_until_ns_) {
+        last_decision_.action != SafetyAction::Allow || manual_out_.lease_active || response_probe_until_ns_ || pitch_gain_trial_pending_) {
       ack_command(name,false,"yaw tuning requires idle healthy Manual commissioning launch"); return;
     }
     for (int i=0;i<kAxisCount;++i) {

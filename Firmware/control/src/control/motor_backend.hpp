@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <cstdio>
@@ -200,12 +201,30 @@ class MotorBackend {
   virtual TripDetail watchdog_trip_detail() const { return {}; }
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
+  struct RegisterObservation {
+    double value = NAN;
+    TimeNs request_ns = 0, rx_ns = 0;
+    int status = -1;
+    bool valid = false;
+  };
+  // Iqf [A], VBus [V], RunMode, LimitCur [A], SpdKp, SpdKi; timestamps
+  // belong to each register reply, independently of periodic type-2 feedback.
+  struct PitchRegisterDiagnostics { std::array<RegisterObservation,6> registers{}; };
+  virtual void poll_pitch_register_diagnostics(TimeNs) {}
+  virtual PitchRegisterDiagnostics pitch_register_diagnostics() const { return {}; }
+  virtual Transition begin_pitch_speed_loop_gain_update(double, double, std::string& error) {
+    error="verified pitch gain application unsupported"; return Transition::Failed;
+  }
+  virtual Transition poll_pitch_speed_loop_gain_update(TimeNs, std::string& error) {
+    error="verified pitch gain application unsupported"; return Transition::Failed;
+  }
   virtual bool recovery_before_homing() const { return false; }
   // Topology/protocol capabilities. Legacy CyberGear and simulation retain
   // the original finite-yaw, register-backed, feedback-confirmed defaults.
   // A mixed backend can opt into continuous yaw and session-relative yaw
   // feedback without inventing a CyberGear UID or register response.
   virtual bool supports_continuous_yaw() const { return false; }
+  virtual bool uses_monotonic_feedback_clock() const { return false; }
   virtual bool yaw_feedback_registerless() const { return false; }
   virtual bool requires_disable_confirmation(AxisId) const { return true; }
   virtual bool begin_motor_recovery(std::string& err) {
