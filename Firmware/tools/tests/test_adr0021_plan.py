@@ -161,3 +161,30 @@ class TheLockCannotBeEditedAfterwards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TheLockCarriesWhatTheProtocolDemands(unittest.TestCase):
+    """:36 and :50 as refusals rather than as prose."""
+
+    def setUp(self):
+        self.inventory = plan.load_inventory(plan.INVENTORY)
+
+    def _refusal(self, mutate):
+        candidate = copy.deepcopy(spec())
+        mutate(candidate)
+        with self.assertRaises(ValueError) as refused:
+            plan.freeze(candidate, self.inventory)
+        return str(refused.exception)
+
+    def test_a_seedless_spec_is_refused_rather_than_defaulted(self):
+        self.assertIn("00_CODEX_START.md:36", self._refusal(lambda candidate: candidate.pop("seed")))
+
+    def test_metrics_that_moved_under_the_spec_block_the_freeze(self):
+        message = self._refusal(lambda candidate: candidate["scorer"].update(metrics_sha256="0" * 64))
+        self.assertIn("BLOCKED_metrics_version_drift", message)
+        self.assertIn("000000000000", message)      # both digests are named: a refusal must be checkable
+
+    def test_a_looser_retry_rule_does_not_get_in(self):
+        message = self._refusal(
+            lambda candidate: candidate.update(retry={"allowed": 3, "same_parameters": True}))
+        self.assertIn("00_CODEX_START.md:50", message)

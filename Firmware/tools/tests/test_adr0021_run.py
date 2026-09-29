@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import adr0021_plan as plan  # noqa: E402
 import adr0021_acceptance  # noqa: E402
+import adr0021_scorer as scoring  # noqa: E402
 import adr0021_run as runner  # noqa: E402
 Runner = runner.Runner
 
@@ -97,7 +98,14 @@ def a_lock(inventory: dict, max_trials: int = 30) -> dict:
                        {"name": "yaw.current_ki_a_per_rad_s", "levels": [0.4, 0.9]}],
         "refine": {"max_candidates": 8, "gate": "improvement > 0.15"},
         "confirm": {"repeats": 2}, "stop": {"max_trials": max_trials, "no_improvement_rounds": 2},
-        "fixed": {"velocity_dps": 6.0}, "scorer": {"metric": "jitter_rad_s_pp"},
+        "fixed": {"velocity_dps": 6.0},
+        # The lock owes the reader four things (00_CODEX_START.md:36, :50); a runner fixture that skipped
+        # them would be testing a planner that lets a real campaign skip them too.
+        "scorer": {"metric": "jitter_rad_s_pp", "metrics_version": scoring.METRICS_VERSION,
+                   "metrics_sha256": scoring.metrics_sha256()},
+        "seed": 20260930,
+        "geometry_calibration": "BLOCKED_geometry_identity_not_measured_this_session",
+        "retry": {"allowed": 1, "same_parameters": True, "same_conditions": True},
         "payload_profile": "no_profile",
         "coarse_count_reason": "a four-cell grid tests the runner; it is not a claim about the machine",
     }
