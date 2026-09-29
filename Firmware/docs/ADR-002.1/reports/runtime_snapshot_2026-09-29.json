@@ -1,0 +1,136 @@
+{
+  "binary": "/home/eamars/workspace/OpenAutoTurret/run/releases/654e3dccebda.VbyLbF/Firmware/build-arm64/control/controld",
+  "binary_sha256_after": "a5be42cdb3f4daae5e5692a3e1b1dbabfb68923a0692c514b1822adfaca50416",
+  "binary_sha256_before": "a5be42cdb3f4daae5e5692a3e1b1dbabfb68923a0692c514b1822adfaca50416",
+  "binary_unchanged": true,
+  "blocked": [
+    "BLOCKED_mode_?"
+  ],
+  "host": "rpi-turret",
+  "inventory_generated_from": {
+    "binary": "build/control/controld",
+    "binary_sha256": "67b562b88858f2d6d04a61a1ae8e054fb923f9a16c6c584c0e5127a73b309016",
+    "config": "config/turret_mixed.yaml",
+    "generated_at_utc": "2026-09-29T14:30:58Z",
+    "hardware_profile": "config/mixed_hardware.yaml",
+    "source_rev": "38fe66448d195dc667df43fbf8c5da1ea582089e"
+  },
+  "inventory_sha256": "9c4427475035f4cf2ee51f5c238018e6670c31acf3feee58ae19a5dd84819472",
+  "protected_write": {
+    "attempt": "yaw.host_current_limit_a = 1.2",
+    "how_the_server_refuses": "the trial grammar carries no name for it; the transaction writes only the fields it can read back",
+    "reported_mutability": "protected_read_only",
+    "value_after_campaign": 0.8,
+    "value_before_campaign": 0.8
+  },
+  "schema": 1,
+  "station_state": {
+    "feedback_age_ms": 0,
+    "mode": "?",
+    "param_applied_hash": "?",
+    "param_expected_hash": "?",
+    "param_revision": "?",
+    "param_state": "?",
+    "payload_status": "?",
+    "phase": "hold",
+    "temp_raw": "?"
+  },
+  "station_state_after": {
+    "feedback_age_ms": 0,
+    "mode": "?",
+    "param_applied_hash": "?",
+    "param_expected_hash": "?",
+    "param_revision": "?",
+    "param_state": "?",
+    "payload_status": "?",
+    "phase": "hold",
+    "temp_raw": "?"
+  },
+  "taken_at_utc": "2026-09-29T14:48:25Z",
+  "transcript": [
+    {
+      "parameter": "pitch.service_speed_kp",
+      "requested": "4.0:0.03",
+      "sent": {
+        "command": "pitch_control_trial",
+        "ok": true,
+        "type": "response",
+        "verdict": "submitted"
+      },
+      "telemetry_after": {
+        "feedback_age_ms": 0,
+        "mode": "?",
+        "param_applied_hash": "?",
+        "param_expected_hash": "?",
+        "param_revision": "?",
+        "param_state": "?",
+        "payload_status": "?",
+        "phase": "hold",
+        "temp_raw": "?"
+      }
+    },
+    {
+      "parameter": "pitch.service_speed_kp (restore)",
+      "requested": "4:0.05",
+      "sent": {
+        "command": "pitch_control_trial",
+        "ok": true,
+        "type": "response",
+        "verdict": "submitted"
+      },
+      "telemetry_after": {
+        "feedback_age_ms": 0,
+        "mode": "?",
+        "param_applied_hash": "?",
+        "param_expected_hash": "?",
+        "param_revision": "?",
+        "param_state": "?",
+        "payload_status": "?",
+        "phase": "hold",
+        "temp_raw": "?"
+      }
+    },
+    {
+      "parameter": "pitch.service_speed_ki",
+      "requested": "4.0:0.03",
+      "sent": {
+        "command": "pitch_control_trial",
+        "ok": true,
+        "type": "response",
+        "verdict": "submitted"
+      },
+      "telemetry_after": {
+        "feedback_age_ms": 0,
+        "mode": "?",
+        "param_applied_hash": "?",
+        "param_expected_hash": "?",
+        "param_revision": "?",
+        "param_state": "?",
+        "payload_status": "?",
+        "phase": "hold",
+        "temp_raw": "?"
+      }
+    },
+    {
+      "parameter": "pitch.service_speed_ki (restore)",
+      "requested": "4:0.05",
+      "sent": {
+        "command": "pitch_control_trial",
+        "ok": true,
+        "type": "response",
+        "verdict": "submitted"
+      },
+      "telemetry_after": {
+        "feedback_age_ms": 0,
+        "mode": "?",
+        "param_applied_hash": "?",
+        "param_expected_hash": "?",
+        "param_revision": "?",
+        "param_state": "?",
+        "payload_status": "?",
+        "phase": "hold",
+        "temp_raw": "?"
+      }
+    }
+  ]
+}
