@@ -249,7 +249,9 @@ def main():
     # The 8 fields the yaw trial command carries, seeded from the values the running binary itself
     # reported — so "restore" means restoring what was actually measured at boot, not what a doc says.
     yaw_base = [boot_value("yaw.current_kp_a_per_rad_s", 1), boot_value("yaw.current_ki_a_per_rad_s", .6),
-                0.0, boot_value("yaw.friction.positive_breakaway_a", 0),
+                # The rx window is a real field with a real range, not a pad byte: feeding the
+                # candidate string a 0 there was my bug, and the prepare ack is where it showed up.
+                boot_value("yaw.velocity_rx_window_ms", 20), boot_value("yaw.friction.positive_breakaway_a", 0),
                 boot_value("yaw.friction.negative_breakaway_a", 0), boot_value("yaw.friction.positive_run_a", 0),
                 boot_value("yaw.friction.negative_run_a", 0),
                 boot_value("yaw.friction.output_slew_a_per_s", 2)]

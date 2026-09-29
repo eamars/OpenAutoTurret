@@ -26,7 +26,27 @@ namespace {
 // A fixed-width tag for the trace record: the archive is read by a parser, not by a person, so the
 // value is a NUL-terminated fixed buffer rather than a dangling pointer into a temporary string.
 template <size_t N>
-void fill_tag(std::array<char, N>& into, std::string_view text) {
+// Both tuning gates check the same conditions, and a refusal that names the one that fired is the
+// difference between an operator re-deriving the state by hand at 1 am and reading it out of the ack.
+// The park gate learned this lesson on 2026-09-29; these two gates had not.
+template <typename... Args>
+void collect_missing(std::string& missing, const char* what, bool ok) {
+  if (!ok) {
+    if (!missing.empty()) missing += "+";
+    missing += what;
+  }
+}
+
+template <typename... Args>
+void collect_missing(std::string& missing, const char* what, bool ok, Args&&... rest) {
+  if (!ok) {
+    if (!missing.empty()) missing += "+";
+    missing += what;
+  }
+  collect_missing(missing, rest...);
+}
+
+std::array<char, N>& into, std::string_view text) {
   const size_t n = text.size() < N - 1 ? text.size() : N - 1;
   for (size_t i = 0; i < n; ++i) into[i] = text[i];
   into[n] = '\0';
@@ -4690,11 +4710,19 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "pitch_control_trial") {
-    if (!cfg_.manual_commissioning || !cfg_.service_speed_control || !position_ready() ||
-        phase_!=Phase::Hold || mode_mgr_.mode()!=OperatingMode::Manual ||
-        last_decision_.action!=SafetyAction::Allow || manual_out_.lease_active ||
-        response_probe_until_ns_ || pitch_gain_trial_pending_) {
-      ack_command(name,false,"pitch tuning requires idle healthy Manual commissioning"); return;
+    {
+      std::string missing;
+      collect_missing(missing, "manual_commissioning_off", cfg_.manual_commissioning,
+                      "service_speed_control_off", cfg_.service_speed_control,
+                      "position_not_ready", position_ready(), "phase_not_hold", phase_==Phase::Hold,
+                      "mode_not_manual", mode_mgr_.mode()==OperatingMode::Manual,
+                      "safety_not_allow", last_decision_.action==SafetyAction::Allow,
+                      "manual_lease_held", !manual_out_.lease_active,
+                      "response_probe_window_open", !response_probe_until_ns_,
+                      "pitch_gain_update_pending", !pitch_gain_trial_pending_);
+      if (!missing.empty()) {
+        ack_command(name,false,"pitch tuning gate refuses: "+missing); return;
+      }
     }
     for(int i=0;i<kAxisCount;++i) {
       if(std::abs(v_est_[i])>.5*kDeg2Rad || std::abs(speed_servo_[i].velocity)>.2*kDeg2Rad) {
@@ -4756,10 +4784,19 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "yaw_control_trial") {
-    if (!cfg_.manual_commissioning || !cfg_.service_speed_control || !position_ready() ||
-        phase_ != Phase::Hold || mode_mgr_.mode() != OperatingMode::Manual ||
-        last_decision_.action != SafetyAction::Allow || manual_out_.lease_active || response_probe_until_ns_ || pitch_gain_trial_pending_) {
-      ack_command(name,false,"yaw tuning requires idle healthy Manual commissioning launch"); return;
+    {
+      std::string missing;
+      collect_missing(missing, "manual_commissioning_off", cfg_.manual_commissioning,
+                      "service_speed_control_off", cfg_.service_speed_control,
+                      "position_not_ready", position_ready(), "phase_not_hold", phase_==Phase::Hold,
+                      "mode_not_manual", mode_mgr_.mode()==OperatingMode::Manual,
+                      "safety_not_allow", last_decision_.action==SafetyAction::Allow,
+                      "manual_lease_held", !manual_out_.lease_active,
+                      "response_probe_window_open", !response_probe_until_ns_,
+                      "pitch_gain_update_pending", !pitch_gain_trial_pending_);
+      if (!missing.empty()) {
+        ack_command(name,false,"yaw tuning gate refuses: "+missing); return;
+      }
     }
     for (int i=0;i<kAxisCount;++i) {
       const auto sample=backend_->snapshot(static_cast<AxisId>(i),now_ns_);
