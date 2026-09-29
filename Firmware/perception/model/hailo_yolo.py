@@ -184,9 +184,30 @@ class HailoYoloAdapter(ModelAdapter):
                         f"NMS class slot {class_index} has shape {boxes.shape}, expected [N,5]")
                 if not np.isfinite(boxes).all():
                     raise ValueError(f"NMS class slot {class_index} contains non-finite values")
+                # The NMS boxes are normalised to the 640x640 tensor, and the tensor carries the
+                # letterbox this method just added. Rows are promised to be normalised to the frame we
+                # were fed, so the pad has to be undone here -- it was created here. The x axis is
+                # whole-width and needs nothing; the y axis maps tensor row to leg row.
+                #
+                # Before this the rows left the tensor normalised, which was wrong for every leg: at
+                # 480 the picture is 80 px in, so y was 33% too tall and offset by 12.5% of the frame.
+                # The probes only ever reported fps and latency, so nothing noticed. On the 640x360
+                # production leg the error is big enough to push boxes off the frame entirely, which
+                # is how we got 91671 detections and zero tracks.
+                scale_y = 640.0 / float(frame.shape[0])
+                offset_y = pad / float(frame.shape[0])
                 for ymin, xmin, ymax, xmax, score in boxes:
-                    rows.append([float(score), float(class_index), float(ymin), float(xmin),
-                                 float(ymax), float(xmax)])
+                    lo = float(ymin) * scale_y - offset_y
+                    hi = float(ymax) * scale_y - offset_y
+                    if hi <= 0.0 or lo >= 1.0:
+                        # Entirely inside the letterbox: the network saw padding, not a sighting.
+                        # Counted rather than dropped quietly -- a counter that moves is not a failure,
+                        # but a silent drop is a lie about what the model reported.
+                        self.detections_pad_dropped += 1
+                        continue
+                    rows.append([float(score), float(class_index),
+                                 min(1.0, max(0.0, lo)), float(xmin),
+                                 min(1.0, max(0.0, hi)), float(xmax)])
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             self.failures += 1
             raise ModelRejected(f"unexpected Hailo NMS output: {exc}") from exc

@@ -57,6 +57,8 @@ class ModelAdapter:
     #: produced versus what survived the label map and the permitted classes.
     detections_raw: int = 0
     detections_emitted: int = 0
+    #: Boxes the network reported entirely inside the letterbox: padding, not a sighting.
+    detections_pad_dropped: int = 0
 
     def configure_stream(self, width: int, height: int,
                          roi: Optional[Tuple[int, int, int, int]] = None) -> None:
@@ -110,7 +112,8 @@ class ModelAdapter:
                 "stream": list(self._stream), "opened": bool(self.opened),
                 "inferences": int(self.inferences), "failures": int(self.failures),
                 "detections_raw": int(self.detections_raw),
-                "detections_emitted": int(self.detections_emitted)}
+                "detections_emitted": int(self.detections_emitted),
+                "detections_pad_dropped": int(self.detections_pad_dropped)}
 
     def _rows_to_set(self, rows: Sequence[Sequence[float]], *, frame_sequence: int,
                      sensor_timestamp_ns: int, publish_timestamp_ns: int,

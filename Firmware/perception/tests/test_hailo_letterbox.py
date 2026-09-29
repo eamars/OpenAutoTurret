@@ -22,12 +22,17 @@ MANIFEST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 class FakeRuntime:
     """Stands in for the HailoRT binding: records the tensor, returns an empty NMS batch."""
 
-    def __init__(self):
+    def __init__(self, person_box=None):
         self.seen = None
+        # Columns are whatever the caller hands back, so the decode under test sees a real box.
+        self.person_box = person_box
 
     def infer(self, feed):
         self.seen = list(feed.values())[0]
-        return {"output0": [([np.zeros((0, 5), dtype=np.float32) for _ in range(80)])]}
+        classes = [np.zeros((0, 5), dtype=np.float32) for _ in range(80)]
+        if self.person_box is not None:
+            classes[0] = np.array([self.person_box], dtype=np.float32)   # COCO person is class 0
+        return {"output0": [classes]}
 
 
 def build_adapter():
@@ -88,6 +93,69 @@ class Letterbox(unittest.TestCase):
             adapter.infer(wide, {}, frame_sequence=1, sensor_timestamp_ns=1,
                           publish_timestamp_ns=2)
         self.assertIn("640", str(caught.exception))
+
+
+class PadRoundTrip(unittest.TestCase):
+    """The pad is created by the encoder, so the decoder has to undo it. No exceptions.
+
+    Tensor rows arrive normalised to the 640x640 letterboxed tensor; rows going out are promised to be
+    normalised to the frame we were fed. x is whole-width; y has the pad taken back out.
+    """
+
+    def _rows(self, leg_h, tensor_box):
+        from perception.model.hailo_yolo import HailoYoloAdapter
+        import json as _json
+        import os as _os
+        from perception.model.manifest import ModelManifest
+        with open(MANIFEST, encoding="utf-8") as handle:
+            manifest = ModelManifest.from_dict(_json.load(handle))
+        adapter = HailoYoloAdapter(manifest)
+        runtime = FakeRuntime(person_box=list(tensor_box))
+        adapter.opened = True
+        adapter._infer = runtime
+        adapter._input_name = "input_0"
+        adapter._output_name = "output0"
+        adapter.configure_stream(640, leg_h)
+        captured = {}
+
+        class _Set:
+            detections = ()
+
+        def capture(rows, **_kw):
+            captured["rows"] = [list(r) for r in rows]
+            return _Set()
+
+        adapter._rows_to_set = capture
+        adapter.infer(np.full((leg_h, 640, 3), 9, dtype=np.uint8), {}, frame_sequence=1,
+                      sensor_timestamp_ns=1, publish_timestamp_ns=2)
+        return captured.get("rows", []), adapter
+
+    def test_a_box_in_the_picture_comes_back_leg_normalised(self):
+        """640x360 leg, pad 140: tensor y 0.359375..0.640625 is leg y 0.25..0.75."""
+        rows, adapter = self._rows(360, [0.359375, 0.2, 0.640625, 0.6, 0.9])
+        self.assertEqual(len(rows), 1, "a box inside the picture must survive the decode")
+        score, klass, ymin, xmin, ymax, xmax = rows[0]
+        self.assertAlmostEqual(ymin, 0.25, places=5)
+        self.assertAlmostEqual(ymax, 0.75, places=5)
+        self.assertAlmostEqual(xmin, 0.2, places=5)   # float32 round trip, so not exact
+        self.assertAlmostEqual(xmax, 0.6, places=5)   # the leg is whole-width: x must not move
+        self.assertAlmostEqual(score, 0.9, places=5)   # float32 again
+        self.assertEqual(int(klass), 0)                # COCO person
+
+    def test_a_box_only_in_the_padding_is_counted_not_smudged(self):
+        """A sighting inside the letterbox is not a sighting: drop it, but say so in a counter."""
+        rows, adapter = self._rows(360, [0.0, 0.2, 0.1, 0.6, 0.9])
+        self.assertEqual(rows, [], "a box entirely inside the pad must not become an edge box")
+        self.assertEqual(adapter.detections_pad_dropped, 1)
+
+    def test_the_measured_480_leg_is_also_corrected(self):
+        """The probes' own leg: at pad 80 the uncorrected y was 33% tall, and that was already wrong."""
+        rows, _adapter = self._rows(480, [0.25, 0.1, 0.75, 0.4, 0.8])
+        self.assertEqual(len(rows), 1)
+        _score, _klass, ymin, _xmin, ymax, _xmax = rows[0]
+        self.assertAlmostEqual(ymin, 80.0 / 480.0, places=5)   # (0.25*640 - 80) / 480
+        self.assertAlmostEqual(ymax, 400.0 / 480.0, places=5)  # (0.75*640 - 80) / 480
+
 
 
 if __name__ == "__main__":
