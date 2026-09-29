@@ -18,10 +18,12 @@ Two behaviours are deliberate and should not be "optimised" away:
 """
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
 
 from perception.camera_id import CameraId
+from perception.protocol.track_set import TrackSet, TrackSetCounters
 
 
 class CameraTracker:
@@ -90,6 +92,77 @@ class CameraTrackRegistry:
         return {key: tracker.snapshot() for key, tracker in self._trackers.items()}
 
 
+def merge_track_sets(sets):
+    """One document out of several cameras' TrackSets, with the refusals written down.
+
+    Merging is a *union of measurements*, not a reconciliation: each tracker owns its own ids and
+    its own lifecycle, and nothing here decides that the person in the narrow view and the person
+    in the wide view are the same human. That question needs a cross-camera identity model and the
+    calibration to support it; pretending it here would silently invent a person.
+
+    What this function will not do is hand back a document whose meaning is unclear:
+
+    * every set must say which camera it came from, and no camera may appear twice -- two sets from
+      one sensor means a frame was routed twice, which is a bug and not something to average;
+    * all sets must declare the same picture geometry, because a merged set declares exactly one.
+      Two legs declaring different pictures need a mapping, and a mapping is calibration;
+    * track uuids must be unique across the merge. A collision would mean two identities in one
+      document, which every consumer that looks up ``by_uuid`` would silently halve.
+
+    Counters are summed, and the stamps come from the newest set: an older document's sequence
+    number is not a lie about the newer one.
+    """
+    from ..errors import ValidationError
+
+    given = [s for s in (sets or ()) if s is not None]
+    if not given:
+        raise ValidationError("merge_track_sets([]) would publish an empty set that means "
+                              "'nothing was measured', which is not the same claim")
+    seen = {}
+    for s in given:
+        cid = str(getattr(s, "camera_id", "") or "")
+        if not cid:
+            raise ValidationError("a TrackSet reached the merge without a camera_id: an "
+                                  "unattributed box cannot be placed in a room with two cameras")
+        if cid in seen:
+            raise ValidationError(f"two TrackSets from camera {cid} reached the merge; one sensor "
+                                  "contributing twice is a routing bug, not a second opinion")
+        seen[cid] = s
+    geometries = {(int(s.stream_width), int(s.stream_height)) for s in given}
+    if len(geometries) > 1:
+        raise ValidationError(
+            f"the merge declares one picture but the sets declare {sorted(geometries)}; "
+            "cross-camera boxes need a mapping, and a mapping has to be measured, not assumed")
+    uuids = {}
+    for s in given:
+        for t in s.tracks:
+            if t.track_uuid in uuids:
+                raise ValidationError(
+                    f"track {t.track_uuid} arrived from both {uuids[t.track_uuid]} and "
+                    f"{s.camera_id}; one document cannot hold an identity twice")
+            uuids[t.track_uuid] = s.camera_id
+
+    newest = max(given, key=lambda s: int(s.publish_timestamp_ns))
+    merged = copy.deepcopy(newest)
+    merged.tracks = [t for s in given for t in s.tracks]
+    # Attribution is stamped per source, so a merged document says which optic each box belongs to
+    # rather than only that several optics are involved somewhere in it.
+    for s in given:
+        for t in s.tracks:
+            t.camera_id = s.camera_id
+    merged.camera_id = ""
+    merged.source_cameras = tuple(sorted(seen))
+    total = {}
+    for s in given:
+        for key, value in s.counters.to_dict().items():
+            total[key] = total.get(key, 0) + int(value)
+    merged.counters = TrackSetCounters.from_dict(total)
+    merged.events = [e for s in given for e in s.events]
+    # Sorted so a reader can attribute a box without opening two documents: the camera id travels
+    # on the track's own record in the published dictionary, which is what the web layer reads.
+    return merged
+
+
 def selftest() -> int:
     """A3's isolation properties at the tracking layer, with mock pipelines."""
     from perception.camera_id import derive_camera_id
@@ -152,6 +225,60 @@ def selftest() -> int:
                    mgr3.tracker_for(wide).snapshot()["generation_stale"] == 1))
     checks.append(("a refused frame leaves the last known result alone",
                    mgr3.tracker_for(wide).result == {"n": "previous-owner"}))
+
+    # -- merge_track_sets: one document, two optics, no invented person ----
+    from perception.errors import ValidationError
+    from perception.protocol.track_set import TrackSet, TrackSetCounters
+    from perception.tracking.track import Track
+
+    def made(cid, uuids, *, width=1920, height=1080, publish=1, created=0, confirmed=0):
+        set_ = TrackSet(session_uuid=cid, stream_width=width, stream_height=height,
+                        publish_timestamp_ns=publish,
+                        tracks=[Track(track_uuid=u) for u in uuids])
+        set_.stamp_camera(cid)
+        set_.counters = TrackSetCounters(tracks_created=created, tracks_confirmed=confirmed,
+                                        detections_in=len(uuids))
+        return set_
+
+    wide_set = made(wide.id, ("w1", "w2"), publish=10, created=2, confirmed=1)
+    detail_set = made(detail.id, ("d1",), publish=20, created=1, confirmed=1)
+    merged = merge_track_sets([wide_set, detail_set])
+    checks.append(("a merge is the union of both cameras' tracks",
+                   sorted(t.track_uuid for t in merged.tracks) == ["d1", "w1", "w2"]))
+    checks.append(("every merged track says which camera it came from",
+                   {t.track_uuid: t.camera_id for t in merged.tracks}
+                   == {"w1": wide.id, "w2": wide.id, "d1": detail.id}))
+    checks.append(("the merged document names its sources and claims no single camera",
+                   merged.source_cameras == tuple(sorted([wide.id, detail.id]))
+                   and merged.camera_id == ""))
+    checks.append(("counters are summed, not averaged into meaninglessness",
+                   merged.counters.tracks_created == 3 and merged.counters.tracks_confirmed == 2
+                   and merged.counters.detections_in == 3))
+    checks.append(("the stamps come from the newer set", merged.publish_timestamp_ns == 20))
+    checks.append(("the declared geometry survives the merge",
+                   (merged.stream_width, merged.stream_height) == (1920, 1080)))
+
+    def refused(build, says):
+        try:
+            merge_track_sets(build())
+        except ValidationError as exc:
+            return says in str(exc)
+        except Exception:                                                 # noqa: BLE001
+            return False
+        return False
+
+    checks.append(("a set that does not say its camera is refused, not guessed",
+                   refused(lambda: [TrackSet(stream_width=1920, stream_height=1080)],
+                           "camera_id")))
+    checks.append(("one camera contributing twice is refused as a routing bug",
+                   refused(lambda: [wide_set, made(wide.id, ("x",))], "routing bug")))
+    checks.append(("sets declaring different pictures are refused, not rescaled",
+                   refused(lambda: [wide_set, made(detail.id, ("d9",), width=1280, height=720)],
+                           "one picture")))
+    checks.append(("an identity appearing in two documents is refused, not halved",
+                   refused(lambda: [wide_set, made(detail.id, ("w1",))], "cannot hold")))
+    checks.append(("merging nothing is a refusal, not an empty set",
+                   refused(lambda: [], "nothing was measured")))
 
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:

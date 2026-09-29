@@ -44,6 +44,10 @@ class ModelAdapter:
         self.inferences = 0
         self.failures = 0
         self._stream: Tuple[int, int] = (0, 0)
+        #: Which sensor this adapter's pixels come from. Bound once, by the daemon that owns the
+        #: camera, and checked on every frame: with two sensors feeding one Hailo, an adapter that
+        #: cannot say whose pixels it just ate cannot be blamed when a box lands in the wrong FOV.
+        self.camera_id = ""
         #: Stage timings only the adapter can see (§40). Empty until the first inference: the
         #: pipeline records what exists and says what is missing, rather than inventing zeros.
         self.last_timings_ms: Dict[str, float] = {}
@@ -104,6 +108,32 @@ class ModelAdapter:
         """Acquire the device/model. Subclasses raise ``ModelRejected`` on refusal."""
         raise NotImplementedError
 
+    # -- camera binding -----------------------------------------------------
+    def bind_camera(self, camera_id: str) -> None:
+        """Say which sensor this adapter serves. Once, and only ever the same answer.
+
+        One adapter per camera is the dual-feed rule: counters, geometry and the letterbox pad
+        belong to a leg, and two legs with different pads sharing one adapter would average each
+        other's numbers into something that describes neither. Re-binding to a second camera is
+        therefore a refusal, not an update -- the fix lives in the daemon's wiring, not here.
+        """
+        wanted = str(camera_id or "")
+        if not wanted:
+            raise ConfigError("bind_camera('') would un-attributing every counter this adapter holds")
+        if self.camera_id and self.camera_id != wanted:
+            raise ConfigError(f"adapter for camera {self.camera_id} cannot also serve {wanted}")
+        self.camera_id = wanted
+
+    def check_camera(self, camera_id: str) -> None:
+        """Refuse a frame whose camera is not the one this adapter was bound to."""
+        if not self.camera_id:
+            return                      # unbound: single-camera stations and replay adapters
+        if str(camera_id or "") != self.camera_id:
+            raise ModelRejected(
+                f"frame from camera {camera_id!r} reached the adapter bound to "
+                f"{self.camera_id!r}; a frame routed to the wrong worker is a routing bug, "
+                "not a frame to drop quietly")
+
     def close(self) -> None:
         self.opened = False
 
@@ -117,7 +147,7 @@ class ModelAdapter:
     # -- inference ----------------------------------------------------------
     def infer(self, image: Any, metadata: Optional[Any] = None, *,
               frame_sequence: int, sensor_timestamp_ns: int,
-              publish_timestamp_ns: int) -> DetectionSet:
+              publish_timestamp_ns: int, camera_id: str = "") -> DetectionSet:
         raise NotImplementedError
 
     def note_model_generation(self, generation: int) -> None:
@@ -128,7 +158,7 @@ class ModelAdapter:
     def describe(self) -> Dict[str, Any]:
         return {"adapter": self.name, "model_id": self.manifest.model_id,
                 "model_generation": int(self.generation),
-                "task": self.manifest.task,
+                "task": self.manifest.task, "camera_id": self.camera_id,
                 "input_size": [self.manifest.input_width, self.manifest.input_height],
                 "postprocess": self.manifest.postprocess,
                 "stream": list(self._stream), "opened": bool(self.opened),
@@ -209,9 +239,11 @@ class MockAdapter(ModelAdapter):
         return list(self.default_rows)
 
     def infer(self, image: Any, metadata: Optional[Any] = None, *, frame_sequence: int,
-              sensor_timestamp_ns: int, publish_timestamp_ns: int) -> DetectionSet:
+              sensor_timestamp_ns: int, publish_timestamp_ns: int,
+              camera_id: str = "") -> DetectionSet:
         if not self.opened:
             raise ModelRejected("MockAdapter.infer() before open()")
+        self.check_camera(camera_id)
         self.requested_frames.append(int(frame_sequence))
         self.inferences += 1
         return self._rows_to_set(self.rows_for(int(frame_sequence)),

@@ -199,9 +199,11 @@ class Imx500YoloAdapter(ModelAdapter):
 
     # -- inference ----------------------------------------------------------
     def infer(self, image: Any, metadata: Optional[Any] = None, *, frame_sequence: int,
-              sensor_timestamp_ns: int, publish_timestamp_ns: int) -> DetectionSet:
+              sensor_timestamp_ns: int, publish_timestamp_ns: int,
+              camera_id: str = "") -> DetectionSet:
         if not self.opened or self.device is None:
             raise ModelRejected("Imx500YoloAdapter.infer() before open()")
+        self.check_camera(camera_id)
         if metadata is None:
             self.failures += 1
             raise ModelRejected(

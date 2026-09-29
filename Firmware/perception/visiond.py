@@ -789,6 +789,18 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
     print(f"visiond: camera {info['camera_num']} stream "
           f"{info['stream_size'][0]}x{info['stream_size'][1]} model {info['task']} "
           f"@ {info['inference_rate_hz']} Hz", file=sys.stderr)
+    # One adapter serves one camera: it holds the geometry, the letterbox pad and every counter
+    # that only makes sense per leg. Binding happens here, where ownership is decided, so a frame
+    # routed to the wrong worker is refused by name instead of quietly degrading the other leg's
+    # statistics. Adapters without a binding (replay, offline) stay unattributed and keep working.
+    bind = getattr(adapter, "bind_camera", None)
+    if callable(bind):
+        try:
+            bind(_ident.id)
+        except Exception as exc:                                          # noqa: BLE001
+            print(f"visiond: the inference adapter would not bind to camera {_ident.id}: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            raise
     camera.start()
     # (b): visiond owns the physical sensor, so visiond is also the only process allowed to say
     # which named stream came out of it. The manifest is what webd reads instead of a filename it
@@ -814,6 +826,7 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
                 frame.metadata,
                                              frame_sequence=frame.frame_sequence,
                                              sensor_timestamp_ns=frame.sensor_timestamp_ns,
+                                             camera_id=_ident.id,
                                              capture_started_ns=frame.metadata_receive_ns)
             delivered += 1
             if tensor_probe is not None:
@@ -888,6 +901,7 @@ def _run_synthetic(args: argparse.Namespace, pipeline: PerceptionPipeline,
     from perception.camera_worker import CameraWorker, WorkerSupervisor
 
     state = {"index": 0}
+    synthetic_ident = derive_camera_id("mock://synthetic")
 
     def step():
         index = state["index"]
@@ -895,14 +909,15 @@ def _run_synthetic(args: argparse.Namespace, pipeline: PerceptionPipeline,
             return None
         state["index"] += 1
         outcome = pipeline.process_frame(None, None, frame_sequence=index,
-                                         sensor_timestamp_ns=base + index * interval_ns)
+                                         sensor_timestamp_ns=base + index * interval_ns,
+                                         camera_id=synthetic_ident.id)
         _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire)
         return index
 
     # The mock profile has no device to name -- ``CameraConfig`` carries geometry, not a path -- so
     # the identity is a label. ``source=label`` and ``durable=False`` in the report are the truth
     # about a synthetic run, not a shortfall to apologise for.
-    worker = CameraWorker(derive_camera_id("mock://synthetic"), step)
+    worker = CameraWorker(synthetic_ident, step)
     supervisor = WorkerSupervisor().add(worker)
     supervisor.start_all()
     deadline = time.monotonic() + max(10.0, frames * (interval_ns / 1e9) * 20)

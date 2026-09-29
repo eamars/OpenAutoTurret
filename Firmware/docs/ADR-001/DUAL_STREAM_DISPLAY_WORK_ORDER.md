@@ -261,3 +261,25 @@ visiond 同时知道 `stream`（main）与 `lores`，所以由它把**发布几�
 
 `camera_fps≈30` 与 `model_inference_ms≈8` 是旁证（Phase 5 量过的区间），不是判据。
 **门限永远最后调**：在 1–4 环没绿之前动 `new_track` 就是拿参数盖 bug。
+
+### H4 起手（round 12）：`camera_id` 穿过整条契约，`merge_track_sets` 有了拒绝条件
+
+第二段（dual-worker cut）的第一步不是加线程，是**让"这是谁的像素"这句话一路传到底**。今天的
+`infer()` 没有 `camera_id`，两路喂同一个 Hailo 时一个 adapter 说不清自己刚吃掉的是哪条腿的帧——
+于是计数器、letterbox pad、几何全都是混的。这一轮把这些做完，**还没有**加第二路：
+
+| 改动 | 落在哪 | 拒绝条件 |
+|---|---|---|
+| `infer(..., camera_id=)` | `adapter.py` 基类 + hailo + imx500 + mock | adapter 绑过摄像头又收到另一路的帧 ⇒ `ModelRejected`「a frame routed to the wrong worker is a routing bug」，**不计入 `failures`**（路由错是接线错，不是网络失败，记错列就看不见） |
+| 一个 adapter 只服务一个摄像头 | `bind_camera()` | 二次绑到别的 id ⇒ `ConfigError`「cannot also serve」 |
+| `process_frame(..., camera_id=)` | `pipeline.py` 两个生产调用点都盖上（真传感器用 `_ident.id`，合成路径用 `mock://synthetic` 导出的 id） | — |
+| 发布文档与每条 track 都带 `camera_id` | `protocol/track_set.py`（`stamp_camera()`）、`tracking/track.py` | — |
+| 汇流 | `tracking/camera_registry.py::merge_track_sets()` | 没盖 camera_id / 同一路来两份 / 声明几何不一致 / uuid 撞车 ⇒ 各自点名拒绝 |
+
+**为什么不在这轮就汇**：`merge_track_sets` 在生产里还没有产生者——窄角那颗仍只有预览腿（`detail_stream.py`
+开头那句"故意不做推理"依然成立）。先契约后线程，是为了让第二路接上时**错会当场叫**，而不是两路混出一堆
+谁也说不清的计数器。
+
+**下一步（H5，还没做）**：窄角开 640×360 lores 腿 → 第二个 adapter + 第二个 pipeline + 第二个
+`CameraWorker` → 生产里真正调用 `merge_track_sets` → 量两路各自 fps 与 **fairness ≥ 0.9**。
+controld 侧的 per-track 归属要 native wire v3（头里没有摄像头字段），那是汇流之后的一步。

@@ -127,9 +127,11 @@ class HailoYoloAdapter(ModelAdapter):
             stack.close()
 
     def infer(self, image: Any, metadata: Any = None, *, frame_sequence: int,
-              sensor_timestamp_ns: int, publish_timestamp_ns: int):
+              sensor_timestamp_ns: int, publish_timestamp_ns: int,
+              camera_id: str = ""):
         if not self.opened or self._infer is None:
             raise ModelRejected("HailoYoloAdapter.infer() before open()")
+        self.check_camera(camera_id)
         frame = np.asarray(image)
         # The guard compares the frame against the leg this adapter was *configured* for, and the
         # vertical pad is computed from the frame. A literal 640x480 here was left over from the

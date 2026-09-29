@@ -47,6 +47,7 @@ class StubAdapter:
         self.work_ns = int(work_ns)
         self.inferences = 0
         self.requests = []
+        self.cameras = []      # the camera identity each inference was attributed to
         self.opened = False
         self.closed = False
         self.last_timings_ms = {}
@@ -61,9 +62,10 @@ class StubAdapter:
         self.closed = True
 
     def infer(self, image, metadata=None, *, frame_sequence, sensor_timestamp_ns,
-              publish_timestamp_ns):
+              publish_timestamp_ns, camera_id=""):
         self.inferences += 1
         self.requests.append(int(frame_sequence))
+        self.cameras.append(str(camera_id))
         self.clock_forward = self.clock() + self.work_ns
         if int(frame_sequence) in self.fail_frames and self.raise_on is None:
             return dset([], frame_index=int(frame_sequence),
@@ -92,6 +94,10 @@ class FakeClock:
     def __call__(self) -> int:
         self.now += self.step
         return self.now
+
+
+WIDE_CAMERA = "cam-4a5aa56e"
+DETAIL_CAMERA = "cam-6c73e20a"
 
 
 class PipelineCase(unittest.TestCase):
@@ -200,15 +206,53 @@ class TestJsonPublisher(unittest.TestCase):
 
 
 class TestPipelineFrame(PipelineCase):
-    def frames(self, count=4, *, adapter=None, pipeline=None, start=1):
+    def frames(self, count=4, *, adapter=None, pipeline=None, start=1, camera_id=WIDE_CAMERA):
         pipeline = pipeline or self.make()
         outcomes = []
         for index in range(start, start + count):
             outcomes.append(pipeline.process_frame(
                 b"image", {"SensorTimestamp": at(index - 1)},
                 frame_sequence=index, sensor_timestamp_ns=at(index - 1),
+                camera_id=camera_id,
                 capture_started_ns=self.clock.now - ms(1.0)))
         return outcomes
+
+    def test_the_frames_camera_identity_reaches_the_adapter_and_the_published_set(self):
+        # With two sensors feeding one inference backend, "which camera" has to survive the whole
+        # chain: the adapter refuses a frame routed to the wrong worker, and the published set says
+        # whose boxes they are. Neither half is decorative -- a normalised box from the narrow FOV
+        # and one from the wide FOV can be numerically identical.
+        adapter = StubAdapter([dset([det(0, cx=0.4)], frame_index=0)])
+        outcomes = self.frames(1, pipeline=self.make(adapter=adapter))
+        self.assertEqual(adapter.cameras, [WIDE_CAMERA])
+        published = outcomes[0].track_set
+        self.assertEqual(published.camera_id, WIDE_CAMERA)
+        self.assertTrue(published.tracks, "the fixture should have produced a track")
+        self.assertEqual([t.camera_id for t in published.tracks], [WIDE_CAMERA])
+        self.assertEqual(published.to_dict()["camera_id"], WIDE_CAMERA)
+        self.assertEqual(published.to_dict()["tracks"][0]["camera_id"], WIDE_CAMERA)
+
+    def test_a_frame_routed_to_another_cameras_worker_is_refused_by_name(self):
+        # The adapter is bound to one camera; a frame from the sibling must not be inferred on it.
+        # MockAdapter and not the local stub, because the binding lives in the real base contract:
+        # a stub that agreed with itself would prove nothing about the adapters that ship.
+        manifest = ModelManifest(model_id="unit-test-model", input_width=640,
+                                 input_height=640, inference_rate_hz=16.0,
+                                 bbox_normalized=True, bbox_order="xy")
+        adapter = MockAdapter(manifest, rows_by_frame=lambda index: [])
+        adapter.configure_stream(1920, 1080)
+        adapter.open()
+        adapter.bind_camera(WIDE_CAMERA)
+        outcome = self.frames(1, pipeline=self.make(adapter=adapter),
+                              camera_id=DETAIL_CAMERA)[0]
+        self.assertEqual(outcome.stage, "inference")
+        self.assertIn("routing bug", outcome.failure)
+        self.assertEqual(adapter.requested_frames, [],
+                         "a misrouted frame must not reach the network")
+        with self.assertRaises(Exception) as refused:
+            adapter.bind_camera(DETAIL_CAMERA)
+        self.assertIn("cannot also serve", str(refused.exception),
+                      "one adapter, one camera: re-binding is a wiring bug, not an update")
 
     def test_a_frame_produces_the_published_pair_and_every_stage_timing(self):
         # Sensor stamps come from the same fake clock domain as the pipeline's clock, so the
