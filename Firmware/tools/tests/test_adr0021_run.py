@@ -19,10 +19,15 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import adr0021_plan as plan  # noqa: E402
 import adr0021_run as runner  # noqa: E402
+Runner = runner.Runner
 
 
 class StubStation:
     """A station that always accepts, and answers the way controld does."""
+
+    trace_rows = 4
+    trace_loses_identity = False
+    trace_truncated = False
 
     def __init__(self, payload_status="no_profile", phase="hold"):
         self.payload_status, self.phase = payload_status, phase
@@ -57,6 +62,20 @@ class StubStation:
             return {"accepted": False, "reason": "no cmd_ack after that sequence", "seq": self._seq}
         return {"accepted": "no request" not in self._pending, "reason": self._pending,
                 "seq": self._seq}
+
+    def trace_window(self, expect_context=""):
+        """The stub answers with a window whose records all carry the tag the runner set — unless a
+        test asks it to lose the identity, which is the failure the runner must treat as blocked.
+        It goes through command() so the per-candidate command count stays honest: a window is asked
+        for, and asking costs a round trip on the real station too.
+        """
+        self.command("read_control_trace")
+        rows = [{"param_context": expect_context or "none"} for _ in range(self.trace_rows)]
+        if self.trace_loses_identity:
+            rows[-1]["param_context"] = "other-campaign"
+        return {"records": len(rows), "records_with_context": sum(
+            1 for row in rows if row["param_context"] == expect_context), "bytes": 340000,
+            "truncated": self.trace_truncated, "reason": "stub window"}
 
     def frame(self):
         return {"payload_profile_status": self.payload_status, "phase": self.phase,
@@ -157,7 +176,7 @@ class ItObysWhatTheLockSays(unittest.TestCase):
 
     def test_each_trial_was_restored_so_the_next_one_starts_from_the_baseline(self):
         # prepare + apply + snapshot + prepare + apply per candidate: the restore is not optional.
-        self.assertEqual(6 * 8, self.station.received,
+        self.assertEqual(7 * 8, self.station.received,
                          "context, prepare, apply, snapshot, then prepare and apply again to return to "
                          "the baseline: six commands per candidate — the campaign says who it is before "
                          "it writes anything, and the restore is not optional")
@@ -168,6 +187,40 @@ class ItObysWhatTheLockSays(unittest.TestCase):
         for trial in self.manifest["trials"]:
             self.assertIsNone(trial["metrics"])
             self.assertIn("does not flatter", trial["unscored_reason"])
+
+
+class TheTraceWindowCarriesTheCampaign(unittest.TestCase):
+    """§5 is satisfied per record or it is not satisfied: an archived row that does not say whose trial
+    it was can only be attributed by correlating timestamps with somebody's log.
+    """
+
+    def _run_with(self, station):
+        inventory = plan.load_inventory(plan.INVENTORY)
+        lock = a_lock(inventory)
+        with tempfile.TemporaryDirectory() as directory:
+            return Runner(station, lock, inventory["_sha256"], bound_binary(lock), list(BASELINE),
+                          directory).run()
+
+    def test_a_window_too_big_for_the_buffer_blocks_rather_than_reporting_a_short_run(self):
+        station = StubStation()
+        station.trace_truncated = True
+        manifest = self._run_with(station)
+        self.assertTrue(any(row.startswith("BLOCKED_trace_truncated") for row in manifest["blocked"]),
+                        manifest["blocked"])
+
+    def test_a_record_without_the_identity_blocks_the_campaign(self):
+        station = StubStation()
+        station.trace_loses_identity = True
+        manifest = self._run_with(station)
+        self.assertTrue(any(row.startswith("BLOCKED_trace_identity_missing") for row in manifest["blocked"]),
+                        manifest["blocked"])
+
+    def test_an_untagged_but_complete_window_is_not_called_a_failure(self):
+        # A station with no campaign context set is a different question from a record losing its tag:
+        # the runner reports the count and lets the first refusal (no context) speak, not a fake one.
+        station = StubStation()
+        manifest = self._run_with(station)
+        self.assertEqual([], manifest["blocked"])
 
 
 class ItStopsWhenTheDesignSaysSo(unittest.TestCase):

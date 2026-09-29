@@ -133,6 +133,20 @@ class Runner:
                                              "reason": applied.get("reason")})
             return record
         self.manifest["applied"] += 1
+        # Ask for the trace window while this candidate is still what is running: §5 wants the identity
+        # inside every record, and the only honest way to know it is there is to ask for the window and
+        # count the records that carry the tag. A truncated read is a blocked run, not a short one.
+        window = self.station.trace_window(expect_context=context)
+        record["trace_window"] = window
+        if window.get("truncated"):
+            self.refuse(f"BLOCKED_trace_truncated_{candidate['candidate_id']}: "
+                        + str(window.get("reason")))
+            return record
+        if window.get("records", 0) and window.get("records_with_context") != window.get("records"):
+            self.refuse(f"BLOCKED_trace_identity_missing_{candidate['candidate_id']}: "
+                        f"{window.get('records_with_context')}/{window.get('records')} records carry "
+                        "the campaign tag; a row without it cannot be attributed to this trial")
+            return record
         snapshot = self.exchange("param_snapshot")
         text = str(snapshot.get("reason", ""))
         grab = lambda key: (re.search(key + r"=(\S+)", text) or [None, None])[1]

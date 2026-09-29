@@ -76,7 +76,7 @@ class Station:
         deadline = time.time() + 3
         while time.time() < deadline:
             try:
-                frame = json.loads(s.recv(65536).decode())
+                frame = json.loads(self.receive(s).decode())
             except socket.timeout:
                 return {}
             if frame.get("type") == "telemetry":
@@ -105,6 +105,22 @@ class Station:
     def seq(self):
         return self.frame().get("cmd_ack_seq")
 
+    TRUNCATED = "truncated"
+
+    @staticmethod
+    def receive(sock):
+        """One datagram, whole or honestly reported as too big.
+
+        A SOCK_SEQPACKET read smaller than the datagram discards the remainder silently, and a trace
+        window is hundreds of kilobytes: parsing the first 64 KiB of a 340 KiB frame produced a
+        JSONDecodeError that looked like a firmware bug and was a buffer. If the kernel says MSG_TRUNC
+        we hand back a marker so the caller blocks instead of mis-reading a half record.
+        """
+        data, _aux, flags, _addr = sock.recvmsg(4 << 20, 0)
+        if flags & getattr(socket, "MSG_TRUNC", 0x2000):
+            return Station.TRUNCATED
+        return data
+
     def command(self, name, arg=None):
         s = self._sock()
         message = {"type": "command", "command": name}
@@ -115,7 +131,7 @@ class Station:
         deadline = time.time() + 4
         while time.time() < deadline:
             try:
-                buf += s.recv(65536)
+                buf += self.receive(s)
             except socket.timeout:
                 break
             if re.search(rb'\{"type":"response"', buf):
@@ -123,6 +139,34 @@ class Station:
         for match in re.findall(rb'\{"type":"response".*?\}', buf):
             return json.loads(match.decode())
         return {"accepted": False, "reason": "no response from controld"}
+
+    def trace_window(self, expect_context=""):
+        """Ask for the frozen evidence window and check that every record says who it belongs to.
+
+        docs/02 §5 wants the campaign identity inside each record rather than inferred afterwards, so
+        the runner asks for the window and counts the records that carry the tag it set. A truncated
+        read is reported, not parsed: half a window would under-count and look like a firmware gap.
+        """
+        before = self.seq()
+        self.command("read_control_trace")
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            chunk = self.receive(self._sock())
+            if chunk is Station.TRUNCATED:
+                return {"truncated": True, "reason": "the trace window exceeded the receive buffer"}
+            try:
+                frame = json.loads(chunk.decode())
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if frame.get("type") != "control_trace":
+                continue
+            rows = frame.get("records") or frame.get("rows") or []
+            tagged = sum(1 for row in rows if isinstance(row, dict) and expect_context
+                         and row.get("param_context") == expect_context)
+            return {"records": len(rows), "records_with_context": tagged, "bytes": len(chunk),
+                    "truncated": False}
+        return {"records": 0, "records_with_context": 0, "bytes": 0, "truncated": False,
+                "reason": "no control_trace frame in 8 s"}
 
     def state(self):
         """The picture, from whichever document the running mode actually publishes.
@@ -160,7 +204,7 @@ class Station:
         deadline = time.time() + 3
         while time.time() < deadline:
             try:
-                frame = json.loads(s.recv(65536).decode())
+                frame = json.loads(self.receive(s).decode())
             except socket.timeout:
                 return {}
             if frame.get("type") == "telemetry":
@@ -176,7 +220,7 @@ class Station:
         deadline = time.time() + 4
         while time.time() < deadline:
             try:
-                frame = json.loads(s.recv(65536).decode())
+                frame = json.loads(self.receive(s).decode())
             except socket.timeout:
                 return {}
             if frame.get("type") == "telemetry":
