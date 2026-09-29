@@ -1,3 +1,5 @@
+<!-- doc-tree-check: ignore —— as-received handoff text; the relative paths inside it are the author's, taken from where the note was written, and rewriting them would falsify the record. -->
+
 # OpenAutoTurret 当前架构与架构师决策交接书
 
 **基线：2026-09-27，`codex/hardware-adaptation` 分支；最近实际激活的站台版本 `8901808`。** 本文描述当前仓库与已观察的站台，不把旧双 CyberGear 的物理验收结果移植到新硬件。架构师可直接读取 GitHub 分支中的相对路径；Pi 上的 `run/` 捕获、日志、HEF 和本地工作区文件不在 Git 中。现场操作以 [STATION_OPERATIONS.md](STATION_OPERATIONS.md) 为准。

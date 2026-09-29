@@ -14,7 +14,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-checkout=$(cd "$here/.." && pwd)                 # .../OpenAutoTurret
+checkout=$(cd "$here/../.." && pwd)               # .../OpenAutoTurret（这份现在住在 Firmware/tools）
 ws=$(cd "$checkout/../.." && pwd)                # the workspace root; secrets and the venv live here
 identity=${OTA_SSH_IDENTITY:-$ws/.secrets/ssh/id_ed25519}
 pinned=${OTA_KNOWN_HOSTS:-$ws/.secrets/ssh/known_hosts_station}
@@ -65,7 +65,7 @@ for addr in "${candidates[@]}"; do
         [[ -x "$python_bin" ]] || die "no interpreter" "set OTA_PYTHON; nothing is installed globally"
         shift
         [[ "${1:-}" == "--" ]] && shift      # the separator is for us, not for the deployer
-        exec "$python_bin" "$checkout/Firmware/tools/deploy_station.py" \
+        exec "$python_bin" "$here/deploy_station.py" \
           --host "$user@$alias_name" --connect-address "$addr" \
           --identity "$identity" --known-hosts "$pinned" "$@"
         ;;

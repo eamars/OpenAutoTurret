@@ -3,6 +3,17 @@
 Current operating runbook, **27 September 2026**. Read this before deploying,
 starting, stopping or diagnosing the station. Dated run reports are historical.
 
+> **How to read this file.** It holds the station's **current state, safety history, owner rulings
+> and measured limits** — the reasons. Procedure lives in [`operations/`](operations/README.md), one
+> card per operation, one hop from [`README.md`](README.md); start there when you are about to *do*
+> something, and come here to understand why the card says what it says. Where the two disagree on a
+> procedure, the card is current; where they disagree on a fact or a limit, this file is.
+>
+> The state recorded below is a **record taken on 2026-09-28**, not a live reading: the station has
+> since moved release and address. Before acting on any line here, take a live reading —
+> `run_application.sh status` for the release and run dir, and
+> [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
+
 ## Current deployment gate
 
 **Current station state:** release `f8bcdb6` is running in operator-selected
@@ -616,8 +627,8 @@ So the station's key is pinned in a file and handed to the tool explicitly:
 ```bash
 OTA_SSH_IDENTITY=/workspace/general_purpose/.secrets/ssh/id_ed25519 \
 OTA_KNOWN_HOSTS=/workspace/general_purpose/.secrets/ssh/known_hosts_station \
-  python3 "$PWD/Firmware/tools/deploy_station.py" \
-  --host eamars@rpi-turret --connect-address 192.168.2.100 --activate --ready-timeout 420
+  "$WS/.venv/bin/python" "$PWD/Firmware/tools/deploy_station.py" \
+  --host eamars@rpi-turret --connect-address <observed> --activate --ready-timeout 420
 ```
 
 `--known-hosts` sets `StrictHostKeyChecking=yes` and blanks `GlobalKnownHostsFile`, so a different box
@@ -625,7 +636,10 @@ wearing that address cannot be accepted silently. The pinned line is
 
     256 SHA256:ll1B6KKdmry4daddh4fMxJ4ecnLS7zp9hBH+3DO0fQw rpi-turret,192.168.2.100 (ED25519)
 
-`--identity` (env `OTA_SSH_IDENTITY`) does the same for the private key, with `IdentitiesOnly=yes`:
+`Firmware/tools/station_address.sh` now assembles this call, resolves the address by verifying it,
+and is the route the deploy card tells you to use; the invocation above is kept so the parts are
+visible. Note that the interpreter is spelled out: a bare `python3` has no third-party packages here
+and will render a red suite green. (`--identity` (env `OTA_SSH_IDENTITY`) does the same for the private key, with `IdentitiesOnly=yes`:
 the same rebuild took `~/.ssh` away, and the resulting 255 reads like a host-key failure but is an
 auth failure -- both halves of "the container's home is not durable" were measured this way.
 

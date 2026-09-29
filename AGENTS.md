@@ -11,7 +11,13 @@ It is the current operating runbook; dated as-built reports are historical.
   Manual/Hold is an explicit web override; do not persist trial speed/mode
   overrides into normal deployment unintentionally.
 - Deploy committed source with `Firmware/tools/deploy_station.py`. It preserves
-  the dirty Pi checkout and builds a separate release. `--activate` additionally
+  the dirty Pi checkout and builds a separate release. **Compilation happens on the deployment
+  host, not on the station**, and `Firmware/tools/deploy_station.py` has no `deploy` twin in the
+  launcher that means the same thing — read
+  [the deploy card](Firmware/docs/operations/deploy.md) before the first deploy on a machine you
+  did not build the last release on. Every operation has one card; the tree starts at
+  [`Firmware/docs/README.md`](Firmware/docs/README.md), and `Firmware/tools/doc_tree_check.py`
+  fails if the tree has a hole. `--activate` additionally
   performs a controlled stop/start after verification.
 - Stop through the launcher; do not use broad process kills, bypass homing,
   overwrite retained calibration, or run legacy controller/camera services beside it.
