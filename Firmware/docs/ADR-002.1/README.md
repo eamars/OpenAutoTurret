@@ -45,6 +45,15 @@ pitch 是**寄存器读回**、异步完成——`pitch_control_trial` 先读当
 也会拒绝与当前二进制不一致的旧文档。清单里 `yaw.friction.enabled` 被标成 `fixed_in_campaign`，理由写在条目本身：
 现在 trial 命令用"任一幅度 > 0"反推这个开关，所以开/关不是单变量对照（§4）。
 
+## 已交付：§6 验收在真站上通过（19/19）
+
+`reports/runtime_snapshot_2026-09-29.json`：对 **9 条 experiment_writable** 逐条改动→读回→恢复（含基线共 19 次交换），
+**全部 applied-and-read-back**；revision 每次交换推进一次；结束时 `state=idle` 且 `applied_hash == expected_hash`。
+**交换集内二进制 SHA 完全不变**——零编译、零部署、零重启，这就是第一片存在的全部理由。
+只读保护是**服务端形态**的拒绝：`yaw.host_current_limit_a` 战役前后都 0.8 A，服务端的清单自报 `protected_read_only`（写路径不存在）。
+温度是**如实缺**而不是编的：live 帧里没有温度键（列过键），`temp_raw`+单位+有效性在 trace 记录里，所以快照写的是来源而不是借个数字凑齐。
+两处**待主人定**：① `manual_commissioning` 只能由 launcher 环境变量武装 ⇒ 正常栈里调参面不可达；② boot `slew=0` 而 prepare 只收 `(0,10]` ⇒ 出厂默认值无法原样 apply 回去。
+
 ## 进行中：冻结的 planner（campaign.lock.json）
 
 `Firmware/tools/adr0021_plan.py` 把设计**一次算死**写进 `campaign.lock.json`：维度名必须来自清单的 `experiment_writable`（保护字段被拒时连条款一起报，D7），
