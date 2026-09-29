@@ -635,11 +635,11 @@
   ],
   "generated_from": {
     "binary": "build/control/controld",
-    "binary_sha256": "823dddc10c012f8a5846cc52aabc08c05079e36598183224e5b63f2baab05752",
+    "binary_sha256": "56998fc2592cc43c61d0f75ad8792cd6b07c31844dd5c868116e513e58c19ec5",
     "config": "config/turret_mixed.yaml",
-    "generated_at_utc": "2026-09-29T15:14:01Z",
+    "generated_at_utc": "2026-09-29T15:36:10Z",
     "hardware_profile": "config/mixed_hardware.yaml",
-    "source_rev": "7bb618d4140e3958f999ed24830048e1581272df"
+    "source_rev": "17864cb463bf4a48746da901fa3fcc13a88ef732"
   },
   "schema": 1
 }

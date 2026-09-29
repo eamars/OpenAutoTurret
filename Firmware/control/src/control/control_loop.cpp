@@ -4473,8 +4473,14 @@ std::vector<control::ParamValue> ControlLoop::yaw_trial_values(
 }
 
 std::vector<control::ParamValue> ControlLoop::pitch_gain_values(double kp, double ki) const {
-  return {{"pitch.service_speed_kp", control::canonical_number(kp)},
-          {"pitch.service_speed_ki", control::canonical_number(ki)}};
+  // A CyberGear speed-loop gain register is a 32-bit float, so the value the drive can hold — and
+  // therefore the value a readback can confirm — is float32(kp), not the double someone typed. Both
+  // sides of the comparison pass through here for that reason. Measured on the station 2026-09-30:
+  // a requested 0.03 came back as 0.0299999993, the transaction called a correct write a mismatch,
+  // restored it, and gated motion — the rollback discipline working, on a comparison that could
+  // never have been satisfied by any real register.
+  return {{"pitch.service_speed_kp", control::canonical_number(static_cast<float>(kp))},
+          {"pitch.service_speed_ki", control::canonical_number(static_cast<float>(ki))}};
 }
 
 void ControlLoop::param_exchange_yaw(const std::string& command,

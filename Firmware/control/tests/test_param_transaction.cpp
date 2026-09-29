@@ -126,6 +126,9 @@ TEST(ParameterTransaction, TheHashIgnoresTheOrderParametersWereAskedFor) {
 }
 
 TEST(ParameterTransaction, CanonicalTextIsWhatTheFirmwareStoresNotWhatSomeoneTyped) {
+  // The register-backed identity of 0.03 is the float32 nearest it; recording that here keeps the
+  // reason a station confirms a write from being folklore.
+  EXPECT_EQ("0.0299999993", control::canonical_number(static_cast<float>(0.03)));
   EXPECT_EQ("2", canonical_number(2.0));
   EXPECT_EQ("0.6", canonical_number(0.6));
   // The trial command's three-count displacement threshold, in the unit the firmware stores it in:
