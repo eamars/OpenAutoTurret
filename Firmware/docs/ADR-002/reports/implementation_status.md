@@ -1,6 +1,6 @@
 # ADR-002 implementation and acceptance ledger
 
-Updated 2026-09-29. Work is in progress; no physical qualification is claimed.
+Updated 2026-09-30 (runtime surface section by 小满). Work is in progress; no physical qualification is claimed.
 
 ## Identity and authorized scope
 
@@ -27,9 +27,9 @@ Updated 2026-09-29. Work is in progress; no physical qualification is claimed.
 | Output arbitration/recovery | PR1 native PASS; Pi 80/80 | Ordinary-TX continuity observed; physical fault injection NOT_RUN | NOT_RUN | 4387411 Manual commissioning |
 | Yaw current velocity loop | PR2 math replay and native PASS | Baseline measured; latency/smoothness targets not met | NOT_RUN | Existing 0.8 A bound |
 | Yaw friction compensation | Bounded state/current integration tests PASS | NOT_RUN | NOT_RUN | Disabled until calibration |
-| Pitch native speed tuning | NOT_RUN | NOT_RUN | NOT_RUN | Existing native mode and 5 A bound |
+| Pitch native speed tuning | Hot update PASS (§6: prepare→apply→read-back→restore against drive registers) | NOT_RUN | NOT_RUN | Existing native mode and 5 A bound |
 | Pitch homing | Existing native/Pi tests PASS | Two starts completed; repeatability not yet reduced | NOT_RUN | Do not inherit old mechanism results |
-| Typed payload qualification | NOT_RUN | NOT_RUN | NOT_RUN | No new qualified profile |
+| Typed payload qualification | Profile binding PASS (a campaign bound to one profile refuses to run under another) | NOT_RUN | NOT_RUN | No new qualified profile |
 
 ## PR1 evidence so far
 
@@ -288,3 +288,36 @@ zero requested with disable state unavailable. No rollback occurred. Trial
 gains were volatile; production configuration still has its original defaults.
 Runtime captures and unintegrated PR4 drafts remain under ignored `run/adr002`;
 they are not included as runtime artifacts in this commit.
+
+## 2026-09-30 · ADR-002.1 runtime surface (小满)
+
+Identity this section speaks about: branch `ADR-002` at `479857b`, deployed release
+`0b1b4b2b3ba7.AJVn7p`, aarch64 `controld` `3f2cabc4fe78d0de…`, station-generated
+`parameter_inventory.json` `498b4e80204a22…`, frozen design `f761cbec39f356db…`. The inventory's
+`source_rev` comes from the release's own `REVISION`; the Pi checkout at `6a47f1dd…` is a different
+tree and is no longer allowed to masquerade as the built source (`git -C` walked up to it until
+`77f71a5`).
+
+### The four gates docs/ADR-002.1/00_CODEX_START.md:58 asks for
+
+| Gate | Status | What was actually run |
+|---|---|---|
+| Parameter hot update on real hardware | PASS | `tools/adr0021_acceptance.py` walked every `experiment_writable` entry: **19/19** prepare→apply→read-back→restore, binary digest unchanged across the set, zero compiles, zero redeploys; `yaw.host_current_limit_a` written as `protected_read_only` and refused **server-side**. Then a real campaign: 16 candidates, 32 applied writes, 16 restores accepted, `refused: []`, `blocked: []` |
+| Apply failure blocks the trial | PASS | The gate now stands in front of both trial and `param_apply`; measured refusal on the station: `param_apply refuses: manual_commissioning_off+mode_not_manual`, snapshot stayed `revision=0`, candidate left staged. A refused restore is `BLOCKED_restore_failed_*`, not a shrug |
+| Experiment freeze | PASS | `adr0021_plan.py` refuses under-sized/oversized grids, missing `coarse_count_reason`, `confirm.repeats < 2`, stop rules without bounds, and names D7 when a dimension may not move; `--check` refuses post-freeze edits and inventory/binary drift. Binding carries four legs: source rev, binary digest, inventory digest, config/hardware profile |
+| Reversal and prescribed-pose re-verification | **NOT_RUN** | Not attempted yet; no cell in this table may be read as physical qualification until it is |
+
+### What this section deliberately does not claim
+
+- The campaign's levels were the **sample grid** (`manifests/campaign.example.json`), authorised by the
+  owner's `跑！` without levels. It is mechanism acceptance, **not** a tuning result: no scorer took part,
+  so no candidate may be described as better, and `metrics` is absent rather than zero.
+- `RUN`, controlled teardown, complete-log and `SCORE` from `00_CODEX_START.md:46` are **not yet performed
+  by the runner**; what ran was parameter exchange, read-back, trace identity and restore.
+- Trace identity is per-record and measured: 16/16 trials, 256 records per window, 66 carrying the
+  candidate tag, contiguous from announcement to newest. The check is contiguity to the newest record,
+  not "every row tagged" — the window is rolling and its head predates the candidate.
+- Two host-side python tests remain red and are named, not hidden: `test_install_station` validates
+  `User=eamars` against the local user database (correct on the Pi, cannot pass as `dsh`); the
+  `test_station_launcher` log-path assertion is still open.
+
