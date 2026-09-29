@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-30",
+  "artifact": "ADR-002.2 development package",
+  "mode": "OFFLINE_REFERENCE_VALIDATION_ONLY",
+  "unit_tests_run": 84,
+  "unit_tests_passed": 84,
+  "unit_failures": 0,
+  "unit_errors": 0,
+  "schemas_validated": [
+    "evidence.schema.json",
+    "profile.schema.json",
+    "stage2_asset.schema.json"
+  ],
+  "schema_examples_validated": 3,
+  "synthetic_cli_passed": true,
+  "exported_synthetic_evidence_correctly_rejected": [
+    "3a_NOT_PHYSICAL_EXECUTION",
+    "3b_NOT_PHYSICAL_EXECUTION"
+  ],
+  "mandatory_requirements_count": 27,
+  "firmware_requirements_execution_status": "NOT_RUN",
+  "python": "3.13.5",
+  "dependencies": {
+    "numpy": "2.3.5",
+    "scipy": "1.17.0",
+    "jsonschema": "4.26.0"
+  },
+  "source_commit_pinned": false,
+  "local_bad742d_audited": false,
+  "entire_repository_cloned": false,
+  "firmware_integrated": false,
+  "cxx_compiled": false,
+  "pi_connected": false,
+  "motor_commands_sent": false,
+  "physical_model_identified": false,
+  "3a_hardware_status": "NOT_RUN",
+  "3b_production_status": "NOT_RUN",
+  "actual_reference_scope": [
+    "constant-load integral regression initializer",
+    "analytic PI formula",
+    "simplified local ZOH discrete pole check",
+    "identity/reuse decision",
+    "apply/readback start gate",
+    "dual physical-evidence metadata contract",
+    "single full-scope completion contract"
+  ],
+  "implementation_required_by_codex_not_optional": [
+    "shared C++ control core",
+    "commissiond and real motor/sensor adapters",
+    "verified pitch current capability",
+    "IMU/time/current calibration",
+    "spatial model family and output-error fit",
+    "information-based signal selection",
+    "full causal observer/robust synthesis",
+    "production path integration",
+    "live adaptation and complete 3a/3b matrix"
+  ]
+}

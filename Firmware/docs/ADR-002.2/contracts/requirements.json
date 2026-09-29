@@ -1,0 +1,195 @@
+{
+  "adr": "ADR-002.2",
+  "done_rule": "ALL_MANDATORY_AND_EVERY_CANDIDATE_DUAL_VALIDATED",
+  "requirements": [
+    {
+      "id": "S1-01",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "独立commissiond与production共用同一控制核心/构建定义"
+    },
+    {
+      "id": "S1-02",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "电流等效模型、位置方向表、起动区间、时延和不确定性实现"
+    },
+    {
+      "id": "S1-03",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "有约束初始化、输出误差拟合、信息量检查与独立留出验证"
+    },
+    {
+      "id": "S1-04",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "数学前馈/离散反馈求解，无PID实机搜索"
+    },
+    {
+      "id": "S1-05",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "两轴电流模式、反馈/单位/限流/承重/停止能力验证"
+    },
+    {
+      "id": "S1-06",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "encoder/gyro/accel的坐标、时间、噪声和有效频带标定"
+    },
+    {
+      "id": "S1-07",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "全量runtime registry与事务/读回，数值变更零编译"
+    },
+    {
+      "id": "S1-08",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "资源互斥owner、丢失租约/进程异常及无重复CAN输出"
+    },
+    {
+      "id": "S2-01",
+      "stage": "2",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "实际输入及完整传感器原始流覆盖和可追溯性"
+    },
+    {
+      "id": "S2-02",
+      "stage": "2",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "角度/方向/姿态模型族及起动/运行辨识数据"
+    },
+    {
+      "id": "S2-03",
+      "stage": "2",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "原始数据、模型族和工况参数的身份化存储与复用"
+    },
+    {
+      "id": "S2-04",
+      "stage": "2",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "固定规则的信息选择器、有限定向补测和变化检测"
+    },
+    {
+      "id": "S2-05",
+      "stage": "2",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "模型独立数据预测合格且无训练/验证泄漏"
+    },
+    {
+      "id": "S3A-01",
+      "stage": "3a",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "两轴独立程序真实闭环、质量/响应/停止矩阵通过"
+    },
+    {
+      "id": "S3A-02",
+      "stage": "3a",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "双轴耦合、完整IMU反馈、热与供电资格"
+    },
+    {
+      "id": "S3B-01",
+      "stage": "3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "真实production完整reference到TX链的确定性矩阵"
+    },
+    {
+      "id": "S3B-02",
+      "stage": "3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "正常服务负载、归零/模式/启动/停止及新配置读回"
+    },
+    {
+      "id": "S3B-03",
+      "stage": "3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "同snapshot/core/observer双环境一致性与绝对性能"
+    },
+    {
+      "id": "ADAPT-01",
+      "stage": "3a+3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "增加payload自动更新并双验证，无人工调参"
+    },
+    {
+      "id": "ADAPT-02",
+      "stage": "3a+3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "减少payload自动更新并双验证，无人工调参"
+    },
+    {
+      "id": "ADAPT-03",
+      "stage": "3a+3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "增加摩擦自动更新并双验证，无人工调参"
+    },
+    {
+      "id": "ADAPT-04",
+      "stage": "3a+3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "减少摩擦自动更新并双验证，无人工调参"
+    },
+    {
+      "id": "ADAPT-05",
+      "stage": "3a+3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "返回旧工况的条件复用与双环境证据"
+    },
+    {
+      "id": "ADAPT-06",
+      "stage": "3a+3b",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "未声明变化检测、全过渡记录与重新双验证"
+    },
+    {
+      "id": "REL-01",
+      "stage": "all",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "旧证书/参数不符/只3a/假3b/采集失败不能晋升"
+    },
+    {
+      "id": "REL-02",
+      "stage": "all",
+      "mandatory": true,
+      "evidence_kind": "physical",
+      "description": "原子晋升与当前工况适用的回退/停止"
+    },
+    {
+      "id": "REL-03",
+      "stage": "all",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "需求矩阵全量证据，无MVP/未来版本删项"
+    }
+  ]
+}

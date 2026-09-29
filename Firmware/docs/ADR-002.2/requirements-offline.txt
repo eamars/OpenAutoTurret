@@ -1,0 +1,4 @@
+# Isolated reference-tool environment only; do not replace project dependency locks.
+numpy==2.3.5
+scipy==1.17.0
+jsonschema==4.26.0

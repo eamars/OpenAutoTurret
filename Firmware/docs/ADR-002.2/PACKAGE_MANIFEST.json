@@ -1,0 +1,34 @@
+{
+  "adr": "ADR-002.2",
+  "date": "2026-09-30",
+  "artifact_kind": "development_contract",
+  "delivery_scope": "single_complete_scope",
+  "stages": [
+    "1_model",
+    "2_actual_feedback",
+    "3a_standalone_hardware",
+    "3b_production_hardware"
+  ],
+  "base_ref": "ADR-001",
+  "base_commit": null,
+  "reported_commit_not_audited": "bad742dddba6a95d3d055e43998adfd0506b0a6e",
+  "physical_hardware_accessed": false,
+  "firmware_integrated": false,
+  "firmware_compiled": false,
+  "hardware_qualification": "NOT_RUN",
+  "source_reading": "selective_unpinned_public_paths",
+  "prior_artifacts": [
+    {
+      "name": "OpenAutoTurret_ADR-002_Development.md",
+      "sha256": "a690096d1a8ba3e0e852beafea6f4b5808399166c394ec0d79ffeb2b8c9b8fbc"
+    },
+    {
+      "name": "OpenAutoTurret_ADR-002.1_Development.md",
+      "sha256": "ddc6eda4324cca1440962176f126cf9f99dddb4c7734961fd3933269aa48b923"
+    },
+    {
+      "name": "Pasted text(20260927-031718).txt",
+      "sha256": "63d33dce466dd54fa8c7b77cd8381268bd45197d98850f7e4a7b5d009cb814a3"
+    }
+  ]
+}

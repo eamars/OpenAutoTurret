@@ -1,0 +1,32 @@
+{
+  "mode": "SYNTHETIC_OFFLINE_ONLY",
+  "hardware_accessed": false,
+  "plant_values_are": "invented_mathematical_example_not_real_motor_gains",
+  "truth": {
+    "a": 0.08,
+    "b": 0.045,
+    "load_positive": 0.12,
+    "load_negative": -0.07
+  },
+  "fit": {
+    "a": 0.07999955329362421,
+    "b": 0.044999922277383496,
+    "load_positive": 0.11999998791200356,
+    "load_negative": -0.06999999215194153,
+    "rms_integral_residual": 3.217884630065244e-08,
+    "normalized_condition": 4.517332667736203,
+    "rows": 148
+  },
+  "ideal_pi_example": {
+    "kp_A_s_per_rad": 0.7549956106588586,
+    "ki_A_per_rad": 1.9999888323406052,
+    "omega_n_rad_s": 5.0,
+    "zeta": 1.0
+  },
+  "simplified_local_discrete_spectral_radius": 0.9752037203579066,
+  "gate_3a_only_rejection_reasons": [
+    "3b_REQUIRES_EXACTLY_ONE_CERTIFICATE"
+  ],
+  "synthetic_metadata_pair_reasons": [],
+  "physical_attestation": "not provided; metadata validator cannot establish physical truth"
+}

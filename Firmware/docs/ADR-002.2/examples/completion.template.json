@@ -1,0 +1,167 @@
+{
+  "status": "NOT_RUN",
+  "requirements": [
+    {
+      "id": "S1-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-04",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-05",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-06",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-07",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-08",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-04",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-05",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S3A-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S3A-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S3B-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S3B-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S3B-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-04",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-05",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-06",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "REL-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "REL-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "REL-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    }
+  ]
+}

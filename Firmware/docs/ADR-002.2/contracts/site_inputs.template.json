@@ -1,0 +1,44 @@
+{
+  "state": "TEMPLATE_NOT_EXECUTABLE",
+  "physical_execution_authorized": false,
+  "base_commit": null,
+  "deployed_binary_hash": null,
+  "hardware_signature": null,
+  "measurement_signature": null,
+  "calibration_window_authorization": null,
+  "promotion_authorization": null,
+  "yaw": {
+    "actual_mode": null,
+    "current_cap_A": null,
+    "continuous_qualification": null,
+    "angle_domain_rad": null,
+    "actual_rx_hz": null,
+    "valid_current_feedback_band_hz": null,
+    "temperature_valid": false
+  },
+  "pitch": {
+    "actual_mode": null,
+    "current_mode_capability_verified": false,
+    "current_cap_A": null,
+    "current_mode_stop_verified": false,
+    "supported_handover_verified": false,
+    "angle_domain_rad": null
+  },
+  "imu": {
+    "mount_calibration_hash": null,
+    "clock_alignment_hash": null,
+    "gyro_bias": null,
+    "lever_arm_m": null,
+    "valid_frequency_band_hz": null
+  },
+  "operating_conditions": {
+    "BASELINE": null,
+    "PAYLOAD_UP": null,
+    "PAYLOAD_DOWN": null,
+    "FRICTION_UP": null,
+    "FRICTION_DOWN": null,
+    "RETURN_BASELINE": null,
+    "UNDECLARED_CHANGE": null
+  },
+  "note": "Unknown is not zero. This template is not permission to move, change mode, or expand a boundary."
+}
