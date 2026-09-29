@@ -635,11 +635,12 @@
   ],
   "generated_from": {
     "binary": "build/control/controld",
-    "binary_sha256": "56998fc2592cc43c61d0f75ad8792cd6b07c31844dd5c868116e513e58c19ec5",
+    "binary_sha256": "c35fb18c163301d25bf6b63b5ce95c370cd796f01becab2a864b62099185d7ad",
     "config": "config/turret_mixed.yaml",
-    "generated_at_utc": "2026-09-29T15:36:10Z",
+    "generated_at_utc": "2026-09-29T16:05:01Z",
     "hardware_profile": "config/mixed_hardware.yaml",
-    "source_rev": "17864cb463bf4a48746da901fa3fcc13a88ef732"
+    "source_rev": "4c0b047164eb720d98b857142b6ba84c5fc4d582",
+    "source_rev_how": "read from /workspace/general_purpose/repos/OpenAutoTurret/.git"
   },
   "schema": 1
 }

@@ -47,6 +47,24 @@ PSEUDO_RULES = {"campaign": "not a config struct: the campaign knobs live in cam
 COVERED_STRUCTS = {"gm6020_friction.hpp": {"FrictionConfig"}}
 
 
+def source_revision(root: str) -> tuple:
+    """Which source tree produced this binary — or an honest empty string.
+
+    `git -C <release-dir> rev-parse HEAD` walks *up* the tree when the directory has no checkout of its
+    own, and on the station that finds the Pi's long-dirty working copy, whose HEAD has nothing to do
+    with the release being measured: the release reported `source_rev=6a47f1d…` for a build made from
+    `4c0b047…`. A binding leg that quietly describes someone else's tree is worse than a missing one,
+    because it reads like evidence. Naming the git directory exactly means "unknown" is what we get
+    when it is unknown.
+    """
+    outcome = subprocess.run(["git", "--git-dir", os.path.join(root, ".git"), "rev-parse", "HEAD"],
+                             capture_output=True, text=True)
+    if outcome.returncode != 0:
+        return "", ("no git checkout at " + root + ": the digest still binds the binary, the revision "
+                    "is unknown here rather than borrowed from a parent directory")
+    return outcome.stdout.strip(), "read from " + os.path.join(root, ".git")
+
+
 def sha256(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -206,8 +224,8 @@ def generate(binary: str, config_path: str, out_path: str) -> dict:
         **generated,
         "binary": os.path.relpath(binary, FIRMWARE),
         "binary_sha256": sha256(binary),
-        "source_rev": subprocess.run(["git", "-C", os.path.dirname(FIRMWARE), "rev-parse", "HEAD"],
-                                     capture_output=True, text=True).stdout.strip(),
+        "source_rev": source_revision(os.path.dirname(FIRMWARE))[0],
+        "source_rev_how": source_revision(os.path.dirname(FIRMWARE))[1],
         "generated_at_utc": datetime.datetime.now(datetime.timezone.utc)
                             .strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
