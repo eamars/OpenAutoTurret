@@ -11,6 +11,7 @@ the table is what happened rather than what was intended. Currents convert with 
 """
 
 import json
+import re
 import os
 import sys
 import time
@@ -24,6 +25,18 @@ import adr0021_acceptance as acc  # noqa: E402
 AMPS_PER_RAW = 3.0 / 16384.0
 SOCKET = os.environ.get("ADR0021_SOCKET", "/tmp/ota-stack-1000/control-web.sock")
 BASELINE = os.environ.get("ADR0021_BASELINE", "/tmp/adr/baseline.json")
+
+
+def exchange(station, command, arg=""):
+    """Send, then wait for the ack that follows it — the campaign runner's rule, learned the hard way.
+
+    `ok/verdict=submitted` on the first frame is a receipt, not a verdict. The station's answer arrives as
+    the ack after the command was queued, and the sequence counter must be captured before sending, or the
+    ack looks like it never arrived. The same three steps as `Runner.exchange` (adr0021_run.py:100-110).
+    """
+    before = station.seq()
+    station.command(command, arg)
+    return station.ack(before)
 
 
 def scaled(base, kp_factor, ki_factor):
@@ -66,7 +79,9 @@ def moves(station, degrees=2):
     result = {}
     for label, sign in (("forward", "+"), ("reverse", "-")):
         before = yaw_field(station, "encoder_raw")
-        reply = station.command("manual_step", "yaw" + sign + str(degrees))
+        # The step goes through the same exchange as everything else: reading its receipt instead of its
+        # ack is what made four accepted prepares look like four refusals earlier today.
+        reply = exchange(station, "manual_step", "yaw" + sign + str(degrees))
         time.sleep(1.8)
         after = yaw_field(station, "encoder_raw")
         delta = (after[-1] - before[-1]) if before and after else None
@@ -74,7 +89,7 @@ def moves(station, degrees=2):
                          "error": str(reply.get("error") or reply.get("reason") or "")[:90],
                          "delta_counts": delta}
         back = "yaw-" if sign == "+" else "yaw+"
-        station.command("manual_step", back + str(degrees))
+        exchange(station, "manual_step", back + str(degrees))
         time.sleep(1.2)
     forward, reverse = result["forward"]["delta_counts"], result["reverse"]["delta_counts"]
     result["verdict"] = "MOVES" if (forward and reverse and (forward > 0) != (reverse > 0)
@@ -111,8 +126,8 @@ def main():
     for name, trial in candidates:
         # The campaign runner announces which trial this is before preparing it, and the station's gate
         # expects that order; a refusal is printed whole rather than as one field I hope is the reason.
-        station.command("param_context", f"moves-check|{name}"[:39])
-        prepared = station.command("param_prepare", trial)
+        exchange(station, "param_context", f"moves-check|{name}"[:39])
+        prepared = exchange(station, "param_prepare", trial)
         request = json.dumps(prepared)
         at = request.find("request_id=")
         # `ok/verdict=submitted` is an ack, not an acceptance: the outcome arrives in a later frame, which
@@ -121,8 +136,11 @@ def main():
         if not prepared.get("accepted") or at < 0:
             print(f"{name}: refused at prepare — {json.dumps(prepared)[:200]}")
             continue
-        request_id = request[at + 11:].strip().strip('"').strip(",").split('"')[0]
-        applied = station.command("param_apply", request_id)
+        # Cut at the first space: the reason carries more than the id after it
+        # (`request_id=prepp-1 expected_hash=… revision_after_apply=1`), and taking the tail whole made the
+        # station correctly answer that the prepared set does not exist. Same regex the runner uses.
+        request_id = re.search(r"request_id=(\S+)", str(prepared.get("reason", ""))).group(1)
+        applied = exchange(station, "param_apply", request_id)
         if not applied.get("accepted"):
             print(f"{name}: refused at apply — {str(applied.get('reason'))[:110]}")
             continue
@@ -133,7 +151,8 @@ def main():
         print(f"{name}: sent {trial} | at-rest {hold.get('at_rest_current_a_p95')} A of "
               f"{hold.get('cap_a')} A ({hold.get('fraction_of_cap')} of cap) | {motion['verdict']} "
               f"fwd={motion['forward']['delta_counts']} rev={motion['reverse']['delta_counts']}")
-    station.command("param_restore")
+    restored = exchange(station, "param_restore")
+    print("restore judged: " + ("accepted" if restored.get("accepted") else json.dumps(restored)[:180]))
     print("baseline restored")
     out = os.environ.get("ADR0021_MOVES_OUT", "")
     if out:
