@@ -228,3 +228,20 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 **正解（不是 workaround）**：pad 必须**双向走完整回路**——编码时算出来，解码时按同一条映射还原
 （`leg_y = tensor_y − pad`，再除以腿高；x 除以 640）。因此 `pad` 不能是 `infer()` 的局部变量，
 要成为解码映射的一部分。**先别动跟踪门限**：在坐标正确之前，任何"把 `new_track` 调低"都是拿参数盖 bug。
+
+### 屏上没有框的第二环（09-30 凌晨现读）：TrackSet 声明的是推理腿，不是发布画面
+
+pad 修完之后（release `eef257b16afe`）仍然 `tracks=[]`、`track_list_age_ms=-1`。逐环节现读：
+
+| 环节 | 读数 |
+|---|---|
+| 网络 | `detections_raw = detections_emitted`（每帧都有框）、`detections_pad_dropped = 0` |
+| 跟踪 | `run/perception/track_set.json`：`detections_in 4068`、`tracks_created 18`、**`tracks_confirmed 11`**、`tracks 2` ⇒ **跟踪器在工作** |
+| 发布 | 同一份文件顶层 **`stream_width/stream_height = 640 × 360`** |
+| controld | `vision: … age 2 ms`（视觉在收）、`tracking=off`（HOLD 下不消费）、**`track_list_age_ms = -1`**（`last_set_receive_ns_` 从未赋值 ⇒ **一份 TrackSet 都没进环**） |
+
+**结论**：交换被几何校验挡在环外——TrackSet 声明了几何，而 controld 按**它对外发布的那幅 1920×1080** 核对。**正解**：TrackSet 必须声明**发布画面的几何**；推理腿的几何是**推理侧的事实**，已经由 `inference.stream` 单独发布，不该冒充画面几何。
+归一化坐标可以从腿直接搬到画面上，**前提是 lores 腿是同一光学的缩放而非裁剪**（16:9 对 16:9）；**这个前提由“框是否落在他身上”当场证伪/证实**，不是靠我说。
+
+**动手位置**：`dset.stream_width/stream_height` 来自 `configure_stream(腿)`（`perception/pipeline.py:469` 把它们写进发布）；
+visiond 同时知道 `stream`（main）与 `lores`，所以由它把**发布几何**交给发布路径。
