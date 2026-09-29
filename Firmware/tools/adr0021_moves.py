@@ -74,8 +74,15 @@ def hold_reading(station):
             "omega_max_dps": round(max(speeds), 4) if speeds else None}
 
 
-def moves(station, degrees=2):
+SANCTIONED_STEP_DEGREES = (0.5, 1, 5)   # the station's own words: "step size must be one of 0.5, 1, or 5"
+
+
+def moves(station, degrees=1):
     """Command a step each way and read the encoder, comparing the last reading before with the last after."""
+    if degrees not in SANCTIONED_STEP_DEGREES:
+        raise SystemExit(f"BLOCKED_step_size_not_sanctioned: {degrees}° is not one of "
+                         + ", ".join(str(v) for v in SANCTIONED_STEP_DEGREES)
+                         + "; an unsanctioned command is refused, and a refused command measures nothing")
     result = {}
     for label, sign in (("forward", "+"), ("reverse", "-")):
         before = yaw_field(station, "encoder_raw")
@@ -146,7 +153,7 @@ def main():
             continue
         time.sleep(2.0)
         hold = hold_reading(station)
-        motion = moves(station)
+        motion = moves(station, degrees=1)
         rows.append({"candidate": name, "string": trial, "hold": hold, "motion": motion})
         print(f"{name}: sent {trial} | at-rest {hold.get('at_rest_current_a_p95')} A of "
               f"{hold.get('cap_a')} A ({hold.get('fraction_of_cap')} of cap) | {motion['verdict']} "
