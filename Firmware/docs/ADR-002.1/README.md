@@ -61,6 +61,14 @@ coarse 固定 16（要改必须写 `coarse_count_reason`）、refine ≤8 且必
 锁文件把 `design_sha256` + 清单 SHA-256 + 二进制 SHA + source_rev 绑在一起；`--check` 会拒绝事后被改过的设计与已经漂移的清单/二进制。
 样板见 `manifests/campaign.example.json`（levels 是现网 boot 值的乘子）。**runner 跑起来不决定任何一轮**——D6。
 
+## 已交付：本地 runner（`Firmware/tools/adr0021_run.py`）
+
+Slice B 的跑腿那个：读 `campaign.lock.json`、**先看机器还是不是设计时那台**（设计哈希 / 清单 SHA / 二进制 SHA / 冻结 scorer 的 SHA，任一对不上就 `BLOCKED_*` 并且**一条命令都不发**），
+再按锁里的顺序跑候选：`prepare→apply→读回→param_snapshot 取身份→恢复基线`，每个候选五条命令，**恢复不是可选项**。
+`stop.max_trials` 与 `no_improvement_rounds` 写在设计里，runner 照它停（`stopped_by: max_trials | design_exhausted`）；
+**没给 scorer 就记 `metrics: null` + 原因，绝不把没打分的试验说成改进**。归档：`--out/<campaign_id>/<ts>/manifest.json`。
+9 条离线测试（假站）钉住这些；真站上等 levels 定下来才开跑。
+
 ## 离线验证
 
 ```bash
