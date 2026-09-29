@@ -76,8 +76,12 @@ def hold_reading(station):
 
 SANCTIONED_STEP_DEGREES = (0.5, 1, 5)   # the station's own words: "step size must be one of 0.5, 1, or 5"
 
+# The yaw angle count is a one-turn 13-bit value (references/gm6020/GM6020_AI_Reference.md:72), so the
+# conversion is the drive's own arithmetic rather than a guess: 8192 counts == 360 degrees.
+COUNTS_PER_DEGREE = 8192.0 / 360.0
 
-def moves(station, degrees=1):
+
+def moves(station, degrees=5):
     """Command a step each way and read the encoder, comparing the last reading before with the last after."""
     if degrees not in SANCTIONED_STEP_DEGREES:
         raise SystemExit(f"BLOCKED_step_size_not_sanctioned: {degrees}° is not one of "
@@ -94,7 +98,8 @@ def moves(station, degrees=1):
         delta = (after[-1] - before[-1]) if before and after else None
         result[label] = {"accepted": bool(reply.get("accepted")),
                          "error": str(reply.get("error") or reply.get("reason") or "")[:90],
-                         "delta_counts": delta}
+                         "delta_counts": delta,
+                         "delta_degrees": None if delta is None else round(delta / COUNTS_PER_DEGREE, 3)}
         back = "yaw-" if sign == "+" else "yaw+"
         exchange(station, "manual_step", back + str(degrees))
         time.sleep(1.2)
@@ -157,7 +162,7 @@ def main():
         rows.append({"candidate": name, "string": trial, "hold": hold, "motion": motion})
         print(f"{name}: sent {trial} | at-rest {hold.get('at_rest_current_a_p95')} A of "
               f"{hold.get('cap_a')} A ({hold.get('fraction_of_cap')} of cap) | {motion['verdict']} "
-              f"fwd={motion['forward']['delta_counts']} rev={motion['reverse']['delta_counts']}")
+              f"fwd={motion['forward'].get('delta_degrees')}deg rev={motion['reverse'].get('delta_degrees')}deg")
     restored = exchange(station, "param_restore")
     print("restore judged: " + ("accepted" if restored.get("accepted") else json.dumps(restored)[:180]))
     print("baseline restored")
