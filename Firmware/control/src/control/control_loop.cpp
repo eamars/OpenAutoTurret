@@ -4893,6 +4893,28 @@ void ControlLoop::execute_command(const std::string& name,
       ack_command(name,false,"request_id '"+arg+"' is not the prepared set ("+param_staged_id_+
                              "); refusing to apply a candidate under someone else's id"); return;
     }
+    // Staging a candidate costs a round trip and can be done in any state; writing it may not. The
+    // trial command has always demanded a stationary, commissioned, Manual, Allow, Hold machine —
+    // measured on the station 2026-09-30, param_apply accepted 16 writes while the stack was running
+    // AUTO_ROAM, because that gate lived only in the trial branch. A current-loop gain swapped under a
+    // tracking controller is not a tuning result, it is two controllers disagreeing at speed, so the
+    // same gate now stands in front of both paths, and it names what it refused.
+    {
+      std::string missing;
+      collect_missing(missing, "manual_commissioning_off", cfg_.manual_commissioning,
+                      "service_speed_control_off", cfg_.service_speed_control,
+                      "position_not_ready", position_ready(), "phase_not_hold", phase_==Phase::Hold,
+                      "mode_not_manual", mode_mgr_.mode()==OperatingMode::Manual,
+                      "safety_not_allow", last_decision_.action==SafetyAction::Allow,
+                      "manual_lease_held", !manual_out_.lease_active,
+                      "response_probe_window_open", !response_probe_until_ns_,
+                      "pitch_gain_update_pending", !pitch_gain_trial_pending_);
+      if (!missing.empty()) {
+        ack_command(name,false,"param_apply refuses: "+missing+"; the staged set stays staged, so "
+                               "arming the machine does not require re-sending the candidate");
+        return;
+      }
+    }
     const MotorBackend::YawTrialSettings settings = param_staged_settings_;
     param_staged_id_.clear();
     param_exchange_yaw(name, settings, arg);
