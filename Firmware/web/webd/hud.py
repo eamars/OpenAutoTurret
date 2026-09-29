@@ -1265,6 +1265,7 @@ async function pollHealth() {
     // camera and let go), ask again instead of letting a frozen frame keep looking like a live one.
     const v = await (await fetch("/api/video/state")).json();
     if (v.running === false) await ensureVideo();
+    if (window.otaPipTick) await window.otaPipTick();   // the PIP's own measured rate rides along
   } catch (e) { transportOk = false; if (lastTelemetry) render(lastTelemetry); }
 }
 
@@ -1682,11 +1683,16 @@ HUD_HTML = """<!DOCTYPE html>
     #pip { position: absolute; right: 14px; bottom: 14px; width: 280px; display: none;
            border: 1px solid #444; background: #000; z-index: 40; }
     #pip.on { display: block; }
+    #pipopen { position: absolute; right: 14px; bottom: 14px; z-index: 41; font-size: 10px;
+               padding: 3px 7px; background: #141414; color: #8cf; border: 1px solid #444;
+               cursor: pointer; }
+    #pip.on ~ #pipopen { display: none; }
     #pip img { width: 100%; display: block; }
     #pip .bar { display: flex; justify-content: space-between; font-size: 10px; color: #bbb;
                 background: #141414; padding: 2px 5px; }
     #pip button { background: none; border: 0; color: #8cf; cursor: pointer; font-size: 10px; }
   </style>
+  <button id="pipopen" type="button" title="secondary stream (wide/detail swap)">PIP</button>
   <div id="pip">
     <img id="pipimg" alt="secondary preview">
     <div class="bar"><span id="piplabel">PIP</span><span id="pipfps">rate n/m</span>
@@ -1705,11 +1711,13 @@ HUD_HTML = """<!DOCTYPE html>
       el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
       if (j.ok) el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
       el("pip").classList.add("on");
+      el("pipopen").style.display = "none";
       el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
       open_ = true;
     }
     function closePip() {
       el("pip").classList.remove("on");
+      el("pipopen").style.display = "block";
       el("pipimg").src = "";
       fetch("/api/video/stop?camera=" + pipRole, { method: "POST" });
       open_ = false;
@@ -1722,6 +1730,18 @@ HUD_HTML = """<!DOCTYPE html>
         openPip();
       }
     }
+    el("pipopen").addEventListener("click", openPip);
+    // The rate is measured by visiond and served per stream; the HUD already polls every second,
+    // so this rides that poll rather than opening a second loop for one number. "rate n/m" is kept
+    // when nobody has measured a window yet -- zero is a measurement, and this is not one.
+    window.otaPipTick = async function () {
+      if (!open_) return;
+      try {
+        const v = await (await fetch("/api/video/state?camera=" + pipRole)).json();
+        el("pipfps").textContent = (typeof v.delivered_fps === "number")
+          ? (v.delivered_fps.toFixed(1) + " fps") : "rate n/m";
+      } catch (e) { /* the poll retries; a dead number is not worth a stack trace */ }
+    };
     el("pipswap").addEventListener("click", swap);
     el("pipclose").addEventListener("click", closePip);
     // The HUD already has a preview on/off control; the PIP rides along with it rather than

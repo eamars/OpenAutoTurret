@@ -76,3 +76,42 @@ HUD：**PIP 左上角、默认隐藏**，显示后可 wide/detail 互换，**两
 
 **上线时要量的两个数**(唯一需要站点的部分):两路各自的**实测** delivered FPS 仍 ≈30/30,
 以及仲裁器发布的 `fairness`(应 ≥0.9)。其余全部可用 `MockAdapter` 在无设备上验证。
+
+---
+
+## UI 待办（09-29 傍晚，compact 之前落在这里）
+
+**主人规则：web UI 没更新 = 没改.** 所以下面每一条的验收都写成"屏幕上看得见什么",不是"提交过没有".
+
+### 已核实（从 `http://192.168.2.103:8080` 取，不是从 git 推）
+- webd 跑在新 release `402b516feff4.J4kmfn/Firmware`；根路径 HUD 里 `id="pip"` 与 `function imuLabel` 都在.
+- `/api/video?camera=detail` 起流 ok、一帧 30,307 字节；未知角色 400 并列出 `wide, detail`；
+  `/api/video/state?camera=detail` 带实测 `delivered_fps`.
+- `/api/state` 的 `imu`：`present:true / rate 215.7 / world_elevation_deg:null / basis:"…no mount calibration…"`.
+
+### 缺陷 A（可见）**右上角 `IMU ABSENT` 是写死的**
+`web/webd/hud.py:1129` → `chip("IMU","amber","ABSENT")` 是**无条件常量**.四态 `imuLabel()`(hud.py:384) 只喂了
+DIAG 抽屉那一行.** ⇒ 改成用 `imuLabel(t.imu)` 算出来.
+
+### 缺陷 B（根因）**叠加层只在一个出口**
+`web/webd/app.py:267` 的叠加层（`imu` 合并、`video_streams`、`camera_id`）**只作用于 `/api/state`**；
+喂 HUD 的是 `/ws` 广播（`app.py:90`、`app.py:103`），它把 controld 载荷**原样**发出 ⇒ 页面看不见 `video_streams`.
+** ⇒ 叠加层收进**产生遥测帧的那一处**（`/ws` 与 `/api/state` 共用同一产物）.一条出口，两个消费者.
+
+### 已写好、**故意未部署**的那笔（`git` 里：见提交 "PIP button"）
+PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已有**的那条轮询（`window.otaPipTick`，
+`delivered_fps` 缺失时显示 `rate n/m`，**不显示 0**）；删掉一条永不生效的兄弟选择器规则（`~` 要求 DOM 顺序，我写反了）。
+
+### 待主人定点（他给了截图，别再覆盖元素）
+图上已确认的占据区：左上 `MANUAL/HOLD/Person`；右上芯片行；视频内左中 `HOLD TO AIM` 十字；视频内右缘 pitch 标尺；
+视频内右下 `PITCH -0.1°`；左下 `FIELD OF REGARD`＋`SAFE ENVELOPE`；底中 `Manual/Hold`、`Auto`；右下停靠栏
+`TARGETS MODE MANUAL DIAG MENU`；最底状态条.**"右下角"是三层叠着的地方，不能用.**
+- **A（我推荐）**：顶部右侧黑边带（芯片行下、yaw 刻度右，约 x900–1250 / y100–340）——压黑边，不盖画面不碰控件.
+- **B**：底部黑带（`Auto` 与停靠栏之间，约 x640–1000 / y1150–1300）——不压画面，但挤.
+
+### 部署与验收（定完角一次做完）
+1. `./Firmware/tools/station_address.sh deploy -- --prebuilt --activate --ready-timeout 600`
+   （**`--prebuilt` 不能漏**：漏了远端会在 Pi 上原生编 → 退出码 2）
+2. 起来之后**把模式放回 MANUAL**（主人有意 park；`/api/command` 的载荷形状是 `{"command": …}`）.
+3. 屏幕上要看见：芯片 `FRESH 216HZ/A3`（或未配置 / 无样本 / `STALE <ms>`）；PIP 按钮在指定角上；点开才有请求；
+   PIP 上显示**这一路自己的**实测帧率；单摄部署下这些东西一个都不出现.
