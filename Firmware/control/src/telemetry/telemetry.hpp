@@ -624,6 +624,13 @@ struct ControlLogRecord {
   // The default says "idle" rather than "unknown": a record nobody has filled in is a record where
   // nothing is in flight, and an empty string here would read as "the firmware lost the state".
   std::array<char, 24> param_state = {{'i', 'd', 'l', 'e', '\0'}};
+  // Which campaign and which candidate this cycle belongs to, as one opaque tag the runner
+  // composed (campaign|candidate|trial). docs/02 §5 asks for campaign/trial/candidate identity in
+  // every record: a line that identifies only the parameters can be attributed to a design only
+  // by correlating timestamps against somebody's log, which is exactly the inference this ADR
+  // exists to remove. The firmware stores and repeats the tag without parsing it, so a campaign
+  // may name its candidates however it likes, and the archive carries the encoding.
+  std::array<char, 40> param_context = {{'n', 'o', 'n', 'e', '\0'}};
   double pi_kp[kAxisCount] = {NAN, NAN};
   double pi_ki[kAxisCount] = {NAN, NAN};
   double current_cap[kAxisCount] = {NAN, NAN};
@@ -991,6 +998,7 @@ class Telemetry {
           << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
           << ",\"param_revision\":" << r.param_revision
           << ",\"param_state\":\"" << r.param_state.data() << "\" "
+          << ",\"param_context\":\"" << r.param_context.data() << "\"" 
              ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\" "
              ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\" "
           << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)

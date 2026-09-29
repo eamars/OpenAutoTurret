@@ -174,7 +174,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
     return r; // Only an explicit Manual commissioning launch may apply it.
   }
   if (command == "param_prepare" || command == "param_apply" ||
-      command == "param_restore" || command == "param_snapshot") {
+      command == "param_restore" || command == "param_snapshot", "param_context") {
     // The parameter transaction's own surface: `param_prepare` stages one candidate and answers with
     // a request_id and the hash it expects to verify, `param_apply` performs the exchange under that
     // id, `param_snapshot` says which revision is verified right now. Shape only — whether a value is

@@ -808,6 +808,9 @@ class ControlLoop {
   double param_pitch_previous_kp_ = 0, param_pitch_previous_ki_ = 0;
   bool param_pitch_restoring_ = false;
   std::string param_staged_id_;
+  // The campaign identity repeated into every trace record: an opaque tag the runner owns
+  // (campaign|candidate|trial), stored verbatim so the firmware cannot misread somebody's naming.
+  std::string param_context_tag_ = "none";
   double response_probe_q_[2]{};
   double response_probe_omega_ = 2.5;
   double response_probe_position_gain_ = 3.0;

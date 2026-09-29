@@ -157,9 +157,10 @@ class ItObysWhatTheLockSays(unittest.TestCase):
 
     def test_each_trial_was_restored_so_the_next_one_starts_from_the_baseline(self):
         # prepare + apply + snapshot + prepare + apply per candidate: the restore is not optional.
-        self.assertEqual(5 * 8, self.station.received,
-                         "prepare, apply, snapshot, then prepare and apply again to return to the "
-                         "baseline: five commands per candidate, and the restore is not optional")
+        self.assertEqual(6 * 8, self.station.received,
+                         "context, prepare, apply, snapshot, then prepare and apply again to return to "
+                         "the baseline: six commands per candidate — the campaign says who it is before "
+                         "it writes anything, and the restore is not optional")
         self.assertEqual(self.station.revision, 8 * 2,
                          "one revision per applied candidate and per applied restore")
 

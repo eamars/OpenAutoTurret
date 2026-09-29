@@ -111,6 +111,10 @@ class Runner:
         baseline_string = ":".join(f"{v:.9g}" for v in self.baseline)
         record = {"candidate_id": candidate["candidate_id"], "stage": stage,
                   "params": candidate["params"], "applied_string": ":".join(f"{v:.9g}" for v in values)}
+        # Say which candidate this is, in the words the campaign archived it under, before anything is
+        # written: docs/02 §5 wants the identity inside every trace record, not inferred afterwards.
+        context = f"{self.manifest['campaign_id']}|{candidate['candidate_id']}|{stage}"[:39]
+        record["context"] = self.exchange("param_context", context)
         prepared = self.exchange("param_prepare", record["applied_string"])
         self.manifest["exchanges"] += 1
         import re

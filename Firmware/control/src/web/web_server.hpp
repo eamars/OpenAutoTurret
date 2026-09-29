@@ -726,6 +726,7 @@ class WebServer {
         out << ']';
         out << ",\"param_revision\":" << r.param_revision
             << ",\"param_state\":\"" << r.param_state.data() << "\""
+            << ",\"param_context\":\"" << r.param_context.data() << "\""
             << ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\""
             << ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\"";
         pair("vest",r.v_estimated);

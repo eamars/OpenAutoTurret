@@ -2476,6 +2476,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // though it had run under the verified set.
     rec.param_revision = param_tx_.revision();
     fill_tag(rec.param_applied_hash, param_tx_.applied_hash());
+    fill_tag(rec.param_context, param_context_tag_);
     fill_tag(rec.param_expected_hash, param_tx_.expected_hash());
     fill_tag(rec.param_state, param_tx_.state_name());
     const auto pitch_registers = backend_->pitch_register_diagnostics();
@@ -4881,6 +4882,25 @@ void ControlLoop::execute_command(const std::string& name,
         ? "previous set restored and verified; revision " + std::to_string(param_tx_.revision()) +
           " is now the verified set"
         : "restore wrote but did not verify: " + still + "; motion stays gated");
+    return;
+  }
+  if (name == "param_context") {
+    // A campaign names its own candidates; the firmware only insists the tag fits the fixed-width
+    // trace field and is printable, and refuses loudly rather than truncating a silently — an archive
+    // whose identity column was cut in half reads like evidence about the wrong candidate.
+    if (arg.empty()) { ack_command(name,false,"param_context takes the tag the campaign archived"); return; }
+    if (arg.size() > 39) {
+      ack_command(name,false,"param_context tag is "+std::to_string(arg.size())+
+                             " characters; the trace field holds 39, and truncating it would archive "
+                             "a half-identity rather than a refusal"); return; }
+    for (char c : arg) {
+      if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) {
+        ack_command(name,false,"param_context must be printable ASCII; the trace line is parsed, not read");
+        return;
+      }
+    }
+    param_context_tag_ = arg;
+    ack_command(name,true,"campaign context set to "+arg+"; every trace record from here says so");
     return;
   }
   if (name == "param_apply") {
