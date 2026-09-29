@@ -226,12 +226,16 @@ bool ControlLoop::start_hold(std::string& err) {
 }
 
 bool ControlLoop::start_parking(std::string& err) {
+  // This entry can run between ticks after the main loop exits. Passing its
+  // previous cycle clock to the mixed backend can reject a NEWER CAN frame
+  // before the freshness check below ever sees a finite position.
+  const auto stop_snapshot_clock = backend_->supports_continuous_yaw() ? now_monotonic_ns() : now_ns_;
   if (backend_->supports_continuous_yaw()) {
     // A shutdown request is also a stop request, even when later preconditions
     // refuse the park. Send bounded zero-speed commands immediately; no API
     // claim is made that the GM6020 is electrically disabled.
     backend_->command_velocity(AxisId::Yaw, 0.0);
-    const auto pitch_stop = backend_->snapshot(AxisId::Pitch, now_ns_);
+    const auto pitch_stop = backend_->snapshot(AxisId::Pitch, stop_snapshot_clock);
     if (pitch_stop.has_feedback && std::isfinite(pitch_stop.q_rad)) {
       if (pitch_stop.in_speed_mode)
         backend_->command_velocity(AxisId::Pitch, 0.0);
@@ -272,8 +276,8 @@ bool ControlLoop::start_parking(std::string& err) {
       err = "cannot stop/park: GM6020 temperature/fault status is unavailable and no reviewed runtime health policy is enabled";
       return false;
     }
-    const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
-    const auto yaw = backend_->snapshot(AxisId::Yaw, now_ns_);
+    const auto pitch = backend_->snapshot(AxisId::Pitch, stop_snapshot_clock);
+    const auto yaw = backend_->snapshot(AxisId::Yaw, stop_snapshot_clock);
     // CAN feedback can arrive after the last control step but before this
     // shutdown request. Judge both snapshots against a clock sample taken
     // after reading them, rather than the previous step's timestamp.
@@ -4475,6 +4479,45 @@ void ControlLoop::execute_command(const std::string& name,
       spdlog::info("search mode {} for the next start_tracking (§36)",
                    want ? "ARMED" : "disarmed");
     }
+    return;
+  }
+  if (name == "yaw_control_trial") {
+    if (!cfg_.manual_commissioning || !cfg_.service_speed_control || !position_ready() ||
+        phase_ != Phase::Hold || mode_mgr_.mode() != OperatingMode::Manual ||
+        last_decision_.action != SafetyAction::Allow || manual_out_.lease_active || response_probe_until_ns_) {
+      ack_command(name,false,"yaw tuning requires idle healthy Manual commissioning launch"); return;
+    }
+    for (int i=0;i<kAxisCount;++i) {
+      const auto sample=backend_->snapshot(static_cast<AxisId>(i),now_ns_);
+      if (!sample.has_feedback || !std::isfinite(sample.q_rad) ||
+          now_ns_-sample.rx_ns > 50'000'000 || std::abs(v_est_[i]) > .5*kDeg2Rad ||
+          std::abs(speed_servo_[i].velocity) > .2*kDeg2Rad) {
+        ack_command(name,false,"yaw tuning requires fresh stationary axes"); return;
+      }
+    }
+    double values[8]{}; size_t begin=0; bool parsed=true;
+    try {
+      for (int i=0;i<8;++i) {
+        const auto end=arg.find(':',begin);
+        const auto token=arg.substr(begin,end==std::string::npos ? end : end-begin);
+        size_t used=0; values[i]=std::stod(token,&used);
+        if (used!=token.size() || !std::isfinite(values[i]) || (i<7 && end==std::string::npos) ||
+            (i==7 && end!=std::string::npos)) { parsed=false; break; }
+        begin=end+1;
+      }
+    } catch (...) { parsed=false; }
+    if (!parsed || (values[2]!=0 && values[2]!=20 && values[2]!=30 && values[2]!=40) ||
+        values[3]<0 || values[4]<0 || values[5]<0 || values[6]<0 || values[7]<=0 || values[7]>10) {
+      ack_command(name,false,"syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]"); return;
+    }
+    MotorBackend::YawTrialSettings settings;
+    settings.kp_a_per_rad_s=values[0]; settings.ki_a_per_rad=values[1];
+    settings.rx_window_ms=static_cast<int>(values[2]);
+    settings.friction={values[3]>0 || values[4]>0 || values[5]>0 || values[6]>0,
+        values[3],values[4],values[5],values[6],1.0,3*2*3.14159265358979323846/8192,
+        .5*kDeg2Rad,5,values[7]};
+    const bool applied=backend_->apply_yaw_trial(settings,err);
+    ack_command(name,applied,applied ? "host yaw settings applied for this commissioning session; current cap unchanged; unqualified" : err);
     return;
   }
   if (name == "response_probe") {

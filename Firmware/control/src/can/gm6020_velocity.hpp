@@ -62,6 +62,12 @@ class VelocityLoop {
   double integral() const { return integral_; }
   double velocity_rad_s() const { return velocity_; }
   const FrictionOutput& friction_output() const { return friction_output_; }
+  void prepare_current_tuning(double reference, double next_kp, double cap) {
+    // Preserve the last delivered effort while replacing a session-only gain
+    // or assist configuration at rest. The next explicit intent starts afresh.
+    integral_ = std::clamp(previous_output_-next_kp*(reference-velocity_),-cap,cap);
+    friction_.reset(); friction_output_ = {};
+  }
 
  private:
   // Shared PI: identical arithmetic for both units, so switching modes cannot quietly change the

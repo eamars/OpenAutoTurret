@@ -89,6 +89,36 @@ struct MixedBackendTestAccess {
   }
 };
 
+TEST(Adr002YawOutput, FreshStopClockDoesNotRejectFramesNewerThanTheLastTick) {
+  MixedCanMotorBackend backend;
+  MixedBackendTestAccess::prepare_current_yaw(backend, [](const auto&) { return true; });
+  const auto fresh_clock = now_monotonic_ns();
+  const auto old = backend.snapshot(AxisId::Yaw,fresh_clock-10'000'000);
+  EXPECT_FALSE(old.has_feedback);
+  EXPECT_FALSE(std::isfinite(old.q_rad));
+  const auto current = backend.snapshot(AxisId::Yaw,fresh_clock);
+  EXPECT_TRUE(current.has_feedback);
+  EXPECT_TRUE(std::isfinite(current.q_rad));
+}
+
+TEST(Adr002YawOutput, SessionTrialRejectsOverCapAndStaleFeedback) {
+  MixedCanMotorBackend backend;
+  MixedBackendTestAccess::prepare_current_yaw(backend, [](const auto&) { return true; });
+  MotorBackend::YawTrialSettings s;
+  s.kp_a_per_rad_s=1; s.ki_a_per_rad=.6; s.rx_window_ms=20;
+  s.friction={true,.05,.05,.05,.05,1,.0023,.0087,5,4};
+  std::string error;
+  ASSERT_TRUE(backend.apply_yaw_trial(s,error)) << error;
+  s.friction.positive_breakaway_a=.81;
+  EXPECT_FALSE(backend.apply_yaw_trial(s,error));
+  s.friction.positive_breakaway_a=.05;
+  s.ki_a_per_rad=NAN;
+  EXPECT_FALSE(backend.apply_yaw_trial(s,error));
+  s.ki_a_per_rad=.6;
+  MixedBackendTestAccess::stale_feedback(backend);
+  EXPECT_FALSE(backend.apply_yaw_trial(s,error));
+}
+
 namespace {
 
 class WatchdogSimBackend final : public sim::SimMotorBackend {

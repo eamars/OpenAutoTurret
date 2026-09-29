@@ -163,6 +163,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override;
   void command_velocity(AxisId axis, double velocity_rad_s) override;
   void set_motion_intent(AxisId axis, bool moving) override;
+  bool apply_yaw_trial(const YawTrialSettings& settings, std::string& error) override;
   void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;

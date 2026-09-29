@@ -949,6 +949,27 @@ void MixedCanMotorBackend::set_motion_intent(AxisId axis, bool moving) {
   yaw_moving_intent_ = moving;
 }
 
+bool MixedCanMotorBackend::apply_yaw_trial(const YawTrialSettings& s, std::string& error) {
+  std::lock_guard lock(yaw_mutex_);
+  if (!yaw_output_is_amperes() || yaw_trip_.load() || !yaw_feedback_safe_locked(now_monotonic_ns()) ||
+      !std::isfinite(s.kp_a_per_rad_s) || s.kp_a_per_rad_s <= 0 || s.kp_a_per_rad_s > 10 ||
+      !std::isfinite(s.ki_a_per_rad) || s.ki_a_per_rad < 0 || s.ki_a_per_rad > 20 ||
+      (s.rx_window_ms != 0 && s.rx_window_ms != 20 && s.rx_window_ms != 30 && s.rx_window_ms != 40) ||
+      (s.friction.enabled && !s.friction.valid(profile_.yaw.host_current_limit_a))) {
+    error = "yaw trial requires fresh current-mode feedback and bounded finite settings"; return false;
+  }
+  yaw_velocity_loop_.prepare_current_tuning(yaw_shaped_speed_rad_s_,s.kp_a_per_rad_s,profile_.yaw.host_current_limit_a);
+  profile_.yaw.current_kp_a_per_rad_s = s.kp_a_per_rad_s;
+  profile_.yaw.current_ki_a_per_rad_s = s.ki_a_per_rad;
+  profile_.yaw.velocity_rx_window_ms = s.rx_window_ms;
+  profile_.yaw.friction = s.friction;
+  spdlog::info("yaw session trial APPLIED: Kp={} A/(rad/s) Ki={} A/rad rx_window_ms={} friction={} break=+{}/-{} A run=+{}/-{} A slew={} A/s cap={} A (unchanged); not persisted or qualified",
+      s.kp_a_per_rad_s,s.ki_a_per_rad,s.rx_window_ms,s.friction.enabled,
+      s.friction.positive_breakaway_a,s.friction.negative_breakaway_a,s.friction.positive_run_a,
+      s.friction.negative_run_a,s.friction.output_slew_a_per_s,profile_.yaw.host_current_limit_a);
+  return true;
+}
+
 void MixedCanMotorBackend::keepalive(AxisId axis) {
   if (axis == AxisId::Pitch && pitch_opened_.load()) pitch_backend_.keepalive(axis);
 }

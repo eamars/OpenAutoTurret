@@ -221,3 +221,43 @@ The baseline therefore does not meet response/hold targets. Every observed
 active yaw row had ordinary output reason and advancing successful TX sequence;
 this confirms no interleaved guard zero in those trials, not emergency-stop
 qualification. Detailed raw captures/analysis remain ignored under `run/adr002`.
+
+## Stop clock correction and session-only yaw trials
+
+Release `eaef375f9046.bzBrVq` was cross-built in local WSL; all 81 registered
+station CTest entries and preflight passed. It was not started. Stopping the
+previous `4387411` session at 23:35 NZDT exposed a readiness defect: shutdown
+passed the previous cycle clock to a newer yaw RX snapshot, so 5.145 ms of
+future feedback was rejected before the fresh-clock check. A production-backend
+WSL probe reproduced `old_clock_feedback=0 q=nan fresh_clock_feedback=1 q=0.4`.
+Shutdown now obtains its snapshot clock at entry. An accepted unverified stop
+also no longer resumes ordinary Hold for the 55-second parking budget: only an
+actual Parking phase runs that state machine. The old session exited at 23:36:53
+with STOP FAILED; this is not counted as parking qualification. The station
+remained stopped while the next fix-forward release was prepared. No rollback
+was performed or is authorized after build/deployment failures.
+
+`yaw_control_trial` uses the existing command queue only in an explicit Manual
+commissioning launch, with fresh stationary axes, no jog/probe and ALLOW state.
+Its eight colon-separated values are Kp [A/(rad/s)], Ki [A/rad], RX window [ms],
+positive/negative breakaway [A], positive/negative running assist [A], and final
+output slew [A/s]. RX windows are 0 (legacy), 20, 30 or 40 ms. Four zero assist
+values disable compensation. Changes are volatile, retain the 0.8 A cap, preserve
+quiet effort across gain application, and explicitly remain unqualified. Normal
+startup and stored configuration are unchanged. Physical A/B of this interface
+is pending deployment; it is not a calibration result.
+
+The second baseline series achieved +15.235 degrees pitch displacement and five
+yaw direction pairs at that pose. Hold yaw current remained roughly 0.44–0.55 A,
+comparable to moving current, with post-stop drift up to 0.835 degrees. Thus the
+observed moving total current must not be copied into a friction feedforward
+term. The +/-1-degree yaw probes also failed to reach their requested travel.
+These are performance failures without runtime faults, retained for comparison.
+
+Validation for this correction: the WSL native build and all 80 CTest entries
+excluding retained homing passed (`session-trial-build.log`,
+`session-trial-tests.log`). Fresh-stop-clock, bounded trial settings and quiet
+gain-change effort regressions passed in the two focused CTest entries after
+their final rebuild (`session-trial-focused-tests.log`). Document links passed.
+The command's real socket/backend application and physical stop are still
+pending the next station run; local tests do not establish those results.

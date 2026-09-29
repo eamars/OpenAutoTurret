@@ -168,6 +168,11 @@ inline CommandResult validate_command(const SystemCommandState& s,
     if (!r.ok) r.error = "response probe needs axis:signed_degrees:omega";
     return r;  // Full state/shape/clearance validation on the controller thread.
   }
+  if (command == "yaw_control_trial") {
+    r.ok = !arg.empty() && arg.size() < 192;
+    if (!r.ok) r.error = "yaw trial requires bounded session settings";
+    return r; // Only an explicit Manual commissioning launch may apply it.
+  }
   if (command == "manual_jog_start" || command == "manual_jog_keepalive" ||
       command == "manual_jog_stop" || command == "manual_step") {
     // Shape only. Which mode is allowed, whether a lease exists to renew, and whether a

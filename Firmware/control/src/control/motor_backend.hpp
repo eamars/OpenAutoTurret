@@ -25,6 +25,7 @@
 #include "can/cybergear_protocol.hpp"  // cybergear::Reg
 #include "common/types.hpp"
 #include "control/park_position_evidence.hpp"
+#include "can/gm6020_friction.hpp"
 
 namespace ota {
 
@@ -259,6 +260,14 @@ class MotorBackend {
   // Explicit upstream intent authorizes bounded breakaway; a quiet position
   // correction alone must never create another start attempt.
   virtual void set_motion_intent(AxisId, bool) {}
+  struct YawTrialSettings {
+    double kp_a_per_rad_s = 1, ki_a_per_rad = .6;
+    int rx_window_ms = 0;
+    gm6020::FrictionConfig friction;
+  };
+  virtual bool apply_yaw_trial(const YawTrialSettings&, std::string& error) {
+    error = "backend has no current-mode yaw tuning interface"; return false;
+  }
   // Feedback keepalive: elicit a fresh COMM_TYPE_2 response WITHOUT changing
   // any reference (the CyberGear has no periodic telemetry — it answers
   // commands only). Needed for speed-mode axes on Allow cycles, where no

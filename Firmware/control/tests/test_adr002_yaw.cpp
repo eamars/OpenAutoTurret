@@ -18,6 +18,16 @@ TEST(Adr002Yaw, FreshRxWindowIgnoresDuplicateTicksAndSessionOffset) {
 
 FrictionConfig measured_fixture() { return {true,.55,.60,.35,.40,1,.0023,.0087,4,4}; }
 
+TEST(Adr002Yaw, SessionGainChangePreservesQuietSupportingCurrent) {
+  VelocityLoop loop; loop.reset(0,1'000'000);
+  for(int n=1;n<=100;++n)
+    loop.update_amps(.1,0,1'000'000+n*5'000'000LL,.524,.8,1,.6,0);
+  const double held=loop.update_amps(0,0,506'000'000,.524,.8,1,.6,0);
+  ASSERT_GT(held,0);
+  loop.prepare_current_tuning(0,2,.8);
+  EXPECT_NEAR(loop.update_amps(0,0,511'000'000,.524,.8,2,.6,0),held,1e-12);
+}
+
 TEST(Adr002Yaw, FinalSlewAndCapBlockIntegratorWindup) {
   VelocityLoop loop; loop.reset(0,1'000'000);
   auto f=measured_fixture();

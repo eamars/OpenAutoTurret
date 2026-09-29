@@ -321,6 +321,7 @@ int main(int argc, char** argv) {
     spdlog::warn("mixed motor health: GM6020 fault/temperature units unavailable; independent raw-temperature/speed/freshness guard active");
   }
   if (mixed_commission_manual) {
+    control_cfg.manual_commissioning = true;
     control_cfg.start_in_auto_roam = false;
     spdlog::warn("mixed commissioning: manual/hold only; AUTO_ROAM startup and tracking auto-enable suppressed");
   }
@@ -727,8 +728,9 @@ int main(int argc, char** argv) {
           (cfg.shutdown.speed_deg_s * kDeg2Rad);
     }
     const TimeNs park_deadline = t_prev + static_cast<TimeNs>(budget_s * 1e9);
-    while (now_monotonic_ns() < park_deadline && loop.phase() != Phase::Parked &&
-           loop.phase() != Phase::Fault) {
+    // An accepted unverified stop is not an active parking state machine.
+    // Do not resume ordinary Hold/mode output for the whole parking budget.
+    while (now_monotonic_ns() < park_deadline && loop.phase() == Phase::Parking) {
       const TimeNs t0 = now_monotonic_ns();
       loop.step(t0, t0 - t_prev);
       t_prev = t0;

@@ -82,6 +82,7 @@ class ControlLoop {
     control::MotionConfig motion;
     bool start_in_auto_roam = false;
     bool service_speed_control = false;
+    bool manual_commissioning = false;
     double homing_speed_kp = 1.0;
     double homing_speed_ki = .002;
     bool homing_mode_displacement_check = true;
