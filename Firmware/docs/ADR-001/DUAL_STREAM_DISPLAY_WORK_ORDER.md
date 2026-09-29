@@ -171,3 +171,25 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 `secondary stream imx477 … orientation='rotate_180'` → 传感器 transform（`create_preview_configuration`
 那条与主摄相同的已验证路径）→ **抓回的一帧里亮帘在上、显示器从上往下挂、线缆垂在下面**。
 判据是**像素**，不是 diff。
+
+---
+
+## 生产切 Hailo · 实现顺序（09-29 深夜立，goal `goal-e600f9c0`）
+
+主人的话：**「目标是把生产环境切换到 Hailo，不依赖 IMX500。这些工作不需要实际校准，
+实际校准也不可以成为不部署的理由。Web 需要同步更新——我看不到的就没有更新。别 workaround。」**
+
+**读到的形状（不是猜的）**：帧的入口是 `perception/model/adapter.py:89 ModelAdapter.infer(image, metadata, *, frame_sequence, …)`
+——**没有 `camera_id`**，这就是 dual-worker 的切口；`HailoYoloAdapter`（`model/hailo_yolo.py:22`）已实现 `open/infer/close/describe`；
+`build_adapter`（`model/adapter.py:297`）按 `model.adapter` 选类；profile `hailo_yolov8n` 已在
+`perception_v1.json`（`adapter=hailo, camera_model=imx477, 640x480@15, orientation=none`）。
+
+| 步 | 做什么 | 完成判据（**都落在他看得见的东西上**） |
+|---|---|---|
+| **H1** | 后端自述上线：`adapter.describe()` 进 visiond 发布 → webd 叠加层 → `/api/state`+`/ws` 的 `inference` 块（后端名、模型、每路输入分辨率、推理 fps、端到端延迟、丢帧）；HUD 芯片行加一枚后端芯片，DIAG 加行 | 他刷页面就看见 `NN HAILO`（切回 IMX500 时看见 `NN IMX500`），**不点 DEV 也能看见** |
+| **H2** | `open_picamera2_sensor` 支持 **main + lores** 双腿（main 1920×1080 给人看，lores 640×360 给 Hailo），`CameraOwner` 交 lores 进推理、main 进 tap | 清单/线上报出**推理输入 640×360**；主画面仍是 1080p；Phase 5 的结论落地：**主机缩放从 14.5 ms/帧 降到 ~2 ms 量级** |
+| **H3** | 生产 profile 切 `hailo_yolov8n`（广角：`camera_model: imx500` 当**纯传感器**用 + 安装朝向照 `camera_install.yaml`），**片上 NN 关掉** | **拔掉 Hailo = 没有感知**（吵，带原因），**不是**静默降级回 IMX500；`tracks` 全部来自 Hailo |
+| **H4** | dual-worker cut：`infer(..., camera_id=…)`、per-camera adapter/几何、`InferenceArbitner` 喂两个 worker、两路 `TrackSet` 在 `tracking/camera_registry.py` 汇流；窄角 IMX477 的 lores 也进来了 | 站上实测两路各 ~30 fps、**fairness ≥ 0.9**、HUD 上两条流各自的身份/分辨率/延迟都在 |
+
+**不许的**：并行跑两套后端贴标签；主机缩放当默认（它是显式后备）；用"校准没做"当不部署的理由；
+把 `describe()` 里没测过的数字填成常数（没测到就发 `null`，HUD 显示 `n/m`）。
