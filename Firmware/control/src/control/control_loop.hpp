@@ -454,6 +454,9 @@ class ControlLoop {
                           const std::string& request_id);
   std::vector<control::ParamValue> yaw_trial_values(
       const MotorBackend::YawTrialSettings& settings) const;
+  // The pitch pair in the same vocabulary the inventory uses, so one transaction can speak to both
+  // axes and a trace line never has to translate between two naming schemes.
+  std::vector<control::ParamValue> pitch_gain_values(double kp, double ki) const;
   void disable_tracking();
   // v3: make the v1 controllers match a mode that has already been accepted, and
   // build the authoritative cycle intent from whichever mode owns motion (§53).
@@ -798,6 +801,12 @@ class ControlLoop {
   // holds the generic values for hashing; a restore needs the typed settings, and "restoring" is not
   // a state somebody else is expected to fix on their own initiative.
   MotorBackend::YawTrialSettings param_previous_settings_;
+  // The pitch speed loop is the asynchronous half: the write is a register write whose completion
+  // arrives a few cycles later, so the transaction stays open across step() boundaries. These hold
+  // what the registers read before the write — the restore target — and whether a restore is in
+  // flight, because `restoring` on this axis cannot be resolved by a synchronous write.
+  double param_pitch_previous_kp_ = 0, param_pitch_previous_ki_ = 0;
+  bool param_pitch_restoring_ = false;
   std::string param_staged_id_;
   double response_probe_q_[2]{};
   double response_probe_omega_ = 2.5;

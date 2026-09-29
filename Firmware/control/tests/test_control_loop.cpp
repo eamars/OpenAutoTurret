@@ -162,11 +162,42 @@ class TunablePlant : public sim::SimMotorBackend {
     return true;
   }
   YawTrialSettings yaw_trial_settings() const override { return stored_; }
+
+  // The pitch half of the same plant, because on this axis the readback is a register and the write
+  // finishes a few cycles later. `lies_about_speed_gains_` is the interesting part: the drive takes
+  // the write, answers the read with something else, and the loop has to notice before it moves.
+  Transition begin_pitch_speed_loop_gain_update(double kp, double ki, std::string& error) override {
+    if (!pitch_registers_answer_) { error = "no register answer from the pitch drive"; return Transition::Failed; }
+    pending_kp_ = kp; pending_ki_ = ki; pitch_write_queued_ = true;
+    ++pitch_writes_;
+    return Transition::Pending;
+  }
+  Transition poll_pitch_speed_loop_gain_update(TimeNs now, std::string& error) override {
+    if (!pitch_write_queued_) return Transition::Complete;
+    pitch_write_queued_ = false;
+    if (pitch_writes_ > allowed_pitch_writes_) { error = "drive will not take another write"; return Transition::Failed; }
+    const double answer_kp = lies_about_speed_gains_ ? pending_kp_ + .1 : pending_kp_;
+    regs_.registers[4] = RegisterObservation{answer_kp, now - 4'000'000, now, 0, true};
+    regs_.registers[5] = RegisterObservation{pending_ki_, now - 4'000'000, now, 0, true};
+    return Transition::Complete;
+  }
+  PitchRegisterDiagnostics pitch_register_diagnostics() const override { return regs_; }
+
   double refuse_above_ = 0, clamp_below_ = 0;
   int allowed_writes_ = 100;
+  bool pitch_registers_answer_ = true, lies_about_speed_gains_ = false;
+  int allowed_pitch_writes_ = 100, pitch_writes_ = 0;
 
  private:
   YawTrialSettings stored_;
+  PitchRegisterDiagnostics regs_ = [] {
+    PitchRegisterDiagnostics d;
+    d.registers[4] = RegisterObservation{20, 1, 1, 0, true};   // SpdKp as the drive reports it at boot
+    d.registers[5] = RegisterObservation{.01, 1, 1, 0, true};  // SpdKi
+    return d;
+  }();
+  double pending_kp_ = 0, pending_ki_ = 0;
+  bool pitch_write_queued_ = false;
 };
 
 // Reaches the same idle, held, Manual-commissioning state the response-probe test starts from.
@@ -281,6 +312,40 @@ TEST(ControlLoopSim, ARefusedApplyIsNotARevisionAndASilentClampHoldsMotion) {
   EXPECT_NE(std::string::npos, applied.reason.find("revision=")) << applied.reason;
   const auto after_apply = probe();
   EXPECT_TRUE(after_apply.accepted) << after_apply.reason;
+
+  // 4. The pitch axis, where the readback is a real register and the answer arrives cycles later. The
+  //    drive takes the write and answers the readout with something else, so motion must stay gated
+  //    across the step boundary — the yaw case could only be caught inside one command.
+  // A bench probe holds its own window during which gains may not change, and phases 1–3 each ran
+  // one; letting the window expire keeps phase 4's failure about the transaction and not about a
+  // guard that is doing its job.
+  for (int i = 0; i < 1200; ++i) loop.step(t += kDtNs, kDtNs);
+  sim->lies_about_speed_gains_ = true;
+  const auto queued = run("pitch_control_trial", "2:0.01");
+  // The poll can answer inside the same window, and its ack is the later one — which is fine: what
+  // the campaign is owed is the state, not the ordering of two acks.
+  SCOPED_TRACE("pitch write ack: " + queued.reason);
+  const auto inflight = run("param_snapshot", "");
+  EXPECT_NE(std::string::npos, inflight.reason.find("state=restoring"))
+      << "the drive took the write and answered 2.1, so the exchange must be unresolved: "
+      << inflight.reason;
+  const auto mid_gated = run("response_probe", "yaw:1:2.5");
+  EXPECT_FALSE(mid_gated.accepted)
+      << "an async exchange in flight must hold motion, not only the command that started it: "
+      << mid_gated.reason;
+
+  // 5. The drive stops lying, `param_restore` retries the register write, and the gate opens on the
+  //    strength of a readback rather than on an acknowledgement.
+  sim->lies_about_speed_gains_ = false;
+  const auto pitch_restored = run("param_restore", "");
+  EXPECT_TRUE(pitch_restored.accepted) << pitch_restored.reason;
+  const auto settled = run("param_snapshot", "");
+  SCOPED_TRACE("after restore: " + settled.reason);
+  EXPECT_NE(std::string::npos, settled.reason.find("state=idle"))
+      << "a verified restore must resolve the exchange: " << settled.reason;
+  EXPECT_NE(std::string::npos, settled.reason.find("applied_hash=")) << settled.reason;
+  const auto free_to_move = probe();
+  EXPECT_TRUE(free_to_move.accepted) << free_to_move.reason;
 }
 
 }  // namespace

@@ -761,8 +761,40 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     const auto result=backend_->poll_pitch_speed_loop_gain_update(now_ns,error);
     if (result != MotorBackend::Transition::Pending) {
       pitch_gain_trial_pending_=false;
-      ack_command("pitch_control_trial",result==MotorBackend::Transition::Complete,
-          result==MotorBackend::Transition::Complete ? "pitch speed gains read back and verified; session only, unqualified" : error);
+      const bool was_restoring=param_pitch_restoring_;
+      param_pitch_restoring_=false;
+      const auto regs=backend_->pitch_register_diagnostics();
+      const bool readable=regs.registers[4].valid&&regs.registers[5].valid;
+      // The latency the ADR wants recorded apart from feedback age: how long the drive took to answer
+      // a register read. A stale register answer is not evidence about the value we wrote.
+      const double readback_ms = readable && regs.registers[4].request_ns
+          ? double(regs.registers[4].rx_ns - regs.registers[4].request_ns)/1e6 : -1.0;
+      std::string reason = readable
+          ? param_tx_.verify(pitch_gain_values(regs.registers[4].value,regs.registers[5].value))
+          : (param_tx_.verify({}), std::string("register readback unavailable"));
+      if (!was_restoring && !reason.empty()) {
+        // Same rule as the yaw path: "restoring" is not a promise somebody else keeps. The loop tries
+        // to put the previous pair back immediately; the poll verifies whichever write is in flight.
+        std::string restore_error;
+        if (backend_->begin_pitch_speed_loop_gain_update(param_pitch_previous_kp_,
+                                                        param_pitch_previous_ki_,
+                                                        restore_error) ==
+            MotorBackend::Transition::Pending) {
+          pitch_gain_trial_pending_ = true;
+          param_pitch_restoring_ = true;
+          reason += "; restore queued";
+        } else {
+          reason += "; the restore was refused too, motion stays gated";
+        }
+      }
+      ack_command("pitch_control_trial", reason.empty(),
+          (was_restoring ? "pitch restore " : "pitch speed gains ") +
+          (reason.empty() ? std::string("read back and verified; session only, unqualified; revision=") +
+                              std::to_string(param_tx_.revision()) + " effective_hash=" +
+                              param_tx_.applied_hash() + " register_readback_ms=" +
+                              control::canonical_number(readback_ms)
+                        : "did not verify: " + reason + " (register_readback_ms=" +
+                              control::canonical_number(readback_ms) + "); motion stays gated"));
     }
   }
   backend_->poll_pitch_register_diagnostics(now_ns);
@@ -4387,6 +4419,11 @@ std::vector<control::ParamValue> ControlLoop::yaw_trial_values(
   };
 }
 
+std::vector<control::ParamValue> ControlLoop::pitch_gain_values(double kp, double ki) const {
+  return {{"pitch.service_speed_kp", control::canonical_number(kp)},
+          {"pitch.service_speed_ki", control::canonical_number(ki)}};
+}
+
 void ControlLoop::param_exchange_yaw(const std::string& command,
                                      const MotorBackend::YawTrialSettings& settings,
                                      const std::string& request_id) {
@@ -4641,11 +4678,48 @@ void ControlLoop::execute_command(const std::string& name,
     if(!parsed || !std::isfinite(kp) || !std::isfinite(ki) || kp<1 || kp>5 || ki<.002 || ki>.05) {
       ack_command(name,false,"pitch trial syntax kp:ki; kp [1,5], ki [0.002,0.05]"); return;
     }
+    // A write nobody can read back is not a verified write: if the registers are not answering now,
+    // there is nothing to compare the candidate against later, and the loop refuses to start an
+    // exchange it cannot finish. (This is the axis where readback is real — a register, not an echo.)
+    const auto before = backend_->pitch_register_diagnostics();
+    const double was_kp = before.registers[4].value, was_ki = before.registers[5].value;
+    if (!before.registers[4].valid || !before.registers[5].valid ||
+        !std::isfinite(was_kp) || !std::isfinite(was_ki)) {
+      ack_command(name,false,"pitch speed gains are not readable right now; refusing a write that "
+                             "cannot be read back and verified"); return;
+    }
+    param_pitch_previous_kp_ = was_kp; param_pitch_previous_ki_ = was_ki;
+    const std::string request_id = "pitcht-" + std::to_string(++param_request_seq_);
+    if (const std::string refused = param_tx_.prepare(pitch_gain_values(kp,ki), request_id);
+        !refused.empty()) {
+      ack_command(name,false,"prepare refused: "+refused); return;
+    }
+    param_tx_.begin_apply(pitch_gain_values(was_kp,was_ki), request_id);
     const auto result=backend_->begin_pitch_speed_loop_gain_update(kp,ki,err);
+    if (result==MotorBackend::Transition::Failed) {
+      param_tx_.verify(pitch_gain_values(was_kp,was_ki));   // the plant still holds the old pair
+      std::string restore_error;
+      const auto again=backend_->begin_pitch_speed_loop_gain_update(was_kp,was_ki,restore_error);
+      param_pitch_restoring_=again==MotorBackend::Transition::Pending;
+      ack_command(name,false,"pitch write refused ("+err+"); restoring the previous gains"+
+                  (again==MotorBackend::Transition::Failed
+                       ? " and the restore was refused too: motion stays gated until the drive "
+                         "answers a register readback (param_restore retries it)" : ""));
+      return;
+    }
     pitch_gain_trial_pending_=result==MotorBackend::Transition::Pending;
-    ack_command(name,result!=MotorBackend::Transition::Failed,
-        pitch_gain_trial_pending_ ? "pitch writes queued; NOT verified yet, wait for readback acknowledgement" :
-        result==MotorBackend::Transition::Complete ? "pitch speed gains verified" : err);
+    if (!pitch_gain_trial_pending_) {   // a backend that finishes synchronously verifies now
+      const auto regs=backend_->pitch_register_diagnostics();
+      const std::string unverified=param_tx_.verify(pitch_gain_values(regs.registers[4].value,
+                                                                     regs.registers[5].value));
+      ack_command(name,unverified.empty(), unverified.empty()
+          ? "pitch speed gains verified; revision="+std::to_string(param_tx_.revision())+
+            " effective_hash="+param_tx_.applied_hash()+" request_id="+request_id : unverified);
+      return;
+    }
+    ack_command(name,true,"pitch writes queued; NOT verified yet, wait for readback acknowledgement; "
+                "request_id="+request_id+" expected_hash="+param_tx_.expected_hash()+
+                "; motion is gated until the register readback verifies");
     return;
   }
   if (name == "yaw_control_trial") {
@@ -4697,6 +4771,30 @@ void ControlLoop::execute_command(const std::string& name,
     if (!param_tx_.restore_required()) {
       ack_command(name,false,"nothing is demanding a restore (state=" +
                   std::string(param_tx_.state_name()) + ")"); return;
+    }
+    // Which axis owes the restore is answered by the names the transaction is holding, not by a flag
+    // that happens to be set: the poll may have already stopped trying, and a flag would then send the
+    // recovery down the wrong axis — where the readback speaks a different vocabulary and reports
+    // "readback did not include pitch.service_speed_ki" while standing on the yaw plant.
+    const auto& target = param_tx_.restore_values();
+    const bool owes_pitch = std::any_of(target.begin(), target.end(),
+        [](const control::ParamValue& v) { return v.name.rfind("pitch.", 0) == 0; });
+    if (owes_pitch) {
+      // The pitch restore is a register write like any other on this axis: it completes asynchronously
+      // and the poll verifies it. Retrying here is what `param_restore` means on this axis.
+      std::string restore_error;
+      const auto again=backend_->begin_pitch_speed_loop_gain_update(param_pitch_previous_kp_,
+                                                                   param_pitch_previous_ki_,
+                                                                   restore_error);
+      ack_command(name, again!=MotorBackend::Transition::Failed,
+          again==MotorBackend::Transition::Pending
+              ? "pitch restore queued; motion stays gated until the register readback verifies"
+              : "pitch restore refused: " + restore_error + "; motion stays gated");
+      if (again!=MotorBackend::Transition::Failed) {
+        param_pitch_restoring_=true;
+        pitch_gain_trial_pending_=true;   // the poll below is what drives an async restore to its end
+      }
+      return;
     }
     std::string restore_error;
     if (!backend_->apply_yaw_trial(param_previous_settings_, restore_error)) {

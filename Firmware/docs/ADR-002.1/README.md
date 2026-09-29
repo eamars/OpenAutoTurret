@@ -36,7 +36,10 @@ controld 多了一组命令，**由控制环持有门**：`param_prepare <kp:ki:
 拒绝理由带状态与最后一次已验证的 revision+hash——这就是「kp2 目录里其实是 Kp=1」那一类编排错误的机械化拦截。
 `yaw_control_trial` 现在走同一条实现（旧脚本不改也能用）。驱动**当面拒绝**、或**答应却存了别的值**（静默截断），都会被抓住：
 `control/tests/test_control_loop.cpp` 的 `ARefusedApplyIsNotARevisionAndASilentClampHoldsMotion` 用一台会撒谎的模拟电机复现整件事。
-注意 yaw 的读回是 `host_echo`（GM6020 没有增益寄存器），pitch 的读回是寄存器读回、异步完成——**下一条就是把它接进同一套 revision**。
+两条轴现在共用同一个 revision 与同一扇门，但**读回的来源不同，清单里也这么写**：yaw 是 `host_echo`（GM6020 没有增益寄存器），
+pitch 是**寄存器读回**、异步完成——`pitch_control_trial` 先读当前寄存器（读不到就拒绝开始一次无法验证的交换），写入后由控制环的 poll 收尾；
+**交换未完成跨 step 边界期间运动命令同样被拒**，ack 里带 `register_readback_ms=`（驱动器回答寄存器读用了多久，与反馈延迟是两件事）。
+`param_restore` 按事务里持有的**参数名**决定该恢复哪条轴——靠一个 flag 会把恢复送到错误的植物上。
 
 `Firmware/tools/tests/test_parameter_inventory.py` 会拒绝任何"新出现的可调字段既没有条目也没有排除原因"，
 也会拒绝与当前二进制不一致的旧文档。清单里 `yaw.friction.enabled` 被标成 `fixed_in_campaign`，理由写在条目本身：

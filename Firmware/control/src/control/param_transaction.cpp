@@ -43,7 +43,11 @@ std::string ParameterTransaction::prepare(std::vector<ParamValue> requested,
                    "whatever is loaded', which is not a candidate";
     return last_reason_;
   }
-  if (state_ == State::AppliedUnverified || state_ == State::Restoring) {
+  // While restoring, restating *the restore* is allowed and means a retry: the obligation is to put a
+  // specific set back, and asking for that set again is how a caller retries it. Staging a different
+  // candidate over an unresolved exchange is what stays refused.
+  if ((state_ == State::AppliedUnverified ||
+       (state_ == State::Restoring && effective_hash(requested) != effective_hash(previous_)))) {
     last_reason_ = std::string("an exchange is already ") + state_name() +
                    "; no new candidate may be staged until the readback verifies (a second prepare "
                    "here is how one trial's motion runs under another trial's gains)";
