@@ -25,11 +25,9 @@ constexpr TimeNs kYawReferenceStationaryNs = 500'000'000;
 namespace {
 // A fixed-width tag for the trace record: the archive is read by a parser, not by a person, so the
 // value is a NUL-terminated fixed buffer rather than a dangling pointer into a temporary string.
-template <size_t N>
 // Both tuning gates check the same conditions, and a refusal that names the one that fired is the
 // difference between an operator re-deriving the state by hand at 1 am and reading it out of the ack.
 // The park gate learned this lesson on 2026-09-29; these two gates had not.
-template <typename... Args>
 void collect_missing(std::string& missing, const char* what, bool ok) {
   if (!ok) {
     if (!missing.empty()) missing += "+";
@@ -46,7 +44,9 @@ void collect_missing(std::string& missing, const char* what, bool ok, Args&&... 
   collect_missing(missing, rest...);
 }
 
-std::array<char, N>& into, std::string_view text) {
+template <size_t N>
+void fill_tag(
+    std::array<char, N>& into, std::string_view text) {
   const size_t n = text.size() < N - 1 ? text.size() : N - 1;
   for (size_t i = 0; i < n; ++i) into[i] = text[i];
   into[n] = '\0';
