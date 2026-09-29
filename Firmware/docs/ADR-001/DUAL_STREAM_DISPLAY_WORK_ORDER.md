@@ -283,3 +283,24 @@ visiond 同时知道 `stream`（main）与 `lores`，所以由它把**发布几�
 **下一步（H5，还没做）**：窄角开 640×360 lores 腿 → 第二个 adapter + 第二个 pipeline + 第二个
 `CameraWorker` → 生产里真正调用 `merge_track_sets` → 量两路各自 fps 与 **fairness ≥ 0.9**。
 controld 侧的 per-track 归属要 native wire v3（头里没有摄像头字段），那是汇流之后的一步。
+
+#### H4 上线实况（round 12，release `0c3a917b7c62.JnxFSk`，`0c3a917`）
+
+从站上 `/api/state` 与 `run/perception/track_set.json` 现读，不是从 git 推：
+
+```
+后端 = hailo | camera_id = cam-baa28c2a | failures = 0 | emitted = 8617 | fresh = True
+wire camera_id = cam-baa28c2a | tracks = [('Person #10', 'cam-baa28c2a')] | 声明 = 1920x1080
+```
+
+也就是说**每条 track 现在都带自己的摄像头归属**，第二条腿接上来的时候不需要再改发布格式。
+
+**本地与站上 suites**：perception **4 既存失败 / 452 passed**（比基线多 2 条绿：新加的 pipeline 两条）、
+webd **279 passed / 1 skipped**、doc-tree 绿、arch_lint 无新红、`camera_registry` 自检 **21/21**（多出 11 条
+都是 merge 的拒绝条件）。站上 prebuilt suite **66 binaries 0 failed**，readiness 到 `AUTO_TRACK / camera_fps=30.0158`。
+
+**这一轮我自己造的险（写进部署卡了）**：清理 release 目录时拿 `run/active_release` 当指针——**那个文件不存在**。
+`cat` 出来是空，于是循环把两份目录（上一版合格的 `7fd9a1919cb1.FAggEo` 与刚激活的 `0c3a917b7c62.mYPvxo`）都删了，
+栈从**已删除的目录**里继续服务（`readlink /proc/<pid>/cwd` 里挂着 `(deleted)`）。修法不是猜指针，是**问进程**：
+`pgrep -af visiond` 的 argv 里就写着它在哪个 release。同一 revision 重新部署一次即恢复，现在 `releases` 里恰好一份
+`0c3a917b7c62.JnxFSk`。教训归到 `docs/operations/deploy.md` 的已知故障清单里。

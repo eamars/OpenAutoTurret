@@ -135,3 +135,11 @@ station. The station is an instrument, not a scratch pad.
   built. The suite-count gate ("not green below 40 test binaries") exists because this happened.
 - **`status 255` from ssh** → check which half failed: host-key or authentication. Both come from the
   container's home not being durable, and they look identical from the exit code alone.
+- **Pruned `run/releases/` and the running stack is now executing a deleted directory** → there is **no
+  pointer file**. "Which release is active" is answered by the running processes, not by a `latest`
+  symlink or a `run/active_release` (neither exists; inventing one is how this happened on 2026-09-29:
+  `cat run/active_release` returned empty, the prune loop therefore treated *every* directory as stale,
+  and the stack kept serving from `.../0c3a917b7c62.mYPvxo/Firmware (deleted)` — visible as `(deleted)`
+  in `readlink /proc/<pid>/cwd`). Ask the processes instead: `pgrep -af visiond` shows the release path
+  in its own argv, and that is the one directory to keep. Recovery is a re-deploy of the same revision;
+  the stack keeps serving meanwhile, which is the only mercy in this failure mode.
