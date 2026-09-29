@@ -137,7 +137,7 @@ def main():
     results = []
     for target in TARGETS:
         for sign in ("+", "-"):
-            results.append(jog_to(eye, sign, target, scale, seconds=30.0, log))
+            results.append(jog_to(eye, sign, target, scale, 30.0, log))
     out = os.environ.get("ADR0021_SWEEP_OUT", "")
     if out:
         with open(out, "w", encoding="utf-8") as handle:
