@@ -31,6 +31,7 @@ class StubStation:
 
     def command(self, name, arg=None):
         self.received += 1
+        self._pending = None            # an ack only exists once something has been answered
         if name == "param_prepare":
             self._pending = f"prepared request_id=prepp-{self._seq + 1} expected_hash=aa revision_after_apply=1"
         elif name == "param_apply":
@@ -48,6 +49,12 @@ class StubStation:
         return self._seq
 
     def ack(self, after_seq):
+        """Honours after_seq, because a stub that answers regardless hides exactly one bug:
+        the runner asking for an ack that already went by. The hardware caught this; the stub
+        had been letting it through.
+        """
+        if self._pending is None or self._seq == after_seq:
+            return {"accepted": False, "reason": "no cmd_ack after that sequence", "seq": self._seq}
         return {"accepted": "no request" not in self._pending, "reason": self._pending,
                 "seq": self._seq}
 
@@ -141,6 +148,12 @@ class ItObysWhatTheLockSays(unittest.TestCase):
         self.assertEqual(len(self.lock["design"]["coarse"]), len(self.manifest["trials"]))
         self.assertEqual("design_exhausted", self.manifest["stopped_by"])
         self.assertTrue(os.path.exists(os.path.join(self.dir, "manifest.json")))
+
+    def test_no_candidate_is_left_in_the_machine(self):
+        for trial in self.manifest["trials"]:
+            self.assertIn("restore", trial, "a trial without a restore moved the machine and called "
+                                           "it an experiment")
+            self.assertTrue(trial["restore"].get("accepted"), trial["restore"])
 
     def test_each_trial_was_restored_so_the_next_one_starts_from_the_baseline(self):
         # prepare + apply + snapshot + prepare + apply per candidate: the restore is not optional.

@@ -55,7 +55,7 @@ class Runner:
         self.baseline, self.archive_dir = baseline, archive_dir
         self.score_command, self.now = score_command, now
         self.manifest = {"campaign_id": self.design["campaign_id"], "design_sha256": lock["design_sha256"],
-                         "started_at": self.now(), "blocked": [], "exchanges": 0,
+                         "started_at": self.now(), "blocked": [], "refused": [], "exchanges": 0,
                          "applied": 0, "trials": [], "binding": lock["bound_to"]}
 
     def refuse(self, reason: str) -> bool:
@@ -93,49 +93,65 @@ class Runner:
             values[FIELDS.index(name)] = float(value)
         return values
 
+    def exchange(self, command: str, arg: str = "") -> dict:
+        """Send one command and wait for the ack that follows it — in that order, every time.
+
+        Sampling the sequence counter after sending is the trap I fell into on hardware: the counter
+        had already moved past the command being answered, so the ack looked like it never arrived,
+        the restore was silently skipped, and the campaign still reported itself clean. Capture first,
+        send second. A campaign that cannot return to its baseline is blocked, not finished.
+        """
+        before = self.station.seq()
+        self.station.command(command, arg)
+        return self.station.ack(before)
+
     def trial(self, candidate: dict, stage: str) -> dict:
         """One candidate: apply it, record the identity the controller confirms, restore the baseline."""
         values = self.candidate_values(candidate["params"])
+        baseline_string = ":".join(f"{v:.9g}" for v in self.baseline)
         record = {"candidate_id": candidate["candidate_id"], "stage": stage,
                   "params": candidate["params"], "applied_string": ":".join(f"{v:.9g}" for v in values)}
-        before = self.station.seq()
-        self.station.command("param_prepare", record["applied_string"])
-        prepared = self.station.ack(before)
+        prepared = self.exchange("param_prepare", record["applied_string"])
         self.manifest["exchanges"] += 1
-        request_id = ""
         import re
         match = re.search(r"request_id=(\S+)", str(prepared.get("reason", "")))
         if not prepared.get("accepted") or not match:
             record["prepare"] = prepared
+            if not prepared.get("accepted"):
+                self.manifest["refused"].append({"candidate_id": candidate["candidate_id"],
+                                                 "reason": prepared.get("reason")})
             return record
-        before = self.station.seq()
-        self.station.command("param_apply", match.group(1))
-        applied = self.station.ack(before)
+        applied = self.exchange("param_apply", match.group(1))
         self.manifest["exchanges"] += 1
         record["applied"] = applied
-        if applied.get("accepted"):
-            self.manifest["applied"] += 1
-            frame = self.station.frame()
-            record["identity"] = {"revision": frame.get("param_revision"),
-                                  "applied_hash": frame.get("param_applied_hash")}
-            import re as _re
-            snap_before = self.station.seq()
-            self.station.command("param_snapshot", "")
-            text = str(self.station.ack(snap_before).get("reason", ""))
-            grab = lambda key: (_re.search(key + r"=(\S+)", text) or [None, None])[1]
-            record["identity"] = {"revision": grab("revision"), "state": grab("state"),
-                                  "applied_hash": grab("applied_hash")}
-            self.station.command("param_prepare", ":".join(f"{v:.9g}" for v in self.baseline))
-            restore_id = ""
-            r = _re.search(r"request_id=(\S+)", str(self.station.ack(self.station.seq()).get("reason", "")))
-            if r:
-                restore_id = r.group(1)
-                before = self.station.seq()
-                self.station.command("param_apply", restore_id)
-                record["restore"] = self.station.ack(before)
-                self.manifest["exchanges"] += 2
-                if record["restore"].get("accepted"):
-                    self.manifest["applied"] += 1
+        if not applied.get("accepted"):
+            self.manifest["refused"].append({"candidate_id": candidate["candidate_id"],
+                                             "reason": applied.get("reason")})
+            return record
+        self.manifest["applied"] += 1
+        snapshot = self.exchange("param_snapshot")
+        text = str(snapshot.get("reason", ""))
+        grab = lambda key: (re.search(key + r"=(\S+)", text) or [None, None])[1]
+        record["identity"] = {"revision": grab("revision"), "state": grab("state"),
+                              "applied_hash": grab("applied_hash")}
+        # Back to the baseline, and the restore is judged: a campaign that cannot return where it
+        # started has not run a trial, it has moved the machine.
+        restore_prepare = self.exchange("param_prepare", baseline_string)
+        self.manifest["exchanges"] += 1
+        r = re.search(r"request_id=(\S+)", str(restore_prepare.get("reason", "")))
+        if not restore_prepare.get("accepted") or not r:
+            record["restore"] = restore_prepare
+            self.refuse(f"BLOCKED_restore_prepare_{candidate['candidate_id']}: "
+                        + str(restore_prepare.get("reason"))[:120])
+            return record
+        restore = self.exchange("param_apply", r.group(1))
+        self.manifest["exchanges"] += 1
+        record["restore"] = restore
+        if not restore.get("accepted"):
+            self.refuse(f"BLOCKED_restore_failed_{candidate['candidate_id']}: the baseline could not "
+                        "be re-applied, so the machine is left holding this candidate")
+            return record
+        self.manifest["applied"] += 1
         return record
 
     def score(self, record: dict):
