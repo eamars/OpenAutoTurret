@@ -112,3 +112,60 @@ def test_fairness_is_unknown_rather_than_zero_when_nothing_ran():
     assert _fairness({}) is None
     assert _fairness({"wide": 0, "detail": 0}) is None
     assert _fairness({"wide": 10, "detail": 5}) == 0.5
+
+
+def test_two_synthetic_camera_streams_end_to_end_without_any_hardware(tmp_path):
+    """The objective's named evidence: a *pair* of fake sources through the real components.
+
+    A `SecondaryCameraStream` per sensor (the same owner the station runs) feeding the real
+    arbiter, results tagged with the sensor that produced them. No /dev, no picamera2, no Hailo:
+    if the shape is wrong it has to show up here, not on the station at 23:00.
+    """
+    import types
+
+    from perception.detail_stream import DetailFrame, SecondaryCameraStream
+
+    ident_wide = types.SimpleNamespace(id="cam-wide0001", source="fwnode", durable=True)
+    ident_detail = types.SimpleNamespace(id="cam-detail01", source="fwnode", durable=True)
+    counter = {"n": 0}
+
+    def make_source(role: str, ident, image_tag: str) -> SecondaryCameraStream:
+        def poll():
+            counter["n"] += 1
+            return DetailFrame(camera_id=ident.id, frame_sequence=counter["n"],
+                               sensor_timestamp_ns=counter["n"] * 33_333_333,
+                               image=image_tag, metadata={})
+        stream = SecondaryCameraStream(role=role, ident=ident, poll=poll, queue_depth=2)
+        stream.start()
+        return stream
+
+    arbiter = InferenceArbiter(infer=lambda j: (j.camera_id, j.image), queue_depth=2)
+    arbiter.start()
+    wide = make_source("wide", ident_wide, "wide-pixels")
+    detail = make_source("detail", ident_detail, "detail-pixels")
+    seen: dict = {}
+    deadline = time.monotonic() + 3.0
+    try:
+        while time.monotonic() < deadline and len(seen) < 2:
+            for source in (wide, detail):
+                frame = source.latest()
+                if frame is not None:
+                    served = arbiter.run_once()
+                    if served is not None:
+                        seen[served[0]] = served[1]
+                    arbiter.submit(InferenceJob(camera_id=frame.camera_id,
+                                               frame_sequence=frame.frame_sequence,
+                                               sensor_timestamp_ns=frame.sensor_timestamp_ns,
+                                               image=frame.image))
+            time.sleep(0.002)
+    finally:
+        for source in (wide, detail):
+            source.stop()
+        arbiter.stop()
+
+    assert ("cam-wide0001", "wide-pixels") in seen.values(), seen
+    assert ("cam-detail01", "detail-pixels") in seen.values(), seen
+    stats = arbiter.stats()
+    assert set(stats["served"]) == {"cam-wide0001", "cam-detail01"}
+    assert stats["failures"] == 0
+    assert wide.delivered > 0 and detail.delivered > 0
