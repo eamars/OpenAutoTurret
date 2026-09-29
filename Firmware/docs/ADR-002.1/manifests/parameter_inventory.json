@@ -637,9 +637,9 @@
     "binary": "build/control/controld",
     "binary_sha256": "c35fb18c163301d25bf6b63b5ce95c370cd796f01becab2a864b62099185d7ad",
     "config": "config/turret_mixed.yaml",
-    "generated_at_utc": "2026-09-29T16:05:01Z",
+    "generated_at_utc": "2026-09-29T16:06:26Z",
     "hardware_profile": "config/mixed_hardware.yaml",
-    "source_rev": "4c0b047164eb720d98b857142b6ba84c5fc4d582",
+    "source_rev": "77f71a5779669fe95a771ab5e474a13f309a2232",
     "source_rev_how": "read from /workspace/general_purpose/repos/OpenAutoTurret/.git"
   },
   "schema": 1

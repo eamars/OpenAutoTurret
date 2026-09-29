@@ -220,12 +220,24 @@ def generate(binary: str, config_path: str, out_path: str) -> dict:
                              + (result.stderr.strip().splitlines() or ["no explanation"])[-1])
         document = json.load(open(path, encoding="utf-8"))
     generated = document.get("generated_from", {})
+    # A release tree has no checkout, but the deployment records the revision it built; that file is
+    # a better authority than a parent directory's git state, so the caller may hand it over.
+    recorded = ""
+    for candidate in (os.path.join(os.path.dirname(FIRMWARE), "REVISION"),
+                      os.path.join(FIRMWARE, "REVISION")):
+        if os.path.exists(candidate):
+            recorded = open(candidate, encoding="utf-8").read().strip()
+            break
+    revision, revision_how = source_revision(os.path.dirname(FIRMWARE))
+    if not revision and recorded:
+        revision, revision_how = recorded, ("read from the release's own REVISION file, written by the "
+                                            "deployment that built this tree")
     document["generated_from"] = {
         **generated,
         "binary": os.path.relpath(binary, FIRMWARE),
         "binary_sha256": sha256(binary),
-        "source_rev": source_revision(os.path.dirname(FIRMWARE))[0],
-        "source_rev_how": source_revision(os.path.dirname(FIRMWARE))[1],
+        "source_rev": revision,
+        "source_rev_how": revision_how,
         "generated_at_utc": datetime.datetime.now(datetime.timezone.utc)
                             .strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
