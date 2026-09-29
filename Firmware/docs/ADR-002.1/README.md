@@ -81,3 +81,16 @@ python tools/adr0021.py demo --output reports/demo
 ## 基线与查阅范围
 
 主要依据用户粘贴的 2026-09-30 00:12 NZDT 执行报告及上一版 ADR-002 文件。报告给出的 `bad742dddba6a95d3d055e43998adfd0506b0a6e` 四个选择性公开文件请求均返回 404；本次**没有核实该提交的源码或本地脏树**。未克隆仓库，未访问 Pi 或用户本地 `run/`。公开 README/AGENTS 只作为文档入口，不替代本地当前状态。详见 `sources/READING_LOG.md`。
+
+## 已交付：第一场真战役在站上跑完（样板 levels，2026-09-30）
+
+`reports/campaign_sample_levels_2026-09-30.json` 是站上跑出来的清单，不是推演：**16 个候选、32 次写全部读回通过并
+全部恢复到基线**（`refused: []`、`blocked: []`、`stopped_by: design_exhausted`），锁绑在 release
+`0b1b4b2b3ba7` 与 arm 二进制摘要上。**levels 用的是 `manifests/campaign.example.json` 的样板网格**——
+主人当时给的指令是「跑！」而没有指定 levels，所以这一场的身份是"机制验收 + 样板参数"，
+**不能当作物理调参结论**：没有 scorer 参与，任何候选都不许被说成"更好"（见 `unscored` 纪律）。
+
+每条 trace 记录自带身份（`param_context`）：每窗 256 条记录，其中 66 条带该候选的标签，从设上标签那一刻到
+最新一条**身份不断**（16/16 试验）。判据是"到最新一条不断"，不是"每条都带当前标签"——窗是滚动的，
+窗前段是设标签之前的历史，要求历史预知未来是错的判据。
+

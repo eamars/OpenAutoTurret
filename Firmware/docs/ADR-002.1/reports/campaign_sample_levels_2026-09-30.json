@@ -1,0 +1,790 @@
+{
+  "applied": 32,
+  "binding": {
+    "binary": "build/control/controld",
+    "binary_sha256": "3f2cabc4fe78d0de01a477ea3be3f61c49ce5090031485306982bf7019194bb4",
+    "config": "config/turret_mixed.yaml",
+    "hardware_profile": "config/mixed_hardware.yaml",
+    "inventory_sha256": "498b4e80204a227ff9e0e92a244b7c113f30bbe1cdb8977f971a7e21e7ca7dcb",
+    "note": "enforcement lives in controld's parameter transaction; this document records the ranges as prose so an archived trial can be read without the binary",
+    "source_rev": "0b1b4b2b3ba7d5e45cc76f880da6049d06373337"
+  },
+  "blocked": [],
+  "campaign_id": "yaw-current-example",
+  "design_sha256": "f761cbec39f356dbd1b82ba05b5bf0bf08b417f0d09aceafc3d79fb11e3b42bb",
+  "ended_at": 1790709595.054688,
+  "exchanges": 64,
+  "refused": [],
+  "started_at": 1790709581.8751945,
+  "stopped_by": "design_exhausted",
+  "trials": [
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=1 effective_hash=9c8a71f3106f1fc4 request_id=prepp-1",
+        "safety": "ALLOW",
+        "seq": 3
+      },
+      "applied_string": "0.6:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c00",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c00|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 1
+      },
+      "identity": {
+        "applied_hash": "9c8a71f3106f1fc4",
+        "revision": "1",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=2 effective_hash=1c9c5ea761dc2132 request_id=prepp-2",
+        "safety": "ALLOW",
+        "seq": 6
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 344884,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=3 effective_hash=d1d28efbc01f0851 request_id=prepp-3",
+        "safety": "ALLOW",
+        "seq": 9
+      },
+      "applied_string": "0.6:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c01",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c01|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 7
+      },
+      "identity": {
+        "applied_hash": "d1d28efbc01f0851",
+        "revision": "3",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=4 effective_hash=1c9c5ea761dc2132 request_id=prepp-4",
+        "safety": "ALLOW",
+        "seq": 12
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 347243,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=5 effective_hash=de74a5839e83b858 request_id=prepp-5",
+        "safety": "ALLOW",
+        "seq": 15
+      },
+      "applied_string": "0.6:1:20:0:0:0:0:0.001",
+      "candidate_id": "c02",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c02|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 13
+      },
+      "identity": {
+        "applied_hash": "de74a5839e83b858",
+        "revision": "5",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=6 effective_hash=1c9c5ea761dc2132 request_id=prepp-6",
+        "safety": "ALLOW",
+        "seq": 18
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 350122,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=7 effective_hash=ae8b9c500029e4cf request_id=prepp-7",
+        "safety": "ALLOW",
+        "seq": 21
+      },
+      "applied_string": "0.6:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c03",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c03|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 19
+      },
+      "identity": {
+        "applied_hash": "ae8b9c500029e4cf",
+        "revision": "7",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=8 effective_hash=1c9c5ea761dc2132 request_id=prepp-8",
+        "safety": "ALLOW",
+        "seq": 24
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 350784,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=9 effective_hash=30fea17419450f87 request_id=prepp-9",
+        "safety": "ALLOW",
+        "seq": 27
+      },
+      "applied_string": "1:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c04",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c04|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 25
+      },
+      "identity": {
+        "applied_hash": "30fea17419450f87",
+        "revision": "9",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=10 effective_hash=1c9c5ea761dc2132 request_id=prepp-10",
+        "safety": "ALLOW",
+        "seq": 30
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 350746,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=11 effective_hash=1c9c5ea761dc2132 request_id=prepp-11",
+        "safety": "ALLOW",
+        "seq": 33
+      },
+      "applied_string": "1:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c05",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c05|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 31
+      },
+      "identity": {
+        "applied_hash": "1c9c5ea761dc2132",
+        "revision": "11",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=12 effective_hash=1c9c5ea761dc2132 request_id=prepp-12",
+        "safety": "ALLOW",
+        "seq": 36
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 350544,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=13 effective_hash=db10b806467226cb request_id=prepp-13",
+        "safety": "ALLOW",
+        "seq": 39
+      },
+      "applied_string": "1:1:20:0:0:0:0:0.001",
+      "candidate_id": "c06",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c06|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 37
+      },
+      "identity": {
+        "applied_hash": "db10b806467226cb",
+        "revision": "13",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=14 effective_hash=1c9c5ea761dc2132 request_id=prepp-14",
+        "safety": "ALLOW",
+        "seq": 42
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 349885,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=15 effective_hash=ad15cb4afe724248 request_id=prepp-15",
+        "safety": "ALLOW",
+        "seq": 45
+      },
+      "applied_string": "1:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c07",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c07|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 43
+      },
+      "identity": {
+        "applied_hash": "ad15cb4afe724248",
+        "revision": "15",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=16 effective_hash=1c9c5ea761dc2132 request_id=prepp-16",
+        "safety": "ALLOW",
+        "seq": 48
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 349618,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=17 effective_hash=07bea719d4f0a00b request_id=prepp-17",
+        "safety": "ALLOW",
+        "seq": 51
+      },
+      "applied_string": "1.6:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c08",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c08|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 49
+      },
+      "identity": {
+        "applied_hash": "07bea719d4f0a00b",
+        "revision": "17",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=18 effective_hash=1c9c5ea761dc2132 request_id=prepp-18",
+        "safety": "ALLOW",
+        "seq": 54
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 349667,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=19 effective_hash=da87bee921cc6872 request_id=prepp-19",
+        "safety": "ALLOW",
+        "seq": 57
+      },
+      "applied_string": "1.6:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c09",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c09|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 55
+      },
+      "identity": {
+        "applied_hash": "da87bee921cc6872",
+        "revision": "19",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=20 effective_hash=1c9c5ea761dc2132 request_id=prepp-20",
+        "safety": "ALLOW",
+        "seq": 60
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 348537,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=21 effective_hash=67771d6c0d1b98df request_id=prepp-21",
+        "safety": "ALLOW",
+        "seq": 63
+      },
+      "applied_string": "1.6:1:20:0:0:0:0:0.001",
+      "candidate_id": "c10",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c10|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 61
+      },
+      "identity": {
+        "applied_hash": "67771d6c0d1b98df",
+        "revision": "21",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=22 effective_hash=1c9c5ea761dc2132 request_id=prepp-22",
+        "safety": "ALLOW",
+        "seq": 66
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 348609,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=23 effective_hash=ffd09bc31f3f6308 request_id=prepp-23",
+        "safety": "ALLOW",
+        "seq": 69
+      },
+      "applied_string": "1.6:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c11",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c11|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 67
+      },
+      "identity": {
+        "applied_hash": "ffd09bc31f3f6308",
+        "revision": "23",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=24 effective_hash=1c9c5ea761dc2132 request_id=prepp-24",
+        "safety": "ALLOW",
+        "seq": 72
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 349177,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=25 effective_hash=12b5f11395607634 request_id=prepp-25",
+        "safety": "ALLOW",
+        "seq": 75
+      },
+      "applied_string": "2.4:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c12",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c12|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 73
+      },
+      "identity": {
+        "applied_hash": "12b5f11395607634",
+        "revision": "25",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=26 effective_hash=1c9c5ea761dc2132 request_id=prepp-26",
+        "safety": "ALLOW",
+        "seq": 78
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 349968,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=27 effective_hash=d5ab8853890e0041 request_id=prepp-27",
+        "safety": "ALLOW",
+        "seq": 81
+      },
+      "applied_string": "2.4:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c13",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c13|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 79
+      },
+      "identity": {
+        "applied_hash": "d5ab8853890e0041",
+        "revision": "27",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=28 effective_hash=1c9c5ea761dc2132 request_id=prepp-28",
+        "safety": "ALLOW",
+        "seq": 84
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 347001,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=29 effective_hash=077f2d0c04112fe8 request_id=prepp-29",
+        "safety": "ALLOW",
+        "seq": 87
+      },
+      "applied_string": "2.4:1:20:0:0:0:0:0.001",
+      "candidate_id": "c14",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c14|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 85
+      },
+      "identity": {
+        "applied_hash": "077f2d0c04112fe8",
+        "revision": "29",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=30 effective_hash=1c9c5ea761dc2132 request_id=prepp-30",
+        "safety": "ALLOW",
+        "seq": 90
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 344248,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=31 effective_hash=482ef1c081274f5f request_id=prepp-31",
+        "safety": "ALLOW",
+        "seq": 93
+      },
+      "applied_string": "2.4:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c15",
+      "context": {
+        "accepted": true,
+        "command": "param_context",
+        "controller_state": "hold/MANUAL",
+        "reason": "campaign context set to yaw-current-example|c15|coarse; every trace record from here says so",
+        "safety": "ALLOW",
+        "seq": 91
+      },
+      "identity": {
+        "applied_hash": "482ef1c081274f5f",
+        "revision": "31",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=32 effective_hash=1c9c5ea761dc2132 request_id=prepp-32",
+        "safety": "ALLOW",
+        "seq": 96
+      },
+      "stage": "coarse",
+      "trace_window": {
+        "bytes": 344143,
+        "contiguous_to_newest": true,
+        "first_tagged_index": 190,
+        "records": 256,
+        "records_with_context": 66,
+        "truncated": false
+      },
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    }
+  ]
+}
