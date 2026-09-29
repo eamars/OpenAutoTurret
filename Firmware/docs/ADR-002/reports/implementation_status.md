@@ -387,3 +387,29 @@ tree and is no longer allowed to masquerade as the built source (`git -C` walked
 **还没做完的两条**（不遮）：①早上那个 **0.80 A = 100% 包线**是 **AUTO_ROAM** 下量到的，本报告只在
 Manual/Hold 下验过——**AUTO_ROAM 的 yaw 路径还没复量**，而主人抱怨的堵转正是那个模式；
 ②`enabled_state = -1`（使能状态未知仍在灌流）仍未查清。
+
+## 2026-10-01 补：我把"能动"撤回重测；文档里本来就有路
+
+主人提醒之后回读文档，三条我凭空造的假设作废：`angle_count` 是**13 位一圈 0..8191**（22.75 计数/度，
+`references/gm6020/GM6020_AI_Reference.md:72`），**滑环无约束、不计圈数**（`STATION_OPERATIONS.md:307`），
+`axes.yaw.position_envelope: none` ⇒ yaw **没有位置包线**（`:524`）。所以"走软限位定标""长 jog 必须限时"
+都是我编的；`adr0021_sweep.py` 的回绕展开按 65536 写也**是错的**。
+
+由此**重算**：我先前报的"能动 +5/−6 counts"按真单位是 **0.22°/0.26°**——**那个 PASS 我撤回**，
+它没到"命令 1°"的程度，也不满足主人要的长脉冲证明。
+
+**现成路径**（launcher 自带、护栏齐备、IMU 独立测角）：
+
+```
+run --commission-hardware --with-imu --yaw-step-deg N      # 文档上界 15..45 ⇒ 90° 超出，我不擅自放宽
+run --commission-hardware --with-imu --yaw-sweep-deg N --yaw-sweep-ff-a A   # drag sweep：正对"各角度阻力不均"
+```
+
+真机跑了一趟 `--yaw-step-deg 45`：**校验通过、会话正常结束**（`COMMISSIONING FINISHED; zero output requested`），
+但**没有报出任何位移**。首要怀疑（**未验证**，不当结论）：usage 明写"yaw 推力单位跟随 `axes.yaw.control_mode`：
+电流驱动用 `--yaw-current-a`，电压驱动用 `--yaw-voltage`，探针会拒绝用错的那个"——我两者都没给，
+**在这条 current-mode profile 上探针可能是"零推力"于是根本没推**。下一轮先读 `axes.yaw.control_mode`，
+再按 `:482` 那次成功记录的量级给显式推力重跑。
+
+`enabled_state=-1` **就地结案，不是故障**：账本写着 `GM6020 zero voltage is not a verified disable`
+（`:495`）——断开状态本来就不可确认，每次停栈那句 `disable state unavailable` 是预期行为。
