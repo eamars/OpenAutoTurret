@@ -40,7 +40,7 @@ from ..fake_controld import FakeControld
 from ..hud import HUD_JS
 from . import fake_camera
 
-DOC = Path(__file__).resolve().parents[3] / "docs" / "open_auto_turret_v3_2_apache_hud_ui_revision.md"
+DOC = Path(__file__).resolve().parents[3] / "docs" / "archive" / "implemented" / "design" / "open_auto_turret_v3_2_apache_hud_ui_revision.md"
 
 
 def _section_20_names() -> list:

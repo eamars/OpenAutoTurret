@@ -14,6 +14,7 @@
 //   * §18 safety envelope (stay inside the soft limits; safe stop on fault).
 //
 // The whole path is testable with no live camera, CAN, or motor driver (§54).
+#include "ota_test_paths.hpp"
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -400,7 +401,7 @@ TEST(TrackingIntegration, VelocityServiceConvergesThenHonorsManualHold) {
 }
 
 TEST(MotionIntegration, ConfiguredLimitsReachMotorCommandsAndRemainIndependentPerAxis) {
-  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"config/turret.yaml";
+  const auto path = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path())/"config/turret.yaml";
   auto loaded = config::load_turret_config(path.string());
   ASSERT_TRUE(loaded.ok);
   for (bool slow_pitch : {false,true}) {
@@ -439,7 +440,7 @@ TEST(MotionIntegration, ConfiguredLimitsReachMotorCommandsAndRemainIndependentPe
 }
 
 TEST(MotionIntegration, LowerManualLimitBrakesSmoothlyAfterRoamAndLeaseExpiryStops) {
-  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"config/turret.yaml";
+  const auto path = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path())/"config/turret.yaml";
   auto loaded = config::load_turret_config(path.string());
   ASSERT_TRUE(loaded.ok);
   auto motion = loaded.config.motion;

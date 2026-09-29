@@ -1,4 +1,5 @@
 // OpenAutoTurret — ControlLoop implementation (§46 per-cycle engine).
+#include "control/stop_evidence.hpp"
 #include "control/control_loop.hpp"
 
 #include <spdlog/spdlog.h>
@@ -240,8 +241,24 @@ bool ControlLoop::start_parking(std::string& err) {
     }
   }
   if (phase_ == Phase::Parking || phase_ == Phase::Parked) return true;
-  if (phase_ == Phase::Homing || phase_ == Phase::Fault || phase_ == Phase::Recovering) {
-    err = "parking unavailable during homing or fault; Home is required for recovery";
+  if (phase_ == Phase::Homing) {
+    // The seam that mattered most, and it was upstream of today's other fix. Homing is precisely
+    // when feedback is least likely to be readable, and this used to answer "no" to a request to
+    // stop -- which means the one command that must always work was refused for lack of evidence,
+    // while the owner's ruling of today already decided that a hold during homing is a warning
+    // and not a fault. So: accept, drive to neutral, record it as unverified, and let the park
+    // claim stay withheld (the shutdown line will say parked=false, which is the truth).
+    spdlog::warn("stop requested during homing: homing loses, the stop wins; park claim withheld");
+    stop_and_record_unverified("stop arrived while homing");
+    shutdown_requested_.store(true);
+    err = "stop accepted during homing: park claim withheld";
+    return true;
+  }
+  if (phase_ == Phase::Fault || phase_ == Phase::Recovering) {
+    // Still a refusal, and deliberately so: in these phases no motion is being commanded -- the
+    // guard has already taken motion authority away -- so "cannot park" is not a station that
+    // keeps moving. Recovery needs Home, and pretending otherwise would erase that.
+    err = "parking unavailable during fault or recovery; Home is required for recovery";
     return false;
   }
   if (backend_->supports_continuous_yaw()) {
@@ -277,14 +294,29 @@ bool ControlLoop::start_parking(std::string& err) {
           pitch.disabled_known, pitch.disabled, pitch.in_speed_mode,
           pitch.in_position_mode, fresh(yaw),
           (stop_observation_now - yaw.rx_ns) / 1e6, yaw.q_rad * kRad2Deg);
-      err = "cannot stop/park: require fresh yaw and healthy running pitch feedback";
-      return false;
+      // "cannot stop" is the wrong answer to a request to stop. Refusing here keeps the axes
+      // energised exactly when the evidence about them is weakest, and docs/ADR-001/docs/07
+      // (WP2: "stale 时可请求停止但不盲 park") plus 08/S0 ("无 readiness 拒绝停止请求") say the
+      // same thing in the spec's own words. So the readiness gate now downgrades the *claim*,
+      // never the *request*: send neutral, ask for the pitch disable, write a record that says
+      // it cannot be verified, and accept. Not fail_parking() -- that latches a Fault, and
+      // "stopped while I could not read myself" is not the owner's definition of a fault.
+      const std::string why = "incomplete evidence at the stop request (see the readiness line above)";
+      spdlog::warn("mixed stop accepted unverified: the station stops, the claim is withheld");
+      stop_and_record_unverified(why);
+      err = "stop accepted without verification: " + why;
+      return true;
     }
     const double yaw_speed = std::max(std::abs(yaw.v_rad_s),
                                       std::abs(v_est_[ix(AxisId::Yaw)]));
     if (!std::isfinite(yaw_speed) || yaw_speed > 25.0 * kDeg2Rad) {
-      err = "cannot stop/park: yaw speed exceeds the independent 25 deg/s stop guard";
-      return false;
+      // Same reasoning, and the case that reads best as a bug: a yaw moving faster than 25 deg/s
+      // used to be told it may not stop -- too fast to be allowed to slow down.
+      const std::string why = "yaw outside the verified-stop envelope at the request";
+      spdlog::warn("mixed stop accepted unverified: yaw_speed={:.3f} deg/s", yaw_speed * kRad2Deg);
+      stop_and_record_unverified(why);
+      err = "stop accepted without verification: " + why;
+      return true;
     }
     const auto& pl = limits_[ix(AxisId::Pitch)];
     const auto& model = models_[ix(AxisId::Pitch)];
@@ -313,6 +345,16 @@ bool ControlLoop::start_parking(std::string& err) {
       err = "cannot stop/park: invalid bounded pitch stop parameters";
       return false;
     }
+    // WP2 ②: a repeated stop must not restart the clock. Everything above this line only reads;
+    // from here down the function rewrites park state and mints a fresh stop_id. Without a guard,
+    // a second request while a park is already in flight (a) pushed the deadline out -- press
+    // STOP repeatedly and the park is forever in progress, never timing out -- and (b) abandoned
+    // the first request's evidence chain under a new identity. Idempotence, per 07's "重复 stop
+    // 不得重置 deadline": accept the request, leave the in-flight park and its stop_id alone.
+    if (mixed_stop_park_) {
+      err = "stop already in progress; the park, its deadline and its stop_id are unchanged";
+      return true;
+    }
     mixed_park_pitch_target_rad_ = target;
     mixed_park_yaw_origin_rad_ = yaw.q_rad;
     constexpr double yaw_brake_rad_s2 = 30.0 * kDeg2Rad;
@@ -331,6 +373,27 @@ bool ControlLoop::start_parking(std::string& err) {
                            (cfg_.park.speed_deg_s * kDeg2Rad) +
                            yaw_speed / yaw_brake_rad_s2 + 5.0) * 1e9);
     mixed_stop_park_ = true;
+    {
+      StopEvidence ev;
+      mixed_stop_id_ = "stop-" + std::to_string(now_ns_);
+      ev.stop_id = mixed_stop_id_;
+      ev.reason = fault_reason_.empty() ? "stop_or_park" : "fault_stop";
+      ev.requested_at_ns = now_ns_;
+      ev.stage = "requested";
+      ev.axes[0].axis = "pitch";
+      ev.axes[1].axis = "yaw";
+      for (int i = 0; i < kAxisCount; ++i) {
+        ev.axes[i].zero_requested = Evidence::Requested;
+        ev.axes[i].feedback_age_ms = -1.0;  // nothing observed yet at request time
+      }
+      ev.axes[0].disable_requested = Evidence::Requested;
+      ev.axes[0].disable_confirmed = Evidence::Absent;   // not yet; asked, unproven
+      // The GM6020 has no disable to request: what we send is neutral, not de-energise.
+      ev.axes[1].disable_requested = Evidence::Unsupported;
+      ev.axes[1].disable_confirmed = Evidence::Unsupported;
+      ev.finalise();
+      telemetry_.append_stop_evidence(ev.to_json_line());
+    }
     park_.reset();
     park_failed_ = false;
     disable_tracking();
@@ -397,9 +460,85 @@ bool ControlLoop::start_parking(std::string& err) {
   return true;
 }
 
+void ControlLoop::stop_and_record_unverified(const std::string& why) {
+  // The action a stop request always performs, and the one record shape that says "we asked and
+  // cannot certify". Deliberately not a Fault: the axes are being driven to neutral, which is
+  // what the caller asked for; what is withheld is the park claim, not the power.
+  if (mixed_stop_id_.empty()) mixed_stop_id_ = "stop-" + std::to_string(now_ns_);
+  backend_->command_velocity(AxisId::Yaw, 0.0);
+  const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
+  if (pitch.has_feedback && std::isfinite(pitch.q_rad)) {
+    if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+    else if (pitch.in_position_mode)
+      backend_->command(AxisId::Pitch, pitch.q_rad, cfg_.park.verify_speed_deg_s * kDeg2Rad);
+  }
+  mixed_yaw_zero_requested_ns_ = now_ns_;
+  StopEvidence ev;
+  ev.stop_id = mixed_stop_id_;
+  ev.reason = "stop_or_park";
+  ev.requested_at_ns = now_ns_;
+  ev.stage = "requested_unverified: " + why;
+  ev.axes[0].axis = "pitch";
+  ev.axes[1].axis = "yaw";
+  for (int i = 0; i < kAxisCount; ++i) {
+    ev.axes[i].zero_requested = Evidence::Requested;
+    ev.axes[i].feedback_age_ms = -1.0;   // unknown here; a 0 would be a reading we did not take
+  }
+  ev.axes[0].disable_requested = Evidence::Requested;
+  ev.axes[0].disable_confirmed = Evidence::Absent;
+  ev.axes[1].disable_requested = Evidence::Unsupported;
+  ev.axes[1].disable_confirmed = Evidence::Unsupported;
+  ev.finalise();
+  telemetry_.append_stop_evidence(ev.to_json_line());
+}
+
+void ControlLoop::note_shutdown(bool parked, const std::string& cause) {
+  // Written once, at process end, from the point where the outcome is known: the third line
+  // of a stop's story -- the request, the per-axis evidence, and here whether the process
+  // actually reached Parked and why it is going away. Without it "we asked" and "it stopped"
+  // stay two claims rather than one record.
+  std::string reason = cause;
+  for (char& ch : reason) {
+    if (ch == '"' || ch == '\\' || ch == '\n') ch = ' ';   // one record per line, parseable always
+  }
+  // Raw strings because this line is JSON: with escapes it was rewritten wrong twice today.
+  telemetry_.append_stop_evidence(
+      std::string(R"({"kind":"shutdown","stop_id":")") +
+      (mixed_stop_id_.empty() ? "stop-none" : mixed_stop_id_) +
+      R"(","parked":)" + std::string(parked ? "true" : "false") + R"(,"phase":")" +
+      std::string(phase_name(phase())) + R"(","cause":")" + reason + R"("})" + "\n");
+}
+
 void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   // Verification failure withholds automatic release. Emergency safety
   // actions retain their independent disable authority.
+  {
+    // A stop that failed still has to close its own record. Before this, the file held a
+    // `requested` line and then silence, so a reader could not tell "the stop was never asked
+    // for" from "we asked, drove it, and could not prove it stopped" -- and the second one is
+    // the case anybody reads the file for. Same stop_id as the request, which is the only
+    // thing that ties the two lines together.
+    StopEvidence ev;
+    if (mixed_stop_id_.empty())
+      mixed_stop_id_ = "stop-" + std::to_string(now_ns_);   // failed before a request was logged
+    ev.stop_id = mixed_stop_id_;
+    ev.reason = fault_reason_.empty() ? "stop_or_park" : "fault_stop";
+    ev.requested_at_ns = now_ns_;
+    ev.stage = "failed: " + reason;
+    ev.axes[0].axis = "pitch";
+    ev.axes[1].axis = "yaw";
+    for (int i = 0; i < kAxisCount; ++i) {
+      // We did send a neutral this function, whatever happened afterwards.
+      ev.axes[i].zero_requested = Evidence::Requested;
+      ev.axes[i].feedback_age_ms = -1.0;   // not measured here; -1 is "unknown", not "instant"
+    }
+    ev.axes[0].disable_requested = Evidence::Requested;
+    ev.axes[0].disable_confirmed = Evidence::Absent;
+    ev.axes[1].disable_requested = Evidence::Unsupported;  // the GM6020 has no disable to confirm
+    ev.axes[1].disable_confirmed = Evidence::Unsupported;
+    ev.finalise();
+    telemetry_.append_stop_evidence(ev.to_json_line());
+  }
   if (backend_->supports_continuous_yaw()) {
     backend_->command_velocity(AxisId::Yaw, 0.0);
     const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
@@ -419,6 +558,11 @@ void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   shutdown_requested_.store(false);
   phase_ = Phase::Fault;
   fault_reason_ = "PARK FAILED: " + reason;
+  // A park that could not be verified is its own mechanism mystery, so it earns a
+  // window too — but the first latch wins: if a guard already froze the cycles
+  // that led to this, overwriting them with the aftermath of the stop would trade
+  // the evidence for a picture of the wreckage.
+  if (!telemetry_.trace_frozen()) telemetry_.freeze_control_trace();
   disable_tracking();
   spdlog::error("{}; automatic park release withheld; services remain online", fault_reason_);
   if (motion_fault) {
@@ -498,8 +642,15 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   double yaw_high = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
   if (backend_->supports_continuous_yaw()) {
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
-    yaw_low = virtual_yaw.q_soft_min_rad;
-    yaw_high = virtual_yaw.q_soft_max_rad;
+    if (virtual_yaw.unbounded()) {
+      // Nothing to clamp against: the search span is the whole answer, and it is
+      // already centred on the ready pose, so it stays finite either way.
+      yaw_low = ready_yaw - cfg_.search_span_rad;
+      yaw_high = ready_yaw + cfg_.search_span_rad;
+    } else {
+      yaw_low = virtual_yaw.q_soft_min_rad;
+      yaw_high = virtual_yaw.q_soft_max_rad;
+    }
   }
   double lo = std::max(ready_yaw - cfg_.search_span_rad, yaw_low + inset);
   double hi = std::min(ready_yaw + cfg_.search_span_rad, yaw_high - inset);
@@ -601,8 +752,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   backend_->heartbeat();
   if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
     deenergize_all();
-    if (phase_ != Phase::Fault)
-      fault("independent motor watchdog: control deadline, feedback, or motor health");
+    if (phase_ != Phase::Fault) {
+      // The trip reason is published by the guard that latched it, when there is
+      // one. "control deadline, feedback, or motor health" is a family of ten
+      // causes; an operator cannot act on a family, so the condition token and a
+      // MOTOR_WATCHDOG_TRIP event carry the specific cause whenever a backend has it.
+      const auto trip = backend_->watchdog_trip_detail();
+      if (trip.valid) {
+        telemetry_.push_event(now_ns, telemetry::Event::MotorWatchdogTrip,
+                              std::string(trip.detail));
+        fault(std::string("independent motor watchdog trip: ") + trip.condition);
+      } else {
+        fault("independent motor watchdog: control deadline, feedback, or motor health");
+      }
+    }
   }
   now_ns_ = now_ns;
   // Commands are executed inside the cycle and need a timestamp to record a selection
@@ -617,6 +780,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     last_q_[i] = sp[i].q_rad;  // for telemetry
     last_temp_[i] = sp[i].temperature_known
         ? sp[i].temp_c : std::numeric_limits<double>::quiet_NaN();
+    last_temp_raw_[i] = sp[i].temperature_raw;
+    last_temp_raw_valid_[i] = sp[i].temperature_raw_valid;
     // Position-derived velocity (see header): refresh only when fresh
     // feedback arrives so the 200 Hz loop does not average in zeros.
     if (sp[i].has_feedback && sp[i].rx_ns > v_est_t_prev_[i]) {
@@ -661,8 +826,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     } else if (yaw_reference_stationary_since_ns_ == 0) {
       yaw_reference_candidate_rad_ = yaw.q_rad;
       yaw_reference_stationary_since_ns_ = yaw.rx_ns;
-    } else if (std::abs(yaw.q_rad - yaw_reference_candidate_rad_) >
+    } else if (!std::isfinite(yaw_reference_candidate_rad_) ||
+               std::abs(yaw.q_rad - yaw_reference_candidate_rad_) >
                kYawReferencePositionToleranceRad) {
+      // A nan candidate used to survive forever here: every comparison with nan is false, so
+      // "has it moved?" said no, the stationary timer ran out, and a nan became the session
+      // zero with valid=true attached -- which is what made every later homing check fire on
+      // delta_deg=nan. Re-seed instead; the angle we are reading now is a real number.
       yaw_reference_candidate_rad_ = yaw.q_rad;
       yaw_reference_stationary_since_ns_ = yaw.rx_ns;
     } else if (yaw.rx_ns - yaw_reference_stationary_since_ns_ >=
@@ -1266,12 +1436,23 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
               std::abs(v_est_[i]) > 2.0*kDeg2Rad ||
               std::abs(yaw.q_rad-yaw_session_reference_rad_) >
                   kYawPitchHomingHoldToleranceRad) {
-            spdlog::error("continuous yaw homing hold rejected: age_ms={} delta_deg={:.3f} encoder_speed_deg_s={:.3f} motor_speed_deg_s={:.3f}",
-                         (now_ns-yaw.rx_ns)/1'000'000,
-                         (yaw.q_rad-yaw_session_reference_rad_)*kRad2Deg,
-                         v_est_[i]*kRad2Deg, yaw.v_rad_s*kRad2Deg);
-            motion_error = "continuous yaw moved or lost fresh stationary feedback during pitch homing";
-            break;
+            // Owner's ruling of 2026-09-28, applied here: "pitch 归零期间 yaw 动了 -> 这条也不
+            // 应该作为 fault 的理由，根据之前约定的，这条不影响安全操作，所以应该当作 warning，
+            // 而不是直接让 turret 掉电 fault". Pitch homes against its own endstop; a yaw that
+            // drifts, or that we cannot read for a moment, is not pushing anything. The yaw
+            // still earns a fault from the guard's own loss-of-control conditions (feedback
+            // unsafe, bus down, drive silent, motor hot) -- that is where "we cannot control
+            // it" lives, and it is not this line. It aborted a deploy today over
+            // delta_deg=nan: arithmetic on our side, a power cut on the payload's account.
+            if (!homing_warning_ns_[i] || now_ns-homing_warning_ns_[i] >= 1'000'000'000LL) {
+              spdlog::warn("continuous yaw moved or lost fresh stationary feedback during pitch "
+                           "homing: age_ms={} delta_deg={:.3f} encoder_speed_deg_s={:.3f} "
+                           "motor_speed_deg_s={:.3f}; continuing (not a fault)",
+                           (now_ns-yaw.rx_ns)/1'000'000,
+                           (yaw.q_rad-yaw_session_reference_rad_)*kRad2Deg,
+                           v_est_[i]*kRad2Deg, yaw.v_rad_s*kRad2Deg);
+              homing_warning_ns_[i] = now_ns;
+            }
           }
           continue;  // GM6020 has no temperature/fault/torque scale for the legacy guard.
         }
@@ -1770,15 +1951,51 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         if (mixed_pitch_disable_requested_ && pitch_disable_confirmed &&
             fresh(pitch) && pitch.disabled_known && pitch.disabled &&
             yaw_dwell_complete && mixed_yaw_zero_request_count_ >= 20) {
-          backend_->deenergize(AxisId::Yaw);  // final zero-voltage request; not disable proof
+          backend_->deenergize(AxisId::Yaw);  // final zero-output request; not disable proof
           phase_ = Phase::Parked;
           homed_ = false;
           pitch_homed_ = false;
           at_ready_ = false;
           mixed_stop_park_ = false;
           shutdown_requested_.store(false);
-          spdlog::info("MIXED STOPPED: pitch disable confirmed by fresh feedback at {} ns; GM6020 received repeated zero-speed requests and final zero-voltage request; yaw disable state unavailable",
+          spdlog::info("MIXED STOPPED: pitch disable confirmed by fresh feedback at {} ns; GM6020 received repeated zero-speed requests and a final zero-output request (zero current where the profile commands current); yaw disable state unavailable",
                        mixed_pitch_disabled_confirmed_ns_);
+          {
+            // "stationary_observed" here is the dwell and pose verification this branch
+            // already required: position held inside a tolerance for a stated window. A
+            // weaker claim than "de-torqued", and the contract is right that only the
+            // weaker one is available from a frame with no enable bit.
+            StopEvidence ev;
+            ev.stop_id = mixed_stop_id_.empty() ? "stop-" + std::to_string(now_ns)
+                                               : mixed_stop_id_;
+            ev.reason = fault_reason_.empty() ? "stop_or_park" : "fault_stop";
+            ev.requested_at_ns = now_ns;
+            ev.stage = "parked";
+            ev.axes[0].axis = "pitch";
+            ev.axes[1].axis = "yaw";
+            ev.axes[0].zero_requested = Evidence::Requested;
+            ev.axes[0].disable_requested = Evidence::Requested;
+            ev.axes[0].disable_confirmed = Evidence::Confirmed;   // fresh feedback said so
+            ev.axes[1].zero_requested = Evidence::Requested;
+            ev.axes[1].disable_requested = Evidence::Unsupported;
+            ev.axes[1].disable_confirmed = Evidence::Unsupported; // no such bit to read
+            ev.axes[0].feedback_age_ms = static_cast<double>(now_ns - pitch.rx_ns) / 1e6;
+            ev.axes[1].feedback_age_ms = static_cast<double>(now_ns - yaw.rx_ns) / 1e6;
+            ev.axes[0].last_neutral_request_ns = mixed_pitch_disable_requested_ns_;
+            ev.axes[1].last_neutral_request_ns = mixed_yaw_zero_requested_ns_;
+            const long long pitch_window = now_ns - mixed_pitch_disable_requested_ns_;
+            const long long yaw_window = now_ns - mixed_park_yaw_dwell_since_ns_;
+            if (pitch_window > 0) {
+              ev.axes[0].stationary_observed = Evidence::Observed;
+              ev.axes[0].stationary_window_ns = pitch_window;
+            }
+            if (yaw_window > 0) {   // yaw_dwell_complete is a precondition of this branch
+              ev.axes[1].stationary_observed = Evidence::Observed;
+              ev.axes[1].stationary_window_ns = yaw_window;
+            }
+            ev.finalise();
+            telemetry_.append_stop_evidence(ev.to_json_line());
+          }
         }
         break;
       }
@@ -2114,6 +2331,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.q_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].q_rad;
     rec.v_actual[ix(AxisId::Pitch)] = sp[ix(AxisId::Pitch)].v_rad_s;
     rec.v_actual[ix(AxisId::Yaw)] = sp[ix(AxisId::Yaw)].v_rad_s;
+    // The two hops closest to the motor, per axis: what the backend accepted after its own
+    // gates, and what the actuator law put on the wire. NaN (null in the file) where the
+    // drive does not report it, which is honest rather than a flattering zero.
+    for (int i = 0; i < kAxisCount; ++i) {
+      const AxisId axis = static_cast<AxisId>(i);
+      rec.backend_cmd[i] = backend_->diag_commanded_speed_rad_s(axis);
+      rec.drive_out[i] = backend_->diag_output(axis);
+    }
     // Position-derived acceleration / jerk (C1, A.1): the trustworthy motion
     // derivatives for smoothness observation and jitter-threshold tuning.
     rec.a_actual[ix(AxisId::Pitch)] = a_est_[ix(AxisId::Pitch)];
@@ -2129,16 +2354,23 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     rec.cycle_duration_us = period_ns / 1000;
     rec.track_state = tracking_ ? tracking_->track_state()
                                 : tracking::TrackState::ReadyHold;
+    rec.phase = phase_;
+    rec.mode = mode_mgr_.mode();
     rec.command_seq = ack_seq_;
     rec.probe_omega = response_probe_until_ns_ > now_ns ? response_probe_omega_ : 0;
     for (int i = 0; i < kAxisCount; ++i) {
       rec.effort[i] = sp[i].torque_nm;
+      // Straight through, no zero substitution: a drive that reports no current leaves the
+      // snapshot's NaN here, and the serializer renders that as null.
+      rec.current_a[i] = sp[i].current_a;
       rec.probe_goal[i] = response_probe_q_[i];
       rec.feedback_ns[i] = sp[i].rx_ns;
       rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
       rec.v_command[i] = service_command_rate[i];
       rec.v_estimated[i] = v_est_[i];
-      rec.soft_limit_distance[i] = limits_[i].valid ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
+      rec.soft_limit_distance[i] = limits_[i].declared()
+        ? limits_[i].distance_to_soft(sp[i].q_rad) : 0.0;
+      rec.temp_raw[i] = sp[i].temperature_raw_valid ? static_cast<int>(sp[i].temperature_raw) : -1;
     }
     telemetry_.push_control(rec);
     telemetry_.push_blackbox(rec);
@@ -2158,9 +2390,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.service_command_rate_pitch_rad_s = service_command_rate[ix(AxisId::Pitch)];
     snap.v_yaw_rad_s = sp[ix(AxisId::Yaw)].v_rad_s;
     snap.effort_yaw = sp[ix(AxisId::Yaw)].torque_nm;
+    snap.current_a_yaw = sp[ix(AxisId::Yaw)].current_a;
     snap.q_pitch_rad = sp[ix(AxisId::Pitch)].q_rad;
     snap.v_pitch_rad_s = sp[ix(AxisId::Pitch)].v_rad_s;
     snap.effort_pitch = sp[ix(AxisId::Pitch)].torque_nm;
+    snap.current_a_pitch = sp[ix(AxisId::Pitch)].current_a;
     snap.q_ref_yaw_rad = q_ref[ix(AxisId::Yaw)];
     snap.q_ref_pitch_rad = q_ref[ix(AxisId::Pitch)];
     {
@@ -2602,8 +2836,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // turret was near an end without knowing which end, or whether an end existed yet.
     const AxisLimits published_limits[kAxisCount] = {
         runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
-    snap.soft_limits_valid = published_limits[ix(AxisId::Pitch)].valid &&
-                             published_limits[ix(AxisId::Yaw)].valid;
+    // "Declared" and "bounded" are different questions. An axis declared
+    // unbounded is ready; an axis whose envelope nobody has written down yet is
+    // not -- conflating them is how removing a limit silently un-readies a station.
+    snap.soft_limits_valid = published_limits[ix(AxisId::Pitch)].declared() &&
+                             published_limits[ix(AxisId::Yaw)].declared();
 
     // §20/§11: publish the same per-cycle limits used by planning and safety.
     // Continuous GM6020 yaw has a session-relative policy sector, not measured
@@ -2625,14 +2862,19 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
     snap.q_soft_min_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_min_rad;
     snap.q_soft_max_pitch_rad = published_limits[ix(AxisId::Pitch)].q_soft_max_rad;
+    // `!unbounded()`, not `declared()`: an axis that declares no envelope is declared.
+    // Asking the wrong predicate here is what made an unbounded yaw answer "sector".
+    snap.yaw_envelope_bounded = !published_limits[ix(AxisId::Yaw)].unbounded();
+    snap.yaw_band_min_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
+    snap.yaw_band_max_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.q_soft_min_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_min_rad;
     snap.q_soft_max_yaw_rad = published_limits[ix(AxisId::Yaw)].q_soft_max_rad;
     snap.soft_limit_distance_pitch_rad =
-        published_limits[ix(AxisId::Pitch)].valid
+        published_limits[ix(AxisId::Pitch)].declared()
             ? published_limits[ix(AxisId::Pitch)].distance_to_soft(sp[ix(AxisId::Pitch)].q_rad)
             : 0.0;
     snap.soft_limit_distance_yaw_rad =
-        published_limits[ix(AxisId::Yaw)].valid
+        published_limits[ix(AxisId::Yaw)].declared()
             ? published_limits[ix(AxisId::Yaw)].distance_to_soft(sp[ix(AxisId::Yaw)].q_rad)
             : 0.0;
     snap.intent_has_joint_target = last_intent_.has_joint_target;
@@ -2719,6 +2961,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.control_deadline_grace_us = static_cast<int64_t>(cfg_.deadline_max_us);
     snap.control_deadline_miss_limit = static_cast<int64_t>(cfg_.deadline_miss_threshold);
     snap.envelope_v_max_deg_s = env_.v_max() * kRad2Deg;
+    snap.yaw_cmd_shaped_deg_s = backend_->diag_commanded_speed_rad_s(AxisId::Yaw) * kRad2Deg;
+    snap.yaw_cmd_output = backend_->diag_output(AxisId::Yaw);
+    snap.yaw_guard_degraded = backend_->diag_degraded();
+    snap.yaw_guard_events = backend_->diag_guard_events();
     snap.camera_measurement_age_ms = -1;
     if (camera_cal_mtime_ns_ > 0) {
       const int64_t realtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2781,6 +3027,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     double az_base = 0.0, el_base = 0.0;
     if (tracking_) tracking_->predicted_los(az_base, el_base);
     fill_world_frame_telemetry(base_orientation_, az_base, el_base, snap);
+    bool imu_fresh = false, imu_gravity_fresh = false;
+    {
+      std::lock_guard<std::mutex> lk(imu_mutex_);
+      imu_fresh = imu_observation_.present;
+      imu_gravity_fresh = imu_observation_.gravity_valid;
+    }
+    telemetry::fill_imu_telemetry(imu_fresh, imu_gravity_fresh, snap);
     telemetry_.set_snapshot(snap);
   }
 
@@ -2900,6 +3153,7 @@ RoamEnvelope ControlLoop::safe_envelope() const {
     // This planner sector is the same transient session policy used by safety;
     // it is not a measured motor endpoint or retained homing.
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
+    e.yaw_unbounded = virtual_yaw.unbounded();
     e.yaw_min_rad = virtual_yaw.q_soft_min_rad;
     e.yaw_max_rad = virtual_yaw.q_soft_max_rad;
   } else {
@@ -2990,8 +3244,17 @@ RoamConfig ControlLoop::roam_config() const {
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
   if (backend_->supports_continuous_yaw()) {
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
-    const double virtual_min = virtual_yaw.q_soft_min_rad;
-    const double virtual_max = virtual_yaw.q_soft_max_rad;
+    double virtual_min = virtual_yaw.q_soft_min_rad;
+    double virtual_max = virtual_yaw.q_soft_max_rad;
+    if (virtual_yaw.unbounded()) {
+      // No outer wall to inherit a sweep from, so the region is declared around
+      // the session reference: the same span a lost-target search already uses,
+      // narrowed further if the file names a roam region. The centre is the
+      // session reference, not where the last sweep ended, so nothing wanders.
+      virtual_min = ready_yaw - cfg_.search_span_rad;
+      virtual_max = ready_yaw + cfg_.search_span_rad;
+      c.envelope.yaw_unbounded = false;  // the region has two ends even if the axis does not
+    }
     c.envelope.yaw_min_rad = virtual_min + c.min_inside_safe_rad;
     c.envelope.yaw_max_rad = virtual_max - c.min_inside_safe_rad;
     if (cfg_.roam_region_named) {
@@ -3336,7 +3599,25 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   if (cfg_.motion.configured) {
     l.manual_v_max_rad_s = motion_speed(OperatingMode::Manual);
     l.track_v_max_rad_s = motion_speed(OperatingMode::AutoTrack);
-    l.roam_v_max_rad_s = motion_speed(OperatingMode::AutoRoam);
+    // A roam sweep moves yaw and holds pitch, so the sweep may not ask for more
+    // than the yaw's own profiled speed. `motion_speed()` is one scalar across both
+    // axes -- the max of the two, i.e. pitch's -- which was harmless only while
+    // something else kept the yaw slow. With the yaw envelope declared away
+    // (2026-09-28) the long approach into the sweep region drove the yaw past the
+    // mixed backend's own speed ceiling on the station. Read that day as "the guard was
+    // right, the ask was wrong" -- half right. Capping the ask was correct; the guard
+    // itself was the wrong shape, because a ceiling that removes power from an
+    // unbalanced payload punishes the mount for a fast reading. Owner ruling
+    // 2026-09-28: the ceiling clamps the command and never trips on a measurement.
+    // The cap is the axis's DECLARED maximum, not the roam profile's target speed:
+    // the first cut used `.target.speed` and the sweep froze on the station (intent
+    // published, `roam_progress` stuck at 0.08%, `phase=hold`) because the station
+    // file names no AUTO_ROAM target for yaw -- a zero cap is paralysis wearing a
+    // number, which is exactly the failure this whole change is about. `maximum`
+    // comes from the per-axis declared ceiling, which the parser guarantees > 0.
+    const double yaw_cap =
+        motion_profile(ix(AxisId::Yaw), OperatingMode::AutoRoam).maximum.speed;
+    if (yaw_cap > 0.0) l.roam_v_max_rad_s = std::min(l.roam_v_max_rad_s, yaw_cap);
     l.hold_v_max_rad_s = motion_speed(mode_mgr_.mode());
   }
   return l;
@@ -3352,12 +3633,25 @@ AxisLimits ControlLoop::runtime_limits(AxisId axis) const {
   // and is never persisted as homing. Invalid policy config fails closed.
   const double half_span = cfg_.continuous_yaw_sector_half_span_rad;
   const double inset = cfg_.continuous_yaw_sector_inset_rad;
+  if (half_span == 0.0) {
+    // The station file declared no sector at all. That is a position, not a gap:
+    // the axis is bounded by nothing, and every consumer must be told so rather
+    // than handed an unestablished limit set it will read as "cannot move".
+    AxisLimits l = AxisLimits::no_envelope();
+    // Carry the declared band as a reference scale (see continuous_yaw_band_half_span_rad).
+    // The envelope label is what makes this safe to read: `Unbounded` means these two
+    // numbers are a ruler, not a wall -- and the display layer is the only consumer.
+    const double band = cfg_.continuous_yaw_band_half_span_rad;
+    l.q_soft_min_rad = -band;
+    l.q_soft_max_rad = band;
+    return l;
+  }
   if (!yaw_session_reference_valid_ || !std::isfinite(yaw_session_reference_rad_) ||
-      !std::isfinite(half_span) || !std::isfinite(inset) || half_span <= 0.0 ||
+      !std::isfinite(half_span) || !std::isfinite(inset) || half_span < 0.0 ||
       inset < 0.0 || inset >= half_span)
     return {};
   AxisLimits sector;
-  sector.set_from_endpoints(yaw_session_reference_rad_ - half_span,
+  sector.set_virtual_sector(yaw_session_reference_rad_ - half_span,
                             yaw_session_reference_rad_ + half_span, inset);
   return sector;
 }

@@ -5,7 +5,9 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <filesystem>
 #include <iterator>
 #include <mutex>
@@ -13,6 +15,7 @@
 #include <vector>
 
 #include "can/gm6020_protocol.hpp"
+#include "can/gm6020_velocity.hpp"
 #include "can/socketcan_bus.hpp"
 #include "can/yousee_transport.hpp"
 #include "can/cybergear_protocol.hpp"
@@ -46,6 +49,20 @@ TEST(GM6020Codec, DecodesStandardFeedbackAndRejectsWrongFrameTypes) {
   EXPECT_EQ(decoded.current_raw, -32767);
   EXPECT_EQ(decoded.temperature_raw, 42);
   EXPECT_EQ(decoded.rx_ns, 123456);
+  // Amperes, by the same scale the command side uses. The accessor is a unit conversion
+  // and not a clamp: this frame reports -32767, beyond the +-16384 the command side can
+  // ask for, and inventing a ceiling here would hide exactly the overload a friction
+  // investigation goes looking for.
+  EXPECT_DOUBLE_EQ(decoded.current_a(), -32767 * (3.0 / 16384.0));
+  auto at_full = valid;
+  at_full.data[4] = 0x40;
+  at_full.data[5] = 0x00;  // raw +16384
+  ASSERT_TRUE(ota::gm6020::decode(at_full, 1, decoded));
+  EXPECT_DOUBLE_EQ(decoded.current_a(), 3.0);  // the documented endpoint, exactly
+  at_full.data[4] = 0xC0;
+  at_full.data[5] = 0x00;  // raw -16384
+  ASSERT_TRUE(ota::gm6020::decode(at_full, 1, decoded));
+  EXPECT_DOUBLE_EQ(decoded.current_a(), -3.0);
 
   auto wrong = valid;
   wrong.extended = true;  // Same numeric ID, wrong CAN frame type.
@@ -314,3 +331,121 @@ TEST(SocketCanTypedFrames, VcanRoutesSffEffAndRtrWithoutLosingFlags) {
 }
 
 }  // namespace
+
+
+// Torque-current command path (migration from voltage). Encoding is checked against the
+// documented endpoints, the clamp is checked in amperes, and the unused slots are checked to be
+// zero because a leftover byte there would command a motor this turret does not have.
+TEST(Gm6020Current, Id1FrameIsStandardDlc8On0x1FEWithZeroedUnusedSlots) {
+  const auto f = ota::gm6020::current_frame(1, 0.8, 0.8);
+  EXPECT_EQ(f.id, 0x1feu);
+  EXPECT_FALSE(f.extended);
+  EXPECT_EQ(f.dlc, 8);
+  EXPECT_EQ(f.data[0], 0x11);   // 0.8 A -> 4369 raw -> 0x1111, big-endian
+  EXPECT_EQ(f.data[1], 0x11);
+  for (int i = 2; i < 8; ++i) EXPECT_EQ(f.data[i], 0) << "unused slot " << i;
+}
+
+TEST(Gm6020Current, NegativeCurrentIsTwoSComplementBigEndian) {
+  const auto f = ota::gm6020::current_frame(1, -0.5, 0.8);
+  EXPECT_EQ(f.data[0], 0xF5);   // -2731 -> 0xF555
+  EXPECT_EQ(f.data[1], 0x55);
+}
+
+TEST(Gm6020Current, ScaleMatchesTheDocumentedEndpoints) {
+  EXPECT_EQ(ota::gm6020::current_raw_uncapped(0.0), 0);
+  EXPECT_EQ(ota::gm6020::current_raw_uncapped(3.0), 16384);
+  EXPECT_EQ(ota::gm6020::current_raw_uncapped(-3.0), -16384);
+}
+
+TEST(Gm6020Current, HostLimitClampsBeforeEncoding) {
+  // 2.0 A demanded against a 0.8 A ceiling must arrive at the motor as 0.8 A, not as 2.0 A and
+  // not as a saturated surprise -- and not as 0 either.
+  EXPECT_EQ(ota::gm6020::current_raw_from_amps(2.0, 0.8), ota::gm6020::current_raw_uncapped(0.8));
+  EXPECT_EQ(ota::gm6020::current_raw_from_amps(-2.0, 0.8), ota::gm6020::current_raw_uncapped(-0.8));
+}
+
+TEST(Gm6020Current, UnreasonableCommandsAndLimitsFailClosed) {
+  EXPECT_THROW(ota::gm6020::current_frame(1, NAN, 0.8), std::invalid_argument);
+  EXPECT_THROW(ota::gm6020::current_frame(1, 0.5, 0.0), std::invalid_argument);
+  EXPECT_THROW(ota::gm6020::current_frame(1, 0.5, -1.0), std::invalid_argument);
+  // Above the continuous rating the software refuses rather than quietly agreeing.
+  EXPECT_THROW(ota::gm6020::current_frame(1, 0.5, 3.0), std::invalid_argument);
+  // Only ID 1 is qualified; a second yaw motor is an assumption, not a fact.
+  EXPECT_THROW(ota::gm6020::current_frame(2, 0.5, 0.8), std::invalid_argument);
+  EXPECT_THROW(ota::gm6020::current_raw_uncapped(4.0), std::invalid_argument);
+}
+
+// The zero frame is what every stop path sends, including the ones that run while something is
+// already wrong. It may not throw (a throwing fault path is a std::terminate waiting to happen),
+// and it may not leave a stale byte in another slot.
+TEST(Gm6020Current, ZeroFrameIsAnEmptyPayloadOnTheCurrentId) {
+  const auto f = ota::gm6020::current_zero_frame(1);
+  EXPECT_EQ(f.id, 0x1feu);
+  EXPECT_EQ(f.dlc, 8);
+  EXPECT_FALSE(f.extended);
+  EXPECT_FALSE(f.rtr);
+  for (const auto byte : f.data) EXPECT_EQ(byte, 0);
+  // 0x2FF/0x1FF cover IDs 5-7; the current frame does not, and pretending otherwise would put a
+  // motor on a frame that cannot carry it.
+  EXPECT_THROW(ota::gm6020::current_zero_frame(5), std::invalid_argument);
+}
+
+// The velocity loop's amperes output. Three separate guarantees: the number is in amperes (so it
+// is bounded by an ampere ceiling, not by 25000 counts), it flips sign with the demand, and a
+// broken input yields zero effort instead of a stale one.
+TEST(Gm6020CurrentLoop, OutputIsAmperesAndCannotOutrunTheCeiling) {
+  constexpr double kCeiling = 0.8;  // axes.yaw.host_current_limit_a
+  ota::gm6020::VelocityLoop loop;
+  loop.reset(0.0, 1'000'000);
+  // 5 ms later, holding position, asked for 0.3 rad/s with kp 1.0 A per rad/s.
+  const double first = loop.update_amps(0.3, 0.0, 6'000'000, 0.524, kCeiling, 1.0, 0.6);
+  EXPECT_TRUE(loop.valid());
+  EXPECT_GT(first, 0.25);
+  EXPECT_LE(first, kCeiling);
+
+  // A gain inherited from voltage mode would sail past the envelope; the ceiling is what catches
+  // it, and it must land exactly on the limit rather than wrapping or growing.
+  loop.reset(0.0, 1'000'000);
+  const double saturated = loop.update_amps(0.5, 0.0, 6'000'000, 0.524, kCeiling, 20000.0, 0.6);
+  EXPECT_EQ(std::abs(saturated), kCeiling);
+
+  // Reversing the demand reverses the torque, or the axis can never be centred.
+  loop.reset(0.0, 1'000'000);
+  const double back = loop.update_amps(-0.3, 0.0, 6'000'000, 0.524, kCeiling, 1.0, 0.6);
+  EXPECT_LT(back, 0.0);
+}
+
+TEST(Gm6020CurrentLoop, BadInputsProduceZeroEffortAndLatchInvalid) {
+  ota::gm6020::VelocityLoop loop;
+  loop.reset(0.0, 1'000'000);
+  EXPECT_DOUBLE_EQ(loop.update_amps(NAN, 0.0, 6'000'000, 0.524, 0.8, 1.0, 0.6), 0.0);
+  EXPECT_FALSE(loop.valid());  // latched: the caller trips, it does not keep driving blind
+
+  ota::gm6020::VelocityLoop reference_too_big;
+  reference_too_big.reset(0.0, 1'000'000);
+  EXPECT_DOUBLE_EQ(reference_too_big.update_amps(0.9, 0.0, 6'000'000, 0.524, 0.8, 1.0, 0.6), 0.0);
+  EXPECT_FALSE(reference_too_big.valid());
+
+  // A ceiling that is not a positive finite number is a missing envelope, not "no limit".
+  ota::gm6020::VelocityLoop no_ceiling;
+  no_ceiling.reset(0.0, 1'000'000);
+  EXPECT_DOUBLE_EQ(no_ceiling.update_amps(0.3, 0.0, 6'000'000, 0.524, 0.0, 1.0, 0.6), 0.0);
+  EXPECT_FALSE(no_ceiling.valid());
+  ota::gm6020::VelocityLoop nan_ceiling;
+  nan_ceiling.reset(0.0, 1'000'000);
+  EXPECT_DOUBLE_EQ(nan_ceiling.update_amps(0.3, 0.0, 6'000'000, 0.524, NAN, 1.0, 0.6), 0.0);
+  EXPECT_FALSE(nan_ceiling.valid());
+}
+
+// The voltage path keeps its own bound, which the shared PI no longer knows about: 25000 counts is
+// a fact about the voltage frame, and it must not be what limits an ampere request.
+TEST(Gm6020CurrentLoop, VoltageWrapperKeepsItsOwnFrameBound) {
+  ota::gm6020::VelocityLoop loop;
+  loop.reset(0.0, 1'000'000);
+  EXPECT_EQ(loop.update(0.3, 0.0, 6'000'000, 0.524, 25001.0, 1000.0, 10.0), 0);
+  EXPECT_FALSE(loop.valid());
+  loop.reset(0.0, 1'000'000);
+  EXPECT_GT(loop.update(0.3, 0.0, 6'000'000, 0.524, 15000.0, 1000.0, 10.0), 0);
+  EXPECT_TRUE(loop.valid());
+}

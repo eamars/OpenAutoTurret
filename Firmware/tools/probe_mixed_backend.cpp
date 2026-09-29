@@ -1,5 +1,6 @@
 // No-motion runtime check for the production split-CAN motor adapter.
-// Startup requests zero GM6020 voltage and CyberGear STOP; no motion targets.
+// Startup requests zero yaw output -- zero torque current on a current-mode profile, zero voltage
+// on a voltage one; the backend decides which -- and CyberGear STOP. No motion targets.
 #include <algorithm>
 #include <charconv>
 #include <chrono>

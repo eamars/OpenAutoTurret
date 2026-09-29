@@ -3,6 +3,29 @@
 Current operating runbook, **27 September 2026**. Read this before deploying,
 starting, stopping or diagnosing the station. Dated run reports are historical.
 
+> **How to read this file.** It holds the station's **current state, safety history, owner rulings
+> and measured limits** — the reasons. Procedure lives in [`operations/`](operations/README.md), one
+> card per operation, one hop from [`README.md`](README.md); start there when you are about to *do*
+> something, and come here to understand why the card says what it says. Where the two disagree on a
+> procedure, the card is current; where they disagree on a fact or a limit, this file is.
+>
+> The state recorded below is a **record taken on 2026-09-28**, not a live reading: the station has
+> since moved release and address. Before acting on any line here, take a live reading —
+> `run_application.sh status` for the release and run dir, and
+> [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
+
+## 现状刷新（09-29 深夜，现读，非历史）
+
+- **release**：`139551b5099c.psS9nL`（`run/releases/` 下只留这一个；清理前有 106 个、20 GB）。
+- **模式**：`MANUAL / READY`（主人有意 park：yaw 无法稳定追踪，属 ADR-002；每次受控重启后会回到
+  AUTO_ROAM，**要有人放回去**，`POST /api/command {"command":"set_mode","arg":"MANUAL"}`）。
+- **双流**：`wide cam-baa28c2a by-path 1920x1080` / `detail cam-68510500 fwnode 1280x720`，两路
+  delivered ~9 fps；第二路的**开关在 `perception_v1.json` 的 `vision.secondary`**（不是环境变量）。
+- **两颗都倒装**：朝向走**同一个传感器级 transform**，值各自配（wide 来自 `config/camera_install.yaml`，
+  detail 来自 `vision.secondary.orientation`）；visiond 启动行会打印它**实际用了哪个**。
+- **IMU**：BNO085 实测 ~216 Hz；controld 自己填 §20 的 `imu.present/gravity_valid`；
+  `world_elevation_deg` 仍是 **null**——传感器装在俯仰组件上、无安装标定，**0.0 会谎称炮塔是平的**。
+
 ## Current deployment gate
 
 **Current station state:** release `f8bcdb6` is running in operator-selected
@@ -230,6 +253,105 @@ speed-ceiling/corridor warnings did not abort with
 IMU orientation is a secondary observation, not a replacement for
 motor/reference validity.
 
+### Who stopped it
+
+`status` on a stopped stack prints `shutdown.cause` before the park outcome. The
+cause line names the trigger, and the labels are deliberately not interchangeable:
+
+| `cause=` | meaning | extra fields |
+|---|---|---|
+| `operator_stop` | someone ran `run_application.sh stop`; the stopper left a credential | `operator="who=operator pid=… uid=… utc=… launcher=…"` |
+| `child_exit` | a supervised child died first, so cleanup followed; the child is blamed by name | `exited_child=… exited_pid=… wait_status=…` (`137(signal 9)` = SIGKILL; `wait_status=0` = that child ended by itself, e.g. a finite capture) |
+| `external_signal` | the launcher was signalled with no stop credential | `signal=INT`/`TERM` |
+| `unattributed` | cleanup ran and nothing above applies | — |
+
+A credential outranks a signal: an operator stop *is* a SIGTERM, and naming the
+caller beats naming the syscall. A clean-looking stop with `cause=unattributed`
+is treated as an open question, not as a normal stop.
+
+Because every run reuses `$RUN`, the previous round's `*.log`, `shutdown.result`,
+`shutdown.cause`, `stack.info` and the whole `traces/` directory (trip files and
+`stop-evidence.ndjson`) are moved to `$RUN/logs-history/<utc>Z-launcher<pid>/`
+before anything is truncated; the newest ten rounds are kept and older ones are
+pruned, since `$RUN` lives in `/tmp`. Read the archived round, not the fresh one,
+when investigating a stop.
+
+The claims above are rehearsed against a real stack (each scenario homes the
+station, so this is a motion-bearing test):
+
+```bash
+ssh eamars@rpi-turret "bash <release>/Firmware/scripts/run_application.sh status"   # context
+ssh eamars@rpi-turret "<release-venv>/bin/python <release>/Firmware/tools/rehearse_stop_cause.py"
+```
+
+`--selftest` exercises only the pass/fail logic, for machines with no station.
+The rehearsal leaves the station stopped.
+
+### Owner rulings of 2026-09-28 (midday), and what they changed
+
+Four rulings, all of them about over-design inherited from the first pass. The reasoning
+and the full list of sites that can remove motor power are in
+[AUDIT_POWER_REMOVAL_2026-09-28.md](ADR-001/reports/AUDIT_POWER_REMOVAL_2026-09-28.md);
+what an operator needs from them:
+
+- **Removing power is the last resort, not a routine response.** The payload is an
+  unbalanced load: if power goes, it drops onto a hard stop, and that collision costs
+  more than never cutting power. So the yaw speed ceiling is a clamp on the ASK
+  (`min(ceiling, requested)`, `kYawSpeedCeilingDegS = 30`), not a trip on a reading -- the
+  `speed_over_ceiling` condition is deleted, not tuned. A non-finite feedback reading is
+  still trusted-nothing; a fast one is not.
+- **MANUAL is one gesture across both axes.** `axes.yaw` used to declare 10 deg/s against
+  pitch's 30 under a shared `motion.modes` block asking both for 20, which is why manual
+  felt like two different sticks. Both now declare 30; the config test asserts the
+  invariant ("both axes resolve to the same speeds in every mode") instead of numbers.
+- **The slip ring has no constraint** (owner, confirmed): free rotation, no turn counting.
+  The cable-loop caution that used to sit around the yaw travel argument is retired --
+  there is no mechanical objection left to unbounded yaw.
+- **AUTO_ROAM's redesign waits for ADR-001.** Its bounded sweep was written for a station
+  with hardware endstops; "keep turning one way" or "turn toward the person" is more
+  sensible now, but the data for choosing is thin, so it is parked, not forgotten.
+  Meanwhile: a `no_progress` trip with the axis parked outside its computed sweep interval
+  is a known open case (see the case file §4-§6), and on this backend a latch still means a
+  process restart -- `recover_motors` answers `unsupported`.
+
+## What a stop proved, per axis (2026-09-28)
+
+`shutdown.cause` says **who** stopped it. It cannot say **what we can prove about the
+outcome**, so controld appends one line per stop to `$RUN/traces/stop-evidence.ndjson`
+(archived with its round, like everything else in `traces/`):
+
+```bash
+ssh eamars@rpi-turret "cat /tmp/ota-stack-1000/traces/stop-evidence.ndjson"   # or the archived copy
+```
+
+Read it by `stage`, in pairs sharing one `stop_id`:
+
+| `stage` | what it can claim |
+|---|---|
+| `requested` | we asked. Usually `completion_quality=unverified` with `missing_evidence` naming the gaps — that is the point, not a defect. |
+| `parked` | what was observed: per axis `zero_requested` / `disable_requested` / `disable_confirmed` / `stationary_observed` over a stated `stationary_window_ms`, plus `feedback_age_ms`. |
+
+Three vocabulary rules, because a stop is read later by someone who wasn't there:
+
+- **`unsupported` is not `false`.** The GM6020 feedback frame has no enable bit, so yaw's
+  `disable_requested`/`disable_confirmed` are `unsupported` forever. It neither helps nor
+  hurts `completion_quality`: it is a fact about the drive, not a gap in this stop.
+- **`stationary_observed` is the weakest claim on the sheet.** It means position held
+  inside a tolerance for the stated window — not "de-torqued", and not "safe to put a hand
+  on". The window is published so the claim's strength is visible.
+- **No green for the pair.** There is no merged boolean; `completion_quality` is computed
+  from the two axes' claims and `missing_evidence` names what is absent.
+
+First real record (`stop-60378202284708`, 2026-09-28 08:46, release `c9b4ffb1282e`):
+pitch `disable_confirmed=confirmed`, stationary 557.9 ms, feedback age 4.573 ms;
+yaw stationary 502.2 ms (the dwell), age 0.265 ms, `disable_confirmed=unsupported`;
+`completion_quality=verified`, `missing_evidence=[]`.
+
+Not yet covered: a stop that **fails** writes only its `requested` line — `fail_parking()`
+does not emit, so "requested with no completion" is currently the signal for a failed
+stop. Linking `stop_id` to `shutdown.cause` (so you can tell who asked *and* what it
+proved from one file) is an open item.
+
 ## Deployment and operation
 
 Use the following launcher path for the mixed profile. Two controlled stops
@@ -397,6 +519,52 @@ to `/tmp/ota-stack-1000/hardware-probe.csv` and `controller.log`; copy it into
 ignored `run/` before the next probe replaces it. No camera or web process is
 started in commissioning mode.
 
+### Yaw runs without a position envelope (2026-09-28)
+
+`config/turret_mixed.yaml` declares `axes.yaw.position_envelope: none`. Continuous GM6020
+yaw therefore enforces **no position limit at runtime**: the provisional +/-90 degree
+session sector is gone, and the travel band that used to define it stays only as the band
+automatic regions are validated inside. The startup log says so rather than leaving it to
+be inferred from a missing limit:
+
+```
+[warning] continuous yaw declared WITHOUT a position envelope; the sector is gone,
+not merely unmeasured (AUTO_ROAM still sweeps a declared region, and every other
+guard is unchanged)
+```
+
+What to expect, measured on this station rather than assumed:
+
+- **Readiness still lights.** `soft_limits_valid` now means "every axis has a declared
+  envelope state", and a declared-unbounded axis satisfies it. An axis nobody has written
+  down yet does not.
+- **Angles run past the encoder seam.** A manual jog took yaw from -0.3 to **+274.1 degrees**
+  with no fault; the session angle is unwrapped, so it does not jump at 180 degrees.
+- **AUTO_ROAM still sweeps a bounded region.** With no wall to inherit one, the region is
+  declared: it is centred on the session reference and sized by the search span (the log
+  reports `search sweep clamped to [-37.1, 37.1] deg`), so the mode keeps its promise of a
+  deterministic bounded sweep that a person watching can predict.
+- **The independent guards are untouched.** After the envelope went away, the first long
+  approach drove yaw past the backend's own `speed_over_ceiling` guard (25 deg/s, hard
+  coded). That trip was correct; the ask was wrong, and the fix capped the sweep at the
+  yaw's declared maximum instead of widening the guard. The ceiling itself remains the
+  operator's parameter.
+- **What the telemetry says about it** (fixed the morning after, 2026-09-28): the wire
+  carries `yaw_envelope:"none"` and publishes `q_soft_min_yaw_rad`, `q_soft_max_yaw_rad`
+  and `soft_limit_distance_yaw_rad` as `null` -- not 0/0, and not the internal -1
+  (`kNoBoundary`) walking around as if it were a distance. Consumers map "no boundary" to
+  their own kind of absence; a zero there reads as "the wall is where you are standing",
+  and the dashboard then lit it as near-limit, because `null < 0.05` is true in JS.
+- **The yaw travel tape stays.** It is drawn from `yaw_band_min_rad`/`yaw_band_max_rad`,
+  the band the station file still declares, centred on the homing origin -- a ruler, not a
+  limit, which is why removing the sector never had to take the scale with it. With no band
+  to show (never homed) the tape gives up to the `TRAVEL UNRANGED` note rather than drawing
+  a tape out of zeros.
+
+To revert: delete the `position_envelope: none` line. The +/-90 degree band with its 10
+degree inset is enforced again on the next start, and nothing else about this change needs
+undoing -- the fourth envelope state describes what an envelope is, not how big it is.
+
 ## Historical procedures
 
 Detailed September 8-9 homing, recovery, tuning and parking instructions are
@@ -406,3 +574,118 @@ Their measurements remain background, not certification of this mechanism.
 prior installations. The earlier BNO085 proposal is also historical design
 input; its hardware-absent status is superseded, while integration remains open.
 See [the documentation map](README.md).
+
+## Owner rulings of 2026-09-28 (afternoon) — tapes, acceleration, and where yaw's zero comes from
+
+**Tapes are cyclic, and the caret never moves.** Both axes, one widget: the marker sits at the
+tape's midpoint always; the ruler slides under it; and past the end of the declared travel the
+ruler **rolls over** instead of showing a dead region (`不需要死区，如果超过了值，就直接 roll over`).
+yaw is a continuous axis, so the wrap is what the world already does; pitch is physically blocked
+and rarely reaches the seam, but is drawn by the same rule. The window is the camera's own field
+of view on that axis (`effective_hfov_deg` / `effective_vfov_deg`), and the tape says which source
+it used. The seam — where the ruler wraps — is labelled with the endpoint's own number, in amber
+when a DERATE names that end, and it never fades to zero opacity (an earlier draft painted the
+approaching limit invisible exactly when it mattered most).
+
+**Manual acceleration parity is a requirement, not a tuning opinion.** The complaint
+("yaw的加速度在manual模式下…比pitch低得多") traced to `kYawMaxAccelerationRadS2 = 20 deg/s²`, a
+codex-era constant living inside the yaw backend — the station file said 30 and pitch's drive ran
+60. All three are now 60, and `test_mixed_station_config` pins the ramp constant to
+`axes.yaw.max_acceleration_deg_s2` so a fourth opinion cannot appear again.
+
+**Non-finite reference rate ⇒ hold and report; the session angle is never re-zeroed.** My ruling,
+delegated by the owner ("#3，你来决定"): the division-by-zero theory does not survive the code
+(the reference-rate path divides only under `dt > 1 ms`), and on a continuous axis a wrong zero
+silently rewrites every number on his tape. A nonsense rate is a reason to stop and say so, not a
+reason to move the origin.
+
+**yaw's zero will come from the IMU; until then, the pitch homing origin is yaw's 0.** Recorded as
+the owner's intent. **As built today this is NOT true**: yaw is not homed on this station, so its
+session zero is wherever it happened to be when the process started (or the retained pose), which
+means the tape's "0 = where I was zeroed" is not reproducible across restarts. The change is
+small and named: where homing establishes the pitch origin, set the yaw session reference to the
+yaw angle at that instant. Until then, treat yaw degree readings as relative, not as position.
+
+### Rates are declared per axis (owner, 2026-09-28), and PID tuning is parked
+
+> 「我建议还是两轴单独设置。我不能确保 yaw 和 pitch 真的能做到等同的加速度。所以分开设置（但是值可以设置成一样）。」
+
+`motion.modes.<mode>.axes.{yaw,pitch}.{maximum,target}` — six numbers per mode, spelled out,
+even where yaw and pitch agree. The loader accepts a mode-level shared pair only for older
+files; a new file that omits it must cover **both** axes, and anything else is an error rather
+than a fall-through onto `MotionRates`' service-cap defaults (20/30/120 nobody wrote).
+`test_mixed_station_config` fails if an axis stops declaring its own six numbers.
+
+Why the distinction matters on this station: yaw closes its own velocity loop in voltage mode
+and was measured (2026-09-28) trailing its reference by ~1 s and settling ~8 deg/s low under the
+3 kg payload, while pitch's drive closes its own loop internally. Declaring them jointly would
+have encoded a claim about the hardware that nobody had measured.
+
+**Parked until ADR-001 is done:** re-tuning the yaw velocity loop (Kp/Ki, and/or feeding the
+shaped speed forward so the loop only closes the error). The owner accepts the current
+slowness for now — "如果是PID导致的速度缓慢那我可以接受。目前先不改" — and wants to tune it
+afterwards. `yaw_cmd_shaped_deg_s` / `yaw_cmd_output` in `/api/state` are the instruments for
+that session: the measurement is the lag between ask and measured, in milliseconds.
+
+## The station's SSH identity is passed in, not hoped for
+
+Measured 2026-09-28: after the DSH container image was rebuilt, every `ssh` in
+`tools/deploy_station.py` started failing with status 255 — the container's home is not durable, and the
+ambient `~/.ssh/known_hosts` that earlier deploys had silently relied on went away with the old container.
+A deploy that only works while one container's home directory survives is not a deploy.
+
+So the station's key is pinned in a file and handed to the tool explicitly:
+
+```bash
+OTA_SSH_IDENTITY=/workspace/general_purpose/.secrets/ssh/id_ed25519 \
+OTA_KNOWN_HOSTS=/workspace/general_purpose/.secrets/ssh/known_hosts_station \
+  "$WS/.venv/bin/python" "$PWD/Firmware/tools/deploy_station.py" \
+  --host eamars@rpi-turret --connect-address <observed> --activate --ready-timeout 420
+```
+
+`--known-hosts` sets `StrictHostKeyChecking=yes` and blanks `GlobalKnownHostsFile`, so a different box
+wearing that address cannot be accepted silently. The pinned line is
+
+    256 SHA256:ll1B6KKdmry4daddh4fMxJ4ecnLS7zp9hBH+3DO0fQw rpi-turret,192.168.2.100 (ED25519)
+
+`Firmware/tools/station_address.sh` now assembles this call, resolves the address by verifying it,
+and is the route the deploy card tells you to use; the invocation above is kept so the parts are
+visible. Note that the interpreter is spelled out: a bare `python3` has no third-party packages here
+and will render a red suite green. (`--identity` (env `OTA_SSH_IDENTITY`) does the same for the private key, with `IdentitiesOnly=yes`:
+the same rebuild took `~/.ssh` away, and the resulting 255 reads like a host-key failure but is an
+auth failure -- both halves of "the container's home is not durable" were measured this way.
+
+which was checked against the host answering today (`hostname` = `rpi-turret`, `uname -m` = `aarch64`).
+If that fingerprint ever changes, that is a finding to investigate, not a line to update.
+
+## 站从网络上消失（2026-09-28 深夜，第九次 activate 期间）
+
+现象：`--prebuilt` 部署跑到远端 ssh 那一步抛 `CalledProcessError`，随后
+`ssh: connect to host 192.168.2.100 port 22: No route to host`，ping 100% 丢包。
+
+排除网络侧：同一时刻 192.168.2.4（Synology）、.53（打印机）、.40（NVR）**全部 ping 通**，
+默认路由正常；全 /24 广播探测后 `ip neigh` 里 `192.168.2.100` 为 `FAILED`，
+且**没有任何地址带 MAC `88:A2:9E:D9:C9:DF`** ⇒ 不是换了 IP，是主机不在线。
+
+未定原因（不猜成结论）：内核挂死 / 掉电 / 网络栈死。现场处置需要人（我无 sudo、也没有它的电源控制权）。
+待回来后要查的第一样东西：`journalctl -b -1 | tail`（上一次 boot 的末尾）——**如果它是重启过的，
+这段会告诉我们是谁干的；如果它被拔过电，这段会直接断掉。**
+
+补：站上 journald **没有跨 boot 持久化**（`journalctl -b -1` 为空）。硬断电之后"上次 boot 的末尾"就查不到了，
+也就是说这台站现在**无法自证死因**。要么开 `Storage=persistent`（要 sudo，等主人方便时），
+要么承认崩溃取证只能靠 controld 自己落盘的 trace/evidence——这反过来正是 WP2 那些记录的价值所在。
+
+## Reading the per-cycle control trace
+
+`GET /api/control_trace` on webd returns controld's ring as-is; on the station
+the same read is `Firmware/tools/pull_control_trace.py`. Both share
+`Firmware/common/control_trace.py`, which is why neither has its own idea of how
+big a reply can be: controld answers with a `control_trace` frame on a
+`SOCK_SEQPACKET` socket, a full ring is on the order of a megabyte, and an
+oversized datagram is truncated rather than split -- so a small receive buffer
+turns evidence into a parse error.
+
+Read it inside about twenty seconds of a trip: the ring wraps. A `frozen` window
+is the trip's own snapshot and its summary line starts with `FROZEN_AT=`. The
+route answers 503 with the socket path when controld is not reachable, which is
+deliberately a different shape from a ring with no rows in it.

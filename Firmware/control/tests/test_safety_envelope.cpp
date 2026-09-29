@@ -175,3 +175,66 @@ TEST(SafetyEnvelope, RandomizedMaxSpeedIsSafe) {
     EXPECT_TRUE(env.stop_feasible(q, -vmax, lim)) << "q=" << q;
   }
 }
+
+// The fourth state: an axis declared with no position envelope at all. What these
+// tests exist to pin is the DISTINCTION from "nobody has measured it yet". Collapse
+// the two and removing a limit silently paralyses the axis (in_soft refuses, the
+// speed governor caps at zero); confuse them the other way and the telemetry reports
+// a boundary that does not exist.
+TEST(SafetyEnvelope, DeclaredUnboundedIsNotTheSameAsNotYetMeasured) {
+  const AxisLimits none = AxisLimits::no_envelope();
+  const AxisLimits nothing;  // default-constructed: nobody has written it down
+
+  EXPECT_TRUE(none.declared());      // a position somebody took in the station file
+  EXPECT_FALSE(nothing.declared());  // a gap -- and the readiness gate must know it
+  EXPECT_TRUE(none.unbounded());
+  EXPECT_FALSE(nothing.unbounded());
+
+  EXPECT_TRUE(none.in_soft(0.0));
+  EXPECT_TRUE(none.in_soft(-12.0));
+  EXPECT_TRUE(none.in_hard(12.0));
+  EXPECT_DOUBLE_EQ(none.distance_to_soft(0.0), AxisLimits::kNoBoundary);
+  // "Not measured" answers 0.0, which every consumer reads as "at a boundary" -- a
+  // claim about a wall. For an axis with no wall, a number of its own is the lie.
+  EXPECT_DOUBLE_EQ(nothing.distance_to_soft(0.0), 0.0);
+
+  // An unbounded axis moves at the mode's ceiling, not at a boundary-derived zero.
+  SafetyEnvelope env;
+  EXPECT_DOUBLE_EQ(env.max_speed_at(0.0, none), env.v_max());
+  EXPECT_TRUE(env.stop_feasible(0.0, 5.0, none));
+
+  // A measured axis does not get to borrow the exemption by being awkward.
+  const AxisLimits measured = make_limits();
+  EXPECT_FALSE(measured.unbounded());
+  EXPECT_TRUE(measured.in_soft(0.0));
+  EXPECT_FALSE(measured.in_soft(1.5));
+}
+
+TEST(SafetyEnvelope, VirtualSectorSaysWhereItCameFrom) {
+  AxisLimits sector;
+  sector.set_virtual_sector(-1.4, 1.4, 0.17);
+  ASSERT_TRUE(sector.valid);
+  EXPECT_EQ(sector.envelope, AxisLimits::Envelope::Virtual);
+  EXPECT_TRUE(sector.in_soft(0.0));
+  EXPECT_NE(sector.distance_to_soft(0.0), AxisLimits::kNoBoundary);
+
+  // A degenerate sector stays unestablished instead of becoming a fake limit set:
+  // an empty sector is not evidence that the axis may not move anywhere.
+  AxisLimits bad;
+  bad.set_virtual_sector(0.5, 0.5, 0.1);
+  EXPECT_FALSE(bad.declared());
+  EXPECT_FALSE(bad.valid);
+}
+
+// "Is there a boundary?" and "was one declared?" are different questions, and the wire has
+// to ask the first one. This distinction was written down in this file and then used wrong
+// one layer up: an unbounded yaw published `yaw_envelope:"sector"` because the snapshot
+// asked `declared()`, which is true by design for an axis that declares no envelope. The
+// field that reads `unbounded()` is the only one that cannot make that mistake.
+TEST(SafetyEnvelope, DeclaredIsNotTheSameQuestionAsBounded) {
+  const AxisLimits l = AxisLimits::no_envelope();
+  EXPECT_TRUE(l.declared());
+  EXPECT_TRUE(l.unbounded());
+  EXPECT_DOUBLE_EQ(l.distance_to_soft(0.3), AxisLimits::kNoBoundary);
+  EXPECT_TRUE(l.in_soft(9.0));   // nowhere to be outside of
+}

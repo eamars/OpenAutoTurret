@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "model_id": "hailo_yolov8n_coco_hailo8_v2_17_0",
+  "model_id": "hailo-yolov8n-coco-hailo8-v2.17.0",
   "artifact": {
     "filename": "yolov8n.hef",
     "url": "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.17.0/hailo8/yolov8n.hef",
@@ -15,7 +15,6 @@
     "api": "pyhailort InferVStreams",
     "device_interface": "PCIe"
   },
-  "task": "COCO object detection",
   "input": {
     "shape_nhwc": [1, 640, 640, 3],
     "dtype": "uint8",

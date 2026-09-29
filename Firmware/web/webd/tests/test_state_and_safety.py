@@ -267,8 +267,10 @@ class DerateMarksTheTapeEdge(_NodeBuilders):
         marked = self._svg(self._opts(markDeg=100.0))
         # hudDegLabel signs positive limits explicitly and uses a literal degree sign, so assert the
         # prefix rather than a guessed entity: the point of this test is which colour the label got.
-        self.assertIn('fill="%s">+100' % self.C["amber"], marked)
-        self.assertIn('fill="%s">+80' % self.C["green"], marked,
+        # The attribute order carries an opacity now (the tape fades at its ends), so match
+        # the label by colour-and-attribute-set rather than by an exact two-attribute prefix.
+        self.assertRegex(marked, 'fill="%s"[^>]*>\+100' % self.C["amber"])
+        self.assertRegex(marked, 'fill="%s"[^>]*>\+80' % self.C["green"],
                       "the neighbour tick stays green; everything amber at once is not a highlight")
 
     def test_the_page_only_asks_for_a_mark_while_safety_is_derating(self) -> None:
@@ -283,8 +285,11 @@ class DerateMarksTheTapeEdge(_NodeBuilders):
 
     def test_the_mark_comes_from_the_same_limits_the_tape_is_drawn_from(self) -> None:
         # The highlight and the scale must not be computed from different numbers.
-        at = HUD_JS.index("const yawMin = deg(t.q_soft_min_yaw_rad)")
-        self.assertIn("minDeg: yawMin, maxDeg: yawMax", HUD_JS[at:at + 420])
+        # Unbounded yaw (2026-09-28) moved the yaw range behind hudYawTapeRange(), so the
+        # anchor is the call site itself: whatever the highlight names, the scale was drawn
+        # from the same pair of numbers.
+        at = HUD_JS.index("const yawRange = hudYawTapeRange(t);")
+        self.assertIn("minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg", HUD_JS[at:at + 420])
 
 
 if __name__ == "__main__":

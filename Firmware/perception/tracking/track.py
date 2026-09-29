@@ -91,6 +91,11 @@ class Track:
     """
 
     track_uuid: str = ""
+    #: Which sensor produced the measurement behind this identity, as the durable camera id. Only
+    #: meaningful once a station has more than one camera feeding one inference backend, and the
+    #: reason a merged document is still readable: two boxes normalised to the same picture can
+    #: come from optics whose centres are degrees apart.
+    camera_id: str = ""
     display_index: int = 0                 # §27: monotonic per class within a session
     class_id: int = 0
     class_name: str = ""
@@ -222,6 +227,7 @@ class Track:
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "track_uuid": self.track_uuid,
+            "camera_id": self.camera_id,
             "display_index": int(self.display_index),
             "display_label": self.display_label,
             "class_id": int(self.class_id),

@@ -5,6 +5,9 @@ starting the new one. Never resets, cleans or overwrites the target checkout.
 """
 import argparse
 import ipaddress
+import pathlib
+import os
+import sys
 from pathlib import Path
 import shlex
 import subprocess
@@ -27,6 +30,26 @@ def main():
                         help="seconds to wait for automatic readiness after --activate (default: 420)")
     parser.add_argument("--probe-build", action="store_true",
                         help="build only the runtime controller and preflight; defer regression tests")
+    parser.add_argument("--known-hosts", type=pathlib.Path,
+                        default=(pathlib.Path(os.environ["OTA_KNOWN_HOSTS"])
+                                 if os.environ.get("OTA_KNOWN_HOSTS") else None),
+                        help="explicit known_hosts for the station. The container's home is "
+                             "not durable (measured 2026-09-28: an image rebuild took the "
+                             "ambient ~/.ssh/known_hosts with it and every ssh here died with "
+                             "status 255), so the station's identity is passed in, not hoped "
+                             "for. Env OTA_KNOWN_HOSTS does the same for scripts.")
+    parser.add_argument("--identity", type=pathlib.Path,
+                        default=(pathlib.Path(os.environ["OTA_SSH_IDENTITY"])
+                                 if os.environ.get("OTA_SSH_IDENTITY") else None),
+                        help="private key for the station, with IdentitiesOnly. The container's "
+                             "home is not durable: when the image was rebuilt 2026-09-28 the "
+                             "ambient key went with it and ssh answered 255 -- an auth failure "
+                             "that looks exactly like a host-key failure. Passed in, like the "
+                             "known_hosts. Env OTA_SSH_IDENTITY does the same for scripts.")
+    parser.add_argument("--prebuilt", action="store_true",
+                        help="cross-compile here with tools/cross_build.py and ship the "
+                             "binaries: the station runs the suite rather than building it. "
+                             "Compiling needs no hardware; only running the tests does.")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
     parser.add_argument("--commission-mixed-controller", action="store_true",
@@ -57,6 +80,15 @@ def main():
     if args.connect_address:
         connection = ["-o", f"HostName={args.connect_address}",
                       "-o", f"HostKeyAlias={args.host.rsplit('@', 1)[-1]}"]
+    if args.identity is not None:
+        # IdentitiesOnly: without it ssh also offers anything an agent is holding, and an
+        # offered-but-wrong key can itself be the reason the station says no.
+        connection += ["-i", str(args.identity), "-o", "IdentitiesOnly=yes"]
+    if args.known_hosts is not None:
+        # Pinned identity, checked strictly: a silent yes would let a different box wearing
+        # this address -- or an ARP neighbour -- take over the station's role mid-deploy.
+        connection += ["-o", f"UserKnownHostsFile={args.known_hosts}",
+                       "-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null"]
 
     def remote(command, **kwargs):
         return run(["ssh", "-o", "ConnectTimeout=10", *connection, args.host, command], **kwargs)
@@ -87,9 +119,24 @@ def main():
            f"ln -s {quote(models)} {quote(release + '/run/hailo-probe')}; fi")
     remote(f"{quote(venv + '/bin/python')} -m pip install --disable-pip-version-check --no-input "
            f"-r {quote(release + '/Firmware/requirements-station.txt')}")
+    if args.prebuilt:
+        # The build machine is this one; see tools/cross_build.py for what it links against and
+        # why that is the station's own library set rather than an approximation of it.
+        run([sys.executable, repo / "Firmware" / "tools" / "cross_build.py"], cwd=repo)
+        # Beside the build tree, not in a temporary directory: the deploying sandbox gave a
+        # freshly created /tmp path to the parent and ENOENT to tar for the same string, which is
+        # the kind of failure that reads like a broken toolchain and is really a writable-path.
+        artifacts = repo / "Firmware" / "build-arm64.tar"
+        run(["tar", "-C", str(repo / "Firmware"), "-cf", str(artifacts),
+             "--exclude=*.o", "--exclude=.ninja_deps", "--exclude=.ninja_log",
+             "--exclude=_deps", "build-arm64"])
+        run(["scp", *connection, str(artifacts), f"{args.host}:{release}/build-arm64.tar"])
+        remote(f"tar -xf {quote(release + '/build-arm64.tar')} -C {quote(release + '/Firmware')} "
+               f"&& rm -- {quote(release + '/build-arm64.tar')}")
     script = release + "/Firmware/scripts/run_application.sh"
     smoke = release + "/Firmware/tools/station_smoke.py"
-    remote(f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
+    remote(("OTA_PREBUILT=1 " if args.prebuilt else "")
+           + f"bash {quote(script)} deploy" + (" --probe-build" if args.probe_build else "")
            + (" --commission-hardware" if args.commission_hardware else "")
            + (" --commission-mixed-controller" if args.commission_mixed_controller else "")
            + (" --probe-imu" if args.probe_imu else ""))

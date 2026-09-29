@@ -82,6 +82,34 @@ telemetry::TelemetrySnapshot sample_snapshot() {
   return s;
 }
 
+// An axis with no declared envelope must not borrow the shape of an axis whose limits
+// happen to sit at zero. Before this, an unbounded yaw published 0/0 and 0.0-to-limit,
+// which is the same sentence as "the wall is exactly where you are standing" -- and the
+// dashboard then highlighted it as "near the limit", because in JS null < 0.05 is true.
+TEST(WebServer, AnUnboundedAxisSaysSoInsteadOfPublishingZeros) {
+  telemetry::TelemetrySnapshot s;
+  s.soft_limits_valid = true;              // pitch still has real limits
+  s.yaw_envelope_bounded = false;
+  s.q_soft_min_yaw_rad = -1.5708;          // the carried reference band, a ruler
+  s.q_soft_max_yaw_rad = 1.5708;
+  s.yaw_band_min_rad = -1.5708;
+  s.yaw_band_max_rad = 1.5708;
+  s.soft_limit_distance_yaw_rad = 0.0;     // must not reach the wire as a number
+  s.q_soft_min_pitch_rad = -0.5;
+  s.q_soft_max_pitch_rad = 0.5;
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"yaw_envelope\":\"none\""), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"q_soft_min_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"q_soft_max_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"soft_limit_distance_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_EQ(wire.find("\"q_soft_min_yaw_rad\":-1.5708"), std::string::npos) << wire;
+  // The ruler survives: the operator keeps a scale centred on the homing origin, and the
+  // word `none` is what says it is not a wall.
+  EXPECT_NE(wire.find("\"yaw_band_min_rad\":-1.5708"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"yaw_band_max_rad\":1.5708"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"q_soft_min_pitch_rad\":-0.5"), std::string::npos) << wire;
+}
+
 TEST(WebServer, UnknownYawTorqueIsValidJsonNull) {
   telemetry::TelemetrySnapshot s;
   s.effort_yaw = std::numeric_limits<double>::quiet_NaN();
@@ -509,6 +537,67 @@ TEST(WebServer, NoBusIsPublishedAsAbsenceNotAsZeroHealth) {
   server.stop();
 }
 
+TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
+  // Nobody in the stack asked for the per-cycle trace until 2026-09-28, and the
+  // first reader that did found a frame that Python's json module rejected: yaw
+  // has no torque figure, so `effort` was NaN, and this serializer — unlike the
+  // telemetry one tested above — had never been told that `std::to_string` emits a
+  // bare `nan`, which is not JSON. The lesson was already in this file; a second
+  // hand-rolled path 500 lines away simply had not inherited it.
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_trace.sock";
+  telemetry::ControlLogRecord rec;
+  rec.phase = Phase::Hold;
+  rec.mode = OperatingMode::AutoTrack;
+  rec.temp_raw[0] = -1;   // CyberGear sends no thermal byte
+  rec.temp_raw[1] = 28;   // unit-less GM6020 byte
+  rec.effort[0] = rec.effort[1] = std::numeric_limits<double>::quiet_NaN();
+  rec.v_estimated[1] = std::numeric_limits<double>::quiet_NaN();
+  WebServer server(
+      cfg, [] { return telemetry::TelemetrySnapshot{}; },
+      [](const std::string&, const std::string&) { return CommandResult{}; },
+      [&rec] { return telemetry::TraceWindow{{rec}, true, 123456789000000}; });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+
+  int cfd = connect_client(cfg.socket_path);
+  ASSERT_TRUE(send_message(cfd, R"({"type":"command","command":"read_control_trace"})"));
+  std::string frame;
+  bool got = false;
+  for (int i = 0; i < 6 && !got; ++i) {
+    if (!read_message(cfd, frame)) break;
+    got = frame.find("\"type\":\"control_trace\"") != std::string::npos;
+  }
+  ASSERT_TRUE(got) << "no control_trace frame arrived";
+  EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
+  // The two context fields the 2026-09-28 case actually needs; `phase` on its own
+  // was shown, by a jog that moved the axis for 11 s while every row said `hold`,
+  // not to carry the distinction.
+  EXPECT_NE(frame.find("\"mode\":\"AUTO_TRACK\""), std::string::npos) << frame;
+  // The frame's own clock declaration. A live reader is in the same position as a
+  // file read weeks later: without the clock name, the boot identity and the offset,
+  // the rows' `t` values are unplaceable -- and "the socket knows less than the file"
+  // is precisely the asymmetry that hides itself until an incident.
+  EXPECT_NE(frame.find("\"clock\":\"CLOCK_MONOTONIC\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"boot_id\":\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"mono_to_wall_ns\":\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"mono_to_wall_err_ns\":\""), std::string::npos) << frame;
+  // The key must be there; the *value* is this fixture's own business. A window built
+  // by hand rather than by Telemetry has never observed a clock mapping, and it says so
+  // as boot_id "unknown" / epoch 0 / bound 0 -- absence spelled as absence, which is the
+  // same rule the effort field obeys. Asserting 1 here would pin the fixture, not the code.
+  EXPECT_NE(frame.find("\"clock_epoch\":"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"boot_id\":\"unknown\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"track\":\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"temp_raw\":[-1,28]"), std::string::npos) << frame;
+  // A reader must be able to tell "the trip's own window" from "whatever the ring
+  // holds right now"; the two answers look identical and mean different things.
+  EXPECT_NE(frame.find("\"frozen\":true"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"effort\":[null,null]"), std::string::npos) << frame;
+  EXPECT_EQ(frame.find("nan"), std::string::npos) << frame;
+  ::close(cfd);
+}
+
 TEST(WebServer, CommandRoundTripOk) {
   WebServer::Config cfg;
   cfg.socket_path = "/tmp/ota_web_test2.sock";
@@ -836,4 +925,29 @@ TEST(WebServer, TheCommandResponseSaysWhichQuestionItAnswered) {
   std::string where;
   EXPECT_TRUE(strict::Check(sub, &where)) << "submitted response is malformed: " << where << " in " << sub;
   EXPECT_TRUE(strict::Check(rej, &where)) << "rejected response is malformed: " << where << " in " << rej;
+}
+
+// One non-finite double printed by ostream as bare `nan` invalidates the WHOLE frame for
+// the web server, and it does so silently per-frame: the station ran for twenty minutes
+// with `rejected a frame from controld (9975 so far)` in the log while /api/state kept
+// serving its last good snapshot -- stale, not obviously dead. Reference rates are the
+// family most likely to be non-finite (no envelope, no sweep, no target), so they go
+// through the house helper like everything else, and this test prints a snapshot where
+// every one of them is NaN and demands the line stay parseable JSON.
+TEST(WebServer, ANonFiniteRateCannotTakeTheFrameDownWithIt) {
+  telemetry::TelemetrySnapshot s;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  s.target_az_rate_world_rad_s = nan;
+  s.target_el_rate_world_rad_s = nan;
+  s.q_ref_rate_yaw_rad_s = nan;
+  s.q_ref_rate_pitch_rad_s = nan;
+  s.q_ref_accel_yaw_rad_s2 = nan;
+  s.q_ref_accel_pitch_rad_s2 = nan;
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"q_ref_rate_yaw_rad_s\":null"), std::string::npos) << wire;
+  // Blanket guard, not a per-field wish: ostream spells these `nan`/`inf`, and Python's
+  // json accepts `NaN` but not `nan`, so a single lowercase one is a whole lost frame.
+  EXPECT_EQ(wire.find(":nan"), std::string::npos) << "裸 nan 会整帧被 webd 丢弃";
+  EXPECT_EQ(wire.find(":-inf"), std::string::npos) << wire;
+  EXPECT_EQ(wire.find(":inf"), std::string::npos) << wire;
 }

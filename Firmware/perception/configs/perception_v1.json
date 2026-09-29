@@ -31,6 +31,20 @@
       "pose_oks_sigma": 0.1
     },
     "models": {
+      "_mock": {
+        "_what": "Offline acceptance path (ADR-001 §55.18): the mock adapter drives the daemon's real wiring with no sensor attached. Kept in config rather than as a code default so 'offline' is something an operator can select, not something that happens by accident when a model is missing. Rates mirror the station's cadence so timing windows behave as they would on the Pi.",
+        "adapter": "mock",
+        "bbox_normalized": false,
+        "bbox_order": "yxyx",
+        "inference_rate_hz": 23,
+        "input_height": 320,
+        "input_width": 320,
+        "labels": "coco_rpk",
+        "license": "",
+        "model_id": "mock-synthetic",
+        "path": "",
+        "manifest": ""
+      },
       "bakeoff_efficientdet320": {
         "adapter": "imx500",
         "bbox_normalized": false,
@@ -85,19 +99,19 @@
         "adapter": "hailo",
         "bbox_normalized": true,
         "bbox_order": "yxyx",
-        "camera_frame_rate_hz": 15,
-        "camera_height": 480,
-        "camera_model": "imx477",
-        "camera_orientation": "none",
-        "camera_width": 640,
-        "inference_rate_hz": 15,
+        "camera_frame_rate_hz": 30.0,
+        "camera_height": 1080,
+        "camera_model": "imx500",
+        "camera_orientation": "rotate_180",
+        "camera_width": 1920,
+        "inference_rate_hz": 30.0,
         "input_height": 640,
         "input_width": 640,
         "labels": "coco",
         "license": "AGPL-3.0",
         "manifest": "model/manifests/hailo_yolov8n_hailo8_coco.json",
         "model_id": "hailo-yolov8n-coco-hailo8-v2.17.0",
-        "path": "../run/hailo-probe/yolov8n.hef",
+        "path": "model/artifacts/yolov8n.hef",
         "permitted_classes": [
           "person"
         ],
@@ -109,7 +123,9 @@
           "low_association": 0.15,
           "new_track": 0.25,
           "selectable": 0.3
-        }
+        },
+        "camera_lores_width": 640,
+        "camera_lores_height": 360
       },
       "offline_replay": {
         "adapter": "mock",
@@ -257,6 +273,19 @@
         "scale": 0.25,
         "shape": 0.15
       }
-    }
+    },
+    "secondary": {
+      "model": "imx477",
+      "width": 1280,
+      "height": 720,
+      "frame_rate_hz": 30.0,
+      "preview_fps": 10.0,
+      "queue_depth": 2,
+      "orientation": "rotate_180",
+      "lores_width": 0,
+      "lores_height": 0,
+      "_why": "lores_width/height = 0 means the narrow camera is preview-only this boot. Measured on the station at 32a765d: a second HailoYoloAdapter opens a second HailoRT context on the same device and HailoRT answers HAILO_DEVICE_IN_USE(73), which took visiond down with EXIT_MODEL. The dual feed needs ONE context with a runner shared by both cameras; until that exists the leg stays off, and the reason is here rather than in a code comment."
+    },
+    "merge_max_age_ms": 150.0
   }
 }

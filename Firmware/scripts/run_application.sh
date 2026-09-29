@@ -17,9 +17,13 @@ case "${1:-}" in
     echo 'deploy --probe-build: build only controld and preflight; defer regression tests.'
     echo 'run: foreground supervision; stop: controlled park/disable and full stack cleanup.'
     echo 'Options: --sim (real camera), --hold-motion (camera only), --profile NAME,'
-    echo '         --commission-hardware [--yaw-voltage N --pulse-ms N --observe-ms N],'
+    echo '         --commission-hardware [--yaw-current-a A --yaw-voltage N --pulse-ms N --observe-ms N],'
+    echo '         (yaw push unit follows axes.yaw.control_mode: --yaw-current-a on a current drive,'
+    echo '          --yaw-voltage only on a voltage one; the probe refuses the wrong one)'
     echo '         --apply-pitch-limit (commissioning only; volatile <=5 A, no pitch enable),'
     echo '         --yaw-speed-deg-s N (commissioning PI loop; integer +/-5, <=1500 raw),'
+    echo '         --yaw-sweep-deg N --yaw-sweep-ff-a A (drag sweep: drag the axis N deg under speed'
+    echo '          regulation with A amperes of breakaway feedforward; current mode only),'
     echo '         --yaw-step-deg N (commissioning with IMU; continuous 15..45 deg out/return),'
     echo '         --probe-imu [--imu-seconds N] (IMU capture only, 1..120 seconds),'
     echo '         --with-imu (commissioning only; capture IMU alongside bounded motor probe),'
@@ -42,6 +46,9 @@ owned_launcher() {
   [ "$(awk '{print $22}' "/proc/$launcher_pid/stat")" = "$launcher_start" ]
 }
 stopped_status() {
+  # A stop that cannot name its trigger is a forensics hole: show the recorded
+  # cause first, then how the motors were brought down.
+  [ ! -r "$RUN/shutdown.cause" ] || cat "$RUN/shutdown.cause"
   if [ -r "$RUN/shutdown.result" ]; then
     cat "$RUN/shutdown.result"
   else
@@ -67,6 +74,11 @@ if [ "$ACTION" = status ]; then
 fi
 if [ "$ACTION" = stop ]; then
   if ! owned_launcher; then echo 'Already stopped'; stopped_status; exit 0; fi
+  # An operator stop leaves a credential, so the launcher can later tell "someone
+  # asked for this" apart from "a child died and cleanup followed". Without it a
+  # clean-looking stop is unattributable, and /tmp logs get truncated on restart.
+  printf 'who=operator pid=%s uid=%s utc=%s launcher=%s\n' \
+    "$$" "$(id -u)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$launcher_pid" > "$RUN/stop.request"
   kill -TERM "$launcher_pid"
   for ((attempt=0; attempt<120; attempt++)); do
     if ! owned_launcher; then stopped_status; exit 0; fi
@@ -75,14 +87,17 @@ if [ "$ACTION" = stop ]; then
   echo "Controller shutdown is still in progress; inspect $RUN/controller.log" >&2
   exit 1
 fi
-PROFILE=person_detect_available
+PROFILE=hailo_yolov8n
 FRAMES=0
 MODE=hardware
 START_WEB=1
 PRODUCTION=0
 PROBE_BUILD=0
 YAW_VOLTAGE=0
+YAW_CURRENT_A=0
 YAW_SPEED_DEG_S=0
+YAW_SWEEP_DEG=0
+YAW_SWEEP_FF_A=0
 YAW_STEP_DEG=0
 PULSE_MS=100
 OBSERVE_MS=2000
@@ -113,7 +128,10 @@ while [ $# -gt 0 ]; do
     --imu-seconds) IMU_SECONDS="${2:?--imu-seconds requires a value}"; shift 2 ;;
     --apply-pitch-limit) APPLY_PITCH_LIMIT=1; shift ;;
     --yaw-voltage) YAW_VOLTAGE="${2:?--yaw-voltage requires a signed value}"; shift 2 ;;
+    --yaw-current-a) YAW_CURRENT_A="${2:?--yaw-current-a requires a signed ampere value}"; shift 2 ;;
     --yaw-speed-deg-s) YAW_SPEED_DEG_S="${2:?--yaw-speed-deg-s requires a signed value}"; shift 2 ;;
+    --yaw-sweep-deg) YAW_SWEEP_DEG="${2:?--yaw-sweep-deg requires a signed travel in degrees}"; shift 2 ;;
+    --yaw-sweep-ff-a) YAW_SWEEP_FF_A="${2:?--yaw-sweep-ff-a requires an ampere magnitude}"; shift 2 ;;
     --yaw-step-deg) YAW_STEP_DEG="${2:?--yaw-step-deg requires a value}"; shift 2 ;;
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
     --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
@@ -126,6 +144,14 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+# One derived fact: did anything ask the yaw axis to move? There are now two spellings of the push
+# (--yaw-voltage in raw counts, --yaw-current-a in amperes), and every "no other motor probe" rule
+# below needs to see both. A request this list misses is two processes driving one CAN bus.
+YAW_PUSH=0
+if [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_CURRENT_A" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] ||
+   [ "$YAW_SWEEP_DEG" != 0 ] || [ "$YAW_SWEEP_FF_A" != 0 ]; then
+  YAW_PUSH=1
+fi
 if [ "$PITCH_RESTORE_GAINS" = 1 ] && { [ "$PITCH_PROBE" != 1 ] || [ "$PITCH_STEP_MDEG" != 0 ] || [ "$PITCH_TEST_GAINS" != 0 ]; }; then
   echo '--pitch-restore-gains requires a zero-step diagnostic probe without test gains' >&2; exit 2
 fi
@@ -133,7 +159,7 @@ if [ "$PITCH_TEST_GAINS" = 1 ] && [ "$PITCH_PROBE" != 1 ]; then
   echo '--pitch-test-gains requires a pitch probe' >&2; exit 2
 fi
 if [ "$PITCH_PROBE" = 1 ]; then
-  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
+  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$YAW_PUSH" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ]; then
     echo 'Pitch steps require commissioning with IMU, without yaw motion or separate limit setup' >&2; exit 2
   fi
   if ! [[ "$PITCH_STEP_MDEG" =~ ^-?[0-9]+$ ]] || ((PITCH_STEP_MDEG < -15000 || PITCH_STEP_MDEG > 15000)); then
@@ -142,7 +168,7 @@ if [ "$PITCH_PROBE" = 1 ]; then
 fi
 if [ "$MIXED_BACKEND_CHECK" = 1 ] && {
   [ "$MODE" != commission ] || [ "$COMMISSION_REQUESTED" != 1 ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] ||
-  [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] ||
+  [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_PUSH" != 0 ] ||
   [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$PITCH_TEST_GAINS" != 0 ] || [ "$PITCH_RESTORE_GAINS" != 0 ];
 }; then
   echo '--mixed-backend-check requires --commission-hardware --with-imu and no other motor probe' >&2; exit 2
@@ -151,12 +177,12 @@ if [ "$MIXED_CONTROLLER_COMMISSION" = 1 ] && {
   [ "$MODE" != mixed-controller-commission ] || [ "$MIXED_BACKEND_CHECK" != 0 ] ||
   [ "$COMMISSION_REQUESTED" != 0 ] || [ "$SIM_REQUESTED" != 0 ] ||
   [ "$WITH_IMU" != 0 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] ||
-  [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ];
+  [ "$YAW_PUSH" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ];
 }; then
   echo '--commission-mixed-controller cannot be combined with another motor probe or --with-imu' >&2; exit 2
 fi
 if [ "$YAW_STEP_DEG" != 0 ]; then
-  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
+  if [ "$MODE" != commission ] || [ "$WITH_IMU" != 1 ] || [ "$PITCH_PROBE" != 0 ] || [ "$YAW_PUSH" != 0 ] || [ "$APPLY_PITCH_LIMIT" != 0 ] ||
      ! [[ "$YAW_STEP_DEG" =~ ^[0-9]+$ ]] || ((YAW_STEP_DEG < 15 || YAW_STEP_DEG > 45)); then
     echo 'Yaw step requires commissioning with IMU, 15..45 degrees, and no other motor probe' >&2; exit 2
   fi
@@ -167,8 +193,8 @@ fi
 if ! [[ "$IMU_SECONDS" =~ ^[0-9]+$ ]] || ((IMU_SECONDS < 1 || IMU_SECONDS > 120)); then
   echo '--imu-seconds must be 1..120' >&2; exit 2
 fi
-if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_SPEED_DEG_S" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$YAW_VOLTAGE" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
-  echo 'Voltage/pulse options require --commission-hardware' >&2; exit 2
+if [ "$MODE" != commission ] && { [ "$APPLY_PITCH_LIMIT" != 0 ] || [ "$YAW_PUSH" != 0 ] || [ "$YAW_STEP_DEG" != 0 ] || [ "$PULSE_MS" != 100 ] || [ "$OBSERVE_MS" != 2000 ]; }; then
+  echo 'Commissioning push/pulse options require --commission-hardware' >&2; exit 2
 fi
 if [ "$PROBE_BUILD" = 1 ] && [ "$ACTION" != deploy ]; then
   echo '--probe-build is only valid for deploy' >&2; exit 2
@@ -199,21 +225,53 @@ if [ "$ACTION" = deploy ]; then
     echo 'Stop this checkout before deployment, or build a separate release directory.' >&2
     exit 1
   fi
-  cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
+  if [ "${OTA_PREBUILT:-0}" = 1 ] && [ -x "$APP/build-arm64/control/controld" ]; then
+    # The binaries were cross-compiled by the deploying machine (Firmware/tools/cross_build.py)
+    # and uploaded beside this source. Compiling them again here bought nothing: the station has
+    # no knowledge of this code that the machine which built it lacks. Running the suite is the
+    # part that needs the hardware, so that part stays here -- each test binary is executed
+    # directly rather than through ctest, because a CTest cache would point back at the machine
+    # that built it. The symlink keeps every later path in this script unchanged.
+    ln -sfn "$APP/build-arm64" "$APP/build"
+    # The tests resolve their config against this: the binary was compiled elsewhere, so its
+    # compiled-in source path describes a machine this station has never been.
+    export OTA_FIRMWARE_ROOT="$APP"
+    tests_run=0
+    tests_failed=0
+    while IFS= read -r t; do
+      case "$t" in */_deps/*) continue ;; esac
+      tests_run=$((tests_run + 1))
+      if ! "$t" >"$APP/build-arm64/last-test.log" 2>&1; then
+        tests_failed=$((tests_failed + 1))
+        echo "FAILED $t" >&2
+        tail -n 15 "$APP/build-arm64/last-test.log" >&2
+      fi
+    done < <(find "$APP/build-arm64" -type f -name 'test_*' -perm -u+x)
+    echo "Prebuilt suite on station: $tests_run binaries, $tests_failed failed"
+    if [ "$tests_run" -lt 40 ] || [ "$tests_failed" -ne 0 ]; then
+      # A count that small means the upload lost targets, which would otherwise read as a pass.
+      echo "refusing to call that a green suite" >&2
+      exit 1
+    fi
+  else
+    cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
+  fi
+  if [ "${OTA_PREBUILT:-0}" != 1 ] || [ ! -x "$APP/build-arm64/control/controld" ]; then
   if [ "$PROBE_BUILD" = 1 ]; then
     if [ "$MODE" = imu ]; then
-    cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     elif [ "$MODE" = commission ]; then
-    cmake --build "$APP/build" --target probe-mixed-hardware probe-mixed-backend probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target probe-mixed-hardware probe-mixed-backend probe-pitch-motion probe-yaw-motion imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     elif [ "$MIXED_CONTROLLER_COMMISSION" = 1 ]; then
-    cmake --build "$APP/build" --target controld probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target controld probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     else
-    cmake --build "$APP/build" --target controld probe-mixed-hardware probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" --target controld probe-mixed-hardware probe-mixed-backend imu-bno085 -j"${OTA_BUILD_JOBS:-$(nproc)}"
     fi
     echo 'Probe build: regression tests deferred until runtime viability is established.'
   else
-    cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-2}"
+    cmake --build "$APP/build" -j"${OTA_BUILD_JOBS:-$(nproc)}"
     ctest --test-dir "$APP/build" --output-on-failure
+  fi
   fi
   ACTION=check
 fi
@@ -261,11 +319,79 @@ if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ 
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
+# A restart must not erase the previous stack's evidence. Every run reuses the
+# same $RUN, so the previous round is archived before anything is truncated.
+rotate_stack_logs() {
+  local keep="${1:-10}" stamp src old
+  ls "$RUN"/*.log >/dev/null 2>&1 || return 0
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  src="$RUN/logs-history/$stamp-launcher$$"
+  mkdir -p "$src" || return 0
+  for f in "$RUN"/*.log "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
+    [ -f "$f" ] && mv -f "$f" "$src/" 2>/dev/null || true
+  done
+  # Trip traces are evidence of the round that faulted, so the directory moves
+  # whole: a redeploy must not be able to truncate the thing it is there to explain.
+  # controld recreates it on the next freeze.
+  [ -d "$RUN/traces" ] && mv -f "$RUN/traces" "$src/traces" 2>/dev/null || true
+  # $RUN lives in /tmp: keep the newest $keep rounds and no more.
+  ( cd "$RUN/logs-history" 2>/dev/null || exit 0
+    ls -1dt */ 2>/dev/null | tail -n +"$((keep + 1))" | while IFS= read -r old; do
+      rm -rf -- "$old" || true
+    done ) || true
+}
+rotate_stack_logs 10
 children=()
+declare -A child_name=()
 controller_pid=''
 imu_pid=''
+cause_signal=''
+first_child_status=''
+exited_pid=''
+exited_name=''
+# wait -n reports a status but not the child it belongs to; record both while the
+# siblings are still alive to point at, i.e. before cleanup signals anyone.
+note_child_exit() {
+  local pid gone=()
+  for pid in "${children[@]}"; do
+    kill -0 "$pid" 2>/dev/null || gone+=("$pid")
+  done
+  for pid in "${gone[@]}"; do
+    if [ -n "${child_name[$pid]:-}" ]; then exited_pid="$pid"; exited_name="${child_name[$pid]}"; return 0; fi
+  done
+  if [ "${#gone[@]}" -gt 0 ]; then exited_pid="${gone[0]}"; exited_name=unknown; fi
+}
+describe_status() {
+  local s="$1"
+  if [[ "$s" =~ ^[0-9]+$ ]] && [ "$s" -gt 128 ]; then
+    printf '%s(signal %s)' "$s" "$((s - 128))"
+  else
+    printf '%s' "$s"
+  fi
+}
+stop_cause_line() {
+  local reason="$1" operator=''
+  printf 'cause=%s utc=%s launcher=%s uptime_s=%s' "$reason" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$SECONDS"
+  if [ -r "$RUN/stop.request" ]; then
+    read -r operator < "$RUN/stop.request" || true
+    [ -n "$operator" ] && printf ' operator="%s"' "$operator"
+  fi
+  [ -z "$exited_pid" ] || printf ' exited_child=%s exited_pid=%s wait_status=%s' \
+    "$exited_name" "$exited_pid" "$(describe_status "${first_child_status:-unset}")"
+  [ -z "$cause_signal" ] || printf ' signal=%s' "$cause_signal"
+  printf '\n'
+}
 cleanup() {
   trap - EXIT INT TERM
+  local reason
+  if [ -r "$RUN/stop.request" ]; then reason=operator_stop
+  elif [ -n "$exited_pid" ]; then reason=child_exit
+  elif [ -n "$cause_signal" ]; then reason=external_signal
+  else reason=unattributed; fi
+  stop_cause_line "$reason" > "$RUN/shutdown.cause"
+  cat "$RUN/shutdown.cause"
+  rm -f -- "$RUN/stop.request"
   if [ "$MODE" = imu ]; then
     echo 'Ending IMU acquisition; no motor process was started.'
     echo 'Stopped: IMU capture ended; motors were not commanded' > "$RUN/shutdown.result"
@@ -337,8 +463,8 @@ cleanup() {
   rm -f -- "$RUN/launcher.pid" "$RUN/started" "$RUN/stack.info" "$RUN/web.port"
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cause_signal=INT; exit 130' INT
+trap 'cause_signal=TERM; exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
 if [ "$MODE" = imu ]; then
@@ -346,11 +472,13 @@ if [ "$MODE" = imu ]; then
     echo 'Existing controller or legacy IMU consumer; refusing capture.' >&2; exit 1
   fi
   "$APP/build/imu-bno085" "$IMU_SECONDS" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-  imu_pid=$!; children+=("$imu_pid")
+  imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   printf 'Mode: IMU capture\nTrace: %s\n' "$RUN/imu.ndjson" > "$RUN/stack.info"
   cp "$RUN/launcher.pid" "$RUN/started"
-  wait "$imu_pid"
-  exit $?
+  first_child_status=0
+  wait "$imu_pid" || first_child_status=$?
+  note_child_exit
+  exit "$first_child_status"
 fi
 if [ "$MODE" = commission ]; then
   if pgrep -x controld >/dev/null; then
@@ -361,7 +489,7 @@ if [ "$MODE" = commission ]; then
   if [ "$WITH_IMU" = 1 ]; then
     if pgrep -x imu_main >/dev/null; then echo 'Legacy IMU consumer still running' >&2; exit 1; fi
     "$APP/build/imu-bno085" 120 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-    imu_pid=$!; children+=("$imu_pid")
+    imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
     # Observe a stationary host tare before starting the independent motor probe.
     for ((attempt=0; attempt<50; attempt++)); do
       kill -0 "$imu_pid" 2>/dev/null || { echo 'IMU startup failed' >&2; exit 1; }
@@ -394,11 +522,13 @@ PY
     --observe-seconds 10 >"$RUN/controller.log" 2>&1 &
   else
   "$PROBE" --config "${OTA_HARDWARE_PROBE_CONFIG:-$APP/config/hardware_probe.yaml}" \
-    --yaw-voltage "$YAW_VOLTAGE" --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
+    --yaw-voltage "$YAW_VOLTAGE" --yaw-current-a "$YAW_CURRENT_A" \
+    --pulse-ms "$PULSE_MS" --observe-ms "$OBSERVE_MS" \
     --yaw-speed-deg-s "$YAW_SPEED_DEG_S" \
+    --yaw-sweep-deg "$YAW_SWEEP_DEG" --yaw-sweep-ff-a "$YAW_SWEEP_FF_A" \
     --trace "$RUN/hardware-probe.csv" "${probe_options[@]}" >"$RUN/controller.log" 2>&1 &
   fi
-  controller_pid=$!; children+=("$controller_pid")
+  controller_pid=$!; children+=("$controller_pid"); child_name[$controller_pid]=probe-mixed-hardware
   if [ "$PITCH_PROBE" = 1 ]; then
     printf 'Mode: pitch commissioning\nStep millidegrees: %s\nTrace: %s\n' "$PITCH_STEP_MDEG" "$RUN/pitch-probe.csv" > "$RUN/stack.info"
   elif [ "$YAW_STEP_DEG" != 0 ]; then
@@ -406,18 +536,30 @@ PY
   elif [ "$MIXED_BACKEND_CHECK" = 1 ]; then
     printf 'Mode: mixed backend observe-only check\nOutput: %s\n' "$RUN/controller.log" > "$RUN/stack.info"
   else
-    printf 'Mode: commissioning\nYaw voltage: %s\nTrace: %s\n' "$YAW_VOLTAGE" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
+    printf 'Mode: commissioning\nYaw push: %s V / %s A (unit follows the probe profile control_mode)\nTrace: %s\n' "$YAW_VOLTAGE" "$YAW_CURRENT_A" "$RUN/hardware-probe.csv" > "$RUN/stack.info"
   fi
   cp "$RUN/launcher.pid" "$RUN/started"
   if [ -n "$imu_pid" ]; then
     # An IMU process failure ends the probe through the same cleanup/zero path.
-    wait -n "$controller_pid" "$imu_pid"
+    first_child_status=0; wait -n "$controller_pid" "$imu_pid" || first_child_status=$?
   else
-    wait "$controller_pid"
+    first_child_status=0; wait "$controller_pid" || first_child_status=$?
   fi
-  exit $?
+  note_child_exit
+  exit "$first_child_status"
 fi
 export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
+# (b): visiond 是唯一持有物理相机的人，所以由它发布"有哪些有名字的流"。
+# 缺这个变量 visiond 就不发布（默认关闭），老部署不受影响。
+export OTA_VISION_STREAM_MANIFEST="$RUN/video_streams.json"
+# 推理后端自述（后端名/模型/输入尺寸/推理计数/model 耗时）。web 不碰相机，只读这份现读。
+export OTA_INFERENCE_HEALTH="$RUN/inference_health.json"
+# 第二颗传感器的**开关只有一个：配置文档里的 vision.secondary.model**（代码默认空 = 这台站没有第二颗）。
+# 以前这里还写死了一个 imx477 默认值，于是"有没有第二路"存在两处真相 —— 朝向那次就是被这种重复
+# 掩住的：文档里的值没被读到，环境变量把型号补上了，症状一个都没有。
+# 环境变量保留成**一次启动的显式覆盖**：填型号就换一颗，填 `off` 就这一次启动不开这路
+# （visiond 会点名拒绝并把广角照常服务），不设就照文档。开不起时只降级这条流，不带走广角。
+export OTA_VISION_DETAIL_SENSOR="${OTA_VISION_DETAIL_SENSOR-}"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"
 export OTA_WEB_SOCKET="$RUN/control-web.sock"
@@ -453,7 +595,7 @@ if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [
   fi
   export OTA_IMU_TRACE="$RUN/imu.ndjson"
   "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-  imu_pid=$!; children+=("$imu_pid")
+  imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   # Require a fresh host tare and same-generation game rotation sample before
   # the controller starts. The IMU residual remains observe-only.
   imu_ready=0
@@ -481,17 +623,47 @@ PY
     echo 'Fresh same-generation BNO085 host tare/sample unavailable; controller not started.' >&2
     exit 1
   fi
+elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; then
+  # 观测档 IMU：给 UI 用的那路（§20 的 imu 块）。和上面那条的区别是**它不硬**——标定档要求
+  # "没有新鲜 tare 就不启动控制器"，而日常启动里 IMU 说话说不通只该让 UI 少一块信息。
+  # 用另一个变量名是有意的：上面那条把 imu_pid 交给了 wait -n，传感器一掉就把整栈收尾；
+  # 观测档不能这么干，所以它只登记进 children（停止时清），不参与 wait -n。
+  if [ "${OTA_IMU_ENABLE:-1}" = "1" ] && [ -x "$APP/build/imu-bno085" ]; then
+    if pgrep -x imu_main >/dev/null; then
+      echo 'Legacy IMU consumer still running; the UI will report the IMU as not configured.' >&2
+    else
+      export OTA_IMU_TRACE="$RUN/imu.ndjson"
+      "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+      imu_shadow_pid=$!; children+=("$imu_shadow_pid"); child_name[$imu_shadow_pid]=imu-bno085
+      imu_shadow_ready=0
+      for ((attempt=0; attempt<30; attempt++)); do
+        kill -0 "$imu_shadow_pid" 2>/dev/null || break
+        if grep -q '"kind":"sample"' "$RUN/imu.ndjson" 2>/dev/null; then imu_shadow_ready=1; break; fi
+        sleep 0.1
+      done
+      if [ "$imu_shadow_ready" = 1 ]; then
+        echo 'BNO085 continuous capture running (observe-only; the station does not depend on it).'
+      else
+        echo 'BNO085 produced no samples within 3s; the UI reports the IMU as absent and the station keeps running.' >&2
+        kill "$imu_shadow_pid" 2>/dev/null || true
+        unset OTA_IMU_TRACE
+      fi
+    fi
+  fi
 fi
 "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
 controller_pid=$!
 children+=("$controller_pid")
+child_name[$controller_pid]=controld
 else
   echo 'Perception only: no controller connection.'
   START_WEB=0
 fi
 if [ "$START_WEB" -eq 1 ]; then
   "$PY" -m web.webd.app >"$RUN/web.log" 2>&1 &
-  children+=("$!")
+  web_pid=$!
+  children+=("$web_pid")
+  child_name[$web_pid]=webd
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
   vision_args+=(--controller-state-url "http://127.0.0.1:$OTA_WEB_PORT/api/state")
 fi
@@ -500,7 +672,9 @@ if [ "$MODE" != mixed-controller-commission ]; then
     vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
   fi
   "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
-  children+=("$!")
+  vision_pid=$!
+  children+=("$vision_pid")
+  child_name[$vision_pid]=visiond
 elif [ "$MODE" = mixed-controller-commission ]; then
   echo 'Mixed controller commissioning: vision and web are not started.'
 fi
@@ -509,4 +683,6 @@ printf 'Mode: %s\nConfig: %s\nPython: %s\nChildren: %s\n' "$MODE" "${controller_
 cp "$RUN/launcher.pid" "$RUN/started"
 echo "Stack logs: $RUN; web port: $OTA_WEB_PORT. Ctrl-C stops this stack."
 # A failed child or finite capture ends its own stack; unrelated processes are untouched.
-wait -n "${children[@]}"
+first_child_status=0
+wait -n "${children[@]}" || first_child_status=$?
+note_child_exit

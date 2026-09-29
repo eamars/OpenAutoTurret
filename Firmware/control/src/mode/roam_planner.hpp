@@ -44,12 +44,20 @@ namespace ota {
 // the limits and the homing offsets are expressed in; a level-frame sweep (§33) is
 // converted to joints before it is checked against anything.
 struct RoamEnvelope {
+  // Set when the axis has no position envelope at all. It is not "bounds of 0",
+  // which would read as an empty region: a sweep region is still declared (see
+  // the loop's roam_config), this flag only says the containment check has no
+  // outer yaw wall to check against.
+  bool yaw_unbounded = false;
   double yaw_min_rad = 0.0;
   double yaw_max_rad = 0.0;
   double pitch_min_rad = 0.0;
   double pitch_max_rad = 0.0;
 
   bool non_empty() const {
+    // The region a sweep runs in must still have two ends even when the axis has
+    // no envelope: "roam is a bounded sweep" is a promise about behaviour, not a
+    // side effect of there being a wall to bump into.
     return yaw_max_rad > yaw_min_rad && pitch_max_rad > pitch_min_rad;
   }
 };
@@ -156,8 +164,9 @@ class RoamPlanner {
     auto inside = [&](double v, double lo, double hi) {
       return v >= lo + min_inside_rad && v <= hi - min_inside_rad;
     };
-    if (!inside(roam.yaw_min_rad, safe.yaw_min_rad, safe.yaw_max_rad) ||
-        !inside(roam.yaw_max_rad, safe.yaw_min_rad, safe.yaw_max_rad)) {
+    if (!safe.yaw_unbounded &&
+        (!inside(roam.yaw_min_rad, safe.yaw_min_rad, safe.yaw_max_rad) ||
+         !inside(roam.yaw_max_rad, safe.yaw_min_rad, safe.yaw_max_rad))) {
       std::snprintf(why, n,
                     "roam yaw %.1f..%.1f deg is not inside the safe envelope by %.1f deg",
                     roam.yaw_min_rad * 57.29577951308232,

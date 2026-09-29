@@ -1,0 +1,18 @@
+{
+  "_what": "HQ（IMX477）视场角档位表。主人 09-29 说清了三件事：这颗**没有光学变倍**（能拧的是对焦，对焦不动几何）；它**支持电子变倍**，目前停在最低档；暂时**没有用电子变倍的需求，保持在最低**。所以这张表现在不被任何控制路径使用——它存在是因为『档位↔FOV』必须有唯一一处可查，等架构师决定要不要用的时候不必有人凭印象报数。",
+  "_rule": "电子变倍是居中裁剪，所以 FOV 随档位变；镜头不因此改变畸变。已实测的档位写 status=measured；由裁剪律推出来的写 status=derived 并同时记录基档；基档没测就写 null——**空值是有位置的空值，不是 0**。",
+  "_derivation": "fov_h(z) = 2*atan(tan(fov_h(1)/2)/z)，线性居中裁剪；vertical 同式。derived 值不能当验收证据，至少要在两个档上各测一次（WP4 的『复现优先于引用』）。",
+  "sensor": "imx477",
+  "base": {
+    "digital_zoom": 1.0,
+    "fov_h_deg": null,
+    "fov_v_deg": null,
+    "status": "not_measured",
+    "provenance": "量法与广角一致（yaw/pitch 扫过已知角度，量归一化宽度对应的角度）；广角的 79.27°/42.19° 记在 calibration/camera_intrinsics.yaml，那里也写明 FOV 随请求的流尺寸变——HQ 量时要同时钉住流尺寸。"
+  },
+  "levels": [
+    {"digital_zoom": 1.0, "fov_h_deg": null, "status": "not_measured", "note": "当前档位（主人保持在最低）"},
+    {"digital_zoom": 2.0, "fov_h_deg": null, "status": "derived_from_unmeasured_base"},
+    {"digital_zoom": 4.0, "fov_h_deg": null, "status": "derived_from_unmeasured_base"}
+  ]
+}

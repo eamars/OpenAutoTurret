@@ -21,6 +21,7 @@ from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
+from common.control_trace import MAX_FRAME
 from .protocol import (
     ResponseMessage,
     Telemetry,
@@ -51,6 +52,11 @@ class ControldClient:
         # healthy publish loop and nothing anywhere said the words "malformed frame". Silence is
         # the one failure mode an operator cannot debug.
         self.malformed_frames = 0
+        # Frames whose shape parses but which webd has no branch for. Kept apart
+        # from malformed_frames on purpose: "the daemon spoke nonsense" and "somebody
+        # asked for a frame type I don't consume" are two different emergencies, and
+        # the first one is the only reason that counter exists.
+        self.unrouted_frames = 0
         self._latest: Optional[Telemetry] = None
         self._latest_mono: Optional[float] = None
         self._latest_lock = threading.Lock()
@@ -187,7 +193,11 @@ class ControldClient:
     def _read_loop(self, sock: socket.socket) -> None:
         while not self._stop_evt.is_set():
             try:
-                raw = sock.recv(65536)
+                # MAX_FRAME, not a local guess: controld answers a trace request on this
+                # same socket with a frame on the order of a megabyte, and SEQPACKET
+                # truncates rather than splits -- a small buffer turns a legitimate
+                # reply into a parse error and charges it to `malformed_frames`.
+                raw = sock.recv(MAX_FRAME)
             except socket.timeout:
                 continue
             except OSError:
@@ -200,6 +210,17 @@ class ControldClient:
         try:
             mtype, payload = parse_message(raw)
         except (ValueError, KeyError) as exc:
+            if "unknown message type" in str(exc):
+                # Not a grammar failure. controld answers read_control_trace with a
+                # `control_trace` frame, which this client has no reason to consume:
+                # /api/control_trace owns that read now. Counting it as malformed
+                # would send an operator hunting for a broken daemon.
+                self.unrouted_frames += 1
+                if self.unrouted_frames == 1:
+                    log.info("webd received a frame it does not consume (%s) — the "
+                             "control trace is read via /api/control_trace, so this "
+                             "is not a fault, but it is also not telemetry", exc)
+                return
             self.malformed_frames += 1
             # Rate-limited, not suppressed: at 15 Hz this would drown the journal, and once is
             # enough for the first occurrence and then again every five seconds of continuing

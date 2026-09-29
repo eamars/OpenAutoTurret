@@ -6,6 +6,10 @@ yaw:
   interface: can0
   spi_parent: spi0.0
   motor_id: 1
+  # Declared, never guessed: a drive with the current ring enabled ignores a voltage frame, so a
+  # probe that assumed voltage here would report "the axis does not move" about a drive that is
+  # simply not listening. Must match axes.yaw.control_mode in config/mixed_hardware.yaml.
+  control_mode: current
 pitch:
   interface: can1
   spi_parent: spi1.0
@@ -15,8 +19,35 @@ pitch:
 bitrate: 1000000
 limits:
   voltage_raw: 3000
+  # Ceiling for a commissioning pulse in amperes. It is deliberately above the station's own
+  # 0.8 A production envelope, and the two numbers are not in conflict: this tool only ever
+  # applies it for --pulse-ms (<=500 ms, then a zero frame on 0x1FE), while controld holds 0.8 A
+  # indefinitely through the closed loop. It went up on 09-29 because 0.25 A and 0.8 A both gave
+  # 4 counts of elastic wind-up and 0 deg/s, and the guide states +/-16384 == +/-3 A maximum
+  # torque current -- so 0.8 A was 27% of what the drive is allowed to source, and "the axis is
+  # blocked" was a conclusion drawn without ever asking the motor near its nameplate.
+  yaw_current_a: 3.00
+  # The regulated (--yaw-speed-deg-s) path uses the same amperes gains as production, so a probe
+  # result transfers instead of being a second tuning mystery.
+  current_kp_a_per_rad_s: 1.0
+  current_ki_a_per_rad_s: 0.6
   pulse_ms: 500
   yaw_travel_deg: 5
   yaw_speed_deg_s: 20
   feedback_age_ms: 20
   heartbeat_age_ms: 40
+  # Drag-sweep envelope (first WP6 measurement). A sweep drags the axis under speed regulation for
+  # tens of degrees and tens of seconds, so it cannot borrow the pulse limits above: those answer
+  # "how hard may a 500 ms pulse push", these answer "how far and how long may we take a map".
+  # sweep_ff_a_max is the breakaway assist: static drag on a crossed-roller bearing is larger than
+  # running drag, so the current a sweep needs to start is not the current it needs to keep going,
+  # and a sweep with no feedforward would spend seconds of integrator windup discovering that.
+  sweep_travel_deg: 400
+  sweep_duration_ms: 60000
+  # Both of these are argument bounds, not runtime guards: they say how big a sweep may be asked
+  # for, and neither one is allowed to end a sweep that is already running. A sweep measures torque,
+  # not speed (owner, 09-29), and the first two attempts tripped speed_or_travel_guard 36 ms and
+  # 5 s in -- at 1.0 A the axis broke static friction in 10 ms and was at ~35 deg/s 25 ms later --
+  # so a speed cap defended a number nobody asked for and cost the map.
+  sweep_speed_deg_s: 40
+  sweep_ff_a_max: 3.00

@@ -14,10 +14,19 @@
 #pragma once
 
 #include <array>
+#include <memory>
+#include <filesystem>
+#include <fstream>
 #include "control/motion_profile.hpp"
+#include "control/phase.hpp"
+#include "mode/operating_mode.hpp"
 #include <cstddef>
+#include <chrono>
+#include <cstdlib>
+#include "spdlog/spdlog.h"
 #include <cstdio>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include "geometry/bore_alignment.hpp"
 #include "tracking/aim_point.hpp"
@@ -150,6 +159,11 @@ struct TelemetrySnapshot {
   double q_pitch_rad = 0.0;
   double v_pitch_rad_s = 0.0;
   double effort_pitch = 0.0;
+  // The drive's own torque current, in amperes, where the protocol reports one. NaN -- and
+  // so `null` on the wire -- for a drive that does not; this is not the same question as
+  // effort_*, which is a torque in N·m where one is known at all.
+  double current_a_yaw = std::numeric_limits<double>::quiet_NaN();
+  double current_a_pitch = std::numeric_limits<double>::quiet_NaN();
   // Per-axis references.
   double q_ref_yaw_rad = 0.0;
   double q_ref_pitch_rad = 0.0;
@@ -297,11 +311,16 @@ struct TelemetrySnapshot {
   int for_envelope_count = 0;
   double for_envelope_deg[64] = {0.0};
 
-  // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
-  // the calibration files, not in the control code (the only "imu" anywhere in the tree is inside the
-  // word "simulation"). These fields exist so the absence is a stated fact on the wire rather than an
-  // empty space that each reader fills with its own guess, and they are a `present` flag rather than a
-  // constant so that adding hardware later is a change of value, not a change of contract.
+  // §20's imu block, now written by the control loop from the BNO085 trace the launcher owns
+  // (I2C1:0x4a; the driver is tools/imu_bno085.c and its NDJSON is what ImuTraceIngest tails). The
+  // claim these fields originally carried -- this station has no inertial sensor -- was written when
+  // that was true of the control code, and stopped being true when the hardware arrived: the sensor
+  // is there and has been measured at 215 Hz. It is a `present` flag rather than a constant either
+  // way, so a station booted without a trace says false and nobody has to guess why.
+  //
+  // What `present` means here, precisely: the trace is open and its samples are fresh. It does NOT
+  // mean the sensor is usable as a pose source -- see ControlLoop::ImuObservation for why the
+  // elevation gate below stays closed until a mount calibration exists.
   //
   // `imu_world_elevation_valid` gates the number, and that gate is the whole point. A world elevation
   // of 0.0 would claim the turret is level; with no sensor the honest value is "no value", and the
@@ -324,6 +343,13 @@ struct TelemetrySnapshot {
   // on, and labelled as derived rather than as a measured motor quantity.
   double q_ref_rate_yaw_rad_s = 0.0;
   double q_ref_rate_pitch_rad_s = 0.0;
+  // The yaw axis's own ask, in the units the operator reads the tape in, plus the drive
+  // output that went with it and the tiered guard's non-latching observations. Without
+  // these, a slow axis cannot be classified from the page.
+  double yaw_cmd_shaped_deg_s = 0.0;
+  double yaw_cmd_output = 0.0;
+  bool yaw_guard_degraded = false;
+  int yaw_guard_events = 0;
   double q_ref_accel_yaw_rad_s2 = 0.0;
   double q_ref_accel_pitch_rad_s2 = 0.0;
   bool q_ref_rate_valid = false;
@@ -520,6 +546,15 @@ struct TelemetrySnapshot {
   double q_soft_max_pitch_rad = 0.0;
   double q_soft_min_yaw_rad = 0.0;
   double q_soft_max_yaw_rad = 0.0;
+  // Whether yaw has a declared envelope at all. Without this a reader cannot tell
+  // "no boundary" from "boundary at zero", and the wire used to answer 0/0 for both.
+  // Bounded 才是关键：`declared()` 对 Unbounded 也是真的（"没有边界"本身就是一个立场，
+  // 见 safety_envelope.hpp），所以这里问的是"有没有一条能量出来的边界"。
+  bool yaw_envelope_bounded = true;
+  // 参考带：文件里声明过的那条带（±90），无包线时给操作手留一把以归零点为 0 的尺。
+  // 它不是限位——`yaw_envelope` 那个词才是说这话的地方。
+  double yaw_band_min_rad = 0.0;
+  double yaw_band_max_rad = 0.0;
   // Distance to the nearer soft limit on each axis, in radians — the same expression the
   // black-box capture records, so the number on the page and the number in an investigation
   // artifact cannot disagree about how close the turret came to the end of its travel.
@@ -551,9 +586,24 @@ struct ControlLogRecord {
   double a_actual[kAxisCount] = {0.0, 0.0};    // position-derived accel (rad/s^2)
   double jerk_actual[kAxisCount] = {0.0, 0.0}; // position-derived jerk (rad/s^3)
   double effort[kAxisCount] = {0.0, 0.0};
+  // The drive's own torque current, in amperes, NaN where the protocol has no such field.
+  // Deliberately not folded into `effort`: that column is N·m where one is known at all, and
+  // the GM6020 answers with a current. Two different measurements, two different columns.
+  double current_a[kAxisCount] = {std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::quiet_NaN()};
   double q_ref[kAxisCount] = {0.0, 0.0};
   double v_ref[kAxisCount] = {0.0, 0.0};
   double v_command[kAxisCount] = {0.0, 0.0};
+  // What the backend accepted after its own gating and shaping, and what the actuator law
+  // put on the wire. `cmd` above is the loop's intent; these two are the last two hops
+  // before the motor, and without them a stop record cannot distinguish "we never asked for
+  // speed" from "we asked and the axis did not answer" -- the exact question the 2026-09-28
+  // manual-jog measurement turned on. NaN (rendered null) means the backend does not report
+  // it: pitch's CyberGear is such a drive today.
+  double backend_cmd[kAxisCount] = {std::numeric_limits<double>::quiet_NaN(),
+                                    std::numeric_limits<double>::quiet_NaN()};
+  double drive_out[kAxisCount] = {std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::quiet_NaN()};
   double v_estimated[kAxisCount] = {0.0, 0.0};  // feedback-position derivative
   TimeNs feedback_ns[kAxisCount] = {0, 0};
   uint64_t command_seq = 0;
@@ -564,6 +614,21 @@ struct ControlLogRecord {
   int64_t feedback_age_ms = 0;
   int64_t cycle_duration_us = 0;
   tracking::TrackState track_state = tracking::TrackState::ReadyHold;
+  // The phase this row was captured in. Without it a cycle cannot say whether the
+  // axis was being held or commanded, which is the difference between a stale
+  // request and a stalled mechanism — the 2026-09-28 no-progress case could not be
+  // classified from the 1 Hz line for exactly this missing bit.
+  Phase phase = Phase::Idle;
+  // Which mode owned the axis for this row. `phase` alone is not enough: a manual
+  // jog and a tracking correction both run inside Phase::Hold, so a row that says
+  // only "hold" cannot distinguish a stale request from a live mode commanding a
+  // move -- which is the exact distinction the 2026-09-28 case turns on. Proved by
+  // an 11 s jog on 2026-09-28: the axis moved 0.12 rad/s and every row said `hold`.
+  OperatingMode mode = OperatingMode::Manual;
+  // Thermal byte per axis as the wire sends it, -1 when no byte has arrived. No
+  // unit, no fault meaning (docs/references/gm6020/); it is here because an
+  // observation you can plot beats a NaN you have to explain.
+  int temp_raw[kAxisCount] = {-1, -1};
 };
 
 // §43.3 structured event.
@@ -610,6 +675,9 @@ enum class Event : uint8_t {
   ManualJogStopped,
   ManualStep,
   StopMotion,
+  // Appended after the 2026-09-27 yaw guard trip: a watchdog trip reaches the operator
+  // with the condition that fired it, never as the one bare string shared by eight causes.
+  MotorWatchdogTrip,
 };
 
 // The name is the wire format. Numbers are for storage; a log, a dashboard and a person
@@ -655,9 +723,27 @@ inline const char* event_name(Event e) {
     case Event::ManualJogStopped: return "MANUAL_JOG_STOPPED";
     case Event::ManualStep: return "MANUAL_STEP";
     case Event::StopMotion: return "STOP_MOTION";
+    case Event::MotorWatchdogTrip: return "MOTOR_WATCHDOG_TRIP";
   }
   return "UNKNOWN";
 }
+
+// A trace reply, and whether it is the trip's own window or the running ring.
+struct TraceWindow {
+  std::vector<ControlLogRecord> rows;
+  bool frozen = false;
+  int64_t frozen_t_ns = 0;
+  // A live reader over the socket is in the same position as a file read three weeks
+  // later: the rows' `t` is CLOCK_MONOTONIC nanoseconds, which restarts at every boot.
+  // So the window carries the same four things the trip file's header does, measured
+  // when the window was taken. Absence here would mean the socket knows less than the
+  // file -- and the file is the copy nobody is watching when it breaks.
+  const char* clock = "CLOCK_MONOTONIC";
+  std::string boot_id = "unknown";
+  long long mono_to_wall_ns = 0;
+  long long mono_to_wall_err_ns = 0;
+  unsigned clock_epoch = 0;
+};
 
 struct EventRecord {
   TimeNs timestamp_ns = 0;
@@ -670,6 +756,14 @@ struct EventRecord {
 template <typename T, std::size_t N>
 class RingBuffer {
  public:
+  // The cap exists so nothing allocates on a control-cycle path -- not so the bytes have
+  // to live on the owner's stack. They used to: the telemetry store holds three of these
+  // (4096 + 8192 + 1024 records), so every object owning one carried four megabytes of
+  // stack, and on 2026-09-29 adding one 16-byte column to a record tipped an 8 MB test
+  // stack. That made a size limit look like a bug, in the process threatening controld
+  // itself, whose ControlLoop has always held this on main()'s stack.
+  RingBuffer() : buf_(std::make_unique<T[]>(N)) {}
+
   void push(const T& item) {
     buf_[write_ % N] = item;
     ++write_;
@@ -703,18 +797,60 @@ class RingBuffer {
   bool empty() const { return count_ == 0; }
   void clear() { write_ = 0; count_ = 0; }
 
+
  private:
-  std::array<T, N> buf_{};
+  // Owned, not embedded: see the constructor. A value-initialized array of N.
+  std::unique_ptr<T[]> buf_;
   std::size_t write_ = 0;
   std::size_t count_ = 0;
 };
 
 // The telemetry store, filled by the control loop.
+// Fills §20's imu block from what the trace ingest observed. It is a function rather than a handful
+// of assignments at the call site for one reason: the elevation gate must not be settable by
+// whoever happens to be publishing. A caller can report that samples are fresh; it cannot
+// accidentally claim the turret's attitude, because the field that gates that claim is decided
+// here, from the calibration state, and nowhere else.
+//
+// The calibration state today: the BNO085 is bolted to the moving pitch assembly and no mount
+// calibration maps its gravity vector onto the base. So `imu_world_elevation_valid` is false, the
+// emitter sends JSON null, and a reader that flattens null into 0.0 is asserting the turret is
+// level -- which is exactly the mistake this gate exists to make impossible.
+inline void fill_imu_telemetry(bool samples_fresh, bool gravity_vector_fresh,
+                               TelemetrySnapshot& snap) {
+  snap.imu_present = samples_fresh;
+  snap.imu_gravity_valid = samples_fresh && gravity_vector_fresh;
+  snap.imu_world_elevation_valid = false;
+}
+
 class Telemetry {
+ public:
+  // The bump rule on its own, so it can be tested without settimeofday (which this
+  // service has no business calling, let alone under the no-sudo rule of this shift).
+  static unsigned clock_epoch_after(unsigned epoch, long long prev_offset_ns,
+                                    long long new_offset_ns, bool seen) {
+    if (!seen) return epoch;                     // first observation establishes, never bumps
+    if (std::abs(new_offset_ns - prev_offset_ns) > kClockJumpResolutionNs) return epoch + 1;
+    return epoch;
+  }
+
+  // Detector resolution, not a safety parameter: below this, a difference between two
+  // measurements is the scheduler moving, not the clock. Ten milliseconds is well
+  // above anything the Pi has shown under load and far below a real NTP step.
+  static constexpr long long kClockJumpResolutionNs = 10000000;
  public:
   static constexpr std::size_t kControlLogCap = 4096;   // ~20 s at 200 Hz
   static constexpr std::size_t kEventCap = 512;
   static constexpr std::size_t kBlackBoxCap = 8192;     // ~40 s at 200 Hz
+  // What a reader can ask for while the station is running: 1.28 s. Named because
+  // the argument below depends on it.
+  static constexpr std::size_t kTraceCap = 256;
+  // What a trip is allowed to keep. The live window is 1.28 s and the loop keeps
+  // publishing while the station sits fault-locked, so without a freeze the cycles
+  // that explain a trip are overwritten by the cycles that merely follow it.
+  // Taken from the deep ring, not the export ring, so the frozen window is longer
+  // than anything a live reader could have caught.
+  static constexpr std::size_t kFrozenTraceCap = 1024;  // ~5.1 s at 200 Hz
 
   // §6.3 the current-cycle snapshot (overwritten each cycle). The web/log
   // processes read this from a non-real-time thread, so the snapshot is
@@ -738,6 +874,151 @@ class Telemetry {
   std::vector<ControlLogRecord> control_trace() const {
     std::lock_guard<std::mutex> lk(trace_mu_);
     return trace_.all();
+  }
+  // Freeze the per-cycle history at the moment a fault latches. Blocking, and
+  // deliberately so: the reader's critical section is a bounded copy of 256 rows,
+  // and this runs once, on a path that has already decided to stop the mechanism.
+  // The hot path's try_lock above stays as it is — dropping a sample every cycle
+  // and blocking once at a trip are different trades, and only one of them was
+  // agreed to.
+  void freeze_control_trace() {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    const int have = control_log_.latest(frozen_trace_.get(),
+                                        static_cast<int>(kFrozenTraceCap));
+    frozen_count_ = have > 0 ? static_cast<std::size_t>(have) : 0;
+    frozen_t_ns_ = frozen_count_ ? frozen_trace_[frozen_count_ - 1].timestamp_ns : 0;
+    archive_path_.clear();
+    if (!frozen_count_ || archive_dir_.empty()) return;
+    // A trip nobody is watching still has to leave evidence: the socket answer is
+    // only there for someone who asks, and asking is exactly what nobody can
+    // promise at 03:00. Written once, from the latch, after the copy is taken.
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir_, ec);
+    if (ec) return;
+    const std::string path =
+        archive_dir_ + "/trip-" + std::to_string(frozen_t_ns_) + ".ndjson";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return;
+    // Numbers that are not finite are `null`, the same rule the telemetry line
+    // already follows. Absolute ns and the 64-bit command sequence are decimal
+    // strings here (docs/04_CONTRACTS.md §2): this file outlives the process, and
+    // a consumer that parses it in a language whose number is a double would
+    // otherwise quietly lose the low digits of a uptime-class timestamp.
+    auto num = [](double v) -> std::string {
+      if (!std::isfinite(v)) return "null";
+      std::ostringstream os;
+      os.precision(17);
+      os << v;
+      return os.str();
+    };
+    auto pair = [&](const double* a) {
+      return "[" + num(a[0]) + "," + num(a[1]) + "]";
+    };
+    auto pairi = [&](const int64_t* a) {
+      return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
+    };
+    // Every row's `t` is CLOCK_MONOTONIC nanoseconds (see common/time.hpp), and a
+    // monotonic clock says nothing by itself once the machine has rebooted -- it
+    // restarts. A file that outlives the boot it describes has to carry its own
+    // translation, measured in the same instant it was written, rather than leaving
+    // the reader to infer wall time from the name of the directory it was rotated
+    // into. Measured on this station 2026-09-28: BOOTTIME minus MONOTONIC = 15 us
+    // (this Pi has never suspended), so the two are interchangeable *here*; the
+    // declared name is what stops that from being an assumption next year.
+    observe_clock_mapping();
+    const long long wall_ns = mono_to_wall_ns_ + mono_now_ns();
+    out << "{\"kind\":\"trip_trace\",\"rows\":" << frozen_count_
+        << ",\"frozen_t_ns\":\"" << frozen_t_ns_ << "\""
+        << ",\"clock\":\"CLOCK_MONOTONIC\""
+        << ",\"boot_id\":\"" << boot_id_ << "\""
+        << ",\"wall_t_ns\":\"" << wall_ns << "\""
+        << ",\"mono_to_wall_ns\":\"" << mono_to_wall_ns_ << "\""
+        << ",\"mono_to_wall_err_ns\":\"" << mono_to_wall_err_ns_ << "\""
+        << ",\"clock_epoch\":" << clock_epoch_ << "}\n";
+    for (std::size_t i = 0; i < frozen_count_; ++i) {
+      const ControlLogRecord& r = frozen_trace_[i];
+      out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
+          << "\",\"mode\":\"" << operating_mode_name(r.mode)
+          << "\",\"track\":\"" << tracking::track_state_name(r.track_state)
+          << "\",\"phase\":\"" << phase_name(r.phase)
+          << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
+          << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
+          << ",\"cmd\":" << pair(r.v_command) << ",\"be_cmd\":" << pair(r.backend_cmd)
+          << ",\"vout\":" << pair(r.drive_out) << ",\"effort\":" << pair(r.effort)
+          // Amperes, from the drive that reports them; null where a drive reports no
+          // current. The same column name as the socket answer, so a reader does not have
+          // to learn two vocabularies for the same ring.
+          << ",\"cur\":" << pair(r.current_a)
+          << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
+          << ",\"safety\":" << static_cast<int>(r.safety_action)
+          << ",\"period_us\":" << r.cycle_duration_us << "}\n";
+    }
+    if (out.good()) archive_path_ = path;
+  }
+  // What a trace reader gets: the frozen trip window when there is one, because
+  // that is the answer to the question anybody asks after a trip. `frozen` is on
+  // the wire so a reader is never told "this is what happened" about live cycles.
+  TraceWindow control_window() const {
+    observe_clock_mapping();   // a live reader is exactly as much a consumer as a file
+    TraceWindow w;
+    {
+      std::lock_guard<std::mutex> lk(trace_mu_);
+      if (frozen_count_) {
+        w.rows.assign(frozen_trace_.get(), frozen_trace_.get() + frozen_count_);
+        w.frozen = true;
+        w.frozen_t_ns = frozen_t_ns_;
+      } else {
+        w.rows = trace_.all();
+      }
+    }
+    w.boot_id = boot_id_;
+    w.mono_to_wall_ns = mono_to_wall_ns_;
+    w.mono_to_wall_err_ns = mono_to_wall_err_ns_;
+    w.clock_epoch = clock_epoch_;
+    return w;
+  }
+  // Where a frozen window is also written to disk, derived once at startup from
+  // the web socket's own directory so the launcher archives it with the logs.
+  // Best-effort by design: a full /tmp must not be able to break a trip.
+  // One line per controlled stop, appended beside the traces so the launcher's rotation
+  // takes it away with the round it describes. Best-effort for the same reason the trip
+  // file is best-effort: a full disk may not become a new way to fail a stop.
+  void append_stop_evidence(const std::string& line) {
+    if (archive_dir_.empty()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir_, ec);
+    std::ofstream out(std::filesystem::path(archive_dir_) / "stop-evidence.ndjson",
+                      std::ios::app);
+    if (!out) return;
+    out << line;
+  }
+  void set_trace_archive_dir(const std::string& dir) {
+    observe_clock_mapping();  // the first artifact could be written at any moment
+    std::ifstream id("/proc/sys/kernel/random/boot_id");
+    if (id) {
+      std::string line;
+      std::getline(id, line);
+      while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+      if (!line.empty()) boot_id_ = line;
+    }
+
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    archive_dir_ = dir;
+    // Made now rather than at the latch: the launcher moves this directory into
+    // the archive on every restart, and a trip is a bad moment to discover that
+    // the place you meant to write to has been moved out from under you.
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir_, ec);
+  }
+  bool trace_archive_path(std::string& out) const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    if (archive_path_.empty()) return false;
+    out = archive_path_;
+    return true;
+  }
+  bool trace_frozen() const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    return frozen_count_ != 0;
   }
   const RingBuffer<ControlLogRecord, kControlLogCap>& control_log() const {
     return control_log_;
@@ -772,15 +1053,91 @@ class Telemetry {
     control_log_.clear();
     event_log_.clear();
     blackbox_.clear();
+    frozen_count_ = 0;
+    frozen_t_ns_ = 0;
+    archive_path_.clear();
     snapshot_ = TelemetrySnapshot{};
   }
 
  private:
   mutable std::mutex snapshot_mu_;
   mutable std::mutex trace_mu_;
-  RingBuffer<ControlLogRecord, 256> trace_;  // 1.28 s; timestamp gaps expose drops
+  RingBuffer<ControlLogRecord, kTraceCap> trace_;  // 1.28 s; timestamp gaps expose drops
   TelemetrySnapshot snapshot_;
   RingBuffer<ControlLogRecord, kControlLogCap> control_log_;
+  // Guarded by trace_mu_ with everything else a reader touches here.
+  // Same lesson as RingBuffer: this one is 320 KB, and it used to sit inside the
+  // store, so the store's owner paid for it on its stack.
+  std::unique_ptr<ControlLogRecord[]> frozen_trace_ =
+      std::make_unique<ControlLogRecord[]>(kFrozenTraceCap);
+  std::size_t frozen_count_ = 0;
+  int64_t frozen_t_ns_ = 0;
+  std::string archive_dir_;
+  // The identity of THIS boot, read once at startup. Two files written by two
+  // different boots can carry identical monotonic timestamps; without this, a
+  // reader cannot tell them apart.
+  std::string boot_id_ = "unknown";
+  // The offset to wall clock with its error bound and the epoch of the mapping it was
+  // measured under (see observe_clock_mapping). Epoch 1 is "this boot, no jump seen".
+  // A cache of "the last time anybody published an artifact, what was the mapping".
+  // Mutable and lock-free on purpose: readers on the web thread may refresh it, and a
+  // stale-by-one-sample bound or epoch is not a control decision -- each of these is an
+  // aligned word, so a reader sees one measurement or the previous one, never a splice.
+  mutable long long mono_to_wall_ns_ = 0;
+  mutable long long mono_to_wall_err_ns_ = 0;
+  mutable unsigned clock_epoch_ = 1;
+  mutable bool mapping_seen_ = false;
+
+  // --------------------------------------------------------------------------
+  // Clock mapping (ADR-001 contracts §"时钟语义"): the control domain stays on
+  // CLOCK_MONOTONIC, so every artifact that outlives a cycle must carry the offset
+  // to wall clock, HOW WELL THAT OFFSET IS KNOWN, and the epoch of the mapping it
+  // was measured under. A bare offset is a number without a warranty.
+  //
+  // The offset is measured the only way it can be measured from one place: read
+  // monotonic, read wall, read monotonic again; keep the sample with the smallest
+  // spread and call half that spread the error. Re-measured whenever an artifact is
+  // published, so a mapping nobody has looked at for an hour cannot be silently
+  // quoted from a stale value; a change larger than the detector resolution bumps
+  // the epoch and says so, which is how "禁止跨 boot 拼接统计" gets teeth.
+  void observe_clock_mapping() const {
+    long long best_spread = -1;
+    long long best_offset = 0;
+    for (int i = 0; i < 3; ++i) {
+      const long long m1 = mono_now_ns();
+      const long long wall = wall_now_ns();
+      const long long m2 = mono_now_ns();
+      const long long spread = m2 - m1;
+      if (best_spread < 0 || spread < best_spread) {
+        best_spread = spread;
+        best_offset = wall - ((m1 + m2) / 2);
+      }
+    }
+    const unsigned bumped =
+        clock_epoch_after(clock_epoch_, mono_to_wall_ns_, best_offset, mapping_seen_);
+    if (bumped != clock_epoch_) {
+      // Anything this large is a step, not drift: an NTP correction, a settimeofday,
+      // or a suspend we were told not to do. Rows published under the old mapping
+      // belong to the old epoch, so the epoch travels with them and the old ones are
+      // quoted as what they are -- not silently re-based.
+      spdlog::warn("clock mapping moved by {} ms; clock_epoch -> {} (rows published "
+                   "under the previous epoch stay in that epoch)",
+                   std::abs(best_offset - mono_to_wall_ns_) / 1000000, bumped);
+      clock_epoch_ = bumped;
+    }
+    mono_to_wall_ns_ = best_offset;
+    mono_to_wall_err_ns_ = best_spread / 2 + 1;
+    mapping_seen_ = true;
+  }
+  static long long mono_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+  static long long wall_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::system_clock::now().time_since_epoch()).count();
+  }
+  std::string archive_path_;  // set only when a freeze actually reached disk
   RingBuffer<EventRecord, kEventCap> event_log_;
   uint64_t event_pushes_ = 0;  // does not saturate where size() does
   RingBuffer<ControlLogRecord, kBlackBoxCap> blackbox_;

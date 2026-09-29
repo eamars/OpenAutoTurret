@@ -59,6 +59,27 @@ function hudAxisNorm(intr) {
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
 
+/**
+ * The reticle's cant (roll) reference line, as geometry rather than as four hand-placed strokes.
+ *
+ * There is ONE line: the parametric point centre + k*(ux, uy). Two visible halves are the samples
+ * outside the central box, which is why the middle is missing and why the two halves cannot drift out
+ * of line with each other -- they are the same expression evaluated at two intervals. Rotating by
+ * `deg` in screen space: 0 = horizontal, positive = clockwise.
+ *
+ * Returns [darkUnderStroke, greenLine] so the caller decides the order (dark first, always).
+ */
+function hudReticleCantSvg(cx, cy, reach, inner, deg, colors) {
+  const rad = (Number.isFinite(deg) ? deg : 0) * Math.PI / 180;
+  const ux = Math.cos(rad), uy = Math.sin(rad);
+  const seg = (from, to) =>
+    '<line x1="' + (cx + ux * from) + '" y1="' + (cy + uy * from) + '" x2="' +
+    (cx + ux * to) + '" y2="' + (cy + uy * to) + '"/>';
+  const halves = seg(-reach, -inner) + seg(inner, reach);
+  return [halves.replace(/\/>/g, ' stroke="' + colors.stroke + '" stroke-width="3.6"/>'),
+          halves.replace(/\/>/g, ' stroke="' + colors.line + '" stroke-width="2"/>')];
+}
+
 // Controller-owned projection; the browser never reconstructs mounting geometry.
 function hudBoreMark(t, stale) {
   const a = t && t.alignment;
@@ -70,19 +91,28 @@ function hudBoreMark(t, stale) {
   return { u: a.x_norm, v: a.y_norm, label: "ASSUMED " + a.assumed_depth_m.toFixed(1) + " m" };
 }
 
-function hudMeasurementPointSvg(t, lay, stale) {
+function hudMeasurementPointSvg(t, lay, stale, C) {
   if (stale || !t || t.target_aim_valid !== true ||
       !Number.isFinite(t.target_aim_x_norm) || !Number.isFinite(t.target_aim_y_norm) ||
       t.target_aim_x_norm < 0 || t.target_aim_x_norm > 1 ||
       t.target_aim_y_norm < 0 || t.target_aim_y_norm > 1) return "";
   const p = hudProject(t.target_aim_x_norm, t.target_aim_y_norm, lay);
   if (!p.ok) return "";
-  const label = t.target_aim_source === "box_fraction" ? "MEASURE" : "ANCHOR";
-  return '<g class="measurement-point"><path d="M ' + p.x + ' ' + (p.y-5) + ' L ' +
+  // §8's point: the measured position needs no caption -- the green reticle *is* the caption. What
+  // still earns words is the two exceptions: "this point is not a box measurement" (ANCHOR) and
+  // "the box is off the edge" (CLIPPED, a degraded condition, therefore amber and not green).
+  const parts = ['<g class="measurement-point"><path d="M ' + p.x + ' ' + (p.y-5) + ' L ' +
     (p.x+5) + ' ' + p.y + ' L ' + p.x + ' ' + (p.y+5) + ' L ' + (p.x-5) + ' ' + p.y +
-    ' Z" fill="none" stroke="#edf2eb" stroke-width="1.5"/>' +
-    '<text x="' + (p.x+9) + '" y="' + (p.y-9) + '" class="lbl" fill="#edf2eb">' +
-    label + (t.target_aim_box_clipped ? " / BOX CLIPPED" : "") + '</text></g>';
+    ' Z" fill="none" stroke="#edf2eb" stroke-width="1.5" stroke-linejoin="round"/>'];
+  if (t.target_aim_source !== "box_fraction") {
+    parts.push('<text x="' + (p.x+9) + '" y="' + (p.y-9) + '" class="lbl" fill="' + C.text +
+               '">ANCHOR</text>');
+  }
+  if (t.target_aim_box_clipped) {
+    parts.push('<text x="' + (p.x+9) + '" y="' + (p.y+12) + '" class="lbl" fill="' + C.amber +
+               '" font-weight="500">CLIPPED</text>');
+  }
+  return parts.join("") + '</g>';
 }
 
 
@@ -321,7 +351,10 @@ function hudDiagRows(t) {
     ["REF YAW / PITCH", num(t.q_ref_yaw_rad) + " / " + num(hudPitch(t, t.q_ref_pitch_rad))],
     ["CMD RATE YAW", num(t.q_ref_rate_yaw_rad_s) + " DEG/S"],
     ["CMD ACCEL YAW", num(t.q_ref_accel_yaw_rad_s2) + " DEG/S2"],
-    ["LIMITS YAW", num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
+    ["LIMITS YAW", t.yaw_envelope === "none"
+      ? "BAND " + num(t.yaw_band_min_rad, 1) + " ... " + num(t.yaw_band_max_rad, 1)
+        + " DEG (no boundary)"
+      : num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
     ["LIMITS PITCH", num(hudPitch(t, t.q_soft_min_pitch_rad), 1) + " ... " + num(hudPitch(t, t.q_soft_max_pitch_rad), 1) + " DEG"],
     ["TRACK RATE", (typeof t.camera_fps === "number" ? t.camera_fps.toFixed(1) : "--") + " HZ"],
     ["SELECTED CONF", (typeof t.selected_confidence === "number"
@@ -378,8 +411,26 @@ function hudDiagRows(t) {
           ? (t.camera.measurement_age_ms / 86400000).toFixed(2) + " D"
           : (t.camera.measurement_age_ms / 3600000).toFixed(1) + " H")
       : "UNKNOWN"],
-    ["IMU", (t.imu && t.imu.present) ? "PRESENT" : "ABSENT"]
+    ["IMU", imuLabel(t.imu)]
   ];
+}
+
+// The IMU chip has four states because the two absences mean different work: a station with no
+// IMU configured needs a deployment change, one with a trace and no samples needs the acquisition
+// process looked at. Collapsing them into "ABSENT" would send the operator to the wrong place.
+// A rate nobody measured yet says "rate n/m", never "0 hz": zero is a measurement, and this is
+// not one.
+function imuLabel(imu) {
+  // No block at all is §20's own absence, and it keeps the word the dashboard has always used.
+  if (!imu) return "ABSENT";
+  // A block that says "nothing was configured here" is a deployment fact, not a dead sensor.
+  if (imu.configured === false) return "NOT CONFIGURED";
+  if (!imu.present) return "NO SAMPLES";
+  if (!imu.fresh) return "STALE " + (typeof imu.age_ms === "number" ? imu.age_ms.toFixed(0) + "ms" : "?");
+  const rate = typeof imu.rate_hz === "number" ? imu.rate_hz.toFixed(0) + "HZ" : "RATE N/M";
+  const acc = typeof imu.game_rv_accuracy === "number" ? "/A" + imu.game_rv_accuracy : "";
+  const gaps = (imu.stats && imu.stats.gaps) ? " G" + imu.stats.gaps : "";
+  return "FRESH " + rate + acc + gaps;
 }
 
 // --- §10 prediction cue ----------------------------------------------------
@@ -587,32 +638,80 @@ function hudTravelTape(o) {
   if (!o || !o.valid || !(o.maxDeg > o.minDeg) || !(o.length > 0)) return null;
 
   const span = o.maxDeg - o.minDeg;
-  const steps = hudTickSteps(span, o.length);
+  // How much travel the window shows. The owner's question -- "why 40 deg? that is
+  // neither bigger nor smaller than the FOV on purpose" -- was the whole objection: a
+  // made-up window size makes the tape a decorative ruler. The window is therefore the
+  // CAMERA'S OWN FIELD OF VIEW on that axis (the commissioned `effective_hfov_deg` /
+  // `effective_vfov_deg` the safe-envelope polygon already uses), so the tape shows
+  // exactly the arc the operator can see, the caret is the boresight at its centre, and
+  // the ruler slides under it as the view sweeps past the travel. Before the camera has
+  // reported a usable FOV there is nothing to inherit, and the tape says which source it
+  // used rather than quietly picking a number.
+  const fov = Number.isFinite(o.windowDeg) ? o.windowDeg : 0;
+  const windowDeg = Math.min(span, fov > 0 ? fov : Math.max(30, span / 4));
+  const windowSource = fov > 0 ? (fov >= span ? "travel" : "fov") : "fallback";
+  const steps = hudTickSteps(windowDeg, o.length);
   const screenSign = o.horizontal ? otaJointScreenSign.yaw : otaJointScreenSign.pitch;
-  const at = (deg) => {
-    const fraction = screenSign > 0
-      ? (deg - o.minDeg) / span : (o.maxDeg - deg) / span;
-    return (o.horizontal ? o.x : o.y) + fraction * o.length;
+
+  // The MARKER never moves and the SCALE always slides (owner, 2026-09-28, second pass:
+  // "在一定角度之后 marker 就会动 —— 我希望 marker 永远不动，只动条带"). The first pass clamped
+  // the window inside the travel, which held the caret centred mid-travel but shoved it aside
+  // near an end. He rejected that, and with it the dead region I would have had to draw past
+  // the end: past the end this tape simply ROLLS OVER, which is what a cyclic axis's ruler
+  // is. The window is pinned to the value and never clamped, and the degrees beyond an
+  // endpoint are the degrees at the other end -- the seam is a real place on a real axis.
+  const lo = o.horizontal ? o.x : o.y;
+  const hi = o.horizontal ? o.x + o.length : o.y + o.length;
+  const mid = (lo + hi) / 2;
+  const half = windowDeg / 2;
+  const slope = screenSign * o.length / windowDeg;   // px per degree, direction included
+  const centreDeg = Number.isFinite(o.valueDeg) ? o.valueDeg : (o.minDeg + o.maxDeg) / 2;
+  const at = (deg) => mid + (deg - centreDeg) * slope;
+  // Cyclic coordinates: the declared travel is one cycle of this ruler, period `span`. yaw
+  // is a continuous axis so wrapping is what the world already does; pitch is physically
+  // blocked and usually never reaches the seam, but it is drawn by the same rule -- one
+  // widget, one behaviour, no second design somebody has to remember.
+  const wrap = (deg) => {
+    const w = (deg - o.minDeg) % span;
+    return o.minDeg + (w < 0 ? w + span : w);
+  };
+  // Ticks dissolve into the last stretch of each end rather than being cut off: that is
+  // how a tape says "there is more of this" without spending an element on the idea.
+  const FADE = Math.max(18, o.length * 0.09);  // proportional: an absolute px band would
+  // appear or vanish depending on how wide the browser made the tape
+  const opacityAt = (pos) => {
+    const d = Math.min(pos - lo, hi - pos);
+    if (d <= 0) return 0;
+    return d >= FADE ? 1 : Math.round((0.15 + 0.85 * d / FADE) * 100) / 100;
   };
 
   const ticks = [];
-  const firstIdx = Math.ceil(o.minDeg / steps.fine - 1e-9);
-  const lastIdx = Math.floor(o.maxDeg / steps.fine + 1e-9);
-  for (let k = firstIdx; k <= lastIdx; ++k) {
-    const deg = k * steps.fine;
-    const coarse = Math.abs(deg / steps.coarse - Math.round(deg / steps.coarse)) < 1e-9;
-    ticks.push({ deg: deg, pos: at(deg), coarse: coarse, endpoint: false,
-                 label: coarse ? hudDegLabel(deg, false) : "" });
+  const onGrid = (deg, step) => Math.abs(deg / step - Math.round(deg / step)) < 1e-9;
+  const push = (deg, forced) => {
+    const pos = at(deg), w = wrap(deg);
+    const atSeam = Math.abs(w - o.minDeg) < 1e-6 || Math.abs(w - o.maxDeg) < 1e-6;
+    const dup = ticks.filter((t) => Math.abs(t.pos - pos) < 1e-6);   // the seam is ONE place
+    if (dup.length) {
+      if (forced || atSeam) dup.forEach((t) => {
+        t.endpoint = true; t.coarse = true; t.label = hudDegLabel(w, true); });
+      return;
+    }
+    const coarse = forced || atSeam || onGrid(w, steps.coarse);
+    ticks.push({ deg: w, pos: pos, coarse: coarse, endpoint: !!(forced || atSeam),
+                 label: coarse ? hudDegLabel(w, !!atSeam || !!forced) : "" });
+  };
+  // Every fine step the window shows, indexed in window coordinates, labelled in cycle ones.
+  for (let k = Math.floor((centreDeg - half) / steps.fine) - 1;
+       k <= Math.ceil((centreDeg + half) / steps.fine) + 1; ++k) push(k * steps.fine, false);
+  // The seam itself, drawn even when it misses the grid: where the ruler rolls over is
+  // information, and on a continuous axis it is the only "endpoint" there ever is.
+  for (let cyc = -2; cyc <= 2; ++cyc) {
+    [o.minDeg, o.maxDeg].forEach((lim) => {
+      const cand = lim + cyc * span;
+      if (cand >= centreDeg - half - steps.fine && cand <= centreDeg + half + steps.fine)
+        push(cand, true);
+    });
   }
-  // Endpoints are always present and always labelled (§5.2), whether or not they fall on a step.
-  [{ deg: o.minDeg, pos: at(o.minDeg) },
-   { deg: o.maxDeg, pos: at(o.maxDeg) }].forEach((e) => {
-    const dupe = ticks.some((t) => Math.abs(t.deg - e.deg) < 1e-6);
-    if (dupe) { ticks.filter((t) => Math.abs(t.deg - e.deg) < 1e-6).forEach((t) => {
-      t.endpoint = true; t.coarse = true; t.label = hudDegLabel(e.deg, true); }); }
-    else ticks.push({ deg: e.deg, pos: e.pos, coarse: true, endpoint: true,
-                      label: hudDegLabel(e.deg, true) });
-  });
   ticks.sort((a, b) => a.pos - b.pos);
 
   // §22 asks a DERATE indication to include the relevant travel-tape edge. The tape's ends ARE the soft
@@ -621,20 +720,48 @@ function hudTravelTape(o) {
   // Matched on the degree value rather than on index, because which tick is an endpoint depends on
   // whether the limit happened to fall on a fine step.
   if (typeof o.markDeg === "number") {
-    ticks.forEach((tk) => { tk.marked = Math.abs(tk.deg - o.markDeg) < 1e-6; });
+    // §22: a DERATE indication names the tape edge it is about, and the tape lights that
+    // end amber. Matching on the degree value broke the day the ruler became cyclic --
+    // +100 wraps to -100, so the mark matched nothing and the amber vanished silently.
+    // What survives the wrap is the PIXEL a limit maps to, plus its whole-cycle images.
+    const eps = steps.fine * Math.abs(slope) / 2;
+    ticks.forEach((tk) => {
+      for (let cyc = -2; cyc <= 2; ++cyc) {
+        if (Math.abs(tk.pos - at(o.markDeg + cyc * span)) < eps) {
+          // Name the limit that was named: the tick at the seam may have been labelled from
+          // the other end of the cycle, and an amber highlight about +100 that reads "-100"
+          // is worse than no highlight.
+          tk.marked = true; tk.deg = o.markDeg; tk.label = hudDegLabel(o.markDeg, true); break;
+        }
+      }
+    });
   }
+
+  // Only what the window can show is drawn -- a label past an end would land on whatever
+  // HUD element lives beside the tape. Survivors carry their own opacity.
+  const shown = ticks.filter((tk) => tk.pos >= lo - 0.5 && tk.pos <= hi + 0.5)
+                     .map((tk) => {
+                       // The fade is for the middle of the scale running out of view. An
+                       // endpoint never fades to nothing: the limit you are approaching is
+                       // the one label that has to stay readable, and the first version of
+                       // this painted it to opacity 0 exactly where it mattered.
+                       tk.opacity = tk.endpoint ? Math.max(0.6, opacityAt(tk.pos))
+                                                : opacityAt(tk.pos);
+                       return tk;
+                     });
+  const seams = shown.filter((tk) => tk.endpoint).length;
 
   // Clamped along the tape's own axis. The first version clamped the vertical case between o.x and
   // o.x - the line's own column - because the horizontal variable was reused without being thought
   // about, and every pitch marker collapsed onto the tape's x-coordinate. Hand arithmetic caught it
   // (expected 593.7, produced 1842.0); a test now carries that arithmetic.
-  const lo = o.horizontal ? o.x : o.y;
-  const hi = o.horizontal ? o.x + o.length : o.y + o.length;
-  const marker = Math.max(lo, Math.min(hi, at(o.valueDeg)));   // never point off the tape
+  const marker = mid;   // literally always: the caret is the vehicle, the world moves
   return {
     horizontal: !!o.horizontal, x: o.x, y: o.y, length: o.length,
     x1: o.horizontal ? o.x + o.length : o.x, y1: o.horizontal ? o.y : o.y + o.length,
-    minDeg: o.minDeg, maxDeg: o.maxDeg, steps: steps, ticks: ticks, marker: marker,
+    minDeg: o.minDeg, maxDeg: o.maxDeg, steps: steps, ticks: shown, marker: marker,
+    centreDeg: centreDeg, seams: seams, cyclic: true,
+    windowDeg: windowDeg, windowSource: windowSource,
     valueDeg: o.valueDeg,
     // §6.3: the value box is a dark translucent fill with a thin green outline. Sized for
     // "PITCH -12.3 deg" at the label size, and always placed where it cannot leave the viewport.
@@ -657,32 +784,43 @@ function hudTravelTapeSvg(t, C, opts) {
   const base = C.green, fine = C.dim, lbl = C.green, mark = C.white;
   const parts = [];
   const w = t.horizontal;
-  parts.push('<line ' + (w ? 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x1 + '" y2="' + t.y
-                           : 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x + '" y2="' + t.y1) +
-             '" stroke="' + base + '" stroke-width="1" opacity=".85"/>');
+  // Every line on these scales is drawn twice: a dark line ~3px wide, then the green one on top of it.
+  // That is the whole contrast story over a white curtain or a window -- and it is deliberately not a
+  // blurred glow, which reads as decoration and disappears against a highlight.
+  const spine = (w ? 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x1 + '" y2="' + t.y
+                 : 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x + '" y2="' + t.y1);
+  parts.push('<line ' + spine + '" stroke="' + C.stroke + '" stroke-width="3" opacity=".9"/>');
+  parts.push('<line ' + spine + '" stroke="' + base + '" stroke-width="1" opacity=".85"/>');
   t.ticks.forEach((tk) => {
     const len = tk.marked ? 17 : (tk.endpoint ? 13 : (tk.coarse ? 10 : 5));
     const col = tk.marked ? C.amber : (tk.coarse ? base : fine);   // §22: caution is amber
-    parts.push('<line ' + (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
-                           : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos) +
-               '" stroke="' + col + '" stroke-width="1"/>');
+    const geom = (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
+                  : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos);
+    // Major ticks hold the green; minor ticks keep the hue but drop back, so the scale can be read
+    // at a glance instead of as a comb of equal-weight marks.
+    const weight = typeof tk.opacity === "number" ? tk.opacity : (tk.coarse || tk.marked ? 1 : 0.55);
+    parts.push('<line ' + geom + '" stroke="' + C.stroke + '" stroke-width="2.6" opacity=".85"/>');
+    parts.push('<line ' + geom + '" stroke="' + col + '" stroke-width="1" opacity="' + weight + '"/>');
     if (tk.label) {
       parts.push('<text class="tlbl" ' +
         (w ? 'x="' + tk.pos + '" y="' + (t.y - 7) + '" text-anchor="middle"'
            : 'x="' + (t.x + 8) + '" y="' + (tk.pos + 4) + '" text-anchor="start"') +
-        ' fill="' + (tk.marked ? C.amber : lbl) + '">' + tk.label + '</text>');
+        ' fill="' + (tk.marked ? C.amber : lbl) + '" opacity="' +
+         (typeof tk.opacity === "number" ? tk.opacity : 1) + '">' + tk.label + '</text>');
     }
   });
   // Current-position caret (§5.2) and its value box. Drawn last inside the group so it sits over the
   // ticks it overlaps.
   const mk = t.marker;
+  // The current-position caret is the strongest thing on the scale, and it earns that with a dark
+  // outline rather than with size: the geometry the operator has learned is 12px wide either way.
   parts.push(w
     ? '<path d="M ' + mk + ' ' + (t.y + 2) + ' L ' + (mk - 6) + ' ' + (t.y + 12) + ' L ' +
-      (mk + 6) + ' ' + (t.y + 12) + ' Z" fill="' + C.green + '" stroke="' + mark +
-      '" stroke-width=".8"/>'
+      (mk + 6) + ' ' + (t.y + 12) + ' Z" fill="' + C.green + '" stroke="' + C.stroke +
+      '" stroke-width="1.4" stroke-linejoin="round"/>'
     : '<path d="M ' + (t.x - 2) + ' ' + mk + ' L ' + (t.x - 12) + ' ' + (mk - 6) + ' L ' +
-      (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + mark +
-      '" stroke-width=".8"/>');
+      (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + C.stroke +
+      '" stroke-width="1.4" stroke-linejoin="round"/>');
   const bx = w ? Math.max(4, Math.min(mk - 48, (opts && opts.vw ? opts.vw - 100 : mk)))
                : Math.max(4, t.x - 84);
   const by = w ? (t.y + 16) : Math.min(t.y1 + 10, (opts && opts.vh ? opts.vh - 44 : t.y1));
@@ -691,9 +829,12 @@ function hudTravelTapeSvg(t, C, opts) {
   parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 14) +
              '" text-anchor="middle" fill="' + C.green + '">' + (opts && opts.title ? opts.title : "") +
              '</text>');
+  // The dark box stays (it is the one element that was already right), and the number inside it is
+  // green: yaw and pitch are level-1 information, which is the whole point of thinning the green out
+  // everywhere else.
   parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 28) +
-             '" text-anchor="middle" fill="' + C.white + '">' + (opts && opts.value ? opts.value : "") +
-             '</text>');
+             '" text-anchor="middle" fill="' + C.green + '" font-weight="600">' +
+             (opts && opts.value ? opts.value : "") + '</text>');
   // What the scale actually is, stated on the tape that uses it. §5.3 asks for logical joint travel
   // and forbids compass letters, which the drawing honours - but on this station the joint numbers
   // are surprising enough to be misread: yaw travels -22.6 to +320.2 deg (the config says in terms:
@@ -702,11 +843,33 @@ function hudTravelTapeSvg(t, C, opts) {
   // that camera-to-axis boresight is NOT separable from the principal point at the spans available
   // here, so the world elevation of this scale's zero has never been measured, and the tape says so
   // rather than borrowing an offset from somebody's recollection - mine included.
-  if (opts && opts.note) {
-    parts.push('<text class="tlbl" x="' + (bx + t.box.w / 2) + '" y="' + (by + t.box.h + 13) +
-               '" text-anchor="middle" fill="' + C.dim + '">' + opts.note + '</text>');
-  }
+  // No caption under the value box (owner, 2026-09-28: "简单就是更好"). What used to sit here
+  // read "JOINT TRAVEL, NOT HEADING" and "0 = TRAVEL MIDPOINT"; neither changed how anyone
+  // read the tape. The knowledge stays where it is acted on: no compass letters are drawn
+  // anywhere on this HUD, and pitch is joint travel -- not elevation, because the theodolite
+  // probe never separated camera-to-axis boresight from the principal point, so there is no
+  // measured offset to borrow. Say that in the design doc, not on the glass.
   return parts.join("");
+}
+
+function hudYawTapeRange(t) {
+  // Where the yaw tape's endpoints come from, as a function so it can be executed instead of
+  // read. Two sources, and the difference between them is stated by `ruler`:
+  //   · an axis with a declared envelope -- the soft limits themselves;
+  //   · `yaw_envelope: "none"` -- the *reference band* the station file still declares, centred
+  //     on the homing origin. Free rotation needs nothing to stop it; an operator still wants
+  //     to know how far the barrel has travelled since it was zeroed, and a ruler is not a wall.
+  // Nothing to show (no homing, or a band that isn't a band) and the page falls back to the
+  // unranged note rather than drawing a tape out of zeros.
+  const toDeg = (r) => (Number.isFinite(r) ? r * 180.0 / Math.PI : NaN);
+  const unbounded = String(t && t.yaw_envelope || "") === "none";
+  const minDeg = toDeg(unbounded ? t.yaw_band_min_rad : t.q_soft_min_yaw_rad);
+  const maxDeg = toDeg(unbounded ? t.yaw_band_max_rad : t.q_soft_max_yaw_rad);
+  return {
+    minDeg: minDeg, maxDeg: maxDeg, ruler: unbounded,
+    valid: Boolean(t && t.soft_limits_valid === true) &&
+      Number.isFinite(minDeg) && Number.isFinite(maxDeg) && maxDeg > minDeg
+  };
 }
 
 function hudUnrangedNote(x, y, label) {
@@ -758,7 +921,22 @@ function fmt(v, digits, suffix) {
 function deg(rad) { return Number.isFinite(rad) ? rad * 180.0 / Math.PI : NaN; }
 
 // §15 color tokens, verbatim from the revision.
+// ---------------------------------------------------------------------------
+// Reticle cant (roll) reference. UI foundation only: nothing here reads the IMU, and the value is
+// not wired to anything. Convention, screen space: 0 deg = horizontal, POSITIVE rotates the line
+// CLOCKWISE on screen, negative counter-clockwise. Whatever the IMU's roll sign eventually means is
+// a mapping problem for whoever connects it -- one expression, at one place, in front of this number.
+//
+// This is the single value that renders the line. To check the geometry by eye during development:
+//     otaSetReticleCant(5)      // or -5, 2, -2, 0
+// which repaints from the last telemetry it saw. There is deliberately no operator-facing control:
+// an operator cannot change the roll of the camera by pressing a button.
+let reticleCantDeg = 0;
+
 const C = {
+  // The dark partner of every primary overlay: a line over arbitrary video is only readable with
+  // something non-luminous under it. Kept in the palette so no drawing site invents its own black.
+  stroke: "#05070a", text: "#c5d0c5", text_dim: "#8c998c",
   green: "#95f58b", dim: "rgba(149,245,139,.56)", faint: "rgba(149,245,139,.22)",
   amber: "#f2b329", red: "#ff5d5d", white: "#edf2eb", black: "rgba(3,6,5,.80)",
   line: "rgba(230,245,230,.24)"
@@ -866,16 +1044,12 @@ function render(t) {
       '<path d="M ' + (c.x + sx * r) + ' ' + (c.y + sy * gap) + ' L ' + (c.x + sx * r) + ' ' +
       (c.y + sy * r) + ' L ' + (c.x + sx * gap) + ' ' + (c.y + sy * r) + '" fill="none" ' +
       'stroke="' + g + '" stroke-width="3"/>';
+    // The cant line, from the geometry module (see hudReticleCantSvg for why it is one line). The
+    // corner brackets are the aiming reference and neither rotate nor move with cant.
+    const cant = hudReticleCantSvg(c.x, c.y, r + 12, gap + 8, reticleCantDeg,
+                                   {stroke: C.stroke, line: g});
     layers.reticle =
-      corner(-1, -1) + corner(1, -1) + corner(-1, 1) + corner(1, 1) +
-      '<line x1="' + c.x + '" y1="' + (c.y - r - 12) + '" x2="' + c.x + '" y2="' + (c.y - gap) +
-      '" stroke="' + g + '" stroke-width="3"/>' +
-      '<line x1="' + c.x + '" y1="' + (c.y + gap) + '" x2="' + c.x + '" y2="' + (c.y + r + 12) +
-      '" stroke="' + g + '" stroke-width="3"/>' +
-      '<line x1="' + (c.x - r - 12) + '" y1="' + c.y + '" x2="' + (c.x - gap - 8) + '" y2="' + c.y +
-      '" stroke="' + g + '" stroke-width="3"/>' +
-      '<line x1="' + (c.x + gap + 8) + '" y1="' + c.y + '" x2="' + (c.x + r + 12) + '" y2="' + c.y +
-      '" stroke="' + g + '" stroke-width="3"/>' +
+      corner(-1, -1) + corner(1, -1) + corner(-1, 1) + corner(1, 1) + cant[0] + cant[1] +
       (intr ? "" : '<text x="' + (c.x + r + 18) + '" y="' + (c.y + 4) + '" class="lbl" ' +
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
     if (bore) {
@@ -889,7 +1063,7 @@ function render(t) {
         '" class="lbl" fill="' + C.amber + '">BORE ALIGNMENT UNAVAILABLE</text>';
     }
   }
-  layers.sel += hudMeasurementPointSvg(t, lay, stale);
+  layers.sel += hudMeasurementPointSvg(t, lay, stale, C);
 
   // §10: the prediction cue, from webd's `prediction` block. Absent when invalid - the revision says
   // prediction disappears when invalid or stale (§661's rule), and an empty group is the honest
@@ -924,12 +1098,13 @@ function render(t) {
   // "DERATE YAW MAX" text cannot drift apart - which matters more than it sounds, because an amber
   // highlight pointing at the wrong end of the tape is worse than no highlight at all.
   const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
-  const yawMin = deg(t.q_soft_min_yaw_rad), yawMax = deg(t.q_soft_max_yaw_rad);
+  const yawRange = hudYawTapeRange(t);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
-    minDeg: yawMin, maxDeg: yawMax,
-    markDeg: (dEdge && dEdge.axis === "YAW") ? (dEdge.side === "MIN" ? yawMin : yawMax) : undefined,
-    valueDeg: deg(t.q_yaw_rad), valid: t.soft_limits_valid === true
+    minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg,
+    markDeg: (dEdge && dEdge.axis === "YAW")
+      ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
+    valueDeg: deg(t.q_yaw_rad), windowDeg: t.effective_hfov_deg, valid: yawRange.valid
   });
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({
@@ -938,7 +1113,8 @@ function render(t) {
     markDeg: (dEdge && dEdge.axis === "PITCH")
       ? (dEdge.side === "MIN" ? deg(hudPitch(t, t.q_soft_min_pitch_rad)) : deg(hudPitch(t, t.q_soft_max_pitch_rad)))
       : undefined,
-    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), valid: t.soft_limits_valid === true
+    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), windowDeg: t.effective_vfov_deg,
+    valid: t.soft_limits_valid === true
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
   // ceremony - if the server ever starts sending a polygon in a different frame, drawing it as joint
@@ -968,11 +1144,9 @@ function render(t) {
 
   layers.tape =
     hudTravelTapeSvg(yawTape, C, { title: "YAW", vw: vw, vh: vh,
-                                   value: hudDegLabel(deg(t.q_yaw_rad), true),
-                                   note: "JOINT TRAVEL, NOT HEADING" }) +
+                                   value: hudDegLabel(deg(t.q_yaw_rad), true) }) +
     hudTravelTapeSvg(pitchTape, C, { title: "PITCH", vw: vw, vh: vh,
-                                     value: hudDegLabel(deg(hudPitch(t, t.q_pitch_rad)), true),
-                                     note: "0 = TRAVEL MIDPOINT" }) +
+                                     value: hudDegLabel(deg(hudPitch(t, t.q_pitch_rad)), true) }) +
     ((yawTape || pitchTape) ? ""
      : hudUnrangedNote(vw / 2, vh * 0.125, "YAW / PITCH"));
 
@@ -989,6 +1163,7 @@ function render(t) {
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
                              jogging: !!t.manual_lease_active });
+  if (window.otaPipNoteStreams) window.otaPipNoteStreams(t.video_streams);
   $("mode-block").innerHTML =
     '<div class="m1">' + st.line1 + '</div>' +
     '<div class="m2' + (st.named ? "" : " raw") + '">' + st.line2 + '</div>' +
@@ -999,13 +1174,44 @@ function render(t) {
   // an HUD that invents health is worse than one that admits a gap.
   const hs = $("health");
   hs.innerHTML = "";
-  const connected = !!t.controld_connected;
+  // `controld_connected` is a /api/health field, not a field of the telemetry snapshot: reading it off
+  // `t` asked for a key that is never published there, so the chip was red since the day it shipped
+  // (it is red in the owner's screenshot from before any of today's changes). transportOk is the page's
+  // own verdict, computed from /api/health and the socket, and it is the honest source.
+  // The field is published on this payload now (webd's decorate), so the chip reads it as the ledger
+  // says it does; transportOk is the fallback for a snapshot that predates the field, not a second
+  // opinion. Before this, the expression was `!!t.controld_connected` against a key that was never
+  // published here -- which is why the chip was red in every screenshot since it shipped.
+  const connected = (typeof t.controld_connected === "boolean") ? t.controld_connected
+                                                                : (transportOk === true);
   hs.appendChild(chip("CONNECTED", connected ? "ok" : "red"));
   const serviceReady = t.phase === "hold" && t.soft_limits_valid && t.supervisory_state === "READY";
   hs.appendChild(chip(serviceReady ? "HOMED" : "NOT READY", serviceReady ? "ok" : "amber"));
   const vis = (typeof t.vision_track_sets === "number" && t.vision_track_sets > 0) ? "ok" : "amber";
   hs.appendChild(chip("VISION", vis, vis === "ok" ? "" : "NO SETS"));
-  hs.appendChild(chip("IMU", "amber", "ABSENT"));
+  // Was a hardcoded amber "ABSENT" -- an unconditional assertion on the one strip the operator
+  // actually reads. The four states exist because they mean different work; the chip now derives
+  // from the same payload the drawer uses.
+  {
+    const lbl = imuLabel(t.imu);
+    const st = lbl.indexOf("FRESH") === 0 ? "ok" : "amber";
+    // State, not details (owner, 2026-09-29): the row is a glance, and rate / accuracy / the sensor's
+    // own attitude are still on the wire and in the drawer for anyone who asks.
+    hs.appendChild(chip("IMU", st, lbl.split(" ")[0]));
+  }
+  {
+    // Which network is actually producing the tracks -- the fact the whole Hailo switch turns on, and
+    // the one thing a station running the other backend would otherwise hide behind a working picture.
+    const nf = t.inference || {};
+    const state = !nf.present ? "red" : (nf.fresh ? (String(nf.adapter || "").toLowerCase() === "hailo" ? "ok" : "amber") : "amber");
+    // Only the backend's name (owner, 2026-09-29): HAILO or IMX500. The model id, the leg it reads and
+    // the produced-versus-kept counters stay on the wire, where I read them to diagnose exactly what
+    // is wrong tonight (emitted 91 671 frames' worth, tracks 0), without spending the operator's row.
+    const shown = !nf.present ? "NO REPORT"
+      : (!nf.fresh ? "STALE"
+                   : String(nf.adapter || "?").toUpperCase());
+    hs.appendChild(chip("NN", state, shown));
+  }
   // §22. Normal is green and compact; anything heavier gets its own element, sized by tier, and the
   // FAULT case is allowed to interrupt precisely because §22 asks it to.
   const sf = hudSafetyPresentation(t);
@@ -1027,12 +1233,19 @@ function render(t) {
   // limited number and is not what this cell claims..
   const cell = (k, v, cls) => '<span class="k">' + k + '</span><span class="' + (cls || "v") + '">' + v + '</span>';
   $("strip").innerHTML =
-    cell("MODE", String(t.operating_mode || "--"), "v") + '<span class="sep">|</span>' +
-    cell("STATE", String(t.track_state || "--").toUpperCase(), "v") + '<span class="sep">|</span>' +
+    // Two cells are the operator's actual steering state and get the green; a count and a rate are
+    // readings, and giving them the same colour as the mode is how everything ends up shouting.
+    cell("MODE", String(t.operating_mode || "--"), "hot") + '<span class="sep">|</span>' +
+    cell("STATE", String(t.track_state || "--").toUpperCase(), "hot") + '<span class="sep">|</span>' +
     cell("TARGETS", String(t.track_count == null ? "--" : t.track_count), "v") + '<span class="sep">|</span>' +
     cell("FPS", fmt(t.camera_fps, 0), "v") + '<span class="sep">|</span>' +
     cell("AGE", fmt(t.vision_measurement_age_ms, 0, " ms"), stale ? "warn" : "v") + '<span class="sep">|</span>' +
-    cell("SAFETY", String(t.safety_action || "UNKNOWN"), "v");
+    // SAFETY is a state, and §22 already colours it: ALLOW is healthy, anything that inhibits is
+    // amber, a fault is red. The rail must not contradict the banner it is standing under.
+    cell("SAFETY", String(t.safety_action || "UNKNOWN"),
+         t.safety_action === "ALLOW" ? "hot"
+           : (t.safety_action === "FAULT" ? "fault"
+             : (t.safety_action ? "warn" : "v")));
 }
 
 function paint(t) {
@@ -1144,6 +1357,7 @@ async function pollHealth() {
     // camera and let go), ask again instead of letting a frozen frame keep looking like a live one.
     const v = await (await fetch("/api/video/state")).json();
     if (v.running === false) await ensureVideo();
+    if (window.otaPipTick) await window.otaPipTick();   // the PIP's own measured rate rides along
   } catch (e) { transportOk = false; if (lastTelemetry) render(lastTelemetry); }
 }
 
@@ -1384,6 +1598,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("video").addEventListener("loadedmetadata", () => { if (lastTelemetry) render(lastTelemetry); });
   // An <img> error is how a stopped stream shows up; re-ask rather than reload forever.
   $("video").addEventListener("error", () => { ensureVideo(); });
+  {
+    // The same treatment for the secondary pane. A deploy restarts visiond, which ends the multipart
+    // response; a browser never retries a broken <img> on its own, so until now the HQ feed stayed
+    // dead until the operator reloaded the page -- while the main preview, which did have this
+    // handler, came back by itself. Keep whatever role the pane is showing; only re-ask.
+    const pipImg = $("pipimg");
+    if (pipImg) pipImg.addEventListener("error", () => {
+      const src = pipImg.getAttribute("src") || "/api/video?camera=detail";
+      pipImg.src = src.replace(/(&|\?)t=[^&]*/, "") + "&t=" + Date.now();
+    });
+  }
   ensureVideo();
   connect();
   pollHealth();
@@ -1397,14 +1622,32 @@ document.addEventListener("DOMContentLoaded", () => {
   // rebuilding the DOM four times a second to notice that nothing arrived is a lot of work to
   // discover an absence.
   setInterval(() => { if (lastTelemetry) updateStaleness(lastTelemetry); }, 250);
+
+  // Development handle for the reticle cant (§16): set the angle and repaint from whatever telemetry
+  // the page last held. Not a control, not a setting, and not persisted -- it is for checking the
+  // geometry at 0/+2/-2/+5/-5 degrees by eye.
+  window.otaSetReticleCant = function (deg) {
+    reticleCantDeg = Number.isFinite(Number(deg)) ? Number(deg) : 0;
+    if (lastTelemetry) paint(lastTelemetry);
+    return reticleCantDeg;
+  };
 });
 """
 
 HUD_CSS = r"""
-#g-reticle, #g-prediction {
-  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000);
-}
-#g-prediction .tlbl { font-weight: 700; paint-order: stroke; stroke: #000; stroke-width: 3px; }
+/* One 1px shadow, not a stack of them: the outline lives in the geometry (see the under-strokes),
+   and a filter that blurs two radii is how a reticle starts looking like a neon sign. */
+#g-reticle, #g-prediction { filter: drop-shadow(0 0 1px #000); }
+#g-prediction .tlbl { font-weight: 500; paint-order: stroke fill; stroke: var(--hud-stroke);
+  stroke-width: 2.4px; stroke-linejoin: round; }
+/* Over-video text: a crisp dark outline, not a halo. `paint-order: stroke fill` puts the stroke behind
+   the fill, so the glyph stays thin while the background stops fighting it; the two drop-shadows that
+   were carrying this were a glow, which is what made everything look equally loud. */
+#overlay text { paint-order: stroke fill; stroke: var(--hud-stroke); stroke-width: 2px;
+  stroke-linejoin: round; }
+/* The pane's own frame, from the token rather than a literal grey: the inline block below owns the
+   pane's pinned place and its metadata colours, and this is the one line about its border. */
+#pip { border: 1px solid var(--hud-line-quiet); }
 
 :root {
   --hud-green: #95f58b;
@@ -1414,7 +1657,19 @@ HUD_CSS = r"""
   --hud-red: #ff5d5d;
   --hud-white: #edf2eb;
   --hud-black: rgba(3,6,5,.80);
-  --hud-line: rgba(230,245,230,.24);
+  --hud-line: rgba(190,205,190,.40);
+  --hud-line-quiet: rgba(190,205,190,.22);
+  /* §8's four classes, and the reason they are tokens: the green is the identity, so anything that is
+     not yaw, pitch, the tracked target or the reticle has to stop borrowing it. Neutral here means
+     green-grey, not a grey dashboard. */
+  --hud-text: #c5d0c5;
+  --hud-text-dim: #8c998c;
+  /* A token nobody spends is a lie about the palette, so there is one dark fill, not three: the
+     pane's metadata bar. The overlay's own darkness is --hud-black plus the under-stroke. */
+  --hud-dark-soft: rgba(0,0,0,.6);
+  /* The dark under-stroke every primary overlay uses instead of a glow: crisp at 2px, and it is the
+     only thing that keeps a green line readable across a white curtain or a window. */
+  --hud-stroke: #05070a;
   /* §16's stack, declared as a token because three later rules read var(--hud-mono) inside a `font:`
      SHORTHAND. An undefined custom property makes the whole shorthand invalid at computed-value time,
      which drops the size and weight too - so an undeclared token is not "falls back to the inherited
@@ -1444,12 +1699,18 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
   border-radius: 3px; }
 .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
 .chip .val { opacity: .7; }
+/* The dot carries the state; the words are just words (§8). A chip whose text also glows green says
+   nothing that the dot has not already said, and it competes with yaw and pitch for the same green. */
+.chip { border-color: var(--hud-line-quiet); }
+.chip .lbl { color: var(--hud-text); }
 #strip { position: absolute; left: 1%; bottom: 1.4%; z-index: 20; display: flex; gap: 7px;
   align-items: baseline; padding: 4px 9px; font-size: 11px; letter-spacing: .08em;
   background: var(--hud-black); border: 1px solid var(--hud-line); border-radius: 3px; }
-#strip .k { color: rgba(237,242,235,.55); margin-right: 3px; }
-#strip .v { color: var(--hud-green); }
+#strip .k { color: var(--hud-text-dim); margin-right: 3px; }
+#strip .v { color: var(--hud-text); }        /* ordinary value: light, neutral, readable */
+#strip .hot { color: var(--hud-green); }     /* the state the operator is actually steering */
 #strip .warn { color: var(--hud-amber); }
+#strip .fault { color: var(--hud-red); }   /* §15: red is a fault, and the selector says so */
 #strip .sep { color: var(--hud-line); }
 text.tlbl { font-size: 11px; letter-spacing: .04em; font-family: inherit; }   /* scale labels */
 text.tval { font-size: 12px; letter-spacing: .06em; font-family: inherit; }   /* value boxes */
@@ -1485,9 +1746,11 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #manual-pad #pad-hold { font-size:10px; }
 #mode-controls { position:absolute; bottom:65px; left:50%; transform:translateX(-50%);
   display:flex; gap:8px; z-index:30; }
-#mode-controls button { padding:10px 16px; background:rgba(3,6,5,.9); border:1px solid var(--hud-green-dim);
-  border-radius:7px; color:var(--hud-green); font:13px var(--hud-mono); cursor:pointer; }
-#mode-controls button[aria-pressed="true"] { border-color:var(--hud-green); }
+/* An inactive control is not a state readout: neutral until it is the mode you are in. */
+#mode-controls button { padding:10px 16px; background:rgba(3,6,5,.9); border:1px solid var(--hud-line);
+  border-radius:7px; color:var(--hud-text); font:13px var(--hud-mono); cursor:pointer; }
+#mode-controls button:hover { border-color:var(--hud-text-dim); color:var(--hud-white); }
+#mode-controls button[aria-pressed="true"] { border-color:var(--hud-green); color:var(--hud-green); }
 #mode-controls button:disabled { opacity:.35; cursor:default; }
 .dockbtn { display:flex; flex-direction:column; align-items:center; gap:3px; width:46px;
            padding:5px 2px 4px; background:rgba(3,6,5,.62); border:1px solid rgba(230,245,230,.22);
@@ -1553,6 +1816,94 @@ HUD_HTML = """<!DOCTYPE html>
   <!-- z=0 camera image. Whole frame always visible: the frame edge is a number the
        operator has to be able to read, so the video is contained, never cropped. -->
   <img id="video" src="/api/video" alt="camera">
+  <!-- Pure-preview PIP (§ (b) dual streams). Default hidden, and hidden means *silent*: nothing
+       asks for /api/video?camera=detail until the operator opens it, so a station running one
+       stream pays nothing for the feature existing. Bottom-right because the telemetry rail, the
+       mode buttons and the target list all sit on the top/left edges of this pane. -->
+  <style>
+    /* Pinned: the same column as the mode block, below it, always open, never repositioned.
+       88px clears the mode block's three lines at every window ratio tried so far -- the earlier
+       version computed the pane's place from the letterboxed picture and therefore moved when the
+       window or the frame geometry changed, which the owner correctly called "还乱跑". The trade is
+       accepted on purpose: at extreme ratios the pane sits over a black bar instead of over the
+       picture; what it must never do is cover a control. */
+    /* Centred horizontally, low, sitting directly above the operating-mode buttons: #mode-controls is
+       anchored at bottom:65px and is ~34px tall, so 112px puts the pane's bottom edge clear of them
+       at any window width. Still constants -- no measurement at run time, which is what made the pane
+       drift before -- and still under the chrome layer, so if a ratio ever gets tight the buttons win
+       the overlap and the preview is the thing that gets covered. */
+    #pip { position: absolute; left: 50%; bottom: 112px; width: 280px; transform: translateX(-50%);
+           border: 1px solid #444; background: #000;
+           /* Below the chrome layer (every control sits at z-index 20), above the picture. The owner's
+              ruling of 2026-09-29 after the pane covered the D-pad: keep the pinned position and let
+              the D-pad paint over the preview -- chrome wins over a preview, always, which is cheaper
+              to reason about than any placement. The swap button sits at the pane's right edge, which
+              the aim pad does not reach, so the pane keeps its one control clickable. */
+           z-index: 15; }
+    #pip img { width: 100%; display: block; }
+    /* Level 3: the pane's chrome is information about a second camera, not state about the turret.
+       Neutral frame, dim metadata, and the one control brightens when the pointer is on it. */
+    #pip .bar { display: flex; justify-content: space-between; font-size: 10px;
+                color: var(--hud-text-dim); padding: 2px 4px; background: var(--hud-dark-soft); }
+    #pip button { background: none; border: 0; color: var(--hud-text-dim); cursor: pointer;
+                  font-size: 10px; }
+    #pip button:hover { color: var(--hud-text); }
+  </style>
+  <div id="pip">
+    <img id="pipimg" alt="secondary preview">
+    <div class="bar"><span id="piplabel">PIP</span><span id="pipfps">rate n/m</span>
+      <button id="pipswap" type="button">swap</button></div>
+  </div>
+  <script>
+  (function () {
+    var mainRole = "wide", pipRole = "detail";
+    function el(id) { return document.getElementById(id); }
+
+    // Rendered state, not a control: a station publishing one stream has no second tap to start, so
+    // the pane says so instead of showing a frozen frame or firing requests at a role nobody owns.
+    window.otaPipNoteStreams = function (streams) {
+      if (Array.isArray(streams) && streams.length < 2) {
+        el("piplabel").textContent = "NO SECOND STREAM";
+        el("pipfps").textContent = "";
+        el("pipimg").style.display = "none";
+      }
+    };
+
+    // Swapping re-points the two <img>s and nothing else; sources stay up until asked to come down,
+    // so the measured rate keeps its own history across a swap.
+    window.otaSwapPip = function () {
+      var m = mainRole; mainRole = pipRole; pipRole = m;
+      el("video").src = "/api/video?camera=" + mainRole + "&t=" + Date.now();
+      el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
+      el("piplabel").textContent = "PIP " + pipRole;
+    };
+    el("pipswap").addEventListener("click", window.otaSwapPip);
+
+    // Open by default: the second tap is asked for as soon as the page loads.
+    fetch("/api/video/start?camera=" + pipRole, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
+        if (j.ok) {
+          el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
+          el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
+        }
+      });
+
+    // The delivered rate is measured per stream by visiond and served per role by webd. The HUD
+    // already polls once a second to self-heal the preview, so this rides that poll rather than
+    // opening a second loop for one number. Unmeasured reads "rate n/m": zero is a measurement and
+    // this is not one.
+    window.otaPipTick = async function () {
+      try {
+        const v = await (await fetch("/api/video/state?camera=" + pipRole)).json();
+        el("pipfps").textContent = (typeof v.delivered_fps === "number")
+          ? (v.delivered_fps.toFixed(1) + " fps") : "rate n/m";
+      } catch (e) { /* the poll retries; a dead number is not worth a stack trace */ }
+    };
+  })();
+  </script>
+  
 
   <!-- z=10 candidates, z=11 selected, z=20 reticle: separate layers, because §18 orders
        them and because "the reticle never represents the target" is easier to keep true

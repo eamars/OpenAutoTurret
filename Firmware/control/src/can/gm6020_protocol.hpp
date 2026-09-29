@@ -1,9 +1,13 @@
 #pragma once
 
 // GM6020 guide v1.4: standard CAN, signed big-endian voltage, modulo encoder.
-// Current/temperature remain raw: the guide does not establish feedback scaling.
+// Temperature stays raw: the guide establishes no °C scale. Current does not -- see
+// current_a() below, whose scale is quoted from the same guide line the command side
+// uses, and which was confirmed on this station's wire on 2026-09-29 (a 0.25 A command
+// returned current_raw 1365; 0.25/3.0*16384 = 1365.3).
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
 #include <numbers>
 #include <stdexcept>
 
@@ -18,6 +22,9 @@ struct Feedback {
   uint8_t temperature_raw{};
   TimeNs rx_ns{};
   double speed_rad_s() const { return speed_rpm * (2.0 * std::numbers::pi / 60.0); }
+  // Amperes of torque current as reported by the drive, not an inferred N·m.
+  // Defined below, next to the scale, so the two cannot drift apart.
+  double current_a() const;
 };
 
 inline uint16_t be16(const uint8_t* p) { return (uint16_t(p[0]) << 8) | p[1]; }
@@ -48,6 +55,75 @@ inline can::RawFrame voltage_frame(uint8_t motor_id, int voltage) {
   const auto value = static_cast<uint16_t>(static_cast<int16_t>(voltage));
   frame.data[slot * 2] = static_cast<uint8_t>(value >> 8);
   frame.data[slot * 2 + 1] = static_cast<uint8_t>(value);
+  return frame;
+}
+
+// Torque-current command (DJI guide v1.4). Motor ID 1 is the only mapping this station qualifies:
+// the frame is 0x1FE, ID 1 lives in DATA[0:1] big-endian signed, and every remaining slot is zero
+// -- a stale byte in another slot would command a motor that is not even fitted on this turret.
+// Amperes are the unit everywhere above this boundary; raw int16 counts exist only here.
+inline constexpr double kRawFullScale = 16384.0;      // documented numeric full scale
+inline constexpr double kAmpsFullScale = 3.0;         // ... which is +-3.0 A of torque current
+// Provenance, since this number has been argued about: guide v1.4 states a 1.2 N·m
+// maximum continuous rated *torque* and no continuous *current*. Owner ruling
+// 2026-09-29: keep the constant and keep the 0.8 A profile limit unchanged -- a host
+// envelope gets re-derived after a thermal run, not before one.
+inline constexpr double kMaxContinuousA = 1.62;       // host envelope, not a wire limit
+inline constexpr double kAmpsPerRaw = kAmpsFullScale / kRawFullScale;
+
+// The drive reports its own torque current in the units it accepts on the command side, so
+// the scale is shared by construction instead of repeated. Amperes, deliberately: turning
+// this into N·m needs a torque constant the guide does not give, and an inferred N·m would
+// be a different physical claim wearing a familiar label.
+inline double Feedback::current_a() const { return current_raw * kAmpsPerRaw; }
+
+// Pure encoding: no clamp, so the scale itself can be tested against the documented endpoints.
+inline int current_raw_uncapped(double amps) {
+  if (!std::isfinite(amps)) throw std::invalid_argument("GM6020 current command is not finite");
+  const long raw = std::lround(amps / kAmpsPerRaw);
+  if (raw < -16384 || raw > 16384)
+    throw std::invalid_argument("GM6020 current command exceeds +-16384 raw counts");
+  return static_cast<int>(raw);
+}
+
+// The host-side clamp, applied in amperes BEFORE encoding, and bounded by the motor's continuous
+// rating: raising this number is an operator decision, and the software refuses to drift past
+// 1.62 A on its own. limit_a must be finite and positive -- a missing limit is not "unlimited".
+inline int current_raw_from_amps(double amps, double limit_a) {
+  if (!std::isfinite(limit_a) || limit_a <= 0.0)
+    throw std::invalid_argument("GM6020 host current limit must be finite and positive");
+  if (limit_a > kMaxContinuousA)
+    throw std::invalid_argument("GM6020 host current limit exceeds the 1.62 A continuous rating");
+  return current_raw_uncapped(std::clamp(amps, -limit_a, limit_a));
+}
+
+// The zero request every startup, hold, fault and shutdown path must put on the wire. It carries
+// no host clamp, because zero is inside every positive limit -- and it must not throw, because the
+// fault path calls it with nothing above it to catch anything: a throwing zero frame turns a
+// guard into std::terminate. A zeroed payload commands zero current to this motor and nothing at
+// all to the other slots, which is exactly the claim we are willing to make about a motor that is
+// not fitted on this turret.
+inline can::RawFrame current_zero_frame(uint8_t motor_id) {
+  if (motor_id < 1 || motor_id > 4)
+    throw std::invalid_argument("GM6020 current frame 0x1FE covers IDs 1-4");
+  can::RawFrame frame;
+  frame.extended = false;
+  frame.dlc = 8;
+  frame.id = 0x1fe;
+  return frame;
+}
+
+inline can::RawFrame current_frame(uint8_t motor_id, double amps, double limit_a) {
+  if (motor_id != 1)
+    throw std::invalid_argument("GM6020 current mode is qualified for motor ID 1 only");
+  const int raw = current_raw_from_amps(amps, limit_a);
+  can::RawFrame frame;   // RawFrame zero-initialises data, so unused slots cannot echo junk
+  frame.extended = false;
+  frame.dlc = 8;
+  frame.id = 0x1fe;
+  const auto value = static_cast<uint16_t>(static_cast<int16_t>(raw));
+  frame.data[0] = static_cast<uint8_t>(value >> 8);
+  frame.data[1] = static_cast<uint8_t>(value);
   return frame;
 }
 

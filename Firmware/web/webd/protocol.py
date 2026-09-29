@@ -57,8 +57,13 @@ class Telemetry:
     q_pitch_rad: float = 0.0
     v_pitch_rad_s: float = 0.0
     q_ref_pitch_rad: float = 0.0
-    effort_yaw: float | None = None  # GM6020 has no verified torque scaling
+    effort_yaw: float | None = None  # N·m: the GM6020 reports a current, not a torque
     effort_pitch: float = 0.0
+    # The drive's own torque current, in amperes. Its own column because it is a different
+    # measurement from effort_*: the yaw drive answers with amperes, the pitch drive with
+    # N·m, and neither one borrows the other's unit. None means that drive reports neither.
+    current_a_yaw: float | None = None
+    current_a_pitch: float | None = None
     target_az_world_rad: float = 0.0
     target_el_world_rad: float = 0.0
     base_roll_rad: float = 0.0
@@ -89,10 +94,15 @@ class Telemetry:
     soft_limits_valid: bool = False
     q_soft_min_pitch_rad: float = 0.0
     q_soft_max_pitch_rad: float = 0.0
-    q_soft_min_yaw_rad: float = 0.0
-    q_soft_max_yaw_rad: float = 0.0
+    # 无包线的轴发 null（不是 0，也不是大数）：0 是一个读数，"无"不是。
+    yaw_envelope: str = "sector"
+    # 参考带（不是限位）：无包线时 HUD 那条刻度带照画，以归零点为 0。
+    yaw_band_min_rad: float = 0.0
+    yaw_band_max_rad: float = 0.0
+    q_soft_min_yaw_rad: float | None = 0.0
+    q_soft_max_yaw_rad: float | None = 0.0
     soft_limit_distance_pitch_rad: float = 0.0
-    soft_limit_distance_yaw_rad: float = 0.0
+    soft_limit_distance_yaw_rad: float | None = 0.0   # 无包线 ⇒ null
     aim_point_valid: bool = False
     aim_point_x: float = 0.0
     aim_point_y: float = 0.0
@@ -188,6 +198,10 @@ class Telemetry:
     vision_last_frame_sequence: int = 0
     perception_native: bool = False
     perception_session_uuid: str = ""
+    # Which camera produced this, and how durable that claim is: "by-path"/"by-id" survive a
+    # re-number, "index" does not. Declared here or it exists and never reaches the page.
+    camera_id: str = ""
+    camera_identity_source: str = ""
     perception_track_set_sequence: int = 0
     selection_generation: int = 0
     vision_measurement_age_ms: int = -1     # since the last measurement
@@ -245,6 +259,17 @@ class Telemetry:
     q_ref_rate_pitch_rad_s: Optional[float] = None
     q_ref_accel_yaw_rad_s2: Optional[float] = None
     q_ref_accel_pitch_rad_s2: Optional[float] = None
+    # What the yaw axis was actually asked to do, and with how much force, straight from the
+    # backend that closes its own velocity loop. Measured manual yaw reached 5.3 deg/s while
+    # manual pitch reached 17.6, and neither the tape nor the log could say whether the ask
+    # was 5 or the ask was 20 and the axis was slow -- a settings bug and an actuator bug
+    # look identical without these. webd is a typed relay: an undeclared field is dropped
+    # here rather than passed through, which is how a field can be "published" by controld
+    # and still never reach the page.
+    yaw_cmd_shaped_deg_s: Optional[float] = None
+    yaw_cmd_output: Optional[float] = None
+    yaw_guard_degraded: Optional[bool] = None
+    yaw_guard_events: Optional[int] = None
     q_ref_rate_valid: bool = False
     tracking_velocity_control: bool = False
     tracking_reference_damped: bool = False

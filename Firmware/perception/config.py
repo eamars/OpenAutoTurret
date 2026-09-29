@@ -596,6 +596,9 @@ class ModelConfig:
     camera_height: Optional[int] = None
     camera_frame_rate_hz: Optional[float] = None
     camera_orientation: str = "none"
+    # The B route's inference leg. Zero means inference reads the main stream, as it did before.
+    camera_lores_width: int = 0
+    camera_lores_height: int = 0
     thresholds: ScoreThresholds = field(default_factory=ScoreThresholds)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -611,6 +614,8 @@ class ModelConfig:
                 "camera_width": self.camera_width, "camera_height": self.camera_height,
                 "camera_frame_rate_hz": self.camera_frame_rate_hz,
                 "camera_orientation": self.camera_orientation,
+                "camera_lores_width": self.camera_lores_width,
+                "camera_lores_height": self.camera_lores_height,
                 "thresholds": self.thresholds.to_dict()}
 
     @classmethod
@@ -648,6 +653,8 @@ class ModelConfig:
                                   _as_float(data.get("camera_frame_rate_hz"),
                                             "camera_frame_rate_hz", 0.0)),
             camera_orientation=str(data.get("camera_orientation", "none")).strip().lower(),
+                camera_lores_width=_as_int(data.get("camera_lores_width", 0), "camera_lores_width", 0),
+                camera_lores_height=_as_int(data.get("camera_lores_height", 0), "camera_lores_height", 0),
             thresholds=ScoreThresholds.from_dict(data.get("thresholds")))
 
     def validate(self) -> List[str]:
@@ -777,6 +784,56 @@ class CameraConfig:
 
 
 @dataclass
+class SecondaryStreamConfig:
+    """The station's second physical sensor, if it has one (§ (b): visiond owns both cameras).
+
+    Bound by **model**, and published under the role that model maps to — never by index. The
+    geometry lives here rather than in the daemon because growing or swapping a sensor should
+    change a document somebody can read, not a process nobody can see.
+
+    ``model=""`` means this station has no second sensor: the stream is absent, which is a
+    different published state from a stream that is published and stalled.
+    """
+
+    model: str = ""
+    width: int = 1280
+    height: int = 720
+    frame_rate_hz: float = 30.0
+    preview_fps: float = 10.0
+    queue_depth: int = 1
+    #: The secondary camera's own inference leg. Zero means "preview only, no inference": the wide
+    #: camera keeps working alone, and the absence is the configuration, not a missing feature.
+    #: The width is what the Hailo artifact demands (640), the height is what the ISP will give.
+    lores_width: int = 0
+    lores_height: int = 0
+    # Same mechanism and same legal values as the primary profile's `camera_orientation`: the
+    # transform is applied at the sensor, so the preview, the neural network and any saved frame all
+    # see one upright image. Only the value is per role -- which sensor is mounted upside down is a
+    # fact about each mount, and on this station both of them are.
+    orientation: str = "none"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"model": self.model, "width": self.width, "height": self.height,
+                "frame_rate_hz": self.frame_rate_hz, "preview_fps": self.preview_fps,
+                "queue_depth": self.queue_depth, "orientation": self.orientation,
+                "lores_width": self.lores_width, "lores_height": self.lores_height}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "SecondaryStreamConfig":
+        data = data or {}
+        return cls(
+            model=str(data.get("model") or "").strip().lower(),
+            width=_as_int(data.get("width", 1280), "secondary.width", 0),
+            height=_as_int(data.get("height", 720), "secondary.height", 0),
+            frame_rate_hz=_as_float(data.get("frame_rate_hz"), "secondary.frame_rate_hz", 30.0),
+            preview_fps=_as_float(data.get("preview_fps"), "secondary.preview_fps", 10.0),
+            queue_depth=_as_int(data.get("queue_depth", 1), "secondary.queue_depth", 0),
+            lores_width=_as_int(data.get("lores_width", 0), "secondary.lores_width", 0),
+            lores_height=_as_int(data.get("lores_height", 0), "secondary.lores_height", 0),
+            orientation=str(data.get("orientation") or "none").strip().lower())
+
+
+@dataclass
 class PreviewConfig:
     """§39: queue depth one, latest frame only, preview may never block inference."""
 
@@ -844,6 +901,10 @@ def _snake(name: str) -> str:
 # Root
 # --------------------------------------------------------------------------
 
+_KNOWN_SECTIONS = {"camera", "preview", "secondary", "models", "dedup",
+                   "tracking", "anchor", "selection", "record"}
+
+
 @dataclass
 class VisionConfig:
     """§50's ``vision:`` document as a typed object."""
@@ -851,6 +912,7 @@ class VisionConfig:
     profile: str = "person_detect"
     camera: CameraConfig = field(default_factory=CameraConfig)
     preview: PreviewConfig = field(default_factory=PreviewConfig)
+    secondary: SecondaryStreamConfig = field(default_factory=SecondaryStreamConfig)
     models: Dict[str, ModelConfig] = field(default_factory=dict)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
@@ -859,6 +921,12 @@ class VisionConfig:
     record: RecordConfig = field(default_factory=RecordConfig)
     #: §40's per-stage timing window (samples retained for p50/p95/p99).
     timing_window: int = 512
+    #: How stale a camera's newest TrackSet may be and still join the merged document. A box from a
+    #: camera that has not produced anything for longer than this is a memory, not a sighting, and
+    #: the control loop would turn toward it. Measured in the merged document's own clock (§19's
+    #: publication clock), and a dropped contribution is named in ``stale_sources`` rather than
+    #: silently missing.
+    merge_max_age_ms: float = 150.0
     #: Where the file came from, so an error message can name it.
     source_path: str = ""
 
@@ -870,6 +938,16 @@ class VisionConfig:
         root = dict(data or {})
         vision = root.get("vision")
         if isinstance(vision, Mapping):
+            # A section written next to `vision` rather than inside it is invisible to every reader
+            # below, and "invisible" here means the default is used silently -- which is how a
+            # configured rotate_180 became a stream that arrived upside down with nothing logged.
+            # The section names the parser knows are listed here so a misplaced one can name itself.
+            stranded = sorted(k for k in root if k != "vision" and k in _KNOWN_SECTIONS)
+            if stranded:
+                import sys
+                where = f" (in {source_path})" if source_path else ""
+                print(f"config: sections {stranded} sit beside 'vision' and are ignored; "
+                      f"move them inside 'vision'{where}", file=sys.stderr)
             root = dict(vision)
         models_raw = root.get("models") or {}
         if not isinstance(models_raw, Mapping):
@@ -880,6 +958,7 @@ class VisionConfig:
             profile=str(root.get("profile", "person_detect")),
             camera=CameraConfig.from_dict(root.get("camera")),
             preview=PreviewConfig.from_dict(root.get("preview")),
+            secondary=SecondaryStreamConfig.from_dict(root.get("secondary")),
             models=models,
             dedup=DedupConfig.from_dict(root.get("dedup")),
             tracking=TrackingConfig.from_dict(root.get("tracking")),
@@ -887,6 +966,7 @@ class VisionConfig:
             selection=SelectionConfig.from_dict(root.get("selection")),
             record=RecordConfig.from_dict(root.get("record")),
             timing_window=_as_int(root.get("timing_window"), "timing_window", 512),
+            merge_max_age_ms=_as_float(root.get("merge_max_age_ms"), "merge_max_age_ms", 150.0),
             source_path=source_path)
 
     @classmethod
@@ -932,6 +1012,7 @@ class VisionConfig:
             "selection": self.selection.to_dict(),
             "record": self.record.to_dict(),
             "timing_window": self.timing_window,
+            "merge_max_age_ms": float(self.merge_max_age_ms),
         }}
 
     # -- validation ---------------------------------------------------------

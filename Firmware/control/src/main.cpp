@@ -209,6 +209,23 @@ int main(int argc, char** argv) {
     backend = make_sim_backend();
   } else if (mixed_mode) {
     auto mixed = std::make_unique<MixedCanMotorBackend>();
+    // The voltage ceiling travels from turret_mixed.yaml (max_output_counts) and applies only in
+    // voltage mode; in current mode the envelope is axes.yaw.host_current_limit_a, which the
+    // profile already carries. Both are handed over, and one line says which one this station is
+    // driving with -- after 2026-09-28 I do not want a unit change discovered from a still axis.
+    mixed->set_yaw_voltage_ceiling(
+        cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
+    if (mixed_profile.yaw.control_mode == config::mixed::ControlMode::Current) {
+      spdlog::info(
+          "yaw commanded in torque current: host limit {} A, gains kp {} / ki {} A per rad/s "
+          "(max_output_counts {} is a voltage-mode number and does not apply here)",
+          mixed_profile.yaw.host_current_limit_a, mixed_profile.yaw.current_kp_a_per_rad_s,
+          mixed_profile.yaw.current_ki_a_per_rad_s,
+          cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
+    } else {
+      spdlog::info("yaw commanded in voltage: ceiling {} raw counts",
+                   cfg.axes[static_cast<int>(AxisId::Yaw)].max_output_counts);
+    }
     std::string cerr;
     if (!mixed->open(mixed_profile, cerr)) {
       spdlog::error("mixed CAN open failed: {}", cerr);
@@ -272,11 +289,29 @@ int main(int argc, char** argv) {
                  yaw_axis.expected_travel_deg.max) * kDeg2Rad;
     control_cfg.continuous_yaw_sector_inset_rad =
         yaw_axis.soft_margin_deg * kDeg2Rad;
-    if (control_cfg.continuous_yaw_sector_half_span_rad <=
-        control_cfg.continuous_yaw_sector_inset_rad) {
+    // The declared band survives the envelope being removed, for exactly one purpose:
+    // the yaw tape on the HUD. It is the same number the named roam region is validated
+    // inside, so showing it is not inventing a limit -- and it is centred on the homing
+    // origin, which is what "0" has always meant for a session-relative yaw.
+    control_cfg.continuous_yaw_band_half_span_rad =
+        control_cfg.continuous_yaw_sector_half_span_rad;
+    if (yaw_axis.position_envelope_none)
+      control_cfg.continuous_yaw_sector_half_span_rad = 0.0;
+    if (control_cfg.continuous_yaw_sector_half_span_rad < 0.0 ||
+        (control_cfg.continuous_yaw_sector_half_span_rad > 0.0 &&
+         control_cfg.continuous_yaw_sector_half_span_rad <=
+             control_cfg.continuous_yaw_sector_inset_rad)) {
       spdlog::error("mixed continuous-yaw software sector is invalid");
       mixed_backend->close();
       return 1;
+    }
+    if (control_cfg.continuous_yaw_sector_half_span_rad == 0.0) {
+      // `position_envelope: none`. That is a declaration that continuous yaw runs
+      // without a position envelope, not a missing number -- said out loud here so a
+      // log reader never has to infer it from the absence of a limit.
+      spdlog::warn("continuous yaw declared WITHOUT a position envelope; the "
+                   "sector is gone, not merely unmeasured (AUTO_ROAM still sweeps "
+                   "a declared region, and every other guard is unchanged)");
     }
     // GM6020 has no reported fault/disable status and its temperature byte
     // has no documented unit. The mixed backend instead independently bounds
@@ -295,37 +330,52 @@ int main(int argc, char** argv) {
   // motion independently of motor feedback; it is not the fixed base pose.
   // The launcher owns its sole I2C process and publishes a tare-scoped trace.
   std::unique_ptr<control::ImuTraceIngest> imu_observer;
+  const char* const imu_trace = std::getenv("OTA_IMU_TRACE");
+  const bool imu_trace_configured = imu_trace && *imu_trace;
+  // The BNO085 is an instrument, not a precondition: no IMU condition may fault the station. What
+  // it can do is report itself absent, which §20's fields are for -- `present:false` on the wire is
+  // the honest answer to "is there usable inertial data", and a page that renders that as "no
+  // sensor" is telling the operator the truth. A daemon that exited because the sensor was quiet
+  // would replace a true statement with a station that has no telemetry at all.
+  //
+  // The one exception is an explicit commissioning session (OTA_MIXED_COMMISSION_MANUAL=1), where
+  // the tare-scoped trace is the thing under qualification: there an unmet gate refuses to *start*
+  // the session, before any motion, in the same class as a config that fails to load. It is not a
+  // runtime fault, and nothing has moved when it happens.
   if (mixed_mode) {
-    const char* trace_path = std::getenv("OTA_IMU_TRACE");
-    if (!trace_path || !*trace_path) {
-      spdlog::error("mixed startup requires launcher-owned BNO085 trace (OTA_IMU_TRACE)");
-      loop.deenergize_all();
-      return 1;
-    }
-    imu_observer = std::make_unique<control::ImuTraceIngest>();
-    std::string imu_error;
-    if (!imu_observer->start(trace_path, imu_error)) {
-      spdlog::error("BNO085 trace ingest failed: {}", imu_error);
-      loop.deenergize_all();
-      return 1;
-    }
-    const auto deadline = now_monotonic_ns() + 2'000'000'000LL;
-    bool ready = false;
-    while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
-      const auto state = imu_observer->snapshot(now_monotonic_ns());
-      if (state.game_rv_fresh && state.game_rv_tared &&
-          state.gyro_fresh && state.game_rv_accuracy >= 2) {
-        ready = true;
-        spdlog::info("BNO085 observer ready: generation={} game-RV status={} tare_rx_ns={}",
-                     state.generation, state.game_rv_accuracy, state.tare_rx_ns);
-        break;
+    if (!imu_trace_configured) {
+      spdlog::warn("no launcher BNO085 trace (OTA_IMU_TRACE unset or the capture did not start); "
+                   "the imu block will report absent");
+    } else {
+      imu_observer = std::make_unique<control::ImuTraceIngest>();
+      std::string imu_error;
+      if (!imu_observer->start(imu_trace, imu_error)) {
+        spdlog::warn("BNO085 trace not ingestable ({}): continuing without an observer", imu_error);
+        imu_observer.reset();
+      } else if (mixed_commission_manual) {
+        const auto deadline = now_monotonic_ns() + 2'000'000'000LL;
+        bool ready = false;
+        while (!g_shutdown.load() && now_monotonic_ns() < deadline) {
+          const auto state = imu_observer->snapshot(now_monotonic_ns());
+          if (state.game_rv_fresh && state.game_rv_tared &&
+              state.gyro_fresh && state.game_rv_accuracy >= 2) {
+            ready = true;
+            spdlog::info("BNO085 observer ready: generation={} game-RV status={} tare_rx_ns={}",
+                         state.generation, state.game_rv_accuracy, state.tare_rx_ns);
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (!ready) {
+          spdlog::error("BNO085 has no fresh same-generation host tare, game-RV and gyro; "
+                        "commissioning session refused before any motion");
+          loop.deenergize_all();
+          return 1;
+        }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    if (!ready) {
-      spdlog::error("BNO085 has no fresh same-generation host tare, game-RV and gyro; mixed startup blocked");
-      loop.deenergize_all();
-      return 1;
+      // A normal mixed start does not wait for the sensor at all: the 1 Hz publisher below reports
+      // freshness as it finds it, so a slow-starting IMU shows up as `present:false` for a second
+      // rather than as a station that refused to boot.
     }
   }
 
@@ -439,6 +489,17 @@ int main(int argc, char** argv) {
   }
   std::array<AxisLogicalModel, 2> saved_models;
   std::array<AxisLimits, 2> saved_limits;
+  if (!retained) {
+    // Say out loud why every boot on this profile homes: the retained-homing store is not built
+    // for the mixed backend, so `reused` below is false by construction -- not because a saved
+    // record failed validation. The owner's ruling of 2026-09-28 ("no re-home while the drives
+    // demonstrably kept power and position") cannot be honoured until retention exists per axis
+    // here: pitch CyberGear is multi-turn absolute, and yaw GM6020 needs the persisted count to
+    // agree with the live encoder before we may skip. Logging the reason is the precondition for
+    // flipping that switch with evidence, instead of discovering it during an incident.
+    spdlog::info("homing retention: unavailable on this profile (mixed/sim); homing at boot is "
+                 "therefore mandatory, zero_source=homing");
+  }
   const bool reused = retained && retained->load(saved_models, saved_limits) &&
       loop.restore_retained_homing(saved_models, saved_limits, err);
   if (!reused && !loop.start_homing(std::move(plan), err)) {
@@ -462,11 +523,21 @@ int main(int argc, char** argv) {
   if (const char* hz = std::getenv("OTA_WEB_HZ")) {
     try { web_cfg.telemetry_hz = std::stoi(hz); } catch (...) {}
   }
+  // Trip traces land beside the socket, i.e. inside the launcher's run dir, where
+  // the next start archives them together with the logs instead of truncating them.
+  {
+    std::filesystem::path tr{web_cfg.socket_path};
+    if (tr.has_parent_path()) {
+      tr = tr.parent_path();
+      tr /= "traces";
+      loop.set_trace_archive_dir(tr.string());
+    }
+  }
   web::WebServer web(web_cfg,
                      [&loop]() { return loop.telemetry().snapshot(); },
                      [&loop](const std::string& n, const std::string& a) {
                        return loop.submit_command(n, a);
-                     }, [&loop]() { return loop.telemetry().control_trace(); });
+                     }, [&loop]() { return loop.telemetry().control_window(); });
   // The socket's parent directory does not survive a reboot by itself: systemd's RuntimeDirectory
   // makes it for the units, but a hand-run controld has nothing, and the bind then fails with
   // "No such file or directory" — which leaves a station that is running, homed and tracking with
@@ -564,10 +635,12 @@ int main(int argc, char** argv) {
       const TimingReport tr = stats.report();
       spdlog::info(
           "t={:.2f}s phase={} q_pitch={:+.4f} q_yaw={:+.4f} rad "
-          "temp_pitch={:.1f} temp_yaw={:.1f} C a_pitch={:+.2f} a_yaw={:+.2f}",
+          "temp_pitch={:.1f} temp_yaw={:.1f} C temp_raw_pitch={} temp_raw_yaw={} "
+          "a_pitch={:+.2f} a_yaw={:+.2f}",
           ns_to_ms(t0) / 1e3, phase_name(ph),
           loop.last_positions()[0], loop.last_positions()[1],
           loop.last_temps()[0], loop.last_temps()[1],
+          loop.last_temp_raw()[0], loop.last_temp_raw()[1],
           loop.last_accels()[0], loop.last_accels()[1]);
       spdlog::info(
           "loop: target={} Hz p50={:.3f} p95={:.3f} p99={:.3f} worst={:.3f} ms "
@@ -581,8 +654,29 @@ int main(int argc, char** argv) {
                        bus.rx_error_frames, bus.tx_frames, bus.tx_failed);
         }
       }
+      if (!imu_observer && imu_trace_configured) {
+        // Reached by a start whose profile carries no hardware profile, so no strict ingest was
+        // built above: the trace is then observed rather than gated -- a sensor that has not
+        // produced a line yet must not hold the station down, which is what the mixed path
+        // deliberately does. On this station's mixed profile imu_observer already exists and this
+        // block stays dormant; what runs there is the publish below. Measured 09-29: the mixed
+        // profile has been ingesting and logging this trace at 1 Hz all along; what was missing was
+        // the §20 fields, not the reader.
+        imu_observer = std::make_unique<control::ImuTraceIngest>();
+        std::string observe_error;
+        if (imu_observer->start(imu_trace, observe_error)) {
+          spdlog::info("BNO085 observer attached to {} (observe-only: no control input, no gate)",
+                       imu_trace);
+        } else {
+          spdlog::warn("BNO085 trace present but not ingestable yet: {}", observe_error);
+          imu_observer.reset();
+        }
+      }
       if (imu_observer) {
         const auto imu_state = imu_observer->snapshot(t0);
+        loop.observe_imu(/*present=*/imu_state.trace_open &&
+                                   (imu_state.game_rv_fresh || imu_state.gyro_fresh),
+                         /*gravity_valid=*/imu_state.game_rv_fresh && !imu_state.gap_seen);
         spdlog::info("BNO085 observer: generation={} tare={} game_rv_fresh={} gyro_fresh={} status={} gap={} trace_ended={}",
                      imu_state.generation, imu_state.game_rv_tared,
                      imu_state.game_rv_fresh, imu_state.gyro_fresh,
@@ -653,6 +747,12 @@ int main(int argc, char** argv) {
       spdlog::error("PARK FAILED: de-energized (phase={}, fault='{}')", phase_name(loop.phase()),
                    loop.fault_reason().empty() ? "park unavailable or shutdown deadline exceeded" : loop.fault_reason());
   }
+  // One closing line in the stop-evidence file, carrying the stop_id the earlier records used:
+  // the log says what we printed to a terminal, this says how the process ended.
+  loop.note_shutdown(!shutdown_failed,
+                     loop.fault_reason().empty()
+                         ? (mixed_mode ? "stop requested" : "park requested")
+                         : loop.fault_reason());
   if (system) system->close();
   if (mixed_backend) mixed_backend->close();
   if (imu_observer) imu_observer->stop();

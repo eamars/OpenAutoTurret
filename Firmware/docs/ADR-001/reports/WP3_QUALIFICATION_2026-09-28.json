@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "work_package": "WP3",
+  "title": "Camera ownership, durable identity, per-camera workers",
+  "actual_commit_sha": "c750e4e（本报告随下一提交入库）",
+  "approved_by": "待主人签",
+  "status": "PARTIAL —— 代码与本地资格完成；站点资格 NOT_RUN（站离线，主人刷 GM6020 固件）",
+  "station_session_id": null,
+  "boot_id": null,
+  "hardware_manifest_id": null,
+  "hardware_motion_authorized": false,
+  "configuration_hashes": {},
+  "source_record_paths": [
+    "Firmware/docs/ADR-001/reports/WP3_CAMERA_OWNERSHIP_2026-09-28.md"
+  ],
+  "metrics": {
+    "local_suite": {
+      "collected": 1027,
+      "passed": 986,
+      "failed": 17,
+      "skipped": 24,
+      "note": "规范调用 `python -m pytest -q --ignore=legacy`；17 个红分布于 7 个文件，均为既有"
+    },
+    "camera_worker_selftest": {
+      "passed": 9,
+      "total": 9
+    },
+    "camera_registry_selftest": {
+      "passed": 10,
+      "total": 10
+    },
+    "camera_id_selftest": {
+      "passed": 4,
+      "total": 4
+    },
+    "visiond_tests": {
+      "passed": 26,
+      "total": 26,
+      "including": "TestSyntheticWorker"
+    }
+  },
+  "evidence": [
+    {
+      "claim": "每相机一个 worker：死亡隔离、挂起不拖人、洪泛有界且计数、重启换代、旧代次帧被拒",
+      "how": ".venv/bin/python -m perception.camera_worker",
+      "observed": "9/9 passed"
+    },
+    {
+      "claim": "每相机跟踪器：抛错者降级但保留上一份已知结果（不谎报空房间）；兄弟继续跟踪",
+      "how": ".venv/bin/python -m perception.tracking.camera_registry",
+      "observed": "10/10 passed"
+    },
+    {
+      "claim": "离线路径的 worker 真在跑，并自报生命周期",
+      "how": "python -m perception.visiond --config perception/configs/perception_v1.json --profile _mock --max-frames 6",
+      "observed": "worker cam-385fcd67 state=stopped frames=6 dropped=5 generation=1"
+    },
+    {
+      "claim": "上述那行输出被断言保护（不是装饰）",
+      "how": "变异检验：把打印改为不循环 → test_visiond -k SyntheticWorker 变红；还原 → 绿",
+      "observed": "1 failed（变异时）/ 1 passed（还原后）"
+    },
+    {
+      "claim": "相机身份耐久",
+      "how": ".venv/bin/python -m perception.camera_id",
+      "observed": "4/4 passed（本站曾实测 cam-baa28c2a / source=by-path / durable=True）"
+    }
+  ],
+  "limitations": [
+    "A3（双 worker 退出/卡死/背压的真机资格）NOT_RUN：站离线，且 08 要求真相机帧率",
+    "T2（wide≥20Hz、detail≥14Hz）NOT_RUN：同上；且本站当前只有单路相机与单路消费者",
+    "双相机真接入未做：worker/registry 已就位，第二路消费者尚未接（`dropped=5` 即其现场证据）",
+    "本地套件存在一个会飘的红：同命令连跑两次分别为 18 failed 与 17 failed，失败集合相同；未定位，押后到 MVP 后的测试轮",
+    "本轮零硬件动作、未部署：全部验证在本地（主人 09-28 令：开发一律本地，rpi-turret 刷机中）"
+  ]
+}

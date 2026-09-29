@@ -50,6 +50,7 @@
 #include "control/tracking_reference.hpp"
 #include "control/speed_servo.hpp"
 #include "control/motion_profile.hpp"
+#include "control/phase.hpp"
 #include "control/boundary_governor.hpp"
 #include "control/safety_envelope.hpp"
 #include "control/safety_supervisor.hpp"
@@ -67,33 +68,6 @@ namespace ota {
 
 namespace vision {
 class VisionLink;  // lock-free vision-link counters (vision_ingest.hpp)
-}
-
-enum class Phase {
-  Idle,     // no motion phase active (pre-homing or post-park)
-  Homing,   // executing the multi-axis homing plan
-  Hold,     // ready-hold: at (or moving to) the safe ready pose, position mode
-  Parking,  // executing the safe park / shutdown sequence (§33)
-  Parked,   // de-energized at the park pose (power-safe)
-  Fault,    // fault-locked: controlled stop commanded, no further motion
-  Recovering, // disabled motor fault clear and feedback verification
-  // Phase 9: payload response check (§27, §31.3) — small moves in the safe
-  // central region, one axis at a time.
-  PayloadCheck,
-};
-
-inline const char* phase_name(Phase p) {
-  switch (p) {
-    case Phase::Idle:    return "idle";
-    case Phase::Homing:  return "homing";
-    case Phase::Hold:    return "hold";
-    case Phase::Parking: return "parking";
-    case Phase::Parked:  return "parked";
-    case Phase::Fault:   return "fault";
-    case Phase::Recovering: return "recovering";
-    case Phase::PayloadCheck: return "payload_check";
-  }
-  return "?";
 }
 
 class ControlLoop {
@@ -190,6 +164,11 @@ class ControlLoop {
     // for roam/web policy. It is independent of the narrower search sweep and
     // is never represented as a measured mechanical endpoint.
     double continuous_yaw_sector_half_span_rad = 90.0 * kDeg2Rad;
+    // The band the station file declared, kept even when the envelope is `none`, so
+    // the operator still has a scale under the yaw travel tape -- centred on the homing
+    // origin, and labelled a reference because it stops being a limit. Display only:
+    // nothing in the control path reads this.
+    double continuous_yaw_band_half_span_rad = 90.0 * kDeg2Rad;
     double continuous_yaw_sector_inset_rad = 10.0 * kDeg2Rad;
     // Drive-mode item 3: hold the aim while the line-of-sight wobbles inside this band, so detector jitter does
     // not walk the pointing. ZERO (the default) means the aim passes straight through, exactly as before this
@@ -328,6 +307,26 @@ class ControlLoop {
   // boot, or updated by a calibration). Defaults to identity (assumed-level
   // base). Consumed by the telemetry snapshot (world-frame LOS + base tilt).
   void set_base_orientation(const BaseOrientation& o) { base_orientation_ = o; }
+
+  // An observation from the BNO085 trace, pushed by the daemon once per status tick. The loop owns
+  // the published snapshot (only it calls set_snapshot), so a field the web page reads cannot be
+  // written from outside it -- that would be overwritten by the next tick and look like a flapping
+  // sensor. Stored here, copied into the snapshot where every other published field is filled.
+  //
+  // `world_elevation_valid` is deliberately NOT derived here. The sensor is bolted to the moving
+  // pitch assembly, so its gravity vector describes the gimbal's attitude, not the base's; turning
+  // it into a world elevation of the *base* needs a mount calibration that does not exist yet. The
+  // gate stays closed rather than borrowing the gimbal's own tilt, because publishing 0.0 would
+  // claim the turret is level -- and that claim is a safety statement, not a number.
+  struct ImuObservation {
+    bool present = false;
+    bool gravity_valid = false;
+  };
+  void observe_imu(bool present, bool gravity_valid) {
+    std::lock_guard<std::mutex> lk(imu_mutex_);
+    imu_observation_.present = present;
+    imu_observation_.gravity_valid = gravity_valid;
+  }
   const BaseOrientation& base_orientation() const { return base_orientation_; }
 
   // --- payload profiling / verification (Phase 9, §28.5, §31) -----------
@@ -360,6 +359,17 @@ class ControlLoop {
   // from a non-RT thread; guarded by the store's mutex). Tracking fields are
   // populated only while tracking mode is enabled.
   const telemetry::Telemetry& telemetry() const { return telemetry_; }
+  // The shutdown outcome belongs in the same file as the stop it closes: today the file has a
+  // request and an outcome per stop, and the log has a line saying how the process ended, and
+  // nothing joins them. `stop_id` is the join key. docs/ADR-001/docs/07, WP2.
+  void note_shutdown(bool parked, const std::string& cause);
+  void stop_and_record_unverified(const std::string& why);
+  // Where a trip's frozen window is additionally written. Deliberately a setter on
+  // the loop rather than a mutable telemetry() accessor: the store stays read-only
+  // to everyone except the one thing that owns it.
+  void set_trace_archive_dir(std::string dir) {
+    telemetry_.set_trace_archive_dir(std::move(dir));
+  }
 
   // --- developer commands (§42.2) ----------------------------------------
   // Submit a high-level developer command from the web UI. Validates against
@@ -406,6 +416,13 @@ class ControlLoop {
   // the 1 Hz log and the web snapshot). The drive's NTC via the feedback.
   const std::array<double, kAxisCount>& last_temps() const {
     return last_temp_;
+  }
+  // Raw thermal byte per axis with a validity bit; -1 means "no byte seen".
+  std::array<int, kAxisCount> last_temp_raw() const {
+    std::array<int, kAxisCount> out{};
+    for (int i = 0; i < kAxisCount; ++i)
+      out[i] = last_temp_raw_valid_[i] ? static_cast<int>(last_temp_raw_[i]) : -1;
+    return out;
   }
   // Position-derived acceleration (rad/s^2) per axis — the filtered derivative
   // of v_est_ (see kATauS). Exposed so the 1 Hz log shows motion quality
@@ -455,6 +472,9 @@ class ControlLoop {
     if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;
+      // The window a live reader could have caught is 1.28 s and the loop keeps
+      // publishing from here on; keep the cycles that led up to this.
+      telemetry_.freeze_control_trace();
     }
   }
   // vel_rad_s is passed in (the position-derived v_est_) rather than read from
@@ -478,6 +498,10 @@ class ControlLoop {
   double yaw_reference_candidate_rad_ = 0.0;
   TimeNs yaw_reference_stationary_since_ns_ = 0;
   bool mixed_stop_park_ = false;
+  // Shared by the two stop-evidence records (request and completion) so a reader can
+  // see a requested stop with no completion after it -- the interesting case --
+  // rather than two unrelated lines.
+  std::string mixed_stop_id_;
   bool mixed_pitch_disable_requested_ = false;
   double mixed_park_yaw_origin_rad_ = 0.0;
   double mixed_park_yaw_corridor_rad_ = 0.0;
@@ -509,6 +533,12 @@ class ControlLoop {
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};
+  // Same reading as the opaque wire byte, plus whether any byte arrived at all.
+  // The GM6020 status frame carries no unit and no fault bit (official guide
+  // v1.4; see docs/references/gm6020/), so yaw has no degC to report — printing
+  // only NaN there throws away the one number that does exist.
+  std::array<uint8_t, kAxisCount> last_temp_raw_{};
+  std::array<bool, kAxisCount> last_temp_raw_valid_{};
   // Homing high-rate motion-log cycle counter (gates the 100 Hz log; see the
   // Phase::Homing case). Reset in start_homing().
   int homing_log_cycle_ = 0;
@@ -538,6 +568,8 @@ class ControlLoop {
   // Phase 7 installation orientation (base -> world). Identity by default.
   BaseOrientation base_orientation_ = identity_pose();
   // §6.3/§43 top-level telemetry (always filled; webd reads the snapshot).
+  mutable std::mutex imu_mutex_;
+  ImuObservation imu_observation_;
   telemetry::Telemetry telemetry_;
   // Phase 8: developer-command plumbing (§42.2). command_state_ is published
   // each cycle for web-thread validation; command_queue_ is drained on the

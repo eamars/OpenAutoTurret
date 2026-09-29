@@ -129,6 +129,12 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
                          control::MotionRates defaults) {
     if (!strict_map(n, {"speed_deg_s", "acceleration_deg_s2", "jerk_deg_s3"}, path, err))
       return defaults;
+    // strict_map guards against unknown names; it does not insist on the ones that must be
+    // there, and until today that was covered up by a mode-level block always being required.
+    // With rates declared per axis, a block missing its acceleration would silently inherit
+    // a struct default -- a number nobody wrote, which is the thing this file is for.
+    for (const char* key : {"speed_deg_s", "acceleration_deg_s2"})
+      if (!n[key].IsDefined()) err.push_back(path + " is missing " + key);
     defaults.speed = alignment_number(n, "speed_deg_s", path, err)*kDeg2Rad;
     defaults.acceleration = alignment_number(n, "acceleration_deg_s2", path, err)*kDeg2Rad;
     if (n["jerk_deg_s3"].IsDefined())
@@ -141,8 +147,19 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
                            control::MotionProfile p, bool axis_override) {
     if (axis_override) strict_map(n, {"maximum", "target"}, path, err);
     else strict_map(n, {"maximum", "target", "axes"}, path, err);
-    p.maximum = rates(fetch(n,"maximum"),path+".maximum",p.maximum);
-    p.target = rates(fetch(n,"target"),path+".target",p.target);
+    // A mode may declare its rates once per axis instead of sharing one pair. When it does,
+    // the shared pair is not merely optional-but-allowed: writing it anyway would put two
+    // numbers in the file for one fact, and the owner's ruling of 2026-09-28 ("两轴单独设置…
+    // 值可以设置成一样") is precisely that the two axes are separate declarations whose
+    // equality is stated, not inherited. So at mode level a missing block is left alone --
+    // the per-axis blocks below are validated with everything else.
+    const bool shared_here = fetch(n, "maximum").IsDefined() && fetch(n, "target").IsDefined();
+    if (axis_override && !(fetch(n,"maximum").IsDefined() && fetch(n,"target").IsDefined()))
+      err.push_back(path + " must declare both maximum and target (an axis block cannot inherit)");
+    if (axis_override || shared_here) {
+      p.maximum = rates(fetch(n,"maximum"),path+".maximum",p.maximum);
+      p.target = rates(fetch(n,"target"),path+".target",p.target);
+    }
     if (p.target.speed > p.maximum.speed || p.target.acceleration > p.maximum.acceleration ||
         p.target.jerk > p.maximum.jerk)
       err.push_back(path + " target must not exceed maximum");
@@ -161,6 +178,14 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
     const auto p = profile(n,path,defaults,false);
     for (int i=0; i<kAxisCount; ++i) c.motion.modes[m][i] = p;
     const auto axes = fetch(n,"axes");
+    // A mode has to get its numbers from somewhere: either it declares the pair itself, or
+    // every axis declares its own. Anything else used to fall through onto MotionRates'
+    // service-cap defaults -- 20/30/120 that no operator wrote, and the reason a "target
+    // removed" config stopped being rejected when the shared block became optional.
+    const bool axes_complete = axes.IsDefined() && !axes.IsNull() &&
+        axes["pitch"].IsDefined() && axes["yaw"].IsDefined();
+    if (!axes_complete && !(fetch(n,"maximum").IsDefined() && fetch(n,"target").IsDefined()))
+      err.push_back(path + " must declare maximum/target, or an axes block covering both axes");
     if (axes.IsDefined() && !axes.IsNull() && strict_map(axes,{"pitch","yaw"},path+".axes",err)) {
       for (int i=0; i<kAxisCount; ++i) {
         const auto name = axis_name(static_cast<AxisId>(i));
@@ -168,6 +193,11 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
           c.motion.modes[m][i] = profile(axes[name],path+".axes."+name,p,true);
       }
     }
+    // Something has to be said about every axis. A mode that spells out only pitch, with no
+    // shared block to fall back on, used to leave yaw on a built-in default in silence.
+    for (int i=0; i<kAxisCount; ++i)
+      if (!(c.motion.modes[m][i].target.speed > 0 && c.motion.modes[m][i].maximum.speed > 0))
+        err.push_back(path + " declares no rates for " + axis_name(static_cast<AxisId>(i)));
   }
   for (int i=0; i<kAxisCount; ++i) {
     const auto& a = c.axes[i];
@@ -176,6 +206,14 @@ void parse_motion(const YAML::Node& root, TurretConfig& c,
     for (double value : {a.max_velocity_deg_s,a.max_acceleration_deg_s2,a.max_jerk_deg_s3})
       if (!std::isfinite(value) || value <= 0)
         err.push_back(std::string("axes.")+axis_name(static_cast<AxisId>(i))+" motion limits must be finite and > 0");
+  }
+  for (int i = 0; i < kAxisCount; ++i) {
+    // The bounds are the velocity controller's own (`output_ceiling > 25000.0` invalidates it),
+    // so the config rejects them here rather than discovering it as a dead axis at runtime.
+    const double counts = c.axes[i].max_output_counts;
+    if (!std::isfinite(counts) || counts <= 0 || counts > 25000.0)
+      err.push_back(std::string("axes.") + axis_name(static_cast<AxisId>(i)) +
+                    ".max_output_counts must be in (0, 25000] raw drive counts");
   }
   if (!c.v3.service_speed_control)
     err.push_back("motion requires v3.service_speed_control: true for acceleration enforcement");
@@ -213,6 +251,7 @@ struct Defaults {
   double max_velocity_deg_s = 30.0;
   double max_acceleration_deg_s2 = 60.0;
   double max_jerk_deg_s3 = 300.0;
+  double max_output_counts = 15000.0;
   double coarse_speed_deg_s = 10.0;
   // Fine approach speed (deg/s). Characterized (drive_current_friction_tuning.md
   // §1, P0j-P0m): at the current friction/load the yaw stick-slips with
@@ -371,6 +410,9 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
                  Defaults().max_acceleration_deg_s2, warn);
   out.max_jerk_deg_s3 = opt_double(anode, "max_jerk_deg_s3", p + "max_jerk_deg_s3",
                                    Defaults().max_jerk_deg_s3, warn);
+  out.max_output_counts =
+      opt_double(anode, "max_output_counts", p + "max_output_counts",
+                 Defaults().max_output_counts, warn);
   out.limit_cur_a = opt_double(anode, "limit_cur_a", p + "limit_cur_a",
                                 name == "pitch" ? can::kPitchCurrentCeilingA : 0.0,
                                 warn);
@@ -382,6 +424,29 @@ void load_axis(const YAML::Node& anode, const std::string& name, AxisLimitsConfi
   }
   if (out.expected_travel_deg.min >= out.expected_travel_deg.max)
     err.push_back(p + "expected_travel_deg.min must be < max");
+  // `position_envelope` states what bounds this axis, because "no limit" has to be
+  // something a file can SAY rather than something a number implies. `sector` is the
+  // default and what every existing file means: expected_travel_deg inset by
+  // soft_margin_deg is enforced at runtime. `none` is a declaration, legal only on
+  // the continuous GM6020 yaw, that the axis has no position envelope at runtime.
+  // The travel band keeps its other job either way -- it is the band the named roam
+  // region and the homing sanity check are validated against -- so naming a region
+  // stays safe with no wall to stop you: the region is still finite in the file.
+  out.position_envelope_none = false;
+  if (anode["position_envelope"].IsDefined()) {
+    std::string pe;
+    try { pe = trim(anode["position_envelope"].as<std::string>()); }
+    catch (const YAML::Exception&) {}
+    if (pe == "sector") {
+      // the default, spelled out
+    } else if (pe == "none") {
+      if (name != "yaw")
+        err.push_back(p + "position_envelope: none is only meaningful on the continuous yaw axis");
+      out.position_envelope_none = true;
+    } else {
+      err.push_back(p + "position_envelope must be 'sector' or 'none'");
+    }
+  }
   if (out.soft_margin_deg < 0.0) err.push_back(p + "soft_margin_deg must be >= 0");
   if (out.max_velocity_deg_s <= 0.0) err.push_back(p + "max_velocity_deg_s must be > 0");
   if (out.max_acceleration_deg_s2 <= 0.0)

@@ -28,6 +28,11 @@ Env vars:
   OTA_VIDEO_QUALITY   JPEG quality 1..95 (default 80)
   OTA_VIDEO_ORIENTATION install orientation correction (default none):
                         none | rotate_180 | flip_horizontal | flip_vertical
+  OTA_VISION_STREAM_MANIFEST  named-stream manifest published by visiond (default: unset,
+                        i.e. webd has nothing to consume and says so rather than guessing a file)
+  OTA_IMU_TRACE         BNO085 NDJSON trace to surface in the UI (default: unset = not configured)
+  OTA_IMU_FRESH_MS      a sample older than this ages the IMU chip out (default 100, matching
+                        controld's own freshness gate; unknown is reported as unknown)
   OTA_VIDEO_WB        white balance: off | auto (gray-world, default off).
                         off = trust the sensor (neutral once BGRX order is correct);
                         auto = software gray-world for a genuinely mis-balanced install
@@ -63,6 +68,14 @@ class WebConfig:
     video_quality: int = 80
     video_orientation: str = "none"
     video_white_balance: str = "off"
+    # (b): webd no longer opens a physical camera; it consumes the named streams visiond
+    # publishes. The manifest path is the whole contract (empty = nothing is published, which the
+    # UI must show as "no stream published", not as a dead camera).
+    stream_manifest: str = ""
+    # The IMU trace written by the acquisition process (empty = this station has no IMU path
+    # configured, which is a different statement from "the IMU is dead").
+    imu_trace: str = ""
+    imu_fresh_ms: int = 100
     # Where the payload profiles live, ONLY so the dashboard can offer a list.
     # The daemon reads its own cfg.payload.profile_dir and is the authority: a
     # name webd lists but controld cannot find is REJECTED with a reason
@@ -117,6 +130,9 @@ def load_web_config() -> WebConfig:
         port=_env_int("OTA_WEB_PORT", 8080),
         socket_path=os.environ.get("OTA_WEB_SOCKET", "/run/ota/controld-web.sock"),
         blackbox_dir=os.environ.get("OTA_BLACKBOX_DIR", ""),
+        stream_manifest=os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip(),
+        imu_trace=os.environ.get("OTA_IMU_TRACE", "").strip(),
+        imu_fresh_ms=int(os.environ.get("OTA_IMU_FRESH_MS", "100") or 100),
         telemetry_hz=_env_int("OTA_WEB_HZ", 15),
         title=os.environ.get("OTA_WEB_TITLE", "OpenAutoTurret"),
         video_enabled=_env_flag("OTA_VIDEO_ENABLE", True),

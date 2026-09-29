@@ -20,6 +20,7 @@
 #include <poll.h>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <sys/socket.h>
 #include "spdlog/spdlog.h"  // a torn frame has to be said out loud
 #include <sys/un.h>
@@ -111,7 +112,9 @@ inline std::string format_motion_profiles(const telemetry::TelemetrySnapshot& s)
 // black-box object and each use is the same pair of numbers; the alternative was four
 // copies of the same concatenation, which is how one of them ends up wrong.
 inline std::string js(const double v[2]) {
-  return "[" + std::to_string(v[0]) + "," + std::to_string(v[1]) + "]";
+  // Same rule as every other unknown on this socket: null, not `nan`.
+  // `std::to_string` happily emits `nan` and `inf`, which are not JSON.
+  return "[" + json_finite_or_null(v[0]) + "," + json_finite_or_null(v[1]) + "]";
 }
 
 inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
@@ -132,6 +135,11 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"q_ref_pitch_rad\":" << s.q_ref_pitch_rad
      << ",\"effort_yaw\":" << json_finite_or_null(s.effort_yaw)
      << ",\"effort_pitch\":" << s.effort_pitch
+     // The drive's own torque current, in amperes. A separate column from effort_* because
+     // it is a different measurement: the GM6020 answers with a current, the CyberGear with
+     // a torque, and neither borrows the other's unit. Null means that drive reports neither.
+     << ",\"current_a_yaw\":" << json_finite_or_null(s.current_a_yaw)
+     << ",\"current_a_pitch\":" << json_finite_or_null(s.current_a_pitch)
      << ",\"target_az_world_rad\":" << s.target_az_world_rad
      << ",\"target_el_world_rad\":" << s.target_el_world_rad
      << ",\"base_roll_rad\":" << s.base_roll_rad
@@ -271,22 +279,33 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
       << "}"
       // The envelope ceiling in force, so "why will it not go faster" has an answer on the screen.
       << ",\"envelope_v_max_deg_s\":" << s.envelope_v_max_deg_s
-     // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
-     // the calibration files, not in the control code, where the only "imu" in the tree sits inside the
-     // word "simulation". `world_elevation_deg` is null rather than 0 for the reason stated on the
-     // snapshot field: with no sensor, 0.0 would assert that the turret is level.
+     // The imu block. `present` and `gravity_valid` come from the control loop, which fills them from
+     // the BNO085 trace the launcher owns; the elevation gate below is closed on purpose, so the number
+     // is emitted as JSON null rather than as the field's initialiser. A reader that flattens null into
+     // 0.0 would be claiming the turret is level -- that claim is a safety statement, and this emitter
+     // is where the difference between "no value" and "flat" is either kept or lost.
+     //
+     // `basis` says why the gate is the way it is: a string on the wire rather than a comment, because
+     // a reader that cannot tell "we have no sensor" from "we have one but cannot turn it into a base
+     // attitude" renders one grey box for two states that mean different work.
      << ",\"imu\":{\"present\":" << (s.imu_present ? "true" : "false")
      << ",\"gravity_valid\":" << (s.imu_gravity_valid ? "true" : "false")
      << ",\"world_elevation_valid\":" << (s.imu_world_elevation_valid ? "true" : "false")
      << ",\"world_elevation_deg\":"
      << (s.imu_world_elevation_valid ? std::to_string(s.imu_world_elevation_deg) : "null")
-     << ",\"basis\":\"no inertial sensor on this station\"}"
-     << ",\"target_az_rate_world_rad_s\":" << s.target_az_rate_world_rad_s
-     << ",\"target_el_rate_world_rad_s\":" << s.target_el_rate_world_rad_s
-     << ",\"q_ref_rate_yaw_rad_s\":" << s.q_ref_rate_yaw_rad_s
-     << ",\"q_ref_rate_pitch_rad_s\":" << s.q_ref_rate_pitch_rad_s
-     << ",\"q_ref_accel_yaw_rad_s2\":" << s.q_ref_accel_yaw_rad_s2
-     << ",\"q_ref_accel_pitch_rad_s2\":" << s.q_ref_accel_pitch_rad_s2
+     << ",\"basis\":\"imu on the moving pitch assembly; no mount calibration, so no base elevation\"}"
+     << ",\"target_az_rate_world_rad_s\":" << json_finite_or_null(s.target_az_rate_world_rad_s)
+     << ",\"target_el_rate_world_rad_s\":" << json_finite_or_null(s.target_el_rate_world_rad_s)
+     << ",\"q_ref_rate_yaw_rad_s\":" << json_finite_or_null(s.q_ref_rate_yaw_rad_s)
+     << ",\"q_ref_rate_pitch_rad_s\":" << json_finite_or_null(s.q_ref_rate_pitch_rad_s)
+     << ",\"q_ref_accel_yaw_rad_s2\":" << json_finite_or_null(s.q_ref_accel_yaw_rad_s2)
+     << ",\"q_ref_accel_pitch_rad_s2\":" << json_finite_or_null(s.q_ref_accel_pitch_rad_s2)
+     // The yaw axis's own ask and effort, through json_finite_or_null like every other
+     // double: a bare nan here once poisoned the whole frame for twenty minutes.
+     << ",\"yaw_cmd_shaped_deg_s\":" << json_finite_or_null(s.yaw_cmd_shaped_deg_s)
+     << ",\"yaw_cmd_output\":" << json_finite_or_null(s.yaw_cmd_output)
+     << ",\"yaw_guard_degraded\":" << (s.yaw_guard_degraded ? "true" : "false")
+     << ",\"yaw_guard_events\":" << s.yaw_guard_events
      << ",\"q_ref_rate_valid\":" << (s.q_ref_rate_valid ? "true" : "false")
      << ",\"tracking_velocity_control\":" << (s.tracking_velocity_control ? "true" : "false")
      << ",\"tracking_reference_damped\":" << (s.tracking_reference_damped ? "true" : "false")
@@ -429,10 +448,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"soft_limits_valid\":" << (s.soft_limits_valid ? "true" : "false")
      << ",\"q_soft_min_pitch_rad\":" << s.q_soft_min_pitch_rad
      << ",\"q_soft_max_pitch_rad\":" << s.q_soft_max_pitch_rad
-     << ",\"q_soft_min_yaw_rad\":" << s.q_soft_min_yaw_rad
-     << ",\"q_soft_max_yaw_rad\":" << s.q_soft_max_yaw_rad
+     << ",\"yaw_band_min_rad\":" << s.yaw_band_min_rad
+     << ",\"yaw_band_max_rad\":" << s.yaw_band_max_rad
+     << ",\"yaw_envelope\":\"" << (s.yaw_envelope_bounded ? "sector" : "none") << "\""
+     << ",\"q_soft_min_yaw_rad\":" << (s.yaw_envelope_bounded ? std::to_string(s.q_soft_min_yaw_rad) : std::string("null"))
+     << ",\"q_soft_max_yaw_rad\":" << (s.yaw_envelope_bounded ? std::to_string(s.q_soft_max_yaw_rad) : std::string("null"))
      << ",\"soft_limit_distance_pitch_rad\":" << s.soft_limit_distance_pitch_rad
-     << ",\"soft_limit_distance_yaw_rad\":" << s.soft_limit_distance_yaw_rad
+     << ",\"soft_limit_distance_yaw_rad\":" << (s.yaw_envelope_bounded ? std::to_string(s.soft_limit_distance_yaw_rad) : std::string("null"))
      << ",\"aim_point_valid\":" << (s.aim_point_valid ? "true" : "false")
      << ",\"aim_point_x\":" << (s.aim_point_valid ? s.aim_point_x : 0.0)
      << ",\"aim_point_y\":" << (s.aim_point_valid ? s.aim_point_y : 0.0)
@@ -489,7 +511,7 @@ class WebServer {
     int max_clients = 8;
   };
   using SnapshotProvider = std::function<telemetry::TelemetrySnapshot()>;
-  using TraceProvider = std::function<std::vector<telemetry::ControlLogRecord>()>;
+  using TraceProvider = std::function<telemetry::TraceWindow()>;
   using CommandHandler =
       std::function<CommandResult(const std::string& command,
                                   const std::string& arg)>;
@@ -642,25 +664,54 @@ class WebServer {
     json_get_string(json, "command", command);
     json_get_string(json, "arg", arg);
     if (command == "read_control_trace" && arg.empty() && trace_provider_) {
-      const auto rows = trace_provider_();
+      const telemetry::TraceWindow win = trace_provider_();
+      const std::vector<telemetry::ControlLogRecord>& rows = win.rows;
       std::ostringstream out;
       out.precision(12);
-      out << "{\"type\":\"control_trace\",\"axes\":[\"pitch\",\"yaw\"],\"rows\":[";
+      out << "{\"type\":\"control_trace\",\"axes\":[\"pitch\",\"yaw\"],"
+             "\"frozen\":" << (win.frozen ? "true" : "false")
+          << ",\"frozen_t_ns\":\"" << win.frozen_t_ns << "\""
+          << ",\"clock\":\"" << win.clock << "\""
+          << ",\"boot_id\":\"" << win.boot_id << "\""
+          << ",\"mono_to_wall_ns\":\"" << win.mono_to_wall_ns << "\""
+          << ",\"mono_to_wall_err_ns\":\"" << win.mono_to_wall_err_ns << "\""
+          << ",\"clock_epoch\":" << win.clock_epoch
+          << ",\"rows\":[";
       bool comma = false;
       for (const auto& r : rows) {
         if (comma) out << ',';
         comma = true;
         out << "{\"t\":" << r.timestamp_ns << ",\"ack\":" << r.command_seq
-            << ",\"omega\":" << r.probe_omega
+            << ",\"omega\":" << json_finite_or_null(r.probe_omega)
             << ",\"safety\":" << static_cast<int>(r.safety_action)
             << ",\"period_us\":" << r.cycle_duration_us;
+        // A double on this wire can be genuinely unknown, and the rule for that is `null`
+        // -- already stated and tested for the telemetry path. Two of these columns are
+        // genuinely per-drive: `effort` is N·m and the GM6020 reports no torque, while
+        // `cur` is the current the GM6020 does report and the CyberGear does not. What used
+        // to be written here -- that a GM6020 status frame carries no figure at all -- was
+        // measured against on 2026-09-29 and did not survive: the frame carries its current,
+        // we parsed it, and then dropped it. A tick counter has no such state, so it keeps
+        // its digits; a null age would be a different kind of lie.
+        const auto jn = [](auto x) {
+          if constexpr (std::is_floating_point_v<decltype(x)>)
+            return json_finite_or_null(static_cast<double>(x));
+          else
+            return std::to_string(x);
+        };
         const auto pair = [&](const char* key, const auto* a) {
-          out << ",\"" << key << "\":[" << a[0] << ',' << a[1] << ']';
+          out << ",\"" << key << "\":[" << jn(a[0]) << ',' << jn(a[1]) << ']';
         };
         pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
-        pair("cmd",r.v_command); pair("effort",r.effort); pair("rx",r.feedback_ns);
+        pair("cmd",r.v_command); pair("effort",r.effort); pair("cur",r.current_a);
+        pair("rx",r.feedback_ns);
         pair("vest",r.v_estimated);
+        out << ",\"phase\":\"" << phase_name(r.phase) << "\""
+            << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';
         pair("goal",r.probe_goal);
+        out << ",\"mode\":\"" << operating_mode_name(r.mode)
+            << "\",\"track\":\"" << tracking::track_state_name(r.track_state) << "\"";
+
         out << '}';
       }
       out << "]}";

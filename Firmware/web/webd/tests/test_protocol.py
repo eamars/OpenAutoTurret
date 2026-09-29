@@ -78,6 +78,7 @@ class ProtocolTest(unittest.TestCase):
             q_ref_pitch_rad=-0.2,
             effort_yaw=1.5,
             effort_pitch=-0.7,
+            current_a_yaw=0.25,
             target_az_world_rad=0.3,
             target_el_world_rad=0.1,
             base_roll_rad=0.0,
@@ -96,6 +97,10 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(obj["installation_source"], "visual_calibration")
         self.assertEqual(obj["safety_action"], "ALLOW")
         back = telemetry_from_json(obj)
+        # The yaw drive reports amperes; the pitch drive reports no current at all, and that
+        # absence has to survive the round trip as None rather than arriving as 0.0.
+        self.assertEqual(back.current_a_yaw, 0.25)
+        self.assertIsNone(back.current_a_pitch)
         self.assertEqual(back.track_state, "tracking")
         self.assertEqual(back.installation_source, "visual_calibration")
         self.assertEqual(back.safety_action, "ALLOW")
@@ -103,6 +108,16 @@ class ProtocolTest(unittest.TestCase):
         self.assertAlmostEqual(back.effort_pitch, -0.7)
         self.assertTrue(back.tracking_active)
         self.assertEqual(back.ts_ns, 123)
+
+    def test_zero_current_and_unreported_current_stay_two_different_things(self):
+        # 0 A is a measurement -- it is what a yaw holding still against static friction
+        # looks like from the outside. null is "this drive reports no current". A parser that
+        # folds them together would make a stalled axis indistinguishable from a pitch axis,
+        # which is exactly the confusion this column exists to remove.
+        wire = {"type": "telemetry", "current_a_yaw": 0.0, "current_a_pitch": None}
+        back = telemetry_from_json(parse_message(json.dumps(wire))[1])
+        self.assertEqual(back.current_a_yaw, 0.0)
+        self.assertIsNone(back.current_a_pitch)
 
     def test_telemetry_missing_fields_default(self) -> None:
         # A minimal telemetry message (older controld) should not break.

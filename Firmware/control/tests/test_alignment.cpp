@@ -1,3 +1,4 @@
+#include "ota_test_paths.hpp"
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
@@ -9,7 +10,7 @@
 
 using namespace ota;
 namespace {
-const auto firmware = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+const auto firmware = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path());
 
 std::string source_config() {
   std::ifstream in(firmware / "config/turret.yaml");

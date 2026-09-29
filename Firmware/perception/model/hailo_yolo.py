@@ -127,23 +127,38 @@ class HailoYoloAdapter(ModelAdapter):
             stack.close()
 
     def infer(self, image: Any, metadata: Any = None, *, frame_sequence: int,
-              sensor_timestamp_ns: int, publish_timestamp_ns: int):
+              sensor_timestamp_ns: int, publish_timestamp_ns: int,
+              camera_id: str = ""):
         if not self.opened or self._infer is None:
             raise ModelRejected("HailoYoloAdapter.infer() before open()")
-        if self.stream_size != (640, 480):
-            raise ModelRejected(
-                f"pinned Hailo camera geometry is 640x480, configured {self.stream_size}; "
-                "update the input mapping before changing the profile")
+        self.check_camera(camera_id)
+        self.note_inference()
         frame = np.asarray(image)
-        if frame.ndim != 3 or frame.shape[:2] != (480, 640) or frame.shape[2] < 3:
-            raise ModelRejected(f"expected a 640x480 RGB888 camera array, got {frame.shape}")
+        # The guard compares the frame against the leg this adapter was *configured* for, and the
+        # vertical pad is computed from the frame. A literal 640x480 here was left over from the
+        # standalone probes and it rejected every frame of the 640x360 ISP leg on the first
+        # production boot -- loudly, which is the only reason this was findable in a log.
+        if (frame.ndim != 3
+                or (frame.shape[1], frame.shape[0]) != (int(self.stream_size[0]),
+                                                        int(self.stream_size[1]))
+                or frame.shape[2] < 3):
+            raise ModelRejected(
+                f"inference was configured for a {self.stream_size[0]}x{self.stream_size[1]} leg and "
+                f"got a frame of shape {frame.shape}; the capture leg and the adapter disagree")
+        # The width is a fact about the artifact: the HEF input is 640 wide and the frame is fed to
+        # it without horizontal scaling. Only the vertical axis may vary, and it is centred.
+        if frame.shape[1] != 640:
+            raise ModelRejected(
+                f"the Hailo input is 640 wide and this leg is {frame.shape[1]} wide; ask the sensor "
+                "for a 640-wide lores leg")
 
         # Picamera2 RGB888 arrays are BGR byte order on this platform. The standalone
         # probe uses request.make_image(...).convert('RGB'); reversing these bytes gives
         # the same RGB pixels without retaining a libcamera request or PIL image.
         rgb = np.ascontiguousarray(frame[..., :3][..., ::-1])
         tensor = np.full((1, 640, 640, 3), 114, dtype=np.uint8)
-        tensor[0, 80:560, :, :] = rgb
+        pad = (640 - int(frame.shape[0])) // 2      # 480 tall -> 80, matching the measured probes
+        tensor[0, pad:pad + int(frame.shape[0]), :, :] = rgb
 
         inference_started = time.monotonic_ns()
         try:
@@ -172,9 +187,30 @@ class HailoYoloAdapter(ModelAdapter):
                         f"NMS class slot {class_index} has shape {boxes.shape}, expected [N,5]")
                 if not np.isfinite(boxes).all():
                     raise ValueError(f"NMS class slot {class_index} contains non-finite values")
+                # The NMS boxes are normalised to the 640x640 tensor, and the tensor carries the
+                # letterbox this method just added. Rows are promised to be normalised to the frame we
+                # were fed, so the pad has to be undone here -- it was created here. The x axis is
+                # whole-width and needs nothing; the y axis maps tensor row to leg row.
+                #
+                # Before this the rows left the tensor normalised, which was wrong for every leg: at
+                # 480 the picture is 80 px in, so y was 33% too tall and offset by 12.5% of the frame.
+                # The probes only ever reported fps and latency, so nothing noticed. On the 640x360
+                # production leg the error is big enough to push boxes off the frame entirely, which
+                # is how we got 91671 detections and zero tracks.
+                scale_y = 640.0 / float(frame.shape[0])
+                offset_y = pad / float(frame.shape[0])
                 for ymin, xmin, ymax, xmax, score in boxes:
-                    rows.append([float(score), float(class_index), float(ymin), float(xmin),
-                                 float(ymax), float(xmax)])
+                    lo = float(ymin) * scale_y - offset_y
+                    hi = float(ymax) * scale_y - offset_y
+                    if hi <= 0.0 or lo >= 1.0:
+                        # Entirely inside the letterbox: the network saw padding, not a sighting.
+                        # Counted rather than dropped quietly -- a counter that moves is not a failure,
+                        # but a silent drop is a lie about what the model reported.
+                        self.detections_pad_dropped += 1
+                        continue
+                    rows.append([float(score), float(class_index),
+                                 min(1.0, max(0.0, lo)), float(xmin),
+                                 min(1.0, max(0.0, hi)), float(xmax)])
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             self.failures += 1
             raise ModelRejected(f"unexpected Hailo NMS output: {exc}") from exc

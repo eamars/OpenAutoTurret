@@ -40,10 +40,18 @@ struct AxisLimitsConfig {
     double max = 0.0;
   };
   TravelDeg expected_travel_deg;
+  // True when the file declares `position_envelope: none` -- this axis runs with no
+  // position envelope at runtime. Parsed and validated in load_axis; see the comment
+  // there for why absence is a declaration and not a missing number.
+  bool position_envelope_none = false;
   double soft_margin_deg = 0.0;
   double max_velocity_deg_s = 0.0;
   double max_acceleration_deg_s2 = 0.0;
   double max_jerk_deg_s3 = 0.0;
+  // Yaw drive authority in raw GM6020 voltage counts; the velocity controller accepts up to
+  // 25000. This lived in a compile-time constant until the axis stalled with the output pinned
+  // there, which is the operator's problem to set, not the linker's.
+  double max_output_counts = 15000.0;
   // Adaptive-current homing (push-through, §22): the INITIAL drive current
   // limit (A) for this axis. The homing raises it by limit_cur_step_a on each
   // false-contact latch, up to limit_cur_max_a. Written to LimitCur (0x7018)

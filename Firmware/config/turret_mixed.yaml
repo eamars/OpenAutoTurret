@@ -46,14 +46,35 @@ axes:
     # Written to LimitCur (0x7018); no adaptive current increase.
     limit_cur_a: 5.0
   yaw:
-    # Provisional +/-90 degree session-relative software operating sector, with
-    # 10 degree inset. These are not physical endpoints; GM6020 yaw is
-    # continuous and is never homed against a stop.
+    # No position envelope (decided 2026-09-28, owner asked for the virtual limits
+    # gone). GM6020 yaw is continuous, has a slip ring, no endstop and is never
+    # homed against a stop, so the +/-90 degree sector that used to be enforced here
+    # was a provisional policy number, not a physical fact -- and the log line at
+    # startup now says out loud when it is not being enforced.
+    #
+    # `none` is a declaration, not an absent number: the axis is bounded by nothing,
+    # and every consumer is told so instead of being handed an unmeasured limit set
+    # it would read as "cannot move". AUTO_ROAM still sweeps a bounded region (the
+    # region comes from the search span and this band below, never from a wall),
+    # pitch keeps its measured soft limits, and all other guards are untouched.
+    #
+    # To revert: delete this key. The band below is then enforced again as before.
+    position_envelope: none
+    # Kept as the policy band the named roam region is validated inside (see
+    # turret_config.cpp); with `none` above it is NOT a runtime limit.
     expected_travel_deg: { min: -90, max: 90 }
     soft_margin_deg: 10
-    max_velocity_deg_s: 10
-    max_acceleration_deg_s2: 15
-    max_jerk_deg_s3: 60
+    # Matched to pitch (owner ruling 2026-09-28): MANUAL is one gesture across both
+    # axes, and yaw felt broken because this file declared it three times slower than
+    # pitch while motion.modes asks both for the same 20 deg/s. Acceleration stays under
+    # pitch's because yaw carries the whole payload.
+    max_velocity_deg_s: 30
+    max_acceleration_deg_s2: 60
+    max_jerk_deg_s3: 300
+    # Yaw drive authority in raw GM6020 counts (controller accepts <= 25000). 9000 stalled the
+    # axis with the output pinned; 15000 moves it. The slip ring makes resistance angle-dependent,
+    # so WP6 replaces one number with a measured profile -- until then this is the operator's knob.
+    max_output_counts: 15000
     limit_cur_a: 0.0
 homing:
   # Pitch CyberGear gains retained from the successful 5 A pitch homing run.
@@ -221,15 +242,37 @@ v3:
 # stopping remains a physical verification gap. Homing/parking retain their
 # separately commissioned profiles above. Manual presets scale this base.
 motion:
+  # Each axis declares its own rates, even where the numbers are the same today. Owner's
+  # ruling of 2026-09-28: "我建议还是两轴单独设置。我不能确保yaw和pitch真的能做到等同的加速度。
+  # 所以分开设置（但是值可以设置成一样）" -- yaw closes its own velocity loop in voltage mode
+  # and lags its reference by about a second under the 3 kg payload, while pitch's drive
+  # closes its own internally, so declaring them jointly would be a claim about the hardware
+  # that nobody has measured. Equal values here are a choice, restated per axis, and
+  # test_mixed_station_config fails if an axis stops spelling itself out.
   modes:
     manual:
-      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-      target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+      axes:
+        yaw:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+        pitch:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 20, acceleration_deg_s2: 15, jerk_deg_s3: 60}
     auto_roam:
-      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-      target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+      axes:
+        yaw:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+        pitch:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
+          target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
     auto_track:
-      maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-      # Requested maximum target speed/acceleration; jerk retains its 100 cap.
-      # At full target speed there is no additional speed correction headroom.
-      target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+      axes:
+        yaw:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+          # Requested maximum target speed/acceleration; jerk retains its 100 cap. At full
+          # target speed there is no additional speed correction headroom.
+          target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+        pitch:
+          maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}
+          target: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 100}

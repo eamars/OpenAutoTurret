@@ -381,6 +381,7 @@ class PerceptionPipeline:
     # -- one frame ----------------------------------------------------------
     def process_frame(self, image: Any, metadata: Any = None, *,
                       frame_sequence: int, sensor_timestamp_ns: int,
+                      camera_id: str = "",
                       capture_started_ns: Optional[int] = None,
                       publish: Optional[Callable[[TrackSet, SelectedTargetObservation], None]]
                       = None) -> FrameOutcome:
@@ -402,7 +403,7 @@ class PerceptionPipeline:
                 dset = self.adapter.infer(
                     image, metadata, frame_sequence=int(frame_sequence),
                     sensor_timestamp_ns=int(sensor_timestamp_ns),
-                    publish_timestamp_ns=self.clock())
+                    publish_timestamp_ns=self.clock(), camera_id=camera_id)
             except NoInferenceForFrame as exc:
                 self.counters.no_inference_frames += 1
                 outcome.failure, outcome.stage = str(exc), 'inference_pending'
@@ -466,6 +467,7 @@ class PerceptionPipeline:
             if self.recorder is not None:
                 # Recorded BEFORE §16, so a replay can re-run the dedup decision (§43).
                 self.recorder.record_frame(dset, camera={
+                    "camera_id": str(camera_id or ""),
                     "width": int(dset.stream_width), "height": int(dset.stream_height),
                     "roi": list(dset.roi) if dset.roi else None,
                     "sensor_scaler_crop": list(metadata.get('ScalerCrop', ())) if metadata else None,
@@ -493,6 +495,11 @@ class PerceptionPipeline:
             # The two timestamps must not become identical by construction.
             published_ns = self.clock()
             track_set.publish_timestamp_ns = published_ns
+            # Whose pixels these are, stamped on the published document. A normalised box from the
+            # narrow FOV and one from the wide one can be numerically identical and mean different
+            # things; whoever consumes the set has to be able to tell them apart without guessing
+            # from which file the frame came.
+            track_set.stamp_camera(camera_id)
             observation.publish_timestamp_ns = published_ns
             mark("selection_end")
             self._record("selection_update_ms",

@@ -79,6 +79,11 @@ class FakeControld:
         self._handler: Callable[[str, str], ResponseMessage] = (
             self._default_handler
         )
+        # When set, read_control_trace is answered with THIS frame instead of a plain
+        # response -- because that is what controld actually does: the trace is a third
+        # frame type on this socket, and a fake that answers it with a `response` would
+        # let a reader pass that cannot read the real thing.
+        self.trace_frame: "dict | None" = None
 
     # -- configuration ------------------------------------------------------
     def set_telemetry(self, **fields) -> None:
@@ -91,6 +96,10 @@ class FakeControld:
         self, fn: Callable[[str, str], ResponseMessage]
     ) -> None:
         self._handler = fn
+
+    def set_trace_frame(self, frame: dict) -> None:
+        """Answer read_control_trace with ``frame`` (a control_trace window)."""
+        self.trace_frame = frame
 
     @staticmethod
     def _default_handler(command: str, arg: str) -> ResponseMessage:
@@ -199,6 +208,9 @@ class FakeControld:
             return
         command = obj.get("command", "")
         arg = obj.get("arg", "")
+        if command == "read_control_trace" and self.trace_frame is not None:
+            self._send(cfd, json.dumps(self.trace_frame, separators=(",", ":")))
+            return
         resp = self._handler(command, arg)
         msg = json.dumps(
             {

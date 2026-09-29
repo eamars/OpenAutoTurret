@@ -20,7 +20,7 @@ time" look identical from the daemon.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..tracking.track import Track, TrackState, visible_candidates
 from .jsonio import dumps, loads
@@ -95,6 +95,18 @@ class TrackSet:
     publish_timestamp_ns: int = 0
     stream_width: int = 0
     stream_height: int = 0
+    #: Which sensor these pixels came from, as the durable camera id. Empty means "not attributed"
+    #: -- legal for a replay or a synthetic set, and the reason a merged set names its sources
+    #: instead: a box from the narrow FOV and a box from the wide one are not the same measurement
+    #: even when both are normalised against the same published picture.
+    camera_id: str = ""
+    #: Set on a merged TrackSet: every camera whose tracks are inside, and the only honest way for
+    #: a consumer to learn that one document describes two optics.
+    source_cameras: Tuple[str, ...] = ()
+    #: Cameras that had something to say and were not believed, because their newest document was
+    #: older than the merge's freshness budget. Listed, not hidden: "one camera stopped contributing"
+    #: and "one camera sees nobody" must not arrive at the same document.
+    stale_sources: Tuple[str, ...] = ()
     model_id: str = ""
     model_generation: int = 0
     tracks: List[Track] = field(default_factory=list)
@@ -139,6 +151,18 @@ class TrackSet:
         """
         return True
 
+    def stamp_camera(self, camera_id: str) -> None:
+        """Say which sensor this document's pixels came from, on the set and on every track.
+
+        Both levels, because the two questions are both asked: "is this the wide camera's document"
+        and "which camera is this particular box from", the second one only interesting once a
+        merged set is in the picture.
+        """
+        cid = str(camera_id or "")
+        self.camera_id = cid
+        for track in self.tracks:
+            track.camera_id = cid
+
     # -- validity -----------------------------------------------------------
     def validate(self) -> "TrackSet":
         from ..errors import ValidationError
@@ -160,7 +184,7 @@ class TrackSet:
 
     # -- serialization ------------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "protocol_version": int(self.protocol_version),
             "session_uuid": self.session_uuid,
             "track_set_sequence": int(self.track_set_sequence),
@@ -169,12 +193,20 @@ class TrackSet:
             "publish_timestamp_ns": int(self.publish_timestamp_ns),
             "stream_width": int(self.stream_width),
             "stream_height": int(self.stream_height),
+            "camera_id": self.camera_id,
             "model_id": self.model_id,
             "model_generation": int(self.model_generation),
             "tracks": [t.to_dict() for t in self.tracks],
             "counters": self.counters.to_dict(),
             "events": list(self.events),
         }
+        if self.stale_sources:
+            out["stale_sources"] = list(self.stale_sources)
+        if self.source_cameras:
+            # Absent unless this document really describes more than one optic: a consumer that
+            # branches on it should not have to know that an empty list is the common case.
+            out["source_cameras"] = list(self.source_cameras)
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TrackSet":
@@ -187,6 +219,10 @@ class TrackSet:
             publish_timestamp_ns=int(data.get("publish_timestamp_ns", 0)),
             stream_width=int(data.get("stream_width", 0)),
             stream_height=int(data.get("stream_height", 0)),
+            camera_id=str(data.get("camera_id", "")),
+            source_cameras=tuple(str(c) for c in data.get("source_cameras") or ()),
+            stale_sources=tuple(str(c) for c in data.get("stale_sources") or ()),
+
             model_id=str(data.get("model_id", "")),
             model_generation=int(data.get("model_generation", 0)),
             tracks=[Track.from_dict(t) for t in data.get("tracks") or ()],

@@ -15,6 +15,8 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
+#include <cstdio>
 #include <functional>
 #include <string>
 #include <vector>
@@ -32,6 +34,13 @@ struct AxisSnapshot {
   double q_rad = 0.0;
   double v_rad_s = 0.0;
   double torque_nm = 0.0;
+  // Torque current as the drive itself reports it, in amperes. Kept apart from torque_nm on
+  // purpose: the GM6020's status frame carries a current, not a torque, and the guide gives
+  // no torque constant to divide by -- so an N·m figure from it would be an inference
+  // wearing a familiar label. Drives reporting neither leave this NaN with
+  // current_a_known=false; the rule is null, never a flattering zero.
+  double current_a = std::numeric_limits<double>::quiet_NaN();
+  bool current_a_known = false;
   double temp_c = 25.0;
   bool temperature_known = true;  // false when the protocol has no established °C scale
   bool temperature_raw_valid = false;
@@ -76,6 +85,90 @@ class MotorBackend {
   virtual bool adopt_running_mode(AxisId, bool, std::string&, double = -1, double = 1) { return false; }
   virtual void heartbeat() {}
   virtual bool watchdog_fault() const { return false; }
+  // The reason a guard latched, captured by the guard itself at trip time. Fixed-size
+  // POD because the thread describing a fault must not allocate to do it; detail is
+  // truncated rather than grown. `condition` is the machine-readable token the fault
+  // string and the MOTOR_WATCHDOG_TRIP event both carry.
+  struct TripDetail {
+    bool valid = false;
+    char condition[24] = {};
+    char detail[96] = {};
+  };
+  // The guard's condition inputs, flattened so naming a cause is testable without a
+  // CAN bus. Every flag mirrors exactly one disjunct of the guard's own should_stop:
+  // a state that is not in should_stop must not appear as a candidate cause, or it
+  // shadows the condition that actually fired. `reference_valid` travels as context
+  // for exactly that reason.
+  // What the axis was actually ASKED to do last cycle, and what came out of the actuator
+  // law. On a voltage-mode yaw these are visible nowhere else: the drive reports position
+  // and temperature only. Measured today, manual yaw peaked at 5.3 deg/s while pitch reached
+  // 17.6, and the station could not tell me whether we asked for 5 or asked for 20 and were
+  // slow getting there -- which is the difference between a settings bug and an actuator
+  // bug. Zero by default: an axis that does not track its own ask says so by being silent.
+  // Per axis, because one backend may own axes it cannot speak for. Unknown is NaN, not 0:
+  // zero reads as "asked for nothing", while the truth is often "this drive does not tell
+  // us", and both the telemetry line and the trip trace already render non-finite as null.
+  virtual double diag_commanded_speed_rad_s(AxisId axis) const {
+    (void)axis; return std::numeric_limits<double>::quiet_NaN();
+  }
+  virtual double diag_output(AxisId axis) const {
+    (void)axis; return std::numeric_limits<double>::quiet_NaN();
+  }
+  virtual bool diag_degraded() const { return false; }
+  virtual int diag_guard_events() const { return 0; }
+
+  struct TripInputs {
+    bool feedback_unsafe = false;
+    bool can_down = false;
+    bool can_state_wrong = false;
+    bool can_counters_bad = false;
+    bool bus_unhealthy = false;
+    bool speed_not_finite = false;
+    bool temp_raw_over = false;
+    bool no_progress = false;
+    // The command reached the backend but was not allowed out on the wire (non-finite,
+    // motion not permitted, heartbeat stale). Zero gets sent and the previous requested
+    // speed is no longer a description of anything, so it must not be the field a
+    // `no_progress` verdict rests on -- 2026-09-28 read three trips that way.
+    bool command_not_sent = false;
+    bool heartbeat_stale = false;
+    bool reference_valid = true;
+    double feedback_age_ms = 0.0;
+    unsigned temp_raw = 0;
+    double speed_deg_s = 0.0;
+  };
+  // The first condition, in the guard's evaluation order, that would have latched it.
+  static const char* select_trip_condition(const TripInputs& in) {
+    if (in.feedback_unsafe) return "feedback_unsafe";
+    if (in.can_down) return "can_down";
+    if (in.can_state_wrong) return "can_state";
+    if (in.can_counters_bad) return "can_counters";
+    if (in.bus_unhealthy) return "bus_unhealthy";
+    if (in.speed_not_finite) return "speed_nan";
+    // `speed_over_ceiling` was deleted from this vocabulary, not lowered: it fired on a
+    // READING, so a momentary overshoot removed power from an unbalanced payload. The
+    // ceiling now clamps the command instead. Non-finite stays -- a NaN feedback is not
+    // a fast axis, it is an axis we cannot see.
+    if (in.temp_raw_over) return "temp_raw_over";
+    // Before `no_progress` and on purpose: "we asked for 10 deg/s and nothing happened"
+    // is a different accusation when we know the frame was never sent. The specific
+    // truth outranks the inference.
+    if (in.command_not_sent) return "command_not_sent";
+    if (in.no_progress) return "no_progress";
+    if (in.heartbeat_stale) return "heartbeat_stale";
+    return "unknown";
+  }
+  // The compact matrix that travels with the token. The full field dump stays in the
+  // log; this is what the event and the fault string can carry. Truncated, never grown.
+  static void format_trip_detail(const TripInputs& in, const char* condition, TripDetail& out) {
+    out.valid = true;
+    std::snprintf(out.condition, sizeof(out.condition), "%s", condition);
+    std::snprintf(out.detail, sizeof(out.detail),
+                  "cond=%s fb_age_ms=%.3f temp_raw=%u speed_deg_s=%.3f can_down=%d ref_valid=%d",
+                  condition, in.feedback_age_ms, in.temp_raw, in.speed_deg_s,
+                  in.can_down ? 1 : 0, in.reference_valid ? 1 : 0);
+  }
+  virtual TripDetail watchdog_trip_detail() const { return {}; }
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
   virtual bool recovery_before_homing() const { return false; }
