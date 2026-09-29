@@ -2067,7 +2067,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             in.axes[i].feedback_age_ms > cfg_.feedback_max_age_ms ||
             !std::isfinite(sp[i].q_rad) || !std::isfinite(v_est_[i]);
       if (invalid_feedback) {
-        fail_parking("stale or untrusted motor feedback during parking", true);
+        // "stale feedback" on its own is a family of causes. Which axis, how old, against which
+        // limit: a park that withholds its release owes the operator the measurement rather than the
+        // category, and the number is also what separates a regression from a cold drive.
+        std::string detail;
+        for (int i = 0; i < kAxisCount; ++i) {
+          if (i) detail += ", ";
+          detail += (i ? "yaw=" : "pitch=");
+          detail += in.axes[i].has_feedback
+                        ? std::to_string(static_cast<int>(in.axes[i].feedback_age_ms)) + "ms"
+                        : "no_feedback";
+          if (!std::isfinite(sp[i].q_rad)) detail += "(position nan)";
+          if (!std::isfinite(v_est_[i])) detail += "(velocity nan)";
+        }
+        fail_parking("stale or untrusted motor feedback during parking (feedback limit " +
+                     std::to_string(cfg_.feedback_max_age_ms) + " ms; " + detail + ")", true);
         break;
       }
       if (!cfg_.park.require_independent_position && park_->complete()) {
