@@ -1645,11 +1645,9 @@ HUD_CSS = r"""
    were carrying this were a glow, which is what made everything look equally loud. */
 #overlay text { paint-order: stroke fill; stroke: var(--hud-stroke); stroke-width: 2px;
   stroke-linejoin: round; }
-/* Level 3 stops competing: PIP chrome, chip labels and the telemetry rail are information, not state. */
-#pip .bar { color: var(--hud-text-dim); background: rgba(0,0,0,.6); }
+/* The pane's own frame, from the token rather than a literal grey: the inline block below owns the
+   pane's pinned place and its metadata colours, and this is the one line about its border. */
 #pip { border: 1px solid var(--hud-line-quiet); }
-#pip button { color: var(--hud-text-dim); }
-#pip button:hover { color: var(--hud-text); }
 
 :root {
   --hud-green: #95f58b;
@@ -1843,9 +1841,13 @@ HUD_HTML = """<!DOCTYPE html>
               the aim pad does not reach, so the pane keeps its one control clickable. */
            z-index: 15; }
     #pip img { width: 100%; display: block; }
-    #pip .bar { display: flex; justify-content: space-between; font-size: 10px; color: #bbb;
-                padding: 2px 4px; background: #101010; }
-    #pip button { background: none; border: 0; color: #8cf; cursor: pointer; font-size: 10px; }
+    /* Level 3: the pane's chrome is information about a second camera, not state about the turret.
+       Neutral frame, dim metadata, and the one control brightens when the pointer is on it. */
+    #pip .bar { display: flex; justify-content: space-between; font-size: 10px;
+                color: var(--hud-text-dim); padding: 2px 4px; background: rgba(0,0,0,.6); }
+    #pip button { background: none; border: 0; color: var(--hud-text-dim); cursor: pointer;
+                  font-size: 10px; }
+    #pip button:hover { color: var(--hud-text); }
   </style>
   <div id="pip">
     <img id="pipimg" alt="secondary preview">
