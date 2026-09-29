@@ -24,7 +24,7 @@ Updated 2026-09-29. Work is in progress; no physical qualification is claimed.
 
 | Capability | Source/offline | Single-axis physical | Thermal/two-axis | Current scope |
 |---|---|---|---|---|
-| Output arbitration/recovery | PR1 native PASS (79 CTest entries) | NOT_RUN | NOT_RUN | Not deployed |
+| Output arbitration/recovery | PR1 native PASS (79 CTest entries) | NOT_RUN | NOT_RUN | 8838b1d deployed inactive |
 | Yaw current velocity loop | Late-cycle public API probe PASS | NOT_RUN | NOT_RUN | Existing 0.8 A bound |
 | Yaw friction compensation | NOT_RUN | NOT_RUN | NOT_RUN | Disabled until calibration |
 | Pitch native speed tuning | NOT_RUN | NOT_RUN | NOT_RUN | Existing native mode and 5 A bound |
@@ -108,9 +108,66 @@ logs are `run/adr002/trace-socket-build.log` and `trace-socket-test.log`.
 No activation, calibrated parameter change, or hardware acceptance is included
 in the native gate above.
 
+## Local cross-build and inactive deployment
+
+WSL Ubuntu hosts a signature-verified Debian 13 amd64 chroot at
+`/home/rba90/.cache/ota-adr002/debian13-verified`, with the workspace bound at
+`/workspace/OpenAutoTurret`. AArch64 GCC 14.2 and fmt 10.1.1, spdlog 1.15.2,
+yaml-cpp 0.8 and GTest 1.16 are installed there. The first cross attempt needed
+the missing `make` package for GTest bootstrapping; installing it and building
+forward succeeded. No rollback was performed. The rootfs target libc is 2.41
+with a newer Debian security patch than the Pi; target execution is verified
+by the station tests, not inferred from that version similarity.
+
+`cross_build.py` succeeded on `8838b1d62186dd106f9b47800e8d642ae9e3e16f`.
+Its reported 152 ELF artifacts include build objects and are not a test count.
+`deploy_station.py --prebuilt --commission-mixed-controller` shipped the local
+build into `/home/eamars/workspace/OpenAutoTurret/run/releases/8838b1d62186.n6vz4e`.
+The station ran 67 test binaries with zero failures and passed the manual
+mixed-controller CAN/IMU preflight. The 13 additional CMake integration entries
+were then run from relocated CTest metadata: 13/13 passed, 33.37 seconds.
+All 80 registered entries, including retained homing, are therefore covered.
+The deployment path now uses the complete CTest manifest rather than a filename
+glob. Its two focused local regressions and seven real relocated CTest probes
+passed; two pre-existing detached-process launcher tests timed out in WSL.
+Logs: `pi-ctest-missing-13.log`, `pr1-cross-build.log`
+and `pr1-deploy-final.log` under ignored `run/adr002/`.
+
+## Old release incident before activation
+
+The old `90aa1f5` release independently entered watchdog fault at 22:38:01 while
+the mistaken Pi build was underway. Its frozen trace ends at a 21.108 ms
+hold/DERATE cycle with fresh yaw feedback; about 90 ms later the log records
+fault and an 84.487 ms cycle. This is consistent with the old late-cycle failure
+path but does not establish scheduling attribution or the exact first trigger.
+Captured evidence is in `run/adr002/old-release-trip/`; analysis is in
+`run/adr002/analysis/old-release-trip-report.md`. At 22:47 the launcher stopped
+the old stack and cleaned up its processes. It reported `STOP FAILED` because
+the controller was already faulted; logs confirm STOP/zero requests and clean
+process exit, not normal parking qualification or confirmed GM disable.
+
 ## Failure handling (owner override)
 
-No new station release has been started. Future releases use locally cross-built
+Release `8838b1d62186.n6vz4e` was started through the launcher in Manual mixed
+commissioning at 23:02 NZDT. Pitch completed mandatory homing and reached hold.
+Actual pitch readbacks: RunMode 2, LimitCur 5 A, SpdKp 4, SpdKi 0.05.
+Yaw current-mode configuration remains 0x1FE, 0.8 A, Kp 1 A/(rad/s), Ki 0.6 A/rad.
+The final 12-second stationary window measured yaw RX 1000.04 Hz and pitch
+49.50 Hz, feedback-age p99 0.9992/19.73 ms respectively, host period p99 5.065 ms.
+Yaw successful TX sequence advanced every cycle with ordinary reason; one raw
+RX age was -0.834 microseconds (RX arrived after the cycle clock sample).
+Pitch temperature was 25.9 C; yaw raw byte 31 has unverified degree scaling.
+Pi throttling flags 0x50000 indicate historical events, no active low-bit flags.
+Captures and analysis reside under ignored `run/adr002/8838` and `analysis`.
+
+The first yaw fine jog was accepted but moved only about 0.75 degrees in twelve
+seconds: this is a baseline observation, not a performance pass. An existing
+response_probe was rejected because it required physical two-axis homing even
+for continuous yaw. Its gate now uses position readiness and the declared
+runtime envelope (including explicitly unbounded yaw); bounded-axis clearance
+and stationary checks remain. The production command-gate simulation passed.
+
+Future releases use locally cross-built
 committed source and a separate release directory, with launcher-controlled
 stop/start and manual commissioning. Build/deployment failures are fixed forward:
 preserve diagnostics and publish the next corrected version, with no rollback.

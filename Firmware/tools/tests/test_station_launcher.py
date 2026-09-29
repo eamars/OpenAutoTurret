@@ -6,6 +6,95 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux process and signal integration')
 
 
+def test_relocate_generated_ctest_paths(tmp_path):
+    """Rebase both top-level and nested CTest metadata from the build host."""
+    firmware = tmp_path / 'release' / 'Firmware'
+    build = firmware / 'build-arm64'
+    old_source = '/workspace/OpenAutoTurret/Firmware'
+    old_build = old_source + '/build-cross'
+    (build / 'control').mkdir(parents=True)
+    (build / 'CMakeCache.txt').write_text(
+        f'CMAKE_HOME_DIRECTORY:INTERNAL={old_source}\n'
+        f'CMAKE_CACHEFILE_DIR:INTERNAL={old_build}\n', encoding='utf-8')
+    top = build / 'CTestTestfile.cmake'
+    nested = build / 'control' / 'CTestTestfile.cmake'
+    top.write_text(f'add_subdirectory("{old_source}/control")\n', encoding='utf-8')
+    nested.write_text(
+        f'add_test(probe "{old_build}/control/test_probe" "{old_source}/config/turret.yaml")\n',
+        encoding='utf-8')
+    helper = pathlib.Path(__file__).resolve().parents[1] / 'relocate_ctest_paths.py'
+
+    result = subprocess.run([sys.executable, str(helper), str(build), str(firmware)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert str(firmware / 'control') in top.read_text(encoding='utf-8')
+    relocated = nested.read_text(encoding='utf-8')
+    assert str(build / 'control/test_probe') in relocated
+    assert str(firmware / 'config/turret.yaml') in relocated
+
+    # The deployment launcher may be retried after a test failure; relocation is idempotent.
+    again = subprocess.run([sys.executable, str(helper), str(build), str(firmware)],
+                           capture_output=True, text=True, timeout=10)
+    assert again.returncode == 0, again.stderr
+    assert '0 rebased' in again.stdout
+
+
+def test_prebuilt_deploy_runs_registered_ctest_suite(tmp_path):
+    """The prebuilt deployment path delegates the complete registered suite to CTest."""
+    firmware = tmp_path / 'Firmware'
+    (firmware / 'scripts').mkdir(parents=True)
+    build = firmware / 'build-arm64'
+    (build / 'control').mkdir(parents=True)
+    (firmware / 'tools').mkdir()
+    (firmware / 'config').mkdir()
+    (firmware / 'config' / 'turret.yaml').write_text('hardware_profile: test\n')
+    (firmware / 'config' / 'turret_mixed.yaml').write_text('hardware_profile: test\n')
+    (build / 'control' / 'controld').write_text('#!/bin/sh\nexit 0\n')
+    (build / 'control' / 'controld').chmod(0o755)
+    old_source = '/build-host/OpenAutoTurret/Firmware'
+    old_build = old_source + '/build-arm64'
+    (build / 'CMakeCache.txt').write_text(
+        f'CMAKE_HOME_DIRECTORY:INTERNAL={old_source}\n'
+        f'CMAKE_CACHEFILE_DIR:INTERNAL={old_build}\n', encoding='utf-8')
+    metadata = build / 'CTestTestfile.cmake'
+    metadata.write_text(f'add_test(fake "{old_build}/control/test_fake")\n')
+    source_tools = pathlib.Path(__file__).resolve().parents[1]
+    shutil.copy(source_tools / 'relocate_ctest_paths.py', firmware / 'tools')
+    shutil.copy(source_tools.parent / 'scripts' / 'run_application.sh',
+                firmware / 'scripts' / 'run_application.sh')
+
+    fake_python = tmp_path / 'python'
+    fake_python.write_text(
+        '#!/bin/sh\n'
+        'case "$1" in *relocate_ctest_paths.py) exec "$PROBE_PY" "$@" ;; esac\n'
+        'if [ "$1" = -c ]; then echo 42; fi\n'
+        'exit 0\n')
+    fake_python.chmod(0o755)
+    calls = tmp_path / 'ctest-calls'
+    fake_ctest = tmp_path / 'ctest'
+    fake_ctest.write_text(textwrap.dedent('''\
+        #!/bin/bash
+        printf '%s\\n' "$*" >> "$PROBE_CTEST_CALLS"
+        if [[ "$*" == *--show-only=json-v1* ]]; then
+          "$PROBE_PY" -c 'import json; print(json.dumps({"tests": [{}] * 42}))'
+        fi
+        '''))
+    fake_ctest.chmod(0o755)
+    env = os.environ.copy()
+    env.update(OTA_PYTHON=str(fake_python), OTA_PREBUILT='1',
+               PROBE_CTEST_CALLS=str(calls), PROBE_PY=sys.executable,
+               PATH=str(tmp_path) + os.pathsep + env['PATH'])
+    result = subprocess.run(['bash', str(firmware / 'scripts/run_application.sh'), 'deploy'],
+                            env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '42 registered tests, 0 failed' in result.stdout
+    invocations = calls.read_text().splitlines()
+    assert len(invocations) == 2, invocations
+    assert '--show-only=json-v1' in invocations[0]
+    assert '--output-on-failure' in invocations[1]
+    assert str(build / 'control/test_fake') in metadata.read_text(encoding='utf-8')
+
+
 def test_commissioning_ownership_and_stop(tmp_path):
     """Exercise supervision and cross-runtime ownership without CAN or cameras."""
     firmware = tmp_path / 'Firmware'

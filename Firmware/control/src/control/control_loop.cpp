@@ -4456,7 +4456,7 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "response_probe") {
-    if (phase_ != Phase::Hold || !homed_ || mode_mgr_.mode() != OperatingMode::Manual ||
+    if (phase_ != Phase::Hold || !position_ready() || mode_mgr_.mode() != OperatingMode::Manual ||
         last_decision_.action != SafetyAction::Allow || !cfg_.service_speed_control) {
       ack_command(name,false,"response probe requires homed, healthy Manual service");
       return;
@@ -4491,10 +4491,12 @@ void ControlLoop::execute_command(const std::string& name,
     }
     for (int i=0; i<2; ++i) {
       const auto s = backend_->snapshot(static_cast<AxisId>(i),now_ns_);
+      const auto probe_limits = runtime_limits(static_cast<AxisId>(i));
       response_probe_q_[i] = s.q_rad + (i == axis ? delta*kDeg2Rad : 0.0);
       if (!s.has_feedback || now_ns_-s.rx_ns > 50'000'000 || s.rx_ns > now_ns_ ||
-          !limits_[i].valid || limits_[i].distance_to_soft(s.q_rad) < 15*kDeg2Rad ||
-          limits_[i].distance_to_soft(response_probe_q_[i]) < 15*kDeg2Rad ||
+          (!probe_limits.unbounded() && (!probe_limits.valid ||
+           probe_limits.distance_to_soft(s.q_rad) < 15*kDeg2Rad ||
+           probe_limits.distance_to_soft(response_probe_q_[i]) < 15*kDeg2Rad)) ||
           std::abs(speed_servo_[i].velocity) > .2*kDeg2Rad) {
         ack_command(name,false,"probe needs fresh stationary drives and 15 degree endpoint clearance");
         return;

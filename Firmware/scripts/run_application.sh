@@ -229,30 +229,29 @@ if [ "$ACTION" = deploy ]; then
     # The binaries were cross-compiled by the deploying machine (Firmware/tools/cross_build.py)
     # and uploaded beside this source. Compiling them again here bought nothing: the station has
     # no knowledge of this code that the machine which built it lacks. Running the suite is the
-    # part that needs the hardware, so that part stays here -- each test binary is executed
-    # directly rather than through ctest, because a CTest cache would point back at the machine
-    # that built it. The symlink keeps every later path in this script unchanged.
+    # part that needs the hardware, so that part stays here. Rebase CTest's generated command and
+    # working-directory paths from the build machine before invoking the registered suite.
     ln -sfn "$APP/build-arm64" "$APP/build"
+    "$PY" "$APP/tools/relocate_ctest_paths.py" "$APP/build-arm64" "$APP"
     # The tests resolve their config against this: the binary was compiled elsewhere, so its
     # compiled-in source path describes a machine this station has never been.
     export OTA_FIRMWARE_ROOT="$APP"
-    tests_run=0
-    tests_failed=0
-    while IFS= read -r t; do
-      case "$t" in */_deps/*) continue ;; esac
-      tests_run=$((tests_run + 1))
-      if ! "$t" >"$APP/build-arm64/last-test.log" 2>&1; then
-        tests_failed=$((tests_failed + 1))
-        echo "FAILED $t" >&2
-        tail -n 15 "$APP/build-arm64/last-test.log" >&2
-      fi
-    done < <(find "$APP/build-arm64" -type f -name 'test_*' -perm -u+x)
-    echo "Prebuilt suite on station: $tests_run binaries, $tests_failed failed"
-    if [ "$tests_run" -lt 40 ] || [ "$tests_failed" -ne 0 ]; then
-      # A count that small means the upload lost targets, which would otherwise read as a pass.
-      echo "refusing to call that a green suite" >&2
+    ctest_list="$APP/build-arm64/prebuilt-ctest-list.json"
+    ctest --test-dir "$APP/build-arm64" --show-only=json-v1 >"$ctest_list"
+    tests_run=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["tests"]))' "$ctest_list")
+    echo "Prebuilt CTest suite on station: $tests_run registered tests"
+    if [ "$tests_run" -lt 40 ]; then
+      # A count that small means the upload lost test registrations, which could read as a pass.
+      echo "refusing to run an incomplete suite" >&2
       exit 1
     fi
+    if ! ctest --test-dir "$APP/build-arm64" --output-on-failure >"$APP/build-arm64/last-test.log" 2>&1; then
+      tail -n 80 "$APP/build-arm64/last-test.log" >&2
+      echo "Prebuilt CTest suite failed" >&2
+      exit 1
+    fi
+    cat "$APP/build-arm64/last-test.log"
+    echo "Prebuilt CTest suite on station: $tests_run registered tests, 0 failed"
   else
     cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
   fi

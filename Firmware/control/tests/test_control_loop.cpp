@@ -86,6 +86,53 @@ bool run_to_ready(ControlLoop& loop, sim::SimMotorBackend& sim, int64_t& t_out) 
   return false;
 }
 
+TEST(ControlLoopSim, ResponseProbeUsesContinuousYawReadinessAndRuntimeEnvelope) {
+  class ContinuousPlant : public sim::SimMotorBackend {
+   public:
+    ContinuousPlant() : SimMotorBackend(.005) {}
+    bool supports_continuous_yaw() const override { return true; }
+  };
+  auto plant = std::make_unique<ContinuousPlant>();
+  plant->set_stops(AxisId::Pitch, -1, 1);
+  plant->set_position(AxisId::Pitch, .5);
+  plant->set_position(AxisId::Yaw, 0);
+  auto* sim = plant.get();
+  auto cfg = make_cfg();
+  cfg.service_speed_control = true;
+  cfg.allow_unknown_motor_health = true;
+  cfg.continuous_yaw_sector_half_span_rad = 0;
+  cfg.homing_motion_checks_abort = false;
+  ControlLoop loop(cfg, std::move(plant));
+  HomingPlanConfig hcfg;
+  hcfg.homing.coarse_speed_rad_s = 20 * kDeg2Rad;
+  hcfg.homing.fine_speed_rad_s = 2 * kDeg2Rad;
+  hcfg.homing.settle_time_s = .3;
+  hcfg.travel_bands[0] = TravelBand{0, 115};
+  std::vector<HomingAction> actions{{.type=HomingActionType::HomeFullRange,
+                                    .axis=AxisId::Pitch}};
+  std::string error;
+  ASSERT_TRUE(loop.start_homing(HomingPlan(std::move(actions), hcfg), error)) << error;
+  int64_t t = kDtNs;
+  for (int i = 0; i < kMaxSteps; ++i, t += kDtNs) {
+    loop.step(t, kDtNs);
+    if (loop.phase() == Phase::Fault ||
+        (loop.position_ready() && loop.at_ready() && loop.phase() == Phase::Hold)) break;
+  }
+  ASSERT_TRUE(loop.position_ready()) << loop.fault_reason();
+  ASSERT_EQ(loop.phase(), Phase::Hold);
+  ASSERT_FALSE(loop.homed()) << "continuous yaw must not claim physical homing";
+  // This gate regression starts the measured plant in the interior after
+  // endpoint homing; the simulated endpoint brake is not the probe subject.
+  for (int i = 0; i < 1000; ++i) {
+    sim->set_position(AxisId::Pitch, 0);
+    loop.step(t += kDtNs, kDtNs);
+  }
+  ASSERT_TRUE(loop.submit_command("response_probe", "yaw:1:2.5").ok);
+  for (int i = 0; i < 20; ++i) loop.step(t += kDtNs, kDtNs);
+  const auto snapshot = loop.telemetry().snapshot();
+  EXPECT_EQ(snapshot.cmd_ack_accepted, 1) << snapshot.cmd_ack_reason;
+}
+
 }  // namespace
 
 // The Phase-2 deliverable: reliable boot -> homed -> safe hold -> park cycle.
