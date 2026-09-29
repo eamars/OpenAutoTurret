@@ -71,24 +71,32 @@ class StubStation:
         return {"accepted": "no request" not in self._pending, "reason": self._pending,
                 "seq": self._seq}
 
-    def trace_window(self, expect_context=""):
-        """The stub answers with a window whose records all carry the tag the runner set — unless a
-        test asks it to lose the identity, which is the failure the runner must treat as blocked.
-        It goes through command() so the per-candidate command count stays honest: a window is asked
-        for, and asking costs a round trip on the real station too.
+    def trace_window(self, expect_context="", want_rows=False):
+        """A window whose records all carry the tag the runner set — unless a test asks it to lose the
+        identity, which is the failure the runner must treat as blocked. Rows travel only when asked
+        for, mirroring the station reader's contract, and they are asked for through command() so the
+        per-candidate command count stays honest: asking costs a round trip on the real station too.
         """
         self.command("read_control_trace")
-        if getattr(self, "refuse_run", False) and not self.runs_accepted:
-            pass
-        # Head: rows written before this candidate announced itself. Tail: this candidate's rows. The
-        # summary comes from the same function the station reader uses, so the stub cannot pass by
-        # disagreeing with the real code about what a window means.
         rows = [{"param_context": "history"} for _ in range(self.trace_history_rows)] + \
                [{"param_context": expect_context or "none"} for _ in range(self.trace_rows)]
         if self.trace_loses_identity:
             rows[-1]["param_context"] = "other-campaign"
         summary = adr0021_acceptance.summarise_window(rows, expect_context)
         summary.update({"bytes": 340000, "truncated": self.trace_truncated, "reason": "stub window"})
+        summary["axes"] = ["pitch", "yaw"]
+        # A runner that forgets to ask for rows must be refused, not left to score an empty window and
+        # record the abstention as a result. The shape is the station's: per-axis arrays in the frame's
+        # axis order, yaw at index 1, pitch null where the axis carried nothing that cycle.
+        if want_rows and self.scorable_rows:
+            summary["rows"] = [{"vref": [None, 5.0], "rx_velocity_20": [None, 5.0], "track": [None, 0.01],
+                                "output_requested": [None, 1.0], "output_reason": [1, 1], "safety": [0, 0],
+                                "enabled_state": [2, 1], "encoder_raw": [-1, 4182 + index],
+                                "pi_integral": [None, 0.0], "phase": "run", "rx_seq": index,
+                                "goal": [0, 5], "t": index * 5_000_000}
+                               for index in range(self.trace_rows)]
+        elif want_rows:
+            summary["rows"] = []
         return summary
 
     def frame(self):

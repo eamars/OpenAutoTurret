@@ -312,11 +312,17 @@ tree and is no longer allowed to masquerade as the built source (`git -C` walked
 - The campaign's levels were the **sample grid** (`manifests/campaign.example.json`), authorised by the
   owner's `跑！` without levels. It is mechanism acceptance, **not** a tuning result: no scorer took part,
   so no candidate may be described as better, and `metrics` is absent rather than zero.
-- `RUN` and `SCORE` from `00_CODEX_START.md:46` are now **implemented in the runner** (`--run-trials`
-  drives the firmware's own guarded trial after the applied write, `--score` runs the frozen scorer over
-  the candidate's own trace window and tallies the classifications), covered by tests. **They have not yet
-  been exercised on the hardware**, so no cell in the matrix above may be read as physical qualification:
-  what has run on the station so far is parameter exchange, read-back, trace identity and restore.
+- `RUN` and `SCORE` (`00_CODEX_START.md:46`) were **exercised on the hardware** on 2026-09-30 with the
+  campaign's own runner (`--run-trials --score`, 4×2 grid = 16 candidates, bound to the same release,
+  commission mode, homing waited for before starting): 32 parameter exchanges applied and all 16 candidates
+  restored, `blocked = none`. The frozen scorer awarded **`PASS_SCOPE` to 15 of 16** candidates, and the
+  classification is honest about its scope: only `feedback` computed (RX age within threshold), while the
+  other eight metrics abstained with a stated reason — a current-loop step trial does not exercise homing,
+  position, reversal or start latency, and there is no valid temperature reading to grade. One candidate
+  (`c02`) never ran because the station's own guard said `yaw tuning requires fresh stationary axes`; the
+  runner recorded that as a gate speaking rather than a quality verdict, and restored the candidate anyway.
+  **What this does not establish:** the matrix above stays NOT_RUN for the §5 reversal and prescribed-pose
+  re-verification, and `PASS_SCOPE` on one metric is not a §7 quality pass for a candidate.
 - Trace identity is per-record and measured: 16/16 trials, 256 records per window, 66 carrying the
   candidate tag, contiguous from announcement to newest. The check is contiguity to the newest record,
   not "every row tagged" — the window is rolling and its head predates the candidate.

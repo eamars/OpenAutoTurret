@@ -152,7 +152,7 @@ class Runner:
                 self.manifest["refused"].append({"candidate_id": candidate["candidate_id"],
                                                  "reason": "RUN refused: " + str(run.get("reason"))})
         if ran:
-            window = self.station.trace_window(expect_context=context)
+            window = self.station.trace_window(expect_context=context, want_rows=self.scorer is not None)
             record["trace_window"] = window
             if window.get("truncated"):
                 self.refuse(f"BLOCKED_trace_truncated_{candidate['candidate_id']}: "
@@ -174,6 +174,14 @@ class Runner:
                             "mid-flight cannot say which candidate a given row belongs to")
                 return record
             if self.scorer is not None:
+                # A scored campaign has to have rows: nine metrics all abstaining because nobody handed
+                # the scorer any samples is not a classification, it is the score step running against
+                # nothing — which is exactly how an empty window would masquerade as a verdict.
+                if not window.get("rows"):
+                    self.refuse(f"BLOCKED_score_window_empty_{candidate['candidate_id']}: the window was "
+                                "requested with its rows and carried none, so every metric would abstain "
+                                "and the abstention would be recorded as a result")
+                    return record
                 score = self.scorer.score_window(window.get("rows") or [], axis="yaw",
                                                  axes=tuple(window.get("axes") or ("pitch", "yaw")))
                 record["score"] = {"classification": score["classification"],
