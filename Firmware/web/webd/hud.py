@@ -1664,9 +1664,9 @@ HUD_CSS = r"""
      green-grey, not a grey dashboard. */
   --hud-text: #c5d0c5;
   --hud-text-dim: #8c998c;
-  --hud-amber-soft: rgba(242,179,41,.75);
-  --hud-dark: rgba(0,0,0,.82);
-  --hud-dark-soft: rgba(0,0,0,.45);
+  /* A token nobody spends is a lie about the palette, so there is one dark fill, not three: the
+     pane's metadata bar. The overlay's own darkness is --hud-black plus the under-stroke. */
+  --hud-dark-soft: rgba(0,0,0,.6);
   /* The dark under-stroke every primary overlay uses instead of a glow: crisp at 2px, and it is the
      only thing that keeps a green line readable across a white curtain or a window. */
   --hud-stroke: #05070a;
@@ -1844,7 +1844,7 @@ HUD_HTML = """<!DOCTYPE html>
     /* Level 3: the pane's chrome is information about a second camera, not state about the turret.
        Neutral frame, dim metadata, and the one control brightens when the pointer is on it. */
     #pip .bar { display: flex; justify-content: space-between; font-size: 10px;
-                color: var(--hud-text-dim); padding: 2px 4px; background: rgba(0,0,0,.6); }
+                color: var(--hud-text-dim); padding: 2px 4px; background: var(--hud-dark-soft); }
     #pip button { background: none; border: 0; color: var(--hud-text-dim); cursor: pointer;
                   font-size: 10px; }
     #pip button:hover { color: var(--hud-text); }
