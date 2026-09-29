@@ -1148,7 +1148,11 @@ function render(t) {
       : (!nf.fresh ? ("STALE " + Math.round(nf.age_ms) + "ms")
                    : (String(nf.adapter || "?").toUpperCase() + " " + String(nf.model_id || "?")
                       + " " + (Array.isArray(nf.stream) ? nf.stream.join("x") : (Array.isArray(nf.input_size) ? nf.input_size.join("x") : "?"))
-                      + (nf.opened === false ? " CLOSED" : "")));
+                      + (nf.opened === false ? " CLOSED" : ""
+                         // "D<what the network produced>/<what survived the label map and the
+                         // permitted classes>": the one glance that separates "there was nothing to
+                         // see" from "we dropped what we saw", which no picture can answer.
+                         + " D" + (nf.detections_raw || 0) + "/" + (nf.detections_emitted || 0))));
     hs.appendChild(chip("NN", state, shown));
   }
   // §22. Normal is green and compact; anything heavier gets its own element, sized by tier, and the

@@ -53,6 +53,11 @@ class ModelAdapter:
         self._roi: Optional[Tuple[int, int, int, int]] = None
 
     # -- lifecycle ----------------------------------------------------------
+    #: Published in describe(), so "no boxes" is diagnosable from the wire: what the network
+    #: produced versus what survived the label map and the permitted classes.
+    detections_raw: int = 0
+    detections_emitted: int = 0
+
     def configure_stream(self, width: int, height: int,
                          roi: Optional[Tuple[int, int, int, int]] = None) -> None:
         """Tell the adapter the size of the stream it will be shown (§14 needs both sizes)."""
@@ -103,7 +108,9 @@ class ModelAdapter:
                 "input_size": [self.manifest.input_width, self.manifest.input_height],
                 "postprocess": self.manifest.postprocess,
                 "stream": list(self._stream), "opened": bool(self.opened),
-                "inferences": int(self.inferences), "failures": int(self.failures)}
+                "inferences": int(self.inferences), "failures": int(self.failures),
+                "detections_raw": int(self.detections_raw),
+                "detections_emitted": int(self.detections_emitted)}
 
     def _rows_to_set(self, rows: Sequence[Sequence[float]], *, frame_sequence: int,
                      sensor_timestamp_ns: int, publish_timestamp_ns: int,
@@ -124,6 +131,12 @@ class ModelAdapter:
             publish_timestamp_ns=int(publish_timestamp_ns),
             label_map=self.manifest.label_map(), score_index=score_index,
             class_index=class_index, box_index=box_index, anchor_cfg=anchor_cfg)
+        # Counted on the way through because "no boxes on screen" has two opposite causes and the
+        # operator cannot tell them apart from the picture: the model saw nothing, or the model saw
+        # something that the label map / permitted classes dropped. Raw is every row the network
+        # produced, emitted is what survived normalization.
+        self.detections_raw += len(rows)
+        self.detections_emitted += len(getattr(out, "detections", ()) or ())
         elapsed = (time.monotonic_ns() - started) / 1_000_000.0
         timings = {"coordinate_normalization_ms": round(elapsed, 6)}
         if self.last_read_ms > 0.0:
