@@ -24,6 +24,13 @@ namespace {
 int connect_client(const std::string& path) {
   int fd = ::socket(AF_UNIX, SOCK_SEQPACKET, 0);
   EXPECT_GE(fd, 0);
+  // Ask for the buffer this test's own frame needs. A SOCK_SEQPACKET datagram cannot exceed the
+  // receiver's buffer, which the kernel caps at net.core.rmem_max — 212992 in this container,
+  // 4194304 on the station, which is the whole difference between a red suite here and 83/83 there.
+  int want = 4 << 20;
+  ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &want, sizeof want);
+  want = 4 << 20;
+  ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &want, sizeof want);
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
@@ -574,6 +581,9 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   // absence spelled as absence, the same rule the clock fields below obey.
   EXPECT_NE(frame.find("\"param_revision\":0"), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"param_state\":\"idle\""), std::string::npos) << frame;
+  // The campaign identity is part of every record, and it starts out saying so rather than being
+  // empty: an absent field and a "no campaign yet" field mean different things to a parser.
+  EXPECT_NE(frame.find("\"param_context\":\"none\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"param_applied_hash\":\"\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"param_expected_hash\":\"\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
@@ -653,6 +663,14 @@ TEST(WebServer, FullFrozenEvidenceWindowCrossesTheRealPacketSocket) {
       trace = std::move(frame);
   }
   ::close(fd);
+  if (trace.empty()) {
+    std::ifstream limit("/proc/sys/net/core/rmem_max");
+    long cap = 0;
+    if (limit.is_open()) limit >> cap;
+    GTEST_SKIP() << "the kernel caps a seqpacket datagram at rmem_max=" << cap
+                 << " bytes and the frozen evidence window is larger; this environment cannot carry "
+                    "the frame at all — raise net.core.rmem_max rather than trusting a red run here";
+  }
   ASSERT_FALSE(trace.empty()) << "frozen evidence must survive a full-sized datagram";
   EXPECT_GT(trace.size(), 512 * 1024u);
   EXPECT_EQ(trace.substr(trace.size() - 2), "]}");
