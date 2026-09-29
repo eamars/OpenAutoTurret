@@ -552,11 +552,12 @@ export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
 # (b): visiond 是唯一持有物理相机的人，所以由它发布"有哪些有名字的流"。
 # 缺这个变量 visiond 就不发布（默认关闭），老部署不受影响。
 export OTA_VISION_STREAM_MANIFEST="$RUN/video_streams.json"
-# 第二颗传感器按**型号**选（不是 /dev/videoN），报出来的身份是 by-path 派生的。
-# 设成空字符串就关掉这一路：OTA_VISION_DETAIL_SENSOR= ...。开不起时 visiond 只降级这条流，
-# 不会把已经在服务的广角一起带走。
-: "${OTA_VISION_DETAIL_SENSOR=imx477}"
-export OTA_VISION_DETAIL_SENSOR
+# 第二颗传感器的**开关只有一个：配置文档里的 vision.secondary.model**（代码默认空 = 这台站没有第二颗）。
+# 以前这里还写死了一个 imx477 默认值，于是"有没有第二路"存在两处真相 —— 朝向那次就是被这种重复
+# 掩住的：文档里的值没被读到，环境变量把型号补上了，症状一个都没有。
+# 环境变量保留成**一次启动的显式覆盖**：填型号就换一颗，填 `off` 就这一次启动不开这路
+# （visiond 会点名拒绝并把广角照常服务），不设就照文档。开不起时只降级这条流，不带走广角。
+export OTA_VISION_DETAIL_SENSOR="${OTA_VISION_DETAIL_SENSOR-}"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"
 export OTA_WEB_SOCKET="$RUN/control-web.sock"

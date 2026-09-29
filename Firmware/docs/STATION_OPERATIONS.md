@@ -14,6 +14,18 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
 
+## 现状刷新（09-29 深夜，现读，非历史）
+
+- **release**：`139551b5099c.psS9nL`（`run/releases/` 下只留这一个；清理前有 106 个、20 GB）。
+- **模式**：`MANUAL / READY`（主人有意 park：yaw 无法稳定追踪，属 ADR-002；每次受控重启后会回到
+  AUTO_ROAM，**要有人放回去**，`POST /api/command {"command":"set_mode","arg":"MANUAL"}`）。
+- **双流**：`wide cam-baa28c2a by-path 1920x1080` / `detail cam-68510500 fwnode 1280x720`，两路
+  delivered ~9 fps；第二路的**开关在 `perception_v1.json` 的 `vision.secondary`**（不是环境变量）。
+- **两颗都倒装**：朝向走**同一个传感器级 transform**，值各自配（wide 来自 `config/camera_install.yaml`，
+  detail 来自 `vision.secondary.orientation`）；visiond 启动行会打印它**实际用了哪个**。
+- **IMU**：BNO085 实测 ~216 Hz；controld 自己填 §20 的 `imu.present/gravity_valid`；
+  `world_elevation_deg` 仍是 **null**——传感器装在俯仰组件上、无安装标定，**0.0 会谎称炮塔是平的**。
+
 ## Current deployment gate
 
 **Current station state:** release `f8bcdb6` is running in operator-selected
