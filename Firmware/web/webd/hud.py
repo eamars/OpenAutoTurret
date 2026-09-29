@@ -1695,7 +1695,13 @@ HUD_HTML = """<!DOCTYPE html>
        accepted on purpose: at extreme ratios the pane sits over a black bar instead of over the
        picture; what it must never do is cover a control. */
     #pip { position: absolute; left: 1%; top: 88px; width: 280px;
-           border: 1px solid #444; background: #000; z-index: 40; }
+           border: 1px solid #444; background: #000;
+           /* Below the chrome layer (every control sits at z-index 20), above the picture. The owner's
+              ruling of 2026-09-29 after the pane covered the D-pad: keep the pinned position and let
+              the D-pad paint over the preview -- chrome wins over a preview, always, which is cheaper
+              to reason about than any placement. The swap button sits at the pane's right edge, which
+              the aim pad does not reach, so the pane keeps its one control clickable. */
+           z-index: 15; }
     #pip img { width: 100%; display: block; }
     #pip .bar { display: flex; justify-content: space-between; font-size: 10px; color: #bbb;
                 padding: 2px 4px; background: #101010; }

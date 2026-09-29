@@ -113,6 +113,17 @@ class PinnedPreviewContract(unittest.TestCase):
             self.assertNotIn(gone, HUD_HTML,
                              f"{gone} came back: the secondary preview is pinned and always open")
         self.assertIn("otaSwapPip", HUD_HTML)         # swap survives: it does something, it isn't chrome
+    def test_the_preview_paints_under_the_chrome(self):
+        """Chrome wins over a preview: the pane may be covered, it must not cover a control.
+
+        The pane was raised to z-index 40 and sat on top of the aim pad; the owner kept the pinned
+        position and asked for the stacking order to be inverted instead of moving anything.
+        """
+        from ..hud import HUD_HTML
+        pane = HUD_HTML[HUD_HTML.index("#pip {"):HUD_HTML.index("#pip img")]
+        self.assertIn("z-index: 15", pane)
+        self.assertNotIn("z-index: 4", pane)          # nothing back above the chrome layer
+
 
 
 class ServedPageIsWellFormed(unittest.TestCase):
