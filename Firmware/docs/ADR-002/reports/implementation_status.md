@@ -413,3 +413,27 @@ run --commission-hardware --with-imu --yaw-sweep-deg N --yaw-sweep-ff-a A   # dr
 
 `enabled_state=-1` **就地结案，不是故障**：账本写着 `GM6020 zero voltage is not a verified disable`
 （`:495`）——断开状态本来就不可确认，每次停栈那句 `disable state unavailable` 是预期行为。
+
+## 2026-10-01：电流模式 drag sweep 真机结果——**命令 45°，实测只走 2.46°**
+
+现成路径逐层被探针纠正后才跑通：`--yaw-step-deg` 那支探针**命令电压**、电流环开着 ⇒ 驱动器不理它
+（`exit=2`，探针自己的 NOTE）；`--yaw-sweep-deg` 还必须配 `--yaw-speed-deg-s`（文档：整数、±5、≤1500 raw）。
+最终命令与探针原话（`/tmp/adr/sweep45.log`）：
+
+```
+run --commission-hardware --with-imu --yaw-sweep-deg 45 --yaw-sweep-ff-a 0.6 --yaw-speed-deg-s 5
+RESULT reason=completed sweep_target_deg=45 sweep_ff_a=0.6 yaw_mode=current
+       current_ceiling_a=3 yaw_speed_target_deg_s=5 peak_speed_deg_s=30
+       peak_travel_deg=2.59 final_displacement_deg=2.46 stationary_observed=1
+       yaw_frames=2807 yaw_tx=857 yaw_errors=0 zero_tx_failed=0
+```
+
+**读数**：探针自己按**度**报，不需要我拿编码器换算。**命令 45°、走完 2.46°、结束时观察到静止**、
+CAN 无错误、护栏判定 `completed`。**这不是"没动"，是"只动了应有行程的 5%"**——
+量级差一个数量级，方向没有异议。
+
+**首要怀疑（下一轮验，不当结论）**：0.6 A 脱阻力前馈对付不了交叉滚子轴承的静阻力，
+且 trace 里 yaw 的运行时 `current_cap` 只有 **0.8 A**（探针上限 3 A 是探针的，不是环的）
+⇒ 速度环一顶到电流上限就再也推不动。可验证动作：**把 sweep 前馈抬到 1.5 A**（仍在探针 3 A 与厂商 ±3 A 之内）
+复跑；若行程随之前馈明显增长，"能动不堵转"的正解就是**抬运行时 yaw 电流上限**（可写参数，0 改源码/0 重编/0 重部），
+而不是继续动 kp/ki。注意 D7：**调参不得自己抬高电流包线**——这一抬属于**主人授权的诊断/资格**，须单独记账。
