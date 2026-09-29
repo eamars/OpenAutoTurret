@@ -282,8 +282,9 @@
       "preview_fps": 10.0,
       "queue_depth": 2,
       "orientation": "rotate_180",
-      "lores_width": 640,
-      "lores_height": 360
+      "lores_width": 0,
+      "lores_height": 0,
+      "_why": "lores_width/height = 0 means the narrow camera is preview-only this boot. Measured on the station at 32a765d: a second HailoYoloAdapter opens a second HailoRT context on the same device and HailoRT answers HAILO_DEVICE_IN_USE(73), which took visiond down with EXIT_MODEL. The dual feed needs ONE context with a runner shared by both cameras; until that exists the leg stays off, and the reason is here rather than in a code comment."
     },
     "merge_max_age_ms": 150.0
   }
