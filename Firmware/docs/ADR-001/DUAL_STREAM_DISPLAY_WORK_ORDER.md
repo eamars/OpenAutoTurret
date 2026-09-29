@@ -143,7 +143,7 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 ② 画面左上角与 `#mode-block` 撞上时下移让开——**近方形窗口会明显往下掉一格**，不合适就改让法。
 **还欠一条测试**：`/ws` 载荷带叠加层这件事现在只有线上实证，没有回归测试钉住。
 
-### 朝向：配置到位了，**效果没到**（09-29 夜，release `03b6a8e44247.8B5lnT`）
+### 朝向：配置到位了，**效果没到**（已闭合，见下一节）（09-29 夜，release `03b6a8e44247.8B5lnT`）
 
 我从站上各取一帧（`/api/video?camera=wide|detail&limit=1` 是 **multipart 流**——第一次我把整条流当图片存，
 `file` 说是 data，**是我的量法错了，不是站上的帧坏**），同一时刻同一场景对照：
@@ -155,3 +155,19 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 
 **下一手**：查 `camera.py` 里 `open_picamera2_sensor` 那条分支——两处 `Transform(hflip,vflip)` 之一点了，
 要么顺序不对（configure 之后设），要么那条分支只算了没用。**判据不是代码读起来对，是 detail 那一帧的 logo 朝上。**
+
+### 朝向：闭合（09-29 夜，release `0840a0df8c1a.bHzl8f`，`0840a0d`）
+
+**根因**：`VisionConfig.from_dict` 见到 `vision` 段就把根换成它，所有小节都在**里面**找；我把
+`secondary` 追加在了 `vision` **旁边**。于是配置从未被读——模型名由启动器环境补上、几何恰好等于默认、
+朝向落回 `none`，**一个症状都没有**。两处小改：
+
+1. 段挪进 `vision`；
+2. 写在 `vision` **旁边**的小节现在**自己报错**（`config: sections ['secondary'] sit beside 'vision'
+   and are ignored; move them inside 'vision'`）。"键在文件里但没人读"是最难查的一类失败，因为
+   对文档的每一次目视都显得正确。
+
+**生效链**：文档 → `VisionConfig` 解析出 `orientation='rotate_180'` → visiond 启动行打印
+`secondary stream imx477 … orientation='rotate_180'` → 传感器 transform（`create_preview_configuration`
+那条与主摄相同的已验证路径）→ **抓回的一帧里亮帘在上、显示器从上往下挂、线缆垂在下面**。
+判据是**像素**，不是 diff。
