@@ -64,11 +64,11 @@ inline can::RawFrame voltage_frame(uint8_t motor_id, int voltage) {
 // Amperes are the unit everywhere above this boundary; raw int16 counts exist only here.
 inline constexpr double kRawFullScale = 16384.0;      // documented numeric full scale
 inline constexpr double kAmpsFullScale = 3.0;         // ... which is +-3.0 A of torque current
-// Provenance, since this number has been argued about: guide v1.4 states a 1.2 N·m
-// maximum continuous rated *torque* and no continuous *current*. Owner ruling
-// 2026-09-29: keep the constant and keep the 0.8 A profile limit unchanged -- a host
-// envelope gets re-derived after a thermal run, not before one.
-inline constexpr double kMaxContinuousA = 1.62;       // host envelope, not a wire limit
+// Legacy software bound named after the 1.62 A rated condition. This is NOT
+// qualification for sustained low-speed/stall use (the manual separately lists
+// 0.90 A continuous stall). Keep the station's initial 0.8 A cap until measured
+// duty/temperature qualification supports another value; protocol range is ±3 A.
+inline constexpr double kMaxContinuousA = 1.62;
 inline constexpr double kAmpsPerRaw = kAmpsFullScale / kRawFullScale;
 
 // The drive reports its own torque current in the units it accepts on the command side, so

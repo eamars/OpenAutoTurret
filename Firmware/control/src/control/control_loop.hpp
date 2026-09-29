@@ -465,10 +465,10 @@ class ControlLoop {
   void finish_payload_check(TimeNs now_ns);
   void abort_payload_check(TimeNs now_ns, const std::string& reason);
   void apply_payload_derate(bool derated);
-  void fault(const std::string& reason) {
+  void fault(const std::string& reason, bool stop_all = true) {
     const bool replace_park_failure = park_failed_;
     park_failed_ = false;  // a safety fault cannot be cleared as a park-only failure
-    if (phase_ == Phase::Homing || phase_ == Phase::Parking) deenergize_all();
+    if (stop_all && (phase_ == Phase::Homing || phase_ == Phase::Parking)) deenergize_all();
     if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;

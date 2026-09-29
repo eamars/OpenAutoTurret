@@ -449,3 +449,21 @@ TEST(Gm6020CurrentLoop, VoltageWrapperKeepsItsOwnFrameBound) {
   EXPECT_GT(loop.update(0.3, 0.0, 6'000'000, 0.524, 15000.0, 1000.0, 10.0), 0);
   EXPECT_TRUE(loop.valid());
 }
+
+TEST(Gm6020CurrentLoop, FreshLateCycleFreezesIntegralAndRecovers) {
+  ota::gm6020::VelocityLoop loop;
+  loop.reset(0, 1'000'000);
+  const auto first = loop.update_amps(.1, 0, 6'000'000, .524, .8, 1, .6);
+  const auto integral = loop.integral();
+  EXPECT_DOUBLE_EQ(first, loop.update_amps(.1, 0, 31'000'000, .524, .8, 1, .6));
+  EXPECT_TRUE(loop.valid());
+  EXPECT_TRUE(loop.late_cycle());
+  EXPECT_DOUBLE_EQ(integral, loop.integral());
+  EXPECT_GT(loop.update_amps(.1, 0, 36'000'000, .524, .8, 1, .6), first);
+  EXPECT_FALSE(loop.late_cycle());
+  EXPECT_DOUBLE_EQ(0, loop.update_amps(.1, 0, 35'000'000, .524, .8, 1, .6));
+  EXPECT_FALSE(loop.valid());
+  loop.reset(0, 1'000'000);
+  EXPECT_DOUBLE_EQ(0, loop.update_amps(.1, 0, 102'000'000, .524, .8, 1, .6));
+  EXPECT_FALSE(loop.valid());
+}

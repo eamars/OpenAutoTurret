@@ -34,10 +34,9 @@ axes:
     # enabled in RoboMaster Assistant v2.7 (sources/GM6020_DRIVE_CONFIG_2026-09-28.md).
     current_ring_verified: true
     # Host-side clamp on commanded torque current. 0.8 A is a deliberately small first envelope,
-    # not the limit of the machine: the motor's continuous rating is 1.62 A and the raw frame
-    # reaches 3.0 A. Nothing here is identified against the payload yet -- WP6 owns that number.
-    # 1.2 N.m of continuous shaft torque costs about 1.2 A on this scale, so 0.8 A is real
-    # authority rather than a stub: on the bench 0.40 A was enough to move the axis.
+    # not thermal qualification: 1.62 A rated, 0.90 A continuous stall and the 3 A
+    # protocol range describe different conditions. ADR-002 requires measured duty/
+    # temperature evidence before raising this envelope for the installed payload.
     host_current_limit_a: 0.8
     # The yaw velocity loop's OUTPUT gains while in current mode, in amperes. Deliberately not
     # derived from the voltage gains: with the drive closing its own current loop, counts and

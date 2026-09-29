@@ -20,6 +20,7 @@ class VelocityLoop {
   void reset(double position, TimeNs now) {
     previous_position_ = position; previous_time_ = now;
     velocity_ = integral_ = 0; valid_ = std::isfinite(position) && now > 0;
+    late_cycle_ = false;
   }
   // Optional per-session limits let a bounded commissioning caller use a
   // separately approved envelope without changing legacy callers' defaults.
@@ -34,7 +35,7 @@ class VelocityLoop {
     return static_cast<int>(std::lround(out));
   }
   // Torque-current output. `ceiling_a` is the host-side clamp in amperes, and kp/ki are in
-  // amperes per (rad/s) and amperes per radian-second: they may NOT be the voltage gains divided
+  // A/(rad/s) and A/rad respectively: they may NOT be the voltage gains divided
   // by a constant, because volts and torque-current do not divide by one back-EMF here -- the
   // drive closes its own current loop underneath us.
   double update_amps(double reference_rad_s, double position, TimeNs now,
@@ -50,6 +51,8 @@ class VelocityLoop {
     return out;
   }
   bool valid() const { return valid_; }
+  bool late_cycle() const { return late_cycle_; }
+  double integral() const { return integral_; }
   double velocity_rad_s() const { return velocity_; }
 
  private:
@@ -61,7 +64,7 @@ class VelocityLoop {
     if (!valid_ || now <= previous_time_ || !std::isfinite(reference_rad_s) ||
         !std::isfinite(position) || !std::isfinite(max_reference_rad_s) ||
         !std::isfinite(output_ceiling) || !std::isfinite(kp) || !std::isfinite(ki) ||
-        max_reference_rad_s <= 0 || kp <= 0 || ki < 0 || dt > .020 ||
+        max_reference_rad_s <= 0 || kp <= 0 || ki < 0 || dt > .100 ||
         std::abs(reference_rad_s) > max_reference_rad_s) {
       valid_ = false; out = 0; return false;
     }
@@ -69,6 +72,14 @@ class VelocityLoop {
     velocity_ += dt / (.050 + dt) * (measured - velocity_);
     previous_position_ = position; previous_time_ = now;
     const double error = reference_rad_s - velocity_;
+    // A single late cycle is recoverable when the caller has independently
+    // checked fresh feedback/heartbeat. Rebase timing, never integrate a long
+    // scheduling gap. Invalid time and >100 ms loss remain latched failures.
+    late_cycle_ = dt > .020;
+    if (late_cycle_) {
+      out = std::clamp(kp * error + integral_, -output_ceiling, output_ceiling);
+      return true;
+    }
     const double candidate = std::clamp(integral_ + ki * error * dt, -output_ceiling, output_ceiling);
     const double output = kp * error + candidate;
     // Integrate only when unsaturated or moving the saturated output inward.
@@ -79,6 +90,7 @@ class VelocityLoop {
   }
 
   bool valid_{false};
+  bool late_cycle_{false};
   double previous_position_{}, velocity_{}, integral_{};
   TimeNs previous_time_{};
 };

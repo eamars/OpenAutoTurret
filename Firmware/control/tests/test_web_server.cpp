@@ -594,6 +594,9 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   // holds right now"; the two answers look identical and mean different things.
   EXPECT_NE(frame.find("\"frozen\":true"), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"effort\":[null,null]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"vout\":[null,null]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"tx_seq\":[0,0]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"current_cap\":[null,null]"), std::string::npos) << frame;
   EXPECT_EQ(frame.find("nan"), std::string::npos) << frame;
   ::close(cfd);
 }

@@ -466,6 +466,10 @@ int main(int argc, char** argv) {
       const double vp = prof.pitch.v_max_rad_s / kDeg2Rad;
       const double vy = prof.yaw.v_max_rad_s / kDeg2Rad;
       loop.set_payload_profile(std::move(prof));
+      spdlog::info("payload source={}/{} startup_qualification={} auto_verify={} (auto_verify does not disable loading)",
+                   cfg.payload.profile_dir, cfg.payload.active_profile,
+                   mixed_mode ? "unqualified: legacy hardware binding" : "legacy startup trust",
+                   cfg.payload.auto_verify);
       spdlog::info("payload profile: loaded '{}' (v_max pitch={:.1f} deg/s, yaw={:.1f} deg/s)",
                    cfg.payload.active_profile, vp, vy);
     } else {

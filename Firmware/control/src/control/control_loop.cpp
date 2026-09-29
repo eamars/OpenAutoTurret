@@ -751,7 +751,8 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
 Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   backend_->heartbeat();
   if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
-    deenergize_all();
+    for (auto axis : {AxisId::Pitch, AxisId::Yaw})
+      if (backend_->watchdog_fault_axis(axis)) backend_->deenergize(axis);
     if (phase_ != Phase::Fault) {
       // The trip reason is published by the guard that latched it, when there is
       // one. "control deadline, feedback, or motor health" is a family of ten
@@ -761,9 +762,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       if (trip.valid) {
         telemetry_.push_event(now_ns, telemetry::Event::MotorWatchdogTrip,
                               std::string(trip.detail));
-        fault(std::string("independent motor watchdog trip: ") + trip.condition);
+        fault(std::string("independent motor watchdog trip: ") + trip.condition, false);
       } else {
-        fault("independent motor watchdog: control deadline, feedback, or motor health");
+        fault("independent motor watchdog: control deadline, feedback, or motor health", false);
       }
     }
   }
@@ -2338,6 +2339,22 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const AxisId axis = static_cast<AxisId>(i);
       rec.backend_cmd[i] = backend_->diag_commanded_speed_rad_s(axis);
       rec.drive_out[i] = backend_->diag_output(axis);
+      const auto evidence = backend_->output_evidence(axis);
+      rec.tx_ns[i] = evidence.tx_ns;
+      rec.tx_seq[i] = evidence.tx_seq;
+      rec.output_requested[i] = evidence.requested;
+      rec.drive_out[i] = evidence.successful;
+      rec.pi_integral[i] = evidence.integral;
+      rec.pi_velocity[i] = evidence.velocity_estimate;
+      rec.pi_kp[i] = evidence.kp;
+      rec.pi_ki[i] = evidence.ki;
+      rec.current_cap[i] = evidence.current_cap;
+      rec.output_reason[i] = evidence.reason;
+      rec.command_kind[i] = evidence.command_kind;
+      rec.rx_seq[i] = sp[i].rx_seq;
+      rec.encoder_raw[i] = sp[i].encoder_raw;
+      rec.current_raw[i] = sp[i].current_raw_valid ? sp[i].current_raw : NAN;
+      rec.enabled_state[i] = sp[i].enabled_state;
     }
     // Position-derived acceleration / jerk (C1, A.1): the trustworthy motion
     // derivatives for smoothness observation and jitter-threshold tuning.
@@ -2364,7 +2381,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // snapshot's NaN here, and the serializer renders that as null.
       rec.current_a[i] = sp[i].current_a;
       rec.probe_goal[i] = response_probe_q_[i];
-      rec.feedback_ns[i] = sp[i].rx_ns;
+      rec.feedback_ns[i] = sp[i].raw_rx_ns ? sp[i].raw_rx_ns : sp[i].rx_ns;
       rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
       rec.v_command[i] = service_command_rate[i];
       rec.v_estimated[i] = v_est_[i];
@@ -3090,6 +3107,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
 void ControlLoop::set_payload_profile(payload::PayloadProfile pr,
                                       bool commissioned) {
   if (phase_ == Phase::PayloadCheck) return;  // never swap mid-check
+  // Schema 1 identifies two CyberGears. It cannot qualify a GM6020 station.
+  // Keep the historical file available as a conservative cap, never as measured
+  // dynamic qualification. PR4 adds explicit hardware/mode/payload binding.
+  if (backend_->supports_continuous_yaw()) commissioned = false;
   payload_profile_ = std::move(pr);
   if (commissioned) {
     // A commissioned profile is trusted (§28.5) until a verification says
@@ -3781,6 +3802,12 @@ void ControlLoop::apply_payload_derate(bool derated) {
 
 void ControlLoop::start_payload_check(TimeNs now_ns, bool manual,
                                       const AxisSnapshot sp[kAxisCount]) {
+  if (backend_->supports_continuous_yaw()) {
+    payload_check_requested_ = false;
+    ack_command("start_payload_verification", false,
+        "legacy dual-CyberGear verifier cannot qualify mixed hardware or apply GM6020 gains");
+    return;
+  }
   if (phase_ == Phase::Fault || phase_ == Phase::PayloadCheck) return;
   if (!homed_) return;
   // The check takes over the axes: drop any tracking reference first.
@@ -4359,6 +4386,11 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "start_payload_verification") {
+    if (backend_->supports_continuous_yaw()) {
+      ack_command(name, false,
+          "legacy dual-CyberGear verifier cannot qualify mixed hardware or apply GM6020 gains");
+      return;
+    }
     // Phase 9 (§31.3, §42.2): begin the payload response check. The web gate
     // already required homed && !fault && !moving; the actual start happens in
     // step() (2c) so it runs on the control thread with the cycle timestamp.

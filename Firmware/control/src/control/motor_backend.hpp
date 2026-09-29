@@ -31,6 +31,12 @@ namespace ota {
 struct AxisSnapshot {
   bool has_feedback = false;
   TimeNs rx_ns = 0;        // host monotonic time of the freshest feedback
+  TimeNs raw_rx_ns = 0;    // unchanged transport timestamp; trace prefers this when supplied
+  uint64_t rx_seq = 0;
+  int encoder_raw = -1;
+  int current_raw = 0;
+  bool current_raw_valid = false;
+  int enabled_state = -1; // CyberGear type2 state, NOT RunMode
   double q_rad = 0.0;
   double v_rad_s = 0.0;
   double torque_nm = 0.0;
@@ -79,12 +85,28 @@ struct CanHealth {
 
 class MotorBackend {
  public:
+  struct OutputEvidence {
+    TimeNs tx_ns = 0;
+    uint64_t tx_seq = 0;
+    double requested = std::numeric_limits<double>::quiet_NaN();
+    double successful = std::numeric_limits<double>::quiet_NaN();
+    double integral = std::numeric_limits<double>::quiet_NaN();
+    double velocity_estimate = std::numeric_limits<double>::quiet_NaN();
+    double kp = std::numeric_limits<double>::quiet_NaN();
+    double ki = std::numeric_limits<double>::quiet_NaN();
+    double current_cap = std::numeric_limits<double>::quiet_NaN();
+    int reason = 0; // 0 unknown, 1 normal, 2 explicit zero, 3 inhibited, 4 TX failed, 5 late cycle
+    int command_kind = 0; // 0 unknown, 1 current A, 2 voltage counts, 3 SpdRef rad/s, 4 LocRef rad, 5 STOP
+  };
+  virtual OutputEvidence output_evidence(AxisId) const { return {}; }
   virtual ~MotorBackend() = default;
   void set_calibration_invalidator(std::function<void()> callback) { invalidate_ = std::move(callback); }
   void invalidate_calibration() { if (invalidate_) invalidate_(); }
   virtual bool adopt_running_mode(AxisId, bool, std::string&, double = -1, double = 1) { return false; }
   virtual void heartbeat() {}
   virtual bool watchdog_fault() const { return false; }
+  // Independent links can inhibit one axis without releasing a healthy load.
+  virtual bool watchdog_fault_axis(AxisId) const { return watchdog_fault(); }
   // The reason a guard latched, captured by the guard itself at trip time. Fixed-size
   // POD because the thread describing a fault must not allocate to do it; detail is
   // truncated rather than grown. `condition` is the machine-readable token the fault
@@ -142,6 +164,8 @@ class MotorBackend {
     if (in.feedback_unsafe) return "feedback_unsafe";
     if (in.can_down) return "can_down";
     if (in.can_state_wrong) return "can_state";
+    if (in.temp_raw_over) return "temp_raw_over";
+    if (in.heartbeat_stale) return "heartbeat_stale";
     if (in.can_counters_bad) return "can_counters";
     if (in.bus_unhealthy) return "bus_unhealthy";
     if (in.speed_not_finite) return "speed_nan";
@@ -149,13 +173,11 @@ class MotorBackend {
     // READING, so a momentary overshoot removed power from an unbalanced payload. The
     // ceiling now clamps the command instead. Non-finite stays -- a NaN feedback is not
     // a fast axis, it is an axis we cannot see.
-    if (in.temp_raw_over) return "temp_raw_over";
     // Before `no_progress` and on purpose: "we asked for 10 deg/s and nothing happened"
     // is a different accusation when we know the frame was never sent. The specific
     // truth outranks the inference.
     if (in.command_not_sent) return "command_not_sent";
     if (in.no_progress) return "no_progress";
-    if (in.heartbeat_stale) return "heartbeat_stale";
     return "unknown";
   }
   // The compact matrix that travels with the token. The full field dump stays in the

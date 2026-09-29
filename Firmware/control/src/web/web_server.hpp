@@ -705,6 +705,14 @@ class WebServer {
         pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
         pair("cmd",r.v_command); pair("effort",r.effort); pair("cur",r.current_a);
         pair("rx",r.feedback_ns);
+        pair("rx_seq",r.rx_seq); pair("encoder_raw",r.encoder_raw);
+        pair("current_raw",r.current_raw); pair("enabled_state",r.enabled_state);
+        pair("be_cmd",r.backend_cmd); pair("vout",r.drive_out);
+        pair("tx_ns",r.tx_ns); pair("tx_seq",r.tx_seq);
+        pair("output_requested",r.output_requested); pair("output_reason",r.output_reason);
+        pair("command_kind",r.command_kind); pair("pi_integral",r.pi_integral);
+        pair("pi_velocity",r.pi_velocity); pair("pi_kp",r.pi_kp);
+        pair("pi_ki",r.pi_ki); pair("current_cap",r.current_cap);
         pair("vest",r.v_estimated);
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';

@@ -64,7 +64,22 @@ bool CanMotorBackend::write_reg_float(cybergear::Reg reg, float value,
   cybergear::CanFrame f = cybergear::make_write_reg_float(
       reg, value, system_.host_id(), system_.motor_id(axis));
   std::string err;
-  return system_.send(f.id, f.data, &err);
+  const bool sent = system_.send(f.id, f.data, &err);
+  if (reg == cybergear::Reg::SpdRef || reg == cybergear::Reg::LocRef)
+    record_output(axis, value, reg == cybergear::Reg::SpdRef ? 3 : 4, sent);
+  return sent;
+}
+
+void CanMotorBackend::record_output(AxisId axis, double value, int kind, bool sent) {
+  auto& evidence = output_evidence_[static_cast<int>(axis)];
+  evidence.requested = value;
+  evidence.command_kind = kind;
+  evidence.reason = sent ? (kind == 5 ? 3 : 1) : 4;
+  if (sent) {
+    evidence.successful = value;
+    evidence.tx_ns = now_monotonic_ns();
+    ++evidence.tx_seq;
+  }
 }
 
 bool CanMotorBackend::write_reg_u8(cybergear::Reg reg, uint8_t value,
@@ -455,6 +470,8 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
         return fail(("mode readback mismatch at register " +
             std::to_string(static_cast<uint16_t>(regs[t.read_index])) + " got " +
             std::to_string(value) + " expected " + std::to_string(expected[t.read_index])).c_str());
+      spdlog::info("drive readback axis={} register=0x{:04x} actual={} expected={}",
+                   axis_name(axis), static_cast<uint16_t>(regs[t.read_index]), value, expected[t.read_index]);
       t.waiting = false;
       ++t.read_index;
       if (position && t.stage == 5 && t.read_index == 2) ++t.read_index;
@@ -522,6 +539,8 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
       if (result == 0) break;
       if (!std::isfinite(value) || std::abs(value - expected[t.read_index]) > 1e-6)
         return fail("pitch current/mode readback mismatch before motion");
+      spdlog::info("pitch safety readback register=0x{:04x} actual={} expected={}",
+                   static_cast<uint16_t>(regs[t.read_index]), value, expected[t.read_index]);
       t.waiting = false;
       ++t.read_index;
       if (t.read_index == 2) {
@@ -545,7 +564,7 @@ void CanMotorBackend::deenergize(AxisId axis) {
   }
   invalidate_commands(axis);
   std::string err;
-  system_.send_stop(axis, &err);
+  record_output(axis, NAN, 5, system_.send_stop(axis, &err));
   in_position_mode_[static_cast<size_t>(axis)] = false;
   in_speed_mode_[static_cast<size_t>(axis)] = false;
 }
@@ -619,12 +638,15 @@ AxisSnapshot CanMotorBackend::snapshot(AxisId axis, TimeNs now_ns) {
   if (system_.axis(axis).latest(l)) {
     s.has_feedback = l.has_feedback;
     s.rx_ns = l.rx_ns;
+    s.raw_rx_ns = l.rx_ns;
+    s.rx_seq = l.frames;
     s.q_rad = l.q_rad;
     s.v_rad_s = l.v_rad_s;
     s.torque_nm = l.torque_nm;
     s.temp_c = l.temp_c;
     s.faults = l.faults;
     s.disabled = l.mode == 0;
+    s.enabled_state = l.mode;
   }
   s.in_position_mode = in_position_mode_[static_cast<size_t>(axis)];
   s.in_speed_mode = in_speed_mode_[static_cast<size_t>(axis)];
@@ -639,15 +661,23 @@ void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
   // velocity loop until it is changed.
   const int a = static_cast<int>(axis);
   if (std::fabs(velocity_rad_s - last_spd_ref_[a]) > 1e-6) {
+    auto& evidence = output_evidence_[a];
+    evidence.requested = velocity_rad_s;
+    evidence.command_kind = 3;
     cybergear::CanFrame f = cybergear::make_write_reg_float(
         cybergear::Reg::SpdRef, static_cast<float>(velocity_rad_s),
         system_.host_id(), system_.motor_id(axis));
     std::string err;
     if (!system_.send(f.id, f.data, &err)) {
+      evidence.reason = 4;
       spdlog::warn("send SpdRef FAIL axis={} v={:+.4f} err={}", a,
                    velocity_rad_s, err);
     } else {
       last_spd_ref_[a] = velocity_rad_s;
+      evidence.successful = velocity_rad_s;
+      evidence.tx_ns = now_monotonic_ns();
+      ++evidence.tx_seq;
+      evidence.reason = 1;
     }
   }
   // Keepalive ping: see keepalive() below.
@@ -726,6 +756,7 @@ void CanMotorBackend::command(AxisId axis, double q_ref_rad,
     std::string err;
     const bool pin_ok =
         system_.send_position_ref(axis, static_cast<float>(q_ref_rad), &err);
+    record_output(axis, static_cast<float>(q_ref_rad), 4, pin_ok);
     if (!pin_ok) {
       spdlog::warn("send_position_ref FAIL axis={} q_ref={:+.6f} err={}",
                    a, q_ref_rad, err);

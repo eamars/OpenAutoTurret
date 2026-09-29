@@ -62,10 +62,16 @@ inline constexpr int64_t kNoCommandLimitNs = 50'000'000;  // ten cycles of a 200
 // that collision costs more than any of the conditions below. Everything short of those
 // three is a thing to keep driving through and say out loud.
 enum class GuardResponse { Run, Hold, Fault };
-// A stall is not a collision risk: a stalled axis is by definition not going anywhere.
-// Repeated stalls earn a Hold (zero output -- zero current in current mode -- still powered,
-// dynamic braking), never a Fault.
-inline constexpr int kYawStallHoldStreak = 3;
+struct MotionEpisodeCounter {
+  int count = 0;
+  bool active = false;
+  void observe(bool limited) {
+    if (limited && !active) ++count;
+    active = limited;
+  }
+};
+// Performance episodes are observations, never independent zero-current writers.
+// Zero current is neither dynamic braking nor position hold.
 // What is worth SAYING while we keep driving. A refused command only matters if somebody
 // actually wanted to move: `command_not_sent` with a zero demand is the loop saying "hold",
 // which is the normal state of a turret with nothing to do -- the first version of this
@@ -76,11 +82,10 @@ inline bool yaw_guard_doubt(const MotorBackend::TripInputs& in, bool wants_motio
   return in.command_not_sent && wants_motion;
 }
 
-inline GuardResponse yaw_guard_response(const MotorBackend::TripInputs& in, int stall_streak) {
+inline GuardResponse yaw_guard_response(const MotorBackend::TripInputs& in, int /*episodes*/) {
   if (in.feedback_unsafe || in.can_down || in.can_state_wrong || in.heartbeat_stale)
     return GuardResponse::Fault;  // cannot see it, cannot reach it, or it stopped answering
   if (in.temp_raw_over) return GuardResponse::Fault;  // the motor's own report: heat
-  if (in.no_progress && stall_streak >= kYawStallHoldStreak) return GuardResponse::Hold;
   return GuardResponse::Run;  // CAN hiccup, our own NaN, a stale demand: drive on, say so
 }
 
@@ -122,6 +127,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   std::vector<CanHealth> can_health_all() const override;
   CanHealth can_health() const override;
   bool buses_healthy() const;
+  OutputEvidence output_evidence(AxisId axis) const override;
   void start_watchdog();
 
   bool supports_continuous_yaw() const override { return true; }
@@ -131,6 +137,10 @@ class MixedCanMotorBackend final : public MotorBackend {
   }
   void heartbeat() override;
   bool watchdog_fault() const override;
+  bool watchdog_fault_axis(AxisId axis) const override {
+    return axis == AxisId::Yaw ? yaw_trip_.load() :
+        (pitch_opened_.load() && pitch_backend_.watchdog_fault());
+  }
   // The guard fills this under yaw_trip_detail_mutex_ and then publishes yaw_trip_.
   // A reader must hold that mutex too: a flag check makes the value visible, not a
   // struct copy atomic. Nesting order is always yaw_mutex_ → yaw_trip_detail_mutex_.
@@ -156,6 +166,11 @@ class MixedCanMotorBackend final : public MotorBackend {
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;
 
  private:
+  friend struct MixedBackendTestAccess;
+  // Narrow transport seam for exercising the real command/guard mutex and
+  // inhibition path without opening a second physical CAN owner.
+  std::function<bool(const can::RawFrame&)> yaw_test_send_;
+  std::function<CanHealth()> yaw_test_health_;
   struct YawState {
     gm6020::Feedback feedback{};
     double position_rad{};  // offset to stationary open-time reference
@@ -171,8 +186,10 @@ class MixedCanMotorBackend final : public MotorBackend {
   bool establish_yaw_reference(std::string& err);
   void on_yaw_frame(const can::RawFrame& frame);
   void yaw_guard_loop(std::stop_token stop);
-  void trip_yaw_locked();
+  void trip_yaw_locked(const char* condition = nullptr);
   bool send_yaw_zero_locked();
+  bool send_yaw_output_locked(const can::RawFrame& frame, double output);
+  bool yaw_bus_healthy() const;
   bool yaw_feedback_safe_locked(TimeNs now_ns) const;
   AxisSnapshot yaw_snapshot_locked(TimeNs now_ns) const;
   void command_yaw_velocity_locked(double velocity_rad_s, TimeNs now_ns);
@@ -223,7 +240,12 @@ class MixedCanMotorBackend final : public MotorBackend {
   // the missing evidence in the 2026-09-28 case file and still missing an hour later.
   std::atomic<double> yaw_last_output_{0};
   std::atomic<double> yaw_last_shaped_rad_s_{0};
-  int yaw_stall_streak_ = 0;
+  MotionEpisodeCounter yaw_stall_episodes_;
+  TimeNs yaw_tx_failure_since_ns_ = 0;
+  TimeNs yaw_last_successful_tx_ns_ = 0;
+  uint64_t yaw_tx_seq_ = 0;
+  double yaw_requested_output_ = 0;
+  int yaw_output_reason_ = 0;
   int64_t last_degrade_log_ns_ = 0;
   // Public: an axis that has been limping is worth a strip indicator, and a counter is the
   // difference between "it happened once" and "it happens every sweep".

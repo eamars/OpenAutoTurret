@@ -63,15 +63,18 @@ class CanMotorBackend : public MotorBackend {
 
   // Bus health straight from the transport counters (§55).
   CanHealth can_health() const override;
+  OutputEvidence output_evidence(AxisId axis) const override { return output_evidence_[static_cast<int>(axis)]; }
 
  private:
   // Fire-and-forget register writes (no response wait).
   bool write_reg_float(cybergear::Reg reg, float value, AxisId axis);
   bool write_reg_u8(cybergear::Reg reg, uint8_t value, AxisId axis);
+  void record_output(AxisId axis, double value, int kind, bool sent);
 
   can::CyberGearSystem& system_;
   int timeout_ms_;
   MotorRecoveryCheck recovery_;
+  std::array<OutputEvidence, kAxisCount> output_evidence_{};
   struct ModeTransition {
     int stage = 0;
     AxisId axis = AxisId::Pitch;

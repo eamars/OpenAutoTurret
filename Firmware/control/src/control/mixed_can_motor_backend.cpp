@@ -156,6 +156,11 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
   if (!validate_profile(profile, err)) return false;
   try {
     profile_ = profile;
+    spdlog::info("mixed effective config: yaw mode={} frame=0x{:x} Kp={} A/(rad/s) Ki={} A/rad cap={} A; pitch configured_mode={} cap={} A; dynamics unqualified",
+                 yaw_output_is_amperes() ? "current" : "voltage",
+                 *profile_.yaw.command_frame_id, profile_.yaw.current_kp_a_per_rad_s,
+                 profile_.yaw.current_ki_a_per_rad_s, profile_.yaw.host_current_limit_a,
+                 static_cast<int>(profile_.pitch.control_mode), *profile_.pitch.current_limit_a);
     {
       std::lock_guard lock(yaw_mutex_);
       yaw_encoder_.reset();
@@ -163,6 +168,11 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
       yaw_origin_rad_ = 0;
       yaw_position_target_rad_ = yaw_speed_target_rad_s_ = yaw_shaped_speed_rad_s_ = 0;
       yaw_position_mode_ = yaw_speed_mode_ = false;
+      yaw_tx_failure_since_ns_ = yaw_last_successful_tx_ns_ = 0;
+      yaw_tx_seq_ = 0;
+      yaw_stall_episodes_ = {};
+      yaw_output_reason_ = 0;
+      yaw_last_output_.store(NAN);
     }
     yaw_reference_valid_.store(false);
     yaw_trip_.store(false);
@@ -399,8 +409,15 @@ AxisSnapshot MixedCanMotorBackend::yaw_snapshot_locked(TimeNs now) const {
   snapshot.disabled = false;
   snapshot.in_position_mode = yaw_position_mode_;
   snapshot.in_speed_mode = yaw_speed_mode_;
+  snapshot.raw_rx_ns = yaw_state_.feedback.rx_ns;
+  snapshot.rx_seq = yaw_state_.count;
+  snapshot.encoder_raw = yaw_state_.received ? yaw_state_.feedback.angle_count : -1;
+  snapshot.current_raw = yaw_state_.feedback.current_raw;
+  snapshot.current_raw_valid = yaw_state_.received;
   if (yaw_feedback_safe_locked(now)) {
     snapshot.has_feedback = true;
+    // Legacy supervisor consumes a cycle-bounded timestamp; raw_rx_ns retains
+    // the unmodified RX timestamp, including frames arriving during this cycle.
     snapshot.rx_ns = std::min(yaw_state_.feedback.rx_ns, now);
     snapshot.q_rad = yaw_state_.position_rad;
     snapshot.v_rad_s = yaw_state_.feedback.speed_rad_s();
@@ -420,7 +437,16 @@ AxisSnapshot MixedCanMotorBackend::yaw_snapshot_locked(TimeNs now) const {
   return snapshot;
 }
 
-void MixedCanMotorBackend::trip_yaw_locked() {
+void MixedCanMotorBackend::trip_yaw_locked(const char* condition) {
+  if (condition && !yaw_trip_.load()) {
+    TripInputs input;
+    input.feedback_age_ms = (now_monotonic_ns() - yaw_state_.feedback.rx_ns) / 1e6;
+    input.temp_raw = yaw_state_.feedback.temperature_raw;
+    input.speed_deg_s = yaw_velocity_loop_.velocity_rad_s() * kDegreesPerRadian;
+    input.reference_valid = yaw_reference_valid_.load();
+    const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
+    format_trip_detail(input, condition, yaw_trip_detail_);
+  }
   yaw_trip_.store(true);
   yaw_motion_allowed_.store(false);
   yaw_position_mode_ = yaw_speed_mode_ = false;
@@ -435,7 +461,46 @@ void MixedCanMotorBackend::trip_yaw_locked() {
 // flush. One decision, one frame builder (yaw_zero_frame), so a fault zero cannot quietly still be
 // a voltage frame after the profile moved to current.
 bool MixedCanMotorBackend::send_yaw_zero_locked() {
-  return yaw_bus_.send_frame(yaw_zero_frame(profile_.yaw));
+  yaw_output_reason_ = yaw_trip_.load() ? 3 : 2;
+  return send_yaw_output_locked(yaw_zero_frame(profile_.yaw), 0);
+}
+
+bool MixedCanMotorBackend::send_yaw_output_locked(const can::RawFrame& frame, double output) {
+  const auto now = now_monotonic_ns();
+  yaw_requested_output_ = output;
+  if (!(yaw_test_send_ ? yaw_test_send_(frame) : yaw_bus_.send_frame(frame))) {
+    yaw_output_reason_ = 4;
+    if (!yaw_tx_failure_since_ns_) yaw_tx_failure_since_ns_ = now;
+    yaw_command_not_sent_.store(true);
+    return false;
+  }
+  yaw_tx_failure_since_ns_ = 0;
+  yaw_last_successful_tx_ns_ = now;
+  ++yaw_tx_seq_;
+  // Report the encoded slot value after quantization, not the pre-encoding
+  // floating-point request. Successful write still is not a drive ACK.
+  const auto slot = 2 * ((profile_.yaw.motor_id ? profile_.yaw.motor_id : 1) - 1);
+  const auto raw = static_cast<int16_t>((frame.data[slot] << 8) | frame.data[slot + 1]);
+  yaw_last_output_.store(yaw_output_is_amperes() ? raw * gm6020::kAmpsPerRaw : raw);
+  return true;
+}
+
+MotorBackend::OutputEvidence MixedCanMotorBackend::output_evidence(AxisId axis) const {
+  if (axis == AxisId::Pitch) return pitch_backend_.output_evidence(axis);
+  std::lock_guard lock(yaw_mutex_);
+  OutputEvidence result;
+  result.tx_ns = yaw_last_successful_tx_ns_;
+  result.tx_seq = yaw_tx_seq_;
+  result.requested = yaw_requested_output_;
+  result.successful = yaw_last_output_.load();
+  result.integral = yaw_velocity_loop_.integral();
+  result.velocity_estimate = yaw_velocity_loop_.velocity_rad_s();
+  result.kp = yaw_output_is_amperes() ? profile_.yaw.current_kp_a_per_rad_s : kYawVelocityKp;
+  result.ki = yaw_output_is_amperes() ? profile_.yaw.current_ki_a_per_rad_s : kYawVelocityKi;
+  result.current_cap = yaw_output_is_amperes() ? profile_.yaw.host_current_limit_a : NAN;
+  result.command_kind = yaw_output_is_amperes() ? 1 : 2;
+  result.reason = yaw_output_reason_;
+  return result;
 }
 
 void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
@@ -445,6 +510,7 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
   double progress_position = 0;
   TimeNs progress_at = now_monotonic_ns();
   TimeNs last_bus_health_check = 0;
+  uint64_t previous_rx_errors = 0, previous_tx_failures = 0;
   while (!stop.stop_requested()) {
     const auto poll_now = now_monotonic_ns();
     if (poll_now - last_bus_health_check >= 500'000'000LL) {
@@ -461,7 +527,6 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
       bus_health_ok_.store(healthy);
       last_bus_health_check = poll_now;
     }
-    bool should_stop = false;
     {
       std::lock_guard lock(yaw_mutex_);
       const auto now = now_monotonic_ns();
@@ -496,9 +561,11 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
       MotorBackend::TripInputs in;
       in.feedback_unsafe = !yaw_feedback_safe_locked(now);
       in.can_down = !health.up;
-      in.can_state_wrong = health.state != static_cast<int>(can::CanIfState::ErrorActive);
-      in.can_counters_bad = health.rx_error_frames != 0 || health.tx_failed != 0;
-      in.bus_unhealthy = !bus_health_ok_.load();
+      in.can_state_wrong = health.state < 0 || health.state >= static_cast<int>(can::CanIfState::BusOff);
+      in.can_counters_bad = health.rx_error_frames != previous_rx_errors || health.tx_failed != previous_tx_failures;
+      previous_rx_errors = health.rx_error_frames;
+      previous_tx_failures = health.tx_failed;
+      in.bus_unhealthy = !yaw_bus_healthy();
       in.speed_not_finite = !std::isfinite(measured_speed);
       in.temp_raw_over = yaw_temp_guard > 0 &&
                          yaw_state_.feedback.temperature_raw >= yaw_temp_guard;
@@ -511,15 +578,20 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
                        !command_stale && now - progress_at > kNoProgressLimitNs;
       in.heartbeat_stale = heartbeat_seen_.load() &&
                            now - heartbeat_ns_.load() > kHeartbeatLimitNs;
+      // One failed TX is retried by the next normal cycle. Sustained failure
+      // cancels motion even when unsolicited encoder feedback remains fresh.
+      if (yaw_tx_failure_since_ns_ && now - yaw_tx_failure_since_ns_ >= 20'000'000)
+        in.can_down = true;
       in.reference_valid = yaw_reference_valid_.load();
       in.feedback_age_ms = (now - yaw_state_.feedback.rx_ns) / 1e6;
       in.temp_raw = yaw_state_.feedback.temperature_raw;
       in.speed_deg_s = measured_speed * kDegreesPerRadian;
+      yaw_stall_episodes_.observe(in.no_progress);
 
       // Owner's ordering, 2026-09-28: running beats holding, holding beats faulting, and a
       // fault is reserved for a motor we cannot control, a motor reporting its own heat, or
       // something equally dangerous. Everything else is driven through and said out loud.
-      const GuardResponse response = yaw_guard_response(in, yaw_stall_streak_);
+      const GuardResponse response = yaw_guard_response(in, yaw_stall_episodes_.count);
       if (response == GuardResponse::Fault && !yaw_trip_.load()) {
         MotorBackend::TripDetail td{};
         MotorBackend::format_trip_detail(in, MotorBackend::select_trip_condition(in), td);
@@ -535,24 +607,11 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
                       (now - yaw_last_command_ns_) * 1e-6, heartbeat_seen_.load(),
                       heartbeat_seen_.load() ? (now - heartbeat_ns_.load()) / 1'000'000 : 0);
         trip_yaw_locked();
-      } else if (response == GuardResponse::Hold) {
-        // Powered and not pushing: a zero output -- zero current in current mode -- is dynamic
-        // braking on this drive, the mildest answer to "keep pushing a stalled axis".
-        // Deliberately not a fault -- a stalled axis is by definition not on its way to an endstop.
-        if (now - last_degrade_log_ns_ > 1'000'000'000) {
-          spdlog::warn("GM6020 guard hold: stall #{} at requested {:.3f} deg/s, {} last; holding, not faulting",
-                       yaw_stall_streak_, requested_speed * kDegreesPerRadian,
-                       yaw_output_text(yaw_output_is_amperes(), yaw_last_output_.load()));
-          last_degrade_log_ns_ = now;
-        }
-        if (!yaw_degraded_.exchange(true)) ++yaw_guard_events_;  // one episode, one count
-        send_yaw_zero_locked();
       } else {
         const bool wants_motion = std::abs(requested_speed) >= kNoProgressCommandRadS;
         const bool any_doubt = yaw_guard_doubt(in, wants_motion);
         if (any_doubt) {
           if (!yaw_degraded_.exchange(true)) ++yaw_guard_events_;  // one episode, one count
-          yaw_stall_streak_ = in.no_progress ? yaw_stall_streak_ + 1 : 0;
           if (now - last_degrade_log_ns_ > 1'000'000'000) {  // at most one line a second
             spdlog::warn("GM6020 degraded, still driving: cond={} rxerr={} txfail={} cmd_stale={} "
                          "requested={:.3f} measured={:.3f} deg/s ms_since_command={:.1f} {} q={:.3f}rad",
@@ -565,10 +624,8 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
           }
         } else {
           yaw_degraded_.store(false);
-          yaw_stall_streak_ = 0;
         }
       }
-      should_stop = response == GuardResponse::Fault;
       if (yaw_trip_.load()) send_yaw_zero_locked();
     }
     std::this_thread::sleep_for(5ms);
@@ -587,10 +644,16 @@ bool MixedCanMotorBackend::buses_healthy() const {
   const auto health = can_health_all();
   if (health.size() != 2) return false;
   for (const auto& bus : health) {
-    if (!bus.available || !bus.up || bus.state != static_cast<int>(can::CanIfState::ErrorActive) ||
-        bus.rx_error_frames != 0 || bus.tx_failed != 0) return false;
+    if (!bus.available || !bus.up || bus.state < 0 ||
+        bus.state >= static_cast<int>(can::CanIfState::BusOff)) return false;
   }
   return true;
+}
+
+bool MixedCanMotorBackend::yaw_bus_healthy() const {
+  const auto bus = can_health();
+  return bus.available && bus.up && bus.state >= 0 &&
+      bus.state < static_cast<int>(can::CanIfState::BusOff);
 }
 
 std::vector<CanHealth> MixedCanMotorBackend::can_health_all() const {
@@ -599,6 +662,7 @@ std::vector<CanHealth> MixedCanMotorBackend::can_health_all() const {
 }
 
 CanHealth MixedCanMotorBackend::can_health() const {
+  if (yaw_test_health_) return yaw_test_health_();
   return yaw_opened_.load() ? socketcan_health(yaw_bus_) : CanHealth{};
 }
 
@@ -718,7 +782,7 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
   (void)speed_ki; (void)speed_kp; (void)check_displacement;
   std::lock_guard lock(yaw_mutex_);
   if (!std::isfinite(limit) || limit < 0 || !yaw_feedback_safe_locked(now) ||
-      !buses_healthy() || yaw_trip_.load()) {
+      !yaw_bus_healthy() || yaw_trip_.load()) {
     err = "GM6020 yaw position control requires a fresh session reference and healthy buses";
     return Transition::Failed;
   }
@@ -765,8 +829,9 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   yaw_last_command_ns_ = now;
   if (!std::isfinite(desired) || !yaw_feedback_safe_locked(now) || yaw_trip_.load() ||
       !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
-      now - heartbeat_ns_.load() > kHeartbeatLimitNs || !buses_healthy()) {
-    if (!yaw_trip_.load() && (!yaw_feedback_safe_locked(now) || !buses_healthy())) trip_yaw_locked();
+      now - heartbeat_ns_.load() > kHeartbeatLimitNs || !yaw_bus_healthy()) {
+    if (!yaw_trip_.load() && (!yaw_feedback_safe_locked(now) || !yaw_bus_healthy()))
+      trip_yaw_locked(!yaw_feedback_safe_locked(now) ? "feedback_unsafe" : "can_unavailable");
     else {
       // Nothing went out but a zero. Say so, and stop quoting the last accepted
       // velocity as if it described this cycle -- that stale 10 deg/s is what made
@@ -792,6 +857,8 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   // speed ceiling, every guard -- is shared, so switching the axis from volts to amperes changes
   // the frame and the gains, not the control architecture.
   can::RawFrame command{};
+  const auto prior_loop = yaw_velocity_loop_;
+  double requested_output = 0;
   if (yaw_output_is_amperes()) {
     // Amperes in, amperes out, clamped twice over: the PI ceiling IS the host limit, and
     // current_frame clamps again against the same number before it encodes.
@@ -800,25 +867,29 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
         profile_.yaw.host_current_limit_a, profile_.yaw.current_kp_a_per_rad_s,
         profile_.yaw.current_ki_a_per_rad_s);
     if (!yaw_velocity_loop_.valid()) {
-      trip_yaw_locked();
+      trip_yaw_locked("velocity_loop_invalid");
       return;
     }
     yaw_last_shaped_rad_s_.store(yaw_shaped_speed_rad_s_);  // what the loop was told to track
-    yaw_last_output_.store(amps);  // kept for the next paralysis log, in amperes
+    requested_output = amps;
     command = gm6020::current_frame(profile_.yaw.motor_id, amps, profile_.yaw.host_current_limit_a);
   } else {
     const int voltage = yaw_velocity_loop_.update(
         yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now, kYawSpeedCeilingRadS,
         yaw_voltage_ceiling_, kYawVelocityKp, kYawVelocityKi);
     if (!yaw_velocity_loop_.valid()) {
-      trip_yaw_locked();
+      trip_yaw_locked("velocity_loop_invalid");
       return;
     }
     yaw_last_shaped_rad_s_.store(yaw_shaped_speed_rad_s_);
-    yaw_last_output_.store(static_cast<double>(voltage));
+    requested_output = static_cast<double>(voltage);
     command = gm6020::voltage_frame(profile_.yaw.motor_id, voltage);
   }
-  if (!yaw_bus_.send_frame(command)) trip_yaw_locked();
+  yaw_output_reason_ = yaw_velocity_loop_.late_cycle() ? 5 : 1;
+  if (!send_yaw_output_locked(command, requested_output)) {
+    yaw_velocity_loop_ = prior_loop; // do not integrate an output that was never sent
+    if (now - yaw_tx_failure_since_ns_ >= 20'000'000) trip_yaw_locked("tx_failure_persistent");
+  }
 }
 
 void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
@@ -830,7 +901,7 @@ void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
   const auto now = now_monotonic_ns();
   std::lock_guard lock(yaw_mutex_);
   if (!std::isfinite(q_ref_rad) || !std::isfinite(limit_spd_rad_s)) {
-    trip_yaw_locked();
+    trip_yaw_locked("nonfinite_reference");
     return;
   }
   yaw_position_target_rad_ = q_ref_rad;
@@ -848,7 +919,7 @@ void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) 
   const auto now = now_monotonic_ns();
   std::lock_guard lock(yaw_mutex_);
   if (!std::isfinite(velocity_rad_s)) {
-    trip_yaw_locked();
+    trip_yaw_locked("nonfinite_reference");
     return;
   }
   yaw_speed_target_rad_s_ = std::clamp(velocity_rad_s, -kYawSpeedCeilingRadS, kYawSpeedCeilingRadS);

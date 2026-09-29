@@ -606,6 +606,20 @@ struct ControlLogRecord {
                                   std::numeric_limits<double>::quiet_NaN()};
   double v_estimated[kAxisCount] = {0.0, 0.0};  // feedback-position derivative
   TimeNs feedback_ns[kAxisCount] = {0, 0};
+  uint64_t rx_seq[kAxisCount] = {};
+  int encoder_raw[kAxisCount] = {-1, -1};
+  double current_raw[kAxisCount] = {NAN, NAN};
+  int enabled_state[kAxisCount] = {-1, -1};
+  TimeNs tx_ns[kAxisCount] = {};
+  uint64_t tx_seq[kAxisCount] = {};
+  double output_requested[kAxisCount] = {NAN, NAN};
+  double pi_integral[kAxisCount] = {NAN, NAN};
+  double pi_velocity[kAxisCount] = {NAN, NAN};
+  double pi_kp[kAxisCount] = {NAN, NAN};
+  double pi_ki[kAxisCount] = {NAN, NAN};
+  double current_cap[kAxisCount] = {NAN, NAN};
+  int output_reason[kAxisCount] = {};
+  int command_kind[kAxisCount] = {};
   uint64_t command_seq = 0;
   double probe_omega = 0;
   double probe_goal[kAxisCount] = {0.0, 0.0};
@@ -914,7 +928,7 @@ class Telemetry {
     auto pair = [&](const double* a) {
       return "[" + num(a[0]) + "," + num(a[1]) + "]";
     };
-    auto pairi = [&](const int64_t* a) {
+    auto pairi = [&](const auto* a) {
       return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
     };
     // Every row's `t` is CLOCK_MONOTONIC nanoseconds (see common/time.hpp), and a
@@ -950,6 +964,14 @@ class Telemetry {
           // to learn two vocabularies for the same ring.
           << ",\"cur\":" << pair(r.current_a)
           << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
+          << ",\"tx_ns\":" << pairi(r.tx_ns) << ",\"tx_seq\":" << pairi(r.tx_seq)
+          << ",\"rx_seq\":" << pairi(r.rx_seq) << ",\"encoder_raw\":" << pairi(r.encoder_raw)
+          << ",\"current_raw\":" << pair(r.current_raw) << ",\"enabled_state\":" << pairi(r.enabled_state)
+          << ",\"output_requested\":" << pair(r.output_requested)
+          << ",\"output_reason\":" << pairi(r.output_reason) << ",\"command_kind\":" << pairi(r.command_kind)
+          << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
+          << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)
+          << ",\"current_cap\":" << pair(r.current_cap)
           << ",\"safety\":" << static_cast<int>(r.safety_action)
           << ",\"period_us\":" << r.cycle_duration_us << "}\n";
     }
