@@ -179,11 +179,17 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
                                   "control_mode", "feedback_frame_id", "command_frame_id",
                                   "guard_temp_raw_ceiling"}, result,
                {"current_ring_verified", "host_current_limit_a", "current_kp_a_per_rad_s",
-                "current_ki_a_per_rad_s"});
+                "current_ki_a_per_rad_s", "velocity_rx_window_ms", "friction"});
     check_axis_string(yaw["protocol"], "gm6020", "axes.yaw", "protocol", result);
     check_axis_string(yaw["bus"], "yaw", "axes.yaw", "bus", result);
     check_axis_string(yaw["topology"], "continuous", "axes.yaw", "topology", result);
     auto& yaw_axis = result.profile.yaw;
+    if (yaw["velocity_rx_window_ms"]) {
+      const auto window = unsigned_value(yaw["velocity_rx_window_ms"], "axes.yaw.velocity_rx_window_ms", result);
+      if (window != 0 && window != 20 && window != 30 && window != 40)
+        error(result, "axes.yaw.velocity_rx_window_ms must be 0, 20, 30 or 40");
+      else yaw_axis.velocity_rx_window_ms = static_cast<int>(window);
+    }
     yaw_axis.protocol = Protocol::Gm6020;
     yaw_axis.bus_name = "yaw";
     yaw_axis.topology = Topology::Continuous;
@@ -249,17 +255,41 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
       double ki = 0.0;
       const bool have_ki = finite_scalar(yaw["current_ki_a_per_rad_s"], ki);
       if (!have_ki || !(ki >= 0.0) || ki > 20.0)
-        error(result, "axes.yaw: current mode needs current_ki_a_per_rad_s in [0, 20] A per "
-                      "rad/s of integral (0 keeps the loop proportional-only)");
+        error(result, "axes.yaw: current mode needs current_ki_a_per_rad_s in [0, 20] A/rad "
+                      "(legacy key spelling; 0 keeps the loop proportional-only)");
       yaw_axis.current_ring_verified = acknowledged;
       yaw_axis.host_current_limit_a = limit;
       yaw_axis.current_kp_a_per_rad_s = kp;
       yaw_axis.current_ki_a_per_rad_s = ki;
+      const auto friction = yaw["friction"];
+      if (friction) {
+        check_keys(friction, "axes.yaw.friction", {"enabled"}, result,
+          {"positive_breakaway_a", "negative_breakaway_a", "positive_run_a", "negative_run_a",
+           "timeout_s", "motion_displacement_rad", "stationary_velocity_rad_s", "fresh_samples", "output_slew_a_per_s"});
+        try { yaw_axis.friction.enabled = friction["enabled"].as<bool>(); }
+        catch (const std::exception&) { error(result, "axes.yaw.friction.enabled must be boolean"); }
+        auto number = [&](const char* key, double& value) {
+          if (friction[key]) value = double_value(friction[key], std::string("axes.yaw.friction.")+key,result);
+          else if (yaw_axis.friction.enabled) error(result,std::string("axes.yaw.friction.")+key+" is required when enabled");
+          if (value < 0) error(result,std::string("axes.yaw.friction.")+key+" must be non-negative");
+        };
+        auto& f = yaw_axis.friction;
+        number("positive_breakaway_a",f.positive_breakaway_a); number("negative_breakaway_a",f.negative_breakaway_a);
+        number("positive_run_a",f.positive_run_a); number("negative_run_a",f.negative_run_a);
+        number("timeout_s",f.timeout_s); number("motion_displacement_rad",f.motion_displacement_rad);
+        number("stationary_velocity_rad_s",f.stationary_velocity_rad_s); number("output_slew_a_per_s",f.output_slew_a_per_s);
+        if (friction["fresh_samples"]) {
+          const auto count = unsigned_value(friction["fresh_samples"],"axes.yaw.friction.fresh_samples",result);
+          if (count > 1000) error(result,"axes.yaw.friction.fresh_samples must be <=1000");
+          else f.fresh_samples = static_cast<uint32_t>(count);
+        }
+        if (f.enabled && !f.valid(limit)) error(result,"axes.yaw.friction needs finite measured values within the current cap");
+      }
     } else {
       // A current key sitting in a voltage profile is a stale claim, not a harmless extra line:
       // the next person would read 0.8 A as the envelope of an axis that is commanding volts.
       for (const auto* key : {"current_ring_verified", "host_current_limit_a",
-                              "current_kp_a_per_rad_s", "current_ki_a_per_rad_s"}) {
+                              "current_kp_a_per_rad_s", "current_ki_a_per_rad_s", "friction"}) {
         if (yaw[key])
           error(result, std::string("axes.yaw.") + key +
                             " is only meaningful when axes.yaw.control_mode is 'current'");

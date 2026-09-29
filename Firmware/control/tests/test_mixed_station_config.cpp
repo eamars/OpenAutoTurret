@@ -345,3 +345,25 @@ TEST(MixedCurrentMode, ZeroFrameStaysOn0x1FFInVoltageMode) {
   EXPECT_EQ(frame.data[0], 0);  // motor 1's slot: zero
   EXPECT_EQ(frame.data[1], 0);
 }
+
+TEST(MixedStationConfig, FrictionRequiresCompleteFiniteDirectionalCalibration) {
+  const auto absent = config::mixed::load_mixed_hardware_profile((firmware_root()/"config/mixed_hardware.yaml").string());
+  ASSERT_TRUE(absent.ok) << why(absent);
+  EXPECT_FALSE(absent.profile.yaw.friction.enabled);
+  const auto incomplete = yaw_variant("friction_missing", [](YAML::Node yaw) {
+    yaw["friction"]["enabled"] = true;
+  });
+  EXPECT_FALSE(incomplete.ok);
+  const auto complete = yaw_variant("friction_measured_fixture", [](YAML::Node yaw) {
+    yaw["velocity_rx_window_ms"] = 30;
+    yaw["friction"] = YAML::Load("{enabled: true, positive_breakaway_a: 0.5, negative_breakaway_a: 0.6, positive_run_a: 0.3, negative_run_a: 0.4, timeout_s: 1, motion_displacement_rad: 0.0023, stationary_velocity_rad_s: 0.0087, fresh_samples: 4, output_slew_a_per_s: 4}");
+  });
+  ASSERT_TRUE(complete.ok) << why(complete);
+  EXPECT_TRUE(complete.profile.yaw.friction.enabled);
+  EXPECT_EQ(complete.profile.yaw.velocity_rx_window_ms,30);
+  const auto invalid = yaw_variant("friction_nonfinite", [](YAML::Node yaw) {
+    yaw["friction"] = YAML::Load("{enabled: false, positive_run_a: .nan}");
+    yaw["velocity_rx_window_ms"] = 100;
+  });
+  EXPECT_FALSE(invalid.ok);
+}

@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "can/gm6020_friction.hpp"
 
 namespace ota::config::mixed {
 
@@ -32,7 +33,9 @@ struct Axis {
   // fields from anything voltage-shaped on purpose: a voltage ceiling in counts says nothing about
   // amperes, and reusing the voltage number silently re-tunes the axis. 0 = unset, refused.
   double current_kp_a_per_rad_s = 0.0;
-  double current_ki_a_per_rad_s = 0.0;
+  double current_ki_a_per_rad_s = 0.0; // legacy key spelling; physical unit A/rad
+  int velocity_rx_window_ms = 0; // 0: legacy 50 ms filter; 20/30/40: fresh-RX window
+  gm6020::FrictionConfig friction;
   std::optional<uint64_t> expected_unique_id;
   std::optional<uint32_t> feedback_frame_id;
   std::optional<uint32_t> command_frame_id;

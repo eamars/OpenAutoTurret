@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <cstdio>
 #include <functional>
@@ -95,6 +96,11 @@ class MotorBackend {
     double kp = std::numeric_limits<double>::quiet_NaN();
     double ki = std::numeric_limits<double>::quiet_NaN();
     double current_cap = std::numeric_limits<double>::quiet_NaN();
+    double rx_velocity_20 = NAN, rx_velocity_30 = NAN, rx_velocity_40 = NAN;
+    int velocity_window_ms = 0;
+    double friction_a = NAN;
+    int friction_state = 0;
+    bool friction_exhausted = false;
     int reason = 0; // 0 unknown, 1 normal, 2 explicit zero, 3 inhibited, 4 TX failed, 5 late cycle
     int command_kind = 0; // 0 unknown, 1 current A, 2 voltage counts, 3 SpdRef rad/s, 4 LocRef rad, 5 STOP
   };
@@ -250,6 +256,9 @@ class MotorBackend {
   // speed with its internal velocity loop; current rises as needed up to the
   // current limit). Fire-and-forget; safe to call every cycle.
   virtual void command_velocity(AxisId axis, double velocity_rad_s) = 0;
+  // Explicit upstream intent authorizes bounded breakaway; a quiet position
+  // correction alone must never create another start attempt.
+  virtual void set_motion_intent(AxisId, bool) {}
   // Feedback keepalive: elicit a fresh COMM_TYPE_2 response WITHOUT changing
   // any reference (the CyberGear has no periodic telemetry — it answers
   // commands only). Needed for speed-mode axes on Allow cycles, where no

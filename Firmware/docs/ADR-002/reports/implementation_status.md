@@ -24,11 +24,11 @@ Updated 2026-09-29. Work is in progress; no physical qualification is claimed.
 
 | Capability | Source/offline | Single-axis physical | Thermal/two-axis | Current scope |
 |---|---|---|---|---|
-| Output arbitration/recovery | PR1 native PASS (79 CTest entries) | NOT_RUN | NOT_RUN | 8838b1d deployed inactive |
-| Yaw current velocity loop | Late-cycle public API probe PASS | NOT_RUN | NOT_RUN | Existing 0.8 A bound |
-| Yaw friction compensation | NOT_RUN | NOT_RUN | NOT_RUN | Disabled until calibration |
+| Output arbitration/recovery | PR1 native PASS; Pi 80/80 | Ordinary-TX continuity observed; physical fault injection NOT_RUN | NOT_RUN | 4387411 Manual commissioning |
+| Yaw current velocity loop | PR2 math replay and native PASS | Baseline measured; latency/smoothness targets not met | NOT_RUN | Existing 0.8 A bound |
+| Yaw friction compensation | Bounded state/current integration tests PASS | NOT_RUN | NOT_RUN | Disabled until calibration |
 | Pitch native speed tuning | NOT_RUN | NOT_RUN | NOT_RUN | Existing native mode and 5 A bound |
-| Pitch homing | NOT_RUN | NOT_RUN | NOT_RUN | Do not inherit old mechanism results |
+| Pitch homing | Existing native/Pi tests PASS | Two starts completed; repeatability not yet reduced | NOT_RUN | Do not inherit old mechanism results |
 | Typed payload qualification | NOT_RUN | NOT_RUN | NOT_RUN | No new qualified profile |
 
 ## PR1 evidence so far
@@ -176,3 +176,48 @@ remains intact. A failed physical trial still preserves traces before the ring
 wraps and uses the launcher for stopping as necessary; it does not trigger
 restoration of an old release. Do not switch GM back to voltage, overwrite
 calibration, or interpret a GM zero-current request as confirmed disable.
+
+## PR2: executable path and bounded compensation
+
+Source now sends service yaw through the shared position-P / velocity-feedforward
+path. Previously finalizing pitch homing selected yaw's host position interface
+unconditionally. Leased yaw jogs retain their explicit velocity even while their
+position waypoint is bounded relative to feedback. The pitch service path is
+unchanged in this PR2 slice. PI gains and the 0.8 A / 5 A caps are unchanged.
+
+The new directional friction state machine defaults disabled. Explicit moving
+intent permits one bounded attempt per direction; repeated lease refreshes do
+not restart it. Directional fresh-RX displacement confirms motion; reversing
+waits for stationary feedback. Timeout is a performance observation. Final
+current and slew limits govern PI integration, transition handoffs use the last
+delivered effort, quiet hold retains its integral, and a reduced current cap
+retains signed braking authority. Unknown calibration is not promoted to a
+measured production profile. New trace fields expose assist/state/exhaustion.
+
+A fixed 128-sample raw-RX history supports 20/30/40 ms measurement windows and
+ignores repeated/backwards timestamps. Default estimator selection remains the
+legacy 50 ms filter until physical A/B data select a window. All three candidate
+window observations are temporarily traced to compare against actual CAN RX.
+
+Before regression expansion, standalone WSL C++ probes replayed the captured
+8838 normal-jog samples through the production estimator and combined current
+loop. The latter preserved finite <=0.8 A output and exactly one start attempt
+after a tiny reference-sign crossing was given a direction deadband. These
+replays use recorded feedback, not a simulated claim about changed mechanics.
+The native suite passed 79/80 entries initially; two new test expectations
+observed their 10 ms attempt after its deadline. After correcting those test
+intervals, the rebuilt transport tests passed. The combined native result is
+80/80 CTest entries excluding retained homing. Final focused current/estimator,
+parser and transport tests passed 3/3; `pr2-ctest.log` and
+`pr2-final-focused-tests.log` retain the evidence and initial failure.
+
+Release `4387411e8be9.PLkMoF` passed all 80 station CTest entries and preflight,
+then completed its mandatory pitch homing. Five +/- normal yaw pairs were
+captured at the initial pitch pose, followed by three accepted +5-degree pitch
+responses and another bounded yaw series. Baseline fine +/-3 deg/s requests
+showed roughly 1.521 s / 9.713 s three-count motion-confirmation delays; positive
+normal motion used up to 0.632 A and drifted about 0.395 degrees after stop.
+The baseline therefore does not meet response/hold targets. Every observed
+active yaw row had ordinary output reason and advancing successful TX sequence;
+this confirms no interleaved guard zero in those trials, not emergency-stop
+qualification. Detailed raw captures/analysis remain ignored under `run/adr002`.

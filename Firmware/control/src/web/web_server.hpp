@@ -713,6 +713,10 @@ class WebServer {
         pair("command_kind",r.command_kind); pair("pi_integral",r.pi_integral);
         pair("pi_velocity",r.pi_velocity); pair("pi_kp",r.pi_kp);
         pair("pi_ki",r.pi_ki); pair("current_cap",r.current_cap);
+        pair("rx_velocity_20",r.rx_velocity_20); pair("rx_velocity_30",r.rx_velocity_30);
+        pair("rx_velocity_40",r.rx_velocity_40); pair("velocity_window_ms",r.velocity_window_ms);
+        pair("friction_a",r.friction_a); pair("friction_state",r.friction_state);
+        pair("friction_exhausted",r.friction_exhausted);
         pair("vest",r.v_estimated);
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';

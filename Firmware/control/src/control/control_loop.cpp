@@ -721,10 +721,11 @@ bool ControlLoop::finalize_homing() {
   if (backend_->supports_continuous_yaw()) {
     if (!yaw_session_reference_valid_) return false;
     ready_raw_[ix(AxisId::Yaw)] = yaw_session_reference_rad_;
-    // Establish the GM6020 voltage-position session only after the bounded
-    // pitch axis has completed real physical homing.
+    // Select the host interface matching the service controller. Current-mode
+    // yaw still uses 0x1FE; this choice determines whether the common position
+    // P + velocity feed-forward reaches its local velocity PI.
     std::string err;
-    if (backend_->transition_mode(AxisId::Yaw, true,
+    if (backend_->transition_mode(AxisId::Yaw, !cfg_.service_speed_control,
                                   cfg_.hold_speed_rad_s, now_ns_, err) !=
         MotorBackend::Transition::Complete) {
       spdlog::error("continuous yaw session enable failed after pitch homing: {}", err);
@@ -2171,6 +2172,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   for (int i = 0; i < kAxisCount; ++i) {
     const AxisId a = static_cast<AxisId>(i);
     double qr = q_ref[i], ls = lim[i];
+    const double requested_velocity = i == ix(AxisId::Yaw) ? last_intent_.v_yaw_rad_s : last_intent_.v_pitch_rad_s;
+    const double requested_position = i == ix(AxisId::Yaw) ? last_intent_.q_yaw_rad : last_intent_.q_pitch_rad;
+    backend_->set_motion_intent(a, phase_ == Phase::Hold && position_ready() &&
+        (last_decision_.action == SafetyAction::Allow || last_decision_.action == SafetyAction::Derate) &&
+        last_intent_.type != IntentType::Hold && last_intent_.live_at(now_ns) &&
+        (manual_out_.lease_active ? std::abs(requested_velocity) > .02*kDeg2Rad :
+         ((last_intent_.has_joint_target && std::abs(requested_position-sp[i].q_rad) > .15*kDeg2Rad) ||
+          last_intent_.has_los || last_intent_.has_world_elevation)));
     if (recovery_cycle) continue;  // never command from pre-recovery snapshots
     if (mixed_parking_handled) continue;  // mixed stop issued direct, topology-specific safe outputs above
     bool do_command = true;
@@ -2232,7 +2241,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                   std::clamp(last_intent_.velocity_scale, 0.0, 1.0));
           }
           if (last_decision_.action == SafetyAction::Derate) cap *= cfg_.derate_factor;
-          const double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+          double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+          // A leased jog carries an explicit velocity. Its measured-pose
+          // waypoint is bounded to prevent queued travel when blocked; its
+          // derivative must not replace the operator's requested velocity.
+          if (a == AxisId::Yaw && manual_out_.lease_active && last_intent_.source == MotionSource::Manual &&
+              last_intent_.live_at(now_ns) && !response_probe_until_ns_)
+            ff = i == ix(AxisId::Yaw) ? last_intent_.v_yaw_rad_s : last_intent_.v_pitch_rad_s;
           const control::BoundaryGovernor boundary{
               std::min(cfg_.a_brake_rad_s2,profile.maximum.acceleration),
               std::min(cfg_.j_brake_rad_s3,profile.maximum.jerk),.20,cfg_.stop_margin_rad};
@@ -2349,6 +2364,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       rec.pi_kp[i] = evidence.kp;
       rec.pi_ki[i] = evidence.ki;
       rec.current_cap[i] = evidence.current_cap;
+      rec.rx_velocity_20[i] = evidence.rx_velocity_20;
+      rec.rx_velocity_30[i] = evidence.rx_velocity_30;
+      rec.rx_velocity_40[i] = evidence.rx_velocity_40;
+      rec.velocity_window_ms[i] = evidence.velocity_window_ms;
+      rec.friction_a[i] = evidence.friction_a;
+      rec.friction_state[i] = evidence.friction_state;
+      rec.friction_exhausted[i] = evidence.friction_exhausted;
       rec.output_reason[i] = evidence.reason;
       rec.command_kind[i] = evidence.command_kind;
       rec.rx_seq[i] = sp[i].rx_seq;

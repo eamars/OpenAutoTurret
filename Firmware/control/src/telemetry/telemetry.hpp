@@ -618,6 +618,13 @@ struct ControlLogRecord {
   double pi_kp[kAxisCount] = {NAN, NAN};
   double pi_ki[kAxisCount] = {NAN, NAN};
   double current_cap[kAxisCount] = {NAN, NAN};
+  double rx_velocity_20[kAxisCount] = {NAN, NAN};
+  double rx_velocity_30[kAxisCount] = {NAN, NAN};
+  double rx_velocity_40[kAxisCount] = {NAN, NAN};
+  int velocity_window_ms[kAxisCount] = {};
+  double friction_a[kAxisCount] = {NAN, NAN};
+  int friction_state[kAxisCount] = {};
+  int friction_exhausted[kAxisCount] = {};
   int output_reason[kAxisCount] = {};
   int command_kind[kAxisCount] = {};
   uint64_t command_seq = 0;
@@ -972,6 +979,13 @@ class Telemetry {
           << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
           << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)
           << ",\"current_cap\":" << pair(r.current_cap)
+          << ",\"rx_velocity_20\":" << pair(r.rx_velocity_20)
+          << ",\"rx_velocity_30\":" << pair(r.rx_velocity_30)
+          << ",\"rx_velocity_40\":" << pair(r.rx_velocity_40)
+          << ",\"velocity_window_ms\":" << pairi(r.velocity_window_ms)
+          << ",\"friction_a\":" << pair(r.friction_a)
+          << ",\"friction_state\":" << pairi(r.friction_state)
+          << ",\"friction_exhausted\":" << pairi(r.friction_exhausted)
           << ",\"safety\":" << static_cast<int>(r.safety_action)
           << ",\"period_us\":" << r.cycle_duration_us << "}\n";
     }

@@ -16,6 +16,7 @@
 
 #include "can/gm6020_protocol.hpp"
 #include "can/gm6020_velocity.hpp"
+#include "can/gm6020_friction.hpp"
 #include "can/socketcan_bus.hpp"
 #include "can/yousee_transport.hpp"
 #include "can/cybergear_protocol.hpp"
@@ -466,4 +467,74 @@ TEST(Gm6020CurrentLoop, FreshLateCycleFreezesIntegralAndRecovers) {
   loop.reset(0, 1'000'000);
   EXPECT_DOUBLE_EQ(0, loop.update_amps(.1, 0, 102'000'000, .524, .8, 1, .6));
   EXPECT_FALSE(loop.valid());
+}
+
+TEST(Gm6020Friction, OneAttemptPerLeaseAndMovingHandoff) {
+  ota::gm6020::FrictionConfig cfg{true, .30, .35, .10, .12, .10, .01, .005, 2, 1.0};
+  ota::gm6020::YawFrictionCompensation friction;
+  auto out = friction.update(cfg, true, 1, 0, 0, 1, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+  EXPECT_DOUBLE_EQ(out.feedforward_target_a, .30);
+  EXPECT_TRUE(out.new_attempt);
+  // Renewing the same intent does not reinitialize the attempt; unique RX samples
+  // must establish displacement before the helper hands control back to PI.
+  out = friction.update(cfg, true, 1, -.011, 1, 2, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+  EXPECT_FALSE(out.new_attempt);
+  out = friction.update(cfg, true, 1, .011, 1, 3, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+  out = friction.update(cfg, true, 1, .012, 1, 4, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Moving);
+  EXPECT_TRUE(out.integral_handoff);
+  EXPECT_DOUBLE_EQ(out.feedforward_target_a, .10);
+  EXPECT_DOUBLE_EQ(out.previous_feedforward_a, .30);
+  EXPECT_DOUBLE_EQ(out.next_feedforward_a, .10);
+  out = friction.update(cfg, false, 0, .012, 1, 5, .005, .8);
+  EXPECT_TRUE(out.integral_handoff);
+  EXPECT_DOUBLE_EQ(out.previous_feedforward_a, .10);
+  EXPECT_DOUBLE_EQ(out.next_feedforward_a, 0);
+}
+
+TEST(Gm6020Friction, QuietHoldExhaustionAndReverseWaitAreBounded) {
+  ota::gm6020::FrictionConfig cfg{true, .3, .3, .1, .1, .010, .02, .005, 2, 2.0};
+  ota::gm6020::YawFrictionCompensation friction;
+  auto out = friction.update(cfg, false, 0, 0, 0, 1, .005, .8);
+  EXPECT_EQ(out.feedforward_target_a, 0);
+  out = friction.update(cfg, true, 1, 0, 0, 2, .005, .8);
+  for (int i = 0; i < 3; ++i) out = friction.update(cfg, true, 1, 0, 0, 3 + i, .005, .8);
+  EXPECT_TRUE(out.attempt_exhausted);
+  EXPECT_FALSE(out.attempt_active);
+  cfg.timeout_s = .1; // observe the reverse gate before its next attempt expires
+  out = friction.update(cfg, true, -1, 0, 0, 6, .005, .8);
+  EXPECT_TRUE(out.waiting_for_stationary);
+  out = friction.update(cfg, true, -1, 0, 0, 7, .005, .8);
+  out = friction.update(cfg, true, -1, 0, 0, 8, .005, .8);
+  EXPECT_FALSE(out.waiting_for_stationary);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+}
+
+TEST(Gm6020Friction, RejectsUnboundedOrNonFiniteCalibration) {
+  ota::gm6020::FrictionConfig cfg{true, NAN, .3, .1, .1, .1, .01, .005, 2, 1.0};
+  EXPECT_FALSE(cfg.valid(.8));
+  cfg.positive_breakaway_a = .9;
+  EXPECT_FALSE(cfg.valid(.8));
+}
+
+TEST(Gm6020Friction, OpposingVelocityWaitsAndZeroDirectionDoesNotRearm) {
+  ota::gm6020::FrictionConfig cfg{true, .3, .3, .1, .1, .1, .02, .005, 2, 2.0};
+  ota::gm6020::YawFrictionCompensation friction;
+  auto out = friction.update(cfg, true, 1, 0, -.05, 1, .005, .8);
+  EXPECT_TRUE(out.waiting_for_stationary);
+  EXPECT_FALSE(out.new_attempt);
+  out = friction.update(cfg, true, 1, 0, 0, 2, .005, .8);
+  EXPECT_TRUE(out.waiting_for_stationary);
+  out = friction.update(cfg, true, 1, 0, 0, 3, .005, .8);
+  EXPECT_TRUE(out.new_attempt);
+  out = friction.update(cfg, true, 1, 0, 0, 4, .005, .8);
+  EXPECT_FALSE(out.new_attempt);
+  out = friction.update(cfg, true, 0, 0, 0, 5, .005, .8);
+  EXPECT_TRUE(out.integral_handoff);
+  EXPECT_EQ(out.feedforward_target_a, 0);
+  out = friction.update(cfg, true, 1, 0, 0, 6, .005, .8);
+  EXPECT_FALSE(out.new_attempt);
 }

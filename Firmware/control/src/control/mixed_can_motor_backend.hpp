@@ -9,6 +9,7 @@
 #include "can/cybergear_system.hpp"
 #include "can/gm6020_protocol.hpp"
 #include "can/gm6020_velocity.hpp"
+#include "can/gm6020_rx_velocity.hpp"
 #include "can/socketcan_bus.hpp"
 #include "config/mixed_hardware_profile.hpp"
 #include "control/can_motor_backend.hpp"
@@ -161,6 +162,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override;
   void command_velocity(AxisId axis, double velocity_rad_s) override;
+  void set_motion_intent(AxisId axis, bool moving) override;
   void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;
@@ -201,6 +203,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   mutable std::mutex yaw_mutex_;
   gm6020::UnwrappedEncoder yaw_encoder_;
   gm6020::VelocityLoop yaw_velocity_loop_;
+  gm6020::RxVelocity yaw_rx_velocity_;
   YawState yaw_state_{};
   double yaw_origin_rad_{0};
   double yaw_position_target_rad_{0};
@@ -208,6 +211,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   double yaw_shaped_speed_rad_s_{0};
   bool yaw_position_mode_{false};
   bool yaw_speed_mode_{false};
+  bool yaw_moving_intent_{false};
   std::atomic<bool> opened_{false};
   std::atomic<bool> pitch_opened_{false};
   std::atomic<bool> pitch_enabled_owned_{false};

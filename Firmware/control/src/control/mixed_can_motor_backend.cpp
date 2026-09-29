@@ -161,9 +161,15 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
                  *profile_.yaw.command_frame_id, profile_.yaw.current_kp_a_per_rad_s,
                  profile_.yaw.current_ki_a_per_rad_s, profile_.yaw.host_current_limit_a,
                  static_cast<int>(profile_.pitch.control_mode), *profile_.pitch.current_limit_a);
+    spdlog::info("yaw estimator rx_window_ms={} (0=legacy 50 ms); friction enabled={} break_pos={} break_neg={} run_pos={} run_neg={} A timeout={} s slew={} A/s; source=mixed_hardware",
+        profile_.yaw.velocity_rx_window_ms, profile_.yaw.friction.enabled,
+        profile_.yaw.friction.positive_breakaway_a, profile_.yaw.friction.negative_breakaway_a,
+        profile_.yaw.friction.positive_run_a, profile_.yaw.friction.negative_run_a,
+        profile_.yaw.friction.timeout_s, profile_.yaw.friction.output_slew_a_per_s);
     {
       std::lock_guard lock(yaw_mutex_);
       yaw_encoder_.reset();
+      yaw_rx_velocity_.reset();
       yaw_state_ = YawState{};
       yaw_origin_rad_ = 0;
       yaw_position_target_rad_ = yaw_speed_target_rad_s_ = yaw_shaped_speed_rad_s_ = 0;
@@ -331,6 +337,8 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
                   (decoded.rx_ns - previous_rx_ns) / 1e6,
                   previous_count, decoded.angle_count, decoded.speed_rpm);
   yaw_state_.position_rad = yaw_encoder_.relative_rad() - yaw_origin_rad_;
+  if (yaw_state_.encoder_valid)
+    yaw_rx_velocity_.observe(yaw_encoder_.relative_rad(), decoded.rx_ns);
   ++yaw_state_.count;
   if (!yaw_reference_valid_.load() && yaw_encoder_.valid()) {
     // Provisional origin permits stationary assessment. The committed origin
@@ -498,6 +506,13 @@ MotorBackend::OutputEvidence MixedCanMotorBackend::output_evidence(AxisId axis) 
   result.kp = yaw_output_is_amperes() ? profile_.yaw.current_kp_a_per_rad_s : kYawVelocityKp;
   result.ki = yaw_output_is_amperes() ? profile_.yaw.current_ki_a_per_rad_s : kYawVelocityKi;
   result.current_cap = yaw_output_is_amperes() ? profile_.yaw.host_current_limit_a : NAN;
+  result.rx_velocity_20 = yaw_rx_velocity_.estimate(20);
+  result.rx_velocity_30 = yaw_rx_velocity_.estimate(30);
+  result.rx_velocity_40 = yaw_rx_velocity_.estimate(40);
+  result.velocity_window_ms = profile_.yaw.velocity_rx_window_ms;
+  result.friction_a = yaw_velocity_loop_.friction_output().feedforward_target_a;
+  result.friction_state = static_cast<int>(yaw_velocity_loop_.friction_output().state);
+  result.friction_exhausted = yaw_velocity_loop_.friction_output().attempt_exhausted;
   result.command_kind = yaw_output_is_amperes() ? 1 : 2;
   result.reason = yaw_output_reason_;
   return result;
@@ -865,7 +880,9 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
     const double amps = yaw_velocity_loop_.update_amps(
         yaw_shaped_speed_rad_s_, yaw_state_.position_rad, now, kYawSpeedCeilingRadS,
         profile_.yaw.host_current_limit_a, profile_.yaw.current_kp_a_per_rad_s,
-        profile_.yaw.current_ki_a_per_rad_s);
+        profile_.yaw.current_ki_a_per_rad_s,
+        profile_.yaw.velocity_rx_window_ms ? yaw_rx_velocity_.estimate(profile_.yaw.velocity_rx_window_ms) : NAN,
+        &profile_.yaw.friction, yaw_moving_intent_, yaw_state_.count);
     if (!yaw_velocity_loop_.valid()) {
       trip_yaw_locked("velocity_loop_invalid");
       return;
@@ -924,6 +941,12 @@ void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) 
   }
   yaw_speed_target_rad_s_ = std::clamp(velocity_rad_s, -kYawSpeedCeilingRadS, kYawSpeedCeilingRadS);
   command_yaw_velocity_locked(yaw_speed_target_rad_s_, now);
+}
+
+void MixedCanMotorBackend::set_motion_intent(AxisId axis, bool moving) {
+  if (axis != AxisId::Yaw) return;
+  std::lock_guard lock(yaw_mutex_);
+  yaw_moving_intent_ = moving;
 }
 
 void MixedCanMotorBackend::keepalive(AxisId axis) {

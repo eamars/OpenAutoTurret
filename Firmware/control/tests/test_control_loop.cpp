@@ -121,6 +121,8 @@ TEST(ControlLoopSim, ResponseProbeUsesContinuousYawReadinessAndRuntimeEnvelope) 
   ASSERT_TRUE(loop.position_ready()) << loop.fault_reason();
   ASSERT_EQ(loop.phase(), Phase::Hold);
   ASSERT_FALSE(loop.homed()) << "continuous yaw must not claim physical homing";
+  EXPECT_TRUE(sim->snapshot(AxisId::Yaw,t).in_speed_mode)
+      << "service yaw must consume the shared velocity feed-forward path";
   // This gate regression starts the measured plant in the interior after
   // endpoint homing; the simulated endpoint brake is not the probe subject.
   for (int i = 0; i < 1000; ++i) {
