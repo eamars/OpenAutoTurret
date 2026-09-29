@@ -25,6 +25,12 @@ import sys
 import time
 import datetime
 
+
+def uds_key(key):
+    """controld's frame names a couple of things differently from webd's merged state."""
+    return {"cmd_ack_safety_state": "safety_state", "cmd_ack_controller_state": "controller_state",
+            "manual_lease_ms": "manual_lease_remaining_ms", "phase": "phase"}.get(key, key)
+
 # name -> position in the trial command's colon-separated fields
 YAW_FIELDS = ["yaw.current_kp_a_per_rad_s", "yaw.current_ki_a_per_rad_s", "yaw.velocity_rx_window_ms",
               "yaw.friction.positive_breakaway_a", "yaw.friction.negative_breakaway_a",
@@ -116,21 +122,51 @@ class Station:
         return {"accepted": False, "reason": "no response from controld"}
 
     def state(self):
-        """The physical and safety picture, asked of the read surface that publishes it.
+        """The picture, from whichever document the running mode actually publishes.
 
-        The first two runs of this script asked the control socket for keys only /api/state publishes,
-        read back `None`, and reported that absence as a precondition failure. Facts come from the
-        document that carries them; the socket is for commands.
+        Measured 2026-09-30: normal `start` publishes /api/state (mode, safety, payload) but leaves
+        manual_commissioning false; `--commission-mixed-controller` arms the tuning gate and keeps
+        controld's UDS, but starts no web server, so /api/state does not exist. Asking one document for
+        a fact only the other carries produced two rounds of my own false BLOCKED lines, so the tool
+        asks both and records which one answered.
         """
         from urllib.request import urlopen
+        frame = {}
+        via = []
         try:
-            with urlopen(self.state_url, timeout=4) as response:
-                frame = json.loads(response.read().decode())
-        except Exception as error:                       # a station we cannot read is a blocked run
-            return {"_state_error": type(error).__name__}
-        return {key: frame.get(key) for key in TELEMETRY_KEYS}
+            with urlopen(self.state_url, timeout=3) as response:
+                web = json.loads(response.read().decode())
+            frame.update({key: web.get(key) for key in TELEMETRY_KEYS if web.get(key) is not None})
+            via.append("web")
+        except Exception:
+            pass
+        uds = self.telemetry_frame()
+        if uds:
+            for key in ("phase", "cmd_ack_safety_state", "cmd_ack_controller_state", "manual_lease_ms"):
+                if uds.get(uds_key(key)) is not None:
+                    frame.setdefault(key, uds[uds_key(key)])
+            via.append("controld-uds")
+        frame["_via"] = "+".join(via) or "nothing"
+        return frame
+
+    def telemetry_frame(self):
+        """One raw frame from controld's own socket, keys and all."""
+        s = self._sock()
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            try:
+                frame = json.loads(s.recv(65536).decode())
+            except socket.timeout:
+                return {}
+            if frame.get("type") == "telemetry":
+                return frame
+        return {}
 
     def telemetry(self):
+        frame = self.telemetry_frame()
+        return {key: frame.get(key, "?") for key in TELEMETRY_KEYS}
+
+    def legacy_telemetry(self):
         s = self._sock()
         deadline = time.time() + 4
         while time.time() < deadline:
@@ -208,8 +244,11 @@ def main():
         snapshot["blocked"].append(f"BLOCKED_phase_{state.get('phase')}")
     if str(state.get("operating_mode", "")).lower() != "manual":
         snapshot["blocked"].append(f"BLOCKED_mode_{state.get('operating_mode')}")
-    if str(state.get("safety_action", "")).lower() != "allow":
-        snapshot["blocked"].append(f"BLOCKED_safety_{state.get('safety_action')}")
+    safety = state.get("safety_action") or state.get("cmd_ack_safety_state")
+    if str(safety or "").lower() != "allow":
+        snapshot["blocked"].append(f"BLOCKED_safety_{safety}")
+    if state.get("_via") == "nothing":
+        snapshot["blocked"].append("BLOCKED_no_state_document")
     snapshot["identity_before"] = identity(station)
 
     def yaw_exchange(label, arg):
