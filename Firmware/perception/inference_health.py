@@ -23,8 +23,14 @@ INTERVAL_S = 1.0
 STALE_AFTER_S = 3.0          # three missed beats: a paused daemon must not look healthy
 
 
-def report(adapter: Any, *, now_ns: int) -> Dict[str, Any]:
-    """The adapter's self-report, stamped. Missing pieces stay missing rather than becoming zero."""
+def report(adapter: Any, *, now_ns: int, companions: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The adapter's self-report, stamped. Missing pieces stay missing rather than becoming zero.
+
+    ``companions`` is how a second camera joins the same document: a function, called every beat,
+    returning extra blocks (``cameras``, ``streams``, ``merge``). A function rather than a value
+    because the second adapter may not exist yet at the beat where the first one started publishing
+    -- and "not yet" must look like an absent key, never like a zero.
+    """
     described: Dict[str, Any] = {}
     describe = getattr(adapter, "describe", None)
     if callable(describe):
@@ -32,6 +38,14 @@ def report(adapter: Any, *, now_ns: int) -> Dict[str, Any]:
             described = dict(describe() or {})
         except Exception as exc:                                    # noqa: BLE001
             described = {"describe_failed": f"{type(exc).__name__}: {exc}"}
+    if callable(companions):
+        try:
+            for key, value in dict(companions() or {}).items():
+                described.setdefault(key, value)
+        except Exception as exc:                                    # noqa: BLE001
+            # A companion that throws says so inside the health document rather than stopping the
+            # primary's beat: the wide camera is still measurable, and that is the point of the file.
+            described["companions_failed"] = f"{type(exc).__name__}: {exc}"
     described["updated_ns"] = int(now_ns)
     described["pid"] = os.getpid()
     return described
@@ -40,8 +54,10 @@ def report(adapter: Any, *, now_ns: int) -> Dict[str, Any]:
 class HealthPublisher:
     """Writes the self-report every INTERVAL_S so the web layer never has to open the camera."""
 
-    def __init__(self, *, adapter: Any, path: str, sink: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(self, *, adapter: Any, path: str, sink: Optional[Callable[[str], None]] = None,
+                 companions: Optional[Callable[[], Dict[str, Any]]] = None) -> None:
         self.adapter = adapter
+        self.companions = companions
         self.path = str(path)
         self._sink = sink                       # tests inject a collector; production writes the file
         self._stop = threading.Event()
@@ -50,7 +66,8 @@ class HealthPublisher:
         self.last_error = ""
 
     def _write_once(self) -> None:
-        body = json.dumps(report(self.adapter, now_ns=time.time_ns()), sort_keys=True)
+        body = json.dumps(report(self.adapter, now_ns=time.time_ns(),
+                                 companions=self.companions), sort_keys=True)
         if self._sink is not None:
             self._sink(body)
         else:

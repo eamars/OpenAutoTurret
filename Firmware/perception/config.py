@@ -801,6 +801,11 @@ class SecondaryStreamConfig:
     frame_rate_hz: float = 30.0
     preview_fps: float = 10.0
     queue_depth: int = 1
+    #: The secondary camera's own inference leg. Zero means "preview only, no inference": the wide
+    #: camera keeps working alone, and the absence is the configuration, not a missing feature.
+    #: The width is what the Hailo artifact demands (640), the height is what the ISP will give.
+    lores_width: int = 0
+    lores_height: int = 0
     # Same mechanism and same legal values as the primary profile's `camera_orientation`: the
     # transform is applied at the sensor, so the preview, the neural network and any saved frame all
     # see one upright image. Only the value is per role -- which sensor is mounted upside down is a
@@ -810,7 +815,8 @@ class SecondaryStreamConfig:
     def to_dict(self) -> Dict[str, Any]:
         return {"model": self.model, "width": self.width, "height": self.height,
                 "frame_rate_hz": self.frame_rate_hz, "preview_fps": self.preview_fps,
-                "queue_depth": self.queue_depth, "orientation": self.orientation}
+                "queue_depth": self.queue_depth, "orientation": self.orientation,
+                "lores_width": self.lores_width, "lores_height": self.lores_height}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "SecondaryStreamConfig":
@@ -822,6 +828,8 @@ class SecondaryStreamConfig:
             frame_rate_hz=_as_float(data.get("frame_rate_hz"), "secondary.frame_rate_hz", 30.0),
             preview_fps=_as_float(data.get("preview_fps"), "secondary.preview_fps", 10.0),
             queue_depth=_as_int(data.get("queue_depth", 1), "secondary.queue_depth", 0),
+            lores_width=_as_int(data.get("lores_width", 0), "secondary.lores_width", 0),
+            lores_height=_as_int(data.get("lores_height", 0), "secondary.lores_height", 0),
             orientation=str(data.get("orientation") or "none").strip().lower())
 
 
@@ -913,6 +921,12 @@ class VisionConfig:
     record: RecordConfig = field(default_factory=RecordConfig)
     #: §40's per-stage timing window (samples retained for p50/p95/p99).
     timing_window: int = 512
+    #: How stale a camera's newest TrackSet may be and still join the merged document. A box from a
+    #: camera that has not produced anything for longer than this is a memory, not a sighting, and
+    #: the control loop would turn toward it. Measured in the merged document's own clock (§19's
+    #: publication clock), and a dropped contribution is named in ``stale_sources`` rather than
+    #: silently missing.
+    merge_max_age_ms: float = 150.0
     #: Where the file came from, so an error message can name it.
     source_path: str = ""
 
@@ -952,6 +966,7 @@ class VisionConfig:
             selection=SelectionConfig.from_dict(root.get("selection")),
             record=RecordConfig.from_dict(root.get("record")),
             timing_window=_as_int(root.get("timing_window"), "timing_window", 512),
+            merge_max_age_ms=_as_float(root.get("merge_max_age_ms"), "merge_max_age_ms", 150.0),
             source_path=source_path)
 
     @classmethod
@@ -997,6 +1012,7 @@ class VisionConfig:
             "selection": self.selection.to_dict(),
             "record": self.record.to_dict(),
             "timing_window": self.timing_window,
+            "merge_max_age_ms": float(self.merge_max_age_ms),
         }}
 
     # -- validation ---------------------------------------------------------

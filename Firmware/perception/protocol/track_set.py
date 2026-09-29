@@ -103,6 +103,10 @@ class TrackSet:
     #: Set on a merged TrackSet: every camera whose tracks are inside, and the only honest way for
     #: a consumer to learn that one document describes two optics.
     source_cameras: Tuple[str, ...] = ()
+    #: Cameras that had something to say and were not believed, because their newest document was
+    #: older than the merge's freshness budget. Listed, not hidden: "one camera stopped contributing"
+    #: and "one camera sees nobody" must not arrive at the same document.
+    stale_sources: Tuple[str, ...] = ()
     model_id: str = ""
     model_generation: int = 0
     tracks: List[Track] = field(default_factory=list)
@@ -196,6 +200,8 @@ class TrackSet:
             "counters": self.counters.to_dict(),
             "events": list(self.events),
         }
+        if self.stale_sources:
+            out["stale_sources"] = list(self.stale_sources)
         if self.source_cameras:
             # Absent unless this document really describes more than one optic: a consumer that
             # branches on it should not have to know that an empty list is the common case.
@@ -215,6 +221,7 @@ class TrackSet:
             stream_height=int(data.get("stream_height", 0)),
             camera_id=str(data.get("camera_id", "")),
             source_cameras=tuple(str(c) for c in data.get("source_cameras") or ()),
+            stale_sources=tuple(str(c) for c in data.get("stale_sources") or ()),
 
             model_id=str(data.get("model_id", "")),
             model_generation=int(data.get("model_generation", 0)),

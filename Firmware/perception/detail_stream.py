@@ -5,11 +5,12 @@ Why this file exists instead of a loop inside ``_run_camera``: the station's pro
 only thing that should change is the role table. So the second sensor gets an owner of its own, a
 bounded latest-only buffer of its own, and a failure that stays its own.
 
-What this module deliberately does **not** do yet: run inference. Today's visiond profile feeds the
-detector from the *main* stream of the camera it opened first. Feeding `detail` into the same Hailo
-needs the shared-inference scheduler, and that belongs with the pipeline, not bolted onto a capture
-thread — see ``docs/ADR-001/DUAL_STREAM_DISPLAY_WORK_ORDER.md`` §Slice 3 的 3C. Publishing a real
-preview stream now is honest; claiming dual inference before the scheduler exists would not be.
+Inference is optional and it is now possible: when the role is configured with its own ``lores`` leg,
+the frame carries ``inference_image`` and the daemon may run a second pipeline on it (see
+``docs/ADR-001/DUAL_STREAM_DISPLAY_WORK_ORDER.md`` §H5). What is still deliberately *not* done here:
+this file does not own a second inference backend, a tracker, or a merge. It owns one sensor, one
+bounded latest-only buffer, and one preview — and a ``pipeline_factory`` is what lets the daemon
+decide what inference means, so a capture thread never grows a scheduler.
 """
 from __future__ import annotations
 
@@ -40,6 +41,12 @@ class DetailFrame:
     sensor_timestamp_ns: Optional[int]
     image: Any
     metadata: dict
+    #: This camera's own inference leg, or ``None`` when the role is preview-only. It is a separate
+    #: field and not "the smaller image" because the two have different lifetimes inside one
+    #: capture request: both come out of the same request, and neither may be resized by hand --
+    #: the whole point of the ISP leg is that the scaling happened in the sensor, not on the host.
+    inference_image: Any = None
+    inference_size: Tuple[int, int] = (0, 0)
 
 
 class SecondaryCameraStream:

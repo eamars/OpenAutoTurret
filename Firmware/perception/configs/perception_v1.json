@@ -280,7 +280,11 @@
       "height": 720,
       "frame_rate_hz": 30.0,
       "preview_fps": 10.0,
-      "orientation": "rotate_180"
-    }
+      "queue_depth": 2,
+      "orientation": "rotate_180",
+      "lores_width": 640,
+      "lores_height": 360
+    },
+    "merge_max_age_ms": 150.0
   }
 }

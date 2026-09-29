@@ -132,6 +132,7 @@ class HailoYoloAdapter(ModelAdapter):
         if not self.opened or self._infer is None:
             raise ModelRejected("HailoYoloAdapter.infer() before open()")
         self.check_camera(camera_id)
+        self.note_inference()
         frame = np.asarray(image)
         # The guard compares the frame against the leg this adapter was *configured* for, and the
         # vertical pad is computed from the frame. A literal 640x480 here was left over from the

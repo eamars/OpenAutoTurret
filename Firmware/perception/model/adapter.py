@@ -48,6 +48,12 @@ class ModelAdapter:
         #: camera, and checked on every frame: with two sensors feeding one Hailo, an adapter that
         #: cannot say whose pixels it just ate cannot be blamed when a box lands in the wrong FOV.
         self.camera_id = ""
+        #: Measured inference rate over the last complete window of at least one second. ``None``
+        #: until a window has closed: a fresh adapter is not running at 0 Hz, it has not been
+        #: observed long enough, and publishing 0.0 would make "just started" look like "stalled".
+        self._last_fps: Optional[float] = None
+        self._fps_count = 0
+        self._fps_started_ns = 0
         #: Stage timings only the adapter can see (§40). Empty until the first inference: the
         #: pipeline records what exists and says what is missing, rather than inventing zeros.
         self.last_timings_ms: Dict[str, float] = {}
@@ -124,6 +130,24 @@ class ModelAdapter:
             raise ConfigError(f"adapter for camera {self.camera_id} cannot also serve {wanted}")
         self.camera_id = wanted
 
+    def note_inference(self) -> None:
+        """Count one completed inference toward the rate this adapter publishes about itself.
+
+        Each camera's adapter measures its own rate, because "both feeds are at 30 fps" is a claim
+        per feed: one shared counter would average a stalled camera and a healthy one into a number
+        that describes neither -- and fairness between the two is exactly what the dual feed has to
+        be judged on.
+        """
+        now = time.monotonic_ns()
+        if not self._fps_started_ns:
+            self._fps_started_ns = now
+            return
+        self._fps_count += 1
+        elapsed = now - self._fps_started_ns
+        if elapsed >= 1_000_000_000:
+            self._last_fps = round(self._fps_count * 1_000_000_000.0 / elapsed, 2)
+            self._fps_count, self._fps_started_ns = 0, now
+
     def check_camera(self, camera_id: str) -> None:
         """Refuse a frame whose camera is not the one this adapter was bound to."""
         if not self.camera_id:
@@ -156,16 +180,23 @@ class ModelAdapter:
 
     # -- reporting ----------------------------------------------------------
     def describe(self) -> Dict[str, Any]:
-        return {"adapter": self.name, "model_id": self.manifest.model_id,
-                "model_generation": int(self.generation),
-                "task": self.manifest.task, "camera_id": self.camera_id,
-                "input_size": [self.manifest.input_width, self.manifest.input_height],
-                "postprocess": self.manifest.postprocess,
-                "stream": list(self._stream), "opened": bool(self.opened),
-                "inferences": int(self.inferences), "failures": int(self.failures),
-                "detections_raw": int(self.detections_raw),
-                "detections_emitted": int(self.detections_emitted),
-                "detections_pad_dropped": int(self.detections_pad_dropped)}
+        out: Dict[str, Any] = {
+            "adapter": self.name, "model_id": self.manifest.model_id,
+            "model_generation": int(self.generation),
+            "task": self.manifest.task, "camera_id": self.camera_id,
+            "input_size": [self.manifest.input_width, self.manifest.input_height],
+            "postprocess": self.manifest.postprocess,
+            "stream": list(self._stream), "declared": list(self.declared_stream),
+            "opened": bool(self.opened),
+            "inferences": int(self.inferences), "failures": int(self.failures),
+            "detections_raw": int(self.detections_raw),
+            "detections_emitted": int(self.detections_emitted),
+            "detections_pad_dropped": int(self.detections_pad_dropped)}
+        if self._last_fps is not None:
+            # Absent, not zero, until one whole window has closed: a freshly opened adapter has not
+            # been observed long enough to have a rate, and 0.0 would read as a stalled feed.
+            out["inference_fps"] = float(self._last_fps)
+        return out
 
     def _rows_to_set(self, rows: Sequence[Sequence[float]], *, frame_sequence: int,
                      sensor_timestamp_ns: int, publish_timestamp_ns: int,
@@ -244,6 +275,7 @@ class MockAdapter(ModelAdapter):
         if not self.opened:
             raise ModelRejected("MockAdapter.infer() before open()")
         self.check_camera(camera_id)
+        self.note_inference()
         self.requested_frames.append(int(frame_sequence))
         self.inferences += 1
         return self._rows_to_set(self.rows_for(int(frame_sequence)),

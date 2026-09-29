@@ -314,3 +314,20 @@ webd **279 passed / 1 skipped**、doc-tree 绿、arch_lint 无新红、`camera_r
 所以 H5 的汇流带一条闸：**超过 `merge_max_age_ns` 的贡献不参与合并**，并且被丢掉的那一路要写进合并文档
 （`stale_sources: [camera_id]`）——丢掉是要被看见的，不是悄悄少了一路。阈值取自配置（AGENTS 规矩①），
 不写在函数体里。**没测过的延迟不许当健康**，这一条与 §40 "unmeasured 不等于 0" 同源。
+
+### H5（round 13）：窄角开自己的 640×360 腿，第二条 pipeline 在同一个 Hailo 上跑
+
+**代码事实**（等站上读数才算数，这一节只写"做了什么"）：
+
+- `secondary` 节进文档：`imx477 / 1280x720 main / 640x360 lores / depth 2 / rotate_180`——**缩放仍然落在
+  ISP 侧**，主机不 resize；`orientation` 与广角同一套机制（两颗都是倒装的，理由写在 config 注释里）。
+- `DetailFrame` 带 `inference_image`/`inference_size`：两条腿来自**同一次 capture request**，都 copy。
+- 第二个 `HailoYoloAdapter`（`bind_camera(detail_id)`）+ 第二个 `PerceptionPipeline`（独立 EventLog）
+  + `CameraWorker`（`camera_worker.py` 里本来就有的生命周期），从 `SecondaryCameraStream.latest()` 取
+  **最新一帧**（depth 2 / latest-wins）。
+- **单发布器**：广角循环仍是唯一发布者，经 `MergedTrackSetView` 发**合并文档**；`_publish_wire` 仍只发
+  广角那一份——controld 的头里至今没有摄像头字段（v3 才有），把合并集发给它会让窄角的框指挥炮管。
+  这句话在启动日志里也说了，不是只在文档里。
+- 汇流画布 = 发布的画面（广角的 1920×1080）；窄角 TrackSet 也声明它，所以合并文档只声明一个几何。
+- `describe()` 现在每路各自带 `stream`（腿尺寸）、`declared`、`inference_fps`（自测，窗口 ≥1 s，
+  **没测够就不出现这个键**，不写 0）；`inference_health.json` 多 `cameras`/`detail_stream`/`merge` 三块。

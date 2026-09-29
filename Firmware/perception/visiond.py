@@ -402,8 +402,16 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         health_path = (os.environ.get("OTA_INFERENCE_HEALTH", "").strip()
                        or (os.path.dirname(os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip())
                            + "/inference_health.json"))
+        # The second camera's adapter does not exist yet at this line -- it is created once its own
+        # sensor has opened -- so the health beat asks a function for its companions every second.
+        # An absent key then means "there is no second leg in this boot", which is a different claim
+        # from a key that says 0 Hz, and the difference is the whole point of publishing this file.
+        health_extras: Dict[str, Any] = {"fn": None}
         if health_path.strip("/"):
-            adapter_health = HealthPublisher(adapter=adapter, path=health_path).start()
+            adapter_health = HealthPublisher(
+                adapter=adapter, path=health_path,
+                companions=lambda: (health_extras["fn"]() if callable(health_extras["fn"]) else {})
+            ).start()
             print(f"visiond: publishing inference health to {health_path}", file=sys.stderr)
     except ConfigError as exc:
         print(f"visiond: {exc}", file=sys.stderr)
@@ -485,11 +493,52 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         pipeline.start()
         primary_ident = resolve_durable_id(str(info.get("device_path")
                                               or f"/dev/video{info.get('camera_num', '?')}"))
-        detail = _start_detail_stream(primary_ident=primary_ident,
+        merge_view = None
+        if lores is not None and (int(config.secondary.lores_width or 0) > 0):
+            from .tracking.camera_registry import MergedTrackSetView
+            # The canvas is the picture the station publishes -- not either camera's own stream
+            # size. Both TrackSets declare it, so the merged document states one geometry and every
+            # box inside it is a fraction of a full-frame view of its own optics.
+            merge_canvas = (int(stream[0]), int(stream[1]))
+            merge_view = MergedTrackSetView(
+                max_age_ns=int(float(config.merge_max_age_ms) * 1_000_000))
+
+            def detail_factory(camera_id, _config=config, _manifest=manifest,
+                               _events=None):
+                from .model import build_adapter as _build
+                second = _build(_config, manifest=_manifest)
+                second_events = EventLog(capacity=256)
+                second_pipeline = PerceptionPipeline(
+                    _config, adapter=second, event_log=second_events,
+                    session_uuid=args.session_uuid or "", orientation='none')
+                return second_pipeline, second
+
+            detail = _start_detail_stream(primary_ident=primary_ident,
+                                          secondary=config.secondary,
+                                          pipeline_factory=detail_factory,
+                                          merge_view=merge_view,
+                                          merge_canvas=merge_canvas)
+            if detail is not None and detail.get("adapter") is not None:
+                def _health_companions(_a=adapter, _d=detail["adapter"],
+                                       _stream=detail["stream"], _view=merge_view):
+                    report = {"cameras": {str(_a.camera_id or "unbound"): _a.describe(),
+                                          str(_d.camera_id): _d.describe()},
+                              "detail_stream": _stream.stats()}
+                    if _view is not None:
+                        report["merge"] = {
+                            "max_age_ms": _view.max_age_ns / 1e6,
+                            "per_camera": _view.stats(), "offers": _view.offers,
+                            "dropped_stale": _view.dropped_stale,
+                            "refusals": _view.refusals, "last_refusal": _view.last_refusal}
+                    return report
+                health_extras["fn"] = _health_companions
+        else:
+            detail = _start_detail_stream(primary_ident=primary_ident,
                                           secondary=config.secondary)
         try:
             return _run_camera(args, pipeline, adapter, camera, info,
-                            wire_publisher=wire_publisher, preview=preview_worker)
+                            wire_publisher=wire_publisher, preview=preview_worker,
+                            merge_view=merge_view)
         finally:
             _stop_detail_stream(detail)
     except ModelRejected as exc:
@@ -644,7 +693,8 @@ class _StreamAnnouncer:
 DETAIL_STREAM_ENV = "OTA_VISION_DETAIL_SENSOR"
 
 
-def _start_detail_stream(*, primary_ident=None, secondary=None):
+def _start_detail_stream(*, primary_ident=None, secondary=None, pipeline_factory=None,
+                         merge_view=None, merge_canvas=None):
     """Open the secondary sensor as a *preview-only* stream, if the launcher asked for one.
 
     The switch names a **sensor model**, not an index: ``/dev/videoN`` is a lease for this boot.
@@ -665,6 +715,9 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
         return None
     width = int(getattr(secondary, "width", 1280) or 1280)
     height = int(getattr(secondary, "height", 720) or 720)
+    lores_w = int(getattr(secondary, "lores_width", 0) or 0)
+    lores_h = int(getattr(secondary, "lores_height", 0) or 0)
+    lores = (lores_w, lores_h) if lores_w > 0 and lores_h > 0 else None
     rate = float(getattr(secondary, "frame_rate_hz", 30.0) or 30.0)
     preview_fps = float(getattr(secondary, "preview_fps", 10.0) or 10.0)
     queue_depth = max(1, int(getattr(secondary, "queue_depth", 1) or 1))
@@ -686,7 +739,8 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
                   "(legal: none, rotate_180, flip_horizontal, flip_vertical)", file=sys.stderr)
             want = "none"
         picam2, info = open_picamera2_sensor(model, stream_size=(width, height),
-                                             frame_rate_hz=rate, orientation=want)
+                                             frame_rate_hz=rate, orientation=want,
+                                             lores_size=lores)
     except Exception as exc:                                                  # noqa: BLE001
         # The wide camera is already open and serving: a secondary sensor that will not open is
         # one stream down, said out loud, not a daemon that takes the station's video with it.
@@ -715,6 +769,10 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
             pass
         return None
     stream_size = (int(info["stream_size"][0]), int(info["stream_size"][1]))
+    # Where this camera's boxes will be declared. With a merge, that is the published canvas --
+    # normally the primary's picture -- because the merged document states exactly one geometry.
+    # Without a merge, a camera declares its own picture, which is what a preview-only role does.
+    merge_canvas = ((int(merge_canvas[0]), int(merge_canvas[1])) if merge_canvas else stream_size)
     print(f"visiond: secondary stream {model} node /dev/video{info['camera_num']} identity "
           f"{ident.id} source={ident.source} orientation={want!r} durable={ident.durable} "
           f"{stream_size[0]}x{stream_size[1]}", file=sys.stderr)
@@ -732,6 +790,10 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
         request = picam2.capture_request()
         try:
             image = request.make_array("main").copy()      # the buffer dies with the request
+            # The leg is copied for the same reason the main stream is: both arrays belong to the
+            # request being released below, and an adapter that reads the buffer afterwards reads
+            # whatever the next frame put there.
+            leg = (request.make_array("lores").copy() if lores is not None else None)
             metadata = dict(request.get_metadata())   # 名字里带下划线：getmetadata() 不存在
         finally:
             request.release()
@@ -742,23 +804,62 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
                                                "frame_sequence": sequence})
         return DetailFrame(camera_id=ident.id, frame_sequence=sequence,
                            sensor_timestamp_ns=None if stamp is None else int(stamp),
-                           image=image, metadata=metadata)
+                           image=image, metadata=metadata,
+                           inference_image=leg,
+                           inference_size=(lores or stream_size))
 
     stream = SecondaryCameraStream(role="detail", ident=ident, poll=poll,
                                    queue_depth=queue_depth)
     stream.start()
+    detail_pipeline = detail_adapter = detail_worker = None
+    if pipeline_factory is not None and merge_view is not None:
+        # A second pipeline over the same profile: its own adapter (one adapter, one camera), its
+        # own event log (one camera's bad day stays its own), and no publisher of its own -- the
+        # wide camera's loop is the single publisher, so a document appears at one cadence and not
+        # at whichever camera got there first.
+        from .camera_worker import CameraWorker
+        detail_pipeline, detail_adapter = pipeline_factory(ident.id)
+        detail_adapter.bind_camera(ident.id)
+        detail_adapter.configure_stream(*(lores or stream_size), declared=merge_canvas)
+        detail_adapter.open()
+        detail_pipeline.start()
+
+        def infer_step():
+            frame = stream.latest(timeout_s=0.2)
+            if frame is None:
+                return None                      # no frame yet: the worker keeps waiting, alive
+            if frame.inference_image is None:
+                return None
+            outcome = detail_pipeline.process_frame(
+                frame.inference_image, frame.metadata,
+                frame_sequence=frame.frame_sequence,
+                sensor_timestamp_ns=frame.sensor_timestamp_ns or 0,
+                camera_id=ident.id)
+            if outcome.track_set is not None:
+                merge_view.offer(outcome.track_set)
+            return outcome
+
+        detail_worker = CameraWorker(ident, infer_step)
+        detail_worker.start()
+        print(f"visiond: detail inference on {ident.id} leg "
+              f"{(lores or stream_size)[0]}x{(lores or stream_size)[1]} declared "
+              f"{merge_canvas[0]}x{merge_canvas[1]}", file=sys.stderr)
     announcer = None
     if manifest_path:
         announcer = DetailStreamAnnouncer(path=manifest_path, stream=stream, preview=preview,
                                           size=stream_size)
         announcer.start()
-    return {"picam2": picam2, "stream": stream, "preview": preview, "announcer": announcer}
+    return {"picam2": picam2, "stream": stream, "preview": preview, "announcer": announcer,
+            "pipeline": detail_pipeline, "adapter": detail_adapter, "worker": detail_worker}
 
 
 def _stop_detail_stream(detail) -> None:
     if not detail:
         return
-    for key in ("announcer", "stream", "preview"):
+    # The worker first, then the pipeline it was feeding, then the stream that fed it: stopping in
+    # the other order lets a step hand a frame to a pipeline that is already closed, which is a
+    # counted error nobody asked for.
+    for key in ("worker", "pipeline", "announcer", "stream", "preview"):
         part = detail.get(key)
         if part is not None:
             part.stop()
@@ -773,7 +874,8 @@ def _stop_detail_stream(detail) -> None:
 def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter: Any,
                 camera: CameraOwner, info: Dict[str, Any],
                 wire_publisher: Optional[SocketPublisher] = None,
-                preview: Optional[JpegPreviewWorker] = None) -> int:
+                preview: Optional[JpegPreviewWorker] = None,
+                merge_view: Optional[Any] = None) -> int:
     # WP3: the owner announces which camera it owns, and how durable that claim is. This is the
     # layer where ownership lives -- carrying it into controld needs a v3 wire-schema bump (the
     # perception report is a typed structure, not a dict), which belongs to the dual-worker cut
@@ -801,6 +903,24 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             print(f"visiond: the inference adapter would not bind to camera {_ident.id}: "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr)
             raise
+    # One publisher for the whole station: the document on disk is the merge, while the control
+    # layer keeps receiving *this* camera's set. That asymmetry is deliberate and it is said out
+    # loud below -- controld's wire header has no camera field until v3, so handing it a merged set
+    # would make a box from the narrow optic aim the turret as if it came from the wide one.
+    publish_hook = None
+    if merge_view is not None and pipeline.publisher is not None:
+        def publish_hook(track_set, observation, _view=merge_view, _pub=pipeline.publisher,
+                         _pipeline=pipeline):
+            _view.offer(track_set)
+            document = _view.merge() or track_set
+            _pub.publish(document, observation)
+            if isinstance(_pub, LatestJsonPublisher):
+                _pipeline.counters.documents_enqueued += 1
+            else:
+                _pipeline.counters.documents_written += 1
+        print("visiond: publishing the merged TrackSet to the document path; the control wire "
+              "carries only this camera's set until the wire carries camera attribution (v3)",
+              file=sys.stderr)
     camera.start()
     # (b): visiond owns the physical sensor, so visiond is also the only process allowed to say
     # which named stream came out of it. The manifest is what webd reads instead of a filename it
@@ -827,7 +947,8 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
                                              frame_sequence=frame.frame_sequence,
                                              sensor_timestamp_ns=frame.sensor_timestamp_ns,
                                              camera_id=_ident.id,
-                                             capture_started_ns=frame.metadata_receive_ns)
+                                             capture_started_ns=frame.metadata_receive_ns,
+                                             publish=publish_hook)
             delivered += 1
             if tensor_probe is not None:
                 tensor_probe.offer(frame, outcome)

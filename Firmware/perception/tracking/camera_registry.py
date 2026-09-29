@@ -19,6 +19,7 @@ Two behaviours are deliberate and should not be "optimised" away:
 from __future__ import annotations
 
 import copy
+import time
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
 
@@ -92,7 +93,71 @@ class CameraTrackRegistry:
         return {key: tracker.snapshot() for key, tracker in self._trackers.items()}
 
 
-def merge_track_sets(sets):
+class MergedTrackSetView:
+    """The newest TrackSet from each camera, merged on demand with a freshness budget.
+
+    The wide camera's loop is the only publisher, so a document appears at the wide camera's cadence
+    and each camera's contribution is whatever it last said. That is the honest shape of a two-camera
+    system with one publisher -- but it needs two rules, both enforced here:
+
+    * a contribution is only believed while it is young (``max_age_ns``), and a dropped one is named;
+    * ``merge()`` never returns ``None`` after the first offer. "There is no document yet" and
+      "this document is empty" are different claims, and the caller has to be able to tell them apart.
+    """
+
+    def __init__(self, *, max_age_ns: int,
+                 clock: Callable[[], int] = time.monotonic_ns) -> None:
+        if int(max_age_ns) <= 0:
+            raise ValueError("a merge with no freshness budget would happily publish a box from "
+                             "whenever the camera last felt like speaking")
+        self.max_age_ns = int(max_age_ns)
+        self._clock = clock
+        self._latest: Dict[str, Any] = {}
+        self.offers = 0
+        self.dropped_stale = 0
+        self.refusals = 0
+        self.last_refusal = ""
+
+    def offer(self, track_set: Any) -> bool:
+        """Take one camera's newest document. An unattributed one is refused by name."""
+        from ..errors import ValidationError
+        cid = str(getattr(track_set, "camera_id", "") or "")
+        if not cid:
+            self.refusals += 1
+            self.last_refusal = "a TrackSet reached the merge view without a camera_id"
+            return False
+        self._latest[cid] = track_set
+        self.offers += 1
+        return True
+
+    def merge(self):
+        """The merged document, or ``None`` while nobody has spoken yet."""
+        from ..errors import ValidationError
+        if not self._latest:
+            return None
+        try:
+            merged = merge_track_sets(list(self._latest.values()), max_age_ns=self.max_age_ns,
+                                      now_ns=int(self._clock()))
+        except ValidationError as exc:
+            # The view must not end the publisher's frame over a stale set: the frame that could
+            # not be merged is reported, counted, and the previous document simply stays published.
+            self.refusals += 1
+            self.last_refusal = f"{type(exc).__name__}: {exc}"
+            self.dropped_stale += 1
+            return None
+        self.dropped_stale += len(merged.stale_sources)
+        return merged
+
+    def stats(self) -> Dict[str, Dict[str, Any]]:
+        now = int(self._clock())
+        return {cid: {"age_ms": round((now - int(s.publish_timestamp_ns)) / 1e6, 3),
+                      "tracks": len(s.tracks),
+                      "stale": (now - int(s.publish_timestamp_ns)) > self.max_age_ns}
+                for cid, s in self._latest.items()}
+
+
+def merge_track_sets(sets, *, max_age_ns: Optional[int] = None,
+                     now_ns: Optional[int] = None):
     """One document out of several cameras' TrackSets, with the refusals written down.
 
     Merging is a *union of measurements*, not a reconciliation: each tracker owns its own ids and
@@ -118,6 +183,24 @@ def merge_track_sets(sets):
     if not given:
         raise ValidationError("merge_track_sets([]) would publish an empty set that means "
                               "'nothing was measured', which is not the same claim")
+    stale_sources: Tuple[str, ...] = ()
+    if max_age_ns is not None:
+        # A camera that has not published inside the budget is not silent because the room is
+        # empty; it is silent because it is not there any more. Its boxes are a memory, and a
+        # memory in a live document makes the control loop turn toward something nobody is
+        # measuring. So: dropped from the tracks, and named, so "stopped contributing" never
+        # reads as "sees nobody".
+        now = int(now_ns if now_ns is not None else time.monotonic_ns())
+        fresh, stale = [], []
+        for s in given:
+            age = now - int(s.publish_timestamp_ns)
+            (fresh if age <= int(max_age_ns) else stale).append(s)
+        if not fresh:
+            raise ValidationError(
+                f"every camera's newest TrackSet was older than {int(max_age_ns)} ns "
+                f"(oldest ages: {sorted(now - int(s.publish_timestamp_ns) for s in given)}); "
+                "publishing an all-stale merge would claim a picture nobody has taken")
+        given, stale_sources = fresh, tuple(sorted(str(s.camera_id) for s in stale))
     seen = {}
     for s in given:
         cid = str(getattr(s, "camera_id", "") or "")
@@ -152,6 +235,7 @@ def merge_track_sets(sets):
             t.camera_id = s.camera_id
     merged.camera_id = ""
     merged.source_cameras = tuple(sorted(seen))
+    merged.stale_sources = stale_sources
     total = {}
     for s in given:
         for key, value in s.counters.to_dict().items():
@@ -279,6 +363,46 @@ def selftest() -> int:
                    refused(lambda: [wide_set, made(detail.id, ("w1",))], "cannot hold")))
     checks.append(("merging nothing is a refusal, not an empty set",
                    refused(lambda: [], "nothing was measured")))
+
+    # -- the freshness gate: a memory is not a sighting ---------------------
+    clock = {"now": 1_000_000_000_000}
+    fresh_set = made(wide.id, ("w1",), publish=999_999_000_000)
+    old_set = made(detail.id, ("d1",), publish=999_000_000_000)      # 1000 ms old
+    gated = merge_track_sets([fresh_set, old_set], max_age_ns=150_000_000, now_ns=clock["now"])
+    checks.append(("a stale contribution is left out of the tracks",
+                   [t.track_uuid for t in gated.tracks] == ["w1"]))
+    checks.append(("but it is named as stale, not silently missing",
+                   gated.stale_sources == (detail.id,)))
+    checks.append(("a merge where nothing is fresh is refused with the ages",
+                   refused(lambda: merge_track_sets([old_set], max_age_ns=1_000_000,
+                                                    now_ns=clock["now"]),
+                           "every camera's newest TrackSet was older")))
+
+    view = MergedTrackSetView(max_age_ns=150_000_000, clock=lambda: clock["now"])
+    checks.append(("the view says 'no document yet' instead of publishing an empty one",
+                   view.merge() is None))
+    checks.append(("an unattributed set is refused by the view and counted",
+                   not view.offer(TrackSet(stream_width=1920, stream_height=1080))
+                   and view.refusals == 1 and "camera_id" in view.last_refusal))
+    view.offer(made(wide.id, ("w1", "w2"), publish=clock["now"]))
+    view.offer(made(detail.id, ("d1",), publish=clock["now"]))
+    both = view.merge()
+    checks.append(("while both are young, the view merges both",
+                   sorted(t.track_uuid for t in both.tracks) == ["d1", "w1", "w2"]))
+    clock["now"] += 400_000_000                            # only the wide camera keeps talking
+    view.offer(made(wide.id, ("w1", "w2"), publish=clock["now"]))
+    aged = view.merge()
+    checks.append(("when one camera falls silent, the next merge drops it and says so",
+                   [t.track_uuid for t in aged.tracks] == ["w1", "w2"]
+                   and aged.stale_sources == (detail.id,)))
+    checks.append(("the drop is counted where the operator can be pointed to it",
+                   view.dropped_stale == 1 and view.stats()[detail.id]["stale"]))
+    try:
+        MergedTrackSetView(max_age_ns=0)
+    except ValueError:
+        checks.append(("a merge with no freshness budget is a refusal at construction", True))
+    else:
+        checks.append(("a merge with no freshness budget is a refusal at construction", False))
 
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:

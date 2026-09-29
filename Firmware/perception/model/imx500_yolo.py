@@ -204,6 +204,7 @@ class Imx500YoloAdapter(ModelAdapter):
         if not self.opened or self.device is None:
             raise ModelRejected("Imx500YoloAdapter.infer() before open()")
         self.check_camera(camera_id)
+        self.note_inference()
         if metadata is None:
             self.failures += 1
             raise ModelRejected(
