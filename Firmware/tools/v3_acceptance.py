@@ -48,7 +48,11 @@ import urllib.request
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_DOC = (
-    REPO_ROOT / "Firmware" / "docs" / "open_auto_turret_v3_three_mode_target_tracking_architecture.md"
+    # The document the ledger checks items against; it was filed into the archive when the plan it
+    # describes was implemented (da0dc6d), so the tool follows it there rather than dying on a
+    # FileNotFoundError and making seven tests look like a regression in someone else's work.
+    REPO_ROOT / "Firmware" / "docs" / "archive" / "implemented" / "architecture"
+    / "open_auto_turret_v3_three_mode_target_tracking_architecture.md"
 )
 DEFAULT_LOG = REPO_ROOT / "Firmware" / "docs" / "acceptance" / "v3_acceptance_log.json"
 
