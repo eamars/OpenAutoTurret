@@ -279,16 +279,16 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
       << "}"
       // The envelope ceiling in force, so "why will it not go faster" has an answer on the screen.
       << ",\"envelope_v_max_deg_s\":" << s.envelope_v_max_deg_s
-     // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
-     // the calibration files, not in the control code, where the only "imu" in the tree sits inside the
-     // word "simulation". `world_elevation_deg` is null rather than 0 for the reason stated on the
-     // snapshot field: with no sensor, 0.0 would assert that the turret is level.
-     << ",\"imu\":{\"present\":" << (s.imu_present ? "true" : "false")
-     << ",\"gravity_valid\":" << (s.imu_gravity_valid ? "true" : "false")
-     << ",\"world_elevation_valid\":" << (s.imu_world_elevation_valid ? "true" : "false")
-     << ",\"world_elevation_deg\":"
-     << (s.imu_world_elevation_valid ? std::to_string(s.imu_world_elevation_deg) : "null")
-     << ",\"basis\":\"no inertial sensor on this station\"}"
+     // The imu block. `present` and `gravity_valid` come from the control loop, which fills them from
+  // the BNO085 trace the launcher owns; the elevation gate below is closed on purpose, so the number is
+  // emitted as JSON null rather than as the field's initialiser. A reader that flattens null into 0.0
+  // would be claiming the turret is level -- that claim is a safety statement, and this emitter is
+  // where the difference between "no value" and "flat" is either kept or lost.
+  //
+  // `basis` says why the gate is the way it is. It is a string on the wire rather than a comment
+  // because a reader that cannot tell "we have no sensor" from "we have one but cannot turn it into a
+  // base attitude" renders one grey box for two states that mean different work.
+  \"basis\":\"imu on the moving pitch assembly; no mount calibration, so no base elevation\"}"
      << ",\"target_az_rate_world_rad_s\":" << json_finite_or_null(s.target_az_rate_world_rad_s)
      << ",\"target_el_rate_world_rad_s\":" << json_finite_or_null(s.target_el_rate_world_rad_s)
      << ",\"q_ref_rate_yaw_rad_s\":" << json_finite_or_null(s.q_ref_rate_yaw_rad_s)
