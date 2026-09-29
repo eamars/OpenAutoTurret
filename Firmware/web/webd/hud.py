@@ -1126,7 +1126,14 @@ function render(t) {
   hs.appendChild(chip(serviceReady ? "HOMED" : "NOT READY", serviceReady ? "ok" : "amber"));
   const vis = (typeof t.vision_track_sets === "number" && t.vision_track_sets > 0) ? "ok" : "amber";
   hs.appendChild(chip("VISION", vis, vis === "ok" ? "" : "NO SETS"));
-  hs.appendChild(chip("IMU", "amber", "ABSENT"));
+  // Was a hardcoded amber "ABSENT" -- an unconditional assertion on the one strip the operator
+  // actually reads. The four states exist because they mean different work; the chip now derives
+  // from the same payload the drawer uses.
+  {
+    const lbl = imuLabel(t.imu);
+    const st = lbl.indexOf("FRESH") === 0 ? "ok" : "amber";
+    hs.appendChild(chip("IMU", st, lbl));
+  }
   // §22. Normal is green and compact; anything heavier gets its own element, sized by tier, and the
   // FAULT case is allowed to interrupt precisely because §22 asks it to.
   const sf = hudSafetyPresentation(t);
@@ -1680,13 +1687,12 @@ HUD_HTML = """<!DOCTYPE html>
        stream pays nothing for the feature existing. Bottom-right because the telemetry rail, the
        mode buttons and the target list all sit on the top/left edges of this pane. -->
   <style>
-    #pip { position: absolute; right: 14px; bottom: 14px; width: 280px; display: none;
+    #pip { position: fixed; width: 280px; display: none;
            border: 1px solid #444; background: #000; z-index: 40; }
     #pip.on { display: block; }
-    #pipopen { position: absolute; right: 14px; bottom: 14px; z-index: 41; font-size: 10px;
+    #pipopen { position: fixed; z-index: 41; font-size: 10px;
                padding: 3px 7px; background: #141414; color: #8cf; border: 1px solid #444;
                cursor: pointer; }
-    #pip.on ~ #pipopen { display: none; }
     #pip img { width: 100%; display: block; }
     #pip .bar { display: flex; justify-content: space-between; font-size: 10px; color: #bbb;
                 background: #141414; padding: 2px 5px; }
@@ -1711,6 +1717,7 @@ HUD_HTML = """<!DOCTYPE html>
       el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
       if (j.ok) el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
       el("pip").classList.add("on");
+      placePip();
       el("pipopen").style.display = "none";
       el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
       open_ = true;
@@ -1730,6 +1737,41 @@ HUD_HTML = """<!DOCTYPE html>
         openPip();
       }
     }
+    // The invariant the owner set on 2026-09-29: the PIP may overlap the picture, never page chrome.
+    // #video is `position:absolute; inset:0; object-fit:contain`, so its element box fills the
+    // viewport while the picture is letterboxed inside it -- the element's top-left is a black-bar
+    // corner, not a picture corner, and which one you get depends on the window ratio. The picture's
+    // real rectangle has to be computed from the intrinsic frame size, and it moves when the window
+    // is resized or the frame geometry changes, so this is recomputed rather than written down.
+    const INSET = 8;
+    function pictureBox() {
+      const v = el("video"), r = v.getBoundingClientRect();
+      const nw = v.naturalWidth, nh = v.naturalHeight;
+      if (!nw || !nh) return null;                       // no frame yet: nothing to align to
+      const k = Math.min(r.width / nw, r.height / nh);   // contain: the smaller ratio wins
+      const w = nw * k, h = nh * k;
+      return {x: r.left + (r.width - w) / 2, y: r.top + (r.height - h) / 2, w: w, h: h};
+    }
+    function placePip() {
+      const box = pictureBox();
+      const mine = el("pip").classList.contains("on") ? el("pip") : el("pipopen");
+      if (!box) { mine.style.left = "-9999px"; mine.style.top = "-9999px"; return; }
+      let top = box.y + INSET;
+      // The one piece of chrome that can reach this corner is the mode/status block, and whether it
+      // sits on the picture or on a black bar depends on the window ratio -- so the clearance is
+      // measured off the live layout instead of hardcoded, and the PIP starts below it when they meet.
+      const status = document.getElementById("mode-block");   // render() writes line1/line2 into this
+      if (status) {
+        const sb = status.getBoundingClientRect();
+        if (sb.bottom > box.y && sb.right > box.x) top = Math.max(top, sb.bottom + INSET);
+      }
+      mine.style.left = (box.x + INSET) + "px";
+      mine.style.top = top + "px";
+    }
+    new ResizeObserver(placePip).observe(el("video"));
+    el("video").addEventListener("loadedmetadata", placePip);   // frame geometry can change size
+    window.addEventListener("resize", placePip);
+    placePip();
     el("pipopen").addEventListener("click", openPip);
     // The rate is measured by visiond and served per stream; the HUD already polls every second,
     // so this rides that poll rather than opening a second loop for one number. "rate n/m" is kept

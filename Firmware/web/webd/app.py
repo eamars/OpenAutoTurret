@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+import time
 import logging
 import dataclasses
 import queue
@@ -88,6 +89,9 @@ class TelemetryHub:
         client's full queue causes its next frame to be dropped, never a
         block of the reader or the control path."""
         data = telemetry_to_json(t)
+        decorate = getattr(self, "decorate", None)
+        if decorate is not None:
+            data = json.dumps(decorate(json.loads(data)))
         with self._lock:
             sessions = list(self._sessions)
         for s in sessions:
@@ -100,7 +104,9 @@ class TelemetryHub:
         """Drain one client's queue until it disconnects."""
         try:
             if latest is not None:
-                await s.ws.send_text(telemetry_to_json(latest))
+                first = telemetry_to_json(latest)
+                decorate = getattr(self, "decorate", None)
+                await s.ws.send_text(json.dumps(decorate(json.loads(first))) if decorate else first)
             while not self.stopping.is_set():
                 try:
                     data = await asyncio.to_thread(s.q.get, True, 0.1)
@@ -135,6 +141,7 @@ class VideoStartRequest(BaseModel):
 #: Roles the /api/video family accepts. Kept here, not imported from perception: webd also runs
 #: on a host with no camera package, and a web daemon that cannot start because a sensor module
 #: failed to import is a worse outage than a duplicated tuple of two strings.
+IMU_MERGE_INTERVAL_S = 0.5     # see decorate(); the HUD polls at 1 Hz anyway
 STREAM_ROLES = ("wide", "detail")
 
 
@@ -256,18 +263,23 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         )
 
 
-    @app.get("/api/state")
-    async def state() -> JSONResponse:
-        t = client.latest_telemetry()
-        if t is None:
-            return JSONResponse(
-                status_code=503, content={"error": "no telemetry yet"}
-            )
-        payload = {"type": "telemetry", "controld_connected": client.connected(),
-                   **json.loads(telemetry_to_json(_stamped(t)))}
-        # (b): the identity belongs to whoever holds the sensor, and that is visiond. Its manifest
-        # is the only honest source for "which camera is this", so the empty strings controld
-        # publishes get filled here rather than left to look like a camera with no name.
+    # One producer for everything controld cannot know: which camera holds which sensor (visiond's
+    # manifest) and what the IMU trace is actually doing (the reader owns that file). The HUD is fed
+    # by the /ws push, not by /api/state, so an overlay living only on the route is invisible to the
+    # page -- which is exactly how a "fixed" IMU chip kept reading ABSENT while the wire said 216 Hz.
+    # Both consumers call this one function; the second half of the fix is that there is no second copy.
+    #
+    # The trace reader tails a file, so at telemetry rate that read is cached briefly. The interval is
+    # a module constant with a reason, not a magic number in a function body: the freshness the
+    # operator sees is dominated by the HUD's own one-second poll, so half a second of cache is
+    # invisible, while an uncached read would tail a 200 Hz file thirty times a second.
+    imu_cache = {"at": 0.0, "reading": {}}
+
+    def decorate(payload: dict) -> dict:
+        now = time.monotonic()
+        if now - imu_cache["at"] >= IMU_MERGE_INTERVAL_S:
+            imu_cache["at"] = now
+            imu_cache["reading"] = imu_reader.read_once()
         streams, absent = _read_streams(config.stream_manifest)
         wide = streams.get("wide") or {}
         if wide.get("camera_id"):
@@ -283,11 +295,25 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             for role, entry in sorted(streams.items())]
         if absent:
             payload["video_streams_error"] = absent
-        # controld's §20 imu block stays the base (it is the control-side claim); what we can see
-        # in the trace is layered on top, because controld's imu_present has never been assigned.
+        # controld's §20 imu block stays the base (it is the control-side claim); what the trace shows
+        # is layered on top, because the reader can see samples controld's snapshot does not carry.
         imu = dict(payload.get("imu") or {})
-        imu.update(imu_reader.read_once())
+        imu.update(imu_cache["reading"])
         payload["imu"] = imu
+        return payload
+
+    hub.decorate = decorate          # the /ws fan-out asks the same function
+
+    @app.get("/api/state")
+    async def state() -> JSONResponse:
+        t = client.latest_telemetry()
+        if t is None:
+            return JSONResponse(
+                status_code=503, content={"error": "no telemetry yet"}
+            )
+        payload = {"type": "telemetry", "controld_connected": client.connected(),
+                   **json.loads(telemetry_to_json(_stamped(t)))}
+        decorate(payload)
         return JSONResponse(payload)
 
     @app.get("/api/health")
