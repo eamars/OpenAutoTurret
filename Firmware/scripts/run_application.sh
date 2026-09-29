@@ -552,6 +552,8 @@ export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
 # (b): visiond 是唯一持有物理相机的人，所以由它发布"有哪些有名字的流"。
 # 缺这个变量 visiond 就不发布（默认关闭），老部署不受影响。
 export OTA_VISION_STREAM_MANIFEST="$RUN/video_streams.json"
+# 推理后端自述（后端名/模型/输入尺寸/推理计数/model 耗时）。web 不碰相机，只读这份现读。
+export OTA_INFERENCE_HEALTH="$RUN/inference_health.json"
 # 第二颗传感器的**开关只有一个：配置文档里的 vision.secondary.model**（代码默认空 = 这台站没有第二颗）。
 # 以前这里还写死了一个 imx477 默认值，于是"有没有第二路"存在两处真相 —— 朝向那次就是被这种重复
 # 掩住的：文档里的值没被读到，环境变量把型号补上了，症状一个都没有。

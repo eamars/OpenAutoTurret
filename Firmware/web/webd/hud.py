@@ -1135,6 +1135,18 @@ function render(t) {
     const st = lbl.indexOf("FRESH") === 0 ? "ok" : "amber";
     hs.appendChild(chip("IMU", st, lbl));
   }
+  {
+    // Which network is actually producing the tracks -- the fact the whole Hailo switch turns on, and
+    // the one thing a station running the other backend would otherwise hide behind a working picture.
+    const nf = t.inference || {};
+    const state = !nf.present ? "red" : (nf.fresh ? (String(nf.adapter || "").toLowerCase() === "hailo" ? "ok" : "amber") : "amber");
+    const shown = !nf.present ? "NO REPORT"
+      : (!nf.fresh ? ("STALE " + Math.round(nf.age_ms) + "ms")
+                   : (String(nf.adapter || "?").toUpperCase() + " " + String(nf.model_id || "?")
+                      + " " + (Array.isArray(nf.input_size) ? nf.input_size.join("x") : "?")
+                      + (nf.opened === false ? " CLOSED" : "")));
+    hs.appendChild(chip("NN", state, shown));
+  }
   // §22. Normal is green and compact; anything heavier gets its own element, sized by tier, and the
   // FAULT case is allowed to interrupt precisely because §22 asks it to.
   const sf = hudSafetyPresentation(t);

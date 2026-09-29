@@ -141,6 +141,7 @@ class VideoStartRequest(BaseModel):
 #: Roles the /api/video family accepts. Kept here, not imported from perception: webd also runs
 #: on a host with no camera package, and a web daemon that cannot start because a sensor module
 #: failed to import is a worse outage than a duplicated tuple of two strings.
+INFERENCE_STALE_AFTER_S = 3.0   # three missed beats: a paused daemon must not look healthy
 IMU_MERGE_INTERVAL_S = 0.5     # see decorate(); the HUD polls at 1 Hz anyway
 STREAM_ROLES = ("wide", "detail")
 
@@ -297,6 +298,19 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             payload["video_streams_error"] = absent
         # controld's §20 imu block stays the base (it is the control-side claim); what the trace shows
         # is layered on top, because the reader can see samples controld's snapshot does not carry.
+        path = (os.environ.get("OTA_INFERENCE_HEALTH", "").strip()
+                or (str(config.stream_manifest).rsplit("/", 1)[0] + "/inference_health.json"))
+        try:
+            with open(path, encoding="utf-8") as handle:
+                health = json.loads(handle.read())
+            age_ms = (time.time_ns() - int(health.get("updated_ns") or 0)) / 1e6
+            health["present"] = True
+            health["age_ms"] = round(age_ms, 1)
+            health["fresh"] = age_ms < INFERENCE_STALE_AFTER_S * 1000.0
+            payload["inference"] = health
+        except (OSError, ValueError):
+            payload["inference"] = {"present": False,
+                                    "reason": f"no health file at {path}"}
         imu = dict(payload.get("imu") or {})
         imu.update(imu_cache["reading"])
         payload["imu"] = imu

@@ -395,6 +395,16 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
 
     try:
         adapter = build_adapter(config, manifest=manifest)
+        # "What I cannot see has not been updated": the backend publishes its own self-report once a
+        # second so the web surface can say, in one glance, which network is producing the tracks.
+        # The path defaults to beside the stream manifest, so a station that set one has the other.
+        from .inference_health import HealthPublisher
+        health_path = (os.environ.get("OTA_INFERENCE_HEALTH", "").strip()
+                       or (os.path.dirname(os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip())
+                           + "/inference_health.json"))
+        if health_path.strip("/"):
+            adapter_health = HealthPublisher(adapter=adapter, path=health_path).start()
+            print(f"visiond: publishing inference health to {health_path}", file=sys.stderr)
     except ConfigError as exc:
         print(f"visiond: {exc}", file=sys.stderr)
         return EXIT_CONFIG
