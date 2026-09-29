@@ -94,3 +94,22 @@ class NamedStreamApi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinnedPreviewContract(unittest.TestCase):
+    """The owner's ruling of 2026-09-29: always open, pinned to the corner, no movable window.
+
+    A toggle and a measured placement were both tried and both taken out. The pane moved when the
+    window moved -- his words were "咋还乱跑呢" -- and the button existed only to reopen a pane that
+    the placement had hidden, so it was a symptom of the placement rather than a feature. This test
+    is here so nobody re-adds either one later.
+    """
+
+    def test_the_pane_is_pinned_and_there_is_no_toggle(self):
+        from ..hud import HUD_HTML
+        self.assertIn("top: 88px", HUD_HTML)          # below the mode block, a constant on purpose
+        self.assertIn("left: 1%", HUD_HTML)           # the same column the mode block is in
+        for gone in ("pipopen", "placePip", "pictureBox", "ResizeObserver", "pipclose"):
+            self.assertNotIn(gone, HUD_HTML,
+                             f"{gone} came back: the secondary preview is pinned and always open")
+        self.assertIn("otaSwapPip", HUD_HTML)         # swap survives: it does something, it isn't chrome

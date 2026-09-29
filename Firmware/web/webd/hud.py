@@ -1110,7 +1110,7 @@ function render(t) {
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
                              jogging: !!t.manual_lease_active });
-  if (window.otaPipMaybeOpen) window.otaPipMaybeOpen(t.video_streams);
+  if (window.otaPipNoteStreams) window.otaPipNoteStreams(t.video_streams);
   $("mode-block").innerHTML =
     '<div class="m1">' + st.line1 + '</div>' +
     '<div class="m2' + (st.named ? "" : " raw") + '">' + st.line2 + '</div>' +
@@ -1688,135 +1688,73 @@ HUD_HTML = """<!DOCTYPE html>
        stream pays nothing for the feature existing. Bottom-right because the telemetry rail, the
        mode buttons and the target list all sit on the top/left edges of this pane. -->
   <style>
-    #pip { position: fixed; width: 280px; display: none;
+    /* Pinned: the same column as the mode block, below it, always open, never repositioned.
+       88px clears the mode block's three lines at every window ratio tried so far -- the earlier
+       version computed the pane's place from the letterboxed picture and therefore moved when the
+       window or the frame geometry changed, which the owner correctly called "还乱跑". The trade is
+       accepted on purpose: at extreme ratios the pane sits over a black bar instead of over the
+       picture; what it must never do is cover a control. */
+    #pip { position: absolute; left: 1%; top: 88px; width: 280px;
            border: 1px solid #444; background: #000; z-index: 40; }
-    #pip.on { display: block; }
-    #pipopen { position: fixed; z-index: 41; font-size: 10px;
-               padding: 3px 7px; background: #141414; color: #8cf; border: 1px solid #444;
-               cursor: pointer; }
     #pip img { width: 100%; display: block; }
     #pip .bar { display: flex; justify-content: space-between; font-size: 10px; color: #bbb;
-                background: #141414; padding: 2px 5px; }
+                padding: 2px 4px; background: #101010; }
     #pip button { background: none; border: 0; color: #8cf; cursor: pointer; font-size: 10px; }
   </style>
-  <button id="pipopen" type="button" title="secondary stream (wide/detail swap)">PIP</button>
   <div id="pip">
     <img id="pipimg" alt="secondary preview">
     <div class="bar"><span id="piplabel">PIP</span><span id="pipfps">rate n/m</span>
-      <button id="pipswap" type="button">swap</button>
-      <button id="pipclose" type="button">×</button></div>
+      <button id="pipswap" type="button">swap</button></div>
   </div>
   <script>
   (function () {
-    // Which role lives on the big screen and which in the PIP. Swapping re-points both <img>s;
-    // it never re-starts a source, so the measured delivered rate keeps its own history.
-    var mainRole = "wide", pipRole = "detail", open_ = false;
+    var mainRole = "wide", pipRole = "detail";
     function el(id) { return document.getElementById(id); }
-    async function openPip() {
-      var r = await fetch("/api/video/start?camera=" + pipRole, { method: "POST" });
-      var j = await r.json();
-      el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
-      if (j.ok) el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
-      el("pip").classList.add("on");
-      el("pipopen").textContent = "PIP \u25be";
-      placePip();
-      el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
-      open_ = true;
-    }
-    function closePip() {
-      el("pip").classList.remove("on");
-      el("pipopen").textContent = "PIP \u25b8";
-      el("pipimg").src = "";
-      fetch("/api/video/stop?camera=" + pipRole, { method: "POST" });
-      open_ = false;
-    }
-    function swap() {
+
+    // Rendered state, not a control: a station publishing one stream has no second tap to start, so
+    // the pane says so instead of showing a frozen frame or firing requests at a role nobody owns.
+    window.otaPipNoteStreams = function (streams) {
+      if (Array.isArray(streams) && streams.length < 2) {
+        el("piplabel").textContent = "NO SECOND STREAM";
+        el("pipfps").textContent = "";
+        el("pipimg").style.display = "none";
+      }
+    };
+
+    // Swapping re-points the two <img>s and nothing else; sources stay up until asked to come down,
+    // so the measured rate keeps its own history across a swap.
+    window.otaSwapPip = function () {
       var m = mainRole; mainRole = pipRole; pipRole = m;
       el("video").src = "/api/video?camera=" + mainRole + "&t=" + Date.now();
-      // A swap re-points the two <img>s and nothing else. It used to stop the role that was about to
-      // become the PIP and start it again a moment later -- interrupting the stream it was supposed to
-      // keep showing. A source stays up until someone asks it to come down.
-      if (open_) openPip();
-    }
-    // The invariant the owner set on 2026-09-29: the PIP may overlap the picture, never page chrome.
-    // #video is `position:absolute; inset:0; object-fit:contain`, so its element box fills the
-    // viewport while the picture is letterboxed inside it -- the element's top-left is a black-bar
-    // corner, not a picture corner, and which one you get depends on the window ratio. The picture's
-    // real rectangle has to be computed from the intrinsic frame size, and it moves when the window
-    // is resized or the frame geometry changes, so this is recomputed rather than written down.
-    const INSET = 8;
-    function pictureBox() {
-      const v = el("video"), r = v.getBoundingClientRect();
-      const nw = v.naturalWidth, nh = v.naturalHeight;
-      if (!nw || !nh) return null;                       // no frame yet: nothing to align to
-      const k = Math.min(r.width / nw, r.height / nh);   // contain: the smaller ratio wins
-      const w = nw * k, h = nh * k;
-      return {x: r.left + (r.width - w) / 2, y: r.top + (r.height - h) / 2, w: w, h: h};
-    }
-    function placePip() {
-      const box = pictureBox();
-      const mine = el("pip").classList.contains("on") ? el("pip") : el("pipopen");
-      if (!box) {
-        // Between re-pointing an <img> and its first decoded frame there is no intrinsic size to align
-        // to. Parking the pane off-screen there made the PIP vanish with no way back; the element box
-        // is the honest fallback and the bar says the geometry is provisional.
-        const r = el("video").getBoundingClientRect();
-        mine.style.left = (r.left + INSET) + "px";
-        mine.style.top = (r.top + INSET) + "px";
-        el("pipfps").textContent = "no frame yet";
-        return;
-      }
-      let top = box.y + INSET;
-      // The one piece of chrome that can reach this corner is the mode/status block, and whether it
-      // sits on the picture or on a black bar depends on the window ratio -- so the clearance is
-      // measured off the live layout instead of hardcoded, and the PIP starts below it when they meet.
-      const status = document.getElementById("mode-block");   // render() writes line1/line2 into this
-      if (status) {
-        const sb = status.getBoundingClientRect();
-        if (sb.bottom > box.y && sb.right > box.x) top = Math.max(top, sb.bottom + INSET);
-      }
-      mine.style.left = (box.x + INSET) + "px";
-      mine.style.top = top + "px";
-      const btn = el("pipopen");
-      if (mine !== btn) {                       // open: the toggle rides under the pane, always clickable
-        btn.style.left = mine.style.left;
-        btn.style.top = (mine.getBoundingClientRect().bottom + 4) + "px";
-      }
-    }
-    new ResizeObserver(placePip).observe(el("video"));
-    el("video").addEventListener("loadedmetadata", placePip);   // frame geometry can change size
-    window.addEventListener("resize", placePip);
-    placePip();
-    el("pipopen").addEventListener("click", openPip);
-    // The rate is measured by visiond and served per stream; the HUD already polls every second,
-    // so this rides that poll rather than opening a second loop for one number. "rate n/m" is kept
-    // when nobody has measured a window yet -- zero is a measurement, and this is not one.
-    // Default open, but on the evidence: the page opens the PIP the first time a telemetry frame
-    // lists a second role. A station publishing one stream gets no pane and no button at all, so
-    // "nothing new appears on a single-camera station" stays true.
-    let decided = false;
-    window.otaPipMaybeOpen = function (streams) {
-      if (decided) return;
-      decided = true;
-      if (Array.isArray(streams) && streams.length >= 2) { openPip(); }
-      else { el("pipopen").style.display = "none"; }
+      el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
+      el("piplabel").textContent = "PIP " + pipRole;
     };
+    el("pipswap").addEventListener("click", window.otaSwapPip);
+
+    // Open by default: the second tap is asked for as soon as the page loads.
+    fetch("/api/video/start?camera=" + pipRole, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
+        if (j.ok) {
+          el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
+          el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
+        }
+      });
+
+    // The delivered rate is measured per stream by visiond and served per role by webd. The HUD
+    // already polls once a second to self-heal the preview, so this rides that poll rather than
+    // opening a second loop for one number. Unmeasured reads "rate n/m": zero is a measurement and
+    // this is not one.
     window.otaPipTick = async function () {
-      if (!open_) return;
       try {
         const v = await (await fetch("/api/video/state?camera=" + pipRole)).json();
         el("pipfps").textContent = (typeof v.delivered_fps === "number")
           ? (v.delivered_fps.toFixed(1) + " fps") : "rate n/m";
       } catch (e) { /* the poll retries; a dead number is not worth a stack trace */ }
     };
-    el("pipswap").addEventListener("click", swap);
-    el("pipclose").addEventListener("click", closePip);
-    // The HUD already has a preview on/off control; the PIP rides along with it rather than
-    // getting its own always-visible button, so a station with one camera sees nothing new.
-    window.otaOpenPip = openPip; window.otaClosePip = closePip; window.otaSwapPip = swap;
-    window.otaPipOpen = function () { return open_; };
   })();
-  </script>
+  
 
   <!-- z=10 candidates, z=11 selected, z=20 reticle: separate layers, because §18 orders
        them and because "the reticle never represents the target" is easier to keep true
