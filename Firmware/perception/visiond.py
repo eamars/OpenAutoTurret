@@ -473,7 +473,10 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         # Inference is configured for the leg it will actually be handed -- the ISP's small picture
         # when the profile asked for one. Reporting the model input without this would let the
         # surface claim 640x360 while the network quietly ate a downscaled 1080p.
-        adapter.configure_stream(*(lores or stream))
+        # The leg is what inference reads; the declaration is the picture the station publishes and the
+        # control layer validates a TrackSet against. Naming the leg here is what kept every TrackSet
+        # out of the control loop while the tracker was confirming tracks just fine.
+        adapter.configure_stream(*(lores or stream), declared=stream)
         camera = CameraOwner(picam2, stream_size=stream, events=events,
                              inference_stream=("lores" if lores else None),
                              inference_size=(lores or stream))

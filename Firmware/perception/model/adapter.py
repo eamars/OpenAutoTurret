@@ -61,22 +61,44 @@ class ModelAdapter:
     detections_pad_dropped: int = 0
 
     def configure_stream(self, width: int, height: int,
-                         roi: Optional[Tuple[int, int, int, int]] = None) -> None:
-        """Tell the adapter the size of the stream it will be shown (§14 needs both sizes)."""
+                         roi: Optional[Tuple[int, int, int, int]] = None, *,
+                         declared: Optional[Tuple[int, int]] = None) -> None:
+        """Tell the adapter the size of the stream it will be shown (§14 needs both sizes).
+
+        Two facts, and with a second ISP leg they are not the same number: the leg inference will be
+        handed (validated against every frame) and the geometry the outputs are *declared* against.
+        The station infers on a 640x360 leg but publishes, and the control layer validates against, the
+        1920x1080 picture -- so a TrackSet naming the leg was refused before it entered the control
+        loop. Normalised boxes carry from one to the other because the small leg is the same optics
+        scaled, not cropped; if that ever stops being true, the boxes will stop lining up and the
+        operator will see it before I do.
+        """
         if min(int(width), int(height)) <= 0:
             raise ConfigError(f"stream size must be positive, got {width}x{height}")
         self._stream = (int(width), int(height))
+        if declared is None:
+            self._declared = self._stream
+        else:
+            if min(int(declared[0]), int(declared[1])) <= 0:
+                raise ConfigError(f"declared geometry must be positive, got {declared}")
+            self._declared = (int(declared[0]), int(declared[1]))
         self._roi = roi
 
     @property
     def stream_size(self) -> Tuple[int, int]:
         return self._stream
 
+    @property
+    def declared_stream(self) -> Tuple[int, int]:
+        """The geometry outputs are declared against -- the published picture, not the leg."""
+        return getattr(self, "_declared", self._stream)
+
     def geometry(self) -> InferenceGeometry:
         if min(self._stream) <= 0:
             raise ConfigError("adapter used before configure_stream(): §14 cannot map "
                               "model coordinates onto a stream of unknown size")
-        return self.manifest.geometry(self._stream[0], self._stream[1], self._roi)
+        declared = self.declared_stream
+        return self.manifest.geometry(declared[0], declared[1], self._roi)
 
     def open(self) -> None:
         """Acquire the device/model. Subclasses raise ``ModelRejected`` on refusal."""

@@ -158,5 +158,38 @@ class PadRoundTrip(unittest.TestCase):
 
 
 
+class DeclaredGeometry(unittest.TestCase):
+    """The leg is validated; the declaration is the published picture. Two facts, one call."""
+
+    def _adapter(self):
+        import json as _json
+        from perception.model.manifest import ModelManifest
+        with open(MANIFEST, encoding="utf-8") as handle:
+            return HailoYoloAdapter(ModelManifest.from_dict(_json.load(handle)))
+
+    def test_the_leg_still_governs_the_frame_and_the_declaration_governs_the_output(self):
+        adapter = self._adapter()
+        adapter.configure_stream(640, 360, declared=(1920, 1080))
+        self.assertEqual(adapter.stream_size, (640, 360),
+                         "the guard that refuses a frame which is not the leg must still see the leg")
+        self.assertEqual(adapter.declared_stream, (1920, 1080))
+        geometry = adapter.geometry()
+        self.assertEqual((int(getattr(geometry, "stream_width", 0)),
+                          int(getattr(geometry, "stream_height", 0))), (1920, 1080),
+                         "§14's mapping has to be onto the picture the control layer validates")
+
+    def test_a_station_with_one_leg_declares_what_it_shows(self):
+        adapter = self._adapter()
+        adapter.configure_stream(1920, 1080)
+        self.assertEqual(adapter.declared_stream, adapter.stream_size,
+                         "no second leg means no second number")
+
+    def test_a_declared_size_of_nothing_is_refused_by_name(self):
+        from perception.errors import ConfigError
+        adapter = self._adapter()
+        with self.assertRaises(ConfigError):
+            adapter.configure_stream(640, 360, declared=(0, 0))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
