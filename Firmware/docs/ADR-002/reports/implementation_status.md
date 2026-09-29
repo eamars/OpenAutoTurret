@@ -655,3 +655,20 @@ kp≈10 在同样的误差下会要 **>1.6 A，超出包线、也超出电流环
 站上 controld `stopped cleanly`、无残留调参进程；`/tmp/adr/` 运行捕获已清，
 原始日志与 JSON 收在仓库外 `artifacts/`（运行捕获不入提交，AGENTS.md）。
 主机套件：2 条环境红（`test_install_station` 需传目标用户、`test_station_launcher` 日志路径），其余绿。
+
+## 交接后补：唯一那处生产改动已撤回（**未上机复验——站归 Codex**）
+
+- `config/mixed_hardware.yaml` 的 `host_current_limit_a` **1.62 → 0.8**，恢复到本轮调查之前的值。
+  **本轮 goal 全部提交里，非 `tools/` 非 `docs/` 的改动只有这一处**（`git diff --name-only 23a00b6^..HEAD`），
+  撤回之后我对生产模式（Manual / Auto Roam）的行为差异为**零**。
+- **构建溯源已修复，且是真验证**：工作站与站上 release 内那份 config **MD5 相同**
+  （`6fd40c4f24fec1c912b022b2ed5bd3bc`）。
+- **未在硬件上复验**两条（主人令：不要用生产环境测我的改动）：①重启后 `current_cap` 是否读回 0.8；
+  ②我写的试验增益是否随会话消失。依据只是代码级事实——注册表把试验值标为
+  **`session value`**，而配置类字段带 **`restart_required`**（`runtime_parameter_registry.cpp:61/94/100`）；
+  且栈当前根本没在跑，**残留无处寄生**。谁要确认，看一眼重启后遥测的 `current_cap` 即可。
+- 我在站上的落脚 `/tmp/adr/` 已删除；**站交还，无进程、无自启单元**。
+
+**留给 Codex 校准模块的实测事实**（这些是数据，不是我的决定）：这台交叉滚子轴承上
+drag sweep 在 0.6 A 走 2.59°、1.5 A 走 11.38°、2.5 A 走 45.04°（`sweep_target_reached`）；
+`0.8 A` 包线推不过这台轴承。Manual/Hold 踏步的位移只到命令的 5–18%，且 `output_requested` 停在 0.32 A。

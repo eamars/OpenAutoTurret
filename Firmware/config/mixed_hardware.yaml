@@ -38,15 +38,14 @@ axes:
     # protocol range describe different conditions. ADR-002 requires measured duty/
     # temperature evidence before raising this envelope for the installed payload.
     #
-    # Raised 0.8 -> 1.62 A (the drive's own rated current, the figure above) on 2026-10-01, with the
-    # owner's blanket authorisation, because drag sweeps on the installed cross-roller bearing measured
-    # 2.59 deg at 0.6 A, 11.38 deg at 1.5 A and a full 45.04 deg at 2.5 A of breakaway feedforward
-    # (docs/ADR-002/reports/implementation_status.md): 0.8 A cannot drive this bearing through a commanded
-    # angle at all. It is raised to rated and no further on purpose — 2.5 A sits above the rating, and the
-    # duty/temperature evidence ADR-002 asks for is still missing (there is no valid temperature reading,
-    # which is why the frozen scorer's thermal metric abstains). If holding current or winding temperature
-    # turns out to be a problem at 1.62 A, this line goes back down as one edit.
-    host_current_limit_a: 1.62
+    # Reverted to 0.8 on 2026-10-01 for the ADR-002.2 handover: this was raised to 1.62 A (rated) during
+    # the yaw motion investigation, and it is the ONLY production-behaviour change that work made. The
+    # owner's instruction is zero contamination of production modes, and the envelope belongs to the
+    # independent calibration module rather than to a diagnosis. The measurement that motivated it stands
+    # as evidence for that module to decide on: on the installed cross-roller bearing, drag sweeps moved
+    # 2.59 deg at 0.6 A, 11.38 deg at 1.5 A and 45.04 deg at 2.5 A of breakaway feedforward, so 0.8 A
+    # cannot drive this bearing through a commanded angle -- that is a finding, not a pre-empted decision.
+    host_current_limit_a: 0.8
     # The yaw velocity loop's OUTPUT gains while in current mode, in amperes. Deliberately not
     # derived from the voltage gains: with the drive closing its own current loop, counts and
     # amperes are not two labels on one straight line. Chosen conservative: kp 1.0 A per rad/s
