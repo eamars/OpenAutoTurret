@@ -15,3 +15,6 @@ run/
 Firmware/build-arm64/
 Firmware/build-arm64.tar
 
+# pytest's scratch directory: it carries a README.md of its own, which
+# is exactly the kind of decoy that sends an agent reading the wrong file.
+.pytest_cache/

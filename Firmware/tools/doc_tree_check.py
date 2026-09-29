@@ -81,6 +81,14 @@ def main() -> int:
             if not resolved.exists():
                 problems.append(f"{path.relative_to(FIRMWARE)}:{lineno} points at {target}, "
                                 "which is not there")
+    for face in ("AGENTS.md", "README.md"):
+        face_path = FIRMWARE.parent / face
+        if not face_path.exists():
+            continue          # a project may carry only one of the two; the other rules still apply
+        if "docs/README.md" not in face_path.read_text(encoding="utf-8"):
+            problems.append(f"{face} does not name docs/README.md — the two files an agent opens "
+                            "first are exactly where a missing entry point costs a session")
+
     if not cards:
         problems.append("docs/operations/ holds no cards — the runbook is being read whole again, "
                         "which is the failure this tree exists to prevent")
