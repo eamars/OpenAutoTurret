@@ -148,8 +148,12 @@ def main():
     base = found[0] if found else None
     if not base:
         raise SystemExit("BLOCKED_baseline_missing: no eight-field yaw trial string in the archived snapshot")
-    candidates = [("baseline", base), ("half_ki", scaled(base, 1.0, 0.5)),
-                  ("half_kp", scaled(base, 0.5, 1.0)), ("half_both", scaled(base, 0.5, 0.5))]
+    # Down-scaling the current-loop gains was tried first and it went the wrong way on every axis of the
+    # evidence: less gain, less travel, more at-rest current. The trace says why -- in Manual/Hold the
+    # output is the integral term alone (0.32 A against a 1.62 A envelope, `ref` already at +5 degrees),
+    # so the honest experiment is the opposite direction, one step at a time.
+    candidates = [("baseline", base), ("ki_x2", scaled(base, 1.0, 2.0)),
+                  ("kp_x2", scaled(base, 2.0, 1.0)), ("both_x2", scaled(base, 2.0, 2.0))]
     station = acc.Station(SOCKET)
     rows = []
     for name, trial in candidates:
