@@ -245,3 +245,19 @@ pad 修完之后（release `eef257b16afe`）仍然 `tracks=[]`、`track_list_age
 
 **动手位置**：`dset.stream_width/stream_height` 来自 `configure_stream(腿)`（`perception/pipeline.py:469` 把它们写进发布）；
 visiond 同时知道 `stream`（main）与 `lores`，所以由它把**发布几何**交给发布路径。
+
+## 换后端之后的端到端验法（09-30 凌晨跑通，逐环节都有读数才算通）
+
+任何一次改动推理后端或采集腿之后，照这五步读。**每一步都要看见数字**；缺一环就别宣布成功——
+今天两次"以为通了"都因为只看了其中一环。
+
+| # | 看哪 | 通过判据 | 今天抓到的 bug |
+|---|---|---|---|
+| 1 | `/api/state` 的 `inference` | `adapter` 是你以为的那个、`stream` 是推理真正吃的腿、`failures` 不涨 | `frame.or` 让 numpy 求布尔 ⇒ visiond 6 s 退出 |
+| 2 | 同块 `detections_raw` / `detections_emitted` / `detections_pad_dropped` | raw>0 且 emitted>0；raw≠emitted 就说明被类别/label map 吃了 | 以为"没人"，其实每帧 2.6 个框 |
+| 3 | `run/perception/track_set.json` 的 `counters.tracks_confirmed` | >0 ⇒ 跟踪在工作；`low_score_associations` 大 ⇒ 才是门限问题 | pad 未还原 ⇒ 框落到画面外 |
+| 4 | 同文件顶层 `stream_width/stream_height` | **等于对外发布的那幅画面**（广角 1920×1080），不是推理腿 | 声明成 640×360 ⇒ controld 环外丢弃 |
+| 5 | `/api/state` 的 `tracks` 与页面上的框 | 有人 ⇒ 至少一条，且**框贴在人身上**（这证明 lores 是缩放不是裁剪） | 前四环都错时无从发现 |
+
+`camera_fps≈30` 与 `model_inference_ms≈8` 是旁证（Phase 5 量过的区间），不是判据。
+**门限永远最后调**：在 1–4 环没绿之前动 `new_track` 就是拿参数盖 bug。
