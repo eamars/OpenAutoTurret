@@ -1133,7 +1133,11 @@ function render(t) {
   {
     const lbl = imuLabel(t.imu);
     const st = lbl.indexOf("FRESH") === 0 ? "ok" : "amber";
-    hs.appendChild(chip("IMU", st, lbl));
+    const att = (t.imu || {}).sensor_attitude_deg;
+    hs.appendChild(chip("IMU", st, lbl + (att
+      // The sensor's own measured attitude, shown because the sensor measured it. Labelled R/P and
+      // never called elevation: it is the sensor frame, and the base frame has no transform yet.
+      ? ("  R" + att.roll_deg.toFixed(1) + "\u00b0 P" + att.pitch_deg.toFixed(1) + "\u00b0") : "")));
   }
   {
     // Which network is actually producing the tracks -- the fact the whole Hailo switch turns on, and
