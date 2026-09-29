@@ -18,6 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import adr0021_plan as plan  # noqa: E402
+import adr0021_acceptance  # noqa: E402
 import adr0021_run as runner  # noqa: E402
 Runner = runner.Runner
 
@@ -26,6 +27,7 @@ class StubStation:
     """A station that always accepts, and answers the way controld does."""
 
     trace_rows = 4
+    trace_history_rows = 4          # a rolling window has history in its head; tests may clear it
     trace_loses_identity = False
     trace_truncated = False
 
@@ -70,12 +72,16 @@ class StubStation:
         for, and asking costs a round trip on the real station too.
         """
         self.command("read_control_trace")
-        rows = [{"param_context": expect_context or "none"} for _ in range(self.trace_rows)]
+        # Head: rows written before this candidate announced itself. Tail: this candidate's rows. The
+        # summary comes from the same function the station reader uses, so the stub cannot pass by
+        # disagreeing with the real code about what a window means.
+        rows = [{"param_context": "history"} for _ in range(self.trace_history_rows)] + \
+               [{"param_context": expect_context or "none"} for _ in range(self.trace_rows)]
         if self.trace_loses_identity:
             rows[-1]["param_context"] = "other-campaign"
-        return {"records": len(rows), "records_with_context": sum(
-            1 for row in rows if row["param_context"] == expect_context), "bytes": 340000,
-            "truncated": self.trace_truncated, "reason": "stub window"}
+        summary = adr0021_acceptance.summarise_window(rows, expect_context)
+        summary.update({"bytes": 340000, "truncated": self.trace_truncated, "reason": "stub window"})
+        return summary
 
     def frame(self):
         return {"payload_profile_status": self.payload_status, "phase": self.phase,
@@ -212,7 +218,8 @@ class TheTraceWindowCarriesTheCampaign(unittest.TestCase):
         station = StubStation()
         station.trace_loses_identity = True
         manifest = self._run_with(station)
-        self.assertTrue(any(row.startswith("BLOCKED_trace_identity_missing") for row in manifest["blocked"]),
+        self.assertTrue(any(row.startswith(("BLOCKED_trace_identity_missing", "BLOCKED_trace_identity_absent"))
+                            for row in manifest["blocked"]),
                         manifest["blocked"])
 
     def test_an_empty_window_is_not_a_passing_window(self):
@@ -220,6 +227,7 @@ class TheTraceWindowCarriesTheCampaign(unittest.TestCase):
         # nothing and being reported as agreement. An empty window now blocks.
         station = StubStation()
         station.trace_rows = 0
+        station.trace_history_rows = 0
         manifest = self._run_with(station)
         self.assertTrue(any(row.startswith("BLOCKED_trace_window_empty") for row in manifest["blocked"]),
                         manifest["blocked"])

@@ -51,6 +51,22 @@ TELEMETRY_KEYS = ("phase", "operating_mode", "safety_action", "manual_lease_acti
                   "yaw_guard_degraded", "cmd_ack_seq")
 
 
+def summarise_window(rows, expect_context):
+    """What a trace window says about identity, computed in one place for the station and for the stub.
+
+    The window is rolling: its head is history written before this candidate was announced, so asking
+    every row to carry the current tag asks the past to have known the future. What detects
+    mis-attribution is that from the first row carrying this candidate's tag to the newest row every
+    record agrees — a window whose identity changes mid-flight cannot say which candidate a row is.
+    """
+    tags = [row.get("param_context") for row in rows]
+    first = next((index for index, tag in enumerate(tags) if tag == expect_context), -1)
+    return {"records": len(rows),
+            "records_with_context": sum(1 for tag in tags if tag == expect_context),
+            "first_tagged_index": first,
+            "contiguous_to_newest": first >= 0 and all(tag == expect_context for tag in tags[first:])}
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -147,11 +163,14 @@ class Station:
         the runner asks for the window and counts the records that carry the tag it set. A truncated
         read is reported, not parsed: half a window would under-count and look like a firmware gap.
         """
-        before = self.seq()
-        self.command("read_control_trace")
+        # One socket for the question and the answer. The trace window is a reply, not a broadcast:
+        # sending on one connection and then reading a freshly opened one finds only periodic telemetry,
+        # which is how a 340 KB frame became "0 records, 0 bytes" on the station.
+        sock = self._sock()
+        sock.send(json.dumps({"type": "command", "command": "read_control_trace"}).encode())
         deadline = time.time() + 8
         while time.time() < deadline:
-            chunk = self.receive(self._sock())
+            chunk = self.receive(sock)
             if chunk is Station.TRUNCATED:
                 return {"truncated": True, "reason": "the trace window exceeded the receive buffer"}
             try:
@@ -160,15 +179,13 @@ class Station:
                 continue
             if frame.get("type") != "control_trace":
                 continue
-            # The window's rows live under a name the sender owns, so take the list of records rather
-            # than guessing one key and reporting zero when the answer was under another: a "0 records"
-            # window that passes the identity check is worse than a refusal, because it reads as proof.
+            # The rows live under a name the sender owns: guessing one key and reporting zero when the
+            # answer sat under another is how a missing read started looking like passing evidence.
             rows = next((value for key, value in sorted(frame.items())
                          if isinstance(value, list) and value and isinstance(value[0], dict)), [])
-            tagged = sum(1 for row in rows if isinstance(row, dict) and expect_context
-                         and row.get("param_context") == expect_context)
-            return {"records": len(rows), "records_with_context": tagged, "bytes": len(chunk),
-                    "truncated": False}
+            summary = summarise_window(rows, expect_context)
+            summary.update({"bytes": len(chunk), "truncated": False})
+            return summary
         return {"records": 0, "records_with_context": 0, "bytes": 0, "truncated": False,
                 "reason": "no control_trace frame in 8 s; an empty window is not a passing window"}
 

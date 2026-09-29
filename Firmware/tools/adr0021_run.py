@@ -147,10 +147,15 @@ class Runner:
                         "no records to check, and an empty window satisfies a count comparison by "
                         "saying nothing")
             return record
-        if window.get("records_with_context") != window.get("records"):
+        if window.get("records_with_context") == 0:
+            self.refuse(f"BLOCKED_trace_identity_absent_{candidate['candidate_id']}: the campaign "
+                        "announced itself and no record in the window carries the tag")
+            return record
+        if not window.get("contiguous_to_newest"):
             self.refuse(f"BLOCKED_trace_identity_missing_{candidate['candidate_id']}: "
-                        f"{window.get('records_with_context')}/{window.get('records')} records carry "
-                        "the campaign tag; a row without it cannot be attributed to this trial")
+                        f"{window.get('records_with_context')}/{window.get('records')} records carry the tag and "
+                        "they do not run unbroken to the newest record; a window whose identity changes "
+                        "mid-flight cannot say which candidate a given row belongs to")
             return record
         snapshot = self.exchange("param_snapshot")
         text = str(snapshot.get("reason", ""))
