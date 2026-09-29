@@ -99,19 +99,19 @@
         "adapter": "hailo",
         "bbox_normalized": true,
         "bbox_order": "yxyx",
-        "camera_frame_rate_hz": 15,
-        "camera_height": 480,
-        "camera_model": "imx477",
-        "camera_orientation": "none",
-        "camera_width": 640,
-        "inference_rate_hz": 15,
+        "camera_frame_rate_hz": 30.0,
+        "camera_height": 1080,
+        "camera_model": "imx500",
+        "camera_orientation": "rotate_180",
+        "camera_width": 1920,
+        "inference_rate_hz": 30.0,
         "input_height": 640,
         "input_width": 640,
         "labels": "coco",
         "license": "AGPL-3.0",
         "manifest": "model/manifests/hailo_yolov8n_hailo8_coco.json",
         "model_id": "hailo-yolov8n-coco-hailo8-v2.17.0",
-        "path": "../run/hailo-probe/yolov8n.hef",
+        "path": "model/artifacts/yolov8n.hef",
         "permitted_classes": [
           "person"
         ],
@@ -123,7 +123,9 @@
           "low_association": 0.15,
           "new_track": 0.25,
           "selectable": 0.3
-        }
+        },
+        "camera_lores_width": 640,
+        "camera_lores_height": 360
       },
       "offline_replay": {
         "adapter": "mock",

@@ -87,7 +87,7 @@ if [ "$ACTION" = stop ]; then
   echo "Controller shutdown is still in progress; inspect $RUN/controller.log" >&2
   exit 1
 fi
-PROFILE=person_detect_available
+PROFILE=hailo_yolov8n
 FRAMES=0
 MODE=hardware
 START_WEB=1
