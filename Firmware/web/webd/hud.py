@@ -1754,6 +1754,7 @@ HUD_HTML = """<!DOCTYPE html>
       } catch (e) { /* the poll retries; a dead number is not worth a stack trace */ }
     };
   })();
+  </script>
   
 
   <!-- z=10 candidates, z=11 selected, z=20 reticle: separate layers, because §18 orders

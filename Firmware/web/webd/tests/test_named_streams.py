@@ -113,3 +113,33 @@ class PinnedPreviewContract(unittest.TestCase):
             self.assertNotIn(gone, HUD_HTML,
                              f"{gone} came back: the secondary preview is pinned and always open")
         self.assertIn("otaSwapPip", HUD_HTML)         # swap survives: it does something, it isn't chrome
+
+
+class ServedPageIsWellFormed(unittest.TestCase):
+    """Every inline script in the served page has to parse.
+
+    A replacement in the PIP block once swallowed its closing `</script>`, so the rest of the
+    document -- the SVG overlay, the style, everything -- arrived inside the script and the browser
+    threw before the HUD drew a pixel. Token greps ("is `top: 88px` in the page?") all passed; the
+    page was still dead. The document is the artifact, so the artifact is what gets checked.
+    """
+
+    def test_inline_scripts_parse(self):
+        import shutil
+        import subprocess
+        import tempfile
+        import re
+        from ..hud import HUD_HTML
+        self.assertEqual(HUD_HTML.count("<script"), HUD_HTML.count("</script>"),
+                         "an inline script was left unterminated: everything after it is JS as far "
+                         "as the browser is concerned")
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("no node on this host")
+        for i, body in enumerate(re.findall(r"<script>(.*?)</script>", HUD_HTML, re.S)):
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+                fh.write(body)
+                path = fh.name
+            proc = subprocess.run([node, "--check", path], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0,
+                             f"inline script {i} does not parse: {proc.stderr[:400]}")
