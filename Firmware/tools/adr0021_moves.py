@@ -80,6 +80,8 @@ SANCTIONED_STEP_DEGREES = (0.5, 1, 5)   # the station's own words: "step size mu
 # conversion is the drive's own arithmetic rather than a guess: 8192 counts == 360 degrees.
 COUNTS_PER_DEGREE = 8192.0 / 360.0
 
+MOTION_FRACTION_OF_COMMAND = 0.1
+
 
 def moves(station, degrees=5):
     """Command a step each way and read the encoder, comparing the last reading before with the last after."""
@@ -93,19 +95,34 @@ def moves(station, degrees=5):
         # The step goes through the same exchange as everything else: reading its receipt instead of its
         # ack is what made four accepted prepares look like four refusals earlier today.
         reply = exchange(station, "manual_step", "yaw" + sign + str(degrees))
-        time.sleep(1.8)
+        # One reading 1.8 s after the step cannot separate "slow" from "stuck", and that distinction is the
+        # whole question now: the profile ramps, so poll the settle window and take the largest excursion.
+        trajectory = []
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            time.sleep(1.0)
+            now = yaw_field(station, "encoder_raw")
+            if before and now:
+                trajectory.append(round((now[-1] - before[-1]) / COUNTS_PER_DEGREE, 3))
         after = yaw_field(station, "encoder_raw")
         delta = (after[-1] - before[-1]) if before and after else None
         result[label] = {"accepted": bool(reply.get("accepted")),
                          "error": str(reply.get("error") or reply.get("reason") or "")[:90],
                          "delta_counts": delta,
-                         "delta_degrees": None if delta is None else round(delta / COUNTS_PER_DEGREE, 3)}
+                         "delta_degrees": None if delta is None else round(delta / COUNTS_PER_DEGREE, 3),
+                         "peak_degrees": max(trajectory, key=abs) if trajectory else None,
+                         "trajectory_degrees": trajectory[:12]}
         back = "yaw-" if sign == "+" else "yaw+"
         exchange(station, "manual_step", back + str(degrees))
         time.sleep(1.2)
     forward, reverse = result["forward"]["delta_counts"], result["reverse"]["delta_counts"]
-    result["verdict"] = "MOVES" if (forward and reverse and (forward > 0) != (reverse > 0)
-                                    and abs(forward) > 2 and abs(reverse) > 2) else "DOES_NOT_MOVE"
+    # "Moves" has to mean a share of what was commanded, not a nonzero wiggle: a refused command leaves
+    # the encoder exactly where it was, so any movement is real, but 0.2 degrees of a 5 degree command is
+    # an axis that is not walking. Anything below a tenth of the command is reported as not moving.
+    peaks = [result[k]["peak_degrees"] for k in ("forward", "reverse")]
+    moved = [v is not None and abs(v) >= MOTION_FRACTION_OF_COMMAND * degrees for v in peaks]
+    result["verdict"] = ("MOVES" if all(moved) and peaks[0] and peaks[1]
+                         and (peaks[0] > 0) != (peaks[1] > 0) else "DOES_NOT_MOVE")
     return result
 
 
@@ -162,7 +179,9 @@ def main():
         rows.append({"candidate": name, "string": trial, "hold": hold, "motion": motion})
         print(f"{name}: sent {trial} | at-rest {hold.get('at_rest_current_a_p95')} A of "
               f"{hold.get('cap_a')} A ({hold.get('fraction_of_cap')} of cap) | {motion['verdict']} "
-              f"fwd={motion['forward'].get('delta_degrees')}deg rev={motion['reverse'].get('delta_degrees')}deg")
+              f"fwd peak={motion['forward'].get('peak_degrees')}deg "
+              f"rev peak={motion['reverse'].get('peak_degrees')}deg "
+              f"trail={motion['forward'].get('trajectory_degrees')}")
     restored = exchange(station, "param_restore")
     print("restore judged: " + ("accepted" if restored.get("accepted") else json.dumps(restored)[:180]))
     print("baseline restored")
