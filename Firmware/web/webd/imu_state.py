@@ -35,6 +35,30 @@ def _blank_trace_stats() -> Dict[str, Any]:
             "truncations": 0}
 
 
+import math
+
+def attitude_from_quaternion(values):
+    """Roll and pitch, in degrees, from the sensor's own rotation vector.
+
+    Arithmetic on a number the BNO085 produced -- not a calibration, not an estimate: the sensor
+    reports a game rotation vector and gravity-aligned roll/pitch fall out of it. What it is *not* is
+    a statement about the turret base: the sensor sits on the moving pitch assembly, so this attitude
+    is the sensor's own and the base-frame elevation stays unclaimed until a mount transform exists
+    (missing data, not an unrun calibration).
+    """
+    try:
+        x, y, z, w = (float(v) for v in values[:4])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if x * x + y * y + z * z + w * w <= 0.0:
+        return None
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    sine_pitch = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
+    return {"roll_deg": round(math.degrees(roll), 2),
+            "pitch_deg": round(math.degrees(math.asin(sine_pitch)), 2),
+            "frame": "sensor"}
+
+
 @dataclass
 class ImuTraceReader:
     """Tails one IMU trace file and answers the UI's four questions about it.
@@ -160,6 +184,11 @@ class ImuTraceReader:
                             isinstance(rv.get("values"), list) and len(rv["values"]) >= 4
                             else None,
             "game_rv_accuracy": rv.get("status") if rv else None,
+            # The sensor's own measured attitude, published because the sensor measured it: no
+            # calibration is involved and none is needed to state it. Only the base-frame claim is
+            # withheld, and it is withheld because the transform does not exist.
+            "sensor_attitude_deg": (attitude_from_quaternion(rv.get("values")) if rv else None),
+            "sensor_quaternion": (list(rv.get("values")[:4]) if rv and rv.get("values") else None),
             "relative_quat": rv.get("relative") if rv else None,
             "tare": dict(self._tare),
             "acquisition": dict(self._summary),
