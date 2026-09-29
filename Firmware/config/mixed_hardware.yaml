@@ -33,10 +33,18 @@ axes:
     # firmware >= v1.0.11.2 (the owner flashed it on 2026-09-28) and the Current Ring switch
     # enabled in RoboMaster Assistant v2.7 (sources/GM6020_DRIVE_CONFIG_2026-09-28.md).
     current_ring_verified: true
-    # Host-side clamp on commanded torque current. 0.8 A is a deliberately small first envelope,
+    # Host-side clamp on commanded torque current. 0.8 A was a deliberately small first envelope,
     # not thermal qualification: 1.62 A rated, 0.90 A continuous stall and the 3 A
     # protocol range describe different conditions. ADR-002 requires measured duty/
     # temperature evidence before raising this envelope for the installed payload.
+    #
+    # Reverted to 0.8 on 2026-10-01 for the ADR-002.2 handover: this was raised to 1.62 A (rated) during
+    # the yaw motion investigation, and it is the ONLY production-behaviour change that work made. The
+    # owner's instruction is zero contamination of production modes, and the envelope belongs to the
+    # independent calibration module rather than to a diagnosis. The measurement that motivated it stands
+    # as evidence for that module to decide on: on the installed cross-roller bearing, drag sweeps moved
+    # 2.59 deg at 0.6 A, 11.38 deg at 1.5 A and 45.04 deg at 2.5 A of breakaway feedforward, so 0.8 A
+    # cannot drive this bearing through a commanded angle -- that is a finding, not a pre-empted decision.
     host_current_limit_a: 0.8
     # The yaw velocity loop's OUTPUT gains while in current mode, in amperes. Deliberately not
     # derived from the voltage gains: with the drive closing its own current loop, counts and
