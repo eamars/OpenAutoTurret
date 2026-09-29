@@ -24,6 +24,14 @@
 
 `manifests/` 中数值是设计目标或离线示例，不是已批准的物理安全包络。`tools/adr0021.py` 提供标准库实现的离线候选生成、评分、回执阻断和演示；**没有 SSH、SocketCAN、UDS、串口或电机发送功能**。实机 adapter 仍由 Codex 在原有单一控制路径中实现。
 
+## 已交付：参数清单
+
+`manifests/parameter_inventory.json` 由 controld 自己生成（`controld <config> --dump-parameter-registry <path>`，经
+`Firmware/tools/dump_parameter_inventory.py` 补上二进制 SHA-256 与源码 revision），**不是手抄表**：31 条条目 + 18 条排除规则。
+`Firmware/tools/tests/test_parameter_inventory.py` 会拒绝任何"新出现的可调字段既没有条目也没有排除原因"，
+也会拒绝与当前二进制不一致的旧文档。清单里 `yaw.friction.enabled` 被标成 `fixed_in_campaign`，理由写在条目本身：
+现在 trial 命令用"任一幅度 > 0"反推这个开关，所以开/关不是单变量对照（§4）。
+
 ## 离线验证
 
 ```bash
