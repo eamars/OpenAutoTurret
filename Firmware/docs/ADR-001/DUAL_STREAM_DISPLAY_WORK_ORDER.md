@@ -193,3 +193,8 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 
 **不许的**：并行跑两套后端贴标签；主机缩放当默认（它是显式后备）；用"校准没做"当不部署的理由；
 把 `describe()` 里没测过的数字填成常数（没测到就发 `null`，HUD 显示 `n/m`）。
+
+### H2 进行中（round 2）：lores 腿的补丁**没落地**，现场是干净的
+
+`camera.py::open_picamera2_sensor` 带返回注解（`-> Tuple[...]`），我用 `def …\(([^)]*)\):` 找签名 ⇒ 正则不匹配 ⇒ 断言先炸、**文件从未写盘**（所以没有半套改动，perception 仍是基线 4 既存失败 / 435 passed）。
+下一手：按字符串锚点插参数（锚 `buffer_count` 那段参数文本，别用正则配平括号）；info 字典要加的两行插在 `"stream_size": (width, height), "task": "object_detection",` 之后（已用 `cat -A` 核对过原文）；`ModelConfig` 加 `camera_lores_width/height`（`_as_int` 点名式校验），visiond 里 `adapter.configure_stream(*(info.get("lores_size") or stream))`，`CameraOwner` 需要按 `info["inference_input"]` 取 lores 帧（**这一处还没读过，动手前先读**）。
