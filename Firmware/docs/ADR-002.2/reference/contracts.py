@@ -188,3 +188,26 @@ def completion_reasons(requirements: list[dict[str, Any]], results: list[dict[st
     if all_profile_bundles_pass is not True:
         reasons.append('PROFILE_DUAL_VALIDATION_INCOMPLETE')
     return sorted(set(reasons))
+
+
+def stage1_completion_reasons(requirements: list[dict[str, Any]], results: list[dict[str, Any]]) -> list[str]:
+    """Architect override: mathematical completion has no physical prerequisites.
+
+    This cannot grant hardware, calibration, Stage 2, 3a/3b or full ADR qualification.
+    Historical S1-05/S1-06 IDs deliberately remain traceable but now belong to Stage 2.
+    """
+    required = [r for r in requirements if r.get('mandatory') is True and
+                r.get('evidence_kind') == 'software' and r.get('stage') in ('1', 'all')]
+    rows = {}
+    reasons = []
+    for row in results:
+        rid = row.get('id')
+        if rid in rows:
+            reasons.append('DUPLICATE_REQUIREMENT_RESULT')
+        rows[rid] = row
+    for requirement in required:
+        rid = requirement['id']; row = rows.get(rid, {})
+        if (row.get('status') != 'PASS' or row.get('execution') not in ('software', 'synthetic')
+                or not row.get('evidence_ids')):
+            reasons.append('UNMET_' + rid)
+    return sorted(set(reasons))

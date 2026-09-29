@@ -2,7 +2,9 @@
 
 **决策日期：2026-09-30 · 一套交付范围 · 一个完成标准**
 
-本包是供 Codex 实施的完整开发合同，附离线数学与验收契约参考工具。它不是已经修改、部署或验收的固件。没有连接 Pi、发送 CAN、运行实机或取得新载荷数据。
+**阶段1/2已由[架构师覆盖指令](docs/07_STAGE1_OFFLINE_OVERRIDE.md)修订：阶段1是完整纯数学软件与合成验证，阶段2才核验实机能力、实测标定并自动辨识/注入参数。** 当前本地工作禁止访问设备，到阶段2入口停止。全ADR仍须3a/3b实机双验收。
+
+本包保存完整开发合同和参考工具；阶段1实际软件位于[commissioning](../../commissioning/README.md)与共享C++核心，已接入本地构建和显式离线回放。物理部署/验收另记；没有连接 Pi、发送 CAN、运行实机或取得新载荷数据。
 
 ## 唯一流程
 
@@ -24,6 +26,7 @@
 | `docs/04_DATA_AND_ADAPTATION.md` | 实际反馈、IMU、实验生成、工况变化与自动更新 |
 | `docs/05_DUAL_VALIDATION.md` | 必需的3a/3b、质量指标、变化矩阵与正式晋升 |
 | `docs/06_IMPLEMENTATION_CONTRACT.md` | 实施边界、源代码结合点、错误分支和交付清单 |
+| `docs/07_STAGE1_OFFLINE_OVERRIDE.md` | 优先覆盖阶段1/2职责、前置条件和完成标准 |
 | `contracts/` | JSON数据契约、验收规则、全量需求矩阵 |
 | `reference/`、`tests/` | 不访问硬件的数学/身份/双验收参考与测试 |
 | `sources/READING_LOG.md` | 来源、选择性代码阅读和未核实范围 |
@@ -42,4 +45,4 @@ python -m unittest discover -s tests -v
 python -m reference.demo --output reports/demo
 ```
 
-参考工具不含 SSH、UDS、SocketCAN 或电机命令。独立 C++ 执行程序、production 接入、全套测量/拟合/仿真/验证流水线是本合同要求 Codex 完整交付的内容；不能将参考工具通过当作项目完成。
+上述命令只运行历史参考工具；完整阶段1的构建、参数接口与复现命令见[实现说明](../../commissioning/README.md)。参考测试或离线回放通过均不能代替正常设备输出链接入和3a/3b实机资格。

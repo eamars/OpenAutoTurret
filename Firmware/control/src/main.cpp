@@ -25,6 +25,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include "replay.hpp"
 
 #include "calibration/camera_calibration.hpp"
 #include "config/tracking_setup.hpp"
@@ -161,6 +162,12 @@ TrackingController::Config make_tracking_cfg(const config::TurretConfig& cfg) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Stage 1 proves the identical compiled mathematical core without constructing
+  // station configuration, transports or runtime services. This is not Stage 3b.
+  if (argc >= 2 && std::strcmp(argv[1], "--axis-core-replay") == 0) {
+    if (argc != 3) return 2;
+    return ota::axis::replay_file(argv[2]);
+  }
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
   const std::string config_path = (argc > 1) ? argv[1] : "config/turret.yaml";

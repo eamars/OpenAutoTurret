@@ -15,7 +15,7 @@ endif()
 add_library(ota_core STATIC ${OTA_CORE_SRCS})
 target_include_directories(ota_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(ota_core PRIVATE -Wall -Wextra)
-target_link_libraries(ota_core PUBLIC Threads::Threads yaml-cpp spdlog::spdlog)
+target_link_libraries(ota_core PUBLIC Threads::Threads yaml-cpp spdlog::spdlog axis_control_core)
 
 # The control daemon.
 add_executable(controld ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)

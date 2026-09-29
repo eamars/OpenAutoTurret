@@ -1,13 +1,15 @@
 {
   "adr": "ADR-002.2",
   "done_rule": "ALL_MANDATORY_AND_EVERY_CANDIDATE_DUAL_VALIDATED",
+  "stage1_rule": "ALL_STAGE1_SOFTWARE_WITH_SYNTHETIC_EVIDENCE_NO_PHYSICAL_PREREQUISITES",
+  "stage_override": "docs/07_STAGE1_OFFLINE_OVERRIDE.md",
   "requirements": [
     {
       "id": "S1-01",
       "stage": "1",
       "mandatory": true,
       "evidence_kind": "software",
-      "description": "独立commissiond与production共用同一控制核心/构建定义"
+      "description": "独立commissiond与production链接同一数学控制核心/构建定义，并离线回放一致；正常设备输出链实机资格归阶段2/3"
     },
     {
       "id": "S1-02",
@@ -32,14 +34,14 @@
     },
     {
       "id": "S1-05",
-      "stage": "1",
+      "stage": "2",
       "mandatory": true,
       "evidence_kind": "physical",
       "description": "两轴电流模式、反馈/单位/限流/承重/停止能力验证"
     },
     {
       "id": "S1-06",
-      "stage": "1",
+      "stage": "2",
       "mandatory": true,
       "evidence_kind": "physical",
       "description": "encoder/gyro/accel的坐标、时间、噪声和有效频带标定"
@@ -49,14 +51,35 @@
       "stage": "1",
       "mandatory": true,
       "evidence_kind": "software",
-      "description": "全量runtime registry与事务/读回，数值变更零编译"
+      "description": "全量数学参数契约、runtime registry及模拟事务/读回，数值变更零编译；真实读回归阶段2"
     },
     {
       "id": "S1-08",
       "stage": "1",
       "mandatory": true,
       "evidence_kind": "software",
-      "description": "资源互斥owner、丢失租约/进程异常及无重复CAN输出"
+      "description": "模拟接口验证互斥owner/epoch、租约丢失、进程异常和禁止重复输出；CAN实机核验归阶段2"
+    },
+    {
+      "id": "S1-09",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "全部参数的单位/坐标/维度/分类/原始信号/可辨识性/不确定性/适用域/未知处理；自动完整绑定且拒绝模拟值冒充实测"
+    },
+    {
+      "id": "S1-10",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "encoder/电流/IMU测量模型及标定、对时、噪声和因果观察器算法用合成数据验证"
+    },
+    {
+      "id": "S1-11",
+      "stage": "1",
+      "mandatory": true,
+      "evidence_kind": "software",
+      "description": "多合成参数/工况无需改代码或编译即可辨识/注入/计算；覆盖载荷、摩擦、重心、姿态、方向、噪声时序异常和模型假设外数据"
     },
     {
       "id": "S2-01",
@@ -74,14 +97,14 @@
     },
     {
       "id": "S2-03",
-      "stage": "2",
+      "stage": "1",
       "mandatory": true,
       "evidence_kind": "software",
       "description": "原始数据、模型族和工况参数的身份化存储与复用"
     },
     {
       "id": "S2-04",
-      "stage": "2",
+      "stage": "1",
       "mandatory": true,
       "evidence_kind": "software",
       "description": "固定规则的信息选择器、有限定向补测和变化检测"

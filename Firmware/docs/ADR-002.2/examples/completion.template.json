@@ -50,6 +50,24 @@
       "evidence_ids": []
     },
     {
+      "id": "S1-09",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-10",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-11",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "evidence_ids": []
+    },
+    {
       "id": "S2-01",
       "status": "NOT_RUN",
       "execution": "not_run",
@@ -163,5 +181,13 @@
       "execution": "not_run",
       "evidence_ids": []
     }
-  ]
+  ],
+  "stage_status": {
+    "mathematical_software": "NOT_RUN",
+    "hardware_capability": "NOT_RUN",
+    "physical_calibration": "NOT_RUN",
+    "plant_identification": "NOT_RUN",
+    "3a": "NOT_RUN",
+    "3b": "NOT_RUN"
+  }
 }

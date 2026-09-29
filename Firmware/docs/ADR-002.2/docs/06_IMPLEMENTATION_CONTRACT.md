@@ -1,5 +1,8 @@
 # 06 · 实施结合点、验收与agent权限
 
+阶段1/2前置条件和完成标准由[架构师覆盖指令](07_STAGE1_OFFLINE_OVERRIDE.md)替代。
+本文件实机能力与现场输入约束适用于阶段2及后续，不阻断完整离线数学实现。
+
 ## 1. 对既有实现的最小复用
 
 公开读取的关键路径：[R2] mixed_hardware.yaml、[R3] can_motor_backend.cpp、[R5] mixed_can_motor_backend.hpp、[R6] gm6020_velocity.hpp。它们只是定位入口；本包未取得本地bad742d或dirty PR3的源码。
