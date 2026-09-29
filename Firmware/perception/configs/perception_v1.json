@@ -272,5 +272,13 @@
         "shape": 0.15
       }
     }
+  },
+  "secondary": {
+    "model": "imx477",
+    "width": 1280,
+    "height": 720,
+    "frame_rate_hz": 30.0,
+    "preview_fps": 10.0,
+    "orientation": "rotate_180"
   }
 }

@@ -653,8 +653,17 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
               file=sys.stderr)
         return None
     try:
+        # One mechanism for both sensors, one value per role: the transform happens at the sensor so
+        # the preview, the neural network and any saved frame all see the same upright pixels. The
+        # value is configuration because which sensor is mounted upside down is a fact about the
+        # station -- and an unsupported value is a named refusal, not a silent "none".
+        want = (getattr(secondary, "orientation", "none") or "none")
+        if want not in ("none", "rotate_180", "flip_horizontal", "flip_vertical"):
+            print(f"visiond: secondary.orientation {want!r} is not supported; using 'none' "
+                  "(legal: none, rotate_180, flip_horizontal, flip_vertical)", file=sys.stderr)
+            want = "none"
         picam2, info = open_picamera2_sensor(model, stream_size=(width, height),
-                                            frame_rate_hz=rate, orientation="none")
+                                             frame_rate_hz=rate, orientation=want)
     except Exception as exc:                                                  # noqa: BLE001
         # The wide camera is already open and serving: a secondary sensor that will not open is
         # one stream down, said out loud, not a daemon that takes the station's video with it.

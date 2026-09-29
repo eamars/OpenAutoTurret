@@ -1110,6 +1110,7 @@ function render(t) {
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
                              jogging: !!t.manual_lease_active });
+  if (window.otaPipMaybeOpen) window.otaPipMaybeOpen(t.video_streams);
   $("mode-block").innerHTML =
     '<div class="m1">' + st.line1 + '</div>' +
     '<div class="m2' + (st.named ? "" : " raw") + '">' + st.line2 + '</div>' +
@@ -1717,14 +1718,14 @@ HUD_HTML = """<!DOCTYPE html>
       el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
       if (j.ok) el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
       el("pip").classList.add("on");
+      el("pipopen").textContent = "PIP \u25be";
       placePip();
-      el("pipopen").style.display = "none";
       el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
       open_ = true;
     }
     function closePip() {
       el("pip").classList.remove("on");
-      el("pipopen").style.display = "block";
+      el("pipopen").textContent = "PIP \u25b8";
       el("pipimg").src = "";
       fetch("/api/video/stop?camera=" + pipRole, { method: "POST" });
       open_ = false;
@@ -1732,10 +1733,10 @@ HUD_HTML = """<!DOCTYPE html>
     function swap() {
       var m = mainRole; mainRole = pipRole; pipRole = m;
       el("video").src = "/api/video?camera=" + mainRole + "&t=" + Date.now();
-      if (open_) {
-        fetch("/api/video/stop?camera=" + pipRole, { method: "POST" });
-        openPip();
-      }
+      // A swap re-points the two <img>s and nothing else. It used to stop the role that was about to
+      // become the PIP and start it again a moment later -- interrupting the stream it was supposed to
+      // keep showing. A source stays up until someone asks it to come down.
+      if (open_) openPip();
     }
     // The invariant the owner set on 2026-09-29: the PIP may overlap the picture, never page chrome.
     // #video is `position:absolute; inset:0; object-fit:contain`, so its element box fills the
@@ -1755,7 +1756,16 @@ HUD_HTML = """<!DOCTYPE html>
     function placePip() {
       const box = pictureBox();
       const mine = el("pip").classList.contains("on") ? el("pip") : el("pipopen");
-      if (!box) { mine.style.left = "-9999px"; mine.style.top = "-9999px"; return; }
+      if (!box) {
+        // Between re-pointing an <img> and its first decoded frame there is no intrinsic size to align
+        // to. Parking the pane off-screen there made the PIP vanish with no way back; the element box
+        // is the honest fallback and the bar says the geometry is provisional.
+        const r = el("video").getBoundingClientRect();
+        mine.style.left = (r.left + INSET) + "px";
+        mine.style.top = (r.top + INSET) + "px";
+        el("pipfps").textContent = "no frame yet";
+        return;
+      }
       let top = box.y + INSET;
       // The one piece of chrome that can reach this corner is the mode/status block, and whether it
       // sits on the picture or on a black bar depends on the window ratio -- so the clearance is
@@ -1767,6 +1777,11 @@ HUD_HTML = """<!DOCTYPE html>
       }
       mine.style.left = (box.x + INSET) + "px";
       mine.style.top = top + "px";
+      const btn = el("pipopen");
+      if (mine !== btn) {                       // open: the toggle rides under the pane, always clickable
+        btn.style.left = mine.style.left;
+        btn.style.top = (mine.getBoundingClientRect().bottom + 4) + "px";
+      }
     }
     new ResizeObserver(placePip).observe(el("video"));
     el("video").addEventListener("loadedmetadata", placePip);   // frame geometry can change size
@@ -1776,6 +1791,16 @@ HUD_HTML = """<!DOCTYPE html>
     // The rate is measured by visiond and served per stream; the HUD already polls every second,
     // so this rides that poll rather than opening a second loop for one number. "rate n/m" is kept
     // when nobody has measured a window yet -- zero is a measurement, and this is not one.
+    // Default open, but on the evidence: the page opens the PIP the first time a telemetry frame
+    // lists a second role. A station publishing one stream gets no pane and no button at all, so
+    // "nothing new appears on a single-camera station" stays true.
+    let decided = false;
+    window.otaPipMaybeOpen = function (streams) {
+      if (decided) return;
+      decided = true;
+      if (Array.isArray(streams) && streams.length >= 2) { openPip(); }
+      else { el("pipopen").style.display = "none"; }
+    };
     window.otaPipTick = async function () {
       if (!open_) return;
       try {

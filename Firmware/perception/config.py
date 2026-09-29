@@ -794,11 +794,16 @@ class SecondaryStreamConfig:
     frame_rate_hz: float = 30.0
     preview_fps: float = 10.0
     queue_depth: int = 1
+    # Same mechanism and same legal values as the primary profile's `camera_orientation`: the
+    # transform is applied at the sensor, so the preview, the neural network and any saved frame all
+    # see one upright image. Only the value is per role -- which sensor is mounted upside down is a
+    # fact about each mount, and on this station both of them are.
+    orientation: str = "none"
 
     def to_dict(self) -> Dict[str, Any]:
         return {"model": self.model, "width": self.width, "height": self.height,
                 "frame_rate_hz": self.frame_rate_hz, "preview_fps": self.preview_fps,
-                "queue_depth": self.queue_depth}
+                "queue_depth": self.queue_depth, "orientation": self.orientation}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "SecondaryStreamConfig":
@@ -809,7 +814,8 @@ class SecondaryStreamConfig:
             height=_as_int(data.get("height", 720), "secondary.height", 0),
             frame_rate_hz=_as_float(data.get("frame_rate_hz"), "secondary.frame_rate_hz", 30.0),
             preview_fps=_as_float(data.get("preview_fps"), "secondary.preview_fps", 10.0),
-            queue_depth=_as_int(data.get("queue_depth", 1), "secondary.queue_depth", 0))
+            queue_depth=_as_int(data.get("queue_depth", 1), "secondary.queue_depth", 0),
+            orientation=str(data.get("orientation") or "none").strip().lower())
 
 
 @dataclass
