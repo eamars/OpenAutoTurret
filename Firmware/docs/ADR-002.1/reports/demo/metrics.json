@@ -1,0 +1,200 @@
+{
+  "smooth": {
+    "status": "PASS_SCOPE",
+    "metrics": {
+      "jitter_position_p95_p5_deg": 0.03989369118159658,
+      "residual_full_span_deg": 0.040595329383060985,
+      "jitter_velocity_rms_dps": 0.04919184928741866,
+      "tracking_rmse_dps": 0.04919205378949327,
+      "tracking_ratio": 0.9999527186761229,
+      "active_fraction": 1.0,
+      "stop_drift_deg": 0.0
+    },
+    "checks": {
+      "position_jitter": true,
+      "position_spike": true,
+      "velocity_jitter": true,
+      "tracking_rmse": true,
+      "tracking_ratio": true,
+      "sustained_motion": true,
+      "stop_drift": true
+    },
+    "reasons": [],
+    "max_normalized_quality": 0.26595794121064387,
+    "mean_normalized_quality": 0.08550233217334886,
+    "steady_duration_s": 3.0,
+    "hold_window_s": 2.0,
+    "independent_rows": 277,
+    "metrics_hash": "e45467a5c4ee8b2211363441b79507363cd1ad3898cc39893a08ecb64264738c",
+    "parameters_hash": "9683071ac368b02d3e510713013885035f94ceef17ba42d7601e6bb4c73c9f17",
+    "qualification": "SYNTHETIC_OR_SUPPLIED_TRACE_ONLY_NOT_HARDWARE_QUALIFICATION"
+  },
+  "stalled": {
+    "status": "FAIL_QUALITY",
+    "metrics": {
+      "jitter_position_p95_p5_deg": 0.0,
+      "residual_full_span_deg": 0.0,
+      "jitter_velocity_rms_dps": 0.0,
+      "tracking_rmse_dps": 3.0,
+      "tracking_ratio": 0.0,
+      "active_fraction": 0.0,
+      "stop_drift_deg": 0.0
+    },
+    "checks": {
+      "position_jitter": true,
+      "position_spike": true,
+      "velocity_jitter": true,
+      "tracking_rmse": false,
+      "tracking_ratio": false,
+      "sustained_motion": false,
+      "stop_drift": true
+    },
+    "reasons": [
+      "tracking_rmse",
+      "tracking_ratio",
+      "sustained_motion"
+    ],
+    "max_normalized_quality": 19.999999999999982,
+    "mean_normalized_quality": 5.142857142857141,
+    "steady_duration_s": 3.0,
+    "hold_window_s": 2.0,
+    "independent_rows": 277,
+    "metrics_hash": "e45467a5c4ee8b2211363441b79507363cd1ad3898cc39893a08ecb64264738c",
+    "parameters_hash": "9683071ac368b02d3e510713013885035f94ceef17ba42d7601e6bb4c73c9f17",
+    "qualification": "SYNTHETIC_OR_SUPPLIED_TRACE_ONLY_NOT_HARDWARE_QUALIFICATION"
+  },
+  "creep": {
+    "status": "FAIL_QUALITY",
+    "metrics": {
+      "jitter_position_p95_p5_deg": 0.03927172533983965,
+      "residual_full_span_deg": 0.045175991634715904,
+      "jitter_velocity_rms_dps": 0.12166939003217392,
+      "tracking_rmse_dps": 2.897024151809959,
+      "tracking_ratio": 0.035177304964539004,
+      "active_fraction": 0.0,
+      "stop_drift_deg": 0.0
+    },
+    "checks": {
+      "position_jitter": true,
+      "position_spike": true,
+      "velocity_jitter": true,
+      "tracking_rmse": false,
+      "tracking_ratio": false,
+      "sustained_motion": false,
+      "stop_drift": true
+    },
+    "reasons": [
+      "tracking_rmse",
+      "tracking_ratio",
+      "sustained_motion"
+    ],
+    "max_normalized_quality": 19.999999999999982,
+    "mean_normalized_quality": 5.156858882155263,
+    "steady_duration_s": 3.0,
+    "hold_window_s": 2.0,
+    "independent_rows": 277,
+    "metrics_hash": "e45467a5c4ee8b2211363441b79507363cd1ad3898cc39893a08ecb64264738c",
+    "parameters_hash": "9683071ac368b02d3e510713013885035f94ceef17ba42d7601e6bb4c73c9f17",
+    "qualification": "SYNTHETIC_OR_SUPPLIED_TRACE_ONLY_NOT_HARDWARE_QUALIFICATION"
+  },
+  "oscillating": {
+    "status": "FAIL_QUALITY",
+    "metrics": {
+      "jitter_position_p95_p5_deg": 0.49038759149529443,
+      "residual_full_span_deg": 0.5479794353433263,
+      "jitter_velocity_rms_dps": 1.8924582955729494,
+      "tracking_rmse_dps": 1.8934227328808722,
+      "tracking_ratio": 0.9798581560283687,
+      "active_fraction": 0.6595744680851063,
+      "stop_drift_deg": 0.0
+    },
+    "checks": {
+      "position_jitter": false,
+      "position_spike": false,
+      "velocity_jitter": false,
+      "tracking_rmse": false,
+      "tracking_ratio": true,
+      "sustained_motion": false,
+      "stop_drift": true
+    },
+    "reasons": [
+      "position_jitter",
+      "position_spike",
+      "velocity_jitter",
+      "tracking_rmse",
+      "sustained_motion"
+    ],
+    "max_normalized_quality": 6.808510638297867,
+    "mean_normalized_quality": 2.811077123243077,
+    "steady_duration_s": 3.0,
+    "hold_window_s": 2.0,
+    "independent_rows": 277,
+    "metrics_hash": "e45467a5c4ee8b2211363441b79507363cd1ad3898cc39893a08ecb64264738c",
+    "parameters_hash": "9683071ac368b02d3e510713013885035f94ceef17ba42d7601e6bb4c73c9f17",
+    "qualification": "SYNTHETIC_OR_SUPPLIED_TRACE_ONLY_NOT_HARDWARE_QUALIFICATION"
+  },
+  "drifting": {
+    "status": "FAIL_QUALITY",
+    "metrics": {
+      "jitter_position_p95_p5_deg": 0.03989369118159658,
+      "residual_full_span_deg": 0.040595329383060985,
+      "jitter_velocity_rms_dps": 0.04919184928741866,
+      "tracking_rmse_dps": 0.04919205378949327,
+      "tracking_ratio": 0.9999527186761229,
+      "active_fraction": 1.0,
+      "stop_drift_deg": 0.3520000000000003
+    },
+    "checks": {
+      "position_jitter": true,
+      "position_spike": true,
+      "velocity_jitter": true,
+      "tracking_rmse": true,
+      "tracking_ratio": true,
+      "sustained_motion": true,
+      "stop_drift": false
+    },
+    "reasons": [
+      "stop_drift"
+    ],
+    "max_normalized_quality": 2.346666666666669,
+    "mean_normalized_quality": 0.4207404274114444,
+    "steady_duration_s": 3.0,
+    "hold_window_s": 2.0,
+    "independent_rows": 277,
+    "metrics_hash": "e45467a5c4ee8b2211363441b79507363cd1ad3898cc39893a08ecb64264738c",
+    "parameters_hash": "9683071ac368b02d3e510713013885035f94ceef17ba42d7601e6bb4c73c9f17",
+    "qualification": "SYNTHETIC_OR_SUPPLIED_TRACE_ONLY_NOT_HARDWARE_QUALIFICATION"
+  },
+  "spike": {
+    "status": "FAIL_QUALITY",
+    "metrics": {
+      "jitter_position_p95_p5_deg": 0.03994046706169385,
+      "residual_full_span_deg": 0.6243061693970038,
+      "jitter_velocity_rms_dps": 0.2555982713834125,
+      "tracking_rmse_dps": 0.2555983107414853,
+      "tracking_ratio": 0.9999527186761229,
+      "active_fraction": 1.0,
+      "stop_drift_deg": 0.0
+    },
+    "checks": {
+      "position_jitter": true,
+      "position_spike": false,
+      "velocity_jitter": true,
+      "tracking_rmse": true,
+      "tracking_ratio": true,
+      "sustained_motion": true,
+      "stop_drift": true
+    },
+    "reasons": [
+      "position_spike"
+    ],
+    "max_normalized_quality": 2.0810205646566793,
+    "mean_normalized_quality": 0.48145090322236267,
+    "steady_duration_s": 3.0,
+    "hold_window_s": 2.0,
+    "independent_rows": 277,
+    "metrics_hash": "e45467a5c4ee8b2211363441b79507363cd1ad3898cc39893a08ecb64264738c",
+    "parameters_hash": "9683071ac368b02d3e510713013885035f94ceef17ba42d7601e6bb4c73c9f17",
+    "qualification": "SYNTHETIC_OR_SUPPLIED_TRACE_ONLY_NOT_HARDWARE_QUALIFICATION"
+  }
+}

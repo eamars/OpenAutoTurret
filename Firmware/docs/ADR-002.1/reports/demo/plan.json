@@ -1,0 +1,395 @@
+{
+  "adr": "002.1",
+  "offline_only": true,
+  "physical_execution_authorized": false,
+  "space_hash": "42ca426bde82544f4c7038642e13635ec1f2de72d960dd0672a21d99e0a6e73f",
+  "policy_hash": "a8cbcf3f93f6e6a95618b25f609b55686b7466d3d31ab0bb30849e0f957eabdd",
+  "seed": 20260930,
+  "candidates": [
+    {
+      "candidate_id": "coarse-000",
+      "normalized": [
+        0.59375,
+        0.28125,
+        0.84375,
+        0.90625,
+        0.40625,
+        0.40625
+      ],
+      "parameters": {
+        "kp": 3.437238596245,
+        "ki": 0.16875,
+        "run_pos": 0.16875,
+        "run_neg": 0.18125,
+        "break_pos": 0.1814453125,
+        "break_neg": 0.1888671875
+      },
+      "parameters_hash": "e693695bba49a28a2f30854480d1639c0abc32272e4a0b040163e6f3c77443c9",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-001",
+      "normalized": [
+        0.78125,
+        0.78125,
+        0.15625,
+        0.46875,
+        0.78125,
+        0.21875
+      ],
+      "parameters": {
+        "kp": 5.076203828767,
+        "ki": 0.46875,
+        "run_pos": 0.03125,
+        "run_neg": 0.09375,
+        "break_pos": 0.1630859375,
+        "break_neg": 0.1169921875
+      },
+      "parameters_hash": "7040ce1ea4ced1e8cad5734fc1af8109450dddb07b3c6d2ed141f80b907c3b8a",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-002",
+      "normalized": [
+        0.09375,
+        0.71875,
+        0.21875,
+        0.09375,
+        0.53125,
+        0.78125
+      ],
+      "parameters": {
+        "kp": 1.21524735998,
+        "ki": 0.43125,
+        "run_pos": 0.04375,
+        "run_neg": 0.01875,
+        "break_pos": 0.1267578125,
+        "break_neg": 0.1603515625
+      },
+      "parameters_hash": "4c3ffb01c69fcf6745d937701bf35274a97fafb966ad681c5cbb9bf1f23e603e",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-003",
+      "normalized": [
+        0.15625,
+        0.40625,
+        0.40625,
+        0.65625,
+        0.59375,
+        0.90625
+      ],
+      "parameters": {
+        "kp": 1.383909881964,
+        "ki": 0.24375,
+        "run_pos": 0.08125,
+        "run_neg": 0.13125,
+        "break_pos": 0.1517578125,
+        "break_neg": 0.1935546875
+      },
+      "parameters_hash": "4ddf19fb404346b0447aeb6bb2c4a6fc6bce819617aaebfa70f11dc7dc0964ec",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-004",
+      "normalized": [
+        0.34375,
+        0.65625,
+        0.71875,
+        0.96875,
+        0.46875,
+        0.84375
+      ],
+      "parameters": {
+        "kp": 2.043794297308,
+        "ki": 0.39375,
+        "run_pos": 0.14375,
+        "run_neg": 0.19375,
+        "break_pos": 0.1701171875,
+        "break_neg": 0.1990234375
+      },
+      "parameters_hash": "0b2627e7885a295524f5a20c07be58ac4bb29414ca4f48830a2ceb8848a875b2",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-005",
+      "normalized": [
+        0.03125,
+        0.21875,
+        0.34375,
+        0.34375,
+        0.09375,
+        0.15625
+      ],
+      "parameters": {
+        "kp": 1.067140400677,
+        "ki": 0.13125,
+        "run_pos": 0.06875,
+        "run_neg": 0.06875,
+        "break_pos": 0.0810546875,
+        "break_neg": 0.0892578125
+      },
+      "parameters_hash": "6eba89061102042804752c0c4a833fad92e48bbe6c3783628f74bc2ac02b4dc9",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-006",
+      "normalized": [
+        0.46875,
+        0.90625,
+        0.65625,
+        0.21875,
+        0.03125,
+        0.71875
+      ],
+      "parameters": {
+        "kp": 2.650473286319,
+        "ki": 0.54375,
+        "run_pos": 0.13125,
+        "run_neg": 0.04375,
+        "break_pos": 0.1333984375,
+        "break_neg": 0.1560546875
+      },
+      "parameters_hash": "5184800ccb93b905bdab9198b2b5307fbc142d98f21f63464e4c24cc57f61e02",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-007",
+      "normalized": [
+        0.96875,
+        0.34375,
+        0.09375,
+        0.59375,
+        0.15625,
+        0.09375
+      ],
+      "parameters": {
+        "kp": 7.496670536441,
+        "ki": 0.20625,
+        "run_pos": 0.01875,
+        "run_neg": 0.11875,
+        "break_pos": 0.0470703125,
+        "break_neg": 0.1263671875
+      },
+      "parameters_hash": "a828b5a5ebc35110947d6bb2de81b8347d0998a20b8627983a8b9e34bee05f21",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-008",
+      "normalized": [
+        0.53125,
+        0.53125,
+        0.59375,
+        0.40625,
+        0.84375,
+        0.59375
+      ],
+      "parameters": {
+        "kp": 3.018328855187,
+        "ki": 0.31875,
+        "run_pos": 0.11875,
+        "run_neg": 0.08125,
+        "break_pos": 0.1873046875,
+        "break_neg": 0.1517578125
+      },
+      "parameters_hash": "4265bcf40c338d1d096b205b61a196535847372b9ee3c1aef225864e50228844",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-009",
+      "normalized": [
+        0.28125,
+        0.59375,
+        0.78125,
+        0.03125,
+        0.28125,
+        0.28125
+      ],
+      "parameters": {
+        "kp": 1.794709075003,
+        "ki": 0.35625,
+        "run_pos": 0.15625,
+        "run_neg": 0.00625,
+        "break_pos": 0.1685546875,
+        "break_neg": 0.0607421875
+      },
+      "parameters_hash": "a0945aa907142f1e690757e3e45a8b801392437dfa3ce717911620841bdfb5dd",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-010",
+      "normalized": [
+        0.84375,
+        0.15625,
+        0.96875,
+        0.78125,
+        0.96875,
+        0.96875
+      ],
+      "parameters": {
+        "kp": 5.780723227908,
+        "ki": 0.09375,
+        "run_pos": 0.19375,
+        "run_neg": 0.15625,
+        "break_pos": 0.1998046875,
+        "break_neg": 0.1986328125
+      },
+      "parameters_hash": "783cf756fe86cef737ac6e2161cb3592ee75ab2a6e8528d94cf3230ca88ffe94",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-011",
+      "normalized": [
+        0.21875,
+        0.09375,
+        0.28125,
+        0.71875,
+        0.34375,
+        0.03125
+      ],
+      "parameters": {
+        "kp": 1.575980845108,
+        "ki": 0.05625,
+        "run_pos": 0.05625,
+        "run_neg": 0.14375,
+        "break_pos": 0.1056640625,
+        "break_neg": 0.1455078125
+      },
+      "parameters_hash": "cb5282ed0cbbfb52f84b398fd9219ac0950f283404851fa81859371d8d450df7",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-012",
+      "normalized": [
+        0.71875,
+        0.46875,
+        0.53125,
+        0.15625,
+        0.21875,
+        0.65625
+      ],
+      "parameters": {
+        "kp": 4.457546970384,
+        "ki": 0.28125,
+        "run_pos": 0.10625,
+        "run_neg": 0.03125,
+        "break_pos": 0.1267578125,
+        "break_neg": 0.1419921875
+      },
+      "parameters_hash": "f8454f372c5cc389fb618a4a32a74485cc04925842bb6a24777c671daaea2185",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-013",
+      "normalized": [
+        0.65625,
+        0.96875,
+        0.03125,
+        0.28125,
+        0.71875,
+        0.46875
+      ],
+      "parameters": {
+        "kp": 3.914288248351,
+        "ki": 0.58125,
+        "run_pos": 0.00625,
+        "run_neg": 0.05625,
+        "break_pos": 0.1455078125,
+        "break_neg": 0.1236328125
+      },
+      "parameters_hash": "b3ff28ec13852023e88513663d48e57286f86915093614d9fd1b4421001c34cd",
+      "direction_order": [
+        -1,
+        1
+      ]
+    },
+    {
+      "candidate_id": "coarse-014",
+      "normalized": [
+        0.40625,
+        0.84375,
+        0.90625,
+        0.53125,
+        0.90625,
+        0.34375
+      ],
+      "parameters": {
+        "kp": 2.327449717555,
+        "ki": 0.50625,
+        "run_pos": 0.18125,
+        "run_neg": 0.10625,
+        "break_pos": 0.1982421875,
+        "break_neg": 0.1384765625
+      },
+      "parameters_hash": "a5b818c0f24a9369f05d207677012e1906277a6278eb974fd5b45669d559ce09",
+      "direction_order": [
+        1,
+        -1
+      ]
+    },
+    {
+      "candidate_id": "coarse-015",
+      "normalized": [
+        0.90625,
+        0.03125,
+        0.46875,
+        0.84375,
+        0.65625,
+        0.53125
+      ],
+      "parameters": {
+        "kp": 6.583021912616,
+        "ki": 0.01875,
+        "run_pos": 0.09375,
+        "run_neg": 0.16875,
+        "break_pos": 0.1634765625,
+        "break_neg": 0.1853515625
+      },
+      "parameters_hash": "440d38d8e3a0ec665c80a688c62264a7522bc1b7cbe7444082b025030fa34625",
+      "direction_order": [
+        -1,
+        1
+      ]
+    }
+  ],
+  "plan_hash": "191f5be29906dde965abf7a391f36d2950a788fca29da8567d7b52d5bead764f"
+}

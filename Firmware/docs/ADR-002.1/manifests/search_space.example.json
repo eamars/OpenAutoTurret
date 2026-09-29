@@ -1,0 +1,75 @@
+{
+  "name": "yaw_report_domain_OFFLINE_ONLY",
+  "physical_execution_authorized": false,
+  "domain_status": "PROPOSED_NOT_QUALIFIED",
+  "units": {
+    "kp": "A/(rad/s)",
+    "ki": "A/rad",
+    "run_pos": "A",
+    "run_neg": "A",
+    "break_pos": "A",
+    "break_neg": "A"
+  },
+  "seed": 20260930,
+  "count": 16,
+  "dimensions": [
+    {
+      "name": "kp",
+      "low": 1.0,
+      "high": 8.0,
+      "scale": "log"
+    },
+    {
+      "name": "ki",
+      "low": 0.0,
+      "high": 0.6,
+      "scale": "linear"
+    },
+    {
+      "name": "run_pos",
+      "low": 0.0,
+      "high": 0.2,
+      "scale": "linear"
+    },
+    {
+      "name": "run_neg",
+      "low": 0.0,
+      "high": 0.2,
+      "scale": "linear"
+    },
+    {
+      "name": "break_pos_fraction",
+      "low": 0.0,
+      "high": 1.0,
+      "scale": "linear"
+    },
+    {
+      "name": "break_neg_fraction",
+      "low": 0.0,
+      "high": 1.0,
+      "scale": "linear"
+    }
+  ],
+  "derived": {
+    "break_pos": {
+      "run_key": "run_pos",
+      "fraction_key": "break_pos_fraction",
+      "upper": 0.2
+    },
+    "break_neg": {
+      "run_key": "run_neg",
+      "fraction_key": "break_neg_fraction",
+      "upper": 0.2
+    }
+  },
+  "frozen": {
+    "estimator": "baseline_actual_algorithm",
+    "integrator_transition": "identical_for_all_candidates",
+    "output_slew_A_per_s": 4.0
+  },
+  "limitations": [
+    "Not approved for direct hardware execution",
+    "Actual firmware registry and test-domain approval required",
+    "No production qualification implied"
+  ]
+}
