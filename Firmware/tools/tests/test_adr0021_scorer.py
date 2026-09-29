@@ -28,8 +28,10 @@ def test_the_frame_the_scorer_reads_still_carries_the_keys_it_is_told_to_read():
     exist and reports NOT_RUN forever while looking honest.
     """
     emitted = open(FIRMWARE_RECORD, encoding="utf-8").read()
+    # The frame emits these keys as escaped quotes inside a C++ string literal, so the escaped form is
+    # what the source contains — asserting the plain form would have failed on correct code.
     for key in ("rows", "axes", "safety", "control_trace"):
-        assert '"' + key + '"' in emitted, key
+        assert '\\"' + key + '\\"' in emitted, key
 
 
 def test_the_frozen_table_hashes_to_something_the_lock_can_carry():
