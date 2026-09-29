@@ -1,0 +1,175 @@
+{
+  "package": "ADR-002",
+  "access_date": "2026-09-29",
+  "requested_branch": "ADR-001",
+  "base_commit": null,
+  "source_method": "Selective web reads of branch URLs; no clone, no repository ZIP, no hardware access",
+  "warning": "Branch URLs are mutable; local Codex must bind actual worktree commit and compare symbols. Line anchors are navigational, not immutable hashes.",
+  "files": [
+    {
+      "id": "S01",
+      "path": "AGENTS.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/AGENTS.md",
+      "scope": "工作区/构建/现场入口规则"
+    },
+    {
+      "id": "S02",
+      "path": "Firmware/config/mixed_hardware.yaml",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/config/mixed_hardware.yaml",
+      "scope": "两轴模式、current增益与上限；约L1–69"
+    },
+    {
+      "id": "S03",
+      "path": "Firmware/config/turret_mixed.yaml",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/config/turret_mixed.yaml",
+      "scope": "200Hz、分轴cap、homing、payload、服务模式；约L31–275"
+    },
+    {
+      "id": "S04",
+      "path": "Firmware/control/src/can/gm6020_velocity.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/can/gm6020_velocity.hpp",
+      "scope": "现PI、50ms滤波、20ms invalid；约L16–79"
+    },
+    {
+      "id": "S05",
+      "path": "Firmware/control/src/control/mixed_can_motor_backend.cpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/mixed_can_motor_backend.cpp",
+      "scope": "guard、CAN健康、snapshot和命令路径；重点L361–562、命令尾部"
+    },
+    {
+      "id": "S06",
+      "path": "Firmware/control/src/control/mixed_can_motor_backend.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/mixed_can_motor_backend.hpp",
+      "scope": "guard枚举、streak=3、typed zero；约L25–87"
+    },
+    {
+      "id": "S07",
+      "path": "Firmware/control/src/control/can_motor_backend.cpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/can_motor_backend.cpp",
+      "scope": "模式切换/读回、SpdRef、keepalive、gain setter；约L300–802"
+    },
+    {
+      "id": "S08",
+      "path": "Firmware/control/src/control/control_loop.cpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/control_loop.cpp",
+      "scope": "watchdog、fresh sample、服务servo、payload信任/限幅；重点L729–822、服务段、L3031–3077"
+    },
+    {
+      "id": "S09",
+      "path": "Firmware/control/src/can/cybergear_protocol.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/can/cybergear_protocol.hpp",
+      "scope": "RunMode/IqRef/SpdRef/LimitCur/Iqf与gain地址；约L103–185"
+    },
+    {
+      "id": "S10",
+      "path": "Firmware/control/src/calibration/homing_controller.cpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/calibration/homing_controller.cpp",
+      "scope": "接近speed、退让position、jitter诊断；约L46–181"
+    },
+    {
+      "id": "S11",
+      "path": "Firmware/control/src/control/safety_supervisor.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/safety_supervisor.hpp",
+      "scope": "现有安全动作与反馈/温度处理"
+    },
+    {
+      "id": "S12",
+      "path": "Firmware/control/src/can/gm6020_protocol.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/can/gm6020_protocol.hpp",
+      "scope": "电流缩放、协议帧、1.62持续上限常量"
+    },
+    {
+      "id": "S13",
+      "path": "Firmware/config/payload_profiles/conservative.yaml",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/config/payload_profiles/conservative.yaml",
+      "scope": "旧双CyberGear UID与2026-09-02历史成绩；全72行"
+    },
+    {
+      "id": "S14",
+      "path": "Firmware/control/src/main.cpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/main.cpp",
+      "scope": "实际payload加载与默认trusted调用；约L420–439，另查看入口/运行配置段"
+    },
+    {
+      "id": "S15",
+      "path": "Firmware/control/src/payload/payload_profile.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/payload/payload_profile.hpp",
+      "scope": "schema1、informational gains、原子保存接口；约L23–84"
+    },
+    {
+      "id": "S16",
+      "path": "Firmware/control/src/control/control_loop.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/control_loop.hpp",
+      "scope": "100ms遥测判稳估计、payload默认commissioned=true；约L295–315、L489–518"
+    },
+    {
+      "id": "S17",
+      "path": "Firmware/control/src/control/speed_servo.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/control/speed_servo.hpp",
+      "scope": "位置P+FF、quiet迟滞、error cap、a/j；全43行"
+    },
+    {
+      "id": "S18",
+      "path": "Firmware/control/src/calibration/contact_detector.hpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/calibration/contact_detector.hpp",
+      "scope": "接触与jitter判据；全149行"
+    },
+    {
+      "id": "S19",
+      "path": "Firmware/control/src/config/mixed_hardware_profile.cpp",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/control/src/config/mixed_hardware_profile.cpp",
+      "scope": "current字段解析/单位/限流/帧mode匹配；约L163–275"
+    },
+    {
+      "id": "S20",
+      "path": "Firmware/docs/STATION_OPERATIONS.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/docs/STATION_OPERATIONS.md",
+      "scope": "部署/运行规则与现场记录；选择性章节，文档状态需与最新报告区别"
+    },
+    {
+      "id": "S21",
+      "path": "Firmware/docs/README.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/docs/README.md",
+      "scope": "新文档归ADR-002目录"
+    },
+    {
+      "id": "R01",
+      "path": "Firmware/docs/ADR-001/reports/CURRENT_MODE_MIGRATION_2026-09-28.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/docs/ADR-001/reports/CURRENT_MODE_MIGRATION_2026-09-28.md",
+      "scope": "append-only迁移报告；优先后部2026-09-29 01:0x以及L172–219；实机成绩为作者报告"
+    },
+    {
+      "id": "R02",
+      "path": "Firmware/docs/ADR-001/sources/GM6020_DRIVE_CONFIG_2026-09-28.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/docs/ADR-001/sources/GM6020_DRIVE_CONFIG_2026-09-28.md",
+      "scope": "Assistant Current Ring和PWM/CAN区别；更正段优先"
+    },
+    {
+      "id": "R03",
+      "path": "Firmware/docs/references/gm6020/GM6020_AI_Reference.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/docs/references/gm6020/GM6020_AI_Reference.md",
+      "scope": "手册索引；其中早期current未知已被新报告部分取代"
+    },
+    {
+      "id": "R04",
+      "path": "Firmware/docs/references/cybergear/CyberGear_AI_Reference.md",
+      "url": "https://raw.githubusercontent.com/eamars/OpenAutoTurret/ADR-001/Firmware/docs/references/cybergear/CyberGear_AI_Reference.md",
+      "scope": "仓库整理的手册参考；查阅协议/寄存器/模式相关节，不声称独立审核全部原PDF"
+    }
+  ],
+  "external": [
+    {
+      "id": "V01",
+      "url": "https://rm-static.djicdn.com/tem/17348/RM%20GM6020%20%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E%EF%BC%88%E8%8B%B1%EF%BC%8920231103.pdf",
+      "title": "DJI RoboMaster GM6020 User Guide v1.4 2023.10",
+      "reviewed_pdf_pages_zero_indexed": [
+        7,
+        8,
+        10,
+        11
+      ],
+      "method": "Parsed text plus screenshots of protocol, feedback, operating chart and parameter tables",
+      "redistributed": false
+    }
+  ]
+}

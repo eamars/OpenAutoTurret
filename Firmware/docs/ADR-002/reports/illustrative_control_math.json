@@ -1,0 +1,15 @@
+{
+  "kind": "ILLUSTRATIVE_ARITHMETIC_NOT_HARDWARE",
+  "assumption": "stationary plant; constant reference; zero I; breakaway=0.40 A",
+  "breakaway_a_is_not_identified": true,
+  "kp": 1.0,
+  "ki": 0.6,
+  "ceiling_a": 0.8,
+  "blocked_axis_time_s": {
+    "3": 11.06572878068496,
+    "5": 5.97277060174431,
+    "10": 2.153051967538822
+  },
+  "gm_encoder_deg_per_count": 0.0439453125,
+  "single_count_at_5ms_deg_s": 8.7890625
+}

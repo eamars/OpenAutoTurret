@@ -1,0 +1,208 @@
+{
+  "kind": "OFFLINE_TRACE_STATISTICS_NOT_QUALIFICATION",
+  "hardware_qualified_by_this_tool": false,
+  "notes": [
+    "Current engineering units must be independently validated before populating iq_a.",
+    "Blank current/temperature is unknown, not zero.",
+    "Observed distinct feedback rate is limited by logging rate; use CAN counters for actual bus rate.",
+    "No automatic pass/fail, thermal equilibrium certification, or step settling-time claim."
+  ],
+  "groups": [
+    {
+      "axis": "yaw",
+      "trial_id": "SYNTHETIC_ONLY_01",
+      "phase": "start",
+      "drive_modes": [
+        "current"
+      ],
+      "samples": 40,
+      "duration_s": 0.195,
+      "capture_hz": 200.0,
+      "capture_period_ms": {
+        "p50": 5.0,
+        "p95": 5.0,
+        "p99": 5.0
+      },
+      "observed_distinct_feedback_hz_NOT_total_CAN_hz": 200.0,
+      "feedback_age_ms": {
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0
+      },
+      "rx_later_than_cycle_start_rows": 0,
+      "position_error_rad": {
+        "rms": 0.003943118157196566,
+        "coverage_fraction": 1.0
+      },
+      "velocity_error_rad_s": {
+        "rms": 0.04418909105043365,
+        "coverage_fraction": 1.0
+      },
+      "peak_abs_position_error_rad": 0.004363323129985825,
+      "current_command_a": {
+        "rms": 0.24032563378967753,
+        "coverage_fraction": 1.0
+      },
+      "measured_current_a": {
+        "rms": null,
+        "coverage_fraction": 0.0
+      },
+      "clamped_time_fraction": 0.25641025641025633,
+      "first_motion_threshold_crossing_ms_NOT_confirmed_onset": 80.0,
+      "motion_threshold_rad": 0.0023009711818284618,
+      "guard_label_episode_counts": {
+        "RUN": 1
+      },
+      "temperature_linear_slope_c_per_min_NOT_equilibrium_proof": null,
+      "bus_voltage_min_v": 24.0,
+      "bus_voltage_max_v": 24.0
+    },
+    {
+      "axis": "yaw",
+      "trial_id": "SYNTHETIC_ONLY_01",
+      "phase": "steady",
+      "drive_modes": [
+        "current"
+      ],
+      "samples": 161,
+      "duration_s": 0.8,
+      "capture_hz": 200.0,
+      "capture_period_ms": {
+        "p50": 5.0,
+        "p95": 5.0,
+        "p99": 5.0
+      },
+      "observed_distinct_feedback_hz_NOT_total_CAN_hz": 200.0,
+      "feedback_age_ms": {
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0
+      },
+      "rx_later_than_cycle_start_rows": 0,
+      "position_error_rad": {
+        "rms": 0.004363323129985829,
+        "coverage_fraction": 1.0
+      },
+      "velocity_error_rad_s": {
+        "rms": 0.0,
+        "coverage_fraction": 1.0
+      },
+      "peak_abs_position_error_rad": 0.00436332312998583,
+      "current_command_a": {
+        "rms": 0.15,
+        "coverage_fraction": 1.0
+      },
+      "measured_current_a": {
+        "rms": null,
+        "coverage_fraction": 0.0
+      },
+      "clamped_time_fraction": 0.0,
+      "first_motion_threshold_crossing_ms_NOT_confirmed_onset": 30.0,
+      "motion_threshold_rad": 0.0023009711818284618,
+      "guard_label_episode_counts": {
+        "RUN": 1
+      },
+      "temperature_linear_slope_c_per_min_NOT_equilibrium_proof": null,
+      "bus_voltage_min_v": 24.0,
+      "bus_voltage_max_v": 24.0
+    },
+    {
+      "axis": "pitch",
+      "trial_id": "SYNTHETIC_ONLY_01",
+      "phase": "start",
+      "drive_modes": [
+        "speed"
+      ],
+      "samples": 40,
+      "duration_s": 0.195,
+      "capture_hz": 200.0,
+      "capture_period_ms": {
+        "p50": 5.0,
+        "p95": 5.0,
+        "p99": 5.0
+      },
+      "observed_distinct_feedback_hz_NOT_total_CAN_hz": 49.99999999999999,
+      "feedback_age_ms": {
+        "p50": 8.5,
+        "p95": 16.0,
+        "p99": 16.0
+      },
+      "rx_later_than_cycle_start_rows": 0,
+      "position_error_rad": {
+        "rms": 0.003943118157196566,
+        "coverage_fraction": 1.0
+      },
+      "velocity_error_rad_s": {
+        "rms": 0.04418909105043365,
+        "coverage_fraction": 1.0
+      },
+      "peak_abs_position_error_rad": 0.004363323129985825,
+      "current_command_a": {
+        "rms": null,
+        "coverage_fraction": 0.0
+      },
+      "measured_current_a": {
+        "rms": null,
+        "coverage_fraction": 0.0
+      },
+      "clamped_time_fraction": 0.0,
+      "first_motion_threshold_crossing_ms_NOT_confirmed_onset": 80.0,
+      "motion_threshold_rad": 0.0023009711818284618,
+      "guard_label_episode_counts": {
+        "RUN": 1
+      },
+      "temperature_linear_slope_c_per_min_NOT_equilibrium_proof": null,
+      "bus_voltage_min_v": 24.0,
+      "bus_voltage_max_v": 24.0
+    },
+    {
+      "axis": "pitch",
+      "trial_id": "SYNTHETIC_ONLY_01",
+      "phase": "steady",
+      "drive_modes": [
+        "speed"
+      ],
+      "samples": 161,
+      "duration_s": 0.8,
+      "capture_hz": 200.0,
+      "capture_period_ms": {
+        "p50": 5.0,
+        "p95": 5.0,
+        "p99": 5.0
+      },
+      "observed_distinct_feedback_hz_NOT_total_CAN_hz": 50.0,
+      "feedback_age_ms": {
+        "p50": 6.0,
+        "p95": 16.0,
+        "p99": 16.0
+      },
+      "rx_later_than_cycle_start_rows": 0,
+      "position_error_rad": {
+        "rms": 0.004363323129985829,
+        "coverage_fraction": 1.0
+      },
+      "velocity_error_rad_s": {
+        "rms": 0.0,
+        "coverage_fraction": 1.0
+      },
+      "peak_abs_position_error_rad": 0.00436332312998583,
+      "current_command_a": {
+        "rms": null,
+        "coverage_fraction": 0.0
+      },
+      "measured_current_a": {
+        "rms": null,
+        "coverage_fraction": 0.0
+      },
+      "clamped_time_fraction": 0.0,
+      "first_motion_threshold_crossing_ms_NOT_confirmed_onset": 30.0,
+      "motion_threshold_rad": 0.0023009711818284618,
+      "guard_label_episode_counts": {
+        "RUN": 1
+      },
+      "temperature_linear_slope_c_per_min_NOT_equilibrium_proof": null,
+      "bus_voltage_min_v": 24.0,
+      "bus_voltage_max_v": 24.0
+    }
+  ]
+}

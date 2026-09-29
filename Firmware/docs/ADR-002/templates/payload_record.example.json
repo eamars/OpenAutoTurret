@@ -1,0 +1,80 @@
+{
+  "schema": "adr002-evidence-record-proposal-1",
+  "loadable_by_current_daemon": false,
+  "status": "NOT_RUN",
+  "profile_id": null,
+  "base_commit": null,
+  "config_hash": null,
+  "payload": {
+    "asset_id": null,
+    "mechanical_revision": null,
+    "mass_kg": null,
+    "center_of_mass_m": null,
+    "change_description": null
+  },
+  "hardware": {
+    "yaw": {
+      "model": "GM6020",
+      "motor_id": 1,
+      "asset_id": null,
+      "readable_uid": null,
+      "drive_mode": "current",
+      "command_id": "0x1FE",
+      "firmware_verified": null
+    },
+    "pitch": {
+      "model": "CyberGear",
+      "motor_id": 127,
+      "uid_verified": null,
+      "drive_mode_proposed": "speed",
+      "run_mode": 2,
+      "firmware_verified": null
+    }
+  },
+  "geometry": {
+    "pitch_calibration_id": null,
+    "yaw_reference_kind": "session_relative",
+    "cross_session_physical_angle_map_verified": false
+  },
+  "yaw": {
+    "host_speed_kp_a_s_per_rad": null,
+    "host_speed_ki_a_per_rad": null,
+    "speed_estimator": null,
+    "breakaway_a_positive": null,
+    "breakaway_a_negative": null,
+    "running_friction_a_positive": null,
+    "running_friction_a_negative": null,
+    "continuous_current_qualified_a": null,
+    "breakaway_peak_qualified_a": null,
+    "breakaway_max_ms": null,
+    "compensation_enabled": false
+  },
+  "pitch": {
+    "actual_run_mode_readback": null,
+    "speed_kp_readback": null,
+    "speed_ki_readback": null,
+    "installation_current_hard_limit_a": 5.0,
+    "current_cap_readback_a": null,
+    "gravity_test_angles_rad": []
+  },
+  "authority": {
+    "existing_yaw_commissioning_limit_a": 0.8,
+    "new_limits_authorized": false,
+    "authorized_by": null,
+    "approved_at": null
+  },
+  "qualification": {
+    "temperature_mapping_verified": false,
+    "thermal_equilibrium": "NOT_RUN",
+    "supply_and_regeneration": "NOT_RUN",
+    "yaw_start_reverse": "NOT_RUN",
+    "pitch_speed_multiple_poses": "NOT_RUN",
+    "position_steps": "NOT_RUN",
+    "hold_and_stop": "NOT_RUN",
+    "homing_if_required": "NOT_RUN",
+    "dual_axis": "NOT_RUN",
+    "operating_range": null
+  },
+  "evidence": [],
+  "notes": "Template contains known design constraints, not calibrated measurements. Do not paste into existing daemon YAML."
+}
