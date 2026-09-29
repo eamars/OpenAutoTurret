@@ -156,7 +156,7 @@ class Station:
             return json.loads(match.decode())
         return {"accepted": False, "reason": "no response from controld"}
 
-    def trace_window(self, expect_context=""):
+    def trace_window(self, expect_context="", want_rows=False):
         """Ask for the frozen evidence window and check that every record says who it belongs to.
 
         docs/02 §5 wants the campaign identity inside each record rather than inferred afterwards, so
@@ -184,7 +184,12 @@ class Station:
             rows = next((value for key, value in sorted(frame.items())
                          if isinstance(value, list) and value and isinstance(value[0], dict)), [])
             summary = summarise_window(rows, expect_context)
-            summary.update({"bytes": len(chunk), "truncated": False})
+            # The rows travel with the summary when the caller asks: a runner that wants to score a
+            # candidate needs the samples, and re-asking would capture a different window.
+            summary.update({"bytes": len(chunk), "truncated": False,
+                            "axes": frame.get("axes") or ["pitch", "yaw"]})
+            if want_rows:
+                summary["rows"] = rows
             return summary
         return {"records": 0, "records_with_context": 0, "bytes": 0, "truncated": False,
                 "reason": "no control_trace frame in 8 s; an empty window is not a passing window"}

@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 import adr0021_plan as plan  # noqa: E402
 import adr0021_acceptance  # noqa: E402
 import adr0021_scorer as scoring  # noqa: E402
+import adr0021_scorer as scoring  # noqa: E402
 import adr0021_run as runner  # noqa: E402
 Runner = runner.Runner
 
@@ -28,17 +29,21 @@ class StubStation:
     """A station that always accepts, and answers the way controld does."""
 
     trace_rows = 4
+    scorable_rows = False
     trace_history_rows = 4          # a rolling window has history in its head; tests may clear it
     trace_loses_identity = False
     trace_truncated = False
 
     def __init__(self, payload_status="no_profile", phase="hold"):
         self.payload_status, self.phase = payload_status, phase
-        self._seq, self._pending, self.received = 0, [], 0
+        self._seq, self._pending, self.received, self.calls = 0, [], 0, []
         self.revision = 0
 
     def command(self, name, arg=None):
+        # Commands are recorded, not just counted: a test that only counts cannot tell a RUN from a
+        # snapshot, which is exactly the distinction :46 turns on.
         self.received += 1
+        self.calls.append((name, arg))
         self._pending = None            # an ack only exists once something has been answered
         if name == "param_prepare":
             self._pending = f"prepared request_id=prepp-{self._seq + 1} expected_hash=aa revision_after_apply=1"
@@ -73,6 +78,8 @@ class StubStation:
         for, and asking costs a round trip on the real station too.
         """
         self.command("read_control_trace")
+        if getattr(self, "refuse_run", False) and not self.runs_accepted:
+            pass
         # Head: rows written before this candidate announced itself. Tail: this candidate's rows. The
         # summary comes from the same function the station reader uses, so the stub cannot pass by
         # disagreeing with the real code about what a window means.
@@ -264,3 +271,40 @@ class ItStopsWhenTheDesignSaysSo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TheCampaignCanRunAndScore(unittest.TestCase):
+    """:46 — a trial that never ran is not a trial, and a score against moved thresholds is not a score."""
+
+    def _run(self, station, mutate_lock=None, **keywords):
+        inventory = plan.load_inventory(plan.INVENTORY)
+        lock = a_lock(inventory)
+        if mutate_lock:
+            mutate_lock(lock)
+        with tempfile.TemporaryDirectory() as directory:
+            return Runner(station, lock, inventory["_sha256"], bound_binary(lock), list(BASELINE),
+                          directory, **keywords).run()
+
+    def test_running_trials_drives_the_firmware_guarded_trial_for_every_candidate(self):
+        station = StubStation()
+        manifest = self._run(station, run_trials=True)
+        drove = [call for call in station.calls if call[0] == "yaw_control_trial"]
+        self.assertEqual(8, len(drove), [call[0] for call in station.calls][:12])
+        self.assertTrue(all((trial.get("restore") or {}).get("accepted") for trial in manifest["trials"]),
+                        "whatever the RUN did, the machine has to be left at its baseline")
+
+    def test_a_scored_campaign_records_the_classification_it_awarded(self):
+        station = StubStation()
+        station.scorable_rows = True
+        manifest = self._run(station, run_trials=True, scorer=scoring)
+        tally = manifest.get("classifications", {})
+        self.assertTrue(tally, manifest["trials"][0].get("score"))
+        self.assertEqual(8, sum(tally.values()))
+
+    def test_thresholds_that_moved_under_the_lock_stop_the_campaign(self):
+        station = StubStation()
+        station.scorable_rows = True
+        manifest = self._run(station, lambda lock: lock["bound_to"].update(metrics_sha256="f" * 64),
+                             run_trials=True, scorer=scoring)
+        self.assertTrue(any(row.startswith("BLOCKED_metrics_version_drift") for row in manifest["blocked"]),
+                        manifest["blocked"])

@@ -312,8 +312,11 @@ tree and is no longer allowed to masquerade as the built source (`git -C` walked
 - The campaign's levels were the **sample grid** (`manifests/campaign.example.json`), authorised by the
   owner's `跑！` without levels. It is mechanism acceptance, **not** a tuning result: no scorer took part,
   so no candidate may be described as better, and `metrics` is absent rather than zero.
-- `RUN`, controlled teardown, complete-log and `SCORE` from `00_CODEX_START.md:46` are **not yet performed
-  by the runner**; what ran was parameter exchange, read-back, trace identity and restore.
+- `RUN` and `SCORE` from `00_CODEX_START.md:46` are now **implemented in the runner** (`--run-trials`
+  drives the firmware's own guarded trial after the applied write, `--score` runs the frozen scorer over
+  the candidate's own trace window and tallies the classifications), covered by tests. **They have not yet
+  been exercised on the hardware**, so no cell in the matrix above may be read as physical qualification:
+  what has run on the station so far is parameter exchange, read-back, trace identity and restore.
 - Trace identity is per-record and measured: 16/16 trials, 256 records per window, 66 carrying the
   candidate tag, contiguous from announcement to newest. The check is contiguity to the newest record,
   not "every row tagged" — the window is rolling and its head predates the candidate.

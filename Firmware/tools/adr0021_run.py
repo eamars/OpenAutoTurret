@@ -48,12 +48,15 @@ def baseline_from(snapshot: dict) -> list:
 
 class Runner:
     def __init__(self, station, lock: dict, inventory_sha: str, binary_sha: str, baseline: list,
-                 archive_dir: str, score_command: str = "", now=time.time):
+                 archive_dir: str, score_command: str = "", now=time.time, scorer=None,
+                 run_trials=False):
         self.station, self.lock = station, lock
         self.design = lock["design"]
         self.inventory_sha, self.binary_sha = inventory_sha, binary_sha
         self.baseline, self.archive_dir = baseline, archive_dir
         self.score_command, self.now = score_command, now
+        self.scorer = scorer            # the frozen scorer module, when the campaign asked to be scored
+        self.run_trials = run_trials    # drive a real trial between applying and archiving (:46)
         self.manifest = {"campaign_id": self.design["campaign_id"], "design_sha256": lock["design_sha256"],
                          "started_at": self.now(), "blocked": [], "refused": [], "exchanges": 0,
                          "applied": 0, "trials": [], "binding": lock["bound_to"]}
@@ -136,27 +139,57 @@ class Runner:
         # Ask for the trace window while this candidate is still what is running: §5 wants the identity
         # inside every record, and the only honest way to know it is there is to ask for the window and
         # count the records that carry the tag. A truncated read is a blocked run, not a short one.
-        window = self.station.trace_window(expect_context=context)
-        record["trace_window"] = window
-        if window.get("truncated"):
-            self.refuse(f"BLOCKED_trace_truncated_{candidate['candidate_id']}: "
-                        + str(window.get("reason")))
-            return record
-        if not window.get("records"):
-            self.refuse(f"BLOCKED_trace_window_empty_{candidate['candidate_id']}: the station returned "
-                        "no records to check, and an empty window satisfies a count comparison by "
-                        "saying nothing")
-            return record
-        if window.get("records_with_context") == 0:
-            self.refuse(f"BLOCKED_trace_identity_absent_{candidate['candidate_id']}: the campaign "
-                        "announced itself and no record in the window carries the tag")
-            return record
-        if not window.get("contiguous_to_newest"):
-            self.refuse(f"BLOCKED_trace_identity_missing_{candidate['candidate_id']}: "
-                        f"{window.get('records_with_context')}/{window.get('records')} records carry the tag and "
-                        "they do not run unbroken to the newest record; a window whose identity changes "
-                        "mid-flight cannot say which candidate a given row belongs to")
-            return record
+        # 00_CODEX_START.md:46 puts a RUN between the applied write and the archived log: gains that were
+        # never driven are not trials, they are configuration changes. The trial command is the firmware's
+        # own guarded path, so a refusal here is a gate speaking, not a quality verdict — and the
+        # candidate still has to be restored, because no candidate may be left in the machine.
+        ran = True
+        if self.run_trials:
+            run = self.exchange("yaw_control_trial", record["applied_string"])
+            record["run"] = run
+            ran = bool(run.get("accepted"))
+            if not ran:
+                self.manifest["refused"].append({"candidate_id": candidate["candidate_id"],
+                                                 "reason": "RUN refused: " + str(run.get("reason"))})
+        if ran:
+            window = self.station.trace_window(expect_context=context)
+            record["trace_window"] = window
+            if window.get("truncated"):
+                self.refuse(f"BLOCKED_trace_truncated_{candidate['candidate_id']}: "
+                            + str(window.get("reason")))
+                return record
+            if not window.get("records"):
+                self.refuse(f"BLOCKED_trace_window_empty_{candidate['candidate_id']}: the station returned "
+                            "no records to check, and an empty window satisfies a count comparison by "
+                            "saying nothing")
+                return record
+            if window.get("records_with_context") == 0:
+                self.refuse(f"BLOCKED_trace_identity_absent_{candidate['candidate_id']}: the campaign "
+                            "announced itself and no record in the window carries the tag")
+                return record
+            if not window.get("contiguous_to_newest"):
+                self.refuse(f"BLOCKED_trace_identity_missing_{candidate['candidate_id']}: "
+                            f"{window.get('records_with_context')}/{window.get('records')} records carry the tag and "
+                            "they do not run unbroken to the newest record; a window whose identity changes "
+                            "mid-flight cannot say which candidate a given row belongs to")
+                return record
+            if self.scorer is not None:
+                score = self.scorer.score_window(window.get("rows") or [], axis="yaw",
+                                                 axes=tuple(window.get("axes") or ("pitch", "yaw")))
+                record["score"] = {"classification": score["classification"],
+                                   "metrics_sha256": score["metrics_sha256"],
+                                   "metrics": {name: row["status"]
+                                               for name, row in score["metrics"].items()}}
+                frozen = self.lock["bound_to"].get("metrics_sha256")
+                if frozen and score["metrics_sha256"] != frozen:
+                    self.refuse("BLOCKED_metrics_version_drift: the campaign was frozen against " +
+                                frozen[:12] + " and the scorer now says " +
+                                score["metrics_sha256"][:12] + "; the classification of this candidate " +
+                                "would not be the classification the lock promised")
+                    return record
+                tallied = self.manifest.setdefault("classifications", {})
+                tallied[score["classification"]] = tallied.get(score["classification"], 0) + 1
+
         snapshot = self.exchange("param_snapshot")
         text = str(snapshot.get("reason", ""))
         grab = lambda key: (re.search(key + r"=(\S+)", text) or [None, None])[1]
@@ -247,6 +280,11 @@ def main() -> int:
     parser.add_argument("--socket", default=os.environ.get("OTA_WEB_SOCKET", "/tmp/ota-stack-1000/control-web.sock"))
     parser.add_argument("--out", default="run/campaigns")
     parser.add_argument("--score-command", default="")
+    parser.add_argument("--score", action="store_true",
+                        help="score each candidate's trace window with the frozen scorer")
+    parser.add_argument("--run-trials", action="store_true",
+                        help="drive the firmware's own guarded trial after applying (00_CODEX_START.md:46)"
+                             " — the axis moves, and that is the point of a trial")
     args = parser.parse_args()
     with open(args.lock, encoding="utf-8") as handle:
         lock = json.load(handle)
@@ -254,8 +292,10 @@ def main() -> int:
     baseline = baseline_from(json.load(open(args.baseline, encoding="utf-8")))
     station = acc.Station(args.socket.replace("control-web.sock", "control-web.sock"))
     archive = os.path.join(args.out, lock["design"]["campaign_id"], str(int(time.time())))
+    scorer = __import__("adr0021_scorer") if args.score else None
     manifest = Runner(station, lock, inventory["_sha256"], acc.sha256(args.binary), baseline,
-                      archive, args.score_command).run()
+                      archive, args.score_command, scorer=scorer,
+                      run_trials=args.run_trials).run()
     print(f"campaign {manifest['campaign_id']}: exchanges={manifest['exchanges']} "
           f"applied={manifest['applied']} stopped_by={manifest.get('stopped_by', 'not_run')} "
           f"blocked={manifest['blocked'] or 'none'}")
