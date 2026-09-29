@@ -12,6 +12,7 @@ procedure from a flag list.
 | start / stop / inspect the running stack | [`operations/start-stop-status.md`](operations/start-stop-status.md) |
 | read what the station did (logs, traces, evidence) | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Reading the per-cycle control trace", §"Stop and preserve evidence" |
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
+| inspect ADR-002.2 acquisition readiness | [`operations/adr0022-inventory.md`](operations/adr0022-inventory.md) — read-only inventory, local review, and the failure stop rule |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |

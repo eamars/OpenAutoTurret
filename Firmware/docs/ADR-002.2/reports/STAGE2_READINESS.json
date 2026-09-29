@@ -1,0 +1,278 @@
+{
+  "version": "adr0022.stage2-readiness/1",
+  "status": "BLOCKED_BEFORE_PHYSICAL_ACQUISITION",
+  "source_head_before_changes": "9a08b3e03d2253b4eb1214a10fd1ab42802532e6",
+  "stage_status": {
+    "mathematical_software": "PASS_HISTORICAL",
+    "stage2": "READ_ONLY_INVENTORY_STARTED_BLOCKED",
+    "hardware_capability_qualification": "NOT_RUN",
+    "physical_calibration": "NOT_RUN",
+    "physical_plant_identification": "NOT_RUN",
+    "3a": "NOT_RUN",
+    "3b": "NOT_RUN"
+  },
+  "full_adr_status": "NOT_DONE",
+  "station_actions": {
+    "ssh_inventory_sessions": 1,
+    "failed_inventory_sessions": 1,
+    "unexpected_command_failures": 2,
+    "motion_attempts": 0,
+    "motor_commands": 0,
+    "sensor_resets": 0,
+    "deployments": 0,
+    "service_actions": 0,
+    "production_configuration_writes": 0,
+    "station_fix_verification_attempts": 0
+  },
+  "confidence": {
+    "original_required_percent": 95,
+    "next_required_percent": 98.5,
+    "later_required_percent": [
+      99,
+      99.95
+    ],
+    "established_percent": null,
+    "physical_readiness_established": false,
+    "meaning": "Owner acceptance requirements, not statistical estimates from software test counts"
+  },
+  "owner_facts": {
+    "provenance": "USER_STATEMENT_CURRENT_SESSION",
+    "extra_payload_present": false,
+    "pitch_stays_in_place_on_power_loss": true,
+    "pitch_total_travel_deg_approximate": 60,
+    "pitch_homes_to_middle": true,
+    "pitch_verified_encoder_bounds_rad": null,
+    "yaw_travel": "CONTINUOUS_WITH_SLIP_RING",
+    "current_policy": "MANUFACTURER_DATASHEET_NO_ADDITIONAL_OPERATOR_LIMIT",
+    "motor_temperature_capture_required": true,
+    "yaw_temperature_celsius_mapping": null
+  },
+  "inventory_session": {
+    "kind": "READ_ONLY_INVENTORY",
+    "motion_attempts": 0,
+    "retry": false,
+    "script_sha256": "7c5506578bd4579d91262e77844c3d5073db50285bcd392faa04baffe4d2b542",
+    "destination": "192.168.2.103",
+    "host_key": "SHA256:ll1B6KKdmry4daddh4fMxJ4ecnLS7zp9hBH+3DO0fQw",
+    "local_started_at": "2026-09-29T23:39:27.594803+00:00",
+    "returncode": 0,
+    "complete": true,
+    "stdout_sha256": "32ef87588a28ffe5b9f0ba5687db207503cf56dedbc1f68f30514070465d4ff9",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "local_finished_at": "2026-09-29T23:39:27.886071+00:00"
+  },
+  "inventory_review": {
+    "version": "adr0022.inventory-review/1",
+    "capture_sha256": "32ef87588a28ffe5b9f0ba5687db207503cf56dedbc1f68f30514070465d4ff9",
+    "capture_completed": true,
+    "collection_integrity": "FAIL",
+    "failures": [
+      "COMMAND_FAILED:processes:rc=1",
+      "COMMAND_FAILED:root_listing:rc=2",
+      "MISSING_SECTION:launcher_status"
+    ],
+    "notes": [
+      "@@STATUS_NOT_EXECUTED source differs or is absent; use recorded processes"
+    ],
+    "section_count": 47,
+    "observed_utc": "2026-09-29T23:39:27Z",
+    "checkout_revision": "6a47f1dd696d75b878b8138dcaceb9f455ab9147",
+    "process_ownership_verified": false,
+    "process_listing_collected": false,
+    "launcher_status": null,
+    "last_recorded_stop": "FAILED",
+    "can_links": [
+      {
+        "interface": "can0",
+        "parent": "spi0.0",
+        "state": "ERROR-ACTIVE",
+        "bitrate": 1000000,
+        "rx_errors": 0,
+        "rx_dropped": 206509,
+        "tx_errors": 0
+      },
+      {
+        "interface": "can1",
+        "parent": "spi1.0",
+        "state": "ERROR-ACTIVE",
+        "bitrate": 1000000,
+        "rx_errors": 0,
+        "rx_dropped": 0,
+        "tx_errors": 0
+      }
+    ],
+    "power": {
+      "raw": "0x50000",
+      "current_flags": 0,
+      "historical_flags": 5,
+      "loaded_power_qualified": false
+    },
+    "motion_allowed": false,
+    "motion_gate_reason": "Inventory cannot certify owner handoff, live adapters, calibration or stop capability",
+    "physical_acquisition": "NOT_RUN"
+  },
+  "local_verification": {
+    "inventory_tests_passed": 11,
+    "windows_reviewer_tests_passed": 8,
+    "windows_linux_only_tests_skipped": 3,
+    "historical_stage1_evidence_audit": "PASS",
+    "station_retest": false,
+    "resolution_probe_physical_qualification": "NOT_RUN",
+    "automatic_solver_rehearsal": [
+      {
+        "axis": "yaw",
+        "execution": "LOCAL_SYNTHETIC_SOLVER_REHEARSAL",
+        "input_snapshot": "run/adr0022-local/qualification/yaw/BASELINE/plants/100058ec50dae98ac00df6aaa83c2933f9dc25f3155ecccd4d5fec814772c01b.json",
+        "encoder_quantum_rad": 0.0007669903939428206,
+        "sensor_calibration": "SYNTHETIC",
+        "actual_plant_used": false,
+        "physical_qualification": "NOT_RUN",
+        "motion_allowed": false,
+        "status": "REJECTED",
+        "reason": "ENVELOPE_LIMITED",
+        "rejection": "run/adr0022-stage2/solver-rehearsal/rejections/70d9ffdc28ae592da93eccd3f1bc9fb7a6914284ba5c6d35dbe5664c749ffeab.json",
+        "elapsed_s": 78.55995442900166
+      },
+      {
+        "axis": "pitch",
+        "execution": "LOCAL_SYNTHETIC_SOLVER_REHEARSAL",
+        "input_snapshot": "run/adr0022-local/qualification/pitch/BASELINE/plants/5b0c3ee19b03488dce6c3a4b89e53057410466b3872097e38d47bfaf9dd783c8.json",
+        "encoder_quantum_rad": 0.00038147554741741054,
+        "sensor_calibration": "SYNTHETIC",
+        "actual_plant_used": false,
+        "physical_qualification": "NOT_RUN",
+        "motion_allowed": false,
+        "status": "REJECTED",
+        "reason": "ENVELOPE_LIMITED",
+        "rejection": "run/adr0022-stage2/solver-rehearsal/rejections/80eb3e3607c86b24329c7c206cf1545a47a1ac065f3f8fd948e55e6ff0438ea0.json",
+        "elapsed_s": 32.447178996997536
+      }
+    ]
+  },
+  "blockers": [
+    "LIVE_COMMISSIOND_ADAPTER_NOT_IMPLEMENTED",
+    "CURRENT_OWNERSHIP_UNVERIFIED_INVENTORY_FAILED",
+    "LAST_RECORDED_STOP_CONFIRMATION_FAILED",
+    "PITCH_CURRENT_MODE_AND_CURRENT_FEEDBACK_UNQUALIFIED",
+    "IMU_MOUNTING_UNITS_FILTER_CLOCK_CALIBRATION_PENDING",
+    "RECEIVE_TIME_AND_CAPTURE_LOSS_EVIDENCE_INCOMPLETE",
+    "TARGET_ABI_AND_COMPLETE_ACQUISITION_REHEARSAL_PENDING",
+    "DATASHEET_DUTY_AND_TEMPERATURE_CONTRACT_NOT_BOUND",
+    "PROTOCOL_RESOLUTION_SYNTHETIC_SOLVER_REHEARSALS_REJECTED"
+  ],
+  "motion_allowed": false,
+  "evidence": [
+    {
+      "path": "run/adr0022-stage2/read_only_inventory.sh",
+      "sha256": "7c5506578bd4579d91262e77844c3d5073db50285bcd392faa04baffe4d2b542",
+      "bytes": 4088
+    },
+    {
+      "path": "run/adr0022-stage2/capture_inventory.py",
+      "sha256": "359641f2fffa9f877e2208f3a1820e506b4a9f8e7e34b25d6687fb09d8f241fe",
+      "bytes": 2553
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-session.json",
+      "sha256": "9a9ebcd7d7581668a6dd2a27b4c55c434515d4a2d3d476780197feb9c5dcd5df",
+      "bytes": 611
+    },
+    {
+      "path": "run/adr0022-stage2/station-inventory.txt",
+      "sha256": "32ef87588a28ffe5b9f0ba5687db207503cf56dedbc1f68f30514070465d4ff9",
+      "bytes": 103596
+    },
+    {
+      "path": "run/adr0022-stage2/station-inventory.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-review.json",
+      "sha256": "7c77b458cf361151061c9c5333fa1ea19b3062c4b60fcf4608578e229a87e66f",
+      "bytes": 7593
+    },
+    {
+      "path": "run/adr0022-stage2/local-inventory-probe.txt",
+      "sha256": "31643f82be2b9ac633490f530d573d8a82fba7c2164baf7c00f399aeec7a5c03",
+      "bytes": 11139
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-tests.log",
+      "sha256": "8e239c9102e48781a2554e2ab57926aac9c69b279f8c750b76b38ab804e68db2",
+      "bytes": 2127
+    },
+    {
+      "path": "run/adr0022-stage2/rehearse_quantization.py",
+      "sha256": "77f5f195c3aff31325607631e95e72827514b319b0d4184a08a50a852a7dab74",
+      "bytes": 2955
+    },
+    {
+      "path": "run/adr0022-stage2/quantization-probe.json",
+      "sha256": "e25565a33024cd99ebd6b03fa763ac6934c68bfcb7d7147303d2717ab0255b42",
+      "bytes": 86032
+    },
+    {
+      "path": "run/adr0022-stage2/rehearse_solver.py",
+      "sha256": "69cb92e4f02eaa0cfb80a27787fb6def3cd9bf4c2ca495385b0246e94ba654b3",
+      "bytes": 2745
+    },
+    {
+      "path": "run/adr0022-stage2/solver-rehearsal.log",
+      "sha256": "535401ce9f8065e2ef6b85df427363f2db04ade07a6ec05fef06e7d042d14d6e",
+      "bytes": 1284
+    },
+    {
+      "path": "run/adr0022-stage2/solver-rehearsal/yaw.json",
+      "sha256": "a34b24c00d5c24e5139161dbfc98c832de5cbd2c3a8cd3eb241576da1b8058e5",
+      "bytes": 621
+    },
+    {
+      "path": "run/adr0022-stage2/solver-rehearsal/pitch.json",
+      "sha256": "3039ececd3b8821bcc58988d7137baf82a0efa1cae8a3c6eb980f70649b9eea7",
+      "bytes": 627
+    },
+    {
+      "path": "run/adr0022-stage2/stage1-regression-audit.log",
+      "sha256": "648d3a8bbf590034d6ce35050675304e43f0891d7c5300a85340b85f1d9d6730",
+      "bytes": 220
+    },
+    {
+      "path": "run/adr0022-stage2/stage1-regression-audit-final.log",
+      "sha256": "648d3a8bbf590034d6ce35050675304e43f0891d7c5300a85340b85f1d9d6730",
+      "bytes": 220
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-windows-tests.log",
+      "sha256": "2061664435424da1fbae30ca089558af34d01e5ffd012637d198f9713afa7036",
+      "bytes": 2320
+    },
+    {
+      "path": "run/adr0022-stage2/solver-rehearsal/rejections/70d9ffdc28ae592da93eccd3f1bc9fb7a6914284ba5c6d35dbe5664c749ffeab.json",
+      "sha256": "af0463c978d6ae4de79b2b5fdae153ddb10723df810b3c6c719afa6e01500c6d",
+      "bytes": 123527
+    },
+    {
+      "path": "run/adr0022-stage2/solver-rehearsal/rejections/80eb3e3607c86b24329c7c206cf1545a47a1ac065f3f8fd948e55e6ff0438ea0.json",
+      "sha256": "29d9f29e4ec1ed1ffc651d3922937e8b29fed99c29853f63798dc7f2089631bc",
+      "bytes": 94742
+    }
+  ],
+  "local_correction_sources": [
+    {
+      "path": "Firmware/tools/adr0022_station_inventory.sh",
+      "sha256": "339cfa333c74e23c3b8933b56e3977765f73082a0e8648fae471168075592763",
+      "bytes": 5044
+    },
+    {
+      "path": "Firmware/tools/adr0022_inventory_review.py",
+      "sha256": "ab9227d2617b6498ee4cbf7115b65bbe4accfd4e6e59450d591d213b5bf51587",
+      "bytes": 5687
+    },
+    {
+      "path": "Firmware/tools/tests/test_adr0022_inventory_review.py",
+      "sha256": "57690b21ece51ee3592ab805f4e2bd0bc5a2ad5dad81ea923852bc9b0f04c8a8",
+      "bytes": 7515
+    }
+  ]
+}

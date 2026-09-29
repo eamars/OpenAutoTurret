@@ -12,7 +12,7 @@
   "base_ref": "local_workspace",
   "base_commit": "b4701de6a021176bcb334f5015415c680eca3bda",
   "reported_commit_not_audited": "bad742dddba6a95d3d055e43998adfd0506b0a6e",
-  "physical_hardware_accessed": false,
+  "physical_hardware_accessed": true,
   "firmware_integrated": true,
   "firmware_compiled": true,
   "hardware_qualification": "NOT_RUN",
@@ -45,7 +45,12 @@
     "x86_64": "full_firmware_including_commissiond_and_controld",
     "arm64": "axis_control_core_and_commissiond_compile_link_only"
   },
-  "stage2_started": false,
+  "stage2_started": true,
   "full_adr_status": "NOT_DONE",
-  "stage1_report": "reports/STAGE1_LOCAL_VALIDATION.json"
+  "stage1_report": "reports/STAGE1_LOCAL_VALIDATION.json",
+  "station_accessed": true,
+  "station_access_scope": "READ_ONLY_HOST_INTERFACE_FILES_AND_POWER_OBSERVATIONS",
+  "motor_or_imu_transport_opened": false,
+  "stage2_status": "BLOCKED_BEFORE_PHYSICAL_ACQUISITION",
+  "stage2_readiness_report": "reports/STAGE2_READINESS.json"
 }

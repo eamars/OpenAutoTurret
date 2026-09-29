@@ -14,6 +14,18 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
 
+## ADR-002.2 只读盘点记录（2026-09-30，本地日期）
+
+主人已授权阶段2，并确认无payload、pitch掉电保持原位、pitch总行程约60度且归零居中、
+yaw滑环无限转动；电流按电机datasheet，不另加人为上限，采集时记录电机温度。
+这些是主人提供的条件，不是当前模式/端点/停车资格的实测证明。
+
+一次只读SSH盘点已留证。原盘点中的`ps --ww`参数错误和可选目录列表错误已被发现；
+没有重新连接站点验证修正。下一次置信要求为98.5%，尚未建立。当前物理采集为NOT_RUN。
+已有日志显示最后一次yaw停车确认超时；不把后续`stopped cleanly`进程清理日志当作停车合格。
+完整状态及证据见[阶段2准备情况](ADR-002.2/reports/STAGE2_READINESS.md)，
+只读工具流程见[盘点操作卡](operations/adr0022-inventory.md)。以下既有状态记录均需按其时间理解。
+
 ## 现状刷新（09-29 深夜，现读，非历史）
 
 - **release**：`139551b5099c.psS9nL`（`run/releases/` 下只留这一个；清理前有 106 个、20 GB）。
