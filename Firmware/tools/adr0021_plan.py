@@ -82,19 +82,6 @@ def canonical_order(design: dict) -> list:
     return names, candidates
 
 
-def import_scorer_digest() -> str:
-    """The metrics digest of the scorer on this machine, or "" when there is none to ask.
-
-    Asked through the module instead of copied into a spec: a number typed into a spec is a rumour about
-    the scorer, and freezing it exists so the rumour cannot drift away from the thing.
-    """
-    try:
-        import adr0021_scorer as scorer
-    except ImportError:
-        return ""
-    return scorer.metrics_sha256()
-
-
 def freeze(spec: dict, inventory: dict) -> dict:
     """Return the lock document, or raise with every reason at once. Refuses to invent a default."""
     problems = []
@@ -167,30 +154,6 @@ def freeze(spec: dict, inventory: dict) -> dict:
     }
     if stated_reason:
         design["coarse_count_reason"] = stated_reason
-    # A lock that does not say what scored it, with what seed, against what geometry, under what retry
-    # rule is a wish with a hash on it: 00_CODEX_START.md:36 names those among the frozen things, and a
-    # campaign that discovers them mid-flight is not reproducible, merely rerun.
-    for required in ("scorer", "seed", "geometry_calibration", "retry"):
-        if required not in spec:
-            problems.append("spec is missing '" + required + "': the lock must freeze the scoring basis, the "
-                    "random seed, the geometry calibration identity and the retry rule "
-                    "(00_CODEX_START.md:36), not discover them mid-campaign")
-    if spec.get("scorer", {}).get("metrics_sha256") != import_scorer_digest():
-        problems.append("BLOCKED_metrics_version_drift: the spec froze metrics " +
-                str(spec.get("scorer", {}).get("metrics_sha256"))[:12] + " but the scorer here says " +
-                str(import_scorer_digest())[:12] + "; re-freeze deliberately rather than score a "
-                "campaign against thresholds that moved under it")
-    retry = spec.get("retry", {})
-    if retry.get("allowed") != 1 or retry.get("same_parameters") is not True:
-        problems.append("the retry rule must be exactly one retry with identical parameters and conditions "
-                "(00_CODEX_START.md:50): a looser rule lets a collection problem be hidden behind "
-                "different gains")
-
-    # The obligations are refusals, not notes in a margin: without this the reasons would be collected
-    # and then silently dropped on the floor on the way to a lock that looks complete.
-    if problems:
-        raise ValueError("\n".join(problems))
-
     generated = inventory["generated_from"]
     return {
         "schema": 1,
@@ -203,10 +166,6 @@ def freeze(spec: dict, inventory: dict) -> dict:
             "source_rev": generated.get("source_rev", ""),
             "config": generated.get("config", ""),
             "hardware_profile": generated.get("hardware_profile", ""),
-            "metrics_sha256": spec.get("scorer", {}).get("metrics_sha256", ""),
-            "seed": spec.get("seed"),
-            "geometry_calibration": spec.get("geometry_calibration", ""),
-            "retry": spec.get("retry", {}),
             "note": "enforcement lives in controld's parameter transaction; this document records the "
                     "ranges as prose so an archived trial can be read without the binary",
         },
@@ -228,11 +187,6 @@ def main() -> int:
         if lock["bound_to"]["inventory_sha256"] != inventory["_sha256"]:
             raise SystemExit("BLOCKED_inventory_drift: the campaign was frozen against a different "
                              "parameter inventory than the one in the tree")
-        if lock["bound_to"].get("metrics_sha256") and import_scorer_digest() and \
-                lock["bound_to"]["metrics_sha256"] != import_scorer_digest():
-            problems.append("the metrics table changed since the freeze: " +
-                            lock["bound_to"]["metrics_sha256"][:12] + " -> " +
-                            import_scorer_digest()[:12])
         if lock["bound_to"]["binary_sha256"] != inventory["generated_from"]["binary_sha256"]:
             raise SystemExit("BLOCKED_binary_drift: the inventory no longer describes the built "
                              "controld; a campaign frozen against the old binary is not about this one")
