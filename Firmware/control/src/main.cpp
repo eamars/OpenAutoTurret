@@ -330,16 +330,17 @@ int main(int argc, char** argv) {
   // motion independently of motor feedback; it is not the fixed base pose.
   // The launcher owns its sole I2C process and publishes a tare-scoped trace.
   std::unique_ptr<control::ImuTraceIngest> imu_observer;
+  const char* const imu_trace = std::getenv("OTA_IMU_TRACE");
+  const bool imu_trace_configured = imu_trace && *imu_trace;
   if (mixed_mode) {
-    const char* trace_path = std::getenv("OTA_IMU_TRACE");
-    if (!trace_path || !*trace_path) {
+    if (!imu_trace_configured) {
       spdlog::error("mixed startup requires launcher-owned BNO085 trace (OTA_IMU_TRACE)");
       loop.deenergize_all();
       return 1;
     }
     imu_observer = std::make_unique<control::ImuTraceIngest>();
     std::string imu_error;
-    if (!imu_observer->start(trace_path, imu_error)) {
+    if (!imu_observer->start(imu_trace, imu_error)) {
       spdlog::error("BNO085 trace ingest failed: {}", imu_error);
       loop.deenergize_all();
       return 1;
@@ -639,8 +640,25 @@ int main(int argc, char** argv) {
                        bus.rx_error_frames, bus.tx_frames, bus.tx_failed);
         }
       }
+      if (!imu_observer && imu_trace_configured) {
+        // Normal startup observes the BNO085 rather than gating on it: a sensor that has not
+        // produced a line yet must not hold the whole station down, which is what the commissioning
+        // path deliberately does. The trace is the launcher's process; we only read it.
+        imu_observer = std::make_unique<control::ImuTraceIngest>();
+        std::string observe_error;
+        if (imu_observer->start(imu_trace, observe_error)) {
+          spdlog::info("BNO085 observer attached to {} (observe-only: no control input, no gate)",
+                       imu_trace);
+        } else {
+          spdlog::warn("BNO085 trace present but not ingestable yet: {}", observe_error);
+          imu_observer.reset();
+        }
+      }
       if (imu_observer) {
         const auto imu_state = imu_observer->snapshot(t0);
+        loop.observe_imu(/*present=*/imu_state.trace_open &&
+                                   (imu_state.game_rv_fresh || imu_state.gyro_fresh),
+                         /*gravity_valid=*/imu_state.game_rv_fresh && !imu_state.gap_seen);
         spdlog::info("BNO085 observer: generation={} tare={} game_rv_fresh={} gyro_fresh={} status={} gap={} trace_ended={}",
                      imu_state.generation, imu_state.game_rv_tared,
                      imu_state.game_rv_fresh, imu_state.gyro_fresh,

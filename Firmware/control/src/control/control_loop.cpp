@@ -3027,6 +3027,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     double az_base = 0.0, el_base = 0.0;
     if (tracking_) tracking_->predicted_los(az_base, el_base);
     fill_world_frame_telemetry(base_orientation_, az_base, el_base, snap);
+    bool imu_fresh = false, imu_gravity_fresh = false;
+    {
+      std::lock_guard<std::mutex> lk(imu_mutex_);
+      imu_fresh = imu_observation_.present;
+      imu_gravity_fresh = imu_observation_.gravity_valid;
+    }
+    telemetry::fill_imu_telemetry(imu_fresh, imu_gravity_fresh, snap);
     telemetry_.set_snapshot(snap);
   }
 

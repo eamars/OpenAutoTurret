@@ -311,11 +311,16 @@ struct TelemetrySnapshot {
   int for_envelope_count = 0;
   double for_envelope_deg[64] = {0.0};
 
-  // §20's imu block. There is no inertial sensor on this station - not in the CAN definition, not in
-  // the calibration files, not in the control code (the only "imu" anywhere in the tree is inside the
-  // word "simulation"). These fields exist so the absence is a stated fact on the wire rather than an
-  // empty space that each reader fills with its own guess, and they are a `present` flag rather than a
-  // constant so that adding hardware later is a change of value, not a change of contract.
+  // §20's imu block, now written by the control loop from the BNO085 trace the launcher owns
+  // (I2C1:0x4a; the driver is tools/imu_bno085.c and its NDJSON is what ImuTraceIngest tails). The
+  // claim these fields originally carried -- this station has no inertial sensor -- was written when
+  // that was true of the control code, and stopped being true when the hardware arrived: the sensor
+  // is there and has been measured at 215 Hz. It is a `present` flag rather than a constant either
+  // way, so a station booted without a trace says false and nobody has to guess why.
+  //
+  // What `present` means here, precisely: the trace is open and its samples are fresh. It does NOT
+  // mean the sensor is usable as a pose source -- see ControlLoop::ImuObservation for why the
+  // elevation gate below stays closed until a mount calibration exists.
   //
   // `imu_world_elevation_valid` gates the number, and that gate is the whole point. A world elevation
   // of 0.0 would claim the turret is level; with no sensor the honest value is "no value", and the
@@ -801,6 +806,23 @@ class RingBuffer {
 };
 
 // The telemetry store, filled by the control loop.
+// Fills §20's imu block from what the trace ingest observed. It is a function rather than a handful
+// of assignments at the call site for one reason: the elevation gate must not be settable by
+// whoever happens to be publishing. A caller can report that samples are fresh; it cannot
+// accidentally claim the turret's attitude, because the field that gates that claim is decided
+// here, from the calibration state, and nowhere else.
+//
+// The calibration state today: the BNO085 is bolted to the moving pitch assembly and no mount
+// calibration maps its gravity vector onto the base. So `imu_world_elevation_valid` is false, the
+// emitter sends JSON null, and a reader that flattens null into 0.0 is asserting the turret is
+// level -- which is exactly the mistake this gate exists to make impossible.
+inline void fill_imu_telemetry(bool samples_fresh, bool gravity_vector_fresh,
+                               TelemetrySnapshot& snap) {
+  snap.imu_present = samples_fresh;
+  snap.imu_gravity_valid = samples_fresh && gravity_vector_fresh;
+  snap.imu_world_elevation_valid = false;
+}
+
 class Telemetry {
  public:
   // The bump rule on its own, so it can be tested without settimeofday (which this

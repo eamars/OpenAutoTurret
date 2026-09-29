@@ -307,6 +307,26 @@ class ControlLoop {
   // boot, or updated by a calibration). Defaults to identity (assumed-level
   // base). Consumed by the telemetry snapshot (world-frame LOS + base tilt).
   void set_base_orientation(const BaseOrientation& o) { base_orientation_ = o; }
+
+  // An observation from the BNO085 trace, pushed by the daemon once per status tick. The loop owns
+  // the published snapshot (only it calls set_snapshot), so a field the web page reads cannot be
+  // written from outside it -- that would be overwritten by the next tick and look like a flapping
+  // sensor. Stored here, copied into the snapshot where every other published field is filled.
+  //
+  // `world_elevation_valid` is deliberately NOT derived here. The sensor is bolted to the moving
+  // pitch assembly, so its gravity vector describes the gimbal's attitude, not the base's; turning
+  // it into a world elevation of the *base* needs a mount calibration that does not exist yet. The
+  // gate stays closed rather than borrowing the gimbal's own tilt, because publishing 0.0 would
+  // claim the turret is level -- and that claim is a safety statement, not a number.
+  struct ImuObservation {
+    bool present = false;
+    bool gravity_valid = false;
+  };
+  void observe_imu(bool present, bool gravity_valid) {
+    std::lock_guard<std::mutex> lk(imu_mutex_);
+    imu_observation_.present = present;
+    imu_observation_.gravity_valid = gravity_valid;
+  }
   const BaseOrientation& base_orientation() const { return base_orientation_; }
 
   // --- payload profiling / verification (Phase 9, §28.5, §31) -----------
@@ -548,6 +568,8 @@ class ControlLoop {
   // Phase 7 installation orientation (base -> world). Identity by default.
   BaseOrientation base_orientation_ = identity_pose();
   // §6.3/§43 top-level telemetry (always filled; webd reads the snapshot).
+  mutable std::mutex imu_mutex_;
+  ImuObservation imu_observation_;
   telemetry::Telemetry telemetry_;
   // Phase 8: developer-command plumbing (§42.2). command_state_ is published
   // each cycle for web-thread validation; command_queue_ is drained on the
