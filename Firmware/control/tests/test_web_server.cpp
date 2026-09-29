@@ -569,6 +569,13 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
     got = frame.find("\"type\":\"control_trace\"") != std::string::npos;
   }
   ASSERT_TRUE(got) << "no control_trace frame arrived";
+  // ADR-002.1 §5: every archived tick names the parameter set it ran under. Nothing has been applied
+  // in this fixture, so the honest answer is revision 0, no verified hash, and an idle exchange —
+  // absence spelled as absence, the same rule the clock fields below obey.
+  EXPECT_NE(frame.find("\"param_revision\":0"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"param_state\":\"idle\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"param_applied_hash\":\"\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"param_expected_hash\":\"\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
   // The two context fields the 2026-09-28 case actually needs; `phase` on its own
   // was shown, by a jog that moved the axis for 11 s while every row said `hold`,

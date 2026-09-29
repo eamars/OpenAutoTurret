@@ -615,6 +615,15 @@ struct ControlLogRecord {
   double output_requested[kAxisCount] = {NAN, NAN};
   double pi_integral[kAxisCount] = {NAN, NAN};
   double pi_velocity[kAxisCount] = {NAN, NAN};
+  // Which verified parameter set this tick ran under (ADR-002.1 §5). A trial that cannot name its own
+  // parameter set cannot be compared against another trial, and "it was the same as before" is not a
+  // hash: the archive has to say the number even when nothing was changed this session.
+  uint64_t param_revision = 0;
+  std::array<char, 17> param_applied_hash{};   // what has been verified; empty = nothing yet
+  std::array<char, 17> param_expected_hash{};  // what is staged or in flight, if anything
+  // The default says "idle" rather than "unknown": a record nobody has filled in is a record where
+  // nothing is in flight, and an empty string here would read as "the firmware lost the state".
+  std::array<char, 24> param_state = {{'i', 'd', 'l', 'e', '\0'}};
   double pi_kp[kAxisCount] = {NAN, NAN};
   double pi_ki[kAxisCount] = {NAN, NAN};
   double current_cap[kAxisCount] = {NAN, NAN};
@@ -980,6 +989,10 @@ class Telemetry {
           << ",\"output_requested\":" << pair(r.output_requested)
           << ",\"output_reason\":" << pairi(r.output_reason) << ",\"command_kind\":" << pairi(r.command_kind)
           << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
+          << ",\"param_revision\":" << r.param_revision
+          << ",\"param_state\":\"" << r.param_state.data() << "\" "
+             ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\" "
+             ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\" "
           << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)
           << ",\"current_cap\":" << pair(r.current_cap)
           << ",\"rx_velocity_20\":" << pair(r.rx_velocity_20)

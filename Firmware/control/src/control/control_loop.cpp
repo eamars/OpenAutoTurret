@@ -22,6 +22,17 @@ constexpr double kAtRestVelRadS = 0.05;
 // Position tolerance for "at the ready pose".
 constexpr double kReadyPosTolRad = 0.01;
 constexpr TimeNs kYawReferenceStationaryNs = 500'000'000;
+namespace {
+// A fixed-width tag for the trace record: the archive is read by a parser, not by a person, so the
+// value is a NUL-terminated fixed buffer rather than a dangling pointer into a temporary string.
+template <size_t N>
+void fill_tag(std::array<char, N>& into, std::string_view text) {
+  const size_t n = text.size() < N - 1 ? text.size() : N - 1;
+  for (size_t i = 0; i < n; ++i) into[i] = text[i];
+  into[n] = '\0';
+}
+}  // namespace
+
 constexpr double kYawReferenceStationaryRadS = 0.5 * kDeg2Rad;
 constexpr double kYawReferencePositionToleranceRad = 0.5 * kDeg2Rad;
 // Pitch homing can nudge the free yaw axis while its GM6020 output is zero.
@@ -2425,6 +2436,14 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       rec.current_raw[i] = sp[i].current_raw_valid ? sp[i].current_raw : NAN;
       rec.enabled_state[i] = sp[i].enabled_state;
     }
+    // §5: every archived tick names the parameter set it ran under. The revision and both hashes come
+    // from the transaction, so a tick recorded while an exchange was in flight carries the candidate's
+    // expected hash and a state that says so: the archive cannot quietly present an unverified tick as
+    // though it had run under the verified set.
+    rec.param_revision = param_tx_.revision();
+    fill_tag(rec.param_applied_hash, param_tx_.applied_hash());
+    fill_tag(rec.param_expected_hash, param_tx_.expected_hash());
+    fill_tag(rec.param_state, param_tx_.state_name());
     const auto pitch_registers = backend_->pitch_register_diagnostics();
     for (int i=0;i<6;++i) {
       const auto& sample=pitch_registers.registers[i];

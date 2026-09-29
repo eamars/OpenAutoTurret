@@ -724,6 +724,10 @@ class WebServer {
               << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
         }
         out << ']';
+        out << ",\"param_revision\":" << r.param_revision
+            << ",\"param_state\":\"" << r.param_state.data() << "\""
+            << ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\""
+            << ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\"";
         pair("vest",r.v_estimated);
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';
