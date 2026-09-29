@@ -44,7 +44,7 @@ def test_a_window_with_nothing_measurable_is_not_run_and_says_which_field():
     verdict = scorer.score_window([{"phase": "hold"}])
     assert verdict["classification"] == "NOT_RUN"
     reasons = [row["reason"] for row in verdict["metrics"].values()]
-    assert any("row field names" in reason for reason in reasons), verdict
+    assert any("do not carry" in reason or "marked RUN window" in reason for reason in reasons), verdict
 
 
 def test_jitter_quiet_alone_cannot_carry_a_candidate_over_the_line():

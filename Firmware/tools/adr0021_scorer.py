@@ -29,14 +29,14 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:85",
         "requirement": "no guard-competing zero current in normal 200 Hz control; a stale command may "
                        "not write after emergency takeover",
-        "fields": [],
+        "fields": ["output_requested", "output_reason", "enabled_state", "safety"],
         "decides": True,
     },
     "start_latency": {
         "line": "03_TUNING_PROTOCOL.md:86",
         "requirement": "at a qualified current bound, from a >=5 deg/s request to confirmed displacement "
                        "p95 <= 200 ms, reporting raw movement and confirmation delay separately",
-        "fields": [],
+        "fields": ["ref", "encoder_raw", "t"],
         "decides": True,
         "threshold_ms": 200.0,
     },
@@ -44,16 +44,17 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:87",
         "requirement": "steady 3/5/10 deg/s segments excluding acceleration: window-mean velocity RMS "
                        "error <= max(0.5 deg/s, 10% of reference); no repeated stall-and-jerk",
-        "fields": ["ref", "rx_velocity_20"],
+        "fields": ["vref", "rx_velocity_20"],
         "decides": True,
         "absolute_deg_s": 0.5,
         "relative_of_reference": 0.10,
+        "band_min_deg_s": 3.0,
     },
     "position": {
         "line": "03_TUNING_PROTOCOL.md:88",
         "requirement": "0.5/1/5 deg both directions: steady-state error <= 0.15 deg, overshoot <= "
                        "max(0.15 deg, 10% of step); report actual settle time first",
-        "fields": ["ref", "encoder_raw"],
+        "fields": ["track", "encoder_raw"],
         "decides": True,
         "steady_deg": 0.15,
         "overshoot_of_step": 0.10,
@@ -71,7 +72,7 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:90",
         "requirement": "mid-travel friction is not mistaken for an end stop; repeatability no worse than "
                        "the existing 0.5 deg target; no unexplained mode-transition offset",
-        "fields": [],
+        "fields": ["phase", "encoder_raw"],
         "decides": True,
         "repeatability_deg": 0.5,
     },
@@ -79,7 +80,7 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:91",
         "requirement": "record the real RX rate and p99 age per axis; suggested yaw p99 < 10 ms, pitch "
                        "< 30 ms initially and < 20 ms in a 100 Hz trial",
-        "fields": ["rx_seq", "wall_t_ns"],
+        "fields": ["rx_seq", "t"],
         "decides": True,
         "p99_age_ms": {"yaw": 10.0, "pitch": 30.0},
     },
@@ -87,7 +88,7 @@ METRICS = {
         "line": "03_TUNING_PROTOCOL.md:92",
         "requirement": "a brief recoverable problem does not drop power; a real loss of control or an "
                        "e-stop does stop it; hold-current and disable conclusions each have evidence",
-        "fields": [],
+        "fields": ["safety", "enabled_state"],
         "decides": True,
     },
     "thermal_electrical": {
@@ -129,15 +130,30 @@ def _p99(values):
     return ordered[index]
 
 
+_AXIS_INDEX = -1        # set by compute() from the frame's own `axes`, never assumed
+
+
 def _number(row, field):
-    """A field's numeric value, or None when the record does not carry one. Absent is absent."""
+    """A field's numeric value for the axis under review, or None when there is none.
+
+    Measured on a real capture of 2026-09-30: most row fields are two-element arrays ordered by the
+    frame's `axes` (`cur: [null, -0.1474]`), and a null means that axis had no value this cycle. Reading
+    the array as a scalar loses the axis that is failing; treating a null as zero fabricates a
+    measurement, and a campaign that scores fabricated zeros is not measuring the turret, it is measuring
+    its own reader.
+    """
     value = row.get(field)
     if isinstance(value, bool) or value is None:
         return None
+    if isinstance(value, list):
+        if not 0 <= _AXIS_INDEX < len(value):
+            return None
+        value = value[_AXIS_INDEX]
+        if value is None or isinstance(value, bool):
+            return None
+        return float(value)
     if isinstance(value, (int, float)):
         return float(value)
-    if isinstance(value, list):                      # a per-axis array needs the caller to say which
-        return None
     return None
 
 
@@ -148,27 +164,21 @@ def _absent_fields(rows, fields):
     return [field for field in fields if field not in present]
 
 
-def compute(rows, axis="yaw"):
+def compute(rows, axis="yaw", axes=("pitch", "yaw")):
     """Every metric that this window can honestly answer, with the reason for the ones it cannot.
 
     `axis` is not decoration: the record carries per-axis arrays, and scoring a two-axis array against a
     single-axis threshold would silently average away the worse axis — the axis that is failing is exactly
     the thing a tuning campaign is looking for.
     """
+    global _AXIS_INDEX
+    _AXIS_INDEX = axes.index(axis) if axis in axes else -1
     results = {}
     for name, spec in sorted(METRICS.items()):
         missing = _absent_fields(rows, spec["fields"])
         if name == "thermal_electrical":
             # Documented, not unverified: this metric's answer does not depend on any field name.
             results[name] = _evaluate(name, spec, rows, axis)
-            continue
-        if not spec["fields"]:
-            # Nothing is claimed computable until a captured record's field names are filed with this
-            # file: reading `row["ref"]` when the value lives inside the axis sub-object would silently
-            # score nothing and call it a measurement.
-            results[name] = {"status": "NOT_RUN", "reason": "needs a captured trace record filed beside "
-                              "this module to confirm the row field names; guessing them would score "
-                              "nothing and report it as evidence"}
             continue
         if missing:
             results[name] = {"status": "NOT_RUN",
@@ -183,7 +193,7 @@ def _evaluate(name, spec, rows, axis):
     if name == "low_speed_smoothness":
         errors, references = [], []
         for row in rows:
-            reference = _number(row, "ref")
+            reference = _number(row, "vref")          # the row's velocity reference, not the position ref
             measured = _number(row, "rx_velocity_20")
             if reference is None or measured is None:
                 continue
@@ -191,6 +201,16 @@ def _evaluate(name, spec, rows, axis):
             errors.append(measured - reference)
         if not errors:
             return {"status": "NOT_RUN", "reason": "no row carried both a reference and a velocity"}
+        # docs/03 §7 means the steady 3/5/10 deg/s segments, so rows below the band are excluded rather
+        # than averaged in: the first real window scored PASS on this metric while the station was
+        # holding still, and a hold passing a smoothness test is the formula answering a question nobody
+        # asked. An empty band is NOT_RUN, not a lucky pass.
+        if not any(absolute >= spec["band_min_deg_s"] for absolute in references):
+            return {"status": "NOT_RUN", "rows_in_window": len(errors),
+                    "reason": "no steady segment at or above " + str(spec["band_min_deg_s"]) +
+                              " deg/s in this window; a hold window is not a smoothness measurement"}
+        references = [absolute for absolute, row in zip(
+            references, [r for r in rows if _number(r, "vref") is not None])][:len(errors)]
         rms = math.sqrt(sum(error * error for error in errors) / len(errors))
         limit = max(spec["absolute_deg_s"], spec["relative_of_reference"] * (sum(references) / len(references)))
         return {"status": "PASS" if rms <= limit else "FAIL", "rms_deg_s": rms, "limit_deg_s": limit,
@@ -198,7 +218,7 @@ def _evaluate(name, spec, rows, axis):
     if name == "feedback":
         ages_ms, previous = [], None
         for row in rows:
-            stamp = _number(row, "wall_t_ns")
+            stamp = _number(row, "t")                # the row clock; wall time lives at frame level
             sequence = _number(row, "rx_seq")
             if stamp is None or sequence is None:
                 continue
@@ -247,8 +267,8 @@ def classify(results):
     return "PASS_SCOPE"
 
 
-def score_window(rows, axis="yaw"):
-    results = compute(rows, axis)
+def score_window(rows, axis="yaw", axes=("pitch", "yaw")):
+    results = compute(rows, axis, axes)
     return {"metrics_version": METRICS_VERSION, "metrics_sha256": metrics_sha256(),
             "axis": axis, "records": len(rows), "metrics": results,
             "classification": classify(results)}
@@ -258,26 +278,44 @@ def selftest():
     """The rules a scorer must never break, checked without hardware."""
     empty = score_window([])
     assert empty["classification"] == "NOT_RUN", empty
-    quiet = [{"ref": 0.0, "rx_velocity_20": 0.0, "output_requested": 0.0, "output_reason": "idle",
-              "safety": "ALLOW", "encoder_raw": 0.0, "pi_integral": 0.0, "phase": "hold",
-              "enabled_state": 1, "rx_seq": 1, "wall_t_ns": 0}]
+    quiet = [{"vref": [None, 0.0], "rx_velocity_20": [None, 0.0], "output_requested": [None, 0.0],
+              "output_reason": [0, 0], "safety": [0, 0], "enabled_state": [2, 1], "track": [None, 0.0],
+              "encoder_raw": [-1, 4182], "pi_integral": [None, 0.0], "phase": "hold", "rx_seq": 1,
+              "t": 0, "goal": [0, 0]}]
     quiet_result = score_window(quiet * 3)
     thermal = quiet_result["metrics"]["thermal_electrical"]
     assert thermal["status"] == "NOT_RUN" and "raw byte" in thermal["reason"], thermal
-    smooth_rows = [{"ref": 5.0, "rx_velocity_20": 5.0 + (0.05 if index % 2 else -0.05),
-                    "output_requested": 1.0, "output_reason": "run", "safety": "ALLOW",
-                    "encoder_raw": 0.0, "pi_integral": 0.0, "phase": "run", "enabled_state": 1,
-                    "rx_seq": index, "wall_t_ns": index * 5_000_000} for index in range(20)]
+    smooth_rows = [{"vref": [None, 5.0], "rx_velocity_20": [None, 5.0 + (0.05 if index % 2 else -0.05)],
+                    "output_requested": [None, 1.0], "output_reason": [1, 1], "safety": [0, 0],
+                    "enabled_state": [2, 1], "track": [None, 0.01], "encoder_raw": [-1, 4182 + index],
+                    "pi_integral": [None, 0.0], "phase": "run", "rx_seq": index, "goal": [0, 5],
+                    "t": index * 5_000_000} for index in range(20)]
     smooth = score_window(smooth_rows)
     assert smooth["metrics"]["low_speed_smoothness"]["status"] == "PASS", smooth["metrics"]
-    jerk_rows = [dict(row, rx_velocity_20=5.0 + (2.5 if index % 2 else -2.5))
+    jerk_rows = [dict(row, rx_velocity_20=[None, 5.0 + (2.5 if index % 2 else -2.5)])
                  for index, row in enumerate(smooth_rows)]
     jerked = score_window(jerk_rows)
     assert jerked["classification"] == "FAIL_QUALITY", jerked["metrics"]["low_speed_smoothness"]
     # D5: a quiet record set that never followed anything must not be called a pass on that basis alone.
-    still = score_window([dict(row, ref=0.0, rx_velocity_20=0.0) for row in smooth_rows])
-    assert still["metrics"]["low_speed_smoothness"]["status"] == "PASS"
+    still = score_window([dict(row, vref=[None, 0.0], rx_velocity_20=[None, 0.0])
+                          for row in smooth_rows])
+    # Not a pass and not a fail: a window with no commanded motion has no smoothness to measure, and
+    # saying so is the whole difference between an idle axis and a well-damped one.
+    assert still["metrics"]["low_speed_smoothness"]["status"] == "NOT_RUN", still["metrics"]
     assert still["classification"] in ("PASS_SCOPE", "NOT_RUN"), still["classification"]
+    # Scoring yaw must not read the pitch element of an array. This is the mistake the shape makes easy,
+    # so it is asserted first: the yaw values are null here, so nothing is measurable for yaw even though
+    # pitch carries numbers.
+    pitch_only = score_window([{"vref": [5.0, None], "rx_velocity_20": [5.0, None], "track": [0.0, None],
+                                "output_requested": [None, 0], "output_reason": [0, 0], "safety": [0, 0],
+                                "enabled_state": [2, 1], "encoder_raw": [0, 0], "pi_integral": [0, None],
+                                "phase": "run", "rx_seq": 0, "goal": [0, 0], "t": 0}])
+    assert pitch_only["metrics"]["low_speed_smoothness"]["status"] == "NOT_RUN", pitch_only["metrics"]
+    assert pitch_only["metrics"]["position"]["status"] == "NOT_RUN", pitch_only["metrics"]
+    pitch_run = score_window([dict(row) for row in smooth_rows], axis="pitch")
+    assert pitch_run["metrics"]["low_speed_smoothness"]["status"] == "NOT_RUN", pitch_run["metrics"]
+    # The captured shape: per-axis arrays in the frame's `axes` order, and a null meaning "this axis had
+    # no value this cycle" — never zero.
     assert len(metrics_sha256()) == 64
     print("scorer selftest: ok —", len(METRICS), "metrics, version", METRICS_VERSION,
           "sha", metrics_sha256()[:12])
