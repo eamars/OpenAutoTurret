@@ -1,12 +1,30 @@
 {
+  "_how_to_read_this": "First \u00a76 run against the deployed build. One yaw candidate completed prepare\u2192apply\u2192readback\u2192revision (row output_slew_a_per_s, revision 1). Rows with prepare.accepted=null are a defect in THIS tool: it looks for `request_id=` inside the prepare ack's reason and the real ack spells it differently, so the exchange was abandoned before applying \u2014 recorded rather than hidden. Pitch's refusals are controld's own sentence; the conjunct that fired is not printed by the firmware yet, which is the next change. Station-side config: manual_commissioning=true was added to this release's turret_mixed.yaml (backup .badr0021) \u2014 a restart-class decision, deliberately not a campaign parameter.",
+  "_station_config_note": {
+    "manual_commissioning": "added station-side to release 654e3dccebda config, backup kept as .badr0021; not in committed source"
+  },
   "binary": "/home/eamars/workspace/OpenAutoTurret/run/releases/654e3dccebda.VbyLbF/Firmware/build-arm64/control/controld",
   "binary_sha256_after": "a5be42cdb3f4daae5e5692a3e1b1dbabfb68923a0692c514b1822adfaca50416",
   "binary_sha256_before": "a5be42cdb3f4daae5e5692a3e1b1dbabfb68923a0692c514b1822adfaca50416",
   "binary_unchanged": true,
-  "blocked": [
-    "BLOCKED_mode_?"
-  ],
+  "blocked": [],
   "host": "rpi-turret",
+  "identity_after": {
+    "accepted": true,
+    "applied_hash": "b80820a38cb7b5ab",
+    "expected_hash": "b80820a38cb7b5ab",
+    "reason": null,
+    "revision": "1",
+    "state": "idle"
+  },
+  "identity_before": {
+    "accepted": true,
+    "applied_hash": "none",
+    "expected_hash": "none",
+    "reason": null,
+    "revision": "0",
+    "state": "idle"
+  },
   "inventory_generated_from": {
     "binary": "build/control/controld",
     "binary_sha256": "67b562b88858f2d6d04a61a1ae8e054fb923f9a16c6c584c0e5127a73b309016",
@@ -25,111 +43,406 @@
   },
   "schema": 1,
   "station_state": {
+    "can_state": 0,
+    "cmd_ack_seq": 4,
+    "current_a_pitch": null,
+    "current_a_yaw": -0.0479736,
     "feedback_age_ms": 0,
-    "mode": "?",
-    "param_applied_hash": "?",
-    "param_expected_hash": "?",
-    "param_revision": "?",
-    "param_state": "?",
-    "payload_status": "?",
+    "manual_lease_active": 0,
+    "manual_lease_remaining_ms": 0,
+    "manual_profile": "NORMAL",
+    "operating_mode": "MANUAL",
+    "payload_profile_name": "conservative",
+    "payload_profile_status": "no_profile",
     "phase": "hold",
-    "temp_raw": "?"
+    "safety_action": "ALLOW",
+    "service_velocity_control": true,
+    "telemetry_stale": false,
+    "yaw_guard_degraded": false
   },
   "station_state_after": {
+    "can_state": 0,
+    "cmd_ack_seq": 42,
+    "current_a_pitch": null,
+    "current_a_yaw": -0.053833,
     "feedback_age_ms": 0,
-    "mode": "?",
-    "param_applied_hash": "?",
-    "param_expected_hash": "?",
-    "param_revision": "?",
-    "param_state": "?",
-    "payload_status": "?",
+    "manual_lease_active": 0,
+    "manual_lease_remaining_ms": 0,
+    "manual_profile": "NORMAL",
+    "operating_mode": "MANUAL",
+    "payload_profile_name": "conservative",
+    "payload_profile_status": "no_profile",
     "phase": "hold",
-    "temp_raw": "?"
+    "safety_action": "ALLOW",
+    "service_velocity_control": true,
+    "telemetry_stale": false,
+    "yaw_guard_degraded": false
   },
-  "taken_at_utc": "2026-09-29T14:48:25Z",
+  "taken_at_utc": "2026-09-29T15:06:21Z",
   "transcript": [
     {
+      "applied": null,
+      "parameter": "yaw.baseline",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 6
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.current_kp_a_per_rad_s",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 7
+      },
+      "requested": "1.4:0.6:0:0:0:0:0:0",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "none",
+        "expected_hash": "none",
+        "reason": null,
+        "revision": "0",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.current_kp_a_per_rad_s (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 8
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.current_ki_a_per_rad_s",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 10
+      },
+      "requested": "1:0.9:0:0:0:0:0:0",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "none",
+        "expected_hash": "none",
+        "reason": null,
+        "revision": "0",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.current_ki_a_per_rad_s (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 11
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.positive_breakaway_a",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 13
+      },
+      "requested": "1:0.6:0:0.12:0:0:0:0",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "none",
+        "expected_hash": "none",
+        "reason": null,
+        "revision": "0",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.positive_breakaway_a (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 14
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.negative_breakaway_a",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 16
+      },
+      "requested": "1:0.6:0:0:0.12:0:0:0",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "none",
+        "expected_hash": "none",
+        "reason": null,
+        "revision": "0",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.negative_breakaway_a (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 17
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.positive_run_a",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 19
+      },
+      "requested": "1:0.6:0:0:0:0.08:0:0",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "none",
+        "expected_hash": "none",
+        "reason": null,
+        "revision": "0",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.positive_run_a (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 20
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.negative_run_a",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 22
+      },
+      "requested": "1:0.6:0:0:0:0:0.08:0",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "none",
+        "expected_hash": "none",
+        "reason": null,
+        "revision": "0",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.negative_run_a (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 23
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=1 effective_hash=b80820a38cb7b5ab request_id=prepp-1",
+        "safety": "ALLOW",
+        "seq": 26
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.output_slew_a_per_s",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "reason": "prepared request_id=prepp-1 expected_hash=b80820a38cb7b5ab revision_after_apply=1",
+        "safety": "ALLOW",
+        "seq": 25
+      },
+      "requested": "1:0.6:0:0:0:0:0:4",
+      "restore": null,
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": null,
+      "parameter": "yaw.friction.output_slew_a_per_s (restore)",
+      "prepare": {
+        "accepted": false,
+        "command": "param_prepare",
+        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "safety": "ALLOW",
+        "seq": 28
+      },
+      "requested": "1:0.6:0:0:0:0:0:0"
+    },
+    {
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
+      "identity_after_settle": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
       "parameter": "pitch.service_speed_kp",
       "requested": "4.0:0.03",
       "sent": {
+        "accepted": false,
         "command": "pitch_control_trial",
-        "ok": true,
-        "type": "response",
-        "verdict": "submitted"
-      },
-      "telemetry_after": {
-        "feedback_age_ms": 0,
-        "mode": "?",
-        "param_applied_hash": "?",
-        "param_expected_hash": "?",
-        "param_revision": "?",
-        "param_state": "?",
-        "payload_status": "?",
-        "phase": "hold",
-        "temp_raw": "?"
+        "reason": "pitch tuning requires idle healthy Manual commissioning",
+        "safety": "ALLOW",
+        "seq": 30
       }
     },
     {
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
+      "identity_after_settle": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
       "parameter": "pitch.service_speed_kp (restore)",
       "requested": "4:0.05",
       "sent": {
+        "accepted": false,
         "command": "pitch_control_trial",
-        "ok": true,
-        "type": "response",
-        "verdict": "submitted"
-      },
-      "telemetry_after": {
-        "feedback_age_ms": 0,
-        "mode": "?",
-        "param_applied_hash": "?",
-        "param_expected_hash": "?",
-        "param_revision": "?",
-        "param_state": "?",
-        "payload_status": "?",
-        "phase": "hold",
-        "temp_raw": "?"
+        "reason": "pitch tuning requires idle healthy Manual commissioning",
+        "safety": "ALLOW",
+        "seq": 33
       }
     },
     {
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
+      "identity_after_settle": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
       "parameter": "pitch.service_speed_ki",
       "requested": "4.0:0.03",
       "sent": {
+        "accepted": false,
         "command": "pitch_control_trial",
-        "ok": true,
-        "type": "response",
-        "verdict": "submitted"
-      },
-      "telemetry_after": {
-        "feedback_age_ms": 0,
-        "mode": "?",
-        "param_applied_hash": "?",
-        "param_expected_hash": "?",
-        "param_revision": "?",
-        "param_state": "?",
-        "payload_status": "?",
-        "phase": "hold",
-        "temp_raw": "?"
+        "reason": "pitch tuning requires idle healthy Manual commissioning",
+        "safety": "ALLOW",
+        "seq": 36
       }
     },
     {
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
+      "identity_after_settle": {
+        "accepted": true,
+        "applied_hash": "b80820a38cb7b5ab",
+        "expected_hash": "b80820a38cb7b5ab",
+        "reason": null,
+        "revision": "1",
+        "state": "idle"
+      },
       "parameter": "pitch.service_speed_ki (restore)",
       "requested": "4:0.05",
       "sent": {
+        "accepted": false,
         "command": "pitch_control_trial",
-        "ok": true,
-        "type": "response",
-        "verdict": "submitted"
-      },
-      "telemetry_after": {
-        "feedback_age_ms": 0,
-        "mode": "?",
-        "param_applied_hash": "?",
-        "param_expected_hash": "?",
-        "param_revision": "?",
-        "param_state": "?",
-        "payload_status": "?",
-        "phase": "hold",
-        "temp_raw": "?"
+        "reason": "pitch tuning requires idle healthy Manual commissioning",
+        "safety": "ALLOW",
+        "seq": 39
       }
     }
   ]
