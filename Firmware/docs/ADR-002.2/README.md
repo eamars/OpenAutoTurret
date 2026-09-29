@@ -6,6 +6,8 @@
 
 本包保存完整开发合同和参考工具；阶段1实际软件位于[commissioning](../../commissioning/README.md)与共享C++核心，已接入本地构建和显式离线回放。物理部署/验收另记；没有连接 Pi、发送 CAN、运行实机或取得新载荷数据。
 
+阶段1结果与阶段2入口见[本地验证报告](reports/STAGE1_HANDOFF.md)及[机器证据](reports/STAGE1_LOCAL_VALIDATION.json)。
+
 ## 唯一流程
 
 **1 建模 → 2 获取实际系统反馈 → 3a 独立调参验证程序实机通过 → 3b production software 实机通过。**

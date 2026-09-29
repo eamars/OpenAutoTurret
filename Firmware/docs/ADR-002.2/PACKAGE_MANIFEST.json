@@ -1,7 +1,7 @@
 {
   "adr": "ADR-002.2",
   "date": "2026-09-30",
-  "artifact_kind": "development_contract",
+  "artifact_kind": "development_contract_with_stage1_mathematical_implementation",
   "delivery_scope": "single_complete_scope",
   "stages": [
     "1_model",
@@ -9,14 +9,14 @@
     "3a_standalone_hardware",
     "3b_production_hardware"
   ],
-  "base_ref": "ADR-001",
-  "base_commit": null,
+  "base_ref": "local_workspace",
+  "base_commit": "b4701de6a021176bcb334f5015415c680eca3bda",
   "reported_commit_not_audited": "bad742dddba6a95d3d055e43998adfd0506b0a6e",
   "physical_hardware_accessed": false,
-  "firmware_integrated": false,
-  "firmware_compiled": false,
+  "firmware_integrated": true,
+  "firmware_compiled": true,
   "hardware_qualification": "NOT_RUN",
-  "source_reading": "selective_unpinned_public_paths",
+  "source_reading": "local_checkout_and_existing_contract",
   "prior_artifacts": [
     {
       "name": "OpenAutoTurret_ADR-002_Development.md",
@@ -30,5 +30,22 @@
       "name": "Pasted text(20260927-031718).txt",
       "sha256": "63d33dce466dd54fa8c7b77cd8381268bd45197d98850f7e4a7b5d009cb814a3"
     }
-  ]
+  ],
+  "contract_original_snapshot": {
+    "source_reading": "selective_unpinned_public_paths",
+    "firmware_integrated": false,
+    "firmware_compiled": false,
+    "report": "reports/OFFLINE_VALIDATION.json"
+  },
+  "stage_override": "docs/07_STAGE1_OFFLINE_OVERRIDE.md",
+  "implementation_head_at_validation": "95c5e5c1c79d0d30d1e9f97365c7f7c4ee710d81",
+  "mathematical_software_status": "PASS",
+  "firmware_integration_scope": "LOCAL_SHARED_CORE_LINK_AND_EXPLICIT_OFFLINE_REPLAY",
+  "compiled_targets": {
+    "x86_64": "full_firmware_including_commissiond_and_controld",
+    "arm64": "axis_control_core_and_commissiond_compile_link_only"
+  },
+  "stage2_started": false,
+  "full_adr_status": "NOT_DONE",
+  "stage1_report": "reports/STAGE1_LOCAL_VALIDATION.json"
 }
