@@ -970,6 +970,16 @@ bool MixedCanMotorBackend::apply_yaw_trial(const YawTrialSettings& s, std::strin
   return true;
 }
 
+MotorBackend::YawTrialSettings MixedCanMotorBackend::yaw_trial_settings() const {
+  std::lock_guard lock(yaw_mutex_);
+  YawTrialSettings s;
+  s.kp_a_per_rad_s = profile_.yaw.current_kp_a_per_rad_s;
+  s.ki_a_per_rad = profile_.yaw.current_ki_a_per_rad_s;
+  s.rx_window_ms = profile_.yaw.velocity_rx_window_ms;
+  s.friction = profile_.yaw.friction;
+  return s;
+}
+
 void MixedCanMotorBackend::keepalive(AxisId axis) {
   if (axis == AxisId::Pitch && pitch_opened_.load()) pitch_backend_.keepalive(axis);
 }

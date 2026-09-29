@@ -4334,6 +4334,117 @@ void ControlLoop::disable_tracking() {
   tracking_ref_ = ReferenceRequest{};
 }
 
+namespace {
+// One parser for the yaw trial set, shared by `yaw_control_trial` and `param_prepare`. Two parsers
+// over one string format is how a campaign and an operator end up meaning different things.
+bool parse_yaw_trial_arg(const std::string& arg, MotorBackend::YawTrialSettings& out,
+                         std::string& why) {
+  double values[8]{}; size_t begin=0; bool parsed=true;
+  try {
+    for (int i=0;i<8;++i) {
+      const auto end=arg.find(':',begin);
+      const auto token=arg.substr(begin,end==std::string::npos ? end : end-begin);
+      size_t used=0; values[i]=std::stod(token,&used);
+      if (used!=token.size() || !std::isfinite(values[i]) || (i<7 && end==std::string::npos) ||
+          (i==7 && end!=std::string::npos)) { parsed=false; break; }
+      begin=end+1;
+    }
+  } catch (...) { parsed=false; }
+  if (!parsed || (values[2]!=0 && values[2]!=20 && values[2]!=30 && values[2]!=40) ||
+      values[3]<0 || values[4]<0 || values[5]<0 || values[6]<0 || values[7]<=0 || values[7]>10) {
+    why = "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, "
+          "slew (0,10]";
+    return false;
+  }
+  out.kp_a_per_rad_s=values[0]; out.ki_a_per_rad=values[1];
+  out.rx_window_ms=static_cast<int>(values[2]);
+  out.friction={values[3]>0 || values[4]>0 || values[5]>0 || values[6]>0,
+      values[3],values[4],values[5],values[6],1.0,3*2*3.14159265358979323846/8192,
+      .5*kDeg2Rad,5,values[7]};
+  return true;
+}
+}  // namespace
+
+std::vector<control::ParamValue> ControlLoop::yaw_trial_values(
+    const MotorBackend::YawTrialSettings& s) const {
+  // The names are the registry's names, spelled the same way, so the document that says what can be
+  // tuned and the exchange that proves what is running cannot drift into two vocabularies.
+  const gm6020::FrictionConfig& f = s.friction;
+  return {
+      {"yaw.current_kp_a_per_rad_s", control::canonical_number(s.kp_a_per_rad_s)},
+      {"yaw.current_ki_a_per_rad_s", control::canonical_number(s.ki_a_per_rad)},
+      {"yaw.velocity_rx_window_ms", control::canonical_number(s.rx_window_ms)},
+      {"yaw.friction.enabled", control::canonical_bool(f.enabled)},
+      {"yaw.friction.positive_breakaway_a", control::canonical_number(f.positive_breakaway_a)},
+      {"yaw.friction.negative_breakaway_a", control::canonical_number(f.negative_breakaway_a)},
+      {"yaw.friction.positive_run_a", control::canonical_number(f.positive_run_a)},
+      {"yaw.friction.negative_run_a", control::canonical_number(f.negative_run_a)},
+      {"yaw.friction.timeout_s", control::canonical_number(f.timeout_s)},
+      {"yaw.friction.motion_displacement_rad", control::canonical_number(f.motion_displacement_rad)},
+      {"yaw.friction.stationary_velocity_rad_s", control::canonical_number(f.stationary_velocity_rad_s)},
+      {"yaw.friction.fresh_samples", control::canonical_number(double(f.fresh_samples))},
+      {"yaw.friction.output_slew_a_per_s", control::canonical_number(f.output_slew_a_per_s)},
+  };
+}
+
+void ControlLoop::param_exchange_yaw(const std::string& command,
+                                     const MotorBackend::YawTrialSettings& settings,
+                                     const std::string& request_id) {
+  const std::vector<control::ParamValue> wanted = yaw_trial_values(settings);
+  const MotorBackend::YawTrialSettings previous = backend_->yaw_trial_settings();
+  param_previous_settings_ = previous;
+  const std::vector<control::ParamValue> was = yaw_trial_values(previous);
+  if (const std::string refused = param_tx_.prepare(wanted, request_id); !refused.empty()) {
+    ack_command(command, false, "prepare refused: " + refused);
+    return;
+  }
+  param_tx_.begin_apply(was, request_id);
+  std::string apply_error;
+  if (!backend_->apply_yaw_trial(settings, apply_error)) {
+    // The write did not take. Feed the transaction what the hardware still holds: it will demand the
+    // restore it just asked for, the restore is a no-op write of values already present, and motion
+    // stays blocked until that is confirmed. This is the branch where a script used to move on.
+    param_tx_.verify(was);
+    // The restore writes what the hardware held, not what was refused: writing `settings` here would
+    // be a no-op that reports itself as a recovery. A verified restore does advance the revision — it
+    // says "an exchange happened and this is the set that is verified now", which is the honest
+    // reading of a revision and the one a runner can act on.
+    std::string restore_error;
+    if (!backend_->apply_yaw_trial(previous, restore_error)) {
+      param_tx_.verify(was);
+      ack_command(command, false, "apply refused (" + apply_error + ") and the restore was refused "
+                                  "too (" + restore_error + "); revision " +
+                                  std::to_string(param_tx_.revision()) + " is the last verified set");
+      return;
+    }
+    param_tx_.verify(was);
+    ack_command(command, false, "apply refused: " + apply_error + "; hardware still holds revision " +
+                                std::to_string(param_tx_.revision()) + " and motion stays gated until "
+                                "the restore verifies");
+    return;
+  }
+  const std::string unverified = param_tx_.verify(yaw_trial_values(backend_->yaw_trial_settings()));
+  if (!unverified.empty()) {
+    // The write was accepted and the plant came back holding something else — a truncation, a
+    // half-applied set, a driver that said yes to a value it cannot run. "restoring" is not a
+    // promise somebody else keeps: the restore is attempted right here, and if it cannot be
+    // confirmed the transaction stays in `restoring`, which holds every motion command.
+    std::string restore_error;
+    const bool restored = backend_->apply_yaw_trial(previous, restore_error);
+    if (restored) param_tx_.verify(yaw_trial_values(backend_->yaw_trial_settings()));
+    ack_command(command, false, "write was accepted but the readback does not match: " + unverified +
+                                (restored
+                                     ? "; the previous set is verified again, revision " +
+                                       std::to_string(param_tx_.revision())
+                                     : "; the restore did not take (" + restore_error +
+                                       "), motion stays gated until the exchange resolves"));
+    return;
+  }
+  ack_command(command, true, "host yaw settings applied for this commissioning session; current cap "
+                             "unchanged; unqualified; revision=" + std::to_string(param_tx_.revision()) +
+                             " effective_hash=" + param_tx_.applied_hash() + " request_id=" + request_id);
+}
+
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
   if ((name=="yaw_control_trial" || name=="pitch_control_trial") && response_probe_until_ns_) {
@@ -4346,6 +4457,17 @@ void ControlLoop::execute_command(const std::string& name,
   if (pitch_gain_trial_pending_ && (name=="response_probe" || name=="manual_jog_start" ||
       name=="manual_step" || name=="start_payload_verification" || name=="start_tracking")) {
     ack_command(name,false,"pitch gain readback pending; wait before motion"); return;
+  }
+  // The same door, for every parameter exchange rather than only the pitch one. `kp2-fine` contained
+  // Kp=1 because nothing stood here: the apply had been refused and the next jog ran anyway.
+  if (param_tx_.blocks_motion() && (name=="response_probe" || name=="manual_jog_start" ||
+      name=="manual_step" || name=="run_test_motion" || name=="start_payload_verification" ||
+      name=="start_tracking")) {
+    ack_command(name,false,std::string("parameter exchange is ")+param_tx_.state_name()+
+                "; motion needs a verified set (last verified revision "+
+                std::to_string(param_tx_.revision())+", hash "+
+                (param_tx_.applied_hash().empty() ? "none" : param_tx_.applied_hash())+
+                "): "+param_tx_.last_reason()); return;
   }
   if (phase_ == Phase::Recovering) {
     if (name == "stop_motion" || name == "hold") stop_motion();
@@ -4540,29 +4662,66 @@ void ControlLoop::execute_command(const std::string& name,
         ack_command(name,false,"yaw tuning requires fresh stationary axes"); return;
       }
     }
-    double values[8]{}; size_t begin=0; bool parsed=true;
-    try {
-      for (int i=0;i<8;++i) {
-        const auto end=arg.find(':',begin);
-        const auto token=arg.substr(begin,end==std::string::npos ? end : end-begin);
-        size_t used=0; values[i]=std::stod(token,&used);
-        if (used!=token.size() || !std::isfinite(values[i]) || (i<7 && end==std::string::npos) ||
-            (i==7 && end!=std::string::npos)) { parsed=false; break; }
-        begin=end+1;
-      }
-    } catch (...) { parsed=false; }
-    if (!parsed || (values[2]!=0 && values[2]!=20 && values[2]!=30 && values[2]!=40) ||
-        values[3]<0 || values[4]<0 || values[5]<0 || values[6]<0 || values[7]<=0 || values[7]>10) {
-      ack_command(name,false,"syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]"); return;
-    }
     MotorBackend::YawTrialSettings settings;
-    settings.kp_a_per_rad_s=values[0]; settings.ki_a_per_rad=values[1];
-    settings.rx_window_ms=static_cast<int>(values[2]);
-    settings.friction={values[3]>0 || values[4]>0 || values[5]>0 || values[6]>0,
-        values[3],values[4],values[5],values[6],1.0,3*2*3.14159265358979323846/8192,
-        .5*kDeg2Rad,5,values[7]};
-    const bool applied=backend_->apply_yaw_trial(settings,err);
-    ack_command(name,applied,applied ? "host yaw settings applied for this commissioning session; current cap unchanged; unqualified" : err);
+    if (!parse_yaw_trial_arg(arg, settings, err)) { ack_command(name,false,err); return; }
+    param_exchange_yaw(name, settings, "yawt-" + std::to_string(++param_request_seq_));
+    return;
+  }
+  if (name == "param_snapshot") {
+    ack_command(name,true,std::string("state=")+param_tx_.state_name()+
+                " revision="+std::to_string(param_tx_.revision())+
+                " applied_hash="+(param_tx_.applied_hash().empty()?"none":param_tx_.applied_hash())+
+                " expected_hash="+(param_tx_.expected_hash().empty()?"none":param_tx_.expected_hash())+
+                (param_tx_.last_reason().empty()?"":" reason="+param_tx_.last_reason()));
+    return;
+  }
+  if (name == "param_prepare") {
+    // Stages one candidate without writing anything: the range and mode checks that a trial would
+    // do happen here, so a rejected candidate costs one round trip and does not touch the hardware.
+    MotorBackend::YawTrialSettings settings;
+    std::string why;
+    if (!parse_yaw_trial_arg(arg, settings, why)) { ack_command(name,false,why); return; }
+    param_staged_settings_ = settings;
+    param_staged_id_ = "prepp-" + std::to_string(++param_request_seq_);
+    const std::string refused = param_tx_.prepare(yaw_trial_values(settings), param_staged_id_);
+    if (!refused.empty()) { param_staged_id_.clear(); ack_command(name,false,"prepare refused: "+refused); return; }
+    ack_command(name,true,"prepared request_id="+param_staged_id_+" expected_hash="+
+                param_tx_.expected_hash()+" revision_after_apply="+
+                std::to_string(param_tx_.revision()+1));
+    return;
+  }
+  if (name == "param_restore") {
+    // The way out of `restoring` when the plant was briefly unwilling: write back the set it held
+    // before the exchange and confirm it. Without this verb the station would sit gated until a
+    // restart, and "wait for somebody to notice" is not a recovery path.
+    if (!param_tx_.restore_required()) {
+      ack_command(name,false,"nothing is demanding a restore (state=" +
+                  std::string(param_tx_.state_name()) + ")"); return;
+    }
+    std::string restore_error;
+    if (!backend_->apply_yaw_trial(param_previous_settings_, restore_error)) {
+      ack_command(name,false,"restore refused: " + restore_error + "; motion stays gated"); return;
+    }
+    const std::string still = param_tx_.verify(yaw_trial_values(backend_->yaw_trial_settings()));
+    ack_command(name, still.empty(), still.empty()
+        ? "previous set restored and verified; revision " + std::to_string(param_tx_.revision()) +
+          " is now the verified set"
+        : "restore wrote but did not verify: " + still + "; motion stays gated");
+    return;
+  }
+  if (name == "param_apply") {
+    if (param_staged_id_.empty()) {
+      ack_command(name,false,"nothing is prepared; param_apply takes the request_id a prepare "
+                             "returned, and an apply that skips prepare would write a candidate "
+                             "nobody validated"); return;
+    }
+    if (arg != param_staged_id_) {
+      ack_command(name,false,"request_id '"+arg+"' is not the prepared set ("+param_staged_id_+
+                             "); refusing to apply a candidate under someone else's id"); return;
+    }
+    const MotorBackend::YawTrialSettings settings = param_staged_settings_;
+    param_staged_id_.clear();
+    param_exchange_yaw(name, settings, arg);
     return;
   }
   if (name == "response_probe") {

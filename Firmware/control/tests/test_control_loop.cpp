@@ -135,6 +135,154 @@ TEST(ControlLoopSim, ResponseProbeUsesContinuousYawReadinessAndRuntimeEnvelope) 
   EXPECT_EQ(snapshot.cmd_ack_accepted, 1) << snapshot.cmd_ack_reason;
 }
 
+// A TunablePlant is the drive that says one thing and does another: it refuses a gain outside its
+// approved envelope, or it accepts the write and quietly stores something else. Both behaviours are
+// real — the ADR-002 run has a folder named kp2-fine whose trace says Kp=1 — and both are the plant's
+// business, not the campaign's. What the loop owes the campaign is that neither is ever mistaken for
+// a new parameter set, and that motion waits while the difference is unresolved.
+class TunablePlant : public sim::SimMotorBackend {
+ public:
+  TunablePlant() : sim::SimMotorBackend(.005) {}
+  bool supports_continuous_yaw() const override { return true; }
+  bool apply_yaw_trial(const YawTrialSettings& s, std::string& error) override {
+    if (refuse_above_ > 0 && s.kp_a_per_rad_s > refuse_above_) {
+      error = "drive refused Kp above the approved envelope";
+      return false;
+    }
+    if (allowed_writes_ == 0) {
+      error = "drive is not accepting writes right now";
+      return false;
+    }
+    --allowed_writes_;
+    stored_.kp_a_per_rad_s = clamp_below_ > 0 && s.kp_a_per_rad_s > clamp_below_ ? clamp_below_
+                                                                                : s.kp_a_per_rad_s;
+    stored_.ki_a_per_rad = s.ki_a_per_rad;
+    stored_.rx_window_ms = s.rx_window_ms;
+    stored_.friction = s.friction;
+    return true;
+  }
+  YawTrialSettings yaw_trial_settings() const override { return stored_; }
+  double refuse_above_ = 0, clamp_below_ = 0;
+  int allowed_writes_ = 100;
+
+ private:
+  YawTrialSettings stored_;
+};
+
+// Reaches the same idle, held, Manual-commissioning state the response-probe test starts from.
+bool reach_manual_commissioning(ControlLoop& loop, int64_t& t) {
+  HomingPlanConfig hcfg;
+  hcfg.homing.coarse_speed_rad_s = 20 * kDeg2Rad;
+  hcfg.homing.fine_speed_rad_s = 2 * kDeg2Rad;
+  hcfg.homing.settle_time_s = .3;
+  hcfg.travel_bands[0] = TravelBand{0, 115};
+  std::vector<HomingAction> actions{{.type=HomingActionType::HomeFullRange, .axis=AxisId::Pitch}};
+  std::string error;
+  if (!loop.start_homing(HomingPlan(std::move(actions), hcfg), error)) return false;
+  for (int i = 0; i < kMaxSteps; ++i, t += kDtNs) {
+    loop.step(t, kDtNs);
+    if (loop.phase() == Phase::Fault ||
+        (loop.position_ready() && loop.at_ready() && loop.phase() == Phase::Hold)) break;
+  }
+  // Settle like the response-probe test does: the trial and probe commands both demand a stationary
+  // axis under an Allow verdict, and a held-but-still-coasting plant would refuse them for that
+  // reason alone, which would look like a transaction bug in the failure output.
+  for (int i = 0; i < 400; ++i) { loop.step(t += kDtNs, kDtNs); }
+  return loop.position_ready() && loop.phase() == Phase::Hold;
+}
+
+TEST(ControlLoopSim, ARefusedApplyIsNotARevisionAndASilentClampHoldsMotion) {
+  auto plant = std::make_unique<TunablePlant>();
+  auto* sim = plant.get();
+  sim->set_position(AxisId::Yaw, 0);
+  sim->set_position(AxisId::Pitch, 0);
+  auto cfg = make_cfg();
+  cfg.service_speed_control = true;
+  cfg.manual_commissioning = true;
+  cfg.allow_unknown_motor_health = true;
+  cfg.continuous_yaw_sector_half_span_rad = 0;
+  cfg.homing_motion_checks_abort = false;
+  ControlLoop loop(cfg, std::move(plant));
+  int64_t t = kDtNs;
+  ASSERT_TRUE(reach_manual_commissioning(loop, t)) << loop.fault_reason();
+
+  auto run = [&](const char* name, const std::string& arg) {
+    loop.submit_command(name, arg);
+    loop.step(t += kDtNs, kDtNs);
+    loop.step(t += kDtNs, kDtNs);
+    return loop.last_command_ack();
+  };
+  auto probe = [&]() { return run("response_probe", "yaw:1:2.5"); };
+  auto id_of = [](const std::string& text) {
+    const size_t at = text.find("request_id=");
+    if (at == std::string::npos) return std::string();
+    const size_t begin = at + 11;
+    return text.substr(begin, text.find(' ', begin) - begin);
+  };
+
+  // 1. The drive refuses Kp=2. The candidate had been prepared, so the refusal costs a round trip and
+  //    nothing about the verified set changed — the snapshot shows that by carrying two hashes that
+  //    differ, which is the difference between "I asked for Kp=2" and "the loop is running Kp=2".
+  sim->refuse_above_ = 1.5;
+  auto prepared = run("param_prepare", "2:0.6:0:0:0:0:0:5");
+  ASSERT_TRUE(prepared.accepted) << prepared.reason;
+  const std::string request_id = id_of(prepared.reason);
+  ASSERT_FALSE(request_id.empty()) << prepared.reason;
+  auto applied = run("param_apply", request_id);
+  EXPECT_FALSE(applied.accepted) << "a refused write may not report success";
+  EXPECT_NE(std::string::npos, applied.reason.find("apply refused")) << applied.reason;
+  auto seen = run("param_snapshot", "");
+  EXPECT_TRUE(seen.accepted) << seen.reason;
+  EXPECT_NE(std::string::npos, seen.reason.find("state=idle"))
+      << "the plant still holds what it held, so the exchange is resolved: " << seen.reason;
+  const size_t applied_at = seen.reason.find("applied_hash=");
+  const size_t expected_at = seen.reason.find("expected_hash=");
+  ASSERT_NE(std::string::npos, applied_at);
+  ASSERT_NE(std::string::npos, expected_at);
+  EXPECT_NE(seen.reason.substr(applied_at + 13, 16), seen.reason.substr(expected_at + 14, 16))
+      << "the verified set must not read as the refused candidate: " << seen.reason;
+  const auto after_refusal = probe();
+  EXPECT_TRUE(after_refusal.accepted)
+      << "a resolved refusal must not park the station: " << after_refusal.reason;
+
+  // 2. The drive accepts Kp=2 and stores 1.9. The loop notices, tries to put the previous set back,
+  //    and cannot — so nothing moves until the exchange resolves. This is the moment a script used
+  //    to start a jog anyway, under gains the trace would later claim were running.
+  sim->refuse_above_ = 0;
+  sim->clamp_below_ = 1.9;
+  sim->allowed_writes_ = 1;  // the clamped write succeeds, the restore does not
+  prepared = run("param_prepare", "2:0.6:0:0:0:0:0:5");
+  ASSERT_TRUE(prepared.accepted) << prepared.reason;
+  applied = run("param_apply", id_of(prepared.reason));
+  EXPECT_FALSE(applied.accepted) << applied.reason;
+  EXPECT_NE(std::string::npos, applied.reason.find("readback does not match")) << applied.reason;
+  auto blocked = run("response_probe", "yaw:1:2.5");
+  EXPECT_FALSE(blocked.accepted)
+      << "the kp2 accident: motion ran while the plant held an unverified set";
+  SCOPED_TRACE("blocked reason: " + blocked.reason + " / snapshot: " + run("param_snapshot", "").reason);
+  EXPECT_NE(std::string::npos, blocked.reason.find("restoring")) << blocked.reason;
+
+  // 3. The plant starts accepting writes again, and the way out of `restoring` is the verb that
+  //    does the restore — not a restart, and not hoping the next command happens to fix it. Only
+  //    then may a new candidate be staged, and the ack says which set motion will now run under.
+  sim->clamp_below_ = 0;
+  sim->allowed_writes_ = 100;
+  const auto recovery = run("param_prepare", "1:0.6:0:0:0:0:0:5");
+  EXPECT_FALSE(recovery.accepted)
+      << "an unresolved exchange may not be papered over by staging the next candidate";
+  const auto restored = run("param_restore", "");
+  EXPECT_TRUE(restored.accepted) << restored.reason;
+  EXPECT_NE(std::string::npos, restored.reason.find("verified")) << restored.reason;
+  prepared = run("param_prepare", "1:0.6:0:0:0:0:0:5");
+  ASSERT_TRUE(prepared.accepted) << prepared.reason;
+  applied = run("param_apply", id_of(prepared.reason));
+  EXPECT_TRUE(applied.accepted) << applied.reason;
+  EXPECT_NE(std::string::npos, applied.reason.find("effective_hash=")) << applied.reason;
+  EXPECT_NE(std::string::npos, applied.reason.find("revision=")) << applied.reason;
+  const auto after_apply = probe();
+  EXPECT_TRUE(after_apply.accepted) << after_apply.reason;
+}
+
 }  // namespace
 
 // The Phase-2 deliverable: reliable boot -> homed -> safe hold -> park cycle.

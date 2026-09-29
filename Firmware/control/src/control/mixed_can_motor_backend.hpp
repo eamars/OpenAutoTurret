@@ -165,6 +165,9 @@ class MixedCanMotorBackend final : public MotorBackend {
   void command_velocity(AxisId axis, double velocity_rad_s) override;
   void set_motion_intent(AxisId axis, bool moving) override;
   bool apply_yaw_trial(const YawTrialSettings& settings, std::string& error) override;
+  // The host echo the parameter transaction verifies against: what this backend stored, under the
+  // same lock the write takes. Not a drive register — there is no gain register to read.
+  YawTrialSettings yaw_trial_settings() const override;
   void poll_pitch_register_diagnostics(TimeNs now) override {
     if (pitch_opened_.load()) pitch_backend_.poll_pitch_register_diagnostics(now);
   }

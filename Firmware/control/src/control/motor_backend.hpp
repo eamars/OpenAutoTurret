@@ -287,6 +287,12 @@ class MotorBackend {
   virtual bool apply_yaw_trial(const YawTrialSettings&, std::string& error) {
     error = "backend has no current-mode yaw tuning interface"; return false;
   }
+  // What this backend believes it is running right now. The parameter transaction verifies against
+  // this instead of against the request it sent, which is the difference between "I asked for Kp=2"
+  // and "the loop is running Kp=2" — the gap that produced a folder named kp2 holding Kp=1. It is a
+  // host echo, not a register readback, and the inventory declares it as host_echo: the GM6020
+  // protocol has no gain register to read.
+  virtual YawTrialSettings yaw_trial_settings() const { return {}; }
   // Feedback keepalive: elicit a fresh COMM_TYPE_2 response WITHOUT changing
   // any reference (the CyberGear has no periodic telemetry — it answers
   // commands only). Needed for speed-mode axes on Allow cycles, where no

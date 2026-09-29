@@ -173,6 +173,28 @@ inline CommandResult validate_command(const SystemCommandState& s,
     if (!r.ok) r.error = "yaw trial requires bounded session settings";
     return r; // Only an explicit Manual commissioning launch may apply it.
   }
+  if (command == "param_prepare" || command == "param_apply" ||
+      command == "param_restore" || command == "param_snapshot") {
+    // The parameter transaction's own surface: `param_prepare` stages one candidate and answers with
+    // a request_id and the hash it expects to verify, `param_apply` performs the exchange under that
+    // id, `param_snapshot` says which revision is verified right now. Shape only — whether a value is
+    // inside the approved envelope and whether the readback confirms it are controld's decisions, made
+    // on the thread that owns the hardware, exactly like the trial commands above.
+    if (command == "param_prepare" && (arg.empty() || arg.size() > 192)) {
+      r.error = "param_prepare needs the candidate settings";
+      return r;
+    }
+    if (command == "param_apply" && (arg.empty() || arg.size() > 64)) {
+      r.error = "param_apply needs the request_id a prepare returned";
+      return r;
+    }
+    if ((command == "param_restore" || command == "param_snapshot") && !arg.empty()) {
+      r.error = "this command takes no argument";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
   if (command == "manual_jog_start" || command == "manual_jog_keepalive" ||
       command == "manual_jog_stop" || command == "manual_step") {
     // Shape only. Which mode is allowed, whether a lease exists to renew, and whether a

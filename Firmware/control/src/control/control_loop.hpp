@@ -44,6 +44,7 @@
 #include "tracks/track_set.hpp"
 #include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
+#include "control/param_transaction.hpp"   // the exchange that must verify before motion
 #include "control/homing_motion_guard.hpp"
 #include "control/reference_manager.hpp"
 #include "control/reference_limiter.hpp"
@@ -445,6 +446,14 @@ class ControlLoop {
   // Phase 8: command execution on the control thread (§42.2).
   void process_commands();
   void execute_command(const std::string& name, const std::string& arg);
+  // Stage, apply, read back, and only then let the revision move. Shared by `yaw_control_trial`
+  // (both halves in one command, which is what the existing scripts do) and by the two-command
+  // surface `param_prepare` / `param_apply` that a campaign runner uses.
+  void param_exchange_yaw(const std::string& command,
+                          const MotorBackend::YawTrialSettings& settings,
+                          const std::string& request_id);
+  std::vector<control::ParamValue> yaw_trial_values(
+      const MotorBackend::YawTrialSettings& settings) const;
   void disable_tracking();
   // v3: make the v1 controllers match a mode that has already been accepted, and
   // build the authoritative cycle intent from whichever mode owns motion (§53).
@@ -775,6 +784,21 @@ class ControlLoop {
   // Explicit target-free bench step; never persisted and never uses vision input.
   TimeNs response_probe_until_ns_ = 0;
   bool pitch_gain_trial_pending_ = false;
+  // One exchange of the tunable set, with the revision it produced. The yaw path fills it
+  // synchronously; the pitch path will feed it from its asynchronous register readback. Motion is
+  // refused while it holds anything other than Idle — that refusal is the whole point, and it is why
+  // the flag above is not enough: "pending" without a revision cannot say which set a jog ran under.
+  control::ParameterTransaction param_tx_;
+  uint64_t param_request_seq_ = 0;
+  // The typed form of the staged candidate. The transaction hashes generic name/value pairs; the
+  // write itself needs the typed settings, so the staged set is kept in both shapes — one to prove
+  // what is running, one to perform the write.
+  MotorBackend::YawTrialSettings param_staged_settings_;
+  // What the plant held before the last exchange, in the form a restore can write. The transaction
+  // holds the generic values for hashing; a restore needs the typed settings, and "restoring" is not
+  // a state somebody else is expected to fix on their own initiative.
+  MotorBackend::YawTrialSettings param_previous_settings_;
+  std::string param_staged_id_;
   double response_probe_q_[2]{};
   double response_probe_omega_ = 2.5;
   double response_probe_position_gain_ = 3.0;
