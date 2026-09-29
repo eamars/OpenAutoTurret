@@ -29,8 +29,11 @@ class AlignmentHudTest(unittest.TestCase):
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const lay = hudLayout(input.width || 960, input.height || 540, 1920, 1080);
 const mark = hudBoreMark(input.t, !!input.stale);
+// The measurement point takes its palette as an argument, like the tape and the FoR do: a geometry
+// module that quietly owned page colours would be a second place to declare them.
+const C = {"green": "#95f58b", "dim": "rgba(149,245,139,.56)", "faint": "rgba(149,245,139,.22)", "amber": "#f2b329", "red": "#ff5d5d", "white": "#edf2eb", "black": "rgba(3,6,5,.80)", "stroke": "#05070a", "text": "#c5d0c5", "text_dim": "#8c998c"};
 console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) : null,
-  point: hudMeasurementPointSvg(input.t, lay, !!input.stale)}));
+  point: hudMeasurementPointSvg(input.t, lay, !!input.stale, C)}));
 ''', encoding="utf-8")
 
     def tearDown(self):
@@ -53,7 +56,10 @@ console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) 
         rendered = self.render(width=960, height=800)
         self.assertAlmostEqual(rendered["pixel"]["x"], 949.5825/2)
         self.assertAlmostEqual(rendered["pixel"]["y"], 130+551.0025/2)
-        self.assertIn("MEASURE", rendered["point"])
+        # §8 of the 09-30 revision: the measured point carries no word -- the green reticle is the
+        # caption. The marker itself must still be drawn, and must not be captioned.
+        self.assertIn("<path", rendered["point"])
+        self.assertNotIn("MEASURE", rendered["point"])
 
     def test_no_virtual_bore_claim_when_disabled_invalid_or_stale(self):
         for key, value in (("mode", "off"), ("valid", False), ("x_norm", 1.1),
@@ -70,6 +76,11 @@ console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) 
     def test_fallback_and_clipping_are_visible(self):
         self.data["target_aim_source"] = "invalid_box_anchor_fallback"
         self.data["target_aim_box_clipped"] = True
-        self.assertIn("ANCHOR / BOX CLIPPED", self.render()["point"])
+        point = self.render()["point"]
+        self.assertIn("ANCHOR", point, "a fallback anchor is not a box measurement, and says so")
+        self.assertIn("CLIPPED", point)
+        self.assertNotIn("BOX CLIPPED", point, "one word, and clipped is a caution not a name")
+        clipped = point[point.index("CLIPPED") - 200:point.index("CLIPPED")]
+        self.assertIn("#f2b329", clipped, "clipping is degraded-but-running: amber, §15")
         self.data["target_aim_valid"] = False
         self.assertEqual(self.render()["point"], "")

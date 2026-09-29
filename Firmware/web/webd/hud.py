@@ -59,6 +59,27 @@ function hudAxisNorm(intr) {
   return { u: intr.cx / intr.width, v: intr.cy / intr.height };
 }
 
+/**
+ * The reticle's cant (roll) reference line, as geometry rather than as four hand-placed strokes.
+ *
+ * There is ONE line: the parametric point centre + k*(ux, uy). Two visible halves are the samples
+ * outside the central box, which is why the middle is missing and why the two halves cannot drift out
+ * of line with each other -- they are the same expression evaluated at two intervals. Rotating by
+ * `deg` in screen space: 0 = horizontal, positive = clockwise.
+ *
+ * Returns [darkUnderStroke, greenLine] so the caller decides the order (dark first, always).
+ */
+function hudReticleCantSvg(cx, cy, reach, inner, deg, colors) {
+  const rad = (Number.isFinite(deg) ? deg : 0) * Math.PI / 180;
+  const ux = Math.cos(rad), uy = Math.sin(rad);
+  const seg = (from, to) =>
+    '<line x1="' + (cx + ux * from) + '" y1="' + (cy + uy * from) + '" x2="' +
+    (cx + ux * to) + '" y2="' + (cy + uy * to) + '"/>';
+  const halves = seg(-reach, -inner) + seg(inner, reach);
+  return [halves.replace(/\/>/g, ' stroke="' + colors.stroke + '" stroke-width="3.6"/>'),
+          halves.replace(/\/>/g, ' stroke="' + colors.line + '" stroke-width="2"/>')];
+}
+
 // Controller-owned projection; the browser never reconstructs mounting geometry.
 function hudBoreMark(t, stale) {
   const a = t && t.alignment;
@@ -70,19 +91,28 @@ function hudBoreMark(t, stale) {
   return { u: a.x_norm, v: a.y_norm, label: "ASSUMED " + a.assumed_depth_m.toFixed(1) + " m" };
 }
 
-function hudMeasurementPointSvg(t, lay, stale) {
+function hudMeasurementPointSvg(t, lay, stale, C) {
   if (stale || !t || t.target_aim_valid !== true ||
       !Number.isFinite(t.target_aim_x_norm) || !Number.isFinite(t.target_aim_y_norm) ||
       t.target_aim_x_norm < 0 || t.target_aim_x_norm > 1 ||
       t.target_aim_y_norm < 0 || t.target_aim_y_norm > 1) return "";
   const p = hudProject(t.target_aim_x_norm, t.target_aim_y_norm, lay);
   if (!p.ok) return "";
-  const label = t.target_aim_source === "box_fraction" ? "MEASURE" : "ANCHOR";
-  return '<g class="measurement-point"><path d="M ' + p.x + ' ' + (p.y-5) + ' L ' +
+  // §8's point: the measured position needs no caption -- the green reticle *is* the caption. What
+  // still earns words is the two exceptions: "this point is not a box measurement" (ANCHOR) and
+  // "the box is off the edge" (CLIPPED, a degraded condition, therefore amber and not green).
+  const parts = ['<g class="measurement-point"><path d="M ' + p.x + ' ' + (p.y-5) + ' L ' +
     (p.x+5) + ' ' + p.y + ' L ' + p.x + ' ' + (p.y+5) + ' L ' + (p.x-5) + ' ' + p.y +
-    ' Z" fill="none" stroke="#edf2eb" stroke-width="1.5"/>' +
-    '<text x="' + (p.x+9) + '" y="' + (p.y-9) + '" class="lbl" fill="#edf2eb">' +
-    label + (t.target_aim_box_clipped ? " / BOX CLIPPED" : "") + '</text></g>';
+    ' Z" fill="none" stroke="#edf2eb" stroke-width="1.5" stroke-linejoin="round"/>'];
+  if (t.target_aim_source !== "box_fraction") {
+    parts.push('<text x="' + (p.x+9) + '" y="' + (p.y-9) + '" class="lbl" fill="' + C.text +
+               '">ANCHOR</text>');
+  }
+  if (t.target_aim_box_clipped) {
+    parts.push('<text x="' + (p.x+9) + '" y="' + (p.y+12) + '" class="lbl" fill="' + C.amber +
+               '" font-weight="500">CLIPPED</text>');
+  }
+  return parts.join("") + '</g>';
 }
 
 
@@ -754,16 +784,23 @@ function hudTravelTapeSvg(t, C, opts) {
   const base = C.green, fine = C.dim, lbl = C.green, mark = C.white;
   const parts = [];
   const w = t.horizontal;
-  parts.push('<line ' + (w ? 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x1 + '" y2="' + t.y
-                           : 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x + '" y2="' + t.y1) +
-             '" stroke="' + base + '" stroke-width="1" opacity=".85"/>');
+  // Every line on these scales is drawn twice: a dark line ~3px wide, then the green one on top of it.
+  // That is the whole contrast story over a white curtain or a window -- and it is deliberately not a
+  // blurred glow, which reads as decoration and disappears against a highlight.
+  const spine = (w ? 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x1 + '" y2="' + t.y
+                 : 'x1="' + t.x + '" y1="' + t.y + '" x2="' + t.x + '" y2="' + t.y1);
+  parts.push('<line ' + spine + '" stroke="' + C.stroke + '" stroke-width="3" opacity=".9"/>');
+  parts.push('<line ' + spine + '" stroke="' + base + '" stroke-width="1" opacity=".85"/>');
   t.ticks.forEach((tk) => {
     const len = tk.marked ? 17 : (tk.endpoint ? 13 : (tk.coarse ? 10 : 5));
     const col = tk.marked ? C.amber : (tk.coarse ? base : fine);   // §22: caution is amber
-    parts.push('<line ' + (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
-                           : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos) +
-               '" stroke="' + col + '" stroke-width="1" opacity="' +
-                (typeof tk.opacity === "number" ? tk.opacity : 1) + '"/>');
+    const geom = (w ? 'x1="' + tk.pos + '" y1="' + t.y + '" x2="' + tk.pos + '" y2="' + (t.y + len)
+                  : 'x1="' + t.x + '" y1="' + tk.pos + '" x2="' + (t.x - len) + '" y2="' + tk.pos);
+    // Major ticks hold the green; minor ticks keep the hue but drop back, so the scale can be read
+    // at a glance instead of as a comb of equal-weight marks.
+    const weight = typeof tk.opacity === "number" ? tk.opacity : (tk.coarse || tk.marked ? 1 : 0.55);
+    parts.push('<line ' + geom + '" stroke="' + C.stroke + '" stroke-width="2.6" opacity=".85"/>');
+    parts.push('<line ' + geom + '" stroke="' + col + '" stroke-width="1" opacity="' + weight + '"/>');
     if (tk.label) {
       parts.push('<text class="tlbl" ' +
         (w ? 'x="' + tk.pos + '" y="' + (t.y - 7) + '" text-anchor="middle"'
@@ -775,13 +812,15 @@ function hudTravelTapeSvg(t, C, opts) {
   // Current-position caret (§5.2) and its value box. Drawn last inside the group so it sits over the
   // ticks it overlaps.
   const mk = t.marker;
+  // The current-position caret is the strongest thing on the scale, and it earns that with a dark
+  // outline rather than with size: the geometry the operator has learned is 12px wide either way.
   parts.push(w
     ? '<path d="M ' + mk + ' ' + (t.y + 2) + ' L ' + (mk - 6) + ' ' + (t.y + 12) + ' L ' +
-      (mk + 6) + ' ' + (t.y + 12) + ' Z" fill="' + C.green + '" stroke="' + mark +
-      '" stroke-width=".8"/>'
+      (mk + 6) + ' ' + (t.y + 12) + ' Z" fill="' + C.green + '" stroke="' + C.stroke +
+      '" stroke-width="1.4" stroke-linejoin="round"/>'
     : '<path d="M ' + (t.x - 2) + ' ' + mk + ' L ' + (t.x - 12) + ' ' + (mk - 6) + ' L ' +
-      (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + mark +
-      '" stroke-width=".8"/>');
+      (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + C.stroke +
+      '" stroke-width="1.4" stroke-linejoin="round"/>');
   const bx = w ? Math.max(4, Math.min(mk - 48, (opts && opts.vw ? opts.vw - 100 : mk)))
                : Math.max(4, t.x - 84);
   const by = w ? (t.y + 16) : Math.min(t.y1 + 10, (opts && opts.vh ? opts.vh - 44 : t.y1));
@@ -790,9 +829,12 @@ function hudTravelTapeSvg(t, C, opts) {
   parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 14) +
              '" text-anchor="middle" fill="' + C.green + '">' + (opts && opts.title ? opts.title : "") +
              '</text>');
+  // The dark box stays (it is the one element that was already right), and the number inside it is
+  // green: yaw and pitch are level-1 information, which is the whole point of thinning the green out
+  // everywhere else.
   parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 28) +
-             '" text-anchor="middle" fill="' + C.white + '">' + (opts && opts.value ? opts.value : "") +
-             '</text>');
+             '" text-anchor="middle" fill="' + C.green + '" font-weight="600">' +
+             (opts && opts.value ? opts.value : "") + '</text>');
   // What the scale actually is, stated on the tape that uses it. §5.3 asks for logical joint travel
   // and forbids compass letters, which the drawing honours - but on this station the joint numbers
   // are surprising enough to be misread: yaw travels -22.6 to +320.2 deg (the config says in terms:
@@ -879,7 +921,22 @@ function fmt(v, digits, suffix) {
 function deg(rad) { return Number.isFinite(rad) ? rad * 180.0 / Math.PI : NaN; }
 
 // §15 color tokens, verbatim from the revision.
+// ---------------------------------------------------------------------------
+// Reticle cant (roll) reference. UI foundation only: nothing here reads the IMU, and the value is
+// not wired to anything. Convention, screen space: 0 deg = horizontal, POSITIVE rotates the line
+// CLOCKWISE on screen, negative counter-clockwise. Whatever the IMU's roll sign eventually means is
+// a mapping problem for whoever connects it -- one expression, at one place, in front of this number.
+//
+// This is the single value that renders the line. To check the geometry by eye during development:
+//     otaSetReticleCant(5)      // or -5, 2, -2, 0
+// which repaints from the last telemetry it saw. There is deliberately no operator-facing control:
+// an operator cannot change the roll of the camera by pressing a button.
+let reticleCantDeg = 0;
+
 const C = {
+  // The dark partner of every primary overlay: a line over arbitrary video is only readable with
+  // something non-luminous under it. Kept in the palette so no drawing site invents its own black.
+  stroke: "#05070a", text: "#c5d0c5", text_dim: "#8c998c",
   green: "#95f58b", dim: "rgba(149,245,139,.56)", faint: "rgba(149,245,139,.22)",
   amber: "#f2b329", red: "#ff5d5d", white: "#edf2eb", black: "rgba(3,6,5,.80)",
   line: "rgba(230,245,230,.24)"
@@ -987,16 +1044,12 @@ function render(t) {
       '<path d="M ' + (c.x + sx * r) + ' ' + (c.y + sy * gap) + ' L ' + (c.x + sx * r) + ' ' +
       (c.y + sy * r) + ' L ' + (c.x + sx * gap) + ' ' + (c.y + sy * r) + '" fill="none" ' +
       'stroke="' + g + '" stroke-width="3"/>';
+    // The cant line, from the geometry module (see hudReticleCantSvg for why it is one line). The
+    // corner brackets are the aiming reference and neither rotate nor move with cant.
+    const cant = hudReticleCantSvg(c.x, c.y, r + 12, gap + 8, reticleCantDeg,
+                                   {stroke: C.stroke, line: g});
     layers.reticle =
-      corner(-1, -1) + corner(1, -1) + corner(-1, 1) + corner(1, 1) +
-      '<line x1="' + c.x + '" y1="' + (c.y - r - 12) + '" x2="' + c.x + '" y2="' + (c.y - gap) +
-      '" stroke="' + g + '" stroke-width="3"/>' +
-      '<line x1="' + c.x + '" y1="' + (c.y + gap) + '" x2="' + c.x + '" y2="' + (c.y + r + 12) +
-      '" stroke="' + g + '" stroke-width="3"/>' +
-      '<line x1="' + (c.x - r - 12) + '" y1="' + c.y + '" x2="' + (c.x - gap - 8) + '" y2="' + c.y +
-      '" stroke="' + g + '" stroke-width="3"/>' +
-      '<line x1="' + (c.x + gap + 8) + '" y1="' + c.y + '" x2="' + (c.x + r + 12) + '" y2="' + c.y +
-      '" stroke="' + g + '" stroke-width="3"/>' +
+      corner(-1, -1) + corner(1, -1) + corner(-1, 1) + corner(1, 1) + cant[0] + cant[1] +
       (intr ? "" : '<text x="' + (c.x + r + 18) + '" y="' + (c.y + 4) + '" class="lbl" ' +
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
     if (bore) {
@@ -1010,7 +1063,7 @@ function render(t) {
         '" class="lbl" fill="' + C.amber + '">BORE ALIGNMENT UNAVAILABLE</text>';
     }
   }
-  layers.sel += hudMeasurementPointSvg(t, lay, stale);
+  layers.sel += hudMeasurementPointSvg(t, lay, stale, C);
 
   // §10: the prediction cue, from webd's `prediction` block. Absent when invalid - the revision says
   // prediction disappears when invalid or stale (§661's rule), and an empty group is the honest
@@ -1180,12 +1233,19 @@ function render(t) {
   // limited number and is not what this cell claims..
   const cell = (k, v, cls) => '<span class="k">' + k + '</span><span class="' + (cls || "v") + '">' + v + '</span>';
   $("strip").innerHTML =
-    cell("MODE", String(t.operating_mode || "--"), "v") + '<span class="sep">|</span>' +
-    cell("STATE", String(t.track_state || "--").toUpperCase(), "v") + '<span class="sep">|</span>' +
+    // Two cells are the operator's actual steering state and get the green; a count and a rate are
+    // readings, and giving them the same colour as the mode is how everything ends up shouting.
+    cell("MODE", String(t.operating_mode || "--"), "hot") + '<span class="sep">|</span>' +
+    cell("STATE", String(t.track_state || "--").toUpperCase(), "hot") + '<span class="sep">|</span>' +
     cell("TARGETS", String(t.track_count == null ? "--" : t.track_count), "v") + '<span class="sep">|</span>' +
     cell("FPS", fmt(t.camera_fps, 0), "v") + '<span class="sep">|</span>' +
     cell("AGE", fmt(t.vision_measurement_age_ms, 0, " ms"), stale ? "warn" : "v") + '<span class="sep">|</span>' +
-    cell("SAFETY", String(t.safety_action || "UNKNOWN"), "v");
+    // SAFETY is a state, and §22 already colours it: ALLOW is healthy, anything that inhibits is
+    // amber, a fault is red. The rail must not contradict the banner it is standing under.
+    cell("SAFETY", String(t.safety_action || "UNKNOWN"),
+         t.safety_action === "ALLOW" ? "hot"
+           : (t.safety_action === "FAULT" ? "fault"
+             : (t.safety_action ? "warn" : "v")));
 }
 
 function paint(t) {
@@ -1562,14 +1622,34 @@ document.addEventListener("DOMContentLoaded", () => {
   // rebuilding the DOM four times a second to notice that nothing arrived is a lot of work to
   // discover an absence.
   setInterval(() => { if (lastTelemetry) updateStaleness(lastTelemetry); }, 250);
+
+  // Development handle for the reticle cant (§16): set the angle and repaint from whatever telemetry
+  // the page last held. Not a control, not a setting, and not persisted -- it is for checking the
+  // geometry at 0/+2/-2/+5/-5 degrees by eye.
+  window.otaSetReticleCant = function (deg) {
+    reticleCantDeg = Number.isFinite(Number(deg)) ? Number(deg) : 0;
+    if (lastTelemetry) paint(lastTelemetry);
+    return reticleCantDeg;
+  };
 });
 """
 
 HUD_CSS = r"""
-#g-reticle, #g-prediction {
-  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000);
-}
-#g-prediction .tlbl { font-weight: 700; paint-order: stroke; stroke: #000; stroke-width: 3px; }
+/* One 1px shadow, not a stack of them: the outline lives in the geometry (see the under-strokes),
+   and a filter that blurs two radii is how a reticle starts looking like a neon sign. */
+#g-reticle, #g-prediction { filter: drop-shadow(0 0 1px #000); }
+#g-prediction .tlbl { font-weight: 500; paint-order: stroke fill; stroke: var(--hud-stroke);
+  stroke-width: 2.4px; stroke-linejoin: round; }
+/* Over-video text: a crisp dark outline, not a halo. `paint-order: stroke fill` puts the stroke behind
+   the fill, so the glyph stays thin while the background stops fighting it; the two drop-shadows that
+   were carrying this were a glow, which is what made everything look equally loud. */
+#overlay text { paint-order: stroke fill; stroke: var(--hud-stroke); stroke-width: 2px;
+  stroke-linejoin: round; }
+/* Level 3 stops competing: PIP chrome, chip labels and the telemetry rail are information, not state. */
+#pip .bar { color: var(--hud-text-dim); background: rgba(0,0,0,.6); }
+#pip { border: 1px solid var(--hud-line-quiet); }
+#pip button { color: var(--hud-text-dim); }
+#pip button:hover { color: var(--hud-text); }
 
 :root {
   --hud-green: #95f58b;
@@ -1579,7 +1659,19 @@ HUD_CSS = r"""
   --hud-red: #ff5d5d;
   --hud-white: #edf2eb;
   --hud-black: rgba(3,6,5,.80);
-  --hud-line: rgba(230,245,230,.24);
+  --hud-line: rgba(190,205,190,.40);
+  --hud-line-quiet: rgba(190,205,190,.22);
+  /* §8's four classes, and the reason they are tokens: the green is the identity, so anything that is
+     not yaw, pitch, the tracked target or the reticle has to stop borrowing it. Neutral here means
+     green-grey, not a grey dashboard. */
+  --hud-text: #c5d0c5;
+  --hud-text-dim: #8c998c;
+  --hud-amber-soft: rgba(242,179,41,.75);
+  --hud-dark: rgba(0,0,0,.82);
+  --hud-dark-soft: rgba(0,0,0,.45);
+  /* The dark under-stroke every primary overlay uses instead of a glow: crisp at 2px, and it is the
+     only thing that keeps a green line readable across a white curtain or a window. */
+  --hud-stroke: #05070a;
   /* §16's stack, declared as a token because three later rules read var(--hud-mono) inside a `font:`
      SHORTHAND. An undefined custom property makes the whole shorthand invalid at computed-value time,
      which drops the size and weight too - so an undeclared token is not "falls back to the inherited
@@ -1609,12 +1701,18 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
   border-radius: 3px; }
 .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
 .chip .val { opacity: .7; }
+/* The dot carries the state; the words are just words (§8). A chip whose text also glows green says
+   nothing that the dot has not already said, and it competes with yaw and pitch for the same green. */
+.chip { border-color: var(--hud-line-quiet); }
+.chip .lbl { color: var(--hud-text); }
 #strip { position: absolute; left: 1%; bottom: 1.4%; z-index: 20; display: flex; gap: 7px;
   align-items: baseline; padding: 4px 9px; font-size: 11px; letter-spacing: .08em;
   background: var(--hud-black); border: 1px solid var(--hud-line); border-radius: 3px; }
-#strip .k { color: rgba(237,242,235,.55); margin-right: 3px; }
-#strip .v { color: var(--hud-green); }
+#strip .k { color: var(--hud-text-dim); margin-right: 3px; }
+#strip .v { color: var(--hud-text); }        /* ordinary value: light, neutral, readable */
+#strip .hot { color: var(--hud-green); }     /* the state the operator is actually steering */
 #strip .warn { color: var(--hud-amber); }
+#strip .fault { color: var(--hud-red); }   /* §15: red is a fault, and the selector says so */
 #strip .sep { color: var(--hud-line); }
 text.tlbl { font-size: 11px; letter-spacing: .04em; font-family: inherit; }   /* scale labels */
 text.tval { font-size: 12px; letter-spacing: .06em; font-family: inherit; }   /* value boxes */
@@ -1650,9 +1748,11 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #manual-pad #pad-hold { font-size:10px; }
 #mode-controls { position:absolute; bottom:65px; left:50%; transform:translateX(-50%);
   display:flex; gap:8px; z-index:30; }
-#mode-controls button { padding:10px 16px; background:rgba(3,6,5,.9); border:1px solid var(--hud-green-dim);
-  border-radius:7px; color:var(--hud-green); font:13px var(--hud-mono); cursor:pointer; }
-#mode-controls button[aria-pressed="true"] { border-color:var(--hud-green); }
+/* An inactive control is not a state readout: neutral until it is the mode you are in. */
+#mode-controls button { padding:10px 16px; background:rgba(3,6,5,.9); border:1px solid var(--hud-line);
+  border-radius:7px; color:var(--hud-text); font:13px var(--hud-mono); cursor:pointer; }
+#mode-controls button:hover { border-color:var(--hud-text-dim); color:var(--hud-white); }
+#mode-controls button[aria-pressed="true"] { border-color:var(--hud-green); color:var(--hud-green); }
 #mode-controls button:disabled { opacity:.35; cursor:default; }
 .dockbtn { display:flex; flex-direction:column; align-items:center; gap:3px; width:46px;
            padding:5px 2px 4px; background:rgba(3,6,5,.62); border:1px solid rgba(230,245,230,.22);
