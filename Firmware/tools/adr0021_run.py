@@ -196,6 +196,23 @@ class Runner:
                                 score["metrics_sha256"][:12] + "; the classification of this candidate " +
                                 "would not be the classification the lock promised")
                     return record
+                # The physical cost of holding belongs in the same record as the verdict: the owner's
+                # complaint was that the axes sit stalled, and a classification that ignores what that
+                # costs the drives is only half the result. The scale is the drive's own, quoted from
+                # control/src/can/gm6020_protocol.hpp:65-66 (16384 counts == +-3.0 A), not invented here.
+                amps = 3.0 / 16384.0
+                readings = []
+                for row in window.get("rows") or []:
+                    value = row.get("current_raw")
+                    if isinstance(value, list) and len(value) > 1 and isinstance(value[1], (int, float)) \
+                            and not isinstance(value[1], bool):
+                        readings.append(abs(float(value[1]) * amps))
+                if readings:
+                    readings.sort()
+                    record["holding_current_a"] = {
+                        "p50": round(readings[len(readings) // 2], 4),
+                        "p95": round(readings[min(len(readings) - 1, int(0.95 * len(readings)))], 4),
+                        "max": round(readings[-1], 4), "n": len(readings)}
                 tallied = self.manifest.setdefault("classifications", {})
                 tallied[score["classification"]] = tallied.get(score["classification"], 0) + 1
 
