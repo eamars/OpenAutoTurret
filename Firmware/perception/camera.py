@@ -351,7 +351,12 @@ def open_picamera2_sensor(camera_model: str, *, stream_size: Tuple[int, int],
     camera = None
     try:
         camera = Picamera2(int(camera_num))
-        configuration = camera.create_video_configuration(
+        # create_preview_configuration, not create_video_configuration: this stream is preview-only
+        # anyway, and it is the call on which the mounted-rotated primary demonstrably applies its
+        # transform on this station. The secondary arrived upside down while passing the same
+        # Transform object through the video configuration, which is the only way anyone would ever
+        # have found out -- so the two sensors now ask for their pixels the same way.
+        configuration = camera.create_preview_configuration(
             main={"size": (width, height), "format": "RGB888"},
             transform=transform,
             controls={"FrameRate": float(frame_rate_hz)},

@@ -693,7 +693,7 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
         return None
     stream_size = (int(info["stream_size"][0]), int(info["stream_size"][1]))
     print(f"visiond: secondary stream {model} node /dev/video{info['camera_num']} identity "
-          f"{ident.id} source={ident.source} durable={ident.durable} "
+          f"{ident.id} source={ident.source} orientation={want!r} durable={ident.durable} "
           f"{stream_size[0]}x{stream_size[1]}", file=sys.stderr)
     try:
         picam2.start()
