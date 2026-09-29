@@ -13,6 +13,10 @@ from pathlib import Path
 import select
 import socket
 import time
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.control_trace import MAX_FRAME
 
 
 class Capture:
@@ -49,7 +53,7 @@ class Capture:
                     self.emit('camera',data=camera)
                     self.last_camera = camera['frame_sequence']
         if select.select([self.sock],[],[],.04)[0]:
-            packet, _, flags, _ = self.sock.recvmsg(256*1024)
+            packet, _, flags, _ = self.sock.recvmsg(MAX_FRAME)
             if not packet or flags & socket.MSG_TRUNC:
                 raise RuntimeError('closed or truncated controller packet')
             message = json.loads(packet)

@@ -14,6 +14,9 @@ Updated 2026-09-29. Work is in progress; no physical qualification is claimed.
 - Owner requested functional verification first, thermal testing last using motor
   reports; no external thermometer is available. Active cooling is a possible
   later hardware change, not present qualification.
+- Owner's subsequent execution rule: **never roll back after a build or release
+  failure**. The Pi has no critical service. Preserve failure evidence, fix the
+  defect and deploy the next version; do not spend time restoring older releases.
 - Unchanged initial limits: yaw current `0x1FE`, 0.8 A, Kp 1 A/(rad/s), Ki 0.6 A/rad;
   pitch LimitCur <=5 A; host 200 Hz. No new calibrated gains or friction values.
 
@@ -83,19 +86,36 @@ neither simulated energized state nor mocked transport establishes physical hold
 No retained-homing test is claimed: the native suite excludes it as directed by
 AGENTS because that test writes `/dev/shm`.
 
-Next is an inactive committed-source release and station suite before PR2
-motion measurements. The owner permits Pi-native compilation as a fallback;
-the Pi's fmt/spdlog/yaml-cpp/GTest development modules are present. Its missing
-libcamera/OpenCV headers are irrelevant to this C++ build (vision is Python).
+PR1 source commit: `02d5e8ce120eccda2a755b8815dbbb10ab4dedb8`.
+An inactive release was created at `run/releases/02d5e8ce120e.yA9dLm` on the Pi.
+Its native compile was an execution mistake: the owner had cleared WSL resources
+specifically for local compilation. After the owner's correction, all build
+processes with that exact release working directory were stopped; a subsequent
+process check found none remaining. No new controller was activated. Preserve
+this incomplete directory as evidence; it is not a usable/verified release.
+The route is now **WSL native tests and ARM64 cross-compilation only**, then
+binary transfer and station tests. Missing cross dependencies are to be installed
+locally, not used as a reason to compile on the Pi again.
+
+A real local Unix SOCK_SEQPACKET probe found a missing PR1 integration case:
+256 live rows transmitted (188,615 bytes), but the 1024-row frozen fault window
+(753,862 bytes) failed with EMSGSIZE under the old 256 KiB sender buffer.
+The follow-up sizes the sender for 2 MiB and reuses the shared MAX_FRAME in the
+response capture client. Repeated real socket probe passed both 256 rows
+(188,615 bytes) and 1024 rows (753,862 bytes). The rebuilt `test_web_server`
+passed, including a full frozen-window regression over a real packet socket;
+logs are `run/adr002/trace-socket-build.log` and `trace-socket-test.log`.
 No activation, calibrated parameter change, or hardware acceptance is included
 in the native gate above.
 
-## Rollback
+## Failure handling (owner override)
 
-No new station release has been started. Keep the observed running release and
-retained geometry intact. Future releases use committed source and a separate
-release directory, with launcher-controlled stop/start and manual commissioning.
-If a trial fails, preserve traces before the ring wraps and stop through the
-launcher. Do not silently restore known competing guard output as a qualified
-loaded configuration, switch the GM drive back to voltage, overwrite calibration,
-or interpret a GM zero-current request as confirmed disable.
+No new station release has been started. Future releases use locally cross-built
+committed source and a separate release directory, with launcher-controlled
+stop/start and manual commissioning. Build/deployment failures are fixed forward:
+preserve diagnostics and publish the next corrected version, with no rollback.
+This owner rule overrides the ADR's generic rollback procedure. Retained geometry
+remains intact. A failed physical trial still preserves traces before the ring
+wraps and uses the launcher for stopping as necessary; it does not trigger
+restoration of an old release. Do not switch GM back to voltage, overwrite
+calibration, or interpret a GM zero-current request as confirmed disable.

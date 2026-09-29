@@ -601,6 +601,54 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   ::close(cfd);
 }
 
+TEST(WebServer, FullFrozenEvidenceWindowCrossesTheRealPacketSocket) {
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_frozen_trace.sock";
+  telemetry::ControlLogRecord rec;
+  rec.timestamp_ns = 9876543210123456;
+  for (int i = 0; i < 2; ++i) {
+    rec.tx_ns[i] = rec.feedback_ns[i] = rec.timestamp_ns;
+    rec.tx_seq[i] = rec.rx_seq[i] = 12345678;
+    rec.q_actual[i] = rec.q_ref[i] = rec.drive_out[i] = .123456789012;
+  }
+  WebServer server(cfg, [] { return telemetry::TelemetrySnapshot{}; },
+      [](const std::string&, const std::string&) { return CommandResult{}; },
+      [rec] {
+        telemetry::TraceWindow window;
+        window.rows.assign(telemetry::Telemetry::kFrozenTraceCap, rec);
+        window.frozen = true;
+        return window;
+      });
+  std::string error;
+  ASSERT_TRUE(server.start(error)) << error;
+  const int fd = connect_client(cfg.socket_path);
+  ASSERT_TRUE(send_message(fd, R"({"command":"read_control_trace"})"));
+  std::vector<char> buffer(2 * 1024 * 1024);
+  std::string trace;
+  for (int attempt = 0; attempt < 10 && trace.empty(); ++attempt) {
+    pollfd poll_fd{fd, POLLIN, 0};
+    if (::poll(&poll_fd, 1, 5000) != 1) break;
+    iovec vec{buffer.data(), buffer.size()};
+    msghdr message{};
+    message.msg_iov = &vec;
+    message.msg_iovlen = 1;
+    const auto count = ::recvmsg(fd, &message, 0);
+    if (count <= 0) break;
+    EXPECT_EQ(message.msg_flags & MSG_TRUNC, 0);
+    std::string frame(buffer.data(), static_cast<size_t>(count));
+    if (frame.find("\"type\":\"control_trace\"") != std::string::npos)
+      trace = std::move(frame);
+  }
+  ::close(fd);
+  ASSERT_FALSE(trace.empty()) << "frozen evidence must survive a full-sized datagram";
+  EXPECT_GT(trace.size(), 512 * 1024u);
+  EXPECT_EQ(trace.substr(trace.size() - 2), "]}");
+  size_t rows = 0;
+  for (size_t pos = 0; (pos = trace.find("\"t\":", pos)) != std::string::npos; ++pos)
+    ++rows;
+  EXPECT_EQ(rows, telemetry::Telemetry::kFrozenTraceCap);
+}
+
 TEST(WebServer, CommandRoundTripOk) {
   WebServer::Config cfg;
   cfg.socket_path = "/tmp/ota_web_test2.sock";

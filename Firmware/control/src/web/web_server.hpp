@@ -749,7 +749,10 @@ class WebServer {
   // exactly once, and a frame the socket will not take loses the client. A reader can live with
   // missing frames — that is what staleness indicators are for. It cannot live with half a frame
   // that arrives dressed as a whole one.
-  static constexpr size_t kFrameBudget = 256 * 1024;
+  // The 1024-row frozen window includes RX/TX and PI evidence. Its actual wire
+  // frame exceeds 256 KiB; a too-small send buffer loses the very fault record
+  // needed for diagnosis (SOCK_SEQPACKET returns EMSGSIZE, not a partial window).
+  static constexpr size_t kFrameBudget = 2 * 1024 * 1024;
 
   void size_socket(int fd) {
     // Set on the accepted socket, not the listener: what matters is the queue this peer's frames
