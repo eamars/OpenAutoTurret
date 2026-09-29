@@ -35,8 +35,14 @@ PROBE = {"yaw.current_kp_a_per_rad_s": 1.4, "yaw.current_ki_a_per_rad_s": 0.9,
          "yaw.friction.positive_run_a": 0.08, "yaw.friction.negative_run_a": 0.08,
          "yaw.friction.output_slew_a_per_s": 4.0,
          "pitch.service_speed_kp": 4.0, "pitch.service_speed_ki": 0.03}
-TELEMETRY_KEYS = ("phase", "mode", "param_revision", "param_state", "param_applied_hash",
-                  "param_expected_hash", "payload_status", "temp_raw", "feedback_age_ms")
+# The keys webd publishes. Two earlier runs of this script asked for keys that document does not
+# carry (`mode`, `param_revision`, …), read back None, and reported that absence as a physical
+# precondition. Facts come from the document that carries them.
+TELEMETRY_KEYS = ("phase", "operating_mode", "safety_action", "manual_lease_active",
+                  "manual_lease_remaining_ms", "manual_profile", "service_velocity_control",
+                  "payload_profile_name", "payload_profile_status", "feedback_age_ms",
+                  "current_a_yaw", "current_a_pitch", "can_state", "telemetry_stale",
+                  "yaw_guard_degraded", "cmd_ack_seq")
 
 
 def sha256(path):
@@ -48,14 +54,47 @@ def sha256(path):
 
 
 class Station:
-    def __init__(self, sock_path):
+    def __init__(self, sock_path, state_url="http://localhost:8080/api/state"):
         self.sock_path = sock_path
+        self.state_url = state_url
 
     def _sock(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         s.connect(self.sock_path)
         s.settimeout(4)
         return s
+
+    def ack(self, after_seq):
+        """Wait for the controller's answer to the command just submitted.
+
+        Over webd a command is asynchronous: the socket answers `{"ok":true,"verdict":"submitted"}` —
+        which only means it was queued — and the real verdict arrives in `cmd_ack_*` on the next
+        telemetry frame. Taking the submission for the verdict is how an agent reports a write that
+        controld refused, so the runner correlates on `cmd_ack_seq` and reads that ack and nothing else.
+        """
+        deadline = time.time() + 4
+        while time.time() < deadline:
+            from urllib.request import urlopen
+            try:
+                with urlopen(self.state_url, timeout=2) as response:
+                    frame = json.loads(response.read().decode())
+            except Exception:
+                return {"accepted": False, "reason": "state unavailable while waiting for an ack"}
+            if frame.get("cmd_ack_seq") != after_seq:
+                return {"accepted": bool(frame.get("cmd_ack_accepted")),
+                        "reason": str(frame.get("cmd_ack_reason", "")),
+                        "command": frame.get("cmd_ack_command"),
+                        "seq": frame.get("cmd_ack_seq"), "safety": frame.get("cmd_ack_safety_state")}
+            time.sleep(0.05)
+        return {"accepted": False, "reason": "no cmd_ack within 4 s"}
+
+    def seq(self):
+        from urllib.request import urlopen
+        try:
+            with urlopen(self.state_url, timeout=2) as response:
+                return json.loads(response.read().decode()).get("cmd_ack_seq")
+        except Exception:
+            return None
 
     def command(self, name, arg=None):
         s = self._sock()
@@ -76,6 +115,21 @@ class Station:
             return json.loads(match.decode())
         return {"accepted": False, "reason": "no response from controld"}
 
+    def state(self):
+        """The physical and safety picture, asked of the read surface that publishes it.
+
+        The first two runs of this script asked the control socket for keys only /api/state publishes,
+        read back `None`, and reported that absence as a precondition failure. Facts come from the
+        document that carries them; the socket is for commands.
+        """
+        from urllib.request import urlopen
+        try:
+            with urlopen(self.state_url, timeout=4) as response:
+                frame = json.loads(response.read().decode())
+        except Exception as error:                       # a station we cannot read is a blocked run
+            return {"_state_error": type(error).__name__}
+        return {key: frame.get(key) for key in TELEMETRY_KEYS}
+
     def telemetry(self):
         s = self._sock()
         deadline = time.time() + 4
@@ -87,6 +141,25 @@ class Station:
             if frame.get("type") == "telemetry":
                 return {key: frame.get(key, "?") for key in TELEMETRY_KEYS}
         return {}
+
+
+def identity(station):
+    """The parameter identity, taken from the command that answers it and nothing else.
+
+    controld's identity fields ride the trace frame, not webd's live telemetry (measured 2026-09-29),
+    so `param_snapshot` is the authority for a runner: it is a question to the code that holds the
+    state, rather than a guess about which fields somebody chose to forward.
+    """
+    before = station.seq()
+    station.command("param_snapshot", "")
+    response = station.ack(before)
+    text = str(response.get("reason", ""))
+    def field(key):
+        match = re.search(key + r"=(\S+)", text)
+        return match.group(1) if match else None
+    return {"state": field("state"), "revision": field("revision"),
+            "applied_hash": field("applied_hash"), "expected_hash": field("expected_hash"),
+            "reason": field("reason"), "accepted": response.get("accepted")}
 
 
 def yaw_string(values):
@@ -113,7 +186,7 @@ def main():
                 if entry["mutability"] == "experiment_writable"}
     boot = {name: entry["actual_value"] for name, entry in writable.items()}
 
-    state = station.telemetry()
+    state = station.state()
     snapshot = {
         "schema": 1,
         "taken_at_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -133,30 +206,53 @@ def main():
     # between a blocked acceptance and a silent skip.
     if str(state.get("phase", "")) not in ("hold",):
         snapshot["blocked"].append(f"BLOCKED_phase_{state.get('phase')}")
-    if str(state.get("mode", "")).lower() != "manual":
-        snapshot["blocked"].append(f"BLOCKED_mode_{state.get('mode')}")
+    if str(state.get("operating_mode", "")).lower() != "manual":
+        snapshot["blocked"].append(f"BLOCKED_mode_{state.get('operating_mode')}")
+    if str(state.get("safety_action", "")).lower() != "allow":
+        snapshot["blocked"].append(f"BLOCKED_safety_{state.get('safety_action')}")
+    snapshot["identity_before"] = identity(station)
 
     def yaw_exchange(label, arg):
         """prepare → apply under the id prepare handed back → record what the station says it runs."""
-        prepared = station.command("param_prepare", arg)
+        before = station.seq()
+        station.command("param_prepare", arg)
+        prepared = station.ack(before)
         record = {"parameter": label, "requested": arg, "prepare": prepared}
         match = re.search(r"request_id=(\S+)", str(prepared.get("reason", "")))
         if not match:
             record["applied"] = None
             snapshot["transcript"].append(record)
             return record
-        record["applied"] = station.command("param_apply", match.group(1))
-        record["telemetry_after"] = station.telemetry()
+        before = station.seq()
+        station.command("param_apply", match.group(1))
+        record["applied"] = station.ack(before)
+        record["identity_after"] = identity(station)
         snapshot["transcript"].append(record)
         return record
 
     def pitch_exchange(label, arg):
         """One command, verified by the register readback a few cycles later — so wait, then look."""
-        sent = station.command("pitch_control_trial", arg)
+        before = station.seq()
+        station.command("pitch_control_trial", arg)
+        sent = station.ack(before)
         time.sleep(0.4)
-        snapshot["transcript"].append({"parameter": label, "requested": arg, "sent": sent,
-                                       "telemetry_after": station.telemetry()})
+        record = {"parameter": label, "requested": arg, "sent": sent,
+                  "identity_after": identity(station)}
+        time.sleep(0.4)                     # the register answer arrives a few cycles later
+        record["identity_after_settle"] = identity(station)
+        snapshot["transcript"].append(record)
 
+    def boot_value(name, fallback):
+        raw = boot.get(name, fallback)
+        return float(json.loads(raw)) if isinstance(raw, str) else float(raw)
+
+    # The 8 fields the yaw trial command carries, seeded from the values the running binary itself
+    # reported — so "restore" means restoring what was actually measured at boot, not what a doc says.
+    yaw_base = [boot_value("yaw.current_kp_a_per_rad_s", 1), boot_value("yaw.current_ki_a_per_rad_s", .6),
+                0.0, boot_value("yaw.friction.positive_breakaway_a", 0),
+                boot_value("yaw.friction.negative_breakaway_a", 0), boot_value("yaw.friction.positive_run_a", 0),
+                boot_value("yaw.friction.negative_run_a", 0),
+                boot_value("yaw.friction.output_slew_a_per_s", 2)]
     if not snapshot["blocked"]:
         yaw_exchange("yaw.baseline", yaw_string(yaw_base))
         for position, name in enumerate(YAW_FIELDS):
@@ -166,7 +262,7 @@ def main():
             probe[position] = PROBE[name]
             changed = yaw_exchange(name, yaw_string(probe))
             changed["restore"] = yaw_exchange(name + " (restore)", yaw_string(yaw_base)).get("applied")
-            changed["snapshot_after_restore"] = station.command("param_snapshot", "")
+            changed["snapshot_after_restore"] = identity(station)
 
     for name in ("pitch.service_speed_kp", "pitch.service_speed_ki"):
         if name in writable:
@@ -197,7 +293,8 @@ def main():
                                        if e["name"] == "yaw.host_current_limit_a"), None),
     }
 
-    snapshot["station_state_after"] = station.telemetry()
+    snapshot["identity_after"] = identity(station)
+    snapshot["station_state_after"] = station.state()
     snapshot["binary_sha256_after"] = sha256(args.binary)
     snapshot["binary_unchanged"] = snapshot["binary_sha256_after"] == binary_before
     with open(args.out, "w", encoding="utf-8") as handle:
