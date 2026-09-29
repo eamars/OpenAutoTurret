@@ -777,6 +777,42 @@ class CameraConfig:
 
 
 @dataclass
+class SecondaryStreamConfig:
+    """The station's second physical sensor, if it has one (§ (b): visiond owns both cameras).
+
+    Bound by **model**, and published under the role that model maps to — never by index. The
+    geometry lives here rather than in the daemon because growing or swapping a sensor should
+    change a document somebody can read, not a process nobody can see.
+
+    ``model=""`` means this station has no second sensor: the stream is absent, which is a
+    different published state from a stream that is published and stalled.
+    """
+
+    model: str = ""
+    width: int = 1280
+    height: int = 720
+    frame_rate_hz: float = 30.0
+    preview_fps: float = 10.0
+    queue_depth: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"model": self.model, "width": self.width, "height": self.height,
+                "frame_rate_hz": self.frame_rate_hz, "preview_fps": self.preview_fps,
+                "queue_depth": self.queue_depth}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "SecondaryStreamConfig":
+        data = data or {}
+        return cls(
+            model=str(data.get("model") or "").strip().lower(),
+            width=_as_int(data.get("width", 1280), "secondary.width", 0),
+            height=_as_int(data.get("height", 720), "secondary.height", 0),
+            frame_rate_hz=_as_float(data.get("frame_rate_hz"), "secondary.frame_rate_hz", 30.0),
+            preview_fps=_as_float(data.get("preview_fps"), "secondary.preview_fps", 10.0),
+            queue_depth=_as_int(data.get("queue_depth", 1), "secondary.queue_depth", 0))
+
+
+@dataclass
 class PreviewConfig:
     """§39: queue depth one, latest frame only, preview may never block inference."""
 
@@ -851,6 +887,7 @@ class VisionConfig:
     profile: str = "person_detect"
     camera: CameraConfig = field(default_factory=CameraConfig)
     preview: PreviewConfig = field(default_factory=PreviewConfig)
+    secondary: SecondaryStreamConfig = field(default_factory=SecondaryStreamConfig)
     models: Dict[str, ModelConfig] = field(default_factory=dict)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
@@ -880,6 +917,7 @@ class VisionConfig:
             profile=str(root.get("profile", "person_detect")),
             camera=CameraConfig.from_dict(root.get("camera")),
             preview=PreviewConfig.from_dict(root.get("preview")),
+            secondary=SecondaryStreamConfig.from_dict(root.get("secondary")),
             models=models,
             dedup=DedupConfig.from_dict(root.get("dedup")),
             tracking=TrackingConfig.from_dict(root.get("tracking")),

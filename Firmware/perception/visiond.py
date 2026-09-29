@@ -462,7 +462,8 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         pipeline.start()
         primary_ident = resolve_durable_id(str(info.get("device_path")
                                               or f"/dev/video{info.get('camera_num', '?')}"))
-        detail = _start_detail_stream(primary_ident=primary_ident)
+        detail = _start_detail_stream(primary_ident=primary_ident,
+                                          secondary=config.secondary)
         try:
             return _run_camera(args, pipeline, adapter, camera, info,
                             wire_publisher=wire_publisher, preview=preview_worker)
@@ -618,10 +619,9 @@ class _StreamAnnouncer:
 
 
 DETAIL_STREAM_ENV = "OTA_VISION_DETAIL_SENSOR"
-DETAIL_STREAM_MODEL_DEFAULTS = {"imx477": (1280, 720, 30.0)}
 
 
-def _start_detail_stream(*, primary_ident=None):
+def _start_detail_stream(*, primary_ident=None, secondary=None):
     """Open the secondary sensor as a *preview-only* stream, if the launcher asked for one.
 
     The switch names a **sensor model**, not an index: ``/dev/videoN`` is a lease for this boot.
@@ -630,14 +630,21 @@ def _start_detail_stream(*, primary_ident=None):
     identical sensors would need the port in configuration; that limitation is written down rather
     than hidden behind a number.
     """
-    model = os.environ.get(DETAIL_STREAM_ENV, "").strip().lower()
+    configured = (secondary.model if secondary is not None else "")
+    # The env var is an operator override for one boot; the document is the durable answer. Both
+    # name a **sensor model**, never a node number.
+    model = (os.environ.get(DETAIL_STREAM_ENV, "").strip().lower() or configured)
     if not model:
         return None
-    if model not in DETAIL_STREAM_MODEL_DEFAULTS:
-        print(f"visiond: {DETAIL_STREAM_ENV}={model!r} has no capture geometry; opening no "
+    if model not in STREAM_ROLES:
+        print(f"visiond: secondary sensor {model!r} maps to no stream role; opening no "
               "secondary stream", file=sys.stderr)
         return None
-    width, height, rate = DETAIL_STREAM_MODEL_DEFAULTS[model]
+    width = int(getattr(secondary, "width", 1280) or 1280)
+    height = int(getattr(secondary, "height", 720) or 720)
+    rate = float(getattr(secondary, "frame_rate_hz", 30.0) or 30.0)
+    preview_fps = float(getattr(secondary, "preview_fps", 10.0) or 10.0)
+    queue_depth = max(1, int(getattr(secondary, "queue_depth", 1) or 1))
     tap_path = os.environ.get("OTA_VISION_FRAME_TAP", "").strip()
     manifest_path = os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip()
     run_dir = os.path.dirname(tap_path) or os.path.dirname(manifest_path)
@@ -685,7 +692,7 @@ def _start_detail_stream(*, primary_ident=None):
         print(f"visiond: secondary {model} failed to start: {type(exc).__name__}: {exc}",
               file=sys.stderr)
         return None
-    tap = PreviewTap(enabled=True, fps=10.0, latest_queue_depth=1)
+    tap = PreviewTap(enabled=True, fps=preview_fps, latest_queue_depth=1)
     preview = JpegPreviewWorker(tap, os.path.join(run_dir, "preview_detail.jpg"))
     preview.start()
 
@@ -705,7 +712,8 @@ def _start_detail_stream(*, primary_ident=None):
                            sensor_timestamp_ns=None if stamp is None else int(stamp),
                            image=image, metadata=metadata)
 
-    stream = SecondaryCameraStream(role="detail", ident=ident, poll=poll, queue_depth=1)
+    stream = SecondaryCameraStream(role="detail", ident=ident, poll=poll,
+                                   queue_depth=queue_depth)
     stream.start()
     announcer = None
     if manifest_path:
