@@ -64,6 +64,7 @@ for addr in "${candidates[@]}"; do
         python_bin=${OTA_PYTHON:-$ws/.venv/bin/python}
         [[ -x "$python_bin" ]] || die "no interpreter" "set OTA_PYTHON; nothing is installed globally"
         shift
+        [[ "${1:-}" == "--" ]] && shift      # the separator is for us, not for the deployer
         exec "$python_bin" "$checkout/Firmware/tools/deploy_station.py" \
           --host "$user@$alias_name" --connect-address "$addr" \
           --identity "$identity" --known-hosts "$pinned" "$@"
