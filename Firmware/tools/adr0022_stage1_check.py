@@ -8,6 +8,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -123,6 +124,7 @@ def audit(matrix_path,local_root):
         'Firmware/control/src/main.cpp','Firmware/docs/ADR-002.2/contracts/requirements.json',
         'Firmware/docs/ADR-002.2/contracts/quality_targets.json','Firmware/docs/ADR-002.2/docs/07_STAGE1_OFFLINE_OVERRIDE.md')]
     return {'version':'adr0022.stage1-report/2','recorded_at_utc':datetime.now(timezone.utc).isoformat(),
+            'workspace_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
             'status':'STAGE1_MATHEMATICAL_SOFTWARE_PASS','ready_for_stage2_entry':True,'stage2_started':False,
             'physical_access':False,'full_adr_status':'NOT_DONE',
             'stage_status':{'mathematical_software':'PASS','hardware_capability':'NOT_RUN',
