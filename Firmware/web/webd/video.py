@@ -101,6 +101,7 @@ class VideoSource:
         self._camera = None
         self._thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
+        self._stream_role = ""
         self._state = VideoState()
         self._first_frame = threading.Event()
         self._pixel_format = ""
@@ -153,15 +154,19 @@ class VideoSource:
             return self._latest, self._seq, self._ts
 
     # -- lifecycle ----------------------------------------------------------
-    def start(self, width: int, height: int, fps: float,
-              quality: int) -> VideoState:
+    def start(self, width: int, height: int, fps: float, quality: int,
+              tap_path_override: Optional[str] = None,
+              stream_role: Optional[str] = None) -> VideoState:
         """Open the camera and begin producing frames (idempotent).
 
         If the vision daemon is tapping frames out (OTA_VISION_FRAME_TAP, fresh file), the tap is served
         INSTEAD of opening the camera. That is the whole point: the IMX500 has one owner, and an operator
         must not have to choose between watching the turret and running the detector.
         """
-        tap_path = (os.environ.get("OTA_VISION_FRAME_TAP") or "").strip()
+        # A named stream's path comes from the manifest (Slice 4); with no override this stays
+        # exactly the old behaviour: whatever OTA_VISION_FRAME_TAP points at.
+        self._stream_role = (stream_role or "").strip()
+        tap_path = (tap_path_override or os.environ.get("OTA_VISION_FRAME_TAP") or "").strip()
         # EXISTENCE routes, not freshness. Falling back to opening the camera because the tap file has
         # gone stale is the worst answer available: that camera is precisely what the tap's owner was
         # holding, so the operator would get either a misleading `Camera __init__ sequence did not
@@ -336,7 +341,9 @@ class VideoSource:
             self._running = True
             self._state = VideoState(
                 running=True, width=width, height=height, fps=float(fps),
-                quality=int(quality), camera="vision-tap")
+                quality=int(quality),
+                camera=("vision-tap" if not self._stream_role
+                        else f"vision-tap:{self._stream_role}"))
             return self.state()
 
     def _tap_loop(self, path: str) -> None:

@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -45,6 +46,9 @@ from .model import (OFFLINE_ADAPTERS, EnvironmentManifest, build_adapter, manife
 from .model.adapter import MockAdapter
 from .pipeline import LatestJsonPublisher, PerceptionPipeline, PreviewTap
 from .preview import JpegPreviewWorker
+from .detail_stream import DetailFrame, DetailStreamAnnouncer, SecondaryCameraStream
+from .pipeline import PreviewTap
+from .stream_manifest import StreamDescriptor, publish, publish_merged
 from .protocol.jsonio import atomic_write_text, dumps as json_dumps
 from .protocol.wire import SocketPublisher, encode_track_set
 from .protocol.native_wire import encode_perception_frame
@@ -456,8 +460,14 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         if (model.adapter or "").strip().lower() not in ("hailo", "hailo8"):
             adapter.open(device=imx500, camera=picam2)
         pipeline.start()
-        return _run_camera(args, pipeline, adapter, camera, info,
-                        wire_publisher=wire_publisher)
+        primary_ident = resolve_durable_id(str(info.get("device_path")
+                                              or f"/dev/video{info.get('camera_num', '?')}"))
+        detail = _start_detail_stream(primary_ident=primary_ident)
+        try:
+            return _run_camera(args, pipeline, adapter, camera, info,
+                            wire_publisher=wire_publisher, preview=preview_worker)
+        finally:
+            _stop_detail_stream(detail)
     except ModelRejected as exc:
         print(f"visiond: model refused (§9.3):\n{exc}", file=sys.stderr)
         return EXIT_MODEL
@@ -521,9 +531,209 @@ def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False
         width=track_set.stream_width, height=track_set.stream_height))
 
 
+#: The role a physical sensor is allowed to publish under (§ architect's (b) binding). This is a
+#: binding by *model + by-path identity*, never by probe order: a station that grows a third
+#: sensor gets a new name here rather than a renumbering of the old ones.
+STREAM_ROLES = {"imx500": "wide", "imx477": "detail"}
+
+
+def _role_for_stream(info: Dict[str, Any]) -> Optional[str]:
+    model = str(info.get("sensor_model") or info.get("camera_model")
+                or info.get("model") or "").strip().lower()
+    role = STREAM_ROLES.get(model)
+    if role is None:
+        # An unmapped sensor gets no name rather than a borrowed one: `wide` on an unknown sensor
+        # would let a UI label pixels it cannot attribute.
+        print(f"visiond: sensor model {model!r} has no stream role; publishing no manifest",
+              file=sys.stderr)
+    return role
+
+
+class _StreamAnnouncer:
+    """Republishes the named-stream manifest at 1 Hz while the camera is open.
+
+    `delivered_fps` is measured from the encoder's own counter across the last window, and stays
+    ``None`` until one whole window has samples. A rate nobody measured must not sit in the
+    manifest as 0, or the first second of every boot renders as "this stream is dead".
+    """
+
+    def __init__(self, *, path: str, role: str, ident: Any, size, preview=None,
+                 interval_s: float = 1.0) -> None:
+        self.path = str(path)
+        self.role = role
+        self.ident = ident
+        self.size = (int(size[0]), int(size[1]))
+        self.preview = preview
+        self.interval_ns = max(1, int(float(interval_s) * 1_000_000_000))
+        self._stop = threading.Event()
+        self._thread = None
+        self._last_count = 0
+        self._last_ns = time.monotonic_ns()
+        self.failures = 0
+        self.last_error = ""
+
+    @classmethod
+    def from_environment(cls, *, role, ident, size, preview):
+        path = os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip()
+        if not path or role is None:
+            return None
+        return cls(path=path, role=role, ident=ident, size=size, preview=preview)
+
+    def start(self) -> None:
+        self.publish_once()          # an empty manifest beats a consumer guessing at absence
+        self._thread = threading.Thread(target=self._run, name="stream-manifest", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_ns / 1_000_000_000.0):
+            self.publish_once()
+
+    def publish_once(self) -> None:
+        count = int(getattr(self.preview, "published", 0)) if self.preview is not None else 0
+        now = time.monotonic_ns()
+        elapsed_ns = now - self._last_ns
+        fps = None
+        if elapsed_ns >= self.interval_ns and count > self._last_count:
+            fps = round((count - self._last_count) * 1_000_000_000.0 / elapsed_ns, 2)
+        if elapsed_ns >= self.interval_ns:
+            self._last_count, self._last_ns = count, now
+        try:
+            publish_merged(path=self.path, descriptor=StreamDescriptor(
+                role=self.role, camera_id=self.ident.id, identity_source=self.ident.source,
+                durable=bool(self.ident.durable), path=str(self.preview.path) if self.preview
+                else "", width=self.size[0], height=self.size[1], delivered_fps=fps,
+                dropped=int(getattr(self.preview, "failures", 0)) if self.preview else None,
+                updated_ns=now))
+            self.last_error = ""
+        except (OSError, ValueError) as exc:
+            # A manifest that cannot be written is a degraded UI, not a lost camera: the capture
+            # thread must not die because a file could not be replaced. Loud, counted, continuing.
+            self.failures += 1
+            self.last_error = f"{type(exc).__name__}: {exc}"
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+
+DETAIL_STREAM_ENV = "OTA_VISION_DETAIL_SENSOR"
+DETAIL_STREAM_MODEL_DEFAULTS = {"imx477": (1280, 720, 30.0)}
+
+
+def _start_detail_stream(*, primary_ident=None):
+    """Open the secondary sensor as a *preview-only* stream, if the launcher asked for one.
+
+    The switch names a **sensor model**, not an index: ``/dev/videoN`` is a lease for this boot.
+    What the stream then *publishes* is a by-path identity resolved from the node we actually
+    opened, so the claim the manifest makes is port-derived, not order-derived. A station with two
+    identical sensors would need the port in configuration; that limitation is written down rather
+    than hidden behind a number.
+    """
+    model = os.environ.get(DETAIL_STREAM_ENV, "").strip().lower()
+    if not model:
+        return None
+    if model not in DETAIL_STREAM_MODEL_DEFAULTS:
+        print(f"visiond: {DETAIL_STREAM_ENV}={model!r} has no capture geometry; opening no "
+              "secondary stream", file=sys.stderr)
+        return None
+    width, height, rate = DETAIL_STREAM_MODEL_DEFAULTS[model]
+    tap_path = os.environ.get("OTA_VISION_FRAME_TAP", "").strip()
+    manifest_path = os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip()
+    run_dir = os.path.dirname(tap_path) or os.path.dirname(manifest_path)
+    if not run_dir:
+        print("visiond: no run dir for the secondary preview; opening no secondary stream",
+              file=sys.stderr)
+        return None
+    try:
+        picam2, info = open_picamera2_sensor(model, stream_size=(width, height),
+                                            frame_rate_hz=rate, orientation="none")
+    except Exception as exc:                                                  # noqa: BLE001
+        # The wide camera is already open and serving: a secondary sensor that will not open is
+        # one stream down, said out loud, not a daemon that takes the station's video with it.
+        print(f"visiond: secondary {model} did not open: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return None
+    # Identity comes from the camera stack's own firmware-node path (`.../i2c@80000/imx477@1a`),
+    # not from a node number: libcamera's camera index is NOT a /dev/videoN number, and on this
+    # station deriving it that way made the IMX477 claim the IMX500's identity.
+    fwnode = str(info.get("fwnode") or "").strip()
+    ident = derive_camera_id(fwnode) if fwnode else resolve_durable_id(
+        f"/dev/video{info['camera_num']}")
+    if fwnode == "" :
+        print("visiond: secondary sensor reported no firmware node path; falling back to the "
+              "kernel node for its identity (less durable, said out loud)", file=sys.stderr)
+    if primary_ident is not None and ident.id == getattr(primary_ident, "id", None):
+        # Two named streams claiming one camera is worse than one stream: every consumer that
+        # attributes detections by camera_id would be silently wrong. Refuse, say why, and keep
+        # the wide stream serving.
+        print(f"visiond: secondary sensor resolved to the primary's identity {ident.id}; "
+              "publishing no secondary stream", file=sys.stderr)
+        try:
+            picam2.stop()
+            picam2.close()
+        except Exception:                                             # noqa: BLE001
+            pass
+        return None
+    stream_size = (int(info["stream_size"][0]), int(info["stream_size"][1]))
+    print(f"visiond: secondary stream {model} node /dev/video{info['camera_num']} identity "
+          f"{ident.id} source={ident.source} durable={ident.durable} "
+          f"{stream_size[0]}x{stream_size[1]}", file=sys.stderr)
+    try:
+        picam2.start()
+    except Exception as exc:                                                  # noqa: BLE001
+        print(f"visiond: secondary {model} failed to start: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return None
+    tap = PreviewTap(enabled=True, fps=10.0, latest_queue_depth=1)
+    preview = JpegPreviewWorker(tap, os.path.join(run_dir, "preview_detail.jpg"))
+    preview.start()
+
+    def poll():
+        request = picam2.capture_request()
+        try:
+            image = request.make_array("main").copy()      # the buffer dies with the request
+            metadata = dict(request.get_metadata())   # 名字里带下划线：getmetadata() 不存在
+        finally:
+            request.release()
+        sequence = int(metadata.get("sequence", 0))
+        stamp = metadata.get("SensorTimestamp")
+        tap.offer(image, now_ns=None, metadata={"camera": "detail",
+                                               "sensor_timestamp_ns": stamp,
+                                               "frame_sequence": sequence})
+        return DetailFrame(camera_id=ident.id, frame_sequence=sequence,
+                           sensor_timestamp_ns=None if stamp is None else int(stamp),
+                           image=image, metadata=metadata)
+
+    stream = SecondaryCameraStream(role="detail", ident=ident, poll=poll, queue_depth=1)
+    stream.start()
+    announcer = None
+    if manifest_path:
+        announcer = DetailStreamAnnouncer(path=manifest_path, stream=stream, preview=preview,
+                                          size=stream_size)
+        announcer.start()
+    return {"picam2": picam2, "stream": stream, "preview": preview, "announcer": announcer}
+
+
+def _stop_detail_stream(detail) -> None:
+    if not detail:
+        return
+    for key in ("announcer", "stream", "preview"):
+        part = detail.get(key)
+        if part is not None:
+            part.stop()
+    try:
+        detail["picam2"].stop()
+        detail["picam2"].close()
+    except Exception as exc:                                                  # noqa: BLE001
+        print(f"visiond: secondary sensor released badly: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+
+
 def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter: Any,
                 camera: CameraOwner, info: Dict[str, Any],
-                wire_publisher: Optional[SocketPublisher] = None) -> int:
+                wire_publisher: Optional[SocketPublisher] = None,
+                preview: Optional[JpegPreviewWorker] = None) -> int:
     # WP3: the owner announces which camera it owns, and how durable that claim is. This is the
     # layer where ownership lives -- carrying it into controld needs a v3 wire-schema bump (the
     # perception report is a typed structure, not a dict), which belongs to the dual-worker cut
@@ -540,6 +750,14 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
           f"{info['stream_size'][0]}x{info['stream_size'][1]} model {info['task']} "
           f"@ {info['inference_rate_hz']} Hz", file=sys.stderr)
     camera.start()
+    # (b): visiond owns the physical sensor, so visiond is also the only process allowed to say
+    # which named stream came out of it. The manifest is what webd reads instead of a filename it
+    # guessed; nothing here changes what webd can do with the pixels.
+    announcer = _StreamAnnouncer.from_environment(role=_role_for_stream(info), ident=_ident,
+                                                  size=info["stream_size"], preview=preview)
+    if announcer is not None:
+        announcer.start()
+        print(f"visiond: publishing stream manifest -> {announcer.path}", file=sys.stderr)
     tensor_probe = None
     try:
         if args.input_tensor_probe:
@@ -588,6 +806,8 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
                         'AnalogueGain','DigitalGain','_ota_image_copy_ms') if k in frame.metadata},
                     imx500_kpi_ms=kpi))
     finally:
+        if announcer is not None:
+            announcer.stop()
         if tensor_probe is not None:
             tensor_probe.close()
     return EXIT_OK

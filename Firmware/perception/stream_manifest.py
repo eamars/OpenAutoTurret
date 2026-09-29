@@ -39,7 +39,7 @@ class StreamDescriptor:
 
     role: str
     camera_id: str
-    identity_source: str          # "by-path" | "by-id" | "index"
+    identity_source: str          # "by-path" | "by-id" | "fwnode" | "index"
     durable: bool
     path: str                     # where the pixels live, under `transport`
     transport: str = JPEG_FILE_TRANSPORT
@@ -133,6 +133,20 @@ def publish(*, path: str | Path, descriptors: Iterable[StreamDescriptor],
     if read_back is None or set(read_back.streams) != set(manifest.streams):
         raise StreamManifestError(f"manifest at {path} did not survive the round trip")
     return manifest
+
+
+def publish_merged(path: str | Path, descriptor: StreamDescriptor, *,
+                   producer: str = "visiond") -> StreamManifest:
+    """Publish one stream's entry without touching the entries another owner published.
+
+    Two capture paths share this one file. A writer that sends only its own descriptor would
+    erase the other's every second, and the surviving stream would look like the only camera the
+    station has. So: read what is published, replace exactly my role, write the set back.
+    """
+    existing = StreamManifest.read(path)
+    merged = dict(existing.streams) if existing else {}
+    merged[descriptor.role] = descriptor
+    return publish(path=path, descriptors=merged.values(), producer=producer)
 
 
 def _selftest() -> int:

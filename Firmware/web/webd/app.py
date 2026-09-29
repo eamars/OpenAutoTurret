@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+import logging
 import dataclasses
 import queue
 import threading
@@ -36,6 +37,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .config import WebConfig, load_web_config
+from .imu_state import ImuTraceReader
 from .blackbox import BlackBoxWriter
 from .controld_client import ControldClient
 from .protocol import TELEMETRY_STALE_AFTER_S
@@ -44,6 +46,9 @@ from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
 from .video import VideoSource, mjpeg_frame
 from .selection_client import request_selection
+
+
+log = logging.getLogger("webd")
 
 
 @dataclass
@@ -127,6 +132,43 @@ class VideoStartRequest(BaseModel):
     fps: Optional[float] = None
 
 
+#: Roles the /api/video family accepts. Kept here, not imported from perception: webd also runs
+#: on a host with no camera package, and a web daemon that cannot start because a sensor module
+#: failed to import is a worse outage than a duplicated tuple of two strings.
+STREAM_ROLES = ("wide", "detail")
+
+
+def _read_streams(manifest_path: str) -> tuple:
+    """Read the named-stream manifest visiond publishes. Returns (streams, why_absent).
+
+    ``({}, "…")`` separates three states the UI has to say apart: nothing configured, nothing
+    published yet, and a file that exists but does not parse.
+    """
+    if not manifest_path:
+        return {}, "no manifest configured (OTA_VISION_STREAM_MANIFEST is unset)"
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+    except FileNotFoundError:
+        return {}, f"no manifest published yet at {manifest_path}"
+    except (OSError, ValueError) as exc:
+        return {}, f"manifest at {manifest_path} is unreadable: {type(exc).__name__}: {exc}"
+    streams = payload.get("streams") or {}
+    unknown = sorted(set(streams) - set(STREAM_ROLES))
+    if unknown:
+        log.warning("stream manifest carries roles webd does not know: %s", ", ".join(unknown))
+    return streams, ""
+
+
+def _role_or_error(camera: Optional[str]) -> tuple:
+    """No `camera` parameter means `wide`, so the pre-dual-stream HUD keeps working."""
+    role = (camera or "wide").strip().lower()
+    if role not in STREAM_ROLES:
+        return None, (f"unknown camera {camera!r}; this station publishes "
+                      + ", ".join(STREAM_ROLES))
+    return role, ""
+
+
 def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     """Build the FastAPI app around a live ControldClient."""
     hub = TelemetryHub()
@@ -153,6 +195,24 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         orientation=config.video_orientation,
         white_balance=config.video_white_balance,
     )
+
+    # One source per named stream. `wide` reuses the instance every existing route already talks
+    # to, so a client that never mentions `camera` cannot tell the difference. A second source is
+    # created the first time someone asks for that stream, and each keeps its own slot: two
+    # viewers, two rates, one file read per stream.
+    sources = {"wide": video}
+
+    def source_for(role: str) -> VideoSource:
+        if role not in sources:
+            sources[role] = VideoSource(enabled=config.video_enabled,
+                                        orientation=config.video_orientation,
+                                        white_balance=config.video_white_balance)
+        return sources[role]
+
+    # One reader for the process: it keeps the byte offset it has already consumed, so a new
+    # instance per request would re-read the whole trace every time the dashboard polls.
+    imu_reader = ImuTraceReader(path=config.imu_trace or "/nonexistent/imu.ndjson",
+                                fresh_ms=int(config.imu_fresh_ms))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
@@ -195,6 +255,7 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             telemetry_stale=bool(age_s is None or age_s > TELEMETRY_STALE_AFTER_S),
         )
 
+
     @app.get("/api/state")
     async def state() -> JSONResponse:
         t = client.latest_telemetry()
@@ -202,7 +263,32 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             return JSONResponse(
                 status_code=503, content={"error": "no telemetry yet"}
             )
-        return JSONResponse({"type": "telemetry", "controld_connected": client.connected(), **json.loads(telemetry_to_json(_stamped(t)))})
+        payload = {"type": "telemetry", "controld_connected": client.connected(),
+                   **json.loads(telemetry_to_json(_stamped(t)))}
+        # (b): the identity belongs to whoever holds the sensor, and that is visiond. Its manifest
+        # is the only honest source for "which camera is this", so the empty strings controld
+        # publishes get filled here rather than left to look like a camera with no name.
+        streams, absent = _read_streams(config.stream_manifest)
+        wide = streams.get("wide") or {}
+        if wide.get("camera_id"):
+            payload["camera_id"] = wide["camera_id"]
+            payload["camera_identity_source"] = wide.get("identity_source") or ""
+        payload["video_streams"] = [
+            {"role": role, "camera_id": entry.get("camera_id"),
+             "identity_source": entry.get("identity_source"),
+             "durable": entry.get("durable"), "delivered_fps": entry.get("delivered_fps"),
+             "dropped": entry.get("dropped"), "width": entry.get("width"),
+             "height": entry.get("height"),
+             "running": bool(sources.get(role) and sources[role].is_running())}
+            for role, entry in sorted(streams.items())]
+        if absent:
+            payload["video_streams_error"] = absent
+        # controld's §20 imu block stays the base (it is the control-side claim); what we can see
+        # in the trace is layered on top, because controld's imu_present has never been assigned.
+        imu = dict(payload.get("imu") or {})
+        imu.update(imu_reader.read_once())
+        payload["imu"] = imu
+        return JSONResponse(payload)
 
     @app.get("/api/health")
     async def health() -> dict:
@@ -276,35 +362,71 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
     # -- video preview (separate low-priority path, §42.3) ------------------
 
     @app.get("/api/video/state")
-    async def video_state() -> dict:
-        return video.state().to_dict()
+    async def video_state(camera: Optional[str] = None) -> dict:
+        role, problem = _role_or_error(camera)
+        if problem:
+            return {"error": problem, "roles": list(STREAM_ROLES)}
+        streams, absent = _read_streams(config.stream_manifest)
+        entry = streams.get(role) or {}
+        return {**source_for(role).state().to_dict(), "role": role,
+                "published": bool(entry), "published_reason": absent,
+                "delivered_fps": entry.get("delivered_fps"),
+                "camera_id": entry.get("camera_id")}
 
     @app.post("/api/video/start")
-    async def video_start(req: Optional[VideoStartRequest] = None) -> JSONResponse:
+    async def video_start(camera: Optional[str] = None,
+                          req: Optional[VideoStartRequest] = None) -> JSONResponse:
         # Body is optional: a bare POST (no JSON body) starts with the defaults.
         req = req or VideoStartRequest()
+        role, problem = _role_or_error(camera)
+        if problem:
+            return JSONResponse({"ok": False, "error": problem, "roles": list(STREAM_ROLES)})
+        streams, absent = _read_streams(config.stream_manifest)
+        entry = streams.get(role)
+        if not entry and role != "wide":
+            # "Not published" is not "start anyway": guessing a filename is how a UI ends up
+            # showing one camera twice and calling it two streams.
+            return JSONResponse({"ok": False, "role": role,
+                                 "error": f"no {role} stream published ({absent or 'visiond '
+                                          'published no entry for it'})"})
+        # `wide` with no manifest keeps the pre-(b) behaviour (the OTA_VISION_FRAME_TAP file, or
+        # webd's own camera): the old HUD and the old deployments must keep working, and the
+        # response says which path it took rather than quietly looking like a named stream.
+        legacy_fallback = "" if entry else f"no manifest entry ({absent}); served the legacy path"
         width = req.width or config.video_width
         height = req.height or config.video_height
         fps = req.fps if req.fps and req.fps > 0 else float(config.video_fps)
         # Camera open is blocking — keep it off the event loop.
-        st = await asyncio.to_thread(video.start, width, height, fps,
-                                     config.video_quality)
-        return JSONResponse({"ok": st.running, **st.to_dict()})
+        st = await asyncio.to_thread(
+            source_for(role).start, width, height, fps, config.video_quality,
+            str((entry or {}).get("path") or ""), role)
+        return JSONResponse({"ok": st.running, "role": role,
+                             "camera_id": (entry or {}).get("camera_id") or "",
+                             "manifest_fallback": legacy_fallback, **st.to_dict()})
 
     @app.post("/api/video/stop")
-    async def video_stop() -> JSONResponse:
-        st = await asyncio.to_thread(video.stop)
+    async def video_stop(camera: Optional[str] = None) -> JSONResponse:
+        role, problem = _role_or_error(camera)
+        if problem:
+            return JSONResponse({"ok": False, "error": problem})
+        st = await asyncio.to_thread(source_for(role).stop)
         return JSONResponse({"ok": True, **st.to_dict()})
 
     @app.get("/api/video")
-    async def video_stream(limit: Optional[int] = None) -> StreamingResponse:
+    async def video_stream(limit: Optional[int] = None,
+                           camera: Optional[str] = None) -> StreamingResponse:
         """MJPEG stream (multipart/x-mixed-replace). Only while the video is on;
         every client re-sends a frame only when it changes, so N viewers share
         one capture. ``?limit=N`` caps the number of frames (production safety
         valve; also makes the stream bounded for tests)."""
-        if not video.is_running():
+        role, problem = _role_or_error(camera)
+        if problem:
+            return JSONResponse(status_code=400,
+                                content={"error": problem, "roles": list(STREAM_ROLES)})
+        source = source_for(role)
+        if not source.is_running():
             return JSONResponse(
-                status_code=409, content={"error": "video not running"}
+                status_code=409, content={"error": f"{role} video not running"}
             )
 
         async def gen():
@@ -319,9 +441,9 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
                 # the lifespan shutdown that releases the IMX500, so a browser left
                 # open could hold the camera away from visiond until TimeoutStopSec
                 # SIGKILLs us.
-                if hub.stopping.is_set() or not video.is_running():
+                if hub.stopping.is_set() or not source.is_running():
                     break
-                jpeg, seq, _ts = video.latest()
+                jpeg, seq, _ts = source.latest()
                 if seq != last_seq and jpeg:
                     last_seq = seq
                     sent += 1

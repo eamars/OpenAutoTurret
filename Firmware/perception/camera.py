@@ -294,7 +294,15 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
         controls={"FrameRate": float(intrinsics.inference_rate)},
         buffer_count=12)
     picam2.configure(configuration)
-    info = {"orientation": orientation, "camera_num": int(camera_num), "input_size": (int(input_size[0]),
+    # The role a stream publishes under is derived from what the *sensor reported*, not from what
+    # a config file hoped to open: a name borrowed from configuration would let an IMX477 wired as
+    # the primary be labelled `wide` and quietly show the operator the wrong pixels.
+    try:
+        _seen = str((picam2.camera_properties or {}).get("Model", "")).strip().lower()
+    except Exception:
+        _seen = ""
+    info = {"orientation": orientation, "camera_num": int(camera_num), "sensor_model": _seen,
+            "input_size": (int(input_size[0]),
                                                           int(input_size[1])),
             "stream_size": (int(main_size[0]), int(main_size[1])),
             "task": getattr(intrinsics, "task", None),
@@ -357,7 +365,13 @@ def open_picamera2_sensor(camera_model: str, *, stream_size: Tuple[int, int],
                 pass
         raise ConfigError(f"cannot configure {model} camera {camera_num}: {exc}") from exc
 
-    info = {"camera_num": int(camera_num), "camera_model": model,
+    try:
+        _seen = str((camera.camera_properties or {}).get("Model", "")).strip().lower()
+    except Exception:
+        _seen = ""
+    _fwnode = str(matches[0].get("Id") or "").strip()
+    info = {"camera_num": int(camera_num), "camera_model": model, "sensor_model": _seen,
+            "fwnode": _fwnode,
             "stream_size": (width, height), "task": "object_detection",
             "inference_rate_hz": float(frame_rate_hz), "orientation": orientation}
     return camera, info

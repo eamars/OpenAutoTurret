@@ -381,8 +381,26 @@ function hudDiagRows(t) {
           ? (t.camera.measurement_age_ms / 86400000).toFixed(2) + " D"
           : (t.camera.measurement_age_ms / 3600000).toFixed(1) + " H")
       : "UNKNOWN"],
-    ["IMU", (t.imu && t.imu.present) ? "PRESENT" : "ABSENT"]
+    ["IMU", imuLabel(t.imu)]
   ];
+}
+
+// The IMU chip has four states because the two absences mean different work: a station with no
+// IMU configured needs a deployment change, one with a trace and no samples needs the acquisition
+// process looked at. Collapsing them into "ABSENT" would send the operator to the wrong place.
+// A rate nobody measured yet says "rate n/m", never "0 hz": zero is a measurement, and this is
+// not one.
+function imuLabel(imu) {
+  // No block at all is §20's own absence, and it keeps the word the dashboard has always used.
+  if (!imu) return "ABSENT";
+  // A block that says "nothing was configured here" is a deployment fact, not a dead sensor.
+  if (imu.configured === false) return "NOT CONFIGURED";
+  if (!imu.present) return "NO SAMPLES";
+  if (!imu.fresh) return "STALE " + (typeof imu.age_ms === "number" ? imu.age_ms.toFixed(0) + "ms" : "?");
+  const rate = typeof imu.rate_hz === "number" ? imu.rate_hz.toFixed(0) + "HZ" : "RATE N/M";
+  const acc = typeof imu.game_rv_accuracy === "number" ? "/A" + imu.game_rv_accuracy : "";
+  const gaps = (imu.stats && imu.stats.gaps) ? " G" + imu.stats.gaps : "";
+  return "FRESH " + rate + acc + gaps;
 }
 
 // --- §10 prediction cue ----------------------------------------------------
@@ -1656,6 +1674,62 @@ HUD_HTML = """<!DOCTYPE html>
   <!-- z=0 camera image. Whole frame always visible: the frame edge is a number the
        operator has to be able to read, so the video is contained, never cropped. -->
   <img id="video" src="/api/video" alt="camera">
+  <!-- Pure-preview PIP (§ (b) dual streams). Default hidden, and hidden means *silent*: nothing
+       asks for /api/video?camera=detail until the operator opens it, so a station running one
+       stream pays nothing for the feature existing. Bottom-right because the telemetry rail, the
+       mode buttons and the target list all sit on the top/left edges of this pane. -->
+  <style>
+    #pip { position: absolute; right: 14px; bottom: 14px; width: 280px; display: none;
+           border: 1px solid #444; background: #000; z-index: 40; }
+    #pip.on { display: block; }
+    #pip img { width: 100%; display: block; }
+    #pip .bar { display: flex; justify-content: space-between; font-size: 10px; color: #bbb;
+                background: #141414; padding: 2px 5px; }
+    #pip button { background: none; border: 0; color: #8cf; cursor: pointer; font-size: 10px; }
+  </style>
+  <div id="pip">
+    <img id="pipimg" alt="secondary preview">
+    <div class="bar"><span id="piplabel">PIP</span><span id="pipfps">rate n/m</span>
+      <button id="pipswap" type="button">swap</button>
+      <button id="pipclose" type="button">×</button></div>
+  </div>
+  <script>
+  (function () {
+    // Which role lives on the big screen and which in the PIP. Swapping re-points both <img>s;
+    // it never re-starts a source, so the measured delivered rate keeps its own history.
+    var mainRole = "wide", pipRole = "detail", open_ = false;
+    function el(id) { return document.getElementById(id); }
+    async function openPip() {
+      var r = await fetch("/api/video/start?camera=" + pipRole, { method: "POST" });
+      var j = await r.json();
+      el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
+      if (j.ok) el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
+      el("pip").classList.add("on");
+      el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
+      open_ = true;
+    }
+    function closePip() {
+      el("pip").classList.remove("on");
+      el("pipimg").src = "";
+      fetch("/api/video/stop?camera=" + pipRole, { method: "POST" });
+      open_ = false;
+    }
+    function swap() {
+      var m = mainRole; mainRole = pipRole; pipRole = m;
+      el("video").src = "/api/video?camera=" + mainRole + "&t=" + Date.now();
+      if (open_) {
+        fetch("/api/video/stop?camera=" + pipRole, { method: "POST" });
+        openPip();
+      }
+    }
+    el("pipswap").addEventListener("click", swap);
+    el("pipclose").addEventListener("click", closePip);
+    // The HUD already has a preview on/off control; the PIP rides along with it rather than
+    // getting its own always-visible button, so a station with one camera sees nothing new.
+    window.otaOpenPip = openPip; window.otaClosePip = closePip; window.otaSwapPip = swap;
+    window.otaPipOpen = function () { return open_; };
+  })();
+  </script>
 
   <!-- z=10 candidates, z=11 selected, z=20 reticle: separate layers, because §18 orders
        them and because "the reticle never represents the target" is easier to keep true

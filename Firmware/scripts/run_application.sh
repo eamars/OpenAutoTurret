@@ -549,6 +549,14 @@ PY
   exit "$first_child_status"
 fi
 export OTA_VISION_FRAME_TAP="$RUN/preview.jpg"
+# (b): visiond 是唯一持有物理相机的人，所以由它发布"有哪些有名字的流"。
+# 缺这个变量 visiond 就不发布（默认关闭），老部署不受影响。
+export OTA_VISION_STREAM_MANIFEST="$RUN/video_streams.json"
+# 第二颗传感器按**型号**选（不是 /dev/videoN），报出来的身份是 by-path 派生的。
+# 设成空字符串就关掉这一路：OTA_VISION_DETAIL_SENSOR= ...。开不起时 visiond 只降级这条流，
+# 不会把已经在服务的广角一起带走。
+: "${OTA_VISION_DETAIL_SENSOR=imx477}"
+export OTA_VISION_DETAIL_SENSOR
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"
 export OTA_WEB_SOCKET="$RUN/control-web.sock"
@@ -611,6 +619,33 @@ PY
   if [ "$imu_ready" != 1 ]; then
     echo 'Fresh same-generation BNO085 host tare/sample unavailable; controller not started.' >&2
     exit 1
+  fi
+elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; then
+  # 观测档 IMU：给 UI 用的那路（§20 的 imu 块）。和上面那条的区别是**它不硬**——标定档要求
+  # "没有新鲜 tare 就不启动控制器"，而日常启动里 IMU 说话说不通只该让 UI 少一块信息。
+  # 用另一个变量名是有意的：上面那条把 imu_pid 交给了 wait -n，传感器一掉就把整栈收尾；
+  # 观测档不能这么干，所以它只登记进 children（停止时清），不参与 wait -n。
+  if [ "${OTA_IMU_ENABLE:-1}" = "1" ] && [ -x "$APP/build/imu-bno085" ]; then
+    if pgrep -x imu_main >/dev/null; then
+      echo 'Legacy IMU consumer still running; the UI will report the IMU as not configured.' >&2
+    else
+      export OTA_IMU_TRACE="$RUN/imu.ndjson"
+      "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+      imu_shadow_pid=$!; children+=("$imu_shadow_pid"); child_name[$imu_shadow_pid]=imu-bno085
+      imu_shadow_ready=0
+      for ((attempt=0; attempt<30; attempt++)); do
+        kill -0 "$imu_shadow_pid" 2>/dev/null || break
+        if grep -q '"kind":"sample"' "$RUN/imu.ndjson" 2>/dev/null; then imu_shadow_ready=1; break; fi
+        sleep 0.1
+      done
+      if [ "$imu_shadow_ready" = 1 ]; then
+        echo 'BNO085 continuous capture running (observe-only; the station does not depend on it).'
+      else
+        echo 'BNO085 produced no samples within 3s; the UI reports the IMU as absent and the station keeps running.' >&2
+        kill "$imu_shadow_pid" 2>/dev/null || true
+        unset OTA_IMU_TRACE
+      fi
+    fi
   fi
 fi
 "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &

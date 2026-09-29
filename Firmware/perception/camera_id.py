@@ -26,7 +26,7 @@ class CameraId(NamedTuple):
 
     @property
     def durable(self) -> bool:
-        return self.source in ("by-id", "by-path")
+        return self.source in ("by-id", "by-path", "fwnode")
 
 
 def derive_camera_id(device: str) -> CameraId:
@@ -44,6 +44,14 @@ def derive_camera_id(device: str) -> CameraId:
         return CameraId("cam-" + hashlib.sha1(base.encode()).hexdigest()[:8], "by-id")
     if "/v4l/by-path/" in normalised:
         return CameraId("cam-" + hashlib.sha1(base.encode()).hexdigest()[:8], "by-path")
+    if "/i2c@" in normalised and (normalised.startswith("/base/") or "/of_node/" in normalised):
+        # A firmware-node path, straight from the camera stack: `.../rp1/i2c@88000/imx500@1a`.
+        # This names the sensor *on its port*, so nothing is stripped — the address and the
+        # part name are the whole point, and two sensors on two addresses must never collide
+        # (measured on the station: /dev/video0 and /dev/video1 both sit under one CSI host's
+        # node family, so deriving an identity from a node number made the IMX477 claim to be
+        # the IMX500).
+        return CameraId("cam-" + hashlib.sha1(normalised.encode()).hexdigest()[:8], "fwnode")
     if base.startswith("video"):
         # A kernel number, borrowed for now. Callers that compare identities across a restart
         # must check .durable and refuse this, rather than treat a re-number as a new camera.
