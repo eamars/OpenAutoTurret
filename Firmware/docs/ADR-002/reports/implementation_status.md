@@ -330,3 +330,30 @@ tree and is no longer allowed to masquerade as the built source (`git -C` walked
   `User=eamars` against the local user database (correct on the Pi, cannot pass as `dsh`); the
   `test_station_launcher` log-path assertion is still open.
 
+
+## 2026-09-30 深夜：正反与规定姿态复验（docs/03 §5）——**部分通过，两处如实留着**
+
+新工具 `Firmware/tools/adr0021_pose.py`（`--selftest` 不碰硬件；符号逻辑、按轴索引、接触判读都过）。
+真站跑了两遍，结论不同，两遍都记：
+
+| 检查 | 第一遍 | 第二遍 |
+|---|---|---|
+| 归零完整循环 ×3（§5 要求至少 3 次） | **PASS**：三轮都 `homing → hold`（每轮约 66 秒） | **FAIL**：`homing → fault` |
+| 正反（命令步 → 编码器读数） | **FAIL（测法错）**：在滚动窗内取首尾差，窗里大半是踏步之前的历史 | **INCONCLUSIVE**：命令被拒，`encoder 4298 → 4298`，轴根本没动 |
+| 中段摩擦平台（§5 先证明不当端点） | `BLOCKED_friction_plateau_needs_hand_resistance` | 同 |
+
+**我这两个错都是测法的错，不是轴的错**，而且都被我自己的工具当场揭出来：
+
+1. **滚动窗不能取首尾差。** trace 是约 256 行的滚动窗，窗内历史远多于踏步之后的行；首尾差量到的是"窗里恰好装了什么"，
+   不是那一步。改成**踏步前最后一条读数 vs 踏步后最后一条读数**之后，第一遍那个看似"反向"的结论就消失了——
+   取而代之的是 `delta=0`：轴没动，因为命令被拒。
+2. **命令形状是我猜的。** `command_validation.hpp:212` 的例子写的是 `yaw+1`——**整名轴 + 符号 + 整度**；
+   我发的是 `y+2.0`。形状校验只查形状，"哪个步长被批准"是 controld 的决定（§38–§41、§52），
+   所以我不替它猜；被拒也**没有**被读成"轴没反应=质量差"。
+   另外我原来只读 `reason` 字段，被拒的话在那里是空的——**拒得没声音就是白拒**，现在 `error` 与 `reason` 都收。
+
+**没做的事，不遮**：第二遍 `homing → fault` 我**还不知道原因**——需要站自己的话（telemetry 的 fault 字段/日志），
+下一轮先查这个再谈 §5 通过与否。摩擦平台那一格要人手在轴上加阻力，主人在睡觉，不叫醒。
+
+⇒ **矩阵里的"正反与规定姿态复验"仍记 NOT_RUN**：归零三次完整通过是真的，正反一次都没量到（命令被拒），
+一个 `BLOCKED_friction_plateau_*` 也是真的。基础设施工具链自此**齐了**，这一格**没到 PASS 就不写 PASS**。
