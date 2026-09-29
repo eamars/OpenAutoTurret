@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -120,7 +121,6 @@ class Runner:
         record["context"] = self.exchange("param_context", context)
         prepared = self.exchange("param_prepare", record["applied_string"])
         self.manifest["exchanges"] += 1
-        import re
         match = re.search(r"request_id=(\S+)", str(prepared.get("reason", "")))
         if not prepared.get("accepted") or not match:
             record["prepare"] = prepared
@@ -185,6 +185,7 @@ class Runner:
                 score = self.scorer.score_window(window.get("rows") or [], axis="yaw",
                                                  axes=tuple(window.get("axes") or ("pitch", "yaw")))
                 record["score"] = {"classification": score["classification"],
+                                   "metric_details": score["metrics"],
                                    "metrics_sha256": score["metrics_sha256"],
                                    "metrics": {name: row["status"]
                                                for name, row in score["metrics"].items()}}
@@ -267,9 +268,62 @@ class Runner:
             record = self.trial(candidate, "coarse")
             self.score(record)                      # fills in metrics, or why there are none
             self.manifest["trials"].append(record)
-        if self.manifest.get("stopped_by") is None:
+        if self.manifest.get("stopped_by") is not None:
+            pass
+        elif self.scorer is None:
+            # An unscored campaign has no gate to consult: it exhausted its design and says so. Refusing
+            # it for a missing gate number would be inventing a requirement the run never took on.
             self.manifest["stopped_by"] = "design_exhausted"
+        else:
+            self.pick_next()
         return self._finish()
+
+    def metric_value(self, record, metric_name):
+        """The number behind a metric, whatever the frozen table chose to call it.
+
+        The scorer publishes metric-specific keys (`p99_age_ms`, `rms_deg_s`) rather than one generic
+        `value`, because a feedback age and a velocity RMS are not one quantity wearing one name. A
+        metric that abstained carries no number at all, and that is exactly what the gate needs to know.
+        """
+        row = ((record.get("score") or {}).get("metric_details") or {}).get(metric_name) or {}
+        for key, value in row.items():
+            if key != "status" and isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+        return None
+
+    def pick_next(self):
+        """refine / confirm / stop, decided by the lock's gate and not by how the run felt.
+
+        The gate is stated on one named metric. If that metric never computed, the campaign is blocked
+        rather than refined: choosing the next grid by feel is how a folder named kp2-fine came to hold
+        Kp=1 in the last run, and the report of that run names it out loud.
+        """
+        name = str(self.design.get("scorer", {}).get("metric", ""))
+        values = {record["candidate_id"]: self.metric_value(record, name)
+                  for record in self.manifest["trials"]}
+        values = {key: value for key, value in values.items() if value is not None}
+        if len(values) < 2:
+            computed = sorted({metric for record in self.manifest["trials"]
+                               for metric, status in ((record.get("score") or {})
+                                                      .get("metrics") or {}).items()
+                               if status in ("PASS", "FAIL")})
+            self.refuse("BLOCKED_refine_gate_metric_never_measured: the gate is stated on " + name +
+                        ", which computed on " + str(len(values)) + " of " +
+                        str(len(self.manifest["trials"])) + " candidates. Metrics that did compute: " +
+                        (", ".join(computed) or "none") + ". A refine chosen without the gate metric "
+                        "would be a grid picked by feel and labelled improvement")
+            return
+        gate_match = re.search(r"\d*\.?\d+", str(self.design["refine"]["gate"]))
+        gate = float(gate_match.group(0)) if gate_match else 0.0
+        best = min(values.values()) if not self.design.get("scorer", {}).get("worse_is_better") \
+            else max(values.values())
+        relative = abs((max(values.values()) - min(values.values())) / best) if best else 0.0
+        self.manifest["refine_gate"] = {"metric": name, "gate": gate, "relative_spread": relative,
+                                       "candidates_with_value": len(values)}
+        if relative < gate:
+            self.manifest["stopped_by"] = "refine_gate_not_met"
+            return
+        self.manifest["stopped_by"] = "refine_due_not_yet_implemented_on_hardware"
 
     def _finish(self) -> dict:
         self.manifest["ended_at"] = self.now()

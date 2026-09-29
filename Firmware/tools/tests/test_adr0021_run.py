@@ -309,6 +309,17 @@ class TheCampaignCanRunAndScore(unittest.TestCase):
         self.assertTrue(tally, manifest["trials"][0].get("score"))
         self.assertEqual(8, sum(tally.values()))
 
+    def test_a_gate_metric_that_never_computed_blocks_rather_than_refines_by_feel(self):
+        # The fixture's gate is stated on `jitter_rad_s_pp`, which the frozen table does not measure, so
+        # the honest answer is a refusal naming what did compute — not a second grid chosen by feel.
+        station = StubStation()
+        station.scorable_rows = True
+        manifest = self._run(station, run_trials=True, scorer=scoring)
+        self.assertTrue(any(row.startswith("BLOCKED_refine_gate_metric_never_measured")
+                            for row in manifest["blocked"]), manifest["blocked"])
+        self.assertIn("feedback", manifest["blocked"][0])
+        self.assertEqual(8, len(manifest["trials"]), "a blocked gate must not invent a second grid")
+
     def test_thresholds_that_moved_under_the_lock_stop_the_campaign(self):
         station = StubStation()
         station.scorable_rows = True
