@@ -1534,6 +1534,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("video").addEventListener("loadedmetadata", () => { if (lastTelemetry) render(lastTelemetry); });
   // An <img> error is how a stopped stream shows up; re-ask rather than reload forever.
   $("video").addEventListener("error", () => { ensureVideo(); });
+  {
+    // The same treatment for the secondary pane. A deploy restarts visiond, which ends the multipart
+    // response; a browser never retries a broken <img> on its own, so until now the HQ feed stayed
+    // dead until the operator reloaded the page -- while the main preview, which did have this
+    // handler, came back by itself. Keep whatever role the pane is showing; only re-ask.
+    const pipImg = $("pipimg");
+    if (pipImg) pipImg.addEventListener("error", () => {
+      const src = pipImg.getAttribute("src") || "/api/video?camera=detail";
+      pipImg.src = src.replace(/(&|\?)t=[^&]*/, "") + "&t=" + Date.now();
+    });
+  }
   ensureVideo();
   connect();
   pollHealth();
@@ -1714,7 +1725,12 @@ HUD_HTML = """<!DOCTYPE html>
        window or the frame geometry changed, which the owner correctly called "还乱跑". The trade is
        accepted on purpose: at extreme ratios the pane sits over a black bar instead of over the
        picture; what it must never do is cover a control. */
-    #pip { position: absolute; left: 1%; top: 88px; width: 280px;
+    /* Centred horizontally, low, sitting directly above the operating-mode buttons: #mode-controls is
+       anchored at bottom:65px and is ~34px tall, so 112px puts the pane's bottom edge clear of them
+       at any window width. Still constants -- no measurement at run time, which is what made the pane
+       drift before -- and still under the chrome layer, so if a ratio ever gets tight the buttons win
+       the overlap and the preview is the thing that gets covered. */
+    #pip { position: absolute; left: 50%; bottom: 112px; width: 280px; transform: translateX(-50%);
            border: 1px solid #444; background: #000;
            /* Below the chrome layer (every control sits at z-index 20), above the picture. The owner's
               ruling of 2026-09-29 after the pane covered the D-pad: keep the pinned position and let

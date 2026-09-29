@@ -107,12 +107,19 @@ class PinnedPreviewContract(unittest.TestCase):
 
     def test_the_pane_is_pinned_and_there_is_no_toggle(self):
         from ..hud import HUD_HTML
-        self.assertIn("top: 88px", HUD_HTML)          # below the mode block, a constant on purpose
-        self.assertIn("left: 1%", HUD_HTML)           # the same column the mode block is in
+        self.assertIn("bottom: 112px", HUD_HTML)          # below the mode block, a constant on purpose
+        self.assertIn("left: 50%", HUD_HTML)           # the same column the mode block is in
         for gone in ("pipopen", "placePip", "pictureBox", "ResizeObserver", "pipclose"):
             self.assertNotIn(gone, HUD_HTML,
                              f"{gone} came back: the secondary preview is pinned and always open")
-        self.assertIn("otaSwapPip", HUD_HTML)         # swap survives: it does something, it isn't chrome
+        self.assertIn("otaSwapPip", HUD_HTML)
+        self.assertIn("translateX(-50%)", HUD_HTML)   # centred by a constant, not by measuring
+        self.assertEqual(HUD_HTML.count('addEventListener("error"'), 2,
+                         "both the main preview and the secondary pane must re-ask when a "
+                         "stream dies; only the main one did, so the HQ feed needed a reload")
+        # ...and so does the secondary pane: a deploy ends the multipart response, and a browser does
+        # not retry a broken <img>, which is why the HQ feed used to need a page reload.
+         # swap survives: it does something, it isn't chrome
     def test_the_preview_paints_under_the_chrome(self):
         """Chrome wins over a preview: the pane may be covered, it must not cover a control.
 
