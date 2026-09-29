@@ -142,3 +142,16 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 **两条留给主人的判断**：① 芯片文字用了 `imuLabel` 的整串（`FRESH 215HZ|RATE …`），信息全但**偏长**，要不要精简版；
 ② 画面左上角与 `#mode-block` 撞上时下移让开——**近方形窗口会明显往下掉一格**，不合适就改让法。
 **还欠一条测试**：`/ws` 载荷带叠加层这件事现在只有线上实证，没有回归测试钉住。
+
+### 朝向：配置到位了，**效果没到**（09-29 夜，release `03b6a8e44247.8B5lnT`）
+
+我从站上各取一帧（`/api/video?camera=wide|detail&limit=1` 是 **multipart 流**——第一次我把整条流当图片存，
+`file` 说是 data，**是我的量法错了，不是站上的帧坏**），同一时刻同一场景对照：
+
+| 角色 | 证据 | 判定 |
+|---|---|---|
+| wide | `SECRET LAB` 三角**朝上**、窗帘在**上**、桌面在**下**、`TITAN` 可读 | **正**（`camera_install.yaml` 的 `rotate_180` 生效） |
+| detail | 同一个 logo 三角**朝下**、亮帘在**下** | **仍倒**——`secondary.orientation` 值进配置了、visiond 也开了流，**transform 没生效** |
+
+**下一手**：查 `camera.py` 里 `open_picamera2_sensor` 那条分支——两处 `Transform(hflip,vflip)` 之一点了，
+要么顺序不对（configure 之后设），要么那条分支只算了没用。**判据不是代码读起来对，是 detail 那一帧的 logo 朝上。**
