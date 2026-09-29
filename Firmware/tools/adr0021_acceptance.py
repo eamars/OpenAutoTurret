@@ -70,37 +70,40 @@ class Station:
         s.settimeout(4)
         return s
 
-    def ack(self, after_seq):
-        """Wait for the controller's answer to the command just submitted.
-
-        Over webd a command is asynchronous: the socket answers `{"ok":true,"verdict":"submitted"}` —
-        which only means it was queued — and the real verdict arrives in `cmd_ack_*` on the next
-        telemetry frame. Taking the submission for the verdict is how an agent reports a write that
-        controld refused, so the runner correlates on `cmd_ack_seq` and reads that ack and nothing else.
-        """
-        deadline = time.time() + 4
+    def frame(self):
+        """One frame from controld's own socket — the only document that exists in every mode."""
+        s = self._sock()
+        deadline = time.time() + 3
         while time.time() < deadline:
-            from urllib.request import urlopen
             try:
-                with urlopen(self.state_url, timeout=2) as response:
-                    frame = json.loads(response.read().decode())
-            except Exception:
-                return {"accepted": False, "reason": "state unavailable while waiting for an ack"}
-            if frame.get("cmd_ack_seq") != after_seq:
+                frame = json.loads(s.recv(65536).decode())
+            except socket.timeout:
+                return {}
+            if frame.get("type") == "telemetry":
+                return frame
+        return {}
+
+    def ack(self, after_seq):
+        """Wait for the controller's answer on the same channel the command went down.
+
+        The submission response only says the command was queued; the verdict arrives as a telemetry
+        frame with a new cmd_ack_seq. Reading it over HTTP broke in --commission-mixed-controller,
+        which runs no web server, so the ack is read where the command lives.
+        """
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            frame = self.frame()
+            if frame and frame.get("cmd_ack_seq") != after_seq:
                 return {"accepted": bool(frame.get("cmd_ack_accepted")),
                         "reason": str(frame.get("cmd_ack_reason", "")),
-                        "command": frame.get("cmd_ack_command"),
-                        "seq": frame.get("cmd_ack_seq"), "safety": frame.get("cmd_ack_safety_state")}
+                        "command": frame.get("cmd_ack_command"), "seq": frame.get("cmd_ack_seq"),
+                        "safety": frame.get("cmd_ack_safety_state"),
+                        "controller_state": frame.get("cmd_ack_controller_state")}
             time.sleep(0.05)
-        return {"accepted": False, "reason": "no cmd_ack within 4 s"}
+        return {"accepted": False, "reason": "no cmd_ack within 6 s"}
 
     def seq(self):
-        from urllib.request import urlopen
-        try:
-            with urlopen(self.state_url, timeout=2) as response:
-                return json.loads(response.read().decode()).get("cmd_ack_seq")
-        except Exception:
-            return None
+        return self.frame().get("cmd_ack_seq")
 
     def command(self, name, arg=None):
         s = self._sock()
@@ -150,7 +153,9 @@ class Station:
         return frame
 
     def telemetry_frame(self):
-        """One raw frame from controld's own socket, keys and all."""
+        return self.frame()
+
+    def legacy_frame(self):
         s = self._sock()
         deadline = time.time() + 3
         while time.time() < deadline:
@@ -240,15 +245,18 @@ def main():
 
     # Preconditions the transaction demands. Saying which one is missing is the whole difference
     # between a blocked acceptance and a silent skip.
-    if str(state.get("phase", "")) not in ("hold",):
-        snapshot["blocked"].append(f"BLOCKED_phase_{state.get('phase')}")
-    if str(state.get("operating_mode", "")).lower() != "manual":
-        snapshot["blocked"].append(f"BLOCKED_mode_{state.get('operating_mode')}")
-    safety = state.get("safety_action") or state.get("cmd_ack_safety_state")
-    if str(safety or "").lower() != "allow":
-        snapshot["blocked"].append(f"BLOCKED_safety_{safety}")
-    if state.get("_via") == "nothing":
-        snapshot["blocked"].append("BLOCKED_no_state_document")
+    # Homing is the one thing worth waiting for: while it runs, the gate's answer would be a fact
+    # about the wrong moment. Everything else is recorded as observed and left to the gate to judge —
+    # its refusal names the condition, which makes it evidence rather than my inference.
+    for _ in range(60):
+        frame = station.frame()
+        if frame.get("phase") != "homing":
+            break
+        time.sleep(2)
+    state.update({key: frame.get(key) for key in TELEMETRY_KEYS if frame.get(key) is not None})
+    snapshot["station_state"] = state
+    if frame.get("phase") != "hold":
+        snapshot["blocked"].append(f"BLOCKED_phase_{frame.get('phase')}")
     snapshot["identity_before"] = identity(station)
 
     def yaw_exchange(label, arg):
@@ -269,11 +277,36 @@ def main():
         snapshot["transcript"].append(record)
         return record
 
+    def settle(limit_rad_s=0.0087, seconds=6.0):
+        """Wait until the axes are actually still, rather than hoping the last exchange finished.
+
+        The gate refuses a gain write while any axis is moving, and it is right to: a register write
+        during motion cannot be attributed. So the runner waits for the physical condition and reports
+        the residual rate it measured, instead of sleeping a guess.
+        """
+        deadline = time.time() + seconds
+        last = {}
+        while time.time() < deadline:
+            last = station.frame()
+            try:
+                still = abs(float(last.get("v_yaw_rad_s", 9))) < limit_rad_s and \
+                        abs(float(last.get("v_pitch_rad_s", 9))) < limit_rad_s
+            except (TypeError, ValueError):
+                still = False
+            if still:
+                return {"settled": True, "v_yaw": last.get("v_yaw_rad_s"),
+                        "v_pitch": last.get("v_pitch_rad_s")}
+            time.sleep(0.2)
+        return {"settled": False, "v_yaw": last.get("v_yaw_rad_s"),
+                "v_pitch": last.get("v_pitch_rad_s")}
+
     def pitch_exchange(label, arg):
         """One command, verified by the register readback a few cycles later — so wait, then look."""
+        record_settle = settle()
         before = station.seq()
         station.command("pitch_control_trial", arg)
         sent = station.ack(before)
+        sent["settle_before"] = record_settle
         time.sleep(0.4)
         record = {"parameter": label, "requested": arg, "sent": sent,
                   "identity_after": identity(station)}
@@ -293,7 +326,11 @@ def main():
                 boot_value("yaw.velocity_rx_window_ms", 20), boot_value("yaw.friction.positive_breakaway_a", 0),
                 boot_value("yaw.friction.negative_breakaway_a", 0), boot_value("yaw.friction.positive_run_a", 0),
                 boot_value("yaw.friction.negative_run_a", 0),
-                boot_value("yaw.friction.output_slew_a_per_s", 2)]
+                # The firmware rejects slew == 0 while the shipped boot value is 0, so the tool's
+                # baseline uses the smallest value the grammar accepts and says so in the transcript:
+                # "restore" here restores a working slew, not the shipped zero, until that asymmetry
+                # is resolved in firmware. See the §6 report.
+                max(boot_value("yaw.friction.output_slew_a_per_s", 2), 0.001)]
     if not snapshot["blocked"]:
         yaw_exchange("yaw.baseline", yaw_string(yaw_base))
         for position, name in enumerate(YAW_FIELDS):

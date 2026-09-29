@@ -7,18 +7,18 @@
   "host": "rpi-turret",
   "identity_after": {
     "accepted": true,
-    "applied_hash": "7f66c8e82672e2a3",
-    "expected_hash": "7f66c8e82672e2a3",
-    "reason": null,
-    "revision": "1",
-    "state": "idle"
+    "applied_hash": "1c9c5ea761dc2132",
+    "expected_hash": "e0e6240ed09cb05f",
+    "reason": "an",
+    "revision": "60",
+    "state": "restoring"
   },
   "identity_before": {
     "accepted": true,
-    "applied_hash": "none",
-    "expected_hash": "none",
+    "applied_hash": "1c9c5ea761dc2132",
+    "expected_hash": "1c9c5ea761dc2132",
     "reason": null,
-    "revision": "0",
+    "revision": "45",
     "state": "idle"
   },
   "inventory_generated_from": {
@@ -39,12 +39,13 @@
   },
   "schema": 1,
   "station_state": {
+    "_via": "controld-uds",
     "can_state": 0,
-    "cmd_ack_seq": 2,
-    "current_a_pitch": null,
-    "current_a_yaw": -0.677673,
+    "cmd_ack_seq": 186,
+    "current_a_yaw": 0.148315,
     "feedback_age_ms": 0,
     "manual_lease_active": 0,
+    "manual_lease_ms": 0,
     "manual_lease_remaining_ms": 0,
     "manual_profile": "NORMAL",
     "operating_mode": "MANUAL",
@@ -53,392 +54,677 @@
     "phase": "hold",
     "safety_action": "ALLOW",
     "service_velocity_control": true,
-    "telemetry_stale": false,
     "yaw_guard_degraded": false
   },
   "station_state_after": {
-    "can_state": 0,
-    "cmd_ack_seq": 40,
-    "current_a_pitch": null,
-    "current_a_yaw": -0.6828,
-    "feedback_age_ms": 0,
-    "manual_lease_active": 0,
-    "manual_lease_remaining_ms": 0,
-    "manual_profile": "NORMAL",
-    "operating_mode": "MANUAL",
-    "payload_profile_name": "conservative",
-    "payload_profile_status": "no_profile",
-    "phase": "hold",
-    "safety_action": "ALLOW",
-    "service_velocity_control": true,
-    "telemetry_stale": false,
-    "yaw_guard_degraded": false
+    "_via": "controld-uds",
+    "manual_lease_ms": 0,
+    "phase": "hold"
   },
-  "taken_at_utc": "2026-09-29T15:20:05Z",
+  "taken_at_utc": "2026-09-29T15:30:13Z",
   "transcript": [
     {
-      "applied": null,
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=46 effective_hash=1c9c5ea761dc2132 request_id=prepp-46",
+        "safety": "ALLOW",
+        "seq": 189
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "46",
+        "state": "idle"
+      },
       "parameter": "yaw.baseline",
       "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 4
-      },
-      "requested": "1:0.6:20:0:0:0:0:0"
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.current_kp_a_per_rad_s",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 5
-      },
-      "requested": "1.4:0.6:20:0:0:0:0:0",
-      "restore": null,
-      "snapshot_after_restore": {
         "accepted": true,
-        "applied_hash": "none",
-        "expected_hash": "none",
-        "reason": null,
-        "revision": "0",
-        "state": "idle"
-      }
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.current_kp_a_per_rad_s (restore)",
-      "prepare": {
-        "accepted": false,
         "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-46 expected_hash=1c9c5ea761dc2132 revision_after_apply=46",
         "safety": "ALLOW",
-        "seq": 6
+        "seq": 188
       },
-      "requested": "1:0.6:20:0:0:0:0:0"
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.current_ki_a_per_rad_s",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 8
-      },
-      "requested": "1:0.9:20:0:0:0:0:0",
-      "restore": null,
-      "snapshot_after_restore": {
-        "accepted": true,
-        "applied_hash": "none",
-        "expected_hash": "none",
-        "reason": null,
-        "revision": "0",
-        "state": "idle"
-      }
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.current_ki_a_per_rad_s (restore)",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 9
-      },
-      "requested": "1:0.6:20:0:0:0:0:0"
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.positive_breakaway_a",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 11
-      },
-      "requested": "1:0.6:20:0.12:0:0:0:0",
-      "restore": null,
-      "snapshot_after_restore": {
-        "accepted": true,
-        "applied_hash": "none",
-        "expected_hash": "none",
-        "reason": null,
-        "revision": "0",
-        "state": "idle"
-      }
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.positive_breakaway_a (restore)",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 12
-      },
-      "requested": "1:0.6:20:0:0:0:0:0"
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.negative_breakaway_a",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 14
-      },
-      "requested": "1:0.6:20:0:0.12:0:0:0",
-      "restore": null,
-      "snapshot_after_restore": {
-        "accepted": true,
-        "applied_hash": "none",
-        "expected_hash": "none",
-        "reason": null,
-        "revision": "0",
-        "state": "idle"
-      }
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.negative_breakaway_a (restore)",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 15
-      },
-      "requested": "1:0.6:20:0:0:0:0:0"
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.positive_run_a",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 17
-      },
-      "requested": "1:0.6:20:0:0:0.08:0:0",
-      "restore": null,
-      "snapshot_after_restore": {
-        "accepted": true,
-        "applied_hash": "none",
-        "expected_hash": "none",
-        "reason": null,
-        "revision": "0",
-        "state": "idle"
-      }
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.positive_run_a (restore)",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 18
-      },
-      "requested": "1:0.6:20:0:0:0:0:0"
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.negative_run_a",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "ALLOW",
-        "seq": 20
-      },
-      "requested": "1:0.6:20:0:0:0:0.08:0",
-      "restore": null,
-      "snapshot_after_restore": {
-        "accepted": true,
-        "applied_hash": "none",
-        "expected_hash": "none",
-        "reason": null,
-        "revision": "0",
-        "state": "idle"
-      }
-    },
-    {
-      "applied": null,
-      "parameter": "yaw.friction.negative_run_a (restore)",
-      "prepare": {
-        "accepted": false,
-        "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
-        "safety": "DERATE",
-        "seq": 21
-      },
-      "requested": "1:0.6:20:0:0:0:0:0"
+      "requested": "1:0.6:20:0:0:0:0:0.001"
     },
     {
       "applied": {
         "accepted": true,
         "command": "param_apply",
-        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=1 effective_hash=7f66c8e82672e2a3 request_id=prepp-1",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=47 effective_hash=69036ebd6274ee3c request_id=prepp-47",
         "safety": "ALLOW",
-        "seq": 24
+        "seq": 192
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "69036ebd6274ee3c",
+        "expected_hash": "69036ebd6274ee3c",
+        "reason": null,
+        "revision": "47",
+        "state": "idle"
+      },
+      "parameter": "yaw.current_kp_a_per_rad_s",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-47 expected_hash=69036ebd6274ee3c revision_after_apply=47",
+        "safety": "ALLOW",
+        "seq": 191
+      },
+      "requested": "1.4:0.6:20:0:0:0:0:0.001",
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=48 effective_hash=1c9c5ea761dc2132 request_id=prepp-48",
+        "safety": "ALLOW",
+        "seq": 195
+      },
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "48",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=48 effective_hash=1c9c5ea761dc2132 request_id=prepp-48",
+        "safety": "ALLOW",
+        "seq": 195
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "48",
+        "state": "idle"
+      },
+      "parameter": "yaw.current_kp_a_per_rad_s (restore)",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-48 expected_hash=1c9c5ea761dc2132 revision_after_apply=48",
+        "safety": "ALLOW",
+        "seq": 194
+      },
+      "requested": "1:0.6:20:0:0:0:0:0.001"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=49 effective_hash=ff5627ae219adf91 request_id=prepp-49",
+        "safety": "ALLOW",
+        "seq": 199
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "ff5627ae219adf91",
+        "expected_hash": "ff5627ae219adf91",
+        "reason": null,
+        "revision": "49",
+        "state": "idle"
+      },
+      "parameter": "yaw.current_ki_a_per_rad_s",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-49 expected_hash=ff5627ae219adf91 revision_after_apply=49",
+        "safety": "ALLOW",
+        "seq": 198
+      },
+      "requested": "1:0.9:20:0:0:0:0:0.001",
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=50 effective_hash=1c9c5ea761dc2132 request_id=prepp-50",
+        "safety": "ALLOW",
+        "seq": 202
+      },
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "50",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=50 effective_hash=1c9c5ea761dc2132 request_id=prepp-50",
+        "safety": "ALLOW",
+        "seq": 202
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "50",
+        "state": "idle"
+      },
+      "parameter": "yaw.current_ki_a_per_rad_s (restore)",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-50 expected_hash=1c9c5ea761dc2132 revision_after_apply=50",
+        "safety": "ALLOW",
+        "seq": 201
+      },
+      "requested": "1:0.6:20:0:0:0:0:0.001"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=51 effective_hash=30d41206e7bc61bc request_id=prepp-51",
+        "safety": "ALLOW",
+        "seq": 206
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "30d41206e7bc61bc",
+        "expected_hash": "30d41206e7bc61bc",
+        "reason": null,
+        "revision": "51",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.positive_breakaway_a",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-51 expected_hash=30d41206e7bc61bc revision_after_apply=51",
+        "safety": "ALLOW",
+        "seq": 205
+      },
+      "requested": "1:0.6:20:0.12:0:0:0:0.001",
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=52 effective_hash=1c9c5ea761dc2132 request_id=prepp-52",
+        "safety": "ALLOW",
+        "seq": 209
+      },
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "52",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=52 effective_hash=1c9c5ea761dc2132 request_id=prepp-52",
+        "safety": "ALLOW",
+        "seq": 209
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "52",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.positive_breakaway_a (restore)",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-52 expected_hash=1c9c5ea761dc2132 revision_after_apply=52",
+        "safety": "ALLOW",
+        "seq": 208
+      },
+      "requested": "1:0.6:20:0:0:0:0:0.001"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=53 effective_hash=aa42f2d2b2ffbaf6 request_id=prepp-53",
+        "safety": "ALLOW",
+        "seq": 213
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "aa42f2d2b2ffbaf6",
+        "expected_hash": "aa42f2d2b2ffbaf6",
+        "reason": null,
+        "revision": "53",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.negative_breakaway_a",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-53 expected_hash=aa42f2d2b2ffbaf6 revision_after_apply=53",
+        "safety": "ALLOW",
+        "seq": 212
+      },
+      "requested": "1:0.6:20:0:0.12:0:0:0.001",
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=54 effective_hash=1c9c5ea761dc2132 request_id=prepp-54",
+        "safety": "ALLOW",
+        "seq": 216
+      },
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "54",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=54 effective_hash=1c9c5ea761dc2132 request_id=prepp-54",
+        "safety": "ALLOW",
+        "seq": 216
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "54",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.negative_breakaway_a (restore)",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-54 expected_hash=1c9c5ea761dc2132 revision_after_apply=54",
+        "safety": "ALLOW",
+        "seq": 215
+      },
+      "requested": "1:0.6:20:0:0:0:0:0.001"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=55 effective_hash=34abd54b01091f99 request_id=prepp-55",
+        "safety": "ALLOW",
+        "seq": 220
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "34abd54b01091f99",
+        "expected_hash": "34abd54b01091f99",
+        "reason": null,
+        "revision": "55",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.positive_run_a",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-55 expected_hash=34abd54b01091f99 revision_after_apply=55",
+        "safety": "ALLOW",
+        "seq": 219
+      },
+      "requested": "1:0.6:20:0:0:0.08:0:0.001",
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=56 effective_hash=1c9c5ea761dc2132 request_id=prepp-56",
+        "safety": "ALLOW",
+        "seq": 223
+      },
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "56",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=56 effective_hash=1c9c5ea761dc2132 request_id=prepp-56",
+        "safety": "ALLOW",
+        "seq": 223
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "56",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.positive_run_a (restore)",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-56 expected_hash=1c9c5ea761dc2132 revision_after_apply=56",
+        "safety": "ALLOW",
+        "seq": 222
+      },
+      "requested": "1:0.6:20:0:0:0:0:0.001"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=57 effective_hash=8585b7c410807631 request_id=prepp-57",
+        "safety": "ALLOW",
+        "seq": 227
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "8585b7c410807631",
+        "expected_hash": "8585b7c410807631",
+        "reason": null,
+        "revision": "57",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.negative_run_a",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-57 expected_hash=8585b7c410807631 revision_after_apply=57",
+        "safety": "ALLOW",
+        "seq": 226
+      },
+      "requested": "1:0.6:20:0:0:0:0.08:0.001",
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=58 effective_hash=1c9c5ea761dc2132 request_id=prepp-58",
+        "safety": "ALLOW",
+        "seq": 230
+      },
+      "snapshot_after_restore": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "58",
+        "state": "idle"
+      }
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=58 effective_hash=1c9c5ea761dc2132 request_id=prepp-58",
+        "safety": "ALLOW",
+        "seq": 230
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "58",
+        "state": "idle"
+      },
+      "parameter": "yaw.friction.negative_run_a (restore)",
+      "prepare": {
+        "accepted": true,
+        "command": "param_prepare",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-58 expected_hash=1c9c5ea761dc2132 revision_after_apply=58",
+        "safety": "ALLOW",
+        "seq": 229
+      },
+      "requested": "1:0.6:20:0:0:0:0:0.001"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=59 effective_hash=7f66c8e82672e2a3 request_id=prepp-59",
+        "safety": "ALLOW",
+        "seq": 234
       },
       "identity_after": {
         "accepted": true,
         "applied_hash": "7f66c8e82672e2a3",
         "expected_hash": "7f66c8e82672e2a3",
         "reason": null,
-        "revision": "1",
+        "revision": "59",
         "state": "idle"
       },
       "parameter": "yaw.friction.output_slew_a_per_s",
       "prepare": {
         "accepted": true,
         "command": "param_prepare",
-        "reason": "prepared request_id=prepp-1 expected_hash=7f66c8e82672e2a3 revision_after_apply=1",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-59 expected_hash=7f66c8e82672e2a3 revision_after_apply=59",
         "safety": "ALLOW",
-        "seq": 23
+        "seq": 233
       },
       "requested": "1:0.6:20:0:0:0:0:4",
-      "restore": null,
+      "restore": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=60 effective_hash=1c9c5ea761dc2132 request_id=prepp-60",
+        "safety": "ALLOW",
+        "seq": 237
+      },
       "snapshot_after_restore": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
         "reason": null,
-        "revision": "1",
+        "revision": "60",
         "state": "idle"
       }
     },
     {
-      "applied": null,
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/MANUAL",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=60 effective_hash=1c9c5ea761dc2132 request_id=prepp-60",
+        "safety": "ALLOW",
+        "seq": 237
+      },
+      "identity_after": {
+        "accepted": true,
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "1c9c5ea761dc2132",
+        "reason": null,
+        "revision": "60",
+        "state": "idle"
+      },
       "parameter": "yaw.friction.output_slew_a_per_s (restore)",
       "prepare": {
-        "accepted": false,
+        "accepted": true,
         "command": "param_prepare",
-        "reason": "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, slew (0,10]",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepared request_id=prepp-60 expected_hash=1c9c5ea761dc2132 revision_after_apply=60",
         "safety": "ALLOW",
-        "seq": 26
+        "seq": 236
       },
-      "requested": "1:0.6:20:0:0:0:0:0"
+      "requested": "1:0.6:20:0:0:0:0:0.001"
     },
     {
       "identity_after": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "pitch.service_speed_ki",
+        "revision": "60",
+        "state": "restoring"
       },
       "identity_after_settle": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "pitch.service_speed_ki",
+        "revision": "60",
+        "state": "restoring"
       },
       "parameter": "pitch.service_speed_kp",
       "requested": "4.0:0.03",
       "sent": {
         "accepted": false,
         "command": "pitch_control_trial",
-        "reason": "pitch tuning gate refuses: manual_commissioning_off",
+        "controller_state": "hold/MANUAL",
+        "reason": "pitch speed gains did not verify: pitch.service_speed_ki came back 0.0299999993, expected 0.03; the restore was refused too, motion stays gated (register_readback_ms=0.559902); motion stays gated",
         "safety": "ALLOW",
-        "seq": 28
+        "seq": 241,
+        "settle_before": {
+          "settled": true,
+          "v_pitch": -0.00778198,
+          "v_yaw": 0
+        }
       }
     },
     {
       "identity_after": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "an",
+        "revision": "60",
+        "state": "restoring"
       },
       "identity_after_settle": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "an",
+        "revision": "60",
+        "state": "restoring"
       },
       "parameter": "pitch.service_speed_kp (restore)",
       "requested": "4:0.05",
       "sent": {
         "accepted": false,
         "command": "pitch_control_trial",
-        "reason": "pitch tuning gate refuses: manual_commissioning_off",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepare refused: an exchange is already restoring; no new candidate may be staged until the readback verifies (a second prepare here is how one trial's motion runs under another trial's gains)",
         "safety": "ALLOW",
-        "seq": 31
+        "seq": 244,
+        "settle_before": {
+          "settled": true,
+          "v_pitch": -0.0050354,
+          "v_yaw": 0
+        }
       }
     },
     {
       "identity_after": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "an",
+        "revision": "60",
+        "state": "restoring"
       },
       "identity_after_settle": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "an",
+        "revision": "60",
+        "state": "restoring"
       },
       "parameter": "pitch.service_speed_ki",
       "requested": "4.0:0.03",
       "sent": {
         "accepted": false,
         "command": "pitch_control_trial",
-        "reason": "pitch tuning gate refuses: manual_commissioning_off",
+        "controller_state": "hold/MANUAL",
+        "reason": "pitch speed gains are not readable right now; refusing a write that cannot be read back and verified",
         "safety": "ALLOW",
-        "seq": 34
+        "seq": 247,
+        "settle_before": {
+          "settled": true,
+          "v_pitch": -0.00320435,
+          "v_yaw": 0
+        }
       }
     },
     {
       "identity_after": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "an",
+        "revision": "60",
+        "state": "restoring"
       },
       "identity_after_settle": {
         "accepted": true,
-        "applied_hash": "7f66c8e82672e2a3",
-        "expected_hash": "7f66c8e82672e2a3",
-        "reason": null,
-        "revision": "1",
-        "state": "idle"
+        "applied_hash": "1c9c5ea761dc2132",
+        "expected_hash": "e0e6240ed09cb05f",
+        "reason": "an",
+        "revision": "60",
+        "state": "restoring"
       },
       "parameter": "pitch.service_speed_ki (restore)",
       "requested": "4:0.05",
       "sent": {
         "accepted": false,
         "command": "pitch_control_trial",
-        "reason": "pitch tuning gate refuses: manual_commissioning_off",
+        "controller_state": "hold/MANUAL",
+        "reason": "prepare refused: an exchange is already restoring; no new candidate may be staged until the readback verifies (a second prepare here is how one trial's motion runs under another trial's gains)",
         "safety": "ALLOW",
-        "seq": 37
+        "seq": 250,
+        "settle_before": {
+          "settled": true,
+          "v_pitch": 0.0050354,
+          "v_yaw": 0
+        }
       }
     }
   ]
