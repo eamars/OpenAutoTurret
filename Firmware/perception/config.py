@@ -596,6 +596,9 @@ class ModelConfig:
     camera_height: Optional[int] = None
     camera_frame_rate_hz: Optional[float] = None
     camera_orientation: str = "none"
+    # The B route's inference leg. Zero means inference reads the main stream, as it did before.
+    camera_lores_width: int = 0
+    camera_lores_height: int = 0
     thresholds: ScoreThresholds = field(default_factory=ScoreThresholds)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -611,6 +614,8 @@ class ModelConfig:
                 "camera_width": self.camera_width, "camera_height": self.camera_height,
                 "camera_frame_rate_hz": self.camera_frame_rate_hz,
                 "camera_orientation": self.camera_orientation,
+                "camera_lores_width": self.camera_lores_width,
+                "camera_lores_height": self.camera_lores_height,
                 "thresholds": self.thresholds.to_dict()}
 
     @classmethod
@@ -648,6 +653,8 @@ class ModelConfig:
                                   _as_float(data.get("camera_frame_rate_hz"),
                                             "camera_frame_rate_hz", 0.0)),
             camera_orientation=str(data.get("camera_orientation", "none")).strip().lower(),
+                camera_lores_width=_as_int(data.get("camera_lores_width", 0), "camera_lores_width", 0),
+                camera_lores_height=_as_int(data.get("camera_lores_height", 0), "camera_lores_height", 0),
             thresholds=ScoreThresholds.from_dict(data.get("thresholds")))
 
     def validate(self) -> List[str]:

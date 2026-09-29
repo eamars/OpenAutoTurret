@@ -428,6 +428,7 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         pipeline.selection_service = SelectionService(args.selection_socket)
     if args.controller_state_url and pipeline.selector.auto.enabled:
         pipeline.controller_context = ControllerContext(args.controller_state_url)
+    lores: Optional[Tuple[int, int]] = None      # set by the profile that asks for a second leg
     camera: Optional[CameraOwner] = None
     try:
         if pipeline.selection_service is not None:
@@ -448,11 +449,15 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             width = int(model.camera_width or 640)
             height = int(model.camera_height or 480)
             rate_hz = float(model.camera_frame_rate_hz or 15.0)
+            lores_w, lores_h = int(model.camera_lores_width or 0), int(model.camera_lores_height or 0)
+            if lores_w > 0 and lores_h > 0:
+                lores = (lores_w, lores_h)
             picam2, info = open_picamera2_sensor(
                 model.camera_model,
                 stream_size=(width, height),
                 frame_rate_hz=rate_hz,
                 orientation=model.camera_orientation,
+                lores_size=lores,
             )
             # The configured libcamera transform applies to pixels before Hailo inference.
             pipeline.orientation = 'none'
@@ -465,8 +470,13 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             # boxes and the image now arrive upright; do not rotate either again.
             pipeline.orientation = 'none'
         stream = (int(info["stream_size"][0]), int(info["stream_size"][1]))
-        adapter.configure_stream(*stream)
-        camera = CameraOwner(picam2, stream_size=stream, events=events)
+        # Inference is configured for the leg it will actually be handed -- the ISP's small picture
+        # when the profile asked for one. Reporting the model input without this would let the
+        # surface claim 640x360 while the network quietly ate a downscaled 1080p.
+        adapter.configure_stream(*(lores or stream))
+        camera = CameraOwner(picam2, stream_size=stream, events=events,
+                             inference_stream=("lores" if lores else None),
+                             inference_size=(lores or stream))
         if (model.adapter or "").strip().lower() not in ("hailo", "hailo8"):
             adapter.open(device=imx500, camera=picam2)
         pipeline.start()
@@ -793,7 +803,7 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             tensor_probe.start()
         delivered = 0
         for frame in camera.frames(max_frames=args.max_frames):
-            outcome = pipeline.process_frame(frame.image, frame.metadata,
+            outcome = pipeline.process_frame(frame.inference_image or frame.image, frame.metadata,
                                              frame_sequence=frame.frame_sequence,
                                              sensor_timestamp_ns=frame.sensor_timestamp_ns,
                                              capture_started_ns=frame.metadata_receive_ns)

@@ -46,6 +46,11 @@ class CapturedFrame:
     stream_size: Tuple[int, int] = (0, 0)
     #: Why this frame cannot be used, when it cannot be. Never a silent ``None`` return.
     unusable_reason: str = ""
+    #: The small ISP leg inference should read, when the sensor was asked for one. ``image`` stays
+    #: the operator's picture: the display and the network are allowed to want different sizes, and
+    #: scaling 1080p on the host costs 14.5 ms a frame (measured, Phase 5).
+    inference_image: Any = None
+    inference_size: Tuple[int, int] = (0, 0)
 
     @property
     def usable(self) -> bool:
@@ -88,7 +93,9 @@ class CameraOwner:
                  events: Optional[EventLog] = None,
                  stall_timeout_ms: float = 1500.0,
                  clock: Optional[Callable[[], int]] = None,
-                 main_stream: str = "main") -> None:
+                 main_stream: str = "main",
+                 inference_stream: Optional[str] = None,
+                 inference_size: Tuple[int, int] = (0, 0)) -> None:
         if min(int(stream_size[0]), int(stream_size[1])) <= 0:
             raise ConfigError(
                 f"CameraOwner needs a real stream size, got {stream_size}. The retired code's "
@@ -101,6 +108,10 @@ class CameraOwner:
         self.stall_timeout_ms = float(stall_timeout_ms)
         self.clock = clock or time.monotonic_ns
         self.main_stream = main_stream
+        # None means the one-leg station: inference reads the same pixels the operator sees, which is
+        # what it did before the B route's second leg existed.
+        self.inference_stream = inference_stream
+        self.inference_size = (int(inference_size[0]), int(inference_size[1]))
         self.stats = CameraStats()
         self.frame_sequence = 0
         self._previous_sensor_ns = 0
@@ -129,6 +140,10 @@ class CameraOwner:
             self.stats.max_gap_ms = max(self.stats.max_gap_ms, gap_ms)
             self._previous_receive_ns = receive_ns
             image = request.make_array(self.main_stream)
+            # Both legs come from the same request, so the picture and the inference input are the
+            # same instant of light -- two requests would have been two timestamps.
+            inference_image = (request.make_array(self.inference_stream)
+                               if self.inference_stream else None)
             metadata = request.get_metadata() or {}
             metadata['_ota_image_copy_ms'] = (int(self.clock())-receive_ns)/1e6
             sensor_ns = _sensor_timestamp_ns(metadata)
@@ -152,7 +167,9 @@ class CameraOwner:
                 # have made the encoder's frame a function of when libcamera recycled it.
                 self.preview.offer(image, now_ns=receive_ns)
             return CapturedFrame(image, metadata, sensor_ns, receive_ns,
-                                 self.frame_sequence, self.stream_size)
+                                 self.frame_sequence, self.stream_size,
+                                 inference_image=inference_image,
+                                 inference_size=self.inference_size)
         finally:
             # A leaked request pins a buffer, and Picamera2 stops delivering frames once it
             # runs out — which looks exactly like a scene with nothing in it.
@@ -312,7 +329,8 @@ def open_picamera2(model_path: str, *, stream_size: Optional[Tuple[int, int]] = 
 
 def open_picamera2_sensor(camera_model: str, *, stream_size: Tuple[int, int],
                           frame_rate_hz: float, orientation: str = "none",
-                          buffer_count: int = 6) -> Tuple[Any, Dict[str, Any]]:
+                          buffer_count: int = 6,
+                 lores_size: Optional[Tuple[int, int]] = None) -> Tuple[Any, Dict[str, Any]]:
     """Open one explicitly selected camera for a host-side inference provider.
 
     Unlike :func:`open_picamera2`, this path does not construct an IMX500 or let a
@@ -356,8 +374,14 @@ def open_picamera2_sensor(camera_model: str, *, stream_size: Tuple[int, int],
         # transform on this station. The secondary arrived upside down while passing the same
         # Transform object through the video configuration, which is the only way anyone would ever
         # have found out -- so the two sensors now ask for their pixels the same way.
+        streams = {"main": {"size": (width, height), "format": "RGB888"}}
+        if lores_size:
+            # The B route's second leg, from the ISP. Asking the ISP for the small picture is the
+            # point: refusing to configure it is a named ConfigError, never a silent main-only run.
+            streams["lores"] = {"size": (int(lores_size[0]), int(lores_size[1])),
+                                "format": "RGB888"}
         configuration = camera.create_preview_configuration(
-            main={"size": (width, height), "format": "RGB888"},
+            **streams,
             transform=transform,
             controls={"FrameRate": float(frame_rate_hz)},
             buffer_count=int(buffer_count))
@@ -378,5 +402,7 @@ def open_picamera2_sensor(camera_model: str, *, stream_size: Tuple[int, int],
     info = {"camera_num": int(camera_num), "camera_model": model, "sensor_model": _seen,
             "fwnode": _fwnode,
             "stream_size": (width, height), "task": "object_detection",
+            "lores_size": (int(lores_size[0]), int(lores_size[1])) if lores_size else None,
+            "inference_input": "lores" if lores_size else "main",
             "inference_rate_hz": float(frame_rate_hz), "orientation": orientation}
     return camera, info

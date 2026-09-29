@@ -198,3 +198,18 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 
 `camera.py::open_picamera2_sensor` 带返回注解（`-> Tuple[...]`），我用 `def …\(([^)]*)\):` 找签名 ⇒ 正则不匹配 ⇒ 断言先炸、**文件从未写盘**（所以没有半套改动，perception 仍是基线 4 既存失败 / 435 passed）。
 下一手：按字符串锚点插参数（锚 `buffer_count` 那段参数文本，别用正则配平括号）；info 字典要加的两行插在 `"stream_size": (width, height), "task": "object_detection",` 之后（已用 `cat -A` 核对过原文）；`ModelConfig` 加 `camera_lores_width/height`（`_as_int` 点名式校验），visiond 里 `adapter.configure_stream(*(info.get("lores_size") or stream))`，`CameraOwner` 需要按 `info["inference_input"]` 取 lores 帧（**这一处还没读过，动手前先读**）。
+
+### H2 完成（round 5）：一条请求出两条腿，推理吃小的那条
+
+`open_picamera2_sensor(..., lores_size=…)` 现在向 ISP 同时要求 main 与 lores；`CapturedFrame` 多带
+`inference_image` / `inference_size`（**两条腿取自同一个 request**——两次请求就是两个光照时刻）；
+`visiond` 用 `adapter.configure_stream(*(lores or stream))` 把推理配到**它真正会被喂的那条腿**上，
+`process_frame` 拿 `frame.inference_image or frame.image`。profile 侧新增 `camera_lores_width/height`，
+**为 0 就是单腿站**（今天的全部 profile 都是 0，所以这一步不改生产行为——它是 H3 的前提，不是偷跑）。
+芯片上显示的是 `describe()["stream"]`，也就是推理真正吃的那条腿的实测尺寸，不是模型名义输入。
+
+**测试**（`tests/test_lores_leg.py`，4 passed、**零 skip**，在没有 picamera2 的机器上靠注入桩模块跑）：
+两条腿各取一次且都释放、`inference_image` 是小腿 / `image` 是大腿、单腿站行为不变、
+`create_preview_configuration` 的 kwargs 里 `lores.size == (640,360)` 且 `info["inference_input"]=="lores"`。
+**H3 才见真章**：把生产 profile 切 `hailo_yolov8n` 并填 `camera_lores_width/height`，芯片应变绿
+`NN HAILO 640x360`。

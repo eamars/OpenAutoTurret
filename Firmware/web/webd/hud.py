@@ -1147,7 +1147,7 @@ function render(t) {
     const shown = !nf.present ? "NO REPORT"
       : (!nf.fresh ? ("STALE " + Math.round(nf.age_ms) + "ms")
                    : (String(nf.adapter || "?").toUpperCase() + " " + String(nf.model_id || "?")
-                      + " " + (Array.isArray(nf.input_size) ? nf.input_size.join("x") : "?")
+                      + " " + (Array.isArray(nf.stream) ? nf.stream.join("x") : (Array.isArray(nf.input_size) ? nf.input_size.join("x") : "?"))
                       + (nf.opened === false ? " CLOSED" : "")));
     hs.appendChild(chip("NN", state, shown));
   }
