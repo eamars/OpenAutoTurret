@@ -160,13 +160,17 @@ class Station:
                 continue
             if frame.get("type") != "control_trace":
                 continue
-            rows = frame.get("records") or frame.get("rows") or []
+            # The window's rows live under a name the sender owns, so take the list of records rather
+            # than guessing one key and reporting zero when the answer was under another: a "0 records"
+            # window that passes the identity check is worse than a refusal, because it reads as proof.
+            rows = next((value for key, value in sorted(frame.items())
+                         if isinstance(value, list) and value and isinstance(value[0], dict)), [])
             tagged = sum(1 for row in rows if isinstance(row, dict) and expect_context
                          and row.get("param_context") == expect_context)
             return {"records": len(rows), "records_with_context": tagged, "bytes": len(chunk),
                     "truncated": False}
         return {"records": 0, "records_with_context": 0, "bytes": 0, "truncated": False,
-                "reason": "no control_trace frame in 8 s"}
+                "reason": "no control_trace frame in 8 s; an empty window is not a passing window"}
 
     def state(self):
         """The picture, from whichever document the running mode actually publishes.

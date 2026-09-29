@@ -142,7 +142,12 @@ class Runner:
             self.refuse(f"BLOCKED_trace_truncated_{candidate['candidate_id']}: "
                         + str(window.get("reason")))
             return record
-        if window.get("records", 0) and window.get("records_with_context") != window.get("records"):
+        if not window.get("records"):
+            self.refuse(f"BLOCKED_trace_window_empty_{candidate['candidate_id']}: the station returned "
+                        "no records to check, and an empty window satisfies a count comparison by "
+                        "saying nothing")
+            return record
+        if window.get("records_with_context") != window.get("records"):
             self.refuse(f"BLOCKED_trace_identity_missing_{candidate['candidate_id']}: "
                         f"{window.get('records_with_context')}/{window.get('records')} records carry "
                         "the campaign tag; a row without it cannot be attributed to this trial")

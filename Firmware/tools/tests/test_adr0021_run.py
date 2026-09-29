@@ -215,6 +215,15 @@ class TheTraceWindowCarriesTheCampaign(unittest.TestCase):
         self.assertTrue(any(row.startswith("BLOCKED_trace_identity_missing") for row in manifest["blocked"]),
                         manifest["blocked"])
 
+    def test_an_empty_window_is_not_a_passing_window(self):
+        # The first hardware run passed this check with zero records counted, which is the check saying
+        # nothing and being reported as agreement. An empty window now blocks.
+        station = StubStation()
+        station.trace_rows = 0
+        manifest = self._run_with(station)
+        self.assertTrue(any(row.startswith("BLOCKED_trace_window_empty") for row in manifest["blocked"]),
+                        manifest["blocked"])
+
     def test_an_untagged_but_complete_window_is_not_called_a_failure(self):
         # A station with no campaign context set is a different question from a record losing its tag:
         # the runner reports the count and lets the first refusal (no context) speak, not a fake one.
