@@ -174,7 +174,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
     return r; // Only an explicit Manual commissioning launch may apply it.
   }
   if (command == "param_prepare" || command == "param_apply" ||
-      command == "param_restore" || command == "param_snapshot", "param_context") {
+      command == "param_restore" || command == "param_snapshot" || command == "param_context") {
     // The parameter transaction's own surface: `param_prepare` stages one candidate and answers with
     // a request_id and the hash it expects to verify, `param_apply` performs the exchange under that
     // id, `param_snapshot` says which revision is verified right now. Shape only — whether a value is
@@ -186,6 +186,10 @@ inline CommandResult validate_command(const SystemCommandState& s,
     }
     if (command == "param_apply" && (arg.empty() || arg.size() > 64)) {
       r.error = "param_apply needs the request_id a prepare returned";
+      return r;
+    }
+    if (command == "param_context" && (arg.empty() || arg.size() > 39)) {
+      r.error = "param_context needs a campaign tag of 1-39 characters";
       return r;
     }
     if ((command == "param_restore" || command == "param_snapshot") && !arg.empty()) {
