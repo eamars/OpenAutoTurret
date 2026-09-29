@@ -2,13 +2,17 @@
 
 This adapter deliberately turns one synchronous Hailo NMS result into the existing
 ``DetectionSet`` contract. It does not add another tracker, selector, preview stream,
-or protocol. The commissioned profile is the fixed 640x480 IMX477 stream letterboxed
-to the HEF's 640x640 RGB input.
+or protocol. The commissioned profile is a 640-wide leg letterboxed to the HEF's 640x640
+RGB input, and the leg's height is allowed to differ per camera.
+
+The adapter owns what is *per camera*: geometry, the padding it adds, its counters, its
+``camera_id``. The chip is not per camera — see ``hailo_device``, which exists because H5
+assumed otherwise and the station came down. Constructing this adapter alone opens its own
+device, so a one-camera station behaves exactly as it did before; a second camera is handed
+the first one's device and joins it.
 """
 from __future__ import annotations
 
-from contextlib import ExitStack
-import hashlib
 import os
 import time
 from typing import Any, List
@@ -17,6 +21,7 @@ import numpy as np
 
 from ..errors import ModelRejected
 from .adapter import ModelAdapter, resolve_artifact
+from .hailo_device import HailoDevice
 
 
 class HailoYoloAdapter(ModelAdapter):
@@ -24,37 +29,29 @@ class HailoYoloAdapter(ModelAdapter):
 
     name = "hailo"
 
-    def __init__(self, manifest, *, generation: int = 1) -> None:
+    def __init__(self, manifest, *, generation: int = 1, device: HailoDevice | None = None) -> None:
         super().__init__(manifest, generation=generation)
-        self._stack: ExitStack | None = None
-        self._infer = None
-        self._input_name = ""
-        self._output_name = ""
-        self._device_id = ""
-        self._architecture = ""
-        self._artifact_path = ""
+        # Passed in for the second camera; None here means this adapter opens (and owns) its own.
+        self._owns_device = device is None
+        self.device = device or HailoDevice()
+        self._member = ""
         self._last_model_inference_ms = 0.0
+
+    @property
+    def artifact_sha256(self) -> str:
+        return self.device.facts_for(self.camera_id)["artifact_sha256"]
 
     def open(self) -> None:
         self.manifest.validate()
         gaps = self.manifest.commissioning_gaps(requires_artifact=True)
         if gaps:
             raise ModelRejected("Hailo model manifest is incomplete: " + "; ".join(gaps))
-        self._artifact_path = os.path.realpath(resolve_artifact(self.manifest.path))
-        if not os.path.isfile(self._artifact_path):
-            raise ModelRejected(f"Hailo HEF does not exist: {self._artifact_path}")
+        artifact_path = os.path.realpath(resolve_artifact(self.manifest.path))
+        if not os.path.isfile(artifact_path):
+            raise ModelRejected(f"Hailo HEF does not exist: {artifact_path}")
         expected_sha = str(self.manifest.sha256).strip().lower()
         if len(expected_sha) != 64 or any(ch not in "0123456789abcdef" for ch in expected_sha):
             raise ModelRejected("Hailo manifest must pin a 64-character SHA-256")
-        digest = hashlib.sha256()
-        with open(self._artifact_path, "rb") as artifact:
-            for block in iter(lambda: artifact.read(1024 * 1024), b""):
-                digest.update(block)
-        self.artifact_sha256 = digest.hexdigest()
-        if self.artifact_sha256 != expected_sha:
-            raise ModelRejected(
-                f"Hailo HEF SHA-256 mismatch for {self._artifact_path}: "
-                f"expected {expected_sha}, got {self.artifact_sha256}")
 
         if (self.manifest.input_width, self.manifest.input_height) != (640, 640):
             raise ModelRejected("this Hailo profile requires the pinned 640x640 HEF input")
@@ -63,73 +60,26 @@ class HailoYoloAdapter(ModelAdapter):
         if (self.manifest.bbox_order, self.manifest.bbox_normalized) != ("yxyx", True):
             raise ModelRejected("the Hailo NMS adapter requires normalized [ymin,xmin,ymax,xmax] boxes")
 
-        stack = ExitStack()
-        try:
-            from hailo_platform import (
-                ConfigureParams,
-                Device,
-                FormatType,
-                HEF,
-                HailoStreamInterface,
-                InferVStreams,
-                InputVStreamParams,
-                OutputVStreamParams,
-                VDevice,
-            )
-
-            device_ids = Device.scan()
-            if len(device_ids) != 1:
-                raise ModelRejected(f"expected one Hailo device, found {len(device_ids)}: {device_ids}")
-            with Device(device_ids[0]) as physical:
-                board = physical.control.identify()
-                self._architecture = str(board.device_architecture)
-            if self._architecture != "HAILO8":
-                raise ModelRejected(f"pinned HEF targets HAILO8; device reports {self._architecture}")
-
-            hef = HEF(self._artifact_path)
-            inputs = hef.get_input_vstream_infos()
-            outputs = hef.get_output_vstream_infos()
-            if len(inputs) != 1 or len(outputs) != 1:
-                raise ModelRejected(
-                    f"expected one input and output vstream; got {len(inputs)} and {len(outputs)}")
-            if tuple(inputs[0].shape) != (640, 640, 3):
-                raise ModelRejected(f"HEF input shape is {inputs[0].shape}, expected 640x640x3")
-            self._input_name, self._output_name = inputs[0].name, outputs[0].name
-
-            vdevice = stack.enter_context(VDevice(device_ids=device_ids))
-            configure = ConfigureParams.create_from_hef(hef, HailoStreamInterface.PCIe)
-            groups = vdevice.configure(hef, configure)
-            if len(groups) != 1:
-                raise ModelRejected(f"expected one Hailo network group, got {len(groups)}")
-            network_group = groups[0]
-            input_params = InputVStreamParams.make(
-                network_group, quantized=True, format_type=FormatType.UINT8)
-            output_params = OutputVStreamParams.make(
-                network_group, quantized=False, format_type=FormatType.FLOAT32)
-            self._infer = stack.enter_context(InferVStreams(
-                network_group, input_params, output_params))
-            stack.enter_context(network_group.activate(network_group.create_params()))
-            self._stack = stack
-            self._device_id = str(device_ids[0])
-            self.opened = True
-        except ModelRejected:
-            stack.close()
-            raise
-        except Exception as exc:  # noqa: BLE001 - runtime dependency failures are model refusal
-            stack.close()
-            raise ModelRejected(f"HailoRT could not open {self._artifact_path}: {exc}") from exc
+        # A camera id is usually not known yet at open() — the sensor is identified when it starts —
+        # so a member is named by profile here and every *counter* is keyed later, by the camera id
+        # that arrives with the frame. Refusals still name whoever asked.
+        self._member = self.camera_id or f"hailo:{self.manifest.model_id}"
+        self.device.open_for(self._member, artifact_path=artifact_path, expected_sha=expected_sha,
+                              require_input=(640, 640, 3), profile=str(self.manifest.model_id))
+        self.opened = True
 
     def close(self) -> None:
         self.opened = False
-        self._infer = None
-        stack, self._stack = self._stack, None
-        if stack is not None:
-            stack.close()
+        member, self._member = self._member, ""
+        if member:
+            self.device.release(member)
+        if self._owns_device:
+            self.device.close()
 
     def infer(self, image: Any, metadata: Any = None, *, frame_sequence: int,
               sensor_timestamp_ns: int, publish_timestamp_ns: int,
               camera_id: str = ""):
-        if not self.opened or self._infer is None:
+        if not self.opened:
             raise ModelRejected("HailoYoloAdapter.infer() before open()")
         self.check_camera(camera_id)
         self.note_inference()
@@ -162,16 +112,19 @@ class HailoYoloAdapter(ModelAdapter):
 
         inference_started = time.monotonic_ns()
         try:
-            result = self._infer.infer({self._input_name: tensor})
-        except Exception as exc:  # noqa: BLE001 - frame failure is counted by the pipeline
+            result = self.device.run(tensor, camera_id=camera_id or self.camera_id)
+        except ModelRejected:
             self.failures += 1
-            raise ModelRejected(f"Hailo inference failed: {exc}") from exc
+            raise
         inference_finished = time.monotonic_ns()
+        # Wall time through the shared device: the chip plus whatever this feed waited for the other
+        # camera. The split lives in describe() as queue_wait_ms / device_ms, because "the model got
+        # slower" and "this camera is starved" want different answers.
         self._last_model_inference_ms = (inference_finished - inference_started) / 1_000_000.0
 
         parse_started = time.monotonic_ns()
         try:
-            batch = result[self._output_name]
+            batch = result[self.device.output_name]
             if not isinstance(batch, (list, tuple)) or len(batch) != 1:
                 raise ValueError("expected one output batch for one input frame")
             class_outputs = batch[0]
@@ -230,9 +183,10 @@ class HailoYoloAdapter(ModelAdapter):
 
     def describe(self):
         report = super().describe()
-        report.update({"hailo_device_id": self._device_id,
-                       "device_architecture": self._architecture,
-                       "artifact_path": self._artifact_path,
-                       "artifact_sha256": getattr(self, "artifact_sha256", ""),
-                       "model_inference_ms": round(self._last_model_inference_ms, 3)})
+        facts = self.device.facts_for(self.camera_id)
+        report.update({key: facts[key] for key in
+                       ("hailo_device_id", "device_architecture", "artifact_path",
+                        "artifact_sha256", "shared_with", "members", "queue_wait_ms", "device_ms",
+                        "device_served", "device_failures", "turn_contested")})
+        report["model_inference_ms"] = round(self._last_model_inference_ms, 3)
         return report

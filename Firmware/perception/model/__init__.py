@@ -23,11 +23,12 @@ from .adapter import (OFFLINE_ADAPTERS, MockAdapter, ModelAdapter, build_adapter
                       resolve_artifact, rows_for_moving_target)
 from .compatibility_probe import ProbeResult, admit, probe_model
 from .environment import EnvironmentManifest, labels_hash, sha256_file
+from .hailo_device import HailoDevice
 from .label_maps import COCO, LabelMap, resolve
 from .manifest import (MANIFEST_SCHEMA_VERSION, Disagreement, ModelManifest,
                        normalise_task)
 
-__all__ = ["COCO", "Disagreement", "EnvironmentManifest", "LabelMap",
+__all__ = ["COCO", "Disagreement", "EnvironmentManifest", "HailoDevice", "LabelMap",
            "MANIFEST_SCHEMA_VERSION", "MockAdapter", "ModelAdapter", "ModelManifest",
            "OFFLINE_ADAPTERS",
            "ProbeResult", "admit", "build_adapter", "labels_hash", "manifest_for",

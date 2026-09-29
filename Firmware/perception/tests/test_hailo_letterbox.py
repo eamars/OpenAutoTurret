@@ -35,15 +35,21 @@ class FakeRuntime:
         return {"output0": [classes]}
 
 
-def build_adapter():
+def build_adapter(person_box=None):
+    """An adapter on a fake runtime, but on the *device* the station uses.
+
+    The old version reached into ``adapter._infer`` and skipped ``HailoDevice`` entirely, which meant
+    the letterbox was tested around the code that shares the chip. Going through the device costs
+    this file nothing and it is what makes "a rejected frame never reaches the accelerator" a claim
+    about the real path.
+    """
+    from perception.model.hailo_device import HailoDevice
     with open(MANIFEST, encoding="utf-8") as handle:
         manifest = ModelManifest.from_dict(json.load(handle))
-    adapter = HailoYoloAdapter(manifest)
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(person_box=person_box)
+    adapter = HailoYoloAdapter(manifest, device=HailoDevice.for_testing(
+        runtime, input_name="input_0", output_name="output0"))
     adapter.opened = True
-    adapter._infer = runtime
-    adapter._input_name = "input_0"
-    adapter._output_name = "output0"
     return adapter, runtime
 
 
@@ -103,18 +109,7 @@ class PadRoundTrip(unittest.TestCase):
     """
 
     def _rows(self, leg_h, tensor_box):
-        from perception.model.hailo_yolo import HailoYoloAdapter
-        import json as _json
-        import os as _os
-        from perception.model.manifest import ModelManifest
-        with open(MANIFEST, encoding="utf-8") as handle:
-            manifest = ModelManifest.from_dict(_json.load(handle))
-        adapter = HailoYoloAdapter(manifest)
-        runtime = FakeRuntime(person_box=list(tensor_box))
-        adapter.opened = True
-        adapter._infer = runtime
-        adapter._input_name = "input_0"
-        adapter._output_name = "output0"
+        adapter, _runtime = build_adapter(person_box=list(tensor_box))
         adapter.configure_stream(640, leg_h)
         captured = {}
 

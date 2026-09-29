@@ -399,13 +399,24 @@ def offline_scene_rows(frame_sequence: int) -> List[List[float]]:
 def build_adapter(config: VisionConfig, *, profile: Optional[str] = None,
                   manifest: Optional[ModelManifest] = None,
                   mock_rows: Optional[Any] = None,
+                  device: Optional[Any] = None,
                   imx500_factory: Optional[Callable[[str], Any]] = None) -> ModelAdapter:
-    """Construct the adapter a profile names (§5: one model owns inference at a time)."""
+    """Construct the adapter a profile names (§5: one model owns inference at a time).
+
+    ``device`` belongs to the Hailo path only: one physical Hailo-8 carries one HailoRT context, so
+    a two-camera station builds the second adapter with the first one's device. Left out, an adapter
+    opens its own, which is what a single-camera station has always done.
+    """
     from .imx500_yolo import Imx500YoloAdapter
 
     model: ModelConfig = config.model_for(profile or config.profile)
     manifest = manifest or manifest_for(config, profile or config.profile)
     kind = (model.adapter or "").strip().lower()
+    if device is not None and kind not in ("hailo", "hailo8"):
+        raise ConfigError(
+            f"a shared Hailo device was handed to the {kind} adapter, which would ignore it. Either "
+            "this profile runs on the Hailo or nothing is sharing that chip; say which. A device "
+            "nobody holds is how two contexts get opened on one accelerator again.")
     if kind in OFFLINE_ADAPTERS:
         # An unscripted mock still has to produce *something*: a daemon whose mock profile
         # emits empty frames records an empty dataset and reports green metrics. The default
@@ -417,7 +428,7 @@ def build_adapter(config: VisionConfig, *, profile: Optional[str] = None,
                                  anchor_cfg=config.anchor)
     if kind in ("hailo", "hailo8"):
         from .hailo_yolo import HailoYoloAdapter
-        return HailoYoloAdapter(manifest)
+        return HailoYoloAdapter(manifest, device=device)
     raise ConfigError(
         f"unknown adapter {model.adapter!r} for profile {model.profile_name!r}. "
         f"known: mock, imx500, hailo. A typo here must stop startup: an adapter chosen by "

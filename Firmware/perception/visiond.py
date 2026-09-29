@@ -503,10 +503,16 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             merge_view = MergedTrackSetView(
                 max_age_ns=int(float(config.merge_max_age_ms) * 1_000_000))
 
+            # One physical Hailo-8 carries one HailoRT context, so the second camera joins the first
+            # adapter's device instead of opening its own. H5 did it the other way round and the chip
+            # answered HAILO_DEVICE_IN_USE(73) — see the post-mortem in the work order. A non-Hailo
+            # primary has no device to lend, and build_adapter refuses a device it would ignore.
+            shared_device = getattr(adapter, "device", None)
+
             def detail_factory(camera_id, _config=config, _manifest=manifest,
-                               _events=None):
+                               _device=shared_device, _events=None):
                 from .model import build_adapter as _build
-                second = _build(_config, manifest=_manifest)
+                second = _build(_config, manifest=_manifest, device=_device)
                 second_events = EventLog(capacity=256)
                 second_pipeline = PerceptionPipeline(
                     _config, adapter=second, event_log=second_events,
