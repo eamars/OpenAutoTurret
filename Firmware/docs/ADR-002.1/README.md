@@ -45,6 +45,13 @@ pitch 是**寄存器读回**、异步完成——`pitch_control_trial` 先读当
 也会拒绝与当前二进制不一致的旧文档。清单里 `yaw.friction.enabled` 被标成 `fixed_in_campaign`，理由写在条目本身：
 现在 trial 命令用"任一幅度 > 0"反推这个开关，所以开/关不是单变量对照（§4）。
 
+## 进行中：冻结的 planner（campaign.lock.json）
+
+`Firmware/tools/adr0021_plan.py` 把设计**一次算死**写进 `campaign.lock.json`：维度名必须来自清单的 `experiment_writable`（保护字段被拒时连条款一起报，D7），
+coarse 固定 16（要改必须写 `coarse_count_reason`）、refine ≤8 且必须带 gate、confirm ≥2、stop 必须写 max_trials 与 no_improvement_rounds、payload 必须绑定。
+锁文件把 `design_sha256` + 清单 SHA-256 + 二进制 SHA + source_rev 绑在一起；`--check` 会拒绝事后被改过的设计与已经漂移的清单/二进制。
+样板见 `manifests/campaign.example.json`（levels 是现网 boot 值的乘子）。**runner 跑起来不决定任何一轮**——D6。
+
 ## 离线验证
 
 ```bash

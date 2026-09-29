@@ -1,0 +1,15 @@
+{
+  "_what": "一份冻结设计的样板。levels 是现网 boot 值（Kp=1 A/(rad/s)、Ki=0.6 A/rad，来自 parameter_inventory.json 的 actual_value）的乘子，不是凭空的数字。真战役的锁文件由 tools/adr0021_plan.py --freeze 生成；改设计=换战役，不是改文件。",
+  "campaign_id": "yaw-current-example",
+  "objective": "在固定速度下比较 yaw 电流环增益对抖动的影响",
+  "dimensions": [
+    {"name": "yaw.current_kp_a_per_rad_s", "levels": [0.6, 1.0, 1.6, 2.4]},
+    {"name": "yaw.current_ki_a_per_rad_s", "levels": [0.3, 0.6, 1.0, 1.5]}
+  ],
+  "refine": {"max_candidates": 8, "gate": "相对改进 > 0.15 才进 refine（D4：refine 是条件阶段）", "levels_per_dimension": 2},
+  "confirm": {"repeats": 3},
+  "stop": {"max_trials": 30, "no_improvement_rounds": 2},
+  "fixed": {"velocity_dps": 6.0, "hold_ms": 1200},
+  "scorer": {"metric": "jitter_rad_s_pp", "worse_is_better": false},
+  "payload_profile": "no_payload"
+}
