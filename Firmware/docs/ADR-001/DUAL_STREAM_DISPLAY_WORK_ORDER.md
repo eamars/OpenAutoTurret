@@ -131,3 +131,14 @@ PIP 按钮 `#pipopen`（关着就在角上可见）；实测帧率走 HUD **已�
 2. 起来之后**把模式放回 MANUAL**（主人有意 park；`/api/command` 的载荷形状是 `{"command": …}`）.
 3. 屏幕上要看见：芯片 `FRESH 216HZ/A3`（或未配置 / 无样本 / `STALE <ms>`）；PIP 按钮在指定角上；点开才有请求；
    PIP 上显示**这一路自己的**实测帧率；单摄部署下这些东西一个都不出现.
+
+### 部署后的实况（09-29 晚，release `77bfb0d77511.YY0CWa`，`77bfb0d`）
+
+从**页面实际吃的那条 `/ws`** 抓的一帧（不是 `/api/state`）：
+`video_streams=[('detail',8.97,True),('wide',8.98,True)]`；
+`imu={present:True, fresh:True, rate_hz:215.2, world_elevation_valid:False}`；`camera_id cam-baa28c2a by-path`.
+页面源码里 `pictureBox`×2、`placePip`×6、`ResizeObserver`×1、`#pipopen`×1、`indexOf("FRESH")`×1.
+
+**两条留给主人的判断**：① 芯片文字用了 `imuLabel` 的整串（`FRESH 215HZ|RATE …`），信息全但**偏长**，要不要精简版；
+② 画面左上角与 `#mode-block` 撞上时下移让开——**近方形窗口会明显往下掉一格**，不合适就改让法。
+**还欠一条测试**：`/ws` 载荷带叠加层这件事现在只有线上实证，没有回归测试钉住。
