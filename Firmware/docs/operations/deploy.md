@@ -118,6 +118,15 @@ station. The station is an instrument, not a scratch pad.
 
 ## Known failure modes, with their reasons
 
+- **The remote step exits 2 right after a successful cross build** → the deploy ran without
+  `--prebuilt`, so `run_application.sh deploy` on the station tried a **native** build and this station
+  has no native dependency set. A cross build that already produced the artifacts must be handed over
+  with `--prebuilt`; that flag is not an optimisation, it is the half of the route that says "the
+  station compiles nothing".
+- **A stale release directory that never activated** is normal after a failed deploy: the tool creates
+  the directory before it builds. Remove it (`run/releases/<sha>.XXXXXX`) rather than letting the pile
+  grow -- this station accumulated 106 release directories and 20 GB. Deleting the release a document
+  names as qualified removes that document's rollback artifact, so say which ones you removed.
 - **`ninja: error: mkdir(/workspace)`** on the station → you tried to build a release tree that was
   configured on another machine. Use the cross path or route A.
 - **Four YAML-reading tests fail only on the station** → a test baked `__FILE__` from the compile

@@ -37,3 +37,12 @@ stopping cleanly — a known defect on the account, not a reason to reach for `k
 Manual/Hold is an **operator override**, not a state to normalize: if the operator parked the
 station on purpose — for instance because yaw cannot currently be driven stably — a restart that
 silently returns it to AUTO_ROAM is a change of intent made by the wrong party.
+
+## Sending a command while it runs
+
+`POST /api/command` takes a body of the shape `{"command": ...}`. A payload shaped some other way is
+rejected by the request model with a validation list naming `body.command` -- that is a 422 from the
+web layer, not a controller refusal, and the two mean different things to whoever is debugging.
+
+The operator's mode override survives a stack restart only by accident: an activation ends in
+AUTO_ROAM by design, so if the operator parked the station on purpose, put it back and say so.
