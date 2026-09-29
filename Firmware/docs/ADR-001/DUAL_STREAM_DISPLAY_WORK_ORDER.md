@@ -331,3 +331,27 @@ webd **279 passed / 1 skipped**、doc-tree 绿、arch_lint 无新红、`camera_r
 - 汇流画布 = 发布的画面（广角的 1920×1080）；窄角 TrackSet 也声明它，所以合并文档只声明一个几何。
 - `describe()` 现在每路各自带 `stream`（腿尺寸）、`declared`、`inference_fps`（自测，窗口 ≥1 s，
   **没测够就不出现这个键**，不写 0）；`inference_health.json` 多 `cameras`/`detail_stream`/`merge` 三块。
+
+### H5 的真机结论：**一个 Hailo 设备不允许第二个 context**（`32a765d` 上线即倒，`c0649f7` 恢复）
+
+主人那句「你改错咯」是对的，现场和他看到的一样：`/api/video/start` 返 500、预览全停。死因不是我推的，
+是 HailoRT 自己在 `vision.log` 里喊的：
+
+```
+[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DEVICE_IN_USE(73)
+visiond: model refused (§9.3): HailoRT could not open .../yolov8n.hef: error 73 (HAILO_DEVICE_IN_USE)
+```
+
+**读法**：`HailoYoloAdapter.open()` 拥有设备，所以"一个 adapter 一个摄像头"在 Hailo 上等于"一个摄像头一个
+HailoRT context"——而这块 Hailo-8 只许一个 context。于是第二个 adapter 一 `open()` 就把整个 visiond 带走
+（EXIT_MODEL）。**它没有静默退回单摄**，这一点是 ① 要的行为，我认它死得吵；错在我把"per-camera adapter"
+直接等同于"per-camera device"，而 device 这一层根本还没拆出来。
+
+**当下的处置是配置，不是代码**：`secondary.lores_width/height = 0`（`_why` 里带着这条实测理由）。窄角回到
+预览-only，广角一切照旧——恢复后实读 `后端 = hailo | inference_fps = 29.91 | failures = 0`，
+`/api/video/start` 返 `ok: True`，两路预览在流（detail 7.99 / wide 6.99），`MANUAL`，单 release。
+**"关掉"是被发布出来的**：健康文档里 `cameras` 键**不存在**（不是 `0 Hz`），所以页面上少一路是看得见的状态。
+
+**H6 的正解（下一轮）**：把 device 从 adapter 里拆出来——**一个 context、一个 runner、两个摄像头共用**；
+per-camera 的仍是几何、pad、计数器与 `camera_id`。共用 runner 会把两路串行化，所以 `measure_dual_feed.py`
+先量出公平性与各自 fps，再决定要不要上 multi-instance vstream。**没有读数不改架构**。
