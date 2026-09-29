@@ -51,3 +51,28 @@ HUD：**PIP 左上角、默认隐藏**，显示后可 wide/detail 互换，**两
 | 7 | **webd 重启不丢相机归属** | 只重启 webd：visiond **不**重开 `/dev/media*`（比对 visiond 进程 `/proc/<pid>/fd` 里的 media fd 集合不变、`video_streams.json` 的 `camera_id` 不变），预览 5 s 内自己回来 |
 
 第 7 条是 (b) 的意义所在：**webd 崩了、升级了、被重启，都不能让相机重新被人抢一次。**
+
+---
+
+## Slice 3C 的真面目（09-29 下午核过代码，不是我推测的）
+
+`PerceptionPipeline.process_frame(...)` **没有 `camera_id` 参数** ⇒ 今天的 pipeline 天生单相机:
+第二颗传感器的帧直接喂进去,会被折进第一颗的跟踪状态里.这不是"加个循环"能解决的,
+**它就是 `visiond.py:527` 与 `telemetry.hpp:314` 两处注释都在指的那次 dual-worker cut**.
+
+**这一轮先交不需要真机、也不需要架构决定的那块**:`perception/inference_gate.py`
+——一颗加速卡、两路相机的**推理仲裁器**.三条固定性质,都有测试(`selftest` 6 条 + pytest 7 条,零硬件):
+
+| 性质 | 为什么是它 |
+|---|---|
+| **有界、latest-wins、按相机分别计数** | 生产数字是 depth 2(实测).积压不是历史,是对"现在"的谎;`dropped_full` 与 `failures` **分开计**,因为它们是两种病 |
+| **轮转,不是到达序** | 广角每次都早一微秒提交就能把窄角饿死.**公平是性质,所以有测试**,`fairness = min/max` 直接发布 |
+| **一设备一线程;失败会喊** | 第一条异常带名字进 stderr(B45),之后只计数.设备一直失败应该让流降级,不该让守护进程退休 |
+
+**那次 cut 还欠的三步**(按依赖顺序):
+1. `process_frame` 接受 `camera_id`(或由 pipeline 持有 per-camera 状态),否则第二路的框会串进第一路的轨迹;
+2. **per-camera adapter**:广角今天用的是 IMX500 片上 RPK(站点实测 `camera_fps ≈ 26.01`),而 IMX477 没有片上 NN ⇒ **它必须走 Hailo**,所以是一个 pipeline 里两个 adapter,不是一个 adapter 吃两路;
+3. 轨迹/选择的合并:`perception/tracking/camera_registry.py` 已经在"按 durable id 分轨迹"上了,缺的是把两路的 `TrackSet` 汇进 `controld` 的那一层(§20 的线格式要加身份,`telemetry.hpp` 的注释已经预感到这件事).
+
+**上线时要量的两个数**(唯一需要站点的部分):两路各自的**实测** delivered FPS 仍 ≈30/30,
+以及仲裁器发布的 `fairness`(应 ≥0.9)。其余全部可用 `MockAdapter` 在无设备上验证。
