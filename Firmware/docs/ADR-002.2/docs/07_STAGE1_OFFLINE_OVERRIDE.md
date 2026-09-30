@@ -74,5 +74,7 @@ qualify station ownership, mode transitions or stopping.
 
 Record independently: mathematical software status, hardware capability status, physical
 calibration status, plant identification status and 3a/3b qualification. The full ADR is
-DONE only after the complete physical matrix. This session is authorized solely through
-Stage 1; stop before connecting to any station or acquiring real feedback.
+DONE only after the complete physical matrix. The original Stage 1 session ended at
+the offline boundary. Subsequent Stage 2 authorization and the stricter requirement
+after the failed inventory are recorded in [current readiness](../reports/STAGE2_READINESS.md).
+That authorization does not permit using the station to verify software corrections.

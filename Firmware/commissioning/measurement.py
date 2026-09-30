@@ -6,7 +6,7 @@ from scipy.optimize import minimize_scalar
 from scipy.spatial.transform import Rotation
 from scipy.signal import welch, coherence
 
-from .contracts import Reason, array, digest, require
+from .contracts import Reason, Rejected, array, digest, require
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,55 @@ class EncoderMapping:
         phase = np.unwrap(values*2*np.pi/self.counts_per_motor_turn)
         return (self.sign*phase/self.motor_turns_per_output_turn+
                 self.physical_zero_rad+self.session_offset_rad)
+
+
+@dataclass(frozen=True)
+class BoundedEncoderMapping:
+    """Finite protocol endpoint encoding (e.g. CyberGear type-2 position).
+
+    Endpoint units must be verified against mechPos before a measured calibration
+    is qualified. This mapping has no modulo unwrap and never turns a finite
+    endpoint transition into a small wraparound motion.
+    """
+    raw_min: int
+    raw_max: int
+    shaft_min_rad: float
+    shaft_max_rad: float
+    motor_turns_per_output_turn: float
+    sign: int
+    physical_zero_rad: float
+    session_offset_rad: float
+
+    def convert(self, counts):
+        require(type(self.raw_min) is int and type(self.raw_max) is int and self.raw_min < self.raw_max and
+                self.sign in (-1, 1) and type(self.sign) is int and self.motor_turns_per_output_turn > 0 and
+                np.isfinite([self.shaft_min_rad, self.shaft_max_rad, self.motor_turns_per_output_turn,
+                             self.physical_zero_rad, self.session_offset_rad]).all() and
+                self.shaft_max_rad > self.shaft_min_rad, Reason.DATA_INVALID,
+                "verified finite encoder endpoints/ratio/sign/session mapping required")
+        values = np.asarray(counts)
+        require(values.ndim == 1 and values.dtype.kind in 'iuf' and np.isfinite(values).all() and
+                np.all(values == np.floor(values)) and np.all((values >= self.raw_min) & (values <= self.raw_max)),
+                Reason.DATA_INVALID, "invalid bounded encoder counts")
+        angle = self.shaft_min_rad + (values-self.raw_min)*(self.shaft_max_rad-self.shaft_min_rad)/(self.raw_max-self.raw_min)
+        return self.sign*angle/self.motor_turns_per_output_turn + self.physical_zero_rad + self.session_offset_rad
+
+
+def convert_encoder(counts, mapping, *, measured=False):
+    fields = dict(mapping)
+    encoding = fields.pop("encoding", None)
+    require(encoding is not None or not measured, Reason.DATA_INVALID,
+            "measured encoder calibration must declare its encoding")
+    if encoding in (None, "modulo_count"):
+        kind = EncoderMapping
+    elif encoding == "bounded_count":
+        kind = BoundedEncoderMapping
+    else:
+        require(False, Reason.INTEGRATION_MISMATCH, "unsupported encoder encoding")
+    try:
+        return kind(**fields).convert(counts)
+    except (TypeError, KeyError) as exc:
+        raise Rejected(Reason.DATA_INVALID, "encoder fields do not match the declared encoding") from exc
 
 
 def verify_stream(time, sequence, generation, valid, *, max_gap_s):

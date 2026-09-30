@@ -1,0 +1,3 @@
+# Project-local venv only. Mathematical tests also use ADR-002.2/requirements-offline.txt.
+pytest==9.1.1
+PyYAML==6.0.3

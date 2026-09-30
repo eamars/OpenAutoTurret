@@ -52,5 +52,8 @@
   "station_access_scope": "READ_ONLY_HOST_INTERFACE_FILES_AND_POWER_OBSERVATIONS",
   "motor_or_imu_transport_opened": false,
   "stage2_status": "BLOCKED_BEFORE_PHYSICAL_ACQUISITION",
-  "stage2_readiness_report": "reports/STAGE2_READINESS.json"
+  "stage2_readiness_report": "reports/STAGE2_READINESS.json",
+  "local_baseline_acquisition": "IMPLEMENTED_AND_LOCALLY_REHEARSED_NOT_DEPLOYED",
+  "active_acquisition": "INCOMPLETE",
+  "encoder_mapping_update": "explicit finite count encoding; no plant/synthesis/quality-rule change"
 }

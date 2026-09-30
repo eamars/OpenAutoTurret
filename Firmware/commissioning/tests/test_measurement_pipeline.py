@@ -6,7 +6,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from Firmware.commissioning.contracts import Identity,Reason,Rejected,digest
 from Firmware.commissioning.normalization import normalize_raw,current_si
-from Firmware.commissioning.measurement import estimate_observer,lever_arm_calibration,accelerometer_model
+from Firmware.commissioning.measurement import estimate_observer,lever_arm_calibration,accelerometer_model,convert_encoder
 
 
 def raw_fixture():
@@ -36,6 +36,31 @@ def raw_fixture():
 
 
 class MeasurementPipelineTests(unittest.TestCase):
+    def test_bounded_pitch_encoding_crosses_existing_normalization_boundary(self):
+        raw,cal,identity=raw_fixture();raw['axis']='pitch'
+        t=np.asarray(raw['encoder']['sample_time_s']);q=.1+.1*t
+        raw['encoder']['raw_count']=np.rint((q+12.5)*65535/25).astype(int).tolist()
+        raw['gyro']['raw_rad_s']=np.tile([.01,.12,.03],(len(q),1)).tolist()
+        cal['encoder']={'encoding':'bounded_count','raw_min':0,'raw_max':65535,
+            'shaft_min_rad':-12.5,'shaft_max_rad':12.5,'motor_turns_per_output_turn':1.,'sign':1,
+            'physical_zero_rad':0.,'session_offset_rad':0.}
+        cal['identity_hash']=digest({k:v for k,v in cal.items() if k!='identity_hash'})
+        identity=replace(identity,measurement=cal['identity_hash']);raw['identity']=identity.__dict__
+        run=normalize_raw(raw,cal,identity)
+        np.testing.assert_allclose(run.q,q,atol=25/65535/2,rtol=0)
+        np.testing.assert_allclose(run.v,.1,atol=1e-12)
+        self.assertEqual(run.identity.provenance,'SYNTHETIC')
+        # A finite end-to-end jump is not a modulo wrap, and both endpoints count.
+        np.testing.assert_allclose(convert_encoder([0,65535,0],cal['encoder']),[-12.5,12.5,-12.5])
+        for bad in ([65536],[-1],[1.5],[True],['12']):
+            with self.assertRaises(Rejected):convert_encoder(bad,cal['encoder'])
+
+    def test_measured_encoder_cannot_guess_encoding_or_mix_mapping_fields(self):
+        _,cal,_=raw_fixture()
+        with self.assertRaises(Rejected):convert_encoder([1,2,3],cal['encoder'],measured=True)
+        with self.assertRaises(Rejected):convert_encoder([1,2,3],{**cal['encoder'],'encoding':'bounded_count'})
+        with self.assertRaises(Rejected):convert_encoder([1,2,3],{**cal['encoder'],'encoding':'unknown'})
+
     def test_raw_units_coordinates_clock_and_tx_normalize(self):
         raw,cal,identity=raw_fixture();run=normalize_raw(raw,cal,identity)
         np.testing.assert_allclose(run.v,.1,atol=1e-12);np.testing.assert_allclose(run.tx,.1)

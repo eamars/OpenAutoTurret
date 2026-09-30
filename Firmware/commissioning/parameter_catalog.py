@@ -44,7 +44,12 @@ def catalog(nq=5):
         "derived","hybrid start","same startup runs and applied boundaries","censor unsuccessful starts",
         "endpoint coverage and valid TX","boolean; censored never qualifies motion",uncertainty="directed interval/censoring")
     for name,unit,shape,meaning in (
-        ("encoder.counts_per_motor_turn","count/turn",(),"Encoder modulus"),
+        ("encoder.encoding","enum",(),"modulo_count or bounded_count; measured calibration must state which"),
+        ("encoder.counts_per_motor_turn","count/turn",(),"Encoder modulus; required only for modulo_count"),
+        ("encoder.raw_min","count",(),"Inclusive finite raw endpoint; required only for bounded_count"),
+        ("encoder.raw_max","count",(),"Inclusive finite raw endpoint; required only for bounded_count"),
+        ("encoder.shaft_min_rad","rad",(),"Verified angle at finite raw_min; required only for bounded_count"),
+        ("encoder.shaft_max_rad","rad",(),"Verified angle at finite raw_max; required only for bounded_count"),
         ("encoder.motor_turns_per_output_turn","1",(),"Gear ratio including internal gearbox"),
         ("encoder.sign","1",(),"Output shaft direction"),
         ("encoder.physical_zero_rad","rad",(),"Recoverable mechanical zero"),

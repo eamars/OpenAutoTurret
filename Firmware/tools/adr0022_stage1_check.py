@@ -76,8 +76,10 @@ def audit(matrix_path,local_root):
             Reason.DATA_INVALID,'final expanded parameter catalog tests did not pass')
     logs['parameter_catalog_final']=file_evidence(path)
     path=local_root/'ctest.log';contents=path.read_text(encoding='utf-8')
-    require('100% tests passed, 0 tests failed out of 82' in contents,Reason.DATA_INVALID,'local native regression suite failed')
-    logs['native_regression']=file_evidence(path);test_counts['native_regression']=82
+    summary=re.search(r'100% tests passed, 0 tests failed out of (\d+)',contents)
+    require(summary is not None and int(summary[1])>=82 and 'tests FAILED:' not in contents,
+            Reason.DATA_INVALID,'local native regression suite failed or lost required tests')
+    logs['native_regression']=file_evidence(path);test_counts['native_regression']=int(summary[1])
     builds={}
     for name,relative,machine in [
         ('host_core','firmware/axis_control_core/libaxis_control_core.so',62),
@@ -148,6 +150,7 @@ def main():
     parser.add_argument('--local-root',type=Path,default=ROOT/'run/adr0022-local')
     parser.add_argument('--output',type=Path)
     args=parser.parse_args()
+    args.local_root=args.local_root.resolve()
     try:
         report=audit(args.local_root/'qualification/matrix.json',args.local_root)
         if args.output:

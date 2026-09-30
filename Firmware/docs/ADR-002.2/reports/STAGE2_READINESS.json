@@ -150,12 +150,12 @@
     ]
   },
   "blockers": [
-    "LIVE_COMMISSIOND_ADAPTER_NOT_IMPLEMENTED",
+    "ACTIVE_CURRENT_MODE_EXCITATION_WATCHDOG_AND_MEASURED_ASSET_INJECTION_INCOMPLETE",
+    "PHYSICAL_DEVICE_TIME_FILTER_AND_CAPTURE_CAPABILITIES_UNQUALIFIED",
     "CURRENT_OWNERSHIP_UNVERIFIED_INVENTORY_FAILED",
     "LAST_RECORDED_STOP_CONFIRMATION_FAILED",
     "PITCH_CURRENT_MODE_AND_CURRENT_FEEDBACK_UNQUALIFIED",
     "IMU_MOUNTING_UNITS_FILTER_CLOCK_CALIBRATION_PENDING",
-    "RECEIVE_TIME_AND_CAPTURE_LOSS_EVIDENCE_INCOMPLETE",
     "TARGET_ABI_AND_COMPLETE_ACQUISITION_REHEARSAL_PENDING",
     "DATASHEET_DUTY_AND_TEMPERATURE_CONTRACT_NOT_BOUND",
     "PROTOCOL_RESOLUTION_SYNTHETIC_SOLVER_REHEARSALS_REJECTED"
@@ -273,6 +273,247 @@
       "path": "Firmware/tools/tests/test_adr0022_inventory_review.py",
       "sha256": "57690b21ece51ee3592ab805f4e2bd0bc5a2ad5dad81ea923852bc9b0f04c8a8",
       "bytes": 7515
+    }
+  ],
+  "local_progress_base_commit": "7f854c516ec5c223ba7f862d2876b0654a8ed3dc",
+  "local_acquisition_implementation": {
+    "scope": "baseline discovery / normal pitch STOP / register reads / CAN and IMU recording; no excitation",
+    "station_access_this_update": false,
+    "deployed": false,
+    "physical_qualification": "NOT_RUN",
+    "simulated_duration_s": 120,
+    "simulated_records": 168122,
+    "simulated_counts": {
+      "kind": "footer",
+      "status": "COMPLETE",
+      "parameter_qualified": false,
+      "begin_ns": 55568769695050,
+      "end_ns": 55688769869501,
+      "yaw_frames": 93184,
+      "pitch_frames": 17076,
+      "register_reads": 11202,
+      "pitch_stop_confirmed": 5873,
+      "writer_queue_high_water": 12
+    },
+    "supersedes_missing_baseline_adapter": true,
+    "retained_failure": "capture-sustained-1 exceeded bounded writer queue before batching fix",
+    "normalization": "explicit finite encoder mapping added; all physical values remain PENDING",
+    "native_checks": "7 tests including real socket overflow and actual file size write failure; 10 consecutive runs after fixing loss-test observation",
+    "math_checks": "93 tests passed with the corrected build environment; initial missing OTA_STAGE1_BUILD error retained",
+    "native_checks_complete": "83 CTests passed, retained_homing excluded as instructed",
+    "confidence_established_percent": null,
+    "updated_math_matrix": "18/18 conditions, 417960 native cases; new method identity, verified compatible fits reused",
+    "process_checks": "25 passed in 25.59s"
+  },
+  "baseline_acquisition_evidence": [
+    {
+      "path": "run/adr0022-stage2/capture-sustained-1.log",
+      "sha256": "6a22e0dc96fa5bf769f8257896526667ccbe6279383358f57884be4441578e3d",
+      "bytes": 660
+    },
+    {
+      "path": "run/adr0022-stage2/capture-sustained-1/capture.jsonl",
+      "sha256": "23d665b643b95d1cf6ae6ffc57e248f3da7ea37a4c13d7c27161281863180490",
+      "bytes": 12709960
+    },
+    {
+      "path": "run/adr0022-stage2/capture-sustained-2/result.json",
+      "sha256": "4b3de1b02e2ce48306e6a3c717b3b52bd893f3321e6ea9da2bdac3ad1f74fa5a",
+      "bytes": 835
+    },
+    {
+      "path": "run/adr0022-stage2/capture-sustained-2/review.json",
+      "sha256": "115c676588a88a8e50de6daea62f97cb60d033b2ac05508f5b3215acfdaba6d6",
+      "bytes": 1964
+    },
+    {
+      "path": "run/adr0022-stage2/capture-sustained-2/capture.jsonl",
+      "sha256": "39185a2f564e6ee48aa97268b62cb58157cd68cabc272784e35c59aa32884dfd",
+      "bytes": 59509713
+    },
+    {
+      "path": "run/adr0022-stage2/capture-native-regression.log",
+      "sha256": "308e52906eb6818ac5822a748e61fe7e9046e30d8b2b0c4a7e439f0333d7b5db",
+      "bytes": 1283
+    },
+    {
+      "path": "run/adr0022-stage2/math-regression.log",
+      "sha256": "2100cc2d79311967ae2871283fad2a36a81c478a22bc62aed0865a8f65453d66",
+      "bytes": 765
+    },
+    {
+      "path": "run/adr0022-stage2/math-replay-corrected-environment.log",
+      "sha256": "88a1c83f9bd0d7df0d3aad08c897aad20fcca53170940553c340bfeaa658ffb2",
+      "bytes": 98
+    },
+    {
+      "path": "run/adr0022-stage2/math-regression-final.log",
+      "sha256": "9932f903e638413ba6c5c2a91b324edff0c79a60dc4641286eaf6c8bcd1fe19d",
+      "bytes": 99
+    },
+    {
+      "path": "run/adr0022-stage2/firmware-regression-final.log",
+      "sha256": "49bdf64cbcc67df2289cb277bd19fa9fc98391dc28971edeebcf5b73c5e9e4dd",
+      "bytes": 9276
+    },
+    {
+      "path": "run/adr0022-stage2/firmware-regression.log",
+      "sha256": "f75aac2f325e3e1777f5f4c3ec17aab7a23897b4fa798e98b66ecf14fca7583f",
+      "bytes": 11072
+    },
+    {
+      "path": "run/adr0022-stage2/capture-launcher-regression.log",
+      "sha256": "63f9cf672c814b669fc6bb8bd9829978be9cef92672aad3522ba05f597c170f5",
+      "bytes": 5013
+    },
+    {
+      "path": "run/adr0022-stage2/capture-launcher-regression-final.log",
+      "sha256": "551fe1f9e231644f3a6b02cc08a8723b4130a20628768aa283cc23abfa159b6e",
+      "bytes": 100
+    },
+    {
+      "path": "run/adr0022-stage2/resolution-diagnosis/results.json",
+      "sha256": "302843c4598f1fe346d9d036918344f504a66b02acffa3435f4aeedfaaca0082",
+      "bytes": 98663
+    },
+    {
+      "path": "run/adr0022-stage2/capture-kernel-probe-2.jsonl",
+      "sha256": "66d47b57e4a952b830d9b8d99f6afb1d0e10d08d74bf2be0aff4a4f59d2a829d",
+      "bytes": 833055
+    },
+    {
+      "path": "run/adr0022-stage2/revalidation/qualification/matrix.json",
+      "sha256": "10ddd58183ece9e004922f4e0f101ad4f0e25de18468d3853cfead4085f93bba",
+      "bytes": 25526
+    },
+    {
+      "path": "run/adr0022-stage2/revalidation/audit-final.log",
+      "sha256": "ca05d0afdf58905f0811e13eead649f0eb6a0964d3c19d6302a9f0bea51f2927",
+      "bytes": 220
+    },
+    {
+      "path": "run/adr0022-stage2/revalidation/audit-final.json",
+      "sha256": "f0b9f8401473c49b94bc5c6468e87e6bb496262796babb042b6b609bd3d7dc2c",
+      "bytes": 47536
+    },
+    {
+      "path": "run/adr0022-stage2/arm64-mathematical-replay-build.log",
+      "sha256": "3a903c47cbafe2d3529a2086a04e115a0b403629373269178854feb196c00cc1",
+      "bytes": 225
+    }
+  ],
+  "baseline_acquisition_sources": [
+    {
+      "path": "Firmware/axis_control_core/commissiond.cpp",
+      "sha256": "dd9ffbc760193de09d5862fb7911a9515216821146d8cfc0dc2d0f73167ab20d",
+      "bytes": 613
+    },
+    {
+      "path": "Firmware/commission_runtime/capture.cpp",
+      "sha256": "cd5d6f3b3880707e10e25e13d0fc5bc8b58acacafd2968a9a56fe3dce084b5d8",
+      "bytes": 10484
+    },
+    {
+      "path": "Firmware/commission_runtime/capture.hpp",
+      "sha256": "f43c7a1bca894d1637df1b2c0d3b645984e907d9c7c4457384498b22e900adbd",
+      "bytes": 2395
+    },
+    {
+      "path": "Firmware/commission_runtime/CMakeLists.txt",
+      "sha256": "25513b90f2f5acbd9d037a46b29f2c0c55db113f81f29e49ed47b08ba4c63790",
+      "bytes": 1007
+    },
+    {
+      "path": "Firmware/commission_runtime/probe_capture.cpp",
+      "sha256": "61d9cdd45f003b0e8f4ba7a3449532b5581ab511728c6fab93fa7c935cc5bcd6",
+      "bytes": 2330
+    },
+    {
+      "path": "Firmware/commission_runtime/readback.cpp",
+      "sha256": "0283ca494eef8ccb375acf4db890c3efae10e1e53b72335a768aa3d260f908ef",
+      "bytes": 2603
+    },
+    {
+      "path": "Firmware/commission_runtime/readback.hpp",
+      "sha256": "e79f0a495bde629670783ee1e20f854cef31fdaadf933f275881782304bf33af",
+      "bytes": 1180
+    },
+    {
+      "path": "Firmware/commission_runtime/requirements-test.txt",
+      "sha256": "38eeff6d106a9a7ab8dda1a25807eb976bda7fddf444029bd3cc3b29f29497f2",
+      "bytes": 119
+    },
+    {
+      "path": "Firmware/commission_runtime/session.cpp",
+      "sha256": "ced6a961683f3e2ab660ce7fa8247d8e2b118c852aaf75887f028f7ffb64c6bb",
+      "bytes": 22451
+    },
+    {
+      "path": "Firmware/commission_runtime/session.hpp",
+      "sha256": "4f47960fd0bef054d4bd2bce51f291b3c94731b4846d30c193be50160a8d6d75",
+      "bytes": 91
+    },
+    {
+      "path": "Firmware/commission_runtime/test_capture.cpp",
+      "sha256": "378bcb314ed8357e305d0c54d89645969dd12320260d2355c98226fadd341375",
+      "bytes": 4898
+    },
+    {
+      "path": "Firmware/commissioning/measurement.py",
+      "sha256": "5f3a44de2d7e99eae4974c47d6ec1753be47542b03444d99ee580943906b7ccd",
+      "bytes": 18307
+    },
+    {
+      "path": "Firmware/commissioning/normalization.py",
+      "sha256": "69a9d9dbe697f8d2c1702a46fdc58f9ddfc93e61860f1b47e991adf2084ebbeb",
+      "bytes": 4669
+    },
+    {
+      "path": "Firmware/commissioning/parameter_catalog.py",
+      "sha256": "de9663ccb63e89388279189c4a78599fb0c4ce1d5487c34a13ca93df33cf1484",
+      "bytes": 18970
+    },
+    {
+      "path": "Firmware/scripts/run_application.sh",
+      "sha256": "a6dbd45ee3862f5137fec78b7f3a98b531fbfe6d2ea545c57121b3ba1e8ce143",
+      "bytes": 37497
+    },
+    {
+      "path": "Firmware/tools/adr0022_capture_launch.py",
+      "sha256": "ee994484c6753d41cf7cb80819379740ce4a9da25bc5718d5a0bfa01fd288ca8",
+      "bytes": 8816
+    },
+    {
+      "path": "Firmware/tools/adr0022_capture_rehearsal.py",
+      "sha256": "8dd9881a5fc73e9f73dba5b49b62291979f632ba4f9d911d763f370e352ef936",
+      "bytes": 12192
+    },
+    {
+      "path": "Firmware/tools/adr0022_capture_review.py",
+      "sha256": "9199a31f536838d9fb1717ec2ea4b7449f80dc7e4630cd27869466634863dba9",
+      "bytes": 7818
+    },
+    {
+      "path": "Firmware/tools/imu_bno085.c",
+      "sha256": "23a134bf53f0d43db8d3d2b33b6975bb023fb4d961d2a8d3965a810e45550cc8",
+      "bytes": 13557
+    }
+  ],
+  "baseline_acquisition_host_binaries": [
+    {
+      "path": "run/adr0022-local/firmware/axis_control_core/commissiond",
+      "sha256": "850107fbe55b3598e124d9e9626d1d458b75b3ad2d9b39bbc8183ccf7a06be45",
+      "bytes": 240200
+    },
+    {
+      "path": "run/adr0022-local/firmware/imu-bno085",
+      "sha256": "8fd3756308310c108b11c668aac98e7af5c72999fb55de848bb2bf917d767cbf",
+      "bytes": 64512
+    },
+    {
+      "path": "run/adr0022-local/firmware/axis_control_core/libaxis_control_core.so",
+      "sha256": "5bac354a6cc9f9bac7cb566ed834b264ef665b0366ad6a7081aab8e41edf86f9",
+      "bytes": 29720
     }
   ]
 }

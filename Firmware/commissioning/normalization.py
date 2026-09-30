@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from .contracts import Reason, array, digest, require
 from .identification import Run
-from .measurement import EncoderMapping, calibrated_times, verify_stream, axis_rates
+from .measurement import convert_encoder, calibrated_times, verify_stream, axis_rates
 
 
 def current_si(raw,scale_A_per_count,bias_A,*,source,filter_tau_s):
@@ -34,7 +34,7 @@ def normalize_raw(raw,calibration,identity):
                 Reason.DATA_INVALID,"RX time precedes calibrated sample time")
         data[name]=(t,stream)
     qt,enc=data["encoder"];gt,gyro=data["gyro"];it,iq=data["current"];ut,tx=data["tx"]
-    q=EncoderMapping(**calibration["encoder"]).convert(enc["raw_count"])
+    q=convert_encoder(enc["raw_count"],calibration["encoder"],measured=identity.provenance=="MEASURED")
     require(len(q)==len(qt),Reason.DATA_INVALID,"encoder length differs")
     rates=axis_rates(np.asarray(gyro["pitch_rad"]),np.asarray(gyro["raw_rad_s"]),calibration["imu"])
     axis=0 if raw["axis"]=="yaw" else 1;v=rates[:,axis]

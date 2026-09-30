@@ -73,19 +73,21 @@ caused it. No guard was loosened and no production stop fix was tested.
 
 ## Remaining acquisition blockers
 
-1. **Live adapter missing.** Current `commissiond` implements synthetic replay only.
-   The simulated ownership/profile protocol does not supply a live capture, mode,
-   readback, writer, watchdog or launcher handoff implementation.
+1. **Active acquisition is incomplete.** `commissiond` now implements baseline CAN/IMU
+   recording, discovery, normal pitch STOP polling and correlated register reads, with
+   launcher ownership and single-attempt supervision, exercised locally. Current-mode
+   preparation, bounded excitation, active watchdog/shutdown, physical calibration and
+   automatic measured-asset injection remain open.
 2. **Current-mode measurement is unqualified.** Yaw firmware/current-ring assertions
    are historical. Pitch is configured for native position mode; current mode and
    `Iqf` acquisition are not qualified. Standard pitch feedback is torque, not measured
    current. `limit_cur` is specified for speed/position modes and cannot be assumed to
    limit `iq_ref` in current mode.
-3. **Timing and loss evidence are incomplete.** Existing SocketCAN code timestamps
-   after userspace `recv` and does not expose per-socket overflow evidence. It cannot
-   by itself distinguish receive scheduling delay from plant delay. Sensor/filter/
-   clock calibration and request/accepted-TX/measured-current relationships remain
-   pending. Register calls must not block the 200 Hz control loop.
+3. **Physical timing and loss evidence are incomplete.** The new capture receiver
+   separates kernel receipt from userspace dequeue, bounds clock mapping uncertainty,
+   observes socket overflow and checks interface loss counters. These mechanisms are
+   locally exercised. Device sample/filter timing and command-to-current relationships
+   still require calibration; host receipt is not a device sampling timestamp.
 4. **Stop and ownership are not qualified.** The historical stop failed; the process
    listing in this inventory failed. Pitch support is owner-confirmed, but the exact
    owner handoff and mode-transition procedure still needs local implementation and
@@ -115,14 +117,66 @@ evidence. See the [operation card](../../operations/adr0022-inventory.md).
 
 Additional local resolution probes and automatic solver results are indexed in the
 machine-readable record. They use synthetic plants and unmeasured sensor assumptions;
-they cannot qualify this physical station or close the blockers above. No hardware
+they cannot qualify this physical station or close the blockers above. No new hardware
 adapter or production control change has been deployed.
 
 The existing automatic solver was run unchanged on the saved synthetic BASELINE
 snapshots, with each protocol encoder resolution and its assumed uniform quantization
 variance injected. Both yaw and pitch returned `ENVELOPE_LIMITED`: none of the 256
 analytic points passed all frozen checks. The rejected-point records are retained;
-no candidate was promoted, no PID was hand-selected and no threshold was relaxed.
+   no candidate was promoted, no PID was hand-selected and no threshold was relaxed.
 This is an offline rejection under those stated assumptions, not proof that the
 physical plant is uncontrollable. It is additional evidence against reusing the
 Stage 1 synthetic sensor settings as a claim of physical readiness.
+
+## Local baseline acquisition implementation
+
+The full firmware build now supplies `commissiond --capture-baseline`, using the shared
+GM6020/CyberGear codecs, kernel receive timestamps, bounded recording, independent IMU
+streams, UID discovery, normal STOP feedback and asynchronous type-17 register reads.
+The launcher supervises it through the existing motion lease. A content-checked
+manifest binds executable hashes; attempt and output files cannot be reused. Commissioning
+IMU startup permits one reset request and no stream recovery. This does not change
+normal production startup. See the [capture operation](../../operations/adr0022-capture.md).
+
+The first sustained local probe exposed insufficient recording throughput on the
+Windows-mounted filesystem. Capture correctly failed when its bounded queue filled.
+That evidence remains intact. Batching writes corrected the bottleneck without enlarging
+the queue or dropping records. The subsequent 120-second local run recorded 93,184 yaw
+feedback frames, 5,873 requested pitch STOP responses, 11,202 register reads and 5,927
+samples from each IMU stream. Maximum queued records were 12 of 4,095 usable slots.
+These counts and temperatures are **synthetic**, not station measurements.
+
+The process suite covers source/UID mismatch, write echoes, timeout, re-enabling after
+STOP, CAN faults/truncation/staleness, IMU loss/reset/EOF, evidence corruption, executable
+identity, ownership supervision and refusal of a repeated attempt. Native tests exercise
+real kernel socket overflow and an actual filesystem write failure. The local overflow
+test was corrected to count loss observed anywhere in the drain, rather than incorrectly
+expecting the last packet to carry a new loss increment.
+
+Final local checks passed: 25 acquisition/launcher process tests, 93 mathematical tests,
+and 83 CTests with `retained_homing` excluded. Seven native acquisition contracts include
+the real socket-overflow and disk-write failures. The launcher lifecycle regression also
+exposed its live log being moved into history; startup now preserves the prior log and
+keeps the current log at its advertised path. All corrections were verified locally.
+
+The encoder contract changed the mathematical method identity. The complete synthetic
+matrix was recalculated against that identity: all 18 conditions passed, covering
+417,960 native evaluations. Compatible fitted assets were verified before reuse; old
+evidence was preserved. The fresh Stage 1 audit passed with 93 mathematical tests,
+84 acceptance-contract tests and 83 native regressions. This revalidation does not
+qualify physical acquisition or resolve the separate protocol-resolution rejection.
+
+Pitch's finite encoder range now has an explicit `bounded_count` calibration mapping.
+It preserves both endpoints and never treats a finite-range jump as modulo wraparound.
+The normalization pipeline accepts it without changing the plant model, identifier,
+controller synthesis or quality thresholds. The parameter catalog includes the encoding
+and finite endpoints; all unknown physical values remain PENDING. Measured calibration
+must explicitly name its encoding and still verify the endpoints against current-device
+`mechPos` observations.
+
+A separate local resolution diagnosis reproduced a synthetic yaw restart timeout after
+a negative 5-degree step, while the frozen position/drift metrics passed. At the stalled
+point, encoder quantization shifted the interpolated start-current boundary. This
+narrows one rejection mechanism; it does not explain every full-solver rejection or
+justify changing gains, thresholds or the model. No rejected candidate was promoted.

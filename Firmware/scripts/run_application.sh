@@ -30,6 +30,7 @@ case "${1:-}" in
     echo '         --pitch-step-mdeg N (enabled +/-15 deg session; 5 A ceiling),'
     echo '         --mixed-backend-check (commissioning + IMU tare; observe-only),'
     echo '         --commission-mixed-controller (manual-mode mixed controller; no vision/web),'
+    echo '         --capture-baseline MANIFEST (ADR-002.2 CAN/IMU capture; discovery, pitch STOP, reads),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -112,12 +113,14 @@ MIXED_BACKEND_CHECK=0
 MIXED_CONTROLLER_COMMISSION=0
 COMMISSION_REQUESTED=0
 SIM_REQUESTED=0
+CAPTURE_MANIFEST=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
     --sim) MODE=sim; SIM_REQUESTED=1; shift ;;
     --hardware) MODE=hardware; shift ;;
     --commission-hardware) MODE=commission; COMMISSION_REQUESTED=1; START_WEB=0; shift ;;
+    --capture-baseline) CAPTURE_MANIFEST="${2:?--capture-baseline requires a manifest}"; MODE=capture-baseline; START_WEB=0; shift 2 ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
     --with-imu) WITH_IMU=1; shift ;;
     --pitch-step-mdeg) PITCH_PROBE=1; PITCH_STEP_MDEG="${2:?--pitch-step-mdeg requires a value}"; shift 2 ;;
@@ -144,6 +147,13 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ -n "$CAPTURE_MANIFEST" ]; then
+  [ "${#options[@]}" -eq 2 ] && [ "$MODE" = capture-baseline ] || {
+    echo '--capture-baseline cannot be combined with other startup options' >&2; exit 2;
+  }
+  CAPTURE_MANIFEST="$(realpath -- "$CAPTURE_MANIFEST")"
+  options=(--capture-baseline "$CAPTURE_MANIFEST")
+fi
 # One derived fact: did anything ask the yaw axis to move? There are now two spellings of the push
 # (--yaw-voltage in raw counts, --yaw-current-a in amperes), and every "no other motor probe" rule
 # below needs to see both. A request this list misses is two processes driving one CAN bus.
@@ -286,6 +296,13 @@ if [ "$ACTION" = start ]; then
     echo "Already running (launcher $launcher_pid). Use status for readiness."
     exit 0
   fi
+  # Save the previous launcher log before shell redirection opens the new one.
+  # The child rotates the other old files after acquiring station ownership.
+  if [ -f "$RUN/launcher.log" ]; then
+    previous_log_dir="$RUN/logs-history/$(date -u +%Y%m%dT%H%M%SZ)-previous-launcher$$"
+    mkdir -p "$previous_log_dir"
+    mv -- "$RUN/launcher.log" "$previous_log_dir/launcher.log"
+  fi
   nohup setsid bash "$APP/scripts/run_application.sh" run "${options[@]}" \
     >"$RUN/launcher.log" 2>&1 < /dev/null 11>&- &
   child=$!
@@ -307,14 +324,18 @@ if [ "$ACTION" = start ]; then
   exit 1
 fi
 # Check is read-only: no camera open, CAN connection, or motor enable.
-"$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK" "$MIXED_CONTROLLER_COMMISSION"
+if [ "$MODE" = capture-baseline ]; then
+  "$PY" "$APP/tools/adr0022_capture_launch.py" "$CAPTURE_MANIFEST" --preflight-only
+else
+  "$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK" "$MIXED_CONTROLLER_COMMISSION"
+fi
 if [ "$ACTION" = check ]; then
   echo 'Preflight passed. deploy/check do not start the station.'
   exit 0
 fi
 exec 9>"$RUN/launcher.lock"
 flock -n 9 || { echo "A stack already owns $RUN" >&2; exit 1; }
-if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ]; then
+if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ] || [ "$MODE" = capture-baseline ]; then
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
@@ -327,6 +348,11 @@ rotate_stack_logs() {
   src="$RUN/logs-history/$stamp-launcher$$"
   mkdir -p "$src" || return 0
   for f in "$RUN"/*.log "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
+    # start has already opened this run's launcher.log. Moving that inode makes
+    # status/startup failure reporting point at a missing file for the whole run.
+    if [ "$f" = "$RUN/launcher.log" ] && { [ "$f" -ef "/proc/$$/fd/1" ] || [ "$f" -ef "/proc/$$/fd/2" ]; }; then continue; fi
+    # Baseline captures own immutable logs alongside their attempt record.
+    if [[ "$f" = *.imu.log ]] && [ -f "${f%.imu.log}.attempt.json" ]; then continue; fi
     [ -f "$f" ] && mv -f "$f" "$src/" 2>/dev/null || true
   done
   # Trip traces are evidence of the round that faulted, so the directory moves
@@ -391,7 +417,10 @@ cleanup() {
   stop_cause_line "$reason" > "$RUN/shutdown.cause"
   cat "$RUN/shutdown.cause"
   rm -f -- "$RUN/stop.request"
-  if [ "$MODE" = imu ]; then
+  if [ "$MODE" = capture-baseline ]; then
+    echo 'Ending baseline acquisition; pitch STOP/read requests only, no excitation.'
+    echo 'Stopped: baseline capture ended; no park or physical qualification claim' > "$RUN/shutdown.result"
+  elif [ "$MODE" = imu ]; then
     echo 'Ending IMU acquisition; no motor process was started.'
     echo 'Stopped: IMU capture ended; motors were not commanded' > "$RUN/shutdown.result"
   elif [ "$MODE" = perception ]; then
@@ -432,7 +461,10 @@ cleanup() {
   # Keep the terminal controller outcome after ownership metadata is removed.
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
-    if [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
+    if [ "$MODE" = capture-baseline ]; then
+      { echo 'Stopped: baseline capture ended; inspect immutable capture result';
+        tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
       { echo 'Stopped: mixed-backend no-motion probe ended; inspect STOP feedback result below';
         tail -n 8 "$RUN/controller.log"; } > "$RUN/shutdown.result"
     elif [ "$MODE" = commission ]; then
@@ -466,6 +498,15 @@ trap 'cause_signal=INT; exit 130' INT
 trap 'cause_signal=TERM; exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
+if [ "$MODE" = capture-baseline ]; then
+  "$PY" "$APP/tools/adr0022_capture_launch.py" "$CAPTURE_MANIFEST" >"$RUN/controller.log" 2>&1 &
+  controller_pid=$!; children+=("$controller_pid"); child_name[$controller_pid]=commission-capture-supervisor
+  printf 'Mode: baseline capture\nManifest: %s\nDiscovery, pitch STOP and reads; no excitation\n' "$CAPTURE_MANIFEST" > "$RUN/stack.info"
+  cp "$RUN/launcher.pid" "$RUN/started"
+  first_child_status=0; wait "$controller_pid" || first_child_status=$?
+  note_child_exit
+  exit "$first_child_status"
+fi
 if [ "$MODE" = imu ]; then
   if pgrep -x controld >/dev/null || pgrep -x imu_main >/dev/null; then
     echo 'Existing controller or legacy IMU consumer; refusing capture.' >&2; exit 1

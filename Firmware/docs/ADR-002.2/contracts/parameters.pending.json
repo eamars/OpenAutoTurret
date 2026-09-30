@@ -78,10 +78,50 @@
       "source_hash": null,
       "uncertainty": null
     },
+    "encoder.encoding": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "enum",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
     "encoder.counts_per_motor_turn": {
       "value": null,
       "state": "PENDING",
       "unit": "count/turn",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.raw_min": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "count",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.raw_max": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "count",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.shaft_min_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.shaft_max_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
       "shape": [],
       "source_hash": null,
       "uncertainty": null

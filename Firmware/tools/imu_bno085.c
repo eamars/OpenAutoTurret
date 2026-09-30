@@ -25,7 +25,7 @@ static volatile sig_atomic_t stopping;
 static unsigned counts[4], read_errors, resets;
 static unsigned generation, tare_samples;
 static int io_failed, invalid_sample, tared, sh2_is_open;
-static int continuous_mode;
+static int continuous_mode, commissioning_mode;
 static unsigned long retain_lines;
 static uint64_t output_lines, tare_rx_ns;
 static uint64_t last_sample_ns, last_accel_ns, last_gyro_ns, stable_since_ns;
@@ -74,7 +74,7 @@ static int hal_open(sh2_Hal_t *self) {
     if (fd < 0) { perror("open i2c"); return -1; }
     if (ioctl(fd, I2C_SLAVE, 0x4a) < 0) { perror("I2C_SLAVE"); close(fd); fd = -1; return -1; }
     uint8_t reset[] = {5, 0, 1, 0, 1};
-    for (int attempt = 0; attempt < 6; ++attempt) {
+    for (int attempt = 0; attempt < (commissioning_mode ? 1 : 6); ++attempt) {
         // Match the upstream Adafruit SH-2 I2C reset settling interval. The
         // original lab's 20 ms delay races the sensor's reset/advertisements.
         if (write(fd, reset, sizeof reset) == sizeof reset) { usleep(300000); return 0; }
@@ -210,7 +210,8 @@ static int open_stream(void) {
 }
 int main(int argc, char **argv) {
     char *end = NULL;
-    int continuous = argc >= 2 && strcmp(argv[1], "--continuous") == 0;
+    commissioning_mode = argc == 2 && strcmp(argv[1], "--commissioning") == 0;
+    int continuous = commissioning_mode || (argc >= 2 && strcmp(argv[1], "--continuous") == 0);
     long seconds = continuous ? 0 : (argc >= 2 ? strtol(argv[1], &end, 10) : -1);
     if (continuous && argc == 4 && strcmp(argv[2], "--retain-lines") == 0) {
         char *retain_end = NULL;
@@ -249,7 +250,7 @@ int main(int argc, char **argv) {
         }
         failed=opened || invalid_sample || io_failed || resets!=initial_resets;
         if (sh2_is_open) { sh2_close(); sh2_is_open=0; }
-        if (!failed || stopping || invalid_sample || recoveries>=1 || now_ns()>=until) break;
+        if (!failed || stopping || invalid_sample || commissioning_mode || recoveries>=1 || now_ns()>=until) break;
         // Recover at the session boundary, not recursively inside SH-2's read
         // callback. Consumers must discard pre-reset tare/continuity.
         printf("{\"kind\":\"gap\",\"rx_ns\":%" PRIu64 ",\"reason\":\"reset_recovery\",\"tare_invalidated\":true}\n",now_ns());

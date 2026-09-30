@@ -8,6 +8,7 @@
 
 阶段1结果与阶段2入口见[本地验证报告](reports/STAGE1_HANDOFF.md)及[机器证据](reports/STAGE1_LOCAL_VALIDATION.json)。
 当前阶段2证据、失败记录、98.5%下一次置信要求及未闭合条件见[阶段2准备情况](reports/STAGE2_READINESS.md)。
+基线CAN/IMU采集、UID/STOP/寄存器读回及launcher监督已实现并在本地验证；[采集操作卡](../operations/adr0022-capture.md)说明边界。主动辨识及实机资格尚未完成。
 
 本包文本以`.gitattributes`固定LF换行；`CHECKSUMS.sha256`校验这些字节，避免Windows/Linux检出转换使证据校验失效。
 
