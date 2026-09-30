@@ -54,7 +54,7 @@ def test_full_process_rejects_injected_fault(tmp_path, fault):
         review(tmp_path / fault / "capture.jsonl")
 
 
-@pytest.mark.parametrize("corruption", ["truncate", "remove_can", "remove_imu", "duplicate", "temperature", "register"])
+@pytest.mark.parametrize("corruption", ["truncate", "remove_can", "remove_imu", "duplicate", "temperature", "register", "final_loss", "missing_loss"])
 def test_review_rejects_corrupt_evidence(tmp_path, successful, corruption):
     source = (successful[0] / "capture.jsonl").read_text()
     rows = [json.loads(r) for r in source.splitlines()]
@@ -68,6 +68,10 @@ def test_review_rejects_corrupt_evidence(tmp_path, successful, corruption):
         rows.insert(10, rows[10])
     elif corruption == "temperature":
         next(r for r in rows if r["kind"] == "can_rx" and r["axis"] == "yaw")["temperature_C"] = 37.
+    elif corruption == "final_loss":
+        rows[-1]["socket_drops"]["yaw"] = 1
+    elif corruption == "missing_loss":
+        del rows[-1]["socket_drops"]
     else:
         next(r for r in rows if r["kind"] == "register_read")["source"] = "type18_echo"
     path = tmp_path / "altered.jsonl"
@@ -113,7 +117,7 @@ def prepare_launcher_fixture(tmp_path):
         sock.bind(("127.0.0.1", 0))
         reservations.append(sock)
     ports = [s.getsockname()[1] for s in reservations]
-    manifest = {"schema": "adr0022.capture/1", "provenance": "SYNTHETIC", "transport": "loopback_udp",
+    manifest = {"schema": "adr0022.capture/2", "provenance": "SYNTHETIC", "transport": "loopback_udp",
                 "output": str(tmp_path / "baseline.jsonl"), "register_reads": False,
                 "yaw": {"port": ports[0]}, "pitch": {"port": ports[1], "peer_port": emitter.getsockname()[1]},
                 "pitch_stop_poll": True, "pitch_supported_when_disabled": True, "expected_pitch_uid": "7216313130333105",
@@ -181,5 +185,29 @@ def test_preflight_refuses_changed_binary_before_sensor_start(tmp_path):
     config["expected_binaries"]["imu"] = "0" * 64
     manifest.write_text(json.dumps(config))
     with pytest.raises(ValueError, match="changed imu"):
+        preflight(manifest, firmware)
+    assert not (tmp_path / "baseline.attempt.json").exists()
+
+
+def test_rehearsal_preserves_process_failure_before_ready(tmp_path):
+    binary = tmp_path / "refuse"
+    binary.write_text("#!/bin/sh\necho 'loader fixture rejected' >&2\nexit 7\n")
+    binary.chmod(0o755)
+    output = tmp_path / "failed"
+    with pytest.raises(RuntimeError, match="before readiness"):
+        rehearse(binary, output)
+    failure = json.loads((output / "failure.json").read_text())
+    assert failure["returncode"] == 7 and failure["stderr"] == "loader fixture rejected\n"
+    assert failure["executable_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+    assert not failure["hardware_accessed"] and not (output / "result.json").exists()
+
+
+def test_preflight_rejects_timing_that_rounds_to_zero_before_sensor_start(tmp_path):
+    firmware, manifest, _, emitter = prepare_launcher_fixture(tmp_path)
+    emitter.close()
+    config = json.loads(manifest.read_text())
+    config["limits"]["read_period_s"] = 1e-12
+    manifest.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="at least one nanosecond"):
         preflight(manifest, firmware)
     assert not (tmp_path / "baseline.attempt.json").exists()

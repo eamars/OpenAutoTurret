@@ -32,7 +32,7 @@ def exclusive_json(path, value):
 
 def preflight(manifest: Path, firmware: Path):
     config = strict_json(manifest.read_text(encoding="utf-8"))
-    if config.get("schema") != "adr0022.capture/1" or config.get("provenance") not in ("SYNTHETIC", "MEASURED"):
+    if config.get("schema") != "adr0022.capture/2" or config.get("provenance") not in ("SYNTHETIC", "MEASURED"):
         raise ValueError("capture schema/provenance required")
     synthetic = config["provenance"] == "SYNTHETIC"
     if config.get("transport") != ("loopback_udp" if synthetic else "socketcan"):
@@ -48,8 +48,8 @@ def preflight(manifest: Path, firmware: Path):
     for key in ("clock_uncertainty_s", "dequeue_age_s", "can_gap_s", "imu_gap_s", "startup_s",
                 "duration_s", "read_timeout_s", "read_period_s", "stop_period_s"):
         value = limits[key]
-        if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 3600:
-            raise ValueError(f"explicit positive {key} required")
+        if type(value) not in (int, float) or not math.isfinite(value) or not 1e-9 <= value <= 3600:
+            raise ValueError(f"explicit {key} of at least one nanosecond required")
     if limits["duration_s"] <= limits["startup_s"] or limits["startup_s"] < (0 if synthetic else 3):
         raise ValueError("capture must include complete sensor startup")
     if type(limits["minimum_imu_status"]) is not int or not 0 <= limits["minimum_imu_status"] <= 3:

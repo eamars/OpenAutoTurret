@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <linux/can.h>
+#include <linux/sock_diag.h>
 #include <sstream>
 #include <stdexcept>
 #include <time.h>
@@ -40,6 +41,15 @@ TimestampedReceiver::TimestampedReceiver(int fd, int64_t max_clock_error_ns)
     throw std::runtime_error("DATA_INVALID: clock mapping uncertainty");
   option(fd, SO_TIMESTAMPNS);
   option(fd, SO_RXQ_OVFL);
+  if (kernel_drops()) throw std::runtime_error("DATA_INVALID: socket already lost packets before capture");
+}
+uint32_t TimestampedReceiver::kernel_drops() const {
+  std::array<uint32_t,SK_MEMINFO_VARS> counters{};
+  socklen_t size=sizeof(counters);
+  if (getsockopt(fd_,SOL_SOCKET,SO_MEMINFO,counters.data(),&size) ||
+      size<(SK_MEMINFO_DROPS+1)*sizeof(uint32_t))
+    throw std::runtime_error("DATA_INVALID: final socket loss counter unavailable");
+  return counters[SK_MEMINFO_DROPS];
 }
 bool TimestampedReceiver::receive(Receipt& out) {
   can_frame wire{};

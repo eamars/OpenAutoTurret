@@ -98,3 +98,18 @@ TEST(Receiver, KernelReportsRealDatagramOverflow) {
   EXPECT_GT(observed_drops,0); EXPECT_GT(r.socket_drops,0);
   close(rx); close(tx);
 }
+TEST(Receiver, FinalCounterDetectsLossBeforeAnyOverflowNotificationIsDequeued) {
+  const int rx=socket(AF_INET,SOCK_DGRAM,0),tx=socket(AF_INET,SOCK_DGRAM,0);
+  ASSERT_GE(rx,0); ASSERT_GE(tx,0);
+  sockaddr_in addr{}; addr.sin_family=AF_INET; addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+  int buffer=1024; ASSERT_EQ(setsockopt(rx,SOL_SOCKET,SO_RCVBUF,&buffer,sizeof(buffer)),0);
+  ASSERT_EQ(bind(rx,reinterpret_cast<sockaddr*>(&addr),sizeof(addr)),0);
+  socklen_t len=sizeof(addr); ASSERT_EQ(getsockname(rx,reinterpret_cast<sockaddr*>(&addr),&len),0);
+  TimestampedReceiver receiver(rx,1000000);
+  EXPECT_EQ(receiver.kernel_drops(),0u);
+  can_frame frame{}; frame.can_dlc=8;
+  for (int i=0;i<1000;++i) ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
+  // No receive() call and no subsequent trigger packet: loss is observable now.
+  EXPECT_GT(receiver.kernel_drops(),0u);
+  close(rx); close(tx);
+}

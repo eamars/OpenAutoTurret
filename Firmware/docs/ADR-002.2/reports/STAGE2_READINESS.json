@@ -515,5 +515,362 @@
       "sha256": "5bac354a6cc9f9bac7cb566ed834b264ef665b0366ad6a7081aab8e41edf86f9",
       "bytes": 29720
     }
-  ]
+  ],
+  "local_target_acquisition": {
+    "scope": "baseline acquisition; capture schema 2; no mode changes or excitation",
+    "source_base_commit": "24b35ed67f42e02b2de9db012965bb6c543e3cda",
+    "capture_schema": "adr0022.capture/2",
+    "station_access_this_update": false,
+    "deployed": false,
+    "physical_qualification": "NOT_RUN",
+    "compiler": "Debian g++ 14.2.0-19cross1",
+    "target_libc": "Debian arm64 libc6 2.41-12+deb13u4",
+    "kernel_in_vm": "6.12.107+deb13-arm64",
+    "emulator": "QEMU system aarch64 10.0.13, Cortex-A76, TCG, 2 CPUs",
+    "isolation": "no VM networking or host device passthrough; guest project venv",
+    "abi": "8 ELF files, 18 dependency/version bindings passed against the recorded Debian sysroot",
+    "full_firmware_cross_build": "PASS; does not imply all target tests executed",
+    "host_process_and_abi_tests": "29 passed in 21.11s",
+    "native_acquisition_contracts": 8,
+    "arm64_acquisition_contracts": 8,
+    "arm64_fault_cases": 12,
+    "arm64_complete_cases": 15,
+    "host_duration_s": 120,
+    "arm64_duration_s": 120,
+    "host_records": 195953,
+    "arm64_records": 194876,
+    "host_capture": {
+      "kind": "footer",
+      "status": "COMPLETE",
+      "parameter_qualified": false,
+      "begin_ns": 59694012730221,
+      "end_ns": 59814013154107,
+      "yaw_frames": 120000,
+      "pitch_frames": 17316,
+      "register_reads": 11459,
+      "pitch_stop_confirmed": 5856,
+      "socket_drops": {
+        "yaw": 0,
+        "pitch": 0
+      },
+      "writer_queue_high_water": 27
+    },
+    "arm64_capture": {
+      "kind": "footer",
+      "status": "COMPLETE",
+      "parameter_qualified": false,
+      "begin_ns": 8210937152,
+      "end_ns": 128211695664,
+      "yaw_frames": 119997,
+      "pitch_frames": 16959,
+      "register_reads": 11142,
+      "pitch_stop_confirmed": 5816,
+      "socket_drops": {
+        "yaw": 0,
+        "pitch": 0
+      },
+      "writer_queue_high_water": 17
+    },
+    "host_offered_load": {
+      "nominal_yaw_hz": 1000.0,
+      "observed_yaw_hz": 1000.0013069292658,
+      "minimum_load_fraction": 0.99
+    },
+    "arm64_offered_load": {
+      "nominal_yaw_hz": 1000.0,
+      "observed_yaw_hz": 1000.0243992752661,
+      "minimum_load_fraction": 0.99
+    },
+    "changes": [
+      "SO_MEMINFO catches loss not yet delivered in ancillary metadata",
+      "version 2 requires zero final socket loss counters; old captures retain original identity",
+      "manifest timings smaller than one nanosecond rejected before sensor startup",
+      "test producer preserves nominal cadence with bounded batches and actual kernel timestamps"
+    ],
+    "retained_local_limitations_and_failures": [
+      "initial build-host setup lacked Ninja, binutils library path and merged-/usr alias; corrected locally",
+      "user-mode QEMU rejects SO_TIMESTAMPNS and SO_RXQ_OVFL; checks were never disabled",
+      "first VM ran the probe successfully but evidence export lacked gzip applet; only its console was preserved",
+      "initial ABI corruption-test fixture omitted shared-library aliases; corrected fixture, not audit rules",
+      "initial 120-second VM success offered only 662.5 Hz; later 819.6 Hz producer failed the added 990 Hz load criterion"
+    ],
+    "limits": [
+      "local ARM64 Linux execution is not execution on the Pi",
+      "exact station library identities and Pi driver/sensor timing remain unknown",
+      "active current-mode execution, watchdog/handoff and measured asset injection remain incomplete",
+      "reported load-test fraction is not a probability of successful physical commissioning"
+    ],
+    "confidence_established_percent": null,
+    "evidence": [
+      {
+        "path": "run/adr0022-debian13/packages.json",
+        "sha256": "19fca0d79cdad52bdeae0a6f2da16bc4255a05a64b69885eb237e70f8790366e",
+        "bytes": 14651
+      },
+      {
+        "path": "run/adr0022-debian13/vm-packages.json",
+        "sha256": "2b893f641f844680f1509e7e3b3c047cb57a6152768316110952e969fe3f1aa9",
+        "bytes": 48271
+      },
+      {
+        "path": "run/adr0022-debian13/build-commands.json",
+        "sha256": "2cdddb8a00256f334bbfec4271af3fed8376c2794856dcc827bc7e7a8922d497",
+        "bytes": 961
+      },
+      {
+        "path": "run/adr0022-debian13/toolchain.cmake",
+        "sha256": "7982f5b6a8dca43b9acd3480177a932e518192c9bdfb74d94fd721ac553cbcc2",
+        "bytes": 1418
+      },
+      {
+        "path": "run/adr0022-debian13/configure.log",
+        "sha256": "81a3e87ff01bb568bd62c65099e60b5858fee619e190b6e09e67e8f44468c94e",
+        "bytes": 209
+      },
+      {
+        "path": "run/adr0022-debian13/configure-make.log.previous-1",
+        "sha256": "1d92fb8f9ff04d48e85cfc5f6b32e9a5746bceecf97652fdf928e8d2ae3185a4",
+        "bytes": 2314
+      },
+      {
+        "path": "run/adr0022-debian13/configure-make.log.previous-2",
+        "sha256": "a478bb17ee68eca3882623988293c8e2bf38c8c8550faf043782f6476f14008a",
+        "bytes": 3205
+      },
+      {
+        "path": "run/adr0022-debian13/configure-make.log",
+        "sha256": "bc891b2df21709b796b2c88d8ff36dda2d49748f7c555df64530e9e290fcd7bd",
+        "bytes": 1095
+      },
+      {
+        "path": "run/adr0022-debian13/build.log",
+        "sha256": "a99ab140acd9573d2344523a947a14a33964f03b7765e995d92f1319a8a8f2ce",
+        "bytes": 74740
+      },
+      {
+        "path": "run/adr0022-debian13/arm-v2-build.log",
+        "sha256": "bf8fdbdd79b1d0642326c450903976bc35373f1c5c89d8bb45c14482dfe007ac",
+        "bytes": 1264
+      },
+      {
+        "path": "run/adr0022-debian13/native-v2-build.log",
+        "sha256": "dbc1281218029f004ed4a4587d98e2e7090aa8fec2d4edf58c8c180b02a10895",
+        "bytes": 1264
+      },
+      {
+        "path": "run/adr0022-debian13/abi-capture-v2.json",
+        "sha256": "47043dee0f25d120b18c9ffdfa05d4373beb7df100a34f61dfd6750cd6479581",
+        "bytes": 15112
+      },
+      {
+        "path": "run/adr0022-debian13/abi-tests.log",
+        "sha256": "54334265b6e40e5eec5f12e2cffb479c517c355634abcc663ee8f32dab97b2d6",
+        "bytes": 3858
+      },
+      {
+        "path": "run/adr0022-debian13/abi-tests-final.log",
+        "sha256": "dab51da0e27afee233d9e831ef755e31ee6bd62e66c451d2b0cf3b8e01ca09a7",
+        "bytes": 98
+      },
+      {
+        "path": "run/adr0022-debian13/host-v2-process-tests.log",
+        "sha256": "68c0c6932faf5f69d2d7ba5239194e806cf536ba91feae32548cc7547147df26",
+        "bytes": 100
+      },
+      {
+        "path": "run/adr0022-debian13/native-v2-contracts.log",
+        "sha256": "a02bd2da5aa93c18fbf4d153cafa768b2092b28f13ed9d852bd6d78615d6026a",
+        "bytes": 1631
+      },
+      {
+        "path": "run/adr0022-debian13/pending-drop-probe.json",
+        "sha256": "0eb0b033ec03045069431279c5f8c1ce73a168fa0d7a332f05e496e89edf28c8",
+        "bytes": 146
+      },
+      {
+        "path": "run/adr0022-debian13/sockopts-user-emulation.log",
+        "sha256": "ccb01ec1c5d242485501bb7c64a9a054a947eb899f519bd74f6b41f50d54b6a2",
+        "bytes": 58
+      },
+      {
+        "path": "run/adr0022-debian13/arm-probe-1.log",
+        "sha256": "2bf1b3c0a7155aa898892fe821ff95d8941083fd3ce64029065d0c5715512e7b",
+        "bytes": 1179
+      },
+      {
+        "path": "run/adr0022-debian13/arm-probe-1/capture.jsonl",
+        "sha256": "3e30d91ef89a5811e91ed9926800810c8f8224ad261b345ed9eb3312d7bbfd6f",
+        "bytes": 1016
+      },
+      {
+        "path": "run/adr0022-debian13/vm-probe-1/console.log",
+        "sha256": "f849ef00338e1017b9f93e6b561ed53b32e845677622035391bcb4202b2ba563",
+        "bytes": 318
+      },
+      {
+        "path": "run/adr0022-debian13/vm-probe-2/evidence/summary.json",
+        "sha256": "f834028a459fe5574f046cf417cb2f5521d549d48331c84275678b4a65c32226",
+        "bytes": 3241
+      },
+      {
+        "path": "run/adr0022-debian13/vm-probe-3/evidence/summary.json",
+        "sha256": "beec924b734a40bf09274635928d51ddd91f4fc3cf134a8a14adb0ce8ed1331a",
+        "bytes": 3177
+      },
+      {
+        "path": "run/adr0022-debian13/vm-matrix-1/evidence/summary.json",
+        "sha256": "b486ae7485dd24dce4664fc0934fdb81461dac839e0d57baf10a64793b6b1349",
+        "bytes": 4429
+      },
+      {
+        "path": "run/adr0022-debian13/vm-matrix-1/evidence/capture/result.json",
+        "sha256": "4a0efc0ad5a77acbc382161fc78cb33d0a7e0f39514cfcd95927a685377547f6",
+        "bytes": 1053
+      },
+      {
+        "path": "run/adr0022-debian13/vm-rate-probe-1/evidence/summary.json",
+        "sha256": "2994777365d2f6524c761d8d0bc453c51dddb369d3e2ef91118283e6cdc75685",
+        "bytes": 408
+      },
+      {
+        "path": "run/adr0022-debian13/vm-rate-probe-1/evidence/capture/failure.json",
+        "sha256": "5716f85ba0e97b7e11c98681ca4794761cc16c4d70f7ef75f10a6eaf62e63129",
+        "bytes": 746
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-probe/evidence/summary.json",
+        "sha256": "0230dd15ba951b7ff0b8de0b30706501a4a7d57e4659d1b9a854947299bc4893",
+        "bytes": 3345
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-probe/evidence/capture/result.json",
+        "sha256": "c7501bcb8f6b0d8284e5f5fe6e1984788cdfedd9c247db9f06901e5f29311f3a",
+        "bytes": 1272
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/manifest.json",
+        "sha256": "7efc43fd05654653c21a453bbe5901e5c4c7834321220483edb4727c82f74f37",
+        "bytes": 1998
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/console.log",
+        "sha256": "72126d48e65c470ed93863f8cd5b3fcfc95f72072a55b98c91a3cfdd0a12419f",
+        "bytes": 592
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/evidence.tar.gz",
+        "sha256": "7af025601baa40b7713ec6b2d5efae01717c1a698f70612bd01239f80188ef3f",
+        "bytes": 5689071
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/evidence/summary.json",
+        "sha256": "2fc7ae9631b5cc34fad83ac036059104b1776ca61fd3e50c61399fbccf9bb122",
+        "bytes": 4589
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/evidence/native-contracts.stdout",
+        "sha256": "23506a9f8c390fc0a243f1b66d8dc7449f773c85f606eadb146073c5a1236a32",
+        "bytes": 1636
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/evidence/capture/capture.jsonl",
+        "sha256": "d39097523917b25833e5eaf38e1da8e04c89a6f644cd4e927723e8c64245d175",
+        "bytes": 70462639
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/evidence/capture/result.json",
+        "sha256": "8ea419b5ae00723dce401f5df05634f1a5c8a567d3da5b4d0da50a82e2920d80",
+        "bytes": 1290
+      },
+      {
+        "path": "run/adr0022-debian13/vm-v2-matrix/evidence/capture/review.json",
+        "sha256": "beb8ea435375116f105b9bc2ef7c0158cec39760a9fa6b16ec3b68dadaf3819c",
+        "bytes": 2017
+      },
+      {
+        "path": "run/adr0022-debian13/host-v2-sustained/capture.jsonl",
+        "sha256": "1e4edbe1092618abef5618a2735d8755087118cb4e5399d959305ad8cbb18312",
+        "bytes": 71573717
+      },
+      {
+        "path": "run/adr0022-debian13/host-v2-sustained/result.json",
+        "sha256": "929d44a9edf962b28f6f3115c0cb8e0861e5d8ea593f076e863c51fe7653ca5d",
+        "bytes": 1417
+      },
+      {
+        "path": "run/adr0022-debian13/host-v2-sustained/review.json",
+        "sha256": "23eac854a4191b9bdbd51e15a531e38d7ab8f95f8dfed29368c82f2d75e13da7",
+        "bytes": 2023
+      }
+    ],
+    "sources": [
+      {
+        "path": "Firmware/commission_runtime/capture.hpp",
+        "sha256": "4e245e0f86e9b33314364fc7664eb6ccc0994363af8009ba4821748746b48765",
+        "bytes": 2481
+      },
+      {
+        "path": "Firmware/commission_runtime/capture.cpp",
+        "sha256": "2542125629a49c60aadf78d5ad539f42da0f362708083f6176a81dc9933a6e46",
+        "bytes": 11003
+      },
+      {
+        "path": "Firmware/commission_runtime/session.cpp",
+        "sha256": "97b421ef32422594a9525ac081924a38d828ec43d1175bfac4e3ff610ce62297",
+        "bytes": 23006
+      },
+      {
+        "path": "Firmware/commission_runtime/test_capture.cpp",
+        "sha256": "b3b1b43661a90760a1107308a6c5105e2f91cdd28e2585748ede3ec01f11b8a6",
+        "bytes": 5846
+      },
+      {
+        "path": "Firmware/tools/adr0022_arm_vm.py",
+        "sha256": "06e24b1c215557fa3c815390b2751804372218acaa8a877f29d82354c64ad541",
+        "bytes": 7257
+      },
+      {
+        "path": "Firmware/tools/adr0022_arm_vm_guest.py",
+        "sha256": "15c58331f9c17e9c4de6ba168de5db19a4b7029ffa45819946788ac800ce0cc3",
+        "bytes": 2429
+      },
+      {
+        "path": "Firmware/tools/adr0022_target_abi.py",
+        "sha256": "99bfdc3ffdf5cd47b173b6f6bbff02d4eaeece52abcd1573115260c64554dc22",
+        "bytes": 6608
+      },
+      {
+        "path": "Firmware/tools/adr0022_capture_rehearsal.py",
+        "sha256": "c2d174c2d6525f1424f6a81e59366794739faed134e64a1fae364f274b147e26",
+        "bytes": 14490
+      },
+      {
+        "path": "Firmware/tools/adr0022_capture_launch.py",
+        "sha256": "bd63e74d31b88226cf20bec88f2f9ae42dd203f48d1a336e6bf8d00b3e4ba12f",
+        "bytes": 8838
+      },
+      {
+        "path": "Firmware/tools/adr0022_capture_review.py",
+        "sha256": "4217a8bd4688438a675e7650ec2069f18fb6082cc45992ebb94bd08c9589f127",
+        "bytes": 8060
+      }
+    ],
+    "binaries": [
+      {
+        "path": "run/adr0022-debian13/firmware-make/axis_control_core/commissiond",
+        "sha256": "863a0447c161f50112b6c4d7bdca220268f65c517dcc1601148890251f65d00d",
+        "bytes": 236424
+      },
+      {
+        "path": "run/adr0022-debian13/firmware-make/imu-bno085",
+        "sha256": "0be58739e8417cd7e1589d2e25be013d48984005265701640807d04f98a493eb",
+        "bytes": 81408
+      },
+      {
+        "path": "run/adr0022-local/firmware/axis_control_core/commissiond",
+        "sha256": "2ff0430001bc834965af32d15dd787c3fa99a518c285008ce9d3e71b1e0d606f",
+        "bytes": 240248
+      }
+    ]
+  }
 }

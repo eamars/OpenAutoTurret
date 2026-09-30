@@ -55,5 +55,7 @@
   "stage2_readiness_report": "reports/STAGE2_READINESS.json",
   "local_baseline_acquisition": "IMPLEMENTED_AND_LOCALLY_REHEARSED_NOT_DEPLOYED",
   "active_acquisition": "INCOMPLETE",
-  "encoder_mapping_update": "explicit finite count encoding; no plant/synthesis/quality-rule change"
+  "encoder_mapping_update": "explicit finite count encoding; no plant/synthesis/quality-rule change",
+  "local_arm64_acquisition": "DEBIAN_BUILD_ABI_AND_FULL_KERNEL_VM_PASS_NOT_STATION_QUALIFICATION",
+  "capture_schema": "adr0022.capture/2"
 }

@@ -31,6 +31,7 @@ class TimestampedReceiver {
   // explicitly synthetic local datagram harness. Both require classic CAN MTU.
   explicit TimestampedReceiver(int fd, int64_t max_clock_error_ns);
   bool receive(Receipt& out); // false only for EAGAIN; other failures throw
+  uint32_t kernel_drops() const; // includes loss not yet delivered in ancillary data
  private:
   int fd_;
   int64_t max_clock_error_ns_;

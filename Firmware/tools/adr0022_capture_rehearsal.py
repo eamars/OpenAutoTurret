@@ -6,6 +6,7 @@ acquisition process, including its writer, clock checks and sensor decoders.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -17,7 +18,8 @@ import subprocess
 import time
 
 
-def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "none") -> dict:
+def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "none",
+             runner: tuple[str, ...] = ()) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     ports = []
     reservations = []
@@ -31,7 +33,7 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
     sender.bind(("127.0.0.1", 0))
     sender.setblocking(False)
     manifest = {
-        "schema": "adr0022.capture/1", "provenance": "SYNTHETIC", "transport": "loopback_udp",
+        "schema": "adr0022.capture/2", "provenance": "SYNTHETIC", "transport": "loopback_udp",
         "output": str((root / "capture.jsonl").resolve()), "imu_fd": read_fd,
         "yaw": {"port": ports[0]}, "pitch": {"port": ports[1], "peer_port": sender.getsockname()[1]},
         "register_reads": True,
@@ -45,7 +47,11 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
     config.write_text(json.dumps(manifest, indent=2) + "\n")
     for sock in reservations:
         sock.close()
-    child = subprocess.Popen([str(binary.resolve()), "--capture-baseline", str(config.resolve())],
+    # A local user-mode emulator may prefix the actual target executable. Keep
+    # argv structured and record both identities; never disguise a shell wrapper
+    # as the target binary or count emulation as station execution.
+    command = [*runner, str(binary.resolve()), "--capture-baseline", str(config.resolve())]
+    child = subprocess.Popen(command,
                              pass_fds=(read_fd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     os.close(read_fd)
     selector = selectors.DefaultSelector()
@@ -58,6 +64,8 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
         if not selector.select(10):
             raise RuntimeError("capture did not become ready")
         first = child.stdout.readline()
+        if not first:
+            raise RuntimeError("capture exited before readiness; see failure.json for process diagnostics")
         if json.loads(first).get("kind") != "capture_ready":
             raise RuntimeError("capture refused startup: " + first)
         start = time.monotonic()
@@ -109,26 +117,28 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                     continue  # CyberGear need not send unsolicited type-2 feedback.
                 if now < due[axis]:
                     continue
-                # Do not fabricate catch-up timestamps. Late scheduling remains
-                # visible in the actual kernel RX and the declared gap checks.
-                due[axis] = now + periods[axis]
-                if fault == "can_stale" and axis == 0 and elapsed > .6:
-                    continue
-                counts[axis] += 1
-                if axis == 0:
-                    data = struct.pack(">HhhBB", counts[axis] % 8192, -1, 1365, 37, 0)
-                    can_id = 0x205
-                else:
-                    data = struct.pack(">HHHH", 32768 + counts[axis] % 1000, 32768, 32768, 345)
-                    can_id = 0x80000000 | (2 << 24) | (2 << 22) | (127 << 8)
-                if fault == "can_error" and elapsed > .6 and axis == 0:
-                    can_id = 0x20000004
-                wire = struct.pack("=IB3x8s", can_id, 8, data)
-                if fault == "can_truncated" and elapsed > .6 and axis == 0:
-                    wire += b"EXTRA"
-                sender.sendto(wire, ("127.0.0.1", ports[axis]))
+                for _ in range(min(16, 1 + int((now-due[axis])/periods[axis]))):
+                    # Preserve the nominal producer rate instead of adding scheduler
+                    # overshoot to every period. Actual kernel receipt timestamps
+                    # still expose late/bunched delivery; none are manufactured.
+                    due[axis] += periods[axis]
+                    if fault == "can_stale" and axis == 0 and elapsed > .6:
+                        continue
+                    counts[axis] += 1
+                    if axis == 0:
+                        data = struct.pack(">HhhBB", counts[axis] % 8192, -1, 1365, 37, 0)
+                        can_id = 0x205
+                    else:
+                        data = struct.pack(">HHHH", 32768 + counts[axis] % 1000, 32768, 32768, 345)
+                        can_id = 0x80000000 | (2 << 24) | (2 << 22) | (127 << 8)
+                    if fault == "can_error" and elapsed > .6 and axis == 0:
+                        can_id = 0x20000004
+                    wire = struct.pack("=IB3x8s", can_id, 8, data)
+                    if fault == "can_truncated" and elapsed > .6 and axis == 0:
+                        wire += b"EXTRA"
+                    sender.sendto(wire, ("127.0.0.1", ports[axis]))
             if now >= due[2]:
-                due[2] = now + periods[2]
+                due[2] += periods[2]
                 counts[2] += 1
                 sequence = counts[2] & 255
                 if fault == "imu_sequence" and elapsed > .6:
@@ -152,6 +162,7 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
         stdout, stderr = child.communicate(timeout=5)
         records = [json.loads(line) for line in (root / "capture.jsonl").read_text().splitlines()]
         complete = records[-1].get("status") == "COMPLETE"
+        offered_load = None
         if fault == "none":
             assert child.returncode == 0 and complete, stderr
             assert records[0]["provenance"] == "SYNTHETIC"
@@ -179,6 +190,11 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
             assert len(reads) == records[-1]["register_reads"] == replies
             assert any(r["index"] == 0x701A and r["value"] == .25 for r in reads)
             assert all(r["device_sample_ns"] is None for r in reads)
+            yaw_times = [r["kernel_monotonic_ns"] for r in can if r["axis"] == "yaw"]
+            yaw_hz = (len(yaw_times)-1)*1e9/(yaw_times[-1]-yaw_times[0])
+            offered_load = {"nominal_yaw_hz": 1/periods[0], "observed_yaw_hz": yaw_hz,
+                            "minimum_load_fraction": .99}
+            assert yaw_hz >= .99/periods[0], "test generator did not supply the required yaw load"
         else:
             assert child.returncode != 0 and not complete, "fault capture was accepted"
             expected = {"can_stale": "feedback absent/stale", "can_error": "CAN error frame",
@@ -189,10 +205,28 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                         "reenabled": "became enabled", "stop_timeout": "feedback"}[fault]
             assert expected in records[-1]["detail"], records[-1]
         result = {"provenance": "SYNTHETIC", "fault": fault, "returncode": child.returncode,
+                  "executable_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                  "command": command, "emulated": bool(runner),
+                  "offered_load": offered_load,
                   "records": len(records), "result": records[-1], "stdout": first + stdout,
                   "stderr": stderr, "hardware_accessed": False}
         (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         return result
+    except Exception as exc:
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=5)
+        stdout, stderr = child.communicate(timeout=5)
+        failure = {"provenance": "SYNTHETIC", "hardware_accessed": False,
+                   "command": command, "returncode": child.returncode,
+                   "executable_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                   "detail": str(exc), "stdout": first + stdout, "stderr": stderr}
+        (root / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+        raise
     finally:
         selector.close()
         sender.close()
@@ -212,10 +246,13 @@ if __name__ == "__main__":
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=3.)
+    parser.add_argument("--runner", action="append", default=[], metavar="ARG",
+                        help="local emulator argv prefix; repeat per token, e.g. --runner=qemu-aarch64 --runner=-L --runner=SYSROOT")
     parser.add_argument("--fault", choices=("none", "can_stale", "can_error", "can_truncated",
                                            "imu_sequence", "imu_reset", "imu_eof", "read_echo",
                                            "read_source", "read_timeout", "wrong_uid", "reenabled", "stop_timeout"), default="none")
     args = parser.parse_args()
     if not math.isfinite(args.duration) or args.duration <= 1:
         parser.error("duration must exceed one second")
-    print(json.dumps(rehearse(args.binary, args.output, duration=args.duration, fault=args.fault), indent=2))
+    print(json.dumps(rehearse(args.binary, args.output, duration=args.duration, fault=args.fault,
+                             runner=tuple(args.runner)), indent=2))

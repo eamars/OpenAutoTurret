@@ -59,7 +59,7 @@ struct Limits {
   explicit Limits(const YAML::Node& n) {
     auto ns=[&](const char* key) {
       const double seconds=n[key].as<double>();
-      require(std::isfinite(seconds) && seconds>0 && seconds<=3600, "DATA_INVALID: capture timing bound");
+      require(std::isfinite(seconds) && seconds>=1e-9 && seconds<=3600, "DATA_INVALID: capture timing bound (at least 1 ns)");
       return int64_t(seconds*1e9);
     };
     clock=ns("clock_uncertainty_s"); dequeue=ns("dequeue_age_s");
@@ -214,7 +214,7 @@ int capture_session(const char* path) {
   std::unique_ptr<Journal> journal;
   try {
     const auto config=YAML::LoadFile(path);
-    require(config["schema"].as<std::string>()=="adr0022.capture/1","INTEGRATION_MISMATCH: capture schema");
+    require(config["schema"].as<std::string>()=="adr0022.capture/2","INTEGRATION_MISMATCH: capture schema");
     const auto source=config["provenance"].as<std::string>();
     const bool synthetic=source=="SYNTHETIC";
     require(synthetic || source=="MEASURED","DATA_INVALID: capture provenance");
@@ -237,7 +237,7 @@ int capture_session(const char* path) {
     if (!synthetic) check_launcher_lease();
     const std::string manifest=json(config); // original configuration retained separately by caller
     journal=std::make_unique<Journal>(config["output"].as<std::string>(),
-       "{\"kind\":\"header\",\"schema\":\"adr0022.capture/1\",\"provenance\":"+quoted(source)+
+       "{\"kind\":\"header\",\"schema\":\"adr0022.capture/2\",\"provenance\":"+quoted(source)+
        ",\"purpose\":\"baseline_acquisition\",\"parameter_qualified\":false,\"manifest_yaml\":"+quoted(manifest)+"}");
     std::array<Endpoint,2> buses;
     buses[0].open(config["yaw"],synthetic,limits); buses[1].open(config["pitch"],synthetic,limits);
@@ -373,10 +373,16 @@ int capture_session(const char* path) {
     if (!synthetic) for (const auto& bus:buses)
       require(bus.counter("rx_dropped")==bus.drops_begin && bus.counter("rx_errors")==bus.errors_begin,
               "DATA_INVALID: interface receive loss during capture");
+    // Ancillary overflow metadata arrives on a later delivered packet. Check
+    // the socket counters directly before certifying completion, including when
+    // the dropped tail had no following packet on which to report the loss.
+    const auto yaw_drops=buses[0].receiver->kernel_drops(), pitch_drops=buses[1].receiver->kernel_drops();
+    require(!yaw_drops && !pitch_drops,"DATA_INVALID: final socket receive loss");
     std::string footer="{\"kind\":\"footer\",\"status\":\"COMPLETE\",\"parameter_qualified\":false,\"begin_ns\":"+
       std::to_string(begin)+",\"end_ns\":"+std::to_string(monotonic_ns())+",\"yaw_frames\":"+
       std::to_string(buses[0].sequence)+",\"pitch_frames\":"+std::to_string(buses[1].sequence)+
       ",\"register_reads\":"+std::to_string(read_count)+",\"pitch_stop_confirmed\":"+std::to_string(stop_confirmed)+
+      ",\"socket_drops\":{\"yaw\":"+std::to_string(yaw_drops)+",\"pitch\":"+std::to_string(pitch_drops)+"}"+
       ",\"writer_queue_high_water\":"+std::to_string(journal->high_water())+"}";
     require(journal->finish(footer),"DATA_INVALID: capture flush failed");
     std::cout << footer << '\n'; return 0;

@@ -98,9 +98,11 @@ caused it. No guard was loosened and no production stop fix was tested.
    too coarse for low-speed truth. Record yaw's temperature byte as raw, with Celsius
    unknown until its mapping is established; pitch feedback has documented 0.1 C
    units. The captured 48.8 C is **Pi CPU temperature**, not motor temperature.
-6. **Executable compatibility and acquisition rehearsal remain open.** A host build
-   and ARM64 link do not prove the target ABI, asynchronous device behavior, sustained
-   recording, stop on process/communication loss or complete physical signal quality.
+6. **Station compatibility and physical execution remain open.** The full firmware
+   now builds against Debian ARM64 libraries, passes an offline dependency/version
+   audit, and executes baseline acquisition under a local ARM64 Linux kernel. This
+   does not identify the station's installed libraries or qualify its asynchronous
+   devices, stop on process/communication loss or physical signal quality.
 
 These are implementation/evidence gates, not grounds to invent physical parameters,
 choose gains manually, change the Stage 1 model or raise the confidence claim.
@@ -180,3 +182,51 @@ a negative 5-degree step, while the frozen position/drift metrics passed. At the
 point, encoder quantization shifted the interpolated start-current boundary. This
 narrows one rejection mechanism; it does not explain every full-solver rejection or
 justify changing gains, thresholds or the model. No rejected candidate was promoted.
+
+## Debian ARM64 execution and capture version 2
+
+The workstation now has an isolated Debian cross-build environment, prepared from
+authenticated package downloads without installing packages into the host. The full
+firmware cross-build passed with GCC 14.2.0. An offline audit resolved eight ELF files
+and 18 dependency/version bindings for `commissiond` and the IMU executable. The
+package identities, binaries and evidence hashes are indexed in the JSON report.
+The existing local release archive's controller hash differs from the inventoried
+station controller, so that archive was not treated as current station evidence.
+
+User-mode QEMU rejected both required socket metadata options. They were not disabled.
+A local ARM64 VM with its own Debian `6.12.107+deb13-arm64` kernel runs the same capture
+binary with the checks intact. It has no network or host-device passthrough and creates
+a project venv inside the guest. Its first probe ran successfully but its initial
+archive exporter lacked a gzip applet; only that attempt's console survived. The
+exporter was corrected locally, then replaced with a virtual-serial export path that
+preserves complete raw captures without slow console transfer.
+
+The first sustained VM run passed at about 663 Hz, below the producer's nominal 1 kHz.
+Adding a full-rate criterion exposed another 820 Hz producer limit. Bounded catch-up
+batches corrected the generator; actual kernel timestamps still expose delivery
+timing. The minimum 99% offered-load criterion is a test workload requirement, not a
+confidence estimate or a change to the frozen controller quality thresholds.
+
+A separate local socket probe showed that queued-packet loss can be read before a
+later packet delivers its ancillary overflow notification. Capture version 2 therefore
+requires zero final socket drop counters from `SO_MEMINFO`, in addition to `SO_RXQ_OVFL`
+and interface counters. Eight native contracts include this real overflow case and
+an actual disk-write failure. The reviewer rejects absent/nonzero final counters and
+older capture schemas. Earlier files remain historical evidence under their original
+software identities. Bounds smaller than one nanosecond are rejected before sensor
+startup, and early process failures retain stdout, stderr and executable identity.
+
+Final version-2 evidence:
+
+| Local environment | Duration | Observed yaw rate | Records | Final socket drops | Queue high water |
+|---|---:|---:|---:|---|---:|
+| Native workstation | 120 s | 1000.001 Hz | 195,953 | yaw 0, pitch 0 | 27 / 4095 |
+| ARM64 Linux VM | 120 s | 1000.024 Hz | 194,876 | yaw 0, pitch 0 | 17 / 4095 |
+
+The VM also passed all 12 injected protocol/stream failures and eight native capture
+contracts. The current host process/ABI suite passed 29 tests. These results concern
+synthetic loopback traffic and recording. The VM kernel is not the Pi kernel; actual
+SocketCAN drivers, motor modes, IMU timing, stop behavior and installed-library
+identities remain unqualified. Active excitation/watchdog/handoff and measured asset
+injection remain incomplete. **No additional station access occurred, and the required
+98.5% physical-readiness assessment is still not established.**

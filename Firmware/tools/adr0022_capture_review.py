@@ -40,13 +40,17 @@ def review(path: Path):
     rows = [strict_json(line) for line in data.decode("utf-8").splitlines()]
     need(len(rows) > 2 and rows[0].get("kind") == "header" and rows[-1].get("kind") == "footer", "missing capture boundaries")
     header, footer = rows[0], rows[-1]
-    need(header.get("schema") == "adr0022.capture/1", "unsupported capture schema")
+    need(header.get("schema") == "adr0022.capture/2", "unsupported capture schema")
     need(header.get("provenance") in ("SYNTHETIC", "MEASURED"), "unknown provenance")
     need(footer.get("status") == "COMPLETE" and footer.get("parameter_qualified") is False, "capture failed/incomplete")
+    drops = footer.get("socket_drops", {})
+    need(set(drops) == {"yaw", "pitch"} and all(type(v) is int and v == 0 for v in drops.values()),
+         "final socket loss counters missing or nonzero")
     need(sum(r.get("kind") == "header" for r in rows) == sum(r.get("kind") == "footer" for r in rows) == 1, "duplicate boundaries")
-    report = {"schema": "adr0022.capture_review/1", "capture_sha256": hashlib.sha256(data).hexdigest(),
+    report = {"schema": "adr0022.capture_review/2", "capture_sha256": hashlib.sha256(data).hexdigest(),
               "provenance": header["provenance"], "capture_complete": True,
               "physical_parameters_qualified": False, "motion_authorized": False, "streams": {}, "temperatures": {}}
+    report["final_socket_drops"] = drops
     for axis in ("yaw", "pitch"):
         frames = [r for r in rows if r.get("kind") == "can_rx" and r.get("axis") == axis]
         need(len(frames) == footer[axis + "_frames"], "CAN count differs from durable footer")

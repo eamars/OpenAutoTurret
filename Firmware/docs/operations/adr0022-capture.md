@@ -32,10 +32,46 @@ run/adr0022-local/.venv/bin/python Firmware/tools/adr0022_capture_review.py \
 Use a fresh output directory per local rehearsal. Dependencies belong in the project
 venv: [capture tests](../../commission_runtime/requirements-test.txt) and
 [mathematical tests](../ADR-002.2/requirements-offline.txt).
+The producer retains its 1 kHz yaw cadence using bounded catch-up batches with actual
+kernel receipt timestamps. A successful full-rate rehearsal also requires at least
+99% of that offered rate; this is a load-test criterion, not a confidence percentage
+or a physical controller acceptance threshold.
+
+Check target executables against an explicitly prepared Debian ARM64 sysroot:
+
+```bash
+run/adr0022-local/.venv/bin/python Firmware/tools/adr0022_target_abi.py \
+  --binary run/adr0022-debian13/firmware-make/axis_control_core/commissiond \
+  --binary run/adr0022-debian13/firmware-make/imu-bno085 \
+  --sysroot run/adr0022-debian13/root \
+  --output run/adr0022-debian13/new-abi-report.json
+```
+
+For a local ARM64 kernel rehearsal, prepare separate `amd64/` and `arm64/` package
+roots using authenticated Debian package downloads and extraction, without installing
+them on the host. The host root supplies `qemu-system-arm` and its dependencies. The
+guest root supplies an ARM64 kernel with `virtio_mmio.ko.xz`, `busybox-static`, Python
+with `venv`, and the target libraries. The current prepared roots and exact package
+identities are indexed in the readiness evidence. Run the probe before the matrix:
+
+```bash
+run/adr0022-local/.venv/bin/python Firmware/tools/adr0022_arm_vm.py \
+  --packages-root run/adr0022-debian13/vm-packages \
+  --build run/adr0022-debian13/firmware-make \
+  --phase probe --output run/adr0022-debian13/new-vm-probe
+# After the probe passes, use --phase matrix with another new output directory.
+```
+
+The VM boots an isolated ARM64 kernel, creates a guest project venv, runs the actual
+target capture executable, and exports raw evidence through a virtual serial port.
+It has no network or host-device passthrough. The matrix includes a 120-second capture,
+native acquisition contracts and all 12 injected protocol/stream failures. User-mode
+QEMU is insufficient for this check: the tested version rejects both `SO_TIMESTAMPNS`
+and `SO_RXQ_OVFL`. Do not bypass these requirements to make an emulator pass.
 
 The implemented station entry is `run_application.sh run --capture-baseline MANIFEST`;
 `check` validates files and topology without opening device transports. A physical
-manifest requires schema `adr0022.capture/1`, provenance `MEASURED`, transport `socketcan`,
+manifest requires schema `adr0022.capture/2`, provenance `MEASURED`, transport `socketcan`,
 `yaw.interface=can0`, `pitch.interface=can1`, an absolute unused output path, expected
 `commissiond` and IMU executable SHA-256 values, explicit timing/quality bounds, pitch
 UID `7216313130333105`, `pitch_stop_poll=true` and confirmed support when pitch is disabled.
@@ -56,6 +92,8 @@ Local success demonstrates the exercised Linux receive, pipe, recording and supe
 behavior with synthetic responses. The reviewer reports each sensor's actual sample
 rate, scheduling delay, pitch Iqf and temperatures. It never adds four IMU stream rates
 and labels the sum as gyro rate. Physical recording would still require calibration.
+The ABI report verifies architecture, dependency closure and version labels against the
+named sysroot. VM results add execution under the recorded ARM64 kernel and libraries.
 
 ## What it does not prove
 
@@ -64,6 +102,9 @@ response interval with `device_sample_ns=null`. Yaw temperature stays raw with C
 unknown; pitch uses documented 0.1 C units. STOP feedback does not qualify yaw settling,
 pitch current mode, protection under load, or 3a/3b. `capture_complete` never implies
 `physical_parameters_qualified` or `motion_authorized`.
+Neither a Debian release name nor a local VM identifies the exact libraries installed
+on the station. VM scheduling and loopback traffic do not measure the Pi's SocketCAN
+drivers, CAN bus load, motor firmware, IMU transport or physical stopping behavior.
 
 ## When it fails
 
@@ -73,3 +114,10 @@ invalidate capture. The bounded writer batches records without blocking acquisit
 rolling truncation or unbounded memory. Preserve incomplete files, attempt/result
 records and stderr. Fix and verify locally. Output/attempt identities cannot be reused;
 the supervisor does not restart automatically.
+
+Version 2 requires zero final per-socket drop counts from `SO_MEMINFO` as well as
+per-packet `SO_RXQ_OVFL` notifications. This detects loss that has not yet been reported
+on a later received packet. The reviewer rejects absent/nonzero final counters and
+older version-1 records; those older captures remain historical evidence under their
+original software identity. Timing bounds smaller than one nanosecond are rejected
+before sensor startup, because they cannot be represented by the acquisition clock.
