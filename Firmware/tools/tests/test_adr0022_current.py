@@ -1,6 +1,7 @@
 """Review real neutral C++ captures and reject unsupported/forged claims."""
 import copy
 import json
+import math
 import os
 from pathlib import Path
 import struct
@@ -10,7 +11,7 @@ import pytest
 
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
-from adr0022_current_review import IQF, IQREF, MODE, review
+from adr0022_current_review import IQF, IQREF, MODE, review, review_characterization
 from adr0022_current_rehearsal import rehearse
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="real Linux C++/UDP/pipe capture")
@@ -186,3 +187,97 @@ def test_invalid_capture_cannot_be_made_complete_by_footer(tmp_path):
     rows[-1].update(status="COMPLETE", detail="", normal_stop_confirmed=True, abort_stop_confirmed=False)
     with pytest.raises(ValueError):
         review(save(tmp_path, rows))
+
+
+def test_pitch_count_scale_matches_the_active_protocol(tmp_path, successful):
+    rows = load(successful[0])
+    feedback = [r for r in rows if is_pitch(r, 2)]
+    row = feedback[10]
+    row["angle_raw"] += 1
+    row["bytes"][:2] = list(struct.pack(">H", row["angle_raw"]))
+    report = review(save(tmp_path, rows))
+    assert math.isclose(report["displacement"]["pitch_max_abs_rad"], 25 / 65535, abs_tol=1e-12)
+
+
+@pytest.fixture(scope="module")
+def characterization(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("characterization-review") / "above-criterion"
+    result = rehearse(BINARY, directory, fault="neutral_noise", characterize=True)
+    return directory, result
+
+
+def test_characterization_records_quality_failure_without_qualifying_current(characterization):
+    directory, result = characterization
+    report = review_characterization(directory / "capture.jsonl")
+    assert result["returncode"] == 0 and report["capture_complete"]
+    assert report["capability_scope"] == "neutral_current_measurement_characterization_only"
+    assert report["protection_current_bound_A"] == 6.5 and report["pitch_neutral_current_bound_A"] == .1
+    assert report["diagnostic_comparison_only"] and report["historical_diagnostic_bound_A"] == .1
+    assert report["neutral_observation_s"] == 2.
+    assert not report["neutral_current_criterion_satisfied"]
+    samples = report["current_observations"]
+    assert len(samples) == report["current_statistics"]["count"] > 100
+    assert report["samples_above_neutral_criterion"] == len(samples)
+    expected = struct.unpack("<f", struct.pack("<f", .2515))[0]
+    assert report["current_statistics"]["mean_A"] == expected and report["current_statistics"]["sample_std_A"] == 0
+    assert report["current_statistics"]["maximum_abs_A"] == expected
+    assert all(r["value_A"] == expected and r["raw_register_response_hex"] == "1a700000" + struct.pack("<f", .2515).hex()
+               and r["device_sample_ns"] is None for r in samples)
+    assert 0 < report["initial_current_receipt_from_enable_s"] < .15
+    assert report["initial_current_receipt_from_enable_s"] == samples[0]["receipt_from_enable_s"]
+    assert not report["neutral_current_qualified"] and not report["neutral_transition_qualified"]
+    assert not report["physical_current_mode_qualified"] and not report["physical_capabilities_qualified"]
+    assert not report["physical_parameters_qualified"] and not report["motion_authorized"]
+    assert not report["current_feedback_scale_calibrated"] and report["current_bias_correction"] is None
+    assert report["plant_snapshot"] is None and report["controller_candidate"] is None
+
+
+def test_characterization_keeps_manufacturer_protection_active(tmp_path):
+    directory = tmp_path / "protection"
+    result = rehearse(BINARY, directory, fault="overcurrent", characterize=True)
+    assert result["returncode"] != 0 and "manufacturer current protection" in result["result"]["detail"]
+    assert result["result"]["abort_stop_confirmed"]
+    with pytest.raises(ValueError, match="capture failed"):
+        review_characterization(directory / "capture.jsonl")
+
+
+def test_strict_v1_still_aborts_above_its_original_neutral_guard(tmp_path):
+    directory = tmp_path / "strict-v1"
+    result = rehearse(BINARY, directory, fault="overcurrent")
+    assert result["returncode"] != 0 and "nonneutral measured pitch current" in result["result"]["detail"]
+    with pytest.raises(ValueError, match="capture failed"):
+        review(directory / "capture.jsonl")
+
+
+def test_purposes_cannot_be_exchanged(characterization, successful):
+    with pytest.raises(ValueError, match="unsupported preparation schema/purpose"):
+        review(characterization[0] / "capture.jsonl")
+    with pytest.raises(ValueError, match="unsupported preparation schema/purpose"):
+        review_characterization(successful[0] / "capture.jsonl")
+
+
+@pytest.mark.parametrize("corruption", ["qualification", "criterion", "count", "peak", "guard", "current", "device_time", "observation"])
+def test_characterization_rejects_forged_footer_or_current_evidence(tmp_path, characterization, corruption):
+    rows = load(characterization[0])
+    if corruption == "qualification": rows[-1]["neutral_current_qualified"] = True
+    elif corruption == "criterion": rows[-1]["neutral_current_criterion_satisfied"] = True
+    elif corruption == "count": rows[-1]["current_sample_count"] -= 1
+    elif corruption == "peak": rows[-1]["observed_current_max_abs_A"] = 0.
+    elif corruption == "guard":
+        config = json.loads(rows[0]["manifest_yaml"])
+        config["protection_current_bound_A"] = "23"
+        rows[0]["manifest_yaml"] = json.dumps(config)
+    elif corruption == "observation":
+        config = json.loads(rows[0]["manifest_yaml"])
+        config["neutral_observation_s"] = "10"
+        rows[0]["manifest_yaml"] = json.dumps(config)
+    else:
+        read = next(r for r in rows if r["kind"] == "register_read" and r["index"] == IQF)
+        if corruption == "device_time": read["device_sample_ns"] = read["receive_ns"]
+        else:
+            read["value"] = 7.
+            reply = next(r for r in rows if is_pitch(r, 17) and r["kernel_monotonic_ns"] == read["receive_ns"])
+            reply["bytes"][4:] = list(struct.pack("<f", 7.))
+            rows[-1]["observed_current_max_abs_A"] = 7.
+    with pytest.raises(ValueError):
+        review_characterization(save(tmp_path, rows))

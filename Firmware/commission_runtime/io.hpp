@@ -34,20 +34,30 @@ inline void on_signal(int) { interrupted = 1; }
 inline void require(bool ok, const char* detail) {
   if (!ok) throw std::runtime_error(detail);
 }
-inline std::string json(const YAML::Node& node) {
-  YAML::Emitter out;
-  out << YAML::Flow << YAML::DoubleQuoted << node;
-  return out.c_str();
-}
 // All emitted machine-readable records use JSON, including exception text.
 inline std::string quoted(const std::string& text) {
   std::ostringstream out; out << '"';
   for (const unsigned char c : text) {
     if (c == '"' || c == '\\') out << '\\' << c;
-    else if (c >= 32 && c < 127) out << c;
+    else if (c >= 32 && c != 127) out << c; // Keep UTF-8 bytes intact; escape only JSON control bytes.
     else { const char* hex="0123456789abcdef"; out << "\\u00" << hex[c>>4] << hex[c&15]; }
   }
   out << '"'; return out.str();
+}
+// Manifest scalars retain their original spelling as JSON strings. In
+// particular, YAML's null spelling '~' is not JSON and cannot appear here.
+inline std::string json(const YAML::Node& node) {
+  if (!node || node.IsNull()) return quoted("null");
+  if (node.IsScalar()) return quoted(node.Scalar());
+  std::string result=node.IsSequence()?"[":"{";
+  bool first=true;
+  for (const auto& item:node) {
+    if (!first) result+=",";
+    first=false;
+    if (node.IsSequence()) result+=json(item);
+    else result+=quoted(item.first.as<std::string>())+":"+json(item.second);
+  }
+  return result+(node.IsSequence()?"]":"}");
 }
 struct Fd {
   int value{-1};

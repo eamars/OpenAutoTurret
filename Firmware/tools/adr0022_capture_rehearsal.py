@@ -19,7 +19,7 @@ import time
 
 
 def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "none",
-             runner: tuple[str, ...] = ()) -> dict:
+             runner: tuple[str, ...] = (), native_settings: bool = False) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     ports = []
     reservations = []
@@ -43,6 +43,8 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                    "duration_s": duration, "minimum_imu_status": 0,
                    "read_timeout_s": .15, "read_period_s": .01, "stop_period_s": .02},
     }
+    if native_settings:
+        manifest["additional_startup_registers"] = [0x701E,0x701F,0x7020,0x7017]
     config = root / "manifest.json"
     config.write_text(json.dumps(manifest, indent=2) + "\n")
     for sock in reservations:
@@ -51,6 +53,7 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
     # argv structured and record both identities; never disguise a shell wrapper
     # as the target binary or count emulation as station execution.
     command = [*runner, str(binary.resolve()), "--capture-baseline", str(config.resolve())]
+    executable_sha256=hashlib.sha256(binary.read_bytes()).hexdigest()
     child = subprocess.Popen(command,
                              pass_fds=(read_fd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     os.close(read_fd)
@@ -101,7 +104,8 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                 else:
                     index = struct.unpack_from("<H", data)[0]
                     value = {0x7005: 1, 0x7014: .1, 0x7018: 5., 0x7010: .2, 0x7011: .3,
-                         0x7019: 0., 0x701C: 24., 0x701A: .25}[index]
+                         0x7019: 0., 0x701C: 24., 0x701A: .25,
+                         0x701E:30.,0x701F:1.,0x7020:.002,0x7017:.175}[index]
                     response = struct.pack("<H2x", index) + (struct.pack("<B3x", value) if index == 0x7005
                                                          else struct.pack("<f", value))
                     response_id = 0x80000000 | (17 << 24) | (127 << 8)
@@ -219,11 +223,12 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                         "reenabled": "became enabled", "stop_timeout": "feedback"}[fault]
             assert expected in records[-1]["detail"], records[-1]
         result = {"provenance": "SYNTHETIC", "fault": fault, "returncode": child.returncode,
-                  "executable_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                  "executable_sha256": executable_sha256,
                   "command": command, "emulated": bool(runner),
                   "offered_load": offered_load,
                   "records": len(records), "result": records[-1], "stdout": first + stdout,
                   "stderr": stderr, "hardware_accessed": False}
+        assert hashlib.sha256(binary.read_bytes()).hexdigest()==executable_sha256, "executable changed during rehearsal"
         (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         return result
     except Exception as exc:
@@ -237,7 +242,7 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
         stdout, stderr = child.communicate(timeout=5)
         failure = {"provenance": "SYNTHETIC", "hardware_accessed": False,
                    "command": command, "returncode": child.returncode,
-                   "executable_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                   "executable_sha256": executable_sha256,
                    "detail": str(exc), "stdout": first + stdout, "stderr": stderr}
         (root / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
         raise
@@ -260,6 +265,7 @@ if __name__ == "__main__":
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=3.)
+    parser.add_argument("--native-settings",action="store_true",help="read native homing settings while disabled")
     parser.add_argument("--runner", action="append", default=[], metavar="ARG",
                         help="local emulator argv prefix; repeat per token, e.g. --runner=qemu-aarch64 --runner=-L --runner=SYSROOT")
     parser.add_argument("--fault", choices=("none", "read_rejected", "can_stale", "can_error", "can_truncated",
@@ -269,4 +275,4 @@ if __name__ == "__main__":
     if not math.isfinite(args.duration) or args.duration <= 1:
         parser.error("duration must exceed one second")
     print(json.dumps(rehearse(args.binary, args.output, duration=args.duration, fault=args.fault,
-                             runner=tuple(args.runner)), indent=2))
+                             runner=tuple(args.runner),native_settings=args.native_settings), indent=2))

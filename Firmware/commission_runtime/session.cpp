@@ -19,6 +19,23 @@ int capture_session(const char* path) {
     const bool stop_poll=config["pitch_stop_poll"].as<bool>();
     require(!stop_poll || config["pitch_supported_when_disabled"].as<bool>(),
             "HARD_ABORT: pitch support must be confirmed before STOP polling");
+    std::vector startup_registers{cybergear::Reg::RunMode,cybergear::Reg::CurFiltGain,
+       cybergear::Reg::LimitCur,cybergear::Reg::CurKp,cybergear::Reg::CurKi,cybergear::Reg::MechPos,cybergear::Reg::VBus,
+       cybergear::Reg::Iqf};
+    if (const auto extra=config["additional_startup_registers"]) {
+      require(extra.IsSequence() && register_reads && stop_poll,
+              "DATA_INVALID: additional native settings require disabled register acquisition");
+      for (const auto& item:extra) {
+        const auto index=item.as<unsigned>();
+        require(index==unsigned(cybergear::Reg::LocKp) || index==unsigned(cybergear::Reg::SpdKp) ||
+                index==unsigned(cybergear::Reg::SpdKi) || index==unsigned(cybergear::Reg::LimitSpd),
+                "DATA_INVALID: unsupported additional baseline register");
+        const auto reg=static_cast<cybergear::Reg>(index);
+        require(std::find(startup_registers.begin(),startup_registers.end(),reg)==startup_registers.end(),
+                "DATA_INVALID: duplicate additional baseline register");
+        startup_registers.push_back(reg);
+      }
+    }
     const auto uid_text=config["expected_pitch_uid"].as<std::string>();
     require(uid_text.size()==16 && uid_text.find_first_not_of("0123456789abcdef")==std::string::npos,
             "DATA_INVALID: expected pitch UID must be 16 lowercase hex digits");
@@ -38,9 +55,6 @@ int capture_session(const char* path) {
     require(synthetic || buses[0].iface!=buses[1].iface,"INTEGRATION_MISMATCH: duplicate CAN bus");
     ImuStream imu;
     Readback readback(127,0);
-    const std::array startup_registers{cybergear::Reg::RunMode,cybergear::Reg::CurFiltGain,
-       cybergear::Reg::LimitCur,cybergear::Reg::CurKp,cybergear::Reg::CurKi,cybergear::Reg::MechPos,cybergear::Reg::VBus,
-       cybergear::Reg::Iqf};
     size_t startup_index=0, periodic_index=0; uint64_t read_count=0, rejected_count=0;
     std::map<cybergear::Reg,bool> readable;
     int64_t next_read=0, discovery_begin=0, stop_begin=0, next_stop=0;

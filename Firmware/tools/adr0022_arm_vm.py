@@ -17,7 +17,9 @@ import subprocess
 import tarfile
 
 parser=argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--phase',choices=['probe','matrix','current-probe','current-matrix'],required=True)
+parser.add_argument('--phase',choices=['probe','matrix','current-probe','current-matrix',
+                                      'characterization-probe','characterization-matrix',
+                                      'homing-probe','homing-matrix'],required=True)
 parser.add_argument('--packages-root',type=Path,required=True,help='separate amd64/ and arm64/ extracted package directories')
 parser.add_argument('--build',type=Path,required=True,help='full ARM64 Firmware CMake build')
 parser.add_argument('--output',type=Path,required=True,help='new local directory for immutable VM evidence')
@@ -58,7 +60,8 @@ for path,name in [('axis_control_core/commissiond','commissiond'),
         raise ValueError(f'ARM64 ELF required: {binary}')
     file(binary,'work/bin/'+name)
 for name in ('adr0022_capture_rehearsal.py','adr0022_capture_review.py',
-             'adr0022_current_rehearsal.py','adr0022_current_review.py'):
+             'adr0022_current_rehearsal.py','adr0022_current_review.py',
+             'adr0022_homing_rehearsal.py','adr0022_homing_review.py'):
     file(tools/name,'work/tools/'+name)
 file(tools/'adr0022_arm_vm_guest.py','work/run_vm_rehearsals.py')
 kernel=next((source/'boot').glob('vmlinuz-*'))
@@ -126,6 +129,8 @@ metadata={'schema':'adr0022.arm_vm/1','phase':args.phase,'station_accessed':Fals
           'assets':[identity(p) for p in (kernel,module,initrd,host/'usr/bin/qemu-system-aarch64',
                                         tools/'adr0022_arm_vm.py',tools/'adr0022_arm_vm_guest.py',
                                         tools/'adr0022_capture_rehearsal.py',tools/'adr0022_capture_review.py',
+                                        tools/'adr0022_current_rehearsal.py',tools/'adr0022_current_review.py',
+                                        tools/'adr0022_homing_rehearsal.py',tools/'adr0022_homing_review.py',
                                         build/'axis_control_core/commissiond')]}
 (out/'manifest.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print('Running isolated ARM64 VM (no network or host device passthrough): '+str(out),flush=True)

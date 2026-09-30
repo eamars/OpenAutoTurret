@@ -20,7 +20,8 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 from adr0022_capture_rehearsal import rehearse
 from adr0022_capture_review import review
-from adr0022_capture_launch import preflight, source_identity, SOURCE_FILES, SOURCE_DIRECTORIES, validate_current_contract, canonical_sha
+from adr0022_capture_launch import (preflight, source_identity, SOURCE_FILES, SOURCE_DIRECTORIES,
+    validate_current_contract, canonical_sha, PROTECTION_DOCUMENT, PROTECTION_DOCUMENT_SHA256)
 from adr0022_baseline_assets import derive, write_asset
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="real Linux recvmsg/process boundary")
@@ -284,7 +285,8 @@ def test_preflight_rejects_timing_that_rounds_to_zero_before_sensor_start(tmp_pa
     assert not (tmp_path / "baseline.attempt.json").exists()
 
 
-def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_collector=False):
+def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_collector=False, characterize_current=False,
+                           protection_violation=False):
     """Actual shell, Python supervisor, C++ owner, UDP peers and IMU pipe."""
     firmware, manifest, ports, emitter = prepare_launcher_fixture(tmp_path)
     current_review = TOOLS / "adr0022_current_review.py"
@@ -300,12 +302,19 @@ def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_
     config.update(schema="adr0022.current-preparation/1", purpose="neutral_current_mode_verification",
                   neutral_current_bound_A=.1, transition_displacement_bound_rad=.01,
                   pitch_maximum_temperature_C=60., expected_source_sha256=source_identity(firmware)["source_sha256"])
+    if characterize_current:
+        config.update(schema="adr0022.neutral-characterization/1", purpose="neutral_current_measurement_characterization",
+                      protection_current_bound_A=6.5, neutral_observation_s=2.,
+                      pending_calibration=None,
+                      protection_limit_basis={"kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
+                                              "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5})
     config["yaw"]["peer_port"] = emitter.getsockname()[1]
     config["limits"]["duration_s"] = 10.
     manifest.write_text(json.dumps(config))
     env = dict(os.environ, OTA_PYTHON=sys.executable, OTA_RUN_DIR=str(tmp_path / "runtime"))
     launcher = firmware / "scripts/run_application.sh"
-    child = subprocess.Popen(["bash", str(launcher), "run", "--prepare-current", str(manifest)],
+    option = "--characterize-current" if characterize_current else "--prepare-current"
+    child = subprocess.Popen(["bash", str(launcher), "run", option, str(manifest)],
                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     enabled, mode, iq, cancelled = False, 2, 1., False
     started = time.monotonic()
@@ -328,7 +337,8 @@ def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_
                 elif kind == 17:
                     reg = struct.unpack_from("<H", data)[0]
                     assert reg in (0x7005, 0x7006, 0x701a)
-                    value = struct.pack("<B3x", mode) if reg == 0x7005 else struct.pack("<f", iq if reg == 0x7006 else 0.)
+                    observed_current = 7. if protection_violation else .3 if characterize_current else 0.
+                    value = struct.pack("<B3x", mode) if reg == 0x7005 else struct.pack("<f", iq if reg == 0x7006 else observed_current)
                     response_id, payload = 0x91007f00, struct.pack("<H2x", reg) + value
                 else:
                     assert kind in (3, 4, 18)
@@ -367,6 +377,12 @@ def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_
             assert result["status"] == "INVALID" and not result["pitch_stop_confirmed"]
             assert result["process_loss"] and "STOP unconfirmed" in result["stop_detail"]
             assert result["forced_termination"] == freeze_collector
+        elif protection_violation:
+            assert child.returncode != 0 and result["status"] == "INVALID"
+            assert not enabled and result["pitch_stop_confirmed"]
+            footer = json.loads((tmp_path / "baseline.jsonl").read_text().splitlines()[-1])
+            assert "manufacturer current protection bound exceeded" in footer["detail"]
+            assert footer["abort_stop_confirmed"]
         else:
             assert not enabled, stdout + stderr + log
             assert result["pitch_stop_confirmed"], result
@@ -378,10 +394,22 @@ def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_
             if not (lose_collector or freeze_collector):
                 footer = json.loads((tmp_path / "baseline.jsonl").read_text().splitlines()[-1])
                 assert footer["abort_stop_confirmed"]
-        else:
+        elif not protection_violation:
             assert child.returncode == 0 and result["status"] == "COMPLETE", stdout + stderr + log
             assert mode == 2 and iq == 0
-        again = subprocess.run(["bash", str(launcher), "run", "--prepare-current", str(manifest)],
+        if characterize_current:
+            assert result["neutral_current_qualified"] is False and result["current_mode_qualified"] is False
+            header = json.loads((tmp_path / "baseline.jsonl").read_text().splitlines()[0])
+            recorded_manifest = json.loads(header["manifest_yaml"])
+            assert recorded_manifest["protection_limit_basis"]["document"] == config["protection_limit_basis"]["document"]
+            assert recorded_manifest["pending_calibration"] == "null"
+            if result["status"] == "COMPLETE":
+                assert result["neutral_current_criterion_satisfied"] is False
+            attempt = json.loads((tmp_path / "baseline.attempt.json").read_text())
+            assert attempt["schema"] == "adr0022.neutral_characterization_attempt/1"
+            assert attempt["automatic_retries"] == 0 and attempt["nonzero_current_requested"] is False
+            assert attempt["historical_diagnostic_bound_A"] == config["neutral_current_bound_A"]
+        again = subprocess.run(["bash", str(launcher), "run", option, str(manifest)],
                                env=env, text=True, capture_output=True, timeout=10)
         assert again.returncode != 0 and "evidence reuse" in again.stderr
     finally:
@@ -405,3 +433,124 @@ def test_neutral_launcher_lost_owner_preserves_unconfirmed_stop(tmp_path):
 
 def test_neutral_launcher_forced_termination_preserves_unconfirmed_stop(tmp_path):
     neutral_launcher_probe(tmp_path, cancel=True, freeze_collector=True)
+
+
+def test_characterization_launcher_records_above_quality_without_qualification(tmp_path):
+    neutral_launcher_probe(tmp_path, characterize_current=True)
+
+
+def test_characterization_launcher_keeps_manufacturer_protection_abort(tmp_path):
+    neutral_launcher_probe(tmp_path, characterize_current=True, protection_violation=True)
+
+
+def homing_launcher_probe(tmp_path, monkeypatch, fault="none"):
+    """Reuse the existing protocol plant, with the actual launcher as process owner."""
+    from adr0022_homing_rehearsal import rehearse as homing_rehearse, PASS_FAULTS
+    firmware, _, _, emitter = prepare_launcher_fixture(tmp_path)
+    emitter.close()
+    for name in SOURCE_FILES:
+        destination = firmware / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(TOOLS.parent / name, destination)
+    for name in SOURCE_DIRECTORIES:
+        shutil.copytree(TOOLS.parent / name, firmware / name)
+    wrapper = tmp_path / "homing-launcher-wrapper"
+    wrapper.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
+        import hashlib, json, os, signal, subprocess, sys, time
+        from pathlib import Path
+        firmware = Path(os.environ['HOMING_LAUNCHER_FIRMWARE'])
+        sys.path.insert(0, str(firmware / 'tools'))
+        from adr0022_capture_launch import source_identity
+        manifest = Path(sys.argv[-1])
+        config = json.loads(manifest.read_text())
+        os.close(config.pop('imu_fd'))
+        config['expected_source_sha256'] = source_identity(firmware)['source_sha256']
+        config['expected_binaries'] = {
+            'commissiond': hashlib.sha256((firmware / 'build/axis_control_core/commissiond').read_bytes()).hexdigest(),
+            'imu': hashlib.sha256((firmware / 'build/imu-bno085').read_bytes()).hexdigest()}
+        manifest.write_text(json.dumps(config))
+        env = dict(os.environ, OTA_PYTHON=sys.executable, OTA_RUN_DIR=str(firmware.parent / 'runtime'))
+        child = subprocess.Popen(['bash', str(firmware / 'scripts/run_application.sh'), 'run',
+                                  '--establish-homing', str(manifest)], env=env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        def cancel(*_):
+            if child.poll() is None: child.terminate()
+        signal.signal(signal.SIGTERM, cancel)
+        signal.signal(signal.SIGINT, cancel)
+        log = firmware.parent / 'runtime/controller.log'
+        deadline = time.monotonic() + 10
+        while child.poll() is None and time.monotonic() < deadline:
+            if log.is_file():
+                ready = next((line for line in log.read_text().splitlines()
+                              if line.startswith('{"kind":"capture_ready"')), None)
+                if ready:
+                    print(ready, flush=True)
+                    break
+            time.sleep(.01)
+        stdout, stderr = child.communicate(timeout=120)
+        print(stdout, end='')
+        print(stderr, file=sys.stderr, end='')
+        if log.is_file(): print(log.read_text(), file=sys.stderr)
+        raise SystemExit(child.returncode)
+        '''))
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("HOMING_LAUNCHER_FIRMWARE", str(firmware))
+    directory = tmp_path / "homing"
+    raw = homing_rehearse(BINARY, directory, fault=fault, runner=(str(wrapper),))
+    result = json.loads((directory / "capture.result.json").read_text())
+    attempt = json.loads((directory / "capture.attempt.json").read_text())
+    succeeded = fault in PASS_FAULTS
+    assert result["status"] == ("COMPLETE" if succeeded else "INVALID"), result
+    assert result["pitch_stop_confirmed"] and not result["yaw_stop_confirmed"]
+    assert not result["current_mode_qualified"] and not result["physical_parameters_qualified"]
+    assert result["retained_calibration_modified"] is False
+    assert attempt["schema"] == "adr0022.sensorless_homing_attempt/1"
+    assert attempt["motion_requested"] is True and attempt["automatic_retries"] == 0
+    assert result["homing_observed"] == succeeded
+    assert not (tmp_path / "runtime/launcher.pid").exists()
+    assert raw["hardware_accessed"] is False
+    again = subprocess.run(["bash", str(firmware / "scripts/run_application.sh"), "run", "--establish-homing",
+                            str(directory / "manifest.json")],
+                           env=dict(os.environ, OTA_PYTHON=sys.executable, OTA_RUN_DIR=str(tmp_path / "runtime")),
+                           text=True, capture_output=True, timeout=10)
+    assert again.returncode != 0 and "evidence reuse" in again.stderr
+
+
+def test_homing_launcher_complete(tmp_path, monkeypatch):
+    homing_launcher_probe(tmp_path, monkeypatch)
+
+
+def test_homing_launcher_cancellation_allows_cpp_stop(tmp_path, monkeypatch):
+    homing_launcher_probe(tmp_path, monkeypatch, fault="interrupt")
+
+
+def test_homing_launcher_measured_native_offset_preserves_observations(tmp_path, monkeypatch):
+    homing_launcher_probe(tmp_path, monkeypatch, fault="native_position_offset")
+
+
+@pytest.mark.parametrize("invalid", ["missing_parameter", "unsafe_current"])
+def test_homing_preflight_uses_exact_runtime_numeric_validation_before_sensor(tmp_path, invalid):
+    from adr0022_homing_rehearsal import fixture
+    firmware, baseline, ports, emitter = prepare_launcher_fixture(tmp_path)
+    emitter.close()
+    for name in SOURCE_FILES:
+        destination = firmware / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(TOOLS.parent / name, destination)
+    for name in SOURCE_DIRECTORIES:
+        shutil.copytree(TOOLS.parent / name, firmware / name)
+    binaries = json.loads(baseline.read_text())["expected_binaries"]
+    config = fixture(ports, 31003, -1, tmp_path / "homing.jsonl")
+    config.pop("imu_fd")
+    config.update(expected_binaries=binaries, expected_source_sha256=source_identity(firmware)["source_sha256"])
+    if invalid == "missing_parameter":
+        del config["homing"]["arrival_tol_rad"]
+    else:
+        config["guards"]["current_bound_A"] = 6.
+    manifest = tmp_path / "homing.json"
+    manifest.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="runtime homing parameter validation failed"):
+        preflight(manifest, firmware, establish_homing=True)
+    assert not (tmp_path / "homing.jsonl").exists()
+    assert not (tmp_path / "homing.attempt.json").exists()
+    assert not (tmp_path / "homing.imu.log").exists()

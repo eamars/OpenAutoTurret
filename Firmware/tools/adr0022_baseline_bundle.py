@@ -16,11 +16,21 @@ CURRENT_SCHEMA = "adr0022.acquisition_bundle/1"
 
 
 def launch_option(manifest):
+    if manifest.get("schema") == "adr0022.sensorless-homing/1":
+        from adr0022_capture_launch import validate_current_contract
+        validate_current_contract(manifest, establish_homing=True)
+        return "--establish-homing"
+    if manifest.get("schema") == "adr0022.neutral-characterization/1":
+        from adr0022_capture_launch import validate_current_contract
+        validate_current_contract(manifest, characterize_current=True)
+        return "--characterize-current"
     if manifest.get("schema") == "adr0022.current-preparation/1":
         from adr0022_capture_launch import validate_current_contract
         validate_current_contract(manifest)
         return "--prepare-current"
     if manifest.get("schema") == "adr0022.capture/2":
+        from adr0022_capture_launch import validate_additional_registers
+        validate_additional_registers(manifest)
         return "--capture-baseline"
     raise ValueError("supported physical acquisition manifest required")
 
@@ -29,7 +39,7 @@ def validate_manifest(manifest, revision):
     option = launch_option(manifest)
     if manifest.get("provenance") != "MEASURED" or "output" in manifest or "imu_fd" in manifest:
         raise ValueError("unbound measured acquisition manifest required")
-    if option == "--prepare-current" and manifest["expected_revision"] != revision:
+    if option != "--capture-baseline" and manifest["expected_revision"] != revision:
         raise ValueError("current preparation source revision differs from committed release")
     return option
 
@@ -51,7 +61,7 @@ def pack(build, revision, manifest, output):
             raise ValueError("manifest binary hash mismatch: " + key)
         content["build/" + relative] = data
     content["manifest.json"] = (json.dumps(manifest, indent=2, allow_nan=False) + "\n").encode()
-    record = {"schema": CURRENT_SCHEMA if option == "--prepare-current" else SCHEMA, "revision": revision,
+    record = {"schema": CURRENT_SCHEMA if option != "--capture-baseline" else SCHEMA, "revision": revision,
               "launch_option": option,
               "files": {name: {"sha256": digest(data), "bytes": len(data)} for name, data in content.items()}}
     content["bundle.json"] = (json.dumps(record, indent=2) + "\n").encode()
@@ -81,13 +91,15 @@ def validate(bundle, revision, firmware=None):
             raise ValueError("bundle file identity differs: " + name)
     manifest = json.loads(content["manifest.json"])
     option = validate_manifest(manifest, revision)
-    expected_schema = CURRENT_SCHEMA if option == "--prepare-current" else SCHEMA
+    expected_schema = CURRENT_SCHEMA if option != "--capture-baseline" else SCHEMA
     if record["schema"] != expected_schema or record.get("launch_option", "--capture-baseline") != option:
         raise ValueError("acquisition launch mode identity differs")
-    if option == "--prepare-current" and firmware is not None:
-        from adr0022_capture_launch import source_identity
+    if option != "--capture-baseline" and firmware is not None:
+        from adr0022_capture_launch import source_identity, verify_protection_basis
         if source_identity(firmware)["source_sha256"] != manifest["expected_source_sha256"]:
             raise ValueError("acquisition source SHA-256 differs from qualified manifest")
+        if option == "--characterize-current":
+            verify_protection_basis(manifest, firmware)
     for key, relative in EXECUTABLES.items():
         data = content["build/" + relative]
         if data[:4] != b"\x7fELF" or data[18:20] != b"\xb7\x00" or digest(data) != manifest["expected_binaries"][key]:
@@ -111,7 +123,8 @@ def install(bundle, revision, firmware, output_directory):
                 target.write(archive.extractfile(name).read())
             path.chmod(0o755)
         manifest = json.load(archive.extractfile("manifest.json"))
-    manifest["output"] = str(output_directory / ("current-preparation.jsonl" if launch_option(manifest) == "--prepare-current" else "baseline.jsonl"))
+    name = {"--establish-homing": "sensorless-homing.jsonl", "--prepare-current": "current-preparation.jsonl", "--characterize-current": "current-characterization.jsonl", "--capture-baseline": "baseline.jsonl"}[launch_option(manifest)]
+    manifest["output"] = str(output_directory / name)
     path = output_directory / "manifest.json"
     with path.open("x") as target:
         json.dump(manifest, target, indent=2, allow_nan=False)
@@ -142,10 +155,12 @@ if __name__ == "__main__":
             raise SystemExit("Commit source before packaging the baseline release")
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
         manifest = json.loads(args.manifest.read_text())
-        if launch_option(manifest) == "--prepare-current":
-            from adr0022_capture_launch import source_identity
+        if launch_option(manifest) != "--capture-baseline":
+            from adr0022_capture_launch import source_identity, verify_protection_basis
             if source_identity(repo / "Firmware")["source_sha256"] != manifest["expected_source_sha256"]:
                 raise SystemExit("Acquisition source differs from local qualification")
+            if launch_option(manifest) == "--characterize-current":
+                verify_protection_basis(manifest, repo / "Firmware")
         print(json.dumps(pack(args.build, revision, manifest, args.output), indent=2))
     else:
         print(install(args.bundle, args.revision, args.firmware, args.output_directory))

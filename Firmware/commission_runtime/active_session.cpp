@@ -10,7 +10,7 @@ can::RawFrame raw(const cybergear::CanFrame& source) {
   std::memcpy(frame.data,source.data,8); return frame;
 }
 
-// This entry qualifies the neutral mode transition. It has no nonzero-current,
+// This entry observes the neutral mode transition. It has no nonzero-current,
 // homing, position-reference, inner-loop-gain or persistent-register operation.
 // Dynamic acquisition must obtain its own qualified envelope and homing identity.
 struct Preparation {
@@ -21,28 +21,38 @@ struct Preparation {
   int64_t entered{}, pending_begin{}, next_ping{}, observed_since{};
   int original_mode=-1;
   double origin{}, actual_current{};
-  int64_t actual_current_ns{}, status_ns{};
+  int64_t actual_current_ns{}, status_ns{}, enable_begin_ns{};
   bool disabled=false, enabled=false, have_origin=false;
 };
 
 class NeutralSession {
  public:
-  explicit NeutralSession(const YAML::Node& config)
+  explicit NeutralSession(const YAML::Node& config, bool characterization=false)
       : config_(config), limits_(config["limits"]), synthetic_(config["provenance"].as<std::string>()=="SYNTHETIC"),
-        readback_(127,0) {
-    require(config["schema"].as<std::string>()=="adr0022.current-preparation/1",
+        characterization_(characterization), readback_(127,0) {
+    schema_=characterization_?"adr0022.neutral-characterization/1":"adr0022.current-preparation/1";
+    purpose_=characterization_?"neutral_current_measurement_characterization":"neutral_current_mode_verification";
+    require(config["schema"].as<std::string>()==schema_,
             "INTEGRATION_MISMATCH: current preparation schema");
     require(synthetic_ || config["provenance"].as<std::string>()=="MEASURED", "DATA_INVALID: provenance");
     require(config["transport"].as<std::string>()==(synthetic_?"loopback_udp":"socketcan"),
             "INTEGRATION_MISMATCH: transport/provenance mismatch");
     require(config["pitch_supported_when_disabled"].as<bool>(), "HARD_ABORT: pitch support is required");
-    require(config["purpose"].as<std::string>()=="neutral_current_mode_verification",
+    require(config["purpose"].as<std::string>()==purpose_,
             "INTEGRATION_MISMATCH: unsupported active purpose");
     uid_text_=config["expected_pitch_uid"].as<std::string>();
     require(uid_text_.size()==16 && uid_text_.find_first_not_of("0123456789abcdef")==std::string::npos,
             "DATA_INVALID: pitch UID");
     expected_uid_=std::stoull(uid_text_,nullptr,16);
     maximum_current_=positive("neutral_current_bound_A");
+    protection_current_=characterization_?positive("protection_current_bound_A"):maximum_current_;
+    const auto observation_s=characterization_?positive("neutral_observation_s"):2.;
+    require(observation_s<=60. && (!characterization_ || protection_current_<=6.5),
+            "DATA_INVALID: characterization protection or duration exceeds bound");
+    observation_ns_=int64_t(observation_s*1e9);
+    require(observation_ns_>0 &&
+            limits_.duration>limits_.startup+observation_ns_,
+            "DATA_INVALID: neutral observation does not fit session deadline");
     maximum_displacement_=positive("transition_displacement_bound_rad");
     maximum_temperature_=positive("pitch_maximum_temperature_C");
     imu_fd_=config["imu_fd"].as<int>();
@@ -56,8 +66,8 @@ class NeutralSession {
               config["pitch"]["interface"].as<std::string>()=="can1", "INTEGRATION_MISMATCH: station topology");
     }
     journal_=std::make_unique<Journal>(config["output"].as<std::string>(),
-      "{\"kind\":\"header\",\"schema\":\"adr0022.current-preparation/1\",\"provenance\":"+
-      quoted(synthetic_?"SYNTHETIC":"MEASURED")+",\"purpose\":\"neutral_current_mode_verification\","
+      "{\"kind\":\"header\",\"schema\":"+quoted(schema_)+",\"provenance\":"+
+      quoted(synthetic_?"SYNTHETIC":"MEASURED")+",\"purpose\":"+quoted(purpose_)+","
       "\"parameter_qualified\":false,\"manifest_yaml\":"+quoted(json(config))+"}");
     buses_[0].open(config["yaw"],synthetic_,limits_);
     buses_[1].open(config["pitch"],synthetic_,limits_);
@@ -66,7 +76,7 @@ class NeutralSession {
   int run() {
     interrupted=0; std::signal(SIGINT,on_signal); std::signal(SIGTERM,on_signal);
     begin_=monotonic_ns(); prep_.entered=begin_;
-    std::cout<<"{\"kind\":\"capture_ready\",\"excitation\":false,\"purpose\":\"neutral_current_mode_verification\"}\n"<<std::flush;
+    std::cout<<"{\"kind\":\"capture_ready\",\"excitation\":false,\"purpose\":"+quoted(purpose_)+"}\n"<<std::flush;
     try {
       record("{\"kind\":\"session_begin\",\"time_ns\":"+std::to_string(begin_)+"}");
       while (prep_.state!=Preparation::State::Done) {
@@ -99,7 +109,7 @@ class NeutralSession {
   void record(const std::string& row) {
     require(journal_->append(row),"DATA_INVALID: capture writer failed");
   }
-  void send(unsigned axis, const can::RawFrame& frame, const char* operation) {
+  int64_t send(unsigned axis, const can::RawFrame& frame, const char* operation) {
     // A separate allowlist at the final send boundary prevents a future caller
     // from quietly turning neutral verification into an excitation interface.
     if (!axis) {
@@ -150,8 +160,9 @@ class NeutralSession {
     record("{\"kind\":\"neutral_tx\",\"axis\":"+quoted(axis?"pitch":"yaw")+",\"operation\":"+quoted(operation)+
       ",\"begin_ns\":"+std::to_string(before)+",\"kernel_accepted_ns\":"+std::to_string(after)+
       ",\"id\":"+std::to_string(frame.id)+",\"data_hex\":"+quoted(bytes)+",\"success\":true}");
+    return before;
   }
-  void pitch(const cybergear::CanFrame& frame, const char* operation) { send(1,raw(frame),operation); }
+  int64_t pitch(const cybergear::CanFrame& frame, const char* operation) { return send(1,raw(frame),operation); }
   void read(cybergear::Reg reg, int64_t now) {
     send(1,readback_.begin(reg,now,limits_.read_timeout),"register_read");
     readback_.accepted(monotonic_ns(),true);
@@ -205,12 +216,16 @@ class NeutralSession {
               "DATA_INVALID: socket receive loss before enable");
       require(prep_.have_origin && prep_.disabled && now-prep_.status_ns<=limits_.can_gap,
               "HARD_ABORT: enabling without fresh disabled feedback and position");
-      prep_.enabled=false; pitch(cybergear::make_enable(0,127),"enable_at_zero"); change(S::CheckEnabledMode,now);
+      prep_.enabled=false;
+      prep_.enable_begin_ns=pitch(cybergear::make_enable(0,127),"enable_at_zero");
+      change(S::CheckEnabledMode,now);
     } else if (prep_.state==S::CheckEnabledMode) {
       if (confirm(cybergear::Reg::RunMode,3,now)) change(S::CheckEnabledZero,now);
     } else if (prep_.state==S::CheckEnabledZero) {
       if (confirm(cybergear::Reg::IqRef,0,now)) {
-        require(prep_.enabled,"HARD_ABORT: enabled status absent after mode readback");
+        require(prep_.enabled && prep_.status_ns>=prep_.enable_begin_ns &&
+                now-prep_.status_ns<=limits_.can_gap,
+                "HARD_ABORT: fresh enabled status absent after mode readback");
         change(S::ObserveEnabled,now);
       }
     } else if (prep_.state==S::ObserveEnabled) {
@@ -220,12 +235,13 @@ class NeutralSession {
         pitch(cybergear::make_write_reg_float(cybergear::Reg::IqRef,0,0,127),"neutral_keepalive");
         prep_.next_ping=now+limits_.stop_period;
       }
-      if (!readback_.pending() && now>=next_read_) {
-        read(cybergear::Reg::Iqf,now); next_read_=now+limits_.read_period;
-      }
       require(now-prep_.entered<=limits_.read_timeout || (prep_.actual_current_ns>=prep_.entered &&
               now-prep_.actual_current_ns<limits_.read_timeout),"MEASUREMENT_LIMITED: neutral Iq feedback missing");
-      if (now-prep_.entered>=2'000'000'000LL && !readback_.pending()) change(S::FinalStop,now);
+      if (now-prep_.entered>=observation_ns_ && !readback_.pending()) {
+        change(S::FinalStop,now);
+      } else if (!readback_.pending() && now>=next_read_) {
+        read(cybergear::Reg::Iqf,now); next_read_=now+limits_.read_period;
+      }
     } else if (prep_.state==S::RestoreMode) {
       pitch(cybergear::make_write_reg_u8(cybergear::Reg::RunMode,prep_.original_mode,0,127),"restore_original_mode_disabled");
       change(S::CheckRestored,now);
@@ -276,7 +292,14 @@ class NeutralSession {
           require(latest_read_->value.has_value(),"MEASUREMENT_LIMITED: required current-mode register rejected");
           if (latest_read_->reg==cybergear::Reg::Iqf) {
             prep_.actual_current=*latest_read_->value; prep_.actual_current_ns=latest_read_->receive_ns;
-            require(std::abs(prep_.actual_current)<=maximum_current_,"HARD_ABORT: nonneutral measured pitch current");
+            ++current_samples_;
+            observed_current_max_=std::max(observed_current_max_,std::abs(prep_.actual_current));
+            // Strict preparation retains its original immediate neutral guard.
+            // Characterization records quality separately within its explicitly
+            // bound manufacturer protection limit; it never qualifies current.
+            require(std::abs(prep_.actual_current)<=protection_current_,
+                    characterization_?"HARD_ABORT: manufacturer current protection bound exceeded":
+                                      "HARD_ABORT: nonneutral measured pitch current");
           }
         } else if (id.comm_type==18) {
           const auto index=uint16_t(r.frame.data[0])|(uint16_t(r.frame.data[1])<<8);
@@ -366,6 +389,12 @@ class NeutralSession {
       ",\"detail\":"+quoted(failure)+",\"parameter_qualified\":false,\"motion_qualified\":false,\"original_mode\":"+
       std::to_string(prep_.original_mode)+",\"abort_stop_confirmed\":"+(abort_stop_confirmed_?"true":"false")+
       ",\"normal_stop_confirmed\":"+(complete && prep_.disabled?"true":"false")+
+      ",\"characterization_only\":"+(characterization_?"true":"false")+
+      ",\"diagnostic_comparison_only\":"+(characterization_?"true":"false")+
+      ",\"neutral_current_qualified\":false,\"neutral_current_criterion_satisfied\":"+
+      (current_samples_ && observed_current_max_<=maximum_current_?"true":"false")+
+      ",\"current_sample_count\":"+std::to_string(current_samples_)+
+      ",\"observed_current_max_abs_A\":"+std::to_string(observed_current_max_)+
       ",\"interface_loss_deltas\":"+interface_loss+
       ",\"writer_queue_high_water\":"+std::to_string(journal_->high_water())+
       ",\"socket_drops\":{\"yaw\":"+std::to_string(yaw_drops)+",\"pitch\":"+
@@ -383,10 +412,14 @@ class NeutralSession {
   YAML::Node config_;
   Limits limits_;
   bool synthetic_;
+  bool characterization_;
+  int64_t observation_ns_{};
+  std::string schema_,purpose_;
   std::string uid_text_;
   uint64_t expected_uid_{};
   int imu_fd_{};
-  double maximum_current_{},maximum_displacement_{},maximum_temperature_{};
+  double maximum_current_{},protection_current_{},observed_current_max_{},maximum_displacement_{},maximum_temperature_{};
+  uint64_t current_samples_{};
   std::array<Endpoint,2> buses_;
   ImuStream imu_;
   Readback readback_;
@@ -402,6 +435,12 @@ class NeutralSession {
 }
 int current_preparation_session(const char* path) {
   try { return NeutralSession(YAML::LoadFile(path)).run(); }
+  catch (const std::exception& e) {
+    std::cerr<<"{\"status\":\"INVALID\",\"detail\":"<<quoted(e.what())<<"}\n"; return 1;
+  }
+}
+int current_characterization_session(const char* path) {
+  try { return NeutralSession(YAML::LoadFile(path),true).run(); }
   catch (const std::exception& e) {
     std::cerr<<"{\"status\":\"INVALID\",\"detail\":"<<quoted(e.what())<<"}\n"; return 1;
   }

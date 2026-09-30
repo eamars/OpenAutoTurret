@@ -12,9 +12,18 @@ int main(int argc,char** argv) {
     return ota::commission::capture_session(argv[2]);
   if(argc==3 && std::strcmp(argv[1],"--prepare-current")==0)
     return ota::commission::current_preparation_session(argv[2]);
+  if(argc==3 && std::strcmp(argv[1],"--characterize-current")==0)
+    return ota::commission::current_characterization_session(argv[2]);
+  if(argc==3 && std::strcmp(argv[1],"--establish-homing")==0)
+    return ota::commission::sensorless_homing_session(argv[2]);
+  if(argc==3 && std::strcmp(argv[1],"--validate-homing")==0)
+    return ota::commission::validate_homing_manifest(argv[2]);
 #endif
   std::cerr<<"commissiond --axis-core-replay <synthetic-file>\n"
            <<"Full firmware build: --capture-baseline <capture-manifest> (discovery, STOP, reads; no enable)\n"
-           <<"--prepare-current <manifest> (neutral current-mode verification; no excitation)\n";
+           <<"--prepare-current <manifest> (neutral current-mode verification; no excitation)\n"
+           <<"--characterize-current <manifest> (neutral current measurement characterization)\n"
+           <<"--establish-homing <manifest> (bounded pitch sensorless homing)\n"
+           <<"--validate-homing <manifest> (no-I/O homing parameter validation)\n";
   return 2;
 }

@@ -1,4 +1,47 @@
-# Stage 2 — baseline captured, neutral current preparation in progress
+# Stage 2 — baseline captured, strict neutral current attempt aborted
+
+## Current measured-imperfection development
+
+The hardware is the owner's camera/sensor mount. The owner's baseline is to retain
+hardware observations and compensate measured imperfections through calibration and
+tuning. The strict attempt above 0.1 A remains a closed historical failure under its
+original rules. In the separate characterization operation, that unmeasured value is
+only a diagnostic comparison; manufacturer current protection, temperature, travel,
+fault and feedback-loss guards remain active.
+
+The frozen native acquisition executable `fca1573f8a5f672125e2c57c6884b4596be84a8a10288cd7b42e8aad8d9d51ad`
+passed 19 characterization process cases and a 10-second mode-3 zero-command probe.
+The target executable `706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd370e79a`
+passed the same 19-case ARM64 kernel VM matrix and 10-second probe. The ABI audit
+against copied installed station libraries passed eight ELF files and 18 bindings.
+The native firmware suite passed 83 tests, excluding the documented retained-homing
+test. These are synthetic/local results; physical characterization remains NOT_RUN.
+
+Shared sensorless homing passed 31 native process cases: five successful variants and
+26 expected rejections. It preserves the measured encoder/native-position residual,
+uses a fresh native MechPos position pin and correlated readback, tolerates pending
+enable acknowledgements and reordered exact write echoes, and requires fresh Motor
+feedback before motion. The reported 60-degree span remains a prior; endpoint and
+repeatability observations must establish the physical geometry. The ARM64 raw
+homing sequence completed with STOP/restore, and corrected independent review passed;
+the VM's earlier reviewer failure remains retained. The full ARM64 matrix and
+physical homing remain NOT_RUN. Before physical homing, the executor must separate
+its 5 A software command ceiling from the documented 6.5 A measured-current
+protection; raw feedback scatter must not be judged by the command ceiling.
+
+The immutable neutral-observation extractor passed the final source-bound launcher
+capture. It retains raw current/encoder/gyro scatter, zero empirical variance,
+protocol quantization bins and host transaction latency. A zero-command current mean
+is not declared sensor bias, and no correction is applied without calibration.
+Mounting, physical encoder mapping, device response time/filtering, dynamic observer
+uncertainty and whole-case dynamic identification remain pending. No PlantSnapshot,
+controller candidate or 3a/3b certificate has been produced from these observations.
+
+A fresh read-only inventory at 2026-09-30 06:15:21 UTC passed collection review. Its
+historical launcher STOP FAILED record is retained as history; interface and process
+facts do not qualify drive disable or dynamic stopping. The next bounded acquisitions
+are fresh disabled native settings and a 10-second zero-command characterization,
+with source and builds frozen during the physical sessions.
 
 ## Development takeover, 2026-09-30
 
@@ -17,11 +60,12 @@ from raw commands/readbacks/status, rather than trusting its completion footer.
 
 The new [operation card](../../operations/adr0022-current-preparation.md) documents
 single-owner launcher supervision, immutable/hash-bound manifests and acquisition
-bundles. A successful local native/ARM64 neutral probe and 17-case process fault matrix
-are preliminary software evidence; physical neutral qualification is still NOT_RUN
-at this report revision. Full calibrated acquisition, established homing, dynamic
-stopping, identification and 3a/3b remain incomplete. Runtime captures and the original
-dirty work snapshot are retained under `run/adr0022-stage2/takeover-20260930/`.
+bundles. The local native/ARM64 neutral probe and 17-case process fault matrix passed.
+The first physical strict neutral attempt then ended in **HARD_ABORT**, as recorded
+below; it did not qualify current mode. Full calibrated acquisition, established
+homing, dynamic stopping, identification and 3a/3b remain incomplete. Runtime captures
+and the original dirty work snapshot are retained under
+`run/adr0022-stage2/takeover-20260930/`.
 
 The owner clarified that there are no endstop microswitches and the existing pitch
 routine homes by detecting stalled motion, believed to use native speed mode. The
@@ -43,6 +87,107 @@ mode write, enable, excitation or production configuration change occurred.
 The [Stage 1 result](STAGE1_HANDOFF.md) remains a historical mathematical-software
 PASS. Its 95% engineering assessment does not certify this acquisition path. The
 full ADR, including 3a and 3b, remains NOT_DONE.
+
+## Closed strict neutral attempt (2026-09-30 04:25:25–04:25:31 UTC)
+
+One authorized, unattended `--prepare-current` attempt ran from the separate release
+`/home/eamars/workspace/OpenAutoTurret/run/releases/1b421d96b5be.qEbsMb`, committed source
+`1b421d96b5becb0411a704b7ec77b5f952ed0ff9`. The bound manifest records attendance as
+false and the owner's explicit authorization without a presence requirement. No
+automatic retry occurred.
+
+Pitch's original `RunMode` was 2. Correlated reads verified mode 3 and `IqRef=0` both
+before and after enable. The first enabled `Iqf` readback was **0.2515328526496887 A**,
+received **3.629904 ms after enable**. This exceeded the strict attempt's **0.1 A**
+neutral criterion and triggered `HARD_ABORT: nonneutral measured pitch current`.
+That criterion was an unmeasured zero-command expectation, not a calibrated physical
+noise bound. One early sample cannot establish a steady-state current offset or its
+cause; the failed capture remains evidence under its original schema and guards.
+
+The C++ owner sent abort STOP **0.116684 ms after that readback**. A fresh, complete,
+fault-free Reset feedback frame arrived **0.764139 ms after STOP**, confirming pitch
+disabled in this attempt. No mode restore or subsequent enable was issued after the
+abort: the last verified configured mode was 3, with pitch disabled. All **500**
+transmissions succeeded; every yaw current command and pitch current reference was
+zero. The capture had zero socket drops and zero interface-loss deltas, with writer
+queue high water 7. Pitch position spanned one encoder count
+(`25/65535 = 0.00038147554741741054` rad); yaw spanned two counts. Pitch temperature
+was **23.9 C** throughout the captured feedback. These observations do not establish
+dynamic stopping or calibrated measurement uncertainty.
+
+The post-attempt launcher recorded the acquisition's exit, and the fresh account
+process listing contained no controller or IMU consumer. Exact executable hashes
+still matched the bound manifest. Pitch abort STOP is confirmed for this recoverable
+collector failure; yaw stopping, independent cutoff, and stopping after complete
+Pi/process/CAN loss remain unqualified. No current-mode qualification, PlantSnapshot,
+controller candidate, 3a or 3b result was produced.
+
+The raw journal SHA-256 is
+`cfa711ec31b37093e1f8c0e6d92bdcfaa5c2a40038b79c471219691cff49ad2f`; the fetched
+evidence archive SHA-256 is
+`09ce24e5d004a984202edb146bf6531fdf3f8e1fef90eb207698ffda1fee0700`.
+The machine-readable record indexes the manifest, attempt, result, raw journal,
+closed analysis and post-state evidence. Runtime files remain outside Git.
+
+## Separate zero-current measurement characterization
+
+The owner's latest requirement is: **"You do NOT reject the hardware observation. You
+shall adapt the imperfection from the hardware, and your calibration and tuning is
+designed to compensate for that."** The 0.1 A assumption in the historical strict
+attempt was not a measured physical acceptance line. Preserve the actual readings;
+measure offset, noise, quantization and timing uncertainty, then use that calibration
+in identification and controller compensation. Do not invent ideal hardware behavior.
+
+The historical `adr0022.current-preparation/1` capture keeps its original abort result.
+A distinct `--characterize-current` operation uses schema
+`adr0022.neutral-characterization/1` and purpose
+`neutral_current_measurement_characterization` to record zero-command current samples,
+startup transients and noise without promoting a neutral qualification. It retains the
+same zero-only commands, 0.01 rad displacement limit, 45 C temperature limit and timing
+guards, followed by verified STOP and original-mode restore only on normal completion.
+
+Characterization separately binds **6.5 A** manufacturer continuous-current protection
+through `protection_current_bound_A` and `protection_limit_basis`. This is the rated
+current from the retained CyberGear manual, not the 23 A peak protocol/rating value,
+and not a measured noise criterion. The `neutral_current_bound_A=0.1` field is retained
+only as a historical diagnostic comparison. Observations above it remain valid raw
+data for calibration and do not invalidate the characterization or reject the hardware.
+Its `neutral_current_qualified`, current-mode, dynamics and physical-parameter
+qualification fields remain false regardless of the observed current.
+
+The physical characterization manifest requires its own matching
+`LOCAL_CURRENT_CHARACTERIZATION_PASS` source/binary-bound local report and the exact
+manufacturer PDF SHA-256
+`4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495`.
+The launcher checks those bytes before device access. First local executable and
+independent-review probes passed with synthetic devices; ARM64 and physical
+characterization are **NOT_RUN** at this report revision. Current qualification and
+compensation require the missing measured calibration and dynamic evidence. This new
+measurement operation preserves the failed strict attempt. See the existing
+[operation card](../../operations/adr0022-current-preparation.md).
+
+The measurement duration is now a required runtime `neutral_observation_s`, independent
+of the historical current comparison. It must be finite, positive and at most 60 seconds,
+with a total deadline longer than startup plus the requested observation. A 10-second
+physical observation is planned but has not been executed at this revision.
+
+## Sensorless homing development
+
+The [new operation card](../../operations/adr0022-sensorless-homing.md) uses the shared
+`FullAxisHoming` routine for native mode 2 approaches and mode 1 backoffs. Runtime
+manifests declare the entire homing/contact/native-setting/guard/timing contract.
+Mode 1 enable requires fresh `MechPos`, a pinned reference and zero speed limit,
+followed by fresh enabled pose re-pinning before bounded motion. Measured native
+originals require their own disabled baseline capability asset and exact readbacks;
+synthetic gains and the historical production span are not physical defaults.
+
+The session records both endpoint contacts, repeatability, measured midpoint/dwell,
+STOP and original-setting restoration on normal completion. It sends no encoder-zero
+or save command and writes no retained calibration. The sole launcher lease excludes
+other controllers/acquisition. Local realistic probes, independent raw review and
+ARM64 binary evidence must close before physical use. **Physical sensorless homing
+is NOT_RUN** at this revision. Homing observations leave parameter, motion,
+current-mode and encoder/`MechPos` qualification false and do not qualify mode 3 stopping.
 
 ## Owner facts and current authorization
 
@@ -121,8 +266,10 @@ caused it. No guard was loosened and no production stop fix was tested.
    automatic measured-asset injection remain open.
 2. **Current-mode actuation is unqualified.** Yaw firmware/current-ring assets
    are historical and require an explicit reuse binding. Pitch's actual baseline
-   `RunMode` is **2 (speed)** despite the profile's position-mode label; mode 3 is not
-   qualified. `Iqf` readback is now acquired at about 24.24 Hz in the disabled context.
+   `RunMode` was **2 (speed)** despite the profile's position-mode label. The strict
+   neutral attempt verified mode 3 but aborted on its first enabled `Iqf` sample;
+   current mode remains unqualified. Baseline `Iqf` readback was acquired at about
+   24.24 Hz in the disabled context.
    Standard pitch feedback is torque, not measured
    current. `limit_cur` is specified for speed/position modes and cannot be assumed to
    limit `iq_ref` in current mode.
@@ -345,7 +492,10 @@ breakaway, delay and mounting remain null. No PlantSnapshot or controller candid
 was generated. The Stage 1 mounting estimator correctly rejects the no-excitation
 identifiability probe with `INSUFFICIENT_EXCITATION`.
 
-The next Step 2 operations are current-mode verification, established homing and
+The next Step 2 operations are separate zero-current measurement characterization,
+current-mode verification, established homing and
 bounded stopping/motion qualification, then mounting/time calibration and prescribed
 dynamic identification. Operator attendance at the manual cutoff has been requested
-as a physical operating fact; the prior inventory failure is not a continuation gate.
+as a physical operating fact at the baseline checkpoint; the owner's later explicit
+authorization permits operation regardless of presence. Record actual attendance
+truthfully. The prior inventory failure is not a continuation gate.

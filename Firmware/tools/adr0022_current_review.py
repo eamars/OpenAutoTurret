@@ -10,11 +10,15 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import statistics
 import struct
 
 from adr0022_capture_review import need, statistics_ns, strict_json
 
 SCHEMA = "adr0022.current-preparation/1"
+CHARACTERIZATION_SCHEMA = "adr0022.neutral-characterization/1"
+CURRENT_PURPOSE = "neutral_current_mode_verification"
+CHARACTERIZATION_PURPOSE = "neutral_current_measurement_characterization"
 MODE, IQREF, IQF = 0x7005, 0x7006, 0x701A
 SENSORS = ("accel", "gyro", "rv", "game_rv")
 
@@ -53,6 +57,15 @@ def stream(times, start, end, gap, startup, detail):
 
 
 def review(path: Path):
+    return _review(path, characterization=False)
+
+
+def review_characterization(path: Path):
+    """Accept complete zero-command observation while keeping qualification false."""
+    return _review(path, characterization=True)
+
+
+def _review(path: Path, *, characterization):
     data = Path(path).read_bytes()
     need(data.endswith(b"\n"), "truncated capture")
     rows = [strict_json(line) for line in data.decode("utf-8").splitlines()]
@@ -61,7 +74,9 @@ def review(path: Path):
     need(sum(r.get("kind") == "header" for r in rows) == 1 and
          sum(r.get("kind") == "footer" for r in rows) == 1, "duplicate capture boundaries")
     header, footer = rows[0], rows[-1]
-    need(header.get("schema") == SCHEMA and header.get("purpose") == "neutral_current_mode_verification",
+    schema = CHARACTERIZATION_SCHEMA if characterization else SCHEMA
+    purpose = CHARACTERIZATION_PURPOSE if characterization else CURRENT_PURPOSE
+    need(header.get("schema") == schema and header.get("purpose") == purpose,
          "unsupported preparation schema/purpose")
     provenance = header.get("provenance")
     need(provenance in ("SYNTHETIC", "MEASURED") and header.get("parameter_qualified") is False,
@@ -70,7 +85,7 @@ def review(path: Path):
          footer.get("parameter_qualified") is False and footer.get("motion_qualified") is False,
          "capture failed/incomplete or qualification claim invalid")
     config = strict_json(header["manifest_yaml"])
-    need(config.get("schema") == SCHEMA and config.get("provenance") == provenance and
+    need(config.get("schema") == schema and config.get("provenance") == provenance and
          config.get("purpose") == header["purpose"], "manifest identity differs")
     need(config.get("transport") == ("loopback_udp" if provenance == "SYNTHETIC" else "socketcan"),
          "manifest transport/provenance differs")
@@ -86,7 +101,12 @@ def review(path: Path):
              "interface receive loss evidence missing/nonzero")
     uid = config["expected_pitch_uid"]
     need(type(uid) is str and len(uid) == 16 and all(c in "0123456789abcdef" for c in uid), "invalid expected UID")
-    current_bound = manifest_number(config, "neutral_current_bound_A")
+    neutral_criterion = manifest_number(config, "neutral_current_bound_A")
+    current_bound = manifest_number(config, "protection_current_bound_A") if characterization else neutral_criterion
+    observation_s = manifest_number(config, "neutral_observation_s") if characterization else 2.
+    if characterization:
+        need(current_bound <= 6.5 and observation_s <= 60,
+             "characterization protection/observation exceeds the documented bound")
     displacement_bound = manifest_number(config, "transition_displacement_bound_rad")
     temperature_bound = manifest_number(config, "pitch_maximum_temperature_C")
     limits = config["limits"]
@@ -153,9 +173,11 @@ def review(path: Path):
              "invalid session begin")
         start = begins[0]["time_ns"]
     need(start < end and end - start < ns["duration"], "capture deadline exceeded")
-    report = {"schema": "adr0022.current_review/1", "capture_sha256": hashlib.sha256(data).hexdigest(),
-              "provenance": provenance, "capture_complete": True, "capability_scope": "neutral_transition_only",
-              "neutral_transition_verified": True, "neutral_transition_qualified": provenance == "MEASURED",
+    report = {"schema": "adr0022.characterization_review/1" if characterization else "adr0022.current_review/1",
+              "capture_sha256": hashlib.sha256(data).hexdigest(),
+              "provenance": provenance, "capture_complete": True,
+              "capability_scope": "neutral_current_measurement_characterization_only" if characterization else "neutral_transition_only",
+              "neutral_transition_verified": True, "neutral_transition_qualified": provenance == "MEASURED" and not characterization,
               "physical_capabilities_qualified": False, "physical_parameters_qualified": False,
               "motion_authorized": False, "streams": {}, "final_socket_drops": drops,
               "measurement_limitations": ["Yaw current and temperature retain protocol units without a bound calibration.",
@@ -208,7 +230,9 @@ def review(path: Path):
                      math.isclose(number(row.get("temperature_C"), "pitch temperature missing"), fields[3] / 10),
                      "pitch raw fields differ from wire")
                 need(fields[3] / 10 < temperature_bound, "pitch temperature bound exceeded")
-                frame.update(mode=mode, angle=fields[0] * (8 * math.pi) / 65535 - 4 * math.pi,
+                # The active C++ protocol uses the station-verified +/-12.5 rad
+                # mapping, rather than the manual's nominal +/-4*pi table.
+                frame.update(mode=mode, angle=fields[0] * 25 / 65535 - 12.5,
                              temperature=fields[3] / 10)
             elif kind == 0:
                 need(cid == 0x7FFE and wire.hex() == uid, "pitch discovery identity differs")
@@ -315,7 +339,8 @@ def review(path: Path):
              rb_begin <= reply["time"] < rb_begin + ns["read_timeout"] and
              request["position"] < reply["position"] < position, "register raw correlation/value differs")
         if observations: need(observations[-1]["time"] <= rb_begin, "overlapping register transaction")
-        observations.append(dict(index=reply["index"], value=reply["value"], time=reply["time"], request=request, position=position))
+        observations.append(dict(index=reply["index"], value=reply["value"], time=reply["time"], request=request,
+                                 wire=reply["wire"], record=record, position=position))
     # Echoes retain provenance but are never used as readback observations.
     echoes = [f for f in frames["pitch"] if f["kind"] == 18]
     echo_records = [r for r in rows if r["kind"] == "write_echo"]
@@ -354,7 +379,7 @@ def review(path: Path):
     need(len(final_stops) == 1, "final STOP missing/duplicated")
     final_stop = final_stops[0]
     need([c for c in stops if enable["time"] < c["time"]] == [final_stop], "STOP interrupted enabled observation or followed restore")
-    need(final_stop["time"] - after[1]["time"] >= 2 * 10**9, "enabled observation dwell missing")
+    need(final_stop["time"] - after[1]["time"] >= int(observation_s * 10**9), "enabled observation dwell missing")
     disabled_before = [f for f in pitch_feedback if initial_disabled[0]["time"] <= f["time"] < enable["time"]]
     enabled_feedback = [f for f in pitch_feedback if enable["time"] <= f["time"] < final_stop["time"]]
     final_disabled = [f for f in pitch_feedback if final_stop["time"] <= f["time"] < restore["time"]]
@@ -369,7 +394,8 @@ def review(path: Path):
          "restored mode readback missing")
     need(len(observations) == len(before) + len(after) + len(restored) + 1, "unexpected register observations")
     current = after[2:]
-    need(all(abs(o["value"]) <= current_bound and o["time"] < final_stop["time"] for o in current), "neutral pitch current bound exceeded")
+    need(all(abs(o["value"]) <= current_bound and o["time"] < final_stop["time"] for o in current),
+         "pitch protection current bound exceeded" if characterization else "neutral pitch current bound exceeded")
     need(current[0]["time"] - after[1]["time"] < ns["read_timeout"] and
          final_stop["time"] - current[-1]["time"] < ns["read_timeout"], "neutral current stream coverage missing")
     report["streams"]["pitch_iqf"] = statistics_ns([o["time"] for o in current])
@@ -379,8 +405,37 @@ def review(path: Path):
          "normal STOP footer differs from evidence")
     report.update(pitch_uid_observed=uid, original_mode=original_mode, restored_mode=original_mode,
         final_disabled_observed_ns=final_disabled[-1]["time"], normal_stop_confirmed=True,
-        pitch_current_max_abs_A=max(abs(o["value"]) for o in current), pitch_neutral_current_bound_A=current_bound,
+        pitch_current_max_abs_A=max(abs(o["value"]) for o in current), pitch_neutral_current_bound_A=neutral_criterion,
         register_reads=len(observations), write_echoes_ignored=len(echoes), neutral_commands=len(commands))
+    if characterization:
+        values = [o["value"] for o in current]
+        above = sum(abs(v) > neutral_criterion for v in values)
+        need(footer.get("characterization_only") is True and footer.get("neutral_current_qualified") is False and
+             footer.get("neutral_current_criterion_satisfied") is (above == 0) and
+             integer(footer["current_sample_count"], "invalid characterization sample count") == len(values) and
+             math.isclose(number(footer["observed_current_max_abs_A"], "invalid characterization peak current"),
+                          max(map(abs, values)), rel_tol=0, abs_tol=0.5e-6),
+             "characterization footer differs from raw observations or claims qualification")
+        report.update(neutral_current_qualified=False, physical_current_mode_qualified=False,
+            neutral_current_criterion_satisfied=above == 0, samples_above_neutral_criterion=above,
+            diagnostic_comparison_only=True, historical_diagnostic_bound_A=neutral_criterion,
+            neutral_observation_s=observation_s,
+            protection_current_bound_A=current_bound, plant_snapshot=None, controller_candidate=None,
+            current_bias_correction=None, current_feedback_scale_calibrated=False,
+            current_feedback_unit="DOCUMENTED_AMPERE_UNCALIBRATED",
+            current_statistics={"count": len(values), "min_A": min(values), "max_A": max(values),
+                "mean_A": statistics.fmean(values), "sample_std_A": statistics.stdev(values),
+                "maximum_abs_A": max(map(abs, values))},
+            initial_current_receipt_from_enable_s=(current[0]["time"] - enable["time"]) / 1e9,
+            current_observations=[{"request_sequence": o["record"]["request_sequence"], "index": IQF,
+                "value_A": o["value"], "raw_register_response_hex": o["wire"].hex(),
+                "request_begin_ns": o["record"]["request_begin_ns"],
+                "command_begin_ns": o["request"]["time"], "kernel_accepted_ns": o["request"]["accepted"],
+                "request_accepted_ns": o["record"]["request_accepted_ns"], "receive_ns": o["time"],
+                "receipt_from_enable_s": (o["time"] - enable["time"]) / 1e9,
+                "device_sample_ns": None} for o in current])
+        report["measurement_limitations"].append(
+            "The historical diagnostic bound is a comparison only; it is not a qualification criterion or a hardware contract. Readings remain uncorrected.")
     return report
 
 
@@ -388,15 +443,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--characterization", action="store_true")
     args = parser.parse_args()
     try:
-        result = review(args.capture)
+        result = review_characterization(args.capture) if args.characterization else review(args.capture)
     except (ValueError, KeyError, TypeError, OSError, IndexError, OverflowError) as exc:
-        result = {"schema": "adr0022.current_review/1", "capture_complete": False,
-                  "capability_scope": "neutral_transition_only", "neutral_transition_verified": False,
+        result = {"schema": "adr0022.characterization_review/1" if args.characterization else "adr0022.current_review/1",
+                  "capture_complete": False,
+                  "capability_scope": "neutral_current_measurement_characterization_only" if args.characterization else "neutral_transition_only",
+                  "neutral_transition_verified": False,
                   "neutral_transition_qualified": False, "physical_capabilities_qualified": False,
                   "motion_authorized": False, "physical_parameters_qualified": False,
                   "reason": "DATA_INVALID", "detail": str(exc)}
+        if args.characterization:
+            result.update(neutral_current_qualified=False, physical_current_mode_qualified=False)
     with args.output.open("x", encoding="utf-8") as output:
         json.dump(result, output, indent=2, allow_nan=False)
         output.write("\n")

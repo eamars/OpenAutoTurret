@@ -24,18 +24,51 @@ def executable(name,args):
     if p.returncode: raise RuntimeError(name+' failed')
 
 try:
-    if phase.startswith('current-'):
+    if phase.startswith('homing-'):
+        from adr0022_homing_rehearsal import rehearse as homing_rehearse, FAULTS, PASS_FAULTS
+        from adr0022_homing_review import review as homing_review
+        faults=('none',) if phase=='homing-probe' else FAULTS
+        for fault in faults:
+            print('VM_PROGRESS homing-'+fault,flush=True)
+            directory=root/('homing-'+fault)
+            outcome=homing_rehearse(Path('/work/bin/commissiond'),directory,fault=fault)
+            check={'name':'homing-'+fault,'returncode':outcome['returncode'],'result':outcome['result']}
+            if fault in PASS_FAULTS:
+                report=homing_review(directory/'capture.jsonl')
+                (directory/'review.json').write_text(json.dumps(report,indent=2)+'\n')
+                check['review']=report
+            else:
+                try:
+                    homing_review(directory/'capture.jsonl')
+                except ValueError:
+                    check['independent_review_rejected']=True
+                else:
+                    raise RuntimeError('independent reviewer accepted failed homing: '+fault)
+            summary['checks'].append(check)
+        summary['status']='LOCAL_ARM64_VM_PASS'
+        sys.exit(0)
+    if phase.startswith(('current-','characterization-')):
         from adr0022_current_rehearsal import rehearse as current_rehearse, FAULTS
-        from adr0022_current_review import review as current_review
-        faults = ('none',) if phase=='current-probe' else FAULTS
+        from adr0022_current_review import review as current_review, review_characterization
+        characterize=phase.startswith('characterization-')
+        if characterize:
+            current_review=review_characterization
+        faults = ('neutral_noise',) if phase=='characterization-probe' else (
+            ('none',) if phase=='current-probe' else FAULTS+('neutral_noise',) if characterize else FAULTS)
         for fault in faults:
             print('VM_PROGRESS current-'+fault,flush=True)
-            outcome=current_rehearse(Path('/work/bin/commissiond'),root/('current-'+fault),fault=fault)
+            outcome=current_rehearse(Path('/work/bin/commissiond'),root/('current-'+fault),
+                                     fault=fault,characterize=characterize,
+                                     original_mode=3 if phase=='characterization-probe' else 2,
+                                     observation_s=10. if phase=='characterization-probe' else 2.)
             check={'name':'current-'+fault,'returncode':outcome['returncode'],'result':outcome['result']}
-            if fault in ('none','write_echo'):
+            if fault in ('none','write_echo','neutral_noise','slow_read'):
                 report=current_review(root/('current-'+fault)/'capture.jsonl')
                 (root/('current-'+fault)/'review.json').write_text(json.dumps(report,indent=2)+'\n')
                 check['review']=report
+                if characterize and fault=='neutral_noise':
+                    if report['neutral_current_criterion_satisfied'] or report['neutral_current_qualified']:
+                        raise RuntimeError('above-criterion characterization promoted qualification')
             else:
                 try:
                     current_review(root/('current-'+fault)/'capture.jsonl')
@@ -48,7 +81,8 @@ try:
         sys.exit(0)
     executable('kernel-capture',['/work/bin/probe-commission-capture',str(root/'kernel-capture.jsonl')])
     print('VM_PROGRESS integrated-capture',flush=True)
-    result=rehearse(Path('/work/bin/commissiond'),root/'capture',duration=3. if phase=='probe' else 120.)
+    result=rehearse(Path('/work/bin/commissiond'),root/'capture',duration=3. if phase=='probe' else 120.,
+                    native_settings=phase=='probe')
     report=review(root/'capture/capture.jsonl')
     (root/'capture/review.json').write_text(json.dumps(report,indent=2)+'\n')
     summary['checks'].append({'name':'integrated-capture','result':result['result'],'review':report})

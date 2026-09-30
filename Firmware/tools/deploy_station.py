@@ -51,7 +51,7 @@ def main():
                              "binaries: the station runs the suite rather than building it. "
                              "Compiling needs no hardware; only running the tests does.")
     parser.add_argument("--baseline-bundle", type=pathlib.Path,
-                        help="ship a committed ADR-002.2 baseline or neutral-current acquisition bundle into a separate release; "
+                        help="ship a committed ADR-002.2 baseline, neutral-current, characterization or sensorless-homing acquisition bundle into a separate release; "
                              "validate with launcher check, without starting devices, installing packages or compiling")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
@@ -127,7 +127,7 @@ def main():
         bundle = release + "/baseline-bundle.tar"
         run(["scp", *connection, str(args.baseline_bundle), f"{args.host}:{bundle}"])
         launch_option = acquisition_record.get("launch_option", "--capture-baseline")
-        capture_directory = release + ("/run/current-preparation" if launch_option == "--prepare-current" else "/run/baseline")
+        capture_directory = release + {"--establish-homing": "/run/sensorless-homing", "--prepare-current": "/run/current-preparation", "--characterize-current": "/run/current-characterization", "--capture-baseline": "/run/baseline"}[launch_option]
         helper = release + "/Firmware/tools/adr0022_baseline_bundle.py"
         remote(f"{quote(venv + '/bin/python')} {quote(helper)} install --bundle {quote(bundle)} "
                f"--revision {quote(revision)} --firmware {quote(release + '/Firmware')} "
