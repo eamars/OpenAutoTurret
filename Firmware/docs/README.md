@@ -14,6 +14,7 @@ procedure from a flag list.
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
 | inspect ADR-002.2 acquisition readiness | [`operations/adr0022-inventory.md`](operations/adr0022-inventory.md) — read-only inventory and local evidence review |
 | rehearse or review ADR-002.2 baseline acquisition | [`operations/adr0022-capture.md`](operations/adr0022-capture.md) — local capture tests and the gated launcher entry |
+| verify ADR-002.2 neutral current-mode transitions | [`operations/adr0022-current-preparation.md`](operations/adr0022-current-preparation.md) — local process/ARM64 checks and the bounded launcher session |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |

@@ -119,7 +119,16 @@ TEST(Receiver, KernelReportsRealDatagramOverflow) {
   can_frame frame{}; frame.can_id=0; frame.can_dlc=8;
   for (int i=0;i<1000;++i) ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
   Receipt r; uint64_t observed_drops=0;
-  while (receiver.receive(r)) observed_drops+=r.drop_delta;
+  auto receive=[&]() {
+    const auto previous=r.kernel_monotonic_ns;
+    try { return receiver.receive(r); }
+    catch (const std::exception& error) {
+      ADD_FAILURE()<<error.what()<<" kernel_ns="<<r.kernel_monotonic_ns<<" previous_ns="<<previous
+                   <<" dequeue_ns="<<r.dequeue_ns<<" uncertainty_ns="<<r.clock_uncertainty_ns;
+      throw;
+    }
+  };
+  while (receive()) observed_drops+=r.drop_delta;
   // Linux attaches the accumulated loss counter to the next enqueued packet.
   ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
   pollfd ready{rx,POLLIN,0}; ASSERT_GT(poll(&ready,1,1000),0);

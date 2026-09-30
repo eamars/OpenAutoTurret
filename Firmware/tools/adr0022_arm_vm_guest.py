@@ -24,6 +24,28 @@ def executable(name,args):
     if p.returncode: raise RuntimeError(name+' failed')
 
 try:
+    if phase.startswith('current-'):
+        from adr0022_current_rehearsal import rehearse as current_rehearse, FAULTS
+        from adr0022_current_review import review as current_review
+        faults = ('none',) if phase=='current-probe' else FAULTS
+        for fault in faults:
+            print('VM_PROGRESS current-'+fault,flush=True)
+            outcome=current_rehearse(Path('/work/bin/commissiond'),root/('current-'+fault),fault=fault)
+            check={'name':'current-'+fault,'returncode':outcome['returncode'],'result':outcome['result']}
+            if fault in ('none','write_echo'):
+                report=current_review(root/('current-'+fault)/'capture.jsonl')
+                (root/('current-'+fault)/'review.json').write_text(json.dumps(report,indent=2)+'\n')
+                check['review']=report
+            else:
+                try:
+                    current_review(root/('current-'+fault)/'capture.jsonl')
+                except ValueError:
+                    check['independent_review_rejected']=True
+                else:
+                    raise RuntimeError('independent reviewer accepted failed current preparation: '+fault)
+            summary['checks'].append(check)
+        summary['status']='LOCAL_ARM64_VM_PASS'
+        sys.exit(0)
     executable('kernel-capture',['/work/bin/probe-commission-capture',str(root/'kernel-capture.jsonl')])
     print('VM_PROGRESS integrated-capture',flush=True)
     result=rehearse(Path('/work/bin/commissiond'),root/'capture',duration=3. if phase=='probe' else 120.)

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -19,7 +20,7 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 from adr0022_capture_rehearsal import rehearse
 from adr0022_capture_review import review
-from adr0022_capture_launch import preflight
+from adr0022_capture_launch import preflight, source_identity, SOURCE_FILES, SOURCE_DIRECTORIES, validate_current_contract, canonical_sha
 from adr0022_baseline_assets import derive, write_asset
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="real Linux recvmsg/process boundary")
@@ -281,3 +282,126 @@ def test_preflight_rejects_timing_that_rounds_to_zero_before_sensor_start(tmp_pa
     with pytest.raises(ValueError, match="at least one nanosecond"):
         preflight(manifest, firmware)
     assert not (tmp_path / "baseline.attempt.json").exists()
+
+
+def neutral_launcher_probe(tmp_path, cancel=False, lose_collector=False, freeze_collector=False):
+    """Actual shell, Python supervisor, C++ owner, UDP peers and IMU pipe."""
+    firmware, manifest, ports, emitter = prepare_launcher_fixture(tmp_path)
+    current_review = TOOLS / "adr0022_current_review.py"
+    if current_review.exists():
+        shutil.copy(current_review, firmware / "tools")
+    for name in SOURCE_FILES:
+        destination = firmware / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(TOOLS.parent / name, destination)
+    for name in SOURCE_DIRECTORIES:
+        shutil.copytree(TOOLS.parent / name, firmware / name)
+    config = json.loads(manifest.read_text())
+    config.update(schema="adr0022.current-preparation/1", purpose="neutral_current_mode_verification",
+                  neutral_current_bound_A=.1, transition_displacement_bound_rad=.01,
+                  pitch_maximum_temperature_C=60., expected_source_sha256=source_identity(firmware)["source_sha256"])
+    config["yaw"]["peer_port"] = emitter.getsockname()[1]
+    config["limits"]["duration_s"] = 10.
+    manifest.write_text(json.dumps(config))
+    env = dict(os.environ, OTA_PYTHON=sys.executable, OTA_RUN_DIR=str(tmp_path / "runtime"))
+    launcher = firmware / "scripts/run_application.sh"
+    child = subprocess.Popen(["bash", str(launcher), "run", "--prepare-current", str(manifest)],
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    enabled, mode, iq, cancelled = False, 2, 1., False
+    started = time.monotonic()
+    try:
+        while child.poll() is None and time.monotonic() - started < 15:
+            for _ in range(64):
+                try:
+                    request, address = emitter.recvfrom(1024)
+                except BlockingIOError:
+                    break
+                cid, dlc, data = struct.unpack("=IB3x8s", request)
+                assert dlc == 8
+                if not cid & 0x80000000:
+                    assert cid == 0x1fe and data == bytes(8)
+                    continue
+                kind = (cid >> 24) & 31
+                assert cid & 255 == 127 and (cid >> 8) & 65535 == 0
+                if kind == 0:
+                    response_id, payload = 0x80007ffe, bytes.fromhex("7216313130333105")
+                elif kind == 17:
+                    reg = struct.unpack_from("<H", data)[0]
+                    assert reg in (0x7005, 0x7006, 0x701a)
+                    value = struct.pack("<B3x", mode) if reg == 0x7005 else struct.pack("<f", iq if reg == 0x7006 else 0.)
+                    response_id, payload = 0x91007f00, struct.pack("<H2x", reg) + value
+                else:
+                    assert kind in (3, 4, 18)
+                    if kind == 3:
+                        assert mode == 3 and iq == 0
+                        enabled = True
+                    elif kind == 4:
+                        assert data == bytes(8)
+                        enabled = False
+                    else:
+                        reg = struct.unpack_from("<H", data)[0]
+                        assert reg in (0x7005, 0x7006)
+                        if reg == 0x7005:
+                            assert not enabled
+                            mode = data[4]
+                        else:
+                            iq = struct.unpack_from("<f", data, 4)[0]
+                            assert iq == 0
+                    response_id = 0x82007f00 | ((2 if enabled else 0) << 22)
+                    payload = struct.pack(">HHHH", 32000, 32768, 32768, 225)
+                emitter.sendto(struct.pack("=IB3x8s", response_id, 8, payload), address)
+            emitter.sendto(struct.pack("=IB3x8s", 0x205, 8, struct.pack(">HhhBB", 100, 0, 0, 37, 0)),
+                           ("127.0.0.1", ports[0]))
+            if cancel and enabled and not cancelled:
+                if lose_collector or freeze_collector:
+                    processes = json.loads((tmp_path / "baseline.processes.json").read_text())
+                    os.kill(processes["collector_pid"], signal.SIGSTOP if freeze_collector else signal.SIGKILL)
+                child.terminate()
+                cancelled = True
+            time.sleep(.001)
+        stdout, stderr = child.communicate(timeout=15)
+        log = (tmp_path / "runtime/controller.log").read_text()
+        result = json.loads((tmp_path / "baseline.result.json").read_text())
+        if lose_collector or freeze_collector:
+            assert enabled  # Loss cannot be repaired or called safe by Python CAN output.
+            assert result["status"] == "INVALID" and not result["pitch_stop_confirmed"]
+            assert result["process_loss"] and "STOP unconfirmed" in result["stop_detail"]
+            assert result["forced_termination"] == freeze_collector
+        else:
+            assert not enabled, stdout + stderr + log
+            assert result["pitch_stop_confirmed"], result
+        assert not result["yaw_stop_confirmed"] and not result["independent_cutoff_qualified"]
+        assert not result["physical_parameters_qualified"]
+        assert not (tmp_path / "runtime/launcher.pid").exists()
+        if cancel:
+            assert cancelled and child.returncode != 0 and result["status"] == "INVALID"
+            if not (lose_collector or freeze_collector):
+                footer = json.loads((tmp_path / "baseline.jsonl").read_text().splitlines()[-1])
+                assert footer["abort_stop_confirmed"]
+        else:
+            assert child.returncode == 0 and result["status"] == "COMPLETE", stdout + stderr + log
+            assert mode == 2 and iq == 0
+        again = subprocess.run(["bash", str(launcher), "run", "--prepare-current", str(manifest)],
+                               env=env, text=True, capture_output=True, timeout=10)
+        assert again.returncode != 0 and "evidence reuse" in again.stderr
+    finally:
+        emitter.close()
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=15)
+
+
+def test_neutral_launcher_cancellation_allows_cpp_stop(tmp_path):
+    neutral_launcher_probe(tmp_path, cancel=True)
+
+
+def test_neutral_launcher_complete_and_immutable_attempt(tmp_path):
+    neutral_launcher_probe(tmp_path)
+
+
+def test_neutral_launcher_lost_owner_preserves_unconfirmed_stop(tmp_path):
+    neutral_launcher_probe(tmp_path, cancel=True, lose_collector=True)
+
+
+def test_neutral_launcher_forced_termination_preserves_unconfirmed_stop(tmp_path):
+    neutral_launcher_probe(tmp_path, cancel=True, freeze_collector=True)

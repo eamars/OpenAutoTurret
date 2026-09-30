@@ -51,11 +51,14 @@
   "station_accessed": true,
   "station_access_scope": "READ_ONLY_INVENTORY_AND_ONE_BOUNDED_BASELINE_ACQUISITION_NO_EXCITATION",
   "motor_or_imu_transport_opened": false,
-  "stage2_status": "BASELINE_CAPTURE_PASS_CALIBRATION_PENDING",
+  "stage2_status": "STEP2_BASELINE_CAPTURE_PASS_NEUTRAL_SOFTWARE_VERIFIED_PHYSICAL_PENDING",
   "stage2_readiness_report": "reports/STAGE2_READINESS.json",
   "local_baseline_acquisition": "IMPLEMENTED_AND_LOCALLY_REHEARSED_NOT_DEPLOYED",
   "active_acquisition": "INCOMPLETE",
   "encoder_mapping_update": "explicit finite count encoding; no plant/synthesis/quality-rule change",
   "local_arm64_acquisition": "DEBIAN_BUILD_ABI_AND_FULL_KERNEL_VM_PASS_NOT_STATION_QUALIFICATION",
-  "capture_schema": "adr0022.capture/2"
+  "capture_schema": "adr0022.capture/2",
+  "local_neutral_current_preparation": "NATIVE_AND_ARM64_VM_FAULT_MATRIX_PASS_PHYSICAL_NOT_RUN",
+  "physical_operation_presence_required": false,
+  "physical_operation_authorization": "I explicitly give you the permission to operate the station regardless of my presence."
 }

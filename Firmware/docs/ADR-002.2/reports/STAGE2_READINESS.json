@@ -1,6 +1,6 @@
 {
   "version": "adr0022.stage2-readiness/1",
-  "status": "STEP2_BASELINE_CAPTURE_PASS_CALIBRATION_PENDING",
+  "status": "STEP2_BASELINE_CAPTURE_PASS_NEUTRAL_SOFTWARE_VERIFIED_PHYSICAL_PENDING",
   "source_head_before_changes": "9a08b3e03d2253b4eb1214a10fd1ab42802532e6",
   "stage_status": {
     "mathematical_software": "PASS_HISTORICAL",
@@ -13,7 +13,7 @@
   },
   "full_adr_status": "NOT_DONE",
   "station_actions": {
-    "ssh_inventory_sessions": 2,
+    "ssh_inventory_sessions": 3,
     "failed_inventory_sessions": 1,
     "unexpected_command_failures": 2,
     "motion_attempts": 0,
@@ -58,7 +58,11 @@
     "independent_power_cutoff": "MANUAL_ONLY",
     "automatic_command_loss_stop_qualified": false,
     "prior_failure_is_gate": false,
-    "latest_direction": "Continue Step 2; do not be gated by the prior failure"
+    "latest_direction": "I explicitly give you the permission to operate the station regardless of my presence.",
+    "operation_regardless_of_presence_authorized": true,
+    "pitch_homing_method": "SENSORLESS_NATIVE_SPEED_MODE_STALL_DETECTION",
+    "endstop_microswitch_present": false,
+    "pitch_homing_method_source": "Owner clarification 2026-09-30; speed mode described as belief, actual mode still read back"
   },
   "inventory_session": {
     "kind": "READ_ONLY_INVENTORY",
@@ -952,7 +956,7 @@
       "checkout_revision": "6a47f1dd696d75b878b8138dcaceb9f455ab9147",
       "process_ownership_verified": false,
       "process_listing_collected": true,
-      "launcher_status": "Stopped: STOP FAILED\n[2026-09-30 12:01:25.744] [controld] [info] mixed stop/park: bounded pitch pose verified; requesting pitch disable, yaw remains zero-requested\n[2026-09-30 12:01:35.236] [controld] [error] mixed stop deadline: pitch_disable_requested=true pitch_disabled_known=true pitch_disabled=true pitch_ack_age_ms=19 yaw_zero_count=1968 yaw_dwell_ms=5 yaw_raw_speed_deg_s=-30.000 yaw_encoder_speed_deg_s=-1.994 yaw_position_deg=0.747\n[2026-09-30 12:01:35.277] [controld] [error] PARK FAILED: mixed pitch stop/yaw zero confirmation deadline exceeded; automatic park release withheld; services remain online\n[2026-09-30 12:01:35.278] [controld] [warning] black-box scene preserved (id 1): ALLOW in fault \u2014 mode MANUAL phase fault safety ALLOW\n[2026-09-30 12:01:35.283] [controld] [error] STOP FAILED: pitch STOP and yaw zero requested (phase=fault, fault='PARK FAILED: mixed pitch stop/yaw zero confirmation deadline exceeded')\n[2026-09-30 12:01:35.340] [controld] [error] motor watchdog: heartbeat_age_ms=103.085 axis=0 feedback_age_ms=56.363 mode=0 faults=0 temp_c=25.3\n[2026-09-30 12:01:35.340] [controld] [error] motor watchdog: heartbeat_age_ms=103.085 axis=1 feedback_age_ms=-1.000 mode=0 faults=0 temp_c=0.0\n[2026-09-30 12:01:35.612] [controld] [info] controld stopped cleanly\n\nSTATUS_EXIT_CODE=1",
+      "launcher_status": "Stopped: STOP FAILED\n[2026-09-30 12:01:25.744] [controld] [info] mixed stop/park: bounded pitch pose verified; requesting pitch disable, yaw remains zero-requested\n[2026-09-30 12:01:35.236] [controld] [error] mixed stop deadline: pitch_disable_requested=true pitch_disabled_known=true pitch_disabled=true pitch_ack_age_ms=19 yaw_zero_count=1968 yaw_dwell_ms=5 yaw_raw_speed_deg_s=-30.000 yaw_encoder_speed_deg_s=-1.994 yaw_position_deg=0.747\n[2026-09-30 12:01:35.277] [controld] [error] PARK FAILED: mixed pitch stop/yaw zero confirmation deadline exceeded; automatic park release withheld; services remain online\n[2026-09-30 12:01:35.278] [controld] [warning] black-box scene preserved (id 1): ALLOW in fault — mode MANUAL phase fault safety ALLOW\n[2026-09-30 12:01:35.283] [controld] [error] STOP FAILED: pitch STOP and yaw zero requested (phase=fault, fault='PARK FAILED: mixed pitch stop/yaw zero confirmation deadline exceeded')\n[2026-09-30 12:01:35.340] [controld] [error] motor watchdog: heartbeat_age_ms=103.085 axis=0 feedback_age_ms=56.363 mode=0 faults=0 temp_c=25.3\n[2026-09-30 12:01:35.340] [controld] [error] motor watchdog: heartbeat_age_ms=103.085 axis=1 feedback_age_ms=-1.000 mode=0 faults=0 temp_c=0.0\n[2026-09-30 12:01:35.612] [controld] [info] controld stopped cleanly\n\nSTATUS_EXIT_CODE=1",
       "last_recorded_stop": "FAILED",
       "can_links": [
         {
@@ -1611,7 +1615,7 @@
       "observed_utc": "2026-09-30T02:55:30.608660+00:00"
     },
     "post_capture_state": "No controller or IMU consumer in fresh account process listing; capture exited normally; production not started",
-    "operator_at_manual_cutoff": "AWAITING_USER_FACT_BEFORE_MOTION"
+    "operator_at_manual_cutoff": "PRESENCE_NOT_REQUIRED_BY_LATEST_EXPLICIT_AUTHORIZATION"
   },
   "physical_baseline_evidence": [
     {
@@ -1704,5 +1708,108 @@
       "sha256": "eba694a86b918619819cd9bf2163898ff17cfe933523937f7f108286875556e4",
       "bytes": 373
     }
-  ]
+  ],
+  "development_takeover": {
+    "date": "2026-09-30",
+    "initial_head": "3d8fe1abcf5015bf81919c6ff4f0ac5cbd2eec48",
+    "inherited_dirty_work_preserved": true,
+    "fresh_inventory": "PASS",
+    "neutral_current_software": "LOCAL_NATIVE_AND_ARM64_PROCESS_MATRIX_PASS",
+    "physical_neutral_current": "NOT_RUN",
+    "full_adr_status": "NOT_DONE",
+    "station_fix_verification_attempts": 0,
+    "local_counts": {
+      "native_ctests": 83,
+      "current_process_cases": 17,
+      "arm64_current_process_cases": 17,
+      "current_tools_regressions": 93,
+      "mathematical_tests": 93
+    },
+    "historical_local_failures": [
+      "Expected missing-STOP was detected as stale feedback before its STOP deadline; preserved and rehearsal expectation corrected.",
+      "Prepared ARM64 toolchain needed its existing host-binutils library path; no packages installed.",
+      "Local overflow regression rejected receive clock uncertainty once; diagnostic/repeated runs and final full suite passed without changing receiver guards.",
+      "First mathematical test command lacked the documented shared-core environment bindings; rerun explicitly binds the unchanged C++ core."
+    ],
+    "pending": [
+      "established measured pitch homing",
+      "current-mode dynamic stopping",
+      "encoder/current units and IMU mounting/time calibration",
+      "dynamic identification and immutable measured snapshot",
+      "3a",
+      "3b"
+    ],
+    "evidence": [
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/initial-status.txt",
+        "sha256": "9cf4cdcfa511a60b9d723ebb3864482657141475be185b9697c7408d7a1d2291",
+        "bytes": 320
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/initial-head.txt",
+        "sha256": "46f0b62d284eaa0662574d3140c5e8668244c7b9e80de385dbe4e9eeb2badfc7",
+        "bytes": 42
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/initial-diff.patch",
+        "sha256": "662ba9e38da3bb38196ba190d3eb960ec8c67c16499a7e8fe773ddc1a00ad180",
+        "bytes": 13032
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/station-connection.json",
+        "sha256": "d9649b00a1558deb947dd7ced018a360e6abd42772b7317ab28bb99a64056821",
+        "bytes": 664
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/station-inventory.txt",
+        "sha256": "b00d75e058af032e02a8dec034d18edf803e0fa54735f0c26b10afc2a2c26869",
+        "bytes": 167465
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/inventory-review.json",
+        "sha256": "52f6e3951ee41c090a1f17c30f184b98ba9c4ad31ef9f436e8b66261ac0802c8",
+        "bytes": 8707
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/neutral-fault-matrix-2/summary.json",
+        "sha256": "486972283b11dbcc6666497df65e46820c7c81c5314386756313dda081d5fccb",
+        "bytes": 11448
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/arm64-current-probe/evidence/summary.json",
+        "sha256": "c941ef30c72b4a936c41700c32bce4eae32759254506431f0d9eece8102d1543",
+        "bytes": 5431
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/arm64-current-matrix/evidence/summary.json",
+        "sha256": "d4c05cd51117fea491dc0d57eef91755454aab06dd709d55fc59b54dd1369cf1",
+        "bytes": 20847
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/arm64-abi.json",
+        "sha256": "e59a7e3edbea1478b49d6d96a7e42739903d21a45546af84f77dea287a3e7866",
+        "bytes": 15112
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/actual-station-library-abi.json",
+        "sha256": "bb4e20a2ea6a1d51ce7c5d8e9885585a307ee10d760c1348322ac064b8b7b7ea",
+        "bytes": 15266
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/ctest-final.log",
+        "sha256": "348100e412675ee0e8371feb7444dc927c9473cb41535e8acf8d0c3efa5b3406",
+        "bytes": 9276
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/current-tools-tests.log",
+        "sha256": "9090229c306fd1eeaf0a9f9b8b425627dd6fb091cc99d0b0c83ca93296eb1ce2",
+        "bytes": 190
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/math-tests-bound-core.log",
+        "sha256": "921d32e8d704d58739eb496bc645bde0393dc46b1ab918d4268fe2e4f30145c1",
+        "bytes": 191
+      }
+    ]
+  }
 }

@@ -51,7 +51,7 @@ def main():
                              "binaries: the station runs the suite rather than building it. "
                              "Compiling needs no hardware; only running the tests does.")
     parser.add_argument("--baseline-bundle", type=pathlib.Path,
-                        help="ship a committed ADR-002.2 baseline bundle into a separate release; "
+                        help="ship a committed ADR-002.2 baseline or neutral-current acquisition bundle into a separate release; "
                              "validate with launcher check, without starting devices, installing packages or compiling")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
@@ -83,7 +83,7 @@ def main():
                    capture_output=True, text=True).stdout.strip()
     if args.baseline_bundle:
         from adr0022_baseline_bundle import validate
-        validate(args.baseline_bundle, revision)
+        acquisition_record = validate(args.baseline_bundle, revision, repo / "Firmware")
     quote = shlex.quote
     connection = []
     if args.connect_address:
@@ -126,7 +126,8 @@ def main():
         # and active services are untouched; the check opens no device transport.
         bundle = release + "/baseline-bundle.tar"
         run(["scp", *connection, str(args.baseline_bundle), f"{args.host}:{bundle}"])
-        capture_directory = release + "/run/baseline"
+        launch_option = acquisition_record.get("launch_option", "--capture-baseline")
+        capture_directory = release + ("/run/current-preparation" if launch_option == "--prepare-current" else "/run/baseline")
         helper = release + "/Firmware/tools/adr0022_baseline_bundle.py"
         remote(f"{quote(venv + '/bin/python')} {quote(helper)} install --bundle {quote(bundle)} "
                f"--revision {quote(revision)} --firmware {quote(release + '/Firmware')} "
@@ -134,11 +135,11 @@ def main():
         manifest = capture_directory + "/manifest.json"
         script = release + "/Firmware/scripts/run_application.sh"
         remote(f"OTA_RUN_DIR={quote(release + '/run/stack')} bash {quote(script)} "
-               f"check --capture-baseline {quote(manifest)}")
-        print(f"Baseline release prepared; devices unopened: {release}\nRevision: {revision}\n"
+               f"check {launch_option} {quote(manifest)}")
+        print(f"Acquisition release prepared; devices unopened: {release}\nRevision: {revision}\n"
               f"Manifest: {manifest}\n"
               f"Capture: OTA_RUN_DIR={quote(release + '/run/stack')} bash {quote(script)} "
-              f"run --capture-baseline {quote(manifest)}", flush=True)
+              f"run {launch_option} {quote(manifest)}", flush=True)
         return
     # Model binaries stay outside Git/release source. The adapter checks the
     # pinned SHA before opening the shared artifact.

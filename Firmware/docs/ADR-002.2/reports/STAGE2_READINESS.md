@@ -1,4 +1,35 @@
-# Stage 2 — baseline captured, calibration in progress
+# Stage 2 — baseline captured, neutral current preparation in progress
+
+## Development takeover, 2026-09-30
+
+The owner explicitly authorized station operation regardless of their presence.
+Attendance at the manual cutoff is therefore not a prerequisite for this authorized
+session. Manifest records retain the actual attendance fact and this authorization;
+independent automatic cutoff and stopping after complete Pi/process/CAN loss remain
+unqualified. This supersedes the pending attendance request below.
+
+The inherited unfinished `--prepare-current` path has been preserved and exercised
+locally. Its neutral transition now rejects receive loss immediately, requires fresh
+disabled status before mode changes/enable, rejects unexpected enabled/disabled state,
+bounds each receive drain, validates abort STOP frame length/time/faults, and reports a
+journal completion failure truthfully. Independent review reconstructs the transition
+from raw commands/readbacks/status, rather than trusting its completion footer.
+
+The new [operation card](../../operations/adr0022-current-preparation.md) documents
+single-owner launcher supervision, immutable/hash-bound manifests and acquisition
+bundles. A successful local native/ARM64 neutral probe and 17-case process fault matrix
+are preliminary software evidence; physical neutral qualification is still NOT_RUN
+at this report revision. Full calibrated acquisition, established homing, dynamic
+stopping, identification and 3a/3b remain incomplete. Runtime captures and the original
+dirty work snapshot are retained under `run/adr0022-stage2/takeover-20260930/`.
+
+The owner clarified that there are no endstop microswitches and the existing pitch
+routine homes by detecting stalled motion, believed to use native speed mode. The
+approximately 60-degree travel is an expected-span statement, not measured endpoints.
+The production file still assumes 140 degrees and a final logical 40-degree pose;
+those historical settings must not be reused as facts for this mount. Sensorless
+endpoint detection, measured travel/repeatability and verified mode/stop transitions
+must precede bounded dynamic acquisition.
 
 The owner explicitly directed Step 2 to continue without treating the prior inventory
 failure as a gate. A fresh read-only inventory at **2026-09-30 02:28:46 UTC passed**:

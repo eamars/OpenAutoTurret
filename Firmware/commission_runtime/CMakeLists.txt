@@ -1,4 +1,4 @@
-add_library(commission_capture STATIC capture.cpp session.cpp readback.cpp)
+add_library(commission_capture STATIC capture.cpp session.cpp readback.cpp active_session.cpp)
 target_include_directories(commission_capture PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(commission_capture PUBLIC ota_core)
 target_compile_options(commission_capture PRIVATE -Wall -Wextra -Werror)

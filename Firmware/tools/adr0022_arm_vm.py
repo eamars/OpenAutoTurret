@@ -17,7 +17,7 @@ import subprocess
 import tarfile
 
 parser=argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--phase',choices=['probe','matrix'],required=True)
+parser.add_argument('--phase',choices=['probe','matrix','current-probe','current-matrix'],required=True)
 parser.add_argument('--packages-root',type=Path,required=True,help='separate amd64/ and arm64/ extracted package directories')
 parser.add_argument('--build',type=Path,required=True,help='full ARM64 Firmware CMake build')
 parser.add_argument('--output',type=Path,required=True,help='new local directory for immutable VM evidence')
@@ -57,7 +57,8 @@ for path,name in [('axis_control_core/commissiond','commissiond'),
     if binary.read_bytes()[:4]!=b'\x7fELF' or binary.read_bytes()[18:20]!=b'\xb7\x00':
         raise ValueError(f'ARM64 ELF required: {binary}')
     file(binary,'work/bin/'+name)
-for name in ('adr0022_capture_rehearsal.py','adr0022_capture_review.py'):
+for name in ('adr0022_capture_rehearsal.py','adr0022_capture_review.py',
+             'adr0022_current_rehearsal.py','adr0022_current_review.py'):
     file(tools/name,'work/tools/'+name)
 file(tools/'adr0022_arm_vm_guest.py','work/run_vm_rehearsals.py')
 kernel=next((source/'boot').glob('vmlinuz-*'))
