@@ -239,6 +239,13 @@ def homing_contract(tmp_path):
     manifest.pop("output")
     manifest.update(provenance="MEASURED", transport="socketcan",
                     yaw={"interface": "can0"}, pitch={"interface": "can1"})
+    manifest["guards"]["current_bound_A"] = 6.5
+    manifest["protection_limit_basis"] = {
+        "kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
+        "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5}
+    document = firmware / PROTECTION_DOCUMENT
+    document.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(Path(__file__).resolve().parents[2] / PROTECTION_DOCUMENT, document)
     manifest["session_authorization"].update(purpose=manifest["purpose"], sensorless_homing_authorized=True)
     manifest["session_authorization"].pop("current_mode_enable_authorized")
     report = manifest["local_qualification"]["report"]
@@ -264,6 +271,8 @@ def test_homing_bundle_binds_own_qualification_and_measured_originals(tmp_path):
     assert bound["output"] == str(tmp_path / "observations/sensorless-homing.jsonl")
     assert bound["native_settings_evidence"] == manifest["native_settings_evidence"]
     assert bound["local_qualification"]["report"]["status"] == "LOCAL_SENSORLESS_HOMING_PASS"
+    assert bound["guards"]["current_bound_A"] == 6.5
+    assert bound["native_settings"]["homing_limit_cur_A"] == 5
 
 
 @pytest.mark.parametrize("changed", ["absent", "wrong_hash", "synthetic", "enabled", "missing_gain",
@@ -307,6 +316,50 @@ def test_homing_bundle_accepts_exact_measured_zero_original_gain(tmp_path):
     evidence["asset"]["registers"]["0x7020"]["observed"].update(min=0., max=0.)
     evidence["sha256"] = canonical_sha(evidence["asset"])
     assert pack(build, revision, manifest, tmp_path / "zero-original.tar")["launch_option"] == "--establish-homing"
+
+
+@pytest.mark.parametrize("changed", ["guard_ceiling", "command_cap", "missing_basis", "peak_rating", "document_identity"])
+def test_homing_bundle_keeps_protection_separate_from_command_cap(tmp_path, changed):
+    _, build, revision, manifest = homing_contract(tmp_path)
+    if changed == "guard_ceiling":
+        manifest["guards"]["current_bound_A"] = 6.6
+    elif changed == "command_cap":
+        manifest["native_settings"]["homing_limit_cur_A"] = 6.5
+    elif changed == "missing_basis":
+        del manifest["protection_limit_basis"]
+    elif changed == "peak_rating":
+        manifest["protection_limit_basis"]["continuous_current_A"] = 23.
+    else:
+        manifest["protection_limit_basis"]["sha256"] = "0" * 64
+    archive = tmp_path / "refused.tar"
+    with pytest.raises(ValueError):
+        pack(build, revision, manifest, archive)
+    assert not archive.exists()
+
+
+def test_homing_changed_manufacturer_document_blocks_before_device_checks(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import adr0022_capture_launch
+    import station_preflight
+    firmware, build, revision, manifest = homing_contract(tmp_path)
+    shutil.copytree(build, firmware / "build")
+    for relative in EXECUTABLES.values():
+        (firmware / "build" / relative).chmod(0o755)
+    (firmware.parent / "REVISION").write_text(revision)
+    manifest["output"] = str(tmp_path / "unused-homing.jsonl")
+    manifest["limits"]["startup_s"] = 3.
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    calls = []
+    monkeypatch.setattr(adr0022_capture_launch.subprocess, "run",
+                        lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0, stderr=""))
+    monkeypatch.setattr(station_preflight, "_validate_can_spi_mapping",
+                        lambda *args, **kwargs: pytest.fail("device checks reached before manufacturer hash validation"))
+    (firmware / PROTECTION_DOCUMENT).write_bytes(b"changed manufacturer document")
+    with pytest.raises(ValueError, match="changed manufacturer protection document"):
+        adr0022_capture_launch.preflight(manifest_path, firmware, establish_homing=True)
+    assert calls == [[str(firmware / "build/axis_control_core/commissiond"), "--validate-homing", str(manifest_path)]]
+    assert not (tmp_path / "unused-homing.attempt.json").exists()
 
 
 @pytest.mark.parametrize("registers,reads,poll", [([0x701e, 0x701e], True, True), ([0x1234], True, True),

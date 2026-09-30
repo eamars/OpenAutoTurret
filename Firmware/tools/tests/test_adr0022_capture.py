@@ -528,7 +528,7 @@ def test_homing_launcher_measured_native_offset_preserves_observations(tmp_path,
     homing_launcher_probe(tmp_path, monkeypatch, fault="native_position_offset")
 
 
-@pytest.mark.parametrize("invalid", ["missing_parameter", "unsafe_current"])
+@pytest.mark.parametrize("invalid", ["missing_parameter", "unsafe_command_cap"])
 def test_homing_preflight_uses_exact_runtime_numeric_validation_before_sensor(tmp_path, invalid):
     from adr0022_homing_rehearsal import fixture
     firmware, baseline, ports, emitter = prepare_launcher_fixture(tmp_path)
@@ -546,7 +546,7 @@ def test_homing_preflight_uses_exact_runtime_numeric_validation_before_sensor(tm
     if invalid == "missing_parameter":
         del config["homing"]["arrival_tol_rad"]
     else:
-        config["guards"]["current_bound_A"] = 6.
+        config["homing"]["limit_cur_max_a"] = 6.
     manifest = tmp_path / "homing.json"
     manifest.write_text(json.dumps(config))
     with pytest.raises(ValueError, match="runtime homing parameter validation failed"):

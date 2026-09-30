@@ -1,4 +1,12 @@
-# Stage 2 — baseline captured, strict neutral current attempt aborted
+# Stage 2 — measured native settings and zero-current observations captured
+
+The independent-current homing revision passed 32 native and 32 ARM64 process
+cases, including 5.2 A feedback with a 5 A command cap and rejection above the
+6.5 A manufacturer protection. The same target binary passed the installed-library
+ABI audit. Physical homing remains NOT_RUN; its next manifest binds the newly
+measured originals and the existing shared sensorless method. The 0.01 rad
+encoder/native discrepancy ceiling is an engineering commissioning limit tied to
+the independent transition guard, not a calibrated full-range uncertainty.
 
 ## Current measured-imperfection development
 
@@ -15,7 +23,9 @@ The target executable `706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd
 passed the same 19-case ARM64 kernel VM matrix and 10-second probe. The ABI audit
 against copied installed station libraries passed eight ELF files and 18 bindings.
 The native firmware suite passed 83 tests, excluding the documented retained-homing
-test. These are synthetic/local results; physical characterization remains NOT_RUN.
+test. These are synthetic/local results. The subsequent physical characterization
+completed and passed independent raw review, as recorded below; qualification remains
+separate from acquisition integrity.
 
 Shared sensorless homing passed 31 native process cases: five successful variants and
 26 expected rejections. It preserves the measured encoder/native-position residual,
@@ -25,7 +35,8 @@ feedback before motion. The reported 60-degree span remains a prior; endpoint an
 repeatability observations must establish the physical geometry. The ARM64 raw
 homing sequence completed with STOP/restore, and corrected independent review passed;
 the VM's earlier reviewer failure remains retained. The full ARM64 matrix and
-physical homing remain NOT_RUN. Before physical homing, the executor must separate
+physical homing remain NOT_RUN. Protection-contract decoupling is under local
+development: before physical homing, the executor must separate
 its 5 A software command ceiling from the documented 6.5 A measured-current
 protection; raw feedback scatter must not be judged by the command ceiling.
 
@@ -39,9 +50,11 @@ controller candidate or 3a/3b certificate has been produced from these observati
 
 A fresh read-only inventory at 2026-09-30 06:15:21 UTC passed collection review. Its
 historical launcher STOP FAILED record is retained as history; interface and process
-facts do not qualify drive disable or dynamic stopping. The next bounded acquisitions
-are fresh disabled native settings and a 10-second zero-command characterization,
-with source and builds frozen during the physical sessions.
+facts do not qualify drive disable or dynamic stopping. Fresh disabled native settings
+and a 10-second zero-command characterization subsequently completed at 06:31:08 and
+06:33:47 UTC. Source and builds stayed frozen throughout both physical sessions.
+The station is stopped; post-session account inspections found no controller or IMU
+consumer, and exact executable hashes matched both manifests.
 
 ## Development takeover, 2026-09-30
 
@@ -159,17 +172,83 @@ The physical characterization manifest requires its own matching
 `LOCAL_CURRENT_CHARACTERIZATION_PASS` source/binary-bound local report and the exact
 manufacturer PDF SHA-256
 `4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495`.
-The launcher checks those bytes before device access. First local executable and
-independent-review probes passed with synthetic devices; ARM64 and physical
-characterization are **NOT_RUN** at this report revision. Current qualification and
-compensation require the missing measured calibration and dynamic evidence. This new
+The launcher checks those bytes before device access. Native and ARM64 executable
+probes and their 19-case matrices passed with synthetic devices. The physical
+characterization below completed with independent raw review. Current qualification
+and compensation require measured calibration and dynamic evidence. This new
 measurement operation preserves the failed strict attempt. See the existing
 [operation card](../../operations/adr0022-current-preparation.md).
 
 The measurement duration is now a required runtime `neutral_observation_s`, independent
 of the historical current comparison. It must be finite, positive and at most 60 seconds,
-with a total deadline longer than startup plus the requested observation. A 10-second
-physical observation is planned but has not been executed at this revision.
+with a total deadline longer than startup plus the requested observation. The physical
+manifest requested 10 seconds of observation, with a 5-second startup allowance and
+25-second total deadline; the observation completed without retry.
+
+## Closed physical native settings and characterization (2026-09-30)
+
+Both sessions used committed source `a6851d4cb96a5da09bc9763f462ca7719bd1dedc`,
+source fingerprint `a1f7c681c47f0d533234143cefcc7f74b82c2d588bcdd7ca5dc56e0979e53b44`,
+and target `commissiond` SHA-256
+`706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd370e79a`.
+The IMU executable remained
+`0be58739e8417cd7e1589d2e25be013d48984005265701640807d04f98a493eb`.
+Each manifest records attendance as false and the owner's explicit unattended
+authorization. There were no automatic retries, nonzero current references,
+production activation, persistent register writes or retained-calibration updates.
+
+The disabled native-settings session ran **06:30:52.428725–06:31:08.601161 UTC** in
+release `a6851d4cb96a.98ua4l`. Its manifest requested 15 seconds total, including a
+5-second startup allowance. It issued discovery, normal pitch STOP requests and
+register reads, with no mode write or enable. Independent review found 716 disabled
+pitch observations, 715 register reads and zero final socket drops. The fresh
+`PITCH_DISABLED_BASELINE` originals were `RunMode=3`, `LimitCur=5 A`, `LocKp=30`,
+`SpdKp=4`, `SpdKi=0.05000000074505806` and `LimitSpd=0`. These are observed original
+settings at this operating point, not newly chosen or qualified tuning values.
+
+The immutable MEASURED capability asset's canonical SHA-256 is
+`daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e`; its raw capture is
+`6f511e0f2a785c41fc1fead01db342f795a96d336bebeeefe0a2fe02f3527677`.
+Its [readiness evidence index](STAGE2_READINESS.json), under
+`physical_native_settings_baseline.evidence`, binds the session, fetched archive,
+manifest, bound manifest, attempt, raw journal, independent review, result and account
+process/binary snapshot. The asset preserves sensor scatter and encoder/native-position
+residuals without qualifying mapping, mounting, stopping or plant parameters.
+
+The separate characterization ran **06:33:30.852144–06:33:47.263436 UTC** in release
+`a6851d4cb96a.aABYSU`. It completed the requested **10 seconds** and retained **485**
+enabled zero-command `Iqf` observations. All 1,955 recorded transmissions succeeded;
+all yaw current commands and pitch current references were zero. Independent review
+verified fresh pitch STOP and restoration of original mode **3** on normal completion.
+Final socket drops and interface-loss increments were zero; writer queue high water
+was 11/4095. Pitch temperature remained **23.9 C**. Yaw temperature remained raw
+byte 28, with Celsius conversion unqualified.
+
+| Measured observation | Value and interpretation |
+|---|---|
+| Zero-command `Iqf` | mean `-0.0024192062350585288 A`; sample standard deviation `0.11981761172579906 A`; range `[-0.33193036913871765, 0.3230209946632385] A` |
+| Historical 0.1 A comparison | 195 observations above the absolute comparison; all retained as valid raw measurements |
+| `Iqf` host receipt cadence | 48.486 Hz; median gap 20.930397 ms; maximum gap 21.312957 ms; device sample times unknown |
+| Host transaction latency | range 0.473383–0.850250 ms; this is not device/filter delay calibration |
+| Pitch encoder in the observation window | counts 30632–30636; protocol quantum `25/65535 rad`, half-bin width `0.00019073777370870527 rad` |
+| Yaw encoder in the observation window | counts 5763–5764; protocol quantum `2*pi/8192 rad`, half-bin width `0.0003834951969714103 rad` |
+| Raw gyro calibration candidates | 500 observations per sensor-frame axis; candidate means and empirical variance retained, with mounting and bias application pending |
+
+The immutable MEASURED neutral-observation asset's canonical SHA-256 is
+`d5d69c46ef30fed36d1a9932b67c44fc49a37fb4267a925129c02fd75f5b0d1a`; its raw capture is
+`1cdfa718760c413fd9571f292ebba633eda96701776fe1f1d8803870a670c906`.
+The [readiness evidence index](STAGE2_READINESS.json), under
+`zero_command_current_characterization.physical_session.evidence`, binds all raw
+identities, review and post-state evidence. `neutral_observation_asset` records the
+current, quantization, sensor-frame scatter and host timing candidates. The current
+mean may contain actual current, sensor bias, filtering and transients; it is **not a
+sensor-bias estimate**. No bias correction, physical encoder mapping, mounted gyro
+calibration or observer covariance has been applied.
+
+These measurements satisfy acquisition integrity and preserve the hardware's measured
+imperfections. They do not qualify current-mode dynamics, dynamic stopping, homing,
+mounting, identification or 3a/3b. Independent cutoff and complete Pi/process/CAN-loss
+stopping remain unqualified. No PlantSnapshot or controller candidate was generated.
 
 ## Sensorless homing development
 
@@ -180,6 +259,9 @@ Mode 1 enable requires fresh `MechPos`, a pinned reference and zero speed limit,
 followed by fresh enabled pose re-pinning before bounded motion. Measured native
 originals require their own disabled baseline capability asset and exact readbacks;
 synthetic gains and the historical production span are not physical defaults.
+The closed native-settings session above now supplies that MEASURED asset and exact
+original values. Physical homing still requires its own matching local qualification,
+completed ARM64 matrix, release bindings and current-protection contract.
 
 The session records both endpoint contacts, repeatability, measured midpoint/dwell,
 STOP and original-setting restoration on normal completion. It sends no encoder-zero
@@ -262,13 +344,16 @@ caused it. No guard was loosened and no production stop fix was tested.
 1. **Active acquisition is incomplete.** `commissiond` now implements baseline CAN/IMU
    recording, discovery, normal pitch STOP polling and correlated register reads, with
    launcher ownership and single-attempt supervision, exercised locally. Current-mode
-   preparation, bounded excitation, active watchdog/shutdown, physical calibration and
+   preparation and raw zero-command characterization are implemented and physically
+   observed; bounded excitation, active watchdog/shutdown, physical calibration and
    automatic measured-asset injection remain open.
 2. **Current-mode actuation is unqualified.** Yaw firmware/current-ring assets
    are historical and require an explicit reuse binding. Pitch's actual baseline
-   `RunMode` was **2 (speed)** despite the profile's position-mode label. The strict
-   neutral attempt verified mode 3 but aborted on its first enabled `Iqf` sample;
-   current mode remains unqualified. Baseline `Iqf` readback was acquired at about
+   `RunMode` was **2 (speed)** at the first baseline despite the profile's position-mode
+   label. The strict neutral attempt verified mode 3 but aborted on its first enabled
+   `Iqf` sample; the later disabled baseline observed mode 3 and the characterization
+   completed with STOP/restore. Current-mode dynamics remain unqualified. First-baseline
+   `Iqf` readback was acquired at about
    24.24 Hz in the disabled context.
    Standard pitch feedback is torque, not measured
    current. `limit_cur` is specified for speed/position modes and cannot be assumed to
@@ -280,8 +365,9 @@ caused it. No guard was loosened and no production stop fix was tested.
    still require calibration; host receipt is not a device sampling timestamp.
 4. **Physical stopping remains unqualified.** The historical stop failed; a later
    process inventory succeeded and found no active device consumers. Pitch support is owner-confirmed, but the exact
-   owner handoff and mode-transition procedure still needs local implementation and
-   verification before physical qualification.
+   zero-command mode transition and recoverable-session pitch disable have since been
+   observed. Dynamic stopping and complete process/Pi/CAN-loss stopping still require
+   their own physical evidence.
 5. **Measurement resolution and temperature semantics must be bound.** GM6020 encoder
    quantization is `2*pi/8192` rad; the currently implemented pitch feedback mapping
    gives `25/65535` rad and needs current-device agreement with `mechPos`. Yaw RPM is

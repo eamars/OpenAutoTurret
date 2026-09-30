@@ -156,6 +156,58 @@ def test_kernel_arrival_before_pin_can_be_processed_after_pin(tmp_path, successf
     assert report["encoder_mechpos_receipt_pairs"][0]["encoder_receive_ns"] == observation["status_receive_ns"]
 
 
+@pytest.fixture(scope="module")
+def continuous_current_capture(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("homing-current-protection") / "continuous-rating"
+    result = rehearse(BINARY, directory, fault="continuous_current_guard")
+    assert result["returncode"] == 0
+    return directory
+
+
+def test_current_protection_is_independent_from_homing_command_cap(continuous_current_capture):
+    rows = load(continuous_current_capture)
+    report = review(continuous_current_capture / "capture.jsonl")
+    assert report["homing_command_current_cap_A"] == 5
+    assert report["measured_current_protection_bound_A"] == 6.5
+    assert report["pitch_current_max_abs_A"] == pytest.approx(5.2)
+    caps = [struct.unpack("<f", bytes.fromhex(r["data_hex"])[4:])[0] for r in rows if tx_kind(r, 18) and register(r) == 0x7018]
+    assert caps and all(value == 5 for value in caps)
+    assert report["normal_stop_confirmed"] and report["restored_settings_verified"]
+    assert not report["current_mode_qualified"] and not report["physical_capabilities_qualified"]
+
+
+@pytest.mark.parametrize("corruption", ["missing", "kind", "document", "sha256", "continuous_current_A", "extra", "lower_guard", "above_rating", "raised_command_cap"])
+def test_measured_current_basis_is_exact_and_command_cap_remains_five(tmp_path, continuous_current_capture, corruption):
+    rows = load(continuous_current_capture)
+    manifest = json.loads(rows[0]["manifest_yaml"])
+    rows[0]["provenance"] = manifest["provenance"] = "MEASURED"
+    manifest["transport"] = "socketcan"
+    manifest["yaw"]["interface"], manifest["pitch"]["interface"] = "can0", "can1"
+    rows[-1]["interface_loss_deltas"] = {axis: {"rx_dropped": 0, "rx_errors": 0} for axis in ("yaw", "pitch")}
+    basis = manifest["protection_limit_basis"]
+    if corruption == "missing": del manifest["protection_limit_basis"]
+    elif corruption == "extra": basis["invented_calibration"] = True
+    elif corruption == "lower_guard": manifest["guards"]["current_bound_A"] = 5
+    elif corruption == "above_rating": manifest["guards"]["current_bound_A"] = 7
+    elif corruption == "raised_command_cap":
+        manifest["homing"]["limit_cur_initial_a"] = manifest["homing"]["limit_cur_max_a"] = 5.2
+        manifest["native_settings"]["homing_limit_cur_A"] = 5.2
+    else: basis[corruption] = 5 if corruption == "continuous_current_A" else "forged"
+    rows[0]["manifest_yaml"] = json.dumps(manifest)
+    with pytest.raises(ValueError): review(save(tmp_path, rows))
+
+
+def test_seven_ampere_actual_feedback_still_aborts_and_cannot_be_qualified(tmp_path):
+    directory = tmp_path / "above-continuous-rating"
+    result = rehearse(BINARY, directory, fault="overcurrent")
+    assert result["returncode"] != 0
+    rows = load(directory)
+    assert any(r["kind"] == "register_read" and r["index"] == IQF and r["value"] == 7 for r in rows)
+    rows[-1].update(status="COMPLETE", detail="", normal_stop_confirmed=True, abort_stop_confirmed=False, homing_observed=True)
+    with pytest.raises(ValueError, match="measured pitch current guard exceeded"):
+        review(save(tmp_path, rows))
+
+
 @pytest.mark.parametrize("corruption", [
     "footer", "geometry", "qualification", "loss", "missing_loss", "sequence", "clock", "age", "can_fault",
     "nonzero_yaw", "nonzero_iq", "zero_encoder", "fault_clear", "read_value", "read_source", "sample_time",

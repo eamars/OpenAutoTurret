@@ -79,7 +79,16 @@ def review(path: Path):
         "backoff_timeout_s", "backoff_arrival_tol_rad", "backoff_arrive_vel_rad_s", "limit_cur_initial_a", "limit_cur_max_a", "torque_safety_nm")}
     need(homing.get("motion_checks_abort") in (True, "true") and homing.get("rearm_before_start") in (True, "true") and
          float(homing["limit_cur_step_a"]) == 0 and parameters["limit_cur_initial_a"] == parameters["limit_cur_max_a"] <= 5 and
-         guards["current_bound_A"] <= 5, "homing fixed-current/abort/rearm contract differs")
+         guards["current_bound_A"] <= 6.5, "homing command cap or measured-current protection contract differs")
+    protection_basis = config.get("protection_limit_basis")
+    if provenance == "MEASURED":
+        need(guards["current_bound_A"] == 6.5 and type(protection_basis) is dict and
+             set(protection_basis) == {"kind", "document", "sha256", "continuous_current_A"} and
+             protection_basis["kind"] == "manufacturer_continuous_current_rating" and
+             protection_basis["document"] == "docs/references/cybergear/CyberGear微电机使用说明书.pdf" and
+             protection_basis["sha256"] == "4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495" and
+             manifest_number(protection_basis, "continuous_current_A") == 6.5,
+             "measured homing lacks exact manufacturer continuous-current protection basis")
     retries = int(homing["repeatability_retries"])
     direction = int(homing["dir_endpoint_a"])
     need(0 <= retries <= 2 and direction in (-1, 1) and int(homing["dir_endpoint_b"]) == -direction, "invalid homing directions/retries")
@@ -573,6 +582,8 @@ def review(path: Path):
         restored_settings_verified=True, mode_transitions=len(enables), register_reads=len(observations), write_echoes_ignored=len(echoes),
         enabled_acknowledgements=enabled_acknowledgements,
         pitch_current_max_abs_A=max(abs(o["value"]) for o in iqf), pitch_temperature_max_C=max(f["temperature"] for f in feedback),
+        homing_command_current_cap_A=desired[CURRENT_LIMIT], measured_current_protection_bound_A=guards["current_bound_A"],
+        protection_limit_basis=protection_basis,
         encoder_mechpos_receipt_pairs=position_observations,
         encoder_mechpos_max_abs_receipt_difference_rad=max((abs(o["difference_rad"]) for o in position_observations), default=None),
         encoder_mechpos_declared_guard_rad=guards["encoder_mechpos_agreement_bound_rad"],

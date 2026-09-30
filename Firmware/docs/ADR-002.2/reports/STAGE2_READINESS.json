@@ -1,17 +1,17 @@
 {
   "version": "adr0022.stage2-readiness/1",
-  "status": "STEP2_BASELINE_CAPTURE_PASS_STRICT_NEUTRAL_HARD_ABORT_CHARACTERIZATION_PENDING",
+  "status": "STEP2_NATIVE_SETTINGS_AND_ZERO_COMMAND_CHARACTERIZATION_CAPTURE_PASS_UNQUALIFIED",
   "source_head_before_changes": "9a08b3e03d2253b4eb1214a10fd1ab42802532e6",
   "stage_status": {
     "mathematical_software": "PASS_HISTORICAL",
-    "stage2": "BASELINE_CAPTURE_PASS_STRICT_NEUTRAL_HARD_ABORT",
-    "hardware_capability_qualification": "PARTIAL_BASELINE_READBACK_ONLY",
+    "stage2": "NATIVE_SETTINGS_AND_ZERO_COMMAND_CHARACTERIZATION_CAPTURE_PASS_STRICT_ABORT_RETAINED",
+    "hardware_capability_qualification": "PARTIAL_MEASURED_READBACK_AND_ZERO_COMMAND_OBSERVATIONS_ONLY",
     "physical_calibration": "NOT_RUN",
     "physical_plant_identification": "NOT_RUN",
     "3a": "NOT_RUN",
     "3b": "NOT_RUN",
     "physical_neutral_current_verification": "HARD_ABORT_UNQUALIFIED",
-    "zero_command_current_characterization": "LOCAL_NATIVE_AND_ARM64_PROCESS_PASS_PHYSICAL_NOT_RUN",
+    "zero_command_current_characterization": "PHYSICAL_CAPTURE_AND_INDEPENDENT_RAW_REVIEW_PASS_UNQUALIFIED",
     "physical_sensorless_homing": "NOT_RUN"
   },
   "full_adr_status": "NOT_DONE",
@@ -37,7 +37,36 @@
     "physical_neutral_current_attempts": 1,
     "neutral_current_transmissions": 500,
     "motor_commands_scope": "Historical baseline count; exact strict neutral attempt transmissions are recorded separately.",
-    "sensor_resets_scope": "One startup reset in each of baseline and strict neutral acquisition; no recovery reset."
+    "sensor_resets_scope": "One startup reset in each of baseline and strict neutral acquisition; no recovery reset.",
+    "counter_scope": "Existing numeric counters preserve the historical first-baseline and strict-attempt checkpoint ending 2026-09-30 04:25:31 UTC. Later closed sessions are counted separately below; these values are not aggregate current totals.",
+    "subsequent_closed_sessions": {
+      "physical_native_settings_baseline_attempts": 1,
+      "physical_zero_command_characterization_attempts": 1,
+      "separate_acquisition_release_deployments": 2,
+      "launcher_acquisition_runs": 2,
+      "automatic_retries": 0,
+      "nonzero_current_requests": 0,
+      "production_activations": 0,
+      "retained_calibration_updates": 0,
+      "characterization_transmissions": 1955,
+      "characterization_successful_transmissions": 1955,
+      "characterization_operation_counts": {
+        "current_zero": 729,
+        "discovery": 1,
+        "stop": 2,
+        "register_read": 491,
+        "stop_poll": 243,
+        "zero_before_mode": 1,
+        "select_current_mode": 1,
+        "enable_at_zero": 1,
+        "neutral_keepalive": 485,
+        "restore_original_mode_disabled": 1
+      },
+      "baseline_discovery_requests": 1,
+      "baseline_pitch_stop_requests": 716,
+      "baseline_register_read_requests": 715,
+      "source_and_builds_frozen": true
+    }
   },
   "confidence": {
     "original_required_percent": 95,
@@ -180,10 +209,10 @@
     "post_capture_arm64_build": "PASS_NOT_DEPLOYED"
   },
   "blockers": [
-    "ACTIVE_CURRENT_MODE_EXCITATION_WATCHDOG_AND_MEASURED_ASSET_INJECTION_INCOMPLETE",
-    "PITCH_CURRENT_MODE_AND_CURRENT_FEEDBACK_UNQUALIFIED",
+    "ACTIVE_CURRENT_MODE_EXCITATION_WATCHDOG_AND_DYNAMIC_ACQUISITION_INCOMPLETE",
+    "PITCH_CURRENT_MODE_DYNAMICS_AND_CURRENT_FEEDBACK_CALIBRATION_PENDING",
     "IMU_MOUNTING_UNITS_FILTER_CLOCK_CALIBRATION_PENDING",
-    "DATASHEET_DUTY_AND_TEMPERATURE_CONTRACT_NOT_BOUND",
+    "DYNAMIC_DUTY_AND_THERMAL_CHARACTERIZATION_PENDING",
     "PROTOCOL_RESOLUTION_SYNTHETIC_SOLVER_REHEARSALS_REJECTED",
     "DEVICE_SAMPLE_CLOCK_FILTER_CALIBRATION_PENDING_DESPITE_VALID_HOST_CAPTURE",
     "RETAINED_HOMING_ABSENT_ESTABLISHED_HOMING_REQUIRED_BEFORE_BOUNDED_MOTION"
@@ -2073,11 +2102,11 @@
     "schema": "adr0022.neutral-characterization/1",
     "purpose": "neutral_current_measurement_characterization",
     "command": "--characterize-current",
-    "status": "LOCAL_NATIVE_AND_ARM64_PROCESS_PASS_PHYSICAL_NOT_RUN",
+    "status": "PHYSICAL_CAPTURE_AND_INDEPENDENT_RAW_REVIEW_PASS_UNQUALIFIED",
     "local_provenance": "SYNTHETIC",
     "hardware_accessed_by_local_probes": false,
     "arm64_characterization": "PROBE_AND_19_CASE_MATRIX_PASS",
-    "physical_characterization": "NOT_RUN",
+    "physical_characterization": "PHYSICAL_CAPTURE_AND_INDEPENDENT_RAW_REVIEW_PASS_UNQUALIFIED",
     "strict_current_preparation_behavior": "UNCHANGED",
     "strict_attempt_reclassified": false,
     "neutral_current_bound_A": 0.1,
@@ -2106,9 +2135,11 @@
     ],
     "manufacturer_document_checked_before_device_access": true,
     "pending": [
-      "Matching clean committed source qualification and release",
-      "Physical raw zero-command characterization and independent review",
-      "Measured calibration and identifier/controller compensation"
+      "Measured current-feedback scale/causal response/filter timing calibration",
+      "Mounted gyro and encoder-to-MechPos calibration",
+      "Physical homing and bounded dynamic stopping",
+      "Prescribed nonzero-command dynamic acquisition and identification",
+      "Measured identifier/observer/controller compensation and whole-run holdouts"
     ],
     "neutral_current_bound_A_meaning": "HISTORICAL_DIAGNOSTIC_COMPARISON_ONLY",
     "observation_above_historical_comparison_invalidates_data": false,
@@ -2150,7 +2181,7 @@
     "neutral_observation_s_required": true,
     "neutral_observation_s_maximum": 60,
     "planned_physical_neutral_observation_s": 10,
-    "planned_physical_observation_executed": false,
+    "planned_physical_observation_executed": true,
     "neutral_observation_duration_basis": "Explicit runtime manifest value; independent of historical current diagnostic comparison.",
     "session_duration_requirement": "limits.duration_s > limits.startup_s + neutral_observation_s",
     "local_current_executable_sha256": "fca1573f8a5f672125e2c57c6884b4596be84a8a10288cd7b42e8aad8d9d51ad",
@@ -2216,13 +2247,279 @@
         "sha256": "ad6b3a50fd1ce14527d1eece6574467958b1fa916c6d409933e3a8f1d8af1dbd",
         "bytes": 365
       }
-    ]
+    ],
+    "physical_provenance": "MEASURED",
+    "actual_neutral_observation_s": 10.0,
+    "current_mean_is_sensor_bias": false,
+    "bias_correction_applied": false,
+    "physical_session": {
+      "schema": "adr0022.physical_acquisition/1",
+      "kind": "characterization",
+      "provenance": "MEASURED",
+      "started_utc": "2026-09-30T06:33:30.852144+00:00",
+      "release": "/home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.aABYSU",
+      "revision": "a6851d4cb96a5da09bc9763f462ca7719bd1dedc",
+      "source_sha256": "a1f7c681c47f0d533234143cefcc7f74b82c2d588bcdd7ca5dc56e0979e53b44",
+      "expected_binaries": {
+        "commissiond": "706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd370e79a",
+        "imu": "0be58739e8417cd7e1589d2e25be013d48984005265701640807d04f98a493eb"
+      },
+      "manifest_sha256": "b3499ff28693c1489b9116260883202e45077e1986cd0fe510fc0320a75f6c24",
+      "command": "OTA_RUN_DIR=/home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.aABYSU/run/stack bash /home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.aABYSU/Firmware/scripts/run_application.sh run --characterize-current /home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.aABYSU/run/current-characterization/manifest.json",
+      "operator_attendance": {
+        "present_at_manual_cutoff": false,
+        "operator_identity": "owner",
+        "manual_cutoff_evidence_identity": "owner_statement_manual_cutoff_only_2026-09-30"
+      },
+      "session_authorization": {
+        "purpose": "neutral_current_measurement_characterization",
+        "current_mode_enable_authorized": true,
+        "unattended_operation_authorized": true,
+        "presence_required": false,
+        "authorization_identity": "a088a4e0cb1b88c277c78a9d94b4158b711cd11f276298f2f1dbfeae914f1aea",
+        "authorization_text": "I explicitly give you the permission to operate the station regardless of my presence."
+      },
+      "automatic_retries": 0,
+      "nonzero_current_requested": false,
+      "source_and_builds_frozen": true,
+      "returncode": 0,
+      "finished_utc": "2026-09-30T06:33:47.263436+00:00",
+      "status": "COMPLETE",
+      "actual_manifest_file": {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/manifest.json",
+        "sha256": "523cd3077ab4a9c74201244451795b75b9a25556f64b0c8d38bee579e868e065",
+        "bytes": 51484
+      },
+      "session_record_manifest_sha256_meaning": "Manifest hash recorded before deployment path binding; actual retrieved manifest identity is indexed separately.",
+      "capture_sha256": "1cdfa718760c413fd9571f292ebba633eda96701776fe1f1d8803870a670c906",
+      "independent_review_passed": true,
+      "neutral_transition_verified": true,
+      "neutral_transition_qualified": false,
+      "current_mode_qualified": false,
+      "neutral_current_qualified": false,
+      "dynamic_motion_qualified": false,
+      "physical_parameters_qualified": false,
+      "original_mode": 3,
+      "restored_mode": 3,
+      "normal_pitch_stop_confirmed": true,
+      "final_disabled_observed_ns": 157213832331534,
+      "yaw_stop_confirmed": false,
+      "neutral_observation_s": 10.0,
+      "total_deadline_s": 25.0,
+      "startup_allowance_s": 5.0,
+      "all_current_references_zero": true,
+      "transmissions": 1955,
+      "successful_transmissions": 1955,
+      "current_statistics": {
+        "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+        "count": 485,
+        "lag1_observation_autocorrelation": 0.021629282218785725,
+        "max": 0.3230209946632385,
+        "mean": -0.0024192062350585288,
+        "min": -0.33193036913871765,
+        "sample_std": 0.11981761172579906,
+        "sample_variance": 0.014356260079674341
+      },
+      "current_receipt_stream": {
+        "count": 485,
+        "device_sample_ns": null,
+        "max_gap_s": 0.021312957,
+        "median_gap_s": 0.020930397,
+        "observed_hz": 48.48600746678264,
+        "sample_clock_calibrated": false
+      },
+      "host_transaction_latency_s": {
+        "count": 485,
+        "max": 0.0008502500000000001,
+        "mean": 0.0007695573546391753,
+        "min": 0.000473383,
+        "sample_std": 3.2668333920835745e-05
+      },
+      "historical_comparison": {
+        "bound_A": 0.1,
+        "rejects_observations": false,
+        "satisfied": false,
+        "observations_above_absolute_comparison": 195,
+        "physical_acceptance_criterion": false
+      },
+      "protection_limit_basis": {
+        "kind": "manufacturer_continuous_current_rating",
+        "document": "docs/references/cybergear/CyberGear微电机使用说明书.pdf",
+        "sha256": "4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495",
+        "continuous_current_A": 6.5
+      },
+      "protection_current_bound_A": 6.5,
+      "transition_displacement_bound_rad": 0.01,
+      "pitch_maximum_temperature_C": 45.0,
+      "observed_displacement": {
+        "bound_rad": 0.01,
+        "yaw_max_abs_rad": 0.0007669903939428206,
+        "pitch_max_abs_rad": 0.0015259021896696368,
+        "mechanically_homed": false
+      },
+      "temperatures": {
+        "yaw": {
+          "raw_min": 28,
+          "raw_max": 28,
+          "Celsius_mapping": "UNKNOWN"
+        },
+        "pitch": {
+          "min_C": 23.9,
+          "max_C": 23.9
+        }
+      },
+      "final_socket_drops": {
+        "yaw": 0,
+        "pitch": 0
+      },
+      "interface_loss_deltas": {
+        "yaw": {
+          "rx_dropped": 0,
+          "rx_errors": 0
+        },
+        "pitch": {
+          "rx_dropped": 0,
+          "rx_errors": 0
+        }
+      },
+      "writer_queue_high_water": 11,
+      "measurement_limitations": [
+        "Yaw current and temperature retain protocol units without a bound calibration.",
+        "Register device sample times are unknown; receipt timing does not qualify current sample timing.",
+        "IMU mounting and device-to-host sample time mapping remain unqualified.",
+        "Neutral transition evidence does not qualify excitation, dynamics, homing, or a controller.",
+        "The historical diagnostic bound is a comparison only; it is not a qualification criterion or a hardware contract. Readings remain uncorrected."
+      ],
+      "post_session_controller_or_imu_consumer_observed": false,
+      "post_session_binary_hashes_match": true,
+      "independent_cutoff_qualified": false,
+      "complete_process_or_pi_or_can_loss_stop_qualified": false,
+      "plant_snapshot_created": false,
+      "controller_candidate_created": false,
+      "evidence": [
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-physical/session.json",
+          "sha256": "ac591afcb697cb540ee0b625607f2eb9d6a182c7d9e6fd136eba693b443c3be1",
+          "bytes": 1867
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-physical/session.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-physical/session.stdout",
+          "sha256": "8c7d7ac3b7619bfa2e799590ac98dbc8bf9dd1846d089d68e29465d625e9424f",
+          "bytes": 1878
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/account-process-binary-snapshot.txt",
+          "sha256": "91190cb25a14d494a4000f537fdd2e71dee6e2e1005e667c6f773098a700398f",
+          "bytes": 3328
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/archive.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/bundle.json",
+          "sha256": "abbafd05a0114999a1a293754522d3909d562457719d900448adb350b996a93f",
+          "bytes": 598
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.attempt.json",
+          "sha256": "f679bb683d7acf09acd7fe3bda79eac5c24130213d1dd38ebc9c60f941d083ae",
+          "bytes": 1921
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.bound.json",
+          "sha256": "64381f08f29b440afdef291364b995388279dbeb881e477692b6b5c0920f1bd1",
+          "bytes": 51499
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.imu.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.jsonl",
+          "sha256": "1cdfa718760c413fd9571f292ebba633eda96701776fe1f1d8803870a670c906",
+          "bytes": 8362526
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.processes.json",
+          "sha256": "e92becb2f73797165ebf3d0cc80170317cca0b8a361790c1d753a14f9deacb19",
+          "bytes": 189
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.result.json",
+          "sha256": "6e77ed0a1b61ae9406ffc0d7b925e53a4f19542b48b2bb654d3a4e796c86daa6",
+          "bytes": 766
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/current-characterization.review.json",
+          "sha256": "de7cb2e95a3d9591ba7524b129c3a9ecc1a2cf79436d54af923ce95e1dbea9bd",
+          "bytes": 222190
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/current-characterization/manifest.json",
+          "sha256": "523cd3077ab4a9c74201244451795b75b9a25556f64b0c8d38bee579e868e065",
+          "bytes": 51484
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/stack/controller.log",
+          "sha256": "1292471962e33cf937adcfb8f63225798bb11d8384aeca0bc6d9393bc6002a87",
+          "bytes": 1444
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/stack/launcher.lock",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/stack/shutdown.cause",
+          "sha256": "c9548e8404dfa6f91a702e362090e4c527184992ede176f7d2036775f4038c3a",
+          "bytes": 147
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/evidence/run/stack/shutdown.result",
+          "sha256": "2f776ad41da8536239a111170037af9c46287a400ed80bd8ea353cd523b6e0d6",
+          "bytes": 1554
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/plan.json",
+          "sha256": "670b6d1bb5d093f4c41e657b8c57046f2c70a4c7861d18eb7a4d63f6847429fc",
+          "bytes": 4379
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/result.json",
+          "sha256": "050aa15064a7d259da61c34eceab932bc4ed52242a5a3d7901f33b53d87dc730",
+          "bytes": 7619
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/snapshot.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/station-evidence.tar.gz",
+          "sha256": "2e27b3ba0042fd8cbf41a8053c85969d958c24b80f88e067b8d3084d71a5aac6",
+          "bytes": 686303
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/measured-neutral-observations/d5d69c46ef30fed36d1a9932b67c44fc49a37fb4267a925129c02fd75f5b0d1a.json",
+          "sha256": "f36e8fd8ce6916c56d53c353925ff9ecad3af609a63ecbfc17b3de7b0011bc5e",
+          "bytes": 7325
+        }
+      ]
+    }
   },
   "sensorless_homing_development": {
     "schema": "adr0022.sensorless-homing/1",
     "purpose": "pitch_sensorless_homing",
     "operation_card": "Firmware/docs/operations/adr0022-sensorless-homing.md",
-    "status": "LOCAL_DEVELOPMENT_PHYSICAL_NOT_RUN",
+    "status": "LOCAL_NATIVE_AND_ARM64_PROCESS_PASS_PHYSICAL_NOT_RUN",
     "physical_homing": "NOT_RUN",
     "owner_reported_total_travel_deg_approximate": 60,
     "endstop_microswitch_present": false,
@@ -2246,7 +2543,7 @@
       "guards",
       "limits"
     ],
-    "physical_original_settings_evidence": "PENDING_FRESH_DISABLED_BASELINE_CAPABILITY_ASSET",
+    "physical_original_settings_evidence": "MEASURED_FRESH_DISABLED_BASELINE_CAPABILITY_ASSET_PASS",
     "native_settings_evidence_contract": {
       "schema": "adr0022.baseline_capabilities/1",
       "provenance": "MEASURED",
@@ -2300,29 +2597,27 @@
     "3a": "NOT_RUN",
     "3b": "NOT_RUN",
     "pending": [
-      "realistic native executor probe and failure matrix",
-      "independent raw-wire review",
-      "ARM64 binary probe and failure matrix",
-      "fresh measured disabled native originals",
-      "matched immutable local qualification and release bindings",
-      "physical sensorless homing"
+      "Matched clean committed source/release qualification",
+      "Physical endpoint/repeatability/midpoint capture and independent review",
+      "Measured full-range encoder/native mapping and mounted gyro/time calibration"
     ],
     "local_native_process_matrix": {
-      "cases": 31,
-      "successful_variants": 5,
-      "expected_rejections": 26,
       "status": "PASS",
+      "cases": 32,
+      "successful_variants": 6,
+      "expected_rejections": 26,
       "hardware_accessed": false,
+      "executable_sha256": "7a0b5c5f7bf000bcefbc01c8909e15d2763a6d824d8b1285dbf9fb16b73009d5",
       "evidence": [
         {
-          "path": "run/adr0022-homing-final-ack-history-matrix/summary.json",
-          "sha256": "9d803280eb904a1ef2809e6c16b0c0e09e7e29fd78b2e06de392f1351352ac8e",
-          "bytes": 29791
+          "path": "run/adr0022-homing-continuous-current-final-matrix/summary.json",
+          "sha256": "12348f8af143ec2b1bd4bb6e94c22ba5a9e1e85f5d8d630e97d9be76fbb3e61e",
+          "bytes": 30769
         },
         {
-          "path": "run/adr0022-homing-final-ack-history-matrix/validation.json",
-          "sha256": "4526e7fa4512d01f8a20715757954feadf61b1146261437a038ea360e6011349",
-          "bytes": 13337
+          "path": "run/adr0022-homing-continuous-current-final-matrix/validation.json",
+          "sha256": "3974ea6767645b8046d1c954561ae1e90395387b9665f9d066b5e9747f48b1e2",
+          "bytes": 13514
         }
       ]
     },
@@ -2334,19 +2629,50 @@
       "native_position_reference": "Fresh native MechPos with correlated LocRef readback before bounded motion"
     },
     "physical_current_protection_contract": {
-      "status": "PENDING_DECOUPLING_FROM_COMMAND_CEILING",
-      "software_current_command_ceiling_A": 5.0,
+      "status": "LOCAL_CONTRACT_PASS_PHYSICAL_HOMING_NOT_RUN",
+      "software_command_ceiling_A": 5,
       "manufacturer_continuous_current_A": 6.5,
-      "detail": "Frozen local homing constructor currently bounds measured Iqf by the command ceiling. Before physical homing, use the independently documented manufacturer protection and retain measured current scatter; do not substitute a 5 A feedback qualification assumption."
+      "measured_current_guard_A": 6.5,
+      "command_ceiling_is_measurement_guard": false,
+      "manufacturer_document_checked_before_device_access": true,
+      "physical_current_measurement_qualified": false,
+      "evidence": [
+        {
+          "path": "run/adr0022-stage2/homing-protection-preflight-probe/result.json",
+          "sha256": "e97072ea537f94e75614bcd9d7d3220d2c9b13a7947af5edc2e71096a6caa93c",
+          "bytes": 835
+        },
+        {
+          "path": "run/adr0022-stage2/homing-protection-contracts.log",
+          "sha256": "084ee87c946ca95c313fc5f55d378d3bbe21086a2b116d680b3a0d9e4854b432",
+          "bytes": 102
+        },
+        {
+          "path": "run/adr0022-stage2/homing-protection-numeric-contracts.log",
+          "sha256": "627d131dbe0432740ce2baeb65d2f20c6cd8b5bb4cef9f178460aa3a2f044e21",
+          "bytes": 101
+        },
+        {
+          "path": "run/adr0022-homing-continuous-current-first-probe/independent-current-protection-tests.log",
+          "sha256": "fad4ff5f8920c5a09e0c90773aca1b02e3199305b47e617addf36ca683a0f1b5",
+          "bytes": 115
+        },
+        {
+          "path": "run/adr0022-stage2/takeover-20260930/homing-rated-actual-station-abi.json",
+          "sha256": "1ff4742d62f0380897e7772339c77bc3800e308ad0af24a986e437805b403df6",
+          "bytes": 15312
+        }
+      ]
     },
     "local_arm64_probe": {
-      "status": "INVALID",
-      "cases": 0,
+      "status": "LOCAL_ARM64_VM_PASS",
+      "cases": 1,
       "hardware_accessed": false,
+      "executable_sha256": "9dcb77d066273b3066388222ea00cc38654429297a070bab5293330c5ad6916d",
       "evidence": {
-        "path": "run/adr0022-stage2/takeover-20260930/final-arm-homing-probe/evidence/summary.json",
-        "sha256": "ad6b3a50fd1ce14527d1eece6574467958b1fa916c6d409933e3a8f1d8af1dbd",
-        "bytes": 365
+        "path": "run/adr0022-stage2/takeover-20260930/homing-rated-arm-probe/evidence/summary.json",
+        "sha256": "a3255833038dfed9ea9a2aebfc1e77c6c9ed4f494a28ff2b39b6a526f6d93707",
+        "bytes": 18302
       }
     },
     "arm64_raw_homing_review": {
@@ -2359,16 +2685,452 @@
       },
       "prior_vm_reviewer_failure_retained": true,
       "full_arm64_matrix": "NOT_RUN"
+    },
+    "physical_original_settings_asset": {
+      "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/measured-native-assets/daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e.json",
+      "sha256": "cbc02bb42bdd86d42e8cdba3f56d8b3255d369d4d6669a476b4ecc993330c444",
+      "bytes": 11997,
+      "canonical_sha256": "daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e",
+      "schema": "adr0022.baseline_capabilities/1",
+      "provenance": "MEASURED",
+      "capture_integrity": "PASS"
+    },
+    "observed_native_originals": {
+      "mode": 3,
+      "limit_cur_A": 5,
+      "position_kp": 30,
+      "speed_kp": 4,
+      "speed_ki": 0.05000000074505806,
+      "limit_spd": 0
+    },
+    "local_arm64_matrix": {
+      "status": "LOCAL_ARM64_VM_PASS",
+      "cases": 32,
+      "hardware_accessed": false,
+      "executable_sha256": "9dcb77d066273b3066388222ea00cc38654429297a070bab5293330c5ad6916d",
+      "evidence": {
+        "path": "run/adr0022-stage2/takeover-20260930/homing-rated-arm-matrix/evidence/summary.json",
+        "sha256": "287eb873c3dced04e598e5e4684a9a4ded82cecb3767742d4486159bf5620a11",
+        "bytes": 133920
+      }
     }
   },
   "hardware_purpose": "CAMERA_SENSOR_MOUNT_OWNER_CONFIRMED",
   "neutral_observation_asset": {
     "schema": "adr0022.neutral_observations/1",
-    "status": "LOCAL_BOUND_RAW_ASSET_PROBE_PASS",
+    "status": "MEASURED_IMMUTABLE_RAW_OBSERVATION_ASSET_CAPTURE_INTEGRITY_PASS",
     "measurement_policy": "Preserve current, encoder and gyro scatter, quantization and transaction latency.",
     "zero_variance_allowed": true,
     "current_mean_is_sensor_bias": false,
     "physical_calibration_applied": false,
-    "physical_parameters_qualified": false
+    "physical_parameters_qualified": false,
+    "asset": {
+      "path": "run/adr0022-stage2/takeover-20260930/measured-neutral-observations/d5d69c46ef30fed36d1a9932b67c44fc49a37fb4267a925129c02fd75f5b0d1a.json",
+      "sha256": "f36e8fd8ce6916c56d53c353925ff9ecad3af609a63ecbfc17b3de7b0011bc5e",
+      "bytes": 7325,
+      "canonical_sha256": "d5d69c46ef30fed36d1a9932b67c44fc49a37fb4267a925129c02fd75f5b0d1a",
+      "schema": "adr0022.neutral_observations/1",
+      "provenance": "MEASURED"
+    },
+    "capture_integrity": "PASS",
+    "source": {
+      "attempt_sha256": "f679bb683d7acf09acd7fe3bda79eac5c24130213d1dd38ebc9c60f941d083ae",
+      "binaries": {
+        "commissiond": "706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd370e79a",
+        "imu": "0be58739e8417cd7e1589d2e25be013d48984005265701640807d04f98a493eb"
+      },
+      "bound_manifest_sha256": "64381f08f29b440afdef291364b995388279dbeb881e477692b6b5c0920f1bd1",
+      "capture_sha256": "1cdfa718760c413fd9571f292ebba633eda96701776fe1f1d8803870a670c906",
+      "extractor_sha256": "90e4a743fe953be6f2b81317d4f15ca74bf1469e2a186cfd6241a0ae43d97828",
+      "independent_review_sha256": "afe2d2a2636a7d9716a6f437777add0b251cdeea53a18ec4512fdd9472d216cb",
+      "manifest_sha256": "523cd3077ab4a9c74201244451795b75b9a25556f64b0c8d38bee579e868e065",
+      "reviewer_sha256": "18976991b33dd7ff11af9e97c28dc72bcb6bc2d9753aeccda1307f37673eccad",
+      "revision": "a6851d4cb96a5da09bc9763f462ca7719bd1dedc",
+      "source_sha256": "a1f7c681c47f0d533234143cefcc7f74b82c2d588bcdd7ca5dc56e0979e53b44"
+    },
+    "iqf": {
+      "bias_correction_applied": false,
+      "device_sample_time_calibrated": false,
+      "documented_unit": "A",
+      "feedback_sensor_bias_A": null,
+      "filter_tau_s": null,
+      "host_transaction_latency_s": {
+        "count": 485,
+        "max": 0.0008502500000000001,
+        "mean": 0.0007695573546391753,
+        "min": 0.000473383,
+        "sample_std": 3.2668333920835745e-05
+      },
+      "meaning": "Observed zero-command feedback response. Mean can contain actual current, sensor bias, filtering and transients; it is not a sensor-bias estimate.",
+      "observation_request_sequence_range": [
+        6,
+        490
+      ],
+      "scale_calibrated": false,
+      "statistics": {
+        "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+        "count": 485,
+        "lag1_observation_autocorrelation": 0.021629282218785725,
+        "max": 0.3230209946632385,
+        "mean": -0.0024192062350585288,
+        "min": -0.33193036913871765,
+        "sample_std": 0.11981761172579906,
+        "sample_variance": 0.014356260079674341
+      },
+      "stream": {
+        "count": 485,
+        "device_sample_ns": null,
+        "max_gap_s": 0.021312957,
+        "median_gap_s": 0.020930397,
+        "observed_hz": 48.48600746678264,
+        "sample_clock_calibrated": false
+      }
+    },
+    "encoders": {
+      "pitch": {
+        "capture_row_range": [
+          6788,
+          21822
+        ],
+        "empirical_variance_is_quantized": true,
+        "observer_covariance": null,
+        "output_frame_verified": false,
+        "output_ratio_verified": false,
+        "protocol_bin_half_width_rad": 0.00019073777370870527,
+        "protocol_quantum_rad": 0.00038147554741741054,
+        "raw_count": {
+          "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+          "count": 485,
+          "lag1_observation_autocorrelation": 0.613080497481017,
+          "max": 30636,
+          "mean": 30633.476288659793,
+          "min": 30632,
+          "sample_std": 0.6787465957901769,
+          "sample_variance": 0.46069694129675387
+        },
+        "uncertainty_meaning": "Protocol angle bin only; physical output ratio, scale/sign and frame require measured mapping.",
+        "zero_empirical_variance_is_valid": true
+      },
+      "yaw": {
+        "capture_row_range": [
+          6784,
+          21818
+        ],
+        "empirical_variance_is_quantized": true,
+        "observer_covariance": null,
+        "output_frame_verified": false,
+        "output_ratio_verified": false,
+        "protocol_bin_half_width_rad": 0.0003834951969714103,
+        "protocol_quantum_rad": 0.0007669903939428206,
+        "raw_count": {
+          "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+          "count": 9982,
+          "lag1_observation_autocorrelation": 0.002466334646845515,
+          "max": 5764,
+          "mean": 5763.97114806652,
+          "min": 5763,
+          "sample_std": 0.16739864604737856,
+          "sample_variance": 0.028022306698495526
+        },
+        "uncertainty_meaning": "Protocol angle bin only; physical output ratio, scale/sign and frame require measured mapping.",
+        "zero_empirical_variance_is_valid": true
+      }
+    },
+    "gyro_calibration_candidates": {
+      "axes": [
+        {
+          "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+          "count": 500,
+          "lag1_observation_autocorrelation": -0.03523097245610173,
+          "max": 0.00390625,
+          "mean": 8.203125e-05,
+          "min": -0.005859375,
+          "sample_std": 0.001602970948826038,
+          "sample_variance": 2.569515862780248e-06
+        },
+        {
+          "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+          "count": 500,
+          "lag1_observation_autocorrelation": 0.14341509588996074,
+          "max": 0.013671875,
+          "mean": -9.375e-05,
+          "min": -0.013671875,
+          "sample_std": 0.004725352862714787,
+          "sample_variance": 2.2328959677166833e-05
+        },
+        {
+          "autocorrelation_meaning": "Adjacent observations; irregular cadence and device filtering are retained.",
+          "count": 500,
+          "lag1_observation_autocorrelation": -0.29655307432948547,
+          "max": 0.017578125,
+          "mean": 0.00019921875,
+          "min": -0.01953125,
+          "sample_std": 0.005207858892834467,
+          "sample_variance": 2.7121794247675038e-05
+        }
+      ],
+      "axis_velocity_noise_variance": null,
+      "bias_applied": false,
+      "bias_candidate_rad_s": [
+        8.203125e-05,
+        -9.375e-05,
+        0.00019921875
+      ],
+      "capture_row_range": [
+        6792,
+        21801
+      ],
+      "coordinate": "RAW_SENSOR_FRAME",
+      "generation_observed": [
+        0
+      ],
+      "mounting_rotation": null,
+      "stationary_assessment": "Zero command and bounded encoder observations; sub-bin motion remains unresolved.",
+      "status_histogram": {
+        "0": 500
+      },
+      "unit": "rad/s",
+      "window_selection_clock": "IMU_CAPTURE_DEQUEUE_MONOTONIC_NS"
+    },
+    "historical_diagnostic_comparison": {
+      "bound_A": 0.1,
+      "rejects_observations": false,
+      "satisfied": false
+    },
+    "adaptation_policy": "Retain measured imperfections; use calibrated mapping, noise/quantization uncertainty and identified load/dynamics in normalization, estimation and controller synthesis.",
+    "pending_components": [
+      "Mounted gyro bias/axis-rate calibration from independent motion directions",
+      "Measured encoder-to-mechPos scale/sign/output ratio/frame",
+      "Device timing, causal response and filter bandwidth",
+      "Synchronized dynamic observer process variance",
+      "Nonzero successful-command motion runs and independent whole-run holdouts"
+    ],
+    "controller_candidate": null,
+    "plant_snapshot": null
+  },
+  "physical_native_settings_baseline": {
+    "schema": "adr0022.physical_acquisition/1",
+    "kind": "native-settings-baseline",
+    "provenance": "MEASURED",
+    "started_utc": "2026-09-30T06:30:52.428725+00:00",
+    "release": "/home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.98ua4l",
+    "revision": "a6851d4cb96a5da09bc9763f462ca7719bd1dedc",
+    "source_sha256": "a1f7c681c47f0d533234143cefcc7f74b82c2d588bcdd7ca5dc56e0979e53b44",
+    "expected_binaries": {
+      "commissiond": "706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd370e79a",
+      "imu": "0be58739e8417cd7e1589d2e25be013d48984005265701640807d04f98a493eb"
+    },
+    "manifest_sha256": "2dbfde336922f37efd08f0ba46d469335a1669e80089a295149af6319dddedb7",
+    "command": "OTA_RUN_DIR=/home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.98ua4l/run/stack bash /home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.98ua4l/Firmware/scripts/run_application.sh run --capture-baseline /home/eamars/workspace/OpenAutoTurret/run/releases/a6851d4cb96a.98ua4l/run/baseline/manifest.json",
+    "operator_attendance": {
+      "present_at_manual_cutoff": false,
+      "operator_identity": "owner",
+      "manual_cutoff_evidence_identity": "owner_statement_manual_cutoff_only_2026-09-30"
+    },
+    "session_authorization": {
+      "purpose": "disabled_native_settings_discovery",
+      "capability_discovery_authorized": true,
+      "current_mode_enable_authorized": false,
+      "unattended_operation_authorized": true,
+      "presence_required": false,
+      "authorization_identity": "a088a4e0cb1b88c277c78a9d94b4158b711cd11f276298f2f1dbfeae914f1aea",
+      "authorization_text": "I explicitly give you the permission to operate the station regardless of my presence."
+    },
+    "automatic_retries": 0,
+    "nonzero_current_requested": false,
+    "source_and_builds_frozen": true,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T06:31:08.601161+00:00",
+    "status": "PHYSICAL_CAPTURE_AND_INDEPENDENT_RAW_REVIEW_PASS",
+    "capture_schema": "adr0022.capture/2",
+    "actual_manifest_file": {
+      "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/manifest.json",
+      "sha256": "679711b58ddc3dfb28bdaee6d39c55d404db86d9209196bd46f99fe59a990360",
+      "bytes": 49856
+    },
+    "session_record_manifest_sha256_meaning": "Manifest hash recorded before deployment path binding; actual retrieved manifest identity is indexed separately.",
+    "duration_s": 15.0,
+    "startup_allowance_s": 5.0,
+    "mode_write_requested": false,
+    "enable_requested": false,
+    "pitch_uid": "7216313130333105",
+    "original_settings_context": "PITCH_DISABLED_BASELINE",
+    "original_settings": {
+      "mode": 3,
+      "limit_cur_A": 5,
+      "position_kp": 30,
+      "speed_kp": 4,
+      "speed_ki": 0.05000000074505806,
+      "limit_spd": 0
+    },
+    "capture_sha256": "6f511e0f2a785c41fc1fead01db342f795a96d336bebeeefe0a2fe02f3527677",
+    "counts": {
+      "yaw_frames": 15001,
+      "pitch_frames": 1432,
+      "register_reads": 715,
+      "pitch_stop_confirmed": 716,
+      "register_rejections": 0,
+      "writer_queue_high_water": 10
+    },
+    "final_socket_drops": {
+      "yaw": 0,
+      "pitch": 0
+    },
+    "temperatures": {
+      "yaw": {
+        "raw_min": 28,
+        "raw_max": 28,
+        "Celsius_mapping": "UNKNOWN"
+      },
+      "pitch": {
+        "min_C": 23.9,
+        "max_C": 23.9
+      }
+    },
+    "immutable_asset": {
+      "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/measured-native-assets/daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e.json",
+      "sha256": "cbc02bb42bdd86d42e8cdba3f56d8b3255d369d4d6669a476b4ecc993330c444",
+      "bytes": 11997,
+      "canonical_sha256": "daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e",
+      "schema": "adr0022.baseline_capabilities/1",
+      "provenance": "MEASURED",
+      "capture_integrity": "PASS"
+    },
+    "applicability": "This capture, operating point and disabled pitch context only; no extrapolation to enabled/current-mode behavior",
+    "physical_parameters_qualified": false,
+    "physical_current_mode_qualified": false,
+    "mapping_qualified": false,
+    "dynamic_stopping_qualified": false,
+    "post_session_controller_or_imu_consumer_observed": false,
+    "post_session_binary_hashes_match": true,
+    "evidence": [
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/account-process-binary-snapshot.txt",
+        "sha256": "3bab7a1e22b7f5417163d6b4979712163fc442444fbd4494d29d5e752767ef9b",
+        "bytes": 3328
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/archive.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.attempt.json",
+        "sha256": "a1b3a1c4f8e7e5de63673aaca29225ec230c2483cae3248d72bba9c5a1206fac",
+        "bytes": 466
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.bound.json",
+        "sha256": "02c3d70d515663cc78227712420ae747e3676816904fa17cf9593087825dbb37",
+        "bytes": 49871
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.imu.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.jsonl",
+        "sha256": "6f511e0f2a785c41fc1fead01db342f795a96d336bebeeefe0a2fe02f3527677",
+        "bytes": 8366161
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.processes.json",
+        "sha256": "841119fcefce9ccd1f85d70aa4ecdc6bef49b5f64dc3416b16742a7ae298dc4b",
+        "bytes": 189
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.result.json",
+        "sha256": "610b022c2c370d88b831e858ac1b9ac61e1af3db43e402af869938191ba8e0c3",
+        "bytes": 215
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/baseline.review.json",
+        "sha256": "540ca39d677d2d6c5dc59d948ebacd71ca8f550d3631dd1e33f4ec318445f84f",
+        "bytes": 2989
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/bundle.json",
+        "sha256": "8f61acd4cf8f54c0753a03431823a1f508d16b6a0754bb87dd7b6997ff4a93f3",
+        "bytes": 591
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/baseline/manifest.json",
+        "sha256": "679711b58ddc3dfb28bdaee6d39c55d404db86d9209196bd46f99fe59a990360",
+        "bytes": 49856
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/stack/controller.log",
+        "sha256": "08f0adf651fcb74f3f343a2552039ccad573b91572b23bdebab0e6fb834f4f44",
+        "bytes": 591
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/stack/launcher.lock",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/stack/shutdown.cause",
+        "sha256": "1888c61093ee72bd7406f91ef87d07473b781f766273d4dd15b49148e79e4451",
+        "bytes": 147
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/evidence/run/stack/shutdown.result",
+        "sha256": "0d999a899fcf0080a8ae45bdacb1f602c4eaf4b7f6f02c3dddc2a3d22c9a50f4",
+        "bytes": 657
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/plan.json",
+        "sha256": "78e88d7d4a48705cb218885f2d2289405fe0a357b272ba7aa641cb0256ea7ec4",
+        "bytes": 4359
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/result.json",
+        "sha256": "ea22e9de48738eb60efa95cbdb5bcabac5d49e5ce1feafcfc1acc41aecc34f39",
+        "bytes": 7333
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/snapshot.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/native-settings-retrieval/station-evidence.tar.gz",
+        "sha256": "965212add432a68d0b291e4de463da3ec76fc9f83276c836f3d969a35f4e287b",
+        "bytes": 637472
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/native-settings-physical/session.json",
+        "sha256": "3c20f7fb53c0d05b32f7be31a2a673729477788c0896b742d8fe36120471e9f6",
+        "bytes": 1892
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/native-settings-physical/session.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/native-settings-physical/session.stdout",
+        "sha256": "bb31db137e82e7d791d3e9d14bf520b52ae81da28b663693d34ae929494039c1",
+        "bytes": 944
+      },
+      {
+        "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/measured-native-assets/daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e.json",
+        "sha256": "cbc02bb42bdd86d42e8cdba3f56d8b3255d369d4d6669a476b4ecc993330c444",
+        "bytes": 11997
+      }
+    ]
+  },
+  "station_post_state_after_characterization": {
+    "status": "STOPPED_NO_ACCOUNT_CONTROLLER_OR_IMU_CONSUMER_OBSERVED",
+    "pitch": "FRESH_DISABLED_STOP_ACK_AND_ORIGINAL_MODE_3_RESTORE_VERIFIED",
+    "binaries_match_bound_manifest": true,
+    "production_active": false,
+    "complete_loss_stop_qualified": false,
+    "evidence": {
+      "path": "run/adr0022-stage2/takeover-20260930/characterization-preparation/characterization-retrieval/account-process-binary-snapshot.txt",
+      "sha256": "91190cb25a14d494a4000f537fdd2e71dee6e2e1005e667c6f773098a700398f",
+      "bytes": 3328
+    }
   }
 }

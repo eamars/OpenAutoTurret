@@ -17,14 +17,14 @@ import struct
 import subprocess
 import time
 
-FAULTS = ("none", "delayed_reads", "write_echo", "original_zero_gain", "native_position_offset",
+FAULTS = ("none", "delayed_reads", "write_echo", "original_zero_gain", "native_position_offset", "continuous_current_guard",
           "sensor_disagreement", "mode_ignored", "gain_ignored", "read_rejected",
           "read_timeout", "overcurrent", "overheat", "over_torque", "stop_ignored",
           "abort_stop_truncated", "transition_motion", "unexpected_disable", "disabled_reenable",
           "can_stale", "can_error", "can_truncated", "imu_eof", "imu_reset", "imu_stale",
           "interrupt", "wrong_uid", "encoder_jump", "no_contact", "wrong_span", "repeatability",
           "midpoint_timeout")
-PASS_FAULTS = ("none", "delayed_reads", "write_echo", "original_zero_gain", "native_position_offset")
+PASS_FAULTS = ("none", "delayed_reads", "write_echo", "original_zero_gain", "native_position_offset", "continuous_current_guard")
 
 
 def fixture(ports, peer_port, imu_fd, output):
@@ -33,6 +33,9 @@ def fixture(ports, peer_port, imu_fd, output):
         "schema": "adr0022.sensorless-homing/1", "purpose": "pitch_sensorless_homing",
         "provenance": "SYNTHETIC", "transport": "loopback_udp",
         "pitch_supported_when_disabled": True, "expected_pitch_uid": "7216313130333105",
+        "protection_limit_basis": {"kind": "manufacturer_continuous_current_rating",
+            "document": "docs/references/cybergear/CyberGear微电机使用说明书.pdf",
+            "sha256": "4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495", "continuous_current_A": 6.5},
         "serialization_probe": {"utf8_text": "制造商手册/电机使用说明书.pdf", "pending_value": None},
         "yaw": {"port": ports[0], "peer_port": peer_port},
         "pitch": {"port": ports[1], "peer_port": peer_port}, "imu_fd": imu_fd,
@@ -79,6 +82,8 @@ def rehearse(binary: Path, output: Path, *, fault="none", runner=()):
     peer.bind(("127.0.0.1", 0)); peer.setblocking(False)
     rd, wr = os.pipe()
     config = fixture(ports, peer.getsockname()[1], rd, output / "capture.jsonl")
+    if fault in ("continuous_current_guard", "overcurrent", "abort_stop_truncated"):
+        config["guards"]["current_bound_A"] = 6.5
     if fault == "original_zero_gain":
         config["native_settings"]["original_speed_ki"] = 0
     if fault == "midpoint_timeout":
@@ -210,7 +215,13 @@ def rehearse(binary: Path, output: Path, *, fault="none", runner=()):
                 elif kind == 17:
                     index = struct.unpack_from("<H", data)[0]
                     assert index in registers or index in (0x7019, 0x701A), "unexpected register read"
-                    value = q+native_offset if index == 0x7019 else ((6. if fault in ("overcurrent", "abort_stop_truncated") and enabled else abs(torque)*2) if index == 0x701A else registers[index])
+                    if index == 0x7019:
+                        value = q+native_offset
+                    elif index == 0x701A:
+                        value = (7. if fault in ("overcurrent", "abort_stop_truncated") and enabled else
+                            5.2 if fault == "continuous_current_guard" and enabled else abs(torque)*2)
+                    else:
+                        value = registers[index]
                     payload = bytearray(data); struct.pack_into("<f", payload, 4, value)
                     if index == 0x7005:
                         payload[4:] = bytes((int(value), 0, 0, 0))
@@ -285,6 +296,13 @@ def rehearse(binary: Path, output: Path, *, fault="none", runner=()):
                 residuals = [row["register_minus_type2_rad"] for row in records if row["kind"] == "homing_position_observation"]
                 assert residuals and max(abs(value) for value in residuals) > .0004
                 assert max(abs(value) for value in residuals) <= config["guards"]["encoder_mechpos_agreement_bound_rad"]
+            if fault == "continuous_current_guard":
+                currents = [row["value"] for row in records if row["kind"] == "register_read" and row["index"] == 0x701A]
+                assert currents and max(currents) > 5 and max(currents) <= 6.5, "probe did not exercise measured current above command cap within continuous protection"
+                caps = [struct.unpack_from("<f", bytes.fromhex(row["data_hex"]), 4)[0] for row in records
+                    if row["kind"] == "homing_tx" and row["axis"] == "pitch" and (row["id"] >> 24) & 31 == 18 and
+                    int.from_bytes(bytes.fromhex(row["data_hex"])[:2], "little") == 0x7018]
+                assert caps and all(value == 5 for value in caps), "current protection change widened homing command cap"
             if fault == "write_echo":
                 prior_writes = {}; replaced_echoes = 0
                 for row in records:

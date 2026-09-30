@@ -67,6 +67,19 @@ def validate_current_contract(config, characterize_current=False, establish_homi
         value = config.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"explicit finite positive {key} required")
+    expected_basis = {"kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
+                      "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5}
+    if establish_homing:
+        guards, settings = config.get("guards"), config.get("native_settings")
+        if not isinstance(guards, dict) or not isinstance(settings, dict):
+            raise ValueError("explicit homing current protection and native command cap required")
+        protection, command_cap = guards.get("current_bound_A"), settings.get("homing_limit_cur_A")
+        if type(protection) not in (int, float) or not math.isfinite(protection) or not 0 < protection <= 6.5:
+            raise ValueError("homing measured current protection must be explicit, positive and <=6.5 A")
+        if type(command_cap) not in (int, float) or not math.isfinite(command_cap) or not 0 < command_cap <= 5:
+            raise ValueError("homing native current command cap must be explicit, positive and <=5 A")
+        if config.get("provenance") == "MEASURED" and config.get("protection_limit_basis") != expected_basis:
+            raise ValueError("homing requires manufacturer 6.5 A rated protection basis")
     if characterize_current:
         observation = config.get("neutral_observation_s")
         timing = config.get("limits", {})
@@ -74,8 +87,6 @@ def validate_current_contract(config, characterize_current=False, establish_homi
             raise ValueError("explicit finite positive characterization neutral_observation_s <=60 s required")
         if not isinstance(timing, dict) or any(type(timing.get(key)) not in (int, float) or not math.isfinite(timing[key]) or timing[key] <= 0 for key in ("startup_s", "duration_s")) or timing["duration_s"] <= timing["startup_s"] + observation:
             raise ValueError("characterization duration must cover startup and the explicit neutral observation")
-        expected_basis = {"kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
-                          "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5}
         if config.get("protection_current_bound_A") != 6.5 or config.get("protection_limit_basis") != expected_basis:
             raise ValueError("characterization requires manufacturer 6.5 A rated protection basis")
     if config.get("provenance") == "MEASURED":
@@ -229,7 +240,7 @@ def preflight(manifest: Path, firmware: Path, prepare_current=False, characteriz
             revision_path = firmware.parent / "REVISION"
             if not revision_path.is_file() or revision_path.read_text().strip() != config["expected_revision"] or identity["source_sha256"] != config["expected_source_sha256"]:
                 raise ValueError("changed acquisition source/release identity")
-            if characterize_current:
+            if characterize_current or establish_homing:
                 verify_protection_basis(config, firmware)
         from station_preflight import _validate_can_spi_mapping
         for axis, iface, spi in (("yaw", "can0", "spi0.0"), ("pitch", "can1", "spi1.0")):

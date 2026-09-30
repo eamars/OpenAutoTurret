@@ -106,7 +106,19 @@ class HomingSession {
     midpoint_tol_=number(g,"midpoint_tolerance_rad"); midpoint_speed_=number(g,"midpoint_speed_rad_s");
     midpoint_dwell_=int64_t(number(g,"midpoint_dwell_s")*1e9);
     midpoint_timeout_=int64_t(number(g,"midpoint_timeout_s")*1e9);
-    require(current_bound_<=can::kPitchCurrentCeilingA && torque_bound_<=params_.homing.torque_safety_nm &&
+    // Measured Iqf protection is a rating boundary, independent of the
+    // established 5 A homing command/LimitCur ceiling checked above.
+    require(current_bound_<=6.5,"DATA_INVALID: homing current protection exceeds manufacturer continuous rating");
+    if (!synthetic_) {
+      const auto basis=config["protection_limit_basis"];
+      require(current_bound_==6.5 && basis && basis.IsMap() &&
+          basis["kind"].as<std::string>("")=="manufacturer_continuous_current_rating" &&
+          basis["document"].as<std::string>("")=="docs/references/cybergear/CyberGear微电机使用说明书.pdf" &&
+          basis["sha256"].as<std::string>("")=="4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495" &&
+          basis["continuous_current_A"].as<double>(0)==6.5,
+          "DATA_INVALID: measured homing requires manufacturer continuous-current protection basis");
+    }
+    require(torque_bound_<=params_.homing.torque_safety_nm &&
             torque_bound_<=params_.homing.contact.effort_hard_abort_nm &&
             travel_bound_>=params_.expected_travel_max_deg*kDeg2Rad &&
             speed_bound_>std::max({params_.homing.coarse_speed_rad_s,params_.homing.fine_speed_rad_s,
