@@ -1,12 +1,13 @@
-# Stage 2 — capability discovery in progress
+# Stage 2 — baseline captured, calibration in progress
 
 The owner explicitly directed Step 2 to continue without treating the prior inventory
 failure as a gate. A fresh read-only inventory at **2026-09-30 02:28:46 UTC passed**:
 current process information, launcher status, interface facts and actual installed
 library bytes were obtained. No controller or IMU consumer was observed in the account's
-process list. Acquisition entry still checks global ownership. **Baseline physical
-acquisition is being prepared; it has not started.** No motor command, sensor reset,
-mode change, deployment, service action or production configuration change has occurred.
+process list. **The first 120-second physical baseline completed successfully at
+02:42:00 UTC**, using a separate acquisition release and launcher ownership. It
+issued pitch discovery, reads and normal STOP requests, with one IMU startup; no
+mode write, enable, excitation or production configuration change occurred.
 
 The [Stage 1 result](STAGE1_HANDOFF.md) remains a historical mathematical-software
 PASS. Its 95% engineering assessment does not certify this acquisition path. The
@@ -87,15 +88,17 @@ caused it. No guard was loosened and no production stop fix was tested.
    launcher ownership and single-attempt supervision, exercised locally. Current-mode
    preparation, bounded excitation, active watchdog/shutdown, physical calibration and
    automatic measured-asset injection remain open.
-2. **Current-mode measurement is unqualified.** Yaw firmware/current-ring assertions
-   are historical. Pitch is configured for native position mode; current mode and
-   `Iqf` acquisition are not qualified. Standard pitch feedback is torque, not measured
+2. **Current-mode actuation is unqualified.** Yaw firmware/current-ring assets
+   are historical and require an explicit reuse binding. Pitch's actual baseline
+   `RunMode` is **2 (speed)** despite the profile's position-mode label; mode 3 is not
+   qualified. `Iqf` readback is now acquired at about 24.24 Hz in the disabled context.
+   Standard pitch feedback is torque, not measured
    current. `limit_cur` is specified for speed/position modes and cannot be assumed to
    limit `iq_ref` in current mode.
-3. **Physical timing and loss evidence are incomplete.** The new capture receiver
+3. **Device time/filter calibration remains incomplete.** The capture receiver
    separates kernel receipt from userspace dequeue, bounds clock mapping uncertainty,
    observes socket overflow and checks interface loss counters. These mechanisms are
-   locally exercised. Device sample/filter timing and command-to-current relationships
+   now exercised on the station with zero capture loss. Device sample/filter timing and command-to-current relationships
    still require calibration; host receipt is not a device sampling timestamp.
 4. **Physical stopping remains unqualified.** The historical stop failed; a later
    process inventory succeeded and found no active device consumers. Pitch support is owner-confirmed, but the exact
@@ -107,7 +110,7 @@ caused it. No guard was loosened and no production stop fix was tested.
    too coarse for low-speed truth. Record yaw's temperature byte as raw, with Celsius
    unknown until its mapping is established; pitch feedback has documented 0.1 C
    units. The captured 48.8 C is **Pi CPU temperature**, not motor temperature.
-6. **Physical execution remains open.** The full firmware
+6. **Dynamic physical execution remains open.** The full firmware
    now builds against Debian ARM64 libraries, passes an offline dependency/version
    audit, and executes baseline acquisition under a local ARM64 Linux kernel. This
    is now also checked against copies of the station's actual installed libraries:
@@ -271,3 +274,47 @@ compilation, target regression testing or production activation is involved. Loc
 pack/install and the real launcher check passed before this deployment path was used.
 Runtime captures and installed-library copies remain outside Git; their identities
 are indexed in the JSON report.
+
+## First measured baseline (2026-09-30 02:39:55–02:42:00 UTC)
+
+The separate `c80f84a38e55.J5AR2G` acquisition release passed launcher preflight and
+completed one 120-second capture. Source revision was `c80f84a38e55101412ff7cb0cb29bbc29f586b1b`.
+The raw capture SHA-256 is `2936324e32f2306f9c548e925b7ebf34cff1d33fec437c5b199d8fd3e52f4c55`.
+Both socket loss counters and interface loss increments were zero. Writer queue
+high water was 11/4095. The single capture ended normally, and subsequent read-only
+process inspection found no controller or IMU consumer. Production was not started.
+
+| Actual observation | Result |
+|---|---|
+| Yaw feedback | 120,001 frames; 1000.006 Hz; largest gap 1.200 ms |
+| Pitch disabled STOP feedback | 5,806 responses; 48.478 Hz |
+| Register reads | 5,805 successful; no negative replies or timeouts |
+| Pitch `Iqf` | 2,900 samples; 24.239 Hz; zero in this disabled context |
+| IMU gyro / rotation vectors | 5,989 samples each; 50.088 Hz; no sequence discontinuity |
+| Accelerometer | 7,823 samples; 65.410 Hz |
+| IMU accuracy status | gyro 0, rotation vector 0, accel 2, game rotation vector 3 throughout |
+| Pitch mode / limit / bus voltage | mode 2 (speed), `limit_cur` 5 A, 24.041 V; limit does not apply as a proven mode-3 cap |
+| Motor temperatures | pitch 22.6 C; yaw raw byte 28, Celsius conversion unknown |
+| Encoder observations | yaw counts 5772–5774; pitch counts 30634–30636 |
+| Retained homing | `/dev/shm/ota-homing-1000` absent; established homing required before bounded motion |
+
+The current acquisition reused the shared codec's legacy yaw ampere conversion in a
+derived `current_A` field. That feedback scale is not bound by this capture's calibration.
+The original raw bytes remain intact; the reviewer now checks them independently and
+explicitly ignores all 120,001 unqualified ampere fields. The local emitter now writes
+null instead. This correction passed the real local process rehearsal and local tests;
+it has not been deployed or verified by repeating the physical capture. The baseline
+remains valid raw acquisition evidence, not a calibrated-current asset.
+
+The automatic capability extractor binds the capture, original/bound manifests,
+attempt and executable hashes, then writes an immutable capability asset. It records
+single-pose encoder comparison and sensor scatter without promoting them to full
+scale/mounting/noise uncertainty qualification. Inertia, resistance, directional load,
+breakaway, delay and mounting remain null. No PlantSnapshot or controller candidate
+was generated. The Stage 1 mounting estimator correctly rejects the no-excitation
+identifiability probe with `INSUFFICIENT_EXCITATION`.
+
+The next Step 2 operations are current-mode verification, established homing and
+bounded stopping/motion qualification, then mounting/time calibration and prescribed
+dynamic identification. Operator attendance at the manual cutoff has been requested
+as a physical operating fact; the prior inventory failure is not a continuation gate.

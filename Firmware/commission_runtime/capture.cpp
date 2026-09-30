@@ -214,7 +214,9 @@ std::string receipt_json(const Receipt& r, const std::string& axis, uint64_t seq
   gm6020::Feedback yaw;
   if (axis == "yaw" && gm6020::decode(r.frame, 1, yaw))
     s << ",\"angle_raw\":" << yaw.angle_count << ",\"speed_rpm\":" << yaw.speed_rpm
-      << ",\"current_raw\":" << yaw.current_raw << ",\"current_A\":" << yaw.current_a()
+      // The command scale is documented; baseline capture has no bound feedback
+      // calibration. Retain raw counts rather than applying the legacy conversion.
+      << ",\"current_raw\":" << yaw.current_raw << ",\"current_A\":null"
       << ",\"temperature_raw\":" << int(yaw.temperature_raw) << ",\"temperature_C\":null";
   // Preserve pitch's wire fields, including temperature. Its feedback torque is
   // NOT Iq; current needs an independently correlated register observation.

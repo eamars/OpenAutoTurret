@@ -20,6 +20,7 @@ sys.path.insert(0, str(TOOLS))
 from adr0022_capture_rehearsal import rehearse
 from adr0022_capture_review import review
 from adr0022_capture_launch import preflight
+from adr0022_baseline_assets import derive, write_asset
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="real Linux recvmsg/process boundary")
 ROOT = TOOLS.parents[1]
@@ -43,6 +44,54 @@ def test_full_process_capture_and_independent_review(successful):
     assert report["streams"]["gyro"]["observed_hz"] < 60  # never sum four sensors as gyro Hz
     assert report["register_values_first_observed"][str(0x7005)] == 1
     assert report["temperatures"]["pitch"]["max_C"] == 34.5
+    assert report["current_units"]["yaw"]["scale_A_per_count"] is None
+    assert report["current_units"]["yaw"]["legacy_derived_ampere_fields_ignored"] == 0
+    assert report["streams"]["gyro"]["status_counts"]["3"] == report["streams"]["gyro"]["count"]
+
+
+def test_saved_legacy_ampere_values_cannot_become_calibrated_current(tmp_path, successful):
+    rows = [json.loads(line) for line in (successful[0] / "capture.jsonl").read_text().splitlines()]
+    yaw = [r for r in rows if r["kind"] == "can_rx" and r["axis"] == "yaw"]
+    for row in yaw:
+        row["current_A"] = row["current_raw"] * 3 / 16384
+    path = tmp_path / "legacy.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    report = review(path)
+    assert report["capture_complete"]  # original raw evidence remains usable
+    assert report["current_units"]["yaw"]["legacy_derived_ampere_fields_ignored"] == len(yaw)
+    assert report["current_units"]["yaw"]["scale_A_per_count"] is None
+    assert not report["physical_parameters_qualified"]
+
+
+def test_capability_assets_bind_evidence_without_fabricating_a_plant(tmp_path, successful):
+    rows = [json.loads(line) for line in (successful[0] / "capture.jsonl").read_text().splitlines()]
+    bound = json.loads((successful[0] / "manifest.json").read_text())
+    bound["expected_binaries"] = {"commissiond": hashlib.sha256(BINARY.read_bytes()).hexdigest(), "imu": "a" * 64}
+    original = {k: v for k, v in bound.items() if k != "imu_fd"}
+    def scalar_strings(value):
+        if isinstance(value, dict): return {k: scalar_strings(v) for k, v in value.items()}
+        if type(value) is bool: return str(value).lower()
+        return str(value)
+    rows[0]["manifest_yaml"] = json.dumps(scalar_strings(bound))
+    capture = tmp_path / "capture.jsonl"
+    capture.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    manifest, bound_path, attempt = (tmp_path / name for name in ("manifest.json", "bound.json", "attempt.json"))
+    manifest.write_text(json.dumps(original))
+    bound_path.write_text(json.dumps(bound))
+    receipt = {"schema": "adr0022.capture_attempt/1", "provenance": "SYNTHETIC", "motion_requested": False,
+               "binaries": bound["expected_binaries"], "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()}
+    attempt.write_text(json.dumps(receipt))
+    asset = derive(capture, attempt, manifest, bound_path)
+    assert asset["capture_integrity"] == "PASS" and asset["provenance"] == "SYNTHETIC"
+    assert asset["plant_snapshot"] is None and asset["controller_candidate"] is None
+    assert not asset["physical_parameters_qualified"] and all(v is None for v in asset["pending_parameters"].values())
+    path = write_asset(tmp_path / "assets", asset)
+    assert path == write_asset(tmp_path / "assets", asset)
+    receipt["binaries"]["commissiond"] = "b" * 64
+    attempt.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="binding differs"):
+        derive(capture, attempt, manifest, bound_path)
+    assert len(list((tmp_path / "assets").glob("*.json"))) == 1
 
 
 def test_rejected_capability_preserves_other_measurements_without_inventing_values(tmp_path):

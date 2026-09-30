@@ -23,7 +23,12 @@ yaw滑环无限转动；电流按电机datasheet，不另加人为上限，采�
 一次只读SSH盘点已留证。原盘点中的`ps --ww`参数错误和可选目录列表错误已被发现；
 修正仅在本地验证。主人最新要求继续Step 2，不以此前失败作为门槛；置信百分比不是测试数推算的概率。
 主人另确认只有手动电源切断；未确认独立自动断电或电调通信丢失停车能力。
-当前物理采集为NOT_RUN。
+2026-09-30 02:39:55–02:42:00 UTC，独立`c80f84a38e55.J5AR2G`采集release完成一次120秒baseline：
+yaw 120001帧、pitch STOP确认5806次、寄存器读回5805次，socket和接口丢包增量均0。
+未enable、未写mode、未发激励；production未启动。pitch实际读回mode=2、Iqf可读；
+gyro约50.09Hz且accuracy=0；pitch温度22.6°C、yaw温度原始字节28（单位未标定）。
+原始capture中的legacy yaw安培换算字段未获资格，离线分析只使用原始电流字节；修正只在本地验证。
+后续只读检查未见controller/IMU进程，retained homing缓存不存在；运动前仍须既有homing流程。
 已有日志显示最后一次yaw停车确认超时；不把后续`stopped cleanly`进程清理日志当作停车合格。
 完整状态及证据见[阶段2准备情况](ADR-002.2/reports/STAGE2_READINESS.md)，
 只读工具流程见[盘点操作卡](operations/adr0022-inventory.md)。以下既有状态记录均需按其时间理解。

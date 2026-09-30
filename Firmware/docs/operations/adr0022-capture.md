@@ -12,8 +12,9 @@ Compile, simulate, inject failures and review evidence on the **workstation**. L
 rehearsals use loopback UDP and a pipe, with no CAN/I2C or SSH access. Physical acquisition
 belongs on `eamars@rpi-turret` through the launcher after its applicable capability
 and operating checks. The owner has explicitly removed the prior inventory failure
-as a gate to Step 2. This path has **not** been deployed or physically
-qualified. Do not use the station to verify a correction.
+as a gate to Step 2. The first physical baseline at source `c80f84a` completed on
+2026-09-30 with zero capture loss; this qualifies that acquisition only. It does not
+qualify motion or calibrated parameters. Do not use the station to verify a correction.
 
 ## The command
 
@@ -110,6 +111,14 @@ unsolicited feedback. Register reads are asynchronous and correlated, with no re
 after timeout. No enable, mode write, motion reference, mechanical zero or yaw output
 is emitted. Pitch STOP does change the drive's enabled state.
 
+After retrieval, derive the capability asset locally with
+`adr0022_baseline_assets.py --capture FILE --attempt FILE --manifest FILE --bound FILE --output DIRECTORY`.
+The inputs are the original capture, attempt record, physical manifest and bound
+manifest. The extractor verifies their identities and writes an immutable asset
+named by its content hash. It records disabled-context observations and pending
+calibrations; `PlantSnapshot` and controller candidate remain absent until the
+existing identification pipeline receives qualified dynamic data.
+
 ## What it proves
 
 Local success demonstrates the exercised Linux receive, pipe, recording and supervision
@@ -123,7 +132,12 @@ named sysroot. VM results add execution under the recorded ARM64 kernel and libr
 
 Kernel timestamps describe host receipt. Register observations preserve their request/
 response interval with `device_sample_ns=null`. Yaw temperature stays raw with Celsius
-unknown; pitch uses documented 0.1 C units. STOP feedback does not qualify yaw settling,
+unknown; pitch uses documented 0.1 C units. Yaw feedback current remains raw until
+its scale is bound by calibration. The first physical capture contains a legacy
+`current_A` conversion inherited from the shared codec: that field is unqualified
+and the reviewer explicitly ignores/counts it while verifying the raw bytes.
+The local serializer now emits null. The original capture is preserved and no
+physical rerun is required to correct this derived field. STOP feedback does not qualify yaw settling,
 pitch current mode, protection under load, or 3a/3b. `capture_complete` never implies
 `physical_parameters_qualified` or `motion_authorized`.
 Neither a Debian release name nor a local VM identifies the exact libraries installed

@@ -186,6 +186,7 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                 assert [row["angle_raw"] for row in feedback] == [origin + i % modulus for i in range(1, len(feedback) + 1)]
             assert any(row.get("temperature_C") == 34.5 for row in can)
             assert all(row["temperature_C"] is None for row in can if row["axis"] == "yaw")
+            assert all(row["current_A"] is None for row in can if row["axis"] == "yaw")
             imu = [json.loads(r["raw_json"]) for r in records if r["kind"] == "imu_raw"]
             assert imu and all(sum(r["sensor"] == sensor for r in imu) > 0 for sensor in ("gyro", "accel", "rv", "game_rv"))
             for sensor in ("gyro", "accel", "rv", "game_rv"):

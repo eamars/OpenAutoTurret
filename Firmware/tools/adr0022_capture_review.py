@@ -51,6 +51,7 @@ def review(path: Path):
               "provenance": header["provenance"], "capture_complete": True,
               "physical_parameters_qualified": False, "motion_authorized": False, "streams": {}, "temperatures": {}}
     report["final_socket_drops"] = drops
+    report["current_units"] = {}
     for axis in ("yaw", "pitch"):
         frames = [r for r in rows if r.get("kind") == "can_rx" and r.get("axis") == axis]
         need(len(frames) == footer[axis + "_frames"], "CAN count differs from durable footer")
@@ -66,6 +67,14 @@ def review(path: Path):
         temps = [r["temperature_raw"] for r in feedback]
         need(all(type(t) is int for t in temps), "missing temperature wire values")
         if axis == "yaw":
+            need(all(int.from_bytes(bytes(r["bytes"][4:6]), "big", signed=True) == r["current_raw"]
+                     for r in feedback), "yaw raw current differs from wire bytes")
+            report["current_units"]["yaw"] = {
+                "raw_unit": "SIGNED_PROTOCOL_COUNT", "scale_A_per_count": None,
+                "calibrated": False,
+                "legacy_derived_ampere_fields_ignored": sum(r.get("current_A") is not None for r in feedback),
+                "reason": "MEASUREMENT_LIMITED",
+                "detail": "baseline has no bound feedback-current calibration; use raw bytes only"}
             need(all(r["temperature_C"] is None for r in feedback), "unqualified yaw temperature conversion")
             report["temperatures"][axis] = {"raw_min": min(temps), "raw_max": max(temps), "Celsius_mapping": "UNKNOWN"}
         else:
@@ -88,6 +97,10 @@ def review(path: Path):
         need(all(0 <= r["sequence"] <= 255 for r in stream), "IMU sequence range")
         need(all((a["sequence"] + 1) & 255 == b["sequence"] for a, b in zip(stream, stream[1:])), "IMU sequence loss")
         report["streams"][sensor] = statistics_ns([r["sample_ns"] for r in stream])
+        need(all(type(r["status"]) is int and 0 <= r["status"] <= 3 for r in stream), "invalid IMU status")
+        report["streams"][sensor]["status_counts"] = {str(status): sum(r["status"] == status for r in stream)
+                                                    for status in range(4)}
+        report["streams"][sensor]["mounting_calibrated"] = False
     requests = [r for r in rows if r.get("kind") == "register_request"]
     reads = [r for r in rows if r.get("kind") == "register_read"]
     rejected = [r for r in rows if r.get("kind") == "register_rejected"]

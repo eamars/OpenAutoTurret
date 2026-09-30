@@ -15,7 +15,7 @@
   "physical_hardware_accessed": true,
   "firmware_integrated": true,
   "firmware_compiled": true,
-  "hardware_qualification": "NOT_RUN",
+  "hardware_qualification": "PARTIAL_BASELINE_READBACK_ONLY",
   "source_reading": "local_checkout_and_existing_contract",
   "prior_artifacts": [
     {
@@ -49,9 +49,9 @@
   "full_adr_status": "NOT_DONE",
   "stage1_report": "reports/STAGE1_LOCAL_VALIDATION.json",
   "station_accessed": true,
-  "station_access_scope": "READ_ONLY_HOST_INTERFACE_LIBRARIES_AND_SAVED_IMU_TRACE",
+  "station_access_scope": "READ_ONLY_INVENTORY_AND_ONE_BOUNDED_BASELINE_ACQUISITION_NO_EXCITATION",
   "motor_or_imu_transport_opened": false,
-  "stage2_status": "HOST_CAPABILITIES_RECORDED_BASELINE_PENDING",
+  "stage2_status": "BASELINE_CAPTURE_PASS_CALIBRATION_PENDING",
   "stage2_readiness_report": "reports/STAGE2_READINESS.json",
   "local_baseline_acquisition": "IMPLEMENTED_AND_LOCALLY_REHEARSED_NOT_DEPLOYED",
   "active_acquisition": "INCOMPLETE",

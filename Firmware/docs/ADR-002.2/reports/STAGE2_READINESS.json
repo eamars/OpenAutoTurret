@@ -1,11 +1,11 @@
 {
   "version": "adr0022.stage2-readiness/1",
-  "status": "STEP2_IN_PROGRESS_BASELINE_PREPARATION",
+  "status": "STEP2_BASELINE_CAPTURE_PASS_CALIBRATION_PENDING",
   "source_head_before_changes": "9a08b3e03d2253b4eb1214a10fd1ab42802532e6",
   "stage_status": {
     "mathematical_software": "PASS_HISTORICAL",
-    "stage2": "HOST_CAPABILITIES_RECORDED_BASELINE_PENDING",
-    "hardware_capability_qualification": "NOT_RUN",
+    "stage2": "BASELINE_CAPTURE_PASS",
+    "hardware_capability_qualification": "PARTIAL_BASELINE_READBACK_ONLY",
     "physical_calibration": "NOT_RUN",
     "physical_plant_identification": "NOT_RUN",
     "3a": "NOT_RUN",
@@ -17,13 +17,20 @@
     "failed_inventory_sessions": 1,
     "unexpected_command_failures": 2,
     "motion_attempts": 0,
-    "motor_commands": 0,
-    "sensor_resets": 0,
-    "deployments": 0,
+    "motor_commands": 11612,
+    "sensor_resets": 1,
+    "deployments": 1,
     "service_actions": 0,
     "production_configuration_writes": 0,
     "station_fix_verification_attempts": 0,
-    "historical_imu_trace_reads": 1
+    "historical_imu_trace_reads": 1,
+    "physical_baseline_attempts": 1,
+    "physical_mode_writes": 0,
+    "physical_enable_commands": 0,
+    "excitation_attempts": 0,
+    "retained_homing_reads": 1,
+    "capture_launcher_runs": 1,
+    "production_service_actions": 0
   },
   "confidence": {
     "original_required_percent": 95,
@@ -153,16 +160,18 @@
         "rejection": "run/adr0022-stage2/solver-rehearsal/rejections/80eb3e3607c86b24329c7c206cf1545a47a1ac065f3f8fd948e55e6ff0438ea0.json",
         "elapsed_s": 32.447178996997536
       }
-    ]
+    ],
+    "post_capture_acquisition_tests_passed": 28,
+    "post_capture_arm64_build": "PASS_NOT_DEPLOYED"
   },
   "blockers": [
     "ACTIVE_CURRENT_MODE_EXCITATION_WATCHDOG_AND_MEASURED_ASSET_INJECTION_INCOMPLETE",
-    "PHYSICAL_DEVICE_TIME_FILTER_AND_CAPTURE_CAPABILITIES_UNQUALIFIED",
     "PITCH_CURRENT_MODE_AND_CURRENT_FEEDBACK_UNQUALIFIED",
     "IMU_MOUNTING_UNITS_FILTER_CLOCK_CALIBRATION_PENDING",
     "DATASHEET_DUTY_AND_TEMPERATURE_CONTRACT_NOT_BOUND",
     "PROTOCOL_RESOLUTION_SYNTHETIC_SOLVER_REHEARSALS_REJECTED",
-    "LIVE_DEVICE_CAPABILITIES_AND_MEASUREMENTS_PENDING_BASELINE_CAPTURE"
+    "DEVICE_SAMPLE_CLOCK_FILTER_CALIBRATION_PENDING_DESPITE_VALID_HOST_CAPTURE",
+    "RETAINED_HOMING_ABSENT_ESTABLISHED_HOMING_REQUIRED_BEFORE_BOUNDED_MOTION"
   ],
   "motion_allowed": false,
   "evidence": [
@@ -1405,6 +1414,295 @@
       "path": "run/adr0022-debian13/bundle-probe/check.stdout",
       "sha256": "345baefbaf40dddef6c9fc777f0932ec97e37f0a98a444979e3a2504c10a36b1",
       "bytes": 122
+    }
+  ],
+  "baseline_acquisition": {
+    "session": {
+      "release": "/home/eamars/workspace/OpenAutoTurret/run/releases/c80f84a38e55.J5AR2G",
+      "command": "OTA_RUN_DIR=/home/eamars/workspace/OpenAutoTurret/run/releases/c80f84a38e55.J5AR2G/run/stack bash /home/eamars/workspace/OpenAutoTurret/run/releases/c80f84a38e55.J5AR2G/Firmware/scripts/run_application.sh run --capture-baseline /home/eamars/workspace/OpenAutoTurret/run/releases/c80f84a38e55.J5AR2G/run/baseline/manifest.json",
+      "started_utc": "2026-09-30T02:39:55.756007+00:00",
+      "mode": "BASELINE_ONLY",
+      "excitation_requested": false,
+      "sensor_start_attempts": 1,
+      "automatic_retries": 0,
+      "returncode": 0,
+      "finished_utc": "2026-09-30T02:42:00.575426+00:00",
+      "evidence_fetch_returncode": 0,
+      "evidence_archive_sha256": "08a399705049fb02adde0c5e2faf27fa542433f8f2080e0556e493a98cc29062"
+    },
+    "review": {
+      "schema": "adr0022.capture_review/2",
+      "capture_sha256": "2936324e32f2306f9c548e925b7ebf34cff1d33fec437c5b199d8fd3e52f4c55",
+      "provenance": "MEASURED",
+      "capture_complete": true,
+      "physical_parameters_qualified": false,
+      "motion_authorized": false,
+      "streams": {
+        "yaw_feedback": {
+          "count": 120001,
+          "observed_hz": 1000.0057240994317,
+          "median_gap_s": 0.000999785,
+          "max_gap_s": 0.001200394,
+          "max_dequeue_delay_s": 0.000913471
+        },
+        "pitch_feedback": {
+          "count": 5806,
+          "observed_hz": 48.47802950167464,
+          "median_gap_s": 0.020862019,
+          "max_gap_s": 0.021615214,
+          "max_dequeue_delay_s": 0.000530448
+        },
+        "accel": {
+          "count": 7823,
+          "observed_hz": 65.4103131157905,
+          "median_gap_s": 0.015268,
+          "max_gap_s": 0.03133,
+          "status_counts": {
+            "0": 0,
+            "1": 0,
+            "2": 7823,
+            "3": 0
+          },
+          "mounting_calibrated": false
+        },
+        "gyro": {
+          "count": 5989,
+          "observed_hz": 50.087577560567844,
+          "median_gap_s": 0.019981,
+          "max_gap_s": 0.021714,
+          "status_counts": {
+            "0": 5989,
+            "1": 0,
+            "2": 0,
+            "3": 0
+          },
+          "mounting_calibrated": false
+        },
+        "rv": {
+          "count": 5989,
+          "observed_hz": 50.087577560567844,
+          "median_gap_s": 0.019942,
+          "max_gap_s": 0.020789,
+          "status_counts": {
+            "0": 5989,
+            "1": 0,
+            "2": 0,
+            "3": 0
+          },
+          "mounting_calibrated": false
+        },
+        "game_rv": {
+          "count": 5989,
+          "observed_hz": 50.087577560567844,
+          "median_gap_s": 0.019942,
+          "max_gap_s": 0.020789,
+          "status_counts": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 5989
+          },
+          "mounting_calibrated": false
+        },
+        "pitch_iqf": {
+          "count": 2900,
+          "observed_hz": 24.239251140375877,
+          "median_gap_s": 0.041055805,
+          "max_gap_s": 0.042168588,
+          "sample_clock_calibrated": false
+        }
+      },
+      "temperatures": {
+        "yaw": {
+          "raw_min": 28,
+          "raw_max": 28,
+          "Celsius_mapping": "UNKNOWN"
+        },
+        "pitch": {
+          "min_C": 22.6,
+          "max_C": 22.6
+        }
+      },
+      "final_socket_drops": {
+        "yaw": 0,
+        "pitch": 0
+      },
+      "current_units": {
+        "yaw": {
+          "raw_unit": "SIGNED_PROTOCOL_COUNT",
+          "scale_A_per_count": null,
+          "calibrated": false,
+          "legacy_derived_ampere_fields_ignored": 120001,
+          "reason": "MEASUREMENT_LIMITED",
+          "detail": "baseline has no bound feedback-current calibration; use raw bytes only"
+        }
+      },
+      "measurement_limitations": [],
+      "register_values_first_observed": {
+        "28677": 2,
+        "28688": 0.125,
+        "28689": 0.015799999237060547,
+        "28692": 0.10000000149011612,
+        "28696": 5,
+        "28697": -0.8131582736968994,
+        "28698": 0,
+        "28700": 24.041000366210938
+      },
+      "pitch_uid_observed": "7216313130333105",
+      "pitch_disabled_observations": 5806
+    },
+    "asset": {
+      "path": "run/adr0022-stage2/physical-baseline/capabilities/1927e87b79f14b3ee99cf65d89b290d4ad5a13da2d67096f1e0bce6f48f0bb84.json",
+      "sha256": "0b1cfe84cb9262c1260bebd323ca3dc4da47d5fbd35a178092f6900d6191e884",
+      "bytes": 10294
+    },
+    "source_revision": "c80f84a38e55101412ff7cb0cb29bbc29f586b1b",
+    "raw_records": 180643,
+    "capability_scope": "Successful acquisition and disabled-pitch readback only; not dynamic calibration or PlantSnapshot",
+    "pitch_mode_observed": {
+      "value": 2,
+      "meaning": "SPEED",
+      "context": "DISABLED"
+    },
+    "pitch_iqf_samples": 2900,
+    "pitch_limit_cur_A": 5,
+    "pitch_limit_cur_scope": "Existing speed/position limit, not a current-mode IqRef limit",
+    "pitch_bus_voltage_V": 24.041000366210938,
+    "derived_yaw_ampere_field": {
+      "valid": false,
+      "raw_bytes_preserved": true,
+      "legacy_fields_ignored": 120001,
+      "correction_verified": "LOCAL_ONLY",
+      "station_rerun": false
+    },
+    "next_steps": [
+      {
+        "item": "pitch_current_mode",
+        "next_operation": "Verify mode 3 and zero IqRef/readback under the sole owner, before enabling",
+        "reason": "MEASUREMENT_LIMITED"
+      },
+      {
+        "item": "yaw_current_feedback_scale",
+        "next_operation": "Bind compatible existing current-interface evidence and qualify feedback scale; no command-scale substitution",
+        "reason": "MEASUREMENT_LIMITED"
+      },
+      {
+        "item": "stop_and_physical_envelope",
+        "next_operation": "Qualify bounded motion/settling and actual zero/travel relationship using declared manual cutoff conditions",
+        "reason": "MEASUREMENT_LIMITED"
+      },
+      {
+        "item": "imu_mount_clock_filter",
+        "next_operation": "Collect independent-axis calibrated motion and matched timing evidence using the existing Stage 1 estimator",
+        "reason": "INSUFFICIENT_EXCITATION"
+      },
+      {
+        "item": "plant_parameters",
+        "next_operation": "Collect prescribed directional/posture excitation, breakaway and whole-run holdouts; call existing identifier and solver",
+        "reason": "INSUFFICIENT_EXCITATION"
+      }
+    ],
+    "retained_homing": {
+      "path": "/dev/shm/ota-homing-1000",
+      "exists": false,
+      "physical_io_opened": false,
+      "account_processes": "    PID COMMAND         COMMAND\n   1519 systemd         /usr/lib/systemd/systemd --user\n   1521 (sd-pam)        (sd-pam)\n   1542 dbus-daemon     /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only\n   1543 pipewire        /usr/bin/pipewire\n   1544 pipewire        /usr/bin/pipewire -c filter-chain.conf\n   1545 labwc           /usr/bin/labwc -m\n   1546 wireplumber     /usr/bin/wireplumber\n   1548 pipewire-pulse  /usr/bin/pipewire-pulse\n   1558 mpris-proxy     /usr/bin/mpris-proxy\n   1601 ssh-agent       /usr/bin/ssh-agent /usr/bin/labwc-pi\n   1661 lwrespawn       /bin/sh /usr/bin/lwrespawn /usr/bin/pcmanfm-pi\n   1662 lwrespawn       /bin/sh /usr/bin/lwrespawn /usr/bin/wf-panel-pi\n   1663 kanshi          /usr/bin/kanshi\n   1685 systemd-inhibit systemd-inhibit --what=handle-power-key rpi-gui-nop\n   1696 polkit-mate-aut /usr/libexec/polkit-mate-authentication-agent-1\n   1709 rpi-gui-nop     rpi-gui-nop\n   1714 pcmanfm-pi      /bin/sh /usr/bin/pcmanfm-pi\n   1716 pcmanfm         pcmanfm --desktop\n   1717 wf-panel-pi     /usr/bin/wf-panel-pi\n   1722 xdg-permission- /usr/libexec/xdg-permission-store\n   1747 gvfsd           /usr/libexec/gvfsd\n   1754 gvfsd-fuse      /usr/libexec/gvfsd-fuse /run/user/1000/gvfs -f\n   1771 xdg-desktop-por /usr/libexec/xdg-desktop-portal\n   1780 xdg-document-po /usr/libexec/xdg-document-portal\n   1781 gvfs-udisks2-vo /usr/libexec/gvfs-udisks2-volume-monitor\n   1792 xdg-desktop-por /usr/libexec/xdg-desktop-portal-gtk\n   1801 gvfs-mtp-volume /usr/libexec/gvfs-mtp-volume-monitor\n   1808 gvfs-afc-volume /usr/libexec/gvfs-afc-volume-monitor\n   1817 gvfs-goa-volume /usr/libexec/gvfs-goa-volume-monitor\n   1824 gvfs-gphoto2-vo /usr/libexec/gvfs-gphoto2-volume-monitor\n   1831 xdg-desktop-por /usr/libexec/xdg-desktop-portal-wlr\n   1833 gvfsd-trash     /usr/libexec/gvfsd-trash --spawner :1.19 /org/gtk/gvfs/exec_spaw/0\n   1846 menu-cached     /usr/lib/menu-cache/menu-cached /run/user/1000/menu-cached-:0\n   1943 bash            -bash\n1198417 sshd-session    sshd-session: eamars@pts/0\n1198418 bash            -bash\n1198433 btop            btop\n3799765 sshd-session    sshd-session: eamars@notty\n3799766 python3         python3 -\n3799767 ps              ps -u 1000 -o pid,comm,args -ww\n",
+      "locks": "1: FLOCK  ADVISORY  WRITE 1543 00:2a:77 0 EOF\n2: FLOCK  ADVISORY  WRITE 1543 00:2a:76 0 EOF\n3: FLOCK  ADVISORY  WRITE 904 00:16:2910 0 EOF\n4: FLOCK  ADVISORY  WRITE 1545 00:2a:79 0 EOF\n5: FLOCK  ADVISORY  WRITE 862 00:16:2849 0 EOF\n",
+      "observed_utc": "2026-09-30T02:55:30.608660+00:00"
+    },
+    "post_capture_state": "No controller or IMU consumer in fresh account process listing; capture exited normally; production not started",
+    "operator_at_manual_cutoff": "AWAITING_USER_FACT_BEFORE_MOTION"
+  },
+  "physical_baseline_evidence": [
+    {
+      "path": "run/adr0022-stage2/physical-baseline/capture-session.json",
+      "sha256": "cdd1fc61f33579f5272de57df8f64494ca3b417a18f22da85620db781ea163da",
+      "bytes": 818
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/deployment-session.json",
+      "sha256": "27f4320aa5bb24131227aa01c5bd7992c60e5fff33d0b8c3b3c4af67dc91cb60",
+      "bytes": 689
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/template.json",
+      "sha256": "2fb50c9892befb830814ffde063334e52b62cca425f3db897b3d6977d145b405",
+      "bytes": 1235
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/bundle.tar",
+      "sha256": "7c9a49fea3b784516dd12127ec3f382d1327efc46d437aa9d5afb7f247b7f8eb",
+      "bytes": 327680
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/station-evidence.tar.gz",
+      "sha256": "08a399705049fb02adde0c5e2faf27fa542433f8f2080e0556e493a98cc29062",
+      "bytes": 5019565
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/evidence/baseline/baseline.jsonl",
+      "sha256": "2936324e32f2306f9c548e925b7ebf34cff1d33fec437c5b199d8fd3e52f4c55",
+      "bytes": 68461314
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/evidence/baseline/baseline.attempt.json",
+      "sha256": "344a2b9300cf449f1fa50d2cff63e6edecee4e6261bcc795cc9c50dea3edb088",
+      "bytes": 466
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/evidence/baseline/baseline.bound.json",
+      "sha256": "3afe23944a15b0b7bc05ad87c29cb649f02e04db4902d4159d4ab88a20af52dd",
+      "bytes": 1326
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/evidence/baseline/manifest.json",
+      "sha256": "fa2f6351faed8c5abb87f31b909143a404c4a53ea17e8ee3592db16212282b57",
+      "bytes": 1311
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/evidence/baseline/baseline.result.json",
+      "sha256": "83dd0f8c94e3e35e534a2fa06e8e2447ede66dee2a4d928ae728ebc902279b86",
+      "bytes": 215
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/evidence/baseline/baseline.imu.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/local-review-current-units.json",
+      "sha256": "2610abc68256090ff71de56190e683ba4316187247244eea61b01c7de34ae6da",
+      "bytes": 3045
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/baseline-analysis-v2.json",
+      "sha256": "003de5d1a7b99ce7476ded95ee2a1ff771278ed05065966c923a600b1657758d",
+      "bytes": 7772
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/retained-homing.json",
+      "sha256": "59d6b83e042aad1302adf256cbf685264efbc1b62f14b5f0babc1591a9e7bae8",
+      "bytes": 2750
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/local-current-label-probe/result.json",
+      "sha256": "09e53a5208e5f0905a01f92c17afd24b8620defbba156b383256fc3288f0df11",
+      "bytes": 1481
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/current-label-tests.log",
+      "sha256": "0750400224c4d3c7aaaeb81dfe83cf5a7f19f87c7cb3c9644f186ea96a230c71",
+      "bytes": 100
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/capability-asset-tests.log",
+      "sha256": "9833fc046cb40bab041aa5ee94e4bb5d1e70649476ec4a7e34794b1cbbd2edfc",
+      "bytes": 100
+    },
+    {
+      "path": "run/adr0022-stage2/physical-baseline/current-label-arm-build.log",
+      "sha256": "eba694a86b918619819cd9bf2163898ff17cfe933523937f7f108286875556e4",
+      "bytes": 373
     }
   ]
 }
