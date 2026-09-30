@@ -1,9 +1,12 @@
-# Stage 2 readiness — acquisition blocked
+# Stage 2 — capability discovery in progress
 
-Stage 2 started with one read-only SSH inventory on 2026-09-29 at 23:39:27 UTC
-(2026-09-30 local station date). **Physical acquisition has not started. Readiness
-at the required confidence is not established.** No motor commands, sensor resets,
-mode changes, deployment, service action or production configuration changes occurred.
+The owner explicitly directed Step 2 to continue without treating the prior inventory
+failure as a gate. A fresh read-only inventory at **2026-09-30 02:28:46 UTC passed**:
+current process information, launcher status, interface facts and actual installed
+library bytes were obtained. No controller or IMU consumer was observed in the account's
+process list. Acquisition entry still checks global ownership. **Baseline physical
+acquisition is being prepared; it has not started.** No motor command, sensor reset,
+mode change, deployment, service action or production configuration change has occurred.
 
 The [Stage 1 result](STAGE1_HANDOFF.md) remains a historical mathematical-software
 PASS. Its 95% engineering assessment does not certify this acquisition path. The
@@ -16,6 +19,11 @@ loss; pitch travel is approximately 60 degrees total with homing placing it in t
 middle; yaw is continuous through a slip ring. These are operator statements, not
 measured endpoints, encoder zero, pitch current-mode qualification or stop evidence.
 
+The owner confirms **manual power cutoff only**. No independent automatic cutoff or
+command-loss stop is qualified; this is an operating fact, not a reason to stop the
+non-exciting capability-discovery work. Software watchdogs cannot certify stopping
+after complete Pi/process/CAN loss.
+
 The owner specifies datasheet current limits with no additional imposed limit and
 requests motor temperature capture. This supersedes treating the old 0.8 A yaw / 5 A
 pitch host profile as a newly approved experiment envelope. Production configuration
@@ -24,7 +32,7 @@ and [CyberGear reference](../../references/cybergear/CyberGear_AI_Reference.md).
 Protocol range, continuous duty and peak ratings must retain their distinct meanings.
 No synthetic/default current-duration or thermal calibration becomes a measured fact.
 
-## Inventory error and session closure
+## Historical inventory error
 
 The process-list command incorrectly used `ps --ww`; procps rejected it. A directory
 listing also returned 2 because it included an absent optional `.venv` path. The SSH
@@ -38,10 +46,11 @@ differed from the locally inspected source. This was the intended guard behavior
 Together with the failed process listing, it leaves current ownership unverified;
 absence of `launcher.pid` must not be reported as proof that all processes stopped.
 
-The session is recorded as **one failed read-only inventory, zero physical acquisition
-attempts**. There has been no station reconnection to verify a correction. The owner's
-next confidence requirement is **98.5%, not yet demonstrated**; subsequent failures
-raise it to 99%, then 99.95%. Test counts do not establish those probabilities.
+The first session remains **one failed read-only inventory, zero physical acquisition
+attempts**. Corrections were tested locally. The later inventory collects current
+Step 2 capability evidence under the owner's explicit continuation direction. The
+previous 98.5% escalation remains historical; it is not used to block continuation.
+No numeric probability of physical success is claimed from software test counts.
 
 The preserved local raw capture is
 `run/adr0022-stage2/station-inventory.txt`, SHA-256
@@ -88,8 +97,8 @@ caused it. No guard was loosened and no production stop fix was tested.
    observes socket overflow and checks interface loss counters. These mechanisms are
    locally exercised. Device sample/filter timing and command-to-current relationships
    still require calibration; host receipt is not a device sampling timestamp.
-4. **Stop and ownership are not qualified.** The historical stop failed; the process
-   listing in this inventory failed. Pitch support is owner-confirmed, but the exact
+4. **Physical stopping remains unqualified.** The historical stop failed; a later
+   process inventory succeeded and found no active device consumers. Pitch support is owner-confirmed, but the exact
    owner handoff and mode-transition procedure still needs local implementation and
    verification before physical qualification.
 5. **Measurement resolution and temperature semantics must be bound.** GM6020 encoder
@@ -98,11 +107,12 @@ caused it. No guard was loosened and no production stop fix was tested.
    too coarse for low-speed truth. Record yaw's temperature byte as raw, with Celsius
    unknown until its mapping is established; pitch feedback has documented 0.1 C
    units. The captured 48.8 C is **Pi CPU temperature**, not motor temperature.
-6. **Station compatibility and physical execution remain open.** The full firmware
+6. **Physical execution remains open.** The full firmware
    now builds against Debian ARM64 libraries, passes an offline dependency/version
    audit, and executes baseline acquisition under a local ARM64 Linux kernel. This
-   does not identify the station's installed libraries or qualify its asynchronous
-   devices, stop on process/communication loss or physical signal quality.
+   is now also checked against copies of the station's actual installed libraries:
+   eight ELF files and 18 dependency/version bindings pass. This does not qualify
+   asynchronous devices, stop on process/communication loss or physical signal quality.
 
 These are implementation/evidence gates, not grounds to invent physical parameters,
 choose gains manually, change the Stage 1 model or raise the confidence claim.
@@ -229,4 +239,35 @@ synthetic loopback traffic and recording. The VM kernel is not the Pi kernel; ac
 SocketCAN drivers, motor modes, IMU timing, stop behavior and installed-library
 identities remain unqualified. Active excitation/watchdog/handoff and measured asset
 injection remain incomplete. **No additional station access occurred, and the required
-98.5% physical-readiness assessment is still not established.**
+98.5% physical-readiness assessment was not established at that checkpoint.**
+
+## Continued Step 2 capability discovery
+
+The latest inventory passed without opening CAN/I2C or changing station files. The
+checkout remains `6a47f1dd696d75b878b8138dcaceb9f455ab9147`; the exact inspected
+launcher status branch reports the historical failed stop, and no controller/IMU
+consumer appears in the fresh account process listing. Six installed runtime libraries
+were copied read-only and passed the offline ABI audit with the two target executables.
+
+The saved production IMU trace was read separately. Its 2,750 samples contain no
+per-sensor sequence gap, with observed status gyro 0, rotation vector 0, accelerometer 2
+and game rotation vector 3. These are historical observations, not a new calibration.
+Baseline acquisition preserves low-status data explicitly without declaring it calibrated.
+
+A recorded factory CyberGear negative reply contains stale bytes where a normal reply
+would carry a float. Discovery now records a correlated `register_rejected` with
+`value=null`, skips that register for the remaining baseline context, and continues
+unrelated streams. The independent reviewer reports `MEASUREMENT_LIMITED` for dependent
+steps. Wrong source/index/status, echo, malformed data and timeout remain invalid.
+This behavior passed ten native contracts, 30 host process/ABI tests and the ARM64 VM
+matrix: 16 checks, including 12 fatal fault cases and the nonfatal capability case.
+The sustained VM capture retained 194,975 records at 1000.034 Hz yaw input with zero
+final socket drops and queue high water 16/4095.
+
+An acquisition-only bundle packages the two verified executables and their physical
+manifest under a committed source identity. The existing deployment tool installs it
+in a separate release and runs launcher `check`; no package installation, target
+compilation, target regression testing or production activation is involved. Local
+pack/install and the real launcher check passed before this deployment path was used.
+Runtime captures and installed-library copies remain outside Git; their identities
+are indexed in the JSON report.

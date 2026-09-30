@@ -12,8 +12,10 @@ run on the workstation. The collector opens no CAN/I2C transport and performs no
 service action, installation, build or deployment. Its only launcher action is
 `status`, conditional on an exact hash of source whose status branch was inspected.
 
-The current session is closed to further station access after an inventory command
-failure. The correction has been tested locally only. See the
+The owner has directed Step 2 to continue and explicitly removed the previous
+inventory failure as a gate. Corrections are verified locally; subsequent station
+access gathers actual capability evidence. Preserve the original failed inventory.
+See the
 [Stage 2 readiness record](../ADR-002.2/reports/STAGE2_READINESS.md).
 
 ## The command
@@ -57,7 +59,7 @@ transmitter is stopped or either motor is disabled.
 
 ## When it fails
 
-Stop station experimentation. Diagnose and verify the correction locally; retain the
-failed attempt and raise the next required confidence threshold as the owner directed.
-The current sequence is 95%, then 98.5%, then 99%, then 99.95%. These are requested
-engineering acceptance thresholds, not probabilities inferred from test counts.
+Diagnose and verify corrections locally; retain the failed attempt. The owner's
+latest direction is to continue Step 2 without treating the prior failure as a gate.
+No software test count establishes a probability of physical success. Read-only
+inventory does not authorize bypassing device capabilities or physical limits.

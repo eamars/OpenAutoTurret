@@ -109,6 +109,11 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                         response_id = 0x80000000 | (18 << 24) | (127 << 8)
                     if fault == "read_source" and elapsed > .6:
                         response_id = 0x80000000 | (17 << 24) | (126 << 8)
+                    if fault == "read_rejected" and index in (0x7019, 0x701A):
+                        response_id = 0x80000000 | 0x11017F00
+                        # Existing captured factory NACK layout; the last four
+                        # bytes are stale data and must never become a value.
+                        response = struct.pack("<H", index) + b"\x00\x00\x30\x33\x31\x05"
                     if not (fault == "read_timeout" and elapsed > .6):
                         sender.sendto(struct.pack("=IB3x8s", response_id, 8, response), address)
                         replies += 1
@@ -163,7 +168,7 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
         records = [json.loads(line) for line in (root / "capture.jsonl").read_text().splitlines()]
         complete = records[-1].get("status") == "COMPLETE"
         offered_load = None
-        if fault == "none":
+        if fault in ("none", "read_rejected"):
             assert child.returncode == 0 and complete, stderr
             assert records[0]["provenance"] == "SYNTHETIC"
             can = [row for row in records if row["kind"] == "can_rx"]
@@ -187,8 +192,16 @@ def rehearse(binary: Path, root: Path, *, duration: float = 3.0, fault: str = "n
                 sequence = [r["sequence"] for r in imu if r["sensor"] == sensor]
                 assert sequence == [i & 255 for i in range(1, len(sequence) + 1)]
             reads = [r for r in records if r["kind"] == "register_read"]
-            assert len(reads) == records[-1]["register_reads"] == replies
-            assert any(r["index"] == 0x701A and r["value"] == .25 for r in reads)
+            rejected = [r for r in records if r["kind"] == "register_rejected"]
+            assert len(reads) == records[-1]["register_reads"]
+            assert len(rejected) == records[-1]["register_rejections"]
+            assert len(reads) + len(rejected) == replies
+            if fault == "read_rejected":
+                assert {r["index"] for r in rejected} == {0x7019, 0x701A} and len(rejected) == 2
+                assert all(r["value"] is None for r in rejected)
+                assert not any(r["index"] in (0x7019, 0x701A) for r in reads)
+            else:
+                assert not rejected and any(r["index"] == 0x701A and r["value"] == .25 for r in reads)
             assert all(r["device_sample_ns"] is None for r in reads)
             yaw_times = [r["kernel_monotonic_ns"] for r in can if r["axis"] == "yaw"]
             yaw_hz = (len(yaw_times)-1)*1e9/(yaw_times[-1]-yaw_times[0])
@@ -248,7 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--duration", type=float, default=3.)
     parser.add_argument("--runner", action="append", default=[], metavar="ARG",
                         help="local emulator argv prefix; repeat per token, e.g. --runner=qemu-aarch64 --runner=-L --runner=SYSROOT")
-    parser.add_argument("--fault", choices=("none", "can_stale", "can_error", "can_truncated",
+    parser.add_argument("--fault", choices=("none", "read_rejected", "can_stale", "can_error", "can_truncated",
                                            "imu_sequence", "imu_reset", "imu_eof", "read_echo",
                                            "read_source", "read_timeout", "wrong_uid", "reenabled", "stop_timeout"), default="none")
     args = parser.parse_args()

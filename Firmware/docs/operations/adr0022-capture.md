@@ -10,8 +10,9 @@ This is not dynamics identification, controller acceptance or production validat
 
 Compile, simulate, inject failures and review evidence on the **workstation**. Local
 rehearsals use loopback UDP and a pipe, with no CAN/I2C or SSH access. Physical acquisition
-belongs on `eamars@rpi-turret` through the launcher after readiness and the current
-confidence requirement are established. This path has **not** been deployed or physically
+belongs on `eamars@rpi-turret` through the launcher after its applicable capability
+and operating checks. The owner has explicitly removed the prior inventory failure
+as a gate to Step 2. This path has **not** been deployed or physically
 qualified. Do not use the station to verify a correction.
 
 ## The command
@@ -65,7 +66,10 @@ run/adr0022-local/.venv/bin/python Firmware/tools/adr0022_arm_vm.py \
 The VM boots an isolated ARM64 kernel, creates a guest project venv, runs the actual
 target capture executable, and exports raw evidence through a virtual serial port.
 It has no network or host-device passthrough. The matrix includes a 120-second capture,
-native acquisition contracts and all 12 injected protocol/stream failures. User-mode
+native acquisition contracts, negative-register capability replies, and all 12
+injected protocol/stream failures. A correlated negative read keeps its value null
+and prevents repeating that register in the same baseline context; other streams
+continue and dependent measurements remain unavailable. User-mode
 QEMU is insufficient for this check: the tested version rejects both `SO_TIMESTAMPNS`
 and `SO_RXQ_OVFL`. Do not bypass these requirements to make an emulator pass.
 
@@ -77,6 +81,26 @@ manifest requires schema `adr0022.capture/2`, provenance `MEASURED`, transport `
 UID `7216313130333105`, `pitch_stop_poll=true` and confirmed support when pitch is disabled.
 Never copy synthetic rehearsal timing bounds into a qualified physical contract.
 The launcher binds the IMU pipe descriptor.
+
+Prepare an acquisition-only release from a clean committed source tree. The input
+manifest contains all physical fields above except `output` and `imu_fd`: deployment
+assigns a fresh output path, and the launcher binds the descriptor. Binary hashes must
+refer to the already checked ARM64 executables.
+
+```bash
+run/adr0022-local/.venv/bin/python Firmware/tools/adr0022_baseline_bundle.py pack \
+  --build run/adr0022-debian13/firmware-make --manifest run/physical-baseline-template.json \
+  --output run/new-baseline-bundle.tar
+```
+
+Pass that archive to `Firmware/tools/deploy_station.py --baseline-bundle FILE` with
+the observed station address, pinned key and existing identity as in the deploy card.
+The tool verifies source and content identity before upload and again in the new
+release, then runs launcher `check`. It prints the bounded capture command with a
+separate run directory. It opens no device, runs no target regression tests, installs
+no packages and does not activate production. Execute the printed launcher command
+once for the authorized physical acquisition and preserve its result. An existing
+bundle output or capture identity cannot be overwritten or retried.
 
 Startup acquires the existing motion lease, checks other device consumers, creates
 an exclusive attempt record, starts the IMU without recovery, and runs `commissiond`.

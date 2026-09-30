@@ -245,8 +245,10 @@ int capture_session(const char* path) {
     ImuStream imu;
     Readback readback(127,0);
     const std::array startup_registers{cybergear::Reg::RunMode,cybergear::Reg::CurFiltGain,
-       cybergear::Reg::LimitCur,cybergear::Reg::CurKp,cybergear::Reg::CurKi,cybergear::Reg::MechPos,cybergear::Reg::VBus};
-    size_t startup_index=0; uint64_t read_count=0;
+       cybergear::Reg::LimitCur,cybergear::Reg::CurKp,cybergear::Reg::CurKi,cybergear::Reg::MechPos,cybergear::Reg::VBus,
+       cybergear::Reg::Iqf};
+    size_t startup_index=0, periodic_index=0; uint64_t read_count=0, rejected_count=0;
+    std::map<cybergear::Reg,bool> readable;
     int64_t next_read=0, discovery_begin=0, stop_begin=0, next_stop=0;
     bool identified=false, stop_pending=false;
     uint64_t stop_count=0, stop_confirmed=0;
@@ -305,7 +307,8 @@ int capture_session(const char* path) {
           if (!feedback && i==1 && register_reads) {
             const auto observation=readback.observe(r);
             require(journal->append(readback_json(observation)),"DATA_INVALID: capture writer failed");
-            ++read_count;
+            readable[observation.reg]=observation.value.has_value();
+            if (observation.value) ++read_count; else ++rejected_count;
             continue;
           }
           require(feedback,"HARD_ABORT: unexpected CAN traffic during exclusive capture");
@@ -339,16 +342,24 @@ int capture_session(const char* path) {
       // have a complete response window. No blocking RPC or retry in this loop.
       if (identified && (!stop_poll || stop_confirmed) && register_reads && !readback.pending() && now>=next_read &&
           now+limits.read_timeout<begin+limits.duration) {
-        const auto reg=startup_index<startup_registers.size() ? startup_registers[startup_index++] :
-                       (read_count%2 ? cybergear::Reg::Iqf : cybergear::Reg::MechPos);
-        const auto request=readback.begin(reg,now,limits.read_timeout);
-        buses[1].send_baseline(request,synthetic);
-        const auto accepted=monotonic_ns(); readback.accepted(accepted,true);
-        require(journal->append("{\"kind\":\"register_request\",\"request_sequence\":"+std::to_string(readback.sequence())+
-             ",\"index\":"+std::to_string(unsigned(reg))+",\"begin_ns\":"+std::to_string(now)+
-             ",\"kernel_accepted_ns\":"+std::to_string(accepted)+",\"motor_actuation\":false}"),
-             "DATA_INVALID: capture writer failed");
-        next_read=accepted+limits.read_period;
+        std::optional<cybergear::Reg> reg;
+        if (startup_index<startup_registers.size()) reg=startup_registers[startup_index++];
+        else for (unsigned attempt=0;attempt<2;++attempt) {
+          const auto candidate=(periodic_index++%2) ? cybergear::Reg::MechPos : cybergear::Reg::Iqf;
+          if (readable.at(candidate)) { reg=candidate; break; }
+        }
+        // A correlated negative response is a discovered capability limit.
+        // Never retry that register in this disabled-baseline context.
+        if (reg) {
+          const auto request=readback.begin(*reg,now,limits.read_timeout);
+          buses[1].send_baseline(request,synthetic);
+          const auto accepted=monotonic_ns(); readback.accepted(accepted,true);
+          require(journal->append("{\"kind\":\"register_request\",\"request_sequence\":"+std::to_string(readback.sequence())+
+               ",\"index\":"+std::to_string(unsigned(*reg))+",\"begin_ns\":"+std::to_string(now)+
+               ",\"kernel_accepted_ns\":"+std::to_string(accepted)+",\"motor_actuation\":false}"),
+               "DATA_INVALID: capture writer failed");
+          next_read=accepted+limits.read_period;
+        } else next_read=now+limits.read_period;
       }
       if (now-begin>limits.startup) {
         for (size_t i=0;i<buses.size();++i) {
@@ -366,7 +377,7 @@ int capture_session(const char* path) {
       require(journal->healthy(),"DATA_INVALID: capture writer failed");
     }
     require(imu.ready() && buses[0].sequence && buses[1].sequence,"DATA_INVALID: incomplete capture");
-    require(!register_reads || (read_count>startup_registers.size() && !readback.pending()),
+    require(!register_reads || (readable.size()==startup_registers.size() && !readback.pending()),
             "MEASUREMENT_LIMITED: incomplete register observations");
     require(identified && (!stop_poll || (stop_confirmed && stop_count==stop_confirmed && !stop_pending)),
             "HARD_ABORT: pitch identity/STOP evidence incomplete");
@@ -382,6 +393,7 @@ int capture_session(const char* path) {
       std::to_string(begin)+",\"end_ns\":"+std::to_string(monotonic_ns())+",\"yaw_frames\":"+
       std::to_string(buses[0].sequence)+",\"pitch_frames\":"+std::to_string(buses[1].sequence)+
       ",\"register_reads\":"+std::to_string(read_count)+",\"pitch_stop_confirmed\":"+std::to_string(stop_confirmed)+
+      ",\"register_rejections\":"+std::to_string(rejected_count)+
       ",\"socket_drops\":{\"yaw\":"+std::to_string(yaw_drops)+",\"pitch\":"+std::to_string(pitch_drops)+"}"+
       ",\"writer_queue_high_water\":"+std::to_string(journal->high_water())+"}";
     require(journal->finish(footer),"DATA_INVALID: capture flush failed");

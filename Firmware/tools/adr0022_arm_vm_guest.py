@@ -30,6 +30,15 @@ try:
     report=review(root/'capture/capture.jsonl')
     (root/'capture/review.json').write_text(json.dumps(report,indent=2)+'\n')
     summary['checks'].append({'name':'integrated-capture','result':result['result'],'review':report})
+    print('VM_PROGRESS capability-rejection',flush=True)
+    limited=rehearse(Path('/work/bin/commissiond'),root/'capability-rejection',fault='read_rejected')
+    report=review(root/'capability-rejection/capture.jsonl')
+    (root/'capability-rejection/review.json').write_text(json.dumps(report,indent=2)+'\n')
+    if {r['index'] for r in report['measurement_limitations']} != {0x7019,0x701A}:
+        raise RuntimeError('missing capability limitations')
+    if 'pitch_iqf' in report['streams'] or report['physical_parameters_qualified']:
+        raise RuntimeError('rejected current feedback fabricated or qualified')
+    summary['checks'].append({'name':'capability-rejection','result':limited['result'],'review':report})
     if phase=='matrix':
         executable('native-contracts',['/work/bin/test_commission_capture'])
         for fault in ('can_stale','can_error','can_truncated','imu_sequence','imu_reset','imu_eof',

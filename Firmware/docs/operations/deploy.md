@@ -86,6 +86,14 @@ to edit.
 
 ## What it proves
 
+ADR-002.2 baseline acquisition has a separate `deploy_station.py --baseline-bundle FILE`
+path, described in [the capture card](adr0022-capture.md). It ships only the two
+identified acquisition executables with committed source, uses the existing project
+venv, and runs launcher `check` without opening devices. It does not activate the
+production stack, install dependencies, compile or run regression tests on the station.
+This is an acquisition release, not a verified production deployment. Normal deployment
+and its registered CTest requirements are unchanged.
+
 A successful `deploy_station.py` run proves: this exact revision built, its test suite passed on the
 station where the hardware is, preflight passed, and (with `--activate`) the launcher stopped and
 started it and reached readiness.

@@ -33,7 +33,7 @@ TEST(Readback, AcceptsOnlyCorrelatedReadAndRecordsUnknownDeviceTime) {
   EXPECT_EQ(ota::cybergear::unpack_ext_id(frame.id).comm_type,17);
   read.accepted(110,true);
   const auto result=read.observe(reply(105)); // response may queue before send returns
-  EXPECT_DOUBLE_EQ(result.value,.25); EXPECT_EQ(result.request_sequence,1);
+  ASSERT_TRUE(result.value); EXPECT_DOUBLE_EQ(*result.value,.25); EXPECT_EQ(result.request_sequence,1);
   EXPECT_NE(readback_json(result).find("\"device_sample_ns\":null"),std::string::npos);
   EXPECT_FALSE(read.pending());
 }
@@ -53,6 +53,35 @@ TEST(Readback, FailedTransmitOrTimeoutCannotRetry) {
   Readback timeout(127,0); timeout.begin(ota::cybergear::Reg::Iqf,100,50); timeout.accepted(101,true);
   EXPECT_THROW(timeout.check_deadline(150),std::runtime_error);
   EXPECT_THROW(timeout.observe(reply(151)),std::runtime_error);
+}
+TEST(Readback, NegativeReplyPreservesUnavailableValueAndDoesNotRetryThatRegister) {
+  Readback read(127,0); read.begin(ota::cybergear::Reg::MechPos,100,50); read.accepted(101,true);
+  auto r=reply(110);
+  // Captured factory rejection: trailing bytes are stale UID data, not a float.
+  r.frame.id=0x11017f00;
+  const uint8_t data[]{0x19,0x70,0,0,0x30,0x33,0x31,0x05};
+  std::memcpy(r.frame.data,data,8);
+  const auto result=read.observe(r);
+  EXPECT_FALSE(result.value); EXPECT_EQ(result.device_error_flag,1);
+  EXPECT_NE(readback_json(result).find("\"value\":null"),std::string::npos);
+  EXPECT_NE(readback_json(result).find("\"kind\":\"register_rejected\""),std::string::npos);
+  EXPECT_FALSE(read.pending());
+  EXPECT_THROW(read.begin(ota::cybergear::Reg::MechPos,200,50),std::runtime_error);
+  EXPECT_NO_THROW(read.begin(ota::cybergear::Reg::Iqf,200,50));
+  read.accepted(201,true);
+  ASSERT_TRUE(read.observe(reply(210)).value);
+}
+TEST(Readback, NegativeReplyStillRequiresExactSourceIndexAndStatus) {
+  for (int scenario=0;scenario<5;++scenario) {
+    Readback read(127,0); read.begin(ota::cybergear::Reg::Iqf,100,50); read.accepted(101,true);
+    auto r=reply(110); r.frame.id=0x11017f00;
+    if (scenario==0) r.frame.id=0x11017e00;
+    if (scenario==1) r.frame.data[0]=0x19;
+    if (scenario==2) r.frame.id=0x11027f00;
+    if (scenario==3) r.frame.data[2]=1;
+    if (scenario==4) r.frame.id=0x11017f01;
+    EXPECT_THROW(read.observe(r),std::runtime_error);
+  }
 }
 TEST(Journal, PreservesEvidenceAndRejectsReopen) {
   Directory dir; const auto path=dir.path+"/capture";

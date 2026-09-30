@@ -90,14 +90,27 @@ def review(path: Path):
         report["streams"][sensor] = statistics_ns([r["sample_ns"] for r in stream])
     requests = [r for r in rows if r.get("kind") == "register_request"]
     reads = [r for r in rows if r.get("kind") == "register_read"]
-    need(len(reads) == footer["register_reads"] == len(requests), "register capture incomplete")
-    need([r["request_sequence"] for r in reads] == [r["request_sequence"] for r in requests]
-         == list(range(1, len(reads) + 1)), "register transaction sequence differs")
-    for request, reply in zip(requests, reads):
+    rejected = [r for r in rows if r.get("kind") == "register_rejected"]
+    outcomes = sorted(reads + rejected, key=lambda r: r["request_sequence"])
+    need(len(reads) == footer["register_reads"] and len(rejected) == footer.get("register_rejections", 0)
+         and len(outcomes) == len(requests), "register capture incomplete")
+    need([r["request_sequence"] for r in outcomes] == [r["request_sequence"] for r in requests]
+         == list(range(1, len(outcomes) + 1)), "register transaction sequence differs")
+    for request, reply in zip(requests, outcomes):
         need(request["index"] == reply["index"] and request["begin_ns"] == reply["request_begin_ns"]
-             and reply["receive_ns"] >= request["begin_ns"] and reply["device_sample_ns"] is None
-             and reply["source"] == "type17_readback", "register correlation invalid")
-        need(math.isfinite(reply["value"]), "nonfinite register read")
+             and reply["receive_ns"] >= request["begin_ns"] and reply["device_sample_ns"] is None,
+             "register correlation invalid")
+        if reply["kind"] == "register_rejected":
+            need(reply["value"] is None and reply["device_error_flag"] == 1
+                 and reply["source"] == "type17_negative_reply", "rejected read has a fabricated value or invalid status")
+            need(not any(r["index"] == reply["index"] and r["request_sequence"] > reply["request_sequence"]
+                         for r in requests), "rejected baseline register was retried")
+        else:
+            need(reply["source"] == "type17_readback" and math.isfinite(reply["value"]), "nonfinite or invalid register read")
+    need(len({r["index"] for r in rejected}) == len(rejected), "duplicate rejected register")
+    report["measurement_limitations"] = [{"reason": "MEASUREMENT_LIMITED", "index": r["index"],
+                                          "detail": "register rejected in baseline context; dependent steps blocked"}
+                                         for r in rejected]
     iqf = [r for r in reads if r["index"] == 0x701A]
     if iqf:
         report["streams"]["pitch_iqf"] = statistics_ns([r["receive_ns"] for r in iqf])

@@ -50,6 +50,9 @@ def main():
                         help="cross-compile here with tools/cross_build.py and ship the "
                              "binaries: the station runs the suite rather than building it. "
                              "Compiling needs no hardware; only running the tests does.")
+    parser.add_argument("--baseline-bundle", type=pathlib.Path,
+                        help="ship a committed ADR-002.2 baseline bundle into a separate release; "
+                             "validate with launcher check, without starting devices, installing packages or compiling")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
     parser.add_argument("--commission-mixed-controller", action="store_true",
@@ -65,6 +68,9 @@ def main():
         parser.error("commissioning activation uses an explicit bounded launcher run, not --activate")
     if sum((args.commission_hardware, args.commission_mixed_controller, args.probe_imu)) > 1:
         parser.error("choose one commissioning or IMU-only deployment mode")
+    if args.baseline_bundle and any((args.activate, args.prebuilt, args.probe_build,
+                                    args.commission_hardware, args.commission_mixed_controller, args.probe_imu)):
+        parser.error("baseline-bundle is a separate non-activating deployment mode")
     repo = Path(__file__).resolve().parents[2]
     requirements = repo / "Firmware" / "requirements-station.txt"
     if not requirements.is_file():
@@ -75,6 +81,9 @@ def main():
         parser.error("Commit source changes before deployment; run/ artifacts are ignored")
     revision = run(["git", "rev-parse", "HEAD"], cwd=repo,
                    capture_output=True, text=True).stdout.strip()
+    if args.baseline_bundle:
+        from adr0022_baseline_bundle import validate
+        validate(args.baseline_bundle, revision)
     quote = shlex.quote
     connection = []
     if args.connect_address:
@@ -112,6 +121,25 @@ def main():
            f"mkdir -p {quote(release + '/run')} && "
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
            f"printf '%s\\n' {quote(revision)} > {quote(release + '/REVISION')}")
+    if args.baseline_bundle:
+        # Dedicated acquisition release. Existing production venv/configuration
+        # and active services are untouched; the check opens no device transport.
+        bundle = release + "/baseline-bundle.tar"
+        run(["scp", *connection, str(args.baseline_bundle), f"{args.host}:{bundle}"])
+        capture_directory = release + "/run/baseline"
+        helper = release + "/Firmware/tools/adr0022_baseline_bundle.py"
+        remote(f"{quote(venv + '/bin/python')} {quote(helper)} install --bundle {quote(bundle)} "
+               f"--revision {quote(revision)} --firmware {quote(release + '/Firmware')} "
+               f"--output-directory {quote(capture_directory)}")
+        manifest = capture_directory + "/manifest.json"
+        script = release + "/Firmware/scripts/run_application.sh"
+        remote(f"OTA_RUN_DIR={quote(release + '/run/stack')} bash {quote(script)} "
+               f"check --capture-baseline {quote(manifest)}")
+        print(f"Baseline release prepared; devices unopened: {release}\nRevision: {revision}\n"
+              f"Manifest: {manifest}\n"
+              f"Capture: OTA_RUN_DIR={quote(release + '/run/stack')} bash {quote(script)} "
+              f"run --capture-baseline {quote(manifest)}", flush=True)
+        return
     # Model binaries stay outside Git/release source. The adapter checks the
     # pinned SHA before opening the shared artifact.
     models = args.root.rstrip("/") + "/run/hailo-probe"

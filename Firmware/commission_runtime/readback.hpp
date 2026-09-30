@@ -2,13 +2,15 @@
 #include "capture.hpp"
 #include "can/cybergear_protocol.hpp"
 #include <optional>
+#include <set>
 
 namespace ota::commission {
 struct ReadObservation {
   cybergear::Reg reg;
-  double value;
+  std::optional<double> value; // rejected reads have no measurement value
   uint64_t request_sequence;
   int64_t request_begin_ns, request_accepted_ns, receive_ns;
+  uint8_t device_error_flag{};
 };
 
 // One outstanding read, no retry after timeout. Source, host, register, type and
@@ -29,6 +31,7 @@ class Readback {
   cybergear::Reg reg_{};
   uint64_t sequence_{};
   int64_t begin_{}, accept_{}, deadline_{};
+  std::set<cybergear::Reg> rejected_registers_;
 };
 std::string readback_json(const ReadObservation&);
 } // namespace ota::commission

@@ -45,6 +45,27 @@ def test_full_process_capture_and_independent_review(successful):
     assert report["temperatures"]["pitch"]["max_C"] == 34.5
 
 
+def test_rejected_capability_preserves_other_measurements_without_inventing_values(tmp_path):
+    directory = tmp_path / "limited"
+    result = rehearse(BINARY, directory, fault="read_rejected")
+    report = review(directory / "capture.jsonl")
+    assert result["returncode"] == 0 and report["capture_complete"]
+    assert {r["index"] for r in report["measurement_limitations"]} == {0x7019, 0x701A}
+    assert all(r["reason"] == "MEASUREMENT_LIMITED" for r in report["measurement_limitations"])
+    assert "pitch_iqf" not in report["streams"]
+    assert str(0x7019) not in report["register_values_first_observed"]
+    assert str(0x701A) not in report["register_values_first_observed"]
+    assert not report["physical_parameters_qualified"] and not report["motion_authorized"]
+    rows = [json.loads(line) for line in (directory / "capture.jsonl").read_text().splitlines()]
+    for index in (0x7019, 0x701A):
+        assert sum(r["kind"] == "register_request" and r["index"] == index for r in rows) == 1
+    next(r for r in rows if r["kind"] == "register_rejected")["value"] = .25
+    altered = tmp_path / "invented-value.jsonl"
+    altered.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    with pytest.raises(ValueError, match="fabricated value"):
+        review(altered)
+
+
 @pytest.mark.parametrize("fault", ["can_stale", "can_error", "can_truncated", "imu_sequence", "imu_reset",
                                    "imu_eof", "read_echo", "read_source", "read_timeout", "wrong_uid", "reenabled", "stop_timeout"])
 def test_full_process_rejects_injected_fault(tmp_path, fault):

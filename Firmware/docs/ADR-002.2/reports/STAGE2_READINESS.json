@@ -1,10 +1,10 @@
 {
   "version": "adr0022.stage2-readiness/1",
-  "status": "BLOCKED_BEFORE_PHYSICAL_ACQUISITION",
+  "status": "STEP2_IN_PROGRESS_BASELINE_PREPARATION",
   "source_head_before_changes": "9a08b3e03d2253b4eb1214a10fd1ab42802532e6",
   "stage_status": {
     "mathematical_software": "PASS_HISTORICAL",
-    "stage2": "READ_ONLY_INVENTORY_STARTED_BLOCKED",
+    "stage2": "HOST_CAPABILITIES_RECORDED_BASELINE_PENDING",
     "hardware_capability_qualification": "NOT_RUN",
     "physical_calibration": "NOT_RUN",
     "physical_plant_identification": "NOT_RUN",
@@ -13,7 +13,7 @@
   },
   "full_adr_status": "NOT_DONE",
   "station_actions": {
-    "ssh_inventory_sessions": 1,
+    "ssh_inventory_sessions": 2,
     "failed_inventory_sessions": 1,
     "unexpected_command_failures": 2,
     "motion_attempts": 0,
@@ -22,7 +22,8 @@
     "deployments": 0,
     "service_actions": 0,
     "production_configuration_writes": 0,
-    "station_fix_verification_attempts": 0
+    "station_fix_verification_attempts": 0,
+    "historical_imu_trace_reads": 1
   },
   "confidence": {
     "original_required_percent": 95,
@@ -33,7 +34,8 @@
     ],
     "established_percent": null,
     "physical_readiness_established": false,
-    "meaning": "Owner acceptance requirements, not statistical estimates from software test counts"
+    "meaning": "Historical owner thresholds retained; latest owner direction removes prior failure as a gate. No probability inferred from tests.",
+    "prior_failure_blocks_continuation": false
   },
   "owner_facts": {
     "provenance": "USER_STATEMENT_CURRENT_SESSION",
@@ -45,7 +47,11 @@
     "yaw_travel": "CONTINUOUS_WITH_SLIP_RING",
     "current_policy": "MANUFACTURER_DATASHEET_NO_ADDITIONAL_OPERATOR_LIMIT",
     "motor_temperature_capture_required": true,
-    "yaw_temperature_celsius_mapping": null
+    "yaw_temperature_celsius_mapping": null,
+    "independent_power_cutoff": "MANUAL_ONLY",
+    "automatic_command_loss_stop_qualified": false,
+    "prior_failure_is_gate": false,
+    "latest_direction": "Continue Step 2; do not be gated by the prior failure"
   },
   "inventory_session": {
     "kind": "READ_ONLY_INVENTORY",
@@ -152,13 +158,11 @@
   "blockers": [
     "ACTIVE_CURRENT_MODE_EXCITATION_WATCHDOG_AND_MEASURED_ASSET_INJECTION_INCOMPLETE",
     "PHYSICAL_DEVICE_TIME_FILTER_AND_CAPTURE_CAPABILITIES_UNQUALIFIED",
-    "CURRENT_OWNERSHIP_UNVERIFIED_INVENTORY_FAILED",
-    "LAST_RECORDED_STOP_CONFIRMATION_FAILED",
     "PITCH_CURRENT_MODE_AND_CURRENT_FEEDBACK_UNQUALIFIED",
     "IMU_MOUNTING_UNITS_FILTER_CLOCK_CALIBRATION_PENDING",
-    "TARGET_ABI_AND_COMPLETE_ACQUISITION_REHEARSAL_PENDING",
     "DATASHEET_DUTY_AND_TEMPERATURE_CONTRACT_NOT_BOUND",
-    "PROTOCOL_RESOLUTION_SYNTHETIC_SOLVER_REHEARSALS_REJECTED"
+    "PROTOCOL_RESOLUTION_SYNTHETIC_SOLVER_REHEARSALS_REJECTED",
+    "LIVE_DEVICE_CAPABILITIES_AND_MEASUREMENTS_PENDING_BASELINE_CAPTURE"
   ],
   "motion_allowed": false,
   "evidence": [
@@ -872,5 +876,535 @@
         "bytes": 240248
       }
     ]
-  }
+  },
+  "continued_inventory": {
+    "session": {
+      "kind": "STEP2_HOST_AND_ABI_INVENTORY",
+      "authorization": "USER_CONTINUE_STEP2_PRIOR_FAILURE_NOT_A_GATE",
+      "started_utc": "2026-09-30T02:28:47.056447+00:00",
+      "script_sha256": "7630a92c01e8299a09e729b58a3bf5cdb8493c234b7e98071a2834f66a7504ac",
+      "trusted_launcher_sha256": "b2e22914342b27f9690c09ce3faf049ebc413dfec43df498424cab919527f22b",
+      "destination": "192.168.2.103",
+      "motion_attempts": 0,
+      "physical_io_opened": false,
+      "command": [
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ConnectionAttempts=1",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=1",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "UpdateHostKeys=no",
+        "-o",
+        "HostKeyAlgorithms=ssh-ed25519",
+        "-o",
+        "HostKeyAlias=rpi-turret",
+        "-o",
+        "HostName=192.168.2.103",
+        "-o",
+        "GlobalKnownHostsFile=NUL",
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "UserKnownHostsFile=C:\\Users\\rba90\\.ssh\\known_hosts",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-i",
+        "C:\\Users\\rba90\\.ssh\\id_ed25519",
+        "eamars@rpi-turret",
+        "bash -s -- /home/eamars/workspace/OpenAutoTurret /tmp/ota-stack-1000 b2e22914342b27f9690c09ce3faf049ebc413dfec43df498424cab919527f22b"
+      ],
+      "automatic_retries": 0,
+      "returncode": 0,
+      "stdout_sha256": "b89c4b86ba56cfc070f981e0422eb9da6461723923712d561666466e7467d19d",
+      "collection_integrity": "PASS",
+      "failures": [],
+      "library_count": 6,
+      "finished_utc": "2026-09-30T02:28:48.885483+00:00"
+    },
+    "review": {
+      "version": "adr0022.inventory-review/1",
+      "capture_sha256": "5938b52db8a7b0c653fc726684617a4e3b4499756e1cbb9058f6e5d251697e48",
+      "capture_completed": true,
+      "collection_integrity": "PASS",
+      "failures": [],
+      "notes": [],
+      "section_count": 48,
+      "observed_utc": "2026-09-30T02:28:46Z",
+      "checkout_revision": "6a47f1dd696d75b878b8138dcaceb9f455ab9147",
+      "process_ownership_verified": false,
+      "process_listing_collected": true,
+      "launcher_status": "Stopped: STOP FAILED\n[2026-09-30 12:01:25.744] [controld] [info] mixed stop/park: bounded pitch pose verified; requesting pitch disable, yaw remains zero-requested\n[2026-09-30 12:01:35.236] [controld] [error] mixed stop deadline: pitch_disable_requested=true pitch_disabled_known=true pitch_disabled=true pitch_ack_age_ms=19 yaw_zero_count=1968 yaw_dwell_ms=5 yaw_raw_speed_deg_s=-30.000 yaw_encoder_speed_deg_s=-1.994 yaw_position_deg=0.747\n[2026-09-30 12:01:35.277] [controld] [error] PARK FAILED: mixed pitch stop/yaw zero confirmation deadline exceeded; automatic park release withheld; services remain online\n[2026-09-30 12:01:35.278] [controld] [warning] black-box scene preserved (id 1): ALLOW in fault \u2014 mode MANUAL phase fault safety ALLOW\n[2026-09-30 12:01:35.283] [controld] [error] STOP FAILED: pitch STOP and yaw zero requested (phase=fault, fault='PARK FAILED: mixed pitch stop/yaw zero confirmation deadline exceeded')\n[2026-09-30 12:01:35.340] [controld] [error] motor watchdog: heartbeat_age_ms=103.085 axis=0 feedback_age_ms=56.363 mode=0 faults=0 temp_c=25.3\n[2026-09-30 12:01:35.340] [controld] [error] motor watchdog: heartbeat_age_ms=103.085 axis=1 feedback_age_ms=-1.000 mode=0 faults=0 temp_c=0.0\n[2026-09-30 12:01:35.612] [controld] [info] controld stopped cleanly\n\nSTATUS_EXIT_CODE=1",
+      "last_recorded_stop": "FAILED",
+      "can_links": [
+        {
+          "ifindex": 3,
+          "ifname": "can0",
+          "flags": [
+            "NOARP",
+            "UP",
+            "LOWER_UP",
+            "ECHO"
+          ],
+          "mtu": 16,
+          "qdisc": "pfifo_fast",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 10,
+          "link_type": "can",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 16,
+          "max_mtu": 16,
+          "linkinfo": {
+            "info_kind": "can",
+            "info_data": {
+              "ctrlmode_supported": [
+                "LOOPBACK",
+                "LISTEN-ONLY",
+                "BERR-REPORTING",
+                "FD",
+                "FD-NON-ISO",
+                "CC-LEN8-DLC",
+                "TDC-AUTO",
+                "TDC-MANUAL"
+              ],
+              "state": "ERROR-ACTIVE",
+              "berr_counter": {
+                "tx": 0,
+                "rx": 0
+              },
+              "restart_ms": 0,
+              "bittiming": {
+                "bitrate": 1000000,
+                "sample_point": "0.750",
+                "tq": 25,
+                "prop_seg": 14,
+                "phase_seg1": 15,
+                "phase_seg2": 10,
+                "sjw": 5,
+                "brp": 1
+              },
+              "bittiming_const": {
+                "name": "mcp251xfd",
+                "tseg1": {
+                  "min": 2,
+                  "max": 256
+                },
+                "tseg2": {
+                  "min": 1,
+                  "max": 128
+                },
+                "sjw": {
+                  "min": 1,
+                  "max": 128
+                },
+                "brp": {
+                  "min": 1,
+                  "max": 256
+                },
+                "brp_inc": 1
+              },
+              "data_bittiming_const": {
+                "name": "mcp251xfd",
+                "tseg1": {
+                  "min": 1,
+                  "max": 32
+                },
+                "tseg2": {
+                  "min": 1,
+                  "max": 16
+                },
+                "sjw": {
+                  "min": 1,
+                  "max": 16
+                },
+                "brp": {
+                  "min": 1,
+                  "max": 256
+                },
+                "brp_inc": 1,
+                "tdc": {
+                  "tdco": {
+                    "min": 0,
+                    "max": 63
+                  }
+                }
+              },
+              "clock": 40000000
+            },
+            "info_xstats": {
+              "restarts": 0,
+              "bus_error": 0,
+              "arbitration_lost": 0,
+              "error_warning": 0,
+              "error_passive": 0,
+              "bus_off": 0
+            }
+          },
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 65536,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536,
+          "parentbus": "spi",
+          "parentdev": "spi0.0",
+          "stats64": {
+            "rx": {
+              "bytes": 1281793696,
+              "packets": 160224212,
+              "errors": 0,
+              "dropped": 206509,
+              "over_errors": 0,
+              "multicast": 0
+            },
+            "tx": {
+              "bytes": 141711248,
+              "packets": 17713906,
+              "errors": 0,
+              "dropped": 0,
+              "carrier_errors": 0,
+              "collisions": 0
+            }
+          }
+        },
+        {
+          "ifindex": 4,
+          "ifname": "can1",
+          "flags": [
+            "NOARP",
+            "UP",
+            "LOWER_UP",
+            "ECHO"
+          ],
+          "mtu": 16,
+          "qdisc": "pfifo_fast",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 10,
+          "link_type": "can",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 16,
+          "max_mtu": 16,
+          "linkinfo": {
+            "info_kind": "can",
+            "info_data": {
+              "ctrlmode_supported": [
+                "LOOPBACK",
+                "LISTEN-ONLY",
+                "BERR-REPORTING",
+                "FD",
+                "FD-NON-ISO",
+                "CC-LEN8-DLC",
+                "TDC-AUTO",
+                "TDC-MANUAL"
+              ],
+              "state": "ERROR-ACTIVE",
+              "berr_counter": {
+                "tx": 0,
+                "rx": 0
+              },
+              "restart_ms": 0,
+              "bittiming": {
+                "bitrate": 1000000,
+                "sample_point": "0.750",
+                "tq": 25,
+                "prop_seg": 14,
+                "phase_seg1": 15,
+                "phase_seg2": 10,
+                "sjw": 5,
+                "brp": 1
+              },
+              "bittiming_const": {
+                "name": "mcp251xfd",
+                "tseg1": {
+                  "min": 2,
+                  "max": 256
+                },
+                "tseg2": {
+                  "min": 1,
+                  "max": 128
+                },
+                "sjw": {
+                  "min": 1,
+                  "max": 128
+                },
+                "brp": {
+                  "min": 1,
+                  "max": 256
+                },
+                "brp_inc": 1
+              },
+              "data_bittiming_const": {
+                "name": "mcp251xfd",
+                "tseg1": {
+                  "min": 1,
+                  "max": 32
+                },
+                "tseg2": {
+                  "min": 1,
+                  "max": 16
+                },
+                "sjw": {
+                  "min": 1,
+                  "max": 16
+                },
+                "brp": {
+                  "min": 1,
+                  "max": 256
+                },
+                "brp_inc": 1,
+                "tdc": {
+                  "tdco": {
+                    "min": 0,
+                    "max": 63
+                  }
+                }
+              },
+              "clock": 40000000
+            },
+            "info_xstats": {
+              "restarts": 0,
+              "bus_error": 0,
+              "arbitration_lost": 0,
+              "error_warning": 0,
+              "error_passive": 0,
+              "bus_off": 0
+            }
+          },
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 65536,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536,
+          "parentbus": "spi",
+          "parentdev": "spi1.0",
+          "stats64": {
+            "rx": {
+              "bytes": 102848944,
+              "packets": 12856118,
+              "errors": 0,
+              "dropped": 0,
+              "over_errors": 0,
+              "multicast": 0
+            },
+            "tx": {
+              "bytes": 51424472,
+              "packets": 6428059,
+              "errors": 0,
+              "dropped": 0,
+              "carrier_errors": 0,
+              "collisions": 0
+            }
+          }
+        }
+      ],
+      "power": {
+        "raw": "0x50000",
+        "current_flags": 0,
+        "historical_flags": 5,
+        "loaded_power_qualified": false
+      },
+      "motion_allowed": false,
+      "motion_gate_reason": "Inventory cannot certify owner handoff, live adapters, calibration or stop capability",
+      "physical_acquisition": "NOT_RUN"
+    },
+    "device_consumers_observed": [],
+    "ownership_scope": "No controller/IMU consumer in account process list; global lease and all-process checks still run at acquisition entry",
+    "actual_station_libraries": [
+      {
+        "name": "ld-linux-aarch64.so.1",
+        "available": true,
+        "requested_path": "/lib/ld-linux-aarch64.so.1",
+        "resolved_path": "/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+        "sha256": "5212aea7a664da8436a7b3a4c69f61b37a08090cf431d401c8446a02df2ab2b4",
+        "bytes": 201344
+      },
+      {
+        "name": "libc.so.6",
+        "available": true,
+        "requested_path": "/lib/aarch64-linux-gnu/libc.so.6",
+        "resolved_path": "/usr/lib/aarch64-linux-gnu/libc.so.6",
+        "sha256": "9d465df210ffba519f96fef9477749896b3f67601b5b38c67c1b024b891617b5",
+        "bytes": 1716616
+      },
+      {
+        "name": "libgcc_s.so.1",
+        "available": true,
+        "requested_path": "/lib/aarch64-linux-gnu/libgcc_s.so.1",
+        "resolved_path": "/usr/lib/aarch64-linux-gnu/libgcc_s.so.1",
+        "sha256": "9a146967dc38c3820c5dc21c3209812655f66b6551264072b187bd0e787947e0",
+        "bytes": 133768
+      },
+      {
+        "name": "libm.so.6",
+        "available": true,
+        "requested_path": "/lib/aarch64-linux-gnu/libm.so.6",
+        "resolved_path": "/usr/lib/aarch64-linux-gnu/libm.so.6",
+        "sha256": "a8afb2d1f4a0c5e14c0fc82f794ec839eafe29738907aa92895410f57630bbe2",
+        "bytes": 591960
+      },
+      {
+        "name": "libstdc++.so.6",
+        "available": true,
+        "requested_path": "/lib/aarch64-linux-gnu/libstdc++.so.6",
+        "resolved_path": "/usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33",
+        "sha256": "fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19",
+        "bytes": 2502136
+      },
+      {
+        "name": "libyaml-cpp.so.0.8",
+        "available": true,
+        "requested_path": "/lib/aarch64-linux-gnu/libyaml-cpp.so.0.8",
+        "resolved_path": "/usr/lib/aarch64-linux-gnu/libyaml-cpp.so.0.8.0",
+        "sha256": "95a73dd178c6d5b93c0df72b31043e490a6f075930d1d5d7612d14fc74cc2ba2",
+        "bytes": 398656
+      }
+    ],
+    "local_abi_check_against_copied_station_libraries": "PASS_8_FILES_18_BINDINGS",
+    "historical_imu_trace": {
+      "sha256": "d17b212500ca5600f05a0bf325d9e0ae2205cfa468d0baf4e5c39e5c1dec67fa",
+      "sequence_gaps": 0,
+      "status_by_sensor": {
+        "gyro": 0,
+        "rv": 0,
+        "accel": 2,
+        "game_rv": 3
+      },
+      "scope": "Saved previous production trace, not fresh acquisition/calibration"
+    }
+  },
+  "local_capability_discovery": {
+    "change": "Correlated negative register replies retain null value and MEASUREMENT_LIMITED; no retry in baseline context; unaffected streams retained",
+    "native_contracts_passed": 10,
+    "host_process_and_abi_tests_passed": 30,
+    "arm64_vm": {
+      "status": "LOCAL_ARM64_VM_PASS",
+      "checks": 16,
+      "capture": {
+        "kind": "footer",
+        "status": "COMPLETE",
+        "parameter_qualified": false,
+        "begin_ns": 7051875248,
+        "end_ns": 127052335472,
+        "yaw_frames": 119997,
+        "pitch_frames": 16992,
+        "register_reads": 11168,
+        "pitch_stop_confirmed": 5823,
+        "register_rejections": 0,
+        "socket_drops": {
+          "yaw": 0,
+          "pitch": 0
+        },
+        "writer_queue_high_water": 16
+      },
+      "observed_yaw_hz": 1000.0344756710136,
+      "records": 194975,
+      "hardware_accessed": false
+    },
+    "deployment_probe": "Local ARM64 bundle pack/install/content identity and real launcher check PASS; no device opens",
+    "source_head_before_changes": "9feb815"
+  },
+  "continued_step2_evidence": [
+    {
+      "path": "run/adr0022-stage2/inventory-continued/session.json",
+      "sha256": "15e88524fd760c69c04cca6ca8a266ab855e2e9a27914d82cfd2db5aeb1b0a9e",
+      "bytes": 1581
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-continued/collector.sh",
+      "sha256": "7630a92c01e8299a09e729b58a3bf5cdb8493c234b7e98071a2834f66a7504ac",
+      "bytes": 6563
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-continued/inventory.txt",
+      "sha256": "5938b52db8a7b0c653fc726684617a4e3b4499756e1cbb9058f6e5d251697e48",
+      "bytes": 109054
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-continued/review.json",
+      "sha256": "cada8993d4083aeb43f4589ae6fc55ed58f09ef3644ec24c865b93e46b5e243f",
+      "bytes": 8707
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-continued/capabilities.json",
+      "sha256": "2e69735de638770d364d9676ef2f3677a521d622a066c43bf5fd89f265bef2b5",
+      "bytes": 77108
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-continued/actual-library-abi.json",
+      "sha256": "d8d06cbf39b05b3ea2bd7e21d30bde8314f31df7c065ae264b085474bc6b4c13",
+      "bytes": 15266
+    },
+    {
+      "path": "run/adr0022-stage2/inventory-continued/existing-imu.json",
+      "sha256": "83c297f1ca7a6c21c7befaea4f22c73bd698bdeca3cff26c102a490ae430eb05",
+      "bytes": 659892
+    },
+    {
+      "path": "run/adr0022-debian13/host-capability-probe-2/capture.jsonl",
+      "sha256": "3784281ddb4c9da1d5392061720b997f60d86688f7d56df5d7f553741450e84f",
+      "bytes": 1580890
+    },
+    {
+      "path": "run/adr0022-debian13/native-capability-contracts.log",
+      "sha256": "a8ea09bb5522c34f72c9855a07e6099deed102323159f29c786becafc23cde50",
+      "bytes": 1972
+    },
+    {
+      "path": "run/adr0022-debian13/host-capability-tests.log",
+      "sha256": "6489560b303cdae200ed563f306b8f7b7a53fb1a2f7b5b25b9a7372e6eabf4bc",
+      "bytes": 100
+    },
+    {
+      "path": "run/adr0022-debian13/bundle-launcher-tests.log",
+      "sha256": "bd01fd6307009622226cc24a9333b8c9062ac016d88bc8edd8bdbe01a8b53853",
+      "bytes": 99
+    },
+    {
+      "path": "run/adr0022-debian13/vm-capability-matrix/manifest.json",
+      "sha256": "517b87431ced0603bd458ac95476f726046695a7f4f30e0e6aa31b7d67616dad",
+      "bytes": 2006
+    },
+    {
+      "path": "run/adr0022-debian13/vm-capability-matrix/evidence/summary.json",
+      "sha256": "2edeb88a503a583f6e9ebd3581ee23ddff6208802280b6c912f8cd7be66cfcf2",
+      "bytes": 7815
+    },
+    {
+      "path": "run/adr0022-debian13/vm-capability-matrix/evidence/capture/capture.jsonl",
+      "sha256": "d306ad3bbb10c851c4f1acdf20b6256ad050226c24da6153442cfccdeb580ebf",
+      "bytes": 70373751
+    },
+    {
+      "path": "run/adr0022-debian13/vm-capability-matrix/evidence/capability-rejection/capture.jsonl",
+      "sha256": "dfc5d7a1a823a07c676867df2a6cc5a6547750b5eb9bc898e248ab911cb8e5b3",
+      "bytes": 1565564
+    },
+    {
+      "path": "run/adr0022-debian13/bundle-probe/check.stdout",
+      "sha256": "345baefbaf40dddef6c9fc777f0932ec97e37f0a98a444979e3a2504c10a36b1",
+      "bytes": 122
+    }
+  ]
 }
