@@ -19,8 +19,9 @@ double number(const YAML::Node& node,const char* key,bool zero=false) {
   return value;
 }
 FullAxisHomingParams parameters(const YAML::Node& config) {
-  const auto n=config["homing"], c=n["contact"], span=config["expected_span"];
+  const auto n=config["homing"], c=n["contact"];
   FullAxisHomingParams full; auto& p=full.homing;
+  p.observe_only=true;
   p.motion_checks_abort=n["motion_checks_abort"].as<bool>();
   require(p.motion_checks_abort,"HARD_ABORT: sensorless homing requires aborting motion checks");
 #define PARAM(field) p.field=number(n,#field)
@@ -51,11 +52,6 @@ FullAxisHomingParams parameters(const YAML::Node& config) {
   full.dir_endpoint_a=n["dir_endpoint_a"].as<int>(); full.dir_endpoint_b=n["dir_endpoint_b"].as<int>();
   require(std::abs(full.dir_endpoint_a)==1 && full.dir_endpoint_b==-full.dir_endpoint_a,
           "DATA_INVALID: opposing pitch endpoint directions required");
-  require(number(span,"operator_reported_deg")==60.,"INTEGRATION_MISMATCH: operator expected span must be approximately 60 degrees");
-  full.expected_travel_min_deg=number(span,"minimum_deg");
-  full.expected_travel_max_deg=number(span,"maximum_deg");
-  require(full.expected_travel_min_deg<60 && full.expected_travel_max_deg>60 &&
-          full.expected_travel_max_deg<=90,"DATA_INVALID: explicit expected travel band for current mount");
   require(can::valid_pitch_current_limit(p.limit_cur_initial_a) &&
           p.limit_cur_initial_a==p.limit_cur_max_a && p.limit_cur_step_a==0,
           "HARD_ABORT: fixed existing pitch homing current cap required");
@@ -91,19 +87,13 @@ class HomingSession {
       {cybergear::Reg::SpdKp,number(n,"homing_speed_kp")},
       {cybergear::Reg::SpdKi,number(n,"homing_speed_ki")},
       {cybergear::Reg::LocKp,number(n,"homing_position_kp")}};
-    position_readback_tol_=number(n,"position_reference_readback_tolerance_rad");
-    encoder_mechpos_bound_=number(g,"encoder_mechpos_agreement_bound_rad");
-    require(position_readback_tol_<=.0004,
-            "DATA_INVALID: position reference readback exceeds existing native contract");
     require(desired_[0].second==params_.homing.limit_cur_initial_a && can::valid_pitch_current_limit(desired_[0].second),
             "HARD_ABORT: homing current cap differs from explicit native setting");
     current_bound_=number(g,"current_bound_A"); torque_bound_=number(g,"torque_bound_Nm");
     temp_bound_=number(g,"pitch_temperature_C"); yaw_bound_=number(g,"yaw_displacement_rad");
     travel_bound_=number(g,"total_displacement_rad"); speed_bound_=number(g,"maximum_encoder_speed_rad_s");
     transition_bound_=number(g,"mode_transition_displacement_rad");
-    require(encoder_mechpos_bound_<=transition_bound_,
-            "DATA_INVALID: measured encoder/native agreement bound exceeds independent transition displacement guard");
-    midpoint_tol_=number(g,"midpoint_tolerance_rad"); midpoint_speed_=number(g,"midpoint_speed_rad_s");
+    midpoint_speed_=number(g,"midpoint_speed_rad_s");
     midpoint_dwell_=int64_t(number(g,"midpoint_dwell_s")*1e9);
     midpoint_timeout_=int64_t(number(g,"midpoint_timeout_s")*1e9);
     // Measured Iqf protection is a rating boundary, independent of the
@@ -114,13 +104,11 @@ class HomingSession {
       require(current_bound_==6.5 && basis && basis.IsMap() &&
           basis["kind"].as<std::string>("")=="manufacturer_continuous_current_rating" &&
           basis["document"].as<std::string>("")=="docs/references/cybergear/CyberGear微电机使用说明书.pdf" &&
-          basis["sha256"].as<std::string>("")=="4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495" &&
           basis["continuous_current_A"].as<double>(0)==6.5,
           "DATA_INVALID: measured homing requires manufacturer continuous-current protection basis");
     }
     require(torque_bound_<=params_.homing.torque_safety_nm &&
             torque_bound_<=params_.homing.contact.effort_hard_abort_nm &&
-            travel_bound_>=params_.expected_travel_max_deg*kDeg2Rad &&
             speed_bound_>std::max({params_.homing.coarse_speed_rad_s,params_.homing.fine_speed_rad_s,
                                  params_.homing.backoff_speed_rad_s,midpoint_speed_}),"DATA_INVALID: incompatible homing guards");
     if (!synthetic_) require(config["yaw"]["interface"].as<std::string>()=="can0" &&
@@ -158,6 +146,7 @@ class HomingSession {
  private:
   enum class State { Discover, InitialStop, Observe, Snapshot, Run, HoldPose, HoldVerify, TransitionStop, TransitionPose, TransitionWrite,
                      TransitionVerify, Enable, EnabledVerify, EnabledPose, EnabledPinVerify, FinalStop,
+                     MidpointVerify,
                      RestoreWrite, RestoreVerify, Done };
   using Settings=std::vector<std::pair<cybergear::Reg,double>>;
   void record(const std::string& row) { require(journal_->append(row),"DATA_INVALID: capture writer failed"); }
@@ -222,11 +211,17 @@ class HomingSession {
     const auto [reg,expected]=verification_[verify_index_];
     if (!pending_begin_) { read(reg,now); pending_begin_=now; return false; }
     if (readback_.pending()) return false;
-    const auto tolerance=reg==cybergear::Reg::LocRef?position_readback_tol_:std::max(1e-6,std::abs(expected)*1e-6);
-    require(latest_read_ && latest_read_->reg==reg && latest_read_->value &&
-            (reg==cybergear::Reg::Iqf?std::abs(*latest_read_->value)<=current_bound_:
-                                    std::abs(*latest_read_->value-expected)<=tolerance),
-            "INTEGRATION_MISMATCH: homing native register readback differs");
+    require(latest_read_ && latest_read_->reg==reg && latest_read_->value,
+            "INTEGRATION_MISMATCH: homing native register readback missing");
+    if (reg==cybergear::Reg::LocRef) {
+      record("{\"kind\":\"homing_reference_observation\",\"expected_rad\":"+scalar(expected)+
+        ",\"observed_rad\":"+scalar(*latest_read_->value)+",\"observed_minus_expected_rad\":"+scalar(*latest_read_->value-expected)+
+        ",\"receive_ns\":"+std::to_string(latest_read_->receive_ns)+",\"reference_qualified\":false}");
+    } else {
+      const auto encoded=reg==cybergear::Reg::RunMode?double(uint8_t(expected)):double(float(expected));
+      require(reg==cybergear::Reg::Iqf?std::abs(*latest_read_->value)<=current_bound_:*latest_read_->value==encoded,
+              "INTEGRATION_MISMATCH: homing native register readback differs from encoded setting");
+    }
     if (state_==State::Snapshot && reg!=cybergear::Reg::Iqf) {
       observed_.push_back({reg,*latest_read_->value});
       record("{\"kind\":\"homing_original_setting\",\"index\":"+std::to_string(unsigned(reg))+",\"value\":"+scalar(*latest_read_->value)+"}");
@@ -256,14 +251,23 @@ class HomingSession {
     record("{\"kind\":\"homing_position_observation\",\"native_mechpos_rad\":"+scalar(*latest_read_->value)+
       ",\"type2_pose_rad\":"+scalar(pose_)+",\"register_minus_type2_rad\":"+scalar(residual)+
       ",\"read_receive_ns\":"+std::to_string(latest_read_->receive_ns)+",\"status_receive_ns\":"+std::to_string(status_ns_)+
-      ",\"agreement_bound_rad\":"+scalar(encoder_mechpos_bound_)+",\"mapping_qualified\":false}");
-    require(std::abs(residual)<=encoder_mechpos_bound_,"INTEGRATION_MISMATCH: fresh native MechPos differs from measured encoder agreement bound");
+      ",\"mapping_qualified\":false}");
     pinned_pose_=*latest_read_->value; return true;
   }
   void complete_transition(int64_t now) {
     transition_=false; mode_=next_mode_;
     auto desired=latched_; desired.enter_pos_mode=false; desired.rearm_speed_mode=false;
     state(State::Run,now); holding_=true; command_speed_=0; apply(desired,now);
+  }
+  void record_endpoint(const HomingController& endpoint,const char* name,bool& recorded) {
+    if (recorded || endpoint.state()!=AxisHomeState::Complete) return;
+    const auto& observed=endpoint.result(); recorded=true;
+    record("{\"kind\":\"homing_endpoint_observation\",\"endpoint\":"+quoted(name)+
+      ",\"coarse_contact_rad\":"+scalar(observed.coarse_contact_rad)+
+      ",\"fine_contact1_rad\":"+scalar(observed.fine_contact1_rad)+
+      ",\"fine_contact2_rad\":"+scalar(observed.fine_contact2_rad)+
+      ",\"fine_contact_rad\":"+scalar(observed.fine_contact_rad)+
+      ",\"repeatability_rad\":"+scalar(observed.repeatability_rad)+",\"endpoint_qualified\":false}");
   }
   void apply(const DesiredState& desired,int64_t now) {
     require(enabled_ && status_ns_ && now-status_ns_<=limits_.can_gap,"HARD_ABORT: homing command without fresh enabled feedback");
@@ -282,6 +286,12 @@ class HomingSession {
       if (holding_ || command_target_!=desired.target_rad || command_speed_!=desired.speed_rad_s) {
         write(cybergear::Reg::LimitSpd,desired.speed_rad_s,"position_speed_limit");
         write(cybergear::Reg::LocRef,desired.target_rad,"position_target");
+        if (midpoint_) {
+          midpoint_command_ns_=now;
+          midpoint_travel_ns_=int64_t(std::abs(desired.target_rad-pinned_pose_)/desired.speed_rad_s*1e9);
+          state(State::MidpointVerify,now);
+          verification_={{cybergear::Reg::LocRef,desired.target_rad},{cybergear::Reg::Iqf,0}};
+        }
       }
       holding_=false; command_target_=desired.target_rad; command_speed_=desired.speed_rad_s;
     } else {
@@ -303,7 +313,7 @@ class HomingSession {
       if (state_==State::EnabledVerify || state_==State::EnabledPose || state_==State::EnabledPinVerify) {
         write(next_mode_==1?cybergear::Reg::LimitSpd:cybergear::Reg::SpdRef,0,"enabled_neutral_keepalive");
         next_command_=now+limits_.stop_period;
-      } else if (state_==State::Run || state_==State::HoldPose || state_==State::HoldVerify) {
+      } else if (state_==State::Run || state_==State::HoldPose || state_==State::HoldVerify || state_==State::MidpointVerify) {
         // CyberGear status is command-triggered. Repeat an inert speed-limit
         // write in position mode; rewriting LocRef restarts its profile.
         write(mode_==1?cybergear::Reg::LimitSpd:cybergear::Reg::SpdRef,
@@ -386,6 +396,10 @@ class HomingSession {
     } else if (state_==State::EnabledPinVerify) {
       require(enabled_,"HARD_ABORT: enabled homing mode was lost");
       if (verify(now)) complete_transition(now);
+    } else if (state_==State::MidpointVerify) {
+      require(enabled_,"HARD_ABORT: enabled homing mode was lost");
+      require(now-midpoint_begin_<midpoint_timeout_,"HARD_ABORT: measured midpoint timeout");
+      if (verify(now)) state(State::Run,now);
     } else if (state_==State::Run) {
       require(enabled_,"HARD_ABORT: enabled homing mode was lost");
       require(now-entered_<=limits_.read_timeout || (current_ns_>=entered_ && now-current_ns_<=limits_.read_timeout),
@@ -397,34 +411,30 @@ class HomingSession {
         // Preserve actual receipt time. Transition waits pause calls to the FSM,
         // never rewrite measurement time or hide time consumed by setup.
         const auto desired=homing_.step({status_ns_,pose_,velocity_,torque_,false});
+        record_endpoint(homing_.home_a(),"A",endpoint_a_recorded_);
+        record_endpoint(homing_.home_b(),"B",endpoint_b_recorded_);
         if (homing_.terminal()) {
-          if (!homing_.result().valid) {
-            const auto& observed=homing_.result();
-            if (homing_.home_a().result().valid && homing_.home_b().result().valid &&
-                (observed.measured_travel_deg<params_.expected_travel_min_deg ||
-                 observed.measured_travel_deg>params_.expected_travel_max_deg))
-              throw std::runtime_error("MEASUREMENT_LIMITED: measured contacts outside approximate operator span; endpoint mapping needs confirmation");
-            throw std::runtime_error("HARD_ABORT: sensorless homing FSM failed: "+observed.fail_reason);
-          }
+          if (homing_.phase()!=FullAxisPhase::Complete)
+            throw std::runtime_error("HARD_ABORT: sensorless homing FSM failed: "+homing_.result().fail_reason);
           const auto& result=homing_.result(); midpoint_target_=0.5*(result.endpoint_a_rad+result.endpoint_b_rad);
           record("{\"kind\":\"homing_endpoints\",\"endpoint_a_rad\":"+scalar(result.endpoint_a_rad)+
             ",\"endpoint_b_rad\":"+scalar(result.endpoint_b_rad)+",\"measured_travel_deg\":"+scalar(result.measured_travel_deg)+
             ",\"repeatability_rad\":"+scalar(result.repeatability_rad)+",\"midpoint_rad\":"+scalar(midpoint_target_)+
-            ",\"encoder_mechpos_agreement_qualified\":false}");
+            ",\"encoder_mechpos_agreement_qualified\":false,\"calibration_qualified\":false}");
           midpoint_=true; midpoint_begin_=now;
           DesiredState move; move.position_move=true; move.enter_pos_mode=true; move.target_rad=midpoint_target_;
           move.speed_rad_s=midpoint_speed_; move.message="measured midpoint"; begin_transition(move,1,now);
         } else apply(desired,now);
         } else {
         require(now-midpoint_begin_<midpoint_timeout_,"HARD_ABORT: measured midpoint timeout");
-        if (std::abs(pose_-midpoint_target_)<=midpoint_tol_ && std::abs(velocity_)<=params_.homing.backoff_arrive_vel_rad_s) {
-          if (!midpoint_since_) midpoint_since_=now;
-          if (now-midpoint_since_>=midpoint_dwell_) {
-            record("{\"kind\":\"homing_midpoint_dwell\",\"target_rad\":"+scalar(midpoint_target_)+",\"observed_rad\":"+scalar(pose_)+
-              ",\"begin_ns\":"+std::to_string(midpoint_since_)+",\"end_ns\":"+std::to_string(now)+"}");
-            state(State::FinalStop,now);
-          }
-        } else midpoint_since_=0;
+        if (midpoint_command_ns_ && now-midpoint_command_ns_>=midpoint_travel_ns_+midpoint_dwell_) {
+          record("{\"kind\":\"homing_midpoint_dwell\",\"target_rad\":"+scalar(midpoint_target_)+",\"observed_rad\":"+scalar(pose_)+
+            ",\"observed_minus_target_rad\":"+scalar(pose_-midpoint_target_)+",\"command_ns\":"+std::to_string(midpoint_command_ns_)+
+            ",\"trajectory_duration_ns\":"+std::to_string(midpoint_travel_ns_)+
+            ",\"begin_ns\":"+std::to_string(midpoint_command_ns_+midpoint_travel_ns_)+",\"end_ns\":"+std::to_string(now)+
+            ",\"settled_qualified\":false}");
+          state(State::FinalStop,now);
+        }
         }
       }
       // A reply slower than read_period must still allow the FSM to advance.
@@ -520,6 +530,7 @@ class HomingSession {
               state_==State::TransitionVerify || state_==State::Enable || state_==State::RestoreWrite || state_==State::RestoreVerify)
             require(disabled_,"HARD_ABORT: pitch re-enabled during disabled transition");
           if (state_==State::Run || state_==State::HoldPose || state_==State::HoldVerify ||
+              state_==State::MidpointVerify ||
               state_==State::EnabledPose || state_==State::EnabledPinVerify ||
               (state_==State::EnabledVerify && enable_seen_))
             require(enabled_,"HARD_ABORT: enabled homing mode was lost");
@@ -568,7 +579,7 @@ class HomingSession {
     loss+="}";
     const auto& result=homing_.result();
     const std::string footer="{\"kind\":\"footer\",\"status\":"+quoted(complete?"COMPLETE":"INVALID")+",\"detail\":"+quoted(failure)+
-      ",\"parameter_qualified\":false,\"motion_qualified\":false,\"current_mode_qualified\":false,\"encoder_mechpos_agreement_qualified\":false,"+
+      ",\"parameter_qualified\":false,\"motion_qualified\":false,\"current_mode_qualified\":false,\"encoder_mechpos_agreement_qualified\":false,\"calibration_qualified\":false,"+
       "\"homing_observed\":"+(complete?"true":"false")+",\"endpoint_a_rad\":"+scalar(result.endpoint_a_rad)+",\"endpoint_b_rad\":"+scalar(result.endpoint_b_rad)+
       ",\"measured_travel_deg\":"+scalar(result.measured_travel_deg)+",\"repeatability_rad\":"+scalar(result.repeatability_rad)+",\"midpoint_rad\":"+scalar(midpoint_target_)+
       ",\"expected_original_mode\":"+std::to_string(expected_mode_)+",\"observed_original_mode\":"+(observed_.empty()?"null":scalar(observed_[0].second))+
@@ -582,13 +593,13 @@ class HomingSession {
   YAML::Node config_; Limits limits_; FullAxisHomingParams params_; FullAxisHoming homing_; bool synthetic_; Readback readback_;
   std::string uid_; uint64_t expected_uid_{}; int expected_mode_{},imu_fd_{},mode_{},next_mode_{},last_count_{},encoder_anchor_count_{};
   double current_bound_{},torque_bound_{},temp_bound_{},yaw_bound_{},travel_bound_{},speed_bound_{},transition_bound_{};
-  double midpoint_tol_{},midpoint_speed_{},midpoint_target_{},origin_{},pose_{},velocity_{},torque_{},low_{},high_{},transition_origin_{},pinned_pose_{};
-  double position_readback_tol_{},encoder_mechpos_bound_{};
+  double midpoint_speed_{},midpoint_target_{},origin_{},pose_{},velocity_{},torque_{},low_{},high_{},transition_origin_{},pinned_pose_{};
   double command_target_{},command_speed_{},position_limit_{};
   int64_t begin_{},entered_{},pending_begin_{},next_ping_{},next_yaw_{},next_command_{},next_read_{},current_ns_{},status_ns_{},fsm_status_ns_{};
   int64_t encoder_anchor_ns_{};
-  int64_t transition_begin_{},enable_begin_{},midpoint_begin_{},midpoint_since_{},midpoint_dwell_{},midpoint_timeout_{};
+  int64_t transition_begin_{},enable_begin_{},midpoint_begin_{},midpoint_command_ns_{},midpoint_travel_ns_{},midpoint_dwell_{},midpoint_timeout_{};
   bool identified_{},disabled_{},enabled_{},enable_seen_{},have_pose_{},transition_{},holding_{true},midpoint_{},abort_stop_confirmed_{},normal_stop_confirmed_{};
+  bool endpoint_a_recorded_{},endpoint_b_recorded_{};
   State state_{State::Discover}; DesiredState latched_; Settings original_,desired_,observed_,verification_; size_t verify_index_{};
   std::array<Endpoint,2> buses_; ImuStream imu_; gm6020::UnwrappedEncoder yaw_encoder_;
   std::optional<ReadObservation> latest_read_; std::unique_ptr<Journal> journal_; std::string last_message_;

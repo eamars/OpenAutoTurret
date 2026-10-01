@@ -6,11 +6,16 @@ from .contracts import Reason, require
 
 
 def motion_metrics(t, references, trace, *, zero_reference_time, command_time, step_rad=None,
-                   gyro_bandwidth_hz=20.):
+                   gyro_bandwidth_hz=20., position_jitter_limit_rad=None):
     t=np.asarray(t);references=np.asarray(references);trace=np.asarray(trace)
     require(trace.shape==(len(t),12) and references.shape==(len(t),4) and
             np.isfinite(trace).all() and np.all(np.diff(t)>0), Reason.DATA_INVALID,
             "invalid full trace for evaluation")
+    position_jitter_limit = (np.deg2rad(.15) if position_jitter_limit_rad is None
+                             else position_jitter_limit_rad)
+    require(isinstance(position_jitter_limit, (int, float)) and not isinstance(position_jitter_limit, bool)
+            and np.isfinite(position_jitter_limit) and position_jitter_limit > 0,
+            Reason.DATA_INVALID, "finite positive declared position-jitter quality limit required")
     q,v=trace[:,0],trace[:,1];rq,rv=references[:,0],references[:,1]
     dt=float(np.median(np.diff(t)))
     steady=(np.abs(references[:,2])<1e-9)&(np.abs(rv)>np.deg2rad(.1))&(t>=command_time)
@@ -42,7 +47,7 @@ def motion_metrics(t, references, trace, *, zero_reference_time, command_time, s
         vibration=sosfilt(band,v-rv)
         gyro_rms=float(np.sqrt(np.mean(vibration[steady]**2)))
         passed &= (.9<=ratio<=1.1 and active>=.95 and speed_error<=speed_limit and jitter<=speed_limit
-                   and p95<=np.deg2rad(.15) and span<=np.deg2rad(.3) and gyro_rms<=speed_limit)
+                   and p95<=position_jitter_limit and span<=np.deg2rad(.3) and gyro_rms<=speed_limit)
         result.update(tracking_ratio=ratio,active_fraction=active,speed_rms_rad_s=speed_error,
                       speed_jitter_rad_s=jitter,position_jitter_rad=p95,position_range_rad=span,
                       gyro_band_rms_rad_s=gyro_rms,gyro_band_hz=[.5,high])
@@ -91,8 +96,9 @@ def shaped_velocity(speed, envelope, dt=.005, *, position=0., posture=0.):
     v[flat]=speed
     q=position+np.cumsum(v)*dt
     refs=np.c_[q,v,acc,np.full(len(t),posture)]
-    require(q.min()>=envelope.angle_min_rad and q.max()<=envelope.angle_max_rad,
-            Reason.ENVELOPE_LIMITED,"shaped velocity trajectory leaves angle envelope")
+    if envelope.angle_min_rad is not None:
+        require(q.min()>=envelope.angle_min_rad and q.max()<=envelope.angle_max_rad,
+                Reason.ENVELOPE_LIMITED,"shaped velocity trajectory leaves angle envelope")
     return t,refs,{"zero_reference_time":float(end),"command_time":start}
 
 
@@ -106,7 +112,8 @@ def shaped_step(distance,envelope,dt=.005,*,position=0.,posture=0.):
     q=position+distance*(10*s**3-15*s**4+6*s**5)
     v=distance*(30*s**2-60*s**3+30*s**4)/duration
     a=distance*(60*s-180*s**2+120*s**3)/duration**2
-    require(q.min()>=envelope.angle_min_rad and q.max()<=envelope.angle_max_rad,
-            Reason.ENVELOPE_LIMITED,"position trajectory leaves angle envelope")
+    if envelope.angle_min_rad is not None:
+        require(q.min()>=envelope.angle_min_rad and q.max()<=envelope.angle_max_rad,
+                Reason.ENVELOPE_LIMITED,"position trajectory leaves angle envelope")
     return t,np.c_[q,v,a,np.full(len(t),posture)],{
         "zero_reference_time":float(stop),"command_time":start,"step_rad":distance}

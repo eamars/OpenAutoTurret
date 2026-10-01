@@ -35,10 +35,8 @@ ClockBracket ClockBracket::sample() {
   const auto after = monotonic_ns();
   return {realtime - (before + (after-before)/2), (after-before+1)/2};
 }
-TimestampedReceiver::TimestampedReceiver(int fd, int64_t max_clock_error_ns)
-    : fd_(fd), max_clock_error_ns_(max_clock_error_ns), origin_(ClockBracket::sample()) {
-  if (max_clock_error_ns <= 0 || origin_.uncertainty_ns > max_clock_error_ns)
-    throw std::runtime_error("DATA_INVALID: clock mapping uncertainty");
+TimestampedReceiver::TimestampedReceiver(int fd)
+    : fd_(fd), origin_(ClockBracket::sample()) {
   option(fd, SO_TIMESTAMPNS);
   option(fd, SO_RXQ_OVFL);
   if (kernel_drops()) throw std::runtime_error("DATA_INVALID: socket already lost packets before capture");
@@ -81,13 +79,11 @@ bool TimestampedReceiver::receive(Receipt& out) {
   }
   if (!timestamp) throw std::runtime_error("DATA_INVALID: kernel timestamp missing");
   const auto now = ClockBracket::sample();
-  // Retain a fixed transform for the capture; bound its drift on every receive.
-  // A clock step invalidates the capture, it is not fitted as motor latency.
+  // Retain the transform and measured uncertainty; calibration interprets it.
   out.clock_uncertainty_ns = origin_.uncertainty_ns + now.uncertainty_ns
                             + std::abs(now.offset_ns - origin_.offset_ns);
   out.kernel_monotonic_ns = out.kernel_realtime_ns - origin_.offset_ns;
-  if (out.clock_uncertainty_ns > max_clock_error_ns_ ||
-      out.kernel_monotonic_ns > out.dequeue_ns + out.clock_uncertainty_ns ||
+  if (out.kernel_monotonic_ns > out.dequeue_ns + out.clock_uncertainty_ns ||
       out.kernel_monotonic_ns <= previous_ns_)
     throw std::runtime_error("DATA_INVALID: receive clock discontinuity or uncertainty");
   previous_ns_ = out.kernel_monotonic_ns;

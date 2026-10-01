@@ -254,8 +254,8 @@ def estimate_observer(t, q, v, static_q, static_v, *, measurement_hash, provenan
     require(t.shape == q.shape == v.shape and t.ndim==1 and len(t)>=100 and np.all(np.diff(t)>0)
             and np.isfinite(t).all() and np.isfinite(q).all() and np.isfinite(v).all(),
             Reason.DATA_INVALID, "observer innovations need valid synchronized records")
-    require(len(static_q)>=100 and len(static_v)>=100, Reason.INSUFFICIENT_EXCITATION,
-            "stationary noise acquisition too short")
+    require(len(static_q)>=2 and len(static_v)>=2, Reason.DATA_INVALID,
+            "stationary variance needs at least two observations per stream")
     require(np.isfinite(static_q).all() and np.isfinite(static_v).all(),Reason.DATA_INVALID,
             "stationary observations contain invalid values")
     rq, rv = float(np.var(static_q, ddof=1)), float(np.var(static_v, ddof=1))

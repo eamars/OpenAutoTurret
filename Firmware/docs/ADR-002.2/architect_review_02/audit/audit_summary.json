@@ -1,0 +1,114 @@
+{
+  "audit_scope": "RECOMPUTED_EXPORTED_TRACE_ERRORS_AND_INSPECTED_REPORTED_METADATA",
+  "does_not_rerun_original_optimizer_or_simulator": true,
+  "source_archive_name": "ADR-002.2-model-evidence-20261001.zip",
+  "source_archive_sha256_generated_by_this_audit": "c5d9171889770a3c894e50a42215920375224e468a6e56d087c93e0d975fe0d2",
+  "source_member_count": 115,
+  "physical_observation_run_count": 11,
+  "physical_prediction_count": 88,
+  "physical_reported_passes": 0,
+  "metrics_comparison_count": 470,
+  "max_absolute_difference_recomputed_vs_reported_numeric_metrics": 0.0,
+  "reported_solver_success_count": 3,
+  "reported_physical_solver_budget_exhaustions": 5,
+  "noisy_synthetic_parameter_gate_passes": 3,
+  "noisy_synthetic_solver_successes": 0,
+  "noisy_synthetic_reported_trajectory_gate_passes": 7,
+  "noisy_synthetic_reported_trajectory_count": 9,
+  "no_motion_selection_cases": [
+    {
+      "label": "algebraic-stribeck-affine",
+      "run_id": "yaw-descended-03",
+      "role": "selection",
+      "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-descended-03.npz",
+      "reported_passed": false,
+      "reported_failures": [
+        "angle_rms",
+        "velocity_rms",
+        "structured_velocity_residual"
+      ],
+      "q": {
+        "rms": 0.039555877113381134,
+        "mean": -0.03540459453965399,
+        "max_abs": 0.05215534405975175,
+        "endpoint_error": -0.037582526574838404,
+        "native_samples": 11576
+      },
+      "v": {
+        "rms": 0.030216656499212267,
+        "mean": -0.003216287549394882,
+        "max_abs": 0.2373252673459462,
+        "endpoint_error": 0.0018611159207193144,
+        "native_samples": 580
+      },
+      "current": {
+        "rms": 0.0025303979123886397,
+        "mean": 2.9789444997685512e-05,
+        "max_abs": 0.010986328125,
+        "endpoint_error": -0.00311279296875,
+        "native_samples": 11576
+      },
+      "observed_q_span_deg": 3.032226562499988,
+      "predicted_q_span_deg": 0.0,
+      "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+      "prediction_initial_constant_q_rms_deg": 2.2663848135348648,
+      "q_rms_deg": 2.2663848135348648,
+      "v_rms_deg_s": 1.731286888401412
+    },
+    {
+      "label": "first_order-stribeck-affine",
+      "run_id": "yaw-descended-03",
+      "role": "selection",
+      "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-descended-03.npz",
+      "reported_passed": false,
+      "reported_failures": [
+        "angle_rms",
+        "velocity_rms",
+        "structured_velocity_residual"
+      ],
+      "q": {
+        "rms": 0.039555877225702744,
+        "mean": -0.03540459466514561,
+        "max_abs": 0.05215534418524337,
+        "endpoint_error": -0.03758252670033002,
+        "native_samples": 11576
+      },
+      "v": {
+        "rms": 0.03021665651550879,
+        "mean": -0.0032162871573714713,
+        "max_abs": 0.2373252673459462,
+        "endpoint_error": 0.0018611159207193144,
+        "native_samples": 580
+      },
+      "current": {
+        "rms": 0.003576475244902534,
+        "mean": 3.0112609580897138e-05,
+        "max_abs": 0.01476100933763097,
+        "endpoint_error": -0.00311279296875,
+        "native_samples": 11576
+      },
+      "observed_q_span_deg": 3.032226562499988,
+      "predicted_q_span_deg": 0.0,
+      "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+      "prediction_initial_constant_q_rms_deg": 2.266384819970419,
+      "q_rms_deg": 2.266384819970419,
+      "v_rms_deg_s": 1.731286889335134
+    }
+  ],
+  "coulomb_threshold_example": {
+    "source": "results/constant.json#/comparisons/0/model",
+    "static_negative_A_equivalent": 0.267553349534901,
+    "static_positive_A_equivalent": 0.2691468254574402,
+    "probe_min_tx_A": -0.24774169921875,
+    "probe_max_tx_A": 0.2490234375
+  },
+  "all_checked_evidence_consistency_tests_passed": true,
+  "qualification": "UNQUALIFIED",
+  "deployment_authorized": false,
+  "limitations": [
+    "No physical experiments or new fitting performed.",
+    "Original source, event transitions and actual actuator current semantics are not independently verified.",
+    "Solver flags and sensitivity values are reported metadata, not rerun results.",
+    "A local archive digest checks reproducibility of this input, not equivalence to unseen repository originals."
+  ]
+}

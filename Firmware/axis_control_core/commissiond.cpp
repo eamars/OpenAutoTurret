@@ -14,6 +14,10 @@ int main(int argc,char** argv) {
     return ota::commission::current_preparation_session(argv[2]);
   if(argc==3 && std::strcmp(argv[1],"--characterize-current")==0)
     return ota::commission::current_characterization_session(argv[2]);
+  if(argc==3 && std::strcmp(argv[1],"--acquire-yaw")==0)
+    return ota::commission::yaw_acquisition_session(argv[2]);
+  if(argc==3 && std::strcmp(argv[1],"--control-yaw")==0)
+    return ota::commission::yaw_control_session(argv[2]);
   if(argc==3 && std::strcmp(argv[1],"--establish-homing")==0)
     return ota::commission::sensorless_homing_session(argv[2]);
   if(argc==3 && std::strcmp(argv[1],"--validate-homing")==0)
@@ -23,6 +27,8 @@ int main(int argc,char** argv) {
            <<"Full firmware build: --capture-baseline <capture-manifest> (discovery, STOP, reads; no enable)\n"
            <<"--prepare-current <manifest> (neutral current-mode verification; no excitation)\n"
            <<"--characterize-current <manifest> (neutral current measurement characterization)\n"
+           <<"--acquire-yaw <manifest> (finite yaw current acquisition; pitch disabled)\n"
+           <<"--control-yaw <manifest> (finite shared-core yaw 3a; pitch disabled)\n"
            <<"--establish-homing <manifest> (bounded pitch sensorless homing)\n"
            <<"--validate-homing <manifest> (no-I/O homing parameter validation)\n";
   return 2;

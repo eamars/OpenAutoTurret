@@ -69,7 +69,8 @@ axes:
     # pitch while motion.modes asks both for the same 20 deg/s. Acceleration stays under
     # pitch's because yaw carries the whole payload.
     max_velocity_deg_s: 30
-    max_acceleration_deg_s2: 60
+    # Owner 2026-10-01: unattended acceleration and braking are limited to 30 deg/s².
+    max_acceleration_deg_s2: 30
     max_jerk_deg_s3: 300
     # Yaw drive authority in raw GM6020 counts (controller accepts <= 25000). 9000 stalled the
     # axis with the output pinned; 15000 moves it. The slip ring makes resistance angle-dependent,

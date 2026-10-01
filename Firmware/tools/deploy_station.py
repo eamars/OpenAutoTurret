@@ -1,4 +1,4 @@
-"""Deploy committed source from Windows/Linux using git, ssh, scp and remote Bash.
+"""Deploy production source or a working-tree acquisition release using ssh and scp.
 
 Builds a separate release; --activate opts into stopping the old stack and
 starting the new one. Never resets, cleans or overwrites the target checkout.
@@ -11,11 +11,30 @@ import sys
 from pathlib import Path
 import shlex
 import subprocess
+import tarfile
 import tempfile
 
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
+
+
+def archive_acquisition_source(repo, archive):
+    """Archive current Firmware files; ignore build, environment and runtime artifacts.
+
+    Git supplies filenames only. No revision, clean-tree check or content digest
+    is used; the bytes come directly from the current working tree.
+    """
+    names = run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "Firmware"],
+                cwd=repo, capture_output=True).stdout.split(b"\0")
+    with tarfile.open(archive, "w") as target:
+        for name in sorted(set(names)):
+            if not name:
+                continue
+            relative = name.decode("utf-8")
+            path = repo / relative
+            if path.is_file() or path.is_symlink():
+                target.add(path, arcname=relative, recursive=False)
 
 
 def main():
@@ -51,8 +70,10 @@ def main():
                              "binaries: the station runs the suite rather than building it. "
                              "Compiling needs no hardware; only running the tests does.")
     parser.add_argument("--baseline-bundle", type=pathlib.Path,
-                        help="ship a committed ADR-002.2 baseline, neutral-current, characterization or sensorless-homing acquisition bundle into a separate release; "
+                        help="ship the current Firmware working tree with an ADR-002.2 baseline, neutral-current, characterization or sensorless-homing acquisition bundle into a separate release; "
                              "validate with launcher check, without starting devices, installing packages or compiling")
+    parser.add_argument("--session-label",
+                        help="human acquisition session label; defaults to the label in --baseline-bundle")
     parser.add_argument("--commission-hardware", action="store_true",
                         help="build/check the bounded mixed-hardware probe; does not start motors")
     parser.add_argument("--commission-mixed-controller", action="store_true",
@@ -71,19 +92,24 @@ def main():
     if args.baseline_bundle and any((args.activate, args.prebuilt, args.probe_build,
                                     args.commission_hardware, args.commission_mixed_controller, args.probe_imu)):
         parser.error("baseline-bundle is a separate non-activating deployment mode")
+    if args.session_label and not args.baseline_bundle:
+        parser.error("--session-label belongs to --baseline-bundle")
     repo = Path(__file__).resolve().parents[2]
     requirements = repo / "Firmware" / "requirements-station.txt"
     if not requirements.is_file():
         parser.error(f"Missing station dependency manifest: {requirements}")
-    status = run(["git", "status", "--porcelain", "--untracked-files=normal"],
-                 cwd=repo, capture_output=True, text=True).stdout
-    if status.strip():
-        parser.error("Commit source changes before deployment; run/ artifacts are ignored")
-    revision = run(["git", "rev-parse", "HEAD"], cwd=repo,
-                   capture_output=True, text=True).stdout.strip()
     if args.baseline_bundle:
         from adr0022_baseline_bundle import validate
-        acquisition_record = validate(args.baseline_bundle, revision, repo / "Firmware")
+        acquisition_record = validate(args.baseline_bundle, args.session_label, repo / "Firmware")
+        deployment_label = acquisition_record["session_label"]
+    else:
+        status = run(["git", "status", "--porcelain", "--untracked-files=normal"],
+                     cwd=repo, capture_output=True, text=True).stdout
+        if status.strip():
+            parser.error("Commit source changes before deployment; run/ artifacts are ignored")
+        revision = run(["git", "rev-parse", "HEAD"], cwd=repo,
+                       capture_output=True, text=True).stdout.strip()
+        deployment_label = revision[:12]
     quote = shlex.quote
     connection = []
     if args.connect_address:
@@ -108,35 +134,40 @@ def main():
     # manifest; no OS package installation or root shell is needed here.
     venv = args.root.rstrip("/") + "/run/station-venv"
     remote(f"test -x {quote(venv + '/bin/python')}")
-    release = remote(f"mkdir -p {quote(releases)} && mktemp -d {quote(releases + '/' + revision[:12] + '.XXXXXX')}",
+    release = remote(f"mkdir -p {quote(releases)} && mktemp -d {quote(releases + '/' + deployment_label + '.XXXXXX')}",
                      capture_output=True, text=True).stdout.strip()
     if not release.startswith(releases + "/") or "\n" in release:
         raise RuntimeError("Unexpected release path from target")
     with tempfile.TemporaryDirectory(prefix="ota-deploy-") as temporary:
         archive = Path(temporary) / "source.tar"
-        run(["git", "archive", "--format=tar", f"--output={archive}", revision], cwd=repo)
+        if args.baseline_bundle:
+            archive_acquisition_source(repo, archive)
+        else:
+            run(["git", "archive", "--format=tar", f"--output={archive}", revision], cwd=repo)
         run(["scp", *connection, str(archive), f"{args.host}:{release}/source.tar"])
+    identity_file = "/SESSION_LABEL" if args.baseline_bundle else "/REVISION"
+    identity_text = deployment_label if args.baseline_bundle else revision
     remote(f"tar -xf {quote(release + '/source.tar')} -C {quote(release)} && "
            f"rm -- {quote(release + '/source.tar')} && "
            f"mkdir -p {quote(release + '/run')} && "
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
-           f"printf '%s\\n' {quote(revision)} > {quote(release + '/REVISION')}")
+           f"printf '%s\\n' {quote(identity_text)} > {quote(release + identity_file)}")
     if args.baseline_bundle:
         # Dedicated acquisition release. Existing production venv/configuration
         # and active services are untouched; the check opens no device transport.
         bundle = release + "/baseline-bundle.tar"
         run(["scp", *connection, str(args.baseline_bundle), f"{args.host}:{bundle}"])
         launch_option = acquisition_record.get("launch_option", "--capture-baseline")
-        capture_directory = release + {"--establish-homing": "/run/sensorless-homing", "--prepare-current": "/run/current-preparation", "--characterize-current": "/run/current-characterization", "--capture-baseline": "/run/baseline"}[launch_option]
+        capture_directory = release + {"--control-yaw": "/run/yaw-control", "--acquire-yaw": "/run/yaw-acquisition", "--establish-homing": "/run/sensorless-homing", "--prepare-current": "/run/current-preparation", "--characterize-current": "/run/current-characterization", "--capture-baseline": "/run/baseline"}[launch_option]
         helper = release + "/Firmware/tools/adr0022_baseline_bundle.py"
         remote(f"{quote(venv + '/bin/python')} {quote(helper)} install --bundle {quote(bundle)} "
-               f"--revision {quote(revision)} --firmware {quote(release + '/Firmware')} "
+               f"--session-label {quote(deployment_label)} --firmware {quote(release + '/Firmware')} "
                f"--output-directory {quote(capture_directory)}")
         manifest = capture_directory + "/manifest.json"
         script = release + "/Firmware/scripts/run_application.sh"
         remote(f"OTA_RUN_DIR={quote(release + '/run/stack')} bash {quote(script)} "
                f"check {launch_option} {quote(manifest)}")
-        print(f"Acquisition release prepared; devices unopened: {release}\nRevision: {revision}\n"
+        print(f"Acquisition release prepared; devices unopened: {release}\nSession: {deployment_label}\n"
               f"Manifest: {manifest}\n"
               f"Capture: OTA_RUN_DIR={quote(release + '/run/stack')} bash {quote(script)} "
               f"run {launch_option} {quote(manifest)}", flush=True)

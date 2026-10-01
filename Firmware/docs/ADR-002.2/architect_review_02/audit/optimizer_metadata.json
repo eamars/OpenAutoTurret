@@ -1,0 +1,218 @@
+[
+  {
+    "label": "algebraic-coulomb-constant",
+    "reported_solver_success": true,
+    "reported_evaluations": 57,
+    "reported_message": "`xtol` termination condition is satisfied.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 0.0,
+      "static_excess_positive": 0.0
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -16939.0,
+    "q_max_numerical_only": 16939.0
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "reported_solver_success": false,
+    "reported_evaluations": 200,
+    "reported_message": "The maximum number of function evaluations is exceeded.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "stribeck_negative",
+      "stribeck_positive"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 929924.9965423393,
+      "static_excess_positive": 1957748.5040361471
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -16939.0,
+    "q_max_numerical_only": 16939.0
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "reported_solver_success": true,
+    "reported_evaluations": 146,
+    "reported_message": "`xtol` termination condition is satisfied.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "actuator_tau"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 453034.97847211116,
+      "static_excess_positive": 1666134.7435947405
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -16939.0,
+    "q_max_numerical_only": 16939.0
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "reported_solver_success": false,
+    "reported_evaluations": 200,
+    "reported_message": "The maximum number of function evaluations is exceeded.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "actuator_tau",
+      "stribeck_negative",
+      "stribeck_positive"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 946661.2295409479,
+      "static_excess_positive": 1943853.9640965464
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -16939.0,
+    "q_max_numerical_only": 16939.0
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "reported_solver_success": true,
+    "reported_evaluations": 44,
+    "reported_message": "`xtol` termination condition is satisfied.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "load_slope",
+      "current_delay",
+      "current_tau"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 0.0,
+      "static_excess_positive": 0.0
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -5.284931635987538e+17,
+    "q_max_numerical_only": 5.284931635987538e+17
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "reported_solver_success": false,
+    "reported_evaluations": 200,
+    "reported_message": "The maximum number of function evaluations is exceeded.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "stribeck_negative",
+      "stribeck_positive",
+      "load_slope",
+      "current_delay",
+      "current_tau"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 2430133.3818943934,
+      "static_excess_positive": 5471816.658382647
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -5.284931635987538e+17,
+    "q_max_numerical_only": 5.284931635987538e+17
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "reported_solver_success": false,
+    "reported_evaluations": 200,
+    "reported_message": "The maximum number of function evaluations is exceeded.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "actuator_tau",
+      "load_slope",
+      "current_delay",
+      "current_tau"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 123314.61931805882,
+      "static_excess_positive": 861317.8618209186
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -5.284931635987538e+17,
+    "q_max_numerical_only": 5.284931635987538e+17
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "reported_solver_success": false,
+    "reported_evaluations": 200,
+    "reported_message": "The maximum number of function evaluations is exceeded.",
+    "estimated_coordinates": [
+      "a",
+      "viscous",
+      "coulomb_negative",
+      "coulomb_positive",
+      "static_excess_negative",
+      "static_excess_positive",
+      "transport_delay",
+      "gyro_tau",
+      "gyro_delay",
+      "actuator_tau",
+      "stribeck_negative",
+      "stribeck_positive",
+      "load_slope",
+      "current_delay",
+      "current_tau"
+    ],
+    "static_excess_sensitivity_norms": {
+      "static_excess_negative": 2228827.296584042,
+      "static_excess_positive": 11746530.99571787
+    },
+    "load_offset": 0.0,
+    "q_min_numerical_only": -5.284931635987538e+17,
+    "q_max_numerical_only": 5.284931635987538e+17
+  }
+]

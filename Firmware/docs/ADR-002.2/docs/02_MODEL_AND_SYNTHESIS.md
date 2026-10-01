@@ -1,6 +1,16 @@
 # 02 · 建模、系统辨识与数学控制器计算
 
+> **2026-10-01最新优先修订：** [辨识修复与前瞻验证](08_IDENTIFICATION_REPAIR.md)依据[架构师review](../architect_review_01/ADR-002.2-independent-review.md)，覆盖下文仅a/b/h移动模型、统一时延、短窗预测及阶段1完成的冲突规则。采用预声明执行器/机械/摩擦/测量族、整run训练/选择/最终验证、完整状态连续轨迹及闭环估计检查；只有支持域内预测合格模型冻结后才能合成，失败模型不得先做有界实机反馈探针。下文理想PI公式仅为经验证的局部特例，不代替非线性增量动力学与A/B/C验证。
+
 以下均为设计方法[D]，不是实测参数。源于一般机械辨识方法的内容见[M1]；本包推导和数值选择是拟实施的工程约定。
+
+Executable parent mathematics now lives in
+[assembly_dynamics.py](../../../commissioning/assembly_dynamics.py): supplied two-axis
+geometry defines coupled M/C/G, with cable/friction loads and actuator mapping
+supplied explicitly. Independent mechanics probes do not establish station
+parameters or native/production coupling. Review 02's
+[recovery amendment](09_ESTIMATOR_RECOVERY.md) remains authoritative for estimation,
+configuration support, synthesis and qualification.
 
 ## 1. 输入、坐标和模型的边界
 

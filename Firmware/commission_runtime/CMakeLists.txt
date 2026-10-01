@@ -1,6 +1,6 @@
-add_library(commission_capture STATIC capture.cpp session.cpp readback.cpp active_session.cpp homing_session.cpp)
+add_library(commission_capture STATIC capture.cpp session.cpp readback.cpp active_session.cpp homing_session.cpp yaw_session.cpp yaw_control_session.cpp)
 target_include_directories(commission_capture PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(commission_capture PUBLIC ota_core)
+target_link_libraries(commission_capture PUBLIC ota_core axis_control_core)
 target_compile_options(commission_capture PRIVATE -Wall -Wextra -Werror)
 add_executable(probe-commission-capture probe_capture.cpp)
 target_link_libraries(probe-commission-capture PRIVATE commission_capture)

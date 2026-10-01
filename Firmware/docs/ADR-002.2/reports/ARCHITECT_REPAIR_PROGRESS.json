@@ -1,0 +1,403 @@
+{
+  "schema": "adr0022.architect-response-progress/1",
+  "authority": "Firmware/docs/ADR-002.2/architect_review_01/ADR-002.2-independent-review.md",
+  "amendment": "Firmware/docs/ADR-002.2/docs/08_IDENTIFICATION_REPAIR.md",
+  "report": "Firmware/docs/ADR-002.2/reports/ARCHITECT_REPAIR_PROGRESS.md",
+  "as_of": "2026-10-01",
+  "stage1": "IN_PROGRESS",
+  "yaw_qualification": "UNQUALIFIED",
+  "candidate14": "NONDEPLOYABLE; NEVER_PHYSICALLY_RUN",
+  "controller_synthesis": "NOT_RUN",
+  "station_access": "NOT_RUN",
+  "fresh_station_status": "NOT_QUERIED",
+  "physical_trials": "NOT_RUN",
+  "hashes_generated_or_checked": false,
+  "exact_review_audit": "REPRODUCED_WITH_FLOAT_ROUNDOFF_ONLY",
+  "clock_audit": {
+    "producer_epoch_lift": "VERIFIED_PER_EVENT_WHEN_FORMULA_MATCHES",
+    "physical_sample_timing": "UNKNOWN",
+    "independent_device_clock": false,
+    "physical_journals": 25,
+    "imu_samples": 59588,
+    "can_receipts": 312948
+  },
+  "family_implementation": "OFFLINE_DIAGNOSTIC_UNQUALIFIED",
+  "estimator": "UNVERIFIED_SYNTHETIC_RECOVERY_FAILED",
+  "numerical_regime_search": "COMPLETED_DIAGNOSTIC; NO_ACCEPTED_MODEL",
+  "model_selection_outcome": "MODEL_DATA_FAILURE",
+  "numerical_domains": "TRAINING_ONLY_MATHEMATICAL_ENVELOPES; NOT_PHYSICAL_TRAVEL_OR_CERTIFIED_SUPPORT",
+  "comparisons": [
+    {
+      "evidence": "run/adr0022-stage2/architect-review-response-01/comparison-constant-numerical-domain",
+      "outcome": "MODEL_DATA_FAILURE",
+      "selected_label": null,
+      "final_holdout_evaluated": false,
+      "numerical_interpretation": "RETURNED_PARAMETERS_FAIL; STRUCTURAL_REJECTION_NOT_ESTABLISHED",
+      "families": [
+        {
+          "label": "algebraic-coulomb-constant",
+          "optimizer_success": true,
+          "optimizer_evaluations": 57,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 72.77235122343633,
+              "v_rms_deg_s": 35.88286838554712,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 126.90071695712473,
+              "v_rms_deg_s": 59.29350286536638,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 117.25109970745206,
+              "v_rms_deg_s": 49.1323923816657,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "algebraic-stribeck-constant",
+          "optimizer_success": false,
+          "optimizer_evaluations": 200,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 56.91242538182925,
+              "v_rms_deg_s": 29.54291526248174,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 114.1279496997418,
+              "v_rms_deg_s": 55.78621589857321,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 123.17643194903239,
+              "v_rms_deg_s": 50.302658800738975,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "first_order-coulomb-constant",
+          "optimizer_success": true,
+          "optimizer_evaluations": 146,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 69.48063017436168,
+              "v_rms_deg_s": 28.89501729383321,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 109.01430753070946,
+              "v_rms_deg_s": 57.19622988117489,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 129.27141773600556,
+              "v_rms_deg_s": 46.14285385489241,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "first_order-stribeck-constant",
+          "optimizer_success": false,
+          "optimizer_evaluations": 200,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 58.2438392742393,
+              "v_rms_deg_s": 29.853313367026917,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 113.83527806571033,
+              "v_rms_deg_s": 55.23001682001836,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 114.4496783704624,
+              "v_rms_deg_s": 53.76961770815786,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evidence": "run/adr0022-stage2/architect-review-response-01/comparison-affine-numerical-domain",
+      "outcome": "MODEL_DATA_FAILURE",
+      "selected_label": null,
+      "final_holdout_evaluated": false,
+      "numerical_interpretation": "RETURNED_PARAMETERS_FAIL; STRUCTURAL_REJECTION_NOT_ESTABLISHED",
+      "families": [
+        {
+          "label": "algebraic-coulomb-affine",
+          "optimizer_success": true,
+          "optimizer_evaluations": 44,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 94.90668131743661,
+              "v_rms_deg_s": 41.926946543103305,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 142.00243250008376,
+              "v_rms_deg_s": 63.49429241069566,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 126.4789236519757,
+              "v_rms_deg_s": 52.637849234465556,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "algebraic-stribeck-affine",
+          "optimizer_success": false,
+          "optimizer_evaluations": 200,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 2.2663848135348648,
+              "v_rms_deg_s": 1.731286888401412,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 102.82834869781416,
+              "v_rms_deg_s": 53.87910455131588,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 93.14127612935638,
+              "v_rms_deg_s": 42.50043101414865,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "first_order-coulomb-affine",
+          "optimizer_success": false,
+          "optimizer_evaluations": 200,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 95.26605444779509,
+              "v_rms_deg_s": 42.327877584607215,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 141.68009754212818,
+              "v_rms_deg_s": 63.76461740611004,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 127.20046978627352,
+              "v_rms_deg_s": 52.44663538884217,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        },
+        {
+          "label": "first_order-stribeck-affine",
+          "optimizer_success": false,
+          "optimizer_evaluations": 200,
+          "selection_passed": false,
+          "selection": [
+            {
+              "run_id": "yaw-descended-03",
+              "q_rms_deg": 2.266384819970419,
+              "v_rms_deg_s": 1.731286889335134,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-case13-01",
+              "q_rms_deg": 119.79114012577234,
+              "v_rms_deg_s": 60.63588414327082,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            },
+            {
+              "run_id": "yaw-information-round2-case20-negative",
+              "q_rms_deg": 98.07128237225687,
+              "v_rms_deg_s": 41.38847818054261,
+              "metric_failures": [
+                "angle_rms",
+                "velocity_rms",
+                "current_observation_rms",
+                "structured_velocity_residual"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "prior_comparison_evidence": [
+    "comparison",
+    "comparison-feasible",
+    "comparison-affine",
+    "comparison-training-seed-probe",
+    "comparison-training-domain-probe"
+  ],
+  "final_validation": {
+    "historical_holdout": "NOT_EVALUATED; NO_SELECTION_PASSED",
+    "unseen_prospective_final_block": "ABSENT",
+    "stage3a": "NOT_PASSED",
+    "stage3b": "NOT_PASSED"
+  },
+  "tests": {
+    "targeted": {
+      "passed": 19,
+      "failed": 0
+    },
+    "ctest_workstation": {
+      "passed": 82,
+      "failed": 1,
+      "excluded": "retained_homing",
+      "failure": "test_mixed_station_config: existing yaw30/pitch60 vs parity/60 assertions"
+    },
+    "native_analytic_probe": "PASSED"
+  },
+  "incomplete_stage1_requirements": [
+    "qualified noisy closed-loop estimator",
+    "event-aligned short horizons and full transition metrics",
+    "residual tests against all required factors and supported uncertainty profiles",
+    "full two-axis and operating-configuration identification"
+  ],
+  "next_required": [
+    "training-only numerical regime crossing and estimator verification",
+    "physical current/clock/coordinate qualification",
+    "only necessary program-selected discriminating evidence, preserving consumed budgets",
+    "supported predictive model freeze before synthesis",
+    "saved prospective forecasts and physical 3a/production3b",
+    "both axes and complete operating-configuration matrix"
+  ]
+}

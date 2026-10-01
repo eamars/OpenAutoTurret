@@ -1,8 +1,258 @@
 """Bounded operating domains, protection facts, and selective asset invalidation."""
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 import numpy as np
 from .contracts import Reason,digest,require
+
+
+class FactStatus(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    REPORTED = "REPORTED"
+    VERIFIED = "VERIFIED"
+    OWNER_CONFIRMED = "OWNER_CONFIRMED"
+    SYNTHETIC = "SYNTHETIC"
+
+
+def _fact_value(value):
+    if isinstance(value, (tuple, list)):
+        return tuple(_fact_value(item) for item in value)
+    require(type(value) in (str, bool, int, float) and
+            (not isinstance(value, (int, float)) or np.isfinite(value)),
+            Reason.DATA_INVALID, "configuration facts need finite explicit scalar/tuple values")
+    require(not isinstance(value, str) or bool(value.strip()), Reason.DATA_INVALID,
+            "empty configuration value is unknown, not a usable fact")
+    return value
+
+
+def _same_fact_value(first, second):
+    if isinstance(first, tuple) and isinstance(second, tuple):
+        return len(first) == len(second) and all(_same_fact_value(a, b) for a, b in zip(first, second))
+    if type(first) is bool or type(second) is bool:
+        return type(first) is type(second) and first == second
+    return first == second
+
+
+@dataclass(frozen=True)
+class ConfigurationFact:
+    value: object
+    status: FactStatus
+    source: str
+
+    def __post_init__(self):
+        require(isinstance(self.status, FactStatus) and isinstance(self.source, str)
+                and bool(self.source.strip()), Reason.DATA_INVALID,
+                "configuration fact status and source must be explicit")
+        if self.status == FactStatus.UNKNOWN:
+            require(self.value is None, Reason.DATA_INVALID, "unknown configuration value must remain None")
+        else:
+            object.__setattr__(self, "value", _fact_value(self.value))
+
+
+@dataclass(frozen=True)
+class ConfigurationFacts:
+    context_id: str  # physical/synthetic assembly context; never a capture procedure ID
+    provenance: str
+    facts: dict[str, ConfigurationFact]
+
+    def __post_init__(self):
+        require(isinstance(self.context_id, str) and bool(self.context_id.strip())
+                and self.provenance in ("MEASURED", "SYNTHETIC") and bool(self.facts),
+                Reason.DATA_INVALID, "descriptive configuration context, provenance and facts required")
+        copied = dict(self.facts)
+        require(all(isinstance(k, str) and k.strip() and isinstance(v, ConfigurationFact)
+                    for k, v in copied.items()), Reason.DATA_INVALID, "typed configuration facts required")
+        require(self.provenance == "SYNTHETIC" or
+                all(v.status != FactStatus.SYNTHETIC for v in copied.values()),
+                Reason.DATA_INVALID, "synthetic facts cannot be relabelled as measured")
+        # Copy prevents mutation of a caller's dictionary from rewriting the binding.
+        from types import MappingProxyType
+        object.__setattr__(self, "facts", MappingProxyType(copied))
+
+    def document(self):
+        return {"context_id": self.context_id, "provenance": self.provenance,
+                "facts": {name: {"value": fact.value, "status": fact.status.value,
+                                  "source": fact.source} for name, fact in self.facts.items()}}
+
+
+@dataclass(frozen=True)
+class ConfigurationSupport:
+    model_revision: str
+    baseline: ConfigurationFacts
+    invariant_fields: tuple[str, ...]
+    numeric_support: dict[str, tuple[float, float]] = field(default_factory=dict)
+    unknown_with_response: tuple[str, ...] = ()
+    qualification: str = "DIAGNOSTIC_ONLY"
+
+    def __post_init__(self):
+        require(isinstance(self.model_revision, str) and bool(self.model_revision.strip())
+                and isinstance(self.baseline, ConfigurationFacts)
+                and self.qualification in ("DIAGNOSTIC_ONLY", "SYNTHETIC_OFFLINE", "PREDICTIVE_MODEL"),
+                Reason.DATA_INVALID, "explicit model revision and configuration support required")
+        object.__setattr__(self, "invariant_fields", tuple(self.invariant_fields))
+        object.__setattr__(self, "unknown_with_response", tuple(self.unknown_with_response))
+        require(len(set(self.invariant_fields)) == len(self.invariant_fields)
+                and bool(self.invariant_fields) and all(isinstance(k, str) and k.strip() for k in self.invariant_fields)
+                and not set(self.invariant_fields) & set(self.numeric_support)
+                and set(self.unknown_with_response) <= set(self.invariant_fields), Reason.DATA_INVALID,
+                "distinct configuration invariants/support coordinates required")
+        require(set(self.baseline.facts) <= set(self.invariant_fields) | set(self.numeric_support),
+                Reason.DATA_INVALID, "every baseline fact must have an invariant or supported interval")
+        require(set(self.unknown_with_response) <= {"payload.mass_kg"}, Reason.DATA_INVALID,
+                "response may cover unknown payload mass, never motor/settings/calibration/clock facts")
+        copied = {}
+        for name, bounds in self.numeric_support.items():
+            require(isinstance(name, str) and name.strip() and len(bounds) == 2
+                    and all(type(v) in (int, float) for v in bounds) and np.isfinite(bounds).all()
+                    and bounds[0] <= bounds[1], Reason.DATA_INVALID, "invalid configuration support interval")
+            copied[name] = tuple(bounds)
+            baseline = self.baseline.facts.get(name)
+            require(baseline is None or baseline.status == FactStatus.UNKNOWN or
+                    (type(baseline.value) in (int, float) and bounds[0] <= baseline.value <= bounds[1]),
+                    Reason.DATA_INVALID, "baseline configuration must lie in its declared support interval")
+        from types import MappingProxyType
+        object.__setattr__(self, "numeric_support", MappingProxyType(copied))
+
+
+@dataclass(frozen=True)
+class ConfigurationResponse:
+    model_revision: str
+    context: ConfigurationFacts
+    prediction_passed: bool
+
+    def __post_init__(self):
+        require(isinstance(self.model_revision, str) and bool(self.model_revision.strip())
+                and isinstance(self.context, ConfigurationFacts) and type(self.prediction_passed) is bool,
+                Reason.DATA_INVALID, "response evidence must bind an exact model and context")
+
+
+def _response_matches(evidence, support, current):
+    # No global PASS, label-only match, digest or unspecified context wildcard.
+    return any(isinstance(item, ConfigurationResponse) and item.prediction_passed
+               and item.model_revision == support.model_revision and _same_context(item.context, current)
+               for item in evidence)
+
+
+def _same_context(first, second):
+    return (first.context_id == second.context_id and first.provenance == second.provenance
+            and set(first.facts) == set(second.facts) and
+            all(first.facts[name].status == second.facts[name].status
+                and first.facts[name].source == second.facts[name].source
+                and _same_fact_value(first.facts[name].value, second.facts[name].value)
+                for name in first.facts))
+
+
+def _configuration_invalidations(fields):
+    affected = set()
+    for name in fields:
+        if name.startswith("sensor.") or name.startswith("clock."):
+            affected.update(("measurement_calibration", "observer", "plant_parameters", "controller_candidate", "3a", "3b"))
+        else:
+            affected.update(("plant_parameters", "controller_candidate", "dual_axis_validation", "3a", "3b"))
+    return sorted(affected)
+
+
+def assess_configuration(support, current, *, response_evidence=(), purpose="DIAGNOSTIC"):
+    """Reuse assessment only: never arm, command, retry or certify physical safety."""
+    require(isinstance(support, ConfigurationSupport) and isinstance(current, ConfigurationFacts)
+            and purpose in ("DIAGNOSTIC", "SYNTHETIC_CONTROL", "PHYSICAL_MODEL"),
+            Reason.DATA_INVALID, "typed configuration assessment and purpose required")
+    changed, unknown = [], []
+    classified = set(support.invariant_fields) | set(support.numeric_support)
+    changed.extend(set(current.facts) - classified)
+    if purpose == "PHYSICAL_MODEL":
+        required = {"hardware.assembly", "payload.distribution", "mounting.geometry", "cable.route",
+                    "transmission.mapping", "motor.settings", "sensor.calibration", "base.orientation"}
+        unknown.extend(required - classified)
+    credible = ({FactStatus.SYNTHETIC} if purpose == "SYNTHETIC_CONTROL" else
+                {FactStatus.VERIFIED, FactStatus.OWNER_CONFIRMED})
+    for name in support.invariant_fields:
+        previous, present = support.baseline.facts.get(name), current.facts.get(name)
+        if previous is not None and present is not None and previous.status != FactStatus.UNKNOWN \
+                and present.status != FactStatus.UNKNOWN and not _same_fact_value(previous.value, present.value):
+            changed.append(name)
+        if previous is None or present is None or previous.status == FactStatus.UNKNOWN \
+                or present.status == FactStatus.UNKNOWN or (purpose != "DIAGNOSTIC" and
+                (previous.status not in credible or present.status not in credible)):
+            unknown.append(name)
+    for name, (low, high) in support.numeric_support.items():
+        fact = current.facts.get(name)
+        if fact is None or fact.status == FactStatus.UNKNOWN:
+            unknown.append(name)
+            continue
+        require(type(fact.value) in (int, float), Reason.DATA_INVALID, f"numeric configuration fact required: {name}")
+        if not low <= fact.value <= high:
+            changed.append(name)
+        if purpose != "DIAGNOSTIC" and fact.status not in credible:
+            unknown.append(name)
+    response_passed = _response_matches(response_evidence, support, current)
+    unresolved = [name for name in unknown if name not in support.unknown_with_response or not response_passed]
+    provenance_ok = current.provenance == support.baseline.provenance
+    if purpose == "SYNTHETIC_CONTROL":
+        provenance_ok = provenance_ok and current.provenance == "SYNTHETIC" and support.qualification == "SYNTHETIC_OFFLINE"
+    if purpose == "PHYSICAL_MODEL":
+        provenance_ok = provenance_ok and current.provenance == "MEASURED" and support.qualification == "PREDICTIVE_MODEL"
+    compatible = provenance_ok and not changed
+    if not compatible:
+        action = "UPDATE_PARAMETERS_AND_REVALIDATE"
+    elif unresolved:
+        action = "DIAGNOSTIC_ASSUMPTION_ONLY" if purpose == "DIAGNOSTIC" else "NEEDS_CONFIGURATION_EVIDENCE"
+    elif purpose == "PHYSICAL_MODEL" and not response_passed:
+        action = "NEEDS_MODEL_CONTEXT_PREDICTION"
+    else:
+        action = "REUSE_WITHIN_SUPPORT"
+    authorized = action == "REUSE_WITHIN_SUPPORT"
+    return {"action": action, "compatible": compatible, "supported": authorized,
+            "model_revision": support.model_revision, "context_id": current.context_id,
+            "changed_fields": sorted(set(changed)), "unknown_fields": sorted(set(unknown)),
+            "unresolved_fields": sorted(set(unresolved)), "model_context_prediction_passed": response_passed,
+            "invalidate": _configuration_invalidations(changed),
+            "preserve": ["raw_history", "model_family", "identification_method"],
+            "physical_3a": "NOT_RUN", "physical_3b": "NOT_RUN", "deployment_authorized": False}
+
+
+def configuration_pool(runs, *, support=None):
+    """Legacy context stays diagnostic; known incompatible facts cannot be pooled."""
+    entries = [(run.run_id, getattr(run, "configuration_facts", None)) for run in runs]
+    provided = [facts for _, facts in entries if facts is not None]
+    require(all(isinstance(facts, ConfigurationFacts) for facts in provided),
+            Reason.DATA_INVALID, "typed run configuration facts required")
+    require(all(facts is None or facts.provenance == run.provenance
+                for run, (_, facts) in zip(runs, entries)), Reason.DATA_INVALID,
+            "configuration provenance must match its observation run")
+    if support is None and provided:
+        names = tuple(sorted(set().union(*(facts.facts for facts in provided))))
+        support = ConfigurationSupport("diagnostic-fixed-family", provided[0], names)
+    if support is not None:
+        for name in support.invariant_fields:
+            known = [facts.facts[name].value for facts in provided if name in facts.facts
+                     and facts.facts[name].status != FactStatus.UNKNOWN]
+            require(not known or all(_same_fact_value(value, known[0]) for value in known), Reason.OPERATING_POINT_CHANGED,
+                    f"conflicting known fixed-family configurations: {name}")
+    reports = []
+    for run_id, facts in entries:
+        if facts is None or support is None:
+            decision = {"action": "DIAGNOSTIC_ASSUMPTION_ONLY", "compatible": True,
+                        "supported": False, "unknown_fields": ["physical_configuration"],
+                        "deployment_authorized": False}
+        else:
+            decision = assess_configuration(support, facts)
+            require(decision["compatible"], Reason.OPERATING_POINT_CHANGED,
+                    f"cannot pool fixed-family run {run_id}: {decision['changed_fields']}")
+        reports.append({"run_id": run_id, **decision})
+    return {"runs": reports, "support_status": "EXPLICIT_DIAGNOSTIC_SUPPORT" if reports and
+            all(row["supported"] for row in reports) else "UNKNOWN_CONFIGURATION_DIAGNOSTIC_ONLY",
+            "physical_qualification": False}
+
+
+def supported_snapshot(supports, current, *, response_evidence=()):
+    """Select a supported descriptive model revision without applying it to hardware."""
+    choices = [support.model_revision for support in supports if
+               assess_configuration(support, current, response_evidence=response_evidence,
+                                    purpose="PHYSICAL_MODEL")["supported"]]
+    require(bool(choices), Reason.OPERATING_POINT_CHANGED,
+            "no model has supported configuration and exact context-specific prediction evidence")
+    return sorted(choices)[0]
 
 
 @dataclass(frozen=True)
@@ -104,10 +354,15 @@ def invalidated_assets(changed_fields):
     return {"invalidate":sorted(affected),"preserve":["immutable_raw_history","model_method","identification_solver"]}
 
 
-def applicable_rollback(snapshots,domain,point,*,hardware,measurement,prediction_checks):
+def applicable_rollback(snapshots,domain,point,*,hardware,measurement,prediction_checks=None,
+                        configuration_supports=(),current_configuration=None,response_evidence=()):
+    require(isinstance(current_configuration, ConfigurationFacts) and bool(configuration_supports),
+            Reason.OPERATING_POINT_CHANGED, "rollback requires snapshot-specific structured configuration support")
+    selected = supported_snapshot(configuration_supports, current_configuration,
+                                  response_evidence=response_evidence)
     domain.check(hardware,measurement,point,independent_prediction_passed=True)
     matching=[s for s in snapshots if s.identity.hardware==hardware and s.identity.measurement==measurement
-              and prediction_checks.get(s.identity_hash) is True]
+              and s.fit_report.get("model_revision") == selected]
     require(bool(matching),Reason.OPERATING_POINT_CHANGED,
             "no applicable historical snapshot; retain verified support/stop instead of blind rollback")
-    return sorted(matching,key=lambda s:s.identity_hash)[0]
+    return matching[0]

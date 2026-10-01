@@ -1,19 +1,17 @@
-"""Independently review neutral current-mode evidence; never authorize motion.
+"""Decode current-mode captures and report observations without quality gates.
 
-Commands, type-17 replies and type-2 status are decoded from the wire. A
-COMPLETE footer, write echo, or state label cannot substitute for readback.
+Raw acquisition status, drive faults, readbacks and STOP evidence remain
+separate from calibration, dynamics and controller qualification.
 """
 from __future__ import annotations
-
 import argparse
-import hashlib
+import bisect
 import json
 import math
 from pathlib import Path
 import statistics
 import struct
-
-from adr0022_capture_review import need, statistics_ns, strict_json
+from adr0022_capture_review import need, strict_json
 
 SCHEMA = "adr0022.current-preparation/1"
 CHARACTERIZATION_SCHEMA = "adr0022.neutral-characterization/1"
@@ -21,6 +19,8 @@ CURRENT_PURPOSE = "neutral_current_mode_verification"
 CHARACTERIZATION_PURPOSE = "neutral_current_measurement_characterization"
 MODE, IQREF, IQF = 0x7005, 0x7006, 0x701A
 SENSORS = ("accel", "gyro", "rv", "game_rv")
+FLOAT_REGISTERS = {0x7006, 0x700A, 0x7010, 0x7011, 0x7014, 0x7016,
+                   0x7017, 0x7018, 0x7019, 0x701A, 0x701C, 0x701E, 0x701F, 0x7020}
 
 
 def integer(value, detail, minimum=0):
@@ -40,7 +40,7 @@ def manifest_number(config, key):
         result = float(value)
     except (ValueError, OverflowError):
         raise ValueError(f"invalid manifest {key}") from None
-    need(math.isfinite(result) and result > 0, f"invalid manifest {key}")
+    need(math.isfinite(result), f"invalid manifest {key}")
     return result
 
 
@@ -48,395 +48,306 @@ def word(data, offset):
     return int.from_bytes(data[offset:offset + 2], "big")
 
 
+def timing_observations(times):
+    times = list(times)
+    gaps = [(b-a)/1e9 for a, b in zip(times, times[1:])]
+    return {"count": len(times), "first_ns": times[0] if times else None,
+            "last_ns": times[-1] if times else None,
+            "max_gap_s": max(gaps) if gaps else None,
+            "min_gap_s": min(gaps) if gaps else None,
+            "median_gap_s": statistics.median(gaps) if gaps else None,
+            "nonincreasing_intervals": sum(g <= 0 for g in gaps),
+            "observed_hz": (len(times)-1)*1e9/(times[-1]-times[0])
+                           if len(times)>1 and times[-1]>times[0] else None}
+
+
 def stream(times, start, end, gap, startup, detail):
-    result = statistics_ns(times)
-    need(result["max_gap_s"] <= gap / 1e9, f"{detail} observation gap")
-    need(times[0] <= start + startup and end - times[-1] <= gap,
-         f"{detail} does not cover the transition")
-    return result
+    # Retained helper interface: timing arguments are observations, not gates.
+    return timing_observations(times)
 
 
-def review(path: Path):
+def summary(values):
+    values = list(values)
+    return {"count": len(values), "min": min(values) if values else None,
+            "max": max(values) if values else None,
+            "mean": statistics.fmean(values) if values else None,
+            "sample_std": statistics.stdev(values) if len(values)>1 else None,
+            "sample_variance": statistics.variance(values) if len(values)>1 else None}
+
+
+def register_value(wire, index):
+    if index == MODE:
+        return wire[4]
+    if index in FLOAT_REGISTERS:
+        value = struct.unpack("<f", wire[4:8])[0]
+        return value if math.isfinite(value) else None
+    return None
+
+
+def _wire_report(path):
+    data = Path(path).read_bytes()
+    rows = [strict_json(line) for line in data.decode("utf-8-sig").splitlines() if line.strip()]
+    need(rows and all(type(row) is dict for row in rows), "capture records must be JSON objects")
+    need(rows[0].get("kind") == "header", "capture header missing")
+    header = rows[0]
+    footers = [row for row in rows if row.get("kind") == "footer"]
+    footer = footers[-1] if footers else {}
+    config = strict_json(header.get("manifest_yaml", "{}"))
+    need(type(config) is dict, "manifest must be a JSON object")
+    integrity = []
+    if not data.endswith(b"\n"):
+        integrity.append("Capture has no terminal newline")
+    if len(footers) != 1 or rows[-1].get("kind") != "footer":
+        integrity.append("Capture footer missing, duplicated or followed by more records")
+    if sum(row.get("kind") == "header" for row in rows) != 1:
+        integrity.append("Capture header duplicated")
+    commands, frames, issues = [], {"yaw": [], "pitch": []}, []
+    for position, row in enumerate(rows):
+        kind = row.get("kind")
+        if kind in ("neutral_tx", "homing_tx"):
+            need(type(row.get("data_hex")) is str, "TX payload must be hexadecimal")
+            try:
+                wire = bytes.fromhex(row["data_hex"])
+            except ValueError:
+                raise ValueError("TX payload is not hexadecimal") from None
+            need(len(wire) == 8, "CAN TX payload must contain eight bytes")
+            cid = integer(row.get("id"), "invalid TX CAN ID")
+            need(cid <= 0x1fffffff, "TX CAN ID exceeds protocol width")
+            axis = row.get("axis")
+            item = {"capture_row_index": position, "axis": axis, "begin_ns": row.get("begin_ns"),
+                    "kernel_accepted_ns": row.get("kernel_accepted_ns"), "success": row.get("success"),
+                    "operation": row.get("operation"), "id": cid, "data_hex": wire.hex(),
+                    "kind": (cid >> 24) & 31 if axis == "pitch" else None}
+            if axis == "pitch" and item["kind"] in (17, 18):
+                item.update(index=int.from_bytes(wire[:2], "little"), reserved_bytes_hex=wire[2:4].hex())
+                item["value"] = register_value(wire, item["index"]) if item["kind"] == 18 else None
+            if axis == "yaw":
+                item["neutral_payload"] = wire == bytes(8)
+            commands.append(item)
+        elif kind == "can_rx":
+            axis = row.get("axis")
+            need(type(row.get("bytes")) is list and all(type(v) is int and 0 <= v <= 255 for v in row["bytes"]),
+                 "CAN payload bytes invalid")
+            wire = bytes(row["bytes"])
+            cid = integer(row.get("id"), "invalid RX CAN ID")
+            need(cid <= 0x1fffffff, "RX CAN ID exceeds protocol width")
+            item = {"capture_row_index": position, "receive_ns": row.get("kernel_monotonic_ns"),
+                    "dequeue_ns": row.get("dequeue_ns"), "sequence": row.get("sequence"),
+                    "generation": row.get("generation"), "socket_drops": row.get("socket_drops"),
+                    "drop_delta": row.get("drop_delta"), "clock_uncertainty_ns": row.get("clock_uncertainty_ns"),
+                    "error": row.get("error"), "rtr": row.get("rtr"), "id": cid,
+                    "raw_hex": wire.hex(), "kind": None}
+            if len(wire) != 8 or row.get("dlc") != 8 or row.get("error") or row.get("rtr"):
+                issues.append({"capture_row_index": position, "detail": "Frame has no decodable eight-byte data payload"})
+            elif axis == "pitch" and row.get("extended") is True:
+                item["kind"] = (cid >> 24) & 31
+                if item["kind"] == 2:
+                    angle, velocity, torque, temperature = [word(wire, offset) for offset in (0, 2, 4, 6)]
+                    item.update(angle_raw=angle, angle_rad=angle*25/65535-12.5,
+                        velocity_raw=velocity, protocol_velocity_rad_s=velocity*60/65535-30,
+                        torque_raw=torque, protocol_torque_Nm=torque*24/65535-12,
+                        temperature_raw=temperature, temperature_C=temperature/10,
+                        host_id=cid & 255, motor_id=(cid >> 8) & 255,
+                        fault_bits=(cid >> 16) & 63, drive_state=(cid >> 22) & 3)
+                elif item["kind"] in (17, 18):
+                    index = int.from_bytes(wire[:2], "little")
+                    item.update(index=index, value=register_value(wire, index),
+                        response_status_hex=wire[2:4].hex(), readback_status_ok=wire[2:4] == bytes(2))
+                elif item["kind"] == 0:
+                    item["uid_hex"] = wire.hex()
+            elif axis == "yaw" and row.get("extended") is False and cid == 0x205:
+                item.update(angle_raw=word(wire, 0), speed_raw=int.from_bytes(wire[2:4], "big", signed=True),
+                    current_raw=int.from_bytes(wire[4:6], "big", signed=True), temperature_raw=wire[6])
+            if axis in frames:
+                frames[axis].append(item)
+            else:
+                issues.append({"capture_row_index": position, "detail": "Frame axis is not identified"})
+    feedback = [f for f in frames["pitch"] if f.get("kind") == 2 and "drive_state" in f]
+    faults = [f for f in feedback if f["fault_bits"]]
+    reads = [f for f in frames["pitch"] if f.get("kind") == 17]
+    requests = [c for c in commands if c["axis"] == "pitch" and c["kind"] == 17 and c["success"] is True]
+    observations = []
+    for reply in reads:
+        annotations = [(i, r) for i, r in enumerate(rows) if r.get("kind") == "register_read" and
+                       r.get("index") == reply["index"] and r.get("receive_ns") == reply["receive_ns"]]
+        annotation_position, record = annotations[0] if len(annotations) == 1 else (None, {})
+        candidates = [c for c in requests if c.get("index") == reply["index"] and
+            c["capture_row_index"] < reply["capture_row_index"] and
+            type(c["begin_ns"]) is int and type(reply["receive_ns"]) is int and c["begin_ns"] <= reply["receive_ns"] and
+            (not record or (type(record.get("request_begin_ns")) is int and record["request_begin_ns"] <= c["begin_ns"] and
+             type(c["kernel_accepted_ns"]) is int and type(record.get("request_accepted_ns")) is int and
+             c["kernel_accepted_ns"] <= record["request_accepted_ns"]))]
+        request = candidates[-1] if candidates else None
+        correlated = bool(len(annotations) == 1 and request and record.get("source") == "type17_readback" and
+            reply.get("readback_status_ok") and reply.get("value") is not None and record.get("value") == reply["value"] and
+            reply["capture_row_index"] < annotation_position and
+            record["request_accepted_ns"] <= reply.get("dequeue_ns", -1))
+        observation = dict(reply)
+        observation.update(request_sequence=record.get("request_sequence"),
+            request_begin_ns=record.get("request_begin_ns"), request_accepted_ns=record.get("request_accepted_ns"),
+            command_begin_ns=request["begin_ns"] if request else None,
+            kernel_accepted_ns=request["kernel_accepted_ns"] if request else None,
+            device_sample_ns=record.get("device_sample_ns"), raw_readback_correlated=correlated,
+            annotation_value=record.get("value"),
+            annotation_minus_raw_value=record["value"]-reply["value"] if type(record.get("value")) in (int,float) and reply.get("value") is not None else None)
+        observations.append(observation)
+    stops = [c for c in commands if c["axis"] == "pitch" and c["kind"] == 4 and c["success"] is True]
+    enables = [c for c in commands if c["axis"] == "pitch" and c["kind"] == 3 and c["success"] is True]
+    stop_observations = []
+    for stop in stops:
+        sent = stop["kernel_accepted_ns"] if type(stop["kernel_accepted_ns"]) is int else stop["begin_ns"]
+        later_enable = next((c for c in enables if c["capture_row_index"] > stop["capture_row_index"]), None)
+        candidates = [f for f in feedback if f["capture_row_index"] > stop["capture_row_index"] and
+            type(f["receive_ns"]) is int and type(sent) is int and f["receive_ns"] >= sent and
+            (later_enable is None or f["capture_row_index"] < later_enable["capture_row_index"])]
+        reset = next((f for f in candidates if f["drive_state"] == 0 and f["fault_bits"] == 0 and
+                      f["host_id"] == 0 and f["motor_id"] == 127), None)
+        stop_observations.append({"stop_tx_ns": stop["begin_ns"], "kernel_accepted_ns": sent,
+            "reset_observed_ns": reset["receive_ns"] if reset else None,
+            "fault_free_reset_after_stop": reset is not None,
+            "receipt_latency_s": (reset["receive_ns"]-sent)/1e9 if reset else None,
+            "reset_payload_hex": reset["raw_hex"] if reset else None})
+    last_enable_position = enables[-1]["capture_row_index"] if enables else -1
+    final_stops = [(c, o) for c, o in zip(stops, stop_observations) if c["capture_row_index"] > last_enable_position]
+    final_stop, final_observation = final_stops[0] if final_stops else (None, None)
+    first_reset_ns = final_observation["reset_observed_ns"] if final_observation else None
+    after_reset = [f for f in feedback if first_reset_ns is not None and f["receive_ns"] >= first_reset_ns]
+    final_confirmed = bool(first_reset_ns is not None and after_reset and
+                           all(f["drive_state"] == 0 and f["fault_bits"] == 0 for f in after_reset))
+    iqf = [o for o in observations if o.get("index") == IQF and o.get("value") is not None]
+    currents = []
+    for observation in iqf:
+        earlier = [c for c in enables if c["begin_ns"] <= observation["receive_ns"]]
+        enable = earlier[-1] if earlier else None
+        current = dict(observation)
+        current.update(value_A=observation["value"], raw_register_response_hex=observation["raw_hex"],
+            receipt_from_enable_s=(observation["receive_ns"]-enable["begin_ns"])/1e9 if enable else None)
+        currents.append(current)
+    imu = {sensor: [] for sensor in SENSORS}
+    imu_events = []
+    for position, row in enumerate(rows):
+        if row.get("kind") != "imu_raw":
+            continue
+        raw = strict_json(row["raw_json"])
+        need(type(raw) is dict, "IMU record must be a JSON object")
+        if raw.get("kind") == "sample" and raw.get("sensor") in imu:
+            values = raw.get("values")
+            need(type(values) is list and all(type(v) in (int,float) and math.isfinite(v) for v in values), "invalid IMU values")
+            imu[raw["sensor"]].append({"capture_row_index": position, "dequeue_ns": row.get("dequeue_ns"), **raw})
+        else:
+            imu_events.append({"capture_row_index": position, "raw": raw})
+    streams = {}
+    for axis, source in frames.items():
+        observed = [f for f in source if "angle_raw" in f]
+        streams[axis+"_feedback"] = timing_observations(f["receive_ns"] for f in observed if type(f["receive_ns"]) is int)
+    streams["pitch_iqf"] = {**timing_observations(o["receive_ns"] for o in iqf),
+                            "device_sample_ns": None, "sample_clock_calibrated": False}
+    imu_summary = {}
+    for sensor, samples in imu.items():
+        sample_times = [s["sample_ns"] for s in samples if type(s.get("sample_ns")) is int]
+        streams[sensor] = timing_observations(sample_times)
+        imu_summary[sensor] = {"sample_clock": streams[sensor],
+            "dequeue_clock": timing_observations(s["dequeue_ns"] for s in samples if type(s.get("dequeue_ns")) is int),
+            "status_counts": {str(status): sum(s.get("status") == status for s in samples) for status in sorted({s.get("status") for s in samples if type(s.get("status")) is int})},
+            "generation_observed": sorted({s.get("generation") for s in samples if type(s.get("generation")) is int}),
+            "sequence_wrap_count": sum(b.get("sequence",0)<a.get("sequence",0) for a,b in zip(samples,samples[1:])),
+            "modulo_sequence_discontinuities": sum((b.get("sequence",0)-a.get("sequence",0))%256 != 1 for a,b in zip(samples,samples[1:])),
+            "axes": [summary(s["values"][i] for s in samples) for i in range(min((len(s["values"]) for s in samples), default=0))],
+            "mounting_calibrated": False, "sample_clock_calibrated": False}
+    yaw = [f for f in frames["yaw"] if "angle_raw" in f]
+    displacement, count = [0.], 0
+    for a, b in zip(yaw, yaw[1:]):
+        count += (b["angle_raw"]-a["angle_raw"]+4096)%8192-4096
+        displacement.append(count*2*math.pi/8192)
+    pitch_angles = [f["angle_rad"] for f in feedback]
+    identities = [f["uid_hex"] for f in frames["pitch"] if "uid_hex" in f]
+    start_rows = [r for r in rows if r.get("kind") == "session_begin"]
+    status = footer.get("status")
+    report = {"schema": "adr0022.raw_measurement_review/1", "raw_capture_path": str(Path(path)),
+        "provenance": header.get("provenance"), "capture_schema": header.get("schema"),
+        "purpose": header.get("purpose"), "capture_footer_status": status, "capture_footer_detail": footer.get("detail"),
+        "capture_footer": footer, "capture_complete": status == "COMPLETE" and not integrity,
+        "capture_integrity": "PASS" if not integrity else "PARTIAL", "integrity_observations": integrity,
+        "decode_observations": issues, "start_ns": start_rows[0].get("time_ns") if start_rows else None,
+        "end_ns": footer.get("end_ns"), "streams": streams,
+        "commands": commands, "register_observations": observations, "register_reads": len(observations),
+        "register_rejected_records": [r for r in rows if r.get("kind") == "register_rejected"],
+        "write_echoes_ignored": sum(f.get("kind") == 18 for f in frames["pitch"]),
+        "write_echoes_qualify_readback": False, "pitch_uid_observed": identities[-1] if identities else None,
+        "drive_faults": faults, "drive_fault_seen": bool(faults),
+        "drive_fault_active_at_last_feedback": bool(feedback[-1]["fault_bits"]) if feedback else None,
+        "pitch_feedback_observations": feedback, "stop_observations": stop_observations,
+        "final_stop_confirmed": final_confirmed, "normal_stop_confirmed": final_confirmed and status == "COMPLETE",
+        "abort_stop_confirmed": final_confirmed and status not in (None,"COMPLETE"),
+        "final_disabled_observed_ns": first_reset_ns,
+        "final_disabled_observation_meaning": "Fault-free Reset after STOP and every subsequent recorded pitch status remains Reset; no unobserved interval is certified",
+        "final_socket_drops": footer.get("socket_drops"), "interface_loss_deltas": footer.get("interface_loss_deltas"),
+        "loss_observations": {a: [{k:f[k] for k in ("capture_row_index","sequence","generation","socket_drops","drop_delta","error")} for f in fs if f.get("drop_delta") or f.get("error")] for a,fs in frames.items()},
+        "clock_uncertainty_ns": {a: summary(f["clock_uncertainty_ns"] for f in fs if type(f.get("clock_uncertainty_ns")) is int) for a,fs in frames.items()},
+        "imu_observations": imu_summary, "imu_events": imu_events,
+        "displacement": {"pitch": {"protocol_min_rad": min(pitch_angles) if pitch_angles else None,
+             "protocol_max_rad": max(pitch_angles) if pitch_angles else None,
+             "protocol_range_rad": max(pitch_angles)-min(pitch_angles) if pitch_angles else None},
+             "yaw": {"protocol_max_abs_rad": max(map(abs,displacement)) if yaw else None}},
+        "yaw_max_abs_displacement_rad": max(map(abs,displacement)) if yaw else None,
+        "temperatures": {"pitch": {"min_C": min((f["temperature_C"] for f in feedback), default=None),
+                                    "max_C": max((f["temperature_C"] for f in feedback), default=None)},
+             "yaw": {"raw_min": min((f["temperature_raw"] for f in yaw), default=None),
+                     "raw_max": max((f["temperature_raw"] for f in yaw), default=None), "Celsius_mapping": "UNKNOWN"}},
+        "pitch_temperature_max_C": max((f["temperature_C"] for f in feedback), default=None),
+        "current_observations": currents, "current_statistics": summary(o["value_A"] for o in currents),
+        "pitch_current_max_abs_A": max((abs(o["value_A"]) for o in currents), default=None),
+        "current_bias_correction": None, "current_feedback_scale_calibrated": False,
+        "current_feedback_unit": "DOCUMENTED_AMPERE_UNCALIBRATED",
+        "current_units": {"yaw": {"raw_unit": "SIGNED_PROTOCOL_COUNT", "scale_A_per_count": None, "calibrated": False}},
+        "manufacturer_limits_reported_by_capture": {k:v for k,v in config.get("protection_limit_basis",{}).items() if k not in ("sha256","hash")},
+        "neutral_transition_qualified": False, "neutral_current_qualified": False, "physical_current_mode_qualified": False,
+        "motion_authorized": False, "motion_qualified": False, "current_mode_qualified": False,
+        "physical_capabilities_qualified": False, "physical_parameters_qualified": False,
+        "calibration_qualified": False, "protection_qualified": False, "controller_qualified": False,
+        "encoder_mechpos_agreement_qualified": False, "plant_snapshot": None, "controller_candidate": None,
+        "measurement_limitations": ["Observations retain raw timing, loss, scatter and operating context without numerical quality rejection.",
+            "Pitch angles/torque use documented protocol mapping; physical scale, sign, ratio and reference remain to be calibrated.",
+            "Iqf mean is an observed response, not a sensor-bias estimate; device sample time and filter response remain unknown.",
+            "STOP conclusions describe received status after transmission, not a stopping-distance or protection qualification."]}
+    return report, config, rows, commands, frames
+
+
+def _review(path, *, characterization):
+    report, config, rows, commands, frames = _wire_report(path)
+    expected = CHARACTERIZATION_SCHEMA if characterization else SCHEMA
+    need(report["capture_schema"] == expected, "unsupported current capture schema")
+    report["schema"] = "adr0022.characterization_review/1" if characterization else "adr0022.current_review/1"
+    report["capability_scope"] = "neutral_current_measurement_observations_only"
+    enables = [c for c in commands if c["axis"] == "pitch" and c["kind"] == 3 and c["success"] is True]
+    mode_reads = [o for o in report["register_observations"] if o["index"] == MODE and o["raw_readback_correlated"]]
+    iqref_reads = [o for o in report["register_observations"] if o["index"] == IQREF and o["raw_readback_correlated"]]
+    references = [c for c in commands if c["axis"] == "pitch" and c["kind"] == 18 and c.get("index") == IQREF and c["success"] is True]
+    neutral = all(c.get("value") == 0 for c in references) and all(c.get("neutral_payload") for c in commands if c["axis"] == "yaw" and c["success"] is True)
+    enable = enables[0] if enables else None
+    before = [o for o in mode_reads if enable and o["receive_ns"] < enable["begin_ns"]]
+    after = [o for o in mode_reads if enable and o["receive_ns"] >= enable["begin_ns"]]
+    before_iq = [o for o in iqref_reads if enable and o["receive_ns"] < enable["begin_ns"]]
+    after_iq = [o for o in iqref_reads if enable and o["receive_ns"] >= enable["begin_ns"]]
+    original = mode_reads[0]["value"] if mode_reads else None
+    final_mode = mode_reads[-1]["value"] if mode_reads else None
+    report.update(neutral_commands_only=neutral, neutral_commands=len(commands), original_mode=original,
+        restored_mode=final_mode, restored_mode_matches_original=original is not None and final_mode == original,
+        neutral_transition_verified=bool(enable and before and after and before[-1]["value"] == 3 and
+            after[0]["value"] == 3 and before_iq and after_iq and before_iq[-1]["value"] == after_iq[0]["value"] == 0 and
+            neutral and report["final_stop_confirmed"]),
+        initial_current_receipt_from_enable_s=report["current_observations"][0]["receipt_from_enable_s"]
+             if report["current_observations"] else None,
+        neutral_observation_s=config.get("neutral_observation_s"), characterization_only=characterization)
+    return report
+
+
+def review(path):
     return _review(path, characterization=False)
 
 
-def review_characterization(path: Path):
-    """Accept complete zero-command observation while keeping qualification false."""
+def review_characterization(path):
     return _review(path, characterization=True)
-
-
-def _review(path: Path, *, characterization):
-    data = Path(path).read_bytes()
-    need(data.endswith(b"\n"), "truncated capture")
-    rows = [strict_json(line) for line in data.decode("utf-8").splitlines()]
-    need(len(rows) > 2 and all(type(r) is dict for r in rows), "missing capture records")
-    need(rows[0].get("kind") == "header" and rows[-1].get("kind") == "footer", "missing capture boundaries")
-    need(sum(r.get("kind") == "header" for r in rows) == 1 and
-         sum(r.get("kind") == "footer" for r in rows) == 1, "duplicate capture boundaries")
-    header, footer = rows[0], rows[-1]
-    schema = CHARACTERIZATION_SCHEMA if characterization else SCHEMA
-    purpose = CHARACTERIZATION_PURPOSE if characterization else CURRENT_PURPOSE
-    need(header.get("schema") == schema and header.get("purpose") == purpose,
-         "unsupported preparation schema/purpose")
-    provenance = header.get("provenance")
-    need(provenance in ("SYNTHETIC", "MEASURED") and header.get("parameter_qualified") is False,
-         "invalid provenance or qualification claim")
-    need(footer.get("status") == "COMPLETE" and footer.get("detail") == "" and
-         footer.get("parameter_qualified") is False and footer.get("motion_qualified") is False,
-         "capture failed/incomplete or qualification claim invalid")
-    config = strict_json(header["manifest_yaml"])
-    need(config.get("schema") == schema and config.get("provenance") == provenance and
-         config.get("purpose") == header["purpose"], "manifest identity differs")
-    need(config.get("transport") == ("loopback_udp" if provenance == "SYNTHETIC" else "socketcan"),
-         "manifest transport/provenance differs")
-    support = config.get("pitch_supported_when_disabled")
-    need(support is True or (type(support) is str and support == "true"), "disabled pitch support not declared")
-    if provenance == "MEASURED":
-        need(config["yaw"].get("interface") == "can0" and config["pitch"].get("interface") == "can1",
-             "station topology differs")
-        loss = footer.get("interface_loss_deltas")
-        need(type(loss) is dict and set(loss) == {"yaw", "pitch"} and
-             all(type(loss[a]) is dict and set(loss[a]) == {"rx_dropped", "rx_errors"} and
-                 all(type(v) is int and v == 0 for v in loss[a].values()) for a in loss),
-             "interface receive loss evidence missing/nonzero")
-    uid = config["expected_pitch_uid"]
-    need(type(uid) is str and len(uid) == 16 and all(c in "0123456789abcdef" for c in uid), "invalid expected UID")
-    neutral_criterion = manifest_number(config, "neutral_current_bound_A")
-    current_bound = manifest_number(config, "protection_current_bound_A") if characterization else neutral_criterion
-    observation_s = manifest_number(config, "neutral_observation_s") if characterization else 2.
-    if characterization:
-        need(current_bound <= 6.5 and observation_s <= 60,
-             "characterization protection/observation exceeds the documented bound")
-    displacement_bound = manifest_number(config, "transition_displacement_bound_rad")
-    temperature_bound = manifest_number(config, "pitch_maximum_temperature_C")
-    limits = config["limits"]
-    ns = {key: int(manifest_number(limits, key + "_s") * 1e9) for key in
-          ("clock_uncertainty", "dequeue_age", "can_gap", "imu_gap", "startup", "duration", "read_timeout", "read_period", "stop_period")}
-    need(all(1 <= v <= 3600 * 10**9 for v in ns.values()) and ns["duration"] > ns["startup"], "invalid timing limits")
-    try:
-        minimum_status = int(limits["minimum_imu_status"])
-    except (ValueError, TypeError):
-        raise ValueError("invalid minimum IMU status") from None
-    need(str(minimum_status) == str(limits["minimum_imu_status"]) and 0 <= minimum_status <= 3,
-         "invalid minimum IMU status")
-    drops = footer.get("socket_drops")
-    need(type(drops) is dict and set(drops) == {"yaw", "pitch"} and
-         all(type(v) is int and v == 0 for v in drops.values()), "final socket loss counters missing/nonzero")
-    end = integer(footer["end_ns"], "invalid capture end", 1)
-    allowed = {"header", "footer", "session_begin", "neutral_tx", "can_rx", "imu_raw", "preparation_state",
-               "pitch_identity", "register_read", "register_rejected", "write_echo"}
-    need(all(r.get("kind") in allowed for r in rows), "unexpected journal record")
-    need(not any(r.get("kind") == "register_rejected" for r in rows), "required register rejected")
-
-    commands = []
-    for position, row in enumerate(rows):
-        if row["kind"] != "neutral_tx":
-            continue
-        begin = integer(row["begin_ns"], "invalid command begin", 1)
-        accepted = integer(row["kernel_accepted_ns"], "invalid command acceptance", 1)
-        need(begin <= accepted <= end and row.get("success") is True, "command not accepted or time invalid")
-        cid = integer(row["id"], "invalid command CAN ID")
-        hex_data = row["data_hex"]
-        need(type(hex_data) is str and len(hex_data) == 16 and all(c in "0123456789abcdef" for c in hex_data),
-             "invalid command payload")
-        wire = bytes.fromhex(hex_data)
-        axis = row.get("axis")
-        need(axis in ("yaw", "pitch"), "unknown command axis")
-        kind, index, value = None, None, None
-        if axis == "yaw":
-            need(cid == 0x1FE and wire == bytes(8), "nonneutral yaw command")
-        else:
-            need(cid <= 0x1FFFFFFF and cid & 255 == 127 and (cid >> 8) & 65535 == 0,
-                 "pitch command identity differs")
-            kind = (cid >> 24) & 31
-            need(kind in (0, 3, 4, 17, 18), "pitch command outside neutral contract")
-            if kind in (17, 18):
-                index = int.from_bytes(wire[:2], "little")
-                need(wire[2:4] == bytes(2), "register command reserved bytes differ")
-                if kind == 17:
-                    need(index in (MODE, IQREF, IQF) and wire[4:] == bytes(4), "unexpected register read command")
-                else:
-                    need(index in (MODE, IQREF), "write outside neutral register contract")
-                    value = wire[4] if index == MODE else struct.unpack("<f", wire[4:])[0]
-                    need((index == IQREF and value == 0.) or
-                         (index == MODE and value in range(4) and wire[5:] == bytes(3)), "nonneutral register write")
-            else:
-                need(wire == bytes(8), "simple command payload must be zero (no fault clearing)")
-        commands.append(dict(row=row, position=position, time=begin, accepted=accepted,
-                             wire=wire, kind=kind, index=index, value=value))
-    need(commands and all(a["time"] < b["time"] for a, b in zip(commands, commands[1:])),
-         "missing/reordered command timestamps")
-    start = commands[0]["time"]
-    begins = [r for r in rows if r["kind"] == "session_begin"]
-    if begins:
-        need(len(begins) == 1 and 0 < integer(begins[0]["time_ns"], "invalid session begin", 1) <= start,
-             "invalid session begin")
-        start = begins[0]["time_ns"]
-    need(start < end and end - start < ns["duration"], "capture deadline exceeded")
-    report = {"schema": "adr0022.characterization_review/1" if characterization else "adr0022.current_review/1",
-              "capture_sha256": hashlib.sha256(data).hexdigest(),
-              "provenance": provenance, "capture_complete": True,
-              "capability_scope": "neutral_current_measurement_characterization_only" if characterization else "neutral_transition_only",
-              "neutral_transition_verified": True, "neutral_transition_qualified": provenance == "MEASURED" and not characterization,
-              "physical_capabilities_qualified": False, "physical_parameters_qualified": False,
-              "motion_authorized": False, "streams": {}, "final_socket_drops": drops,
-              "measurement_limitations": ["Yaw current and temperature retain protocol units without a bound calibration.",
-                  "Register device sample times are unknown; receipt timing does not qualify current sample timing.",
-                  "IMU mounting and device-to-host sample time mapping remain unqualified.",
-                  "Neutral transition evidence does not qualify excitation, dynamics, homing, or a controller."]}
-
-    frames = {axis: [] for axis in ("yaw", "pitch")}
-    for position, row in enumerate(rows):
-        if row["kind"] != "can_rx":
-            continue
-        axis = row.get("axis")
-        need(axis in frames, "unknown received CAN axis")
-        need(row.get("generation") == 1 and type(row.get("generation")) is int and
-             row.get("socket_drops") == 0 and type(row.get("socket_drops")) is int and
-             row.get("drop_delta") == 0 and type(row.get("drop_delta")) is int and
-             row.get("error") is False and row.get("rtr") is False and row.get("dlc") == 8,
-             "CAN loss/invalidity")
-        need(type(row["bytes"]) is list and len(row["bytes"]) == 8 and
-             all(type(b) is int and 0 <= b <= 255 for b in row["bytes"]), "invalid received CAN bytes")
-        wire = bytes(row["bytes"])
-        stamp = integer(row["kernel_monotonic_ns"], "invalid CAN receive timestamp", 1)
-        dequeue = integer(row["dequeue_ns"], "invalid CAN dequeue timestamp", 1)
-        uncertainty = integer(row["clock_uncertainty_ns"], "invalid clock uncertainty")
-        integer(row["kernel_realtime_ns"], "missing CAN kernel timestamp", 1)
-        need(uncertainty <= ns["clock_uncertainty"] and -uncertainty <= dequeue - stamp <= ns["dequeue_age"] and
-             dequeue <= end, "CAN clock mapping/dequeue age invalid")
-        cid = integer(row["id"], "invalid received CAN ID")
-        frame = dict(row=row, position=position, wire=wire, time=stamp, kind=None)
-        if axis == "yaw":
-            need(row.get("extended") is False and cid == 0x205 and word(wire, 0) <= 8191, "unexpected yaw traffic")
-            angle, speed, current, temp = word(wire, 0), int.from_bytes(wire[2:4], "big", signed=True), int.from_bytes(wire[4:6], "big", signed=True), wire[6]
-            need(row.get("angle_raw") == angle and row.get("speed_rpm") == speed and
-                 row.get("current_raw") == current and row.get("temperature_raw") == temp and
-                 row.get("temperature_C") is None, "yaw raw fields differ from wire/unqualified temperature")
-            frame.update(angle=angle, current=current, temperature=temp)
-        else:
-            need(row.get("extended") is True and cid <= 0x1FFFFFFF, "invalid pitch CAN frame")
-            kind = (cid >> 24) & 31
-            need(kind in (0, 2, 17, 18), "unexpected pitch traffic")
-            frame["kind"] = kind
-            if kind == 2:
-                need(cid & 255 == 0 and (cid >> 8) & 255 == 127 and (cid >> 16) & 63 == 0,
-                     "pitch feedback identity/fault differs")
-                mode = (cid >> 22) & 3
-                need(mode in (0, 2), "pitch feedback not disabled/enabled")
-                fields = [word(wire, at) for at in (0, 2, 4, 6)]
-                need(all(row.get(name) == value for name, value in zip(
-                    ("angle_raw", "velocity_raw", "torque_raw", "temperature_raw"), fields)) and
-                     math.isclose(number(row.get("temperature_C"), "pitch temperature missing"), fields[3] / 10),
-                     "pitch raw fields differ from wire")
-                need(fields[3] / 10 < temperature_bound, "pitch temperature bound exceeded")
-                # The active C++ protocol uses the station-verified +/-12.5 rad
-                # mapping, rather than the manual's nominal +/-4*pi table.
-                frame.update(mode=mode, angle=fields[0] * 25 / 65535 - 12.5,
-                             temperature=fields[3] / 10)
-            elif kind == 0:
-                need(cid == 0x7FFE and wire.hex() == uid, "pitch discovery identity differs")
-            else:
-                need(cid & 255 == 0 and (cid >> 8) & 65535 == 127 and wire[2:4] == bytes(2),
-                     "register response identity/status differs")
-                frame["index"] = int.from_bytes(wire[:2], "little")
-                need(frame["index"] in (MODE, IQREF, IQF), "unexpected register response")
-                frame["value"] = wire[4] if frame["index"] == MODE else struct.unpack("<f", wire[4:])[0]
-                number(frame["value"], "nonfinite register wire value")
-        frames[axis].append(frame)
-    for axis in frames:
-        observed = frames[axis]
-        need(len(observed) == integer(footer[axis + "_frames"], "invalid final CAN count") and
-             [f["row"]["sequence"] for f in observed] == list(range(1, len(observed) + 1)), "CAN count/sequence differs")
-        statistics_ns([f["time"] for f in observed])
-        feedback = observed if axis == "yaw" else [f for f in observed if f["kind"] == 2]
-        report["streams"][axis + "_feedback"] = stream([f["time"] for f in feedback], start, end,
-            min(ns["can_gap"], 80_000_000) if axis == "yaw" else ns["can_gap"], ns["startup"], axis + " feedback")
-        report["streams"][axis + "_feedback"]["max_dequeue_delay_s"] = max(f["row"]["dequeue_ns"] - f["time"] for f in observed) / 1e9
-    yaw = frames["yaw"]
-    cumulative, yaw_displacement = 0, [0.]
-    scale = 2 * math.pi / 8192
-    for a, b in zip(yaw, yaw[1:]):
-        delta = b["angle"] - a["angle"]
-        if delta > 4096: delta -= 8192
-        if delta < -4096: delta += 8192
-        need(abs(delta) * scale <= 40 * (b["time"] - a["time"]) / 1e9 + 2 * scale, "yaw encoder discontinuity")
-        cumulative += delta
-        yaw_displacement.append(cumulative * scale)
-    pitch_feedback = [f for f in frames["pitch"] if f["kind"] == 2]
-    pitch_displacement = [f["angle"] - pitch_feedback[0]["angle"] for f in pitch_feedback]
-    need(max(map(abs, yaw_displacement)) <= displacement_bound and max(map(abs, pitch_displacement)) <= displacement_bound,
-         "neutral transition displacement bound exceeded")
-    report["displacement"] = {"bound_rad": displacement_bound, "yaw_max_abs_rad": max(map(abs, yaw_displacement)),
-                              "pitch_max_abs_rad": max(map(abs, pitch_displacement)), "mechanically_homed": False}
-    report["current_units"] = {"yaw": {"raw_unit": "SIGNED_PROTOCOL_COUNT", "scale_A_per_count": None,
-        "calibrated": False, "raw_min": min(f["current"] for f in yaw), "raw_max": max(f["current"] for f in yaw),
-        "legacy_derived_ampere_fields_ignored": sum(f["row"].get("current_A") is not None for f in yaw)}}
-    report["temperatures"] = {"yaw": {"raw_min": min(f["temperature"] for f in yaw),
-        "raw_max": max(f["temperature"] for f in yaw), "Celsius_mapping": "UNKNOWN"},
-        "pitch": {"min_C": min(f["temperature"] for f in pitch_feedback), "max_C": max(f["temperature"] for f in pitch_feedback)}}
-
-    imu = {sensor: [] for sensor in SENSORS}
-    generations = set()
-    for row in rows:
-        if row["kind"] != "imu_raw":
-            continue
-        raw = strict_json(row["raw_json"])
-        need(type(raw) is dict and raw.get("kind") not in ("trace_reset", "gap", "summary"), "IMU reset/discard/end within capture")
-        dequeue = integer(row["dequeue_ns"], "invalid IMU dequeue", 1)
-        need(dequeue <= end, "IMU dequeue beyond capture")
-        if raw.get("kind") != "sample":
-            continue
-        sensor = raw.get("sensor")
-        need(sensor in imu, "unknown IMU sensor")
-        sample = integer(raw["sample_ns"], "invalid IMU sample time", 1)
-        receive = integer(raw["rx_ns"], "invalid IMU receive time", 1)
-        need(sample <= receive <= dequeue and receive - sample <= ns["imu_gap"] and dequeue - receive <= ns["dequeue_age"],
-             "IMU clock/order/dequeue age invalid")
-        generations.add(integer(raw["generation"], "invalid IMU generation"))
-        seq = integer(raw["sequence"], "invalid IMU sequence")
-        status = integer(raw["status"], "invalid IMU status")
-        need(seq <= 255 and minimum_status <= status <= 3, "IMU sequence/status invalid")
-        values = raw["values"]
-        need(type(values) is list and len(values) == (3 if sensor in ("accel", "gyro") else 4), "invalid IMU dimensions")
-        for v in values: number(v, "nonfinite IMU value")
-        if len(values) == 4: need(.9801 <= sum(v * v for v in values) <= 1.0201, "invalid IMU quaternion norm")
-        imu[sensor].append(raw)
-    need(len(generations) == 1, "IMU generation changed or missing")
-    for sensor, observations in imu.items():
-        need(all(((a["sequence"] + 1) & 255) == b["sequence"] and a["rx_ns"] <= b["rx_ns"]
-                 for a, b in zip(observations, observations[1:])), "IMU sequence loss/reordering")
-        report["streams"][sensor] = stream([r["sample_ns"] for r in observations], start, end, ns["imu_gap"], ns["startup"], sensor)
-        report["streams"][sensor].update(mounting_calibrated=False, sample_clock_calibrated=False,
-            status_counts={str(status): sum(r["status"] == status for r in observations) for status in range(4)})
-
-    pitch_commands = [c for c in commands if c["row"]["axis"] == "pitch"]
-    discoveries = [c for c in pitch_commands if c["kind"] == 0]
-    discovery_frames = [f for f in frames["pitch"] if f["kind"] == 0]
-    identities = [r for r in rows if r["kind"] == "pitch_identity"]
-    need(len(discoveries) == len(discovery_frames) == len(identities) == 1, "discovery evidence missing/duplicated")
-    discover, identity_frame = discoveries[0], discovery_frames[0]
-    need(discover["time"] <= identity_frame["time"] < discover["time"] + ns["read_timeout"] and
-         discover["position"] < identity_frame["position"] and identities[0].get("uid_hex") == uid and
-         identities[0].get("receive_ns") == identity_frame["time"], "discovery correlation differs")
-    need(all(c["kind"] == 0 or c["time"] >= identity_frame["time"] for c in pitch_commands), "pitch operation before identity")
-
-    requests = [c for c in pitch_commands if c["kind"] == 17]
-    replies = [f for f in frames["pitch"] if f["kind"] == 17]
-    reads = [(i, r) for i, r in enumerate(rows) if r["kind"] == "register_read"]
-    need(len(requests) == len(replies) == len(reads) and
-         [r["request_sequence"] for _, r in reads] == list(range(1, len(reads) + 1)), "register read evidence incomplete/reordered")
-    observations = []
-    for request, reply, (position, record) in zip(requests, replies, reads):
-        rb_begin = integer(record["request_begin_ns"], "invalid register request begin", 1)
-        rb_accepted = integer(record["request_accepted_ns"], "invalid register acceptance", 1)
-        need(request["index"] == reply["index"] == record["index"] and
-             record.get("source") == "type17_readback" and record.get("axis") == "pitch" and
-             "device_sample_ns" in record and record["device_sample_ns"] is None and record.get("receive_ns") == reply["time"] and
-             number(record["value"], "invalid register value") == reply["value"] and
-             rb_begin <= request["time"] <= rb_begin + ns["dequeue_age"] and
-             request["accepted"] <= rb_accepted <= reply["row"]["dequeue_ns"] and
-             rb_begin <= reply["time"] < rb_begin + ns["read_timeout"] and
-             request["position"] < reply["position"] < position, "register raw correlation/value differs")
-        if observations: need(observations[-1]["time"] <= rb_begin, "overlapping register transaction")
-        observations.append(dict(index=reply["index"], value=reply["value"], time=reply["time"], request=request,
-                                 wire=reply["wire"], record=record, position=position))
-    # Echoes retain provenance but are never used as readback observations.
-    echoes = [f for f in frames["pitch"] if f["kind"] == 18]
-    echo_records = [r for r in rows if r["kind"] == "write_echo"]
-    need(len(echoes) == len(echo_records), "write echo evidence incomplete")
-    for echo, record in zip(echoes, echo_records):
-        writes = [c for c in pitch_commands if c["kind"] == 18 and c["wire"] == echo["wire"] and
-                  c["time"] <= echo["time"] < c["time"] + ns["read_timeout"] and c["position"] < echo["position"]]
-        need(writes and record.get("index") == echo["index"] and record.get("receive_ns") == echo["time"] and
-             record.get("readback_verified") is False, "uncorrelated write echo")
-
-    mode_writes = [c for c in pitch_commands if c["kind"] == 18 and c["index"] == MODE]
-    enable = [c for c in pitch_commands if c["kind"] == 3]
-    zero_writes = [c for c in pitch_commands if c["kind"] == 18 and c["index"] == IQREF]
-    stops = [c for c in pitch_commands if c["kind"] == 4]
-    need(len(mode_writes) == 2 and len(enable) == 1 and zero_writes and stops, "neutral transition commands missing/duplicated")
-    select, restore = mode_writes
-    enable = enable[0]
-    original = observations[0] if observations else None
-    need(original and original["index"] == MODE and original["value"] in range(4), "initial RunMode read missing/invalid")
-    original_mode = int(original["value"])
-    need(select["value"] == 3 and restore["value"] == original_mode == footer.get("original_mode"), "mode selection/restore differs")
-    need(original["time"] < zero_writes[0]["time"] < select["time"] < enable["time"] < restore["time"],
-         "neutral transition ordering invalid")
-    initial_stops = [c for c in stops if c["time"] < original["request"]["time"]]
-    need(initial_stops, "initial STOP missing before mode read")
-    initial_stop = initial_stops[-1]
-    initial_disabled = [f for f in pitch_feedback if initial_stop["time"] <= f["time"] < original["request"]["time"] and f["mode"] == 0]
-    need(initial_disabled, "initial STOP disabled acknowledgement missing")
-    need(zero_writes[0]["time"] - initial_disabled[0]["time"] >= 2 * 10**9, "disabled observation dwell missing")
-    before = [o for o in observations if select["time"] < o["request"]["time"] and o["time"] < enable["time"]]
-    after = [o for o in observations if enable["time"] < o["request"]["time"] and o["time"] < restore["time"]]
-    need([(o["index"], o["value"]) for o in before] == [(MODE, 3), (IQREF, 0)], "mode/zero readback missing before enable")
-    need(len(after) >= 3 and [(o["index"], o["value"]) for o in after[:2]] == [(MODE, 3), (IQREF, 0)] and
-         all(o["index"] == IQF for o in after[2:]), "enabled mode/zero/current readback missing")
-    final_stops = [c for c in stops if after[1]["time"] < c["time"] < restore["time"]]
-    need(len(final_stops) == 1, "final STOP missing/duplicated")
-    final_stop = final_stops[0]
-    need([c for c in stops if enable["time"] < c["time"]] == [final_stop], "STOP interrupted enabled observation or followed restore")
-    need(final_stop["time"] - after[1]["time"] >= int(observation_s * 10**9), "enabled observation dwell missing")
-    disabled_before = [f for f in pitch_feedback if initial_disabled[0]["time"] <= f["time"] < enable["time"]]
-    enabled_feedback = [f for f in pitch_feedback if enable["time"] <= f["time"] < final_stop["time"]]
-    final_disabled = [f for f in pitch_feedback if final_stop["time"] <= f["time"] < restore["time"]]
-    need(disabled_before and all(f["mode"] == 0 for f in disabled_before), "pitch enabled before verified transition")
-    need(enabled_feedback and all(f["mode"] == 2 for f in enabled_feedback) and
-         enabled_feedback[0]["time"] <= after[1]["time"], "enabled feedback status absent/lost")
-    need(final_disabled and final_disabled[-1]["mode"] == 0 and
-         final_disabled[-1]["time"] < final_stop["time"] + ns["read_timeout"], "fresh STOP acknowledgement missing before restore")
-    need(all(f["mode"] == 0 for f in pitch_feedback if f["time"] >= final_disabled[-1]["time"]), "pitch reenabled after final STOP")
-    restored = [o for o in observations if o["request"]["time"] > restore["time"]]
-    need(len(restored) == 1 and restored[0]["index"] == MODE and restored[0]["value"] == original_mode,
-         "restored mode readback missing")
-    need(len(observations) == len(before) + len(after) + len(restored) + 1, "unexpected register observations")
-    current = after[2:]
-    need(all(abs(o["value"]) <= current_bound and o["time"] < final_stop["time"] for o in current),
-         "pitch protection current bound exceeded" if characterization else "neutral pitch current bound exceeded")
-    need(current[0]["time"] - after[1]["time"] < ns["read_timeout"] and
-         final_stop["time"] - current[-1]["time"] < ns["read_timeout"], "neutral current stream coverage missing")
-    report["streams"]["pitch_iqf"] = statistics_ns([o["time"] for o in current])
-    need(report["streams"]["pitch_iqf"]["max_gap_s"] < ns["read_timeout"] / 1e9, "neutral current readback gap")
-    report["streams"]["pitch_iqf"].update(device_sample_ns=None, sample_clock_calibrated=False)
-    need(footer.get("normal_stop_confirmed") is True and footer.get("abort_stop_confirmed") is False,
-         "normal STOP footer differs from evidence")
-    report.update(pitch_uid_observed=uid, original_mode=original_mode, restored_mode=original_mode,
-        final_disabled_observed_ns=final_disabled[-1]["time"], normal_stop_confirmed=True,
-        pitch_current_max_abs_A=max(abs(o["value"]) for o in current), pitch_neutral_current_bound_A=neutral_criterion,
-        register_reads=len(observations), write_echoes_ignored=len(echoes), neutral_commands=len(commands))
-    if characterization:
-        values = [o["value"] for o in current]
-        above = sum(abs(v) > neutral_criterion for v in values)
-        need(footer.get("characterization_only") is True and footer.get("neutral_current_qualified") is False and
-             footer.get("neutral_current_criterion_satisfied") is (above == 0) and
-             integer(footer["current_sample_count"], "invalid characterization sample count") == len(values) and
-             math.isclose(number(footer["observed_current_max_abs_A"], "invalid characterization peak current"),
-                          max(map(abs, values)), rel_tol=0, abs_tol=0.5e-6),
-             "characterization footer differs from raw observations or claims qualification")
-        report.update(neutral_current_qualified=False, physical_current_mode_qualified=False,
-            neutral_current_criterion_satisfied=above == 0, samples_above_neutral_criterion=above,
-            diagnostic_comparison_only=True, historical_diagnostic_bound_A=neutral_criterion,
-            neutral_observation_s=observation_s,
-            protection_current_bound_A=current_bound, plant_snapshot=None, controller_candidate=None,
-            current_bias_correction=None, current_feedback_scale_calibrated=False,
-            current_feedback_unit="DOCUMENTED_AMPERE_UNCALIBRATED",
-            current_statistics={"count": len(values), "min_A": min(values), "max_A": max(values),
-                "mean_A": statistics.fmean(values), "sample_std_A": statistics.stdev(values),
-                "maximum_abs_A": max(map(abs, values))},
-            initial_current_receipt_from_enable_s=(current[0]["time"] - enable["time"]) / 1e9,
-            current_observations=[{"request_sequence": o["record"]["request_sequence"], "index": IQF,
-                "value_A": o["value"], "raw_register_response_hex": o["wire"].hex(),
-                "request_begin_ns": o["record"]["request_begin_ns"],
-                "command_begin_ns": o["request"]["time"], "kernel_accepted_ns": o["request"]["accepted"],
-                "request_accepted_ns": o["record"]["request_accepted_ns"], "receive_ns": o["time"],
-                "receipt_from_enable_s": (o["time"] - enable["time"]) / 1e9,
-                "device_sample_ns": None} for o in current])
-        report["measurement_limitations"].append(
-            "The historical diagnostic bound is a comparison only; it is not a qualification criterion or a hardware contract. Readings remain uncorrected.")
-    return report
 
 
 def main():
@@ -448,15 +359,10 @@ def main():
     try:
         result = review_characterization(args.capture) if args.characterization else review(args.capture)
     except (ValueError, KeyError, TypeError, OSError, IndexError, OverflowError) as exc:
-        result = {"schema": "adr0022.characterization_review/1" if args.characterization else "adr0022.current_review/1",
-                  "capture_complete": False,
-                  "capability_scope": "neutral_current_measurement_characterization_only" if args.characterization else "neutral_transition_only",
-                  "neutral_transition_verified": False,
-                  "neutral_transition_qualified": False, "physical_capabilities_qualified": False,
-                  "motion_authorized": False, "physical_parameters_qualified": False,
-                  "reason": "DATA_INVALID", "detail": str(exc)}
-        if args.characterization:
-            result.update(neutral_current_qualified=False, physical_current_mode_qualified=False)
+        result = {"schema": "adr0022.current_review/1", "capture_complete": False,
+            "capture_integrity": "DATA_INVALID", "reason": "DATA_INVALID", "detail": str(exc),
+            "neutral_transition_qualified": False, "neutral_current_qualified": False,
+            "physical_capabilities_qualified": False, "physical_parameters_qualified": False}
     with args.output.open("x", encoding="utf-8") as output:
         json.dump(result, output, indent=2, allow_nan=False)
         output.write("\n")

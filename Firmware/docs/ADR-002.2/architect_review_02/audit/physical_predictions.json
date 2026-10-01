@@ -1,0 +1,3466 @@
+[
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556061769551583,
+      "mean": 0.003499852632493676,
+      "max_abs": 0.01687379580446715,
+      "endpoint_error": 0.01533981501658151,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238048991546,
+      "mean": 0.0023050485227812355,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.0017181043454171962,
+      "mean": 3.6465211928017636e-06,
+      "max_abs": 0.00677490234375,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475220081616228,
+    "q_rms_deg": 0.5475220081616228,
+    "v_rms_deg_s": 1.2009331777967385
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.01833328506560878,
+      "mean": -0.017330111718061127,
+      "max_abs": 0.0214743946001932,
+      "endpoint_error": -0.014571481054707817,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.011693611406705925,
+      "mean": -0.0008872340414958793,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.0016854407145739342,
+      "mean": 1.2930425480381076e-05,
+      "max_abs": 0.073974609375,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.0504198588696056,
+    "q_rms_deg": 1.0504198588696056,
+    "v_rms_deg_s": 0.6699945808702872
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.1210932957905286,
+      "mean": -1.3560616583326588,
+      "max_abs": 3.951717039484805,
+      "endpoint_error": 0.7719980110837994,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 1.037628102799986,
+      "mean": 0.0651752597434417,
+      "max_abs": 2.48868436484576,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.008987973610291036,
+      "mean": -2.1977083288360244e-06,
+      "max_abs": 0.04888916015625,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2296.636220229993,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.421121314304,
+    "q_rms_deg": 121.52969380229123,
+    "v_rms_deg_s": 59.45171099460592
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.092036248870301,
+      "mean": -0.8018270424320254,
+      "max_abs": 1.8270949569868113,
+      "endpoint_error": -0.3072234797913609,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.4971856646868624,
+      "mean": -0.026842232810472103,
+      "max_abs": 1.347280344967729,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0024296852219066476,
+      "mean": 3.588101810119613e-05,
+      "max_abs": 0.0098876953125,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 589.5877008293868,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.2741348481518,
+    "q_rms_deg": 62.56906813556626,
+    "v_rms_deg_s": 28.48664022096375
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.126743884126371,
+      "mean": 1.6684511890009854,
+      "max_abs": 3.080572872977166,
+      "endpoint_error": 3.080572872977166,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.7732445145487543,
+      "mean": 0.39483703547669086,
+      "max_abs": 2.435865927381025,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.002408634900932052,
+      "mean": -7.68781255982006e-06,
+      "max_abs": 0.01409912109375,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 256.53247885348196,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.45830042863142,
+    "q_rms_deg": 121.85344866570085,
+    "v_rms_deg_s": 44.30364721528581
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.8357396137725377,
+      "mean": 1.1347462698827941,
+      "max_abs": 3.252509643162967,
+      "endpoint_error": 3.2517426527690247,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 0.9058409278983541,
+      "mean": 0.4145045766321763,
+      "max_abs": 2.4878617086029347,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.002269371977462874,
+      "mean": 1.9877886708285495e-05,
+      "max_abs": 0.01318359375,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 187.5860317211955,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.274014895057562,
+    "q_rms_deg": 105.18013215414221,
+    "v_rms_deg_s": 51.90086207879
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.4778816217888344,
+      "mean": -0.13513538275786832,
+      "max_abs": 1.2372719434859185,
+      "endpoint_error": 0.1037240820425609,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.5614297140024792,
+      "mean": 0.01126462183308712,
+      "max_abs": 1.76868010922444,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006314301940572257,
+      "mean": 2.9768468390058534e-05,
+      "max_abs": 0.04248046875,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3170.9273025614643,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.7046371247443,
+    "q_rms_deg": 27.380600035367255,
+    "v_rms_deg_s": 32.16755310557892
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.3269162194069263,
+      "mean": -0.15704974377767741,
+      "max_abs": 0.8756647685472032,
+      "endpoint_error": 0.0005489107602230092,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.47554695984056344,
+      "mean": -0.004220918720550379,
+      "max_abs": 1.392547050359875,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.0062776396307738505,
+      "mean": 1.0721068148550382e-05,
+      "max_abs": 0.0428466796875,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 3007.5405687378075,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.7687144138804,
+    "q_rms_deg": 18.730919626389692,
+    "v_rms_deg_s": 27.246833759141538
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.2701171332666876,
+      "mean": 0.8659100737824903,
+      "max_abs": 2.1002573642429136,
+      "endpoint_error": -0.1118560063420122,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.6262741983875793,
+      "mean": -0.00962111475351506,
+      "max_abs": 1.3851123767354274,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.002399042425650112,
+      "mean": 3.1682813917264166e-05,
+      "max_abs": 0.01043701171875,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 126.36027730990722,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.266384739286454,
+    "q_rms_deg": 72.77235122343633,
+    "v_rms_deg_s": 35.88286838554712
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.2148353340432263,
+      "mean": 1.5076540235586362,
+      "max_abs": 3.6423358722785437,
+      "endpoint_error": 3.6415688818846013,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 1.0348668500413354,
+      "mean": 0.4651237774350283,
+      "max_abs": 3.473951811976183,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.002460466226992902,
+      "mean": -1.7630126859596476e-05,
+      "max_abs": 0.01593017578125,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 209.04205043083604,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263415824816412,
+    "q_rms_deg": 126.90071695712473,
+    "v_rms_deg_s": 59.29350286536638
+  },
+  {
+    "label": "algebraic-coulomb-constant",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/algebraic-coulomb-constant/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.0464177414791984,
+      "mean": -1.1820133958174315,
+      "max_abs": 3.7677874717460185,
+      "endpoint_error": -3.76702048135207,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.8575220164418449,
+      "mean": -0.35937180968973453,
+      "max_abs": 1.9829342366977691,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006199577337048575,
+      "mean": -2.3339852970682657e-06,
+      "max_abs": 0.04412841796875,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3117.103906307883,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.359058979624,
+    "q_rms_deg": 117.25109970745206,
+    "v_rms_deg_s": 49.1323923816657
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556061811566865,
+      "mean": 0.003499852747212971,
+      "max_abs": 0.016873795919186443,
+      "endpoint_error": 0.015339815131300805,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238049063995,
+      "mean": 0.0023050485017108873,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.0017181043454171962,
+      "mean": 3.6465211928017636e-06,
+      "max_abs": 0.00677490234375,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475220105689211,
+    "q_rms_deg": 0.5475220105689211,
+    "v_rms_deg_s": 1.2009331778008894
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.018333189424198648,
+      "mean": -0.01733001054030709,
+      "max_abs": 0.021474293422439165,
+      "endpoint_error": -0.014571379876953781,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.011693611406806845,
+      "mean": -0.0008872340613469396,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.0016854407145739342,
+      "mean": 1.2930425480381076e-05,
+      "max_abs": 0.073974609375,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.0504143790204583,
+    "q_rms_deg": 1.0504143790204583,
+    "v_rms_deg_s": 0.6699945808760693
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.064338924695654,
+      "mean": -1.3350095154584722,
+      "max_abs": 3.874789550910023,
+      "endpoint_error": 0.7153848562617491,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 0.9990662877256423,
+      "mean": 0.06028848751771196,
+      "max_abs": 2.3450345339366017,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.008987973610291036,
+      "mean": -2.1977083288360244e-06,
+      "max_abs": 0.04888916015625,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2304.287535490093,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.4210584546634,
+    "q_rms_deg": 118.27790786963564,
+    "v_rms_deg_s": 57.24228174048206
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.3103410901542785,
+      "mean": -0.9756958835768986,
+      "max_abs": 2.206859056371324,
+      "endpoint_error": -0.34627750606425733,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.5664635176654959,
+      "mean": -0.030212763363207846,
+      "max_abs": 1.4684981900347673,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0024292531776957393,
+      "mean": 3.542242421625356e-05,
+      "max_abs": 0.0098876953125,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 570.0664516024974,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.273932219937,
+    "q_rms_deg": 75.07701418841147,
+    "v_rms_deg_s": 32.45596881036727
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.9166990063482907,
+      "mean": 1.5028120959463753,
+      "max_abs": 2.7515536112414014,
+      "endpoint_error": 2.7515536112414014,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.7093425229187358,
+      "mean": 0.3528959433957167,
+      "max_abs": 2.28219506796348,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.002409096716898877,
+      "mean": -7.220468331259571e-06,
+      "max_abs": 0.01409912109375,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 237.68132210618342,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.45850143956708,
+    "q_rms_deg": 109.81876366067564,
+    "v_rms_deg_s": 40.64233279240543
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6455709046004838,
+      "mean": 1.0127130712638674,
+      "max_abs": 2.9144896354524077,
+      "endpoint_error": 2.9137226450584643,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 0.8282501013332858,
+      "mean": 0.37143255397451885,
+      "max_abs": 2.316106226606,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.002269233449683315,
+      "mean": 1.9854528439533105e-05,
+      "max_abs": 0.01318359375,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 168.2188897731796,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.273995486902207,
+    "q_rms_deg": 94.28426772313274,
+    "v_rms_deg_s": 47.45523518768003
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.5181350625676903,
+      "mean": -0.13589448387832925,
+      "max_abs": 1.3254993146445244,
+      "endpoint_error": 0.03235358587662063,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.6018965163371253,
+      "mean": 0.0045337709221193664,
+      "max_abs": 1.866512469873891,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006314209700356843,
+      "mean": 2.983761698097621e-05,
+      "max_abs": 0.04248046875,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3166.8388443261306,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.705265890647,
+    "q_rms_deg": 29.686952302875497,
+    "v_rms_deg_s": 34.48613008974428
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.35843050457369474,
+      "mean": -0.19248787214055316,
+      "max_abs": 1.027205795070678,
+      "endpoint_error": 0.0012428768716219452,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.48357729622617623,
+      "mean": -0.004155063363743139,
+      "max_abs": 1.5154289012272617,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006278731754177082,
+      "mean": 1.0876696557158372e-05,
+      "max_abs": 0.0428466796875,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 3007.50088243663,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.7687755638012,
+    "q_rms_deg": 20.536555160817258,
+    "v_rms_deg_s": 27.70693814210749
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.9933092082085114,
+      "mean": 0.6556799539975265,
+      "max_abs": 1.642347966305593,
+      "endpoint_error": -0.15551958200953697,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.5156211419679911,
+      "mean": -0.013401136362986137,
+      "max_abs": 1.1985282350294557,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0023991631501061785,
+      "mean": 3.199916752602367e-05,
+      "max_abs": 0.01043701171875,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 102.61508998093126,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.2663847615459614,
+    "q_rms_deg": 56.91242538182925,
+    "v_rms_deg_s": 29.54291526248174
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.9919084908109683,
+      "mean": 1.3388691588189519,
+      "max_abs": 3.2696334384183756,
+      "endpoint_error": 3.2688664480244327,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 0.9736531446585095,
+      "mean": 0.4174933464150397,
+      "max_abs": 3.337004819762695,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.002463521641875809,
+      "mean": -1.9126583250861958e-05,
+      "max_abs": 0.01593017578125,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 187.68777247607864,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263406910891735,
+    "q_rms_deg": 114.1279496997418,
+    "v_rms_deg_s": 55.78621589857321
+  },
+  {
+    "label": "algebraic-stribeck-constant",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/algebraic-stribeck-constant/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.1498342983693512,
+      "mean": -1.2582716851991806,
+      "max_abs": 3.870902026734697,
+      "endpoint_error": -3.8701350363407485,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.8779470185801973,
+      "mean": -0.36909998468249405,
+      "max_abs": 2.087487361558324,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006199577337048575,
+      "mean": -2.3339852970682657e-06,
+      "max_abs": 0.04412841796875,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3123.0119351008575,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.3590589679443,
+    "q_rms_deg": 123.17643194903239,
+    "v_rms_deg_s": 50.302658800738975
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556129172220942,
+      "mean": 0.0035000366657879055,
+      "max_abs": 0.016873979837761382,
+      "endpoint_error": 0.015339999049875742,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238049398065,
+      "mean": 0.0023050484589475662,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.005769612608292733,
+      "mean": -1.997417906818751e-08,
+      "max_abs": 0.020778067616827163,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.547525870050105,
+    "q_rms_deg": 0.547525870050105,
+    "v_rms_deg_s": 1.2009331778200303
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.018285767707513577,
+      "mean": -0.017279835980609077,
+      "max_abs": 0.021424118862741152,
+      "endpoint_error": -0.014521205317255767,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.01169361140695011,
+      "mean": -0.0008872340841111409,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.006310944090846132,
+      "mean": 1.1040595913086611e-05,
+      "max_abs": 0.3147583007812499,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.0476973147971387,
+    "q_rms_deg": 1.0476973147971387,
+    "v_rms_deg_s": 0.6699945808842779
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.9392909370414482,
+      "mean": -1.238509332183066,
+      "max_abs": 3.626589180242675,
+      "endpoint_error": 0.7729984122901696,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 0.9796570173929298,
+      "mean": 0.0651895248934153,
+      "max_abs": 2.308139334561032,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.01393962937513088,
+      "mean": 1.0003732376843435e-06,
+      "max_abs": 0.06656778845058964,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2315.2073555997454,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.390795497855,
+    "q_rms_deg": 111.11318594044563,
+    "v_rms_deg_s": 56.13021246698916
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.0378099491260788,
+      "mean": -0.8130122259540521,
+      "max_abs": 1.651656880971582,
+      "endpoint_error": -0.54910043811697,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.41234143658475625,
+      "mean": -0.04780703661635891,
+      "max_abs": 1.1886108647912303,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.005849520733036685,
+      "mean": 3.685181943658762e-05,
+      "max_abs": 0.023331299042078812,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 613.4980910244738,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.2351230910001,
+    "q_rms_deg": 59.462130021610996,
+    "v_rms_deg_s": 23.625424034667812
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.430287655900505,
+      "mean": 1.122473960676177,
+      "max_abs": 2.2541254651882916,
+      "endpoint_error": 1.7241351029738023,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.6995190343285186,
+      "mean": 0.22206095971796683,
+      "max_abs": 2.204772297608355,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.009138833307590294,
+      "mean": -1.0542419426126612e-05,
+      "max_abs": 0.034557764641277716,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 213.2725389662667,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.49674001265732,
+    "q_rms_deg": 81.9494461727587,
+    "v_rms_deg_s": 40.07948835609106
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.022402869751785903,
+      "mean": -0.019704191464973143,
+      "max_abs": 0.028577367233041384,
+      "endpoint_error": -0.02244144408149884,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 0.024237446916341228,
+      "mean": -0.0027358081567198933,
+      "max_abs": 0.2373252673459462,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.005458026196301063,
+      "mean": 1.46876817188676e-05,
+      "max_abs": 0.03612512772494034,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.2835898857586263,
+    "q_rms_deg": 1.2835898857586263,
+    "v_rms_deg_s": 1.388703414478724
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.4085648677718023,
+      "mean": 0.07737015451297849,
+      "max_abs": 0.8352171698330295,
+      "endpoint_error": 0.3133682575038037,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.4825821951320325,
+      "mean": 0.031084319987286575,
+      "max_abs": 1.5653892272701562,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.011674394471337387,
+      "mean": 2.6360273599515556e-05,
+      "max_abs": 0.05821198425473051,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3182.968723022231,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.7288854274793,
+    "q_rms_deg": 23.40904258064482,
+    "v_rms_deg_s": 27.649923049224203
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.5725235865608933,
+      "mean": -0.32708984148592796,
+      "max_abs": 1.3585553192140623,
+      "endpoint_error": 0.0012890358774768629,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.5246148548947251,
+      "mean": -0.004171016191761422,
+      "max_abs": 1.1381372645085586,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.013036768518027623,
+      "mean": 8.256662125460465e-06,
+      "max_abs": 0.06257816516140813,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 3007.5137474084186,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.781416390735,
+    "q_rms_deg": 32.803185181632045,
+    "v_rms_deg_s": 30.05821705533585
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.2126657629031332,
+      "mean": -0.684077711656209,
+      "max_abs": 2.500141843212215,
+      "endpoint_error": -2.500141843212215,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.5043131891980913,
+      "mean": -0.2158890002980819,
+      "max_abs": 1.5461993121205728,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.004317891938660024,
+      "mean": 2.9756286387517817e-05,
+      "max_abs": 0.01716054149933191,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 141.09425571850582,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.2663847467961484,
+    "q_rms_deg": 69.48063017436168,
+    "v_rms_deg_s": 28.89501729383321
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.9026585981925295,
+      "mean": 1.225433996556942,
+      "max_abs": 3.1704222205040575,
+      "endpoint_error": 3.1696552301101146,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 0.9982625311540668,
+      "mean": 0.40481130275810123,
+      "max_abs": 3.457128758860282,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.007355471637909393,
+      "mean": -2.2091304823579246e-05,
+      "max_abs": 0.034918928052306286,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 182.00338940615035,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263413116329426,
+    "q_rms_deg": 109.01430753070946,
+    "v_rms_deg_s": 57.19622988117489
+  },
+  {
+    "label": "first_order-coulomb-constant",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/first_order-coulomb-constant/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.2562118682142907,
+      "mean": -1.4756603006666886,
+      "max_abs": 4.152409618002309,
+      "endpoint_error": -4.151642627608361,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.8053447260344303,
+      "mean": -0.3956754651021136,
+      "max_abs": 2.012004688861485,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.011685510464405127,
+      "mean": 1.7374710371302952e-06,
+      "max_abs": 0.06290753224316126,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3139.1411319924173,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.3590589769888,
+    "q_rms_deg": 129.27141773600556,
+    "v_rms_deg_s": 46.14285385489241
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556061158888612,
+      "mean": 0.0034998509651279638,
+      "max_abs": 0.01687379413710144,
+      "endpoint_error": 0.015339813349215798,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238049027708,
+      "mean": 0.002305048510384636,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.002509001349845324,
+      "mean": 3.3120656728477745e-07,
+      "max_abs": 0.011021427474407416,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475219731732118,
+    "q_rms_deg": 0.5475219731732118,
+    "v_rms_deg_s": 1.2009331777988104
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.018333682009629034,
+      "mean": -0.017330531639098694,
+      "max_abs": 0.021474814521230772,
+      "endpoint_error": -0.014571900975745388,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.011693611406774534,
+      "mean": -0.0008872340552413673,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.0031825456725760237,
+      "mean": 1.1454935322963778e-05,
+      "max_abs": 0.21270939465703573,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.050442602086669,
+    "q_rms_deg": 1.050442602086669,
+    "v_rms_deg_s": 0.6699945808742181
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.200985358430554,
+      "mean": -1.416701806460546,
+      "max_abs": 4.086686563400129,
+      "endpoint_error": 0.7597230224506708,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 1.0529794783024782,
+      "mean": 0.0641229706677773,
+      "max_abs": 2.36395334110326,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.009646849650033772,
+      "mean": -2.559549883072724e-07,
+      "max_abs": 0.05471929941224174,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2289.606341189004,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.421498788718,
+    "q_rms_deg": 126.10717180815948,
+    "v_rms_deg_s": 60.33128002061924
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.3263928923034563,
+      "mean": -0.9864862844991782,
+      "max_abs": 2.2505080273959805,
+      "endpoint_error": -0.314328286765837,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.5635900253464511,
+      "mean": -0.0274522714669871,
+      "max_abs": 1.403548922881146,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0029709258806314186,
+      "mean": 3.6973080000346e-05,
+      "max_abs": 0.014637037964413513,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 565.7349943581584,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.275880149606,
+    "q_rms_deg": 75.99671470513837,
+    "v_rms_deg_s": 32.29132982802274
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.8895115770896806,
+      "mean": 1.4792715287453606,
+      "max_abs": 2.721500176141511,
+      "endpoint_error": 2.721500176141511,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.6943507844344431,
+      "mean": 0.3490789958882777,
+      "max_abs": 2.18866193532448,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.0037448478315077038,
+      "mean": -1.1625086753145129e-05,
+      "max_abs": 0.01589087761532873,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 235.9578326748794,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.45729711512344,
+    "q_rms_deg": 108.26103870834679,
+    "v_rms_deg_s": 39.783369449691605
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6413220650970441,
+      "mean": 1.0087211683182313,
+      "max_abs": 2.9136990523869475,
+      "endpoint_error": 2.912932061993005,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 0.8255291548033785,
+      "mean": 0.37132556548137463,
+      "max_abs": 2.29845398430951,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.002802032212590066,
+      "mean": 1.4473931706215057e-05,
+      "max_abs": 0.01766116606189777,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 168.17343379655546,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.2738560368513,
+    "q_rms_deg": 94.0408271517572,
+    "v_rms_deg_s": 47.29933643523558
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.6895870218732255,
+      "mean": -0.28327379043988216,
+      "max_abs": 1.743558669330838,
+      "endpoint_error": 0.10352126670087358,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.6852015633041568,
+      "mean": 0.011244844273450046,
+      "max_abs": 2.0712004295539703,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.00708375198650236,
+      "mean": 2.656234995344698e-05,
+      "max_abs": 0.04290221131151262,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3170.915724565649,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.7046718036854,
+    "q_rms_deg": 39.5104259603314,
+    "v_rms_deg_s": 39.25915769309429
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.2276203801626385,
+      "mean": -0.01565989031399756,
+      "max_abs": 0.6039212061700567,
+      "endpoint_error": -0.0008393092680165637,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.49500275533617816,
+      "mean": -0.004363491780444961,
+      "max_abs": 1.6927384195609232,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.0073200732916685555,
+      "mean": 8.870489086341247e-06,
+      "max_abs": 0.04566218606935368,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 3007.6202041329175,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.768792857301,
+    "q_rms_deg": 13.041687114482512,
+    "v_rms_deg_s": 28.361568728109898
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.0165467643378603,
+      "mean": 0.6800067341521558,
+      "max_abs": 1.6799123593269008,
+      "endpoint_error": -0.12605569770363712,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.5210386108842541,
+      "mean": -0.01085425282506699,
+      "max_abs": 1.2037847184567012,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.002673556229769826,
+      "mean": 3.0015489312611537e-05,
+      "max_abs": 0.01098020636054306,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 103.0789827134382,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.266384754777587,
+    "q_rms_deg": 58.2438392742393,
+    "v_rms_deg_s": 29.853313367026917
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.986800407169927,
+      "mean": 1.334603302823022,
+      "max_abs": 3.2716529452901884,
+      "endpoint_error": 3.2708859548962455,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 0.9639456394411688,
+      "mean": 0.41774398174234284,
+      "max_abs": 3.2825139946291095,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.0033764486735539663,
+      "mean": -2.1513354927855016e-05,
+      "max_abs": 0.017213255518700205,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 187.8034822610881,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263410534140174,
+    "q_rms_deg": 113.83527806571033,
+    "v_rms_deg_s": 55.23001682001836
+  },
+  {
+    "label": "first_order-stribeck-constant",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/constant/first_order-stribeck-constant/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.9975237154131071,
+      "mean": -0.9878774528055174,
+      "max_abs": 3.5824580719301125,
+      "endpoint_error": -3.581691081536164,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.9384568665460021,
+      "mean": -0.3418605359916301,
+      "max_abs": 2.141045752622958,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006975083007829231,
+      "mean": 1.077198741888462e-06,
+      "max_abs": 0.04593723376449588,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3106.485313870141,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.359058972575,
+    "q_rms_deg": 114.4496783704624,
+    "v_rms_deg_s": 53.76961770815786
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556064141574809,
+      "mean": 0.003499859109104173,
+      "max_abs": 0.016873802281077648,
+      "endpoint_error": 0.015339821493192008,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.02096023804902482,
+      "mean": 0.002305048528498762,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.0016944609198971921,
+      "mean": 2.6735087685704987e-06,
+      "max_abs": 0.00585376461464443,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475221440685425,
+    "q_rms_deg": 0.5475221440685425,
+    "v_rms_deg_s": 1.200933177798645
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.01833163903641722,
+      "mean": -0.017328370397273408,
+      "max_abs": 0.021472653279405483,
+      "endpoint_error": -0.014569739733920098,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.011693611406660639,
+      "mean": -0.0008872340308423396,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.001659518343292265,
+      "mean": 1.247045751720187e-05,
+      "max_abs": 0.0648193359375,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.050325548343974,
+    "q_rms_deg": 1.050325548343974,
+    "v_rms_deg_s": 0.6699945808676924
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.4938297596085837,
+      "mean": -1.0877285131767926,
+      "max_abs": 2.732483300470676,
+      "endpoint_error": -0.5133612846282496,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 0.7251158973288845,
+      "mean": -0.04581208181198941,
+      "max_abs": 1.746990233703242,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.008972915385055576,
+      "mean": 4.845342816822929e-08,
+      "max_abs": 0.04888916015625,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2440.1388305176656,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.4174501539017,
+    "q_rms_deg": 85.59014053661419,
+    "v_rms_deg_s": 41.54608057478661
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.5748960249057257,
+      "mean": -0.3765785903548705,
+      "max_abs": 1.0119953520005165,
+      "endpoint_error": -0.0012734835060186356,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.31899856084935996,
+      "mean": -0.00042856816834691306,
+      "max_abs": 0.8969297657576298,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0024175023849124645,
+      "mean": 3.6296768762086534e-05,
+      "max_abs": 0.0098876953125,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 630.3642024023083,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.2706719362111,
+    "q_rms_deg": 32.93911588594594,
+    "v_rms_deg_s": 18.277271207415502
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.399717364320195,
+      "mean": 1.8774910462561392,
+      "max_abs": 3.512672091344836,
+      "endpoint_error": 3.512672091344836,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.8500100419295968,
+      "mean": 0.44990046634387737,
+      "max_abs": 2.522100982967025,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.0023753376733286593,
+      "mean": -1.0738785612770118e-05,
+      "max_abs": 0.01409912109375,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 281.29469693876774,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.46198449224264,
+    "q_rms_deg": 137.49367699980493,
+    "v_rms_deg_s": 48.701987946304044
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.0666147853313843,
+      "mean": 1.276159174838876,
+      "max_abs": 3.6872076941964975,
+      "endpoint_error": 3.686440703802555,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 1.0066199182324613,
+      "mean": 0.4699115767182762,
+      "max_abs": 2.698918896083282,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.0022405552563589813,
+      "mean": 1.599573067841573e-05,
+      "max_abs": 0.0091552734375,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 212.49299422674326,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.2745404475204538,
+    "q_rms_deg": 118.40830507882295,
+    "v_rms_deg_s": 57.67507288852406
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.9390783854992621,
+      "mean": 0.36999582981826507,
+      "max_abs": 1.5262978293186436,
+      "endpoint_error": 1.023307422688383,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.7392423165853341,
+      "mean": 0.09801542356471846,
+      "max_abs": 2.376134857935364,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006299173712659211,
+      "mean": 2.683306000422088e-05,
+      "max_abs": 0.04248046875,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3223.6190250754553,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.7074774239927,
+    "q_rms_deg": 53.805228121067046,
+    "v_rms_deg_s": 42.3554647778135
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.37653854327007885,
+      "mean": -0.1315113005967117,
+      "max_abs": 1.0619295665603303,
+      "endpoint_error": 0.2092582580948843,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.5300754818832678,
+      "mean": 0.015466752756913957,
+      "max_abs": 1.8248017851983978,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006259004459838664,
+      "mean": 1.0018934701734079e-05,
+      "max_abs": 0.04237353023178558,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 2995.5815610463906,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.7680273920005,
+    "q_rms_deg": 21.574069353379645,
+    "v_rms_deg_s": 30.371087935274577
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6564340711302585,
+      "mean": 1.2322600072540588,
+      "max_abs": 2.696686425643599,
+      "endpoint_error": 0.3107871658974184,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.7317632624848073,
+      "mean": 0.026875834740778995,
+      "max_abs": 1.6793301206677538,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0023870164119786,
+      "mean": 3.0615247279250154e-05,
+      "max_abs": 0.00970458984375,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 156.2884067531048,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.266384714890574,
+    "q_rms_deg": 94.90668131743661,
+    "v_rms_deg_s": 41.926946543103305
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.4784099929674643,
+      "mean": 1.6929167207810716,
+      "max_abs": 4.1184360719794295,
+      "endpoint_error": 4.117669081585487,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 1.1081844587906868,
+      "mean": 0.5259530800538089,
+      "max_abs": 3.5738031831715613,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.0024209821678634114,
+      "mean": -1.8722180711457555e-05,
+      "max_abs": 0.01162038053806791,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 236.3205835655876,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263421221461357,
+    "q_rms_deg": 142.00243250008376,
+    "v_rms_deg_s": 63.49429241069566
+  },
+  {
+    "label": "algebraic-coulomb-affine",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/algebraic-coulomb-affine/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.2074736521055067,
+      "mean": -1.2773500334164474,
+      "max_abs": 3.839542341690091,
+      "endpoint_error": -3.8387753512961424,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.9187037803098006,
+      "mean": -0.36611819662682454,
+      "max_abs": 2.2300560717194156,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006187889927082359,
+      "mean": 1.3706058237946205e-08,
+      "max_abs": 0.04372782611084458,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3121.2151575293233,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.3590589912137,
+    "q_rms_deg": 126.4789236519757,
+    "v_rms_deg_s": 52.637849234465556
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556174361089242,
+      "mean": 0.003500160042801891,
+      "max_abs": 0.016874103214775366,
+      "endpoint_error": 0.015340122426889724,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238053517374,
+      "mean": 0.002305047815155249,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.0021211132618821054,
+      "mean": 8.32273042208987e-07,
+      "max_abs": 0.010424680241325895,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475284591815396,
+    "q_rms_deg": 0.5475284591815396,
+    "v_rms_deg_s": 1.2009331780560493
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.01825592238750448,
+      "mean": -0.017248250145513108,
+      "max_abs": 0.021392533027645183,
+      "endpoint_error": -0.014489619482159799,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.01169361140929705,
+      "mean": -0.0008872344838410646,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.0031158382931701766,
+      "mean": 1.2166782917007517e-05,
+      "max_abs": 0.29388427734375,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.0459873039224001,
+    "q_rms_deg": 1.0459873039224001,
+    "v_rms_deg_s": 0.6699945810187476
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.7788695314182845,
+      "mean": -1.2566926786757893,
+      "max_abs": 3.3860377433371696,
+      "endpoint_error": -0.0005663503100348244,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 0.8151634298351702,
+      "mean": -0.0016166797436524356,
+      "max_abs": 1.9170976270788866,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.009328240364409426,
+      "mean": -1.7293692596281445e-06,
+      "max_abs": 0.05002645133619399,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2373.3119337672697,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.3809024146635,
+    "q_rms_deg": 101.9217164546821,
+    "v_rms_deg_s": 46.705424142963864
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.9132802093920246,
+      "mean": -0.6454429550840353,
+      "max_abs": 1.6784750405760818,
+      "endpoint_error": 0.0010274047678944243,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.42056071457091365,
+      "mean": -0.00030163894661810754,
+      "max_abs": 1.0364224459843063,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0026807723850529952,
+      "mean": 3.8598119561512125e-05,
+      "max_abs": 0.0150146484375,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 592.132756490929,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.2383245222724,
+    "q_rms_deg": 52.3271015109871,
+    "v_rms_deg_s": 24.096353973919417
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6202918790231895,
+      "mean": 1.2576155264310784,
+      "max_abs": 2.613890833443933,
+      "endpoint_error": 2.090030994870253,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.7251258336656818,
+      "mean": 0.26871094814622476,
+      "max_abs": 2.0120872484503414,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.0030943362305112343,
+      "mean": -1.4897037105917614e-05,
+      "max_abs": 0.01666259765625,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 200.31317229133614,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.496601182175326,
+    "q_rms_deg": 92.83588624735052,
+    "v_rms_deg_s": 41.54664988494891
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.0700288596495844,
+      "mean": 0.6271819434578821,
+      "max_abs": 1.9466619345366647,
+      "endpoint_error": 1.9458949441427218,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 0.6221357016878103,
+      "mean": 0.24811045684705843,
+      "max_abs": 1.8874951519313008,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.0025396369071153642,
+      "mean": 1.3547379466320202e-05,
+      "max_abs": 0.01739501953125,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 112.78530070984553,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.2905727890120609,
+    "q_rms_deg": 61.308137615117495,
+    "v_rms_deg_s": 35.645749991121534
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.5852284756668271,
+      "mean": 0.09482441978275923,
+      "max_abs": 1.161174765681455,
+      "endpoint_error": 0.4556086278907401,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.5886066332755772,
+      "mean": 0.04451894594302085,
+      "max_abs": 1.8849771731432234,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006672094665628408,
+      "mean": 2.8770360047747866e-05,
+      "max_abs": 0.03936767578125,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3191.1331121312214,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.7408211593806,
+    "q_rms_deg": 33.53112170658379,
+    "v_rms_deg_s": 33.72467588009518
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.35991802657703553,
+      "mean": -0.18187042961692537,
+      "max_abs": 1.0712480126689101,
+      "endpoint_error": 0.0013319241440825635,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.46939402048515877,
+      "mean": -0.004125429895822529,
+      "max_abs": 1.4812354848547074,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006811842692787865,
+      "mean": 8.731992718279752e-06,
+      "max_abs": 0.04528007672121004,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 3007.490787994527,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.764706619495,
+    "q_rms_deg": 20.621783893541533,
+    "v_rms_deg_s": 26.894296302476903
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.039555877113381134,
+      "mean": -0.03540459453965399,
+      "max_abs": 0.05215534405975175,
+      "endpoint_error": -0.037582526574838404,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.030216656499212267,
+      "mean": -0.003216287549394882,
+      "max_abs": 0.2373252673459462,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0025303979123886397,
+      "mean": 2.9789444997685512e-05,
+      "max_abs": 0.010986328125,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.2663848135348648,
+    "q_rms_deg": 2.2663848135348648,
+    "v_rms_deg_s": 1.731286888401412
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.7946932491656808,
+      "mean": 1.1513734722998072,
+      "max_abs": 3.008811623902794,
+      "endpoint_error": 3.0080446335088515,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 0.9403677724467243,
+      "mean": 0.384158689274261,
+      "max_abs": 3.25042427911924,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.0029278448401860806,
+      "mean": -1.805179211625055e-05,
+      "max_abs": 0.01776123046875,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 172.7437792384941,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263379070809532,
+    "q_rms_deg": 102.82834869781416,
+    "v_rms_deg_s": 53.87910455131588
+  },
+  {
+    "label": "algebraic-stribeck-affine",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/algebraic-stribeck-affine/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6256219379664687,
+      "mean": -0.9440165670812581,
+      "max_abs": 2.4383329845367,
+      "endpoint_error": -2.4335727784768437,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.7417724547136068,
+      "mean": -0.23357329712726693,
+      "max_abs": 2.0564620301939875,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.006550134053486523,
+      "mean": 1.6866490679667414e-06,
+      "max_abs": 0.0421142578125,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3040.702980683892,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.359058940412,
+    "q_rms_deg": 93.14127612935638,
+    "v_rms_deg_s": 42.50043101414865
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.009556077768840425,
+      "mean": 0.003499896317009088,
+      "max_abs": 0.016873839488982564,
+      "endpoint_error": 0.015339858701096923,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238049173907,
+      "mean": 0.0023050485053363193,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.0027290671146612475,
+      "mean": 5.066223168148499e-07,
+      "max_abs": 0.012117362985170438,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475229248533486,
+    "q_rms_deg": 0.5475229248533486,
+    "v_rms_deg_s": 1.200933177807187
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.018321889670757666,
+      "mean": -0.01731805624113232,
+      "max_abs": 0.021462339123264396,
+      "endpoint_error": -0.014559425577779011,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.011693611406756343,
+      "mean": -0.0008872340474840793,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.003564853128739804,
+      "mean": 1.223689047596372e-05,
+      "max_abs": 0.2444658681023712,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.0497669508387517,
+    "q_rms_deg": 1.0497669508387517,
+    "v_rms_deg_s": 0.6699945808731759
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.475863658481215,
+      "mean": -1.0599938620112217,
+      "max_abs": 2.7314176164051034,
+      "endpoint_error": -0.3698589868115696,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 0.7184716311715125,
+      "mean": -0.03344615855757573,
+      "max_abs": 1.7187962811879576,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.009869000491850638,
+      "mean": -1.1531844957479617e-06,
+      "max_abs": 0.05630463646781192,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2431.977813701592,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.4054330447896,
+    "q_rms_deg": 84.56075876771072,
+    "v_rms_deg_s": 41.165392166007585
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.5559971549188939,
+      "mean": -0.36434415724753033,
+      "max_abs": 0.9823501866241315,
+      "endpoint_error": 0.0002512163344814411,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.3084492014190999,
+      "mean": -0.00031888594237303955,
+      "max_abs": 0.8605923085214933,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0031438933207116847,
+      "mean": 3.6980695776180365e-05,
+      "max_abs": 0.015434254858480101,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 632.048634076757,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.26052194395345,
+    "q_rms_deg": 31.856290398134018,
+    "v_rms_deg_s": 17.67283743549507
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.390470639919014,
+      "mean": 1.8676939537669652,
+      "max_abs": 3.5048889839711235,
+      "endpoint_error": 3.5048889839711235,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.8520850268374115,
+      "mean": 0.4489408594591302,
+      "max_abs": 2.5035636590071793,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.004114021142766187,
+      "mean": -7.963032958099557e-06,
+      "max_abs": 0.017613042960979194,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 280.8637717453588,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.473616421074816,
+    "q_rms_deg": 136.96387871729664,
+    "v_rms_deg_s": 48.820875824075166
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.0640232382232266,
+      "mean": 1.272421791500345,
+      "max_abs": 3.6870479356596393,
+      "endpoint_error": 3.686280945265697,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 1.0094749039677842,
+      "mean": 0.46989539671508973,
+      "max_abs": 2.710819604362117,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.002966255737739439,
+      "mean": 1.5454929021627315e-05,
+      "max_abs": 0.019682567245364574,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 212.4872976311357,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.2775756465843582,
+    "q_rms_deg": 118.25982036711618,
+    "v_rms_deg_s": 57.83865152172811
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.944735149180228,
+      "mean": 0.38184653407249974,
+      "max_abs": 1.5185919658117513,
+      "endpoint_error": 1.0639462652228389,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.7295353987173833,
+      "mean": 0.10185958368205013,
+      "max_abs": 2.3619226501345434,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.007334926448359282,
+      "mean": 2.900307473750926e-05,
+      "max_abs": 0.04329603339435206,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3225.9549181346174,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.713568395573,
+    "q_rms_deg": 54.129336805689285,
+    "v_rms_deg_s": 41.79929935189979
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.3782839716577625,
+      "mean": -0.14006669121051107,
+      "max_abs": 1.0829896214032928,
+      "endpoint_error": 0.1855563279306338,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.5267148134889412,
+      "mean": 0.013228224198323745,
+      "max_abs": 1.8076752196853931,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.007652244991087055,
+      "mean": 7.88495156476442e-06,
+      "max_abs": 0.0467685090204808,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 2996.9394939400963,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.767955937801,
+    "q_rms_deg": 21.674075033436242,
+    "v_rms_deg_s": 30.178535819936656
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6627063154982127,
+      "mean": 1.2324432262068428,
+      "max_abs": 2.7103587087325316,
+      "endpoint_error": 0.29272804383842654,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.7387608292325005,
+      "mean": 0.02532518768679485,
+      "max_abs": 1.691584927624957,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.0027620999635105162,
+      "mean": 3.039990512574494e-05,
+      "max_abs": 0.011658691279054056,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 157.06053881539063,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.2663847177874406,
+    "q_rms_deg": 95.26605444779509,
+    "v_rms_deg_s": 42.327877584607215
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.4727841866568623,
+      "mean": 1.6839061486318394,
+      "max_abs": 4.114274437877523,
+      "endpoint_error": 4.113507447483579,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 1.1129025200111065,
+      "mean": 0.5254165691956675,
+      "max_abs": 3.5970217539734586,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.0036396573127961004,
+      "mean": -2.24482569056031e-05,
+      "max_abs": 0.0184656947078789,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 236.08213948644692,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263421181099153,
+    "q_rms_deg": 141.68009754212818,
+    "v_rms_deg_s": 63.76461740611004
+  },
+  {
+    "label": "first_order-coulomb-affine",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/first_order-coulomb-affine/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.2200670078540408,
+      "mean": -1.2876075377893648,
+      "max_abs": 3.8800895735522403,
+      "endpoint_error": -3.8793225831582916,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.9153664691282724,
+      "mean": -0.36993201009086774,
+      "max_abs": 2.195988631115126,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.007231783729886851,
+      "mean": 1.3284970726805508e-06,
+      "max_abs": 0.04742153674418559,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3123.5383427860324,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.35905899127,
+    "q_rms_deg": 127.20046978627352,
+    "v_rms_deg_s": 52.44663538884217
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-physical-probe-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-physical-probe-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.00955614180387281,
+      "mean": 0.003500071153764314,
+      "max_abs": 0.016874014325737787,
+      "endpoint_error": 0.015340033537852148,
+      "native_samples": 6578
+    },
+    "v": {
+      "rms": 0.020960238050014512,
+      "mean": 0.002305048333472153,
+      "max_abs": 0.16249150611247748,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 330
+    },
+    "current": {
+      "rms": 0.004430527645094297,
+      "mean": 4.3570222156772984e-07,
+      "max_abs": 0.01694078770302456,
+      "endpoint_error": 0.0032958984375,
+      "native_samples": 6578
+    },
+    "observed_q_span_deg": 1.494140625,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 0.5650980130867818,
+    "prediction_initial_constant_q_rms_deg": 0.5475265937904452,
+    "q_rms_deg": 0.5475265937904452,
+    "v_rms_deg_s": 1.20093317785535
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-30deg-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-30deg-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.018277040379697594,
+      "mean": -0.0172706003342299,
+      "max_abs": 0.02141488321636198,
+      "endpoint_error": -0.014511969670876595,
+      "native_samples": 18579
+    },
+    "v": {
+      "rms": 0.011693611407483808,
+      "mean": -0.0008872341820813297,
+      "max_abs": 0.14522149759818834,
+      "endpoint_error": -0.00021081885926778086,
+      "native_samples": 931
+    },
+    "current": {
+      "rms": 0.005386001173013756,
+      "mean": 1.1945227463815766e-05,
+      "max_abs": 0.3147583007812499,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 18579
+    },
+    "observed_q_span_deg": 1.2744140624999998,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 1.050492241067884,
+    "prediction_initial_constant_q_rms_deg": 1.0471972757468557,
+    "q_rms_deg": 1.0471972757468557,
+    "v_rms_deg_s": 0.6699945809148565
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-maximum-stationary-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-maximum-stationary-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.4892467388093737,
+      "mean": -1.055774305626446,
+      "max_abs": 2.804837664281237,
+      "endpoint_error": -0.10703762563198893,
+      "native_samples": 11581
+    },
+    "v": {
+      "rms": 0.7029637945442403,
+      "mean": -0.010778929566889124,
+      "max_abs": 1.820432531648052,
+      "endpoint_error": -4.023735435029005e-05,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.01195122943119468,
+      "mean": -3.21963238402693e-08,
+      "max_abs": 0.06355753115979679,
+      "endpoint_error": -0.00054931640625,
+      "native_samples": 11581
+    },
+    "observed_q_span_deg": 2567.548828125,
+    "predicted_q_span_deg": 2412.712600065168,
+    "initial_observation_constant_q_rms_deg": 1473.4223936425649,
+    "prediction_initial_constant_q_rms_deg": 1473.3845880057308,
+    "q_rms_deg": 85.32755278739877,
+    "v_rms_deg_s": 40.27685857788649
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-descended-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-descended-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.2380434639992298,
+      "mean": -0.16120274969675988,
+      "max_abs": 0.5002169684811992,
+      "endpoint_error": 0.007223238676113741,
+      "native_samples": 11579
+    },
+    "v": {
+      "rms": 0.17556056433158135,
+      "mean": 0.00022079507325643548,
+      "max_abs": 0.6164919593572638,
+      "endpoint_error": -0.0020553116326982213,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.004616742358745561,
+      "mean": 3.663875085378033e-05,
+      "max_abs": 0.019888546160131804,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 11579
+    },
+    "observed_q_span_deg": 688.3593749999999,
+    "predicted_q_span_deg": 661.006684586884,
+    "initial_observation_constant_q_rms_deg": 412.2793827178222,
+    "prediction_initial_constant_q_rms_deg": 412.2352376089291,
+    "q_rms_deg": 13.63888582783022,
+    "v_rms_deg_s": 10.05887938513459
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-program-information-02",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-program-information-02.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.6407567698489838,
+      "mean": 1.274079627429239,
+      "max_abs": 2.6080419404266943,
+      "endpoint_error": 2.0780515782122055,
+      "native_samples": 7836
+    },
+    "v": {
+      "rms": 0.7465758578867185,
+      "mean": 0.2671190754014883,
+      "max_abs": 2.088388785375464,
+      "endpoint_error": -0.002135171514753673,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.006944092944850547,
+      "mean": -8.879238041966044e-06,
+      "max_abs": 0.02693526212217557,
+      "endpoint_error": 0.00091552734375,
+      "native_samples": 7836
+    },
+    "observed_q_span_deg": 101.29394531249999,
+    "predicted_q_span_deg": 214.9639967651578,
+    "initial_observation_constant_q_rms_deg": 59.45501954462714,
+    "prediction_initial_constant_q_rms_deg": 59.49712093157275,
+    "q_rms_deg": 94.00843811986454,
+    "v_rms_deg_s": 42.77564574326771
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-information-case4-01",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-information-case4-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.016196933684508186,
+      "mean": -0.010283038172650312,
+      "max_abs": 0.0284587180980731,
+      "endpoint_error": 0.0017292408758391442,
+      "native_samples": 7839
+    },
+    "v": {
+      "rms": 0.027576479733953295,
+      "mean": 0.00033176874993758916,
+      "max_abs": 0.2373252673459462,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 393
+    },
+    "current": {
+      "rms": 0.004324436117429491,
+      "mean": 1.5646475079732887e-05,
+      "max_abs": 0.029018197501781695,
+      "endpoint_error": -0.0003662109375,
+      "native_samples": 7839
+    },
+    "observed_q_span_deg": 1.6699218750000102,
+    "predicted_q_span_deg": 1.378080141319252,
+    "initial_observation_constant_q_rms_deg": 1.2735870080749894,
+    "prediction_initial_constant_q_rms_deg": 1.2776147931502284,
+    "q_rms_deg": 0.9280159411755972,
+    "v_rms_deg_s": 1.5800159025835712
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-information-round2-case14-positive",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-information-round2-case14-positive.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.0828716086760999,
+      "mean": 0.5649423333374968,
+      "max_abs": 1.7065142039474708,
+      "endpoint_error": 1.7065142039474708,
+      "native_samples": 10592
+    },
+    "v": {
+      "rms": 0.6075905809481731,
+      "mean": 0.1625176585196669,
+      "max_abs": 2.0260962394262485,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.009622753488101888,
+      "mean": 2.8298582846575185e-05,
+      "max_abs": 0.050570434693312016,
+      "endpoint_error": -0.00201416015625,
+      "native_samples": 10592
+    },
+    "observed_q_span_deg": 3165.2490234375005,
+    "predicted_q_span_deg": 3262.802456609136,
+    "initial_observation_constant_q_rms_deg": 2225.7413407127724,
+    "prediction_initial_constant_q_rms_deg": 2225.738971047753,
+    "q_rms_deg": 62.04397293168258,
+    "v_rms_deg_s": 34.812375960232124
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-information-round2-case15-negative",
+    "role": "train",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-information-round2-case15-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.319225302481148,
+      "mean": -0.1370391326581134,
+      "max_abs": 0.8962336071533912,
+      "endpoint_error": 0.0006308996084669616,
+      "native_samples": 10589
+    },
+    "v": {
+      "rms": 0.4616955879106936,
+      "mean": -0.004210068419275066,
+      "max_abs": 1.3638742279609612,
+      "endpoint_error": -0.00017695773804490502,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.01052947501317849,
+      "mean": 7.680094369905683e-06,
+      "max_abs": 0.05614815786324734,
+      "endpoint_error": -0.0025634765625,
+      "native_samples": 10589
+    },
+    "observed_q_span_deg": 3008.1005859375,
+    "predicted_q_span_deg": 3007.5309645569455,
+    "initial_observation_constant_q_rms_deg": 2146.769711338046,
+    "prediction_initial_constant_q_rms_deg": 2146.7647154341566,
+    "q_rms_deg": 18.290262545956868,
+    "v_rms_deg_s": 26.453208607094016
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-descended-03",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-descended-03.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 0.039555877225702744,
+      "mean": -0.03540459466514561,
+      "max_abs": 0.05215534418524337,
+      "endpoint_error": -0.03758252670033002,
+      "native_samples": 11576
+    },
+    "v": {
+      "rms": 0.03021665651550879,
+      "mean": -0.0032162871573714713,
+      "max_abs": 0.2373252673459462,
+      "endpoint_error": 0.0018611159207193144,
+      "native_samples": 580
+    },
+    "current": {
+      "rms": 0.003576475244902534,
+      "mean": 3.0112609580897138e-05,
+      "max_abs": 0.01476100933763097,
+      "endpoint_error": -0.00311279296875,
+      "native_samples": 11576
+    },
+    "observed_q_span_deg": 3.032226562499988,
+    "predicted_q_span_deg": 0.0,
+    "initial_observation_constant_q_rms_deg": 2.2663849534526355,
+    "prediction_initial_constant_q_rms_deg": 2.266384819970419,
+    "q_rms_deg": 2.266384819970419,
+    "v_rms_deg_s": 1.731286889335134
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-information-case13-01",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-information-case13-01.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 2.0907498099126216,
+      "mean": 1.3285690927185656,
+      "max_abs": 3.581252636732791,
+      "endpoint_error": 3.5804856463388486,
+      "native_samples": 7831
+    },
+    "v": {
+      "rms": 1.058295823157897,
+      "mean": 0.457328845562985,
+      "max_abs": 3.48000834202937,
+      "endpoint_error": -0.0002338182396840686,
+      "native_samples": 392
+    },
+    "current": {
+      "rms": 0.005703418132946094,
+      "mean": -2.2364181827303185e-05,
+      "max_abs": 0.027938555066519266,
+      "endpoint_error": -0.00018310546875,
+      "native_samples": 7831
+    },
+    "observed_q_span_deg": 1.5820312500000009,
+    "predicted_q_span_deg": 205.54223407870535,
+    "initial_observation_constant_q_rms_deg": 0.5263315013117941,
+    "prediction_initial_constant_q_rms_deg": 0.5263384454339975,
+    "q_rms_deg": 119.79114012577234,
+    "v_rms_deg_s": 60.63588414327082
+  },
+  {
+    "label": "first_order-stribeck-affine",
+    "run_id": "yaw-information-round2-case20-negative",
+    "role": "selection",
+    "source_prediction_member": "predictions/affine/first_order-stribeck-affine/yaw-information-round2-case20-negative.npz",
+    "reported_passed": false,
+    "reported_failures": [
+      "angle_rms",
+      "velocity_rms",
+      "current_observation_rms",
+      "structured_velocity_residual"
+    ],
+    "q": {
+      "rms": 1.7116667790489577,
+      "mean": -0.9994801995563639,
+      "max_abs": 2.9352876068397933,
+      "endpoint_error": -2.9345206164458446,
+      "native_samples": 10591
+    },
+    "v": {
+      "rms": 0.7223652166403006,
+      "mean": -0.2808417334077031,
+      "max_abs": 1.8602817715853117,
+      "endpoint_error": 0.0018042554190801506,
+      "native_samples": 531
+    },
+    "current": {
+      "rms": 0.009582110889572535,
+      "mean": 9.30634901629623e-07,
+      "max_abs": 0.056794677815780625,
+      "endpoint_error": 0.00054931640625,
+      "native_samples": 10591
+    },
+    "observed_q_span_deg": 2903.5546875,
+    "predicted_q_span_deg": 3069.405177552056,
+    "initial_observation_constant_q_rms_deg": 2141.359058867242,
+    "prediction_initial_constant_q_rms_deg": 2141.359058937409,
+    "q_rms_deg": 98.07128237225687,
+    "v_rms_deg_s": 41.38847818054261
+  }
+]

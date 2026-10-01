@@ -1,0 +1,63 @@
+{
+  "scope": "Read-only raw-journal audit; no new hardware run and no qualified model",
+  "physical_journals": 25,
+  "paired_can_records": 286319,
+  "decoder_mismatches": 0,
+  "unpaired_decoded_records": 0,
+  "all_experiment_index_event_counts_match": true,
+  "telemetry_best_lag_ms_counts": {
+    "1": 24,
+    "2": 1
+  },
+  "telemetry_lag_caution": "Descriptive decoded-current alignment, not calibrated physical torque delay",
+  "fit_window_count": 29,
+  "fit_physical_journal_count": 3,
+  "prediction_window_count": 29,
+  "training_and_prediction_ids_identical": true,
+  "fit_total_duration_s": 4.308642366,
+  "fit_median_duration_s": 0.059985071,
+  "fit_min_duration_s": 0.058979915,
+  "fit_max_duration_s": 1.019642485,
+  "fit_windows_at_most_61ms": 16,
+  "native_updated_prediction_failures": {
+    "angle_rms": 8,
+    "velocity_rms": 28
+  },
+  "integral_equations_by_direction": {
+    "-1": 5,
+    "1": 38
+  },
+  "observed_information": {
+    "equations": 43,
+    "unknowns": 8,
+    "observed_columns": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "normalized_rank": 8,
+    "normalized_condition": 22.93572179504982,
+    "initializer_supported": true,
+    "rank_rule": "Existing constrained initializer: nonzero columns and normalized singular values above largest/1e6"
+  },
+  "frozen_delay_s": 0.06059310818541734,
+  "local_q_support_rad": [
+    1.2348545342479411,
+    1.7809516947352293
+  ],
+  "local_q_span_deg": 31.289062499999996,
+  "actual_posture_support_rad": [
+    -0.7670398354530334,
+    -0.7665945291519165
+  ],
+  "posture_span_deg": 0.025514171644582632,
+  "optimizer_evaluations": 43,
+  "optimizer_message": "`ftol` termination condition is satisfied.",
+  "candidate14_physically_run": false,
+  "qualification": "UNQUALIFIED; this audit does not produce deployment gains"
+}

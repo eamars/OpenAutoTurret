@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import numpy as np
 from .contracts import Reason, digest, require
-from .native import CONTROL_FIELDS, parameters, Controller
+from .native import CONTROL_FIELDS, ACCELERATION_FIELDS, acceleration_values, parameters, Controller
 from .protocol import Field
 
 
@@ -94,6 +94,21 @@ def catalog(nq=5):
             "bound model, observer, approved envelope","256 log-spaced offline bandwidth points; shared C++ simulation and all-model checks",
             "identified model and all offline performance/pole/margin gates","Kp>0, Ki>=0, other values positive; never expand approved limits",
             dependencies=("model.a","model.b","model.h","model.uncertainty"),uncertainty="128 joint model robustness outcomes")
+    for name,unit,meaning,classification in (
+        ("acceleration_cap","rad/s^2","Owner supplied startup angular acceleration authority","external_constraint"),
+        ("acceleration_noise_sigma","rad/s^2","Measured angular acceleration noise standard deviation","derived"),
+        ("acceleration_sample_period_s","s","Measured gyro sample interval for acceleration feedback","estimated")):
+        add("controller."+name,meaning,unit,(),classification,"acceleration",
+            "timestamped calibrated gyro and actual successful current history",
+            "explicit owner authority and measured sample/noise values",
+            "positive cap activates the shared-core guard; legacy offline profiles bind zero inactive",
+            "finite nonnegative; live cap and sample period positive",
+            dependencies=("model.a","model.b","model.h","model.delay"),
+            uncertainty="recorded gyro noise and sample timing")
+    add("controller.acceleration_current_window_enabled","Owner selects guidance or provisional measured-current window",
+        "bool",(),"external_constraint","acceleration","owner runtime instruction",
+        "explicit 0 guidance / 1 provisional model-current feedback","guidance retains reference shaping and raw telemetry",
+        "finite 0 or 1; no physical acceleration certificate",uncertainty="model/load and gyro dynamics remain unqualified")
     for name,unit in (("current_a","A"),("slew_a_s","A/s"),("velocity_rad_s","rad/s"),
                       ("acceleration_rad_s2","rad/s^2"),("jerk_rad_s3","rad/s^3"),
                       ("angle_min_rad","rad"),("angle_max_rad","rad"),("duration_s","s")):
@@ -176,6 +191,8 @@ def validate_parameter_document(document,*,physical=False,nq=5):
 
 
 def core_registry(snapshot,observer,values):
+    guard,_=acceleration_values(values)
+    values={**values,**guard}
     current={"model.theta":snapshot.theta.tolist(),"model.q_nodes":list(snapshot.spec.q_nodes),
              "model.z_nodes":list(snapshot.spec.z_nodes),"start.total":snapshot.start_intervals[...,1].tolist(),
              **{"controller."+k:v for k,v in values.items()},
@@ -184,13 +201,19 @@ def core_registry(snapshot,observer,values):
     definitions=catalog(len(snapshot.spec.q_nodes));fields={}
     for name,value in current.items():
         info=definitions.get(name,{"unit":"mixed SI","classification":"derived"})
-        protected=name in ("controller.current_cap","controller.slew","controller.velocity_cap")
+        protected=name in ("controller.current_cap","controller.slew","controller.velocity_cap",
+                           "controller.acceleration_cap")
         fields[name]=Field(info["unit"],not protected,info["classification"],np.asarray(value).shape)
     return fields,current
 
 
 def bind_core_profile(native,snapshot,observer,current):
-    fields,expected=core_registry(snapshot,observer,{k:current["controller."+k] for k in CONTROL_FIELDS})
+    values={k:current["controller."+k] for k in CONTROL_FIELDS}
+    values.update({k:current["controller."+k] for k in ACCELERATION_FIELDS if "controller."+k in current})
+    guard,provenance=acceleration_values(values)
+    current={**current,**{"controller."+k:v for k,v in guard.items()}}
+    values.update(guard)
+    fields,expected=core_registry(snapshot,observer,values)
     require(set(current)==set(expected),Reason.DATA_INVALID,"unknown or missing core registry binding")
     require(current["model.q_nodes"]==list(snapshot.spec.q_nodes) and
             current["model.z_nodes"]==list(snapshot.spec.z_nodes),Reason.OPERATING_POINT_CHANGED,
@@ -200,7 +223,8 @@ def bind_core_profile(native,snapshot,observer,current):
         if "observer."+key in current:obs[key]=current["observer."+key]
     from .measurement import ObserverSpec
     p=parameters(snapshot.spec,current["model.theta"],ObserverSpec(**obs),
-                 {k:current["controller."+k] for k in CONTROL_FIELDS},
+                 {k:current["controller."+k] for k in CONTROL_FIELDS+ACCELERATION_FIELDS},
                  current["start.total"],snapshot.start_censored)
+    p.acceleration_binding_provenance=provenance
     with Controller(native,p):pass
     return p

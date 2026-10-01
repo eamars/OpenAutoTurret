@@ -34,6 +34,8 @@ case "${1:-}" in
     echo '         --prepare-current MANIFEST (ADR-002.2 bounded neutral current-mode verification),'
     echo '         --characterize-current MANIFEST (distinct zero-command current measurement acquisition),'
     echo '         --establish-homing MANIFEST (bounded pitch sensorless homing acquisition),'
+    echo '         --acquire-yaw MANIFEST (ADR-002.2 program-selected yaw current acquisition),'
+    echo '         --control-yaw MANIFEST (ADR-002.2 supervised yaw shared-core 3a control),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -128,6 +130,8 @@ while [ $# -gt 0 ]; do
     --prepare-current) PREPARE_CURRENT_MANIFEST="${2:?--prepare-current requires a manifest}"; MODE=prepare-current; START_WEB=0; shift 2 ;;
     --characterize-current) PREPARE_CURRENT_MANIFEST="${2:?--characterize-current requires a manifest}"; MODE=characterize-current; START_WEB=0; shift 2 ;;
     --establish-homing) PREPARE_CURRENT_MANIFEST="${2:?--establish-homing requires a manifest}"; MODE=establish-homing; START_WEB=0; shift 2 ;;
+    --acquire-yaw) PREPARE_CURRENT_MANIFEST="${2:?--acquire-yaw requires a manifest}"; MODE=acquire-yaw; START_WEB=0; shift 2 ;;
+    --control-yaw) PREPARE_CURRENT_MANIFEST="${2:?--control-yaw requires a manifest}"; MODE=control-yaw; START_WEB=0; shift 2 ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
     --with-imu) WITH_IMU=1; shift ;;
     --pitch-step-mdeg) PITCH_PROBE=1; PITCH_STEP_MDEG="${2:?--pitch-step-mdeg requires a value}"; shift 2 ;;
@@ -162,11 +166,11 @@ if [ -n "$CAPTURE_MANIFEST" ]; then
   options=(--capture-baseline "$CAPTURE_MANIFEST")
 fi
 if [ -n "$PREPARE_CURRENT_MANIFEST" ]; then
-  [ "${#options[@]}" -eq 2 ] && { [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ]; } || {
-    echo 'Neutral current acquisition cannot be combined with other startup options' >&2; exit 2;
+  [ "${#options[@]}" -eq 2 ] && { [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ] || [ "$MODE" = acquire-yaw ] || [ "$MODE" = control-yaw ]; } || {
+    echo 'Acquisition cannot be combined with other startup options' >&2; exit 2;
   }
   [ "$ACTION" != deploy ] || {
-    echo 'Current preparation uses a locally qualified acquisition bundle; do not build it on the station.' >&2; exit 2;
+    echo 'Acquisition uses workstation-built binaries; do not build it on the station.' >&2; exit 2;
   }
   PREPARE_CURRENT_MANIFEST="$(realpath -- "$PREPARE_CURRENT_MANIFEST")"
   options=("--$MODE" "$PREPARE_CURRENT_MANIFEST")
@@ -343,7 +347,7 @@ fi
 # Check is read-only: no camera open, CAN connection, or motor enable.
 if [ "$MODE" = capture-baseline ]; then
   "$PY" "$APP/tools/adr0022_capture_launch.py" "$CAPTURE_MANIFEST" --preflight-only
-elif [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ]; then
+elif [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ] || [ "$MODE" = acquire-yaw ] || [ "$MODE" = control-yaw ]; then
   "$PY" "$APP/tools/adr0022_capture_launch.py" "$PREPARE_CURRENT_MANIFEST" "--$MODE" --preflight-only
 else
   "$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK" "$MIXED_CONTROLLER_COMMISSION"
@@ -354,7 +358,7 @@ if [ "$ACTION" = check ]; then
 fi
 exec 9>"$RUN/launcher.lock"
 flock -n 9 || { echo "A stack already owns $RUN" >&2; exit 1; }
-if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ] || [ "$MODE" = capture-baseline ] || [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ]; then
+if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ] || [ "$MODE" = capture-baseline ] || [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ] || [ "$MODE" = acquire-yaw ] || [ "$MODE" = control-yaw ]; then
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
@@ -436,7 +440,11 @@ cleanup() {
   stop_cause_line "$reason" > "$RUN/shutdown.cause"
   cat "$RUN/shutdown.cause"
   rm -f -- "$RUN/stop.request"
-  if [ "$MODE" = establish-homing ]; then
+  if [ "$MODE" = control-yaw ]; then
+    echo 'Ending supervised yaw shared-core control; the C++ owner records current zero and pitch STOP feedback.'
+  elif [ "$MODE" = acquire-yaw ]; then
+    echo 'Ending bounded yaw acquisition; the C++ owner records current zero and pitch STOP feedback.'
+  elif [ "$MODE" = establish-homing ]; then
     echo 'Ending bounded pitch sensorless homing; the C++ owner records zero/STOP feedback.'
   elif [ "$MODE" = characterize-current ]; then
     echo 'Ending distinct neutral current characterization; acquisition is no current-mode qualification.'
@@ -486,7 +494,13 @@ cleanup() {
   # Keep the terminal controller outcome after ownership metadata is removed.
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
-    if [ "$MODE" = establish-homing ]; then
+    if [ "$MODE" = control-yaw ]; then
+      { echo 'Yaw shared-core control ended; inspect runtime parameter readback, raw trace and 3a measurements';
+        tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif [ "$MODE" = acquire-yaw ]; then
+      { echo 'Yaw acquisition ended; inspect retained data; stopping and dynamics qualification remain separate';
+        tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif [ "$MODE" = establish-homing ]; then
       { echo 'Sensorless homing ended; inspect immutable result; no retained calibration or stop qualification claim';
         tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
     elif [ "$MODE" = characterize-current ]; then
@@ -541,16 +555,22 @@ if [ "$MODE" = capture-baseline ]; then
   note_child_exit
   exit "$first_child_status"
 fi
-if [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ]; then
+if [ "$MODE" = prepare-current ] || [ "$MODE" = characterize-current ] || [ "$MODE" = establish-homing ] || [ "$MODE" = acquire-yaw ] || [ "$MODE" = control-yaw ]; then
   "$PY" "$APP/tools/adr0022_capture_launch.py" "$PREPARE_CURRENT_MANIFEST" "--$MODE" >"$RUN/controller.log" 2>&1 &
   controller_pid=$!; children+=("$controller_pid"); child_name[$controller_pid]=commission-current-supervisor
   current_label='neutral current preparation'
   [ "$MODE" != characterize-current ] || current_label='neutral current measurement characterization; no current-mode qualification'
   [ "$MODE" != establish-homing ] || current_label='bounded pitch sensorless homing; no retained calibration write'
+  [ "$MODE" != acquire-yaw ] || current_label='bounded yaw current acquisition; pitch disabled, no retained calibration write'
+  [ "$MODE" != control-yaw ] || current_label='supervised yaw shared-core 3a control; pitch disabled, runtime parameter readback'
   printf 'Mode: %s\nManifest: %s\nMotion purpose, bounds, attendance and authorization recorded in manifest\n' "$current_label" "$PREPARE_CURRENT_MANIFEST" > "$RUN/stack.info"
   cp "$RUN/launcher.pid" "$RUN/started"
   first_child_status=0; wait "$controller_pid" || first_child_status=$?
   note_child_exit
+  if [ "$MODE" = acquire-yaw ] || [ "$MODE" = control-yaw ]; then
+    "$PY" "$APP/tools/adr0022_yaw_vibration.py" --manifest "$PREPARE_CURRENT_MANIFEST" \
+      >"$RUN/yaw-vibration-report.log" 2>&1 || echo 'Yaw IMU report could not be saved; raw capture and session outcome remain retained.' >&2
+  fi
   exit "$first_child_status"
 fi
 if [ "$MODE" = imu ]; then

@@ -93,11 +93,18 @@ class Identity:
     measurement: str
     operating_point: str
     provenance: str  # SYNTHETIC or MEASURED; neither implies physical qualification
+    provisional_labels: bool = False
 
     def __post_init__(self):
         require(self.provenance in ("SYNTHETIC", "MEASURED"), Reason.DATA_INVALID,
                 "explicit data provenance required")
+        require(type(self.provisional_labels) is bool, Reason.DATA_INVALID,
+                "provisional label status must be explicit")
         for key in (self.hardware, self.measurement, self.operating_point):
+            if self.provisional_labels:
+                require(isinstance(key, str) and bool(key.strip()), Reason.DATA_INVALID,
+                        "provisional hardware, measurement and operating-point labels required")
+                continue
             require(isinstance(key, str) and len(key) == 64 and
                     all(c in "0123456789abcdef" for c in key), Reason.DATA_INVALID,
                     "identities must be canonical content hashes")

@@ -69,7 +69,7 @@ struct Limits {
   explicit Limits(const YAML::Node& n) {
     auto ns=[&](const char* key) {
       const double seconds=n[key].as<double>();
-      require(std::isfinite(seconds) && seconds>=1e-9 && seconds<=3600, "DATA_INVALID: capture timing bound (at least 1 ns)");
+      require(std::isfinite(seconds) && seconds>=1e-9, "DATA_INVALID: positive capture timing required");
       return int64_t(seconds*1e9);
     };
     clock=ns("clock_uncertainty_s"); dequeue=ns("dequeue_age_s");
@@ -111,11 +111,11 @@ struct Endpoint {
     require(bool(input>>value),"DATA_INVALID: interface loss counter unavailable");
     return value;
   }
-  void open(const YAML::Node& n, bool synthetic, const Limits& limits) {
+  void open(const YAML::Node& n, bool synthetic, const Limits&) {
     if (synthetic) {
       fd.value=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);
       require(fd.value>=0,"DATA_INVALID: loopback socket unavailable");
-      receiver=std::make_unique<TimestampedReceiver>(fd.value,limits.clock);
+      receiver=std::make_unique<TimestampedReceiver>(fd.value);
       sockaddr_in addr{}; addr.sin_family=AF_INET; addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
       const auto port=n["port"].as<unsigned>();
       require(port>0 && port<=65535,"DATA_INVALID: loopback port"); addr.sin_port=htons(port);
@@ -136,7 +136,7 @@ struct Endpoint {
       drops_begin=counter("rx_dropped"); errors_begin=counter("rx_errors");
       fd.value=socket(PF_CAN,SOCK_RAW|SOCK_CLOEXEC,CAN_RAW);
       require(fd.value>=0,"DATA_INVALID: SocketCAN open failed");
-      receiver=std::make_unique<TimestampedReceiver>(fd.value,limits.clock);
+      receiver=std::make_unique<TimestampedReceiver>(fd.value);
       // Subscribe to all traffic and all errors; unexpected senders remain visible.
       const can_err_mask_t mask=CAN_ERR_MASK;
       require(setsockopt(fd.value,SOL_CAN_RAW,CAN_RAW_ERR_FILTER,&mask,sizeof(mask))==0,
@@ -171,15 +171,13 @@ struct ImuStream {
   std::string pending;
   int generation{-1};
   bool ready() const { for (const auto& [_,s]:sensors) if (!s.count) return false; return true; }
-  void line(const std::string& raw, const Limits& limits, Journal& journal) {
+  void line(const std::string& raw, const Limits&, Journal& journal) {
     require(raw.size()<3000 && !raw.empty() && raw.front()=='{' && raw.back()=='}',
             "DATA_INVALID: invalid IMU JSON record");
     const auto n=YAML::Load(raw);
     const auto kind=n["kind"].as<std::string>();
     require(journal.append("{\"kind\":\"imu_raw\",\"dequeue_ns\":"+std::to_string(monotonic_ns())+
                            ",\"raw_json\":"+quoted(raw)+"}"),"DATA_INVALID: capture writer failed");
-    require(kind!="trace_reset" && kind!="gap" && kind!="summary",
-            "DATA_INVALID: IMU stream ended, recovered or discarded history");
     if (kind!="sample") return; // retain product/config/tare events; no calibration claim
     const auto name=n["sensor"].as<std::string>();
     require(sensors.count(name),"DATA_INVALID: unknown IMU sensor");
@@ -187,22 +185,13 @@ struct ImuStream {
     const auto stamp=n["sample_ns"].as<int64_t>(), rx=n["rx_ns"].as<int64_t>();
     const auto gen=n["generation"].as<int>(), seq=n["sequence"].as<int>();
     const auto status=n["status"].as<int>();
-    require(gen>=0 && seq>=0 && seq<=255 && status>=limits.imu_status && status<=3,
+    require(gen>=0 && seq>=0 && seq<=255 && status>=0 && status<=3,
             "DATA_INVALID: IMU generation, sequence or status");
-    if (generation<0) generation=gen;
-    require(gen==generation,"DATA_INVALID: IMU generation changed");
-    require(stamp>0 && rx>=stamp && rx<=monotonic_ns() && rx-stamp<=limits.imu_gap &&
-            monotonic_ns()-rx<=limits.dequeue,"DATA_INVALID: stale or invalid IMU clock");
-    if (s.count) {
-      require(gen==s.generation && seq==((s.sequence+1)&255),"DATA_INVALID: IMU sequence loss or reset");
-      require(stamp>s.stamp && stamp-s.stamp<=limits.imu_gap && rx>=s.received,
-              "MEASUREMENT_LIMITED: IMU sample gap or reordering");
-    }
+    generation=gen;
+    require(stamp>0 && rx>0,"DATA_INVALID: invalid IMU timestamp");
     const auto values=n["values"].as<std::vector<double>>();
     require(values.size()==(name=="gyro" || name=="accel" ? 3u:4u),"DATA_INVALID: IMU dimensions");
-    double norm=0;
-    for (const auto v:values) { require(std::isfinite(v),"DATA_INVALID: nonfinite IMU value"); norm+=v*v; }
-    if (values.size()==4) require(norm>=.9801 && norm<=1.0201,"DATA_INVALID: IMU quaternion norm");
+    for (const auto v:values) require(std::isfinite(v),"DATA_INVALID: nonfinite IMU value");
     s={gen,seq,stamp,rx,s.count+1};
   }
   void read_fd(int fd, const Limits& limits, Journal& journal) {

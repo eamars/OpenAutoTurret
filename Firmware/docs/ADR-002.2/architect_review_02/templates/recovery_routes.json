@@ -1,0 +1,53 @@
+{
+  "schema": "ADR0022_RECOVERY_ROUTES_V1",
+  "software_policy_only": true,
+  "routes": [
+    {
+      "condition": "BUDGET_EXHAUSTED",
+      "block": "candidate promotion",
+      "continue": "checkpoint -> improvement/scaling/event/derivative diagnosis -> justified resume or alternative"
+    },
+    {
+      "condition": "CONVERGED_BUT_TRAJECTORY_FAILS",
+      "block": "candidate promotion",
+      "continue": "objective/profile/structure discrimination; retain numerical success separately"
+    },
+    {
+      "condition": "SYNTHETIC_REFERENCE_FAILS_AT_TRUE_PARAMETERS",
+      "block": "affected estimator/structure qualification",
+      "continue": "forward integration/units/timing/state regression"
+    },
+    {
+      "condition": "PARAMETERS_RECOVER_BUT_CROSS_PREDICTION_FAILS",
+      "block": "synthetic/plant gate",
+      "continue": "locate divergence; examine excitation, event sensitivity, noise and objective; do not waive gate"
+    },
+    {
+      "condition": "NO_MOTION_MODEL_ON_MOVING_DATA",
+      "block": "model adequacy",
+      "continue": "threshold/load/state identification and baseline/event metrics"
+    },
+    {
+      "condition": "NEEDS_DISCRIMINATING_DATA",
+      "block": "physical model promotion",
+      "continue": "WP5 approved bounded information-gain experiment -> WP4; offline work continues"
+    },
+    {
+      "condition": "HARDWARE_FAULT",
+      "block": "physical motion and rearm",
+      "continue": "validated stop/latch -> offline fault diagnosis; explicit reentry tests"
+    },
+    {
+      "condition": "UNRESOLVABLE_EXTERNAL_PREREQUISITE",
+      "block": "dependent work only",
+      "continue": "precise required fact/accuracy/approval request; continue independent work"
+    }
+  ],
+  "forbidden_transitions": [
+    "optimizer_success -> deployment without quality/physical gates",
+    "hardware_fault -> identical automatic motion retry",
+    "communications_reconnect -> automatic rearm",
+    "failed_fit -> permanent task termination without diagnostic routing",
+    "unknown_fallback -> assume FF=0 is physically safe"
+  ]
+}

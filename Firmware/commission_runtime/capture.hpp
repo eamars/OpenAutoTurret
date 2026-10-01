@@ -29,12 +29,11 @@ class TimestampedReceiver {
  public:
   // Does not own fd. The same recvmsg/ancillary path serves SocketCAN and the
   // explicitly synthetic local datagram harness. Both require classic CAN MTU.
-  explicit TimestampedReceiver(int fd, int64_t max_clock_error_ns);
+  explicit TimestampedReceiver(int fd);
   bool receive(Receipt& out); // false only for EAGAIN; other failures throw
   uint32_t kernel_drops() const; // includes loss not yet delivered in ancillary data
  private:
   int fd_;
-  int64_t max_clock_error_ns_;
   ClockBracket origin_;
   uint32_t drops_{};
   int64_t previous_ns_{};

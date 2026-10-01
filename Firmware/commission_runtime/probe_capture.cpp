@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
     if (rx < 0 || tx < 0 || bind(rx, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)))
       throw std::runtime_error("loopback socket failed");
     socklen_t len = sizeof(addr); getsockname(rx, reinterpret_cast<sockaddr*>(&addr), &len);
-    ota::commission::TimestampedReceiver receiver(rx, 1000000);
+    ota::commission::TimestampedReceiver receiver(rx);
     ota::commission::Journal journal(argv[1], "{\"kind\":\"header\",\"provenance\":\"SYNTHETIC\",\"transport\":\"loopback_udp\"}");
     for (unsigned n = 0; n<2000; ++n) {
       can_frame f{}; f.can_id = 0x205; f.can_dlc = 8;

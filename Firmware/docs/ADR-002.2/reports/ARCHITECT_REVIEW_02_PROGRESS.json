@@ -1,0 +1,772 @@
+{
+  "schema": "adr0022.review02-progress/1",
+  "stage1": "IN_PROGRESS",
+  "yaw": "UNQUALIFIED",
+  "candidate14": "NONDEPLOYABLE",
+  "physical_stage3a": "NOT_RUN",
+  "physical_stage3b": "NOT_RUN",
+  "deployment_authorized": false,
+  "station_actions": "NONE",
+  "acceptance_criteria_changed": true,
+  "WP0": {
+    "status": "REPRODUCED",
+    "observation_runs": 11,
+    "predictions": 88,
+    "numeric_comparisons": 470,
+    "audit_tests": 8
+  },
+  "WP1": {
+    "status": "REPRODUCED_AND_SEPARATED",
+    "original_noisy_parameter_passes": 3,
+    "original_noisy_optimizer_converged": 0,
+    "original_noisy_trajectory_passes": "7/9"
+  },
+  "WP2": {
+    "status": "BOUNDED_METHODS_VERIFIED; JOINT_NOISY_NUISANCE_AND_FULL_STRUCTURE_COVERAGE_IN_PROGRESS",
+    "repairs": [
+      "absolute central residual derivatives",
+      "training-only moving-integral initializer"
+    ],
+    "original_cases_passed": 6,
+    "original_noisy_predictions_passed": "9/9",
+    "consumed_development_retest": "9/9 cases,81/81 predictions",
+    "fresh_final": "9/9 cases,81/81 predictions; seeds1019/1237/1423 and3 new reference cases",
+    "maximum_cross_q_rms_rad": 0.00032939164192615677,
+    "synthetic_q_gate_rad": 0.0008023127185209158,
+    "maximum_parameter_relative_error": 0.003954998788045205,
+    "limits": "Known-nuisance algebraic-current/Coulomb/constant-load four mechanics; no qualification of static/Stribeck/unknown dynamics, clocks, or physical models",
+    "current_scope": "Fresh joint10 exact-known-Gaussian encoder-bin method:3/3 recovery and TRAIN,12/12 new heldout predictions,6/6 historical. Largest relative parameter error 0.00943926311402854. Fixed known gauge/noise/static/clock assumptions; one true point/one720s TRAIN design/three noise draws. Termination is ftol; large reported optimality retained, no global/stationary-gradient proof. Other structures/unknown noise/timing remain incomplete."
+  },
+  "WP3": {
+    "status": "OWNER_CONFIRMED_CAN_CURRENT_AND_ARCHIVED_SCHEMA; SETTINGS_STOP_UNVERIFIED",
+    "PWM": "EXCLUDED_BY_OWNER"
+  },
+  "WP4": {
+    "status": "FAIR_FOUR_CELL_ALGEBRAIC_DIAGNOSTIC_EXECUTED; ALL_CELLS_FAIL; FULL_STRUCTURE_QUALIFICATION_INCOMPLETE",
+    "no_motion_contradictions": 19,
+    "training_threshold_predictions": 640,
+    "threshold_candidates_passing_all_training": "0/80"
+  },
+  "WP5": {
+    "status": "NO_NEW_MOTION_AUTHORIZED_OR_RUN",
+    "remaining_external_facts": [
+      "motor-specific firmware/applied settings readback tied to physical configuration",
+      "setup-specific safe stop/cutoff, fault response and actual limits before any new motion"
+    ]
+  },
+  "WP6": {
+    "status": "SHARED_POSTERIOR_FF_AND_DYNAMIC_STEADY_STATE_REFERENCE_IMPLEMENTED_OFFLINE; CONTROL_UNQUALIFIED",
+    "scope": "One native observer/controller/limiter/accepted-TX path; exact posterior callback, explicit supported steady-state reference FF, guarded bounded START, causal synthetic feedback forecasts.",
+    "limits": "Owner-revised45deg/6dB local Stribeck candidate with fixed directional60/80mA START:6/6 plateaux pass revised.16deg jitter,5/6 original.15deg; only1/6 signed small/large position steps passes, other5 correctiveSTART guard faults. Planned reverse leg works; full4case reversals1complete/3HOLD faults. Local/prefix/motor interface evidence is not whole-controller/physical qualification. Fresh fitted Coulomb local candidates also complete18/18 plateaux but fail jitter/range18/18 and gyro-band9/18. No full controller qualified."
+  },
+  "WP7": {
+    "status": "NOT_RUN; FULL_BOTH_AXIS_CONFIGURATION_DELIVERY_REQUIRED"
+  },
+  "tests": {
+    "targeted_python_native": 149,
+    "direct_cpp_fault_scenarios": 4,
+    "doc_tree": "PASS",
+    "workstation_full_suite": "HISTORICAL first81/83; mixed config mismatch and receive-clock transient; targeted capture retry PASS with guard unchanged",
+    "targeted_scope": "149/149 in7.297s on canonical ABI4: current family forecast/sampled/synthesis, coupled parent, family assets/information, MotorFF/planned START, controller faults, START policy tool and nuisance likelihood. Completed runtime probes separately establish event/dose/default equivalence. Prior192 suite historical. Subsequent36/36 in2.701s cover Coulomb admission, assets, position-response tool and configuration lifecycle; overlaps are not added into a total."
+  },
+  "next_action": "Repair the small-step START/braking transition without bypassing guards; continue calibrated joint uncertainty and required coverage.",
+  "continued_cycle_03": {
+    "joint_mechanics_stribeck": "PASS known-nuisance synthetic; fresh pristine102/noisy28 nfev; worst noisy error0.018155",
+    "load_structure": "6/6 selections and6/6 frozen HOLDOUT passes; known nuisances/interpolation support only",
+    "local_linearization": "96 native cases PASS; sampled observer/controller margins NOT_RUN",
+    "causal_family_forecast": "3 native and1 independent backend case PASS; supplied legacy controller UNQUALIFIED",
+    "unknown_mechanics_nuisance": "NOT_QUALIFIED after3 strategies; gyro-delay derivative refinement next",
+    "focused_tests": 137,
+    "evidence_zip": "run/adr0022-stage2/architect-review-response-02/ADR-002.2-review02-latest-evidence.zip",
+    "evidence_zip_bytes": 1983722,
+    "physical_actions": false,
+    "goal": "ACTIVE"
+  },
+  "continued_cycle_02": {
+    "independent_current_numerics": "PASS; exact cascade and delayed observation anchors",
+    "original_generator": "6/6 exactly retained",
+    "original_estimator": "6/6 cases and9/9 noisy predictions PASS",
+    "static_thresholds": "CONDITIONAL_INTERVALS; independent actual-rest support required;27 inner fits and9 predictions PASS",
+    "six_nuisance_coordinates": "3/3 fresh TRAIN recovery PASS; maxrelative error0.0347315; known mechanics, prescribed input only",
+    "stribeck_speed_scales": "PASS; fixed known nuisances",
+    "joint_mechanics_stribeck": "NOT_QUALIFIED; two retained pristine failures",
+    "fair_physical_diagnostic": "4/4 cells FAIL all8 TRAIN/all3 SELECTION;44 continuous predictions;132 metrics exact",
+    "historical_holdout": "NOT_LOADED",
+    "configuration": "structured support wired into fitting/FF/rollback; changed facts invalidate",
+    "two_axis_parent": "independent mechanics probes PASS; native/physical coupling NOT_RUN",
+    "focused_tests": 101,
+    "stribeck_original_gate_recheck": "2% pristine/5% noisy; all retained outcomes unchanged",
+    "evidence_zip": "run/adr0022-stage2/architect-review-response-02/ADR-002.2-review02-cycle02-evidence.zip",
+    "evidence_zip_bytes": 1339549,
+    "ctest_first_run": "81/83; existing configuration mismatch and transient receiveclock rejection",
+    "capture_retry": "PASS; guard unchanged",
+    "next_action": "TRAIN-only joint Stribeck initializer and unknown-mechanics/nuisance verification"
+  },
+  "continued_cycle_04": {
+    "numerical_sensor_query": "PASS: reporting delay no longer changes the mechanical mesh. q/current identical in15 derivative probes; independent original numerical gates pass; six original generators unchanged.",
+    "joint_prior_information": "PASS: step/refinement and declared conditional local precision; gyro-delay SE68.7336us <=71.6667us. This is a local supplied-model forecast.",
+    "joint_pristine": "Huber120 and staged116 fail. LINEAR from original nontruth start converges in22, max relative error6.3555e-6; forward/TRAIN/historical/recovery pass. No production default change.",
+    "joint_fresh_noisy": "COMPLETE FAIL:0/3 qualify.7103/7517/7907 each exhaust120,2521 residual calls; recovery FAIL, integrity/forward/TRAIN PASS. Gyro-delay error+8.506/+7.392/+7.128%, current delay+7.981/+8.144/+8.155%. One362s TRAIN excitation, encoder/current1kHz andgyro50Hz; three fresh noise draws. New Product A12 predictions:6 noisy PASS,6 pristine FAIL; historical0/6 PASS.2268.802s total. All these partitions become development for any informed repair.",
+    "near_fit_transport_derivative": "18/18 independent time-shift derivative checks pass1e-3 diagnostic budget. No transport-source repair justified.",
+    "sampled_analysis": "Corrected source clocks:14/14 native prefixes pass, max3.70149e-8 <1e-7;17 tests.10 Coulomb margins pass;4 Stribeck cases stable but fail50deg phase. Earlier fractional results superseded.",
+    "shared_posterior_FF": "PASS: exact same-posterior insertion and constant-callback equivalence. Exceptions/nonfinite/inhibit/re-entry/stale or future ACK/reset/close/destroy guarded.",
+    "dynamic_FF": "Explicit synthetic steady-state reference policy retains full lag/history with no inverse. Memory bound describes characteristic lag+transport, not a finite tail cutoff.",
+    "bounded_start": "Planned DEPARTURE and finite20/40/60/80mA grid select60mA development candidate. BRAKING prevents STOP->START re-entry; HOLD retains position correction. Both pristine full runs complete but0/2 quality sets pass. Noisy101 START timeout at2.2s remains.48 native/FF tests pass; guards/caps/gains/attempt1 unchanged. No qualified or fresh final policy.",
+    "causal_forecasts": "Earlier10/10 native/independent forward checks pass;9 complete,1 pristine START timeout,4 end inSTART. Completion does not imply START recovery.",
+    "frozen_motion_metrics": "Original six signed5deg/s plateau sets all fail unchanged quality gates; later two phased pristine runs also fail. Noise-censored run has full metrics NOT_RUN.",
+    "evidence_remeasurement": "120 numerical comparisons independently reproduce, max difference3.105155e-16.",
+    "focused_tests": 192,
+    "physical_stage3a": "NOT_RUN",
+    "physical_stage3b": "NOT_RUN",
+    "station_actions": "NONE",
+    "acceptance_changed": false,
+    "goal": "ACTIVE",
+    "automatic_family_synthesis": "PASS LOCAL ONLY: grid[.5,1,2,4] selects fastest4rad/s; Kp.952118544,Ki1.6,Kpos.8,Kaw3. Both signs54.344616deg/12.949396dB.3900-tick prefixes pass6.63213e-8 <1e-7;3800 failure retained. Two0.6s lower native callback runs generate own future TX and pass forward/replay. Public MotorFF moving reset UNSUPPORTED; full maneuvers/physical NOT_RUN.",
+    "encoder_objective_diagnostic": "Analytic Gaussian-before-rounding check: interval surrogate expected score is phase dependent,401-point grid max356.407rad^-1. Integrated-bin score cancels<7.12e-13rad^-1; tail/refinement pass. Scalar mismatch property; no unique joint bias or recovery claim. Exact-bin prerequisite next.",
+    "focused_test_elapsed_s": 17.626,
+    "document_checks": "PASS:399 relative links,10 reachable operation cards; whitespace check PASS.",
+    "builds": "PASS: final canonical native core and full firmware; no deployment.",
+    "coupled_native_parent": "FIRST PRISTINE RUNTIME PASS:600 nested callbacks/vector FF evaluations and jointly accepted pairs; both outputs before either ACK. One parent, nonzero M01=.0117562.. .0141545 kg m\u00b2; max current.0393495A, slew2A/s. Same-history replay0; halved integration step difference7.77e-16. Explicit frictionless/zero-gravity/algebraic maps. Fault/domain/filter hardening pending; lower callback interface only, physical NOT_RUN.",
+    "evidence_zip": "run/adr0022-stage2/architect-review-response-02/ADR-002.2-review02-cycle04-evidence.zip",
+    "evidence_zip_bytes": 489152,
+    "export_checks": "PASS:55 JSON/NPZ/evidence entries parse;12 exported original metrics recompute within2.26e-17 and independent/native repair pair passes unchanged numerical gates."
+  },
+  "continued_cycle_05": {
+    "encoder_likelihood": "Numerical prerequisite PASS: exact Gaussian-before-rounding bin likelihood, signed relative deviance, no probability/deviance floors; quadrature maxrelative7.04e-12,50/50 derivative plateaux,9 targeted tests.",
+    "joint10_consumed_development": {
+      "status": "PASS_DEVELOPMENT_ONLY",
+      "seed": 7103,
+      "nfev": 25,
+      "njev": 25,
+      "raw_residual_calls": 526,
+      "elapsed_s": 201.566,
+      "maximum_parameter_relative_error": 0.017892502884874206,
+      "noisy_recovery_limit": 0.05,
+      "pristine_recovery_limit": 0.02,
+      "TRAIN": "PASS",
+      "consumed_regressions": "6/6 PASS",
+      "fresh_final": "NOT_RUN",
+      "production_objective_default_changed": false
+    },
+    "fresh_information_design": "Distinct720s TRAIN prior-information probe passes all10 precision/step/refinement predicates before observations; gyrodelaySE46.4629us<=53.75us. Protocol and independent audit in progress; no claim from future data.",
+    "dynamic_sampled_policy": "Actual shared posterior/reference derivative policy retains actuator/delay/filter states; early mixed native discriminator1.26844e-8<1e-7 PASS. Subsequent8 cases4PASS/4FAIL; delayed Stribeck warmup does not establish frozen point.20 tests PASS.",
+    "dynamic_synthesis": {
+      "status": "LOCAL_CANDIDATE_ONLY",
+      "prior_curves": "unitzeta4 andzeta1/1.5/2 twelve candidates allFAIL",
+      "third_zeta_grid": [
+        2.5,
+        3.0,
+        4.0
+      ],
+      "wn_grid": [
+        0.5,
+        1.0,
+        2.0,
+        4.0
+      ],
+      "selected_wn_rad_s": 0.5,
+      "selected_zeta": 4.0,
+      "gains": {
+        "kp": 0.6411435757340913,
+        "ki": 0.025,
+        "kpos": 0.1,
+        "kaw": 3.0
+      },
+      "negative_margin_deg_db": [
+        50.72,
+        8.37
+      ],
+      "positive_margin_deg_db": [
+        65.18,
+        15.15
+      ],
+      "native_prefix_positive": "PASS1.050443e-8<1e-7",
+      "native_prefix_negative": "FAIL bounded20s coldSTART; offpoint3.32239e-5rad/s, tangent3.46805e-4>1e-7",
+      "full_plateaux": "0/6 complete; five postzeroSTART-count faults,one noisySTART gyroguard fault; conditional numeric/replay PASS, qualityNOT_RUN"
+    },
+    "complete_manoeuvre_slice": "Pristine/noisy stationary2PASS. Corrected signed0.5/1/5deg steps and both reversals8 genuine START-count faults; all conditional numeric/replay PASS. Two prior0.5deg metadata midpoint faults retained/repaired without q/v/a clipping. Full quality/stop windowNOT_RUN for censored cases; first START reachedMOVE, later entry is correction or planned opposite leg.",
+    "coupled_parent": "Verified bounded zero-gravity/frictionless two-axis interface with nonunit gain/bias maps and offmesh transport/filter/source delay.600vectorFF/1200peraxis receipts; current.0469303A/slew2A_s; replay0; gyrohalfstep3.98049e-7<=1e-6 after retainedcoarsestepfailure. Actual partialyawACK retainedafterpitchfailure;9 faultcases/6 testsPASS. Independent piecewise filter oracle knots1.39e-17 and10queries within derived interpolationbound. No gravity/friction/coupled synthesis or physicalstop claim.",
+    "focused_tests": {
+      "passed": 108,
+      "elapsed_s": 3.619,
+      "scope": "changed forecast/sampled/synthesis/coupled/FF/fault/nuisance modules on canonicalABI4; prior192 suite is historical"
+    },
+    "family_asset_pipeline": "IN_PROGRESS: estimated Coulomb asset must not be misbound to selected Stribeck candidate; diagnostic original gain template, full native readback, unknown uncertainty/unqualified receipt.",
+    "family_information_selector": "IN_PROGRESS: reuse existing32templates/selector, selectedFamily sensitivities, explicit qualified envelope/stop evidence, maximum3cases and2 rounds; unknown limits typedreject.",
+    "remaining_Stage1": [
+      "fresh joint10 verification and supported additional structures/noise/timing scope",
+      "full nonlinear qualified automatic synthesis and supported uncertainty",
+      "family asset/identification/selection/runtime pipeline",
+      "reusable family information/configuration lifecycle",
+      "coupled identification/synthesis plus gravity/cable/friction pitch states",
+      "fault/reuse/watchdog/production-equivalence method"
+    ],
+    "physical_stage3a": "NOT_RUN",
+    "physical_stage3b": "NOT_RUN",
+    "station_actions": "NONE",
+    "acceptance_changed": false,
+    "goal": "ACTIVE"
+  },
+  "acceptance_revision": {
+    "authority": "Owner accepts reasonable motor-control performance relaxation; upper target-tracking loop remains above motor loop.",
+    "scope": "New separate offline motor-performance contract; original verdicts and evaluator defaults retained.",
+    "local_phase_margin_deg": {
+      "original": 50.0,
+      "revised": 45.0
+    },
+    "detrended_position_P95_minus_P5_deg": {
+      "original": 0.15,
+      "revised": 0.16
+    },
+    "gain_margin_db": 6.0,
+    "unchanged": [
+      "current/travel/fault/START/body/slew/dose guards",
+      "stop drift",
+      "range/speed/gyro-band metrics",
+      "position-step overshoot/settling metrics",
+      "estimator2% pristine/5% noisy gates"
+    ],
+    "physical_authorization_changed": false
+  },
+  "continued_cycle_06": {
+    "owner_performance_revision": {
+      "authority": "Owner accepts reasonable motor-control performance relaxation; upper target-tracking loop remains above motor loop.",
+      "scope": "New separate offline motor-performance contract; original verdicts and evaluator defaults retained.",
+      "local_phase_margin_deg": {
+        "original": 50.0,
+        "revised": 45.0
+      },
+      "detrended_position_P95_minus_P5_deg": {
+        "original": 0.15,
+        "revised": 0.16
+      },
+      "gain_margin_db": 6.0,
+      "unchanged": [
+        "current/travel/fault/START/body/slew/dose guards",
+        "stop drift",
+        "range/speed/gyro-band metrics",
+        "position-step overshoot/settling metrics",
+        "estimator2% pristine/5% noisy gates"
+      ],
+      "physical_authorization_changed": false
+    },
+    "fresh_joint10": {
+      "status": "PASS_SCOPED_SYNTHETIC",
+      "seeds": [
+        10103,
+        10301,
+        10613
+      ],
+      "maximum_parameter_relative_error": 0.00943926311402854,
+      "optimizer_evaluations": [
+        27,
+        27,
+        29
+      ],
+      "raw_residual_evaluations": [
+        568,
+        568,
+        610
+      ],
+      "TRAIN": "3/3 PASS",
+      "held_out_prescribed_input_predictions": "12/12 PASS;6 pristine/6 noisy",
+      "historical_regressions": "6/6 PASS",
+      "all_vectors_and_six_native_predictions_frozen_before_validation_truth_or_noise": true,
+      "termination": "ftol; optimality separately reported",
+      "scope": "Fresh720s prescribed TRAIN input with3 independent original-noise seeds;2 new prescribed validation input designs, each pristine/noisy; fixed known scale/bias/load/static/clock/prehistory/noise/quantizer assumptions",
+      "production_objective_default_changed": false
+    },
+    "local_synthesis": {
+      "status": "LOCAL_ONLY; original50deg FAIL",
+      "WN_rad_s": 2.0,
+      "zeta": 1.5,
+      "gains": {
+        "kp": 0.8411435757340915,
+        "ki": 0.4,
+        "kpos": 0.4,
+        "kaw": 3.0
+      },
+      "signed_margins_deg_db": [
+        [
+          45.470816,
+          9.881409
+        ],
+        [
+          56.400034,
+          12.55242
+        ]
+      ]
+    },
+    "symmetric_START_grid": "20/40/60/80mA \u00d76 actual plateaux, no all-domain candidate;24/24 conditional numerics pass; no limits widened.",
+    "directional_START_pair": "Fixednegative60/positive80mA actual combined replay:6/6 plateaux revisedPASS,5/6 originalPASS. Steps1/6PASS;5 later correctiveSTART faults. All12 conditional numerical/replay checksPASS. Development selection consumed.",
+    "planned_START_program": "Opt-in immutable alternating legs, accepted MOVE plus causal rest required; one persistent actual-ACK START-interval dose ledger. Ten fault cases, four receipt/tail cases, six exact legacy forecast replays and peer audits pass. Physical current cutoff unestablished.",
+    "planned_reversals": "UNQUALIFIED; 1/4 COMPLETE, 3/4 CORRECTIVE_HOLD_FAULT",
+    "family_asset_pipeline": "PASS interface: serialized fitted consumedCoulomb model -> complete native readback/rebound receipt -> publicFF/native and independent forecast. Model/controller/uncertainty qualification remain absent; cannot bind Stribeck controller to this asset.",
+    "family_information_selector": "PASS conditional bridge: existing32templates/logdet occupancy/selector with finite supported family set and4moving coordinates;3cases/2round policy, native prediction/stop screening. Quantized/correlated noise and physical continuous bounds typedunsupported.",
+    "fresh_family_control_bridge": "COMPLETE conditional development bridge; all3 assets synthesize their own Coulomb controller,18/18 numerics/readbacks/completionPASS,0/18 motion qualityPASS. See cycle07.",
+    "focused_tests": {
+      "passed": 149,
+      "elapsed_s": 7.297
+    },
+    "station_actions": "NONE",
+    "physical_stage3a": "NOT_RUN",
+    "physical_stage3b": "NOT_RUN",
+    "deployment_authorized": false,
+    "goal": "ACTIVE",
+    "evidence_zip": "run/adr0022-stage2/architect-review-response-02/ADR-002.2-review02-cycle06-evidence.zip",
+    "evidence_zip_bytes": 42022,
+    "evidence_records": 25,
+    "export_checks": "PASS: JSON readback; only25 JSON/CSV/MD records, no source/binaries/hashes/bulk captures."
+  },
+  "continued_cycle_07": {
+    "Coulomb_synthesis_admission": "Minimal Coulomb classification admission through same selected-family derivatives, sampled states and candidate curve. Defaults50/6 unchanged. Both signed first fitted native tangent prefixesPASS<1e-7;15 focusedtestsPASS.",
+    "fitted_family_control": {
+      "schema": "adr0022.fresh-family-control-decision/1",
+      "status": "NONLINEAR_MOTION_QUALITY_FAILED",
+      "local_synthesis": "3/3PASS own fitted Coulomb candidates WN4/zeta1 under45deg/6dB",
+      "actual_complete_native_readback": "18/18PASS;26172 successful readbacks compared across every scalar/array/slot",
+      "complete_plateau": "18/18",
+      "independent_forward": "18/18PASS original gates",
+      "motion_quality": "0/18PASS original0.15deg and owner0.16deg jitter; position range gate also18/18FAIL",
+      "position_jitter_deg_range": [
+        0.2508531876424285,
+        0.3579664360894612
+      ],
+      "failed_metric_counts": {
+        "speed_rms_rad_s": 0,
+        "speed_jitter_rad_s": 0,
+        "position_range_rad": 18,
+        "gyro_band_rms_rad_s": 9,
+        "stop_drift_rad": 0,
+        "sustained_start_s": 0
+      },
+      "other_flags": "All fitted vectors frozen; no truth substitution/seed winner/tolerance change/restart/tuning",
+      "tests": {
+        "focused_family_assets_and_synthesis": 28,
+        "status": "PASS",
+        "elapsed_s": 2.299
+      },
+      "scope": "DEVELOPMENTAL ProductB conditional on each fitted FamilyModel as plant; independent oracle same own successful TX",
+      "unknown_true_plant_forecast": "NOT_RUN",
+      "uncertainty": "UNKNOWN;3noise draws are not calibratedjoint confidence support",
+      "model_qualified": false,
+      "controller_qualified": false,
+      "physical_stage3a": "NOT_RUN",
+      "physical_stage3b": "NOT_RUN",
+      "deployment_authorized": false,
+      "next_causal_question": "Why does a locally feasible fastest candidate fail nonlinear plateaux? Retained traces can distinguish friction-state switching/START effects from position-loop interaction without changing any gates."
+    },
+    "departure_transient_discriminator": "First chronological fitted asset, both pristine plateaux: all501ticks SLIDE/MOVE, constant signedFF, no latentstick/reversal/limiting. Failing curved position residual is a decaying departure transient within fixed metric window; no unique cause/repair claimed.",
+    "position_response": {
+      "status": "NO_POSITION_RESPONSE_ALL_DECLARED_DOMAIN_CANDIDATE",
+      "local_feasible": 16,
+      "local_candidates": 72,
+      "native_candidates": 3,
+      "full_cases": 36,
+      "revised_passes_per_candidate": [
+        7,
+        0,
+        5
+      ],
+      "conditional_forward": "36/36 PASS",
+      "remaining13_local_feasible_full_motor_cases": "NOT_RUN; not global infeasibility"
+    },
+    "configuration_lifecycle": {
+      "status": "PASS_SYNTHETIC_INTERFACE_ONLY",
+      "actual_receipts": 1205,
+      "native_generations": 5,
+      "model_revision_count": 1,
+      "declared_payload_friction_changes": "4/4 inhibit, preserve accepted command/time, require same-method identification/revalidation",
+      "RETURN": "4/4 explicit synthetic rest reset only; old tokens rejected, receipt clock retained",
+      "UNDECLARED": "Quiet-rest inertia/friction changes structurally unobservable; finite information policy required",
+      "changed_configuration_identification": "NOT_RUN",
+      "uncertainty": "UNKNOWN"
+    },
+    "focused_validation": {
+      "passed": 36,
+      "elapsed_s": 2.701,
+      "scope": "Assets/synthesis, position response and lifecycle; overlaps previous149, not an additive total."
+    },
+    "fitted_nonlinear_candidate_screen": {
+      "status": "NO_FEASIBLE_CANDIDATE_IN_THIS_BOUNDED_NONLINEAR_SELECTION",
+      "curves": [
+        [
+          4.0,
+          1.5
+        ],
+        [
+          2.0,
+          1.0
+        ],
+        [
+          2.0,
+          1.5
+        ]
+      ],
+      "original_passes_per18": [
+        3,
+        0,
+        9
+      ],
+      "owner_passes_per18": [
+        6,
+        0,
+        9
+      ],
+      "completed_cases": 54,
+      "independent_forward": "54/54 PASS",
+      "complete_native_readbacks": 78516,
+      "remaining_local_feasible_curves": "16 NOT_RUN",
+      "protocol_checks": "6 PASS",
+      "qualification": "UNKNOWN uncertainty; conditional fitted-plant development only"
+    },
+    "loaded_coupled_interface": {
+      "status": "BOUNDED_LOADED_SYNTHETIC_INTERFACE_PASS; PHYSICAL_UNQUALIFIED",
+      "original_geometry_required_pitch_A": -9.658974007509611,
+      "original_geometry": "ENVELOPE_LIMITED; motion NOT_RUN",
+      "near_balanced_geometry": "Separately prescribed upright COM[.001,.01,.0005]m; originalmass/inertias; physicalgeometry/map NOT_ESTABLISHED",
+      "hold_host_A": [
+        -0.005,
+        -0.023152351067307463
+      ],
+      "full_move_two_second_stop": "PASS_BOUNDED_MATHEMATICAL_INTERFACE; two handles/same vectorposterior FF",
+      "current_A": 0.02819088232228696,
+      "slew_A_s": 1.341280251073918,
+      "filtered_gyro_halfstep_rad_s": 6.25218272685274e-07,
+      "original_gate_rad_s": 1e-06,
+      "original_coarse_failure": "2.5ms integration filteredgyro2.57955e-6 FAIL retained;1.25ms firstPASS;625us NOT_RUN",
+      "analytic_component_check": "11points G/M01 PASS1e-12; independent formula for newCOM",
+      "gravity_nominal_table": "Sampled error6.422951e-6A separately retained; independent continuous upright interpolation remainder6.426512e-6A<=1e-5A",
+      "scope": "No noise/friction/cable/identification/physicalstop/fullmotor qualification",
+      "contract_tests": "7 PASS .335s"
+    },
+    "station_actions": "NONE",
+    "physical_stage3a": "NOT_RUN",
+    "physical_stage3b": "NOT_RUN",
+    "deployment_authorized": false,
+    "goal": "ACTIVE",
+    "evidence_zip": "run\\adr0022-stage2\\architect-review-response-02\\ADR-002.2-review02-cycle07-evidence.zip",
+    "evidence_zip_bytes": 77384,
+    "evidence_records": 42,
+    "export_checks": "PASS: JSON readback; data/prose only, no source/binaries/hashes/bulk captures."
+  },
+  "continued_cycle_08": {
+    "status": "FAMILY_SPECIFIC_START_PAIR_CONDITIONAL_DEVELOPMENT_PASS",
+    "question": "Inherited Stribeck START policy caused a departure transient in the fitted Coulomb control bridge.",
+    "fixed_curve": "WN 2 rad/s, zeta 1.5; each of the three fitted assets uses its own gains",
+    "selected_START_excess_A": {
+      "negative": 0.02,
+      "positive": 0.02
+    },
+    "actual_native_START_totals_A": {
+      "negative": -0.164,
+      "positive": 0.204
+    },
+    "grid": {
+      "cases": 72,
+      "original_passes_by_symmetric_20_40_60_80mA": [
+        18,
+        18,
+        18,
+        3
+      ]
+    },
+    "combined_separate_replay": {
+      "cases": 18,
+      "original_quality_passes": 18,
+      "owner_quality_passes": 18
+    },
+    "complete_and_independent_forward": "90/90 PASS",
+    "exact_native_readbacks": 130860,
+    "position_jitter_rad_range": [
+      0.0005460161049223337,
+      0.0017799611596788876
+    ],
+    "sustained_start_s_range": [
+      0.1499999999999999,
+      0.18500000000000005
+    ],
+    "START_interval_command_dose_A2s_range": [
+      0.0030726153563865335,
+      0.005596599999999996
+    ],
+    "selected_local_worst_phase_margin_deg_range": [
+      69.6732195276297,
+      69.67511123364785
+    ],
+    "selected_local_worst_gain_margin_db_range": [
+      16.593919237381304,
+      16.603116224603912
+    ],
+    "relaxed_acceptance_needed_for_current_plateau_result": false,
+    "protocol_checks": "6 PASS",
+    "evidence_role": "CONSUMED DEVELOPMENT; conditional on each fitted model as plant",
+    "uncertainty": "UNKNOWN; three fitted vectors are not calibrated joint support",
+    "model_qualified": false,
+    "controller_qualified": false,
+    "unknown_true_plant_validation": "NOT_RUN",
+    "full_domain_coverage": "NOT_RUN",
+    "physical_stage3a": "NOT_RUN",
+    "physical_stage3b": "NOT_RUN",
+    "new_motion_authority": false,
+    "station_actions": "NONE",
+    "goal": "ACTIVE"
+  },
+  "continued_cycle_09": {
+    "status": "COMPLETED_CHECKPOINT; GOAL_ACTIVE",
+    "separate_plant_control": {
+      "schema": "adr0022.separate-synthetic-plant-control/1",
+      "status": "SEPARATE_SYNTHETIC_PLANT_PLATEAUX_PASS",
+      "cases": 18,
+      "completed": 18,
+      "original_quality_passes": 18,
+      "owner_quality_passes": 18,
+      "independent_forward_passes": 18,
+      "exact_native_readbacks": 26172,
+      "default_saved_array_replay": "PASS",
+      "early_case_reused_once": true,
+      "scope": "fixed supplied synthetic truth point; same consumed reference design, new noise draws; not physical or global validation",
+      "uncertainty": "UNKNOWN",
+      "controller_qualified": false,
+      "physical_stage3a": "NOT_RUN",
+      "physical_stage3b": "NOT_RUN",
+      "deployment_authorized": false
+    },
+    "position_steps": {
+      "schema": "adr0022.fitted-manoeuvre-development/1",
+      "status": "POSITION_STEP_MOTOR_QUALITY_FAILED",
+      "fixed_curve": [
+        2.0,
+        1.5
+      ],
+      "START_excess_A": {
+        "negative": 0.02,
+        "positive": 0.02
+      },
+      "required_position_cases": 36,
+      "complete_case_count": 0,
+      "original_quality_pass_count": 0,
+      "owner_quality_pass_count": 0,
+      "motor_case_pass_count": 0,
+      "independent_forward_pass_count": 36,
+      "actual_complete_readbacks": 20400,
+      "position_coverage": "signed.5/1/5deg pristine and noisy101, all3fitted models",
+      "reversal_coverage": "NOT_RUN; separate declaration required",
+      "all_motor_reference_quality_limits": "UNCHANGED",
+      "uncertainty": "UNKNOWN",
+      "model_qualified": false,
+      "controller_qualified": false,
+      "independent_unknown_true_plant_forecast": "NOT_RUN",
+      "full_domain_coverage": "NOT_RUN",
+      "physical_stage3a": "NOT_RUN",
+      "physical_stage3b": "NOT_RUN",
+      "deployment_authorized": false,
+      "fault_truncated_case_count": 36,
+      "original_full_position_quality": "NOT_RUN; all36 fault-truncated before fixed windows",
+      "revised_full_position_quality": "NOT_RUN; all36 fault-truncated before fixed windows",
+      "evaluated_original_quality_case_count": 0,
+      "evaluated_revised_quality_case_count": 0,
+      "unchanged_step_settling_deadline": "command+1s for abs(step)<=1deg; zero_reference+1s for5deg",
+      "unchanged_final_position_error_limit_deg": 0.15,
+      "unchanged_overshoot_limit_deg": "max(0.15,0.1*abs(step_deg))"
+    },
+    "planned_reversals": {
+      "schema": "adr0022.fitted-planned-reversal-development/1",
+      "status": "REVERSAL_INTERFACE_AND_FIXED_STOP_PASS",
+      "required_case_count": 12,
+      "completed_case_count": 12,
+      "independent_forward_pass_count": 12,
+      "interface_and_fixed_stop_pass_count": 12,
+      "actual_complete_readbacks": 19224,
+      "full_original_reversal_tracking_quality": "NOT_RUN; no complete predicate declared",
+      "full_revised_reversal_tracking_quality": "NOT_RUN; no complete predicate declared",
+      "uncertainty": "UNKNOWN",
+      "model_qualified": false,
+      "controller_qualified": false,
+      "independent_unknown_true_plant_forecast": "NOT_RUN",
+      "full_domain_coverage": "NOT_RUN",
+      "physical_stage3a": "NOT_RUN",
+      "physical_stage3b": "NOT_RUN",
+      "deployment_authorized": false
+    },
+    "fitted_local_information": {
+      "scope": "CONDITIONAL_LOCAL_INFORMATION_ONLY",
+      "uncertainty": "UNKNOWN",
+      "chronological_fit": "joint-final-mixed-720s-noisy-10103",
+      "source_fitting_model_max_step_s": 0.000125,
+      "fitted_physical_coordinates_changed": false,
+      "coordinate_order": [
+        "a",
+        "viscous",
+        "coulomb_negative",
+        "coulomb_positive",
+        "actuator_tau",
+        "transport_delay",
+        "gyro_tau",
+        "gyro_delay",
+        "current_tau",
+        "current_delay"
+      ],
+      "numerical_gate": {
+        "full_derivatives_and_pointwise_bin_fisher_relative": 0.01,
+        "normalized_rank": 10,
+        "normalized_condition_max": 1000000.0
+      },
+      "retained_pairs": [
+        {
+          "case": "original",
+          "native_max_steps_s": [
+            0.000125,
+            6.25e-05
+          ],
+          "status": "CONDITIONAL_INFORMATION_NUMERICAL_PREREQUISITE_FAILED",
+          "all10_decade_derivatives_passed": true,
+          "max_decade_relative_change": 0.0001397439386111022,
+          "max_native_halfstep_relative_change": 0.018323962986143295,
+          "transport_delay_halfstep_relative_change": 0.018323962986143295,
+          "pointwise_encoder_fisher_halfstep_relative_change": 0.0546343305867798,
+          "joint_information_halfstep_relative_change": 5.4448814769299844e-05,
+          "normalized_rank": 10,
+          "normalized_condition": 890.0928670743905,
+          "saved_source_native_error": 0.0,
+          "halfstep_center_q_max_error_rad": 5.846405187526216e-06,
+          "covariance": "NOT_COMPUTED"
+        },
+        {
+          "case": "refinement-pair-1",
+          "native_max_steps_s": [
+            6.25e-05,
+            3.125e-05
+          ],
+          "status": "CONDITIONAL_INFORMATION_NUMERICAL_PREREQUISITE_FAILED",
+          "all10_decade_derivatives_passed": true,
+          "max_decade_relative_change": 0.0004069765911813566,
+          "max_native_halfstep_relative_change": 0.006737854536771363,
+          "transport_delay_halfstep_relative_change": 0.006737854536771363,
+          "pointwise_encoder_fisher_halfstep_relative_change": 0.014265371715991959,
+          "joint_information_halfstep_relative_change": 2.0620424390537685e-05,
+          "normalized_rank": 10,
+          "normalized_condition": 889.1260168544977,
+          "saved_source_native_error": 0.0,
+          "halfstep_center_q_max_error_rad": 1.5561349346882025e-06,
+          "covariance": "NOT_COMPUTED"
+        },
+        {
+          "case": "refinement-pair-2",
+          "native_max_steps_s": [
+            3.125e-05,
+            1.5625e-05
+          ],
+          "status": "FITTED_EXPECTED_INFORMATION_NUMERICAL_PASS",
+          "all10_decade_derivatives_passed": true,
+          "max_decade_relative_change": 0.0011156334689237074,
+          "max_native_halfstep_relative_change": 0.0005035070881905192,
+          "transport_delay_halfstep_relative_change": 0.0005035070881905192,
+          "pointwise_encoder_fisher_halfstep_relative_change": 0.0036580538706776355,
+          "joint_information_halfstep_relative_change": 2.1239741279920545e-06,
+          "normalized_rank": 10,
+          "normalized_condition": 889.3374948698197,
+          "saved_source_native_error": 0.0,
+          "halfstep_center_q_max_error_rad": 4.013639784972156e-07,
+          "covariance": "COMPUTED_LOCAL_INFORMATION_INVERSE"
+        }
+      ],
+      "first_passing_pair": 2,
+      "unused_pairs": "NONE",
+      "information": "joint expected score Fisher at the same retained fitted vector; no prior/Gauss-Newton substitution",
+      "covariance_scope": "conditional local information inverse; source vector was fitted at125us and was not refitted at finer resolution",
+      "generator_diagnostics": {
+        "scope": "known independent truth, fresh masks; descriptive consumed data only",
+        "encoder": {
+          "fresh_count": 720001,
+          "probability_mass_max_error": 8.881784197001252e-16,
+          "true_score_mean_standard_errors": 0.1365093386925655,
+          "observed_squared_score_over_expected": 0.998982469258572,
+          "true_score_lag1": 0.0013699176339091249,
+          "observed_offsets_outside_seven_bin_support": 0
+        },
+        "encoder_largest_nonsparse_phase_bin_count_standard_errors": 1.7959145721721677,
+        "gyro": {
+          "fresh_count": 36001,
+          "normalized_sample_sd": 1.0014839225998269,
+          "mean_standard_errors": 0.594695650742475,
+          "lag1": 0.010371091001765939
+        },
+        "current": {
+          "fresh_count": 720001,
+          "normalized_sample_sd": 0.9996679926395864,
+          "mean_standard_errors": -0.11741979311329867,
+          "lag1": 4.487277078777936e-05
+        }
+      },
+      "calibrated_joint_coverage": "NOT_RUN",
+      "parameter_uncertainty_ensemble": "NOT_CONSTRUCTED",
+      "next_required_evidence": "frozen joint-estimation ensemble under supported noise/gauges plus independent empirical simultaneous parameter and event/horizon trajectory coverage/width; retain optimizer/numerical failures",
+      "one_truth_one_train_design": true,
+      "closed_loop_data_statistics": "UNQUALIFIED",
+      "inverse_fits": 0,
+      "new_noise_draws": 0,
+      "physical_actions": false,
+      "deployment": false,
+      "conditional_standard_errors": {
+        "a": 4.244284709994373e-07,
+        "viscous": 2.5963840435478255e-07,
+        "coulomb_negative": 2.5754831770663063e-07,
+        "coulomb_positive": 2.1602544680592483e-07,
+        "actuator_tau": 2.4178539168215413e-08,
+        "transport_delay": 1.9871412077368014e-06,
+        "gyro_tau": 3.966983953959339e-05,
+        "gyro_delay": 3.463281961033808e-05,
+        "current_tau": 6.772982753124441e-07,
+        "current_delay": 2.072994874919915e-06
+      },
+      "fitted_score_local_information_norm": 12.985033858260271,
+      "information_matrices_reference": "conditional-joint-matrices.json"
+    },
+    "forecast_contract_tests": {
+      "passed": 15,
+      "elapsed_s": 1.757
+    },
+    "position_reversal_quality": "Full reversal tracking predicate NOT_DECLARED; fault-truncated step metrics NOT_RUN.",
+    "next_action": "Repair the small-step START/braking transition without bypassing guards; continue calibrated joint uncertainty and required coverage.",
+    "station_actions": "NONE",
+    "physical_stage3a": "NOT_RUN",
+    "physical_stage3b": "NOT_RUN",
+    "deployment_authorized": false,
+    "goal": "ACTIVE",
+    "evidence_zip": "run\\adr0022-stage2\\architect-review-response-02\\ADR-002.2-review02-cycle09-final-evidence.zip",
+    "evidence_zip_bytes": 40623,
+    "evidence_records": 27,
+    "export_checks": "PASS; data/prose only, no source/binaries/hashes/bulk captures",
+    "fitted_information_peer_review": {
+      "schema": "adr0022.fitted-information-peer/1",
+      "status": "PASS_CONDITIONAL_LOCAL_SCOPE",
+      "review": "source expected-score/Fisher weighting, fresh masks, physical central-step/scales and fixed-vector refinement; saved matrix algebra only, no native rerun/refit/noise",
+      "chronological_case": "joint-final-mixed-720s-noisy-10103",
+      "retained_failures": {
+        "125_to_62_5_us": "transport derivative1.8324%, pointwise bin Fisher5.4634%; covariance NOT_COMPUTED",
+        "62_5_to_31_25_us": "pointwise bin Fisher1.4265%; covariance NOT_COMPUTED"
+      },
+      "first_passing_pair_us": [
+        31.25,
+        15.625
+      ],
+      "unchanged_gates": "all10 decade/mesh derivatives and pointwise bin Fisher<=1%; rank10, normalized condition<=1e6; probability mass<=1e-12",
+      "matrix_checks": {
+        "ordered_physical_units": "PASS",
+        "symmetry_and_SPD": "PASS",
+        "SE_correlation_consistency": "PASS",
+        "dimensionless_information_covariance_identity_max_error": 1.4811263326919288e-11,
+        "normalized_J_condition": 889.3374947791322
+      },
+      "fitted_score_local_information_norm": 12.985033858260271,
+      "scope": "conditional local information inverse at retained125us-fitted vector; not reoptimized at fine mesh, not an actual fine-mesh MLE or calibrated confidence set",
+      "uncertainty": "UNKNOWN",
+      "joint_empirical_coverage": "NOT_RUN",
+      "parameter_ensemble": "NOT_CONSTRUCTED",
+      "new_fits": 0,
+      "new_noise": 0,
+      "whole_or_physical_qualification": false
+    }
+  }
+}

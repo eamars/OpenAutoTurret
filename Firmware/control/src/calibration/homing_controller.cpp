@@ -67,7 +67,7 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
   // on contact (or the timeout), well short of this target. The coarse
   // approach passes the rotation cap (max_rotation_rad + margin) so the
   // `arrived` travel-limit check never trips before the rotation cap does.
-  if (target_distance_rad < 0.0 && p_.motion_checks_abort) {
+  if (target_distance_rad < 0.0 && p_.motion_checks_abort && !p_.observe_only) {
     // A fine pass has already observed this endpoint. Bound it to that
     // observation plus the repeatability allowance, not another full traverse.
     const double contact = fine_samples_>0 ? fine_contact1_rad_ : coarse_contact_rad_;
@@ -315,7 +315,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       if (hard_abort || fb.motor_fault) {
         fail("fine approach: hard abort or motor fault");
       } else if (contact) {
-        if (p_.motion_checks_abort && std::abs(fb.pos_rad-coarse_contact_rad_)>p_.repeatability_rad) {
+        if (!p_.observe_only && p_.motion_checks_abort && std::abs(fb.pos_rad-coarse_contact_rad_)>p_.repeatability_rad) {
           fail("fine contact inconsistent with coarse contact; obstruction or load stall unverified");
           break;
         }
@@ -371,12 +371,14 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
           fine_samples_ = 2;
           const double rep = std::fabs(fine_contact2_rad_ - fine_contact1_rad_);
           result_.repeatability_rad = rep;
-          if (rep <= p_.repeatability_rad) {
+          if (p_.observe_only || rep <= p_.repeatability_rad) {
             result_.complete = true;
-            result_.valid = true;
+            result_.valid = !p_.observe_only;
             result_.coarse_contact_rad = coarse_contact_rad_;
             result_.fine_contact_rad =
                 0.5 * (fine_contact1_rad_ + fine_contact2_rad_);
+            result_.fine_contact1_rad = fine_contact1_rad_;
+            result_.fine_contact2_rad = fine_contact2_rad_;
             result_.fine_samples = fine_samples_;
             result_.repeatability_retries = verify_retries_;
             result_.peak_torque_nm = peak_torque_nm_;

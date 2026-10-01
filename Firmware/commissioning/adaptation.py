@@ -10,20 +10,28 @@ from .model import coefficients, features
 class Envelope:
     current_a: float
     slew_a_s: float
-    velocity_rad_s: float
-    acceleration_rad_s2: float
-    jerk_rad_s3: float
-    angle_min_rad: float
-    angle_max_rad: float
+    velocity_rad_s: float | None
+    acceleration_rad_s2: float | None
+    jerk_rad_s3: float | None
+    angle_min_rad: float | None
+    angle_max_rad: float | None
     duration_s: float
     stop_verified: bool
     provenance: str
 
     def __post_init__(self):
-        require(np.isfinite(list(self.__dict__.values())[:8]).all(), Reason.DATA_INVALID, "invalid envelope")
-        require(min(self.current_a,self.slew_a_s,self.velocity_rad_s,self.acceleration_rad_s2,
-                    self.jerk_rad_s3,self.duration_s)>0 and self.angle_min_rad<self.angle_max_rad,
-                Reason.DATA_INVALID, "positive, ordered external bounds required")
+        required = (self.current_a, self.slew_a_s, self.duration_s)
+        require(np.isfinite(required).all() and min(required)>0, Reason.DATA_INVALID,
+                "positive finite current, slew and duration bounds required")
+        for bound in (self.velocity_rad_s, self.acceleration_rad_s2, self.jerk_rad_s3):
+            require(bound is None or (np.isfinite(bound) and bound>0), Reason.DATA_INVALID,
+                    "declared kinematic bounds must be positive and finite")
+        require((self.angle_min_rad is None)==(self.angle_max_rad is None), Reason.DATA_INVALID,
+                "angle bounds must be declared together")
+        if self.angle_min_rad is not None:
+            require(np.isfinite((self.angle_min_rad,self.angle_max_rad)).all() and
+                    self.angle_min_rad<self.angle_max_rad, Reason.DATA_INVALID,
+                    "declared angle bounds must be finite and ordered")
         require(type(self.stop_verified) is bool and self.provenance in ("SYNTHETIC", "MEASURED"),
                 Reason.DATA_INVALID, "envelope provenance missing")
 
@@ -90,19 +98,63 @@ def template(case_id, duration, dt):
 
 def choose_information(native, spec, theta, uncertainty, envelope, prior_information,
                        *, initial_position, posture, direction, noise_sigma, sample_hz,
-                       _all_templates=False):
-    require(envelope.stop_verified, Reason.ENVELOPE_LIMITED, "stopping bound must be injected/verified")
+                       _all_templates=False, maximum_first_hold_s=None):
     require(sample_hz>0 and noise_sigma>0, Reason.MEASUREMENT_LIMITED, "sampling/noise not calibrated")
+    if maximum_first_hold_s is not None:
+        require(np.isfinite(maximum_first_hold_s) and maximum_first_hold_s>0,
+                Reason.DATA_INVALID, "maximum-first hold duration must be positive and finite")
+        maximum_first_current=direction*float(first_stimulus(None,envelope,
+            previous_factor=0,maximum_first=True)[0])
     p=spec.size;prior=np.asarray(prior_information,float)
-    require(prior.shape==(p,p) and np.isfinite(prior).all() and np.allclose(prior,prior.T) and
-            np.min(np.linalg.eigvalsh(prior))>=-1e-10, Reason.DATA_INVALID, "Fisher prior must be positive semidefinite")
+    require(prior.shape==(p,p) and np.isfinite(prior).all() and np.allclose(prior,prior.T),
+            Reason.DATA_INVALID, "Fisher prior must be finite and symmetric")
+    eigenvalues=np.linalg.eigvalsh(prior)
+    require(eigenvalues.min()>=-1e-10*max(1.,float(np.max(np.abs(eigenvalues)))),
+            Reason.DATA_INVALID, "Fisher prior must be positive semidefinite")
     scores=[]
     for case_id in range(32):
         t,shape=template(case_id,min(envelope.duration_s,4.),1/sample_hz)
         _,_,load=coefficients(spec,theta,initial_position,posture,direction)
-        amplitude=max(0.,envelope.current_a-abs(float(load)))*.25
+        amplitude=max(0.,envelope.current_a-abs(float(load)))
         u=float(load)+direction*amplitude*shape
-        if np.max(np.abs(np.diff(u)/np.diff(t)))>envelope.slew_a_s:continue
+        template_duration=float(t[-1]);prefix=None;final_zero_ramp_s=0.
+        if maximum_first_hold_s is not None:
+            times=[0.];currents=[0.]
+            def append_linear(target,duration):
+                if duration<=0:return
+                offsets=np.linspace(0.,duration,max(1,int(np.ceil(duration*sample_hz)))+1)[1:]
+                start=times[-1];current=currents[-1]
+                times.extend(start+offsets)
+                currents.extend(current+(target-current)*offsets/duration)
+            ramp_s=abs(maximum_first_current)/envelope.slew_a_s
+            transition_s=abs(float(u[0])-maximum_first_current)/envelope.slew_a_s
+            append_linear(maximum_first_current,ramp_s)
+            append_linear(maximum_first_current,maximum_first_hold_s)
+            append_linear(float(u[0]),transition_s)
+            prefix_duration=times[-1]
+            prefix={"method":"first_stimulus","maximum_first":True,"factor_index":0,
+                    "current_A":maximum_first_current,"slew_A_s":envelope.slew_a_s,
+                    "ramp_s":ramp_s,"hold_s":float(maximum_first_hold_s),
+                    "transition_to_template_s":transition_s,"duration_s":prefix_duration,
+                    "startup_or_motion_guaranteed":False}
+            times.extend(prefix_duration+t[1:]);currents.extend(u[1:])
+            final_zero_ramp_s=abs(currents[-1])/envelope.slew_a_s
+            append_linear(0.,final_zero_ramp_s)
+            t=np.asarray(times,float);u=np.asarray(currents,float)
+            if t[-1]>envelope.duration_s:continue
+        if np.max(np.abs(u))>envelope.current_a:continue
+        intervals=np.diff(t);increments=np.abs(np.diff(u))
+        if maximum_first_hold_s is None:
+            if np.max(increments/intervals)>envelope.slew_a_s:continue
+        else:
+            slew_increment=envelope.slew_a_s*intervals
+            # The exact ramp acquires rounding when its local times are added
+            # to the prefix. Propagate one representable step of each input
+            # and product; this is numerical resolution, not extra slew authority.
+            roundoff=(np.spacing(np.abs(u[:-1]))+np.spacing(np.abs(u[1:]))+
+                      envelope.slew_a_s*(np.spacing(t[:-1])+np.spacing(t[1:]))+
+                      np.spacing(slew_increment))
+            if np.any(increments>slew_increment+roundoff):continue
         z=np.full(len(t),posture);dirs=np.full(len(t),direction)
         try:out=native.rollout(spec,theta,t,u,z,dirs,(initial_position,0.))
         except Rejected:continue
@@ -112,19 +164,30 @@ def choose_information(native, spec, theta, uncertainty, envelope, prior_informa
         if brake<=0:continue
         delay=float(np.max(np.asarray(uncertainty)[:,-1]))+2*envelope.current_a/envelope.slew_a_s
         stop=np.abs(out[:,1])*delay+out[:,1]**2*worst_a/(2*brake)
-        if (np.any(out[:,0]-stop<envelope.angle_min_rad) or
-            np.any(out[:,0]+stop>envelope.angle_max_rad) or
-            np.max(np.abs(out[:,1]))>envelope.velocity_rad_s):continue
+        if envelope.angle_min_rad is not None and (np.any(out[:,0]-stop<envelope.angle_min_rad) or
+            np.any(out[:,0]+stop>envelope.angle_max_rad)):continue
+        if envelope.velocity_rad_s is not None and np.max(np.abs(out[:,1]))>envelope.velocity_rad_s:continue
         s,h=features(spec,out[:,0],z,dirs)
         a,b,hh=coefficients(spec,theta,out[:,0],z,dirs)
         acc=(u-b*out[:,1]-hh)/a
-        if (np.max(np.abs(acc))>envelope.acceleration_rad_s2 or
-            np.max(np.abs(np.gradient(acc,t)))>envelope.jerk_rad_s3):continue
+        if envelope.acceleration_rad_s2 is not None and np.max(np.abs(acc))>envelope.acceleration_rad_s2:continue
+        if envelope.jerk_rad_s3 is not None and np.max(np.abs(np.gradient(acc,t)))>envelope.jerk_rad_s3:continue
         X=np.c_[s*acc[:,None],s*out[:,1,None],h,-np.gradient(u,t)]/noise_sigma
-        information=X.T@X/sample_hz
+        if maximum_first_hold_s is None:information=X.T@X/sample_hz
+        else:
+            intervals=np.diff(t)
+            weights=np.r_[intervals[0]/2,(intervals[:-1]+intervals[1:])/2,intervals[-1]/2]
+            information=X.T@(weights[:,None]*X)
         sign,score=np.linalg.slogdet(prior+information+np.eye(p)*1e-12)
         if sign>0:scores.append({"case_id":case_id,"score":float(score/t[-1]),
-                                "time":t,"successful_tx":u,"information":information})
+                                "time":t,"successful_tx":u,"information":information,
+                                "stop_verified":envelope.stop_verified,
+                                "predicted_stop_rad":stop,
+                                "absent_external_bounds":[key for key in
+                                    ("velocity_rad_s","acceleration_rad_s2","jerk_rad_s3","angle_min_rad","angle_max_rad")
+                                    if getattr(envelope,key) is None],
+                                **({"maximum_first_prefix":prefix,"template_duration_s":template_duration,
+                                    "final_zero_ramp_s":final_zero_ramp_s} if prefix is not None else {})})
     require(bool(scores), Reason.ENVELOPE_LIMITED, "no complete stimulus plus stop fits the injected envelope")
     if _all_templates:return scores
     # Tie breaking is deterministic; no text interpretation or agent-selected amplitudes.
@@ -165,14 +228,18 @@ def select_supplemental(native,snapshot,envelope,prior_information,*,noise_sigma
     return selected
 
 
-def first_stimulus(approved_minimum, envelope, *, previous_factor=0):
-    require(envelope.stop_verified and approved_minimum is not None, Reason.ENVELOPE_LIMITED,
-            "unknown plant requires an independently approved minimum stimulus and stopping evidence")
-    # Fixed expansion factors; never infer initial safety from an unknown inertia.
+def first_stimulus(approved_minimum, envelope, *, previous_factor=0, maximum_first=False):
+    # Fixed factors expand the legacy seed or descend from approved authority.
     factors=(1.,1.5,2.,3.)
     require(type(previous_factor) is int and 0<=previous_factor<len(factors),
             Reason.INSUFFICIENT_EXCITATION, "initial stimulus information budget exhausted")
-    result=np.asarray(approved_minimum,float)*factors[previous_factor]
+    if maximum_first:
+        result=np.full(np.asarray(approved_minimum if approved_minimum is not None else [0.],float).shape,
+                       envelope.current_a/factors[previous_factor])
+    else:
+        require(approved_minimum is not None, Reason.ENVELOPE_LIMITED,
+                "unknown plant requires an independently approved minimum stimulus")
+        result=np.asarray(approved_minimum,float)*factors[previous_factor]
     require(np.isfinite(result).all() and np.max(np.abs(result))<=envelope.current_a,
             Reason.ENVELOPE_LIMITED, "approved current envelope exhausted")
     return result

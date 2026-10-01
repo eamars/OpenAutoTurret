@@ -1,6 +1,6 @@
 # Operate and adapt the camera station
 
-Current operating runbook, **27 September 2026**. Read this before deploying,
+Current operating runbook, **1 October 2026**. Read this before deploying,
 starting, stopping or diagnosing the station. Dated run reports are historical.
 
 > **How to read this file.** It holds the station's **current state, safety history, owner rulings
@@ -14,7 +14,36 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
 
+## ADR-002.2 architect review priority (2026-10-01, local date)
+
+The owner instructed the agent to continue under [architect review 02](ADR-002.2/architect_review_02/00_START_HERE.md)
+and the [estimator recovery amendment](ADR-002.2/docs/09_ESTIMATOR_RECOVERY.md).
+The earlier [review 01](ADR-002.2/architect_review_01/ADR-002.2-independent-review.md)
+and [identification amendment](ADR-002.2/docs/08_IDENTIFICATION_REPAIR.md) remain history.
+Yaw is UNQUALIFIED; Candidate14 is NONDEPLOYABLE and was never physically run.
+Continue estimator repair, whole-run comparison and synthetic control verification
+while physical promotion is gated. A predictively accepted physical model and the
+applicable authorization are required before deployable gain synthesis or another
+physical controller trial. Review 02 authorizes no new motion, setting change or deployment.
+No further architect approval is required for this authorized offline work.
+
+The owner confirms that the GM6020 uses CAN current control; PWM diagnosis is excluded.
+Motor-specific firmware/applied settings, command scaling and the setup's physical
+stop/fault behaviour still require supported evidence before physical qualification.
+Existing limits and presence rulings below remain. Review 02 work has not contacted
+the station; historical ending-state records are not live status.
+
+## ADR-002.2 unattended startup ruling (2026-10-01, local date)
+
+Latest owner override: acceleration is guidance. Marginal exceedances and high IMU acceleration observations may pass and must not distract from ADR-002.2 tuning. Retain 30-degree/s² reference shaping and raw evidence, but disable the measured-current acceleration restriction for tuning when it blocks useful yaw drive. Keep true current, thermal, fresh-feedback and unsafe STOP protection. Higher-acceleration reference cases remain deferred until presence; incidental measured excursions do not block the present tuning path.
+
+The owner reports that nobody will be near the station and sets **30 degrees/s²** for both yaw acceleration and deceleration, including startup assistance and controlled braking. Use measured IMU acceleration, gyro and orientation to assess uneven vibration. The owner reports the pitch platform is balanced and higher-RPM steady rotation is stable; do not introduce a new speed cap for this request. Higher-acceleration hardware tests wait until the owner confirms presence around 18:00 local. Continue deterministic automatic ADR-002.2 tuning across low/high acceleration and low/high speed, with higher-acceleration physical cases deferred. Preserve current, thermal, fresh-feedback and unsafe STOP protection. Before another physical run, verify the acceleration-limiting path and record the actual response. Reference shaping alone does not certify actual body acceleration or vibration. Candidate11 ended at 2026-09-30 23:28:57 UTC; the 23:29:13 UTC query found no output owners. Its sampled acceleration and motion failures remain recorded, and the observed limiter arbitration is being repaired before more motion. This is a recorded state, not a replacement for a fresh ownership check.
+
 ## ADR-002.2 只读盘点记录（2026-09-30，本地日期）
+
+2026-09-30最新主人指令：后续阶段2不生成或检查hash，不以agent新增的噪声、编码器
+差异或预期行程门槛拒绝标定观测；采用已有滤波并保留原始反馈。只做必要正常路径
+开发检查，直接开展实机标定。既有真实保护、有限会话及唯一输出owner保持有效。
 
 主人已授权阶段2，并确认无payload、pitch掉电保持原位、pitch总行程约60度且归零居中、
 yaw滑环无限转动；电流按电机datasheet，不另加人为上限，采集时记录电机温度。

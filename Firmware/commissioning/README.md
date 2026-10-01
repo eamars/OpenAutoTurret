@@ -1,8 +1,13 @@
 # ADR-002.2 local mathematical software
 
-This package implements Stage 1 under the [architect override](../docs/ADR-002.2/docs/07_STAGE1_OFFLINE_OVERRIDE.md).
-Its commands read files and run mathematics on the workstation. They do not connect to a
-station, open CAN, deploy, or qualify hardware. Actual station parameters remain unknown.
+Current authority is [architect review 02's recovery amendment](../docs/ADR-002.2/docs/09_ESTIMATOR_RECOVERY.md),
+which takes precedence over the original [Stage 1 override](../docs/ADR-002.2/docs/07_STAGE1_OFFLINE_OVERRIDE.md)
+and conflicting algorithm/completion rules below. **Amended Stage 1 is IN_PROGRESS;
+yaw is UNQUALIFIED; Candidate14 is NONDEPLOYABLE and was never physically run.**
+Current commands read retained files and run local mathematics; they do not connect
+to the station or qualify hardware. No new hashes are generated or checked.
+The current evidence and remaining work are recorded in the
+[review 02 progress report](../docs/ADR-002.2/reports/ARCHITECT_REVIEW_02_PROGRESS.md).
 
 The C++ [axis_control_core](../axis_control_core/axis_control_core.hpp) owns the causal
 observer, position P / velocity PI, feedforward, motion states, successful-output
@@ -13,7 +18,89 @@ configuration initialization. This replay is mathematical parity evidence. The n
 production output path and its physical adapters still require Stage 2/3 integration
 and qualification; the replay is not a 3b certificate.
 
-## Local build and reproduction
+## Current local repair and reproduction
+
+[yaw_events.py](yaw_events.py) retains whole-journal source/line/run/calibration
+provenance, separate TX/current channels, native observation freshness, timing
+uncertainties and caller-supplied shaft registration. [model_family.py](model_family.py)
+compares bounded algebraic/first-order actuators with Coulomb/Stribeck sliding
+friction and true stick/start/reversal/stop transitions. It predicts one continuous
+trajectory; future measured motion cannot reset that prediction. Its bounded
+output-error fitter is diagnostic and claims no closed-loop unbiasedness.
+
+The [closed-loop estimator probe](../tools/adr0022_closed_loop_estimator_probe.py)
+uses the actual native controller with an independent analytic synthetic plant,
+multi-rate observations, quantization/noise and saturation/slew. The latest declared
+four-coordinate recovery/prediction gates pass after the documented repair and fresh
+seed/reference verification. Its limited synthetic subspace does not qualify all model structures,
+physical timing/current meaning or station gains. Controller synthesis/promotion
+requires a predictive model and the amended validation evidence.
+
+[family_analysis.py](family_analysis.py) supplies the selected family's frozen
+sliding tangent, including friction differential damping, actuator/sensor states
+and separate exact delays. It does not calculate sampled controller margins.
+[family_forecast.py](family_forecast.py) runs the existing native controller against
+native or independent family plants using causal simulated sensors and its own
+successful current history. Source timestamps and acquisition initialization are
+explicit. An optional motor FF adapter evaluates its single term after the native
+observer update, sharing the PI's posterior and actual-command accounting.
+Dynamic actuation requires explicit bounded `STEADY_STATE_REFERENCE` support;
+it supplies no inverse or new gains. Supplied controller baselines remain unqualified.
+The forecast probe's `--reference velocity-plateau --speed-deg-s 5` reuses the
+existing shaper and frozen sensor-based metrics, including the exact stop anchor.
+`--motor-ff-policy STEADY_STATE_REFERENCE` selects that synthetic policy.
+[family_sampled_analysis.py](family_sampled_analysis.py) supplies the local sampled
+lift with exact held-input/delay propagation and native observe/output/ACK order.
+Its sliding, inactive-limit and smooth-sensor prerequisites exclude rest,
+reversal, quantized observations and physical gain qualification.
+
+Run from the repository root in Linux or local WSL. Reuse the project-local venv;
+create it only if absent. Keep libraries, captures and reports under ignored `run/`.
+
+```bash
+python3 -m venv run/adr0022-local/.venv
+run/adr0022-local/.venv/bin/python -m pip install -r Firmware/docs/ADR-002.2/requirements-offline.txt
+cmake -S Firmware/axis_control_core -B run/adr0022-local/core -DCMAKE_BUILD_TYPE=Release
+cmake --build run/adr0022-local/core --target axis_control_core_native --parallel 2
+export OTA_AXIS_CORE_LIBRARY="$PWD/run/adr0022-local/core/libaxis_control_core.so"
+export OPENBLAS_NUM_THREADS=1
+run/adr0022-local/.venv/bin/python -m Firmware.commissioning.probe_model_family \
+  --native-library "$OTA_AXIS_CORE_LIBRARY"
+run/adr0022-local/.venv/bin/python -m unittest \
+  Firmware.commissioning.tests.test_model_family \
+  Firmware.commissioning.tests.test_yaw_events -v
+run/adr0022-local/.venv/bin/python Firmware/tools/doc_tree_check.py
+```
+
+To replay the original regression with the repaired procedure, use a fresh output
+directory. The original pre-repair failure remains retained. Failed gates route to
+diagnosis; do not enlarge the quality limits after inspecting a result.
+
+```bash
+run/adr0022-local/.venv/bin/python Firmware/tools/adr0022_closed_loop_estimator_probe.py \
+  --library "$OTA_AXIS_CORE_LIBRARY" \
+  --output-dir run/adr0022-stage2/architect-review-response-01/closed-loop-estimator/reproduction \
+  --duration-s 8 --seeds 17 41 83 --max-nfev 120
+```
+
+Existing physical-data fitting follows the workstation-only
+[whole-run yaw model-comparison operation card](../docs/operations/adr0022-yaw-model-comparison.md).
+It freezes TRAIN/SELECTION/HOLDOUT journals, calibration scope, timing bounds and
+numerical plan before fitting; use a fresh result directory for any changed plan.
+Train first on current-excitation journals and retain feedback journals as diagnostic
+comparisons until estimator validity is established. Inspected historical holdouts
+cannot become unseen prospective experiments. This path generates no controller gains.
+
+<details>
+<summary>Historical original-contract algorithm and reproduction</summary>
+
+The sections below describe the pre-amendment Stage 1 implementation and its original
+evidence procedure. They remain useful historical context, but do not establish
+amended Stage 1 completion or replace the current model-family/prospective validation
+route. The original content-addressed artifact/auditor commands are not the current
+acceptance route; do not generate or check hashes for this repair.
+
+## Historical local build and reproduction
 
 Run these commands from the repository root in Linux or **local WSL**, using a project
 virtual environment. The full firmware build needs the existing project build dependencies.
@@ -120,3 +207,5 @@ approved boundaries before collecting the dependent measurements. It then suppli
 real data to these existing algorithms. Independent-program 3a and normal-production
 3b physical validation both remain mandatory for the full ADR. This local session stops
 before Stage 2 and makes no statement about the station's present running state.
+
+</details>

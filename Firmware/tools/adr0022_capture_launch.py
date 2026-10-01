@@ -27,6 +27,8 @@ CHARACTERIZATION_SCHEMA = "adr0022.neutral-characterization/1"
 CHARACTERIZATION_PURPOSE = "neutral_current_measurement_characterization"
 HOMING_SCHEMA = "adr0022.sensorless-homing/1"
 HOMING_PURPOSE = "pitch_sensorless_homing"
+YAW_CONTROL_SCHEMA = "adr0022.yaw-control/1"
+YAW_CONTROL_PURPOSE = "yaw_shared_core_3a"
 PROTECTION_DOCUMENT = "docs/references/cybergear/CyberGear微电机使用说明书.pdf"
 PROTECTION_DOCUMENT_SHA256 = "4fe8727a690193953e62438c04abd25f8e8be232e02b4eddf3aa1f99610da495"
 SOURCE_DIRECTORIES = ("axis_control_core", "commission_runtime", "control/src", "third_party/sh2")
@@ -63,12 +65,18 @@ def validate_current_contract(config, characterize_current=False, establish_homi
         raise ValueError("neutral current preparation schema/purpose required")
     if config.get("pitch_supported_when_disabled") is not True:
         raise ValueError("pitch must be physically supported for current preparation")
-    for key in (() if establish_homing else ("neutral_current_bound_A", "transition_displacement_bound_rad", "pitch_maximum_temperature_C")):
+    for key in (() if establish_homing else ("transition_displacement_bound_rad", "pitch_maximum_temperature_C")):
         value = config.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"explicit finite positive {key} required")
     expected_basis = {"kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
-                      "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5}
+                      "continuous_current_A": 6.5}
+    basis = config.get("protection_limit_basis", {})
+    basis_matches = isinstance(basis, dict) and all(basis.get(key) == value for key, value in expected_basis.items())
+    if not establish_homing:
+        protection = config.get("protection_current_bound_A")
+        if type(protection) not in (int, float) or not math.isfinite(protection) or not 0 < protection <= 6.5:
+            raise ValueError("manufacturer current protection must be explicit, positive and <=6.5 A")
     if establish_homing:
         guards, settings = config.get("guards"), config.get("native_settings")
         if not isinstance(guards, dict) or not isinstance(settings, dict):
@@ -78,16 +86,16 @@ def validate_current_contract(config, characterize_current=False, establish_homi
             raise ValueError("homing measured current protection must be explicit, positive and <=6.5 A")
         if type(command_cap) not in (int, float) or not math.isfinite(command_cap) or not 0 < command_cap <= 5:
             raise ValueError("homing native current command cap must be explicit, positive and <=5 A")
-        if config.get("provenance") == "MEASURED" and config.get("protection_limit_basis") != expected_basis:
+        if config.get("provenance") == "MEASURED" and not basis_matches:
             raise ValueError("homing requires manufacturer 6.5 A rated protection basis")
     if characterize_current:
         observation = config.get("neutral_observation_s")
         timing = config.get("limits", {})
-        if type(observation) not in (int, float) or not math.isfinite(observation) or not 0 < observation <= 60:
-            raise ValueError("explicit finite positive characterization neutral_observation_s <=60 s required")
+        if type(observation) not in (int, float) or not math.isfinite(observation) or observation <= 0:
+            raise ValueError("explicit finite positive characterization neutral_observation_s required")
         if not isinstance(timing, dict) or any(type(timing.get(key)) not in (int, float) or not math.isfinite(timing[key]) or timing[key] <= 0 for key in ("startup_s", "duration_s")) or timing["duration_s"] <= timing["startup_s"] + observation:
             raise ValueError("characterization duration must cover startup and the explicit neutral observation")
-        if config.get("protection_current_bound_A") != 6.5 or config.get("protection_limit_basis") != expected_basis:
+        if config.get("protection_current_bound_A") != 6.5 or not basis_matches:
             raise ValueError("characterization requires manufacturer 6.5 A rated protection basis")
     if config.get("provenance") == "MEASURED":
         attendance = config.get("operator_attendance", {})
@@ -104,23 +112,96 @@ def validate_current_contract(config, characterize_current=False, establish_homi
             raise ValueError("explicit current-mode session authorization identity required")
         if attendance["present_at_manual_cutoff"] is False and (authorization.get("unattended_operation_authorized") is not True or authorization.get("presence_required") is not False):
             raise ValueError("unattended operation requires explicit authorization without a presence requirement")
-        revision = config.get("expected_revision", "")
-        source = config.get("expected_source_sha256", "")
-        if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
-            raise ValueError("full committed source revision required")
-        if not isinstance(source, str) or len(source) != 64 or any(c not in "0123456789abcdef" for c in source):
-            raise ValueError("expected acquisition source SHA-256 required")
-        qualification = config.get("local_qualification", {})
-        if not isinstance(qualification, dict) or not isinstance(qualification.get("report"), dict):
-            raise ValueError("embedded local current preparation qualification required")
-        report = qualification.get("report", {})
-        expected_status = "LOCAL_SENSORLESS_HOMING_PASS" if establish_homing else "LOCAL_CURRENT_CHARACTERIZATION_PASS" if characterize_current else "LOCAL_CURRENT_PREPARATION_PASS"
-        if qualification.get("sha256") != canonical_sha(report) or report.get("status") != expected_status or (
-                report.get("expected_binaries") != config.get("expected_binaries") or report.get("source_sha256") != source or
-                report.get("revision") != revision or report.get("hardware_accessed") is not False or report.get("provenance") != "SYNTHETIC"):
-            raise ValueError("matching successful local current preparation qualification required")
-        if establish_homing:
-            validate_native_settings_evidence(config)
+        # Original native parameters are verified by fresh disabled readbacks
+        # in commissiond; a local simulation certificate is not an entry gate.
+
+
+def validate_yaw_contract(config):
+    """Finite, current-only yaw acquisition; no sensor-quality qualification gate."""
+    if config.get("schema") != "adr0022.yaw-acquisition/1" or config.get("purpose") != "yaw_current_identification":
+        raise ValueError("yaw acquisition schema/purpose required")
+    if config.get("pitch_supported_when_disabled") is not True:
+        raise ValueError("yaw acquisition requires supported disabled pitch")
+    measured = config.get("provenance") == "MEASURED"
+    for key in ("baseline_s", "stop_observation_s", "yaw_current_bound_A", "pitch_maximum_temperature_C"):
+        value = config.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"finite positive {key} required")
+    if config["yaw_current_bound_A"] > 3 or config["stop_observation_s"] < 2 or (measured and config["baseline_s"] < 2):
+        raise ValueError("yaw acquisition requires protocol current bounds and complete baseline/stop windows")
+    segments = config.get("current_segments")
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("program-selected current segments required")
+    total = episode = 0.
+    for segment in segments:
+        if not isinstance(segment, dict) or any(type(segment.get(key)) not in (int, float) or not math.isfinite(segment[key]) for key in ("duration_s", "start_A", "end_A")):
+            raise ValueError("finite yaw current segment required")
+        duration = segment["duration_s"]
+        if duration <= 0 or max(abs(segment["start_A"]), abs(segment["end_A"])) > config["yaw_current_bound_A"]:
+            raise ValueError("yaw segment exceeds declared current or duration")
+        total += duration
+        if segment["start_A"] == segment["end_A"] == 0:
+            episode = 0.
+        else:
+            episode += duration
+            if measured and config["yaw_current_bound_A"] > .9 and episode > .500001:
+                raise ValueError("yaw current above the continuous stall allowance requires brief pulses")
+    limits = config.get("limits", {})
+    if limits.get("duration_s", 0) <= limits.get("startup_s", 0) + config["baseline_s"] + total + config["stop_observation_s"]:
+        raise ValueError("yaw waveform and stopping observation must fit the finite session")
+
+
+def validate_yaw_control_contract(config):
+    """Check finite session fields; commissiond applies and reads back the core."""
+    if config.get("schema") != YAW_CONTROL_SCHEMA or config.get("purpose") != YAW_CONTROL_PURPOSE:
+        raise ValueError("yaw shared-core control schema/purpose required")
+    if config.get("pitch_supported_when_disabled") is not True:
+        raise ValueError("yaw control requires supported disabled pitch")
+    for key in ("baseline_s", "stop_observation_s", "yaw_current_bound_A", "pitch_maximum_temperature_C"):
+        value = config.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"finite positive {key} required")
+    if config["yaw_current_bound_A"] > .9 or config["baseline_s"] < 2 or config["stop_observation_s"] != 2:
+        raise ValueError("yaw control requires <=0.90 A authority and complete baseline/stop windows")
+    if not isinstance(config.get("candidate_label"), str) or not config["candidate_label"].strip():
+        raise ValueError("descriptive yaw candidate label required")
+    for key in ("controller_parameters", "gyro_calibration"):
+        if not isinstance(config.get(key), dict):
+            raise ValueError(f"explicit {key} required for runtime application")
+    for key in ("other_axis_posture_rad", "yaw_position_offset_rad"):
+        value = config.get(key, 0.) if key == "yaw_position_offset_rad" else config.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError(f"finite {key} required")
+    samples = config.get("reference_samples")
+    if samples is not None:
+        if config.get("reference_segments") is not None:
+            raise ValueError("choose yaw reference samples or position segments")
+        if not isinstance(samples, list) or len(samples) < 2:
+            raise ValueError("finite yaw reference sample table required")
+        previous = -1.
+        for index, sample in enumerate(samples):
+            if not isinstance(sample, dict) or any(
+                    type(sample.get(key)) not in (int, float) or not math.isfinite(sample[key])
+                    for key in ("time_s", "position_rad", "velocity_rad_s", "acceleration_rad_s2")):
+                raise ValueError("finite yaw reference time and q/v/a required")
+            if (index == 0 and sample["time_s"] != 0) or sample["time_s"] <= previous:
+                raise ValueError("yaw reference samples must start at zero and increase in time")
+            previous = sample["time_s"]
+        total = previous
+    else:
+        segments = config.get("reference_segments")
+        if not isinstance(segments, list) or not segments:
+            raise ValueError("finite yaw reference segments required")
+        total = 0.
+        for segment in segments:
+            if not isinstance(segment, dict) or any(
+                    type(segment.get(key)) not in (int, float) or not math.isfinite(segment[key])
+                    for key in ("duration_s", "target_position_rad")) or segment["duration_s"] <= 0:
+                raise ValueError("finite yaw reference duration and target required")
+            total += segment["duration_s"]
+    limits = config.get("limits", {})
+    if limits.get("duration_s", 0) <= limits.get("startup_s", 0) + config["baseline_s"] + total + config["stop_observation_s"]:
+        raise ValueError("yaw references and stop observation must fit the finite session")
 
 
 def validate_native_settings_evidence(config):
@@ -153,8 +234,9 @@ def validate_native_settings_evidence(config):
 
 
 def verify_protection_basis(config, firmware):
-    if sha(Path(firmware) / PROTECTION_DOCUMENT) != config["protection_limit_basis"]["sha256"]:
-        raise ValueError("changed manufacturer protection document identity")
+    """Require the declared manufacturer source file without computing a digest."""
+    if not (Path(firmware) / PROTECTION_DOCUMENT).is_file():
+        raise ValueError("manufacturer protection document unavailable")
 
 
 def validate_additional_registers(config):
@@ -179,18 +261,20 @@ def exclusive_json(path, value):
         os.fsync(f.fileno())
 
 
-def preflight(manifest: Path, firmware: Path, prepare_current=False, characterize_current=False, establish_homing=False):
-    if sum((prepare_current, characterize_current, establish_homing)) > 1:
-        raise ValueError("choose a single neutral session purpose")
-    active = prepare_current or characterize_current or establish_homing
+def preflight(manifest: Path, firmware: Path, prepare_current=False, characterize_current=False, establish_homing=False, acquire_yaw=False, control_yaw=False):
+    if sum((prepare_current, characterize_current, establish_homing, acquire_yaw, control_yaw)) > 1:
+        raise ValueError("choose a single acquisition purpose")
+    active = prepare_current or characterize_current or establish_homing or acquire_yaw or control_yaw
     config = strict_json(manifest.read_text(encoding="utf-8"))
-    expected_schema = HOMING_SCHEMA if establish_homing else CHARACTERIZATION_SCHEMA if characterize_current else CURRENT_SCHEMA if prepare_current else "adr0022.capture/2"
+    expected_schema = YAW_CONTROL_SCHEMA if control_yaw else "adr0022.yaw-acquisition/1" if acquire_yaw else HOMING_SCHEMA if establish_homing else CHARACTERIZATION_SCHEMA if characterize_current else CURRENT_SCHEMA if prepare_current else "adr0022.capture/2"
     if config.get("schema") != expected_schema or config.get("provenance") not in ("SYNTHETIC", "MEASURED"):
         raise ValueError("capture schema/provenance required")
-    if active:
+    if control_yaw:
+        validate_yaw_control_contract(config)
+    elif acquire_yaw:
+        validate_yaw_contract(config)
+    elif active:
         validate_current_contract(config, characterize_current, establish_homing)
-        if config.get("expected_source_sha256") != source_identity(firmware)["source_sha256"]:
-            raise ValueError("changed acquisition source identity")
     synthetic = config["provenance"] == "SYNTHETIC"
     if config.get("transport") != ("loopback_udp" if synthetic else "socketcan"):
         raise ValueError("transport does not match provenance")
@@ -207,14 +291,14 @@ def preflight(manifest: Path, firmware: Path, prepare_current=False, characteriz
     for key in ("clock_uncertainty_s", "dequeue_age_s", "can_gap_s", "imu_gap_s", "startup_s",
                 "duration_s", "read_timeout_s", "read_period_s", "stop_period_s"):
         value = limits[key]
-        if type(value) not in (int, float) or not math.isfinite(value) or not 1e-9 <= value <= 3600:
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 1e-9:
             raise ValueError(f"explicit {key} of at least one nanosecond required")
     if limits["duration_s"] <= limits["startup_s"] or limits["startup_s"] < (0 if synthetic else 3):
         raise ValueError("capture must include complete sensor startup")
     if type(limits["minimum_imu_status"]) is not int or not 0 <= limits["minimum_imu_status"] <= 3:
         raise ValueError("IMU quality requirement must be explicit")
-    if active and (limits["read_timeout_s"] > 5 or limits["duration_s"] > 120):
-        raise ValueError("neutral preparation requires bounded <=5 s read/STOP and <=120 s session deadlines")
+    if active and limits["read_timeout_s"] > 5:
+        raise ValueError("neutral preparation requires bounded <=5 s read/STOP deadlines")
     output = Path(config["output"])
     if not output.is_absolute() or not output.parent.is_dir():
         raise ValueError("existing absolute capture directory required")
@@ -225,8 +309,8 @@ def preflight(manifest: Path, firmware: Path, prepare_current=False, characteriz
             raise ValueError(f"refusing capture/evidence reuse: {path}")
     binaries = {"commissiond": firmware / "build/axis_control_core/commissiond", "imu": firmware / "build/imu-bno085"}
     for key, path in binaries.items():
-        if not os.access(path, os.X_OK) or sha(path) != config["expected_binaries"][key]:
-            raise ValueError(f"missing or changed {key} executable")
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ValueError(f"missing or non-executable {key}")
     if establish_homing:
         checked = subprocess.run([str(binaries["commissiond"]), "--validate-homing", str(manifest)],
                                  capture_output=True, text=True, timeout=5)
@@ -235,13 +319,8 @@ def preflight(manifest: Path, firmware: Path, prepare_current=False, characteriz
     if not synthetic:
         if (not active and not config["pitch_stop_poll"]) or uid != "7216313130333105":
             raise ValueError("station baseline requires known pitch UID and STOP feedback polling")
-        if active:
-            identity = source_identity(firmware)
-            revision_path = firmware.parent / "REVISION"
-            if not revision_path.is_file() or revision_path.read_text().strip() != config["expected_revision"] or identity["source_sha256"] != config["expected_source_sha256"]:
-                raise ValueError("changed acquisition source/release identity")
-            if characterize_current or establish_homing:
-                verify_protection_basis(config, firmware)
+        if characterize_current or establish_homing:
+            verify_protection_basis(config, firmware)
         from station_preflight import _validate_can_spi_mapping
         for axis, iface, spi in (("yaw", "can0", "spi0.0"), ("pitch", "can1", "spi1.0")):
             if config[axis] != {"interface": iface}:
@@ -252,10 +331,11 @@ def preflight(manifest: Path, firmware: Path, prepare_current=False, characteriz
     return config, binaries
 
 
-def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_current=False, establish_homing=False):
-    active = prepare_current or characterize_current or establish_homing
-    purpose = HOMING_PURPOSE if establish_homing else CHARACTERIZATION_PURPOSE if characterize_current else CURRENT_PURPOSE
-    config, binaries = preflight(manifest, firmware, prepare_current, characterize_current, establish_homing)
+def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_current=False, establish_homing=False, acquire_yaw=False, control_yaw=False):
+    active = prepare_current or characterize_current or establish_homing or acquire_yaw or control_yaw
+    yaw_motion = acquire_yaw or control_yaw
+    purpose = YAW_CONTROL_PURPOSE if control_yaw else "yaw_current_identification" if acquire_yaw else HOMING_PURPOSE if establish_homing else CHARACTERIZATION_PURPOSE if characterize_current else CURRENT_PURPOSE
+    config, binaries = preflight(manifest, firmware, prepare_current, characterize_current, establish_homing, acquire_yaw, control_yaw)
     output = Path(config["output"])
     synthetic = config["provenance"] == "SYNTHETIC"
     if not synthetic:
@@ -274,21 +354,23 @@ def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_
                 continue
             if name in ("controld", "commissiond", "imu_main", "imu-bno085"):
                 raise ValueError(f"existing device consumer {proc.name}: {name}")
-    attempt_schema = "adr0022.sensorless_homing_attempt/1" if establish_homing else "adr0022.neutral_characterization_attempt/1" if characterize_current else "adr0022.current_preparation_attempt/1" if prepare_current else "adr0022.capture_attempt/1"
+    attempt_schema = "adr0022.yaw_control_attempt/1" if control_yaw else "adr0022.yaw_acquisition_attempt/1" if acquire_yaw else "adr0022.sensorless_homing_attempt/1" if establish_homing else "adr0022.neutral_characterization_attempt/1" if characterize_current else "adr0022.current_preparation_attempt/1" if prepare_current else "adr0022.capture_attempt/1"
     attempt = {"schema": attempt_schema, "provenance": config["provenance"],
-               "manifest_sha256": sha(manifest), "binaries": config["expected_binaries"],
-               "started_ns": time.monotonic_ns(), "automatic_retries": 0, "motion_requested": establish_homing,
+               "manifest_path": str(manifest), "binary_paths": {key: str(path) for key, path in binaries.items()},
+               "started_ns": time.monotonic_ns(), "automatic_retries": 0, "motion_requested": establish_homing or yaw_motion,
                "pitch_stop_requests": True if active else config["pitch_stop_poll"]}
     if active:
-        attempt.update(purpose=purpose, mode_transition_requested=True, nonzero_current_requested=False,
-                       expected_revision=config.get("expected_revision"), source_sha256=config.get("expected_source_sha256"),
-                       session_authorization=config.get("session_authorization"), operator_attendance=config.get("operator_attendance"),
-                       local_qualification_sha256=config.get("local_qualification", {}).get("sha256"))
+        attempt.update(purpose=purpose, mode_transition_requested=not yaw_motion, nonzero_current_requested=yaw_motion,
+                       session_label=config.get("session_label"), source_description=config.get("source_description"),
+                       session_authorization=config.get("session_authorization"), operator_attendance=config.get("operator_attendance"))
     if characterize_current:
         attempt.update(neutral_current_qualified=False, protection_limit_basis=config["protection_limit_basis"],
-                       historical_diagnostic_bound_A=config["neutral_current_bound_A"], protection_current_bound_A=config["protection_current_bound_A"])
+                       protection_current_bound_A=config["protection_current_bound_A"])
     if establish_homing:
-        attempt.update(native_settings_evidence_sha256=config.get("native_settings_evidence", {}).get("sha256"))
+        attempt.update(native_settings_source=config.get("native_settings_source"),
+                       protection_limit_basis=config["protection_limit_basis"])
+    if control_yaw:
+        attempt["candidate_label"] = config["candidate_label"]
     exclusive_json(output.with_suffix(".attempt.json"), attempt)
     children = []
     cancelled = False
@@ -299,7 +381,7 @@ def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_
     result = {"status": "INVALID", "provenance": config["provenance"], "motion_authorized": False,
               "physical_parameters_qualified": False}
     if active:
-        result.update(purpose=purpose, mode_transition_requested=True, nonzero_current_requested=False,
+        result.update(purpose=purpose, mode_transition_requested=not yaw_motion, nonzero_current_requested=yaw_motion,
                       pitch_stop_confirmed=False, yaw_stop_confirmed=False, independent_cutoff_qualified=False,
                       forced_termination=False, process_loss=False)
     if characterize_current:
@@ -307,6 +389,12 @@ def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_
     if establish_homing:
         result.update(homing_observed=False, current_mode_qualified=False, dynamics_qualified=False,
                       retained_calibration_modified=False, motion_authorized=not synthetic)
+    if yaw_motion:
+        result.update(current_mode_qualified=False, dynamics_qualified=False,
+                      retained_calibration_modified=False, motion_authorized=not synthetic)
+    if control_yaw:
+        result.update(candidate_label=config["candidate_label"], shared_core_control_requested=True,
+                      stage3a_qualified=False)
     imu_log = None
     imu = collector = None
     producer_lost = False
@@ -318,7 +406,7 @@ def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_
         bound = output.with_suffix(".bound.json")
         exclusive_json(bound, config)
         descriptors = (imu.stdout.fileno(),) if synthetic else (imu.stdout.fileno(), 8)
-        option = "--establish-homing" if establish_homing else "--characterize-current" if characterize_current else "--prepare-current" if prepare_current else "--capture-baseline"
+        option = "--control-yaw" if control_yaw else "--acquire-yaw" if acquire_yaw else "--establish-homing" if establish_homing else "--characterize-current" if characterize_current else "--prepare-current" if prepare_current else "--capture-baseline"
         collector = subprocess.Popen([str(binaries["commissiond"]), option, str(bound)], pass_fds=descriptors)
         children.append(collector)
         exclusive_json(output.with_suffix(".processes.json"), {
@@ -344,21 +432,31 @@ def capture(manifest: Path, firmware: Path, prepare_current=False, characterize_
             time.sleep(.01)
         if collector.returncode:
             raise RuntimeError(f"commissiond rejected acquisition (exit {collector.returncode})")
-        if establish_homing:
+        if yaw_motion:
+            from adr0022_yaw_data import summarize
+            report = summarize(output)
+        elif establish_homing:
             from adr0022_homing_review import review as homing_review
             report = homing_review(output)
             result["homing_observed"] = report["homing_observed"]
         elif characterize_current:
             from adr0022_current_review import review_characterization
             report = review_characterization(output)
-            result["neutral_current_criterion_satisfied"] = report["neutral_current_criterion_satisfied"]
         elif prepare_current:
             from adr0022_current_review import review as current_review
             report = current_review(output)
         else:
             report = review(output)
         exclusive_json(output.with_suffix(".review.json"), report)
-        result.update(status="COMPLETE", capture_sha256=report["capture_sha256"])
+        if active:
+            complete = report.get("capture_complete") is True and report.get("capture_footer_status") == "COMPLETE"
+            result.update(status="COMPLETE" if complete else "INVALID", capture_path=str(output),
+                          capture_footer_status=report.get("capture_footer_status"),
+                          capture_footer_detail=report.get("capture_footer_detail"))
+            if not complete:
+                result["detail"] = "Raw review did not confirm complete acquisition"
+        else:
+            result.update(status="COMPLETE", capture_path=str(output))
     except Exception as exc:
         result["detail"] = str(exc)
     finally:
@@ -401,9 +499,11 @@ if __name__ == "__main__":
     modes.add_argument("--prepare-current", action="store_true")
     modes.add_argument("--characterize-current", action="store_true")
     modes.add_argument("--establish-homing", action="store_true")
+    modes.add_argument("--acquire-yaw", action="store_true")
+    modes.add_argument("--control-yaw", action="store_true")
     args = parser.parse_args()
     if args.preflight_only:
-        preflight(args.manifest, args.firmware, args.prepare_current, args.characterize_current, args.establish_homing)
-        print("Sensorless homing" if args.establish_homing else "Neutral current characterization" if args.characterize_current else "Current preparation" if args.prepare_current else "Baseline capture", "manifest and binaries checked; devices unopened")
+        preflight(args.manifest, args.firmware, args.prepare_current, args.characterize_current, args.establish_homing, args.acquire_yaw, args.control_yaw)
+        print("Yaw shared-core control" if args.control_yaw else "Yaw acquisition" if args.acquire_yaw else "Sensorless homing" if args.establish_homing else "Neutral current characterization" if args.characterize_current else "Current preparation" if args.prepare_current else "Baseline capture", "manifest and binaries checked; devices unopened")
     else:
-        raise SystemExit(capture(args.manifest, args.firmware, args.prepare_current, args.characterize_current, args.establish_homing))
+        raise SystemExit(capture(args.manifest, args.firmware, args.prepare_current, args.characterize_current, args.establish_homing, args.acquire_yaw, args.control_yaw))

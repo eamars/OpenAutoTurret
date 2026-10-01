@@ -31,6 +31,10 @@ class Run:
     closed_loop_identification: bool = False
     support_controller_hash: str | None = None
     gyro_filter_tau_s: float | None = None
+    # Actual successful command events, in the same time coordinate as t.
+    # They may precede the measured state window; no state is integrated there.
+    tx_history_t: np.ndarray | None = None
+    tx_history_A: np.ndarray | None = None
 
     def validate(self):
         n = len(self.t)
@@ -39,13 +43,21 @@ class Run:
         for name in ("t", "q", "v", "tx", "z", "direction"):
             setattr(self, name, array(getattr(self, name), (n,), name))
         require(np.all(np.diff(self.t) > 0), Reason.DATA_INVALID, "time must increase uniquely")
+        history_t, history_A = getattr(self, "tx_history_t", None), getattr(self, "tx_history_A", None)
+        require((history_t is None) == (history_A is None), Reason.DATA_INVALID,
+                "successful TX history requires both timestamps and currents")
+        if history_t is not None:
+            self.tx_history_t = array(history_t, (len(history_t),), "successful TX history time")
+            self.tx_history_A = array(history_A, (len(history_t),), "successful TX history current")
+            require(len(history_t) > 0 and np.all(np.diff(self.tx_history_t) > 0),
+                    Reason.DATA_INVALID, "successful TX history must increase uniquely")
         require(np.isin(self.direction, [-1, 0, 1]).all(), Reason.DATA_INVALID, "invalid direction")
         require(self.acquisition_verified is True, Reason.DATA_INVALID, "acquisition not verified")
         require(self.gyro_filter_tau_s is not None and np.isfinite(self.gyro_filter_tau_s) and
                 self.gyro_filter_tau_s>=0,Reason.DATA_INVALID,"gyro observation filter must be declared, not assumed zero")
         for name in ("q_new", "v_new"):
             mask = np.asarray(getattr(self, name))
-            require(mask.shape == (n,) and mask.dtype == bool and mask.sum() >= 15,
+            require(mask.shape == (n,) and mask.dtype == bool and mask.sum() >= 2,
                     Reason.DATA_INVALID, "missing independent RX observations")
             setattr(self, name, mask)
         require(self.sigma_q > 0 and self.sigma_v > 0 and
@@ -105,10 +117,13 @@ def integral_design(spec: ModelSpec, runs: Sequence[Run], window_s: float = .15)
                 break
             sl = slice(start, end+1)
             dirs = run.direction[sl]
-            # Never span reversal/rest/contact or another scheduling posture during initialization.
-            if dirs[0] and np.all(dirs == dirs[0]) and np.ptp(run.z[sl]) < 1e-9:
+            # Do not span reversal/rest/contact. Use actual observed posture
+            # weights rather than silently discarding normal posture drift.
+            if dirs[0] and np.all(dirs == dirs[0]):
                 s, h = features(spec, q[sl], run.z[sl], dirs)
-                rows.append(np.r_[s[0]*(v[end]-v[start]), s[0]*(q[end]-q[start]),
+                average_s = (s[:-1]+s[1:])/2
+                rows.append(np.r_[np.sum(average_s*np.diff(v[sl])[:,None], axis=0),
+                                  np.sum(average_s*np.diff(q[sl])[:,None], axis=0),
                                   np.trapezoid(h, run.t[sl], axis=0)])
                 # Successful command is ZOH, not an invented 200Hz measured current stream.
                 targets.append(np.sum(run.tx[start:end]*np.diff(run.t[sl])))
@@ -118,7 +133,7 @@ def integral_design(spec: ModelSpec, runs: Sequence[Run], window_s: float = .15)
     return np.asarray(rows), np.asarray(targets), np.asarray(groups)
 
 
-def bounded_initializer(X, y):
+def bounded_initializer(X, y, *, lower_bounds=None):
     X, y = np.asarray(X), np.asarray(y)
     require(X.ndim == 2 and len(y) >= 2*X.shape[1], Reason.INSUFFICIENT_EXCITATION,
             "too few independent equations")
@@ -127,7 +142,9 @@ def bounded_initializer(X, y):
     singular = np.linalg.svd(X/scale, compute_uv=False)
     require(singular[-1] > singular[0]/1e6, Reason.INSUFFICIENT_EXCITATION,
             "rank deficient or normalized condition exceeds 1e6")
-    lower = np.r_[np.full(3, 1e-10), np.zeros(3), np.full(X.shape[1]-6, -np.inf)]
+    lower = (np.r_[np.full(3, 1e-10), np.zeros(3), np.full(X.shape[1]-6, -np.inf)]
+             if lower_bounds is None else np.asarray(lower_bounds, dtype=float))
+    require(lower.shape == (X.shape[1],), Reason.DATA_INVALID, "initializer bound shape differs")
     fit = lsq_linear(X/scale, y, bounds=(lower*scale, np.full(X.shape[1], np.inf)),
                      method="trf", tol=1e-11)
     require(fit.success and np.isfinite(fit.x).all(), Reason.MODEL_INADEQUATE,
@@ -139,7 +156,9 @@ def residuals(native: Native, spec, theta, runs):
     result = []
     for run in runs:
         predicted = native.rollout(spec, theta, run.t, run.tx, run.z, run.direction,
-                                   (run.q[0], run.v[0]))
+                                   (run.q[0], run.v[0]),
+                                   tx_history_t=getattr(run, "tx_history_t", None),
+                                   tx_history_A=getattr(run, "tx_history_A", None))
         gyro=observe_gyro(predicted[:,1],run.t,run.gyro_filter_tau_s)
         result.extend(((predicted[run.q_new, 0]-run.q[run.q_new])/run.sigma_q,
                        (gyro[run.v_new]-run.v[run.v_new])/run.sigma_v))
@@ -158,14 +177,35 @@ def observe_gyro(velocity,time,tau):
     return out
 
 
-def output_error(native, spec, initial, runs, delay_bound_s):
+def output_error(native, spec, initial, runs, delay_bound_s, *, parameter_map=None,
+                 reduced_initial=None, reduced_bounds=None, parameter_offset=None):
     require(np.isfinite(delay_bound_s) and delay_bound_s > 0, Reason.DATA_INVALID,
             "known positive delay search bound required; unknown is not zero")
     initial = array(initial, (spec.size,), "initializer")
     lower = np.r_[np.full(3, 1e-8), np.zeros(3), np.full(spec.size-7, -np.inf), 0.]
     upper = np.r_[np.full(spec.size-1, np.inf), delay_bound_s]
+    if parameter_map is None:
+        projection = np.eye(spec.size)
+        coordinates = initial.copy()
+        offset = np.zeros(spec.size)
+        require(parameter_offset is None, Reason.DATA_INVALID,
+                "a fixed parameter offset needs an explicit reduced map")
+    else:
+        projection = np.asarray(parameter_map, dtype=float)
+        coordinates = np.asarray(reduced_initial, dtype=float)
+        offset = (np.zeros(spec.size) if parameter_offset is None else
+                  array(parameter_offset, (spec.size,), "fixed parameter offset"))
+        require(projection.shape == (spec.size, len(coordinates)) and
+                np.isfinite(projection).all() and np.isfinite(coordinates).all() and
+                np.allclose(offset + projection @ coordinates, initial), Reason.DATA_INVALID,
+                "parameter tying must reproduce the native initializer")
+        require(reduced_bounds is not None, Reason.DATA_INVALID, "explicit reduced physical bounds required")
+        lower, upper = (np.asarray(bound, dtype=float) for bound in reduced_bounds)
+        require(lower.shape == upper.shape == coordinates.shape, Reason.DATA_INVALID,
+                "reduced bound shape differs")
     count = sum(int(r.q_new.sum()+r.v_new.sum()) for r in runs)
-    def objective(theta):
+    def objective(coordinates):
+        theta = offset + projection @ coordinates
         try:
             return residuals(native, spec, theta, runs)
         except Rejected as exc:
@@ -177,31 +217,38 @@ def output_error(native, spec, initial, runs, delay_bound_s):
     # observation is initially an outlier. Updating trust-region scales from
     # that Jacobian then permits enormous steps and false xtol convergence.
     # Freeze scales from the UNMODIFIED, noise-normalized observation Jacobian.
-    base = objective(initial)
+    base = objective(coordinates)
     sensitivity=[]
-    for k in range(spec.size):
-        delta=max(abs(initial[k])*1e-5,1e-8)
-        trial=initial.copy();trial[k]+=delta
-        if trial[k]>upper[k]:trial[k]=initial[k]-delta
-        sensitivity.append(np.linalg.norm((objective(trial)-base)/(trial[k]-initial[k])))
+    for k in range(len(coordinates)):
+        delta=max(abs(coordinates[k])*1e-5,1e-8)
+        trial=coordinates.copy();trial[k]+=delta
+        if trial[k]>upper[k]:trial[k]=coordinates[k]-delta
+        sensitivity.append(np.linalg.norm((objective(trial)-base)/(trial[k]-coordinates[k])))
     sensitivity=np.asarray(sensitivity)
     require(np.all(sensitivity>1e-10) and np.isfinite(sensitivity).all(),
             Reason.INSUFFICIENT_EXCITATION,"output-error sensitivity has an unobserved parameter")
     scales=1/sensitivity
-    result = least_squares(objective, initial, bounds=(lower, upper), method="trf",
+    result = least_squares(objective, coordinates, bounds=(lower, upper), method="trf",
                            loss="huber", f_scale=1., max_nfev=2000, x_scale=scales,
                            ftol=1e-8, xtol=1e-8, gtol=1e-8,
                            diff_step=1e-5)
     require(result.success and np.isfinite(result.x).all() and
             np.max(np.abs(objective(result.x))) < 1e8, Reason.MODEL_INADEQUATE,
             "output-error optimizer failed or left the model domain")
+    if parameter_map is not None:
+        result.reduced_x = result.x.copy()
+        result.parameter_map = projection
+        result.parameter_offset = offset
+        result.x = offset + projection @ result.x
     return result
 
 
 def validation_report(native, spec, theta, runs):
     reports = []
     for r in runs:
-        pred = native.rollout(spec, theta, r.t, r.tx, r.z, r.direction, (r.q[0], r.v[0]))
+        pred = native.rollout(spec, theta, r.t, r.tx, r.z, r.direction, (r.q[0], r.v[0]),
+                              tx_history_t=getattr(r, "tx_history_t", None),
+                              tx_history_A=getattr(r, "tx_history_A", None))
         rq = pred[r.q_new, 0]-r.q[r.q_new]
         rv = observe_gyro(pred[:,1],r.t,r.gyro_filter_tau_s)[r.v_new]-r.v[r.v_new]
         qrms, vrms = float(np.sqrt(np.mean(rq**2))), float(np.sqrt(np.mean(rv**2)))

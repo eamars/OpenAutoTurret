@@ -16,6 +16,9 @@ procedure from a flag list.
 | rehearse or review ADR-002.2 baseline acquisition | [`operations/adr0022-capture.md`](operations/adr0022-capture.md) — local capture tests and the gated launcher entry |
 | observe ADR-002.2 zero-command current and neutral mode transitions | [`operations/adr0022-current-preparation.md`](operations/adr0022-current-preparation.md) — local process/ARM64 checks, measured imperfections and the bounded launcher session |
 | establish ADR-002.2 pitch sensorless endpoint/midpoint observations | [`operations/adr0022-sensorless-homing.md`](operations/adr0022-sensorless-homing.md) — workstation probes, measured native originals and the shared homing routine |
+| acquire ADR-002.2 yaw current-to-motion observations | [`operations/adr0022-yaw-acquisition.md`](operations/adr0022-yaw-acquisition.md) — one normal-path probe, workstation ARM64 build and bounded station acquisition |
+| run a calculated ADR-002.2 yaw feedback probe | [`operations/adr0022-yaw-feedback.md`](operations/adr0022-yaw-feedback.md) — shared-core parameter readback, local executable probe and bounded station feedback |
+| compare ADR-002.2 yaw identification structures after the architect review | [`operations/adr0022-yaw-model-comparison.md`](operations/adr0022-yaw-model-comparison.md) — workstation-only whole-journal fitting and blocked selection |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |

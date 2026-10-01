@@ -44,11 +44,9 @@ class NeutralSession {
     require(uid_text_.size()==16 && uid_text_.find_first_not_of("0123456789abcdef")==std::string::npos,
             "DATA_INVALID: pitch UID");
     expected_uid_=std::stoull(uid_text_,nullptr,16);
-    maximum_current_=positive("neutral_current_bound_A");
-    protection_current_=characterization_?positive("protection_current_bound_A"):maximum_current_;
+    protection_current_=positive("protection_current_bound_A");
     const auto observation_s=characterization_?positive("neutral_observation_s"):2.;
-    require(observation_s<=60. && (!characterization_ || protection_current_<=6.5),
-            "DATA_INVALID: characterization protection or duration exceeds bound");
+    require(protection_current_<=6.5,"DATA_INVALID: manufacturer continuous current protection required");
     observation_ns_=int64_t(observation_s*1e9);
     require(observation_ns_>0 &&
             limits_.duration>limits_.startup+observation_ns_,
@@ -175,7 +173,7 @@ class NeutralSession {
     if (!prep_.pending_begin) { read(reg,now); prep_.pending_begin=now; return false; }
     if (readback_.pending()) return false;
     require(latest_read_ && latest_read_->reg==reg && latest_read_->value &&
-            std::abs(*latest_read_->value-expected)<1e-7,"INTEGRATION_MISMATCH: pitch register readback differs");
+            *latest_read_->value==double(float(expected)),"INTEGRATION_MISMATCH: pitch register readback differs");
     return true;
   }
   void step(int64_t now) {
@@ -294,12 +292,10 @@ class NeutralSession {
             prep_.actual_current=*latest_read_->value; prep_.actual_current_ns=latest_read_->receive_ns;
             ++current_samples_;
             observed_current_max_=std::max(observed_current_max_,std::abs(prep_.actual_current));
-            // Strict preparation retains its original immediate neutral guard.
-            // Characterization records quality separately within its explicitly
-            // bound manufacturer protection limit; it never qualifies current.
+            // Neutral offsets and noise remain measurements. The manufacturer
+            // electrical protection is independent of a zero-current command.
             require(std::abs(prep_.actual_current)<=protection_current_,
-                    characterization_?"HARD_ABORT: manufacturer current protection bound exceeded":
-                                      "HARD_ABORT: nonneutral measured pitch current");
+                    "HARD_ABORT: manufacturer current protection bound exceeded");
           }
         } else if (id.comm_type==18) {
           const auto index=uint16_t(r.frame.data[0])|(uint16_t(r.frame.data[1])<<8);
@@ -390,9 +386,7 @@ class NeutralSession {
       std::to_string(prep_.original_mode)+",\"abort_stop_confirmed\":"+(abort_stop_confirmed_?"true":"false")+
       ",\"normal_stop_confirmed\":"+(complete && prep_.disabled?"true":"false")+
       ",\"characterization_only\":"+(characterization_?"true":"false")+
-      ",\"diagnostic_comparison_only\":"+(characterization_?"true":"false")+
-      ",\"neutral_current_qualified\":false,\"neutral_current_criterion_satisfied\":"+
-      (current_samples_ && observed_current_max_<=maximum_current_?"true":"false")+
+      ",\"neutral_current_qualified\":false"+
       ",\"current_sample_count\":"+std::to_string(current_samples_)+
       ",\"observed_current_max_abs_A\":"+std::to_string(observed_current_max_)+
       ",\"interface_loss_deltas\":"+interface_loss+
@@ -418,7 +412,7 @@ class NeutralSession {
   std::string uid_text_;
   uint64_t expected_uid_{};
   int imu_fd_{};
-  double maximum_current_{},protection_current_{},observed_current_max_{},maximum_displacement_{},maximum_temperature_{};
+  double protection_current_{},observed_current_max_{},maximum_displacement_{},maximum_temperature_{};
   uint64_t current_samples_{};
   std::array<Endpoint,2> buses_;
   ImuStream imu_;
