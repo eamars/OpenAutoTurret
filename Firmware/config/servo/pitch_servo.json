@@ -1,0 +1,41 @@
+{
+ "schema": "ota.servo-asset/1",
+ "axis": "pitch",
+ "motor": "CyberGear (speed mode RunMode=2, host position loop 1 kHz)",
+ "provenance": {
+  "measured": "2026-10-02 station rpi-turret",
+  "sessions": {
+   "validation": [
+    "claude-pitch-kp15",
+    "claude-pitch-kp25",
+    "claude-pitch-kp35",
+    "claude-pitch-kp50"
+   ]
+  },
+  "notes": [
+   "endstops from production homing logs 2026-09-30: A=-0.115 rad, B=-1.511 rad (MechPos), midpoint -0.813",
+   "kp 50/ki 45 also verified clean; nominal is one step below for margin",
+   "drive native speed gains as found: SpdKp 4, SpdKi 0.05"
+  ]
+ },
+ "native_settings": {
+  "expected_original_mode": 2,
+  "original_speed_kp": 4,
+  "original_speed_ki": 0.05,
+  "homing_speed_kp": 4,
+  "homing_speed_ki": 0.05
+ },
+ "servo_trial": {
+  "kp_per_s": 35,
+  "ki_per_s2": 30,
+  "integral_clamp_rad_s": 0.1,
+  "command_period_s": 0.001,
+  "hold_after_s": 1.0,
+  "speed_limit_rad_s": 0.6,
+  "following_error_rad": 0.1,
+  "center_rad": -0.813,
+  "approach_speed_rad_s": 0.08,
+  "window_min_rad": -1.37,
+  "window_max_rad": -0.255
+ }
+}

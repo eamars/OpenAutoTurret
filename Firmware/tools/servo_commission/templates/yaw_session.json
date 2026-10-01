@@ -1,0 +1,55 @@
+{
+ "schema": "adr0022.yaw-control/1",
+ "purpose": "yaw_shared_core_3a",
+ "provenance": "MEASURED",
+ "transport": "socketcan",
+ "yaw": {
+  "interface": "can0"
+ },
+ "pitch": {
+  "interface": "can1"
+ },
+ "expected_pitch_uid": "7216313130333105",
+ "pitch_supported_when_disabled": true,
+ "baseline_s": 2.0,
+ "stop_observation_s": 2.0,
+ "pitch_maximum_temperature_C": 45.0,
+ "operator_attendance": {
+  "present_at_manual_cutoff": null,
+  "operator_identity": "owner",
+  "manual_cutoff_evidence_identity": "attendance not observed by remote operator"
+ },
+ "limits": {
+  "clock_uncertainty_s": 0.001,
+  "dequeue_age_s": 0.1,
+  "can_gap_s": 0.1,
+  "imu_gap_s": 0.2,
+  "startup_s": 20.0,
+  "duration_s": 163,
+  "minimum_imu_status": 0,
+  "read_timeout_s": 0.2,
+  "read_period_s": 0.02,
+  "stop_period_s": 0.02
+ },
+ "gyro_calibration": {
+  "scope": "single yaw column at the current fixed pitch; full mounting calibration unknown",
+  "yaw_column": [
+   -0.9964237359024551,
+   0.011703077994046572,
+   0.028933078779482667
+  ],
+  "baseline_sensor_bias": [
+   0.0001730617088607595,
+   7.416930379746836e-05,
+   -0.0001483386075949367
+  ],
+  "motion_gyro_samples": 516,
+  "encoder_local_regression_half_width_s": 0.039922,
+  "noise_sigma_rad_s": 0.0012933623177601324,
+  "added_gyro_filter_tau_s": 0.0,
+  "sensor_internal_filter": "unknown; unseparated end-to-end dynamics",
+  "gyro_accuracy_zero_retained": true,
+  "qualification": false
+ },
+ "other_axis_posture_rad": -0.7668914794921875
+}

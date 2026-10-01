@@ -161,11 +161,14 @@ def validate_yaw_control_contract(config):
         value = config.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"finite positive {key} required")
-    if config["yaw_current_bound_A"] > .9 or config["baseline_s"] < 2 or config["stop_observation_s"] != 2:
-        raise ValueError("yaw control requires <=0.90 A authority and complete baseline/stop windows")
+    # The servo may peak to 1.5 A only under its own RMS budget (<=0.9 A, checked natively).
+    authority = 1.5 if "servo_parameters" in config else .9
+    if config["yaw_current_bound_A"] > authority or config["baseline_s"] < 2 or config["stop_observation_s"] != 2:
+        raise ValueError("yaw control requires bounded current authority and complete baseline/stop windows")
     if not isinstance(config.get("candidate_label"), str) or not config["candidate_label"].strip():
         raise ValueError("descriptive yaw candidate label required")
-    for key in ("controller_parameters", "gyro_calibration"):
+    control_key = "servo_parameters" if "servo_parameters" in config else "controller_parameters"
+    for key in (control_key, "gyro_calibration"):
         if not isinstance(config.get(key), dict):
             raise ValueError(f"explicit {key} required for runtime application")
     for key in ("other_axis_posture_rad", "yaw_position_offset_rad"):

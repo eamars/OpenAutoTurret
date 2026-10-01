@@ -1,7 +1,9 @@
 #include "session.hpp"
 #include "io.hpp"
 #include "axis_control_core.hpp"
+#include "servo.hpp"
 #include <algorithm>
+#include <deque>
 #include <numbers>
 
 namespace ota::commission {
@@ -193,6 +195,71 @@ std::string parameter_json(const axis::Parameters& p) {
   return out.str();
 }
 
+void load_servo_extra(const YAML::Node& node,axis::ServoParameters& p) {
+  p.friction_learning_rate=node["friction_learning_rate"].as<double>();
+  p.friction_learning_speed=node["friction_learning_speed"].as<double>();
+  p.friction_map_limit=node["friction_map_limit"].as<double>();
+  const auto pos=node["friction_map_positive"].as<std::vector<double>>(),neg=node["friction_map_negative"].as<std::vector<double>>();
+  require(pos.size()==axis::ServoParameters::kFrictionBins && neg.size()==pos.size(),"DATA_INVALID: friction map size");
+  std::copy(pos.begin(),pos.end(),p.friction_map_positive); std::copy(neg.begin(),neg.end(),p.friction_map_negative);
+  p.crosstalk_delay_s=node["crosstalk_delay_s"]?node["crosstalk_delay_s"].as<double>():0.;
+  if (const auto stall=node["stall_recovery"]) {
+    p.stall_error=stall["error_rad"].as<double>(); p.stall_speed=stall["speed_rad_s"].as<double>();
+    p.stall_current=stall["current_A"].as<double>(); p.stall_time_s=stall["time_s"].as<double>();
+    p.rock_current=stall["rock_current_A"].as<double>(); p.rock_s=stall["rock_s"].as<double>();
+  }
+  if (const auto map=node["crosstalk_map"]) {
+    const auto values=map.as<std::vector<double>>();
+    require(values.size()==axis::ServoParameters::kCrosstalkBins,"DATA_INVALID: crosstalk map size");
+    std::copy(values.begin(),values.end(),p.crosstalk_map);
+  }
+}
+axis::ServoParameters load_servo(const YAML::Node& node) {
+  axis::ServoParameters p{};
+#define OTA_SERVO_VALUE(name) p.name=node[#name].as<double>();
+  OTA_SERVO_VALUE(encoder_variance) OTA_SERVO_VALUE(gyro_variance) OTA_SERVO_VALUE(process_variance)
+  OTA_SERVO_VALUE(max_encoder_age_s) OTA_SERVO_VALUE(max_gyro_age_s)
+  OTA_SERVO_VALUE(inertia) OTA_SERVO_VALUE(coulomb_positive) OTA_SERVO_VALUE(coulomb_negative)
+  OTA_SERVO_VALUE(stribeck_positive) OTA_SERVO_VALUE(stribeck_negative) OTA_SERVO_VALUE(stribeck_speed)
+  OTA_SERVO_VALUE(viscous) OTA_SERVO_VALUE(friction_band) OTA_SERVO_VALUE(load)
+  OTA_SERVO_VALUE(friction_correction_rate) OTA_SERVO_VALUE(friction_correction_deadband)
+  OTA_SERVO_VALUE(dither_amplitude) OTA_SERVO_VALUE(dither_period_s) OTA_SERVO_VALUE(kq) OTA_SERVO_VALUE(kv) OTA_SERVO_VALUE(ki)
+  OTA_SERVO_VALUE(integral_cap) OTA_SERVO_VALUE(error_clamp) OTA_SERVO_VALUE(hold_band) OTA_SERVO_VALUE(hold_speed)
+  OTA_SERVO_VALUE(hold_relax_tau_s) OTA_SERVO_VALUE(rms_limit) OTA_SERVO_VALUE(rms_tau_s)
+  OTA_SERVO_VALUE(current_cap) OTA_SERVO_VALUE(slew) OTA_SERVO_VALUE(dt_min) OTA_SERVO_VALUE(dt_max)
+  OTA_SERVO_VALUE(following_error_limit)
+#undef OTA_SERVO_VALUE
+  p.use_gyro=node["use_gyro"].as<int>();
+  load_servo_extra(node,p);
+  require(axis::valid(p),"DATA_INVALID: servo parameters invalid");
+  return p;
+}
+std::string servo_json(const axis::ServoParameters& p) {
+  // 9 significant digits keeps the full record (maps included) inside one journal line.
+  std::ostringstream out; out.precision(9); out<<'{';
+#define OTA_SERVO_JSON(name) out<<"\"" #name "\":"<<p.name<<',';
+  OTA_SERVO_JSON(encoder_variance) OTA_SERVO_JSON(gyro_variance) OTA_SERVO_JSON(process_variance)
+  OTA_SERVO_JSON(max_encoder_age_s) OTA_SERVO_JSON(max_gyro_age_s)
+  OTA_SERVO_JSON(inertia) OTA_SERVO_JSON(coulomb_positive) OTA_SERVO_JSON(coulomb_negative)
+  OTA_SERVO_JSON(stribeck_positive) OTA_SERVO_JSON(stribeck_negative) OTA_SERVO_JSON(stribeck_speed)
+  OTA_SERVO_JSON(viscous) OTA_SERVO_JSON(friction_band) OTA_SERVO_JSON(load)
+  OTA_SERVO_JSON(friction_correction_rate) OTA_SERVO_JSON(friction_correction_deadband)
+  OTA_SERVO_JSON(dither_amplitude) OTA_SERVO_JSON(dither_period_s) OTA_SERVO_JSON(kq) OTA_SERVO_JSON(kv) OTA_SERVO_JSON(ki)
+  OTA_SERVO_JSON(integral_cap) OTA_SERVO_JSON(error_clamp) OTA_SERVO_JSON(hold_band) OTA_SERVO_JSON(hold_speed)
+  OTA_SERVO_JSON(hold_relax_tau_s) OTA_SERVO_JSON(rms_limit) OTA_SERVO_JSON(rms_tau_s)
+  OTA_SERVO_JSON(current_cap) OTA_SERVO_JSON(slew) OTA_SERVO_JSON(dt_min) OTA_SERVO_JSON(dt_max)
+  OTA_SERVO_JSON(following_error_limit)
+#undef OTA_SERVO_JSON
+  out<<"\"use_gyro\":"<<p.use_gyro<<",\"friction_learning_rate\":"<<p.friction_learning_rate
+     <<",\"friction_learning_speed\":"<<p.friction_learning_speed<<",\"friction_map_limit\":"<<p.friction_map_limit;
+  out<<",\"friction_map_positive\":"; array_json(out,p.friction_map_positive,axis::ServoParameters::kFrictionBins);
+  out<<",\"friction_map_negative\":"; array_json(out,p.friction_map_negative,axis::ServoParameters::kFrictionBins);
+  out<<",\"crosstalk_delay_s\":"<<p.crosstalk_delay_s<<",\"crosstalk_map\":";
+  array_json(out,p.crosstalk_map,axis::ServoParameters::kCrosstalkBins);
+  out<<'}';
+  return out.str();
+}
+
 class YawControlSession {
  public:
   explicit YawControlSession(const YAML::Node& config)
@@ -213,16 +280,51 @@ class YawControlSession {
     baseline_s_=positive("baseline_s"); stop_s_=positive("stop_observation_s");
     require(baseline_s_>=2. && stop_s_==2.,"DATA_INVALID: two-second baseline and zero observation required");
     current_bound_=positive("yaw_current_bound_A");
-    require(current_bound_<=.9,"HARD_ABORT: yaw shared-core continuous stationary current authority");
+    // Continuous authority stays at the GM6020 0.9 A stall rating. The servo may
+    // use short peaks up to 1.5 A (rated 1.62 A) only under an RMS budget <=0.9 A.
+    require(current_bound_<=(config["servo_parameters"]?1.5:.9),"HARD_ABORT: yaw current authority");
     pitch_temperature_=positive("pitch_maximum_temperature_C");
     posture_=config["other_axis_posture_rad"].as<double>();
     position_offset_=config["yaw_position_offset_rad"]?config["yaw_position_offset_rad"].as<double>():0.;
     require(std::isfinite(posture_) && std::isfinite(position_offset_),"DATA_INVALID: finite measured coordinates");
+    servo_mode_=bool(config["servo_parameters"]);
+    if (servo_mode_) {
+      // Position servo: one PID + reference feedforward, event-driven on encoder frames.
+      require(!config["controller_parameters"] && !config["selected_family_feedforward"],
+              "DATA_INVALID: choose servo_parameters or controller_parameters");
+      const auto servo=load_servo(config["servo_parameters"]);
+      require(servo.current_cap==current_bound_,"INTEGRATION_MISMATCH: current authority differs from servo");
+      require(servo.rms_limit<=.9 && servo.rms_tau_s<=5.,"HARD_ABORT: servo RMS budget above the 0.9 A continuous rating");
+      motor_temperature_limit_=config["servo_motor_temperature_limit_C"].as<double>();
+      require(motor_temperature_limit_>0 && motor_temperature_limit_<=70.,"DATA_INVALID: servo motor temperature limit");
+      require(servo_.configure(servo),"DATA_INVALID: servo parameter apply failed");
+      speed_limit_=config["servo_speed_limit_rad_s"].as<double>();
+      // Owner rule 2026-10-02: stay below 100 RPM (10.47 rad/s).
+      require(std::isfinite(speed_limit_) && speed_limit_>0 && speed_limit_<=10.,"DATA_INVALID: servo speed limit");
+      hold_after_s_=config["servo_hold_after_s"].as<double>();
+      require(std::isfinite(hold_after_s_) && hold_after_s_>=0 && hold_after_s_<=10.,"DATA_INVALID: servo hold window");
+      event_control_=config["servo_event_control"].as<bool>();
+      if (const auto schedule=config["servo_gain_schedule"]) {
+        for (const auto& item:schedule)
+          gain_schedule_.push_back({item["begin_s"].as<double>(),item["kq"].as<double>(),item["kv"].as<double>(),item["ki"].as<double>()});
+        require(!gain_schedule_.empty() && gain_schedule_.size()<=64,"DATA_INVALID: servo gain schedule");
+      }
+      if (const auto x=config["servo_excitation"]) {
+        // Identification only: a log-swept sine added to the servo output.
+        excitation_amplitude_=x["amplitude_A"].as<double>(); excitation_f0_=x["f0_hz"].as<double>();
+        excitation_f1_=x["f1_hz"].as<double>(); excitation_begin_=x["begin_s"].as<double>();
+        excitation_duration_=x["duration_s"].as<double>();
+        require(excitation_amplitude_>0 && excitation_amplitude_<=.4 && excitation_f0_>0 && excitation_f1_>excitation_f0_ &&
+                excitation_f1_<=200 && excitation_duration_>0,"DATA_INVALID: servo excitation");
+      }
+      parameter_readback_=servo_json(servo_.parameters());
+    } else {
     const auto parameters=load_parameters(config["controller_parameters"],bool(config["selected_family_feedforward"]));
     family_.load(config["selected_family_feedforward"],config["reference_limits"],parameters);
     require(parameters.current_cap==current_bound_,"INTEGRATION_MISMATCH: current authority differs from runtime controller");
     require(controller_.configure(parameters),"DATA_INVALID: shared controller parameter apply failed");
     parameter_readback_=parameter_json(controller_.parameters());
+    }
     const auto calibration=config["gyro_calibration"];
     const auto column=calibration["yaw_column"].as<std::vector<double>>();
     const auto bias=calibration["baseline_sensor_bias"].as<std::vector<double>>();
@@ -258,7 +360,7 @@ class YawControlSession {
         references_.push_back(segment); reference_s_+=segment.duration;
       }
     }
-    require((baseline_s_+reference_s_+stop_s_)*1e9<limits_.duration,"DATA_INVALID: control sequence deadline");
+    require((baseline_s_+reference_s_+hold_after_s_+stop_s_)*1e9<limits_.duration,"DATA_INVALID: control sequence deadline");
     if(family_.enabled) {
       const auto cases=config["reference_profile"]["cases"];
       require(cases.IsSequence() && cases.size()>0 && cases.size()<=128,
@@ -285,7 +387,9 @@ class YawControlSession {
     }
     journal_=std::make_unique<Journal>(config["output"].as<std::string>(),
       "{\"kind\":\"header\",\"schema\":\"adr0022.yaw-control/1\",\"purpose\":\"yaw_shared_core_3a\",\"provenance\":"+
-      quoted(synthetic_?"SYNTHETIC":"MEASURED")+",\"candidate_label\":"+quoted(candidate_)+",\"parameter_qualified\":false,\"manifest_yaml\":"+quoted(json(config))+"}");
+      quoted(synthetic_?"SYNTHETIC":"MEASURED")+",\"candidate_label\":"+quoted(candidate_)+",\"parameter_qualified\":false,\"manifest_yaml\":"+quoted(json(config))+"}",
+      // 1 kHz servo sessions log ~4 rows/ms; absorb SD-card write stalls.
+      config["servo_parameters"]?16384:4096);
     buses_[0].open(config["yaw"],synthetic_,limits_); buses_[1].open(config["pitch"],synthetic_,limits_);
   }
   int run() {
@@ -295,7 +399,7 @@ class YawControlSession {
     try {
       record("{\"kind\":\"session_begin\",\"time_ns\":"+std::to_string(begin_)+"}");
       record("{\"kind\":\"controller_parameters_readback\",\"candidate_label\":"+quoted(candidate_)+
-             ",\"source\":\"configured_shared_core\",\"parameters\":"+parameter_readback_+"}");
+             ",\"source\":"+quoted(servo_mode_?"configured_servo":"configured_shared_core")+",\"parameters\":"+parameter_readback_+"}");
       if(family_.enabled) { record(family_.readback()); record(family_.start_policy_readback); }
       const auto first_zero=yaw(0.,"baseline");
       require(first_zero.success,"HARD_ABORT: yaw baseline zero TX failed");
@@ -309,15 +413,24 @@ class YawControlSession {
         readback_.check_deadline(now); supervise(now); service_pitch(now);
         if (!control_begin_ && now-begin_>=int64_t(baseline_s_*1e9) && identified_ && disabled_ && have_mode_) {
           check_streams(now); initial_position_=position(); control_begin_=now;
+          if (servo_mode_) require(servo_.reset(seconds(now),initial_position_,0.,0.),"DATA_INVALID: servo reset failed");
+          else
           require(controller_.reset(seconds(now),initial_position_,gyro_rate_,0.,1,seconds(baseline_current_time_)),"DATA_INVALID: shared controller reset failed");
           next_control_=now+5'000'000;
           record("{\"kind\":\"yaw_control_begin\",\"time_ns\":"+std::to_string(now)+"}");
         }
-        if (control_begin_ && !braking_begin_ && (now-control_begin_)*1e-9>=reference_s_) {
+        if (servo_mode_ && control_begin_) {
+          // The servo holds the final reference sample, then the session ends.
+          if ((now-control_begin_)*1e-9>=reference_s_+hold_after_s_) { complete=true; servo_done_=true; }
+          else if (!event_control_ && now>=next_control_) {
+            control_servo(now); next_control_+=((now-next_control_)/5'000'000+1)*5'000'000;
+          }
+        }
+        else if (control_begin_ && !braking_begin_ && (now-control_begin_)*1e-9>=reference_s_) {
           braking_begin_=now;
           record("{\"kind\":\"controlled_stop_begin\",\"time_ns\":"+std::to_string(now)+"}");
         }
-        if (control_begin_ && now>=next_control_) {
+        if (!servo_mode_ && control_begin_ && now>=next_control_) {
           control(now); next_control_+=((now-next_control_)/5'000'000+1)*5'000'000;
           if(braking_begin_) {
             const auto& parameters=controller_.parameters();
@@ -334,6 +447,8 @@ class YawControlSession {
         require(journal_->healthy(),"DATA_INVALID: capture writer failed");
       }
     } catch (const std::exception& e) { failure=e.what(); }
+    servo_done_=true;  // nothing but zero current from here on, whatever ended the loop
+    if (servo_mode_) record_best("{\"kind\":\"servo_learned\",\"parameters\":"+servo_json(servo_.learned())+"}");
     const auto stop_begin=monotonic_ns();
     try { zero_completed=yaw(0.,"stop").success; require(zero_completed,"HARD_ABORT: final zero TX failed"); }
     catch (const std::exception& e) { if (failure.empty()) failure=e.what(); }
@@ -420,6 +535,45 @@ class YawControlSession {
     }
     return {from,0.,0.,posture_};
   }
+  void control_servo(int64_t now) {
+    const double since=(now-control_begin_)*1e-9;
+    while (next_gain_<gain_schedule_.size() && since>=gain_schedule_[next_gain_][0]) {
+      const auto& g=gain_schedule_[next_gain_++];
+      require(servo_.set_gains(g[1],g[2],g[3]),"DATA_INVALID: servo gain schedule entry");
+      record("{\"kind\":\"servo_gains\",\"time_ns\":"+std::to_string(now)+",\"kq\":"+std::to_string(g[1])+
+             ",\"kv\":"+std::to_string(g[2])+",\"ki\":"+std::to_string(g[3])+"}");
+    }
+    const auto r=reference(since);
+    // Servo references are relative to the position where control began.
+    const auto out=servo_.step(seconds(now),initial_position_+r.position,r.velocity,r.acceleration);
+    std::ostringstream log; log.precision(9);
+    require(motor_temperature_<motor_temperature_limit_,"HARD_ABORT: yaw motor temperature limit");
+    log<<"{\"kind\":\"servo_cycle\",\"time_ns\":"<<now<<",\"qr\":"<<initial_position_+r.position<<",\"vr\":"<<r.velocity<<",\"ar\":"<<r.acceleration
+       <<",\"q\":"<<out.position<<",\"v\":"<<out.velocity<<",\"gyro\":"<<gyro_rate_<<",\"req\":"<<out.requested<<",\"u\":"<<out.limited
+       <<",\"ff\":"<<out.feedforward<<",\"fr\":"<<out.friction<<",\"p\":"<<out.proportional<<",\"d\":"<<out.derivative
+       <<",\"i\":"<<out.integral<<",\"rms\":"<<out.rms<<",\"cap\":"<<out.cap<<",\"sat\":"<<out.saturated<<",\"rock\":"<<out.rocking<<",\"stalls\":"<<out.stall_events<<",\"stale\":"<<servo_.stale_samples()<<",\"status\":"<<out.status<<'}'; record(log.str());
+    require(out.status!=int(axis::ServoStatus::FollowingError),"HARD_ABORT: servo following error limit");
+    require(out.status==int(axis::ServoStatus::Ok),"MEASUREMENT_LIMITED: servo sensor data stale or invalid");
+    // Physical speed check: encoder displacement over >=20 ms and the independent
+    // gyro. The observer's instantaneous estimate overshoots for a few ms after a
+    // breakaway and is not, by itself, evidence of real overspeed.
+    speed_history_.push_back({now,position()});
+    while (speed_history_.size()>2 && now-speed_history_[1].first>=20'000'000) speed_history_.pop_front();
+    const auto& [then,where]=speed_history_.front();
+    const double encoder_speed=now-then>=20'000'000?(position()-where)/((now-then)*1e-9):0.;
+    if (std::abs(encoder_speed)>speed_limit_ || std::abs(gyro_rate_)>speed_limit_)
+      throw std::runtime_error("HARD_ABORT: yaw speed limit (encoder "+std::to_string(encoder_speed)+
+                               " rad/s, gyro "+std::to_string(gyro_rate_)+" rad/s)");
+    double excitation=0.;
+    const double elapsed=(now-control_begin_)*1e-9-excitation_begin_;
+    if (excitation_amplitude_>0 && elapsed>=0 && elapsed<excitation_duration_) {
+      const double k=std::log(excitation_f1_/excitation_f0_)/excitation_duration_;
+      excitation=excitation_amplitude_*std::sin(2*std::numbers::pi*excitation_f0_*(std::exp(k*elapsed)-1)/k);
+    }
+    const auto sent=yaw(std::clamp(out.limited+excitation,-current_bound_,current_bound_),excitation!=0.?"excitation":"control");
+    servo_.acknowledge(sent.success,sent.actual);
+    require(sent.success,"HARD_ABORT: yaw control TX failed"); ++control_cycles_;
+  }
   void control(int64_t now) {
     const auto r=braking_begin_?axis::Reference{position(),0.,0.,posture_}:
       reference((now-control_begin_)*1e-9);
@@ -505,6 +659,7 @@ class YawControlSession {
     const auto values=sample["values"].as<std::vector<double>>(); gyro_rate_=0.;
     for (unsigned i=0;i<3;++i) gyro_rate_+=(values[i]-bias_[i])*projection_[i];
     ++gyro_sequence_;
+    if (servo_mode_ && control_begin_) servo_.observe_gyro(seconds(gyro_time_),gyro_rate_);
   }
   void pump() {
     std::array<pollfd,3> fds{{{buses_[0].fd.value,POLLIN,0},{buses_[1].fd.value,POLLIN,0},{imu_fd_,POLLIN,0}}};
@@ -513,19 +668,28 @@ class YawControlSession {
     for (unsigned axis=0;axis<2;++axis) {
       auto& bus=buses_[axis]; require(!(fds[axis].revents&(POLLERR|POLLHUP|POLLNVAL)),"HARD_ABORT: CAN endpoint failed"); Receipt receipt;
       for (unsigned drained=0;drained<256 && bus.receiver->receive(receipt);++drained) {
-        record(receipt_json(receipt,axis?"pitch":"yaw",++bus.sequence));
+        ++bus.sequence;
+        // Servo mode: the decoded yaw_feedback row already carries the kernel timestamps.
+        if (axis || !servo_mode_) record(receipt_json(receipt,axis?"pitch":"yaw",bus.sequence));
         require(!receipt.frame.error,"HARD_ABORT: CAN error frame"); require(!receipt.drop_delta,"DATA_INVALID: socket receive loss");
         if (!axis) {
           gm6020::Feedback value;
           if (gm6020::decode(receipt.frame,1,value)) {
             if (have_encoder_) { int delta=int(value.angle_count)-int(previous_encoder_); if (delta>4096) delta-=8192; if (delta<-4096) delta+=8192; encoder_counts_+=delta; }
-            have_encoder_=true; previous_encoder_=value.angle_count; encoder_time_=receipt.kernel_monotonic_ns; ++encoder_sequence_; bus.last_feedback=encoder_time_;
+            if (!have_encoder_ && servo_mode_) position_offset_=value.angle_count*(2.*std::numbers::pi/8192.);
+            have_encoder_=true; previous_encoder_=value.angle_count; motor_temperature_=value.temperature_raw; encoder_time_=receipt.kernel_monotonic_ns; ++encoder_sequence_; bus.last_feedback=encoder_time_;
             std::ostringstream out; out.precision(17);
             out<<"{\"kind\":\"yaw_feedback\",\"encoder_raw\":"<<value.angle_count<<",\"encoder_unwrapped_counts\":"<<encoder_counts_
                <<",\"q_relative_rad\":"<<position()<<",\"speed_rpm\":"<<value.speed_rpm<<",\"current_raw\":"<<value.current_raw
                <<",\"current_A\":"<<value.current_a()<<",\"temperature_raw\":"<<unsigned(value.temperature_raw)
                <<",\"kernel_realtime_ns\":"<<receipt.kernel_realtime_ns<<",\"kernel_monotonic_ns\":"<<encoder_time_
                <<",\"dequeue_ns\":"<<receipt.dequeue_ns<<'}'; record(out.str());
+            if (servo_mode_ && control_begin_ && !servo_done_) {
+              if (!servo_.observe_encoder(seconds(encoder_time_),position()))
+                throw std::runtime_error("MEASUREMENT_LIMITED: servo encoder update rejected (ready="+
+                  std::to_string(servo_.ready())+", t="+std::to_string(seconds(encoder_time_))+")");
+              if (event_control_) control_servo(monotonic_ns());
+            }
           }
           continue;
         }
@@ -577,6 +741,11 @@ class YawControlSession {
   }
   YAML::Node config_; Limits limits_; bool synthetic_; Readback readback_; axis::Controller controller_;
   SelectedFamilyFeedforward family_;
+  axis::Servo servo_; bool servo_mode_{},event_control_{},servo_done_{}; double speed_limit_{},hold_after_s_{};
+  double motor_temperature_{},motor_temperature_limit_{};
+  std::vector<std::array<double,4>> gain_schedule_; std::size_t next_gain_{};
+  std::deque<std::pair<int64_t,double>> speed_history_;
+  double excitation_amplitude_{},excitation_f0_{},excitation_f1_{},excitation_begin_{},excitation_duration_{};
   std::array<Endpoint,2> buses_; ImuStream imu_; std::unique_ptr<Journal> journal_;
   std::vector<ReferenceSegment> references_; std::vector<ReferenceSample> reference_samples_;
   std::vector<DepartureWindow> departures_;

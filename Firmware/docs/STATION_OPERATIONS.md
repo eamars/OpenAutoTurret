@@ -14,6 +14,35 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
 
+## Servo takeover: owner rulings and measured facts (2026-10-02, local date)
+
+**Owner rulings (2026-10-02).** The working product comes first: probe on the real station, make it
+work, then test and harden. ADR-002.x architect documents are guidance only (the architect has no
+station access); the model must be adjusted from real responses. Close ADR-002.x before ADR-003, with
+limits that serve ADR-003's framing use. Full station authority with yaw/pitch speed below 100 RPM;
+high acceleration at low speed is acceptable. Production stack stays off until ADR-003 starts. Pitch
+control mode: best measured performance. Repeat tests: the cross-roller bearings are inconsistent.
+
+**Measured facts (station, 2026-10-02).** Procedure: [servo commissioning card](operations/servo-commissioning.md);
+evidence and numbers: [takeover report](ADR-002.2/reports/SERVO_TAKEOVER_2026-10-02.md).
+
+- GM6020 angle feedback has **current crosstalk**: reading = angle + g(angle)·i(t−2.1 ms), g periodic
+  (nine cycles per revolution, up to ±6.4 mrad/A). Uncompensated it caused every 14–17 Hz yaw limit
+  cycle at stiff gains. Calibrated table: [`config/servo/yaw_servo.json`](../config/servo/yaw_servo.json).
+- Yaw: inertia 0.03 A·s²/rad (open-loop excitation and chirp agree), loop delay ≈2 ms. Kinetic
+  friction ≈0.4–0.5 A at 20 deg/s, ≈0.3–0.4 A at 60 deg/s; breakaway after loaded rest can exceed
+  0.9 A; slowly rising force produces creep-and-restick, while a brief force reversal releases it.
+  Friction rises through a cold night and falls after a warm-up rotation. A localized bump near
+  240–255 deg absolute. The BNO085 gyro lags the encoder by ≈100 ms (not fused into the servo).
+- Yaw current authority used by the servo: 1.5 A peak under a 0.8 A RMS (3 s) budget, 55 C trip;
+  continuous authority stays at the GM6020 0.9 A stall rating.
+- Pitch endstops (production homing logs, 2026-09-30, MechPos): A = −0.115 rad, B = −1.511 rad
+  (≈80 deg, not 60), midpoint −0.813 rad. Pitch rests unpowered where left. As-found native settings
+  on 2026-10-02: RunMode 3, LimitCur 5 A, SpdKp 4, SpdKi 0.05; after these sessions the drive is left
+  in RunMode 2 (production rewrites its own mode at start).
+- 56 commissioning releases (`claude-*`, `yaw-final-check`, `yaw-rock-*`, `pitch-final-check`) were created under `run/releases/` (7.7 GB
+  with journals); production checkout and stack untouched and stopped.
+
 ## ADR-002.2 architect review priority (2026-10-01, local date)
 
 The owner instructed the agent to continue under [architect review 02](ADR-002.2/architect_review_02/00_START_HERE.md)

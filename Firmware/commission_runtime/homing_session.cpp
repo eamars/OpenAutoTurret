@@ -113,6 +113,29 @@ class HomingSession {
                                  params_.homing.backoff_speed_rad_s,midpoint_speed_}),"DATA_INVALID: incompatible homing guards");
     if (!synthetic_) require(config["yaw"]["interface"].as<std::string>()=="can0" &&
         config["pitch"]["interface"].as<std::string>()=="can1","INTEGRATION_MISMATCH: station topology");
+    if (const auto t=config["servo_trial"]) {
+      // Pitch speed-mode servo trial: the drive keeps its own velocity loop; the host
+      // streams SpdRef = v_ref + kp*(q_ref-q) + integral at a fixed period.
+      trial_=true;
+      trial_kp_=number(t,"kp_per_s"); trial_ki_=number(t,"ki_per_s2",true); trial_iclamp_=number(t,"integral_clamp_rad_s",true);
+      trial_period_=int64_t(number(t,"command_period_s")*1e9); trial_hold_=int64_t(number(t,"hold_after_s",true)*1e9);
+      trial_min_=t["window_min_rad"].as<double>(); trial_max_=t["window_max_rad"].as<double>();
+      trial_speed_=number(t,"speed_limit_rad_s"); trial_follow_=number(t,"following_error_rad");
+      // The script runs relative to an absolute centre, reached first by a slow smoothstep move.
+      trial_center_=t["center_rad"].as<double>(); trial_approach_speed_=number(t,"approach_speed_rad_s");
+      require(std::isfinite(trial_min_) && std::isfinite(trial_max_) && trial_min_<trial_max_ && trial_speed_<=1.0 &&
+              trial_period_>=500'000 && trial_period_<=20'000'000 && trial_center_>trial_min_ && trial_center_<trial_max_ &&
+              trial_approach_speed_<=0.2,"DATA_INVALID: pitch servo trial bounds");
+      double previous=-1.;
+      for (const auto& item:t["reference_samples"]) {
+        const std::array<double,4> sample{item["time_s"].as<double>(),item["position_rad"].as<double>(),
+                                          item["velocity_rad_s"].as<double>(),item["acceleration_rad_s2"].as<double>()};
+        require(std::isfinite(sample[0]) && sample[0]>previous && std::isfinite(sample[1]) && std::isfinite(sample[2]),
+                "DATA_INVALID: pitch trial reference");
+        trial_ref_.push_back(sample); previous=sample[0];
+      }
+      require(trial_ref_.size()>=2 && trial_ref_.front()[0]==0.,"DATA_INVALID: pitch trial reference table");
+    }
     if (validate_only) return; // Same numerical contract, before any device or output I/O.
     imu_fd_=config["imu_fd"].as<int>(); struct stat info{};
     require(imu_fd_>2 && imu_fd_!=8 && fstat(imu_fd_,&info)==0 && S_ISFIFO(info.st_mode),"DATA_INVALID: inherited IMU pipe required");
@@ -186,7 +209,7 @@ class HomingSession {
       // Keep older accepted writes while their receipts may still be queued.
       // Matching below uses receipt time and the narrower read-timeout window.
       while (!writes_.empty() && before-writes_.front().begin_ns>=limits_.read_timeout+limits_.dequeue) writes_.pop_front();
-      require(writes_.size()<256,"DATA_INVALID: bounded homing write history exhausted");
+      require(writes_.size()<4096,"DATA_INVALID: bounded homing write history exhausted");  // 1 kHz servo trial writes
     }
     const auto count=synthetic_?sendto(bus.fd.value,&wire,sizeof(wire),MSG_DONTWAIT,reinterpret_cast<sockaddr*>(&bus.peer),sizeof(bus.peer)):
                                ::send(bus.fd.value,&wire,sizeof(wire),MSG_DONTWAIT);
@@ -336,7 +359,13 @@ class HomingSession {
       stop_poll(now);
       if (disabled_ && status_ns_>=pending_begin_) {
         if (state_==State::InitialStop) state(State::Observe,now);
-        else if (state_==State::FinalStop) { normal_stop_confirmed_=true; state(State::RestoreWrite,now); }
+        else if (state_==State::FinalStop) {
+          // 1 kHz trial writes can still have Motor-state replies queued behind
+          // the STOP reply; let them drain before the disabled-only restore.
+          if (!trial_ || now-status_ns_>=100'000'000 || now-pending_begin_>=limits_.read_timeout/2) {
+            normal_stop_confirmed_=true; state(State::RestoreWrite,now);
+          }
+        }
         else state(next_mode_==1?State::TransitionPose:State::TransitionWrite,now);
       }
     } else if (state_==State::Observe) {
@@ -372,7 +401,9 @@ class HomingSession {
         write(cybergear::Reg::LocRef,pinned_pose_,"transition_pin_measured_pose");
       }
       state(State::TransitionVerify,now); verification_=guarded(desired_); verification_.push_back({cybergear::Reg::RunMode,double(next_mode_)});
-      verification_.push_back({cybergear::Reg::SpdRef,0}); verification_.push_back({cybergear::Reg::IqRef,0});
+      verification_.push_back({cybergear::Reg::SpdRef,0});
+      // In speed/position mode IqRef reads back the drive's own loop output, not our write.
+      if (next_mode_==3) verification_.push_back({cybergear::Reg::IqRef,0});
       if (next_mode_==1) { verification_.push_back({cybergear::Reg::LocRef,pinned_pose_}); verification_.push_back({cybergear::Reg::LimitSpd,0}); }
     } else if (state_==State::TransitionVerify) {
       stop_poll(now); if (verify(now)) state(State::Enable,now);
@@ -380,7 +411,8 @@ class HomingSession {
       check_streams(now); require(disabled_ && now-status_ns_<=limits_.can_gap,"HARD_ABORT: enable without fresh disabled status");
       enabled_=false; enable_seen_=false; enable_begin_=now; pitch(cybergear::make_enable(0,127),"enable_homing_neutral");
       state(State::EnabledVerify,now); verification_=guarded(desired_); verification_.push_back({cybergear::Reg::RunMode,double(next_mode_)});
-      verification_.push_back({cybergear::Reg::SpdRef,0}); verification_.push_back({cybergear::Reg::IqRef,0});
+      verification_.push_back({cybergear::Reg::SpdRef,0});
+      if (next_mode_==3) verification_.push_back({cybergear::Reg::IqRef,0});
       if (next_mode_==1) verification_.push_back({cybergear::Reg::LimitSpd,0});
     } else if (state_==State::EnabledVerify) {
       if (verify(now)) {
@@ -404,8 +436,9 @@ class HomingSession {
       require(enabled_,"HARD_ABORT: enabled homing mode was lost");
       require(now-entered_<=limits_.read_timeout || (current_ns_>=entered_ && now-current_ns_<=limits_.read_timeout),
               "MEASUREMENT_LIMITED: measured homing current stale");
+      if (trial_ && !midpoint_) { trial_step(now); if (state_!=State::Run) return; }
       if (readback_.pending()) return;
-      if (status_ns_>fsm_status_ns_) {
+      if (!trial_ && status_ns_>fsm_status_ns_) {
         fsm_status_ns_=status_ns_;
         if (!midpoint_) {
         // Preserve actual receipt time. Transition waits pause calls to the FSM,
@@ -448,6 +481,54 @@ class HomingSession {
     } else if (state_==State::RestoreVerify) {
       stop_poll(now); if (verify(now)) state(State::Done,now);
     }
+  }
+  std::array<double,4> trial_reference(double elapsed) const {
+    if (elapsed<=0) return trial_ref_.front();
+    if (elapsed>=trial_ref_.back()[0]) { auto last=trial_ref_.back(); last[2]=last[3]=0; return last; }
+    const auto upper=std::upper_bound(trial_ref_.begin(),trial_ref_.end(),elapsed,
+      [](double time,const std::array<double,4>& sample){ return time<sample[0]; });
+    const auto& lower=*(upper-1); const double f=(elapsed-lower[0])/((*upper)[0]-lower[0]);
+    return {elapsed,std::lerp(lower[1],(*upper)[1],f),std::lerp(lower[2],(*upper)[2],f),std::lerp(lower[3],(*upper)[3],f)};
+  }
+  void trial_step(int64_t now) {
+    if (!trial_begin_) {
+      trial_origin_=pose_; next_trial_=now; trial_status_=status_ns_;
+      trial_approach_=std::max(0.5,std::abs(trial_center_-pose_)/trial_approach_speed_*1.5);
+      trial_begin_=now+int64_t(trial_approach_*1e9);  // script time zero starts after the approach
+      record("{\"kind\":\"pitch_trial_approach\",\"from_rad\":"+scalar(pose_)+",\"center_rad\":"+scalar(trial_center_)+
+             ",\"duration_s\":"+scalar(trial_approach_)+"}");
+    }
+    const double elapsed=(now-trial_begin_)*1e-9;
+    // During the approach the axis may start up to 0.1 rad outside the working
+    // window (still inside the measured endstops); the script itself is strict.
+    const double slack=elapsed<0?0.1:0.;
+    require(pose_>=trial_min_-slack && pose_<=trial_max_+slack,"HARD_ABORT: pitch outside servo trial window");
+    if (now-trial_begin_>=int64_t(trial_ref_.back()[0]*1e9)+trial_hold_) {
+      command_speed_=0; write(cybergear::Reg::SpdRef,0,"trial_end_zero_speed");
+      record("{\"kind\":\"pitch_trial_end\",\"time_ns\":"+std::to_string(now)+",\"pose_rad\":"+scalar(pose_)+"}");
+      state(State::FinalStop,now); return;
+    }
+    if (now<next_trial_) return;
+    next_trial_+=trial_period_; if (next_trial_<now) next_trial_=now+trial_period_;
+    auto r=trial_reference(elapsed);
+    double q_ref=trial_center_+r[1];
+    if (elapsed<0) {
+      // Smoothstep approach from the starting pose to the centre.
+      const double x=std::clamp(1+elapsed/trial_approach_,0.,1.), d=trial_center_-trial_origin_;
+      q_ref=trial_origin_+d*(3*x*x-2*x*x*x); r[2]=d*(6*x-6*x*x)/trial_approach_; r[3]=0;
+    }
+    const double error=q_ref-pose_;
+    require(std::abs(error)<=trial_follow_,"HARD_ABORT: pitch servo following error");
+    const double dt=trial_last_?(now-trial_last_)*1e-9:0.; trial_last_=now;
+    const double unclamped=r[2]+trial_kp_*error+trial_integral_;
+    if (std::abs(unclamped)<trial_speed_ || unclamped*error<0)
+      trial_integral_=std::clamp(trial_integral_+trial_ki_*error*dt,-trial_iclamp_,trial_iclamp_);
+    const double speed=std::clamp(r[2]+trial_kp_*error+trial_integral_,-trial_speed_,trial_speed_);
+    command_speed_=speed; write(cybergear::Reg::SpdRef,speed,"trial_speed");
+    std::ostringstream out; out.precision(9);
+    out<<"{\"kind\":\"pitch_trial\",\"time_ns\":"<<now<<",\"qr\":"<<q_ref<<",\"vr\":"<<r[2]<<",\"q\":"<<pose_
+       <<",\"status_ns\":"<<status_ns_<<",\"torque\":"<<torque_<<",\"cmd\":"<<speed<<",\"i\":"<<trial_integral_<<'}';
+    record(out.str());
   }
   void check_streams(int64_t now) {
     for (const auto& bus:buses_) require(bus.last_feedback && now-bus.last_feedback<=limits_.can_gap,"MEASUREMENT_LIMITED: CAN feedback absent/stale");
@@ -509,7 +590,8 @@ class HomingSession {
             // with the elapsed-time corridor plus one-count quantization;
             // adding a count to velocity would invent motion at rest. Keep the
             // anchor through a full command period to expose sustained motion.
-            require(std::abs(displacement)<=speed_bound_*dt+25./65535.,"HARD_ABORT: pitch encoder speed guard");
+            // Replies 0.1-1 ms apart can differ by a couple of counts from sampling jitter.
+            require(std::abs(displacement)<=speed_bound_*dt+3*25./65535.,"HARD_ABORT: pitch encoder speed guard");
             if (stamp-encoder_anchor_ns_>=limits_.stop_period) {
               velocity_=displacement/dt; encoder_anchor_count_=count; encoder_anchor_ns_=stamp;
             }
@@ -600,6 +682,10 @@ class HomingSession {
   int64_t transition_begin_{},enable_begin_{},midpoint_begin_{},midpoint_command_ns_{},midpoint_travel_ns_{},midpoint_dwell_{},midpoint_timeout_{};
   bool identified_{},disabled_{},enabled_{},enable_seen_{},have_pose_{},transition_{},holding_{true},midpoint_{},abort_stop_confirmed_{},normal_stop_confirmed_{};
   bool endpoint_a_recorded_{},endpoint_b_recorded_{};
+  bool trial_{}; std::vector<std::array<double,4>> trial_ref_;
+  double trial_kp_{},trial_ki_{},trial_iclamp_{},trial_min_{},trial_max_{},trial_speed_{},trial_follow_{},trial_origin_{},trial_integral_{};
+  int64_t trial_period_{},trial_hold_{},trial_begin_{},next_trial_{},trial_last_{},trial_status_{};
+  double trial_center_{},trial_approach_speed_{},trial_approach_{};
   State state_{State::Discover}; DesiredState latched_; Settings original_,desired_,observed_,verification_; size_t verify_index_{};
   std::array<Endpoint,2> buses_; ImuStream imu_; gm6020::UnwrappedEncoder yaw_encoder_;
   std::optional<ReadObservation> latest_read_; std::unique_ptr<Journal> journal_; std::string last_message_;

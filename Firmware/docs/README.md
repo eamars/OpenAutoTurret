@@ -18,6 +18,7 @@ procedure from a flag list.
 | establish ADR-002.2 pitch sensorless endpoint/midpoint observations | [`operations/adr0022-sensorless-homing.md`](operations/adr0022-sensorless-homing.md) — workstation probes, measured native originals and the shared homing routine |
 | acquire ADR-002.2 yaw current-to-motion observations | [`operations/adr0022-yaw-acquisition.md`](operations/adr0022-yaw-acquisition.md) — one normal-path probe, workstation ARM64 build and bounded station acquisition |
 | run a calculated ADR-002.2 yaw feedback probe | [`operations/adr0022-yaw-feedback.md`](operations/adr0022-yaw-feedback.md) — shared-core parameter readback, local executable probe and bounded station feedback |
+| run or recalibrate the yaw position servo / pitch speed-mode servo (current working path) | [`operations/servo-commissioning.md`](operations/servo-commissioning.md) — ADR-003-shaped scripts, crosstalk calibration, scoring |
 | compare ADR-002.2 yaw identification structures after the architect review | [`operations/adr0022-yaw-model-comparison.md`](operations/adr0022-yaw-model-comparison.md) — workstation-only whole-journal fitting and blocked selection |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
