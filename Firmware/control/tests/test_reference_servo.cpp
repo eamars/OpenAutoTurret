@@ -200,7 +200,10 @@ TEST(ReferenceServo, PitchEngagesOnlyInsideItsEnvelope) {
   EXPECT_FALSE(pitch_reference_has_envelope(r));
 }
 
-TEST(ReferenceServo, FollowingErrorTrips) {
+// Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a following error is
+// usually an obstruction, not a hazard. The servo lets go and asks for a HOLD; it does not trip, and
+// it does not re-engage onto the far reference.
+TEST(ReferenceServo, FollowingErrorLetsGoAndHoldsWithoutTripping) {
   MixedCanMotorBackend b;
   Plant plant;
   Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
@@ -208,8 +211,11 @@ TEST(ReferenceServo, FollowingErrorTrips) {
   ASSERT_TRUE(Access::load(b, err)) << err;
   ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(1.0)));  // 57 deg away: beyond the 15 deg limit
   run(b, plant, 0.05);
-  EXPECT_TRUE(Access::tripped(b));
+  EXPECT_FALSE(Access::tripped(b));
   EXPECT_FALSE(Access::engaged(b));
+  ASSERT_NE(b.servo_hold_reason(), nullptr);
+  EXPECT_STREQ(b.servo_hold_reason(), "yaw servo following error");
+  EXPECT_FALSE(b.command_reference(AxisId::Yaw, hold_at(1.0))) << "re-engaged onto the far reference";
 }
 
 }  // namespace ota
