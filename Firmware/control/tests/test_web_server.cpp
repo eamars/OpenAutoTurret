@@ -125,6 +125,22 @@ TEST(WebServer, UnknownYawTorqueIsValidJsonNull) {
   EXPECT_EQ(wire.find("nan"), std::string::npos);
 }
 
+TEST(WebServer, AnInvalidatedEncoderLeavesTheFrameValidJson) {
+  // Station, 2026-10-02: a trip invalidated the yaw encoder, q_yaw_rad went NaN, and every frame
+  // after it was rejected by webd -- the page showed nothing for the whole fault. Any number may be
+  // unknown, not only the ones somebody remembered to wrap.
+  telemetry::TelemetrySnapshot s;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  s.q_yaw_rad = nan;
+  s.v_yaw_rad_s = std::numeric_limits<double>::infinity();
+  s.q_ref_yaw_rad = nan;
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"q_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"v_yaw_rad_s\":null"), std::string::npos) << wire;
+  EXPECT_EQ(wire.find("nan"), std::string::npos);
+  EXPECT_EQ(wire.find("inf"), std::string::npos);
+}
+
 TEST(WebServer, ATrackIdentifierCrossesTheWireAsTextNotAsARoundNumber) {
   // §50's `track_uuid` and §78's "selected UUID". Two separate hazards in one field: the
   // identifier is 128 bits with the high half drawn from the whole 64-bit range, and every

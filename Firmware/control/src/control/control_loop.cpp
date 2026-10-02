@@ -75,7 +75,9 @@ ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
     // ADR-003 D17 tracking trace on the async pool (no disk I/O on the control thread).
     tracking_trace_ = spdlog::get("tracking_trace");
     if (!tracking_trace_) {
-      tracking_trace_ = spdlog::basic_logger_mt<spdlog::async_factory>("tracking_trace", trace);
+      // Non-blocking like the main logger: when the shared queue is full a trace line is dropped,
+      // the control thread never waits for storage.
+      tracking_trace_ = spdlog::basic_logger_mt<spdlog::async_factory_nonblock>("tracking_trace", trace);
       tracking_trace_->set_pattern("%v");
       tracking_trace_->flush_on(spdlog::level::warn);
     }
@@ -1800,8 +1802,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
         if (core_tracking) {
           const int Y = ix(AxisId::Yaw), P = ix(AxisId::Pitch);
-          if (!core_engaged_) {
-            tracking_->core_engage(now_ns, {ref_lim_[Y].q_rad, ref_lim_[P].q_rad}, {ref_lim_[Y].v_rad_s, ref_lim_[P].v_rad_s},
+          // Station, 2026-10-02: tracking dropped to brake-to-hold for ~150 ms along a branch that
+          // never cleared core_engaged_; on resuming, Level 1 integrated the gap from its stale
+          // state and stepped the yaw reference 5 deg ahead of the stopped axis.
+          if (!core_engaged_ || now_ns - core_last_tick_ns_ > 2 * period_ns) {
+            // The seed is the reference published last tick, so it belongs to last tick's time:
+            // stamped `now`, the first Level-1 step integrates nothing and repeats it (a one-tick stall).
+            tracking_->core_engage(now_ns - period_ns, {ref_lim_[Y].q_rad, ref_lim_[P].q_rad}, {ref_lim_[Y].v_rad_s, ref_lim_[P].v_rad_s},
                                    {ref_lim_[Y].a_rad_s2, ref_lim_[P].a_rad_s2});
             core_engaged_ = true;
           }
@@ -1817,6 +1824,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           tracking_->core_limits(1, core_v[P], core_a[P], core_j[P], plo, phi);
           tracking_->core_travel({ylo, yhi, plo, phi});
           const auto rec = tracking_->core_tick(now_ns, {sp[Y].q_rad, sp[P].q_rad});
+          core_last_tick_ns_ = now_ns;
           const auto& r = rec.reference;
           for (const auto [i, c] : {std::pair{Y, 0}, std::pair{P, 1}}) {
             ref_lim_[i].q_rad = r.q[c]; ref_lim_[i].v_rad_s = r.v[c]; ref_lim_[i].a_rad_s2 = r.a[c];
@@ -1876,6 +1884,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         } else {
           lim[i] = 0.0;
         }
+      }
+      // The ADR-002.2 servos follow what they are handed at full authority, so a hold has to be a
+      // reference that brakes, not a pose. Station, 2026-10-02: AUTO_TRACK lost its subject 36 deg/s
+      // into a slew, the latched hold became a position step, and the yaw servo stopped the axis at
+      // its current limit. The legacy speed loop shaped this itself; for the servos the limiter does,
+      // continuing from wherever the reference is, under the braking limits that loop used.
+      // The pose was latched where this reference comes to rest (intent_limits), and the speed
+      // cap never undercuts the speed it carries in: lowering the cap below it is a one-tick clamp.
+      if (servo_holds()) {
+        const double dt = static_cast<double>(period_ns) * 1e-9;
+        for (int i = 0; i < kAxisCount; ++i) {
+          const auto [a, j] = hold_brake_limits(i);
+          if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
+          const double cap = std::max(hold_speed_effective(), std::abs(ref_lim_[i].v_rad_s));
+          q_ref[i] = control::limit_reference(ref_lim_[i], q_ref[i], dt, cap, a, j);
+          servo_jerk_[i] = 0.0;
+        }
+        ref_lim_engaged_ = true;
       }
       break;
     }
@@ -3357,6 +3383,14 @@ double ControlLoop::hold_speed_effective() const {
   return v;
 }
 
+std::pair<double, double> ControlLoop::hold_brake_limits(int axis) const {
+  const auto profile = motion_profile(axis, mode_mgr_.mode());
+  return {cfg_.motion.configured ? std::min(cfg_.a_brake_rad_s2, profile.maximum.acceleration)
+                                 : cfg_.a_brake_rad_s2,
+          cfg_.motion.configured ? std::min(cfg_.j_brake_rad_s3, profile.maximum.jerk)
+                                 : cfg_.j_brake_rad_s3};
+}
+
 control::MotionProfile ControlLoop::motion_profile(int axis, OperatingMode mode) const {
   if (!cfg_.motion.configured) return {};  // existing service servo bounds
   auto payload = control::MotionRates{};
@@ -3804,8 +3838,20 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     // moving, and then held there. Two properties that only make sense together: no
     // creep (it is not re-read every cycle) and no journey (it is not the ready pose).
     if (!mode_hold_latched_ || last_intent_.type != IntentType::Hold) {
-      const double q[2] = {last_positions()[ix(AxisId::Pitch)],
-                           last_positions()[ix(AxisId::Yaw)]};
+      double q[2] = {last_positions()[ix(AxisId::Pitch)],
+                     last_positions()[ix(AxisId::Yaw)]};
+      // With the servos the hold is a braked reference, so the pose is where that reference
+      // comes to rest rather than where the axis is on this cycle: a stop taken at speed would
+      // otherwise run past the pose and drive back to it.
+      if (servo_holds() && ref_lim_engaged_) {
+        for (int i = 0; i < kAxisCount; ++i) {
+          const auto [a, j] = hold_brake_limits(i);
+          const auto& r = ref_lim_[i];
+          q[i] = env_.constrain_reference(
+              r.q_rad + std::copysign(control::stopping_distance_rad(r.v_rad_s, r.a_rad_s2, a, j), r.v_rad_s),
+              limits_[i]);
+        }
+      }
       mode_hold_pitch_rad_ = q[ix(AxisId::Pitch)];
       mode_hold_yaw_rad_ = q[ix(AxisId::Yaw)];
       mode_hold_latched_ = true;

@@ -22,6 +22,7 @@
 #pragma once
 
 #include <array>
+#include <utility>
 #include <atomic>
 #include <deque>
 #include <functional>
@@ -354,6 +355,12 @@ class ControlLoop {
   // (§28.5/§31.3).
   double hold_speed_effective() const;
   control::MotionProfile motion_profile(int axis, OperatingMode mode) const;
+  // ADR-002.2 servos on both axes: a hold is then a braked reference, not a pose (see Phase::Hold).
+  bool servo_holds() const {
+    return backend_->servo_available(AxisId::Yaw) && backend_->servo_available(AxisId::Pitch);
+  }
+  // The braking limits of that reference: the ones the legacy speed loop stopped with.
+  std::pair<double, double> hold_brake_limits(int axis) const;
   double motion_speed(OperatingMode mode, bool maximum = false) const;
 
   // --- telemetry (§6.3, §43) --------------------------------------------
@@ -663,6 +670,9 @@ class ControlLoop {
   // source owns it. servo_jerk_ is the segment jerk handed to the ADR-002.2 servos (zero for the
   // legacy limiter, which does not integrate one).
   bool core_engaged_ = false;
+  // When the core last ticked. A tick it missed, by whatever path, means Level 1 must re-seed from
+  // the reference actually executed meanwhile rather than integrate the gap from its stale state.
+  TimeNs core_last_tick_ns_ = 0;
   double servo_jerk_[kAxisCount] = {0.0, 0.0};
   std::shared_ptr<spdlog::logger> tracking_trace_;  // OTA_TRACKING_TRACE: one JSON line per core tick
   void trace_core_tick(const track::TickRecord& r, TimeNs now_ns);

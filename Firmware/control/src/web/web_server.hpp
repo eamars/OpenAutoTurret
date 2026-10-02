@@ -117,8 +117,25 @@ inline std::string js(const double v[2]) {
   return "[" + json_finite_or_null(v[0]) + "," + json_finite_or_null(v[1]) + "]";
 }
 
-inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
+// The telemetry object is written through this instead of a bare ostringstream: every floating-point
+// value it is handed is checked, so an unknown (NaN, inf) goes out as null. A bare stream writes `nan`,
+// which is not JSON: on 2026-10-02 a trip invalidated the yaw encoder, q_yaw_rad became NaN, and webd
+// rejected every telemetry frame from then on -- the page showed nothing for the whole fault.
+struct JsonNumberStream {
   std::ostringstream os;
+  template <class T>
+  JsonNumberStream& operator<<(const T& v) {
+    if constexpr (std::is_floating_point_v<T>) {
+      if (!std::isfinite(v)) { os << "null"; return *this; }
+    }
+    os << v;
+    return *this;
+  }
+  std::string str() const { return os.str(); }
+};
+
+inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
+  JsonNumberStream os;
   os << "{\"type\":\"telemetry\""
      << ",\"ts_ns\":" << s.timestamp_ns
      << ",\"phase\":\"" << json_escape(s.phase) << "\""
