@@ -89,7 +89,7 @@ if [ "$ACTION" = stop ]; then
   echo "Controller shutdown is still in progress; inspect $RUN/controller.log" >&2
   exit 1
 fi
-PROFILE=hailo_yolov8n
+PROFILE=hailo_yolov8s_pose   # person boxes + COCO-17 keypoints; the aim anchor is the head (2026-10-02)
 FRAMES=0
 MODE=hardware
 START_WEB=1

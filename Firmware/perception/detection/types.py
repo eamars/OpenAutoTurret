@@ -50,6 +50,9 @@ class AnchorSource(str, Enum):
     """
 
     BBOX_TORSO = "bbox_torso"
+    BBOX_HEAD = "bbox_head"
+    POSE_HEAD = "pose_head"
+    POSE_HEAD_FROM_SHOULDERS = "pose_head_from_shoulders"
     POSE_SHOULDERS = "pose_shoulders"
     POSE_TORSO = "pose_torso"
     BBOX_CENTER_FALLBACK = "bbox_center_fallback"

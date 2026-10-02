@@ -450,7 +450,7 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
             # exercised on a machine with no sensor attached (§55.18's offline acceptance run).
             return _run_synthetic(args, pipeline, adapter, config, wire_publisher=wire_publisher)
         model = config.active_model
-        if (model.adapter or "").strip().lower() in ("hailo", "hailo8"):
+        if (model.adapter or "").strip().lower() in ("hailo", "hailo8", "hailo_pose"):
             # The Hailo profile names its independent camera and capture geometry. The
             # current IMX500 installation orientation is not presumed to describe IMX477.
             adapter.open()
@@ -488,7 +488,7 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         camera = CameraOwner(picam2, stream_size=stream, events=events,
                              inference_stream=("lores" if lores else None),
                              inference_size=(lores or stream))
-        if (model.adapter or "").strip().lower() not in ("hailo", "hailo8"):
+        if (model.adapter or "").strip().lower() not in ("hailo", "hailo8", "hailo_pose"):
             adapter.open(device=imx500, camera=picam2)
         pipeline.start()
         primary_ident = resolve_durable_id(str(info.get("device_path")

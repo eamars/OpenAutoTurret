@@ -165,8 +165,12 @@ tracking:
   # Applies on native and legacy observation paths. Perception's association
   # anchor remains independent. A fraction is a box position, not a detected head.
   # Startup-only: edit these values and restart through the normal launcher.
+  # Owner, 2026-10-02: aim at the head as the pose profile (hailo_yolov8s_pose, the launcher default)
+  # measures it -- head keypoints, else above the shoulders, else a box fraction, with the source
+  # published per detection -- rather than a fixed fraction of a box that moves with pose and
+  # clipping. Under a box-only profile perception's anchor is the torso (anchor.target).
   aim_point:
-    mode: box_fraction        # box_fraction | perception_anchor
+    mode: perception_anchor   # box_fraction | perception_anchor
     x_fraction: 0.50          # left -> right inside the detected box
     y_fraction: 0.22          # top -> bottom; tune the head/framing compromise here
   search_enabled_by_default: false

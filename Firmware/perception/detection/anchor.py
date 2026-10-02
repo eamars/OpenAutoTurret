@@ -27,6 +27,8 @@ from .types import AnchorSource, BBox, Keypoint, PointNorm
 
 # COCO-17 skeleton indices. Named, because "keypoints[5]" appears in three places in this
 # file and an off-by-one there puts the aim anchor on an elbow.
+COCO_NOSE = 0
+COCO_HEAD = (0, 1, 2, 3, 4)   # nose, eyes, ears: whichever way the person faces, some of these show
 COCO_SHOULDER_LEFT = 5
 COCO_SHOULDER_RIGHT = 6
 COCO_HIP_LEFT = 11
@@ -78,8 +80,41 @@ def box_anchor(bbox: BBox, cfg: AnchorConfig) -> Tuple[PointNorm, AnchorSource]:
     return anchor, AnchorSource.BBOX_TORSO
 
 
+def head_anchor(bbox: BBox, keypoints: Sequence[Keypoint], cfg: AnchorConfig,
+                aspect: float = 1.0) -> Tuple[PointNorm, AnchorSource]:
+    """Head mode: measured head keypoints -> above the shoulder line -> a box fraction.
+
+    The confidence-weighted centre of the confident nose/eyes/ears is the head from the front,
+    the side or behind (ears). With none of them, two shoulders still place it: their midpoint
+    raised by ``head_above_shoulder_widths`` shoulder widths, measured in pixels (``aspect`` is the
+    stream's width/height, so a normalised width converts to a normalised height). Only without
+    a pose does it fall back to a fixed fraction of the box -- the guess this mode replaces.
+    """
+    min_score = cfg.min_keypoint_score
+    if cfg.use_pose_anchors and len(keypoints) >= _MIN_INDEXED_KEYPOINTS:
+        head = [keypoints[i] for i in COCO_HEAD if keypoints[i].score >= min_score]
+        if head:
+            weight = sum(k.score for k in head)
+            centre = PointNorm(sum(k.x * k.score for k in head) / weight,
+                               sum(k.y * k.score for k in head) / weight)
+            return _clamp_to_box(centre, bbox), AnchorSource.POSE_HEAD
+        left = _confident(keypoints, COCO_SHOULDER_LEFT, min_score)
+        right = _confident(keypoints, COCO_SHOULDER_RIGHT, min_score)
+        if left is not None and right is not None:
+            mid = _weighted_midpoint(left, right)
+            width_px = abs(left.x - right.x) * aspect      # in units of the stream height
+            centre = PointNorm(mid.x, mid.y - cfg.head_above_shoulder_widths * width_px)
+            return _clamp_to_box(centre, bbox), AnchorSource.POSE_HEAD_FROM_SHOULDERS
+    if not bbox.is_well_formed():
+        return bbox.center, AnchorSource.BBOX_CENTER_FALLBACK
+    anchor = bbox.anchor_at_height(cfg.head_box_fraction)
+    if not anchor.is_valid():
+        return bbox.center, AnchorSource.BBOX_CENTER_FALLBACK
+    return anchor, AnchorSource.BBOX_HEAD
+
+
 def compute_anchor(bbox: BBox, keypoints: Sequence[Keypoint],
-                   cfg: AnchorConfig) -> Tuple[PointNorm, AnchorSource]:
+                   cfg: AnchorConfig, aspect: float = 1.0) -> Tuple[PointNorm, AnchorSource]:
     """§12.1's priority order: shoulders → shoulder/hip midpoint → hips → box.
 
     Each step down is chosen only when the step above it has no confident evidence — not
@@ -87,6 +122,8 @@ def compute_anchor(bbox: BBox, keypoints: Sequence[Keypoint],
     other uses the weighted midpoint of what it has; a profile that places neither falls
     back to the box, and says so in ``anchor_source``.
     """
+    if getattr(cfg, "target", "torso") == "head":
+        return head_anchor(bbox, keypoints, cfg, aspect)
     if not cfg.use_pose_anchors or len(keypoints) < _MIN_INDEXED_KEYPOINTS:
         return box_anchor(bbox, cfg)
 

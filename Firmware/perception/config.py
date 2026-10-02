@@ -528,6 +528,13 @@ class DedupConfig:
 # Aim anchor (§35)
 # --------------------------------------------------------------------------
 
+def _anchor_target(value: Any) -> str:
+    target = "torso" if value is None else str(value).strip().lower()
+    if target not in ("torso", "head"):
+        raise ConfigError(f"anchor.target must be 'torso' or 'head', got {value!r}")
+    return target
+
+
 @dataclass
 class AnchorConfig:
     """§35. The aim anchor is deliberately not the identity box's centre."""
@@ -539,11 +546,22 @@ class AnchorConfig:
     #: §12.1's "use confidence-weighted keypoints": below this a keypoint does not
     #: contribute, and a pose profile with nothing above it falls back to the box anchor.
     min_keypoint_score: float = 0.30
+    #: What the anchor is: "torso" (§35, above) or "head" (owner, 2026-10-02: aim at the head as
+    #: measured by a pose profile -- nose/eyes/ears, else above the shoulder line -- instead of a
+    #: fraction of a box that changes with pose and clipping).
+    target: str = "torso"
+    #: Head mode, box fallback: the head centre this fraction of the box height below its top.
+    head_box_fraction: float = 0.12
+    #: Head mode, shoulders only: the head centre this many shoulder widths above the shoulder line.
+    head_above_shoulder_widths: float = 0.75
 
     def to_dict(self) -> Dict[str, Any]:
         return {"torso_fraction": self.torso_fraction,
                 "use_pose_anchors": self.use_pose_anchors,
-                "min_keypoint_score": self.min_keypoint_score}
+                "min_keypoint_score": self.min_keypoint_score,
+                "target": self.target,
+                "head_box_fraction": self.head_box_fraction,
+                "head_above_shoulder_widths": self.head_above_shoulder_widths}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "AnchorConfig":
@@ -553,7 +571,12 @@ class AnchorConfig:
             use_pose_anchors=_as_bool(data.get("use_pose_anchors"),
                                       "anchor.use_pose_anchors", True),
             min_keypoint_score=_as_float(data.get("min_keypoint_score"),
-                                         "anchor.min_keypoint_score", 0.30))
+                                         "anchor.min_keypoint_score", 0.30),
+            target=_anchor_target(data.get("target")),
+            head_box_fraction=_as_float(data.get("head_box_fraction"), "anchor.head_box_fraction", 0.12),
+            head_above_shoulder_widths=_as_float(data.get("head_above_shoulder_widths"),
+                                                 "anchor.head_above_shoulder_widths", 0.75))
+
 
     def validate(self) -> List[str]:
         problems: List[str] = []
@@ -600,6 +623,9 @@ class ModelConfig:
     camera_lores_width: int = 0
     camera_lores_height: int = 0
     thresholds: ScoreThresholds = field(default_factory=ScoreThresholds)
+    #: The profile's own aim anchor ("torso" | "head"); empty keeps the global ``anchor.target``.
+    #: A pose profile measures the head, a box-only profile can only guess it.
+    anchor_target: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {"model_id": self.model_id, "adapter": self.adapter, "path": self.path,
@@ -616,7 +642,8 @@ class ModelConfig:
                 "camera_orientation": self.camera_orientation,
                 "camera_lores_width": self.camera_lores_width,
                 "camera_lores_height": self.camera_lores_height,
-                "thresholds": self.thresholds.to_dict()}
+                "thresholds": self.thresholds.to_dict(),
+                "anchor_target": self.anchor_target}
 
     @classmethod
     def from_dict(cls, profile_name: str, data: Mapping[str, Any]) -> "ModelConfig":
@@ -655,7 +682,9 @@ class ModelConfig:
             camera_orientation=str(data.get("camera_orientation", "none")).strip().lower(),
                 camera_lores_width=_as_int(data.get("camera_lores_width", 0), "camera_lores_width", 0),
                 camera_lores_height=_as_int(data.get("camera_lores_height", 0), "camera_lores_height", 0),
-            thresholds=ScoreThresholds.from_dict(data.get("thresholds")))
+            thresholds=ScoreThresholds.from_dict(data.get("thresholds")),
+            anchor_target=("" if data.get("anchor_target") in (None, "")
+                           else _anchor_target(data.get("anchor_target"))))
 
     def validate(self) -> List[str]:
         problems: List[str] = []

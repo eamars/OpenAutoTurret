@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import time
 
+import dataclasses
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..config import ModelConfig, VisionConfig
@@ -200,7 +201,8 @@ class ModelAdapter:
 
     def _rows_to_set(self, rows: Sequence[Sequence[float]], *, frame_sequence: int,
                      sensor_timestamp_ns: int, publish_timestamp_ns: int,
-                     anchor_cfg: Any = None, geometry: Any = None) -> DetectionSet:
+                     anchor_cfg: Any = None, geometry: Any = None,
+                     keypoint_index: Optional[int] = None, keypoint_count: int = 0) -> DetectionSet:
         """The single normalization path (§14, §9.2's oracle compares exactly this output).
 
         It also owns the one timing the pipeline cannot measure itself: §40 asks for
@@ -216,7 +218,9 @@ class ModelAdapter:
             sensor_timestamp_ns=int(sensor_timestamp_ns),
             publish_timestamp_ns=int(publish_timestamp_ns),
             label_map=self.manifest.label_map(), score_index=score_index,
-            class_index=class_index, box_index=box_index, anchor_cfg=anchor_cfg)
+            class_index=class_index, box_index=box_index,
+            anchor_cfg=anchor_cfg if anchor_cfg is not None else getattr(self, "anchor_cfg", None),
+            keypoint_index=keypoint_index, keypoint_count=keypoint_count)
         # Counted on the way through because "no boxes on screen" has two opposite causes and the
         # operator cannot tell them apart from the picture: the model saw nothing, or the model saw
         # something that the label map / permitted classes dropped. Raw is every row the network
@@ -415,12 +419,22 @@ def build_adapter(config: VisionConfig, *, profile: Optional[str] = None,
     if kind in ("imx500", "imx500_yolo", "imx500_yolo_pp"):
         return Imx500YoloAdapter(manifest, roi=None, imx500_factory=imx500_factory,
                                  anchor_cfg=config.anchor)
+    anchor_cfg = config.anchor
+    if model.anchor_target:
+        anchor_cfg = dataclasses.replace(config.anchor, target=model.anchor_target)
     if kind in ("hailo", "hailo8"):
         from .hailo_yolo import HailoYoloAdapter
-        return HailoYoloAdapter(manifest)
+        adapter = HailoYoloAdapter(manifest)
+        adapter.anchor_cfg = anchor_cfg
+        return adapter
+    if kind == "hailo_pose":
+        from .hailo_pose import HailoYoloPoseAdapter
+        adapter = HailoYoloPoseAdapter(manifest)
+        adapter.anchor_cfg = anchor_cfg
+        return adapter
     raise ConfigError(
         f"unknown adapter {model.adapter!r} for profile {model.profile_name!r}. "
-        f"known: mock, imx500, hailo. A typo here must stop startup: an adapter chosen by "
+        f"known: mock, imx500, hailo, hailo_pose. A typo here must stop startup: an adapter chosen by "
         f"fallback would silently change what 'detection' means.")
 
 
