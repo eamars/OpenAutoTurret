@@ -184,6 +184,22 @@ TEST(ReferenceServo, StaleSegmentIsHeldNotExtrapolated) {
   EXPECT_LT(std::abs(plant.q()), 0.015);
 }
 
+TEST(ReferenceServo, PitchEngagesOnlyInsideItsEnvelope) {
+  // The station on 2026-10-02: the first reference after homing carried no envelope (0, 0) with
+  // the axis parked at -0.81 rad. That reference must be refused, not engaged into a guard trip.
+  MotorBackend::ServoReference r;
+  r.q = -0.8146;
+  EXPECT_FALSE(pitch_reference_has_envelope(r));
+  EXPECT_FALSE(pitch_servo_may_engage(r, -0.8146, 0.035));
+  r.q_min = -1.4236; r.q_max = -0.2032;   // the soft limits homing established that day
+  EXPECT_TRUE(pitch_servo_may_engage(r, -0.8146, 0.035));
+  EXPECT_TRUE(pitch_servo_may_engage(r, -1.4236 - 0.03, 0.035)) << "inside the guard band";
+  EXPECT_FALSE(pitch_servo_may_engage(r, -1.4236 - 0.04, 0.035)) << "beyond it: would only trip";
+  EXPECT_FALSE(pitch_servo_may_engage(r, -0.2032 + 0.04, 0.035));
+  r.q_max = std::nan("");
+  EXPECT_FALSE(pitch_reference_has_envelope(r));
+}
+
 TEST(ReferenceServo, FollowingErrorTrips) {
   MixedCanMotorBackend b;
   Plant plant;

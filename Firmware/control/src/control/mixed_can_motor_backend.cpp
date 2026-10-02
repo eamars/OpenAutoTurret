@@ -1089,9 +1089,13 @@ bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& 
   if (axis == AxisId::Pitch) {
     std::lock_guard lock(pitch_servo_mutex_);
     if (!pitch_servo_configured_ || pitch_servo_fault_.load() || !pitch_opened_.load()) return false;
+    // Refused, not engaged (see pitch_servo_may_engage); refusing while engaged hands the axis to
+    // the legacy path, whose command releases the servo.
+    if (!pitch_reference_has_envelope(r)) return false;
     if (!pitch_servo_active_.load()) {
       can::AxisLatest l;
       if (!pitch_system_.axis(AxisId::Pitch).latest(l) || !l.has_feedback || l.mode != 2) return false;
+      if (!pitch_servo_may_engage(r, l.q_rad, profile_.servo->pitch_guard_rad)) return false;
       pitch_loop_.reset();
       pitch_servo_last_step_ns_ = 0;
       pitch_hold_q_ = l.q_rad;

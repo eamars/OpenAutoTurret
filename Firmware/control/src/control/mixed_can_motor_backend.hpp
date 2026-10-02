@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -101,6 +102,18 @@ inline double apply_yaw_speed_ceiling(double requested_rad_s) {
   return requested_rad_s > kYawSpeedCeilingRadS ? kYawSpeedCeilingRadS
          : requested_rad_s < -kYawSpeedCeilingRadS ? -kYawSpeedCeilingRadS
                                                    : requested_rad_s;
+}
+
+// Pitch has end stops, so its servo takes a reference only with the soft envelope, and engages
+// only where its end-stop guard (envelope +- guard) already holds. Otherwise the reference is
+// refused and the legacy path keeps the axis this tick: on 2026-10-02 the first tick after
+// homing arrived before the limits were valid, the servo engaged at -0.81 rad against an empty
+// envelope ([-0.035, +0.035]) and the guard faulted the station.
+inline bool pitch_reference_has_envelope(const MotorBackend::ServoReference& r) {
+  return std::isfinite(r.q_min) && std::isfinite(r.q_max) && r.q_max > r.q_min;
+}
+inline bool pitch_servo_may_engage(const MotorBackend::ServoReference& r, double q_axis, double guard) {
+  return pitch_reference_has_envelope(r) && q_axis >= r.q_min - guard && q_axis <= r.q_max + guard;
 }
 
 class MixedCanMotorBackend final : public MotorBackend {
