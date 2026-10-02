@@ -8,7 +8,9 @@ health document, and every page (and every reload) draws its panes from it. Ever
 """
 from __future__ import annotations
 
+import os
 import threading
+import time
 from typing import Dict, Iterable, Tuple
 
 ROLES = ("wide", "detail")
@@ -21,6 +23,9 @@ class MainCamera:
         self._role = "wide"
         self._generation = 0
         self.last_refusal = ""
+        # Generations count within one visiond: a page that saw generation 4 before a restart must
+        # not ignore the new process's generation 0 as "older" (it did, at 06bd0e2).
+        self.boot = f"{os.getpid()}-{time.time_ns()}"
 
     def make_available(self, role: str) -> None:
         with self._lock:
@@ -58,5 +63,5 @@ class MainCamera:
 
     def snapshot(self) -> Dict[str, object]:
         with self._lock:
-            return {"role": self._role, "generation": self._generation,
+            return {"role": self._role, "generation": self._generation, "boot": self.boot,
                     "available": sorted(self._available), "last_refusal": self.last_refusal}

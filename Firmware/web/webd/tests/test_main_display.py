@@ -32,7 +32,7 @@ class PageRulesExecuted(unittest.TestCase):
             geo = os.path.join(box, "geo.js")
             with open(geo, "w", encoding="utf-8") as fh:
                 fh.write(HUD_GEOMETRY_JS + "\nmodule.exports = { hudPaneStep, hudMainView, "
-                         "hudProject, hudViewFov };\n")
+                         "hudProject, hudViewFov, hudAcceptMainView };\n")
             main = os.path.join(box, "main.js")
             with open(main, "w", encoding="utf-8") as fh:
                 fh.write("const T = require(%s);\nconsole.log(JSON.stringify(%s));\n"
@@ -70,6 +70,18 @@ class PageRulesExecuted(unittest.TestCase):
         stale = fresh.replace("fresh: true", "fresh: false")
         self.assertEqual(self._node("T.hudMainView(%s)" % stale)["main"], "wide",
                          "a stale report must not keep the picture zoomed in")
+
+    def test_a_report_older_than_the_answered_swap_is_ignored_within_one_visiond(self):
+        self.assertIsNone(self._node('T.hudAcceptMainView({boot: "a", generation: 4}, '
+                                     '{boot: "a", generation: 3})'))
+        self.assertEqual(self._node('T.hudAcceptMainView({boot: "a", generation: 4}, '
+                                    '{boot: "a", generation: 5})'), {"boot": "a", "generation": 5})
+
+    def test_a_restarted_visiond_is_followed_although_its_generation_starts_again(self):
+        # A page that saw generation 4 must not ignore the restarted daemon's generation 0 (wide on
+        # the main display) as "older" and keep showing detail.
+        self.assertEqual(self._node('T.hudAcceptMainView({boot: "a", generation: 4}, '
+                                    '{boot: "b", generation: 0})'), {"boot": "b", "generation": 0})
 
     def test_overlays_land_on_the_detail_picture_where_visiond_put_them(self):
         lay = "{ok: true, ox: 0, oy: 0, w: 1000, h: 500, k: 5.9}"

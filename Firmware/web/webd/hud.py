@@ -67,7 +67,20 @@ function hudMainView(t) {
   const available = (mc && Array.isArray(mc.available)) ? mc.available : ["wide"];
   return { main: main, pip: main === "wide" ? "detail" : "wide", k: k,
            canSwap: available.indexOf("detail") >= 0,
-           generation: (mc && typeof mc.generation === "number") ? mc.generation : undefined };
+           generation: (mc && typeof mc.generation === "number") ? mc.generation : undefined,
+           boot: (mc && mc.boot) || "" };
+}
+
+// Whether a published main-display report is news to this page. A swap's reply arrives before the
+// next health beat, so a report older than it must not flip the panes back for a second; but
+// generations count within one visiond, so a restarted one (new boot) is always accepted -- a page
+// that saw generation 4 used to ignore the new process's generation 0.
+function hudAcceptMainView(seen, view) {
+  const sameBoot = !view.boot || view.boot === seen.boot;
+  const generation = (typeof view.generation === "number") ? view.generation : null;
+  if (sameBoot && generation !== null && generation < seen.generation) return null;
+  return { boot: view.boot || seen.boot,
+           generation: generation !== null ? generation : (sameBoot ? seen.generation : -1) };
 }
 
 // The field of view of the picture on the main display: the wide camera's, or the detail window's
@@ -1437,12 +1450,11 @@ function paneErrored(pane) {
 
 // The station moved the main display (this page's swap, another page's, or a restart back to wide):
 // both panes change role, and both are started afresh rather than waiting for a poll.
-let paneGeneration = -1;
+let paneSeen = { boot: "", generation: -1 };
 window.otaPanesFollow = function (view) {
-  if (typeof view.generation === "number") {
-    if (view.generation < paneGeneration) return;   // an older report than the swap we saw answered
-    paneGeneration = view.generation;
-  }
+  const seen = hudAcceptMainView(paneSeen, view);
+  if (!seen) return;                 // an older report than the swap this page already saw answered
+  paneSeen = seen;
   if ($("pipswap")) $("pipswap").style.display = view.canSwap ? "" : "none";
   if (view.main === panes.main.role) return;
   panes.main.role = view.main;
@@ -1992,7 +2004,7 @@ HUD_HTML = """<!DOCTYPE html>
         }
         const mc = j.main_camera || {};
         window.otaPanesFollow({ main: mc.role, pip: mc.role === "wide" ? "detail" : "wide",
-                                canSwap: true, generation: mc.generation });
+                                canSwap: true, generation: mc.generation, boot: mc.boot });
       } catch (e) { el("pipfps").textContent = "refused: " + e; }
     };
     el("pipswap").addEventListener("click", window.otaSwapPip);
