@@ -1,7 +1,7 @@
 """ADR-003 3b on the station: acquire and hold a stationary object through production's own chain.
 
 Runs on the station beside the live stack and drives it only through the operator's web commands
-(set_mode, manual_step, select_target), so selection, modes, the reference chain, Level 1 and the
+(set_mode, manual_step, and perception's selection API), so selection, modes, the reference chain, Level 1 and the
 ADR-002.2 servos are production's own. Per trial: MANUAL; step the turret off the object with
 manual_step (5 deg steps); find the object again; select it; AUTO_TRACK; hold; back to MANUAL.
 State is recorded at RATE_HZ with the station's monotonic receive time, beside controld's per-tick
@@ -18,11 +18,12 @@ import argparse
 import json
 import math
 import os
+import subprocess
 import time
 import urllib.request
 
 PITCH_MARGIN = math.radians(5.0)
-SETTLE_SPEED = math.radians(0.3)      # rad/s: "stopped" for step completion
+STILL_BAND = 0.0016                   # rad: two GM6020 counts, "stopped" for step completion
 STEP_DEG = 5.0                        # manual_step's largest sanctioned size
 
 run_dir = f"/tmp/ota-stack-{os.getuid()}"
@@ -40,6 +41,35 @@ def command(name, arg=""):
     req = urllib.request.Request(BASE + "/api/command", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=2.0) as r:
         return json.loads(r.read())
+
+
+def select(s, track_uuid):
+    """Select by identity through perception's selection API, as the dashboard does (the numeric
+    select_target command is refused while perception owns the selection)."""
+    body = {"type": "select_target", "session_uuid": s["perception_session_uuid"], "track_uuid": track_uuid,
+            "track_set_sequence_seen_by_ui": int(s["perception_track_set_sequence"]),
+            "request_id": f"stationary-{time.monotonic_ns()}", "source": "stationary_trial"}
+    req = urllib.request.Request(BASE + "/api/selection", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=2.0) as r:
+        return json.loads(r.read())
+
+
+def viewers():
+    """Who is watching: the preview stream and the web clients connected right now. The owner
+    asked for the tracking cost of watching to be measured, so every trial records it."""
+    try:
+        with urllib.request.urlopen(BASE + "/api/video/state", timeout=1.0) as r:
+            v = json.loads(r.read())
+    except Exception:  # noqa: BLE001
+        v = {}
+    try:
+        out = subprocess.run(["ss", "-Htn", "state", "established", f"( sport = :{port} )"],
+                             capture_output=True, text=True, timeout=2).stdout
+        peers = sorted({line.split()[-1].rsplit(":", 1)[0] for line in out.splitlines() if line.strip()} - {"127.0.0.1"})
+    except Exception:  # noqa: BLE001
+        peers = None
+    return {"video_running": v.get("running"), "video_fps": v.get("delivered_fps"), "web_peers": peers}
 
 
 class Recorder:
@@ -79,25 +109,22 @@ def wait_for(pred, timeout, what):
     raise RuntimeError(f"timed out waiting for {what}")
 
 
-def settled(s):
-    v = [s.get("v_yaw_rad_s"), s.get("v_pitch_rad_s")]
-    return all(x is not None and abs(x) < SETTLE_SPEED for x in v)
-
-
-def wait_settled(timeout=15.0):
-    """Stopped for 0.5 s in a row."""
+def wait_settled(timeout=15.0, window=0.5):
+    """Both axes within STILL_BAND for `window` s. By position: the GM6020 reports speed in whole
+    rpm (6 deg/s), so a speed threshold below that can never be met."""
     end = time.monotonic() + timeout
-    calm_since = None
+    anchor, since = None, None
     while time.monotonic() < end:
         s = state()
         if s.get("fault"):
             raise RuntimeError(f"station fault: {s['fault']}")
-        if settled(s):
-            calm_since = calm_since or time.monotonic()
-            if time.monotonic() - calm_since >= 0.5:
-                return s
-        else:
-            calm_since = None
+        q = (s.get("q_yaw_rad"), s.get("q_pitch_rad"))
+        if None in q:
+            anchor = None
+        elif anchor is None or max(abs(a - b) for a, b in zip(q, anchor)) > STILL_BAND:
+            anchor, since = q, time.monotonic()
+        elif time.monotonic() - since >= window:
+            return s
         time.sleep(0.05)
     raise RuntimeError("axes did not settle")
 
@@ -187,9 +214,12 @@ def main():
         uuid = t["uuid"]
         rec.mark(event="select", trial=trial, uuid=uuid, display_index=t["display_index"],
                  anchor=[t["anchor_x"], t["anchor_y"]], q=[s["q_yaw_rad"], s["q_pitch_rad"]])
-        command("select_target", str(t["display_index"]))
+        ack = select(s, uuid)
+        if not ack.get("accepted"):
+            rec.mark(event="skip", trial=trial, reason="selection refused", ack=ack)
+            continue
         command("set_mode", "AUTO_TRACK")
-        rec.mark(event="track", trial=trial)
+        rec.mark(event="track", trial=trial, viewers=viewers())
         last = rec.record(args.hold, trial)
         rec.mark(event="end", trial=trial, fault=(last or {}).get("fault"))
         if last and last.get("fault"):
