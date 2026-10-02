@@ -5,12 +5,10 @@ Why this file exists instead of a loop inside ``_run_camera``: the station's pro
 only thing that should change is the role table. So the second sensor gets an owner of its own, a
 bounded latest-only buffer of its own, and a failure that stays its own.
 
-Inference is optional and it is now possible: when the role is configured with its own ``lores`` leg,
-the frame carries ``inference_image`` and the daemon may run a second pipeline on it (see
-``docs/ADR-001/DUAL_STREAM_DISPLAY_WORK_ORDER.md`` §H5). What is still deliberately *not* done here:
-this file does not own a second inference backend, a tracker, or a merge. It owns one sensor, one
-bounded latest-only buffer, and one preview — and a ``pipeline_factory`` is what lets the daemon
-decide what inference means, so a capture thread never grows a scheduler.
+When the role is configured with its own ``lores`` leg, each frame also carries ``inference_image``,
+which the daemon infers only while this camera is on the main display (owner, 2026-10-02; see
+``inference_switch.py``). This file does not own an inference backend, a tracker or a scheduler: it
+owns one sensor, one bounded latest-only buffer, and one preview.
 """
 from __future__ import annotations
 
@@ -127,7 +125,11 @@ class SecondaryCameraStream:
                 self._condition.wait(remaining)
                 if self._stop.is_set():
                     return None
-            return self._queue.pop()
+            # Newest wins and the rest go with it: popping only the newest left an OLDER frame
+            # for the next call, which would hand inference a frame from before the one it just ran.
+            frame = self._queue.pop()
+            self._queue.clear()
+            return frame
 
     def stop(self, join_s: float = 2.0) -> None:
         self._stop.set()

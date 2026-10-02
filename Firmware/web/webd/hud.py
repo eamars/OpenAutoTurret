@@ -46,7 +46,49 @@ function hudLayout(vw, vh, iw, ih) {
 // or a frame-exit warning, and clamping here would hide both.
 function hudProject(u, v, lay) {
   if (!lay || !lay.ok) return { ok: false, x: 0, y: 0 };
-  return { ok: true, x: lay.ox + u * lay.w, y: lay.oy + v * lay.h };
+  // Every published coordinate is in the wide camera's frame (perception/detection/view.py). With
+  // the detail camera on the main display, the picture is a centred window `k` times smaller, so
+  // the same point sits k times further from the centre of what the operator sees.
+  const k = (lay.k > 1) ? lay.k : 1;
+  const uu = 0.5 + (u - 0.5) * k, vv = 0.5 + (v - 0.5) * k;
+  return { ok: true, x: lay.ox + uu * lay.w, y: lay.oy + vv * lay.h };
+}
+
+// Which camera is on the main display, from the station rather than from this page: only that one
+// is inferred (owner, 2026-10-02), so every page and every reload must agree. An absent or stale
+// inference report means "assume wide" -- every boot starts there.
+function hudMainView(t) {
+  const inf = (t && typeof t.inference === "object" && t.inference) ? t.inference : null;
+  const mc = (inf && inf.present !== false && inf.fresh !== false && inf.main_camera &&
+              typeof inf.main_camera === "object") ? inf.main_camera : null;
+  const main = (mc && mc.role === "detail") ? "detail" : "wide";
+  const view = (mc && mc.views && mc.views.detail) || null;
+  const k = (main === "detail" && view && Number(view.scale) > 1) ? Number(view.scale) : 1;
+  const available = (mc && Array.isArray(mc.available)) ? mc.available : ["wide"];
+  return { main: main, pip: main === "wide" ? "detail" : "wide", k: k,
+           canSwap: available.indexOf("detail") >= 0,
+           generation: (mc && typeof mc.generation === "number") ? mc.generation : undefined };
+}
+
+// The field of view of the picture on the main display: the wide camera's, or the detail window's
+// (a centred window k times smaller in the image plane, so tan(half-angle) shrinks by k).
+function hudViewFov(fovDeg, k) {
+  if (!(fovDeg > 0) || !(k > 1)) return fovDeg;
+  return 2 * Math.atan(Math.tan(fovDeg * Math.PI / 360) / k) * 180 / Math.PI;
+}
+
+// One rule for both panes, so the PIP can never again recover differently from the main picture.
+// `pane` remembers the stream it was pointed at (`epoch`) and when it last tried; `state` is
+// /api/video/state for the pane's role. A stopped source is started; a source that restarted under
+// the pane (a redeploy restarts webd, and its new stream is not the one the old <img> was reading,
+// whether or not the browser ever fired an error) is re-pointed. Attempts are spaced, so a refusal
+// cannot become a request storm.
+function hudPaneStep(pane, state, nowMs) {
+  if (!state || typeof state !== "object") return "none";
+  const due = !(pane.lastAttemptMs > 0) || nowMs - pane.lastAttemptMs >= 1500;
+  if (state.running === false) return due ? "start" : "wait";
+  if (state.running === true && state.epoch && state.epoch !== pane.epoch) return "point";
+  return "none";
 }
 
 // Where the optical axis lands, in the same normalised units. This comes from the
@@ -979,6 +1021,9 @@ function render(t) {
   const vw = window.innerWidth, vh = window.innerHeight;
   const iw = video.naturalWidth || 0, ih = video.naturalHeight || 0;
   const lay = hudLayout(vw, vh, iw, ih);
+  const view = hudMainView(t);
+  lay.k = view.k;
+  if (window.otaPanesFollow) window.otaPanesFollow(view);
   svg.setAttribute("viewBox", "0 0 " + vw + " " + vh);
   svg.setAttribute("width", vw);
   svg.setAttribute("height", vh);
@@ -1104,7 +1149,8 @@ function render(t) {
     minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg,
     markDeg: (dEdge && dEdge.axis === "YAW")
       ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
-    valueDeg: deg(t.q_yaw_rad), windowDeg: t.effective_hfov_deg, valid: yawRange.valid
+    valueDeg: deg(t.q_yaw_rad), windowDeg: hudViewFov(t.effective_hfov_deg, view.k),
+    valid: yawRange.valid
   });
   const pitchLen = vh * 0.425;
   const pitchTape = hudTravelTape({
@@ -1113,7 +1159,7 @@ function render(t) {
     markDeg: (dEdge && dEdge.axis === "PITCH")
       ? (dEdge.side === "MIN" ? deg(hudPitch(t, t.q_soft_min_pitch_rad)) : deg(hudPitch(t, t.q_soft_max_pitch_rad)))
       : undefined,
-    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), windowDeg: t.effective_vfov_deg,
+    valueDeg: deg(hudPitch(t, t.q_pitch_rad)), windowDeg: hudViewFov(t.effective_vfov_deg, view.k),
     valid: t.soft_limits_valid === true
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
@@ -1134,7 +1180,8 @@ function render(t) {
                    Number.isFinite(t.tracking_aim_yaw_rad) && Number.isFinite(t.tracking_aim_pitch_rad);
     const gi = hudForInset({
       vw: vw, vh: vh, pts: forB.safe_envelope_points.map(p => [p[0], p[1] - deg(hudPitchCenter(t))]),
-      hfovDeg: t.effective_hfov_deg, vfovDeg: t.effective_vfov_deg,
+      hfovDeg: hudViewFov(t.effective_hfov_deg, view.k),
+      vfovDeg: hudViewFov(t.effective_vfov_deg, view.k),
       los: [deg(t.q_yaw_rad), deg(hudPitch(t, t.q_pitch_rad))],
       target: hasIntent ? [deg(t.intent_q_yaw_rad), deg(hudPitch(t, t.intent_q_pitch_rad))] : null,
       pred: hasAim ? [deg(t.tracking_aim_yaw_rad), deg(hudPitch(t, t.tracking_aim_pitch_rad))] : null
@@ -1318,27 +1365,95 @@ function notice(msg) {
   if (n) n.textContent = msg || "";
 }
 
-async function ensureVideo() {
+// The two camera panes. They differ in which role they show -- the station decides that, see
+// hudMainView -- and in where a refusal is written; they recover by exactly the same rule
+// (hudPaneStep). The PIP once had its own, weaker path: it re-requested a stream nobody had started,
+// so after every deploy it stayed frozen until the page was reloaded while the main picture healed.
+const panes = {
+  main: { el: "video", role: "wide", epoch: "", lastAttemptMs: 0, busy: false },
+  pip: { el: "pipimg", role: "detail", epoch: "", lastAttemptMs: 0, busy: false, wanted: true }
+};
+
+function paneSays(pane, ok, why) {
+  if (pane === panes.main) {
+    notice(ok ? "" : "VIDEO UNAVAILABLE: " + why + " - symbology below is live, the picture is not");
+  } else if ($("pipfps")) {
+    if (!ok) $("pipfps").textContent = "refused: " + why;
+  }
+}
+
+function pointPane(pane, epoch) {
+  pane.epoch = epoch || "";
+  const img = $(pane.el);
+  // A new URL every time: the browser never retries a failed or ended <img> on its own.
+  if (img) img.src = "/api/video?camera=" + pane.role + "&t=" + Date.now();
+  paneSays(pane, true, "");
+}
+
+async function startPane(pane) {
+  if (pane.busy) return false;
+  pane.busy = true;
+  pane.lastAttemptMs = Date.now();
   try {
-    const r = await fetch("/api/video/start", {
+    const r = await fetch("/api/video/start?camera=" + pane.role, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const j = await r.json();
     if (r.status >= 400 || j.ok === false || j.running === false) {
-      notice("VIDEO UNAVAILABLE: " + (j.error || ("HTTP " + r.status)) +
-             " - symbology below is live, the picture is not");
+      paneSays(pane, false, j.error || ("HTTP " + r.status));
       return false;
     }
-    notice("");
-    // The initial img request can precede video/start and receive 409. Starting
-    // the source does not cause the browser to retry that failed image request.
-    const video = $("video");
-    if (video) video.src = "/api/video?stream=" + Date.now();
+    pointPane(pane, j.epoch);
     return true;
   } catch (e) {
-    notice("VIDEO UNAVAILABLE: " + e);
+    paneSays(pane, false, String(e));
     return false;
+  } finally {
+    pane.busy = false;
   }
 }
+
+async function pollPanes() {
+  for (const pane of [panes.main, panes.pip]) {
+    if (pane.wanted === false) continue;
+    let s = null;
+    try { s = await (await fetch("/api/video/state?camera=" + pane.role)).json(); }
+    catch (e) { continue; }
+    const step = hudPaneStep(pane, s, Date.now());
+    if (step === "start") await startPane(pane);
+    else if (step === "point") pointPane(pane, s.epoch);
+    if (pane === panes.pip && $("pipfps") && step !== "start") {
+      // visiond's measured rate for the stream this pane shows; unmeasured reads "rate n/m".
+      $("pipfps").textContent = (typeof s.delivered_fps === "number")
+        ? (s.delivered_fps.toFixed(1) + " fps") : "rate n/m";
+    }
+  }
+}
+
+// An <img> error is how a stopped stream shows up: start it again (spaced by hudPaneStep, so a
+// source that keeps refusing is asked every 1.5 s rather than in a tight loop of 409s).
+function paneErrored(pane) {
+  if (hudPaneStep(pane, { running: false }, Date.now()) === "start") startPane(pane);
+}
+
+// The station moved the main display (this page's swap, another page's, or a restart back to wide):
+// both panes change role, and both are started afresh rather than waiting for a poll.
+let paneGeneration = -1;
+window.otaPanesFollow = function (view) {
+  if (typeof view.generation === "number") {
+    if (view.generation < paneGeneration) return;   // an older report than the swap we saw answered
+    paneGeneration = view.generation;
+  }
+  if ($("pipswap")) $("pipswap").style.display = view.canSwap ? "" : "none";
+  if (view.main === panes.main.role) return;
+  panes.main.role = view.main;
+  panes.pip.role = view.pip;
+  for (const pane of [panes.main, panes.pip]) {
+    pane.epoch = "";
+    pane.lastAttemptMs = 0;
+    if (pane.wanted !== false) startPane(pane);
+  }
+  if ($("piplabel")) $("piplabel").textContent = "PIP " + panes.pip.role;
+};
 
 // webd keeps serving the last snapshot it received after controld dies, which has already
 // fooled a test script and would equally fool an operator. §25 makes it a defect; until the
@@ -1353,11 +1468,9 @@ async function pollHealth() {
     // died. Absent (older webd, or no telemetry yet) stays null and simply does not vote.
     healthAgeMs = (typeof h.telemetry_age_ms === "number") ? h.telemetry_age_ms : null;
     if (lastTelemetry) render(lastTelemetry);
-    // Self-heal the preview: if the stream stopped (daemon bounce, or another owner took the
-    // camera and let go), ask again instead of letting a frozen frame keep looking like a live one.
-    const v = await (await fetch("/api/video/state")).json();
-    if (v.running === false) await ensureVideo();
-    if (window.otaPipTick) await window.otaPipTick();   // the PIP's own measured rate rides along
+    // Self-heal both panes: a stopped stream is started, a restarted one re-pointed, instead of
+    // letting a frozen frame keep looking like a live one.
+    await pollPanes();
   } catch (e) { transportOk = false; if (lastTelemetry) render(lastTelemetry); }
 }
 
@@ -1596,20 +1709,11 @@ renderDock();
 window.addEventListener("resize", () => { if (lastTelemetry) render(lastTelemetry); });
 document.addEventListener("DOMContentLoaded", () => {
   $("video").addEventListener("loadedmetadata", () => { if (lastTelemetry) render(lastTelemetry); });
-  // An <img> error is how a stopped stream shows up; re-ask rather than reload forever.
-  $("video").addEventListener("error", () => { ensureVideo(); });
-  {
-    // The same treatment for the secondary pane. A deploy restarts visiond, which ends the multipart
-    // response; a browser never retries a broken <img> on its own, so until now the HQ feed stayed
-    // dead until the operator reloaded the page -- while the main preview, which did have this
-    // handler, came back by itself. Keep whatever role the pane is showing; only re-ask.
-    const pipImg = $("pipimg");
-    if (pipImg) pipImg.addEventListener("error", () => {
-      const src = pipImg.getAttribute("src") || "/api/video?camera=detail";
-      pipImg.src = src.replace(/(&|\?)t=[^&]*/, "") + "&t=" + Date.now();
-    });
-  }
-  ensureVideo();
+  // An <img> error is how a stopped stream shows up; both panes answer it the same way.
+  $("video").addEventListener("error", () => { paneErrored(panes.main); });
+  if ($("pipimg")) $("pipimg").addEventListener("error", () => { paneErrored(panes.pip); });
+  startPane(panes.main);
+  startPane(panes.pip);
   connect();
   pollHealth();
   setInterval(pollHealth, 2000);
@@ -1815,11 +1919,10 @@ HUD_HTML = """<!DOCTYPE html>
 <div id="viewport">
   <!-- z=0 camera image. Whole frame always visible: the frame edge is a number the
        operator has to be able to read, so the video is contained, never cropped. -->
-  <img id="video" src="/api/video" alt="camera">
-  <!-- Pure-preview PIP (§ (b) dual streams). Default hidden, and hidden means *silent*: nothing
-       asks for /api/video?camera=detail until the operator opens it, so a station running one
-       stream pays nothing for the feature existing. Bottom-right because the telemetry rail, the
-       mode buttons and the target list all sit on the top/left edges of this pane. -->
+  <img id="video" alt="camera">
+  <!-- The PIP: the camera that is NOT on the main display, for display only (owner, 2026-10-02:
+       only the main display is inferred). Always open; which camera it shows is the station's
+       choice, published in the inference report, and the swap button asks the station. -->
   <style>
     /* Pinned: the same column as the mode block, below it, always open, never repositioned.
        88px clears the mode block's three lines at every window ratio tried so far -- the earlier
@@ -1856,51 +1959,44 @@ HUD_HTML = """<!DOCTYPE html>
   </div>
   <script>
   (function () {
-    var mainRole = "wide", pipRole = "detail";
     function el(id) { return document.getElementById(id); }
 
     // Rendered state, not a control: a station publishing one stream has no second tap to start, so
-    // the pane says so instead of showing a frozen frame or firing requests at a role nobody owns.
+    // the pane says so instead of showing a frozen frame or firing requests at a role nobody owns --
+    // and says so only while it is true: the stream coming back (visiond restarted) brings the pane
+    // back, where the old one-way latch kept it hidden until a reload.
     window.otaPipNoteStreams = function (streams) {
-      if (Array.isArray(streams) && streams.length < 2) {
-        el("piplabel").textContent = "NO SECOND STREAM";
-        el("pipfps").textContent = "";
-        el("pipimg").style.display = "none";
-      }
+      if (!Array.isArray(streams) || typeof panes === "undefined") return;
+      const two = streams.length >= 2;
+      if (two === panes.pip.wanted) return;
+      panes.pip.wanted = two;
+      el("pipimg").style.display = two ? "" : "none";
+      el("piplabel").textContent = two ? "PIP " + panes.pip.role : "NO SECOND STREAM";
+      el("pipfps").textContent = "";
+      if (two) { panes.pip.lastAttemptMs = 0; startPane(panes.pip); }
     };
 
-    // Swapping re-points the two <img>s and nothing else; sources stay up until asked to come down,
-    // so the measured rate keeps its own history across a swap.
-    window.otaSwapPip = function () {
-      var m = mainRole; mainRole = pipRole; pipRole = m;
-      el("video").src = "/api/video?camera=" + mainRole + "&t=" + Date.now();
-      el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
-      el("piplabel").textContent = "PIP " + pipRole;
+    // Swap asks the STATION to change the main display -- which is also the camera the Hailo sees
+    // (owner, 2026-10-02) -- and the panes follow the published answer (otaPanesFollow), so every
+    // open page shows the same thing and a reload does not undo it.
+    window.otaSwapPip = async function () {
+      el("pipfps").textContent = "swapping...";
+      try {
+        const r = await fetch("/api/camera/main", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: panes.pip.role }) });
+        const j = await r.json();
+        if (!j.accepted) {
+          el("pipfps").textContent = "refused: " + (j.detail || j.reason || "?");
+          return;
+        }
+        const mc = j.main_camera || {};
+        window.otaPanesFollow({ main: mc.role, pip: mc.role === "wide" ? "detail" : "wide",
+                                canSwap: true, generation: mc.generation });
+      } catch (e) { el("pipfps").textContent = "refused: " + e; }
     };
     el("pipswap").addEventListener("click", window.otaSwapPip);
-
-    // Open by default: the second tap is asked for as soon as the page loads.
-    fetch("/api/video/start?camera=" + pipRole, { method: "POST" })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        el("pipfps").textContent = j.ok ? "started" : ("refused: " + (j.error || "?"));
-        if (j.ok) {
-          el("pipimg").src = "/api/video?camera=" + pipRole + "&t=" + Date.now();
-          el("piplabel").textContent = "PIP " + pipRole + (j.camera_id ? " " + j.camera_id : "");
-        }
-      });
-
-    // The delivered rate is measured per stream by visiond and served per role by webd. The HUD
-    // already polls once a second to self-heal the preview, so this rides that poll rather than
-    // opening a second loop for one number. Unmeasured reads "rate n/m": zero is a measurement and
-    // this is not one.
-    window.otaPipTick = async function () {
-      try {
-        const v = await (await fetch("/api/video/state?camera=" + pipRole)).json();
-        el("pipfps").textContent = (typeof v.delivered_fps === "number")
-          ? (v.delivered_fps.toFixed(1) + " fps") : "rate n/m";
-      } catch (e) { /* the poll retries; a dead number is not worth a stack trace */ }
-    };
+    el("piplabel").textContent = "PIP detail";       // every boot starts with wide on the main display
   })();
   </script>
   

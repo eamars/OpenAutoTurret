@@ -27,6 +27,8 @@ class SelectionService:
         self.thread = None
         self.owner_lock = None
         self.inode = None
+        # perception.main_camera.MainCamera, when visiond owns two cameras.
+        self.main_camera = None
 
     def start(self):
         import fcntl  # local Linux IPC, like SOCK_SEQPACKET below
@@ -86,6 +88,12 @@ class SelectionService:
                     data = json.loads(raw)
                     if not isinstance(data, dict):
                         raise ValueError('selection request must be an object')
+                    if data.get('type') == 'set_main_camera':
+                        # Not a tracker decision, so it is not queued behind a frame: the swap must
+                        # work precisely when the current camera is producing nothing useful.
+                        reply = self._main_camera(data)
+                        client.sendall(json.dumps(reply, allow_nan=False).encode())
+                        continue
                     item = dict(data=data, expires=time.monotonic()+.6,
                                 lock=threading.Lock(), done=threading.Event(), reply=None)
                     self.pending.put_nowait(item)
@@ -101,6 +109,16 @@ class SelectionService:
                     client.sendall(json.dumps(reply, allow_nan=False).encode())
                 except OSError:
                     pass
+
+    def _main_camera(self, data):
+        if self.main_camera is None:
+            return {'accepted': False, 'reason': 'NO_CAMERA_SWITCH',
+                    'detail': 'this perception run has one camera'}
+        ok, detail = self.main_camera.request(data.get('role'))
+        reply = {'accepted': bool(ok), 'main_camera': self.main_camera.snapshot()}
+        if not ok:
+            reply.update(reason='CAMERA_REFUSED', detail=detail)
+        return reply
 
     def process(self, selector, track_set, now_ns):
         for _ in range(16):

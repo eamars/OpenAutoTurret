@@ -46,7 +46,7 @@ from .dashboard import dashboard_html
 from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
 from .video import VideoSource, mjpeg_frame
-from .selection_client import request_selection
+from .selection_client import request_main_camera, request_selection
 
 
 log = logging.getLogger("webd")
@@ -217,6 +217,15 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
                                         white_balance=config.video_white_balance)
         return sources[role]
 
+    # Names the stream a page is pointed at. A redeploy restarts webd, and the new process starts a
+    # source the old page's <img> was never connected to: comparing this, not waiting for an error
+    # event the browser may never fire, is how a pane knows it must re-point (the PIP used to stay
+    # frozen until the page was reloaded).
+    boot = f"{os.getpid()}-{time.time_ns()}"
+
+    def epoch_of(role: str) -> str:
+        return f"{boot}:{source_for(role).starts}"
+
     # One reader for the process: it keeps the byte offset it has already consumed, so a new
     # instance per request would re-read the whole trace every time the dashboard polls.
     imu_reader = ImuTraceReader(path=config.imu_trace or "/nonexistent/imu.ndjson",
@@ -359,6 +368,18 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         return await asyncio.to_thread(request_selection,
             os.environ.get('OTA_SELECTION_SOCKET', '/tmp/ota-selection.sock'), request)
 
+    @app.post("/api/camera/main")
+    async def camera_main(request: dict) -> dict:
+        """Put a camera on the main display -- which is also the one camera the Hailo sees.
+
+        A station state, not a page layout (owner, 2026-10-02: only the main display is inferred),
+        so visiond holds it and every page draws its panes from the published answer rather than
+        from what this request asked for.
+        """
+        return await asyncio.to_thread(
+            request_main_camera, os.environ.get('OTA_SELECTION_SOCKET', '/tmp/ota-selection.sock'),
+            str((request or {}).get("role", "")))
+
     @app.get("/api/payload_profiles")
     async def payload_profiles() -> dict:
         """The stored profile NAMES, for the dashboard's picker (§28.5).
@@ -416,7 +437,7 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         return {**source_for(role).state().to_dict(), "role": role,
                 "published": bool(entry), "published_reason": absent,
                 "delivered_fps": entry.get("delivered_fps"),
-                "camera_id": entry.get("camera_id")}
+                "camera_id": entry.get("camera_id"), "epoch": epoch_of(role)}
 
     @app.post("/api/video/start")
     async def video_start(camera: Optional[str] = None,
@@ -447,7 +468,8 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             str((entry or {}).get("path") or ""), role)
         return JSONResponse({"ok": st.running, "role": role,
                              "camera_id": (entry or {}).get("camera_id") or "",
-                             "manifest_fallback": legacy_fallback, **st.to_dict()})
+                             "manifest_fallback": legacy_fallback, "epoch": epoch_of(role),
+                             **st.to_dict()})
 
     @app.post("/api/video/stop")
     async def video_stop(camera: Optional[str] = None) -> JSONResponse:

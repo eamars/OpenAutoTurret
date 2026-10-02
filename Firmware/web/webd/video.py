@@ -98,6 +98,10 @@ class VideoSource:
         self._ts: float = 0.0
         self._count: int = 0
         self._running: bool = False
+        # Successful starts of this source. With webd's own boot id it names the stream a page is
+        # pointed at: when it changes, a page's <img> is reading a stream that no longer exists,
+        # whether or not the browser ever fired an error for it.
+        self.starts: int = 0
         self._camera = None
         self._thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
@@ -272,6 +276,7 @@ class VideoSource:
 
             self._camera = cam
             self._running = True
+            self.starts += 1
             model = ""
             try:
                 model = cam.camera_properties.get("Model", "")
@@ -339,6 +344,7 @@ class VideoSource:
                 self._state = VideoState(error=msg)
                 return self.state()
             self._running = True
+            self.starts += 1
             self._state = VideoState(
                 running=True, width=width, height=height, fps=float(fps),
                 quality=int(quality),
@@ -363,6 +369,9 @@ class VideoSource:
                 # serving a frozen frame forever, which is how a dead camera gets mistaken for an idle room.
                 if missing > 200:
                     self._open_error = f"vision frame tap vanished: {path}"
+                    # A source whose reader has gone must not keep answering "running": that is
+                    # what stops every page's self-heal from ever asking for it again.
+                    self._running = False
                     return
                 self._stop_evt.wait(0.05)
                 continue
@@ -389,6 +398,7 @@ class VideoSource:
                         jpeg = f.read()
                 except OSError as e:
                     self._open_error = f"vision frame tap unreadable: {e}"
+                    self._running = False
                     return
                 if jpeg:
                     now = time.monotonic()
