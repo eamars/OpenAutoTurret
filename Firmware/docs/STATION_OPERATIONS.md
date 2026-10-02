@@ -101,8 +101,8 @@ the station; historical ending-state records are not live status.
 
 ## ADR-002.2 unattended startup ruling (2026-10-01, local date)
 
-**Retired by the owner on 2026-10-02:** the centre of mass has been lowered and the turret is much
-more robust, so the 30 degrees/s² yaw acceleration/braking limit below no longer applies; yaw is
+**Retired by the owner on 2026-10-02:** a new tripod lowered the centre of mass (the station itself is unchanged)
+and the turret is much more robust, so the 30 degrees/s² yaw acceleration/braking limit below no longer applies; yaw is
 back to 60 degrees/s² (`config/turret_mixed.yaml`). Kept as history.
 
 Latest owner override: acceleration is guidance. Marginal exceedances and high IMU acceleration observations may pass and must not distract from ADR-002.2 tuning. Retain 30-degree/s² reference shaping and raw evidence, but disable the measured-current acceleration restriction for tuning when it blocks useful yaw drive. Keep true current, thermal, fresh-feedback and unsafe STOP protection. Higher-acceleration reference cases remain deferred until presence; incidental measured excursions do not block the present tuning path.
