@@ -136,7 +136,19 @@ def pitch_ladder(steps):
     return S + [(1.0, "hold", 0, "final")], begins
 
 
-SCRIPTS = {"survey": survey, "crosstalk": crosstalk_scan, "inertia": inertia_sweep, "circle": circle, "probe": probe,
+def speed_sweep():
+    """Full turns each way at rising speed with the commissioned servo: where it stays quiet at the
+    speeds production tracking asks for (2026-10-02: a 15 Hz limit cycle at ~1 rad/s turning positive
+    through motor angles 85-101 deg, twice, which the identified model does not reproduce).
+    Run with --opts '{"vmax": 70}': the session reference is otherwise capped at 20 deg/s."""
+    S = [(2.0, "hold", 0, "hold")]
+    for s in (20, 30, 40, 50, 60):
+        d = 360.0 / s + 1.0
+        S += [(d, "ramp", s * DEG, f"turn+{s}"), (1.5, "hold", 0, "h"), (d, "ramp", -s * DEG, f"turn-{s}"), (1.5, "hold", 0, "h")]
+    return S
+
+
+SCRIPTS = {"survey": survey, "speed_sweep": speed_sweep, "crosstalk": crosstalk_scan, "inertia": inertia_sweep, "circle": circle, "probe": probe,
            "usecase": usecase.script, "pitch_usecase": pitch_usecase, "pitch_identify": pitch_identify,
            "hold": lambda: [(24.0, "hold", 0, "hold")]}
 
