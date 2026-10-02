@@ -14,6 +14,69 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
 
+## Fault, hold, degrade: when the station may stop itself (owner ruling, 2026-10-02)
+
+**Read this before adding, keeping or tuning any guard, trip, watchdog or threshold.** It came from
+two field faults on 2026-10-02 (18:33 and 19:10): the yaw servo's oscillation guard tripped 50 ms
+into a limit cycle that the owner, standing in front of the turret, could not see; the station
+faulted and de-energised yaw while it was tracking him well.
+
+The turret is an **industrial device**. It is deployed outdoors and indoors, in dust and rain, on a
+cross-roller yaw bearing whose friction can change anywhere and at any time, under loads that are
+not balanced. It is not a laboratory instrument, and a guard that trips without margin is a defect.
+
+**De-energising is itself a hazard.** With an unbalanced load, a released axis falls or swings
+free. "Fault → power off" is the dangerous direction, not the safe one.
+
+### The three responses
+
+| Response | When | What the motors do | How it ends |
+|---|---|---|---|
+| **FAULT** | Only for a **safety hazard**: harm to people, the machine or its surroundings if motion continued. | A controlled stop, then **hold position, energised**. An axis is released only when it cannot be held: its drive has itself faulted, or there is no way left to command it. | An operator recovers it. |
+| **HOLD** | A **persistent** failure that is not a hazard. Examples: video lost for good, a servo still oscillating or stalled after its persistence time, repeated control-deadline misses. | Stop the motion (braked, as the supervisor's HOLD already does) and hold position, energised. | **By itself**, once the cause has cleared. |
+| **DEGRADE** | A **transient**: a brief limit cycle, a short stall and its rock, a friction excursion, a single deadline overrun, a short frame gap. | Keep operating; log it with numbers and count it. | It clears itself; nothing to recover. |
+
+### Rules for every guard
+
+1. **Classify first.** Before writing a trip, say which row it belongs to and why. "Something
+   unusual" is not a hazard.
+2. **Margin and time.** A threshold sits above the worst *normal* operating value measured on the
+   station, not at a commissioning-session limit. It also has a persistence time scaled to the harm:
+   - Immediate (milliseconds) only where milliseconds matter, such as a runaway above the 100 RPM
+     cap, or the end-stop guard on pitch.
+   - Performance conditions, such as a stall or oscillation, are failures only after they persist,
+     about **5 s**, the owner's own figure. Below that they are DEGRADE.
+3. **Prefer holding to releasing.** A drive that can hold on its own encoder is told to hold speed
+   zero, for example a CyberGear in speed mode. A dead-man that fires because *this host* stalled
+   must leave the axes held by their drives, not released.
+4. **Robustness is designed in, not re-commissioned in.** Friction drift (±35 % within an hour was
+   measured on yaw) is a normal operating condition. A loop that only behaves at this morning's
+   friction is not finished. Re-commissioning is not the answer to environmental change.
+5. **Commissioning sessions are different.** A bounded commissiond session, run by the tool with
+   nobody relying on the turret, may hard-abort quickly, because its job is to find limits. Those
+   abort thresholds must not be copied into production.
+
+### The guards in production, against this rule (2026-10-02)
+
+The first three rows were changed on 2026-10-02, with tests. The rows marked **open** still violate
+the rule and are the next work. Do not cite them as precedent.
+
+| Guard | Where | Was | Now |
+|---|---|---|---|
+| Yaw servo oscillation (fast current RMS > 0.3 A) | `MixedCanMotorBackend` | FAULT after 50 ms, yaw de-energised | DEGRADE: logged per episode, with its peak. After 5 s continuously, HOLD until 1 s quiet (`EpisodeLatch`). |
+| Yaw servo stall (stall recovery still rocking) | same | — | Rocking itself is DEGRADE. Still stuck after 5 s, HOLD until it clears. |
+| Watchdog fault, pitch | `ControlLoop` (watchdog handling) | pitch de-energised for any pitch fault | Released only if the drive itself reports a fault (`fault_releases_axis`). Otherwise the Fault phase brakes and holds it. |
+| CyberGear dead-man (host heartbeat > 100 ms, feedback > 100 ms, > 75 °C) | `CyberGearSystem` watchdog | STOP (release) to both drives every 5 ms | `SpdRef = 0` to an enabled, healthy drive, which holds on its own encoder. STOP only to a faulted or not-enabled drive. Owner to confirm the > 75 °C case: holding heats the motor, but releasing drops the load. |
+| Yaw feedback older than 20 ms (`feedback_unsafe`) | yaw servo | FAULT at once | **open:** no time margin. Should brake and hold, and fault only past the supervisor's 100 ms. |
+| Yaw transmit failures for 20 ms | yaw | FAULT | **open:** same. |
+| One rejected encoder sample (`servo_encoder_rejected`) | yaw servo | FAULT | **open:** one sample is a transient. |
+| Following error > 15° (yaw), and the pitch following error | both servos | FAULT | **open:** usually an obstruction. Stop pushing (hold where it is), HOLD, and fault only if it persists. |
+| Pitch servo feedback stale > 20 ms | pitch servo | pitch servo fault | **open:** no time margin. Since 2026-10-02 the drive at least stays held. |
+| Faults during homing, mode transitions and recovery (`deenergize_all()`) | `ControlLoop` | release both axes | **open:** pitch must be held, not released. |
+| Operator stop and shutdown | launcher → `controld` | pitch STOP at the end | **open, owner decision:** park first so the release is safe, or hold. |
+| Motor over-temperature (supervisor), drive-reported fault | supervisor | FaultStop / Disable | Consistent: a hazard, and a faulted drive is not holding anyway. |
+| 100 RPM speed cap, pitch end-stop guard | servos | FAULT | Consistent: hazards, immediate. The pitch drive is now held at speed zero, not released. |
+
 ## ADR-003 camera tracking: ownership and the accuracy ruling (2026-10-02, local date)
 
 - **Ownership.** The owner handed ADR-003 to the agent, with the architect's package as guidance.

@@ -132,10 +132,13 @@ class WatchdogSimBackend final : public sim::SimMotorBackend {
   bool watchdog_fault_axis(AxisId axis) const override {
     return global_trip_ || axis_tripped_[static_cast<std::size_t>(axis)];
   }
+  bool fault_releases_axis(AxisId axis) const override { return !holds_[static_cast<std::size_t>(axis)]; }
+  void holds_on_fault(AxisId axis) { holds_[static_cast<std::size_t>(axis)] = true; }
 
  private:
   bool global_trip_ = false;
   bool axis_tripped_[kAxisCount] = {};
+  bool holds_[kAxisCount] = {};
 };
 
 std::unique_ptr<WatchdogSimBackend> powered_backend() {
@@ -161,6 +164,22 @@ TEST(Adr002WatchdogRecovery, YawOnlyTripLeavesHealthyPitchEnergized) {
             std::string::npos);
   EXPECT_FALSE(sim->in_position_mode(AxisId::Yaw));
   EXPECT_TRUE(sim->in_position_mode(AxisId::Pitch));
+}
+
+// Owner ruling 2026-10-02: releasing an unbalanced axis lets it fall. A fault releases only an axis
+// that cannot be held; the pitch drive holds on its own encoder unless it has itself faulted.
+TEST(Adr002WatchdogRecovery, AFaultLeavesAnAxisThatCanStillBeHeldEnergized) {
+  auto backend = powered_backend();
+  auto* sim = backend.get();
+  sim->holds_on_fault(AxisId::Pitch);
+  sim->trip_global();
+  ControlLoop loop({}, std::move(backend));
+
+  loop.step(5'000'000, 5'000'000);
+
+  EXPECT_EQ(loop.phase(), Phase::Fault);
+  EXPECT_FALSE(sim->in_position_mode(AxisId::Yaw));
+  EXPECT_TRUE(sim->in_position_mode(AxisId::Pitch)) << "pitch was released and would fall";
 }
 
 TEST(Adr002WatchdogRecovery, GlobalTripDeenergizesBothAxes) {

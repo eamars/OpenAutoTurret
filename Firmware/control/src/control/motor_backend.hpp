@@ -115,6 +115,13 @@ class MotorBackend {
   virtual bool watchdog_fault() const { return false; }
   // Independent links can inhibit one axis without releasing a healthy load.
   virtual bool watchdog_fault_axis(AxisId) const { return watchdog_fault(); }
+  // Owner ruling 2026-10-02 (STATION_OPERATIONS.md, "Fault, hold, degrade"): a watchdog fault
+  // de-energises an axis only when holding it is impossible -- for a drive that holds on its own
+  // encoder, only when the drive itself has faulted. Releasing an unbalanced axis lets it fall.
+  virtual bool fault_releases_axis(AxisId) const { return true; }
+  // A persistent, non-hazardous servo condition (oscillation or stall that has not cleared within
+  // its persistence time): the supervisor HOLDs, energised, until it clears. nullptr: none.
+  virtual const char* servo_hold_reason() const { return nullptr; }
   // The reason a guard latched, captured by the guard itself at trip time. Fixed-size
   // POD because the thread describing a fault must not allocate to do it; detail is
   // truncated rather than grown. `condition` is the machine-readable token the fault

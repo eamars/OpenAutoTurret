@@ -13,6 +13,7 @@
 #include "can/gm6020_rx_velocity.hpp"
 #include "can/socketcan_bus.hpp"
 #include "config/mixed_hardware_profile.hpp"
+#include "control/episode_latch.hpp"
 #include "control/can_motor_backend.hpp"
 #include "position_loop.hpp"
 #include "servo.hpp"
@@ -155,6 +156,11 @@ class MixedCanMotorBackend final : public MotorBackend {
   }
   void heartbeat() override;
   bool watchdog_fault() const override;
+  const char* servo_hold_reason() const override {
+    if (const char* r = yaw_osc_hold_.load()) return r;
+    return yaw_stall_hold_.load();
+  }
+  bool fault_releases_axis(AxisId axis) const override;
   bool watchdog_fault_axis(AxisId axis) const override {
     return axis == AxisId::Yaw ? yaw_trip_.load() :
         (pitch_servo_fault_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault()));
@@ -241,6 +247,14 @@ class MixedCanMotorBackend final : public MotorBackend {
   axis::Servo yaw_servo_;
   axis::ServoOutput yaw_servo_out_{};
   axis::OscillationMonitor yaw_oscillation_;
+  // Owner ruling 2026-10-02: oscillation and stall rocking are transients that clear by themselves;
+  // only an episode that persists kServoFailurePersistNs is a failure, and that HOLDs (energised),
+  // it does not fault. An episode ends after kServoQuietNs below 70% of the limit / without a rock.
+  static constexpr TimeNs kServoFailurePersistNs = 5'000'000'000, kServoQuietNs = 1'000'000'000;
+  control::EpisodeLatch yaw_osc_episode_, yaw_stall_episode_;
+  double yaw_osc_peak_a_ = 0;
+  std::atomic<const char*> yaw_osc_hold_{nullptr}, yaw_stall_hold_{nullptr};
+  void track_yaw_servo_episodes_locked(TimeNs now, bool rock_settling);
   ServoReference yaw_reference_{};
   double yaw_servo_offset_rad_ = 0;   // absolute GM6020 angle minus the session yaw
   double yaw_servo_hold_q_ = 0;       // last evaluated reference (held when a segment goes stale)

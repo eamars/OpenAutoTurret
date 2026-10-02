@@ -22,6 +22,14 @@ cards. Dated as-built reports are historical.
   checkout it is standing in), so read
   [the deploy card](Firmware/docs/operations/deploy.md) before deploying from a machine you did not
   build the last release on, and read `Firmware/tools/doc_tree_check.py`'s rules if you add a card.
+- **Fault vs hold (owner ruling 2026-10-02):** before adding or tuning any guard, trip or watchdog,
+  read "Fault, hold, degrade" at the top of
+  [`Firmware/docs/STATION_OPERATIONS.md`](Firmware/docs/STATION_OPERATIONS.md):
+  - FAULT only for safety hazards, and even then hold the axes energised. De-energising an
+    unbalanced load is dangerous.
+  - Persistent non-hazards HOLD and recover by themselves.
+  - Transients only degrade.
+  - Every threshold needs margin and a persistence time.
 - Stop through the launcher; do not use broad process kills, bypass homing,
   overwrite retained calibration, or run legacy controller/camera services beside it.
 - Python dependencies belong in project-local virtual environments. Never put

@@ -1,6 +1,7 @@
 // Unit tests for the per-cycle safety supervisor (architecture §38 / §39).
 #include <gtest/gtest.h>
 
+#include "control/episode_latch.hpp"
 #include "control/safety_supervisor.hpp"
 
 namespace {
@@ -143,3 +144,45 @@ TEST(SafetySupervisor, StaleTakesPriorityOverTrackingGate) {
   in.axes[0].feedback_age_ms = 999;  // but stale -> Brake (more urgent)
   EXPECT_EQ(sup.evaluate(in).action, SafetyAction::Brake);
 }
+
+// Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a persistent servo
+// condition HOLDs; it never faults or disables, and the hazards still outrank it.
+TEST(SafetySupervisorRuling, APersistentServoConditionHoldsAndNeverFaults) {
+  SafetySupervisor sup;
+  auto in = nominal();
+  in.servo_hold_reason = "yaw servo oscillating for 5 s";
+  const auto d = sup.evaluate(in);
+  EXPECT_EQ(d.action, SafetyAction::Hold);
+  EXPECT_EQ(d.reason, "yaw servo oscillating for 5 s");
+  in.axes[0].has_feedback = false;                       // a hazard outranks it
+  EXPECT_EQ(sup.evaluate(in).action, SafetyAction::Brake);
+}
+
+TEST(EpisodeLatch, ATransientNeverPersistsAndAPersistentConditionDoesUntilItClears) {
+  using ota::control::EpisodeLatch;
+  using E = EpisodeLatch::Event;
+  constexpr int64_t ms = 1'000'000, persist = 5000 * ms, clear = 1000 * ms;
+  EpisodeLatch l;
+  // A 50 ms excursion (what used to fault the station), repeated every 2 s: never a failure.
+  int64_t t = 0;
+  for (int k = 0; k < 10; ++k)
+    for (int i = 0; i < 400; ++i, t += 5 * ms)
+      EXPECT_NE(l.update(t, i < 10, i >= 10, persist, clear), E::Persisted) << k << " " << i;
+  EXPECT_FALSE(l.persisted());
+  // Hovering around the limit (present, then neither present nor clearly absent) does not end it.
+  EpisodeLatch h;
+  EXPECT_EQ(h.update(0, true, false, persist, clear), E::Started);
+  for (int64_t u = 5 * ms; u < 4900 * ms; u += 5 * ms) h.update(u, (u / ms) % 200 < 20, false, persist, clear);
+  EXPECT_EQ(h.update(5000 * ms, false, false, persist, clear), E::Persisted);
+  EXPECT_TRUE(h.persisted());
+  // It clears only after a full second clearly absent.
+  EXPECT_EQ(h.update(5100 * ms, false, true, persist, clear), E::None);
+  EXPECT_EQ(h.update(6050 * ms, false, true, persist, clear), E::None);
+  EXPECT_EQ(h.update(6070 * ms, false, false, persist, clear), E::None);   // rises again: restart
+  EXPECT_EQ(h.update(6100 * ms, false, true, persist, clear), E::None);
+  EXPECT_EQ(h.update(7099 * ms, false, true, persist, clear), E::None);
+  EXPECT_EQ(h.update(7100 * ms, false, true, persist, clear), E::Cleared);
+  EXPECT_FALSE(h.persisted());
+  EXPECT_FALSE(h.active());
+}
+

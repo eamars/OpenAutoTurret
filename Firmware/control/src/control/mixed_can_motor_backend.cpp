@@ -1068,6 +1068,9 @@ void MixedCanMotorBackend::release_yaw_servo_locked() {
   // The legacy loop takes over from where the axis is, at rest in its own terms.
   yaw_velocity_loop_.reset(yaw_state_.position_rad, now_monotonic_ns());
   yaw_shaped_speed_rad_s_ = 0;
+  // Its episodes end with it: nothing would update them, and a latched HOLD would never clear.
+  yaw_osc_episode_ = {}; yaw_stall_episode_ = {};
+  yaw_osc_hold_.store(nullptr); yaw_stall_hold_.store(nullptr);
   spdlog::info("yaw servo released at q={:+.5f} rad (stale segments while engaged: {})",
                yaw_state_.position_rad, yaw_servo_stale_);
 }
@@ -1131,6 +1134,54 @@ bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& 
   return true;
 }
 
+void MixedCanMotorBackend::track_yaw_servo_episodes_locked(TimeNs now, bool rock_settling) {
+  using E = control::EpisodeLatch::Event;
+  const double limit = profile_.servo ? profile_.servo->oscillation_limit_a : 0.0;
+  const double rms = yaw_oscillation_.rms();
+  const unsigned persist_s = kServoFailurePersistNs / 1'000'000'000;
+  switch (yaw_osc_episode_.update(now, limit > 0 && rms > limit, rms < 0.7 * limit, kServoFailurePersistNs, kServoQuietNs)) {
+    case E::Started:
+      yaw_osc_peak_a_ = rms;
+      spdlog::warn("yaw servo oscillating: fast current RMS {:.3f} A > {:.3f} A (tolerated; HOLD if it lasts {} s)",
+                   rms, limit, persist_s);
+      break;
+    case E::Persisted:
+      spdlog::error("yaw servo oscillating for {} s (peak fast current RMS {:.3f} A): HOLD until it clears",
+                    persist_s, yaw_osc_peak_a_);
+      yaw_osc_hold_.store("yaw servo oscillating for 5 s");
+      break;
+    case E::Cleared:
+      spdlog::info("yaw servo oscillation cleared after {:.2f} s (peak fast current RMS {:.3f} A)",
+                   yaw_osc_episode_.last_duration_ns() * 1e-9, yaw_osc_peak_a_);
+      yaw_osc_hold_.store(nullptr);
+      break;
+    case E::None: break;
+  }
+  if (yaw_osc_episode_.active()) yaw_osc_peak_a_ = std::max(yaw_osc_peak_a_, rms);
+  // Stuck: the stall recovery keeps rocking without freeing the axis.
+  switch (yaw_stall_episode_.update(now, rock_settling, !rock_settling, kServoFailurePersistNs, kServoQuietNs)) {
+    case E::Persisted:
+      spdlog::error("yaw servo stalled for {} s (stall recovery has not freed it): HOLD until it clears", persist_s);
+      yaw_stall_hold_.store("yaw servo stalled for 5 s");
+      break;
+    case E::Cleared:
+      if (yaw_stall_hold_.load()) spdlog::info("yaw servo stall cleared");
+      yaw_stall_hold_.store(nullptr);
+      break;
+    default: break;
+  }
+}
+
+// Pitch is unbalanced and the CyberGear holds on its own encoder: only a drive that has faulted
+// (and so already stopped holding) is released. Yaw's GM6020 runs on host current, so a tripped
+// yaw has no holding loop left and its zero current is the release.
+bool MixedCanMotorBackend::fault_releases_axis(AxisId axis) const {
+  if (axis == AxisId::Yaw) return true;
+  if (!pitch_opened_.load()) return true;
+  can::AxisLatest l;
+  return pitch_system_.axis(AxisId::Pitch).latest(l) && l.has_feedback && l.faults != 0;
+}
+
 // Called with yaw_mutex_ held, on every GM6020 frame while the servo is engaged: the
 // commissiond session's order (observe the encoder, step, transmit, acknowledge) with the
 // production guards in front of it and the commissioning trips behind it.
@@ -1171,12 +1222,12 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   }
   if (out.rocking) yaw_servo_last_rock_ns_ = now;
   const bool rock_settling = yaw_servo_last_rock_ns_ && now - yaw_servo_last_rock_ns_ < 200'000'000;
-  if (yaw_oscillation_.update(yaw_servo_last_step_ns_ ? (now - yaw_servo_last_step_ns_) * 1e-9 : 0.0, out.limited,
-                              rock_settling)) {
-    spdlog::error("yaw servo oscillation guard: fast current RMS {:.3f} A", yaw_oscillation_.rms());
-    trip_yaw_locked("servo_oscillation");
-    return;
-  }
+  // Station, 2026-10-02 18:33 and 19:10: this guard tripped the station (fault, yaw de-energised)
+  // 50 ms into a limit cycle the owner could not even see. Not a hazard: tolerated, reported, and a
+  // HOLD only if it persists (track_yaw_servo_episodes_locked).
+  yaw_oscillation_.update(yaw_servo_last_step_ns_ ? (now - yaw_servo_last_step_ns_) * 1e-9 : 0.0, out.limited,
+                          rock_settling);
+  track_yaw_servo_episodes_locked(now, rock_settling);
   yaw_servo_last_step_ns_ = now;
   yaw_output_reason_ = 1;
   const bool sent = send_yaw_output_locked(

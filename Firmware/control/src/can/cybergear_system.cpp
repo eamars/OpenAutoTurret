@@ -238,14 +238,22 @@ void CyberGearSystem::start_watchdog() {
         first_trip = !motion_inhibited_.exchange(true);
       }
       if (motion_inhibited_.load()) {
+        // Owner ruling 2026-10-02 (STATION_OPERATIONS.md, "Fault, hold, degrade"): the pitch load is
+        // unbalanced, and a STOP releases it -- it falls. An enabled drive that has not faulted is
+        // told to hold speed zero on its own encoder, which needs nothing from this host; only a
+        // faulted or not-enabled drive (already not holding) gets the STOP. A speed reference is
+        // ignored by a drive in position mode, which keeps holding its target.
         for (auto a : {AxisId::Pitch, AxisId::Yaw}) {
-          const auto f = cybergear::make_stop(cfg_.host_can_id, motor_id(a));
+          const auto& s = observed[static_cast<int>(a)];
+          const bool holds = s.has_feedback && s.mode == 2 && !s.faults;
+          const auto f = holds ? cybergear::make_write_reg_float(cybergear::Reg::SpdRef, 0.0f, cfg_.host_can_id, motor_id(a))
+                               : cybergear::make_stop(cfg_.host_can_id, motor_id(a));
           if (bus_) bus_->send(f.id, f.data, nullptr);
         }
       }
       command_lock.unlock();
       if (first_trip) {
-        // Record the evidence after issuing both stops. A generic fault label
+        // Record the evidence after issuing the holds/stops. A generic fault label
         // cannot distinguish a stalled host from lost feedback or a drive fault.
         for (int i = 0; i < 2; ++i) {
           const auto& s = observed[i];

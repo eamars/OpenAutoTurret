@@ -856,8 +856,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
   backend_->poll_pitch_register_diagnostics(now_ns);
   if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
+    // Release only an axis that cannot be held (owner ruling 2026-10-02): the Fault phase brakes and
+    // holds every other one, energised. An unbalanced pitch that is released falls.
     for (auto axis : {AxisId::Pitch, AxisId::Yaw})
-      if (backend_->watchdog_fault_axis(axis)) backend_->deenergize(axis);
+      if (backend_->watchdog_fault_axis(axis) && backend_->fault_releases_axis(axis)) backend_->deenergize(axis);
     if (phase_ != Phase::Fault) {
       // The trip reason is published by the guard that latched it, when there is
       // one. "control deadline, feedback, or motor health" is a family of ten
@@ -1430,6 +1432,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   in.cycle_overrun_us = overrun_us;
   in.deadline_miss_count = deadline_miss_count_;
   in.allow_unknown_motor_health = cfg_.allow_unknown_motor_health;
+  in.servo_hold_reason = backend_->servo_hold_reason();
 
   // 4. Safety decision (authoritative).
   last_decision_ = supervisor_.evaluate(in);
