@@ -1,0 +1,15 @@
+{
+  "epoch": 1,
+  "imu_generation": 2,
+  "calibration_id": "SYNTHETIC-CAL",
+  "time_map_id": "SYNTHETIC-TIME",
+  "estimate_ns": 1000000000,
+  "sample_ns": 2000000000,
+  "published_ns": 2001000000,
+  "valid": false,
+  "reason": "GRAVITY_INVALID",
+  "up_B": null,
+  "gravity_sigma_rad": null,
+  "mounting_class": "UNKNOWN",
+  "tilt_rad": null
+}

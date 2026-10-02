@@ -1,0 +1,19 @@
+{
+  "epoch": 1,
+  "imu_generation": 2,
+  "calibration_id": "SYNTHETIC-CAL",
+  "time_map_id": "SYNTHETIC-TIME",
+  "estimate_ns": 1000000000,
+  "sample_ns": 2000000000,
+  "published_ns": 2001000000,
+  "valid": true,
+  "reason": null,
+  "up_B": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "gravity_sigma_rad": 0.001,
+  "mounting_class": "UPRIGHT",
+  "tilt_rad": 0.0
+}

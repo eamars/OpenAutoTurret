@@ -1,0 +1,62 @@
+{
+  "schema_version": "ADR-004.params/1",
+  "status": "DESIGN_TEMPLATE_NOT_QUALIFIED",
+  "date": "2026-10-02",
+  "base_commit": null,
+  "defaults_are": "architectural requirements, not measured capabilities or hardware authorization",
+  "design": {
+    "reference_frame": "GRAVITY_LEVEL",
+    "elevation_rad": 0.0,
+    "extra_clearance_rad": 0.03490658503988659,
+    "gravity_static_window_s": 2.0,
+    "gravity_min_unique_samples": 50,
+    "gravity_update_max_iterations": 20,
+    "orientation_boundary_rad": 0.08726646259971647,
+    "orientation_hysteresis_rad": 0.03490658503988659,
+    "base_move_dwell_s": 0.5,
+    "cue_stale_after_ms": 200,
+    "cue_time_basis": "CONTROL_POSE",
+    "vertical_cue_exclusion_rad": 0.03490658503988659,
+    "path_phase_resolution_rad": 1e-05,
+    "level_rms_limit_rad": 0.017453292519943295,
+    "level_peak_limit_rad": 0.03490658503988659,
+    "cue_direction_error_limit_rad": 0.017453292519943295,
+    "physical_round_trips_per_case": 3,
+    "gravity_huber_scale": 1.345,
+    "path_interval_node_limit": 2048
+  },
+  "measured_or_reused": {
+    "hardware_signature": null,
+    "geometry_id": null,
+    "R_PS": null,
+    "R_PC": null,
+    "time_map_id": null,
+    "imu_generation": null,
+    "gravity_epoch": null,
+    "up_B": null,
+    "gravity_sigma_rad": null,
+    "K_active_camera": null,
+    "camera_display_transform_id": null,
+    "level_ground_truth_method": null,
+    "ground_truth_uncertainty_rad": null,
+    "runtime_limit_revision": null,
+    "runtime_limits": null,
+    "existing_extra_clearance_rad": null,
+    "qualified_stop_capability_id": null,
+    "orientation_qualified_plant_id": null,
+    "requested_heading_span_rad": null,
+    "qualified_mounting_domain": null,
+    "actual_maximum_delay_s": null
+  },
+  "candidate": {
+    "effective_arc_rad": null,
+    "branch_id": null,
+    "parameter_hash": null,
+    "bench_validation": null,
+    "production_validation": null
+  },
+  "writes": {
+    "parameter_numeric_changes_require_compile": false,
+    "physical_motion_authorized": false
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-02",
+  "scope": "OFFLINE_LOCAL_GEOMETRY_AND_DOCUMENT_CONTRACTS_ONLY",
+  "unit_tests_run": 30,
+  "unit_tests_passed": 30,
+  "schema_valid": true,
+  "schema_positive_examples": 2,
+  "schema_negative_examples_rejected": 5,
+  "synthetic_demo_points": 13,
+  "synthetic_max_abs_up_dot_ray": 2.3592239273284576e-16,
+  "requirements_count": 18,
+  "scenario_count": 16,
+  "user_requirements_covered": 6,
+  "document_reference_checks_passed": true,
+  "json_parse_checks_passed": true,
+  "source_scope": "selective moving branch reads; no clone; base_commit unknown",
+  "base_commit": null,
+  "firmware_implemented": false,
+  "full_stage1_implemented": false,
+  "cpp_compiled": false,
+  "physical_gravity_measured": false,
+  "physical_limits_read_back": false,
+  "hardware_motion_tested": false,
+  "continuous_path_safety_certified": false,
+  "scalar_timing_solver_implemented": false,
+  "hud_integrated": false,
+  "independent_physical_3a": "NOT_RUN",
+  "production_physical_3b": "NOT_RUN",
+  "notes": [
+    "Reference tests do not establish real BNO085 accuracy, braking, horizontal scan or display latency.",
+    "User reports ADR-002.2 and ADR-003 complete; this package did not independently repeat their acceptance."
+  ]
+}

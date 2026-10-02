@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openautoturret:adr004:gravity-frame:1",
+  "title": "ADR004 logical GravityFrame, not native ABI",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "epoch",
+    "imu_generation",
+    "calibration_id",
+    "time_map_id",
+    "estimate_ns",
+    "sample_ns",
+    "published_ns",
+    "valid",
+    "reason",
+    "up_B",
+    "gravity_sigma_rad",
+    "mounting_class",
+    "tilt_rad"
+  ],
+  "properties": {
+    "epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "imu_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "calibration_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "time_map_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sample_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "published_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "valid": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "up_B": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      ]
+    },
+    "gravity_sigma_rad": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "mounting_class": {
+      "enum": [
+        "UPRIGHT",
+        "INVERTED",
+        "SIDEWAYS",
+        "UNKNOWN"
+      ]
+    },
+    "tilt_rad": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 3.141592653589793
+    },
+    "estimate_ns": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "valid": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "calibration_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "time_map_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "up_B": {
+            "type": "array"
+          },
+          "gravity_sigma_rad": {
+            "type": "number"
+          },
+          "tilt_rad": {
+            "type": "number"
+          },
+          "mounting_class": {
+            "enum": [
+              "UPRIGHT",
+              "INVERTED",
+              "SIDEWAYS"
+            ]
+          },
+          "reason": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mounting_class": {
+            "const": "UNKNOWN"
+          }
+        }
+      }
+    }
+  ],
+  "$comment": "Runtime must also check finite values, norm(up_B), ordering/clock/generation/calibration and uncertainty; JSON Schema alone cannot establish sensor validity."
+}

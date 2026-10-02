@@ -1,0 +1,105 @@
+{
+  "synthetic_only": true,
+  "hardware_qualified": false,
+  "path_or_stop_certified": false,
+  "up_B": [
+    0.24917906141831928,
+    -0.14950743685099155,
+    0.9568475958463459
+  ],
+  "mounting_class": "UPRIGHT",
+  "rows": [
+    {
+      "heading_deg": -60,
+      "yaw_deg": -59.93185451466069,
+      "pitch_deg": 14.87969214444851,
+      "horizontal_residual": -2.220446049250313e-16,
+      "reticle_angle_deg": -8.887356141528155
+    },
+    {
+      "heading_deg": -50,
+      "yaw_deg": -49.626471687331566,
+      "pitch_deg": 16.05194072611509,
+      "horizontal_residual": -2.3592239273284576e-16,
+      "reticle_angle_deg": -5.865519612240601
+    },
+    {
+      "heading_deg": -40,
+      "yaw_deg": -39.225516194457356,
+      "pitch_deg": 16.727816061299865,
+      "horizontal_residual": -1.6653345369377348e-16,
+      "reticle_angle_deg": -2.6321672838504426
+    },
+    {
+      "heading_deg": -30,
+      "yaw_deg": -28.77944056878666,
+      "pitch_deg": 16.88171870636694,
+      "horizontal_residual": -1.5265566588595902e-16,
+      "reticle_angle_deg": 0.6980541110209222
+    },
+    {
+      "heading_deg": -20,
+      "yaw_deg": -18.345467739086516,
+      "pitch_deg": 16.507731477792277,
+      "horizontal_residual": -2.1510571102112408e-16,
+      "reticle_angle_deg": 4.002463542070966
+    },
+    {
+      "heading_deg": -10,
+      "yaw_deg": -7.978989995614116,
+      "pitch_deg": 15.620175829433473,
+      "horizontal_residual": -1.6653345369377348e-16,
+      "reticle_angle_deg": 7.160559644856148
+    },
+    {
+      "heading_deg": 0,
+      "yaw_deg": 2.2746137594337412,
+      "pitch_deg": 14.252282914920135,
+      "horizontal_residual": -1.240327285323417e-16,
+      "reticle_angle_deg": 10.063666994012141
+    },
+    {
+      "heading_deg": 10,
+      "yaw_deg": 12.385974816375521,
+      "pitch_deg": 12.453337859690638,
+      "horizontal_residual": -1.249000902703301e-16,
+      "reticle_angle_deg": 12.621657129343582
+    },
+    {
+      "heading_deg": 20,
+      "yaw_deg": 22.344608537057205,
+      "pitch_deg": 10.285005303774081,
+      "horizontal_residual": 1.3877787807814457e-17,
+      "reticle_angle_deg": 14.765644785007076
+    },
+    {
+      "heading_deg": 30,
+      "yaw_deg": 32.1587332762847,
+      "pitch_deg": 7.8176062048065225,
+      "horizontal_residual": -9.71445146547012e-17,
+      "reticle_angle_deg": 16.447033942953162
+    },
+    {
+      "heading_deg": 40,
+      "yaw_deg": 41.85279648528351,
+      "pitch_deg": 5.126927483466726,
+      "horizontal_residual": -2.7755575615628914e-17,
+      "reticle_angle_deg": 17.634246443139933
+    },
+    {
+      "heading_deg": 50,
+      "yaw_deg": 51.46366716792714,
+      "pitch_deg": 2.2918440642687803,
+      "horizontal_residual": -6.938893903907228e-18,
+      "reticle_angle_deg": 18.30868721830152
+    },
+    {
+      "heading_deg": 60,
+      "yaw_deg": 61.036266636840075,
+      "pitch_deg": -0.6072517756448553,
+      "horizontal_residual": -6.071532165918825e-17,
+      "reticle_angle_deg": 18.46121056407717
+    }
+  ],
+  "note": "Point geometry only; no interval proof, timing, motor simulation or live execution."
+}

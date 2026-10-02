@@ -1,0 +1,323 @@
+{
+  "schema_version": "ADR-004.requirements/1",
+  "design_only": true,
+  "user_requirements": {
+    "U1": "ADR-004开发计划",
+    "U2": "重力方向",
+    "U3": "当前水平平面",
+    "U4": "不越限位且留安全距离",
+    "U5": "正置倒置",
+    "U6": "reticle随水平面调整"
+  },
+  "requirements": [
+    {
+      "id": "R01",
+      "user": "U1",
+      "requirement": "按ADR-004完整交付及范围控制",
+      "owner_document": "ADR-004.md",
+      "scenarios": [
+        "S01"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R02",
+      "user": "U2",
+      "requirement": "raw game quaternion+encoder还原base重力",
+      "owner_document": "docs/01_GRAVITY_AND_FRAMES.md",
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S13"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R03",
+      "user": "U3",
+      "requirement": "水平面、局部方位、无磁北依赖",
+      "owner_document": "docs/01_GRAVITY_AND_FRAMES.md",
+      "scenarios": [
+        "S01",
+        "S02",
+        "S04"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R04",
+      "user": "U4",
+      "requirement": "连续IK/整段可达区间",
+      "owner_document": "docs/02_SWEEP_AND_CLEARANCE.md",
+      "scenarios": [
+        "S05",
+        "S06",
+        "S07",
+        "S08",
+        "S09"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R05",
+      "user": "U4",
+      "requirement": "同一相位产生两轴q/v/a并同步限制",
+      "owner_document": "docs/02_SWEEP_AND_CLEARANCE.md",
+      "scenarios": [
+        "S03",
+        "S07",
+        "S10"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R06",
+      "user": "U4",
+      "requirement": "工作留距+实际制动可达范围",
+      "owner_document": "docs/02_SWEEP_AND_CLEARANCE.md",
+      "scenarios": [
+        "S07",
+        "S10",
+        "S11"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R07",
+      "user": "U5",
+      "requirement": "upright/inverted/sideways/unknown不改变轴符号",
+      "owner_document": "docs/01_GRAVITY_AND_FRAMES.md",
+      "scenarios": [
+        "S04",
+        "S05",
+        "S14"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R08",
+      "user": "U6",
+      "requirement": "固定框+一条共线横线中央缺口",
+      "owner_document": "docs/03_RETICLE_AND_CONTRACTS.md",
+      "scenarios": [
+        "S14",
+        "S15"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R09",
+      "user": "U6",
+      "requirement": "相机投影/显示变换恰好一次",
+      "owner_document": "docs/03_RETICLE_AND_CONTRACTS.md",
+      "scenarios": [
+        "S14"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R10",
+      "user": "U2,U6",
+      "requirement": "重力/时序失效不显示假水平",
+      "owner_document": "docs/03_RETICLE_AND_CONTRACTS.md",
+      "scenarios": [
+        "S12",
+        "S13",
+        "S15"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R11",
+      "user": "U4",
+      "requirement": "当前安装重力负载与停止profile资格",
+      "owner_document": "docs/02_SWEEP_AND_CLEARANCE.md",
+      "scenarios": [
+        "S04",
+        "S16"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R12",
+      "user": "U1",
+      "requirement": "阶段1完全无硬件且必需分支实现",
+      "owner_document": "docs/04_STAGES_AND_ACCEPTANCE.md",
+      "scenarios": [
+        "S01",
+        "S08",
+        "S09",
+        "S13",
+        "S14"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R13",
+      "user": "U1",
+      "requirement": "阶段2复用/参数自动注入/数值热更新",
+      "owner_document": "docs/04_STAGES_AND_ACCEPTANCE.md",
+      "scenarios": [
+        "S16"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R14",
+      "user": "U1",
+      "requirement": "3a和3b双实机/完整单一交付",
+      "owner_document": "docs/04_STAGES_AND_ACCEPTANCE.md",
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S07",
+        "S10",
+        "S11",
+        "S16"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R15",
+      "user": "U1,U4",
+      "requirement": "既有模式/单输出owner/无重复伺服",
+      "owner_document": "docs/02_SWEEP_AND_CLEARANCE.md",
+      "scenarios": [
+        "S11"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R16",
+      "user": "U2,U3",
+      "requirement": "固定base与搬动后的重建/不追逐动态加速度",
+      "owner_document": "docs/01_GRAVITY_AND_FRAMES.md",
+      "scenarios": [
+        "S12"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R17",
+      "user": "U6",
+      "requirement": "CONTROL_POSE时间基准与视频误差分账",
+      "owner_document": "docs/03_RETICLE_AND_CONTRACTS.md",
+      "scenarios": [
+        "S15"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    },
+    {
+      "id": "R18",
+      "user": "U1",
+      "requirement": "源码差异核对/不重复已完工ADR",
+      "owner_document": "docs/05_SOURCE_AUDIT.md",
+      "scenarios": [
+        "S16"
+      ],
+      "status": "NOT_IMPLEMENTED_BY_THIS_PACKAGE"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S01",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S02",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S03",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S04",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S05",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S06",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S07",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S08",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S09",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S10",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S11",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S12",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S13",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S14",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S15",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "S16",
+      "definition": "docs/04_STAGES_AND_ACCEPTANCE.md#3",
+      "physical_requirement": "Per stated matrix; negative/unsupported physical variants use software evidence, required positive tilt/inversion cases cannot be waived",
+      "status": "NOT_RUN"
+    }
+  ],
+  "done_rule": "All mandatory requirements implemented; required positive and specified failure cases passed in independent physical 3a and actual production 3b with same applicable assets; synthetic evidence never qualifies hardware."
+}
