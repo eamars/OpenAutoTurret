@@ -16,7 +16,8 @@
 //   Disable    — motor hard fault (Layer 4);
 //   FaultStop  — motor over-temperature;
 //   Brake      — stale/missing feedback, or stop-feasibility violation (L3);
-//   Hold       — tracking requested while homing invalid; repeated deadline miss;
+//   Hold       — tracking requested while homing invalid; repeated deadline miss; a servo
+//                oscillating or stalled beyond its persistence time (energised, self-clearing);
 //   Derate     — a single cycle deadline overrun;
 //   Allow      — otherwise.
 #pragma once
@@ -53,6 +54,8 @@ struct SupervisorInput {
   // protocol that omits these fields may proceed only under an explicit,
   // separately reviewed health policy; default behavior is HOLD.
   bool allow_unknown_motor_health = false;
+  // MotorBackend::servo_hold_reason(): a persistent, non-hazardous servo condition -> HOLD.
+  const char* servo_hold_reason = nullptr;
 };
 
 struct SupervisorParams {
@@ -107,6 +110,9 @@ class SafetySupervisor {
       if (!env_.stop_feasible(in.axes[i].q_raw_rad, in.axes[i].v_rad_s,
                               in.axes[i].limits))
         return {SafetyAction::Brake, "stop infeasible before soft boundary"};
+    // Owner ruling 2026-10-02: a servo that keeps oscillating or stays stalled is a reason to hold
+    // (energised, recovering by itself), never a fault.
+    if (in.servo_hold_reason) return {SafetyAction::Hold, in.servo_hold_reason};
     // §38.1: no tracking while position validity is unknown.
     if (in.tracking_enabled && !in.homing_valid)
       return {SafetyAction::Hold, "tracking blocked: not homed"};

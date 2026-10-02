@@ -117,8 +117,25 @@ inline std::string js(const double v[2]) {
   return "[" + json_finite_or_null(v[0]) + "," + json_finite_or_null(v[1]) + "]";
 }
 
-inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
+// The telemetry object is written through this instead of a bare ostringstream: every floating-point
+// value it is handed is checked, so an unknown (NaN, inf) goes out as null. A bare stream writes `nan`,
+// which is not JSON: on 2026-10-02 a trip invalidated the yaw encoder, q_yaw_rad became NaN, and webd
+// rejected every telemetry frame from then on -- the page showed nothing for the whole fault.
+struct JsonNumberStream {
   std::ostringstream os;
+  template <class T>
+  JsonNumberStream& operator<<(const T& v) {
+    if constexpr (std::is_floating_point_v<T>) {
+      if (!std::isfinite(v)) { os << "null"; return *this; }
+    }
+    os << v;
+    return *this;
+  }
+  std::string str() const { return os.str(); }
+};
+
+inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
+  JsonNumberStream os;
   os << "{\"type\":\"telemetry\""
      << ",\"ts_ns\":" << s.timestamp_ns
      << ",\"phase\":\"" << json_escape(s.phase) << "\""
@@ -705,6 +722,30 @@ class WebServer {
         pair("q",r.q_actual); pair("ref",r.q_ref); pair("vref",r.v_ref);
         pair("cmd",r.v_command); pair("effort",r.effort); pair("cur",r.current_a);
         pair("rx",r.feedback_ns);
+        pair("rx_seq",r.rx_seq); pair("encoder_raw",r.encoder_raw);
+        pair("current_raw",r.current_raw); pair("enabled_state",r.enabled_state);
+        pair("be_cmd",r.backend_cmd); pair("vout",r.drive_out);
+        pair("tx_ns",r.tx_ns); pair("tx_seq",r.tx_seq);
+        pair("output_requested",r.output_requested); pair("output_reason",r.output_reason);
+        pair("command_kind",r.command_kind); pair("pi_integral",r.pi_integral);
+        pair("pi_velocity",r.pi_velocity); pair("pi_kp",r.pi_kp);
+        pair("pi_ki",r.pi_ki); pair("current_cap",r.current_cap);
+        pair("rx_velocity_20",r.rx_velocity_20); pair("rx_velocity_30",r.rx_velocity_30);
+        pair("rx_velocity_40",r.rx_velocity_40); pair("velocity_window_ms",r.velocity_window_ms);
+        pair("friction_a",r.friction_a); pair("friction_state",r.friction_state);
+        pair("friction_exhausted",r.friction_exhausted);
+        out << ",\"pitch_registers\":[";
+        for (int j=0;j<6;++j) {
+          if(j) out << ',';
+          out << '[' << json_finite_or_null(r.pitch_register_value[j]) << ',' << r.pitch_register_request_ns[j]
+              << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
+        }
+        out << ']';
+        out << ",\"param_revision\":" << r.param_revision
+            << ",\"param_state\":\"" << r.param_state.data() << "\""
+            << ",\"param_context\":\"" << r.param_context.data() << "\""
+            << ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\""
+            << ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\"";
         pair("vest",r.v_estimated);
         out << ",\"phase\":\"" << phase_name(r.phase) << "\""
             << ",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']';
@@ -741,7 +782,10 @@ class WebServer {
   // exactly once, and a frame the socket will not take loses the client. A reader can live with
   // missing frames — that is what staleness indicators are for. It cannot live with half a frame
   // that arrives dressed as a whole one.
-  static constexpr size_t kFrameBudget = 256 * 1024;
+  // The 1024-row frozen window includes RX/TX and PI evidence. Its actual wire
+  // frame exceeds 256 KiB; a too-small send buffer loses the very fault record
+  // needed for diagnosis (SOCK_SEQPACKET returns EMSGSIZE, not a partial window).
+  static constexpr size_t kFrameBudget = 2 * 1024 * 1024;
 
   void size_socket(int fd) {
     // Set on the accepted socket, not the listener: what matters is the queue this peer's frames

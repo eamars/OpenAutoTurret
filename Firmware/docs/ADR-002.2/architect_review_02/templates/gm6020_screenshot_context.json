@@ -1,0 +1,22 @@
+{
+  "source": "User-supplied image(6).png",
+  "provenance": "USER_REPORTED_DEFAULT_SCREENSHOT_NOT_HISTORICAL_READBACK",
+  "assistant_app_version": "2.7 (build 73)",
+  "motor_type_displayed": "GM6020",
+  "motor_firmware_version": null,
+  "pwm_mode_displayed": "position",
+  "maximum_angle_displayed": 360,
+  "centre_position_displayed": 4096,
+  "position_P_displayed": 80,
+  "position_I_displayed": 0,
+  "speed_P_displayed": 64,
+  "speed_I_displayed": 100,
+  "speed_limit_rpm_displayed": 300,
+  "feedback_rate_hz_displayed": 1000,
+  "current_P_displayed": 1000,
+  "current_I_displayed": 500,
+  "current_loop_enabled_displayed": true,
+  "active_CAN_command_mode_verified": false,
+  "physical_gain_units_known": false,
+  "setting_change_authorized_by_package": false
+}

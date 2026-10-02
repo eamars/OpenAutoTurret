@@ -606,6 +606,46 @@ struct ControlLogRecord {
                                   std::numeric_limits<double>::quiet_NaN()};
   double v_estimated[kAxisCount] = {0.0, 0.0};  // feedback-position derivative
   TimeNs feedback_ns[kAxisCount] = {0, 0};
+  uint64_t rx_seq[kAxisCount] = {};
+  int encoder_raw[kAxisCount] = {-1, -1};
+  double current_raw[kAxisCount] = {NAN, NAN};
+  int enabled_state[kAxisCount] = {-1, -1};
+  TimeNs tx_ns[kAxisCount] = {};
+  uint64_t tx_seq[kAxisCount] = {};
+  double output_requested[kAxisCount] = {NAN, NAN};
+  double pi_integral[kAxisCount] = {NAN, NAN};
+  double pi_velocity[kAxisCount] = {NAN, NAN};
+  // Which verified parameter set this tick ran under (ADR-002.1 §5). A trial that cannot name its own
+  // parameter set cannot be compared against another trial, and "it was the same as before" is not a
+  // hash: the archive has to say the number even when nothing was changed this session.
+  uint64_t param_revision = 0;
+  std::array<char, 17> param_applied_hash{};   // what has been verified; empty = nothing yet
+  std::array<char, 17> param_expected_hash{};  // what is staged or in flight, if anything
+  // The default says "idle" rather than "unknown": a record nobody has filled in is a record where
+  // nothing is in flight, and an empty string here would read as "the firmware lost the state".
+  std::array<char, 24> param_state = {{'i', 'd', 'l', 'e', '\0'}};
+  // Which campaign and which candidate this cycle belongs to, as one opaque tag the runner
+  // composed (campaign|candidate|trial). docs/02 §5 asks for campaign/trial/candidate identity in
+  // every record: a line that identifies only the parameters can be attributed to a design only
+  // by correlating timestamps against somebody's log, which is exactly the inference this ADR
+  // exists to remove. The firmware stores and repeats the tag without parsing it, so a campaign
+  // may name its candidates however it likes, and the archive carries the encoding.
+  std::array<char, 40> param_context = {{'n', 'o', 'n', 'e', '\0'}};
+  double pi_kp[kAxisCount] = {NAN, NAN};
+  double pi_ki[kAxisCount] = {NAN, NAN};
+  double current_cap[kAxisCount] = {NAN, NAN};
+  double rx_velocity_20[kAxisCount] = {NAN, NAN};
+  double rx_velocity_30[kAxisCount] = {NAN, NAN};
+  double rx_velocity_40[kAxisCount] = {NAN, NAN};
+  int velocity_window_ms[kAxisCount] = {};
+  double friction_a[kAxisCount] = {NAN, NAN};
+  int friction_state[kAxisCount] = {};
+  int friction_exhausted[kAxisCount] = {};
+  double pitch_register_value[6] = {NAN,NAN,NAN,NAN,NAN,NAN};
+  TimeNs pitch_register_request_ns[6] = {}, pitch_register_rx_ns[6] = {};
+  int pitch_register_status[6] = {-1,-1,-1,-1,-1,-1};
+  int output_reason[kAxisCount] = {};
+  int command_kind[kAxisCount] = {};
   uint64_t command_seq = 0;
   double probe_omega = 0;
   double probe_goal[kAxisCount] = {0.0, 0.0};
@@ -914,7 +954,7 @@ class Telemetry {
     auto pair = [&](const double* a) {
       return "[" + num(a[0]) + "," + num(a[1]) + "]";
     };
-    auto pairi = [&](const int64_t* a) {
+    auto pairi = [&](const auto* a) {
       return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
     };
     // Every row's `t` is CLOCK_MONOTONIC nanoseconds (see common/time.hpp), and a
@@ -950,8 +990,35 @@ class Telemetry {
           // to learn two vocabularies for the same ring.
           << ",\"cur\":" << pair(r.current_a)
           << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
+          << ",\"tx_ns\":" << pairi(r.tx_ns) << ",\"tx_seq\":" << pairi(r.tx_seq)
+          << ",\"rx_seq\":" << pairi(r.rx_seq) << ",\"encoder_raw\":" << pairi(r.encoder_raw)
+          << ",\"current_raw\":" << pair(r.current_raw) << ",\"enabled_state\":" << pairi(r.enabled_state)
+          << ",\"output_requested\":" << pair(r.output_requested)
+          << ",\"output_reason\":" << pairi(r.output_reason) << ",\"command_kind\":" << pairi(r.command_kind)
+          << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
+          << ",\"param_revision\":" << r.param_revision
+          << ",\"param_state\":\"" << r.param_state.data() << "\" "
+          << ",\"param_context\":\"" << r.param_context.data() << "\"" 
+             ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\" "
+             ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\" "
+          << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)
+          << ",\"current_cap\":" << pair(r.current_cap)
+          << ",\"rx_velocity_20\":" << pair(r.rx_velocity_20)
+          << ",\"rx_velocity_30\":" << pair(r.rx_velocity_30)
+          << ",\"rx_velocity_40\":" << pair(r.rx_velocity_40)
+          << ",\"velocity_window_ms\":" << pairi(r.velocity_window_ms)
+          << ",\"friction_a\":" << pair(r.friction_a)
+          << ",\"friction_state\":" << pairi(r.friction_state)
+          << ",\"friction_exhausted\":" << pairi(r.friction_exhausted)
           << ",\"safety\":" << static_cast<int>(r.safety_action)
-          << ",\"period_us\":" << r.cycle_duration_us << "}\n";
+          << ",\"period_us\":" << r.cycle_duration_us;
+      out << ",\"pitch_registers\":[";
+      for (int j=0;j<6;++j) {
+        if(j) out << ',';
+        out << '[' << num(r.pitch_register_value[j]) << ',' << r.pitch_register_request_ns[j]
+            << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
+      }
+      out << "]}\n";
     }
     if (out.good()) archive_path_ = path;
   }

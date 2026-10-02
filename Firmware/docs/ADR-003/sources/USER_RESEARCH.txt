@@ -1,0 +1,982 @@
+Please design **ADR-003 for OpenAutoTurret**, based directly on the existing **ADR-002.2 control architecture** in this branch:
+
+https://github.com/eamars/OpenAutoTurret/tree/codex/adr002-control/Firmware
+
+Before designing ADR-003, inspect only the files necessary to understand:
+
+- ADR-002.2 and its final accepted requirements;
+- the existing trajectory/reference generation interfaces;
+- the motor position/current control path;
+- motor state feedback interfaces;
+- vision/tracking interfaces that are directly relevant.
+
+Do not inspect or pull unrelated parts of the repository unnecessarily.
+
+## Task boundary
+
+This task is **architecture/design only**.
+
+Do not implement ADR-003 yet.
+
+Produce a complete ADR-003 that defines how OpenAutoTurret performs continuous target tracking using **two distinct levels of feedforward + feedback control**:
+
+1. **Target-tracking / reference-generation level**
+2. **Motor position/trajectory servo level**
+
+ADR-003 must build on ADR-002.2 rather than replace or duplicate it.
+
+The scope is pointing/tracking control only. Do not introduce firing or engagement logic.
+
+---
+
+# 1. Architectural objective
+
+The completed architecture must support all of the following with one coherent controller:
+
+- acquire a stationary target;
+- hold a stationary target accurately;
+- track a target moving at approximately constant angular velocity;
+- track accelerating/decelerating targets;
+- follow target direction reversals;
+- smoothly transition from moving-target tracking to stationary-target hold;
+- recover when target velocity estimation is temporarily unavailable or unreliable;
+- tolerate realistic camera/vision latency and irregular measurement arrival;
+- preserve stable motor control independently of the vision/tracking layer.
+
+Do **not** solve stationary and moving targets by creating two unrelated controllers.
+
+The preferred architecture is one continuous tracking system in which feedforward naturally tends toward zero when target motion tends toward zero, while feedback remains responsible for removing residual pointing error.
+
+---
+
+# 2. Required two-level controller architecture
+
+ADR-003 must clearly separate the following two levels.
+
+## Level 1 — Target Tracking Controller
+
+Purpose:
+
+> Determine where the turret should be going, including the motion of the target itself.
+
+This layer must operate in target/LOS kinematics and must NOT directly command motor current.
+
+Conceptually:
+
+```text
+Vision observation
+       │
+       ▼
+Target state estimation
+(angle / angular velocity / optionally acceleration)
+       │
+       ├──────── Target-motion Feedforward
+       │
+       ▼
+Tracking Controller
+       ▲
+       │
+turret pointing / LOS error
+       │
+       └──────── Tracking Feedback
+                    │
+                    ▼
+          Reference / trajectory generator
+                    │
+             θ_ref, ω_ref, α_ref
+```
+
+The output of Level 1 must be a dynamically consistent turret reference:
+
+- position `θ_ref`
+- angular velocity `ω_ref`
+- angular acceleration `α_ref`
+
+for each controlled axis.
+
+Level 1 must therefore combine:
+
+### Feedforward
+
+Feedforward represents known/predicted target motion.
+
+At minimum consider:
+
+- estimated target LOS angular velocity;
+- optionally target LOS angular acceleration;
+- measurement/system latency prediction.
+
+For example, ADR-003 may consider a model such as:
+
+\[
+\theta_{target,pred}
+=
+\theta_{target}
++
+\hat{\omega}_{target}\Delta t
++
+\frac{1}{2}\hat{\alpha}_{target}\Delta t^2
+\]
+
+where `Δt` is derived from timestamps and represents the relevant prediction horizon.
+
+A reasonable baseline tracking relationship to evaluate is:
+
+\[
+\omega_{cmd}
+=
+\hat{\omega}_{target}
++
+K_{track} e_{LOS}
+\]
+
+where:
+
+\[
+e_{LOS}
+=
+\theta_{target,pred}-\theta_{turret}
+\]
+
+The exact formulation is an ADR decision: do not blindly adopt this equation if another formulation integrates more cleanly with the existing ADR-002.2 trajectory generator.
+
+However, ADR-003 must preserve the conceptual separation:
+
+\[
+\text{tracking command}
+=
+\text{target-motion FF}
++
+\text{tracking-error FB}
+\]
+
+### Feedback
+
+Tracking feedback must operate on pointing error and cause the turret to converge onto the target even when:
+
+- target velocity is zero;
+- target velocity is estimated incorrectly;
+- feedforward is unavailable;
+- model prediction is imperfect.
+
+The target feedforward term must therefore improve tracking but must not be required for basic target acquisition or stationary hold.
+
+---
+
+# 3. Very important: target velocity reference frame
+
+Do not directly treat raw image-plane pixel velocity as target feedforward.
+
+Explicitly define the coordinate-frame contract.
+
+Because the camera itself moves with the turret, an apparent target velocity in camera coordinates can contain:
+
+- actual target LOS motion;
+- turret/camera ego-motion;
+- measurement noise.
+
+ADR-003 must define where the target state estimator produces its output and how turret motion is accounted for.
+
+Prefer a well-defined quantity such as:
+
+```text
+target LOS angle
+target LOS angular velocity
+target LOS angular acceleration
+```
+
+in a documented turret/world/reference frame.
+
+If vision only supplies relative image-plane motion, ADR-003 must specify how turret encoder/IMU/angular-rate information is used so that target-motion feedforward does not double-count the turret's own motion.
+
+Also specify:
+
+- units;
+- axis conventions;
+- sign conventions;
+- wraparound semantics;
+- timestamps;
+- measurement age;
+- confidence/validity.
+
+Use radians and SI units internally unless the current architecture has a compelling established alternative.
+
+---
+
+# 4. Reference generation must remain dynamically consistent
+
+Do not independently generate unrelated `θ_ref`, `ω_ref`, and `α_ref`.
+
+ADR-003 must define one authoritative reference-generation path so that:
+
+\[
+\frac{d\theta_{ref}}{dt}=\omega_{ref}
+\]
+
+and:
+
+\[
+\frac{d\omega_{ref}}{dt}=\alpha_{ref}
+\]
+
+within the numerical/discrete implementation.
+
+The existing ADR-002.2 trajectory generator should be reused where applicable.
+
+The tracking controller should provide a moving target/reference to that subsystem rather than bypassing trajectory constraints.
+
+Respect:
+
+- maximum angular velocity;
+- maximum acceleration;
+- jerk limits if ADR-002.2 supports them;
+- axis limits;
+- actuator limits.
+
+There must be exactly one clear owner of the final motor trajectory reference.
+
+---
+
+# 5. Level 2 — Motor Position / Trajectory Controller
+
+Purpose:
+
+> Make the physical turret execute the Level-1 trajectory accurately.
+
+This is the dynamic servo level and must build directly on ADR-002.2.
+
+Conceptually:
+
+```text
+θ_ref
+ω_ref
+α_ref
+  │
+  ├──────────── Physical-model Feedforward ────────────┐
+  │                                                    │
+  ▼                                                    ▼
+Position / velocity error ── Feedback controller ──── (+)
+                                                       │
+                                                       ▼
+                                               Current/Torque command
+                                                       │
+                                                       ▼
+                                                     Motor
+                                                       │
+                                                       └── encoder / IMU feedback
+```
+
+The Level-2 output must remain the appropriate motor actuator command established by ADR-002.2, preferably current/torque where that is the accepted actuator interface.
+
+The controller should conceptually remain:
+
+\[
+u =
+u_{FF,motor}
++
+u_{FB,motor}
+\]
+
+### Motor feedforward
+
+Use the physical plant/model identified through ADR-002.2.
+
+For yaw, evaluate terms such as:
+
+\[
+u_{FF}
+=
+k_A\alpha_{ref}
++
+k_V\omega_{ref}
++
+u_{friction}
+\]
+
+with the exact model determined by ADR-002.2 system identification rather than guessed coefficients.
+
+Yaw should not gain an artificial gravity term.
+
+For pitch or other axes where gravity materially affects torque, the architecture may additionally support:
+
+\[
+u_{gravity}(\theta)
+\]
+
+but model terms must remain axis-specific.
+
+### Motor feedback
+
+The motor servo must correct deviations between requested and actual turret motion, for example:
+
+\[
+u_{FB}
+=
+K_P(\theta_{ref}-\theta)
++
+K_D(\omega_{ref}-\omega)
+\]
+
+An integral term should not be included automatically. If ADR-003 proposes one, explicitly justify:
+
+- what persistent disturbance requires it;
+- why model feedforward cannot account for that disturbance;
+- anti-windup behavior;
+- interaction with actuator saturation.
+
+ADR-003 must not turn model feedforward into another manually tuned arbitrary gain set.
+
+Parameters that describe plant physics should come from ADR-002.2's modelling/identification process wherever possible.
+
+---
+
+# 6. Clearly distinguish the two feedforward mechanisms
+
+ADR-003 must explicitly document that these are different mechanisms:
+
+## Target-motion feedforward
+
+Answers:
+
+> Where will the target be / how quickly is the target moving?
+
+Inputs may include:
+
+- target angular velocity;
+- target angular acceleration;
+- timestamps;
+- latency;
+- target-state estimator confidence.
+
+Its output affects the desired turret trajectory.
+
+It must never directly command motor torque/current.
+
+## Motor-model feedforward
+
+Answers:
+
+> How much actuator effort should the turret need to execute this requested trajectory?
+
+Inputs include:
+
+- `ω_ref`
+- `α_ref`
+- axis position where relevant
+- identified plant parameters.
+
+Its output is motor torque/current feedforward.
+
+Do not collapse these two layers into something like:
+
+```text
+motor_current =
+PID(target_angle - motor_angle)
++ K * target_velocity
+```
+
+That mixes target kinematics with actuator dynamics and is explicitly not the desired architecture.
+
+---
+
+# 7. Stationary-target behaviour
+
+This must be addressed explicitly in ADR-003.
+
+A stationary target is **not** an exceptional mode.
+
+When the target is stationary:
+
+\[
+\hat{\omega}_{target}\rightarrow 0
+\]
+
+and:
+
+\[
+\hat{\alpha}_{target}\rightarrow 0
+\]
+
+therefore the Level-1 target-motion feedforward should smoothly approach zero.
+
+Tracking feedback remains active:
+
+\[
+e_{LOS}\neq0
+\Rightarrow
+\text{feedback moves turret toward target}
+\]
+
+Once aligned:
+
+\[
+e_{LOS}\rightarrow0
+\]
+
+and therefore both target-motion feedforward and tracking correction naturally approach zero.
+
+The turret should then hold the reference through the Level-2 motor servo.
+
+For yaw at rest:
+
+- dynamic velocity/acceleration feedforward should be approximately zero;
+- position feedback rejects disturbances and maintains pointing.
+
+For pitch:
+
+- dynamic FF may be zero;
+- static gravity compensation may remain non-zero.
+
+Do not require a separate `"STATIC_TARGET_CONTROLLER"` unless there is a strong architectural reason.
+
+---
+
+# 8. Prevent stationary-target jitter
+
+Near zero target velocity, vision noise can falsely appear as motion.
+
+ADR-003 must therefore define how target-motion feedforward becomes trustworthy.
+
+Consider:
+
+- filtered state estimation rather than raw frame-to-frame differentiation;
+- velocity uncertainty/confidence;
+- a noise-aware zero-velocity region;
+- hysteresis where appropriate;
+- smooth decay/blending of target FF toward zero;
+- preventing rapid FF sign reversal around zero velocity.
+
+Avoid a hard discontinuous moving/static switch that causes chatter.
+
+The design should allow:
+
+```text
+moving target
+    ↓
+target slows
+    ↓
+estimated angular rate smoothly decreases
+    ↓
+FF smoothly decreases
+    ↓
+feedback increasingly handles residual position error
+    ↓
+stationary hold
+```
+
+and the reverse transition should also be smooth.
+
+---
+
+# 9. Target estimator and controller must be separate responsibilities
+
+ADR-003 should define an explicit target-state estimator boundary.
+
+The control loop should consume a target state such as:
+
+```text
+TargetState {
+    timestamp
+    yaw
+    pitch
+    yaw_rate
+    pitch_rate
+    optional yaw_acceleration
+    optional pitch_acceleration
+    confidence
+}
+```
+
+The exact API may differ from this example.
+
+The important architectural point is that:
+
+- vision produces observations;
+- estimator produces a timestamped target state;
+- tracking controller consumes the state;
+- trajectory generator creates a feasible motor reference;
+- motor servo executes the reference.
+
+Do not hide noisy numerical differentiation inside the motor controller.
+
+---
+
+# 10. Latency must be first-class
+
+ADR-003 must explicitly model timing.
+
+At minimum account for:
+
+- camera exposure/acquisition time;
+- frame timestamp;
+- vision inference time;
+- transport/IPC delay;
+- control-loop timing;
+- actuator/reference execution delay where material.
+
+Do not assume the latest vision result represents the target's current state.
+
+Prediction should use the measurement timestamp rather than an arbitrary fixed number where practical.
+
+Document which clock is authoritative and how timestamps cross process boundaries.
+
+The architecture should still work when latency compensation is disabled; latency prediction is an enhancement, not a prerequisite for closed-loop stability.
+
+---
+
+# 11. Different update rates
+
+Vision and motor control will not necessarily run at the same frequency.
+
+ADR-003 must explicitly support:
+
+```text
+vision / detector        low or variable rate
+target estimator         measurement-driven / regular estimator rate
+tracking controller      regular control rate
+trajectory generator     regular control rate
+motor servo              high-rate deterministic loop
+```
+
+Do not require the motor control loop to wait for a new camera frame.
+
+Between vision observations, the target estimator/reference layer may propagate the target state forward using the currently estimated motion model.
+
+---
+
+# 12. Target stops suddenly
+
+Include this case explicitly.
+
+Example:
+
+```text
+target moving at +30 deg/s
+        ↓
+target suddenly stops
+        ↓
+old velocity estimate initially remains positive
+```
+
+ADR-003 must describe how the estimator and controller converge without the turret continuing to lead indefinitely.
+
+The design should distinguish:
+
+- model prediction;
+- new measurement innovation/error;
+- feedforward decay/correction;
+- motor feedback.
+
+The controller must recover naturally as observations show that actual target velocity has dropped.
+
+---
+
+# 13. Target direction reversal
+
+Also explicitly cover:
+
+```text
++ω target motion
+    ↓
+deceleration
+    ↓
+zero
+    ↓
+−ω target motion
+```
+
+This is an important validation case because both:
+
+- target-motion FF;
+- motor acceleration/friction FF
+
+change significantly during reversal.
+
+The architecture must avoid duplicated or contradictory compensation between the two layers.
+
+---
+
+# 14. Missing or unreliable target velocity
+
+The system must remain functional if target velocity cannot be estimated reliably.
+
+Required degradation:
+
+```text
+target velocity unavailable
+        ↓
+Level-1 FF = 0 or confidence-weighted toward 0
+        ↓
+tracking feedback remains operational
+        ↓
+turret still acquires and tracks from angular error
+```
+
+Do not make feedforward a dependency for basic position tracking.
+
+If target velocity confidence later improves, blend FF back in smoothly.
+
+---
+
+# 15. Target-loss semantics
+
+ADR-003 should define target-loss behaviour because it affects the estimator/reference generator.
+
+Do not extrapolate a moving target forever after observations disappear.
+
+Define:
+
+- freshness/TTL;
+- prediction horizon;
+- confidence decay;
+- transition after timeout;
+- reference hold behaviour;
+- reacquisition behaviour.
+
+The exact target-loss policy may remain configurable, but the architecture and ownership must be explicit.
+
+---
+
+# 16. Interaction with ADR-002.2
+
+ADR-003 must treat ADR-002.2 as the authority for the physical axis servo and plant identification.
+
+Do not redesign an unrelated motor-control subsystem.
+
+Specifically identify which ADR-002.2 outputs ADR-003 consumes, such as:
+
+- identified inertia/dynamic parameters;
+- friction model;
+- actuator scaling;
+- feedback gains;
+- limits;
+- trajectory limits;
+- validated motor command interface.
+
+If an ADR-002.2 interface is insufficient for ADR-003, specify the smallest required extension and explain why.
+
+Do not silently alter ADR-002.2 assumptions.
+
+---
+
+# 17. Preserve the ADR-002.2 development discipline
+
+Do not split ADR-003 into a disposable MVP and a later "real" architecture.
+
+There is one final architecture.
+
+Use the same general validation philosophy already established for ADR-002.2.
+
+## Stage 1 — mathematical architecture and simulation
+
+Must not depend on physical measurement.
+
+Define:
+
+- equations;
+- coordinate conventions;
+- timing contracts;
+- interfaces;
+- estimator/controller relationships;
+- synthetic target trajectories;
+- simulated plant;
+- validation metrics.
+
+Synthetic scenarios must include stationary and moving targets.
+
+## Stage 2 — actual system feedback / identification
+
+Use real-system observations to populate and validate parameters that cannot be known purely analytically.
+
+Reuse ADR-002.2 identified plant parameters whenever hardware has not changed and the parameters remain applicable.
+
+Do not replace systematic identification with manual trial-and-error tuning.
+
+Target-tracking-specific quantities such as latency/noise characteristics should also have a reproducible estimation/calibration method where required.
+
+## Stage 3 — validation
+
+As with ADR-002.2, final validation must occur in both:
+
+1. an independent control/tracking validation program;
+2. the actual production OpenAutoTurret software.
+
+Passing only an isolated simulation or tuning utility is not sufficient.
+
+Passing only production behaviour without independent validation is also not sufficient.
+
+---
+
+# 18. Independent testability
+
+The architecture must make the two levels independently testable.
+
+## Level-1 tests
+
+It must be possible to test target tracking against:
+
+- an ideal turret actuator;
+- a simulated ADR-002.2 plant;
+- recorded/synthetic target trajectories.
+
+This should allow target prediction/tracking quality to be evaluated without motor hardware.
+
+## Level-2 tests
+
+It must remain possible to test the ADR-002.2 motor servo using synthetic:
+
+```text
+θ_ref
+ω_ref
+α_ref
+```
+
+without requiring vision or a target detector.
+
+## End-to-end tests
+
+Then verify:
+
+```text
+target observation
+→ estimator
+→ tracking FF + FB
+→ trajectory/reference
+→ motor FF + FB
+→ physical/simulated turret
+→ pointing result
+```
+
+---
+
+# 19. Required validation scenarios
+
+ADR-003 must define measurable validation for at least:
+
+1. stationary target acquisition;
+2. stationary target hold;
+3. slow constant-rate target;
+4. fast constant-rate target;
+5. accelerating target;
+6. decelerating target;
+7. target suddenly stopping;
+8. direction reversal;
+9. near-zero target velocity with vision noise;
+10. temporary loss of velocity estimate;
+11. delayed vision observations;
+12. irregular frame arrival / dropped frames;
+13. motor saturation;
+14. target loss and reacquisition.
+
+Also explicitly compare:
+
+### Level 1
+`tracking feedback only`
+
+versus
+
+`target-motion FF + tracking feedback`
+
+for moving-target lag.
+
+### Level 2
+`motor feedback only`
+
+versus
+
+`motor-model FF + motor feedback`
+
+for trajectory tracking error.
+
+The ADR should define quantitative metrics rather than relying only on visual judgement.
+
+Possible metrics include:
+
+- RMS pointing error;
+- peak pointing error;
+- steady moving-target lag;
+- settling time;
+- overshoot;
+- reversal error;
+- stationary jitter;
+- commanded-current RMS/peak;
+- saturation duration.
+
+Do not invent final acceptance numbers without evidence; define how those limits will be established.
+
+---
+
+# 20. Observability
+
+ADR-003 must require enough telemetry to distinguish whether tracking error originates in Level 1 or Level 2.
+
+At minimum consider logging:
+
+### Target/tracking layer
+
+- observed target angle;
+- observation timestamp/age;
+- estimated target angle;
+- estimated target angular velocity;
+- estimated acceleration if used;
+- estimator confidence;
+- predicted target angle;
+- pointing error;
+- target-motion FF contribution;
+- tracking feedback contribution;
+- final tracking command.
+
+### Trajectory layer
+
+- `θ_ref`;
+- `ω_ref`;
+- `α_ref`;
+- constraint/saturation state.
+
+### Motor layer
+
+- measured position;
+- measured velocity;
+- motor FF contribution;
+- motor FB contribution;
+- final current/torque command;
+- actuator saturation.
+
+It should be possible from logs to answer:
+
+> Are we behind because the target predictor was wrong, because the reference generator constrained motion, or because the physical servo failed to execute the requested trajectory?
+
+---
+
+# 21. Failure isolation and fallback
+
+Feedforward must be additive performance enhancement rather than a hidden stability dependency.
+
+Define fallback behaviour for:
+
+- invalid target velocity → outer FF disabled, tracking FB remains;
+- invalid acceleration estimate → acceleration FF disabled;
+- invalid/stale target → target-loss policy;
+- invalid plant feedforward parameters → motor FF disabled, validated motor FB remains;
+- actuator saturation → bounded behaviour with no uncontrolled integrator accumulation.
+
+Individual FF components should be observable and independently disableable for validation.
+
+This does not imply user-facing runtime switches are required; it is primarily an architectural/testability requirement.
+
+---
+
+# 22. Architecture decisions ADR-003 must make explicitly
+
+Do not leave these ambiguous:
+
+1. exact ownership of target state estimation;
+2. target state coordinate frame;
+3. timestamp semantics;
+4. Level-1 controller equation/structure;
+5. how target velocity enters Level 1;
+6. whether/how target acceleration is used;
+7. latency-prediction strategy;
+8. how Level-1 output enters the ADR-002.2 trajectory generator;
+9. exact ownership of `θ_ref / ω_ref / α_ref`;
+10. Level-2 motor FF structure;
+11. relationship to ADR-002.2 identified parameters;
+12. zero-velocity / stationary-target treatment;
+13. estimator-noise handling near zero velocity;
+14. target-loss behaviour;
+15. control-loop/update-rate boundaries;
+16. saturation/limit behaviour;
+17. telemetry required for diagnosis;
+18. independent and production validation procedure.
+
+---
+
+# 23. Deliverable
+
+Create **ADR-003** following the repository's existing ADR naming/location/style convention.
+
+ADR-003 should contain:
+
+- Context
+- Problem
+- Decision
+- Architecture diagram
+- Two-level FF+FB control decomposition
+- Equations / mathematical model
+- Coordinate and timing conventions
+- Interface contracts
+- Stationary-target behaviour
+- Moving-target behaviour
+- Latency handling
+- State-estimation boundary
+- Motor-control integration with ADR-002.2
+- Failure/fallback behaviour
+- Observability
+- Parameter ownership
+- Stage 1 / Stage 2 / Stage 3 validation design
+- Acceptance scenarios
+- Alternatives considered
+- Consequences/trade-offs
+- Relationship/dependencies on ADR-002.2
+- Expected implementation boundaries/files, without implementing them
+
+Before finalising ADR-003, explicitly check for accidental duplication of responsibility between:
+
+```text
+target estimator
+tracking controller
+trajectory generator
+motor controller
+```
+
+Each quantity should have one clear owner.
+
+The central architecture should remain:
+
+```text
+          TARGET / LOS DOMAIN
+────────────────────────────────────────
+
+Vision observations
+        │
+        ▼
+Target state estimator
+θ_target, ω_target, α_target
+        │
+        │ target-motion FF
+        ▼
+Tracking FF + FB
+        ▲
+        │ actual pointing error
+        │
+        ▼
+Constrained reference generator
+θ_ref, ω_ref, α_ref
+
+────────────────────────────────────────
+          PHYSICAL AXIS DOMAIN
+────────────────────────────────────────
+
+θ_ref, ω_ref, α_ref
+        │
+        ├──── model / dynamics FF ────────┐
+        │                                 │
+        ▼                                 ▼
+position/velocity FB ──────────────────── (+)
+                                          │
+                                          ▼
+                                  current / torque
+                                          │
+                                          ▼
+                                       motor
+                                          │
+                                          └── measured θ, ω
+```
+
+The key invariant is:
+
+> **Level 1 uses target motion to decide what the turret should do. Level 2 uses turret physics to make the turret actually do it.**
+
+And for a stationary target:
+
+> **Target-motion feedforward naturally approaches zero; tracking feedback acquires and centres the target; the motor position servo then maintains the commanded pointing direction. No separate stationary-target controller should be necessary.**

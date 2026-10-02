@@ -1,0 +1,52 @@
+{
+  "origin": "DESIGN_REQUIREMENTS_NOT_MEASURED_PERFORMANCE",
+  "tracking_ratio": [
+    0.9,
+    1.1
+  ],
+  "active_fraction_min": 0.95,
+  "position_jitter_p95_minus_p5_deg": 0.15,
+  "position_jitter_full_range_deg": 0.3,
+  "speed_rms_limit": {
+    "absolute_deg_s": 0.5,
+    "fraction_of_reference": 0.1,
+    "operator": "max"
+  },
+  "stop_window_s": 2.0,
+  "stop_drift_deg": 0.15,
+  "min_steady_s": 2.0,
+  "repeat_count": 3,
+  "position_settled_error_deg": 0.15,
+  "small_step_settling_s": 1.0,
+  "position_overshoot": {
+    "absolute_deg": 0.15,
+    "fraction_of_step": 0.1,
+    "operator": "max"
+  },
+  "sustained_start_max_s": 0.2,
+  "sustained_start_reference_min_deg_s": 5.0,
+  "model_angle_prediction_rms_deg": 0.15,
+  "gyro_band_hz": {
+    "low": 0.5,
+    "high_formula": "min(20, measured_sample_rate/5, calibrated_bandwidth)"
+  },
+  "relative_prod_degradation_limit": "max(0.10*bench_metric,0.10*absolute_metric_limit)",
+  "noise_max_fraction_of_metric_limit": 0.3333333333333333,
+  "offline_design": {
+    "zeta": 1.0,
+    "bandwidth_points": 256,
+    "block_bootstrap_runs": 128,
+    "min_phase_margin_deg": 50.0,
+    "min_gain_margin_db": 6.0,
+    "condition_limit": 1000000.0
+  },
+  "adaptation": {
+    "residual_window_s": 2.0,
+    "consecutive_windows": 3,
+    "normalized_residual_rms_threshold": 2.0,
+    "max_information_rounds": 2,
+    "max_cases_per_round": 3,
+    "same_case_data_retry_limit": 1
+  },
+  "never_relax_automatically": true
+}

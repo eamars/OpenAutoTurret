@@ -1,0 +1,158 @@
+{
+ "timing": {
+  "fixed_offset_s": 0.00342328779211793,
+  "exposure_fraction": -0.3302393974476696,
+  "row_time_s": 1.1631746031746032e-05
+ },
+ "exposure_coefficient": -0.8302393974476696,
+ "delay_at_centre_row_s": [
+  -0.017730000000000003,
+  0.0030666666666666733
+ ],
+ "row_times_s": [
+  1.8555555555555574e-05,
+  1.1631746031746032e-05
+ ],
+ "timestamp_uncertainty_s": 0.0038616467656365644,
+ "exposure_model_residual_ms": 0.0,
+ "gates": {
+  "r2_min": 0.6,
+  "row_fit_residual_ms_max": 3.0,
+  "exposure_model_residual_ms_max": 2.0
+ },
+ "fails": [],
+ "valid": true,
+ "sessions": [
+  {
+   "frames": 1174,
+   "exposure_s": 0.033044000000000004,
+   "frame_interval_ms_median": 33.315,
+   "peak_reference_speed_dps": 15.289132677693008,
+   "delta_s": -0.019700000000000002,
+   "r2": 0.7743341626851493,
+   "bands": [
+    {
+     "rows_full": [
+      0,
+      180
+     ],
+     "delta_s": -0.02704,
+     "r2": 0.7898299550926184
+    },
+    {
+     "rows_full": [
+      180,
+      360
+     ],
+     "delta_s": -0.020220000000000002,
+     "r2": 0.7618420783453415
+    },
+    {
+     "rows_full": [
+      360,
+      540
+     ],
+     "delta_s": -0.02014,
+     "r2": 0.76459295753036
+    },
+    {
+     "rows_full": [
+      540,
+      720
+     ],
+     "delta_s": -0.018940000000000002,
+     "r2": 0.7777742077566914
+    },
+    {
+     "rows_full": [
+      720,
+      900
+     ],
+     "delta_s": -0.010020000000000001,
+     "r2": 0.7849892539280338
+    },
+    {
+     "rows_full": [
+      900,
+      1080
+     ],
+     "delta_s": -0.010020000000000001,
+     "r2": 0.7588161561614298
+    }
+   ],
+   "row_time_s": 1.8555555555555574e-05,
+   "delta_row0_s": -0.02775000000000001,
+   "row_fit_residual_ms": 1.9922181942079882,
+   "fails": [],
+   "valid": true,
+   "session": "timing-timing-1"
+  },
+  {
+   "frames": 1240,
+   "exposure_s": 0.007995,
+   "frame_interval_ms_median": 33.316,
+   "peak_reference_speed_dps": 15.28898176060977,
+   "delta_s": 0.00406,
+   "r2": 0.9911095820422751,
+   "bands": [
+    {
+     "rows_full": [
+      0,
+      180
+     ],
+     "delta_s": -0.00248,
+     "r2": 0.9912137402285482
+    },
+    {
+     "rows_full": [
+      180,
+      360
+     ],
+     "delta_s": 0.00084,
+     "r2": 0.9907244330004659
+    },
+    {
+     "rows_full": [
+      360,
+      540
+     ],
+     "delta_s": 0.0009400000000000001,
+     "r2": 0.9909441591948267
+    },
+    {
+     "rows_full": [
+      540,
+      720
+     ],
+     "delta_s": 0.00406,
+     "r2": 0.9908326539172398
+    },
+    {
+     "rows_full": [
+      720,
+      900
+     ],
+     "delta_s": 0.0074600000000000005,
+     "r2": 0.9913464004834466
+    },
+    {
+     "rows_full": [
+      900,
+      1080
+     ],
+     "delta_s": 0.007580000000000001,
+     "r2": 0.9912239966339036
+    }
+   ],
+   "row_time_s": 1.1631746031746032e-05,
+   "delta_row0_s": -0.0032144761904761843,
+   "row_fit_residual_ms": 0.8357473606261946,
+   "fails": [],
+   "valid": true,
+   "session": "timing-fixed8ms-timing-1"
+  }
+ ],
+ "servo_asset": "yaw-20261002-123425",
+ "measured": "2026-10-02",
+ "method": "tools/tracking/timing.py: ego-motion, consecutive-frame flow against encoder increments, row bands, two exposures"
+}

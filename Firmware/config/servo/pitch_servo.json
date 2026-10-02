@@ -1,0 +1,103 @@
+{
+ "schema": "ota.servo-asset/2",
+ "axis": "pitch",
+ "hardware_signature": {
+  "motor": "CyberGear, speed mode (RunMode 2), host position loop at 1 kHz",
+  "position_quantum_rad": 0.0003835,
+  "speed_limit_rad_s": 0.6,
+  "homing": "production controld sensorless homing (config/turret.yaml); endstops 2026-09-30 MechPos A=-0.115, B=-1.511 rad, valid while the drive is not power-cycled"
+ },
+ "provenance": {
+  "commissioned": "20261002-113234",
+  "run": "pitch-20261002-113234",
+  "station": "rpi-turret",
+  "tool": "Firmware/tools/servo_commission/commission.py",
+  "accepted": true
+ },
+ "identified": {
+  "window": {
+   "window_min_rad": -1.371,
+   "window_max_rad": -0.255,
+   "center_rad": -0.813,
+   "endpoint_low_rad": -1.5110000000000001,
+   "endpoint_high_rad": -0.11499999999999999
+  },
+  "speed_delay_s": 9.899804491883626e-17,
+  "speed_tau_s": 4.808488308532488e-15,
+  "speed_gain": 0.34,
+  "speed_loop_note": "speed_gain recomputed from this run's identify journal with the gain-aware fit (identify.pitch_speed_loop after this run): 0.34, no delay or lag resolvable below 10 Hz; the friction-limited drive puts no phase-margin bound on kp, so kp is the 60/s cap, verified quiet on the station to kp 90"
+ },
+ "design": {
+  "kp_per_s": 60.0,
+  "ki_per_s2": 90.0,
+  "phase_margin_deg": 90.0,
+  "pm_limited_kp": 500.0,
+  "ladder_onset_scale": null,
+  "final": {
+   "kp_per_s": 60.0,
+   "ki_per_s2": 90.0
+  }
+ },
+ "plant": {
+  "speed_delay_s": 0.0,
+  "speed_tau_s": 0.0,
+  "reply_delay_s": 0.0005,
+  "position_quantum_rad": 0.0003835,
+  "endpoint_low_rad": -1.5110000000000001,
+  "endpoint_high_rad": -0.11499999999999999,
+  "speed_gain": 0.34
+ },
+ "validation": [
+  {
+   "script": "pitch_usecase",
+   "summary": {
+    "ramp_rms_deg": [
+     0.021,
+     0.041
+    ],
+    "step_final_deg": [
+     -0.003,
+     0.004
+    ],
+    "walker_rms_deg": 0.031
+   },
+   "fails": []
+  },
+  {
+   "script": "pitch_usecase",
+   "summary": {
+    "ramp_rms_deg": [
+     0.023,
+     0.045
+    ],
+    "step_final_deg": [
+     -0.002,
+     0.007
+    ],
+    "walker_rms_deg": 0.031
+   },
+   "fails": []
+  }
+ ],
+ "native_settings": {
+  "expected_original_mode": 2,
+  "original_speed_kp": 4,
+  "original_speed_ki": 0.05,
+  "homing_speed_kp": 4,
+  "homing_speed_ki": 0.05
+ },
+ "servo_trial": {
+  "kp_per_s": 60.0,
+  "ki_per_s2": 90.0,
+  "integral_clamp_rad_s": 0.1,
+  "command_period_s": 0.001,
+  "hold_after_s": 1.0,
+  "speed_limit_rad_s": 0.6,
+  "following_error_rad": 0.1,
+  "approach_speed_rad_s": 0.08,
+  "window_margin_rad": 0.14,
+  "window_min_rad": -1.371,
+  "window_max_rad": -0.255,
+  "center_rad": -0.813
+ }
+}

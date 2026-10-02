@@ -1,0 +1,53 @@
+{
+  "schema_name": "ADR003_PhotographyRequirements_design_template_v1",
+  "artifact_kind": "input_contract_not_existing_runtime_api",
+  "status": "UNSPECIFIED_NOT_APPROVED_NOT_EXECUTABLE",
+  "camera": {
+    "camera_id": null,
+    "sensor_mode_id": null,
+    "image_width_px": null,
+    "image_height_px": null,
+    "calibration_revision": null,
+    "anchor_policy_id": null,
+    "framing_pixel": null
+  },
+  "required_operating_domain": {
+    "target_rate_rad_s": {
+      "yaw": null,
+      "pitch": null
+    },
+    "target_acceleration_rad_s2": {
+      "yaw": null,
+      "pitch": null
+    },
+    "distance_range_m": null,
+    "pose_range_rad": null,
+    "exposure_range_s": null
+  },
+  "photography_limits": {
+    "maximum_anchor_rms_error_px": null,
+    "maximum_anchor_peak_error_px": null,
+    "maximum_exposure_motion_blur_px": null,
+    "maximum_time_to_first_usable_frame_s": null,
+    "minimum_usable_frame_fraction": null,
+    "minimum_subject_edge_margin_px": null
+  },
+  "comparison_requirements": {
+    "moving_lag_improvement_floor_s": null,
+    "maximum_stationary_jitter_regression_px": null,
+    "maximum_stop_peak_error_regression_px": null
+  },
+  "provenance": {
+    "source_of_requirements": null,
+    "accepted_by": null,
+    "accepted_at": null
+  },
+  "rules": [
+    "Use previously explicit photography requirements where available.",
+    "Do not infer tolerances from achieved performance.",
+    "Do not replace null with zero or a guessed measured value.",
+    "Use calibrated projection to convert pixel requirements into angular budgets.",
+    "Control parameters are fitted/solved separately and are not quality requirements.",
+    "No field grants motor authority or enlarges ADR0022 limits."
+  ]
+}

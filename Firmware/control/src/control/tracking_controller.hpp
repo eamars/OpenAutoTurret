@@ -36,6 +36,9 @@
 #include "tracking/aim_point.hpp"
 #include "tracking/target_measurement.hpp"
 #include "tracking/tracking_state_machine.hpp"
+#include "tracker.hpp"
+#include <memory>
+#include <optional>
 
 namespace ota {
 
@@ -66,6 +69,15 @@ class TrackingController {
     // Subtract the two-sigma rate uncertainty before prediction/feed-forward.
     // Enabled by speed-mode service; configurable here for offline ablation.
     bool uncertainty_gated_motion = false;
+    // ADR-003 tracking core (Firmware/tracking_core, parameters config/tracking/*.json): when set
+    // it alone owns the target state (one CV Kalman filter on the base-frame LOS at each frame's
+    // optical time), the prediction (observation age + identified execution delay only; the
+    // configured control_delay/motor_response lead is not used) and the AUTO_TRACK reference
+    // (Level 1). The legacy estimator below is then never updated.
+    std::optional<track::TrackerParameters> core;
+    // Until the V2 observation wire carries each frame's exposure, the exposure term of the
+    // measured optical time uses this value (the camera's auto-exposure in the station's room).
+    double core_nominal_exposure_s = 0.033;
   };
 
   explicit TrackingController(Config cfg)
@@ -81,6 +93,12 @@ class TrackingController {
         refman_(solver_) {
     if (alignment_.enabled && !alignment_.valid) throw std::invalid_argument(alignment_.reason);
     if (!tracking::valid_aim_options(cfg_.aim)) throw std::invalid_argument("invalid aim point policy");
+    if (cfg_.core) {
+      const auto& l1 = cfg_.core->level1.axis;
+      core_ = std::make_unique<track::Tracker>(*cfg_.core, cfg_.kinematics, cfg_.intrinsics, alignment_.sight_camera,
+                                               track::Travel{0, 0, l1[1].q_min, l1[1].q_max});
+      if (!core_->ok()) throw std::invalid_argument("ADR-003 tracking core parameters or geometry rejected");
+    }
   }
 
   // Feed the latest pose (rad) each cycle (maintains the motor history for §11
@@ -141,6 +159,28 @@ class TrackingController {
       estimator_.reset();
       fsm_.reset();
     }
+    if (core_) {
+      // ADR-003: the pixel at its measured optical time, the pose interpolated at that time, one
+      // update of the one estimator. The core resets the subject on an identity change.
+      track::PixelObservation z;
+      z.sensor_ns = static_cast<int64_t>(m.sensor_timestamp_ns);
+      z.exposure_s = cfg_.core_nominal_exposure_s;
+      z.u = ap.u_px; z.v = ap.v_px;
+      z.identity = m.has_track_id ? m.visual_track_id : 0;
+      const TimeNs t_o = core_->observation_time(z);
+      MotorSample op, oy;
+      if (!history_pitch_.interpolate(t_o, op) || !history_yaw_.interpolate(t_o, oy)) return false;
+      if (!core_->observe(z, oy.q, op.q)) return false;
+      last_aim_point_ = ap;
+      aim_valid_ = true;
+      has_identity_ = m.has_track_id;
+      last_identity_ = m.visual_track_id;
+      last_capture_ns_ = m.sensor_timestamp_ns;
+      last_frame_sequence_ = m.frame_sequence;
+      last_valid_arrival_ns_ = now_ns_;
+      has_measurement_ = true;
+      return true;
+    }
     // A conservative diagonal angular covariance from anchor/box scale and
     // independent detector/association/identity qualities. The 2 px floor and
     // 2% box jitter are provisional priors to fit from stationary recordings.
@@ -177,7 +217,13 @@ class TrackingController {
 
     // §13.3 predict to the actuation time.
     double az, el;
-    if (estimator_.initialized()) {
+    if (core_) {
+      // ADR-003: the observation age (and an identified execution delay, if any) is the only lead.
+      const auto goal = core_query(now_ns);
+      const auto& x = core_->estimator().state();
+      az = goal.position_valid ? goal.theta[0] : x[0].theta;
+      el = goal.position_valid ? goal.theta[1] : x[1].theta;
+    } else if (estimator_.initialized()) {
       estimator_.predict(now_ns + cfg_.control_delay_ns + cfg_.motor_response_ns,
                          az, el);
       if (cfg_.uncertainty_gated_motion && cfg_.estimator.use_kalman) {
@@ -228,11 +274,13 @@ class TrackingController {
   void set_search_enabled(bool enabled) { fsm_.set_search_enabled(enabled); }
   double confidence() const { return fsm_.confidence(); }
   bool has_measurement() const { return has_measurement_; }
-  bool estimator_initialized() const { return estimator_.initialized(); }
+  bool estimator_initialized() const { return core_ ? core_->estimator().initialized() : estimator_.initialized(); }
   bool prediction_valid() const {
+    if (core_) return core_query(now_ns_).position_valid;
     return estimator_.prediction_valid(now_ns_ + cfg_.control_delay_ns + cfg_.motor_response_ns);
   }
   void predicted_los(double& az, double& el) const {
+    if (core_) { az = core_->estimator().state()[0].theta; el = core_->estimator().state()[1].theta; return; }
     az = estimator_.azimuth();
     el = estimator_.elevation();
   }
@@ -248,10 +296,14 @@ class TrackingController {
   // because a lead claim is otherwise unmeasurable: `q_ref` is the OUTPUT of the slew limiter, so a
   // lead measured on it conflates "no lead was asked for" with "lead was asked for and the reference
   // could not slew that fast". These three numbers say what was actually requested.
-  double target_az_rate_rad_s() const { return estimator_.azimuth_rate(); }
-  double target_el_rate_rad_s() const { return estimator_.elevation_rate(); }
-  double target_rate_variance(int axis) const { return estimator_.rate_variance(axis); }
+  double target_az_rate_rad_s() const { return core_ ? core_->estimator().state()[0].omega : estimator_.azimuth_rate(); }
+  double target_el_rate_rad_s() const { return core_ ? core_->estimator().state()[1].omega : estimator_.elevation_rate(); }
+  double target_rate_variance(int axis) const {
+    if (core_) return axis >= 0 && axis < 2 ? core_->estimator().state()[axis].vv : 0.0;
+    return estimator_.rate_variance(axis);
+  }
   double target_motion_rate(int axis) const {
+    if (core_) return axis >= 0 && axis < 2 ? core_query(now_ns_).omega[axis] : 0.0;
     const double rate=axis==0?estimator_.azimuth_rate():estimator_.elevation_rate();
     if (!cfg_.uncertainty_gated_motion || !cfg_.estimator.use_kalman) return rate;
     const double uncertainty=2*std::sqrt(std::max(0.0,estimator_.rate_variance(axis)));
@@ -268,12 +320,27 @@ class TrackingController {
     return {(geo::wrap_near(next_yaw,yaw)-yaw)/h,(next_pitch-pitch)/h};
   }
   const tracking::TargetEstimator::Diagnostics& estimator_diagnostics() const {
+    if (core_) {
+      // The legacy telemetry fields, filled from the core's diagnostics.
+      const auto& d = core_->estimator().diagnostics();
+      core_diagnostics_.innovation_az = d.innovation[0];
+      core_diagnostics_.innovation_el = d.innovation[1];
+      core_diagnostics_.mahalanobis = d.nis;
+      core_diagnostics_.process_noise_scale = std::max(d.scale[0], d.scale[1]);
+      core_diagnostics_.accepted = d.accepted;
+      core_diagnostics_.rejected = d.rejected;
+      core_diagnostics_.gap_resets = d.gap_resets;
+      core_diagnostics_.last_accepted = d.last_accepted;
+      return core_diagnostics_;
+    }
     return estimator_.diagnostics();
   }
   double target_position_variance(int axis) const {
+    if (core_) return axis >= 0 && axis < 2 ? core_->estimator().state()[axis].pp : 0.0;
     return estimator_.position_variance(axis, now_ns_ + cfg_.control_delay_ns + cfg_.motor_response_ns);
   }
   int64_t prediction_horizon_ns() const {
+    if (core_) return core_->estimator().initialized() ? static_cast<int64_t>(core_query(now_ns_).age_s * 1e9) : 0;
     if (!estimator_.initialized()) return 0;
     return std::clamp<int64_t>(now_ns_ + cfg_.control_delay_ns + cfg_.motor_response_ns
                              - estimator_.state_timestamp_ns(), 0,
@@ -288,7 +355,28 @@ class TrackingController {
   void record_pose(double q_yaw_rad) { last_q_yaw_ = q_yaw_rad; }
   void record_reference(const ReferenceRequest& r) { last_ref_ = r; }
 
+  // --- ADR-003 tracking core (Config::core) ----------------------------------
+  bool uses_core() const { return core_ != nullptr; }
+  // Level 1 takes the reference over from its current state (engagement, never per tick).
+  void core_engage(TimeNs t, const std::array<double,2>& q, const std::array<double,2>& v,
+                   const std::array<double,2>& a) { if (core_) core_->engage(t, q, v, a); }
+  // This tick's envelope and travel (core axis order: 0 yaw, 1 pitch).
+  bool core_limits(int axis, double v_max, double a_max, double j_max, double q_min, double q_max) {
+    return core_ && core_->level1().set_limits(axis, v_max, a_max, j_max, q_min, q_max);
+  }
+  void core_travel(const track::Travel& travel) { if (core_) core_->set_travel(travel); }
+  bool core_speed_bounds(int axis, double negative_speed, double positive_speed) {
+    return core_ && core_->level1().set_speed_bounds(axis, negative_speed, positive_speed);
+  }
+  // One Level-1 tick: the joint goal from the estimator and the one reference sample.
+  track::TickRecord core_tick(TimeNs now, const std::array<double,2>& q_measured) {
+    now_ns_ = now;
+    return core_ ? core_->tick(now, q_measured) : track::TickRecord{};
+  }
+  const track::Tracker* core() const { return core_.get(); }
+
   void reset() {
+    if (core_) core_->forget();
     estimator_.reset();
     fsm_.reset();
     has_measurement_ = false;
@@ -356,6 +444,12 @@ class TrackingController {
   double predicted_az_act_rad_ = 0.0;
   double predicted_el_act_rad_ = 0.0;
   ReferenceRequest last_ref_;
+  std::unique_ptr<track::Tracker> core_;
+  mutable tracking::TargetEstimator::Diagnostics core_diagnostics_{};
+  track::LosGoal core_query(TimeNs now) const {
+    const auto h = static_cast<int64_t>(cfg_.core->execution_horizon_s * 1e9);
+    return core_->estimator().query(now + h, cfg_.core->target_motion);
+  }
 };
 
 }  // namespace ota

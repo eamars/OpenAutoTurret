@@ -29,7 +29,10 @@ find_package(Threads REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(spdlog REQUIRED)
 
+add_subdirectory(axis_control_core)
+add_subdirectory(tracking_core)
 add_subdirectory(control)
+add_subdirectory(commission_runtime)
 
 add_executable(probe-mixed-hardware tools/probe_mixed_hardware.cpp)
 target_link_libraries(probe-mixed-hardware PRIVATE ota_core)

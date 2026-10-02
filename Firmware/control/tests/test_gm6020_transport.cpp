@@ -16,6 +16,7 @@
 
 #include "can/gm6020_protocol.hpp"
 #include "can/gm6020_velocity.hpp"
+#include "can/gm6020_friction.hpp"
 #include "can/socketcan_bus.hpp"
 #include "can/yousee_transport.hpp"
 #include "can/cybergear_protocol.hpp"
@@ -178,6 +179,42 @@ TEST(GM6020Encoder, RejectsAmbiguousOrReorderedSamplesAndLatchesInvalidity) {
   bad_count.reset();
   EXPECT_TRUE(bad_count.update(0, 6'000'000'000));
   EXPECT_TRUE(bad_count.valid());
+}
+
+// Station, 2026-10-02 20:02:50: two frames received 3 us apart (bunched in the receive queue; the
+// motor samples every 1 ms), 3 counts apart at 14 rpm, latched the old unwrap invalid and faulted
+// the station for good. Production's Recover policy: the device period bounds the time between
+// readings, a doubtful reading is skipped, a run of them is believed, and gaps never latch.
+TEST(GM6020Encoder, RecoverPolicyNeverLatchesOnBunchedFramesGapsOrGlitches) {
+  using ota::gm6020::UnwrappedEncoder;
+  constexpr double k = UnwrappedEncoder::kRadiansPerCount;
+  UnwrappedEncoder e(UnwrappedEncoder::Policy::Recover);
+  ASSERT_TRUE(e.update(838, 1'000'000'000));
+  EXPECT_TRUE(e.update(841, 1'000'003'000)) << "the station's 3 us pair";
+  EXPECT_TRUE(e.update(841, 1'000'003'000)) << "a duplicate stamp";
+  EXPECT_TRUE(e.update(843, 1'000'002'000)) << "a reordered stamp";
+  EXPECT_NEAR(e.relative_rad(), 5 * k, 1e-12);
+  // A corrupt reading half a turn away is skipped, and the next good one continues.
+  EXPECT_FALSE(e.update(4900, 1'001'000'000));
+  EXPECT_TRUE(e.valid());
+  EXPECT_TRUE(e.update(845, 1'002'000'000));
+  EXPECT_NEAR(e.relative_rad(), 7 * k, 1e-12);
+  // A 400 ms gap (the old unwrap latched beyond 80 ms) re-establishes the turn by nearest count.
+  EXPECT_TRUE(e.update(900, 1'402'000'000));
+  EXPECT_NEAR(e.relative_rad(), 62 * k, 1e-12);
+  EXPECT_EQ(e.long_gaps(), 1u);
+  // A real jump the unwrap did not see coming (readings consistently elsewhere) is believed after a run.
+  int accepted_at = -1;
+  for (int i = 0; i < 30 && accepted_at < 0; ++i)
+    if (e.update(3000, 1'403'000'000 + i * 1'000)) accepted_at = i;
+  EXPECT_GE(accepted_at, 1);
+  EXPECT_LT(accepted_at, UnwrappedEncoder::kBelieveAfter);
+  EXPECT_TRUE(e.valid());
+  // Malformed frames are skipped, never latched.
+  EXPECT_FALSE(e.update(8192, 1'500'000'000));
+  EXPECT_FALSE(e.update(3000, 0));
+  EXPECT_TRUE(e.valid());
+  EXPECT_TRUE(e.update(3001, 1'501'000'000));
 }
 
 TEST(YouseeTransport, RefusesTypedStandardFrameWithoutOpeningAdapter) {
@@ -448,4 +485,92 @@ TEST(Gm6020CurrentLoop, VoltageWrapperKeepsItsOwnFrameBound) {
   loop.reset(0.0, 1'000'000);
   EXPECT_GT(loop.update(0.3, 0.0, 6'000'000, 0.524, 15000.0, 1000.0, 10.0), 0);
   EXPECT_TRUE(loop.valid());
+}
+
+TEST(Gm6020CurrentLoop, FreshLateCycleFreezesIntegralAndRecovers) {
+  ota::gm6020::VelocityLoop loop;
+  loop.reset(0, 1'000'000);
+  const auto first = loop.update_amps(.1, 0, 6'000'000, .524, .8, 1, .6);
+  const auto integral = loop.integral();
+  EXPECT_DOUBLE_EQ(first, loop.update_amps(.1, 0, 31'000'000, .524, .8, 1, .6));
+  EXPECT_TRUE(loop.valid());
+  EXPECT_TRUE(loop.late_cycle());
+  EXPECT_DOUBLE_EQ(integral, loop.integral());
+  EXPECT_GT(loop.update_amps(.1, 0, 36'000'000, .524, .8, 1, .6), first);
+  EXPECT_FALSE(loop.late_cycle());
+  EXPECT_DOUBLE_EQ(0, loop.update_amps(.1, 0, 35'000'000, .524, .8, 1, .6));
+  EXPECT_FALSE(loop.valid());
+  loop.reset(0, 1'000'000);
+  EXPECT_DOUBLE_EQ(0, loop.update_amps(.1, 0, 102'000'000, .524, .8, 1, .6));
+  EXPECT_FALSE(loop.valid());
+}
+
+TEST(Gm6020Friction, OneAttemptPerLeaseAndMovingHandoff) {
+  ota::gm6020::FrictionConfig cfg{true, .30, .35, .10, .12, .10, .01, .005, 2, 1.0};
+  ota::gm6020::YawFrictionCompensation friction;
+  auto out = friction.update(cfg, true, 1, 0, 0, 1, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+  EXPECT_DOUBLE_EQ(out.feedforward_target_a, .30);
+  EXPECT_TRUE(out.new_attempt);
+  // Renewing the same intent does not reinitialize the attempt; unique RX samples
+  // must establish displacement before the helper hands control back to PI.
+  out = friction.update(cfg, true, 1, -.011, 1, 2, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+  EXPECT_FALSE(out.new_attempt);
+  out = friction.update(cfg, true, 1, .011, 1, 3, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+  out = friction.update(cfg, true, 1, .012, 1, 4, .005, .8);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Moving);
+  EXPECT_TRUE(out.integral_handoff);
+  EXPECT_DOUBLE_EQ(out.feedforward_target_a, .10);
+  EXPECT_DOUBLE_EQ(out.previous_feedforward_a, .30);
+  EXPECT_DOUBLE_EQ(out.next_feedforward_a, .10);
+  out = friction.update(cfg, false, 0, .012, 1, 5, .005, .8);
+  EXPECT_TRUE(out.integral_handoff);
+  EXPECT_DOUBLE_EQ(out.previous_feedforward_a, .10);
+  EXPECT_DOUBLE_EQ(out.next_feedforward_a, 0);
+}
+
+TEST(Gm6020Friction, QuietHoldExhaustionAndReverseWaitAreBounded) {
+  ota::gm6020::FrictionConfig cfg{true, .3, .3, .1, .1, .010, .02, .005, 2, 2.0};
+  ota::gm6020::YawFrictionCompensation friction;
+  auto out = friction.update(cfg, false, 0, 0, 0, 1, .005, .8);
+  EXPECT_EQ(out.feedforward_target_a, 0);
+  out = friction.update(cfg, true, 1, 0, 0, 2, .005, .8);
+  for (int i = 0; i < 3; ++i) out = friction.update(cfg, true, 1, 0, 0, 3 + i, .005, .8);
+  EXPECT_TRUE(out.attempt_exhausted);
+  EXPECT_FALSE(out.attempt_active);
+  cfg.timeout_s = .1; // observe the reverse gate before its next attempt expires
+  out = friction.update(cfg, true, -1, 0, 0, 6, .005, .8);
+  EXPECT_TRUE(out.waiting_for_stationary);
+  out = friction.update(cfg, true, -1, 0, 0, 7, .005, .8);
+  out = friction.update(cfg, true, -1, 0, 0, 8, .005, .8);
+  EXPECT_FALSE(out.waiting_for_stationary);
+  EXPECT_EQ(out.state, ota::gm6020::FrictionState::Breakaway);
+}
+
+TEST(Gm6020Friction, RejectsUnboundedOrNonFiniteCalibration) {
+  ota::gm6020::FrictionConfig cfg{true, NAN, .3, .1, .1, .1, .01, .005, 2, 1.0};
+  EXPECT_FALSE(cfg.valid(.8));
+  cfg.positive_breakaway_a = .9;
+  EXPECT_FALSE(cfg.valid(.8));
+}
+
+TEST(Gm6020Friction, OpposingVelocityWaitsAndZeroDirectionDoesNotRearm) {
+  ota::gm6020::FrictionConfig cfg{true, .3, .3, .1, .1, .1, .02, .005, 2, 2.0};
+  ota::gm6020::YawFrictionCompensation friction;
+  auto out = friction.update(cfg, true, 1, 0, -.05, 1, .005, .8);
+  EXPECT_TRUE(out.waiting_for_stationary);
+  EXPECT_FALSE(out.new_attempt);
+  out = friction.update(cfg, true, 1, 0, 0, 2, .005, .8);
+  EXPECT_TRUE(out.waiting_for_stationary);
+  out = friction.update(cfg, true, 1, 0, 0, 3, .005, .8);
+  EXPECT_TRUE(out.new_attempt);
+  out = friction.update(cfg, true, 1, 0, 0, 4, .005, .8);
+  EXPECT_FALSE(out.new_attempt);
+  out = friction.update(cfg, true, 0, 0, 0, 5, .005, .8);
+  EXPECT_TRUE(out.integral_handoff);
+  EXPECT_EQ(out.feedforward_target_a, 0);
+  out = friction.update(cfg, true, 1, 0, 0, 6, .005, .8);
+  EXPECT_FALSE(out.new_attempt);
 }

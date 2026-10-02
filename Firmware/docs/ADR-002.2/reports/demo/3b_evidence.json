@@ -1,0 +1,86 @@
+{
+  "stage": "3b",
+  "started_at": "2026-09-29T11:00:00Z",
+  "finished_at": "2026-09-29T11:30:00Z",
+  "bench_certificate_hash": "111ccfcec248d9db927b416b272e640c9a90db623cd0c6ba3527ba4f9e4df473",
+  "program": "production",
+  "route": "normal_production_chain",
+  "execution": "synthetic",
+  "shadow": false,
+  "status": "PASS",
+  "candidate_id": "SYNTHETIC_TEST_ONLY",
+  "hardware_signature": "c0b93bc23099710c3d45532ff5032b146b8b68da321ff05b4b6aa3b1169553f9",
+  "measurement_signature": "b1593e195e73650ef8e17b8e8d2d5901bd3831c421f4d266cc9cfe5e96b63528",
+  "core_build_hash": "33a57ce28353b66fa8ff3e0b7d1a0b6c3bf6f370cb42c041b6fd3cef4a822016",
+  "observer_hash": "311b178a630c3ab2acdcecd86373b7a455b5af2d8af8a1d80e9d4ad03730aa14",
+  "model_hash": "b7db1e71f2d2e60f9db2d698093f1fc1525b380cff2e4eda220a29cf6363cbac",
+  "parameters_hash": "e93b92bda54cd7c65dc7fef5c3c8ee7cec4f3fbdf86bda0f865c4559f4bf6f9d",
+  "metrics_hash": "fa283b7643dab6274b4889b0922341d3c970ac0efa76865f4cb03a47e8e391ff",
+  "test_spec_hash": "3acacbb831fcdee8f46473ab26cce14cac5556cf6cf4aaf1a7e4c5359d7f814e",
+  "envelope_hash": "f1f6f892eb7f5908a75e043c044a17d0ea0fba56dde0a8a033d12e2383ab10f4",
+  "actual_parameters_hash": "e93b92bda54cd7c65dc7fef5c3c8ee7cec4f3fbdf86bda0f865c4559f4bf6f9d",
+  "binary_hash": "837ef87bb3b36f4d3b980d05232c6e3f31272ea2ea63a7d89e1c34e95a149645",
+  "trace_hashes": [
+    "82f7fde8a06e8ccfa9c2f3bdebe4be385221a9e8808846047b71da5b535d157d"
+  ],
+  "unresolved_abort": false,
+  "coverage": [
+    {
+      "axis": "yaw",
+      "condition": "BASELINE",
+      "case": "response",
+      "status": "PASS",
+      "valid_data": true,
+      "repetitions": 3,
+      "operating_point_hash": "ecaa4df4456e172430f3b25c31eb7f1cb2322e8523bffe3b1a808045647feb49"
+    },
+    {
+      "axis": "yaw",
+      "condition": "BASELINE",
+      "case": "smoothness",
+      "status": "PASS",
+      "valid_data": true,
+      "repetitions": 3,
+      "operating_point_hash": "ecaa4df4456e172430f3b25c31eb7f1cb2322e8523bffe3b1a808045647feb49"
+    },
+    {
+      "axis": "yaw",
+      "condition": "BASELINE",
+      "case": "stop",
+      "status": "PASS",
+      "valid_data": true,
+      "repetitions": 3,
+      "operating_point_hash": "ecaa4df4456e172430f3b25c31eb7f1cb2322e8523bffe3b1a808045647feb49"
+    },
+    {
+      "axis": "pitch",
+      "condition": "BASELINE",
+      "case": "response",
+      "status": "PASS",
+      "valid_data": true,
+      "repetitions": 3,
+      "operating_point_hash": "ecaa4df4456e172430f3b25c31eb7f1cb2322e8523bffe3b1a808045647feb49"
+    },
+    {
+      "axis": "pitch",
+      "condition": "BASELINE",
+      "case": "smoothness",
+      "status": "PASS",
+      "valid_data": true,
+      "repetitions": 3,
+      "operating_point_hash": "ecaa4df4456e172430f3b25c31eb7f1cb2322e8523bffe3b1a808045647feb49"
+    },
+    {
+      "axis": "pitch",
+      "condition": "BASELINE",
+      "case": "stop",
+      "status": "PASS",
+      "valid_data": true,
+      "repetitions": 3,
+      "operating_point_hash": "ecaa4df4456e172430f3b25c31eb7f1cb2322e8523bffe3b1a808045647feb49"
+    }
+  ],
+  "production_load_verified": true,
+  "lifecycle_verified": true,
+  "parity_passed": true
+}

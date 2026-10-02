@@ -38,6 +38,7 @@
 #include "config/station_wiring.hpp"
 #include "config/mixed_hardware_profile.hpp"
 #include "config/turret_config.hpp"
+#include "control/runtime_parameter_registry.hpp"
 #include "control/boot_fsm.hpp"
 #include "control/can_motor_backend.hpp"
 #include "control/mixed_can_motor_backend.hpp"
@@ -107,6 +108,15 @@ bool has_flag(int argc, char** argv, const char* name) {
   for (int i = 2; i < argc; ++i)
     if (std::strcmp(argv[i], name) == 0) return true;
   return false;
+}
+
+// `--flag <value>`, or "" when the flag is absent. The dump paths use it so that a machine reading
+// the registry gets a file it can open, instead of having to pick the document out of whatever the
+// logger happened to print on the same stream.
+std::string flag_value(int argc, char** argv, const char* name) {
+  for (int i = 2; i + 1 < argc; ++i)
+    if (std::strcmp(argv[i], name) == 0) return argv[i + 1];
+  return "";
 }
 
 // The sim plant sized to THIS station's measured geometry (P0/P3: pitch travel
@@ -198,6 +208,32 @@ int main(int argc, char** argv) {
   catch (const std::exception& e) {
     spdlog::error("tracking configuration: {}", e.what());
     return 1;
+  }
+
+  // `--dump-parameter-registry <path|->`: what this binary can change while it runs, as JSON.
+  // Placed deliberately here — after the config and hardware profile are loaded, so every reported
+  // value is the one this boot would run with, and before any CAN transport is opened, so asking a
+  // station what it can tune has no way to move a motor. A file path is preferred over stdout
+  // because the boot log shares stdout; "-" asks for stdout in a context where that is safe.
+  const std::string registry_dump = flag_value(argc, argv, "--dump-parameter-registry");
+  if (!registry_dump.empty()) {
+    const std::string json = control::parameter_registry_json(
+        cfg, mixed_mode ? &mixed_profile : nullptr, config_path, cfg.hardware_profile);
+    if (registry_dump == "-") {
+      std::fputs(json.c_str(), stdout);
+      std::fflush(stdout);
+      return 0;
+    }
+    std::FILE* out = std::fopen(registry_dump.c_str(), "wb");
+    if (out == nullptr) {
+      spdlog::error("--dump-parameter-registry: cannot write {}: {}", registry_dump,
+                    std::strerror(errno));
+      return 1;
+    }
+    std::fputs(json.c_str(), out);
+    std::fclose(out);
+    spdlog::info("parameter registry written to {}", registry_dump);
+    return 0;
   }
 
   // 2. The motor backend. Real: open the CAN bus (this process is the sole
@@ -321,6 +357,7 @@ int main(int argc, char** argv) {
     spdlog::warn("mixed motor health: GM6020 fault/temperature units unavailable; independent raw-temperature/speed/freshness guard active");
   }
   if (mixed_commission_manual) {
+    control_cfg.manual_commissioning = true;
     control_cfg.start_in_auto_roam = false;
     spdlog::warn("mixed commissioning: manual/hold only; AUTO_ROAM startup and tracking auto-enable suppressed");
   }
@@ -466,6 +503,10 @@ int main(int argc, char** argv) {
       const double vp = prof.pitch.v_max_rad_s / kDeg2Rad;
       const double vy = prof.yaw.v_max_rad_s / kDeg2Rad;
       loop.set_payload_profile(std::move(prof));
+      spdlog::info("payload source={}/{} startup_qualification={} auto_verify={} (auto_verify does not disable loading)",
+                   cfg.payload.profile_dir, cfg.payload.active_profile,
+                   mixed_mode ? "unqualified: legacy hardware binding" : "legacy startup trust",
+                   cfg.payload.auto_verify);
       spdlog::info("payload profile: loaded '{}' (v_max pitch={:.1f} deg/s, yaw={:.1f} deg/s)",
                    cfg.payload.active_profile, vp, vy);
     } else {
@@ -723,8 +764,9 @@ int main(int argc, char** argv) {
           (cfg.shutdown.speed_deg_s * kDeg2Rad);
     }
     const TimeNs park_deadline = t_prev + static_cast<TimeNs>(budget_s * 1e9);
-    while (now_monotonic_ns() < park_deadline && loop.phase() != Phase::Parked &&
-           loop.phase() != Phase::Fault) {
+    // An accepted unverified stop is not an active parking state machine.
+    // Do not resume ordinary Hold/mode output for the whole parking budget.
+    while (now_monotonic_ns() < park_deadline && loop.phase() == Phase::Parking) {
       const TimeNs t0 = now_monotonic_ns();
       loop.step(t0, t0 - t_prev);
       t_prev = t0;

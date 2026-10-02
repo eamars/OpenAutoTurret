@@ -1,0 +1,272 @@
+{
+  "date": "2026-09-30",
+  "validation_kind": "documentation_consistency_not_control_software_validation",
+  "checks_run": 48,
+  "checks_passed": 48,
+  "checks": [
+    {
+      "check": "Both declarative contract files parse as JSON",
+      "passed": true
+    },
+    {
+      "check": "18 unique decisions",
+      "passed": true
+    },
+    {
+      "check": "14 unique scenarios",
+      "passed": true
+    },
+    {
+      "check": "D01 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D02 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D03 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D04 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D05 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D06 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D07 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D08 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D09 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D10 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D11 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D12 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D13 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D14 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D15 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D16 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D17 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "D18 occurs in ADR decision table",
+      "passed": true
+    },
+    {
+      "check": "T01 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T02 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T03 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T04 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T05 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T06 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T07 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T08 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T09 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T10 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T11 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T12 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T13 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "T14 occurs in acceptance table and requires all stages",
+      "passed": true
+    },
+    {
+      "check": "Stage 1 explicitly excludes physical measurements and access",
+      "passed": true
+    },
+    {
+      "check": "Both physical validation environments required",
+      "passed": true
+    },
+    {
+      "check": "Physical results not asserted",
+      "passed": true
+    },
+    {
+      "check": "Implementation not asserted",
+      "passed": true
+    },
+    {
+      "check": "Source commit honestly unknown",
+      "passed": true
+    },
+    {
+      "check": "No manual parameter search or rebuild for parameter changes",
+      "passed": true
+    },
+    {
+      "check": "Photography thresholds remain unspecified",
+      "passed": true
+    },
+    {
+      "check": "Same-core and same-parameter rule present",
+      "passed": true
+    },
+    {
+      "check": "No unapproved template presented as executable",
+      "passed": true
+    },
+    {
+      "check": "User source preserved byte-for-byte",
+      "passed": true
+    },
+    {
+      "check": "Both staged FF comparisons specified",
+      "passed": true
+    },
+    {
+      "check": "One consistent reference integration specified",
+      "passed": true
+    },
+    {
+      "check": "All Markdown relative file links resolve",
+      "passed": true
+    }
+  ],
+  "relative_links": [
+    {
+      "source": "ADR-003.md",
+      "target": "sources/SOURCES.md",
+      "exists": true
+    },
+    {
+      "source": "ADR-003.md",
+      "target": "docs/01_SOURCE_AUDIT.md",
+      "exists": true
+    },
+    {
+      "source": "ADR-003.md",
+      "target": "docs/02_MATH_AND_INTERFACES.md",
+      "exists": true
+    },
+    {
+      "source": "ADR-003.md",
+      "target": "docs/03_STAGES_AND_ACCEPTANCE.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "00_CODEX_START.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "ADR-003.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "docs/01_SOURCE_AUDIT.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "docs/02_MATH_AND_INTERFACES.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "docs/03_STAGES_AND_ACCEPTANCE.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "contracts/requirements.json",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "contracts/photography_spec.template.json",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "sources/SOURCES.md",
+      "exists": true
+    }
+  ],
+  "repository_cloned": false,
+  "firmware_modified": false,
+  "cxx_compiled": false,
+  "unit_tests_of_tracking_implementation_run": false,
+  "simulation_of_proposed_tracking_algorithm_run": false,
+  "pi_accessed": false,
+  "motor_commands_sent": false,
+  "physical_3a": "NOT_RUN",
+  "production_3b": "NOT_RUN",
+  "note": "These checks verify document structure and declarations, not algorithm correctness or photography performance."
+}

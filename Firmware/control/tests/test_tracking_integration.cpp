@@ -17,11 +17,13 @@
 #include "ota_test_paths.hpp"
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "calibration/homing_plan.hpp"
 #include "config/turret_config.hpp"
@@ -29,6 +31,8 @@
 #include "sim/sim_motor_backend.hpp"
 #include "tracks/perception_wire.hpp"
 #include "web/web_server.hpp"
+#include "tracking_config.hpp"
+#include <yaml-cpp/yaml.h>
 
 using namespace ota;
 using ota::geo::CameraIntrinsics;
@@ -128,8 +132,9 @@ TrackingController::Config make_tracking_cfg(bool search_enabled) {
 class TrackingRig {
  public:
   explicit TrackingRig(bool speed_control = false, bool full_travel = false,
-                       double track_acceleration = 15, const control::MotionConfig& motion = {})
-      : backend_(std::make_unique<SimMotorBackend>(0.005)),
+                       double track_acceleration = 15, const control::MotionConfig& motion = {},
+                       std::unique_ptr<SimMotorBackend> backend = nullptr)
+      : backend_(backend ? std::move(backend) : std::make_unique<SimMotorBackend>(0.005)),
         sim_(backend_.get()),
         cam_(make_intrinsics()), kin_(TurretKinematics::aligned()),
         loop_(std::make_unique<ControlLoop>(make_cfg(speed_control,full_travel,track_acceleration,motion), std::move(backend_))) {
@@ -544,6 +549,495 @@ TEST(TrackingIntegration, TracksRotatingTarget) {
   EXPECT_NEAR(el_now, el_const, 3.0 * kDeg)
       << "gimbal elevation should track the target";
 }
+
+// ADR-003 3b: the same closed loop with the tracking core owning the target state and the
+// AUTO_TRACK reference (Level 1: target-velocity feedforward + reference-error feedback), under
+// the speed service, against the legacy estimator + lead + track_reference in the identical rig
+// and scenario: a 10 deg/s subject seen by a 30 fps camera. Returns the worst azimuth error of
+// the last 1.5 s (deg) and, through `core`, whether the core path ran.
+double follow_moving_subject(bool use_core, bool& core) {
+  TrackingRig r(true, true);  // speed service with the 20 deg/s service ceiling (the default is 3)
+  int64_t t0 = 0;
+  EXPECT_TRUE(run_to_ready(r, t0));
+  auto cfg = make_tracking_cfg(false);
+  if (use_core) {
+    const auto prior = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()) /
+                       "config/tracking/tracking_prior.json";
+    cfg.core = track::tracker_from_yaml(YAML::LoadFile(prior.string()));
+    cfg.core->pixel_sigma = 1.0;  // this synthetic camera has no noise
+    cfg.core->timing = {};         // ... and stamps the exact instant it images (no exposure, no latency)
+    cfg.core_nominal_exposure_s = 0;
+    // Level 1's limits are the actuator's capability. The station asset describes the ADR-002.2
+    // servos; this rig's actuator is the legacy speed service (20 deg/s, 60 deg/s^2, 300 deg/s^3).
+    for (auto& a : cfg.core->level1.axis) { a.v_max = 20 * kDeg; a.a_max = 60 * kDeg; a.j_max = 300 * kDeg; }
+  }
+  enter_mode(r, cfg, ota::OperatingMode::AutoTrack);
+  core = r.loop().tracking_controller().uses_core();
+  const double el = 5.0 * kDeg, rate = 10.0 * kDeg;
+  int64_t t = t0;
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  for (int i = 0; i < 4; ++i) { step_with_track(r, t, 10 + i, 0.0, el); t += kDtNs; }
+  double worst = 0;
+  for (int i = 0; i < 800; ++i) {
+    const double az = rate * (i * 0.005);
+    if (i % 7 == 0) step_with_track(r, t, 100 + i, az, el);
+    else r.loop().step(t, kDtNs);
+    t += kDtNs;
+    EXPECT_NE(r.loop().phase(), Phase::Fault);
+    if (i > 500) {
+      double az_now, el_now;
+      actual_los(r.kin(), r.loop().last_positions()[1], r.loop().last_positions()[0], az_now, el_now);
+      worst = std::max(worst, std::abs(az_now - az));
+    }
+  }
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Tracking);
+  if (use_core) {
+    EXPECT_GT(r.loop().tracking_controller().core()->estimator().diagnostics().accepted, 90u);
+    EXPECT_NEAR(r.loop().tracking_controller().target_az_rate_rad_s(), rate, 0.5 * kDeg);
+  }
+  return worst / kDeg;
+}
+
+TEST(TrackingIntegration, CoreFollowsMovingSubjectWithLessLagThanLegacy) {
+  bool core = false, legacy_core = true;
+  const double with_core = follow_moving_subject(true, core);
+  const double legacy = follow_moving_subject(false, legacy_core);
+  std::printf("worst late azimuth error: core %.3f deg, legacy %.3f deg\n", with_core, legacy);
+  EXPECT_TRUE(core);
+  EXPECT_FALSE(legacy_core);
+  EXPECT_LT(with_core, 1.0);
+  EXPECT_LT(with_core, legacy);
+}
+
+// The station's ADR-002.2 servos as the control loop sees them: an engaged servo follows the last
+// reference it was handed, and any legacy command (speed, position, de-energize) releases it. A
+// tick that leaves an engaged servo with neither is "silent": on the station the servo then holds
+// the end of its stale segment at full current.
+class ServoSimBackend : public SimMotorBackend {
+ public:
+  ServoSimBackend() : SimMotorBackend(0.005) {}
+  struct Axis { bool engaged = false, fed = false; int engagements = 0, releases = 0, silent = 0; double q_ref = 0; };
+  std::array<Axis, 2> servo;
+  bool servo_available(AxisId) const override { return true; }
+  const char* hold = nullptr;   // what the backend's servo_hold_reason() reports (a following error)
+  const char* servo_hold_reason() const override { return hold; }
+  bool command_reference(AxisId a, const ServoReference& r) override {
+    auto& s = servo[static_cast<size_t>(a)];
+    if (!s.engaged) { s.engaged = true; ++s.engagements; }
+    s.fed = true;
+    double q, v, acc;
+    if (!r.at(r.t_ns, q, v, acc)) { q = r.q; v = 0; }
+    s.q_ref = q;
+    SimMotorBackend::command_velocity(a, v + 40.0 * (q - snapshot(a, r.t_ns).q_rad));
+    return true;
+  }
+  void command_velocity(AxisId a, double v) override { release(a); SimMotorBackend::command_velocity(a, v); }
+  void command(AxisId a, double q, double s) override { release(a); SimMotorBackend::command(a, q, s); }
+  void deenergize(AxisId a) override { release(a); SimMotorBackend::deenergize(a); }
+  void end_tick() {
+    for (auto& s : servo) { if (s.engaged && !s.fed) ++s.silent; s.fed = false; }
+  }
+
+ private:
+  void release(AxisId a) {
+    auto& s = servo[static_cast<size_t>(a)];
+    if (s.engaged) { s.engaged = false; ++s.releases; }
+    s.fed = true;
+  }
+};
+
+// The station, 2026-10-02 16:05:44 (trip trace trip-317533038226322): AUTO_TRACK slewing at ~37
+// deg/s onto a subject when the subject vanished from the arriving frames (motion blur; 0 frames
+// dropped). The track went coasting -> brake_to_hold: the latched hold pose reached the yaw servo
+// as a position step and it stopped the axis at its current limit. 160 ms later the subject was
+// back; the core had missed those ticks without being re-engaged, so Level 1 integrated the gap
+// from its stale state and stepped the reference 5 deg ahead of the axis: saturation, oscillation
+// guard, fault. What the servo is handed must stay dynamically feasible through all of it.
+TEST(TrackingIntegration, SubjectLostMidSlewHandsTheServoOnlyFeasibleReferences) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  auto cfg = make_tracking_cfg(false);
+  const auto prior = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()) /
+                     "config/tracking/tracking_prior.json";
+  cfg.core = track::tracker_from_yaml(YAML::LoadFile(prior.string()));
+  cfg.core->pixel_sigma = 1.0;
+  cfg.core->timing = {};
+  cfg.core_nominal_exposure_s = 0;
+  const double a_level1 = 300 * kDeg;
+  for (auto& a : cfg.core->level1.axis) { a.v_max = 40 * kDeg; a.a_max = a_level1; a.j_max = 3000 * kDeg; }
+  enter_mode(r, cfg, ota::OperatingMode::AutoTrack);
+  const double el = 5.0 * kDeg, az = 25.0 * kDeg;   // a subject well off the boresight
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  double speed_at_loss = 0;
+  bool braked = false, retracked = false;
+  std::vector<double> ref;      // the yaw reference the servo was handed, one per tick
+  int first_feasible_check = -1;
+  for (int i = 0; i < 700; ++i) {
+    const bool lost = i >= 60 && i < 160;            // 500 ms: long enough for brake-to-hold
+    if (i == 60) speed_at_loss = std::abs(r.sim().snapshot(AxisId::Yaw, t).v_rad_s);
+    if (i % 6 == 0) {
+      if (!lost) step_with_track(r, t, seq++, az, el);
+      else {  // frames keep arriving; the selected subject is not in them
+        ota::tracks::TrackSet empty;
+        empty.frame_sequence = seq++;
+        empty.sensor_timestamp_ns = t;
+        empty.publish_timestamp_ns = t + 3'000'000;
+        empty.width = 1920;
+        empty.height = 1080;
+        r.loop().feed_track_set(empty, t);
+        r.loop().step(t, kDtNs);
+      }
+    } else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    const auto state = r.loop().tracking_controller().track_state();
+    if (lost && state == TrackState::BrakeToHold) braked = true;
+    if (!lost && i >= 160 && state == TrackState::Tracking) retracked = true;
+    ref.push_back(servo->servo[1].engaged ? servo->servo[1].q_ref : std::nan(""));
+    if (first_feasible_check < 0 && servo->servo[1].engaged) first_feasible_check = i;
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  // The reference's own acceleration, tick to tick. A position step (the latched hold, or a resumed
+  // Level 1 that integrated a gap) reads as thousands of deg/s^2.
+  const double dt = kDtNs * 1e-9;
+  double worst_a = 0; int worst_at = -1;
+  for (size_t k = static_cast<size_t>(first_feasible_check) + 2; k < ref.size(); ++k) {
+    if (std::isnan(ref[k]) || std::isnan(ref[k - 1]) || std::isnan(ref[k - 2])) continue;
+    const double a = std::abs(ref[k] - 2 * ref[k - 1] + ref[k - 2]) / (dt * dt);
+    if (a > worst_a) { worst_a = a; worst_at = static_cast<int>(k); }
+  }
+  // A hold taken at speed brakes to rest; it does not run past its pose and drive back.
+  int reversals = 0;
+  for (int k = 62; k < 160; ++k)
+    if (!std::isnan(ref[k]) && !std::isnan(ref[k - 1]) && !std::isnan(ref[k - 2]) &&
+        (ref[k] - ref[k - 1]) * (ref[k - 1] - ref[k - 2]) < -1e-12) ++reversals;
+  std::printf("yaw servo: engagements %d releases %d silent %d; speed at loss %.1f deg/s; "
+              "worst reference acceleration %.0f deg/s^2 at tick %d\n",
+              servo->servo[1].engagements, servo->servo[1].releases, servo->servo[1].silent,
+              speed_at_loss / kDeg, worst_a / kDeg, worst_at);
+  EXPECT_GT(speed_at_loss, 10 * kDeg) << "the loss must fall inside the slew";
+  EXPECT_TRUE(braked) << "the scenario must reach brake-to-hold, as the station did";
+  EXPECT_TRUE(retracked) << "and track again afterwards";
+  EXPECT_EQ(servo->servo[1].silent, 0) << "an engaged yaw servo was left without reference or release";
+  EXPECT_EQ(servo->servo[0].silent, 0) << "an engaged pitch servo was left without reference or release";
+  EXPECT_LT(worst_a, 1.5 * a_level1) << "a reference step reached the servo";
+  EXPECT_EQ(reversals, 0) << "the hold drove back to a pose it had overrun";
+}
+
+// The tracking-core configuration the servo tests share: the prior, an exact synthetic camera,
+// and stiff Level-1 limits so the boundary and the supervisor, not Level 1, are what bind.
+TrackingController::Config servo_core_cfg() {
+  auto cfg = make_tracking_cfg(false);
+  const auto prior = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()) /
+                     "config/tracking/tracking_prior.json";
+  cfg.core = track::tracker_from_yaml(YAML::LoadFile(prior.string()));
+  cfg.core->pixel_sigma = 1.0;
+  cfg.core->timing = {};
+  cfg.core_nominal_exposure_s = 0;
+  for (auto& a : cfg.core->level1.axis) { a.v_max = 40 * kDeg; a.a_max = 300 * kDeg; a.j_max = 3000 * kDeg; }
+  return cfg;
+}
+
+// Station, 2026-10-02 17:05:52: following a subject downward, Level 1 rode its own braking curve
+// toward the pitch soft minimum (44 deg/s, 18 deg away) while the supervisor's stop model said the
+// axis could no longer stop: BRAKE. Level 1 now takes the supervisor's own boundary governor as its
+// speed bounds, so chasing a subject toward an end never needs the supervisor.
+TEST(TrackingIntegration, ChasingASubjectTowardThePitchLimitNeverNeedsTheSupervisor) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  int brakes = 0;
+  double lowest = 0, highest = 0, peak_speed = 0;
+  for (int i = 0; i < 800; ++i) {
+    // Toward the pitch end at 40 deg/s (this rig's negative elevation is positive pitch), stopping
+    // where the pitch goal is ~42 deg, 13 deg inside the 55.3 deg soft limit: the station's case
+    // (44 deg/s, 18 deg away). Without the governor this run brakes 273 times and the brake, by
+    // then infeasible, carries pitch onto the rig's hard stop.
+    const double el = std::max(-58.3 * kDeg, -40.0 * kDeg * i * 0.005);
+    if (i % 6 == 0) step_with_track(r, t, seq++, 0.0, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+    lowest = std::min(lowest, r.loop().last_positions()[0]);
+    highest = std::max(highest, r.loop().last_positions()[0]);
+    peak_speed = std::max(peak_speed, std::abs(r.sim().snapshot(AxisId::Pitch, t).v_rad_s));
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  std::printf("pitch chase: pitch %.1f..%.1f deg (soft %.1f..%.1f), peak %.1f deg/s, supervisor brakes %d, "
+              "releases %d\n", lowest / kDeg, highest / kDeg, r.loop().limits()[0].q_soft_min_rad / kDeg,
+              r.loop().limits()[0].q_soft_max_rad / kDeg, peak_speed / kDeg, brakes, servo->servo[0].releases);
+  EXPECT_EQ(brakes, 0) << "Level 1 went where the supervisor had to stop it";
+  EXPECT_EQ(servo->servo[0].releases, 0);
+  EXPECT_GT(peak_speed, 30 * kDeg) << "the chase must arrive at speed";
+  EXPECT_GT(highest, 35 * kDeg) << "and near the end";
+  EXPECT_LE(highest, r.loop().limits()[0].q_soft_max_rad);
+}
+
+// Station, 2026-10-02 17:05:52: the supervisor's BRAKE sent a zero-speed command, which released
+// the yaw servo with the axis moving; the legacy speed loop could not take it over and the station
+// faulted. A supervisor stop with the servos engaged is now executed by the servo.
+TEST(TrackingIntegration, ASupervisorBrakeMidSlewIsExecutedByTheServo) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  const double az = 25.0 * kDeg, el = 5.0 * kDeg;
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  int brakes = 0;
+  double speed_at_brake = 0;
+  std::vector<double> ref;
+  for (int i = 0; i < 500; ++i) {
+    const bool stale = i == 60;                      // one cycle of missing yaw feedback, mid-slew
+    if (stale) speed_at_brake = std::abs(r.sim().snapshot(AxisId::Yaw, t).v_rad_s);
+    r.sim().set_feedback_ok(AxisId::Yaw, !stale);
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+    ref.push_back(servo->servo[1].engaged ? servo->servo[1].q_ref : std::nan(""));
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  double worst_a = 0;
+  for (size_t k = 2; k < ref.size(); ++k)
+    if (!std::isnan(ref[k]) && !std::isnan(ref[k - 1]) && !std::isnan(ref[k - 2]))
+      worst_a = std::max(worst_a, std::abs(ref[k] - 2 * ref[k - 1] + ref[k - 2]) / (kDtNs * kDtNs * 1e-18));
+  std::printf("supervisor brake at %.1f deg/s: brakes %d, yaw releases %d, silent %d, worst reference "
+              "acceleration %.0f deg/s^2\n", speed_at_brake / kDeg, brakes, servo->servo[1].releases,
+              servo->servo[1].silent, worst_a / kDeg);
+  EXPECT_GT(speed_at_brake, 10 * kDeg) << "the brake must fall inside the slew";
+  EXPECT_GT(brakes, 0) << "the scenario must actually brake";
+  EXPECT_EQ(servo->servo[1].releases, 0) << "the stop handed a moving axis to the legacy loop";
+  EXPECT_EQ(servo->servo[1].silent, 0);
+  EXPECT_LT(worst_a, 450 * kDeg) << "a reference step reached the servo";
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Tracking) << "and tracking resumes";
+}
+
+// Station, 2026-10-02 18:33:28 (trip trace trip-326400907197766): a BRAKE that lasted 1 s. Each
+// tick the servo's stop re-aimed at "here + stopping distance", the limiter read that target as one
+// moving at the axis's own speed and followed it: pitch cruised at 13 deg/s for 0.4 s and came to
+// rest 0.5 deg past its soft limit. A sustained BRAKE must decelerate from its first tick.
+TEST(TrackingIntegration, ASustainedSupervisorBrakeDecelerates) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  const double az = 30.0 * kDeg, el = 0.0;            // in view: the half field of view is ~35 deg
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  constexpr int kOnset = 60, kStale = 80;           // 400 ms of BRAKE, mid-slew
+  double v_onset = 0, q_onset = 0, v_end = 0, q_rest = 0;
+  int brakes = 0;
+  std::vector<double> ref;
+  for (int i = 0; i < 400; ++i) {
+    const bool stale = i >= kOnset && i < kOnset + kStale;
+    r.sim().set_feedback_ok(AxisId::Yaw, !stale);
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+    ref.push_back(servo->servo[1].q_ref);
+    const auto k = ref.size() - 1;
+    if (i == kOnset) { v_onset = std::abs(ref[k] - ref[k - 1]) / (kDtNs * 1e-9); q_onset = ref[k - 1]; }
+    if (i == kOnset + kStale - 1) { v_end = std::abs(ref[k] - ref[k - 1]) / (kDtNs * 1e-9); q_rest = ref[k]; }
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  // The supervisor's own braking model, from the onset speed: where the stop may land at the latest.
+  const double a = 60 * kDeg, j = 300 * kDeg;
+  const double reach = v_onset * v_onset / (2 * a) + v_onset * a / (2 * j);
+  std::printf("sustained brake from %.1f deg/s: %.1f deg/s after %d ms, travelled %.2f deg (model %.2f), "
+              "brakes %d, releases %d\n", v_onset / kDeg, v_end / kDeg, kStale * 5,
+              std::abs(q_rest - q_onset) / kDeg, reach / kDeg, brakes, servo->servo[1].releases);
+  EXPECT_GT(v_onset, 20 * kDeg) << "the brake must fall inside the slew";
+  EXPECT_GE(brakes, kStale - 2);
+  EXPECT_EQ(servo->servo[1].releases, 0);
+  // 400 ms of braking at 60 deg/s^2 after a 200 ms jerk ramp removes ~18 deg/s.
+  EXPECT_LT(v_end, v_onset - 12 * kDeg) << "the BRAKE cruised instead of braking";
+  EXPECT_LT(std::abs(q_rest - q_onset), reach + 0.2 * kDeg);
+}
+
+// Station, 2026-10-02 18:33:23-28: a subject close to the turret took the pitch aim past the soft
+// limit. Tracking dropped into a hold that stopped yaw as well (and, re-aimed every tick, cruised
+// pitch into the limit), the subject was lost and reacquired at 70 deg/s. A subject that leaves
+// through the pitch travel is followed in yaw with pitch parked at its limit, without the supervisor.
+TEST(TrackingIntegration, ASubjectPastThePitchLimitIsStillFollowedInYaw) {
+  for (const double rate : {14.0, 25.0, 40.0}) {
+    auto owned = std::make_unique<ServoSimBackend>();
+    ServoSimBackend* servo = owned.get();
+    TrackingRig r(true, true, 15, {}, std::move(owned));
+    int64_t t = 0;
+    ASSERT_TRUE(run_to_ready(r, t));
+    enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+    for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+    r.loop().submit_command("select_target", "1");
+    servo->servo = {};
+    int64_t seq = 10;
+    int brakes = 0;
+    double highest = 0;
+    // Down to 62 deg (7 deg past the 55.3 deg limit, still inside the image), then 20 deg sideways.
+    const int down = static_cast<int>(62.0 / rate / 0.005);
+    for (int i = 0; i < down + 800; ++i) {
+      const double el = -std::min(62.0, rate * i * 0.005) * kDeg;
+      const double az = i < down + 200 ? 0.0 : std::min(20.0, 10.0 * (i - down - 200) * 0.005) * kDeg;
+      if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+      else r.loop().step(t, kDtNs);
+      servo->end_tick();
+      if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+      highest = std::max(highest, r.loop().last_positions()[0]);
+      t += kDtNs;
+      ASSERT_NE(r.loop().phase(), Phase::Fault) << rate << " deg/s, tick " << i;
+    }
+    const double soft = r.loop().limits()[0].q_soft_max_rad;
+    const double yaw = r.loop().last_positions()[1];
+    std::printf("subject past the pitch limit at %.0f deg/s: pitch reached %.2f deg (soft %.2f), yaw %.2f deg "
+                "(subject 20), supervisor brakes %d\n", rate, highest / kDeg, soft / kDeg, yaw / kDeg, brakes);
+    EXPECT_EQ(brakes, 0) << rate << " deg/s: Level 1 went where the supervisor had to stop it";
+    EXPECT_LE(highest, soft) << rate << " deg/s";
+    EXPECT_GT(highest, soft - 5 * kDeg) << rate << " deg/s: pitch follows to the limit";
+    EXPECT_NEAR(yaw, 20 * kDeg, 1.5 * kDeg) << rate << " deg/s: yaw keeps following the subject";
+  }
+}
+
+// A subject leaving through a bounded yaw travel: the hold that replaces tracking is produced inside a
+// tracking intent (its pose is now latched once, see last_ref_was_hold_). A property test: no
+// supervisor, no servo release, inside the soft limit. It does not separate the latch fix on its own:
+// here the subject also leaves the image, which ends the chase either way.
+TEST(TrackingIntegration, ASubjectLeavingThroughTheYawTravelIsStoppedNotChased) {
+  for (const double rate : {20.0, 35.0}) {
+    auto owned = std::make_unique<ServoSimBackend>();
+    ServoSimBackend* servo = owned.get();
+    TrackingRig r(true, true, 15, {}, std::move(owned));
+    int64_t t = 0;
+    ASSERT_TRUE(run_to_ready(r, t));
+    enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+    for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+    r.loop().submit_command("select_target", "1");
+    servo->servo = {};
+    int64_t seq = 10;
+    int brakes = 0;
+    double highest = 0;
+    for (int i = 0; i < static_cast<int>(75.0 / rate / 0.005) + 400; ++i) {
+      const double az = std::min(75.0, rate * i * 0.005) * kDeg;   // on past the 55.3 deg yaw limit
+      if (i % 6 == 0) step_with_track(r, t, seq++, az, 0.0);
+      else r.loop().step(t, kDtNs);
+      servo->end_tick();
+      if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+      highest = std::max(highest, r.loop().last_positions()[1]);
+      t += kDtNs;
+      ASSERT_NE(r.loop().phase(), Phase::Fault) << rate << " deg/s, tick " << i;
+    }
+    const double soft = r.loop().limits()[1].q_soft_max_rad;
+    std::printf("subject leaving through yaw at %.0f deg/s: yaw reached %.2f deg (soft %.2f), supervisor brakes %d, "
+                "releases %d\n", rate, highest / kDeg, soft / kDeg, brakes, servo->servo[1].releases);
+    EXPECT_EQ(brakes, 0) << rate << " deg/s";
+    EXPECT_LE(highest, soft) << rate << " deg/s";
+    EXPECT_EQ(servo->servo[1].releases, 0) << rate << " deg/s";
+  }
+}
+
+// Owner ruling 2026-10-02: a following error (usually an obstruction) is a HOLD, and the hold must not
+// keep pushing towards a reference the axis could not reach: the supervisor's stop starts at the axis.
+TEST(TrackingIntegration, AFollowingErrorHoldStopsAtTheAxisNotAtTheReference) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  const double az = 30.0 * kDeg;
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, 0.0); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  int64_t seq = 10;
+  double blocked_at = 0, gap_at_hold = 0, gap_after = 1e9;
+  int holds = 0;
+  for (int i = 0; i < 300; ++i) {
+    if (i == 40) {           // mid-slew, something stops the yaw dead
+      blocked_at = r.loop().last_positions()[1];
+      r.sim().set_stops(AxisId::Yaw, blocked_at - 0.001, blocked_at + 0.001);
+    }
+    if (i == 70) {           // the backend's following error
+      gap_at_hold = std::abs(servo->servo[1].q_ref - r.loop().last_positions()[1]);
+      servo->hold = "yaw servo following error";
+    }
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, 0.0);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Hold) ++holds;
+    if (i > 80) gap_after = std::abs(servo->servo[1].q_ref - r.loop().last_positions()[1]);   // the latest
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  std::printf("following error: reference %.2f deg from the blocked axis at the hold, %.3f deg after it, holds %d\n",
+              gap_at_hold / kDeg, gap_after / kDeg, holds);
+  EXPECT_GT(gap_at_hold, 3 * kDeg) << "the scenario must leave the reference well away from the axis";
+  EXPECT_GT(holds, 200);
+  // The stop starts at the axis with its measured velocity estimate (still decaying after the abrupt
+  // block) and brakes that out: about half a degree, against the 5 degrees it was being pushed.
+  EXPECT_LT(gap_after, 1.0 * kDeg) << "the hold kept pushing towards the old reference";
+}
+
+// OTA_TEST_PITCH_HOLD (an isolation test, off by default): pitch stays at its first READY pose,
+// held by the motor's own position mode or by the pitch servo, while yaw alone tracks.
+void pitch_hold_test(const char* how) {
+  ::setenv("OTA_TEST_PITCH_HOLD", how, 1);
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  ::unsetenv("OTA_TEST_PITCH_HOLD");
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  r.loop().step(t, kDtNs); t += kDtNs;
+  const double held = r.loop().last_positions()[0];
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  int64_t seq = 10;
+  double pitch_dev = 0, yaw_err = 0;
+  for (int i = 0; i < 800; ++i) {
+    const double az = 15.0 * kDeg, el = -8.0 * kDeg;   // off in both axes
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    pitch_dev = std::max(pitch_dev, std::abs(r.loop().last_positions()[0] - held));
+    if (i > 600) yaw_err = std::max(yaw_err, std::abs(r.loop().last_positions()[1] - az));
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << how << " tick " << i;
+  }
+  std::printf("pitch hold by %s: pitch moved %.3f deg, late yaw error %.2f deg, pitch in speed mode %d\n",
+              how, pitch_dev / kDeg, yaw_err / kDeg, r.sim().in_speed_mode(AxisId::Pitch) ? 1 : 0);
+  EXPECT_LT(pitch_dev, 0.3 * kDeg) << "pitch must stay where it was latched";
+  EXPECT_LT(yaw_err, 1.0 * kDeg) << "yaw still tracks";
+  if (std::string(how) == "motor") EXPECT_FALSE(r.sim().in_speed_mode(AxisId::Pitch)) << "held by position mode";
+  else EXPECT_TRUE(r.sim().in_speed_mode(AxisId::Pitch));
+}
+
+TEST(TrackingIntegration, TestPitchHoldByTheMotorKeepsPitchFixedWhileYawTracks) { pitch_hold_test("motor"); }
+TEST(TrackingIntegration, TestPitchHoldByTheServoKeepsPitchFixedWhileYawTracks) { pitch_hold_test("servo"); }
 
 // Feed the target for `track_cycles` cycles, then stop feeding (target lost)
 // and return the TrackingRig + the time of the last measurement cycle.

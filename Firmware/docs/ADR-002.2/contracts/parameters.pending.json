@@ -1,0 +1,719 @@
+{
+  "version": "adr0022.parameters/2",
+  "provenance": "PENDING",
+  "parameters": {
+    "model.a": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A*s^2/rad",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "model.b": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A*s/rad",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "model.h": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [
+        2,
+        3,
+        5
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "model.delay": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "model.uncertainty": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "mixed SI",
+      "shape": [
+        128,
+        37
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "start.intervals": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [
+        2,
+        3,
+        5,
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "start.censored": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "bool",
+      "shape": [
+        2,
+        3,
+        5
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.encoding": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "enum",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.counts_per_motor_turn": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "count/turn",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.raw_min": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "count",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.raw_max": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "count",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.shaft_min_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.shaft_max_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.motor_turns_per_output_turn": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "1",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.sign": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "1",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.physical_zero_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "encoder.session_offset_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "current.scale_A_per_count": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A/count",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "current.bias_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "current.filter_tau_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "imu.body_to_sensor": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "1",
+      "shape": [
+        3,
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "imu.gyro_bias_rad_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "imu.accel_bias_m_s2": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "m/s^2",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "imu.lever_arm_m": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "m",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "clock.scale": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "1",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "clock.offset_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "clock.residual_p99_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.encoder_quantum_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.effective_rates_hz": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "Hz",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.valid_band_hz": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "Hz",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.gyro_filter_tau_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.encoder_variance": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad^2",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.gyro_variance": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad^2/s^2",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.process_variance": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad^2/s^4",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.max_encoder_age_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.max_gyro_age_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.initial_position_variance": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad^2",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.initial_velocity_variance": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad^2/s^2",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "observer.encoder_only_verified": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "bool",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.kp": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A*s/rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.ki": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A/rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.kpos": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "1/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.kaw": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "1/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.current_cap": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.slew": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.integral_cap": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.velocity_cap": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.dt_min": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.dt_max": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.intent_threshold": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.rest_speed": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.sustained_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "controller.start_timeout_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.current_a": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.slew_a_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.velocity_rad_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.acceleration_rad_s2": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s^2",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.jerk_rad_s3": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s^3",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.angle_min_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.angle_max_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.duration_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "coordinates.q_nodes": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [
+        5
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "coordinates.z_nodes": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "method.control_hz": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "Hz",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "context.hardware_signature": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "identity",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "context.operating_point": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "identity",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.mode": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "enum",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.current_feedback_cap_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.tx_quantum_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "execution.latency_p99_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "identification.delay_search_bound_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.max_gap_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [
+        4
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.sigma_q_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "measurement.sigma_v_rad_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "imu.gyro_noise_rad_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad/s",
+      "shape": [
+        3
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "envelope.stop_verified": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "bool",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.current_A": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "A",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.temperature_C": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "degC",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.bus_V": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "V",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.position_rad": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "rad",
+      "shape": [
+        2
+      ],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.approved_duration_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.approved_unknown_temperature_window_s": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "s",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    },
+    "protection.required_margin_C": {
+      "value": null,
+      "state": "PENDING",
+      "unit": "degC",
+      "shape": [],
+      "source_hash": null,
+      "uncertainty": null
+    }
+  }
+}

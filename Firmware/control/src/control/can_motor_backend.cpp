@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <thread>
 
 #include <spdlog/spdlog.h>
@@ -14,6 +15,8 @@ namespace ota {
 
 bool CanMotorBackend::begin_motor_recovery(std::string& err) {
   system_.inhibit_motion();
+  cancel_pitch_diagnostic("motor recovery started");
+  cancel_pitch_gain_update("motor recovery started");
   system_.cancel_register_read();
   deenergize(AxisId::Pitch); deenergize(AxisId::Yaw);
   recovery_.begin(now_monotonic_ns());
@@ -64,7 +67,22 @@ bool CanMotorBackend::write_reg_float(cybergear::Reg reg, float value,
   cybergear::CanFrame f = cybergear::make_write_reg_float(
       reg, value, system_.host_id(), system_.motor_id(axis));
   std::string err;
-  return system_.send(f.id, f.data, &err);
+  const bool sent = system_.send(f.id, f.data, &err);
+  if (reg == cybergear::Reg::SpdRef || reg == cybergear::Reg::LocRef)
+    record_output(axis, value, reg == cybergear::Reg::SpdRef ? 3 : 4, sent);
+  return sent;
+}
+
+void CanMotorBackend::record_output(AxisId axis, double value, int kind, bool sent) {
+  auto& evidence = output_evidence_[static_cast<int>(axis)];
+  evidence.requested = value;
+  evidence.command_kind = kind;
+  evidence.reason = sent ? (kind == 5 ? 3 : 1) : 4;
+  if (sent) {
+    evidence.successful = value;
+    evidence.tx_ns = now_monotonic_ns();
+    ++evidence.tx_seq;
+  }
 }
 
 bool CanMotorBackend::write_reg_u8(cybergear::Reg reg, uint8_t value,
@@ -79,13 +97,101 @@ bool CanMotorBackend::write_reg_u8(cybergear::Reg reg, uint8_t value,
 
 bool CanMotorBackend::discover(AxisId axis, uint64_t& unique_id,
                                std::string& err) {
+  cancel_pitch_diagnostic("blocking discovery started");
+  cancel_pitch_gain_update("blocking discovery started");
   return system_.discover(axis, unique_id, timeout_ms_, &err);
 }
 
 bool CanMotorBackend::read_register(AxisId axis, cybergear::Reg reg,
                                     double& value, int timeout_ms,
                                     std::string& err) {
+  cancel_pitch_diagnostic("blocking register read started");
+  cancel_pitch_gain_update("blocking register read started");
   return system_.read_register(axis, reg, value, timeout_ms, &err);
+}
+
+namespace {
+constexpr std::array<cybergear::Reg, 6> kPitchDiagnosticRegisters{
+    cybergear::Reg::Iqf, cybergear::Reg::VBus, cybergear::Reg::RunMode,
+    cybergear::Reg::LimitCur, cybergear::Reg::SpdKp, cybergear::Reg::SpdKi};
+constexpr TimeNs kPitchDiagnosticIntervalNs = 250'000'000;  // 4 requests/s total.
+constexpr TimeNs kPitchDiagnosticTimeoutNs = 100'000'000;
+}
+
+void CanMotorBackend::cancel_pitch_diagnostic(const char* reason) {
+  (void)reason;  // cancellation is surfaced in the per-register status.
+  if (!pitch_diag_waiting_) return;
+  system_.cancel_register_read();
+  auto& sample = pitch_diagnostics_.registers[static_cast<size_t>(pitch_diag_index_)];
+  sample.status = -2;
+  sample.valid = false;
+  sample.value = std::numeric_limits<double>::quiet_NaN();
+  sample.rx_ns = 0;
+  pitch_diag_waiting_ = false;
+  pitch_diag_next_request_ns_ = now_monotonic_ns() + kPitchDiagnosticIntervalNs;
+}
+
+void CanMotorBackend::cancel_pitch_gain_update(const char* reason) {
+  if (gain_update_.stage <= 0) return;
+  if (gain_update_.waiting) system_.cancel_register_read();
+  gain_update_.stage = -1;
+  gain_update_.waiting = false;
+  gain_update_.error = std::string("verified pitch gain update cancelled: ") + reason;
+}
+
+void CanMotorBackend::poll_pitch_register_diagnostics(TimeNs now) {
+  if (transition_.stage != 0 || gain_update_.stage != 0 ||
+      system_.motion_inhibited()) {
+    cancel_pitch_diagnostic("mode transition, gain update, or recovery active");
+    return;
+  }
+
+  auto& observation = pitch_diagnostics_.registers[
+      static_cast<size_t>(pitch_diag_index_)];
+  if (pitch_diag_waiting_) {
+    double value = 0.0;
+    TimeNs rx_ns = 0;
+    std::string err;
+    const int result = system_.poll_register_read(value, err, &rx_ns);
+    if (result == 0 && now <= pitch_diag_deadline_ns_) return;
+    if (result == 1 && std::isfinite(value) && rx_ns > 0) {
+      observation.value = value;
+      observation.rx_ns = rx_ns;
+      observation.valid = true;
+      observation.status = 1;
+    } else {
+      if (result == 0) system_.cancel_register_read();
+      observation.status = -1;
+      observation.valid = false;
+      observation.value = std::numeric_limits<double>::quiet_NaN();
+      observation.rx_ns = 0;
+    }
+    pitch_diag_waiting_ = false;
+    pitch_diag_index_ = (pitch_diag_index_ + 1) %
+        static_cast<int>(kPitchDiagnosticRegisters.size());
+    pitch_diag_next_request_ns_ = now + kPitchDiagnosticIntervalNs;
+    return;
+  }
+
+  if (now < pitch_diag_next_request_ns_) return;
+  observation.status = 0;
+  observation.valid = false;
+  observation.value = std::numeric_limits<double>::quiet_NaN();
+  observation.rx_ns = 0;
+  observation.request_ns = now;
+  std::string err;
+  if (!system_.begin_register_read(AxisId::Pitch,
+          kPitchDiagnosticRegisters[static_cast<size_t>(pitch_diag_index_)],
+          err, &observation.request_ns)) {
+    observation.status = -1;
+    observation.valid = false;
+    pitch_diag_index_ = (pitch_diag_index_ + 1) %
+        static_cast<int>(kPitchDiagnosticRegisters.size());
+    pitch_diag_next_request_ns_ = now + kPitchDiagnosticIntervalNs;
+    return;
+  }
+  pitch_diag_waiting_ = true;
+  pitch_diag_deadline_ns_ = now + kPitchDiagnosticTimeoutNs;
 }
 
 // The verified-live position-mode recipe:
@@ -94,6 +200,8 @@ bool CanMotorBackend::read_register(AxisId axis, cybergear::Reg reg,
 //   restore LimitSpd. Pitch never enables when its encoder read is invalid.
 bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
                                           std::string& err) {
+  cancel_pitch_diagnostic("position-mode setup started");
+  cancel_pitch_gain_update("position-mode setup started");
   invalidate_calibration();
   invalidate_commands(axis);
   for (int attempt = 1; attempt <= kRecipeMaxAttempts; ++attempt) {
@@ -214,6 +322,8 @@ bool CanMotorBackend::enter_position_mode(AxisId axis, double limit_spd_rad_s,
 // the current position against any load up to LimitCur.
 bool CanMotorBackend::enter_speed_mode(AxisId axis, double limit_cur_a,
                                        std::string& err) {
+  cancel_pitch_diagnostic("speed-mode setup started");
+  cancel_pitch_gain_update("speed-mode setup started");
   invalidate_calibration();
   invalidate_commands(axis);
   if (axis == AxisId::Pitch && !can::valid_pitch_current_limit(limit_cur_a)) {
@@ -310,6 +420,10 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
     AxisId axis, bool position, double limit, TimeNs now, std::string& err, double speed_ki, double speed_kp,
     bool check_displacement) {
   auto& t = transition_;
+  if (t.stage == 0) {
+    cancel_pitch_diagnostic("mode transition started");
+    cancel_pitch_gain_update("mode transition started");
+  }
   const auto i = static_cast<size_t>(axis);
   auto fail = [&](const char* why) {
     err = why;
@@ -455,6 +569,8 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
         return fail(("mode readback mismatch at register " +
             std::to_string(static_cast<uint16_t>(regs[t.read_index])) + " got " +
             std::to_string(value) + " expected " + std::to_string(expected[t.read_index])).c_str());
+      spdlog::info("drive readback axis={} register=0x{:04x} actual={} expected={}",
+                   axis_name(axis), static_cast<uint16_t>(regs[t.read_index]), value, expected[t.read_index]);
       t.waiting = false;
       ++t.read_index;
       if (position && t.stage == 5 && t.read_index == 2) ++t.read_index;
@@ -522,6 +638,8 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
       if (result == 0) break;
       if (!std::isfinite(value) || std::abs(value - expected[t.read_index]) > 1e-6)
         return fail("pitch current/mode readback mismatch before motion");
+      spdlog::info("pitch safety readback register=0x{:04x} actual={} expected={}",
+                   static_cast<uint16_t>(regs[t.read_index]), value, expected[t.read_index]);
       t.waiting = false;
       ++t.read_index;
       if (t.read_index == 2) {
@@ -538,6 +656,10 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
 }
 
 void CanMotorBackend::deenergize(AxisId axis) {
+  if (axis == AxisId::Pitch) {
+    cancel_pitch_diagnostic("pitch deenergize requested");
+    cancel_pitch_gain_update("pitch deenergize requested");
+  }
   invalidate_calibration();
   if (transition_.stage && transition_.axis == axis) {
     system_.cancel_register_read();
@@ -545,13 +667,15 @@ void CanMotorBackend::deenergize(AxisId axis) {
   }
   invalidate_commands(axis);
   std::string err;
-  system_.send_stop(axis, &err);
+  record_output(axis, NAN, 5, system_.send_stop(axis, &err));
   in_position_mode_[static_cast<size_t>(axis)] = false;
   in_speed_mode_[static_cast<size_t>(axis)] = false;
 }
 
 // --- Control loop (fast, non-blocking) --------------------------------------
 bool CanMotorBackend::adopt_running_mode(AxisId axis, bool position, std::string& err, double speed_ki, double speed_kp) {
+  cancel_pitch_diagnostic("running-mode adoption started");
+  cancel_pitch_gain_update("running-mode adoption started");
   const auto fail_pitch = [&](const std::string& why) {
     err = why;
     if (axis == AxisId::Pitch) deenergize(axis);
@@ -619,12 +743,15 @@ AxisSnapshot CanMotorBackend::snapshot(AxisId axis, TimeNs now_ns) {
   if (system_.axis(axis).latest(l)) {
     s.has_feedback = l.has_feedback;
     s.rx_ns = l.rx_ns;
+    s.raw_rx_ns = l.rx_ns;
+    s.rx_seq = l.frames;
     s.q_rad = l.q_rad;
     s.v_rad_s = l.v_rad_s;
     s.torque_nm = l.torque_nm;
     s.temp_c = l.temp_c;
     s.faults = l.faults;
     s.disabled = l.mode == 0;
+    s.enabled_state = l.mode;
   }
   s.in_position_mode = in_position_mode_[static_cast<size_t>(axis)];
   s.in_speed_mode = in_speed_mode_[static_cast<size_t>(axis)];
@@ -639,19 +766,48 @@ void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
   // velocity loop until it is changed.
   const int a = static_cast<int>(axis);
   if (std::fabs(velocity_rad_s - last_spd_ref_[a]) > 1e-6) {
+    auto& evidence = output_evidence_[a];
+    evidence.requested = velocity_rad_s;
+    evidence.command_kind = 3;
     cybergear::CanFrame f = cybergear::make_write_reg_float(
         cybergear::Reg::SpdRef, static_cast<float>(velocity_rad_s),
         system_.host_id(), system_.motor_id(axis));
     std::string err;
     if (!system_.send(f.id, f.data, &err)) {
+      evidence.reason = 4;
       spdlog::warn("send SpdRef FAIL axis={} v={:+.4f} err={}", a,
                    velocity_rad_s, err);
     } else {
       last_spd_ref_[a] = velocity_rad_s;
+      evidence.successful = velocity_rad_s;
+      evidence.tx_ns = now_monotonic_ns();
+      ++evidence.tx_seq;
+      evidence.reason = 1;
     }
   }
   // Keepalive ping: see keepalive() below.
   keepalive(axis);
+}
+
+bool CanMotorBackend::command_velocity_always(AxisId axis, double velocity_rad_s) {
+  if (transition_.stage && transition_.axis == axis) return false;
+  const int a = static_cast<int>(axis);
+  auto& evidence = output_evidence_[a];
+  evidence.requested = velocity_rad_s;
+  evidence.command_kind = 3;
+  cybergear::CanFrame f = cybergear::make_write_reg_float(
+      cybergear::Reg::SpdRef, static_cast<float>(velocity_rad_s), system_.host_id(), system_.motor_id(axis));
+  std::string err;
+  if (!system_.send(f.id, f.data, &err)) {
+    evidence.reason = 4;
+    return false;
+  }
+  last_spd_ref_[a] = velocity_rad_s;
+  evidence.successful = velocity_rad_s;
+  evidence.tx_ns = now_monotonic_ns();
+  ++evidence.tx_seq;
+  evidence.reason = 1;
+  return true;
 }
 
 void CanMotorBackend::keepalive(AxisId axis) {
@@ -726,6 +882,7 @@ void CanMotorBackend::command(AxisId axis, double q_ref_rad,
     std::string err;
     const bool pin_ok =
         system_.send_position_ref(axis, static_cast<float>(q_ref_rad), &err);
+    record_output(axis, static_cast<float>(q_ref_rad), 4, pin_ok);
     if (!pin_ok) {
       spdlog::warn("send_position_ref FAIL axis={} q_ref={:+.6f} err={}",
                    a, q_ref_rad, err);
@@ -791,6 +948,11 @@ void CanMotorBackend::set_speed_loop_gains(AxisId axis, double spd_kp,
   // power-cycled or rewritten), which is desirable: the stronger speed loop
   // also makes the post-check position holds more authoritative.
   const int a = static_cast<int>(axis);
+  if (axis == AxisId::Pitch) {
+    spdlog::error("pitch gains rejected through unverified fire-and-forget API; "
+                  "use begin/poll_pitch_speed_loop_gain_update");
+    return;
+  }
   if (!write_reg_float(cybergear::Reg::SpdKp, static_cast<float>(spd_kp),
                        axis))
     spdlog::warn("write SpdKp FAIL axis={} kp={:.4f}", a, spd_kp);
@@ -799,8 +961,138 @@ void CanMotorBackend::set_speed_loop_gains(AxisId axis, double spd_kp,
     spdlog::warn("write SpdKi FAIL axis={} ki={:.6f}", a, spd_ki);
 }
 
+MotorBackend::Transition CanMotorBackend::begin_pitch_speed_loop_gain_update(
+    double kp, double ki, std::string& err) {
+  if (transition_.stage != 0) {
+    err = "cannot update pitch gains during a mode transition";
+    return Transition::Failed;
+  }
+  if (gain_update_.stage != 0) {
+    err = "a pitch gain update is already active or its failure is unconsumed";
+    return Transition::Failed;
+  }
+  if (!std::isfinite(kp) || kp < 1.0 || kp > 5.0 ||
+      !std::isfinite(ki) || ki < .002 || ki > .05) {
+    err = "pitch speed gains outside supported commissioning bounds";
+    return Transition::Failed;
+  }
+  constexpr size_t kRunModeIndex = 2, kLimitCurIndex = 3;
+  constexpr TimeNs kSetupEvidenceMaxAgeNs = 2'000'000'000;
+  const TimeNs evidence_now = now_monotonic_ns();
+  const auto& run_mode = pitch_diagnostics_.registers[kRunModeIndex];
+  const auto& current_limit = pitch_diagnostics_.registers[kLimitCurIndex];
+  const auto is_recent = [evidence_now](const RegisterObservation& sample) {
+    return sample.valid && sample.status == 1 && sample.rx_ns > 0 &&
+        sample.rx_ns <= evidence_now && evidence_now - sample.rx_ns <= kSetupEvidenceMaxAgeNs;
+  };
+  const bool full_diagnostic_cycle = std::all_of(
+      pitch_diagnostics_.registers.begin(), pitch_diagnostics_.registers.end(), is_recent);
+  const size_t pitch_index = static_cast<size_t>(AxisId::Pitch);
+  can::AxisLatest feedback{};
+  const bool fresh_enabled = system_.axis(AxisId::Pitch).latest(feedback) &&
+      feedback.has_feedback && feedback.mode == 2 && feedback.faults == 0 &&
+      feedback.rx_ns > 0 && feedback.rx_ns <= evidence_now &&
+      evidence_now - feedback.rx_ns <= 50'000'000 &&
+      std::isfinite(feedback.temp_c) && feedback.temp_c <= 75.0;
+  if (system_.motion_inhibited() || !system_.pitch_setup_verified() ||
+      !in_speed_mode_[pitch_index] || !fresh_enabled ||
+      !full_diagnostic_cycle ||
+      !is_recent(run_mode) || run_mode.value != 2.0 ||
+      !is_recent(current_limit) || !can::valid_pitch_current_limit(current_limit.value)) {
+    err = "pitch gain update requires a complete fresh six-register cycle, healthy enabled RunMode=2 feedback, and verified LimitCur within 5 A";
+    return Transition::Failed;
+  }
+  cancel_pitch_diagnostic("verified gain update started");
+  if (!write_reg_float(cybergear::Reg::SpdKp, static_cast<float>(kp), AxisId::Pitch)) {
+    err = "pitch SpdKp write failed";
+    return Transition::Failed;
+  }
+  if (!write_reg_float(cybergear::Reg::SpdKi, static_cast<float>(ki), AxisId::Pitch)) {
+    err = "pitch SpdKi write failed";
+    return Transition::Failed;
+  }
+  gain_update_.stage = 1;
+  gain_update_.waiting = false;
+  gain_update_.kp = kp;
+  gain_update_.ki = ki;
+  gain_update_.error.clear();
+  return Transition::Pending;
+}
+
+MotorBackend::Transition CanMotorBackend::poll_pitch_speed_loop_gain_update(
+    TimeNs now, std::string& err) {
+  if (gain_update_.stage == 0) {
+    err = "no pitch gain update is active";
+    return Transition::Failed;
+  }
+  if (gain_update_.stage < 0) {
+    err = gain_update_.error;
+    gain_update_ = GainUpdate{};
+    return Transition::Failed;
+  }
+  if (transition_.stage != 0 || system_.motion_inhibited()) {
+    cancel_pitch_gain_update(transition_.stage != 0
+        ? "mode transition started" : "motor recovery or watchdog inhibit active");
+    err = gain_update_.error;
+    gain_update_ = GainUpdate{};
+    return Transition::Failed;
+  }
+
+  const cybergear::Reg reg = gain_update_.stage == 1
+      ? cybergear::Reg::SpdKp : cybergear::Reg::SpdKi;
+  const double expected = gain_update_.stage == 1 ? gain_update_.kp : gain_update_.ki;
+  if (!gain_update_.waiting) {
+    if (!system_.begin_register_read(AxisId::Pitch, reg, err,
+                                     &gain_update_.request_ns)) {
+      gain_update_.stage = -1;
+      gain_update_.error = "pitch gain readback request failed: " + err;
+      return Transition::Pending;
+    }
+    gain_update_.waiting = true;
+    gain_update_.deadline_ns = gain_update_.request_ns + kPitchDiagnosticTimeoutNs;
+    return Transition::Pending;
+  }
+
+  double actual = 0.0;
+  TimeNs rx_ns = 0;
+  const int result = system_.poll_register_read(actual, err, &rx_ns);
+  if (result == 0 && now <= gain_update_.deadline_ns) return Transition::Pending;
+  if (result == 0) system_.cancel_register_read();
+  gain_update_.waiting = false;
+  const double tolerance = std::max(1e-6, std::abs(expected) * 1e-5);
+  if (result != 1 || !std::isfinite(actual) || rx_ns <= 0 ||
+      std::abs(actual - expected) > tolerance) {
+    gain_update_.stage = -1;
+    gain_update_.error = result == 0
+        ? "pitch gain readback timed out"
+        : "pitch gain readback failed or did not match requested value";
+    return Transition::Pending;
+  }
+
+  const size_t diagnostic_index = gain_update_.stage == 1 ? 4 : 5;
+  auto& observation = pitch_diagnostics_.registers[diagnostic_index];
+  observation.value = actual;
+  observation.request_ns = gain_update_.request_ns;
+  observation.rx_ns = rx_ns;
+  observation.status = 1;
+  observation.valid = true;
+  if (gain_update_.stage == 1) {
+    gain_update_.stage = 2;
+    return Transition::Pending;
+  }
+  const auto& kp_observation = pitch_diagnostics_.registers[4];
+  const auto& ki_observation = pitch_diagnostics_.registers[5];
+  spdlog::info("pitch speed gains verified kp={:.6f} ki={:.6f} kp_request_ns={} kp_rx_ns={} ki_request_ns={} ki_rx_ns={}",
+      kp_observation.value, ki_observation.value, kp_observation.request_ns,
+      kp_observation.rx_ns, ki_observation.request_ns, ki_observation.rx_ns);
+  gain_update_ = GainUpdate{};
+  return Transition::Complete;
+}
+
 bool CanMotorBackend::restore_stopped_pitch_gains(double kp, double ki, std::string& err) {
   constexpr auto axis=AxisId::Pitch;
+  cancel_pitch_diagnostic("stopped gain restore started");
+  cancel_pitch_gain_update("stopped gain restore started");
   auto fail=[&](const char* why) { deenergize(axis); err=why; return false; };
   if (!std::isfinite(kp) || kp<1 || kp>5 || !std::isfinite(ki) || ki<.002 || ki>.05)
     return fail("restored pitch gains outside supported commissioning bounds");

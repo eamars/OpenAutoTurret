@@ -1,0 +1,75 @@
+{
+  "adr": "002.1",
+  "scope": "non_weapon_camera_sensor_gimbal",
+  "status": "DESIGN_NOT_LIVE_AUTHORIZATION",
+  "physical_execution_authorized": false,
+  "disable_all_safety": false,
+  "agent": {
+    "manual_candidate_selection": false,
+    "change_thresholds_during_campaign": false,
+    "change_source_during_campaign": false,
+    "compile_for_parameter_change": false,
+    "deploy_for_parameter_change": false,
+    "background_unattended_tuning": false
+  },
+  "search": {
+    "seed": 20260930,
+    "coarse_count": 16,
+    "refine_centers": 2,
+    "points_per_center": 4,
+    "refine_half_width_normalized": 0.125,
+    "refinement_rounds": 1,
+    "confirm_candidates_max": 2,
+    "baseline_parameter_sets": 1,
+    "invalid_data_exact_retries": 1,
+    "confirm_repeats_per_case": 3
+  },
+  "metrics": {
+    "version": "adr0021-metrics-1",
+    "steady_min_s": 2.0,
+    "hold_window_s": 2.0,
+    "velocity_window_s": 0.2,
+    "velocity_span_min_s": 0.15,
+    "velocity_samples_min": 5,
+    "max_gap_s": 0.05,
+    "reference_relative_tolerance": 0.01,
+    "reference_absolute_tolerance_dps": 0.02,
+    "jitter_position_p95_p5_deg": 0.15,
+    "residual_full_span_deg": 0.3,
+    "speed_floor_dps": 0.5,
+    "speed_fraction": 0.1,
+    "tracking_ratio_min": 0.9,
+    "tracking_ratio_max": 1.1,
+    "active_fraction_min": 0.95,
+    "active_speed_fraction": 0.5,
+    "stop_drift_deg": 0.15,
+    "static_noise_fraction": 0.3333333333333333
+  },
+  "ranking": {
+    "aggregate": "worst_case_across_required_trials",
+    "keys": [
+      "max_normalized_quality",
+      "mean_normalized_quality",
+      "candidate_id"
+    ],
+    "current_penalty": false
+  },
+  "protected": {
+    "writable_by_optimizer": false,
+    "retain": [
+      "emergency_stop",
+      "hardware_overcurrent",
+      "overtemperature",
+      "feedback_validity",
+      "physical_limits",
+      "approved_trial_envelope",
+      "command_lease",
+      "bus_fault_handling"
+    ]
+  },
+  "source": {
+    "reported_commit": "bad742dddba6a95d3d055e43998adfd0506b0a6e",
+    "independently_read": false,
+    "dirty_tree_reviewed": false
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "model_id": "hailo-yolov8s-pose-hailo8-v2.18.0",
+  "task": "pose_estimation",
+  "input_width": 640,
+  "input_height": 640,
+  "bbox_order": "yxyx",
+  "bbox_normalized": true,
+  "preserve_aspect_ratio": true,
+  "postprocess": "host",
+  "inference_rate_hz": 30,
+  "labels": "coco",
+  "permitted_classes": ["person"],
+  "sha256": "86288580a486362d93063c6b37a02f298fff2f5504529badb9a53c8e746e7a61",
+  "license": "AGPL-3.0",
+  "head_outputs": {
+    "format": "YOLOv8-pose head, three scales (stride 32/16/8), decoded on the host",
+    "per_scale": ["box DFL 4x16 (FCR)", "person score, sigmoid on device", "keypoints 17x(x, y, visibility) (FCR, 16-bit)"],
+    "decode": "Hailo Model Zoo v2.18 _yolov8_decoding: box = cell centre -/+ stride * E[softmax(DFL)]; keypoint = stride * (2 * raw + cell index); visibility = sigmoid(raw)",
+    "keypoints": "COCO-17: nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles"
+  },
+  "preprocessing": {
+    "capture_format": "Picamera2 RGB888 byte order converted from BGR to RGB",
+    "canvas_size": [640, 640],
+    "padding_rgb": [114, 114, 114],
+    "resize": "none",
+    "input_dtype": "uint8",
+    "normalization": "on device (alls: normalization([0,0,0],[255,255,255]))"
+  },
+  "hailo": {
+    "architecture": "HAILO8",
+    "runtime_version": "4.23.0",
+    "model_zoo_version": "2.18.0",
+    "dataflow_compiler_version": "3.33.0",
+    "hef_url": "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.18.0/hailo8/yolov8s_pose.hef",
+    "source_config": "https://raw.githubusercontent.com/hailo-ai/hailo_model_zoo/v2.18/hailo_model_zoo/cfg/networks/yolov8s_pose.yaml",
+    "alls": "https://raw.githubusercontent.com/hailo-ai/hailo_model_zoo/v2.18/hailo_model_zoo/cfg/alls/generic/yolov8s_pose.alls",
+    "published_accuracy": "COCO keypoints mAP 59.2 float / 55.7 on Hailo-8; 393 FPS at batch 1"
+  },
+  "notes": [
+    "Downloaded 2026-10-02 from the Hailo Model Zoo v2.18.0 public bucket (10592016 bytes); hailortcli parse-hef on the station: HAILO8, single context, input 640x640x3 UINT8, nine head outputs.",
+    "Weights are Ultralytics YOLOv8s-pose (AGPL-3.0), like the YOLOv8n HEF it sits beside.",
+    "Profile hailo_yolov8s_pose aims at the head (anchor_target: head): measured head keypoints, else above the shoulders, else a box fraction; the anchor source is published per detection."
+  ]
+}

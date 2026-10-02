@@ -1,0 +1,21 @@
+{
+  "issue_id": null,
+  "work_package": null,
+  "observed_failing_predicate": null,
+  "evidence_references": [],
+  "physical_state": "INHIBITED",
+  "facts": [],
+  "assumptions": [],
+  "unknowns": [],
+  "competing_hypotheses": [],
+  "discriminating_test": null,
+  "expected_distinguishing_outcomes": [],
+  "test_budget_and_checkpoint": null,
+  "actual_result": null,
+  "decision": null,
+  "next_action": null,
+  "regression_tests": [],
+  "external_blocker": null,
+  "acceptance_criteria_changed": false,
+  "deployment_authorized": false
+}

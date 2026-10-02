@@ -1,0 +1,693 @@
+# ADR-002 implementation and acceptance ledger
+
+Updated 2026-09-30 (runtime surface section by 小满). Work is in progress; no physical qualification is claimed.
+
+## Identity and authorized scope
+
+- Source baseline: `main@2e789c59dc9038228ac2aa91caab0f07d26d8137`, initially clean.
+- Observed running release: `90aa1f5d4c9155310940813e3933ad49fa36901c`, directory
+  `/home/eamars/workspace/OpenAutoTurret/run/releases/90aa1f5d4c91.uZvIsv`.
+- Pi checkout HEAD is separately `6a47f1dd696d75b878b8138dcaceb9f455ab9147`.
+- Initial live state: MANUAL / READY / hold, no fault. Preserve this operator intent.
+- Owner authorized implementation, deployment and bounded motor/encoder/IMU trials.
+  Actual pitch payload is **camera plus Raspberry Pi**, not an empty axis.
+- Owner requested functional verification first, thermal testing last using motor
+  reports; no external thermometer is available. Active cooling is a possible
+  later hardware change, not present qualification.
+- Owner's subsequent execution rule: **never roll back after a build or release
+  failure**. The Pi has no critical service. Preserve failure evidence, fix the
+  defect and deploy the next version; do not spend time restoring older releases.
+- Unchanged initial limits: yaw current `0x1FE`, 0.8 A, Kp 1 A/(rad/s), Ki 0.6 A/rad;
+  pitch LimitCur <=5 A; host 200 Hz. No new calibrated gains or friction values.
+
+## Acceptance matrix
+
+| Capability | Source/offline | Single-axis physical | Thermal/two-axis | Current scope |
+|---|---|---|---|---|
+| Output arbitration/recovery | PR1 native PASS; Pi 80/80 | Ordinary-TX continuity observed; physical fault injection NOT_RUN | NOT_RUN | 4387411 Manual commissioning |
+| Yaw current velocity loop | PR2 math replay and native PASS | Baseline measured; latency/smoothness targets not met | NOT_RUN | Existing 0.8 A bound |
+| Yaw friction compensation | Bounded state/current integration tests PASS | NOT_RUN | NOT_RUN | Disabled until calibration |
+| Pitch native speed tuning | Hot update PASS (§6: prepare→apply→read-back→restore against drive registers) | NOT_RUN | NOT_RUN | Existing native mode and 5 A bound |
+| Pitch homing | Existing native/Pi tests PASS | Two starts completed; repeatability not yet reduced | NOT_RUN | Do not inherit old mechanism results |
+| Typed payload qualification | Profile binding PASS (a campaign bound to one profile refuses to run under another) | NOT_RUN | NOT_RUN | No new qualified profile |
+
+## PR1 evidence so far
+
+The public `gm6020::VelocityLoop` probe was compiled and executed with WSL G++.
+At timestamps 6/31/36 ms with constant fresh-position input, baseline output was
+0.1003/0/0 A and validity was true/false/false. The thin fix gave
+0.1003/0.1003/0.1006 A and remained valid: the late cycle freezes integration,
+then normal integration resumes. This verifies the deterministic PI boundary;
+it does not verify Linux/CAN timing or physical response.
+
+Changes under test:
+
+- No-progress is a performance episode; the guard no longer inserts routine
+  zero-current frames. Emergency trips latch under the same mutex as normal TX.
+- Current link state and error deltas replace cumulative error-count latching.
+  Yaw command health uses its own bus; sustained TX failure is bounded at 20 ms.
+- Watchdog action identifies the affected axis, retaining the healthy axis's
+  controlled support instead of automatically disabling both axes.
+- Trace records carry RX sequence/raw encoder/current, successful TX sequence/time,
+  encoded output, requested output, command kind/reason and effective PI values.
+  Transport success is not a motor acknowledgement. Pitch host current command
+  remains unknown; its command is SpdRef in rad/s.
+- Raw RX timestamps are preserved separately from the legacy cycle-bounded
+  supervisor timestamp, and the trace exports raw RX time.
+- Legacy mixed-station payload loading is explicitly unqualified; the historical
+  file remains a conservative cap while typed identity binding is implemented.
+
+Offline package tests: 45 passed. Synthetic metrics and illustrative arithmetic
+ran successfully. These tools establish no mechanism stability.
+
+The old running release was observed read-only for 10.529 s (2,080 unique control
+cycles). Average reported host period was 5,064 us. Pitch's trace-visible RX
+updates averaged 55.59 Hz, with feedback age 3.45/11.74/24.37 ms min/mean/max.
+Yaw feedback age was 0/0.49/2.48 ms; its trace-visible update rate of 197.46 Hz is
+limited by controller sampling and **is not the true CAN RX rate**. Yaw raw
+temperature was 33 (unverified degrees scaling); pitch temperature was absent
+from that trace. Peak-to-peak encoder position range was 0.1093 degrees pitch
+and 0.04395 degrees yaw. Raw capture is ignored at
+`run/adr002/baseline-90aa/trace-10s-and-imu.txt`; the stack stayed MANUAL/READY.
+
+Native builds use WSL Ubuntu, GCC 15 and CMake 4.2, in ignored
+`run/adr002/native-build`. Full compilation succeeded. The final native suite
+`ctest --test-dir run/adr002/native-build -E retained_homing --output-on-failure`
+passed 78 of 79 entries initially; the remaining watchdog-event test expected
+no-progress to outrank a lost heartbeat. Its assertion now requires the actual
+fatal condition first, then no-progress after the heartbeat condition clears.
+`cmake --build run/adr002/native-build --target test_watchdog_trip_events --parallel "$(nproc)"`
+and `ctest --test-dir run/adr002/native-build -R "^test_watchdog_trip_events$" --output-on-failure`
+passed. Combined result: 79/79 entries, including nine new recovery/arbitration
+cases executing the production backend and control loop. Evidence logs:
+`run/adr002/native-ctest-final.log`, `native-watchdog-rebuild.log`, and
+`native-watchdog-rerun.log`. Earlier assertion-only failures are superseded;
+neither simulated energized state nor mocked transport establishes physical hold.
+No retained-homing test is claimed: the native suite excludes it as directed by
+AGENTS because that test writes `/dev/shm`.
+
+PR1 source commit: `02d5e8ce120eccda2a755b8815dbbb10ab4dedb8`.
+An inactive release was created at `run/releases/02d5e8ce120e.yA9dLm` on the Pi.
+Its native compile was an execution mistake: the owner had cleared WSL resources
+specifically for local compilation. After the owner's correction, all build
+processes with that exact release working directory were stopped; a subsequent
+process check found none remaining. No new controller was activated. Preserve
+this incomplete directory as evidence; it is not a usable/verified release.
+The route is now **WSL native tests and ARM64 cross-compilation only**, then
+binary transfer and station tests. Missing cross dependencies are to be installed
+locally, not used as a reason to compile on the Pi again.
+
+A real local Unix SOCK_SEQPACKET probe found a missing PR1 integration case:
+256 live rows transmitted (188,615 bytes), but the 1024-row frozen fault window
+(753,862 bytes) failed with EMSGSIZE under the old 256 KiB sender buffer.
+The follow-up sizes the sender for 2 MiB and reuses the shared MAX_FRAME in the
+response capture client. Repeated real socket probe passed both 256 rows
+(188,615 bytes) and 1024 rows (753,862 bytes). The rebuilt `test_web_server`
+passed, including a full frozen-window regression over a real packet socket;
+logs are `run/adr002/trace-socket-build.log` and `trace-socket-test.log`.
+No activation, calibrated parameter change, or hardware acceptance is included
+in the native gate above.
+
+## Local cross-build and inactive deployment
+
+WSL Ubuntu hosts a signature-verified Debian 13 amd64 chroot at
+`/home/rba90/.cache/ota-adr002/debian13-verified`, with the workspace bound at
+`/workspace/OpenAutoTurret`. AArch64 GCC 14.2 and fmt 10.1.1, spdlog 1.15.2,
+yaml-cpp 0.8 and GTest 1.16 are installed there. The first cross attempt needed
+the missing `make` package for GTest bootstrapping; installing it and building
+forward succeeded. No rollback was performed. The rootfs target libc is 2.41
+with a newer Debian security patch than the Pi; target execution is verified
+by the station tests, not inferred from that version similarity.
+
+`cross_build.py` succeeded on `8838b1d62186dd106f9b47800e8d642ae9e3e16f`.
+Its reported 152 ELF artifacts include build objects and are not a test count.
+`deploy_station.py --prebuilt --commission-mixed-controller` shipped the local
+build into `/home/eamars/workspace/OpenAutoTurret/run/releases/8838b1d62186.n6vz4e`.
+The station ran 67 test binaries with zero failures and passed the manual
+mixed-controller CAN/IMU preflight. The 13 additional CMake integration entries
+were then run from relocated CTest metadata: 13/13 passed, 33.37 seconds.
+All 80 registered entries, including retained homing, are therefore covered.
+The deployment path now uses the complete CTest manifest rather than a filename
+glob. Its two focused local regressions and seven real relocated CTest probes
+passed; two pre-existing detached-process launcher tests timed out in WSL.
+Logs: `pi-ctest-missing-13.log`, `pr1-cross-build.log`
+and `pr1-deploy-final.log` under ignored `run/adr002/`.
+
+## Old release incident before activation
+
+The old `90aa1f5` release independently entered watchdog fault at 22:38:01 while
+the mistaken Pi build was underway. Its frozen trace ends at a 21.108 ms
+hold/DERATE cycle with fresh yaw feedback; about 90 ms later the log records
+fault and an 84.487 ms cycle. This is consistent with the old late-cycle failure
+path but does not establish scheduling attribution or the exact first trigger.
+Captured evidence is in `run/adr002/old-release-trip/`; analysis is in
+`run/adr002/analysis/old-release-trip-report.md`. At 22:47 the launcher stopped
+the old stack and cleaned up its processes. It reported `STOP FAILED` because
+the controller was already faulted; logs confirm STOP/zero requests and clean
+process exit, not normal parking qualification or confirmed GM disable.
+
+## Failure handling (owner override)
+
+Release `8838b1d62186.n6vz4e` was started through the launcher in Manual mixed
+commissioning at 23:02 NZDT. Pitch completed mandatory homing and reached hold.
+Actual pitch readbacks: RunMode 2, LimitCur 5 A, SpdKp 4, SpdKi 0.05.
+Yaw current-mode configuration remains 0x1FE, 0.8 A, Kp 1 A/(rad/s), Ki 0.6 A/rad.
+The final 12-second stationary window measured yaw RX 1000.04 Hz and pitch
+49.50 Hz, feedback-age p99 0.9992/19.73 ms respectively, host period p99 5.065 ms.
+Yaw successful TX sequence advanced every cycle with ordinary reason; one raw
+RX age was -0.834 microseconds (RX arrived after the cycle clock sample).
+Pitch temperature was 25.9 C; yaw raw byte 31 has unverified degree scaling.
+Pi throttling flags 0x50000 indicate historical events, no active low-bit flags.
+Captures and analysis reside under ignored `run/adr002/8838` and `analysis`.
+
+The first yaw fine jog was accepted but moved only about 0.75 degrees in twelve
+seconds: this is a baseline observation, not a performance pass. An existing
+response_probe was rejected because it required physical two-axis homing even
+for continuous yaw. Its gate now uses position readiness and the declared
+runtime envelope (including explicitly unbounded yaw); bounded-axis clearance
+and stationary checks remain. The production command-gate simulation passed.
+
+Future releases use locally cross-built
+committed source and a separate release directory, with launcher-controlled
+stop/start and manual commissioning. Build/deployment failures are fixed forward:
+preserve diagnostics and publish the next corrected version, with no rollback.
+This owner rule overrides the ADR's generic rollback procedure. Retained geometry
+remains intact. A failed physical trial still preserves traces before the ring
+wraps and uses the launcher for stopping as necessary; it does not trigger
+restoration of an old release. Do not switch GM back to voltage, overwrite
+calibration, or interpret a GM zero-current request as confirmed disable.
+
+## PR2: executable path and bounded compensation
+
+Source now sends service yaw through the shared position-P / velocity-feedforward
+path. Previously finalizing pitch homing selected yaw's host position interface
+unconditionally. Leased yaw jogs retain their explicit velocity even while their
+position waypoint is bounded relative to feedback. The pitch service path is
+unchanged in this PR2 slice. PI gains and the 0.8 A / 5 A caps are unchanged.
+
+The new directional friction state machine defaults disabled. Explicit moving
+intent permits one bounded attempt per direction; repeated lease refreshes do
+not restart it. Directional fresh-RX displacement confirms motion; reversing
+waits for stationary feedback. Timeout is a performance observation. Final
+current and slew limits govern PI integration, transition handoffs use the last
+delivered effort, quiet hold retains its integral, and a reduced current cap
+retains signed braking authority. Unknown calibration is not promoted to a
+measured production profile. New trace fields expose assist/state/exhaustion.
+
+A fixed 128-sample raw-RX history supports 20/30/40 ms measurement windows and
+ignores repeated/backwards timestamps. Default estimator selection remains the
+legacy 50 ms filter until physical A/B data select a window. All three candidate
+window observations are temporarily traced to compare against actual CAN RX.
+
+Before regression expansion, standalone WSL C++ probes replayed the captured
+8838 normal-jog samples through the production estimator and combined current
+loop. The latter preserved finite <=0.8 A output and exactly one start attempt
+after a tiny reference-sign crossing was given a direction deadband. These
+replays use recorded feedback, not a simulated claim about changed mechanics.
+The native suite passed 79/80 entries initially; two new test expectations
+observed their 10 ms attempt after its deadline. After correcting those test
+intervals, the rebuilt transport tests passed. The combined native result is
+80/80 CTest entries excluding retained homing. Final focused current/estimator,
+parser and transport tests passed 3/3; `pr2-ctest.log` and
+`pr2-final-focused-tests.log` retain the evidence and initial failure.
+
+Release `4387411e8be9.PLkMoF` passed all 80 station CTest entries and preflight,
+then completed its mandatory pitch homing. Five +/- normal yaw pairs were
+captured at the initial pitch pose, followed by three accepted +5-degree pitch
+responses and another bounded yaw series. Baseline fine +/-3 deg/s requests
+showed roughly 1.521 s / 9.713 s three-count motion-confirmation delays; positive
+normal motion used up to 0.632 A and drifted about 0.395 degrees after stop.
+The baseline therefore does not meet response/hold targets. Every observed
+active yaw row had ordinary output reason and advancing successful TX sequence;
+this confirms no interleaved guard zero in those trials, not emergency-stop
+qualification. Detailed raw captures/analysis remain ignored under `run/adr002`.
+
+## Stop clock correction and session-only yaw trials
+
+Release `eaef375f9046.bzBrVq` was cross-built in local WSL; all 81 registered
+station CTest entries and preflight passed. It was not started. Stopping the
+previous `4387411` session at 23:35 NZDT exposed a readiness defect: shutdown
+passed the previous cycle clock to a newer yaw RX snapshot, so 5.145 ms of
+future feedback was rejected before the fresh-clock check. A production-backend
+WSL probe reproduced `old_clock_feedback=0 q=nan fresh_clock_feedback=1 q=0.4`.
+Shutdown now obtains its snapshot clock at entry. An accepted unverified stop
+also no longer resumes ordinary Hold for the 55-second parking budget: only an
+actual Parking phase runs that state machine. The old session exited at 23:36:53
+with STOP FAILED; this is not counted as parking qualification. The station
+remained stopped while the next fix-forward release was prepared. No rollback
+was performed or is authorized after build/deployment failures.
+
+`yaw_control_trial` uses the existing command queue only in an explicit Manual
+commissioning launch, with fresh stationary axes, no jog/probe and ALLOW state.
+Its eight colon-separated values are Kp [A/(rad/s)], Ki [A/rad], RX window [ms],
+positive/negative breakaway [A], positive/negative running assist [A], and final
+output slew [A/s]. RX windows are 0 (legacy), 20, 30 or 40 ms. Four zero assist
+values disable compensation. Changes are volatile, retain the 0.8 A cap, preserve
+quiet effort across gain application, and explicitly remain unqualified. Normal
+startup and stored configuration are unchanged. Physical A/B of this interface
+is pending deployment; it is not a calibration result.
+
+The second baseline series achieved +15.235 degrees pitch displacement and five
+yaw direction pairs at that pose. Hold yaw current remained roughly 0.44–0.55 A,
+comparable to moving current, with post-stop drift up to 0.835 degrees. Thus the
+observed moving total current must not be copied into a friction feedforward
+term. The +/-1-degree yaw probes also failed to reach their requested travel.
+These are performance failures without runtime faults, retained for comparison.
+
+Validation for this correction: the WSL native build and all 80 CTest entries
+excluding retained homing passed (`session-trial-build.log`,
+`session-trial-tests.log`). Fresh-stop-clock, bounded trial settings and quiet
+gain-change effort regressions passed in the two focused CTest entries after
+their final rebuild (`session-trial-focused-tests.log`). Document links passed.
+The command's real socket/backend application and physical stop are still
+pending the next station run; local tests do not establish those results.
+
+## Owner-requested stop and work-in-progress snapshot (2026-09-30)
+
+The owner stopped further tuning and implementation, then requested a commit
+of the current work and removal of the WSL environment installed for this task.
+The detailed operation history, parameter trials, errors and remaining work are
+in [the agent behavior review](AGENT_BEHAVIOR_REVIEW_2026-09-30.md).
+
+The PR3 snapshot adds six asynchronous pitch register observations with request
+and actual RX timestamps, transaction cancellation before mode changes, verified
+pitch gain application, trace fields, and a commissioning-only command. Payload
+response checks now measure installed gains rather than silently writing gains
+through the old void setter. Homing jitter diagnostics no longer infer that
+current must be increased. Hardware-clock shutdown checks are also corrected.
+
+This is **unfinished work, not a release qualification**. The transport probe
+passed; the last complete native run passed 79/81 entries excluding retained
+homing. A subsequent focused run passed 5/6 entries, with `park_power_probe`
+still failing on stale/untrusted feedback. No further repair or build was run
+after the owner stopped work. The PR3 snapshot has not been deployed.
+
+The last deployed revision remains `bad742dddba6a95d3d055e43998adfd0506b0a6e`.
+At 00:12 NZDT its launcher reported STOPPED, pitch disable confirmed, and yaw
+zero requested with disable state unavailable. No rollback occurred. Trial
+gains were volatile; production configuration still has its original defaults.
+Runtime captures and unintegrated PR4 drafts remain under ignored `run/adr002`;
+they are not included as runtime artifacts in this commit.
+
+## 2026-09-30 · ADR-002.1 runtime surface (小满)
+
+Identity this section speaks about: branch `ADR-002` at `479857b`, deployed release
+`0b1b4b2b3ba7.AJVn7p`, aarch64 `controld` `3f2cabc4fe78d0de…`, station-generated
+`parameter_inventory.json` `498b4e80204a22…`, frozen design `f761cbec39f356db…`. The inventory's
+`source_rev` comes from the release's own `REVISION`; the Pi checkout at `6a47f1dd…` is a different
+tree and is no longer allowed to masquerade as the built source (`git -C` walked up to it until
+`77f71a5`).
+
+### The four gates docs/ADR-002.1/00_CODEX_START.md:58 asks for
+
+| Gate | Status | What was actually run |
+|---|---|---|
+| Parameter hot update on real hardware | PASS | `tools/adr0021_acceptance.py` walked every `experiment_writable` entry: **19/19** prepare→apply→read-back→restore, binary digest unchanged across the set, zero compiles, zero redeploys; `yaw.host_current_limit_a` written as `protected_read_only` and refused **server-side**. Then a real campaign: 16 candidates, 32 applied writes, 16 restores accepted, `refused: []`, `blocked: []` |
+| Apply failure blocks the trial | PASS | The gate now stands in front of both trial and `param_apply`; measured refusal on the station: `param_apply refuses: manual_commissioning_off+mode_not_manual`, snapshot stayed `revision=0`, candidate left staged. A refused restore is `BLOCKED_restore_failed_*`, not a shrug |
+| Experiment freeze | PASS | `adr0021_plan.py` refuses under-sized/oversized grids, missing `coarse_count_reason`, `confirm.repeats < 2`, stop rules without bounds, and names D7 when a dimension may not move; `--check` refuses post-freeze edits and inventory/binary drift. Binding carries four legs: source rev, binary digest, inventory digest, config/hardware profile |
+| Reversal and prescribed-pose re-verification | **NOT_RUN** | Not attempted yet; no cell in this table may be read as physical qualification until it is |
+
+### What this section deliberately does not claim
+
+- The campaign's levels were the **sample grid** (`manifests/campaign.example.json`), authorised by the
+  owner's `跑！` without levels. It is mechanism acceptance, **not** a tuning result: no scorer took part,
+  so no candidate may be described as better, and `metrics` is absent rather than zero.
+- `RUN` and `SCORE` (`00_CODEX_START.md:46`) were **exercised on the hardware** on 2026-09-30 with the
+  campaign's own runner (`--run-trials --score`, 4×2 grid = 16 candidates, bound to the same release,
+  commission mode, homing waited for before starting): 32 parameter exchanges applied and all 16 candidates
+  restored, `blocked = none`. The frozen scorer awarded **`PASS_SCOPE` to 15 of 16** candidates, and the
+  classification is honest about its scope: only `feedback` computed (RX age within threshold), while the
+  other eight metrics abstained with a stated reason — a current-loop step trial does not exercise homing,
+  position, reversal or start latency, and there is no valid temperature reading to grade. One candidate
+  (`c02`) never ran because the station's own guard said `yaw tuning requires fresh stationary axes`; the
+  runner recorded that as a gate speaking rather than a quality verdict, and restored the candidate anyway.
+  **What this does not establish:** the matrix above stays NOT_RUN for the §5 reversal and prescribed-pose
+  re-verification, and `PASS_SCOPE` on one metric is not a §7 quality pass for a candidate.
+- Trace identity is per-record and measured: 16/16 trials, 256 records per window, 66 carrying the
+  candidate tag, contiguous from announcement to newest. The check is contiguity to the newest record,
+  not "every row tagged" — the window is rolling and its head predates the candidate.
+- Two host-side python tests remain red and are named, not hidden: `test_install_station` validates
+  `User=eamars` against the local user database (correct on the Pi, cannot pass as `dsh`); the
+  `test_station_launcher` log-path assertion is still open.
+
+
+## 2026-09-30 深夜：正反与规定姿态复验（docs/03 §5）——**部分通过，两处如实留着**
+
+新工具 `Firmware/tools/adr0021_pose.py`（`--selftest` 不碰硬件；符号逻辑、按轴索引、接触判读都过）。
+真站跑了两遍，结论不同，两遍都记：
+
+| 检查 | 第一遍 | 第二遍 |
+|---|---|---|
+| 归零完整循环 ×3（§5 要求至少 3 次） | **PASS**：三轮都 `homing → hold`（每轮约 66 秒） | **FAIL**：`homing → fault` |
+| 正反（命令步 → 编码器读数） | **FAIL（测法错）**：在滚动窗内取首尾差，窗里大半是踏步之前的历史 | **INCONCLUSIVE**：命令被拒，`encoder 4298 → 4298`，轴根本没动 |
+| 中段摩擦平台（§5 先证明不当端点） | `BLOCKED_friction_plateau_needs_hand_resistance` | 同 |
+
+**我这两个错都是测法的错，不是轴的错**，而且都被我自己的工具当场揭出来：
+
+1. **滚动窗不能取首尾差。** trace 是约 256 行的滚动窗，窗内历史远多于踏步之后的行；首尾差量到的是"窗里恰好装了什么"，
+   不是那一步。改成**踏步前最后一条读数 vs 踏步后最后一条读数**之后，第一遍那个看似"反向"的结论就消失了——
+   取而代之的是 `delta=0`：轴没动，因为命令被拒。
+2. **命令形状是我猜的。** `command_validation.hpp:212` 的例子写的是 `yaw+1`——**整名轴 + 符号 + 整度**；
+   我发的是 `y+2.0`。形状校验只查形状，"哪个步长被批准"是 controld 的决定（§38–§41、§52），
+   所以我不替它猜；被拒也**没有**被读成"轴没反应=质量差"。
+   另外我原来只读 `reason` 字段，被拒的话在那里是空的——**拒得没声音就是白拒**，现在 `error` 与 `reason` 都收。
+
+**没做的事，不遮**：第二遍 `homing → fault` 我**还不知道原因**——需要站自己的话（telemetry 的 fault 字段/日志），
+下一轮先查这个再谈 §5 通过与否。摩擦平台那一格要人手在轴上加阻力，主人在睡觉，不叫醒。
+
+⇒ **矩阵里的"正反与规定姿态复验"仍记 NOT_RUN**：归零三次完整通过是真的，正反一次都没量到（命令被拒），
+一个 `BLOCKED_friction_plateau_*` 也是真的。基础设施工具链自此**齐了**，这一格**没到 PASS 就不写 PASS**。
+
+## 2026-10-01：判据「能动、不堵转」——**两判据在 Manual/Hold 下都过了**，AUTO_ROAM 那条还没量
+
+主人把判据降到"能动、不堵转"。真机跑出来的答案：
+
+| 候选（实发串） | 静止电流 | 占包线 | `manual_step yaw±1` 位移 |
+|---|---|---|---|
+| **baseline** `1:0.6:20:0:0:0:0:0.001` | **0.0493 A** | **6.2%** | **+5 / −6 counts ⇒ 能动** |
+| half_ki `1.0:0.3:…` | 0.1069 A | 13.4% | +2 / −2 |
+| half_kp `0.5:0.6:…` | 0.158 A | 19.8% | +3 / −1 |
+| half_both `0.5:0.3:…` | 0.2205 A | 27.6% | +3 / 0 |
+
+- **判据②不堵转：过。** Manual/Hold 下静止电流是包线的 **6%**（不是早上在 AUTO_ROAM 量到的 100%）。
+- **判据①能动：过。** 命令步之后编码器位移**非零且正反两向符号相反**（+5 / −6 counts）。
+
+**三处必须跟着这张表一起读，否则它会被误读：**
+
+1. **"2° 不合法"是我自己造的哑局。** 站的判决一直是 `"step size must be one of 0.5, 1, or 5 degrees"`，
+   我却连着几轮把**回执**当判决读，于是报成"命令被拒、原因未知"。改成批准的 1° 之后，
+   `manual_jog_start yaw+` 也当场被批准并让编码器 4099 → 4109。**轴一直是会动的。**
+   工具现在硬性拒绝非常准步长（`SANCTIONED_STEP_DEGREES`），不再拿一条被拒的命令去量运动。
+2. **后三行"位移小"不等于"不动"。** 我的判决线取在 >2 counts，是**我拍的**，不是文档给的；
+   被拒命令的位移是精确的 `0.0`，所以非零本身就是运动的证据。诚实的写法是：
+   **四个候选都动**，baseline 位移最大且对称性最好；阈值这条我要重定，不许拿它冒充判据。
+3. **"降额反而电流更高"这个趋势我不敢当真。** 静止读数是在上一候选的踏步/恢复之后 2 秒取的，
+   候选之间不独立（余温、位置、滚动窗都串味）。要拿它下结论，得改成每个候选前先静置并复量。
+
+**还没做完的两条**（不遮）：①早上那个 **0.80 A = 100% 包线**是 **AUTO_ROAM** 下量到的，本报告只在
+Manual/Hold 下验过——**AUTO_ROAM 的 yaw 路径还没复量**，而主人抱怨的堵转正是那个模式；
+②`enabled_state = -1`（使能状态未知仍在灌流）仍未查清。
+
+## 2026-10-01 补：我把"能动"撤回重测；文档里本来就有路
+
+主人提醒之后回读文档，三条我凭空造的假设作废：`angle_count` 是**13 位一圈 0..8191**（22.75 计数/度，
+`references/gm6020/GM6020_AI_Reference.md:72`），**滑环无约束、不计圈数**（`STATION_OPERATIONS.md:307`），
+`axes.yaw.position_envelope: none` ⇒ yaw **没有位置包线**（`:524`）。所以"走软限位定标""长 jog 必须限时"
+都是我编的；`adr0021_sweep.py` 的回绕展开按 65536 写也**是错的**。
+
+由此**重算**：我先前报的"能动 +5/−6 counts"按真单位是 **0.22°/0.26°**——**那个 PASS 我撤回**，
+它没到"命令 1°"的程度，也不满足主人要的长脉冲证明。
+
+**现成路径**（launcher 自带、护栏齐备、IMU 独立测角）：
+
+```
+run --commission-hardware --with-imu --yaw-step-deg N      # 文档上界 15..45 ⇒ 90° 超出，我不擅自放宽
+run --commission-hardware --with-imu --yaw-sweep-deg N --yaw-sweep-ff-a A   # drag sweep：正对"各角度阻力不均"
+```
+
+真机跑了一趟 `--yaw-step-deg 45`：**校验通过、会话正常结束**（`COMMISSIONING FINISHED; zero output requested`），
+但**没有报出任何位移**。首要怀疑（**未验证**，不当结论）：usage 明写"yaw 推力单位跟随 `axes.yaw.control_mode`：
+电流驱动用 `--yaw-current-a`，电压驱动用 `--yaw-voltage`，探针会拒绝用错的那个"——我两者都没给，
+**在这条 current-mode profile 上探针可能是"零推力"于是根本没推**。下一轮先读 `axes.yaw.control_mode`，
+再按 `:482` 那次成功记录的量级给显式推力重跑。
+
+`enabled_state=-1` **就地结案，不是故障**：账本写着 `GM6020 zero voltage is not a verified disable`
+（`:495`）——断开状态本来就不可确认，每次停栈那句 `disable state unavailable` 是预期行为。
+
+## 2026-10-01：电流模式 drag sweep 真机结果——**命令 45°，实测只走 2.46°**
+
+现成路径逐层被探针纠正后才跑通：`--yaw-step-deg` 那支探针**命令电压**、电流环开着 ⇒ 驱动器不理它
+（`exit=2`，探针自己的 NOTE）；`--yaw-sweep-deg` 还必须配 `--yaw-speed-deg-s`（文档：整数、±5、≤1500 raw）。
+最终命令与探针原话（`/tmp/adr/sweep45.log`）：
+
+```
+run --commission-hardware --with-imu --yaw-sweep-deg 45 --yaw-sweep-ff-a 0.6 --yaw-speed-deg-s 5
+RESULT reason=completed sweep_target_deg=45 sweep_ff_a=0.6 yaw_mode=current
+       current_ceiling_a=3 yaw_speed_target_deg_s=5 peak_speed_deg_s=30
+       peak_travel_deg=2.59 final_displacement_deg=2.46 stationary_observed=1
+       yaw_frames=2807 yaw_tx=857 yaw_errors=0 zero_tx_failed=0
+```
+
+**读数**：探针自己按**度**报，不需要我拿编码器换算。**命令 45°、走完 2.46°、结束时观察到静止**、
+CAN 无错误、护栏判定 `completed`。**这不是"没动"，是"只动了应有行程的 5%"**——
+量级差一个数量级，方向没有异议。
+
+**首要怀疑（下一轮验，不当结论）**：0.6 A 脱阻力前馈对付不了交叉滚子轴承的静阻力，
+且 trace 里 yaw 的运行时 `current_cap` 只有 **0.8 A**（探针上限 3 A 是探针的，不是环的）
+⇒ 速度环一顶到电流上限就再也推不动。可验证动作：**把 sweep 前馈抬到 1.5 A**（仍在探针 3 A 与厂商 ±3 A 之内）
+复跑；若行程随之前馈明显增长，"能动不堵转"的正解就是**抬运行时 yaw 电流上限**（可写参数，0 改源码/0 重编/0 重部），
+而不是继续动 kp/ki。注意 D7：**调参不得自己抬高电流包线**——这一抬属于**主人授权的诊断/资格**，须单独记账。
+
+## 2026-10-01：drag sweep 两点对照——**行程跟着可用的脱阻力电流走**
+
+同一支探针、同一速度目标（5 °/s）、同一 45° 命令，只改脱阻力前馈：
+
+| `--yaw-sweep-ff-a` | `peak_travel_deg` | `final_displacement_deg` | `peak_speed_deg_s` | 判定 |
+|---|---|---|---|---|
+| **0.6** | 2.59 | **2.46** | 30 | `completed`、`stationary_observed=1`、`yaw_errors=0` |
+| **1.5** | 11.38 | **11.21** | **84** | 同上 |
+
+前馈 ×2.5 ⇒ 行程 ×4.6，**方向无争议：限制行程的是能用到环里的电流，不是 kp/ki**。
+另两条读数值得记：`peak_speed_deg_s=84` 而速度目标只有 5 °/s，且 RESULT 里 `yaw_current_a=0` ——
+**速度环没有把速度按住在 5 °/s**，脱阻力前馈在主导；轴是先窜起来、再在某个角度被阻力停下来
+（`stationary_observed=1`）。**这正是主人说的"各角度阻力不均"的形状**，不是我此前任何一版猜测。
+
+**还没到"能动"的定论**：11.2° 仍只有命令的 25%。下一手：前馈再抬一档（2.5 A，仍在探针 3 A 与厂商 ±3 A 之内），
+看行程是否继续增长、以及**停在哪个角度**——那才是把"能动不堵转"落到一组参数上的依据。
+D7 提醒仍然生效：抬高电流包线属**主人授权的资格动作**，不是调参自己开门，须单独记账。
+
+## 2026-10-01：前馈 2.5 A ——**yaw 真的走大角度了（40°/50°），但会话 exit=2，速度环没在管**
+
+同一支探针，`--yaw-sweep-ff-a 2.5 --yaw-speed-deg-s 5`：
+
+| 命令 | `reason` | `peak_travel_deg` | `final_displacement_deg` | `peak_speed_deg_s` | launcher |
+|---|---|---|---|---|---|
+| 15° | `sweep_target_reached` | 15.25 | **40.65** | **186** | **exit=2** |
+| 45° | `sweep_target_reached` | 45.04 | **50.36** | **222** | **exit=2** |
+
+三条读法，好的坏的都写：
+
+1. **能动成立（在量级上）**：实测位移 40.6° / 50.4°——比我报过的 0.26° 完全是另一个世界，
+   也超过主人"能动"的字面要求。**轴不是被阻力摁死的。**
+2. **但速度环显然没在干活**：目标 5 °/s，峰值 **186 / 222 °/s**，且 RESULT 里 `yaw_current_a=0`；
+   `final_displacement` 大于 `peak_travel` ⇒ **越过反向点还在惯性滑行**。也就是说**全部权威都来自脱阻力前馈**，
+   PI 那一项是空的——这与三轮 sweep 一致（0.6/1.5/2.5 A 时 `yaw_current_a` 都是 0）。
+3. **`exit=2` 不是干净通过**：探针判 `sweep_target_reached`，launcher 仍以 2 退出（后续护栏/返回段的问题，
+   原因未查）。**所以这一格我只能写"能动＝是；干净通过＝否"**，不拿 `target_reached` 冒充全程合格。
+
+**由此得出的下一个真问题（也是调参的正题）**：为什么 yaw 速度环输出恒为 0 ——
+是速度环增益被写成 0、还是被某个上限/开关掐住。若那一环活过来，"用 5 °/s 走完 45° 且不受阻力角度影响"
+才是可达成的，`不堵转` 也才有意义（现在是前馈硬顶，不是闭环在跟）。
+
+## 2026-10-01 更正与结论：**限制是 yaw 的电流包线本身，而它是受保护只读参数**
+
+**先更正我自己**：上一轮我写"yaw 速度环输出恒为 0"，证据是 RESULT 里的 `yaw_current_a=0`。
+读了 `tools/probe_mixed_hardware.cpp:506` 才知道那印的是**探针自己的推力电流变量**——我没传
+`--yaw-current-a`，它就是 0。**那句话是误读，撤回。**
+同一处还写着（`:419` 附近）探针作者引的主人 09-29 裁定：**"这是扭矩测试，不是速度测试"**，
+任何形如运动极限的东西都不许结束一次扫掠。所以 **186/222 °/s 的峰值不是控制失效**，
+是我拿速度测试的尺子去量扭矩测试——第二次因为没先读代码而挨这一刀。
+
+**再看行程**：探针在 `travel >= |sweep_deg|` 时才判 `sweep_target_reached`，
+所以 `peak_travel_deg=45.04` 是真的**拖着走完了 45°**（15° 那次 15.25°）。合上前两轮：
+
+| 脱阻力前馈 | 拖过的角度 | 探针判定 |
+|---|---|---|
+| 0.6 A | 2.59° | `completed`（未达目标，时间窗用完） |
+| 1.5 A | 11.38° | `completed`（同上） |
+| **2.5 A** | **45.04°** | **`sweep_target_reached`** |
+
+**最后是权限层的事实**（`parameter_inventory.json`）：
+
+```
+yaw.current_kp_a_per_rad_s   experiment_writable
+yaw.current_ki_a_per_rad_s   experiment_writable
+yaw.host_current_limit_a     protected_read_only     <-- 我量到的 0.8 A 上限就是它
+yaw.current_limit_register   unsupported
+```
+
+⇒ **轴承要 ~2.5 A 才拖得动 45°，而生产环的包线是 0.8 A，且这个参数是受保护只读**——
+调参面动不了它，ADR-002.1 D7 也不许调参自己抬包线。**这不是 bug，是一个需要主人点头的资格决定**
+（profile 改动 + 重启，restart-class；厂商满量程 ±3 A，探针上限 3 A，2.5 A 在其中）。
+
+**所以本目标的诚实结论**：`能动` 在**调参探针路径**下已证明（拖过 45°）；
+`能动` 在**生产环 + 0.8 A 包线**下**未证明**；`不堵转` 在 Manual/Hold 下已过（静止 2–5% 包线），
+AUTO_ROAM 的满包线保持仍未复量。要把 yaw 交给主人用，缺的是**抬 `yaw.host_current_limit_a`（建议 2.5 A）并重启**，
+然后重跑扫掠与 AUTO_ROAM 保持电流。**这一步我不擅自做：它是包线资格，不是调参。**
+
+## 2026-10-01：AUTO 模式保持电流复量——**"长期顶满包线"是我以偏概全，更正**
+
+正常模式起栈，间隔 25 秒采两窗（`tools/adr0021_loop_sources.py`，256 行/窗）：
+
+| 采样 | mode 分布 | `omega` | `current_raw` p50 / max | 折算 | 占 0.8 A 包线 |
+|---|---|---|---|---|---|
+| 第 1 窗 | AUTO_TRACK 256 | 全 0 | −1607 / 444 | 0.29 A | **37%** |
+| 第 2 窗 | AUTO_ROAM 207 + AUTO_TRACK 49 | 全 0 | +1725 / 1991 | 0.32–0.36 A | **40–45%** |
+
+**而我先前报给您的是"`omega=0` 而 `current_raw=−4369` = 0.80 A = 100% 包线"**——那是**归零后不久的一窗**。
+两窗复量说明：**静止时 yaw 并不长期顶在包线上，而是 37–45%，且两次符号相反**（保持扭矩在跟摩擦拉锯，不是单向死顶）。
+⇒ **判据②（不堵转）在 AUTO 模式下也是"过"**，我先前那句"电机一直在堵转"作为**持续状态**描述**不准确**；
+您现场的感受（有保持力、发热、声音）对应的是**静止时约 0.3 A 的保持电流**，这仍然值得治，但**不是"顶满包线"级别的故障**。
+
+单写者这一条这次也再次成立：每窗 256 行只有一个 `command_kind`（yaw=1）与一个 `output_reason`（1）。
+`enabled_state=-1` 依旧（预期，见前文）。
+
+## 主人已给的授权（不再逐项询问）
+`yaw.host_current_limit_a` 0.8 A → **2.5 A**（profile 改动 + 重启，restart-class；厂商 ±3 A、探针上限 3 A 之内）
+——**主人 2026-10-01："之后不用问我，都批准。我相信你"**。抬完之后要做的事：生产路径内重跑扫掠、
+复量 AUTO 保持电流、把两格判据正式定版。
+
+## 定版（2026-10-01）：两条判据各自的结果
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| **② 不堵转**——静止时 yaw 电流不顶满包线 | **通过** | 抬包线后 AUTO 静止 0.48 A / 1.62 A = **30%**；Manual/Hold 各候选 0.039–0.209 A = **2–13%**。此前"100% 顶格"是归零后一窗的以偏概全，已更正 |
+| **① 能动**——命令步之后编码器位移非零、正反符号相反 | **未通过（生产路径）** | 命令 5°，10 秒窗口内峰值只有 **0.308°**（=命令的 6%），且轨迹 `[0.132,0.176,0.22,0.308,0.308,…]` **3–4 秒到顶后纹丝不动** |
+
+**关键排除**：这条轨迹**否掉了"斜坡慢"这个解释**——若是在爬，轨迹会继续长。**它是走到 0.31° 就停了。**
+增益单调有效（kp/ki 减半 ⇒ 0.308→0.176→0.044°），而静止电流反而随增益下降升高（0.039→0.209 A）。
+⇒ 环**没有用满它的权限**（0.04–0.21 A，远低于档案里"曾推动本轴"的 0.40 A，更远低于 1.62 A 包线）：
+**限制在电流环上游**——`control_loop.hpp:94 position_servo_kp` 与 `reference_limiter.hpp` 是下一处要读的，
+不是再降 kp/ki 能解决的。
+
+**已交付的调参面产物**：四组 yaw 电流环参数全部经 `param_apply`/读回/归档走完（0 改源码/0 重编/0 重部），
+`1:0.6:20:0:0:0:0:0.001`、`1.0:0.3:…`、`0.5:0.6:…`、`0.5:0.3:…`，各自的静止电流与位移见上。
+包线 0.8→**1.62 A（额定）** 属主人授权的资格动作，已生效（遥测 `current_cap`=1.62 为证）。
+
+**站点收尾**：`run_application.sh stop` 已执行（`STOPPED`），无残留调参进程。
+
+## 2026-10-01：踏步瞬间的原始行——**参考是对的，环没用力**（`tools/adr0021_step_probe.py`）
+
+```
+step verdict: accepted, "step issued to v1 safety (41)"
+angle=0.439deg  ref=0.0864995  track=ready_hold  omega=0  integral=0.1815→0.1852  out=0.3168→0.3230  reason=1
+```
+
+- **`ref=0.0864995` 弧度 = 4.956°**：`manual_step yaw+5` 的**参考确实落到 +5°**——所以"踏步被参考限幅吃掉"这条**排除**。
+- 轴停在 **0.439°**、`omega=0`、`safety=0`、`output_reason=1`（全程无第二种原因码 ⇒ **没有任何护栏在拦**）。
+- **`out` 只有 0.317 A 且在极慢上爬**（积分 0.1815→0.1852）：环**看得见 4.5° 的误差，却只肯给 0.32 A**。
+- 而拖阻扫描说得很清楚：**0.6 A 才走 2.6°**，**0.32 A 在这台轴承上根本不到起推门槛**。
+
+⇒ **判据①"能动"的病因定位到：yaw 环的输出权限被卡在 ~0.35 A 附近，与 1.62 A 的包线无关。**
+抬包线没用（已抬，已生效）；降 kp/ki 只会更小（实测单调）。**要动的是那个输出上限本身**——
+下一处读的是速度环/位置伺服的输出钳位（不是 `host_current_limit_a`），并查它在调参面上是否可写。
+
+## 2026-10-01：我猜错的 0.05，和真该看的 `max_output_counts: 15000`
+
+`current_or_effort_limit: 0.05`（`turret_mixed.yaml:94`）**是 pitch 归零的接触阈值**（它在 `homing.contact`
+之下），**不是 yaw 的输出钳位**——我第一眼看到 0.05 就当钳位，猜错了，记下。
+
+同一个 yaw 块里作者早就写明了权限旋钮与它的历史（`:74-78`）：
+
+> Yaw drive authority in raw GM6020 counts（控制器接受 ≤ 25000）。**9000 会让轴"输出顶满却不动"；
+> 15000 能推动它。** 滑环使阻力随角度变化，WP6 会用实测剖面替换这一个数——**在那之前这就是操作者的旋钮**。
+> `max_output_counts: 15000`
+
+**这与今天的观测是同一条曲线的两端**：我在 Manual/Hold 看到"输出爬升而轴停在 0.44°"，档案说
+"输出顶满却不动"发生在权限 9000。**待查的关键单位问题**：trace 的 `output_requested=0.317` 到底是
+**绝对安培**还是**相对 `max_output_counts` 的比例**——0.317 × 15000 = 4755 counts ≈ **0.87 A**（正是"能推动"的量级），
+而 0.317 A 绝对值则低于起推门槛。**这一单位之别决定下一手往哪走**，所以要先读打这行的代码，不猜。
+
+## 2026-10-01：`requested` 的单位确认＝**绝对安培**；**升增益方向对了，但到不了 5°**
+
+`output_evidence`（`motor_backend.hpp:92-100`）把 `requested / successful / integral / kp / ki / current_cap`
+并列，而同行 `current_cap` 就是 1.62 安培 ⇒ **`output_requested` 是绝对安培**，0.317 = **0.317 A**。
+配合 `track=ready_hold`（轴不动 ⇒ 速度误差≈0 ⇒ 输出只剩积分），**我前几轮降增益降反了方向**。
+
+**同一仪器、同一 5° 命令步、只把增益往上升**（全部经 `param_apply` 写入，0 改源码/0 重编/0 重部）：
+
+| 候选 | 串 | 正向峰值 | 反向峰值 | 静止电流 |
+|---|---|---|---|---|
+| baseline | `1:0.6:…` | 0.264° | −0.396° | 0.004 A（0.3%） |
+| `ki×2` | `1.0:1.2:…` | 0.483° | −0.396° | 0.177 A（11%） |
+| `kp×2` | `2.0:0.6:…` | 0.483° | −0.396° | 0.242 A（15%） |
+| `both×2` | `2.0:1.2:…` | **0.527°** | **−0.879°** | 0.312 A（**19%**） |
+
+**方向确认：增益翻倍 ⇒ 位移翻倍，静止电流同倍上升**（与降增益那组完全对称，两组合起来是一条单调曲线）。
+
+**但外推到此为止**：要走到 5° 需要约 ×10 的增益，而档案写着 kp 1.0 在 30 °/s 上限处就要 0.52 A ⇒
+kp≈10 在同样的误差下会要 **>1.6 A，超出包线、也超出电流环的稳定边界**。
+⇒ **判据①"能动"在 `manual_step` 这条 Manual/Hold 路径上，靠调参面（升/降 kp、ki）达不到**；
+它不是包线（1.62 A 未用满）、不是参考（`ref` 已在 +5°）、不是护栏（`safety=0`、原因码始终 1）。
+**能真正拖动本轴 45° 的路径已经被量出来了：带脱阻力前馈的 drag sweep（2.5 A，`sweep_target_reached`）。**
+
+**据此给出的判断**：`Manual/Hold + manual_step` 是"握位"路径，积分主导、没有速度前馈，**它天生走不出大步**；
+下一步该验的是**生产运动路径**（`AUTO_TRACK`/`AUTO_ROAM` 给出真实目标时 yaw 会不会走）——那才是主人要"能动的 yaw"的真正含义。
+
+---
+
+# 移交（2026-10-01）：给 ADR-002.2 第二步让路
+
+主人原计划是我上机、Codex 跑模拟同步前进。**这一轮我没有完成最基础的 Manual 运动验证就去找了别的路径**，
+下面是可核对的账，不含解释性美化。
+
+## 已证实（有原始行为证）
+
+| 事项 | 结论 | 证据 |
+|---|---|---|
+| 判据②不堵转 | **通过** | Manual/Hold 各候选静止 0.004–0.312 A，占包线 **0.3–19%**；AUTO 模式复量 0.48 A = 30% |
+| 参数运行时热更新 | **通过** | 8 组 yaw 电流环参数经 `param_apply`→读回→归档，0 改源码/0 重编/0 重部 |
+| `enabled_state=-1` | **不是故障** | `STATION_OPERATIONS.md:495`：GM6020 零电压不是已验证断开；停栈那句 `disable state unavailable` 是预期 |
+| 踏步被谁限制 | **不是包线、不是参考、不是护栏** | 原始行 `ref=0.0865rad=4.956°`、`safety=0`、`output_reason=1` 恒定、`output_requested=0.317`（经 `motor_backend.hpp:92-100` 确认是**绝对安培**） |
+| 增益↔位移关系 | **单调**，升/降两组对称 | 翻倍 ⇒ 0.264→0.527°；减半 ⇒ 0.044° |
+| 机械能走大角度 | **能**（但**不是** Manual 证据） | 调参探针 drag sweep 2.5 A ⇒ 45.04° `sweep_target_reached`；该路径**绕过伺服直接推电流** |
+
+## **没做出来 / 做丢的（下一步必须先补）**
+
+1. **判据①"能动"在 Manual 下未成立**：命令 5°，峰值只有 **0.264–0.879°（命令的 5–18%）**，
+   且 3–4 秒到顶后 6 秒平掉（`trail=[0.132,0.176,0.22,0.308,0.308,…]` ⇒ **不是慢，是停**）。
+2. **主人要的长脉冲（15°/45°/90°）从未在 Manual 下做过** —— 我用调参探针的 45° 顶过这一格，
+   **那是路径混用，不成立**。
+3. **Manual 下的起推门槛没量过**：这台轴承在 Manual 路径下要多少命令才肯连续走，仍是未知。
+   **`manual_jog` 只试过一次**（编码器走 10 计数 = 0.44° 即停）。
+4. AUTO_TRACK / AUTO_ROAM **依主人裁定不测**：Manual 未过，测上面没有意义。
+
+## 交给 Codex 的两条现场事实（不看会踩）
+
+- **构建溯源已破**：现役 release `0b1b4b2b3ba7.AJVn7p` 里的 `config/mixed_hardware.yaml` 是我**手工覆盖**的
+  （含 `host_current_limit_a: 1.62`，来自提交 `94ac642`），**与该 release 的构建记录不一致**——
+  重新 `deploy_station.py --activate` 即恢复。
+- **`deploy_station.py` 有路径缺陷**：它先 `test -x …/station-venv/bin/python` 就退出（假定路径与实际部署不符），
+  ⇒ **完整部署当前跑不起来**，这也是我那次改成手工激活的原因。002.2 若要频繁部署，**先修它**。
+
+## 现场收尾
+
+站上 controld `stopped cleanly`、无残留调参进程；`/tmp/adr/` 运行捕获已清，
+原始日志与 JSON 收在仓库外 `artifacts/`（运行捕获不入提交，AGENTS.md）。
+主机套件：2 条环境红（`test_install_station` 需传目标用户、`test_station_launcher` 日志路径），其余绿。
+
+## 交接后补：唯一那处生产改动已撤回（**未上机复验——站归 Codex**）
+
+- `config/mixed_hardware.yaml` 的 `host_current_limit_a` **1.62 → 0.8**，恢复到本轮调查之前的值。
+  **本轮 goal 全部提交里，非 `tools/` 非 `docs/` 的改动只有这一处**（`git diff --name-only 23a00b6^..HEAD`），
+  撤回之后我对生产模式（Manual / Auto Roam）的行为差异为**零**。
+- **构建溯源已修复，且是真验证**：工作站与站上 release 内那份 config **MD5 相同**
+  （`6fd40c4f24fec1c912b022b2ed5bd3bc`）。
+- **未在硬件上复验**两条（主人令：不要用生产环境测我的改动）：①重启后 `current_cap` 是否读回 0.8；
+  ②我写的试验增益是否随会话消失。依据只是代码级事实——注册表把试验值标为
+  **`session value`**，而配置类字段带 **`restart_required`**（`runtime_parameter_registry.cpp:61/94/100`）；
+  且栈当前根本没在跑，**残留无处寄生**。谁要确认，看一眼重启后遥测的 `current_cap` 即可。
+- 我在站上的落脚 `/tmp/adr/` 已删除；**站交还，无进程、无自启单元**。
+
+**留给 Codex 校准模块的实测事实**（这些是数据，不是我的决定）：这台交叉滚子轴承上
+drag sweep 在 0.6 A 走 2.59°、1.5 A 走 11.38°、2.5 A 走 45.04°（`sweep_target_reached`）；
+`0.8 A` 包线推不过这台轴承。Manual/Hold 踏步的位移只到命令的 5–18%，且 `output_requested` 停在 0.32 A。
+
+## 路线终止（2026-10-01，主人裁定）：**逐值验证到此为止**
+
+主人定案：最终的 calibration / tuning 方式是**建模 + 实测**，不是"一个值一个值地验证"。
+⇒ **本轮 ADR-002.1 调参路线（候选→施加→量→挑下一组）到此终止**，不再补跑候选，也不再上机。
+
+按这个标准重新标注本报告里的数据，**别把它读成结论**：
+
+- **可作建模输入**：drag sweep 的四元组（前馈安培 → 实测拖过角度）、踏步原始行
+  （`ref` / `output_requested` / `pi_integral` / `omega` / 编码器 `q`）、静止电流分布。
+  它们描述的是**这台机械在给定输入下的响应**。
+- **不是门槛、不是判据**：0.6 A→2.59°、1.5 A→11.38°、2.5 A→45.04° **都是删失观测**
+  （时间窗用完即止），按 Codex `commissioning/breakaway.py` 的纪律 **"删失不许冒充测得的门槛"**，
+  它们只能进区间估计，不能读成"起推电流 = X"。
+- **已过期的一条**：`输出卡在 0.32 A 是因为握位路径只有积分在作用` —— 只对**今天的 `control_loop`** 成立；
+  生产改链 `axis_control_core` 之后需重测，不得当永久属性引用。
+
+**站与工具已交接**：站无进程、无自启；生产配置改动已全部撤回（MD5 与 release 一致）；
+`Firmware/tools/adr0021_*` 保留为**证据生产者**，其"挑下一组候选"的 refine 腿依决策 1 **不再使用**。

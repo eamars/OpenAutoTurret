@@ -3,6 +3,8 @@
 #include "config/turret_config.hpp"
 #include "calibration/camera_calibration.hpp"
 #include "control/tracking_controller.hpp"
+#include "tracking_config.hpp"
+#include <yaml-cpp/yaml.h>
 
 namespace ota::config {
 
@@ -55,6 +57,21 @@ inline TrackingController::Config make_tracking_config(const TurretConfig& cfg,
   t.alignment = cfg.alignment;
   const auto alignment = geo::bore_alignment(t.alignment, t.intrinsics);
   if (alignment.enabled && !alignment.valid) throw std::invalid_argument(alignment.reason);
+  if (!cfg.tracking.core_parameters.empty()) {
+    // ADR-003: every number from the assets, none defaulted; a broken asset stops the boot.
+    auto core = track::tracker_from_yaml(YAML::LoadFile(cfg.tracking.core_parameters));
+    if (!cfg.tracking.core_camera_timing.empty()) {
+      const auto timing = YAML::LoadFile(cfg.tracking.core_camera_timing);
+      if (!timing["valid"] || !timing["valid"].as<bool>())
+        throw std::invalid_argument("camera timing asset is not valid: " + cfg.tracking.core_camera_timing);
+      core.timing.fixed_offset_s = timing["timing"]["fixed_offset_s"].as<double>();
+      core.timing.exposure_fraction = timing["timing"]["exposure_fraction"].as<double>();
+      core.timing.row_time_s = timing["timing"]["row_time_s"].as<double>();
+      if (!track::valid(core)) throw std::invalid_argument("camera timing out of range: " + cfg.tracking.core_camera_timing);
+    }
+    t.core = core;
+    t.core_nominal_exposure_s = cfg.tracking.core_nominal_exposure_s;
+  }
   return t;
 }
 

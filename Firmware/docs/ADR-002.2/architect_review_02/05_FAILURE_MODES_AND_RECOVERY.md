@@ -1,0 +1,59 @@
+# Failure-mode analysis and fault handling
+
+## 1. Two separate state machines
+
+**Engineering analysis:** `READY -> RUNNING -> DIAGNOSE -> REPAIR/REPLAN -> RETEST`. An unmet predicate can block promotion while analysis continues. `BLOCKED_EXTERNAL` is reserved for a specific unresolved external dependency. `COMPLETE` requires the full delivery. A numerical exception must not directly cause an experiment to restart or a motor to re-arm.
+
+**Physical motion:** use the existing safety implementation with the equivalent of `INHIBITED -> PREFLIGHT -> ARMED -> ACTIVE -> STOPPING -> SAFE_CONFIRMED`, plus a latched `FAULT`. These are required semantics, not a request to duplicate an already adequate state machine. Entering ARMED needs explicit authorization and current evidence. After a fault, a communications reconnect or solver retry cannot return directly to ACTIVE.
+
+A mathematical integration guard is not a physical limit. A software zero command is not proof that torque is zero or the assembly is stationary. A motor-current cap is not proof that motion stays within travel. Pitch load can make an unpowered state unsafe.
+
+## 2. Failure-mode matrix
+
+This is a qualitative engineering analysis. Frequencies/probabilities are not supplied and no risk-priority numbers are invented. “Observed” refers to the supplied offline evidence; the other rows are hypotheses or required prospective fault tests, not claims that these faults occurred.
+
+| ID / failure mode | Detection and evidence | Immediate action | Diagnostic / recovery and re-entry |
+|---|---|---|---|
+| A01 — Optimizer budget exhausted **(observed)** | Termination status, objective history, evaluations and wall time. | Keep candidate nondeployable; retain checkpoint. No hardware action. | Inspect improvement, scaling, derivatives, events and initialization. Resume a justified budget or change one procedure; rerun frozen regressions. No automatic “too hard” termination. |
+| A02 — Local convergence with bad prediction **(observed)** | `xtol` success plus large whole-run errors. | Reject fit/promotion, not the entire model family. | Profile objective, residuals, constraints and competing starts. Convergence is a numerical condition, not plant validation. |
+| A03 — Static threshold invisible to local derivative **(observed in two algebraic Coulomb fits)** | Zero static-excess sensitivity, unchanged threshold, predicted sticking during movement. | Do not declare threshold measured or friction absent. | Threshold brackets, censored start/no-start observations, event-aware profiles/outer search. Re-enter only with identifiable support and full-trajectory tests. |
+| A04 — No-motion baseline appears to be best model **(observed)** | Predicted span zero while measured span nonzero; RMS close to constant-position baseline. | Reject predictive adequacy despite lower aggregate score. | Fix start/load estimation; assess event and displacement errors. Retain baseline comparison permanently. |
+| A05 — Data weighting, parameter gauge, or ablation confound | Loss contribution by run/regime; rank/profile diagnostics; multiple changes in model comparison. | Freeze selection conclusions until interpretation is sound. | Separate run weights from sample counts; constrain supported combinations; hold measurement freedoms constant for load ablation. No new physics claim from an unfair comparison. |
+| A06 — Simulation NaN, overflow, event chatter, or step dependence | Finite checks; event counts; failure time/state; step-refinement comparison. | Abort that numerical candidate, preserve first fault. Physical state stays inhibited. | Minimal reproducible integration test; meaningful admissible bounds and discontinuity handling. Do not clip into the observed range or flatten all invalid candidates to a fake minimum. |
+| D01 — Wrong units, masks, sign, encoder wrap, or datum | Independent decode/scaling tests, mask alignment, native counts, plausible increments, source provenance. | Block model promotion. If encountered live, use verified stop/inhibit policy. | Repair transformation and regenerate derived data with provenance; preserve originals. Re-run known-angle/sign and native-sample regressions. |
+| D02 — Stale/repeated sensor, time reset, out-of-order sample | Age, sequence/generation, timestamp monotonicity, reset marker, per-channel freshness. | Do not integrate stale data as fresh. Stop or use only a separately qualified degraded observer. | Reset clock mapping/unwrap/observer only under defined restart procedure. Reject pre-reset commands and samples. Require fresh stationary/known-state checks before re-arm. |
+| H01 — Wrong CAN mode/frame/scale or conflicting command owner | Firmware-matched protocol and readback, transmitted bytes, owner/lease, CAN/PWM source inventory. | Inhibit motion; never probe with an arbitrary larger command. | Verify identity, mode, signs, endian/slot/scale, and ownership. Save/read back authorized settings changes. Do not infer mode from the PWM selector. |
+| H02 — TX failure, bus-off, lost ACK, process crash, orphaned command | TX acceptance/failure, bus state, lease/watchdog, queue age, motor/sensor observations. | Cancel pending trajectory and invoke the independently adequate stop mechanism. Do not assume a new zero command can traverse a failed bus. | Bound communication retries without blocking the control/safety thread. Reconnect may restore telemetry, not motion authorization. Verify watchdog/fallback and physical safe state before reset. |
+| H03 — Unexpected current or wrong current-to-torque interpretation | Command/feedback discrepancy under established semantics; polarity/supply/temp checks. | Stop/inhibit when discrepancy breaches a validated protective threshold. | Separate telemetry/filter error from electrical/mechanical response. Inspect frame decode, firmware, mode, supply and thermal limits. Current agreement alone is not torque calibration. |
+| H04 — Overspeed, travel/winding boundary, or excessive acceleration | Independent motion supervision with uncertainty/latency margin, not optimizer prediction alone. | Execute validated controlled stop where feasible; use independent protection when it is not. Latch fault. | Preserve pre/post-trigger data, inspect sign/current/load model and braking feasibility. Do not widen the limit because the model predicted the excursion. |
+| H05 — No-start/jam/repeated breakaway heating | Bounded start duration/energy, actual movement, temperature, current. | End the attempt; no endless restart or current escalation. | Check cable route, mechanics, friction interval, actual actuator mode, and start feasibility. Return censored evidence; request only a justified authorized new experiment. |
+| H06 — Supply droop, thermal fault, reboot, changed settings | Available fault/temperature/supply telemetry and boot/config identity. | Stop/inhibit under the established electrical/mechanical safety policy. | Cool/repair supply or hardware as required, read back settings, reset generation, and invalidate affected calibration if necessary. Never invent absent supply measurements. |
+| C01 — Saturation, windup, limit cycle, or unsafe transition | Actual limited/accepted commands, integral/friction state, overspeed/stall metrics. | Stay inside independent limits; stop if quality/fault thresholds require it. | Audit anti-windup and current accounting, static-to-moving and reversal logic, FF continuity, and reference feasibility. Test in simulation before another physical trial. |
+| C02 — Model/FF invalid, payload/config changed | Fingerprint mismatch, outside-domain state, residual monitoring with calibrated false-alarm policy. | Use a qualified fallback only within its proven envelope; otherwise stop/inhibit. | Update parameters through the reusable Stage 2 method, then repeat required validation. Do not substitute FF=0 as an untested safety argument. |
+| H07 — Gravity-loaded pitch after torque removal | Known loading/support, geometry, stop/brake capability. | Use the setup-specific safe mechanism; generic zero current may let the payload fall. | Require adequate mechanical support/brake or independently validated control/energy path. Do not reuse yaw's coast policy without a pitch safety case. |
+
+## 3. Safe stopping and restart contract
+
+Before physical excitation, establish a setup-specific stop mechanism that works under the faults the experiment can reasonably encounter. Document what remains controllable after CAN failure, process death, power loss, or missing sensors. If the only path to safety depends on the failed component, the preflight is inadequate.
+
+For a normal validated stop, cancel pending references, apply the defined deceleration/holding policy, account for successfully accepted commands, and observe the required safe-state conditions with fresh measurements. For an emergency condition, independent protection may be needed; its power removal/brake/support behaviour must be appropriate for both yaw and gravity-loaded pitch. This package does not certify the existing hardware stop chain.
+
+Preserve a bounded pre-trigger ring buffer and post-trigger observations: reference, requested/limited/accepted command, relevant raw frames, current feedback, sensor freshness, control/observer/friction states, configuration, fault source, and stop confirmation or lack of it. Do not let logging block the real-time safety path. Failed logs must not authorize motion or erase the first fault.
+
+Use generation/lease/deadline checks so queued commands from before a fault or restart cannot execute later. Restore telemetry before resetting observer/unwrap/reference state. Reset integral and friction state with the verified safe initialization policy; do not blindly restore a stale checkpoint into an energized axis.
+
+Re-arm only after the cause is resolved or the approved plan addresses it, safety interlocks pass, the configuration matches, and the required operator authorization is present. A watchdog must not automatically reissue the failed movement. Reconnecting CAN, launching the script again, or completing an optimizer run is not authorization.
+
+## 4. Fault injection and evidence
+
+Test software faults first in simulation/replay with the same control/safety code: failed TX, duplicate/stale samples, delayed ACK, clock generation change, packet reordering, invalid model parameters, saturation, NaNs, process interruption, and FF validity loss. Confirm bounded outputs, no old-command replay, correct latch/reset semantics, and continued evidence capture.
+
+Only then use a separately approved physical fault-test plan with adequate containment. Do not deliberately unplug a live gravity-loaded assembly or disable protection merely to demonstrate recovery. Simulation tests are not physical protection certification, and a stopped test does not mean the complete system passed.
+
+## 5. Agent recovery rule
+
+A physical fault stops the physical activity. The agent should then continue safe offline diagnosis, reproduction, root-cause isolation, patching, and planning. A hardware-dependent gate can remain `BLOCKED_EXTERNAL` while independent work advances.
+
+Each recovery record must contain: first failing predicate; observed evidence; physical state; known/unknown cause; tested hypotheses; selected repair or requested input; the exact tests required for re-entry; and the unchanged acceptance criteria. Use `templates/decision_record.json` and `templates/fault_record.json` only where existing records cannot already express this.
+
+Do not retry identical motion after a fault. Do not label an untested assumption a root cause. Do not claim success because a more permissive threshold, a smaller claimed scope, or a later time window passed. Persistence means making the next informative safe decision, not refusing to stop and not refusing to think.

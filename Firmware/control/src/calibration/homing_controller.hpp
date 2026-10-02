@@ -28,6 +28,8 @@ namespace ota {
 
 // Per-axis homing parameters (§58 params 8-13, all config-driven).
 struct HomingParams {
+  // Calibration records contact scatter without qualifying the endpoint.
+  bool observe_only = false;
   // False retains the previously commissioned arrival/settling procedure.
   bool motion_checks_abort = true;
   double coarse_speed_rad_s = 10.0 * kDeg2Rad;  // coarse approach
@@ -190,6 +192,8 @@ struct HomingResult {
   bool valid = false;                // the endpoint is valid (repeatability OK)
   double coarse_contact_rad = 0.0;   // the coarse contact position
   double fine_contact_rad = 0.0;     // the validated fine contact (avg of samples)
+  double fine_contact1_rad = 0.0;    // raw first fine-contact observation
+  double fine_contact2_rad = 0.0;    // raw second fine-contact observation
   double repeatability_rad = 0.0;    // |fine_contact_1 - fine_contact_2|
   int fine_samples = 0;              // number of fine contact samples
   int repeatability_retries = 0;     // second-approach passes re-run on a

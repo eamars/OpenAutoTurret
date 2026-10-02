@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -9,9 +10,14 @@
 #include "can/cybergear_system.hpp"
 #include "can/gm6020_protocol.hpp"
 #include "can/gm6020_velocity.hpp"
+#include "can/gm6020_rx_velocity.hpp"
 #include "can/socketcan_bus.hpp"
 #include "config/mixed_hardware_profile.hpp"
+#include "control/episode_latch.hpp"
 #include "control/can_motor_backend.hpp"
+#include "position_loop.hpp"
+#include "servo.hpp"
+#include "session_parts.hpp"
 
 namespace ota {
 
@@ -62,10 +68,16 @@ inline constexpr int64_t kNoCommandLimitNs = 50'000'000;  // ten cycles of a 200
 // that collision costs more than any of the conditions below. Everything short of those
 // three is a thing to keep driving through and say out loud.
 enum class GuardResponse { Run, Hold, Fault };
-// A stall is not a collision risk: a stalled axis is by definition not going anywhere.
-// Repeated stalls earn a Hold (zero output -- zero current in current mode -- still powered,
-// dynamic braking), never a Fault.
-inline constexpr int kYawStallHoldStreak = 3;
+struct MotionEpisodeCounter {
+  int count = 0;
+  bool active = false;
+  void observe(bool limited) {
+    if (limited && !active) ++count;
+    active = limited;
+  }
+};
+// Performance episodes are observations, never independent zero-current writers.
+// Zero current is neither dynamic braking nor position hold.
 // What is worth SAYING while we keep driving. A refused command only matters if somebody
 // actually wanted to move: `command_not_sent` with a zero demand is the loop saying "hold",
 // which is the normal state of a turret with nothing to do -- the first version of this
@@ -76,13 +88,24 @@ inline bool yaw_guard_doubt(const MotorBackend::TripInputs& in, bool wants_motio
   return in.command_not_sent && wants_motion;
 }
 
-inline GuardResponse yaw_guard_response(const MotorBackend::TripInputs& in, int stall_streak) {
+inline GuardResponse yaw_guard_response(const MotorBackend::TripInputs& in, int /*episodes*/) {
   if (in.feedback_unsafe || in.can_down || in.can_state_wrong || in.heartbeat_stale)
     return GuardResponse::Fault;  // cannot see it, cannot reach it, or it stopped answering
   if (in.temp_raw_over) return GuardResponse::Fault;  // the motor's own report: heat
-  if (in.no_progress && stall_streak >= kYawStallHoldStreak) return GuardResponse::Hold;
   return GuardResponse::Run;  // CAN hiccup, our own NaN, a stale demand: drive on, say so
 }
+
+// Owner ruling 2026-10-02 ("Fault, hold, degrade"): the guard's Fault verdict becomes a fault only
+// once it has persisted `persist_ns`; until then it is a Hold (the caller coasts a blind axis).
+struct GuardFaultPersistence {
+  int64_t since_ns = 0;
+  bool started = false;
+  GuardResponse decide(GuardResponse verdict, int64_t now_ns, int64_t persist_ns) {
+    if (verdict != GuardResponse::Fault) { started = false; return verdict; }
+    if (!started) { started = true; since_ns = now_ns; }
+    return now_ns - since_ns >= persist_ns ? GuardResponse::Fault : GuardResponse::Hold;
+  }
+};
 
 inline bool yaw_command_is_stale(int64_t now_ns, int64_t last_command_ns) {
   return last_command_ns == 0 || now_ns - last_command_ns > kNoCommandLimitNs;
@@ -92,6 +115,18 @@ inline double apply_yaw_speed_ceiling(double requested_rad_s) {
   return requested_rad_s > kYawSpeedCeilingRadS ? kYawSpeedCeilingRadS
          : requested_rad_s < -kYawSpeedCeilingRadS ? -kYawSpeedCeilingRadS
                                                    : requested_rad_s;
+}
+
+// Pitch has end stops, so its servo takes a reference only with the soft envelope, and engages
+// only where its end-stop guard (envelope +- guard) already holds. Otherwise the reference is
+// refused and the legacy path keeps the axis this tick: on 2026-10-02 the first tick after
+// homing arrived before the limits were valid, the servo engaged at -0.81 rad against an empty
+// envelope ([-0.035, +0.035]) and the guard faulted the station.
+inline bool pitch_reference_has_envelope(const MotorBackend::ServoReference& r) {
+  return std::isfinite(r.q_min) && std::isfinite(r.q_max) && r.q_max > r.q_min;
+}
+inline bool pitch_servo_may_engage(const MotorBackend::ServoReference& r, double q_axis, double guard) {
+  return pitch_reference_has_envelope(r) && q_axis >= r.q_min - guard && q_axis <= r.q_max + guard;
 }
 
 class MixedCanMotorBackend final : public MotorBackend {
@@ -122,15 +157,28 @@ class MixedCanMotorBackend final : public MotorBackend {
   std::vector<CanHealth> can_health_all() const override;
   CanHealth can_health() const override;
   bool buses_healthy() const;
+  OutputEvidence output_evidence(AxisId axis) const override;
   void start_watchdog();
 
   bool supports_continuous_yaw() const override { return true; }
+  bool uses_monotonic_feedback_clock() const override { return true; }
   bool yaw_feedback_registerless() const override { return true; }
   bool requires_disable_confirmation(AxisId axis) const override {
     return axis != AxisId::Yaw;
   }
   void heartbeat() override;
   bool watchdog_fault() const override;
+  const char* servo_hold_reason() const override {
+    for (const auto* h : {&yaw_follow_hold_, &pitch_follow_hold_, &yaw_osc_hold_, &yaw_stall_hold_})
+      if (const char* r = h->load()) return r;
+    return nullptr;
+  }
+  bool fault_releases_axis(AxisId axis) const override;
+  void hold_axis(AxisId axis) override;
+  bool watchdog_fault_axis(AxisId axis) const override {
+    return axis == AxisId::Yaw ? yaw_trip_.load() :
+        (pitch_servo_fault_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault()));
+  }
   // The guard fills this under yaw_trip_detail_mutex_ and then publishes yaw_trip_.
   // A reader must hold that mutex too: a flag check makes the value visible, not a
   // struct copy atomic. Nesting order is always yaw_mutex_ → yaw_trip_detail_mutex_.
@@ -151,11 +199,35 @@ class MixedCanMotorBackend final : public MotorBackend {
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override;
   void command_velocity(AxisId axis, double velocity_rad_s) override;
+  void set_motion_intent(AxisId axis, bool moving) override;
+  bool apply_yaw_trial(const YawTrialSettings& settings, std::string& error) override;
+  // The host echo the parameter transaction verifies against: what this backend stored, under the
+  // same lock the write takes. Not a drive register — there is no gain register to read.
+  YawTrialSettings yaw_trial_settings() const override;
+  void poll_pitch_register_diagnostics(TimeNs now) override {
+    if (pitch_opened_.load()) pitch_backend_.poll_pitch_register_diagnostics(now);
+  }
+  PitchRegisterDiagnostics pitch_register_diagnostics() const override {
+    return pitch_backend_.pitch_register_diagnostics();
+  }
+  Transition begin_pitch_speed_loop_gain_update(double kp, double ki, std::string& error) override {
+    return pitch_backend_.begin_pitch_speed_loop_gain_update(kp,ki,error);
+  }
+  Transition poll_pitch_speed_loop_gain_update(TimeNs now, std::string& error) override {
+    return pitch_backend_.poll_pitch_speed_loop_gain_update(now,error);
+  }
   void keepalive(AxisId axis) override;
+  bool servo_available(AxisId axis) const override;
+  bool command_reference(AxisId axis, const ServoReference& reference) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;
 
  private:
+  friend struct MixedBackendTestAccess;
+  // Narrow transport seam for exercising the real command/guard mutex and
+  // inhibition path without opening a second physical CAN owner.
+  std::function<bool(const can::RawFrame&)> yaw_test_send_;
+  std::function<CanHealth()> yaw_test_health_;
   struct YawState {
     gm6020::Feedback feedback{};
     double position_rad{};  // offset to stationary open-time reference
@@ -171,19 +243,67 @@ class MixedCanMotorBackend final : public MotorBackend {
   bool establish_yaw_reference(std::string& err);
   void on_yaw_frame(const can::RawFrame& frame);
   void yaw_guard_loop(std::stop_token stop);
-  void trip_yaw_locked();
+  void trip_yaw_locked(const char* condition = nullptr);
   bool send_yaw_zero_locked();
+  bool send_yaw_output_locked(const can::RawFrame& frame, double output);
+  bool yaw_bus_healthy() const;
   bool yaw_feedback_safe_locked(TimeNs now_ns) const;
   AxisSnapshot yaw_snapshot_locked(TimeNs now_ns) const;
   void command_yaw_velocity_locked(double velocity_rad_s, TimeNs now_ns);
+  // ADR-003 3b: the ADR-002.2 servos (MotorBackend::ServoReference). Loaded from the profile's
+  // servo assets at open; a configured but unloadable asset refuses to open.
+  bool load_servos(std::string& err);
+  void step_yaw_servo_locked(TimeNs rx_ns);
+  void release_yaw_servo_locked();
+  void release_pitch_servo();
+  void pitch_servo_loop(std::stop_token stop);
+  bool yaw_servo_configured_ = false, yaw_servo_active_ = false;
+  axis::Servo yaw_servo_;
+  axis::ServoOutput yaw_servo_out_{};
+  axis::OscillationMonitor yaw_oscillation_;
+  // Owner ruling 2026-10-02: oscillation and stall rocking are transients that clear by themselves;
+  // only an episode that persists kServoFailurePersistNs is a failure, and that HOLDs (energised),
+  // it does not fault. An episode ends after kServoQuietNs below 70% of the limit / without a rock.
+  static constexpr TimeNs kServoFailurePersistNs = 5'000'000'000, kServoQuietNs = 1'000'000'000;
+  control::EpisodeLatch yaw_osc_episode_, yaw_stall_episode_;
+  double yaw_osc_peak_a_ = 0;
+  std::atomic<const char*> yaw_osc_hold_{nullptr}, yaw_stall_hold_{nullptr};
+  void track_yaw_servo_episodes_locked(TimeNs now, bool rock_settling);
+  ServoReference yaw_reference_{};
+  double yaw_servo_offset_rad_ = 0;   // absolute GM6020 angle minus the session yaw
+  double yaw_servo_hold_q_ = 0;       // last evaluated reference (held when a segment goes stale)
+  TimeNs yaw_servo_epoch_ns_ = 0, yaw_servo_last_step_ns_ = 0, yaw_servo_last_rock_ns_ = 0;
+  uint64_t yaw_servo_stale_ = 0;
+  mutable std::mutex pitch_servo_mutex_;
+  bool pitch_servo_configured_ = false;
+  std::atomic<bool> pitch_servo_active_{false}, pitch_servo_fault_{false};
+  axis::PositionLoop pitch_loop_;
+  ServoReference pitch_reference_{};
+  double pitch_following_error_rad_ = 0, pitch_hold_q_ = 0;
+  TimeNs pitch_servo_last_step_ns_ = 0;
+  std::jthread pitch_servo_;
 
   config::mixed::Profile profile_{};
   can::SocketCanBus yaw_bus_;
   can::CyberGearSystem pitch_system_;
   CanMotorBackend pitch_backend_;
   mutable std::mutex yaw_mutex_;
-  gm6020::UnwrappedEncoder yaw_encoder_;
+  gm6020::UnwrappedEncoder yaw_encoder_{gm6020::UnwrappedEncoder::Policy::Recover};
+  TimeNs yaw_encoder_log_ns_ = 0;
+  // The guard's fault conditions must persist this long (owner ruling 2026-10-02).
+  static constexpr TimeNs kGuardFaultPersistNs = 500'000'000;
+  GuardFaultPersistence yaw_guard_persistence_;
+  // Following error (either servo): HOLD, cleared once the reference handed over is back within
+  // kFollowClearRad of the axis and kServoQuietNs has passed. Late pitch feedback: the drive holds,
+  // the servo lets go; a fault only after kPitchStaleFaultNs.
+  static constexpr double kFollowClearRad = 0.05;
+  static constexpr TimeNs kPitchFreshNs = 20'000'000, kPitchStaleFaultNs = 500'000'000;
+  std::atomic<const char*> yaw_follow_hold_{nullptr}, pitch_follow_hold_{nullptr};
+  TimeNs yaw_follow_since_ns_ = 0;
+  std::atomic<TimeNs> pitch_follow_since_ns_{0};
+  TimeNs pitch_stale_since_ns_ = 0;   // pitch servo thread only
   gm6020::VelocityLoop yaw_velocity_loop_;
+  gm6020::RxVelocity yaw_rx_velocity_;
   YawState yaw_state_{};
   double yaw_origin_rad_{0};
   double yaw_position_target_rad_{0};
@@ -191,6 +311,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   double yaw_shaped_speed_rad_s_{0};
   bool yaw_position_mode_{false};
   bool yaw_speed_mode_{false};
+  bool yaw_moving_intent_{false};
   std::atomic<bool> opened_{false};
   std::atomic<bool> pitch_opened_{false};
   std::atomic<bool> pitch_enabled_owned_{false};
@@ -223,7 +344,12 @@ class MixedCanMotorBackend final : public MotorBackend {
   // the missing evidence in the 2026-09-28 case file and still missing an hour later.
   std::atomic<double> yaw_last_output_{0};
   std::atomic<double> yaw_last_shaped_rad_s_{0};
-  int yaw_stall_streak_ = 0;
+  MotionEpisodeCounter yaw_stall_episodes_;
+  TimeNs yaw_tx_failure_since_ns_ = 0;
+  TimeNs yaw_last_successful_tx_ns_ = 0;
+  uint64_t yaw_tx_seq_ = 0;
+  double yaw_requested_output_ = 0;
+  int yaw_output_reason_ = 0;
   int64_t last_degrade_log_ns_ = 0;
   // Public: an axis that has been limping is worth a strip indicator, and a counter is the
   // difference between "it happened once" and "it happens every sweep".

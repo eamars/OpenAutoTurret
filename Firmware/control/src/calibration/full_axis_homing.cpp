@@ -29,7 +29,7 @@ DesiredState FullAxisHoming::step(const HomingFeedback& fb) {
     case FullAxisPhase::HomeA: {
       const DesiredState ds = home_a_.step(fb);
       if (home_a_.terminal()) {
-        if (home_a_.result().valid) {
+        if (home_a_.result().valid || (p_.homing.observe_only && home_a_.state()==AxisHomeState::Complete)) {
           // Endpoint A is validated. The axis now sits at A, which is on the
           // near side of endpoint B, so homing B naturally performs the
           // "traverse safely" step of §23 as it approaches across the axis.
@@ -48,7 +48,7 @@ DesiredState FullAxisHoming::step(const HomingFeedback& fb) {
     case FullAxisPhase::HomeB: {
       const DesiredState ds = home_b_.step(fb);
       if (home_b_.terminal()) {
-        if (home_b_.result().valid) {
+        if (home_b_.result().valid || (p_.homing.observe_only && home_b_.state()==AxisHomeState::Complete)) {
           result_.endpoint_b_rad = home_b_.result().fine_contact_rad;
           result_.repeatability_rad =
               std::max(result_.repeatability_rad,
@@ -84,6 +84,13 @@ void FullAxisHoming::validate() {
       std::min(result_.endpoint_a_rad, result_.endpoint_b_rad);
   const double raw_high =
       std::max(result_.endpoint_a_rad, result_.endpoint_b_rad);
+  if (p_.homing.observe_only) {
+    result_.measured_travel_deg = (raw_high-raw_low)*kRad2Deg;
+    result_.complete = true;
+    result_.valid = false;
+    phase_ = FullAxisPhase::Complete;
+    return; // Observation only; no qualified logical model is exported.
+  }
   // Set up the host logical model (§24): the low endpoint becomes logical 0
   // and the travel is positive. This also yields the measured span in degrees.
   result_.measured_travel_deg =

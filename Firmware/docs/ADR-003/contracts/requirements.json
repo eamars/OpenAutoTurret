@@ -1,0 +1,310 @@
+{
+  "document": "ADR-003",
+  "artifact_kind": "design_contract_not_runtime_configuration",
+  "date": "2026-09-30",
+  "implementation_status": "NOT_IMPLEMENTED_BY_THIS_DELIVERY",
+  "physical_validation_status": "NOT_RUN",
+  "final_scope": "single_complete_delivery",
+  "stage_1": {
+    "physical_measurements_required": false,
+    "physical_access_allowed": false,
+    "synthetic_model_tests_required": true
+  },
+  "stage_2": {
+    "reuse_applicable_adr0022_assets": true,
+    "measurement_to_model_injection": "automatic",
+    "manual_parameter_search_allowed": false,
+    "parameter_changes_require_rebuild": false
+  },
+  "completion": {
+    "requires_all_decisions": true,
+    "requires_all_scenarios": true,
+    "requires_independent_physical_3a": true,
+    "requires_production_physical_3b": true,
+    "same_core_and_parameters": true,
+    "unknown_acceptance_requirements_can_pass": false
+  },
+  "decisions": [
+    {
+      "id": "D01",
+      "name": "目标状态估计唯一所有者",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D02",
+      "name": "固定基座LOS坐标与自身运动补偿",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D03",
+      "name": "光学观测时间与控制时钟",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D04",
+      "name": "Level1参考误差反馈结构",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D05",
+      "name": "目标速度只进入参考层",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D06",
+      "name": "CV模型且无显式目标加速度状态",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D07",
+      "name": "唯一预测时域",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D08",
+      "name": "正常参考链接入",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D09",
+      "name": "q/v/a唯一生成器",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D10",
+      "name": "002.2电机模型前馈",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D11",
+      "name": "002.2资产与参数复用",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D12",
+      "name": "静止与运动同一控制器",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D13",
+      "name": "噪声与速度置信处理",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D14",
+      "name": "有限目标丢失与重获",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D15",
+      "name": "独立更新速率",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D16",
+      "name": "饱和与限制归属",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D17",
+      "name": "分层误差遥测",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    },
+    {
+      "id": "D18",
+      "name": "三阶段及双实机验证",
+      "required": true,
+      "design_location": "ADR-003.md#3-18项架构决定"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "T01",
+      "name": "静止捕获",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T02",
+      "name": "静止保持",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T03",
+      "name": "慢速匀速",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T04",
+      "name": "快速匀速",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T05",
+      "name": "加速",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T06",
+      "name": "减速",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T07",
+      "name": "突然停止",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T08",
+      "name": "方向反转",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T09",
+      "name": "近零与视觉噪声",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T10",
+      "name": "速度暂不可用",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T11",
+      "name": "延迟观测",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T12",
+      "name": "不规则到达与丢帧",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T13",
+      "name": "饱和与解除",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "T14",
+      "name": "丢失与重获",
+      "required_stages": [
+        "1",
+        "3a",
+        "3b"
+      ],
+      "result": "NOT_RUN"
+    }
+  ],
+  "allowed_scope": [
+    "current_selected_camera",
+    "single_selected_subject",
+    "los_estimation",
+    "target_motion_prediction",
+    "constrained_reference",
+    "reuse_adr0022_motor_servo",
+    "existing_trace_extension"
+  ],
+  "excluded_scope": [
+    "firing",
+    "ballistics",
+    "weapon_alignment",
+    "new_detector",
+    "reid",
+    "multi_camera_fusion",
+    "mpc",
+    "reinforcement_learning",
+    "new_motor_pid",
+    "new_motor_identification",
+    "new_daemon_platform",
+    "new_database",
+    "ui_redesign",
+    "automatic_shutter_scheduler"
+  ],
+  "source_commit": null,
+  "notes": [
+    "This JSON is a requirements index, not a command accepted by current firmware.",
+    "Stage1 numerical success never certifies hardware.",
+    "Missing real photography limits do not block offline development; they prevent unsupported physical performance certification."
+  ]
+}

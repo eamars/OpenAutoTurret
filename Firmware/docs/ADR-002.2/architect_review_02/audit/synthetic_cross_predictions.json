@@ -1,0 +1,84 @@
+[
+  {
+    "source_member": "estimator/seed41-predict-seed17.npz",
+    "target_seed": 17,
+    "thresholds": {
+      "q": 0.0008023127185209158,
+      "v": 0.015,
+      "current": 0.006
+    },
+    "channel_passed": {
+      "q": false,
+      "v": true,
+      "current": true
+    },
+    "q": {
+      "rms": 0.0014181643743053686,
+      "mean": -0.00034493796470210435,
+      "max_abs": 0.003378168725799241,
+      "endpoint_error": -0.0023570627739283034,
+      "native_samples": 8001
+    },
+    "v": {
+      "rms": 0.005204725440180411,
+      "mean": 1.4183700038406279e-05,
+      "max_abs": 0.017480989114120417,
+      "endpoint_error": 0.0015031684689807458,
+      "native_samples": 401
+    },
+    "current": {
+      "rms": 0.0019901648722278485,
+      "mean": 5.910780745220022e-07,
+      "max_abs": 0.007407265840428799,
+      "endpoint_error": -0.0009256317214542398,
+      "native_samples": 8001
+    },
+    "observed_q_span_deg": 31.5087890625,
+    "predicted_q_span_deg": 31.644227225404663,
+    "initial_observation_constant_q_rms_deg": 11.555412071123008,
+    "prediction_initial_constant_q_rms_deg": 11.555412071123008,
+    "q_rms_deg": 0.08125483330350874,
+    "v_rms_deg_s": 0.2982088012467071
+  },
+  {
+    "source_member": "estimator/seed41-predict-seed83.npz",
+    "target_seed": 83,
+    "thresholds": {
+      "q": 0.0008023127185209158,
+      "v": 0.015,
+      "current": 0.006
+    },
+    "channel_passed": {
+      "q": false,
+      "v": true,
+      "current": true
+    },
+    "q": {
+      "rms": 0.0010986193478377784,
+      "mean": -0.00011747184589164761,
+      "max_abs": 0.002592417285573856,
+      "endpoint_error": -0.0018151053604196776,
+      "native_samples": 8001
+    },
+    "v": {
+      "rms": 0.005407086866511917,
+      "mean": -7.098853106294373e-05,
+      "max_abs": 0.016503715603829794,
+      "endpoint_error": 0.007687241701165637,
+      "native_samples": 401
+    },
+    "current": {
+      "rms": 0.0019924621961980335,
+      "mean": -2.8958303406612937e-06,
+      "max_abs": 0.007732294341604842,
+      "endpoint_error": 0.006877442808807067,
+      "native_samples": 8001
+    },
+    "observed_q_span_deg": 32.34375000000001,
+    "predicted_q_span_deg": 32.30037434685877,
+    "initial_observation_constant_q_rms_deg": 11.745739438028982,
+    "prediction_initial_constant_q_rms_deg": 11.745739438028982,
+    "q_rms_deg": 0.06294625192251965,
+    "v_rms_deg_s": 0.30980325691175
+  }
+]

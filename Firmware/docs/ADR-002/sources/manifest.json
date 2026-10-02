@@ -2,9 +2,17 @@
   "package": "ADR-002",
   "access_date": "2026-09-29",
   "requested_branch": "ADR-001",
-  "base_commit": null,
-  "source_method": "Selective web reads of branch URLs; no clone, no repository ZIP, no hardware access",
-  "warning": "Branch URLs are mutable; local Codex must bind actual worktree commit and compare symbols. Line anchors are navigational, not immutable hashes.",
+  "base_commit": "2e789c59dc9038228ac2aa91caab0f07d26d8137",
+  "source_method": "Original source selection used selective web reads of ADR-001 branch URLs. Local audit performed in the clean main worktree at base_commit on 2026-09-29; symbols and configuration were checked against the actual files listed below. No station or hardware access.",
+  "warning": "The ADR-001 URLs are mutable historical pointers, not immutable source evidence. This audit binds the reviewed local source to base_commit; source file contents and runtime/deployed state are distinct. Line anchors in source scopes are navigational.",
+  "local_audit": {
+    "branch": "main",
+    "commit": "2e789c59dc9038228ac2aa91caab0f07d26d8137",
+    "working_tree_at_start": "clean",
+    "audit_date": "2026-09-29",
+    "hardware_validation": false,
+    "report": "reports/source_audit_2026-09-29.md"
+  },
   "files": [
     {
       "id": "S01",

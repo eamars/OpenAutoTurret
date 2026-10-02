@@ -1,0 +1,20 @@
+{
+  "fault_id": null,
+  "failure_mode_id": null,
+  "first_trigger_time": null,
+  "clock_and_generation": null,
+  "configuration_id": null,
+  "active_reference": null,
+  "requested_limited_accepted_command": null,
+  "sensor_freshness": null,
+  "physical_state_at_trigger": null,
+  "stop_action": null,
+  "command_acceptance_confirmed": null,
+  "physical_safe_state_confirmed": null,
+  "pre_post_trigger_evidence": [],
+  "root_cause_status": "UNKNOWN",
+  "repair": null,
+  "reentry_tests": [],
+  "operator_rearm_authorization": null,
+  "automatically_repeat_motion": false
+}

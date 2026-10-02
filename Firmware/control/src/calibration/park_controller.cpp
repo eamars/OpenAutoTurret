@@ -70,6 +70,18 @@ ParkController::ParkController(ParkParams p,
                     p_.move_pos_tol_rad, p_.move_vel_tol_rad_s, p_.move_timeout_s);
 }
 
+namespace {
+// A withheld release is a safety decision made against a number, so the number travels with the
+// decision. "stale or untrusted" alone cannot tell a regression from a drive that was simply not
+// asked recently, and on this path the two have opposite remedies.
+std::string ages_ms(TimeNs now_ns, TimeNs feedback_ns, TimeNs independent_ns) {
+  const auto fmt = [](TimeNs ns) { return std::to_string(ns / 1'000'000LL); };
+  std::string text = "feedback_age_ms=" + fmt(now_ns - feedback_ns);
+  if (independent_ns > 0) text += ", independent_age_ms=" + fmt(now_ns - independent_ns);
+  return text;  // the caller appends which disjunct fired
+}
+}  // namespace
+
 bool ParkController::release_gate(const HomingFeedback& pitch_fb,
     const HomingFeedback& yaw_fb,
     const std::array<ParkPositionEvidence, kAxisCount>& evidence, TimeNs now_ns,
@@ -83,8 +95,20 @@ bool ParkController::release_gate(const HomingFeedback& pitch_fb,
     const auto independent_age = now_ns - ev.sampled_ns;
     const double tolerance = .5 * p_.pos_tol_deg * kDeg2Rad;
     if (fb.motor_fault || !std::isfinite(fb.pos_rad) || !std::isfinite(fb.vel_rad_s) ||
-        fb.t_ns <= 0 || age < 0 || age > p_.evidence_max_age_ms * 1'000'000LL)
-      reason = "stale or untrusted motor feedback";
+        fb.t_ns <= 0 || age < 0 || age > p_.evidence_max_age_ms * 1'000'000LL) {
+      // Which of the six conditions fired: the age came out at 0 ms in the 2026-09-29 investigation,
+      // which ruled out staleness and left a trust condition unnamed. A withheld release should not
+      // make its reader guess.
+      std::string which;
+      if (fb.motor_fault) which += " motor_fault";
+      if (!std::isfinite(fb.pos_rad)) which += " position_nan";
+      if (!std::isfinite(fb.vel_rad_s)) which += " velocity_nan";
+      if (fb.t_ns <= 0) which += " no_timestamp";
+      if (age < 0) which += " timestamp_from_the_future";
+      if (age > p_.evidence_max_age_ms * 1'000'000LL) which += " too_old";
+      reason = "stale or untrusted motor feedback (" + ages_ms(now_ns, fb.t_ns, ev.sampled_ns) +
+               ", limit " + std::to_string(p_.evidence_max_age_ms) + " ms; failing:" + which + ")";
+    }
     else if (p_.require_independent_position && observed_travel_[i] < p_.min_observed_travel_deg * kDeg2Rad)
       reason = "no parking motion observed; no automatic release";
     else if (allow_settling && !at_park(fb, static_cast<AxisId>(i)))
@@ -97,7 +121,9 @@ bool ParkController::release_gate(const HomingFeedback& pitch_fb,
              independent_age > p_.evidence_max_age_ms * 1'000'000LL ||
              !std::isfinite(ev.q_raw_rad) || !std::isfinite(ev.uncertainty_rad) ||
              ev.uncertainty_rad < 0)
-      reason = "independent physical position confirmation unavailable or stale";
+      reason = "independent physical position confirmation unavailable or stale (" +
+               ages_ms(now_ns, fb.t_ns, ev.sampled_ns) + ", limit " +
+               std::to_string(p_.evidence_max_age_ms) + " ms)";
     else if (std::abs(ev.q_raw_rad - park_raw_[i]) + ev.uncertainty_rad >= tolerance)
       reason = "independent position outside guarded park tolerance";
     else if (independent_travel_[i] < p_.min_observed_travel_deg*kDeg2Rad)

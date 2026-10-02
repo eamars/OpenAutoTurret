@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "can/gm6020_friction.hpp"
 
 namespace ota::config::mixed {
 
@@ -32,7 +33,9 @@ struct Axis {
   // fields from anything voltage-shaped on purpose: a voltage ceiling in counts says nothing about
   // amperes, and reusing the voltage number silently re-tunes the axis. 0 = unset, refused.
   double current_kp_a_per_rad_s = 0.0;
-  double current_ki_a_per_rad_s = 0.0;
+  double current_ki_a_per_rad_s = 0.0; // legacy key spelling; physical unit A/rad
+  int velocity_rx_window_ms = 0; // 0: legacy 50 ms filter; 20/30/40: fresh-RX window
+  gm6020::FrictionConfig friction;
   std::optional<uint64_t> expected_unique_id;
   std::optional<uint32_t> feedback_frame_id;
   std::optional<uint32_t> command_frame_id;
@@ -43,12 +46,29 @@ struct Axis {
   int yaw_guard_temp_raw_ceiling = 0;
 };
 
+// ADR-003 3b: the ADR-002.2 servos (assets from tools/servo_commission/commission.py) own both
+// axes whenever the control loop publishes a reference segment. Absent: the legacy speed paths.
+struct Servo {
+  std::string yaw_asset, pitch_asset;   // resolved paths of config/servo/*_servo.json
+  double yaw_current_limit_a = 0;       // peak authority (owner ruling 2026-10-02: 3 A)
+  double yaw_rms_limit_a = 0;           // continuous budget (1.62 A rated)
+  int yaw_temperature_limit_raw = 0;    // the commissioning sessions' thermal trip (raw byte, ~deg C)
+  double oscillation_limit_a = 0;       // limit-cycle guard: fast current RMS (commissioning rule)
+  double speed_limit_rad_s = 0;         // owner ruling 2026-10-02: 100 RPM is the safety cap (both axes)
+  // Pitch end-stop protection (owner: never drive the pitch into its mechanical end stop): the
+  // guard lies this far beyond each soft limit (which homing places inside the measured ends),
+  // and toward it the commanded speed always allows a stop at stop_acceleration.
+  double pitch_guard_rad = 0;
+  double pitch_stop_acceleration_rad_s2 = 0;
+};
+
 struct Profile {
   int schema_version = 0;
   CanBus yaw_bus;
   CanBus pitch_bus;
   Axis yaw;
   Axis pitch;
+  std::optional<Servo> servo;
 };
 
 struct LoadResult {

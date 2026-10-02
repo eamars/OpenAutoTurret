@@ -1,0 +1,1154 @@
+{
+  "version": "adr0022.stage1-report/2",
+  "recorded_at_utc": "2026-09-29T23:26:52.188332+00:00",
+  "workspace_head": "95c5e5c1c79d0d30d1e9f97365c7f7c4ee710d81",
+  "status": "STAGE1_MATHEMATICAL_SOFTWARE_PASS",
+  "ready_for_stage2_entry": true,
+  "stage2_started": false,
+  "physical_access": false,
+  "full_adr_status": "NOT_DONE",
+  "stage_status": {
+    "mathematical_software": "PASS",
+    "hardware_capability": "NOT_RUN",
+    "physical_calibration": "NOT_RUN",
+    "physical_plant_identification": "NOT_RUN",
+    "3a": "NOT_RUN",
+    "3b": "NOT_RUN"
+  },
+  "method": {
+    "source_files": {
+      "__init__.py": "a809b4b9941a13f24ddf229b8ce618ebc17edd46619b60e75f14602398c84798",
+      "adaptation.py": "0dae1dea148a6a7e02e66d4925a470a70ca30d987af251701a3f757a282605df",
+      "applicability.py": "5a136fedaa9cac4058545368b7a10d6aad53fddf632444d37cfd19242c9ee78e",
+      "breakaway.py": "964170812608ecd2c0932fbc4f075ad88c8a5fbbc3e6d8889939c3ea50a61f1f",
+      "calibrate.py": "9b46d52bc867d5f4ed82b196afcca5a736a61f383e643358ef55090a360f0d0d",
+      "contracts.py": "6b1687dc24b199cdac79a27e2692ddafdaf440090438a295279174151f6c3c77",
+      "identification.py": "5367e5b12dea0679e97f3956bd99af699f78dbf3a4b459be6a04b3133364dd7e",
+      "measurement.py": "0c5132220a01dda53cfac085e8a9229628778ab2d666a8981bc071a3d1cc4a47",
+      "metrics.py": "0e0b331f41716e2c207f6f630d88e8e7e294629b3696518290a24a9d7d3e7646",
+      "model.py": "efb972e2693a793fc0a7455e2b0df8cdc5a72ea159f5fedb6d2bdec74f1caf86",
+      "native.py": "5b5069e306e885410e4d6b9d762333eb85c48c65a1acb52e6b1b6673f0376af0",
+      "normalization.py": "fa2af984a3626070cf93581909a6393bfa13c4a0baf52998d4e3c8461617cb3f",
+      "parameter_catalog.py": "e1da666c7e0f9f30f035f61b7129793fca38030d4f805d45656a2461f67d2d6c",
+      "probe_control.py": "328d32016a727d339e6e644f77e1c3f9a8afa8915ad309e5f75da362bc97923d",
+      "protocol.py": "0957401f679f9f6b940018f996c6746513e7adfaa1d632671d4ab05036c611de",
+      "provenance.py": "c3297d207f317dc06ae54c632c406a6457bc210df1ef5c48e8cd1b960f57e3ba",
+      "qualification.py": "25c4977198517ed22685eb1103039523bdae789321444da75df131e2f5a61eba",
+      "replay.py": "8e428e313058cf96bfa3bd43ac8c04f38310c55af4e015ed2b1fcddd4b6d26d8",
+      "sampled_analysis.py": "02ee9967a6276ece1fe507e02b2be65b25b695b5e14b715eea6ae0a7e19e8de8",
+      "synthesis.py": "c5e901e7ab95a2819fded3ee3faf6b1c5dbb7b9dc3c9ec0f526c181be27456e5",
+      "synthetic.py": "e1f514168a9d5eae4a5874b7a5d0cd3c0d00bf42c7ad665ba8d3d7af43a8e36d"
+    },
+    "native_sha256": "5bac354a6cc9f9bac7cb566ed834b264ef665b0366ad6a7081aab8e41edf86f9",
+    "dependencies": {
+      "numpy": "2.3.5",
+      "scipy": "1.17.0"
+    },
+    "execution": "OFFLINE_MATHEMATICS",
+    "physical_qualification": "NOT_RUN"
+  },
+  "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+  "builds": {
+    "host_core": {
+      "path": "run/adr0022-local/firmware/axis_control_core/libaxis_control_core.so",
+      "sha256": "5bac354a6cc9f9bac7cb566ed834b264ef665b0366ad6a7081aab8e41edf86f9",
+      "bytes": 29720
+    },
+    "host_commissiond": {
+      "path": "run/adr0022-local/firmware/axis_control_core/commissiond",
+      "sha256": "2ce52b25bf1d9d31244ca476eb85d83a119d43af2959cc96b1e93962f8f0dec6",
+      "bytes": 40768
+    },
+    "host_controld": {
+      "path": "run/adr0022-local/firmware/control/controld",
+      "sha256": "d3886183f5b012581f58077da30fb467054fc16f79b63b88bff791b1d5febec3",
+      "bytes": 2037536
+    },
+    "arm64_core": {
+      "path": "run/adr0022-local/core-arm64/libaxis_control_core.so",
+      "sha256": "4227f6aa4b513f2c60697b04794bbc330e352a167c7e172445bd67c9902bfc92",
+      "bytes": 78264
+    },
+    "arm64_commissiond": {
+      "path": "run/adr0022-local/core-arm64/commissiond",
+      "sha256": "ba807dd51eafb1d1684f6f568341a594302411f7768e8ad8e95952d0be557657",
+      "bytes": 89616
+    }
+  },
+  "logs": {
+    "mathematical": {
+      "path": "run/adr0022-local/stage1-tests.log",
+      "sha256": "1d839fe32fd0f36c5f64c12d08ed0e9a1a699571bf4516a2132c562886bb92fc",
+      "bytes": 13052
+    },
+    "acceptance_contract": {
+      "path": "run/adr0022-local/reference-tests.log",
+      "sha256": "56fc75ecea57e0ce7883dc4eaa2bc076f8d10d383d3c6174a49f3294d9a28255",
+      "bytes": 8999
+    },
+    "parameter_catalog_final": {
+      "path": "run/adr0022-local/catalog-tests.log",
+      "sha256": "bde55a3fdc3cc22ba67ac3bf09278b682ec8c6a1556cf4962c92edd50955821f",
+      "bytes": 1764
+    },
+    "native_regression": {
+      "path": "run/adr0022-local/ctest.log",
+      "sha256": "021c17ccbb1e05e4f181bf2f358c5ca2a484d9968d9c86d497a8fec58b11db51",
+      "bytes": 9327
+    }
+  },
+  "test_counts": {
+    "mathematical": 91,
+    "acceptance_contract": 84,
+    "native_regression": 82
+  },
+  "identification_component_hash": "a25415552ee569211eefa4fdc9b609d2766f15e6786b800ca43438b58b7793f6",
+  "source_files": [
+    {
+      "path": "Firmware/CMakeLists.txt",
+      "sha256": "70f2950fc60ea82239f9b49717a178c5132669dc0178dbd6f5811b96236dbbd8",
+      "bytes": 7673
+    },
+    {
+      "path": "Firmware/axis_control_core/CMakeLists.txt",
+      "sha256": "a3e694947681137575aa4d20542dc37c67ef7b8f9f338cf74a3d7ccea021018c",
+      "bytes": 894
+    },
+    {
+      "path": "Firmware/axis_control_core/axis_control_core.cpp",
+      "sha256": "588af72e49a042bfeb2a25ec4a648864e3a4a835721133d973372ac3c3b0598e",
+      "bytes": 17112
+    },
+    {
+      "path": "Firmware/axis_control_core/axis_control_core.hpp",
+      "sha256": "688389a0f8348b12218b86daebfd9cd1fb425bf19b1b7f68958ed5003a337f92",
+      "bytes": 4234
+    },
+    {
+      "path": "Firmware/axis_control_core/commissiond.cpp",
+      "sha256": "5f1669e84f70880f3657f22a64da368b32d3a58d17075f0726d4af788bfa276e",
+      "bytes": 312
+    },
+    {
+      "path": "Firmware/axis_control_core/replay.cpp",
+      "sha256": "f39ced7c60b36e7b29b21bb6a278773bab87792049e2dd4778ace7e89d50ed6e",
+      "bytes": 2442
+    },
+    {
+      "path": "Firmware/axis_control_core/replay.hpp",
+      "sha256": "15618d75b45d6e1baf2f06da46d2ad3912f1f59c7abf49da8ef87ab6a9866e1c",
+      "bytes": 160
+    },
+    {
+      "path": "Firmware/commissioning/__init__.py",
+      "sha256": "a809b4b9941a13f24ddf229b8ce618ebc17edd46619b60e75f14602398c84798",
+      "bytes": 80
+    },
+    {
+      "path": "Firmware/commissioning/adaptation.py",
+      "sha256": "0dae1dea148a6a7e02e66d4925a470a70ca30d987af251701a3f757a282605df",
+      "bytes": 10037
+    },
+    {
+      "path": "Firmware/commissioning/applicability.py",
+      "sha256": "5a136fedaa9cac4058545368b7a10d6aad53fddf632444d37cfd19242c9ee78e",
+      "bytes": 6772
+    },
+    {
+      "path": "Firmware/commissioning/breakaway.py",
+      "sha256": "964170812608ecd2c0932fbc4f075ad88c8a5fbbc3e6d8889939c3ea50a61f1f",
+      "bytes": 2755
+    },
+    {
+      "path": "Firmware/commissioning/calibrate.py",
+      "sha256": "9b46d52bc867d5f4ed82b196afcca5a736a61f383e643358ef55090a360f0d0d",
+      "bytes": 8977
+    },
+    {
+      "path": "Firmware/commissioning/contracts.py",
+      "sha256": "6b1687dc24b199cdac79a27e2692ddafdaf440090438a295279174151f6c3c77",
+      "bytes": 9283
+    },
+    {
+      "path": "Firmware/commissioning/identification.py",
+      "sha256": "5367e5b12dea0679e97f3956bd99af699f78dbf3a4b459be6a04b3133364dd7e",
+      "bytes": 14651
+    },
+    {
+      "path": "Firmware/commissioning/measurement.py",
+      "sha256": "0c5132220a01dda53cfac085e8a9229628778ab2d666a8981bc071a3d1cc4a47",
+      "bytes": 15861
+    },
+    {
+      "path": "Firmware/commissioning/metrics.py",
+      "sha256": "0e0b331f41716e2c207f6f630d88e8e7e294629b3696518290a24a9d7d3e7646",
+      "bytes": 6680
+    },
+    {
+      "path": "Firmware/commissioning/model.py",
+      "sha256": "efb972e2693a793fc0a7455e2b0df8cdc5a72ea159f5fedb6d2bdec74f1caf86",
+      "bytes": 2037
+    },
+    {
+      "path": "Firmware/commissioning/native.py",
+      "sha256": "5b5069e306e885410e4d6b9d762333eb85c48c65a1acb52e6b1b6673f0376af0",
+      "bytes": 8307
+    },
+    {
+      "path": "Firmware/commissioning/normalization.py",
+      "sha256": "fa2af984a3626070cf93581909a6393bfa13c4a0baf52998d4e3c8461617cb3f",
+      "bytes": 4637
+    },
+    {
+      "path": "Firmware/commissioning/parameter_catalog.py",
+      "sha256": "e1da666c7e0f9f30f035f61b7129793fca38030d4f805d45656a2461f67d2d6c",
+      "bytes": 18393
+    },
+    {
+      "path": "Firmware/commissioning/probe_control.py",
+      "sha256": "328d32016a727d339e6e644f77e1c3f9a8afa8915ad309e5f75da362bc97923d",
+      "bytes": 2093
+    },
+    {
+      "path": "Firmware/commissioning/protocol.py",
+      "sha256": "0957401f679f9f6b940018f996c6746513e7adfaa1d632671d4ab05036c611de",
+      "bytes": 7462
+    },
+    {
+      "path": "Firmware/commissioning/provenance.py",
+      "sha256": "c3297d207f317dc06ae54c632c406a6457bc210df1ef5c48e8cd1b960f57e3ba",
+      "bytes": 1242
+    },
+    {
+      "path": "Firmware/commissioning/qualification.py",
+      "sha256": "25c4977198517ed22685eb1103039523bdae789321444da75df131e2f5a61eba",
+      "bytes": 5500
+    },
+    {
+      "path": "Firmware/commissioning/replay.py",
+      "sha256": "8e428e313058cf96bfa3bd43ac8c04f38310c55af4e015ed2b1fcddd4b6d26d8",
+      "bytes": 931
+    },
+    {
+      "path": "Firmware/commissioning/sampled_analysis.py",
+      "sha256": "02ee9967a6276ece1fe507e02b2be65b25b695b5e14b715eea6ae0a7e19e8de8",
+      "bytes": 6349
+    },
+    {
+      "path": "Firmware/commissioning/synthesis.py",
+      "sha256": "c5e901e7ab95a2819fded3ee3faf6b1c5dbb7b9dc3c9ec0f526c181be27456e5",
+      "bytes": 14449
+    },
+    {
+      "path": "Firmware/commissioning/synthetic.py",
+      "sha256": "e1f514168a9d5eae4a5874b7a5d0cd3c0d00bf42c7ad665ba8d3d7af43a8e36d",
+      "bytes": 4880
+    },
+    {
+      "path": "Firmware/commissioning/tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_additional_paths.py",
+      "sha256": "ec6b652caef2a64575a6a8fb15e617bf05bd3b0135e342677954fa98099aa9f5",
+      "bytes": 5808
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_applicability.py",
+      "sha256": "d006968c3919cdee7b8ddc6fba5d522456f685889c10b51c157fe4002a896791",
+      "bytes": 3596
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_controller_protocol.py",
+      "sha256": "7e7778827e396a78b5adf700897ed1ad6dec844789068668c055c26f7246a6d6",
+      "bytes": 11724
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_measurement_pipeline.py",
+      "sha256": "bf0dda199d4ad27893a0496d715e9949f75bc676b50c68debab0b92ca6d432a9",
+      "bytes": 6327
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_sampled_dynamics.py",
+      "sha256": "566d9b471034c38070048d6b303f3601b5b3256eadd325873943b87e6ace6ae1",
+      "bytes": 3916
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_stage1.py",
+      "sha256": "324ca921d0da82f09a52fc7cf89586206d661351a52fd75b8bfc191518f0fc7d",
+      "bytes": 8672
+    },
+    {
+      "path": "Firmware/commissioning/tests/test_stage_boundaries.py",
+      "sha256": "f774bb3ed48977baeefe2b8430fdd79d98e08776b594b60c60da5243e9bbd408",
+      "bytes": 5339
+    },
+    {
+      "path": "Firmware/control/CMakeLists.txt",
+      "sha256": "f66c55fc759f036b377cbdf224dbc53fbb1d05489f3ca9c91a1c542a49b6a134",
+      "bytes": 1625
+    },
+    {
+      "path": "Firmware/control/src/main.cpp",
+      "sha256": "77a006bc62947e123d179f6391c964f1b158ef43d19dff1c602aa832220f9ad2",
+      "bytes": 42037
+    },
+    {
+      "path": "Firmware/docs/ADR-002.2/contracts/quality_targets.json",
+      "sha256": "d631a8ecc2bd8dcdc44829c5b337d2e1a04736fc8be2de110620b2d3c27b02d0",
+      "bytes": 1462
+    },
+    {
+      "path": "Firmware/docs/ADR-002.2/contracts/requirements.json",
+      "sha256": "9f6c33ab40506ee7ca59a2cf159917d55de70cb6562542c6454b6ac43bd7db19",
+      "bytes": 6691
+    },
+    {
+      "path": "Firmware/docs/ADR-002.2/docs/07_STAGE1_OFFLINE_OVERRIDE.md",
+      "sha256": "2907fbfd9bb634dbcf5a450d7a3fd4408d8a851378b393e544cfe1a0e40d741f",
+      "bytes": 5150
+    }
+  ],
+  "synthetic_matrix": {
+    "path": "run/adr0022-local/qualification/matrix.json",
+    "sha256": "c6710a2e2bb10a88505f9a8683dbfa02753f4c8a222c2c96410648abe2a47dd2",
+    "bytes": 24770
+  },
+  "conditions": [
+    {
+      "axis": "yaw",
+      "condition": "BASELINE",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/BASELINE/datasets/880988511951bd73601a9cf0deb92dfeac1773f11230f632db093a96f2eaf564.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/BASELINE/plants/100058ec50dae98ac00df6aaa83c2933f9dc25f3155ecccd4d5fec814772c01b.json",
+      "candidate": "run/adr0022-local/qualification/yaw/BASELINE/candidates/9f8977fdc26939b535ed12dc2f657e176e2095c404fdc8416f6c954dcb0e3640.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "100058ec50dae98ac00df6aaa83c2933f9dc25f3155ecccd4d5fec814772c01b",
+      "candidate_hash": "9f8977fdc26939b535ed12dc2f657e176e2095c404fdc8416f6c954dcb0e3640",
+      "a_max_relative_error": 7.700861942664765e-05,
+      "b_max_relative_error": 7.395006129395919e-05,
+      "h_max_error_A": 1.2826539727728292e-05,
+      "delay_error_s": 6.219110688440027e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 226,
+      "omega_n_rad_s": 11.164779303039802,
+      "phase_margin_deg": 53.60380204173346,
+      "gain_margin_db": 17.116823013794548
+    },
+    {
+      "axis": "yaw",
+      "condition": "PAYLOAD_UP",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/PAYLOAD_UP/datasets/8fcfa90b895cc60b351b1fad890eb8f163a18f60c2e1069822c76f70f8813a95.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/PAYLOAD_UP/plants/9e40ee006f71f414f2ea905ea1275c746db09e32009de0e35f9066534eeef351.json",
+      "candidate": "run/adr0022-local/qualification/yaw/PAYLOAD_UP/candidates/8cd11d18e19528dbe11f7c506730c2ba4702cc18dc699578b956ebb707927101.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "9e40ee006f71f414f2ea905ea1275c746db09e32009de0e35f9066534eeef351",
+      "candidate_hash": "8cd11d18e19528dbe11f7c506730c2ba4702cc18dc699578b956ebb707927101",
+      "a_max_relative_error": 0.0001234393209237967,
+      "b_max_relative_error": 0.000208991575902492,
+      "h_max_error_A": 2.56303650175288e-05,
+      "delay_error_s": 8.848628876529166e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 229,
+      "omega_n_rad_s": 11.78635599679433,
+      "phase_margin_deg": 52.56128174447194,
+      "gain_margin_db": 16.548966105755273
+    },
+    {
+      "axis": "yaw",
+      "condition": "PAYLOAD_DOWN",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/PAYLOAD_DOWN/datasets/c9b2b0ce582094efe47d78cc8587cc3d77b5d5c360a59396b9fc89990d98a3e7.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/PAYLOAD_DOWN/plants/29db82b0efcdcbe0ff02d73c5c54c0a488028a1a62115b7601b25f125f3098ab.json",
+      "candidate": "run/adr0022-local/qualification/yaw/PAYLOAD_DOWN/candidates/7a85375f8db21c5bd423d34f974b2ed4e0a83708d9a2979f339d37d095da06c7.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "29db82b0efcdcbe0ff02d73c5c54c0a488028a1a62115b7601b25f125f3098ab",
+      "candidate_hash": "7a85375f8db21c5bd423d34f974b2ed4e0a83708d9a2979f339d37d095da06c7",
+      "a_max_relative_error": 4.067187557263166e-05,
+      "b_max_relative_error": 1.6627160987532043e-05,
+      "h_max_error_A": 7.03810907876079e-06,
+      "delay_error_s": 4.449075432816363e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 228,
+      "omega_n_rad_s": 11.575410921161797,
+      "phase_margin_deg": 53.732121576844136,
+      "gain_margin_db": 16.90084732824267
+    },
+    {
+      "axis": "yaw",
+      "condition": "FRICTION_UP",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/FRICTION_UP/datasets/9080626d84820800733fb860c6191753d5ea7d58b550e3f0149a0d4e41874766.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/FRICTION_UP/plants/0e0229ecf2b4012559f2b39100e0c61f67485a2c7a16d498bd10962c1e5e3810.json",
+      "candidate": "run/adr0022-local/qualification/yaw/FRICTION_UP/candidates/d076f4d193ab2f3aacac807897c0bdf9da92ca178f14f78a418e24323cb139c1.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "0e0229ecf2b4012559f2b39100e0c61f67485a2c7a16d498bd10962c1e5e3810",
+      "candidate_hash": "d076f4d193ab2f3aacac807897c0bdf9da92ca178f14f78a418e24323cb139c1",
+      "a_max_relative_error": 3.8985560861283984e-05,
+      "b_max_relative_error": 3.785758630831411e-05,
+      "h_max_error_A": 1.4016608134964637e-05,
+      "delay_error_s": 4.962605406285195e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 207,
+      "omega_n_rad_s": 7.921921504906823,
+      "phase_margin_deg": 58.43198990104868,
+      "gain_margin_db": 20.520590080201238
+    },
+    {
+      "axis": "yaw",
+      "condition": "FRICTION_DOWN",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/FRICTION_DOWN/datasets/dcc04831b65709912f606adcd2fcfb8f42e291603c5f897586a2cf511fe8e846.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/FRICTION_DOWN/plants/2686a0631fe708e4f2f0198a39f5a6e59047470375e774afe211b6e5e897e925.json",
+      "candidate": "run/adr0022-local/qualification/yaw/FRICTION_DOWN/candidates/bf88a6adca8f6257e7fe4768057ed5f08123811b5dad85926cbcd0748c70b2fa.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "2686a0631fe708e4f2f0198a39f5a6e59047470375e774afe211b6e5e897e925",
+      "candidate_hash": "bf88a6adca8f6257e7fe4768057ed5f08123811b5dad85926cbcd0748c70b2fa",
+      "a_max_relative_error": 0.00010460954544821988,
+      "b_max_relative_error": 0.00013083213254438952,
+      "h_max_error_A": 1.092189772497476e-05,
+      "delay_error_s": 7.264570723878455e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 232,
+      "omega_n_rad_s": 12.442537726235823,
+      "phase_margin_deg": 51.87303025356991,
+      "gain_margin_db": 16.04895677670433
+    },
+    {
+      "axis": "yaw",
+      "condition": "RETURN_BASELINE",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/RETURN_BASELINE/datasets/77a67276b633dbe7b0dba258d0f40f01d2cfa70409237971216bde029aaadac8.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/RETURN_BASELINE/plants/0dbecef089fb0b93d3e9c67729fcdeeb0e6768926c9e6e79035fe43a1eef2d54.json",
+      "candidate": "run/adr0022-local/qualification/yaw/RETURN_BASELINE/candidates/abbac658801fa05c80c01fea778b6383cdc49c8c32d87f417a062625aca94369.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "0dbecef089fb0b93d3e9c67729fcdeeb0e6768926c9e6e79035fe43a1eef2d54",
+      "candidate_hash": "abbac658801fa05c80c01fea778b6383cdc49c8c32d87f417a062625aca94369",
+      "a_max_relative_error": 7.700861942664765e-05,
+      "b_max_relative_error": 7.395006129395919e-05,
+      "h_max_error_A": 1.2826539727728292e-05,
+      "delay_error_s": 6.219110688440027e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 226,
+      "omega_n_rad_s": 11.164779303039802,
+      "phase_margin_deg": 53.60380204173346,
+      "gain_margin_db": 17.116823013794548
+    },
+    {
+      "axis": "yaw",
+      "condition": "UNDECLARED_CHANGE",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/UNDECLARED_CHANGE/datasets/1d7c71b3d7bd5bf970cbcf7bf209950a7735c05e56547d9dec6467db6807c747.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/UNDECLARED_CHANGE/plants/61c89456862d7e4c683b007ec72f0d288966d56c672aada48e0de3ef2b76e6c7.json",
+      "candidate": "run/adr0022-local/qualification/yaw/UNDECLARED_CHANGE/candidates/251f78d418ee46bf2fe7aedef88bac15d683b917b8751951adeb218b2a142d94.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "61c89456862d7e4c683b007ec72f0d288966d56c672aada48e0de3ef2b76e6c7",
+      "candidate_hash": "251f78d418ee46bf2fe7aedef88bac15d683b917b8751951adeb218b2a142d94",
+      "a_max_relative_error": 3.8985560861283984e-05,
+      "b_max_relative_error": 3.785758630831411e-05,
+      "h_max_error_A": 1.4016608134964637e-05,
+      "delay_error_s": 4.962605406285195e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 207,
+      "omega_n_rad_s": 7.921921504906823,
+      "phase_margin_deg": 58.43198990104868,
+      "gain_margin_db": 20.520590080201238
+    },
+    {
+      "axis": "yaw",
+      "condition": "CENTRE_OF_MASS",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/CENTRE_OF_MASS/datasets/c2f4068627dd3315c9f447df5aac27d5ae50a66110256aa8af0192c036f6845a.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/CENTRE_OF_MASS/plants/91f7430d396f9b97625cabddd8e869fe1d6086bca27dbe808f8c0befe57ee853.json",
+      "candidate": "run/adr0022-local/qualification/yaw/CENTRE_OF_MASS/candidates/e910b2e5a31e1583c7bb80fed51e4ded5288a7f2a3c8585a48410d182e9aad99.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "91f7430d396f9b97625cabddd8e869fe1d6086bca27dbe808f8c0befe57ee853",
+      "candidate_hash": "e910b2e5a31e1583c7bb80fed51e4ded5288a7f2a3c8585a48410d182e9aad99",
+      "a_max_relative_error": 3.071355138654919e-05,
+      "b_max_relative_error": 0.000157844307235519,
+      "h_max_error_A": 3.838030102678094e-06,
+      "delay_error_s": 3.065991444346772e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 224,
+      "omega_n_rad_s": 10.76871462573312,
+      "phase_margin_deg": 54.23368030518408,
+      "gain_margin_db": 17.435953029043457
+    },
+    {
+      "axis": "yaw",
+      "condition": "TEMPERATURE_SUPPLY",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/yaw/TEMPERATURE_SUPPLY/datasets/711d23c06bea4e4b02c994d763bd33be12d78c71e1672b70862d58bf130c890b.json",
+      "snapshot": "run/adr0022-local/qualification/yaw/TEMPERATURE_SUPPLY/plants/293e56ad883385b7f41774952f3651928ba45cd5c3781df8c470f98028cee4a5.json",
+      "candidate": "run/adr0022-local/qualification/yaw/TEMPERATURE_SUPPLY/candidates/418da40c5650600648d475437c8a87a60148b2f55852f1b5a5156d6a85f47f67.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "293e56ad883385b7f41774952f3651928ba45cd5c3781df8c470f98028cee4a5",
+      "candidate_hash": "418da40c5650600648d475437c8a87a60148b2f55852f1b5a5156d6a85f47f67",
+      "a_max_relative_error": 6.559669321360799e-05,
+      "b_max_relative_error": 6.015573639779284e-05,
+      "h_max_error_A": 1.3313712929285959e-05,
+      "delay_error_s": 5.823826085079101e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 225,
+      "omega_n_rad_s": 10.964958831374021,
+      "phase_margin_deg": 54.057924302336005,
+      "gain_margin_db": 17.333056612587924
+    },
+    {
+      "axis": "pitch",
+      "condition": "BASELINE",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/BASELINE/datasets/bd1da1049b490a7987a323e47a6d2f773b41f271e76b794e4de8af1f0fa0699b.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/BASELINE/plants/5b0c3ee19b03488dce6c3a4b89e53057410466b3872097e38d47bfaf9dd783c8.json",
+      "candidate": "run/adr0022-local/qualification/pitch/BASELINE/candidates/fc5bc4274844ad394b2ef84fa1d817376be8caa7eb28cdfd715f5b15465f9eb6.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "5b0c3ee19b03488dce6c3a4b89e53057410466b3872097e38d47bfaf9dd783c8",
+      "candidate_hash": "fc5bc4274844ad394b2ef84fa1d817376be8caa7eb28cdfd715f5b15465f9eb6",
+      "a_max_relative_error": 7.128267992984761e-05,
+      "b_max_relative_error": 0.00028594421666222614,
+      "h_max_error_A": 4.585538803223918e-05,
+      "delay_error_s": 2.6010077264607828e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 224,
+      "omega_n_rad_s": 10.76871462573312,
+      "phase_margin_deg": 53.743184668614404,
+      "gain_margin_db": 17.33908248098992
+    },
+    {
+      "axis": "pitch",
+      "condition": "PAYLOAD_UP",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/PAYLOAD_UP/datasets/dba39d1ecfbdd5c5be73a21a3edd9ce18ef5799efec712759a11ba5ae3d7f9a6.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/PAYLOAD_UP/plants/81640053c62a57492d4e24bffc711740d86a42e2bb1e8fcc263df8aa09f743a9.json",
+      "candidate": "run/adr0022-local/qualification/pitch/PAYLOAD_UP/candidates/fe87746584263636f66a0f40a501a261d4cc3bcddb7fbb0171f63603d969360c.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "81640053c62a57492d4e24bffc711740d86a42e2bb1e8fcc263df8aa09f743a9",
+      "candidate_hash": "fe87746584263636f66a0f40a501a261d4cc3bcddb7fbb0171f63603d969360c",
+      "a_max_relative_error": 0.0001231803821476303,
+      "b_max_relative_error": 0.000365182603051517,
+      "h_max_error_A": 8.057519700434973e-05,
+      "delay_error_s": 4.280303379787867e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 223,
+      "omega_n_rad_s": 10.575982680269377,
+      "phase_margin_deg": 53.562510205613506,
+      "gain_margin_db": 17.433008819322755
+    },
+    {
+      "axis": "pitch",
+      "condition": "PAYLOAD_DOWN",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/PAYLOAD_DOWN/datasets/e0530545d00d70f2ced1d01feaaa4d0728dd8c821059a478c1854848fbc1e29e.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/PAYLOAD_DOWN/plants/13dbaac0709d4bc9859683c23a4db947ac5be66e9afd4bfe97e4700b09a05efc.json",
+      "candidate": "run/adr0022-local/qualification/pitch/PAYLOAD_DOWN/candidates/1008f7447b84902b6079b3e80130882cf3bd9ecf2fcb46f040e37aa204aa5d97.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "13dbaac0709d4bc9859683c23a4db947ac5be66e9afd4bfe97e4700b09a05efc",
+      "candidate_hash": "1008f7447b84902b6079b3e80130882cf3bd9ecf2fcb46f040e37aa204aa5d97",
+      "a_max_relative_error": 3.7209641753254524e-05,
+      "b_max_relative_error": 0.0002805922479334755,
+      "h_max_error_A": 3.3318775745619714e-05,
+      "delay_error_s": 2.5104677737555064e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 224,
+      "omega_n_rad_s": 10.76871462573312,
+      "phase_margin_deg": 54.223940493587676,
+      "gain_margin_db": 17.424779698110548
+    },
+    {
+      "axis": "pitch",
+      "condition": "FRICTION_UP",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/FRICTION_UP/datasets/c1968a48903e6ae3f97c2f189a89b0df90387fbdaaa6e23fb44d7ad623520a59.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/FRICTION_UP/plants/a1d15c36cd5151a543c8f903f21a55d5333a862854a88efc0f7e9b9f3602784b.json",
+      "candidate": "run/adr0022-local/qualification/pitch/FRICTION_UP/candidates/7ed7206d8c408d1d79fc73f0daf91f2802b9f814959d75dae127fb4d938e078c.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "a1d15c36cd5151a543c8f903f21a55d5333a862854a88efc0f7e9b9f3602784b",
+      "candidate_hash": "7ed7206d8c408d1d79fc73f0daf91f2802b9f814959d75dae127fb4d938e078c",
+      "a_max_relative_error": 6.726142674488667e-05,
+      "b_max_relative_error": 0.0001393687033918178,
+      "h_max_error_A": 4.1440514604772216e-05,
+      "delay_error_s": 2.279948896959788e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 208,
+      "omega_n_rad_s": 8.066287034769138,
+      "phase_margin_deg": 57.65091185628053,
+      "gain_margin_db": 20.164538647002793
+    },
+    {
+      "axis": "pitch",
+      "condition": "FRICTION_DOWN",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/FRICTION_DOWN/datasets/f3cff50ea32a053fe957b3cfcb3ded8c44943883dd0c0a95c106367fe56d1f2f.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/FRICTION_DOWN/plants/a433a45e2bad338e211db7095a7f2910d3b3f3597b957166a3ad3a871b2770ae.json",
+      "candidate": "run/adr0022-local/qualification/pitch/FRICTION_DOWN/candidates/1d70260785c552a1cf168cffffdc56b79b1cf9839f158ce013a90ed0a9f2d139.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "a433a45e2bad338e211db7095a7f2910d3b3f3597b957166a3ad3a871b2770ae",
+      "candidate_hash": "1d70260785c552a1cf168cffffdc56b79b1cf9839f158ce013a90ed0a9f2d139",
+      "a_max_relative_error": 6.222698486530183e-05,
+      "b_max_relative_error": 0.0005072155455143612,
+      "h_max_error_A": 4.920583931579403e-05,
+      "delay_error_s": 2.937191461876293e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 228,
+      "omega_n_rad_s": 11.575410921161797,
+      "phase_margin_deg": 52.550721175958685,
+      "gain_margin_db": 16.60381476739083
+    },
+    {
+      "axis": "pitch",
+      "condition": "RETURN_BASELINE",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/RETURN_BASELINE/datasets/40c5ca03fa906d9c4fb1e2117389ed4650fa62e8517641314e5cf8c2f101ffd3.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/RETURN_BASELINE/plants/d6ef944be000bcb55cc9d47a6aed9b62ed869ec09274b02f64e64ca75d9b0e33.json",
+      "candidate": "run/adr0022-local/qualification/pitch/RETURN_BASELINE/candidates/9571fd58031e5b6b2352cf8519dff25cd8d3324da427d0eeab859207918f6b75.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "d6ef944be000bcb55cc9d47a6aed9b62ed869ec09274b02f64e64ca75d9b0e33",
+      "candidate_hash": "9571fd58031e5b6b2352cf8519dff25cd8d3324da427d0eeab859207918f6b75",
+      "a_max_relative_error": 7.128267992984761e-05,
+      "b_max_relative_error": 0.00028594421666222614,
+      "h_max_error_A": 4.585538803223918e-05,
+      "delay_error_s": 2.6010077264607828e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 224,
+      "omega_n_rad_s": 10.76871462573312,
+      "phase_margin_deg": 53.743184668614404,
+      "gain_margin_db": 17.33908248098992
+    },
+    {
+      "axis": "pitch",
+      "condition": "UNDECLARED_CHANGE",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/UNDECLARED_CHANGE/datasets/d8f01f5f6a482c49e8bb10b5f700ba162a931b4d39732141607e0422164c2561.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/UNDECLARED_CHANGE/plants/dd1f5d8da4a77a91047f513ae656ba96402d6132e87e10b6656985a93586ef00.json",
+      "candidate": "run/adr0022-local/qualification/pitch/UNDECLARED_CHANGE/candidates/5fc9402494c141c567b05c87334181822c4cdaac54185d6fbff8a028e6b53f23.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "dd1f5d8da4a77a91047f513ae656ba96402d6132e87e10b6656985a93586ef00",
+      "candidate_hash": "5fc9402494c141c567b05c87334181822c4cdaac54185d6fbff8a028e6b53f23",
+      "a_max_relative_error": 6.726142674488667e-05,
+      "b_max_relative_error": 0.0001393687033918178,
+      "h_max_error_A": 4.1440514604772216e-05,
+      "delay_error_s": 2.279948896959788e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 208,
+      "omega_n_rad_s": 8.066287034769138,
+      "phase_margin_deg": 57.65091185628053,
+      "gain_margin_db": 20.164538647002793
+    },
+    {
+      "axis": "pitch",
+      "condition": "CENTRE_OF_MASS",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/CENTRE_OF_MASS/datasets/16e5a85d2cf04e9ce8b9618319f2334ab28ecc87ae9364e906b291fa98764f3a.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/CENTRE_OF_MASS/plants/1a23c83c25e4ac6b1ab63a93cd98b9370aef0159ed75b213620430cf85267adf.json",
+      "candidate": "run/adr0022-local/qualification/pitch/CENTRE_OF_MASS/candidates/4559177b229647a45a023ea9d25c82f0c50a98e51f5478a501b00ac67c13b08c.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "1a23c83c25e4ac6b1ab63a93cd98b9370aef0159ed75b213620430cf85267adf",
+      "candidate_hash": "4559177b229647a45a023ea9d25c82f0c50a98e51f5478a501b00ac67c13b08c",
+      "a_max_relative_error": 2.2020593538922868e-05,
+      "b_max_relative_error": 6.611261168076865e-05,
+      "h_max_error_A": 2.061040973386219e-05,
+      "delay_error_s": 4.8575243830402404e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 228,
+      "omega_n_rad_s": 11.575410921161797,
+      "phase_margin_deg": 52.858875143316936,
+      "gain_margin_db": 16.72818211055199
+    },
+    {
+      "axis": "pitch",
+      "condition": "TEMPERATURE_SUPPLY",
+      "status": "PASS",
+      "dataset": "run/adr0022-local/qualification/pitch/TEMPERATURE_SUPPLY/datasets/a5453f7299b675d76caf9677c9c0d69e7f76912552cdd127d677d65eef2b4346.json",
+      "snapshot": "run/adr0022-local/qualification/pitch/TEMPERATURE_SUPPLY/plants/c309b0e5ffd2bb3d67934126c2bccaa361c5757cb65d30b61d7a597481734055.json",
+      "candidate": "run/adr0022-local/qualification/pitch/TEMPERATURE_SUPPLY/candidates/489a76144be56f9f90fb5aa53b2aec04e7f426eef7cae62fbd51eaae50cd4af0.json",
+      "method_hash": "be60833fbc97c97062d7b5a37adec5db01f4ab2dc3f588198fec2ab5fcd36fbb",
+      "snapshot_hash": "c309b0e5ffd2bb3d67934126c2bccaa361c5757cb65d30b61d7a597481734055",
+      "candidate_hash": "489a76144be56f9f90fb5aa53b2aec04e7f426eef7cae62fbd51eaae50cd4af0",
+      "a_max_relative_error": 7.20609225207669e-05,
+      "b_max_relative_error": 0.0002303530572463075,
+      "h_max_error_A": 4.4489612569961756e-05,
+      "delay_error_s": 2.48988940388193e-05,
+      "bootstrap_models": 128,
+      "case_evaluations": 23220,
+      "point_id": 224,
+      "omega_n_rad_s": 10.76871462573312,
+      "phase_margin_deg": 53.940971544815326,
+      "gain_margin_db": 17.383826444521983
+    }
+  ],
+  "case_evaluations": 417960,
+  "requirements": [
+    {
+      "id": "S1-01",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/axis_control_core/CMakeLists.txt",
+          "sha256": "a3e694947681137575aa4d20542dc37c67ef7b8f9f338cf74a3d7ccea021018c",
+          "bytes": 894
+        },
+        {
+          "path": "Firmware/commissioning/tests/test_controller_protocol.py",
+          "sha256": "7e7778827e396a78b5adf700897ed1ad6dec844789068668c055c26f7246a6d6",
+          "bytes": 11724
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-02",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/axis_control_core/axis_control_core.cpp",
+          "sha256": "588af72e49a042bfeb2a25ec4a648864e3a4a835721133d973372ac3c3b0598e",
+          "bytes": 17112
+        },
+        {
+          "path": "Firmware/commissioning/breakaway.py",
+          "sha256": "964170812608ecd2c0932fbc4f075ad88c8a5fbbc3e6d8889939c3ea50a61f1f",
+          "bytes": 2755
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-03",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/identification.py",
+          "sha256": "5367e5b12dea0679e97f3956bd99af699f78dbf3a4b459be6a04b3133364dd7e",
+          "bytes": 14651
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-04",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/synthesis.py",
+          "sha256": "c5e901e7ab95a2819fded3ee3faf6b1c5dbb7b9dc3c9ec0f526c181be27456e5",
+          "bytes": 14449
+        },
+        {
+          "path": "Firmware/commissioning/sampled_analysis.py",
+          "sha256": "02ee9967a6276ece1fe507e02b2be65b25b695b5e14b715eea6ae0a7e19e8de8",
+          "bytes": 6349
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-05",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-06",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S1-07",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/parameter_catalog.py",
+          "sha256": "e1da666c7e0f9f30f035f61b7129793fca38030d4f805d45656a2461f67d2d6c",
+          "bytes": 18393
+        },
+        {
+          "path": "Firmware/commissioning/protocol.py",
+          "sha256": "0957401f679f9f6b940018f996c6746513e7adfaa1d632671d4ab05036c611de",
+          "bytes": 7462
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-08",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/protocol.py",
+          "sha256": "0957401f679f9f6b940018f996c6746513e7adfaa1d632671d4ab05036c611de",
+          "bytes": 7462
+        },
+        {
+          "path": "Firmware/commissioning/tests/test_additional_paths.py",
+          "sha256": "ec6b652caef2a64575a6a8fb15e617bf05bd3b0135e342677954fa98099aa9f5",
+          "bytes": 5808
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-09",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/contracts.py",
+          "sha256": "6b1687dc24b199cdac79a27e2692ddafdaf440090438a295279174151f6c3c77",
+          "bytes": 9283
+        },
+        {
+          "path": "Firmware/commissioning/parameter_catalog.py",
+          "sha256": "e1da666c7e0f9f30f035f61b7129793fca38030d4f805d45656a2461f67d2d6c",
+          "bytes": 18393
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-10",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/measurement.py",
+          "sha256": "0c5132220a01dda53cfac085e8a9229628778ab2d666a8981bc071a3d1cc4a47",
+          "bytes": 15861
+        },
+        {
+          "path": "Firmware/commissioning/normalization.py",
+          "sha256": "fa2af984a3626070cf93581909a6393bfa13c4a0baf52998d4e3c8461617cb3f",
+          "bytes": 4637
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S1-11",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/qualification.py",
+          "sha256": "25c4977198517ed22685eb1103039523bdae789321444da75df131e2f5a61eba",
+          "bytes": 5500
+        },
+        {
+          "path": "Firmware/commissioning/tests/test_stage_boundaries.py",
+          "sha256": "f774bb3ed48977baeefe2b8430fdd79d98e08776b594b60c60da5243e9bbd408",
+          "bytes": 5339
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S2-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S2-03",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/calibrate.py",
+          "sha256": "9b46d52bc867d5f4ed82b196afcca5a736a61f383e643358ef55090a360f0d0d",
+          "bytes": 8977
+        },
+        {
+          "path": "Firmware/commissioning/applicability.py",
+          "sha256": "5a136fedaa9cac4058545368b7a10d6aad53fddf632444d37cfd19242c9ee78e",
+          "bytes": 6772
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S2-04",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/commissioning/adaptation.py",
+          "sha256": "0dae1dea148a6a7e02e66d4925a470a70ca30d987af251701a3f757a282605df",
+          "bytes": 10037
+        },
+        {
+          "path": "Firmware/commissioning/tests/test_controller_protocol.py",
+          "sha256": "7e7778827e396a78b5adf700897ed1ad6dec844789068668c055c26f7246a6d6",
+          "bytes": 11724
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "S2-05",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S3A-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S3A-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S3B-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S3B-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "S3B-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-01",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-03",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-04",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-05",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "ADAPT-06",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "REL-01",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/docs/ADR-002.2/reference/contracts.py",
+          "sha256": "15663689229617fb5b1f7414f20216012cd9fba3279bba72b5e5fc32ea40169b",
+          "bytes": 11083
+        },
+        {
+          "path": "Firmware/docs/ADR-002.2/tests/test_reference.py",
+          "sha256": "d988578e544f1e2b2c11df936311ca586fd565b007a692287a564927929e117e",
+          "bytes": 14944
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    },
+    {
+      "id": "REL-02",
+      "status": "NOT_RUN",
+      "execution": "not_run",
+      "implementation": [],
+      "evidence_ids": []
+    },
+    {
+      "id": "REL-03",
+      "status": "PASS",
+      "execution": "software",
+      "implementation": [
+        {
+          "path": "Firmware/tools/adr0022_stage1_check.py",
+          "sha256": "7654df2deebdf44878bf1ad4155b3460c83b04d919798bcacd8910e24a64e418",
+          "bytes": 11688
+        }
+      ],
+      "evidence_ids": [
+        "mathematical",
+        "acceptance_contract",
+        "native_regression",
+        "synthetic_matrix"
+      ]
+    }
+  ],
+  "stage1_gate_reasons": [],
+  "full_adr_unmet": [
+    "NOT_PHYSICAL_ADAPT-01",
+    "NOT_PHYSICAL_ADAPT-02",
+    "NOT_PHYSICAL_ADAPT-03",
+    "NOT_PHYSICAL_ADAPT-04",
+    "NOT_PHYSICAL_ADAPT-05",
+    "NOT_PHYSICAL_ADAPT-06",
+    "NOT_PHYSICAL_REL-02",
+    "NOT_PHYSICAL_S1-05",
+    "NOT_PHYSICAL_S1-06",
+    "NOT_PHYSICAL_S2-01",
+    "NOT_PHYSICAL_S2-02",
+    "NOT_PHYSICAL_S2-05",
+    "NOT_PHYSICAL_S3A-01",
+    "NOT_PHYSICAL_S3A-02",
+    "NOT_PHYSICAL_S3B-01",
+    "NOT_PHYSICAL_S3B-02",
+    "NOT_PHYSICAL_S3B-03",
+    "PROFILE_DUAL_VALIDATION_INCOMPLETE",
+    "UNMET_ADAPT-01",
+    "UNMET_ADAPT-02",
+    "UNMET_ADAPT-03",
+    "UNMET_ADAPT-04",
+    "UNMET_ADAPT-05",
+    "UNMET_ADAPT-06",
+    "UNMET_REL-02",
+    "UNMET_S1-05",
+    "UNMET_S1-06",
+    "UNMET_S2-01",
+    "UNMET_S2-02",
+    "UNMET_S2-05",
+    "UNMET_S3A-01",
+    "UNMET_S3A-02",
+    "UNMET_S3B-01",
+    "UNMET_S3B-02",
+    "UNMET_S3B-03"
+  ],
+  "limits": [
+    "Synthetic results do not identify or qualify the station.",
+    "Host executable replay is not normal-production 3b evidence.",
+    "ARM64 cross-build covers the shared core and independent replay program; no target execution.",
+    "retained_homing excluded from local CTest as required by repository instructions.",
+    "Finite model/domain validation is not a proof for arbitrary unknown physics."
+  ]
+}

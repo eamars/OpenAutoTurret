@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "ADR-002.2 reusable stage-2 asset index",
+  "properties": {
+    "schema_version": {
+      "const": "adr0022.stage2/1"
+    },
+    "hardware_signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "measurement_signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "method_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "model_spec_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "plant_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "train_run_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "holdout_run_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "valid_frequency_band_hz": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": 0
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "parameter_file_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uncertainty_file_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "measurement_calibration_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "qualification": {
+      "enum": [
+        "CANDIDATE",
+        "MODELLING_PASS",
+        "BLOCKED"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "hardware_signature",
+    "measurement_signature",
+    "method_hash",
+    "model_spec_hash",
+    "plant_hash",
+    "conditions",
+    "train_run_hashes",
+    "holdout_run_hashes",
+    "valid_frequency_band_hz",
+    "parameter_file_hash",
+    "uncertainty_file_hash",
+    "measurement_calibration_hash",
+    "source_commit",
+    "qualification"
+  ]
+}

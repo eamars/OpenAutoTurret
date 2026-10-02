@@ -1,0 +1,129 @@
+{
+  "schema": "ADR0022_NEXT_WORK_QUEUE_V1",
+  "status": "INSTRUCTIONS_NOT_LOCAL_EXECUTION",
+  "physical_authorization_granted_by_this_package": false,
+  "single_complete_delivery": true,
+  "candidate14": "NONDEPLOYABLE",
+  "notes": [
+    "Dependencies describe promotion; safe offline interface/control work may run in parallel.",
+    "WP5 is conditional: do not acquire new data if WP4 can pass using existing evidence.",
+    "WP3 unknowns that do not affect a bounded lumped-model diagnostic need not block that diagnostic.",
+    "All local statuses start PENDING even where the reviewer has executed a separate data audit.",
+    "A failed WP4 fit must not deadlock the queue: WP5 is a conditional recovery branch, not dependent on WP4 success."
+  ],
+  "tasks": [
+    {
+      "id": "WP0",
+      "title": "Reproduce evidence and map actual local source",
+      "depends_on": [],
+      "status": "PENDING",
+      "acceptance": [
+        "11 native observation runs and 88 predictions reproduced",
+        "Source and native library identities recorded"
+      ],
+      "failure_next_action": "Repair data/export/source mismatch before interpreting fits"
+    },
+    {
+      "id": "WP1",
+      "title": "Reproduce synthetic cases with separate gates",
+      "depends_on": [
+        "WP0"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "Pristine and noisy cases reproduced",
+        "Termination, recovery, and trajectory gates distinguished"
+      ],
+      "failure_next_action": "Classify the first actual failure; do not discard useful passing components"
+    },
+    {
+      "id": "WP2",
+      "title": "Repair and verify the estimator",
+      "depends_on": [
+        "WP1"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "Noise/event/derivative diagnosis with minimal regression",
+        "Existing gates pass with documented termination",
+        "Predeclared independent synthetic excitation/seed verification"
+      ],
+      "failure_next_action": "Return to a discriminating numerical/statistical test or precise external blocker"
+    },
+    {
+      "id": "WP3",
+      "title": "Verify motor/measurement/configuration interface",
+      "depends_on": [
+        "WP0"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "Active firmware/mode/command semantics supported",
+        "Configuration and measurement assumptions explicitly bounded",
+        "Safe physical stop dependencies identified"
+      ],
+      "failure_next_action": "Continue offline work; request only unresolved device-specific facts"
+    },
+    {
+      "id": "WP4",
+      "title": "Refit fair, identifiable physical model comparisons",
+      "depends_on": [
+        "WP2",
+        "WP3"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "No motion-baseline failure concealed",
+        "Comparable freedoms and blocked splits",
+        "Supported model predicts required whole-run regimes"
+      ],
+      "failure_next_action": "Use targeted profiles or an information-gain experiment plan; no controller promotion"
+    },
+    {
+      "id": "WP5",
+      "title": "Acquire necessary authorized discriminating evidence",
+      "depends_on": [
+        "WP0",
+        "WP3"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "Specific missing distinction and required accuracy stated",
+        "Approved bounded experiment and safe stop",
+        "Automatic parameter update and full repeat of model gates"
+      ],
+      "failure_next_action": "Censored result or hardware fault returns to diagnosis without limit escalation",
+      "trigger": "WP4 diagnostic outcome is NEEDS_DISCRIMINATING_DATA; WP4 need not pass first",
+      "after_completion": "Return new data to WP4 and rerun the same automatic identification gates"
+    },
+    {
+      "id": "WP6",
+      "title": "Synthesize and freeze prospective predictions",
+      "depends_on": [
+        "WP4"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "Qualified required model evidence",
+        "Same control core and sensor/actuator semantics",
+        "Nonlinear and local stability checks with unchanged limits",
+        "Pre-run predictions saved"
+      ],
+      "failure_next_action": "Route to identified model, sensing, actuator, or reference feasibility failure",
+      "promotion_requires": "WP4 plant/measurement prediction gate passes; offline implementation may precede this"
+    },
+    {
+      "id": "WP7",
+      "title": "Complete physical Stage 3a and production Stage 3b",
+      "depends_on": [
+        "WP6"
+      ],
+      "status": "PENDING",
+      "acceptance": [
+        "Both physical gates and promised axes/configurations pass",
+        "Configuration-specific reuse/invalidation package delivered"
+      ],
+      "failure_next_action": "Stop/inhibit as needed; diagnose and revalidate without weakening criteria"
+    }
+  ]
+}

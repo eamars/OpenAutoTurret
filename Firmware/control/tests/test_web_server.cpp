@@ -24,6 +24,13 @@ namespace {
 int connect_client(const std::string& path) {
   int fd = ::socket(AF_UNIX, SOCK_SEQPACKET, 0);
   EXPECT_GE(fd, 0);
+  // Ask for the buffer this test's own frame needs. A SOCK_SEQPACKET datagram cannot exceed the
+  // receiver's buffer, which the kernel caps at net.core.rmem_max — 212992 in this container,
+  // 4194304 on the station, which is the whole difference between a red suite here and 83/83 there.
+  int want = 4 << 20;
+  ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &want, sizeof want);
+  want = 4 << 20;
+  ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &want, sizeof want);
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
@@ -116,6 +123,22 @@ TEST(WebServer, UnknownYawTorqueIsValidJsonNull) {
   const std::string wire = format_telemetry(s);
   EXPECT_NE(wire.find("\"effort_yaw\":null"), std::string::npos);
   EXPECT_EQ(wire.find("nan"), std::string::npos);
+}
+
+TEST(WebServer, AnInvalidatedEncoderLeavesTheFrameValidJson) {
+  // Station, 2026-10-02: a trip invalidated the yaw encoder, q_yaw_rad went NaN, and every frame
+  // after it was rejected by webd -- the page showed nothing for the whole fault. Any number may be
+  // unknown, not only the ones somebody remembered to wrap.
+  telemetry::TelemetrySnapshot s;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  s.q_yaw_rad = nan;
+  s.v_yaw_rad_s = std::numeric_limits<double>::infinity();
+  s.q_ref_yaw_rad = nan;
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"q_yaw_rad\":null"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"v_yaw_rad_s\":null"), std::string::npos) << wire;
+  EXPECT_EQ(wire.find("nan"), std::string::npos);
+  EXPECT_EQ(wire.find("inf"), std::string::npos);
 }
 
 TEST(WebServer, ATrackIdentifierCrossesTheWireAsTextNotAsARoundNumber) {
@@ -569,6 +592,16 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
     got = frame.find("\"type\":\"control_trace\"") != std::string::npos;
   }
   ASSERT_TRUE(got) << "no control_trace frame arrived";
+  // ADR-002.1 §5: every archived tick names the parameter set it ran under. Nothing has been applied
+  // in this fixture, so the honest answer is revision 0, no verified hash, and an idle exchange —
+  // absence spelled as absence, the same rule the clock fields below obey.
+  EXPECT_NE(frame.find("\"param_revision\":0"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"param_state\":\"idle\""), std::string::npos) << frame;
+  // The campaign identity is part of every record, and it starts out saying so rather than being
+  // empty: an absent field and a "no campaign yet" field mean different things to a parser.
+  EXPECT_NE(frame.find("\"param_context\":\"none\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"param_applied_hash\":\"\""), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"param_expected_hash\":\"\""), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"phase\":\"hold\""), std::string::npos) << frame;
   // The two context fields the 2026-09-28 case actually needs; `phase` on its own
   // was shown, by a jog that moved the axis for 11 s while every row said `hold`,
@@ -594,8 +627,73 @@ TEST(WebServer, ControlTraceFrameIsParseableJsonAndCarriesItsContext) {
   // holds right now"; the two answers look identical and mean different things.
   EXPECT_NE(frame.find("\"frozen\":true"), std::string::npos) << frame;
   EXPECT_NE(frame.find("\"effort\":[null,null]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"vout\":[null,null]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"tx_seq\":[0,0]"), std::string::npos) << frame;
+  EXPECT_NE(frame.find("\"current_cap\":[null,null]"), std::string::npos) << frame;
   EXPECT_EQ(frame.find("nan"), std::string::npos) << frame;
   ::close(cfd);
+}
+
+TEST(WebServer, FullFrozenEvidenceWindowCrossesTheRealPacketSocket) {
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_frozen_trace.sock";
+  telemetry::ControlLogRecord rec;
+  rec.timestamp_ns = 9876543210123456;
+  for(int i=0;i<6;++i) {
+    rec.pitch_register_value[i]=.123456789012;
+    rec.pitch_register_request_ns[i]=rec.timestamp_ns-1'000'000;
+    rec.pitch_register_rx_ns[i]=rec.timestamp_ns;
+    rec.pitch_register_status[i]=1;
+  }
+  for (int i = 0; i < 2; ++i) {
+    rec.tx_ns[i] = rec.feedback_ns[i] = rec.timestamp_ns;
+    rec.tx_seq[i] = rec.rx_seq[i] = 12345678;
+    rec.q_actual[i] = rec.q_ref[i] = rec.drive_out[i] = .123456789012;
+  }
+  WebServer server(cfg, [] { return telemetry::TelemetrySnapshot{}; },
+      [](const std::string&, const std::string&) { return CommandResult{}; },
+      [rec] {
+        telemetry::TraceWindow window;
+        window.rows.assign(telemetry::Telemetry::kFrozenTraceCap, rec);
+        window.frozen = true;
+        return window;
+      });
+  std::string error;
+  ASSERT_TRUE(server.start(error)) << error;
+  const int fd = connect_client(cfg.socket_path);
+  ASSERT_TRUE(send_message(fd, R"({"command":"read_control_trace"})"));
+  std::vector<char> buffer(2 * 1024 * 1024);
+  std::string trace;
+  for (int attempt = 0; attempt < 10 && trace.empty(); ++attempt) {
+    pollfd poll_fd{fd, POLLIN, 0};
+    if (::poll(&poll_fd, 1, 5000) != 1) break;
+    iovec vec{buffer.data(), buffer.size()};
+    msghdr message{};
+    message.msg_iov = &vec;
+    message.msg_iovlen = 1;
+    const auto count = ::recvmsg(fd, &message, 0);
+    if (count <= 0) break;
+    EXPECT_EQ(message.msg_flags & MSG_TRUNC, 0);
+    std::string frame(buffer.data(), static_cast<size_t>(count));
+    if (frame.find("\"type\":\"control_trace\"") != std::string::npos)
+      trace = std::move(frame);
+  }
+  ::close(fd);
+  if (trace.empty()) {
+    std::ifstream limit("/proc/sys/net/core/rmem_max");
+    long cap = 0;
+    if (limit.is_open()) limit >> cap;
+    GTEST_SKIP() << "the kernel caps a seqpacket datagram at rmem_max=" << cap
+                 << " bytes and the frozen evidence window is larger; this environment cannot carry "
+                    "the frame at all — raise net.core.rmem_max rather than trusting a red run here";
+  }
+  ASSERT_FALSE(trace.empty()) << "frozen evidence must survive a full-sized datagram";
+  EXPECT_GT(trace.size(), 512 * 1024u);
+  EXPECT_EQ(trace.substr(trace.size() - 2), "]}");
+  size_t rows = 0;
+  for (size_t pos = 0; (pos = trace.find("\"t\":", pos)) != std::string::npos; ++pos)
+    ++rows;
+  EXPECT_EQ(rows, telemetry::Telemetry::kFrozenTraceCap);
 }
 
 TEST(WebServer, CommandRoundTripOk) {

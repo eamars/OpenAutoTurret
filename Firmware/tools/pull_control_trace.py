@@ -67,7 +67,7 @@ def to_ndjson(rows: list[dict]) -> str:
     out = []
     for r in rows:
         fixed = dict(r)
-        for key in ("t", "ack", "rx"):
+        for key in ("t", "ack", "rx", "tx_ns", "tx_seq", "rx_seq"):
             if key in fixed:
                 fixed[key] = [str(v) for v in fixed[key]] if isinstance(fixed[key], list) else str(fixed[key])
         out.append(json.dumps(fixed, separators=(",", ":")))

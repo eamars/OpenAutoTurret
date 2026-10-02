@@ -1,6 +1,6 @@
 # Operate and adapt the camera station
 
-Current operating runbook, **27 September 2026**. Read this before deploying,
+Current operating runbook, **1 October 2026**. Read this before deploying,
 starting, stopping or diagnosing the station. Dated run reports are historical.
 
 > **How to read this file.** It holds the station's **current state, safety history, owner rulings
@@ -13,6 +13,204 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > since moved release and address. Before acting on any line here, take a live reading —
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
+
+## Fault, hold, degrade: when the station may stop itself (owner ruling, 2026-10-02)
+
+**Read this before adding, keeping or tuning any guard, trip, watchdog or threshold.** It came from
+two field faults on 2026-10-02 (18:33 and 19:10): the yaw servo's oscillation guard tripped 50 ms
+into a limit cycle that the owner, standing in front of the turret, could not see; the station
+faulted and de-energised yaw while it was tracking him well.
+
+The turret is an **industrial device**. It is deployed outdoors and indoors, in dust and rain, on a
+cross-roller yaw bearing whose friction can change anywhere and at any time, under loads that are
+not balanced. It is not a laboratory instrument, and a guard that trips without margin is a defect.
+
+**De-energising is itself a hazard.** With an unbalanced load, a released axis falls or swings
+free. "Fault → power off" is the dangerous direction, not the safe one.
+
+### The three responses
+
+| Response | When | What the motors do | How it ends |
+|---|---|---|---|
+| **FAULT** | Only for a **safety hazard**: harm to people, the machine or its surroundings if motion continued. | A controlled stop, then **hold position, energised**. An axis is released only when it cannot be held: its drive has itself faulted, or there is no way left to command it. | An operator recovers it. |
+| **HOLD** | A **persistent** failure that is not a hazard. Examples: video lost for good, a servo still oscillating or stalled after its persistence time, repeated control-deadline misses. | Stop the motion (braked, as the supervisor's HOLD already does) and hold position, energised. | **By itself**, once the cause has cleared. |
+| **DEGRADE** | A **transient**: a brief limit cycle, a short stall and its rock, a friction excursion, a single deadline overrun, a short frame gap. | Keep operating; log it with numbers and count it. | It clears itself; nothing to recover. |
+
+### Rules for every guard
+
+1. **Classify first.** Before writing a trip, say which row it belongs to and why. "Something
+   unusual" is not a hazard.
+2. **Margin and time.** A threshold sits above the worst *normal* operating value measured on the
+   station, not at a commissioning-session limit. It also has a persistence time scaled to the harm:
+   - Immediate (milliseconds) only where milliseconds matter, such as a runaway above the 100 RPM
+     cap, or the end-stop guard on pitch.
+   - Performance conditions, such as a stall or oscillation, are failures only after they persist,
+     about **5 s**, the owner's own figure. Below that they are DEGRADE.
+3. **Prefer holding to releasing.** A drive that can hold on its own encoder is told to hold speed
+   zero, for example a CyberGear in speed mode. A dead-man that fires because *this host* stalled
+   must leave the axes held by their drives, not released.
+4. **Robustness is designed in, not re-commissioned in.** Friction drift (±35 % within an hour was
+   measured on yaw) is a normal operating condition. A loop that only behaves at this morning's
+   friction is not finished. Re-commissioning is not the answer to environmental change.
+5. **Commissioning sessions are different.** A bounded commissiond session, run by the tool with
+   nobody relying on the turret, may hard-abort quickly, because its job is to find limits. Those
+   abort thresholds must not be copied into production.
+
+### The guards in production, against this rule (2026-10-02)
+
+Every row except the ones marked **open** was changed on 2026-10-02, with tests. The **open** rows
+still violate the rule and are the next work. Do not cite them as precedent.
+
+| Guard | Where | Was | Now |
+|---|---|---|---|
+| Yaw servo oscillation (fast RMS > 0.3 A of the current the servo did not plan: output minus feedforward) | `MixedCanMotorBackend` | FAULT after 50 ms, yaw de-energised | DEGRADE: logged per episode, with its peak. After 5 s continuously, HOLD until 1 s quiet (`EpisodeLatch`). Until 21:40 it watched the whole current, and a hard stop's own deceleration current (0.3 A) counted. |
+| Yaw servo stall (stall recovery still rocking) | same | — | Rocking itself is DEGRADE. Still stuck after 5 s, HOLD until it clears. |
+| Watchdog fault, pitch | `ControlLoop` (watchdog handling) | pitch de-energised for any pitch fault | Released only if the drive itself reports a fault (`fault_releases_axis`). Otherwise the Fault phase brakes and holds it. |
+| CyberGear dead-man (host heartbeat > 100 ms, feedback > 100 ms, > 75 °C) | `CyberGearSystem` watchdog | STOP (release) to both drives every 5 ms | `SpdRef = 0` to an enabled, healthy drive, which holds on its own encoder. STOP only to a faulted or not-enabled drive. Owner to confirm the > 75 °C case: holding heats the motor, but releasing drops the load. |
+| GM6020 encoder unwrap: one implausible reading, or a gap over 80 ms | `UnwrappedEncoder` | latched invalid for the session, then `feedback_unsafe` and a permanent FAULT. Station, 20:02:50: two frames bunched 3 µs apart in the receive queue | Production's `Recover` policy:<br>• the 1 ms device period is the floor on the time between readings;<br>• a doubtful reading is skipped, and a run of 20 is believed;<br>• a gap re-establishes the turn by nearest count (yaw is continuous).<br>Commissioning keeps `Latch`. |
+| Guard: feedback unsafe, bus down or wrong, tx failing for 20 ms, heartbeat stale, motor heat | yaw guard thread, servo step, legacy command path | FAULT at once (two paths tripped directly) | The command paths refuse motion (zero current) and never trip. The guard faults only after 0.5 s without a break (`GuardFaultPersistence`). Until then it holds: a blind axis coasts on zero current, otherwise the servo keeps holding. |
+| Observer refuses an encoder reading (`servo_encoder_rejected`) | yaw servo | FAULT | Released (zero current); it re-engages from the measured state on the next reference. |
+| Following error > 15° (yaw), and the pitch following error | both servos | FAULT | HOLD. The servo lets go (yaw zero current; pitch drive at speed zero). The supervisor's stop starts at the measured axis (`kStopReanchorRad`), so nothing pushes toward the old reference. It clears 1 s later, once the reference is back within 0.05 rad of the axis. |
+| Pitch servo feedback older than 20 ms | pitch servo | pitch servo fault | The servo lets go to the drive's speed-zero hold and re-engages when feedback is fresh. A fault only after 0.5 s without a break. A disabled or self-faulted drive is still a fault at once (it isn't holding). |
+| Faults during homing, mode transitions, recovery failure | `ControlLoop` | `deenergize_all()`: release both axes | `stop_axes_safely()`: release only what `fault_releases_axis` says cannot be held. The pitch drive holds speed zero (`hold_axis`). `deenergize_all()` is kept for operator stop and shutdown only (next row). Motor recovery's own disable, needed to clear drive faults, is unchanged. |
+| Operator stop and shutdown | launcher → `controld` | pitch STOP at the end | **open, owner decision:** park first so the release is safe, or hold. |
+| Motor over-temperature (supervisor), drive-reported fault | supervisor | FaultStop / Disable | Consistent: a hazard, and a faulted drive is not holding anyway. |
+| 100 RPM speed cap, pitch end-stop guard | servos | FAULT | Consistent: hazards, immediate. The pitch drive is now held at speed zero, not released. |
+
+## ADR-003 camera tracking: ownership and the accuracy ruling (2026-10-02, local date)
+
+- **Ownership.** The owner handed ADR-003 to the agent, with the architect's package as guidance.
+  The plan, the decisions and the state of each stage are in
+  [ADR-003/IMPLEMENTATION.md](ADR-003/IMPLEMENTATION.md).
+- **Accuracy ruling.** The yaw accuracy limits are calibrated from the real tracking performance
+  of the feedforward + feedback servo. This replaces the photography template's "do not infer
+  tolerances from achieved performance" for this station.
+  - **Result:** [`config/servo/yaw_accuracy.json`](../config/servo/yaw_accuracy.json), from
+    calibration run `yaw-20261002-134637`: 4 angles, plus the asset's 2 validation passes.
+  - **Limits:** pointing at rest 0.44 deg, ramp RMS 0.19 deg, walking profile 0.26 deg, moving
+    peak 0.79 deg. That is 10.7, 4.6, 6.3 and 19.2 px in the 1920x1080 tracker frame.
+  - **Use:** later yaw commissioning reports its conformance to these limits, and they are the
+    servo share of ADR-003's framing budget
+    ([`photography_spec.json`](../config/tracking/photography_spec.json)).
+- **Pitch prefers undershoot (owner ruling, 2026-10-02 22:00).** The 16:9 frame gives pitch
+  ±20° against yaw's ±35°, and the camera turns with pitch: running past a subject who stops or
+  turns back moves the aim point out of the picture. Pitch is tuned less aggressive and biased to
+  undershoot; a little overshoot is acceptable, chasing is not. In the tracking asset's Level 1
+  (`config/tracking/tracking_prior.json`, provenance `level1_pitch`): a 3° dead band (head motion
+  inside it moves nothing; beyond it only the excess counts), velocity feedforward × 0.7, λ 2.5,
+  jerk 1500°/s³ (acceleration stays 60°/s²; end-stop braking is unchanged because the boundary
+  governor uses the supervisor's 300°/s³). Proof: the recorded pitch goal of sessions human-3
+  and human-4 replayed through `Level1Generator`. Passes beyond the target fell from 11/17 to 0/0,
+  pitch travel by 75%, and the frame-error p95 from 4.1/7.2° to 3.6/6.0°. The stage-1 scenarios
+  hold pitch to its band, not to the pixel noise. Yaw is unchanged.
+  - **22:25, the band alone never converged** (owner: "at certain height the aim never
+    converges"): pitch sat more than 1° off a still subject 92% of the time. A move still stops
+    short. An offset whose 1 s average exceeds the 0.5° centre band is then closed at no more than
+    3°/s (slow enough never to pass the subject), until within 0.25°. Replayed on human-3/4/5:
+    more than 1° off while still went from 37/82/92% to 0.5/3.3/0%; passes 0/2 (2.5°)/0. The
+    band-only replay of human-5 matches its recording.
+- **Station facts for ADR-003 (2026-10-02).**
+  - The camera timestamp clock (libcamera's CLOCK_BOOTTIME) equals CLOCK_MONOTONIC to within 1.2
+    µs; there has been no suspend since boot.
+  - The installed stack is libcamera 0.7.2+rpt20260817 with picamera2 0.3.37.
+  - Production still runs the pre-ADR-002.2 yaw velocity PI and the stacked 140 ms lead; nothing
+    of ADR-003 is in production yet.
+
+## Servo takeover: owner rulings and measured facts (2026-10-02, local date)
+
+**Owner rulings (2026-10-02).** The working product comes first: probe on the real station, make it
+work, then test and harden. ADR-002.x architect documents are guidance only (the architect has no
+station access); the model must be adjusted from real responses. Close ADR-002.x before ADR-003, with
+limits that serve ADR-003's framing use. Full station authority with yaw/pitch speed below 100 RPM;
+high acceleration at low speed is acceptable. Production stack stays off until ADR-003 starts. Pitch
+control mode: best measured performance. Repeat tests: the cross-roller bearings are inconsistent.
+
+**Measured facts (station, 2026-10-02).** Procedure: [servo commissioning card](operations/servo-commissioning.md);
+evidence and numbers: [takeover report](ADR-002.2/reports/SERVO_TAKEOVER_2026-10-02.md).
+
+- GM6020 angle feedback has **current crosstalk**: reading = angle + g(angle)·i(t−2.1 ms), g periodic
+  (nine cycles per revolution, up to ±6.4 mrad/A). Uncompensated it caused every 14–17 Hz yaw limit
+  cycle at stiff gains. Calibrated table: [`config/servo/yaw_servo.json`](../config/servo/yaw_servo.json).
+- Yaw: inertia 0.03 A·s²/rad (open-loop excitation and chirp agree), loop delay ≈2 ms. Kinetic
+  friction ≈0.4–0.5 A at 20 deg/s, ≈0.3–0.4 A at 60 deg/s; breakaway after loaded rest can exceed
+  0.9 A; slowly rising force produces creep-and-restick, while a brief force reversal releases it.
+  Friction rises through a cold night and falls after a warm-up rotation. A localized bump near
+  240–255 deg absolute. The BNO085 gyro lags the encoder by ≈100 ms (not fused into the servo).
+- **Yaw current authority (owner ruling, 2026-10-02 later the same day):** up to 3 A peak (the CAN
+  protocol's full scale) and 1.62 A continuous (the GM6020 rating); 0.8 A is thermal *guidance* only,
+  not a limit. The servo enforces the peak and an RMS budget (≤1.62 A over 3 s); the 55 C motor
+  temperature trip is the thermal protection. Commissioning reports when sliding friction exceeds
+  the 0.8 A guidance.
+- **Commissioning is automatic** ([card](operations/servo-commissioning.md)): one command per axis
+  identifies the plant from a prior that assumes nothing, designs the gains with the simulator and
+  verifies them on the station. Measured by it on 2026-10-02: yaw inertia ≈0.04–0.047 A·s²/rad (the
+  0.03 above was an early hand estimate), crosstalk delay 1.18 ms, sliding friction 0.17–0.59 A at
+  0.25–2 deg/s falling to ≈0.3 A at 40–65 deg/s.
+- Pitch endstops (production homing logs, 2026-09-30, MechPos): A = −0.115 rad, B = −1.511 rad
+  (≈80 deg, not 60), midpoint −0.813 rad. Pitch rests unpowered where left. As-found native settings
+  on 2026-10-02: RunMode 3, LimitCur 5 A, SpdKp 4, SpdKi 0.05; after these sessions the drive is left
+  in RunMode 2 (production rewrites its own mode at start).
+- Commissioning releases under `run/releases/`: 92 on 2026-10-02 13:00 (19 GB with journals, 86 GB
+  free): the overnight `claude-*`/`yaw-*`/`pitch-*` ones and one per automatic run (`yaw-2026*`,
+  `pitch-2026*`). They are evidence and may be pruned by the owner. Production checkout and stack
+  untouched and stopped; station idle, both drives disabled, pitch parked at its window centre.
+- **Decoupling (measured):** the unpowered idle axis holds by its own friction. The pitch moved at
+  most 0.04 deg during 36 yaw sessions, the yaw 0.044 deg during pitch sessions. Commission pitch
+  first; it parks at its centre.
+- **commissiond's own pitch homing is not station-qualified.** Its torque-off rearm drops the loaded
+  pitch; commissioning uses production's homed window instead (see the card).
+
+## ADR-002.2 architect review priority (2026-10-01, local date)
+
+The owner instructed the agent to continue under [architect review 02](ADR-002.2/architect_review_02/00_START_HERE.md)
+and the [estimator recovery amendment](ADR-002.2/docs/09_ESTIMATOR_RECOVERY.md).
+The earlier [review 01](ADR-002.2/architect_review_01/ADR-002.2-independent-review.md)
+and [identification amendment](ADR-002.2/docs/08_IDENTIFICATION_REPAIR.md) remain history.
+Yaw is UNQUALIFIED; Candidate14 is NONDEPLOYABLE and was never physically run.
+Continue estimator repair, whole-run comparison and synthetic control verification
+while physical promotion is gated. A predictively accepted physical model and the
+applicable authorization are required before deployable gain synthesis or another
+physical controller trial. Review 02 authorizes no new motion, setting change or deployment.
+No further architect approval is required for this authorized offline work.
+
+The owner confirms that the GM6020 uses CAN current control; PWM diagnosis is excluded.
+Motor-specific firmware/applied settings, command scaling and the setup's physical
+stop/fault behaviour still require supported evidence before physical qualification.
+Existing limits and presence rulings below remain. Review 02 work has not contacted
+the station; historical ending-state records are not live status.
+
+## ADR-002.2 unattended startup ruling (2026-10-01, local date)
+
+**Retired by the owner on 2026-10-02:** a new tripod lowered the centre of mass (the station itself is unchanged)
+and the turret is much more robust, so the 30 degrees/s² yaw acceleration/braking limit below no longer applies; yaw is
+back to 60 degrees/s² (`config/turret_mixed.yaml`). Kept as history.
+
+Latest owner override: acceleration is guidance. Marginal exceedances and high IMU acceleration observations may pass and must not distract from ADR-002.2 tuning. Retain 30-degree/s² reference shaping and raw evidence, but disable the measured-current acceleration restriction for tuning when it blocks useful yaw drive. Keep true current, thermal, fresh-feedback and unsafe STOP protection. Higher-acceleration reference cases remain deferred until presence; incidental measured excursions do not block the present tuning path.
+
+The owner reports that nobody will be near the station and sets **30 degrees/s²** for both yaw acceleration and deceleration, including startup assistance and controlled braking. Use measured IMU acceleration, gyro and orientation to assess uneven vibration. The owner reports the pitch platform is balanced and higher-RPM steady rotation is stable; do not introduce a new speed cap for this request. Higher-acceleration hardware tests wait until the owner confirms presence around 18:00 local. Continue deterministic automatic ADR-002.2 tuning across low/high acceleration and low/high speed, with higher-acceleration physical cases deferred. Preserve current, thermal, fresh-feedback and unsafe STOP protection. Before another physical run, verify the acceleration-limiting path and record the actual response. Reference shaping alone does not certify actual body acceleration or vibration. Candidate11 ended at 2026-09-30 23:28:57 UTC; the 23:29:13 UTC query found no output owners. Its sampled acceleration and motion failures remain recorded, and the observed limiter arbitration is being repaired before more motion. This is a recorded state, not a replacement for a fresh ownership check.
+
+## ADR-002.2 只读盘点记录（2026-09-30，本地日期）
+
+2026-09-30最新主人指令：后续阶段2不生成或检查hash，不以agent新增的噪声、编码器
+差异或预期行程门槛拒绝标定观测；采用已有滤波并保留原始反馈。只做必要正常路径
+开发检查，直接开展实机标定。既有真实保护、有限会话及唯一输出owner保持有效。
+
+主人已授权阶段2，并确认无payload、pitch掉电保持原位、pitch总行程约60度且归零居中、
+yaw滑环无限转动；电流按电机datasheet，不另加人为上限，采集时记录电机温度。
+这些是主人提供的条件，不是当前模式/端点/停车资格的实测证明。
+
+一次只读SSH盘点已留证。原盘点中的`ps --ww`参数错误和可选目录列表错误已被发现；
+修正仅在本地验证。主人最新要求继续Step 2，不以此前失败作为门槛；置信百分比不是测试数推算的概率。
+主人另确认只有手动电源切断；未确认独立自动断电或电调通信丢失停车能力。
+2026-09-30 02:39:55–02:42:00 UTC，独立`c80f84a38e55.J5AR2G`采集release完成一次120秒baseline：
+yaw 120001帧、pitch STOP确认5806次、寄存器读回5805次，socket和接口丢包增量均0。
+未enable、未写mode、未发激励；production未启动。pitch实际读回mode=2、Iqf可读；
+gyro约50.09Hz且accuracy=0；pitch温度22.6°C、yaw温度原始字节28（单位未标定）。
+原始capture中的legacy yaw安培换算字段未获资格，离线分析只使用原始电流字节；修正只在本地验证。
+后续只读检查未见controller/IMU进程，retained homing缓存不存在；运动前仍须既有homing流程。
+已有日志显示最后一次yaw停车确认超时；不把后续`stopped cleanly`进程清理日志当作停车合格。
+完整状态及证据见[阶段2准备情况](ADR-002.2/reports/STAGE2_READINESS.md)
+（盘点工具与操作卡已于2026-10-02随ADR-002.x收尾删除，见git历史）。以下既有状态记录均需按其时间理解。
 
 ## 现状刷新（09-29 深夜，现读，非历史）
 

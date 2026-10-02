@@ -2,13 +2,17 @@
 #include "control/stop_evidence.hpp"
 #include "control/control_loop.hpp"
 
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/spdlog.h>
+#include <spdlog/async.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 #include "vision/vision_ingest.hpp"
@@ -22,6 +26,37 @@ constexpr double kAtRestVelRadS = 0.05;
 // Position tolerance for "at the ready pose".
 constexpr double kReadyPosTolRad = 0.01;
 constexpr TimeNs kYawReferenceStationaryNs = 500'000'000;
+namespace {
+// A fixed-width tag for the trace record: the archive is read by a parser, not by a person, so the
+// value is a NUL-terminated fixed buffer rather than a dangling pointer into a temporary string.
+// Both tuning gates check the same conditions, and a refusal that names the one that fired is the
+// difference between an operator re-deriving the state by hand at 1 am and reading it out of the ack.
+// The park gate learned this lesson on 2026-09-29; these two gates had not.
+void collect_missing(std::string& missing, const char* what, bool ok) {
+  if (!ok) {
+    if (!missing.empty()) missing += "+";
+    missing += what;
+  }
+}
+
+template <typename... Args>
+void collect_missing(std::string& missing, const char* what, bool ok, Args&&... rest) {
+  if (!ok) {
+    if (!missing.empty()) missing += "+";
+    missing += what;
+  }
+  collect_missing(missing, rest...);
+}
+
+template <size_t N>
+void fill_tag(
+    std::array<char, N>& into, std::string_view text) {
+  const size_t n = text.size() < N - 1 ? text.size() : N - 1;
+  for (size_t i = 0; i < n; ++i) into[i] = text[i];
+  into[n] = '\0';
+}
+}  // namespace
+
 constexpr double kYawReferenceStationaryRadS = 0.5 * kDeg2Rad;
 constexpr double kYawReferencePositionToleranceRad = 0.5 * kDeg2Rad;
 // Pitch homing can nudge the free yaw axis while its GM6020 output is zero.
@@ -37,6 +72,28 @@ bool ControlLoop::position_ready() const {
 
 ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
     : cfg_(std::move(cfg)), backend_(std::move(backend)) {
+  if (const char* hold = std::getenv("OTA_TEST_PITCH_HOLD"); hold && *hold) {
+    const std::string h(hold);
+    pitch_test_hold_ = h == "motor" ? PitchTestHold::Motor : h == "servo" ? PitchTestHold::Servo
+                                                                          : PitchTestHold::Off;
+    spdlog::warn("TEST MODE OTA_TEST_PITCH_HOLD={}: pitch is held fixed by {}; tracking moves yaw only",
+                 h, pitch_test_hold_ == PitchTestHold::Motor ? "the CyberGear's own position mode"
+                    : pitch_test_hold_ == PitchTestHold::Servo ? "the ADR-002.2 pitch servo" : "nothing (unknown value, ignored)");
+  }
+  if (const char* trace = std::getenv("OTA_TRACKING_TRACE"); trace && *trace) {
+    // ADR-003 D17 tracking trace on the async pool (no disk I/O on the control thread).
+    tracking_trace_ = spdlog::get("tracking_trace");
+    if (!tracking_trace_) {
+      // Non-blocking like the main logger: when the shared queue is full a trace line is dropped,
+      // the control thread never waits for storage. Rotating: the launcher puts it in /tmp (RAM) and
+      // tracking writes ~160 kB/s -- 100 MB after an afternoon on the station, 2026-10-02. Two 32 MB
+      // files keep the last ~7 minutes of tracking.
+      tracking_trace_ = spdlog::rotating_logger_mt<spdlog::async_factory_nonblock>(
+          "tracking_trace", trace, 32u * 1024 * 1024, 1);
+      tracking_trace_->set_pattern("%v");
+      tracking_trace_->flush_on(spdlog::level::warn);
+    }
+  }
   SupervisorParams sp;
   sp.feedback_max_age_ms = cfg_.feedback_max_age_ms;
   sp.deadline_max_us = cfg_.deadline_max_us;
@@ -68,7 +125,7 @@ bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
         : backend_->enter_position_mode(a, limit_spd, e);
     if (!ok) {
       err = std::string(axis_name(a)) + ": " + e;
-      deenergize_all();
+      stop_axes_safely();
       return false;
     }
   }
@@ -83,7 +140,7 @@ bool ControlLoop::enter_speed_mode_all(
     std::string e;
     if (!backend_->enter_speed_mode(a, limit_cur_a[i], e)) {
       err = std::string(axis_name(a)) + ": " + e;
-      deenergize_all();
+      stop_axes_safely();
       return false;
     }
   }
@@ -148,7 +205,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
     limit_cur[i] = homing_->initial_current_limit(static_cast<AxisId>(i));
     if (!std::isfinite(limit_cur[i]) || limit_cur[i] <= 0.0) {
       err = "homing requires a positive initial current limit for each axis";
-      deenergize_all();
+      stop_axes_safely();
       return false;
     }
   }
@@ -201,7 +258,7 @@ bool ControlLoop::start_motor_recovery(std::string& err, bool then_home) {
     sync_controllers_to_mode(OperatingMode::Manual);
   }
   if (!backend_->begin_motor_recovery(err)) {
-    deenergize_all();
+    stop_axes_safely();
     fault_reason_ = "RECOVERY FAILED: " + err;
     phase_ = Phase::Fault;
     return false;
@@ -226,12 +283,16 @@ bool ControlLoop::start_hold(std::string& err) {
 }
 
 bool ControlLoop::start_parking(std::string& err) {
+  // This entry can run between ticks after the main loop exits. Passing its
+  // previous cycle clock to the mixed backend can reject a NEWER CAN frame
+  // before the freshness check below ever sees a finite position.
+  const auto stop_snapshot_clock = backend_->uses_monotonic_feedback_clock() ? now_monotonic_ns() : now_ns_;
   if (backend_->supports_continuous_yaw()) {
     // A shutdown request is also a stop request, even when later preconditions
     // refuse the park. Send bounded zero-speed commands immediately; no API
     // claim is made that the GM6020 is electrically disabled.
     backend_->command_velocity(AxisId::Yaw, 0.0);
-    const auto pitch_stop = backend_->snapshot(AxisId::Pitch, now_ns_);
+    const auto pitch_stop = backend_->snapshot(AxisId::Pitch, stop_snapshot_clock);
     if (pitch_stop.has_feedback && std::isfinite(pitch_stop.q_rad)) {
       if (pitch_stop.in_speed_mode)
         backend_->command_velocity(AxisId::Pitch, 0.0);
@@ -272,8 +333,8 @@ bool ControlLoop::start_parking(std::string& err) {
       err = "cannot stop/park: GM6020 temperature/fault status is unavailable and no reviewed runtime health policy is enabled";
       return false;
     }
-    const auto pitch = backend_->snapshot(AxisId::Pitch, now_ns_);
-    const auto yaw = backend_->snapshot(AxisId::Yaw, now_ns_);
+    const auto pitch = backend_->snapshot(AxisId::Pitch, stop_snapshot_clock);
+    const auto yaw = backend_->snapshot(AxisId::Yaw, stop_snapshot_clock);
     // CAN feedback can arrive after the last control step but before this
     // shutdown request. Judge both snapshots against a clock sample taken
     // after reading them, rather than the previous step's timestamp.
@@ -410,9 +471,10 @@ bool ControlLoop::start_parking(std::string& err) {
   // Never remove torque to prepare a park. Retain each drive's verified
   // running mode; a disabled/unknown drive needs explicit recovery and Home.
   for (int i = 0; i < kAxisCount; ++i) {
-    const auto s = backend_->snapshot(static_cast<AxisId>(i), now_ns_);
-    if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now_ns_ ||
-        now_ns_ - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
+    const auto s = backend_->snapshot(static_cast<AxisId>(i), stop_snapshot_clock);
+    const auto freshness_clock=backend_->uses_monotonic_feedback_clock() ? now_monotonic_ns() : now_ns_;
+    if (!s.has_feedback || s.rx_ns <= 0 || s.rx_ns > freshness_clock ||
+        freshness_clock - s.rx_ns > cfg_.feedback_max_age_ms * 1'000'000LL ||
         s.faults || s.disabled || (!s.in_speed_mode && !s.in_position_mode)) {
       err = "cannot park: fresh healthy running drives required; Recover Motors then Home";
       return false;
@@ -575,6 +637,8 @@ void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   }
 }
 
+// Explicit release of both axes: operator stop and shutdown only (main.cpp, stop_motion). Whether
+// those should park or hold an unbalanced pitch instead is open for the owner (STATION_OPERATIONS.md).
 void ControlLoop::deenergize_all() {
   backend_->invalidate_calibration();
   homed_ = false;
@@ -584,6 +648,25 @@ void ControlLoop::deenergize_all() {
     yaw_reference_stationary_since_ns_ = 0;
   }
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
+}
+
+// Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a failed homing, mode
+// transition or recovery stops the axes, but releases only one that cannot be held. An unbalanced
+// pitch released near an end stop falls onto it. Motor recovery's own disable (to clear drive
+// faults) is the backend's begin_motor_recovery, not this.
+void ControlLoop::stop_axes_safely() {
+  backend_->invalidate_calibration();
+  homed_ = false;
+  pitch_homed_ = false;
+  if (backend_->supports_continuous_yaw()) {
+    yaw_session_reference_valid_ = false;
+    yaw_reference_stationary_since_ns_ = 0;
+  }
+  for (int i = 0; i < kAxisCount; ++i) {
+    const auto a = static_cast<AxisId>(i);
+    if (backend_->fault_releases_axis(a)) backend_->deenergize(a);
+    else backend_->hold_axis(a);
+  }
 }
 
 bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
@@ -721,10 +804,11 @@ bool ControlLoop::finalize_homing() {
   if (backend_->supports_continuous_yaw()) {
     if (!yaw_session_reference_valid_) return false;
     ready_raw_[ix(AxisId::Yaw)] = yaw_session_reference_rad_;
-    // Establish the GM6020 voltage-position session only after the bounded
-    // pitch axis has completed real physical homing.
+    // Select the host interface matching the service controller. Current-mode
+    // yaw still uses 0x1FE; this choice determines whether the common position
+    // P + velocity feed-forward reaches its local velocity PI.
     std::string err;
-    if (backend_->transition_mode(AxisId::Yaw, true,
+    if (backend_->transition_mode(AxisId::Yaw, !cfg_.service_speed_control,
                                   cfg_.hold_speed_rad_s, now_ns_, err) !=
         MotorBackend::Transition::Complete) {
       spdlog::error("continuous yaw session enable failed after pitch homing: {}", err);
@@ -750,8 +834,53 @@ HomingFeedback ControlLoop::to_feedback(const AxisSnapshot& s, double vel_rad_s)
 
 Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   backend_->heartbeat();
+  if (pitch_gain_trial_pending_) {
+    std::string error;
+    const auto result=backend_->poll_pitch_speed_loop_gain_update(now_ns,error);
+    if (result != MotorBackend::Transition::Pending) {
+      pitch_gain_trial_pending_=false;
+      const bool was_restoring=param_pitch_restoring_;
+      param_pitch_restoring_=false;
+      const auto regs=backend_->pitch_register_diagnostics();
+      const bool readable=regs.registers[4].valid&&regs.registers[5].valid;
+      // The latency the ADR wants recorded apart from feedback age: how long the drive took to answer
+      // a register read. A stale register answer is not evidence about the value we wrote.
+      const double readback_ms = readable && regs.registers[4].request_ns
+          ? double(regs.registers[4].rx_ns - regs.registers[4].request_ns)/1e6 : -1.0;
+      std::string reason = readable
+          ? param_tx_.verify(pitch_gain_values(regs.registers[4].value,regs.registers[5].value))
+          : (param_tx_.verify({}), std::string("register readback unavailable"));
+      if (!was_restoring && !reason.empty()) {
+        // Same rule as the yaw path: "restoring" is not a promise somebody else keeps. The loop tries
+        // to put the previous pair back immediately; the poll verifies whichever write is in flight.
+        std::string restore_error;
+        if (backend_->begin_pitch_speed_loop_gain_update(param_pitch_previous_kp_,
+                                                        param_pitch_previous_ki_,
+                                                        restore_error) ==
+            MotorBackend::Transition::Pending) {
+          pitch_gain_trial_pending_ = true;
+          param_pitch_restoring_ = true;
+          reason += "; restore queued";
+        } else {
+          reason += "; the restore was refused too, motion stays gated";
+        }
+      }
+      ack_command("pitch_control_trial", reason.empty(),
+          (was_restoring ? "pitch restore " : "pitch speed gains ") +
+          (reason.empty() ? std::string("read back and verified; session only, unqualified; revision=") +
+                              std::to_string(param_tx_.revision()) + " effective_hash=" +
+                              param_tx_.applied_hash() + " register_readback_ms=" +
+                              control::canonical_number(readback_ms)
+                        : "did not verify: " + reason + " (register_readback_ms=" +
+                              control::canonical_number(readback_ms) + "); motion stays gated"));
+    }
+  }
+  backend_->poll_pitch_register_diagnostics(now_ns);
   if (backend_->watchdog_fault() && phase_ != Phase::Recovering) {
-    deenergize_all();
+    // Release only an axis that cannot be held (owner ruling 2026-10-02): the Fault phase brakes and
+    // holds every other one, energised. An unbalanced pitch that is released falls.
+    for (auto axis : {AxisId::Pitch, AxisId::Yaw})
+      if (backend_->watchdog_fault_axis(axis) && backend_->fault_releases_axis(axis)) backend_->deenergize(axis);
     if (phase_ != Phase::Fault) {
       // The trip reason is published by the guard that latched it, when there is
       // one. "control deadline, feedback, or motor health" is a family of ten
@@ -761,9 +890,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       if (trip.valid) {
         telemetry_.push_event(now_ns, telemetry::Event::MotorWatchdogTrip,
                               std::string(trip.detail));
-        fault(std::string("independent motor watchdog trip: ") + trip.condition);
+        fault(std::string("independent motor watchdog trip: ") + trip.condition, false);
       } else {
-        fault("independent motor watchdog: control deadline, feedback, or motor health");
+        fault("independent motor watchdog: control deadline, feedback, or motor health", false);
       }
     }
   }
@@ -1142,6 +1271,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         bounds.q_yaw_hold_rad = sp[ix(AxisId::Yaw)].q_rad;
         bounds.q_pitch_hold_rad = sp[ix(AxisId::Pitch)].q_rad;
         bounds.axis_limits = {runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
+        bounds.clamp_pitch_to_travel = tracking_->uses_core();
         at_input_.los_feasible = !ref_mgr_->resolve(probe, bounds).target_unreachable;
       }
       // §13/§16, once per cycle and not once per frame. The block that normally refreshes
@@ -1235,6 +1365,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     tracking_ref_ = ref_mgr_
                       ? ref_mgr_->resolve(last_intent_, intent_limits(now_ns))
                       : ReferenceRequest{};
+    last_ref_was_hold_ = tracking_ref_.source == ReferenceSource::Hold;
+    if (tracking_ref_.pitch_at_travel_limit != pitch_at_travel_limit_) {
+      pitch_at_travel_limit_ = tracking_ref_.pitch_at_travel_limit;
+      spdlog::info(pitch_at_travel_limit_ ? "tracking: subject beyond the pitch travel; pitch parks at its limit, yaw follows"
+                                          : "tracking: subject back inside the pitch travel");
+    }
     if (!ref_mgr_) {
       // Cannot happen on any path that reaches here (it is built in
       // enable_tracking), but the alternative is dereferencing an optional on the
@@ -1317,6 +1453,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   in.cycle_overrun_us = overrun_us;
   in.deadline_miss_count = deadline_miss_count_;
   in.allow_unknown_motor_health = cfg_.allow_unknown_motor_health;
+  in.servo_hold_reason = backend_->servo_hold_reason();
 
   // 4. Safety decision (authoritative).
   last_decision_ = supervisor_.evaluate(in);
@@ -1371,6 +1508,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   // Was the previous cycle a shaped move? Captured before it is cleared below, so the limiter knows
   // it is starting fresh without needing a separate "engagement started" event from every caller.
   const bool ref_lim_was_engaged = ref_lim_engaged_;
+  control::ReferenceLimiter ref_lim_prev[kAxisCount];
+  std::copy(std::begin(ref_lim_), std::end(ref_lim_), std::begin(ref_lim_prev));
   ref_lim_engaged_ = false;
   bool tracking_velocity_control = false;
   double tracking_command_rate[kAxisCount]{};
@@ -1391,7 +1530,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const auto result = backend_->poll_motor_recovery(now_ns, cfg_.motor_overtemp_c, detail);
       if (result == MotorBackend::Transition::Failed) {
         backend_->cancel_motor_recovery();
-        deenergize_all();
+        stop_axes_safely();
         phase_ = Phase::Fault;
         fault_reason_ = "RECOVERY FAILED: " + detail;
         recovery_then_home_ = false;
@@ -1487,7 +1626,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         std::string e;
         const auto status = backend_->transition_mode(axis, false, homing_->initial_current_limit(axis), now_ns, e,
             cfg_.homing_speed_ki,cfg_.homing_speed_kp,cfg_.homing_mode_displacement_check);
-        if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+        if (status == MotorBackend::Transition::Failed) { stop_axes_safely(); fault(e); }
         else if (status == MotorBackend::Transition::Complete) ++homing_init_axis_;
         break;
       }
@@ -1507,15 +1646,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                   ? cfg_.park.limit_cur_a[homing_final_axis_] : cfg_.hold_speed_rad_s, now_ns, e,
               cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp,
               cfg_.homing_mode_displacement_check);
-          if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+          if (status == MotorBackend::Transition::Failed) { stop_axes_safely(); fault(e); }
           else if (status == MotorBackend::Transition::Complete) ++homing_final_axis_;
         } else if (finalize_homing()) phase_ = Phase::Hold;
-        else { deenergize_all(); fault("homing results invalid"); }
+        else { stop_axes_safely(); fault("homing results invalid"); }
         break;
       }
       const AxisId a = homing_->active_axis();
       if (backend_->supports_continuous_yaw() && a == AxisId::Yaw) {
-        deenergize_all();
+        stop_axes_safely();
         fault("continuous yaw cannot be endpoint homed; configure a pitch-only homing plan");
         break;
       }
@@ -1553,7 +1692,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
         pending_homing_ds_.reset();
         rearmed = status == MotorBackend::Transition::Complete;
-        if (!rearmed) { deenergize_all(); fault("homing mode transition: " + e); }
+        if (!rearmed) { stop_axes_safely(); fault("homing mode transition: " + e); }
       }
       if (rearmed) {
         homing_motion_.expect(a,ds,sp[ix(a)].q_rad);
@@ -1616,7 +1755,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             sp[ix(a)].torque_nm, ds.velocity_rad_s, ds.message);
       }
       if (homing_->failed()) {
-        deenergize_all();
+        stop_axes_safely();
         fault("homing failed: " + homing_->fail_reason());
       }
       break;
@@ -1633,7 +1772,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             mode_mgr_.mode() == OperatingMode::Manual;
         const bool damped_tracking = cfg_.service_speed_control &&
             tracking_ref_.is_tracking_reference && tracking_;
-        const auto tracking_rates = damped_tracking ? tracking_->joint_motion_rates(
+        // ADR-003: with the tracking core, Level 1 owns the reference and its goal comes from the
+        // core's own estimator through the same LOS->joint solver; the per-axis limits computed
+        // below are its envelope this tick.
+        const bool core_tracking = damped_tracking && tracking_->uses_core() && !response_probe;
+        double core_v[kAxisCount]{}, core_a[kAxisCount]{}, core_j[kAxisCount]{};
+        const auto tracking_rates = damped_tracking && !core_tracking ? tracking_->joint_motion_rates(
             tracking_ref_.q_yaw_rad, tracking_ref_.q_pitch_rad) : std::array<double,2>{};
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
@@ -1684,13 +1828,74 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double jerk = (cfg_.service_speed_control
               ? std::min(cfg_.j_brake_rad_s3,service_j) : cfg_.j_brake_rad_s3)
               * std::clamp(last_intent_.jerk_scale,0.0,1.0);
-          if (damped_tracking || response_probe) {
+          if (core_tracking) {
+            // Owner ruling 2026-10-02: in AUTO_TRACK only the 100 RPM safety cap and physical
+            // capability (the tracking asset's Level-1 limits) bound the reference; the motion
+            // profile does not. Derating still applies; travel is kept by Level 1's own boundary
+            // braking against this cycle's soft envelope, and the envelope keeps final authority.
+            const auto& c = tracking_->core()->parameters().level1.axis[i == ix(AxisId::Yaw) ? 0 : 1];
+            const double derate = last_decision_.action == SafetyAction::Derate ? cfg_.derate_factor : 1.0;
+            core_v[i] = c.v_max * derate; core_a[i] = c.a_max * derate; core_j[i] = c.j_max;
+            lim[i] = core_v[i];
+          } else if (damped_tracking || response_probe) {
             q_ref[i] = control::track_reference(ref_lim_[i], solved,
                 tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk,
                 response_probe ? response_probe_omega_ : cfg_.tracking_reference_omega);
           } else {
-            q_ref[i] = control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
+            // A hold's target does not move: its velocity is zero, not an estimate carried over
+            // from whatever the reference was following a tick ago.
+            q_ref[i] = tracking_ref_.source == ReferenceSource::Hold
+                ? control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk,0.0)
+                : control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
           }
+        }
+        if (core_tracking) {
+          const int Y = ix(AxisId::Yaw), P = ix(AxisId::Pitch);
+          // Station, 2026-10-02: tracking dropped to brake-to-hold for ~150 ms along a branch that
+          // never cleared core_engaged_; on resuming, Level 1 integrated the gap from its stale
+          // state and stepped the yaw reference 5 deg ahead of the stopped axis.
+          if (!core_engaged_ || now_ns - core_last_tick_ns_ > 2 * period_ns) {
+            // The seed is the reference published last tick, so it belongs to last tick's time:
+            // stamped `now`, the first Level-1 step integrates nothing and repeats it (a one-tick stall).
+            tracking_->core_engage(now_ns - period_ns, {ref_lim_[Y].q_rad, ref_lim_[P].q_rad}, {ref_lim_[Y].v_rad_s, ref_lim_[P].v_rad_s},
+                                   {ref_lim_[Y].a_rad_s2, ref_lim_[P].a_rad_s2});
+            core_engaged_ = true;
+          }
+          // Core axis order: 0 yaw, 1 pitch. Travel is this cycle's soft envelope; an unbounded
+          // axis gets no travel clamp (equal bounds) and its branch follows the reference.
+          const auto bounds = [&](int i, double& lo, double& hi) {
+            if (cycle_limits[i].valid) { lo = cycle_limits[i].q_soft_min_rad; hi = cycle_limits[i].q_soft_max_rad; }
+            else lo = hi = 0.0;
+          };
+          double ylo, yhi, plo, phi;
+          bounds(Y, ylo, yhi); bounds(P, plo, phi);
+          tracking_->core_limits(0, core_v[Y], core_a[Y], core_j[Y], ylo, yhi);
+          tracking_->core_limits(1, core_v[P], core_a[P], core_j[P], plo, phi);
+          tracking_->core_travel({ylo, yhi, plo, phi});
+          // The supervisor brakes any axis that can no longer stop before its soft limit under its
+          // own braking model (a_brake, j_brake, stop margin). Level 1 must stay inside that, not
+          // ride its own stiffer curve beside it: station, 2026-10-02 17:05:52, pitch at 44 deg/s
+          // 18 deg above its soft minimum -> BRAKE. The same governor as the legacy speed path,
+          // with braking no stronger than Level 1 itself can execute.
+          for (const auto [i, c] : {std::pair{Y, 0}, std::pair{P, 1}}) {
+            const control::BoundaryGovernor governor{std::min(cfg_.a_brake_rad_s2, core_a[i]),
+                std::min(cfg_.j_brake_rad_s3, core_j[i]), .20, cfg_.stop_margin_rad};
+            const auto b = governor.at(sp[i].q_rad, cycle_limits[i], core_v[i], ref_lim_[i].a_rad_s2, v_est_[i]);
+            tracking_->core_speed_bounds(c, b.negative_speed, b.positive_speed);
+          }
+          const auto rec = tracking_->core_tick(now_ns, {sp[Y].q_rad, sp[P].q_rad});
+          core_last_tick_ns_ = now_ns;
+          const auto& r = rec.reference;
+          for (const auto [i, c] : {std::pair{Y, 0}, std::pair{P, 1}}) {
+            ref_lim_[i].q_rad = r.q[c]; ref_lim_[i].v_rad_s = r.v[c]; ref_lim_[i].a_rad_s2 = r.a[c];
+            ref_lim_[i].initialised = true;
+            servo_jerk_[i] = r.j[c];
+            q_ref[i] = r.q[c];
+          }
+          trace_core_tick(rec, now_ns);
+        } else {
+          core_engaged_ = false;
+          servo_jerk_[0] = servo_jerk_[1] = 0.0;
         }
         ref_lim_engaged_ = true;
         break;
@@ -1739,6 +1944,24 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         } else {
           lim[i] = 0.0;
         }
+      }
+      // The ADR-002.2 servos follow what they are handed at full authority, so a hold has to be a
+      // reference that brakes, not a pose. Station, 2026-10-02: AUTO_TRACK lost its subject 36 deg/s
+      // into a slew, the latched hold became a position step, and the yaw servo stopped the axis at
+      // its current limit. The legacy speed loop shaped this itself; for the servos the limiter does,
+      // continuing from wherever the reference is, under the braking limits that loop used.
+      // The pose was latched where this reference comes to rest (intent_limits), and the speed
+      // cap never undercuts the speed it carries in: lowering the cap below it is a one-tick clamp.
+      if (servo_holds()) {
+        const double dt = static_cast<double>(period_ns) * 1e-9;
+        for (int i = 0; i < kAxisCount; ++i) {
+          const auto [a, j] = hold_brake_limits(i);
+          if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
+          const double cap = std::max(hold_speed_effective(), std::abs(ref_lim_[i].v_rad_s));
+          q_ref[i] = control::limit_reference(ref_lim_[i], q_ref[i], dt, cap, a, j, 0.0);
+          servo_jerk_[i] = 0.0;
+        }
+        ref_lim_engaged_ = true;
       }
       break;
     }
@@ -2007,7 +2230,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             in.axes[i].feedback_age_ms > cfg_.feedback_max_age_ms ||
             !std::isfinite(sp[i].q_rad) || !std::isfinite(v_est_[i]);
       if (invalid_feedback) {
-        fail_parking("stale or untrusted motor feedback during parking", true);
+        // "stale feedback" on its own is a family of causes. Which axis, how old, against which
+        // limit: a park that withholds its release owes the operator the measurement rather than the
+        // category, and the number is also what separates a regression from a cold drive.
+        std::string detail;
+        for (int i = 0; i < kAxisCount; ++i) {
+          if (i) detail += ", ";
+          detail += (i ? "yaw=" : "pitch=");
+          detail += in.axes[i].has_feedback
+                        ? std::to_string(static_cast<int>(in.axes[i].feedback_age_ms)) + "ms"
+                        : "no_feedback";
+          if (!std::isfinite(sp[i].q_rad)) detail += "(position nan)";
+          if (!std::isfinite(v_est_[i])) detail += "(velocity nan)";
+        }
+        fail_parking("stale or untrusted motor feedback during parking (feedback limit " +
+                     std::to_string(cfg_.feedback_max_age_ms) + " ms; " + detail + ")", true);
         break;
       }
       if (!cfg_.park.require_independent_position && park_->complete()) {
@@ -2165,12 +2402,51 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;  // hold (no motion)
   }
 
+  // ADR-003 isolation test (OTA_TEST_PITCH_HOLD): pitch fixed at its first READY pose.
+  pitch_test_transitioning_ = false;
+  // Only once at the ready pose: the Hold phase also carries the move there after homing, and a
+  // latch taken then would pin pitch at its homing end point.
+  if (pitch_test_hold_ != PitchTestHold::Off && phase_ == Phase::Hold && position_ready() &&
+      (pitch_test_latched_ || at_ready_)) {
+    const int P = ix(AxisId::Pitch);
+    if (!pitch_test_latched_) {
+      pitch_test_q_ = sp[P].q_rad;
+      pitch_test_latched_ = true;
+      spdlog::warn("TEST MODE: pitch latched at {:+.5f} rad", pitch_test_q_);
+    }
+    q_ref[P] = pitch_test_q_;
+    lim[P] = hold_speed_effective();
+    ref_lim_[P].reset_at(pitch_test_q_);
+    servo_jerk_[P] = 0.0;
+    if (pitch_test_hold_ == PitchTestHold::Motor && !pitch_test_in_position_) {
+      std::string err;
+      const auto t = backend_->transition_mode(AxisId::Pitch, true, hold_speed_effective(), now_ns, err);
+      if (t == MotorBackend::Transition::Complete) {
+        pitch_test_in_position_ = true;
+        spdlog::warn("TEST MODE: pitch now in CyberGear position mode, holding {:+.5f} rad", pitch_test_q_);
+      } else if (t == MotorBackend::Transition::Pending) {
+        pitch_test_transitioning_ = true;
+      } else {
+        fault("test pitch hold: CyberGear position mode refused: " + err);
+      }
+    }
+  }
+
   // 6. Apply the safety action (overrides the phase reference), then command.
   bool any_disable = false;
   for (int i = 0; i < kAxisCount; ++i) {
     const AxisId a = static_cast<AxisId>(i);
     double qr = q_ref[i], ls = lim[i];
+    const double requested_velocity = i == ix(AxisId::Yaw) ? last_intent_.v_yaw_rad_s : last_intent_.v_pitch_rad_s;
+    const double requested_position = i == ix(AxisId::Yaw) ? last_intent_.q_yaw_rad : last_intent_.q_pitch_rad;
+    backend_->set_motion_intent(a, phase_ == Phase::Hold && position_ready() &&
+        (last_decision_.action == SafetyAction::Allow || last_decision_.action == SafetyAction::Derate) &&
+        last_intent_.type != IntentType::Hold && last_intent_.live_at(now_ns) &&
+        (manual_out_.lease_active ? std::abs(requested_velocity) > .02*kDeg2Rad :
+         ((last_intent_.has_joint_target && std::abs(requested_position-sp[i].q_rad) > .15*kDeg2Rad) ||
+          last_intent_.has_los || last_intent_.has_world_elevation)));
     if (recovery_cycle) continue;  // never command from pre-recovery snapshots
+    if (pitch_test_transitioning_ && a == AxisId::Pitch) continue;  // the mode switch owns pitch
     if (mixed_parking_handled) continue;  // mixed stop issued direct, topology-specific safe outputs above
     bool do_command = true;
     switch (last_decision_.action) {
@@ -2231,7 +2507,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                   std::clamp(last_intent_.velocity_scale, 0.0, 1.0));
           }
           if (last_decision_.action == SafetyAction::Derate) cap *= cfg_.derate_factor;
-          const double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+          double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
+          // A leased jog carries an explicit velocity. Its measured-pose
+          // waypoint is bounded to prevent queued travel when blocked; its
+          // derivative must not replace the operator's requested velocity.
+          if (a == AxisId::Yaw && manual_out_.lease_active && last_intent_.source == MotionSource::Manual &&
+              last_intent_.live_at(now_ns) && !response_probe_until_ns_)
+            ff = i == ix(AxisId::Yaw) ? last_intent_.v_yaw_rad_s : last_intent_.v_pitch_rad_s;
           const control::BoundaryGovernor boundary{
               std::min(cfg_.a_brake_rad_s2,profile.maximum.acceleration),
               std::min(cfg_.j_brake_rad_s3,profile.maximum.jerk),.20,cfg_.stop_margin_rad};
@@ -2255,6 +2537,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           }
           motion_negative_speed[i] = b.negative_speed;
           motion_positive_speed[i] = b.positive_speed;
+          if (backend_->servo_available(a)) {
+            // ADR-003 3b: the ADR-002.2 servo executes the one reference this loop owns -- the
+            // limiter's q/v/a this tick (or the latched hold pose at rest) -- at the axis's own
+            // feedback rate. No speed loop is closed here; Brake, EmergencyStop and Fault keep
+            // the legacy paths below, which release the servo.
+            MotorBackend::ServoReference r;
+            r.t_ns = now_ns;
+            r.q = qr;
+            if (ref_lim_engaged_) { r.v = ref_lim_[i].v_rad_s; r.a = ref_lim_[i].a_rad_s2; r.j = servo_jerk_[i]; }
+            r.valid_s = 4 * static_cast<double>(period_ns) * 1e-9;
+            if (cycle_limits[i].valid) { r.q_min = cycle_limits[i].q_soft_min_rad; r.q_max = cycle_limits[i].q_soft_max_rad; }
+            speed_servo_[i].reset();
+            if (backend_->command_reference(a, r)) {
+              if (tracking_ref_.is_tracking_reference) {
+                tracking_velocity_control = true;
+                tracking_command_rate[i] = r.v;
+              }
+              service_velocity_control = true;
+              service_command_rate[i] = r.v;
+              continue;
+            }
+            // Not engaged (feedback not fresh, a guard holding): the legacy path below this tick.
+          }
           double velocity = speed_servo_[i].step(qr, ff, sp[i].q_rad, cap,
               static_cast<double>(period_ns)*1e-9,
               // Allow the servo to follow the bounded reference profile and
@@ -2277,6 +2582,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           service_velocity_control = true;
           service_command_rate[i] = velocity;
           backend_->command_velocity(a, velocity);
+        } else if (phase_ == Phase::Hold && servo_holds() &&
+                   (last_decision_.action == SafetyAction::Brake ||
+                    last_decision_.action == SafetyAction::Hold) &&
+                   servo_stop(i, a, ref_lim_prev[i], period_ns, now_ns, cycle_limits[i], sp[i].q_rad, v_est_[i])) {
+          // The engaged servo executes the supervisor's stop. Station, 2026-10-02 17:05:52: the
+          // zero-speed command below released the yaw servo with the axis moving, the legacy speed
+          // loop could not take it over (velocity_loop_invalid) and the station faulted.
+          service_velocity_control = true;
+          service_command_rate[i] = ref_lim_[i].v_rad_s;
         } else if (phase_ == Phase::Fault || (last_decision_.action != SafetyAction::Allow &&
                    !(phase_ == Phase::Parking && last_decision_.action == SafetyAction::Derate))) {
           speed_servo_[i].reset();
@@ -2338,6 +2652,46 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const AxisId axis = static_cast<AxisId>(i);
       rec.backend_cmd[i] = backend_->diag_commanded_speed_rad_s(axis);
       rec.drive_out[i] = backend_->diag_output(axis);
+      const auto evidence = backend_->output_evidence(axis);
+      rec.tx_ns[i] = evidence.tx_ns;
+      rec.tx_seq[i] = evidence.tx_seq;
+      rec.output_requested[i] = evidence.requested;
+      rec.drive_out[i] = evidence.successful;
+      rec.pi_integral[i] = evidence.integral;
+      rec.pi_velocity[i] = evidence.velocity_estimate;
+      rec.pi_kp[i] = evidence.kp;
+      rec.pi_ki[i] = evidence.ki;
+      rec.current_cap[i] = evidence.current_cap;
+      rec.rx_velocity_20[i] = evidence.rx_velocity_20;
+      rec.rx_velocity_30[i] = evidence.rx_velocity_30;
+      rec.rx_velocity_40[i] = evidence.rx_velocity_40;
+      rec.velocity_window_ms[i] = evidence.velocity_window_ms;
+      rec.friction_a[i] = evidence.friction_a;
+      rec.friction_state[i] = evidence.friction_state;
+      rec.friction_exhausted[i] = evidence.friction_exhausted;
+      rec.output_reason[i] = evidence.reason;
+      rec.command_kind[i] = evidence.command_kind;
+      rec.rx_seq[i] = sp[i].rx_seq;
+      rec.encoder_raw[i] = sp[i].encoder_raw;
+      rec.current_raw[i] = sp[i].current_raw_valid ? sp[i].current_raw : NAN;
+      rec.enabled_state[i] = sp[i].enabled_state;
+    }
+    // §5: every archived tick names the parameter set it ran under. The revision and both hashes come
+    // from the transaction, so a tick recorded while an exchange was in flight carries the candidate's
+    // expected hash and a state that says so: the archive cannot quietly present an unverified tick as
+    // though it had run under the verified set.
+    rec.param_revision = param_tx_.revision();
+    fill_tag(rec.param_applied_hash, param_tx_.applied_hash());
+    fill_tag(rec.param_context, param_context_tag_);
+    fill_tag(rec.param_expected_hash, param_tx_.expected_hash());
+    fill_tag(rec.param_state, param_tx_.state_name());
+    const auto pitch_registers = backend_->pitch_register_diagnostics();
+    for (int i=0;i<6;++i) {
+      const auto& sample=pitch_registers.registers[i];
+      rec.pitch_register_value[i]=sample.valid ? sample.value : NAN;
+      rec.pitch_register_request_ns[i]=sample.request_ns;
+      rec.pitch_register_rx_ns[i]=sample.rx_ns;
+      rec.pitch_register_status[i]=sample.status;
     }
     // Position-derived acceleration / jerk (C1, A.1): the trustworthy motion
     // derivatives for smoothness observation and jitter-threshold tuning.
@@ -2364,7 +2718,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // snapshot's NaN here, and the serializer renders that as null.
       rec.current_a[i] = sp[i].current_a;
       rec.probe_goal[i] = response_probe_q_[i];
-      rec.feedback_ns[i] = sp[i].rx_ns;
+      rec.feedback_ns[i] = sp[i].raw_rx_ns ? sp[i].raw_rx_ns : sp[i].rx_ns;
       rec.v_ref[i] = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
       rec.v_command[i] = service_command_rate[i];
       rec.v_estimated[i] = v_est_[i];
@@ -3090,6 +3444,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
 void ControlLoop::set_payload_profile(payload::PayloadProfile pr,
                                       bool commissioned) {
   if (phase_ == Phase::PayloadCheck) return;  // never swap mid-check
+  // Schema 1 identifies two CyberGears. It cannot qualify a GM6020 station.
+  // Keep the historical file available as a conservative cap, never as measured
+  // dynamic qualification. PR4 adds explicit hardware/mode/payload binding.
+  if (backend_->supports_continuous_yaw()) commissioned = false;
   payload_profile_ = std::move(pr);
   if (commissioned) {
     // A commissioned profile is trusted (§28.5) until a verification says
@@ -3123,6 +3481,67 @@ double ControlLoop::hold_speed_effective() const {
   }
   if (payload_derated_) v *= cfg_.derate_factor;  // §31.3 conservative path
   return v;
+}
+
+bool ControlLoop::servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from_reference,
+                             TimeNs period_ns, TimeNs now_ns, const AxisLimits& limits,
+                             double q_measured, double v_measured) {
+  if (!from_reference.initialised) return false;
+  // From last tick's published reference: this tick's has already advanced along the motion the
+  // supervisor just stopped, and continuing from it would step the servo twice in one tick.
+  // Unless the axis is nowhere near it (a following error, an obstruction): then the stop starts at
+  // the axis, or holding would push it on towards a reference it could not reach.
+  control::ReferenceLimiter from = from_reference;
+  if (std::isfinite(q_measured) && std::abs(from.q_rad - q_measured) > kStopReanchorRad) {
+    from.reset_at(q_measured);
+    from.v_rad_s = std::isfinite(v_measured) ? v_measured : 0.0;
+  }
+  ref_lim_[i] = from;
+  double a = cfg_.a_brake_rad_s2, j = cfg_.j_brake_rad_s3;
+  const double v = from.v_rad_s;
+  // Station, 2026-10-02 18:33:28: re-aimed every tick at "here + stopping distance", the stop was a
+  // target moving at the axis's own speed; the limiter followed it and pitch cruised at 13 deg/s for
+  // 0.4 s into its soft limit. The rest point is latched once per stop and its velocity is zero.
+  const bool new_stop = brake_last_ns_[i] == 0 || now_ns - brake_last_ns_[i] > 2 * period_ns;
+  brake_last_ns_[i] = now_ns;
+  if (new_stop) {
+    brake_rest_rad_[i] = env_.constrain_reference(
+        from.q_rad + std::copysign(control::stopping_distance_rad(v, from.a_rad_s2, a, j), v), limits);
+  }
+  // A rest point pulled in by the soft limit needs more than the braking model's deceleration: take
+  // what the limit requires, up to what the axis can physically do (its Level-1 capability).
+  const double room = std::abs(brake_rest_rad_[i] - from.q_rad) + 1e-4;   // + 0.006 deg: rounding
+  if (std::abs(v) > 0 && control::stopping_distance_rad(v, from.a_rad_s2, a, j) > room) {
+    double a_phys = a, j_phys = j;
+    if (tracking_ && tracking_->uses_core()) {
+      const auto& c = tracking_->core()->parameters().level1.axis[axis == AxisId::Yaw ? 0 : 1];
+      a_phys = std::max(a, c.a_max);
+      j_phys = std::max(j, c.j_max);
+    }
+    j = j_phys;
+    while (a < a_phys && control::stopping_distance_rad(v, from.a_rad_s2, a, j) > room)
+      a = std::min(a_phys, a * 1.25);
+  }
+  control::limit_reference(ref_lim_[i], brake_rest_rad_[i], static_cast<double>(period_ns) * 1e-9,
+                           std::abs(v), a, j, 0.0);
+  MotorBackend::ServoReference r;
+  r.t_ns = now_ns;
+  r.q = ref_lim_[i].q_rad; r.v = ref_lim_[i].v_rad_s; r.a = ref_lim_[i].a_rad_s2; r.j = 0;
+  r.valid_s = 4 * static_cast<double>(period_ns) * 1e-9;
+  if (limits.valid) { r.q_min = limits.q_soft_min_rad; r.q_max = limits.q_soft_max_rad; }
+  if (!backend_->command_reference(axis, r)) { ref_lim_[i] = from; return false; }
+  servo_jerk_[i] = 0.0;
+  ref_lim_engaged_ = true;
+  core_last_tick_ns_ = 0;  // the core's reference was not executed: re-seed Level 1 next tick
+  return true;
+}
+
+std::pair<double, double> ControlLoop::hold_brake_limits(int axis) const {
+  const auto profile = motion_profile(axis, mode_mgr_.mode());
+  return {cfg_.motion.configured ? std::min(cfg_.a_brake_rad_s2, profile.maximum.acceleration)
+                                 : cfg_.a_brake_rad_s2,
+          cfg_.motion.configured ? std::min(cfg_.j_brake_rad_s3, profile.maximum.jerk)
+                                 : cfg_.j_brake_rad_s3};
 }
 
 control::MotionProfile ControlLoop::motion_profile(int axis, OperatingMode mode) const {
@@ -3409,12 +3828,12 @@ ModeResult ControlLoop::stop_motion() {
   if (phase_ == Phase::Recovering) {
     backend_->cancel_motor_recovery();
     recovery_then_home_ = false;
-    deenergize_all();
+    stop_axes_safely();
     phase_ = Phase::Fault;
     fault_reason_ = "motor recovery cancelled; retry Recover Motors when ready";
   }
   if (phase_ == Phase::Homing) {
-    deenergize_all();
+    stop_axes_safely();
     phase_ = Phase::Idle;
     pending_homing_ds_.reset();
   }
@@ -3571,9 +3990,21 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     // The pose is taken from the measured joints on the cycle the turret *stopped*
     // moving, and then held there. Two properties that only make sense together: no
     // creep (it is not re-read every cycle) and no journey (it is not the ready pose).
-    if (!mode_hold_latched_ || last_intent_.type != IntentType::Hold) {
-      const double q[2] = {last_positions()[ix(AxisId::Pitch)],
-                           last_positions()[ix(AxisId::Yaw)]};
+    if (!mode_hold_latched_ || (last_intent_.type != IntentType::Hold && !last_ref_was_hold_)) {
+      double q[2] = {last_positions()[ix(AxisId::Pitch)],
+                     last_positions()[ix(AxisId::Yaw)]};
+      // With the servos the hold is a braked reference, so the pose is where that reference
+      // comes to rest rather than where the axis is on this cycle: a stop taken at speed would
+      // otherwise run past the pose and drive back to it.
+      if (servo_holds() && ref_lim_engaged_) {
+        for (int i = 0; i < kAxisCount; ++i) {
+          const auto [a, j] = hold_brake_limits(i);
+          const auto& r = ref_lim_[i];
+          q[i] = env_.constrain_reference(
+              r.q_rad + std::copysign(control::stopping_distance_rad(r.v_rad_s, r.a_rad_s2, a, j), r.v_rad_s),
+              limits_[i]);
+        }
+      }
       mode_hold_pitch_rad_ = q[ix(AxisId::Pitch)];
       mode_hold_yaw_rad_ = q[ix(AxisId::Yaw)];
       mode_hold_latched_ = true;
@@ -3591,6 +4022,7 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   l.manual_v_max_rad_s = cap;
   l.track_v_max_rad_s = std::min(tracking_cfg_.track_v_max_rad_s, cap);
   l.roam_v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, cap);
+  l.clamp_pitch_to_travel = tracking_ && tracking_->uses_core();
   // The roam intent carries its endpoint, not its configured speed. Preserve
   // the named sweep rate through conversion into a shaped joint reference.
   if (cfg_.roam_velocity_deg_s > 0.0)
@@ -3781,6 +4213,12 @@ void ControlLoop::apply_payload_derate(bool derated) {
 
 void ControlLoop::start_payload_check(TimeNs now_ns, bool manual,
                                       const AxisSnapshot sp[kAxisCount]) {
+  if (backend_->supports_continuous_yaw()) {
+    payload_check_requested_ = false;
+    ack_command("start_payload_verification", false,
+        "legacy dual-CyberGear verifier cannot qualify mixed hardware or apply GM6020 gains");
+    return;
+  }
   if (phase_ == Phase::Fault || phase_ == Phase::PayloadCheck) return;
   if (!homed_) return;
   // The check takes over the axes: drop any tracking reference first.
@@ -3793,19 +4231,9 @@ void ControlLoop::start_payload_check(TimeNs now_ns, bool manual,
   for (int i = 0; i < kAxisCount; ++i)
     backend_->set_current_limit(static_cast<AxisId>(i),
                                 cfg_.payload_check_current_a);
-  // The stock drive speed-loop gains (SpdKp=1.0, SpdKi=0.002) are too weak to
-  // hold the position-mode speed limit against a gravity load: on the pitch
-  // axis the "against-gravity" half of the 2 deg check step creeps at a
-  // fraction of the commanded rate (a few hundred milliamps, ~0.08 deg/s) and
-  // never settles in the move budget, while the "with-gravity" half is
-  // assisted and is fast. Raise the inner speed loop so it builds the torque
-  // needed to hold the commanded rate against gravity and the step response is
-  // the drive's controlled (mass-sensitive) response, not a gravity-dominated
-  // creep. Capped by the current/torque limits, so safe. No-op in sim.
-  for (int i = 0; i < kAxisCount; ++i)
-    backend_->set_speed_loop_gains(static_cast<AxisId>(i),
-                                   cfg_.payload_check_spd_kp,
-                                   cfg_.payload_check_spd_ki);
+  // Measure the installed configuration. A response check must not silently
+  // replace gains through a fire-and-forget setter (or a yaw no-op). Explicit
+  // commissioning changes use the readback-confirmed pitch transaction.
   payload_check_cfg_ = payload::PayloadCheckConfig{};
   payload_check_cfg_.step_amplitude_rad = cfg_.payload_check_step_deg * kDeg2Rad;
   payload_check_cfg_.speed_rad_s = cfg_.payload_check_speed_deg_s * kDeg2Rad;
@@ -4192,6 +4620,7 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     bounds.q_yaw_hold_rad = q[ix(AxisId::Yaw)];
     bounds.q_pitch_hold_rad = q[ix(AxisId::Pitch)];
     bounds.axis_limits = limits_;
+    bounds.clamp_pitch_to_travel = tracking_->uses_core();
     const auto resolved = ref_mgr_->resolve(probe,bounds);
     reachable = !resolved.target_unreachable;
     yaw_delta = resolved.q_yaw_rad - q[ix(AxisId::Yaw)];
@@ -4272,12 +4701,152 @@ void ControlLoop::disable_tracking() {
   tracking_ref_ = ReferenceRequest{};
 }
 
+namespace {
+// One parser for the yaw trial set, shared by `yaw_control_trial` and `param_prepare`. Two parsers
+// over one string format is how a campaign and an operator end up meaning different things.
+bool parse_yaw_trial_arg(const std::string& arg, MotorBackend::YawTrialSettings& out,
+                         std::string& why) {
+  double values[8]{}; size_t begin=0; bool parsed=true;
+  try {
+    for (int i=0;i<8;++i) {
+      const auto end=arg.find(':',begin);
+      const auto token=arg.substr(begin,end==std::string::npos ? end : end-begin);
+      size_t used=0; values[i]=std::stod(token,&used);
+      if (used!=token.size() || !std::isfinite(values[i]) || (i<7 && end==std::string::npos) ||
+          (i==7 && end!=std::string::npos)) { parsed=false; break; }
+      begin=end+1;
+    }
+  } catch (...) { parsed=false; }
+  if (!parsed || (values[2]!=0 && values[2]!=20 && values[2]!=30 && values[2]!=40) ||
+      values[3]<0 || values[4]<0 || values[5]<0 || values[6]<0 || values[7]<=0 || values[7]>10) {
+    why = "syntax kp:ki:rx_ms:break_pos:break_neg:run_pos:run_neg:slew_A_s; rx 0/20/30/40, "
+          "slew (0,10]";
+    return false;
+  }
+  out.kp_a_per_rad_s=values[0]; out.ki_a_per_rad=values[1];
+  out.rx_window_ms=static_cast<int>(values[2]);
+  out.friction={values[3]>0 || values[4]>0 || values[5]>0 || values[6]>0,
+      values[3],values[4],values[5],values[6],1.0,3*2*3.14159265358979323846/8192,
+      .5*kDeg2Rad,5,values[7]};
+  return true;
+}
+}  // namespace
+
+std::vector<control::ParamValue> ControlLoop::yaw_trial_values(
+    const MotorBackend::YawTrialSettings& s) const {
+  // The names are the registry's names, spelled the same way, so the document that says what can be
+  // tuned and the exchange that proves what is running cannot drift into two vocabularies.
+  const gm6020::FrictionConfig& f = s.friction;
+  return {
+      {"yaw.current_kp_a_per_rad_s", control::canonical_number(s.kp_a_per_rad_s)},
+      {"yaw.current_ki_a_per_rad_s", control::canonical_number(s.ki_a_per_rad)},
+      {"yaw.velocity_rx_window_ms", control::canonical_number(s.rx_window_ms)},
+      {"yaw.friction.enabled", control::canonical_bool(f.enabled)},
+      {"yaw.friction.positive_breakaway_a", control::canonical_number(f.positive_breakaway_a)},
+      {"yaw.friction.negative_breakaway_a", control::canonical_number(f.negative_breakaway_a)},
+      {"yaw.friction.positive_run_a", control::canonical_number(f.positive_run_a)},
+      {"yaw.friction.negative_run_a", control::canonical_number(f.negative_run_a)},
+      {"yaw.friction.timeout_s", control::canonical_number(f.timeout_s)},
+      {"yaw.friction.motion_displacement_rad", control::canonical_number(f.motion_displacement_rad)},
+      {"yaw.friction.stationary_velocity_rad_s", control::canonical_number(f.stationary_velocity_rad_s)},
+      {"yaw.friction.fresh_samples", control::canonical_number(double(f.fresh_samples))},
+      {"yaw.friction.output_slew_a_per_s", control::canonical_number(f.output_slew_a_per_s)},
+  };
+}
+
+std::vector<control::ParamValue> ControlLoop::pitch_gain_values(double kp, double ki) const {
+  // A CyberGear speed-loop gain register is a 32-bit float, so the value the drive can hold — and
+  // therefore the value a readback can confirm — is float32(kp), not the double someone typed. Both
+  // sides of the comparison pass through here for that reason. Measured on the station 2026-09-30:
+  // a requested 0.03 came back as 0.0299999993, the transaction called a correct write a mismatch,
+  // restored it, and gated motion — the rollback discipline working, on a comparison that could
+  // never have been satisfied by any real register.
+  return {{"pitch.service_speed_kp", control::canonical_number(static_cast<float>(kp))},
+          {"pitch.service_speed_ki", control::canonical_number(static_cast<float>(ki))}};
+}
+
+void ControlLoop::param_exchange_yaw(const std::string& command,
+                                     const MotorBackend::YawTrialSettings& settings,
+                                     const std::string& request_id) {
+  const std::vector<control::ParamValue> wanted = yaw_trial_values(settings);
+  const MotorBackend::YawTrialSettings previous = backend_->yaw_trial_settings();
+  param_previous_settings_ = previous;
+  const std::vector<control::ParamValue> was = yaw_trial_values(previous);
+  if (const std::string refused = param_tx_.prepare(wanted, request_id); !refused.empty()) {
+    ack_command(command, false, "prepare refused: " + refused);
+    return;
+  }
+  param_tx_.begin_apply(was, request_id);
+  std::string apply_error;
+  if (!backend_->apply_yaw_trial(settings, apply_error)) {
+    // The write did not take. Feed the transaction what the hardware still holds: it will demand the
+    // restore it just asked for, the restore is a no-op write of values already present, and motion
+    // stays blocked until that is confirmed. This is the branch where a script used to move on.
+    param_tx_.verify(was);
+    // The restore writes what the hardware held, not what was refused: writing `settings` here would
+    // be a no-op that reports itself as a recovery. A verified restore does advance the revision — it
+    // says "an exchange happened and this is the set that is verified now", which is the honest
+    // reading of a revision and the one a runner can act on.
+    std::string restore_error;
+    if (!backend_->apply_yaw_trial(previous, restore_error)) {
+      param_tx_.verify(was);
+      ack_command(command, false, "apply refused (" + apply_error + ") and the restore was refused "
+                                  "too (" + restore_error + "); revision " +
+                                  std::to_string(param_tx_.revision()) + " is the last verified set");
+      return;
+    }
+    param_tx_.verify(was);
+    ack_command(command, false, "apply refused: " + apply_error + "; hardware still holds revision " +
+                                std::to_string(param_tx_.revision()) + " and motion stays gated until "
+                                "the restore verifies");
+    return;
+  }
+  const std::string unverified = param_tx_.verify(yaw_trial_values(backend_->yaw_trial_settings()));
+  if (!unverified.empty()) {
+    // The write was accepted and the plant came back holding something else — a truncation, a
+    // half-applied set, a driver that said yes to a value it cannot run. "restoring" is not a
+    // promise somebody else keeps: the restore is attempted right here, and if it cannot be
+    // confirmed the transaction stays in `restoring`, which holds every motion command.
+    std::string restore_error;
+    const bool restored = backend_->apply_yaw_trial(previous, restore_error);
+    if (restored) param_tx_.verify(yaw_trial_values(backend_->yaw_trial_settings()));
+    ack_command(command, false, "write was accepted but the readback does not match: " + unverified +
+                                (restored
+                                     ? "; the previous set is verified again, revision " +
+                                       std::to_string(param_tx_.revision())
+                                     : "; the restore did not take (" + restore_error +
+                                       "), motion stays gated until the exchange resolves"));
+    return;
+  }
+  ack_command(command, true, "host yaw settings applied for this commissioning session; current cap "
+                             "unchanged; unqualified; revision=" + std::to_string(param_tx_.revision()) +
+                             " effective_hash=" + param_tx_.applied_hash() + " request_id=" + request_id);
+}
+
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
+  if ((name=="yaw_control_trial" || name=="pitch_control_trial") && response_probe_until_ns_) {
+    ack_command(name,false,"response probe active; wait before changing gains"); return;
+  }
   // Every new motion/mode command cancels a bench trial. Read-only trace requests
   // are handled on the web thread and never enter this queue.
   response_probe_until_ns_ = 0;
   std::string err;
+  if (pitch_gain_trial_pending_ && (name=="response_probe" || name=="manual_jog_start" ||
+      name=="manual_step" || name=="start_payload_verification" || name=="start_tracking")) {
+    ack_command(name,false,"pitch gain readback pending; wait before motion"); return;
+  }
+  // The same door, for every parameter exchange rather than only the pitch one. `kp2-fine` contained
+  // Kp=1 because nothing stood here: the apply had been refused and the next jog ran anyway.
+  if (param_tx_.blocks_motion() && (name=="response_probe" || name=="manual_jog_start" ||
+      name=="manual_step" || name=="run_test_motion" || name=="start_payload_verification" ||
+      name=="start_tracking")) {
+    ack_command(name,false,std::string("parameter exchange is ")+param_tx_.state_name()+
+                "; motion needs a verified set (last verified revision "+
+                std::to_string(param_tx_.revision())+", hash "+
+                (param_tx_.applied_hash().empty() ? "none" : param_tx_.applied_hash())+
+                "): "+param_tx_.last_reason()); return;
+  }
   if (phase_ == Phase::Recovering) {
     if (name == "stop_motion" || name == "hold") stop_motion();
     else ack_command(name, false, "motor recovery active; wait or Stop Motion to cancel");
@@ -4359,6 +4928,11 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "start_payload_verification") {
+    if (backend_->supports_continuous_yaw()) {
+      ack_command(name, false,
+          "legacy dual-CyberGear verifier cannot qualify mixed hardware or apply GM6020 gains");
+      return;
+    }
     // Phase 9 (§31.3, §42.2): begin the payload response check. The web gate
     // already required homed && !fault && !moving; the actual start happens in
     // step() (2c) so it runs on the control thread with the cycle timestamp.
@@ -4423,8 +4997,232 @@ void ControlLoop::execute_command(const std::string& name,
     }
     return;
   }
+  if (name == "pitch_control_trial") {
+    {
+      std::string missing;
+      collect_missing(missing, "manual_commissioning_off", cfg_.manual_commissioning,
+                      "service_speed_control_off", cfg_.service_speed_control,
+                      "position_not_ready", position_ready(), "phase_not_hold", phase_==Phase::Hold,
+                      "mode_not_manual", mode_mgr_.mode()==OperatingMode::Manual,
+                      "safety_not_allow", last_decision_.action==SafetyAction::Allow,
+                      "manual_lease_held", !manual_out_.lease_active,
+                      "response_probe_window_open", !response_probe_until_ns_,
+                      "pitch_gain_update_pending", !pitch_gain_trial_pending_);
+      if (!missing.empty()) {
+        ack_command(name,false,"pitch tuning gate refuses: "+missing); return;
+      }
+    }
+    for(int i=0;i<kAxisCount;++i) {
+      if(std::abs(v_est_[i])>.5*kDeg2Rad || std::abs(speed_servo_[i].velocity)>.2*kDeg2Rad) {
+        ack_command(name,false,"pitch tuning requires stationary axes"); return;
+      }
+    }
+    double kp=0,ki=0; bool parsed=false;
+    try {
+      const auto colon=arg.find(':');
+      const auto a=arg.substr(0,colon),b=arg.substr(colon+1);
+      size_t na=0,nb=0; kp=std::stod(a,&na);ki=std::stod(b,&nb);
+      parsed=colon!=std::string::npos && na==a.size() && nb==b.size();
+    } catch(...) {}
+    if(!parsed || !std::isfinite(kp) || !std::isfinite(ki) || kp<1 || kp>5 || ki<.002 || ki>.05) {
+      ack_command(name,false,"pitch trial syntax kp:ki; kp [1,5], ki [0.002,0.05]"); return;
+    }
+    // A write nobody can read back is not a verified write: if the registers are not answering now,
+    // there is nothing to compare the candidate against later, and the loop refuses to start an
+    // exchange it cannot finish. (This is the axis where readback is real — a register, not an echo.)
+    const auto before = backend_->pitch_register_diagnostics();
+    const double was_kp = before.registers[4].value, was_ki = before.registers[5].value;
+    if (!before.registers[4].valid || !before.registers[5].valid ||
+        !std::isfinite(was_kp) || !std::isfinite(was_ki)) {
+      ack_command(name,false,"pitch speed gains are not readable right now; refusing a write that "
+                             "cannot be read back and verified"); return;
+    }
+    param_pitch_previous_kp_ = was_kp; param_pitch_previous_ki_ = was_ki;
+    const std::string request_id = "pitcht-" + std::to_string(++param_request_seq_);
+    if (const std::string refused = param_tx_.prepare(pitch_gain_values(kp,ki), request_id);
+        !refused.empty()) {
+      ack_command(name,false,"prepare refused: "+refused); return;
+    }
+    param_tx_.begin_apply(pitch_gain_values(was_kp,was_ki), request_id);
+    const auto result=backend_->begin_pitch_speed_loop_gain_update(kp,ki,err);
+    if (result==MotorBackend::Transition::Failed) {
+      param_tx_.verify(pitch_gain_values(was_kp,was_ki));   // the plant still holds the old pair
+      std::string restore_error;
+      const auto again=backend_->begin_pitch_speed_loop_gain_update(was_kp,was_ki,restore_error);
+      param_pitch_restoring_=again==MotorBackend::Transition::Pending;
+      ack_command(name,false,"pitch write refused ("+err+"); restoring the previous gains"+
+                  (again==MotorBackend::Transition::Failed
+                       ? " and the restore was refused too: motion stays gated until the drive "
+                         "answers a register readback (param_restore retries it)" : ""));
+      return;
+    }
+    pitch_gain_trial_pending_=result==MotorBackend::Transition::Pending;
+    if (!pitch_gain_trial_pending_) {   // a backend that finishes synchronously verifies now
+      const auto regs=backend_->pitch_register_diagnostics();
+      const std::string unverified=param_tx_.verify(pitch_gain_values(regs.registers[4].value,
+                                                                     regs.registers[5].value));
+      ack_command(name,unverified.empty(), unverified.empty()
+          ? "pitch speed gains verified; revision="+std::to_string(param_tx_.revision())+
+            " effective_hash="+param_tx_.applied_hash()+" request_id="+request_id : unverified);
+      return;
+    }
+    ack_command(name,true,"pitch writes queued; NOT verified yet, wait for readback acknowledgement; "
+                "request_id="+request_id+" expected_hash="+param_tx_.expected_hash()+
+                "; motion is gated until the register readback verifies");
+    return;
+  }
+  if (name == "yaw_control_trial") {
+    {
+      std::string missing;
+      collect_missing(missing, "manual_commissioning_off", cfg_.manual_commissioning,
+                      "service_speed_control_off", cfg_.service_speed_control,
+                      "position_not_ready", position_ready(), "phase_not_hold", phase_==Phase::Hold,
+                      "mode_not_manual", mode_mgr_.mode()==OperatingMode::Manual,
+                      "safety_not_allow", last_decision_.action==SafetyAction::Allow,
+                      "manual_lease_held", !manual_out_.lease_active,
+                      "response_probe_window_open", !response_probe_until_ns_,
+                      "pitch_gain_update_pending", !pitch_gain_trial_pending_);
+      if (!missing.empty()) {
+        ack_command(name,false,"yaw tuning gate refuses: "+missing); return;
+      }
+    }
+    for (int i=0;i<kAxisCount;++i) {
+      const auto sample=backend_->snapshot(static_cast<AxisId>(i),now_ns_);
+      if (!sample.has_feedback || !std::isfinite(sample.q_rad) ||
+          now_ns_-sample.rx_ns > 50'000'000 || std::abs(v_est_[i]) > .5*kDeg2Rad ||
+          std::abs(speed_servo_[i].velocity) > .2*kDeg2Rad) {
+        ack_command(name,false,"yaw tuning requires fresh stationary axes"); return;
+      }
+    }
+    MotorBackend::YawTrialSettings settings;
+    if (!parse_yaw_trial_arg(arg, settings, err)) { ack_command(name,false,err); return; }
+    param_exchange_yaw(name, settings, "yawt-" + std::to_string(++param_request_seq_));
+    return;
+  }
+  if (name == "param_snapshot") {
+    ack_command(name,true,std::string("state=")+param_tx_.state_name()+
+                " revision="+std::to_string(param_tx_.revision())+
+                " applied_hash="+(param_tx_.applied_hash().empty()?"none":param_tx_.applied_hash())+
+                " expected_hash="+(param_tx_.expected_hash().empty()?"none":param_tx_.expected_hash())+
+                (param_tx_.last_reason().empty()?"":" reason="+param_tx_.last_reason()));
+    return;
+  }
+  if (name == "param_prepare") {
+    // Stages one candidate without writing anything: the range and mode checks that a trial would
+    // do happen here, so a rejected candidate costs one round trip and does not touch the hardware.
+    MotorBackend::YawTrialSettings settings;
+    std::string why;
+    if (!parse_yaw_trial_arg(arg, settings, why)) { ack_command(name,false,why); return; }
+    param_staged_settings_ = settings;
+    param_staged_id_ = "prepp-" + std::to_string(++param_request_seq_);
+    const std::string refused = param_tx_.prepare(yaw_trial_values(settings), param_staged_id_);
+    if (!refused.empty()) { param_staged_id_.clear(); ack_command(name,false,"prepare refused: "+refused); return; }
+    ack_command(name,true,"prepared request_id="+param_staged_id_+" expected_hash="+
+                param_tx_.expected_hash()+" revision_after_apply="+
+                std::to_string(param_tx_.revision()+1));
+    return;
+  }
+  if (name == "param_restore") {
+    // The way out of `restoring` when the plant was briefly unwilling: write back the set it held
+    // before the exchange and confirm it. Without this verb the station would sit gated until a
+    // restart, and "wait for somebody to notice" is not a recovery path.
+    if (!param_tx_.restore_required()) {
+      ack_command(name,false,"nothing is demanding a restore (state=" +
+                  std::string(param_tx_.state_name()) + ")"); return;
+    }
+    // Which axis owes the restore is answered by the names the transaction is holding, not by a flag
+    // that happens to be set: the poll may have already stopped trying, and a flag would then send the
+    // recovery down the wrong axis — where the readback speaks a different vocabulary and reports
+    // "readback did not include pitch.service_speed_ki" while standing on the yaw plant.
+    const auto& target = param_tx_.restore_values();
+    const bool owes_pitch = std::any_of(target.begin(), target.end(),
+        [](const control::ParamValue& v) { return v.name.rfind("pitch.", 0) == 0; });
+    if (owes_pitch) {
+      // The pitch restore is a register write like any other on this axis: it completes asynchronously
+      // and the poll verifies it. Retrying here is what `param_restore` means on this axis.
+      std::string restore_error;
+      const auto again=backend_->begin_pitch_speed_loop_gain_update(param_pitch_previous_kp_,
+                                                                   param_pitch_previous_ki_,
+                                                                   restore_error);
+      ack_command(name, again!=MotorBackend::Transition::Failed,
+          again==MotorBackend::Transition::Pending
+              ? "pitch restore queued; motion stays gated until the register readback verifies"
+              : "pitch restore refused: " + restore_error + "; motion stays gated");
+      if (again!=MotorBackend::Transition::Failed) {
+        param_pitch_restoring_=true;
+        pitch_gain_trial_pending_=true;   // the poll below is what drives an async restore to its end
+      }
+      return;
+    }
+    std::string restore_error;
+    if (!backend_->apply_yaw_trial(param_previous_settings_, restore_error)) {
+      ack_command(name,false,"restore refused: " + restore_error + "; motion stays gated"); return;
+    }
+    const std::string still = param_tx_.verify(yaw_trial_values(backend_->yaw_trial_settings()));
+    ack_command(name, still.empty(), still.empty()
+        ? "previous set restored and verified; revision " + std::to_string(param_tx_.revision()) +
+          " is now the verified set"
+        : "restore wrote but did not verify: " + still + "; motion stays gated");
+    return;
+  }
+  if (name == "param_context") {
+    // A campaign names its own candidates; the firmware only insists the tag fits the fixed-width
+    // trace field and is printable, and refuses loudly rather than truncating a silently — an archive
+    // whose identity column was cut in half reads like evidence about the wrong candidate.
+    if (arg.empty()) { ack_command(name,false,"param_context takes the tag the campaign archived"); return; }
+    if (arg.size() > 39) {
+      ack_command(name,false,"param_context tag is "+std::to_string(arg.size())+
+                             " characters; the trace field holds 39, and truncating it would archive "
+                             "a half-identity rather than a refusal"); return; }
+    for (char c : arg) {
+      if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) {
+        ack_command(name,false,"param_context must be printable ASCII; the trace line is parsed, not read");
+        return;
+      }
+    }
+    param_context_tag_ = arg;
+    ack_command(name,true,"campaign context set to "+arg+"; every trace record from here says so");
+    return;
+  }
+  if (name == "param_apply") {
+    if (param_staged_id_.empty()) {
+      ack_command(name,false,"nothing is prepared; param_apply takes the request_id a prepare "
+                             "returned, and an apply that skips prepare would write a candidate "
+                             "nobody validated"); return;
+    }
+    if (arg != param_staged_id_) {
+      ack_command(name,false,"request_id '"+arg+"' is not the prepared set ("+param_staged_id_+
+                             "); refusing to apply a candidate under someone else's id"); return;
+    }
+    // Staging a candidate costs a round trip and can be done in any state; writing it may not. The
+    // trial command has always demanded a stationary, commissioned, Manual, Allow, Hold machine —
+    // measured on the station 2026-09-30, param_apply accepted 16 writes while the stack was running
+    // AUTO_ROAM, because that gate lived only in the trial branch. A current-loop gain swapped under a
+    // tracking controller is not a tuning result, it is two controllers disagreeing at speed, so the
+    // same gate now stands in front of both paths, and it names what it refused.
+    {
+      std::string missing;
+      collect_missing(missing, "manual_commissioning_off", cfg_.manual_commissioning,
+                      "service_speed_control_off", cfg_.service_speed_control,
+                      "position_not_ready", position_ready(), "phase_not_hold", phase_==Phase::Hold,
+                      "mode_not_manual", mode_mgr_.mode()==OperatingMode::Manual,
+                      "safety_not_allow", last_decision_.action==SafetyAction::Allow,
+                      "manual_lease_held", !manual_out_.lease_active,
+                      "response_probe_window_open", !response_probe_until_ns_,
+                      "pitch_gain_update_pending", !pitch_gain_trial_pending_);
+      if (!missing.empty()) {
+        ack_command(name,false,"param_apply refuses: "+missing+"; the staged set stays staged, so "
+                               "arming the machine does not require re-sending the candidate");
+        return;
+      }
+    }
+    const MotorBackend::YawTrialSettings settings = param_staged_settings_;
+    param_staged_id_.clear();
+    param_exchange_yaw(name, settings, arg);
+    return;
+  }
   if (name == "response_probe") {
-    if (phase_ != Phase::Hold || !homed_ || mode_mgr_.mode() != OperatingMode::Manual ||
+    if (phase_ != Phase::Hold || !position_ready() || mode_mgr_.mode() != OperatingMode::Manual ||
         last_decision_.action != SafetyAction::Allow || !cfg_.service_speed_control) {
       ack_command(name,false,"response probe requires homed, healthy Manual service");
       return;
@@ -4459,10 +5257,12 @@ void ControlLoop::execute_command(const std::string& name,
     }
     for (int i=0; i<2; ++i) {
       const auto s = backend_->snapshot(static_cast<AxisId>(i),now_ns_);
+      const auto probe_limits = runtime_limits(static_cast<AxisId>(i));
       response_probe_q_[i] = s.q_rad + (i == axis ? delta*kDeg2Rad : 0.0);
       if (!s.has_feedback || now_ns_-s.rx_ns > 50'000'000 || s.rx_ns > now_ns_ ||
-          !limits_[i].valid || limits_[i].distance_to_soft(s.q_rad) < 15*kDeg2Rad ||
-          limits_[i].distance_to_soft(response_probe_q_[i]) < 15*kDeg2Rad ||
+          (!probe_limits.unbounded() && (!probe_limits.valid ||
+           probe_limits.distance_to_soft(s.q_rad) < 15*kDeg2Rad ||
+           probe_limits.distance_to_soft(response_probe_q_[i]) < 15*kDeg2Rad)) ||
           std::abs(speed_servo_[i].velocity) > .2*kDeg2Rad) {
         ack_command(name,false,"probe needs fresh stationary drives and 15 degree endpoint clearance");
         return;
@@ -4693,4 +5493,32 @@ void ControlLoop::execute_command(const std::string& name,
   ack_command(name, false, "unknown command '" + name + "'");
 }
 
+}  // namespace ota
+
+namespace ota {
+// ADR-003 D17: one line per Level-1 tick, enough to say from the record alone whether an error
+// came from the estimate (goal vs truth, offline), the reference (e_track) or the servo
+// (e_servo). Written by spdlog's async pool, never by this thread. Core axis order: yaw, pitch.
+void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
+  if (!tracking_trace_) return;
+  const auto& g = r.los;
+  const auto& d = tracking_->core()->estimator().diagnostics();
+  const auto& x = tracking_->core()->estimator().state();
+  tracking_trace_->info(
+      "{{\"t_ns\":{},\"state_ns\":{},\"age_s\":{:.4f},\"est\":[{:.6f},{:.6f},{:.5f},{:.5f}],"
+      "\"sig_w\":[{:.5f},{:.5f}],\"goal_los\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"ffw\":[{:.3f},{:.3f}],\"fade\":{:.3f},"
+      "\"valid\":[{},{}],\"goal_q\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"goal_valid\":{},"
+      "\"ref\":[{:.6f},{:.6f},{:.5f},{:.5f},{:.4f},{:.4f},{:.3f},{:.3f}],\"flags\":[{},{}],"
+      "\"q\":[{:.6f},{:.6f}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
+      "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"rate_limited\":{}}}",
+      now_ns, g.state_ns, g.age_s, x[0].theta, x[1].theta, x[0].omega, x[1].omega,
+      std::sqrt(std::max(0.0, x[0].vv)), std::sqrt(std::max(0.0, x[1].vv)),
+      g.theta[0], g.theta[1], g.omega[0], g.omega[1], g.ff_weight[0], g.ff_weight[1], g.fade,
+      g.position_valid ? 1 : 0, g.velocity_valid ? 1 : 0,
+      r.joint.q[0], r.joint.q[1], r.joint.v[0], r.joint.v[1], r.joint.valid ? 1 : 0,
+      r.reference.q[0], r.reference.q[1], r.reference.v[0], r.reference.v[1], r.reference.a[0], r.reference.a[1],
+      r.reference.j[0], r.reference.j[1], r.reference.flags[0], r.reference.flags[1],
+      r.q_measured[0], r.q_measured[1], r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
+      d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.rate_limited);
+}
 }  // namespace ota

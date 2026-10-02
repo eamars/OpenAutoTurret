@@ -1,0 +1,83 @@
+{
+  "adr": "ADR-002.2",
+  "date": "2026-09-30",
+  "artifact_kind": "development_contract_with_stage1_mathematical_implementation",
+  "delivery_scope": "single_complete_scope",
+  "stages": [
+    "1_model",
+    "2_actual_feedback",
+    "3a_standalone_hardware",
+    "3b_production_hardware"
+  ],
+  "base_ref": "local_workspace",
+  "base_commit": "b4701de6a021176bcb334f5015415c680eca3bda",
+  "reported_commit_not_audited": "bad742dddba6a95d3d055e43998adfd0506b0a6e",
+  "physical_hardware_accessed": true,
+  "firmware_integrated": true,
+  "firmware_compiled": true,
+  "hardware_qualification": "PARTIAL_MEASURED_READBACK_AND_ZERO_COMMAND_OBSERVATIONS_ONLY",
+  "source_reading": "local_checkout_and_existing_contract",
+  "prior_artifacts": [
+    {
+      "name": "OpenAutoTurret_ADR-002_Development.md",
+      "sha256": "a690096d1a8ba3e0e852beafea6f4b5808399166c394ec0d79ffeb2b8c9b8fbc"
+    },
+    {
+      "name": "OpenAutoTurret_ADR-002.1_Development.md",
+      "sha256": "ddc6eda4324cca1440962176f126cf9f99dddb4c7734961fd3933269aa48b923"
+    },
+    {
+      "name": "Pasted text(20260927-031718).txt",
+      "sha256": "63d33dce466dd54fa8c7b77cd8381268bd45197d98850f7e4a7b5d009cb814a3"
+    }
+  ],
+  "contract_original_snapshot": {
+    "source_reading": "selective_unpinned_public_paths",
+    "firmware_integrated": false,
+    "firmware_compiled": false,
+    "report": "reports/OFFLINE_VALIDATION.json"
+  },
+  "stage_override": "docs/07_STAGE1_OFFLINE_OVERRIDE.md",
+  "implementation_head_at_validation": "95c5e5c1c79d0d30d1e9f97365c7f7c4ee710d81",
+  "mathematical_software_status": "PASS",
+  "firmware_integration_scope": "LOCAL_SHARED_CORE_LINK_AND_EXPLICIT_OFFLINE_REPLAY",
+  "compiled_targets": {
+    "x86_64": "full_firmware_including_commissiond_and_controld",
+    "arm64": "axis_control_core_and_commissiond_compile_link_only"
+  },
+  "stage2_started": true,
+  "full_adr_status": "NOT_DONE",
+  "stage1_report": "reports/STAGE1_LOCAL_VALIDATION.json",
+  "station_accessed": true,
+  "station_access_scope": "INVENTORY_DISABLED_BASELINES_STRICT_ZERO_REFERENCE_ABORT_AND_RAW_ZERO_COMMAND_CHARACTERIZATION",
+  "motor_or_imu_transport_opened": true,
+  "stage2_status": "STEP2_NATIVE_SETTINGS_AND_ZERO_COMMAND_CHARACTERIZATION_CAPTURE_PASS_UNQUALIFIED",
+  "stage2_readiness_report": "reports/STAGE2_READINESS.json",
+  "local_baseline_acquisition": "IMPLEMENTED_LOCALLY_REHEARSED_DEPLOYED_PHYSICAL_CAPTURE_PASS",
+  "active_acquisition": "INCOMPLETE",
+  "encoder_mapping_update": "explicit finite count encoding; no plant/synthesis/quality-rule change",
+  "local_arm64_acquisition": "DEBIAN_BUILD_ABI_AND_FULL_KERNEL_VM_PASS_NOT_STATION_QUALIFICATION",
+  "capture_schema": "adr0022.capture/2",
+  "local_neutral_current_preparation": "NATIVE_AND_ARM64_VM_FAULT_MATRIX_PASS_PHYSICAL_HARD_ABORT_RETAINED",
+  "physical_zero_command_characterization": "PHYSICAL_CAPTURE_AND_INDEPENDENT_RAW_REVIEW_PASS_UNQUALIFIED",
+  "physical_sensorless_homing": "NOT_RUN",
+  "physical_current_mode_qualified": false,
+  "neutral_current_qualified": false,
+  "hardware_observation_policy": "RETAIN_RAW_OBSERVATIONS_AND_COMPENSATE_MEASURED_IMPERFECTIONS_IN_CALIBRATION_AND_TUNING",
+  "historical_0_1_A_threshold": "UNMEASURED_DIAGNOSTIC_COMPARISON_ONLY_FOR_CHARACTERIZATION",
+  "physical_operation_presence_required": false,
+  "physical_operation_authorization": "I explicitly give you the permission to operate the station regardless of my presence.",
+  "physical_native_settings_baseline": "CAPTURE_AND_INDEPENDENT_RAW_REVIEW_PASS",
+  "physical_acquisition_source_revision": "a6851d4cb96a5da09bc9763f462ca7719bd1dedc",
+  "physical_acquisition_source_sha256": "a1f7c681c47f0d533234143cefcc7f74b82c2d588bcdd7ca5dc56e0979e53b44",
+  "physical_acquisition_binaries": {
+    "commissiond": "706883054714d7d1d0311a040c4bb39f109a0b92f6f65b4020f4b16cd370e79a",
+    "imu": "0be58739e8417cd7e1589d2e25be013d48984005265701640807d04f98a493eb"
+  },
+  "measured_native_settings_asset_canonical_sha256": "daac99b0176065bca203f334f14d12f6c3557c58651072909468486a7677d73e",
+  "measured_neutral_observations_asset_canonical_sha256": "d5d69c46ef30fed36d1a9932b67c44fc49a37fb4267a925129c02fd75f5b0d1a",
+  "dynamic_stop_qualified": false,
+  "station_post_state": "STOPPED_NO_ACCOUNT_CONTROLLER_OR_IMU_CONSUMER_OBSERVED",
+  "current_mean_is_sensor_bias": false,
+  "physical_calibration_applied": false
+}

@@ -193,3 +193,20 @@ class DeclaredGeometry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class PublishedGeometry(unittest.TestCase):
+    """Station, 2026-10-02: the pad was undone twice and every vertical coordinate came out 1.78x
+    stretched about the centre. End to end, through the real normalisation, on production's leg."""
+
+    def test_a_person_is_published_where_it_is(self):
+        adapter, _ = build_adapter()
+        adapter._infer = FakeRuntime(person_box=[0.359375, 0.2, 0.640625, 0.6, 0.9])
+        adapter.configure_stream(640, 360, declared=(1920, 1080))
+        out = adapter.infer(np.full((360, 640, 3), 9, dtype=np.uint8), {}, frame_sequence=1,
+                            sensor_timestamp_ns=1, publish_timestamp_ns=2)
+        box = out.detections[0].bbox
+        self.assertAlmostEqual(box.y_min, 0.25, places=4)
+        self.assertAlmostEqual(box.y_max, 0.75, places=4)
+        self.assertAlmostEqual(box.x_min, 0.2, places=4)
+        self.assertAlmostEqual(box.x_max, 0.6, places=4)

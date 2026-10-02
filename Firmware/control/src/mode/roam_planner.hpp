@@ -102,6 +102,13 @@ struct RoamConfig {
   // dwells here before issuing the opposite waypoint, so a jittery feedback signal
   // cannot make the turret oscillate around the turnaround point at full rate.
   double turnaround_dwell_rad = 0.008;
+  // Settled at a turnaround also means "has stopped moving": yaw within `still_band_rad`
+  // (one GM6020 count is 0.77 mrad) for `settle_still_ns`. A servo rests inside its own
+  // commissioned accuracy, not inside half the arrival band -- on 2026-10-02 the ADR-002.2
+  // yaw servo stopped 0.24 deg short of a waypoint whose settle band was 0.2 deg, and the
+  // sweep sat in TURNAROUND indefinitely.
+  double still_band_rad = 0.001;
+  TimeNs settle_still_ns = 150'000'000;
   // §33: only used when the IMU expansion says gravity is valid. Core v3 runs without
   // the IMU, in which case the joint-space pitch above is the answer.
   bool level_scan_available = false;
@@ -286,6 +293,11 @@ class RoamPlanner {
     const double lo = sweep_lo_rad();
     const double hi = sweep_hi_rad();
     const double dist = std::fabs(q_yaw_rad - target_yaw_);
+    if (!std::isfinite(still_q_) || std::fabs(q_yaw_rad - still_q_) > cfg_.still_band_rad) {
+      still_q_ = q_yaw_rad;
+      still_since_ns_ = now_ns;
+    }
+    const bool still = now_ns - still_since_ns_ >= cfg_.settle_still_ns;
 
     if (dist <= cfg_.reach_tol_rad && state_ == RoamState::MoveToScanStart) {
       // The approach direction already points inward. Arrival completes the
@@ -300,8 +312,7 @@ class RoamPlanner {
         reversal_armed_ = false;
         state_ = RoamState::Turnaround;
       } else if (!reversal_armed_ &&
-                 std::fabs(q_yaw_rad - target_yaw_) <=
-                     cfg_.reach_tol_rad * 0.5) {
+                 (std::fabs(q_yaw_rad - target_yaw_) <= cfg_.reach_tol_rad * 0.5 || still)) {
         // Actually settled — feedback has stopped moving toward the waypoint, not merely
         // come within tolerance of it.
         reversal_armed_ = true;
@@ -380,6 +391,8 @@ class RoamPlanner {
   int direction_ = 0;
   bool reversing_ = false;
   bool reversal_armed_ = false;
+  double still_q_ = std::nan("");
+  TimeNs still_since_ns_ = 0;
 };
 
 }  // namespace ota

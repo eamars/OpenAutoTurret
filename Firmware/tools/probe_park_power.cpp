@@ -11,6 +11,11 @@
 using namespace ota;
 class ParkPlant final : public can::CanTransport {
  public:
+  // The cycle this plant is answering, supplied by the probe. A frame stamped with the wall clock
+  // *inside* loop.step() is later than the `now` that step was handed, so the release gate rightly
+  // refuses it as a sample from the future: 2026-09-29 found the probe failing its own parks this way,
+  // and the guard was the part that was right. One clock per cycle is the fixture's job.
+  TimeNs stamp = 0;
   struct Motor {
     double q = 0;
     bool enabled = true;
@@ -33,7 +38,7 @@ class ParkPlant final : public can::CanTransport {
   void feedback(int i) {
     can::RawFrame f{};
     f.id = cybergear::pack_ext_id(2, 100+i, 0) | (motors[i].enabled ? 2u<<22 : 0);
-    f.dlc = 8; f.rx_ns = now_monotonic_ns();
+    f.dlc = 8; f.rx_ns = stamp ? stamp : now_monotonic_ns();
     const auto u = cybergear::encode_u16(motors[i].q, -12.5, 12.5);
     f.data[0] = u>>8; f.data[1] = u&255;
     f.data[2] = f.data[4] = 0x80; f.data[7] = 250;
@@ -74,7 +79,7 @@ class ParkPlant final : public can::CanTransport {
     if (e.comm_type == 17) {
       can::RawFrame f{};
       f.id = cybergear::pack_ext_id(17, 100+i, 0);
-      f.dlc = 8; f.rx_ns = now_monotonic_ns();
+      f.dlc = 8; f.rx_ns = stamp ? stamp : now_monotonic_ns();
       std::memcpy(f.data, data, 8);
       const float value = reg == uint16_t(cybergear::Reg::MechPos) ? m.q : m.regs[reg];
       std::memcpy(f.data+4, &value, sizeof(value));
@@ -129,6 +134,7 @@ bool run(bool independent, bool approved = false, bool already_parked = false,
     std::cerr << error << '\n'; return false;
   }
   auto now = now_monotonic_ns();
+  plant->stamp = now;
   loop.step(now,5'000'000);
   if (!loop.start_parking(error)) { std::cerr << error << '\n'; return false; }
   const auto began = now;
@@ -143,6 +149,7 @@ bool run(bool independent, bool approved = false, bool already_parked = false,
       injected = true;
     }
     now = now_monotonic_ns();  // Feedback must precede this control sample.
+    plant->stamp = now;        // ...and be stamped at it, not after it.
     loop.step(now,5'000'000);
   }
   const bool moved = plant->maximum_travel[0] > 1.75*kDeg2Rad &&

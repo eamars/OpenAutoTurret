@@ -57,9 +57,23 @@ controller and takes minutes; that is expected, not a hang, and it is the reason
 ```bash
 # resolve the station's address rather than restating it (see "Address" below)
 OTA_STATION_ADDRESS=<observed-ip> scripts/station_address.sh deploy -- \
-    --probe-build --ready-timeout 420            # build + preflight, regression deferred
-scripts/station_address.sh deploy -- --activate --ready-timeout 420    # …then restart through the launcher
+    --prebuilt --probe-build --ready-timeout 420     # build here + preflight, regression deferred
+scripts/station_address.sh deploy -- --prebuilt --activate --ready-timeout 420    # …then restart through the launcher
 ```
+
+Leave out `--prebuilt` and the station compiles the whole tree itself, on every core, beside the
+live stack (2026-10-02: that is exactly what happened from the Windows workstation).
+
+**From the Windows workstation** (`python.exe Firmware/tools/deploy_station.py --prebuilt …`): the
+build runs in WSL against the extracted Debian 13 arm64 sysroot that servo commissioning already
+builds with, `run/adr0022-debian13/root` (its own Debian GCC 14.2.0 and the station's library
+packages; the binutils need `run/adr0022-debian13/cross-host-lib`). Those are the defaults on
+Windows; `--sysroot`/`--host-lib` (or `OTA_SYSROOT`/`OTA_HOST_LIB`) name others. The toolchain is
+`cmake/aarch64-sysroot.toolchain.cmake`, which deliberately sets no emulator: an emulator would be
+baked into every CTest command the station runs. The archive is packed inside WSL as well, because
+Windows tar drops the executable bits and the launcher then reads the tree as "not prebuilt" and
+compiles natively. The build happens before the station is touched, so a failed build leaves no
+release directory behind.
 
 Three things a handover needs, and each has already cost this project a session:
 
@@ -85,6 +99,14 @@ If the pinned fingerprint ever differs from the box's, that is a finding to inve
 to edit.
 
 ## What it proves
+
+Servo commissioning has a separate `deploy_station.py --baseline-bundle FILE` path, used by
+[the servo commissioning card](servo-commissioning.md). It ships only the two workstation-built
+commissioning executables (`commissiond`, `imu-bno085`) with the working-tree source, uses the
+existing project venv, and runs launcher `check` without opening devices. It does not activate the
+production stack, install dependencies, compile or run regression tests on the station.
+This is an acquisition release, not a verified production deployment. Normal deployment
+and its registered CTest requirements are unchanged.
 
 A successful `deploy_station.py` run proves: this exact revision built, its test suite passed on the
 station where the hardware is, preflight passed, and (with `--activate`) the launcher stopped and

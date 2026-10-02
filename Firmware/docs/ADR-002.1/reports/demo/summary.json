@@ -1,0 +1,14 @@
+{
+  "offline_only": true,
+  "generated_candidates": 16,
+  "synthetic_cases": {
+    "smooth": "PASS_SCOPE",
+    "stalled": "FAIL_QUALITY",
+    "creep": "FAIL_QUALITY",
+    "oscillating": "FAIL_QUALITY",
+    "drifting": "FAIL_QUALITY",
+    "spike": "FAIL_QUALITY"
+  },
+  "apply_rejected_run_count": 0,
+  "apply_rejected_blocked": true
+}

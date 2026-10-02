@@ -15,6 +15,8 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <cmath>
 #include <limits>
 #include <cstdio>
 #include <functional>
@@ -24,6 +26,7 @@
 #include "can/cybergear_protocol.hpp"  // cybergear::Reg
 #include "common/types.hpp"
 #include "control/park_position_evidence.hpp"
+#include "can/gm6020_friction.hpp"
 
 namespace ota {
 
@@ -31,6 +34,12 @@ namespace ota {
 struct AxisSnapshot {
   bool has_feedback = false;
   TimeNs rx_ns = 0;        // host monotonic time of the freshest feedback
+  TimeNs raw_rx_ns = 0;    // unchanged transport timestamp; trace prefers this when supplied
+  uint64_t rx_seq = 0;
+  int encoder_raw = -1;
+  int current_raw = 0;
+  bool current_raw_valid = false;
+  int enabled_state = -1; // CyberGear type2 state, NOT RunMode
   double q_rad = 0.0;
   double v_rad_s = 0.0;
   double torque_nm = 0.0;
@@ -79,12 +88,43 @@ struct CanHealth {
 
 class MotorBackend {
  public:
+  struct OutputEvidence {
+    TimeNs tx_ns = 0;
+    uint64_t tx_seq = 0;
+    double requested = std::numeric_limits<double>::quiet_NaN();
+    double successful = std::numeric_limits<double>::quiet_NaN();
+    double integral = std::numeric_limits<double>::quiet_NaN();
+    double velocity_estimate = std::numeric_limits<double>::quiet_NaN();
+    double kp = std::numeric_limits<double>::quiet_NaN();
+    double ki = std::numeric_limits<double>::quiet_NaN();
+    double current_cap = std::numeric_limits<double>::quiet_NaN();
+    double rx_velocity_20 = NAN, rx_velocity_30 = NAN, rx_velocity_40 = NAN;
+    int velocity_window_ms = 0;
+    double friction_a = NAN;
+    int friction_state = 0;
+    bool friction_exhausted = false;
+    int reason = 0; // 0 unknown, 1 normal, 2 explicit zero, 3 inhibited, 4 TX failed, 5 late cycle
+    int command_kind = 0; // 0 unknown, 1 current A, 2 voltage counts, 3 SpdRef rad/s, 4 LocRef rad, 5 STOP
+  };
+  virtual OutputEvidence output_evidence(AxisId) const { return {}; }
   virtual ~MotorBackend() = default;
   void set_calibration_invalidator(std::function<void()> callback) { invalidate_ = std::move(callback); }
   void invalidate_calibration() { if (invalidate_) invalidate_(); }
   virtual bool adopt_running_mode(AxisId, bool, std::string&, double = -1, double = 1) { return false; }
   virtual void heartbeat() {}
   virtual bool watchdog_fault() const { return false; }
+  // Independent links can inhibit one axis without releasing a healthy load.
+  virtual bool watchdog_fault_axis(AxisId) const { return watchdog_fault(); }
+  // Owner ruling 2026-10-02 (STATION_OPERATIONS.md, "Fault, hold, degrade"): a watchdog fault
+  // de-energises an axis only when holding it is impossible -- for a drive that holds on its own
+  // encoder, only when the drive itself has faulted. Releasing an unbalanced axis lets it fall.
+  virtual bool fault_releases_axis(AxisId) const { return true; }
+  // A persistent, non-hazardous servo condition (oscillation or stall that has not cleared within
+  // its persistence time): the supervisor HOLDs, energised, until it clears. nullptr: none.
+  virtual const char* servo_hold_reason() const { return nullptr; }
+  // Stop an axis and keep it held, energised, where holding is possible without this host (a drive
+  // holding speed zero on its own encoder). Default: no such hold exists, release it.
+  virtual void hold_axis(AxisId axis) { deenergize(axis); }
   // The reason a guard latched, captured by the guard itself at trip time. Fixed-size
   // POD because the thread describing a fault must not allocate to do it; detail is
   // truncated rather than grown. `condition` is the machine-readable token the fault
@@ -142,6 +182,8 @@ class MotorBackend {
     if (in.feedback_unsafe) return "feedback_unsafe";
     if (in.can_down) return "can_down";
     if (in.can_state_wrong) return "can_state";
+    if (in.temp_raw_over) return "temp_raw_over";
+    if (in.heartbeat_stale) return "heartbeat_stale";
     if (in.can_counters_bad) return "can_counters";
     if (in.bus_unhealthy) return "bus_unhealthy";
     if (in.speed_not_finite) return "speed_nan";
@@ -149,13 +191,11 @@ class MotorBackend {
     // READING, so a momentary overshoot removed power from an unbalanced payload. The
     // ceiling now clamps the command instead. Non-finite stays -- a NaN feedback is not
     // a fast axis, it is an axis we cannot see.
-    if (in.temp_raw_over) return "temp_raw_over";
     // Before `no_progress` and on purpose: "we asked for 10 deg/s and nothing happened"
     // is a different accusation when we know the frame was never sent. The specific
     // truth outranks the inference.
     if (in.command_not_sent) return "command_not_sent";
     if (in.no_progress) return "no_progress";
-    if (in.heartbeat_stale) return "heartbeat_stale";
     return "unknown";
   }
   // The compact matrix that travels with the token. The full field dump stays in the
@@ -171,12 +211,30 @@ class MotorBackend {
   virtual TripDetail watchdog_trip_detail() const { return {}; }
   virtual ParkPositionEvidence park_position_evidence(AxisId, TimeNs) const { return {}; }
   enum class Transition { Pending, Complete, Failed };
+  struct RegisterObservation {
+    double value = NAN;
+    TimeNs request_ns = 0, rx_ns = 0;
+    int status = -1;
+    bool valid = false;
+  };
+  // Iqf [A], VBus [V], RunMode, LimitCur [A], SpdKp, SpdKi; timestamps
+  // belong to each register reply, independently of periodic type-2 feedback.
+  struct PitchRegisterDiagnostics { std::array<RegisterObservation,6> registers{}; };
+  virtual void poll_pitch_register_diagnostics(TimeNs) {}
+  virtual PitchRegisterDiagnostics pitch_register_diagnostics() const { return {}; }
+  virtual Transition begin_pitch_speed_loop_gain_update(double, double, std::string& error) {
+    error="verified pitch gain application unsupported"; return Transition::Failed;
+  }
+  virtual Transition poll_pitch_speed_loop_gain_update(TimeNs, std::string& error) {
+    error="verified pitch gain application unsupported"; return Transition::Failed;
+  }
   virtual bool recovery_before_homing() const { return false; }
   // Topology/protocol capabilities. Legacy CyberGear and simulation retain
   // the original finite-yaw, register-backed, feedback-confirmed defaults.
   // A mixed backend can opt into continuous yaw and session-relative yaw
   // feedback without inventing a CyberGear UID or register response.
   virtual bool supports_continuous_yaw() const { return false; }
+  virtual bool uses_monotonic_feedback_clock() const { return false; }
   virtual bool yaw_feedback_registerless() const { return false; }
   virtual bool requires_disable_confirmation(AxisId) const { return true; }
   virtual bool begin_motor_recovery(std::string& err) {
@@ -228,6 +286,23 @@ class MotorBackend {
   // speed with its internal velocity loop; current rises as needed up to the
   // current limit). Fire-and-forget; safe to call every cycle.
   virtual void command_velocity(AxisId axis, double velocity_rad_s) = 0;
+  // Explicit upstream intent authorizes bounded breakaway; a quiet position
+  // correction alone must never create another start attempt.
+  virtual void set_motion_intent(AxisId, bool) {}
+  struct YawTrialSettings {
+    double kp_a_per_rad_s = 1, ki_a_per_rad = .6;
+    int rx_window_ms = 0;
+    gm6020::FrictionConfig friction;
+  };
+  virtual bool apply_yaw_trial(const YawTrialSettings&, std::string& error) {
+    error = "backend has no current-mode yaw tuning interface"; return false;
+  }
+  // What this backend believes it is running right now. The parameter transaction verifies against
+  // this instead of against the request it sent, which is the difference between "I asked for Kp=2"
+  // and "the loop is running Kp=2" — the gap that produced a folder named kp2 holding Kp=1. It is a
+  // host echo, not a register readback, and the inventory declares it as host_echo: the GM6020
+  // protocol has no gain register to read.
+  virtual YawTrialSettings yaw_trial_settings() const { return {}; }
   // Feedback keepalive: elicit a fresh COMM_TYPE_2 response WITHOUT changing
   // any reference (the CyberGear has no periodic telemetry — it answers
   // commands only). Needed for speed-mode axes on Allow cycles, where no
@@ -263,6 +338,34 @@ class MotorBackend {
   // (sim: its plant is a fixed time constant, not a tuned velocity loop).
   virtual void set_speed_loop_gains(AxisId axis, double spd_kp,
                                     double spd_ki) {}
+
+  // --- reference servo (ADR-003 3b with the ADR-002.2 servos) ---------------
+  // One trajectory segment from the control loop's single reference owner: q/v/a at t_ns and the
+  // jerk that holds until the next tick. The backend's own servo evaluates it at the axis's
+  // feedback rate (yaw: every GM6020 frame; pitch: a 1 kHz SpdRef loop) and owns the actuator law;
+  // nothing above it closes a speed loop. A segment older than valid_s is held at its last
+  // position with zero speed. Any legacy command (command, command_velocity, deenergize) releases
+  // the servo for that axis and the existing path takes over, so homing, braking and stopping are
+  // unchanged.
+  struct ServoReference {
+    TimeNs t_ns = 0;
+    double q = 0, v = 0, a = 0, j = 0, valid_s = 0;
+    // This boot's soft envelope (from homing); q_min == q_max: unbounded. A bounded axis's servo
+    // guards against its mechanical ends with it, independently of q.
+    double q_min = 0, q_max = 0;
+    // q/v/a at time t (t >= t_ns), or false when stale.
+    bool at(TimeNs t, double& q_out, double& v_out, double& a_out) const {
+      const double tau = (t - t_ns) * 1e-9;
+      if (!(tau >= -1e-3) || tau > valid_s) return false;
+      const double s = tau > 0 ? tau : 0.0;
+      q_out = q + v * s + a * s * s / 2 + j * s * s * s / 6;
+      v_out = v + a * s + j * s * s / 2;
+      a_out = a + j * s;
+      return true;
+    }
+  };
+  virtual bool servo_available(AxisId) const { return false; }
+  virtual bool command_reference(AxisId, const ServoReference&) { return false; }
  private:
   std::function<void()> invalidate_;
 };

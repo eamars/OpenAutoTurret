@@ -124,6 +124,7 @@ void CyberGearSystem::on_frame(const RawFrame& f) {
     if (pending_.comm == static_cast<uint8_t>(cybergear::CommType::ReadReg) &&
         (uint16_t(cf.data[0]) | (uint16_t(cf.data[1]) << 8)) != pending_.address) return;
     pending_.frame = cf;
+    pending_.rx_ns = f.rx_ns;
     pending_.received = true;
   }
   pend_cv_.notify_all();
@@ -237,14 +238,22 @@ void CyberGearSystem::start_watchdog() {
         first_trip = !motion_inhibited_.exchange(true);
       }
       if (motion_inhibited_.load()) {
+        // Owner ruling 2026-10-02 (STATION_OPERATIONS.md, "Fault, hold, degrade"): the pitch load is
+        // unbalanced, and a STOP releases it -- it falls. An enabled drive that has not faulted is
+        // told to hold speed zero on its own encoder, which needs nothing from this host; only a
+        // faulted or not-enabled drive (already not holding) gets the STOP. A speed reference is
+        // ignored by a drive in position mode, which keeps holding its target.
         for (auto a : {AxisId::Pitch, AxisId::Yaw}) {
-          const auto f = cybergear::make_stop(cfg_.host_can_id, motor_id(a));
+          const auto& s = observed[static_cast<int>(a)];
+          const bool holds = s.has_feedback && s.mode == 2 && !s.faults;
+          const auto f = holds ? cybergear::make_write_reg_float(cybergear::Reg::SpdRef, 0.0f, cfg_.host_can_id, motor_id(a))
+                               : cybergear::make_stop(cfg_.host_can_id, motor_id(a));
           if (bus_) bus_->send(f.id, f.data, nullptr);
         }
       }
       command_lock.unlock();
       if (first_trip) {
-        // Record the evidence after issuing both stops. A generic fault label
+        // Record the evidence after issuing the holds/stops. A generic fault label
         // cannot distinguish a stalled host from lost feedback or a drive fault.
         for (int i = 0; i < 2; ++i) {
           const auto& s = observed[i];
@@ -258,7 +267,8 @@ void CyberGearSystem::start_watchdog() {
   });
 }
 
-bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err) {
+bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err,
+                                          TimeNs* request_ns) {
   const auto f = cybergear::make_read_reg(reg, cfg_.host_can_id, motor_id(axis));
   {
     std::lock_guard lk(pend_mtx_);
@@ -270,12 +280,14 @@ bool CyberGearSystem::begin_register_read(AxisId axis, cybergear::Reg reg, std::
     pending_.match_target = cfg_.host_can_id;
     pending_.address = static_cast<uint16_t>(reg);
   }
+  if (request_ns) *request_ns = now_monotonic_ns();
   if (send(f.id, f.data, &err)) return true;
   cancel_register_read();
   return false;
 }
 
-int CyberGearSystem::poll_register_read(double& value, std::string& err) {
+int CyberGearSystem::poll_register_read(double& value, std::string& err,
+                                        TimeNs* response_ns) {
   std::lock_guard lk(pend_mtx_);
   if (!pending_.active || !pending_.asynchronous) { err = "no asynchronous read"; return -1; }
   if (!pending_.received) return 0;
@@ -285,6 +297,7 @@ int CyberGearSystem::poll_register_read(double& value, std::string& err) {
       static_cast<uint16_t>(reg) != pending_.address) {
     err = "malformed register response"; return -1;
   }
+  if (response_ns) *response_ns = pending_.rx_ns;
   return 1;
 }
 

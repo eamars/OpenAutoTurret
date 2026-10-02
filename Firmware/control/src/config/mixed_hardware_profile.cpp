@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <initializer_list>
 #include <limits>
 #include <string_view>
@@ -157,8 +158,42 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
   LoadResult result;
   try {
     const YAML::Node root = YAML::LoadFile(path);
-    if (!check_keys(root, "profile", {"schema_version", "buses", "axes"}, result))
+    if (!check_keys(root, "profile", {"schema_version", "buses", "axes"}, result, {"servo"}))
       return result;
+    if (const auto servo = root["servo"]) {
+      check_keys(servo, "servo", {"yaw_asset", "pitch_asset", "yaw_current_limit_a", "yaw_rms_limit_a",
+                                  "yaw_temperature_limit_raw", "oscillation_limit_a", "speed_limit_rad_s",
+                                  "pitch_guard_rad", "pitch_stop_acceleration_rad_s2"}, result);
+      Servo s;
+      const auto base = std::filesystem::path(path).parent_path();
+      s.yaw_asset = (base / string_value(servo["yaw_asset"], "servo.yaw_asset", result)).string();
+      s.pitch_asset = (base / string_value(servo["pitch_asset"], "servo.pitch_asset", result)).string();
+      s.yaw_current_limit_a = double_value(servo["yaw_current_limit_a"], "servo.yaw_current_limit_a", result);
+      s.yaw_rms_limit_a = double_value(servo["yaw_rms_limit_a"], "servo.yaw_rms_limit_a", result);
+      s.oscillation_limit_a = double_value(servo["oscillation_limit_a"], "servo.oscillation_limit_a", result);
+      s.speed_limit_rad_s = double_value(servo["speed_limit_rad_s"], "servo.speed_limit_rad_s", result);
+      s.pitch_guard_rad = double_value(servo["pitch_guard_rad"], "servo.pitch_guard_rad", result);
+      s.pitch_stop_acceleration_rad_s2 = double_value(servo["pitch_stop_acceleration_rad_s2"],
+                                                      "servo.pitch_stop_acceleration_rad_s2", result);
+      if (!(s.pitch_guard_rad > 0 && s.pitch_guard_rad <= 0.06))
+        error(result, "servo.pitch_guard_rad must be in (0, 0.06] rad: the soft margin inside the end stops is about 0.09");
+      if (!(s.pitch_stop_acceleration_rad_s2 > 0 && s.pitch_stop_acceleration_rad_s2 <= 5.0))
+        error(result, "servo.pitch_stop_acceleration_rad_s2 must be in (0, 5] rad/s^2 (a demonstrated deceleration)");
+      if (!(s.speed_limit_rad_s > 0 && s.speed_limit_rad_s <= 100 * 2 * M_PI / 60 + 1e-9))
+        error(result, "servo.speed_limit_rad_s must be in (0, 10.472] rad/s (owner ruling: below 100 RPM)");
+      s.yaw_temperature_limit_raw = static_cast<int>(unsigned_value(servo["yaw_temperature_limit_raw"],
+                                                                    "servo.yaw_temperature_limit_raw", result));
+      // Owner ruling 2026-10-02: 3 A peak (protocol full scale), 1.62 A continuous (rated).
+      if (!(s.yaw_current_limit_a > 0 && s.yaw_current_limit_a <= 3.0))
+        error(result, "servo.yaw_current_limit_a must be in (0, 3] A");
+      if (!(s.yaw_rms_limit_a > 0 && s.yaw_rms_limit_a <= 1.62))
+        error(result, "servo.yaw_rms_limit_a must be in (0, 1.62] A");
+      if (!(s.oscillation_limit_a > 0 && s.oscillation_limit_a <= 1.0))
+        error(result, "servo.oscillation_limit_a must be in (0, 1] A");
+      if (s.yaw_temperature_limit_raw <= 0 || s.yaw_temperature_limit_raw > 70)
+        error(result, "servo.yaw_temperature_limit_raw must be in (0, 70]");
+      result.profile.servo = s;
+    }
     const auto version = unsigned_value(root["schema_version"], "schema_version", result);
     if (version != 1) error(result, "schema_version must be 1");
     result.profile.schema_version = version <= INT32_MAX ? static_cast<int>(version) : 0;
@@ -179,11 +214,17 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
                                   "control_mode", "feedback_frame_id", "command_frame_id",
                                   "guard_temp_raw_ceiling"}, result,
                {"current_ring_verified", "host_current_limit_a", "current_kp_a_per_rad_s",
-                "current_ki_a_per_rad_s"});
+                "current_ki_a_per_rad_s", "velocity_rx_window_ms", "friction"});
     check_axis_string(yaw["protocol"], "gm6020", "axes.yaw", "protocol", result);
     check_axis_string(yaw["bus"], "yaw", "axes.yaw", "bus", result);
     check_axis_string(yaw["topology"], "continuous", "axes.yaw", "topology", result);
     auto& yaw_axis = result.profile.yaw;
+    if (yaw["velocity_rx_window_ms"]) {
+      const auto window = unsigned_value(yaw["velocity_rx_window_ms"], "axes.yaw.velocity_rx_window_ms", result);
+      if (window != 0 && window != 20 && window != 30 && window != 40)
+        error(result, "axes.yaw.velocity_rx_window_ms must be 0, 20, 30 or 40");
+      else yaw_axis.velocity_rx_window_ms = static_cast<int>(window);
+    }
     yaw_axis.protocol = Protocol::Gm6020;
     yaw_axis.bus_name = "yaw";
     yaw_axis.topology = Topology::Continuous;
@@ -249,17 +290,41 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
       double ki = 0.0;
       const bool have_ki = finite_scalar(yaw["current_ki_a_per_rad_s"], ki);
       if (!have_ki || !(ki >= 0.0) || ki > 20.0)
-        error(result, "axes.yaw: current mode needs current_ki_a_per_rad_s in [0, 20] A per "
-                      "rad/s of integral (0 keeps the loop proportional-only)");
+        error(result, "axes.yaw: current mode needs current_ki_a_per_rad_s in [0, 20] A/rad "
+                      "(legacy key spelling; 0 keeps the loop proportional-only)");
       yaw_axis.current_ring_verified = acknowledged;
       yaw_axis.host_current_limit_a = limit;
       yaw_axis.current_kp_a_per_rad_s = kp;
       yaw_axis.current_ki_a_per_rad_s = ki;
+      const auto friction = yaw["friction"];
+      if (friction) {
+        check_keys(friction, "axes.yaw.friction", {"enabled"}, result,
+          {"positive_breakaway_a", "negative_breakaway_a", "positive_run_a", "negative_run_a",
+           "timeout_s", "motion_displacement_rad", "stationary_velocity_rad_s", "fresh_samples", "output_slew_a_per_s"});
+        try { yaw_axis.friction.enabled = friction["enabled"].as<bool>(); }
+        catch (const std::exception&) { error(result, "axes.yaw.friction.enabled must be boolean"); }
+        auto number = [&](const char* key, double& value) {
+          if (friction[key]) value = double_value(friction[key], std::string("axes.yaw.friction.")+key,result);
+          else if (yaw_axis.friction.enabled) error(result,std::string("axes.yaw.friction.")+key+" is required when enabled");
+          if (value < 0) error(result,std::string("axes.yaw.friction.")+key+" must be non-negative");
+        };
+        auto& f = yaw_axis.friction;
+        number("positive_breakaway_a",f.positive_breakaway_a); number("negative_breakaway_a",f.negative_breakaway_a);
+        number("positive_run_a",f.positive_run_a); number("negative_run_a",f.negative_run_a);
+        number("timeout_s",f.timeout_s); number("motion_displacement_rad",f.motion_displacement_rad);
+        number("stationary_velocity_rad_s",f.stationary_velocity_rad_s); number("output_slew_a_per_s",f.output_slew_a_per_s);
+        if (friction["fresh_samples"]) {
+          const auto count = unsigned_value(friction["fresh_samples"],"axes.yaw.friction.fresh_samples",result);
+          if (count > 1000) error(result,"axes.yaw.friction.fresh_samples must be <=1000");
+          else f.fresh_samples = static_cast<uint32_t>(count);
+        }
+        if (f.enabled && !f.valid(limit)) error(result,"axes.yaw.friction needs finite measured values within the current cap");
+      }
     } else {
       // A current key sitting in a voltage profile is a stale claim, not a harmless extra line:
       // the next person would read 0.8 A as the envelope of an axis that is commanding volts.
       for (const auto* key : {"current_ring_verified", "host_current_limit_a",
-                              "current_kp_a_per_rad_s", "current_ki_a_per_rad_s"}) {
+                              "current_kp_a_per_rad_s", "current_ki_a_per_rad_s", "friction"}) {
         if (yaw[key])
           error(result, std::string("axes.yaw.") + key +
                             " is only meaningful when axes.yaw.control_mode is 'current'");

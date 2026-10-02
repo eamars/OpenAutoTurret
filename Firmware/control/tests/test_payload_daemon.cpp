@@ -342,7 +342,7 @@ TEST(PayloadDaemon, FailedFirstAxisAbortsTheWholeCheck) {
 // driven at the commanded rate against the pitch's gravity load. The sim plant
 // ignores the gain writes (no drive-internal velocity loop), so this asserts
 // the loop ISSUES them — with the configured values, for both axes.
-TEST(PayloadDaemon, CheckStartRaisesSpeedLoopGainsAndCurrentOnBothAxes) {
+TEST(PayloadDaemon, CheckMeasuresInstalledGainsWithoutUnverifiedWrites) {
   auto backend = std::make_unique<RecordingGainsBackend>(0.005);
   RecordingGainsBackend* rec = backend.get();
   backend->set_stops(AxisId::Pitch, -1.0, 1.0);
@@ -370,7 +370,7 @@ TEST(PayloadDaemon, CheckStartRaisesSpeedLoopGainsAndCurrentOnBothAxes) {
   const auto res = loop.submit_command("start_payload_verification", "");
   ASSERT_TRUE(res.ok) << res.error;
   // The command only raises a flag; the check starts on the next control step
-  // (so the gain writes land on the control thread). Run it to completion.
+  // on the control thread. Run it to completion.
   bool active = false;
   for (int i = 0; i < 8000; ++i) {
     t += kDtNs;
@@ -380,19 +380,9 @@ TEST(PayloadDaemon, CheckStartRaisesSpeedLoopGainsAndCurrentOnBothAxes) {
   }
   EXPECT_TRUE(active) << "the check never started";
 
-  // Both axes get the speed-loop gains, with the configured values.
-  ASSERT_EQ(rec->gain_calls_.size(), 2u);
-  for (const auto& g : rec->gain_calls_) {
-    EXPECT_DOUBLE_EQ(g.kp, 5.0);
-    EXPECT_DOUBLE_EQ(g.ki, 0.02);
-  }
-  bool pitch_gained = false, yaw_gained = false;
-  for (const auto& g : rec->gain_calls_) {
-    if (g.axis == AxisId::Pitch) pitch_gained = true;
-    if (g.axis == AxisId::Yaw) yaw_gained = true;
-  }
-  EXPECT_TRUE(pitch_gained) << "pitch gains not applied";
-  EXPECT_TRUE(yaw_gained) << "yaw gains not applied";
+  // A response check measures installed gains; only an explicit verified
+  // transaction may change them. This also avoids claiming a yaw no-op applied.
+  EXPECT_TRUE(rec->gain_calls_.empty());
 
   // Both axes get the check current limit (5 A) too. Homing also raises the
   // current limit (adaptive, §22), so there are more than two calls — assert

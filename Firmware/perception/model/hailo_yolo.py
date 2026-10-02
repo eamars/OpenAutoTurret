@@ -58,10 +58,7 @@ class HailoYoloAdapter(ModelAdapter):
 
         if (self.manifest.input_width, self.manifest.input_height) != (640, 640):
             raise ModelRejected("this Hailo profile requires the pinned 640x640 HEF input")
-        if self.manifest.labels != "coco":
-            raise ModelRejected("the pinned YOLOv8n HEF requires the contiguous COCO-80 label map")
-        if (self.manifest.bbox_order, self.manifest.bbox_normalized) != ("yxyx", True):
-            raise ModelRejected("the Hailo NMS adapter requires normalized [ymin,xmin,ymax,xmax] boxes")
+        self._check_manifest()
 
         stack = ExitStack()
         try:
@@ -89,12 +86,12 @@ class HailoYoloAdapter(ModelAdapter):
             hef = HEF(self._artifact_path)
             inputs = hef.get_input_vstream_infos()
             outputs = hef.get_output_vstream_infos()
-            if len(inputs) != 1 or len(outputs) != 1:
-                raise ModelRejected(
-                    f"expected one input and output vstream; got {len(inputs)} and {len(outputs)}")
+            if len(inputs) != 1:
+                raise ModelRejected(f"expected one input vstream; got {len(inputs)}")
             if tuple(inputs[0].shape) != (640, 640, 3):
                 raise ModelRejected(f"HEF input shape is {inputs[0].shape}, expected 640x640x3")
-            self._input_name, self._output_name = inputs[0].name, outputs[0].name
+            self._input_name = inputs[0].name
+            self._check_outputs(outputs)
 
             vdevice = stack.enter_context(VDevice(device_ids=device_ids))
             configure = ConfigureParams.create_from_hef(hef, HailoStreamInterface.PCIe)
@@ -170,6 +167,52 @@ class HailoYoloAdapter(ModelAdapter):
         self._last_model_inference_ms = (inference_finished - inference_started) / 1_000_000.0
 
         parse_started = time.monotonic_ns()
+        rows = self._parse(result, frame, pad)
+        self.last_read_ms = (time.monotonic_ns() - parse_started) / 1_000_000.0
+
+        try:
+            detection_set = self._rows_to_set(
+                rows, frame_sequence=int(frame_sequence),
+                sensor_timestamp_ns=int(sensor_timestamp_ns),
+                publish_timestamp_ns=int(publish_timestamp_ns), **self._row_layout())
+        except Exception as exc:  # noqa: BLE001 - invalid model coordinates are fatal to frame
+            self.failures += 1
+            raise ModelRejected(f"Hailo output violates the detection contract: {exc}") from exc
+        self.last_timings_ms["model_inference_ms"] = round(self._last_model_inference_ms, 6)
+        self.inferences += 1
+        return detection_set
+
+    def geometry(self):
+        """Rows leave ``_parse`` already normalised to the frame (the letterbox pad is undone there,
+        where it was made), so the mapping onto the declared stream is a plain scale.
+
+        Station, 2026-10-02: the manifest's true ``preserve_aspect_ratio`` made the standard geometry
+        undo the 140 px pad a second time, publishing every vertical coordinate stretched 1.78x
+        about the centre -- a person at y 0.25..0.75 came out at 0.056..0.944. It ran the pitch loop
+        at 1.78x its gain (the "detections move 1.5-1.75x the scene" finding), clamped anyone in the
+        top or bottom 22% of the picture onto its edge, and was tuned around by the 0.22 head fraction.
+        """
+        geometry = super().geometry()
+        geometry.preserve_aspect_ratio = False
+        return geometry
+
+    # -- hooks a sibling HEF (hailo_pose.HailoYoloPoseAdapter) overrides -------------------
+    def _check_manifest(self) -> None:
+        if self.manifest.labels != "coco":
+            raise ModelRejected("the pinned YOLOv8n HEF requires the contiguous COCO-80 label map")
+        if (self.manifest.bbox_order, self.manifest.bbox_normalized) != ("yxyx", True):
+            raise ModelRejected("the Hailo NMS adapter requires normalized [ymin,xmin,ymax,xmax] boxes")
+
+    def _check_outputs(self, outputs) -> None:
+        if len(outputs) != 1:
+            raise ModelRejected(f"expected one output vstream; got {len(outputs)}")
+        self._output_name = outputs[0].name
+
+    def _row_layout(self) -> dict:
+        return {}
+
+    def _parse(self, result, frame, pad: int) -> List[List[float]]:
+        """One synchronous Hailo NMS result -> rows normalised to the frame that was fed."""
         try:
             batch = result[self._output_name]
             if not isinstance(batch, (list, tuple)) or len(batch) != 1:
@@ -214,19 +257,7 @@ class HailoYoloAdapter(ModelAdapter):
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             self.failures += 1
             raise ModelRejected(f"unexpected Hailo NMS output: {exc}") from exc
-        self.last_read_ms = (time.monotonic_ns() - parse_started) / 1_000_000.0
-
-        try:
-            detection_set = self._rows_to_set(
-                rows, frame_sequence=int(frame_sequence),
-                sensor_timestamp_ns=int(sensor_timestamp_ns),
-                publish_timestamp_ns=int(publish_timestamp_ns))
-        except Exception as exc:  # noqa: BLE001 - invalid model coordinates are fatal to frame
-            self.failures += 1
-            raise ModelRejected(f"Hailo output violates the detection contract: {exc}") from exc
-        self.last_timings_ms["model_inference_ms"] = round(self._last_model_inference_ms, 6)
-        self.inferences += 1
-        return detection_set
+        return rows
 
     def describe(self):
         report = super().describe()

@@ -94,6 +94,8 @@ TEST(WatchdogTripEvents, SeveralConditionsReportTheFirstInGuardOrder) {
   in.temp_raw_over = true;
   EXPECT_STREQ("temp_raw_over", MotorBackend::select_trip_condition(in));
   in.temp_raw_over = false;
+  EXPECT_STREQ("heartbeat_stale", MotorBackend::select_trip_condition(in));
+  in.heartbeat_stale = false;
   EXPECT_STREQ("no_progress", MotorBackend::select_trip_condition(in));
 }
 
@@ -136,6 +138,14 @@ TEST(WatchdogTripEvents, TheCeilingClampsTheAskAndPowersNothingOff) {
 static ota::GuardResponse resp(std::function<void(MotorBackend::TripInputs&)> set, int streak = 0) {
   MotorBackend::TripInputs in; set(in); return yaw_guard_response(in, streak);
 }
+TEST(WatchdogTripEvents, RepeatedTicksAreOneMotionEpisode) {
+  ota::MotionEpisodeCounter episodes;
+  for (int tick = 0; tick < 1000; ++tick) episodes.observe(true);
+  EXPECT_EQ(episodes.count, 1);
+  episodes.observe(false);
+  episodes.observe(true);
+  EXPECT_EQ(episodes.count, 2);
+}
 TEST(WatchdogTripEvents, OnlyLossOfControlOrHeatMayFault) {
   EXPECT_EQ(ota::GuardResponse::Fault, resp([](MotorBackend::TripInputs& i){ i.feedback_unsafe = true; }));
   EXPECT_EQ(ota::GuardResponse::Fault, resp([](MotorBackend::TripInputs& i){ i.can_down = true; }));
@@ -147,11 +157,10 @@ TEST(WatchdogTripEvents, OnlyLossOfControlOrHeatMayFault) {
   EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs& i){ i.speed_not_finite = true; }));
   EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs& i){ i.command_not_sent = true; }));
   EXPECT_EQ(ota::GuardResponse::Run,
-            resp([](MotorBackend::TripInputs& i){ i.no_progress = true; }, ota::kYawStallHoldStreak - 1));
-  // A stall repeated becomes a Hold -- powered, not pushing -- and never a Fault: an axis
-  // that is not moving is not on its way to an endstop.
-  EXPECT_EQ(ota::GuardResponse::Hold,
-            resp([](MotorBackend::TripInputs& i){ i.no_progress = true; }, ota::kYawStallHoldStreak));
+            resp([](MotorBackend::TripInputs& i){ i.no_progress = true; }, 2));
+  // Even repeated performance episodes must not create a second output writer.
+  EXPECT_EQ(ota::GuardResponse::Run,
+            resp([](MotorBackend::TripInputs& i){ i.no_progress = true; }, 1000));
   EXPECT_EQ(ota::GuardResponse::Run, resp([](MotorBackend::TripInputs&){}));
 }
 

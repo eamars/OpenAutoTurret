@@ -69,6 +69,10 @@ axes:
     # pitch while motion.modes asks both for the same 20 deg/s. Acceleration stays under
     # pitch's because yaw carries the whole payload.
     max_velocity_deg_s: 30
+    # Owner 2026-10-02: the 2026-10-01 limit of 30 deg/s² no longer applies -- a new tripod
+    # lowered the centre of mass (station unchanged) and the turret is much more robust.
+    # Back to pitch's 60 (manual parity, 2026-09-28), which is also the backend's yaw ramp
+    # (kYawMaxAccelerationRadS2).
     max_acceleration_deg_s2: 60
     max_jerk_deg_s3: 300
     # Yaw drive authority in raw GM6020 counts (controller accepts <= 25000). 9000 stalled the
@@ -143,6 +147,15 @@ homing_plan:
     axis: pitch
     position_deg: 40
 tracking:
+  # ADR-003: the tracking core owns the target state, the prediction and the AUTO_TRACK reference
+  # (docs/ADR-003/IMPLEMENTATION.md). The estimator_* and motor_response_ms keys below belong to
+  # the legacy path and are unused while `core` is set.
+  core:
+    parameters: config/tracking/tracking.json
+    camera_timing: config/tracking/camera_timing.json
+    # The exposure term of the measured optical time until the V2 observation wire carries each
+    # frame's exposure: the auto-exposure the tracking camera runs at in the station's room.
+    nominal_exposure_s: 0.033
   # Camera measurements are noisier than the encoder. Smooth the measured LOS
   # before prediction; the displayed prediction comes from this same estimator.
   estimator_measurement_sigma_rad: 0.012
@@ -152,8 +165,12 @@ tracking:
   # Applies on native and legacy observation paths. Perception's association
   # anchor remains independent. A fraction is a box position, not a detected head.
   # Startup-only: edit these values and restart through the normal launcher.
+  # Owner, 2026-10-02: aim at the head as the pose profile (hailo_yolov8s_pose, the launcher default)
+  # measures it -- head keypoints, else above the shoulders, else a box fraction, with the source
+  # published per detection -- rather than a fixed fraction of a box that moves with pose and
+  # clipping. Under a box-only profile perception's anchor is the torso (anchor.target).
   aim_point:
-    mode: box_fraction        # box_fraction | perception_anchor
+    mode: perception_anchor   # box_fraction | perception_anchor
     x_fraction: 0.50          # left -> right inside the detected box
     y_fraction: 0.22          # top -> bottom; tune the head/framing compromise here
   search_enabled_by_default: false

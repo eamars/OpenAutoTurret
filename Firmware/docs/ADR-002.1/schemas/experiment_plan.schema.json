@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ADR-002.1 offline reference plan, not hardware authorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["adr", "offline_only", "physical_execution_authorized", "space_hash", "policy_hash", "seed", "candidates", "plan_hash"],
+  "properties": {
+    "adr": {"const": "002.1"},
+    "offline_only": {"const": true},
+    "physical_execution_authorized": {"const": false},
+    "space_hash": {"$ref": "#/$defs/hash"},
+    "policy_hash": {"$ref": "#/$defs/hash"},
+    "plan_hash": {"$ref": "#/$defs/hash"},
+    "seed": {"const": 20260930},
+    "candidates": {
+      "type": "array", "minItems": 1, "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_id", "normalized", "parameters", "parameters_hash", "direction_order"],
+        "properties": {
+          "candidate_id": {"type": "string", "pattern": "^coarse-[0-9]{3}$"},
+          "normalized": {"type": "array", "minItems": 1, "items": {"type": "number", "minimum": 0, "maximum": 1}},
+          "parameters": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "number"}},
+          "parameters_hash": {"$ref": "#/$defs/hash"},
+          "direction_order": {"enum": [[1, -1], [-1, 1]]}
+        }
+      }
+    }
+  },
+  "$defs": {"hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

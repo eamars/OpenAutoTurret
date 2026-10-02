@@ -22,6 +22,7 @@
 #pragma once
 
 #include <array>
+#include <utility>
 #include <atomic>
 #include <deque>
 #include <functional>
@@ -44,6 +45,7 @@
 #include "tracks/track_set.hpp"
 #include "web/command_validation.hpp"
 #include "control/motor_backend.hpp"
+#include "control/param_transaction.hpp"   // the exchange that must verify before motion
 #include "control/homing_motion_guard.hpp"
 #include "control/reference_manager.hpp"
 #include "control/reference_limiter.hpp"
@@ -82,6 +84,7 @@ class ControlLoop {
     control::MotionConfig motion;
     bool start_in_auto_roam = false;
     bool service_speed_control = false;
+    bool manual_commissioning = false;
     double homing_speed_kp = 1.0;
     double homing_speed_ki = .002;
     bool homing_mode_displacement_check = true;
@@ -203,6 +206,8 @@ class ControlLoop {
   bool start_hold(std::string& err);
   bool start_parking(std::string& err);  // requires homed_ (valid limits/models)
   void deenergize_all();
+  // Internal fault paths: stop, release only what cannot be held (see the definition).
+  void stop_axes_safely();
 
   // --- tracking (Phase 6, §13-§16) --------------------------------------
   // Enable the tracking mode. Requires a valid homing (position validity
@@ -352,6 +357,18 @@ class ControlLoop {
   // (§28.5/§31.3).
   double hold_speed_effective() const;
   control::MotionProfile motion_profile(int axis, OperatingMode mode) const;
+  // ADR-002.2 servos on both axes: a hold is then a braked reference, not a pose (see Phase::Hold).
+  bool servo_holds() const {
+    return backend_->servo_available(AxisId::Yaw) && backend_->servo_available(AxisId::Pitch);
+  }
+  // The braking limits of that reference: the ones the legacy speed loop stopped with.
+  std::pair<double, double> hold_brake_limits(int axis) const;
+  // A supervisor BRAKE/HOLD executed by the engaged ADR-002.2 servo: a braked reference from
+  // `from` (last tick's published reference) to where it comes to rest. False: not handed over.
+  bool servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from, TimeNs period_ns, TimeNs now_ns,
+                  const AxisLimits& limits, double q_measured, double v_measured);
+  // A supervisor stop starts at the measured axis when the reference is further than this from it.
+  static constexpr double kStopReanchorRad = 0.05;
   double motion_speed(OperatingMode mode, bool maximum = false) const;
 
   // --- telemetry (§6.3, §43) --------------------------------------------
@@ -444,6 +461,17 @@ class ControlLoop {
   // Phase 8: command execution on the control thread (§42.2).
   void process_commands();
   void execute_command(const std::string& name, const std::string& arg);
+  // Stage, apply, read back, and only then let the revision move. Shared by `yaw_control_trial`
+  // (both halves in one command, which is what the existing scripts do) and by the two-command
+  // surface `param_prepare` / `param_apply` that a campaign runner uses.
+  void param_exchange_yaw(const std::string& command,
+                          const MotorBackend::YawTrialSettings& settings,
+                          const std::string& request_id);
+  std::vector<control::ParamValue> yaw_trial_values(
+      const MotorBackend::YawTrialSettings& settings) const;
+  // The pitch pair in the same vocabulary the inventory uses, so one transaction can speak to both
+  // axes and a trace line never has to translate between two naming schemes.
+  std::vector<control::ParamValue> pitch_gain_values(double kp, double ki) const;
   void disable_tracking();
   // v3: make the v1 controllers match a mode that has already been accepted, and
   // build the authoritative cycle intent from whichever mode owns motion (§53).
@@ -465,10 +493,10 @@ class ControlLoop {
   void finish_payload_check(TimeNs now_ns);
   void abort_payload_check(TimeNs now_ns, const std::string& reason);
   void apply_payload_derate(bool derated);
-  void fault(const std::string& reason) {
+  void fault(const std::string& reason, bool stop_all = true) {
     const bool replace_park_failure = park_failed_;
     park_failed_ = false;  // a safety fault cannot be cleared as a park-only failure
-    if (phase_ == Phase::Homing || phase_ == Phase::Parking) deenergize_all();
+    if (stop_all && (phase_ == Phase::Homing || phase_ == Phase::Parking)) stop_axes_safely();
     if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;
@@ -645,6 +673,29 @@ class ControlLoop {
   // True on a cycle that published a shaped reference, so the first cycle of an engagement re-seats
   // the profile at the pose the hardware is actually in instead of at wherever the last one ended.
   bool ref_lim_engaged_ = false;
+  // ADR-003 tracking core (TrackingController::uses_core): Level 1 owns the AUTO_TRACK reference.
+  // Engaged from the current reference on the first tracking tick, released whenever another
+  // source owns it. servo_jerk_ is the segment jerk handed to the ADR-002.2 servos (zero for the
+  // legacy limiter, which does not integrate one).
+  bool core_engaged_ = false;
+  // When the core last ticked. A tick it missed, by whatever path, means Level 1 must re-seed from
+  // the reference actually executed meanwhile rather than integrate the gap from its stale state.
+  TimeNs core_last_tick_ns_ = 0;
+  // servo_stop: the rest point of the supervisor stop in progress, latched on its first tick (a
+  // stop re-aimed every tick at "here + stopping distance" is a target moving at the axis's speed).
+  double brake_rest_rad_[kAxisCount] = {0.0, 0.0};
+  TimeNs brake_last_ns_[kAxisCount] = {0, 0};
+  // ADR-003 isolation test, OTA_TEST_PITCH_HOLD=motor|servo (read once at start, off by default,
+  // never persisted): pitch is held at the pose it has when READY is first reached, by the
+  // CyberGear's own position mode (motor) or by the ADR-002.2 pitch servo at a fixed reference
+  // (servo); tracking moves yaw only. It separates the motor/gearbox/detector from this loop.
+  enum class PitchTestHold { Off, Motor, Servo };
+  PitchTestHold pitch_test_hold_ = PitchTestHold::Off;
+  bool pitch_test_latched_ = false, pitch_test_in_position_ = false, pitch_test_transitioning_ = false;
+  double pitch_test_q_ = 0.0;
+  double servo_jerk_[kAxisCount] = {0.0, 0.0};
+  std::shared_ptr<spdlog::logger> tracking_trace_;  // OTA_TRACKING_TRACE: one JSON line per core tick
+  void trace_core_tick(const track::TickRecord& r, TimeNs now_ns);
   unsigned tracking_log_cycle_ = 0;
   std::optional<bool> search_override_;  // enable_search / disable_search
   // v3 §53: converts the authoritative mode's intent into a joint reference.
@@ -705,6 +756,11 @@ class ControlLoop {
   int64_t lead_prev_ns_[2] = {0, 0};
   void evaluate_auto_switch(TimeNs now_ns);
   mutable bool mode_hold_latched_ = false;
+  // Last tick's reference was a hold. A hold produced inside a non-hold intent ("target outside
+  // travel", an expired intent) latches its pose once, like a Hold intent; re-latching it every tick
+  // at the moving reference's stopping point made the limiter follow it as a moving target.
+  bool last_ref_was_hold_ = false;
+  bool pitch_at_travel_limit_ = false;
   mutable double mode_hold_yaw_rad_ = 0.0;
   mutable double mode_hold_pitch_rad_ = 0.0;
   char mode_refusal_reason_[224] = {};
@@ -773,6 +829,31 @@ class ControlLoop {
   ManualOutput manual_out_;
   // Explicit target-free bench step; never persisted and never uses vision input.
   TimeNs response_probe_until_ns_ = 0;
+  bool pitch_gain_trial_pending_ = false;
+  // One exchange of the tunable set, with the revision it produced. The yaw path fills it
+  // synchronously; the pitch path will feed it from its asynchronous register readback. Motion is
+  // refused while it holds anything other than Idle — that refusal is the whole point, and it is why
+  // the flag above is not enough: "pending" without a revision cannot say which set a jog ran under.
+  control::ParameterTransaction param_tx_;
+  uint64_t param_request_seq_ = 0;
+  // The typed form of the staged candidate. The transaction hashes generic name/value pairs; the
+  // write itself needs the typed settings, so the staged set is kept in both shapes — one to prove
+  // what is running, one to perform the write.
+  MotorBackend::YawTrialSettings param_staged_settings_;
+  // What the plant held before the last exchange, in the form a restore can write. The transaction
+  // holds the generic values for hashing; a restore needs the typed settings, and "restoring" is not
+  // a state somebody else is expected to fix on their own initiative.
+  MotorBackend::YawTrialSettings param_previous_settings_;
+  // The pitch speed loop is the asynchronous half: the write is a register write whose completion
+  // arrives a few cycles later, so the transaction stays open across step() boundaries. These hold
+  // what the registers read before the write — the restore target — and whether a restore is in
+  // flight, because `restoring` on this axis cannot be resolved by a synchronous write.
+  double param_pitch_previous_kp_ = 0, param_pitch_previous_ki_ = 0;
+  bool param_pitch_restoring_ = false;
+  std::string param_staged_id_;
+  // The campaign identity repeated into every trace record: an opaque tag the runner owns
+  // (campaign|candidate|trial), stored verbatim so the firmware cannot misread somebody's naming.
+  std::string param_context_tag_ = "none";
   double response_probe_q_[2]{};
   double response_probe_omega_ = 2.5;
   double response_probe_position_gain_ = 3.0;

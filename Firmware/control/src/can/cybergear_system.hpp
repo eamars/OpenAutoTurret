@@ -59,8 +59,10 @@ class CyberGearSystem {
                 std::string* err = nullptr);
   bool read_register(AxisId axis, cybergear::Reg reg, double& value,
                      int timeout_ms = 500, std::string* err = nullptr);
-  bool begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err);
-  int poll_register_read(double& value, std::string& err); // 0 pending, 1 received, -1 failed
+  bool begin_register_read(AxisId axis, cybergear::Reg reg, std::string& err,
+                           TimeNs* request_ns = nullptr);
+  int poll_register_read(double& value, std::string& err,
+                         TimeNs* response_ns = nullptr); // 0 pending, 1 received, -1 failed
   void cancel_register_read();
   // Read-only diagnostic access. Unknown firmware parameters remain raw bytes.
   bool read_parameter_raw(AxisId axis, uint16_t address, std::array<uint8_t, 4>& value,
@@ -125,6 +127,7 @@ class CyberGearSystem {
     uint8_t match_target{0};
     uint16_t address{0};
     cybergear::CanFrame frame;
+    TimeNs rx_ns{0};
   } pending_;
 };
 

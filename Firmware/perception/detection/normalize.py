@@ -29,7 +29,7 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 from ..config import AnchorConfig
 from ..errors import ValidationError
 from .anchor import compute_anchor
-from .types import (BBox, Detection, DetectionCounters, DetectionSet, PointNorm,
+from .types import (BBox, Detection, DetectionCounters, DetectionSet, Keypoint, PointNorm,
                     is_finite)
 
 BoxTuple = Tuple[float, float, float, float]
@@ -200,7 +200,9 @@ def normalize_rows(rows: Sequence[Sequence[float]], *, geometry: InferenceGeomet
                    sensor_timestamp_ns: int, publish_timestamp_ns: int,
                    label_map: Any, score_index: int = 0, class_index: int = 1,
                    box_index: int = 2,
-                   anchor_cfg: Optional[AnchorConfig] = None) -> DetectionSet:
+                   anchor_cfg: Optional[AnchorConfig] = None,
+                   keypoint_index: Optional[int] = None,
+                   keypoint_count: int = 0) -> DetectionSet:
     """Model output rows → a validated ``DetectionSet`` (§13, §14, §16.4).
 
     The row layout is the model's own — ``[score, class_id, x1, y1, x2, y2]`` unless the
@@ -234,11 +236,31 @@ def normalize_rows(rows: Sequence[Sequence[float]], *, geometry: InferenceGeomet
             counters.malformed_rejected += 1
             continue
 
-        anchor, source = compute_anchor(bbox, (), anchor_cfg)
+        # A pose row carries `keypoint_count` (x, y, score) triples at `keypoint_index`, in the
+        # same normalised model-input convention as its box, so they go through the same unmap
+        # (crop, letterbox, orientation). A keypoint outside the visible stream was not observed:
+        # it is kept, clamped onto the frame edge, with score 0 so no anchor rule uses it.
+        keypoints = []
+        if keypoint_index is not None and keypoint_count > 0:
+            try:
+                for k in range(keypoint_count):
+                    kx, ky, ks = (float(v) for v in row[keypoint_index + 3 * k:keypoint_index + 3 * k + 3])
+                    if not (is_finite(kx) and is_finite(ky) and is_finite(ks)):
+                        raise ValidationError("keypoint is not finite")
+                    point = geometry.unmap_point(kx * geometry.input_width, ky * geometry.input_height)
+                    inside = 0.0 <= point.x <= 1.0 and 0.0 <= point.y <= 1.0
+                    keypoints.append(Keypoint(min(1.0, max(0.0, point.x)), min(1.0, max(0.0, point.y)),
+                                              min(1.0, max(0.0, ks)) if inside else 0.0))
+            except (ValidationError, TypeError, ValueError, IndexError):
+                counters.malformed_rejected += 1
+                continue
+        aspect = (float(geometry.stream_width) / float(geometry.stream_height)
+                  if geometry.stream_width and geometry.stream_height else 1.0)
+        anchor, source = compute_anchor(bbox, keypoints, anchor_cfg, aspect=aspect)
         detections.append(Detection(
             detection_id_in_frame=index, class_id=class_id, class_name=class_name,
             detector_score=score, bbox=bbox, measured_anchor=anchor,
-            anchor_source=source))
+            anchor_source=source, keypoints=tuple(keypoints)))
 
     # What the model's own NMS plus normalization left: the input to the host dedup stage.
     counters.post_model_nms = len(detections)

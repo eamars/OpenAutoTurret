@@ -30,6 +30,8 @@ case "${1:-}" in
     echo '         --pitch-step-mdeg N (enabled +/-15 deg session; 5 A ceiling),'
     echo '         --mixed-backend-check (commissioning + IMU tare; observe-only),'
     echo '         --commission-mixed-controller (manual-mode mixed controller; no vision/web),'
+    echo '         --establish-homing MANIFEST (bounded pitch sensorless homing acquisition),'
+    echo '         --control-yaw MANIFEST (ADR-002.2 supervised yaw shared-core 3a control),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -87,7 +89,7 @@ if [ "$ACTION" = stop ]; then
   echo "Controller shutdown is still in progress; inspect $RUN/controller.log" >&2
   exit 1
 fi
-PROFILE=hailo_yolov8n
+PROFILE=hailo_yolov8s_pose   # person boxes + COCO-17 keypoints; the aim anchor is the head (2026-10-02)
 FRAMES=0
 MODE=hardware
 START_WEB=1
@@ -112,12 +114,15 @@ MIXED_BACKEND_CHECK=0
 MIXED_CONTROLLER_COMMISSION=0
 COMMISSION_REQUESTED=0
 SIM_REQUESTED=0
+SESSION_MANIFEST=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
     --sim) MODE=sim; SIM_REQUESTED=1; shift ;;
     --hardware) MODE=hardware; shift ;;
     --commission-hardware) MODE=commission; COMMISSION_REQUESTED=1; START_WEB=0; shift ;;
+    --establish-homing) SESSION_MANIFEST="${2:?--establish-homing requires a manifest}"; MODE=establish-homing; START_WEB=0; shift 2 ;;
+    --control-yaw) SESSION_MANIFEST="${2:?--control-yaw requires a manifest}"; MODE=control-yaw; START_WEB=0; shift 2 ;;
     --probe-imu) MODE=imu; START_WEB=0; shift ;;
     --with-imu) WITH_IMU=1; shift ;;
     --pitch-step-mdeg) PITCH_PROBE=1; PITCH_STEP_MDEG="${2:?--pitch-step-mdeg requires a value}"; shift 2 ;;
@@ -144,6 +149,16 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ -n "$SESSION_MANIFEST" ]; then
+  [ "${#options[@]}" -eq 2 ] && { [ "$MODE" = establish-homing ] || [ "$MODE" = control-yaw ]; } || {
+    echo 'Acquisition cannot be combined with other startup options' >&2; exit 2;
+  }
+  [ "$ACTION" != deploy ] || {
+    echo 'Acquisition uses workstation-built binaries; do not build it on the station.' >&2; exit 2;
+  }
+  SESSION_MANIFEST="$(realpath -- "$SESSION_MANIFEST")"
+  options=("--$MODE" "$SESSION_MANIFEST")
+fi
 # One derived fact: did anything ask the yaw axis to move? There are now two spellings of the push
 # (--yaw-voltage in raw counts, --yaw-current-a in amperes), and every "no other motor probe" rule
 # below needs to see both. A request this list misses is two processes driving one CAN bus.
@@ -229,30 +244,29 @@ if [ "$ACTION" = deploy ]; then
     # The binaries were cross-compiled by the deploying machine (Firmware/tools/cross_build.py)
     # and uploaded beside this source. Compiling them again here bought nothing: the station has
     # no knowledge of this code that the machine which built it lacks. Running the suite is the
-    # part that needs the hardware, so that part stays here -- each test binary is executed
-    # directly rather than through ctest, because a CTest cache would point back at the machine
-    # that built it. The symlink keeps every later path in this script unchanged.
+    # part that needs the hardware, so that part stays here. Rebase CTest's generated command and
+    # working-directory paths from the build machine before invoking the registered suite.
     ln -sfn "$APP/build-arm64" "$APP/build"
+    "$PY" "$APP/tools/relocate_ctest_paths.py" "$APP/build-arm64" "$APP"
     # The tests resolve their config against this: the binary was compiled elsewhere, so its
     # compiled-in source path describes a machine this station has never been.
     export OTA_FIRMWARE_ROOT="$APP"
-    tests_run=0
-    tests_failed=0
-    while IFS= read -r t; do
-      case "$t" in */_deps/*) continue ;; esac
-      tests_run=$((tests_run + 1))
-      if ! "$t" >"$APP/build-arm64/last-test.log" 2>&1; then
-        tests_failed=$((tests_failed + 1))
-        echo "FAILED $t" >&2
-        tail -n 15 "$APP/build-arm64/last-test.log" >&2
-      fi
-    done < <(find "$APP/build-arm64" -type f -name 'test_*' -perm -u+x)
-    echo "Prebuilt suite on station: $tests_run binaries, $tests_failed failed"
-    if [ "$tests_run" -lt 40 ] || [ "$tests_failed" -ne 0 ]; then
-      # A count that small means the upload lost targets, which would otherwise read as a pass.
-      echo "refusing to call that a green suite" >&2
+    ctest_list="$APP/build-arm64/prebuilt-ctest-list.json"
+    ctest --test-dir "$APP/build-arm64" --show-only=json-v1 >"$ctest_list"
+    tests_run=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["tests"]))' "$ctest_list")
+    echo "Prebuilt CTest suite on station: $tests_run registered tests"
+    if [ "$tests_run" -lt 40 ]; then
+      # A count that small means the upload lost test registrations, which could read as a pass.
+      echo "refusing to run an incomplete suite" >&2
       exit 1
     fi
+    if ! ctest --test-dir "$APP/build-arm64" --output-on-failure >"$APP/build-arm64/last-test.log" 2>&1; then
+      tail -n 80 "$APP/build-arm64/last-test.log" >&2
+      echo "Prebuilt CTest suite failed" >&2
+      exit 1
+    fi
+    cat "$APP/build-arm64/last-test.log"
+    echo "Prebuilt CTest suite on station: $tests_run registered tests, 0 failed"
   else
     cmake -S "$APP" -B "$APP/build" -DCMAKE_BUILD_TYPE=Release
   fi
@@ -287,6 +301,13 @@ if [ "$ACTION" = start ]; then
     echo "Already running (launcher $launcher_pid). Use status for readiness."
     exit 0
   fi
+  # Save the previous launcher log before shell redirection opens the new one.
+  # The child rotates the other old files after acquiring station ownership.
+  if [ -f "$RUN/launcher.log" ]; then
+    previous_log_dir="$RUN/logs-history/$(date -u +%Y%m%dT%H%M%SZ)-previous-launcher$$"
+    mkdir -p "$previous_log_dir"
+    mv -- "$RUN/launcher.log" "$previous_log_dir/launcher.log"
+  fi
   nohup setsid bash "$APP/scripts/run_application.sh" run "${options[@]}" \
     >"$RUN/launcher.log" 2>&1 < /dev/null 11>&- &
   child=$!
@@ -308,14 +329,18 @@ if [ "$ACTION" = start ]; then
   exit 1
 fi
 # Check is read-only: no camera open, CAN connection, or motor enable.
-"$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK" "$MIXED_CONTROLLER_COMMISSION"
+if [ "$MODE" = establish-homing ] || [ "$MODE" = control-yaw ]; then
+  "$PY" "$APP/tools/adr0022_capture_launch.py" "$SESSION_MANIFEST" "--$MODE" --preflight-only
+else
+  "$PY" "$APP/tools/station_preflight.py" "$ACTIVE_CONTROL_CONFIG" "$MODE" "$PROFILE" "$PRODUCTION" "$MIXED_BACKEND_CHECK" "$MIXED_CONTROLLER_COMMISSION"
+fi
 if [ "$ACTION" = check ]; then
   echo 'Preflight passed. deploy/check do not start the station.'
   exit 0
 fi
 exec 9>"$RUN/launcher.lock"
 flock -n 9 || { echo "A stack already owns $RUN" >&2; exit 1; }
-if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ]; then
+if [ "$MODE" = hardware ] || [ "$MODE" = commission ] || [ "$MODE" = imu ] || [ "$MODE" = mixed-controller-commission ] || [ "$MODE" = establish-homing ] || [ "$MODE" = control-yaw ]; then
   exec 8>"/tmp/ota-motion-$(id -u).lock"
   flock -n 8 || { echo 'Another launcher owns station motion, including across runtime directories.' >&2; exit 1; }
 fi
@@ -328,6 +353,11 @@ rotate_stack_logs() {
   src="$RUN/logs-history/$stamp-launcher$$"
   mkdir -p "$src" || return 0
   for f in "$RUN"/*.log "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
+    # start has already opened this run's launcher.log. Moving that inode makes
+    # status/startup failure reporting point at a missing file for the whole run.
+    if [ "$f" = "$RUN/launcher.log" ] && { [ "$f" -ef "/proc/$$/fd/1" ] || [ "$f" -ef "/proc/$$/fd/2" ]; }; then continue; fi
+    # Baseline captures own immutable logs alongside their attempt record.
+    if [[ "$f" = *.imu.log ]] && [ -f "${f%.imu.log}.attempt.json" ]; then continue; fi
     [ -f "$f" ] && mv -f "$f" "$src/" 2>/dev/null || true
   done
   # Trip traces are evidence of the round that faulted, so the directory moves
@@ -392,7 +422,11 @@ cleanup() {
   stop_cause_line "$reason" > "$RUN/shutdown.cause"
   cat "$RUN/shutdown.cause"
   rm -f -- "$RUN/stop.request"
-  if [ "$MODE" = imu ]; then
+  if [ "$MODE" = control-yaw ]; then
+    echo 'Ending supervised yaw shared-core control; the C++ owner records current zero and pitch STOP feedback.'
+  elif [ "$MODE" = establish-homing ]; then
+    echo 'Ending bounded pitch sensorless homing; the C++ owner records zero/STOP feedback.'
+  elif [ "$MODE" = imu ]; then
     echo 'Ending IMU acquisition; no motor process was started.'
     echo 'Stopped: IMU capture ended; motors were not commanded' > "$RUN/shutdown.result"
   elif [ "$MODE" = perception ]; then
@@ -433,7 +467,13 @@ cleanup() {
   # Keep the terminal controller outcome after ownership metadata is removed.
   # A clean process exit alone does not prove that the motors reached park.
   if [ -n "$controller_pid" ]; then
-    if [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
+    if [ "$MODE" = control-yaw ]; then
+      { echo 'Yaw shared-core control ended; inspect runtime parameter readback, raw trace and 3a measurements';
+        tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif [ "$MODE" = establish-homing ]; then
+      { echo 'Sensorless homing ended; inspect immutable result; no retained calibration or stop qualification claim';
+        tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif [ "$MODE" = commission ] && [ "$MIXED_BACKEND_CHECK" = 1 ]; then
       { echo 'Stopped: mixed-backend no-motion probe ended; inspect STOP feedback result below';
         tail -n 8 "$RUN/controller.log"; } > "$RUN/shutdown.result"
     elif [ "$MODE" = commission ]; then
@@ -467,6 +507,21 @@ trap 'cause_signal=INT; exit 130' INT
 trap 'cause_signal=TERM; exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
+if [ "$MODE" = establish-homing ] || [ "$MODE" = control-yaw ]; then
+  "$PY" "$APP/tools/adr0022_capture_launch.py" "$SESSION_MANIFEST" "--$MODE" >"$RUN/controller.log" 2>&1 &
+  controller_pid=$!; children+=("$controller_pid"); child_name[$controller_pid]=commission-current-supervisor
+  current_label='bounded pitch sensorless homing; no retained calibration write'
+  [ "$MODE" != control-yaw ] || current_label='supervised yaw shared-core 3a control; pitch disabled, runtime parameter readback'
+  printf 'Mode: %s\nManifest: %s\nMotion purpose, bounds, attendance and authorization recorded in manifest\n' "$current_label" "$SESSION_MANIFEST" > "$RUN/stack.info"
+  cp "$RUN/launcher.pid" "$RUN/started"
+  first_child_status=0; wait "$controller_pid" || first_child_status=$?
+  note_child_exit
+  if [ "$MODE" = control-yaw ]; then
+    "$PY" "$APP/tools/adr0022_yaw_vibration.py" --manifest "$SESSION_MANIFEST" \
+      >"$RUN/yaw-vibration-report.log" 2>&1 || echo 'Yaw IMU report could not be saved; raw capture and session outcome remain retained.' >&2
+  fi
+  exit "$first_child_status"
+fi
 if [ "$MODE" = imu ]; then
   if pgrep -x controld >/dev/null || pgrep -x imu_main >/dev/null; then
     echo 'Existing controller or legacy IMU consumer; refusing capture.' >&2; exit 1
@@ -563,6 +618,8 @@ export OTA_VISION_DETAIL_SENSOR="${OTA_VISION_DETAIL_SENSOR-}"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"
 export OTA_WEB_SOCKET="$RUN/control-web.sock"
+# ADR-003 D17: controld's per-tick tracking record (one JSON line per Level-1 tick while tracking).
+export OTA_TRACKING_TRACE="$RUN/tracking-trace.jsonl"
 export OTA_WEB_PORT="${OTA_WEB_PORT:-8080}"
 export OTA_WEB_HOST="${OTA_WEB_HOST:-0.0.0.0}"
 vision_args=(--config perception/configs/perception_v1.json --profile "$PROFILE"

@@ -1,0 +1,74 @@
+[
+  {
+    "case": "pristine-seed-17",
+    "max_abs_parameter_relative_error": 9.119569451450834e-09,
+    "max_abs_parameter_percent_error": 9.119569451450834e-07,
+    "parameter_gate_passed": true,
+    "parameter_gate_limit": 0.02,
+    "reported_solver_success": true,
+    "reported_evaluations": 48,
+    "reported_trajectory_passes": 3,
+    "reported_trajectory_count": 3,
+    "reported_case_passed": true
+  },
+  {
+    "case": "pristine-seed-41",
+    "max_abs_parameter_relative_error": 9.119569451450834e-09,
+    "max_abs_parameter_percent_error": 9.119569451450834e-07,
+    "parameter_gate_passed": true,
+    "parameter_gate_limit": 0.02,
+    "reported_solver_success": true,
+    "reported_evaluations": 48,
+    "reported_trajectory_passes": 3,
+    "reported_trajectory_count": 3,
+    "reported_case_passed": true
+  },
+  {
+    "case": "pristine-seed-83",
+    "max_abs_parameter_relative_error": 9.119569451450834e-09,
+    "max_abs_parameter_percent_error": 9.119569451450834e-07,
+    "parameter_gate_passed": true,
+    "parameter_gate_limit": 0.02,
+    "reported_solver_success": true,
+    "reported_evaluations": 48,
+    "reported_trajectory_passes": 3,
+    "reported_trajectory_count": 3,
+    "reported_case_passed": true
+  },
+  {
+    "case": "noisy-seed-17",
+    "max_abs_parameter_relative_error": 0.0023571903291369953,
+    "max_abs_parameter_percent_error": 0.23571903291369953,
+    "parameter_gate_passed": true,
+    "parameter_gate_limit": 0.05,
+    "reported_solver_success": false,
+    "reported_evaluations": 120,
+    "reported_trajectory_passes": 3,
+    "reported_trajectory_count": 3,
+    "reported_case_passed": false
+  },
+  {
+    "case": "noisy-seed-41",
+    "max_abs_parameter_relative_error": 0.03987170236752329,
+    "max_abs_parameter_percent_error": 3.987170236752329,
+    "parameter_gate_passed": true,
+    "parameter_gate_limit": 0.05,
+    "reported_solver_success": false,
+    "reported_evaluations": 120,
+    "reported_trajectory_passes": 1,
+    "reported_trajectory_count": 3,
+    "reported_case_passed": false
+  },
+  {
+    "case": "noisy-seed-83",
+    "max_abs_parameter_relative_error": 0.00536421852788555,
+    "max_abs_parameter_percent_error": 0.536421852788555,
+    "parameter_gate_passed": true,
+    "parameter_gate_limit": 0.05,
+    "reported_solver_success": false,
+    "reported_evaluations": 120,
+    "reported_trajectory_passes": 3,
+    "reported_trajectory_count": 3,
+    "reported_case_passed": false
+  }
+]

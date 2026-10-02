@@ -1,0 +1,405 @@
+{
+  "applied": 16,
+  "binding": {
+    "binary": "build/control/controld",
+    "binary_sha256": "8c2a10f302548f94c99ce886330392f1593be47378a5cc9df500c183bd3bed25",
+    "config": "config/turret_mixed.yaml",
+    "hardware_profile": "config/mixed_hardware.yaml",
+    "inventory_sha256": "950143f5b526b51c7b5f56371bc41e2b8e9bb959bc853c10bfaedba91ecbb780",
+    "note": "enforcement lives in controld's parameter transaction; this document records the ranges as prose so an archived trial can be read without the binary",
+    "source_rev": "6a47f1dd696d75b878b8138dcaceb9f455ab9147"
+  },
+  "blocked": [],
+  "campaign_id": "yaw-current-example",
+  "design_sha256": "f761cbec39f356dbd1b82ba05b5bf0bf08b417f0d09aceafc3d79fb11e3b42bb",
+  "ended_at": 1790697275.1950352,
+  "exchanges": 32,
+  "started_at": 1790697169.4245424,
+  "stopped_by": "design_exhausted",
+  "trials": [
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=1 effective_hash=9c8a71f3106f1fc4 request_id=prepp-1",
+        "safety": "ALLOW",
+        "seq": 3
+      },
+      "applied_string": "0.6:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c00",
+      "identity": {
+        "applied_hash": "9c8a71f3106f1fc4",
+        "revision": "1",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=2 effective_hash=d1d28efbc01f0851 request_id=prepp-3",
+        "safety": "ALLOW",
+        "seq": 7
+      },
+      "applied_string": "0.6:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c01",
+      "identity": {
+        "applied_hash": "d1d28efbc01f0851",
+        "revision": "2",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=3 effective_hash=de74a5839e83b858 request_id=prepp-5",
+        "safety": "ALLOW",
+        "seq": 11
+      },
+      "applied_string": "0.6:1:20:0:0:0:0:0.001",
+      "candidate_id": "c02",
+      "identity": {
+        "applied_hash": "de74a5839e83b858",
+        "revision": "3",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=4 effective_hash=ae8b9c500029e4cf request_id=prepp-7",
+        "safety": "ALLOW",
+        "seq": 15
+      },
+      "applied_string": "0.6:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c03",
+      "identity": {
+        "applied_hash": "ae8b9c500029e4cf",
+        "revision": "4",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 0.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=5 effective_hash=30fea17419450f87 request_id=prepp-9",
+        "safety": "ALLOW",
+        "seq": 19
+      },
+      "applied_string": "1:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c04",
+      "identity": {
+        "applied_hash": "30fea17419450f87",
+        "revision": "5",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=6 effective_hash=1c9c5ea761dc2132 request_id=prepp-11",
+        "safety": "ALLOW",
+        "seq": 23
+      },
+      "applied_string": "1:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c05",
+      "identity": {
+        "applied_hash": "1c9c5ea761dc2132",
+        "revision": "6",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=7 effective_hash=db10b806467226cb request_id=prepp-13",
+        "safety": "ALLOW",
+        "seq": 27
+      },
+      "applied_string": "1:1:20:0:0:0:0:0.001",
+      "candidate_id": "c06",
+      "identity": {
+        "applied_hash": "db10b806467226cb",
+        "revision": "7",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=8 effective_hash=ad15cb4afe724248 request_id=prepp-15",
+        "safety": "ALLOW",
+        "seq": 31
+      },
+      "applied_string": "1:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c07",
+      "identity": {
+        "applied_hash": "ad15cb4afe724248",
+        "revision": "8",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 1.0
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=9 effective_hash=07bea719d4f0a00b request_id=prepp-17",
+        "safety": "ALLOW",
+        "seq": 35
+      },
+      "applied_string": "1.6:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c08",
+      "identity": {
+        "applied_hash": "07bea719d4f0a00b",
+        "revision": "9",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=10 effective_hash=da87bee921cc6872 request_id=prepp-19",
+        "safety": "ALLOW",
+        "seq": 39
+      },
+      "applied_string": "1.6:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c09",
+      "identity": {
+        "applied_hash": "da87bee921cc6872",
+        "revision": "10",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=11 effective_hash=67771d6c0d1b98df request_id=prepp-21",
+        "safety": "ALLOW",
+        "seq": 43
+      },
+      "applied_string": "1.6:1:20:0:0:0:0:0.001",
+      "candidate_id": "c10",
+      "identity": {
+        "applied_hash": "67771d6c0d1b98df",
+        "revision": "11",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=12 effective_hash=ffd09bc31f3f6308 request_id=prepp-23",
+        "safety": "ALLOW",
+        "seq": 47
+      },
+      "applied_string": "1.6:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c11",
+      "identity": {
+        "applied_hash": "ffd09bc31f3f6308",
+        "revision": "12",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 1.6
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=13 effective_hash=12b5f11395607634 request_id=prepp-25",
+        "safety": "ALLOW",
+        "seq": 51
+      },
+      "applied_string": "2.4:0.3:20:0:0:0:0:0.001",
+      "candidate_id": "c12",
+      "identity": {
+        "applied_hash": "12b5f11395607634",
+        "revision": "13",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.3,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=14 effective_hash=d5ab8853890e0041 request_id=prepp-27",
+        "safety": "ALLOW",
+        "seq": 55
+      },
+      "applied_string": "2.4:0.6:20:0:0:0:0:0.001",
+      "candidate_id": "c13",
+      "identity": {
+        "applied_hash": "d5ab8853890e0041",
+        "revision": "14",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 0.6,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=15 effective_hash=077f2d0c04112fe8 request_id=prepp-29",
+        "safety": "ALLOW",
+        "seq": 59
+      },
+      "applied_string": "2.4:1:20:0:0:0:0:0.001",
+      "candidate_id": "c14",
+      "identity": {
+        "applied_hash": "077f2d0c04112fe8",
+        "revision": "15",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.0,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    },
+    {
+      "applied": {
+        "accepted": true,
+        "command": "param_apply",
+        "controller_state": "hold/AUTO_ROAM",
+        "reason": "host yaw settings applied for this commissioning session; current cap unchanged; unqualified; revision=16 effective_hash=482ef1c081274f5f request_id=prepp-31",
+        "safety": "ALLOW",
+        "seq": 63
+      },
+      "applied_string": "2.4:1.5:20:0:0:0:0:0.001",
+      "candidate_id": "c15",
+      "identity": {
+        "applied_hash": "482ef1c081274f5f",
+        "revision": "16",
+        "state": "idle"
+      },
+      "metrics": null,
+      "params": {
+        "yaw.current_ki_a_per_rad_s": 1.5,
+        "yaw.current_kp_a_per_rad_s": 2.4
+      },
+      "stage": "coarse",
+      "unscored_reason": "no scorer was named: the runner records, it does not flatter"
+    }
+  ]
+}

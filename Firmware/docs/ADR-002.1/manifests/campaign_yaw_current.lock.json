@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "design_sha256": "f761cbec39f356dbd1b82ba05b5bf0bf08b417f0d09aceafc3d79fb11e3b42bb",
+  "design": {
+    "campaign_id": "yaw-current-example",
+    "objective": "\u5728\u56fa\u5b9a\u901f\u5ea6\u4e0b\u6bd4\u8f83 yaw \u7535\u6d41\u73af\u589e\u76ca\u5bf9\u6296\u52a8\u7684\u5f71\u54cd",
+    "scorer": {
+      "metric": "jitter_rad_s_pp",
+      "worse_is_better": false
+    },
+    "fixed": {
+      "velocity_dps": 6.0,
+      "hold_ms": 1200
+    },
+    "dimensions": [
+      {
+        "name": "yaw.current_ki_a_per_rad_s",
+        "unit": "A/rad",
+        "supported_range": "0 <= ki <= 20, enforced by MixedCanMotorBackend::apply_yaw_trial",
+        "readback_source": "host_echo",
+        "levels": [
+          0.3,
+          0.6,
+          1.0,
+          1.5
+        ]
+      },
+      {
+        "name": "yaw.current_kp_a_per_rad_s",
+        "unit": "A/(rad/s)",
+        "supported_range": "0 < kp <= 10, enforced by MixedCanMotorBackend::apply_yaw_trial",
+        "readback_source": "host_echo",
+        "levels": [
+          0.6,
+          1.0,
+          1.6,
+          2.4
+        ]
+      }
+    ],
+    "coarse": [
+      {
+        "candidate_id": "c00",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.3,
+          "yaw.current_kp_a_per_rad_s": 0.6
+        }
+      },
+      {
+        "candidate_id": "c01",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.6,
+          "yaw.current_kp_a_per_rad_s": 0.6
+        }
+      },
+      {
+        "candidate_id": "c02",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.0,
+          "yaw.current_kp_a_per_rad_s": 0.6
+        }
+      },
+      {
+        "candidate_id": "c03",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.5,
+          "yaw.current_kp_a_per_rad_s": 0.6
+        }
+      },
+      {
+        "candidate_id": "c04",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.3,
+          "yaw.current_kp_a_per_rad_s": 1.0
+        }
+      },
+      {
+        "candidate_id": "c05",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.6,
+          "yaw.current_kp_a_per_rad_s": 1.0
+        }
+      },
+      {
+        "candidate_id": "c06",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.0,
+          "yaw.current_kp_a_per_rad_s": 1.0
+        }
+      },
+      {
+        "candidate_id": "c07",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.5,
+          "yaw.current_kp_a_per_rad_s": 1.0
+        }
+      },
+      {
+        "candidate_id": "c08",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.3,
+          "yaw.current_kp_a_per_rad_s": 1.6
+        }
+      },
+      {
+        "candidate_id": "c09",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.6,
+          "yaw.current_kp_a_per_rad_s": 1.6
+        }
+      },
+      {
+        "candidate_id": "c10",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.0,
+          "yaw.current_kp_a_per_rad_s": 1.6
+        }
+      },
+      {
+        "candidate_id": "c11",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.5,
+          "yaw.current_kp_a_per_rad_s": 1.6
+        }
+      },
+      {
+        "candidate_id": "c12",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.3,
+          "yaw.current_kp_a_per_rad_s": 2.4
+        }
+      },
+      {
+        "candidate_id": "c13",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 0.6,
+          "yaw.current_kp_a_per_rad_s": 2.4
+        }
+      },
+      {
+        "candidate_id": "c14",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.0,
+          "yaw.current_kp_a_per_rad_s": 2.4
+        }
+      },
+      {
+        "candidate_id": "c15",
+        "params": {
+          "yaw.current_ki_a_per_rad_s": 1.5,
+          "yaw.current_kp_a_per_rad_s": 2.4
+        }
+      }
+    ],
+    "refine": {
+      "max_candidates": 8,
+      "gate": "\u76f8\u5bf9\u6539\u8fdb > 0.15 \u624d\u8fdb refine\uff08D4\uff1arefine \u662f\u6761\u4ef6\u9636\u6bb5\uff09",
+      "levels_per_dimension": 2
+    },
+    "confirm": {
+      "repeats": 3
+    },
+    "stop": {
+      "max_trials": 30,
+      "no_improvement_rounds": 2
+    },
+    "payload_profile": "no_profile"
+  },
+  "bound_to": {
+    "inventory_sha256": "498b4e80204a227ff9e0e92a244b7c113f30bbe1cdb8977f971a7e21e7ca7dcb",
+    "binary": "build/control/controld",
+    "binary_sha256": "3f2cabc4fe78d0de01a477ea3be3f61c49ce5090031485306982bf7019194bb4",
+    "source_rev": "0b1b4b2b3ba7d5e45cc76f880da6049d06373337",
+    "config": "config/turret_mixed.yaml",
+    "hardware_profile": "config/mixed_hardware.yaml",
+    "note": "enforcement lives in controld's parameter transaction; this document records the ranges as prose so an archived trial can be read without the binary"
+  },
+  "sequence": [
+    "baseline",
+    "coarse",
+    "refine_if_gate_passes",
+    "confirm",
+    "report"
+  ]
+}

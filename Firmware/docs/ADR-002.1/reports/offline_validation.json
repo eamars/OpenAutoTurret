@@ -1,0 +1,37 @@
+{
+  "date": "2026-09-30",
+  "offline_only": true,
+  "unit_tests_run": 41,
+  "unit_tests_passed": 41,
+  "cli_demo_passed": true,
+  "cli_plan_passed": true,
+  "json_schema_valid": true,
+  "schema_positive_plans_passed": 1,
+  "schema_negative_cases_rejected": 3,
+  "synthetic_results": {
+    "smooth": "PASS_SCOPE",
+    "stalled": "FAIL_QUALITY",
+    "creep": "FAIL_QUALITY",
+    "oscillating": "FAIL_QUALITY",
+    "drifting": "FAIL_QUALITY",
+    "spike": "FAIL_QUALITY"
+  },
+  "rejected_apply_run_count": 0,
+  "cxx_compiled": false,
+  "firmware_modified": false,
+  "pi_accessed": false,
+  "hardware_motion_tested": false,
+  "thermal_qualification_tested": false,
+  "raw_report_evidence_reanalyzed": false,
+  "reported_commit_independently_audited": false,
+  "not_implemented": [
+    "live UDS adapter",
+    "motor register transactions",
+    "real-time abort monitor",
+    "raw RX normalization",
+    "static noise qualification",
+    "geometry safety validation",
+    "full live campaign engine",
+    "production promotion"
+  ]
+}
