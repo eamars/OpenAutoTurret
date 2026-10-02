@@ -40,6 +40,13 @@ def framing(f, a, b):
     return {"framing_rms_px": rms(e), "framing_peak_px": peak(e), "blur_peak_px": peak(blur), "frames": int(len(e))}
 
 
+def framing_axis(f, a, b, column):
+    """One image axis of the framing error (err_u_px: horizontal, yaw; err_v_px: vertical, pitch): RMS and peak (px)."""
+    ok = np.isfinite(f[column])
+    e = window(f[column][ok], f["t_mid"][ok], a, b)
+    return {"rms_px": rms(e), "peak_px": peak(e)}
+
+
 def layers(t, a, b):
     out = {}
     for axis, s in (("yaw", "y"), ("pitch", "p")):
@@ -68,6 +75,20 @@ def settle_s(f, t_event, threshold_px, end):
     if not len(bad):
         return 0.0
     if bad[-1] == len(e) - 1:
+        return float("inf")
+    return float(tm[bad[-1] + 1] - t_event)
+
+
+def settle_axes_s(f, t_event, threshold_u_px, threshold_v_px, end):
+    """settle_s with a threshold per image axis (horizontal: yaw, vertical: pitch)."""
+    ok = np.isfinite(f["err_u_px"]) & np.isfinite(f["err_v_px"]) & (f["t_mid"] >= t_event) & (f["t_mid"] < end)
+    tm = f["t_mid"][ok]
+    bad = np.where((np.abs(f["err_u_px"][ok]) > threshold_u_px) | (np.abs(f["err_v_px"][ok]) > threshold_v_px))[0]
+    if not len(tm):
+        return float("nan")
+    if not len(bad):
+        return 0.0
+    if bad[-1] == len(tm) - 1:
         return float("inf")
     return float(tm[bad[-1] + 1] - t_event)
 

@@ -74,7 +74,8 @@ def checks(sid, r, params):
     tb, fb, _ = r["fb"]
     end = float(t["t"][-1])
     lim, est = params["level1"], params["estimator"]
-    H, lam, sigma = est["horizon_s"], lim["yaw"]["lambda_rad_s"], params["pixel_sigma_px"]
+    H, sigma = est["horizon_s"], params["pixel_sigma_px"]
+    lam = min(lim["yaw"]["lambda_rad_s"], lim["pitch"]["lambda_rad_s"])   # the slower axis settles last
     settle = H + 4 / lam
     c = lim["yaw"]
     stop = c["v_max_rad_s"] / c["a_max_rad_s2"] + c["a_max_rad_s2"] / c["j_max_rad_s3"]
@@ -82,24 +83,34 @@ def checks(sid, r, params):
     out = [_c("session completes", None, "COMPLETE", status == "COMPLETE"),
            _c("reference is one integral (rad)", ev.consistency(t), 1e-6, ev.consistency(t) <= 1e-6),
            _c("reference within its v/a/j limits (fraction)", ev.bounds(t, lim), 1.0, ev.bounds(t, lim) <= 1 + 1e-9)]
+    # Pitch rests anywhere within its dead band of the subject (owner 2026-10-02: undershoot preferred on
+    # the frame's short edge), so its framing requirement is the band; yaw's is the pixel noise.
+    band_px = lim["pitch"].get("dead_band_rad", 0.0) * sim.intrinsics()["fy"]
+    yaw_px = lambda a, b: ev.framing_axis(f, a, b, "err_u_px")
+    pitch_px = lambda a, b: ev.framing_axis(f, a, b, "err_v_px")
+    settled = lambda t_event, k: ev.settle_axes_s(f, t_event, k * sigma, band_px + k * sigma, end)
     if sid == "T01":
         first = float(np.min(f["t_arrival"][f["delivered"] > 0]))
         moved = t["t"][np.abs(t["vr_y"]) > 0]
         start = float(moved[0]) if len(moved) else float("inf")
         slew = (t["t"] > 0.3) & (t["t"] < 2.0)
         excess = float(np.mean(np.abs(t["est_waz"][slew] - t["truth_waz"][slew]) > 3 * t["sig_waz"][slew]))
-        final = ev.framing(f, end - 2, end)["framing_rms_px"]
+        final, final_v = yaw_px(end - 2, end)["rms_px"], pitch_px(end - 2, end)["peak_px"]
         # The tick that consumes the frame chooses the first jerk; its motion shows from the next tick.
         out += [_c("motion starts within two ticks of the first observation (s)", start - first, 2 * lim["period_s"] + 1e-4,
                    start - first <= 2 * lim["period_s"] + 1e-4),
-                _c("converges from angle error alone: final framing RMS (px)", final, f"<= sigma {sigma}", final <= sigma),
+                _c("yaw converges from angle error alone: final horizontal framing RMS (px)", final, f"<= sigma {sigma}", final <= sigma),
+                _c("pitch converges into its dead band: final vertical framing peak (px)", final_v, f"<= band {band_px:.0f} + sigma",
+                   final_v <= band_px + sigma),
                 _c("camera rotation is not target motion: rate beyond 3 sigma while slewing (fraction)", excess, 0.01, excess <= 0.01),
                 _c("FF ~0 for a static subject: mean weight", float(np.mean(w(t["ffw_az"], 2, end))), 0.05,
                    np.mean(w(t["ffw_az"], 2, end)) <= 0.05)]
     elif sid == "T02":
-        fr = ev.framing(f, 1, end)["framing_rms_px"]
+        fr, frv = yaw_px(1, end)["rms_px"], pitch_px(1, end)["peak_px"]
         drift = abs(float(np.polyfit(w(t["t"], 1, end), w(t["qtrue_y"], 1, end), 1)[0])) / DEG
-        out += [_c("hold jitter at or below the pixel noise: framing RMS (px)", fr, f"<= sigma {sigma}", fr <= sigma),
+        out += [_c("yaw hold jitter at or below the pixel noise: horizontal framing RMS (px)", fr, f"<= sigma {sigma}", fr <= sigma),
+                _c("pitch holds within its dead band: vertical framing peak (px)", frv, f"<= band {band_px:.0f} + sigma",
+                   frv <= band_px + sigma),
                 _c("FF tends to zero: mean weight", float(np.mean(w(t["ffw_az"], 1, end))), 0.05, np.mean(w(t["ffw_az"], 1, end)) <= 0.05),
                 _c("no drift (deg/s)", drift, 0.01, drift <= 0.01)]
     elif sid == "T03":
@@ -119,11 +130,11 @@ def checks(sid, r, params):
         rec = recognised(t, change_end, H)
         out += [_c("innovation updates the rate within the horizon (s)", rec, H, rec <= H)]
         if sid == "T06":
-            st = ev.settle_s(f, change_end, 3 * sigma, end)
-            out += [_c("no lasting lead after the stop: within 3 sigma (s)", st, round(settle + stop, 3), st <= settle + stop)]
+            st = settled(change_end, 3)
+            out += [_c("no lasting lead after the stop: within 3 sigma (pitch: of its band) (s)", st, round(settle + stop, 3), st <= settle + stop)]
     elif sid == "T07":
         rec = recognised(t, 3.0, H)
-        st = ev.settle_s(f, 3.0, 3 * sigma, end)
+        st = settled(3.0, 3)
         # Not knowable before it is seen: recognition (<= H), the reference's own stop, Level-1 settling.
         out += [_c("new observations correct the old model within the horizon (s)", rec, H, rec <= H),
                 _c("stop settles within H + stop + 4/lambda (s)", st, round(settle + stop, 3), st <= settle + stop)]
@@ -137,13 +148,15 @@ def checks(sid, r, params):
                 _c("new direction recognised within the horizon (s)", rec, H, rec <= H),
                 _c("FF+FB total error below FB only (deg)", tf, round(tb_, 4), tf < tb_)]
     elif sid == "T09":
-        fr = ev.framing(f, 2, end)["framing_rms_px"]
+        fr, frv = yaw_px(2, end)["rms_px"], pitch_px(2, end)["peak_px"]
         noise_px = scenarios.SCENARIOS["T09"]["camera"]["pixel_noise_px"]
         # The goal rate steps with each frame by design; the reference must not (only jerk-limited change).
         vref = ev.peak_step(w(t["vr_y"], 2, end))
         step = c["a_max_rad_s2"] * lim["period_s"]
         out += [_c("FF enters through the generator: reference speed step per tick (deg/s)", vref / DEG, round(step / DEG, 4), vref <= step + 1e-12),
-                _c("position feedback holds the subject at the noise level: framing RMS (px)", fr, f"<= sigma {noise_px}", fr <= noise_px)]
+                _c("position feedback holds the subject at the noise level: horizontal framing RMS (px)", fr, f"<= sigma {noise_px}", fr <= noise_px),
+                _c("pitch holds the subject within its dead band: vertical framing peak (px)", frv, f"<= band {band_px:.0f} + 3 sigma",
+                   frv <= band_px + 3 * noise_px)]
     elif sid == "T10":
         off = w(t["goal_waz"], 4.01, 7.0)
         ratio = speed_ratio(t, 5.0, 7.0, 8.0)
@@ -191,10 +204,10 @@ def checks(sid, r, params):
         lost = t["t"][(t["t"] > 3.0) & (t["pos_valid"] == 0)]
         when = float(lost[0] - 3.0) if len(lost) else float("inf")
         limit = H + scenarios.CAMERA["frame_period_s"] + scenarios.CAMERA["latency_s"] + 0.03
-        held = ev.peak(ev.window(t["vr_y"], t["t"], 3.0 + limit + 4 / lam, 5.5)) / DEG
+        held = ev.peak(ev.window(t["vr_y"], t["t"], 3.0 + limit + 4 / lim["yaw"]["lambda_rad_s"], 5.5)) / DEG
         k2 = np.where(t["identity_changes"] > 0)[0]
         reset = abs(float(t["est_waz"][k2[0]])) / DEG if len(k2) else float("inf")
-        st = ev.settle_s(f, 8.0, 3 * sigma, end)
+        st = settled(8.0, 3)
         out += [_c("finite coast: target invalid after the horizon (s)", when, round(limit, 3), when <= limit),
                 _c("then the reference holds (deg/s)", held, 0.05, held <= 0.05),
                 _c("new identity does not inherit velocity (deg/s)", reset, 0.0, reset == 0),
@@ -223,5 +236,8 @@ def comparison(r):
                     "framing_rms_px": {"ff_fb": round(ev.framing(f, a, b)["framing_rms_px"], 2),
                                        "fb_only": round(ev.framing(fb, a, b)["framing_rms_px"], 2),
                                        "ff_fb_ideal_actuator": round(ev.framing(fi, a, b)["framing_rms_px"], 2)},
+                    # the comparison is about the target's rate fed forward: yaw (full feedforward) is the axis
+                    "yaw_framing_rms_px": {"ff_fb": round(ev.framing_axis(f, a, b, "err_u_px")["rms_px"], 2),
+                                           "fb_only": round(ev.framing_axis(fb, a, b, "err_u_px")["rms_px"], 2)},
                     "lag_s": {"ff_fb": round(ev.lag_s(t, a, b, rate), 4), "fb_only": round(ev.lag_s(tb, a, b, rate), 4)}}
     return out

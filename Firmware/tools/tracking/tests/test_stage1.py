@@ -22,7 +22,8 @@ def test_target_feedforward_removes_moving_lag():
     results = stage1.run_all(PRIOR, ["T04", "T08", "T11"])
     for sid, c in stage1.comparison(results).items():
         assert abs(c["lag_s"]["ff_fb"]) < 0.1 * abs(c["lag_s"]["fb_only"]), sid
-        assert c["framing_rms_px"]["ff_fb"] < 0.2 * c["framing_rms_px"]["fb_only"], sid
+        # Yaw: pitch feeds forward only 0.7 of the rate by design (tracking_prior.json provenance level1_pitch).
+        assert c["yaw_framing_rms_px"]["ff_fb"] < 0.2 * c["yaw_framing_rms_px"]["fb_only"], sid
 
 
 def test_simulation_is_deterministic():

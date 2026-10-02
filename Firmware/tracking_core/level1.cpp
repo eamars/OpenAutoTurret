@@ -8,7 +8,9 @@ bool valid(const Level1Parameters& p) {
   for (const auto& a:p.axis)
     if (!(std::isfinite(a.lambda) && a.lambda>0 && std::isfinite(a.v_max) && a.v_max>0 && std::isfinite(a.a_max) && a.a_max>0 &&
           std::isfinite(a.j_max) && a.j_max>0 && std::isfinite(a.lead_limit) && a.lead_limit>0 &&
-          std::isfinite(a.q_min) && std::isfinite(a.q_max) && a.q_min<=a.q_max)) return false;
+          std::isfinite(a.q_min) && std::isfinite(a.q_max) && a.q_min<=a.q_max &&
+          std::isfinite(a.dead_band) && a.dead_band>=0 && std::isfinite(a.feedforward_gain) &&
+          a.feedforward_gain>=0 && a.feedforward_gain<=1)) return false;
   return std::isfinite(p.period_s) && p.period_s>0 && p.period_s<0.1 && std::isfinite(p.valid_s) && p.valid_s>=p.period_s;
 }
 
@@ -104,6 +106,11 @@ ReferenceSample Level1Generator::step(int64_t t_ns,const JointGoal& goal,const s
     }
     const bool bounded=c.q_min<c.q_max;
     if (bounded && (qt<c.q_min || qt>c.q_max)) { qt=std::clamp(qt,c.q_min,c.q_max); vt=0; flags|=kBoundary; }
+    vt*=c.feedforward_gain;
+    if (c.dead_band>0) {
+      const double e=qt-q;
+      if (std::abs(e)<=c.dead_band) { qt=q; vt=0; } else qt-=std::copysign(c.dead_band,e);
+    }
     // The axis cannot keep up (saturation, an obstruction): beyond lead_limit the reference
     // stops advancing and holds where it is, until the axis has closed half of the limit;
     // then it continues from there toward the current target (nothing queued is replayed).

@@ -92,6 +92,17 @@ still violate the rule and are the next work. Do not cite them as precedent.
   - **Use:** later yaw commissioning reports its conformance to these limits, and they are the
     servo share of ADR-003's framing budget
     ([`photography_spec.json`](../config/tracking/photography_spec.json)).
+- **Pitch prefers undershoot (owner ruling, 2026-10-02 22:00).** The 16:9 frame gives pitch
+  ±20° against yaw's ±35°, and the camera turns with pitch: running past a subject who stops or
+  turns back moves the aim point out of the picture. Pitch is tuned less aggressive and biased to
+  undershoot; a little overshoot is acceptable, chasing is not. In the tracking asset's Level 1
+  (`config/tracking/tracking_prior.json`, provenance `level1_pitch`): a 3° dead band (head motion
+  inside it moves nothing; beyond it only the excess counts), velocity feedforward × 0.7, λ 2.5,
+  jerk 1500°/s³ (acceleration stays 60°/s²; end-stop braking is unchanged because the boundary
+  governor uses the supervisor's 300°/s³). Proof: the recorded pitch goal of sessions human-3
+  and human-4 replayed through `Level1Generator`. Passes beyond the target fell from 11/17 to 0/0,
+  pitch travel by 75%, and the frame-error p95 from 4.1/7.2° to 3.6/6.0°. The stage-1 scenarios
+  hold pitch to its band, not to the pixel noise. Yaw is unchanged.
 - **Station facts for ADR-003 (2026-10-02).**
   - The camera timestamp clock (libcamera's CLOCK_BOOTTIME) equals CLOCK_MONOTONIC to within 1.2
     µs; there has been no suspend since boot.

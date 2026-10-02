@@ -91,7 +91,7 @@ struct Frame {
   double start=0, mid=0, reported=0, exposure=0, arrival=0;
   double noise_u=0, noise_v=0;
   bool dropped=false, delivered=false, superseded=false, out_of_view=false, accepted=false, recorded=false;
-  double u_true=0, v_true=0, err=0, blur=0, u=0, v=0;
+  double u_true=0, v_true=0, err=0, err_u=0, err_v=0, blur=0, u=0, v=0;
   uint64_t identity=0;
 };
 }
@@ -182,7 +182,7 @@ TrackingSimulation simulate_tracking(const YAML::Node& request) {
     "areq_y","areq_p","qm_y","qm_p","qtrue_y","qtrue_p","qT_y","qT_p","err_u","err_v","nis","weight","scale_az","scale_el",
     "accepted","rejected","downweighted","rate_limited","gap_resets","identity_changes","u_yaw","rms_yaw","cmd_pitch","motion","saturated"};
   out.frame_columns={"t_start","t_mid","t_reported","t_arrival","dropped","delivered","superseded","out_of_view",
-    "u_true","v_true","err_px","blur_px","u_meas","v_meas","identity","accepted"};
+    "u_true","v_true","err_px","blur_px","u_meas","v_meas","identity","accepted","err_u_px","err_v_px"};
   out.status="COMPLETE";
 
   // Pixel of the true target through the true camera pose at time t (false: not in front of the camera).
@@ -278,7 +278,8 @@ TrackingSimulation simulate_tracking(const YAML::Node& request) {
     while (next_record<frames.size() && frames[next_record].start+frames[next_record].exposure<=t) {
       auto& f=frames[next_record++];
       double u,v; std::array<double,2> th{},om{}; truth.at(f.mid,th,om,f.identity);
-      if (project(f.mid,f.u_true,f.v_true)) f.err=std::hypot(f.u_true-frame_u,f.v_true-frame_v); else f.err=NAN;
+      if (project(f.mid,f.u_true,f.v_true)) { f.err_u=f.u_true-frame_u; f.err_v=f.v_true-frame_v; f.err=std::hypot(f.err_u,f.err_v); }
+      else f.err=f.err_u=f.err_v=NAN;
       double path=0, pu=NAN, pv=NAN;
       for (int s=0;s<=8;++s) {
         if (!project(f.start+f.exposure*s/8.,u,v)) { path=NAN; break; }
@@ -291,7 +292,8 @@ TrackingSimulation simulate_tracking(const YAML::Node& request) {
   for (const auto& f:frames) {
     if (!f.recorded) continue;
     out.frames.push_back({f.start,f.mid,f.reported,f.arrival,double(f.dropped),double(f.delivered),double(f.superseded),
-                          double(f.out_of_view),f.u_true,f.v_true,f.err,f.blur,f.u,f.v,double(f.identity),double(f.accepted)});
+                          double(f.out_of_view),f.u_true,f.v_true,f.err,f.blur,f.u,f.v,double(f.identity),double(f.accepted),
+                          f.err_u,f.err_v});
   }
   return out;
 }

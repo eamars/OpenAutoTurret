@@ -181,6 +181,49 @@ void level1_respects_lead_limit_and_resumes() {
   check(std::abs(r.q[0]-10*kDeg*8)<0.01,"after release it converges on the current target (no replay of old waypoints)");
 }
 
+void level1_pitch_prefers_undershoot_and_ignores_small_motion() {
+  // Owner, 2026-10-02 (sessions human-3/4): pitch sits on the frame's short edge (+-20 deg against
+  // yaw's +-35), so running past a subject who stops or turns back loses them; undershoot is
+  // preferred. Pitch has a dead band (head motion inside it moves nothing; outside it only the
+  // excess counts) and partial velocity feedforward. Replayed on both sessions: passes 13-16 -> 0.
+  Level1Parameters p=level1_parameters();
+  auto& a=p.axis[1];
+  a.lambda=2.5; a.v_max=34*kDeg; a.a_max=60*kDeg; a.j_max=1500*kDeg; a.dead_band=3*kDeg; a.feedforward_gain=0.7;
+  a.q_min=-1.42; a.q_max=-0.2;
+  // A head rising at 17 deg/s for 0.6 s, then stopping (the stop that overshot on the station).
+  {
+    Level1Generator g; check(g.configure(p),"pitch with a dead band configures");
+    g.reset(kS,{0.,-0.85},{0.,0.},{0.,0.});
+    JointGoal goal; goal.valid=true; goal.velocity_valid={true,true};
+    ReferenceSample r=g.last(); double beyond=-1e9; const double rate=17*kDeg, stop=0.6;
+    for (int k=1;k<=800;++k) {
+      const double s=k*0.005;
+      goal.q={0.,-0.85+rate*std::min(s,stop)}; goal.v={0.,s<stop?rate:0.};
+      r=g.step(kS+int64_t(k)*5'000'000,goal,{r.q[0],r.q[1]});
+      beyond=std::max(beyond,r.q[1]-goal.q[1]);
+    }
+    check(beyond<=0.2*kDeg,"pitch does not run past a head that stops");
+    check(std::abs(r.q[1]-goal.q[1])<=3*kDeg+1e-6 && std::abs(r.v[1])<1e-4,"and rests within the dead band of it");
+  }
+  // Head bob: +-2 deg at 2 Hz inside the band moves pitch not at all.
+  {
+    Level1Generator g; g.configure(p);
+    g.reset(kS,{0.,-0.85},{0.,0.},{0.,0.});
+    JointGoal goal; goal.valid=true; goal.velocity_valid={true,true};
+    ReferenceSample r=g.last(); double travel=0;
+    for (int k=1;k<=800;++k) {
+      const double s=k*0.005, w=2*M_PI*2;
+      goal.q={0.,-0.85+2*kDeg*std::sin(w*s)}; goal.v={0.,2*kDeg*w*std::cos(w*s)};
+      const double before=r.q[1];
+      r=g.step(kS+int64_t(k)*5'000'000,goal,{r.q[0],r.q[1]});
+      travel+=std::abs(r.q[1]-before);
+    }
+    check(travel<1e-9,"head bob inside the dead band does not move pitch");
+  }
+  // Yaw keeps no band and full feedforward: zero steady ramp lag as before.
+  check(p.axis[0].dead_band==0 && p.axis[0].feedforward_gain==1,"defaults leave an axis unchanged");
+}
+
 void level1_holds_inside_pitch_travel() {
   Level1Generator g; g.configure(level1_parameters());
   g.reset(kS,{0.,-0.5},{0.,0.},{0.,0.});
@@ -308,6 +351,7 @@ int main() {
   run("level1_is_one_integral",level1_is_one_integral);
   run("level1_tracks_ramp_without_lag",level1_tracks_ramp_without_lag);
   run("level1_respects_lead_limit_and_resumes",level1_respects_lead_limit_and_resumes);
+  run("level1_pitch_prefers_undershoot_and_ignores_small_motion",level1_pitch_prefers_undershoot_and_ignores_small_motion);
   run("level1_holds_inside_pitch_travel",level1_holds_inside_pitch_travel);
   run("level1_slows_to_a_falling_speed_cap",level1_slows_to_a_falling_speed_cap);
   run("tracker_removes_camera_rotation_once",tracker_removes_camera_rotation_once);
