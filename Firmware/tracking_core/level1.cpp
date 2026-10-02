@@ -2,6 +2,7 @@
 #include "control/reference_limiter.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace ota::track {
 bool valid(const Level1Parameters& p) {
@@ -10,6 +11,8 @@ bool valid(const Level1Parameters& p) {
           std::isfinite(a.j_max) && a.j_max>0 && std::isfinite(a.lead_limit) && a.lead_limit>0 &&
           std::isfinite(a.q_min) && std::isfinite(a.q_max) && a.q_min<=a.q_max &&
           std::isfinite(a.dead_band) && a.dead_band>=0 && std::isfinite(a.feedforward_gain) &&
+          std::isfinite(a.centre_band) && a.centre_band>=0 && a.centre_band<=a.dead_band &&
+          std::isfinite(a.centre_tau_s) && a.centre_tau_s>0 && std::isfinite(a.centre_speed) && a.centre_speed>=0 &&
           a.feedforward_gain>=0 && a.feedforward_gain<=1)) return false;
   return std::isfinite(p.period_s) && p.period_s>0 && p.period_s<0.1 && std::isfinite(p.valid_s) && p.valid_s>=p.period_s;
 }
@@ -81,7 +84,7 @@ bool Level1Generator::set_speed_bounds(int axis,double negative_speed,double pos
 void Level1Generator::reset(int64_t t_ns,const std::array<double,2>& q,const std::array<double,2>& v,
                             const std::array<double,2>& a) {
   last_={};
-  last_.t_ns=t_ns; last_.q=q; last_.v=v; last_.a=a; last_.valid=true; last_.valid_s=p_.valid_s; lead_hold_={};
+  last_.t_ns=t_ns; last_.q=q; last_.v=v; last_.a=a; last_.valid=true; last_.valid_s=p_.valid_s; lead_hold_={}; centring_={}; offset_average_={};
   for (int i=0;i<2;++i) { last_.a_max[i]=p_.axis[i].a_max; last_.v_max[i]=p_.axis[i].v_max; }
   initialized_=true;
 }
@@ -107,9 +110,17 @@ ReferenceSample Level1Generator::step(int64_t t_ns,const JointGoal& goal,const s
     const bool bounded=c.q_min<c.q_max;
     if (bounded && (qt<c.q_min || qt>c.q_max)) { qt=std::clamp(qt,c.q_min,c.q_max); vt=0; flags|=kBoundary; }
     vt*=c.feedforward_gain;
+    double centre_cap=std::numeric_limits<double>::infinity();
     if (c.dead_band>0) {
       const double e=qt-q;
-      if (std::abs(e)<=c.dead_band) { qt=q; vt=0; } else qt-=std::copysign(c.dead_band,e);
+      offset_average_[i]+=(e-offset_average_[i])*(1-std::exp(-std::max(dt,0.)/c.centre_tau_s));
+      if (std::abs(e)>c.dead_band) { qt-=std::copysign(c.dead_band,e); centring_[i]=false; }
+      else {
+        centring_[i]=c.centre_speed>0 && (std::abs(offset_average_[i])>c.centre_band ||
+                                          (centring_[i] && std::abs(e)>c.centre_band/2));
+        vt=0;
+        if (centring_[i]) centre_cap=c.centre_speed; else qt=q;
+      }
     }
     // The axis cannot keep up (saturation, an obstruction): beyond lead_limit the reference
     // stops advancing and holds where it is, until the axis has closed half of the limit;
@@ -130,7 +141,7 @@ ReferenceSample Level1Generator::step(int64_t t_ns,const JointGoal& goal,const s
     // request is pulled down along the same jerk-limited curve that approaches it from below (a
     // cap that falls as the axis nears its end must slow the reference, not merely stop it
     // accelerating).
-    const double vp=std::min(c.v_max,c.v_pos_cap), vn=std::min(c.v_max,c.v_neg_cap);
+    const double vp=std::min({c.v_max,c.v_pos_cap,centre_cap}), vn=std::min({c.v_max,c.v_neg_cap,centre_cap});
     const auto toward=[&](double gap) { return std::copysign(std::sqrt(2*c.j_max*std::abs(gap)),gap); };
     const double up=toward(vp-v), down=-toward(vn+v);
     if (request>up || request<down) { request=std::clamp(request,down,up); flags|=kVelocityLimited; }

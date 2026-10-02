@@ -103,6 +103,12 @@ still violate the rule and are the next work. Do not cite them as precedent.
   and human-4 replayed through `Level1Generator`. Passes beyond the target fell from 11/17 to 0/0,
   pitch travel by 75%, and the frame-error p95 from 4.1/7.2° to 3.6/6.0°. The stage-1 scenarios
   hold pitch to its band, not to the pixel noise. Yaw is unchanged.
+  - **22:25, the band alone never converged** (owner: "at certain height the aim never
+    converges"): pitch sat more than 1° off a still subject 92% of the time. A move still stops
+    short. An offset whose 1 s average exceeds the 0.5° centre band is then closed at no more than
+    3°/s (slow enough never to pass the subject), until within 0.25°. Replayed on human-3/4/5:
+    more than 1° off while still went from 37/82/92% to 0.5/3.3/0%; passes 0/2 (2.5°)/0. The
+    band-only replay of human-5 matches its recording.
 - **Station facts for ADR-003 (2026-10-02).**
   - The camera timestamp clock (libcamera's CLOCK_BOOTTIME) equals CLOCK_MONOTONIC to within 1.2
     µs; there has been no suspend since boot.

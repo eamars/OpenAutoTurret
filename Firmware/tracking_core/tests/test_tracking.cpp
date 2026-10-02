@@ -184,11 +184,14 @@ void level1_respects_lead_limit_and_resumes() {
 void level1_pitch_prefers_undershoot_and_ignores_small_motion() {
   // Owner, 2026-10-02 (sessions human-3/4): pitch sits on the frame's short edge (+-20 deg against
   // yaw's +-35), so running past a subject who stops or turns back loses them; undershoot is
-  // preferred. Pitch has a dead band (head motion inside it moves nothing; outside it only the
-  // excess counts) and partial velocity feedforward. Replayed on both sessions: passes 13-16 -> 0.
+  // preferred. Pitch has a dead band (head motion inside it moves nothing) and partial velocity
+  // feedforward. Owner, 22:25 (human-5): "at certain height the aim never converges" -- pitch sat
+  // 1.6 deg off a still subject for 20 s. A move still stops short; an offset that persists (its 1 s
+  // average beyond the centre band) is then closed slowly, never passing; bob averages away.
   Level1Parameters p=level1_parameters();
   auto& a=p.axis[1];
   a.lambda=2.5; a.v_max=34*kDeg; a.a_max=60*kDeg; a.j_max=1500*kDeg; a.dead_band=3*kDeg; a.feedforward_gain=0.7;
+  a.centre_band=0.5*kDeg; a.centre_tau_s=1.0; a.centre_speed=3*kDeg;
   a.q_min=-1.42; a.q_max=-0.2;
   // A head rising at 17 deg/s for 0.6 s, then stopping (the stop that overshot on the station).
   {
@@ -196,14 +199,14 @@ void level1_pitch_prefers_undershoot_and_ignores_small_motion() {
     g.reset(kS,{0.,-0.85},{0.,0.},{0.,0.});
     JointGoal goal; goal.valid=true; goal.velocity_valid={true,true};
     ReferenceSample r=g.last(); double beyond=-1e9; const double rate=17*kDeg, stop=0.6;
-    for (int k=1;k<=800;++k) {
+    for (int k=1;k<=1200;++k) {
       const double s=k*0.005;
       goal.q={0.,-0.85+rate*std::min(s,stop)}; goal.v={0.,s<stop?rate:0.};
       r=g.step(kS+int64_t(k)*5'000'000,goal,{r.q[0],r.q[1]});
       beyond=std::max(beyond,r.q[1]-goal.q[1]);
     }
     check(beyond<=0.2*kDeg,"pitch does not run past a head that stops");
-    check(std::abs(r.q[1]-goal.q[1])<=3*kDeg+1e-6 && std::abs(r.v[1])<1e-4,"and rests within the dead band of it");
+    check(std::abs(r.q[1]-goal.q[1])<=0.5*kDeg && std::abs(r.v[1])<1e-3,"and finishes centred on it (within the centre band)");
   }
   // Head bob: +-2 deg at 2 Hz inside the band moves pitch not at all.
   {
@@ -220,8 +223,18 @@ void level1_pitch_prefers_undershoot_and_ignores_small_motion() {
     }
     check(travel<1e-9,"head bob inside the dead band does not move pitch");
   }
+  // A still subject 1.6 deg off (inside the dead band): re-centred within a few seconds, without passing.
+  {
+    Level1Generator g; g.configure(p);
+    g.reset(kS,{0.,-0.85},{0.,0.},{0.,0.});
+    JointGoal goal; goal.valid=true; goal.velocity_valid={true,true}; goal.q={0.,-0.85+1.6*kDeg}; goal.v={0.,0.};
+    ReferenceSample r=g.last(); double beyond=-1e9;
+    for (int k=1;k<=800;++k) { r=g.step(kS+int64_t(k)*5'000'000,goal,{r.q[0],r.q[1]}); beyond=std::max(beyond,r.q[1]-goal.q[1]); }
+    check(std::abs(r.q[1]-goal.q[1])<=0.5*kDeg,"a persistent offset inside the dead band is re-centred");
+    check(beyond<=0.1*kDeg,"without passing the subject");
+  }
   // Yaw keeps no band and full feedforward: zero steady ramp lag as before.
-  check(p.axis[0].dead_band==0 && p.axis[0].feedforward_gain==1,"defaults leave an axis unchanged");
+  check(p.axis[0].dead_band==0 && p.axis[0].feedforward_gain==1 && p.axis[0].centre_band==0,"defaults leave an axis unchanged");
 }
 
 void level1_holds_inside_pitch_travel() {

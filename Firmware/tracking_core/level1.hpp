@@ -24,11 +24,13 @@ struct Level1Axis {
   double v_max=0, a_max=0, j_max=0;
   double lead_limit=0;        // rad: largest reference-to-axis lead before advance stops
   double q_min=0, q_max=0;    // travel (q_min==q_max: unbounded, e.g. continuous yaw)
-  // Dead band (rad): a target within it of the reference moves nothing; beyond it only the excess
-  // counts, so the reference rests up to dead_band short of the target. feedforward_gain scales the
-  // target's own rate. Pitch (owner 2026-10-02: the frame's short edge, undershoot preferred) uses
-  // both; 0 and 1 leave an axis as the plain law.
-  double dead_band=0, feedforward_gain=1;
+  // Dead band (rad), like a camera operator. Beyond it the axis follows a target pulled dead_band
+  // back toward it, so a move stops short (undershoot; owner 2026-10-02: pitch is the frame's short
+  // edge). Inside it nothing moves for head bob, blur or box changes; an offset that persists -- its
+  // centre_tau_s average beyond centre_band -- is closed at no more than centre_speed (rad/s), slow
+  // enough never to pass the subject, until within centre_band/2. feedforward_gain scales the
+  // target's own rate. A 0 band and gain 1 leave an axis as the plain law.
+  double dead_band=0, feedforward_gain=1, centre_band=0, centre_tau_s=1, centre_speed=0;
   // Directional speed caps set each tick by the host (>=0; infinite = none): the speed toward
   // each end from which a stop under the host's own safety model still fits.
   double v_pos_cap=std::numeric_limits<double>::infinity(), v_neg_cap=std::numeric_limits<double>::infinity();
@@ -82,7 +84,8 @@ class Level1Generator {
  private:
   Level1Parameters p_{};
   bool configured_=false, initialized_=false;
-  std::array<bool,2> lead_hold_{};
+  std::array<bool,2> lead_hold_{}, centring_{};
+  std::array<double,2> offset_average_{};
   ReferenceSample last_{};
 };
 

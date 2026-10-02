@@ -10,7 +10,7 @@
   "level1": "lambda 4 rad/s (the production tracking_reference_omega). Limits: owner ruling 2026-10-02, AUTO_TRACK is limited only by the 100 RPM safety cap and physical capability, not by a motion profile. Yaw: v 100 deg/s, the yaw servo asset's speed limit (1.75 rad/s). It was capped at 60 deg/s on 2026-10-02 after its 15 Hz limit cycle tripped the station; since the owner's fault/hold ruling the limit cycle is a tolerated episode (HOLD only after 5 s), and in the 20:44 person session two of six losses were the turret pinned at 60 deg/s. a = half of (3 A peak - 1 A worst friction) / inertia 0.0407 = 24.56 rad/s^2 (the other half is feedback headroom); j = half of the servo's 200 A/s current slew / inertia = 2456.0 rad/s^3. Pitch: v 100 RPM; a/j the 60 deg/s^2 / 300 deg/s^3 its commissioning exercised -- its capability under the 3 kg payload is unmeasured and Level 1's braking into the end stops relies on a real number. Travel: replaced each tick by the station's soft envelope.",
   "lead_limit_rad": "2 deg: ten times the worst servo moving error measured by the yaw accuracy calibration",
   "rate_domain_rad_s": "3.5 rad/s, twice the yaw servo's 1.75 rad/s: a guard against nonsense rates, not a motion limit (beyond it the rate is held at the edge). It was 1.0 rad/s and reset the rate to zero; at 21:14 on 2026-10-02 a person at 60-80 deg/s had their rate zeroed every other frame",
-  "level1_pitch": "Owner 2026-10-02: pitch sits on the frame's short edge (+-20 deg against yaw's +-35), so running past a subject who stops or turns back loses them; undershoot is preferred to speed. Pitch: lambda 2.5 rad/s, velocity feedforward x0.7, a 3 deg dead band (head bob, blur and box changes inside it move nothing; beyond it only the excess counts), jerk 1500 deg/s^3 (was 300; acceleration stays 60 deg/s^2). Replayed through Level 1 on the recorded pitch goal of sessions human-3 and human-4: passes beyond the target 13/16 -> 0/0, pitch travel -75%, |frame error| p95 4.2/8.0 -> 3.6/5.9 deg. End-stop braking is unchanged: the boundary governor uses min(supervisor j_brake 300, Level-1 j)."
+  "level1_pitch": "Owner 2026-10-02: pitch sits on the frame's short edge (+-20 deg against yaw's +-35), so running past a subject who stops or turns back loses them; undershoot is preferred to speed. Pitch: lambda 2.5 rad/s, velocity feedforward x0.7, a 3 deg dead band (head bob, blur and box changes inside it move nothing; beyond it only the excess counts), jerk 1500 deg/s^3 (was 300; acceleration stays 60 deg/s^2). Replayed through Level 1 on the recorded pitch goal of sessions human-3 and human-4: passes beyond the target 13/16 -> 0/0, pitch travel -75%, |frame error| p95 4.2/8.0 -> 3.6/5.9 deg. End-stop braking is unchanged: the boundary governor uses min(supervisor j_brake 300, Level-1 j). 22:25 (human-5): with the band alone pitch sat >1 deg off a still subject 92% of the time ('at certain height the aim never converges'). A move still stops short; an offset whose 1 s average exceeds the 0.5 deg centre band is then closed at no more than 3 deg/s until within 0.25 deg. Replayed (human-3/4/5): >1 deg off while still 37/82/92% -> 0.5/3.3/0%, passes 0/2 (2.5 deg)/0; the band-only replay of human-5 matches its recording (92.3% both)."
  },
  "estimator": {
   "process_density_rad2_s3": [
@@ -53,7 +53,10 @@
    "q_min_rad": -1.371,
    "q_max_rad": -0.255,
    "dead_band_rad": 0.0524,
-   "feedforward_gain": 0.7
+   "feedforward_gain": 0.7,
+   "centre_band_rad": 0.0087,
+   "centre_tau_s": 1.0,
+   "centre_speed_rad_s": 0.0524
   }
  },
  "timing": {

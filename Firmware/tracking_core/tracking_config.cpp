@@ -20,6 +20,8 @@ Level1Axis axis(const YAML::Node& n) {
   a.j_max=number(n,"j_max_rad_s3"); a.lead_limit=number(n,"lead_limit_rad");
   a.q_min=number(n,"q_min_rad"); a.q_max=number(n,"q_max_rad");
   a.dead_band=n["dead_band_rad"].as<double>(0.); a.feedforward_gain=n["feedforward_gain"].as<double>(1.);
+  a.centre_band=n["centre_band_rad"].as<double>(0.); a.centre_tau_s=n["centre_tau_s"].as<double>(1.);
+  a.centre_speed=n["centre_speed_rad_s"].as<double>(0.);
   return a;
 }
 }
@@ -70,7 +72,8 @@ std::string tracker_to_json(const TrackerParameters& p) {
     const auto& a=p.level1.axis[i];
     o<<",\""<<names[i]<<"\":{\"lambda_rad_s\":"<<a.lambda<<",\"v_max_rad_s\":"<<a.v_max<<",\"a_max_rad_s2\":"<<a.a_max
      <<",\"j_max_rad_s3\":"<<a.j_max<<",\"lead_limit_rad\":"<<a.lead_limit<<",\"q_min_rad\":"<<a.q_min<<",\"q_max_rad\":"<<a.q_max
-     <<",\"dead_band_rad\":"<<a.dead_band<<",\"feedforward_gain\":"<<a.feedforward_gain<<'}';
+     <<",\"dead_band_rad\":"<<a.dead_band<<",\"feedforward_gain\":"<<a.feedforward_gain
+     <<",\"centre_band_rad\":"<<a.centre_band<<",\"centre_tau_s\":"<<a.centre_tau_s<<",\"centre_speed_rad_s\":"<<a.centre_speed<<'}';
   }
   o<<"},\"timing\":{\"fixed_offset_s\":"<<p.timing.fixed_offset_s<<",\"exposure_fraction\":"<<p.timing.exposure_fraction
    <<",\"row_time_s\":"<<p.timing.row_time_s<<"},\"execution_horizon_s\":"<<p.execution_horizon_s<<",\"pixel_sigma_px\":"
