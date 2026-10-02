@@ -122,6 +122,9 @@ class MotorBackend {
   // A persistent, non-hazardous servo condition (oscillation or stall that has not cleared within
   // its persistence time): the supervisor HOLDs, energised, until it clears. nullptr: none.
   virtual const char* servo_hold_reason() const { return nullptr; }
+  // Stop an axis and keep it held, energised, where holding is possible without this host (a drive
+  // holding speed zero on its own encoder). Default: no such hold exists, release it.
+  virtual void hold_axis(AxisId axis) { deenergize(axis); }
   // The reason a guard latched, captured by the guard itself at trip time. Fixed-size
   // POD because the thread describing a fault must not allocate to do it; detail is
   // truncated rather than grown. `condition` is the machine-readable token the fault

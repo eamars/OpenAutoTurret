@@ -149,9 +149,25 @@ inline can::RawFrame servo_current_frame(uint8_t motor_id, double amps, double p
 class UnwrappedEncoder {
  public:
   static constexpr double kRadiansPerCount = 2.0 * std::numbers::pi / 8192.0;
-  // A session reference, never a claim of mechanical homing or absolute heading.
-  void reset() { initialized_ = false; valid_ = true; counts_ = 0; stamp_ = 0; }
+  // Latch (the default, commissioning and probes): any doubtful sample invalidates the unwrap until
+  // reset -- a bounded session may stop on the first doubt. Recover (production; owner ruling
+  // 2026-10-02, STATION_OPERATIONS.md "Fault, hold, degrade"): the GM6020 angle is absolute within
+  // a turn, so a doubtful sample is skipped, never latched. Station, 2026-10-02 20:02:50: two
+  // frames received 3 us apart (bunched in the receive queue; the motor samples every 1 ms) read as
+  // an impossible speed, latched the encoder invalid and faulted the station for good.
+  enum class Policy { Latch, Recover };
+  explicit UnwrappedEncoder(Policy policy = Policy::Latch) : policy_(policy) {}
+  void reset() { initialized_ = false; valid_ = true; counts_ = 0; stamp_ = 0; rejected_run_ = 0; }
+  // Recover: the GM6020's own sample period, the floor of the time between two of its readings
+  // however they were queued; the fastest the shaft can turn (rated 320 rpm, with margin); the
+  // consecutive implausible readings after which they are believed (nearest turn); and the gap
+  // beyond which the turn count could be wrong at the 100 RPM safety cap (counted, not fatal: yaw
+  // is continuous and no limit depends on its turn count).
+  static constexpr double kFramePeriodS = 0.001, kMaxSpeedRadS = 40.0;
+  static constexpr int kBelieveAfter = 20;
+  static constexpr double kTurnSafeGapS = 0.2;
   bool update(uint16_t count, TimeNs stamp) {
+    if (policy_ == Policy::Recover) return update_recover(count, stamp);
     if (!valid_ || count > 8191 || stamp <= 0) return invalidate();
     if (!initialized_) {
       first_ = previous_ = count; stamp_ = stamp; initialized_ = true; return true;
@@ -171,12 +187,40 @@ class UnwrappedEncoder {
     counts_ += delta; previous_ = count; stamp_ = stamp; return true;
   }
   bool valid() const { return initialized_ && valid_; }
+  // Recover: readings skipped as implausible, readings believed after a run of them, and gaps long
+  // enough that the turn count was re-established by nearest turn.
+  uint64_t rejected() const { return rejected_; }
+  uint64_t believed() const { return believed_; }
+  uint64_t long_gaps() const { return long_gaps_; }
   double relative_rad() const { return counts_ * kRadiansPerCount; }
   // The motor's own angle of the first frame: relative_rad() + first_rad() is the absolute GM6020
   // angle (one turn's worth of ambiguity is irrelevant: it indexes periodic tables).
   double first_rad() const { return first_ * kRadiansPerCount; }
  private:
   bool invalidate() { valid_ = false; return false; }
+  // True: the reading was used (or skipped as a duplicate); false: skipped as implausible. The
+  // unwrap itself stays valid.
+  bool update_recover(uint16_t count, TimeNs stamp) {
+    if (count > 8191 || stamp <= 0) { ++rejected_; return false; }
+    if (!initialized_) {
+      first_ = previous_ = count; stamp_ = stamp; initialized_ = true; valid_ = true; return true;
+    }
+    int delta = int(count) - int(previous_);
+    if (delta > 4096) delta -= 8192;
+    if (delta < -4096) delta += 8192;
+    // Since the last accepted reading: its stamp difference, but never less than one device period
+    // per reading taken since then (skipped ones included).
+    const double dt = std::max((stamp - stamp_) * 1e-9, kFramePeriodS * (1 + rejected_run_));
+    const bool plausible = std::abs(delta) * kRadiansPerCount <= kMaxSpeedRadS * dt + 2 * kRadiansPerCount;
+    if (!plausible && ++rejected_run_ < kBelieveAfter) { ++rejected_; return false; }
+    if (!plausible) ++believed_;
+    if ((stamp - stamp_) * 1e-9 > kTurnSafeGapS) ++long_gaps_;
+    rejected_run_ = 0;
+    counts_ += delta; previous_ = count; stamp_ = std::max(stamp, stamp_); return true;
+  }
+  Policy policy_;
+  int rejected_run_{0};
+  uint64_t rejected_{0}, believed_{0}, long_gaps_{0};
   bool initialized_{false}, valid_{true};
   uint16_t previous_{}, first_{};
   int64_t counts_{};

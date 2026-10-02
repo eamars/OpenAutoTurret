@@ -349,11 +349,25 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
   const bool encoder_was_valid = yaw_state_.encoder_valid;
   yaw_state_.feedback = decoded;
   yaw_state_.received = true;
-  yaw_state_.encoder_valid = yaw_encoder_.update(decoded.angle_count, decoded.rx_ns);
+  const bool accepted = yaw_encoder_.update(decoded.angle_count, decoded.rx_ns);
+  yaw_state_.encoder_valid = yaw_encoder_.valid();
   if (encoder_was_valid && !yaw_state_.encoder_valid)
     spdlog::error("GM6020 encoder invalidated: dt_ms={:.3f} previous_count={} count={} speed_rpm={}",
                   (decoded.rx_ns - previous_rx_ns) / 1e6,
                   previous_count, decoded.angle_count, decoded.speed_rpm);
+  if (!accepted) {
+    // A transient (owner ruling 2026-10-02): skipped, counted, said at most once a second. The
+    // frame is still fresh feedback for everything except the angle.
+    if (decoded.rx_ns - yaw_encoder_log_ns_ > 1'000'000'000) {
+      spdlog::warn("GM6020 reading skipped as implausible: dt_ms={:.3f} previous_count={} count={} speed_rpm={} "
+                   "(skipped {}, believed after a run {}, long gaps {})", (decoded.rx_ns - previous_rx_ns) / 1e6,
+                   previous_count, decoded.angle_count, decoded.speed_rpm, yaw_encoder_.rejected(),
+                   yaw_encoder_.believed(), yaw_encoder_.long_gaps());
+      yaw_encoder_log_ns_ = decoded.rx_ns;
+    }
+    ++yaw_state_.count;
+    return;
+  }
   yaw_state_.position_rad = yaw_encoder_.relative_rad() - yaw_origin_rad_;
   if (yaw_state_.encoder_valid)
     yaw_rx_velocity_.observe(yaw_encoder_.relative_rad(), decoded.rx_ns);
@@ -636,8 +650,24 @@ void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
       // Owner's ordering, 2026-09-28: running beats holding, holding beats faulting, and a
       // fault is reserved for a motor we cannot control, a motor reporting its own heat, or
       // something equally dangerous. Everything else is driven through and said out loud.
-      const GuardResponse response = yaw_guard_response(in, yaw_stall_episodes_.count);
-      if (response == GuardResponse::Fault && !yaw_trip_.load()) {
+      const GuardResponse verdict = yaw_guard_response(in, yaw_stall_episodes_.count);
+      // Owner ruling 2026-10-02 ("Fault, hold, degrade"): a fault condition has to persist
+      // kGuardFaultPersistNs before it is one. Until then it is an episode: blind (no fresh feedback
+      // or no bus) the axis coasts on zero current, which for this balanced axis is safe; otherwise
+      // (a stale control heartbeat, motor heat) the servo keeps holding what it was last given.
+      const bool was_pending = yaw_guard_persistence_.started;
+      const GuardResponse response = yaw_guard_persistence_.decide(verdict, now, kGuardFaultPersistNs);
+      if (verdict == GuardResponse::Fault && !was_pending)
+        spdlog::warn("GM6020 guard: {} (feedback_age_ms={:.1f}); fault if it lasts {} ms",
+                     MotorBackend::select_trip_condition(in), (now - yaw_state_.feedback.rx_ns) / 1e6,
+                     kGuardFaultPersistNs / 1'000'000);
+      if (verdict != GuardResponse::Fault && was_pending && !yaw_trip_.load())
+        spdlog::info("GM6020 guard: cleared after {:.1f} ms", (now - yaw_guard_persistence_.since_ns) / 1e6);
+      if (response == GuardResponse::Hold && (in.feedback_unsafe || in.can_down || in.can_state_wrong))
+        send_yaw_zero_locked();
+      if (response == GuardResponse::Hold) {
+        if (!yaw_degraded_.exchange(true)) ++yaw_guard_events_;  // one episode, one count
+      } else if (response == GuardResponse::Fault && !yaw_trip_.load()) {
         MotorBackend::TripDetail td{};
         MotorBackend::format_trip_detail(in, MotorBackend::select_trip_condition(in), td);
         const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
@@ -879,9 +909,9 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   if (!std::isfinite(desired) || !yaw_feedback_safe_locked(now) || yaw_trip_.load() ||
       !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
       now - heartbeat_ns_.load() > kHeartbeatLimitNs || !yaw_bus_healthy()) {
-    if (!yaw_trip_.load() && (!yaw_feedback_safe_locked(now) || !yaw_bus_healthy()))
-      trip_yaw_locked(!yaw_feedback_safe_locked(now) ? "feedback_unsafe" : "can_unavailable");
-    else {
+    // Refused, not tripped: unsafe feedback or a sick bus becomes a fault only in the guard, after
+    // it has persisted (owner ruling 2026-10-02).
+    {
       // Nothing went out but a zero. Say so, and stop quoting the last accepted
       // velocity as if it described this cycle -- that stale 10 deg/s is what made
       // three no_progress trips read as "commanded and blocked".
@@ -939,7 +969,7 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
   yaw_output_reason_ = yaw_velocity_loop_.late_cycle() ? 5 : 1;
   if (!send_yaw_output_locked(command, requested_output)) {
     yaw_velocity_loop_ = prior_loop; // do not integrate an output that was never sent
-    if (now - yaw_tx_failure_since_ns_ >= 20'000'000) trip_yaw_locked("tx_failure_persistent");
+    // Sustained failure is the guard's: can_down after 20 ms, a fault only if it persists.
   }
 }
 
@@ -1097,7 +1127,14 @@ bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& 
     if (!pitch_reference_has_envelope(r)) return false;
     if (!pitch_servo_active_.load()) {
       can::AxisLatest l;
-      if (!pitch_system_.axis(AxisId::Pitch).latest(l) || !l.has_feedback || l.mode != 2) return false;
+      if (!pitch_system_.axis(AxisId::Pitch).latest(l) || !l.has_feedback || l.mode != 2 || l.faults ||
+          now_monotonic_ns() - l.rx_ns > kPitchFreshNs) return false;
+      if (pitch_follow_hold_.load() && now_monotonic_ns() - pitch_follow_since_ns_ >= kServoQuietNs &&
+          std::abs(r.q - l.q_rad) < kFollowClearRad) {
+        spdlog::info("pitch servo following error cleared: the reference is back at the axis");
+        pitch_follow_hold_.store(nullptr);
+      }
+      if (pitch_follow_hold_.load()) return false;
       if (!pitch_servo_may_engage(r, l.q_rad, profile_.servo->pitch_guard_rad)) return false;
       pitch_loop_.reset();
       pitch_servo_last_step_ns_ = 0;
@@ -1112,8 +1149,14 @@ bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& 
   if (!yaw_servo_configured_) return false;
   const auto now = now_monotonic_ns();
   yaw_last_command_ns_ = now;
+  if (yaw_follow_hold_.load() && now - yaw_follow_since_ns_ >= kServoQuietNs &&
+      std::abs(r.q - yaw_state_.position_rad) < kFollowClearRad) {
+    spdlog::info("yaw servo following error cleared: the reference is back at the axis");
+    yaw_follow_hold_.store(nullptr);
+  }
   if (!yaw_servo_active_) {
     if (yaw_trip_.load() || !yaw_motion_allowed_.load() || !yaw_feedback_safe_locked(now)) return false;
+    if (yaw_follow_hold_.load()) return false;   // not onto a reference still away from the axis
     // Take over at the measured state; the current on the wire becomes the integral's start.
     yaw_servo_offset_rad_ = yaw_encoder_.first_rad() + yaw_origin_rad_;
     const double applied = yaw_last_output_.load();
@@ -1182,15 +1225,23 @@ bool MixedCanMotorBackend::fault_releases_axis(AxisId axis) const {
   return pitch_system_.axis(AxisId::Pitch).latest(l) && l.has_feedback && l.faults != 0;
 }
 
+// The CyberGear holds speed zero on its own encoder; yaw (host current) has no such hold.
+void MixedCanMotorBackend::hold_axis(AxisId axis) {
+  if (axis != AxisId::Pitch || !pitch_opened_.load()) { deenergize(axis); return; }
+  release_pitch_servo();
+  pitch_transition_active_.store(false);
+  if (!pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0))
+    spdlog::warn("pitch hold: speed-zero write refused (mode transition in progress); the drive keeps its last target");
+}
+
 // Called with yaw_mutex_ held, on every GM6020 frame while the servo is engaged: the
 // commissiond session's order (observe the encoder, step, transmit, acknowledge) with the
 // production guards in front of it and the commissioning trips behind it.
 void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   const auto now = now_monotonic_ns();
-  if (!yaw_feedback_safe_locked(now) || !yaw_bus_healthy()) {
-    trip_yaw_locked(!yaw_feedback_safe_locked(now) ? "feedback_unsafe" : "can_unavailable");
-    return;
-  }
+  // Unsafe feedback or an unhealthy bus: no step on this frame. Whether it is a fault is the guard's
+  // call, after it has persisted (owner ruling 2026-10-02).
+  if (!yaw_feedback_safe_locked(now) || !yaw_bus_healthy()) return;
   if (yaw_trip_.load() || !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
       now - heartbeat_ns_.load() > kHeartbeatLimitNs) {
     yaw_servo_active_ = false;
@@ -1199,7 +1250,11 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   }
   const double offset = yaw_servo_offset_rad_;
   if (!yaw_servo_.observe_encoder((rx_ns - yaw_servo_epoch_ns_) * 1e-9, yaw_state_.position_rad + offset)) {
-    trip_yaw_locked("servo_encoder_rejected");
+    // The observer could not take the reading: let go (zero current) and let the next reference
+    // re-engage it from the measured state. A transient, not a fault (owner ruling 2026-10-02).
+    spdlog::warn("yaw servo: encoder reading not accepted by the observer; released, re-engages on the next reference");
+    release_yaw_servo_locked();
+    send_yaw_zero_locked();
     return;
   }
   double q, v, a;
@@ -1207,7 +1262,17 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   else { q = yaw_servo_hold_q_; v = a = 0; ++yaw_servo_stale_; }
   const auto out = yaw_servo_.step((now - yaw_servo_epoch_ns_) * 1e-9, q + offset, v, a);
   yaw_servo_out_ = out;
-  if (out.status == static_cast<int>(axis::ServoStatus::FollowingError)) { trip_yaw_locked("servo_following_error"); return; }
+  if (out.status == static_cast<int>(axis::ServoStatus::FollowingError)) {
+    // Usually an obstruction: stop pushing (let go), and HOLD until a reference near the axis comes
+    // back -- the control loop re-anchors its stop at the measured axis. Not a fault.
+    spdlog::error("yaw servo following error: reference {:+.4f} rad, axis {:+.4f} rad; released, HOLD",
+                  q, yaw_state_.position_rad);
+    yaw_follow_since_ns_ = now;
+    yaw_follow_hold_.store("yaw servo following error");
+    release_yaw_servo_locked();
+    send_yaw_zero_locked();
+    return;
+  }
   if (out.status != static_cast<int>(axis::ServoStatus::Ok)) { trip_yaw_locked("servo_data_invalid"); return; }
   if (yaw_state_.feedback.temperature_raw >= profile_.servo->yaw_temperature_limit_raw) {
     trip_yaw_locked("servo_temperature");
@@ -1233,7 +1298,7 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   const bool sent = send_yaw_output_locked(
       gm6020::servo_current_frame(profile_.yaw.motor_id, out.limited, profile_.servo->yaw_current_limit_a), out.limited);
   yaw_servo_.acknowledge(sent, sent ? yaw_last_output_.load() : 0.0);
-  if (!sent && now - yaw_tx_failure_since_ns_ >= 20'000'000) trip_yaw_locked("tx_failure_persistent");
+  // Sustained transmit failure is the guard's (can_down after 20 ms, a fault only if it persists).
 }
 
 // The pitch servo: commissioning's host position loop at 1 kHz on the drive's own speed loop.
@@ -1243,16 +1308,41 @@ void MixedCanMotorBackend::pitch_servo_loop(std::stop_token stop) {
   while (!stop.stop_requested()) {
     next += std::chrono::milliseconds(1);
     std::this_thread::sleep_until(next);
+    if (pitch_stale_since_ns_) {
+      // Late pitch feedback (above): cleared when it is fresh again, a fault if it lasts.
+      can::AxisLatest s;
+      const auto t = now_monotonic_ns();
+      if (pitch_system_.axis(AxisId::Pitch).latest(s) && s.has_feedback && t - s.rx_ns <= kPitchFreshNs) {
+        spdlog::info("pitch servo: feedback fresh again after {:.1f} ms", (t - pitch_stale_since_ns_) / 1e6);
+        pitch_stale_since_ns_ = 0;
+      } else if (t - pitch_stale_since_ns_ >= kPitchStaleFaultNs) {
+        spdlog::error("pitch servo: no fresh feedback for {:.0f} ms; fault (the drive keeps holding speed zero)",
+                      (t - pitch_stale_since_ns_) / 1e6);
+        pitch_servo_fault_.store(true);
+        pitch_stale_since_ns_ = 0;
+        pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+      }
+    }
     if (!pitch_servo_active_.load()) continue;
     std::lock_guard lock(pitch_servo_mutex_);
     if (!pitch_servo_active_.load()) continue;
     const auto now = now_monotonic_ns();
     can::AxisLatest l;
-    if (!pitch_system_.axis(AxisId::Pitch).latest(l) || !l.has_feedback || l.mode != 2 || l.faults ||
-        now - l.rx_ns > 20'000'000) {
-      spdlog::error("pitch servo: feedback missing, stale, disabled or faulted (mode={} faults={} age_ms={:.1f})",
-                    l.mode, l.faults, (now - l.rx_ns) / 1e6);
+    const bool have = pitch_system_.axis(AxisId::Pitch).latest(l) && l.has_feedback;
+    if (!have || l.mode != 2 || l.faults) {
+      // The drive is not running or reports its own fault: it is not holding. A hazard -> fault.
+      spdlog::error("pitch servo: drive disabled or faulted (feedback={} mode={} faults={})", have, l.mode, l.faults);
       pitch_servo_fault_.store(true);
+      pitch_servo_active_.store(false);
+      pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+      continue;
+    }
+    if (now - l.rx_ns > kPitchFreshNs) {
+      // Late feedback is a transient (owner ruling 2026-10-02): the drive holds speed zero on its own
+      // encoder while the servo lets go; it re-engages through the next reference once feedback is
+      // fresh. A fault only if it lasts kPitchStaleFaultNs (pitch_stale_watch below).
+      spdlog::warn("pitch servo: feedback {:.1f} ms old; released to the drive's speed-zero hold", (now - l.rx_ns) / 1e6);
+      pitch_stale_since_ns_ = l.rx_ns;
       pitch_servo_active_.store(false);
       pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
       continue;
@@ -1273,8 +1363,11 @@ void MixedCanMotorBackend::pitch_servo_loop(std::stop_token stop) {
       continue;
     }
     if (std::abs(q - l.q_rad) > pitch_following_error_rad_) {
-      spdlog::error("pitch servo following error: reference {:+.4f} rad, axis {:+.4f} rad", q, l.q_rad);
-      pitch_servo_fault_.store(true);
+      // Usually an obstruction: stop pushing (the drive holds speed zero) and HOLD until a reference
+      // near the axis comes back. Not a fault (owner ruling 2026-10-02).
+      spdlog::error("pitch servo following error: reference {:+.4f} rad, axis {:+.4f} rad; released, HOLD", q, l.q_rad);
+      pitch_follow_since_ns_ = now;
+      pitch_follow_hold_.store("pitch servo following error");
       pitch_servo_active_.store(false);
       pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
       continue;

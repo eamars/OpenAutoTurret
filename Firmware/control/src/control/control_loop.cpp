@@ -125,7 +125,7 @@ bool ControlLoop::enter_position_mode_all(double limit_spd, std::string& err) {
         : backend_->enter_position_mode(a, limit_spd, e);
     if (!ok) {
       err = std::string(axis_name(a)) + ": " + e;
-      deenergize_all();
+      stop_axes_safely();
       return false;
     }
   }
@@ -140,7 +140,7 @@ bool ControlLoop::enter_speed_mode_all(
     std::string e;
     if (!backend_->enter_speed_mode(a, limit_cur_a[i], e)) {
       err = std::string(axis_name(a)) + ": " + e;
-      deenergize_all();
+      stop_axes_safely();
       return false;
     }
   }
@@ -205,7 +205,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
     limit_cur[i] = homing_->initial_current_limit(static_cast<AxisId>(i));
     if (!std::isfinite(limit_cur[i]) || limit_cur[i] <= 0.0) {
       err = "homing requires a positive initial current limit for each axis";
-      deenergize_all();
+      stop_axes_safely();
       return false;
     }
   }
@@ -258,7 +258,7 @@ bool ControlLoop::start_motor_recovery(std::string& err, bool then_home) {
     sync_controllers_to_mode(OperatingMode::Manual);
   }
   if (!backend_->begin_motor_recovery(err)) {
-    deenergize_all();
+    stop_axes_safely();
     fault_reason_ = "RECOVERY FAILED: " + err;
     phase_ = Phase::Fault;
     return false;
@@ -637,6 +637,8 @@ void ControlLoop::fail_parking(const std::string& reason, bool motion_fault) {
   }
 }
 
+// Explicit release of both axes: operator stop and shutdown only (main.cpp, stop_motion). Whether
+// those should park or hold an unbalanced pitch instead is open for the owner (STATION_OPERATIONS.md).
 void ControlLoop::deenergize_all() {
   backend_->invalidate_calibration();
   homed_ = false;
@@ -646,6 +648,25 @@ void ControlLoop::deenergize_all() {
     yaw_reference_stationary_since_ns_ = 0;
   }
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
+}
+
+// Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a failed homing, mode
+// transition or recovery stops the axes, but releases only one that cannot be held. An unbalanced
+// pitch released near an end stop falls onto it. Motor recovery's own disable (to clear drive
+// faults) is the backend's begin_motor_recovery, not this.
+void ControlLoop::stop_axes_safely() {
+  backend_->invalidate_calibration();
+  homed_ = false;
+  pitch_homed_ = false;
+  if (backend_->supports_continuous_yaw()) {
+    yaw_session_reference_valid_ = false;
+    yaw_reference_stationary_since_ns_ = 0;
+  }
+  for (int i = 0; i < kAxisCount; ++i) {
+    const auto a = static_cast<AxisId>(i);
+    if (backend_->fault_releases_axis(a)) backend_->deenergize(a);
+    else backend_->hold_axis(a);
+  }
 }
 
 bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
@@ -1509,7 +1530,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       const auto result = backend_->poll_motor_recovery(now_ns, cfg_.motor_overtemp_c, detail);
       if (result == MotorBackend::Transition::Failed) {
         backend_->cancel_motor_recovery();
-        deenergize_all();
+        stop_axes_safely();
         phase_ = Phase::Fault;
         fault_reason_ = "RECOVERY FAILED: " + detail;
         recovery_then_home_ = false;
@@ -1605,7 +1626,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         std::string e;
         const auto status = backend_->transition_mode(axis, false, homing_->initial_current_limit(axis), now_ns, e,
             cfg_.homing_speed_ki,cfg_.homing_speed_kp,cfg_.homing_mode_displacement_check);
-        if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+        if (status == MotorBackend::Transition::Failed) { stop_axes_safely(); fault(e); }
         else if (status == MotorBackend::Transition::Complete) ++homing_init_axis_;
         break;
       }
@@ -1625,15 +1646,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                   ? cfg_.park.limit_cur_a[homing_final_axis_] : cfg_.hold_speed_rad_s, now_ns, e,
               cfg_.service_speed_control ? cfg_.service_speed_ki : -1, cfg_.service_speed_kp,
               cfg_.homing_mode_displacement_check);
-          if (status == MotorBackend::Transition::Failed) { deenergize_all(); fault(e); }
+          if (status == MotorBackend::Transition::Failed) { stop_axes_safely(); fault(e); }
           else if (status == MotorBackend::Transition::Complete) ++homing_final_axis_;
         } else if (finalize_homing()) phase_ = Phase::Hold;
-        else { deenergize_all(); fault("homing results invalid"); }
+        else { stop_axes_safely(); fault("homing results invalid"); }
         break;
       }
       const AxisId a = homing_->active_axis();
       if (backend_->supports_continuous_yaw() && a == AxisId::Yaw) {
-        deenergize_all();
+        stop_axes_safely();
         fault("continuous yaw cannot be endpoint homed; configure a pitch-only homing plan");
         break;
       }
@@ -1671,7 +1692,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
         pending_homing_ds_.reset();
         rearmed = status == MotorBackend::Transition::Complete;
-        if (!rearmed) { deenergize_all(); fault("homing mode transition: " + e); }
+        if (!rearmed) { stop_axes_safely(); fault("homing mode transition: " + e); }
       }
       if (rearmed) {
         homing_motion_.expect(a,ds,sp[ix(a)].q_rad);
@@ -1734,7 +1755,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             sp[ix(a)].torque_nm, ds.velocity_rad_s, ds.message);
       }
       if (homing_->failed()) {
-        deenergize_all();
+        stop_axes_safely();
         fault("homing failed: " + homing_->fail_reason());
       }
       break;
@@ -2564,7 +2585,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         } else if (phase_ == Phase::Hold && servo_holds() &&
                    (last_decision_.action == SafetyAction::Brake ||
                     last_decision_.action == SafetyAction::Hold) &&
-                   servo_stop(i, a, ref_lim_prev[i], period_ns, now_ns, cycle_limits[i])) {
+                   servo_stop(i, a, ref_lim_prev[i], period_ns, now_ns, cycle_limits[i], sp[i].q_rad, v_est_[i])) {
           // The engaged servo executes the supervisor's stop. Station, 2026-10-02 17:05:52: the
           // zero-speed command below released the yaw servo with the axis moving, the legacy speed
           // loop could not take it over (velocity_loop_invalid) and the station faulted.
@@ -3462,11 +3483,19 @@ double ControlLoop::hold_speed_effective() const {
   return v;
 }
 
-bool ControlLoop::servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from,
-                             TimeNs period_ns, TimeNs now_ns, const AxisLimits& limits) {
-  if (!from.initialised) return false;
+bool ControlLoop::servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from_reference,
+                             TimeNs period_ns, TimeNs now_ns, const AxisLimits& limits,
+                             double q_measured, double v_measured) {
+  if (!from_reference.initialised) return false;
   // From last tick's published reference: this tick's has already advanced along the motion the
   // supervisor just stopped, and continuing from it would step the servo twice in one tick.
+  // Unless the axis is nowhere near it (a following error, an obstruction): then the stop starts at
+  // the axis, or holding would push it on towards a reference it could not reach.
+  control::ReferenceLimiter from = from_reference;
+  if (std::isfinite(q_measured) && std::abs(from.q_rad - q_measured) > kStopReanchorRad) {
+    from.reset_at(q_measured);
+    from.v_rad_s = std::isfinite(v_measured) ? v_measured : 0.0;
+  }
   ref_lim_[i] = from;
   double a = cfg_.a_brake_rad_s2, j = cfg_.j_brake_rad_s3;
   const double v = from.v_rad_s;
@@ -3799,12 +3828,12 @@ ModeResult ControlLoop::stop_motion() {
   if (phase_ == Phase::Recovering) {
     backend_->cancel_motor_recovery();
     recovery_then_home_ = false;
-    deenergize_all();
+    stop_axes_safely();
     phase_ = Phase::Fault;
     fault_reason_ = "motor recovery cancelled; retry Recover Motors when ready";
   }
   if (phase_ == Phase::Homing) {
-    deenergize_all();
+    stop_axes_safely();
     phase_ = Phase::Idle;
     pending_homing_ds_.reset();
   }

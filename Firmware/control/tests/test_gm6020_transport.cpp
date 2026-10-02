@@ -181,6 +181,42 @@ TEST(GM6020Encoder, RejectsAmbiguousOrReorderedSamplesAndLatchesInvalidity) {
   EXPECT_TRUE(bad_count.valid());
 }
 
+// Station, 2026-10-02 20:02:50: two frames received 3 us apart (bunched in the receive queue; the
+// motor samples every 1 ms), 3 counts apart at 14 rpm, latched the old unwrap invalid and faulted
+// the station for good. Production's Recover policy: the device period bounds the time between
+// readings, a doubtful reading is skipped, a run of them is believed, and gaps never latch.
+TEST(GM6020Encoder, RecoverPolicyNeverLatchesOnBunchedFramesGapsOrGlitches) {
+  using ota::gm6020::UnwrappedEncoder;
+  constexpr double k = UnwrappedEncoder::kRadiansPerCount;
+  UnwrappedEncoder e(UnwrappedEncoder::Policy::Recover);
+  ASSERT_TRUE(e.update(838, 1'000'000'000));
+  EXPECT_TRUE(e.update(841, 1'000'003'000)) << "the station's 3 us pair";
+  EXPECT_TRUE(e.update(841, 1'000'003'000)) << "a duplicate stamp";
+  EXPECT_TRUE(e.update(843, 1'000'002'000)) << "a reordered stamp";
+  EXPECT_NEAR(e.relative_rad(), 5 * k, 1e-12);
+  // A corrupt reading half a turn away is skipped, and the next good one continues.
+  EXPECT_FALSE(e.update(4900, 1'001'000'000));
+  EXPECT_TRUE(e.valid());
+  EXPECT_TRUE(e.update(845, 1'002'000'000));
+  EXPECT_NEAR(e.relative_rad(), 7 * k, 1e-12);
+  // A 400 ms gap (the old unwrap latched beyond 80 ms) re-establishes the turn by nearest count.
+  EXPECT_TRUE(e.update(900, 1'402'000'000));
+  EXPECT_NEAR(e.relative_rad(), 62 * k, 1e-12);
+  EXPECT_EQ(e.long_gaps(), 1u);
+  // A real jump the unwrap did not see coming (readings consistently elsewhere) is believed after a run.
+  int accepted_at = -1;
+  for (int i = 0; i < 30 && accepted_at < 0; ++i)
+    if (e.update(3000, 1'403'000'000 + i * 1'000)) accepted_at = i;
+  EXPECT_GE(accepted_at, 1);
+  EXPECT_LT(accepted_at, UnwrappedEncoder::kBelieveAfter);
+  EXPECT_TRUE(e.valid());
+  // Malformed frames are skipped, never latched.
+  EXPECT_FALSE(e.update(8192, 1'500'000'000));
+  EXPECT_FALSE(e.update(3000, 0));
+  EXPECT_TRUE(e.valid());
+  EXPECT_TRUE(e.update(3001, 1'501'000'000));
+}
+
 TEST(YouseeTransport, RefusesTypedStandardFrameWithoutOpeningAdapter) {
   ota::can::YouseeTransport::Options options;
   ota::can::YouseeTransport transport(options);

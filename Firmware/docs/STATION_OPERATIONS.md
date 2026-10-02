@@ -58,8 +58,8 @@ free. "Fault → power off" is the dangerous direction, not the safe one.
 
 ### The guards in production, against this rule (2026-10-02)
 
-The first three rows were changed on 2026-10-02, with tests. The rows marked **open** still violate
-the rule and are the next work. Do not cite them as precedent.
+Every row except the ones marked **open** was changed on 2026-10-02, with tests. The **open** rows
+still violate the rule and are the next work. Do not cite them as precedent.
 
 | Guard | Where | Was | Now |
 |---|---|---|---|
@@ -67,12 +67,12 @@ the rule and are the next work. Do not cite them as precedent.
 | Yaw servo stall (stall recovery still rocking) | same | — | Rocking itself is DEGRADE. Still stuck after 5 s, HOLD until it clears. |
 | Watchdog fault, pitch | `ControlLoop` (watchdog handling) | pitch de-energised for any pitch fault | Released only if the drive itself reports a fault (`fault_releases_axis`). Otherwise the Fault phase brakes and holds it. |
 | CyberGear dead-man (host heartbeat > 100 ms, feedback > 100 ms, > 75 °C) | `CyberGearSystem` watchdog | STOP (release) to both drives every 5 ms | `SpdRef = 0` to an enabled, healthy drive, which holds on its own encoder. STOP only to a faulted or not-enabled drive. Owner to confirm the > 75 °C case: holding heats the motor, but releasing drops the load. |
-| Yaw feedback older than 20 ms (`feedback_unsafe`) | yaw servo | FAULT at once | **open:** no time margin. Should brake and hold, and fault only past the supervisor's 100 ms. |
-| Yaw transmit failures for 20 ms | yaw | FAULT | **open:** same. |
-| One rejected encoder sample (`servo_encoder_rejected`) | yaw servo | FAULT | **open:** one sample is a transient. |
-| Following error > 15° (yaw), and the pitch following error | both servos | FAULT | **open:** usually an obstruction. Stop pushing (hold where it is), HOLD, and fault only if it persists. |
-| Pitch servo feedback stale > 20 ms | pitch servo | pitch servo fault | **open:** no time margin. Since 2026-10-02 the drive at least stays held. |
-| Faults during homing, mode transitions and recovery (`deenergize_all()`) | `ControlLoop` | release both axes | **open:** pitch must be held, not released. |
+| GM6020 encoder unwrap: one implausible reading, or a gap over 80 ms | `UnwrappedEncoder` | latched invalid for the session, then `feedback_unsafe` and a permanent FAULT. Station, 20:02:50: two frames bunched 3 µs apart in the receive queue | Production's `Recover` policy:<br>• the 1 ms device period is the floor on the time between readings;<br>• a doubtful reading is skipped, and a run of 20 is believed;<br>• a gap re-establishes the turn by nearest count (yaw is continuous).<br>Commissioning keeps `Latch`. |
+| Guard: feedback unsafe, bus down or wrong, tx failing for 20 ms, heartbeat stale, motor heat | yaw guard thread, servo step, legacy command path | FAULT at once (two paths tripped directly) | The command paths refuse motion (zero current) and never trip. The guard faults only after 0.5 s without a break (`GuardFaultPersistence`). Until then it holds: a blind axis coasts on zero current, otherwise the servo keeps holding. |
+| Observer refuses an encoder reading (`servo_encoder_rejected`) | yaw servo | FAULT | Released (zero current); it re-engages from the measured state on the next reference. |
+| Following error > 15° (yaw), and the pitch following error | both servos | FAULT | HOLD. The servo lets go (yaw zero current; pitch drive at speed zero). The supervisor's stop starts at the measured axis (`kStopReanchorRad`), so nothing pushes toward the old reference. It clears 1 s later, once the reference is back within 0.05 rad of the axis. |
+| Pitch servo feedback older than 20 ms | pitch servo | pitch servo fault | The servo lets go to the drive's speed-zero hold and re-engages when feedback is fresh. A fault only after 0.5 s without a break. A disabled or self-faulted drive is still a fault at once (it isn't holding). |
+| Faults during homing, mode transitions, recovery failure | `ControlLoop` | `deenergize_all()`: release both axes | `stop_axes_safely()`: release only what `fault_releases_axis` says cannot be held. The pitch drive holds speed zero (`hold_axis`). `deenergize_all()` is kept for operator stop and shutdown only (next row). Motor recovery's own disable, needed to clear drive faults, is unchanged. |
 | Operator stop and shutdown | launcher → `controld` | pitch STOP at the end | **open, owner decision:** park first so the release is safe, or hold. |
 | Motor over-temperature (supervisor), drive-reported fault | supervisor | FaultStop / Disable | Consistent: a hazard, and a faulted drive is not holding anyway. |
 | 100 RPM speed cap, pitch end-stop guard | servos | FAULT | Consistent: hazards, immediate. The pitch drive is now held at speed zero, not released. |

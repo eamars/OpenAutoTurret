@@ -620,6 +620,8 @@ class ServoSimBackend : public SimMotorBackend {
   struct Axis { bool engaged = false, fed = false; int engagements = 0, releases = 0, silent = 0; double q_ref = 0; };
   std::array<Axis, 2> servo;
   bool servo_available(AxisId) const override { return true; }
+  const char* hold = nullptr;   // what the backend's servo_hold_reason() reports (a following error)
+  const char* servo_hold_reason() const override { return hold; }
   bool command_reference(AxisId a, const ServoReference& r) override {
     auto& s = servo[static_cast<size_t>(a)];
     if (!s.engaged) { s.engaged = true; ++s.engagements; }
@@ -956,6 +958,47 @@ TEST(TrackingIntegration, ASubjectLeavingThroughTheYawTravelIsStoppedNotChased) 
     EXPECT_LE(highest, soft) << rate << " deg/s";
     EXPECT_EQ(servo->servo[1].releases, 0) << rate << " deg/s";
   }
+}
+
+// Owner ruling 2026-10-02: a following error (usually an obstruction) is a HOLD, and the hold must not
+// keep pushing towards a reference the axis could not reach: the supervisor's stop starts at the axis.
+TEST(TrackingIntegration, AFollowingErrorHoldStopsAtTheAxisNotAtTheReference) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  const double az = 30.0 * kDeg;
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, 0.0); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  int64_t seq = 10;
+  double blocked_at = 0, gap_at_hold = 0, gap_after = 1e9;
+  int holds = 0;
+  for (int i = 0; i < 300; ++i) {
+    if (i == 40) {           // mid-slew, something stops the yaw dead
+      blocked_at = r.loop().last_positions()[1];
+      r.sim().set_stops(AxisId::Yaw, blocked_at - 0.001, blocked_at + 0.001);
+    }
+    if (i == 70) {           // the backend's following error
+      gap_at_hold = std::abs(servo->servo[1].q_ref - r.loop().last_positions()[1]);
+      servo->hold = "yaw servo following error";
+    }
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, 0.0);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Hold) ++holds;
+    if (i > 80) gap_after = std::abs(servo->servo[1].q_ref - r.loop().last_positions()[1]);   // the latest
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  std::printf("following error: reference %.2f deg from the blocked axis at the hold, %.3f deg after it, holds %d\n",
+              gap_at_hold / kDeg, gap_after / kDeg, holds);
+  EXPECT_GT(gap_at_hold, 3 * kDeg) << "the scenario must leave the reference well away from the axis";
+  EXPECT_GT(holds, 200);
+  // The stop starts at the axis with its measured velocity estimate (still decaying after the abrupt
+  // block) and brakes that out: about half a degree, against the 5 degrees it was being pushed.
+  EXPECT_LT(gap_after, 1.0 * kDeg) << "the hold kept pushing towards the old reference";
 }
 
 // OTA_TEST_PITCH_HOLD (an isolation test, off by default): pitch stays at its first READY pose,

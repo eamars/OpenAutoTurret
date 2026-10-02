@@ -315,7 +315,11 @@ TEST(Adr002YawOutput, OneTransmitFailureRecoversOnNextCommand) {
   EXPECT_EQ(backend.output_evidence(AxisId::Yaw).tx_seq, 1u);
 }
 
-TEST(Adr002YawOutput, SustainedTransmitFailureTripsAfterTwentyMilliseconds) {
+// Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a sick bus or late feedback
+// refuses motion at once (zero current) but is not a fault by itself. The guard thread faults only
+// once the condition has persisted (GuardFaultPersistence, below). These three tests used to assert
+// an immediate trip from the command path.
+TEST(Adr002YawOutput, SustainedTransmitFailureIsRetriedNotTripped) {
   MixedCanMotorBackend backend;
   std::vector<can::RawFrame> frames;
   MixedBackendTestAccess::prepare_current_yaw(
@@ -325,17 +329,15 @@ TEST(Adr002YawOutput, SustainedTransmitFailureTripsAfterTwentyMilliseconds) {
       });
 
   backend.command_velocity(AxisId::Yaw, 0.2);
-  EXPECT_FALSE(backend.watchdog_fault());
   std::this_thread::sleep_for(std::chrono::milliseconds(25));
   MixedBackendTestAccess::refresh_live_inputs(backend);
   backend.command_velocity(AxisId::Yaw, 0.2);
 
-  EXPECT_TRUE(backend.watchdog_fault());
-  ASSERT_GE(frames.size(), 3u);  // first, second, and emergency zero attempts
-  EXPECT_TRUE(frame_is_zero(frames.back()));
+  EXPECT_FALSE(backend.watchdog_fault()) << "25 ms of failed transmits is a transient";
+  EXPECT_GE(frames.size(), 2u) << "every cycle still tries";
 }
 
-TEST(Adr002YawOutput, BusOffRejectsMotionAndTrips) {
+TEST(Adr002YawOutput, BusOffRefusesMotionWithZeroCurrentWithoutTripping) {
   MixedCanMotorBackend backend;
   auto health = MixedBackendTestAccess::healthy_can();
   health.state = static_cast<int>(can::CanIfState::BusOff);
@@ -348,12 +350,12 @@ TEST(Adr002YawOutput, BusOffRejectsMotionAndTrips) {
 
   backend.command_velocity(AxisId::Yaw, 0.2);
 
-  EXPECT_TRUE(backend.watchdog_fault());
+  EXPECT_FALSE(backend.watchdog_fault());
   ASSERT_EQ(frames.size(), 1u);
   EXPECT_TRUE(frame_is_zero(frames.front()));
 }
 
-TEST(Adr002YawOutput, StaleFeedbackRejectsMotionAndTrips) {
+TEST(Adr002YawOutput, StaleFeedbackRefusesMotionWithZeroCurrentWithoutTripping) {
   MixedCanMotorBackend backend;
   std::vector<can::RawFrame> frames;
   MixedBackendTestAccess::prepare_current_yaw(
@@ -365,9 +367,28 @@ TEST(Adr002YawOutput, StaleFeedbackRejectsMotionAndTrips) {
 
   backend.command_velocity(AxisId::Yaw, 0.2);
 
-  EXPECT_TRUE(backend.watchdog_fault());
+  EXPECT_FALSE(backend.watchdog_fault());
   ASSERT_EQ(frames.size(), 1u);
   EXPECT_TRUE(frame_is_zero(frames.front()));
+}
+
+TEST(Adr002YawGuard, AFaultConditionFaultsOnlyAfterItPersists) {
+  using ota::GuardFaultPersistence;
+  using ota::GuardResponse;
+  constexpr int64_t ms = 1'000'000, persist = 500 * ms;
+  GuardFaultPersistence p;
+  // Flickering for two seconds -- 100 ms bad, 50 ms good -- never becomes a fault.
+  for (int64_t t = 0; t < 2000 * ms; t += 5 * ms) {
+    const bool bad = (t / ms) % 150 < 100;
+    const auto r = p.decide(bad ? GuardResponse::Fault : GuardResponse::Run, t, persist);
+    EXPECT_NE(r, GuardResponse::Fault) << t / ms;
+    if (bad) EXPECT_EQ(r, GuardResponse::Hold);
+  }
+  // Good again, then continuously bad: a hold until 500 ms, then the fault.
+  EXPECT_EQ(p.decide(GuardResponse::Run, 2500 * ms, persist), GuardResponse::Run);
+  EXPECT_EQ(p.decide(GuardResponse::Fault, 3000 * ms, persist), GuardResponse::Hold);
+  EXPECT_EQ(p.decide(GuardResponse::Fault, 3499 * ms, persist), GuardResponse::Hold);
+  EXPECT_EQ(p.decide(GuardResponse::Fault, 3500 * ms, persist), GuardResponse::Fault);
 }
 
 TEST(Adr002YawOutput, ZeroCurrentRequestDoesNotClaimDisableOrLoadSupport) {

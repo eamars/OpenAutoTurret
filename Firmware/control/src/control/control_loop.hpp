@@ -206,6 +206,8 @@ class ControlLoop {
   bool start_hold(std::string& err);
   bool start_parking(std::string& err);  // requires homed_ (valid limits/models)
   void deenergize_all();
+  // Internal fault paths: stop, release only what cannot be held (see the definition).
+  void stop_axes_safely();
 
   // --- tracking (Phase 6, §13-§16) --------------------------------------
   // Enable the tracking mode. Requires a valid homing (position validity
@@ -363,8 +365,10 @@ class ControlLoop {
   std::pair<double, double> hold_brake_limits(int axis) const;
   // A supervisor BRAKE/HOLD executed by the engaged ADR-002.2 servo: a braked reference from
   // `from` (last tick's published reference) to where it comes to rest. False: not handed over.
-  bool servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from, TimeNs period_ns,
-                  TimeNs now_ns, const AxisLimits& limits);
+  bool servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from, TimeNs period_ns, TimeNs now_ns,
+                  const AxisLimits& limits, double q_measured, double v_measured);
+  // A supervisor stop starts at the measured axis when the reference is further than this from it.
+  static constexpr double kStopReanchorRad = 0.05;
   double motion_speed(OperatingMode mode, bool maximum = false) const;
 
   // --- telemetry (§6.3, §43) --------------------------------------------
@@ -492,7 +496,7 @@ class ControlLoop {
   void fault(const std::string& reason, bool stop_all = true) {
     const bool replace_park_failure = park_failed_;
     park_failed_ = false;  // a safety fault cannot be cleared as a park-only failure
-    if (stop_all && (phase_ == Phase::Homing || phase_ == Phase::Parking)) deenergize_all();
+    if (stop_all && (phase_ == Phase::Homing || phase_ == Phase::Parking)) stop_axes_safely();
     if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
       fault_reason_ = reason;

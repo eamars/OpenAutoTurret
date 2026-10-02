@@ -95,6 +95,18 @@ inline GuardResponse yaw_guard_response(const MotorBackend::TripInputs& in, int 
   return GuardResponse::Run;  // CAN hiccup, our own NaN, a stale demand: drive on, say so
 }
 
+// Owner ruling 2026-10-02 ("Fault, hold, degrade"): the guard's Fault verdict becomes a fault only
+// once it has persisted `persist_ns`; until then it is a Hold (the caller coasts a blind axis).
+struct GuardFaultPersistence {
+  int64_t since_ns = 0;
+  bool started = false;
+  GuardResponse decide(GuardResponse verdict, int64_t now_ns, int64_t persist_ns) {
+    if (verdict != GuardResponse::Fault) { started = false; return verdict; }
+    if (!started) { started = true; since_ns = now_ns; }
+    return now_ns - since_ns >= persist_ns ? GuardResponse::Fault : GuardResponse::Hold;
+  }
+};
+
 inline bool yaw_command_is_stale(int64_t now_ns, int64_t last_command_ns) {
   return last_command_ns == 0 || now_ns - last_command_ns > kNoCommandLimitNs;
 }
@@ -157,10 +169,12 @@ class MixedCanMotorBackend final : public MotorBackend {
   void heartbeat() override;
   bool watchdog_fault() const override;
   const char* servo_hold_reason() const override {
-    if (const char* r = yaw_osc_hold_.load()) return r;
-    return yaw_stall_hold_.load();
+    for (const auto* h : {&yaw_follow_hold_, &pitch_follow_hold_, &yaw_osc_hold_, &yaw_stall_hold_})
+      if (const char* r = h->load()) return r;
+    return nullptr;
   }
   bool fault_releases_axis(AxisId axis) const override;
+  void hold_axis(AxisId axis) override;
   bool watchdog_fault_axis(AxisId axis) const override {
     return axis == AxisId::Yaw ? yaw_trip_.load() :
         (pitch_servo_fault_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault()));
@@ -274,7 +288,20 @@ class MixedCanMotorBackend final : public MotorBackend {
   can::CyberGearSystem pitch_system_;
   CanMotorBackend pitch_backend_;
   mutable std::mutex yaw_mutex_;
-  gm6020::UnwrappedEncoder yaw_encoder_;
+  gm6020::UnwrappedEncoder yaw_encoder_{gm6020::UnwrappedEncoder::Policy::Recover};
+  TimeNs yaw_encoder_log_ns_ = 0;
+  // The guard's fault conditions must persist this long (owner ruling 2026-10-02).
+  static constexpr TimeNs kGuardFaultPersistNs = 500'000'000;
+  GuardFaultPersistence yaw_guard_persistence_;
+  // Following error (either servo): HOLD, cleared once the reference handed over is back within
+  // kFollowClearRad of the axis and kServoQuietNs has passed. Late pitch feedback: the drive holds,
+  // the servo lets go; a fault only after kPitchStaleFaultNs.
+  static constexpr double kFollowClearRad = 0.05;
+  static constexpr TimeNs kPitchFreshNs = 20'000'000, kPitchStaleFaultNs = 500'000'000;
+  std::atomic<const char*> yaw_follow_hold_{nullptr}, pitch_follow_hold_{nullptr};
+  TimeNs yaw_follow_since_ns_ = 0;
+  std::atomic<TimeNs> pitch_follow_since_ns_{0};
+  TimeNs pitch_stale_since_ns_ = 0;   // pitch servo thread only
   gm6020::VelocityLoop yaw_velocity_loop_;
   gm6020::RxVelocity yaw_rx_velocity_;
   YawState yaw_state_{};
