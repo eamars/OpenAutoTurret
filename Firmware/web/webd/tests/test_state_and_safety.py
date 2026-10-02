@@ -275,7 +275,7 @@ class DerateMarksTheTapeEdge(_NodeBuilders):
 
     def test_the_page_only_asks_for_a_mark_while_safety_is_derating(self) -> None:
         at = HUD_JS.index('const dEdge = String(t.safety_action || "")')
-        body = HUD_JS[at:at + 900]
+        body = HUD_JS[at:at + 1500]
         self.assertIn('"DERATE"', body[:130], "BRAKE and FAULT are not limit problems; highlighting a "
                                               "tape edge for them would name a cause that is not there")
         self.assertIn("hudSafetyEdge(t)", body)

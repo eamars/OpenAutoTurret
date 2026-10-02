@@ -183,9 +183,11 @@ class HudProjectionTest(unittest.TestCase):
             rows:hudDiagRows({...t,q_pitch_rad:-.7,q_yaw_rad:0})}));
         ''')
         self.assertAlmostEqual(got['center'], -.7)
-        self.assertAlmostEqual(got['low'], -.6)
+        # Displayed pitch is up-positive (owner, 2026-10-02), and positive joint pitch points this
+        # camera DOWN (direction_contract), so the joint's low end is the display's high end.
+        self.assertAlmostEqual(got['low'], .6)
         self.assertAlmostEqual(got['mid'], 0)
-        self.assertAlmostEqual(got['high'], .6)
+        self.assertAlmostEqual(got['high'], -.6)
         self.assertIsNone(got['missing'])
         self.assertEqual(got['raw'], -1.3)
         self.assertIn('0.00 / 0.00 DEG', dict(got['rows'])['Q YAW / PITCH'])

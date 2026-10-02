@@ -130,9 +130,9 @@ class ForInsetGeometry(unittest.TestCase):
         self.assertLess(e[1]["x"], e[0]["x"], "yaw+ aims left on the current station")
         self.assertAlmostEqual(e[1]["x"], e[2]["x"], places=6, msg="same yaw, different columns")
         self.assertGreater(abs(e[2]["y"] - e[1]["y"]), 1.0)
-        # A positive joint-pitch move tilts this camera down; encoder pitch is
-        # not world elevation. Static background moved upward in the live probe.
-        self.assertGreater(e[2]["y"], e[1]["y"], "pitch+ aims down on the current station")
+        # The inset is handed DISPLAYED pitch, which is up-positive (hudPitch; owner, 2026-10-02:
+        # negative means the camera points down), so a higher pitch is higher on the map.
+        self.assertLess(e[2]["y"], e[1]["y"], "displayed pitch+ is up on the map")
 
     def test_markers_beyond_the_map_are_pinned_and_flagged(self) -> None:
         # Dropping an unreachable target would make "the axis cannot get there" look like "no target".

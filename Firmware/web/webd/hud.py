@@ -388,9 +388,26 @@ function hudPitchCenter(t) {
       !(t.q_soft_max_pitch_rad > t.q_soft_min_pitch_rad)) return null;
   return .5 * (t.q_soft_min_pitch_rad + t.q_soft_max_pitch_rad);
 }
+// Displayed pitch is UP-POSITIVE, whatever the joint's sign (owner, 2026-10-02: negative means the
+// camera points down). The joint's measured screen sign (direction_contract: positive CyberGear pitch
+// points the camera down) is what turns one into the other, so a remounted drive changes one constant.
+const HUD_PITCH_UP = -otaJointScreenSign.pitch;
 function hudPitch(t, raw) {
   const center = hudPitchCenter(t);
-  return center !== null && Number.isFinite(raw) ? raw - center : null;
+  if (center === null || !Number.isFinite(raw)) return null;
+  const v = (raw - center) * HUD_PITCH_UP;
+  return Math.abs(v) < 1e-12 ? 0 : v;   // no "-0.00" for a camera that is level
+}
+// The displayed pitch range, low end first, whichever joint limit each end came from.
+function hudPitchRange(t) {
+  const a = hudPitch(t, t && t.q_soft_min_pitch_rad), b = hudPitch(t, t && t.q_soft_max_pitch_rad);
+  return (a === null || b === null) ? null : { lo: Math.min(a, b), hi: Math.max(a, b) };
+}
+// Yaw on a continuous axis, as an angle: (-180, 180].
+function hudWrapDeg(d) {
+  if (!Number.isFinite(d)) return d;
+  const w = ((d + 180) % 360 + 360) % 360 - 180;
+  return w === -180 ? 180 : w;
 }
 
 function hudDiagRows(t) {
@@ -410,7 +427,7 @@ function hudDiagRows(t) {
       ? "BAND " + num(t.yaw_band_min_rad, 1) + " ... " + num(t.yaw_band_max_rad, 1)
         + " DEG (no boundary)"
       : num(t.q_soft_min_yaw_rad, 1) + " ... " + num(t.q_soft_max_yaw_rad, 1) + " DEG"],
-    ["LIMITS PITCH", num(hudPitch(t, t.q_soft_min_pitch_rad), 1) + " ... " + num(hudPitch(t, t.q_soft_max_pitch_rad), 1) + " DEG"],
+    ["LIMITS PITCH", (hudPitchRange(t) ? num(hudPitchRange(t).lo, 1) + " ... " + num(hudPitchRange(t).hi, 1) : "--") + " DEG"],
     ["TRACK RATE", (typeof t.camera_fps === "number" ? t.camera_fps.toFixed(1) : "--") + " HZ"],
     ["SELECTED CONF", (typeof t.selected_confidence === "number"
                         ? Math.round(t.selected_confidence * 100) + "%" : "--")],
@@ -558,6 +575,17 @@ function hudForInset(o) {
   const plot = { x: x + pad, y: y + titleH, w: w - 2 * pad, h: h - titleH - pad };
   if (!(plot.w > 0) || !(plot.h > 0)) return null;
 
+  // A continuous yaw axis: the map is the whole circle, -180..180, at the envelope's pitch range, and
+  // every yaw on it is an angle rather than a count of turns (owner, 2026-10-02: the map used to be
+  // the +/-90 deg reference band, so the turret at +104 deg was drawn off the map).
+  const ring = !!o.continuousYaw;
+  const wrapYaw = (pt) => (ring && Array.isArray(pt) ? [hudWrapDeg(pt[0]), pt[1]] : pt);
+  if (ring) {
+    const ps = o.pts.map((p) => p[1]);
+    const lo = Math.min.apply(null, ps), hi = Math.max.apply(null, ps);
+    o = Object.assign({}, o, { pts: [[-180, lo], [180, lo], [180, hi], [-180, hi]],
+                               los: wrapYaw(o.los), target: wrapYaw(o.target), pred: wrapYaw(o.pred) });
+  }
   let minY = Infinity, maxY = -Infinity, minP = Infinity, maxP = -Infinity;
   for (const pt of o.pts) {
     // typeof checks, not isFinite: in JavaScript isFinite(null) is TRUE, because Number(null) is 0.
@@ -575,9 +603,10 @@ function hudForInset(o) {
   // The inset is spatial: left/right/up/down match the camera aim and D-pad.
   // Numeric labels remain joint degrees. Both conversions use the same measured
   // signs as the D-pad and travel tapes.
+  // Pitch arrives up-positive (hudPitch), so up the map is up.
   const toPx = (yawDeg, pitchDeg) => [
     cx + (yawDeg - midY) * k * otaJointScreenSign.yaw,
-    cy + (pitchDeg - midP) * k * otaJointScreenSign.pitch
+    cy - (pitchDeg - midP) * k
   ];
 
   const clampMark = (pt) => {
@@ -595,10 +624,18 @@ function hudForInset(o) {
 
   const los = clampMark(o.los);
   const fovW = o.hfovDeg * k, fovH = o.vfovDeg * k;            // §11.3: size from effective HFOV/VFOV
+  const fov = { x: los.x - fovW / 2, y: los.y - fovH / 2, w: fovW, h: fovH };
+  // On the ring the view across +/-180 is one view: the part past one edge is drawn at the other.
+  let fovWrap = null;
+  if (ring) {
+    const turn = 360 * k;
+    if (fov.x < plot.x) fovWrap = Object.assign({}, fov, { x: fov.x + turn });
+    else if (fov.x + fov.w > plot.x + plot.w) fovWrap = Object.assign({}, fov, { x: fov.x - turn });
+  }
   const g = {
-    x: x, y: y, w: w, h: h, plot: plot, scale: k,
+    x: x, y: y, w: w, h: h, plot: plot, scale: k, ring: ring,
     envPx: o.pts.map((pt) => { const q = toPx(pt[0], pt[1]); return { x: q[0], y: q[1] }; }),
-    fov: { x: los.x - fovW / 2, y: los.y - fovH / 2, w: fovW, h: fovH },
+    fov: fov, fovWrap: fovWrap,
     los: los,
     target: Array.isArray(o.target) ? clampMark(o.target) : null,
     pred: Array.isArray(o.pred) ? clampMark(o.pred) : null,
@@ -621,8 +658,13 @@ function hudForInsetSvg(g, C) {
       '" stroke-width="1" opacity=".85"/>',
     '<text class="tlbl" x="' + (g.plot.x + 2) + '" y="' + (g.plot.y + g.plot.h - 3) +
       '" fill="' + C.green + '" opacity=".8">SAFE ENVELOPE</text>',
-    '<rect x="' + g.fov.x + '" y="' + g.fov.y + '" width="' + g.fov.w + '" height="' + g.fov.h +
-      '" fill="none" stroke="' + C.white + '" stroke-width="1" opacity=".95"/>',
+    // The view rectangle is clipped to the map; on a ring its overhang reappears at the other edge.
+    '<clipPath id="for-plot-clip"><rect x="' + g.plot.x + '" y="' + (g.plot.y - g.plot.h) +
+      '" width="' + g.plot.w + '" height="' + (3 * g.plot.h) + '"/></clipPath>',
+    [g.fov].concat(g.fovWrap ? [g.fovWrap] : []).map((r) =>
+      '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h +
+      '" fill="none" stroke="' + C.white + '" stroke-width="1" opacity=".95"' +
+      (g.ring ? ' clip-path="url(#for-plot-clip)"' : '') + '/>').join(""),
     '<line x1="' + (g.los.x - 4) + '" y1="' + g.los.y + '" x2="' + (g.los.x + 4) + '" y2="' +
       g.los.y + '" stroke="' + C.white + '" stroke-width="1.2"/>',
     '<line x1="' + g.los.x + '" y1="' + (g.los.y - 4) + '" x2="' + g.los.x + '" y2="' +
@@ -706,7 +748,9 @@ function hudTravelTape(o) {
   const windowDeg = Math.min(span, fov > 0 ? fov : Math.max(30, span / 4));
   const windowSource = fov > 0 ? (fov >= span ? "travel" : "fov") : "fallback";
   const steps = hudTickSteps(windowDeg, o.length);
-  const screenSign = o.horizontal ? otaJointScreenSign.yaw : otaJointScreenSign.pitch;
+  // Yaw is drawn in joint degrees with its measured screen sign; pitch arrives already up-positive
+  // (hudPitch), so up the screen is always up the scale.
+  const screenSign = o.horizontal ? otaJointScreenSign.yaw : -1;
 
   // The MARKER never moves and the SCALE always slides (owner, 2026-09-28, second pass:
   // "在一定角度之后 marker 就会动 —— 我希望 marker 永远不动，只动条带"). The first pass clamped
@@ -742,9 +786,12 @@ function hudTravelTape(o) {
 
   const ticks = [];
   const onGrid = (deg, step) => Math.abs(deg / step - Math.round(deg / step)) < 1e-9;
+  // A continuous axis (yaw with no envelope) has no ends: its ruler is the whole circle, and +/-180
+  // is a direction like any other, so nothing is drawn or labelled as a limit there.
+  const continuous = !!o.continuous;
   const push = (deg, forced) => {
     const pos = at(deg), w = wrap(deg);
-    const atSeam = Math.abs(w - o.minDeg) < 1e-6 || Math.abs(w - o.maxDeg) < 1e-6;
+    const atSeam = !continuous && (Math.abs(w - o.minDeg) < 1e-6 || Math.abs(w - o.maxDeg) < 1e-6);
     const dup = ticks.filter((t) => Math.abs(t.pos - pos) < 1e-6);   // the seam is ONE place
     if (dup.length) {
       if (forced || atSeam) dup.forEach((t) => {
@@ -752,15 +799,16 @@ function hudTravelTape(o) {
       return;
     }
     const coarse = forced || atSeam || onGrid(w, steps.coarse);
+    const shown = (continuous && Math.abs(Math.abs(w) - 180) < 1e-6) ? "180" : hudDegLabel(w, !!atSeam || !!forced);
     ticks.push({ deg: w, pos: pos, coarse: coarse, endpoint: !!(forced || atSeam),
-                 label: coarse ? hudDegLabel(w, !!atSeam || !!forced) : "" });
+                 label: coarse ? shown : "" });
   };
   // Every fine step the window shows, indexed in window coordinates, labelled in cycle ones.
   for (let k = Math.floor((centreDeg - half) / steps.fine) - 1;
        k <= Math.ceil((centreDeg + half) / steps.fine) + 1; ++k) push(k * steps.fine, false);
   // The seam itself, drawn even when it misses the grid: where the ruler rolls over is
   // information, and on a continuous axis it is the only "endpoint" there ever is.
-  for (let cyc = -2; cyc <= 2; ++cyc) {
+  for (let cyc = -2; cyc <= 2 && !continuous; ++cyc) {
     [o.minDeg, o.maxDeg].forEach((lim) => {
       const cand = lim + cyc * span;
       if (cand >= centreDeg - half - steps.fine && cand <= centreDeg + half + steps.fine)
@@ -876,9 +924,11 @@ function hudTravelTapeSvg(t, C, opts) {
     : '<path d="M ' + (t.x - 2) + ' ' + mk + ' L ' + (t.x - 12) + ' ' + (mk - 6) + ' L ' +
       (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + C.stroke +
       '" stroke-width="1.4" stroke-linejoin="round"/>');
+  // The value box sits against the caret on the picture side of its tape, for both tapes (owner,
+  // 2026-10-02: the pitch label belongs where the yaw label is, not at the far end of the tape).
   const bx = w ? Math.max(4, Math.min(mk - 48, (opts && opts.vw ? opts.vw - 100 : mk)))
-               : Math.max(4, t.x - 84);
-  const by = w ? (t.y + 16) : Math.min(t.y1 + 10, (opts && opts.vh ? opts.vh - 44 : t.y1));
+               : Math.max(4, t.x - 16 - t.box.w);
+  const by = w ? (t.y + 16) : (mk - t.box.h / 2);
   parts.push('<rect x="' + bx + '" y="' + by + '" width="' + t.box.w + '" height="' + t.box.h +
              '" fill="' + C.black + '" stroke="' + C.green + '" stroke-width="1" rx="2"/>');
   parts.push('<text class="tval" x="' + (bx + t.box.w / 2) + '" y="' + (by + 14) +
@@ -916,12 +966,14 @@ function hudYawTapeRange(t) {
   //     to know how far the barrel has travelled since it was zeroed, and a ruler is not a wall.
   // Nothing to show (no homing, or a band that isn't a band) and the page falls back to the
   // unranged note rather than drawing a tape out of zeros.
+  // With no envelope the axis is a full circle (owner, 2026-10-02: the ruler stopped at the +/-90 deg
+  // reference band while the turret pointed at +104). The band is a homing reference, not travel.
   const toDeg = (r) => (Number.isFinite(r) ? r * 180.0 / Math.PI : NaN);
   const unbounded = String(t && t.yaw_envelope || "") === "none";
-  const minDeg = toDeg(unbounded ? t.yaw_band_min_rad : t.q_soft_min_yaw_rad);
-  const maxDeg = toDeg(unbounded ? t.yaw_band_max_rad : t.q_soft_max_yaw_rad);
+  const minDeg = unbounded ? -180 : toDeg(t.q_soft_min_yaw_rad);
+  const maxDeg = unbounded ? 180 : toDeg(t.q_soft_max_yaw_rad);
   return {
-    minDeg: minDeg, maxDeg: maxDeg, ruler: unbounded,
+    minDeg: minDeg, maxDeg: maxDeg, ruler: unbounded, continuous: unbounded,
     valid: Boolean(t && t.soft_limits_valid === true) &&
       Number.isFinite(minDeg) && Number.isFinite(maxDeg) && maxDeg > minDeg
   };
@@ -1163,12 +1215,16 @@ function render(t) {
     markDeg: (dEdge && dEdge.axis === "YAW")
       ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
     valueDeg: deg(t.q_yaw_rad), windowDeg: hudViewFov(t.effective_hfov_deg, view.k),
-    valid: yawRange.valid
+    valid: yawRange.valid, continuous: yawRange.continuous
   });
+  // A continuous yaw reads as an angle, not as a count of turns since homing.
+  const yawShown = yawRange.continuous ? hudWrapDeg(deg(t.q_yaw_rad)) : deg(t.q_yaw_rad);
   const pitchLen = vh * 0.425;
+  const pitchSpan = hudPitchRange(t);
   const pitchTape = hudTravelTape({
     horizontal: false, x: vw - Math.max(78.0, vw * 0.055), y: vh / 2 - pitchLen / 2,
-    length: pitchLen, minDeg: deg(hudPitch(t, t.q_soft_min_pitch_rad)), maxDeg: deg(hudPitch(t, t.q_soft_max_pitch_rad)),
+    length: pitchLen, minDeg: pitchSpan ? deg(pitchSpan.lo) : NaN,
+    maxDeg: pitchSpan ? deg(pitchSpan.hi) : NaN,
     markDeg: (dEdge && dEdge.axis === "PITCH")
       ? (dEdge.side === "MIN" ? deg(hudPitch(t, t.q_soft_min_pitch_rad)) : deg(hudPitch(t, t.q_soft_max_pitch_rad)))
       : undefined,
@@ -1192,7 +1248,8 @@ function render(t) {
     const hasAim = !stale && pred && pred.valid === true && t.tracking_aim_joint_valid === true &&
                    Number.isFinite(t.tracking_aim_yaw_rad) && Number.isFinite(t.tracking_aim_pitch_rad);
     const gi = hudForInset({
-      vw: vw, vh: vh, pts: forB.safe_envelope_points.map(p => [p[0], p[1] - deg(hudPitchCenter(t))]),
+      vw: vw, vh: vh, continuousYaw: yawRange.continuous,
+      pts: forB.safe_envelope_points.map(p => [p[0], deg(hudPitch(t, p[1] * Math.PI / 180.0))]),
       hfovDeg: hudViewFov(t.effective_hfov_deg, view.k),
       vfovDeg: hudViewFov(t.effective_vfov_deg, view.k),
       los: [deg(t.q_yaw_rad), deg(hudPitch(t, t.q_pitch_rad))],
@@ -1204,7 +1261,7 @@ function render(t) {
 
   layers.tape =
     hudTravelTapeSvg(yawTape, C, { title: "YAW", vw: vw, vh: vh,
-                                   value: hudDegLabel(deg(t.q_yaw_rad), true) }) +
+                                   value: hudDegLabel(yawShown, true) }) +
     hudTravelTapeSvg(pitchTape, C, { title: "PITCH", vw: vw, vh: vh,
                                      value: hudDegLabel(deg(hudPitch(t, t.q_pitch_rad)), true) }) +
     ((yawTape || pitchTape) ? ""
