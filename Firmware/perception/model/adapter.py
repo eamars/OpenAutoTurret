@@ -131,6 +131,23 @@ class ModelAdapter:
             raise ConfigError(f"adapter for camera {self.camera_id} cannot also serve {wanted}")
         self.camera_id = wanted
 
+    def serve_camera(self, camera_id: str, width: int, height: int, *,
+                     declared: Tuple[int, int]) -> None:
+        """Hand the one device to another camera: the only sanctioned re-binding.
+
+        One Hailo-8 allows one context (HAILO_DEVICE_IN_USE, measured at 32a765d), and the owner's
+        rule is that only the camera on the main display is inferred (2026-10-02). So the device
+        stays open and the *binding* moves: camera, leg and declared geometry change together, and
+        the rate restarts, because a rate measured across a switch describes neither camera. The
+        caller holds the inference lock, so no frame is in flight while this runs.
+        """
+        wanted = str(camera_id or "")
+        if not wanted:
+            raise ConfigError("serve_camera('') would leave every later frame unattributed")
+        self.configure_stream(width, height, declared=declared)
+        self.camera_id = wanted
+        self._last_fps, self._fps_count, self._fps_started_ns = None, 0, 0
+
     def note_inference(self) -> None:
         """Count one completed inference toward the rate this adapter publishes about itself.
 

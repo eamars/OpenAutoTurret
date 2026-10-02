@@ -38,6 +38,7 @@ This module never touches CAN, a motor backend or a drive mode (§49). Its outpu
 """
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
@@ -108,6 +109,11 @@ class TrackManager:
         self.frames_out_of_order = 0
         self.last_outcome: Optional[AssociationOutcome] = None
         self.last_camera_shift: Optional[PointNorm] = None
+        # A camera swap in progress (note_source_change): the gate, the window, and the tracks whose
+        # next box comes from the other optic and so must not be blended with the old one.
+        self._handoff: Optional[Dict[str, float]] = None
+        self._unsmoothed: set = set()
+        self.handoffs = {"requested": 0, "kept": 0, "expired": 0}
 
     # -- identity surface (§29, §37.1) --------------------------------------
     @property
@@ -220,6 +226,8 @@ class TrackManager:
             thresholds=self.thresholds, sensor_timestamp_ns=sensor_ns,
             appearance_scorer=scorer, shift=shift)
         self.last_outcome = outcome
+        if self._handoff is not None:
+            self._hand_off_selected(outcome, detections, sensor_ns, dset.frame_sequence)
 
         by_id = {detection.detection_id_in_frame: detection for detection in detections}
         self._apply_matches(outcome, by_id, sensor_ns, now_ns, dset.frame_sequence)
@@ -236,6 +244,73 @@ class TrackManager:
 
         self._last_sensor_ns = sensor_ns
         return self.build_track_set(dset.frame_sequence, sensor_ns, now_ns)
+
+    # -- camera swap (owner, 2026-10-02: "re-acquire at aim") ------------------
+    def note_source_change(self, *, gate_norm: float, window_ms: float) -> None:
+        """The next frames come from the other camera, already mapped into the same frame.
+
+        Most boxes still associate by overlap, but the narrow optic often sees only the head and
+        shoulders of someone the wide one saw whole, so the selected subject may not overlap its own
+        track. For ``window_ms`` after the first new frame, an unmatched selected track takes the
+        detection whose anchor is nearest its own, within ``gate_norm`` (wide-frame units) -- the
+        person at the aim point -- and keeps its identity, so the control loop sees one subject
+        rather than a loss and a stranger. Past the window the ordinary loss rules apply.
+        """
+        self._handoff = {"gate": float(gate_norm), "window_ms": float(window_ms), "until_ns": 0}
+        self.handoffs["requested"] += 1
+        # Every live box is from the old optic: blending it with the new one, or differencing the
+        # two as motion, would invent a jump the subject never made.
+        self._unsmoothed = {t.track_uuid for t in self._tracks}
+        for track in self._tracks:
+            track.velocity_x = track.velocity_y = 0.0
+
+    def _hand_off_selected(self, outcome: AssociationOutcome, detections: List[Detection],
+                           sensor_ns: int, frame_sequence: int) -> None:
+        handoff = self._handoff
+        if not handoff["until_ns"]:
+            handoff["until_ns"] = sensor_ns + int(handoff["window_ms"] * 1e6)
+        if sensor_ns > handoff["until_ns"]:
+            self._handoff = None
+            self.handoffs["expired"] += 1
+            return
+        index = next((i for i, t in enumerate(self._tracks)
+                      if t.track_uuid == self._selected_uuid and not t.alias_of
+                      and t.state is not TrackState.RETIRED), None)
+        if index is None:
+            self._handoff = None        # nobody selected: nothing to carry across
+            return
+        if outcome.match_for_track(index) is not None:
+            self._handoff = None        # it associated by itself
+            self.handoffs["kept"] += 1
+            return
+        track = self._tracks[index]
+        free = set(outcome.new_track_candidates) | set(outcome.unmatched_high)
+        best, best_d = None, handoff["gate"]
+        for detection in detections:
+            if detection.detection_id_in_frame not in free or not detection.anchor_valid:
+                continue
+            if detection.class_name != track.class_name:
+                continue
+            d = math.hypot(detection.measured_anchor.x - track.anchor.x,
+                           detection.measured_anchor.y - track.anchor.y)
+            if d <= best_d:
+                best, best_d = detection, d
+        if best is None:
+            return                      # not yet: the window is still open
+        det_id = best.detection_id_in_frame
+        for bucket in (outcome.new_track_candidates, outcome.unmatched_high):
+            if det_id in bucket:
+                bucket.remove(det_id)
+        if index in outcome.unmatched_tracks:
+            outcome.unmatched_tracks.remove(index)
+        outcome.high_matches.append((index, det_id, 1.0))
+        self._handoff = None
+        self.handoffs["kept"] += 1
+        self._emit(EventType.TRACK_REACQUIRED, track_uuid=track.track_uuid,
+                   sensor_timestamp_ns=sensor_ns, frame_sequence=frame_sequence,
+                   from_state=track.state.label, miss_ms=0.0,
+                   display_label=track.display_label, reason="camera_swap",
+                   anchor_distance=round(best_d, 4))
 
     def _frame_interval(self, sensor_ns: int) -> float:
         """Seconds between detector results, from ``SensorTimestamp`` (§19, §22)."""
@@ -293,10 +368,15 @@ class TrackManager:
         """Fold one detection into a track's state."""
         before = track.state
 
-        track.velocity_x, track.velocity_y = self._update_velocity(track, detection,
-                                                                  sensor_ns)
+        # The first box after a camera swap is from the other optic: taken as it is, and not
+        # differenced against the old one as motion.
+        swapped = track.track_uuid in self._unsmoothed
+        self._unsmoothed.discard(track.track_uuid)
+        if not swapped:
+            track.velocity_x, track.velocity_y = self._update_velocity(track, detection,
+                                                                      sensor_ns)
         track.bbox = self._smooth_box(track.bbox, detection.bbox,
-                                      first=not track.measurement_valid)
+                                      first=swapped or not track.measurement_valid)
         track.anchor = detection.measured_anchor          # §36: measured, never smoothed
         track.anchor_source = detection.anchor_source
         track.keypoints = tuple(detection.keypoints)
@@ -737,6 +817,7 @@ class TrackManager:
                 "counters": self.counters.to_dict(),
                 "resolver": self.resolver.stats(),
                 "aliases": len(self.aliases),
+                "camera_handoffs": dict(self.handoffs),
                 "association": self.last_outcome.to_dict() if self.last_outcome else {},
                 "camera_shift": (self.last_camera_shift.to_dict()
                                  if self.last_camera_shift is not None else None)}

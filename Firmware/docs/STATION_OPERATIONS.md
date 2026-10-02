@@ -219,6 +219,10 @@ gyro约50.09Hz且accuracy=0；pitch温度22.6°C、yaw温度原始字节28（单
   AUTO_ROAM，**要有人放回去**，`POST /api/command {"command":"set_mode","arg":"MANUAL"}`）。
 - **双流**：`wide cam-baa28c2a by-path 1920x1080` / `detail cam-68510500 fwnode 1280x720`，两路
   delivered ~9 fps；第二路的**开关在 `perception_v1.json` 的 `vision.secondary`**（不是环境变量）。
+  **2026-10-02 主人裁决**：只有**主画面**那一路进 Hailo，PIP 只供显示；HUD 的 swap 改的是站点状态
+  （`POST /api/camera/main {"role":"wide|detail"}`，visiond 持有，`inference_health.json` 的 `main_camera` 发布），
+  每次启动回到 wide。窄角的框以 1/`view_scale`（5.90）的居中窗口发布在广角坐标系里，controld 不变。
+  设计与理由见 [工单末节](ADR-001/DUAL_STREAM_DISPLAY_WORK_ORDER.md)。
 - **两颗都倒装**：朝向走**同一个传感器级 transform**，值各自配（wide 来自 `config/camera_install.yaml`，
   detail 来自 `vision.secondary.orientation`）；visiond 启动行会打印它**实际用了哪个**。
 - **IMU**：BNO085 实测 ~216 Hz；controld 自己填 §20 的 `imu.present/gravity_valid`；

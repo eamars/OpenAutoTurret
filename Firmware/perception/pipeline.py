@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from .config import VisionConfig
 from common.image_corrections import apply_orientation_image, validate_orientation
 from .detection.orientation import orient_detections
+from .detection.view import to_wide_frame
 from .detection.class_filter import filter_permitted
 
 
@@ -362,6 +363,10 @@ class PerceptionPipeline:
             alias_map=self.manager.aliases, on_selected=self.manager.set_selected_uuid)
         self.selection_service = None
         self.controller_context = None
+        # 1.0: the frame is the wide picture. Otherwise the detail camera is being inferred and its
+        # boxes are mapped into the wide canvas (detection/view.py); visiond sets both on a swap.
+        self.view_scale = 1.0
+        self.view_canvas: Optional[Tuple[int, int]] = None
         # §36's degenerate-box floor (fraction of stream height). 0 = off. A sliver at
         # the frame edge is not a target; without this it blocks selection of the real one.
         self.min_measure_height = float(getattr(config, 'min_measure_height_norm', 0.03)
@@ -435,6 +440,10 @@ class PerceptionPipeline:
                     self._unmeasured.add(stage)
 
             dset = orient_detections(dset, self.orientation, self.config.anchor)
+            if self.view_scale != 1.0:
+                # The detail camera publishes in the wide frame (detection/view.py): one frame for
+                # the tracker, the control layer and the HUD, whichever camera is on the main display.
+                dset = to_wide_frame(dset, self.view_scale, self.view_canvas)
             if image is not None and self.orientation != 'none':
                 image = apply_orientation_image(image, self.orientation)
             outcome.detection_set = dset

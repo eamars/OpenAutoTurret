@@ -840,12 +840,24 @@ class SecondaryStreamConfig:
     # see one upright image. Only the value is per role -- which sensor is mounted upside down is a
     # fact about each mount, and on this station both of them are.
     orientation: str = "none"
+    #: How many times narrower the detail picture is than the wide one, in normalised units (the
+    #: focal-length ratio, so independent of the subject's distance). The detail camera's boxes are
+    #: published in the wide frame as a window this much smaller, centred (detection/view.py).
+    #: 0 means unknown: the detail camera may then be displayed but never inferred.
+    view_scale: float = 0.0
+    #: The camera swap's re-acquisition (owner, 2026-10-02: "re-acquire at aim"): how far, in wide-
+    #: frame units, the selected subject's anchor may land from its last one in the new camera, and
+    #: for how long after the swap that match is offered before the ordinary loss rules take over.
+    handoff_gate_norm: float = 0.05
+    handoff_window_ms: float = 1000.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {"model": self.model, "width": self.width, "height": self.height,
                 "frame_rate_hz": self.frame_rate_hz, "preview_fps": self.preview_fps,
                 "queue_depth": self.queue_depth, "orientation": self.orientation,
-                "lores_width": self.lores_width, "lores_height": self.lores_height}
+                "lores_width": self.lores_width, "lores_height": self.lores_height,
+                "view_scale": self.view_scale, "handoff_gate_norm": self.handoff_gate_norm,
+                "handoff_window_ms": self.handoff_window_ms}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "SecondaryStreamConfig":
@@ -859,7 +871,12 @@ class SecondaryStreamConfig:
             queue_depth=_as_int(data.get("queue_depth", 1), "secondary.queue_depth", 0),
             lores_width=_as_int(data.get("lores_width", 0), "secondary.lores_width", 0),
             lores_height=_as_int(data.get("lores_height", 0), "secondary.lores_height", 0),
-            orientation=str(data.get("orientation") or "none").strip().lower())
+            orientation=str(data.get("orientation") or "none").strip().lower(),
+            view_scale=_as_float(data.get("view_scale"), "secondary.view_scale", 0.0),
+            handoff_gate_norm=_as_float(data.get("handoff_gate_norm"),
+                                        "secondary.handoff_gate_norm", 0.05),
+            handoff_window_ms=_as_float(data.get("handoff_window_ms"),
+                                        "secondary.handoff_window_ms", 1000.0))
 
 
 @dataclass
@@ -950,12 +967,6 @@ class VisionConfig:
     record: RecordConfig = field(default_factory=RecordConfig)
     #: §40's per-stage timing window (samples retained for p50/p95/p99).
     timing_window: int = 512
-    #: How stale a camera's newest TrackSet may be and still join the merged document. A box from a
-    #: camera that has not produced anything for longer than this is a memory, not a sighting, and
-    #: the control loop would turn toward it. Measured in the merged document's own clock (§19's
-    #: publication clock), and a dropped contribution is named in ``stale_sources`` rather than
-    #: silently missing.
-    merge_max_age_ms: float = 150.0
     #: Where the file came from, so an error message can name it.
     source_path: str = ""
 
@@ -995,7 +1006,6 @@ class VisionConfig:
             selection=SelectionConfig.from_dict(root.get("selection")),
             record=RecordConfig.from_dict(root.get("record")),
             timing_window=_as_int(root.get("timing_window"), "timing_window", 512),
-            merge_max_age_ms=_as_float(root.get("merge_max_age_ms"), "merge_max_age_ms", 150.0),
             source_path=source_path)
 
     @classmethod
@@ -1041,7 +1051,6 @@ class VisionConfig:
             "selection": self.selection.to_dict(),
             "record": self.record.to_dict(),
             "timing_window": self.timing_window,
-            "merge_max_age_ms": float(self.merge_max_age_ms),
         }}
 
     # -- validation ---------------------------------------------------------

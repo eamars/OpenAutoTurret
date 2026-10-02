@@ -373,12 +373,14 @@
       "height": 720,
       "frame_rate_hz": 30.0,
       "preview_fps": 10.0,
-      "queue_depth": 2,
+      "queue_depth": 1,
       "orientation": "rotate_180",
-      "lores_width": 0,
-      "lores_height": 0,
-      "_why": "lores_width/height = 0 means the narrow camera is preview-only this boot. Measured on the station at 32a765d: a second HailoYoloAdapter opens a second HailoRT context on the same device and HailoRT answers HAILO_DEVICE_IN_USE(73), which took visiond down with EXIT_MODEL. The dual feed needs ONE context with a runner shared by both cameras; until that exists the leg stays off, and the reason is here rather than in a code comment."
-    },
-    "merge_max_age_ms": 150.0
+      "lores_width": 640,
+      "lores_height": 360,
+      "view_scale": 5.90,
+      "handoff_gate_norm": 0.05,
+      "handoff_window_ms": 1000.0,
+      "_why": "Only the camera on the HUD's main display is inferred (owner, 2026-10-02); the PIP is display only. One Hailo-8 allows one HailoRT context (HAILO_DEVICE_IN_USE at 32a765d), so the one adapter is handed between cameras on a swap. The lores leg is the detail camera's inference input when it is on the main display. view_scale: the detail picture is 1/5.90 of the wide frame (normalised), measured 2026-10-02 by tools/register_detail_view.py on the live previews (NCC 0.60, roll within 0.5 deg); the optics predict 5.8 (25 mm lens, 2028x1080 mode cropped to 16:9, against the wide fx 1389 at 1920). handoff_*: on a swap the selected subject keeps its identity if its anchor lands within 0.05 of the wide frame (about 3.5 deg) within 1 s."
+    }
   }
 }

@@ -47,6 +47,8 @@ from .model.adapter import MockAdapter
 from .pipeline import LatestJsonPublisher, PerceptionPipeline, PreviewTap
 from .preview import JpegPreviewWorker
 from .detail_stream import DetailFrame, DetailStreamAnnouncer, SecondaryCameraStream
+from .inference_switch import InferenceSwitch, View
+from .main_camera import MainCamera
 from .pipeline import PreviewTap
 from .stream_manifest import StreamDescriptor, publish, publish_merged
 from .protocol.jsonio import atomic_write_text, dumps as json_dumps
@@ -493,53 +495,49 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         pipeline.start()
         primary_ident = resolve_durable_id(str(info.get("device_path")
                                               or f"/dev/video{info.get('camera_num', '?')}"))
-        merge_view = None
-        if lores is not None and (int(config.secondary.lores_width or 0) > 0):
-            from .tracking.camera_registry import MergedTrackSetView
-            # The canvas is the picture the station publishes -- not either camera's own stream
-            # size. Both TrackSets declare it, so the merged document states one geometry and every
-            # box inside it is a fraction of a full-frame view of its own optics.
-            merge_canvas = (int(stream[0]), int(stream[1]))
-            merge_view = MergedTrackSetView(
-                max_age_ns=int(float(config.merge_max_age_ms) * 1_000_000))
+        # Owner, 2026-10-02: only the camera on the main display is inferred; the PIP is display
+        # only. Both cameras capture; one adapter (one HailoRT context) follows the main display.
+        main_camera = MainCamera(available=("wide",))
+        if pipeline.selection_service is not None:
+            pipeline.selection_service.main_camera = main_camera
+        detail = _start_detail_stream(primary_ident=primary_ident, secondary=config.secondary)
+        views = {"wide": View(camera_id=primary_ident.id, leg=(lores or stream), declared=stream)}
+        scale = float(config.secondary.view_scale or 0.0)
+        if detail is not None and detail.get("lores") is not None and lores is not None:
+            if scale > 1.0:
+                views["detail"] = View(camera_id=detail["ident"].id, leg=detail["lores"],
+                                       declared=detail["stream_size"], scale=scale,
+                                       canvas=stream)
+                main_camera.make_available("detail")
+            else:
+                print("visiond: secondary.view_scale is not set: the detail camera is displayed "
+                      "but cannot be put on the main display (its boxes would have no frame)",
+                      file=sys.stderr)
+        switch = InferenceSwitch(main_camera, pipeline, adapter, views,
+                                 wide_preview=pipeline.preview,
+                                 handoff_gate_norm=config.secondary.handoff_gate_norm,
+                                 handoff_window_ms=config.secondary.handoff_window_ms)
 
-            def detail_factory(camera_id, _config=config, _manifest=manifest,
-                               _events=None):
-                from .model import build_adapter as _build
-                second = _build(_config, manifest=_manifest)
-                second_events = EventLog(capacity=256)
-                second_pipeline = PerceptionPipeline(
-                    _config, adapter=second, event_log=second_events,
-                    session_uuid=args.session_uuid or "", orientation='none')
-                return second_pipeline, second
-
-            detail = _start_detail_stream(primary_ident=primary_ident,
-                                          secondary=config.secondary,
-                                          pipeline_factory=detail_factory,
-                                          merge_view=merge_view,
-                                          merge_canvas=merge_canvas)
-            if detail is not None and detail.get("adapter") is not None:
-                def _health_companions(_a=adapter, _d=detail["adapter"],
-                                       _stream=detail["stream"], _view=merge_view):
-                    report = {"cameras": {str(_a.camera_id or "unbound"): _a.describe(),
-                                          str(_d.camera_id): _d.describe()},
-                              "detail_stream": _stream.stats()}
-                    if _view is not None:
-                        report["merge"] = {
-                            "max_age_ms": _view.max_age_ns / 1e6,
-                            "per_camera": _view.stats(), "offers": _view.offers,
-                            "dropped_stale": _view.dropped_stale,
-                            "refusals": _view.refusals, "last_refusal": _view.last_refusal}
-                    return report
-                health_extras["fn"] = _health_companions
-        else:
-            detail = _start_detail_stream(primary_ident=primary_ident,
-                                          secondary=config.secondary)
+        def _health_companions(_detail=detail, _switch=switch, _main=main_camera,
+                               _pipeline=pipeline):
+            report = {"main_camera": dict(_main.snapshot(), **_switch.stats()),
+                      "camera_handoffs": dict(_pipeline.manager.handoffs)}
+            if _detail is not None:
+                report["detail_stream"] = _detail["stream"].stats()
+            return report
+        health_extras["fn"] = _health_companions
+        worker = None
+        if "detail" in views:
+            worker = _start_detail_inference(detail, switch, pipeline,
+                                             wire_publisher=wire_publisher,
+                                             legacy=args.legacy_track_wire)
         try:
             return _run_camera(args, pipeline, adapter, camera, info,
                             wire_publisher=wire_publisher, preview=preview_worker,
-                            merge_view=merge_view)
+                            switch=switch)
         finally:
+            if worker is not None:
+                worker.stop()
             _stop_detail_stream(detail)
     except ModelRejected as exc:
         print(f"visiond: model refused (§9.3):\n{exc}", file=sys.stderr)
@@ -693,9 +691,11 @@ class _StreamAnnouncer:
 DETAIL_STREAM_ENV = "OTA_VISION_DETAIL_SENSOR"
 
 
-def _start_detail_stream(*, primary_ident=None, secondary=None, pipeline_factory=None,
-                         merge_view=None, merge_canvas=None):
-    """Open the secondary sensor as a *preview-only* stream, if the launcher asked for one.
+def _start_detail_stream(*, primary_ident=None, secondary=None):
+    """Open the secondary sensor: its preview always, its inference leg when configured.
+
+    Whether its frames are inferred is not decided here: that is the main display's choice
+    (``InferenceSwitch``), made per frame by ``_start_detail_inference``.
 
     The switch names a **sensor model**, not an index: ``/dev/videoN`` is a lease for this boot.
     What the stream then *publishes* is a by-path identity resolved from the node we actually
@@ -769,10 +769,6 @@ def _start_detail_stream(*, primary_ident=None, secondary=None, pipeline_factory
             pass
         return None
     stream_size = (int(info["stream_size"][0]), int(info["stream_size"][1]))
-    # Where this camera's boxes will be declared. With a merge, that is the published canvas --
-    # normally the primary's picture -- because the merged document states exactly one geometry.
-    # Without a merge, a camera declares its own picture, which is what a preview-only role does.
-    merge_canvas = ((int(merge_canvas[0]), int(merge_canvas[1])) if merge_canvas else stream_size)
     print(f"visiond: secondary stream {model} node /dev/video{info['camera_num']} identity "
           f"{ident.id} source={ident.source} orientation={want!r} durable={ident.durable} "
           f"{stream_size[0]}x{stream_size[1]}", file=sys.stderr)
@@ -786,14 +782,18 @@ def _start_detail_stream(*, primary_ident=None, secondary=None, pipeline_factory
     preview = JpegPreviewWorker(tap, os.path.join(run_dir, "preview_detail.jpg"))
     preview.start()
 
+    leg_wanted = threading.Event()
+
     def poll():
         request = picam2.capture_request()
         try:
-            image = request.make_array("main").copy()      # the buffer dies with the request
-            # The leg is copied for the same reason the main stream is: both arrays belong to the
-            # request being released below, and an adapter that reads the buffer afterwards reads
-            # whatever the next frame put there.
-            leg = (request.make_array("lores").copy() if lores is not None else None)
+            # make_array already copies out of the request's buffer (picamera2 request.py: "we
+            # don't want to send out an exported handle to the camera buffer, so we're going to have
+            # to do a copy"); a second .copy() here was 2.7 MB of interpreter time per frame.
+            image = request.make_array("main")
+            # The inference leg only while this camera is on the main display (leg_wanted).
+            leg = (request.make_array("lores")
+                   if lores is not None and leg_wanted.is_set() else None)
             metadata = dict(request.get_metadata())   # 名字里带下划线：getmetadata() 不存在
         finally:
             request.release()
@@ -811,55 +811,68 @@ def _start_detail_stream(*, primary_ident=None, secondary=None, pipeline_factory
     stream = SecondaryCameraStream(role="detail", ident=ident, poll=poll,
                                    queue_depth=queue_depth)
     stream.start()
-    detail_pipeline = detail_adapter = detail_worker = None
-    if pipeline_factory is not None and merge_view is not None:
-        # A second pipeline over the same profile: its own adapter (one adapter, one camera), its
-        # own event log (one camera's bad day stays its own), and no publisher of its own -- the
-        # wide camera's loop is the single publisher, so a document appears at one cadence and not
-        # at whichever camera got there first.
-        from .camera_worker import CameraWorker
-        detail_pipeline, detail_adapter = pipeline_factory(ident.id)
-        detail_adapter.bind_camera(ident.id)
-        detail_adapter.configure_stream(*(lores or stream_size), declared=merge_canvas)
-        detail_adapter.open()
-        detail_pipeline.start()
-
-        def infer_step():
-            frame = stream.latest(timeout_s=0.2)
-            if frame is None:
-                return None                      # no frame yet: the worker keeps waiting, alive
-            if frame.inference_image is None:
-                return None
-            outcome = detail_pipeline.process_frame(
-                frame.inference_image, frame.metadata,
-                frame_sequence=frame.frame_sequence,
-                sensor_timestamp_ns=frame.sensor_timestamp_ns or 0,
-                camera_id=ident.id)
-            if outcome.track_set is not None:
-                merge_view.offer(outcome.track_set)
-            return outcome
-
-        detail_worker = CameraWorker(ident, infer_step)
-        detail_worker.start()
-        print(f"visiond: detail inference on {ident.id} leg "
-              f"{(lores or stream_size)[0]}x{(lores or stream_size)[1]} declared "
-              f"{merge_canvas[0]}x{merge_canvas[1]}", file=sys.stderr)
     announcer = None
     if manifest_path:
         announcer = DetailStreamAnnouncer(path=manifest_path, stream=stream, preview=preview,
                                           size=stream_size)
         announcer.start()
     return {"picam2": picam2, "stream": stream, "preview": preview, "announcer": announcer,
-            "pipeline": detail_pipeline, "adapter": detail_adapter, "worker": detail_worker}
+            "ident": ident, "stream_size": stream_size, "lores": lores, "leg_wanted": leg_wanted}
+
+
+def _start_detail_inference(detail, switch, pipeline, *, wire_publisher=None, legacy=False):
+    """The detail camera's inference loop: a worker that runs only while detail is the main display.
+
+    It shares the wide camera's pipeline, adapter and publishers through ``switch.lock``; while wide
+    is on the main display it takes frames out of the buffer and drops them, so a swap starts on a
+    fresh frame rather than a stale one.
+    """
+    from .camera_worker import CameraWorker
+    stream, ident = detail["stream"], detail["ident"]
+    failures = {"count": 0}
+
+    def infer_step():
+        frame = stream.latest(timeout_s=0.2)
+        main = switch.is_main("detail")
+        # The leg is only copied out of the capture request while it will be inferred.
+        if main:
+            detail["leg_wanted"].set()
+        else:
+            detail["leg_wanted"].clear()
+        if (not main or frame is None or frame.inference_image is None
+                or not frame.sensor_timestamp_ns):
+            return None
+        try:
+            with switch.lock:
+                if not switch.acquire("detail") or not switch.fresh(frame.sensor_timestamp_ns):
+                    return None
+                outcome = pipeline.process_frame(
+                    frame.inference_image, frame.metadata, frame_sequence=frame.frame_sequence,
+                    sensor_timestamp_ns=frame.sensor_timestamp_ns, camera_id=ident.id)
+                if wire_publisher is not None and outcome.stage != 'inference_pending':
+                    _publish_wire(outcome, wire_publisher, legacy=legacy)
+            return outcome
+        except Exception as exc:                                              # noqa: BLE001
+            # A worker that dies leaves the main display on a camera nobody infers: it stays
+            # alive, and the first reason is said out loud (the rest are counted).
+            failures["count"] += 1
+            if failures["count"] == 1:
+                print(f"visiond: detail inference failed: {type(exc).__name__}: {exc}",
+                      file=sys.stderr)
+            return None
+
+    worker = CameraWorker(ident, infer_step)
+    worker.start()
+    print(f"visiond: detail camera {ident.id} can take the main display: leg "
+          f"{detail['lores'][0]}x{detail['lores'][1]}, boxes mapped into the wide frame",
+          file=sys.stderr)
+    return worker
 
 
 def _stop_detail_stream(detail) -> None:
     if not detail:
         return
-    # The worker first, then the pipeline it was feeding, then the stream that fed it: stopping in
-    # the other order lets a step hand a frame to a pipeline that is already closed, which is a
-    # counted error nobody asked for.
-    for key in ("worker", "pipeline", "announcer", "stream", "preview"):
+    for key in ("announcer", "stream", "preview"):
         part = detail.get(key)
         if part is not None:
             part.stop()
@@ -875,7 +888,7 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
                 camera: CameraOwner, info: Dict[str, Any],
                 wire_publisher: Optional[SocketPublisher] = None,
                 preview: Optional[JpegPreviewWorker] = None,
-                merge_view: Optional[Any] = None) -> int:
+                switch: Optional[InferenceSwitch] = None) -> int:
     # WP3: the owner announces which camera it owns, and how durable that claim is. This is the
     # layer where ownership lives -- carrying it into controld needs a v3 wire-schema bump (the
     # perception report is a typed structure, not a dict), which belongs to the dual-worker cut
@@ -903,24 +916,14 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             print(f"visiond: the inference adapter would not bind to camera {_ident.id}: "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr)
             raise
-    # One publisher for the whole station: the document on disk is the merge, while the control
-    # layer keeps receiving *this* camera's set. That asymmetry is deliberate and it is said out
-    # loud below -- controld's wire header has no camera field until v3, so handing it a merged set
-    # would make a box from the narrow optic aim the turret as if it came from the wide one.
-    publish_hook = None
-    if merge_view is not None and pipeline.publisher is not None:
-        def publish_hook(track_set, observation, _view=merge_view, _pub=pipeline.publisher,
-                         _pipeline=pipeline):
-            _view.offer(track_set)
-            document = _view.merge() or track_set
-            _pub.publish(document, observation)
-            if isinstance(_pub, LatestJsonPublisher):
-                _pipeline.counters.documents_enqueued += 1
-            else:
-                _pipeline.counters.documents_written += 1
-        print("visiond: publishing the merged TrackSet to the document path; the control wire "
-              "carries only this camera's set until the wire carries camera attribution (v3)",
-              file=sys.stderr)
+    if switch is None:
+        # A one-camera run (tests, replay-like callers): wide is always the main display.
+        from .main_camera import MainCamera as _MainCamera
+        switch = InferenceSwitch(_MainCamera(), pipeline, adapter,
+                                 {"wide": View(camera_id=_ident.id,
+                                               leg=tuple(adapter.stream_size),
+                                               declared=tuple(adapter.declared_stream))},
+                                 wide_preview=pipeline.preview)
     camera.start()
     # (b): visiond owns the physical sensor, so visiond is also the only process allowed to say
     # which named stream came out of it. The manifest is what webd reads instead of a filename it
@@ -941,14 +944,25 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             # `is not None`, never `or`: the leg is a numpy array, and `array or x` asks numpy for a
             # truth value -- which is exactly the ValueError that killed visiond six seconds into
             # the first Hailo boot. A pixel buffer is never falsy, so the intent has to be spelled.
-            outcome = pipeline.process_frame(
-                frame.inference_image if frame.inference_image is not None else frame.image,
-                frame.metadata,
-                                             frame_sequence=frame.frame_sequence,
-                                             sensor_timestamp_ns=frame.sensor_timestamp_ns,
-                                             camera_id=_ident.id,
-                                             capture_started_ns=frame.metadata_receive_ns,
-                                             publish=publish_hook)
+            pixels = frame.inference_image if frame.inference_image is not None else frame.image
+            active = False
+            if switch.is_main("wide"):               # the idle camera never takes the lock
+                with switch.lock:
+                    active = switch.acquire("wide") and switch.fresh(frame.sensor_timestamp_ns)
+                    if active:
+                        outcome = pipeline.process_frame(
+                            pixels, frame.metadata, frame_sequence=frame.frame_sequence,
+                            sensor_timestamp_ns=frame.sensor_timestamp_ns, camera_id=_ident.id,
+                            capture_started_ns=frame.metadata_receive_ns)
+                        if wire_publisher is not None and outcome.stage != 'inference_pending':
+                            if not _publish_wire(outcome, wire_publisher,
+                                                 legacy=args.legacy_track_wire) and not args.quiet:
+                                print("visiond: TrackSet publish failed", file=sys.stderr)
+            if not active:
+                # The detail camera is on the main display: this one is the PIP, display only.
+                if switch.wide_preview is not None:
+                    switch.wide_preview.offer(pixels, now_ns=frame.metadata_receive_ns)
+                continue
             delivered += 1
             if tensor_probe is not None:
                 tensor_probe.offer(frame, outcome)
@@ -963,9 +977,6 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             if not outcome.published and outcome.stage != 'inference_pending' and not args.quiet:
                 print(f"visiond: frame {frame.frame_sequence} failed in {outcome.stage}: "
                       f"{outcome.failure}", file=sys.stderr)
-            if wire_publisher is not None and outcome.stage != 'inference_pending':
-                if not _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire) and not args.quiet:
-                    print("visiond: TrackSet publish failed", file=sys.stderr)
             if isinstance(pipeline.publisher, LatestJsonPublisher):
                 wire_done_ns = time.monotonic_ns()
                 kpi = None
