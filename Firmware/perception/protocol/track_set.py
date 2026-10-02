@@ -107,6 +107,10 @@ class TrackSet:
     #: older than the merge's freshness budget. Listed, not hidden: "one camera stopped contributing"
     #: and "one camera sees nobody" must not arrive at the same document.
     stale_sources: Tuple[str, ...] = ()
+    #: The detail camera is on the main display: these boxes are its narrow view mapped into the
+    #: wide frame. Carried on the native wire (flags bit 1) so the control loop can pace AUTO_ROAM
+    #: to the field of view the operator is actually watching.
+    narrow_view: bool = False
     model_id: str = ""
     model_generation: int = 0
     tracks: List[Track] = field(default_factory=list)

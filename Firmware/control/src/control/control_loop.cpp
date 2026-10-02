@@ -1251,6 +1251,18 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
     }
     if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
+      // Patrol memory: where people are (pitch, once a second while one is visible) and which
+      // way the last one was going (yaw). Joint yaw and LOS azimuth share a sign (R_z(yaw)).
+      if (at_input_.target_visible && at_input_.has_selection) {
+        if (now_ns - search_pitch_sampled_ns_ >= 1'000'000'000LL) {
+          search_pitch_.add(sp[ix(AxisId::Pitch)].q_rad);
+          search_pitch_sampled_ns_ = now_ns;
+        }
+        if (tracking_ && tracking_->estimator_initialized()) {
+          const double rate = tracking_->target_az_rate_rad_s();
+          if (std::abs(rate) > 2.0 * kDeg2Rad) last_target_yaw_dir_ = rate > 0 ? 1 : -1;
+        }
+      }
       at_input_.measurement_age_ms =
           last_measurement_ns_ > 0 ? (now_ns - last_measurement_ns_) / 1000000 : -1;
       at_input_.measurement_timestamp_ns = last_measurement_ns_;
@@ -3078,11 +3090,13 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // A leg runs from the bound it left to the bound ahead of it, and progress is
       // measured at the turret rather than at the planner: if an axis cannot follow, the
       // number has to stop too. Nothing else on this page will admit it.
-      snap.roam_pattern = roam_.active() && roam_out_.envelope_valid ? "BOUNDED_SWEEP"
-                                                                    : "NONE";
+      snap.roam_pattern = !(roam_.active() && roam_out_.envelope_valid) ? "NONE"
+                          : (roam_.state() == RoamState::Patrol ? "PATROL" : "BOUNDED_SWEEP");
       const double lo = roam_.sweep_lo_rad(), hi = roam_.sweep_hi_rad();
       const double qy = last_positions()[ix(AxisId::Yaw)];
-      if (roam_.active() && hi > lo) {
+      if (roam_.state() == RoamState::Patrol) {
+        snap.roam_progress = roam_.patrol_progress(qy);   // fraction of the current turn
+      } else if (roam_.active() && hi > lo) {
         const double along = (qy - lo) / (hi - lo);
         const double clamped = along < 0.0 ? 0.0 : (along > 1.0 ? 1.0 : along);
         snap.roam_progress =
@@ -3684,6 +3698,9 @@ RoamConfig ControlLoop::roam_config() const {
     }
     c.braking_margin_rad = std::max(0.0,cfg_.stop_margin_rad + .5*kDeg2Rad - c.min_inside_safe_rad);
     c.reach_tol_rad = .4*kDeg2Rad;
+    // No envelope: patrol the circle. The band above stays only as the region the mode gate
+    // validates; the patrol never turns at its ends.
+    c.patrol = roam_patrol();
   } else if (cfg_.roam_full_yaw_travel) {
     c.envelope.yaw_min_rad = yl.q_soft_min_rad + c.min_inside_safe_rad;
     c.envelope.yaw_max_rad = yl.q_soft_max_rad - c.min_inside_safe_rad;
@@ -3716,10 +3733,14 @@ RoamConfig ControlLoop::roam_config() const {
       std::min(tracking_cfg_.search_v_max_rad_s, hold_speed_effective());
   c.pitch_ref_rad = cfg_.roam_pitch_named ? cfg_.roam_pitch_deg * kDeg2Rad
                                          : ready_raw_[ix(AxisId::Pitch)];
+  // Patrol pitch: the median pitch of tracked people, the travel middle until there is one.
+  c.search_pitch_rad = search_pitch_.median(0.5 * (pl.q_soft_min_rad + pl.q_soft_max_rad));
+  c.pitch_keep_band_rad = cfg_.roam_pitch_keep_band_deg * kDeg2Rad;
   // A named speed may slow the sweep; it may not exceed the station's own search limit.
   c.v_max_rad_s = cfg_.roam_velocity_deg_s > 0.0
                       ? std::min(derived_v, cfg_.roam_velocity_deg_s * kDeg2Rad)
                       : derived_v;
+  if (c.patrol) c.v_max_rad_s = patrol_speed_rad_s();
   // §33: a world-level scan needs gravity from the BNO085 expansion. This station has
   // the sensor, but core v3 does not depend on it, so the sweep stays in joint space and
   // says so rather than claiming a level scan it cannot honour.
@@ -4052,7 +4073,29 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     if (yaw_cap > 0.0) l.roam_v_max_rad_s = std::min(l.roam_v_max_rad_s, yaw_cap);
     l.hold_v_max_rad_s = motion_speed(mode_mgr_.mode());
   }
+  if (roam_patrol()) {
+    // The patrol's pace is its own, set by the view (owner, 2026-10-02), still under the
+    // profiled hold cap and the yaw axis's declared maximum.
+    double v = std::min(patrol_speed_rad_s(), cap);
+    if (cfg_.motion.configured) {
+      const double yaw_cap = motion_profile(ix(AxisId::Yaw), OperatingMode::AutoRoam).maximum.speed;
+      if (yaw_cap > 0.0) v = std::min(v, yaw_cap);
+    }
+    l.roam_v_max_rad_s = v;
+  }
   return l;
+}
+
+bool ControlLoop::roam_patrol() const {
+  return backend_->supports_continuous_yaw() && yaw_session_reference_valid_ &&
+         runtime_limits(AxisId::Yaw).unbounded();
+}
+
+double ControlLoop::patrol_speed_rad_s() const {
+  // The narrow view counts only while perception keeps saying so: a second without a frame
+  // (visiond restarting, which always comes back on wide) is the wide pace.
+  const bool narrow = narrow_view_ && now_ns_ - narrow_view_ns_ < 1'000'000'000LL;
+  return (narrow ? cfg_.roam_narrow_patrol_speed_deg_s : cfg_.roam_patrol_speed_deg_s) * kDeg2Rad;
 }
 
 AxisLimits ControlLoop::runtime_limits(AxisId axis) const {
@@ -4419,6 +4462,10 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
     }
   }
   last_set_receive_ns_ = now;
+  if (obs.native) {
+    narrow_view_ = obs.narrow_view;
+    narrow_view_ns_ = now;
+  }
   // §17's chain, entered from the v3 door: the set is observed, a track is chosen, and
   // the result is handed to the v1 estimator as a pixel measurement. Everything from
   // "pixel" rightwards — ray, motor interpolation at the SensorTimestamp, LOS, the
@@ -4664,11 +4711,17 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
       if (request_mode(OperatingMode::AutoRoam).ok) {
         const auto q = last_positions();
         roam_.set_config(roam_config());
-        roam_.enter(q[ix(AxisId::Yaw)], q[ix(AxisId::Pitch)], interrupted_roam_dir_);
+        // A patrol resumes the way the lost person was going (they usually leave the frame in
+        // that direction); a bounded sweep resumes the leg it was interrupted on.
+        const bool patrol = roam_.config().patrol;
+        const int resume = patrol && last_target_yaw_dir_ != 0 ? last_target_yaw_dir_
+                                                               : interrupted_roam_dir_;
+        roam_.enter(q[ix(AxisId::Yaw)], q[ix(AxisId::Pitch)], resume);
         last_auto_switch_ns_ = now_ns;
         spdlog::info("ROAM_RECOVERY: source={} requested_direction={} effective_direction={}",
-                     interrupted_roam_dir_ == 0 ? "nearest_boundary" : "interrupted_sweep",
-                     interrupted_roam_dir_, roam_.direction());
+                     patrol ? (last_target_yaw_dir_ != 0 ? "target_motion" : "previous_patrol")
+                            : (interrupted_roam_dir_ == 0 ? "nearest_boundary" : "interrupted_sweep"),
+                     resume, roam_.direction());
       }
       loss_since_ns_ = 0;
     }

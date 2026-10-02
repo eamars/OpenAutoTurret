@@ -509,6 +509,7 @@ class PerceptionPipeline:
             # things; whoever consumes the set has to be able to tell them apart without guessing
             # from which file the frame came.
             track_set.stamp_camera(camera_id)
+            track_set.narrow_view = self.view_scale != 1.0
             observation.publish_timestamp_ns = published_ns
             mark("selection_end")
             self._record("selection_update_ms",

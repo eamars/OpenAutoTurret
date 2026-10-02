@@ -23,7 +23,7 @@ inline bool decode_perception_frame(const uint8_t* bytes, size_t size, TrackSet&
   PerceptionHeader h;
   std::memcpy(&h, bytes, sizeof(h));
   if (std::memcmp(h.magic, "OTP1", 4) || h.version != 1 || h.header_size != sizeof(h) ||
-      h.state > 5 || h.valid > 1 || (h.flags & ~1u) || !(h.session_hi || h.session_lo)) return false;
+      h.state > 5 || h.valid > 1 || (h.flags & ~3u) || !(h.session_hi || h.session_lo)) return false;
   for (float v : {h.detector_score, h.association_quality, h.identity_confidence, h.ambiguity})
     if (!std::isfinite(v) || v < 0 || v > 1) return false;
   if (h.state == 0 && (h.track_hi || h.track_lo || h.valid)) return false;
@@ -41,6 +41,9 @@ inline bool decode_perception_frame(const uint8_t* bytes, size_t size, TrackSet&
   obs.state = h.state;
   obs.valid = h.valid;
   obs.just_reacquired = h.flags & 1;
+  // bit 1: the detail camera is on the main display (boxes are its narrow view mapped into the
+  // wide frame). Only AUTO_ROAM's pace reads it.
+  obs.narrow_view = h.flags & 2;
   obs.ambiguity = h.ambiguity;
   obs.association_quality = h.association_quality;
   obs.identity_confidence = h.identity_confidence;

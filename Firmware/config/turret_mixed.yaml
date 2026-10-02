@@ -245,6 +245,15 @@ v3:
     # Bounded to the session-relative software envelope above. This is not a
     # claim about GM6020 mechanical endpoints.
     full_yaw_travel: false
+    # Yaw has no envelope (position_envelope: none), so AUTO_ROAM patrols the whole
+    # circle in one direction instead of sweeping the +/-90 band around the power-up
+    # zero (owner, 2026-10-02). Pace per view, so a person stays in the picture ~4.5 s
+    # either way: wide 69 deg at 15 deg/s, detail ~13.6 deg at 3 deg/s. Pitch keeps its
+    # value within 10 deg of the median pitch at which people were tracked (travel middle
+    # until the first one), and otherwise moves only to that band's edge.
+    patrol_speed_deg_s: 15
+    narrow_patrol_speed_deg_s: 3
+    pitch_keep_band_deg: 10
   auto_track:
     roam_on_loss_ms: 1000
     # Perception already requires confirmation and 500 ms of a single candidate.
@@ -279,10 +288,12 @@ motion:
       axes:
         yaw:
           maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-          target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+          # 15: the patrol pace on the wide camera (v3.auto_roam.patrol_speed_deg_s); the
+          # reference is capped by this target, so the two must agree.
+          target: {speed_deg_s: 15, acceleration_deg_s2: 15, jerk_deg_s3: 60}
         pitch:
           maximum: {speed_deg_s: 20, acceleration_deg_s2: 30, jerk_deg_s3: 120}
-          target: {speed_deg_s: 10, acceleration_deg_s2: 15, jerk_deg_s3: 60}
+          target: {speed_deg_s: 15, acceleration_deg_s2: 15, jerk_deg_s3: 60}
     auto_track:
       axes:
         yaw:

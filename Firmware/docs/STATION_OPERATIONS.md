@@ -509,9 +509,19 @@ what an operator needs from them:
 - **The slip ring has no constraint** (owner, confirmed): free rotation, no turn counting.
   The cable-loop caution that used to sit around the yaw travel argument is retired --
   there is no mechanical objection left to unbounded yaw.
-- **AUTO_ROAM's redesign waits for ADR-001.** Its bounded sweep was written for a station
-  with hardware endstops; "keep turning one way" or "turn toward the person" is more
-  sensible now, but the data for choosing is thin, so it is parked, not forgotten.
+- **AUTO_ROAM patrols the circle (owner ruling 2026-10-02, replaces the parked redesign).**
+  With `position_envelope: none` the roam is no longer a sweep between the ends of the
+  +/-90 deg band around the power-up zero (which could sweep forever without facing the
+  person, and could not be moved). It turns one way, continuously:
+  - **pace per view:** 15 deg/s with wide on the main display, 3 deg/s with detail, so a
+    person stays in the picture about 4.5 s either way;
+  - **after a loss:** it resumes the way the lost person was moving, otherwise the way the
+    last patrol went;
+  - **pitch:** kept if within 10 deg of the median pitch at which people were tracked (the
+    travel middle before the first one), otherwise moved only to that band's edge.
+
+  Settings live in `v3.auto_roam` of `turret_mixed.yaml`. The AUTO_ROAM yaw target speed is
+  15 to match. The bounded sweep still serves stations with a yaw envelope.
   Meanwhile: a `no_progress` trip with the axis parked outside its computed sweep interval
   is a known open case (see the case file §4-§6), and on this backend a latch still means a
   process restart -- `recover_motors` answers `unsupported`.

@@ -71,6 +71,7 @@ enum class RoamState : uint8_t {
   MoveToScanStart,  // outside the envelope: the one legitimate long move
   Sweep,
   Turnaround,
+  Patrol,           // continuous yaw: one direction, round and round (owner, 2026-10-02)
 };
 
 inline const char* roam_state_name(RoamState s) {
@@ -79,9 +80,38 @@ inline const char* roam_state_name(RoamState s) {
     case RoamState::MoveToScanStart: return "MOVE_TO_SCAN_START";
     case RoamState::Sweep: return "SWEEP";
     case RoamState::Turnaround: return "TURNAROUND";
+    case RoamState::Patrol: return "PATROL";
   }
   return "?";
 }
+
+// Where people have actually been, in joint pitch: the median of samples taken while a target was
+// being tracked (owner, 2026-10-02). Patrol pitch converges to within a band of it, so a mount or a
+// room that puts heads somewhere else teaches the turret where to look, and one target that walked
+// up close and dragged pitch to the floor does not decide the next patrol.
+class SearchPitchMemory {
+ public:
+  static constexpr int kCapacity = 32;
+  void add(double q_pitch_rad) {
+    if (!std::isfinite(q_pitch_rad)) return;
+    samples_[next_] = q_pitch_rad;
+    next_ = (next_ + 1) % kCapacity;
+    if (count_ < kCapacity) ++count_;
+  }
+  int count() const { return count_; }
+  // The median, or `fallback` (the travel middle) before anything has been tracked.
+  double median(double fallback) const {
+    if (count_ == 0) return fallback;
+    double v[kCapacity];
+    for (int i = 0; i < count_; ++i) v[i] = samples_[i];
+    for (int i = 1; i < count_; ++i)   // insertion sort: 32 doubles, control thread, no allocation
+      for (int j = i; j > 0 && v[j - 1] > v[j]; --j) { const double t = v[j]; v[j] = v[j - 1]; v[j - 1] = t; }
+    return count_ % 2 ? v[count_ / 2] : 0.5 * (v[count_ / 2 - 1] + v[count_ / 2]);
+  }
+ private:
+  double samples_[kCapacity] = {};
+  int count_ = 0, next_ = 0;
+};
 
 struct RoamConfig {
   RoamEnvelope envelope;
@@ -116,6 +146,17 @@ struct RoamConfig {
   // §32: the roam envelope must sit inside the safe envelope by at least this much.
   // Checked, not assumed — see validate_envelope.
   double min_inside_safe_rad = 0.0349;  // 2 deg
+  // Continuous yaw (no envelope): patrol the whole circle in one direction instead of sweeping a
+  // band between two ends. Owner, 2026-10-02: a band centred on wherever yaw was zeroed at power-up
+  // can sweep forever without ever facing the person, and no operator can move it.
+  bool patrol = false;
+  // How far ahead of the axis the patrol waypoint rolls. Far enough that the trajectory never
+  // brakes for it (15 deg/s at 15 deg/s^2 needs 7.5 deg), close enough to stay a local move.
+  double patrol_lookahead_rad = 1.0472;  // 60 deg
+  // Patrol pitch: the axis keeps its pitch if it is within `pitch_keep_band_rad` of the learned
+  // search pitch, and otherwise moves only as far as the band's edge.
+  double search_pitch_rad = 0.0;
+  double pitch_keep_band_rad = 0.1745;   // 10 deg
 };
 
 struct RoamOutput {
@@ -137,7 +178,7 @@ class RoamPlanner {
     // supposed to stay inside.
     const bool envelope_changed =
         cfg.envelope.yaw_min_rad != cfg_.envelope.yaw_min_rad ||
-        cfg.envelope.yaw_max_rad != cfg_.envelope.yaw_max_rad;
+        cfg.envelope.yaw_max_rad != cfg_.envelope.yaw_max_rad || cfg.patrol != cfg_.patrol;
     cfg_ = cfg;
     if (envelope_changed) state_ = RoamState::Idle;
   }
@@ -206,6 +247,19 @@ class RoamPlanner {
   // interrupted sweep. Zero starts a fresh sweep toward the nearest boundary.
   // This is a waypoint preference, never permission to exceed the envelope.
   void enter(double q_yaw_rad, double q_pitch_rad, int resume_direction = 0) {
+    if (cfg_.patrol) {
+      // The circle has no nearer end: keep the direction asked for (a lost target's), else the
+      // direction this patrol last went, else +1. Starting from wherever the axis is, always.
+      direction_ = resume_direction != 0 ? (resume_direction < 0 ? -1 : 1)
+                                         : (patrol_direction_ != 0 ? patrol_direction_ : 1);
+      patrol_direction_ = direction_;
+      pitch_target_rad_ = clamp_envelope_pitch(patrol_pitch(q_pitch_rad));
+      patrol_start_yaw_ = q_yaw_rad;
+      target_yaw_ = q_yaw_rad + direction_ * cfg_.patrol_lookahead_rad;
+      state_ = RoamState::Patrol;
+      reversing_ = reversal_armed_ = false;
+      return;
+    }
     const double lo = sweep_lo_rad();
     const double hi = sweep_hi_rad();
     // §30: the elevation a sweep holds is the configured one, not whatever the operator
@@ -241,6 +295,7 @@ class RoamPlanner {
   // Explicit bounded reposition after a target crosses the forbidden yaw gap.
   // The waypoint is still inside the same validated sweep envelope.
   void enter_toward(double q_yaw_rad, double q_pitch_rad, int direction) {
+    if (cfg_.patrol) { enter(q_yaw_rad, q_pitch_rad, direction); return; }
     enter(q_yaw_rad, q_pitch_rad);
     if (!active()) return;
     direction_ = direction < 0 ? -1 : 1;
@@ -284,6 +339,25 @@ class RoamPlanner {
       out.reason = "roam idle";
       out.intent.set_reason(out.reason);
       return out;  // Hold. A planner with nothing to do does not invent a waypoint.
+    }
+    if (state_ == RoamState::Patrol) {
+      // The waypoint rolls ahead of the axis, so the trajectory cruises and never reaches it.
+      // Pitch holds the value chosen at entry (re-clamped only if the envelope moved).
+      target_yaw_ = q_yaw_rad + direction_ * cfg_.patrol_lookahead_rad;
+      pitch_target_rad_ = clamp_envelope_pitch(pitch_target_rad_);
+      out.state = state_;
+      out.target_yaw_rad = target_yaw_;
+      out.direction = direction_;
+      out.intent.type = IntentType::JointPosition;
+      out.intent.has_joint_target = true;
+      out.intent.q_yaw_rad = target_yaw_;
+      out.intent.q_pitch_rad = pitch_target_rad_;
+      out.intent.confidence = 1.0;
+      out.intent.velocity_scale = 1.0;
+      out.intent.set_reason("patrol");
+      out.reason = roam_state_name(state_);
+      (void)period_ns;
+      return out;
     }
 
     // Re-clamped every cycle: the envelope is editable live, and the elevation the sweep
@@ -373,6 +447,21 @@ class RoamPlanner {
     return out;
   }
 
+  // The patrol's pitch from the axis's current one: kept inside the band around the learned search
+  // pitch, moved only as far as the band's edge when outside it (owner ruling, 2026-10-02).
+  double patrol_pitch(double q_pitch_rad) const {
+    const double lo = cfg_.search_pitch_rad - cfg_.pitch_keep_band_rad;
+    const double hi = cfg_.search_pitch_rad + cfg_.pitch_keep_band_rad;
+    if (!std::isfinite(q_pitch_rad)) return cfg_.search_pitch_rad;
+    return q_pitch_rad < lo ? lo : (q_pitch_rad > hi ? hi : q_pitch_rad);
+  }
+  // Turns completed since this patrol began, as a fraction of the current one (telemetry).
+  double patrol_progress(double q_yaw_rad) const {
+    if (state_ != RoamState::Patrol) return 0.0;
+    const double turns = std::fabs(q_yaw_rad - patrol_start_yaw_) / (2.0 * M_PI);
+    return turns - std::floor(turns);
+  }
+
   // The actual sweep bounds: the configured roam envelope, inset by the braking margin.
   double sweep_lo_rad() const { return cfg_.envelope.yaw_min_rad + cfg_.braking_margin_rad; }
   double sweep_hi_rad() const { return cfg_.envelope.yaw_max_rad - cfg_.braking_margin_rad; }
@@ -389,6 +478,8 @@ class RoamPlanner {
   double target_yaw_ = 0.0;
   double pitch_target_rad_ = 0.0;
   int direction_ = 0;
+  int patrol_direction_ = 0;     // survives exit(): the next patrol keeps going the same way
+  double patrol_start_yaw_ = 0.0;
   bool reversing_ = false;
   bool reversal_armed_ = false;
   double still_q_ = std::nan("");

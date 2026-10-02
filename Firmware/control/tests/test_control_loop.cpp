@@ -2795,3 +2795,61 @@ TEST(PositionLead, AnUnloadedEnvelopeFallsBackInsteadOfPinningTheAxesToZero) {
   EXPECT_DOUBLE_EQ(ota::apply_position_lead(1.5, 0.2, 0.25, 0.0, 0.0), 1.5);
   EXPECT_DOUBLE_EQ(ota::apply_position_lead(-0.4, -0.2, 0.25, 0.0, 0.0), -0.4);
 }
+
+// Owner, 2026-10-02: a yaw with no end stop patrols the whole circle in one direction. The bounded
+// sweep turned back at +/-90 deg around wherever yaw was zeroed at power-up, and could sweep forever
+// without facing the person. Production loop, simulated continuous plant.
+TEST(RoamMode, AContinuousYawPatrolsPastTheOldBandWithoutTurningBack) {
+  class ContinuousPlant : public sim::SimMotorBackend {
+   public:
+    ContinuousPlant() : SimMotorBackend(.005) {}
+    bool supports_continuous_yaw() const override { return true; }
+  };
+  auto plant = std::make_unique<ContinuousPlant>();
+  plant->set_stops(AxisId::Pitch, -1, 1);
+  plant->set_stops(AxisId::Yaw, -100, 100);       // a slip ring: no stop within reach
+  plant->set_position(AxisId::Pitch, .5);
+  plant->set_position(AxisId::Yaw, 0);
+  auto cfg = make_cfg();
+  cfg.service_speed_control = true;
+  cfg.allow_unknown_motor_health = true;
+  cfg.continuous_yaw_sector_half_span_rad = 0;   // position_envelope: none
+  cfg.homing_motion_checks_abort = false;
+  ControlLoop loop(cfg, std::move(plant));
+  HomingPlanConfig hcfg;
+  hcfg.homing.coarse_speed_rad_s = 20 * kDeg2Rad;
+  hcfg.homing.fine_speed_rad_s = 2 * kDeg2Rad;
+  hcfg.homing.settle_time_s = .3;
+  hcfg.travel_bands[0] = TravelBand{0, 115};
+  std::vector<HomingAction> actions{{.type=HomingActionType::HomeFullRange, .axis=AxisId::Pitch}};
+  std::string error;
+  ASSERT_TRUE(loop.start_homing(HomingPlan(std::move(actions), hcfg), error)) << error;
+  int64_t t = kDtNs;
+  for (int i = 0; i < kMaxSteps; ++i, t += kDtNs) {
+    loop.step(t, kDtNs);
+    if (loop.phase() == Phase::Fault ||
+        (loop.position_ready() && loop.at_ready() && loop.phase() == Phase::Hold)) break;
+  }
+  ASSERT_TRUE(loop.position_ready()) << loop.fault_reason();
+  const auto mode = loop.request_mode(OperatingMode::AutoRoam);
+  ASSERT_TRUE(mode.ok) << mode.reason;
+  const double start = loop.last_positions()[1];
+  int direction = 0;
+  double previous = start;
+  // 60 s at 200 Hz. This harness caps every motion at its 3 deg/s service speed, so a minute is
+  // 180 deg: well past the old +/-90 band.
+  for (int i = 0; i < 12000; ++i) {
+    loop.step(t += kDtNs, kDtNs);
+    const double q = loop.last_positions()[1];
+    if (i > 400 && direction == 0 && std::abs(q - start) > .05) direction = q > start ? 1 : -1;
+    if (direction != 0)
+      ASSERT_GE((q - previous) * direction, -1e-3) << "it turned back at " << q / kDeg2Rad << " deg";
+    previous = q;
+  }
+  const auto s = loop.telemetry().snapshot();
+  EXPECT_EQ(s.mode_phase, "PATROL");
+  EXPECT_EQ(s.roam_pattern, "PATROL");
+  EXPECT_GT(std::abs(previous - start), 150 * kDeg2Rad)
+      << "travelled only " << (previous - start) / kDeg2Rad << " deg in 60 s";
+  EXPECT_EQ(loop.phase(), Phase::Hold) << loop.fault_reason();
+}

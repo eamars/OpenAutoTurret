@@ -197,6 +197,8 @@ function hudStateLabel(o) {
   if (auto && phase === "LOST_HOLD") return { line1: "TARGET LOST", line2: "HOLDING", named: true };
   if (auto && phase === "WAIT_TARGET") return { line1: "AUTO TRACK", line2: "WAIT TARGET", named: true };
   if (roam && phase === "SWEEP") return { line1: "AUTO ROAM", line2: "SWEEP", named: true };
+  // Continuous yaw: the whole circle, one direction (owner, 2026-10-02).
+  if (roam && phase === "PATROL") return { line1: "AUTO ROAM", line2: "PATROL", named: true };
   if (mode === "MANUAL") {
     // §21.4 asks for SWEEP LEFT|RIGHT; the daemon publishes no sweep direction, so the direction is
     // left off rather than guessed from the sign of a rate that also moves for other reasons.

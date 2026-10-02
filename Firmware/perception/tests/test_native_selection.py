@@ -34,6 +34,19 @@ def test_native_packet_preserves_session_and_generation():
     assert header[9:11] == (1, 1)
 
 
+def test_the_narrow_view_rides_flags_bit_1_and_nothing_else_changes():
+    # controld paces AUTO_ROAM's patrol to the view on the main display (owner, 2026-10-02).
+    selector, frame, track = fixture()
+    observation = selector.update(frame, frame.sensor_timestamp_ns)
+    wide = HEADER.unpack_from(encode_perception_frame(frame, observation))
+    frame.narrow_view = True
+    narrow = HEADER.unpack_from(encode_perception_frame(frame, observation))
+    assert wide[11] & 2 == 0
+    assert narrow[11] & 2 == 2
+    assert narrow[11] & 1 == wide[11] & 1
+    assert narrow[:11] == wide[:11] and narrow[12:] == wide[12:]
+
+
 def test_socket_ack_retry_clear_and_expired_request():
     selector, frame, track = fixture()
     with tempfile.TemporaryDirectory() as directory:

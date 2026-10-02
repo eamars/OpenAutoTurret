@@ -641,6 +641,20 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
       err.push_back("v3.auto_roam.velocity_deg_s must be >= 0 (0 derives it)");
       out.roam_velocity_deg_s = 0.0;
     }
+    out.roam_patrol_speed_deg_s = opt_double(roam, "patrol_speed_deg_s",
+                                             "v3.auto_roam.patrol_speed_deg_s", 15.0, warn);
+    out.roam_narrow_patrol_speed_deg_s = opt_double(
+        roam, "narrow_patrol_speed_deg_s", "v3.auto_roam.narrow_patrol_speed_deg_s", 3.0, warn);
+    out.roam_pitch_keep_band_deg = opt_double(roam, "pitch_keep_band_deg",
+                                              "v3.auto_roam.pitch_keep_band_deg", 10.0, warn);
+    // Bounded well under the owner's 100 RPM (600 deg/s) ceiling; the yaw axis's declared
+    // AUTO_ROAM maximum still caps the command at run time.
+    for (const double v : {out.roam_patrol_speed_deg_s, out.roam_narrow_patrol_speed_deg_s})
+      if (!std::isfinite(v) || v <= 0.0 || v > 60.0)
+        err.push_back("v3.auto_roam patrol speeds must be in (0, 60] deg/s");
+    if (!std::isfinite(out.roam_pitch_keep_band_deg) || out.roam_pitch_keep_band_deg < 0.0 ||
+        out.roam_pitch_keep_band_deg > 45.0)
+      err.push_back("v3.auto_roam.pitch_keep_band_deg must be in [0, 45]");
 
     // Strictly inside the soft limits, checked here against the numbers in this same
     // file. The control loop re-checks at runtime with the *homed* limits and the

@@ -405,3 +405,70 @@ TEST(RoamEnvelopeValidation, NoOuterYawWallDoesNotExcuseAnEndlessSweep) {
                                               sizeof why));
   EXPECT_NE(std::strstr(why, "empty"), nullptr) << why;
 }
+
+// Owner, 2026-10-02: with no yaw end stop the bounded sweep is the wrong pattern. A band centred on
+// the power-up zero can sweep forever without facing the person, so a continuous axis patrols the
+// whole circle in one direction, and pitch converges near where people have actually been.
+namespace ota {
+namespace {
+
+class PatrolTest : public RoamTest {
+ protected:
+  void SetUp() override {
+    cfg_ = test_config();
+    cfg_.patrol = true;
+    cfg_.search_pitch_rad = -5.0 * kDeg;
+    cfg_.pitch_keep_band_rad = 10.0 * kDeg;
+    r_.set_config(cfg_);
+  }
+};
+
+TEST_F(PatrolTest, ItGoesRoundTheWholeCircleInOneDirectionAndNeverTurnsBack) {
+  r_.enter(0.0, pitch_);
+  // 1 deg per cycle: 400 cycles is more than a full turn, far past the band's ends (+/-55 deg).
+  follow_waypoint(400, 1.0 * kDeg);
+  EXPECT_EQ(out_.state, RoamState::Patrol);
+  EXPECT_EQ(out_.direction, 1);
+  EXPECT_GT(q_yaw_, 2.0 * M_PI) << "it stopped or turned back at " << q_yaw_ / kDeg << " deg";
+  EXPECT_GT(out_.target_yaw_rad, q_yaw_) << "the waypoint stays ahead, so the axis cruises";
+  EXPECT_EQ(out_.intent.type, IntentType::JointPosition);
+}
+
+TEST_F(PatrolTest, ALostTargetsDirectionIsKeptAndTheNextPatrolGoesTheSameWay) {
+  r_.enter(10.0 * kDeg, pitch_, -1);
+  follow_waypoint(50, 1.0 * kDeg);
+  EXPECT_EQ(out_.direction, -1);
+  EXPECT_LT(q_yaw_, 10.0 * kDeg);
+  r_.exit();
+  r_.enter(q_yaw_, pitch_);           // no direction asked: the last patrol's
+  run(1, q_yaw_);
+  EXPECT_EQ(out_.direction, -1);
+}
+
+TEST_F(PatrolTest, PitchIsKeptInsideTheBandAndMovedOnlyToItsEdgeOutside) {
+  // Search pitch -5, band 10: [-15, +5] (inside the [-20, +10] envelope).
+  r_.enter(0.0, -12.0 * kDeg);
+  run(1, 0.0);
+  EXPECT_NEAR(out_.intent.q_pitch_rad, -12.0 * kDeg, 1e-12) << "inside the band: left alone";
+  r_.exit();
+  r_.enter(0.0, +9.0 * kDeg);          // looking up past the band
+  run(1, 0.0);
+  EXPECT_NEAR(out_.intent.q_pitch_rad, +5.0 * kDeg, 1e-12) << "outside: only to the band edge";
+  r_.exit();
+  r_.enter(0.0, -19.0 * kDeg);
+  run(1, 0.0);
+  EXPECT_NEAR(out_.intent.q_pitch_rad, -15.0 * kDeg, 1e-12);
+}
+
+TEST(SearchPitchMemory, TheMedianOfWherePeopleWereAndTheFallbackBeforeAnyone) {
+  SearchPitchMemory m;
+  EXPECT_DOUBLE_EQ(m.median(-0.8), -0.8);
+  for (double p : {-0.6, -0.7, -1.4, -0.65, -0.62}) m.add(p);  // one dragged to the floor
+  EXPECT_DOUBLE_EQ(m.median(-0.8), -0.65);
+  for (int i = 0; i < 100; ++i) m.add(-0.3);   // bounded: the old samples age out
+  EXPECT_DOUBLE_EQ(m.median(-0.8), -0.3);
+  EXPECT_EQ(m.count(), SearchPitchMemory::kCapacity);
+}
+
+}  // namespace
+}  // namespace ota

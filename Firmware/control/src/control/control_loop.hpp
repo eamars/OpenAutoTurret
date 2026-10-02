@@ -147,6 +147,12 @@ class ControlLoop {
     bool roam_pitch_named = false;
     double roam_pitch_deg = 0.0;
     double roam_velocity_deg_s = 0.0;  // 0 = derive
+    // Continuous-yaw patrol (owner, 2026-10-02). Speeds are per view so a person stays in the
+    // picture about as long on either camera: ~4.5 s across the wide 69 deg at 15 deg/s, the
+    // same across the detail camera's ~13.6 deg at 3 deg/s.
+    double roam_patrol_speed_deg_s = 15.0;
+    double roam_narrow_patrol_speed_deg_s = 3.0;
+    double roam_pitch_keep_band_deg = 10.0;
     int auto_track_coast_ms = 0;
     int auto_track_lost_hold_ms = 0;
     int auto_track_reacquire_window_ms = 0;
@@ -771,6 +777,16 @@ class ControlLoop {
   // supervision. Used only by automatic loss recovery, never operator entry.
   int interrupted_roam_dir_ = 0;
   bool yaw_reposition_active_ = false;
+  // Patrol (continuous yaw): where tracked people were in pitch (sampled once a second while a
+  // target is visible in AUTO_TRACK), which way the last one was moving in yaw, and whether the
+  // narrow camera is the one on the main display (perception flag; stale after 1 s => wide).
+  SearchPitchMemory search_pitch_;
+  TimeNs search_pitch_sampled_ns_ = 0;
+  int last_target_yaw_dir_ = 0;
+  bool narrow_view_ = false;
+  TimeNs narrow_view_ns_ = 0;
+  bool roam_patrol() const;
+  double patrol_speed_rad_s() const;
   // §80: the preserved scene, held so it can be published until someone takes it. Kept
   // here rather than only in the snapshot because each cycle fills a fresh snapshot.
   telemetry::BlackBoxCapture blackbox_{};

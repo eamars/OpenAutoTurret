@@ -279,6 +279,10 @@ struct V3Config {
   bool has_roam_pitch = false;
   double roam_pitch_deg = 0.0;
   double roam_velocity_deg_s = 0.0;  // 0 = derive from the tracking search speed
+  // Continuous-yaw patrol (owner, 2026-10-02): pace per view and the pitch keep band.
+  double roam_patrol_speed_deg_s = 15.0;
+  double roam_narrow_patrol_speed_deg_s = 3.0;
+  double roam_pitch_keep_band_deg = 10.0;
 
   // §19/§20/§21: when a value is absent the controller's own default stands, and the
   // distinction is kept per key rather than per block — naming only coast_ms must not

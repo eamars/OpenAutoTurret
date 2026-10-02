@@ -154,6 +154,9 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.roam_pitch_named = cfg.v3.has_roam_pitch;
   c.roam_pitch_deg = cfg.v3.roam_pitch_deg;
   c.roam_velocity_deg_s = cfg.v3.roam_velocity_deg_s;
+  c.roam_patrol_speed_deg_s = cfg.v3.roam_patrol_speed_deg_s;
+  c.roam_narrow_patrol_speed_deg_s = cfg.v3.roam_narrow_patrol_speed_deg_s;
+  c.roam_pitch_keep_band_deg = cfg.v3.roam_pitch_keep_band_deg;
   if (cfg.motion.configured) {
     // Legacy auxiliary consumers (search setup, pre-ready hold) receive
     // resolved values, never the obsolete YAML defaults.
