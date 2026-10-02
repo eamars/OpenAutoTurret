@@ -104,7 +104,8 @@ class YawControlSession {
     std::cout<<"{\"kind\":\"capture_ready\",\"excitation\":true,\"purpose\":\"yaw_shared_core_3a\"}\n"<<std::flush;
     std::string failure; bool complete=false,zero_completed=false;
     try {
-      record("{\"kind\":\"session_begin\",\"time_ns\":"+std::to_string(begin_)+"}");
+      record("{\"kind\":\"session_begin\",\"time_ns\":"+std::to_string(begin_)+",\"startup_discarded\":["+
+             std::to_string(buses_[0].receiver->startup_discarded())+","+std::to_string(buses_[1].receiver->startup_discarded())+"]}");
       record("{\"kind\":\"controller_parameters_readback\",\"candidate_label\":"+quoted(candidate_)+
              ",\"source\":\"configured_servo\",\"parameters\":"+axis::servo_to_json(servo_.parameters())+"}");
       require(yaw(0.,"baseline").success,"HARD_ABORT: yaw baseline zero TX failed");

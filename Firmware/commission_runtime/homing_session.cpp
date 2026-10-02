@@ -177,7 +177,8 @@ class HomingSession {
     interrupted=0; std::signal(SIGINT,on_signal); std::signal(SIGTERM,on_signal); begin_=monotonic_ns(); entered_=begin_;
     std::cout<<"{\"kind\":\"capture_ready\",\"excitation\":true,\"purpose\":\"pitch_sensorless_homing\"}\n"<<std::flush;
     try {
-      record("{\"kind\":\"session_begin\",\"time_ns\":"+std::to_string(begin_)+"}");
+      record("{\"kind\":\"session_begin\",\"time_ns\":"+std::to_string(begin_)+",\"startup_discarded\":["+
+             std::to_string(buses_[0].receiver->startup_discarded())+","+std::to_string(buses_[1].receiver->startup_discarded())+"]}");
       while (state_!=State::Done) {
         pump(); const auto now=monotonic_ns();
         require(!interrupted,"HARD_ABORT: homing interrupted");
