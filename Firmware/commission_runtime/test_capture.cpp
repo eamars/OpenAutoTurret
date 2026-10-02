@@ -11,6 +11,7 @@
 #include <poll.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 using namespace ota::commission;
@@ -20,6 +21,23 @@ struct Directory {
   Directory() { char name[]="/tmp/ota-capture-test-XXXXXX"; auto* p=mkdtemp(name); if (!p) throw std::runtime_error("mkdtemp"); path=p; }
   ~Directory() { std::filesystem::remove_all(path); }
 };
+// Linux switches kernel receive stamping on for the system's first timestamping socket through
+// deferred work (net_enable_timestamp -> schedule_work). Datagrams queued before that work runs
+// are stamped when they are read, so a burst sent straight after the receiver opens can carry
+// read-time stamps followed by earlier queue-time stamps, and the receiver rightly rejects a
+// clock that goes backwards (station 2026-10-02, stack stopped: 1.57 ms, 2 of 300 lone runs).
+// Probe until a datagram is stamped at queue time; probes cannot go backwards themselves, each
+// is sent after the previous one was read.
+void wait_for_queue_stamps(int tx, const sockaddr_in& addr, TimestampedReceiver& receiver, Receipt& r) {
+  can_frame probe{}; probe.can_dlc=8;
+  for (int i=0;i<500;++i) {
+    ASSERT_EQ(sendto(tx,&probe,sizeof(probe),0,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr)),sizeof(probe));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    ASSERT_TRUE(receiver.receive(r));
+    if (r.dequeue_ns-r.kernel_monotonic_ns>=1'000'000) return;
+  }
+  FAIL()<<"kernel receive stamping never took effect";
+}
 Receipt reply(int64_t t, int type=17, int motor=127) {
   Receipt r; r.frame.id=ota::cybergear::pack_ext_id(type,motor,0);
   r.frame.data[0]=0x1a; r.frame.data[1]=0x70;
@@ -116,9 +134,11 @@ TEST(Receiver, KernelReportsRealDatagramOverflow) {
   ASSERT_EQ(bind(rx,reinterpret_cast<sockaddr*>(&addr),sizeof(addr)),0);
   socklen_t len=sizeof(addr); ASSERT_EQ(getsockname(rx,reinterpret_cast<sockaddr*>(&addr),&len),0);
   TimestampedReceiver receiver(rx);
+  Receipt r; uint64_t observed_drops=0;
+  wait_for_queue_stamps(tx,addr,receiver,r);
+  if (HasFatalFailure()) return;
   can_frame frame{}; frame.can_id=0; frame.can_dlc=8;
   for (int i=0;i<1000;++i) ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
-  Receipt r; uint64_t observed_drops=0;
   auto receive=[&]() {
     const auto previous=r.kernel_monotonic_ns;
     try { return receiver.receive(r); }
