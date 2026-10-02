@@ -176,6 +176,25 @@ TEST_F(RoamTest, TurnaroundIsADeliberateStateNotABounce) {
   EXPECT_EQ(out_.direction, -dir_in);
 }
 
+TEST_F(RoamTest, AnAxisRestingShortOfTheWaypointStillReverses) {
+  // Station, 2026-10-02: the ADR-002.2 yaw servo rested 0.24 deg short of a turnaround
+  // waypoint (inside its commissioned rest accuracy, outside half the 0.4 deg arrival band)
+  // and the sweep stayed in TURNAROUND indefinitely. Within the band and still is settled.
+  cfg_.reach_tol_rad = 0.4 * kDeg;
+  r_.set_config(cfg_);
+  r_.enter(0.0, pitch_);
+  const double lo = r_.sweep_lo_rad();
+  run(1, lo + 2.0 * cfg_.reach_tol_rad);
+  const int dir_in = out_.direction;
+  const double short_of = lo + 0.6 * cfg_.reach_tol_rad;    // 0.24 deg short
+  run(2, short_of);
+  EXPECT_EQ(out_.state, RoamState::Turnaround);
+  EXPECT_EQ(out_.direction, dir_in) << "a reversal on arrival is a bounce, not a decision";
+  run(static_cast<int>(cfg_.settle_still_ns / kCycle) + 2, short_of);
+  EXPECT_NE(out_.state, RoamState::Turnaround) << "it waited for an arrival that will not happen";
+  EXPECT_EQ(out_.direction, -dir_in);
+}
+
 TEST_F(RoamTest, EnvelopeOutsideTheSafeEnvelopeIsRefused) {
   // §32, and §86's "collision envelope" case. The numbers below are the plausible
   // mistake, not a caricature: someone widens the roam region in a config file to cover
