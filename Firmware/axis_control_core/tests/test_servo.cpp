@@ -122,10 +122,14 @@ void travel_governor_stops_before_the_end() {
   expect(travel_governor(-1.,0.,-1.,.1,1.)==-1.,"speed away from the near end untouched while the far end permits it");
   expect(travel_governor(.3,.1,-1.,.1,1.)==0.,"at the guard: no speed outward");
   expect(travel_governor(-.3,.15,-1.,.1,1.)==-.3,"beyond the guard: motion back inside is allowed");
-  // Integrated: from 1 rad/s at 0, commanding 1 rad/s forever, the axis stops before the 0.6 guard.
+  // Integrated: from 1 rad/s at 0, commanding 1 rad/s forever, the axis stops at the 0.6 guard.
+  // Sampled at dt, the last step can land past it by sqrt(2*a*d)*dt - d, at most a*dt^2/2 (at
+  // d = a*dt^2/2), after which no outward speed is allowed. Which side it lands on is rounding:
+  // inside on x86, outside on the station's aarch64 (fused multiply-add).
+  const double a=1., dt=1e-3;
   double q=0, v=1.;
-  for (int k=0;k<5000;++k) { v=travel_governor(1.,q,-1.,.6,1.); q+=v*1e-3; }
-  expect(q<=.6+1e-9 && q>.59,"never passes the guard and arrives at it");
+  for (int k=0;k<5000;++k) { v=travel_governor(1.,q,-1.,.6,a); q+=v*dt; }
+  expect(q<=.6+a*dt*dt/2+1e-12 && q>.59,"never passes the guard by more than one step's a*dt^2/2");
 }
 
 int main() {

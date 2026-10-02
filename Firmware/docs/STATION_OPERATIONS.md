@@ -101,6 +101,10 @@ the station; historical ending-state records are not live status.
 
 ## ADR-002.2 unattended startup ruling (2026-10-01, local date)
 
+**Retired by the owner on 2026-10-02:** the centre of mass has been lowered and the turret is much
+more robust, so the 30 degrees/s² yaw acceleration/braking limit below no longer applies; yaw is
+back to 60 degrees/s² (`config/turret_mixed.yaml`). Kept as history.
+
 Latest owner override: acceleration is guidance. Marginal exceedances and high IMU acceleration observations may pass and must not distract from ADR-002.2 tuning. Retain 30-degree/s² reference shaping and raw evidence, but disable the measured-current acceleration restriction for tuning when it blocks useful yaw drive. Keep true current, thermal, fresh-feedback and unsafe STOP protection. Higher-acceleration reference cases remain deferred until presence; incidental measured excursions do not block the present tuning path.
 
 The owner reports that nobody will be near the station and sets **30 degrees/s²** for both yaw acceleration and deceleration, including startup assistance and controlled braking. Use measured IMU acceleration, gyro and orientation to assess uneven vibration. The owner reports the pitch platform is balanced and higher-RPM steady rotation is stable; do not introduce a new speed cap for this request. Higher-acceleration hardware tests wait until the owner confirms presence around 18:00 local. Continue deterministic automatic ADR-002.2 tuning across low/high acceleration and low/high speed, with higher-acceleration physical cases deferred. Preserve current, thermal, fresh-feedback and unsafe STOP protection. Before another physical run, verify the acceleration-limiting path and record the actual response. Reference shaping alone does not certify actual body acceleration or vibration. Candidate11 ended at 2026-09-30 23:28:57 UTC; the 23:29:13 UTC query found no output owners. Its sampled acceleration and motion failures remain recorded, and the observed limiter arbitration is being repaired before more motion. This is a recorded state, not a replacement for a fresh ownership check.

@@ -12,6 +12,7 @@ arm64 package is needed for the tests, and the version cannot drift from the sta
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,34 +64,56 @@ def main() -> int:
                              "system libgtest-dev:arm64 if the image grows it")
     parser.add_argument("--target", action="append",
                         help="build only this target (repeatable); default builds everything")
+    parser.add_argument("--sysroot", type=Path,
+                        help="an extracted Debian 13 arm64 sysroot that carries the cross compiler "
+                             "(cmake/aarch64-sysroot.toolchain.cmake); GTest and the libraries "
+                             "come from it. Without it, the host's arm64 multiarch packages.")
+    parser.add_argument("--host-lib", type=Path,
+                        help="host libraries the sysroot's cross binutils need (LD_LIBRARY_PATH)")
     args = parser.parse_args()
 
-    build = args.build_dir
+    build = args.build_dir.resolve()
     deps = build / "_deps"
-    if args.gtest == "local":
-        build_gtest(deps / "gtest")
+    env = dict(os.environ)
+    if args.host_lib:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            p for p in (str(args.host_lib.resolve()), env.get("LD_LIBRARY_PATH")) if p)
+    if args.sysroot:
+        sysroot = args.sysroot.resolve()
+        toolchain = FIRMWARE / "cmake/aarch64-sysroot.toolchain.cmake"
+        libdir = f"{sysroot}{ARM64_LIBDIR}"
+    else:
+        toolchain = FIRMWARE / "cmake/aarch64-pi.toolchain.cmake"
+        libdir = ARM64_LIBDIR
+        if args.gtest == "local":
+            build_gtest(deps / "gtest")
 
     # -DVAR=value is one token: split across two, CMake reads the second as a path and says so.
-    configure = ["cmake", "-S", FIRMWARE, "-B", build, "-G", "Ninja",
-                 "-DCMAKE_BUILD_TYPE=Release",
-                 "-DCMAKE_TOOLCHAIN_FILE=" + str(FIRMWARE / "cmake/aarch64-pi.toolchain.cmake")]
-    if args.gtest == "local":
+    generator = "Ninja" if shutil.which("ninja") else "Unix Makefiles"
+    configure = ["cmake", "-S", FIRMWARE, "-B", build, "-G", generator,
+                 "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_TOOLCHAIN_FILE=" + str(toolchain)]
+    if args.sysroot:
+        configure += [f"-DOTA_SYSROOT={sysroot}", f"-DGTest_DIR={libdir}/cmake/GTest"]
+    elif args.gtest == "local":
         configure.append(f"-DGTest_DIR={deps / 'gtest/lib/cmake/GTest'}")
     # Pinned so find_package cannot quietly reach an amd64 config file and report a missing
     # library when the real problem is the architecture.
     for package in ("spdlog", "yaml-cpp", "fmt"):
-        configure.append(f"-D{package}_DIR={ARM64_LIBDIR}/cmake/{package}")
-    run(configure)
+        configure.append(f"-D{package}_DIR={libdir}/cmake/{package}")
+    run(configure, env=env)
 
     if args.target:
         for target in args.target:
-            run(["cmake", "--build", build, "--target", target, "--parallel", os.cpu_count() or 2])
+            run(["cmake", "--build", build, "--target", target, "--parallel", os.cpu_count() or 2], env=env)
     else:
-        run(["cmake", "--build", build, "--parallel", os.cpu_count() or 2])
+        run(["cmake", "--build", build, "--parallel", os.cpu_count() or 2], env=env)
 
     # Verify what was actually produced rather than trusting the toolchain file's promises.
+    # Not under CMakeFiles/: executables never live there, and the Makefile generator's
+    # dependency files (test_x.cpp.o.d) do.
     shipped = sorted(p for p in build.rglob("*")
-                     if p.is_file() and p.name.startswith(("controld", "test_", "probe_")))
+                     if p.is_file() and p.name.startswith(("controld", "test_", "probe_"))
+                     and "CMakeFiles" not in p.relative_to(build).parts)
     wrong = []
     for artifact in shipped:
         with artifact.open("rb") as handle:
