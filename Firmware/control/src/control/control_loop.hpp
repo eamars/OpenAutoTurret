@@ -677,6 +677,14 @@ class ControlLoop {
   // When the core last ticked. A tick it missed, by whatever path, means Level 1 must re-seed from
   // the reference actually executed meanwhile rather than integrate the gap from its stale state.
   TimeNs core_last_tick_ns_ = 0;
+  // ADR-003 isolation test, OTA_TEST_PITCH_HOLD=motor|servo (read once at start, off by default,
+  // never persisted): pitch is held at the pose it has when READY is first reached, by the
+  // CyberGear's own position mode (motor) or by the ADR-002.2 pitch servo at a fixed reference
+  // (servo); tracking moves yaw only. It separates the motor/gearbox/detector from this loop.
+  enum class PitchTestHold { Off, Motor, Servo };
+  PitchTestHold pitch_test_hold_ = PitchTestHold::Off;
+  bool pitch_test_latched_ = false, pitch_test_in_position_ = false, pitch_test_transitioning_ = false;
+  double pitch_test_q_ = 0.0;
   double servo_jerk_[kAxisCount] = {0.0, 0.0};
   std::shared_ptr<spdlog::logger> tracking_trace_;  // OTA_TRACKING_TRACE: one JSON line per core tick
   void trace_core_tick(const track::TickRecord& r, TimeNs now_ns);

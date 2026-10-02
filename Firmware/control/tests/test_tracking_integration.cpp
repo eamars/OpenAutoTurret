@@ -831,6 +831,44 @@ TEST(TrackingIntegration, ASupervisorBrakeMidSlewIsExecutedByTheServo) {
   EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Tracking) << "and tracking resumes";
 }
 
+// OTA_TEST_PITCH_HOLD (an isolation test, off by default): pitch stays at its first READY pose,
+// held by the motor's own position mode or by the pitch servo, while yaw alone tracks.
+void pitch_hold_test(const char* how) {
+  ::setenv("OTA_TEST_PITCH_HOLD", how, 1);
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  ::unsetenv("OTA_TEST_PITCH_HOLD");
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  r.loop().step(t, kDtNs); t += kDtNs;
+  const double held = r.loop().last_positions()[0];
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  int64_t seq = 10;
+  double pitch_dev = 0, yaw_err = 0;
+  for (int i = 0; i < 800; ++i) {
+    const double az = 15.0 * kDeg, el = -8.0 * kDeg;   // off in both axes
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    pitch_dev = std::max(pitch_dev, std::abs(r.loop().last_positions()[0] - held));
+    if (i > 600) yaw_err = std::max(yaw_err, std::abs(r.loop().last_positions()[1] - az));
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << how << " tick " << i;
+  }
+  std::printf("pitch hold by %s: pitch moved %.3f deg, late yaw error %.2f deg, pitch in speed mode %d\n",
+              how, pitch_dev / kDeg, yaw_err / kDeg, r.sim().in_speed_mode(AxisId::Pitch) ? 1 : 0);
+  EXPECT_LT(pitch_dev, 0.3 * kDeg) << "pitch must stay where it was latched";
+  EXPECT_LT(yaw_err, 1.0 * kDeg) << "yaw still tracks";
+  if (std::string(how) == "motor") EXPECT_FALSE(r.sim().in_speed_mode(AxisId::Pitch)) << "held by position mode";
+  else EXPECT_TRUE(r.sim().in_speed_mode(AxisId::Pitch));
+}
+
+TEST(TrackingIntegration, TestPitchHoldByTheMotorKeepsPitchFixedWhileYawTracks) { pitch_hold_test("motor"); }
+TEST(TrackingIntegration, TestPitchHoldByTheServoKeepsPitchFixedWhileYawTracks) { pitch_hold_test("servo"); }
+
 // Feed the target for `track_cycles` cycles, then stop feeding (target lost)
 // and return the TrackingRig + the time of the last measurement cycle.
 struct TrackThenLose {

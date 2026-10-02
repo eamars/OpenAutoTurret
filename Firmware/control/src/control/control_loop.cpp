@@ -71,6 +71,14 @@ bool ControlLoop::position_ready() const {
 
 ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
     : cfg_(std::move(cfg)), backend_(std::move(backend)) {
+  if (const char* hold = std::getenv("OTA_TEST_PITCH_HOLD"); hold && *hold) {
+    const std::string h(hold);
+    pitch_test_hold_ = h == "motor" ? PitchTestHold::Motor : h == "servo" ? PitchTestHold::Servo
+                                                                          : PitchTestHold::Off;
+    spdlog::warn("TEST MODE OTA_TEST_PITCH_HOLD={}: pitch is held fixed by {}; tracking moves yaw only",
+                 h, pitch_test_hold_ == PitchTestHold::Motor ? "the CyberGear's own position mode"
+                    : pitch_test_hold_ == PitchTestHold::Servo ? "the ADR-002.2 pitch servo" : "nothing (unknown value, ignored)");
+  }
   if (const char* trace = std::getenv("OTA_TRACKING_TRACE"); trace && *trace) {
     // ADR-003 D17 tracking trace on the async pool (no disk I/O on the control thread).
     tracking_trace_ = spdlog::get("tracking_trace");
@@ -2355,6 +2363,36 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;  // hold (no motion)
   }
 
+  // ADR-003 isolation test (OTA_TEST_PITCH_HOLD): pitch fixed at its first READY pose.
+  pitch_test_transitioning_ = false;
+  // Only once at the ready pose: the Hold phase also carries the move there after homing, and a
+  // latch taken then would pin pitch at its homing end point.
+  if (pitch_test_hold_ != PitchTestHold::Off && phase_ == Phase::Hold && position_ready() &&
+      (pitch_test_latched_ || at_ready_)) {
+    const int P = ix(AxisId::Pitch);
+    if (!pitch_test_latched_) {
+      pitch_test_q_ = sp[P].q_rad;
+      pitch_test_latched_ = true;
+      spdlog::warn("TEST MODE: pitch latched at {:+.5f} rad", pitch_test_q_);
+    }
+    q_ref[P] = pitch_test_q_;
+    lim[P] = hold_speed_effective();
+    ref_lim_[P].reset_at(pitch_test_q_);
+    servo_jerk_[P] = 0.0;
+    if (pitch_test_hold_ == PitchTestHold::Motor && !pitch_test_in_position_) {
+      std::string err;
+      const auto t = backend_->transition_mode(AxisId::Pitch, true, hold_speed_effective(), now_ns, err);
+      if (t == MotorBackend::Transition::Complete) {
+        pitch_test_in_position_ = true;
+        spdlog::warn("TEST MODE: pitch now in CyberGear position mode, holding {:+.5f} rad", pitch_test_q_);
+      } else if (t == MotorBackend::Transition::Pending) {
+        pitch_test_transitioning_ = true;
+      } else {
+        fault("test pitch hold: CyberGear position mode refused: " + err);
+      }
+    }
+  }
+
   // 6. Apply the safety action (overrides the phase reference), then command.
   bool any_disable = false;
   for (int i = 0; i < kAxisCount; ++i) {
@@ -2369,6 +2407,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
          ((last_intent_.has_joint_target && std::abs(requested_position-sp[i].q_rad) > .15*kDeg2Rad) ||
           last_intent_.has_los || last_intent_.has_world_elevation)));
     if (recovery_cycle) continue;  // never command from pre-recovery snapshots
+    if (pitch_test_transitioning_ && a == AxisId::Pitch) continue;  // the mode switch owns pitch
     if (mixed_parking_handled) continue;  // mixed stop issued direct, topology-specific safe outputs above
     bool do_command = true;
     switch (last_decision_.action) {
