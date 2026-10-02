@@ -1,1 +1,1 @@
-"""ADR-002.2 offline modelling. Importing this package never opens a device."""
+"""Offline analysis of retained commissioning captures. Importing this package never opens a device."""

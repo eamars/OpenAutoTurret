@@ -87,6 +87,27 @@ void stall_rocks_against_the_push() {
   }
   expect(rocked && reversed,"stall recovery triggered and reversed the applied current");
 }
+void excitation_does_not_drag_the_slew_limit() {
+  // An identification sweep is added after the servo; acknowledging the total must
+  // not move the servo's own output (the slew window once ratcheted it to the cap).
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.;
+  for(int k=0;k<200;++k) {
+    t+=.001; expect(s.observe_encoder(t,0.),"encoder");
+    const auto out=s.step(t,0.,0.,0.);
+    expect(std::abs(out.limited)<.05,"servo output stays at the (zero) demand");
+    s.acknowledge(true,out.limited+.3*std::sin(2*M_PI*10*t));
+  }
+}
+void stall_rock_waits_for_a_stopped_reference() {
+  auto p=fixture();
+  p.stall_error=.0025; p.stall_speed=.009; p.stall_current=.6; p.stall_time_s=.3; p.rock_current=.4; p.rock_s=.025;
+  p.stall_reference_speed=.01;
+  Servo s; expect(s.configure(p) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.; bool rocked=false;
+  for(int k=0;k<700;++k) { const auto out=run(s,t,1,0.,.03,.05); rocked|=out.rocking!=0; }
+  expect(!rocked,"no rock while the reference is still moving");
+}
 void friction_feedforward_follows_the_reference_only() {
   Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
   expect(s.friction(0.)==0.,"no friction feedforward at rest");
@@ -103,6 +124,8 @@ int main() {
     rms_budget_lowers_authority();
     stall_rocks_against_the_push();
     friction_feedforward_follows_the_reference_only();
+    excitation_does_not_drag_the_slew_limit();
+    stall_rock_waits_for_a_stopped_reference();
   } catch(const std::exception& e) { std::cerr<<"FAIL: "<<e.what()<<'\n'; return 1; }
   std::cout<<"servo tests passed\n"; return 0;
 }

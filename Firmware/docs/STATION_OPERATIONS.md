@@ -34,14 +34,29 @@ evidence and numbers: [takeover report](ADR-002.2/reports/SERVO_TAKEOVER_2026-10
   0.9 A; slowly rising force produces creep-and-restick, while a brief force reversal releases it.
   Friction rises through a cold night and falls after a warm-up rotation. A localized bump near
   240–255 deg absolute. The BNO085 gyro lags the encoder by ≈100 ms (not fused into the servo).
-- Yaw current authority used by the servo: 1.5 A peak under a 0.8 A RMS (3 s) budget, 55 C trip;
-  continuous authority stays at the GM6020 0.9 A stall rating.
+- **Yaw current authority (owner ruling, 2026-10-02 later the same day):** up to 3 A peak (the CAN
+  protocol's full scale) and 1.62 A continuous (the GM6020 rating); 0.8 A is thermal *guidance* only,
+  not a limit. The servo enforces the peak and an RMS budget (≤1.62 A over 3 s); the 55 C motor
+  temperature trip is the thermal protection. Commissioning reports when sliding friction exceeds
+  the 0.8 A guidance.
+- **Commissioning is automatic** ([card](operations/servo-commissioning.md)): one command per axis
+  identifies the plant from a prior that assumes nothing, designs the gains with the simulator and
+  verifies them on the station. Measured by it on 2026-10-02: yaw inertia ≈0.04–0.047 A·s²/rad (the
+  0.03 above was an early hand estimate), crosstalk delay 1.18 ms, sliding friction 0.17–0.59 A at
+  0.25–2 deg/s falling to ≈0.3 A at 40–65 deg/s.
 - Pitch endstops (production homing logs, 2026-09-30, MechPos): A = −0.115 rad, B = −1.511 rad
   (≈80 deg, not 60), midpoint −0.813 rad. Pitch rests unpowered where left. As-found native settings
   on 2026-10-02: RunMode 3, LimitCur 5 A, SpdKp 4, SpdKi 0.05; after these sessions the drive is left
   in RunMode 2 (production rewrites its own mode at start).
-- 56 commissioning releases (`claude-*`, `yaw-final-check`, `yaw-rock-*`, `pitch-final-check`) were created under `run/releases/` (7.7 GB
-  with journals); production checkout and stack untouched and stopped.
+- Commissioning releases under `run/releases/`: 92 on 2026-10-02 13:00 (19 GB with journals, 86 GB
+  free): the overnight `claude-*`/`yaw-*`/`pitch-*` ones and one per automatic run (`yaw-2026*`,
+  `pitch-2026*`). They are evidence and may be pruned by the owner. Production checkout and stack
+  untouched and stopped; station idle, both drives disabled, pitch parked at its window centre.
+- **Decoupling (measured):** the unpowered idle axis holds by its own friction. The pitch moved at
+  most 0.04 deg during 36 yaw sessions, the yaw 0.044 deg during pitch sessions. Commission pitch
+  first; it parks at its centre.
+- **commissiond's own pitch homing is not station-qualified.** Its torque-off rearm drops the loaded
+  pitch; commissioning uses production's homed window instead (see the card).
 
 ## ADR-002.2 architect review priority (2026-10-01, local date)
 
@@ -88,8 +103,8 @@ gyro约50.09Hz且accuracy=0；pitch温度22.6°C、yaw温度原始字节28（单
 原始capture中的legacy yaw安培换算字段未获资格，离线分析只使用原始电流字节；修正只在本地验证。
 后续只读检查未见controller/IMU进程，retained homing缓存不存在；运动前仍须既有homing流程。
 已有日志显示最后一次yaw停车确认超时；不把后续`stopped cleanly`进程清理日志当作停车合格。
-完整状态及证据见[阶段2准备情况](ADR-002.2/reports/STAGE2_READINESS.md)，
-只读工具流程见[盘点操作卡](operations/adr0022-inventory.md)。以下既有状态记录均需按其时间理解。
+完整状态及证据见[阶段2准备情况](ADR-002.2/reports/STAGE2_READINESS.md)
+（盘点工具与操作卡已于2026-10-02随ADR-002.x收尾删除，见git历史）。以下既有状态记录均需按其时间理解。
 
 ## 现状刷新（09-29 深夜，现读，非历史）
 

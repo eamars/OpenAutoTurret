@@ -1,3 +1,6 @@
+<!-- doc-tree-check: ignore -->
+> **Historical (2026-10-02).** The model-first code, tools and operation cards this document links to were removed when ADR-002.x closed; they remain in git history before the cleanup commit. Current path: [automatic servo commissioning](../../operations/servo-commissioning.md), closing report [SERVO_COMMISSIONING_2026-10-02](../reports/SERVO_COMMISSIONING_2026-10-02.md).
+
 # Architect review 02: estimator recovery and fair comparison
 
 Authority: the owner's instruction to follow [architect review 02](../architect_review_02/00_START_HERE.md),

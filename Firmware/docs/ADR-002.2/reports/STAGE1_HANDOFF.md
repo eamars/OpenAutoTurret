@@ -1,3 +1,6 @@
+<!-- doc-tree-check: ignore -->
+> **Historical (2026-10-02).** The model-first code, tools and operation cards this document links to were removed when ADR-002.x closed; they remain in git history before the cleanup commit. Current path: [automatic servo commissioning](../../operations/servo-commissioning.md), closing report [SERVO_COMMISSIONING_2026-10-02](../reports/SERVO_COMMISSIONING_2026-10-02.md).
+
 # Stage 1 local validation and Stage 2 handoff
 
 Stage 1 mathematical software: **PASS**. Stopped at the Stage 2 entry.

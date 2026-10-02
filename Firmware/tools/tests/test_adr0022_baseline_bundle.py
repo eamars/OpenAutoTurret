@@ -1,5 +1,4 @@
-"""Evidence identity and extraction boundaries for the dedicated baseline release."""
-import hashlib
+"""Packing, validation and extraction boundaries for a dedicated session release."""
 import io
 import json
 from pathlib import Path
@@ -10,57 +9,90 @@ import tarfile
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from adr0022_baseline_bundle import EXECUTABLES, install, pack, validate
-from adr0022_capture_launch import (SOURCE_FILES, SOURCE_DIRECTORIES, source_identity, canonical_sha,
-                                   validate_current_contract, PROTECTION_DOCUMENT, PROTECTION_DOCUMENT_SHA256)
+from adr0022_baseline_bundle import EXECUTABLES, SCHEMA, install, pack, validate
+from adr0022_capture_launch import PROTECTION_DOCUMENT
+
+LABEL = "yaw-fixture-01"
+
+
+def arm64_build(tmp_path):
+    """Dummy executables with only the ARM64 ELF identification the bundle checks."""
+    build = tmp_path / "build"
+    for key, relative in EXECUTABLES.items():
+        path = build / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x7fELF" + bytes(14) + b"\xb7\x00" + key.encode())
+    return build
+
+
+def yaw_control_manifest():
+    """Synthetic, unbound yaw-control session; no physical facts."""
+    return {"schema": "adr0022.yaw-control/1", "purpose": "yaw_shared_core_3a", "provenance": "MEASURED",
+            "transport": "socketcan", "yaw": {"interface": "can0"}, "pitch": {"interface": "can1"},
+            "expected_pitch_uid": "7216313130333105", "pitch_supported_when_disabled": True,
+            "baseline_s": 2., "stop_observation_s": 2., "pitch_maximum_temperature_C": 45., "yaw_current_bound_A": 3.,
+            "candidate_label": "fixture", "servo_parameters": {"use_gyro": 0}, "gyro_calibration": {"yaw_column": [0, 0, 1]},
+            "other_axis_posture_rad": 0., "reference_segments": [{"duration_s": 1., "target_position_rad": .1}],
+            "limits": {"clock_uncertainty_s": .001, "dequeue_age_s": .1, "can_gap_s": .1, "imu_gap_s": .2,
+                       "startup_s": 3., "duration_s": 20., "minimum_imu_status": 0, "read_timeout_s": .2,
+                       "read_period_s": .01, "stop_period_s": .02}}
+
+
+def homing_manifest(tmp_path):
+    """Synthetic package fixture from the homing rehearsal; never a physical qualification."""
+    from adr0022_homing_rehearsal import fixture
+    manifest = fixture([31001, 31002], 31003, -1, tmp_path / "unused.jsonl")
+    manifest.pop("imu_fd")
+    manifest.pop("output")
+    manifest.update(provenance="MEASURED", transport="socketcan", yaw={"interface": "can0"}, pitch={"interface": "can1"},
+                    operator_attendance={"present_at_manual_cutoff": False, "operator_identity": "fixture",
+                                         "manual_cutoff_evidence_identity": "fixture-manual-only-cutoff"},
+                    session_authorization={"purpose": "pitch_sensorless_homing", "sensorless_homing_authorized": True,
+                                           "authorization_identity": "fixture-authorization",
+                                           "unattended_operation_authorized": True, "presence_required": False})
+    manifest["guards"]["current_bound_A"] = 6.5
+    return manifest
 
 
 @pytest.fixture
 def bundle(tmp_path):
-    build = tmp_path / "build"
-    hashes = {}
-    for key, relative in EXECUTABLES.items():
-        path = build / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = b"\x7fELF" + bytes(14) + b"\xb7\x00" + key.encode()
-        path.write_bytes(data)
-        hashes[key] = hashlib.sha256(data).hexdigest()
-    manifest = {"schema": "adr0022.capture/2", "provenance": "MEASURED", "expected_binaries": hashes}
     archive = tmp_path / "bundle.tar"
-    revision = "a" * 40
-    pack(build, revision, manifest, archive)
-    return archive, revision
+    pack(arm64_build(tmp_path), LABEL, yaw_control_manifest(), archive)
+    return archive
 
 
-def test_install_preserves_binary_identity_and_existing_evidence(tmp_path, bundle):
-    archive, revision = bundle
+def test_yaw_control_bundle_installs_executables_and_bound_manifest(tmp_path, bundle):
+    record = validate(bundle, LABEL)
+    assert record["schema"] == SCHEMA and record["launch_option"] == "--control-yaw"
     firmware, output = tmp_path / "Firmware", tmp_path / "observations"
     firmware.mkdir()
-    manifest = install(archive, revision, firmware, output)
+    manifest = install(bundle, LABEL, firmware, output)
     bound = json.loads(manifest.read_text())
-    assert bound["output"] == str(output / "baseline.jsonl")
-    for key, relative in EXECUTABLES.items():
-        assert hashlib.sha256((firmware / "build" / relative).read_bytes()).hexdigest() == bound["expected_binaries"][key]
+    assert bound["output"] == str(output.resolve() / "yaw-control.jsonl")
+    assert bound["session_label"] == LABEL
+    for relative in EXECUTABLES.values():
+        assert (firmware / "build" / relative).read_bytes() == (tmp_path / "build" / relative).read_bytes()
     with pytest.raises(ValueError, match="unused release"):
-        install(archive, revision, firmware, output)
-    assert not (output / "baseline.jsonl").exists()
+        install(bundle, LABEL, firmware, output)
+    assert not (output / "yaw-control.jsonl").exists()
 
 
-def test_bundle_cannot_be_relabelled_as_another_revision(bundle):
-    with pytest.raises(ValueError, match="revision differs"):
-        validate(bundle[0], "b" * 40)
+def test_bundle_cannot_be_relabelled_as_another_session(bundle):
+    with pytest.raises(ValueError, match="session label differs"):
+        validate(bundle, "another-session")
 
 
-@pytest.mark.parametrize("corruption", ["changed_bytes", "duplicate", "traversal", "symlink"])
+@pytest.mark.parametrize("corruption", ["truncated", "duplicate", "traversal", "symlink"])
 def test_modified_or_unsafe_bundle_is_rejected_before_install(tmp_path, bundle, corruption):
     altered = tmp_path / "altered.tar"
-    with tarfile.open(bundle[0]) as source, tarfile.open(altered, "w") as target:
+    with tarfile.open(bundle) as source, tarfile.open(altered, "w") as target:
         for entry in source:
             data = source.extractfile(entry).read()
-            if corruption == "changed_bytes" and entry.name.endswith("commissiond"):
-                data = data[:-1] + bytes([data[-1] ^ 1])
+            if corruption == "truncated" and entry.name.endswith("commissiond"):
+                data = data[:-1]
+                entry.size = len(data)
             target.addfile(entry, io.BytesIO(data))
-        if corruption != "changed_bytes":
+        if corruption != "truncated":
             name = "bundle.json" if corruption == "duplicate" else "../../escape"
             extra = tarfile.TarInfo(name)
             if corruption == "symlink":
@@ -68,284 +100,100 @@ def test_modified_or_unsafe_bundle_is_rejected_before_install(tmp_path, bundle, 
                 extra.linkname = "/tmp/escape"
             target.addfile(extra, io.BytesIO())
     with pytest.raises(ValueError):
-        install(altered, bundle[1], tmp_path / "Firmware", tmp_path / "evidence")
+        install(altered, LABEL, tmp_path / "Firmware", tmp_path / "evidence")
     assert not (tmp_path / "Firmware").exists() and not (tmp_path / "evidence").exists()
 
 
-def current_contract(tmp_path, characterization=False):
-    """Deliberately synthetic file fixture for package checks; no physical facts."""
-    firmware, build = tmp_path / "Firmware", tmp_path / "build"
-    for name in SOURCE_FILES:
-        path = firmware / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"source fixture\r\n")
-    for name in SOURCE_DIRECTORIES:
-        path = firmware / name / "fixture.hpp"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"header fixture\r\n")
-    binaries = {}
-    for key, relative in EXECUTABLES.items():
-        path = build / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = b"\x7fELF" + bytes(14) + b"\xb7\x00" + key.encode()
-        path.write_bytes(data)
-        binaries[key] = hashlib.sha256(data).hexdigest()
-    revision = "a" * 40
-    identity = source_identity(firmware)
-    report = {"status": "LOCAL_CURRENT_PREPARATION_PASS", "expected_binaries": binaries,
-              "source_sha256": identity["source_sha256"], "revision": revision,
-              "hardware_accessed": False, "provenance": "SYNTHETIC"}
-    manifest = {"schema": "adr0022.current-preparation/1", "purpose": "neutral_current_mode_verification",
-                "provenance": "MEASURED", "pitch_supported_when_disabled": True,
-                "neutral_current_bound_A": .1, "transition_displacement_bound_rad": .01,
-                "pitch_maximum_temperature_C": 60., "expected_binaries": binaries,
-                "expected_source_sha256": identity["source_sha256"], "expected_revision": revision,
-                "operator_attendance": {"present_at_manual_cutoff": False, "operator_identity": "fixture",
-                                        "manual_cutoff_evidence_identity": "fixture-manual-only-cutoff"},
-                "session_authorization": {"purpose": "neutral_current_mode_verification", "current_mode_enable_authorized": True,
-                                          "authorization_identity": "fixture-authorization", "unattended_operation_authorized": True,
-                                          "presence_required": False},
-                "local_qualification": {"report": report, "sha256": canonical_sha(report)}}
-    if characterization:
-        manifest.update(schema="adr0022.neutral-characterization/1", purpose="neutral_current_measurement_characterization",
-                        protection_current_bound_A=6.5, neutral_observation_s=2., limits={"startup_s": 3., "duration_s": 30.},
-                        protection_limit_basis={"kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
-                                                "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5})
-        manifest["session_authorization"]["purpose"] = manifest["purpose"]
-        report["status"] = "LOCAL_CURRENT_CHARACTERIZATION_PASS"
-        manifest["local_qualification"]["sha256"] = canonical_sha(report)
-        document = firmware / PROTECTION_DOCUMENT
-        document.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(Path(__file__).resolve().parents[2] / PROTECTION_DOCUMENT, document)
-    return firmware, build, revision, manifest
-
-
-def test_current_bundle_binds_portable_qualification_and_normalized_source(tmp_path):
-    firmware, build, revision, manifest = current_contract(tmp_path)
-    archive = tmp_path / "current.tar"
-    record = pack(build, revision, manifest, archive)
-    assert record["launch_option"] == "--prepare-current"
-    assert source_identity(firmware)["normalization"] == "CRLF_TO_LF"
-    for path in firmware.rglob("*"):
-        if path.is_file():
-            path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
-    assert source_identity(firmware)["source_sha256"] == manifest["expected_source_sha256"]
-    validate(archive, revision, firmware)
-    bound = json.loads(install(archive, revision, firmware, tmp_path / "observations").read_text())
-    assert bound["output"] == str(tmp_path / "observations/current-preparation.jsonl")
-    assert bound["local_qualification"] == manifest["local_qualification"]
-    assert bound["operator_attendance"]["present_at_manual_cutoff"] is False
-
-
-@pytest.mark.parametrize("missing", ["attendance", "authorization", "qualification", "unattended_authorization"])
-def test_current_bundle_refuses_missing_physical_contract_before_writing(tmp_path, missing):
-    _, build, revision, manifest = current_contract(tmp_path)
-    if missing == "unattended_authorization":
-        manifest["session_authorization"]["unattended_operation_authorized"] = False
+@pytest.mark.parametrize("changed", ["bound_output", "synthetic", "label_mismatch", "authority", "stop_window",
+                                     "no_reference", "short_session", "non_arm64"])
+def test_yaw_control_bundle_refuses_invalid_session_before_writing(tmp_path, changed):
+    build = arm64_build(tmp_path)
+    manifest = yaw_control_manifest()
+    if changed == "bound_output":
+        manifest["output"] = "/tmp/yaw-control.jsonl"
+    elif changed == "synthetic":
+        manifest["provenance"] = "SYNTHETIC"
+    elif changed == "label_mismatch":
+        manifest["session_label"] = "other-session"
+    elif changed == "authority":
+        manifest["yaw_current_bound_A"] = 3.5
+    elif changed == "stop_window":
+        manifest["stop_observation_s"] = 1.
+    elif changed == "no_reference":
+        del manifest["reference_segments"]
+    elif changed == "short_session":
+        manifest["limits"]["duration_s"] = 8.
     else:
-        del manifest[{"attendance": "operator_attendance", "authorization": "session_authorization",
-                      "qualification": "local_qualification"}[missing]]
+        (build / EXECUTABLES["imu"]).write_bytes(b"\x7fELF" + bytes(14) + b"\x3e\x00")
     archive = tmp_path / "refused.tar"
     with pytest.raises(ValueError):
-        pack(build, revision, manifest, archive)
+        pack(build, LABEL, manifest, archive)
     assert not archive.exists()
 
 
-def test_current_bundle_refuses_changed_source_before_install(tmp_path):
-    firmware, build, revision, manifest = current_contract(tmp_path)
-    archive = tmp_path / "current.tar"
-    pack(build, revision, manifest, archive)
-    (firmware / SOURCE_FILES[0]).write_text("changed source\n")
-    with pytest.raises(ValueError, match="source SHA-256 differs"):
-        install(archive, revision, firmware, tmp_path / "observations")
-    assert not (firmware / "build").exists() and not (tmp_path / "observations").exists()
-
-
-def test_characterization_bundle_distinct_purpose_and_output(tmp_path):
-    firmware, build, revision, manifest = current_contract(tmp_path, characterization=True)
-    archive = tmp_path / "characterization.tar"
-    assert pack(build, revision, manifest, archive)["launch_option"] == "--characterize-current"
-    bound = json.loads(install(archive, revision, firmware, tmp_path / "observations").read_text())
-    assert bound["output"] == str(tmp_path / "observations/current-characterization.jsonl")
-    assert bound["local_qualification"]["report"]["status"] == "LOCAL_CURRENT_CHARACTERIZATION_PASS"
-    assert bound["protection_current_bound_A"] == 6.5 and bound["neutral_current_bound_A"] == .1
-
-
-@pytest.mark.parametrize("changed", ["peak_current", "quality_bound", "document_identity", "old_qualification", "old_authorization"])
-def test_characterization_bundle_refuses_wrong_limit_or_reused_purpose(tmp_path, changed):
-    _, build, revision, manifest = current_contract(tmp_path, characterization=True)
-    if changed == "peak_current":
-        manifest["protection_current_bound_A"] = 23.
-    elif changed == "quality_bound":
-        manifest["neutral_current_bound_A"] = float("nan")
-    elif changed == "document_identity":
-        manifest["protection_limit_basis"]["sha256"] = "0" * 64
-    elif changed == "old_qualification":
-        manifest["local_qualification"]["report"]["status"] = "LOCAL_CURRENT_PREPARATION_PASS"
-        manifest["local_qualification"]["sha256"] = canonical_sha(manifest["local_qualification"]["report"])
-    else:
-        manifest["session_authorization"]["purpose"] = "neutral_current_mode_verification"
-    archive = tmp_path / "refused.tar"
-    with pytest.raises(ValueError):
-        pack(build, revision, manifest, archive)
+@pytest.mark.parametrize("schema", ["adr0022.capture/2", "adr0022.current-preparation/1",
+                                    "adr0022.neutral-characterization/1", "adr0022.yaw-acquisition/1"])
+def test_removed_acquisition_modes_cannot_be_packed(tmp_path, schema):
+    manifest = dict(yaw_control_manifest(), schema=schema)
+    archive = tmp_path / "removed.tar"
+    with pytest.raises(ValueError, match="yaw-control or sensorless-homing"):
+        pack(arm64_build(tmp_path), LABEL, manifest, archive)
     assert not archive.exists()
 
 
-def test_characterization_bundle_accepts_explicit_positive_diagnostic_bound(tmp_path):
-    _, build, revision, manifest = current_contract(tmp_path, characterization=True)
-    manifest["neutral_current_bound_A"] = .3
-    assert pack(build, revision, manifest, tmp_path / "diagnostic.tar")["launch_option"] == "--characterize-current"
-
-
-def test_characterization_bundle_changed_manufacturer_document_prevents_install(tmp_path):
-    firmware, build, revision, manifest = current_contract(tmp_path, characterization=True)
-    archive = tmp_path / "characterization.tar"
-    pack(build, revision, manifest, archive)
-    (firmware / PROTECTION_DOCUMENT).write_bytes(b"changed manual")
-    with pytest.raises(ValueError, match="changed manufacturer protection document"):
-        install(archive, revision, firmware, tmp_path / "observations")
-    assert not (firmware / "build").exists() and not (tmp_path / "observations").exists()
-
-
-@pytest.mark.parametrize("observation", [None, 0, 61, float("inf")])
-def test_characterization_bundle_requires_bounded_explicit_observation(tmp_path, observation):
-    _, build, revision, manifest = current_contract(tmp_path, characterization=True)
-    if observation is None:
-        del manifest["neutral_observation_s"]
-    else:
-        manifest["neutral_observation_s"] = observation
-    archive = tmp_path / "refused.tar"
-    with pytest.raises(ValueError, match="neutral_observation_s"):
-        pack(build, revision, manifest, archive)
-    assert not archive.exists()
-
-
-def test_characterization_bundle_duration_covers_explicit_observation(tmp_path):
-    _, build, revision, manifest = current_contract(tmp_path, characterization=True)
-    manifest["neutral_observation_s"] = 10.
-    manifest["limits"]["duration_s"] = 13.
-    archive = tmp_path / "refused.tar"
-    with pytest.raises(ValueError, match="duration must cover"):
-        pack(build, revision, manifest, archive)
-    assert not archive.exists()
-
-
-def homing_contract(tmp_path):
-    """Synthetic package/evidence fixture; never an actual physical qualification."""
-    from adr0022_homing_rehearsal import fixture
-    firmware, build, revision, manifest = current_contract(tmp_path)
-    manifest.update(fixture([31001, 31002], 31003, -1, tmp_path / "unused.jsonl"))
-    manifest.pop("imu_fd")
-    manifest.pop("output")
-    manifest.update(provenance="MEASURED", transport="socketcan",
-                    yaw={"interface": "can0"}, pitch={"interface": "can1"})
-    manifest["guards"]["current_bound_A"] = 6.5
-    manifest["protection_limit_basis"] = {
-        "kind": "manufacturer_continuous_current_rating", "document": PROTECTION_DOCUMENT,
-        "sha256": PROTECTION_DOCUMENT_SHA256, "continuous_current_A": 6.5}
-    document = firmware / PROTECTION_DOCUMENT
-    document.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(Path(__file__).resolve().parents[2] / PROTECTION_DOCUMENT, document)
-    manifest["session_authorization"].update(purpose=manifest["purpose"], sensorless_homing_authorized=True)
-    manifest["session_authorization"].pop("current_mode_enable_authorized")
-    report = manifest["local_qualification"]["report"]
-    report["status"] = "LOCAL_SENSORLESS_HOMING_PASS"
-    manifest["local_qualification"]["sha256"] = canonical_sha(report)
-    asset = {"schema": "adr0022.baseline_capabilities/1", "provenance": "MEASURED",
-             "capture_integrity": "PASS", "pitch_uid": manifest["expected_pitch_uid"],
-             "source": {"capture_sha256": "b" * 64}, "registers": {}}
-    for name, index in (("expected_original_mode", "0x7005"), ("original_limit_cur_A", "0x7018"),
-                        ("original_position_kp", "0x701e"), ("original_speed_kp", "0x701f"), ("original_speed_ki", "0x7020")):
-        original = manifest["native_settings"][name]
-        asset["registers"][index] = {"context": "PITCH_DISABLED_BASELINE",
-                                      "observed": {"count": 1, "min": original, "max": original}}
-    manifest["native_settings_evidence"] = {"asset": asset, "sha256": canonical_sha(asset)}
-    return firmware, build, revision, manifest
-
-
-def test_homing_bundle_binds_own_qualification_and_measured_originals(tmp_path):
-    firmware, build, revision, manifest = homing_contract(tmp_path)
+def test_homing_bundle_installs_with_homing_output(tmp_path):
+    manifest = homing_manifest(tmp_path)
     archive = tmp_path / "homing.tar"
-    assert pack(build, revision, manifest, archive)["launch_option"] == "--establish-homing"
-    bound = json.loads(install(archive, revision, firmware, tmp_path / "observations").read_text())
-    assert bound["output"] == str(tmp_path / "observations/sensorless-homing.jsonl")
-    assert bound["native_settings_evidence"] == manifest["native_settings_evidence"]
-    assert bound["local_qualification"]["report"]["status"] == "LOCAL_SENSORLESS_HOMING_PASS"
+    assert pack(arm64_build(tmp_path), "homing-fixture", manifest, archive)["launch_option"] == "--establish-homing"
+    firmware = tmp_path / "Firmware"
+    firmware.mkdir()
+    bound = json.loads(install(archive, "homing-fixture", firmware, tmp_path / "observations").read_text())
+    assert bound["output"] == str((tmp_path / "observations").resolve() / "sensorless-homing.jsonl")
     assert bound["guards"]["current_bound_A"] == 6.5
     assert bound["native_settings"]["homing_limit_cur_A"] == 5
 
 
-@pytest.mark.parametrize("changed", ["absent", "wrong_hash", "synthetic", "enabled", "missing_gain",
-                                    "wrong_gain", "old_qualification", "old_authorization", "malformed"])
-def test_homing_bundle_refuses_unmeasured_originals_or_reused_purpose(tmp_path, changed):
-    _, build, revision, manifest = homing_contract(tmp_path)
-    evidence = manifest["native_settings_evidence"]
-    asset = evidence["asset"]
-    if changed == "absent":
-        del manifest["native_settings_evidence"]
-    elif changed == "wrong_hash":
-        evidence["sha256"] = "0" * 64
-    elif changed == "synthetic":
-        asset["provenance"] = "SYNTHETIC"
-    elif changed == "enabled":
-        asset["registers"]["0x701f"]["context"] = "PITCH_ENABLED"
-    elif changed == "missing_gain":
-        del asset["registers"]["0x7020"]
-    elif changed == "wrong_gain":
-        manifest["native_settings"]["original_speed_kp"] += 1
-    elif changed == "old_qualification":
-        report = manifest["local_qualification"]["report"]
-        report["status"] = "LOCAL_CURRENT_CHARACTERIZATION_PASS"
-        manifest["local_qualification"]["sha256"] = canonical_sha(report)
-    elif changed == "old_authorization":
+@pytest.mark.parametrize("missing", ["attendance", "authorization", "unattended_authorization", "authorization_purpose"])
+def test_homing_bundle_refuses_missing_attendance_or_authorization(tmp_path, missing):
+    manifest = homing_manifest(tmp_path)
+    if missing == "unattended_authorization":
+        manifest["session_authorization"]["unattended_operation_authorized"] = False
+    elif missing == "authorization_purpose":
         manifest["session_authorization"]["purpose"] = "neutral_current_mode_verification"
     else:
-        manifest["native_settings_evidence"] = []
-    if changed in ("synthetic", "enabled", "missing_gain"):
-        evidence["sha256"] = canonical_sha(asset)
+        del manifest[{"attendance": "operator_attendance", "authorization": "session_authorization"}[missing]]
     archive = tmp_path / "refused.tar"
     with pytest.raises(ValueError):
-        pack(build, revision, manifest, archive)
+        pack(arm64_build(tmp_path), "homing-fixture", manifest, archive)
     assert not archive.exists()
 
 
-def test_homing_bundle_accepts_exact_measured_zero_original_gain(tmp_path):
-    _, build, revision, manifest = homing_contract(tmp_path)
-    manifest["native_settings"]["original_speed_ki"] = 0.
-    evidence = manifest["native_settings_evidence"]
-    evidence["asset"]["registers"]["0x7020"]["observed"].update(min=0., max=0.)
-    evidence["sha256"] = canonical_sha(evidence["asset"])
-    assert pack(build, revision, manifest, tmp_path / "zero-original.tar")["launch_option"] == "--establish-homing"
-
-
-@pytest.mark.parametrize("changed", ["guard_ceiling", "command_cap", "missing_basis", "peak_rating", "document_identity"])
+@pytest.mark.parametrize("changed", ["guard_ceiling", "command_cap", "missing_basis", "peak_rating"])
 def test_homing_bundle_keeps_protection_separate_from_command_cap(tmp_path, changed):
-    _, build, revision, manifest = homing_contract(tmp_path)
+    manifest = homing_manifest(tmp_path)
     if changed == "guard_ceiling":
         manifest["guards"]["current_bound_A"] = 6.6
     elif changed == "command_cap":
         manifest["native_settings"]["homing_limit_cur_A"] = 6.5
     elif changed == "missing_basis":
         del manifest["protection_limit_basis"]
-    elif changed == "peak_rating":
-        manifest["protection_limit_basis"]["continuous_current_A"] = 23.
     else:
-        manifest["protection_limit_basis"]["sha256"] = "0" * 64
+        manifest["protection_limit_basis"]["continuous_current_A"] = 23.
     archive = tmp_path / "refused.tar"
     with pytest.raises(ValueError):
-        pack(build, revision, manifest, archive)
+        pack(arm64_build(tmp_path), "homing-fixture", manifest, archive)
     assert not archive.exists()
 
 
-def test_homing_changed_manufacturer_document_blocks_before_device_checks(tmp_path, monkeypatch):
+def test_homing_missing_manufacturer_document_blocks_before_device_checks(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import adr0022_capture_launch
     import station_preflight
-    firmware, build, revision, manifest = homing_contract(tmp_path)
-    shutil.copytree(build, firmware / "build")
+    firmware = tmp_path / "Firmware"
+    shutil.copytree(arm64_build(tmp_path), firmware / "build")
     for relative in EXECUTABLES.values():
         (firmware / "build" / relative).chmod(0o755)
-    (firmware.parent / "REVISION").write_text(revision)
+    manifest = homing_manifest(tmp_path)
     manifest["output"] = str(tmp_path / "unused-homing.jsonl")
     manifest["limits"]["startup_s"] = 3.
     manifest_path = tmp_path / "manifest.json"
@@ -354,30 +202,9 @@ def test_homing_changed_manufacturer_document_blocks_before_device_checks(tmp_pa
     monkeypatch.setattr(adr0022_capture_launch.subprocess, "run",
                         lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0, stderr=""))
     monkeypatch.setattr(station_preflight, "_validate_can_spi_mapping",
-                        lambda *args, **kwargs: pytest.fail("device checks reached before manufacturer hash validation"))
-    (firmware / PROTECTION_DOCUMENT).write_bytes(b"changed manufacturer document")
-    with pytest.raises(ValueError, match="changed manufacturer protection document"):
+                        lambda *args, **kwargs: pytest.fail("device checks reached before manufacturer document check"))
+    assert not (firmware / PROTECTION_DOCUMENT).exists()
+    with pytest.raises(ValueError, match="manufacturer protection document unavailable"):
         adr0022_capture_launch.preflight(manifest_path, firmware, establish_homing=True)
     assert calls == [[str(firmware / "build/axis_control_core/commissiond"), "--validate-homing", str(manifest_path)]]
     assert not (tmp_path / "unused-homing.attempt.json").exists()
-
-
-@pytest.mark.parametrize("registers,reads,poll", [([0x701e, 0x701e], True, True), ([0x1234], True, True),
-                                              ([True], True, True), ([0x701f], False, True), ([0x701f], True, False)])
-def test_baseline_bundle_refuses_unbounded_or_enabled_additional_reads(tmp_path, bundle, registers, reads, poll):
-    archive, revision = bundle
-    with tarfile.open(archive) as source:
-        manifest = dict(json.load(source.extractfile("manifest.json")), additional_startup_registers=registers,
-                        register_reads=reads, pitch_stop_poll=poll)
-    output = tmp_path / "refused.tar"
-    with pytest.raises(ValueError):
-        pack(tmp_path / "build", revision, manifest, output)
-    assert not output.exists()
-
-
-def test_baseline_bundle_allows_only_explicit_disabled_native_setting_reads(tmp_path, bundle):
-    archive, revision = bundle
-    with tarfile.open(archive) as source:
-        manifest = dict(json.load(source.extractfile("manifest.json")), additional_startup_registers=[0x701e, 0x701f, 0x7020, 0x7017],
-                        register_reads=True, pitch_stop_poll=True)
-    assert pack(tmp_path / "build", revision, manifest, tmp_path / "native-settings.tar")["launch_option"] == "--capture-baseline"

@@ -1,6 +1,6 @@
 # ADR-002.2 yaw commissioning TODO
 
-> **2026-10-02 (owner ruling):** the architect reviews are guidance, not instructions; the working product comes first. Current working path and evidence: [servo takeover report](reports/SERVO_TAKEOVER_2026-10-02.md) and the [servo commissioning card](../operations/servo-commissioning.md). The items below are historical context.
+> **2026-10-02 (owner ruling):** the architect reviews are guidance, not instructions; the working product comes first. **ADR-002.x is closed**: commissioning is automatic and station-verified — [closing report](reports/SERVO_COMMISSIONING_2026-10-02.md), [servo commissioning card](../operations/servo-commissioning.md), overnight hand-tuned predecessor in the [takeover report](reports/SERVO_TAKEOVER_2026-10-02.md). The items below are historical context.
 
 Highest current authority: [architect review 02](architect_review_02/00_START_HERE.md)
 and its [estimator recovery amendment](docs/09_ESTIMATOR_RECOVERY.md). Follow WP0–WP7

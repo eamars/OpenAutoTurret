@@ -1,3 +1,6 @@
+<!-- doc-tree-check: ignore -->
+> **Historical (2026-10-02).** The model-first code, tools and operation cards this document links to were removed when ADR-002.x closed; they remain in git history before the cleanup commit. Current path: [automatic servo commissioning](../../operations/servo-commissioning.md), closing report [SERVO_COMMISSIONING_2026-10-02](../reports/SERVO_COMMISSIONING_2026-10-02.md).
+
 # 02 · 建模、系统辨识与数学控制器计算
 
 > **2026-10-01最新优先修订：** [辨识修复与前瞻验证](08_IDENTIFICATION_REPAIR.md)依据[架构师review](../architect_review_01/ADR-002.2-independent-review.md)，覆盖下文仅a/b/h移动模型、统一时延、短窗预测及阶段1完成的冲突规则。采用预声明执行器/机械/摩擦/测量族、整run训练/选择/最终验证、完整状态连续轨迹及闭环估计检查；只有支持域内预测合格模型冻结后才能合成，失败模型不得先做有界实机反馈探针。下文理想PI公式仅为经验证的局部特例，不代替非线性增量动力学与A/B/C验证。

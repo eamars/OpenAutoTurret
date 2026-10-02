@@ -2,6 +2,8 @@
 #include "io.hpp"
 #include "calibration/full_axis_homing.hpp"
 #include "can/pitch_current_policy.hpp"
+#include "position_loop.hpp"
+#include "session_parts.hpp"
 #include <algorithm>
 #include <deque>
 #include <vector>
@@ -115,26 +117,47 @@ class HomingSession {
         config["pitch"]["interface"].as<std::string>()=="can1","INTEGRATION_MISMATCH: station topology");
     if (const auto t=config["servo_trial"]) {
       // Pitch speed-mode servo trial: the drive keeps its own velocity loop; the host
-      // streams SpdRef = v_ref + kp*(q_ref-q) + integral at a fixed period.
+      // streams SpdRef = v_ref + kp*(q_ref-q) + integral (axis::PositionLoop) at a fixed period.
       trial_=true;
-      trial_kp_=number(t,"kp_per_s"); trial_ki_=number(t,"ki_per_s2",true); trial_iclamp_=number(t,"integral_clamp_rad_s",true);
+      axis::PositionLoopParameters loop{number(t,"kp_per_s"),number(t,"ki_per_s2",true),number(t,"integral_clamp_rad_s",true),
+                                         number(t,"speed_limit_rad_s")};
+      require(loop.speed_limit<=1.0 && loop_.configure(loop),"DATA_INVALID: pitch servo trial loop");
       trial_period_=int64_t(number(t,"command_period_s")*1e9); trial_hold_=int64_t(number(t,"hold_after_s",true)*1e9);
-      trial_min_=t["window_min_rad"].as<double>(); trial_max_=t["window_max_rad"].as<double>();
-      trial_speed_=number(t,"speed_limit_rad_s"); trial_follow_=number(t,"following_error_rad");
-      // The script runs relative to an absolute centre, reached first by a slow smoothstep move.
-      trial_center_=t["center_rad"].as<double>(); trial_approach_speed_=number(t,"approach_speed_rad_s");
-      require(std::isfinite(trial_min_) && std::isfinite(trial_max_) && trial_min_<trial_max_ && trial_speed_<=1.0 &&
-              trial_period_>=500'000 && trial_period_<=20'000'000 && trial_center_>trial_min_ && trial_center_<trial_max_ &&
-              trial_approach_speed_<=0.2,"DATA_INVALID: pitch servo trial bounds");
-      double previous=-1.;
-      for (const auto& item:t["reference_samples"]) {
-        const std::array<double,4> sample{item["time_s"].as<double>(),item["position_rad"].as<double>(),
-                                          item["velocity_rad_s"].as<double>(),item["acceleration_rad_s2"].as<double>()};
-        require(std::isfinite(sample[0]) && sample[0]>previous && std::isfinite(sample[1]) && std::isfinite(sample[2]),
-                "DATA_INVALID: pitch trial reference");
-        trial_ref_.push_back(sample); previous=sample[0];
+      trial_follow_=number(t,"following_error_rad"); trial_approach_speed_=number(t,"approach_speed_rad_s");
+      require(trial_period_>=500'000 && trial_period_<=20'000'000 && trial_approach_speed_<=0.2,"DATA_INVALID: pitch servo trial timing");
+      home_first_=t["home_first"].as<bool>(false);
+      if (home_first_) {
+        // The working window comes from this session's own sensorless homing:
+        // the measured endpoints inset by window_margin_rad, centred between them.
+        trial_margin_=number(t,"window_margin_rad");
+      } else {
+        // Without homing the absolute window comes from the manifest (production's homed
+        // endstops, inset). The pitch may rest anywhere up to its endstops, so the approach
+        // may start up to window_margin_rad (+0.02) outside the window.
+        trial_min_=t["window_min_rad"].as<double>(); trial_max_=t["window_max_rad"].as<double>();
+        trial_center_=t["center_rad"].as<double>(); trial_slack_=number(t,"window_margin_rad")+0.02;
+        require(std::isfinite(trial_min_) && std::isfinite(trial_max_) && trial_min_<trial_max_ &&
+                trial_center_>trial_min_ && trial_center_<trial_max_,"DATA_INVALID: pitch servo trial bounds");
       }
-      require(trial_ref_.size()>=2 && trial_ref_.front()[0]==0.,"DATA_INVALID: pitch trial reference table");
+      if (const auto x=t["excitation"]) {
+        // Identification only: a log-swept sine added to SpdRef.
+        excitation_={x["amplitude_rad_s"].as<double>(),x["f0_hz"].as<double>(),x["f1_hz"].as<double>(),
+                     x["begin_s"].as<double>(),x["duration_s"].as<double>()};
+        require(excitation_.valid(.2),"DATA_INVALID: pitch servo trial excitation");
+      }
+      if (const auto schedule=t["gain_schedule"]) {
+        for (const auto& g:schedule) trial_schedule_.push_back({g["begin_s"].as<double>(),g["kp"].as<double>(),g["ki"].as<double>()});
+        require(!trial_schedule_.empty() && trial_schedule_.size()<=64,"DATA_INVALID: pitch servo trial gain schedule");
+        for (const auto& g:trial_schedule_) require(std::isfinite(g[1]) && g[1]>0 && std::isfinite(g[2]) && g[2]>=0,
+                                                    "DATA_INVALID: pitch servo trial gain schedule entry");
+      }
+      try {
+        for (const auto& item:t["reference_samples"])
+          trial_ref_.add({item["time_s"].as<double>(),item["position_rad"].as<double>(),
+                          item["velocity_rad_s"].as<double>(),item["acceleration_rad_s2"].as<double>()});
+      } catch (const std::runtime_error&) { require(false,"DATA_INVALID: pitch trial reference"); }
+      require(trial_ref_.size()>=2,"DATA_INVALID: pitch trial reference table");
+      trial_active_=!home_first_;
     }
     if (validate_only) return; // Same numerical contract, before any device or output I/O.
     imu_fd_=config["imu_fd"].as<int>(); struct stat info{};
@@ -436,9 +459,9 @@ class HomingSession {
       require(enabled_,"HARD_ABORT: enabled homing mode was lost");
       require(now-entered_<=limits_.read_timeout || (current_ns_>=entered_ && now-current_ns_<=limits_.read_timeout),
               "MEASUREMENT_LIMITED: measured homing current stale");
-      if (trial_ && !midpoint_) { trial_step(now); if (state_!=State::Run) return; }
+      if (trial_active_) { trial_step(now); if (state_!=State::Run) return; }
       if (readback_.pending()) return;
-      if (!trial_ && status_ns_>fsm_status_ns_) {
+      if (!trial_active_ && status_ns_>fsm_status_ns_) {
         fsm_status_ns_=status_ns_;
         if (!midpoint_) {
         // Preserve actual receipt time. Transition waits pause calls to the FSM,
@@ -454,6 +477,7 @@ class HomingSession {
             ",\"endpoint_b_rad\":"+scalar(result.endpoint_b_rad)+",\"measured_travel_deg\":"+scalar(result.measured_travel_deg)+
             ",\"repeatability_rad\":"+scalar(result.repeatability_rad)+",\"midpoint_rad\":"+scalar(midpoint_target_)+
             ",\"encoder_mechpos_agreement_qualified\":false,\"calibration_qualified\":false}");
+          if (trial_) { begin_trial_after_homing(result.endpoint_a_rad,result.endpoint_b_rad,now); return; }
           midpoint_=true; midpoint_begin_=now;
           DesiredState move; move.position_move=true; move.enter_pos_mode=true; move.target_rad=midpoint_target_;
           move.speed_rad_s=midpoint_speed_; move.message="measured midpoint"; begin_transition(move,1,now);
@@ -482,52 +506,58 @@ class HomingSession {
       stop_poll(now); if (verify(now)) state(State::Done,now);
     }
   }
-  std::array<double,4> trial_reference(double elapsed) const {
-    if (elapsed<=0) return trial_ref_.front();
-    if (elapsed>=trial_ref_.back()[0]) { auto last=trial_ref_.back(); last[2]=last[3]=0; return last; }
-    const auto upper=std::upper_bound(trial_ref_.begin(),trial_ref_.end(),elapsed,
-      [](double time,const std::array<double,4>& sample){ return time<sample[0]; });
-    const auto& lower=*(upper-1); const double f=(elapsed-lower[0])/((*upper)[0]-lower[0]);
-    return {elapsed,std::lerp(lower[1],(*upper)[1],f),std::lerp(lower[2],(*upper)[2],f),std::lerp(lower[3],(*upper)[3],f)};
+  void begin_trial_after_homing(double a,double b,int64_t now) {
+    const double low=std::min(a,b),high=std::max(a,b);
+    require(high-low>2*trial_margin_+0.1,"HARD_ABORT: measured pitch travel too short for the servo trial window");
+    trial_min_=low+trial_margin_; trial_max_=high-trial_margin_; trial_center_=0.5*(low+high); trial_slack_=trial_margin_+0.02;
+    record("{\"kind\":\"pitch_trial_window\",\"endpoint_low_rad\":"+scalar(low)+",\"endpoint_high_rad\":"+scalar(high)+
+           ",\"window_min_rad\":"+scalar(trial_min_)+",\"window_max_rad\":"+scalar(trial_max_)+",\"center_rad\":"+scalar(trial_center_)+"}");
+    trial_active_=true;
+    // Re-arm speed mode: the drive's speed integral is still wound up against the last stop.
+    DesiredState initial; initial.rearm_speed_mode=true; initial.hold=true;
+    begin_transition(initial,2,now);
   }
   void trial_step(int64_t now) {
     if (!trial_begin_) {
-      trial_origin_=pose_; next_trial_=now; trial_status_=status_ns_;
+      trial_origin_=pose_; next_trial_=now;
       trial_approach_=std::max(0.5,std::abs(trial_center_-pose_)/trial_approach_speed_*1.5);
       trial_begin_=now+int64_t(trial_approach_*1e9);  // script time zero starts after the approach
       record("{\"kind\":\"pitch_trial_approach\",\"from_rad\":"+scalar(pose_)+",\"center_rad\":"+scalar(trial_center_)+
              ",\"duration_s\":"+scalar(trial_approach_)+"}");
     }
     const double elapsed=(now-trial_begin_)*1e-9;
-    // During the approach the axis may start up to 0.1 rad outside the working
-    // window (still inside the measured endstops); the script itself is strict.
-    const double slack=elapsed<0?0.1:0.;
+    // During the approach the axis may start outside the working window (still
+    // inside the endstops); the script itself is strict.
+    const double slack=elapsed<0?trial_slack_:0.;
     require(pose_>=trial_min_-slack && pose_<=trial_max_+slack,"HARD_ABORT: pitch outside servo trial window");
-    if (now-trial_begin_>=int64_t(trial_ref_.back()[0]*1e9)+trial_hold_) {
+    if (now-trial_begin_>=int64_t(trial_ref_.duration()*1e9)+trial_hold_) {
       command_speed_=0; write(cybergear::Reg::SpdRef,0,"trial_end_zero_speed");
       record("{\"kind\":\"pitch_trial_end\",\"time_ns\":"+std::to_string(now)+",\"pose_rad\":"+scalar(pose_)+"}");
       state(State::FinalStop,now); return;
     }
     if (now<next_trial_) return;
     next_trial_+=trial_period_; if (next_trial_<now) next_trial_=now+trial_period_;
-    auto r=trial_reference(elapsed);
-    double q_ref=trial_center_+r[1];
+    while (next_gain_<trial_schedule_.size() && elapsed>=trial_schedule_[next_gain_][0]) {
+      const auto& g=trial_schedule_[next_gain_++]; loop_.set_gains(g[1],g[2]);
+      record("{\"kind\":\"pitch_trial_gains\",\"time_ns\":"+std::to_string(now)+",\"kp\":"+scalar(g[1])+",\"ki\":"+scalar(g[2])+"}");
+    }
+    const auto r=trial_ref_.at(std::max(0.,elapsed),true);
+    double q_ref=trial_center_+r.position, v_ref=r.velocity;
     if (elapsed<0) {
       // Smoothstep approach from the starting pose to the centre.
       const double x=std::clamp(1+elapsed/trial_approach_,0.,1.), d=trial_center_-trial_origin_;
-      q_ref=trial_origin_+d*(3*x*x-2*x*x*x); r[2]=d*(6*x-6*x*x)/trial_approach_; r[3]=0;
+      q_ref=trial_origin_+d*(3*x*x-2*x*x*x); v_ref=d*(6*x-6*x*x)/trial_approach_;
     }
     const double error=q_ref-pose_;
     require(std::abs(error)<=trial_follow_,"HARD_ABORT: pitch servo following error");
     const double dt=trial_last_?(now-trial_last_)*1e-9:0.; trial_last_=now;
-    const double unclamped=r[2]+trial_kp_*error+trial_integral_;
-    if (std::abs(unclamped)<trial_speed_ || unclamped*error<0)
-      trial_integral_=std::clamp(trial_integral_+trial_ki_*error*dt,-trial_iclamp_,trial_iclamp_);
-    const double speed=std::clamp(r[2]+trial_kp_*error+trial_integral_,-trial_speed_,trial_speed_);
+    const double x=excitation_.at(elapsed);
+    const double limit=loop_.parameters().speed_limit;
+    const double speed=std::clamp(loop_.step(dt,q_ref,v_ref,pose_)+x,-limit,limit);
     command_speed_=speed; write(cybergear::Reg::SpdRef,speed,"trial_speed");
     std::ostringstream out; out.precision(9);
-    out<<"{\"kind\":\"pitch_trial\",\"time_ns\":"<<now<<",\"qr\":"<<q_ref<<",\"vr\":"<<r[2]<<",\"q\":"<<pose_
-       <<",\"status_ns\":"<<status_ns_<<",\"torque\":"<<torque_<<",\"cmd\":"<<speed<<",\"i\":"<<trial_integral_<<'}';
+    out<<"{\"kind\":\"pitch_trial\",\"time_ns\":"<<now<<",\"qr\":"<<q_ref<<",\"vr\":"<<v_ref<<",\"q\":"<<pose_
+       <<",\"status_ns\":"<<status_ns_<<",\"torque\":"<<torque_<<",\"cmd\":"<<speed<<",\"x\":"<<x<<",\"i\":"<<loop_.integral()<<'}';
     record(out.str());
   }
   void check_streams(int64_t now) {
@@ -682,9 +712,10 @@ class HomingSession {
   int64_t transition_begin_{},enable_begin_{},midpoint_begin_{},midpoint_command_ns_{},midpoint_travel_ns_{},midpoint_dwell_{},midpoint_timeout_{};
   bool identified_{},disabled_{},enabled_{},enable_seen_{},have_pose_{},transition_{},holding_{true},midpoint_{},abort_stop_confirmed_{},normal_stop_confirmed_{};
   bool endpoint_a_recorded_{},endpoint_b_recorded_{};
-  bool trial_{}; std::vector<std::array<double,4>> trial_ref_;
-  double trial_kp_{},trial_ki_{},trial_iclamp_{},trial_min_{},trial_max_{},trial_speed_{},trial_follow_{},trial_origin_{},trial_integral_{};
-  int64_t trial_period_{},trial_hold_{},trial_begin_{},next_trial_{},trial_last_{},trial_status_{};
+  bool trial_{},trial_active_{},home_first_{}; axis::ReferenceTable trial_ref_; axis::PositionLoop loop_; axis::LogSweep excitation_;
+  std::vector<std::array<double,3>> trial_schedule_; std::size_t next_gain_{};
+  double trial_min_{},trial_max_{},trial_follow_{},trial_origin_{},trial_margin_{},trial_slack_{};
+  int64_t trial_period_{},trial_hold_{},trial_begin_{},next_trial_{},trial_last_{};
   double trial_center_{},trial_approach_speed_{},trial_approach_{};
   State state_{State::Discover}; DesiredState latched_; Settings original_,desired_,observed_,verification_; size_t verify_index_{};
   std::array<Endpoint,2> buses_; ImuStream imu_; gm6020::UnwrappedEncoder yaw_encoder_;

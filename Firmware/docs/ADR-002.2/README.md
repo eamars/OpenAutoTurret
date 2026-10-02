@@ -1,3 +1,6 @@
+<!-- doc-tree-check: ignore -->
+> **Historical (2026-10-02).** The model-first code, tools and operation cards this document links to were removed when ADR-002.x closed; they remain in git history before the cleanup commit. Current path: [automatic servo commissioning](../operations/servo-commissioning.md), closing report [SERVO_COMMISSIONING_2026-10-02](reports/SERVO_COMMISSIONING_2026-10-02.md).
+
 # ADR-002.2 · 可复用系统辨识与双环境自动整定
 
 **当前最高优先级：[架构师 review 02：估计器恢复与公平比较](docs/09_ESTIMATOR_RECOVERY.md)。** 先修复已知合成估计故障，再进行公平物理模型比较。失败拒绝提升并继续诊断；完整交付范围不变。最新执行结果见[review 02 进展](reports/ARCHITECT_REVIEW_02_PROGRESS.md)。

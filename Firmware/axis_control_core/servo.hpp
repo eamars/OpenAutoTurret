@@ -19,6 +19,7 @@ struct ServoParameters {
   double stribeck_positive, stribeck_negative;   // A, extra low-speed magnitude
   double stribeck_speed;                         // rad/s
   double viscous;                                // A*s/rad
+  double creep_drop, creep_speed;                // A, rad/s: below ~creep_speed the level falls by up to creep_drop
   double friction_band;                          // rad/s: v_ref below this scales friction FF linearly
   double load;                                   // A, constant (cable/gravity at the operating pose)
   double friction_correction_rate;               // 1/s: friction FF follows v_ref + rate*error (0: v_ref only)
@@ -45,7 +46,10 @@ struct ServoParameters {
   // beyond stall_error with no motion (|v|<stall_speed) for stall_time_s triggers
   // a rock_s pulse of rock_current in the opposite direction, then the integral
   // restarts from zero so the loop re-applies force fast. 0 stall_time_s disables.
+  // With stall_reference_speed > 0 it acts only while |v_ref| is below it: a stall
+  // at a target, not a moving reference whose own reversal will free the bearing.
   double stall_error, stall_speed, stall_current, stall_time_s, rock_current, rock_s;
+  double stall_reference_speed;                  // rad/s (0: any reference)
   // Output limits and supervision.
   double current_cap, slew;                      // A, A/s: peak authority and its rate
   double rms_limit, rms_tau_s;                   // A, s: thermal budget; above it the cap falls to rms_limit
@@ -88,7 +92,10 @@ class Servo {
   bool configured_=false, ready_=false;
   double t_=0, q_=0, v_=0, p00_=0, p01_=0, p11_=0;
   double encoder_time_=0, gyro_time_=0, step_time_=0;
-  double integral_=0, last_applied_=0, mean_square_=0;
+  // last_applied_: the total current on the wire (crosstalk history, thermal RMS);
+  // last_output_: the servo's own output, which the slew limit follows (an added
+  // identification excitation must not drag it).
+  double integral_=0, last_applied_=0, last_output_=0, mean_square_=0;
   int last_saturated_=0;
   long stale_samples_=0, stall_events_=0;
   double stall_since_=-1, stall_position_=0, rock_until_=-1, rock_direction_=0;

@@ -1,4 +1,7 @@
-"""Package acquisition executables and an operation manifest for a separate release.
+"""Package commissiond, the IMU producer and a session manifest for a separate release.
+
+Two session manifests are accepted: yaw control (--control-yaw) and sensorless
+homing (--establish-homing).
 
 Deployment uses deploy_station.py; this module never contacts or starts a station.
 """
@@ -10,8 +13,8 @@ import re
 import tarfile
 
 EXECUTABLES = {"commissiond": "axis_control_core/commissiond", "imu": "imu-bno085"}
-SCHEMA = "adr0022.baseline_bundle/1"
-CURRENT_SCHEMA = "adr0022.acquisition_bundle/1"
+SCHEMA = "adr0022.acquisition_bundle/1"
+OUTPUT_NAMES = {"--control-yaw": "yaw-control.jsonl", "--establish-homing": "sensorless-homing.jsonl"}
 
 
 def launch_option(manifest):
@@ -19,27 +22,11 @@ def launch_option(manifest):
         from adr0022_capture_launch import validate_yaw_control_contract
         validate_yaw_control_contract(manifest)
         return "--control-yaw"
-    if manifest.get("schema") == "adr0022.yaw-acquisition/1":
-        from adr0022_capture_launch import validate_yaw_contract
-        validate_yaw_contract(manifest)
-        return "--acquire-yaw"
     if manifest.get("schema") == "adr0022.sensorless-homing/1":
         from adr0022_capture_launch import validate_current_contract
         validate_current_contract(manifest, establish_homing=True)
         return "--establish-homing"
-    if manifest.get("schema") == "adr0022.neutral-characterization/1":
-        from adr0022_capture_launch import validate_current_contract
-        validate_current_contract(manifest, characterize_current=True)
-        return "--characterize-current"
-    if manifest.get("schema") == "adr0022.current-preparation/1":
-        from adr0022_capture_launch import validate_current_contract
-        validate_current_contract(manifest)
-        return "--prepare-current"
-    if manifest.get("schema") == "adr0022.capture/2":
-        from adr0022_capture_launch import validate_additional_registers
-        validate_additional_registers(manifest)
-        return "--capture-baseline"
-    raise ValueError("supported physical acquisition manifest required")
+    raise ValueError("yaw-control or sensorless-homing session manifest required")
 
 
 def validate_session_label(session_label):
@@ -69,7 +56,7 @@ def pack(build, session_label, manifest, output):
             raise ValueError("ARM64 ELF required: " + relative)
         content["build/" + relative] = data
     content["manifest.json"] = (json.dumps(manifest, indent=2, allow_nan=False) + "\n").encode()
-    record = {"schema": CURRENT_SCHEMA if option != "--capture-baseline" else SCHEMA, "session_label": session_label,
+    record = {"schema": SCHEMA, "session_label": session_label,
               "launch_option": option,
               "files": {name: {"bytes": len(data), "mode": 0o755 if name.startswith("build/") else 0o644}
                         for name, data in content.items()}}
@@ -93,7 +80,7 @@ def validate(bundle, session_label=None, firmware=None):
         modes = {m.name: m.mode for m in members}
     record = json.loads(content.pop("bundle.json"))
     label = validate_session_label(record.get("session_label"))
-    if record.get("schema") not in (SCHEMA, CURRENT_SCHEMA) or (session_label is not None and label != session_label):
+    if record.get("schema") != SCHEMA or (session_label is not None and label != session_label):
         raise ValueError("bundle session label differs from requested acquisition")
     if set(record["files"]) != set(content):
         raise ValueError("bundle identity incomplete")
@@ -103,8 +90,7 @@ def validate(bundle, session_label=None, firmware=None):
             raise ValueError("bundle file size or mode differs: " + name)
     manifest = json.loads(content["manifest.json"])
     option = validate_manifest(manifest, label)
-    expected_schema = CURRENT_SCHEMA if option != "--capture-baseline" else SCHEMA
-    if record["schema"] != expected_schema or record.get("launch_option", "--capture-baseline") != option:
+    if record.get("launch_option") != option:
         raise ValueError("acquisition launch mode identity differs")
     for key, relative in EXECUTABLES.items():
         data = content["build/" + relative]
@@ -129,7 +115,7 @@ def install(bundle, session_label, firmware, output_directory):
                 target.write(archive.extractfile(name).read())
             path.chmod(0o755)
         manifest = json.load(archive.extractfile("manifest.json"))
-    name = {"--control-yaw": "yaw-control.jsonl", "--acquire-yaw": "yaw-acquisition.jsonl", "--establish-homing": "sensorless-homing.jsonl", "--prepare-current": "current-preparation.jsonl", "--characterize-current": "current-characterization.jsonl", "--capture-baseline": "baseline.jsonl"}[launch_option(manifest)]
+    name = OUTPUT_NAMES[launch_option(manifest)]
     manifest["output"] = str(output_directory / name)
     path = output_directory / "manifest.json"
     with path.open("x") as target:

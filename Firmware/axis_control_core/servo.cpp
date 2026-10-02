@@ -10,12 +10,13 @@ bool valid(const ServoParameters& p) {
     p.following_error_limit,p.error_clamp,p.rms_limit,p.rms_tau_s};
   for (double value:positive) if (!std::isfinite(value) || value<=0) return false;
   const double nonnegative[] = {p.inertia,p.coulomb_positive,p.coulomb_negative,p.stribeck_positive,
-    p.stribeck_negative,p.viscous,p.friction_correction_rate,p.friction_correction_deadband,p.dither_amplitude,p.kq,p.kv,p.ki,p.integral_cap,p.hold_band,p.hold_speed,p.hold_relax_tau_s};
+    p.stribeck_negative,p.viscous,p.creep_drop,p.friction_correction_rate,p.friction_correction_deadband,p.dither_amplitude,p.kq,p.kv,p.ki,p.integral_cap,p.hold_band,p.hold_speed,p.hold_relax_tau_s};
   for (double value:nonnegative) if (!std::isfinite(value) || value<0) return false;
   for (int k=0;k<ServoParameters::kFrictionBins;++k)
     if (!std::isfinite(p.friction_map_positive[k]) || !std::isfinite(p.friction_map_negative[k])) return false;
-  for (double value:{p.stall_error,p.stall_speed,p.stall_current,p.stall_time_s,p.rock_current,p.rock_s})
+  for (double value:{p.stall_error,p.stall_speed,p.stall_current,p.stall_time_s,p.rock_current,p.rock_s,p.stall_reference_speed})
     if (!std::isfinite(value) || value<0) return false;
+  if (p.creep_drop>0 && !(std::isfinite(p.creep_speed) && p.creep_speed>0)) return false;
   if (!std::isfinite(p.crosstalk_delay_s) || p.crosstalk_delay_s<0 || p.crosstalk_delay_s>0.02) return false;
   for (int k=0;k<ServoParameters::kCrosstalkBins;++k) if (!std::isfinite(p.crosstalk_map[k])) return false;
   if (!std::isfinite(p.friction_learning_rate) || p.friction_learning_rate<0 ||
@@ -36,14 +37,15 @@ bool Servo::reset(double t,double q,double v,double current) {
   // Bumpless: whatever was applied becomes the integral's starting point.
   integral_=std::clamp(current-friction(0.)-p_.load,-p_.integral_cap,p_.integral_cap);
   applied_history_.clear(); applied_history_.push_back({t,current});
-  last_applied_=current; mean_square_=current*current; last_saturated_=0; ready_=true; return true;
+  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; ready_=true; return true;
 }
 double Servo::friction(double v) const {
   if (v==0.) return 0.;
   const double speed=std::abs(v);
   const double scale=std::min(1.,speed/p_.friction_band);
-  const double magnitude=v>0?p_.coulomb_positive+p_.stribeck_positive*std::exp(-speed/p_.stribeck_speed):
-                             p_.coulomb_negative+p_.stribeck_negative*std::exp(-speed/p_.stribeck_speed);
+  const double creep=p_.creep_drop>0?p_.creep_drop*std::exp(-speed/p_.creep_speed):0.;
+  const double magnitude=std::max(0.,(v>0?p_.coulomb_positive+p_.stribeck_positive*std::exp(-speed/p_.stribeck_speed):
+                                          p_.coulomb_negative+p_.stribeck_negative*std::exp(-speed/p_.stribeck_speed))-creep);
   return (v>0?1.:-1.)*scale*magnitude+p_.viscous*v;
 }
 namespace {
@@ -171,7 +173,8 @@ ServoOutput Servo::step(double now,double q_ref,double v_ref,double a_ref) {
   if (p_.stall_time_s>0) {
     // "Not moving" is judged by displacement since the stall began (the observer's
     // instantaneous velocity is too noisy at rest), allowing two encoder counts.
-    const bool pushing=std::abs(e)>p_.stall_error && std::abs(out.requested)>p_.stall_current && out.requested*e>0;
+    const bool settling=p_.stall_reference_speed<=0 || std::abs(v_ref)<p_.stall_reference_speed;
+    const bool pushing=settling && std::abs(e)>p_.stall_error && std::abs(out.requested)>p_.stall_current && out.requested*e>0;
     if (!pushing || now<rock_until_) stall_since_=-1;
     else if (stall_since_<0) { stall_since_=now; stall_position_=q; }
     else if (std::abs(q-stall_position_)>p_.stall_speed*(now-stall_since_)+2*2*M_PI/8192) stall_since_=-1;
@@ -186,8 +189,9 @@ ServoOutput Servo::step(double now,double q_ref,double v_ref,double a_ref) {
   mean_square_+=(last_applied_*last_applied_-mean_square_)*(1-std::exp(-dt/p_.rms_tau_s));
   const double cap=std::sqrt(mean_square_)>=p_.rms_limit?p_.rms_limit:p_.current_cap;
   out.rms=std::sqrt(mean_square_); out.cap=cap;
-  const double slewed=std::clamp(out.requested,last_applied_-p_.slew*dt,last_applied_+p_.slew*dt);
+  const double slewed=std::clamp(out.requested,last_output_-p_.slew*dt,last_output_+p_.slew*dt);
   out.limited=std::clamp(slewed,-cap,cap);
+  last_output_=out.limited;
   out.saturated=out.limited<out.requested-1e-12?1:out.limited>out.requested+1e-12?-1:0;
   last_saturated_=out.saturated;
   out.status=static_cast<int>(ServoStatus::Ok);

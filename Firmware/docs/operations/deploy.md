@@ -86,10 +86,10 @@ to edit.
 
 ## What it proves
 
-ADR-002.2 baseline acquisition has a separate `deploy_station.py --baseline-bundle FILE`
-path, described in [the capture card](adr0022-capture.md). It ships only the two
-identified acquisition executables with committed source, uses the existing project
-venv, and runs launcher `check` without opening devices. It does not activate the
+Servo commissioning has a separate `deploy_station.py --baseline-bundle FILE` path, used by
+[the servo commissioning card](servo-commissioning.md). It ships only the two workstation-built
+commissioning executables (`commissiond`, `imu-bno085`) with the working-tree source, uses the
+existing project venv, and runs launcher `check` without opening devices. It does not activate the
 production stack, install dependencies, compile or run regression tests on the station.
 This is an acquisition release, not a verified production deployment. Normal deployment
 and its registered CTest requirements are unchanged.

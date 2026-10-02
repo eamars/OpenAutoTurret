@@ -70,7 +70,7 @@ def main():
                              "binaries: the station runs the suite rather than building it. "
                              "Compiling needs no hardware; only running the tests does.")
     parser.add_argument("--baseline-bundle", type=pathlib.Path,
-                        help="ship the current Firmware working tree with an ADR-002.2 baseline, neutral-current, characterization or sensorless-homing acquisition bundle into a separate release; "
+                        help="ship the current Firmware working tree with a yaw-control or sensorless-homing session bundle into a separate release; "
                              "validate with launcher check, without starting devices, installing packages or compiling")
     parser.add_argument("--session-label",
                         help="human acquisition session label; defaults to the label in --baseline-bundle")
@@ -157,8 +157,8 @@ def main():
         # and active services are untouched; the check opens no device transport.
         bundle = release + "/baseline-bundle.tar"
         run(["scp", *connection, str(args.baseline_bundle), f"{args.host}:{bundle}"])
-        launch_option = acquisition_record.get("launch_option", "--capture-baseline")
-        capture_directory = release + {"--control-yaw": "/run/yaw-control", "--acquire-yaw": "/run/yaw-acquisition", "--establish-homing": "/run/sensorless-homing", "--prepare-current": "/run/current-preparation", "--characterize-current": "/run/current-characterization", "--capture-baseline": "/run/baseline"}[launch_option]
+        launch_option = acquisition_record["launch_option"]
+        capture_directory = release + {"--control-yaw": "/run/yaw-control", "--establish-homing": "/run/sensorless-homing"}[launch_option]
         helper = release + "/Firmware/tools/adr0022_baseline_bundle.py"
         remote(f"{quote(venv + '/bin/python')} {quote(helper)} install --bundle {quote(bundle)} "
                f"--session-label {quote(deployment_label)} --firmware {quote(release + '/Firmware')} "
