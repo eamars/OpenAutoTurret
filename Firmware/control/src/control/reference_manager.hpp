@@ -76,6 +76,9 @@ struct ReferenceRequest {
   // policy, it reports what it could not satisfy. Without this field the only
   // signal would be "it holds, for no stated reason".
   bool target_unreachable = false;
+  // The subject is beyond the pitch travel and pitch is parked at its limit while yaw follows
+  // (IntentLimits::clamp_pitch_to_travel); reported, not a failure.
+  bool pitch_at_travel_limit = false;
   // Literal-only diagnostics (§52): static strings, so no allocation on the
   // control thread (§46).
   const char* reason = "";
@@ -176,6 +179,10 @@ class ReferenceManager {
     double manual_v_max_rad_s = 30.0 * kDeg2Rad;
     double hold_v_max_rad_s = 10.0 * kDeg2Rad;
     std::array<AxisLimits, kAxisCount> axis_limits{};
+    // ADR-003 tracking core: a subject that leaves through the pitch travel keeps being followed in
+    // yaw with pitch parked at its soft limit (Level 1 brakes onto it under the boundary governor),
+    // instead of the whole turret dropping into a hold.
+    bool clamp_pitch_to_travel = false;
   };
 
   ReferenceRequest resolve(const MotionIntent& in, const IntentLimits& lim) const {
@@ -207,6 +214,24 @@ class ReferenceManager {
             pitch.q_soft_min_rad,pitch.q_soft_max_rad,qy,qp) :
             sight_solver.solve_from_pose(in.los_az_rad,in.los_el_rad,
                 lim.q_yaw_hold_rad,lim.q_pitch_hold_rad,qy,qp);
+        // Station, 2026-10-02 18:33:27: a subject close to the turret took the pitch aim past the
+        // soft minimum; the hold that replaced tracking stopped yaw as well, the subject was lost,
+        // and roam/reacquire slewed back at 70 deg/s. With the core, only the pitch is out of reach.
+        const auto pitch_clamped = [&](double yaw_q, double pitch_q) {
+          req.q_yaw_rad = yaw_q;
+          req.q_pitch_rad = std::clamp(pitch_q, pitch.q_soft_min_rad, pitch.q_soft_max_rad);
+          req.pitch_at_travel_limit = true;
+          req.source = ReferenceSource::Tracking;
+          req.is_tracking_reference = true;
+          req.v_max_rad_s = lim.track_v_max_rad_s * vs;
+          return req;
+        };
+        const bool clamp = lim.clamp_pitch_to_travel && pitch.valid;
+        if (!solved && clamp &&
+            sight_solver.solve_from_pose(in.los_az_rad,in.los_el_rad,lim.q_yaw_hold_rad,lim.q_pitch_hold_rad,qy,qp)) {
+          qy = geo::wrap_near(qy, lim.q_yaw_hold_rad);
+          if (!yaw.valid || yaw.in_soft(qy)) return pitch_clamped(qy, qp);
+        }
         if (!solved) {
           // §67: an unreachable target is reported, not pressed into a hold.
           req = hold_reference(lim, "target outside travel");
@@ -218,6 +243,8 @@ class ReferenceManager {
         // reporting "tracking" - which is what happened on the station 2026-09-04.
         req.q_yaw_rad = bounded ? qy : geo::wrap_near(qy, lim.q_yaw_hold_rad);
         req.q_pitch_rad = qp;
+        if (clamp && !pitch.in_soft(qp) && (!yaw.valid || yaw.in_soft(req.q_yaw_rad)))
+          return pitch_clamped(req.q_yaw_rad, qp);
         if ((pitch.valid && !pitch.in_soft(qp)) ||
             (yaw.valid && !yaw.in_soft(req.q_yaw_rad))) {
           req = hold_reference(lim, "target outside travel");

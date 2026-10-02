@@ -677,6 +677,10 @@ class ControlLoop {
   // When the core last ticked. A tick it missed, by whatever path, means Level 1 must re-seed from
   // the reference actually executed meanwhile rather than integrate the gap from its stale state.
   TimeNs core_last_tick_ns_ = 0;
+  // servo_stop: the rest point of the supervisor stop in progress, latched on its first tick (a
+  // stop re-aimed every tick at "here + stopping distance" is a target moving at the axis's speed).
+  double brake_rest_rad_[kAxisCount] = {0.0, 0.0};
+  TimeNs brake_last_ns_[kAxisCount] = {0, 0};
   // ADR-003 isolation test, OTA_TEST_PITCH_HOLD=motor|servo (read once at start, off by default,
   // never persisted): pitch is held at the pose it has when READY is first reached, by the
   // CyberGear's own position mode (motor) or by the ADR-002.2 pitch servo at a fixed reference
@@ -748,6 +752,11 @@ class ControlLoop {
   int64_t lead_prev_ns_[2] = {0, 0};
   void evaluate_auto_switch(TimeNs now_ns);
   mutable bool mode_hold_latched_ = false;
+  // Last tick's reference was a hold. A hold produced inside a non-hold intent ("target outside
+  // travel", an expired intent) latches its pose once, like a Hold intent; re-latching it every tick
+  // at the moving reference's stopping point made the limiter follow it as a moving target.
+  bool last_ref_was_hold_ = false;
+  bool pitch_at_travel_limit_ = false;
   mutable double mode_hold_yaw_rad_ = 0.0;
   mutable double mode_hold_pitch_rad_ = 0.0;
   char mode_refusal_reason_[224] = {};

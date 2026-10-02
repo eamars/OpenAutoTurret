@@ -53,8 +53,22 @@ JointGoal Tracker::joint_goal(const LosGoal& g,const std::array<double,2>& seed)
   const bool continuous=travel_.yaw_low==travel_.yaw_high;
   const double ylo=continuous?seed[0]-2*M_PI:travel_.yaw_low, yhi=continuous?seed[0]+2*M_PI:travel_.yaw_high;
   double yaw=seed[0],pitch=seed[1];
-  if (!solver_.solve_within_limits(g.theta[0],g.theta[1],seed[0],seed[1],ylo,yhi,travel_.pitch_low,travel_.pitch_high,yaw,pitch))
-    return out;  // unreachable: hold
+  if (!solver_.solve_within_limits(g.theta[0],g.theta[1],seed[0],seed[1],ylo,yhi,travel_.pitch_low,travel_.pitch_high,yaw,pitch)) {
+    // Beyond the pitch travel only (a subject close below the turret): the goal stays valid and
+    // unconstrained, so yaw keeps following while Level 1's travel clamp parks pitch at its limit.
+    // Holding both axes lost the subject on the station (2026-10-02 18:33:27). Pitch gets no rate:
+    // the clamp is where it stops.
+    if (!solver_.solve_from_pose(g.theta[0],g.theta[1],seed[0],seed[1],yaw,pitch) ||
+        !(yaw>=ylo && yaw<=yhi) || (pitch>=travel_.pitch_low && pitch<=travel_.pitch_high))
+      return out;  // unreachable in yaw: hold
+    out.valid=true; out.q={yaw,pitch};
+    const double h=1e-5;
+    const double j00=std::remainder(los(yaw+h,pitch)[0]-los(yaw-h,pitch)[0],2*M_PI)/(2*h);
+    if (g.velocity_valid && std::isfinite(j00) && std::abs(j00)>p_.jacobian_det_min) {
+      out.v={g.omega[0]/j00,0.}; out.velocity_valid={true,false};
+    }
+    return out;
+  }
   out.valid=true; out.q={yaw,pitch};
   // Joint rate from the LOS rate through the same geometry: J v = omega, J = d(LOS)/dq.
   const double h=1e-5;

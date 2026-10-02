@@ -831,6 +831,133 @@ TEST(TrackingIntegration, ASupervisorBrakeMidSlewIsExecutedByTheServo) {
   EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Tracking) << "and tracking resumes";
 }
 
+// Station, 2026-10-02 18:33:28 (trip trace trip-326400907197766): a BRAKE that lasted 1 s. Each
+// tick the servo's stop re-aimed at "here + stopping distance", the limiter read that target as one
+// moving at the axis's own speed and followed it: pitch cruised at 13 deg/s for 0.4 s and came to
+// rest 0.5 deg past its soft limit. A sustained BRAKE must decelerate from its first tick.
+TEST(TrackingIntegration, ASustainedSupervisorBrakeDecelerates) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  const double az = 30.0 * kDeg, el = 0.0;            // in view: the half field of view is ~35 deg
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  constexpr int kOnset = 60, kStale = 80;           // 400 ms of BRAKE, mid-slew
+  double v_onset = 0, q_onset = 0, v_end = 0, q_rest = 0;
+  int brakes = 0;
+  std::vector<double> ref;
+  for (int i = 0; i < 400; ++i) {
+    const bool stale = i >= kOnset && i < kOnset + kStale;
+    r.sim().set_feedback_ok(AxisId::Yaw, !stale);
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+    ref.push_back(servo->servo[1].q_ref);
+    const auto k = ref.size() - 1;
+    if (i == kOnset) { v_onset = std::abs(ref[k] - ref[k - 1]) / (kDtNs * 1e-9); q_onset = ref[k - 1]; }
+    if (i == kOnset + kStale - 1) { v_end = std::abs(ref[k] - ref[k - 1]) / (kDtNs * 1e-9); q_rest = ref[k]; }
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  // The supervisor's own braking model, from the onset speed: where the stop may land at the latest.
+  const double a = 60 * kDeg, j = 300 * kDeg;
+  const double reach = v_onset * v_onset / (2 * a) + v_onset * a / (2 * j);
+  std::printf("sustained brake from %.1f deg/s: %.1f deg/s after %d ms, travelled %.2f deg (model %.2f), "
+              "brakes %d, releases %d\n", v_onset / kDeg, v_end / kDeg, kStale * 5,
+              std::abs(q_rest - q_onset) / kDeg, reach / kDeg, brakes, servo->servo[1].releases);
+  EXPECT_GT(v_onset, 20 * kDeg) << "the brake must fall inside the slew";
+  EXPECT_GE(brakes, kStale - 2);
+  EXPECT_EQ(servo->servo[1].releases, 0);
+  // 400 ms of braking at 60 deg/s^2 after a 200 ms jerk ramp removes ~18 deg/s.
+  EXPECT_LT(v_end, v_onset - 12 * kDeg) << "the BRAKE cruised instead of braking";
+  EXPECT_LT(std::abs(q_rest - q_onset), reach + 0.2 * kDeg);
+}
+
+// Station, 2026-10-02 18:33:23-28: a subject close to the turret took the pitch aim past the soft
+// limit. Tracking dropped into a hold that stopped yaw as well (and, re-aimed every tick, cruised
+// pitch into the limit), the subject was lost and reacquired at 70 deg/s. A subject that leaves
+// through the pitch travel is followed in yaw with pitch parked at its limit, without the supervisor.
+TEST(TrackingIntegration, ASubjectPastThePitchLimitIsStillFollowedInYaw) {
+  for (const double rate : {14.0, 25.0, 40.0}) {
+    auto owned = std::make_unique<ServoSimBackend>();
+    ServoSimBackend* servo = owned.get();
+    TrackingRig r(true, true, 15, {}, std::move(owned));
+    int64_t t = 0;
+    ASSERT_TRUE(run_to_ready(r, t));
+    enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+    for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+    r.loop().submit_command("select_target", "1");
+    servo->servo = {};
+    int64_t seq = 10;
+    int brakes = 0;
+    double highest = 0;
+    // Down to 62 deg (7 deg past the 55.3 deg limit, still inside the image), then 20 deg sideways.
+    const int down = static_cast<int>(62.0 / rate / 0.005);
+    for (int i = 0; i < down + 800; ++i) {
+      const double el = -std::min(62.0, rate * i * 0.005) * kDeg;
+      const double az = i < down + 200 ? 0.0 : std::min(20.0, 10.0 * (i - down - 200) * 0.005) * kDeg;
+      if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+      else r.loop().step(t, kDtNs);
+      servo->end_tick();
+      if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+      highest = std::max(highest, r.loop().last_positions()[0]);
+      t += kDtNs;
+      ASSERT_NE(r.loop().phase(), Phase::Fault) << rate << " deg/s, tick " << i;
+    }
+    const double soft = r.loop().limits()[0].q_soft_max_rad;
+    const double yaw = r.loop().last_positions()[1];
+    std::printf("subject past the pitch limit at %.0f deg/s: pitch reached %.2f deg (soft %.2f), yaw %.2f deg "
+                "(subject 20), supervisor brakes %d\n", rate, highest / kDeg, soft / kDeg, yaw / kDeg, brakes);
+    EXPECT_EQ(brakes, 0) << rate << " deg/s: Level 1 went where the supervisor had to stop it";
+    EXPECT_LE(highest, soft) << rate << " deg/s";
+    EXPECT_GT(highest, soft - 5 * kDeg) << rate << " deg/s: pitch follows to the limit";
+    EXPECT_NEAR(yaw, 20 * kDeg, 1.5 * kDeg) << rate << " deg/s: yaw keeps following the subject";
+  }
+}
+
+// A subject leaving through a bounded yaw travel: the hold that replaces tracking is produced inside a
+// tracking intent (its pose is now latched once, see last_ref_was_hold_). A property test: no
+// supervisor, no servo release, inside the soft limit. It does not separate the latch fix on its own:
+// here the subject also leaves the image, which ends the chase either way.
+TEST(TrackingIntegration, ASubjectLeavingThroughTheYawTravelIsStoppedNotChased) {
+  for (const double rate : {20.0, 35.0}) {
+    auto owned = std::make_unique<ServoSimBackend>();
+    ServoSimBackend* servo = owned.get();
+    TrackingRig r(true, true, 15, {}, std::move(owned));
+    int64_t t = 0;
+    ASSERT_TRUE(run_to_ready(r, t));
+    enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+    for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+    r.loop().submit_command("select_target", "1");
+    servo->servo = {};
+    int64_t seq = 10;
+    int brakes = 0;
+    double highest = 0;
+    for (int i = 0; i < static_cast<int>(75.0 / rate / 0.005) + 400; ++i) {
+      const double az = std::min(75.0, rate * i * 0.005) * kDeg;   // on past the 55.3 deg yaw limit
+      if (i % 6 == 0) step_with_track(r, t, seq++, az, 0.0);
+      else r.loop().step(t, kDtNs);
+      servo->end_tick();
+      if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+      highest = std::max(highest, r.loop().last_positions()[1]);
+      t += kDtNs;
+      ASSERT_NE(r.loop().phase(), Phase::Fault) << rate << " deg/s, tick " << i;
+    }
+    const double soft = r.loop().limits()[1].q_soft_max_rad;
+    std::printf("subject leaving through yaw at %.0f deg/s: yaw reached %.2f deg (soft %.2f), supervisor brakes %d, "
+                "releases %d\n", rate, highest / kDeg, soft / kDeg, brakes, servo->servo[1].releases);
+    EXPECT_EQ(brakes, 0) << rate << " deg/s";
+    EXPECT_LE(highest, soft) << rate << " deg/s";
+    EXPECT_EQ(servo->servo[1].releases, 0) << rate << " deg/s";
+  }
+}
+
 // OTA_TEST_PITCH_HOLD (an isolation test, off by default): pitch stays at its first READY pose,
 // held by the motor's own position mode or by the pitch servo, while yaw alone tracks.
 void pitch_hold_test(const char* how) {

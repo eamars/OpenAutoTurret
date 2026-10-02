@@ -2,6 +2,7 @@
 #include "control/stop_evidence.hpp"
 #include "control/control_loop.hpp"
 
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -84,8 +85,11 @@ ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
     tracking_trace_ = spdlog::get("tracking_trace");
     if (!tracking_trace_) {
       // Non-blocking like the main logger: when the shared queue is full a trace line is dropped,
-      // the control thread never waits for storage.
-      tracking_trace_ = spdlog::basic_logger_mt<spdlog::async_factory_nonblock>("tracking_trace", trace);
+      // the control thread never waits for storage. Rotating: the launcher puts it in /tmp (RAM) and
+      // tracking writes ~160 kB/s -- 100 MB after an afternoon on the station, 2026-10-02. Two 32 MB
+      // files keep the last ~7 minutes of tracking.
+      tracking_trace_ = spdlog::rotating_logger_mt<spdlog::async_factory_nonblock>(
+          "tracking_trace", trace, 32u * 1024 * 1024, 1);
       tracking_trace_->set_pattern("%v");
       tracking_trace_->flush_on(spdlog::level::warn);
     }
@@ -1244,6 +1248,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         bounds.q_yaw_hold_rad = sp[ix(AxisId::Yaw)].q_rad;
         bounds.q_pitch_hold_rad = sp[ix(AxisId::Pitch)].q_rad;
         bounds.axis_limits = {runtime_limits(AxisId::Pitch), runtime_limits(AxisId::Yaw)};
+        bounds.clamp_pitch_to_travel = tracking_->uses_core();
         at_input_.los_feasible = !ref_mgr_->resolve(probe, bounds).target_unreachable;
       }
       // §13/§16, once per cycle and not once per frame. The block that normally refreshes
@@ -1337,6 +1342,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     tracking_ref_ = ref_mgr_
                       ? ref_mgr_->resolve(last_intent_, intent_limits(now_ns))
                       : ReferenceRequest{};
+    last_ref_was_hold_ = tracking_ref_.source == ReferenceSource::Hold;
+    if (tracking_ref_.pitch_at_travel_limit != pitch_at_travel_limit_) {
+      pitch_at_travel_limit_ = tracking_ref_.pitch_at_travel_limit;
+      spdlog::info(pitch_at_travel_limit_ ? "tracking: subject beyond the pitch travel; pitch parks at its limit, yaw follows"
+                                          : "tracking: subject back inside the pitch travel");
+    }
     if (!ref_mgr_) {
       // Cannot happen on any path that reaches here (it is built in
       // enable_tracking), but the alternative is dereferencing an optional on the
@@ -1807,7 +1818,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                 tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk,
                 response_probe ? response_probe_omega_ : cfg_.tracking_reference_omega);
           } else {
-            q_ref[i] = control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
+            // A hold's target does not move: its velocity is zero, not an estimate carried over
+            // from whatever the reference was following a tick ago.
+            q_ref[i] = tracking_ref_.source == ReferenceSource::Hold
+                ? control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk,0.0)
+                : control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
           }
         }
         if (core_tracking) {
@@ -1919,7 +1934,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const auto [a, j] = hold_brake_limits(i);
           if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
           const double cap = std::max(hold_speed_effective(), std::abs(ref_lim_[i].v_rad_s));
-          q_ref[i] = control::limit_reference(ref_lim_[i], q_ref[i], dt, cap, a, j);
+          q_ref[i] = control::limit_reference(ref_lim_[i], q_ref[i], dt, cap, a, j, 0.0);
           servo_jerk_[i] = 0.0;
         }
         ref_lim_engaged_ = true;
@@ -3450,11 +3465,33 @@ bool ControlLoop::servo_stop(int i, AxisId axis, const control::ReferenceLimiter
   // From last tick's published reference: this tick's has already advanced along the motion the
   // supervisor just stopped, and continuing from it would step the servo twice in one tick.
   ref_lim_[i] = from;
-  const double a = cfg_.a_brake_rad_s2, j = cfg_.j_brake_rad_s3;
+  double a = cfg_.a_brake_rad_s2, j = cfg_.j_brake_rad_s3;
   const double v = from.v_rad_s;
-  const double rest = env_.constrain_reference(
-      from.q_rad + std::copysign(control::stopping_distance_rad(v, from.a_rad_s2, a, j), v), limits);
-  control::limit_reference(ref_lim_[i], rest, static_cast<double>(period_ns) * 1e-9, std::abs(v), a, j);
+  // Station, 2026-10-02 18:33:28: re-aimed every tick at "here + stopping distance", the stop was a
+  // target moving at the axis's own speed; the limiter followed it and pitch cruised at 13 deg/s for
+  // 0.4 s into its soft limit. The rest point is latched once per stop and its velocity is zero.
+  const bool new_stop = brake_last_ns_[i] == 0 || now_ns - brake_last_ns_[i] > 2 * period_ns;
+  brake_last_ns_[i] = now_ns;
+  if (new_stop) {
+    brake_rest_rad_[i] = env_.constrain_reference(
+        from.q_rad + std::copysign(control::stopping_distance_rad(v, from.a_rad_s2, a, j), v), limits);
+  }
+  // A rest point pulled in by the soft limit needs more than the braking model's deceleration: take
+  // what the limit requires, up to what the axis can physically do (its Level-1 capability).
+  const double room = std::abs(brake_rest_rad_[i] - from.q_rad) + 1e-4;   // + 0.006 deg: rounding
+  if (std::abs(v) > 0 && control::stopping_distance_rad(v, from.a_rad_s2, a, j) > room) {
+    double a_phys = a, j_phys = j;
+    if (tracking_ && tracking_->uses_core()) {
+      const auto& c = tracking_->core()->parameters().level1.axis[axis == AxisId::Yaw ? 0 : 1];
+      a_phys = std::max(a, c.a_max);
+      j_phys = std::max(j, c.j_max);
+    }
+    j = j_phys;
+    while (a < a_phys && control::stopping_distance_rad(v, from.a_rad_s2, a, j) > room)
+      a = std::min(a_phys, a * 1.25);
+  }
+  control::limit_reference(ref_lim_[i], brake_rest_rad_[i], static_cast<double>(period_ns) * 1e-9,
+                           std::abs(v), a, j, 0.0);
   MotorBackend::ServoReference r;
   r.t_ns = now_ns;
   r.q = ref_lim_[i].q_rad; r.v = ref_lim_[i].v_rad_s; r.a = ref_lim_[i].a_rad_s2; r.j = 0;
@@ -3921,7 +3958,7 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
     // The pose is taken from the measured joints on the cycle the turret *stopped*
     // moving, and then held there. Two properties that only make sense together: no
     // creep (it is not re-read every cycle) and no journey (it is not the ready pose).
-    if (!mode_hold_latched_ || last_intent_.type != IntentType::Hold) {
+    if (!mode_hold_latched_ || (last_intent_.type != IntentType::Hold && !last_ref_was_hold_)) {
       double q[2] = {last_positions()[ix(AxisId::Pitch)],
                      last_positions()[ix(AxisId::Yaw)]};
       // With the servos the hold is a braked reference, so the pose is where that reference
@@ -3953,6 +3990,7 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
   l.manual_v_max_rad_s = cap;
   l.track_v_max_rad_s = std::min(tracking_cfg_.track_v_max_rad_s, cap);
   l.roam_v_max_rad_s = std::min(tracking_cfg_.search_v_max_rad_s, cap);
+  l.clamp_pitch_to_travel = tracking_ && tracking_->uses_core();
   // The roam intent carries its endpoint, not its configured speed. Preserve
   // the named sweep rate through conversion into a shaped joint reference.
   if (cfg_.roam_velocity_deg_s > 0.0)
@@ -4550,6 +4588,7 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     bounds.q_yaw_hold_rad = q[ix(AxisId::Yaw)];
     bounds.q_pitch_hold_rad = q[ix(AxisId::Pitch)];
     bounds.axis_limits = limits_;
+    bounds.clamp_pitch_to_travel = tracking_->uses_core();
     const auto resolved = ref_mgr_->resolve(probe,bounds);
     reachable = !resolved.target_unreachable;
     yaw_delta = resolved.q_yaw_rad - q[ix(AxisId::Yaw)];

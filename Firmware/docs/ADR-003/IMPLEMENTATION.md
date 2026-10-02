@@ -112,7 +112,8 @@ started.
   configured 140 ms is not used. Level 1 is the only reference, within the limits ruled above.
   The 2-σ-gated legacy lead is no longer on this path.
 - **Per-tick trace:** `OTA_TRACKING_TRACE` holds one JSON line per Level-1 tick, with the goal,
-  the reference, its flags, e_track and e_servo.
+  the reference, its flags, e_track and e_servo. It rotates at 32 MB into `<name>.1.jsonl` (about
+  7 minutes of tracking each), since the launcher keeps it in `/tmp`, which is RAM.
 - **Tests:**
   - *`test_reference_servo`:* against the commissioned plant model, it follows a smooth move,
     releases on a legacy command, holds a stale segment, and trips on following error.
