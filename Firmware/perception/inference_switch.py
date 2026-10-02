@@ -42,6 +42,15 @@ class InferenceSwitch:
         self.switches = 0
         self.last_sensor_ns = 0
 
+    def is_main(self, role: str) -> bool:
+        """Without the lock: the camera that is not on the main display must never take it.
+
+        Measured on the station at 9c427cf: both loops took the lock every frame, and the idle one,
+        holding it while it waited its turn for the interpreter, stalled the inferring one -- 30 fps
+        fell to 20 on either camera. The idle loop now asks this and goes back to its own work.
+        """
+        return self.main_camera.role == role
+
     def acquire(self, role: str) -> bool:
         """With ``lock`` held: is ``role`` the camera to infer now? Re-binds on the first frame of a swap."""
         current, generation = self.main_camera.state()

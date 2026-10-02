@@ -355,3 +355,29 @@ HailoRT context"——而这块 Hailo-8 只许一个 context。于是第二个 a
 **H6 的正解（下一轮）**：把 device 从 adapter 里拆出来——**一个 context、一个 runner、两个摄像头共用**；
 per-camera 的仍是几何、pad、计数器与 `camera_id`。共用 runner 会把两路串行化，所以 `measure_dual_feed.py`
 先量出公平性与各自 fps，再决定要不要上 multi-instance vstream。**没有读数不改架构**。
+
+## 主人裁决（2026-10-02 夜）：只推理主画面那一路——**取代 H6**
+
+> 「PIP 每次启动都要刷新（如果旧页面还开着），主画面不用——同样的修法要给 PIP。」
+> 「我不想两路同时喂 Hailo。只有主画面那一路进 AI HAT，PIP 只是看的。」
+
+追问后的三条决定：换画面时若正在跟踪 ⇒ **在瞄准点重新捕获**（保持同一身份，约 1 s 窗口，之后走正常丢失流程）；
+每次启动主画面都是 **wide**（不持久化）；**只手动切换**，不做 WP7 的自动交接。窄角装在广角**正上方**、25 mm、手动对焦；
+主人不要标定流程（「try-best，yolo 找不到就算了」）。
+
+**做法（`9c427cf`）**：
+- **一个 Hailo context、一个 adapter、一个 pipeline**：`perception/inference_switch.py` 在一把锁下决定这一帧是不是主画面那一路；
+  换画面的第一帧把 adapter 重新绑定（`serve_camera`，唯一被允许的重绑）、改视图、改 wide 预览的喂法，并通知跟踪器“源变了”。
+  H5 的双 adapter / 合并路径与 `merge_max_age_ms` 删除。
+- **主画面是站点状态**（`perception/main_camera.py`），走 selection socket（`POST /api/camera/main`），发布在 `inference_health.json`
+  的 `main_camera` 块；每个页面、每次刷新都按它摆两个画面。
+- **窄角的框发布在广角坐标系里**（`perception/detection/view.py`）：窄角画面 = 广角画面中心一个 1/5.90 的窗口。
+  controld、wire、估计器**一行没改**；HUD 用同一个比例把叠加层映射到主画面上。故意**居中**而不是放到窄角实际看的位置：
+  两颗镜头相距几厘米，实际位置随距离变（视差）；居中 ⇒ 炮塔把人放在**操作者正在看的画面**中间，代价是换画面时估计器看到约 1° 的阶跃，Level 1 平滑。
+- **比例 5.90** 由 `tools/register_detail_view.py` 在两路实时预览上量得（梯度图 + FFT NCC，NCC 0.60，roll ≤0.5°）；
+  光学推算 5.8（25 mm、2028×1080 模式裁 16:9、对广角 fx 1389@1920）。比例与距离无关，所以不需要标定板也不需要运动。
+- **在瞄准点重新捕获**：`TrackManager.note_source_change`——换画面后 1 s 内，选中目标若没按重叠关联上，就取锚点距离它
+  ≤0.05（广角归一化，≈3.5°）最近的检测并**保留 UUID**；新镜头的第一个框不与旧框平滑、不当作运动。
+- **PIP 刷新**：根因是重新部署后新的 webd 两路都没起流；主画面会重新 `start`，PIP 只会重新请求一个没人起的流（永远 409）。
+  现在两个画面用同一条规则 `hudPaneStep`：没在跑就 `start`，源在页面底下重启过（webd 按源发布 `epoch`）就重新指向；1.5 s 间隔。
+  `NO SECOND STREAM` 不再是单向锁存；tap 读线程死掉后不再谎报 `running`。

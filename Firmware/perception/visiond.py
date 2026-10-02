@@ -782,14 +782,18 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
     preview = JpegPreviewWorker(tap, os.path.join(run_dir, "preview_detail.jpg"))
     preview.start()
 
+    leg_wanted = threading.Event()
+
     def poll():
         request = picam2.capture_request()
         try:
-            image = request.make_array("main").copy()      # the buffer dies with the request
-            # The leg is copied for the same reason the main stream is: both arrays belong to the
-            # request being released below, and an adapter that reads the buffer afterwards reads
-            # whatever the next frame put there.
-            leg = (request.make_array("lores").copy() if lores is not None else None)
+            # make_array already copies out of the request's buffer (picamera2 request.py: "we
+            # don't want to send out an exported handle to the camera buffer, so we're going to have
+            # to do a copy"); a second .copy() here was 2.7 MB of interpreter time per frame.
+            image = request.make_array("main")
+            # The inference leg only while this camera is on the main display (leg_wanted).
+            leg = (request.make_array("lores")
+                   if lores is not None and leg_wanted.is_set() else None)
             metadata = dict(request.get_metadata())   # 名字里带下划线：getmetadata() 不存在
         finally:
             request.release()
@@ -813,7 +817,7 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
                                           size=stream_size)
         announcer.start()
     return {"picam2": picam2, "stream": stream, "preview": preview, "announcer": announcer,
-            "ident": ident, "stream_size": stream_size, "lores": lores}
+            "ident": ident, "stream_size": stream_size, "lores": lores, "leg_wanted": leg_wanted}
 
 
 def _start_detail_inference(detail, switch, pipeline, *, wire_publisher=None, legacy=False):
@@ -829,7 +833,14 @@ def _start_detail_inference(detail, switch, pipeline, *, wire_publisher=None, le
 
     def infer_step():
         frame = stream.latest(timeout_s=0.2)
-        if frame is None or frame.inference_image is None or not frame.sensor_timestamp_ns:
+        main = switch.is_main("detail")
+        # The leg is only copied out of the capture request while it will be inferred.
+        if main:
+            detail["leg_wanted"].set()
+        else:
+            detail["leg_wanted"].clear()
+        if (not main or frame is None or frame.inference_image is None
+                or not frame.sensor_timestamp_ns):
             return None
         try:
             with switch.lock:
@@ -934,17 +945,19 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
             # truth value -- which is exactly the ValueError that killed visiond six seconds into
             # the first Hailo boot. A pixel buffer is never falsy, so the intent has to be spelled.
             pixels = frame.inference_image if frame.inference_image is not None else frame.image
-            with switch.lock:
-                active = switch.acquire("wide") and switch.fresh(frame.sensor_timestamp_ns)
-                if active:
-                    outcome = pipeline.process_frame(
-                        pixels, frame.metadata, frame_sequence=frame.frame_sequence,
-                        sensor_timestamp_ns=frame.sensor_timestamp_ns, camera_id=_ident.id,
-                        capture_started_ns=frame.metadata_receive_ns)
-                    if wire_publisher is not None and outcome.stage != 'inference_pending':
-                        if not _publish_wire(outcome, wire_publisher,
-                                             legacy=args.legacy_track_wire) and not args.quiet:
-                            print("visiond: TrackSet publish failed", file=sys.stderr)
+            active = False
+            if switch.is_main("wide"):               # the idle camera never takes the lock
+                with switch.lock:
+                    active = switch.acquire("wide") and switch.fresh(frame.sensor_timestamp_ns)
+                    if active:
+                        outcome = pipeline.process_frame(
+                            pixels, frame.metadata, frame_sequence=frame.frame_sequence,
+                            sensor_timestamp_ns=frame.sensor_timestamp_ns, camera_id=_ident.id,
+                            capture_started_ns=frame.metadata_receive_ns)
+                        if wire_publisher is not None and outcome.stage != 'inference_pending':
+                            if not _publish_wire(outcome, wire_publisher,
+                                                 legacy=args.legacy_track_wire) and not args.quiet:
+                                print("visiond: TrackSet publish failed", file=sys.stderr)
             if not active:
                 # The detail camera is on the main display: this one is the PIP, display only.
                 if switch.wide_preview is not None:
