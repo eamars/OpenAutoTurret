@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <limits>
 #include <cstdint>
 
 namespace ota::track {
@@ -23,6 +24,9 @@ struct Level1Axis {
   double v_max=0, a_max=0, j_max=0;
   double lead_limit=0;        // rad: largest reference-to-axis lead before advance stops
   double q_min=0, q_max=0;    // travel (q_min==q_max: unbounded, e.g. continuous yaw)
+  // Directional speed caps set each tick by the host (>=0; infinite = none): the speed toward
+  // each end from which a stop under the host's own safety model still fits.
+  double v_pos_cap=std::numeric_limits<double>::infinity(), v_neg_cap=std::numeric_limits<double>::infinity();
 };
 struct Level1Parameters {
   std::array<Level1Axis,2> axis{};
@@ -68,6 +72,8 @@ class Level1Generator {
   // The host's envelope this tick (speed, acceleration, jerk and travel already reduced for
   // derating and boundaries): Level 1 never asks for more than the existing limits allow.
   bool set_limits(int axis,double v_max,double a_max,double j_max,double q_min,double q_max);
+  // Speed allowed toward q_min (negative_speed) and toward q_max (positive_speed), >=0.
+  bool set_speed_bounds(int axis,double negative_speed,double positive_speed);
  private:
   Level1Parameters p_{};
   bool configured_=false, initialized_=false;

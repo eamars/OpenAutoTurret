@@ -69,6 +69,13 @@ bool Level1Generator::set_limits(int axis,double v_max,double a_max,double j_max
   return true;
 }
 
+bool Level1Generator::set_speed_bounds(int axis,double negative_speed,double positive_speed) {
+  if (axis<0 || axis>1 || std::isnan(negative_speed) || std::isnan(positive_speed)) return false;
+  auto& a=p_.axis[axis];
+  a.v_neg_cap=std::max(0.,negative_speed); a.v_pos_cap=std::max(0.,positive_speed);
+  return true;
+}
+
 void Level1Generator::reset(int64_t t_ns,const std::array<double,2>& q,const std::array<double,2>& v,
                             const std::array<double,2>& a) {
   last_={};
@@ -112,7 +119,13 @@ ReferenceSample Level1Generator::step(int64_t t_ns,const JointGoal& goal,const s
         request=v>0?std::min(request,-c.a_max):std::max(request,c.a_max); flags|=kBoundary;
       }
     }
-    const double up=std::sqrt(2*c.j_max*std::max(0.,c.v_max-v)), down=-std::sqrt(2*c.j_max*std::max(0.,c.v_max+v));
+    // Speed bounds: v_max both ways, tightened by the host's directional caps. Above a cap the
+    // request is pulled down along the same jerk-limited curve that approaches it from below (a
+    // cap that falls as the axis nears its end must slow the reference, not merely stop it
+    // accelerating).
+    const double vp=std::min(c.v_max,c.v_pos_cap), vn=std::min(c.v_max,c.v_neg_cap);
+    const auto toward=[&](double gap) { return std::copysign(std::sqrt(2*c.j_max*std::abs(gap)),gap); };
+    const double up=toward(vp-v), down=-toward(vn+v);
     if (request>up || request<down) { request=std::clamp(request,down,up); flags|=kVelocityLimited; }
     if (std::abs(request)>c.a_max) { request=std::copysign(c.a_max,request); flags|=kAccelerationLimited; }
     double j=(request-a)/p_.period_s;

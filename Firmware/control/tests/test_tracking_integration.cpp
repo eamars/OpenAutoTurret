@@ -729,6 +729,108 @@ TEST(TrackingIntegration, SubjectLostMidSlewHandsTheServoOnlyFeasibleReferences)
   EXPECT_EQ(reversals, 0) << "the hold drove back to a pose it had overrun";
 }
 
+// The tracking-core configuration the servo tests share: the prior, an exact synthetic camera,
+// and stiff Level-1 limits so the boundary and the supervisor, not Level 1, are what bind.
+TrackingController::Config servo_core_cfg() {
+  auto cfg = make_tracking_cfg(false);
+  const auto prior = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()) /
+                     "config/tracking/tracking_prior.json";
+  cfg.core = track::tracker_from_yaml(YAML::LoadFile(prior.string()));
+  cfg.core->pixel_sigma = 1.0;
+  cfg.core->timing = {};
+  cfg.core_nominal_exposure_s = 0;
+  for (auto& a : cfg.core->level1.axis) { a.v_max = 40 * kDeg; a.a_max = 300 * kDeg; a.j_max = 3000 * kDeg; }
+  return cfg;
+}
+
+// Station, 2026-10-02 17:05:52: following a subject downward, Level 1 rode its own braking curve
+// toward the pitch soft minimum (44 deg/s, 18 deg away) while the supervisor's stop model said the
+// axis could no longer stop: BRAKE. Level 1 now takes the supervisor's own boundary governor as its
+// speed bounds, so chasing a subject toward an end never needs the supervisor.
+TEST(TrackingIntegration, ChasingASubjectTowardThePitchLimitNeverNeedsTheSupervisor) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, 0.0); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  int brakes = 0;
+  double lowest = 0, highest = 0, peak_speed = 0;
+  for (int i = 0; i < 800; ++i) {
+    // Toward the pitch end at 40 deg/s (this rig's negative elevation is positive pitch), stopping
+    // where the pitch goal is ~42 deg, 13 deg inside the 55.3 deg soft limit: the station's case
+    // (44 deg/s, 18 deg away). Without the governor this run brakes 273 times and the brake, by
+    // then infeasible, carries pitch onto the rig's hard stop.
+    const double el = std::max(-58.3 * kDeg, -40.0 * kDeg * i * 0.005);
+    if (i % 6 == 0) step_with_track(r, t, seq++, 0.0, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+    lowest = std::min(lowest, r.loop().last_positions()[0]);
+    highest = std::max(highest, r.loop().last_positions()[0]);
+    peak_speed = std::max(peak_speed, std::abs(r.sim().snapshot(AxisId::Pitch, t).v_rad_s));
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  std::printf("pitch chase: pitch %.1f..%.1f deg (soft %.1f..%.1f), peak %.1f deg/s, supervisor brakes %d, "
+              "releases %d\n", lowest / kDeg, highest / kDeg, r.loop().limits()[0].q_soft_min_rad / kDeg,
+              r.loop().limits()[0].q_soft_max_rad / kDeg, peak_speed / kDeg, brakes, servo->servo[0].releases);
+  EXPECT_EQ(brakes, 0) << "Level 1 went where the supervisor had to stop it";
+  EXPECT_EQ(servo->servo[0].releases, 0);
+  EXPECT_GT(peak_speed, 30 * kDeg) << "the chase must arrive at speed";
+  EXPECT_GT(highest, 35 * kDeg) << "and near the end";
+  EXPECT_LE(highest, r.loop().limits()[0].q_soft_max_rad);
+}
+
+// Station, 2026-10-02 17:05:52: the supervisor's BRAKE sent a zero-speed command, which released
+// the yaw servo with the axis moving; the legacy speed loop could not take it over and the station
+// faulted. A supervisor stop with the servos engaged is now executed by the servo.
+TEST(TrackingIntegration, ASupervisorBrakeMidSlewIsExecutedByTheServo) {
+  auto owned = std::make_unique<ServoSimBackend>();
+  ServoSimBackend* servo = owned.get();
+  TrackingRig r(true, true, 15, {}, std::move(owned));
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(r, t));
+  enter_mode(r, servo_core_cfg(), ota::OperatingMode::AutoTrack);
+  const double az = 25.0 * kDeg, el = 5.0 * kDeg;
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, az, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  servo->servo = {};
+  int64_t seq = 10;
+  int brakes = 0;
+  double speed_at_brake = 0;
+  std::vector<double> ref;
+  for (int i = 0; i < 500; ++i) {
+    const bool stale = i == 60;                      // one cycle of missing yaw feedback, mid-slew
+    if (stale) speed_at_brake = std::abs(r.sim().snapshot(AxisId::Yaw, t).v_rad_s);
+    r.sim().set_feedback_ok(AxisId::Yaw, !stale);
+    if (i % 6 == 0) step_with_track(r, t, seq++, az, el);
+    else r.loop().step(t, kDtNs);
+    servo->end_tick();
+    if (r.loop().last_decision().action == SafetyAction::Brake) ++brakes;
+    ref.push_back(servo->servo[1].engaged ? servo->servo[1].q_ref : std::nan(""));
+    t += kDtNs;
+    ASSERT_NE(r.loop().phase(), Phase::Fault) << "tick " << i;
+  }
+  double worst_a = 0;
+  for (size_t k = 2; k < ref.size(); ++k)
+    if (!std::isnan(ref[k]) && !std::isnan(ref[k - 1]) && !std::isnan(ref[k - 2]))
+      worst_a = std::max(worst_a, std::abs(ref[k] - 2 * ref[k - 1] + ref[k - 2]) / (kDtNs * kDtNs * 1e-18));
+  std::printf("supervisor brake at %.1f deg/s: brakes %d, yaw releases %d, silent %d, worst reference "
+              "acceleration %.0f deg/s^2\n", speed_at_brake / kDeg, brakes, servo->servo[1].releases,
+              servo->servo[1].silent, worst_a / kDeg);
+  EXPECT_GT(speed_at_brake, 10 * kDeg) << "the brake must fall inside the slew";
+  EXPECT_GT(brakes, 0) << "the scenario must actually brake";
+  EXPECT_EQ(servo->servo[1].releases, 0) << "the stop handed a moving axis to the legacy loop";
+  EXPECT_EQ(servo->servo[1].silent, 0);
+  EXPECT_LT(worst_a, 450 * kDeg) << "a reference step reached the servo";
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Tracking) << "and tracking resumes";
+}
+
 // Feed the target for `track_cycles` cycles, then stop feeding (target lost)
 // and return the TrackingRig + the time of the last measurement cycle.
 struct TrackThenLose {

@@ -171,6 +171,33 @@ void level1_holds_inside_pitch_travel() {
   check(std::abs(r.v[1])<1e-6 && (r.flags[1]&kGoalInvalid),"no goal: brakes to rest and holds");
 }
 
+void level1_slows_to_a_falling_speed_cap() {
+  // The host's boundary governor lowers the speed allowed toward an end as the axis nears it; a
+  // reference already faster than the new cap must slow to it within a_max and j_max, not merely
+  // stop accelerating (station 2026-10-02: pitch rode Level 1's own braking curve outside the
+  // supervisor's, which braked the station).
+  Level1Generator g; g.configure(level1_parameters());
+  g.reset(kS,{0.,-0.8},{0.,0.},{0.,0.});
+  JointGoal goal; goal.valid=true; goal.velocity_valid={true,true}; goal.q={2.,-0.8}; goal.v={0.5,0.};
+  ReferenceSample r;
+  int k=1;
+  for (;k<=400;++k) r=g.step(kS+int64_t(k)*5'000'000,goal,r_measured(r));
+  check(std::abs(r.v[0]-20*kDeg)<1e-3,"running at v_max before the cap falls");
+  g.set_speed_bounds(0,20*kDeg,5*kDeg);
+  double worst_a=0, worst_j=0; ReferenceSample prev=r;
+  for (;k<=600;++k) {
+    r=g.step(kS+int64_t(k)*5'000'000,goal,r_measured(r));
+    worst_a=std::max(worst_a,std::abs(r.a[0]));
+    worst_j=std::max(worst_j,std::abs(r.a[0]-prev.a[0])/0.005);
+    prev=r;
+  }
+  check(r.v[0]<=5*kDeg+1e-3,"slowed to the cap");
+  check(worst_a<=60*kDeg+1e-9 && worst_j<=300*kDeg+1e-6,"within a_max and j_max while slowing");
+  g.set_speed_bounds(0,20*kDeg,0.);
+  for (;k<=900;++k) r=g.step(kS+int64_t(k)*5'000'000,goal,r_measured(r));
+  check(std::abs(r.v[0])<1e-3,"a zero cap toward an end stops the reference");
+}
+
 TrackerParameters tracker_parameters() {
   TrackerParameters p;
   p.estimator=estimator_parameters(); p.level1=level1_parameters(); p.pixel_sigma=1.5;
@@ -259,6 +286,7 @@ int main() {
   run("level1_tracks_ramp_without_lag",level1_tracks_ramp_without_lag);
   run("level1_respects_lead_limit_and_resumes",level1_respects_lead_limit_and_resumes);
   run("level1_holds_inside_pitch_travel",level1_holds_inside_pitch_travel);
+  run("level1_slows_to_a_falling_speed_cap",level1_slows_to_a_falling_speed_cap);
   run("tracker_removes_camera_rotation_once",tracker_removes_camera_rotation_once);
   run("tracker_identity_change_drops_motion",tracker_identity_change_drops_motion);
   run("tracker_uses_optical_time",tracker_uses_optical_time);

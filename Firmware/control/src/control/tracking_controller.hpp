@@ -365,6 +365,9 @@ class TrackingController {
     return core_ && core_->level1().set_limits(axis, v_max, a_max, j_max, q_min, q_max);
   }
   void core_travel(const track::Travel& travel) { if (core_) core_->set_travel(travel); }
+  bool core_speed_bounds(int axis, double negative_speed, double positive_speed) {
+    return core_ && core_->level1().set_speed_bounds(axis, negative_speed, positive_speed);
+  }
   // One Level-1 tick: the joint goal from the estimator and the one reference sample.
   track::TickRecord core_tick(TimeNs now, const std::array<double,2>& q_measured) {
     now_ns_ = now;

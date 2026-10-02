@@ -361,6 +361,10 @@ class ControlLoop {
   }
   // The braking limits of that reference: the ones the legacy speed loop stopped with.
   std::pair<double, double> hold_brake_limits(int axis) const;
+  // A supervisor BRAKE/HOLD executed by the engaged ADR-002.2 servo: a braked reference from
+  // `from` (last tick's published reference) to where it comes to rest. False: not handed over.
+  bool servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from, TimeNs period_ns,
+                  TimeNs now_ns, const AxisLimits& limits);
   double motion_speed(OperatingMode mode, bool maximum = false) const;
 
   // --- telemetry (§6.3, §43) --------------------------------------------

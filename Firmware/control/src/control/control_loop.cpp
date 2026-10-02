@@ -1465,6 +1465,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   // Was the previous cycle a shaped move? Captured before it is cleared below, so the limiter knows
   // it is starting fresh without needing a separate "engagement started" event from every caller.
   const bool ref_lim_was_engaged = ref_lim_engaged_;
+  control::ReferenceLimiter ref_lim_prev[kAxisCount];
+  std::copy(std::begin(ref_lim_), std::end(ref_lim_), std::begin(ref_lim_prev));
   ref_lim_engaged_ = false;
   bool tracking_velocity_control = false;
   double tracking_command_rate[kAxisCount]{};
@@ -1823,6 +1825,17 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           tracking_->core_limits(0, core_v[Y], core_a[Y], core_j[Y], ylo, yhi);
           tracking_->core_limits(1, core_v[P], core_a[P], core_j[P], plo, phi);
           tracking_->core_travel({ylo, yhi, plo, phi});
+          // The supervisor brakes any axis that can no longer stop before its soft limit under its
+          // own braking model (a_brake, j_brake, stop margin). Level 1 must stay inside that, not
+          // ride its own stiffer curve beside it: station, 2026-10-02 17:05:52, pitch at 44 deg/s
+          // 18 deg above its soft minimum -> BRAKE. The same governor as the legacy speed path,
+          // with braking no stronger than Level 1 itself can execute.
+          for (const auto [i, c] : {std::pair{Y, 0}, std::pair{P, 1}}) {
+            const control::BoundaryGovernor governor{std::min(cfg_.a_brake_rad_s2, core_a[i]),
+                std::min(cfg_.j_brake_rad_s3, core_j[i]), .20, cfg_.stop_margin_rad};
+            const auto b = governor.at(sp[i].q_rad, cycle_limits[i], core_v[i], ref_lim_[i].a_rad_s2, v_est_[i]);
+            tracking_->core_speed_bounds(c, b.negative_speed, b.positive_speed);
+          }
           const auto rec = tracking_->core_tick(now_ns, {sp[Y].q_rad, sp[P].q_rad});
           core_last_tick_ns_ = now_ns;
           const auto& r = rec.reference;
@@ -2491,6 +2504,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           service_velocity_control = true;
           service_command_rate[i] = velocity;
           backend_->command_velocity(a, velocity);
+        } else if (phase_ == Phase::Hold && servo_holds() &&
+                   (last_decision_.action == SafetyAction::Brake ||
+                    last_decision_.action == SafetyAction::Hold) &&
+                   servo_stop(i, a, ref_lim_prev[i], period_ns, now_ns, cycle_limits[i])) {
+          // The engaged servo executes the supervisor's stop. Station, 2026-10-02 17:05:52: the
+          // zero-speed command below released the yaw servo with the axis moving, the legacy speed
+          // loop could not take it over (velocity_loop_invalid) and the station faulted.
+          service_velocity_control = true;
+          service_command_rate[i] = ref_lim_[i].v_rad_s;
         } else if (phase_ == Phase::Fault || (last_decision_.action != SafetyAction::Allow &&
                    !(phase_ == Phase::Parking && last_decision_.action == SafetyAction::Derate))) {
           speed_servo_[i].reset();
@@ -3381,6 +3403,29 @@ double ControlLoop::hold_speed_effective() const {
   }
   if (payload_derated_) v *= cfg_.derate_factor;  // §31.3 conservative path
   return v;
+}
+
+bool ControlLoop::servo_stop(int i, AxisId axis, const control::ReferenceLimiter& from,
+                             TimeNs period_ns, TimeNs now_ns, const AxisLimits& limits) {
+  if (!from.initialised) return false;
+  // From last tick's published reference: this tick's has already advanced along the motion the
+  // supervisor just stopped, and continuing from it would step the servo twice in one tick.
+  ref_lim_[i] = from;
+  const double a = cfg_.a_brake_rad_s2, j = cfg_.j_brake_rad_s3;
+  const double v = from.v_rad_s;
+  const double rest = env_.constrain_reference(
+      from.q_rad + std::copysign(control::stopping_distance_rad(v, from.a_rad_s2, a, j), v), limits);
+  control::limit_reference(ref_lim_[i], rest, static_cast<double>(period_ns) * 1e-9, std::abs(v), a, j);
+  MotorBackend::ServoReference r;
+  r.t_ns = now_ns;
+  r.q = ref_lim_[i].q_rad; r.v = ref_lim_[i].v_rad_s; r.a = ref_lim_[i].a_rad_s2; r.j = 0;
+  r.valid_s = 4 * static_cast<double>(period_ns) * 1e-9;
+  if (limits.valid) { r.q_min = limits.q_soft_min_rad; r.q_max = limits.q_soft_max_rad; }
+  if (!backend_->command_reference(axis, r)) { ref_lim_[i] = from; return false; }
+  servo_jerk_[i] = 0.0;
+  ref_lim_engaged_ = true;
+  core_last_tick_ns_ = 0;  // the core's reference was not executed: re-seed Level 1 next tick
+  return true;
 }
 
 std::pair<double, double> ControlLoop::hold_brake_limits(int axis) const {
