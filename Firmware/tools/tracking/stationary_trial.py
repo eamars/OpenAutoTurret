@@ -173,6 +173,18 @@ def main():
     rec = Recorder(args.out, args.rate, args.block)
 
     s = to_manual()
+    if not tracks(s, args.cls):
+        # Not in view: let AUTO_ROAM sweep until it is, then let AUTO_TRACK centre it.
+        command("set_mode", "AUTO_ROAM")
+        s = wait_for(lambda x: bool(tracks(x, args.cls)), 90.0, f"a {args.cls} in view")
+        found = tracks(s, args.cls)[0]
+        ack = select(s, found["uuid"])
+        if not ack.get("accepted"):
+            raise SystemExit(f"could not select {args.cls}: {ack}")
+        command("set_mode", "AUTO_TRACK")
+        time.sleep(6.0)
+        rec.mark(event="acquired", uuid=found["uuid"])
+        s = to_manual()
     hfov = math.radians(s.get("effective_hfov_deg") or 69.3)
     vfov = math.radians(s.get("effective_vfov_deg") or 40.4)
     seed = tracks(s, args.cls)

@@ -55,6 +55,9 @@ def trial_metrics(trial, ticks, states):
         "pitch_mean_px": st.fmean(ep[i] for i in tail), "pitch_std_px": st.pstdev([ep[i] for i in tail]),
         "p95_px": pct([mag[i] for i in tail], 95), "max_px": max(mag[i] for i in tail),
         "ffw_mean": st.fmean(max(ticks[i]["ffw"]) for i in tail),
+        # The pitch axis itself (what a fixed pitch must show as ~0) and its peak-to-peak.
+        "pitch_q_std_deg": st.pstdev([math.degrees(ticks[i]["q"][1]) for i in tail]),
+        "pitch_q_pp_deg": math.degrees(max(ticks[i]["q"][1] for i in tail) - min(ticks[i]["q"][1] for i in tail)),
         "rate_dps_mean": [st.fmean(math.degrees(ticks[i]["est"][2 + k]) for i in tail) for k in (0, 1)],
         "rate_over_sigma_p95": pct([max(abs(ticks[i]["est"][2 + k]) / max(ticks[i]["sig_w"][k], 1e-9)
                                         for k in (0, 1)) for i in tail], 95),
@@ -125,7 +128,8 @@ def main():
         h, e, f, i = r["hold"], r["camera_turning"], r["frames"], r["image"]
         print(f"{r['trial']:16s} start {r['initial_error_px']:+7.1f}px settle {r['settle_s']:5.2f}s over {r['overshoot_px']:5.1f}px | "
               f"hold yaw {h['yaw_mean_px']:+5.2f}+-{h['yaw_std_px']:.2f} pitch {h['pitch_mean_px']:+5.2f}+-{h['pitch_std_px']:.2f} "
-              f"p95 {h['p95_px']:.2f}px ffw {h['ffw_mean']:.2f} | img x {i['x_mean_px']:+5.1f}+-{i['x_std_px']:.1f} | "
+              f"p95 {h['p95_px']:.2f}px ffw {h['ffw_mean']:.2f} | pitch axis sd {h['pitch_q_std_deg']:.3f} pp {h['pitch_q_pp_deg']:.2f}deg | "
+              f"img x {i['x_mean_px']:+5.1f}+-{i['x_std_px']:.1f} y {i['y_mean_px']:+5.1f}+-{i['y_std_px']:.1f} | "
               f"slew {e['peak_axis_dps']:4.1f}dps w/sig {e['rate_over_sigma_max']:.1f} | frames {f['interval_ms_median']:.0f}/"
               f"{f['interval_ms_p95']:.0f}/{f['interval_ms_max']:.0f}ms age {f['age_ms_median']:.0f}/{f['age_ms_p95']:.0f}ms")
     if args.out:
