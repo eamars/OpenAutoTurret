@@ -1,4 +1,5 @@
 #include "capture.hpp"
+#include <arpa/inet.h>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <linux/can.h>
 #include <linux/sock_diag.h>
+#include <netinet/in.h>
 #include <sstream>
 #include <stdexcept>
 #include <time.h>
@@ -27,6 +29,43 @@ void option(int fd, int key) {
   if (setsockopt(fd, SOL_SOCKET, key, &one, sizeof(one)))
     throw std::runtime_error("required receive metadata unavailable: " + std::string(strerror(errno)));
 }
+// Linux switches kernel receive stamping on for the system's first timestamping socket through
+// deferred work (net_enable_timestamp -> schedule_work). A datagram queued before that work runs
+// carries no stamp and recvmsg fills in the time it is *read*, so a socket can deliver read-time
+// stamps followed by earlier queue-time stamps, which receive() rightly rejects as a clock going
+// backwards (station 2026-10-02, kernel 6.18: 1.57 ms in the overflow test, 2 of 300 lone runs).
+// Stamping is system-wide and the caller's socket keeps it on once it is on, so prove it is on
+// with a private loopback datagram left waiting in its queue: a queue-time stamp precedes the
+// read, a read-time stamp cannot.
+void await_queue_stamping() {
+  struct Probe { int fd; ~Probe() { if (fd >= 0) close(fd); } } probe{socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, 0)};
+  if (probe.fd < 0) throw std::runtime_error("DATA_INVALID: stamping probe socket unavailable");
+  option(probe.fd, SO_TIMESTAMPNS);
+  sockaddr_in addr{}; addr.sin_family = AF_INET; addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  socklen_t size = sizeof(addr);
+  if (bind(probe.fd, reinterpret_cast<sockaddr*>(&addr), size) ||
+      getsockname(probe.fd, reinterpret_cast<sockaddr*>(&addr), &size))
+    throw std::runtime_error("DATA_INVALID: stamping probe bind failed");
+  const auto deadline = monotonic_ns() + 1'000'000'000;
+  do {
+    const char byte = 0;
+    if (sendto(probe.fd, &byte, 1, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 1)
+      throw std::runtime_error("DATA_INVALID: stamping probe send failed");
+    const timespec wait{0, 1'000'000}; nanosleep(&wait, nullptr);
+    const auto read_ns = read_clock(CLOCK_REALTIME);
+    char data; iovec io{&data, 1};
+    alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(timespec))> control{};
+    msghdr msg{}; msg.msg_iov = &io; msg.msg_iovlen = 1;
+    msg.msg_control = control.data(); msg.msg_controllen = control.size();
+    if (recvmsg(probe.fd, &msg, MSG_DONTWAIT) != 1) continue;
+    for (auto* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+      if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_TIMESTAMPNS || c->cmsg_len != CMSG_LEN(sizeof(timespec))) continue;
+      timespec stamp{}; std::memcpy(&stamp, CMSG_DATA(c), sizeof(stamp));
+      if (read_ns - (int64_t(stamp.tv_sec)*1000000000 + stamp.tv_nsec) >= 500'000) return;
+    }
+  } while (monotonic_ns() < deadline);
+  throw std::runtime_error("DATA_INVALID: kernel receive stamping did not take effect");
+}
 }
 int64_t monotonic_ns() { return read_clock(CLOCK_MONOTONIC); }
 ClockBracket ClockBracket::sample() {
@@ -39,6 +78,13 @@ TimestampedReceiver::TimestampedReceiver(int fd)
     : fd_(fd), origin_(ClockBracket::sample()) {
   option(fd, SO_TIMESTAMPNS);
   option(fd, SO_RXQ_OVFL);
+  await_queue_stamping();
+  // Anything already queued may have been stamped when read; it is not evidence.
+  can_frame wire{}; timespec stamp{}; uint32_t drops{};
+  while (dequeue(wire, stamp, drops)) {
+    if (wire.can_id & CAN_ERR_FLAG) throw std::runtime_error("DATA_INVALID: CAN error frame queued before capture");
+    ++discarded_;
+  }
   if (kernel_drops()) throw std::runtime_error("DATA_INVALID: socket already lost packets before capture");
 }
 uint32_t TimestampedReceiver::kernel_drops() const {
@@ -49,8 +95,7 @@ uint32_t TimestampedReceiver::kernel_drops() const {
     throw std::runtime_error("DATA_INVALID: final socket loss counter unavailable");
   return counters[SK_MEMINFO_DROPS];
 }
-bool TimestampedReceiver::receive(Receipt& out) {
-  can_frame wire{};
+bool TimestampedReceiver::dequeue(can_frame& wire, timespec& stamp, uint32_t& socket_drops) {
   iovec io{&wire, sizeof(wire)};
   alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(timespec)) + CMSG_SPACE(sizeof(uint32_t))> control{};
   msghdr msg{};
@@ -61,23 +106,29 @@ bool TimestampedReceiver::receive(Receipt& out) {
   if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return false;
   if (n != CAN_MTU || (msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC)))
     throw std::runtime_error("DATA_INVALID: truncated or invalid CAN datagram");
-  out = {};
-  out.dequeue_ns = monotonic_ns();
   bool timestamp = false;
-  out.socket_drops = drops_;
   for (auto* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
     if (c->cmsg_level != SOL_SOCKET) continue;
     if (c->cmsg_type == SCM_TIMESTAMPNS && c->cmsg_len == CMSG_LEN(sizeof(timespec))) {
-      timespec stamp{}; std::memcpy(&stamp, CMSG_DATA(c), sizeof(stamp));
+      std::memcpy(&stamp, CMSG_DATA(c), sizeof(stamp));
       if (stamp.tv_sec <= 0 || stamp.tv_nsec < 0 || stamp.tv_nsec >= 1000000000)
         throw std::runtime_error("DATA_INVALID: malformed kernel timestamp");
-      out.kernel_realtime_ns = int64_t(stamp.tv_sec)*1000000000 + stamp.tv_nsec;
       timestamp = true;
     }
     if (c->cmsg_type == SO_RXQ_OVFL && c->cmsg_len == CMSG_LEN(sizeof(uint32_t)))
-      std::memcpy(&out.socket_drops, CMSG_DATA(c), sizeof(uint32_t));
+      std::memcpy(&socket_drops, CMSG_DATA(c), sizeof(uint32_t));
   }
   if (!timestamp) throw std::runtime_error("DATA_INVALID: kernel timestamp missing");
+  return true;
+}
+bool TimestampedReceiver::receive(Receipt& out) {
+  can_frame wire{}; timespec stamp{};
+  uint32_t socket_drops = drops_;
+  if (!dequeue(wire, stamp, socket_drops)) return false;
+  out = {};
+  out.dequeue_ns = monotonic_ns();
+  out.socket_drops = socket_drops;
+  out.kernel_realtime_ns = int64_t(stamp.tv_sec)*1000000000 + stamp.tv_nsec;
   const auto now = ClockBracket::sample();
   // Retain the transform and measured uncertainty; calibration interprets it.
   out.clock_uncertainty_ns = origin_.uncertainty_ns + now.uncertainty_ns

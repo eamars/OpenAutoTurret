@@ -21,23 +21,20 @@ struct Directory {
   Directory() { char name[]="/tmp/ota-capture-test-XXXXXX"; auto* p=mkdtemp(name); if (!p) throw std::runtime_error("mkdtemp"); path=p; }
   ~Directory() { std::filesystem::remove_all(path); }
 };
-// Linux switches kernel receive stamping on for the system's first timestamping socket through
-// deferred work (net_enable_timestamp -> schedule_work). Datagrams queued before that work runs
-// are stamped when they are read, so a burst sent straight after the receiver opens can carry
-// read-time stamps followed by earlier queue-time stamps, and the receiver rightly rejects a
-// clock that goes backwards (station 2026-10-02, stack stopped: 1.57 ms, 2 of 300 lone runs).
-// Probe until a datagram is stamped at queue time; probes cannot go backwards themselves, each
-// is sent after the previous one was read.
-void wait_for_queue_stamps(int tx, const sockaddr_in& addr, TimestampedReceiver& receiver, Receipt& r) {
-  can_frame probe{}; probe.can_dlc=8;
-  for (int i=0;i<500;++i) {
-    ASSERT_EQ(sendto(tx,&probe,sizeof(probe),0,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr)),sizeof(probe));
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    ASSERT_TRUE(receiver.receive(r));
-    if (r.dequeue_ns-r.kernel_monotonic_ns>=1'000'000) return;
+struct Loopback {
+  int rx{socket(AF_INET,SOCK_DGRAM,0)}, tx{socket(AF_INET,SOCK_DGRAM,0)};
+  sockaddr_in addr{};
+  Loopback() {
+    addr.sin_family=AF_INET; addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK); socklen_t len=sizeof(addr);
+    if (rx<0 || tx<0 || bind(rx,reinterpret_cast<sockaddr*>(&addr),len) || getsockname(rx,reinterpret_cast<sockaddr*>(&addr),&len))
+      throw std::runtime_error("loopback");
   }
-  FAIL()<<"kernel receive stamping never took effect";
-}
+  ~Loopback() { close(rx); close(tx); }
+  bool send(canid_t id=0) {
+    can_frame frame{}; frame.can_id=id; frame.can_dlc=8;
+    return sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr))==sizeof(frame);
+  }
+};
 Receipt reply(int64_t t, int type=17, int motor=127) {
   Receipt r; r.frame.id=ota::cybergear::pack_ext_id(type,motor,0);
   r.frame.data[0]=0x1a; r.frame.data[1]=0x70;
@@ -135,8 +132,6 @@ TEST(Receiver, KernelReportsRealDatagramOverflow) {
   socklen_t len=sizeof(addr); ASSERT_EQ(getsockname(rx,reinterpret_cast<sockaddr*>(&addr),&len),0);
   TimestampedReceiver receiver(rx);
   Receipt r; uint64_t observed_drops=0;
-  wait_for_queue_stamps(tx,addr,receiver,r);
-  if (HasFatalFailure()) return;
   can_frame frame{}; frame.can_id=0; frame.can_dlc=8;
   for (int i=0;i<1000;++i) ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
   auto receive=[&]() {
@@ -170,4 +165,30 @@ TEST(Receiver, FinalCounterDetectsLossBeforeAnyOverflowNotificationIsDequeued) {
   // No receive() call and no subsequent trigger packet: loss is observable now.
   EXPECT_GT(receiver.kernel_drops(),0u);
   close(rx); close(tx);
+}
+// Linux switches receive stamping on for the system's first timestamping socket through deferred
+// work, and a datagram queued before that work runs is stamped when it is read. The receiver must
+// return from construction only once datagrams are stamped as they queue, and must not deliver
+// anything that was queued before then (station 2026-10-02: read-time stamps followed by earlier
+// queue-time stamps aborted the overflow test as a backwards clock, 2 of 300 lone runs).
+TEST(Receiver, StampsAtQueueTimeFromConstructionAndDiscardsWhatWasAlreadyQueued) {
+  Loopback link;
+  for (int i=0;i<5;++i) ASSERT_TRUE(link.send());
+  TimestampedReceiver receiver(link.rx);
+  EXPECT_EQ(receiver.startup_discarded(),5u);
+  Receipt r; EXPECT_FALSE(receiver.receive(r));
+  // Sent straight after construction, before any deferred work could have been waited for here.
+  ASSERT_TRUE(link.send());
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  ASSERT_TRUE(receiver.receive(r));
+  EXPECT_GE(r.dequeue_ns-r.kernel_monotonic_ns,1'000'000) << "stamped when read, not when queued";
+  for (int i=0;i<50;++i) ASSERT_TRUE(link.send());
+  int received=0;
+  while (receiver.receive(r)) ++received;
+  EXPECT_EQ(received,50);
+}
+TEST(Receiver, ErrorFrameQueuedBeforeCaptureIsNotDiscardedSilently) {
+  Loopback link;
+  ASSERT_TRUE(link.send()); ASSERT_TRUE(link.send(CAN_ERR_FLAG));
+  EXPECT_THROW(TimestampedReceiver receiver(link.rx),std::runtime_error);
 }

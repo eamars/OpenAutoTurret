@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <linux/can.h>
 #include <sys/socket.h>
 #include "can/can_transport.hpp"
 
@@ -29,13 +30,17 @@ class TimestampedReceiver {
  public:
   // Does not own fd. The same recvmsg/ancillary path serves SocketCAN and the
   // explicitly synthetic local datagram harness. Both require classic CAN MTU.
+  // Returns only once the kernel stamps at queue time; construct before bind,
+  // since anything already queued is discarded unread (and counted).
   explicit TimestampedReceiver(int fd);
   bool receive(Receipt& out); // false only for EAGAIN; other failures throw
   uint32_t kernel_drops() const; // includes loss not yet delivered in ancillary data
+  uint32_t startup_discarded() const { return discarded_; }
  private:
+  bool dequeue(can_frame& wire, timespec& stamp, uint32_t& socket_drops); // false only for EAGAIN
   int fd_;
   ClockBracket origin_;
-  uint32_t drops_{};
+  uint32_t drops_{}, discarded_{};
   int64_t previous_ns_{};
 };
 
