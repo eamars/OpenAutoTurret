@@ -50,6 +50,10 @@ class CyberGearSystem {
   bool motion_inhibited() const { return motion_inhibited_.load(); }
   void inhibit_motion();
   bool finish_motor_recovery(double max_temp, std::string& err);
+  // One drive only, for a system whose other slot is an alias that never reports (the mixed
+  // station's pitch). Accepts a stopped drive, or an enabled one holding speed zero without a fault:
+  // the watchdog's own hold leaves it there, and releasing an unbalanced load to re-arm drops it.
+  bool finish_axis_recovery(AxisId axis, double max_temp, std::string& err);
   bool open(const CyberGearSystemConfig& cfg, std::string& err,
             std::unique_ptr<CanTransport> transport = {});
   void close();

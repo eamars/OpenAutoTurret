@@ -184,6 +184,14 @@ class MixedCanMotorBackend final : public MotorBackend {
   // struct copy atomic. Nesting order is always yaw_mutex_ → yaw_trip_detail_mutex_.
   TripDetail watchdog_trip_detail() const override;
   bool recovery_before_homing() const override { return false; }
+  // Home's recovery (owner ruling 2026-10-03: Home recovers everything). Clears what this backend
+  // latched -- the GM6020 guard trip, a pitch servo fault, the CyberGear watchdog inhibit -- and
+  // proves fresh, healthy feedback on both axes before homing enables anything. Only a pitch drive
+  // that reports a fault of its own is stopped to clear it (the clear IS a stop, and that drive is
+  // not holding anyway); a healthy one keeps holding (STATION_OPERATIONS "Fault, hold, degrade").
+  bool begin_motor_recovery(std::string& err) override;
+  Transition poll_motor_recovery(TimeNs now, double max_temp, std::string& err) override;
+  void cancel_motor_recovery() override { recovery_active_ = false; }
   bool discover(AxisId axis, uint64_t& unique_id, std::string& err) override;
   bool read_register(AxisId axis, cybergear::Reg reg, double& value,
                      int timeout_ms, std::string& err) override;
@@ -302,6 +310,9 @@ class MixedCanMotorBackend final : public MotorBackend {
   TimeNs yaw_follow_since_ns_ = 0;
   std::atomic<TimeNs> pitch_follow_since_ns_{0};
   TimeNs pitch_stale_since_ns_ = 0;   // pitch servo thread only
+  // Motor recovery (control thread only).
+  bool recovery_active_ = false, recovery_pitch_cleared_ = false;
+  TimeNs recovery_started_ns_ = 0, recovery_healthy_since_ns_ = 0;
   gm6020::VelocityLoop yaw_velocity_loop_;
   gm6020::RxVelocity yaw_rx_velocity_;
   YawState yaw_state_{};

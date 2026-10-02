@@ -205,6 +205,15 @@ TEST(ReferenceServo, LegacyCommandReleasesIt) {
   run(b, plant, 0.1);
   b.command_velocity(AxisId::Yaw, 0.0);
   EXPECT_FALSE(Access::engaged(b)) << "a legacy speed command hands the axis back to the legacy loop";
+  // Station, 2026-10-03 01:43:33: Park sent this zero while the servo held yaw. The release reset the
+  // legacy loop at a clock reading later than the command's own, its first step saw time run
+  // backwards (velocity_loop_invalid) and the station faulted. The hand-over must not trip.
+  EXPECT_FALSE(Access::tripped(b));
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.02)));
+  run(b, plant, 0.1);
+  b.command(AxisId::Yaw, 0.02, 0.1);
+  EXPECT_FALSE(Access::engaged(b));
+  EXPECT_FALSE(Access::tripped(b)) << "a legacy position command hands over the same way";
 }
 
 TEST(ReferenceServo, StaleSegmentIsHeldNotExtrapolated) {

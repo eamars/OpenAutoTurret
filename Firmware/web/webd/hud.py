@@ -362,20 +362,35 @@ function hudDrawerActions(name, t) {
   }
 
   if (name === "MENU") {
-    // Supervisory actions move the turret somewhere the operator did not just ask it to go, so they ask
-    // twice. §14 reserves red for stop and fault, so the confirm state - not colour alone - is what
-    // signals danger here.
+    // Owner ruling 2026-10-03: three supervisory actions, each of which works from where it is offered.
+    //   HOME     recovers whatever latched (fault, drive watchdog) and runs homing; AUTO ROAM after.
+    //   PARK     yaw to 0, pitch onto its rest end stop, hold there; any MODE leaves it.
+    //   SHUTDOWN PARK, then both motors off; only HOME starts again.
+    // They move the turret somewhere the operator did not just point it, so they ask twice. §14 reserves
+    // red for stop and fault, so the confirm state - not colour alone - is what signals danger here.
+    const phase = String(t.phase || "");
+    const rest = String(t.rest_park || "");
+    const parking = rest === "moving" || rest === "touching";
+    const busy = phase === "homing" || phase === "recovering";
+    const home = busy
+      ? { kind: "gated", note: phase === "recovering" ? "RECOVERING THE DRIVES…" : "HOMING…" }
+      : rest === "releasing" ? { kind: "gated", note: "SWITCHING THE MOTORS OFF…" }
+      : { kind: "danger", note: phase === "fault" ? "Recover the drives, then home both axes"
+          : phase === "idle" ? "Start: home, then AUTO ROAM" : "Re-home both axes, then AUTO ROAM" };
+    const homed = phase === "hold" || phase === "parked" || phase === "parking";
+    const park = parking ? { kind: "gated", note: rest === "touching" ? "TOUCHING THE REST STOP…" : "PARKING…" }
+      : rest === "parked" && t.rest_park_on_stop === true ? { kind: "current", note: "PARKED · ANY MODE LEAVES" }
+      : rest === "parked" ? { kind: "danger", note: "Short of the rest stop: touch it again" }
+      : phase === "hold" ? { kind: "danger", note: "Yaw to 0, pitch onto its rest stop, hold" }
+      : { kind: "gated", note: phase === "idle" ? "MOTORS OFF · HOME FIRST" : "HOME FIRST" };
+    const off = rest === "releasing" ? { kind: "gated", note: "SWITCHING THE MOTORS OFF…" }
+      : phase === "idle" ? { kind: "gated", note: "MOTORS ARE OFF · HOME TO START" }
+      : homed && !busy ? { kind: "danger", note: "Park, then switch both motors off" }
+      : { kind: "gated", note: "HOME FIRST" };
     return [
-      { label: "RECOVER MOTORS", command: "recover_motors", arg: "",
-        kind: t && ["fault", "idle", "parked"].includes(t.phase) ? "danger" : "gated",
-        note: t && t.phase === "recovering" ? "Verifying stopped motor feedback" : "Clear motor faults; stays disabled; Home required afterward" },
-      { label: "HOME", command: "start_homing", arg: "",
-        kind: t && ["parking", "recovering"].includes(t.phase) ? "gated" : "danger",
-        note: t && ["parking", "recovering"].includes(t.phase) ? "BUSY — HOME UNAVAILABLE" :
-          t && t.phase === "fault" ? "For motor/watchdog faults, use Recover Motors first" : "Clear/check motors, then recalibrate both axes" },
-      { label: "HOLD / PARK", command: "request_park", arg: "", kind: "danger", note: "CONFIRM TWICE" },
-      { label: "PARK / MOTOR SHUTDOWN", command: "request_shutdown", arg: "", kind: "danger",
-        note: "Parks motors; web stays online for Home and recovery" }
+      { label: "HOME", command: home.kind === "danger" ? "start_homing" : null, arg: "", kind: home.kind, note: home.note },
+      { label: "PARK", command: park.kind === "danger" ? "request_park" : null, arg: "", kind: park.kind, note: park.note },
+      { label: "SHUTDOWN", command: off.kind === "danger" ? "request_shutdown" : null, arg: "", kind: off.kind, note: off.note }
     ];
   }
 
@@ -1371,7 +1386,7 @@ function paint(t) {
   // Track churn must not replace MENU buttons between pointer-down and click.
   // Phase changes must refresh their Home/recovery gates even with no tracks.
   const drawerKey = value => JSON.stringify(drawerOpen === "MENU"
-    ? [value && value.phase, value && value.cmd_ack_seq]
+    ? [value && value.phase, value && value.cmd_ack_seq, value && value.rest_park, value && value.rest_park_on_stop]
     : [value && value.operating_mode, value && value.cmd_ack_seq,
       value && value.selected_uuid, value && value.perception_session_uuid,
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);

@@ -147,6 +147,11 @@ struct TelemetrySnapshot {
   // station IPC client both need it (§42.1).
   std::string phase;
   std::string fault_reason;
+  // The web's Park / Shutdown: "" | "moving" | "touching" | "parked" | "releasing". "moving" runs
+  // under phase "hold", which is why it needs saying; `rest_park_on_stop` is false when the pitch
+  // stopped beside its rest stop rather than on it (Shutdown then touches again first).
+  std::string rest_park;
+  bool rest_park_on_stop = false;
   // "homed AND holding the safe ready pose" — the same condition the operator's
   // P0 log line reports ("homed + at ready pose") and the §27 auto payload check
   // gate. It distinguishes "waiting for a target" from "still homing / moving to

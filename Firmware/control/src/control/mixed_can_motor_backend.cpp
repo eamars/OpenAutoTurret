@@ -764,6 +764,108 @@ void MixedCanMotorBackend::heartbeat() {
   }
 }
 
+bool MixedCanMotorBackend::begin_motor_recovery(std::string& err) {
+  if (!opened_.load() || !pitch_opened_.load()) {
+    err = "mixed backend is not open";
+    return false;
+  }
+  {
+    std::lock_guard lock(yaw_mutex_);
+    release_yaw_servo_locked();
+    if (!yaw_feedback_safe_locked(now_monotonic_ns())) {
+      err = "yaw: no fresh, valid GM6020 feedback to recover from";
+      return false;
+    }
+    {
+      const std::lock_guard detail_lock(yaw_trip_detail_mutex_);
+      yaw_trip_.store(false);
+      yaw_trip_detail_ = {};
+    }
+    yaw_guard_persistence_ = {};
+    yaw_follow_hold_.store(nullptr);
+    // Zero current until homing's finalize enables the axis again, exactly as at power-up.
+    yaw_motion_allowed_.store(false);
+    yaw_position_mode_ = yaw_speed_mode_ = false;
+    yaw_position_target_rad_ = yaw_state_.position_rad;
+    yaw_speed_target_rad_s_ = yaw_shaped_speed_rad_s_ = 0;
+    yaw_requested_velocity_rad_s_.store(0);
+    yaw_velocity_loop_.reset(yaw_state_.position_rad, now_monotonic_ns());
+    send_yaw_zero_locked();
+  }
+  release_pitch_servo();
+  pitch_servo_fault_.store(false);
+  pitch_follow_hold_.store(nullptr);
+  can::AxisLatest l;
+  recovery_pitch_cleared_ = false;
+  if (pitch_system_.axis(AxisId::Pitch).latest(l) && l.has_feedback && l.faults) {
+    // The drive faulted itself and is not holding. Its fault clear is a STOP; the heartbeat's
+    // STOP pings then bring the fresh disabled feedback the re-arm needs.
+    spdlog::warn("motor recovery: pitch CyberGear reports faults=0x{:x}; clearing (the clear is a STOP)", l.faults);
+    pitch_system_.inhibit_motion();
+    pitch_enabled_owned_.store(false);
+    std::string e;
+    if (!pitch_system_.send_clear_fault(AxisId::Pitch, &e)) {
+      err = "pitch: fault-clear write failed: " + e;
+      return false;
+    }
+    recovery_pitch_cleared_ = true;
+  }
+  recovery_active_ = true;
+  recovery_started_ns_ = now_monotonic_ns();
+  recovery_healthy_since_ns_ = 0;
+  spdlog::warn("motor recovery: yaw guard latch cleared; verifying fresh feedback on both axes{}",
+               recovery_pitch_cleared_ ? " (pitch fault being cleared)" : "");
+  return true;
+}
+
+MotorBackend::Transition MixedCanMotorBackend::poll_motor_recovery(TimeNs, double max_temp,
+                                                                   std::string& err) {
+  if (!recovery_active_) {
+    err = "no motor recovery is active";
+    return Transition::Failed;
+  }
+  // The backend's own clock: both feedback stamps below are monotonic.
+  const auto now = now_monotonic_ns();
+  // CyberGear feedback only answers a command; nothing else is sent while recovering.
+  if (!recovery_pitch_cleared_) keepalive(AxisId::Pitch);
+  bool healthy = true;
+  {
+    std::lock_guard lock(yaw_mutex_);
+    if (yaw_trip_.load() || !yaw_feedback_safe_locked(now) || !yaw_bus_healthy()) {
+      healthy = false;
+      err = "yaw: waiting for fresh GM6020 feedback on a healthy bus without a guard trip";
+    }
+  }
+  can::AxisLatest l;
+  const bool pitch_ok = pitch_system_.axis(AxisId::Pitch).latest(l) && l.has_feedback &&
+      l.rx_ns > 0 && l.rx_ns <= now && now - l.rx_ns <= 50'000'000 && !l.faults &&
+      std::isfinite(l.q_rad) && std::isfinite(l.temp_c) && l.temp_c <= max_temp &&
+      (recovery_pitch_cleared_ ? l.mode == 0 : (l.mode == 0 || l.mode == 2));
+  if (healthy && !pitch_ok) {
+    healthy = false;
+    err = "pitch: waiting for fresh, fault-free CyberGear feedback below the temperature limit";
+  }
+  if (!healthy) recovery_healthy_since_ns_ = 0;
+  else if (!recovery_healthy_since_ns_) recovery_healthy_since_ns_ = now;
+  if (healthy && now - recovery_healthy_since_ns_ >= 300'000'000) {
+    if (pitch_system_.motion_inhibited() &&
+        !pitch_system_.finish_axis_recovery(AxisId::Pitch, max_temp, err)) {
+      recovery_active_ = false;
+      return Transition::Failed;
+    }
+    recovery_active_ = false;
+    err = recovery_pitch_cleared_ ? "yaw guard cleared; pitch fault cleared and re-armed (stopped)"
+                                  : "yaw guard cleared; pitch healthy and still holding";
+    return Transition::Complete;
+  }
+  if (now - recovery_started_ns_ >= 5'000'000'000) {
+    recovery_active_ = false;
+    err = "motor recovery timed out: " + err;
+    return Transition::Failed;
+  }
+  return Transition::Pending;
+}
+
 bool MixedCanMotorBackend::watchdog_fault() const {
   return yaw_trip_.load() || pitch_servo_fault_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault());
 }
@@ -980,9 +1082,12 @@ void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
     if (pitch_opened_.load()) pitch_backend_.command(axis, q_ref_rad, limit_spd_rad_s);
     return;
   }
-  const auto now = now_monotonic_ns();
   std::lock_guard lock(yaw_mutex_);
   release_yaw_servo_locked();
+  // Read after the release: it restarts the legacy loop at its own clock reading, and a command
+  // stamped earlier is a step backwards in time that latches velocity_loop_invalid (station,
+  // 2026-10-03 01:43:33, the first Park pressed while the servo held yaw).
+  const auto now = now_monotonic_ns();
   if (!std::isfinite(q_ref_rad) || !std::isfinite(limit_spd_rad_s)) {
     trip_yaw_locked("nonfinite_reference");
     return;
@@ -1000,9 +1105,9 @@ void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) 
     if (pitch_opened_.load()) pitch_backend_.command_velocity(axis, velocity_rad_s);
     return;
   }
-  const auto now = now_monotonic_ns();
   std::lock_guard lock(yaw_mutex_);
   release_yaw_servo_locked();
+  const auto now = now_monotonic_ns();  // after the release, as in command()
   if (!std::isfinite(velocity_rad_s)) {
     trip_yaw_locked("nonfinite_reference");
     return;

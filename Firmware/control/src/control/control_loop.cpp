@@ -147,17 +147,19 @@ bool ControlLoop::enter_speed_mode_all(
   return true;
 }
 
-bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
+bool ControlLoop::start_homing(HomingPlan plan, std::string& err, bool recover_first) {
   if (phase_ == Phase::Parking || phase_ == Phase::Recovering) {
     err = "Home unavailable: shutdown/parking already accepted";
     return false;
   }
   backend_->invalidate_calibration();
-  if (phase_ == Phase::Fault && !park_failed_) {
+  if (phase_ == Phase::Fault && !park_failed_ && !recover_first) {
     err = "in fault; reset required";
     return false;
   }
-  if (phase_ == Phase::Parked || park_failed_) {
+  // With recovery first, the recovery itself is the evidence gate (fresh, fault-free feedback on
+  // both axes); the parked check below is its weaker cousin.
+  if (!recover_first && (phase_ == Phase::Parked || park_failed_)) {
     if (backend_->watchdog_fault()) {
       err = "Home blocked: watchdog is latched; operator service required";
       return false;
@@ -186,6 +188,13 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
   if (backend_->supports_continuous_yaw() && !cfg_.allow_unknown_motor_health) {
     err = "Home blocked: GM6020 temperature/fault status is unavailable and no reviewed runtime health policy is enabled";
     return false;
+  }
+  rest_park_ = {};
+  if (recover_first) {
+    park_failed_ = false;
+    park_.reset();
+    mixed_stop_park_ = false;
+    shutdown_requested_.store(false);
   }
   homing_.reset(new HomingPlan(std::move(plan)));
   // Speed mode (velocity) for homing: the drive's own velocity loop holds the
@@ -227,7 +236,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err) {
     yaw_reference_stationary_since_ns_ = 0;
   }
   phase_ = Phase::Homing;
-  if (backend_->recovery_before_homing()) return start_motor_recovery(err, true);
+  if (recover_first || backend_->recovery_before_homing()) return start_motor_recovery(err, true);
   return true;
 }
 
@@ -552,6 +561,270 @@ void ControlLoop::stop_and_record_unverified(const std::string& why) {
   ev.axes[1].disable_confirmed = Evidence::Unsupported;
   ev.finalise();
   telemetry_.append_stop_evidence(ev.to_json_line());
+}
+
+// ------------------------------------------------------------------------------------------------
+// The web's Park and Shutdown (owner ruling 2026-10-03). Park: yaw to 0, pitch onto its rest end
+// stop, hold there energised; "nothing special about this state", any mode leaves it. Shutdown:
+// that park, then both axes de-energised; only Home leaves it. The pitch stop is the one homing
+// measured, and the last stretch onto it runs at homing's own fine-approach speed.
+
+const char* ControlLoop::rest_park_stage() const {
+  switch (rest_park_.stage) {
+    case RestPark::Off: return "";
+    case RestPark::Move: return "moving";
+    case RestPark::Touch: return "touching";
+    case RestPark::Holding: return "parked";
+    case RestPark::Release: return "releasing";
+  }
+  return "";
+}
+
+bool ControlLoop::begin_rest_park(bool shutdown, std::string& why) {
+  const char* what = shutdown ? "Shutdown" : "Park";
+  switch (rest_park_.stage) {
+    case RestPark::Release:
+      why = "the motors are already being switched off";
+      return shutdown;
+    case RestPark::Holding:
+      if (!shutdown && rest_park_.touched) {
+        why = "already parked";
+        return true;
+      }
+      rest_park_.shutdown = shutdown;
+      rest_park_.since_ns = now_ns_;
+      phase_ = Phase::Parking;
+      if (rest_park_.touched) {
+        rest_park_.stage = RestPark::Release;
+        rest_park_.last_disable_ns = 0;
+        why = "parked on the stop: switching the motors off";
+      } else {
+        // The last touch stopped beside the stop. Touch again: a released payload must rest on it.
+        rest_park_.stage = RestPark::Touch;
+        rest_park_.stalled_since_ns = 0;
+        rest_park_.touch_from_rad = last_q_[ix(AxisId::Pitch)];
+        why = shutdown ? "not on the stop yet: touching it again, then switching the motors off"
+                       : "not on the stop yet: touching it again";
+      }
+      spdlog::warn("REST PARK: {} while parked: {}", what, why);
+      return true;
+    case RestPark::Move:
+    case RestPark::Touch:
+      rest_park_.shutdown = shutdown;
+      why = std::string("already on the way; on the stop it will ") +
+            (shutdown ? "switch the motors off" : "hold");
+      return true;
+    case RestPark::Off:
+      break;
+  }
+  if (phase_ != Phase::Hold || !position_ready()) {
+    why = std::string(what) + " needs a homed turret holding position: Home first";
+    return false;
+  }
+  const int P = ix(AxisId::Pitch), Y = ix(AxisId::Yaw);
+  const auto& pl = limits_[P];
+  if (!pl.valid || pl.envelope != AxisLimits::Envelope::Measured ||
+      !std::isfinite(pl.q_hard_min_rad) || !std::isfinite(pl.q_hard_max_rad)) {
+    why = std::string(what) + " needs the pitch end stops measured by homing: Home first";
+    return false;
+  }
+  const bool low = cfg_.rest_park_pitch_low;
+  // Short of the soft limit by the supervisor's stop margin and three degrees more, so the normal hold
+  // path arrives without the envelope braking it; the rest of the way is the touch.
+  const double inset = cfg_.stop_margin_rad + 3.0 * kDeg2Rad;
+  const double approach = low ? pl.q_soft_min_rad + inset : pl.q_soft_max_rad - inset;
+  if (!(approach > pl.q_soft_min_rad && approach < pl.q_soft_max_rad)) {
+    why = "the pitch travel is too short for a park approach";
+    return false;
+  }
+  const double qy = last_q_[Y];
+  const AxisLimits yl = runtime_limits(AxisId::Yaw);
+  // Yaw 0 is the session zero the HUD shows. A continuous yaw takes the whole turn nearest to it
+  // (owner: the slip ring has no constraint); a bounded one, 0 inside its envelope.
+  double yaw = backend_->supports_continuous_yaw() || !yl.valid
+      ? 2.0 * M_PI * std::round(qy / (2.0 * M_PI)) : 0.0;
+  if (yl.valid) yaw = env_.constrain_reference(yaw, yl);
+  if (!std::isfinite(qy) || !std::isfinite(yaw)) {
+    why = std::string(what) + ": the yaw position is not known";
+    return false;
+  }
+  manual_.cancel(now_ns_);
+  request_mode(OperatingMode::Manual);  // the park owns motion now; selecting a mode takes it back
+  rest_park_ = {};
+  rest_park_.stage = RestPark::Move;
+  rest_park_.shutdown = shutdown;
+  rest_park_.yaw_rad = yaw;
+  rest_park_.pitch_approach_rad = approach;
+  rest_park_.pitch_stop_rad = low ? pl.q_hard_min_rad : pl.q_hard_max_rad;
+  rest_park_.since_ns = now_ns_;
+  spdlog::warn("REST PARK ({}): yaw {:+.1f} -> {:+.1f} deg, pitch {:+.4f} -> {:+.4f} rad, then onto "
+               "the {} stop at {:+.4f} rad", what, qy * kRad2Deg, yaw * kRad2Deg, last_q_[P], approach,
+               low ? "low" : "high", rest_park_.pitch_stop_rad);
+  why = shutdown ? "shutting down: parking first, then switching the motors off"
+                 : "parking: yaw to 0, pitch onto its rest stop";
+  return true;
+}
+
+void ControlLoop::end_rest_park(const char* why) {
+  if (rest_park_.stage == RestPark::Off) return;
+  spdlog::warn("REST PARK ended while {}: {}", rest_park_stage(), why);
+  // The MANUAL hold latched before the park would otherwise pull the turret back there.
+  if (rest_park_.stage == RestPark::Move) mode_hold_latched_ = false;
+  rest_park_ = {};
+}
+
+void ControlLoop::leave_rest_park_to_hold() {
+  end_rest_park("a mode was selected");
+  phase_ = Phase::Hold;
+  // Commands later in this cycle are judged against the state just entered, not the parked one.
+  mode_mgr_.notify_supervisory(SupervisoryState::Ready);
+  // A hold means the ready pose again, as after homing: MANUAL from the park returns there.
+  mode_has_moved_ = false;
+  for (auto& s : speed_servo_) s.reset();
+}
+
+void ControlLoop::rest_park_hold_yaw(const AxisSnapshot& yaw, TimeNs now_ns, TimeNs period_ns) {
+  const auto Y = AxisId::Yaw;
+  if (backend_->servo_available(Y)) {
+    MotorBackend::ServoReference r;
+    r.t_ns = now_ns;
+    r.q = rest_park_.yaw_rad;
+    r.valid_s = 4 * static_cast<double>(period_ns) * 1e-9;
+    const AxisLimits yl = runtime_limits(Y);
+    if (yl.valid) { r.q_min = yl.q_soft_min_rad; r.q_max = yl.q_soft_max_rad; }
+    if (backend_->command_reference(Y, r)) return;
+  }
+  const double cap = hold_speed_effective();
+  if (yaw.in_speed_mode) {
+    const double v = std::clamp(cfg_.position_servo_kp * (rest_park_.yaw_rad - yaw.q_rad), -cap, cap);
+    backend_->command_velocity(Y, std::isfinite(v) ? v : 0.0);
+  } else if (yaw.in_position_mode) {
+    backend_->command(Y, rest_park_.yaw_rad, cap);
+  }
+}
+
+void ControlLoop::rest_park_on_stop(const AxisSnapshot& pitch, TimeNs now_ns, bool touched,
+                                    const std::string& why) {
+  if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+  rest_park_.touched = touched;
+  rest_park_.pitch_hold_rad = pitch.q_rad;
+  rest_park_.since_ns = now_ns;
+  if (touched) {
+    spdlog::info("REST PARK: pitch on its stop at {:+.4f} rad ({:+.2f} deg from where homing measured it)",
+                 pitch.q_rad, (pitch.q_rad - rest_park_.pitch_stop_rad) * kRad2Deg);
+  } else {
+    // Not a fault (owner ruling 2026-10-02): nothing is moving and nothing is at risk. It holds where
+    // it stopped, and a Shutdown touches again before it lets go.
+    spdlog::warn("REST PARK: {}", why);
+    ack_command(rest_park_.shutdown ? "request_shutdown" : "request_park", false,
+                why + (rest_park_.shutdown ? "; the motors stay on" : ""));
+  }
+  if (touched && rest_park_.shutdown) {
+    rest_park_.stage = RestPark::Release;
+    rest_park_.last_disable_ns = 0;
+    phase_ = Phase::Parking;
+  } else {
+    rest_park_.stage = RestPark::Holding;
+    rest_park_.shutdown = false;
+    phase_ = Phase::Parked;
+  }
+}
+
+bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, TimeNs period_ns) {
+  // Step 6 executes these two, and step 7 faults (which ends the park).
+  if (last_decision_.action == SafetyAction::Disable ||
+      last_decision_.action == SafetyAction::FaultStop) return false;
+  const int P = ix(AxisId::Pitch);
+  const auto& pitch = sp[P];
+  const double dir = cfg_.rest_park_pitch_low ? -1.0 : 1.0;  // toward the rest stop
+  const bool held_by_supervisor = last_decision_.action != SafetyAction::Allow &&
+                                  last_decision_.action != SafetyAction::Derate;
+  switch (rest_park_.stage) {
+    case RestPark::Touch: {
+      rest_park_hold_yaw(sp[ix(AxisId::Yaw)], now_ns, period_ns);
+      if (!pitch.in_speed_mode && !pitch.in_position_mode) {
+        fault("park: the pitch drive left its running mode during the touch");
+        return false;
+      }
+      const double speed = cfg_.rest_park_touch_speed_rad_s;
+      if (held_by_supervisor) {
+        // Stale feedback or a closed health gate: stop pushing and wait for it to clear.
+        if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+        else backend_->command(AxisId::Pitch, pitch.q_rad, cfg_.park.verify_speed_deg_s * kDeg2Rad);
+        rest_park_.stalled_since_ns = 0;
+        return true;
+      }
+      if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, dir * speed);
+      else backend_->command(AxisId::Pitch, rest_park_.pitch_stop_rad + dir * kDeg2Rad, speed);
+      const double short_of_stop = (rest_park_.pitch_stop_rad - pitch.q_rad) * dir;  // > 0 before it
+      const bool slow = std::abs(v_est_[P]) < 0.25 * speed;
+      if (now_ns - rest_park_.since_ns < 400'000'000 || !slow) rest_park_.stalled_since_ns = 0;
+      else if (!rest_park_.stalled_since_ns) rest_park_.stalled_since_ns = now_ns;
+      const TimeNs stalled = rest_park_.stalled_since_ns ? now_ns - rest_park_.stalled_since_ns : 0;
+      const double window = 2.0 * kDeg2Rad;  // homing repeats the stop to 0.5 deg
+      const double budget_s = 2.0 * std::abs(rest_park_.touch_from_rad - rest_park_.pitch_stop_rad) / speed + 3.0;
+      char why[160];
+      if (std::abs(short_of_stop) <= window && stalled >= 200'000'000) {
+        rest_park_on_stop(pitch, now_ns, true, "");
+      } else if (short_of_stop < -window) {
+        std::snprintf(why, sizeof why, "pitch went %.1f deg past the stop homing measured without meeting it; "
+                      "holding there (Home to re-measure)", -short_of_stop * kRad2Deg);
+        rest_park_on_stop(pitch, now_ns, false, why);
+      } else if (stalled >= 1'000'000'000) {
+        std::snprintf(why, sizeof why, "pitch stopped %.1f deg short of its rest stop (an obstruction?); "
+                      "holding there", short_of_stop * kRad2Deg);
+        rest_park_on_stop(pitch, now_ns, false, why);
+      } else if (now_ns - rest_park_.since_ns > static_cast<TimeNs>(budget_s * 1e9)) {
+        std::snprintf(why, sizeof why, "pitch did not reach its rest stop in %.0f s (%.1f deg short); "
+                      "holding there", budget_s, short_of_stop * kRad2Deg);
+        rest_park_on_stop(pitch, now_ns, false, why);
+      }
+      return true;
+    }
+    case RestPark::Holding: {
+      rest_park_hold_yaw(sp[ix(AxisId::Yaw)], now_ns, period_ns);
+      // Back onto the stop if the payload drifts off it; never push past where it touched.
+      const double off = (pitch.q_rad - rest_park_.pitch_hold_rad) * -dir;  // > 0 drifted away
+      double v = 0.0;
+      if (!held_by_supervisor && std::isfinite(off) && off > 0.1 * kDeg2Rad)
+        v = dir * std::min(cfg_.position_servo_kp * off, cfg_.rest_park_touch_speed_rad_s);
+      if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, v);
+      else if (pitch.in_position_mode)
+        backend_->command(AxisId::Pitch, rest_park_.pitch_hold_rad, cfg_.park.verify_speed_deg_s * kDeg2Rad);
+      return true;
+    }
+    case RestPark::Release: {
+      const bool confirmed = pitch.has_feedback && pitch.disabled_known && pitch.disabled;
+      if (!rest_park_.last_disable_ns ||
+          (!confirmed && now_ns - rest_park_.last_disable_ns >= 100'000'000)) {
+        backend_->deenergize(AxisId::Pitch);
+        backend_->deenergize(AxisId::Yaw);
+        rest_park_.last_disable_ns = now_ns;
+        return true;
+      }
+      const bool timed_out = now_ns - rest_park_.since_ns >= 2'000'000'000;
+      if (!confirmed && !timed_out) return true;
+      if (confirmed)
+        spdlog::info("SHUT DOWN: yaw at {:+.1f} deg, pitch on its rest stop, both motors switched off; "
+                     "Home starts it again", last_q_[ix(AxisId::Yaw)] * kRad2Deg);
+      else
+        spdlog::error("SHUT DOWN: pitch disable not confirmed by feedback within 2 s; its STOP requests "
+                      "continue (yaw has no disable to confirm)");
+      backend_->invalidate_calibration();
+      homed_ = pitch_homed_ = at_ready_ = false;
+      if (backend_->supports_continuous_yaw()) {
+        yaw_session_reference_valid_ = false;
+        yaw_reference_stationary_since_ns_ = 0;
+      }
+      rest_park_ = {};
+      phase_ = Phase::Idle;
+      return true;
+    }
+    case RestPark::Move:
+    case RestPark::Off:
+      break;
+  }
+  return false;
 }
 
 void ControlLoop::note_shutdown(bool parked, const std::string& cause) {
@@ -1456,6 +1729,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     in.axes[i].limits = i == static_cast<int>(AxisId::Yaw) &&
                         phase_ == Phase::Parking && mixed_stop_park_
         ? parking_yaw_stop_limits : cycle_limits[i];
+    // On and onto its rest stop, pitch is outside the inset soft envelope on purpose: the stop it
+    // touches is the one homing measured, at homing's own approach speed. As during homing, the
+    // stop-feasibility check has no envelope to apply there; every other check still runs.
+    if (i == static_cast<int>(AxisId::Pitch) && (rest_park_.stage == RestPark::Touch ||
+        rest_park_.stage == RestPark::Holding || rest_park_.stage == RestPark::Release))
+      in.axes[i].limits = AxisLimits{};
   }
   in.homing_valid = position_ready();
   // §38.1: the supervisor applies the stricter tracking checks only when the
@@ -1536,6 +1815,47 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   }
   const bool recovery_cycle = phase_ == Phase::Recovering;
   bool mixed_parking_handled = false;
+  // The web's Park / Shutdown. Its Move stage is an ordinary MANUAL hold toward the approach pose
+  // (the Hold case below); anything else that takes the turret -- a mode, a jog, homing, a fault --
+  // ends it. The stages on the stop issue their own outputs.
+  if (rest_park_.stage == RestPark::Move) {
+    if (phase_ != Phase::Hold) {
+      end_rest_park("the turret left its hold");
+    } else if (mode_mgr_.mode() != OperatingMode::Manual ||
+               tracking_ref_.source != ReferenceSource::Hold) {
+      end_rest_park("an operator command took over");
+    } else {
+      const int P = ix(AxisId::Pitch), Y = ix(AxisId::Yaw);
+      // The hold stops pushing inside kReadyPosTolRad (0.57 deg), so arrival cannot ask for less.
+      const double tol = kReadyPosTolRad + 0.2 * kDeg2Rad;
+      const bool there =
+          std::abs(sp[P].q_rad - rest_park_.pitch_approach_rad) <= tol &&
+          std::abs(sp[Y].q_rad - rest_park_.yaw_rad) <= tol &&
+          std::abs(v_est_[P]) < 0.5 * kDeg2Rad && std::abs(v_est_[Y]) < 0.5 * kDeg2Rad;
+      if (!there) rest_park_.settled_since_ns = 0;
+      else if (!rest_park_.settled_since_ns) rest_park_.settled_since_ns = now_ns;
+      const double travel = std::abs(sp[P].q_rad - rest_park_.pitch_approach_rad) +
+                            std::abs(sp[Y].q_rad - rest_park_.yaw_rad);
+      if (rest_park_.settled_since_ns && now_ns - rest_park_.settled_since_ns >= 300'000'000) {
+        rest_park_.stage = RestPark::Touch;
+        rest_park_.since_ns = now_ns;
+        rest_park_.stalled_since_ns = 0;
+        rest_park_.touch_from_rad = sp[P].q_rad;
+        phase_ = Phase::Parking;
+        spdlog::info("REST PARK: at the approach pose; pitch onto its stop at {:.1f} deg/s",
+                     cfg_.rest_park_touch_speed_rad_s * kRad2Deg);
+      } else if (now_ns - rest_park_.since_ns > 120'000'000'000LL) {
+        // A persistent non-hazard (owner ruling 2026-10-02): hold where it is and say so.
+        char why[128];
+        std::snprintf(why, sizeof why, "park: the approach pose was not reached in 120 s (%.1f deg away); holding",
+                      travel * kRad2Deg);
+        ack_command(rest_park_.shutdown ? "request_shutdown" : "request_park", false, why);
+        end_rest_park(why);
+      }
+    }
+  }
+  const bool rest_park_handled = rest_park_.stage != RestPark::Off &&
+      rest_park_.stage != RestPark::Move && step_rest_park(sp, now_ns, period_ns);
   switch (phase_) {
     case Phase::Recovering: {
       std::string detail;
@@ -1935,10 +2255,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       // Keep the latched destination through encoder noise inside the arrival tolerance.
       // The arrival speed cap remains the existing configured behavior until separate
       // yaw/pitch quiet-hold profiles have been measured on the installed payload.
+      // The web's Park travels here too: the same hold, toward its approach pose instead.
+      const bool rest_move = rest_park_.stage == RestPark::Move;
       const double hold_pose[2] = {
-          mode_hold_in_place_ ? mode_hold_pitch_rad_ : ready_raw_[0],
-          mode_hold_in_place_ ? mode_hold_yaw_rad_ : ready_raw_[1]};
-      at_ready_ = true;
+          rest_move ? rest_park_.pitch_approach_rad : mode_hold_in_place_ ? mode_hold_pitch_rad_ : ready_raw_[0],
+          rest_move ? rest_park_.yaw_rad : mode_hold_in_place_ ? mode_hold_yaw_rad_ : ready_raw_[1]};
+      at_ready_ = !rest_move;
+      // The park's approach pose sits near the pitch boundary, which the ready pose never does: at the
+      // full hold speed the supervisor's stop-feasibility check brakes the move on every approach
+      // (measured in simulation). 10 deg/s stops inside the inset left at that pose (4.7 deg of 5.9);
+      // yaw is unhurried too, since a park has no target to catch.
+      double hold_cap[kAxisCount];
+      for (int i = 0; i < kAxisCount; ++i)
+        hold_cap[i] = !rest_move ? hold_speed_effective()
+            : std::min(hold_speed_effective(), (i == ix(AxisId::Pitch) ? 10.0 : 20.0) * kDeg2Rad);
       for (int i = 0; i < kAxisCount; ++i) {
         if (test_motion && i == (int)ix(AxisId::Yaw)) {
           const double target =
@@ -1951,7 +2281,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
         q_ref[i] = hold_pose[i];
         if (std::fabs(sp[i].q_rad - hold_pose[i]) > kReadyPosTolRad) {
-          lim[i] = hold_speed_effective();
+          lim[i] = hold_cap[i];
           at_ready_ = false;
         } else {
           lim[i] = 0.0;
@@ -1969,7 +2299,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         for (int i = 0; i < kAxisCount; ++i) {
           const auto [a, j] = hold_brake_limits(i);
           if (!ref_lim_was_engaged) ref_lim_[i].reset_at(sp[i].q_rad);
-          const double cap = std::max(hold_speed_effective(), std::abs(ref_lim_[i].v_rad_s));
+          const double cap = std::max(hold_cap[i], std::abs(ref_lim_[i].v_rad_s));
           q_ref[i] = control::limit_reference(ref_lim_[i], q_ref[i], dt, cap, a, j, 0.0);
           servo_jerk_[i] = 0.0;
         }
@@ -2032,6 +2362,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       break;
     }
     case Phase::Parking: {
+      if (rest_park_handled || rest_park_.stage != RestPark::Off) break;  // outputs above, or step 6's
       if (mixed_stop_park_) {
         mixed_parking_handled = true;
         const auto& pitch = sp[ix(AxisId::Pitch)];
@@ -2460,6 +2791,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     if (recovery_cycle) continue;  // never command from pre-recovery snapshots
     if (pitch_test_transitioning_ && a == AxisId::Pitch) continue;  // the mode switch owns pitch
     if (mixed_parking_handled) continue;  // mixed stop issued direct, topology-specific safe outputs above
+    if (rest_park_handled) continue;      // the rest park's stages on the stop, likewise
     bool do_command = true;
     switch (last_decision_.action) {
       case SafetyAction::Allow:
@@ -2747,6 +3079,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.timestamp_ns = now_ns;
     snap.phase = phase_name(phase_);
     snap.fault_reason = fault_reason_;
+    snap.rest_park = rest_park_stage();
+    snap.rest_park_on_stop = rest_park_.touched;
     snap.at_ready = at_ready_;
     snap.q_yaw_rad = sp[ix(AxisId::Yaw)].q_rad;
     snap.feedback_timestamp_yaw_ns = sp[ix(AxisId::Yaw)].rx_ns;
@@ -3412,7 +3746,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // This is the command validator's position-valid gate. Public physical
     // homing telemetry remains `homed_` and is false for continuous yaw.
     command_state_.homed = position_ready();
-    command_state_.shutdown_or_parking = phase_ == Phase::Parking;
+    // The legacy (process-exit) park only: the web's rest park answers its own commands.
+    command_state_.shutdown_or_parking = phase_ == Phase::Parking && rest_park_.stage == RestPark::Off;
     command_state_.motor_recovery_active = phase_ == Phase::Recovering;
     command_state_.motor_recovery_allowed = phase_ == Phase::Fault || phase_ == Phase::Idle || phase_ == Phase::Parked;
     command_state_.recoverable_park_failure = park_failed_ && !backend_->watchdog_fault();
@@ -4905,6 +5240,52 @@ void ControlLoop::execute_command(const std::string& name,
     else ack_command(name, false, "motor recovery active; wait or Stop Motion to cancel");
     return;
   }
+  // The web's Park / Shutdown, under way or holding on the stop (owner ruling 2026-10-03: nothing
+  // special about it; a mode takes the turret back). Commands that fall through are handled as usual.
+  if (rest_park_.stage != RestPark::Off) {
+    const bool on_stop = rest_park_.stage != RestPark::Move;
+    const bool releasing = rest_park_.stage == RestPark::Release;
+    if (name == "request_park" || name == "request_shutdown") {
+      const bool ok = begin_rest_park(name == "request_shutdown", err);
+      ack_command(name, ok, err);
+      return;
+    }
+    if (name == "stop_motion" || name == "hold") {
+      if (!on_stop) {
+        end_rest_park("Stop Motion");  // an ordinary stop, below: MANUAL, holding where it is
+      } else {
+        if (rest_park_.stage == RestPark::Touch) {
+          rest_park_.stage = RestPark::Holding;
+          rest_park_.touched = false;
+          rest_park_.shutdown = false;
+          rest_park_.pitch_hold_rad = last_q_[ix(AxisId::Pitch)];
+          phase_ = Phase::Parked;
+        }
+        ack_command(name, true, releasing ? "the motors are being switched off"
+            : rest_park_.touched ? "parked; holding on the stop"
+            : "stopped short of the rest stop; holding here (Park or Shutdown carries on)");
+        return;
+      }
+    } else if (name == "start_homing") {
+      if (releasing) {
+        ack_command(name, false, "the motors are being switched off; Home once that is done");
+        return;
+      }
+      end_rest_park("Home");
+      if (phase_ == Phase::Parking || phase_ == Phase::Parked) phase_ = Phase::Hold;
+    } else if (name == "set_mode" || name == "start_tracking") {
+      if (releasing) {
+        ack_command(name, false, "the motors are being switched off; Home to start again");
+        return;
+      }
+      if (on_stop) leave_rest_park_to_hold();  // during the move, the mode change itself ends it
+    } else if (on_stop && (name == "manual_jog_start" || name == "manual_step" ||
+                           name == "run_test_motion" || name == "response_probe" ||
+                           name == "start_payload_verification")) {
+      ack_command(name, false, "parked: select a mode first (MANUAL returns to the ready pose), or Home");
+      return;
+    }
+  }
   if (name == "recover_motors") {
     const bool ok = start_motor_recovery(err);
     ack_command(name, ok, ok ? "motor recovery accepted; verifying disabled feedback" : err);
@@ -4957,6 +5338,15 @@ void ControlLoop::execute_command(const std::string& name,
   }
   if (name == "stop_tracking") {
     disable_tracking();
+    return;
+  }
+  if ((name == "request_park" || name == "request_shutdown") && cfg_.rest_park) {
+    if (name == "request_shutdown" && phase_ == Phase::Idle) {
+      ack_command(name, true, "the motors are already off; Home starts the turret");
+      return;
+    }
+    const bool ok = begin_rest_park(name == "request_shutdown", err);
+    ack_command(name, ok, err);
     return;
   }
   if (name == "request_park") {
@@ -5518,15 +5908,19 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "start_homing") {
-    if (!homing_factory_ || phase_ == Phase::Homing || phase_ == Phase::Parking ||
-        (phase_ == Phase::Fault && !park_failed_)) {
-      ack_command(name, false, "homing unavailable or supervisory routine already active");
+    if (!homing_factory_ || phase_ == Phase::Homing || phase_ == Phase::Parking) {
+      ack_command(name, false, phase_ == Phase::Homing ? "already homing"
+          : !homing_factory_ ? "homing is not configured" : "the process-exit stop is under way");
       return;
     }
-    startup_mode_applied_ = mode_mgr_.mode() == OperatingMode::Manual;
+    // Owner ruling 2026-10-03: Home recovers everything and runs the homing routine, so it begins with
+    // motor recovery whenever anything is latched -- a fault, a drive watchdog, a guard trip. It is a
+    // fresh start, too: once at the ready pose the station resumes AUTO_ROAM, as at power-up.
+    const bool recover = phase_ == Phase::Fault || backend_->watchdog_fault();
+    startup_mode_applied_ = false;
     std::string e;
-    const bool ok = start_homing(homing_factory_(), e);
-    ack_command(name, ok, ok ? "homing started" : e);
+    const bool ok = start_homing(homing_factory_(), e, recover);
+    ack_command(name, ok, ok ? (recover ? "recovering the drives, then homing" : "homing started") : e);
     return;
   }
   if (name == "start_installation_calibration") {

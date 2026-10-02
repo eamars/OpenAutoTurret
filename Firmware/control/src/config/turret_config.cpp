@@ -958,6 +958,16 @@ LoadResult load_turret_config(const std::string& path) {
     // Verify hold could never pull an axis back into the §33.2 window (p3).
     if (c.shutdown.verify_speed_deg_s <= 0.0)
       err.push_back(p + "verify_speed_deg_s must be > 0");
+    c.shutdown.pitch_rest_end = opt_string(sh, "pitch_rest_end", p + "pitch_rest_end", "", warn);
+    if (!c.shutdown.pitch_rest_end.empty() && c.shutdown.pitch_rest_end != "min" &&
+        c.shutdown.pitch_rest_end != "max")
+      err.push_back(p + "pitch_rest_end must be min or max (the raw joint end the payload rests on)");
+    c.shutdown.pitch_touch_speed_deg_s = opt_double(sh, "pitch_touch_speed_deg_s",
+        p + "pitch_touch_speed_deg_s", 3.0, warn);
+    // Homing's own fine approach is 3 deg/s; anything much faster is a collision, not a touch.
+    if (!std::isfinite(c.shutdown.pitch_touch_speed_deg_s) || c.shutdown.pitch_touch_speed_deg_s <= 0.0 ||
+        c.shutdown.pitch_touch_speed_deg_s > 5.0)
+      err.push_back(p + "pitch_touch_speed_deg_s must be in (0, 5]");
   }
   {
     const std::string p = "safety.";

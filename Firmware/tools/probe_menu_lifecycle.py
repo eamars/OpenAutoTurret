@@ -14,14 +14,17 @@ function render() {}
 function resolveAckFromTelemetry() {}
 function renderDrawer() { rows = hudDrawerActions(drawerOpen, lastTelemetry); ++updates; }
 """ + paint + """
-for (const phase of ['hold', 'parking', 'fault', 'recovering', 'idle', 'parked']) {
+// Owner ruling 2026-10-03: HOME is the way out of everything but its own run; SHUTDOWN needs a homed turret.
+for (const phase of ['hold', 'parking', 'fault', 'recovering', 'idle', 'parked', 'homing']) {
   paint({phase, operating_mode: 'MANUAL', tracks: []});
-  const recovery = rows.find(r => r.command === 'recover_motors');
-  const expected = ['fault', 'idle', 'parked'].includes(phase);
-  const enabled = recovery.kind !== 'gated';
-  console.log(JSON.stringify({phase, enabled, expected, updates}));
-  if (enabled !== expected) process.exitCode = 1;
+  const home = rows.find(r => r.label === 'HOME'), off = rows.find(r => r.label === 'SHUTDOWN');
+  const homeExpected = !['recovering', 'homing'].includes(phase);
+  const offExpected = ['hold', 'parked', 'parking'].includes(phase);
+  const homeEnabled = home.command === 'start_homing', offEnabled = off.command === 'request_shutdown';
+  console.log(JSON.stringify({phase, homeEnabled, homeExpected, offEnabled, offExpected, updates}));
+  if (homeEnabled !== homeExpected || offEnabled !== offExpected) process.exitCode = 1;
 }
+paint({phase: 'parked', operating_mode: 'MANUAL', tracks: []});
 const before = updates;
 for (let i = 0; i < 50; ++i)
   paint({phase: 'parked', operating_mode: 'MANUAL', tracks: [{uuid: String(i)}]});

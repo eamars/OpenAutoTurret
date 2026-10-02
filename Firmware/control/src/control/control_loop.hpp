@@ -116,8 +116,15 @@ class ControlLoop {
     double derate_factor = 0.5;
     // Soft-limit margin (rad) used to build AxisLimits from the homed endpoints.
     double soft_margin_rad = 2.0 * kDeg2Rad;
-    // §33 park sequence parameters.
+    // §33 park sequence parameters. These now serve the process-exit stop (main.cpp) only, plus the
+    // web's park when rest_park is off.
     ParkParams park;
+    // The web's Park / Shutdown (owner ruling 2026-10-03). Park: yaw to 0 (the nearest whole turn on
+    // a continuous yaw), pitch onto its rest end stop at touch speed, then hold, energised; any mode
+    // leaves it. Shutdown: Park, then de-energise both axes; Home leaves that.
+    bool rest_park = false;
+    bool rest_park_pitch_low = true;   // the rest stop is the raw minimum (else the maximum)
+    double rest_park_touch_speed_rad_s = 3.0 * kDeg2Rad;
     // Phase 9: payload verification (§27, §31.3).
     bool payload_auto_verify = false;  // §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK:
                                        // run once on first hold, at boot
@@ -204,7 +211,9 @@ class ControlLoop {
   ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend);
 
   // --- phase setup (slow; called by the boot FSM / main, not per cycle) ---
-  bool start_homing(HomingPlan plan, std::string& err);
+  // `recover_first`: the web's Home (owner ruling 2026-10-03, "Home recovers everything") -- clear
+  // and verify the drives through motor recovery, whatever latched, then home.
+  bool start_homing(HomingPlan plan, std::string& err, bool recover_first = false);
   bool start_motor_recovery(std::string& err, bool then_home = false);
   void set_homing_factory(std::function<HomingPlan()> factory) { homing_factory_ = std::move(factory); }
   bool restore_retained_homing(const std::array<AxisLogicalModel, 2>& models,
@@ -421,6 +430,9 @@ class ControlLoop {
   Phase step(TimeNs now_ns, TimeNs period_ns);
 
   Phase phase() const { return phase_; }
+  // The web Park / Shutdown stage: "" (none), "moving", "touching", "parked", "releasing".
+  const char* rest_park_stage() const;
+  bool rest_park_touched() const { return rest_park_.touched; }
   bool homed() const { return homed_; }
   // Position-ready means every bounded axis has physical homing/calibration
   // and a continuous yaw backend has a fresh stationary session reference.
@@ -502,6 +514,7 @@ class ControlLoop {
   void fault(const std::string& reason, bool stop_all = true) {
     const bool replace_park_failure = park_failed_;
     park_failed_ = false;  // a safety fault cannot be cleared as a park-only failure
+    rest_park_ = {};       // Home is the way out of a fault, not a park that resumes
     if (stop_all && (phase_ == Phase::Homing || phase_ == Phase::Parking)) stop_axes_safely();
     if (phase_ != Phase::Fault || replace_park_failure) {
       phase_ = Phase::Fault;
@@ -564,6 +577,27 @@ class ControlLoop {
   std::array<double, kAxisCount> park_command_rate_{};
   bool recovery_then_home_ = false;
   void fail_parking(const std::string& reason, bool motion_fault = false);
+  // The web's Park / Shutdown (Config::rest_park). Move runs in Phase::Hold under MANUAL -- the
+  // ready-pose hold path, its servos and every guard unchanged -- to a pose a few degrees short of the
+  // rest stop. Touch (Phase::Parking) creeps pitch onto the stop at touch speed with the yaw held.
+  // Holding (Phase::Parked) keeps both there, energised. Release (Phase::Parking) de-energises both
+  // and ends in Phase::Idle.
+  enum class RestPark { Off, Move, Touch, Holding, Release };
+  struct RestParkState {
+    RestPark stage = RestPark::Off;
+    bool shutdown = false;   // de-energise once on the stop
+    bool touched = false;    // pitch reached the stop, as opposed to stopping beside it
+    double yaw_rad = 0, pitch_approach_rad = 0, pitch_stop_rad = 0, pitch_hold_rad = 0;
+    TimeNs since_ns = 0, settled_since_ns = 0, stalled_since_ns = 0, last_disable_ns = 0;
+    double touch_from_rad = 0;
+  } rest_park_;
+  bool begin_rest_park(bool shutdown, std::string& why);
+  void end_rest_park(const char* why);
+  void leave_rest_park_to_hold();
+  // Outputs for Touch / Holding / Release; false when step 6 must command instead (Disable, FaultStop).
+  bool step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, TimeNs period_ns);
+  void rest_park_hold_yaw(const AxisSnapshot& yaw, TimeNs now_ns, TimeNs period_ns);
+  void rest_park_on_stop(const AxisSnapshot& pitch, TimeNs now_ns, bool touched, const std::string& why);
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};

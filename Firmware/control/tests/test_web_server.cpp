@@ -49,7 +49,9 @@ bool read_message(int fd, std::string& out, int timeout_ms = 5000) {
   pollfd pfd{fd, POLLIN, 0};
   int pr = ::poll(&pfd, 1, timeout_ms);
   if (pr != 1) return false;
-  char buf[8192];
+  // Larger than any telemetry frame (webd itself reads up to common/control_trace.py MAX_FRAME):
+  // a reader smaller than the frame tears it, and the test would blame the server.
+  static char buf[65536];
   ssize_t n = ::recv(fd, buf, sizeof(buf) - 1, 0);
   if (n <= 0) return false;
   out.assign(buf, static_cast<size_t>(n));

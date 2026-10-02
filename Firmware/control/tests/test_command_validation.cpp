@@ -33,16 +33,17 @@ TEST(CommandValidation, FaultLocksMotion) {
   auto s = homed_state();
   s.fault = true;
   EXPECT_FALSE(validate_command(s, "start_tracking").ok);
-  EXPECT_FALSE(validate_command(s, "start_homing").ok);
   EXPECT_FALSE(validate_command(s, "enable_search").ok);
   EXPECT_FALSE(validate_command(s, "run_test_motion", "1.0").ok);
+  // Owner ruling 2026-10-03: Home is the way out of a fault (controld recovers the drives first).
+  EXPECT_TRUE(validate_command(s, "start_homing").ok);
 }
 
 TEST(CommandValidation, RecoveryDoesNotUnlockMotionAndCannotOverlapRoutines) {
   SystemCommandState s;
   s.fault = true; s.motor_recovery_allowed = true;
   EXPECT_TRUE(validate_command(s, "recover_motors").ok);
-  EXPECT_FALSE(validate_command(s, "start_homing").ok);
+  EXPECT_TRUE(validate_command(s, "start_homing").ok);  // Home recovers, then homes
   s.motor_recovery_active = true;
   EXPECT_FALSE(validate_command(s, "recover_motors").ok);
   EXPECT_FALSE(validate_command(s, "start_homing").ok);

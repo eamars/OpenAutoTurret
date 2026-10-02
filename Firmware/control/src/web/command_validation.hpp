@@ -73,6 +73,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
   }
   if (s.shutdown_or_parking && command != "request_shutdown" &&
       command != "stop_motion" && command != "hold") {
+    // The process-exit stop only; the web's own Park answers its commands in controld.
     r.error = "shutdown/parking already accepted; Home and motion commands unavailable";
     return r;
   }
@@ -115,15 +116,16 @@ inline CommandResult validate_command(const SystemCommandState& s,
     if (!r.ok) r.error = "motor recovery requires Fault, Idle or Parked";
     return r;
   }
-  // Motion/calibration commands are locked out while faulted.
-  if (s.fault && !(s.recoverable_park_failure && command == "start_homing")) {
-    r.error = "system faulted; motion/calibration commands are locked out";
-    return r;
-  }
   // Homing is the command that ESTABLISHES position validity, so it is the one
-  // command allowed while NOT homed (it requires not-yet-homed).
+  // command allowed while NOT homed. It is also the way out of a fault (owner ruling
+  // 2026-10-03: Home recovers everything): controld runs motor recovery first.
   if (command == "start_homing") {
     r.ok = true;
+    return r;
+  }
+  // Motion/calibration commands are locked out while faulted.
+  if (s.fault) {
+    r.error = "system faulted; Home recovers the drives and homes";
     return r;
   }
   // Everything below requires a homed system.

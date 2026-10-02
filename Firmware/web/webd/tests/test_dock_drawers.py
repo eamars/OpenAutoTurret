@@ -159,27 +159,54 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     # -- MENU / DIAG -------------------------------------------------------------------
 
-    def test_home_is_visibly_gated_during_parking(self) -> None:
-        for phase in ("parking", "recovering"):
-            home = next(r for r in self._rows("MENU", {"phase": phase})
-                        if r["command"] == "start_homing")
-            self.assertEqual(home["kind"], "gated")
-            self.assertIn("HOME UNAVAILABLE", home["note"])
+    # Owner ruling 2026-10-03: HOME (recover whatever latched, then home), PARK (yaw 0, pitch onto its
+    # rest stop, hold), SHUTDOWN (park, then motors off). A row offers its command only where controld
+    # will carry it out; elsewhere it is greyed with the reason, and sends nothing.
 
-    def test_home_remains_available_after_parking_or_failure(self) -> None:
-        for phase in ("parked", "fault"):
-            home = next(r for r in self._rows("MENU", {"phase": phase})
-                        if r["command"] == "start_homing")
-            self.assertEqual(home["kind"], "danger")
+    def _menu(self, **t) -> dict:
+        return {r["label"]: r for r in self._rows("MENU", t)}
 
-    def test_motor_recovery_is_confirmed_and_requires_stopped_service(self) -> None:
-        for phase in ("fault", "idle", "parked", "hold", "homing", "parking", "recovering"):
-            recovery = next(r for r in self._rows("MENU", {"phase": phase})
-                            if r["command"] == "recover_motors")
-            self.assertEqual(recovery["kind"], "danger" if phase in ("fault", "idle", "parked") else "gated")
+    def test_menu_is_home_park_shutdown(self) -> None:
+        rows = self._rows("MENU", {"phase": "hold"})
+        self.assertEqual([r["label"] for r in rows], ["HOME", "PARK", "SHUTDOWN"])
+        self.assertEqual([r["command"] for r in rows], ["start_homing", "request_park", "request_shutdown"])
+
+    def test_home_is_the_way_out_of_a_fault_and_of_motors_off(self) -> None:
+        for phase in ("fault", "idle", "hold", "parked"):
+            home = self._menu(phase=phase)["HOME"]
+            self.assertEqual((home["kind"], home["command"]), ("danger", "start_homing"), phase)
+        self.assertIn("Recover", self._menu(phase="fault")["HOME"]["note"])
+
+    def test_home_is_visibly_busy_while_homing_or_recovering(self) -> None:
+        for phase, note in (("homing", "HOMING"), ("recovering", "RECOVERING")):
+            home = self._menu(phase=phase)["HOME"]
+            self.assertEqual((home["kind"], home["command"]), ("gated", None))
+            self.assertIn(note, home["note"])
+
+    def test_park_and_shutdown_need_a_homed_turret(self) -> None:
+        for phase in ("fault", "idle", "homing", "recovering"):
+            menu = self._menu(phase=phase)
+            for label in ("PARK", "SHUTDOWN"):
+                self.assertEqual((menu[label]["kind"], menu[label]["command"]), ("gated", None), (phase, label))
+        self.assertIn("MOTORS ARE OFF", self._menu(phase="idle")["SHUTDOWN"]["note"])
+
+    def test_parked_on_the_stop_is_current_and_shutdown_is_offered(self) -> None:
+        menu = self._menu(phase="parked", rest_park="parked", rest_park_on_stop=True)
+        self.assertEqual((menu["PARK"]["kind"], menu["PARK"]["command"]), ("current", None))
+        self.assertEqual(menu["SHUTDOWN"]["command"], "request_shutdown")
+        short = self._menu(phase="parked", rest_park="parked", rest_park_on_stop=False)
+        self.assertEqual(short["PARK"]["command"], "request_park", "short of the stop, PARK touches again")
+
+    def test_a_park_under_way_says_so_and_releasing_offers_nothing(self) -> None:
+        moving = self._menu(phase="hold", rest_park="moving")
+        self.assertEqual(moving["PARK"]["kind"], "gated")
+        self.assertIn("PARKING", moving["PARK"]["note"])
+        self.assertEqual(moving["SHUTDOWN"]["command"], "request_shutdown", "a park can become a shutdown")
+        releasing = self._menu(phase="parking", rest_park="releasing")
+        self.assertEqual([r["command"] for r in releasing.values()], [None, None, None])
 
     def test_supervisory_actions_need_two_presses(self) -> None:
-        rows = self._rows("MENU", {})
+        rows = self._rows("MENU", {"phase": "hold"})
         danger = [r for r in rows if r["kind"] == "danger"]
         self.assertEqual({r["command"] for r in danger}, {"start_homing", "request_park", "request_shutdown"})
         self.assertIn("two-press", HUD_JS.lower().replace("two press", "two-press"),

@@ -460,6 +460,24 @@ bool CyberGearSystem::finish_motor_recovery(double max_temp, std::string& err) {
   return true;
 }
 
+bool CyberGearSystem::finish_axis_recovery(AxisId a, double max_temp, std::string& err) {
+  std::lock_guard lock(command_mutex_);
+  const auto now = now_monotonic_ns();
+  if (!bus_ || !bus_->is_up() || !std::isfinite(max_temp) || max_temp > 75 || max_temp <= 0 ||
+      now - heartbeat_ns_.load() > 100'000'000) {
+    err = "re-arm rejected: transport or control heartbeat unhealthy"; return false;
+  }
+  AxisLatest s;
+  if (!axis(a).latest(s) || !s.has_feedback || s.rx_ns <= 0 || s.rx_ns > now ||
+      now - s.rx_ns > 50'000'000 || (s.mode != 0 && s.mode != 2) || s.faults ||
+      !std::isfinite(s.q_rad) || !std::isfinite(s.temp_c) || s.temp_c > max_temp) {
+    err = std::string(axis_name(a)) + ": re-arm rejected; fresh, fault-free feedback below the temperature limit required";
+    return false;
+  }
+  motion_inhibited_.store(false);
+  return true;
+}
+
 bool CyberGearSystem::send_set_zero(AxisId axis, std::string* err) {
   auto f = cybergear::make_set_zero(cfg_.host_can_id, motor_id(axis));
   return send(f.id, f.data, err);

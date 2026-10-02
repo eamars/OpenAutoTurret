@@ -212,6 +212,9 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
                                                         : can::kPitchCurrentCeilingA;
   c.park.limit_cur_a[1] = cfg.axes[1].limit_cur_a > 0.0 ? cfg.axes[1].limit_cur_a
                                                         : c.park.limit_cur_a[1];
+  c.rest_park = !cfg.shutdown.pitch_rest_end.empty();
+  c.rest_park_pitch_low = cfg.shutdown.pitch_rest_end == "min";
+  c.rest_park_touch_speed_rad_s = cfg.shutdown.pitch_touch_speed_deg_s * kDeg2Rad;
   // Phase 9: payload verification (§27, §31.3).
   c.payload_auto_verify = cfg.payload.auto_verify;
   c.payload_check_region_half_span_deg =

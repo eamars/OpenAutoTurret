@@ -77,6 +77,43 @@ still violate the rule and are the next work. Do not cite them as precedent.
 | Motor over-temperature (supervisor), drive-reported fault | supervisor | FaultStop / Disable | Consistent: a hazard, and a faulted drive is not holding anyway. |
 | 100 RPM speed cap, pitch end-stop guard | servos | FAULT | Consistent: hazards, immediate. The pitch drive is now held at speed zero, not released. |
 
+## The web MENU: Home, Park, Shutdown (owner ruling, 2026-10-03)
+
+Before this, almost nothing in the MENU worked on this station. Pressing Park at 01:43:33 faulted the
+station within 40 ms (`velocity_loop_invalid`), and from there Recover Motors answered "unsupported"
+and Home was refused "system faulted". Only a process restart got it back. The menu now has three
+actions. Each one works from wherever it is offered, and each asks for two presses:
+
+| Action | What it does | Offered from | Ends in |
+|---|---|---|---|
+| **HOME** | Recovers whatever latched (yaw guard trip, pitch watchdog inhibit, pitch servo fault, a drive fault the drive itself has cleared), proves fresh, healthy feedback on both axes, then runs homing. | Any state except while homing or recovering already | The ready pose, then **AUTO ROAM**, as at power-up |
+| **PARK** | Yaw to 0 by the nearest whole turn. Pitch first goes to a pose about 6° inside its soft limit, then onto its **rest stop** at 3°/s (homing's fine-approach speed). Both axes are then held there, energised. | A homed turret | phase `parked`. **Any MODE leaves it**; MANUAL returns to the ready pose. |
+| **SHUTDOWN** | PARK, then both motors off. If the pitch stopped short of the stop, it touches the stop again first, so the payload is released resting on it. | A homed or parked turret | phase `idle`, motors off. **Only HOME** starts it again. |
+
+- **The rest stop** is the camera-up end. That is the raw pitch **minimum**, measured by homing at
+  −1.511 rad on 2026-10-03 (`shutdown.pitch_rest_end: min` in `turret_mixed.yaml`).
+- **Touching the stop.** It counts as touched when the pitch stalls within 2° of the measured stop
+  for 200 ms. In the parked hold, the pitch is pulled back if it drifts off the stop and is never
+  pushed past where it touched.
+- **What isn't a fault.** If the pitch stalls more than 2° short of the stop, goes past the measured
+  stop, or runs out of time, the park holds where it is and says so (rule 2 above). STOP MOTION
+  during the move gives an ordinary MANUAL hold in place. STOP MOTION on the stop holds there.
+- **Live progress** is in telemetry `rest_park` (`moving`, `touching`, `parked`, `releasing`) and
+  `rest_park_on_stop`.
+- **The process-exit stop is unchanged.** `run_application.sh stop` still runs the older
+  `start_parking` path. The `shutdown.*_park_*` keys now serve only that path.
+- **Recover-only.** `recover_motors` is still accepted by controld, but it is no longer in the menu:
+  HOME does the recovery itself.
+- **The Park fault itself** was a clock-ordering bug in `MixedCanMotorBackend`. A legacy speed or
+  position command sampled the time, then released the engaged ADR-003 yaw servo, which restarted
+  the legacy loop at a later clock reading. The loop's first step therefore saw time run backwards
+  and latched the trip. The time is now read after the release. The 2026-10-02 17:05:52 fault quoted
+  in `control_loop.cpp` ("the legacy speed loop could not take it over") was most likely the same
+  bug.
+- **Recovering the pitch.** A drive that reports its own fault is cleared with the CyberGear fault
+  clear, which is a STOP. A drive that is still holding speed zero is re-armed without being
+  released (`CyberGearSystem::finish_axis_recovery`).
+
 ## ADR-003 camera tracking: ownership and the accuracy ruling (2026-10-02, local date)
 
 - **Ownership.** The owner handed ADR-003 to the agent, with the architect's package as guidance.
@@ -523,8 +560,8 @@ what an operator needs from them:
   Settings live in `v3.auto_roam` of `turret_mixed.yaml`. The AUTO_ROAM yaw target speed is
   15 to match. The bounded sweep still serves stations with a yaw envelope.
   Meanwhile: a `no_progress` trip with the axis parked outside its computed sweep interval
-  is a known open case (see the case file §4-§6), and on this backend a latch still means a
-  process restart -- `recover_motors` answers `unsupported`.
+  is a known open case (see the case file §4-§6). Since 2026-10-03 a latch is recovered from the
+  web: HOME recovers the drives, then homes (see "The web MENU" above).
 
 ## What a stop proved, per axis (2026-09-28)
 

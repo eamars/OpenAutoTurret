@@ -203,6 +203,15 @@ shutdown:
   # Retained pitch park-verification parameter; GM6020 yaw disable cannot be
   # confirmed and its session zero is not a physical parked orientation.
   verify_speed_deg_s: 2.0
+  # The web's Park and Shutdown (owner ruling 2026-10-03). Park: yaw to 0 (the nearest whole
+  # turn), pitch onto its rest end stop, hold energised; selecting any mode leaves it. Shutdown:
+  # Park, then both motors off; Home starts again. The rest stop is the camera-UP end, which on
+  # this mounting is the raw MINIMUM (positive CyberGear pitch points the camera down; homing
+  # measured that stop at -1.511 rad on 2026-10-03). The values above now serve the
+  # process-exit stop only.
+  pitch_rest_end: min
+  # The last few degrees onto the stop, at homing's own fine-approach speed.
+  pitch_touch_speed_deg_s: 3
 # §38/§39 safety supervisor + watchdog tuning.
 safety:
   # §39.2 stale motor feedback -> no open-loop.

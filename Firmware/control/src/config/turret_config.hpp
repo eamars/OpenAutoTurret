@@ -203,6 +203,13 @@ struct ShutdownConfig {
   // velocity-loop lag; 2 deg/s lands a ~0.8 deg residual inside the 0.5 deg
   // window in one pass).
   double verify_speed_deg_s = 2.0;
+  // The web's Park and Shutdown (owner ruling 2026-10-03): yaw to 0, pitch onto its REST end stop
+  // and hold there; Shutdown then de-energises. `pitch_rest_end` names that stop by raw joint
+  // direction ("min" | "max"), because which end the camera faces from there is a fact about the
+  // mounting, not something to infer. Empty keeps the web on the legacy park above. The last
+  // stretch onto the stop runs at `pitch_touch_speed_deg_s`, like homing's fine approach.
+  std::string pitch_rest_end;
+  double pitch_touch_speed_deg_s = 3.0;
 };
 
 // §38/§39 safety supervisor + watchdog tuning.

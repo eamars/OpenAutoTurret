@@ -45,6 +45,11 @@ class Telemetry:
     # "payload_check") + the fault reason while phase == "fault" (§6.3).
     phase: str = ""
     fault: str = ""
+    # The web's Park / Shutdown (owner ruling 2026-10-03): "" | "moving" | "touching" | "parked" |
+    # "releasing". "moving" runs under phase "hold", which is why it is its own field.
+    # rest_park_on_stop: the pitch reached its rest stop (false: it stopped beside it).
+    rest_park: str = ""
+    rest_park_on_stop: bool = False
     # Homed AND holding the ready pose (the P0 "homed + at ready pose" state).
     # `phase` alone cannot tell "waiting for a target" from "still homing".
     at_ready: bool = False
