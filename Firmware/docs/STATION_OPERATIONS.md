@@ -63,7 +63,7 @@ still violate the rule and are the next work. Do not cite them as precedent.
 
 | Guard | Where | Was | Now |
 |---|---|---|---|
-| Yaw servo oscillation (fast current RMS > 0.3 A) | `MixedCanMotorBackend` | FAULT after 50 ms, yaw de-energised | DEGRADE: logged per episode, with its peak. After 5 s continuously, HOLD until 1 s quiet (`EpisodeLatch`). |
+| Yaw servo oscillation (fast RMS > 0.3 A of the current the servo did not plan: output minus feedforward) | `MixedCanMotorBackend` | FAULT after 50 ms, yaw de-energised | DEGRADE: logged per episode, with its peak. After 5 s continuously, HOLD until 1 s quiet (`EpisodeLatch`). Until 21:40 it watched the whole current, and a hard stop's own deceleration current (0.3 A) counted. |
 | Yaw servo stall (stall recovery still rocking) | same | — | Rocking itself is DEGRADE. Still stuck after 5 s, HOLD until it clears. |
 | Watchdog fault, pitch | `ControlLoop` (watchdog handling) | pitch de-energised for any pitch fault | Released only if the drive itself reports a fault (`fault_releases_axis`). Otherwise the Fault phase brakes and holds it. |
 | CyberGear dead-man (host heartbeat > 100 ms, feedback > 100 ms, > 75 °C) | `CyberGearSystem` watchdog | STOP (release) to both drives every 5 ms | `SpdRef = 0` to an enabled, healthy drive, which holds on its own encoder. STOP only to a faulted or not-enabled drive. Owner to confirm the > 75 °C case: holding heats the motor, but releasing drops the load. |

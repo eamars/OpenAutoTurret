@@ -7,18 +7,22 @@
     commission.py session yaw|pitch SCRIPT   one session with the current asset (diagnosis)
     commission.py calibrate yaw              accuracy limits from measured FF+FB tracking, and the
                                              motor-FF comparison (ADR-003 sec. 7B); see accuracy.py
+    commission.py redesign yaw               gains re-derived offline from the asset's identified plant
+                                             under the current design rules (no station)
 
 Yaw, --from-prior (nothing known; config/servo/yaw_prior.json):
   survey     friction against speed (0.25-40 deg/s both ways) and per-angle maps
   crosstalk  80 Hz probe tone over a full turn each way: the encoder's current sensitivity
   inertia    current sweep while sliding: inertia and loop delay
   design     simulation: largest quiet gain on the identified plant, crosstalk table +- its
-             uncertainty, every 45 degrees; the compensation bias that allows the most
+             uncertainty and a drift allowance (design.py), every 45 degrees; the compensation
+             bias that allows the most
   ladder     station: rising gains at the two weakest angles until the oscillation guard
-             trips; final gain = onset / 1.2 (or the simulated value if lower)
+             trips; final gain = onset / 1.2, never above the robust design
   validate   two use-case passes and a full circle, scored against fixed limits
 --update starts from the current asset and skips the crosstalk scan when a short
-check of the table agrees (a payload change does not move the encoder's sensitivity).
+check of the table agrees. (The sensitivity does drift in service -- 3 mrad/A within a day on
+2026-10-02 -- which is what the design's drift allowance is for.)
 
 Pitch: home against the endstops (every session), identify the drive's speed loop
 from a speed-reference sweep, set kp for a 60 degree phase margin, ladder kp on the
@@ -248,6 +252,15 @@ def yaw_ladder(run, servo_base, identified, dsg, rules, position):
     return (min(onsets) if onsets else None), wns[-1], position
 
 
+def final_wn(dsg, onset, top, rules):
+    """The commissioned gain: the station ladder's onset (or its top step) / station_onset_margin,
+    never above the robust design wn. Returns (wn, rule text)."""
+    cap = dsg["wn"] if dsg.get("model_adequate", True) and dsg.get("wn") else float("inf")
+    edge, what = (onset, f"station onset {onset:.1f}") if onset else (top, f"no onset up to {top:.1f}: top")
+    wn = min(edge / rules["station_onset_margin"], cap)
+    return wn, f"min({what} / {rules['station_onset_margin']}, robust design {cap:.1f})"
+
+
 CIRCLE_MARGIN = 1.1  # the full circle runs at this multiple of the chosen gain
 
 
@@ -365,14 +378,10 @@ def commission_yaw(args):
             run.log(f"    sim boundary wn {dsg['boundary_wn_sim']:.1f} rad/s with bias {dsg['bias'] * 1e3:.1f} mrad/A")
         run.step("design", **dsg)
         onset, top, position = yaw_ladder(run, base, identified, dsg, rules, position)
-        # The station decides; the model's own boundary caps it (never run past the predicted edge).
-        cap = dsg["boundary_wn_sim"] or float("inf")
-        if onset:
-            wn = min(onset / rules["station_onset_margin"], cap)
-            rule = f"min(station onset {onset:.1f} / {rules['station_onset_margin']}, sim boundary {cap:.1f})"
-        else:
-            wn = min(top / rules["station_onset_margin"], cap)
-            rule = f"no onset up to {top:.1f}: min(top / {rules['station_onset_margin']}, sim boundary {cap:.1f})"
+        # The station decides, capped by the robust design (the simulated boundary with the crosstalk
+        # error bound, times the design margin): the station's onset is measured with today's crosstalk,
+        # the cap keeps the margin for the crosstalk of another day (design.py).
+        wn, rule = final_wn(dsg, onset, top, rules)
         dsg.update(wn=round(wn, 2), station_onset_wn=onset, final_rule=rule)
         run.log(f"    ladder wn {wn:.1f} rad/s ({rule}) -> {design.gains(identified['inertia'], wn, dsg['zeta'], dsg['integral_rate'])}")
         wn, position = yaw_circle_check(run, base, identified, dsg, position)
@@ -708,6 +717,43 @@ def calibrate(args):
     write_markdown(run)
 
 
+def redesign(args):
+    """Yaw gains re-derived offline from the asset's identified plant under the current design
+    rules (no station). The station onset recorded in the asset still bounds the result; the
+    asset's validation entries stay, marked with the gain they were measured at."""
+    prior = json.load(open(CONFIG / "yaw_prior.json", encoding="utf-8"))
+    rules = prior["design_rules"]
+    path = Path(args.asset) if args.asset else CONFIG / "yaw_servo.json"
+    asset = json.load(open(path, encoding="utf-8"))
+    identified, old = asset["identified"], asset["design"]
+    print(f"redesign {path.name}: commissioned wn {old['wn']} rad/s ({old.get('final_rule', '')})")
+    dsg = design.design_yaw(identified, prior["servo_parameters"], rules, log=print)
+    if not dsg["model_adequate"]:
+        print("MODEL INADEQUATE: no offline redesign; commission on the station")
+        sys.exit(1)
+    onset = old.get("station_onset_wn")
+    wn, rule = final_wn(dsg, onset, None, rules) if onset else (dsg["wn"], f"robust design {dsg['wn']:.1f}")
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    dsg.update(wn=round(wn, 2), station_onset_wn=onset, final_rule=f"{rule} (redesigned offline {stamp})")
+    servo = design.servo(prior["servo_parameters"], identified, dsg)
+    rows, extra, status = design.predicted_usecase(identified, servo)
+    print(f"wn {old['wn']} -> {dsg['wn']} rad/s: {design.gains(identified['inertia'], dsg['wn'], dsg['zeta'], dsg['integral_rate'])}; "
+          f"crosstalk error bound {dsg['crosstalk_error_bound'] * 1e3:.2f} mrad/A; predicted use case {status}, "
+          f"cost {design.predicted_cost(rows, extra, status):.3f}")
+    for v in asset.get("validation", []):
+        v.setdefault("measured_at_wn", old["wn"])
+    asset["design"] = dsg
+    asset["servo_parameters"] = servo
+    asset["provenance"]["redesigned"] = {"at": stamp, "previous_wn": old["wn"], "previous_bias": old.get("bias"),
+                                         "rule": rule, "tool": "commission.py redesign"}
+    out = Path(args.out) if args.out else path
+    if args.no_write and not args.out:
+        print("--no-write: nothing written")
+        return
+    out.write_text(json.dumps(asset, indent=1) + "\n", encoding="utf-8")
+    print(f"wrote {out}")
+
+
 def one_session(args):
     run = Run(args, args.axis)
     asset = load_asset(args)
@@ -741,6 +787,9 @@ def main():
     c.add_argument("--resume", help="a calibration run directory: score its recorded passes, run the missing ones")
     c = sub.add_parser("rescore", help="re-evaluate a recorded yaw run directory with the current scorer")
     c.add_argument("run_dir")
+    c = sub.add_parser("redesign", help="yaw gains re-derived offline from the asset's identified plant (current rules)")
+    c.add_argument("axis", choices=("yaw",))
+    c.add_argument("--asset", help="asset file (default config/servo/yaw_servo.json)")
     c = sub.add_parser("session")
     c.add_argument("axis", choices=("yaw", "pitch")); c.add_argument("script")
     c.add_argument("--asset", help="asset file (default config/servo/<axis>_servo.json)")
@@ -763,6 +812,8 @@ def main():
         rescore(args)
     elif args.command == "calibrate":
         calibrate(args)
+    elif args.command == "redesign":
+        redesign(args)
     else:
         one_session(args)
 

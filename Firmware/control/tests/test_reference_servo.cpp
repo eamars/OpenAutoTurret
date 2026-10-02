@@ -5,12 +5,14 @@
 // (axis::YawPlant: LuGre friction, the encoder's current crosstalk, actuation delay), fed by the
 // current the backend actually put on the (test) wire.
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 #include <cmath>
 #include <filesystem>
 #include <memory>
 #include <thread>
+#include <vector>
 
 #include <yaml-cpp/yaml.h>
 
@@ -79,6 +81,7 @@ struct MixedBackendTestAccess {
     b.on_yaw_frame(f);
   }
   static bool engaged(MixedCanMotorBackend& b) { std::lock_guard l(b.yaw_mutex_); return b.yaw_servo_active_; }
+  static double oscillation_rms(MixedCanMotorBackend& b) { std::lock_guard l(b.yaw_mutex_); return b.yaw_oscillation_.rms(); }
   static bool tripped(MixedCanMotorBackend& b) { return b.yaw_trip_.load(); }
 };
 
@@ -87,12 +90,15 @@ using Access = MixedBackendTestAccess;
 constexpr double kStart = Access::kFirstCount * gm6020::UnwrappedEncoder::kRadiansPerCount;
 
 // The commissioned asset's identified plant, advanced in real time (the backend reads the clock).
+// `crosstalk_shift` (rad/A) moves the encoder's true current sensitivity off the identified table.
 struct Plant {
   std::unique_ptr<axis::YawPlant> model;
   std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-  Plant() {
+  explicit Plant(double crosstalk_shift = 0.0) {
     const auto asset = YAML::LoadFile((Access::firmware() / "config/servo/yaw_servo.json").string());
-    model = std::make_unique<axis::YawPlant>(axis::yaw_plant_from_yaml(asset["plant"]), kStart);
+    auto p = axis::yaw_plant_from_yaml(asset["plant"]);
+    for (auto& g : p.crosstalk_map) g += crosstalk_shift;
+    model = std::make_unique<axis::YawPlant>(p, kStart);
   }
   double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
   void command(double amps) { model->command(now(), amps); }
@@ -121,6 +127,38 @@ MotorBackend::ServoReference smooth(double t, double distance, double duration) 
   r.valid_s = 0.02;
   return r;
 }
+
+// A Level-1-shaped move (ADR-003 tracking limits: jerk-limited to a_max) from rest to `speed`,
+// a cruise, and a stop as hard as Level 1 brakes; sampled from a 1 ms table.
+struct HardMove {
+  std::vector<std::array<double, 3>> qva;
+  HardMove(double speed, double cruise_s, double a_max = 24.56, double j_max = 2456.0) {
+    double q = 0, v = 0, a = 0;
+    auto reach = [&](double target) {
+      for (int k = 0; k < 20000; ++k) {
+        const double dv = target - v, s = dv > 0 ? 1.0 : -1.0, ramp = a * std::abs(a) / (2 * j_max);
+        if (std::abs(dv) < 1e-9 && std::abs(a) < 1e-9) break;
+        double j = (dv - ramp) * s > 0 ? (std::abs(a) < a_max ? s * j_max : 0.0) : (std::abs(a) > 1e-9 ? -std::copysign(j_max, a) : 0.0);
+        a = std::clamp(a + j * 1e-3, -a_max, a_max);
+        if (std::abs(dv) < std::abs(a) * 1e-3 && std::abs(a) < j_max * 1.5e-3) { a = 0; v = target; }
+        v += a * 1e-3; q += v * 1e-3;
+        qva.push_back({q, v, a});
+      }
+    };
+    reach(speed);
+    for (int k = 0; k < cruise_s * 1000; ++k) { q += v * 1e-3; qva.push_back({q, v, 0.0}); }
+    reach(0.0);
+  }
+  double duration() const { return qva.size() * 1e-3; }
+  double distance() const { return qva.back()[0]; }
+  MotorBackend::ServoReference at(double t) const {
+    const auto& s = qva[std::min<std::size_t>(qva.size() - 1, static_cast<std::size_t>(t * 1000))];
+    MotorBackend::ServoReference r;
+    r.t_ns = now_monotonic_ns(); r.q = s[0]; r.v = t < duration() ? s[1] : 0.0; r.a = t < duration() ? s[2] : 0.0;
+    r.valid_s = 0.02;
+    return r;
+  }
+};
 
 void run(MixedCanMotorBackend& b, Plant& plant, double seconds,
          const std::function<void(double)>& tick = nullptr) {
@@ -198,6 +236,35 @@ TEST(ReferenceServo, PitchEngagesOnlyInsideItsEnvelope) {
   EXPECT_FALSE(pitch_servo_may_engage(r, -0.2032 + 0.04, 0.035));
   r.q_max = std::nan("");
   EXPECT_FALSE(pitch_reference_has_envelope(r));
+}
+
+// Station 2026-10-02 21:15: after hard stops at absolute 100 and 326 deg the yaw buzzed at standstill
+// (34 Hz, +-1.2 A) for over 10 s: its encoder's current sensitivity had drifted about -3 mrad/A off
+// the morning's table, and the commissioned gains (wn 44.7) left -2 mrad/A of margin. The design now
+// survives a crosstalk error as large as the table itself (design.py). And the oscillation monitor
+// counts only the current the servo did not plan (output minus feedforward): a hard stop's own
+// deceleration current is not an oscillation.
+TEST(ReferenceServo, AHardStopWithDriftedCrosstalkSettlesQuietly) {
+  MixedCanMotorBackend b;
+  Plant plant(-0.004);
+  Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
+  std::string err;
+  ASSERT_TRUE(Access::load(b, err)) << err;
+  // From 44 deg absolute at 80 deg/s to a stop near 88 deg (a simulated onset angle of the old gains).
+  const HardMove move(80 * M_PI / 180, 0.4);
+  ASSERT_GT(move.distance(), 0.6);
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, move.at(0)));
+  double worst_rms = 0, hold_lo = 1e9, hold_hi = -1e9;
+  run(b, plant, move.duration() + 1.5, [&](double t) {
+    ASSERT_TRUE(b.command_reference(AxisId::Yaw, move.at(t)));
+    worst_rms = std::max(worst_rms, Access::oscillation_rms(b));
+    if (t > move.duration() + 0.5) { hold_lo = std::min(hold_lo, plant.q()); hold_hi = std::max(hold_hi, plant.q()); }
+  });
+  EXPECT_FALSE(Access::tripped(b));
+  EXPECT_EQ(b.servo_hold_reason(), nullptr);
+  EXPECT_LT(worst_rms, 0.5 * 0.3) << "the oscillation monitor must not see a planned stop, nor a buzz";
+  EXPECT_NEAR(plant.q(), move.distance(), 0.006) << "settled within the hold band";
+  EXPECT_LT(hold_hi - hold_lo, 0.004) << "still at rest";
 }
 
 // Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a following error is

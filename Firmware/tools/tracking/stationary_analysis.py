@@ -22,7 +22,7 @@ HOLD_TAIL_S = 15.0
 def load_trace(path):
     text = open(path, encoding="utf-8", errors="replace").read()
     rows = []
-    for m in re.finditer(r'\{"t_ns".*?"reacquired":\d+\}', text, flags=re.S):
+    for m in re.finditer(r'\{"t_ns".*?"(?:reacquired|rate_limited)":\d+\}', text, flags=re.S):
         try:
             rows.append(json.loads(m.group(0).replace("\n", "")))
         except json.JSONDecodeError:

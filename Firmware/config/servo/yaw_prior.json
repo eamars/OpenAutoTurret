@@ -21,6 +21,7 @@
    0.002,
    0.003
   ],
+  "crosstalk_drift_fraction": 1.0,
   "design_margin": 0.85,
   "station_onset_margin": 1.2,
   "oscillation_limit_A": 0.3,
@@ -125,5 +126,6 @@
    "rock_current_A": 0.4,
    "rock_s": 0.025
   }
- }
+ },
+ "design_rules_basis": "crosstalk_drift_fraction 1.0: the design boundary is taken with the crosstalk table wrong by its own largest |g| (the loop survives losing the compensation). Station 2026-10-02: the reading moved 3 mrad/A off the morning's table within the day and the yaw buzzed at standstill; see tools/servo_commission/design.py."
 }

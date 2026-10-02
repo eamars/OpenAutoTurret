@@ -1290,8 +1290,11 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   // Station, 2026-10-02 18:33 and 19:10: this guard tripped the station (fault, yaw de-energised)
   // 50 ms into a limit cycle the owner could not even see. Not a hazard: tolerated, reported, and a
   // HOLD only if it persists (track_yaw_servo_episodes_locked).
-  yaw_oscillation_.update(yaw_servo_last_step_ns_ ? (now - yaw_servo_last_step_ns_) * 1e-9 : 0.0, out.limited,
-                          rock_settling);
+  // It watches the current the servo did not plan: output minus feedforward (inertia x a_ref +
+  // friction). At 21:14 the same day a hard stop's own deceleration current (0.3 A fast RMS)
+  // counted as oscillation and held tracking for 10 s; the planned share is not an oscillation.
+  yaw_oscillation_.update(yaw_servo_last_step_ns_ ? (now - yaw_servo_last_step_ns_) * 1e-9 : 0.0,
+                          out.limited - out.feedforward, rock_settling);
   track_yaw_servo_episodes_locked(now, rock_settling);
   yaw_servo_last_step_ns_ = now;
   yaw_output_reason_ = 1;

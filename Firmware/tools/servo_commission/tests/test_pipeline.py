@@ -94,10 +94,15 @@ class Pipeline(unittest.TestCase):
         self.assertLess(abs(asset["identified"]["inertia"] / truth("station_estimate")["yaw"]["inertia"] - 1), 0.15)
 
     def test_yaw_from_prior_heavy_payload(self):
-        """A 2.5x payload: the same command finds the new inertia and scales the gains up."""
+        """A 2.5x payload: the same command finds the new inertia and scales the gains up.
+
+        The gain is bounded by the crosstalk error the loop must survive (design.py): its
+        right-half-plane zero sits at 1/sqrt(J |g|), so the usable wn falls as 1/sqrt(J) and
+        kv = 2 zeta J wn grows as sqrt(J) -- not in proportion to J."""
         light, heavy = self.run_pipeline("yaw", "station_estimate"), self.run_pipeline("yaw", "heavy_payload")
-        self.assertGreater(heavy["identified"]["inertia"], 2 * light["identified"]["inertia"])
-        self.assertGreater(heavy["servo_parameters"]["kv"], 1.5 * light["servo_parameters"]["kv"])
+        ratio = heavy["identified"]["inertia"] / light["identified"]["inertia"]
+        self.assertGreater(ratio, 2)
+        self.assertGreater(heavy["servo_parameters"]["kv"], 0.8 * math.sqrt(ratio) * light["servo_parameters"]["kv"])
 
     def test_pitch_from_prior(self):
         for case in ("station_estimate", "heavy_payload"):

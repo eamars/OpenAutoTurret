@@ -17,8 +17,8 @@ namespace ota::track {
 // * Robust update: the whitened innovation norm r gives w = min(1, sqrt(gate)/r) and the
 //   update uses R/w (covariance included), so a real stop or reversal is followed instead of
 //   rejected forever. Only invalid numbers, time or geometry are rejected outright.
-// * |omega| beyond the validated rate domain on two consecutive frames: same-identity
-//   reacquire (velocity back to zero and unknown).
+// * |omega| beyond the validated rate domain (a guard against nonsense, set well above what the
+//   turret can follow): the rate is held at the domain edge (rate_limited counts it).
 // * Queries never advance the committed state. The query applies the velocity-confidence
 //   weight w_noise and the coast fade g(age), and returns one motion hypothesis:
 //   theta_goal = theta + v_ff * integral_0^age g, omega_goal = v_ff * g(age).
@@ -48,7 +48,7 @@ struct AxisState { double theta=0, omega=0, pp=0, pv=0, vv=0; };
 struct EstimatorDiagnostics {
   double nis=0, weight=1;
   std::array<double,2> scale{1.,1.}, innovation{};
-  uint64_t accepted=0, rejected=0, downweighted=0, reacquired=0, gap_resets=0;
+  uint64_t accepted=0, rejected=0, downweighted=0, rate_limited=0, gap_resets=0;
   bool last_accepted=false;
 };
 
@@ -87,7 +87,6 @@ class TargetEstimator {
   bool configured_=false, initialized_=false;
   std::array<AxisState,2> x_{};
   int64_t t_ns_=0;
-  int beyond_domain_=0;
   EstimatorDiagnostics d_{};
 };
 }

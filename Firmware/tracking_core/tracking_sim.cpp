@@ -180,7 +180,7 @@ TrackingSimulation simulate_tracking(const YAML::Node& request) {
     "goal_az","goal_el","goal_waz","goal_wel","ffw_az","ffw_el","fade","age","pos_valid","vel_valid",
     "qt_y","qt_p","vt_y","vt_p","goal_valid","qr_y","qr_p","vr_y","vr_p","ar_y","ar_p","jr_y","jr_p","flag_y","flag_p",
     "areq_y","areq_p","qm_y","qm_p","qtrue_y","qtrue_p","qT_y","qT_p","err_u","err_v","nis","weight","scale_az","scale_el",
-    "accepted","rejected","downweighted","reacquired","gap_resets","identity_changes","u_yaw","rms_yaw","cmd_pitch","motion","saturated"};
+    "accepted","rejected","downweighted","rate_limited","gap_resets","identity_changes","u_yaw","rms_yaw","cmd_pitch","motion","saturated"};
   out.frame_columns={"t_start","t_mid","t_reported","t_arrival","dropped","delivered","superseded","out_of_view",
     "u_true","v_true","err_px","blur_px","u_meas","v_meas","identity","accepted"};
   out.status="COMPLETE";
@@ -235,7 +235,7 @@ TrackingSimulation simulate_tracking(const YAML::Node& request) {
         double(sample.flags[0]),double(sample.flags[1]),sample.a_request[0],sample.a_request[1],
         q_measured[0],q_measured[1],yaw_true.last(),pitch_true.last(),ideal_goal.q[0],ideal_goal.q[1],
         u-frame_u,v-frame_v,d.nis,d.weight,d.scale[0],d.scale[1],double(d.accepted),double(d.rejected),double(d.downweighted),
-        double(d.reacquired),double(d.gap_resets),double(tracker.identity_changes()),sent_current,rms,pitch_cmd,
+        double(d.rate_limited),double(d.gap_resets),double(tracker.identity_changes()),sent_current,rms,pitch_cmd,
         double(tracker.parameters().target_motion),saturation_now>=0?1.:0.});
     }
     // ---- actuators (1 kHz)

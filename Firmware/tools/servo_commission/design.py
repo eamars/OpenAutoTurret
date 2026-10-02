@@ -6,8 +6,16 @@ which does not scale with inertia (station 2026-10-02: wn-scaled integral left s
 The usable wn is bounded by the encoder current crosstalk left after compensation:
 the reading becomes q + r*i, and a residual r <= 0 puts a right-half-plane zero at
 1/sqrt(a*|r|); a small positive residual (the compensation bias b) keeps it away.
-The boundary is found in simulation for residuals b +- the table uncertainty, at
-every angle, and checked on the station by a gain ladder.
+The boundary is found in simulation for residuals b +- (the table uncertainty + a drift
+allowance), at every angle, and checked on the station by a gain ladder.
+
+The drift allowance is crosstalk_drift_fraction x the table's largest |g| (rule 1.0: the loop
+survives losing the compensation entirely). Station 2026-10-02: commissioned at 12:34 with
+the boundary taken at the scan's own +-0.48 mrad/A, by 21:15 the reading at 326 deg moved
+with the current at -6.7..-8.1 mrad/A against the table's -4.1, and the servo buzzed at
+standstill after hard stops (a crosstalk loop held up by static friction) until the
+supervisor held the station. The scan's scatter within one session is not the uncertainty
+that matters in service.
 
 Pitch: the drive's speed loop is a delay d and lag tau; the host P loop around it
 gets the gain with the requested phase margin, ki from the same ratio rule.
@@ -152,11 +160,19 @@ def predicted_cost(rows, extra, status):
             worst("walker", "err_rms") / lim["walker_rms"] + worst("step", "final_err") / lim["step_final"])
 
 
+def crosstalk_error_bound(identified, rules):
+    """The crosstalk error (rad/A) the loop must stay quiet with: the scan's uncertainty plus the
+    drift allowance (module docstring)."""
+    table = identified["crosstalk"]["table"]
+    drift = rules.get("crosstalk_drift_fraction", 0.0) * max(abs(g) for g in table)
+    return identified["crosstalk"]["uncertainty"] + drift
+
+
 def design_yaw(identified, base, rules, start=0.0, log=print):
-    """For each compensation bias: the robust simulated boundary (table +- its uncertainty),
+    """For each compensation bias: the robust simulated boundary (table +- the error bound),
     the design gain margin*boundary, and a simulated use-case pass. Keep the bias whose
     use case scores best (the bias trades stability margin for crosstalk error)."""
-    delta = identified["crosstalk"]["uncertainty"]
+    delta = crosstalk_error_bound(identified, rules)
     candidates = []
     for bias in rules["crosstalk_bias_candidates_rad_per_A"]:
         results = [boundary(identified, base, bias, shift, rules["zeta"], rules["integral_rate_per_s"], start)
@@ -178,7 +194,7 @@ def design_yaw(identified, base, rules, start=0.0, log=print):
     cost, bias, wn_b, angles = min(candidates, key=lambda c: (round(c[0], 2), c[1]))
     return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "bias": bias, "model_adequate": True,
             "boundary_wn_sim": round(wn_b, 2), "wn": round(rules["design_margin"] * wn_b, 2), "predicted_cost": round(cost, 3),
-            "onset_angles_sim": [round(a, 4) for a in angles]}
+            "onset_angles_sim": [round(a, 4) for a in angles], "crosstalk_error_bound": round(delta, 6)}
 
 
 def ladder_angles(design, crosstalk):

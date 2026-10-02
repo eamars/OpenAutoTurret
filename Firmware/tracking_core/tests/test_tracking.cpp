@@ -83,6 +83,28 @@ void estimator_follows_a_sudden_stop() {
   check(e.diagnostics().downweighted>0,"the stop used the robust update");
 }
 
+void estimator_keeps_a_fast_subject_moving() {
+  // Station 2026-10-02 21:14: a person at 60-80 deg/s against a 57 deg/s rate domain. The old
+  // estimator zeroed the rate on every other frame, so the goal velocity alternated 0 / 70 deg/s
+  // at 15 Hz, the reference fell 13 deg behind and overshot the stop. Beyond the domain the rate
+  // is held at its edge: the subject is still moving that way.
+  TargetEstimator e; e.configure(estimator_parameters());
+  const double rate=1.5*estimator_parameters().rate_domain;
+  double t=1, worst=1e9;
+  bool weight_dropped=false;
+  for (int k=0;k<90;++k) {
+    t+=0.033; LosObservation z; z.t_ns=int64_t(t*kS); z.az=rate*(t-1); z.var_az=z.var_el=1e-7;
+    check(e.update(z),"fast frame accepted");
+    if (k>=15) {
+      worst=std::min(worst,e.state()[0].omega);
+      weight_dropped|=e.query(z.t_ns+int64_t(0.06*kS)).ff_weight[0]<0.99;
+    }
+  }
+  check(worst>=0.99*estimator_parameters().rate_domain,"the rate stays at the domain's edge, never back to zero");
+  check(!weight_dropped,"the velocity feedforward stays on");
+  check(e.diagnostics().rate_limited>0,"the limitation is counted");
+}
+
 void velocity_weight_and_coast_laws() {
   check(velocity_weight(0.,1.)==0 && velocity_weight(1.,1.)==0 && std::abs(velocity_weight(3.,1.)-1)<1e-12,
         "w=0 below 1 sigma, 1 from 3 sigma");
@@ -280,6 +302,7 @@ int main() {
   run("estimator_tracks_constant_rate_with_irregular_frames",estimator_tracks_constant_rate_with_irregular_frames);
   run("estimator_rejects_repeated_and_old_frames",estimator_rejects_repeated_and_old_frames);
   run("estimator_follows_a_sudden_stop",estimator_follows_a_sudden_stop);
+  run("estimator_keeps_a_fast_subject_moving",estimator_keeps_a_fast_subject_moving);
   run("velocity_weight_and_coast_laws",velocity_weight_and_coast_laws);
   run("estimator_coast_is_bounded",estimator_coast_is_bounded);
   run("level1_is_one_integral",level1_is_one_integral);

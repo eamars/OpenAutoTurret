@@ -77,11 +77,16 @@ numbers; the report records every number):
 4. **design (simulation).** `servo-sim` runs the identified plant through eight angles with steps
    and 5 and 20 deg/s ramps. Gains follow one loop shape scaled by inertia: kq = a·wn²,
    kv = a·wn (zeta 0.5), ki = 1.5·kq. For each compensation bias (1, 2, 3 mrad/A left in the
-   reading on purpose) it finds the largest quiet wn with the table shifted by ± its uncertainty.
-   It then keeps the bias whose simulated use case scores best.
+   reading on purpose) it finds the largest quiet wn with the table shifted by ± (its uncertainty +
+   a drift allowance of `crosstalk_drift_fraction` × the table's largest |g|; rule 1.0, so the loop
+   survives losing the compensation). It then keeps the bias whose simulated use case scores best.
+   Why the drift allowance: on 2026-10-02 the reading at 326 deg moved 3 mrad/A off the morning's
+   table within the day, and gains designed against the scan's own ±0.48 mrad/A buzzed at standstill.
 5. **ladder (station).** At the two weakest angles, wn rises from 0.6 to 1.3 × the simulated
    boundary until the session's oscillation guard trips (fast current RMS above 0.3 A for 50 ms, stall
-   rocks excluded) or the speed trip fires. The ladder gain is min(onset / 1.2, simulated boundary).
+   rocks excluded) or the speed trip fires. The ladder gain is min(onset / 1.2, robust design wn).
+   `commission.py redesign yaw` re-derives the gains offline from an asset's identified plant under
+   the current rules (no station); the asset records it under `provenance.redesigned`.
    The two angles are where the crosstalk scan's two directions disagree most and where the table
    is steepest.
 6. **circle check (station).** A full circle each way at 1.1 × that gain must finish without the

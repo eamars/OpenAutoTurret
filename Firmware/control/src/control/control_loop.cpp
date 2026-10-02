@@ -5510,7 +5510,7 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       "\"valid\":[{},{}],\"goal_q\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"goal_valid\":{},"
       "\"ref\":[{:.6f},{:.6f},{:.5f},{:.5f},{:.4f},{:.4f},{:.3f},{:.3f}],\"flags\":[{},{}],"
       "\"q\":[{:.6f},{:.6f}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
-      "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"reacquired\":{}}}",
+      "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"rate_limited\":{}}}",
       now_ns, g.state_ns, g.age_s, x[0].theta, x[1].theta, x[0].omega, x[1].omega,
       std::sqrt(std::max(0.0, x[0].vv)), std::sqrt(std::max(0.0, x[1].vv)),
       g.theta[0], g.theta[1], g.omega[0], g.omega[1], g.ff_weight[0], g.ff_weight[1], g.fade,
@@ -5519,6 +5519,6 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       r.reference.q[0], r.reference.q[1], r.reference.v[0], r.reference.v[1], r.reference.a[0], r.reference.a[1],
       r.reference.j[0], r.reference.j[1], r.reference.flags[0], r.reference.flags[1],
       r.q_measured[0], r.q_measured[1], r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
-      d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.reacquired);
+      d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.rate_limited);
 }
 }  // namespace ota

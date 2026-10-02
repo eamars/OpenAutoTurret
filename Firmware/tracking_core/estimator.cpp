@@ -62,16 +62,16 @@ bool TargetEstimator::configure(const EstimatorParameters& p) {
 }
 
 void TargetEstimator::reset() {
-  initialized_=false; x_={}; t_ns_=0; beyond_domain_=0;
+  initialized_=false; x_={}; t_ns_=0;
   const auto counts=d_; d_={};
   d_.accepted=counts.accepted; d_.rejected=counts.rejected; d_.downweighted=counts.downweighted;
-  d_.reacquired=counts.reacquired; d_.gap_resets=counts.gap_resets;
+  d_.rate_limited=counts.rate_limited; d_.gap_resets=counts.gap_resets;
 }
 
 void TargetEstimator::initialise(const LosObservation& z,const double r[2]) {
   const double angle[2]={z.az,z.el};
   for (int i=0;i<2;++i) x_[i]={angle[i],0.,r[i],0.,p_.initial_rate_sigma*p_.initial_rate_sigma};
-  t_ns_=z.t_ns; initialized_=true; beyond_domain_=0; d_.scale={1.,1.};
+  t_ns_=z.t_ns; initialized_=true; d_.scale={1.,1.};
 }
 
 bool TargetEstimator::update(const LosObservation& z) {
@@ -120,13 +120,13 @@ bool TargetEstimator::update(const LosObservation& z) {
   }
   x_[1].theta=std::clamp(x_[1].theta,-M_PI/2,M_PI/2);
   d_.nis=nis; d_.weight=w; t_ns_=z.t_ns;
-  // Outside the validated motion domain twice in a row: reacquire with the same identity.
-  if (std::abs(x_[0].omega)>p_.rate_domain || std::abs(x_[1].omega)>p_.rate_domain) {
-    if (++beyond_domain_>=2) {
-      for (auto& a:x_) { a.omega=0; a.pv=0; a.vv=p_.initial_rate_sigma*p_.initial_rate_sigma; }
-      beyond_domain_=0; ++d_.reacquired;
-    }
-  } else beyond_domain_=0;
+  // Beyond the validated rate domain the rate is held at its edge: the subject is still moving
+  // that way. (Station 2026-10-02 21:14: zeroing it instead, every other frame for a person at
+  // 60-80 deg/s, made the goal velocity chatter at 15 Hz; the reference fell 13 deg behind and
+  // overshot the stop.) A wrong association is not this guard's business: a new identity resets
+  // the motion (Tracker), a jump is down-weighted by the robust update.
+  for (auto& a:x_)
+    if (std::abs(a.omega)>p_.rate_domain) { a.omega=std::copysign(p_.rate_domain,a.omega); ++d_.rate_limited; }
   d_.last_accepted=true; ++d_.accepted;
   return true;
 }

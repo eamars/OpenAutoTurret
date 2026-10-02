@@ -77,7 +77,12 @@ and friction.
 ## Rules decided on the station (2026-10-02)
 
 - **Oscillation guard at 0.3 A of fast current RMS:** normal runs peak at 0.14 A, the limit cycle
-  reaches 0.3 A within 0.2 s of onset.
+  reaches 0.3 A within 0.2 s of onset. (Production watches output minus feedforward instead: in
+  tracking, hard stops at 24 rad/s² reach 0.3 A of planned current; commissioning scripts do not.)
+- **Crosstalk drift allowance (`crosstalk_drift_fraction` 1.0, design.py):** the design boundary is
+  taken with the table wrong by its own largest |g|. On 2026-10-02 the commissioned gains (wn 44.7,
+  stable to -2 mrad/A of error) buzzed at standstill once the reading had drifted ~3 mrad/A; the
+  redesign (wn 27.5, bias 3 mrad/A) is quiet to -7 mrad/A in simulation, at friction x0.5 to x2.
 - **Integral rate ki = 1.5·kq, not scaled with wn:** the integral works against friction, which
   does not scale with inertia.
 - **Stall recovery always on in a designed asset:** without it, ±90 deg moves stuck 0.33 deg short
