@@ -346,8 +346,8 @@ int main(int argc, char** argv) {
       // without a position envelope, not a missing number -- said out loud here so a
       // log reader never has to infer it from the absence of a limit.
       spdlog::warn("continuous yaw declared WITHOUT a position envelope; the "
-                   "sector is gone, not merely unmeasured (AUTO_ROAM still sweeps "
-                   "a declared region, and every other guard is unchanged)");
+                   "sector is gone, not merely unmeasured (AUTO_ROAM patrols the whole "
+                   "circle in one direction, and every other guard is unchanged)");
     }
     // GM6020 has no reported fault/disable status and its temperature byte
     // has no documented unit. The mixed backend instead independently bounds
