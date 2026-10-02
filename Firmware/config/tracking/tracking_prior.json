@@ -7,7 +7,7 @@
   "pixel_sigma_px": "detector anchor on a 640x360 inference image scaled to 1920x1080: about one inference pixel",
   "scale_max": "max(1, A^2 T_m / q_a) with A = 2 rad/s^2 and T_m = 0.111 s (the ~9 fps delivered rate measured 2026-09-29)",
   "fresh_s / horizon_s": "fresh: normal age at use (latency 0.06 + frame 0.111 + jitter); horizon: the AUTO_TRACK coast of 0.5 s beyond it",
-  "level1": "lambda 4 rad/s (the production tracking_reference_omega). Limits: owner ruling 2026-10-02, AUTO_TRACK is limited only by the 100 RPM safety cap and physical capability, not by a motion profile. Yaw: v 60 deg/s, the fastest the yaw servo has shown stable -- station 2026-10-02 18:33:32, a 74 deg/s slew braking at 310 deg/s^2 drove it into its 15 Hz crosstalk limit cycle (oscillation guard, fault); today's production tracking was clean to 60 deg/s and the commissioning survey ran full turns at 60. Above 60 needs a designed sweep, not this number. a = half of (3 A peak - 1 A worst friction) / inertia 0.0407 = 24.56 rad/s^2 (the other half is feedback headroom); j = half of the servo's 200 A/s current slew / inertia = 2456.0 rad/s^3. Pitch: v 100 RPM; a/j the 60 deg/s^2 / 300 deg/s^3 its commissioning exercised -- its capability under the 3 kg payload is unmeasured and Level 1's braking into the end stops relies on a real number. Travel: replaced each tick by the station's soft envelope.",
+  "level1": "lambda 4 rad/s (the production tracking_reference_omega). Limits: owner ruling 2026-10-02, AUTO_TRACK is limited only by the 100 RPM safety cap and physical capability, not by a motion profile. Yaw: v 100 deg/s, the yaw servo asset's speed limit (1.75 rad/s). It was capped at 60 deg/s on 2026-10-02 after its 15 Hz limit cycle tripped the station; since the owner's fault/hold ruling the limit cycle is a tolerated episode (HOLD only after 5 s), and in the 20:44 person session two of six losses were the turret pinned at 60 deg/s. a = half of (3 A peak - 1 A worst friction) / inertia 0.0407 = 24.56 rad/s^2 (the other half is feedback headroom); j = half of the servo's 200 A/s current slew / inertia = 2456.0 rad/s^3. Pitch: v 100 RPM; a/j the 60 deg/s^2 / 300 deg/s^3 its commissioning exercised -- its capability under the 3 kg payload is unmeasured and Level 1's braking into the end stops relies on a real number. Travel: replaced each tick by the station's soft envelope.",
   "lead_limit_rad": "2 deg: ten times the worst servo moving error measured by the yaw accuracy calibration"
  },
  "estimator": {
@@ -35,7 +35,7 @@
   "valid_s": 0.02,
   "yaw": {
    "lambda_rad_s": 4.0,
-   "v_max_rad_s": 1.047,
+   "v_max_rad_s": 1.75,
    "a_max_rad_s2": 24.56,
    "j_max_rad_s3": 2456.0,
    "lead_limit_rad": 0.0349,
