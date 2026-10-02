@@ -57,6 +57,9 @@ class CanMotorBackend : public MotorBackend {
   AxisSnapshot snapshot(AxisId axis, TimeNs now_ns) override;
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override;
   void command_velocity(AxisId axis, double velocity_rad_s) override;
+  // SpdRef written every call, never skipped as unchanged: each write is answered by a type-2
+  // frame, which is how a 1 kHz host position loop gets 1 kHz feedback (ADR-002.2 pitch servo).
+  bool command_velocity_always(AxisId axis, double velocity_rad_s);
   void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp,

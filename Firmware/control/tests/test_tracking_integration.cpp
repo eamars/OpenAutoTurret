@@ -29,6 +29,8 @@
 #include "sim/sim_motor_backend.hpp"
 #include "tracks/perception_wire.hpp"
 #include "web/web_server.hpp"
+#include "tracking_config.hpp"
+#include <yaml-cpp/yaml.h>
 
 using namespace ota;
 using ota::geo::CameraIntrinsics;
@@ -543,6 +545,66 @@ TEST(TrackingIntegration, TracksRotatingTarget) {
       << "gimbal azimuth should track the target";
   EXPECT_NEAR(el_now, el_const, 3.0 * kDeg)
       << "gimbal elevation should track the target";
+}
+
+// ADR-003 3b: the same closed loop with the tracking core owning the target state and the
+// AUTO_TRACK reference (Level 1: target-velocity feedforward + reference-error feedback), under
+// the speed service, against the legacy estimator + lead + track_reference in the identical rig
+// and scenario: a 10 deg/s subject seen by a 30 fps camera. Returns the worst azimuth error of
+// the last 1.5 s (deg) and, through `core`, whether the core path ran.
+double follow_moving_subject(bool use_core, bool& core) {
+  TrackingRig r(true, true);  // speed service with the 20 deg/s service ceiling (the default is 3)
+  int64_t t0 = 0;
+  EXPECT_TRUE(run_to_ready(r, t0));
+  auto cfg = make_tracking_cfg(false);
+  if (use_core) {
+    const auto prior = ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()) /
+                       "config/tracking/tracking_prior.json";
+    cfg.core = track::tracker_from_yaml(YAML::LoadFile(prior.string()));
+    cfg.core->pixel_sigma = 1.0;  // this synthetic camera has no noise
+    cfg.core->timing = {};         // ... and stamps the exact instant it images (no exposure, no latency)
+    cfg.core_nominal_exposure_s = 0;
+    // Level 1's limits are the actuator's capability. The station asset describes the ADR-002.2
+    // servos; this rig's actuator is the legacy speed service (20 deg/s, 60 deg/s^2, 300 deg/s^3).
+    for (auto& a : cfg.core->level1.axis) { a.v_max = 20 * kDeg; a.a_max = 60 * kDeg; a.j_max = 300 * kDeg; }
+  }
+  enter_mode(r, cfg, ota::OperatingMode::AutoTrack);
+  core = r.loop().tracking_controller().uses_core();
+  const double el = 5.0 * kDeg, rate = 10.0 * kDeg;
+  int64_t t = t0;
+  for (int i = 0; i < 3; ++i) { step_with_track(r, t, i, 0.0, el); t += kDtNs; }
+  r.loop().submit_command("select_target", "1");
+  for (int i = 0; i < 4; ++i) { step_with_track(r, t, 10 + i, 0.0, el); t += kDtNs; }
+  double worst = 0;
+  for (int i = 0; i < 800; ++i) {
+    const double az = rate * (i * 0.005);
+    if (i % 7 == 0) step_with_track(r, t, 100 + i, az, el);
+    else r.loop().step(t, kDtNs);
+    t += kDtNs;
+    EXPECT_NE(r.loop().phase(), Phase::Fault);
+    if (i > 500) {
+      double az_now, el_now;
+      actual_los(r.kin(), r.loop().last_positions()[1], r.loop().last_positions()[0], az_now, el_now);
+      worst = std::max(worst, std::abs(az_now - az));
+    }
+  }
+  EXPECT_EQ(r.loop().tracking_controller().track_state(), TrackState::Tracking);
+  if (use_core) {
+    EXPECT_GT(r.loop().tracking_controller().core()->estimator().diagnostics().accepted, 90u);
+    EXPECT_NEAR(r.loop().tracking_controller().target_az_rate_rad_s(), rate, 0.5 * kDeg);
+  }
+  return worst / kDeg;
+}
+
+TEST(TrackingIntegration, CoreFollowsMovingSubjectWithLessLagThanLegacy) {
+  bool core = false, legacy_core = true;
+  const double with_core = follow_moving_subject(true, core);
+  const double legacy = follow_moving_subject(false, legacy_core);
+  std::printf("worst late azimuth error: core %.3f deg, legacy %.3f deg\n", with_core, legacy);
+  EXPECT_TRUE(core);
+  EXPECT_FALSE(legacy_core);
+  EXPECT_LT(with_core, 1.0);
+  EXPECT_LT(with_core, legacy);
 }
 
 // Feed the target for `track_cycles` cycles, then stop feeding (target lost)

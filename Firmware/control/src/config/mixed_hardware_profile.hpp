@@ -46,12 +46,29 @@ struct Axis {
   int yaw_guard_temp_raw_ceiling = 0;
 };
 
+// ADR-003 3b: the ADR-002.2 servos (assets from tools/servo_commission/commission.py) own both
+// axes whenever the control loop publishes a reference segment. Absent: the legacy speed paths.
+struct Servo {
+  std::string yaw_asset, pitch_asset;   // resolved paths of config/servo/*_servo.json
+  double yaw_current_limit_a = 0;       // peak authority (owner ruling 2026-10-02: 3 A)
+  double yaw_rms_limit_a = 0;           // continuous budget (1.62 A rated)
+  int yaw_temperature_limit_raw = 0;    // the commissioning sessions' thermal trip (raw byte, ~deg C)
+  double oscillation_limit_a = 0;       // limit-cycle guard: fast current RMS (commissioning rule)
+  double speed_limit_rad_s = 0;         // owner ruling 2026-10-02: 100 RPM is the safety cap (both axes)
+  // Pitch end-stop protection (owner: never drive the pitch into its mechanical end stop): the
+  // guard lies this far beyond each soft limit (which homing places inside the measured ends),
+  // and toward it the commanded speed always allows a stop at stop_acceleration.
+  double pitch_guard_rad = 0;
+  double pitch_stop_acceleration_rad_s2 = 0;
+};
+
 struct Profile {
   int schema_version = 0;
   CanBus yaw_bus;
   CanBus pitch_bus;
   Axis yaw;
   Axis pitch;
+  std::optional<Servo> servo;
 };
 
 struct LoadResult {

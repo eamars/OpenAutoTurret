@@ -14,6 +14,28 @@ starting, stopping or diagnosing the station. Dated run reports are historical.
 > `run_application.sh status` for the release and run dir, and
 > [`tools/station_address.sh`](../tools/station_address.sh) `print` for the address.
 
+## ADR-003 camera tracking: ownership and the accuracy ruling (2026-10-02, local date)
+
+- **Ownership.** The owner handed ADR-003 to the agent, with the architect's package as guidance.
+  The plan, the decisions and the state of each stage are in
+  [ADR-003/IMPLEMENTATION.md](ADR-003/IMPLEMENTATION.md).
+- **Accuracy ruling.** The yaw accuracy limits are calibrated from the real tracking performance
+  of the feedforward + feedback servo. This replaces the photography template's "do not infer
+  tolerances from achieved performance" for this station.
+  - **Result:** [`config/servo/yaw_accuracy.json`](../config/servo/yaw_accuracy.json), from
+    calibration run `yaw-20261002-134637`: 4 angles, plus the asset's 2 validation passes.
+  - **Limits:** pointing at rest 0.44 deg, ramp RMS 0.19 deg, walking profile 0.26 deg, moving
+    peak 0.79 deg. That is 10.7, 4.6, 6.3 and 19.2 px in the 1920x1080 tracker frame.
+  - **Use:** later yaw commissioning reports its conformance to these limits, and they are the
+    servo share of ADR-003's framing budget
+    ([`photography_spec.json`](../config/tracking/photography_spec.json)).
+- **Station facts for ADR-003 (2026-10-02).**
+  - The camera timestamp clock (libcamera's CLOCK_BOOTTIME) equals CLOCK_MONOTONIC to within 1.2
+    µs; there has been no suspend since boot.
+  - The installed stack is libcamera 0.7.2+rpt20260817 with picamera2 0.3.37.
+  - Production still runs the pre-ADR-002.2 yaw velocity PI and the stacked 140 ms lead; nothing
+    of ADR-003 is in production yet.
+
 ## Servo takeover: owner rulings and measured facts (2026-10-02, local date)
 
 **Owner rulings (2026-10-02).** The working product comes first: probe on the real station, make it

@@ -328,6 +328,34 @@ class MotorBackend {
   // (sim: its plant is a fixed time constant, not a tuned velocity loop).
   virtual void set_speed_loop_gains(AxisId axis, double spd_kp,
                                     double spd_ki) {}
+
+  // --- reference servo (ADR-003 3b with the ADR-002.2 servos) ---------------
+  // One trajectory segment from the control loop's single reference owner: q/v/a at t_ns and the
+  // jerk that holds until the next tick. The backend's own servo evaluates it at the axis's
+  // feedback rate (yaw: every GM6020 frame; pitch: a 1 kHz SpdRef loop) and owns the actuator law;
+  // nothing above it closes a speed loop. A segment older than valid_s is held at its last
+  // position with zero speed. Any legacy command (command, command_velocity, deenergize) releases
+  // the servo for that axis and the existing path takes over, so homing, braking and stopping are
+  // unchanged.
+  struct ServoReference {
+    TimeNs t_ns = 0;
+    double q = 0, v = 0, a = 0, j = 0, valid_s = 0;
+    // This boot's soft envelope (from homing); q_min == q_max: unbounded. A bounded axis's servo
+    // guards against its mechanical ends with it, independently of q.
+    double q_min = 0, q_max = 0;
+    // q/v/a at time t (t >= t_ns), or false when stale.
+    bool at(TimeNs t, double& q_out, double& v_out, double& a_out) const {
+      const double tau = (t - t_ns) * 1e-9;
+      if (!(tau >= -1e-3) || tau > valid_s) return false;
+      const double s = tau > 0 ? tau : 0.0;
+      q_out = q + v * s + a * s * s / 2 + j * s * s * s / 6;
+      v_out = v + a * s + j * s * s / 2;
+      a_out = a + j * s;
+      return true;
+    }
+  };
+  virtual bool servo_available(AxisId) const { return false; }
+  virtual bool command_reference(AxisId, const ServoReference&) { return false; }
  private:
   std::function<void()> invalidate_;
 };

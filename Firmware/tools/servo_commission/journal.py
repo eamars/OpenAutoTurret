@@ -48,7 +48,7 @@ def yaw(path):
     posture = [x["value"] for x in r["register_read"] if x.get("index") == 0x7019 and x.get("value") is not None]
     out = {"manifest": manifest, "footer": r["footer"][0] if r["footer"] else None,
            "learned": r["servo_learned"][0]["parameters"] if r["servo_learned"] else None,
-           "pitch_posture": np.array(posture, float)}
+           "pitch_posture": np.array(posture, float), "begin_ns": begin}
     if begin is None or not r["yaw_feedback"]:
         return out
     fb = r["yaw_feedback"]

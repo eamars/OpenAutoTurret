@@ -789,6 +789,27 @@ void CanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
   keepalive(axis);
 }
 
+bool CanMotorBackend::command_velocity_always(AxisId axis, double velocity_rad_s) {
+  if (transition_.stage && transition_.axis == axis) return false;
+  const int a = static_cast<int>(axis);
+  auto& evidence = output_evidence_[a];
+  evidence.requested = velocity_rad_s;
+  evidence.command_kind = 3;
+  cybergear::CanFrame f = cybergear::make_write_reg_float(
+      cybergear::Reg::SpdRef, static_cast<float>(velocity_rad_s), system_.host_id(), system_.motor_id(axis));
+  std::string err;
+  if (!system_.send(f.id, f.data, &err)) {
+    evidence.reason = 4;
+    return false;
+  }
+  last_spd_ref_[a] = velocity_rad_s;
+  evidence.successful = velocity_rad_s;
+  evidence.tx_ns = now_monotonic_ns();
+  ++evidence.tx_seq;
+  evidence.reason = 1;
+  return true;
+}
+
 void CanMotorBackend::keepalive(AxisId axis) {
   if (transition_.stage && transition_.axis == axis) return;
   // The CyberGear emits COMM_TYPE_2 feedback ONLY in response to a command

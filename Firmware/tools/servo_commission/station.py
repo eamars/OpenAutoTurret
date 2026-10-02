@@ -101,6 +101,10 @@ class Station:
         fetched = _run(["scp.exe", "-q", f"{HOST}:{remote}/{name}", _relative(local / name)], check=False)
         if fetched.returncode:
             raise RuntimeError(f"{label}: no journal (session log: {local / 'session.log'})")
+        if manifest.get("camera_capture"):
+            stem = Path(name).stem
+            for extra in (f"{stem}.camera.jsonl", f"{stem}.camera.bin", f"{stem}.camera.log"):
+                _run(["scp.exe", "-q", f"{HOST}:{remote}/{extra}", _relative(local / extra)], check=False)
         j = (journal.yaw if axis == "yaw" else journal.pitch)(local / name)
         if footer and j.get("footer") is None:
             j["footer"] = json.loads(footer[footer.index("{"):])

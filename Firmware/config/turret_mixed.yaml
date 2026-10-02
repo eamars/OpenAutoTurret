@@ -144,6 +144,15 @@ homing_plan:
     axis: pitch
     position_deg: 40
 tracking:
+  # ADR-003: the tracking core owns the target state, the prediction and the AUTO_TRACK reference
+  # (docs/ADR-003/IMPLEMENTATION.md). The estimator_* and motor_response_ms keys below belong to
+  # the legacy path and are unused while `core` is set.
+  core:
+    parameters: config/tracking/tracking.json
+    camera_timing: config/tracking/camera_timing.json
+    # The exposure term of the measured optical time until the V2 observation wire carries each
+    # frame's exposure: the auto-exposure the tracking camera runs at in the station's room.
+    nominal_exposure_s: 0.033
   # Camera measurements are noisier than the encoder. Smooth the measured LOS
   # before prediction; the displayed prediction comes from this same estimator.
   estimator_measurement_sigma_rad: 0.012

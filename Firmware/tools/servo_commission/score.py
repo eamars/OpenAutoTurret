@@ -13,20 +13,26 @@ steps report the final error.
 import argparse
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 from scipy.signal import savgol_filter
 
+import accuracy
 import journal
 import usecase
 
 DEG = math.pi / 180
+ACCURACY_FILE = Path(__file__).resolve().parents[2] / "config/servo/yaw_accuracy.json"
 
-# Gates (fail the run): the servo really tracks (speed ratio, so a barely-moving axis cannot pass
-# on low jitter) and stalls were recovered. Accuracy is ADVISORY: ADR-003's photography spec leaves
-# the framing budget unspecified ("do not infer tolerances from achieved performance"), so the
-# targets below are provisional placeholders, reported against but not gating, until that spec
-# converts the pixel budget into angles. Speeds in deg/s, angles in deg.
+# Gates (fail the run, no asset is written): the servo really tracks (speed ratio, so a barely-moving
+# axis cannot pass on low jitter) and stalls were recovered. Conformance (reported, never blocks the
+# asset): the accuracy limits in config/servo/yaw_accuracy.json, calibrated by `commission.py
+# calibrate` from the real FF+FB tracking performance (owner ruling 2026-10-02, accuracy.py). A
+# servo that works on a changed plant must still be written -- keeping the old asset would be
+# worse -- and a conformance shortfall is a capability finding: inspect the hardware, or after a
+# deliberate change re-run the calibration. YAW_LIMITS are the design targets the simulator's bias
+# choice normalises by (design.predicted_cost). Speeds in deg/s, angles in deg.
 YAW_GATES = {"speed_ratio": (0.9, 1.1), "max_stalls": 4}
 PITCH_GATES = {}
 YAW_LIMITS = {"speed_ratio": (0.95, 1.05), "ramp_p95_5": 0.15, "ramp_p95_5_fast": 0.25, "step_final": 0.25,
@@ -48,10 +54,23 @@ def yaw_result(j, table, delay):
             "true_t": tu, "true_q": qu, "true_v": savgol_filter(qu, 21, 2, deriv=1, delta=0.001)}
 
 
+UNSCORED = ("goto",)  # a calibration's positioning move: not part of the use-case pass
+
+
+def scored_stalls(j):
+    """Stall recoveries that began inside the scored script."""
+    c = j["cycles"]
+    if not len(c["stalls"]):
+        return 0
+    onset = c["t"][np.where(np.diff(c["stalls"]) > 0)[0] + 1] - c["t"][0]
+    skip = [(s["begin_s"], s["end_s"]) for s in j["manifest"]["reference_segments_labels"] if s["label"] in UNSCORED]
+    return int(sum(1 for t in onset if not any(a <= t < b for a, b in skip)))
+
+
 def yaw(j, table, delay):
     rows = usecase.metrics(yaw_result(j, table, delay), segments(j["manifest"]))
-    stalls = int(j["cycles"]["stalls"][-1]) if len(j["cycles"]["stalls"]) else 0
-    return rows, {"stalls": stalls, "peak_current": float(np.max(np.abs(j["cycles"]["u"])))}
+    total = int(j["cycles"]["stalls"][-1]) if len(j["cycles"]["stalls"]) else 0
+    return rows, {"stalls": scored_stalls(j), "stalls_total": total, "peak_current": float(np.max(np.abs(j["cycles"]["u"])))}
 
 
 def pitch(j):
@@ -69,16 +88,32 @@ def pitch(j):
     return rows, {}
 
 
+def calibrated_limits():
+    """The measured accuracy limits, or None before the first calibration."""
+    if not ACCURACY_FILE.exists():
+        return None
+    return json.load(open(ACCURACY_FILE, encoding="utf-8"))["limits"]
+
+
+def tracking_fails(rows):
+    """The axis really tracks: every steady ramp's speed within YAW_GATES of the reference."""
+    lo, hi = YAW_GATES["speed_ratio"]
+    return [f"{r['label']}: speed ratio {r['v_ratio']:.3f} (not tracking)" for r in rows
+            if r["label"].startswith("ramp") and "v_ratio" in r and not lo <= r["v_ratio"] <= hi]
+
+
 def gate_yaw(rows, extra):
     """Hard gates: the run fails on these."""
-    fails = []
-    lo, hi = YAW_GATES["speed_ratio"]
-    for r in rows:
-        if r["label"].startswith("ramp") and "v_ratio" in r and not lo <= r["v_ratio"] <= hi:
-            fails.append(f"{r['label']}: speed ratio {r['v_ratio']:.3f} (not tracking)")
+    fails = tracking_fails(rows)
     if extra.get("stalls", 0) > YAW_GATES["max_stalls"]:
         fails.append(f"{extra['stalls']} stalls")
     return fails
+
+
+def conformance_yaw(rows):
+    """Exceedances of the calibrated accuracy limits (empty before the first calibration)."""
+    limits = calibrated_limits()
+    return accuracy.check(accuracy.pass_metrics(rows), limits) if limits else []
 
 
 def gate_pitch(rows, extra):

@@ -9,6 +9,13 @@ bool PositionLoop::configure(const PositionLoopParameters& p) {
   if (!(p.kp>0) || !(p.speed_limit>0)) return false;
   p_=p; integral_=0.; return true;
 }
+double travel_governor(double speed,double q,double low,double high,double stop_acceleration) {
+  if (!(stop_acceleration>0) || !(high>low)) return 0.;
+  const double up=std::sqrt(2*stop_acceleration*std::max(0.,high-q));
+  const double down=std::sqrt(2*stop_acceleration*std::max(0.,q-low));
+  return std::clamp(speed,-down,up);
+}
+
 double PositionLoop::step(double dt,double q_ref,double v_ref,double q) {
   const double error=q_ref-q;
   const double unclamped=v_ref+p_.kp*error+integral_;

@@ -3,12 +3,15 @@
 #include "control/control_loop.hpp"
 
 #include <spdlog/spdlog.h>
+#include <spdlog/async.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 #include "vision/vision_ingest.hpp"
@@ -68,6 +71,15 @@ bool ControlLoop::position_ready() const {
 
 ControlLoop::ControlLoop(Config cfg, std::unique_ptr<MotorBackend> backend)
     : cfg_(std::move(cfg)), backend_(std::move(backend)) {
+  if (const char* trace = std::getenv("OTA_TRACKING_TRACE"); trace && *trace) {
+    // ADR-003 D17 tracking trace on the async pool (no disk I/O on the control thread).
+    tracking_trace_ = spdlog::get("tracking_trace");
+    if (!tracking_trace_) {
+      tracking_trace_ = spdlog::basic_logger_mt<spdlog::async_factory>("tracking_trace", trace);
+      tracking_trace_->set_pattern("%v");
+      tracking_trace_->flush_on(spdlog::level::warn);
+    }
+  }
   SupervisorParams sp;
   sp.feedback_max_age_ms = cfg_.feedback_max_age_ms;
   sp.deadline_max_us = cfg_.deadline_max_us;
@@ -1713,7 +1725,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             mode_mgr_.mode() == OperatingMode::Manual;
         const bool damped_tracking = cfg_.service_speed_control &&
             tracking_ref_.is_tracking_reference && tracking_;
-        const auto tracking_rates = damped_tracking ? tracking_->joint_motion_rates(
+        // ADR-003: with the tracking core, Level 1 owns the reference and its goal comes from the
+        // core's own estimator through the same LOS->joint solver; the per-axis limits computed
+        // below are its envelope this tick.
+        const bool core_tracking = damped_tracking && tracking_->uses_core() && !response_probe;
+        double core_v[kAxisCount]{}, core_a[kAxisCount]{}, core_j[kAxisCount]{};
+        const auto tracking_rates = damped_tracking && !core_tracking ? tracking_->joint_motion_rates(
             tracking_ref_.q_yaw_rad, tracking_ref_.q_pitch_rad) : std::array<double,2>{};
         for (int i = 0; i < kAxisCount; ++i) {
           const double r = (i == ix(AxisId::Yaw)) ? tracking_ref_.q_yaw_rad
@@ -1764,13 +1781,53 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           const double jerk = (cfg_.service_speed_control
               ? std::min(cfg_.j_brake_rad_s3,service_j) : cfg_.j_brake_rad_s3)
               * std::clamp(last_intent_.jerk_scale,0.0,1.0);
-          if (damped_tracking || response_probe) {
+          if (core_tracking) {
+            // Owner ruling 2026-10-02: in AUTO_TRACK only the 100 RPM safety cap and physical
+            // capability (the tracking asset's Level-1 limits) bound the reference; the motion
+            // profile does not. Derating still applies; travel is kept by Level 1's own boundary
+            // braking against this cycle's soft envelope, and the envelope keeps final authority.
+            const auto& c = tracking_->core()->parameters().level1.axis[i == ix(AxisId::Yaw) ? 0 : 1];
+            const double derate = last_decision_.action == SafetyAction::Derate ? cfg_.derate_factor : 1.0;
+            core_v[i] = c.v_max * derate; core_a[i] = c.a_max * derate; core_j[i] = c.j_max;
+            lim[i] = core_v[i];
+          } else if (damped_tracking || response_probe) {
             q_ref[i] = control::track_reference(ref_lim_[i], solved,
                 tracking_rates[i == ix(AxisId::Yaw) ? 0 : 1], dt, lim[i], acceleration, jerk,
                 response_probe ? response_probe_omega_ : cfg_.tracking_reference_omega);
           } else {
             q_ref[i] = control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
           }
+        }
+        if (core_tracking) {
+          const int Y = ix(AxisId::Yaw), P = ix(AxisId::Pitch);
+          if (!core_engaged_) {
+            tracking_->core_engage(now_ns, {ref_lim_[Y].q_rad, ref_lim_[P].q_rad}, {ref_lim_[Y].v_rad_s, ref_lim_[P].v_rad_s},
+                                   {ref_lim_[Y].a_rad_s2, ref_lim_[P].a_rad_s2});
+            core_engaged_ = true;
+          }
+          // Core axis order: 0 yaw, 1 pitch. Travel is this cycle's soft envelope; an unbounded
+          // axis gets no travel clamp (equal bounds) and its branch follows the reference.
+          const auto bounds = [&](int i, double& lo, double& hi) {
+            if (cycle_limits[i].valid) { lo = cycle_limits[i].q_soft_min_rad; hi = cycle_limits[i].q_soft_max_rad; }
+            else lo = hi = 0.0;
+          };
+          double ylo, yhi, plo, phi;
+          bounds(Y, ylo, yhi); bounds(P, plo, phi);
+          tracking_->core_limits(0, core_v[Y], core_a[Y], core_j[Y], ylo, yhi);
+          tracking_->core_limits(1, core_v[P], core_a[P], core_j[P], plo, phi);
+          tracking_->core_travel({ylo, yhi, plo, phi});
+          const auto rec = tracking_->core_tick(now_ns, {sp[Y].q_rad, sp[P].q_rad});
+          const auto& r = rec.reference;
+          for (const auto [i, c] : {std::pair{Y, 0}, std::pair{P, 1}}) {
+            ref_lim_[i].q_rad = r.q[c]; ref_lim_[i].v_rad_s = r.v[c]; ref_lim_[i].a_rad_s2 = r.a[c];
+            ref_lim_[i].initialised = true;
+            servo_jerk_[i] = r.j[c];
+            q_ref[i] = r.q[c];
+          }
+          trace_core_tick(rec, now_ns);
+        } else {
+          core_engaged_ = false;
+          servo_jerk_[0] = servo_jerk_[1] = 0.0;
         }
         ref_lim_engaged_ = true;
         break;
@@ -2363,6 +2420,29 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           }
           motion_negative_speed[i] = b.negative_speed;
           motion_positive_speed[i] = b.positive_speed;
+          if (backend_->servo_available(a)) {
+            // ADR-003 3b: the ADR-002.2 servo executes the one reference this loop owns -- the
+            // limiter's q/v/a this tick (or the latched hold pose at rest) -- at the axis's own
+            // feedback rate. No speed loop is closed here; Brake, EmergencyStop and Fault keep
+            // the legacy paths below, which release the servo.
+            MotorBackend::ServoReference r;
+            r.t_ns = now_ns;
+            r.q = qr;
+            if (ref_lim_engaged_) { r.v = ref_lim_[i].v_rad_s; r.a = ref_lim_[i].a_rad_s2; r.j = servo_jerk_[i]; }
+            r.valid_s = 4 * static_cast<double>(period_ns) * 1e-9;
+            if (cycle_limits[i].valid) { r.q_min = cycle_limits[i].q_soft_min_rad; r.q_max = cycle_limits[i].q_soft_max_rad; }
+            speed_servo_[i].reset();
+            if (backend_->command_reference(a, r)) {
+              if (tracking_ref_.is_tracking_reference) {
+                tracking_velocity_control = true;
+                tracking_command_rate[i] = r.v;
+              }
+              service_velocity_control = true;
+              service_command_rate[i] = r.v;
+              continue;
+            }
+            // Not engaged (feedback not fresh, a guard holding): the legacy path below this tick.
+          }
           double velocity = speed_servo_[i].step(qr, ff, sp[i].q_rad, cap,
               static_cast<double>(period_ns)*1e-9,
               // Allow the servo to follow the bounded reference profile and
@@ -5212,4 +5292,32 @@ void ControlLoop::execute_command(const std::string& name,
   ack_command(name, false, "unknown command '" + name + "'");
 }
 
+}  // namespace ota
+
+namespace ota {
+// ADR-003 D17: one line per Level-1 tick, enough to say from the record alone whether an error
+// came from the estimate (goal vs truth, offline), the reference (e_track) or the servo
+// (e_servo). Written by spdlog's async pool, never by this thread. Core axis order: yaw, pitch.
+void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
+  if (!tracking_trace_) return;
+  const auto& g = r.los;
+  const auto& d = tracking_->core()->estimator().diagnostics();
+  const auto& x = tracking_->core()->estimator().state();
+  tracking_trace_->info(
+      "{{\"t_ns\":{},\"state_ns\":{},\"age_s\":{:.4f},\"est\":[{:.6f},{:.6f},{:.5f},{:.5f}],"
+      "\"sig_w\":[{:.5f},{:.5f}],\"goal_los\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"ffw\":[{:.3f},{:.3f}],\"fade\":{:.3f},"
+      "\"valid\":[{},{}],\"goal_q\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"goal_valid\":{},"
+      "\"ref\":[{:.6f},{:.6f},{:.5f},{:.5f},{:.4f},{:.4f},{:.3f},{:.3f}],\"flags\":[{},{}],"
+      "\"q\":[{:.6f},{:.6f}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
+      "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"reacquired\":{}}}",
+      now_ns, g.state_ns, g.age_s, x[0].theta, x[1].theta, x[0].omega, x[1].omega,
+      std::sqrt(std::max(0.0, x[0].vv)), std::sqrt(std::max(0.0, x[1].vv)),
+      g.theta[0], g.theta[1], g.omega[0], g.omega[1], g.ff_weight[0], g.ff_weight[1], g.fade,
+      g.position_valid ? 1 : 0, g.velocity_valid ? 1 : 0,
+      r.joint.q[0], r.joint.q[1], r.joint.v[0], r.joint.v[1], r.joint.valid ? 1 : 0,
+      r.reference.q[0], r.reference.q[1], r.reference.v[0], r.reference.v[1], r.reference.a[0], r.reference.a[1],
+      r.reference.j[0], r.reference.j[1], r.reference.flags[0], r.reference.flags[1],
+      r.q_measured[0], r.q_measured[1], r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
+      d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.reacquired);
+}
 }  // namespace ota

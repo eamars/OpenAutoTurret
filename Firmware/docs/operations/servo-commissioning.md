@@ -59,6 +59,7 @@ identified at a defined pitch posture.
 | Yaw motor replaced, remounted, or its firmware changed | `commission.py yaw` | The crosstalk table is a property of that motor and its mounting, so it is measured again. |
 | Pitch, anything | `commission.py pitch` | The working window is the one production's homing measures: the endstops inset by 0.14 rad, recorded in `pitch_prior.json`. It is valid while the drive is not power-cycled; after a reboot, start production once so it homes, and update the window if the endstops moved. |
 | Just look | `commission.py validate yaw` (two use-case passes), `commission.py session yaw usecase` | Both accept `--asset FILE`. |
+| After a deliberate hardware change, once the new asset is in place | `commission.py calibrate yaw` (about 30 min) | Re-measures the yaw accuracy limits (below). Drift alone is not a reason: a conformance shortfall without a hardware change means inspect the hardware. |
 
 What the yaw run does, and the rule behind each step (each is a fixed computation on the measured
 numbers; the report records every number):
@@ -88,12 +89,33 @@ numbers; the report records every number):
    ladder only saw two angles.
 7. **validate (station).** Two use-case passes.
    - **Gates** (`score.py` `YAW_GATES`): the session completes, ramps really track (speed ratio
-     within 10%), and there are at most 4 stalls.
-   - **Accuracy** is scored against the provisional `YAW_LIMITS` and reported as *advisory*. ADR-003's
-     photography spec owns the real angular budget and has not set it yet.
+     within 10%), and there are at most 4 stalls (counted inside the scored script). A gate failure
+     writes no asset.
+   - **Conformance:** the pass is scored against the calibrated accuracy limits in
+     [`yaw_accuracy.json`](../../config/servo/yaw_accuracy.json) and any shortfall is logged as
+     `ACCURACY BELOW THE CALIBRATED LIMITS`. The asset is still written: on a changed plant the
+     new working servo is better than the old one. The shortfall is a capability finding, and the
+     limits gate ADR-003 qualification.
    - The model's prediction of the same pass is recorded next to the measurement.
    - `commission.py rescore RUN_DIR` re-evaluates a recorded run with the current scorer, without
      the station.
+
+**Accuracy limits (`commission.py calibrate yaw`).** Owner ruling, 2026-10-02: the yaw accuracy
+limits come from the real tracking performance of the feedforward + feedback servo. The campaign
+and the rule are fixed in `accuracy.py` and `commission.py`:
+- **Campaign:** four positions 90 deg apart. At each one, a use-case pass with the asset and one
+  with every plant feedforward term removed, in alternating order.
+- **Rule:** per metric, limit = 1.25 × the worst feedforward + feedback pass, over these passes
+  and the asset's own two validation passes. The metrics are pointing at rest, overshoot, ramp
+  RMS and jitter, speed jitter, walking-profile RMS and moving peak.
+
+A failed feedforward pass stops the campaign and writes nothing. `--resume DIR` re-scores the
+passes already recorded and runs only the missing ones. The feedback-only passes give ADR-003's
+motor-feedforward comparison. The 2026-10-02 result:
+- **Limits:** rest 0.44 deg, ramp RMS 0.19 deg, walking profile 0.26 deg, moving peak 0.79 deg
+  (10.7, 4.6, 6.3 and 19.2 px in the tracker frame).
+- **Without motor feedforward:** ramp error 1.4–2.0×, walking-profile error 1.5×, rest error
+  about the same.
 
 Pitch works the same way:
 

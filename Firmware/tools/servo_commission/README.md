@@ -14,7 +14,8 @@ were calibrated how.
 | `identify.py` | Friction curve and maps, crosstalk table, inertia and loop delay (yaw), and speed-loop delay and lag (pitch). |
 | `design.py` | The gain law, the simulated stability boundary, the bias choice, and the pitch phase-margin rule. |
 | `sim.py` | Wrapper around the native `servo-sim` (`axis_control_core/simulate.cpp`). |
-| `score.py`, `usecase.py` | ADR-003-shaped references (Level-1 generator), per-segment metrics, and the fixed acceptance limits. |
+| `score.py`, `usecase.py` | ADR-003-shaped references (Level-1 generator), per-segment metrics, the acceptance gates, and conformance to the calibrated accuracy limits. |
+| `accuracy.py` | The yaw accuracy calibration (`commission.py calibrate`): per-pass metrics, the fixed limit rule (1.25 x worst pass), the motor-feedforward-off variant, and the comparison. |
 | `journal.py` | Reads commissiond journals into arrays. |
 | `sim_cases/` | Hidden plants for the offline proof: this station's estimate, and a 2.5× payload. |
 | `tests/test_pipeline.py` | The offline proof: identification accuracy, delay calibration, and whole-pipeline acceptance. |

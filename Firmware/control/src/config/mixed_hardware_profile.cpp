@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <initializer_list>
 #include <limits>
 #include <string_view>
@@ -157,8 +158,42 @@ LoadResult load_mixed_hardware_profile(const std::string& path) {
   LoadResult result;
   try {
     const YAML::Node root = YAML::LoadFile(path);
-    if (!check_keys(root, "profile", {"schema_version", "buses", "axes"}, result))
+    if (!check_keys(root, "profile", {"schema_version", "buses", "axes"}, result, {"servo"}))
       return result;
+    if (const auto servo = root["servo"]) {
+      check_keys(servo, "servo", {"yaw_asset", "pitch_asset", "yaw_current_limit_a", "yaw_rms_limit_a",
+                                  "yaw_temperature_limit_raw", "oscillation_limit_a", "speed_limit_rad_s",
+                                  "pitch_guard_rad", "pitch_stop_acceleration_rad_s2"}, result);
+      Servo s;
+      const auto base = std::filesystem::path(path).parent_path();
+      s.yaw_asset = (base / string_value(servo["yaw_asset"], "servo.yaw_asset", result)).string();
+      s.pitch_asset = (base / string_value(servo["pitch_asset"], "servo.pitch_asset", result)).string();
+      s.yaw_current_limit_a = double_value(servo["yaw_current_limit_a"], "servo.yaw_current_limit_a", result);
+      s.yaw_rms_limit_a = double_value(servo["yaw_rms_limit_a"], "servo.yaw_rms_limit_a", result);
+      s.oscillation_limit_a = double_value(servo["oscillation_limit_a"], "servo.oscillation_limit_a", result);
+      s.speed_limit_rad_s = double_value(servo["speed_limit_rad_s"], "servo.speed_limit_rad_s", result);
+      s.pitch_guard_rad = double_value(servo["pitch_guard_rad"], "servo.pitch_guard_rad", result);
+      s.pitch_stop_acceleration_rad_s2 = double_value(servo["pitch_stop_acceleration_rad_s2"],
+                                                      "servo.pitch_stop_acceleration_rad_s2", result);
+      if (!(s.pitch_guard_rad > 0 && s.pitch_guard_rad <= 0.06))
+        error(result, "servo.pitch_guard_rad must be in (0, 0.06] rad: the soft margin inside the end stops is about 0.09");
+      if (!(s.pitch_stop_acceleration_rad_s2 > 0 && s.pitch_stop_acceleration_rad_s2 <= 5.0))
+        error(result, "servo.pitch_stop_acceleration_rad_s2 must be in (0, 5] rad/s^2 (a demonstrated deceleration)");
+      if (!(s.speed_limit_rad_s > 0 && s.speed_limit_rad_s <= 100 * 2 * M_PI / 60 + 1e-9))
+        error(result, "servo.speed_limit_rad_s must be in (0, 10.472] rad/s (owner ruling: below 100 RPM)");
+      s.yaw_temperature_limit_raw = static_cast<int>(unsigned_value(servo["yaw_temperature_limit_raw"],
+                                                                    "servo.yaw_temperature_limit_raw", result));
+      // Owner ruling 2026-10-02: 3 A peak (protocol full scale), 1.62 A continuous (rated).
+      if (!(s.yaw_current_limit_a > 0 && s.yaw_current_limit_a <= 3.0))
+        error(result, "servo.yaw_current_limit_a must be in (0, 3] A");
+      if (!(s.yaw_rms_limit_a > 0 && s.yaw_rms_limit_a <= 1.62))
+        error(result, "servo.yaw_rms_limit_a must be in (0, 1.62] A");
+      if (!(s.oscillation_limit_a > 0 && s.oscillation_limit_a <= 1.0))
+        error(result, "servo.oscillation_limit_a must be in (0, 1] A");
+      if (s.yaw_temperature_limit_raw <= 0 || s.yaw_temperature_limit_raw > 70)
+        error(result, "servo.yaw_temperature_limit_raw must be in (0, 70]");
+      result.profile.servo = s;
+    }
     const auto version = unsigned_value(root["schema_version"], "schema_version", result);
     if (version != 1) error(result, "schema_version must be 1");
     result.profile.schema_version = version <= INT32_MAX ? static_cast<int>(version) : 0;

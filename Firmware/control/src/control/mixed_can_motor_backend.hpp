@@ -13,6 +13,9 @@
 #include "can/socketcan_bus.hpp"
 #include "config/mixed_hardware_profile.hpp"
 #include "control/can_motor_backend.hpp"
+#include "position_loop.hpp"
+#include "servo.hpp"
+#include "session_parts.hpp"
 
 namespace ota {
 
@@ -141,7 +144,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   bool watchdog_fault() const override;
   bool watchdog_fault_axis(AxisId axis) const override {
     return axis == AxisId::Yaw ? yaw_trip_.load() :
-        (pitch_opened_.load() && pitch_backend_.watchdog_fault());
+        (pitch_servo_fault_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault()));
   }
   // The guard fills this under yaw_trip_detail_mutex_ and then publishes yaw_trip_.
   // A reader must hold that mutex too: a flag check makes the value visible, not a
@@ -181,6 +184,8 @@ class MixedCanMotorBackend final : public MotorBackend {
     return pitch_backend_.poll_pitch_speed_loop_gain_update(now,error);
   }
   void keepalive(AxisId axis) override;
+  bool servo_available(AxisId axis) const override;
+  bool command_reference(AxisId axis, const ServoReference& reference) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;
 
@@ -212,6 +217,30 @@ class MixedCanMotorBackend final : public MotorBackend {
   bool yaw_feedback_safe_locked(TimeNs now_ns) const;
   AxisSnapshot yaw_snapshot_locked(TimeNs now_ns) const;
   void command_yaw_velocity_locked(double velocity_rad_s, TimeNs now_ns);
+  // ADR-003 3b: the ADR-002.2 servos (MotorBackend::ServoReference). Loaded from the profile's
+  // servo assets at open; a configured but unloadable asset refuses to open.
+  bool load_servos(std::string& err);
+  void step_yaw_servo_locked(TimeNs rx_ns);
+  void release_yaw_servo_locked();
+  void release_pitch_servo();
+  void pitch_servo_loop(std::stop_token stop);
+  bool yaw_servo_configured_ = false, yaw_servo_active_ = false;
+  axis::Servo yaw_servo_;
+  axis::ServoOutput yaw_servo_out_{};
+  axis::OscillationMonitor yaw_oscillation_;
+  ServoReference yaw_reference_{};
+  double yaw_servo_offset_rad_ = 0;   // absolute GM6020 angle minus the session yaw
+  double yaw_servo_hold_q_ = 0;       // last evaluated reference (held when a segment goes stale)
+  TimeNs yaw_servo_epoch_ns_ = 0, yaw_servo_last_step_ns_ = 0, yaw_servo_last_rock_ns_ = 0;
+  uint64_t yaw_servo_stale_ = 0;
+  mutable std::mutex pitch_servo_mutex_;
+  bool pitch_servo_configured_ = false;
+  std::atomic<bool> pitch_servo_active_{false}, pitch_servo_fault_{false};
+  axis::PositionLoop pitch_loop_;
+  ServoReference pitch_reference_{};
+  double pitch_following_error_rad_ = 0, pitch_hold_q_ = 0;
+  TimeNs pitch_servo_last_step_ns_ = 0;
+  std::jthread pitch_servo_;
 
   config::mixed::Profile profile_{};
   can::SocketCanBus yaw_bus_;

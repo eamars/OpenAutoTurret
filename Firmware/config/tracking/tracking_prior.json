@@ -1,0 +1,64 @@
+{
+ "schema": "ota.tracking/1",
+ "purpose": "ADR-003 stage-1 synthetic starting point: explicit values for the simulator and the first station measurements. Stage 2 (tools/tracking/tracking.py identify) replaces the measured quantities (timing, pixel noise, R, q_a, frame statistics) and solves lambda; it never edits this file.",
+ "provenance": {
+  "process_density_rad2_s3": "a person turning or walking at 3-10 m: LOS accelerations of order 0.5 rad/s^2 held for ~0.1 s, q = A^2 T",
+  "measurement_floor_rad2": "1 px at fx 1389 (the floor; each observation carries its own pixel noise through the camera Jacobian)",
+  "pixel_sigma_px": "detector anchor on a 640x360 inference image scaled to 1920x1080: about one inference pixel",
+  "scale_max": "max(1, A^2 T_m / q_a) with A = 2 rad/s^2 and T_m = 0.111 s (the ~9 fps delivered rate measured 2026-09-29)",
+  "fresh_s / horizon_s": "fresh: normal age at use (latency 0.06 + frame 0.111 + jitter); horizon: the AUTO_TRACK coast of 0.5 s beyond it",
+  "level1": "lambda 4 rad/s (the production tracking_reference_omega). Limits: owner ruling 2026-10-02, AUTO_TRACK is limited only by the 100 RPM safety cap and physical capability, not by a motion profile. Yaw: v 100 RPM; a = half of (3 A peak - 1 A worst friction) / inertia 0.0407 = 24.56 rad/s^2 (the other half is feedback headroom); j = half of the servo's 200 A/s current slew / inertia = 2456.0 rad/s^3. Pitch: v 100 RPM; a/j the 60 deg/s^2 / 300 deg/s^3 its commissioning exercised -- its capability under the 3 kg payload is unmeasured and Level 1's braking into the end stops relies on a real number. Travel: replaced each tick by the station's soft envelope.",
+  "lead_limit_rad": "2 deg: ten times the worst servo moving error measured by the yaw accuracy calibration"
+ },
+ "estimator": {
+  "process_density_rad2_s3": [
+   0.01,
+   0.01
+  ],
+  "measurement_floor_rad2": [
+   5.2e-07,
+   5.2e-07
+  ],
+  "initial_rate_sigma_rad_s": 0.5,
+  "scale_max": [
+   44.4,
+   44.4
+  ],
+  "scale_tau_s": 0.222,
+  "rate_domain_rad_s": 1.0,
+  "fresh_s": 0.25,
+  "horizon_s": 0.75,
+  "position_sigma_limit_rad": 0.17
+ },
+ "level1": {
+  "period_s": 0.005,
+  "valid_s": 0.02,
+  "yaw": {
+   "lambda_rad_s": 4.0,
+   "v_max_rad_s": 10.47,
+   "a_max_rad_s2": 24.56,
+   "j_max_rad_s3": 2456.0,
+   "lead_limit_rad": 0.0349,
+   "q_min_rad": 0.0,
+   "q_max_rad": 0.0
+  },
+  "pitch": {
+   "lambda_rad_s": 4.0,
+   "v_max_rad_s": 10.47,
+   "a_max_rad_s2": 1.0472,
+   "j_max_rad_s3": 5.236,
+   "lead_limit_rad": 0.0349,
+   "q_min_rad": -1.371,
+   "q_max_rad": -0.255
+  }
+ },
+ "timing": {
+  "fixed_offset_s": 0.0,
+  "exposure_fraction": 0.5,
+  "row_time_s": 0.0
+ },
+ "execution_horizon_s": 0.0,
+ "pixel_sigma_px": 3.0,
+ "target_motion": true,
+ "jacobian_det_min": 0.001
+}

@@ -1,4 +1,5 @@
 #include "servo.hpp"
+#include "position_loop.hpp"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -115,6 +116,18 @@ void friction_feedforward_follows_the_reference_only() {
 }
 }
 
+void travel_governor_stops_before_the_end() {
+  // Driving at 2 rad/s toward an end 0.1 rad away at 1 rad/s^2: allowed sqrt(2*1*0.1) = 0.447.
+  expect(std::abs(travel_governor(2.,0.,-1.,.1,1.)-std::sqrt(.2))<1e-12,"speed toward the high end limited");
+  expect(travel_governor(-1.,0.,-1.,.1,1.)==-1.,"speed away from the near end untouched while the far end permits it");
+  expect(travel_governor(.3,.1,-1.,.1,1.)==0.,"at the guard: no speed outward");
+  expect(travel_governor(-.3,.15,-1.,.1,1.)==-.3,"beyond the guard: motion back inside is allowed");
+  // Integrated: from 1 rad/s at 0, commanding 1 rad/s forever, the axis stops before the 0.6 guard.
+  double q=0, v=1.;
+  for (int k=0;k<5000;++k) { v=travel_governor(1.,q,-1.,.6,1.); q+=v*1e-3; }
+  expect(q<=.6+1e-9 && q>.59,"never passes the guard and arrives at it");
+}
+
 int main() {
   try {
     crosstalk_is_removed_from_the_position();
@@ -126,6 +139,7 @@ int main() {
     friction_feedforward_follows_the_reference_only();
     excitation_does_not_drag_the_slew_limit();
     stall_rock_waits_for_a_stopped_reference();
+    travel_governor_stops_before_the_end();
   } catch(const std::exception& e) { std::cerr<<"FAIL: "<<e.what()<<'\n'; return 1; }
   std::cout<<"servo tests passed\n"; return 0;
 }

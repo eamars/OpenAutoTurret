@@ -122,6 +122,13 @@ struct HomingPlanConfig {
 
 // §40 `tracking:` block (§58 params 19-20) + the Part-2 S1 ingest wiring.
 struct TrackingConfig {
+  // ADR-003 tracking core (tracking.core): the parameter asset (config/tracking/tracking.json or
+  // the stage-1 prior) and the measured camera timing (config/tracking/camera_timing.json). Empty:
+  // the legacy estimator and lead. Paths are relative to the working directory, like the
+  // camera calibration files.
+  std::string core_parameters;
+  std::string core_camera_timing;
+  double core_nominal_exposure_s = 0.033;
   // Auto-enable tracking once the homing gates pass (§38.1). FALSE by default:
   // a station must never start following pixels because a config file said so.
   // The `start_tracking` developer command (§42.2) is the operator path.

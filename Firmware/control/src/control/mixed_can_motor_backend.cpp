@@ -10,6 +10,9 @@
 #include <thread>
 
 #include <spdlog/spdlog.h>
+#include <yaml-cpp/yaml.h>
+
+#include "servo_config.hpp"
 
 #include "common/time.hpp"
 
@@ -266,6 +269,10 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
       close();
       return false;
     }
+    if (profile_.servo && !load_servos(err)) {
+      close();
+      return false;
+    }
 
     heartbeat_ns_.store(0);
     heartbeat_seen_.store(false);
@@ -273,6 +280,8 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
     yaw_motion_allowed_.store(false);
     opened_.store(true);
     yaw_guard_ = std::jthread([this](std::stop_token stop) { yaw_guard_loop(stop); });
+    if (pitch_servo_configured_)
+      pitch_servo_ = std::jthread([this](std::stop_token stop) { pitch_servo_loop(stop); });
     return true;
   } catch (const std::exception& error) {
     err = error.what();
@@ -283,6 +292,15 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
 
 void MixedCanMotorBackend::close() {
   opened_.store(false);
+  if (pitch_servo_.joinable()) {
+    pitch_servo_.request_stop();
+    pitch_servo_.join();
+  }
+  pitch_servo_active_.store(false);
+  {
+    std::lock_guard lock(yaw_mutex_);
+    yaw_servo_active_ = false;
+  }
   if (yaw_guard_.joinable()) {
     yaw_guard_.request_stop();
     yaw_guard_.join();
@@ -345,6 +363,7 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
     // is refreshed after the bus/pitch UID checks complete.
     yaw_origin_rad_ = 0;
   }
+  if (yaw_servo_active_) step_yaw_servo_locked(decoded.rx_ns);
 }
 
 bool MixedCanMotorBackend::establish_yaw_reference(std::string& err) {
@@ -457,6 +476,7 @@ void MixedCanMotorBackend::trip_yaw_locked(const char* condition) {
   }
   yaw_trip_.store(true);
   yaw_motion_allowed_.store(false);
+  yaw_servo_active_ = false;
   yaw_position_mode_ = yaw_speed_mode_ = false;
   yaw_position_target_rad_ = yaw_state_.position_rad;
   yaw_speed_target_rad_s_ = yaw_shaped_speed_rad_s_ = 0;
@@ -515,6 +535,16 @@ MotorBackend::OutputEvidence MixedCanMotorBackend::output_evidence(AxisId axis) 
   result.friction_exhausted = yaw_velocity_loop_.friction_output().attempt_exhausted;
   result.command_kind = yaw_output_is_amperes() ? 1 : 2;
   result.reason = yaw_output_reason_;
+  if (yaw_servo_active_) {
+    const auto& p = yaw_servo_.parameters();
+    result.requested = yaw_servo_out_.requested;
+    result.integral = yaw_servo_out_.integral;
+    result.velocity_estimate = yaw_servo_out_.velocity;
+    result.kp = p.kq;
+    result.ki = p.ki;
+    result.current_cap = yaw_servo_out_.cap;
+    result.friction_a = yaw_servo_out_.friction;
+  }
   return result;
 }
 
@@ -705,7 +735,7 @@ void MixedCanMotorBackend::heartbeat() {
 }
 
 bool MixedCanMotorBackend::watchdog_fault() const {
-  return yaw_trip_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault());
+  return yaw_trip_.load() || pitch_servo_fault_.load() || (pitch_opened_.load() && pitch_backend_.watchdog_fault());
 }
 
 MotorBackend::TripDetail MixedCanMotorBackend::watchdog_trip_detail() const {
@@ -783,6 +813,7 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
     AxisId axis, bool position, double limit, TimeNs now, std::string& err,
     double speed_ki, double speed_kp, bool check_displacement) {
   if (axis == AxisId::Pitch) {
+    release_pitch_servo();
     if (pitch_opened_.load()) {
       pitch_transition_active_.store(true);
       const auto result = pitch_backend_.transition_mode(axis, position, limit, now, err,
@@ -796,6 +827,7 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
   }
   (void)speed_ki; (void)speed_kp; (void)check_displacement;
   std::lock_guard lock(yaw_mutex_);
+  release_yaw_servo_locked();
   if (!std::isfinite(limit) || limit < 0 || !yaw_feedback_safe_locked(now) ||
       !yaw_bus_healthy() || yaw_trip_.load()) {
     err = "GM6020 yaw position control requires a fresh session reference and healthy buses";
@@ -814,12 +846,14 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
 
 void MixedCanMotorBackend::deenergize(AxisId axis) {
   if (axis == AxisId::Pitch) {
+    release_pitch_servo();
     pitch_transition_active_.store(false);
     if (pitch_opened_.load()) pitch_backend_.deenergize(axis);
     pitch_enabled_owned_.store(false);
     return;
   }
   std::lock_guard lock(yaw_mutex_);
+  release_yaw_servo_locked();
   yaw_motion_allowed_.store(false);
   yaw_position_mode_ = yaw_speed_mode_ = false;
   yaw_position_target_rad_ = yaw_state_.position_rad;
@@ -912,11 +946,13 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
 void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
                                    double limit_spd_rad_s) {
   if (axis == AxisId::Pitch) {
+    release_pitch_servo();
     if (pitch_opened_.load()) pitch_backend_.command(axis, q_ref_rad, limit_spd_rad_s);
     return;
   }
   const auto now = now_monotonic_ns();
   std::lock_guard lock(yaw_mutex_);
+  release_yaw_servo_locked();
   if (!std::isfinite(q_ref_rad) || !std::isfinite(limit_spd_rad_s)) {
     trip_yaw_locked("nonfinite_reference");
     return;
@@ -930,11 +966,13 @@ void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
 
 void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
   if (axis == AxisId::Pitch) {
+    release_pitch_servo();
     if (pitch_opened_.load()) pitch_backend_.command_velocity(axis, velocity_rad_s);
     return;
   }
   const auto now = now_monotonic_ns();
   std::lock_guard lock(yaw_mutex_);
+  release_yaw_servo_locked();
   if (!std::isfinite(velocity_rad_s)) {
     trip_yaw_locked("nonfinite_reference");
     return;
@@ -981,7 +1019,218 @@ MotorBackend::YawTrialSettings MixedCanMotorBackend::yaw_trial_settings() const 
 }
 
 void MixedCanMotorBackend::keepalive(AxisId axis) {
-  if (axis == AxisId::Pitch && pitch_opened_.load()) pitch_backend_.keepalive(axis);
+  if (axis == AxisId::Pitch && pitch_opened_.load() && !pitch_servo_active_.load()) pitch_backend_.keepalive(axis);
+}
+
+// ---------------------------------------------------------------- ADR-002.2 servos (ADR-003 3b)
+
+bool MixedCanMotorBackend::load_servos(std::string& err) {
+  const auto& c = *profile_.servo;
+  try {
+    auto yaw = axis::servo_from_yaml(YAML::LoadFile(c.yaw_asset)["servo_parameters"]);
+    // The profile's authority is the ceiling; an asset can ask for less, never more.
+    yaw.current_cap = std::min(yaw.current_cap, c.yaw_current_limit_a);
+    yaw.rms_limit = std::min(yaw.rms_limit, c.yaw_rms_limit_a);
+    if (!yaw_servo_.configure(yaw)) {
+      err = "yaw servo asset rejected: " + c.yaw_asset;
+      return false;
+    }
+    const auto trial = YAML::LoadFile(c.pitch_asset)["servo_trial"];
+    // The asset's speed clamp was a commissioning choice; the owner's cap is 100 RPM (2026-10-02).
+    const axis::PositionLoopParameters loop{trial["kp_per_s"].as<double>(), trial["ki_per_s2"].as<double>(),
+                                            trial["integral_clamp_rad_s"].as<double>(), c.speed_limit_rad_s};
+    pitch_following_error_rad_ = trial["following_error_rad"].as<double>();
+    if (!pitch_loop_.configure(loop) || !(pitch_following_error_rad_ > 0)) {
+      err = "pitch servo asset rejected: " + c.pitch_asset;
+      return false;
+    }
+    yaw_oscillation_ = axis::OscillationMonitor(c.oscillation_limit_a);
+    yaw_servo_epoch_ns_ = now_monotonic_ns();
+    yaw_servo_configured_ = pitch_servo_configured_ = true;
+    spdlog::info("ADR-002.2 servos loaded: yaw {} (kq {} A/rad, kv {} A s/rad, ki {} A/(rad s), peak {} A, rms {} A, "
+                 "inertia {} A s^2/rad); pitch {} (kp {}/s, ki {}/s^2, speed {} rad/s, following {} rad)",
+                 c.yaw_asset, yaw.kq, yaw.kv, yaw.ki, yaw.current_cap, yaw.rms_limit, yaw.inertia,
+                 c.pitch_asset, loop.kp, loop.ki, loop.speed_limit, pitch_following_error_rad_);
+    return true;
+  } catch (const std::exception& error) {
+    err = std::string("servo asset: ") + error.what();
+    return false;
+  }
+}
+
+bool MixedCanMotorBackend::servo_available(AxisId axis) const {
+  return axis == AxisId::Yaw ? yaw_servo_configured_ : pitch_servo_configured_ && !pitch_servo_fault_.load();
+}
+
+void MixedCanMotorBackend::release_yaw_servo_locked() {
+  if (!yaw_servo_active_) return;
+  yaw_servo_active_ = false;
+  // The legacy loop takes over from where the axis is, at rest in its own terms.
+  yaw_velocity_loop_.reset(yaw_state_.position_rad, now_monotonic_ns());
+  yaw_shaped_speed_rad_s_ = 0;
+  spdlog::info("yaw servo released at q={:+.5f} rad (stale segments while engaged: {})",
+               yaw_state_.position_rad, yaw_servo_stale_);
+}
+
+void MixedCanMotorBackend::release_pitch_servo() {
+  std::lock_guard lock(pitch_servo_mutex_);
+  pitch_servo_active_.store(false);
+}
+
+bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& r) {
+  if (!std::isfinite(r.q) || !std::isfinite(r.v) || !std::isfinite(r.a) || !std::isfinite(r.j) ||
+      !(r.valid_s > 0)) {
+    if (axis == AxisId::Yaw) {
+      std::lock_guard lock(yaw_mutex_);
+      trip_yaw_locked("nonfinite_reference");
+    }
+    return false;
+  }
+  if (axis == AxisId::Pitch) {
+    std::lock_guard lock(pitch_servo_mutex_);
+    if (!pitch_servo_configured_ || pitch_servo_fault_.load() || !pitch_opened_.load()) return false;
+    if (!pitch_servo_active_.load()) {
+      can::AxisLatest l;
+      if (!pitch_system_.axis(AxisId::Pitch).latest(l) || !l.has_feedback || l.mode != 2) return false;
+      pitch_loop_.reset();
+      pitch_servo_last_step_ns_ = 0;
+      pitch_hold_q_ = l.q_rad;
+      pitch_servo_active_.store(true);
+      spdlog::info("pitch servo engaged at q={:+.5f} rad", l.q_rad);
+    }
+    pitch_reference_ = r;
+    return true;
+  }
+  std::lock_guard lock(yaw_mutex_);
+  if (!yaw_servo_configured_) return false;
+  const auto now = now_monotonic_ns();
+  yaw_last_command_ns_ = now;
+  if (!yaw_servo_active_) {
+    if (yaw_trip_.load() || !yaw_motion_allowed_.load() || !yaw_feedback_safe_locked(now)) return false;
+    // Take over at the measured state; the current on the wire becomes the integral's start.
+    yaw_servo_offset_rad_ = yaw_encoder_.first_rad() + yaw_origin_rad_;
+    const double applied = yaw_last_output_.load();
+    if (!yaw_servo_.reset((yaw_state_.feedback.rx_ns - yaw_servo_epoch_ns_) * 1e-9,
+                          yaw_state_.position_rad + yaw_servo_offset_rad_, 0.0,
+                          std::isfinite(applied) ? applied : 0.0)) return false;
+    yaw_oscillation_ = axis::OscillationMonitor(profile_.servo->oscillation_limit_a);
+    yaw_servo_last_step_ns_ = yaw_servo_last_rock_ns_ = 0;
+    yaw_servo_hold_q_ = yaw_state_.position_rad;
+    yaw_servo_stale_ = 0;
+    yaw_servo_active_ = true;
+    spdlog::info("yaw servo engaged at q={:+.5f} rad (absolute {:+.5f})", yaw_state_.position_rad,
+                 yaw_state_.position_rad + yaw_servo_offset_rad_);
+  }
+  yaw_reference_ = r;
+  yaw_requested_velocity_rad_s_.store(r.v);
+  yaw_command_not_sent_.store(false);
+  return true;
+}
+
+// Called with yaw_mutex_ held, on every GM6020 frame while the servo is engaged: the
+// commissiond session's order (observe the encoder, step, transmit, acknowledge) with the
+// production guards in front of it and the commissioning trips behind it.
+void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
+  const auto now = now_monotonic_ns();
+  if (!yaw_feedback_safe_locked(now) || !yaw_bus_healthy()) {
+    trip_yaw_locked(!yaw_feedback_safe_locked(now) ? "feedback_unsafe" : "can_unavailable");
+    return;
+  }
+  if (yaw_trip_.load() || !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
+      now - heartbeat_ns_.load() > kHeartbeatLimitNs) {
+    yaw_servo_active_ = false;
+    send_yaw_zero_locked();
+    return;
+  }
+  const double offset = yaw_servo_offset_rad_;
+  if (!yaw_servo_.observe_encoder((rx_ns - yaw_servo_epoch_ns_) * 1e-9, yaw_state_.position_rad + offset)) {
+    trip_yaw_locked("servo_encoder_rejected");
+    return;
+  }
+  double q, v, a;
+  if (yaw_reference_.at(now, q, v, a)) yaw_servo_hold_q_ = q;
+  else { q = yaw_servo_hold_q_; v = a = 0; ++yaw_servo_stale_; }
+  const auto out = yaw_servo_.step((now - yaw_servo_epoch_ns_) * 1e-9, q + offset, v, a);
+  yaw_servo_out_ = out;
+  if (out.status == static_cast<int>(axis::ServoStatus::FollowingError)) { trip_yaw_locked("servo_following_error"); return; }
+  if (out.status != static_cast<int>(axis::ServoStatus::Ok)) { trip_yaw_locked("servo_data_invalid"); return; }
+  if (yaw_state_.feedback.temperature_raw >= profile_.servo->yaw_temperature_limit_raw) {
+    trip_yaw_locked("servo_temperature");
+    return;
+  }
+  // The owner's safety cap, on the drive's own speed report (independent of the observer).
+  if (std::abs(yaw_state_.feedback.speed_rad_s()) > profile_.servo->speed_limit_rad_s) {
+    spdlog::error("yaw servo speed trip: {:.3f} rad/s > {:.3f}", yaw_state_.feedback.speed_rad_s(),
+                  profile_.servo->speed_limit_rad_s);
+    trip_yaw_locked("servo_speed_limit");
+    return;
+  }
+  if (out.rocking) yaw_servo_last_rock_ns_ = now;
+  const bool rock_settling = yaw_servo_last_rock_ns_ && now - yaw_servo_last_rock_ns_ < 200'000'000;
+  if (yaw_oscillation_.update(yaw_servo_last_step_ns_ ? (now - yaw_servo_last_step_ns_) * 1e-9 : 0.0, out.limited,
+                              rock_settling)) {
+    spdlog::error("yaw servo oscillation guard: fast current RMS {:.3f} A", yaw_oscillation_.rms());
+    trip_yaw_locked("servo_oscillation");
+    return;
+  }
+  yaw_servo_last_step_ns_ = now;
+  yaw_output_reason_ = 1;
+  const bool sent = send_yaw_output_locked(
+      gm6020::servo_current_frame(profile_.yaw.motor_id, out.limited, profile_.servo->yaw_current_limit_a), out.limited);
+  yaw_servo_.acknowledge(sent, sent ? yaw_last_output_.load() : 0.0);
+  if (!sent && now - yaw_tx_failure_since_ns_ >= 20'000'000) trip_yaw_locked("tx_failure_persistent");
+}
+
+// The pitch servo: commissioning's host position loop at 1 kHz on the drive's own speed loop.
+// Every SpdRef write is answered by a type-2 frame, so the loop steps on 1 kHz feedback.
+void MixedCanMotorBackend::pitch_servo_loop(std::stop_token stop) {
+  auto next = std::chrono::steady_clock::now();
+  while (!stop.stop_requested()) {
+    next += std::chrono::milliseconds(1);
+    std::this_thread::sleep_until(next);
+    if (!pitch_servo_active_.load()) continue;
+    std::lock_guard lock(pitch_servo_mutex_);
+    if (!pitch_servo_active_.load()) continue;
+    const auto now = now_monotonic_ns();
+    can::AxisLatest l;
+    if (!pitch_system_.axis(AxisId::Pitch).latest(l) || !l.has_feedback || l.mode != 2 || l.faults ||
+        now - l.rx_ns > 20'000'000) {
+      spdlog::error("pitch servo: feedback missing, stale, disabled or faulted (mode={} faults={} age_ms={:.1f})",
+                    l.mode, l.faults, (now - l.rx_ns) / 1e6);
+      pitch_servo_fault_.store(true);
+      pitch_servo_active_.store(false);
+      pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+      continue;
+    }
+    double q, v, a;
+    if (pitch_reference_.at(now, q, v, a)) pitch_hold_q_ = q;
+    else { q = pitch_hold_q_; v = a = 0; }
+    // End-stop protection, independent of the reference (owner: never into the end stop).
+    const bool bounded = pitch_reference_.q_max > pitch_reference_.q_min;
+    const double guard = profile_.servo->pitch_guard_rad;
+    const double low = pitch_reference_.q_min - guard, high = pitch_reference_.q_max + guard;
+    if (!bounded || l.q_rad < low || l.q_rad > high) {
+      spdlog::error("pitch servo end-stop guard: axis {:+.4f} rad outside [{:+.4f}, {:+.4f}]{}", l.q_rad, low, high,
+                    bounded ? "" : " (no envelope given)");
+      pitch_servo_fault_.store(true);
+      pitch_servo_active_.store(false);
+      pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+      continue;
+    }
+    if (std::abs(q - l.q_rad) > pitch_following_error_rad_) {
+      spdlog::error("pitch servo following error: reference {:+.4f} rad, axis {:+.4f} rad", q, l.q_rad);
+      pitch_servo_fault_.store(true);
+      pitch_servo_active_.store(false);
+      pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+      continue;
+    }
+    const double dt = pitch_servo_last_step_ns_ ? (now - pitch_servo_last_step_ns_) * 1e-9 : 0.0;
+    const double limit = pitch_loop_.parameters().speed_limit;
+    const double speed = axis::travel_governor(std::clamp(pitch_loop_.step(dt, q, v, l.q_rad), -limit, limit), l.q_rad,
+                                               low, high, profile_.servo->pitch_stop_acceleration_rad_s2);
+    pitch_servo_last_step_ns_ = now;
+    pitch_backend_.command_velocity_always(AxisId::Pitch, speed);
+  }
 }
 
 void MixedCanMotorBackend::set_current_limit(AxisId axis, double limit_cur_a) {

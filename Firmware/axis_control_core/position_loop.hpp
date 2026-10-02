@@ -11,6 +11,13 @@ struct PositionLoopParameters {
   double speed_limit;     // rad/s
 };
 
+// End-stop protection for a bounded axis, independent of the reference: the commanded speed
+// toward either end never exceeds the speed from which a stop at `stop_acceleration` still fits
+// before that end's guard (low and high are the guard positions themselves). Away from an end it
+// is untouched. A pitch with a mechanical end stop and a 3 kg payload must never be driven into
+// it, whatever the reference or the loop's own integral asks for.
+double travel_governor(double speed,double q,double low,double high,double stop_acceleration);
+
 class PositionLoop {
  public:
   bool configure(const PositionLoopParameters& p);

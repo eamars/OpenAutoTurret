@@ -75,3 +75,21 @@ axes:
     control_mode: position
     expected_unique_id_hex: "7216313130333105"
     current_limit_a: 5.0
+
+# ADR-003 3b (2026-10-02): the ADR-002.2 servos, from the assets tools/servo_commission/commission.py
+# writes, own both axes whenever the control loop publishes a reference segment (all modes at
+# Hold). Homing, braking, emergency stop and fault keep the legacy paths above, which release the
+# servo. Paths are relative to this file.
+servo:
+  yaw_asset: servo/yaw_servo.json
+  pitch_asset: servo/pitch_servo.json
+  yaw_current_limit_a: 3.0            # owner ruling 2026-10-02: 3 A peak (the protocol full scale)
+  yaw_rms_limit_a: 1.62               # ... and 1.62 A continuous (the rating), the servo's RMS budget
+  yaw_temperature_limit_raw: 55       # the commissioning sessions' thermal trip
+  oscillation_limit_a: 0.3            # limit-cycle guard: fast current RMS (commissioning rule)
+  speed_limit_rad_s: 10.47            # owner ruling 2026-10-02: 100 RPM is the safety cap
+  # Owner: never drive the pitch into its mechanical end stop. The guard is 2 deg beyond the soft
+  # limit, which homing places 5 deg inside the measured ends; toward it the pitch servo's
+  # commanded speed always allows a stop at the deceleration its commissioning demonstrated.
+  pitch_guard_rad: 0.035
+  pitch_stop_acceleration_rad_s2: 1.047

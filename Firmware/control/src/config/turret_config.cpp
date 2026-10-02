@@ -1041,6 +1041,19 @@ LoadResult load_turret_config(const std::string& path) {
         opt_int(trk, "control_delay_ms", "tracking.control_delay_ms", 20, warn);
     c.tracking.motor_response_ms =
         opt_int(trk, "motor_response_ms", "tracking.motor_response_ms", 20, warn);
+    // fetch() answers a Null node for an absent section, which IsDefined() would accept.
+    if (const auto core = fetch(trk, "core"); core.IsDefined() && !core.IsNull()) {
+      if (!core.IsMap() || !core["parameters"] || !core["parameters"].IsScalar()) {
+        err.push_back("tracking.core needs parameters: <path of the ADR-003 tracking asset>");
+      } else {
+        c.tracking.core_parameters = core["parameters"].as<std::string>();
+        if (core["camera_timing"]) c.tracking.core_camera_timing = core["camera_timing"].as<std::string>();
+        c.tracking.core_nominal_exposure_s = opt_double(core, "nominal_exposure_s", "tracking.core.nominal_exposure_s",
+                                                        0.033, warn);
+        if (!(c.tracking.core_nominal_exposure_s > 0 && c.tracking.core_nominal_exposure_s < 0.2))
+          err.push_back("tracking.core.nominal_exposure_s must be in (0, 0.2) s");
+      }
+    }
     c.tracking.fresh_threshold_ms =
         opt_int(trk, "fresh_threshold_ms", "tracking.fresh_threshold_ms", 100, warn);
     c.tracking.coast_timeout_ms =

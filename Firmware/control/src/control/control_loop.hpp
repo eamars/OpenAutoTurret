@@ -658,6 +658,14 @@ class ControlLoop {
   // True on a cycle that published a shaped reference, so the first cycle of an engagement re-seats
   // the profile at the pose the hardware is actually in instead of at wherever the last one ended.
   bool ref_lim_engaged_ = false;
+  // ADR-003 tracking core (TrackingController::uses_core): Level 1 owns the AUTO_TRACK reference.
+  // Engaged from the current reference on the first tracking tick, released whenever another
+  // source owns it. servo_jerk_ is the segment jerk handed to the ADR-002.2 servos (zero for the
+  // legacy limiter, which does not integrate one).
+  bool core_engaged_ = false;
+  double servo_jerk_[kAxisCount] = {0.0, 0.0};
+  std::shared_ptr<spdlog::logger> tracking_trace_;  // OTA_TRACKING_TRACE: one JSON line per core tick
+  void trace_core_tick(const track::TickRecord& r, TimeNs now_ns);
   unsigned tracking_log_cycle_ = 0;
   std::optional<bool> search_override_;  // enable_search / disable_search
   // v3 §53: converts the authoritative mode's intent into a joint reference.

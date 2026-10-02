@@ -127,6 +127,25 @@ inline can::RawFrame current_frame(uint8_t motor_id, double amps, double limit_a
   return frame;
 }
 
+// The ADR-002.2 servo's frame (ADR-003 3b). Owner ruling 2026-10-02: peaks up to the protocol's
+// 3 A full scale, with the 1.62 A continuous rating enforced by the servo's own RMS budget rather
+// than by this clamp. The legacy velocity loop keeps current_frame and its 1.62 A ceiling.
+inline can::RawFrame servo_current_frame(uint8_t motor_id, double amps, double peak_a) {
+  if (motor_id != 1)
+    throw std::invalid_argument("GM6020 current mode is qualified for motor ID 1 only");
+  if (!std::isfinite(peak_a) || peak_a <= 0.0 || peak_a > kAmpsFullScale)
+    throw std::invalid_argument("GM6020 servo peak current must be in (0, 3] A");
+  const int raw = current_raw_uncapped(std::clamp(amps, -peak_a, peak_a));
+  can::RawFrame frame;
+  frame.extended = false;
+  frame.dlc = 8;
+  frame.id = 0x1fe;
+  const auto value = static_cast<uint16_t>(static_cast<int16_t>(raw));
+  frame.data[0] = static_cast<uint8_t>(value >> 8);
+  frame.data[1] = static_cast<uint8_t>(value);
+  return frame;
+}
+
 class UnwrappedEncoder {
  public:
   static constexpr double kRadiansPerCount = 2.0 * std::numbers::pi / 8192.0;
@@ -135,7 +154,7 @@ class UnwrappedEncoder {
   bool update(uint16_t count, TimeNs stamp) {
     if (!valid_ || count > 8191 || stamp <= 0) return invalidate();
     if (!initialized_) {
-      previous_ = count; stamp_ = stamp; initialized_ = true; return true;
+      first_ = previous_ = count; stamp_ = stamp; initialized_ = true; return true;
     }
     const double dt = (stamp - stamp_) * 1e-9;
     // At the rated 320 rpm, an 80 ms observation gap spans under half a
@@ -153,10 +172,13 @@ class UnwrappedEncoder {
   }
   bool valid() const { return initialized_ && valid_; }
   double relative_rad() const { return counts_ * kRadiansPerCount; }
+  // The motor's own angle of the first frame: relative_rad() + first_rad() is the absolute GM6020
+  // angle (one turn's worth of ambiguity is irrelevant: it indexes periodic tables).
+  double first_rad() const { return first_ * kRadiansPerCount; }
  private:
   bool invalidate() { valid_ = false; return false; }
   bool initialized_{false}, valid_{true};
-  uint16_t previous_{};
+  uint16_t previous_{}, first_{};
   int64_t counts_{};
   TimeNs stamp_{};
 };

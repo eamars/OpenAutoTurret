@@ -3,6 +3,9 @@
 Python starts processes and reviews files; only commissiond can open CAN. Two
 sessions remain: --control-yaw (yaw position servo, pitch disabled) and
 --establish-homing (bounded pitch sensorless homing, optionally a servo trial).
+A yaw session whose manifest has `camera_capture: {seconds}` also records the
+tracking camera beside it (tools/tracking/camera_record.py, ADR-003 stage 2
+timing calibration): same lease, same lifetime, no motor or CAN access.
 """
 from __future__ import annotations
 import argparse
@@ -16,6 +19,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 
 from adr0022_homing_review import strict_json
@@ -253,9 +257,26 @@ def capture(manifest: Path, firmware: Path, *, establish_homing=False, control_y
         result.update(candidate_label=config["candidate_label"], shared_core_control_requested=True,
                       stage3a_qualified=False)
     imu_log = None
-    imu = collector = None
+    imu = collector = camera = None
     producer_lost = False
     try:
+        if control_yaw and config.get("camera_capture"):
+            seconds = float(config["camera_capture"]["seconds"])
+            if not 0 < seconds <= config["limits"]["duration_s"]:
+                raise ValueError("camera_capture seconds must be positive and within the session deadline")
+            camera_log = output.with_suffix(".camera.log").open("xb")
+            fixed = config["camera_capture"].get("exposure_us")
+            extra = [str(int(fixed)), str(float(config["camera_capture"]["analogue_gain"]))] if fixed else []
+            camera = subprocess.Popen([sys.executable, str(firmware / "tools/tracking/camera_record.py"), str(output), str(seconds), *extra],
+                                      stdout=camera_log, stderr=subprocess.STDOUT)
+            children.append(camera)
+            # The control must start after the camera delivers, or the motion would be half unseen.
+            frames = output.with_suffix(".camera.jsonl")
+            ready = time.monotonic() + 15
+            while not (frames.is_file() and frames.read_text().count('"kind": "frame"') >= 3):
+                if camera.poll() is not None or time.monotonic() > ready:
+                    raise RuntimeError("tracking camera did not start delivering frames")
+                time.sleep(.05)
         imu_log = output.with_suffix(".imu.log").open("xb")
         imu = subprocess.Popen([str(binaries["imu"]), "--commissioning"], stdout=subprocess.PIPE, stderr=imu_log)
         children.append(imu)
@@ -268,7 +289,7 @@ def capture(manifest: Path, firmware: Path, *, establish_homing=False, control_y
         children.append(collector)
         exclusive_json(output.with_suffix(".processes.json"), {
             "schema": "adr0022.acquisition_processes/1", "supervisor_pid": os.getpid(),
-            "imu_pid": imu.pid, "collector_pid": collector.pid,
+            "imu_pid": imu.pid, "collector_pid": collector.pid, "camera_pid": camera.pid if camera else None,
             "recorded_ns": time.monotonic_ns(), "automatic_retries": 0})
         # The collector exclusively drains this pipe. Keeping the read end here
         # would conceal collector death from the producer's broken-pipe signal.

@@ -1,0 +1,54 @@
+{
+ "schema_name": "ADR003_PhotographyRequirements_v1",
+ "artifact_kind": "input_contract",
+ "status": "OWNER_RULING_MEASURED_CAPABILITY",
+ "ruling": "Owner, 2026-10-02: calibrate the accuracy limits from the real tracking performance of the feedforward + feedback controllers. For this station that replaces the template's 'do not infer tolerances from achieved performance'. What keeps it honest is that the rule is fixed before any data is taken (limit = 1.25 x the worst of a fixed campaign of passes, rounded up), the campaign is fixed (angles, order, passes; nothing repeated or dropped), and the limits are re-calibrated only after a deliberate hardware change. The optimiser that solves control parameters never edits this file.",
+ "camera": {
+  "camera_id": "IMX500 wide, cam-baa28c2a (tracking camera; Hailo-8 YOLOv8n person detector)",
+  "sensor_mode_id": "main 1920x1080, lores 640x360 inference, orientation rotate_180",
+  "image_width_px": 1920,
+  "image_height_px": 1080,
+  "calibration_revision": "calibration/camera_intrinsics.yaml (measured 2026-09-04, fx 1389, fy 1467) + camera_extrinsics.yaml (2026-09-27)",
+  "anchor_policy_id": "turret_mixed.yaml tracking.aim box_fraction 0.50 / 0.22",
+  "framing_pixel": [960, 540]
+ },
+ "required_operating_domain": {
+  "target_rate_rad_s": {"yaw": 0.349, "pitch": null},
+  "target_acceleration_rad_s2": {"yaw": 1.047, "pitch": null},
+  "basis": "yaw: the envelope the yaw limits were calibrated over (Level-1 references up to 20 deg/s and 60 deg/s^2, tools/servo_commission/usecase.py). Pitch and the camera-side domain are calibrated with the 3a runs.",
+  "distance_range_m": null,
+  "pose_range_rad": null,
+  "exposure_range_s": null
+ },
+ "yaw_servo_limits": {
+  "what": "the Level-2 share of the framing error: servo error q_ref - q_true over the ADR-003-shaped use case, with the plant feedforward + feedback servo",
+  "file": "config/servo/yaw_accuracy.json",
+  "calibrated": "2026-10-02, run yaw-20261002-134637 (4 angles) + the asset's 2 validation passes; gates every later yaw commissioning (score.gate_yaw)"
+ },
+ "photography_limits": {
+  "maximum_anchor_rms_error_px": null,
+  "maximum_anchor_peak_error_px": null,
+  "maximum_exposure_motion_blur_px": null,
+  "maximum_time_to_first_usable_frame_s": null,
+  "minimum_usable_frame_fraction": null,
+  "minimum_subject_edge_margin_px": null,
+  "calibration": "end-to-end, from the 3a camera runs by the same rule (tools/tracking); null until those runs exist"
+ },
+ "comparison_requirements": {
+  "moving_lag_improvement_floor_s": null,
+  "maximum_stationary_jitter_regression_px": null,
+  "maximum_stop_peak_error_regression_px": null
+ },
+ "provenance": {
+  "source_of_requirements": "owner ruling 2026-10-02 (limits from measured FF+FB tracking performance)",
+  "accepted_by": "owner",
+  "accepted_at": "2026-10-02"
+ },
+ "rules": [
+  "Limits come from a calibration campaign whose rule, passes and order are fixed before it runs; a failed or missing pass is reported, never replaced.",
+  "Pixel limits convert to angle through the calibrated projection (fx 1389 px/rad: 24.24 px/deg at the frame centre).",
+  "Control parameters are fitted and solved separately and never edit these limits.",
+  "A deliberate hardware change (payload, camera, bearing, motor) re-runs the calibration; drift alone does not.",
+  "No field grants motor authority or enlarges the ADR-002.2 limits."
+ ]
+}

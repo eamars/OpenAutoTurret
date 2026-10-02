@@ -30,6 +30,7 @@ find_package(yaml-cpp REQUIRED)
 find_package(spdlog REQUIRED)
 
 add_subdirectory(axis_control_core)
+add_subdirectory(tracking_core)
 add_subdirectory(control)
 add_subdirectory(commission_runtime)
 

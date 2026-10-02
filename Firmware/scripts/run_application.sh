@@ -618,6 +618,8 @@ export OTA_VISION_DETAIL_SENSOR="${OTA_VISION_DETAIL_SENSOR-}"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"
 export OTA_WEB_SOCKET="$RUN/control-web.sock"
+# ADR-003 D17: controld's per-tick tracking record (one JSON line per Level-1 tick while tracking).
+export OTA_TRACKING_TRACE="$RUN/tracking-trace.jsonl"
 export OTA_WEB_PORT="${OTA_WEB_PORT:-8080}"
 export OTA_WEB_HOST="${OTA_WEB_HOST:-0.0.0.0}"
 vision_args=(--config perception/configs/perception_v1.json --profile "$PROFILE"

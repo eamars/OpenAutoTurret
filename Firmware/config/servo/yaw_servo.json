@@ -18,7 +18,7 @@
   "station": "rpi-turret",
   "tool": "Firmware/tools/servo_commission/commission.py",
   "accepted": true,
-  "rescored": "gates: tracking and stalls; accuracy advisory until the ADR-003 photography spec"
+  "rescored": "gates: tracking and stalls; conformance: config/servo/yaw_accuracy.json"
  },
  "identified": {
   "inertia": 0.04072,
@@ -558,11 +558,11 @@
    "script": "usecase",
    "summary": {
     "speed_ratio": [
-     0.997,
-     1.015
+     0.996,
+     1.009
     ],
     "ramp_p95_5_deg": [
-     0.055,
+     0.06,
      0.118
     ],
     "ramp_rms_deg": [
@@ -581,10 +581,11 @@
    },
    "extra": {
     "stalls": 2,
+    "stalls_total": 2,
     "peak_current": 0.992002212
    },
    "fails": [],
-   "advisory": [],
+   "conformance": [],
    "predicted": {
     "speed_ratio": [
      0.999,
@@ -614,12 +615,12 @@
    "script": "usecase",
    "summary": {
     "speed_ratio": [
-     0.998,
-     1.024
+     0.992,
+     1.017
     ],
     "ramp_p95_5_deg": [
-     0.062,
-     0.307
+     0.063,
+     0.267
     ],
     "ramp_rms_deg": [
      0.055,
@@ -637,16 +638,11 @@
    },
    "extra": {
     "stalls": 2,
+    "stalls_total": 2,
     "peak_current": 1.61384258
    },
    "fails": [],
-   "advisory": [
-    "step+1.0: final error 0.292 deg",
-    "step+2.0: final error 0.262 deg",
-    "step-2.0: final error -0.303 deg",
-    "ramp+2: P95-P5 0.188 deg",
-    "ramp+5: P95-P5 0.307 deg"
-   ],
+   "conformance": [],
    "predicted": null
   }
  ],

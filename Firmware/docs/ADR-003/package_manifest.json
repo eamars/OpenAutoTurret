@@ -1,0 +1,29 @@
+{
+  "package": "OpenAutoTurret_ADR-003",
+  "date": "2026-09-30",
+  "kind": "architecture_and_development_plan_only",
+  "scope": "fixed-base camera framing and fast moving-subject photography",
+  "entrypoint": "00_CODEX_START.md",
+  "base_repository": "https://github.com/eamars/OpenAutoTurret",
+  "branch": "codex/adr002-control",
+  "base_commit": null,
+  "research_input": "sources/USER_RESEARCH.txt",
+  "implementation_included": false,
+  "hardware_access_performed": false,
+  "control_algorithm_tests_run": false,
+  "physical_tests_run": false,
+  "checks_scope": "document and declarative-contract consistency only",
+  "required_decisions": 18,
+  "required_scenarios": 14,
+  "core_decisions": {
+    "estimator": "existing per-axis 2-state CV Kalman; explicit acceleration not implemented",
+    "level1": "target motion feedforward + critically damped constrained reference generator",
+    "level2": "accepted ADR-002.2 shared physical servo unchanged",
+    "stages": [
+      "pure_math_offline",
+      "real_feedback_parameter_injection",
+      "independent_physical_3a",
+      "production_physical_3b"
+    ]
+  }
+}

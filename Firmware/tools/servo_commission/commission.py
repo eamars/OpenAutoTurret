@@ -5,6 +5,8 @@
     commission.py check yaw|pitch            short probe: is the current asset still right?
     commission.py validate yaw|pitch         two use-case passes with the current asset
     commission.py session yaw|pitch SCRIPT   one session with the current asset (diagnosis)
+    commission.py calibrate yaw              accuracy limits from measured FF+FB tracking, and the
+                                             motor-FF comparison (ADR-003 sec. 7B); see accuracy.py
 
 Yaw, --from-prior (nothing known; config/servo/yaw_prior.json):
   survey     friction against speed (0.25-40 deg/s both ways) and per-angle maps
@@ -36,6 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
+import accuracy
 import design
 import identify
 import journal
@@ -279,7 +282,7 @@ def yaw_validate(run, servo, identified, passes=2, circle=True, position=None, p
         j = run.session(f"{name}{n}", m)
         rows, extra = score.yaw(j, identified["crosstalk"]["table"], identified["crosstalk"]["delay_s"]) if "cycles" in j else ([], {})
         fails = score.gate_yaw(rows, extra) if name == "usecase" else []
-        advisory = score.accept_yaw(rows, extra) if name == "usecase" else []
+        conformance = score.conformance_yaw(rows) if name == "usecase" else []
         status = (j.get("footer") or {}).get("status")
         if status != "COMPLETE":
             fails.append(f"session {status}: {(j.get('footer') or {}).get('detail')}")
@@ -289,8 +292,8 @@ def yaw_validate(run, servo, identified, passes=2, circle=True, position=None, p
                 fails.append(f"circle: fast current RMS {fast:.2f} A")
         summ = score.summary(rows)
         run.log(f"    {name}{n}: {json.dumps(summ)} stalls {extra.get('stalls')} -> {'ACCEPTED' if not fails else 'NOT ACCEPTED: ' + '; '.join(fails)}"
-                + (f" (advisory, provisional targets: {'; '.join(advisory)})" if advisory else ""))
-        entry = {"script": name, "summary": summ, "extra": extra, "fails": fails, "advisory": advisory, "rows": rows}
+                + (f"; ACCURACY BELOW THE CALIBRATED LIMITS: {'; '.join(conformance)}" if conformance else ""))
+        entry = {"script": name, "summary": summ, "extra": extra, "fails": fails, "conformance": conformance, "rows": rows}
         if predict and name == "usecase" and n == 0:
             entry["predicted"] = predicted_usecase(m, identified, position)
             run.log(f"    model predicted: {json.dumps(entry['predicted'])}")
@@ -392,7 +395,7 @@ def yaw_asset(run, prior, identified, dsg, servo, results, accepted):
             "identified": identified, "design": dsg,
             "plant": design.plant(identified),
             "validation": [{"script": r["script"], "summary": r["summary"], "extra": r["extra"], "fails": r["fails"],
-                            "advisory": r.get("advisory", []), "predicted": r.get("predicted")} for r in results],
+                            "conformance": r.get("conformance", []), "predicted": r.get("predicted")} for r in results],
             "servo_parameters": servo}
 
 
@@ -574,23 +577,135 @@ def rescore(args):
         fails = score.gate_yaw(rows, extra)
         if (j.get("footer") or {}).get("status") != "COMPLETE":
             fails.append(f"session {(j.get('footer') or {}).get('detail')}")
-        advisory = score.accept_yaw(rows, extra)
+        conformance = score.conformance_yaw(rows)
         accepted &= not fails
         print(f"{path.parent.name}: {json.dumps(score.summary(rows))} stalls {extra.get('stalls')} -> "
               f"{'ACCEPTED' if not fails else 'NOT ACCEPTED: ' + '; '.join(fails)}"
-              + (f" (advisory: {'; '.join(advisory)})" if advisory else ""))
-        results.append({"script": "usecase", "summary": score.summary(rows), "extra": extra, "fails": fails, "advisory": advisory})
+              + (f"; accuracy below the calibrated limits: {'; '.join(conformance)}" if conformance else ""))
+        results.append({"script": "usecase", "summary": score.summary(rows), "extra": extra, "fails": fails, "conformance": conformance})
     accepted &= len(results) >= 2
     old = {v["script"] + str(i): v.get("predicted") for i, v in enumerate(asset.get("validation", []))}
     asset["validation"] = [dict(r, predicted=old.get(f"usecase{i}")) for i, r in enumerate(results)]
     asset["provenance"]["accepted"] = accepted
-    asset["provenance"]["rescored"] = "gates: tracking and stalls; accuracy advisory until the ADR-003 photography spec"
+    asset["provenance"]["rescored"] = "gates: tracking and stalls; conformance: config/servo/yaw_accuracy.json"
     (out / "yaw_servo.json").write_text(json.dumps(asset, indent=1), encoding="utf-8")
     if accepted and not args.no_write:
         (CONFIG / "yaw_servo.json").write_text(json.dumps(asset, indent=1) + "\n", encoding="utf-8")
         print(f"ACCEPTED: wrote {CONFIG / 'yaw_servo.json'}")
     else:
         print("ACCEPTED" if accepted else "NOT ACCEPTED")
+
+
+# --------------------------------------------------------------- accuracy (ADR-003)
+CALIBRATION_ANGLES = 4  # positions 90 deg apart, each with one FF+FB and one FB-only pass
+
+
+def calibration_script(goto):
+    return ([(7.0, "step", goto, "goto")] if goto else []) + manifests.usecase.script()
+
+
+def asset_validation_journals(asset):
+    """The use-case journals the asset was accepted on (its commissioning run's validation)."""
+    for report in sorted((REPO / "run/servo-commission").glob("*/report.json")):
+        if json.load(open(report, encoding="utf-8")).get("run") == asset["provenance"]["run"]:
+            return sorted(report.parent.glob("*-usecase*/yaw-control.jsonl"))
+    return []
+
+
+def px_per_deg():
+    """Tracker-frame scale from the measured intrinsics (calibration/camera_intrinsics.yaml)."""
+    text = (REPO / "Firmware/calibration/camera_intrinsics.yaml").read_text(encoding="utf-8")
+    fx = float(next(line.split("=")[1] for line in text.splitlines() if line.startswith("fx=")))
+    return fx * DEG, fx
+
+
+def calibrate(args):
+    """Yaw accuracy limits from the measured performance of the FF+FB servo (owner ruling
+    2026-10-02), and ADR-003 sec. 7B: the same references with motor feedforward removed.
+
+    Fixed campaign: at 4 angles 90 deg apart, one use-case pass with the asset and one with
+    accuracy.motor_feedback_only(asset), in alternating order (ABBA...). Every FF+FB pass must
+    complete and meet the tracking gates; the limits are accuracy.limits_from() over these
+    passes plus the passes the asset was accepted on. No pass is repeated or dropped: --resume
+    DIR scores the passes already recorded there (same plan, same angles) and runs the rest."""
+    if args.resume:
+        args.out = args.resume
+    run = Run(args, "yaw")
+    asset = load_asset(args)
+    x = asset["identified"]["crosstalk"]
+    variants = {"ff_fb": asset["servo_parameters"], "fb_only": accuracy.motor_feedback_only(asset["servo_parameters"])}
+    passes = {"ff_fb": [], "fb_only": []}
+    for k in range(CALIBRATION_ANGLES):
+        for n, name in enumerate(("ff_fb", "fb_only") if k % 2 == 0 else ("fb_only", "ff_fb")):
+            goto = 90 * DEG if k and not n else 0.0
+            done = [p for p in sorted(run.out.glob(f"*-{name}{k}/yaw-control.jsonl"))
+                    if (journal.yaw(p).get("footer") or {}).get("status") == "COMPLETE"]
+            if done:
+                run.log(f"[recorded] {name}{k}: {done[-1].parent.name}")
+                j = journal.yaw(done[-1])
+            else:
+                j = run.session(f"{name}{k}", manifests.yaw(f"{run.id}-{name}{k}", variants[name], calibration_script(goto)))
+            status = (j.get("footer") or {}).get("status")
+            rows, extra = score.yaw(j, x["table"], x["delay_s"]) if "cycles" in j else ([], {})
+            fails = score.gate_yaw(rows, extra) + ([] if status == "COMPLETE" else [f"session {status}"])
+            metrics = accuracy.pass_metrics(rows)
+            run.log(f"    {name}{k}: {json.dumps({m: round(v, 3) for m, v in metrics.items()})} stalls {extra.get('stalls')}"
+                    + (f" -- {'; '.join(fails)}" if fails else ""))
+            # Valid for the comparison: the session completed and the axis really tracked. Stall
+            # recoveries are an outcome to compare, not a reason to leave a pass out.
+            valid = status == "COMPLETE" and not score.tracking_fails(rows)
+            passes[name].append({"pass": f"{name}{k}", "angle_index": k, "metrics": metrics, "fails": fails, "valid": valid,
+                                 "stalls": extra.get("stalls"), "summary": score.summary(rows)})
+            run.step("calibration_pass", **passes[name][-1])
+            if name == "ff_fb" and fails:
+                write_markdown(run)
+                raise Failed(f"calibration pass {name}{k} failed the tracking gates ({'; '.join(fails)}): no limits written; "
+                             "the servo itself needs `commission.py check yaw` first")
+    prior = []
+    for path in asset_validation_journals(asset):
+        rows, extra = score.yaw(journal.yaw(path), x["table"], x["delay_s"])
+        prior.append({"pass": path.parent.name, "metrics": accuracy.pass_metrics(rows), "stalls": extra.get("stalls")})
+    ff = passes["ff_fb"] + prior
+    limits = accuracy.limits_from([p["metrics"] for p in ff])
+    scale, fx = px_per_deg()
+    ff_valid = [p for p in passes["ff_fb"] if p["valid"]]
+    fb_valid = [p for p in passes["fb_only"] if p["valid"]]
+    comparison = None
+    if ff_valid and fb_valid:
+        comparison = accuracy.compare([dict(p["metrics"], stalls=p["stalls"]) for p in ff_valid],
+                                      [dict(p["metrics"], stalls=p["stalls"]) for p in fb_valid])
+    result = {
+        "schema": "ota.servo-accuracy/1", "axis": "yaw",
+        "status": "OWNER_RULING_MEASURED_CAPABILITY",
+        "ruling": "Owner 2026-10-02: calibrate the yaw accuracy limits from the real tracking performance of the "
+                  "feedforward + feedback controller (the ADR-003 photography spec had no framing budget).",
+        "asset_run": asset["provenance"]["run"], "calibration_run": run.id,
+        "rule": f"limit = ceil({accuracy.MARGIN} x worst pass, grid) over {len(ff)} FF+FB passes "
+                f"({CALIBRATION_ANGLES} angles 90 deg apart + the asset's validation passes)",
+        "error": "servo error q_ref - q_true (encoder with the measured crosstalk removed), use-case script of usecase.py",
+        "limits": limits,
+        "units": {m: u for m, (_, u, _) in accuracy.METRICS.items()},
+        "definitions": {m: d for m, (_, _, d) in accuracy.METRICS.items()},
+        "tracker_frame": {"camera": "IMX500 wide, 1920x1080", "fx_px_per_rad": fx, "px_per_deg": round(scale, 2),
+                          "limits_px": accuracy.pixels(limits, scale)},
+        "passes": [{"pass": p["pass"], "metrics": {m: round(v, 4) for m, v in p["metrics"].items()}, "stalls": p["stalls"]}
+                   for p in ff],
+        "motor_feedforward_comparison": {
+            "what": "ADR-003 sec. 7B: identical references and gains; fb_only has every plant feedforward term zero",
+            "fb_only_passes": [{"pass": p["pass"], "metrics": {m: round(v, 4) for m, v in p["metrics"].items()},
+                                "stalls": p["stalls"], "fails": p["fails"]} for p in passes["fb_only"]],
+            "paired_means": comparison},
+    }
+    run.step("limits", limits=limits, limits_px=result["tracker_frame"]["limits_px"], comparison=comparison)
+    (run.out / "yaw_accuracy.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
+    run.log(f"limits: {json.dumps(limits)}")
+    run.log(f"limits in tracker pixels: {json.dumps(result['tracker_frame']['limits_px'])}")
+    if comparison:
+        run.log("motor FF comparison (FB-only / FF+FB): " + ", ".join(f"{m} {c['fb_over_ff']}" for m, c in comparison.items()))
+    if not args.no_write:
+        (CONFIG / "yaw_accuracy.json").write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
+        run.log(f"wrote {CONFIG / 'yaw_accuracy.json'}")
+    write_markdown(run)
 
 
 def one_session(args):
@@ -620,6 +735,10 @@ def main():
         c = sub.add_parser(name)
         c.add_argument("axis", choices=("yaw", "pitch"))
         c.add_argument("--asset", help="asset file (default config/servo/<axis>_servo.json)")
+    c = sub.add_parser("calibrate", help="yaw accuracy limits from measured FF+FB tracking (accuracy.py)")
+    c.add_argument("axis", choices=("yaw",))
+    c.add_argument("--asset", help="asset file (default config/servo/yaw_servo.json)")
+    c.add_argument("--resume", help="a calibration run directory: score its recorded passes, run the missing ones")
     c = sub.add_parser("rescore", help="re-evaluate a recorded yaw run directory with the current scorer")
     c.add_argument("run_dir")
     c = sub.add_parser("session")
@@ -642,6 +761,8 @@ def main():
         validate(args)
     elif args.command == "rescore":
         rescore(args)
+    elif args.command == "calibrate":
+        calibrate(args)
     else:
         one_session(args)
 

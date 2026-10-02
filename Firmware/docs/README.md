@@ -13,6 +13,7 @@ procedure from a flag list.
 | read what the station did (logs, traces, evidence) | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Reading the per-cycle control trace", §"Stop and preserve evidence" |
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
 | commission or re-commission the yaw / pitch servo (after a payload, camera, weight, bearing or motor change) | [`operations/servo-commissioning.md`](operations/servo-commissioning.md) — one automatic command per axis: identify, design, verify on the station, write the asset |
+| work on camera tracking (ADR-003: target estimator, Level-1 reference, its stages and status) | [`ADR-003/IMPLEMENTATION.md`](ADR-003/IMPLEMENTATION.md) — the plan, the decisions taken against the architect's package, and the state of each stage; stage 1 is `tools/tracking/tracking.py stage1` |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |

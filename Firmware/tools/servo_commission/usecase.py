@@ -90,7 +90,9 @@ def metrics(res, segs, true=True):
         e = (qr[m] - qa[m]) / DEG
         row = dict(label=label, err_rms=np.sqrt(np.mean(e**2)), err_max=np.max(np.abs(e)))
         if kind == "ramp":
-            mm = m & (t > a + 1.0) & (np.abs(np.abs(vr) - abs(val)) < 1e-6)
+            # Steady: the reference within 1% of the segment's rate (a 10 deg/s ramp never comes
+            # within 1e-6 of it inside its 4 s, so an exact test left that speed unscored).
+            mm = m & (t > a + 1.0) & (np.abs(vr - val) <= 0.01 * abs(val))
             if mm.sum() > 20:
                 row["v_mean"] = np.mean(va[mm]) / DEG
                 row["v_ratio"] = np.mean(va[mm]) / val
