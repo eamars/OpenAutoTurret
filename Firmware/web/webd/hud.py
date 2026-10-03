@@ -1739,12 +1739,12 @@ function renderManualPad(t) {
   $("auto-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode !== "MANUAL"));
   $("auto-mode").disabled = !(t && t.phase === "hold" && t.soft_limits_valid && !t.telemetry_stale);
   pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
-  // Releasing an arrow is the stop. The centre is the pace: the camera's unless the operator pinned it.
+  // Releasing an arrow is the stop. The centre is the pace: the camera's, or outlined when the
+  // operator pinned it.
   const pace = padPace() === "precise" ? "FINE" : "COARSE";
-  const label = "PRESS TO AIM · " + (padPaceOverride ? "PACE PINNED" : "PACE FOLLOWS CAMERA");
   if ($("pad-pace").textContent !== pace) $("pad-pace").textContent = pace;
   $("pad-pace").setAttribute("aria-pressed", String(!!padPaceOverride));
-  if ($("pad-label").textContent !== label) $("pad-label").textContent = label;
+  $("pad-pace").title = padPaceOverride ? "Pace pinned; tap to follow the camera" : "Pace follows the camera; tap to pin the other";
   if (!enabled) stopPadJog();
   if (drawerOpen === "MANUAL" && pad.hidden) { drawerOpen = null; renderDrawer(); }
 }
@@ -1954,7 +1954,6 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
   background:rgba(149,245,139,.08); color:var(--hud-green); font:22px var(--hud-mono); touch-action:none; }
 #manual-pad button.pressed { background:var(--hud-green); color:#05070a; }
 #manual-pad button:disabled { opacity:.3; }
-#manual-pad .pad-label { grid-column:1/4; text-align:center; font-size:10px; color:var(--hud-white); }
 #manual-pad #pad-pace { font-size:10px; }
 #manual-pad #pad-pace[aria-pressed="true"] { border-color:var(--hud-white); color:var(--hud-white); }
 #mode-controls { position:absolute; bottom:65px; left:50%; transform:translateX(-50%);
@@ -2149,7 +2148,6 @@ HUD_HTML = """<!DOCTYPE html>
     <button id="auto-mode" type="button">Auto</button>
   </div>
   <div id="manual-pad" hidden role="group" aria-label="Manual direction pad">
-    <span class="pad-label" id="pad-label">PRESS TO AIM</span>
     <span></span><button data-direction="up" aria-label="Aim camera up">↑</button><span></span>
     <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-pace" type="button" aria-pressed="false" aria-label="Jog pace">COARSE</button><button data-direction="right" aria-label="Aim camera right">→</button>
     <span></span><button data-direction="down" aria-label="Aim camera down">↓</button><span></span>
