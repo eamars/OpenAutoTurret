@@ -671,11 +671,15 @@ if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [
   export OTA_IMU_TRACE="$RUN/imu.ndjson"
   "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
   imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
-  # Require a fresh host tare and same-generation game rotation sample before
-  # the controller starts. The IMU residual remains observe-only.
+  # Commissioning requires a fresh host tare and same-generation game rotation sample before the
+  # controller starts: there the IMU trace is evidence. Normal operation only waits for one, then
+  # starts without it (below). The IMU residual remains observe-only either way.
   imu_ready=0
   for ((attempt=0; attempt<50; attempt++)); do
-    kill -0 "$imu_pid" 2>/dev/null || { echo 'Continuous BNO085 startup failed' >&2; exit 1; }
+    if ! kill -0 "$imu_pid" 2>/dev/null; then
+      [ "$MODE" = hardware ] && break
+      echo 'Continuous BNO085 startup failed' >&2; exit 1
+    fi
     if "$PY" - "$RUN/imu.ndjson" <<'PY'
 import json, sys, time
 try:
@@ -694,9 +698,24 @@ PY
     then imu_ready=1; break; fi
     sleep 0.1
   done
-  if [ "$imu_ready" != 1 ]; then
+  if [ "$imu_ready" != 1 ] && [ "$MODE" != hardware ]; then
     echo 'Fresh same-generation BNO085 host tare/sample unavailable; controller not started.' >&2
     exit 1
+  fi
+  if [ "$MODE" = hardware ]; then
+    # Station, 2026-10-03 16:35: the BNO085 held SDA low (the known I2C fault) and this gate kept the
+    # whole station down after a deploy. In normal operation the IMU is an instrument, not a
+    # precondition (owner ruling 2026-10-03; controld says the same): start without it, let it keep
+    # reconnecting, and do not wait on it -- the same footing as the observe-only capture below.
+    if [ "$imu_ready" != 1 ]; then
+      if kill -0 "$imu_pid" 2>/dev/null; then
+        echo 'BNO085: no fresh tare within 5 s; starting without it (observe-only; it keeps reconnecting).' >&2
+      else
+        echo 'BNO085 capture exited at startup; starting without it (the UI reports the IMU absent).' >&2
+        unset OTA_IMU_TRACE
+      fi
+    fi
+    imu_shadow_pid="$imu_pid"
   fi
 elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; then
   # 观测档 IMU：给 UI 用的那路（§20 的 imu 块）。和上面那条的区别是**它不硬**——标定档要求
