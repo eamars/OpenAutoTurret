@@ -40,12 +40,16 @@ therefore capped at 49.
 
 ## The commands
 
-On the station (the script is in every release, and in the checkout):
+On the station. The script ships in every release; there is no `run/current` link, so take the
+newest release directory (any release from 5676fbb on carries it):
 
 ```bash
-bash Firmware/tools/station_os_setup.sh --check
-sudo bash Firmware/tools/station_os_setup.sh --apply
+R=~/workspace/OpenAutoTurret/run/releases/$(ls -t ~/workspace/OpenAutoTurret/run/releases | head -1)
+bash "$R/Firmware/tools/station_os_setup.sh" --check
+sudo bash "$R/Firmware/tools/station_os_setup.sh" --apply
 ```
+
+In the examples below, `Firmware/tools/...` means that same path inside the release.
 
 Then **log out and in again** (a new SSH session; limits are read at login), and restart the stack
 from that session: `bash Firmware/scripts/run_application.sh stop` then `start`, or a deploy with

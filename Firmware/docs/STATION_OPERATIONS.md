@@ -153,6 +153,20 @@ more. The procedure, and the table of every thread's class, is the
 - The OS grant (limits.d: rtprio 49, unlimited memlock) is the one sudo step, and it is the
   owner's.
 
+**Measured after each step (2026-10-03, same station, AUTO_ROAM/AUTO_TRACK with the owner in view).**
+
+| Release | Overruns (DERATE) | Loop period p99 / worst | Notes |
+|---|---|---|---|
+| 077a330, before | 412 in 52 min (~475/h) | 5.67 / 12.5 ms | visiond 17.9 Hz at 116% CPU |
+| 257744d, retired-track fix | 18 in 5 min (~216/h) | 5.49 / 9.0 ms | visiond 29.8 Hz at 84%; camera to controld 53 ms |
+| 5676fbb, CPU split + nice, no FIFO | 1 in 6 min | 5.02 / 7.8 ms | step work p99 0.33 ms |
+| 4705bb2 + OS grant, SCHED_FIFO | 0 in 11.5 min | 5.015 / 5.36 ms | step work p99 0.20 ms, worst 0.31 ms |
+
+With SCHED_FIFO the motor threads' run-queue wait fell to 0-2 µs on average: over 10 s, `rx-can0`
+ran 131 ms and waited 0 ms, where before it ran 239 ms and waited 322 ms. Load average is 3.1-3.3.
+The loop's own work is under a tenth of its period, so splitting it further is not needed for
+timing.
+
 ## ADR-003 camera tracking: ownership and the accuracy ruling (2026-10-02, local date)
 
 - **Ownership.** The owner handed ADR-003 to the agent, with the architect's package as guidance.
