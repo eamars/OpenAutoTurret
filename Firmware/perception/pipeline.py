@@ -145,6 +145,7 @@ class PreviewTap:
         self.fps = float(fps)
         self._minimum_interval_ns = (1_000_000_000.0 / self.fps) if self.fps > 0 else 0.0
         self._lock = threading.Lock()
+        self._ready = threading.Event()
         self._frame: Any = None
         self._frame_metadata: Optional[dict] = None
         # -1, not 0: "no frame yet" must not be expressible as a timestamp, or a clock that
@@ -162,8 +163,13 @@ class PreviewTap:
         self.taken = 0
 
     def offer(self, frame: Any, *, now_ns: Optional[int] = None,
-              metadata: Optional[dict] = None) -> bool:
-        """Put the newest frame in the slot. Never blocks, never raises on a full buffer."""
+              metadata: Any = None) -> bool:
+        """Put the newest frame in the slot. Never blocks, never raises on a full buffer.
+
+        ``metadata`` may be a callable: it is then built only for a frame the rate limit lets in,
+        not for every frame offered (2026-10-03: the preview's detection and track dicts were built
+        at the full inference rate and most were thrown away).
+        """
         if not self.enabled:
             return False
         if frame is None:
@@ -176,13 +182,21 @@ class PreviewTap:
                 if now - self._enqueued_ns < self._minimum_interval_ns:
                     self.rate_limited += 1
                     return False
+            self._enqueued_ns = now
+        if callable(metadata):
+            metadata = metadata()
+        with self._lock:
             if self._frame is not None:
                 self.overwritten += 1            # the old frame is discarded, §39's rule
             self._frame = frame
             self._frame_metadata = metadata
-            self._enqueued_ns = now
             self.enqueued += 1
-            return True
+        self._ready.set()
+        return True
+
+    def wait_for_frame(self, timeout: float) -> bool:
+        """Block the encoder until a frame is offered (or ``timeout``), instead of polling."""
+        return self._ready.wait(timeout)
 
     def take(self) -> Any:
         return self.take_packet()[0]
@@ -192,6 +206,7 @@ class PreviewTap:
         with self._lock:
             frame, self._frame = self._frame, None
             metadata, self._frame_metadata = self._frame_metadata, None
+            self._ready.clear()
             if frame is not None:
                 self.taken += 1
             return frame, metadata
@@ -267,6 +282,8 @@ class LatestJsonPublisher(JsonPublisher):
             self._condition.notify()
 
     def _run(self):
+        from common.thread_class import lower_this_thread
+        lower_this_thread()   # diagnostics, not the control path (that is the native datagram)
         while True:
             with self._condition:
                 self._condition.wait_for(lambda: self._pending is not None or self._timing is not None or self._closed)
@@ -518,7 +535,7 @@ class PerceptionPipeline:
             outcome.track_set, outcome.observation = track_set, observation
 
             if self.preview is not None:
-                self.preview.offer(image, now_ns=self.clock(), metadata={
+                self.preview.offer(image, now_ns=self.clock(), metadata=lambda: {
                     "frame_sequence": int(frame_sequence),
                     "sensor_timestamp_ns": int(sensor_timestamp_ns),
                     "metadata_receive_ns": int(capture_started_ns or 0),

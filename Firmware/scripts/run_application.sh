@@ -743,11 +743,13 @@ if [ "$START_WEB" -eq 1 ]; then
   children+=("$web_pid")
   child_name[$web_pid]=webd
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
-  vision_args+=(--controller-state-url "http://127.0.0.1:$OTA_WEB_PORT/api/state")
 fi
 if [ "$MODE" != mixed-controller-commission ]; then
   if [ "$MODE" != perception ]; then
     vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
+    # The operating mode comes from controld itself, not through the web UI: the UI runs last
+    # (docs/operations/os-setup.md), and perception must not wait on it.
+    vision_args+=(--controller-state-url "unix:$OTA_WEB_SOCKET")
   fi
   "${vision_sched[@]}" "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
   vision_pid=$!

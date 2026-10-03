@@ -104,7 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--selection-socket", default="/tmp/ota-selection.sock",
                         help="local UUID selection/ACK socket; empty disables the service")
     parser.add_argument('--controller-state-url', default='',
-                        help='read-only controller /api/state for optional AUTO_SELECT_SINGLE')
+                        help='read-only controller state for optional AUTO_SELECT_SINGLE: unix:<controld web socket> '
+                             '(the launcher) or an HTTP /api/state URL')
     parser.add_argument("--legacy-track-wire", action="store_true",
                         help="compatibility bridge: publish only the old TrackSet contract")
     parser.add_argument("--session-uuid", default="",
@@ -489,7 +490,10 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         adapter.configure_stream(*(lores or stream), declared=stream)
         camera = CameraOwner(picam2, stream_size=stream, events=events,
                              inference_stream=("lores" if lores else None),
-                             inference_size=(lores or stream))
+                             inference_size=(lores or stream),
+                             # Inference and the wide preview both read the leg; only the input
+                             # tensor probe compares against the full picture.
+                             copy_main=bool(args.input_tensor_probe))
         if (model.adapter or "").strip().lower() not in ("hailo", "hailo8", "hailo_pose"):
             adapter.open(device=imx500, camera=picam2)
         pipeline.start()
@@ -656,6 +660,8 @@ class _StreamAnnouncer:
         self._thread.start()
 
     def _run(self) -> None:
+        from common.thread_class import lower_this_thread
+        lower_this_thread()
         while not self._stop.wait(self.interval_ns / 1_000_000_000.0):
             self.publish_once()
 

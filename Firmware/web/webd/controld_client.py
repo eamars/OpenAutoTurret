@@ -191,20 +191,23 @@ class ControldClient:
                 self._connected_evt.clear()
 
     def _read_loop(self, sock: socket.socket) -> None:
+        # One buffer for the connection's life: recv(MAX_FRAME) allocated 32 MiB per frame, 15 times
+        # a second. Pages are only touched as far as the frames reach.
+        buffer = bytearray(MAX_FRAME)
         while not self._stop_evt.is_set():
             try:
                 # MAX_FRAME, not a local guess: controld answers a trace request on this
                 # same socket with a frame on the order of a megabyte, and SEQPACKET
                 # truncates rather than splits -- a small buffer turns a legitimate
                 # reply into a parse error and charges it to `malformed_frames`.
-                raw = sock.recv(MAX_FRAME)
+                n = sock.recv_into(buffer)
             except socket.timeout:
                 continue
             except OSError:
                 return  # peer closed
-            if not raw:
+            if not n:
                 return
-            self._dispatch(raw.decode("utf-8", "replace"))
+            self._dispatch(bytes(buffer[:n]).decode("utf-8", "replace"))
 
     def _dispatch(self, raw: str) -> None:
         try:

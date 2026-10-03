@@ -79,6 +79,8 @@ class HealthPublisher:
 
     def start(self) -> "HealthPublisher":
         def run() -> None:
+            from common.thread_class import lower_this_thread
+            lower_this_thread()
             while not self._stop.wait(INTERVAL_S):
                 try:
                     self._write_once()

@@ -26,7 +26,7 @@ Everything after the OS step happens without privileges, every start, from the l
 | `rx-can1` (CyberGear feedback) | controld | SCHED_FIFO 47 |
 | `pitch-servo` (1 kHz host position loop) | controld | SCHED_FIFO 46 |
 | `yaw-guard`, `cg-watchdog` | controld | SCHED_FIFO 45 |
-| `control` (the 200 Hz loop) | controld | SCHED_FIFO 44 |
+| `controld` (the main thread: the 200 Hz loop) | controld | SCHED_FIFO 44 |
 | `vision-accept`, `vision-rx` (target input) | controld | normal, nice 0 |
 | `web-accept`, `web-client`, `imu-observer`, `log-writer` | controld | nice 10 |
 | controld as a process | launcher | CPU 3 alone |

@@ -101,3 +101,28 @@ def test_output_failure_is_reported_and_worker_can_recover(tmp_path):
         assert worker.last_error == ''
     finally:
         worker.stop()
+
+
+def test_metadata_is_built_only_for_a_frame_the_tap_accepts():
+    clock = [0]
+    tap = PreviewTap(fps=10, clock=lambda: clock[0])
+    built = []
+
+    def metadata():
+        built.append(1)
+        return {'n': len(built)}
+
+    assert tap.offer(np.zeros((8, 8, 3), dtype=np.uint8), metadata=metadata)
+    clock[0] = 10_000_000                       # 10 ms later: inside the 100 ms interval
+    assert not tap.offer(np.zeros((8, 8, 3), dtype=np.uint8), metadata=metadata)
+    assert len(built) == 1, "a rate-limited frame must not pay for its metadata"
+    assert tap.take_packet()[1] == {'n': 1}
+
+
+def test_the_encoder_is_woken_by_an_offer_not_a_poll():
+    tap = PreviewTap(fps=0)
+    assert not tap.wait_for_frame(0.01)
+    tap.offer(np.zeros((8, 8, 3), dtype=np.uint8))
+    assert tap.wait_for_frame(0.01)
+    tap.take_packet()
+    assert not tap.wait_for_frame(0.01), "taking the frame re-arms the wait"

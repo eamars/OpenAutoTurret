@@ -193,3 +193,25 @@ class LoresAsk(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FullPictureCopy(unittest.TestCase):
+    """2026-10-03: the 1080p copy was most of the per-frame copy time, and nothing read it."""
+
+    def test_with_a_leg_and_no_preview_the_full_picture_is_not_copied(self):
+        device = FakeCamera()
+        owner = CameraOwner(device, stream_size=(1920, 1080), inference_stream="lores",
+                            inference_size=(640, 360), copy_main=False)
+        frame = owner.next_frame()
+        self.assertEqual(device.names.count("main"), 0)
+        self.assertEqual(device.names.count("lores"), 1)
+        self.assertIsNone(frame.image)
+        self.assertEqual(frame.inference_image.stream, "lores")
+        self.assertTrue(frame.usable)
+
+    def test_without_a_leg_the_full_picture_is_always_copied(self):
+        device = FakeCamera()
+        owner = CameraOwner(device, stream_size=(1920, 1080), copy_main=False)
+        frame = owner.next_frame()
+        self.assertEqual(device.names.count("main"), 1, "it is the only picture inference has")
+        self.assertEqual(frame.image.stream, "main")

@@ -88,6 +88,11 @@ class TelemetryHub:
         """Called on the controld-client reader thread. Non-blocking: a slow
         client's full queue causes its next frame to be dropped, never a
         block of the reader or the control path."""
+        with self._lock:
+            if not self._sessions:
+                # No browser: nothing to serialise, decorate or queue. /api/state builds its own
+                # copy from the client's latest frame when it is asked.
+                return
         data = telemetry_to_json(t)
         decorate = getattr(self, "decorate", None)
         if decorate is not None:
@@ -146,6 +151,23 @@ IMU_MERGE_INTERVAL_S = 0.5     # see decorate(); the HUD polls at 1 Hz anyway
 STREAM_ROLES = ("wide", "detail")
 
 
+_json_file_cache: dict = {}
+
+
+def _read_json_cached(path: str):
+    """Parse a small JSON file only when it changed. The stream manifest and the inference health
+    file are rewritten about once a second and were parsed on every telemetry frame (15 Hz)."""
+    st = os.stat(path)
+    key = (st.st_mtime_ns, st.st_size, st.st_ino)
+    hit = _json_file_cache.get(path)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.loads(handle.read())
+    _json_file_cache[path] = (key, payload)
+    return payload
+
+
 def _read_streams(manifest_path: str) -> tuple:
     """Read the named-stream manifest visiond publishes. Returns (streams, why_absent).
 
@@ -155,8 +177,7 @@ def _read_streams(manifest_path: str) -> tuple:
     if not manifest_path:
         return {}, "no manifest configured (OTA_VISION_STREAM_MANIFEST is unset)"
     try:
-        with open(manifest_path, "r", encoding="utf-8") as handle:
-            payload = json.loads(handle.read())
+        payload = _read_json_cached(manifest_path)
     except FileNotFoundError:
         return {}, f"no manifest published yet at {manifest_path}"
     except (OSError, ValueError) as exc:
@@ -310,8 +331,7 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
         path = (os.environ.get("OTA_INFERENCE_HEALTH", "").strip()
                 or (str(config.stream_manifest).rsplit("/", 1)[0] + "/inference_health.json"))
         try:
-            with open(path, encoding="utf-8") as handle:
-                health = json.loads(handle.read())
+            health = dict(_read_json_cached(path))
             age_ms = (time.time_ns() - int(health.get("updated_ns") or 0)) / 1e6
             health["present"] = True
             health["age_ms"] = round(age_ms, 1)

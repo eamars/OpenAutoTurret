@@ -639,7 +639,8 @@ int main(int argc, char** argv) {
   TimingStats work_stats;
   // From here on this thread is the 200 Hz control loop (docs/operations/os-setup.md).
   lock_process_memory();
-  apply_thread_class("control", ThreadClass::Motor, rt_priority::kControl);
+  // The main thread keeps the process name: the launcher and tools find controld by it.
+  apply_thread_class("controld", ThreadClass::Motor, rt_priority::kControl);
   TimeNs t_prev = now_monotonic_ns();
   // Wake-ups on a fixed grid: each cycle is due one period after the previous one was due, not one
   // period after it woke, so a late wake-up is not carried into every later cycle.

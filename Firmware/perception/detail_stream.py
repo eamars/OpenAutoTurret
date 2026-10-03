@@ -182,6 +182,8 @@ class DetailStreamAnnouncer:
         self._thread.start()
 
     def _run(self) -> None:
+        from common.thread_class import lower_this_thread
+        lower_this_thread()
         while not self._stop.wait(self.interval_ns / 1e9):
             self.publish_once()
 

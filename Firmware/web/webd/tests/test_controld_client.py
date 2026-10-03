@@ -117,8 +117,10 @@ def test_a_frame_that_cannot_be_parsed_is_counted_and_said_out_loud(caplog):
         def __init__(self, frames):
             self._frames = list(frames)
 
-        def recv(self, _n):
-            return self._frames.pop(0) if self._frames else b""
+        def recv_into(self, buffer):
+            frame = self._frames.pop(0) if self._frames else b""
+            buffer[:len(frame)] = frame
+            return len(frame)
 
     good = b'{"type":"telemetry","ts_ns":1,"phase":"hold"}'
     bad = b'{"type":"telemetry","ts_ns":1,"blackbox":{"a":1]}'

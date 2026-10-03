@@ -40,10 +40,17 @@ class JpegPreviewWorker:
         return output.getvalue()
 
     def _run(self) -> None:
+        from common.thread_class import lower_this_thread
+        # Display work: it yields to the thread that runs inference and tracking.
+        lower_this_thread()
+        wait = getattr(self.tap, "wait_for_frame", None)
         while not self._stop.is_set():
             frame, metadata = self.tap.take_packet()
             if frame is None:
-                self._stop.wait(.01)
+                if wait is not None:
+                    wait(.1)
+                else:
+                    self._stop.wait(.01)
                 continue
             temporary = None
             try:
