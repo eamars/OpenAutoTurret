@@ -206,6 +206,7 @@ class Telemetry:
     temp_pitch_c: Optional[float] = None
     temp_yaw_c: Optional[float] = None
     motor_overtemp_c: float = 0.0
+    temp_raw_yaw: int = -1                  # GM6020 raw thermal byte (about deg C); -1 = none yet
     payload_profile_status: str = "no_profile"  # ok|no_profile|mismatch|error
     payload_derated: bool = False           # motion limits derated (mismatch)
     payload_check_active: bool = False      # in-loop verification running

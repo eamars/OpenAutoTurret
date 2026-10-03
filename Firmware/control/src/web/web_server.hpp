@@ -193,6 +193,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"temp_pitch_c\":" << json_finite_or_null(s.temp_pitch_c)
      << ",\"temp_yaw_c\":" << json_finite_or_null(s.temp_yaw_c)
      << ",\"motor_overtemp_c\":" << s.motor_overtemp_c
+     << ",\"temp_raw_yaw\":" << s.temp_raw_yaw
      << ",\"can_available\":" << (s.can_available ? "true" : "false")
      << ",\"can_kind\":\"" << json_escape(s.can_kind) << "\""
      << ",\"can_device\":\"" << json_escape(s.can_device) << "\""

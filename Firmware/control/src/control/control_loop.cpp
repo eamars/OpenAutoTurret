@@ -3431,6 +3431,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       snap.temp_pitch_c = last_temp_[ix(AxisId::Pitch)];
       snap.temp_yaw_c = last_temp_[ix(AxisId::Yaw)];
       snap.motor_overtemp_c = cfg_.motor_overtemp_c;
+      snap.temp_raw_yaw = last_temp_raw_valid_[ix(AxisId::Yaw)] ? last_temp_raw_[ix(AxisId::Yaw)] : -1;
       snap.speed_overridden = speed_override_patrol_wide_deg_s_ > 0 ||
                               speed_override_patrol_detail_deg_s_ > 0 ||
                               speed_override_track_deg_s_ > 0;

@@ -521,6 +521,9 @@ struct TelemetrySnapshot {
   double temp_pitch_c = std::numeric_limits<double>::quiet_NaN();
   double temp_yaw_c = std::numeric_limits<double>::quiet_NaN();
   double motor_overtemp_c = 0;
+  // The GM6020 reports a raw thermal byte (about deg C), not a calibrated temperature, so yaw has no
+  // temp_yaw_c; its byte is published as-is, -1 until one arrives.
+  int temp_raw_yaw = -1;
   // --- v3 §50/§52: the mode, and what the last command actually did --------
   // Names, not enums: these cross a process boundary into a browser, and a
   // renumbered enum on one side is a silent wrong label on the other.

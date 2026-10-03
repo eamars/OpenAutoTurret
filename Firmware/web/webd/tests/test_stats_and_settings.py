@@ -86,6 +86,9 @@ class Builders(unittest.TestCase):
     def test_motor_temperatures_show_against_the_trip(self) -> None:
         axes = self._stats({"temp_yaw_c": 41.4, "temp_pitch_c": 37.0, "motor_overtemp_c": 75})["AXES"]
         self.assertEqual(axes["MOTOR TEMP YAW / PITCH"], "41°C / 37°C  (trip 75°C)")
+        raw = self._stats({"temp_yaw_c": None, "temp_raw_yaw": 30, "temp_pitch_c": 28.6})["AXES"]
+        self.assertEqual(raw["MOTOR TEMP YAW / PITCH"], "≈30°C (raw) / 29°C",
+                         "the GM6020's byte is shown as raw, not as a calibrated temperature")
         unknown = self._stats({"temp_yaw_c": None})["AXES"]["MOTOR TEMP YAW / PITCH"]
         self.assertTrue(unknown.startswith("-- / --"), "no reading is not a cold motor")
 
@@ -112,6 +115,15 @@ class PageWiring(unittest.TestCase):
         self.assertEqual(HUD_HTML.count('id="health"'), 1)
         # Folded hides only healthy chips: an alert is never folded away.
         self.assertIn("#strip.folded #health .chip.ok { display: none; }", HUD_CSS)
+
+    def test_a_hailo_adapter_by_any_name_is_healthy(self) -> None:
+        # The station's adapter is "hailo_pose"; testing for exactly "hailo" kept the NN chip amber.
+        self.assertIn("/^hailo/.test(", HUD_JS)
+        self.assertNotIn('.toLowerCase() === "hailo"', HUD_JS)
+
+    def test_an_unhealthy_imu_keeps_its_words(self) -> None:
+        # "NO SAMPLES" was cut to "NO"; only the healthy FRESH state is shortened to one word.
+        self.assertIn('st === "ok" ? lbl.split(" ")[0] : lbl', HUD_JS)
 
     def test_settings_rows_send_set_speed(self) -> None:
         self.assertIn('data-cmd="set_speed"', HUD_JS)

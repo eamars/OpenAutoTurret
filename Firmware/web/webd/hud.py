@@ -486,7 +486,10 @@ function hudStatsSections(t) {
       deg(typeof t.v_pitch_rad_s === "number" ? t.v_pitch_rad_s * HUD_PITCH_UP : null) + " DEG/S"],
     ["PITCH TO LIMIT", deg(t.soft_limit_distance_pitch_rad) + " DEG"],
     // Casual inspection (owner, 2026-10-03): the drives' own sensors, against the supervisor's trip.
-    ["MOTOR TEMP YAW / PITCH", n(t.temp_yaw_c, 0, "°C") + " / " + n(t.temp_pitch_c, 0, "°C") +
+    // The GM6020 sends a raw byte, about deg C, which the project does not call calibrated.
+    ["MOTOR TEMP YAW / PITCH", (typeof t.temp_yaw_c === "number" ? n(t.temp_yaw_c, 0, "°C")
+        : (typeof t.temp_raw_yaw === "number" && t.temp_raw_yaw >= 0
+           ? "≈" + t.temp_raw_yaw + "°C (raw)" : "--")) + " / " + n(t.temp_pitch_c, 0, "°C") +
       (typeof t.motor_overtemp_c === "number" && t.motor_overtemp_c > 0
         ? "  (trip " + t.motor_overtemp_c.toFixed(0) + "°C)" : "")],
     ["YAW CURRENT", n(t.current_a_yaw, 2, " A")],
@@ -1469,13 +1472,17 @@ function render(t) {
     const st = lbl.indexOf("FRESH") === 0 ? "ok" : "amber";
     // State, not details (owner, 2026-09-29): the row is a glance, and rate / accuracy / the sensor's
     // own attitude are still on the wire and in the drawer for anyone who asks.
-    hs.appendChild(chip("IMU", st, lbl.split(" ")[0]));
+    // FRESH alone is the glance; any other state keeps its words ("NO SAMPLES" read as "NO" on
+    // 2026-10-03, the day the folded bar made the chip pop out).
+    hs.appendChild(chip("IMU", st, st === "ok" ? lbl.split(" ")[0] : lbl));
   }
   {
     // Which network is actually producing the tracks -- the fact the whole Hailo switch turns on, and
     // the one thing a station running the other backend would otherwise hide behind a working picture.
     const nf = t.inference || {};
-    const state = !nf.present ? "red" : (nf.fresh ? (String(nf.adapter || "").toLowerCase() === "hailo" ? "ok" : "amber") : "amber");
+    // Any Hailo adapter is the accelerator in use: the station's is "hailo_pose", and a test for exactly
+    // "hailo" kept this chip amber on a healthy station (owner's screenshot, 2026-10-03).
+    const state = !nf.present ? "red" : (nf.fresh ? (/^hailo/.test(String(nf.adapter || "").toLowerCase()) ? "ok" : "amber") : "amber");
     // Only the backend's name (owner, 2026-09-29): HAILO or IMX500. The model id, the leg it reads and
     // the produced-versus-kept counters stay on the wire, where I read them to diagnose exactly what
     // is wrong tonight (emitted 91 671 frames' worth, tracks 0), without spending the operator's row.
