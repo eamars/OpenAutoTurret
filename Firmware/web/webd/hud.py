@@ -193,6 +193,9 @@ function hudStateLabel(o) {
   if (o.supervisory === "idle") return { line1: "SHUTDOWN", line2: "MOTORS OFF · MENU › HOME", named: true };
   // At the park pose the station is homed and holding; the line names the next steps.
   if (o.supervisory === "parked") return { line1: "PARKED", line2: "AUTO · MANUAL · SHUTDOWN", named: true };
+  // A mode selected on the stop: the park lifts pitch back into its envelope first, then the mode runs.
+  if (o.supervisory === "parking" && o.rest === "lifting")
+    return { line1: "LEAVING PARK", line2: "PITCH OFF THE REST STOP", named: true };
   if (o.supervisory && o.supervisory !== "hold") return {
     line1: String(o.supervisory).toUpperCase(), line2: "", named: true };
 
@@ -377,7 +380,7 @@ function hudDrawerActions(name, t) {
     // red for stop and fault, so the confirm state - not colour alone - is what signals danger here.
     const phase = String(t.phase || "");
     const rest = String(t.rest_park || "");
-    const parking = rest === "moving" || rest === "touching";
+    const parking = rest === "moving" || rest === "touching" || rest === "lifting";
     const busy = phase === "homing" || phase === "recovering";
     const home = busy
       ? { kind: "gated", note: phase === "recovering" ? "RECOVERING THE DRIVES…" : "HOMING…" }
@@ -385,7 +388,8 @@ function hudDrawerActions(name, t) {
       : { kind: "danger", note: phase === "fault" ? "Recover the drives, then home both axes"
           : phase === "idle" ? "Start: home, then AUTO ROAM" : "Re-home both axes, then AUTO ROAM" };
     const homed = phase === "hold" || phase === "parked" || phase === "parking";
-    const park = parking ? { kind: "gated", note: rest === "touching" ? "TOUCHING THE REST STOP…" : "PARKING…" }
+    const park = parking ? { kind: "gated", note: rest === "touching" ? "TOUCHING THE REST STOP…"
+                                                : rest === "lifting" ? "LEAVING THE PARK…" : "PARKING…" }
       : rest === "parked" && t.rest_park_on_stop === true ? { kind: "current", note: "PARKED · ANY MODE LEAVES" }
       : rest === "parked" ? { kind: "danger", note: "Short of the rest stop: touch it again" }
       : phase === "hold" ? { kind: "danger", note: "Yaw to 0, pitch onto its rest stop, hold" }
@@ -1442,7 +1446,7 @@ function render(t) {
 
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
-                             jogging: !!t.manual_lease_active });
+                             rest: t.rest_park, jogging: !!t.manual_lease_active });
   if (window.otaPipNoteStreams) window.otaPipNoteStreams(t.video_streams);
   $("mode-block").innerHTML =
     '<div class="m1">' + st.line1 + '</div>' +

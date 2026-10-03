@@ -88,7 +88,7 @@ actions. Each one works from wherever it is offered, and each asks for two press
 | Action | What it does | Offered from | Ends in |
 |---|---|---|---|
 | **HOME** | Recovers whatever latched (yaw guard trip, pitch watchdog inhibit, pitch servo fault, a drive fault the drive itself has cleared), proves fresh, healthy feedback on both axes, then runs homing. | Any state except while homing or recovering already | The ready pose, then **AUTO ROAM**, as at power-up |
-| **PARK** | Yaw to 0 by the nearest whole turn. Pitch first goes to a pose about 6° inside its soft limit, then onto its **rest stop** at 3°/s (homing's fine-approach speed). Both axes are then held there, energised. | A homed turret | phase `parked`. Park is a scripted move, not a state to stay in (owner, 2026-10-03): the page's **Auto**, **Manual** and MENU **Shutdown** are one press each from there. MANUAL first brings pitch off the stop to the ready pose (the stop is outside the soft envelope), then the DPAD is back. |
+| **PARK** | Yaw to 0 by the nearest whole turn. Pitch first goes to a pose about 6° inside its soft limit, then onto its **rest stop** at 3°/s (homing's fine-approach speed). Both axes are then held there, energised. | A homed turret | phase `parked`. Park is a scripted move, not a state to stay in (owner, 2026-10-03): the page's **Auto**, **Manual** and MENU **Shutdown** are one press each from there. A mode chosen on the stop first **lifts** pitch back to the approach pose, inside its envelope (`rest_park` `lifting`, the page reads LEAVING PARK), and then runs: AUTO roams, MANUAL returns to the ready pose with the DPAD back. |
 | **SHUTDOWN** | PARK, then both motors off. If the pitch stopped short of the stop, it touches the stop again first, so the payload is released resting on it. | A homed or parked turret | phase `idle`, motors off. **Only HOME** starts it again. |
 
 - **The rest stop** is the camera-up end. That is the raw pitch **minimum**, measured by homing at
@@ -99,10 +99,15 @@ actions. Each one works from wherever it is offered, and each asks for two press
 - **What isn't a fault.** If the pitch stalls more than 2° short of the stop, goes past the measured
   stop, or runs out of time, the park holds where it is and says so (rule 2 above). STOP MOTION
   during the move gives an ordinary MANUAL hold in place. STOP MOTION on the stop holds there.
-- **Live progress** is in telemetry `rest_park` (`moving`, `touching`, `parked`, `releasing`) and
-  `rest_park_on_stop`.
-- **The process-exit stop is unchanged.** `run_application.sh stop` still runs the older
-  `start_parking` path. The `shutdown.*_park_*` keys now serve only that path.
+- **Leaving the stop.** The lift runs at up to 10°/s and ends when pitch has settled at the approach
+  pose. STOP MOTION during it holds where it is, still parked; PARK or SHUTDOWN during it touches the
+  stop again. If pitch does not move for a second, or misses its time budget, the park holds where it
+  is and refuses the mode with the reason (a persistent non-hazard, rule 2).
+- **Live progress** is in telemetry `rest_park` (`moving`, `touching`, `parked`, `lifting`,
+  `releasing`) and `rest_park_on_stop`.
+- **A process stop runs SHUTDOWN** when the turret is homed or anywhere in the park (see "Two
+  states" below). The older `start_parking` path and its `shutdown.*_park_*` keys remain only as the
+  fallback when that cannot run.
 - **Recover-only.** `recover_motors` is still accepted by controld, but it is no longer in the menu:
   HOME does the recovery itself.
 - **The Park fault itself** was a clock-ordering bug in `MixedCanMotorBackend`. A legacy speed or
@@ -114,6 +119,35 @@ actions. Each one works from wherever it is offered, and each asks for two press
 - **Recovering the pitch.** A drive that reports its own fault is cleared with the CyberGear fault
   clear, which is a STOP. A drive that is still holding speed zero is re-armed without being
   released (`CyberGearSystem::finish_axis_recovery`).
+
+### The pitch envelope's boundary: position and direction (owner, 2026-10-03)
+
+The rest stop lies outside pitch's soft envelope by design, and the safety layers had been written as
+if the axis never left it. On 2026-10-03 Auto from the park left pitch on the stop: every one-count
+flicker of the encoder read as motion past a boundary already behind it, the supervisor chattered
+BRAKE five times a second, and no jog or mode could bring pitch back. A jog that finally reached the
+pitch servo's engage line tripped its end-stop guard one count later and faulted the station. The
+rule every layer now follows:
+
+- **Back in is always open; further out is judged.** The stop check uses the boundary the axis is
+  moving toward. Moving into the envelope passes. Moving out of it fails once the motion is real.
+- **"Moving" means above the measured noise.** One encoder count steps the velocity estimate by
+  about 0.0036 rad/s on pitch, and at rest on its stop the worst reading was 0.0044 rad/s. Below
+  `velocity_noise_floor_rad_s` (pitch 0.5°/s, yaw 1°/s) the axis counts as still. A slower reading
+  must last 50 ms to count; anything above four floors counts at once. The old gate, 1e-3 rad/s,
+  sat under a single count.
+- **A stop is never a move.** Past a soft limit a brake comes to rest where the axis is
+  (`SafetyEnvelope::constrain_stop`). Before, clamping the rest point to the limit made every BRAKE
+  at the rest stop a 5° move back in. The brake's travel no longer includes the safety margin
+  either: an axis at rest was being sent 0.05 rad by its own brake.
+- **Engaging and tripping are different lines.** The pitch servo engages only within half its guard
+  band past the soft limit, and trips at the full band: 46 counts apart on the station.
+- **Only contact moves go outward past the limit:** homing, and the park's touch and hold on the
+  rest stop. Everything else, including the lift, is judged by the rule above.
+
+Simulation tests now run on an encoder that reads whole counts and flickers (`SimMotorBackend::set_encoder`),
+and assert where pitch ends up and that no BRAKE fired, not the mode labels
+(`test_rest_park.cpp`, `RestParkBoundary.*`).
 
 ## Two states, Homed or Shutdown, and the boot (owner ruling, 2026-10-03)
 

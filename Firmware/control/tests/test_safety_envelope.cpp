@@ -131,6 +131,29 @@ TEST(SafetyEnvelope, EmergencyStopTargetClampsToBoundary) {
   EXPECT_GT(t2, 0.0);
 }
 
+// Position and direction (station, 2026-10-03): past a soft limit a stop comes to rest where the axis
+// is or further in its own direction of travel, never dragged back across the limit. Clamping the
+// rest point to the limit turned every BRAKE at the rest stop into a 5 deg move.
+TEST(SafetyEnvelope, AStopPastTheSoftLimitIsNotAMove) {
+  const auto env = make_env();
+  const auto lim = make_limits();             // soft [-0.9, 0.9]
+  // At rest past the low limit: the stop is right here.
+  EXPECT_DOUBLE_EQ(env.emergency_stop_target(-0.95, 0.0, lim), -0.95);
+  // Moving further out: it stops here rather than travelling the braking distance, and is not
+  // pulled back to -0.9 either.
+  EXPECT_DOUBLE_EQ(env.emergency_stop_target(-0.95, -0.5, lim), -0.95);
+  // Moving back in: it may stop where its braking takes it, inward.
+  const double t = env.emergency_stop_target(-0.95, 0.5, lim);
+  EXPECT_GT(t, -0.95);
+  EXPECT_LE(t, lim.q_soft_max_rad);
+  // Inside, unchanged from constrain_reference.
+  EXPECT_DOUBLE_EQ(env.constrain_stop(0.8, 5.0, lim), lim.q_soft_max_rad);
+  EXPECT_DOUBLE_EQ(env.constrain_stop(0.0, 0.3, lim), 0.3);
+  // And the feasibility check is direction-aware past the limit: in is feasible, out is not.
+  EXPECT_TRUE(env.stop_feasible(-0.95, 0.5, lim));
+  EXPECT_FALSE(env.stop_feasible(-0.95, -0.5, lim));
+}
+
 // §48: randomized positions/velocities. Core invariant — whenever the envelope
 // declares a stop feasible, the resulting stop position stays inside the HARD
 // limits (it never permits reaching a boundary the brake cannot avoid).

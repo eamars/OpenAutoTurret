@@ -24,6 +24,7 @@
 //   Layer 4 — a motor/CAN hard fault may require disabling the motor.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 #include "common/types.hpp"
@@ -135,6 +136,10 @@ class SafetyEnvelope {
 
   // Layer 2: can the axis still stop before the nearer soft boundary?
   // When limits are not valid there is nothing to check (returns true).
+  // Position and direction: the boundary that counts is the one the axis is moving toward, so an
+  // axis past its soft limit and moving back in is judged against the far side and passes, while
+  // the same axis moving further out has a negative budget and fails. Whether it is moving at all
+  // is the caller's velocity (the control loop passes zero under its measured noise floor).
   bool stop_feasible(double q_rad, double v_rad_s, const AxisLimits& lim) const {
     if (!lim.valid) return true;
     // A (near) stationary axis is already stopped; it cannot cross a boundary
@@ -169,14 +174,30 @@ class SafetyEnvelope {
     return std::max(lim.q_soft_min_rad, std::min(lim.q_soft_max_rad, q_ref_rad));
   }
 
+  // Where a stop that starts at q_from may come to rest: the soft limits may shorten it, never turn
+  // it into a move. Inside the envelope this is constrain_reference. An axis already past a soft
+  // limit (a rest stop, the end of homing) stops where it is: clamping its rest point to the limit
+  // would command a drive back across the boundary under the name of a brake -- on the station,
+  // 2026-10-03, a 5 deg move that each BRAKE started and the next ALLOW abandoned.
+  double constrain_stop(double q_from_rad, double target_rad, const AxisLimits& lim) const {
+    if (!lim.valid) return target_rad;
+    const double lo = std::min(lim.q_soft_min_rad, q_from_rad);
+    const double hi = std::max(lim.q_soft_max_rad, q_from_rad);
+    return std::max(lo, std::min(hi, target_rad));
+  }
+
   // Layer 3: the position to command for a controlled maximum-safe stop from
   // (q, v): where the axis would land under the braking model, clamped to the
-  // soft limits. The caller commands this as the reference with a low speed
-  // limit to bring the axis to rest before the boundary.
+  // soft limits (constrain_stop). The caller commands this as the reference
+  // with a low speed limit to bring the axis to rest before the boundary.
+  // The travel is the braking distance without the margin: the margin is room the feasibility
+  // check keeps in reserve, not distance to cover. With it, an axis at rest (v = +0) was sent
+  // margin_rad (0.05 rad on the station) in the positive direction by its own brake.
   double emergency_stop_target(double q_rad, double v_rad_s,
                                const AxisLimits& lim) const {
-    const double target = q_rad + std::copysign(stop_distance(v_rad_s), v_rad_s);
-    return constrain_reference(target, lim);
+    const double travel = std::max(0.0, stop_distance(v_rad_s) - p_.margin_rad);
+    const double target = q_rad + std::copysign(travel, v_rad_s);
+    return constrain_stop(q_rad, target, lim);
   }
 
  private:

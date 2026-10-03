@@ -240,7 +240,11 @@ TEST(ReferenceServo, PitchEngagesOnlyInsideItsEnvelope) {
   EXPECT_FALSE(pitch_servo_may_engage(r, -0.8146, 0.035));
   r.q_min = -1.4236; r.q_max = -0.2032;   // the soft limits homing established that day
   EXPECT_TRUE(pitch_servo_may_engage(r, -0.8146, 0.035));
-  EXPECT_TRUE(pitch_servo_may_engage(r, -1.4236 - 0.03, 0.035)) << "inside the guard band";
+  EXPECT_TRUE(pitch_servo_may_engage(r, -1.4236 - 0.015, 0.035)) << "inside the guard band's inner half";
+  // Station 2026-10-03 22:26: engaged at -1.45819, one count inside the trip line at -1.4586, and
+  // tripped on the next count. Engaging and tripping need room between them.
+  EXPECT_FALSE(pitch_servo_may_engage(r, -1.45819, 0.035)) << "one count from the trip line";
+  EXPECT_FALSE(pitch_servo_may_engage(r, -1.4236 - 0.03, 0.035)) << "outer half: the legacy path brings it in";
   EXPECT_FALSE(pitch_servo_may_engage(r, -1.4236 - 0.04, 0.035)) << "beyond it: would only trip";
   EXPECT_FALSE(pitch_servo_may_engage(r, -0.2032 + 0.04, 0.035));
   r.q_max = std::nan("");

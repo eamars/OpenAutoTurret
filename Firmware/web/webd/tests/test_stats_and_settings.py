@@ -82,6 +82,12 @@ class Builders(unittest.TestCase):
         self.assertIn("AUTO", label["line2"])
         self.assertIn("MANUAL", label["line2"])
 
+    def test_leaving_the_park_says_so(self) -> None:
+        # A mode chosen on the stop lifts pitch back into its envelope before the mode runs.
+        label = self._run("T.hudStateLabel(t)", {"supervisory": "parking", "rest": "lifting", "mode": "MANUAL"})
+        self.assertEqual(label["line1"], "LEAVING PARK")
+        self.assertIn("REST STOP", label["line2"])
+
     def test_both_buses_and_bus_off_are_shown(self) -> None:
         stats = self._stats({"can_buses": [
             {"device": "can0", "up": True, "state": 0, "rx_frames": 10, "rx_error_frames": 0,

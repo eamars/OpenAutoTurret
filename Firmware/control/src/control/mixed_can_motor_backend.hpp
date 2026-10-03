@@ -122,11 +122,18 @@ inline double apply_yaw_speed_ceiling(double requested_rad_s) {
 // refused and the legacy path keeps the axis this tick: on 2026-10-02 the first tick after
 // homing arrived before the limits were valid, the servo engaged at -0.81 rad against an empty
 // envelope ([-0.035, +0.035]) and the guard faulted the station.
+//
+// The engage line keeps half the guard band clear of the trip line. On 2026-10-03 22:26 a jog
+// brought pitch up from its rest stop, the servo engaged at -1.45819 rad with the guard at
+// -1.4586, and one encoder count later (0.38 mrad) the guard read -1.4586 and faulted the station:
+// one threshold used both as "may take over" and "has gone too far", with no room between them.
+// Half the band is 46 counts on the station; an axis between the two lines stays with the legacy
+// path, which brings it in.
 inline bool pitch_reference_has_envelope(const MotorBackend::ServoReference& r) {
   return std::isfinite(r.q_min) && std::isfinite(r.q_max) && r.q_max > r.q_min;
 }
 inline bool pitch_servo_may_engage(const MotorBackend::ServoReference& r, double q_axis, double guard) {
-  return pitch_reference_has_envelope(r) && q_axis >= r.q_min - guard && q_axis <= r.q_max + guard;
+  return pitch_reference_has_envelope(r) && q_axis >= r.q_min - 0.5 * guard && q_axis <= r.q_max + 0.5 * guard;
 }
 
 class MixedCanMotorBackend final : public MotorBackend {

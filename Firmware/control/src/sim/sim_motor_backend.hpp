@@ -44,6 +44,16 @@ class SimMotorBackend : public MotorBackend {
     axes_[ix(a)].q = q;
     axes_[ix(a)].v = 0.0;
   }
+  // The encoder as the station reads it (2026-10-03): positions in whole counts, and an axis holding
+  // still flickers between neighbouring counts. The pitch CyberGear reports 16 bits over +-4 pi
+  // (0.38 mrad); held on its stop it flipped one count every few cycles. A plant that reports exact
+  // positions hides every threshold that sits below that noise, which is how a 1e-3 rad/s at-rest
+  // gate passed in simulation and chattered BRAKE on the station. `dither_counts` is the peak of a
+  // deterministic noise added before rounding; 0.6 gives the station's occasional one-count flips.
+  void set_encoder(AxisId a, double quantum_rad, double dither_counts) {
+    axes_[ix(a)].quantum = quantum_rad;
+    axes_[ix(a)].dither_counts = dither_counts;
+  }
   void set_feedback_ok(AxisId a, bool ok) { axes_[ix(a)].feedback_ok = ok; }
   void set_faults(AxisId a, uint16_t f) { axes_[ix(a)].faults = f; }
   void set_temp(AxisId a, double t) { axes_[ix(a)].temp_c = t; }
@@ -125,7 +135,7 @@ class SimMotorBackend : public MotorBackend {
     AxisSnapshot s;
     s.has_feedback = ax.feedback_ok;
     s.rx_ns = now_ns;
-    s.q_rad = ax.q;
+    s.q_rad = measured(ax, now_ns);
     s.v_rad_s = ax.v;
     s.torque_nm = ax.torque;
     s.temp_c = ax.temp_c;
@@ -159,6 +169,19 @@ class SimMotorBackend : public MotorBackend {
   bool recovery_begin_pending_ = false;
   bool pre_home_recovery_ = false;
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
+  struct Axis;
+  // The encoder reading of the true position (set_encoder). The noise is a hash of the sample time,
+  // so one instant always reads the same and a test run is repeatable.
+  static double measured(const Axis& ax, TimeNs now_ns) {
+    if (!(ax.quantum > 0)) return ax.q;
+    uint64_t z = static_cast<uint64_t>(now_ns) + 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    const double u = static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);  // [0, 1)
+    const double noise = (2.0 * u - 1.0) * ax.dither_counts * ax.quantum;
+    return std::round((ax.q + noise) / ax.quantum) * ax.quantum;
+  }
   // Advance the plant by dt_. Models a position-mode CyberGear: the position
   // converges smoothly to the reference (first-order, tau ~ 50 ms) subject to
   // the speed limit, so moves settle (no sustained oscillation). Pushing into a
@@ -241,6 +264,8 @@ class SimMotorBackend : public MotorBackend {
     uint16_t faults = 0;
     bool feedback_ok = true;
     bool discovery_ok = true;
+    double quantum = 0.0;        // set_encoder: 0 reports the exact position
+    double dither_counts = 0.0;
   };
 
   double dt_;

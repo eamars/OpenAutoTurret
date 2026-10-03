@@ -101,6 +101,14 @@ class ControlLoop {
     double a_brake_rad_s2 = 60.0 * kDeg2Rad;
     double j_brake_rad_s3 = 300.0 * kDeg2Rad;
     double stop_margin_rad = 0.05;
+    // What the position-derived velocity (v_est_) reads on an axis that is holding still, per axis
+    // [pitch, yaw]. Below it the supervisor's boundary check counts the axis at rest. One encoder
+    // count steps v_est_ by about count / kVestTauS: the pitch CyberGear's 0.38 mrad gives 0.0036
+    // rad/s, and on its rest stop (station, 2026-10-03, 5 s trip trace) the worst reading was 0.0044
+    // rad/s, p99 0.0031. 0.5 deg/s is twice that worst. The GM6020's 0.77 mrad steps twice as far, so
+    // yaw's is 1 deg/s. The gate it replaced, 1e-3 rad/s, sat under a single count: every flicker of
+    // a pitch at rest past its soft limit read as motion past the boundary.
+    std::array<double, kAxisCount> velocity_noise_floor_rad_s{0.5 * kDeg2Rad, 1.0 * kDeg2Rad};
     // Safety supervisor / watchdogs (§38/§39).
     int feedback_max_age_ms = 100;
     int deadline_max_us = 2000;
@@ -443,9 +451,10 @@ class ControlLoop {
   // Whether the web's SHUTDOWN (park on the rest stop, then motors off) can start from here: the same
   // test begin_rest_park makes. Not homed(), which stays false on a continuous-yaw station -- the
   // reason a process stop on the station skipped the park on 2026-10-03 while the simulator, whose
-  // yaw is bounded, parked.
+  // yaw is bounded, parked. Any stage of the park itself takes a Shutdown too (a lift touches the
+  // stop again first).
   bool rest_shutdown_available() const {
-    return (phase_ == Phase::Hold && position_ready()) || phase_ == Phase::Parked;
+    return (phase_ == Phase::Hold && position_ready()) || rest_park_.stage != RestPark::Off;
   }
   const std::array<AxisLimits, kAxisCount>& limits() const { return limits_; }
   const std::array<AxisLogicalModel, kAxisCount>& models() const { return models_; }
@@ -589,8 +598,9 @@ class ControlLoop {
   // ready-pose hold path, its servos and every guard unchanged -- to a pose a few degrees short of the
   // rest stop. Touch (Phase::Parking) creeps pitch onto the stop at touch speed with the yaw held.
   // Holding (Phase::Parked) keeps both there, energised. Release (Phase::Parking) de-energises both
-  // and ends in Phase::Idle.
-  enum class RestPark { Off, Move, Touch, Holding, Release };
+  // and ends in Phase::Idle. Lift (Phase::Parking) is the way out: a mode selected on the stop
+  // brings pitch back to the approach pose, inside its envelope, and only then runs.
+  enum class RestPark { Off, Move, Touch, Holding, Release, Lift };
   struct RestParkState {
     RestPark stage = RestPark::Off;
     bool shutdown = false;   // de-energise once on the stop
@@ -598,10 +608,17 @@ class ControlLoop {
     double yaw_rad = 0, pitch_approach_rad = 0, pitch_stop_rad = 0, pitch_hold_rad = 0;
     TimeNs since_ns = 0, settled_since_ns = 0, stalled_since_ns = 0, last_disable_ns = 0;
     double touch_from_rad = 0;
+    double lift_from_rad = 0, lift_speed_rad_s = 0;
+    std::string then_command, then_arg;  // Lift: the mode command that runs once pitch is in
   } rest_park_;
+  // Lift: up to 10 deg/s, reached at 20 deg/s^2 from the stop, slowing into the approach pose.
+  static constexpr double kRestLiftSpeedRadS = 10.0 * kDeg2Rad;
+  static constexpr double kRestLiftAccelRadS2 = 20.0 * kDeg2Rad;
   bool begin_rest_park(bool shutdown, std::string& why);
   void end_rest_park(const char* why);
-  void leave_rest_park_to_hold();
+  void begin_rest_lift(const std::string& command, const std::string& arg);
+  void finish_rest_lift(double pitch_q);
+  void hold_rest_park_here(const AxisSnapshot& pitch, TimeNs now_ns);
   // Outputs for Touch / Holding / Release; false when step 6 must command instead (Disable, FaultStop).
   bool step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, TimeNs period_ns);
   void rest_park_hold_yaw(const AxisSnapshot& yaw, TimeNs now_ns, TimeNs period_ns);
@@ -635,6 +652,12 @@ class ControlLoop {
   std::array<TimeNs, kAxisCount> v_est_t_prev_{};
   std::array<double, kAxisCount> v_est_q_prev_{};
   std::array<double, kAxisCount> v_est_{};
+  // The velocity the supervisor's boundary check judges (supervised_velocity): v_est_ once it has
+  // left the noise floor for kMotionPersistNs, or at once above kMotionCertainFloors x the floor.
+  static constexpr TimeNs kMotionPersistNs = 50'000'000;
+  static constexpr double kMotionCertainFloors = 4.0;
+  std::array<TimeNs, kAxisCount> motion_since_ns_{};
+  double supervised_velocity(int axis, TimeNs now_ns);
   std::array<double, kAxisCount> a_est_{};
   std::array<double, kAxisCount> jerk_est_{};
   TimeNs deadline_ns_ = 0;
