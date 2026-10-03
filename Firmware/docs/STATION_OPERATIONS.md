@@ -76,6 +76,7 @@ still violate the rule and are the next work. Do not cite them as precedent.
 | Operator stop and shutdown | launcher → `controld` | pitch STOP at the end | **open, owner decision:** park first so the release is safe, or hold. |
 | Motor over-temperature (supervisor), drive-reported fault | supervisor | FaultStop / Disable | Consistent: a hazard, and a faulted drive is not holding anyway. |
 | 100 RPM speed cap, pitch end-stop guard | servos | FAULT | Consistent: hazards, immediate. The pitch drive is now held at speed zero, not released. |
+| BNO085 IMU drops off I2C (a known BNO085 behaviour; station 2026-10-03 14:27:32) | `imu-bno085`, launcher | One recovery, then exit; the launcher waited on it and stopped the **whole stack** | Fixed 2026-10-03: observe-only capture reconnects for as long as it runs (backoff 0.1 to 5 s); the launcher no longer waits on it. The HUD shows the IMU stale until it returns. Commissioning captures keep their single recovery. |
 
 ## The web MENU: Home, Park, Shutdown (owner ruling, 2026-10-03)
 

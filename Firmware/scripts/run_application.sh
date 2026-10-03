@@ -384,6 +384,8 @@ exited_name=''
 note_child_exit() {
   local pid gone=()
   for pid in "${children[@]}"; do
+    # An observe-only IMU that died earlier is not what ended the stack.
+    [ "$pid" = "${imu_shadow_pid:-}" ] && continue
     kill -0 "$pid" 2>/dev/null || gone+=("$pid")
   done
   for pid in "${gone[@]}"; do
@@ -700,9 +702,12 @@ elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; t
       done
       if [ "$imu_shadow_ready" = 1 ]; then
         echo 'BNO085 continuous capture running (observe-only; the station does not depend on it).'
+      elif kill -0 "$imu_shadow_pid" 2>/dev/null; then
+        # It keeps reconnecting (imu_bno085.c), so a sensor that is slow or briefly off the bus
+        # joins later instead of being given up on at boot.
+        echo 'BNO085 produced no samples within 3s; it keeps reconnecting and the station keeps running.' >&2
       else
-        echo 'BNO085 produced no samples within 3s; the UI reports the IMU as absent and the station keeps running.' >&2
-        kill "$imu_shadow_pid" 2>/dev/null || true
+        echo 'BNO085 capture exited at startup; the UI reports the IMU as absent and the station keeps running.' >&2
         unset OTA_IMU_TRACE
       fi
     fi
@@ -740,6 +745,14 @@ printf 'Mode: %s\nConfig: %s\nPython: %s\nChildren: %s\n' "$MODE" "${controller_
 cp "$RUN/launcher.pid" "$RUN/started"
 echo "Stack logs: $RUN; web port: $OTA_WEB_PORT. Ctrl-C stops this stack."
 # A failed child or finite capture ends its own stack; unrelated processes are untouched.
+# The observe-only IMU is not one of them: it sits in children so cleanup stops it, but it is
+# not waited on. Station, 2026-10-03 14:27:32: the BNO085 lost its I2C link, its process
+# exited, and this wait took the whole stack down with it (owner ruling 2026-10-02: losing a
+# display-only sensor is not even a HOLD).
 first_child_status=0
-wait -n "${children[@]}" || first_child_status=$?
+waited=()
+for pid in "${children[@]}"; do
+  [ "$pid" = "${imu_shadow_pid:-}" ] || waited+=("$pid")
+done
+wait -n "${waited[@]}" || first_child_status=$?
 note_child_exit

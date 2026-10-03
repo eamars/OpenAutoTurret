@@ -236,7 +236,16 @@ int main(int argc, char **argv) {
     signal(SIGINT, stop); signal(SIGTERM, stop);
     uint64_t until=continuous_mode ? UINT64_MAX : now_ns()+(uint64_t)seconds*1000000000ULL;
     int failed=0; unsigned recoveries=0;
+    // Observe-only continuous capture reconnects for as long as it runs: the BNO085 is known to
+    // drop off this I2C bus now and then (station, 2026-10-03 14:27:32: errno 121, a timeout,
+    // then no product identity after one reset), and the station does not depend on it. Retries
+    // back off from 100 ms to 5 s, and a session that streamed for 10 s resets the backoff.
+    // Commissioning and timed captures keep their single recovery: there a dropout is evidence.
+    const int keep_reconnecting = continuous_mode && !commissioning_mode;
+    uint64_t backoff_ns = 100000000ULL;
     for (;;) {
+        const uint64_t session_start_ns = now_ns();
+        if (keep_reconnecting) invalid_sample = 0;
         io_failed=0; tared=0; stable_since_ns=0; tare_samples=0; memset(tare_sum,0,sizeof tare_sum);
         tare_rx_ns=0;
         last_accel_ns=last_gyro_ns=0;
@@ -250,12 +259,21 @@ int main(int argc, char **argv) {
         }
         failed=opened || invalid_sample || io_failed || resets!=initial_resets;
         if (sh2_is_open) { sh2_close(); sh2_is_open=0; }
-        if (!failed || stopping || invalid_sample || commissioning_mode || recoveries>=1 || now_ns()>=until) break;
+        if (!failed || stopping || now_ns()>=until) break;
+        if (!keep_reconnecting && (invalid_sample || commissioning_mode || recoveries>=1)) break;
         // Recover at the session boundary, not recursively inside SH-2's read
         // callback. Consumers must discard pre-reset tare/continuity.
         printf("{\"kind\":\"gap\",\"rx_ns\":%" PRIu64 ",\"reason\":\"reset_recovery\",\"tare_invalidated\":true}\n",now_ns());
         ++output_lines;
         ++recoveries; ++generation;
+        if (keep_reconnecting) {
+            if (now_ns()-session_start_ns >= 10000000000ULL) backoff_ns = 100000000ULL;
+            fprintf(stderr,"IMU reconnect %u in %.1f s (read_errors=%u resets=%u)\n",
+                    recoveries, backoff_ns/1e9, read_errors, resets);
+            for (uint64_t waited=0; waited<backoff_ns && !stopping; waited+=10000000ULL) usleep(10000);
+            if (backoff_ns < 5000000000ULL) backoff_ns *= 2;
+            if (backoff_ns > 5000000000ULL) backoff_ns = 5000000000ULL;
+        }
     }
     printf("{\"kind\":\"summary\",\"counts\":[%u,%u,%u,%u],\"read_errors\":%u,\"recoveries\":%u,\"failed\":%s,\"tared\":%s}\n",
            counts[0],counts[1],counts[2],counts[3],read_errors,recoveries,failed ? "true":"false",tared ? "true":"false");
