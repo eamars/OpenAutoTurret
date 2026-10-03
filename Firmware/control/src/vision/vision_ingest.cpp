@@ -2,6 +2,7 @@
 #include "vision/vision_ingest.hpp"
 #include "tracks/perception_wire.hpp"
 
+#include "common/thread_class.hpp"
 #include "common/time.hpp"
 
 #include <spdlog/spdlog.h>
@@ -74,6 +75,7 @@ void VisionIngest::stop() {
 }
 
 void VisionIngest::accept_loop() {
+  apply_thread_class("vision-accept", ThreadClass::Normal);
   while (running_.load()) {
     pollfd pfd{listen_fd_, POLLIN, 0};
     int pr = ::poll(&pfd, 1, 100);  // 100 ms so stop() is observed promptly
@@ -104,6 +106,7 @@ void VisionIngest::accept_loop() {
 }
 
 void VisionIngest::client_loop(int cfd) {
+  apply_thread_class("vision-rx", ThreadClass::Normal);
   // One datagram == one measurement or one TrackSet, told apart by length (§59).
   // The buffer is deliberately LARGER than the biggest valid message: on a
   // SEQPACKET socket a too-small buffer truncates silently, and a truncated TrackSet

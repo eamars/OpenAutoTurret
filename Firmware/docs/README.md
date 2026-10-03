@@ -10,6 +10,7 @@ procedure from a flag list.
 |---|---|
 | put new source onto the station | [`operations/deploy.md`](operations/deploy.md) — including **where compilation happens**, which is the question every new operator gets wrong |
 | start / stop / inspect the running stack | [`operations/start-stop-status.md`](operations/start-stop-status.md) |
+| prepare the station's OS (fresh install, new SD card, new operator, or controld logs `SCHED_FIFO ... refused`) | [`operations/os-setup.md`](operations/os-setup.md) — the one sudo step, which the owner runs; which threads are real time and why |
 | read what the station did (logs, traces, evidence) | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Reading the per-cycle control trace", §"Stop and preserve evidence" |
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
 | commission or re-commission the yaw / pitch servo (after a payload, camera, weight, bearing or motor change) | [`operations/servo-commissioning.md`](operations/servo-commissioning.md) — one automatic command per axis: identify, design, verify on the station, write the asset |
@@ -33,6 +34,7 @@ that justify the procedure.
 | [`operations/README.md`](operations/README.md) | the card index and the fixed skeleton every card follows |
 | [`operations/deploy.md`](operations/deploy.md) | build location, the two different things named "deploy", the three things a handover needs, and what to do on a host with no cross-toolchain |
 | [`operations/start-stop-status.md`](operations/start-stop-status.md) | launcher actions, run dir, what `stop` proves, what it does not |
+| [`operations/os-setup.md`](operations/os-setup.md) | the real-time grant, CPU split and UI-last priorities; the per-thread table; how to verify it took |
 
 ## Verify the tree
 

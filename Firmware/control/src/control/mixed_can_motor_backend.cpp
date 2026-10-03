@@ -14,6 +14,7 @@
 
 #include "servo_config.hpp"
 
+#include "common/thread_class.hpp"
 #include "common/time.hpp"
 
 namespace ota {
@@ -203,6 +204,8 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
     yaw_options.bring_up_if_down = false;
     yaw_options.install_filters = false;
     yaw_options.receive_error_frames = true;
+    // The yaw servo steps on this thread, on every GM6020 feedback frame.
+    yaw_options.rx_fifo_priority = rt_priority::kYawRx;
     if (!yaw_bus_.open(yaw_options, err) || !yaw_bus_.is_up() ||
         yaw_bus_.bitrate() != profile_.yaw_bus.bitrate ||
         yaw_bus_.can_state() != can::CanIfState::ErrorActive || !yaw_bus_.start_rx(err)) {
@@ -219,6 +222,7 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
     pitch_config.iface = profile_.pitch_bus.interface;
     pitch_config.bitrate = profile_.pitch_bus.bitrate;
     pitch_config.bring_up_if_down = false;
+    pitch_config.rx_fifo_priority = rt_priority::kPitchRx;
     pitch_config.pitch_motor_id = profile_.pitch.motor_id;
     pitch_config.yaw_motor_id = profile_.pitch.motor_id;
     if (!pitch_system_.open(pitch_config, err)) {
@@ -563,6 +567,7 @@ MotorBackend::OutputEvidence MixedCanMotorBackend::output_evidence(AxisId axis) 
 }
 
 void MixedCanMotorBackend::yaw_guard_loop(std::stop_token stop) {
+  apply_thread_class("yaw-guard", ThreadClass::Motor, rt_priority::kGuard);
   double prior_position = 0;
   TimeNs prior_sample_ns = 0;
   double measured_speed = 0;
@@ -1412,6 +1417,7 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
 // The pitch servo: commissioning's host position loop at 1 kHz on the drive's own speed loop.
 // Every SpdRef write is answered by a type-2 frame, so the loop steps on 1 kHz feedback.
 void MixedCanMotorBackend::pitch_servo_loop(std::stop_token stop) {
+  apply_thread_class("pitch-servo", ThreadClass::Motor, rt_priority::kPitchServo);
   auto next = std::chrono::steady_clock::now();
   while (!stop.stop_requested()) {
     next += std::chrono::milliseconds(1);

@@ -115,6 +115,44 @@ actions. Each one works from wherever it is offered, and each asks for two press
   clear, which is a STOP. A drive that is still holding speed zero is re-armed without being
   released (`CyberGearSystem::finish_axis_recovery`).
 
+## Scheduling: what runs real time (owner ruling, 2026-10-03)
+
+**Ruling.** Motor control comes first and the web UI last. Real time is given **per thread, only to
+motor control**, never to a whole process, and work fused into a real-time path is split out rather
+than promoted with it. Target tracking keeps the normal class unless a measurement shows it needs
+more. The procedure, and the table of every thread's class, is the
+[OS setup card](operations/os-setup.md).
+
+**Why: measured on 2026-10-03, 15:22-16:15, release 077a330, before any of this.**
+
+- Everything ran SCHED_OTHER at nice 0, unpinned. Load average 4.6-5.7 on 4 CPUs. Every device
+  interrupt was on CPU 0. Memory was fine (6.3 GB available, no swap) and nothing was throttling at
+  the time (59 °C, 2.4 GHz), though `throttled=0x50000` records past under-voltage from the 5 V rail
+  through the slip ring.
+- CPU: visiond 116% (one Python thread 55-65% of a core), webd 10.6%, controld 8.5%, the two SPI
+  CAN controllers' kernel IRQ threads about 15% (about 1000 frames/s per bus).
+- The 200 Hz control loop overran its 5 ms period by more than 2 ms **412 times in 52 minutes**,
+  each a supervisor `DERATE 'control-loop cycle overrun'`. Worst cycle 12.5 ms; five in a row is a
+  HOLD. Every cycle was also 55-60 µs late from the default 50 µs timer slack of a SCHED_OTHER sleep.
+- controld's threads waited for a CPU longer than they ran: over 10 s, the GM6020 RX thread (on
+  which the yaw servo steps) ran 239 ms and waited 322 ms in the run queue.
+- visiond: 45-60 ms per frame, of which 26-29 ms was track association (the retired-track leak,
+  fixed in 257744d), so 17.5 Hz. Frames then waited 65-100 ms in the camera queue; camera to
+  controld took 127-151 ms.
+- visiond learns the operating mode by polling the web UI's `/api/state` at 10 Hz (a new HTTP
+  connection each time). Lowering the UI's priority would therefore have slowed perception; that
+  path must go to controld directly.
+
+**What follows from it.**
+
+- controld's motor threads ask for SCHED_FIFO 44-48 when the launcher passes `OTA_RT=1`. That is
+  below the kernel's CAN IRQ threads at 50, which feed them.
+- controld's own web, IMU-observer and log threads are niced to 10.
+- The launcher pins controld to CPU 3, and keeps visiond (nice 0), the IMU (nice 10) and webd
+  (nice 19) on CPUs 0-2.
+- The OS grant (limits.d: rtprio 49, unlimited memlock) is the one sudo step, and it is the
+  owner's.
+
 ## ADR-003 camera tracking: ownership and the accuracy ruling (2026-10-02, local date)
 
 - **Ownership.** The owner handed ADR-003 to the agent, with the architect's package as guidance.

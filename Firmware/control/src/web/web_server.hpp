@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "calibration/installation_pose.hpp"
+#include "common/thread_class.hpp"
 #include "common/types.hpp"
 #include "telemetry/telemetry.hpp"
 #include "tracking/tracking_state_machine.hpp"
@@ -614,6 +615,7 @@ class WebServer {
 
  private:
   void accept_loop() {
+    apply_thread_class("web-accept", ThreadClass::Background);
     while (running_.load()) {
       pollfd pfd{listen_fd_, POLLIN, 0};
       int pr = ::poll(&pfd, 1, 100);  // 100 ms so we observe stop()
@@ -642,6 +644,7 @@ class WebServer {
   }
 
   void client_loop(int cfd) {
+    apply_thread_class("web-client", ThreadClass::Background);
     int timeout_ms = std::max(1, 1000 / std::max(1, cfg_.telemetry_hz));
     while (running_.load()) {
       pollfd pfd{cfd, POLLIN, 0};

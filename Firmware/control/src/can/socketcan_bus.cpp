@@ -16,6 +16,7 @@
 #include <cstring>
 
 #include "can/can_netlink.hpp"
+#include "common/thread_class.hpp"
 #include "common/types.hpp"
 
 namespace ota::can {
@@ -187,6 +188,11 @@ void SocketCanBus::stop_rx() {
 }
 
 void SocketCanBus::rx_loop() {
+  const std::string name = "rx-" + opts_.iface;
+  if (opts_.rx_fifo_priority > 0)
+    apply_thread_class(name.c_str(), ThreadClass::Motor, opts_.rx_fifo_priority);
+  else
+    apply_thread_class(name.c_str(), ThreadClass::Normal);
   uint8_t tmp[8];
   while (running_.load()) {
     struct pollfd pfds[2]{};

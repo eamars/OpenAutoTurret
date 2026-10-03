@@ -38,6 +38,9 @@ class SocketCanBus : public CanTransport {
     bool install_filters = true;
     // Subscribe to kernel CAN error frames through CAN_RAW_ERR_FILTER.
     bool receive_error_frames = true;
+    // SCHED_FIFO priority of the RX thread when it carries a motor loop (common/thread_class.hpp);
+    // 0 leaves it in the normal class.
+    int rx_fifo_priority = 0;
   };
 
   SocketCanBus() = default;

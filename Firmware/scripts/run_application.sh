@@ -624,6 +624,22 @@ export OTA_WEB_SOCKET="$RUN/control-web.sock"
 export OTA_TRACKING_TRACE="$RUN/tracking-trace.jsonl"
 export OTA_WEB_PORT="${OTA_WEB_PORT:-8080}"
 export OTA_WEB_HOST="${OTA_WEB_HOST:-0.0.0.0}"
+# Scheduling (owner ruling 2026-10-03; docs/operations/os-setup.md). Real time belongs to threads,
+# not processes: OTA_RT=1 lets controld put its motor threads (CAN RX + yaw servo, pitch servo,
+# guards, the 200 Hz loop) on SCHED_FIFO and nice its web/IMU/log threads; nothing else is real
+# time. Per process: controld gets CPU 3 to itself; perception, the IMU observer and the web UI
+# share CPUs 0-2, the web UI niced lowest, so the UI is what waits when the station is busy.
+# OTA_RT=0 keeps every controld thread SCHED_OTHER; OTA_CPU_PIN=0 leaves the CPUs unpinned.
+control_sched=(env "OTA_RT=${OTA_RT:-1}")
+vision_sched=()
+imu_sched=(nice -n 10)
+web_sched=(nice -n 19)
+if [ "${OTA_CPU_PIN:-1}" = 1 ] && command -v taskset >/dev/null && [ "$(nproc)" -ge 4 ]; then
+  control_sched+=(taskset -c "${OTA_CONTROL_CPUS:-3}")
+  vision_sched=(taskset -c "${OTA_APP_CPUS:-0-2}" "${vision_sched[@]}")
+  imu_sched=(taskset -c "${OTA_APP_CPUS:-0-2}" "${imu_sched[@]}")
+  web_sched=(taskset -c "${OTA_APP_CPUS:-0-2}" "${web_sched[@]}")
+fi
 vision_args=(--config perception/configs/perception_v1.json --profile "$PROFILE"
              --max-frames "$FRAMES" --publish-dir "$RUN/perception"
              --selection-socket "$OTA_SELECTION_SOCKET")
@@ -653,7 +669,7 @@ if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [
     echo 'Legacy IMU consumer still running; refusing BNO085 continuous capture.' >&2; exit 1
   fi
   export OTA_IMU_TRACE="$RUN/imu.ndjson"
-  "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+  "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
   imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   # Require a fresh host tare and same-generation game rotation sample before
   # the controller starts. The IMU residual remains observe-only.
@@ -692,7 +708,7 @@ elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; t
       echo 'Legacy IMU consumer still running; the UI will report the IMU as not configured.' >&2
     else
       export OTA_IMU_TRACE="$RUN/imu.ndjson"
-      "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+      "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
       imu_shadow_pid=$!; children+=("$imu_shadow_pid"); child_name[$imu_shadow_pid]=imu-bno085
       imu_shadow_ready=0
       for ((attempt=0; attempt<30; attempt++)); do
@@ -713,7 +729,7 @@ elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; t
     fi
   fi
 fi
-"$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
+"${control_sched[@]}" "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
 controller_pid=$!
 children+=("$controller_pid")
 child_name[$controller_pid]=controld
@@ -722,7 +738,7 @@ else
   START_WEB=0
 fi
 if [ "$START_WEB" -eq 1 ]; then
-  "$PY" -m web.webd.app >"$RUN/web.log" 2>&1 &
+  "${web_sched[@]}" "$PY" -m web.webd.app >"$RUN/web.log" 2>&1 &
   web_pid=$!
   children+=("$web_pid")
   child_name[$web_pid]=webd
@@ -733,7 +749,7 @@ if [ "$MODE" != mixed-controller-commission ]; then
   if [ "$MODE" != perception ]; then
     vision_args+=(--publish-socket "$OTA_VISION_SOCKET")
   fi
-  "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
+  "${vision_sched[@]}" "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
   vision_pid=$!
   children+=("$vision_pid")
   child_name[$vision_pid]=visiond

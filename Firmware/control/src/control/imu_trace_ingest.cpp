@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "common/thread_class.hpp"
 #include "common/time.hpp"
 
 namespace ota::control {
@@ -117,6 +118,7 @@ ImuTraceSnapshot ImuTraceIngest::snapshot(TimeNs now_ns) const {
 }
 
 void ImuTraceIngest::reader_loop() {
+  apply_thread_class("imu-observer", ThreadClass::Background);
   while (running_.load()) {
     std::ifstream input(path_, std::ios::in | std::ios::binary);
     if (!input) {

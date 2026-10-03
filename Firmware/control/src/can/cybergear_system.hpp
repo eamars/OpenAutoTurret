@@ -39,6 +39,7 @@ struct CyberGearSystemConfig {
   uint8_t pitch_motor_id = 100;  // 0x64
   uint8_t yaw_motor_id = 101;    // 0x65
   bool bring_up_if_down = false;
+  int rx_fifo_priority = 0;  // SocketCanBus::Options::rx_fifo_priority
   std::size_t history_capacity = AxisRuntime::kDefaultHistoryCapacity;
 };
 

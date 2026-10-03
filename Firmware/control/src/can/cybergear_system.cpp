@@ -8,6 +8,7 @@
 #include "can/socketcan_bus.hpp"
 #include "can/pitch_current_policy.hpp"
 #include "can/yousee_transport.hpp"
+#include "common/thread_class.hpp"
 
 namespace ota::can {
 
@@ -57,6 +58,7 @@ bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err,
     bo.bitrate = cfg_.bitrate;
     bo.bring_up_if_down = cfg_.bring_up_if_down;
     bo.install_filters = true;
+    bo.rx_fifo_priority = cfg_.rx_fifo_priority;
     bus_ = std::make_unique<SocketCanBus>(bo);
   } else {
     err = "unknown can transport '" + cfg_.transport +
@@ -220,6 +222,7 @@ void CyberGearSystem::start_watchdog() {
   watchdog_stop_.store(false);
   heartbeat();
   watchdog_ = std::thread([this] {
+    apply_thread_class("cg-watchdog", ThreadClass::Motor, rt_priority::kGuard);
     while (!watchdog_stop_.load()) {
       // Assessment, latching and STOP writes share the re-arm/command gate.
       // A watchdog decision made before recovery must not stop a later enable.

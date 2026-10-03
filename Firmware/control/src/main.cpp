@@ -18,6 +18,7 @@
 // register reads) and the one-time enter-position-mode transition.
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -32,6 +33,7 @@
 #include "calibration/retained_homing.hpp"
 #include "calibration/park_controller.hpp"
 #include "can/cybergear_system.hpp"
+#include "common/thread_class.hpp"
 #include "common/time.hpp"
 #include "common/timing_stats.hpp"
 #include "common/types.hpp"
@@ -86,7 +88,7 @@ void init_async_logging() {
     // Bounded queue (8192 messages) + ONE background writer, and the
     // non-blocking factory: when the queue is full the PRODUCER drops the
     // oldest message instead of waiting for storage.
-    spdlog::init_thread_pool(8192, 1);
+    spdlog::init_thread_pool(8192, 1, [] { apply_thread_class("log-writer", ThreadClass::Background); });
     auto lg = spdlog::create_async_nb<spdlog::sinks::stdout_color_sink_mt>(
         "controld");
     lg->set_level(spdlog::level::info);
@@ -634,7 +636,14 @@ int main(int argc, char** argv) {
 
   const TimeNs period_ns = static_cast<TimeNs>(1e9) / cfg.control_loop_hz;
   TimingStats stats;
+  TimingStats work_stats;
+  // From here on this thread is the 200 Hz control loop (docs/operations/os-setup.md).
+  lock_process_memory();
+  apply_thread_class("control", ThreadClass::Motor, rt_priority::kControl);
   TimeNs t_prev = now_monotonic_ns();
+  // Wake-ups on a fixed grid: each cycle is due one period after the previous one was due, not one
+  // period after it woke, so a late wake-up is not carried into every later cycle.
+  TimeNs due = t_prev + period_ns;
   bool logged_fault = false;
   bool logged_ready = false;
   int cycles = 0;
@@ -647,6 +656,7 @@ int main(int argc, char** argv) {
     const TimeNs period = t0 - t_prev;
     t_prev = t0;
     const Phase ph = loop.step(t0, period);
+    work_stats.record_period(now_monotonic_ns() - t0);
     if (retained && ph == Phase::Hold && loop.homed() && !retained->valid())
       retained->save(loop.models(), loop.limits());
     stats.record_period(period);
@@ -674,6 +684,7 @@ int main(int argc, char** argv) {
       // the number that explains a supervisor Brake/DERATE ("was it the loop,
       // or the bus?").
       const TimingReport tr = stats.report();
+      const TimingReport wr = work_stats.report();
       spdlog::info(
           "t={:.2f}s phase={} q_pitch={:+.4f} q_yaw={:+.4f} rad "
           "temp_pitch={:.1f} temp_yaw={:.1f} C temp_raw_pitch={} temp_raw_yaw={} "
@@ -685,9 +696,10 @@ int main(int argc, char** argv) {
           loop.last_accels()[0], loop.last_accels()[1]);
       spdlog::info(
           "loop: target={} Hz p50={:.3f} p95={:.3f} p99={:.3f} worst={:.3f} ms "
-          "(n={})",
+          "(n={}) | step work p50={:.3f} p99={:.3f} worst={:.3f} ms",
           cfg.control_loop_hz, tr.p50_ns / 1e6, tr.p95_ns / 1e6,
-          tr.p99_ns / 1e6, tr.worst_ns / 1e6, tr.samples);
+          tr.p99_ns / 1e6, tr.worst_ns / 1e6, tr.samples,
+          wr.p50_ns / 1e6, wr.p99_ns / 1e6, wr.worst_ns / 1e6);
       if (mixed_backend) {
         for (const auto& bus : mixed_backend->can_health_all()) {
           spdlog::info("CAN {}: up={} state={} rx={} rx_errors={} tx={} tx_failed={}",
@@ -739,9 +751,15 @@ int main(int argc, char** argv) {
             snap.target_confidence);
       }
     }
-    const TimeNs next = t0 + period_ns;
+    // A cycle that overran by a whole period starts a new grid instead of running the missed
+    // cycles back to back.
     const TimeNs tnow = now_monotonic_ns();
-    if (tnow < next) std::this_thread::sleep_for(std::chrono::nanoseconds(next - tnow));
+    if (tnow - due >= period_ns) due = tnow;
+    const timespec wake{static_cast<time_t>(due / 1'000'000'000LL),
+                        static_cast<long>(due % 1'000'000'000LL)};
+    while (::clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &wake, nullptr) == EINTR) {
+    }
+    due += period_ns;
   }
 
   // Park before joining I/O workers: their shutdown can exceed the independent
