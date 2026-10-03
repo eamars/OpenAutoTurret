@@ -175,6 +175,18 @@ def main():
     # The build machine is this one; see tools/cross_build.py for what it links against and
     # why that is the station's own library set rather than an approximation of it.
     artifacts = cross_build(repo, args) if args.prebuilt else None
+    if artifacts and not args.baseline_bundle:
+        # The station gets `git archive` of the commit, but the prebuilt binaries are compiled from
+        # the working tree. 2026-10-03: an edit made while a deploy was compiling shipped controld
+        # built from uncommitted source under a release named for the commit. So the tree must still
+        # be clean, and on the same commit, after the build; otherwise nothing reaches the station.
+        after = run(["git", "status", "--porcelain", "--untracked-files=normal"],
+                    cwd=repo, capture_output=True, text=True).stdout
+        head = run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+        if after.strip() or head != revision:
+            raise SystemExit("source changed while the binaries were being built (working tree "
+                             "edited or HEAD moved); they may not match " + revision[:12] +
+                             ". Nothing was sent to the station. Commit, then deploy again.")
 
     releases = args.root.rstrip("/") + "/run/releases"
     # Reuse the station's existing project-local runtime, including libcamera
