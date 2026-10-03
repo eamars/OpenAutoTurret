@@ -440,6 +440,13 @@ class ControlLoop {
   // `homed()` intentionally remains false for that topology.
   bool position_ready() const;
   bool at_ready() const { return at_ready_; }
+  // Whether the web's SHUTDOWN (park on the rest stop, then motors off) can start from here: the same
+  // test begin_rest_park makes. Not homed(), which stays false on a continuous-yaw station -- the
+  // reason a process stop on the station skipped the park on 2026-10-03 while the simulator, whose
+  // yaw is bounded, parked.
+  bool rest_shutdown_available() const {
+    return (phase_ == Phase::Hold && position_ready()) || phase_ == Phase::Parked;
+  }
   const std::array<AxisLimits, kAxisCount>& limits() const { return limits_; }
   const std::array<AxisLogicalModel, kAxisCount>& models() const { return models_; }
   const std::string& fault_reason() const { return fault_reason_; }

@@ -782,7 +782,7 @@ int main(int argc, char** argv) {
   // stop, then both motors off. Only a turret that cannot park (not homed, faulted, already shut
   // down) takes the older stop below.
   bool rest_shutdown = false;
-  if (loop.homed() && (loop.phase() == Phase::Hold || loop.phase() == Phase::Parked)) {
+  if (loop.rest_shutdown_available()) {
     spdlog::info("shutdown requested; parking on the rest stop, then both motors off");
     loop.submit_command("request_shutdown", "");
     t_prev = now_monotonic_ns();

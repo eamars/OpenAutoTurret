@@ -325,6 +325,10 @@ TEST(RestPark, ContinuousYawParksAtTheNearestWholeTurn) {
     return s.saw_fault || (s.loop->position_ready() && s.loop->at_ready() && s.loop->phase() == Phase::Hold);
   }));
   ASSERT_FALSE(s.saw_fault) << s.loop->fault_reason();
+  // The process stop asks this before parking (controld main): it must hold on a continuous-yaw
+  // station, where homed() never does.
+  EXPECT_FALSE(s.loop->homed());
+  EXPECT_TRUE(s.loop->rest_shutdown_available());
   // Four hundred degrees round: a patrol that has been going a while.
   s.run("set_mode", "MANUAL");
   s.sim->set_position(AxisId::Yaw, 7.0);
