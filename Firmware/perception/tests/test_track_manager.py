@@ -369,3 +369,24 @@ class TestAmbiguity(unittest.TestCase):
 
 if __name__ == "__main__":                                     # pragma: no cover
     unittest.main()
+
+
+class TestRetiredIdentitiesAreDropped(unittest.TestCase):
+    """Station, 2026-10-03: the track list only ever grew. A person standing still plus detector
+    flicker minted ~6000 short-lived identities in 40 minutes, every frame walked all of them,
+    and perception slowed from 30 Hz to 17.5 Hz."""
+
+    def test_flicker_does_not_grow_the_track_list(self):
+        manager = TrackManager(commissioned_config())
+        corners = [(0.15, 0.25), (0.85, 0.25), (0.15, 0.75), (0.85, 0.75)]
+        for frame in range(2000):
+            frame_dets = [det(1)]
+            if frame % 10 == 5:   # a one-frame false detection somewhere else
+                cx, cy = corners[(frame // 10) % 4]
+                frame_dets.append(det(2, cx=cx, cy=cy))
+            manager.update(dset(frame_dets, frame_index=frame), at(frame) + ms(0.05))
+        self.assertGreater(manager.counters.tracks_retired, 150, "the flicker must have retired")
+        self.assertLess(len(manager._tracks), 10, "retired identities must leave the list")
+        live = manager.tracks()
+        self.assertEqual(len([t for t in live if t.state is TrackState.CONFIRMED_VISIBLE]), 1,
+                         "and the person standing still is still the one confirmed identity")

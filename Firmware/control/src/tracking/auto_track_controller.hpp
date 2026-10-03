@@ -80,9 +80,12 @@ struct AutoTrackConfig {
   // §19's authority ceilings: "modest derating" and "do not accelerate aggressively".
   float medium_scale = 0.60f;
   float low_scale = 0.30f;
-  // Capture age includes camera/processing delay as well as inter-frame spacing.
-  // The station's ~26 Hz stream commonly arrives about 50-75 ms after capture.
-  int64_t fresh_ms = 150; // capture-to-publish delay plus the measured ~38 ms frame interval
+  // Capture age includes camera/processing delay as well as inter-frame spacing. At 150 ms this
+  // gate had no margin (owner ruling 2026-10-02 asks for margin above the worst normal value):
+  // on 2026-10-03 the station's measurement age ran 130-190 ms (81 ms capture-to-metadata, ~50 ms
+  // processing, 17 Hz while perception was slowed), so every frame entered REACQUIRE and left it
+  // again before the next one -- the HUD flipped TRACKING/COASTING with the person standing still.
+  int64_t fresh_ms = 300;
   // §20.1: authority at the start of a coast, and the floor it decays to.
   float coast_scale_start = 0.60f;
   float coast_scale_floor = 0.20f;

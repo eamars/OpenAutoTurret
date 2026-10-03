@@ -698,6 +698,10 @@ void parse_v3(const YAML::Node& root, V3Config& out, std::vector<std::string>& e
     out.auto_track_reacquire_window_ms =
         static_cast<int>(opt_double(at, "reacquire_window_ms",
                                     "v3.auto_track.reacquire_window_ms", 0.0, warn));
+    out.auto_track_fresh_ms =
+        static_cast<int>(opt_double(at, "fresh_ms", "v3.auto_track.fresh_ms", 0.0, warn));
+    if (out.auto_track_fresh_ms < 0 || out.auto_track_fresh_ms > 2000)
+      err.push_back("v3.auto_track.fresh_ms must be in [0, 2000] (0 keeps the default)");
     out.auto_track_roam_on_loss_ms =
         static_cast<int64_t>(opt_double(at, "roam_on_loss_ms", "v3.auto_track.roam_on_loss_ms",
                                         0.0, warn));

@@ -163,6 +163,7 @@ class ControlLoop {
     int auto_track_coast_ms = 0;
     int auto_track_lost_hold_ms = 0;
     int auto_track_reacquire_window_ms = 0;
+    int auto_track_fresh_ms = 0;  // 0 keeps AutoTrackConfig::fresh_ms
     float auto_track_medium_min = 0.0f;
     float auto_track_high_min = 0.0f;
     float auto_track_medium_scale = 0.0f;

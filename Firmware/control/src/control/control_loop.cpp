@@ -3960,6 +3960,7 @@ void ControlLoop::apply_v3_config_once() {
   if (cfg_.auto_track_lost_hold_ms > 0) ac.lost_hold_ms = cfg_.auto_track_lost_hold_ms;
   if (cfg_.auto_track_reacquire_window_ms > 0)
     ac.reacquire_window_ms = cfg_.auto_track_reacquire_window_ms;
+  if (cfg_.auto_track_fresh_ms > 0) ac.fresh_ms = cfg_.auto_track_fresh_ms;
   if (cfg_.auto_track_medium_min > 0.0f) ac.medium_min = cfg_.auto_track_medium_min;
   if (cfg_.auto_track_high_min > 0.0f) ac.high_min = cfg_.auto_track_high_min;
   if (cfg_.auto_track_medium_scale > 0.0f) ac.medium_scale = cfg_.auto_track_medium_scale;

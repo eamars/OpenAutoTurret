@@ -271,6 +271,11 @@ v3:
     coast_ms: 250
     lost_hold_ms: 500
     reacquire_window_ms: 1000
+    # A measurement counts as fresh while its capture is at most this old. 2026-10-03: at 150 ms
+    # the gate sat inside the normal range (ages 130-190 ms with perception at 17 Hz), and
+    # AUTO_TRACK dropped and reacquired a motionless person on every frame. 300 ms clears that
+    # worst case with margin; coast_ms then runs on top of it.
+    fresh_ms: 300
 
 # Independent reference targets and actuator maximums. Deg/s, deg/s², deg/s³.
 # These preserve the established service command envelope; full-speed loaded

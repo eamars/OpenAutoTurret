@@ -77,6 +77,25 @@ TEST_F(AutoTrackTest, AcquisitionCountsNewCapturesDespiteCameraDelay) {
   EXPECT_EQ(out_.state, AutoTrackState::Tracking);
 }
 
+// Station, 2026-10-03: perception at 17 Hz, each measurement 130 ms old on arrival and ~186 ms by
+// the next one. At the old 150 ms freshness gate a motionless person was "reacquired" and "lost
+// again" on every frame and AUTO_TRACK never reached TRACKING.
+TEST_F(AutoTrackTest, ASlowLateStreamStillTracksSteadily) {
+  make_visible(in_);
+  TimeNs capture = now_ - 130 * kMs;
+  int transitions = 0;
+  AutoTrackState last = out_.state;
+  for (int cycle = 0; cycle < 2000; ++cycle) {              // 10 s at 200 Hz
+    if (cycle % 11 == 0) capture = now_ + kCycle - 130 * kMs;  // a new frame, 55 ms apart
+    in_.measurement_timestamp_ns = capture;
+    in_.measurement_age_ms = (now_ + kCycle - capture) / kMs;
+    advance();
+    if (out_.state != last) { ++transitions; last = out_.state; }
+  }
+  EXPECT_EQ(out_.state, AutoTrackState::Tracking);
+  EXPECT_LE(transitions, 2) << "WAIT_TARGET -> ACQUIRE -> TRACKING, and then it stays";
+}
+
 TEST_F(AutoTrackTest, AmbiguityRemovesMotionAuthorityImmediately) {
   make_visible(in_);
   advance(3);

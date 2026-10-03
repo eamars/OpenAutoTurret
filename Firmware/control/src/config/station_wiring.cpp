@@ -173,6 +173,7 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.auto_track_coast_ms = cfg.v3.auto_track_coast_ms;
   c.auto_track_lost_hold_ms = cfg.v3.auto_track_lost_hold_ms;
   c.auto_track_reacquire_window_ms = cfg.v3.auto_track_reacquire_window_ms;
+  c.auto_track_fresh_ms = cfg.v3.auto_track_fresh_ms;
   c.auto_track_medium_min = cfg.v3.auto_track_medium_min;
   c.auto_roam_on_loss_ms = cfg.v3.auto_track_roam_on_loss_ms;
   c.auto_track_on_acquire_ms = cfg.v3.auto_track_track_on_acquire_ms;

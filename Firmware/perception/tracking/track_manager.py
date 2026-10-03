@@ -206,6 +206,13 @@ class TrackManager:
         self._stream_size = (dset.stream_width, dset.stream_height)
         self.counters.detections_in += len(dset.detections)
         self._created_this_frame = {}
+        # Retired identities are never consulted again (every reader skips them; a merge resolves
+        # through the alias map), so they leave the list here, before association indexes it.
+        # Kept, they were the station's 2026-10-03 slowdown: a person standing still plus
+        # detector flicker minted ~6000 short-lived tracks in 40 minutes, every frame walked all
+        # of them, and perception fell from 30 Hz to 17.5 Hz -- slow enough that AUTO_TRACK's
+        # freshness gate dropped the target on every frame.
+        self._tracks = [t for t in self._tracks if t.state is not TrackState.RETIRED]
 
         shift = self.camera_motion.shift_norm(sensor_ns, now_ns)
         self.last_camera_shift = shift

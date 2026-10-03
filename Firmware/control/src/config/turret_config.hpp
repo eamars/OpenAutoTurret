@@ -297,6 +297,7 @@ struct V3Config {
   int auto_track_coast_ms = 0;
   int auto_track_lost_hold_ms = 0;
   int auto_track_reacquire_window_ms = 0;
+  int auto_track_fresh_ms = 0;  // 0 keeps AutoTrackConfig::fresh_ms
   float auto_track_medium_min = 0.0f;
   // Drive-mode item 3 (see control/src/control/aim_deadband.hpp). 0 = disabled, which is the shipped default:
   // a station that never names these keys aims exactly as it did before they existed.
