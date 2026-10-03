@@ -131,7 +131,13 @@ class DockAndDrawerBehaviour(unittest.TestCase):
     def test_jog_and_step_arguments_match_the_daemon(self) -> None:
         rows = self._rows("MANUAL", {"operating_mode": "MANUAL"})
         self.assertEqual(set(re.findall(r'data-direction="([^"]+)"', HUD_HTML)),
-                         {"left", "right", "up", "down"})
+                         {"left", "right", "up", "down", "up-left", "up-right", "down-left",
+                          "down-right"})
+        # Eight directions (owner, 2026-10-03): a diagonal is its two arrows in one jog, so the
+        # page still sends directions only and controld applies every cap and margin per axis.
+        self.assertEqual(self._node("console.log(JSON.stringify(['up-left','up-right','down-left',"
+                                     "'down-right'].map(T.otaJogForArrow)));"),
+                         ["pitch-|yaw+", "pitch-|yaw-", "pitch+|yaw+", "pitch+|yaw-"])
         # Station probes established yaw+ = camera left, pitch+ = camera down.
         # The button and every other spatial indicator use one conversion.
         self.assertEqual(self._node("console.log(JSON.stringify(["
@@ -161,7 +167,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         pad = re.search(r'<div id="manual-pad".*?</div>', HUD_HTML, re.S).group()
         self.assertNotIn("HOLD", pad)
         self.assertIn('id="pad-pace"', pad)
-        self.assertEqual(len(re.findall(r"<button", pad)), 5, "four arrows and the pace")
+        self.assertEqual(len(re.findall(r"<button", pad)), 9, "eight directions and the pace")
         self.assertNotIn("data-jog", re.search(r'<button id="pad-pace".*?</button>', pad).group(),
                          "the pace button must never start a jog")
 

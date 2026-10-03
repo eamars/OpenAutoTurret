@@ -2600,6 +2600,42 @@ TEST(ManualLimits, AJogRunsOutToTheEndOfTravelAndStopsThere) {
   h.run("manual_jog_stop");
 }
 
+TEST(ManualLimits, ADiagonalJogKeepsEachAxisAtItsOwnCapAndStopsEachAtItsEndOfTravel) {
+  // Owner, 2026-10-03: the DPAD has eight directions, and the caps and margins are controld's, not
+  // the page's. A diagonal is two axes in one jog ("yaw+|pitch+"); the browser sends no numbers.
+  // Each axis must move at no more than the pace it would have alone, and each must stop at its own
+  // end of travel while the other may still be moving.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "MANUAL");
+  const telemetry::TelemetrySnapshot before = h.snap();
+  ASSERT_TRUE(before.soft_limits_valid);
+  constexpr double kCoarseDegS = 15.0;   // the wide patrol pace, which COARSE is
+
+  h.run("manual_jog_start", "yaw+|pitch+:coarse");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  double peak_yaw = 0, peak_pitch = 0, q0_yaw = h.snap().q_yaw_rad, q0_pitch = h.snap().q_pitch_rad;
+  for (int i = 0; i < 3000; ++i) {   // 15 s, past both ends
+    if (i % 20 == 0) h.loop->submit_command("manual_jog_keepalive", "");
+    h.step(1);
+    const telemetry::TelemetrySnapshot s = h.snap();
+    peak_yaw = std::max(peak_yaw, std::fabs(s.v_yaw_rad_s));
+    peak_pitch = std::max(peak_pitch, std::fabs(s.v_pitch_rad_s));
+    EXPECT_LE(s.q_ref_yaw_rad, before.q_soft_max_yaw_rad + 1e-9);
+    EXPECT_LE(s.q_ref_pitch_rad, before.q_soft_max_pitch_rad + 1e-9);
+    EXPECT_LE(s.q_yaw_rad, before.q_soft_max_yaw_rad + 1e-6);
+    EXPECT_LE(s.q_pitch_rad, before.q_soft_max_pitch_rad + 1e-6);
+  }
+  const telemetry::TelemetrySnapshot ended = h.snap();
+  EXPECT_GT(ended.q_yaw_rad - q0_yaw, 0.1) << "yaw did not move";
+  EXPECT_GT(ended.q_pitch_rad - q0_pitch, 0.1) << "pitch did not move";
+  EXPECT_LE(peak_yaw * kRad2Deg, kCoarseDegS * 1.1) << "a diagonal must not speed an axis up";
+  EXPECT_LE(peak_pitch * kRad2Deg, kCoarseDegS * 1.1) << "a diagonal must not speed an axis up";
+  EXPECT_LT(std::fabs(ended.v_yaw_rad_s), 0.02);
+  EXPECT_LT(std::fabs(ended.v_pitch_rad_s), 0.02);
+  h.run("manual_jog_stop");
+}
+
 TEST(TrackIdentity, TheSelectedTrackIsNamedWithBothHalvesOfItsIdentifier) {
   // §50 lists `track_uuid` under the runtime UI state and §78 asks for it again in diagnostics.
   // What controld published instead, until now, was the display index — a label that is

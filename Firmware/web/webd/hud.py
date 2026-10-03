@@ -2402,9 +2402,9 @@ HUD_HTML = """<!DOCTYPE html>
     <button id="auto-mode" type="button">Auto</button>
   </div>
   <div id="manual-pad" hidden role="group" aria-label="Manual direction pad">
-    <span></span><button data-direction="up" aria-label="Aim camera up">↑</button><span></span>
+    <button data-direction="up-left" aria-label="Aim camera up and left">↖</button><button data-direction="up" aria-label="Aim camera up">↑</button><button data-direction="up-right" aria-label="Aim camera up and right">↗</button>
     <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-pace" type="button" aria-pressed="false" aria-label="Jog pace">COARSE</button><button data-direction="right" aria-label="Aim camera right">→</button>
-    <span></span><button data-direction="down" aria-label="Aim camera down">↓</button><span></span>
+    <button data-direction="down-left" aria-label="Aim camera down and left">↙</button><button data-direction="down" aria-label="Aim camera down">↓</button><button data-direction="down-right" aria-label="Aim camera down and right">↘</button>
   </div>
   <!-- §22 safety indication. Outside the health chips, because BRAKING and FAULT are asked to be more
        prominent than a chip and a fault to interrupt normal operation. -->

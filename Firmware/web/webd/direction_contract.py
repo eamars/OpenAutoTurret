@@ -16,6 +16,14 @@ const otaJointScreenSign = Object.freeze({{
 function otaJogForArrow(arrow) {{
   const directions = {{left: ["yaw", -1], right: ["yaw", 1],
                       up: ["pitch", -1], down: ["pitch", 1]}};
+  // A diagonal ("up-left") is its two arrows in one jog, "pitch-|yaw+": controld moves each axis at
+  // its own capped pace and stops each at its own end of travel. No number crosses from the page.
+  const parts = String(arrow).split("-");
+  if (parts.length === 2) {{
+    if (!["up", "down"].includes(parts[0]) || !["left", "right"].includes(parts[1]))
+      throw new Error("unknown camera direction: " + arrow);
+    return otaJogForArrow(parts[0]) + "|" + otaJogForArrow(parts[1]);
+  }}
   const d = directions[arrow];
   if (!d) throw new Error("unknown camera direction: " + arrow);
   return d[0] + (d[1] * otaJointScreenSign[d[0]] > 0 ? "+" : "-");
