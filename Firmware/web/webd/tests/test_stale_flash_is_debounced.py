@@ -21,6 +21,7 @@ answer, and the notes say which.
 
 import json
 import shutil
+import os
 import subprocess
 import sys
 import textwrap
@@ -114,7 +115,14 @@ HARNESS = textwrap.dedent("""
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_page_clock_hiccups_do_not_assert_stale_but_station_truth_still_does():
-    proc = subprocess.run([NODE, "-e", HARNESS], capture_output=True, text=True, timeout=60)
+    # From a file, not `node -e`: the page outgrew Linux's 128 KiB single-argument limit (2026-10-03).
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as fh:
+        fh.write(HARNESS)
+    try:
+        proc = subprocess.run([NODE, fh.name], capture_output=True, text=True, timeout=60)
+    finally:
+        os.unlink(fh.name)
     assert proc.returncode == 0, f"node harness failed: {proc.stderr[-800:]}"
     got = json.loads(proc.stdout.strip().splitlines()[-1])
 

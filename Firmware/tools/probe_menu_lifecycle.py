@@ -1,6 +1,8 @@
 """Execute production menu update logic in Node; no browser or video access."""
+import os
 import re
 import subprocess
+import tempfile
 
 from web.webd.hud import HUD_GEOMETRY_JS, HUD_JS
 
@@ -31,7 +33,13 @@ for (let i = 0; i < 50; ++i)
 console.log(JSON.stringify({trackChurnMenuReplacements: updates - before}));
 if (updates !== before) process.exitCode = 1;
 """
-    result = subprocess.run(["node", "-e", script], check=False)
+    # From a file: the page outgrows `node -e`'s single-argument limit (128 KiB on Linux).
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as fh:
+        fh.write(script)
+    try:
+        result = subprocess.run(["node", fh.name], check=False)
+    finally:
+        os.unlink(fh.name)
     raise SystemExit(result.returncode)
 
 

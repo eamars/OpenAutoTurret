@@ -76,6 +76,12 @@ class Builders(unittest.TestCase):
         self.assertEqual(label["line1"], "SHUTDOWN")
         self.assertIn("HOME", label["line2"])
 
+    def test_the_park_pose_names_its_next_steps(self) -> None:
+        label = self._run("T.hudStateLabel(t)", {"supervisory": "parked", "mode": "MANUAL"})
+        self.assertEqual(label["line1"], "PARKED")
+        self.assertIn("AUTO", label["line2"])
+        self.assertIn("MANUAL", label["line2"])
+
     def test_both_buses_and_bus_off_are_shown(self) -> None:
         stats = self._stats({"can_buses": [
             {"device": "can0", "up": True, "state": 0, "rx_frames": 10, "rx_error_frames": 0,
@@ -130,6 +136,12 @@ class PageWiring(unittest.TestCase):
     def test_an_unhealthy_imu_keeps_its_words(self) -> None:
         # "NO SAMPLES" was cut to "NO"; only the healthy FRESH state is shortened to one word.
         self.assertIn('st === "ok" ? lbl.split(" ")[0] : lbl', HUD_JS)
+
+    def test_park_is_not_a_place_to_be_stuck(self) -> None:
+        # Owner, 2026-10-03: from the park pose, Auto and Manual are one press each.
+        self.assertIn('(t.phase === "hold" || t.phase === "parked")', HUD_JS)
+        self.assertIn('if (lastTelemetry && lastTelemetry.phase === "parked") sendCommand("set_mode", "MANUAL");',
+                      HUD_JS)
 
     def test_settings_rows_send_set_speed(self) -> None:
         self.assertIn('data-cmd="set_speed"', HUD_JS)

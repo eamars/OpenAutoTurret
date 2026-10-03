@@ -88,7 +88,7 @@ actions. Each one works from wherever it is offered, and each asks for two press
 | Action | What it does | Offered from | Ends in |
 |---|---|---|---|
 | **HOME** | Recovers whatever latched (yaw guard trip, pitch watchdog inhibit, pitch servo fault, a drive fault the drive itself has cleared), proves fresh, healthy feedback on both axes, then runs homing. | Any state except while homing or recovering already | The ready pose, then **AUTO ROAM**, as at power-up |
-| **PARK** | Yaw to 0 by the nearest whole turn. Pitch first goes to a pose about 6° inside its soft limit, then onto its **rest stop** at 3°/s (homing's fine-approach speed). Both axes are then held there, energised. | A homed turret | phase `parked`. **Any MODE leaves it**; MANUAL returns to the ready pose. |
+| **PARK** | Yaw to 0 by the nearest whole turn. Pitch first goes to a pose about 6° inside its soft limit, then onto its **rest stop** at 3°/s (homing's fine-approach speed). Both axes are then held there, energised. | A homed turret | phase `parked`. Park is a scripted move, not a state to stay in (owner, 2026-10-03): the page's **Auto**, **Manual** and MENU **Shutdown** are one press each from there. MANUAL first brings pitch off the stop to the ready pose (the stop is outside the soft envelope), then the DPAD is back. |
 | **SHUTDOWN** | PARK, then both motors off. If the pitch stopped short of the stop, it touches the stop again first, so the payload is released resting on it. | A homed or parked turret | phase `idle`, motors off. **Only HOME** starts it again. |
 
 - **The rest stop** is the camera-up end. That is the raw pitch **minimum**, measured by homing at

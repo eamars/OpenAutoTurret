@@ -125,6 +125,25 @@ TEST(RestPark, AModeLeavesTheParkWithoutHoming) {
   EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
   EXPECT_TRUE(s.loop->homed());
   EXPECT_NEAR(s.sim->position(AxisId::Pitch), 0.0, 1.0 * kDeg2Rad);
+  // And it is ordinary MANUAL now: the DPAD's jog is accepted (owner, 2026-10-03: the park is a
+  // scripted move, not a state to be stuck in).
+  s.run("manual_jog_start", "yaw+:coarse");
+  EXPECT_TRUE(s.ack().accepted) << s.ack().reason;
+  s.run("manual_jog_stop");
+}
+
+TEST(RestPark, AutoLeavesTheParkInOnePress) {
+  Station s;
+  ASSERT_TRUE(s.home());
+  s.run("request_park");
+  ASSERT_TRUE(s.until([&] { return s.stage() == "parked"; }));
+  s.run("set_mode", "AUTO_ROAM");
+  ASSERT_TRUE(s.ack().accepted) << s.ack().reason;
+  EXPECT_EQ(s.stage(), "");
+  EXPECT_EQ(s.loop->phase(), Phase::Hold);
+  s.step(400);
+  EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
+  EXPECT_TRUE(s.loop->homed());
 }
 
 TEST(RestPark, ShutdownParksThenSwitchesBothMotorsOffAndOnlyHomeStartsAgain) {

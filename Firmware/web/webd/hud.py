@@ -191,6 +191,8 @@ function hudStateLabel(o) {
   // The station is Homed or Shutdown (owner ruling 2026-10-03), and a boot is Shutdown: the phase is
   // controld's "idle", and the line says what starts it.
   if (o.supervisory === "idle") return { line1: "SHUTDOWN", line2: "MOTORS OFF · MENU › HOME", named: true };
+  // At the park pose the station is homed and holding; the line names the next steps.
+  if (o.supervisory === "parked") return { line1: "PARKED", line2: "AUTO · MANUAL · SHUTDOWN", named: true };
   if (o.supervisory && o.supervisory !== "hold") return {
     line1: String(o.supervisory).toUpperCase(), line2: "", named: true };
 
@@ -1944,7 +1946,10 @@ function renderManualPad(t) {
   const enabled = padReady(t);
   $("manual-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode === "MANUAL"));
   $("auto-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode !== "MANUAL"));
-  $("auto-mode").disabled = !(t && t.phase === "hold" && t.soft_limits_valid && !t.telemetry_stale);
+  // Park is a scripted move, not a place to be stuck (owner, 2026-10-03): from the park pose, Auto,
+  // Manual and Shutdown are each one press. controld takes pitch off the stop before anything moves.
+  $("auto-mode").disabled = !(t && (t.phase === "hold" || t.phase === "parked") && t.soft_limits_valid &&
+                              !t.telemetry_stale);
   pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
   // Releasing an arrow is the stop. The centre is the pace: the camera's, or outlined when the
   // operator pinned it.
@@ -1995,7 +2000,14 @@ $("pad-pace").addEventListener("click", () => {
   padPaceOverride = next === camera ? null : next;   // back to the camera's pace un-pins it
   renderManualPad(lastTelemetry);
 });
-$("manual-mode").addEventListener("click", () => { stopPadJog(); sendCommand("stop_motion", ""); });
+// Manual / Hold is STOP MOTION everywhere except on the park pose, where stopping is already done and
+// the press means "manual": select MANUAL, which brings pitch off the rest stop to the ready pose (as
+// after homing) and puts the DPAD back.
+$("manual-mode").addEventListener("click", () => {
+  stopPadJog();
+  if (lastTelemetry && lastTelemetry.phase === "parked") sendCommand("set_mode", "MANUAL");
+  else sendCommand("stop_motion", "");
+});
 $("auto-mode").addEventListener("click", () => { stopPadJog(); sendCommand("set_mode", "AUTO_ROAM"); });
 setInterval(() => renderManualPad(lastTelemetry), 100);
 
