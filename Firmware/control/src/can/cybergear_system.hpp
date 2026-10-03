@@ -47,6 +47,9 @@ class CyberGearSystem {
  public:
   ~CyberGearSystem() { close(); }
   void start_watchdog();
+  // Stops the heartbeat watchdog without closing the bus. Only for a process ending with both
+  // motors already off: the watchdog's job (hold or stop on a silent host) is then done.
+  void stop_watchdog();
   void heartbeat() { heartbeat_ns_.store(now_monotonic_ns()); }
   bool motion_inhibited() const { return motion_inhibited_.load(); }
   void inhibit_motion();

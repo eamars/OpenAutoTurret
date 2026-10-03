@@ -77,9 +77,13 @@ bool CyberGearSystem::open(const CyberGearSystemConfig& cfg, std::string& err,
   return true;
 }
 
-void CyberGearSystem::close() {
+void CyberGearSystem::stop_watchdog() {
   watchdog_stop_.store(true);
   if (watchdog_.joinable()) watchdog_.join();
+}
+
+void CyberGearSystem::close() {
+  stop_watchdog();
   if (bus_) {
     bus_->stop();
     bus_.reset();

@@ -1747,8 +1747,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // On and onto its rest stop, pitch is outside the inset soft envelope on purpose: the stop it
     // touches is the one homing measured, at homing's own approach speed. As during homing, the
     // stop-feasibility check has no envelope to apply there; every other check still runs.
+    // Shut down (phase idle) is the same pose with both motors off: nothing is commanded, so there
+    // is no stop to be feasible, and a BRAKE there (2026-10-03, pitch resting on its stop after
+    // SHUTDOWN) was noise in the log and a black-box capture of nothing.
     if (i == static_cast<int>(AxisId::Pitch) && (rest_park_.stage == RestPark::Touch ||
-        rest_park_.stage == RestPark::Holding || rest_park_.stage == RestPark::Release))
+        rest_park_.stage == RestPark::Holding || rest_park_.stage == RestPark::Release ||
+        phase_ == Phase::Idle))
       in.axes[i].limits = AxisLimits{};
   }
   in.homing_valid = position_ready();

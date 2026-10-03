@@ -746,6 +746,10 @@ CanHealth MixedCanMotorBackend::can_health() const {
   return yaw_opened_.load() ? socketcan_health(yaw_bus_) : CanHealth{};
 }
 
+void MixedCanMotorBackend::stop_watchdog() {
+  if (pitch_opened_.load()) pitch_system_.stop_watchdog();
+}
+
 void MixedCanMotorBackend::start_watchdog() {
   if (pitch_opened_.load()) pitch_system_.start_watchdog();
 }

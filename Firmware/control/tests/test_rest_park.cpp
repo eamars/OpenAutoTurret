@@ -189,6 +189,27 @@ TEST(RestPark, ABootIntoShutdownStaysOffUntilHome) {
   EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
 }
 
+TEST(RestPark, AShutDownTurretThatIsMovedByHandIsNotBraked) {
+  // 2026-10-03 on the station: shut down, pitch on its stop (outside the soft envelope), and the
+  // supervisor logged BRAKE 'stop infeasible before soft boundary' and kept a black-box scene, with
+  // both motors off. A turret nobody drives has no stop to be feasible.
+  Station s;
+  ASSERT_TRUE(s.home());
+  s.run("request_shutdown");
+  ASSERT_TRUE(s.until([&] { return s.loop->phase() == Phase::Idle || s.saw_fault; }));
+  ASSERT_FALSE(s.saw_fault) << s.loop->fault_reason();
+  int brakes = 0;
+  double q = s.sim->position(AxisId::Pitch);
+  for (int i = 0; i < 200; ++i) {   // someone leans on it: pitch creeps further out, 0.2 rad/s
+    q -= 0.001;
+    s.sim->set_position(AxisId::Pitch, q);
+    s.step(1);
+    brakes += s.loop->last_decision().action == SafetyAction::Brake;
+  }
+  EXPECT_EQ(brakes, 0);
+  EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
+}
+
 TEST(RestPark, ShutdownWhileParkedReleasesFromTheStop) {
   Station s;
   ASSERT_TRUE(s.home());

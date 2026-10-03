@@ -159,6 +159,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   bool buses_healthy() const;
   OutputEvidence output_evidence(AxisId axis) const override;
   void start_watchdog();
+  void stop_watchdog();   // CyberGearSystem::stop_watchdog: only once both motors are off
 
   bool supports_continuous_yaw() const override { return true; }
   bool uses_monotonic_feedback_clock() const override { return true; }

@@ -834,10 +834,16 @@ int main(int argc, char** argv) {
   // motors are off. It used to be reported as STOP FAILED, the defect the start/stop card named.
   const bool already_off = !rest_shutdown && loop.phase() == Phase::Idle;
   const bool shutdown_failed = !rest_shutdown && !already_off && loop.phase() != Phase::Parked;
+  // With both motors off, the heartbeat watchdog has nothing left to guard, and the loop no longer
+  // feeds it: stopped here, it cannot log a 100 ms "heartbeat lost" while the drives are closed.
+  if (rest_shutdown || already_off) {
+    if (already_off) loop.deenergize_all();
+    if (mixed_backend) mixed_backend->stop_watchdog();
+    if (system) system->stop_watchdog();
+  }
   if (rest_shutdown) {
     // Logged and recorded above.
   } else if (already_off) {
-    loop.deenergize_all();
     spdlog::info("STOPPED (already shut down: both motors off)");
   } else if (!shutdown_failed) {
     if (mixed_mode)
