@@ -776,9 +776,37 @@ int main(int argc, char** argv) {
   // Park before joining I/O workers: their shutdown can exceed the independent
   // watchdog's heartbeat deadline. Commands remain gated by parking/shutdown.
   loop.set_vision_link(nullptr);
-  spdlog::info("shutdown requested; {}", loop.position_ready() ? "controlled stop" : "zero/STOP requests");
+  // A process stop -- the launcher's stop, a deploy, the boot service at power-off -- ends the same
+  // way the web's SHUTDOWN does whenever it can (owner, 2026-10-03: "once a heavy payload is
+  // installed it becomes dangerous" to release pitch where it stands): yaw to 0, pitch onto its rest
+  // stop, then both motors off. Only a turret that cannot park (not homed, faulted, already shut
+  // down) takes the older stop below.
+  bool rest_shutdown = false;
+  if (loop.homed() && (loop.phase() == Phase::Hold || loop.phase() == Phase::Parked)) {
+    spdlog::info("shutdown requested; parking on the rest stop, then both motors off");
+    loop.submit_command("request_shutdown", "");
+    t_prev = now_monotonic_ns();
+    const TimeNs rest_deadline = t_prev + 60'000'000'000LL;
+    do {
+      const TimeNs t0 = now_monotonic_ns();
+      loop.step(t0, t0 - t_prev);
+      t_prev = t0;
+      std::this_thread::sleep_for(std::chrono::nanoseconds(period_ns));
+    } while (now_monotonic_ns() < rest_deadline && loop.phase() != Phase::Idle &&
+             loop.phase() != Phase::Fault);
+    rest_shutdown = loop.phase() == Phase::Idle;
+    if (rest_shutdown) {
+      spdlog::info("SHUT DOWN (pitch released on its rest stop, yaw at 0, both motors off)");
+      loop.note_shutdown(true, "stop requested; rest-stop shutdown");
+    } else {
+      spdlog::error("rest-stop shutdown did not finish (phase={}, fault='{}'); falling back to the "
+                    "controlled stop", phase_name(loop.phase()), loop.fault_reason());
+    }
+  }
+  if (!rest_shutdown)
+    spdlog::info("shutdown requested; {}", loop.position_ready() ? "controlled stop" : "zero/STOP requests");
   bool parking_started = false;
-  if (loop.position_ready() && loop.phase() != Phase::Fault &&
+  if (!rest_shutdown && loop.position_ready() && loop.phase() != Phase::Fault &&
       loop.phase() != Phase::Parked) {
     parking_started = loop.start_parking(err);
     if (!parking_started) spdlog::error("shutdown park rejected: {}", err);
@@ -802,8 +830,16 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::nanoseconds(period_ns));
     }
   }
-  const bool shutdown_failed = loop.phase() != Phase::Parked;
-  if (!shutdown_failed) {
+  // Already shut down (the web's SHUTDOWN, or a boot that was never homed) is a clean stop: both
+  // motors are off. It used to be reported as STOP FAILED, the defect the start/stop card named.
+  const bool already_off = !rest_shutdown && loop.phase() == Phase::Idle;
+  const bool shutdown_failed = !rest_shutdown && !already_off && loop.phase() != Phase::Parked;
+  if (rest_shutdown) {
+    // Logged and recorded above.
+  } else if (already_off) {
+    loop.deenergize_all();
+    spdlog::info("STOPPED (already shut down: both motors off)");
+  } else if (!shutdown_failed) {
     if (mixed_mode)
       spdlog::info("STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)");
     else
@@ -820,7 +856,7 @@ int main(int argc, char** argv) {
   }
   // One closing line in the stop-evidence file, carrying the stop_id the earlier records used:
   // the log says what we printed to a terminal, this says how the process ended.
-  loop.note_shutdown(!shutdown_failed,
+  if (!rest_shutdown) loop.note_shutdown(!shutdown_failed,
                      loop.fault_reason().empty()
                          ? (mixed_mode ? "stop requested" : "park requested")
                          : loop.fault_reason());

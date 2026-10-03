@@ -125,6 +125,10 @@ actions. Each one works from wherever it is offered, and each asks for two press
 - **A deploy returns the station to the state it found.** `tools/station_state.py` decides: Homed
   needs a reachable controller with valid limits that is neither idle nor faulted.
 - **A plain launcher `start` is Shutdown**; `--home` homes.
+- **A stop ends in Shutdown too.** Any process stop of a homed turret (launcher `stop`, a deploy,
+  power-off through the boot service) runs the SHUTDOWN sequence: pitch onto its rest stop, then
+  motors off. Before this, a stop released pitch wherever it stood, which the owner flagged as
+  dangerous once a heavy payload is fitted.
 
 The boot needs one sudo step, once (`station_os_setup.sh --apply --autostart`). After it, every
 deploy maintains the boot service by itself; see the [OS setup card](operations/os-setup.md),

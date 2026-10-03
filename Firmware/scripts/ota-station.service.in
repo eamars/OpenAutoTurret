@@ -16,7 +16,7 @@ ExecStart=@ROOT@/run/current/Firmware/scripts/station_boot.sh
 # only, so it can bring the motors down before anything else is signalled.
 ExecStop=@ROOT@/run/current/Firmware/scripts/run_application.sh stop
 KillMode=mixed
-TimeoutStopSec=90
+TimeoutStopSec=150
 Restart=no
 
 [Install]

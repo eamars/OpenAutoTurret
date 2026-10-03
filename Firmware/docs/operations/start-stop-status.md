@@ -38,8 +38,14 @@ down, children reaped. `status` proves which release and run dir own the stack r
 ## What it does not prove
 
 A clean stop is not stop *qualification*: it shows the sequence ran, not that the envelope held
-(§19, and the `DEFERRED_TO_ADR002` items). Note also that `stop` prints `STOP FAILED` while still
-stopping cleanly — a known defect on the account, not a reason to reach for `kill`.
+(§19, and the `DEFERRED_TO_ADR002` items).
+
+**What a stop does to the motors (owner, 2026-10-03).** A stop of a homed turret, from `stop`, a
+deploy or the boot service at power-off, runs the web's SHUTDOWN: yaw to 0, pitch onto its rest stop,
+then both motors off. It reports `Stopped: SHUT DOWN (pitch on its rest stop, ...)`, typically after
+10-20 s. A turret that cannot park (not homed, faulted) gets the older controlled stop, which releases
+pitch where it is. A station already shut down reports `Stopped: already shut down`; that case used
+to print `STOP FAILED`, and no longer does.
 
 Manual/Hold is an **operator override**, not a state to normalize: if the operator parked the
 station on purpose — for instance because yaw cannot currently be driven stably — a restart that

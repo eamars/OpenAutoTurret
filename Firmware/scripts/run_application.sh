@@ -484,6 +484,11 @@ cleanup() {
     elif [ "$MODE" = commission ]; then
       { echo 'Stopped: commissioning probe ended; not a park/disable certification';
         tail -n 3 "$RUN/controller.log"; } > "$RUN/shutdown.result"
+    elif grep -Fq 'SHUT DOWN (pitch released on its rest stop' "$RUN/controller.log"; then
+      # The web's SHUTDOWN sequence, run by the stop itself (owner, 2026-10-03).
+      echo 'Stopped: SHUT DOWN (pitch on its rest stop, yaw at 0, both motors off)' > "$RUN/shutdown.result"
+    elif grep -Fq 'STOPPED (already shut down: both motors off)' "$RUN/controller.log"; then
+      echo 'Stopped: already shut down (both motors off)' > "$RUN/shutdown.result"
     elif grep -Fq 'STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)' "$RUN/controller.log"; then
       echo 'Stopped: STOPPED (pitch disable confirmed; GM6020 yaw zero requested, disable state unavailable)' > "$RUN/shutdown.result"
     elif grep -Fq 'STOP FAILED:' "$RUN/controller.log"; then
