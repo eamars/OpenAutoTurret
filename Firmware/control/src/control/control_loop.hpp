@@ -822,6 +822,17 @@ class ControlLoop {
   TimeNs narrow_view_ns_ = 0;
   bool roam_patrol() const;
   double patrol_speed_rad_s() const;
+  // The web MENU's live speed settings (owner, 2026-10-03), deg/s; 0 = the configured value.
+  // This session only: a restart returns to turret_mixed.yaml, so a trial speed cannot become the
+  // deployment's speed by accident (AGENTS.md).
+  double patrol_wide_deg_s() const;
+  double patrol_detail_deg_s() const;
+  double speed_override_patrol_wide_deg_s_ = 0, speed_override_patrol_detail_deg_s_ = 0,
+         speed_override_track_deg_s_ = 0;
+  void execute_set_speed(const std::string& arg);
+  // A mode's motion profile as configured (axis caps, payload profile, derate), before any live
+  // speed setting; motion_profile() applies the setting on top.
+  control::MotionProfile configured_motion_profile(int axis, OperatingMode mode) const;
   // §80: the preserved scene, held so it can be published until someone takes it. Kept
   // here rather than only in the snapshot because each cycle fills a fresh snapshot.
   telemetry::BlackBoxCapture blackbox_{};

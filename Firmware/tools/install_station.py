@@ -270,7 +270,7 @@ def check_units(root: str, units_dir: str, rep: Report) -> None:
     rep.add(INFO if video_on else PASS,
             "webd preview availability flag",
             ("OTA_VIDEO_ENABLE on: webd does NOT open /dev/video1 at startup — "
-             "it opens it when the dashboard switch turns the preview on "
+             "it opens it when the HUD asks for the preview "
              "(measured: running=False before /api/video/start). The device is "
              "exclusive, so previewing while visiond runs fails with a visible "
              "error in the panel rather than stealing frames (§42.3). Set "

@@ -63,6 +63,7 @@ inline constexpr int kYawIx = 1;
 //   start_installation_calibration,
 //   start_payload_verification, select_payload_profile <name>,
 //   request_park, request_shutdown,
+//   set_speed <patrol_wide|patrol_detail|track>=<deg/s|default>  (this session only),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -120,6 +121,35 @@ inline CommandResult validate_command(const SystemCommandState& s,
   // command allowed while NOT homed. It is also the way out of a fault (owner ruling
   // 2026-10-03: Home recovers everything): controld runs motor recovery first.
   if (command == "start_homing") {
+    r.ok = true;
+    return r;
+  }
+  if (command == "set_speed") {
+    // The web MENU's live speed settings (owner, 2026-10-03). Shape here; the bound is the mode's
+    // current maximum, which only the control thread knows (payload profile, derate). It moves
+    // nothing, so it is allowed before homing and in a fault, unlike a profile switch.
+    const auto eq = arg.find('=');
+    const std::string key = eq == std::string::npos ? std::string() : arg.substr(0, eq);
+    const std::string value = eq == std::string::npos ? std::string() : arg.substr(eq + 1);
+    if (key != "patrol_wide" && key != "patrol_detail" && key != "track") {
+      r.error = "set_speed needs patrol_wide=, patrol_detail= or track=";
+      return r;
+    }
+    if (value != "default") {
+      double v = 0;
+      try {
+        size_t used = 0;
+        v = std::stod(value, &used);
+        if (used != value.size()) throw std::invalid_argument("trailing");
+      } catch (...) {
+        r.error = "set_speed value must be deg/s or 'default'";
+        return r;
+      }
+      if (!std::isfinite(v) || v <= 0) {
+        r.error = "set_speed value must be a positive speed in deg/s";
+        return r;
+      }
+    }
     r.ok = true;
     return r;
   }

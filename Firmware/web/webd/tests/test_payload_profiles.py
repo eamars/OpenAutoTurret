@@ -1,4 +1,5 @@
-"""The payload-profile picker's server side (§28.5 / §31.3 / §42.2).
+"""The payload-profile picker's server side (§28.5 / §31.3 / §42.2). Since 2026-10-03 there is no
+picker page (the /dashboard was removed); the API and controld's command stay, and are what this tests.
 
 The daemon has accepted `select_payload_profile` for a while (and `station_ipc`
 could send it), but the dashboard — the thing an operator actually stands at —
@@ -20,7 +21,6 @@ from fastapi.testclient import TestClient
 from ..app import create_app
 from ..config import WebConfig
 from ..controld_client import ControldClient
-from ..dashboard import DASHBOARD_HTML
 from ..fake_controld import FakeControld
 
 
@@ -104,22 +104,6 @@ class ProfileListingTest(unittest.TestCase):
         # The reason must survive the relay: that string is the operator's only
         # explanation of why nothing changed.
         self.assertIn("does_not_exist", r["error"])
-
-
-class DashboardSurfaceTest(unittest.TestCase):
-    """The UI wiring is plain text in dashboard.py; assert it stays wired."""
-
-    def test_profile_picker_is_present_and_wired(self):
-        for token in ('data-cmd="select_payload_profile"',
-                      'id="profile-select"', '"/api/payload_profiles"',
-                      'wireCommands("p-payload")'):
-            self.assertIn(token, DASHBOARD_HTML, token)
-
-    def test_the_picker_explains_caps_vs_commissioning(self):
-        """Silence here causes the wrong mental model: selecting a profile is
-        not the same as commissioning verified payload data (§31.3)."""
-        self.assertIn("CAPS", DASHBOARD_HTML)
-        self.assertIn("Start payload verification", DASHBOARD_HTML)
 
 
 if __name__ == "__main__":

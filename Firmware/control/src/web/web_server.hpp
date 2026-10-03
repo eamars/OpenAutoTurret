@@ -181,6 +181,18 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"effective_speed_ceiling_deg_s\":" << s.effective_speed_ceiling_deg_s
      << ",\"motion_profile\":" << format_motion_profiles(s)
      << ",\"payload_profile_name\":\"" << json_escape(s.payload_profile_name) << "\""
+     << ",\"speed_patrol_wide_deg_s\":" << s.speed_patrol_wide_deg_s
+     << ",\"speed_patrol_wide_default_deg_s\":" << s.speed_patrol_wide_default_deg_s
+     << ",\"speed_patrol_detail_deg_s\":" << s.speed_patrol_detail_deg_s
+     << ",\"speed_patrol_detail_default_deg_s\":" << s.speed_patrol_detail_default_deg_s
+     << ",\"speed_track_deg_s\":" << s.speed_track_deg_s
+     << ",\"speed_track_default_deg_s\":" << s.speed_track_default_deg_s
+     << ",\"speed_roam_max_deg_s\":" << s.speed_roam_max_deg_s
+     << ",\"speed_track_max_deg_s\":" << s.speed_track_max_deg_s
+     << ",\"speed_overridden\":" << (s.speed_overridden ? "true" : "false")
+     << ",\"temp_pitch_c\":" << json_finite_or_null(s.temp_pitch_c)
+     << ",\"temp_yaw_c\":" << json_finite_or_null(s.temp_yaw_c)
+     << ",\"motor_overtemp_c\":" << s.motor_overtemp_c
      << ",\"can_available\":" << (s.can_available ? "true" : "false")
      << ",\"can_kind\":\"" << json_escape(s.can_kind) << "\""
      << ",\"can_device\":\"" << json_escape(s.can_device) << "\""
@@ -191,6 +203,21 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"can_tx_frames\":" << s.can_tx_frames
      << ",\"can_tx_failed\":" << s.can_tx_failed
      << ",\"can_last_rx_age_ms\":" << s.can_last_rx_age_ms
+     << ",\"can_buses\":" << [&s]() {
+          std::string out = "[";
+          for (int i = 0; i < s.can_bus_count; ++i) {
+            const auto& b = s.can_buses[static_cast<size_t>(i)];
+            if (i) out += ",";
+            out += "{\"device\":\"" + json_escape(b.device) + "\",\"up\":" +
+                   (b.up ? "true" : "false") + ",\"state\":" + std::to_string(b.state) +
+                   ",\"rx_frames\":" + std::to_string(b.rx_frames) +
+                   ",\"rx_error_frames\":" + std::to_string(b.rx_error_frames) +
+                   ",\"tx_frames\":" + std::to_string(b.tx_frames) +
+                   ",\"tx_failed\":" + std::to_string(b.tx_failed) +
+                   ",\"last_rx_age_ms\":" + std::to_string(b.last_rx_age_ms) + "}";
+          }
+          return out + "]";
+        }()
      << ",\"payload_profile_status\":\"" << s.payload_profile_status << "\""
      << ",\"payload_derated\":" << (s.payload_derated ? "true" : "false")
      << ",\"payload_check_active\":" << (s.payload_check_active ? "true" : "false")

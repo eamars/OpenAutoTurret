@@ -106,11 +106,9 @@ class HudServedTest(unittest.TestCase):
         self.assertIn('/api/video/state', HUD_JS)          # self-heal, not a single attempt
         self.assertIn('addEventListener("error"', HUD_JS)  # a stopped stream has to be noticed
 
-    def test_legacy_engineering_page_survives_at_its_own_path(self):
-        """The HUD is not allowed to delete the numbers it has not replaced yet."""
-        r = self.http.get("/dashboard")
-        self.assertEqual(r.status_code, 200)
-        self.assertNotIn("--hud-green", r.text)
+    def test_the_legacy_engineering_page_is_gone(self):
+        """Removed 2026-10-03 (owner) once the stats overlay carried its audited numbers."""
+        self.assertEqual(self.http.get("/dashboard").status_code, 404)
 
     def test_api_surface_is_unchanged(self):
         """The presentation revision must not disturb what other clients depend on."""

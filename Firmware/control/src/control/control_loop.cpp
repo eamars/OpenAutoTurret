@@ -1448,8 +1448,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         const double base = v_max[ix(AxisId::Yaw)];
         ManualProfileLimits coarse = manual_.config().normal, precise = manual_.config().fine;
         if (base > 0) {
-          coarse.velocity_scale = std::clamp(cfg_.roam_patrol_speed_deg_s * kDeg2Rad / base, 0.01, 1.0);
-          precise.velocity_scale = std::clamp(cfg_.roam_narrow_patrol_speed_deg_s * kDeg2Rad / base, 0.01, 1.0);
+          coarse.velocity_scale = std::clamp(patrol_wide_deg_s() * kDeg2Rad / base, 0.01, 1.0);
+          precise.velocity_scale = std::clamp(patrol_detail_deg_s() * kDeg2Rad / base, 0.01, 1.0);
         }
         manual_.set_pace_limits(coarse, precise, narrow);
       }
@@ -3394,9 +3394,47 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           (ch.last_rx_ns > 0 && now_ns >= ch.last_rx_ns)
               ? static_cast<int64_t>((now_ns - ch.last_rx_ns) / 1000000)
               : -1;
+      snap.can_bus_count = 0;
+      for (const CanHealth& bus : backend_->can_health_all()) {
+        if (!bus.available || snap.can_bus_count >= static_cast<int>(snap.can_buses.size())) continue;
+        auto& row = snap.can_buses[snap.can_bus_count++];
+        row.device = bus.device;
+        row.up = bus.up;
+        row.state = static_cast<int8_t>(bus.state);
+        row.rx_frames = bus.rx_frames;
+        row.rx_error_frames = bus.rx_error_frames;
+        row.tx_frames = bus.tx_frames;
+        row.tx_failed = bus.tx_failed;
+        row.last_rx_age_ms = (bus.last_rx_ns > 0 && now_ns >= bus.last_rx_ns)
+                                 ? static_cast<int64_t>((now_ns - bus.last_rx_ns) / 1000000)
+                                 : -1;
+      }
     }
     // Phase 9: payload profile status (§42.1, §31.3).
     snap.payload_profile_name = payload_profile_ ? payload_profile_->name : "";
+    {
+      const auto speed_deg_s = [this](OperatingMode m, bool configured) {
+        double v = 0;
+        for (int a = 0; a < kAxisCount; ++a)
+          v = std::max(v, (configured ? configured_motion_profile(a, m) : motion_profile(a, m))
+                              .target.speed);
+        return v / kDeg2Rad;
+      };
+      snap.speed_patrol_wide_deg_s = patrol_wide_deg_s();
+      snap.speed_patrol_wide_default_deg_s = cfg_.roam_patrol_speed_deg_s;
+      snap.speed_patrol_detail_deg_s = patrol_detail_deg_s();
+      snap.speed_patrol_detail_default_deg_s = cfg_.roam_narrow_patrol_speed_deg_s;
+      snap.speed_track_deg_s = speed_deg_s(OperatingMode::AutoTrack, false);
+      snap.speed_track_default_deg_s = speed_deg_s(OperatingMode::AutoTrack, true);
+      snap.speed_roam_max_deg_s = motion_speed(OperatingMode::AutoRoam, true) / kDeg2Rad;
+      snap.speed_track_max_deg_s = motion_speed(OperatingMode::AutoTrack, true) / kDeg2Rad;
+      snap.temp_pitch_c = last_temp_[ix(AxisId::Pitch)];
+      snap.temp_yaw_c = last_temp_[ix(AxisId::Yaw)];
+      snap.motor_overtemp_c = cfg_.motor_overtemp_c;
+      snap.speed_overridden = speed_override_patrol_wide_deg_s_ > 0 ||
+                              speed_override_patrol_detail_deg_s_ > 0 ||
+                              speed_override_track_deg_s_ > 0;
+    }
     snap.payload_profile_status =
         payload::payload_status_name(payload_status_);
     snap.payload_derated = payload_derated_;
@@ -3909,6 +3947,19 @@ std::pair<double, double> ControlLoop::hold_brake_limits(int axis) const {
 }
 
 control::MotionProfile ControlLoop::motion_profile(int axis, OperatingMode mode) const {
+  auto resolved = configured_motion_profile(axis, mode);
+  if (!cfg_.motion.configured) return resolved;
+  // A live speed setting moves the mode's target speed, never past its resolved maximum. The roam
+  // target follows the wide patrol pace because it caps the patrol reference (turret_mixed.yaml).
+  const double speed_override_deg_s =
+      mode == OperatingMode::AutoTrack ? speed_override_track_deg_s_
+      : mode == OperatingMode::AutoRoam ? speed_override_patrol_wide_deg_s_ : 0.0;
+  if (speed_override_deg_s > 0)
+    resolved.target.speed = std::min(resolved.maximum.speed, speed_override_deg_s * kDeg2Rad);
+  return resolved;
+}
+
+control::MotionProfile ControlLoop::configured_motion_profile(int axis, OperatingMode mode) const {
   if (!cfg_.motion.configured) return {};  // existing service servo bounds
   auto payload = control::MotionRates{};
   if (payload_profile_) {
@@ -4446,7 +4497,53 @@ double ControlLoop::patrol_speed_rad_s() const {
   // The narrow view counts only while perception keeps saying so: a second without a frame
   // (visiond restarting, which always comes back on wide) is the wide pace.
   const bool narrow = narrow_view_ && now_ns_ - narrow_view_ns_ < 1'000'000'000LL;
-  return (narrow ? cfg_.roam_narrow_patrol_speed_deg_s : cfg_.roam_patrol_speed_deg_s) * kDeg2Rad;
+  return (narrow ? patrol_detail_deg_s() : patrol_wide_deg_s()) * kDeg2Rad;
+}
+
+double ControlLoop::patrol_wide_deg_s() const {
+  return speed_override_patrol_wide_deg_s_ > 0 ? speed_override_patrol_wide_deg_s_
+                                               : cfg_.roam_patrol_speed_deg_s;
+}
+
+double ControlLoop::patrol_detail_deg_s() const {
+  return speed_override_patrol_detail_deg_s_ > 0 ? speed_override_patrol_detail_deg_s_
+                                                 : cfg_.roam_narrow_patrol_speed_deg_s;
+}
+
+void ControlLoop::execute_set_speed(const std::string& arg) {
+  const auto eq = arg.find('=');
+  const std::string key = arg.substr(0, eq), value = arg.substr(eq + 1);
+  // The bound is the mode's maximum as it stands now: config, axis caps, payload profile, derate.
+  const OperatingMode mode = key == "track" ? OperatingMode::AutoTrack : OperatingMode::AutoRoam;
+  const double max_deg_s = motion_speed(mode, /*maximum=*/true) / kDeg2Rad;
+  double* slot = key == "patrol_wide" ? &speed_override_patrol_wide_deg_s_
+               : key == "patrol_detail" ? &speed_override_patrol_detail_deg_s_
+                                        : &speed_override_track_deg_s_;
+  if (value == "default") {
+    *slot = 0;
+    spdlog::info("speed setting: {} back to the configured value", key);
+    ack_command("set_speed", true, key + " back to the configured value");
+    return;
+  }
+  const double v = std::stod(value);
+  constexpr double kMinDegS = 0.5;
+  if (key == "track" && !cfg_.motion.configured) {
+    ack_command("set_speed", false, "this configuration has no motion block; tracking speed is fixed");
+    return;
+  }
+  if (cfg_.motion.configured && v > max_deg_s + 1e-9) {
+    ack_command("set_speed", false,
+                fmt::format("{} {:.1f} deg/s is above this mode's maximum {:.1f} deg/s", key, v,
+                            max_deg_s));
+    return;
+  }
+  if (v < kMinDegS) {
+    ack_command("set_speed", false, fmt::format("{} must be at least {:.1f} deg/s", key, kMinDegS));
+    return;
+  }
+  *slot = v;
+  spdlog::info("speed setting: {} = {:.1f} deg/s for this session", key, v);
+  ack_command("set_speed", true, fmt::format("{} = {:.1f} deg/s until restart", key, v));
 }
 
 AxisLimits ControlLoop::runtime_limits(AxisId axis) const {
@@ -5402,6 +5499,10 @@ void ControlLoop::execute_command(const std::string& name,
                   std::string("payload check needs Hold; phase is ") +
                       phase_name(phase_));
     }
+    return;
+  }
+  if (name == "set_speed") {
+    execute_set_speed(arg);
     return;
   }
   if (name == "select_payload_profile") {

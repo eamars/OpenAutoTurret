@@ -14,6 +14,7 @@
 #pragma once
 
 #include <array>
+#include <limits>
 #include <memory>
 #include <filesystem>
 #include <fstream>
@@ -492,12 +493,34 @@ struct TelemetrySnapshot {
   uint64_t can_tx_frames = 0;
   uint64_t can_tx_failed = 0;
   int64_t can_last_rx_age_ms = -1;      // -1 = nothing received yet
+  // Every bus the backend owns (the mixed station: can0 yaw, can1 pitch). The can_* fields above
+  // are the backend's primary bus only, kept for older readers; the stats overlay reads this list.
+  struct CanBus {
+    std::string device;
+    bool up = false;
+    int8_t state = -1;
+    uint64_t rx_frames = 0, rx_error_frames = 0, tx_frames = 0, tx_failed = 0;
+    int64_t last_rx_age_ms = -1;
+  };
+  std::array<CanBus, 4> can_buses{};
+  int can_bus_count = 0;
   // Safety / timing.
   SafetyAction safety_action = SafetyAction::Allow;
   int64_t feedback_age_ms = 0;
   int64_t control_cycle_us = 0;
   // Phase 9: payload profiling status (§42.1, §31.3).
   std::string payload_profile_name;    // active profile ("" = none)
+  // The web MENU's live speed settings (deg/s): value in force, configured value, and the mode's
+  // maximum that bounds it. speed_overridden: any of them differs from turret_mixed.yaml.
+  double speed_patrol_wide_deg_s = 0, speed_patrol_wide_default_deg_s = 0;
+  double speed_patrol_detail_deg_s = 0, speed_patrol_detail_default_deg_s = 0;
+  double speed_track_deg_s = 0, speed_track_default_deg_s = 0;
+  double speed_roam_max_deg_s = 0, speed_track_max_deg_s = 0;
+  bool speed_overridden = false;
+  // Drive-reported motor temperatures (deg C; NaN = no reading yet) and the supervisor's trip.
+  double temp_pitch_c = std::numeric_limits<double>::quiet_NaN();
+  double temp_yaw_c = std::numeric_limits<double>::quiet_NaN();
+  double motor_overtemp_c = 0;
   // --- v3 §50/§52: the mode, and what the last command actually did --------
   // Names, not enums: these cross a process boundary into a browser, and a
   // renumbered enum on one side is a silent wrong label on the other.

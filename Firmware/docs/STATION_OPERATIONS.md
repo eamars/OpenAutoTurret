@@ -115,6 +115,39 @@ actions. Each one works from wherever it is offered, and each asks for two press
   clear, which is a STOP. A drive that is still holding speed zero is re-armed without being
   released (`CyberGearSystem::finish_axis_recovery`).
 
+## The web page: less on screen, settings in MENU, stats on request (owner ruling, 2026-10-03)
+
+**Ruling.** The page should inform without overwhelming:
+- **Status bar.** The six health chips moved from the top right into the bottom bar, folded behind
+  one summary (`ALL OK`, or `N ALERTS`).
+  - A chip that is not healthy is never folded away.
+  - MODE, STATE and SAFETY left the bar, because the mode block and the safety banner already say
+    them.
+- **Mode controls.** The Manual/Hold and Auto buttons and the MODE drawer stay as they were.
+- **MENU > SETTINGS** holds:
+  - The live speeds: patrol on wide, patrol on detail, and tracking. They use controld's
+    `set_speed` and are bounded by each mode's maximum. They last **this session only**: a restart
+    returns to `turret_mixed.yaml`, so a trial speed cannot quietly become the deployment's speed.
+    The DPAD's COARSE and FINE paces are the two patrol paces, so they follow.
+  - A placeholder for the target selection policy. Today the only policy is perception's
+    `AUTO_SELECT_SINGLE`: one person, alone for 0.5 s.
+  - The **STATS FOR NERDS** switch.
+- **The stats overlay** is off by default and remembered per browser. It replaced both the DIAG
+  drawer and the old `/dashboard` page, which was removed.
+  - Every dashboard field was audited before the move. These were dropped:
+    - the installation pose, which is always identity here
+    - payload verification status, which is refused on the mixed backend
+    - the GM6020 "effort", which is always null
+    - v1 tracking state
+    - the video caption, which reported config defaults rather than the served size
+  - controld now publishes both CAN buses (`can_buses`; can1 had been invisible), the motor
+    temperatures against the supervisor's trip, and the event history, which no page showed before.
+
+**What became UI-unreachable.** Payload profile selection, `run_test_motion`, and the dead v1
+controls: start/stop tracking, enable/disable search, visual calibration (always refused), and
+payload verification (refused on mixed). All of them remain on `/api/command` and
+`tools/station_ipc.py cmd`.
+
 ## Scheduling: what runs real time (owner ruling, 2026-10-03)
 
 **Ruling.** Motor control comes first and the web UI last. Real time is given **per thread, only to

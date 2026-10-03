@@ -192,6 +192,20 @@ class Telemetry:
     cmd_ack_seq: int = 0
     # Phase 9 payload verification (§28.5, §31.3, §42.1).
     payload_profile_name: str = ""          # active stored profile ("" = none)
+    # The web MENU's live speed settings (deg/s; controld's set_speed, this session only).
+    speed_patrol_wide_deg_s: float = 0.0
+    speed_patrol_wide_default_deg_s: float = 0.0
+    speed_patrol_detail_deg_s: float = 0.0
+    speed_patrol_detail_default_deg_s: float = 0.0
+    speed_track_deg_s: float = 0.0
+    speed_track_default_deg_s: float = 0.0
+    speed_roam_max_deg_s: float = 0.0
+    speed_track_max_deg_s: float = 0.0
+    speed_overridden: bool = False
+    # Drive-reported motor temperatures (deg C; None until a drive reports) and the supervisor's trip.
+    temp_pitch_c: Optional[float] = None
+    temp_yaw_c: Optional[float] = None
+    motor_overtemp_c: float = 0.0
     payload_profile_status: str = "no_profile"  # ok|no_profile|mismatch|error
     payload_derated: bool = False           # motion limits derated (mismatch)
     payload_check_active: bool = False      # in-loop verification running
@@ -328,6 +342,9 @@ class Telemetry:
     can_tx_frames: int = 0
     can_tx_failed: int = 0
     can_last_rx_age_ms: int = -1            # -1 = nothing received yet
+    # Every bus the backend owns, [{device, up, state, rx_frames, rx_error_frames, tx_frames,
+    # tx_failed, last_rx_age_ms}]: the mixed station's can0 (yaw) and can1 (pitch).
+    can_buses: list = field(default_factory=list)
 
 
 @dataclass

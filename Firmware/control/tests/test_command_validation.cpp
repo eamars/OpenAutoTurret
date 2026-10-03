@@ -210,3 +210,17 @@ TEST(CommandValidation, SetModeRejectsNamesThatDoNotExist) {
   EXPECT_NE(r.error.find("MANUAL"), std::string::npos)
       << "the rejection must name the accepted spellings, not just say no";
 }
+
+TEST(CommandValidation, SetSpeedTakesAKnownKeyAndAPositiveSpeedOrDefault) {
+  SystemCommandState s;
+  EXPECT_TRUE(validate_command(s, "set_speed", "patrol_wide=12").ok);
+  EXPECT_TRUE(validate_command(s, "set_speed", "patrol_detail=2.5").ok);
+  EXPECT_TRUE(validate_command(s, "set_speed", "track=default").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "pitch=5").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "track=fast").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "track=5deg").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "track=-3").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "track=0").ok);
+  EXPECT_FALSE(validate_command(s, "set_speed", "track=nan").ok);
+}

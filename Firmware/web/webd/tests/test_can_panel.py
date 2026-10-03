@@ -1,4 +1,5 @@
-"""The CAN health panel (§55 / §54.4) — server fields and the UI wiring.
+"""CAN health (§55 / §54.4): the server fields. The panel is the HUD stats overlay's CAN section,
+tested in test_stats_and_settings.py (both buses, BUS-OFF, absence said as absence).
 
 The transport has always counted rx/tx/error frames and the controller's error
 state; the control loop read those counters and dropped them on the floor. The
@@ -14,40 +15,7 @@ from __future__ import annotations
 
 import unittest
 
-from ..dashboard import DASHBOARD_HTML
 from ..protocol import Telemetry, telemetry_to_json
-
-
-class CanPanelSurfaceTest(unittest.TestCase):
-
-    def test_panel_and_renderer_exist(self):
-        for token in ('id="p-can"', 'id="can-state"', "renderCan(t)",
-                      "t.can_state", "t.can_rx_error_frames", "CAN_STATE"):
-            self.assertIn(token, DASHBOARD_HTML, token)
-
-    def test_bus_off_is_the_loud_one(self):
-        """§54.4 lists active/warning/passive/bus-off as things the HIL run must
-        observe. BUS-OFF has to be visually unmistakable."""
-        self.assertIn("BUS-OFF", DASHBOARD_HTML)
-        self.assertIn('"err"', DASHBOARD_HTML[DASHBOARD_HTML.index("CAN_STATE"):
-                                              DASHBOARD_HTML.index("CAN_STATE") + 400])
-
-    def test_yousee_gets_no_permanent_unknown_badge(self):
-        """This station's primary PHY is the yousee adapter, which exposes no
-        controller error state (yousee_transport.hpp). A plain state map would
-        sit on "unknown" forever and read as a fault; the panel must say the
-        state is not exposed and name the signals that DO exist there."""
-        note = DASHBOARD_HTML[DASHBOARD_HTML.index("function renderCan"):]
-        note = note[:note.index("function render(t)")]
-        self.assertIn('t.can_kind === "yousee"', note)
-        self.assertIn("not exposed by adapter", note)
-        self.assertIn("RX error frames", note)
-
-    def test_simulated_backend_is_labelled_as_absence(self):
-        note = DASHBOARD_HTML[DASHBOARD_HTML.index("function renderCan"):]
-        note = note[:note.index("function render(t)")]
-        self.assertIn("no CAN link", note)
-        self.assertIn("absence, not health", note)
 
 
 class CanTelemetryShapeTest(unittest.TestCase):

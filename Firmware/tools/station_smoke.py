@@ -85,7 +85,7 @@ def readiness_gaps(state: dict) -> list[str]:
 def smoke_once(base: str, timeout: float) -> dict:
     page = get_bytes(base + "/", timeout)
     if b"OpenAutoTurret" not in page:
-        raise RuntimeError("station page did not contain the OpenAutoTurret dashboard")
+        raise RuntimeError("station page did not contain the OpenAutoTurret HUD")
     get_json(base + "/api/health", timeout)
     telemetry = receive_telemetry(base, timeout)
     print(

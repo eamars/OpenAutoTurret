@@ -34,7 +34,9 @@ DOC = REPO / "Firmware" / "docs" / "archive" / "implemented" / "architecture" / 
 SNAPSHOT = REPO / "Firmware" / "control" / "src" / "telemetry" / "telemetry.hpp"
 WIRE = REPO / "Firmware" / "control" / "src" / "web" / "web_server.hpp"
 PROTOCOL = REPO / "Firmware" / "web" / "webd" / "protocol.py"
-PAGE = REPO / "Firmware" / "web" / "webd" / "dashboard.py"
+# The page is the HUD since the /dashboard was removed (2026-10-03); its stats overlay reads the
+# engineering fields the card page used to.
+PAGE = REPO / "Firmware" / "web" / "webd" / "hud.py"
 
 
 def _section(title: str) -> str:

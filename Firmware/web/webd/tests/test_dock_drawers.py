@@ -74,10 +74,11 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     # -- the dock itself ---------------------------------------------------------------
 
-    def test_the_five_buttons_are_the_five_the_revision_names(self) -> None:
+    def test_the_dock_is_the_revision_less_diag(self) -> None:
+        # §13 listed five; DIAG left on 2026-10-03 (owner): its rows are in the stats overlay, which
+        # MENU > SETTINGS turns on. The order of the rest is unchanged.
         spec = self._node("console.log(JSON.stringify(T.hudDockSpecs({})));")
-        self.assertEqual([b["key"] for b in spec], ["TARGETS", "MODE", "MANUAL", "DIAG", "MENU"],
-                         "§13 lists these five in this order")
+        self.assertEqual([b["key"] for b in spec], ["TARGETS", "MODE", "MANUAL", "MENU"])
         self.assertTrue(all(not b["active"] for b in spec))
 
     def test_exactly_one_button_shows_the_open_drawer(self) -> None:

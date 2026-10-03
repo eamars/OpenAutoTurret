@@ -103,9 +103,8 @@ class AppTest(unittest.TestCase):
         self.assertIn("/ws", r.text)
         self.assertNotIn("Developer controls", r.text,
                          "the operator view must not be the engineering console (v3.2 s3)")
-        d = self.tc.get("/dashboard")
-        self.assertEqual(d.status_code, 200)
-        self.assertIn("Developer controls", d.text)
+        # The old card page is gone (owner, 2026-10-03); its numbers are the HUD's stats overlay.
+        self.assertEqual(self.tc.get("/dashboard").status_code, 404)
 
     def test_websocket_streams_telemetry(self) -> None:
         with self.tc.websocket_connect("/ws") as ws:

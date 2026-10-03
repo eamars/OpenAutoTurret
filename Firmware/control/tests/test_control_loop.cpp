@@ -476,13 +476,27 @@ struct HomedLoop {
   // at the homing gate, from whatever configuration is current there — which is why this has to
   // happen here rather than from inside a test body.
   HomedLoop(bool home = true, float confidence_high_min = 0.0f, bool wide_lens = false,
-            bool automatic_handoffs = false, int acquisition_dwell_ms = 250) {
+            bool automatic_handoffs = false, int acquisition_dwell_ms = 250,
+            bool station_motion = false) {
     sim_owner = std::make_unique<sim::SimMotorBackend>(0.005);
     sim = sim_owner.get();
     sim->set_stops(AxisId::Pitch, -1.0, 1.0);
     sim->set_stops(AxisId::Yaw, -1.0, 1.0);
     auto cfg = make_cfg();
     cfg.auto_track_high_min = confidence_high_min;  // 0 = the default
+    if (station_motion) {
+      // turret_mixed.yaml's motion block: 20 deg/s maximum everywhere, roam targeting 15.
+      cfg.motion.configured = true;
+      const control::MotionRates max{20 * kDeg2Rad, 30 * kDeg2Rad, 120 * kDeg2Rad};
+      for (int m = 0; m < 3; ++m)
+        for (int a = 0; a < kAxisCount; ++a) {
+          cfg.motion.modes[m][a].maximum = max;
+          cfg.motion.modes[m][a].target = {20 * kDeg2Rad, 15 * kDeg2Rad, 60 * kDeg2Rad};
+        }
+      for (int a = 0; a < kAxisCount; ++a)
+        cfg.motion.modes[static_cast<int>(OperatingMode::AutoRoam)][a].target.speed = 15 * kDeg2Rad;
+      cfg.motion.axis_maximum = {max, max};
+    }
     if (automatic_handoffs) {
       cfg.auto_roam_on_loss_ms = 1000;
       cfg.auto_track_on_acquire_ms = acquisition_dwell_ms;
@@ -1099,6 +1113,63 @@ TEST(ManualMode, TheViewJogMovesAtThePatrolPaceOfTheMainCamera) {
   // The operator's pin on the pad's centre: the other pace, whatever the main display shows.
   EXPECT_NEAR(pace(false, "yaw+:precise"), 3.0, 0.6);
   EXPECT_NEAR(pace(true, "yaw+:coarse"), 15.0, 2.0);
+}
+
+TEST(SpeedSettings, ALiveSpeedSettingMovesThePaceAndDefaultRestoresIt) {
+  // The web MENU's speed settings (owner, 2026-10-03): this session only, bounded by the mode.
+  HomedLoop h(true, 0.0f, false, false, 250, /*station_motion=*/true);
+  ASSERT_TRUE(h.ready);
+  EXPECT_DOUBLE_EQ(h.snap().speed_patrol_wide_deg_s, 15.0);
+  EXPECT_DOUBLE_EQ(h.snap().speed_patrol_wide_default_deg_s, 15.0);
+  EXPECT_FALSE(h.snap().speed_overridden);
+
+  h.run("set_speed", "patrol_wide=8");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_DOUBLE_EQ(h.snap().speed_patrol_wide_deg_s, 8.0);
+  EXPECT_DOUBLE_EQ(h.snap().speed_patrol_wide_default_deg_s, 15.0);
+  EXPECT_TRUE(h.snap().speed_overridden);
+
+  // The coarse DPAD pace is the wide patrol pace, so it follows the setting.
+  h.run("manual_jog_start", "yaw+:coarse");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  double q0 = 0;
+  for (int i = 0; i < 500; ++i) {
+    if (i % 20 == 0) h.loop->submit_command("manual_jog_keepalive", "");
+    if (i == 300) q0 = h.loop->last_positions()[1];
+    h.step(1);
+  }
+  EXPECT_NEAR((h.loop->last_positions()[1] - q0) * kRad2Deg, 8.0, 1.2);
+  h.run("manual_jog_stop", "");
+
+  h.run("set_speed", "track=12");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_NEAR(h.snap().speed_track_deg_s, 12.0, 1e-9);
+  EXPECT_NEAR(h.snap().speed_track_default_deg_s, 20.0, 1e-9);
+
+  // Above the mode's maximum: refused with the bound, nothing changes.
+  const double max_track = h.snap().speed_track_max_deg_s;
+  const std::string too_fast = "track=" + std::to_string(max_track + 5);
+  h.run("set_speed", too_fast.c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("maximum"), std::string::npos) << h.snap().cmd_ack_reason;
+  EXPECT_NEAR(h.snap().speed_track_deg_s, 12.0, 1e-9);
+
+  h.run("set_speed", "patrol_wide=default");
+  h.run("set_speed", "track=default");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_DOUBLE_EQ(h.snap().speed_patrol_wide_deg_s, 15.0);
+  EXPECT_NEAR(h.snap().speed_track_deg_s, 20.0, 1e-9);
+  EXPECT_FALSE(h.snap().speed_overridden);
+}
+
+TEST(SpeedSettings, WithoutAMotionProfileThereIsNoTrackingSpeedToSet) {
+  HomedLoop h;   // the legacy path: no motion block
+  ASSERT_TRUE(h.ready);
+  h.run("set_speed", "track=12");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  h.run("set_speed", "patrol_detail=2");   // the patrol pace exists either way
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_DOUBLE_EQ(h.snap().speed_patrol_detail_deg_s, 2.0);
 }
 
 TEST(ManualMode, ALeasedJogMovesTheTurretAndStopsWhenTheBrowserGoesQuiet) {

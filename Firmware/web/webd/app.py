@@ -9,7 +9,7 @@ Wiring:
     browser video"). Because webd is a separate process from controld and
     controld's web server runs on a non-RT thread, browser load can never
     degrade the control loop or CAN feedback staleness (§54.5).
-  * FastAPI routes: ``/`` (v3.2 HUD), ``/dashboard`` (legacy engineering page),
+  * FastAPI routes: ``/`` (v3.2 HUD; its engineering numbers are the stats overlay),
     ``/api/state``, ``/api/health``,
     ``/api/command`` (POST), ``/ws`` (telemetry stream).
 
@@ -42,7 +42,6 @@ from .imu_state import ImuTraceReader
 from .blackbox import BlackBoxWriter
 from .controld_client import ControldClient
 from .protocol import TELEMETRY_STALE_AFTER_S
-from .dashboard import dashboard_html
 from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
 from .video import VideoSource, mjpeg_frame
@@ -266,16 +265,10 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
-        # v3.2 s3: the operator view is the camera-dominant HUD. The card dashboard is what
-        # s3 rules out, but its engineering numbers are still needed until the DIAG drawer
-        # exists, so it stays reachable rather than being deleted out from under anyone.
+        # v3.2 s3: the operator view is the camera-dominant HUD. The old card page at
+        # /dashboard was removed on 2026-10-03 (owner): its audited numbers are the HUD's stats
+        # overlay (MENU > SETTINGS), and its developer commands remain on /api/command.
         return HUD_HTML
-
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard() -> str:
-        """The pre-v3.2 engineering page. Kept until the HUD's DIAG drawer carries the same
-        numbers; s23 means it is a tool, not the operator view."""
-        return dashboard_html(config.title)
 
     def _stamped(t):
         """Attach webd's own view of how old this snapshot is, on a copy.

@@ -2,8 +2,9 @@
 
 `docs/archive/implemented/design/open_auto_turret_v3_2_apache_hud_ui_revision.md` governs presentation and overrides the v3
 dashboard, whose engineering cards are the exact "header plus cards" layout §3 forbids. The
-engineering numbers are not lost: the old page stays reachable at `/dashboard` until the DIAG
-drawer replaces it, and `/api/*` is untouched, so nothing downstream changes.
+engineering numbers moved into the stats overlay, off by default and turned on from
+MENU > SETTINGS; the old `/dashboard` page was removed on 2026-10-03 (owner), and `/api/*` is
+untouched, so nothing downstream changes.
 
 Two decisions worth their weight, both recorded in code rather than in chat:
 
@@ -290,9 +291,10 @@ function hudSafetyPresentation(t) {
 // profile, manual_step takes yaw+1 / pitch-0.5, set_mode takes MANUAL / AUTO_TRACK / AUTO_ROAM and
 // refuses anything else instead of falling back, and STOP MOTION is `hold`.
 function hudDockSpecs(o) {
-  // §13's five, in the order the revision lists them. Always five, whatever the state: a control that
-  // disappears when it is not applicable teaches the operator that the layout is arbitrary.
-  const keys = ["TARGETS", "MODE", "MANUAL", "DIAG", "MENU"];
+  // §13's controls, in the order the revision lists them. DIAG left the dock on 2026-10-03 (owner):
+  // its rows live in the stats overlay, which MENU > SETTINGS turns on, like a video player's
+  // "stats for nerds"; an operator who does not ask for engineering numbers does not see them.
+  const keys = ["TARGETS", "MODE", "MANUAL", "MENU"];
   const open = (o && typeof o.open === "string") ? o.open : null;
   return keys.map((k) => ({ key: k, active: (k === open) }));
 }
@@ -394,7 +396,143 @@ function hudDrawerActions(name, t) {
     ];
   }
 
-  return [];   // DIAG is read-only telemetry; §14 gives it no actions.
+  return [];
+}
+
+// --- MENU > SETTINGS (owner, 2026-10-03) ------------------------------------------------------
+// Speeds are live: controld's set_speed, bounded by each mode's maximum, for this session only (a
+// restart returns to turret_mixed.yaml, so a trial speed never becomes the deployment's speed by
+// accident). The DPAD's COARSE/FINE paces are the two patrol paces, so they follow too.
+const HUD_SPEED_SETTINGS = [
+  { key: "patrol_wide", label: "PATROL · WIDE", value: "speed_patrol_wide_deg_s",
+    base: "speed_patrol_wide_default_deg_s", max: "speed_roam_max_deg_s", step: 1 },
+  { key: "patrol_detail", label: "PATROL · DETAIL", value: "speed_patrol_detail_deg_s",
+    base: "speed_patrol_detail_default_deg_s", max: "speed_roam_max_deg_s", step: 0.5 },
+  { key: "track", label: "TRACKING", value: "speed_track_deg_s",
+    base: "speed_track_default_deg_s", max: "speed_track_max_deg_s", step: 1 }
+];
+const HUD_SPEED_MIN_DEG_S = 0.5;   // controld's own floor
+
+function hudSpeedRows(t) {
+  t = t || {};
+  const round = (x) => Math.round(x * 10) / 10;
+  return HUD_SPEED_SETTINGS.map((s) => {
+    const v = t[s.value], base = t[s.base], max = t[s.max];
+    const known = typeof v === "number" && v > 0;
+    const hasMax = typeof max === "number" && max > 0;
+    const down = known ? round(Math.max(HUD_SPEED_MIN_DEG_S, v - s.step)) : null;
+    const up = known && hasMax ? round(Math.min(max, v + s.step)) : null;
+    return {
+      key: s.key, label: s.label,
+      value: known ? v : null,
+      base: typeof base === "number" && base > 0 ? base : null,
+      max: hasMax ? max : null,
+      // Each arrow is the exact command it sends; null when it would not change anything.
+      down: down !== null && down < v - 1e-9 ? s.key + "=" + down : null,
+      up: up !== null && up > v + 1e-9 ? s.key + "=" + up : null,
+      reset: known && typeof base === "number" && Math.abs(v - base) > 1e-6 ? s.key + "=default" : null
+    };
+  });
+}
+
+// One policy exists today (perception_v1.json: AUTO_SELECT_SINGLE). The row is a placeholder for the
+// choice the owner expects later, so it is shown, named and inert rather than invented.
+const HUD_TARGET_POLICY = { label: "TARGET POLICY", value: "ONE PERSON, ALONE 0.5 S",
+                            note: "more policies later" };
+
+// --- the stats overlay ("stats for nerds") ----------------------------------------------------
+// Off by default, per browser. It replaced both the DIAG drawer and the /dashboard page (owner,
+// 2026-10-03), after a field-by-field audit: fields that are constant on this station (installation
+// pose, payload verification, the GM6020's torque), legacy v1 tracking state, and anything the HUD
+// already shows were left out; what remains is here and nowhere else.
+function hudStatsSections(t) {
+  t = t || {};
+  const deg = (r, dp) => (typeof r === "number" && Number.isFinite(r)
+    ? (r * 57.29577951308232).toFixed(dp === undefined ? 1 : dp) : "--");
+  const n = (v, dp, unit) => (typeof v === "number" && Number.isFinite(v)
+    ? v.toFixed(dp || 0) + (unit || "") : "--");
+  const age = (ms) => (typeof ms === "number" && ms >= 0 ? ms + " ms" : "--");
+  const control = hudDiagRows(t).filter((kv) => kv[0] !== "MODE / PHASE" && kv[0] !== "IMU");
+  control.push(["FEEDBACK AGE", age(t.feedback_age_ms)]);
+  control.push(["CONTROL CYCLE", n(t.control_cycle_us, 0, " us")]);
+  control.push(["SUPERVISORY", String(t.supervisory_state || "--")]);
+
+  const nf = t.inference || {};
+  const streams = Array.isArray(t.video_streams) ? t.video_streams : [];
+  const vision = [
+    ["PUBLISHER", t.vision_connected ? "CONNECTED" : "NOT CONNECTED"],
+    ["MEASUREMENTS", n(t.vision_frames) + "  (" + n(t.vision_dropped) + " dropped)"],
+    ["NETWORK", nf.present ? String(nf.adapter || "?").toUpperCase() + "  " + n(nf.inference_fps, 1, " Hz") +
+                             "  " + n(nf.model_inference_ms, 1, " ms") : "NO REPORT"]
+  ].concat(streams.map((s) => ["STREAM " + String(s.role || "?").toUpperCase(),
+    (s.width && s.height ? s.width + "x" + s.height : "--") + "  " + n(s.delivered_fps, 1, " fps") +
+    (s.running ? "" : "  (stopped)")]));
+
+  const selection = [
+    ["VISIBILITY", String(t.selection_visibility || "--")],
+    ["LAST SEEN", age(t.selection_last_seen_age_ms) + "  predicted " + age(t.prediction_age_ms)],
+    ["AMBIGUITY", (t.selection_ambiguous ? "AMBIGUOUS" : "CLEAR") + "  reacq " +
+                  n(t.reacquisition_score, 2) + "  margin " + n(t.ambiguity_margin, 2)],
+    // The installation pose is identity on this station, so this is the line of sight in the base frame.
+    ["TARGET LOS AZ / EL", deg(t.target_az_world_rad) + " / " + deg(t.target_el_world_rad) + " DEG (base)"],
+    ["INTENT", String(t.intent_source || "--") + " / " + String(t.intent_type || "--") + "  " +
+               String(t.confidence_band || "") + "  " + String(t.intent_reason || "")]
+  ];
+
+  const axes = [
+    ["ASKED YAW / PITCH", t.intent_has_joint_target
+      ? deg(t.intent_q_yaw_rad) + " / " + deg(hudPitch(t, t.intent_q_pitch_rad)) + " DEG" : "none"],
+    ["RATE YAW / PITCH", deg(t.v_yaw_rad_s) + " / " +
+      deg(typeof t.v_pitch_rad_s === "number" ? t.v_pitch_rad_s * HUD_PITCH_UP : null) + " DEG/S"],
+    ["PITCH TO LIMIT", deg(t.soft_limit_distance_pitch_rad) + " DEG"],
+    // Casual inspection (owner, 2026-10-03): the drives' own sensors, against the supervisor's trip.
+    ["MOTOR TEMP YAW / PITCH", n(t.temp_yaw_c, 0, "°C") + " / " + n(t.temp_pitch_c, 0, "°C") +
+      (typeof t.motor_overtemp_c === "number" && t.motor_overtemp_c > 0
+        ? "  (trip " + t.motor_overtemp_c.toFixed(0) + "°C)" : "")],
+    ["YAW CURRENT", n(t.current_a_yaw, 2, " A")],
+    ["PITCH TORQUE", n(t.effort_pitch, 2, " Nm")],
+    ["PAYLOAD PROFILE", String(t.payload_profile_name || "none")]
+  ];
+
+  const roam = [
+    ["PATTERN", String(t.roam_pattern || "--") + (t.roam_sweep_direction
+      ? (t.roam_sweep_direction > 0 ? "  +" : "  -") : "")],
+    ["PROGRESS", n(typeof t.roam_progress === "number" ? t.roam_progress * 100 : null, 0, "% of this turn")],
+    ["WAYPOINT YAW", typeof t.roam_target_yaw_rad === "number"
+      ? hudWrapDeg(t.roam_target_yaw_rad * 57.29577951308232).toFixed(1) + " DEG" : "--"],
+    ["JOG LEASE", t.manual_lease_active ? n(t.manual_lease_remaining_ms, 0, " ms") + "  " +
+                                         String(t.manual_profile || "") : "idle"]
+  ];
+
+  const buses = Array.isArray(t.can_buses) && t.can_buses.length ? t.can_buses
+    : (t.can_available ? [{ device: t.can_device, up: t.can_up, state: t.can_state,
+        rx_frames: t.can_rx_frames, rx_error_frames: t.can_rx_error_frames, tx_frames: t.can_tx_frames,
+        tx_failed: t.can_tx_failed, last_rx_age_ms: t.can_last_rx_age_ms }] : []);
+  const busState = (s) => (["ERROR-ACTIVE", "ERROR-WARNING", "ERROR-PASSIVE", "BUS-OFF", "STOPPED",
+                            "SLEEPING"][s] || "UNKNOWN");
+  const can = buses.length ? buses.map((b) => [String(b.device || "?").toUpperCase(),
+    (b.up ? busState(b.state) : "DOWN") + "  rx " + n(b.rx_frames) + " (" + n(b.rx_error_frames) +
+    " err)  tx " + n(b.tx_frames) + " (" + n(b.tx_failed) + " fail)  " + age(b.last_rx_age_ms)])
+    : [["CAN", "no CAN link reported"]];
+
+  const ack = t.cmd_ack_command ? [["LAST COMMAND", String(t.cmd_ack_command) + "  " +
+    (t.cmd_ack_accepted === 1 ? "ACCEPTED" : t.cmd_ack_accepted === 0 ? "REFUSED" : "--") +
+    (t.cmd_ack_reason ? "  " + String(t.cmd_ack_reason) : "")]] : [];
+
+  const events = (Array.isArray(t.events) ? t.events.slice() : []).reverse().map((e) => [
+    (typeof t.ts_ns === "number" && typeof e.t_ns === "number"
+      ? "-" + Math.max(0, (t.ts_ns - e.t_ns) / 1e9).toFixed(0) + " S" : "--"),
+    String(e.event || "?") + (e.detail ? "  " + String(e.detail) : "")]);
+
+  return [
+    { title: "CONTROL", rows: control },
+    { title: "VISION", rows: vision },
+    { title: "SELECTION", rows: selection },
+    { title: "AXES", rows: axes },
+    { title: "ROAM / MANUAL", rows: roam },
+    { title: "CAN", rows: can },
+    { title: "EVENTS", rows: ack.concat(events.length ? events : [["--", "no events yet"]]) }
+  ];
 }
 
 
@@ -1087,7 +1225,7 @@ const TRACK_AFTER_MS = 500;  // target-list staleness, as measured and reported 
 function chip(label, state, value) {
   // §8: small translucent chips with a status dot; near-white text; no header bar.
   const d = document.createElement("div");
-  d.className = "chip";
+  d.className = "chip " + (state === "red" ? "bad" : (state === "amber" ? "warn" : "ok"));
   const dot = state === "red" ? C.red : (state === "amber" ? C.amber : C.green);
   d.innerHTML = '<span class="dot" style="background:' + dot + '"></span>' +
                 '<span class="lbl">' + label + '</span>' +
@@ -1365,28 +1503,69 @@ function render(t) {
   // §12 bottom strip. FPS here is `camera_fps`: the inter-TrackSet cadence, which is what
   // §12's example strip quotes ("FPS 29"). The browser's preview rate is a different, separately
   // limited number and is not what this cell claims..
+  // The strip merged with the health chips (owner, 2026-10-03). MODE, STATE and SAFETY left it: the
+  // mode block and the safety banner say them already, louder. What stays are readings.
   const cell = (k, v, cls) => '<span class="k">' + k + '</span><span class="' + (cls || "v") + '">' + v + '</span>';
-  $("strip").innerHTML =
-    // Two cells are the operator's actual steering state and get the green; a count and a rate are
-    // readings, and giving them the same colour as the mode is how everything ends up shouting.
-    cell("MODE", String(t.operating_mode || "--"), "hot") + '<span class="sep">|</span>' +
-    cell("STATE", String(t.track_state || "--").toUpperCase(), "hot") + '<span class="sep">|</span>' +
+  $("strip-cells").innerHTML =
     cell("TARGETS", String(t.track_count == null ? "--" : t.track_count), "v") + '<span class="sep">|</span>' +
     cell("FPS", fmt(t.camera_fps, 0), "v") + '<span class="sep">|</span>' +
-    cell("AGE", fmt(t.vision_measurement_age_ms, 0, " ms"), stale ? "warn" : "v") + '<span class="sep">|</span>' +
-    // SAFETY is a state, and §22 already colours it: ALLOW is healthy, anything that inhibits is
-    // amber, a fault is red. The rail must not contradict the banner it is standing under.
-    cell("SAFETY", String(t.safety_action || "UNKNOWN"),
-         t.safety_action === "ALLOW" ? "hot"
-           : (t.safety_action === "FAULT" ? "fault"
-             : (t.safety_action ? "warn" : "v")));
+    cell("AGE", fmt(t.vision_measurement_age_ms, 0, " ms"), stale ? "warn" : "v");
+  renderStatusFold();
+  renderStats(t);
+}
+
+// Folded by default: one summary dot, and a healthy chip stays hidden. A chip that is not healthy
+// is never folded away; it shows on its own until it recovers. Unfolding is remembered per browser.
+let statusExpanded = hudPref("ota.hud.status.expanded", false);
+function renderStatusFold() {
+  const strip = $("strip"), fold = $("status-fold");
+  strip.classList.toggle("folded", !statusExpanded);
+  const bad = $("health").querySelectorAll(".chip.bad").length;
+  const warn = $("health").querySelectorAll(".chip.warn").length;
+  const tone = bad ? C.red : (warn ? C.amber : C.green);
+  const text = bad || warn ? (bad + warn) + (bad + warn === 1 ? " ALERT" : " ALERTS") : "ALL OK";
+  const html = '<span class="dot" style="background:' + tone + '"></span><span class="lbl">' + text +
+               '</span><span class="arr">' + (statusExpanded ? "\u25C2" : "\u25B8") + "</span>";
+  if (fold.innerHTML !== html) fold.innerHTML = html;
+  fold.setAttribute("aria-expanded", String(statusExpanded));
+}
+
+// --- stats overlay -----------------------------------------------------------------------------
+let statsOn = hudPref("ota.hud.stats", false), statsPaintedAt = 0;
+function renderStats(t, force) {
+  const box = $("stats");
+  if (!statsOn) { if (!box.hidden) { box.hidden = true; box.innerHTML = ""; } return; }
+  const now = Date.now();
+  if (!force && !box.hidden && now - statsPaintedAt < 250) return;   // 4 Hz is enough to read
+  statsPaintedAt = now;
+  box.hidden = false;
+  box.innerHTML = '<div class="stitle"><span>STATS</span><button type="button" data-ui="stats" ' +
+    'aria-label="Close stats">\u00D7</button></div>' + hudStatsSections(t).map((s) =>
+    '<div class="ssec">' + escapeMarkup(s.title) + "</div>" + s.rows.map((kv) =>
+      '<div class="srow"><span class="sk">' + escapeMarkup(kv[0]) + '</span><span class="sv">' +
+      escapeMarkup(kv[1]) + "</span></div>").join("")).join("");
+}
+
+function hudPref(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v === "1"; }
+  catch (e) { return fallback; }
+}
+function hudSetPref(key, on) {
+  try { localStorage.setItem(key, on ? "1" : "0"); } catch (e) { /* private window: this page only */ }
+}
+function setStats(on) {
+  statsOn = !!on;
+  hudSetPref("ota.hud.stats", statsOn);
+  renderStats(lastTelemetry || {}, true);
+  if (drawerOpen === "MENU") renderDrawer();
 }
 
 function paint(t) {
   // Track churn must not replace MENU buttons between pointer-down and click.
   // Phase changes must refresh their Home/recovery gates even with no tracks.
   const drawerKey = value => JSON.stringify(drawerOpen === "MENU"
-    ? [value && value.phase, value && value.cmd_ack_seq, value && value.rest_park, value && value.rest_park_on_stop]
+    ? [value && value.phase, value && value.cmd_ack_seq, value && value.rest_park, value && value.rest_park_on_stop,
+       hudSpeedRows(value).map(r => [r.value, r.max])]
     : [value && value.operating_mode, value && value.cmd_ack_seq,
       value && value.selected_uuid, value && value.perception_session_uuid,
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
@@ -1621,11 +1800,7 @@ function escapeMarkup(value) {
 function renderDrawer() {
   if (!drawerOpen) { drawer.hidden = true; drawer.innerHTML = ""; return; }
   let rows;
-  if (drawerOpen === "DIAG") {
-    rows = hudDiagRows(lastTelemetry || {}).map((kv) =>
-      '<div class="drow"><span class="rl">' + kv[0] + '</span><span class="rn">' + kv[1] +
-      "</span></div>").join("");
-  } else {
+  {
     rows = hudDrawerActions(drawerOpen, lastTelemetry || {}).map((a) => {
       const inert = a.command === null || a.kind === "current" || a.kind === "gated";
       const cls = "drow " + (a.kind === "stop" ? "stop" : a.kind === "danger" ? "danger" :
@@ -1637,10 +1812,32 @@ function renderDrawer() {
              escapeMarkup(waiting ? "CONFIRM " + a.label : a.label) + '</span><span class="rn">' +
              escapeMarkup(waiting ? "PRESS AGAIN" : (a.note || "")) + "</span></button>";
     }).join("");
+    if (drawerOpen === "MENU") rows += renderSettings(lastTelemetry || {});
   }
   drawer.innerHTML = '<div class="dtitle">' + drawerOpen + "</div>" + rows +
     '<div class="dack ' + lastAck.kind + '" role="status">' + escapeMarkup(lastAck.text || " ") + "</div>";
   drawer.hidden = false;
+}
+
+function renderSettings(t) {
+  const btn = (arg, text, label) => '<button type="button" class="sbtn" data-cmd="set_speed" data-kind="act"' +
+    ' data-arg="' + escapeMarkup(arg || "") + '" aria-label="' + label + '"' + (arg ? "" : " disabled") + ">" +
+    text + "</button>";
+  const speeds = hudSpeedRows(t).map((r) =>
+    '<div class="drow setting"><span class="rl">' + r.label + '</span><span class="stepper">' +
+    btn(r.down, "\u2212", r.label + " slower") +
+    '<span class="sval">' + (r.value === null ? "--" : r.value.toFixed(1) + "\u00B0/s") + "</span>" +
+    btn(r.up, "+", r.label + " faster") +
+    btn(r.reset, "\u21BA", r.label + " back to " + (r.base === null ? "default" : r.base.toFixed(1))) +
+    '</span><span class="snote">' + (r.base === null ? "" : "default " + r.base.toFixed(1)) +
+    (r.max === null ? "" : " \u00B7 max " + r.max.toFixed(1)) + "</span></div>").join("");
+  return '<div class="dsec">SETTINGS</div>' + speeds +
+    '<div class="dnote">Speeds hold until the station restarts.</div>' +
+    '<div class="drow setting gated"><span class="rl">' + HUD_TARGET_POLICY.label + '</span><span class="rn">' +
+    HUD_TARGET_POLICY.value + '</span><span class="snote">' + HUD_TARGET_POLICY.note + "</span></div>" +
+    '<button type="button" class="drow' + (statsOn ? " on" : "") + '" data-ui="stats" aria-pressed="' +
+    String(statsOn) + '"><span class="rl">STATS FOR NERDS</span><span class="rn">' +
+    (statsOn ? "ON" : "OFF") + "</span></button>";
 }
 
 // §13.2: only one drawer at a time, and pressing the same button again closes it. There is one
@@ -1798,6 +1995,8 @@ dock.addEventListener("click", (e) => {
 });
 
 drawer.addEventListener("click", (e) => {
+  const ui = e.target && e.target.closest ? e.target.closest("button[data-ui]") : null;
+  if (ui) { setStats(!statsOn); return; }
   const b = e.target && e.target.closest ? e.target.closest("button[data-cmd]") : null;
   if (!b || b.disabled) return;
   const cmd = b.getAttribute("data-cmd");
@@ -1813,6 +2012,14 @@ drawer.addEventListener("click", (e) => {
 });
 
 renderDock();
+$("status-fold").addEventListener("click", () => {
+  statusExpanded = !statusExpanded;
+  hudSetPref("ota.hud.status.expanded", statusExpanded);
+  renderStatusFold();
+});
+$("stats").addEventListener("click", (e) => {
+  if (e.target && e.target.closest && e.target.closest("button[data-ui]")) setStats(false);
+});
 
 window.addEventListener("resize", () => { if (lastTelemetry) render(lastTelemetry); });
 document.addEventListener("DOMContentLoaded", () => {
@@ -1905,7 +2112,28 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
 #mode-block .m1 { color: var(--hud-green); font-size: 20px; letter-spacing: .12em; }
 #mode-block .m2 { color: var(--hud-white); font-size: 11px; letter-spacing: .12em; opacity: .86; }
 #mode-block .m3 { color: var(--hud-white); font-size: 11px; letter-spacing: .12em; opacity: .62; }
-#health { position: absolute; right: 1%; top: 1.2%; z-index: 20; display: flex; gap: 6px; }
+#health { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#strip.folded #health .chip.ok { display: none; }
+#strip.folded #health:not(:has(.chip.warn, .chip.bad)) { display: none; }
+#status-fold { display: flex; align-items: center; gap: 5px; padding: 2px 6px; font: inherit;
+  font-size: 10px; letter-spacing: .1em; color: var(--hud-text); background: transparent;
+  border: 1px solid var(--hud-line-quiet); border-radius: 3px; cursor: pointer; }
+#status-fold .dot { width: 6px; height: 6px; border-radius: 50%; }
+#status-fold .arr { color: var(--hud-text-dim); }
+#strip-cells { display: flex; gap: 7px; align-items: baseline; }
+#stats { position: absolute; left: 1%; top: 21%; z-index:40; width: min(380px, 94vw);
+  max-height: calc(79% - 60px); overflow-y: auto; padding: 6px 9px 8px; box-sizing: border-box;
+  background: rgba(5,7,10,.9); border: 1px solid var(--hud-line); border-radius: 4px;
+  font-size: 10px; letter-spacing: .05em; color: var(--hud-text); }
+#stats[hidden] { display: none; }
+#stats .stitle { display: flex; justify-content: space-between; align-items: center;
+  color: var(--hud-green); letter-spacing: .14em; margin-bottom: 2px; }
+#stats .stitle button { font: inherit; font-size: 14px; line-height: 1; color: var(--hud-text);
+  background: transparent; border: 0; cursor: pointer; padding: 0 2px; }
+#stats .ssec { color: var(--hud-text-dim); margin-top: 6px; letter-spacing: .14em; }
+#stats .srow { display: flex; gap: 8px; justify-content: space-between; line-height: 1.45; }
+#stats .sk { color: var(--hud-text-dim); white-space: nowrap; }
+#stats .sv { text-align: right; overflow-wrap: anywhere; }
 .chip { display: flex; align-items: center; gap: 5px; padding: 3px 7px; font-size: 10px;
   letter-spacing: .1em; background: var(--hud-black); border: 1px solid var(--hud-line);
   border-radius: 3px; }
@@ -1916,7 +2144,7 @@ html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden;
 .chip { border-color: var(--hud-line-quiet); }
 .chip .lbl { color: var(--hud-text); }
 #strip { position: absolute; left: 1%; bottom: 1.4%; z-index: 20; display: flex; gap: 7px;
-  align-items: baseline; padding: 4px 9px; font-size: 11px; letter-spacing: .08em;
+  align-items: center; flex-wrap: wrap; max-width: 70%; padding: 4px 9px; font-size: 11px; letter-spacing: .08em;
   background: var(--hud-black); border: 1px solid var(--hud-line); border-radius: 3px; }
 #strip .k { color: var(--hud-text-dim); margin-right: 3px; }
 #strip .v { color: var(--hud-text); }        /* ordinary value: light, neutral, readable */
@@ -1996,6 +2224,19 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #drawer .dack { margin-top:6px; font-size:9px; letter-spacing:.05em; color:rgba(149,245,139,.56); }
 #drawer .dack.ok { color:#95f58b; }
 #drawer .dack.bad { color:var(--hud-amber); }
+/* MENU > SETTINGS: a section rule, steppers that send the exact value they show, and the restart note. */
+#drawer .dsec { color:#95f58b; font-size:9px; letter-spacing:.14em; margin:9px 0 3px; padding-top:5px;
+                border-top:1px solid rgba(149,245,139,.38); }
+#drawer .dnote { font-size:9px; color:rgba(237,242,235,.55); padding:2px 1px 4px; }
+#drawer .drow.setting { flex-wrap:wrap; align-items:center; cursor:default; box-sizing:border-box; }
+#drawer .drow.setting:hover { background:none; }
+#drawer .stepper { display:flex; align-items:center; gap:4px; }
+#drawer .sbtn { min-width:24px; height:22px; font:inherit; font-size:12px; color:#95f58b;
+                background:rgba(149,245,139,.08); border:1px solid rgba(149,245,139,.38); border-radius:3px;
+                cursor:pointer; }
+#drawer .sbtn:disabled { opacity:.25; cursor:default; }
+#drawer .sval { min-width:52px; text-align:center; color:#edf2eb; }
+#drawer .snote { width:100%; font-size:9px; color:rgba(237,242,235,.45); }
 
 /* --- §22 safety presentation ------------------------------------------------ */
 #safety { position:absolute; left:50%; top:16%; transform:translateX(-50%); text-align:center;
@@ -2134,9 +2375,12 @@ HUD_HTML = """<!DOCTYPE html>
   </svg>
 
   <div id="mode-block"></div>
-  <div id="health"></div>
   <div id="notices"></div>
-  <div id="strip"></div>
+  <!-- The status bar: the health chips folded behind one summary, then the readings (owner,
+       2026-10-03: the top-right chip row merged into the bottom bar). -->
+  <div id="strip" class="folded"><button id="status-fold" type="button" aria-expanded="false"
+    aria-label="Show system status"></button><span id="health"></span><span id="strip-cells"></span></div>
+  <div id="stats" hidden role="region" aria-label="Stats for nerds"></div>
 
   <!-- §13 dock and §14 drawer. Outside the SVG deliberately: these are the only parts of the overlay the
        operator presses, and real elements keep focus, hover and button semantics away from a hit-test on
