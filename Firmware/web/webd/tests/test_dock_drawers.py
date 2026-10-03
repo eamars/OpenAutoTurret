@@ -152,6 +152,18 @@ class DockAndDrawerBehaviour(unittest.TestCase):
             self.assertEqual(stop[0]["command"], "hold")
             self.assertEqual(stop[0]["kind"], "stop", "§14 reserves red for stop and fault")
 
+    def test_the_pad_paces_by_the_main_camera_and_its_centre_is_the_pace(self) -> None:
+        # Owner, 2026-10-03: coarse on wide, fine on detail (controld's "view" profile); the centre
+        # HOLD that looked like a button became the pace toggle, and releasing an arrow is the stop.
+        self.assertIn('"view"', HUD_JS)
+        self.assertNotIn('":normal"', HUD_JS)
+        pad = re.search(r'<div id="manual-pad".*?</div>', HUD_HTML, re.S).group()
+        self.assertNotIn("HOLD", pad)
+        self.assertIn('id="pad-pace"', pad)
+        self.assertEqual(len(re.findall(r"<button", pad)), 5, "four arrows and the pace")
+        self.assertNotIn("data-jog", re.search(r'<button id="pad-pace".*?</button>', pad).group(),
+                         "the pace button must never start a jog")
+
     def test_jogs_are_not_duplicated_as_click_actions_in_the_drawer(self) -> None:
         rows = self._rows("MANUAL", {"operating_mode": "AUTO_TRACK"})
         jogs = [r for r in rows if r["command"] == "manual_jog_start"]

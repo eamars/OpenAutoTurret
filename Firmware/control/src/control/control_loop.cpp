@@ -1438,6 +1438,21 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           cfg_.motion.configured ? motion_profile(1,OperatingMode::Manual).target.speed : vmax};
       const bool was_leased = manual_.lease_active();
       const bool was_expired = std::string(manual_out_.reason) == "jog lease expired";
+      {
+        // The DPAD's paces (owner, 2026-10-03) are AUTO_ROAM's patrol paces, so a person stays in
+        // the picture as long under the operator's hand as under the patrol: COARSE is the wide
+        // camera's (15 deg/s, NORMAL's ramps), PRECISE the detail camera's (3 deg/s, FINE's), and
+        // VIEW whichever matches the main display. Re-read every cycle: a camera swap mid-jog
+        // changes a VIEW jog's pace.
+        const bool narrow = narrow_view_ && now_ns - narrow_view_ns_ < 1'000'000'000LL;
+        const double base = v_max[ix(AxisId::Yaw)];
+        ManualProfileLimits coarse = manual_.config().normal, precise = manual_.config().fine;
+        if (base > 0) {
+          coarse.velocity_scale = std::clamp(cfg_.roam_patrol_speed_deg_s * kDeg2Rad / base, 0.01, 1.0);
+          precise.velocity_scale = std::clamp(cfg_.roam_narrow_patrol_speed_deg_s * kDeg2Rad / base, 0.01, 1.0);
+        }
+        manual_.set_pace_limits(coarse, precise, narrow);
+      }
       manual_out_ = manual_.update(q_logical, v_max, now_ns, period_ns);
       if (response_probe_until_ns_ && (now_ns >= response_probe_until_ns_ ||
           phase_ != Phase::Hold || !position_ready() || last_decision_.action != SafetyAction::Allow))

@@ -246,7 +246,23 @@ TEST_F(ManualTest, JogArgGrammarIsSharedAndStrict) {
   EXPECT_FALSE(ManualController::parse_jog_arg("yaw:ultra", d, p, why, sizeof why))
       << "an unknown profile must be refused, not run at NORMAL silently: the operator "
          "chose a speed and got a different one";
-  EXPECT_STREQ(why, "unknown speed profile (fine/normal/fast)");
+  EXPECT_STREQ(why, "unknown speed profile (fine/normal/fast/view/coarse/precise)");
+  EXPECT_TRUE(ManualController::parse_jog_arg("pitch-:view", d, p, why, sizeof why));
+  EXPECT_EQ(p, ManualProfile::View);
+  EXPECT_TRUE(ManualController::parse_jog_arg("pitch-:coarse", d, p, why, sizeof why));
+  EXPECT_EQ(p, ManualProfile::Coarse);
+  EXPECT_TRUE(ManualController::parse_jog_arg("pitch-:precise", d, p, why, sizeof why));
+  EXPECT_EQ(p, ManualProfile::Precise);
+}
+
+TEST_F(ManualTest, TheViewProfileIsTheCoarseOrPrecisePaceTheLoopLastSet) {
+  ManualController m;
+  m.set_pace_limits({0.75, 0.60, 0.80}, {0.15, 0.25, 0.40}, false);
+  EXPECT_DOUBLE_EQ(m.limits(ManualProfile::View).velocity_scale, 0.75);
+  m.set_pace_limits({0.75, 0.60, 0.80}, {0.15, 0.25, 0.40}, true);
+  EXPECT_DOUBLE_EQ(m.limits(ManualProfile::View).velocity_scale, 0.15);
+  EXPECT_DOUBLE_EQ(m.limits(ManualProfile::Coarse).velocity_scale, 0.75) << "pinned, whatever the view";
+  EXPECT_DOUBLE_EQ(m.limits(ManualProfile::Precise).velocity_scale, 0.15);
 }
 
 TEST_F(ManualTest, LeavingManualCancelsEverything) {

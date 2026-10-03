@@ -36,13 +36,19 @@
 
 namespace ota {
 
-enum class ManualProfile : uint8_t { Fine = 0, Normal = 1, Fast = 2 };
+// The DPAD's paces (owner, 2026-10-03), AUTO_ROAM's patrol speeds: Coarse is the wide camera's,
+// Precise the detail camera's, and View is whichever of the two matches the camera on the main
+// display. The control loop sets all three every cycle; the operator may pin Coarse or Precise.
+enum class ManualProfile : uint8_t { Fine = 0, Normal = 1, Fast = 2, View = 3, Coarse = 4, Precise = 5 };
 
 inline const char* manual_profile_name(ManualProfile p) {
   switch (p) {
     case ManualProfile::Fine: return "FINE";
     case ManualProfile::Normal: return "NORMAL";
     case ManualProfile::Fast: return "FAST";
+    case ManualProfile::View: return "VIEW";
+    case ManualProfile::Coarse: return "COARSE";
+    case ManualProfile::Precise: return "PRECISE";
   }
   return "NORMAL";
 }
@@ -75,6 +81,10 @@ struct ManualConfig {
   ManualProfileLimits fine{0.15, 0.25, 0.40};
   ManualProfileLimits normal{0.45, 0.60, 0.80};
   ManualProfileLimits fast{1.00, 1.00, 1.00};
+  // Replaced every cycle by set_pace_limits.
+  ManualProfileLimits coarse{0.45, 0.60, 0.80};
+  ManualProfileLimits precise{0.15, 0.25, 0.40};
+  bool view_is_detail = false;
   // How far ahead of the turret the jog's position reference sits. Not a speed: the
   // rate is set by manual v_max times the profile scale, and the envelope caps it again.
   // The horizon only decides how far the moving target is in front, which is what lets
@@ -122,6 +132,12 @@ class ManualController {
   explicit ManualController(ManualConfig cfg = ManualConfig()) : cfg_(cfg) {}
 
   void set_config(const ManualConfig& cfg) { cfg_ = cfg; }
+  void set_pace_limits(const ManualProfileLimits& coarse, const ManualProfileLimits& precise,
+                       bool view_is_detail) {
+    cfg_.coarse = coarse;
+    cfg_.precise = precise;
+    cfg_.view_is_detail = view_is_detail;
+  }
   const ManualConfig& config() const { return cfg_; }
   bool lease_active() const { return lease_until_ns_ > 0; }
   ManualProfile profile() const { return profile_; }
@@ -131,6 +147,9 @@ class ManualController {
       case ManualProfile::Fine: return cfg_.fine;
       case ManualProfile::Normal: return cfg_.normal;
       case ManualProfile::Fast: return cfg_.fast;
+      case ManualProfile::View: return cfg_.view_is_detail ? cfg_.precise : cfg_.coarse;
+      case ManualProfile::Coarse: return cfg_.coarse;
+      case ManualProfile::Precise: return cfg_.precise;
     }
     return cfg_.normal;
   }
@@ -153,8 +172,11 @@ class ManualController {
       if (name == "fine") profile = ManualProfile::Fine;
       else if (name == "normal") profile = ManualProfile::Normal;
       else if (name == "fast") profile = ManualProfile::Fast;
+      else if (name == "view") profile = ManualProfile::View;
+      else if (name == "coarse") profile = ManualProfile::Coarse;
+      else if (name == "precise") profile = ManualProfile::Precise;
       else {
-        std::snprintf(why, n, "unknown speed profile (fine/normal/fast)");
+        std::snprintf(why, n, "unknown speed profile (fine/normal/fast/view/coarse/precise)");
         return false;
       }
       text = text.substr(0, colon);

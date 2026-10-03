@@ -1063,6 +1063,44 @@ TEST(ManualMode, MotionOutsideManualIsRefusedWithTheReasonFrom52) {
   EXPECT_FALSE(h.snap().manual_lease_active);
 }
 
+// Owner, 2026-10-03: the DPAD (profile "view") moves at AUTO_ROAM's patrol pace for the camera on the
+// main display -- coarse on wide, fine on detail -- not at one speed for both.
+TEST(ManualMode, TheViewJogMovesAtThePatrolPaceOfTheMainCamera) {
+  const auto pace = [](bool narrow, const char* jog = "yaw+:view") {
+    HomedLoop h;
+    EXPECT_TRUE(h.ready);
+    uint64_t seq = 0;
+    const auto view = [&] {   // what perception says about the main display, twice a second
+      tracks::TrackSet set;
+      set.observation.native = true;
+      set.observation.session = {1, 1};
+      set.observation.track_set_sequence = ++seq;
+      set.observation.narrow_view = narrow;
+      set.width = static_cast<uint32_t>(h.loop->tracking_config().intrinsics.width);
+      set.height = static_cast<uint32_t>(h.loop->tracking_config().intrinsics.height);
+      set.sensor_timestamp_ns = h.t;
+      EXPECT_EQ(h.loop->apply_track_set(set, h.t), nullptr);  // no tracks: only the view flag
+    };
+    view();
+    h.run("manual_jog_start", jog);
+    EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+    double q0 = 0;
+    for (int i = 0; i < 500; ++i) {   // 2.5 s; measure the last second, past the ramp
+      if (i % 20 == 0) h.loop->submit_command("manual_jog_keepalive", "");
+      if (i % 100 == 0) view();
+      if (i == 300) q0 = h.loop->last_positions()[1];
+      h.step(1);
+    }
+    return (h.loop->last_positions()[1] - q0) / 1.0 * kRad2Deg;  // deg/s over 200 cycles
+  };
+  // The patrol defaults: 15 deg/s on wide, 3 deg/s on detail.
+  EXPECT_NEAR(pace(false), 15.0, 2.0);
+  EXPECT_NEAR(pace(true), 3.0, 0.6);
+  // The operator's pin on the pad's centre: the other pace, whatever the main display shows.
+  EXPECT_NEAR(pace(false, "yaw+:precise"), 3.0, 0.6);
+  EXPECT_NEAR(pace(true, "yaw+:coarse"), 15.0, 2.0);
+}
+
 TEST(ManualMode, ALeasedJogMovesTheTurretAndStopsWhenTheBrowserGoesQuiet) {
   HomedLoop h;
   ASSERT_TRUE(h.ready);                     // MANUAL is the mode after homing

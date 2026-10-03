@@ -560,6 +560,12 @@ what an operator needs from them:
 
   Settings live in `v3.auto_roam` of `turret_mixed.yaml`. The AUTO_ROAM yaw target speed is
   15 to match. The bounded sweep still serves stations with a yaw envelope.
+  - **MANUAL DPAD uses the same paces (owner, 2026-10-03):** COARSE is the wide patrol speed
+    (15 deg/s, NORMAL's ramps), FINE the detail one (3 deg/s, FINE's ramps). By default the
+    arrows send jog profile `view` and controld picks the pace matching the camera on the main
+    display. The pad's centre (formerly a HOLD that was not a button) shows the pace; tapping
+    it pins the other one (`coarse` / `precise`), and a camera swap un-pins it. Releasing an
+    arrow is the stop; STOP MOTION stays in the MANUAL drawer.
   Meanwhile: a `no_progress` trip with the axis parked outside its computed sweep interval
   is a known open case (see the case file §4-§6). Since 2026-10-03 a latch is recovered from the
   web: HOME recovers the drives, then homes (see "The web MENU" above).

@@ -1739,8 +1739,21 @@ function renderManualPad(t) {
   $("auto-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode !== "MANUAL"));
   $("auto-mode").disabled = !(t && t.phase === "hold" && t.soft_limits_valid && !t.telemetry_stale);
   pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
+  // Releasing an arrow is the stop. The centre is the pace: the camera's unless the operator pinned it.
+  const pace = padPace() === "precise" ? "FINE" : "COARSE";
+  const label = "PRESS TO AIM · " + (padPaceOverride ? "PACE PINNED" : "PACE FOLLOWS CAMERA");
+  if ($("pad-pace").textContent !== pace) $("pad-pace").textContent = pace;
+  $("pad-pace").setAttribute("aria-pressed", String(!!padPaceOverride));
+  if ($("pad-label").textContent !== label) $("pad-label").textContent = label;
   if (!enabled) stopPadJog();
   if (drawerOpen === "MANUAL" && pad.hidden) { drawerOpen = null; renderDrawer(); }
+}
+// The pad's pace: null follows the main camera; "coarse" | "precise" is the operator's pin, which a
+// camera swap clears (the new view brings its own pace back).
+let padPaceOverride = null, padPaceRole = null;
+function padPace() {
+  if (padPaceRole !== panes.main.role) { padPaceRole = panes.main.role; padPaceOverride = null; }
+  return padPaceOverride || (panes.main.role === "detail" ? "precise" : "coarse");
 }
 const manualPad = $("manual-pad");
 manualPad.querySelectorAll("button[data-direction]").forEach(b => {
@@ -1754,7 +1767,11 @@ manualPad.addEventListener("pointerdown", (e) => {
   jogActive = true;
   b.classList.add("pressed");
   jogBusy = true;
-  jogRequest("manual_jog_start", b.dataset.jog + ":normal").finally(() => { jogBusy = false; });
+  // Owner, 2026-10-03: AUTO_ROAM's paces. "view" lets controld follow the camera on the main display
+  // (coarse on wide, fine on detail); the centre button pins one of them instead.
+  padPace();
+  jogRequest("manual_jog_start", b.dataset.jog + ":" + (padPaceOverride || "view"))
+    .finally(() => { jogBusy = false; });
   jogTimer = setInterval(() => {
     if (!padReady(lastTelemetry)) { stopPadJog(); return; }
     if (!jogActive || jogBusy) return;
@@ -1765,7 +1782,12 @@ manualPad.addEventListener("pointerdown", (e) => {
 ["pointerup", "pointercancel", "lostpointercapture"].forEach(event => manualPad.addEventListener(event, stopPadJog));
 window.addEventListener("blur", stopPadJog);
 document.addEventListener("visibilitychange", () => { if (document.hidden) stopPadJog(); });
-$("pad-hold").addEventListener("click", () => { stopPadJog(); sendCommand("stop_motion", ""); });
+$("pad-pace").addEventListener("click", () => {
+  const camera = panes.main.role === "detail" ? "precise" : "coarse";
+  const next = padPace() === "coarse" ? "precise" : "coarse";
+  padPaceOverride = next === camera ? null : next;   // back to the camera's pace un-pins it
+  renderManualPad(lastTelemetry);
+});
 $("manual-mode").addEventListener("click", () => { stopPadJog(); sendCommand("stop_motion", ""); });
 $("auto-mode").addEventListener("click", () => { stopPadJog(); sendCommand("set_mode", "AUTO_ROAM"); });
 setInterval(() => renderManualPad(lastTelemetry), 100);
@@ -1933,7 +1955,8 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #manual-pad button.pressed { background:var(--hud-green); color:#05070a; }
 #manual-pad button:disabled { opacity:.3; }
 #manual-pad .pad-label { grid-column:1/4; text-align:center; font-size:10px; color:var(--hud-white); }
-#manual-pad #pad-hold { font-size:10px; }
+#manual-pad #pad-pace { font-size:10px; }
+#manual-pad #pad-pace[aria-pressed="true"] { border-color:var(--hud-white); color:var(--hud-white); }
 #mode-controls { position:absolute; bottom:65px; left:50%; transform:translateX(-50%);
   display:flex; gap:8px; z-index:30; }
 /* An inactive control is not a state readout: neutral until it is the mode you are in. */
@@ -2126,9 +2149,9 @@ HUD_HTML = """<!DOCTYPE html>
     <button id="auto-mode" type="button">Auto</button>
   </div>
   <div id="manual-pad" hidden role="group" aria-label="Manual direction pad">
-    <span class="pad-label">HOLD TO AIM</span>
+    <span class="pad-label" id="pad-label">PRESS TO AIM</span>
     <span></span><button data-direction="up" aria-label="Aim camera up">↑</button><span></span>
-    <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-hold" aria-label="Hold position">HOLD</button><button data-direction="right" aria-label="Aim camera right">→</button>
+    <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-pace" type="button" aria-pressed="false" aria-label="Jog pace">COARSE</button><button data-direction="right" aria-label="Aim camera right">→</button>
     <span></span><button data-direction="down" aria-label="Aim camera down">↓</button><span></span>
   </div>
   <!-- §22 safety indication. Outside the health chips, because BRAKING and FAULT are asked to be more
