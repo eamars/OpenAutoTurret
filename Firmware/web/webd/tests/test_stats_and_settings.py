@@ -30,7 +30,7 @@ class Builders(unittest.TestCase):
 
     def setUp(self) -> None:
         self._geo = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False)
-        self._geo.write(HUD_GEOMETRY_JS + "\nmodule.exports = { hudSpeedRows, hudStatsSections };\n")
+        self._geo.write(HUD_GEOMETRY_JS + "\nmodule.exports = { hudSpeedRows, hudStatsSections, hudStateLabel };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -69,6 +69,12 @@ class Builders(unittest.TestCase):
         rows = self._run("T.hudSpeedRows(t)", {})
         self.assertTrue(all(r["value"] is None and r["up"] is None and r["down"] is None
                             and r["reset"] is None for r in rows))
+
+    def test_shutdown_says_what_starts_it(self) -> None:
+        # Owner ruling 2026-10-03: Homed or Shutdown, and a boot is Shutdown (controld's "idle").
+        label = self._run("T.hudStateLabel(t)", {"supervisory": "idle", "mode": "MANUAL"})
+        self.assertEqual(label["line1"], "SHUTDOWN")
+        self.assertIn("HOME", label["line2"])
 
     def test_both_buses_and_bus_off_are_shown(self) -> None:
         stats = self._stats({"can_buses": [

@@ -15,10 +15,17 @@ from; its runtime files are in the run dir (`/tmp/ota-stack-<uid>` by default, o
 ## The commands
 
 ```bash
-bash Firmware/scripts/run_application.sh start     # detached; also the no-argument default
+bash Firmware/scripts/run_application.sh start     # detached, SHUTDOWN; also the no-argument default
+bash Firmware/scripts/run_application.sh start --home   # detached, homes at once (OTA_START_STATE=homed)
 bash Firmware/scripts/run_application.sh status     # who owns the stack, and from which checkout
 bash Firmware/scripts/run_application.sh stop       # controlled park + full cleanup
 ```
+
+**Two states (owner ruling 2026-10-03): Homed or Shutdown.** A hardware `start` is Shutdown: web,
+camera and controller up, both motors off, nothing moves until the web's MENU > HOME (which homes,
+then AUTO_ROAM). `--home` starts homed. A boot starts Shutdown through the boot service (see the
+[OS setup card](os-setup.md), "Start at boot"), and `deploy_station.py --activate` restores the state
+it found (`--start-state homed|shutdown` overrides). `--sim` still homes at start.
 
 `start` returns after the children are launched, **not** after readiness — a station that is up and a
 station that is ready are different claims, and the difference is tens of seconds of homing.
@@ -44,5 +51,6 @@ silently returns it to AUTO_ROAM is a change of intent made by the wrong party.
 rejected by the request model with a validation list naming `body.command` -- that is a 422 from the
 web layer, not a controller refusal, and the two mean different things to whoever is debugging.
 
-The operator's mode override survives a stack restart only by accident: an activation ends in
-AUTO_ROAM by design, so if the operator parked the station on purpose, put it back and say so.
+The operator's mode override survives a stack restart only by accident: a homed activation ends in
+AUTO_ROAM by design, so if the operator parked the station on purpose, put it back and say so. A
+station that was shut down stays shut down across a deploy.

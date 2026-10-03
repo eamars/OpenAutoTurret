@@ -73,6 +73,9 @@ def main():
                         help="after successful build/check, park/stop the old stack and start this release")
     parser.add_argument("--ready-timeout", type=int, default=420,
                         help="seconds to wait for automatic readiness after --activate (default: 420)")
+    parser.add_argument("--start-state", choices=("keep", "homed", "shutdown"), default="keep",
+                        help="state to activate into (owner ruling 2026-10-03: Homed or Shutdown); "
+                             "keep = the state the station was in before this deploy (default)")
     parser.add_argument("--probe-build", action="store_true",
                         help="build only the runtime controller and preflight; defer regression tests")
     parser.add_argument("--known-hosts", type=pathlib.Path,
@@ -238,12 +241,57 @@ def main():
     label = "Probe-ready release (regression tests deferred)" if args.probe_build else "Verified release"
     print(f"{label}: {release}\nRevision: {revision}", flush=True)
     if args.activate:
-        # stop uses common PID+start-time ownership, even across release paths.
-        remote(f"bash {quote(script)} stop && bash {quote(script)} start")
-        remote(f"run_dir=/tmp/ota-stack-$(id -u) && port=$(cat \"$run_dir/web.port\") && "
+        root = args.root.rstrip("/")
+        # Two states (owner ruling 2026-10-03): a deploy returns the station to the one it found
+        # (tools/station_state.py says which), unless --start-state names one.
+        state = args.start_state
+        if state == "keep":
+            probe = release + "/Firmware/tools/station_state.py"
+            state = remote(f"{quote(venv + '/bin/python')} {quote(probe)}",
+                           capture_output=True, text=True).stdout.strip() or "shutdown"
+        print(f"Start state: {state.upper()}", flush=True)
+        # run/current is what the boot service starts; replace it atomically.
+        remote(f"ln -sfn {quote(release)} {quote(root + '/run/current.new')} && "
+               f"mv -T {quote(root + '/run/current.new')} {quote(root + '/run/current')}")
+        # The boot service is a user unit this deploy installs and refreshes, so the one-time sudo
+        # step (station_os_setup.sh --autostart) is never repeated. The stack runs under it once the
+        # user manager carries the real-time grant (from the first boot after that step); until
+        # then an ssh start keeps the grant PAM gives a login.
+        template = root + "/run/current/Firmware/scripts/ota-station.service.in"
+        service = remote(
+            'd="$HOME/.config/systemd/user"; mkdir -p "$d" && '
+            f"sed 's|@ROOT@|{root}|g' {quote(template)} > \"$d/ota-station.service\" && "
+            "systemctl --user daemon-reload >/dev/null 2>&1 && "
+            "systemctl --user enable ota-station.service >/dev/null 2>&1 || { echo nouser; exit 0; }; "
+            'm=$(pgrep -u "$(id -u)" -x systemd | head -1); '
+            "r=$(awk '/Max realtime priority/ {print $4}' \"/proc/$m/limits\" 2>/dev/null); "
+            '[ "${r:-0}" -ge 44 ] && echo systemd || echo ssh',
+            capture_output=True, text=True).stdout.strip()
+        if service == "nouser":
+            print("Boot service: not installed (no user systemd manager reachable). Run "
+                  "`station_os_setup.sh --apply --autostart` once, then deploy again.", flush=True)
+        elif service == "ssh":
+            print("Boot service: installed and enabled. It starts the station at boot from the first "
+                  "reboot after `station_os_setup.sh --apply --autostart`; this activation starts "
+                  "over ssh.", flush=True)
+        else:
+            print("Boot service: installed, enabled, and running this activation.", flush=True)
+        # stop uses common PID+start-time ownership, across release paths and the service alike.
+        remote(f"bash {quote(script)} stop")
+        if service == "systemd":
+            remote(f"systemctl --user set-environment OTA_START_STATE={state} && "
+                   "{ systemctl --user reset-failed ota-station.service 2>/dev/null; "
+                   "systemctl --user start ota-station.service; rc=$?; "
+                   "systemctl --user unset-environment OTA_START_STATE; exit $rc; }")
+        else:
+            remote(f"OTA_START_STATE={state} bash {quote(script)} start")
+        remote("run_dir=/tmp/ota-stack-$(id -u) && "
+               'for i in $(seq 1 60); do [ -r "$run_dir/web.port" ] && break; sleep 1; done && '
+               'port=$(cat "$run_dir/web.port") && '
                f"{quote(venv + '/bin/python')} {quote(smoke)} "
-               f"--url http://127.0.0.1:$port --wait-ready {args.ready_timeout}")
-        print(f"Active and ready: {release}", flush=True)
+               f"--url http://127.0.0.1:$port --wait-ready {args.ready_timeout} --expect {state}")
+        print(f"Active and {'ready' if state == 'homed' else 'up in SHUTDOWN (MENU > HOME starts it)'}: "
+              f"{release}", flush=True)
     else:
         print("Build only; the running station was not changed.")
         if args.commission_hardware:

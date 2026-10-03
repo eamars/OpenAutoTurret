@@ -188,6 +188,9 @@ function hudStateLabel(o) {
   const phase = String(o.phase || "").toUpperCase();
   const auto = mode === "AUTO_TRACK";
   const roam = mode === "AUTO_ROAM";
+  // The station is Homed or Shutdown (owner ruling 2026-10-03), and a boot is Shutdown: the phase is
+  // controld's "idle", and the line says what starts it.
+  if (o.supervisory === "idle") return { line1: "SHUTDOWN", line2: "MOTORS OFF · MENU › HOME", named: true };
   if (o.supervisory && o.supervisory !== "hold") return {
     line1: String(o.supervisory).toUpperCase(), line2: "", named: true };
 

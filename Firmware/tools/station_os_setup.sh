@@ -6,6 +6,10 @@
 #   sudo bash Firmware/tools/station_os_setup.sh --apply [options]
 #
 # --apply always installs the real-time grant (limits.d). The rest are opt-in:
+#   --autostart             start the station at boot, in SHUTDOWN (motors off until HOME): keeps the
+#                           operator's user manager running without a login (linger) and gives it
+#                           the same real-time grant. One time only: every deploy after this
+#                           installs and refreshes the service itself, without sudo.
 #   --isolate-cpu3          kernel command line: isolcpus=3 irqaffinity=0-2 (reboot needed)
 #   --performance-governor  pin the CPU clock at its maximum from boot (only once the supply is
 #                           stiff: it raises the current draw on a rail that already droops)
@@ -23,7 +27,7 @@ GOVERNOR_UNIT=/etc/systemd/system/ota-cpu-governor.service
 # above every user thread, so the grant stops at 49.
 RTPRIO_MAX=49
 
-mode=""; isolate=0; governor=0; headless=0; user="${SUDO_USER:-eamars}"
+mode=""; isolate=0; governor=0; headless=0; autostart=0; user="${SUDO_USER:-eamars}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) mode=check ;;
@@ -31,6 +35,7 @@ while [ $# -gt 0 ]; do
     --isolate-cpu3) isolate=1 ;;
     --performance-governor) governor=1 ;;
     --headless) headless=1 ;;
+    --autostart) autostart=1 ;;
     --user) user="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -40,6 +45,7 @@ done
 
 check() {
   echo "== station OS setup check (user $user)"
+  local uid; uid=$(id -u "$user")
   if [ -r "$LIMITS" ]; then echo "limits:   $LIMITS present:"; sed 's/^/            /' "$LIMITS"
   else echo "limits:   MISSING ($LIMITS) -- controld's SCHED_FIFO and mlockall requests will be refused"; fi
   echo "session:  this shell has rtprio=$(ulimit -r) memlock=$(ulimit -l) (a new login picks up limits.d)"
@@ -54,6 +60,10 @@ check() {
   echo "target:   $(systemctl get-default)"
   echo "throttle: $(vcgencmd get_throttled 2>/dev/null || echo unknown)"
   echo "rt cap:   sched_rt_runtime_us=$(cat /proc/sys/kernel/sched_rt_runtime_us) (950000 = the kernel keeps 5% for others)"
+  echo "boot:     linger=$(loginctl show-user "$user" -p Linger --value 2>/dev/null || echo unknown)"        "user-manager grant=$([ -r "/etc/systemd/system/user@$uid.service.d/ota-realtime.conf" ] && echo present || echo MISSING)"
+  local mgr; mgr=$(pgrep -u "$user" -x systemd | head -1 || true)
+  [ -z "$mgr" ] || echo "          user manager now: $(grep -E 'realtime priority' "/proc/$mgr/limits" | tr -s ' ')"                        "(the grant applies from the next boot)"
+  echo "          run/current -> $(readlink "$(getent passwd "$user" | cut -d: -f6)/workspace/OpenAutoTurret/run/current" 2>/dev/null || echo 'none yet (the next deploy makes it)')"
 }
 
 if [ "$mode" = check ]; then check; exit 0; fi
@@ -113,7 +123,26 @@ UNIT
   echo "governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
 fi
 
-# 4. Optional: no desktop session.
+# 4. Optional: start at boot. The service itself is a user unit that every deploy installs and
+#    refreshes (tools/deploy_station.py); what needs root, once, is letting the user manager run
+#    without a login and giving it -- and so the station it starts -- the real-time grant above.
+if [ "$autostart" = 1 ]; then
+  uid=$(id -u "$user")
+  loginctl enable-linger "$user"
+  dropin="/etc/systemd/system/user@$uid.service.d"
+  mkdir -p "$dropin"
+  cat > "$dropin/ota-realtime.conf" <<CONF
+# OpenAutoTurret (Firmware/docs/operations/os-setup.md): the station's boot service is a user unit,
+# and a user unit inherits its limits from this manager. Same grant as $LIMITS.
+[Service]
+LimitRTPRIO=$RTPRIO_MAX
+LimitMEMLOCK=infinity
+CONF
+  systemctl daemon-reload
+  echo "autostart: linger on for $user; user manager real-time grant installed (from the next boot)"
+fi
+
+# 5. Optional: no desktop session.
 if [ "$headless" = 1 ]; then
   systemctl set-default multi-user.target
   echo "boots to multi-user.target from the next reboot (undo: systemctl set-default graphical.target)"

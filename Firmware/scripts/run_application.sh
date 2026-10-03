@@ -32,6 +32,7 @@ case "${1:-}" in
     echo '         --commission-mixed-controller (manual-mode mixed controller; no vision/web),'
     echo '         --establish-homing MANIFEST (bounded pitch sensorless homing acquisition),'
     echo '         --control-yaw MANIFEST (ADR-002.2 supervised yaw shared-core 3a control),'
+    echo '         --home (home at start; a hardware start is otherwise SHUTDOWN, motors off),'
     echo '         --no-web, --frames N, --production, --dev. See docs/STATION_OPERATIONS.md.'
     exit 0 ;;
 esac
@@ -115,6 +116,7 @@ MIXED_CONTROLLER_COMMISSION=0
 COMMISSION_REQUESTED=0
 SIM_REQUESTED=0
 SESSION_MANIFEST=''
+START_STATE_HOME=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hold-motion) MODE=perception; shift ;;
@@ -141,6 +143,7 @@ while [ $# -gt 0 ]; do
     --pulse-ms) PULSE_MS="${2:?--pulse-ms requires a value}"; shift 2 ;;
     --observe-ms) OBSERVE_MS="${2:?--observe-ms requires a value}"; shift 2 ;;
     --no-web) START_WEB=0; shift ;;
+    --home) START_STATE_HOME=1; shift ;;
     --production) PRODUCTION=1; shift ;;
     --profile) PROFILE="${2:?--profile requires a name}"; shift 2 ;;
     --frames) FRAMES="${2:?--frames requires a count}"; shift 2 ;;
@@ -630,7 +633,20 @@ export OTA_WEB_HOST="${OTA_WEB_HOST:-0.0.0.0}"
 # time. Per process: controld gets CPU 3 to itself; perception, the IMU observer and the web UI
 # share CPUs 0-2, the web UI niced lowest, so the UI is what waits when the station is busy.
 # OTA_RT=0 keeps every controld thread SCHED_OTHER; OTA_CPU_PIN=0 leaves the CPUs unpinned.
-control_sched=(env "OTA_RT=${OTA_RT:-1}")
+# Two states (owner ruling 2026-10-03): Homed or Shutdown. A hardware start is Shutdown -- web,
+# camera and controller up, both motors off, nothing moves until the web's HOME -- unless --home
+# (or OTA_START_STATE=homed) asks for the station to home now; a deploy passes the state it found.
+# --sim keeps homing at start: the simulation tools drive a homed plant.
+START_STATE="${OTA_START_STATE:-}"
+[ "$START_STATE_HOME" = 1 ] && START_STATE=homed
+if [ -z "$START_STATE" ]; then
+  if [ "$MODE" = hardware ]; then START_STATE=shutdown; else START_STATE=homed; fi
+fi
+case "$START_STATE" in
+  homed|shutdown) ;;
+  *) echo "OTA_START_STATE must be homed or shutdown, not '$START_STATE'" >&2; exit 2 ;;
+esac
+control_sched=(env "OTA_RT=${OTA_RT:-1}" "OTA_START_STATE=$START_STATE")
 vision_sched=()
 imu_sched=(nice -n 10)
 web_sched=(nice -n 19)
@@ -654,7 +670,11 @@ if [ "$MODE" = sim ]; then
   controller_args+=(--sim)
   echo 'SIMULATED motors; camera and web are real.'
 elif [ "$MODE" = hardware ]; then
-  echo 'HARDWARE station: homing establishes calibration, then automatic roam/track begins. Web Manual overrides autonomy.'
+  if [ "$START_STATE" = shutdown ]; then
+    echo 'HARDWARE station, SHUTDOWN: web and camera up, both motors off. MENU > HOME homes it, then automatic roam/track begins.'
+  else
+    echo 'HARDWARE station: homing establishes calibration, then automatic roam/track begins. Web Manual overrides autonomy.'
+  fi
 elif [ "$MODE" = mixed-controller-commission ]; then
   export OTA_MIXED_COMMISSION_MANUAL=1
   echo 'MIXED CONTROLLER COMMISSION: manual startup only; no vision/web; supervise pitch homing and controlled stop.'

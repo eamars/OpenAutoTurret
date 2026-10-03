@@ -82,6 +82,28 @@ def readiness_gaps(state: dict) -> list[str]:
     return gaps
 
 
+def shutdown_gaps(state: dict) -> list[str]:
+    """SHUTDOWN is a ready state too (owner ruling 2026-10-03: Homed or Shutdown): everything up,
+    both motors off, waiting for the web's HOME."""
+    gaps: list[str] = []
+    if not state.get("controld_connected"):
+        gaps.append("controld_connected")
+    if state.get("phase") != "idle":
+        gaps.append(f"phase={state.get('phase')}")
+    if not state.get("vision_connected"):
+        gaps.append("vision_connected")
+    if not state.get("can_up"):
+        gaps.append("can_up")
+    if state.get("telemetry_stale"):
+        gaps.append("telemetry_stale")
+    try:
+        if float(state.get("camera_fps", 0)) <= 0:
+            gaps.append("camera_fps")
+    except (TypeError, ValueError):
+        gaps.append("camera_fps")
+    return gaps
+
+
 def smoke_once(base: str, timeout: float) -> dict:
     page = get_bytes(base + "/", timeout)
     if b"OpenAutoTurret" not in page:
@@ -106,6 +128,9 @@ def main() -> int:
         metavar="SECONDS",
         help="wait for the normal automatic ready state after the smoke checks",
     )
+    parser.add_argument("--expect", choices=("homed", "shutdown"), default="homed",
+                        help="the state --wait-ready waits for: homed (READY in AUTO_ROAM/AUTO_TRACK) "
+                             "or shutdown (up, both motors off, waiting for HOME)")
     args = parser.parse_args()
     if args.timeout <= 0 or args.wait_ready < 0:
         parser.error("--timeout must be positive and --wait-ready cannot be negative")
@@ -144,10 +169,11 @@ def main() -> int:
         fault = state.get("fault")
         if fault:
             raise RuntimeError(f"station reported fault during activation: {fault}")
-        gaps = readiness_gaps(state)
+        gaps = shutdown_gaps(state) if args.expect == "shutdown" else readiness_gaps(state)
         if not gaps:
             print(
-                "Station ready: "
+                ("Station up, SHUTDOWN (motors off; MENU > HOME starts it): "
+                 if args.expect == "shutdown" else "Station ready: ") +
                 f"mode={state.get('operating_mode')} "
                 f"phase={state.get('phase')} "
                 f"camera_fps={state.get('camera_fps')}"

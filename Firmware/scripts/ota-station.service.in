@@ -1,0 +1,23 @@
+# OpenAutoTurret station, as a systemd USER unit (docs/operations/os-setup.md, "Start at boot").
+# Installed and refreshed by tools/deploy_station.py --activate into ~/.config/systemd/user/; @ROOT@
+# is the deployment root. It starts the release that run/current points at, in SHUTDOWN unless the
+# deploy asked for the state it found (OTA_START_STATE in the user manager's environment).
+#
+# Real-time priority and memory locking come from the user manager itself (the one-time
+# `station_os_setup.sh --apply --autostart` grants them to user@<uid>.service); a user unit cannot
+# raise its own limits, and does not need to.
+[Unit]
+Description=OpenAutoTurret station (boots SHUTDOWN: web and camera up, motors off until HOME)
+
+[Service]
+Type=simple
+ExecStart=@ROOT@/run/current/Firmware/scripts/station_boot.sh
+# The launcher's own controlled stop: park, then disable. KillMode=mixed sends TERM to the launcher
+# only, so it can bring the motors down before anything else is signalled.
+ExecStop=@ROOT@/run/current/Firmware/scripts/run_application.sh stop
+KillMode=mixed
+TimeoutStopSec=90
+Restart=no
+
+[Install]
+WantedBy=default.target

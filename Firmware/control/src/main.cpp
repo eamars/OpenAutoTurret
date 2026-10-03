@@ -545,13 +545,23 @@ int main(int argc, char** argv) {
   }
   const bool reused = retained && retained->load(saved_models, saved_limits) &&
       loop.restore_retained_homing(saved_models, saved_limits, err);
-  if (!reused && !loop.start_homing(std::move(plan), err)) {
+  // Owner ruling 2026-10-03: the station is in one of two states, Homed or Shutdown. The launcher
+  // says which one to start in (OTA_START_STATE): a boot is always Shutdown -- up and reachable,
+  // both motors off, nothing moves until the web's HOME -- and a deploy restores the state it found.
+  // Unset means homed, which is what every caller did before the ruling.
+  const char* start_state_env = std::getenv("OTA_START_STATE");
+  const bool start_shut_down = start_state_env && std::strcmp(start_state_env, "shutdown") == 0;
+  if (start_shut_down) {
+    loop.deenergize_all();
+    spdlog::info("start state: SHUTDOWN (both motors off, not homed); MENU > HOME starts the station");
+  } else if (!reused && !loop.start_homing(std::move(plan), err)) {
     spdlog::error("start homing failed: {}", err);
     loop.deenergize_all();
     return 1;
   }
   loop.set_homing_factory([cfg]() { std::string e; return make_homing_plan(cfg, e); });
-  spdlog::info("calibration: {}", reused ? "retained calibration validated; homing skipped" : "homing required");
+  spdlog::info("calibration: {}", start_shut_down ? "not homed (start state shutdown)"
+                                  : reused ? "retained calibration validated; homing skipped" : "homing required");
   spdlog::info("service startup: {} after calibration and ready gates",
                mixed_commission_manual ? "manual commissioning hold" :
                cfg.v3.default_mode == "AUTO_ROAM" ? "automatic roam" : "manual hold");

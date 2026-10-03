@@ -12,9 +12,13 @@ cards. Dated as-built reports are historical.
 - Operate as `eamars@rpi-turret`, without `sudo`, using the existing SSH key.
 - Use `Firmware/scripts/run_application.sh` for the entire stack: `deploy`,
   `check`, `start` (also the no-argument default), `status`, `stop`.
-- Normal startup is AUTO_ROAM → target tracking → AUTO_ROAM after loss.
-  Manual/Hold is an explicit web override; do not persist trial speed/mode
-  overrides into normal deployment unintentionally.
+- The station is in one of two states, **Homed** or **Shutdown** (owner ruling 2026-10-03).
+  - A boot, and a plain launcher `start`, is Shutdown: web, camera and controller are up, both
+    motors are off, and nothing moves until the web's MENU > HOME.
+  - A deploy returns the station to the state it found.
+  - Once homed, normal operation is AUTO_ROAM → target tracking → AUTO_ROAM after loss.
+  - Manual/Hold is an explicit web override. Do not persist trial speed/mode overrides into normal
+    deployment unintentionally; the web's speed settings last until a restart by design.
 - Deploy committed source with `Firmware/tools/deploy_station.py`. It preserves
   the dirty Pi checkout and builds a separate release; `--activate` additionally performs a
   controlled stop/start after verification. **Compilation happens on the deployment host, not on

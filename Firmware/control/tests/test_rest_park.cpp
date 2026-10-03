@@ -149,6 +149,27 @@ TEST(RestPark, ShutdownParksThenSwitchesBothMotorsOffAndOnlyHomeStartsAgain) {
   EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
 }
 
+TEST(RestPark, ABootIntoShutdownStaysOffUntilHome) {
+  // Owner, 2026-10-03: two states, Homed or Shutdown, and a boot is Shutdown (like a printer's
+  // firmware: up and reachable, motors off, nothing moves until Home). controld's
+  // OTA_START_STATE=shutdown is this: no homing at startup, both drives told off.
+  Station s;
+  s.loop->deenergize_all();
+  s.step(400);
+  EXPECT_EQ(s.loop->phase(), Phase::Idle);
+  EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
+  EXPECT_FALSE(s.loop->homed());
+  EXPECT_TRUE(s.sim->snapshot(AxisId::Pitch, s.t).disabled);
+  EXPECT_TRUE(s.sim->snapshot(AxisId::Yaw, s.t).disabled);
+  s.run("set_mode", "AUTO_ROAM");
+  s.step(200);
+  EXPECT_TRUE(s.sim->snapshot(AxisId::Pitch, s.t).disabled) << "a mode cannot wake a shut-down turret";
+  s.run("start_homing");
+  ASSERT_TRUE(s.ack().accepted) << s.ack().reason;
+  ASSERT_TRUE(s.until([&] { return s.saw_fault || (s.loop->homed() && s.loop->at_ready()); }));
+  EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
+}
+
 TEST(RestPark, ShutdownWhileParkedReleasesFromTheStop) {
   Station s;
   ASSERT_TRUE(s.home());

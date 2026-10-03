@@ -115,6 +115,26 @@ actions. Each one works from wherever it is offered, and each asks for two press
   clear, which is a STOP. A drive that is still holding speed zero is re-armed without being
   released (`CyberGearSystem::finish_axis_recovery`).
 
+## Two states, Homed or Shutdown, and the boot (owner ruling, 2026-10-03)
+
+**Ruling.** The station is either **Homed** (energised, AUTO_ROAM / tracking / MANUAL) or **Shutdown**
+(both motors off, not homed, web and camera up). There is no third state.
+
+- **A boot is Shutdown**, the way a printer's firmware comes up and waits for a home. MENU > HOME is
+  what brings the unit up.
+- **A deploy returns the station to the state it found.** `tools/station_state.py` decides: Homed
+  needs a reachable controller with valid limits that is neither idle nor faulted.
+- **A plain launcher `start` is Shutdown**; `--home` homes.
+
+The boot needs one sudo step, once (`station_os_setup.sh --apply --autostart`). After it, every
+deploy maintains the boot service by itself; see the [OS setup card](operations/os-setup.md),
+"Start at boot".
+
+Why the launcher no longer insists on the IMU: on 2026-10-03 at 16:35 the BNO085 held SDA low (the
+known I2C fault, next to an under-voltage event). The launcher's mixed-station gate, which demanded a
+fresh IMU tare, kept the station down after a deploy. In normal operation that wait now times out
+into a start without the IMU; commissioning keeps the gate.
+
 ## The web page: less on screen, settings in MENU, stats on request (owner ruling, 2026-10-03)
 
 **Ruling.** The page should inform without overwhelming:

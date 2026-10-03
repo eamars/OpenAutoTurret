@@ -75,6 +75,31 @@ Launcher overrides, for diagnosis only (not for normal deployment): `OTA_RT=0` k
 controld thread SCHED_OTHER; `OTA_CPU_PIN=0` leaves all CPUs unpinned; `OTA_CONTROL_CPUS` and
 `OTA_APP_CPUS` move the split.
 
+### Start at boot (one time)
+
+```bash
+sudo bash "$R/Firmware/tools/station_os_setup.sh" --apply --autostart    # then reboot
+```
+
+This is the only sudo step for boot. It turns on linger for the operator, so their systemd user
+manager runs without a login, and gives that manager the same real-time grant as above
+(`/etc/systemd/system/user@<uid>.service.d/ota-realtime.conf`).
+
+Everything else is the deploy's job, every time, without sudo:
+- `deploy_station.py --activate` points `run/current` at the new release.
+- It installs or refreshes the user unit `~/.config/systemd/user/ota-station.service` from
+  `scripts/ota-station.service.in`, and enables it.
+- Once the manager carries the grant, it starts the stack through the unit.
+
+At boot the unit runs `scripts/station_boot.sh` from `run/current`. That script waits for can0,
+can1 and `/dev/hailo0`, then runs the launcher in the foreground in **SHUTDOWN**: up and reachable,
+motors off, waiting for HOME. Stopping the unit (or shutting the Pi down) runs the launcher's
+controlled stop.
+
+Verify: `systemctl --user status ota-station`, `bash "$R/Firmware/tools/station_os_setup.sh" --check`
+(linger, the manager's grant, `run/current`), and after a reboot the HUD reading
+`SHUTDOWN · MOTORS OFF · MENU › HOME`.
+
 ## What it proves
 
 `--check` reporting the limits file and `pam_limits active` proves a new login will be granted
