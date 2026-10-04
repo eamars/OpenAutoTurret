@@ -6,7 +6,9 @@
 //   * stale feedback -> Brake (a recoverable safe stop, NOT a fault);
 //   * motor hard fault -> Disable (de-energize, fault-locked).
 #include <cstring>
+#include <filesystem>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -2997,4 +2999,233 @@ TEST(RoamMode, AContinuousYawPatrolsPastTheOldBandWithoutTurningBack) {
   EXPECT_GT(std::abs(previous - start), 150 * kDeg2Rad)
       << "travelled only " << (previous - start) / kDeg2Rad << " deg in 60 s";
   EXPECT_EQ(loop.phase(), Phase::Hold) << loop.fault_reason();
+}
+
+// --- SURVEILLANCE (owner, 2026-10-05) --------------------------------------------------------------
+// The turret faces a saved watch point, follows a target through the ordinary AUTO_TRACK hand-off,
+// and goes back to the point when the target is lost. Asserted on where the axes end up, not on the
+// labels that say so.
+namespace {
+constexpr double kWatchTol = 0.6 * kDeg2Rad;
+
+// Steps until both axes have rested within kWatchTol of (yaw, pitch) for 0.2 s.
+bool settles_at(HomedLoop& h, double yaw, double pitch, int max_cycles) {
+  int inside = 0;
+  for (int i = 0; i < max_cycles; ++i) {
+    h.step(1);
+    const auto q = h.loop->last_positions();
+    inside = (std::abs(q[1] - yaw) < kWatchTol && std::abs(q[0] - pitch) < kWatchTol) ? inside + 1 : 0;
+    if (inside > 40) return true;
+  }
+  return false;
+}
+
+// One confirmed person at image x `ax`, selected by perception (the native wire).
+tracks::TrackSet lone_subject(uint32_t seq, TimeNs t, float ax) {
+  auto set = two_people(seq, t, 1, 2, .95f, .3f, ax, .9f);
+  set.count = 1;
+  set.width = 1920;
+  set.height = 1080;
+  set.tracks[0].visible_frames = 20;
+  set.observation.native = true;
+  set.observation.session = {1, 1};
+  set.observation.selected = set.tracks[0].uuid;
+  set.observation.generation = 1;
+  set.observation.track_set_sequence = seq;
+  set.observation.state = 1;
+  set.observation.valid = true;
+  set.observation.association_quality = 1;
+  set.observation.identity_confidence = 1;
+  return set;
+}
+
+// A watch point away from the ready pose on both axes, so returning to it cannot be mistaken for
+// returning to the ready pose.
+std::array<double, kAxisCount> aim_and_save(HomedLoop& h) {
+  for (const char* s : {"yaw+5", "yaw+5", "pitch+5"}) {
+    h.run("manual_step", s);
+    EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << s << ": " << h.snap().cmd_ack_reason;
+    h.step(400);
+  }
+  const auto q = h.loop->last_positions();
+  h.run("set_watch_point");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  return q;
+}
+}  // namespace
+
+TEST(Surveillance, RefusedWithoutAWatchPointAndTheReasonSaysHowToSetOne) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "SURVEILLANCE");
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("SET WATCH POINT"), std::string::npos) << h.snap().cmd_ack_reason;
+  EXPECT_FALSE(h.snap().watch_point_set);
+  EXPECT_EQ(h.snap().auto_return_mode, "AUTO_ROAM");
+}
+
+TEST(Surveillance, ItReturnsToTheSavedPointFromWhereverItWasLeft) {
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  const auto q0 = aim_and_save(h);
+  h.step(2);
+  EXPECT_TRUE(h.snap().watch_point_set);
+  EXPECT_TRUE(h.snap().watch_point_usable);
+  EXPECT_NEAR(h.snap().watch_yaw_rad, q0[1], 1e-6);
+  EXPECT_NEAR(h.snap().watch_pitch_rad, q0[0], 1e-6);
+  // A roam takes yaw away, and pitch to its sweep elevation.
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(1200);
+  const auto away = h.loop->last_positions();
+  ASSERT_GT(std::max(std::abs(away[1] - q0[1]), std::abs(away[0] - q0[0])), 3 * kDeg2Rad)
+      << "the roam must have moved it off the point";
+  h.run("set_mode", "SURVEILLANCE");
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::Surveillance) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.snap().auto_return_mode, "SURVEILLANCE");
+  EXPECT_TRUE(settles_at(h, q0[1], q0[0], 6000))
+      << "yaw " << h.loop->last_positions()[1] / kDeg2Rad << " vs " << q0[1] / kDeg2Rad
+      << ", pitch " << h.loop->last_positions()[0] / kDeg2Rad << " vs " << q0[0] / kDeg2Rad;
+  EXPECT_EQ(h.snap().mode_phase, "WATCH");
+  EXPECT_EQ(h.snap().intent_source, "surveillance");
+  h.step(200);  // and it stays there
+  EXPECT_NEAR(h.loop->last_positions()[1], q0[1], kWatchTol);
+  EXPECT_NEAR(h.loop->last_positions()[0], q0[0], kWatchTol);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(Surveillance, ATargetIsFollowedAndItsLossBringsTheTurretBackToTheWatchPoint) {
+  HomedLoop h(true, 0, false, /*automatic_handoffs=*/true, 50);
+  ASSERT_TRUE(h.ready);
+  const auto q0 = aim_and_save(h);
+  h.run("set_mode", "SURVEILLANCE");
+  ASSERT_TRUE(settles_at(h, q0[1], q0[0], 2000));
+  // A person right of centre: acquired through the automatic hand-off, and followed.
+  uint32_t seq = 0;
+  int tracking_for = 0;
+  for (int i = 0; i < 1200 && tracking_for < 100; ++i) {
+    if (i % 8 == 0) h.loop->feed_track_set(lone_subject(++seq, h.t, .7f), h.t);
+    h.step(1);
+    if (h.loop->operating_mode() == OperatingMode::AutoTrack && h.snap().mode_phase == "TRACKING")
+      ++tracking_for;
+  }
+  ASSERT_GE(tracking_for, 100) << h.snap().mode_phase;
+  ASSERT_GT(std::abs(h.loop->last_positions()[1] - q0[1]), 1 * kDeg2Rad)
+      << "following must have turned the turret off the point";
+  // Gone, and nobody else: SURVEILLANCE again, and the axes back on the point.
+  for (int i = 0; i < 2000 && h.loop->operating_mode() != OperatingMode::Surveillance; ++i) h.step(1);
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::Surveillance) << h.snap().mode_phase;
+  EXPECT_TRUE(settles_at(h, q0[1], q0[0], 6000))
+      << "yaw " << h.loop->last_positions()[1] / kDeg2Rad << " vs " << q0[1] / kDeg2Rad;
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(Surveillance, ALossReturnsWhereTheOperatorLastLeftTheCycle) {
+  // AUTO_TRACK started by hand ends in the mode the operator chose last: SURVEILLANCE, then, after
+  // the operator picks AUTO_ROAM, the patrol again. MANUAL and AUTO_TRACK do not change it.
+  HomedLoop h(true, 0, false, /*automatic_handoffs=*/true, 50);
+  ASSERT_TRUE(h.ready);
+  aim_and_save(h);
+  h.run("set_mode", "SURVEILLANCE");
+  h.run("set_mode", "MANUAL");
+  h.run("set_mode", "AUTO_TRACK");
+  for (int i = 0; i < 2000 && h.loop->operating_mode() == OperatingMode::AutoTrack; ++i) h.step(1);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Surveillance);
+  h.run("set_mode", "AUTO_ROAM");
+  h.run("set_mode", "AUTO_TRACK");
+  for (int i = 0; i < 2000 && h.loop->operating_mode() == OperatingMode::AutoTrack; ++i) h.step(1);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  EXPECT_EQ(h.snap().auto_return_mode, "AUTO_ROAM");
+}
+
+namespace {
+// A continuous yaw whose drive reports an absolute angle, like the GM6020: absolute = q + offset.
+// A new process opens the drive with a new session origin, which is a new offset.
+class AbsoluteYawPlant : public sim::SimMotorBackend {
+ public:
+  explicit AbsoluteYawPlant(double offset) : SimMotorBackend(.005), offset_(offset) {}
+  bool supports_continuous_yaw() const override { return true; }
+  bool absolute_angle_offset(AxisId axis, double& offset_rad) const override {
+    if (axis != AxisId::Yaw) return false;
+    offset_rad = offset_;
+    return true;
+  }
+ private:
+  double offset_;
+};
+
+struct ContinuousStation {
+  std::unique_ptr<ControlLoop> loop;
+  int64_t t = kDtNs;
+  bool ready = false;
+  ContinuousStation(double offset, double yaw0, const std::string& watch_file) {
+    auto plant = std::make_unique<AbsoluteYawPlant>(offset);
+    plant->set_stops(AxisId::Pitch, -1, 1);
+    plant->set_stops(AxisId::Yaw, -100, 100);       // a slip ring: no stop within reach
+    plant->set_position(AxisId::Pitch, .5);
+    plant->set_position(AxisId::Yaw, yaw0);
+    auto cfg = make_cfg();
+    cfg.service_speed_control = true;
+    cfg.allow_unknown_motor_health = true;
+    cfg.continuous_yaw_sector_half_span_rad = 0;   // position_envelope: none
+    cfg.homing_motion_checks_abort = false;
+    loop = std::make_unique<ControlLoop>(cfg, std::move(plant));
+    std::string err;
+    EXPECT_TRUE(loop->set_watch_point_store(watch_file, err)) << err;
+    HomingPlanConfig hcfg;
+    hcfg.homing.coarse_speed_rad_s = 20 * kDeg2Rad;
+    hcfg.homing.fine_speed_rad_s = 2 * kDeg2Rad;
+    hcfg.homing.settle_time_s = .3;
+    hcfg.travel_bands[0] = TravelBand{0, 115};
+    std::vector<HomingAction> actions{{.type=HomingActionType::HomeFullRange, .axis=AxisId::Pitch}};
+    if (!loop->start_homing(HomingPlan(std::move(actions), hcfg), err)) return;
+    for (int i = 0; i < kMaxSteps; ++i, t += kDtNs) {
+      loop->step(t, kDtNs);
+      if (loop->phase() == Phase::Fault ||
+          (loop->position_ready() && loop->at_ready() && loop->phase() == Phase::Hold)) break;
+    }
+    ready = loop->position_ready() && loop->phase() == Phase::Hold;
+  }
+  void step(int n) { for (int i = 0; i < n; ++i, t += kDtNs) loop->step(t, kDtNs); }
+};
+}  // namespace
+
+TEST(Surveillance, TheWatchPointNamesTheSameDirectionAfterARestart) {
+  // Yaw's joint zero is wherever the axis stood when the drive was opened, so a saved joint angle
+  // would point somewhere else after a restart. The point is saved as the drive's absolute angle.
+  std::random_device rd;
+  const auto dir = std::filesystem::temp_directory_path() / ("ota-surv-" + std::to_string(rd()));
+  std::filesystem::create_directories(dir);
+  const std::string file = (dir / "watch_point.json").string();
+  double absolute = 0.0, pitch = 0.0;
+  {
+    ContinuousStation s(/*offset=*/1.0, /*yaw0=*/0.3, file);
+    ASSERT_TRUE(s.ready) << s.loop->fault_reason();
+    s.loop->submit_command("set_watch_point", "");
+    s.step(3);
+    ASSERT_EQ(s.loop->telemetry().snapshot().cmd_ack_accepted, 1)
+        << s.loop->telemetry().snapshot().cmd_ack_reason;
+    absolute = s.loop->last_positions()[1] + 1.0;
+    pitch = s.loop->last_positions()[0];
+  }  // the store finishes its write before the loop is gone
+  {
+    // The next process: a different session origin, and the turret standing elsewhere.
+    ContinuousStation s(/*offset=*/2.0, /*yaw0=*/0.0, file);
+    ASSERT_TRUE(s.ready) << s.loop->fault_reason();
+    ASSERT_TRUE(s.loop->watch_point().valid) << "the point did not survive the restart";
+    const auto r = s.loop->request_mode(OperatingMode::Surveillance);
+    ASSERT_TRUE(r.ok) << r.reason;
+    for (int i = 0; i < 8000; ++i) {
+      s.step(1);
+      if (s.loop->telemetry().snapshot().mode_phase == "WATCH") break;
+    }
+    s.step(100);
+    const double yaw = s.loop->last_positions()[1];
+    EXPECT_NEAR(std::remainder(yaw + 2.0 - absolute, 2 * M_PI), 0.0, kWatchTol)
+        << "facing absolute " << (yaw + 2.0) / kDeg2Rad << " deg, saved " << absolute / kDeg2Rad;
+    EXPECT_NEAR(yaw, absolute - 2.0, kWatchTol) << "the short way round from where it stood";
+    EXPECT_NEAR(s.loop->last_positions()[0], pitch, kWatchTol);
+    EXPECT_EQ(s.loop->phase(), Phase::Hold) << s.loop->fault_reason();
+  }
+  std::filesystem::remove_all(dir);
 }

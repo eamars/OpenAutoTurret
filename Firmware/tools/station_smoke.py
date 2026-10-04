@@ -64,7 +64,7 @@ def readiness_gaps(state: dict) -> list[str]:
         gaps.append("controld_connected")
     if not state.get("soft_limits_valid"):
         gaps.append("soft_limits_valid")
-    if state.get("operating_mode") not in ("AUTO_ROAM", "AUTO_TRACK"):
+    if state.get("operating_mode") not in ("AUTO_ROAM", "AUTO_TRACK", "SURVEILLANCE"):
         gaps.append(f"operating_mode={state.get('operating_mode')}")
     if state.get("supervisory_state") != "READY":
         gaps.append(f"supervisory_state={state.get('supervisory_state')}")

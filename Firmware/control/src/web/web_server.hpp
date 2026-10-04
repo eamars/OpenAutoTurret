@@ -483,6 +483,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""
      << ",\"supervisory_state\":\"" << json_escape(s.supervisory_state) << "\""
      << ",\"mode_phase\":\"" << json_escape(s.mode_phase) << "\""
+     << ",\"auto_return_mode\":\"" << json_escape(s.auto_return_mode) << "\""
+     << ",\"watch_point_set\":" << (s.watch_point_set ? "true" : "false")
+     << ",\"watch_point_usable\":" << (s.watch_point_usable ? "true" : "false")
+     << ",\"watch_point_persistent\":" << (s.watch_point_persistent ? "true" : "false")
+     << ",\"watch_point_saved\":" << s.watch_point_saved
+     << ",\"watch_yaw_rad\":" << s.watch_yaw_rad
+     << ",\"watch_pitch_rad\":" << s.watch_pitch_rad
      << ",\"intent_source\":\"" << json_escape(s.intent_source) << "\""
      << ",\"intent_type\":\"" << json_escape(s.intent_type) << "\""
      << ",\"intent_reason\":\"" << json_escape(s.intent_reason) << "\""

@@ -188,6 +188,7 @@ function hudStateLabel(o) {
   const phase = String(o.phase || "").toUpperCase();
   const auto = mode === "AUTO_TRACK";
   const roam = mode === "AUTO_ROAM";
+  const surv = mode === "SURVEILLANCE";
   // The station is Homed or Shutdown (owner ruling 2026-10-03), and a boot is Shutdown: the phase is
   // controld's "idle", and the line says what starts it.
   if (o.supervisory === "idle") return { line1: "SHUTDOWN", line2: "MOTORS OFF · MENU › HOME", named: true };
@@ -208,6 +209,9 @@ function hudStateLabel(o) {
   if (roam && phase === "SWEEP") return { line1: "AUTO ROAM", line2: "SWEEP", named: true };
   // Continuous yaw: the whole circle, one direction (owner, 2026-10-02).
   if (roam && phase === "PATROL") return { line1: "AUTO ROAM", line2: "PATROL", named: true };
+  // A fixed camera (owner, 2026-10-05): on its way back to the watch point, or holding it.
+  if (surv && phase === "RETURN") return { line1: "SURVEILLANCE", line2: "RETURNING", named: true };
+  if (surv && phase === "WATCH") return { line1: "SURVEILLANCE", line2: "WATCHING", named: true };
   if (mode === "MANUAL") {
     // §21.4 asks for SWEEP LEFT|RIGHT; the daemon publishes no sweep direction, so the direction is
     // left off rather than guessed from the sign of a rate that also moves for other reasons.
@@ -219,7 +223,7 @@ function hudStateLabel(o) {
   // would sound authoritative about a state nobody specified, which is the failure mode this project
   // keeps meeting: the interface asserting more than the station said.
   return {
-    line1: (auto ? "AUTO TRACK" : roam ? "AUTO ROAM" : mode || "--"),
+    line1: (auto ? "AUTO TRACK" : roam ? "AUTO ROAM" : surv ? "SURVEILLANCE" : mode || "--"),
     line2: phase || "--",
     named: false
   };
@@ -296,8 +300,9 @@ function hudSafetyPresentation(t) {
 // Every command name and argument spelling here was read out of the daemon's own handlers rather than
 // from prose: select_target takes the DISPLAY INDEX as a number (controld's own refusal says "the label
 // on the screen"), manual_jog_start takes yaw+/yaw-/pitch+/pitch- with an optional fine|normal|fast
-// profile, manual_step takes yaw+1 / pitch-0.5, set_mode takes MANUAL / AUTO_TRACK / AUTO_ROAM and
-// refuses anything else instead of falling back, and STOP MOTION is `hold`.
+// profile, manual_step takes yaw+1 / pitch-0.5, set_mode takes MANUAL / AUTO_TRACK / AUTO_ROAM /
+// SURVEILLANCE and refuses anything else instead of falling back, set_watch_point takes nothing (it
+// saves where the turret points), and STOP MOTION is `hold`.
 function hudDockSpecs(o) {
   // §13's controls, in the order the revision lists them. DIAG left the dock on 2026-10-03 (owner):
   // its rows live in the stats overlay, which MENU > SETTINGS turns on, like a video player's
@@ -342,15 +347,29 @@ function hudDrawerActions(name, t) {
   }
 
   if (name === "MODE") {
-    // §13: MANUAL / AUTO TRACK / AUTO ROAM. The mode already in force is rendered as selected and sends
-    // nothing: re-issuing the current mode is a command with no effect, and a control that appears to
-    // act while doing nothing is what the rest of this file is paranoid about.
-    return [["MANUAL", "MANUAL"], ["AUTO TRACK", "AUTO_TRACK"], ["AUTO ROAM", "AUTO_ROAM"]]
+    // §13: MANUAL / AUTO TRACK / AUTO ROAM, and SURVEILLANCE (owner, 2026-10-05). The mode already in
+    // force is rendered as selected and sends nothing: re-issuing the current mode is a command with no
+    // effect, and a control that appears to act while doing nothing is what the rest of this file is
+    // paranoid about. SURVEILLANCE without a usable watch point is greyed with the reason, because
+    // controld would refuse it; SET WATCH POINT saves where the turret points now, and asks twice
+    // when it would replace a saved point, since that one outlives restarts.
+    const rows = [["MANUAL", "MANUAL"], ["AUTO TRACK", "AUTO_TRACK"], ["AUTO ROAM", "AUTO_ROAM"],
+                  ["SURVEILLANCE", "SURVEILLANCE"]]
       .map(function (pair) {
         const shown = pair[0], wire = pair[1], now = (wire === mode);
+        if (!now && wire === "SURVEILLANCE" && !t.watch_point_usable)
+          return { label: shown, command: null, arg: wire, kind: "gated",
+                   note: t.watch_point_set ? "WATCH POINT NOT USABLE · HOME FIRST" : "SET A WATCH POINT FIRST" };
         return { label: shown, command: now ? null : "set_mode", arg: wire,
                  kind: now ? "current" : "act", note: now ? "ACTIVE" : "" };
       });
+    const holding = String(t.phase || "") === "hold";
+    rows.push(holding
+      ? { label: "SET WATCH POINT", command: "set_watch_point", arg: "",
+          kind: t.watch_point_set ? "danger" : "act",
+          note: t.watch_point_set ? "Replace the saved point with where it points now" : "Save where it points now" }
+      : { label: "SET WATCH POINT", command: null, arg: "", kind: "gated", note: "HOME FIRST" });
+    return rows;
   }
 
   if (name === "MANUAL") {
@@ -1582,7 +1601,8 @@ function paint(t) {
   const drawerKey = value => JSON.stringify(drawerOpen === "MENU"
     ? [value && value.phase, value && value.cmd_ack_seq, value && value.rest_park, value && value.rest_park_on_stop,
        hudSpeedRows(value).map(r => [r.value, r.max])]
-    : [value && value.operating_mode, value && value.cmd_ack_seq,
+    : [value && value.operating_mode, value && value.cmd_ack_seq, value && value.phase,
+      value && value.watch_point_set, value && value.watch_point_usable,
       value && value.selected_uuid, value && value.perception_session_uuid,
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
   const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);

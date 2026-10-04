@@ -151,7 +151,7 @@ and assert where pitch ends up and that no BRAKE fired, not the mode labels
 
 ## Two states, Homed or Shutdown, and the boot (owner ruling, 2026-10-03)
 
-**Ruling.** The station is either **Homed** (energised, AUTO_ROAM / tracking / MANUAL) or **Shutdown**
+**Ruling.** The station is either **Homed** (energised, AUTO_ROAM / SURVEILLANCE / tracking / MANUAL) or **Shutdown**
 (both motors off, not homed, web and camera up). There is no third state.
 
 - **A boot is Shutdown**, the way a printer's firmware comes up and waits for a home. MENU > HOME is
@@ -173,6 +173,61 @@ known I2C fault, next to an under-voltage event). The launcher's mixed-station g
 fresh IMU tare, kept the station down after a deploy. In normal operation that wait now times out
 into a start without the IMU; commissioning keeps the gate.
 
+## SURVEILLANCE: a fixed camera that follows (owner ruling, 2026-10-05)
+
+**Ruling.** A fourth mode, AUTO_ROAM's sibling. The turret faces a saved **watch point** and holds
+it. A person who comes into view is followed exactly as AUTO_TRACK follows one: same automatic
+hand-off, same tracking. When they are lost and nobody else is in view, the turret goes back to the
+watch point. The owner's answers:
+
+- **The watch point is a saved preset.** MODE > SET WATCH POINT saves where the turret points now,
+  and it survives restarts, deploys and reboots. It is the one operator setting that persists, on
+  purpose; the speeds still last a session.
+- **Following is unlimited**, like AUTO_TRACK. The turret goes back only on a loss.
+- **Several people: SURVEILLANCE ranks.**
+  - After a loss it follows the eligible candidate nearest where the lost one was last seen.
+  - At, or on the way back to, the watch point it takes the one nearest the frame centre.
+  - Every candidate still needs perception's 0.5 s dwell on its own. AUTO_ROAM and AUTO_TRACK keep
+    the single-candidate rule (§28.3); this is the one exception.
+- **HOME still ends in AUTO_ROAM** (ruling of 2026-10-03). SURVEILLANCE is chosen in the MODE drawer.
+
+**How it runs.**
+- **The cycle:** SURVEILLANCE (RETURN, then WATCH) → AUTO_TRACK on acquisition → loss → SURVEILLANCE.
+  - The hand-off is the existing one: `track_on_acquire_ms` going in, and `roam_on_loss_ms` of
+    LOST_HOLD / WAIT_TARGET coming back.
+  - controld keeps the mode the operator last chose of AUTO_ROAM and SURVEILLANCE (`auto_return_mode`
+    in telemetry), and a loss returns there. MANUAL and a hand-started AUTO_TRACK leave it alone;
+    HOME and a restart reset it to AUTO_ROAM.
+- **A second target is taken before the turret turns home.** Perception switches the moment controld
+  reports LOST_HOLD, while the loss window is still running, so with somebody else in view there is
+  no trip back to the watch point in between.
+- **The return runs at the wide patrol pace on either camera** (MENU > SETTINGS > PATROL · WIDE,
+  15 deg/s), under AUTO_ROAM's motion profile; SURVEILLANCE declares none of its own. The detail
+  pace exists so a person stays in the narrow picture during a search; the way back to a known
+  point has no such reason.
+- **No arrival is waited for.** The planner aims at the watch point on every cycle; RETURN and WATCH
+  (1 deg in, 2 deg out) are labels only. A turret pushed off its point goes back to it.
+- **Where it lives:** `<root>/run/state/watch_point.json`.
+  - The launcher exports `OTA_STATE_DIR`. `deploy_station.py` links `run/state` into every release,
+    as it does the venv. `--sim` and the commissioning modes use their run directory, so they never
+    touch the station's point.
+  - Yaw is saved as the GM6020's absolute angle. The motor drives the turret directly, so this names
+    the same direction in every session, whereas yaw's joint zero is wherever the axis stood when
+    the drive was opened. **Turning or moving the tripod moves the watch point with it: set it
+    again.** Pitch is saved in its homed frame.
+  - A writer thread does the save; the 200 Hz loop does no file I/O.
+- **Refusals, each with its reason:**
+  - SURVEILLANCE with no watch point, before homing, or before the yaw drive has an absolute angle.
+  - SET WATCH POINT with pitch outside its envelope (on the rest stop), or while not holding.
+  - If the point stops resolving during a loss, the cycle falls back to AUTO_ROAM and says so.
+- **Fault, hold, degrade:** unchanged. SURVEILLANCE adds no guard, trip or watchdog.
+
+**Not yet verified on the station.** Checked so far:
+- Simulator: return from a roam, follow then loss then return, the operator's return mode, and the
+  same absolute direction after a restart with a new session origin (`test_control_loop
+  Surveillance.*`).
+- Perception: the ranked pick (`test_selection.py` `TestSurveillanceRanking`).
+
 ## The web page: less on screen, settings in MENU, stats on request (owner ruling, 2026-10-03)
 
 **Ruling.** The page should inform without overwhelming:
@@ -188,7 +243,8 @@ into a start without the IMU; commissioning keeps the gate.
     returns to `turret_mixed.yaml`, so a trial speed cannot quietly become the deployment's speed.
     The DPAD's COARSE and FINE paces are the two patrol paces, so they follow.
   - A placeholder for the target selection policy. Today the only policy is perception's
-    `AUTO_SELECT_SINGLE`: one person, alone for 0.5 s.
+    `AUTO_SELECT_SINGLE`: one person, alone for 0.5 s. SURVEILLANCE ranks by position instead
+    (see its section above).
   - The **STATS FOR NERDS** switch.
 - **The stats overlay** is off by default and remembered per browser. It replaced both the DIAG
   drawer and the old `/dashboard` page, which was removed.

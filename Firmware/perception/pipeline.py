@@ -74,6 +74,7 @@ from .protocol.jsonio import atomic_write_text, dumps
 from .protocol.selected_target import SelectedTargetObservation
 from .protocol.track_set import TrackSet
 from .replay.recorder import Recorder
+from .selection.control_context import SelectionFlags
 from .selection.target_selection_manager import TargetSelectionManager
 from .tracking.diagnostics import AssociationDiagnostics
 from .tracking.track_manager import TrackManager
@@ -510,13 +511,13 @@ class PerceptionPipeline:
             mark("selection_start")
             if self.selection_service is not None:
                 self.selection_service.process(self.selector, track_set, self.clock())
-            auto_allowed = bool(self.controller_context and self.controller_context.allows_auto_select(
-                track_set.session_uuid, self.clock()))
+            flags = (self.controller_context.selection_flags(track_set.session_uuid, self.clock())
+                     if self.controller_context else SelectionFlags())
             observation = self.selector.update(track_set, int(sensor_timestamp_ns),
-                                               auto_track_enabled=auto_allowed,
-                                               auto_roam_enabled=bool(auto_allowed and
-                                                   self.controller_context.operating_mode(
-                                                       track_set.session_uuid, self.clock()) == 'AUTO_ROAM'))
+                                               auto_track_enabled=flags.auto_track_enabled,
+                                               auto_roam_enabled=flags.auto_roam_enabled,
+                                               surveillance=flags.surveillance,
+                                               controller_lost=flags.controller_lost)
             # Lifecycle uses sensor time, but publication has its own host clock.
             # The two timestamps must not become identical by construction.
             published_ns = self.clock()

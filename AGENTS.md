@@ -17,6 +17,9 @@ cards. Dated as-built reports are historical.
     motors are off, and nothing moves until the web's MENU > HOME.
   - A deploy returns the station to the state it found.
   - Once homed, normal operation is AUTO_ROAM → target tracking → AUTO_ROAM after loss.
+  - SURVEILLANCE (owner ruling 2026-10-05) is the operator's alternative to AUTO_ROAM: face a saved
+    watch point, track, return to it after a loss. HOME still ends in AUTO_ROAM. The watch point
+    (`run/state/watch_point.json`) is the one operator setting that persists by design.
   - Manual/Hold is an explicit web override. Do not persist trial speed/mode overrides into normal
     deployment unintentionally; the web's speed settings last until a restart by design.
 - Deploy committed source with `Firmware/tools/deploy_station.py`. It preserves

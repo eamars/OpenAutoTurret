@@ -527,9 +527,21 @@ struct TelemetrySnapshot {
   // --- v3 §50/§52: the mode, and what the last command actually did --------
   // Names, not enums: these cross a process boundary into a browser, and a
   // renumbered enum on one side is a silent wrong label on the other.
-  std::string operating_mode;       // MANUAL | AUTO_TRACK | AUTO_ROAM
+  std::string operating_mode;       // MANUAL | AUTO_TRACK | AUTO_ROAM | SURVEILLANCE
   std::string supervisory_state;    // READY | HOMING | PARKING | FAULT | ... (§2)
-  std::string mode_phase;           // the mode's substate, e.g. WAIT_TARGET
+  std::string mode_phase;           // the mode's substate, e.g. WAIT_TARGET, RETURN, WATCH
+  // SURVEILLANCE (owner, 2026-10-05). `auto_return_mode` is where a loss sends the automatic cycle:
+  // AUTO_ROAM, or SURVEILLANCE once chosen; perception ranks a second target only for the latter.
+  // The watch point: saved at all; resolvable in this session (homed, the yaw's absolute angle
+  // known); written to a state directory or this session only; the last write's outcome (1 ok,
+  // 0 failed, -1 none yet); and where it is, in this session's joints (NaN when not resolvable).
+  std::string auto_return_mode = "AUTO_ROAM";
+  bool watch_point_set = false;
+  bool watch_point_usable = false;
+  bool watch_point_persistent = false;
+  int watch_point_saved = -1;
+  double watch_yaw_rad = std::numeric_limits<double>::quiet_NaN();
+  double watch_pitch_rad = std::numeric_limits<double>::quiet_NaN();
   std::string intent_source;        // who is asking for motion (§26)
   std::string intent_type;          // and what it asked for (§25)
   // §92's three positions, published so they can be told apart. `q_ref_*` is the reference

@@ -40,6 +40,8 @@
 #include "mode/mode_manager.hpp"
 #include "mode/manual_controller.hpp"
 #include "mode/roam_planner.hpp"
+#include "mode/surveillance_planner.hpp"
+#include "mode/watch_point.hpp"
 #include "tracking/auto_track_controller.hpp"
 #include "tracks/target_selection_manager.hpp"
 #include "tracks/track_set.hpp"
@@ -307,6 +309,19 @@ class ControlLoop {
   // has just become illegal.
   RoamConfig roam_config() const;
   RoamEnvelope safe_envelope() const;
+
+  // SURVEILLANCE's watch point (owner, 2026-10-05). `path` is the file it lives in (empty: this
+  // session only); it is read here, once, before the loop runs, and every later save is written by
+  // the store's own thread. Returns false, with `err`, when a file exists and cannot be used -- the
+  // station then starts with no watch point rather than a half-read one.
+  bool set_watch_point_store(const std::string& path, std::string& err);
+  const WatchPoint& watch_point() const { return watch_; }
+  // The mode the automatic cycle returns to after a loss: AUTO_ROAM, or SURVEILLANCE once the
+  // operator has chosen it. HOME and a restart go back to AUTO_ROAM (owner ruling 2026-10-03).
+  OperatingMode auto_return_mode() const { return auto_return_mode_; }
+  // The watch point in this session's joints, resolved from where yaw is now (the shortest way
+  // round on a continuous yaw). False, with the reason, when there is none or it cannot be used.
+  bool watch_point_target(double q_yaw_now, double& q_yaw, double& q_pitch, std::string& why) const;
 
   // §52: answer every command, including the ones that do nothing. `accepted`
   // here means controld acted on it — not that the web layer delivered it. A
@@ -837,6 +852,19 @@ class ControlLoop {
   char mode_refusal_reason_[224] = {};
   RoamPlanner roam_;
   RoamOutput roam_out_;
+  // SURVEILLANCE: the return to / hold at the watch point, and the point itself. The planner is
+  // (re-)aimed on the first cycle of every entry, from wherever the axes are then.
+  SurveillancePlanner surveil_;
+  SurveillanceOutput surveil_out_;
+  OperatingMode auto_return_mode_ = OperatingMode::AutoRoam;
+  WatchPoint watch_;
+  std::unique_ptr<WatchPointStore> watch_store_;
+  SurveillanceState last_surveil_state_ = SurveillanceState::Idle;
+  bool surveil_unusable_ = false;   // entered, but the point did not resolve: holding, said once
+  // The resolved point as published (5 Hz: resolving asks the yaw drive for its absolute angle).
+  TimeNs watch_telemetry_ns_ = 0;
+  bool watch_telemetry_valid_ = false;
+  double watch_telemetry_yaw_ = 0.0, watch_telemetry_pitch_ = 0.0;
   // Coverage memory for one autonomous session, independent of event telemetry.
   // Captured at the accepted ROAM -> TRACK transition; cleared by Manual or
   // supervision. Used only by automatic loss recovery, never operator entry.
@@ -860,6 +888,12 @@ class ControlLoop {
   double speed_override_patrol_wide_deg_s_ = 0, speed_override_patrol_detail_deg_s_ = 0,
          speed_override_track_deg_s_ = 0;
   void execute_set_speed(const std::string& arg);
+  void execute_set_watch_point();
+  // SURVEILLANCE owns no motion profile of its own: its only motion is a return at the wide patrol
+  // pace, so it reads AUTO_ROAM's (the config file declares three modes, and stays that way).
+  static int motion_index(OperatingMode mode) {
+    return static_cast<int>(mode == OperatingMode::Surveillance ? OperatingMode::AutoRoam : mode);
+  }
   // A mode's motion profile as configured (axis caps, payload profile, derate), before any live
   // speed setting; motion_profile() applies the setting on top.
   control::MotionProfile configured_motion_profile(int axis, OperatingMode mode) const;

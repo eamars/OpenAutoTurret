@@ -1,6 +1,6 @@
 // OpenAutoTurret v3 — ModeManager (§43, §44).
 //
-// Owns which of MANUAL / AUTO_TRACK / AUTO_ROAM is authoritative, and — the part
+// Owns which of MANUAL / AUTO_TRACK / AUTO_ROAM / SURVEILLANCE is authoritative, and — the part
 // that actually matters — *refuses* transitions that are not allowed, with a
 // reason a human can read (§52: "Do not silently ignore commands").
 //
@@ -75,6 +75,10 @@ struct ModeRequestContext {
   // Only consulted for AUTO_ROAM, and only ever to refuse: an invalid envelope
   // must stop the mode from starting, not quietly widen it (§32, §69).
   bool roam_envelope_valid = false;
+  // A watch point is saved and resolves, in this session, to a pose inside the envelope. Only
+  // consulted for SURVEILLANCE, and only ever to refuse: with nothing to face, the mode has no
+  // meaning, and "face wherever it happens to be" would be a guess dressed up as a mode.
+  bool watch_point_valid = false;
   SupervisoryState supervisory = SupervisoryState::Ready;
 };
 
@@ -133,8 +137,12 @@ class ModeManager {
       r.reason = "rejected: AUTO_ROAM envelope invalid";
       return r;
     }
+    if (target == OperatingMode::Surveillance && !ctx.watch_point_valid) {
+      r.reason = "rejected: no usable watch point";
+      return r;
+    }
 
-    // §44 permits all six pairwise transitions once the destination's
+    // §44 permits every pairwise transition once the destination's
     // preconditions hold. AUTO_TRACK does not require a visible or even a
     // selected target: it holds in WAIT_TARGET until one exists (§16), which is
     // why no target facts appear in this gate at all.

@@ -3,20 +3,23 @@
 // Extracted from mode_manager.hpp for the same reason the phase vocabulary was
 // extracted: the per-cycle trace has to say which mode owned the axis when the row
 // was written, and telemetry cannot include the manager that includes telemetry.
-// Keeping one copy is the whole point -- a second list of these three names drifts
-// the first time a mode is added.
+// Keeping one copy is the whole point -- a second list of these names drifts the
+// first time a mode is added (SURVEILLANCE was the first, 2026-10-05).
 #pragma once
 
 #include <cstdint>
 
 namespace ota {
 
-// The three primary operator modes (§2). HOLD / JOG / TRACKING / COASTING /
-// LOST_HOLD / SWEEP ... are phases *inside* these, not peers.
+// The primary operator modes (§2). HOLD / JOG / TRACKING / COASTING /
+// LOST_HOLD / SWEEP / RETURN / WATCH ... are phases *inside* these, not peers.
+// SURVEILLANCE (owner, 2026-10-05) is AUTO_ROAM's sibling: the mode the automatic
+// cycle waits in, facing a saved watch point instead of patrolling.
 enum class OperatingMode : uint8_t {
   Manual,
   AutoTrack,
   AutoRoam,
+  Surveillance,
 };
 
 inline const char* operating_mode_name(OperatingMode m) {
@@ -24,6 +27,7 @@ inline const char* operating_mode_name(OperatingMode m) {
     case OperatingMode::Manual:    return "MANUAL";
     case OperatingMode::AutoTrack: return "AUTO_TRACK";
     case OperatingMode::AutoRoam:  return "AUTO_ROAM";
+    case OperatingMode::Surveillance: return "SURVEILLANCE";
   }
   return "?";
 }
@@ -49,6 +53,9 @@ inline bool operating_mode_from_name(const char* name, OperatingMode& out) {
   }
   if (eq(name, "AUTO_ROAM") || eq(name, "AUTOROAM") || eq(name, "ROAM")) {
     out = OperatingMode::AutoRoam; return true;
+  }
+  if (eq(name, "SURVEILLANCE") || eq(name, "SURVEIL")) {
+    out = OperatingMode::Surveillance; return true;
   }
   return false;
 }

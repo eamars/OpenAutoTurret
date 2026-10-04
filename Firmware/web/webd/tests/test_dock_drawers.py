@@ -120,11 +120,41 @@ class DockAndDrawerBehaviour(unittest.TestCase):
     def test_mode_rows_use_the_names_the_parser_accepts(self) -> None:
         # operating_mode_from_name returns false rather than guessing, so a wrong spelling is a refusal
         # and not a fallback; the exact wire spellings belong in a test.
-        rows = self._rows("MODE", {"operating_mode": "MANUAL"})
-        self.assertEqual([r["arg"] for r in rows], ["MANUAL", "AUTO_TRACK", "AUTO_ROAM"])
-        self.assertEqual([r["label"] for r in rows], ["MANUAL", "AUTO TRACK", "AUTO ROAM"])
+        rows = self._rows("MODE", {"operating_mode": "MANUAL", "watch_point_usable": True})
+        modes = [r for r in rows if r["command"] in ("set_mode", None) and r["arg"]]
+        self.assertEqual([r["arg"] for r in modes], ["MANUAL", "AUTO_TRACK", "AUTO_ROAM", "SURVEILLANCE"])
+        self.assertEqual([r["label"] for r in modes], ["MANUAL", "AUTO TRACK", "AUTO ROAM", "SURVEILLANCE"])
         self.assertIsNone(rows[0]["command"], "the mode already in force must not be re-issued")
         self.assertEqual(rows[1]["command"], "set_mode")
+        self.assertEqual(rows[3]["command"], "set_mode")
+
+    def test_surveillance_is_greyed_with_the_reason_until_a_watch_point_is_usable(self) -> None:
+        # controld refuses SURVEILLANCE with no usable watch point (owner, 2026-10-05); a live-looking
+        # row whose only outcome is a refusal is the failure mode this drawer exists to avoid.
+        none = self._rows("MODE", {"operating_mode": "AUTO_ROAM", "phase": "hold"})
+        surv = [r for r in none if r["label"] == "SURVEILLANCE"][0]
+        self.assertIsNone(surv["command"])
+        self.assertEqual(surv["kind"], "gated")
+        self.assertIn("SET A WATCH POINT", surv["note"])
+        unusable = self._rows("MODE", {"operating_mode": "AUTO_ROAM", "phase": "hold",
+                                       "watch_point_set": True, "watch_point_usable": False})
+        self.assertIn("NOT USABLE", [r for r in unusable if r["label"] == "SURVEILLANCE"][0]["note"])
+        ready = self._rows("MODE", {"operating_mode": "AUTO_ROAM", "phase": "hold",
+                                    "watch_point_set": True, "watch_point_usable": True})
+        self.assertEqual([r for r in ready if r["label"] == "SURVEILLANCE"][0]["command"], "set_mode")
+
+    def test_set_watch_point_saves_here_and_asks_twice_only_to_replace_a_saved_one(self) -> None:
+        first = [r for r in self._rows("MODE", {"operating_mode": "MANUAL", "phase": "hold"})
+                 if r["label"] == "SET WATCH POINT"][0]
+        self.assertEqual((first["command"], first["arg"], first["kind"]), ("set_watch_point", "", "act"))
+        again = [r for r in self._rows("MODE", {"operating_mode": "MANUAL", "phase": "hold",
+                                                "watch_point_set": True})
+                 if r["label"] == "SET WATCH POINT"][0]
+        self.assertEqual(again["kind"], "danger", "a saved point outlives restarts: replacing it confirms")
+        unhomed = [r for r in self._rows("MODE", {"operating_mode": "MANUAL", "phase": "idle"})
+                   if r["label"] == "SET WATCH POINT"][0]
+        self.assertIsNone(unhomed["command"])
+        self.assertEqual(unhomed["kind"], "gated")
 
     # -- MANUAL ------------------------------------------------------------------------
 

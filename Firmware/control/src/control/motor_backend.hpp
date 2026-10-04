@@ -234,6 +234,11 @@ class MotorBackend {
   // A mixed backend can opt into continuous yaw and session-relative yaw
   // feedback without inventing a CyberGear UID or register response.
   virtual bool supports_continuous_yaw() const { return false; }
+  // The axis's absolute encoder angle minus its session position, in radians: absolute = q + offset
+  // (mod 2*pi). Only for a drive with a single-turn absolute encoder and no gearing, so that the angle
+  // names the same direction in every session -- the GM6020 yaw. SURVEILLANCE saves its watch point in
+  // it (owner, 2026-10-05). False when the axis has no such angle, or it is not established yet.
+  virtual bool absolute_angle_offset(AxisId, double& offset_rad) const { (void)offset_rad; return false; }
   virtual bool uses_monotonic_feedback_clock() const { return false; }
   virtual bool yaw_feedback_registerless() const { return false; }
   virtual bool requires_disable_confirmation(AxisId) const { return true; }

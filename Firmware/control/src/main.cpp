@@ -571,6 +571,22 @@ int main(int argc, char** argv) {
   //     validation gate. It never opens can0; commands are queued and executed
   //     on the control thread next cycle. Socket path + rate are overridable
   //     via env (§53: nothing hard-coded).
+  // SURVEILLANCE's watch point (owner, 2026-10-05) lives in the launcher's state directory, which
+  // outlives restarts, deploys and reboots (run/state, shared by every release). Read here, before
+  // the loop runs; later saves are written by the store's own thread, never by the 200 Hz loop.
+  // No directory: a point set from the web lasts this session only, and the ack says so.
+  {
+    std::string wp_path;
+    if (const char* sd = std::getenv("OTA_STATE_DIR"); sd != nullptr && *sd != '\0') {
+      std::error_code ec;
+      std::filesystem::create_directories(sd, ec);
+      if (ec) spdlog::error("state directory {} unusable ({}); the watch point lasts this session only", sd,
+                            ec.message());
+      else wp_path = (std::filesystem::path(sd) / "watch_point.json").string();
+    }
+    std::string wp_err;
+    loop.set_watch_point_store(wp_path, wp_err);  // logs what it found
+  }
   web::WebServer::Config web_cfg;
   if (const char* sp = std::getenv("OTA_WEB_SOCKET")) web_cfg.socket_path = sp;
   if (const char* hz = std::getenv("OTA_WEB_HZ")) {

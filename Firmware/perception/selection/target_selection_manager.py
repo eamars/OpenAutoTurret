@@ -45,7 +45,7 @@ from ..events import EventLog, EventType
 from ..measure import ms_from_ns
 from ..protocol.selected_target import SelectedTargetObservation, TargetState
 from ..protocol.track_set import TrackSet
-from .policy import AutoSelector, evaluate_selectability
+from .policy import AutoDecision, AutoSelector, evaluate_selectability
 from .protocol import (ClearTargetRequest, SelectTargetAck, SelectTargetRequest,
                        SelectionReason)
 from ..tracking.track import Track, TrackState
@@ -110,6 +110,9 @@ class TargetSelectionManager:
         self.rejections: Dict[str, int] = {}
         self._last_observation = SelectedTargetObservation.no_target(0, "")
         self._ambiguous_reported = False
+        #: Where the followed target was last measured (normalised anchor). SURVEILLANCE ranks a
+        #: second target by nearness to it right after a loss (owner ruling 2026-10-05).
+        self._last_seen_anchor: Optional[tuple] = None
 
     # -- commands -----------------------------------------------------------
     def select(self, request: SelectTargetRequest, track_set: TrackSet,
@@ -199,16 +202,52 @@ class TargetSelectionManager:
     # -- the frame ----------------------------------------------------------
     def update(self, track_set: TrackSet, now_ns: int, *,
                auto_track_enabled: bool = False,
-               auto_roam_enabled: bool = False) -> SelectedTargetObservation:
-        """Recompute the observation for one published ``TrackSet``."""
+               auto_roam_enabled: bool = False,
+               surveillance: bool = False,
+               controller_lost: bool = False) -> SelectedTargetObservation:
+        """Recompute the observation for one published ``TrackSet``.
+
+        ``auto_roam_enabled`` means the controller is searching (AUTO_ROAM or SURVEILLANCE), so a
+        missing identity is released. ``surveillance`` means the automatic cycle waits at a watch
+        point -- SURVEILLANCE itself, or AUTO_TRACK that will return there -- and candidates are
+        ranked instead of requiring exactly one. ``controller_lost`` is the controller's own word
+        that it has given the target up (AUTO_TRACK in LOST_HOLD or WAIT_TARGET).
+        """
         track_set.validate()
         self._observe_sequence(track_set)
         self.frames_processed += 1
         sensor_ns = track_set.sensor_timestamp_ns
 
+        selected = track_set.by_uuid(self.state.selected_uuid)
+        selected_measured = (selected is not None and selected.measurement_valid
+                             and selected.state is TrackState.CONFIRMED_VISIBLE)
+        if selected_measured:
+            self._last_seen_anchor = (selected.anchor.x, selected.anchor.y)
+        ranked = surveillance and self.auto.enabled
+        if ranked:
+            self.auto.observe_eligibility(track_set.tracks, sensor_ns)
+        else:
+            self.auto.reset_eligibility()
+
+        # SURVEILLANCE, after a loss (owner ruling 2026-10-05): the controller has given the target
+        # up and somebody else is in view, so follow the one nearest where it was last seen now --
+        # before the controller's own loss window sends the turret back to the watch point. With
+        # nobody else, nothing changes here and the turret goes back, as asked.
+        if ranked and auto_track_enabled and controller_lost and self.state.has_selection \
+                and not selected_measured:
+            decision = self.auto.evaluate_ranked(
+                track_set.tracks, sensor_ns, reference=self._last_seen_anchor or (0.5, 0.5),
+                stream_size=(track_set.stream_width, track_set.stream_height),
+                exclude_uuid=self.state.selected_uuid)
+            if decision.track_uuid:
+                self._clear_selection(reason="surveillance_target_lost",
+                                      event=EventType.TARGET_CLEARED,
+                                      detail="target lost; following the nearest other target")
+                self._auto_select(track_set, decision.track_uuid, now_ns, decision)
+                return self._publish(track_set, now_ns)
+
         # Once the controller has returned to search, release a missing identity.
         # Retain the identity through short occlusions and all manual operation.
-        selected = track_set.by_uuid(self.state.selected_uuid)
         if auto_roam_enabled and self.auto.enabled and self.state.has_selection:
             last_seen = selected.last_measurement_ns if selected else 0
             reference = max(last_seen, self.state.selected_since_ns)
@@ -220,9 +259,20 @@ class TargetSelectionManager:
         # The dwell machine is stepped every frame, including the ones where a selection
         # already exists: its state must be "reset while the operator holds the target", not
         # "paused", or it would resume a dwell that started before the operator intervened.
-        decision = self.auto.evaluate(track_set.tracks, sensor_ns,
-                                      selection_active=self.state.has_selection,
-                                      auto_track_enabled=auto_track_enabled or auto_roam_enabled)
+        if ranked:
+            # SURVEILLANCE: the nearest eligible candidate, to the frame centre while the turret is
+            # on (or returning to) its watch point, else to where the last target was seen.
+            self.auto.reset()
+            decision = AutoDecision(reason="selection_already_active")
+            if not self.state.has_selection and (auto_track_enabled or auto_roam_enabled):
+                reference = (0.5, 0.5) if auto_roam_enabled else (self._last_seen_anchor or (0.5, 0.5))
+                decision = self.auto.evaluate_ranked(
+                    track_set.tracks, sensor_ns, reference=reference,
+                    stream_size=(track_set.stream_width, track_set.stream_height))
+        else:
+            decision = self.auto.evaluate(track_set.tracks, sensor_ns,
+                                          selection_active=self.state.has_selection,
+                                          auto_track_enabled=auto_track_enabled or auto_roam_enabled)
         if not self.state.has_selection and decision.track_uuid:
             self._auto_select(track_set, decision.track_uuid, now_ns, decision)
             return self._publish(track_set, now_ns)

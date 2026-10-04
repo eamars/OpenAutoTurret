@@ -82,9 +82,19 @@ class Telemetry:
     # v3 §50: who is driving, and why. Strings by design — this crosses a process
     # boundary into a browser, and an enum renumbered on one side becomes a wrong
     # label on the other with nothing to complain about it.
-    operating_mode: str = ""             # MANUAL | AUTO_TRACK | AUTO_ROAM
+    operating_mode: str = ""             # MANUAL | AUTO_TRACK | AUTO_ROAM | SURVEILLANCE
     supervisory_state: str = ""          # READY | HOMING | PARKING | FAULT | ...
-    mode_phase: str = ""                 # WAIT_TARGET | TRACK | COAST | SWEEP | ...
+    mode_phase: str = ""                 # WAIT_TARGET | TRACK | COAST | SWEEP | RETURN | WATCH | ...
+    # SURVEILLANCE (owner, 2026-10-05): where a loss sends the automatic cycle, and the watch point --
+    # saved, resolvable this session, kept across restarts, the last save's outcome (1/0/-1), and
+    # where it is in this session's joints (None when it does not resolve).
+    auto_return_mode: str = "AUTO_ROAM"
+    watch_point_set: bool = False
+    watch_point_usable: bool = False
+    watch_point_persistent: bool = False
+    watch_point_saved: int = -1
+    watch_yaw_rad: Optional[float] = None
+    watch_pitch_rad: Optional[float] = None
     intent_source: str = "none"          # who is asking for motion (§26)
     intent_type: str = "hold"            # what it asked for (§25)
     # §73's reticle, normalised against the detector's frame like `tracks`. controld owns the

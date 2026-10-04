@@ -55,7 +55,8 @@ inline constexpr int kYawIx = 1;
 // (empty for no-arg commands). Returns ok or the rejection reason.
 //
 // Allowed commands:
-//   hold, set_mode <MANUAL|AUTO_TRACK|AUTO_ROAM>, stop_motion,
+//   hold, set_mode <MANUAL|AUTO_TRACK|AUTO_ROAM|SURVEILLANCE>, stop_motion,
+//   set_watch_point  (SURVEILLANCE's point: here, saved across restarts),
 //   start_tracking, stop_tracking, enable_search, disable_search,
 //   manual_jog_start <dir[:profile]> / manual_jog_keepalive /
 //   manual_jog_stop / manual_step <axis><sign><deg>,
@@ -101,7 +102,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
     // answers with the real reason, §52.
     ota::OperatingMode target;
     if (!ota::operating_mode_from_name(arg.c_str(), target)) {
-      r.error = "set_mode needs MANUAL, AUTO_TRACK or AUTO_ROAM";
+      r.error = "set_mode needs MANUAL, AUTO_TRACK, AUTO_ROAM or SURVEILLANCE";
       return r;
     }
     r.ok = true;
@@ -161,6 +162,12 @@ inline CommandResult validate_command(const SystemCommandState& s,
   // Everything below requires a homed system.
   if (!s.homed) {
     r.error = "not homed (position validity unknown)";
+    return r;
+  }
+  if (command == "set_watch_point") {
+    // Moves nothing: it records where the turret points. Whether that pose may be saved (inside
+    // the envelope, holding, an absolute yaw angle known) is the control thread's answer.
+    r.ok = true;
     return r;
   }
   if (command == "start_tracking") {

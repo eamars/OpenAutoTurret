@@ -193,6 +193,7 @@ def main():
     # system-site-packages. Python packages are installed from the committed
     # manifest; no OS package installation or root shell is needed here.
     venv = args.root.rstrip("/") + "/run/station-venv"
+    state = args.root.rstrip("/") + "/run/state"
     remote(f"test -x {quote(venv + '/bin/python')}")
     release = remote(f"mkdir -p {quote(releases)} && mktemp -d {quote(releases + '/' + deployment_label + '.XXXXXX')}",
                      capture_output=True, text=True).stdout.strip()
@@ -211,6 +212,9 @@ def main():
            f"rm -- {quote(release + '/source.tar')} && "
            f"mkdir -p {quote(release + '/run')} && "
            f"ln -s {quote(venv)} {quote(release + '/run/station-venv')} && "
+           # Operator state shared by every release (SURVEILLANCE's watch point, owner 2026-10-05):
+           # it must survive this deploy, so it lives beside the venv, not in the release.
+           f"mkdir -p {quote(state)} && ln -s {quote(state)} {quote(release + '/run/state')} && "
            f"printf '%s\\n' {quote(identity_text)} > {quote(release + identity_file)}")
     if args.baseline_bundle:
         # Dedicated acquisition release. Existing production venv/configuration

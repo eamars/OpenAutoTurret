@@ -404,6 +404,99 @@ class TestAutoSelect(unittest.TestCase):
         self.assertGreater(selector.auto.denied_missing_thresholds, 0)
 
 
+class TestSurveillanceRanking(unittest.TestCase):
+    """SURVEILLANCE (owner ruling 2026-10-05): the one place candidates are ranked, by *where*.
+
+    At (or on the way back to) a watch point the eligible candidate nearest the frame centre is
+    picked; right after the controller gives a target up, the one nearest where it was last seen.
+    Each candidate still needs the same dwell on its own, and outside SURVEILLANCE nothing changes.
+    """
+
+    def _selector(self):
+        config = commissioned_config(selection=SelectionConfig(
+            policy=SelectionPolicy.AUTO_SELECT_SINGLE, auto_select_single_dwell_ms=500.0,
+            auto_select_min_detector_score=0.70, auto_select_min_identity_confidence=0.60))
+        return TargetSelectionManager(config)
+
+    def _frame(self, selector, index, tracks, *, watching, lost=False):
+        """One frame. ``watching``: SURVEILLANCE itself; otherwise AUTO_TRACK returning to it."""
+        for track in tracks:
+            track.last_measurement_ns = at(index)
+        subset = track_set_of(tracks, sequence=index + 1, sensor_ns=at(index))
+        return selector.update(subset, at(index), auto_track_enabled=True,
+                               auto_roam_enabled=watching, surveillance=True,
+                               controller_lost=lost)
+
+    def test_at_the_watch_point_the_candidate_nearest_the_centre_is_picked_after_its_dwell(self):
+        selector = self._selector()
+        edge, middle = track_at(0.15, index=1), track_at(0.55, index=2)
+        for index in range(6):
+            self._frame(selector, index, [edge, middle], watching=True)
+        self.assertFalse(selector.state.has_selection, "6 frames = 300 ms < the 500 ms dwell")
+        for index in range(6, 14):
+            self._frame(selector, index, [edge, middle], watching=True)
+        self.assertEqual(selector.state.selected_uuid, middle.track_uuid,
+                         "two people in view must not leave a surveillance camera looking at nobody")
+
+    def test_after_a_loss_the_one_nearest_where_the_target_was_last_seen_is_followed(self):
+        selector = self._selector()
+        lost = track_at(0.8, index=1)
+        near, far = track_at(0.7, index=2), track_at(0.2, index=3)
+        for index in range(12):                       # alone at the watch point: picked
+            self._frame(selector, index, [lost], watching=True)
+        self.assertEqual(selector.state.selected_uuid, lost.track_uuid)
+        generation = selector.state.generation
+        for index in range(12, 24):                   # followed; two others walk in and dwell
+            self._frame(selector, index, [lost, near, far], watching=False)
+        self.assertEqual(selector.state.selected_uuid, lost.track_uuid,
+                         "a target in view is never swapped for a nearer one")
+        observation = self._frame(selector, 24, [near, far], watching=False, lost=True)
+        self.assertEqual(selector.state.selected_uuid, near.track_uuid)
+        self.assertGreater(selector.state.generation, generation, "a new subject resets acquisition")
+        self.assertTrue(observation.measurement_valid)
+
+    def test_until_the_controller_gives_the_target_up_it_is_kept(self):
+        selector = self._selector()
+        target, other = track_at(0.8, index=1), track_at(0.7, index=2)
+        for index in range(12):
+            self._frame(selector, index, [target], watching=True)
+        for index in range(12, 24):
+            self._frame(selector, index, [target, other], watching=False)
+        for index in range(24, 30):                   # occluded, the controller still coasting
+            self._frame(selector, index, [other], watching=False, lost=False)
+        self.assertEqual(selector.state.selected_uuid, target.track_uuid)
+
+    def test_with_nobody_else_the_lost_target_is_kept_and_the_turret_goes_back(self):
+        selector = self._selector()
+        target = track_at(0.8, index=1)
+        for index in range(12):
+            self._frame(selector, index, [target], watching=True)
+        for index in range(12, 20):
+            self._frame(selector, index, [], watching=False, lost=True)
+        self.assertEqual(selector.state.selected_uuid, target.track_uuid,
+                         "nothing to switch to: the controller's loss path takes it home")
+
+    def test_a_newcomer_must_dwell_before_it_can_replace_a_lost_target(self):
+        selector = self._selector()
+        target, newcomer = track_at(0.8, index=1), track_at(0.75, index=2)
+        for index in range(12):
+            self._frame(selector, index, [target], watching=True)
+        self._frame(selector, 12, [newcomer], watching=False, lost=True)
+        self.assertEqual(selector.state.selected_uuid, target.track_uuid,
+                         "one frame of a new box must not take the turret")
+        for index in range(13, 24):
+            self._frame(selector, index, [newcomer], watching=False, lost=True)
+        self.assertEqual(selector.state.selected_uuid, newcomer.track_uuid)
+
+    def test_outside_surveillance_two_people_still_select_nobody(self):
+        selector = self._selector()
+        a, b = track_at(0.3, index=1), track_at(0.6, index=2)
+        for index in range(14):
+            subset = track_set_of([a, b], sequence=index + 1, sensor_ns=at(index))
+            selector.update(subset, at(index), auto_track_enabled=True, auto_roam_enabled=True)
+        self.assertFalse(selector.state.has_selection)
+
+
 class TestObservationContract(unittest.TestCase):
     def test_the_observation_carries_no_control_authority(self):
         # §36 and §54: prediction and actuation belong to the controller. A field that

@@ -169,6 +169,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   void stop_watchdog();   // CyberGearSystem::stop_watchdog: only once both motors are off
 
   bool supports_continuous_yaw() const override { return true; }
+  bool absolute_angle_offset(AxisId axis, double& offset_rad) const override;
   bool uses_monotonic_feedback_clock() const override { return true; }
   bool yaw_feedback_registerless() const override { return true; }
   bool requires_disable_confirmation(AxisId axis) const override {

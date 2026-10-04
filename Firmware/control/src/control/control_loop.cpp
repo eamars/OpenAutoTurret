@@ -13,10 +13,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <limits>
 
 #include "vision/vision_ingest.hpp"
 #include "common/time.hpp"
+#include "geometry/los_joint_solver.hpp"
 
 namespace ota {
 
@@ -1495,7 +1497,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // Service starts only after the homing return reaches the ready pose.
     // An explicit operator mode/STOP cancels this one-shot startup request.
     if (!startup_mode_applied_ && cfg_.start_in_auto_roam && at_ready_) {
-      if (request_mode(OperatingMode::AutoRoam).ok) startup_mode_applied_ = true;
+      if (request_mode(OperatingMode::AutoRoam).ok) {
+        startup_mode_applied_ = true;
+        // Power-up and HOME are AUTO_ROAM (owner ruling 2026-10-03); SURVEILLANCE is chosen.
+        auto_return_mode_ = OperatingMode::AutoRoam;
+      }
     }
     // §25/§53: the intent path belongs to the modes, not to the tracking session. It
     // used to be gated on `tracking_`, which was harmless while AUTO_TRACK was the only
@@ -1649,6 +1655,36 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         last_roam_dir_ = 0;
         last_roam_turnaround_ = false;
       }
+    }
+    if (mode_mgr_.mode() == OperatingMode::Surveillance) {
+      // SURVEILLANCE (owner, 2026-10-05): face the watch point. The planner is aimed on the first
+      // cycle of every entry, from where the axes are then, so the way back after a loss is the
+      // short way round from wherever tracking left the turret. Pursuing a target is AUTO_TRACK's
+      // job, reached through the automatic hand-off exactly as from AUTO_ROAM.
+      const double qy = sp[ix(AxisId::Yaw)].q_rad;
+      const double qp = sp[ix(AxisId::Pitch)].q_rad;
+      if (!surveil_.active() && !surveil_unusable_) {
+        double ty = 0.0, tp = 0.0;
+        std::string why;
+        if (watch_point_target(qy, ty, tp, why)) {
+          surveil_.enter(ty, tp);
+          spdlog::info("SURVEILLANCE: facing the watch point, yaw {:+.1f} deg and pitch {:+.1f} deg away",
+                       (ty - qy) * kRad2Deg, (tp - qp) * kRad2Deg);
+        } else {
+          // The mode gate checked this a cycle ago; say once why it is holding instead.
+          surveil_unusable_ = true;
+          spdlog::warn("SURVEILLANCE: holding here, the watch point cannot be used: {}", why);
+        }
+      }
+      surveil_out_ = surveil_.update(qy, qp, now_ns);
+      if (surveil_out_.state != last_surveil_state_ && surveil_out_.state == SurveillanceState::Watch)
+        spdlog::info("SURVEILLANCE: at the watch point");
+      last_surveil_state_ = surveil_out_.state;
+    } else if (surveil_.active() || surveil_unusable_) {
+      surveil_.exit();
+      surveil_out_ = SurveillanceOutput{};
+      last_surveil_state_ = SurveillanceState::Idle;
+      surveil_unusable_ = false;
     }
     if (mode_mgr_.mode() == OperatingMode::AutoTrack) {
       // Patrol memory: where people are (pitch, once a second while one is visible) and which
@@ -3567,7 +3603,25 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             ? (yaw_reposition_active_ ? "YAW_REPOSITION" : roam_state_name(roam_.state()))
             : mode_mgr_.mode() == OperatingMode::AutoTrack
                   ? auto_track_state_name(at_out_.state)
+            : mode_mgr_.mode() == OperatingMode::Surveillance
+                  ? surveillance_state_name(surveil_out_.state)
                   : mode_phase_label();
+    // SURVEILLANCE (owner, 2026-10-05): the mode a loss returns to (perception ranks a second
+    // target only on the way back to a watch point), and the point itself, in this session's
+    // joints for the tapes. Re-resolved at 5 Hz: it asks the yaw drive for its absolute angle.
+    snap.auto_return_mode = operating_mode_name(auto_return_mode_);
+    snap.watch_point_set = watch_.valid;
+    snap.watch_point_saved = watch_store_ ? watch_store_->last_result() : -1;
+    snap.watch_point_persistent = watch_store_ && watch_store_->persistent();
+    if (now_ns - watch_telemetry_ns_ >= 200'000'000LL || watch_telemetry_ns_ == 0) {
+      watch_telemetry_ns_ = now_ns;
+      std::string why;
+      watch_telemetry_valid_ = watch_point_target(last_positions()[ix(AxisId::Yaw)],
+                                                  watch_telemetry_yaw_, watch_telemetry_pitch_, why);
+    }
+    snap.watch_point_usable = watch_telemetry_valid_;
+    snap.watch_yaw_rad = watch_telemetry_valid_ ? watch_telemetry_yaw_ : std::nan("");
+    snap.watch_pitch_rad = watch_telemetry_valid_ ? watch_telemetry_pitch_ : std::nan("");
     snap.roam_target_yaw_rad = roam_out_.target_yaw_rad;
     snap.roam_sweep_direction = roam_out_.direction;
     snap.manual_lease_active = manual_.lease_active();
@@ -3804,7 +3858,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.motion_profiles_active = cfg_.motion.configured && service_velocity_control;
     if (snap.motion_profiles_active) {
       for (int i=0; i<kAxisCount; ++i) {
-        const auto& configured = cfg_.motion.modes[static_cast<int>(mode_mgr_.mode())][i];
+        const auto& configured = cfg_.motion.modes[motion_index(mode_mgr_.mode())][i];
         snap.configured_motion[i] = configured;
         snap.effective_motion[i] = effective_motion[i];
         snap.motion_negative_speed[i] = motion_negative_speed[i];
@@ -4088,7 +4142,8 @@ control::MotionProfile ControlLoop::motion_profile(int axis, OperatingMode mode)
   // target follows the wide patrol pace because it caps the patrol reference (turret_mixed.yaml).
   const double speed_override_deg_s =
       mode == OperatingMode::AutoTrack ? speed_override_track_deg_s_
-      : mode == OperatingMode::AutoRoam ? speed_override_patrol_wide_deg_s_ : 0.0;
+      : (mode == OperatingMode::AutoRoam || mode == OperatingMode::Surveillance)
+          ? speed_override_patrol_wide_deg_s_ : 0.0;
   if (speed_override_deg_s > 0)
     resolved.target.speed = std::min(resolved.maximum.speed, speed_override_deg_s * kDeg2Rad);
   return resolved;
@@ -4103,7 +4158,7 @@ control::MotionProfile ControlLoop::configured_motion_profile(int axis, Operatin
     if (p.a_max_rad_s2 > 0) payload.acceleration = p.a_max_rad_s2;
     if (p.j_max_rad_s3 > 0) payload.jerk = p.j_max_rad_s3;
   }
-  return control::resolve_motion(cfg_.motion.modes[static_cast<int>(mode)][axis],
+  return control::resolve_motion(cfg_.motion.modes[motion_index(mode)][axis],
       cfg_.motion.axis_maximum[axis], payload, payload_derated_ ? cfg_.derate_factor : 1.0);
 }
 
@@ -4320,8 +4375,130 @@ ModeRequestContext ControlLoop::mode_context() const {
                                                  rc.min_inside_safe_rad, unused,
                                                  sizeof unused);
   }
+  {
+    double qy = 0.0, qp = 0.0;
+    std::string why;
+    c.watch_point_valid = watch_point_target(last_positions()[ix(AxisId::Yaw)], qy, qp, why);
+  }
   c.supervisory = mode_mgr_.supervisory();
   return c;
+}
+
+bool ControlLoop::set_watch_point_store(const std::string& path, std::string& err) {
+  err.clear();
+  watch_ = WatchPoint{};
+  bool ok = true;
+  if (!path.empty()) {
+    WatchPoint w;
+    if (load_watch_point(path, w, err)) watch_ = w;
+    else if (!err.empty()) ok = false;
+  }
+  watch_store_ = std::make_unique<WatchPointStore>(path);
+  if (watch_.valid)
+    spdlog::info("watch point loaded from {}: yaw {:.2f} deg ({}), pitch {:.2f} deg (homed frame)", path,
+                 watch_.yaw_rad * kRad2Deg, watch_.yaw_absolute ? "yaw drive absolute angle" : "homed frame",
+                 watch_.pitch_homed_rad * kRad2Deg);
+  else if (!ok)
+    spdlog::error("watch point file {} not used: {}; SURVEILLANCE needs a new one", path, err);
+  else
+    spdlog::info("no watch point saved{}; SURVEILLANCE waits for MODE > SET WATCH POINT",
+                 path.empty() ? " (no state directory: a new one lasts this session only)" : "");
+  return ok;
+}
+
+bool ControlLoop::watch_point_target(double q_yaw_now, double& q_yaw, double& q_pitch,
+                                     std::string& why) const {
+  if (!watch_.valid) { why = "no watch point saved (MODE > SET WATCH POINT)"; return false; }
+  if (!position_ready()) { why = "not homed, so the watch point cannot be found (home first)"; return false; }
+  // Inside the soft envelope with room to stop: the point was saved from a pose inside it, and a
+  // re-homed envelope a fraction of a degree narrower must not turn that into a refusal.
+  constexpr double kInset = 1.0 * kDeg2Rad;
+  const auto& pm = models_[ix(AxisId::Pitch)];
+  if (!pm.has_reference) { why = "pitch has no homed reference"; return false; }
+  double qp = pm.logical_to_raw_rad(watch_.pitch_homed_rad * kRad2Deg);
+  const auto pl = runtime_limits(AxisId::Pitch);
+  if (pl.valid && !pl.unbounded()) {
+    if (!(pl.q_soft_max_rad - pl.q_soft_min_rad > 2 * kInset)) { why = "pitch envelope too narrow"; return false; }
+    qp = std::clamp(qp, pl.q_soft_min_rad + kInset, pl.q_soft_max_rad - kInset);
+  }
+  double qy = 0.0;
+  if (watch_.yaw_absolute) {
+    double offset = 0.0;
+    if (!backend_->absolute_angle_offset(AxisId::Yaw, offset) || !std::isfinite(q_yaw_now)) {
+      why = "the yaw drive reports no absolute angle yet, and the watch point is saved as one";
+      return false;
+    }
+    qy = geo::wrap_near(watch_.yaw_rad - offset, q_yaw_now);  // absolute = q + offset
+  } else {
+    if (backend_->supports_continuous_yaw()) {
+      why = "the watch point was saved in a homed yaw frame, which a continuous yaw does not have; "
+            "set it again";
+      return false;
+    }
+    const auto& ym = models_[ix(AxisId::Yaw)];
+    if (!ym.has_reference) { why = "yaw has no homed reference"; return false; }
+    qy = ym.logical_to_raw_rad(watch_.yaw_rad * kRad2Deg);
+  }
+  const auto yl = runtime_limits(AxisId::Yaw);
+  if (yl.valid && !yl.unbounded()) {
+    if (!(yl.q_soft_max_rad - yl.q_soft_min_rad > 2 * kInset)) { why = "yaw envelope too narrow"; return false; }
+    qy = std::clamp(qy, yl.q_soft_min_rad + kInset, yl.q_soft_max_rad - kInset);
+  }
+  if (!std::isfinite(qy) || !std::isfinite(qp)) { why = "the watch point does not resolve to a finite pose"; return false; }
+  q_yaw = qy;
+  q_pitch = qp;
+  return true;
+}
+
+void ControlLoop::execute_set_watch_point() {
+  // Here, as measured: the operator has aimed the turret (jogged in MANUAL, or stopped where a
+  // target was) and says "watch this". On the pitch rest stop it is refused -- that pose is
+  // outside the envelope, so it could only ever be reached clamped.
+  const std::string name = "set_watch_point";
+  if (phase_ != Phase::Hold || !position_ready()) {
+    ack_command(name, false, "the turret must be homed and holding (not parked, homing or faulted)");
+    return;
+  }
+  const auto q = last_positions();
+  const double qy = q[ix(AxisId::Yaw)], qp = q[ix(AxisId::Pitch)];
+  const auto& pm = models_[ix(AxisId::Pitch)];
+  const auto pl = runtime_limits(AxisId::Pitch);
+  if (!std::isfinite(qy) || !std::isfinite(qp) || !pm.has_reference) {
+    ack_command(name, false, "no fresh, homed position to save");
+    return;
+  }
+  if (pl.valid && !pl.in_soft(qp)) {
+    ack_command(name, false, "pitch is outside its envelope (on the rest stop?); aim the turret first");
+    return;
+  }
+  WatchPoint w;
+  w.pitch_homed_rad = pm.raw_to_logical_rad(qp);
+  double offset = 0.0;
+  if (backend_->absolute_angle_offset(AxisId::Yaw, offset)) {
+    w.yaw_absolute = true;
+    w.yaw_rad = std::fmod(qy + offset, 2.0 * M_PI);
+    if (w.yaw_rad < 0) w.yaw_rad += 2.0 * M_PI;
+  } else if (!backend_->supports_continuous_yaw() && models_[ix(AxisId::Yaw)].has_reference) {
+    w.yaw_absolute = false;
+    w.yaw_rad = models_[ix(AxisId::Yaw)].raw_to_logical_rad(qy);
+  } else {
+    ack_command(name, false, "the yaw drive reports no absolute angle, so the direction could not be "
+                             "found again after a restart");
+    return;
+  }
+  w.saved_unix_s = static_cast<int64_t>(std::time(nullptr));
+  w.valid = true;
+  watch_ = w;
+  watch_telemetry_ns_ = 0;  // republish the resolved point next cycle
+  if (watch_store_) watch_store_->save(w);
+  // A new point while watching re-aims there (the turret is already at it: it was just measured).
+  if (mode_mgr_.mode() == OperatingMode::Surveillance) surveil_.exit();
+  surveil_unusable_ = false;
+  spdlog::info("watch point set: yaw {:+.2f} deg (session), pitch {:+.2f} deg (homed {:.2f} deg){}", qy * kRad2Deg,
+               qp * kRad2Deg, w.pitch_homed_rad * kRad2Deg,
+               watch_store_ && watch_store_->persistent() ? "" : "; no state directory, this session only");
+  ack_command(name, true, std::string("watch point set here") +
+              (watch_store_ && watch_store_->persistent() ? "" : " (this session only: no state directory)"));
 }
 
 ModeResult ControlLoop::request_mode(OperatingMode target) {
@@ -4346,6 +4523,18 @@ ModeResult ControlLoop::request_mode(OperatingMode target) {
     }
     std::snprintf(mode_refusal_reason_, sizeof mode_refusal_reason_,
                   "AUTO_ROAM refused: %s", why);
+    ack_command(who, false, mode_refusal_reason_);
+    return {false, false, mode_refusal_reason_};
+  }
+  if (!r.ok && target == OperatingMode::Surveillance && !ctx.watch_point_valid &&
+      ctx.safety_healthy && ctx.position_valid && ctx.supervisory == SupervisoryState::Ready) {
+    // Same reasoning as the AUTO_ROAM refusal above: say what is missing, in the words the
+    // operator acts on -- usually "no watch point saved".
+    double qy = 0.0, qp = 0.0;
+    std::string why;
+    watch_point_target(last_positions()[ix(AxisId::Yaw)], qy, qp, why);
+    std::snprintf(mode_refusal_reason_, sizeof mode_refusal_reason_, "SURVEILLANCE refused: %s",
+                  why.c_str());
     ack_command(who, false, mode_refusal_reason_);
     return {false, false, mode_refusal_reason_};
   }
@@ -4506,7 +4695,8 @@ void ControlLoop::sync_controllers_to_mode(OperatingMode mode) {
       if (tracking_) disable_tracking();
       break;
     case OperatingMode::AutoTrack:
-    case OperatingMode::AutoRoam: {
+    case OperatingMode::AutoRoam:
+    case OperatingMode::Surveillance: {
       std::string err;
       if (!tracking_ && !enable_tracking(tracking_cfg_, err))
         spdlog::warn("mode {}: tracking session could not start: {} — the mode "
@@ -4542,7 +4732,8 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
       mode_has_moved_ && mode_mgr_.supervisory() == SupervisoryState::Ready &&
       (mode_mgr_.mode() == OperatingMode::Manual ||
        mode_mgr_.mode() == OperatingMode::AutoTrack ||
-       mode_mgr_.mode() == OperatingMode::AutoRoam);
+       mode_mgr_.mode() == OperatingMode::AutoRoam ||
+       mode_mgr_.mode() == OperatingMode::Surveillance);
   mode_hold_in_place_ = mode_hold_in_place;
   if (mode_hold_in_place) {
     // The pose is taken from the measured joints on the cycle the turret *stopped*
@@ -4619,6 +4810,17 @@ ReferenceManager::IntentLimits ControlLoop::intent_limits(TimeNs now_ns) const {
       if (yaw_cap > 0.0) v = std::min(v, yaw_cap);
     }
     l.roam_v_max_rad_s = v;
+  }
+  // SURVEILLANCE's return: the wide patrol pace on either camera. The detail pace exists so a person
+  // stays in the narrow picture during a search of unknown ground; the way back to a known point has
+  // no such reason, and 3 deg/s would take half a minute over 90 deg.
+  {
+    double v = std::min(patrol_wide_deg_s() * kDeg2Rad, cap);
+    if (cfg_.motion.configured) {
+      const double yaw_cap = motion_profile(ix(AxisId::Yaw), OperatingMode::Surveillance).maximum.speed;
+      if (yaw_cap > 0.0) v = std::min(v, yaw_cap);
+    }
+    l.watch_v_max_rad_s = v;
   }
   return l;
 }
@@ -4809,6 +5011,15 @@ MotionIntent ControlLoop::build_mode_intent(TimeNs now_ns) const {
       if (ri.type != IntentType::Hold) return ri;
       return MotionIntent::hold(MotionSource::AutoRoam,
                                 roam_out_.reason[0] ? roam_out_.reason : "roam hold");
+    }
+
+    case OperatingMode::Surveillance: {
+      // The watch point, or a hold when there is none to face (the gate refuses that, so this is
+      // the one cycle between a refusal and the mode leaving, or a point that stopped resolving).
+      const MotionIntent& si = surveil_out_.intent;
+      if (si.type != IntentType::Hold) return si;
+      return MotionIntent::hold(MotionSource::Surveillance,
+                                surveil_unusable_ ? "watch point unusable" : "surveillance hold");
     }
   }
   return MotionIntent::hold(MotionSource::None, "unreachable mode value");
@@ -5272,6 +5483,23 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     return;
   }
 
+  // A reposition is roam's job even when the cycle waits in SURVEILLANCE (a bounded yaw only). Once
+  // it is over, the turret goes back to the watch point: AUTO_ROAM with SURVEILLANCE as the return
+  // mode is reachable only through a reposition, because choosing AUTO_ROAM makes it the return mode.
+  if (m == OperatingMode::AutoRoam && auto_return_mode_ == OperatingMode::Surveillance &&
+      !yaw_reposition_active_) {
+    if (request_mode(OperatingMode::Surveillance).ok) {
+      last_auto_switch_ns_ = now_ns;
+      acquire_since_ns_ = loss_since_ns_ = 0;
+      spdlog::info("YAW_REPOSITION over: back to the watch point");
+    } else {
+      // Asking again every cycle would only repeat the refusal: the cycle becomes a roam.
+      auto_return_mode_ = OperatingMode::AutoRoam;
+      spdlog::warn("YAW_REPOSITION over, SURVEILLANCE refused ({}); AUTO_ROAM from here", last_ack_.reason);
+    }
+    return;
+  }
+
   if (m == OperatingMode::AutoTrack && cfg_.auto_roam_on_loss_ms > 0) {
     // §20.2's LostHold: prediction has stopped and the station is holding, which is what "the session gave
     // up" means. NOT Acquire or Coasting - a track that is still alive is not lost, and switching on those
@@ -5289,9 +5517,25 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
       return;
     }
     if (now_ns - loss_since_ns_ >= cfg_.auto_roam_on_loss_ms * nsec) {
-      spdlog::info("auto hand-off AUTO_TRACK -> AUTO_ROAM: target lost for {} ms",
-                   cfg_.auto_roam_on_loss_ms);
-      if (request_mode(OperatingMode::AutoRoam).ok) {
+      // SURVEILLANCE: back to the watch point. Perception has had the whole loss window to offer
+      // a second target (it ranks one as soon as this controller reports LOST_HOLD), so reaching
+      // here means there was none. A refusal (the point stopped resolving) falls back to the
+      // patrol rather than leaving the turret holding where the target vanished.
+      bool returned = false;
+      if (auto_return_mode_ == OperatingMode::Surveillance) {
+        spdlog::info("auto hand-off AUTO_TRACK -> SURVEILLANCE: target lost for {} ms",
+                     cfg_.auto_roam_on_loss_ms);
+        returned = request_mode(OperatingMode::Surveillance).ok;
+        if (returned) {
+          last_auto_switch_ns_ = now_ns;
+        } else {
+          auto_return_mode_ = OperatingMode::AutoRoam;  // and stays one, rather than retrying per loss
+          spdlog::warn("SURVEILLANCE refused after the loss ({}); AUTO_ROAM from here", last_ack_.reason);
+        }
+      }
+      if (!returned) spdlog::info("auto hand-off AUTO_TRACK -> AUTO_ROAM: target lost for {} ms",
+                                  cfg_.auto_roam_on_loss_ms);
+      if (!returned && request_mode(OperatingMode::AutoRoam).ok) {
         const auto q = last_positions();
         roam_.set_config(roam_config());
         // A patrol resumes the way the lost person was going (they usually leave the frame in
@@ -5311,7 +5555,8 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
     return;
   }
 
-  if (m == OperatingMode::AutoRoam && cfg_.auto_track_on_acquire_ms > 0) {
+  if ((m == OperatingMode::AutoRoam || m == OperatingMode::Surveillance) &&
+      cfg_.auto_track_on_acquire_ms > 0) {
     // Require a fresh visible selection and accepted measurement throughout
     // the dwell. A retained UUID alone cannot pull roam back into lost tracking.
     const bool held = visible && reachable && std::abs(yaw_delta) < 180*kDeg2Rad;
@@ -5324,7 +5569,7 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
       return;
     }
     if (now_ns - acquire_since_ns_ >= cfg_.auto_track_on_acquire_ms * nsec) {
-      spdlog::info("auto hand-off AUTO_ROAM -> AUTO_TRACK: target held for {} ms",
+      spdlog::info("auto hand-off {} -> AUTO_TRACK: target held for {} ms", operating_mode_name(m),
                    cfg_.auto_track_on_acquire_ms);
       if (request_mode(OperatingMode::AutoTrack).ok) last_auto_switch_ns_ = now_ns;
       acquire_since_ns_ = 0;
@@ -5569,10 +5814,18 @@ void ControlLoop::execute_command(const std::string& name,
     OperatingMode target;
     if (!operating_mode_from_name(arg.c_str(), target)) {
       ack_command(name, false, "unknown mode '" + arg +
-                                  "'; expected MANUAL, AUTO_TRACK or AUTO_ROAM");
+                                  "'; expected MANUAL, AUTO_TRACK, AUTO_ROAM or SURVEILLANCE");
       return;
     }
-    request_mode(target);
+    // The operator's choice of where the automatic cycle waits: a loss returns there. AUTO_TRACK
+    // and MANUAL leave it as it was, so a track started by hand still ends where the station was.
+    if (request_mode(target).ok &&
+        (target == OperatingMode::AutoRoam || target == OperatingMode::Surveillance))
+      auto_return_mode_ = target;
+    return;
+  }
+  if (name == "set_watch_point") {
+    execute_set_watch_point();
     return;
   }
   if (name == "stop_motion") {

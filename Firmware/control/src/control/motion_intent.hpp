@@ -37,6 +37,7 @@ enum class MotionSource : uint8_t {
   Manual,
   AutoTrack,
   AutoRoam,
+  Surveillance,  // the return to / hold at the watch point (owner, 2026-10-05)
   Supervisory,  // homing / calibration / park
   Safety,       // supervisor override: brake or hold
 };
@@ -47,6 +48,7 @@ inline const char* motion_source_name(MotionSource s) {
     case MotionSource::Manual:      return "manual";
     case MotionSource::AutoTrack:   return "auto_track";
     case MotionSource::AutoRoam:    return "auto_roam";
+    case MotionSource::Surveillance: return "surveillance";
     case MotionSource::Supervisory: return "supervisory";
     case MotionSource::Safety:      return "safety";
   }

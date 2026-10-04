@@ -384,6 +384,16 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
   if (yaw_servo_active_) step_yaw_servo_locked(decoded.rx_ns);
 }
 
+bool MixedCanMotorBackend::absolute_angle_offset(AxisId axis, double& offset_rad) const {
+  // The same offset the yaw servo indexes its crosstalk table with: under either unwrap policy the
+  // accumulated counts stay congruent to the latest raw angle, so q + offset is the motor's angle.
+  if (axis != AxisId::Yaw || !yaw_reference_valid_.load()) return false;
+  std::lock_guard lock(yaw_mutex_);
+  if (!yaw_encoder_.valid()) return false;
+  offset_rad = yaw_encoder_.first_rad() + yaw_origin_rad_;
+  return std::isfinite(offset_rad);
+}
+
 bool MixedCanMotorBackend::establish_yaw_reference(std::string& err) {
   const auto started = now_monotonic_ns();
   TimeNs still_since = 0;

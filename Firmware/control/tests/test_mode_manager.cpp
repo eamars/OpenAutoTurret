@@ -20,6 +20,7 @@ ModeRequestContext ok_ctx() {
   c.position_valid = true;
   c.safety_healthy = true;
   c.roam_envelope_valid = true;
+  c.watch_point_valid = true;
   c.supervisory = SupervisoryState::Ready;
   return c;
 }
@@ -34,9 +35,9 @@ TEST(ModeManager, StartsInManualHold) {
   EXPECT_STREQ(operating_mode_name(m.mode()), "MANUAL");
 }
 
-TEST(ModeManager, AllSixTransitionsAreAllowedWhenPreconditionsHold) {
+TEST(ModeManager, EveryTransitionIsAllowedWhenPreconditionsHold) {
   const OperatingMode all[] = {OperatingMode::Manual, OperatingMode::AutoTrack,
-                               OperatingMode::AutoRoam};
+                               OperatingMode::AutoRoam, OperatingMode::Surveillance};
   for (const auto from : all) {
     for (const auto to : all) {
       ota::ModeManager m;
@@ -115,8 +116,26 @@ TEST(ModeManager, UnderSupervisoryControlEvenManualWaits) {
   EXPECT_TRUE(m.stop_motion(ctx).ok);
 }
 
+TEST(ModeManager, SurveillanceIsRefusedWithoutAUsableWatchPoint) {
+  // Owner, 2026-10-05: SURVEILLANCE faces a saved watch point. With none, "face wherever it is" would
+  // be a guess, so the mode is refused, and the other modes are untouched by the missing point.
+  auto ctx = ok_ctx();
+  ctx.watch_point_valid = false;
+  ota::ModeManager m;
+  auto r = m.request(OperatingMode::Surveillance, ctx);
+  EXPECT_FALSE(r.ok);
+  EXPECT_NE(std::string(r.reason).find("watch point"), std::string::npos) << r.reason;
+  EXPECT_EQ(m.mode(), OperatingMode::Manual);
+  EXPECT_TRUE(m.request(OperatingMode::AutoRoam, ctx).ok);
+  EXPECT_STREQ(operating_mode_name(OperatingMode::Surveillance), "SURVEILLANCE");
+  OperatingMode parsed = OperatingMode::Manual;
+  EXPECT_TRUE(ota::operating_mode_from_name("surveillance", parsed));
+  EXPECT_EQ(parsed, OperatingMode::Surveillance);
+}
+
 TEST(ModeManager, SafetyFaultRefusesEntryIntoAutonomy) {
-  for (const auto to : {OperatingMode::AutoTrack, OperatingMode::AutoRoam}) {
+  for (const auto to : {OperatingMode::AutoTrack, OperatingMode::AutoRoam,
+                        OperatingMode::Surveillance}) {
     auto ctx = ok_ctx();
     ctx.safety_healthy = false;
     ota::ModeManager m;

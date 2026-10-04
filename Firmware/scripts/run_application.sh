@@ -628,6 +628,16 @@ export OTA_VISION_DETAIL_SENSOR="${OTA_VISION_DETAIL_SENSOR-}"
 export OTA_SELECTION_SOCKET="$RUN/selection.sock"
 export OTA_VISION_SOCKET="$RUN/vision.sock"
 export OTA_WEB_SOCKET="$RUN/control-web.sock"
+# SURVEILLANCE's watch point (owner, 2026-10-05) must outlive restarts, deploys and reboots, so the
+# station keeps it beside the shared venv: <root>/run/state, which deploy_station.py links into
+# every release (a checkout reaches the same directory directly). Anything but the real station
+# keeps its own in the run dir, so a simulation never moves the station's point.
+if [ "$MODE" = hardware ] && [ "$SIM_REQUESTED" != 1 ]; then
+  OTA_STATE_DIR="${OTA_STATE_DIR:-$APP/../run/state}"
+else
+  OTA_STATE_DIR="${OTA_STATE_DIR:-$RUN/state}"
+fi
+export OTA_STATE_DIR
 # ADR-003 D17: controld's per-tick tracking record (one JSON line per Level-1 tick while tracking).
 export OTA_TRACKING_TRACE="$RUN/tracking-trace.jsonl"
 export OTA_WEB_PORT="${OTA_WEB_PORT:-8080}"

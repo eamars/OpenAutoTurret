@@ -44,6 +44,7 @@ enum class ReferenceSource : uint8_t {
   // answer "why is it moving" — the first question during a live run.
   Manual,    // manual jog / step / goto
   Roam,      // AUTO_ROAM sweep waypoint
+  Watch,     // SURVEILLANCE: the watch point
 };
 
 inline const char* reference_source_name(ReferenceSource s) {
@@ -55,6 +56,7 @@ inline const char* reference_source_name(ReferenceSource s) {
     case ReferenceSource::Developer: return "developer";
     case ReferenceSource::Manual:     return "manual";
     case ReferenceSource::Roam:       return "roam";
+    case ReferenceSource::Watch:      return "watch";
   }
   return "?";
 }
@@ -176,6 +178,7 @@ class ReferenceManager {
     // one belonging to its own source, and the envelope gets the final word.
     double track_v_max_rad_s = 30.0 * kDeg2Rad;
     double roam_v_max_rad_s = 10.0 * kDeg2Rad;
+    double watch_v_max_rad_s = 10.0 * kDeg2Rad;
     double manual_v_max_rad_s = 30.0 * kDeg2Rad;
     double hold_v_max_rad_s = 10.0 * kDeg2Rad;
     std::array<AxisLimits, kAxisCount> axis_limits{};
@@ -261,11 +264,12 @@ class ReferenceManager {
           return hold_reference(lim, "joint intent without target");
         req.q_yaw_rad = in.q_yaw_rad;
         req.q_pitch_rad = in.q_pitch_rad;
-        req.source = (in.source == MotionSource::AutoRoam) ? ReferenceSource::Roam
-                                                          : ReferenceSource::Manual;
-        req.v_max_rad_s = (in.source == MotionSource::AutoRoam
-                               ? lim.roam_v_max_rad_s
-                               : lim.manual_v_max_rad_s) * vs;
+        req.source = in.source == MotionSource::AutoRoam       ? ReferenceSource::Roam
+                     : in.source == MotionSource::Surveillance ? ReferenceSource::Watch
+                                                               : ReferenceSource::Manual;
+        req.v_max_rad_s = (in.source == MotionSource::AutoRoam       ? lim.roam_v_max_rad_s
+                           : in.source == MotionSource::Surveillance ? lim.watch_v_max_rad_s
+                                                                     : lim.manual_v_max_rad_s) * vs;
         return req;
       }
       case IntentType::WorldLevelYaw: {

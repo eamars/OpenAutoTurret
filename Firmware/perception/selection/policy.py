@@ -13,6 +13,13 @@ higher confidence thresholds than the manual gate. The dwell is not ceremony. A 
 emits a single confident box for a moment at the edge of frame; a selector that acted on the
 first frame would take ownership of the turret for that moment.
 
+**SURVEILLANCE ranks** (owner ruling 2026-10-05, the one exception to §28.3). A turret facing a
+fixed watch point is a surveillance camera, and one that ignores a scene because two people are
+in it is not doing that job. On the way back to (and at) a watch point, the eligible candidate
+nearest a reference point is picked: where the lost target was last seen, right after a loss,
+otherwise the frame centre. It is still not a ranking of who is worth following, only of
+*where*, and each candidate must have been eligible on its own for the same dwell.
+
 This module is consulted by ``TargetSelectionManager`` and by ``TrackManager``'s published
 ``selectable`` flag, from the same code, so the browser's greyed-out row, the daemon's
 refusal and the tracker's own claim cannot disagree — which is the failure mode that makes an
@@ -20,8 +27,9 @@ interface feel broken when nothing is actually broken.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Dict, Sequence
+from typing import Dict, Sequence, Tuple
 
 from ..config import ScoreThresholds, SelectionConfig, SelectionPolicy
 from ..measure import ms_from_ns
@@ -113,6 +121,8 @@ class AutoSelector:
         self.thresholds = thresholds
         self._sole_uuid: str = ""
         self._sole_since_ns: int = 0
+        # SURVEILLANCE: since when each track has been continuously auto-eligible (sensor ns).
+        self._eligible_since: Dict[str, int] = {}
         self.triggered = 0
         self.suppressed_by_existing_selection = 0
         self.denied_missing_thresholds = 0
@@ -168,6 +178,58 @@ class AutoSelector:
         self.triggered += 1
         return AutoDecision(track_uuid=sole.track_uuid, reason="dwell_elapsed",
                             candidates=1, dwell_ms=dwell_ms)
+
+    # -- SURVEILLANCE's ranked pick (owner ruling 2026-10-05) -------------------------------
+    def observe_eligibility(self, tracks: Sequence[Track], sensor_timestamp_ns: int) -> None:
+        """Step every frame, selection or not: a candidate's dwell is its own, so one that has
+        been in view while somebody else was followed is ready the moment that somebody is lost."""
+        eligible = {track.track_uuid for track in tracks if _auto_eligible(
+            track, thresholds=self.thresholds, selection=self.cfg)}
+        for uuid in [u for u in self._eligible_since if u not in eligible]:
+            del self._eligible_since[uuid]
+        for uuid in eligible:
+            self._eligible_since.setdefault(uuid, sensor_timestamp_ns)
+
+    def reset_eligibility(self) -> None:
+        """Outside SURVEILLANCE nothing steps the dwells, so none may survive into the next one."""
+        self._eligible_since.clear()
+
+    def evaluate_ranked(self, tracks: Sequence[Track], sensor_timestamp_ns: int, *,
+                        reference: Tuple[float, float], stream_size: Tuple[int, int],
+                        exclude_uuid: str = "") -> AutoDecision:
+        """The candidate nearest ``reference`` (normalised x, y) among those eligible for a dwell.
+
+        Distance is measured in pixels of the stream (``stream_size``), so a wide frame does not
+        count a horizontal offset as smaller than the same offset vertically. Ties go to the
+        lower UUID, so the same scene always gives the same answer.
+        """
+        if not self.enabled:
+            return AutoDecision(reason="explicit_only_policy")
+        if self.thresholds.selectable is None \
+                or self.cfg.auto_select_min_detector_score is None \
+                or self.cfg.auto_select_min_identity_confidence is None:
+            self.denied_missing_thresholds += 1
+            return AutoDecision(reason="thresholds_uncommissioned")
+        dwell_ns = self.cfg.auto_select_single_dwell_ms * 1e6
+        candidates = [track for track in tracks
+                      if track.track_uuid != exclude_uuid
+                      and track.track_uuid in self._eligible_since
+                      and sensor_timestamp_ns - self._eligible_since[track.track_uuid] >= dwell_ns]
+        if not candidates:
+            return AutoDecision(reason="no_candidate_past_dwell",
+                                candidates=len(self._eligible_since))
+        rx, ry = reference
+        width, height = (max(1, int(stream_size[0])), max(1, int(stream_size[1])))
+
+        def distance(track: Track) -> float:
+            return math.hypot((track.anchor.x - rx) * width, (track.anchor.y - ry) * height)
+
+        best = min(candidates, key=lambda track: (distance(track), track.track_uuid))
+        self.triggered += 1
+        return AutoDecision(track_uuid=best.track_uuid, reason="ranked_nearest",
+                            candidates=len(candidates),
+                            dwell_ms=ms_from_ns(sensor_timestamp_ns,
+                                                self._eligible_since[best.track_uuid]))
 
     def to_dict(self) -> Dict[str, object]:
         return {"enabled": self.enabled, "policy": self.cfg.policy.value,
