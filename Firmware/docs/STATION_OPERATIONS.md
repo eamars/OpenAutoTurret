@@ -223,9 +223,9 @@ watch point. The owner's answers:
   - If the point stops resolving during a loss, the cycle falls back to AUTO_ROAM and says so.
 - **Fault, hold, degrade:** unchanged. SURVEILLANCE adds no guard, trip or watchdog.
 - **On the tapes** (owner, 2026-10-05): a pale-lemon diamond (`#fff07a`) marks the watch point on
-  both tapes, like a quest marker -- **solid in MANUAL**, where the point is aimed and saved, and
-  **hollow in the SURVEILLANCE cycle** (and a track it will return from), so the caret shows through
-  it on the point. Not drawn in AUTO_ROAM. Outside the camera's field of view it is pinned at the end
+  both tapes, like a quest marker -- **solid in the SURVEILLANCE cycle** (and a track it will return
+  from), where the point is in force, and **hollow in MANUAL**, where it is a reference while
+  aiming. Not drawn in AUTO_ROAM. Outside the camera's field of view it is pinned at the end
   it lies beyond, with an arrow and the angle still to go, the short way round on yaw. Pale lemon so
   it cannot be read as the amber that marks a tape end the safety layer is derating toward.
 

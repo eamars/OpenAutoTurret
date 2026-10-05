@@ -1086,16 +1086,16 @@ function hudTravelTape(o) {
 }
 
 function hudWatchStyle(t) {
-  // How SURVEILLANCE's watch point is drawn on the tapes (owner, 2026-10-05): solid in MANUAL, where
-  // the operator aims and may save a new one; hollow in the SURVEILLANCE cycle (watching, returning,
-  // or following a target it will return from), so the caret shows through it on the point; not at
+  // How SURVEILLANCE's watch point is drawn on the tapes (owner, 2026-10-05): solid in the
+  // SURVEILLANCE cycle (watching, returning, or following a target it will return from), where the
+  // point is in force; hollow in MANUAL, where it is only a reference while the operator aims; not at
   // all in AUTO_ROAM. null when not drawn.
   t = t || {};
   if (!(t.watch_point_usable === true && Number.isFinite(t.watch_yaw_rad) && Number.isFinite(t.watch_pitch_rad)))
     return null;
   const mode = String(t.operating_mode || "");
-  if (mode === "MANUAL") return "solid";
-  if (mode === "SURVEILLANCE" || (mode === "AUTO_TRACK" && t.auto_return_mode === "SURVEILLANCE")) return "hollow";
+  if (mode === "MANUAL") return "hollow";
+  if (mode === "SURVEILLANCE" || (mode === "AUTO_TRACK" && t.auto_return_mode === "SURVEILLANCE")) return "solid";
   return null;
 }
 
@@ -1468,7 +1468,7 @@ function render(t) {
   // highlight pointing at the wrong end of the tape is worse than no highlight at all.
   const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
   const yawRange = hudYawTapeRange(t);
-  // The watch point (owner, 2026-10-05): solid in MANUAL, hollow in the SURVEILLANCE cycle.
+  // The watch point (owner, 2026-10-05): solid in the SURVEILLANCE cycle, hollow in MANUAL.
   const watchStyle = hudWatchStyle(t);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,

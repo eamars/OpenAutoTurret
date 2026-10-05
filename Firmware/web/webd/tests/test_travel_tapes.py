@@ -386,13 +386,13 @@ class WatchPointMarker(unittest.TestCase):
         self.assertNotIn('class="watch', svg(), "no watch point asked for, none drawn")
         self.assertIn('watch: "#fff07a"', HUD_JS, "pale lemon: lighter and less orange than the caution amber")
 
-    def test_solid_in_manual_hollow_in_surveillance_absent_in_roam(self) -> None:
-        # Owner, 2026-10-05 (after using it): visible in MANUAL, where the point is aimed and saved;
-        # hollow in the SURVEILLANCE cycle so the caret shows through it on the point.
+    def test_solid_in_surveillance_hollow_in_manual_absent_in_roam(self) -> None:
+        # Owner, 2026-10-05 (after using it): solid in the SURVEILLANCE cycle, where the point is in
+        # force; hollow in MANUAL, where it is a reference; nothing in AUTO_ROAM.
         base = {"watch_point_usable": True, "watch_yaw_rad": 0.3, "watch_pitch_rad": -0.7}
-        cases = [({"operating_mode": "MANUAL"}, "solid"),
-                 ({"operating_mode": "SURVEILLANCE"}, "hollow"),
-                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "SURVEILLANCE"}, "hollow"),
+        cases = [({"operating_mode": "MANUAL"}, "hollow"),
+                 ({"operating_mode": "SURVEILLANCE"}, "solid"),
+                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "SURVEILLANCE"}, "solid"),
                  ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "AUTO_ROAM"}, None),
                  ({"operating_mode": "AUTO_ROAM"}, None),
                  ({"operating_mode": "SURVEILLANCE", "watch_point_usable": False}, None),
