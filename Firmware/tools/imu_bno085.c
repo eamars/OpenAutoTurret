@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <linux/gpio.h>
 #include <linux/i2c-dev.h>
 #include <math.h>
 #include <signal.h>
@@ -22,7 +23,9 @@
 
 static int fd = -1;
 static volatile sig_atomic_t stopping;
-static unsigned counts[4], read_errors, resets;
+static unsigned counts[4], read_errors, resets, hard_resets;
+static char reset_chip[64];
+static unsigned reset_line;
 static unsigned generation, tare_samples;
 static int io_failed, invalid_sample, tared, sh2_is_open;
 static int continuous_mode, commissioning_mode;
@@ -68,11 +71,44 @@ static void maybe_rotate_trace(void) {
     if (tared) emit_tare(tare_rx_ns, 1);
 }
 static void stop(int sig) { (void)sig; stopping = 1; }
+// Pulse the BNO085's active-low RST through the GPIO character device. Station, 2026-10-05: the
+// sensor held SDA low for hours and through three stack restarts; the SH-2 soft reset below is an
+// I2C write, so it cannot reach a sensor that owns the bus. RST can. The line is open-drain and only
+// requested for the pulse: once released it returns to an input and the board's pull-up holds RST
+// high, so a crash here cannot leave the sensor in reset.
+static int hardware_reset(void) {
+    int chip = open(reset_chip, O_RDWR | O_CLOEXEC);
+    if (chip < 0) { fprintf(stderr,"IMU reset line %s: %s\n",reset_chip,strerror(errno)); return -1; }
+    struct gpio_v2_line_request req;
+    memset(&req, 0, sizeof req);
+    req.offsets[0] = reset_line;
+    req.num_lines = 1;
+    req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT | GPIO_V2_LINE_FLAG_OPEN_DRAIN;
+    req.config.num_attrs = 1;
+    req.config.attrs[0].attr.id = GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES;
+    req.config.attrs[0].attr.values = 0;   // asserted: RST low from the moment of the request
+    req.config.attrs[0].mask = 1;
+    snprintf(req.consumer, sizeof req.consumer, "imu-bno085 reset");
+    int rc = ioctl(chip, GPIO_V2_GET_LINE_IOCTL, &req);
+    close(chip);
+    if (rc < 0) { fprintf(stderr,"IMU reset line %s:%u: %s\n",reset_chip,reset_line,strerror(errno)); return -1; }
+    usleep(10000);   // the datasheet asks for 10 ns
+    struct gpio_v2_line_values release = {.bits = 1, .mask = 1};
+    ioctl(req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &release);
+    close(req.fd);
+    ++hard_resets;
+    return 0;
+}
 static int hal_open(sh2_Hal_t *self) {
     (void)self;
+    // With RST wired, every session starts from a hardware reset; the soft reset is the fallback.
+    // Boot takes ~94 ms (datasheet 6.5.3); keep the soft reset's 300 ms settling.
+    int hard = reset_chip[0] && hardware_reset() == 0;
+    if (hard) usleep(300000);
     fd = open("/dev/i2c-1", O_RDWR | O_CLOEXEC);
     if (fd < 0) { perror("open i2c"); return -1; }
     if (ioctl(fd, I2C_SLAVE, 0x4a) < 0) { perror("I2C_SLAVE"); close(fd); fd = -1; return -1; }
+    if (hard) return 0;
     uint8_t reset[] = {5, 0, 1, 0, 1};
     for (int attempt = 0; attempt < (commissioning_mode ? 1 : 6); ++attempt) {
         // Match the upstream Adafruit SH-2 I2C reset settling interval. The
@@ -208,25 +244,45 @@ static int open_stream(void) {
     }
     return 0;
 }
+static int usage(void) {
+    fprintf(stderr, "Usage: imu-bno085 SECONDS (0 or 1..120) | --commissioning | --continuous [--retain-lines N]"
+                    " [--reset-gpio CHIP:LINE]; owns/resets BNO085 I2C1:0x4a\n");
+    return 2;
+}
 int main(int argc, char **argv) {
     char *end = NULL;
-    commissioning_mode = argc == 2 && strcmp(argv[1], "--commissioning") == 0;
-    int continuous = commissioning_mode || (argc >= 2 && strcmp(argv[1], "--continuous") == 0);
-    long seconds = continuous ? 0 : (argc >= 2 ? strtol(argv[1], &end, 10) : -1);
-    if (continuous && argc == 4 && strcmp(argv[2], "--retain-lines") == 0) {
-        char *retain_end = NULL;
-        errno = 0;
-        unsigned long parsed = strtoul(argv[3], &retain_end, 10);
-        if (!errno && retain_end != argv[3] && *retain_end == '\0' && parsed >= 64 && parsed <= 1000000)
-            retain_lines = parsed;
-        else {
-            fprintf(stderr, "--retain-lines must be 64..1000000\n"); return 2;
+    if (argc < 2) return usage();
+    commissioning_mode = strcmp(argv[1], "--commissioning") == 0;
+    int continuous = commissioning_mode || strcmp(argv[1], "--continuous") == 0;
+    long seconds = continuous ? 0 : strtol(argv[1], &end, 10);
+    if (!continuous && (*end || seconds < 0 || seconds > 120)) return usage();
+    for (int i = 2; i < argc; i += 2) {
+        if (i + 1 >= argc) return usage();
+        if (strcmp(argv[i], "--retain-lines") == 0 && continuous && !commissioning_mode) {
+            char *retain_end = NULL;
+            errno = 0;
+            unsigned long parsed = strtoul(argv[i+1], &retain_end, 10);
+            if (!errno && retain_end != argv[i+1] && *retain_end == '\0' && parsed >= 64 && parsed <= 1000000)
+                retain_lines = parsed;
+            else {
+                fprintf(stderr, "--retain-lines must be 64..1000000\n"); return 2;
+            }
+        } else if (strcmp(argv[i], "--reset-gpio") == 0) {
+            const char *colon = strrchr(argv[i+1], ':');
+            char *line_end = NULL;
+            errno = 0;
+            unsigned long line = colon ? strtoul(colon + 1, &line_end, 10) : 0;
+            size_t chip_len = colon ? (size_t)(colon - argv[i+1]) : 0;
+            if (!colon || errno || line_end == colon + 1 || *line_end || line > 1023 ||
+                chip_len == 0 || chip_len >= sizeof reset_chip) {
+                fprintf(stderr, "--reset-gpio must be CHIP:LINE, e.g. /dev/gpiochip0:4\n"); return 2;
+            }
+            memcpy(reset_chip, argv[i+1], chip_len);
+            reset_chip[chip_len] = '\0';
+            reset_line = (unsigned)line;
+        } else {
+            return usage();
         }
-    } else if ((continuous && argc != 2) || (!continuous && argc != 2)) {
-        fprintf(stderr, "Usage: imu-bno085 SECONDS (0 or 1..120) | --continuous [--retain-lines N]; owns/resets BNO085 I2C1:0x4a\n"); return 2;
-    }
-    if (!continuous && (*end || seconds < 0 || seconds > 120)) {
-        fprintf(stderr, "Usage: imu-bno085 SECONDS (0 or 1..120) | --continuous [--retain-lines N]; owns/resets BNO085 I2C1:0x4a\n"); return 2;
     }
     continuous_mode = continuous || seconds == 0;
     char lock_path[80]; snprintf(lock_path, sizeof lock_path, "/tmp/ota-imu-%u.lock", getuid());
@@ -240,6 +296,7 @@ int main(int argc, char **argv) {
     // drop off this I2C bus now and then (station, 2026-10-03 14:27:32: errno 121, a timeout,
     // then no product identity after one reset), and the station does not depend on it. Retries
     // back off from 100 ms to 5 s, and a session that streamed for 10 s resets the backoff.
+    // Each attempt pulses RST when --reset-gpio names it (hal_open), which also frees a held SDA.
     // Commissioning and timed captures keep their single recovery: there a dropout is evidence.
     const int keep_reconnecting = continuous_mode && !commissioning_mode;
     uint64_t backoff_ns = 100000000ULL;
@@ -268,15 +325,15 @@ int main(int argc, char **argv) {
         ++recoveries; ++generation;
         if (keep_reconnecting) {
             if (now_ns()-session_start_ns >= 10000000000ULL) backoff_ns = 100000000ULL;
-            fprintf(stderr,"IMU reconnect %u in %.1f s (read_errors=%u resets=%u)\n",
-                    recoveries, backoff_ns/1e9, read_errors, resets);
+            fprintf(stderr,"IMU reconnect %u in %.1f s, %s reset (read_errors=%u resets=%u hard_resets=%u)\n",
+                    recoveries, backoff_ns/1e9, reset_chip[0] ? "hardware" : "soft", read_errors, resets, hard_resets);
             for (uint64_t waited=0; waited<backoff_ns && !stopping; waited+=10000000ULL) usleep(10000);
             if (backoff_ns < 5000000000ULL) backoff_ns *= 2;
             if (backoff_ns > 5000000000ULL) backoff_ns = 5000000000ULL;
         }
     }
-    printf("{\"kind\":\"summary\",\"counts\":[%u,%u,%u,%u],\"read_errors\":%u,\"recoveries\":%u,\"failed\":%s,\"tared\":%s}\n",
-           counts[0],counts[1],counts[2],counts[3],read_errors,recoveries,failed ? "true":"false",tared ? "true":"false");
+    printf("{\"kind\":\"summary\",\"counts\":[%u,%u,%u,%u],\"read_errors\":%u,\"recoveries\":%u,\"hard_resets\":%u,\"failed\":%s,\"tared\":%s}\n",
+           counts[0],counts[1],counts[2],counts[3],read_errors,recoveries,hard_resets,failed ? "true":"false",tared ? "true":"false");
     ++output_lines;
     close(lock);
     return !failed && counts[0]>0 && counts[1]>0 && counts[2]>0 && counts[3]>0 ? 0 : 1;

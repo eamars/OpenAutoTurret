@@ -107,6 +107,11 @@ OBSERVE_MS=2000
 APPLY_PITCH_LIMIT=0
 IMU_SECONDS=10
 WITH_IMU=0
+# The BNO085's RST is wired to GPIO4 (2026-10-05). imu-bno085 pulses it on every (re)connect, which
+# frees a sensor holding SDA low; an I2C soft reset cannot. OTA_IMU_RESET_GPIO= (empty) disables it.
+IMU_RESET_GPIO="${OTA_IMU_RESET_GPIO-/dev/gpiochip0:4}"
+imu_reset_args=()
+[ -n "$IMU_RESET_GPIO" ] && imu_reset_args=(--reset-gpio "$IMU_RESET_GPIO")
 PITCH_STEP_MDEG=0
 PITCH_PROBE=0
 PITCH_TEST_GAINS=0
@@ -536,7 +541,7 @@ if [ "$MODE" = imu ]; then
   if pgrep -x controld >/dev/null || pgrep -x imu_main >/dev/null; then
     echo 'Existing controller or legacy IMU consumer; refusing capture.' >&2; exit 1
   fi
-  "$APP/build/imu-bno085" "$IMU_SECONDS" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+  "$APP/build/imu-bno085" "$IMU_SECONDS" "${imu_reset_args[@]}" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
   imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   printf 'Mode: IMU capture\nTrace: %s\n' "$RUN/imu.ndjson" > "$RUN/stack.info"
   cp "$RUN/launcher.pid" "$RUN/started"
@@ -553,7 +558,7 @@ if [ "$MODE" = commission ]; then
   imu_pid=''
   if [ "$WITH_IMU" = 1 ]; then
     if pgrep -x imu_main >/dev/null; then echo 'Legacy IMU consumer still running' >&2; exit 1; fi
-    "$APP/build/imu-bno085" 120 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+    "$APP/build/imu-bno085" 120 "${imu_reset_args[@]}" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
     imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
     # Observe a stationary host tare before starting the independent motor probe.
     for ((attempt=0; attempt<50; attempt++)); do
@@ -704,7 +709,7 @@ if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [
     echo 'Legacy IMU consumer still running; refusing BNO085 continuous capture.' >&2; exit 1
   fi
   export OTA_IMU_TRACE="$RUN/imu.ndjson"
-  "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+  "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 "${imu_reset_args[@]}" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
   imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
   # Commissioning requires a fresh host tare and same-generation game rotation sample before the
   # controller starts: there the IMU trace is evidence. Normal operation only waits for one, then
@@ -762,7 +767,7 @@ elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; t
       echo 'Legacy IMU consumer still running; the UI will report the IMU as not configured.' >&2
     else
       export OTA_IMU_TRACE="$RUN/imu.ndjson"
-      "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
+      "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 "${imu_reset_args[@]}" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
       imu_shadow_pid=$!; children+=("$imu_shadow_pid"); child_name[$imu_shadow_pid]=imu-bno085
       imu_shadow_ready=0
       for ((attempt=0; attempt<30; attempt++)); do

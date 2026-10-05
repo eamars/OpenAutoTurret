@@ -148,7 +148,7 @@ class ImuTraceReader:
         elif kind == TRACE_RESET:
             self.stats["resets"] += 1
         elif kind == SUMMARY:
-            self._summary = {k: payload.get(k) for k in ("counts", "read_errors", "recoveries",
+            self._summary = {k: payload.get(k) for k in ("counts", "read_errors", "recoveries", "hard_resets",
                                                         "failed", "tared")}
 
     def block(self, now_ns: int, *, present: bool, configured: bool) -> Dict[str, Any]:
