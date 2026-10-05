@@ -1066,7 +1066,7 @@ function hudTravelTape(o) {
     const inset = 8;
     const inView = pos >= lo + inset && pos <= hi - inset;
     const side = pos < mid ? -1 : 1;   // which screen end, not which sign of degrees
-    watch = { deltaDeg: delta, inView: inView, side: side,
+    watch = { deltaDeg: delta, inView: inView, side: side, hollow: !!o.watchHollow,
               pos: inView ? pos : (side < 0 ? lo + inset : hi - inset),
               label: inView ? "" : hudDegLabel(Math.round(delta), true) };
   }
@@ -1085,13 +1085,18 @@ function hudTravelTape(o) {
   };
 }
 
-function hudWatchShown(t) {
-  // SURVEILLANCE's watch point is on the tapes while the station is in that cycle: watching or
-  // returning, or following a target it will return from. Never in MANUAL or AUTO_ROAM.
+function hudWatchStyle(t) {
+  // How SURVEILLANCE's watch point is drawn on the tapes (owner, 2026-10-05): solid in MANUAL, where
+  // the operator aims and may save a new one; hollow in the SURVEILLANCE cycle (watching, returning,
+  // or following a target it will return from), so the caret shows through it on the point; not at
+  // all in AUTO_ROAM. null when not drawn.
   t = t || {};
+  if (!(t.watch_point_usable === true && Number.isFinite(t.watch_yaw_rad) && Number.isFinite(t.watch_pitch_rad)))
+    return null;
   const mode = String(t.operating_mode || "");
-  return t.watch_point_usable === true && Number.isFinite(t.watch_yaw_rad) && Number.isFinite(t.watch_pitch_rad) &&
-    (mode === "SURVEILLANCE" || (mode === "AUTO_TRACK" && t.auto_return_mode === "SURVEILLANCE"));
+  if (mode === "MANUAL") return "solid";
+  if (mode === "SURVEILLANCE" || (mode === "AUTO_TRACK" && t.auto_return_mode === "SURVEILLANCE")) return "hollow";
+  return null;
 }
 
 function hudDegLabel(deg, withDegree) {
@@ -1150,9 +1155,18 @@ function hudTravelTapeSvg(t, C, opts) {
   if (t.watch) {
     const W = C.watch || "#fff07a", r = 7, p = t.watch.pos;
     const cx = w ? p : t.x, cy = w ? t.y : p;
-    parts.push('<path class="watch" d="M ' + cx + ' ' + (cy - r) + ' L ' + (cx + r) + ' ' + cy + ' L ' + cx +
-               ' ' + (cy + r) + ' L ' + (cx - r) + ' ' + cy + ' Z" fill="' + W + '" stroke="' + C.stroke +
-               '" stroke-width="1.4" stroke-linejoin="round"/>');
+    const dia = 'd="M ' + cx + ' ' + (cy - r) + ' L ' + (cx + r) + ' ' + cy + ' L ' + cx + ' ' + (cy + r) +
+                ' L ' + (cx - r) + ' ' + cy + ' Z"';
+    if (t.watch.hollow) {
+      // An outline over a dark one, the tapes' own contrast rule, with nothing inside it.
+      parts.push('<path class="watch-under" ' + dia + ' fill="none" stroke="' + C.stroke +
+                 '" stroke-width="4" stroke-linejoin="round"/>');
+      parts.push('<path class="watch hollow" ' + dia + ' fill="none" stroke="' + W +
+                 '" stroke-width="1.8" stroke-linejoin="round"/>');
+    } else {
+      parts.push('<path class="watch" ' + dia + ' fill="' + W + '" stroke="' + C.stroke +
+                 '" stroke-width="1.4" stroke-linejoin="round"/>');
+    }
     if (!t.watch.inView) {
       const s = t.watch.side, a = r + 2, L = 7;
       parts.push('<path class="watch-arrow" d="' + (w
@@ -1454,9 +1468,8 @@ function render(t) {
   // highlight pointing at the wrong end of the tape is worse than no highlight at all.
   const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
   const yawRange = hudYawTapeRange(t);
-  // The watch point is marked only during SURVEILLANCE (owner, 2026-10-05): the mode itself, and the
-  // track it hands off to, which returns there.
-  const watchOn = hudWatchShown(t);
+  // The watch point (owner, 2026-10-05): solid in MANUAL, hollow in the SURVEILLANCE cycle.
+  const watchStyle = hudWatchStyle(t);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
     minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg,
@@ -1464,7 +1477,7 @@ function render(t) {
       ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
     valueDeg: deg(t.q_yaw_rad), windowDeg: hudViewFov(t.effective_hfov_deg, view.k),
     valid: yawRange.valid, continuous: yawRange.continuous,
-    watchDeg: watchOn ? deg(t.watch_yaw_rad) : undefined
+    watchDeg: watchStyle ? deg(t.watch_yaw_rad) : undefined, watchHollow: watchStyle === "hollow"
   });
   // A continuous yaw reads as an angle, not as a count of turns since homing.
   const yawShown = yawRange.continuous ? hudWrapDeg(deg(t.q_yaw_rad)) : deg(t.q_yaw_rad);
@@ -1479,7 +1492,7 @@ function render(t) {
       : undefined,
     valueDeg: deg(hudPitch(t, t.q_pitch_rad)), windowDeg: hudViewFov(t.effective_vfov_deg, view.k),
     valid: t.soft_limits_valid === true,
-    watchDeg: watchOn ? deg(hudPitch(t, t.watch_pitch_rad)) : undefined
+    watchDeg: watchStyle ? deg(hudPitch(t, t.watch_pitch_rad)) : undefined, watchHollow: watchStyle === "hollow"
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
   // ceremony - if the server ever starts sending a polygon in a different frame, drawing it as joint
@@ -1663,16 +1676,15 @@ function paint(t) {
   // Track churn must not replace MENU buttons between pointer-down and click.
   // Phase changes must refresh their Home/recovery gates even with no tracks.
   const drawerKey = value => JSON.stringify(drawerOpen === "MENU"
-    ? [value && value.phase, value && value.cmd_ack_seq, value && value.rest_park, value && value.rest_park_on_stop,
+    ? [value && value.phase, value && value.rest_park, value && value.rest_park_on_stop,
        hudSpeedRows(value).map(r => [r.value, r.max])]
-    : [value && value.operating_mode, value && value.cmd_ack_seq, value && value.phase,
+    : [value && value.operating_mode, value && value.phase,
       value && value.watch_point_set, value && value.watch_point_usable,
       value && value.selected_uuid, value && value.perception_session_uuid,
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
   const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
-  resolveAckFromTelemetry(t);
   render(t);
   if (drawerOpen && drawerChanged) renderDrawer();
 }
@@ -1843,9 +1855,7 @@ async function pollHealth() {
 // --- §13 dock / §14 drawer behaviour -----------------------------------------
 const dock = $("dock"), drawer = $("drawer");
 let drawerOpen = null;
-let lastAck = { text: "", kind: "" };
 let pendingConfirm = null;    // hudConfirmKey of the row awaiting a second press; see the two-press rule
-let pendingAck = null;        // {command, afterSeq, at}: the published ack this command is waiting on
 
 // Line icons, drawn rather than filled: §13.1 asks for a green line icon and explicitly rules out the
 // raised solid-fill card look, which is the fastest way for an overlay to stop reading as a HUD.
@@ -1873,25 +1883,6 @@ function renderDock() {
     "<span>" + b.key + "</span></button>").join("");
 }
 
-// The daemon's ack is the only thing entitled to say ACCEPTED. It arrives on the next snapshot, so this
-// runs from render(); a command whose ack never comes is called out after a moment rather than left
-// looking accepted, because a command that quietly produced nothing is the failure the operator cannot
-// see from a picture that keeps moving.
-function resolveAckFromTelemetry(t) {
-  if (!pendingAck || !t) return;
-  const seq = (typeof t.cmd_ack_seq === "number") ? t.cmd_ack_seq : 0;
-  if (t.cmd_ack_command === pendingAck.command && seq > pendingAck.afterSeq) {
-    const accepted = t.cmd_ack_accepted === 1 || t.cmd_ack_accepted === true;
-    const why = String(t.cmd_ack_reason || "");
-    lastAck = { text: pendingAck.command + (accepted ? "  ACCEPTED"
-                  : "  REFUSED: " + (why || "no reason given")), kind: accepted ? "ok" : "bad" };
-    pendingAck = null;
-  } else if (Date.now() - pendingAck.at > 4000) {
-    lastAck = { text: pendingAck.command + "  NO ACK FROM CONTROLD", kind: "bad" };
-    pendingAck = null;
-  }
-}
-
 function escapeMarkup(value) {
   return String(value).replace(/[&<>"']/g, c =>
     ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
@@ -1914,8 +1905,7 @@ function renderDrawer() {
     }).join("");
     if (drawerOpen === "MENU") rows += renderSettings(lastTelemetry || {});
   }
-  drawer.innerHTML = '<div class="dtitle">' + drawerOpen + "</div>" + rows +
-    '<div class="dack ' + lastAck.kind + '" role="status">' + escapeMarkup(lastAck.text || " ") + "</div>";
+  drawer.innerHTML = '<div class="dtitle">' + drawerOpen + "</div>" + rows;
   drawer.hidden = false;
 }
 
@@ -1945,13 +1935,17 @@ function renderSettings(t) {
 // each handler has to remember to honour.
 function setDrawer(key) {
   drawerOpen = (drawerOpen === key) ? null : key;
-  lastAck = { text: "", kind: "" };
   pendingConfirm = null;
   renderDock();
   renderDrawer();
 }
 
 async function sendCommand(cmd, arg) {
+  // The page does not narrate commands (owner, 2026-10-05: "less is more"). What a command did shows
+  // where it lands -- the mode block, the drawer's ACTIVE row, the turret itself -- and the daemon's own
+  // verdict, the only thing entitled to say ACCEPTED or REFUSED, is STATS FOR NERDS > LAST COMMAND
+  // (cmd_ack_*). The drawer's ack line went: it echoed raw command names, and the DPAD's keepalive,
+  // sent every 75 ms, rewrote it -- and rebuilt the drawer -- thirteen times a second.
   if (cmd === "select_uuid" || (cmd === "clear_target" && lastTelemetry && lastTelemetry.perception_native)) {
     try {
       const body = cmd === "select_uuid" ? JSON.parse(arg) :
@@ -1959,51 +1953,22 @@ async function sendCommand(cmd, arg) {
       body.type = cmd === "select_uuid" ? "select_target" : "clear_target";
       body.request_id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
         String(Date.now()) + "-" + String(Math.random());
-      const response = await fetch("/api/selection", {method: "POST",
+      await fetch("/api/selection", {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-      const ack = await response.json();
-      lastAck = {text: body.type + "  " + String(ack.reason || "NO ACK"),
-        kind: ack.accepted ? "" : "bad"};
     } catch (e) {
-      lastAck = {text: "SELECTION NOT ACKNOWLEDGED", kind: "bad"};
+      // The TARGETS rows show what is selected; a lost request leaves them as they were.
     }
-    pendingAck = null;
-    pendingConfirm = null;
-    renderDrawer();
     return;
   }
-  let j = null;
   try {
-    const r = await fetch("/api/command", {
+    await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: cmd, arg: arg || "" })
     });
-    j = await r.json();
   } catch (e) {
-    lastAck = { text: cmd + "  NOT SENT: transport", kind: "bad" };
-    renderDrawer();
-    return;
+    // A transport loss shows in the status bar's staleness, not as a line about one command.
   }
-  // What came back over the socket is NOT the verdict. It says the command reached the daemon's
-  // handler; the daemon's own decision is recorded separately and published as cmd_ack_* - and the two
-  // disagree today, which was found by posting a selection the station could not honour: controld's log
-  // says "select_target 9999: REFUSED (no vision data has reached controld yet)" while /api/command
-  // answered ok:true. Rendering that response as ACCEPTED would have told the operator the turret had
-  // picked a target that does not exist. So the response is reported as SENT, and the verdict is read
-  // from the ack the daemon publishes, matched on command name and sequence.
-  const seq = (lastTelemetry && typeof lastTelemetry.cmd_ack_seq === "number")
-    ? lastTelemetry.cmd_ack_seq : 0;
-  pendingAck = { command: cmd, afterSeq: seq, at: Date.now() };
-  // `verdict` says which question the response answered, so the two cases can finally be told apart.
-  // "rejected" is a decision and is shown as one, immediately - the gate refused it and nothing will
-  // execute. "submitted" is a receipt for queueing and must not be dressed up as success. An older
-  // daemon that sends no verdict leaves the wording honest rather than guessed.
-  lastAck = (j && j.verdict === "rejected")
-    ? { text: cmd + "  REFUSED: " + ((j && j.error) || "no reason given"), kind: "bad" }
-    : { text: cmd + ((j && j.verdict === "submitted") ? "  SUBMITTED" : "  SENT"), kind: "" };
-  pendingConfirm = null;
-  renderDrawer();
 }
 
 // The pad's DOM stays in place while telemetry updates, preserving pointer capture.
@@ -2107,6 +2072,7 @@ drawer.addEventListener("click", (e) => {
     if (pendingConfirm !== key) { pendingConfirm = key; renderDrawer(); return; }
   }
   sendCommand(cmd, b.getAttribute("data-arg") || "");
+  if (pendingConfirm !== null) { pendingConfirm = null; renderDrawer(); }
 });
 
 renderDock();
@@ -2311,9 +2277,6 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #drawer .drow.stop:hover { background:rgba(255,93,93,.14); }
 #drawer .drow.confirm { background:rgba(242,179,41,.16); }
 #drawer .drow.confirm .rl { color:#f2b329; }
-#drawer .dack { margin-top:6px; font-size:9px; letter-spacing:.05em; color:rgba(149,245,139,.56); }
-#drawer .dack.ok { color:#95f58b; }
-#drawer .dack.bad { color:var(--hud-amber); }
 /* MENU > SETTINGS: a section rule, steppers that send the exact value they show, and the restart note. */
 #drawer .dsec { color:#95f58b; font-size:9px; letter-spacing:.14em; margin:9px 0 3px; padding-top:5px;
                 border-top:1px solid rgba(149,245,139,.38); }

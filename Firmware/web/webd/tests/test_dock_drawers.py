@@ -333,27 +333,21 @@ class DrawerPresentation(unittest.TestCase):
         self.assertIn("if (!b || b.disabled) return;", HUD_JS,
                       "the click handler must respect the disabled row, not rely on the browser alone")
 
-    def test_only_the_daemons_published_ack_may_say_accepted(self) -> None:
-        # Found by posting a command the station could not honour: controld logged
-        # "select_target 9999: REFUSED (no vision data has reached controld yet)" while /api/command
-        # answered ok:true. A page that renders the socket reply as ACCEPTED would tell an operator the
-        # turret had acquired a target that does not exist. So the reply is reported as SENT, and
-        # ACCEPTED/REFUSED come only from cmd_ack_accepted on the next snapshot.
+    def test_the_drawer_does_not_narrate_commands(self) -> None:
+        # Owner, 2026-10-05: "less is more". The drawer's ack line echoed raw command names, and the
+        # DPAD's keepalive (every 75 ms) rewrote it and rebuilt the drawer thirteen times a second. What a
+        # command did shows where it lands; the daemon's verdict stays in STATS FOR NERDS.
+        self.assertNotIn("dack", HUD_JS)
+        self.assertNotIn("dack", HUD_CSS)
         at = HUD_JS.index("async function sendCommand")
-        body = HUD_JS[at:HUD_JS.index("dock.addEventListener", at)]
-        self.assertIn('"  SENT"', body, "the socket reply must not be called a verdict")
-        # The literal, not the word: the comment beside it explains why it may not be claimed, and a test
-        # that cannot tell prose from code will pass or fail on the colour of the comment.
-        self.assertNotIn('"  ACCEPTED"', body, "acceptance may not be claimed from the response")
-        self.assertIn('"  ACCEPTED"', HUD_JS[HUD_JS.index("function resolveAckFromTelemetry"):
-                                              HUD_JS.index("async function sendCommand")],
-                      "the resolver is the only place allowed to say it")
-        self.assertLess(HUD_JS.index("function resolveAckFromTelemetry"), HUD_JS.index('"  SENT"'),
-                        "the ack resolver belongs beside the sender that feeds it")
-        self.assertIn("cmd_ack_accepted", HUD_JS)
-        self.assertIn("cmd_ack_seq", HUD_JS, "matched on sequence, or a stale ack would answer a new command")
-        self.assertIn("NO ACK FROM CONTROLD", HUD_JS,
-                      "a command that never gets an ack must not be left looking accepted")
+        body = HUD_JS[at:HUD_JS.index("// The pad's DOM stays in place", at)]
+        self.assertNotIn("renderDrawer", body, "a jog keepalive must not rebuild the drawer")
+        self.assertNotIn('"  ACCEPTED"', body, "the page never claims a verdict; the daemon publishes it")
+        self.assertNotIn("cmd_ack_seq", HUD_JS[HUD_JS.index("function paint(t)"):HUD_JS.index("function updateStaleness")],
+                         "the drawer refreshes on what it shows, not on every acknowledged command")
+        self.assertIn('"LAST COMMAND"', HUD_JS, "the daemon's own verdict is still on the stats overlay")
+        self.assertIn("cmd_ack_accepted === 1", HUD_JS)
+
 
 
 class CommandPathIsReal(unittest.TestCase):
@@ -437,15 +431,6 @@ class CommandVerdictIsNotAmbiguous(unittest.TestCase):
         at = src.index("no response within timeout")
         self.assertNotIn("verdict=", src[at - 200:at + 200],
                          "the timeout path must leave the verdict None, not invent one")
-
-    def test_the_page_tells_submitted_and_rejected_apart(self) -> None:
-        at = HUD_JS.index("async function sendCommand")
-        body = HUD_JS[at:HUD_JS.index("dock.addEventListener", at)]
-        self.assertIn('j.verdict === "rejected"', body,
-                      "a gate rejection is a decision and must show as one, at once")
-        self.assertIn('"  SUBMITTED"', body, "a receipt for queueing must not be dressed as success")
-        self.assertIn('"  SENT"', body, "an older daemon with no verdict gets honest wording, not a guess")
-        self.assertNotIn('"  ACCEPTED"', body, "acceptance still belongs to cmd_ack_accepted alone")
 
     def test_the_endpoint_passes_the_verdict_through(self) -> None:
         import json as _json

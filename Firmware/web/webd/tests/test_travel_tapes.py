@@ -24,7 +24,7 @@ from ..hud import HUD_CSS, HUD_GEOMETRY_JS, HUD_HTML, HUD_JS
 
 _EXPORTS = (
     "\nmodule.exports = { hudTravelTape, hudYawTapeRange, hudTravelTapeSvg, hudTickSteps, hudDegLabel,"
-    " hudUnrangedNote, hudWatchShown };\n"
+    " hudUnrangedNote, hudWatchStyle };\n"
 )
 
 # The colour tokens the page passes in, mirrored so a change in the page's palette shows up here as
@@ -386,15 +386,27 @@ class WatchPointMarker(unittest.TestCase):
         self.assertNotIn('class="watch', svg(), "no watch point asked for, none drawn")
         self.assertIn('watch: "#fff07a"', HUD_JS, "pale lemon: lighter and less orange than the caution amber")
 
-    def test_it_is_shown_only_in_the_surveillance_cycle(self) -> None:
+    def test_solid_in_manual_hollow_in_surveillance_absent_in_roam(self) -> None:
+        # Owner, 2026-10-05 (after using it): visible in MANUAL, where the point is aimed and saved;
+        # hollow in the SURVEILLANCE cycle so the caret shows through it on the point.
         base = {"watch_point_usable": True, "watch_yaw_rad": 0.3, "watch_pitch_rad": -0.7}
-        cases = [({"operating_mode": "SURVEILLANCE"}, True),
-                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "SURVEILLANCE"}, True),
-                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "AUTO_ROAM"}, False),
-                 ({"operating_mode": "AUTO_ROAM"}, False),
-                 ({"operating_mode": "MANUAL"}, False),
-                 ({"operating_mode": "SURVEILLANCE", "watch_point_usable": False}, False),
-                 ({"operating_mode": "SURVEILLANCE", "watch_yaw_rad": None}, False)]
-        got = self._node("console.log(JSON.stringify(%s.map(c => T.hudWatchShown(c))));"
+        cases = [({"operating_mode": "MANUAL"}, "solid"),
+                 ({"operating_mode": "SURVEILLANCE"}, "hollow"),
+                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "SURVEILLANCE"}, "hollow"),
+                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "AUTO_ROAM"}, None),
+                 ({"operating_mode": "AUTO_ROAM"}, None),
+                 ({"operating_mode": "SURVEILLANCE", "watch_point_usable": False}, None),
+                 ({"operating_mode": "MANUAL", "watch_yaw_rad": None}, None)]
+        got = self._node("console.log(JSON.stringify(%s.map(c => T.hudWatchStyle(c))));"
                          % json.dumps([dict(base, **c) for c, _ in cases]))
         self.assertEqual(got, [want for _, want in cases])
+
+    def test_the_hollow_diamond_is_an_outline_with_nothing_inside(self) -> None:
+        tokens = dict(C_TOKENS, stroke="#05070a", watch="#fff07a")
+        svg = self._node("console.log(T.hudTravelTapeSvg(T.hudTravelTape(%s), %s, {title:'YAW', value:'+22.4',"
+                         " vw:1920, vh:1080}));"
+                         % (json.dumps(dict(YAW, windowDeg=self.WIN, watchDeg=YAW["valueDeg"], watchHollow=True)),
+                            json.dumps(tokens)))
+        hollow = re.search(r'<path class="watch hollow"[^>]*>', svg).group()
+        self.assertIn('fill="none"', hollow)
+        self.assertIn('stroke="#fff07a"', hollow)

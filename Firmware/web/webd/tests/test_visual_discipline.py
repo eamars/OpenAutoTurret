@@ -181,11 +181,6 @@ class PaletteDiscipline(unittest.TestCase):
                          "§15: red only for fault/stop. A panel that spends red on anything inconvenient "
                          "trains the operator to ignore it when FAULT appears: %s" % offenders)
 
-    def test_a_refused_command_is_a_caution_not_a_fault(self) -> None:
-        at = HUD_CSS.index("#drawer .dack.bad")
-        self.assertIn("var(--hud-amber)", HUD_CSS[at:at + 60],
-                      "a refused command is inconvenient, not a fault")
-
     def test_the_prediction_cue_is_never_green(self) -> None:
         # Restated here because §15 and §10 agree on it and it is the easiest colour to get wrong: green
         # means "healthy and here", the cue means "where it is going, if we are guessing".

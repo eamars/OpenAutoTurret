@@ -222,11 +222,12 @@ watch point. The owner's answers:
   - SET WATCH POINT with pitch outside its envelope (on the rest stop), or while not holding.
   - If the point stops resolving during a loss, the cycle falls back to AUTO_ROAM and says so.
 - **Fault, hold, degrade:** unchanged. SURVEILLANCE adds no guard, trip or watchdog.
-- **On the tapes** (owner, 2026-10-05): during SURVEILLANCE (and a track it will return from) a
-  pale-lemon diamond (`#fff07a`) marks the watch point on both tapes, like a quest marker. Outside
-  the camera's field of view it is pinned at the end it lies beyond, with an arrow and the angle
-  still to go, the short way round on yaw. Pale lemon so it cannot be read as the amber that marks
-  a tape end the safety layer is derating toward.
+- **On the tapes** (owner, 2026-10-05): a pale-lemon diamond (`#fff07a`) marks the watch point on
+  both tapes, like a quest marker -- **solid in MANUAL**, where the point is aimed and saved, and
+  **hollow in the SURVEILLANCE cycle** (and a track it will return from), so the caret shows through
+  it on the point. Not drawn in AUTO_ROAM. Outside the camera's field of view it is pinned at the end
+  it lies beyond, with an arrow and the angle still to go, the short way round on yaw. Pale lemon so
+  it cannot be read as the amber that marks a tape end the safety layer is derating toward.
 
 **Not yet verified on the station.** Checked so far:
 - Simulator: return from a roam, follow then loss then return, the operator's return mode, and the
@@ -248,6 +249,9 @@ watch point. The owner's answers:
   drawer, MODE > MANUAL holds where the turret is, and the active row reads ACTIVE. Only SHUTDOWN
   asks twice. (A bug fixed the same day: with nothing awaiting confirmation, the active mode's row
   read "CONFIRM … PRESS AGAIN", because its empty command matched the empty pending one.)
+  The drawer no longer prints a line about each command ("set_mode ACCEPTED"): the result shows in
+  the mode block and the ACTIVE row, and the DPAD's keepalive used to rewrite that line thirteen
+  times a second. The daemon's verdict is STATS FOR NERDS > LAST COMMAND.
 - **MENU > SETTINGS** holds:
   - The live speeds: patrol on wide, patrol on detail, and tracking. They use controld's
     `set_speed` and are bounded by each mode's maximum. They last **this session only**: a restart
