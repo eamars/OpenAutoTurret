@@ -280,6 +280,39 @@ TEST(ReferenceServo, AHardStopWithDriftedCrosstalkSettlesQuietly) {
   EXPECT_LT(hold_hi - hold_lo, 0.004) << "still at rest";
 }
 
+// The camera measurement pairs each frame with the yaw at its optical time (tracking history). The
+// raw GM6020 reading carries the current crosstalk -- up to ~0.36 deg/A -- which the history did not
+// remove (station, 2026-10-05). q_true_rad removes it with the IDENTIFIED table: the servo's own table
+// carries a -3 mrad/A stabilising bias, and with it this test measured the angle WORSE than raw
+// (1.74 vs 1.21 mrad RMS against the plant, whose encoder follows the identified table).
+TEST(ReferenceServo, SnapshotCarriesTheCrosstalkCorrectedAngle) {
+  MixedCanMotorBackend b;
+  Plant plant;
+  Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
+  std::string err;
+  ASSERT_TRUE(Access::load(b, err)) << err;
+  EXPECT_FALSE(std::isfinite(b.snapshot(AxisId::Yaw, now_monotonic_ns()).q_true_rad)) << "not driving: no correction";
+  const HardMove move(80 * M_PI / 180, 0.4);
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, move.at(0)));
+  double raw2 = 0, true2 = 0;
+  int n = 0, missing = 0;
+  run(b, plant, move.duration(), [&](double t) {
+    ASSERT_TRUE(b.command_reference(AxisId::Yaw, move.at(t)));
+    const auto s = b.snapshot(AxisId::Yaw, now_monotonic_ns());
+    if (!s.has_feedback || t < 0.02) return;
+    if (!std::isfinite(s.q_true_rad)) { ++missing; return; }
+    // plant.q() has not advanced since the frame this snapshot holds (run() ticks before it advances).
+    raw2 += std::pow(s.q_rad - plant.q(), 2);
+    true2 += std::pow(s.q_true_rad - plant.q(), 2);
+    ++n;
+  });
+  ASSERT_GT(n, 100);
+  EXPECT_LT(missing, n / 50) << "the corrected angle is there whenever the servo drives";
+  const double raw_rms = std::sqrt(raw2 / n), true_rms = std::sqrt(true2 / n);
+  EXPECT_GT(raw_rms, 1e-3) << "the move must load the encoder with crosstalk to test anything";
+  EXPECT_LT(true_rms, 0.5 * raw_rms) << "raw " << raw_rms << " rad, corrected " << true_rms << " rad";
+}
+
 // Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a following error is
 // usually an obstruction, not a hazard. The servo lets go and asks for a HOLD; it does not trip, and
 // it does not re-engage onto the far reference.

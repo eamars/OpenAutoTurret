@@ -43,6 +43,30 @@ void crosstalk_is_removed_from_the_position() {
   const auto out=run(s,t,200,0.,.002,0.,-.005);  // stuck axis, current pushing
   expect(std::abs(out.position)<2e-4,"compensated position follows the true (stuck) angle");
 }
+void corrected_reading_is_the_observers_correction() {
+  // Raw reading minus g(q) times the current applied crosstalk_delay_s earlier: with the servo's
+  // own table, exactly the number the observer is fed; the tracking history passes another table.
+  auto p=fixture();
+  for(int k=0;k<ServoParameters::kCrosstalkBins;++k) p.crosstalk_map[k]=-.004-.002*std::sin(2*M_PI*k/ServoParameters::kCrosstalkBins*9);
+  p.crosstalk_delay_s=.0012;
+  Servo s; expect(s.configure(p) && s.reset(0.,0.,0.,.2),"configure");
+  expect(std::abs(s.corrected_reading(0.,.3,p.crosstalk_map)-(.3-s.crosstalk_gain(.3)*.2))<1e-12,"before any step: the reset current");
+  double t=0.;
+  for(int k=0;k<5;++k) {   // commands of .5, .6, .7, ... A, each acknowledged as sent
+    t+=.001; expect(s.observe_encoder(t,0.),"encoder"); (void)s.step(t,.001,0.,0.);
+    s.acknowledge(true,.5+.1*k);
+  }
+  // Read at t: the current applied 1.2 ms before is the one acknowledged at t-2 ms (step 3, .7 A).
+  const double q=.3, expected=q-s.crosstalk_gain(q)*.7;
+  expect(std::abs(s.corrected_reading(t,q,p.crosstalk_map)-expected)<1e-12,"raw minus g(q) * i(t - delay)");
+  expect(std::abs(s.corrected_reading(t+.0005,q,p.crosstalk_map)-(q-s.crosstalk_gain(q)*.8))<1e-12,"the next current once it is delay old");
+  const double before=s.corrected_reading(t,q,p.crosstalk_map); (void)s.corrected_reading(t,q,p.crosstalk_map);
+  expect(s.corrected_reading(t,q,p.crosstalk_map)==before,"reading it changes nothing (const)");
+  // Another table (the identified one, without the servo's stabilising bias) through the same history.
+  double other[ServoParameters::kCrosstalkBins];
+  for(int k=0;k<ServoParameters::kCrosstalkBins;++k) other[k]=p.crosstalk_map[k]+.003;
+  expect(std::abs(s.corrected_reading(t,q,other)-(q-(s.crosstalk_gain(q)+.003)*.7))<1e-12,"the table is the caller's");
+}
 void stiff_gains_stay_quiet_with_compensated_crosstalk() {
   // Axis held still, a small reference offset, real crosstalk on the reading. The
   // uncompensated loop reads its own current as position error and winds up.
@@ -135,6 +159,7 @@ void travel_governor_stops_before_the_end() {
 int main() {
   try {
     crosstalk_is_removed_from_the_position();
+    corrected_reading_is_the_observers_correction();
     stiff_gains_stay_quiet_with_compensated_crosstalk();
     following_error_stops_the_servo();
     stale_encoder_is_data_invalid();

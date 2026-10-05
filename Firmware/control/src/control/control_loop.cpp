@@ -1383,8 +1383,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       spdlog::warn("auto-enable tracking failed: {}", terr);
   }
   if (tracking_) {
+    // The camera measurement pairs a pixel with the pose at t_o: use the crosstalk-corrected yaw
+    // (identified table), not the raw reading, which moves up to ~0.36 deg per amp of yaw current.
+    const auto& yaw_sp = sp[ix(AxisId::Yaw)];
     tracking_->update_snapshots(now_ns, sp[ix(AxisId::Pitch)].q_rad,
-                                sp[ix(AxisId::Yaw)].q_rad,
+                                std::isfinite(yaw_sp.q_true_rad) ? yaw_sp.q_true_rad : yaw_sp.q_rad,
                                 sp[ix(AxisId::Pitch)].has_feedback ? sp[ix(AxisId::Pitch)].rx_ns : 0,
                                 sp[ix(AxisId::Yaw)].has_feedback ? sp[ix(AxisId::Yaw)].rx_ns : 0);
   }

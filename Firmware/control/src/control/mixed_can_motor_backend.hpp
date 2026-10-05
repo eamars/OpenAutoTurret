@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -245,9 +246,17 @@ class MixedCanMotorBackend final : public MotorBackend {
   // inhibition path without opening a second physical CAN owner.
   std::function<bool(const can::RawFrame&)> yaw_test_send_;
   std::function<CanHealth()> yaw_test_health_;
+  // The yaw asset's identified encoder crosstalk (rad/A per bin), for the true-angle estimate the
+  // tracking history uses. The servo's own table is this minus a stabilising bias.
+  std::array<double, axis::ServoParameters::kCrosstalkBins> yaw_identified_crosstalk_{};
+  bool yaw_identified_crosstalk_valid_ = false;
   struct YawState {
     gm6020::Feedback feedback{};
     double position_rad{};  // offset to stationary open-time reference
+    // position_rad with the current crosstalk removed (identified table, the servo's applied-current
+    // history), for the receipt the servo last accepted; NaN while the servo is not driving
+    // (released: zero current, nothing to remove) or without an identified table.
+    double position_true_rad{std::numeric_limits<double>::quiet_NaN()};
     uint64_t count{};
     bool received{false};
     bool encoder_valid{false};

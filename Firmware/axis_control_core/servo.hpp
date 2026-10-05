@@ -84,6 +84,11 @@ class Servo {
   double friction(double v_ref) const;
   double friction_at(double v_ref, double q) const;
   double crosstalk_gain(double q) const;
+  // An encoder reading with its current-induced error removed by `map` (120 bins, rad/A), using
+  // the current applied crosstalk_delay_s before ts. observe_encoder passes its own table, which
+  // carries a deliberate stabilising bias (design: -3 mrad/A off the identified table); a consumer
+  // that wants the true angle passes the asset's identified table instead.
+  double corrected_reading(double ts, double q, const double* map) const;
   const ServoParameters& learned() const { return p_; }
  private:
   void predict(double to);

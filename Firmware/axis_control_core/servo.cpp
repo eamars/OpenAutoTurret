@@ -64,11 +64,18 @@ double Servo::friction_at(double v,double q) const {
   const double scale=std::min(1.,std::abs(v)/p_.friction_band);
   return friction(v)+(v>0?1.:-1.)*scale*extra;
 }
-double Servo::crosstalk_gain(double q) const {
+static double table_gain(const double* map,double q) {
   constexpr int n=ServoParameters::kCrosstalkBins;
   const double x=std::fmod(std::fmod(q,2*M_PI)+2*M_PI,2*M_PI)/(2*M_PI)*n;
   const int k0=static_cast<int>(std::floor(x))%n,k1=(k0+1)%n; const double w=x-std::floor(x);
-  return (1-w)*p_.crosstalk_map[k0]+w*p_.crosstalk_map[k1];
+  return (1-w)*map[k0]+w*map[k1];
+}
+double Servo::crosstalk_gain(double q) const { return table_gain(p_.crosstalk_map,q); }
+double Servo::corrected_reading(double ts,double q,const double* map) const {
+  if (applied_history_.empty()) return q;
+  double current=applied_history_.front().second;  // the current applied at ts-delay
+  for (const auto& [time,value]:applied_history_) if (time<=ts-p_.crosstalk_delay_s) current=value; else break;
+  return q-table_gain(map,q)*current;
 }
 void Servo::predict(double to) {
   const double dt=to-t_;
@@ -89,10 +96,7 @@ bool Servo::update(double value,double hq,double hv,double variance) {
 bool Servo::observe_encoder(double ts,double q) {
   if (!ready_ || !std::isfinite(ts) || !std::isfinite(q)) return false;
   if (ts<=encoder_time_) { ++stale_samples_; return true; }  // reordered/duplicate: ignore, not fatal
-  // Remove the current-induced reading error using the current applied at ts-delay.
-  double current=applied_history_.front().second;
-  for (const auto& [time,value]:applied_history_) if (time<=ts-p_.crosstalk_delay_s) current=value; else break;
-  q-=crosstalk_gain(q)*current;
+  q=corrected_reading(ts,q,p_.crosstalk_map);  // remove the current-induced reading error
   // A sample older than the state is applied through its age (H=[1,-age]).
   if (ts>=t_) { predict(ts); if (!update(q,1,0,p_.encoder_variance)) return ready_=false; }
   else {

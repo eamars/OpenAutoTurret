@@ -381,6 +381,7 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
     // is refreshed after the bus/pitch UID checks complete.
     yaw_origin_rad_ = 0;
   }
+  yaw_state_.position_true_rad = std::numeric_limits<double>::quiet_NaN();
   if (yaw_servo_active_) step_yaw_servo_locked(decoded.rx_ns);
 }
 
@@ -475,6 +476,7 @@ AxisSnapshot MixedCanMotorBackend::yaw_snapshot_locked(TimeNs now) const {
     // the unmodified RX timestamp, including frames arriving during this cycle.
     snapshot.rx_ns = std::min(yaw_state_.feedback.rx_ns, now);
     snapshot.q_rad = yaw_state_.position_rad;
+    snapshot.q_true_rad = yaw_state_.position_true_rad;
     snapshot.v_rad_s = yaw_state_.feedback.speed_rad_s();
     // The status frame does carry a figure -- it is the drive's own torque current, and
     // this is where it used to be dropped on the floor. Amperes, not N·m: the guide gives
@@ -1181,7 +1183,8 @@ void MixedCanMotorBackend::keepalive(AxisId axis) {
 bool MixedCanMotorBackend::load_servos(std::string& err) {
   const auto& c = *profile_.servo;
   try {
-    auto yaw = axis::servo_from_yaml(YAML::LoadFile(c.yaw_asset)["servo_parameters"]);
+    const auto yaw_asset = YAML::LoadFile(c.yaw_asset);
+    auto yaw = axis::servo_from_yaml(yaw_asset["servo_parameters"]);
     // The profile's authority is the ceiling; an asset can ask for less, never more.
     yaw.current_cap = std::min(yaw.current_cap, c.yaw_current_limit_a);
     yaw.rms_limit = std::min(yaw.rms_limit, c.yaw_rms_limit_a);
@@ -1189,6 +1192,19 @@ bool MixedCanMotorBackend::load_servos(std::string& err) {
       err = "yaw servo asset rejected: " + c.yaw_asset;
       return false;
     }
+    // Optional: without the identified table the tracking history keeps the raw reading.
+    yaw_identified_crosstalk_valid_ = false;
+    const auto identified = yaw_asset["identified"]["crosstalk"]["table"];
+    if (identified && identified.IsSequence() && identified.size() == yaw_identified_crosstalk_.size()) {
+      bool finite = true;
+      for (std::size_t k = 0; k < yaw_identified_crosstalk_.size(); ++k) {
+        yaw_identified_crosstalk_[k] = identified[k].as<double>();
+        finite = finite && std::isfinite(yaw_identified_crosstalk_[k]);
+      }
+      yaw_identified_crosstalk_valid_ = finite;
+    }
+    if (!yaw_identified_crosstalk_valid_)
+      spdlog::warn("yaw asset has no usable identified crosstalk table; tracking uses the raw yaw reading");
     const auto trial = YAML::LoadFile(c.pitch_asset)["servo_trial"];
     // The asset's speed clamp was a commissioning choice; the owner's cap is 100 RPM (2026-10-02).
     const axis::PositionLoopParameters loop{trial["kp_per_s"].as<double>(), trial["ki_per_s2"].as<double>(),
@@ -1373,7 +1389,8 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
     return;
   }
   const double offset = yaw_servo_offset_rad_;
-  if (!yaw_servo_.observe_encoder((rx_ns - yaw_servo_epoch_ns_) * 1e-9, yaw_state_.position_rad + offset)) {
+  const double ts = (rx_ns - yaw_servo_epoch_ns_) * 1e-9;
+  if (!yaw_servo_.observe_encoder(ts, yaw_state_.position_rad + offset)) {
     // The observer could not take the reading: let go (zero current) and let the next reference
     // re-engage it from the measured state. A transient, not a fault (owner ruling 2026-10-02).
     spdlog::warn("yaw servo: encoder reading not accepted by the observer; released, re-engages on the next reference");
@@ -1381,6 +1398,12 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
     send_yaw_zero_locked();
     return;
   }
+  // The true angle, for consumers that pair the encoder with something else (the camera
+  // measurement's pose at t_o). The identified table, not the servo's: the servo's carries a
+  // deliberate -3 mrad/A stabilising bias, which is a control choice, not where the axis is.
+  if (yaw_identified_crosstalk_valid_)
+    yaw_state_.position_true_rad =
+        yaw_servo_.corrected_reading(ts, yaw_state_.position_rad + offset, yaw_identified_crosstalk_.data()) - offset;
   double q, v, a;
   if (yaw_reference_.at(now, q, v, a)) yaw_servo_hold_q_ = q;
   else { q = yaw_servo_hold_q_; v = a = 0; ++yaw_servo_stale_; }

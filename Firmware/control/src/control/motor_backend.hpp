@@ -41,6 +41,10 @@ struct AxisSnapshot {
   bool current_raw_valid = false;
   int enabled_state = -1; // CyberGear type2 state, NOT RunMode
   double q_rad = 0.0;
+  // q_rad with the drive's known reading error removed (GM6020: current crosstalk, by the asset's
+  // IDENTIFIED table and the applied current -- not the servo's deliberately biased table). NaN
+  // when no correction applies (the servo is not driving, or the drive has none): use q_rad.
+  double q_true_rad = std::numeric_limits<double>::quiet_NaN();
   double v_rad_s = 0.0;
   double torque_nm = 0.0;
   // Torque current as the drive itself reports it, in amperes. Kept apart from torque_nm on
