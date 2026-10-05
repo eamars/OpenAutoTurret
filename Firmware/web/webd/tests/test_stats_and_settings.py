@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -144,10 +145,14 @@ class PageWiring(unittest.TestCase):
         self.assertIn('st === "ok" ? lbl.split(" ")[0] : lbl', HUD_JS)
 
     def test_park_is_not_a_place_to_be_stuck(self) -> None:
-        # Owner, 2026-10-03: from the park pose, Auto and Manual are one press each.
-        self.assertIn('(t.phase === "hold" || t.phase === "parked")', HUD_JS)
-        self.assertIn('if (lastTelemetry && lastTelemetry.phase === "parked") sendCommand("set_mode", "MANUAL");',
-                      HUD_JS)
+        # Owner, 2026-10-03: from the park pose every mode is one press. Since 2026-10-05 the modes live
+        # only in the MODE drawer, whose rows are set_mode in every phase (controld lifts pitch off the
+        # rest stop first) and never ask twice.
+        block = re.search(r'if \(name === "MODE"\) \{.*?\n  \}\n', HUD_JS, re.S).group()
+        self.assertNotIn("phase", block.split("const holding")[0],
+                         "the mode rows must not be gated on the phase, or the park would trap the turret")
+        self.assertIn('command: now ? null : "set_mode"', block)
+        self.assertNotIn('"danger"', block)
 
     def test_settings_rows_send_set_speed(self) -> None:
         self.assertIn('data-cmd="set_speed"', HUD_JS)

@@ -107,7 +107,7 @@ class PinnedPreviewContract(unittest.TestCase):
 
     def test_the_pane_is_pinned_and_there_is_no_toggle(self):
         from ..hud import HUD_HTML
-        self.assertIn("bottom: 112px", HUD_HTML)          # below the mode block, a constant on purpose
+        self.assertIn("bottom: 65px", HUD_HTML)           # where the mode buttons sat, a constant on purpose
         self.assertIn("left: 50%", HUD_HTML)           # the same column the mode block is in
         for gone in ("pipopen", "placePip", "pictureBox", "ResizeObserver", "pipclose"):
             self.assertNotIn(gone, HUD_HTML,

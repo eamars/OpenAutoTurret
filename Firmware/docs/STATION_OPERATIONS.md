@@ -83,7 +83,8 @@ still violate the rule and are the next work. Do not cite them as precedent.
 Before this, almost nothing in the MENU worked on this station. Pressing Park at 01:43:33 faulted the
 station within 40 ms (`velocity_loop_invalid`), and from there Recover Motors answered "unsupported"
 and Home was refused "system faulted". Only a process restart got it back. The menu now has three
-actions. Each one works from wherever it is offered, and each asks for two presses:
+actions. Each one works from wherever it is offered. Only SHUTDOWN asks for two presses (owner,
+2026-10-05; until then HOME and PARK asked twice as well):
 
 | Action | What it does | Offered from | Ends in |
 |---|---|---|---|
@@ -221,6 +222,11 @@ watch point. The owner's answers:
   - SET WATCH POINT with pitch outside its envelope (on the rest stop), or while not holding.
   - If the point stops resolving during a loss, the cycle falls back to AUTO_ROAM and says so.
 - **Fault, hold, degrade:** unchanged. SURVEILLANCE adds no guard, trip or watchdog.
+- **On the tapes** (owner, 2026-10-05): during SURVEILLANCE (and a track it will return from) a
+  pale-lemon diamond (`#fff07a`) marks the watch point on both tapes, like a quest marker. Outside
+  the camera's field of view it is pinned at the end it lies beyond, with an arrow and the angle
+  still to go, the short way round on yaw. Pale lemon so it cannot be read as the amber that marks
+  a tape end the safety layer is derating toward.
 
 **Not yet verified on the station.** Checked so far:
 - Simulator: return from a roam, follow then loss then return, the operator's return mode, and the
@@ -236,7 +242,12 @@ watch point. The owner's answers:
   - A chip that is not healthy is never folded away.
   - MODE, STATE and SAFETY left the bar, because the mode block and the safety banner already say
     them.
-- **Mode controls.** The Manual/Hold and Auto buttons and the MODE drawer stay as they were.
+- **Mode controls.** The MODE drawer only (owner, 2026-10-05). The Manual / Hold and Auto buttons
+  were removed when SURVEILLANCE arrived: Auto only ever meant AUTO_ROAM and lit up for any mode
+  but MANUAL, so it read as roaming while the station watched. Every mode is one press in the
+  drawer, MODE > MANUAL holds where the turret is, and the active row reads ACTIVE. Only SHUTDOWN
+  asks twice. (A bug fixed the same day: with nothing awaiting confirmation, the active mode's row
+  read "CONFIRM … PRESS AGAIN", because its empty command matched the empty pending one.)
 - **MENU > SETTINGS** holds:
   - The live speeds: patrol on wide, patrol on detail, and tracking. They use controld's
     `set_speed` and are bounded by each mode's maximum. They last **this session only**: a restart

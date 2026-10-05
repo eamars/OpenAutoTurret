@@ -24,7 +24,7 @@ from ..hud import HUD_CSS, HUD_GEOMETRY_JS, HUD_HTML, HUD_JS
 
 _EXPORTS = (
     "\nmodule.exports = { hudTravelTape, hudYawTapeRange, hudTravelTapeSvg, hudTickSteps, hudDegLabel,"
-    " hudUnrangedNote };\n"
+    " hudUnrangedNote, hudWatchShown };\n"
 )
 
 # The colour tokens the page passes in, mirrored so a change in the page's palette shows up here as
@@ -328,3 +328,73 @@ if __name__ == "__main__":
         self.assertTrue(got["valid"])
         self.assertFalse(got["ruler"], "with an envelope the endpoints are the soft limits")
         self.assertAlmostEqual(got["minDeg"], -90.0, places=3)
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed; the tapes cannot be executed")
+class WatchPointMarker(unittest.TestCase):
+    """SURVEILLANCE's watch point on the tapes (owner, 2026-10-05): a pale-lemon quest marker at its
+    angle inside the window, pinned at the end it lies beyond (with the angle to go) outside it, and
+    only while the station is in the SURVEILLANCE cycle."""
+
+    _node = TravelTapesExecuted._node
+    WIN = 69.3
+
+    def _tape(self, **over):
+        o = dict(YAW, windowDeg=self.WIN)
+        o.update(over)
+        return self._node("console.log(JSON.stringify(T.hudTravelTape(%s)));" % json.dumps(o))
+
+    def test_inside_the_view_the_diamond_sits_at_its_angle(self) -> None:
+        tape = self._tape(watchDeg=40.0)
+        w = tape["watch"]
+        self.assertTrue(w["inView"])
+        self.assertAlmostEqual(abs(w["pos"] - tape["marker"]), 17.6 * YAW["length"] / self.WIN, places=3)
+        self.assertEqual(w["label"], "")
+        on = self._tape(watchDeg=YAW["valueDeg"])["watch"]
+        self.assertAlmostEqual(on["pos"], tape["marker"], places=6, msg="on the point it sits on the caret")
+
+    def test_outside_the_view_it_is_pinned_at_the_end_it_lies_beyond(self) -> None:
+        tape = self._tape(watchDeg=YAW["valueDeg"] + 96.0)
+        w = tape["watch"]
+        self.assertFalse(w["inView"])
+        self.assertEqual(w["label"], "+96\u00b0")
+        ends = (YAW["x"] + 8, YAW["x"] + YAW["length"] - 8)
+        self.assertIn(round(w["pos"], 6), [round(e, 6) for e in ends])
+        near = self._tape(watchDeg=YAW["valueDeg"] + 20.0)["watch"]
+        self.assertEqual(w["side"], near["side"], "pinned on the side the point would appear")
+        other = self._tape(watchDeg=YAW["valueDeg"] - 96.0)["watch"]
+        self.assertEqual(other["side"], -w["side"])
+        self.assertEqual(other["label"], "-96\u00b0")
+
+    def test_a_continuous_yaw_counts_the_short_way_round(self) -> None:
+        w = self._tape(minDeg=-180.0, maxDeg=180.0, continuous=True, valueDeg=170.0, watchDeg=-170.0)["watch"]
+        self.assertAlmostEqual(w["deltaDeg"], 20.0, places=6)
+        self.assertTrue(w["inView"])
+
+    def test_the_marker_is_drawn_in_its_own_colour_and_only_when_asked(self) -> None:
+        tokens = dict(C_TOKENS, stroke="#05070a", watch="#fff07a")
+        svg = lambda **o: self._node("console.log(T.hudTravelTapeSvg(T.hudTravelTape(%s), %s, {title:'YAW',"
+                                     " value:'+22.4', vw:1920, vh:1080}));"
+                                     % (json.dumps(dict(YAW, windowDeg=self.WIN, **o)), json.dumps(tokens)))
+        inside = svg(watchDeg=40.0)
+        self.assertIn('class="watch"', inside)
+        self.assertIn("#fff07a", inside)
+        self.assertNotIn("watch-arrow", inside)
+        outside = svg(watchDeg=YAW["valueDeg"] + 96.0)
+        self.assertIn("watch-arrow", outside)
+        self.assertIn("+96\u00b0", outside)
+        self.assertNotIn('class="watch', svg(), "no watch point asked for, none drawn")
+        self.assertIn('watch: "#fff07a"', HUD_JS, "pale lemon: lighter and less orange than the caution amber")
+
+    def test_it_is_shown_only_in_the_surveillance_cycle(self) -> None:
+        base = {"watch_point_usable": True, "watch_yaw_rad": 0.3, "watch_pitch_rad": -0.7}
+        cases = [({"operating_mode": "SURVEILLANCE"}, True),
+                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "SURVEILLANCE"}, True),
+                 ({"operating_mode": "AUTO_TRACK", "auto_return_mode": "AUTO_ROAM"}, False),
+                 ({"operating_mode": "AUTO_ROAM"}, False),
+                 ({"operating_mode": "MANUAL"}, False),
+                 ({"operating_mode": "SURVEILLANCE", "watch_point_usable": False}, False),
+                 ({"operating_mode": "SURVEILLANCE", "watch_yaw_rad": None}, False)]
+        got = self._node("console.log(JSON.stringify(%s.map(c => T.hudWatchShown(c))));"
+                         % json.dumps([dict(base, **c) for c, _ in cases]))
+        self.assertEqual(got, [want for _, want in cases])

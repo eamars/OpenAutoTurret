@@ -312,6 +312,16 @@ function hudDockSpecs(o) {
   return keys.map((k) => ({ key: k, active: (k === open) }));
 }
 
+// The two-press rule (owner, 2026-10-05: only SHUTDOWN asks twice). A row waits for its second press
+// only if it asks for one and it is the row that was pressed: command and argument together. The key
+// used to be the bare command, and with nothing pending it was null -- which every inert row's command
+// also is, so the active mode read "CONFIRM ... PRESS AGAIN".
+function hudConfirmKey(cmd, arg) { return String(cmd || "") + "\u0000" + String(arg || ""); }
+function hudRowAwaitsConfirm(row, pending) {
+  return !!row && row.kind === "danger" && !!row.command && typeof pending === "string" &&
+    pending === hudConfirmKey(row.command, row.arg);
+}
+
 function hudDrawerActions(name, t) {
   // What this drawer offers, as commands. kind: "act" | "current" | "gated" | "stop" | "danger".
   t = t || {};
@@ -351,8 +361,7 @@ function hudDrawerActions(name, t) {
     // force is rendered as selected and sends nothing: re-issuing the current mode is a command with no
     // effect, and a control that appears to act while doing nothing is what the rest of this file is
     // paranoid about. SURVEILLANCE without a usable watch point is greyed with the reason, because
-    // controld would refuse it; SET WATCH POINT saves where the turret points now, and asks twice
-    // when it would replace a saved point, since that one outlives restarts.
+    // controld would refuse it; SET WATCH POINT saves where the turret points now, in one press.
     const rows = [["MANUAL", "MANUAL"], ["AUTO TRACK", "AUTO_TRACK"], ["AUTO ROAM", "AUTO_ROAM"],
                   ["SURVEILLANCE", "SURVEILLANCE"]]
       .map(function (pair) {
@@ -366,7 +375,7 @@ function hudDrawerActions(name, t) {
     const holding = String(t.phase || "") === "hold";
     rows.push(holding
       ? { label: "SET WATCH POINT", command: "set_watch_point", arg: "",
-          kind: t.watch_point_set ? "danger" : "act",
+          kind: "act",
           note: t.watch_point_set ? "Replace the saved point with where it points now" : "Save where it points now" }
       : { label: "SET WATCH POINT", command: null, arg: "", kind: "gated", note: "HOME FIRST" });
     return rows;
@@ -395,8 +404,9 @@ function hudDrawerActions(name, t) {
     //   HOME     recovers whatever latched (fault, drive watchdog) and runs homing; AUTO ROAM after.
     //   PARK     yaw to 0, pitch onto its rest end stop, hold there; any MODE leaves it.
     //   SHUTDOWN PARK, then both motors off; only HOME starts again.
-    // They move the turret somewhere the operator did not just point it, so they ask twice. §14 reserves
-    // red for stop and fault, so the confirm state - not colour alone - is what signals danger here.
+    // Only SHUTDOWN asks twice (owner, 2026-10-05): it switches both motors off. HOME and PARK are one
+    // press, like every mode. §14 reserves red for stop and fault, so the confirm state - not colour
+    // alone - is what signals danger here.
     const phase = String(t.phase || "");
     const rest = String(t.rest_park || "");
     const parking = rest === "moving" || rest === "touching" || rest === "lifting";
@@ -404,22 +414,22 @@ function hudDrawerActions(name, t) {
     const home = busy
       ? { kind: "gated", note: phase === "recovering" ? "RECOVERING THE DRIVES…" : "HOMING…" }
       : rest === "releasing" ? { kind: "gated", note: "SWITCHING THE MOTORS OFF…" }
-      : { kind: "danger", note: phase === "fault" ? "Recover the drives, then home both axes"
+      : { kind: "act", note: phase === "fault" ? "Recover the drives, then home both axes"
           : phase === "idle" ? "Start: home, then AUTO ROAM" : "Re-home both axes, then AUTO ROAM" };
     const homed = phase === "hold" || phase === "parked" || phase === "parking";
     const park = parking ? { kind: "gated", note: rest === "touching" ? "TOUCHING THE REST STOP…"
                                                 : rest === "lifting" ? "LEAVING THE PARK…" : "PARKING…" }
       : rest === "parked" && t.rest_park_on_stop === true ? { kind: "current", note: "PARKED · ANY MODE LEAVES" }
-      : rest === "parked" ? { kind: "danger", note: "Short of the rest stop: touch it again" }
-      : phase === "hold" ? { kind: "danger", note: "Yaw to 0, pitch onto its rest stop, hold" }
+      : rest === "parked" ? { kind: "act", note: "Short of the rest stop: touch it again" }
+      : phase === "hold" ? { kind: "act", note: "Yaw to 0, pitch onto its rest stop, hold" }
       : { kind: "gated", note: phase === "idle" ? "MOTORS OFF · HOME FIRST" : "HOME FIRST" };
     const off = rest === "releasing" ? { kind: "gated", note: "SWITCHING THE MOTORS OFF…" }
       : phase === "idle" ? { kind: "gated", note: "MOTORS ARE OFF · HOME TO START" }
       : homed && !busy ? { kind: "danger", note: "Park, then switch both motors off" }
       : { kind: "gated", note: "HOME FIRST" };
     return [
-      { label: "HOME", command: home.kind === "danger" ? "start_homing" : null, arg: "", kind: home.kind, note: home.note },
-      { label: "PARK", command: park.kind === "danger" ? "request_park" : null, arg: "", kind: park.kind, note: park.note },
+      { label: "HOME", command: home.kind === "act" ? "start_homing" : null, arg: "", kind: home.kind, note: home.note },
+      { label: "PARK", command: park.kind === "act" ? "request_park" : null, arg: "", kind: park.kind, note: park.note },
       { label: "SHUTDOWN", command: off.kind === "danger" ? "request_shutdown" : null, arg: "", kind: off.kind, note: off.note }
     ];
   }
@@ -1045,6 +1055,21 @@ function hudTravelTape(o) {
   // about, and every pitch marker collapsed onto the tape's x-coordinate. Hand arithmetic caught it
   // (expected 593.7, produced 1842.0); a test now carries that arithmetic.
   const marker = mid;   // literally always: the caret is the vehicle, the world moves
+  // SURVEILLANCE's watch point (owner, 2026-10-05), drawn like a quest marker: inside the window at its
+  // angle; outside it, pinned at the end it lies beyond with the angle still to go. A continuous axis
+  // counts the short way round, which is the way the turret turns back to it.
+  let watch = null;
+  if (Number.isFinite(o.watchDeg) && Number.isFinite(o.valueDeg)) {
+    let delta = o.watchDeg - o.valueDeg;
+    if (continuous) delta = ((delta + 180) % 360 + 360) % 360 - 180;
+    const pos = mid + delta * slope;
+    const inset = 8;
+    const inView = pos >= lo + inset && pos <= hi - inset;
+    const side = pos < mid ? -1 : 1;   // which screen end, not which sign of degrees
+    watch = { deltaDeg: delta, inView: inView, side: side,
+              pos: inView ? pos : (side < 0 ? lo + inset : hi - inset),
+              label: inView ? "" : hudDegLabel(Math.round(delta), true) };
+  }
   return {
     horizontal: !!o.horizontal, x: o.x, y: o.y, length: o.length,
     x1: o.horizontal ? o.x + o.length : o.x, y1: o.horizontal ? o.y : o.y + o.length,
@@ -1052,11 +1077,21 @@ function hudTravelTape(o) {
     centreDeg: centreDeg, seams: seams, cyclic: true,
     windowDeg: windowDeg, windowSource: windowSource,
     valueDeg: o.valueDeg,
+    watch: watch,
     // §6.3: the value box is a dark translucent fill with a thin green outline. Sized for
     // "PITCH -12.3 deg" at the label size, and always placed where it cannot leave the viewport.
     box: { w: 96, h: 34, x: 0, y: 0 },
     note: ""
   };
+}
+
+function hudWatchShown(t) {
+  // SURVEILLANCE's watch point is on the tapes while the station is in that cycle: watching or
+  // returning, or following a target it will return from. Never in MANUAL or AUTO_ROAM.
+  t = t || {};
+  const mode = String(t.operating_mode || "");
+  return t.watch_point_usable === true && Number.isFinite(t.watch_yaw_rad) && Number.isFinite(t.watch_pitch_rad) &&
+    (mode === "SURVEILLANCE" || (mode === "AUTO_TRACK" && t.auto_return_mode === "SURVEILLANCE"));
 }
 
 function hudDegLabel(deg, withDegree) {
@@ -1110,6 +1145,27 @@ function hudTravelTapeSvg(t, C, opts) {
     : '<path d="M ' + (t.x - 2) + ' ' + mk + ' L ' + (t.x - 12) + ' ' + (mk - 6) + ' L ' +
       (t.x - 12) + ' ' + (mk + 6) + ' Z" fill="' + C.green + '" stroke="' + C.stroke +
       '" stroke-width="1.4" stroke-linejoin="round"/>');
+  // The watch point's diamond sits on the spine; outside the window an arrow beyond it points the way
+  // to go and the angle says how far. Drawn after the caret, so on the point both stay visible.
+  if (t.watch) {
+    const W = C.watch || "#fff07a", r = 7, p = t.watch.pos;
+    const cx = w ? p : t.x, cy = w ? t.y : p;
+    parts.push('<path class="watch" d="M ' + cx + ' ' + (cy - r) + ' L ' + (cx + r) + ' ' + cy + ' L ' + cx +
+               ' ' + (cy + r) + ' L ' + (cx - r) + ' ' + cy + ' Z" fill="' + W + '" stroke="' + C.stroke +
+               '" stroke-width="1.4" stroke-linejoin="round"/>');
+    if (!t.watch.inView) {
+      const s = t.watch.side, a = r + 2, L = 7;
+      parts.push('<path class="watch-arrow" d="' + (w
+        ? 'M ' + (cx + s * (a + L)) + ' ' + cy + ' L ' + (cx + s * a) + ' ' + (cy - 5) + ' L ' + (cx + s * a) + ' ' + (cy + 5)
+        : 'M ' + cx + ' ' + (cy + s * (a + L)) + ' L ' + (cx - 5) + ' ' + (cy + s * a) + ' L ' + (cx + 5) + ' ' + (cy + s * a)) +
+        ' Z" fill="' + W + '" stroke="' + C.stroke + '" stroke-width="1"/>');
+      parts.push('<text class="tlbl watch-label" ' +
+        (w ? 'x="' + cx + '" y="' + (cy + 24) + '" text-anchor="middle"'
+           : 'x="' + (cx - 14) + '" y="' + (cy + 4) + '" text-anchor="end"') +
+        ' fill="' + W + '" stroke="' + C.stroke + '" stroke-width="2.5" paint-order="stroke">' +
+        t.watch.label + '</text>');
+    }
+  }
   // The value box sits against the caret on the picture side of its tape, for both tapes (owner,
   // 2026-10-02: the pitch label belongs where the yaw label is, not at the far end of the tape).
   const bx = w ? Math.max(4, Math.min(mk - 48, (opts && opts.vw ? opts.vw - 100 : mk)))
@@ -1232,7 +1288,10 @@ const C = {
   stroke: "#05070a", text: "#c5d0c5", text_dim: "#8c998c",
   green: "#95f58b", dim: "rgba(149,245,139,.56)", faint: "rgba(149,245,139,.22)",
   amber: "#f2b329", red: "#ff5d5d", white: "#edf2eb", black: "rgba(3,6,5,.80)",
-  line: "rgba(230,245,230,.24)"
+  line: "rgba(230,245,230,.24)",
+  // SURVEILLANCE's watch point (owner, 2026-10-05): pale lemon, lighter and less orange than the
+  // amber that means caution, so a glance cannot read "watch point" as "near a limit".
+  watch: "#fff07a"
 };
 
 let lastTelemetry = null;
@@ -1395,13 +1454,17 @@ function render(t) {
   // highlight pointing at the wrong end of the tape is worse than no highlight at all.
   const dEdge = String(t.safety_action || "").toUpperCase() === "DERATE" ? hudSafetyEdge(t) : null;
   const yawRange = hudYawTapeRange(t);
+  // The watch point is marked only during SURVEILLANCE (owner, 2026-10-05): the mode itself, and the
+  // track it hands off to, which returns there.
+  const watchOn = hudWatchShown(t);
   const yawTape = hudTravelTape({
     horizontal: true, x: vw * (1 - 0.575) / 2, y: vh * 0.125, length: vw * 0.575,
     minDeg: yawRange.minDeg, maxDeg: yawRange.maxDeg,
     markDeg: (dEdge && dEdge.axis === "YAW")
       ? (dEdge.side === "MIN" ? yawRange.minDeg : yawRange.maxDeg) : undefined,
     valueDeg: deg(t.q_yaw_rad), windowDeg: hudViewFov(t.effective_hfov_deg, view.k),
-    valid: yawRange.valid, continuous: yawRange.continuous
+    valid: yawRange.valid, continuous: yawRange.continuous,
+    watchDeg: watchOn ? deg(t.watch_yaw_rad) : undefined
   });
   // A continuous yaw reads as an angle, not as a count of turns since homing.
   const yawShown = yawRange.continuous ? hudWrapDeg(deg(t.q_yaw_rad)) : deg(t.q_yaw_rad);
@@ -1415,7 +1478,8 @@ function render(t) {
       ? (dEdge.side === "MIN" ? deg(hudPitch(t, t.q_soft_min_pitch_rad)) : deg(hudPitch(t, t.q_soft_max_pitch_rad)))
       : undefined,
     valueDeg: deg(hudPitch(t, t.q_pitch_rad)), windowDeg: hudViewFov(t.effective_vfov_deg, view.k),
-    valid: t.soft_limits_valid === true
+    valid: t.soft_limits_valid === true,
+    watchDeg: watchOn ? deg(hudPitch(t, t.watch_pitch_rad)) : undefined
   });
   // §11: the FOR inset, drawn from the daemon's own block. The coordinate_frame check is not
   // ceremony - if the server ever starts sending a polygon in a different frame, drawing it as joint
@@ -1780,7 +1844,7 @@ async function pollHealth() {
 const dock = $("dock"), drawer = $("drawer");
 let drawerOpen = null;
 let lastAck = { text: "", kind: "" };
-let pendingConfirm = null;    // label awaiting a second press; see the two-press rule below
+let pendingConfirm = null;    // hudConfirmKey of the row awaiting a second press; see the two-press rule
 let pendingAck = null;        // {command, afterSeq, at}: the published ack this command is waiting on
 
 // Line icons, drawn rather than filled: §13.1 asks for a green line icon and explicitly rules out the
@@ -1841,7 +1905,7 @@ function renderDrawer() {
       const inert = a.command === null || a.kind === "current" || a.kind === "gated";
       const cls = "drow " + (a.kind === "stop" ? "stop" : a.kind === "danger" ? "danger" :
                              a.kind === "gated" ? "gated" : a.kind === "current" ? "on" : "");
-      const waiting = pendingConfirm === a.command;
+      const waiting = hudRowAwaitsConfirm(a, pendingConfirm);
       return '<button type="button" class="' + cls + (waiting ? " confirm" : "") + '" data-cmd="' +
              escapeMarkup(a.command || "") + '" data-arg="' + escapeMarkup(a.arg || "") + '" data-kind="' + a.kind + '"' +
              (inert ? " disabled" : "") + '><span class="rl">' +
@@ -1968,12 +2032,6 @@ function renderManualPad(t) {
   const hidden = !(t && t.operating_mode === "MANUAL" && t.phase === "hold");
   if (pad.hidden !== hidden) { pad.hidden = hidden; renderDock(); }
   const enabled = padReady(t);
-  $("manual-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode === "MANUAL"));
-  $("auto-mode").setAttribute("aria-pressed", String(!!t && t.operating_mode !== "MANUAL"));
-  // Park is a scripted move, not a place to be stuck (owner, 2026-10-03): from the park pose, Auto,
-  // Manual and Shutdown are each one press. controld takes pitch off the stop before anything moves.
-  $("auto-mode").disabled = !(t && (t.phase === "hold" || t.phase === "parked") && t.soft_limits_valid &&
-                              !t.telemetry_stale);
   pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
   // Releasing an arrow is the stop. The centre is the pace: the camera's, or outlined when the
   // operator pinned it.
@@ -2024,15 +2082,8 @@ $("pad-pace").addEventListener("click", () => {
   padPaceOverride = next === camera ? null : next;   // back to the camera's pace un-pins it
   renderManualPad(lastTelemetry);
 });
-// Manual / Hold is STOP MOTION everywhere except on the park pose, where stopping is already done and
-// the press means "manual": select MANUAL, which brings pitch off the rest stop to the ready pose (as
-// after homing) and puts the DPAD back.
-$("manual-mode").addEventListener("click", () => {
-  stopPadJog();
-  if (lastTelemetry && lastTelemetry.phase === "parked") sendCommand("set_mode", "MANUAL");
-  else sendCommand("stop_motion", "");
-});
-$("auto-mode").addEventListener("click", () => { stopPadJog(); sendCommand("set_mode", "AUTO_ROAM"); });
+// The Manual / Hold and Auto buttons are gone (owner, 2026-10-05): every mode, SURVEILLANCE included,
+// is one press in the MODE drawer, and MODE > MANUAL holds where the turret is.
 setInterval(() => renderManualPad(lastTelemetry), 100);
 
 dock.addEventListener("click", (e) => {
@@ -2052,7 +2103,8 @@ drawer.addEventListener("click", (e) => {
     // changes and the row says PRESS AGAIN, so the waiting state is on screen, not in someone's memory.
     // Match a stable command, since the displayed label changes to CONFIRM …
     // after the first press. Comparing that label made confirmation impossible.
-    if (pendingConfirm !== cmd) { pendingConfirm = cmd; renderDrawer(); return; }
+    const key = hudConfirmKey(cmd, b.getAttribute("data-arg") || "");
+    if (pendingConfirm !== key) { pendingConfirm = key; renderDrawer(); return; }
   }
   sendCommand(cmd, b.getAttribute("data-arg") || "");
 });
@@ -2230,14 +2282,6 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #manual-pad button:disabled { opacity:.3; }
 #manual-pad #pad-pace { font-size:10px; }
 #manual-pad #pad-pace[aria-pressed="true"] { border-color:var(--hud-white); color:var(--hud-white); }
-#mode-controls { position:absolute; bottom:65px; left:50%; transform:translateX(-50%);
-  display:flex; gap:8px; z-index:30; }
-/* An inactive control is not a state readout: neutral until it is the mode you are in. */
-#mode-controls button { padding:10px 16px; background:rgba(3,6,5,.9); border:1px solid var(--hud-line);
-  border-radius:7px; color:var(--hud-text); font:13px var(--hud-mono); cursor:pointer; }
-#mode-controls button:hover { border-color:var(--hud-text-dim); color:var(--hud-white); }
-#mode-controls button[aria-pressed="true"] { border-color:var(--hud-green); color:var(--hud-green); }
-#mode-controls button:disabled { opacity:.35; cursor:default; }
 .dockbtn { display:flex; flex-direction:column; align-items:center; gap:3px; width:46px;
            padding:5px 2px 4px; background:rgba(3,6,5,.62); border:1px solid rgba(230,245,230,.22);
            border-radius:2px; color:#edf2eb; font:500 8.5px/1 var(--hud-mono); letter-spacing:.06em;
@@ -2325,12 +2369,12 @@ HUD_HTML = """<!DOCTYPE html>
        window or the frame geometry changed, which the owner correctly called "还乱跑". The trade is
        accepted on purpose: at extreme ratios the pane sits over a black bar instead of over the
        picture; what it must never do is cover a control. */
-    /* Centred horizontally, low, sitting directly above the operating-mode buttons: #mode-controls is
-       anchored at bottom:65px and is ~34px tall, so 112px puts the pane's bottom edge clear of them
-       at any window width. Still constants -- no measurement at run time, which is what made the pane
-       drift before -- and still under the chrome layer, so if a ratio ever gets tight the buttons win
-       the overlap and the preview is the thing that gets covered. */
-    #pip { position: absolute; left: 50%; bottom: 112px; width: 280px; transform: translateX(-50%);
+    /* Centred horizontally, low, where the operating-mode buttons sat until they were removed
+       (owner, 2026-10-05): 65px is the line they were anchored to, clear of the status bar. Still
+       constants -- no measurement at run time, which is what made the pane drift before -- and still
+       under the chrome layer, so if a ratio ever gets tight a control wins the overlap and the
+       preview is the thing that gets covered. */
+    #pip { position: absolute; left: 50%; bottom: 65px; width: 280px; transform: translateX(-50%);
            border: 1px solid #444; background: #000;
            /* Below the chrome layer (every control sits at z-index 20), above the picture. The owner's
               ruling of 2026-09-29 after the pane covered the D-pad: keep the pinned position and let
@@ -2433,10 +2477,6 @@ HUD_HTML = """<!DOCTYPE html>
        painted geometry. They come last in document order, which on this page IS the z-order (§18: dock
        30, drawer 40); the z-index in the CSS states it rather than relying on it. -->
   <div id="dock" role="toolbar" aria-label="context controls"></div>
-  <div id="mode-controls" role="group" aria-label="Operating mode">
-    <button id="manual-mode" type="button">Manual / Hold</button>
-    <button id="auto-mode" type="button">Auto</button>
-  </div>
   <div id="manual-pad" hidden role="group" aria-label="Manual direction pad">
     <button data-direction="up-left" aria-label="Aim camera up and left">↖</button><button data-direction="up" aria-label="Aim camera up">↑</button><button data-direction="up-right" aria-label="Aim camera up and right">↗</button>
     <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-pace" type="button" aria-pressed="false" aria-label="Jog pace">COARSE</button><button data-direction="right" aria-label="Aim camera right">→</button>

@@ -47,7 +47,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self._geo = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False)
         self._geo.write(HUD_GEOMETRY_JS +
                         "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows,"
-                        " otaJogForArrow, otaAxisArrow };\n")
+                        " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -143,14 +143,38 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                                     "watch_point_set": True, "watch_point_usable": True})
         self.assertEqual([r for r in ready if r["label"] == "SURVEILLANCE"][0]["command"], "set_mode")
 
-    def test_set_watch_point_saves_here_and_asks_twice_only_to_replace_a_saved_one(self) -> None:
+    def test_no_row_asks_to_be_confirmed_until_it_has_been_pressed_once(self) -> None:
+        # 2026-10-05: with nothing pending the old key was null, which is also every inert row's
+        # command, so the active mode read "CONFIRM ... PRESS AGAIN".
+        rows = self._rows("MODE", {"operating_mode": "SURVEILLANCE", "phase": "hold",
+                                   "watch_point_set": True, "watch_point_usable": True}) + \
+            self._rows("MENU", {"phase": "hold"})
+        got = self._node("const rows = %s; console.log(JSON.stringify(["
+                         "rows.map(r => T.hudRowAwaitsConfirm(r, null)),"
+                         "rows.map(r => T.hudRowAwaitsConfirm(r, T.hudConfirmKey('request_shutdown', '')))]));"
+                         % json.dumps(rows))
+        self.assertEqual(got[0], [False] * len(rows), "nothing pressed, nothing waiting")
+        self.assertEqual([r["label"] for r, w in zip(rows, got[1]) if w], ["SHUTDOWN"],
+                         "only the row that was pressed, and only one that asks")
+        active = [r for r in rows if r["label"] == "SURVEILLANCE"][0]
+        self.assertEqual((active["kind"], active["note"]), ("current", "ACTIVE"))
+
+    def test_the_quick_mode_buttons_are_gone(self) -> None:
+        # Owner, 2026-10-05: modes are switched in the MODE drawer only.
+        for marker in ('id="mode-controls"', 'id="manual-mode"', 'id="auto-mode"'):
+            self.assertNotIn(marker, HUD_HTML)
+        self.assertNotIn('$("manual-mode")', HUD_JS)
+        self.assertNotIn('$("auto-mode")', HUD_JS)
+
+    def test_set_watch_point_saves_here_in_one_press(self) -> None:
         first = [r for r in self._rows("MODE", {"operating_mode": "MANUAL", "phase": "hold"})
                  if r["label"] == "SET WATCH POINT"][0]
         self.assertEqual((first["command"], first["arg"], first["kind"]), ("set_watch_point", "", "act"))
         again = [r for r in self._rows("MODE", {"operating_mode": "MANUAL", "phase": "hold",
                                                 "watch_point_set": True})
                  if r["label"] == "SET WATCH POINT"][0]
-        self.assertEqual(again["kind"], "danger", "a saved point outlives restarts: replacing it confirms")
+        self.assertEqual((again["command"], again["kind"]), ("set_watch_point", "act"),
+                         "owner, 2026-10-05: only SHUTDOWN asks twice")
         unhomed = [r for r in self._rows("MODE", {"operating_mode": "MANUAL", "phase": "idle"})
                    if r["label"] == "SET WATCH POINT"][0]
         self.assertIsNone(unhomed["command"])
@@ -223,7 +247,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
     def test_home_is_the_way_out_of_a_fault_and_of_motors_off(self) -> None:
         for phase in ("fault", "idle", "hold", "parked"):
             home = self._menu(phase=phase)["HOME"]
-            self.assertEqual((home["kind"], home["command"]), ("danger", "start_homing"), phase)
+            self.assertEqual((home["kind"], home["command"]), ("act", "start_homing"), phase)
         self.assertIn("Recover", self._menu(phase="fault")["HOME"]["note"])
 
     def test_home_is_visibly_busy_while_homing_or_recovering(self) -> None:
@@ -254,10 +278,14 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         releasing = self._menu(phase="parking", rest_park="releasing")
         self.assertEqual([r["command"] for r in releasing.values()], [None, None, None])
 
-    def test_supervisory_actions_need_two_presses(self) -> None:
-        rows = self._rows("MENU", {"phase": "hold"})
+    def test_only_shutdown_needs_two_presses(self) -> None:
+        # Owner, 2026-10-05: SHUTDOWN switches both motors off and asks twice; HOME, PARK and every
+        # mode are one press.
+        rows = self._rows("MENU", {"phase": "hold"}) + \
+            self._rows("MODE", {"operating_mode": "MANUAL", "phase": "hold", "watch_point_set": True,
+                                "watch_point_usable": True})
         danger = [r for r in rows if r["kind"] == "danger"]
-        self.assertEqual({r["command"] for r in danger}, {"start_homing", "request_park", "request_shutdown"})
+        self.assertEqual({r["command"] for r in danger}, {"request_shutdown"})
         self.assertIn("two-press", HUD_JS.lower().replace("two press", "two-press"),
                       "the handler's confirm path must exist, not just the data")
 
