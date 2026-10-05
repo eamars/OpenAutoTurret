@@ -8,7 +8,7 @@
   "sensor_mode_id": "main 1920x1080, lores 640x360 inference, orientation rotate_180",
   "image_width_px": 1920,
   "image_height_px": 1080,
-  "calibration_revision": "calibration/camera_intrinsics.yaml (measured 2026-09-04, fx 1389, fy 1467) + camera_extrinsics.yaml (2026-09-27)",
+  "calibration_revision": "calibration/camera_intrinsics.yaml (measured 2026-09-04, fx 1389, fy 1467) + camera_extrinsics.yaml (refit 2026-10-05)",
   "anchor_policy_id": "turret_mixed.yaml tracking.aim box_fraction 0.50 / 0.22",
   "framing_pixel": [960, 540]
  },

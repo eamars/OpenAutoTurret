@@ -361,6 +361,25 @@ timing.
     3°/s (slow enough never to pass the subject), until within 0.25°. Replayed on human-3/4/5:
     more than 1° off while still went from 37/82/92% to 0.5/3.3/0%; passes 0/2 (2.5°)/0. The
     band-only replay of human-5 matches its recording.
+- **The 2.2 Hz yaw oscillation on a still person: the camera extrinsic (2026-10-05).** The
+  owner saw yaw swing with the YOLO prediction on a stationary subject. Measured: a 2.2 Hz limit
+  cycle, ~3° peak to peak; the world estimate of a still person moved with the turret.
+  - **Cause.** `calibration/camera_extrinsics.yaml` still carried the old mechanism's provisional
+    0.860 rad pitch offset (the file asked for a refit). It was ~42° wrong: pixels became world
+    azimuth through the wrong cos(elevation), 39% of every yaw motion leaked into the target
+    estimate, and the vision loop ran ~1.4× too stiff. A stiff box anchor (a plant) still held;
+    a person's head keypoints, noisier and blurred by the night's 33 ms exposure, drove the cycle.
+  - **Fix.** Refit from a stationary plant (`stationary_trial.py`, the
+    `hailo_yolov8n_objects` profile, four AUTO_TRACK slews): rot_x(−41.77°), spread 0.24°, offset
+    0.131 rad. The trial is the method for any future refit: a target that cannot sway, slewed
+    onto from both sides; a correct extrinsic holds its world azimuth still.
+  - **Ruled out by measurement**, so nobody re-chases them: controller load (5.00 ms ticks, p99
+    5.01), detection timing (±10 ms), base twist or mount play (the IMU's world yaw rate equals
+    the encoder's, ratio 1.0, zero lag), and encoder crosstalk (too small; the tracking history
+    now removes it anyway, with the identified table).
+  - **Evidence:** `tracking-trace.jsonl` lines carry `obs` (the measurement as the estimator
+    received it) and visiond writes `perception-trace.jsonl` (anchor and its source); they join
+    by `sensor_ns`. The class names cross the wire truncated to 11 characters ("potted plan").
 - **Station facts for ADR-003 (2026-10-02).**
   - The camera timestamp clock (libcamera's CLOCK_BOOTTIME) equals CLOCK_MONOTONIC to within 1.2
     µs; there has been no suspend since boot.

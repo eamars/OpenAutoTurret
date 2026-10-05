@@ -21,8 +21,21 @@
 # parallax, and lens distortion remain unmeasured. Translation below is unused
 # by LOS. Historical old-mechanism fit: docs/archive/partially-implemented/validation/automatic_service_validation_2026_09_06.md.
 #
+# REFIT 2026-10-05 (station, stationary target): the inherited 0.860 rad offset above was wrong
+# by ~42 deg. A level potted plant computed at +42 deg elevation, so pixels were turned into world
+# azimuth with the wrong cos(elevation) and 39 % of every yaw motion leaked into the target
+# estimate (k 1.39-1.42 in four reacquisition slews, identical) -- the vision loop ran ~1.4x too
+# stiff and a person's keypoint noise drove a 2.2 Hz yaw limit cycle. Fit: the one rotation about
+# camera-right (= the pitch axis) that holds a stationary target's world azimuth still through
+# four 8-14 deg AUTO_TRACK slews (tools/tracking/stationary_trial.py, potted plant, generic
+# YOLOv8n): R_P_C(2026-10-05) = R_P_C(2026-09-27) * rot_x(-41.765 deg), per-slew -41.54..-42.13,
+# std 0.24 deg. Offset now 0.1311 rad. Slew azimuth variance /27; the plant reads +0.3 deg
+# elevation (it sits at camera height) and a person at the desk -1.5 deg. Lens scale checked in
+# the same session: a 10 deg yaw step moves the image 230-245 px against 245 predicted (fx 1389).
+# Still unmeasured: roll about the optical axis, translation, distortion.
+#
 # Format: t_P_C key followed by three row-major rotation rows.
 t_P_C=0 0 0
-0 -0.6524374681640519 0.757842562895277
+0 -0.9914233940930259 0.1306891489185867
 -1 0 0
-0 -0.757842562895277 -0.6524374681640519
+0 -0.1306891489185867 -0.9914233940930259
