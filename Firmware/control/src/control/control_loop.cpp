@@ -6462,13 +6462,17 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
   const auto& g = r.los;
   const auto& d = tracking_->core()->estimator().diagnostics();
   const auto& x = tracking_->core()->estimator().state();
+  // obs: [sensor_ns, t_o_ns, u, v, yaw(t_o), pitch(t_o), az, el, accepted] of the last frame the
+  // estimator saw; joined offline with visiond's perception-trace.jsonl by sensor_ns.
+  const auto& z = tracking_->core()->last_observation();
   tracking_trace_->info(
       "{{\"t_ns\":{},\"state_ns\":{},\"age_s\":{:.4f},\"est\":[{:.6f},{:.6f},{:.5f},{:.5f}],"
       "\"sig_w\":[{:.5f},{:.5f}],\"goal_los\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"ffw\":[{:.3f},{:.3f}],\"fade\":{:.3f},"
       "\"valid\":[{},{}],\"goal_q\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"goal_valid\":{},"
       "\"ref\":[{:.6f},{:.6f},{:.5f},{:.5f},{:.4f},{:.4f},{:.3f},{:.3f}],\"flags\":[{},{}],"
       "\"q\":[{:.6f},{:.6f}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
-      "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"rate_limited\":{}}}",
+      "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"rate_limited\":{},"
+      "\"obs\":[{},{},{:.2f},{:.2f},{:.6f},{:.6f},{:.6f},{:.6f},{}]}}",
       now_ns, g.state_ns, g.age_s, x[0].theta, x[1].theta, x[0].omega, x[1].omega,
       std::sqrt(std::max(0.0, x[0].vv)), std::sqrt(std::max(0.0, x[1].vv)),
       g.theta[0], g.theta[1], g.omega[0], g.omega[1], g.ff_weight[0], g.ff_weight[1], g.fade,
@@ -6477,6 +6481,7 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       r.reference.q[0], r.reference.q[1], r.reference.v[0], r.reference.v[1], r.reference.a[0], r.reference.a[1],
       r.reference.j[0], r.reference.j[1], r.reference.flags[0], r.reference.flags[1],
       r.q_measured[0], r.q_measured[1], r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
-      d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.rate_limited);
+      d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.rate_limited,
+      z.sensor_ns, z.t_ns, z.u, z.v, z.yaw, z.pitch, z.az, z.el, z.accepted ? 1 : 0);
 }
 }  // namespace ota

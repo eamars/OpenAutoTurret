@@ -44,7 +44,9 @@ bool Tracker::observe(const PixelObservation& z,double yaw,double pitch) {
   const double su=z.sigma_u>0?z.sigma_u:p_.pixel_sigma, sv=z.sigma_v>0?z.sigma_v:p_.pixel_sigma;
   const auto variance=geo::pixel_los_variance(camera_,kinematics_,yaw,pitch,z.u,z.v,su,sv);
   o.var_az=variance[0]; o.var_el=variance[1];
-  return estimator_.update(o);
+  const bool accepted=estimator_.update(o);
+  last_observation_={z.sensor_ns,o.t_ns,z.u,z.v,yaw,pitch,o.az,o.el,accepted};
+  return accepted;
 }
 
 JointGoal Tracker::joint_goal(const LosGoal& g,const std::array<double,2>& seed) const {

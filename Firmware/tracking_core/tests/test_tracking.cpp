@@ -307,6 +307,10 @@ void tracker_removes_camera_rotation_once() {
     PixelObservation z; z.sensor_ns=int64_t(t*kS); z.u=u; z.v=v; z.identity=7;
     // exposure 0, so t_o = sensor time and the pose is the pose at t (exact).
     tr.observe(z,yaw,pitch);
+    const auto& o=tr.last_observation();
+    check(o.sensor_ns==z.sensor_ns && o.t_ns==tr.observation_time(z) && o.u==u && o.v==v && o.yaw==yaw &&
+          o.pitch==pitch && o.accepted,"the trace sees the observation exactly as the estimator got it");
+    check(std::abs(o.az-target[0])<1e-6 && std::abs(o.el-target[1])<1e-6,"and its LOS is the subject's");
   }
   const auto& x=tr.estimator().state();
   check(std::abs(x[0].omega)<0.002 && std::abs(x[1].omega)<0.002,"stationary subject: base rate ~0 while the camera turns");

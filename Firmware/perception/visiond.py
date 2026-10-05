@@ -590,7 +590,27 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         events.close()
 
 
-def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False) -> bool:
+_observation_trace = None
+
+
+def _trace_observation(observation, metadata) -> None:
+    """Append the published measurement to OTA_PERCEPTION_TRACE (see observation_trace.py)."""
+    global _observation_trace
+    if _observation_trace is None:
+        path = os.environ.get("OTA_PERCEPTION_TRACE", "")
+        if not path:
+            return
+        from .observation_trace import ObservationTrace
+        try:
+            _observation_trace = ObservationTrace(path)
+        except OSError as exc:
+            print(f"visiond: perception trace disabled: {exc}", file=sys.stderr)
+            os.environ["OTA_PERCEPTION_TRACE"] = ""
+            return
+    _observation_trace.record(observation, metadata)
+
+
+def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False, metadata=None) -> bool:
     """One measurement authority per frame, shared by live and offline daemon runs."""
     if publisher is None or outcome.track_set is None:
         return False
@@ -598,7 +618,10 @@ def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False
     if not legacy:
         if outcome.observation is None:
             return False
-        return publisher.send(encode_perception_frame(track_set, outcome.observation))
+        sent = publisher.send(encode_perception_frame(track_set, outcome.observation))
+        if sent:
+            _trace_observation(outcome.observation, metadata)
+        return sent
     return publisher.send(encode_track_set(
         track_set.tracks, frame_sequence=track_set.frame_sequence,
         sensor_timestamp_ns=track_set.sensor_timestamp_ns,
@@ -856,7 +879,7 @@ def _start_detail_inference(detail, switch, pipeline, *, wire_publisher=None, le
                     frame.inference_image, frame.metadata, frame_sequence=frame.frame_sequence,
                     sensor_timestamp_ns=frame.sensor_timestamp_ns, camera_id=ident.id)
                 if wire_publisher is not None and outcome.stage != 'inference_pending':
-                    _publish_wire(outcome, wire_publisher, legacy=legacy)
+                    _publish_wire(outcome, wire_publisher, legacy=legacy, metadata=frame.metadata)
             return outcome
         except Exception as exc:                                              # noqa: BLE001
             # A worker that dies leaves the main display on a camera nobody infers: it stays
@@ -961,8 +984,8 @@ def _run_camera(args: argparse.Namespace, pipeline: PerceptionPipeline, adapter:
                             sensor_timestamp_ns=frame.sensor_timestamp_ns, camera_id=_ident.id,
                             capture_started_ns=frame.metadata_receive_ns)
                         if wire_publisher is not None and outcome.stage != 'inference_pending':
-                            if not _publish_wire(outcome, wire_publisher,
-                                                 legacy=args.legacy_track_wire) and not args.quiet:
+                            if not _publish_wire(outcome, wire_publisher, legacy=args.legacy_track_wire,
+                                                 metadata=frame.metadata) and not args.quiet:
                                 print("visiond: TrackSet publish failed", file=sys.stderr)
             if not active:
                 # The detail camera is on the main display: this one is the PIP, display only.

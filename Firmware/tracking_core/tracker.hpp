@@ -46,6 +46,16 @@ struct PixelObservation {
   uint64_t identity=0;           // selected subject and generation; a change starts a new subject
 };
 
+// The last pixel observation as the estimator received it: enough to rebuild the world LOS offline
+// and to see whether turret motion leaks into it (station, 2026-10-05: a 2.2 Hz yaw limit cycle).
+struct ObservationRecord {
+  int64_t sensor_ns=0, t_ns=0;   // SensorTimestamp and the optical time t_o it was stamped with
+  double u=0, v=0;               // aim pixel, tracker frame
+  double yaw=0, pitch=0;         // joint angles interpolated at t_o
+  double az=0, el=0;             // the base-frame LOS handed to the estimator
+  bool accepted=false;
+};
+
 struct TickRecord {
   int64_t t_ns=0;
   LosGoal los{};
@@ -76,6 +86,7 @@ class Tracker {
   TrackerParameters& parameters() { return p_; }
   const TrackerParameters& parameters() const { return p_; }
   uint64_t identity_changes() const { return identity_changes_; }
+  const ObservationRecord& last_observation() const { return last_observation_; }
  private:
   TrackerParameters p_;
   geo::TurretKinematics kinematics_;
@@ -86,5 +97,6 @@ class Tracker {
   Level1Generator level1_;
   bool ok_=false, have_identity_=false;
   uint64_t identity_=0, identity_changes_=0;
+  ObservationRecord last_observation_{};
 };
 }

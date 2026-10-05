@@ -645,6 +645,7 @@ fi
 export OTA_STATE_DIR
 # ADR-003 D17: controld's per-tick tracking record (one JSON line per Level-1 tick while tracking).
 export OTA_TRACKING_TRACE="$RUN/tracking-trace.jsonl"
+export OTA_PERCEPTION_TRACE="$RUN/perception-trace.jsonl"   # joins the tracking trace by sensor_ns
 export OTA_WEB_PORT="${OTA_WEB_PORT:-8080}"
 export OTA_WEB_HOST="${OTA_WEB_HOST:-0.0.0.0}"
 # Scheduling (owner ruling 2026-10-03; docs/operations/os-setup.md). Real time belongs to threads,
