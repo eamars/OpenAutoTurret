@@ -1078,6 +1078,7 @@ bool ControlLoop::restore_retained_homing(const std::array<AxisLogicalModel, 2>&
   }
   models_=models; limits_=limits; homed_=true; at_ready_=true; phase_=Phase::Hold;
   pitch_homed_ = true;
+  place_extrinsic_in_session();
   return true;
 }
 
@@ -1094,6 +1095,10 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   }
   if (!position_ready()) {
     err = "cannot enable tracking: pitch homing/session yaw reference incomplete";
+    return false;
+  }
+  if (!extrinsic_session_error_.empty()) {
+    err = extrinsic_session_error_;
     return false;
   }
   // §36/§49: the SearchPlanner requires its yaw bounds to be STRICTLY inside
@@ -1174,6 +1179,30 @@ void ControlLoop::feed_measurement(const vision::TargetMeasurement& m) {
   has_pending_measurement_ = true;
 }
 
+void ControlLoop::place_extrinsic_in_session() {
+  // A homed-relative extrinsic: R_y(q_raw) R_PC(session) == R_y(q_raw - raw_low) R_PC(homed), so
+  // R_PC(session) = R_y(-raw_low) R_PC(homed) -- exact for any power-up, nothing else changes frame.
+  extrinsic_session_error_.clear();
+  if (!tracking_cfg_.kinematics.pitch_from_homed_low) return;
+  tracking_cfg_.kinematics.R_PC = extrinsic_R_PC_;
+  const auto& pm = models_[ix(AxisId::Pitch)];
+  if (!pitch_homed_ || !pm.has_reference) {
+    extrinsic_session_error_ = "the camera extrinsic is relative to the homed pitch stop: home first";
+    return;
+  }
+  if (pm.direction_sign != 1 || pm.q_reference_logical_deg != 0.0 || !std::isfinite(pm.q_raw_reference_rad)) {
+    extrinsic_session_error_ = "the camera extrinsic is relative to the homed pitch low stop, but this "
+                               "homing measured pitch the other way round; refit the extrinsic";
+    spdlog::error("{}", extrinsic_session_error_);
+    return;
+  }
+  auto homed = tracking_cfg_.kinematics;
+  homed.R_PC = extrinsic_R_PC_;
+  tracking_cfg_.kinematics.R_PC = homed.placed_at_pitch_stop(pm.q_raw_reference_rad).R_PC;
+  spdlog::info("camera extrinsic placed in this power-up's pitch frame: homed low stop at {:+.4f} rad raw",
+               pm.q_raw_reference_rad);
+}
+
 bool ControlLoop::finalize_homing() {
   const int axis_count = backend_->supports_continuous_yaw() ? 1 : kAxisCount;
   for (int i = 0; i < axis_count; ++i) {
@@ -1188,6 +1217,7 @@ bool ControlLoop::finalize_homing() {
     ready_raw_[i] = models_[i].logical_to_raw_rad(0.5 * (ll + lh));
   }
   pitch_homed_ = true;
+  place_extrinsic_in_session();
   if (backend_->supports_continuous_yaw()) {
     if (!yaw_session_reference_valid_) return false;
     ready_raw_[ix(AxisId::Yaw)] = yaw_session_reference_rad_;

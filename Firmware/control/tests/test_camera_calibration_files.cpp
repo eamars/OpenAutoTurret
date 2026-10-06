@@ -103,6 +103,23 @@ TEST_F(CameraCalibrationFiles, LoadsExtrinsicsWrittenByPython) {
   EXPECT_NEAR(kin.R_PC.m[0][2], 1.0, 1e-12);
   EXPECT_NEAR(kin.R_PC.m[1][0], -1.0, 1e-12);
   EXPECT_NEAR(kin.R_PC.m[2][1], -1.0, 1e-12);
+  EXPECT_FALSE(kin.pitch_from_homed_low) << "a plain extrinsic stays in the raw pitch frame";
+}
+
+TEST_F(CameraCalibrationFiles, ExtrinsicCanDeclareTheHomedPitchFrame) {
+  const std::string p = write_file(
+      "camera_extrinsics.yaml",
+      "# ota-camera-extrinsics v1\n"
+      "pitch_from_homed_low=1\n"
+      "t_P_C=0 0 0\n"
+      "0 0 1\n"
+      "-1 0 0\n"
+      "0 -1 0\n");
+  std::string detail;
+  ota::geo::TurretKinematics kin = ota::load_camera_extrinsics(p, detail);
+  EXPECT_TRUE(kin.pitch_from_homed_low) << detail;
+  EXPECT_NE(detail.find("homed low stop"), std::string::npos) << detail;
+  EXPECT_NEAR(kin.R_PC.m[0][2], 1.0, 1e-12) << "the declaration is not read as a matrix row";
 }
 
 TEST_F(CameraCalibrationFiles, LegacyYamlExtrinsicsFallsBackToAligned) {

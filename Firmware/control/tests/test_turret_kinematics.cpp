@@ -13,6 +13,7 @@ namespace {
 using ota::geo::CameraIntrinsics;
 using ota::geo::CameraModel;
 using ota::geo::TurretKinematics;
+using ota::geo::Mat3;
 using ota::geo::Vec3;
 
 constexpr double kPi = M_PI;
@@ -175,3 +176,23 @@ TEST(TurretKinematics, ARayBehindTheCameraIsDetectableBeforeItIsProjected) {
 }
 
 }  // namespace
+
+// Station, 2026-10-06: after a power-off the CyberGear's raw pitch moved two gear steps
+// (2 x 360/7.75 deg) and every camera measurement's elevation moved with it. A homed-relative
+// extrinsic placed at each power-up's low stop gives the same line of sight for the same pose.
+TEST(TurretKinematics, HomedExtrinsicIsTheSameInEveryPowerUp) {
+  TurretKinematics homed;
+  homed.R_PC = Mat3{0, -0.9914233940930259, 0.1306891489185867, -1, 0, 0, 0, -0.1306891489185867, -0.9914233940930259};
+  homed.pitch_from_homed_low = true;
+  const double step = 2 * M_PI / 7.75, low_a = -2.3214664626, low_b = low_a + 2 * step;
+  const TurretKinematics a = homed.placed_at_pitch_stop(low_a), b = homed.placed_at_pitch_stop(low_b);
+  EXPECT_FALSE(a.pitch_from_homed_low);
+  const Vec3 ray = Vec3{0.1, -0.05, 1.0}.normalized();
+  for (double above_stop : {0.0, 0.3, 0.9, 1.2}) {
+    const Vec3 ra = a.ray_to_base(ray, 0.4, low_a + above_stop);
+    const Vec3 rb = b.ray_to_base(ray, 0.4, low_b + above_stop);
+    const Vec3 rh = homed.ray_to_base(ray, 0.4, above_stop);   // the homed frame itself
+    EXPECT_NEAR(ra.x, rb.x, 1e-12); EXPECT_NEAR(ra.y, rb.y, 1e-12); EXPECT_NEAR(ra.z, rb.z, 1e-12);
+    EXPECT_NEAR(ra.x, rh.x, 1e-12); EXPECT_NEAR(ra.y, rh.y, 1e-12); EXPECT_NEAR(ra.z, rh.z, 1e-12);
+  }
+}

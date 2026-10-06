@@ -373,6 +373,16 @@ timing.
     `hailo_yolov8n_objects` profile, four AUTO_TRACK slews): rot_x(−41.77°), spread 0.24°, offset
     0.131 rad. The trial is the method for any future refit: a target that cannot sway, slewed
     onto from both sides; a correct extrinsic holds its world azimuth still.
+  - **The pitch frame moves at power-up (2026-10-06).** After the station was moved, tracking went
+    wild again: the CyberGear knows its output angle only modulo 360°/7.75 = 46.45° at power-up,
+    and the raw pitch frame had shifted two steps (92.90°; soft min −2.2342 → −0.6127 rad). Homing
+    re-finds the stops, so motion stayed safe, but a raw-frame extrinsic is valid for one power-up
+    only. The extrinsic is now **relative to the homed low stop** (`pitch_from_homed_low=1` in the
+    file); controld places it in each power-up's raw frame after homing and logs
+    `camera extrinsic placed in this power-up's pitch frame`. Tracking refuses to start until it is
+    placed. **Refit in the homed frame**: R_P_C(homed) = R_y(raw_low) · R_P_C(raw), raw_low = that
+    power-up's homed low stop (soft min − 5° margin). The 09-27 "~42° error" was very likely one
+    such step.
   - **Ruled out by measurement**, so nobody re-chases them: controller load (5.00 ms ticks, p99
     5.01), detection timing (±10 ms), base twist or mount play (the IMU's world yaw rate equals
     the encoder's, ratio 1.0, zero lag), and encoder crosstalk (too small; the tracking history

@@ -17,8 +17,8 @@ entries:
     closure: claimed
   - id: extrinsics
     path: camera_extrinsics.yaml
-    sha256: aa485cec1430bfd891611fc05af263907ab8217f9e441b289d87568cae29efd8
-    session: "cal-2026-10-05-stationary-plant-refit"
+    sha256: 0e392591394bd8f6d0688accf8a4df0357b7a586cc48d7d138707c5a930f5f76
+    session: "cal-2026-10-05-stationary-plant-refit, homed pitch frame 2026-10-06"
     applies_to: [auto_roam, tracking, manual]
     closure: claimed
   - id: install

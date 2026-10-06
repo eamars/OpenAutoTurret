@@ -34,8 +34,19 @@
 # the same session: a 10 deg yaw step moves the image 230-245 px against 245 predicted (fx 1389).
 # Still unmeasured: roll about the optical axis, translation, distortion.
 #
-# Format: t_P_C key followed by three row-major rotation rows.
+# HOMED FRAME 2026-10-06: the rotation below is relative to pitch measured from the HOMED LOW STOP,
+# not the motor's raw angle. The geared CyberGear knows its output angle only modulo 360/7.75 =
+# 46.45 deg at power-up: after the station was moved (powered off) the raw pitch frame shifted by
+# 92.903 deg (two steps; soft min -2.2342 -> -0.612741 rad, predicted 1.621456, measured 1.621459)
+# and every detection's elevation shifted with it -- tracking went wild. The refit above was made in
+# the 2026-10-05 power-up, whose homed low stop read -2.321466 rad raw (soft min - 5 deg margin), so
+# R_P_C(homed) = R_y(-2.321466) * R_P_C(2026-10-05 raw). controld places it in each power-up's raw
+# frame after homing (R_y(-raw_low) * R_P_C(homed)); the 2026-09-27 "~42 deg" error was very likely
+# this same frame shift (one 46.45 deg step, less the mount's own few degrees).
+#
+# Format: optional key lines, the t_P_C key, then three row-major rotation rows.
+pitch_from_homed_low=1
 t_P_C=0 0 0
-0 -0.9914233940930259 0.1306891489185867
+0 0.7718426632747656 0.6358135757821759
 -1 0 0
-0 -0.1306891489185867 -0.9914233940930259
+0 -0.6358135757821759 0.7718426632747656

@@ -23,6 +23,12 @@ struct TurretKinematics {
   // Camera -> pitch-frame rotation (fixed extrinsic, §10.3). Identity by
   // default; use aligned() for the ideal-aligned camera.
   Mat3 R_PC{};
+  // What R_PC's pitch is measured from. false: the motor's raw angle. true: the homed low stop.
+  // The geared CyberGear knows its output angle only modulo 360/7.75 deg at power-up (station,
+  // 2026-10-06: the raw frame moved 92.90 deg = two steps after a move), so a raw-frame extrinsic
+  // is valid for one power-up only. With this set, ControlLoop rotates R_PC into each power-up's
+  // raw frame after homing; before that it is unusable.
+  bool pitch_from_homed_low = false;
 
   // The ideal-aligned camera: optical axis along the pitch frame's forward
   // axis, camera X right / Y down / Z forward -> base X forward / Y left / Z up.
@@ -34,6 +40,15 @@ struct TurretKinematics {
   }
 
   // Camera-frame LOS -> base-frame LOS.
+  // A homed-relative extrinsic placed in a power-up whose homed low stop reads `raw_low_rad`:
+  // R_y(q) R_PC(placed) == R_y(q - raw_low) R_PC(homed) for every raw pitch q.
+  TurretKinematics placed_at_pitch_stop(double raw_low_rad) const {
+    TurretKinematics k = *this;
+    k.R_PC = Mat3::rot_y(-raw_low_rad) * R_PC;
+    k.pitch_from_homed_low = false;  // now in the raw frame of this power-up
+    return k;
+  }
+
   Vec3 ray_to_base(const Vec3& r_cam, double q_yaw_rad, double q_pitch_rad) const {
     const Mat3 R = Mat3::rot_z(q_yaw_rad) * Mat3::rot_y(q_pitch_rad) * R_PC;
     return (R * r_cam).normalized();

@@ -187,6 +187,11 @@ inline geo::TurretKinematics load_camera_extrinsics(const std::string& path,
     for (int j = 0; j < 3; ++j) R.m[i][j] = m[i * 3 + j];
   kin.R_PC = R;
   detail = "R_P_C loaded from file";
+  for (int i = 0; i < n; ++i)
+    if (keys[i] == "pitch_from_homed_low" && vals[i] == 1.0) {
+      kin.pitch_from_homed_low = true;
+      detail += " (pitch from the homed low stop)";
+    }
   return kin;
 }
 

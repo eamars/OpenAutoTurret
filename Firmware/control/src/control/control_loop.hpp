@@ -252,6 +252,8 @@ class ControlLoop {
     // Validate before publishing a new snapshot of startup configuration.
     TrackingController checked(cfg);
     tracking_cfg_ = cfg;
+    extrinsic_R_PC_ = cfg.kinematics.R_PC;
+    place_extrinsic_in_session();
     tracking_auto_enable_ = auto_enable;
     ++tracking_config_revision_;
   }
@@ -741,6 +743,11 @@ class ControlLoop {
   // Commissioned tracking configuration (from turret.yaml + the calibration
   // files). Used by the `start_tracking` command and the auto-enable path.
   TrackingController::Config tracking_cfg_;
+  // The extrinsic as configured; tracking_cfg_.kinematics.R_PC is it placed in this power-up's
+  // pitch frame when it is homed-relative (place_extrinsic_in_session).
+  geo::Mat3 extrinsic_R_PC_{};
+  std::string extrinsic_session_error_;
+  void place_extrinsic_in_session();
   uint64_t tracking_config_revision_ = 0;
   // Last published reference, to derive its rate and acceleration (see telemetry fields).
   double ref_prev_q_yaw_ = 0.0;
