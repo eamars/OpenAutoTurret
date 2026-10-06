@@ -118,7 +118,7 @@ TEST_F(CameraCalibrationFiles, ExtrinsicCanDeclareTheHomedPitchFrame) {
   std::string detail;
   ota::geo::TurretKinematics kin = ota::load_camera_extrinsics(p, detail);
   EXPECT_TRUE(kin.pitch_from_homed_low) << detail;
-  EXPECT_NE(detail.find("homed low stop"), std::string::npos) << detail;
+  EXPECT_EQ(detail, "R_P_C loaded from file") << "callers test this exact text as 'loaded'";
   EXPECT_NEAR(kin.R_PC.m[0][2], 1.0, 1e-12) << "the declaration is not read as a matrix row";
 }
 
