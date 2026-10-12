@@ -15,7 +15,7 @@ procedure from a flag list.
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
 | commission or re-commission the yaw / pitch servo (after a payload, camera, weight, bearing or motor change) | [`operations/servo-commissioning.md`](operations/servo-commissioning.md) — one automatic command per axis: identify, design, verify on the station, write the asset |
 | work on camera tracking (ADR-003: target estimator, Level-1 reference, its stages and status) | [`ADR-003/IMPLEMENTATION.md`](ADR-003/IMPLEMENTATION.md) — the plan, the decisions taken against the architect's package, and the state of each stage; stage 1 is `tools/tracking/tracking.py stage1` |
-| plan the precision mount (0.3 MOA rangefinder: actuators, drives, development order) | [`ADR-005/ADR-005.md`](ADR-005/ADR-005.md) — proposal, primary and secondary hardware |
+| plan the precision mount (0.3 MOA rangefinder: actuators, drives, development order) | [`Hardware/HDP-001/HDP-001.md`](../../Hardware/HDP-001/HDP-001.md) — proposal, primary and secondary hardware |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |
@@ -50,7 +50,9 @@ the runbook has moved off the path `AGENTS.md` promises. Run it after touching a
 
 `ADR-001/` is the first development plan in the new convention. The next new project document starts
 at `ADR-002/`; continue with monotonically increasing `ADR-NNN/` directories. Keep each new plan or
-decision and its supporting material inside its own ADR directory. Do not add new dated project
+decision and its supporting material inside its own ADR directory. A plan for the device's hardware
+(mechanics, actuators, electronics) is not an ADR: it lives at the repository root as
+`Hardware/HDP-NNN/`, numbered on its own, and the software work it calls for gets its own ADR here. Do not add new dated project
 reports to the legacy root or archive folders. Operational procedure is not a dated report: it goes
 in `operations/`, and a procedure change is edited in place rather than appended as a new file.
 

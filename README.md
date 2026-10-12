@@ -6,6 +6,7 @@ each card states **which machine the work happens on** before it states a comman
 agent about to deploy, start at
 [`Firmware/docs/operations/deploy.md`](Firmware/docs/operations/deploy.md); the project's operating
 rules are in [`AGENTS.md`](AGENTS.md).
+Hardware plans (mechanics, actuators, electronics) are in [`Hardware/`](Hardware/README.md).
 
 Status below is a **record**, not a live reading: take one with `run_application.sh status` and
 `Firmware/tools/station_address.sh print` before acting on it.
