@@ -44,8 +44,9 @@ TEST(AlignmentConfig, ShippedConfigurationReachesProductionSetup) {
   EXPECT_EQ(cfg.aim.mode, tracking::AimMode::BoxFraction);
   EXPECT_DOUBLE_EQ(cfg.aim.y_fraction, .22);
   EXPECT_FALSE(cfg.alignment.enabled);
-  EXPECT_DOUBLE_EQ(cfg.alignment.camera_right_mm, 75);
-  EXPECT_DOUBLE_EQ(cfg.alignment.camera_up_mm, 75);
+  EXPECT_DOUBLE_EQ(cfg.alignment.wide.right_mm, 75);
+  EXPECT_DOUBLE_EQ(cfg.alignment.wide.up_mm, 75);
+  EXPECT_DOUBLE_EQ(cfg.alignment.detail.right_mm, 75);
 }
 
 TEST(AlignmentConfig, ManualDepthProducesExpectedReticle) {
@@ -54,7 +55,7 @@ TEST(AlignmentConfig, ManualDepthProducesExpectedReticle) {
   auto parsed = load_text(text);
   ASSERT_TRUE(parsed.ok);
   auto cfg = config::make_tracking_config(parsed.config);
-  const auto a = geo::bore_alignment(cfg.alignment, cfg.intrinsics);
+  const auto a = geo::bore_alignment(cfg.alignment, geo::CameraRole::Wide, cfg.intrinsics);
   ASSERT_TRUE(a.valid);
   EXPECT_NEAR(a.u_norm*1920, 949.5825, 1e-9);
   EXPECT_NEAR(a.v_norm*1080, 551.0025, 1e-9);
@@ -70,16 +71,19 @@ TEST(AlignmentConfig, RejectsBadValuesInsteadOfDefaulting) {
       {"y_fraction: 0.22", "y_fraction: .nan"}, {"y_fraction: 0.22", "y_fraction: true"},
       {"y_fraction: 0.22", "y_fraction: 1.1"}, {"mode: box_fraction", "mode: typo"},
       {"x_fraction: 0.50", "x_fracton: 0.50"}, {"mode: off", "mode: measured"},
-      {"assumed_depth_m: 10", "assumed_depth_m: 0"}, {"right: 75", "right: .inf"},
-      {"bore_axis_deg: {right: 0, up: 0}", "bore_axis_deg: {right: 90, up: 0}"},
-      {"camera_from_bore_mm: {right: 75, up: 75, forward: 0}", "camera_from_bore_mm: null"}}) {
+      {"assumed_depth_m: 10", "assumed_depth_m: 0"}, {"right_mm: 75", "right_mm: .inf"},
+      {"right_deg: 0, up_deg: 0}\n    detail", "right_deg: 90, up_deg: 0}\n    detail"},
+      {"detail: {right_mm: 75", "detail: {right_mm: 75, typo: 1"},
+      {"    detail: {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}\n", ""},
+      {"wide:   {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}", "wide: null"},
+      {"camera_offset:", "camera_from_bore_mm:"}}) {
     SCOPED_TRACE(value);
     auto text = source_config(); replace(text, old, value);
     EXPECT_FALSE(load_text(text).ok);
   }
   auto parsed = load_text(source_config());
   parsed.config.alignment.enabled = true;
-  parsed.config.alignment.camera_right_mm = 1e9;
+  parsed.config.alignment.wide.right_mm = 1e9;
   EXPECT_THROW(config::make_tracking_config(parsed.config), std::invalid_argument);
 }
 
@@ -113,22 +117,62 @@ TEST(AlignmentConfig, MissingNewBlocksPreservesLegacyAndExplicitModeWins) {
 }
 
 TEST(AlignmentGeometry, SignsDepthAndAngles) {
+  constexpr auto W = geo::CameraRole::Wide;
   geo::BoreAlignmentConfig c;
-  c.enabled = true; c.camera_right_mm = c.camera_up_mm = 75;
+  c.enabled = true; c.wide.right_mm = c.wide.up_mm = 75;
   const geo::CameraIntrinsics in;
-  auto a = geo::bore_alignment(c, in);
+  auto a = geo::bore_alignment(c, W, in);
   c.assumed_depth_m = 20;
-  auto far = geo::bore_alignment(c, in);
+  auto far = geo::bore_alignment(c, W, in);
   EXPECT_NEAR((a.u_norm-.5)/2, far.u_norm-.5, 1e-12);
-  c.camera_right_mm = -75; c.camera_up_mm = -75;
-  a = geo::bore_alignment(c, in);
+  // A camera right of and above the bore sees it to the left and below; the other way round, the
+  // other way.
+  EXPECT_LT(a.u_norm, .5); EXPECT_GT(a.v_norm, .5);
+  c.wide.right_mm = -75; c.wide.up_mm = -75;
+  a = geo::bore_alignment(c, W, in);
   EXPECT_GT(a.u_norm, .5); EXPECT_LT(a.v_norm, .5);
-  c.camera_right_mm = c.camera_up_mm = 0;
-  c.bore_right_deg = 1; c.bore_up_deg = 2;
-  a = geo::bore_alignment(c, in);
-  EXPECT_GT(a.u_norm, .5); EXPECT_LT(a.v_norm, .5);
-  c.camera_forward_mm = -30000;
-  EXPECT_FALSE(geo::bore_alignment(c, in).valid);
+  // A camera that looks right of and up from the bore sees it to the left and below.
+  c.wide.right_mm = c.wide.up_mm = 0;
+  c.wide.right_deg = 1; c.wide.up_deg = 2;
+  a = geo::bore_alignment(c, W, in);
+  EXPECT_LT(a.u_norm, .5); EXPECT_GT(a.v_norm, .5);
+  c.wide.forward_mm = -30000;
+  EXPECT_FALSE(geo::bore_alignment(c, W, in).valid);
+}
+
+TEST(AlignmentGeometry, EachCameraHasItsOwnOffset) {
+  geo::BoreAlignmentConfig c;
+  c.enabled = true;
+  c.wide.right_mm = 75;
+  c.detail.right_mm = -40;   // the detail camera on the bore's other side
+  const geo::CameraIntrinsics in;
+  const auto wide = geo::bore_alignment(c, geo::CameraRole::Wide, in);
+  const auto detail = geo::bore_alignment(c, geo::CameraRole::Detail, in);
+  ASSERT_TRUE(wide.valid && detail.valid);
+  EXPECT_LT(wide.u_norm, .5);
+  EXPECT_GT(detail.u_norm, .5);
+}
+
+TEST(AlignmentGeometry, PointingIsAnExactRotationNotATangentSum) {
+  // A camera looking 10 deg right and 10 deg up of the bore. The bore's direction seen from the
+  // camera is that rotation undone: turning it by Ry(right) Rx(up) must give the bore axis back.
+  geo::BoreAlignmentConfig c;
+  c.enabled = true;
+  c.assumed_depth_m = 1e6;
+  c.wide.right_deg = 10; c.wide.up_deg = 10;
+  geo::CameraIntrinsics in;
+  in.fx = in.fy = 1000; in.cx = 960; in.cy = 540; in.width = 1920; in.height = 1080;
+  const auto a = geo::bore_alignment(c, geo::CameraRole::Wide, in);
+  ASSERT_TRUE(a.valid);
+  const double r = 10*M_PI/180;
+  const auto& d = a.direction_camera;
+  const double y1 = std::cos(r)*d.y - std::sin(r)*d.z, z1 = std::sin(r)*d.y + std::cos(r)*d.z;
+  const double x2 = std::cos(r)*d.x + std::sin(r)*z1, z2 = -std::sin(r)*d.x + std::cos(r)*z1;
+  EXPECT_NEAR(x2, 0, 1e-12); EXPECT_NEAR(y1, 0, 1e-12); EXPECT_NEAR(z2, 1, 1e-12);
+  // The two-tangent shortcut the old model used puts the mark tan(r) (1/cos(u) - 1) off
+  // horizontally: 2.7 mrad here (2.7 px), negligible at 1 deg x 1 deg (3 urad).
+  const double tangent_u = in.cx - in.fx*std::tan(r);
+  EXPECT_NEAR(a.u_norm*in.width - tangent_u, -in.fx*std::tan(r)*(1/std::cos(r) - 1), 1e-6);
 }
 
 TEST(AlignmentGeometry, BoundedAndIterativeSolversUseSameSight) {

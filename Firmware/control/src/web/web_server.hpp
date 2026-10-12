@@ -25,6 +25,7 @@
 #include "spdlog/spdlog.h"  // a torn frame has to be said out loud
 #include <sys/un.h>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
 #include <atomic>
 #include <functional>
@@ -254,17 +255,21 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"mode\":\"" << tracking::aim_mode_name(s.aim_options.mode) << "\""
      << ",\"x_fraction\":" << s.aim_options.x_fraction
      << ",\"y_fraction\":" << s.aim_options.y_fraction << "}"
-     << ",\"alignment\":{\"mode\":\"" << (s.alignment_config.enabled ? "manual_depth" : "off")
-     << "\",\"valid\":" << (s.bore_alignment.valid ? "true" : "false")
-     << ",\"reason\":\"" << s.bore_alignment.reason << "\""
+     << ",\"alignment\":{\"mode\":\"" << (s.alignment_config.enabled ? "manual_depth" : "off") << "\""
      << ",\"revision\":" << s.tracking_config_revision
      << ",\"range_source\":\"" << (s.alignment_config.enabled ? "manual" : "none") << "\""
-     << ",\"range_measured\":false,\"assumed_depth_m\":" << s.alignment_config.assumed_depth_m
-     << ",\"x_norm\":" << s.bore_alignment.u_norm << ",\"y_norm\":" << s.bore_alignment.v_norm
-     << ",\"camera_from_bore_mm\":{\"right\":" << s.alignment_config.camera_right_mm
-     << ",\"up\":" << s.alignment_config.camera_up_mm << ",\"forward\":" << s.alignment_config.camera_forward_mm << "}"
-     << ",\"bore_axis_deg\":{\"right\":" << s.alignment_config.bore_right_deg
-     << ",\"up\":" << s.alignment_config.bore_up_deg << "}}"
+     << ",\"range_measured\":false,\"assumed_depth_m\":" << s.alignment_config.assumed_depth_m;
+  // Per camera: where it sees the bore (x/y in the wide frame, where the HUD draws both pictures)
+  // and its configured offset from the bore.
+  for (const auto& [name, mark, o] : {std::tuple{"wide", &s.bore_alignment_wide, &s.alignment_config.wide},
+                                       std::tuple{"detail", &s.bore_alignment_detail, &s.alignment_config.detail}})
+    os << ",\"" << name << "\":{\"valid\":" << (mark->valid ? "true" : "false")
+       << ",\"reason\":\"" << mark->reason << "\""
+       << ",\"x_norm\":" << mark->u_norm << ",\"y_norm\":" << mark->v_norm
+       << ",\"camera_offset\":{\"right_mm\":" << o->right_mm << ",\"up_mm\":" << o->up_mm
+       << ",\"forward_mm\":" << o->forward_mm << ",\"right_deg\":" << o->right_deg
+       << ",\"up_deg\":" << o->up_deg << "}}";
+  os << "}"
      << ",\"predicted_target_az_world_rad\":" << s.predicted_target_az_world_rad
      << ",\"predicted_target_el_world_rad\":" << s.predicted_target_el_world_rad
      << ",\"predicted_target_los_valid\":" << (s.predicted_target_los_valid ? "true" : "false")

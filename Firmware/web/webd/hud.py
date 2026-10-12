@@ -136,15 +136,18 @@ function hudReticleCantSvg(cx, cy, reach, inner, deg, colors) {
           halves.replace(/\/>/g, ' stroke="' + colors.line + '" stroke-width="2"/>')];
 }
 
-// Controller-owned projection; the browser never reconstructs mounting geometry.
-function hudBoreMark(t, stale) {
+// Controller-owned projection; the browser never reconstructs mounting geometry. Each camera has its
+// own offset from the bore, so the mark is the one for the camera on the main display ("wide" or
+// "detail", hudMainView), already in the wide frame both pictures are drawn in.
+function hudBoreMark(t, stale, main) {
   const a = t && t.alignment;
-  if (stale || !a || a.mode !== "manual_depth" || a.valid !== true ||
+  const m = a && a[main === "detail" ? "detail" : "wide"];
+  if (stale || !a || !m || a.mode !== "manual_depth" || m.valid !== true ||
       a.range_source !== "manual" || a.range_measured !== false ||
       !Number.isFinite(a.assumed_depth_m) || a.assumed_depth_m <= 0 ||
-      !Number.isFinite(a.x_norm) || !Number.isFinite(a.y_norm) ||
-      a.x_norm < 0 || a.x_norm > 1 || a.y_norm < 0 || a.y_norm > 1) return null;
-  return { u: a.x_norm, v: a.y_norm, label: "ASSUMED " + a.assumed_depth_m.toFixed(1) + " m" };
+      !Number.isFinite(m.x_norm) || !Number.isFinite(m.y_norm) ||
+      m.x_norm < 0 || m.x_norm > 1 || m.y_norm < 0 || m.y_norm > 1) return null;
+  return { u: m.x_norm, v: m.y_norm, label: "ASSUMED " + a.assumed_depth_m.toFixed(1) + " m" };
 }
 
 function hudMeasurementPointSvg(t, lay, stale, C) {
@@ -1405,7 +1408,7 @@ function render(t) {
   // left and right, open centre - and never on the target.
   const intr = t.camera_intrinsics;
   const axis = hudAxisNorm(intr) || { u: 0.5, v: 0.5 };
-  const bore = hudBoreMark(t, stale);
+  const bore = hudBoreMark(t, stale, view.main);
   const c = hudProject(bore ? bore.u : axis.u, bore ? bore.v : axis.v, lay);
   if (c.ok) {
     const g = bore ? C.amber : C.green, r = 26, gap = 8, len = 12;

@@ -271,9 +271,9 @@ TEST(AlignmentSimulation, NativeWireToSimulatedMotorsAndTelemetry) {
     cfg.aim.mode = tracking::AimMode::BoxFraction;
     cfg.aim.y_fraction = fraction;
     cfg.alignment.enabled = enabled;
-    cfg.alignment.camera_right_mm = cfg.alignment.camera_up_mm = 75;
+    cfg.alignment.wide.right_mm = cfg.alignment.wide.up_mm = 75;
     cfg.alignment.assumed_depth_m = 2;
-    const auto align = geo::bore_alignment(cfg.alignment, cfg.intrinsics);
+    const auto align = geo::bore_alignment(cfg.alignment, geo::CameraRole::Wide, cfg.intrinsics);
     enter_mode(r, cfg, OperatingMode::AutoTrack);
     // Ground truth is a fixed point, independently projected into each synthetic frame.
     const Mat3 goal = Mat3::rot_z(.10)*Mat3::rot_y(-.05)*cfg.kinematics.R_PC;
@@ -333,7 +333,7 @@ TEST(AlignmentSimulation, NativeWireToSimulatedMotorsAndTelemetry) {
               << " final_image_error_px=" << std::hypot(u-expected_u, v-expected_v) << '\n';
     EXPECT_TRUE(snap.target_aim_valid);
     EXPECT_STREQ(snap.target_aim_source, "box_fraction");
-    EXPECT_EQ(snap.bore_alignment.valid, enabled);
+    EXPECT_EQ(snap.bore_alignment_wide.valid, enabled);
     EXPECT_DOUBLE_EQ(snap.aim_options.y_fraction, fraction);
     EXPECT_GT(snap.tracking_config_revision, 0u);
     EXPECT_NE(web::format_telemetry(snap).find("\"range_measured\":false"), std::string::npos);

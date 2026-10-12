@@ -254,7 +254,7 @@ struct TelemetrySnapshot {
   uint64_t tracking_config_revision = 0;
   tracking::AimOptions aim_options;
   geo::BoreAlignmentConfig alignment_config;
-  geo::BoreAlignment bore_alignment;
+  geo::BoreAlignment bore_alignment_wide, bore_alignment_detail;  // where each camera sees the bore
 
   // The direction the AUTO_TRACK intent is actually built from, and what it is worth.
   //

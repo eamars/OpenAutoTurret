@@ -83,7 +83,7 @@ class TrackingController {
   explicit TrackingController(Config cfg)
       : cfg_(std::move(cfg)),
         camera_(cfg_.intrinsics),
-        alignment_(geo::bore_alignment(cfg_.alignment, cfg_.intrinsics)),
+        alignment_(geo::bore_alignment(cfg_.alignment, geo::CameraRole::Wide, cfg_.intrinsics)),  // detections are in the wide frame
         solver_(cfg_.kinematics, alignment_.sight_camera),
         estimator_(cfg_.estimator),
         history_pitch_(cfg_.history_capacity),

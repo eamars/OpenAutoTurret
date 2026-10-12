@@ -63,8 +63,8 @@ class AlignmentDesignTest(unittest.TestCase):
             (('alignment', 'assumed_depth_m'), math.nan),
             (('alignment', 'assumed_depth_m'), True),
             (('alignment', 'mode'), 'measured'),
-            (('alignment', 'camera_from_bore_mm', 'right'), math.inf),
-            (('alignment', 'bore_axis_deg', 'up'), 90),
+            (('alignment', 'camera_offset', 'wide', 'right_mm'), math.inf),
+            (('alignment', 'camera_offset', 'detail', 'up_deg'), 90),
             (('tracking', 'aim_point', 'y_fraction'), 1.1),
             (('tracking', 'aim_point', 'mode'), 'typo'),
         ]
@@ -83,14 +83,14 @@ class AlignmentDesignTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             model.beam_point((0, 0, 5), (0, 0, 1), 2)
 
-    def test_positive_bore_angle_projects_right_and_up(self):
-        self.config['alignment']['camera_from_bore_mm'] = dict(right=0, up=0, forward=0)
-        self.config['alignment']['bore_axis_deg'] = dict(right=1, up=2)
+    def test_camera_looking_right_and_up_sees_the_bore_left_and_below(self):
+        self.config['alignment']['camera_offset']['wide'] = dict(
+            right_mm=0, up_mm=0, forward_mm=0, right_deg=1, up_deg=2)
         origin, direction = model.bore_geometry(self.config)
         near = model.project(model.beam_point(origin, direction, 2), self.intrinsics)
         far = model.project(model.beam_point(origin, direction, 100), self.intrinsics)
-        self.assertGreater(near[0], self.intrinsics['cx'])
-        self.assertLess(near[1], self.intrinsics['cy'])
+        self.assertLess(near[0], self.intrinsics['cx'])
+        self.assertGreater(near[1], self.intrinsics['cy'])
         self.assertAlmostEqual(near[0], far[0])
         self.assertAlmostEqual(near[1], far[1])
 

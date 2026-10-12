@@ -125,34 +125,35 @@ def validate_config(config):
         if not 0 <= aim[key] <= 1:
             raise ValueError(f'{key} must be in [0,1]')
     alignment = config['alignment']
-    keys(alignment, 'mode camera_from_bore_mm bore_axis_deg assumed_depth_m', 'alignment')
+    keys(alignment, 'mode assumed_depth_m camera_offset', 'alignment')
     if alignment['mode'] not in ('off', 'manual_depth'):
         raise ValueError('alignment mode must be off or manual_depth; no sensor is available')
-    mount = alignment['camera_from_bore_mm']
-    keys(mount, 'right up forward', 'camera_from_bore_mm')
-    for key, value in mount.items():
-        number(value, key)
-    angles = alignment['bore_axis_deg']
-    keys(angles, 'right up', 'bore_axis_deg')
-    for key, value in angles.items():
-        number(value, key)
-        if abs(value) >= 45:
-            raise ValueError('reference model supports alignment angles strictly inside +/-45 deg')
+    keys(alignment['camera_offset'], 'wide detail', 'camera_offset')
+    for camera, offset in alignment['camera_offset'].items():
+        keys(offset, 'right_mm up_mm forward_mm right_deg up_deg', f'camera_offset.{camera}')
+        for key, value in offset.items():
+            number(value, key)
+            if key.endswith('_deg') and abs(value) >= 45:
+                raise ValueError('reference model supports alignment angles strictly inside +/-45 deg')
     number(alignment['assumed_depth_m'], 'assumed_depth_m')
     origin, direction = bore_geometry(config)
     beam_point(origin, direction, alignment['assumed_depth_m'])
     return config
 
 
-def bore_geometry(config):
-    alignment = config['alignment']
-    mount = alignment['camera_from_bore_mm']
-    # C is the corrected detector frame: x right, y down, z forward.
-    origin = (-mount['right']/1000, mount['up']/1000, -mount['forward']/1000)
-    angles = alignment['bore_axis_deg']
-    direction = unit((math.tan(math.radians(angles['right'])),
-                      -math.tan(math.radians(angles['up'])), 1))
-    return origin, direction
+def bore_geometry(config, camera='wide'):
+    """The bore's origin and direction seen from one camera, from that camera's offset from the bore."""
+    o = config['alignment']['camera_offset'][camera]
+    # C is the corrected detector frame: x right, y down, z forward. The camera's axes in the bore's
+    # frame are Ry(right) Rx(up); a bore-frame vector seen from the camera is the transpose applied.
+    cr, sr = math.cos(math.radians(o['right_deg'])), math.sin(math.radians(o['right_deg']))
+    cu, su = math.cos(math.radians(o['up_deg'])), math.sin(math.radians(o['up_deg']))
+
+    def to_camera(v):
+        x, y, z = cr*v[0] - sr*v[2], v[1], sr*v[0] + cr*v[2]
+        return (x, cu*y + su*z, -su*y + cu*z)
+    origin = to_camera((-o['right_mm']/1000, o['up_mm']/1000, -o['forward_mm']/1000))
+    return origin, unit(to_camera((0, 0, 1)))
 
 
 def aim_point(bbox, anchor, aim):

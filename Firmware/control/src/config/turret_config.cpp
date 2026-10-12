@@ -94,27 +94,30 @@ void parse_alignment_policy(const YAML::Node& root, TurretConfig& c,
   }
   if (!root.IsMap() || !root["alignment"].IsDefined()) return;
   const auto a = root["alignment"];
-  if (!strict_map(a, {"mode", "camera_from_bore_mm", "bore_axis_deg", "assumed_depth_m"},
-                  "alignment", errors)) return;
+  if (!strict_map(a, {"mode", "assumed_depth_m", "camera_offset"}, "alignment", errors)) return;
   auto& c_align = c.alignment;
   const auto mode = alignment_mode(a, "alignment", errors);
   if (mode == "manual_depth") c_align.enabled = true;
   else if (mode != "off") errors.push_back("alignment.mode must be off or manual_depth (no range sensor)");
   c_align.assumed_depth_m = alignment_number(a, "assumed_depth_m", "alignment", errors);
-  const auto mount = a["camera_from_bore_mm"], axis = a["bore_axis_deg"];
-  if (strict_map(mount, {"right", "up", "forward"}, "alignment.camera_from_bore_mm", errors)) {
-    c_align.camera_right_mm = alignment_number(mount, "right", "alignment.camera_from_bore_mm", errors);
-    c_align.camera_up_mm = alignment_number(mount, "up", "alignment.camera_from_bore_mm", errors);
-    c_align.camera_forward_mm = alignment_number(mount, "forward", "alignment.camera_from_bore_mm", errors);
+  if (c_align.assumed_depth_m <= 0) errors.push_back("alignment.assumed_depth_m must be positive");
+  // Each camera's offset from the bore: where it sits and where it looks (geo::CameraOffset).
+  const auto offsets = a["camera_offset"];
+  if (!strict_map(offsets, {"wide", "detail"}, "alignment.camera_offset", errors)) return;
+  for (const auto& [name, o] : {std::pair{"wide", &c_align.wide}, std::pair{"detail", &c_align.detail}}) {
+    const std::string path = std::string("alignment.camera_offset.") + name;
+    const auto n = offsets[name];
+    if (!strict_map(n, {"right_mm", "up_mm", "forward_mm", "right_deg", "up_deg"}, path, errors)) continue;
+    o->right_mm = alignment_number(n, "right_mm", path, errors);
+    o->up_mm = alignment_number(n, "up_mm", path, errors);
+    o->forward_mm = alignment_number(n, "forward_mm", path, errors);
+    o->right_deg = alignment_number(n, "right_deg", path, errors);
+    o->up_deg = alignment_number(n, "up_deg", path, errors);
+    if (std::abs(o->right_deg) >= 45 || std::abs(o->up_deg) >= 45)
+      errors.push_back(path + ": angles must be strictly inside +/-45 degrees");
+    if (c_align.assumed_depth_m + o->forward_mm/1000 <= 0)
+      errors.push_back(path + ": the reference depth must lie in front of the bore");
   }
-  if (strict_map(axis, {"right", "up"}, "alignment.bore_axis_deg", errors)) {
-    c_align.bore_right_deg = alignment_number(axis, "right", "alignment.bore_axis_deg", errors);
-    c_align.bore_up_deg = alignment_number(axis, "up", "alignment.bore_axis_deg", errors);
-  }
-  if (c_align.assumed_depth_m <= 0 || c_align.assumed_depth_m + c_align.camera_forward_mm/1000 <= 0)
-    errors.push_back("alignment reference depth must be positive and in front of bore");
-  if (std::abs(c_align.bore_right_deg) >= 45 || std::abs(c_align.bore_up_deg) >= 45)
-    errors.push_back("alignment bore angles must be strictly inside +/-45 degrees");
 }
 
 void parse_motion(const YAML::Node& root, TurretConfig& c,

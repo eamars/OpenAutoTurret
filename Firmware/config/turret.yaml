@@ -199,9 +199,14 @@ alignment:
   # The bore/rangefinder is absent. Enable manual_depth only for an explicitly
   # assumed reference plane; the displayed mark is virtual, never a measurement.
   mode: off                  # off | manual_depth
-  camera_from_bore_mm: {right: 75, up: 75, forward: 0}
-  bore_axis_deg: {right: 0, up: 0}  # unmeasured parallel-axis assumption
   assumed_depth_m: 10         # example camera-axis depth, NOT a measured range
+  # Each camera's offset from the bore (the payload's point of aim): where the camera sits, in mm
+  # in the bore's frame, and where it looks, in degrees right of and up from the bore's axis.
+  # The tracker uses the wide camera's; each camera's places the bore mark on its own picture.
+  # UNMEASURED: parallel axes assumed, and the detail camera given the wide camera's position.
+  camera_offset:
+    wide:   {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}
+    detail: {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}
 shutdown:
   # Resolve targets from calibrated RAW soft limits after homing.
   # Front-heavy load: yaw center, pitch lower end with stopping clearance.

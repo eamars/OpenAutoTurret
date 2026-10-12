@@ -14,10 +14,16 @@ class AlignmentHudTest(unittest.TestCase):
     def setUp(self):
         self.data = {
             "type": "telemetry",
-            "alignment": {"mode": "manual_depth", "valid": True, "range_source": "manual",
+            "alignment": {"mode": "manual_depth", "range_source": "manual",
                           "range_measured": False, "assumed_depth_m": 10,
-                          "x_norm": 949.5825/1920, "y_norm": 551.0025/1080,
-                          "camera_from_bore_mm": {"right": 75, "up": 75, "forward": 0}},
+                          "wide": {"valid": True, "reason": "assumed depth",
+                                   "x_norm": 949.5825/1920, "y_norm": 551.0025/1080,
+                                   "camera_offset": {"right_mm": 75, "up_mm": 75, "forward_mm": 0,
+                                                     "right_deg": 0, "up_deg": 0}},
+                          "detail": {"valid": True, "reason": "assumed depth",
+                                     "x_norm": 0.6, "y_norm": 0.4,
+                                     "camera_offset": {"right_mm": -40, "up_mm": 30, "forward_mm": 0,
+                                                       "right_deg": 0, "up_deg": 0}}},
             "aim_point_policy": {"revision": 1, "mode": "box_fraction", "x_fraction": .5, "y_fraction": .22},
             "target_aim_valid": True, "target_aim_source": "box_fraction",
             "target_aim_x_norm": .5, "target_aim_y_norm": .276,
@@ -28,7 +34,7 @@ class AlignmentHudTest(unittest.TestCase):
         self.program.write_text(HUD_GEOMETRY_JS + '''
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const lay = hudLayout(input.width || 960, input.height || 540, 1920, 1080);
-const mark = hudBoreMark(input.t, !!input.stale);
+const mark = hudBoreMark(input.t, !!input.stale, input.main || "wide");
 // The measurement point takes its palette as an argument, like the tape and the FoR do: a geometry
 // module that quietly owned page colours would be a second place to declare them.
 const C = {"green": "#95f58b", "dim": "rgba(149,245,139,.56)", "faint": "rgba(149,245,139,.22)", "amber": "#f2b329", "red": "#ff5d5d", "white": "#edf2eb", "black": "rgba(3,6,5,.80)", "stroke": "#05070a", "text": "#c5d0c5", "text_dim": "#8c998c"};
@@ -62,16 +68,30 @@ console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) 
         self.assertNotIn("MEASURE", rendered["point"])
 
     def test_no_virtual_bore_claim_when_disabled_invalid_or_stale(self):
-        for key, value in (("mode", "off"), ("valid", False), ("x_norm", 1.1),
-                           ("y_norm", None), ("assumed_depth_m", 0),
-                           ("range_measured", True), ("range_source", "sensor")):
+        for key, value in (("mode", "off"), ("wide.valid", False), ("wide.x_norm", 1.1),
+                           ("wide.y_norm", None), ("assumed_depth_m", 0),
+                           ("range_measured", True), ("range_source", "sensor"), ("wide", None)):
             data = copy.deepcopy(self.data)
-            data["alignment"][key] = value
+            owner, leaf = data["alignment"], key
+            if "." in key:
+                camera, leaf = key.split(".")
+                owner = owner[camera]
+            owner[leaf] = value
             with self.subTest(key=key):
                 self.assertIsNone(self.render(data)["mark"])
         rendered = self.render(stale=True)
         self.assertIsNone(rendered["mark"])
         self.assertEqual(rendered["point"], "")
+
+    def test_mark_follows_the_camera_on_the_main_display(self):
+        # Each camera has its own offset from the bore, so each has its own mark.
+        wide = self.render()["mark"]
+        detail = self.render(main="detail")["mark"]
+        self.assertAlmostEqual(wide["u"], 949.5825/1920)
+        self.assertAlmostEqual(detail["u"], 0.6)
+        self.assertAlmostEqual(detail["v"], 0.4)
+        self.data["alignment"]["detail"]["valid"] = False
+        self.assertIsNone(self.render(main="detail")["mark"], "no wide mark drawn on the detail picture")
 
     def test_fallback_and_clipping_are_visible(self):
         self.data["target_aim_source"] = "invalid_box_anchor_fallback"

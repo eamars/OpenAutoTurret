@@ -27,9 +27,9 @@ int main() {
       cfg.aim.mode = tracking::AimMode::BoxFraction;
       cfg.aim.y_fraction = .22;
       cfg.alignment.enabled = true;
-      cfg.alignment.camera_right_mm = cfg.alignment.camera_up_mm = 75;
+      cfg.alignment.wide.right_mm = cfg.alignment.wide.up_mm = 75;
       cfg.alignment.assumed_depth_m = depth;
-      const auto bore = bore_alignment(cfg.alignment, cfg.intrinsics);
+      const auto bore = bore_alignment(cfg.alignment, geo::CameraRole::Wide, cfg.intrinsics);
       require(bore.valid, "bore geometry invalid");
       const Vec3 point = bore.sight_camera*(depth/bore.sight_camera.z);
       for (double yaw_deg : {20., 160., 300.}) for (double pitch_deg : {-10., -35., -65.}) {
