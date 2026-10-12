@@ -72,9 +72,11 @@ TEST(AlignmentConfig, RejectsBadValuesInsteadOfDefaulting) {
       {"y_fraction: 0.22", "y_fraction: 1.1"}, {"mode: box_fraction", "mode: typo"},
       {"x_fraction: 0.50", "x_fracton: 0.50"}, {"mode: off", "mode: measured"},
       {"assumed_depth_m: 10", "assumed_depth_m: 0"}, {"right_mm: 75", "right_mm: .inf"},
-      {"right_deg: 0, up_deg: 0}\n    detail", "right_deg: 90, up_deg: 0}\n    detail"},
+      // Single-line patterns: a release's YAML has CRLF line ends (Windows checkout, git archive).
+      {"wide:   {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0,",
+       "wide:   {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 90,"},
       {"detail: {right_mm: 75", "detail: {right_mm: 75, typo: 1"},
-      {"    detail: {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}\n", ""},
+      {"detail: {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}", "detail_missing: 1"},
       {"wide:   {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0}", "wide: null"},
       {"camera_offset:", "camera_from_bore_mm:"}}) {
     SCOPED_TRACE(value);

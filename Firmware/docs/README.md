@@ -15,6 +15,7 @@ procedure from a flag list.
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
 | commission or re-commission the yaw / pitch servo (after a payload, camera, weight, bearing or motor change) | [`operations/servo-commissioning.md`](operations/servo-commissioning.md) — one automatic command per axis: identify, design, verify on the station, write the asset |
 | work on camera tracking (ADR-003: target estimator, Level-1 reference, its stages and status) | [`ADR-003/IMPLEMENTATION.md`](ADR-003/IMPLEMENTATION.md) — the plan, the decisions taken against the architect's package, and the state of each stage; stage 1 is `tools/tracking/tracking.py stage1` |
+| plan the precision mount (0.3 MOA rangefinder: actuators, drives, development order) | [`ADR-005/ADR-005.md`](ADR-005/ADR-005.md) — proposal, primary and secondary hardware |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |
