@@ -4,9 +4,14 @@
 #include <gtest/gtest.h>
 
 #include "telemetry/telemetry.hpp"
+#include "blocking_sink.hpp"
 
 #include <unistd.h>
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <future>
 #include <fstream>
 #include <limits>
 #include <string>
@@ -92,6 +97,7 @@ TEST(Telemetry, AStopRecordCarriesWhatTheBackendWasToldAndHowHardItPushed) {
   r.phase = ota::Phase::Fault;
   t.push_control(r);
   t.freeze_control_trace();
+  t.wait_for_evidence();  // the file is the evidence writer's job
   std::string path;
   ASSERT_TRUE(t.trace_archive_path(path));
   std::ifstream in(path);
@@ -121,6 +127,7 @@ TEST(Telemetry, ATraceRowCarriesTheCurrentTheDriveReported) {
   r.phase = ota::Phase::Hold;
   t.push_control(r);
   t.freeze_control_trace();
+  t.wait_for_evidence();  // the file is the evidence writer's job
   std::string path;
   ASSERT_TRUE(t.trace_archive_path(path));
   std::string header, row;
@@ -149,6 +156,7 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   r.effort[1] = std::numeric_limits<double>::quiet_NaN();
   t.push_control(r);
   t.freeze_control_trace();
+  t.wait_for_evidence();  // the file is the evidence writer's job
 
   std::string path;
   ASSERT_TRUE(t.trace_archive_path(path));
@@ -199,6 +207,7 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   blocked.set_trace_archive_dir("/proc/definitely-not-writable/traces");
   blocked.push_control(r);
   blocked.freeze_control_trace();          // must not throw
+  blocked.wait_for_evidence();
   EXPECT_TRUE(blocked.trace_frozen());     // the in-memory answer still works
   std::string none;
   EXPECT_FALSE(blocked.trace_archive_path(none));
@@ -314,6 +323,7 @@ TEST(TripFileHeader, DeclaresEpochAndErrorBound) {
   r.timestamp_ns = 1;
   t.push_control(r);
   t.freeze_control_trace();
+  t.wait_for_evidence();  // the file is the evidence writer's job
   std::string path;
   ASSERT_TRUE(t.trace_archive_path(path));
   std::ifstream in(path);
@@ -328,5 +338,87 @@ TEST(TripFileHeader, DeclaresEpochAndErrorBound) {
   const long long bound = std::stoll(header.substr(at + key.size()));
   EXPECT_GT(bound, 0);
   EXPECT_LT(bound, 100 * 1000 * 1000);
+  fs::remove_all(dir);
+}
+
+// 2026-10-20 15:34:13: a trip latched in the control step and the step took 79.6 ms, because
+// the trip file was formatted and written right there while visiond loaded its model. The
+// latch has to be copies only. The trip file's path is made a FIFO nobody reads -- a disk
+// that does not answer -- and the latch must return anyway; before the evidence writer,
+// it hung in open() until a reader came.
+TEST(TelemetryEvidence, ATripLatchDoesNotWaitForADiskThatDoesNotAnswer) {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / ("ota-stalled-trip-" + std::to_string(::getpid()));
+  fs::remove_all(dir);
+  Telemetry t;
+  t.set_trace_archive_dir(dir.string());
+  for (int i = 0; i < 1024; ++i) {
+    ControlLogRecord r;
+    r.timestamp_ns = 7000000 + i;
+    t.push_control(r);
+  }
+  const std::string trip = (dir / "trip-7001023.ndjson").string();
+  ASSERT_TRUE(ota::test::make_blocking_sink(trip));
+  const std::string stops = (dir / "stop-evidence.ndjson").string();
+  ASSERT_TRUE(ota::test::make_blocking_sink(stops));
+
+  auto latch = std::async(std::launch::async, [&] {
+    const auto t0 = std::chrono::steady_clock::now();
+    t.freeze_control_trace();
+    t.append_stop_evidence("{\"kind\":\"probe\"}\n");
+    return std::chrono::steady_clock::now() - t0;
+  });
+  const bool returned = latch.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  if (!returned) {
+    ota::test::pump_fifos({trip, stops}, latch);  // answer, so the test can end
+    FAIL() << "the trip latch waited on the trip file's I/O";
+  }
+  const auto spent = latch.get();
+  EXPECT_LT(spent, std::chrono::milliseconds(20))
+      << std::chrono::duration<double, std::milli>(spent).count() << " ms";
+  EXPECT_TRUE(t.trace_frozen()) << "the in-memory window is there before any byte is on disk";
+  std::string path;
+  EXPECT_FALSE(t.trace_archive_path(path)) << "no path is published before the file is complete";
+
+  // The disk answers: both files arrive, complete, and the path is published.
+  auto written = std::async(std::launch::async, [&] { t.wait_for_evidence(); });
+  const auto got = ota::test::pump_fifos({trip, stops}, written);
+  EXPECT_EQ(got[0].rfind("{\"kind\":\"trip_trace\",\"rows\":1024,", 0), 0u) << got[0].substr(0, 80);
+  EXPECT_EQ(std::count(got[0].begin(), got[0].end(), '\n'), 1025);
+  EXPECT_EQ(got[1], "{\"kind\":\"probe\"}\n");
+  ASSERT_TRUE(t.trace_archive_path(path));
+  EXPECT_EQ(path, trip);
+  EXPECT_EQ(t.evidence_dropped(), 0u);
+  fs::remove_all(dir);
+}
+
+// One trip file in flight at a time: a second trip that latches while the first one's file
+// is still stuck is kept in memory (the socket answers with it) and its file is dropped and
+// counted -- it never waits for the first.
+TEST(TelemetryEvidence, ASecondTripWhileTheFirstIsStuckIsCountedNotWaitedFor) {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / ("ota-second-trip-" + std::to_string(::getpid()));
+  fs::remove_all(dir);
+  Telemetry t;
+  t.set_trace_archive_dir(dir.string());
+  ControlLogRecord r;
+  r.timestamp_ns = 100;
+  t.push_control(r);
+  const std::string first = (dir / "trip-100.ndjson").string();
+  ASSERT_TRUE(ota::test::make_blocking_sink(first));
+  t.freeze_control_trace();
+  r.timestamp_ns = 200;
+  t.push_control(r);
+  t.freeze_control_trace();  // the first file is still stuck in open()
+  EXPECT_EQ(t.control_window().frozen_t_ns, 200) << "the newer window is what a reader gets";
+  EXPECT_EQ(t.evidence_dropped(), 1u);
+
+  auto written = std::async(std::launch::async, [&] { t.wait_for_evidence(); });
+  const auto got = ota::test::pump_fifos({first}, written);
+  EXPECT_NE(got[0].find("\"frozen_t_ns\":\"100\""), std::string::npos);
+  std::string path;
+  EXPECT_FALSE(t.trace_archive_path(path))
+      << "the first trip's file must not be offered as the answer for the second trip";
+  EXPECT_FALSE(fs::exists(dir / "trip-200.ndjson"));
   fs::remove_all(dir);
 }
