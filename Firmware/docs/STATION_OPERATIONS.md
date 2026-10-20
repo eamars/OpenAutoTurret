@@ -975,10 +975,18 @@ pitch `disable_confirmed=confirmed`, stationary 557.9 ms, feedback age 4.573 ms;
 yaw stationary 502.2 ms (the dwell), age 0.265 ms, `disable_confirmed=unsupported`;
 `completion_quality=verified`, `missing_evidence=[]`.
 
-Not yet covered: a stop that **fails** writes only its `requested` line — `fail_parking()`
-does not emit, so "requested with no completion" is currently the signal for a failed
-stop. Linking `stop_id` to `shutdown.cause` (so you can tell who asked *and* what it
-proved from one file) is an open item.
+Two more lines close the story:
+- **A failed stop** writes a `failed: <why>` stage under its request's `stop_id`
+  (`fail_parking()`, since 2026-09-28), so "asked, drove it, could not prove it stopped" no longer
+  looks like silence.
+- **Every process end** writes `{"kind":"shutdown","stop_id":...,"parked":...,"cause":...}`, so
+  who asked and what it proved join on one key.
+
+The rest park (MENU > SHUTDOWN, and the launcher's stop: the station's normal stop since
+2026-10-03) writes its own line since 2026-10-20: `reason` `rest_park_shutdown`, stage `parked`
+(or `failed: pitch disable not confirmed by feedback within 2 s`), pitch `disable_confirmed` from
+the drive, and `stationary_observed` when neither axis moved more than half the park pose
+tolerance during the release. Before that every shutdown line said `stop-none`.
 
 ## Deployment and operation
 

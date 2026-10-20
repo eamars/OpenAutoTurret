@@ -91,9 +91,9 @@ said otherwise, and the state of each work item.
 |---|---|---|
 | Yaw accuracy limits (owner request) | **done 2026-10-02** | [`config/servo/yaw_accuracy.json`](../../config/servo/yaw_accuracy.json), [`config/tracking/photography_spec.json`](../../config/tracking/photography_spec.json), `commission.py calibrate` |
 | W1 stage 1: math, interfaces, simulator, 14 scenarios | **done 2026-10-02** | `tracking_core/` (+ `test-tracking`), `tools/tracking/` (`tracking.py stage1`, pytest), [stage-1 report](reports/STAGE1_2026-10-02.md) |
-| W2 stage 2: timing, noise, q_a, λ from data | **timing done 2026-10-02**; noise, q_a, λ need a subject | [`config/tracking/camera_timing.json`](../../config/tracking/camera_timing.json), `tracking.py timing` (below) |
-| W3 stage 3a: independent program on the station | next | commissiond plus the unchanged visiond: real camera, then tracking_core, then both ADR-002.2 servos |
-| W4 stage 3b: production | **built 2026-10-02, not yet on the station** | details below |
+| W2 stage 2: timing, noise, q_a, λ from data | **timing done 2026-10-02**; noise and q_a still need a moving subject. λ was set on the plant, not from a stage-2 solve: yaw 6, pitch 4 (2026-10-20) | [`config/tracking/camera_timing.json`](../../config/tracking/camera_timing.json), `tracking.py timing` (below); λ: `STATION_OPERATIONS.md`, drive review 2026-10-19/20 |
+| W3 stage 3a: independent program on the station | **skipped**: 3b went to the station first | commissiond plus the unchanged visiond was the plan; production reached the same evidence sooner |
+| W4 stage 3b: production | **on the station since 2026-10-02** (owner accepted the human-5 session that evening); stage 1 re-run PASS 14/14 on 2026-10-20 | details below; open items at the end of the section |
 
 **Stage 1 re-run, 2026-10-20: PASS (14/14).** From 2026-10-06 to 10-20 the suite tested no real
 geometry:
@@ -111,8 +111,9 @@ now counts the release in whole segments (`level1.cpp`; test
 `level1_reaches_its_speed_ceiling_jerk_limited`). Steady yaw framing FF+FB is 2–7 px at 8–20°/s,
 against 120–280 px FB only.
 
-**Stage 3b in production (controld).** Software is done and tested offline; physical 3b has not
-started.
+**Stage 3b in production (controld).** Running on the station since 2026-10-02: AUTO_TRACK and
+AUTO_ROAM on the tracking core, with both ADR-002.2 servos (status updated 2026-10-20; the line
+here said "not yet on the station" for 18 days after it was).
 
 - **The ADR-002.2 servos own both axes** at Hold in every mode. The mixed backend:
   - steps the yaw `Servo` on every GM6020 frame;
@@ -139,7 +140,7 @@ started.
 - **Still to do for 3b:**
   - the V2 observation wire, so visiond sends each frame's exposure and optical time;
   - removing the legacy estimator once 3b qualifies;
-  - the station runs themselves.
+  - a moving-subject session (W2's noise and q_a), the one station run still owed.
 
 ## Stage 2: camera timing (2026-10-02)
 

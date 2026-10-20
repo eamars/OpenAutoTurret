@@ -655,6 +655,9 @@ class ControlLoop {
     Phase unhomed_from = Phase::Idle;
     double lift_from_rad = 0, lift_speed_rad_s = 0;
     std::string then_command, then_arg;  // Lift: the mode command that runs once pitch is in
+    // Release: where each axis was when the motors were first asked off, and the furthest either
+    // has moved from there since -- the stop record's stationary claim.
+    std::array<double, kAxisCount> release_q{}, release_moved{};
   } rest_park_;
   // Lift: up to 10 deg/s, reached at 20 deg/s^2 from the stop, slowing into the approach pose.
   static constexpr double kRestLiftSpeedRadS = 10.0 * kDeg2Rad;
@@ -669,6 +672,9 @@ class ControlLoop {
   bool step_unhomed_touch(const AxisSnapshot& pitch, TimeNs now_ns, double dir, bool held_by_supervisor);
   void rest_park_hold_yaw(const AxisSnapshot& yaw, TimeNs now_ns, TimeNs period_ns);
   void rest_park_on_stop(const AxisSnapshot& pitch, TimeNs now_ns, bool touched, const std::string& why);
+  // The rest park's line in stop-evidence.ndjson, under a stop_id of its own that the process's
+  // shutdown line then carries.
+  void note_rest_park_evidence(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, bool pitch_disable_confirmed);
   std::array<double, kAxisCount> last_q_{};
   // Drive-reported motor temperature (degC) per axis (for the 1 Hz log + web).
   std::array<double, kAxisCount> last_temp_{};

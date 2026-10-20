@@ -6,9 +6,15 @@
 // the turret anywhere: Park faulted it in 40 ms, and a fault then refused both Recover and Home.
 #include <gtest/gtest.h>
 
+#include <unistd.h>
+
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "control/control_loop.hpp"
 #include "sim/sim_motor_backend.hpp"
@@ -241,6 +247,40 @@ TEST(RestPark, ShutdownParksThenSwitchesBothMotorsOffAndOnlyHomeStartsAgain) {
   ASSERT_TRUE(s.ack().accepted) << s.ack().reason;
   ASSERT_TRUE(s.until([&] { return s.saw_fault || (s.loop->homed() && s.loop->at_ready()); }));
   EXPECT_FALSE(s.saw_fault) << s.loop->fault_reason();
+}
+
+TEST(RestPark, ShutdownWritesItsStopRecordAndTheShutdownLineCarriesItsId) {
+  // Until 2026-10-20 the rest park, the station's normal stop, wrote no stop-evidence line, and
+  // every process-end line said stop_id "stop-none": nothing tied how it stopped to what it proved.
+  namespace fs = std::filesystem;
+  Station s;
+  const fs::path dir = fs::temp_directory_path() / ("ota-rest-evidence-" + std::to_string(::getpid()));
+  fs::remove_all(dir);
+  s.loop->set_trace_archive_dir(dir.string());
+  ASSERT_TRUE(s.home());
+  s.run("request_shutdown");
+  ASSERT_TRUE(s.until([&] { return s.loop->phase() == Phase::Idle || s.saw_fault; }));
+  ASSERT_FALSE(s.saw_fault) << s.loop->fault_reason();
+  s.loop->note_shutdown(true, "stop requested; rest-stop shutdown");
+  s.loop->wait_for_evidence();
+  std::ifstream in(dir / "stop-evidence.ndjson");
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(in, line);) lines.push_back(line);
+  ASSERT_EQ(lines.size(), 2u);
+  const auto field = [](const std::string& line, const std::string& key) {
+    const auto at = line.find("\"" + key + "\":\"");
+    if (at == std::string::npos) return std::string();
+    const auto from = at + key.size() + 4;
+    return line.substr(from, line.find('"', from) - from);
+  };
+  EXPECT_EQ(field(lines[0], "reason"), "rest_park_shutdown");
+  EXPECT_EQ(field(lines[0], "stage"), "parked");
+  EXPECT_EQ(field(lines[0], "completion_quality"), "verified") << lines[0];
+  EXPECT_NE(lines[0].find("\"disable_confirmed\":\"confirmed\""), std::string::npos) << "pitch said it is off";
+  EXPECT_EQ(field(lines[1], "kind"), "shutdown");
+  EXPECT_NE(field(lines[0], "stop_id"), "");
+  EXPECT_EQ(field(lines[1], "stop_id"), field(lines[0], "stop_id")) << "one key joins the stop and the process end";
+  fs::remove_all(dir);
 }
 
 TEST(RestPark, ABootIntoShutdownStaysOffUntilHome) {

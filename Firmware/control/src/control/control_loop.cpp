@@ -886,6 +886,43 @@ bool ControlLoop::step_unhomed_touch(const AxisSnapshot& pitch, TimeNs now_ns, d
   return true;
 }
 
+void ControlLoop::note_rest_park_evidence(const AxisSnapshot sp[kAxisCount], TimeNs now_ns,
+                                          bool pitch_disable_confirmed) {
+  // Since 2026-10-03 the rest park is how the station normally stops, and until 10-20 it wrote no
+  // stop record: every shutdown line said stop_id "stop-none", so nothing tied it to evidence.
+  // A fresh id, never an earlier stop's: this is a stop of its own.
+  mixed_stop_id_ = "stop-" + std::to_string(rest_park_.since_ns);
+  StopEvidence ev;
+  ev.stop_id = mixed_stop_id_;
+  ev.reason = "rest_park_shutdown";
+  ev.requested_at_ns = rest_park_.since_ns;
+  ev.stage = pitch_disable_confirmed ? "parked" : "failed: pitch disable not confirmed by feedback within 2 s";
+  ev.axes[0].axis = "pitch";
+  ev.axes[1].axis = "yaw";
+  const int P = ix(AxisId::Pitch), Y = ix(AxisId::Yaw);
+  ev.axes[0].zero_requested = Evidence::Requested;
+  ev.axes[0].disable_requested = Evidence::Requested;
+  ev.axes[0].disable_confirmed = pitch_disable_confirmed ? Evidence::Confirmed : Evidence::Absent;
+  ev.axes[1].zero_requested = Evidence::Requested;
+  ev.axes[1].disable_requested = Evidence::Unsupported;  // the GM6020 has no disable to confirm
+  ev.axes[1].disable_confirmed = Evidence::Unsupported;
+  // Stationary: neither axis moved further than the park's own pose tolerance from where it was
+  // when the motors were first asked off, over the whole release.
+  const double tol = .5 * cfg_.park.pos_tol_deg * kDeg2Rad;
+  const long long window = rest_park_.last_disable_ns ? now_ns - rest_park_.since_ns : 0;
+  for (int a : {P, Y}) {
+    auto& axis = ev.axes[a == P ? 0 : 1];
+    axis.last_neutral_request_ns = rest_park_.last_disable_ns;
+    if (sp[a].has_feedback && sp[a].rx_ns > 0) axis.feedback_age_ms = static_cast<double>(now_ns - sp[a].rx_ns) / 1e6;
+    if (window > 0 && rest_park_.release_moved[a] <= tol) {
+      axis.stationary_observed = Evidence::Observed;
+      axis.stationary_window_ns = window;
+    }
+  }
+  ev.finalise();
+  telemetry_.append_stop_evidence(ev.to_json_line());
+}
+
 bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, TimeNs period_ns) {
   // Step 6 executes these two, and step 7 faults (which ends the park).
   if (last_decision_.action == SafetyAction::Disable ||
@@ -952,6 +989,17 @@ bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_n
     }
     case RestPark::Release: {
       const bool confirmed = pitch.has_feedback && pitch.disabled_known && pitch.disabled;
+      if (!rest_park_.last_disable_ns) {
+        for (int i = 0; i < kAxisCount; ++i) {
+          rest_park_.release_q[i] = sp[i].q_rad;
+          rest_park_.release_moved[i] = 0.0;
+        }
+      }
+      for (int i = 0; i < kAxisCount; ++i) {
+        const double moved = std::abs(sp[i].q_rad - rest_park_.release_q[i]);
+        rest_park_.release_moved[i] = std::isfinite(moved)
+            ? std::max(rest_park_.release_moved[i], moved) : std::numeric_limits<double>::infinity();
+      }
       if (!rest_park_.last_disable_ns ||
           (!confirmed && now_ns - rest_park_.last_disable_ns >= 100'000'000)) {
         backend_->deenergize(AxisId::Pitch);
@@ -967,6 +1015,7 @@ bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_n
       else
         spdlog::error("SHUT DOWN: pitch disable not confirmed by feedback within 2 s; its STOP requests "
                       "continue (yaw has no disable to confirm)");
+      note_rest_park_evidence(sp, now_ns, confirmed);
       backend_->invalidate_calibration();
       homed_ = pitch_homed_ = at_ready_ = false;
       if (backend_->supports_continuous_yaw()) {
