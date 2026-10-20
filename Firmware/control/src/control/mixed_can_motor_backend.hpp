@@ -179,7 +179,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   void heartbeat() override;
   bool watchdog_fault() const override;
   const char* servo_hold_reason() const override {
-    for (const auto* h : {&yaw_follow_hold_, &pitch_follow_hold_, &yaw_osc_hold_, &yaw_stall_hold_})
+    for (const auto* h : {&yaw_follow_hold_, &pitch_follow_hold_, &yaw_osc_hold_, &yaw_stall_hold_, &yaw_gap_hold_})
       if (const char* r = h->load()) return r;
     return nullptr;
   }
@@ -296,9 +296,17 @@ class MixedCanMotorBackend final : public MotorBackend {
   // only an episode that persists kServoFailurePersistNs is a failure, and that HOLDs (energised),
   // it does not fault. An episode ends after kServoQuietNs below 70% of the limit / without a rock.
   static constexpr TimeNs kServoFailurePersistNs = 5'000'000'000, kServoQuietNs = 1'000'000'000;
-  control::EpisodeLatch yaw_osc_episode_, yaw_stall_episode_;
+  control::EpisodeLatch yaw_osc_episode_, yaw_stall_episode_, yaw_gap_episode_;
+  // Holes in the GM6020's 1 kHz frame stream longer than the servo's dt_max: each re-seeds the
+  // servo (a transient degrades); recurring for kServoFailurePersistNs, they HOLD.
+  TimeNs yaw_last_gap_ns_ = 0;
+  uint64_t yaw_servo_gaps_ = 0;
+  // Measured 2026-10-20 (run/drive-review-20261019/station/gm6020-silence*.csv): the GM6020 keeps
+  // applying its last current command for 198-203 ms after the host falls silent, then zeroes its
+  // output itself. The DJI guide documents no command timeout.
+  static constexpr TimeNs kGm6020CommandWatchdogNs = 200'000'000;
   double yaw_osc_peak_a_ = 0;
-  std::atomic<const char*> yaw_osc_hold_{nullptr}, yaw_stall_hold_{nullptr};
+  std::atomic<const char*> yaw_osc_hold_{nullptr}, yaw_stall_hold_{nullptr}, yaw_gap_hold_{nullptr};
   void track_yaw_servo_episodes_locked(TimeNs now, bool rock_settling);
   ServoReference yaw_reference_{};
   double yaw_servo_offset_rad_ = 0;   // absolute GM6020 angle minus the session yaw

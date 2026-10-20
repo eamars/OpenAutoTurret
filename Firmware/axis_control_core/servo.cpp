@@ -39,6 +39,14 @@ bool Servo::reset(double t,double q,double v,double current) {
   applied_history_.clear(); applied_history_.push_back({t,current});
   last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; ready_=true; return true;
 }
+bool Servo::reseed(double t,double q,double v,double applied) {
+  if (!ready_ || !std::isfinite(t) || !std::isfinite(q) || !std::isfinite(v) ||
+      !std::isfinite(applied) || std::abs(applied)>p_.current_cap) return false;
+  t_=encoder_time_=gyro_time_=step_time_=t; q_=q; v_=v;
+  p00_=p_.encoder_variance; p01_=0; p11_=p_.gyro_variance;
+  if (applied!=last_applied_) { applied_history_.push_back({t,applied}); last_applied_=applied; }
+  return true;
+}
 double Servo::friction(double v) const {
   if (v==0.) return 0.;
   const double speed=std::abs(v);

@@ -210,10 +210,12 @@ TEST(ReferenceServo, FollowsTheReferenceThroughTheProductionOutputPath) {
   EXPECT_NEAR(plant.q(), 0.05, 0.006);
 }
 
-// What the old real-time version of these tests hit under load, made explicit: a frame gap past
-// the asset's dt_max (20 ms) is servo data the servo cannot integrate, and it trips. The failure
-// then read as every later command_reference refused.
-TEST(ReferenceServo, AFrameGapPastDtMaxTripsTheServo) {
+// A hole in the GM6020's 1 kHz frame stream longer than the servo's dt_max (20 ms) used to trip the
+// axis, latched -- a fault for a transient (owner ruling 2026-10-02; and what the old real-time
+// version of these tests hit under load). Now the servo is re-seeded at the next frame and drives
+// on; only holes that keep recurring HOLD, and no feedback at all stays the guard's call.
+// During a hole the plant keeps the last current, as the drive does (measured: for ~200 ms).
+TEST(ReferenceServo, AOneOffFrameHoleIsReseededNotTripped) {
   MixedCanMotorBackend b;
   Plant plant;
   Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
@@ -221,11 +223,77 @@ TEST(ReferenceServo, AFrameGapPastDtMaxTripsTheServo) {
   ASSERT_TRUE(Access::load(b, err)) << err;
   ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0)));
   run(b, plant, 0.1);
+  g_virtual_ns += 25'000'000;  // one 25 ms hole
+  run(b, plant, 1.0);
   EXPECT_FALSE(Access::tripped(b));
-  g_virtual_ns += 25'000'000;  // one 25 ms hole in the 1 kHz stream
+  EXPECT_TRUE(Access::engaged(b));
+  EXPECT_EQ(b.servo_hold_reason(), nullptr) << "one hole is a transient, not a HOLD";
+  EXPECT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0)));
+  EXPECT_NEAR(plant.q(), 0.0, 0.006);
+}
+
+TEST(ReferenceServo, AHoleMidMoveDoesNotKickTheAxis) {
+  // The same 0.05 rad move twice, once with a 40 ms hole at its fastest point: the re-seeded servo
+  // must follow as the uninterrupted one does, not lurch.
+  auto move_with_hole = [](bool hole, double& worst_error) {
+    MixedCanMotorBackend b;
+    Plant plant;
+    Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
+    std::string err;
+    EXPECT_TRUE(Access::load(b, err)) << err;
+    EXPECT_TRUE(b.command_reference(AxisId::Yaw, smooth(0, 0.05, 0.6)));
+    worst_error = 0;
+    bool done = !hole;
+    run(b, plant, 1.5, [&](double t) {
+      EXPECT_TRUE(b.command_reference(AxisId::Yaw, smooth(t, 0.05, 0.6)));
+      worst_error = std::max(worst_error, std::abs(plant.q() - smooth(t, 0.05, 0.6).q));
+      if (!done && t >= 0.3) { done = true; g_virtual_ns += 40'000'000; }
+    });
+    EXPECT_FALSE(Access::tripped(b));
+    return plant.q();
+  };
+  double clean_error = 0, hole_error = 0;
+  const double clean_q = move_with_hole(false, clean_error);
+  const double hole_q = move_with_hole(true, hole_error);
+  EXPECT_NEAR(hole_q, clean_q, 0.006) << "settled somewhere else after the hole";
+  // The hole itself costs what 40 ms of the move costs (the reference runs on, the axis coasts on
+  // its last current), not a kick on top: 0.05 rad over 0.6 s peaks at ~0.13 rad/s, ~5 mrad in 40 ms.
+  EXPECT_LT(hole_error, clean_error + 0.008) << "clean " << clean_error << " rad, with hole " << hole_error;
+}
+
+TEST(ReferenceServo, AHoleLongerThanTheDrivesWatchdogStartsFromZeroCurrent) {
+  MixedCanMotorBackend b;
+  Plant plant;
+  Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
+  std::string err;
+  ASSERT_TRUE(Access::load(b, err)) << err;
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0)));
+  run(b, plant, 0.2);
+  plant.command(0.0);           // the drive zeroed itself 200 ms into the silence
+  g_virtual_ns += 250'000'000;  // a 250 ms hole
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0)));  // the loop's reference runs on
+  run(b, plant, 1.0, [&](double) { ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0))); });
+  EXPECT_FALSE(Access::tripped(b));
+  EXPECT_NEAR(plant.q(), 0.0, 0.006);
+}
+
+TEST(ReferenceServo, HolesThatKeepRecurringHoldAndClearWhenTheyStop) {
+  MixedCanMotorBackend b;
+  Plant plant;
+  Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
+  std::string err;
+  ASSERT_TRUE(Access::load(b, err)) << err;
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0, 100.0)));
+  for (int k = 0; k < 14; ++k) {  // a 25 ms hole every 0.5 s for 7 s
+    run(b, plant, 0.5);
+    g_virtual_ns += 25'000'000;
+  }
   run(b, plant, 0.01);
-  EXPECT_TRUE(Access::tripped(b));
-  EXPECT_FALSE(b.command_reference(AxisId::Yaw, hold_at(0.0)));
+  EXPECT_FALSE(Access::tripped(b));
+  ASSERT_NE(b.servo_hold_reason(), nullptr);
+  EXPECT_STREQ(b.servo_hold_reason(), "yaw feedback intermittent for 5 s");
+  run(b, plant, 2.5);  // clean frames
+  EXPECT_EQ(b.servo_hold_reason(), nullptr) << "the HOLD outlived the holes";
 }
 
 TEST(ReferenceServo, LegacyCommandReleasesIt) {

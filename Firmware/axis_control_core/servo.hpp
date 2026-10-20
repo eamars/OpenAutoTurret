@@ -70,6 +70,11 @@ class Servo {
  public:
   bool configure(const ServoParameters& p);
   bool reset(double time, double position, double velocity, double previous_current);
+  // After a hole in the measurements longer than dt_max: restart the observer at a measured state
+  // and keep the controller (integral, outputs, thermal RMS). reset() is for taking an axis over;
+  // its integral (current less static friction) is right at rest and counts the friction feedforward
+  // twice in motion. `applied` is what the drive applied through the hole, for the crosstalk history.
+  bool reseed(double time, double position, double velocity, double applied);
   // Each measurement carries its own sample time; call for every frame received.
   bool observe_encoder(double sample_time, double position);
   bool observe_gyro(double sample_time, double rate);

@@ -1244,8 +1244,8 @@ void MixedCanMotorBackend::release_yaw_servo_locked() {
   yaw_velocity_loop_.reset(yaw_state_.position_rad, clock_());
   yaw_shaped_speed_rad_s_ = 0;
   // Its episodes end with it: nothing would update them, and a latched HOLD would never clear.
-  yaw_osc_episode_ = {}; yaw_stall_episode_ = {};
-  yaw_osc_hold_.store(nullptr); yaw_stall_hold_.store(nullptr);
+  yaw_osc_episode_ = {}; yaw_stall_episode_ = {}; yaw_gap_episode_ = {};
+  yaw_osc_hold_.store(nullptr); yaw_stall_hold_.store(nullptr); yaw_gap_hold_.store(nullptr);
   spdlog::info("yaw servo released at q={:+.5f} rad (stale segments while engaged: {})",
                yaw_state_.position_rad, yaw_servo_stale_);
 }
@@ -1346,6 +1346,25 @@ void MixedCanMotorBackend::track_yaw_servo_episodes_locked(TimeNs now, bool rock
     case E::None: break;
   }
   if (yaw_osc_episode_.active()) yaw_osc_peak_a_ = std::max(yaw_osc_peak_a_, rms);
+  // Frame holes: one is a transient (re-seeded, above); holes recurring for 5 s HOLD, and a second
+  // without one clears it.
+  const bool gapping = yaw_last_gap_ns_ && now - yaw_last_gap_ns_ < kServoQuietNs;
+  switch (yaw_gap_episode_.update(now, gapping, !gapping, kServoFailurePersistNs, kServoQuietNs)) {
+    case E::Started:
+      spdlog::warn("yaw feedback intermittent: frame holes past dt_max (tolerated; HOLD if they recur for {} s)",
+                   persist_s);
+      break;
+    case E::Persisted:
+      spdlog::error("yaw feedback intermittent for {} s ({} holes since start): HOLD until a second passes "
+                    "without one", persist_s, yaw_servo_gaps_);
+      yaw_gap_hold_.store("yaw feedback intermittent for 5 s");
+      break;
+    case E::Cleared:
+      spdlog::info("yaw feedback intermittent: cleared after {:.2f} s", yaw_gap_episode_.last_duration_ns() * 1e-9);
+      yaw_gap_hold_.store(nullptr);
+      break;
+    case E::None: break;
+  }
   // Stuck: the stall recovery keeps rocking without freeing the axis.
   switch (yaw_stall_episode_.update(now, rock_settling, !rock_settling, kServoFailurePersistNs, kServoQuietNs)) {
     case E::Persisted:
@@ -1395,6 +1414,33 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   }
   const double offset = yaw_servo_offset_rad_;
   const double ts = (rx_ns - yaw_servo_epoch_ns_) * 1e-9;
+  // A hole in the frame stream longer than the servo can integrate across (its dt_max): until
+  // 2026-10-20 the step below refused it and the axis tripped, latched, for one late burst of
+  // frames -- a fault for a transient (owner ruling 2026-10-02). Now the servo's observer is
+  // re-seeded here, at this frame, at the measured angle and speed; the controller keeps its
+  // integral (a reset() here counted the friction feedforward twice and kicked a moving axis 21 mrad
+  // in simulation). The current applied through the hole is the last command we sent, unless the
+  // host was silent past the drive's own watchdog, which zeroed it. Recurring holes HOLD
+  // (track_yaw_servo_episodes_locked); no feedback at all is still the guard's call.
+  const auto max_step_ns = static_cast<TimeNs>(yaw_servo_.parameters().dt_max * 1e9);
+  if (yaw_servo_last_step_ns_ && now - yaw_servo_last_step_ns_ > max_step_ns) {
+    const double sent = yaw_last_output_.load();
+    const bool drive_zeroed = now - yaw_last_successful_tx_ns_ >= kGm6020CommandWatchdogNs;
+    const double applied = drive_zeroed || !std::isfinite(sent) ? 0.0 : sent;
+    const auto gap_ms = (now - yaw_servo_last_step_ns_) / 1'000'000;
+    yaw_last_gap_ns_ = now;
+    ++yaw_servo_gaps_;
+    if (!yaw_servo_.reseed(ts, yaw_state_.position_rad + offset, yaw_state_.feedback.speed_rad_s(), applied)) {
+      spdlog::warn("yaw servo: no frame for {} ms and the re-seed was refused; released, re-engages on the "
+                   "next reference", gap_ms);
+      release_yaw_servo_locked();
+      send_yaw_zero_locked();
+      return;
+    }
+    spdlog::warn("yaw servo: no frame for {} ms (> dt_max {} ms); re-seeded at q={:+.5f} rad, {:+.3f} A "
+                 "applied{} (gap {} since start)", gap_ms, max_step_ns / 1'000'000, yaw_state_.position_rad,
+                 applied, drive_zeroed ? ", the drive's own watchdog had zeroed it" : "", yaw_servo_gaps_);
+  }
   if (!yaw_servo_.observe_encoder(ts, yaw_state_.position_rad + offset)) {
     // The observer could not take the reading: let go (zero current) and let the next reference
     // re-engage it from the measured state. A transient, not a fault (owner ruling 2026-10-02).
