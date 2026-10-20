@@ -37,17 +37,31 @@ def archive_acquisition_source(repo, archive):
                 target.add(path, arcname=relative, recursive=False)
 
 
-def cross_build(repo, args):
+def cross_build(repo, args, revision=None):
     """Build the aarch64 tree on this machine and pack it, before anything on the station changes.
 
     On Windows the build runs in WSL against the extracted Debian 13 sysroot that servo
     commissioning already builds with (tools/servo_commission/station.py), and the archive is
     packed there too: Windows tar drops the executable bits, and the launcher reads a
     non-executable controld as "no prebuilt tree" and quietly compiles on the station instead.
+
+    With a revision, WSL builds that commit from a native mirror (tools/cross_build_mirror.py):
+    the checkout on /mnt/c is behind WSL's 9p filesystem, which made a header change a 3-4 minute
+    build, and building the commit rather than the working tree means an edit made meanwhile
+    cannot reach the binaries. Returns (archive, built_from_commit).
     """
     def relative(path):
         return os.path.relpath(Path(path).resolve(), repo).replace(os.sep, "/")
     local = ["wsl.exe", "-e"] if os.name == "nt" else []
+    if local and revision:
+        command = [*local, "python3", "Firmware/tools/cross_build_mirror.py", "--repo", ".",
+                   "--revision", revision, "--out", "Firmware/build-arm64.tar"]
+        if args.sysroot:
+            command += ["--sysroot", relative(args.sysroot)]
+        if args.host_lib:
+            command += ["--host-lib", relative(args.host_lib)]
+        run(command, cwd=repo)
+        return repo / "Firmware" / "build-arm64.tar", True
     command = [*local, "python3" if local else sys.executable, "Firmware/tools/cross_build.py"]
     if args.sysroot:
         command += ["--sysroot", relative(args.sysroot)]
@@ -60,7 +74,7 @@ def cross_build(repo, args):
     run([*local, "tar", "-C", "Firmware", "-cf", "Firmware/build-arm64.tar",
          "--exclude=*.o", "--exclude=.ninja_deps", "--exclude=.ninja_log",
          "--exclude=_deps", "build-arm64"], cwd=repo)
-    return repo / "Firmware" / "build-arm64.tar"
+    return repo / "Firmware" / "build-arm64.tar", False
 
 
 def main():
@@ -155,9 +169,12 @@ def main():
                        capture_output=True, text=True).stdout.strip()
         deployment_label = revision[:12]
     quote = shlex.quote
-    connection = []
+    # Keep-alives on every ssh and scp: 2026-10-20 18:26 a deploy's `ssh ... test -x` hung on a
+    # connection that died after it was established and waited 79 minutes; ConnectTimeout only
+    # covers the connect. Four missed 15 s probes end it with an error instead.
+    connection = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
     if args.connect_address:
-        connection = ["-o", f"HostName={args.connect_address}",
+        connection += ["-o", f"HostName={args.connect_address}",
                       "-o", f"HostKeyAlias={args.host.rsplit('@', 1)[-1]}"]
     if args.identity is not None:
         # IdentitiesOnly: without it ssh also offers anything an agent is holding, and an
@@ -174,8 +191,9 @@ def main():
 
     # The build machine is this one; see tools/cross_build.py for what it links against and
     # why that is the station's own library set rather than an approximation of it.
-    artifacts = cross_build(repo, args) if args.prebuilt else None
-    if artifacts and not args.baseline_bundle:
+    artifacts, from_commit = (cross_build(repo, args, None if args.baseline_bundle else revision)
+                              if args.prebuilt else (None, False))
+    if artifacts and not args.baseline_bundle and not from_commit:
         # The station gets `git archive` of the commit, but the prebuilt binaries are compiled from
         # the working tree. 2026-10-03: an edit made while a deploy was compiling shipped controld
         # built from uncommitted source under a release named for the commit. So the tree must still
