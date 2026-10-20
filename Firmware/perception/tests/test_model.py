@@ -757,8 +757,9 @@ class TestFactory(unittest.TestCase):
         config = VisionConfig.from_file(os.path.join(PACKAGE_ROOT, "configs",
                                                      "perception_v1.json"))
         self.assertEqual(sorted(config.models),
-                         ["bakeoff_efficientdet320", "bakeoff_nanodet416", "offline_replay",
-                          "person_detect", "person_detect_available"])
+                         ["_mock", "bakeoff_efficientdet320", "bakeoff_nanodet416",
+                          "hailo_yolov8n", "hailo_yolov8n_objects", "hailo_yolov8s_pose",
+                          "offline_replay", "person_detect", "person_detect_available"])
         for name in config.models:
             item = manifest_for(config, name)
             item.validate()
