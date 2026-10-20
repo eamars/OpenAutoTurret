@@ -83,7 +83,11 @@ def main() -> int:
     if args.sysroot:
         command += ["--sysroot", mirror_sysroot(args.sysroot.resolve(), base / "sysroot")]
     if args.host_lib:
-        command += ["--host-lib", args.host_lib.resolve()]
+        # A few small libraries the cross binutils load on every invocation: native too.
+        host_lib = base / "host-lib"
+        host_lib.mkdir(parents=True, exist_ok=True)
+        run(["rsync", "-a", "--delete", f"{args.host_lib.resolve()}/", f"{host_lib}/"])
+        command += ["--host-lib", host_lib]
     run(command, cwd=src)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     run(["tar", "-C", build.parent, "-cf", args.out,
