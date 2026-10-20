@@ -282,6 +282,27 @@ known I2C fault, next to an under-voltage event). The launcher's mixed-station g
 fresh IMU tare, kept the station down after a deploy. In normal operation that wait now times out
 into a start without the IMU; commissioning keeps the gate.
 
+## Target type: HUMAN, HEAD, CAT, DOG (owner ruling, 2026-10-20)
+
+Design and decisions: [DESIGN_TARGET_TYPE_2026-10-20.md](DESIGN_TARGET_TYPE_2026-10-20.md).
+
+- **What the operator sees.** TARGETS drawer, FOLLOW row: one type at a time. HUMAN aims at the torso,
+  HEAD at the head (pose keypoints; the default, as before), CAT and DOG at the middle of the box.
+  Only the chosen type is detected, listed, overlaid and selectable. Click selection of a listed
+  candidate is unchanged.
+- **What a change does.** controld persists it (`run/state/target_type.json`) and, until perception's
+  frames carry it, holds the turret in MANUAL: the target is dropped, the turret brakes and holds, the
+  automatic cycle is frozen and jogs are refused. A mode chosen meanwhile is the one resumed.
+  visiond swaps the network between frames when the type needs the other model.
+- **Measured on the station (release e561e58).** Model swap in visiond 191-208 ms (HEAD <-> CAT/DOG,
+  HUMAN), 0 ms between types of one model. Command to resumed mode 0.37-0.57 s. From a 15 deg/s
+  patrol the brake travels 3.4-4.6 deg before the hold. AUTO_ROAM resumed every time, no fault.
+- **If perception never applies it** (10 s): the turret stays held in MANUAL, the chip says NOT
+  APPLIED, and nothing faults. Choosing a type again retries.
+- **Developer runs.** `run_application.sh start --profile X` pins that model: visiond acknowledges
+  the operator's type without applying it (the stationary-object trials on the objects profile
+  keep working). A plain `start` follows the operator's type.
+
 ## SURVEILLANCE: a fixed camera that follows (owner ruling, 2026-10-05)
 
 **Ruling.** A fourth mode, AUTO_ROAM's sibling. The turret faces a saved **watch point** and holds
