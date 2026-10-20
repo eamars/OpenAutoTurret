@@ -454,6 +454,24 @@ const HUD_SPEED_SETTINGS = [
 ];
 const HUD_SPEED_MIN_DEG_S = 0.5;   // controld's own floor
 
+// What the turret follows (owner, 2026-10-20): one of four types, as chips at the head of the TARGETS
+// drawer. controld owns the choice and holds the turret while perception changes model; the page only
+// shows it and sends set_target_type. The chosen chip sends nothing (it is already in force), and while
+// a switch is pending it says so. Absent when the controller does not report a type (older controld).
+const HUD_TARGET_TYPES = ["HUMAN", "HEAD", "CAT", "DOG"];
+function hudTargetTypeChips(t) {
+  t = t || {};
+  const requested = String(t.target_type || "").toUpperCase();
+  if (HUD_TARGET_TYPES.indexOf(requested) < 0) return null;
+  const switching = !!t.target_type_switching;
+  const chips = HUD_TARGET_TYPES.map((type) => ({
+    type: type, current: type === requested, pending: switching && type === requested,
+    command: type === requested ? null : "set_target_type", arg: type }));
+  const note = !switching ? "" : t.target_type_overdue ? requested + " NOT APPLIED · HOLDING"
+                                                      : "SWITCHING TO " + requested + " · HOLDING";
+  return { label: "FOLLOW", chips: chips, note: note };
+}
+
 function hudSpeedRows(t) {
   t = t || {};
   const round = (x) => Math.round(x * 10) / 10;
@@ -1907,9 +1925,22 @@ function renderDrawer() {
              escapeMarkup(waiting ? "PRESS AGAIN" : (a.note || "")) + "</span></button>";
     }).join("");
     if (drawerOpen === "MENU") rows += renderSettings(lastTelemetry || {});
+    if (drawerOpen === "TARGETS") rows = renderTargetTypes(lastTelemetry || {}) + rows;
   }
   drawer.innerHTML = '<div class="dtitle">' + drawerOpen + "</div>" + rows;
   drawer.hidden = false;
+}
+
+function renderTargetTypes(t) {
+  const spec = hudTargetTypeChips(t);
+  if (!spec) return "";
+  const chips = spec.chips.map((c) =>
+    '<button type="button" class="sbtn chip' + (c.current ? " on" : "") + (c.pending ? " pending" : "") +
+    '" data-cmd="' + (c.command || "") + '" data-arg="' + c.arg + '" data-kind="act" aria-pressed="' +
+    String(c.current) + '"' + (c.command ? "" : " disabled") + ">" + c.type + "</button>").join("");
+  return '<div class="drow setting ttype"><span class="rl">' + spec.label + '</span><span class="stepper">' +
+    chips + "</span>" + (spec.note ? '<span class="snote warn">' + escapeMarkup(spec.note) + "</span>" : "") +
+    "</div>";
 }
 
 function renderSettings(t) {
@@ -2292,6 +2323,13 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
                 cursor:pointer; }
 #drawer .sbtn:disabled { opacity:.25; cursor:default; }
 #drawer .sval { min-width:52px; text-align:center; color:#edf2eb; }
+/* TARGETS > FOLLOW: the type in force is lit and inert (not dimmed like a refused control); a switch in
+   progress blinks it until perception applies it. */
+#drawer .sbtn.chip { padding:0 6px; font-size:10px; letter-spacing:.08em; }
+#drawer .sbtn.chip.on, #drawer .sbtn.chip.on:disabled { opacity:1; color:#0b100b; background:#95f58b; }
+#drawer .sbtn.chip.pending { animation: chipwait 1s steps(2) infinite; }
+@keyframes chipwait { 50% { background:rgba(149,245,139,.35); } }
+#drawer .snote.warn { color:#f2b329; }
 #drawer .snote { width:100%; font-size:9px; color:rgba(237,242,235,.45); }
 
 /* --- §22 safety presentation ------------------------------------------------ */

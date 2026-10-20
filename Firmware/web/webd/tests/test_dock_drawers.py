@@ -46,7 +46,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
     def setUp(self) -> None:
         self._geo = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False)
         self._geo.write(HUD_GEOMETRY_JS +
-                        "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows,"
+                        "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows, hudTargetTypeChips,"
                         " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey };\n")
         self._geo.close()
 
@@ -67,6 +67,30 @@ class DockAndDrawerBehaviour(unittest.TestCase):
             return json.loads(out)
         except json.JSONDecodeError:
             return out
+
+    def _chips(self, telemetry: dict):
+        return self._node("console.log(JSON.stringify(T.hudTargetTypeChips(%s)));" % json.dumps(telemetry))
+
+    def test_follow_chips_send_the_type_and_the_one_in_force_sends_nothing(self):
+        # Owner, 2026-10-20: one type at a time, chosen at the head of the TARGETS drawer.
+        spec = self._chips({"target_type": "HEAD", "target_type_switching": False})
+        self.assertEqual(spec["label"], "FOLLOW")
+        self.assertEqual([c["type"] for c in spec["chips"]], ["HUMAN", "HEAD", "CAT", "DOG"])
+        by = {c["type"]: c for c in spec["chips"]}
+        self.assertTrue(by["HEAD"]["current"])
+        self.assertIsNone(by["HEAD"]["command"])
+        self.assertEqual((by["CAT"]["command"], by["CAT"]["arg"]), ("set_target_type", "CAT"))
+        self.assertEqual(spec["note"], "")
+
+    def test_a_switch_in_progress_is_on_screen(self):
+        spec = self._chips({"target_type": "CAT", "target_type_switching": True})
+        self.assertTrue({c["type"]: c for c in spec["chips"]}["CAT"]["pending"])
+        self.assertEqual(spec["note"], "SWITCHING TO CAT \u00b7 HOLDING")
+        overdue = self._chips({"target_type": "CAT", "target_type_switching": True, "target_type_overdue": True})
+        self.assertEqual(overdue["note"], "CAT NOT APPLIED \u00b7 HOLDING")
+
+    def test_no_chips_from_a_controller_that_reports_no_type(self):
+        self.assertIsNone(self._chips({"operating_mode": "MANUAL"}))
 
     def _rows(self, drawer: str, telemetry: dict):
         return self._node("console.log(JSON.stringify(T.hudDrawerActions(%s, %s)));"
