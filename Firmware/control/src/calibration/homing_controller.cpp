@@ -79,6 +79,12 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
   detector_.reset();
   detector_.set_approach_direction(dir_);
   last_cr_ = ContactResult{};
+  push_capped_ = push_cap_spent_ = false;
+  push_capped_since_ns_ = 0;
+  cap_mark_q_ = current_pos_rad;
+  cap_mark_ns_ = now;
+  cap_speed_rad_s_ = 0.0;
+  cap_armed_ = false;
 }
 
 void HomingController::begin_backoff_to(TimeNs now, double target_rad,
@@ -190,6 +196,36 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
                                 fb.torque_nm, fb.motor_fault);
     contact = last_cr_.contact;
     hard_abort = last_cr_.hard_abort;
+    if (p_.speed_mode_backoff && !contact) {
+      // Pitch climbing against a heavy payload pushes hard too, but it is moving at the approach
+      // speed; a stop has stalled it. Judged by encoder progress over 50 ms steps, not by the drive's
+      // noisy velocity: under half the approach speed.
+      if (fb.t_ns - cap_mark_ns_ >= 50'000'000) {
+        cap_speed_rad_s_ = std::fabs(fb.pos_rad - cap_mark_q_) / ((fb.t_ns - cap_mark_ns_) * 1e-9);
+        cap_mark_q_ = fb.pos_rad;
+        cap_mark_ns_ = fb.t_ns;
+      }
+      // A stop is met after moving: armed once the axis has run at half the approach speed, so a
+      // heavy payload starting from rest (slow, pushing hard) is not taken for one.
+      if (cap_speed_rad_s_ >= 0.5 * phase_.speed_rad_s) cap_armed_ = true;
+      const bool stalled = cap_speed_rad_s_ < 0.5 * phase_.speed_rad_s;
+      if (cap_armed_ && !push_capped_ && !push_cap_spent_ && stalled &&
+          last_cr_.signed_effort_nm >= p_.contact.effort_contact_threshold_nm) {
+        push_capped_ = true;
+        push_capped_since_ns_ = fb.t_ns;
+        push_capped_q_ = fb.pos_rad;
+      } else if (push_capped_ && std::fabs(fb.pos_rad - push_capped_q_) <= p_.contact.q_stall_threshold_rad &&
+                 fb.t_ns - push_capped_since_ns_ >= static_cast<TimeNs>(p_.contact.contact_dwell_ms * 1e6)) {
+        // Stalled at the gate's push and still there a dwell later with nothing pushing it on: the
+        // stop. (A friction notch that took the gate's push would have slipped.) This does not lean
+        // on the drive keeping its push at SpdRef 0, which the CyberGear does and others may not.
+        contact = true;
+      } else if (push_capped_ && (fb.t_ns - push_capped_since_ns_ > 2'000'000'000 ||
+                                  std::fabs(fb.pos_rad - push_capped_q_) > p_.contact.q_stall_threshold_rad)) {
+        push_capped_ = false;  // not a stop the detector will confirm: approach on, uncapped
+        push_cap_spent_ = true;
+      }
+    }
   }
 
   // 2. Advance the FSM based on the feedback.
@@ -453,7 +489,8 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         ds = move_state(phase_.target_rad, phase_.speed_rad_s, std::isfinite(v) ? v : 0.0, "backoff");
       } else {
         ds = move_state(phase_.target_rad, phase_.speed_rad_s,
-                        phase_.velocity_rad_s, phase_.approach ? "approach" : "move");
+                        phase_.approach && push_capped_ ? 0.0 : phase_.velocity_rad_s,
+                        phase_.approach ? (push_capped_ ? "approach:contact" : "approach") : "move");
       }
       break;
   }

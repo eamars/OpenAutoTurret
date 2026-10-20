@@ -423,3 +423,45 @@ TEST(Homing, RepeatabilityRetryExhaustsThenFails) {
       << "fail_reason was: " << r.fail_reason;
   SUCCEED();
 }
+
+// Speed-mode homing stops pushing at the contact gate (station 2026-10-20: with the approach speed
+// commanded through the detector's confirmation, the drive's speed loop wound from the 0.8 N.m gate
+// to 2-3.4 N.m, and every backoff spent its first second unwinding it). Driving against a load that
+// takes more than the gate while still moving is not a contact.
+namespace {
+// Cycles the controller commands speed into the stop while the axis sits on it.
+int push_cycles_on_stop(bool speed_mode_backoff, HomingController** out = nullptr) {
+  SimAxis axis;
+  axis.drive_effort = 1.0;   // above the 0.8 gate while moving: a heavy payload climbing
+  axis.contact_effort = 5.0;
+  axis.reset(0.5, 1.0);
+  HomingParams p = test_params();
+  p.contact.effort_contact_threshold_nm = 0.8;
+  p.contact.contact_dwell_ms = 250;
+  p.speed_mode_backoff = speed_mode_backoff;
+  static HomingController* keep = nullptr;
+  delete keep;
+  keep = new HomingController(ota::AxisId::Pitch, +1, p);
+  if (out) *out = keep;
+  int pushing = 0;
+  int64_t t = 0;
+  for (int i = 0; i < 20000 && !keep->terminal(); ++i, t += kDtNs) {
+    const DesiredState ds = keep->step(axis.feedback(t));
+    if (axis.at_stop && !ds.hold && !ds.position_move && ds.velocity_rad_s > 0) ++pushing;
+    axis.step(ds, t);
+  }
+  return pushing;
+}
+}  // namespace
+
+TEST(Homing, SpeedModeHomingStopsPushingAtTheContactGate) {
+  HomingController* hc = nullptr;
+  const int capped = push_cycles_on_stop(true, &hc);
+  ASSERT_TRUE(hc->state() == ota::AxisHomeState::Complete) << hc->result().fail_reason;
+  EXPECT_NEAR(hc->result().fine_contact_rad, 1.0, 0.01);
+  const int uncapped = push_cycles_on_stop(false);
+  // Three contacts per endpoint. Capped, each pushes only until the stall shows (a few cycles);
+  // uncapped, it pushes through the whole confirmation.
+  EXPECT_LT(capped, uncapped / 3) << "capped " << capped << " uncapped " << uncapped;
+  EXPECT_LE(capped, 3 * 30) << "at most ~150 ms of push per contact";
+}

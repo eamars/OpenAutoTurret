@@ -97,7 +97,9 @@ homing:
     # it mostly creeps (0.5-1.1 deg/s, stick-slip); it runs smoothly from about 10 deg/s. The contact
     # precision comes from the stop (fine contacts repeat to one count), not from the speed.
     coarse_speed_deg_s: 10
-    fine_speed_deg_s: 5
+    # 5 deg/s crept at 0.2-0.8 deg/s for 1-2.5 s before each fine contact (station 2026-10-20); the
+    # fine contacts repeat to 0-2 counts at any speed, the stop decides.
+    fine_speed_deg_s: 8
     # The contact push gate. A stop takes the push from the free-running 0-0.3 N.m to 0.8 N.m within
     # ~0.1 s at 5 deg/s, then winds on to 3.3 N.m (station 2026-10-19); friction notches and the
     # drive's slow start stall at 0.1-0.45 N.m (P0j, p3f). Above the notches, the gate does the

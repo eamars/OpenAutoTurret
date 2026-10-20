@@ -137,9 +137,14 @@ class HomingPlan {
     const double value = cfg_.limit_cur_max_a[ix(a)];
     return value > 0.0 ? value : cfg_.homing.limit_cur_max_a;
   }
+  // Margin over the fastest commanded homing speed (fault/hold ruling: a threshold sits above the
+  // worst normal value). Was +2 deg/s: at 10 deg/s the CyberGear's own ripple (up to 11.4 deg/s in
+  // 0.5 s bins) and its 20 ms position steps in a 50 ms window crossed it on a correct homing
+  // (station 2026-10-20 14:42:44).
   double motion_speed_ceiling() const {
-    return std::max({cfg_.homing.coarse_speed_rad_s, cfg_.homing.fine_speed_rad_s,
-                     cfg_.homing.backoff_speed_rad_s, cfg_.move_speed_rad_s}) + 2*kDeg2Rad;
+    const double fastest = std::max({cfg_.homing.coarse_speed_rad_s, cfg_.homing.fine_speed_rad_s,
+                                     cfg_.homing.backoff_speed_rad_s, cfg_.move_speed_rad_s});
+    return std::max(1.5 * fastest, fastest + 2*kDeg2Rad);
   }
 
   // Per-axis results (valid once that axis is homed).

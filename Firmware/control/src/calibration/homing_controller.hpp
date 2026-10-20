@@ -282,6 +282,18 @@ class HomingController {
   AxisHomeState state_ = AxisHomeState::Unknown;
   ContactDetector detector_;
   ContactResult last_cr_{};  // latest detector result during the approach
+  // Speed-mode homing: the approach stops pushing once the push reaches the contact gate with the
+  // axis stalled, and the detector confirms the contact at SpdRef 0. Commanding the approach speed
+  // through the confirmation wound the drive's speed loop from 0.8 to 2-3.4 N.m (station
+  // 2026-10-20). Released (once per approach) if no contact is confirmed within 2 s.
+  bool push_capped_ = false;
+  bool push_cap_spent_ = false;
+  TimeNs push_capped_since_ns_ = 0;
+  // Encoder speed over the last 50 ms step (position-derived; the cap's stall test).
+  double cap_mark_q_ = 0.0, cap_speed_rad_s_ = 0.0;
+  TimeNs cap_mark_ns_ = 0;
+  bool cap_armed_ = false;
+  double push_capped_q_ = 0.0;
   Phase phase_;
 
   // Backoff arrival window (rad), sized from the backoff distance in
