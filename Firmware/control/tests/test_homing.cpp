@@ -465,3 +465,31 @@ TEST(Homing, SpeedModeHomingStopsPushingAtTheContactGate) {
   EXPECT_LT(capped, uncapped / 3) << "capped " << capped << " uncapped " << uncapped;
   EXPECT_LE(capped, 3 * 30) << "at most ~150 ms of push per contact";
 }
+
+// The stop's compliance springs back when the push eases (station 2026-10-20 15:34:09: 0.04-0.07 deg
+// at SpdRef 0). That is still the stop: the capped contact must confirm, not release and push on.
+TEST(Homing, CappedContactSurvivesTheStopSpringingBack) {
+  struct SpringyStop : SimAxis {
+    void step(const DesiredState& ds, int64_t t_ns) {
+      SimAxis::step(ds, t_ns);
+      // At the stop with nothing pushing: the compliance gives back 0.07 deg.
+      if (at_stop && !ds.hold && !ds.position_move && ds.velocity_rad_s == 0.0) q = stop_at - 0.07 * kDeg2Rad;
+    }
+  } axis;
+  axis.reset(0.5, 1.0);
+  HomingParams p = test_params();
+  p.contact.effort_contact_threshold_nm = 0.8;
+  p.contact.contact_dwell_ms = 250;
+  p.speed_mode_backoff = true;
+  HomingController hc(ota::AxisId::Pitch, +1, p);
+  int pushing = 0;
+  int64_t t = 0;
+  for (int i = 0; i < 20000 && !hc.terminal(); ++i, t += kDtNs) {
+    const DesiredState ds = hc.step(axis.feedback(t));
+    if (axis.at_stop && !ds.hold && !ds.position_move && ds.velocity_rad_s > 0) ++pushing;
+    axis.step(ds, t);
+  }
+  ASSERT_TRUE(hc.state() == ota::AxisHomeState::Complete) << hc.result().fail_reason;
+  EXPECT_NEAR(hc.result().fine_contact_rad, 1.0, 0.002) << "recorded where the push met the stop";
+  EXPECT_LE(pushing, 3 * 30) << "the cap held through the spring-back";
+}

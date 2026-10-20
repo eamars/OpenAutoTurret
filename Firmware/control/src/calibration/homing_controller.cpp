@@ -191,6 +191,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
   // 1. Run the contact detector if the current phase is an approach move.
   bool contact = false;
   bool hard_abort = false;
+  contact_q_ = fb.pos_rad;
   if (phase_.kind == PhaseKind::Move && phase_.approach) {
     last_cr_ = detector_.update(fb.t_ns, fb.pos_rad, fb.vel_rad_s,
                                 fb.torque_nm, fb.motor_fault);
@@ -214,14 +215,24 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         push_capped_ = true;
         push_capped_since_ns_ = fb.t_ns;
         push_capped_q_ = fb.pos_rad;
-      } else if (push_capped_ && std::fabs(fb.pos_rad - push_capped_q_) <= p_.contact.q_stall_threshold_rad &&
-                 fb.t_ns - push_capped_since_ns_ >= static_cast<TimeNs>(p_.contact.contact_dwell_ms * 1e6)) {
+      }
+      // Progress from where the cap engaged: > 0 further into the stop's direction (it was not a
+      // stop: a notch slipping), < 0 springing back off it. A stop's compliance springs back when
+      // the push eases: 0.04-0.07 deg at SpdRef 0 on the station (2026-10-20 15:34:09), larger than
+      // q_stall_threshold, which released the first cap on a real stop. Back-off up to a degree is
+      // the stop; more is the payload moving away on its own.
+      const double onward = push_capped_ ? (fb.pos_rad - push_capped_q_) * dir_ : 0.0;
+      const bool on_stop = onward <= 0.25 * kDeg2Rad && onward >= -1.0 * kDeg2Rad;
+      if (push_capped_ && on_stop &&
+          fb.t_ns - push_capped_since_ns_ >= static_cast<TimeNs>(p_.contact.contact_dwell_ms * 1e6)) {
         // Stalled at the gate's push and still there a dwell later with nothing pushing it on: the
         // stop. (A friction notch that took the gate's push would have slipped.) This does not lean
         // on the drive keeping its push at SpdRef 0, which the CyberGear does and others may not.
+        // The contact is where the push reached the gate, the same push every time, not wherever
+        // the spring-back has left the axis.
         contact = true;
-      } else if (push_capped_ && (fb.t_ns - push_capped_since_ns_ > 2'000'000'000 ||
-                                  std::fabs(fb.pos_rad - push_capped_q_) > p_.contact.q_stall_threshold_rad)) {
+        contact_q_ = push_capped_q_;
+      } else if (push_capped_ && (fb.t_ns - push_capped_since_ns_ > 2'000'000'000 || !on_stop)) {
         push_capped_ = false;  // not a stop the detector will confirm: approach on, uncapped
         push_cap_spent_ = true;
       }
@@ -288,7 +299,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         // stability/jitter gate, so a latched contact is the end-stop.
         // (No adaptive current raise — that was a position-mode hack that
         // made friction notches *hold* instead of slipping.)
-        coarse_contact_rad_ = fb.pos_rad;
+        coarse_contact_rad_ = contact_q_;
         begin_settle(fb.t_ns);
         state_ = AxisHomeState::ContactCoarse;
       } else if (timed_out(fb)) {
@@ -351,11 +362,11 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
       if (hard_abort || fb.motor_fault) {
         fail("fine approach: hard abort or motor fault");
       } else if (contact) {
-        if (!p_.observe_only && p_.motion_checks_abort && std::abs(fb.pos_rad-coarse_contact_rad_)>p_.repeatability_rad) {
+        if (!p_.observe_only && p_.motion_checks_abort && std::abs(contact_q_-coarse_contact_rad_)>p_.repeatability_rad) {
           fail("fine contact inconsistent with coarse contact; obstruction or load stall unverified");
           break;
         }
-        fine_contact1_rad_ = fb.pos_rad;
+        fine_contact1_rad_ = contact_q_;
         fine_samples_ = 1;
         begin_settle(fb.t_ns);
         state_ = AxisHomeState::ContactFine;
@@ -403,7 +414,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         }
       } else {  // second fine approach
         if (contact) {
-          fine_contact2_rad_ = fb.pos_rad;
+          fine_contact2_rad_ = contact_q_;
           fine_samples_ = 2;
           const double rep = std::fabs(fine_contact2_rad_ - fine_contact1_rad_);
           result_.repeatability_rad = rep;

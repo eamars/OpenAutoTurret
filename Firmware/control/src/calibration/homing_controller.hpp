@@ -294,6 +294,7 @@ class HomingController {
   TimeNs cap_mark_ns_ = 0;
   bool cap_armed_ = false;
   double push_capped_q_ = 0.0;
+  double contact_q_ = 0.0;  // where this cycle's contact is recorded
   Phase phase_;
 
   // Backoff arrival window (rad), sized from the backoff distance in
