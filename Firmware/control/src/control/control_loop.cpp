@@ -1209,7 +1209,7 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
   // Speed-mode tracking consumes velocity explicitly. Do not interpret a
   // rate inside the observer's uncertainty as established target motion.
   if (cfg_.service_speed_control) cfg.uncertainty_gated_motion = true;
-  const double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
+  double inset = cfg_.soft_margin_rad + cfg_.stop_margin_rad;
   const double ready_yaw = ready_raw_[ix(AxisId::Yaw)];
   double yaw_low = limits_[ix(AxisId::Yaw)].q_soft_min_rad;
   double yaw_high = limits_[ix(AxisId::Yaw)].q_soft_max_rad;
@@ -1217,9 +1217,12 @@ bool ControlLoop::enable_tracking(const TrackingController::Config& cfg_in,
     const auto virtual_yaw = runtime_limits(AxisId::Yaw);
     if (virtual_yaw.unbounded()) {
       // Nothing to clamp against: the search span is the whole answer, and it is
-      // already centred on the ready pose, so it stays finite either way.
+      // already centred on the ready pose, so it stays finite either way. No inset
+      // either: the margins keep an end of travel away, and this yaw has none (until
+      // 2026-10-20 every boot logged "search sweep clamped" for a clamp that was not).
       yaw_low = ready_yaw - cfg_.search_span_rad;
       yaw_high = ready_yaw + cfg_.search_span_rad;
+      inset = 0.0;
     } else {
       yaw_low = virtual_yaw.q_soft_min_rad;
       yaw_high = virtual_yaw.q_soft_max_rad;
