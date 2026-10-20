@@ -41,7 +41,11 @@ def request(params, segments, start_offset_deg=(0.0, 0.0), start_rate_dps=(0.0, 
     "jump": [..] deg, "identity": n}. Injections: drops, extra_delay ([t0, t1, s]), velocity_unavailable,
     saturate ([t0, t1, yaw A or pitch rad/s])."""
     yaw, pitch, window, centre = sim.servo_assets()
-    r_pc = sim.extrinsics()
+    # The window, centre and Level-1 travel are in the pitch asset's raw frame: place the homed
+    # extrinsic at that frame's low stop, as controld does after homing. (Until 2026-10-20 the
+    # homed matrix was used on raw angles, 1.511 rad off: every scenario looked 83 deg up, at the
+    # LOS azimuth's singularity, where 20 deg/s of azimuth is 2.5 deg/s across the frame.)
+    r_pc = sim.extrinsics(pitch["plant"]["endpoint_low_rad"])
     az0, el0 = boresight(0.0, centre, r_pc)
     segs = []
     for s in segments:

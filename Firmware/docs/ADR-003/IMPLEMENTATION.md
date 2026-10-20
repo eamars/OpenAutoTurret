@@ -95,6 +95,22 @@ said otherwise, and the state of each work item.
 | W3 stage 3a: independent program on the station | next | commissiond plus the unchanged visiond: real camera, then tracking_core, then both ADR-002.2 servos |
 | W4 stage 3b: production | **built 2026-10-02, not yet on the station** | details below |
 
+**Stage 1 re-run, 2026-10-20: PASS (14/14).** From 2026-10-06 to 10-20 the suite tested no real
+geometry:
+- first `sim.py` parsed the wrong extrinsic rows (fixed in 2e249f5);
+- then `scenarios.py` used the homed-low extrinsic on the pitch asset's raw angles, which are
+  1.511 rad apart. Every scenario then looked 83° up, near the LOS azimuth's singularity, and the
+  T05/T06 targets passed over the zenith.
+
+With the extrinsic placed at the asset's low stop (as controld places it after homing), the
+boresight is 10.5° up. The six 10-20 failures were all that geometry, except one real Level-1
+defect that it exposed. Yaw ran at v_max there, and the speed ceiling's a²/2j release, judged at
+the segment's start, let the speed reach v_max *inside* a 5 ms segment. `integrate()` then cut the
+acceleration to 0 in one step, unflagged: a jerk of 1.4–3× j_max at the servo's 1 kHz. Level 1
+now counts the release in whole segments (`level1.cpp`; test
+`level1_reaches_its_speed_ceiling_jerk_limited`). Steady yaw framing FF+FB is 2–7 px at 8–20°/s,
+against 120–280 px FB only.
+
 **Stage 3b in production (controld).** Software is done and tested offline; physical 3b has not
 started.
 
