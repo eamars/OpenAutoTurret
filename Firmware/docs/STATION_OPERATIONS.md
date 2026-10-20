@@ -160,11 +160,21 @@ measured):
     and unwinds at about 1.4 N·m/s per 5°/s of speed error.
   - **If a backoff ever cannot leave a stop,** its 15 s timeout fails the homing with pitch held. That
     is a HOLD-class outcome, not a fall.
-- **Open (2026-10-20):** homing faults on any supervisor BRAKE, however brief.
-  - On 15:34:13 it was a single cycle in which the GM6020's feedback carried a NaN while pitch homed;
-    its cause is not yet found.
-  - The fault path then spent 80 ms writing files in the control thread.
-  - Under the fault/hold ruling a transient should only degrade.
+- **Homing holds through a transient brake** (owner, 2026-10-20; release d161452).
+  - A supervisor Brake/Hold, or a feedback gap seen by homing's own guard, pauses homing with the axis
+    held at speed zero. It resumes when motion is allowed again.
+  - Only a pause lasting 5 s ends the homing. FaultStop and Disable (hazards) still end it at once.
+- **A late caller is not missing feedback.** The "NaN yaw" that faulted a correct homing on 2026-10-20
+  at 15:34:13 was not the drive:
+  - The control step reached its snapshot about 5 ms after its tick, while the GM6020 kept sending at
+    1 kHz.
+  - The yaw snapshot rejected any frame stamped more than 5 ms after the caller's clock, and reported
+    it as no feedback, with NaN position and speed.
+  - Now a frame newer than the caller's clock is fresh feedback, in the yaw snapshot, the mode
+    transition and the homing guard. Only a stamp 1 s or more ahead is a broken clock.
+  - A late loop belongs to the deadline monitor.
+  - Still open: the fault path writes the control trace and black box synchronously in the real-time
+    control thread (80 ms that time).
 - **Idle commands only a held axis.** A BRAKE in Shutdown used to command both de-energised axes to a
   stop target that was not finite; on 2026-10-20 15:23:53 the yaw guard tripped and the station latched
   Fault at boot.
