@@ -44,9 +44,16 @@
 # frame after homing (R_y(-raw_low) * R_P_C(homed)); the 2026-09-27 "~42 deg" error was very likely
 # this same frame shift (one 46.45 deg step, less the mount's own few degrees).
 #
+# CONTACT 2026-10-20: homing now records the low stop where the capped push meets it (release
+# 6048094), not where a 2-3 N.m push ends; on this power-up that reads -0.69829 rad raw against the
+# deep push's -0.7002, 0.00191 rad (0.109 deg) shallower. The rotation below is therefore the one
+# above re-referenced to the new contact, R_P_C = R_y(+0.00191) * R_P_C(2026-10-06), so the matrix
+# controld places in each power-up's raw frame is unchanged. Within the 10-05 fit's own spread
+# (0.24 deg per slew), but a known bias, so it is removed rather than left.
+#
 # Format: optional key lines, the t_P_C key, then three row-major rotation rows.
 pitch_from_homed_low=1
 t_P_C=0 0 0
-0 0.7718426632747656 0.6358135757821759
+0 0.7706268522042173 0.6372866346172805
 -1 0 0
-0 -0.6358135757821759 0.7718426632747656
+0 -0.6372866346172805 0.7706268522042173
