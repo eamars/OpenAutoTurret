@@ -238,6 +238,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err, bool recover_f
     yaw_reference_stationary_since_ns_ = 0;
   }
   phase_ = Phase::Homing;
+  emit(telemetry::Event::HomingStarted, now_ns_, 0, "homing", "started");
   if (recover_first || backend_->recovery_before_homing()) return start_motor_recovery(err, true);
   return true;
 }
@@ -583,6 +584,18 @@ const char* ControlLoop::rest_park_stage() const {
   return "";
 }
 
+bool ControlLoop::pitch_energised() const {
+  const auto p = backend_->snapshot(AxisId::Pitch, now_ns_);
+  return p.has_feedback && p.disabled_known && !p.disabled && (p.in_speed_mode || p.in_position_mode);
+}
+
+bool ControlLoop::unhomed_touch_available() const {
+  if (!cfg_.rest_park || rest_park_.stage != RestPark::Off) return false;
+  if (phase_ != Phase::Idle && phase_ != Phase::Fault) return false;
+  const auto p = backend_->snapshot(AxisId::Pitch, now_ns_);
+  return pitch_energised() && !(p.faults_known && p.faults != 0);
+}
+
 bool ControlLoop::begin_rest_park(bool shutdown, std::string& why) {
   const char* what = shutdown ? "Shutdown" : "Park";
   switch (rest_park_.stage) {
@@ -632,6 +645,26 @@ bool ControlLoop::begin_rest_park(bool shutdown, std::string& why) {
       return true;
     case RestPark::Off:
       break;
+  }
+  if (shutdown && unhomed_touch_available()) {
+    // Held but not homed (a STOP MOTION during homing, or a Fault that holds pitch): Shutdown still
+    // ends with the payload resting on its stop. Without homing the stop is found by pushing.
+    const double q = last_q_[ix(AxisId::Pitch)];
+    manual_.cancel(now_ns_);
+    rest_park_ = {};
+    rest_park_.stage = RestPark::Touch;
+    rest_park_.shutdown = true;
+    rest_park_.stop_known = false;
+    rest_park_.unhomed_from = phase_;
+    rest_park_.touch_from_rad = q;
+    rest_park_.pitch_stop_rad = q;  // unknown; reported relative to where the touch began
+    rest_park_.since_ns = now_ns_;
+    phase_ = Phase::Parking;
+    spdlog::warn("REST PARK (Shutdown, not homed): pitch held at {:+.4f} rad; lowering it onto its {} stop "
+                 "at {:.1f} deg/s by contact, then both motors off", q,
+                 cfg_.rest_park_pitch_low ? "low" : "high", cfg_.rest_park_touch_speed_rad_s * kRad2Deg);
+    why = "not homed: lowering pitch onto its rest stop, then switching the motors off";
+    return true;
   }
   if (phase_ != Phase::Hold || !position_ready()) {
     why = std::string(what) + " needs a homed turret holding position: Home first";
@@ -789,6 +822,69 @@ void ControlLoop::rest_park_on_stop(const AxisSnapshot& pitch, TimeNs now_ns, bo
   }
 }
 
+bool ControlLoop::step_unhomed_touch(const AxisSnapshot& pitch, TimeNs now_ns, double dir,
+                                     bool held_by_supervisor) {
+  const int P = ix(AxisId::Pitch);
+  const double speed = cfg_.rest_park_touch_speed_rad_s;
+  auto give_up = [&](const char* why) {
+    // Not a fault: pitch stays held where it stopped, and Shutdown (or a process stop) tries again.
+    if (pitch.in_speed_mode) backend_->command_velocity(AxisId::Pitch, 0.0);
+    spdlog::warn("REST PARK (not homed): {}; pitch held at {:+.4f} rad", why, pitch.q_rad);
+    ack_command("request_shutdown", false, std::string(why) + "; the motors stay on");
+    const Phase back = rest_park_.unhomed_from;
+    rest_park_ = {};
+    phase_ = back;
+    return true;
+  };
+  if (!pitch.in_speed_mode) {
+    // The unhomed hold is a speed-zero hold; anything else (released, faulted, position mode) is not
+    // a state this touch can push from.
+    if (pitch.disabled_known && pitch.disabled) {
+      rest_park_ = {};
+      phase_ = Phase::Idle;
+      spdlog::warn("REST PARK (not homed): the pitch drive is already off");
+      return true;
+    }
+    return give_up("the pitch drive is not in speed mode");
+  }
+  if (held_by_supervisor) {
+    backend_->command_velocity(AxisId::Pitch, 0.0);
+    rest_park_.stalled_since_ns = 0;
+    return true;
+  }
+  backend_->command_velocity(AxisId::Pitch, dir * speed);
+  const bool slow = std::abs(v_est_[P]) < 0.25 * speed;
+  if (now_ns - rest_park_.since_ns < 400'000'000 || !slow) rest_park_.stalled_since_ns = 0;
+  else if (!rest_park_.stalled_since_ns) rest_park_.stalled_since_ns = now_ns;
+  const TimeNs stalled = rest_park_.stalled_since_ns ? now_ns - rest_park_.stalled_since_ns : 0;
+  const double push = dir * pitch.torque_nm;  // > 0 pushing toward the rest stop
+  // A friction notch or the drive's slow start stalls with a small push (0.2-0.45 N.m measured); the
+  // stop takes the drive's full current. Stalled and pushing hard is the stop.
+  if (stalled >= 300'000'000 && std::isfinite(push) && push >= cfg_.rest_park_contact_effort_nm) {
+    backend_->command_velocity(AxisId::Pitch, 0.0);
+    spdlog::info("REST PARK (not homed): pitch on its stop at {:+.4f} rad ({:+.1f} deg from where it was "
+                 "held, pushing {:.2f} N.m)", pitch.q_rad, (pitch.q_rad - rest_park_.touch_from_rad) * kRad2Deg,
+                 push);
+    rest_park_.touched = true;
+    rest_park_.pitch_hold_rad = pitch.q_rad;
+    rest_park_.since_ns = now_ns;
+    rest_park_.stage = RestPark::Release;
+    rest_park_.last_disable_ns = 0;
+    return true;
+  }
+  if (stalled >= 5'000'000'000) {
+    char why[160];
+    std::snprintf(why, sizeof why, "pitch stalled %.1f deg from where it was held without pushing on a "
+                  "stop (%.2f N.m)", (pitch.q_rad - rest_park_.touch_from_rad) * kRad2Deg, push);
+    return give_up(why);
+  }
+  // A full turn of the output at touch speed is more than any pitch travel.
+  const double budget_s = 2.0 * M_PI / speed + 5.0;
+  if (now_ns - rest_park_.since_ns > static_cast<TimeNs>(budget_s * 1e9))
+    return give_up("pitch did not reach a stop in time");
+  return true;
+}
+
 bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, TimeNs period_ns) {
   // Step 6 executes these two, and step 7 faults (which ends the park).
   if (last_decision_.action == SafetyAction::Disable ||
@@ -800,6 +896,7 @@ bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_n
                                   last_decision_.action != SafetyAction::Derate;
   switch (rest_park_.stage) {
     case RestPark::Touch: {
+      if (!rest_park_.stop_known) return step_unhomed_touch(pitch, now_ns, dir, held_by_supervisor);
       rest_park_hold_yaw(sp[ix(AxisId::Yaw)], now_ns, period_ns);
       if (!pitch.in_speed_mode && !pitch.in_position_mode) {
         fault("park: the pitch drive left its running mode during the touch");
@@ -2179,7 +2276,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
               cfg_.homing_mode_displacement_check);
           if (status == MotorBackend::Transition::Failed) { stop_axes_safely(); fault(e); }
           else if (status == MotorBackend::Transition::Complete) ++homing_final_axis_;
-        } else if (finalize_homing()) phase_ = Phase::Hold;
+        } else if (finalize_homing()) {
+          phase_ = Phase::Hold;
+          emit(telemetry::Event::HomingComplete, now_ns, 0, "homing", "complete");
+        }
         else { stop_axes_safely(); fault("homing results invalid"); }
         break;
       }
@@ -5882,7 +5982,7 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if ((name == "request_park" || name == "request_shutdown") && cfg_.rest_park) {
-    if (name == "request_shutdown" && phase_ == Phase::Idle) {
+    if (name == "request_shutdown" && phase_ == Phase::Idle && motors_off()) {
       ack_command(name, true, "the motors are already off; Home starts the turret");
       return;
     }
@@ -6499,6 +6599,16 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
   // obs: [sensor_ns, t_o_ns, u, v, yaw(t_o), pitch(t_o), az, el, accepted] of the last frame the
   // estimator saw; joined offline with visiond's perception-trace.jsonl by sensor_ns.
   const auto& z = tracking_->core()->last_observation();
+  // yaw: [applied current A, crosstalk-corrected angle, GM6020 absolute angle (rad, 0..2pi)] so the
+  // servo's own error and the angle-indexed friction and crosstalk maps can be read from production
+  // (drive review 2026-10-19, item 6). null where the drive or the session has no value.
+  const auto ys = backend_->snapshot(AxisId::Yaw, now_ns);
+  double yaw_abs = std::numeric_limits<double>::quiet_NaN();
+  if (double off = 0; backend_->absolute_angle_offset(AxisId::Yaw, off))
+    yaw_abs = std::fmod(std::fmod(ys.q_rad + off, 2.0 * M_PI) + 2.0 * M_PI, 2.0 * M_PI);
+  auto num = [](double v, int digits) {
+    return std::isfinite(v) ? fmt::format("{:.{}f}", v, digits) : std::string("null");
+  };
   tracking_trace_->info(
       "{{\"t_ns\":{},\"state_ns\":{},\"age_s\":{:.4f},\"est\":[{:.6f},{:.6f},{:.5f},{:.5f}],"
       "\"sig_w\":[{:.5f},{:.5f}],\"goal_los\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"ffw\":[{:.3f},{:.3f}],\"fade\":{:.3f},"
@@ -6506,7 +6616,7 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       "\"ref\":[{:.6f},{:.6f},{:.5f},{:.5f},{:.4f},{:.4f},{:.3f},{:.3f}],\"flags\":[{},{}],"
       "\"q\":[{:.6f},{:.6f}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
       "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"rate_limited\":{},"
-      "\"obs\":[{},{},{:.2f},{:.2f},{:.6f},{:.6f},{:.6f},{:.6f},{}]}}",
+      "\"obs\":[{},{},{:.2f},{:.2f},{:.6f},{:.6f},{:.6f},{:.6f},{}],\"yaw\":[{},{},{}]}}",
       now_ns, g.state_ns, g.age_s, x[0].theta, x[1].theta, x[0].omega, x[1].omega,
       std::sqrt(std::max(0.0, x[0].vv)), std::sqrt(std::max(0.0, x[1].vv)),
       g.theta[0], g.theta[1], g.omega[0], g.omega[1], g.ff_weight[0], g.ff_weight[1], g.fade,
@@ -6516,6 +6626,8 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       r.reference.j[0], r.reference.j[1], r.reference.flags[0], r.reference.flags[1],
       r.q_measured[0], r.q_measured[1], r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
       d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.rate_limited,
-      z.sensor_ns, z.t_ns, z.u, z.v, z.yaw, z.pitch, z.az, z.el, z.accepted ? 1 : 0);
+      z.sensor_ns, z.t_ns, z.u, z.v, z.yaw, z.pitch, z.az, z.el, z.accepted ? 1 : 0,
+      num(ys.current_a_known ? ys.current_a : std::numeric_limits<double>::quiet_NaN(), 3),
+      num(ys.q_true_rad, 6), num(yaw_abs, 6));
 }
 }  // namespace ota

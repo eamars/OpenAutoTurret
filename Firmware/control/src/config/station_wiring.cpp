@@ -51,6 +51,7 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
   }
   HomingParams hp;  // start from the safe defaults...
   hp.motion_checks_abort = cfg.homing.motion_checks_abort;
+  hp.speed_mode_backoff = cfg.homing.speed_mode_backoff;
   const config::ContactConfig& cc = cfg.homing.contact;  // ...override from YAML
   if (cc.coarse_speed_deg_s > 0)
     hp.coarse_speed_rad_s = cc.coarse_speed_deg_s * kDeg2Rad;
@@ -80,8 +81,10 @@ HomingPlan make_homing_plan(const config::TurretConfig& cfg, std::string& err) {
 
   // A slow homing profile must also slow backoff and between-axis moves.
   // Allow a full capped rotation at that speed, with a bounded settle budget.
-  hp.backoff_speed_rad_s = std::min({hp.backoff_speed_rad_s,
-                                    hp.coarse_speed_rad_s,hp.fine_speed_rad_s});
+  // A speed-mode backoff runs at the coarse speed: it must unwind the contact push, and the drive
+  // crawls in stick-slip below it.
+  hp.backoff_speed_rad_s = std::min({hp.backoff_speed_rad_s, hp.coarse_speed_rad_s,
+                                    hp.speed_mode_backoff ? hp.coarse_speed_rad_s : hp.fine_speed_rad_s});
   hp.approach_timeout_s = std::clamp(
       std::max(hp.approach_timeout_s,hp.max_rotation_rad/hp.coarse_speed_rad_s+10.0),
       30.0,120.0);
@@ -216,6 +219,11 @@ ControlLoop::Config make_control_cfg(const config::TurretConfig& cfg) {
   c.rest_park = !cfg.shutdown.pitch_rest_end.empty();
   c.rest_park_pitch_low = cfg.shutdown.pitch_rest_end == "min";
   c.rest_park_touch_speed_rad_s = cfg.shutdown.pitch_touch_speed_deg_s * kDeg2Rad;
+  // An unhomed Shutdown touch (no measured stop) takes contact as a stall with homing's contact push,
+  // the larger of its two gates: friction notches stall at up to 0.45 N.m.
+  if (const double e = std::max(cfg.homing.contact.effort_hard_contact_nm,
+                                cfg.homing.contact.current_or_effort_limit); e > 0)
+    c.rest_park_contact_effort_nm = e;
   // Phase 9: payload verification (§27, §31.3).
   c.payload_auto_verify = cfg.payload.auto_verify;
   c.payload_check_region_half_span_deg =

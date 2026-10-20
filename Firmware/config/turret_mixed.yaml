@@ -88,14 +88,21 @@ homing:
   mode_displacement_check: false
   # Continue homing on added speed/corridor/reverse-motion warnings.
   motion_checks_abort: false
+  # No torque off anywhere in the homing (drive review 2026-10-19): backoffs run in speed mode under
+  # a host position law, and nothing re-arms. Each of the five STOP/RunMode/enable recipes let the
+  # pitch move 0.7-2.7 deg on its own; with an unbalanced payload that is a fall.
+  speed_mode_backoff: true
   contact:
-    # Slow loaded pitch homing only. Tracking and roaming retain their separate
-    # service speeds below.
-    coarse_speed_deg_s: 5
-    fine_speed_deg_s: 3
-    # Pitch contact threshold from its existing 5 A homing profile. Revalidate
-    # on the supervised mixed-profile homing run.
-    current_or_effort_limit: 0.05
+    # Drive review 2026-10-19: at 5 deg/s the CyberGear's speed loop ripples 0-8 deg/s and at 3 deg/s
+    # it mostly creeps (0.5-1.1 deg/s, stick-slip); it runs smoothly from about 10 deg/s. The contact
+    # precision comes from the stop (fine contacts repeat to one count), not from the speed.
+    coarse_speed_deg_s: 10
+    fine_speed_deg_s: 5
+    # The contact push gate. A stop takes the push from the free-running 0-0.3 N.m to 0.8 N.m within
+    # ~0.1 s at 5 deg/s, then winds on to 3.3 N.m (station 2026-10-19); friction notches and the
+    # drive's slow start stall at 0.1-0.45 N.m (P0j, p3f). Above the notches, the gate does the
+    # notch rejection the 1.5 s dwell used to (it was 0.05 N.m: no gate at all).
+    current_or_effort_limit: 0.8
     stall_velocity_threshold: 0.5   # rad/s; contact-gate stall (above approach
                                     # speed, so position-progress is the real
                                     # discriminator). Do NOT use for jitter.
@@ -111,14 +118,14 @@ homing:
     # well above the ramp's 0.028 rad/s peak.
     effort_hard_contact_nm: 0.40
     motion_history_velocity: 0.025   # rad/s, below the slow fine approach
-    # POC stability window: a genuine mechanical stop stays stable; a friction
-    # notch SLIPS before 1.5 s. Require the stalled+pushing candidate to persist
-    # for 1.5 s (matching the POC zero_axis 3x0.5 s position-span window) so a
-    # briefly-holding notch cannot false-positive as a stop. This is the speed-
-    # mode analogue of the POC's "position steady ~1.5 s + drive pushing" test.
-    contact_dwell_ms: 1500
+    # Was 1.5 s to let a friction notch slip (POC). With the 0.8 N.m push gate a notch never becomes
+    # a candidate, and every 0.1 s of dwell winds the drive's speed loop ~0.14 N.m harder into the
+    # stop (3.3 N.m after the old dwell); a short dwell keeps the push, and the backoff, small.
+    contact_dwell_ms: 250
     backoff_deg: 5
-    repeatability_deg: 0.5
+    # Fine contacts repeat to 0-1 count (0.022 deg) in every homing so far; 0.2 deg still catches a
+    # second approach that stalls short of the stop (p3f: 0.5-1.5 deg short) and retries it.
+    repeatability_deg: 0.2
     # p3f: the second fine approach can stall in the drive's static-friction
     # zone short of the stop (measured 75-79 deg pitch: 0.1-0.44 N.m,
     # v~0.02) and the detector latches that stall as a false contact, so the

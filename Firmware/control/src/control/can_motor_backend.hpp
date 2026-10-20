@@ -15,6 +15,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <string>
 
 #include "can/cybergear_system.hpp"
@@ -133,10 +134,16 @@ class CanMotorBackend : public MotorBackend {
   std::array<double, kAxisCount> last_limit_spd_{{-1e30, -1e30}};
   std::array<double, kAxisCount> last_loc_ref_{{-1e30, -1e30}};
   std::array<TimeNs, kAxisCount> last_ping_ns_{};
+  // The speed-loop gains the last speed-mode transition wrote and read back (NaN: unknown). A
+  // transition to the speed mode the drive is already running, with these gains and limit, is
+  // done without a STOP (see transition_mode).
+  std::array<double, kAxisCount> last_speed_kp_{{std::nan(""), std::nan("")}};
+  std::array<double, kAxisCount> last_speed_ki_{{std::nan(""), std::nan("")}};
   void invalidate_commands(AxisId axis) {
     const auto a = static_cast<size_t>(axis);
     last_spd_ref_[a] = last_limit_spd_[a] = last_loc_ref_[a] = -1e30;
     last_limit_cur_a_[a] = -1.0;
+    last_speed_kp_[a] = last_speed_ki_[a] = std::nan("");
     last_ping_ns_[a] = 0;
     in_position_mode_[a] = in_speed_mode_[a] = false;
   }

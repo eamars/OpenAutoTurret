@@ -135,6 +135,9 @@ class ControlLoop {
     bool rest_park = false;
     bool rest_park_pitch_low = true;   // the rest stop is the raw minimum (else the maximum)
     double rest_park_touch_speed_rad_s = 3.0 * kDeg2Rad;
+    // An unhomed touch takes contact as a stall while pitch pushes at least this hard toward the rest
+    // stop (homing's hard-contact effort; the measured stop plateau is 0.43-0.73 N.m and more).
+    double rest_park_contact_effort_nm = 0.40;
     // Phase 9: payload verification (§27, §31.3).
     bool payload_auto_verify = false;  // §27 OPTIONAL_PAYLOAD_RESPONSE_CHECK:
                                        // run once on first hold, at boot
@@ -471,8 +474,20 @@ class ControlLoop {
   // yaw is bounded, parked. Any stage of the park itself takes a Shutdown too (a lift touches the
   // stop again first).
   bool rest_shutdown_available() const {
-    return (phase_ == Phase::Hold && position_ready()) || rest_park_.stage != RestPark::Off;
+    return (phase_ == Phase::Hold && position_ready()) || rest_park_.stage != RestPark::Off ||
+           unhomed_touch_available();
   }
+  // Pitch is energised by its own feedback: enabled and running in speed or position mode. The
+  // phase does not say this. Idle after a STOP MOTION during homing, and Fault, both hold pitch
+  // (owner ruling 2026-10-02: hold, do not release). Reading "Idle" as "motors off" released a held
+  // pitch on the next process stop (drive review 2026-10-19, item 9).
+  bool pitch_energised() const;
+  // Shutdown means motors off (owner ruling 2026-10-03: Homed or Shutdown). Yaw has no disable to
+  // confirm, and every path that leaves Homed releases it, so pitch decides.
+  bool motors_off() const { return !pitch_energised(); }
+  // A held but unhomed pitch: Shutdown lowers it onto its rest stop by contact, then releases it.
+  // The stop's position is unknown without homing, so the touch is judged by push, not by position.
+  bool unhomed_touch_available() const;
   const std::array<AxisLimits, kAxisCount>& limits() const { return limits_; }
   const std::array<AxisLogicalModel, kAxisCount>& models() const { return models_; }
   const std::string& fault_reason() const { return fault_reason_; }
@@ -625,6 +640,10 @@ class ControlLoop {
     double yaw_rad = 0, pitch_approach_rad = 0, pitch_stop_rad = 0, pitch_hold_rad = 0;
     TimeNs since_ns = 0, settled_since_ns = 0, stalled_since_ns = 0, last_disable_ns = 0;
     double touch_from_rad = 0;
+    // false: an unhomed Shutdown touch. The stop's position is unknown, the yaw is left released, and
+    // a touch that cannot finish returns to `unhomed_from` (Idle or Fault), still holding pitch.
+    bool stop_known = true;
+    Phase unhomed_from = Phase::Idle;
     double lift_from_rad = 0, lift_speed_rad_s = 0;
     std::string then_command, then_arg;  // Lift: the mode command that runs once pitch is in
   } rest_park_;
@@ -638,6 +657,7 @@ class ControlLoop {
   void hold_rest_park_here(const AxisSnapshot& pitch, TimeNs now_ns);
   // Outputs for Touch / Holding / Release; false when step 6 must command instead (Disable, FaultStop).
   bool step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_ns, TimeNs period_ns);
+  bool step_unhomed_touch(const AxisSnapshot& pitch, TimeNs now_ns, double dir, bool held_by_supervisor);
   void rest_park_hold_yaw(const AxisSnapshot& yaw, TimeNs now_ns, TimeNs period_ns);
   void rest_park_on_stop(const AxisSnapshot& pitch, TimeNs now_ns, bool touched, const std::string& why);
   std::array<double, kAxisCount> last_q_{};

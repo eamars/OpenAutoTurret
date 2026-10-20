@@ -13,7 +13,8 @@ namespace {
 // Reset the drive's velocity controller at endpoint B's start so the
 // approach begins clean (rehome3 root cause, 2026-09-02).
 HomingParams with_start_rearm(HomingParams p) {
-  p.rearm_before_start = true;
+  // A speed-mode backoff never leaves speed mode, and the short contact leaves little to clear.
+  p.rearm_before_start = !p.speed_mode_backoff;
   return p;
 }
 }  // namespace

@@ -122,6 +122,17 @@ struct HomingParams {
   // approach would start by fighting that residual (it crawled through in
   // rehome2, but only because the old code had no timeouts).
   bool rearm_before_start = false;
+  // Speed-mode backoff (drive review 2026-10-19): the backoff is a host position law in speed mode
+  // (SpdRef = clamp(backoff_kp * (target - q), +-backoff_speed)) instead of the drive's position
+  // mode, and nothing re-arms. Every RunMode change is a STOP (torque off) on a CyberGear: the pitch
+  // moved 0.7-2.7 deg on its own at each of the five per homing, and an unbalanced payload falls.
+  // Position mode and the re-arms existed to clear the speed-loop integral that the 1.5 s contact
+  // dwell wound up (rehome3 and p3c, measured on the earlier CyberGear yaw). A contact gate on push
+  // effort above the friction notches lets the dwell be short, so the wind-up stays small, and a
+  // backoff at speed unwinds it: on the pitch the integral winds at ~1.4 N.m/s against a 5 deg/s
+  // speed error (station, 2026-10-19).
+  bool speed_mode_backoff = false;
+  double backoff_kp_per_s = 4.0;
   ContactDetectorParams contact;
   // --- Adaptive-current homing (push-through, §22) ---
   // The yaw is a ~360 deg axis whose mid-travel friction stalls (false

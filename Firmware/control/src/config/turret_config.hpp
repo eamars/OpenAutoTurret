@@ -100,6 +100,9 @@ struct HomingConfig {
   double speed_ki = .002;
   bool mode_displacement_check = true;
   bool motion_checks_abort = true;
+  // Backoffs in speed mode under a host position law, with no RunMode change or re-arm (no torque
+  // off) anywhere in the homing (HomingParams::speed_mode_backoff).
+  bool speed_mode_backoff = false;
 };
 
 // One step of the multi-axis homing plan (§25.2). Units are degrees for

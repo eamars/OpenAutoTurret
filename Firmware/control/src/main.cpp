@@ -811,7 +811,7 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::nanoseconds(period_ns));
     } while (now_monotonic_ns() < rest_deadline && loop.phase() != Phase::Idle &&
              loop.phase() != Phase::Fault);
-    rest_shutdown = loop.phase() == Phase::Idle;
+    rest_shutdown = loop.phase() == Phase::Idle && loop.motors_off();
     if (rest_shutdown) {
       spdlog::info("SHUT DOWN (pitch released on its rest stop, yaw at 0, both motors off)");
       loop.note_shutdown(true, "stop requested; rest-stop shutdown");
@@ -849,7 +849,9 @@ int main(int argc, char** argv) {
   }
   // Already shut down (the web's SHUTDOWN, or a boot that was never homed) is a clean stop: both
   // motors are off. It used to be reported as STOP FAILED, the defect the start/stop card named.
-  const bool already_off = !rest_shutdown && loop.phase() == Phase::Idle;
+  // Off is read from pitch's feedback, not from the phase: Idle after a STOP MOTION during homing
+  // holds pitch, and releasing it here dropped the payload (drive review 2026-10-19, item 9).
+  const bool already_off = !rest_shutdown && loop.phase() == Phase::Idle && loop.motors_off();
   const bool shutdown_failed = !rest_shutdown && !already_off && loop.phase() != Phase::Parked;
   // With both motors off, the heartbeat watchdog has nothing left to guard, and the loop no longer
   // feeds it: stopped here, it cannot log a 100 ms "heartbeat lost" while the drives are closed.

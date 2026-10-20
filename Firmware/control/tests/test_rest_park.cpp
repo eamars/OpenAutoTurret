@@ -553,3 +553,189 @@ TEST(RestParkBoundary, OutwardMotionPastTheEnvelopeIsStillBraked) {
   ASSERT_GE(braked_at, 0) << "never braked";
   EXPECT_LE(braked_at, 12) << "braked within 60 ms of a 6 deg/s outward push";
 }
+
+// Shutdown from a held, unhomed pitch (drive review 2026-10-19, item 9). The station holds pitch at
+// speed zero on its own drive whenever it cannot release it safely, and STOP MOTION during homing
+// leaves exactly that: not homed, pitch energised. The phase then read Idle, which the web's
+// Shutdown and the process stop both took as "both motors already off": the next stop released the
+// pitch where it stood, and an unbalanced payload fell. Shutdown means motors off with the payload
+// resting on its stop, homed or not.
+namespace {
+class HeldPitchPlant : public ContinuousPlant {
+ public:
+  bool fault_releases_axis(AxisId a) const override { return a == AxisId::Yaw; }
+  void hold_axis(AxisId a) override {
+    if (a != AxisId::Pitch) { deenergize(a); return; }
+    command_velocity(AxisId::Pitch, 0.0);  // the CyberGear holds speed zero on its own encoder
+  }
+};
+
+struct HeldStation : StationLike {
+  HeldStation() : StationLike() {}
+  static std::unique_ptr<sim::SimMotorBackend> held_plant() {
+    auto p = std::make_unique<HeldPitchPlant>();
+    p->set_stops(AxisId::Pitch, -1, 1);
+    p->set_stops(AxisId::Yaw, -100, 100);
+    p->set_position(AxisId::Pitch, .5);
+    return p;
+  }
+  // StationLike's constructor builds its own plant; this one replaces the loop with the held plant.
+  void use_held_plant() {
+    auto p = held_plant();
+    sim = p.get();
+    loop = std::make_unique<ControlLoop>(station_cfg(), std::move(p));
+    loop->set_homing_factory([] { return two_axis_plan(); });
+  }
+  // STOP MOTION a few seconds into pitch homing: the held, unhomed state.
+  bool stopped_mid_homing() {
+    HomingPlanConfig hcfg;
+    hcfg.homing.coarse_speed_rad_s = 5 * kDeg2Rad;
+    hcfg.homing.fine_speed_rad_s = 3 * kDeg2Rad;
+    hcfg.homing.settle_time_s = .3;
+    hcfg.travel_bands[0] = TravelBand{0, 115};
+    std::vector<HomingAction> actions{{.type = HomingActionType::HomeFullRange, .axis = AxisId::Pitch}};
+    std::string error;
+    if (!loop->start_homing(HomingPlan(std::move(actions), hcfg), error)) return false;
+    step(600);
+    if (loop->phase() != Phase::Homing) return false;
+    run("stop_motion");
+    step(20);
+    return true;
+  }
+  bool pitch_off() { return sim->snapshot(AxisId::Pitch, t).disabled; }
+};
+}  // namespace
+
+TEST(RestParkUnhomed, StopMotionDuringHomingHoldsPitchAndIsNotReportedAsOff) {
+  HeldStation s;
+  s.use_held_plant();
+  ASSERT_TRUE(s.stopped_mid_homing());
+  EXPECT_EQ(s.loop->phase(), Phase::Idle);
+  EXPECT_FALSE(s.pitch_off()) << "the ruling holds pitch rather than releasing it";
+  EXPECT_TRUE(s.loop->pitch_energised());
+  EXPECT_FALSE(s.loop->motors_off()) << "Idle here is a held pitch, not Shutdown";
+  EXPECT_TRUE(s.loop->rest_shutdown_available()) << "a process stop must lower it, not release it";
+}
+
+TEST(RestParkUnhomed, ShutdownLowersAHeldUnhomedPitchOntoItsRestStopBeforeReleasing) {
+  HeldStation s;
+  s.use_held_plant();
+  ASSERT_TRUE(s.stopped_mid_homing());
+  const double held_at = s.pitch();
+  ASSERT_GT(held_at, -0.9);
+  s.run("request_shutdown");
+  EXPECT_TRUE(s.ack().accepted) << s.ack().reason;
+  double released_at = std::nan("");
+  ASSERT_TRUE(s.until([&] {
+    if (std::isnan(released_at) && s.pitch_off()) released_at = s.pitch();
+    return s.loop->phase() == Phase::Idle && s.pitch_off();
+  }, 60'000)) << "stage " << s.stage();
+  // Released on the low (rest) stop, not where it was held.
+  EXPECT_NEAR(released_at, -1.0, 0.01);
+  EXPECT_TRUE(s.loop->motors_off());
+  EXPECT_FALSE(s.saw_fault);
+  // Shutdown again from here is the clean "already off".
+  s.run("request_shutdown");
+  EXPECT_NE(s.ack().reason.find("already off"), std::string::npos) << s.ack().reason;
+}
+
+TEST(RestParkUnhomed, ProcessStopPathFromAHeldUnhomedPitchEndsOnTheStop) {
+  // main.cpp's process stop, step for step: rest_shutdown_available(), submit request_shutdown, run
+  // until Idle or Fault, and call it a clean shutdown only if the motors are really off.
+  HeldStation s;
+  s.use_held_plant();
+  ASSERT_TRUE(s.stopped_mid_homing());
+  ASSERT_TRUE(s.loop->rest_shutdown_available());
+  s.loop->submit_command("request_shutdown", "");
+  int steps = 0;
+  do { s.step(); } while (++steps < 12'000 && s.loop->phase() != Phase::Idle && s.loop->phase() != Phase::Fault);
+  EXPECT_EQ(s.loop->phase(), Phase::Idle);
+  EXPECT_TRUE(s.loop->motors_off());
+  EXPECT_NEAR(s.pitch(), -1.0, 0.01) << "the payload rests on its stop";
+}
+
+TEST(RestParkUnhomed, ABootIntoShutdownIsAlreadyOff) {
+  HeldStation s;
+  s.use_held_plant();
+  s.step(10);
+  EXPECT_TRUE(s.loop->motors_off());
+  EXPECT_FALSE(s.loop->rest_shutdown_available());
+  s.run("request_shutdown");
+  EXPECT_NE(s.ack().reason.find("already off"), std::string::npos) << s.ack().reason;
+  EXPECT_DOUBLE_EQ(s.pitch(), .5) << "nothing moved";
+}
+
+// Homing without torque off (drive review 2026-10-19, item 9a). Every RunMode change or re-arm on a
+// CyberGear is a STOP: the station's pitch moved 0.7-2.7 deg on its own at each of the five per
+// homing. With speed-mode backoffs the only mode changes are the one that switches the drive on and
+// the hand-over at the end, and the endpoints still come out where the stops are.
+namespace {
+class CountingPlant : public HeldPitchPlant {
+ public:
+  Transition transition_mode(AxisId axis, bool position, double limit, TimeNs now_ns, std::string& err,
+                             double speed_ki, double speed_kp, bool check_displacement) override {
+    if (axis == AxisId::Pitch) { ++pitch_transitions; pitch_position_entries += position; }
+    return HeldPitchPlant::transition_mode(axis, position, limit, now_ns, err, speed_ki, speed_kp,
+                                           check_displacement);
+  }
+  void deenergize(AxisId a) override {
+    if (a == AxisId::Pitch) ++pitch_releases;
+    HeldPitchPlant::deenergize(a);
+  }
+  int pitch_transitions = 0, pitch_position_entries = 0, pitch_releases = 0;
+};
+
+struct HomingRun {
+  CountingPlant* plant = nullptr;
+  std::unique_ptr<ControlLoop> loop;
+  int64_t t = kDtNs;
+  bool run(bool speed_mode_backoff) {
+    auto p = std::make_unique<CountingPlant>();
+    p->set_stops(AxisId::Pitch, -1, 1);
+    p->set_stops(AxisId::Yaw, -100, 100);
+    p->set_position(AxisId::Pitch, -0.95);  // a boot: resting near the rest stop
+    plant = p.get();
+    loop = std::make_unique<ControlLoop>(station_cfg(), std::move(p));
+    HomingPlanConfig hcfg;
+    hcfg.homing.coarse_speed_rad_s = 10 * kDeg2Rad;
+    hcfg.homing.fine_speed_rad_s = 5 * kDeg2Rad;
+    hcfg.homing.settle_time_s = .3;
+    hcfg.homing.contact.effort_contact_threshold_nm = 0.8;
+    hcfg.homing.contact.contact_dwell_ms = 250;
+    hcfg.homing.repeatability_rad = 0.2 * kDeg2Rad;
+    hcfg.homing.speed_mode_backoff = speed_mode_backoff;
+    hcfg.homing.backoff_speed_rad_s = speed_mode_backoff ? 10 * kDeg2Rad : 5 * kDeg2Rad;
+    hcfg.travel_bands[0] = TravelBand{0, 115};
+    std::vector<HomingAction> actions{{.type = HomingActionType::HomeFullRange, .axis = AxisId::Pitch}};
+    std::string error;
+    if (!loop->start_homing(HomingPlan(std::move(actions), hcfg), error)) return false;
+    for (int i = 0; i < 60'000; ++i, t += kDtNs) {
+      loop->step(t, kDtNs);
+      if (loop->phase() == Phase::Fault) return false;
+      if (loop->position_ready() && loop->phase() == Phase::Hold) return true;
+    }
+    return false;
+  }
+};
+}  // namespace
+
+TEST(HomingNoTorqueOff, SpeedModeBackoffsHomeBothStopsWithoutAStop) {
+  HomingRun r;
+  ASSERT_TRUE(r.run(true)) << "fault: " << r.loop->fault_reason();
+  const auto& pl = r.loop->limits()[static_cast<int>(AxisId::Pitch)];
+  EXPECT_NEAR(pl.q_hard_min_rad, -1.0, 0.01);
+  EXPECT_NEAR(pl.q_hard_max_rad, 1.0, 0.01);
+  EXPECT_EQ(r.plant->pitch_position_entries, 0) << "no position-mode backoff";
+  EXPECT_EQ(r.plant->pitch_releases, 0) << "pitch was never released";
+  // Switching on, and the hand-over to service at the end: nothing in between.
+  EXPECT_LE(r.plant->pitch_transitions, 2);
+}
+
+TEST(HomingNoTorqueOff, TheOldBackoffNeededAModeChangePerBackoff) {
+  // The contrast, so the test above cannot pass by not homing: the position-mode backoff path still
+  // enters position mode at each of its backoffs (four per two-ended homing).
+  HomingRun r;
+  ASSERT_TRUE(r.run(false)) << "fault: " << r.loop->fault_reason();
+  EXPECT_GE(r.plant->pitch_position_entries, 4);
+  EXPECT_GT(r.plant->pitch_transitions, 2);
+}

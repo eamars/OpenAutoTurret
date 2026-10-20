@@ -85,7 +85,7 @@ void HomingController::begin_backoff_to(TimeNs now, double target_rad,
                                         double start_rad) {
   phase_.kind = PhaseKind::Move;
   phase_.approach = false;
-  phase_.position_mode = true;
+  phase_.position_mode = !p_.speed_mode_backoff;
   // Position mode (p3c fix, 2026-09-02): the drive's own position loop
   // (loc_kp ~30 N.m/rad) drives target_rad with a speed cap of
   // backoff_speed (LimitSpd). At a 5 deg error its P-term wants 2.6 N.m
@@ -114,7 +114,7 @@ void HomingController::begin_backoff_to(TimeNs now, double target_rad,
   // the control path), but the reset keeps the controller clean. The brief
   // de-energize can let either axis move in either direction. The executor
   // must reject setup drift; re-measuring the stop cannot make that drift safe.
-  pos_enter_pending_ = true;
+  pos_enter_pending_ = !p_.speed_mode_backoff;
 }
 
 bool HomingController::backoff_arrived(const HomingFeedback& fb) {
@@ -306,7 +306,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         // — the same re-arm endpoint B uses before its coarse approach.
         // Clearance and stationary feedback are required before re-arm;
         // the backend separately rejects movement while drive torque is off.
-        rearm_pending_ = true;
+        rearm_pending_ = !p_.speed_mode_backoff;
         state_ = AxisHomeState::ApproachFine;
       }
       break;
@@ -355,7 +355,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
           // fine approach is speed mode — re-arm (de-energize/re-energize)
           // so the SpdRef commands take effect (see the Settle ->
           // ApproachFine transition).
-          rearm_pending_ = true;
+          rearm_pending_ = !p_.speed_mode_backoff;
         } else if (fb.t_ns - phase_.start_ns >=
                    static_cast<TimeNs>(p_.backoff_timeout_s * 1e9)) {
           fail("repeatability: small backoff timeout (position mode, stuck "
@@ -444,6 +444,13 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         // target costs one CAN write). velocity_rad_s stays 0.
         ds = move_state(phase_.target_rad, phase_.speed_rad_s, 0.0, "move:pos");
         ds.position_move = true;
+      } else if (!phase_.approach && p_.speed_mode_backoff) {
+        // Speed-mode backoff: a host position law toward the backoff target, at most the backoff
+        // speed. It starts at full speed (a 5 deg error saturates it), which unwinds the drive's
+        // contact push quickly, and slows into the target instead of overshooting it.
+        const double v = std::clamp(p_.backoff_kp_per_s * (phase_.target_rad - fb.pos_rad),
+                                    -phase_.speed_rad_s, phase_.speed_rad_s);
+        ds = move_state(phase_.target_rad, phase_.speed_rad_s, std::isfinite(v) ? v : 0.0, "backoff");
       } else {
         ds = move_state(phase_.target_rad, phase_.speed_rad_s,
                         phase_.velocity_rad_s, phase_.approach ? "approach" : "move");

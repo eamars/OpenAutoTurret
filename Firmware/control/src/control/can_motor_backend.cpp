@@ -440,7 +440,10 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
       if (axis == AxisId::Pitch)
         last_limit_cur_a_[i] = t.pitch_limit_cur;
     }
-    else { last_spd_ref_[i] = 0; last_limit_cur_a_[i] = limit; }
+    else {
+      last_spd_ref_[i] = 0; last_limit_cur_a_[i] = limit;
+      if (t.speed_ki >= 0) { last_speed_kp_[i] = t.speed_kp; last_speed_ki_[i] = t.speed_ki; }
+    }
     t = ModeTransition{};
     return Transition::Complete;
   };
@@ -449,6 +452,17 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   if (!s.has_feedback || s.rx_ns<=0 || s.rx_ns>now+5000000LL || now-s.rx_ns>100000000LL ||
       !std::isfinite(s.q_rad) || s.faults)
     return fail("fresh finite fault-free feedback required for mode setup");
+  if (t.stage == 0 && !position && in_speed_mode_[i] && s.mode == 2 &&
+      (axis != AxisId::Pitch || system_.pitch_setup_verified()) &&
+      last_limit_cur_a_[i] == limit &&
+      (speed_ki < 0 || (last_speed_kp_[i] == speed_kp && last_speed_ki_[i] == speed_ki))) {
+    // Already running speed mode with these gains and this limit, all read back when it was set
+    // up: the transition is a SpdRef of zero, not a STOP. A STOP turns the torque off, and the pitch
+    // moved 0.7-2.7 deg on its own each time (drive review 2026-10-19, homing item 9a).
+    if (!write_reg_float(cybergear::Reg::SpdRef, 0, axis)) return fail("neutral SpdRef write failed");
+    t.speed_ki = speed_ki; t.speed_kp = speed_kp;
+    return complete();
+  }
   if (t.stage == 0) {
     invalidate_calibration();
     if (!std::isfinite(limit) || limit <= 0) return fail("invalid mode limit");
