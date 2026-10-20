@@ -791,13 +791,16 @@ function hudForInset(o) {
   const vw = o.vw, vh = o.vh;
   if (!(vw > 0) || !(vh > 0)) return null;
 
-  const w = vw * 0.26, h = vh * 0.215;             // §11.2: 25-27% wide, 20-23% tall
+  // The region the map may use (§11.2: 25-27% wide, 20-23% tall, lower left, above the §12 status
+  // strip). Nothing is drawn for the region itself (owner, 2026-10-21: the box was bigger than the map
+  // and not needed): the map is sized into it and anchored to its bottom-left corner, and the legend
+  // row above the map is all the region's top band holds.
+  const w = vw * 0.26, h = vh * 0.215;
   const x = vw * 0.015;                            // "lower left", clear of the bezel
   const y = vh - h - vh * 0.055;                   // above the §12 status strip
-  const titleH = Math.max(12, h * 0.17);
-  const pad = Math.max(6, Math.min(w, h) * 0.08);
-  const plot = { x: x + pad, y: y + titleH, w: w - 2 * pad, h: h - titleH - pad };
-  if (!(plot.w > 0) || !(plot.h > 0)) return null;
+  const titleH = 14;                               // the legend row
+  const room = { w: w, h: h - titleH };
+  if (!(room.w > 0) || !(room.h > 0)) return null;
 
   // A continuous yaw axis: the map is the whole circle, -180..180, at the envelope's pitch range, and
   // every yaw on it is an angle rather than a count of turns (owner, 2026-10-02: the map used to be
@@ -821,7 +824,9 @@ function hudForInset(o) {
     minP = Math.min(minP, pt[1]); maxP = Math.max(maxP, pt[1]);
   }
   const spanY = Math.max(1e-6, maxY - minY), spanP = Math.max(1e-6, maxP - minP);
-  const k = Math.min(plot.w / spanY, plot.h / spanP);          // the one shared scale
+  const k = Math.min(room.w / spanY, room.h / spanP);          // the one shared scale
+  // The plot is the map itself: no letterbox margins to float in.
+  const plot = { x: x, y: y + h - spanP * k, w: spanY * k, h: spanP * k };
   const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
   const midY = (minY + maxY) / 2, midP = (minP + maxP) / 2;
   // The inset is spatial: left/right/up/down match the camera aim and D-pad.
@@ -861,7 +866,7 @@ function hudForInset(o) {
   const g = {
     x: x, y: y, w: w, h: h, plot: plot, scale: k, ring: ring,
     envPx: envPx,
-    // The drawn map's box: letterboxing centres it in the plot, so the legend anchors to this.
+    // The drawn map's box (the plot, since the map is sized to it); the legend anchors to this.
     map: { x: Math.min.apply(null, ex), y: Math.min.apply(null, ey),
            w: Math.max.apply(null, ex) - Math.min.apply(null, ex),
            h: Math.max.apply(null, ey) - Math.min.apply(null, ey) },
@@ -878,12 +883,10 @@ function hudForInsetSvg(g, C) {
   if (!g) return "";
   const pts = g.envPx.map((p) => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ");
   const parts = [
-    // "It is not a full dashboard card" - one low-opacity panel, no card chrome, so the scene stays
-    // dominant as §11.2 requires.
-    '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w + '" height="' + g.h + '" rx="2" ' +
-      'fill="' + C.black + '" fill-opacity=".28" stroke="' + C.line + '" stroke-width="1"/>',
-    // No title and no "SAFE ENVELOPE" caption (owner, 2026-10-21): the map explains itself, and the
-    // band above it carries the legend instead.
+    // "It is not a full dashboard card" (§11.2), and since 2026-10-21 not a box at all (owner): no
+    // panel, no title, no "SAFE ENVELOPE" caption. The envelope itself carries the low-opacity dark
+    // underlay that keeps it readable over the video, then its green fill and outline.
+    '<polygon points="' + pts + '" fill="' + C.black + '" fill-opacity=".28" stroke="none"/>',
     '<polygon points="' + pts + '" fill="' + C.green + '" fill-opacity=".10" stroke="' + C.green +
       '" stroke-width="1" opacity=".85"/>',
     // The view rectangle is clipped to the map; on a ring its overhang reappears at the other edge.

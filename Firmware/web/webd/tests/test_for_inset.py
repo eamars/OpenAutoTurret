@@ -108,9 +108,15 @@ class ForInsetGeometry(unittest.TestCase):
         # degrees round-trip: the rectangle's width IS the effective HFOV at the inset's scale
         self.assertAlmostEqual(g["fov"]["w"] / g["scale"], HFOV, places=6)
         self.assertAlmostEqual(g["fov"]["h"] / g["scale"], VFOV, places=6)
-        # and one scale, not two, is what makes that true
-        self.assertNotIn("spanY *", HUD_GEOMETRY_JS.replace("plot.w / spanY", ""),
-                         "a second per-axis scale appeared; §11's comparison needs one")
+        # and the map is drawn at that same one scale on both axes: its pixel box is its degree spans
+        # times the scale. (Until 2026-10-21 this was a source-text check for "spanY *"; sizing the
+        # map to its own box made that string legitimate, so the property is asserted instead.)
+        yaws = [p[0] for p in ENV]
+        pitches = [p[1] for p in ENV]
+        xs = [p["x"] for p in g["envPx"]]
+        ys = [p["y"] for p in g["envPx"]]
+        self.assertAlmostEqual((max(xs) - min(xs)) / g["scale"], max(yaws) - min(yaws), places=6)
+        self.assertAlmostEqual((max(ys) - min(ys)) / g["scale"], max(pitches) - min(pitches), places=6)
 
     def test_the_fov_rectangle_is_centred_on_the_los_marker(self) -> None:
         # §11.3: "camera FOV center derives from actual yaw/pitch".
@@ -238,11 +244,27 @@ class ForInsetMarkup(unittest.TestCase):
         fov = svg[svg.index("<rect", svg.index("</clipPath>")):svg.index("<line", svg.index("</clipPath>"))]
         self.assertIn(C_TOKENS["white"], fov, "§11: white current-camera FOV rectangle")
 
-    def test_the_box_is_low_opacity_not_a_card(self) -> None:
-        # §11: "not a full dashboard card", and §11.2 keeps the scene dominant.
+    def test_there_is_no_box_only_the_map_on_a_low_opacity_underlay(self) -> None:
+        # §11: "not a full dashboard card", and §11.2 keeps the scene dominant. Owner, 2026-10-21: no
+        # box at all. The only rects are the view rectangle and its clip; the dark underlay is the
+        # envelope's own shape.
         svg = self._svg({})
-        self.assertIn('fill-opacity=".28"', svg)
+        self.assertEqual(svg.count("<rect"), 2, "the FOV rectangle and the clip rect, nothing else")
+        under = svg[:svg.index("<polygon", svg.index("<polygon") + 1)]
+        self.assertIn('fill-opacity=".28"', under)
         self.assertNotIn("<filter", svg)
+
+    def test_the_map_sits_in_the_regions_bottom_left_corner(self) -> None:
+        # Nothing floats in letterbox margins: the map fills the region's width or height, from its
+        # bottom-left corner.
+        g = self._geometry()
+        xs = [p["x"] for p in g["envPx"]]
+        ys = [p["y"] for p in g["envPx"]]
+        self.assertAlmostEqual(min(xs), g["x"], places=6)
+        self.assertAlmostEqual(max(ys), g["y"] + g["h"], places=6)
+        fills_w = abs(max(xs) - min(xs) - g["w"]) < 1e-6
+        fills_h = abs(max(ys) - min(ys) - (g["h"] - g["titleH"])) < 1e-6
+        self.assertTrue(fills_w or fills_h, "one shared scale, as large as the region allows")
 
     def test_it_draws_nothing_when_the_daemon_has_no_envelope(self) -> None:
         self.assertEqual(self._svg({"pts": [[0, 0], [1, 0]]}), "")
