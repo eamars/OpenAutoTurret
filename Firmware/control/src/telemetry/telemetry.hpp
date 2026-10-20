@@ -546,6 +546,10 @@ struct TelemetrySnapshot {
   std::string target_type_applied;
   bool target_type_switching = false;
   bool target_type_overdue = false;
+  // How far the switch is, for the page's bar: 0 while perception has not produced a frame of the new
+  // type (how long a model swap takes is not knowable in advance); then the share of the 0.3 s of
+  // matching frames that ends the switch. 1 when no switch is in progress.
+  double target_type_progress = 1.0;
   bool watch_point_set = false;
   bool watch_point_usable = false;
   bool watch_point_persistent = false;

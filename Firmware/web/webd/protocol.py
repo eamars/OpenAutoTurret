@@ -95,6 +95,7 @@ class Telemetry:
     target_type_applied: str = ""
     target_type_switching: bool = False
     target_type_overdue: bool = False
+    target_type_progress: float = 1.0
     watch_point_set: bool = False
     watch_point_usable: bool = False
     watch_point_persistent: bool = False

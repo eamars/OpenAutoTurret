@@ -3342,6 +3342,12 @@ TEST(TargetTypeSwitch, HoldsThroughTheSwapThenResumesTheModeItWasIn) {
   frames(2, 200);  // the old model's frames are not the new type
   EXPECT_TRUE(h.snap().target_type_switching);
   EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_EQ(h.snap().target_type_progress, 0.0) << "no frame of the new type yet: nothing to measure";
+
+  frames(3, 30);  // 0.15 s of CAT frames: half the settle
+  EXPECT_TRUE(h.snap().target_type_switching);
+  EXPECT_GT(h.snap().target_type_progress, 0.3);
+  EXPECT_LT(h.snap().target_type_progress, 0.7);
 
   frames(3, 120);  // 0.6 s of CAT frames
   EXPECT_FALSE(h.snap().target_type_switching);

@@ -99,6 +99,17 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         for field in ("target_type", "target_type_switching", "target_type_overdue"):
             self.assertIn("value.%s" % field, paint, field)
 
+    def test_the_switch_bar_slides_while_waiting_fills_while_settling_and_is_amber_when_overdue(self):
+        # Owner, 2026-10-20: a minimal progress bar instead of a blinking chip.
+        self.assertIsNone(self._chips({"target_type": "HEAD", "target_type_switching": False})["progress"])
+        wait = self._chips({"target_type": "CAT", "target_type_switching": True, "target_type_progress": 0})
+        self.assertEqual(wait["progress"]["mode"], "wait", "a swap's length is not knowable: no fake fill")
+        fill = self._chips({"target_type": "CAT", "target_type_switching": True, "target_type_progress": 0.5})
+        self.assertEqual(fill["progress"], {"mode": "fill", "fraction": 0.5})
+        late = self._chips({"target_type": "CAT", "target_type_switching": True, "target_type_overdue": True,
+                            "target_type_progress": 0})
+        self.assertEqual(late["progress"]["mode"], "overdue")
+
     def _rows(self, drawer: str, telemetry: dict):
         return self._node("console.log(JSON.stringify(T.hudDrawerActions(%s, %s)));"
                           % (json.dumps(drawer), json.dumps(telemetry)))

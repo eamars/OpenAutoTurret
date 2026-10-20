@@ -456,8 +456,11 @@ const HUD_SPEED_MIN_DEG_S = 0.5;   // controld's own floor
 
 // What the turret follows (owner, 2026-10-20): one of four types, as chips at the head of the TARGETS
 // drawer. controld owns the choice and holds the turret while perception changes model; the page only
-// shows it and sends set_target_type. The chosen chip sends nothing (it is already in force), and while
-// a switch is pending it says so. Absent when the controller does not report a type (older controld).
+// shows it and sends set_target_type. The chosen chip sends nothing (it is already in force). While a
+// switch is in progress a thin bar under the row says how far (owner, 2026-10-20: a minimal progress
+// bar, not a blinking chip): "wait" while perception swaps (its length is not knowable, so a sliding
+// segment, not a fake fill), "fill" over the 0.3 s of matching frames that ends it, "overdue" in amber.
+// Absent when the controller does not report a type (older controld).
 const HUD_TARGET_TYPES = ["HUMAN", "HEAD", "CAT", "DOG"];
 function hudTargetTypeChips(t) {
   t = t || {};
@@ -469,7 +472,11 @@ function hudTargetTypeChips(t) {
     command: type === requested ? null : "set_target_type", arg: type }));
   const note = !switching ? "" : t.target_type_overdue ? requested + " NOT APPLIED · HOLDING"
                                                       : "SWITCHING TO " + requested + " · HOLDING";
-  return { label: "FOLLOW", chips: chips, note: note };
+  const fraction = Math.min(1, Math.max(0, Number(t.target_type_progress) || 0));
+  const progress = !switching ? null
+    : t.target_type_overdue ? { mode: "overdue", fraction: 1 }
+    : fraction > 0 ? { mode: "fill", fraction: fraction } : { mode: "wait", fraction: 0 };
+  return { label: "FOLLOW", chips: chips, note: note, progress: progress };
 }
 
 function hudSpeedRows(t) {
@@ -1705,6 +1712,7 @@ function paint(t) {
       // TARGETS > FOLLOW draws these: without them the chip kept blinking after the switch ended,
       // because nothing else the drawer draws changed on that frame (station, 2026-10-20 23:04).
       value && value.target_type, value && value.target_type_switching, value && value.target_type_overdue,
+      Math.round(10 * ((value && value.target_type_progress) || 0)),
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
   const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);
   lastTelemetry = t; lastTelemetryAt = Date.now();
@@ -1941,8 +1949,12 @@ function renderTargetTypes(t) {
     '<button type="button" class="sbtn chip' + (c.current ? " on" : "") + (c.pending ? " pending" : "") +
     '" data-cmd="' + (c.command || "") + '" data-arg="' + c.arg + '" data-kind="act" aria-pressed="' +
     String(c.current) + '"' + (c.command ? "" : " disabled") + ">" + c.type + "</button>").join("");
+  const p = spec.progress;
+  const bar = !p ? "" : '<span class="tbar ' + p.mode + '" role="progressbar" aria-valuemin="0" aria-valuemax="100"' +
+    (p.mode === "fill" ? ' aria-valuenow="' + Math.round(p.fraction * 100) + '"' : "") + '><i style="width:' +
+    (p.mode === "wait" ? 30 : Math.round(p.fraction * 100)) + '%"></i></span>';
   return '<div class="drow setting ttype"><span class="rl">' + spec.label + '</span><span class="stepper">' +
-    chips + "</span>" + (spec.note ? '<span class="snote warn">' + escapeMarkup(spec.note) + "</span>" : "") +
+    chips + "</span>" + bar + (spec.note ? '<span class="snote warn">' + escapeMarkup(spec.note) + "</span>" : "") +
     "</div>";
 }
 
@@ -2326,12 +2338,17 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
                 cursor:pointer; }
 #drawer .sbtn:disabled { opacity:.25; cursor:default; }
 #drawer .sval { min-width:52px; text-align:center; color:#edf2eb; }
-/* TARGETS > FOLLOW: the type in force is lit and inert (not dimmed like a refused control); a switch in
-   progress blinks it until perception applies it. */
+/* TARGETS > FOLLOW: the type in force is lit and inert (not dimmed like a refused control). A switch in
+   progress draws a 2 px bar under the row: a sliding segment while perception swaps, a fill over the
+   settle, amber when overdue. */
 #drawer .sbtn.chip { padding:0 6px; font-size:10px; letter-spacing:.08em; }
 #drawer .sbtn.chip.on, #drawer .sbtn.chip.on:disabled { opacity:1; color:#0b100b; background:#95f58b; }
-#drawer .sbtn.chip.pending { animation: chipwait 1s steps(2) infinite; }
-@keyframes chipwait { 50% { background:rgba(149,245,139,.35); } }
+#drawer .tbar { position:relative; width:100%; height:2px; margin-top:4px; overflow:hidden;
+                background:rgba(149,245,139,.15); }
+#drawer .tbar i { position:absolute; left:0; top:0; height:100%; background:#95f58b; transition:width .1s linear; }
+#drawer .tbar.wait i { animation: tslide .9s ease-in-out infinite; }
+#drawer .tbar.overdue i { background:#f2b329; }
+@keyframes tslide { from { transform:translateX(-100%); } to { transform:translateX(340%); } }
 #drawer .snote.warn { color:#f2b329; }
 #drawer .snote { width:100%; font-size:9px; color:rgba(237,242,235,.45); }
 

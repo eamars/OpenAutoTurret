@@ -493,6 +493,7 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"target_type_applied\":\"" << json_escape(s.target_type_applied) << "\""
      << ",\"target_type_switching\":" << (s.target_type_switching ? "true" : "false")
      << ",\"target_type_overdue\":" << (s.target_type_overdue ? "true" : "false")
+     << ",\"target_type_progress\":" << s.target_type_progress
      << ",\"watch_point_set\":" << (s.watch_point_set ? "true" : "false")
      << ",\"watch_point_usable\":" << (s.watch_point_usable ? "true" : "false")
      << ",\"watch_point_persistent\":" << (s.watch_point_persistent ? "true" : "false")

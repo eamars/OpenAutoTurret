@@ -3813,6 +3813,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.target_type_applied = target_type_name(applied_target_type(now_ns));
     snap.target_type_switching = tswitch_.active;
     snap.target_type_overdue = tswitch_.overdue;
+    snap.target_type_progress = !tswitch_.active ? 1.0 : tswitch_.matched_since_ns == 0 ? 0.0
+        : std::clamp(static_cast<double>(now_ns - tswitch_.matched_since_ns) / kTargetSwitchSettleNs, 0.0, 1.0);
     snap.watch_point_set = watch_.valid;
     snap.watch_point_saved = watch_store_ ? watch_store_->last_result() : -1;
     snap.watch_point_persistent = watch_store_ && watch_store_->persistent();
