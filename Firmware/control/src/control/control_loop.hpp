@@ -431,6 +431,9 @@ class ControlLoop {
   void set_trace_archive_dir(std::string dir) {
     telemetry_.set_trace_archive_dir(std::move(dir));
   }
+  // Trip traces and stop records are written by a background thread; this waits until
+  // the ones queued so far are on disk. Shutdown (before the logger goes) and tests only.
+  void wait_for_evidence() { telemetry_.wait_for_evidence(); }
 
   // --- developer commands (§42.2) ----------------------------------------
   // Submit a high-level developer command from the web UI. Validates against

@@ -5,8 +5,10 @@
 //   * the Phase-2 deliverable: boot -> homed -> safe hold -> park cycle;
 //   * stale feedback -> Brake (a recoverable safe stop, NOT a fault);
 //   * motor hard fault -> Disable (de-energize, fault-locked).
+#include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <random>
 #include <string>
@@ -16,6 +18,7 @@
 #include "control/control_loop.hpp"
 #include "control/session_replay.hpp"
 #include "sim/sim_motor_backend.hpp"
+#include "blocking_sink.hpp"
 
 #include <gtest/gtest.h>
 
@@ -452,6 +455,68 @@ TEST(ControlLoop, MotorFaultTriggersDisable) {
   loop.step(t, kDtNs);
   t += kDtNs;
   EXPECT_EQ(loop.phase(), Phase::Fault);
+}
+
+// The step that latches a fault does no file I/O (§46; scheduling ruling 2026-10-03). On the
+// station, 2026-10-20 15:34:13, the step that latched a fault took 79.6 ms: the trip trace was
+// formatted and written in the control thread while visiond loaded its model. Here the trip
+// file's path is a FIFO nobody reads -- a disk that does not answer. The step must return
+// anyway, with the window frozen in memory; the old synchronous write hung in open().
+TEST(ControlLoop, TheStepThatLatchesAFaultDoesNotWaitOnEvidenceIO) {
+  namespace fs = std::filesystem;
+  auto backend = std::make_unique<sim::SimMotorBackend>(0.005);
+  sim::SimMotorBackend* sim = backend.get();
+  sim->set_stops(AxisId::Pitch, -1.0, 1.0);
+  sim->set_stops(AxisId::Yaw, -1.0, 1.0);
+  sim->set_position(AxisId::Pitch, 0.5);
+  sim->set_position(AxisId::Yaw, -0.3);
+  ControlLoop loop(make_cfg(), std::move(backend));
+  const fs::path dir = fs::temp_directory_path() / ("ota-fault-step-" + std::to_string(::getpid()));
+  fs::remove_all(dir);
+  loop.set_trace_archive_dir(dir.string());
+  std::string err;
+  ASSERT_TRUE(loop.start_homing(make_plan(), err)) << err;
+  int64_t t = 0;
+  ASSERT_TRUE(run_to_ready(loop, *sim, t)) << loop.fault_reason();
+  loop.wait_for_evidence();  // whatever homing left behind is on disk before the stall
+
+  // The window ends at the last cycle published before the latch or at the latching cycle
+  // itself; both paths are made stalled so the test does not depend on that ordering.
+  const std::vector<std::string> sinks = {
+      (dir / ("trip-" + std::to_string(t - kDtNs) + ".ndjson")).string(),
+      (dir / ("trip-" + std::to_string(t) + ".ndjson")).string()};
+  for (const auto& p : sinks) ASSERT_TRUE(ota::test::make_blocking_sink(p)) << p;
+
+  sim->set_faults(AxisId::Yaw, 0x1);
+  auto step = std::async(std::launch::async, [&] {
+    const auto t0 = std::chrono::steady_clock::now();
+    loop.step(t, kDtNs);
+    return std::chrono::steady_clock::now() - t0;
+  });
+  if (step.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    ota::test::pump_fifos(sinks, step);  // answer, so the test can end
+    FAIL() << "the fault step waited on the trip file's I/O";
+  }
+  const auto spent = step.get();
+  EXPECT_LT(spent, std::chrono::milliseconds(20))
+      << "fault step took " << std::chrono::duration<double, std::milli>(spent).count() << " ms";
+  ASSERT_EQ(loop.phase(), Phase::Fault);
+  const auto window = loop.telemetry().control_window();
+  EXPECT_TRUE(window.frozen) << "the trip's cycles are held in memory at the latch";
+  std::string path;
+  EXPECT_FALSE(loop.telemetry().trace_archive_path(path)) << "nothing is on disk yet";
+
+  // The disk answers: the trip file arrives complete and is published.
+  auto written = std::async(std::launch::async, [&] { loop.wait_for_evidence(); });
+  const auto got = ota::test::pump_fifos(sinks, written);
+  const std::size_t i = window.frozen_t_ns == t ? 1 : 0;
+  ASSERT_TRUE(window.frozen_t_ns == t || window.frozen_t_ns == t - kDtNs) << window.frozen_t_ns;
+  EXPECT_EQ(got[i].rfind("{\"kind\":\"trip_trace\"", 0), 0u) << got[i].substr(0, 80);
+  EXPECT_TRUE(got[1 - i].empty());
+  ASSERT_TRUE(loop.telemetry().trace_archive_path(path));
+  EXPECT_EQ(path, sinks[i]);
+  EXPECT_EQ(loop.telemetry().evidence_dropped(), 0u);
+  fs::remove_all(dir);
 }
 
 // --- v3 §52: every command answers, and "accepted" has to be earned -------

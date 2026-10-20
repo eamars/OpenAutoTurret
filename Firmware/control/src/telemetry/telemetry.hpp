@@ -13,7 +13,9 @@
 // Pure data structures — no CAN, no camera, no motor driver.
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <limits>
 #include <memory>
 #include <filesystem>
@@ -35,6 +37,7 @@
 
 #include "common/types.hpp"
 #include "control/safety_supervisor.hpp"
+#include "telemetry/evidence_writer.hpp"
 #include "tracking/tracking_state_machine.hpp"
 
 namespace ota {
@@ -964,6 +967,10 @@ class Telemetry {
   // The hot path's try_lock above stays as it is — dropping a sample every cycle
   // and blocking once at a trip are different trades, and only one of them was
   // agreed to.
+  //
+  // What runs here is copies, nothing else: the file is formatted and written by the
+  // evidence writer (2026-10-20 15:34:13, a trip formatted and written in the step took
+  // 79.6 ms of a 5 ms cycle). trace_archive_path() names the file once it is complete.
   void freeze_control_trace() {
     std::lock_guard<std::mutex> lk(trace_mu_);
     const int have = control_log_.latest(frozen_trace_.get(),
@@ -971,99 +978,29 @@ class Telemetry {
     frozen_count_ = have > 0 ? static_cast<std::size_t>(have) : 0;
     frozen_t_ns_ = frozen_count_ ? frozen_trace_[frozen_count_ - 1].timestamp_ns : 0;
     archive_path_.clear();
-    if (!frozen_count_ || archive_dir_.empty()) return;
+    ++freeze_generation_;
+    if (!frozen_count_ || archive_dir_.empty() || !trip_out_) return;
     // A trip nobody is watching still has to leave evidence: the socket answer is
     // only there for someone who asks, and asking is exactly what nobody can
-    // promise at 03:00. Written once, from the latch, after the copy is taken.
-    std::error_code ec;
-    std::filesystem::create_directories(archive_dir_, ec);
-    if (ec) return;
-    const std::string path =
-        archive_dir_ + "/trip-" + std::to_string(frozen_t_ns_) + ".ndjson";
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) return;
-    // Numbers that are not finite are `null`, the same rule the telemetry line
-    // already follows. Absolute ns and the 64-bit command sequence are decimal
-    // strings here (docs/04_CONTRACTS.md §2): this file outlives the process, and
-    // a consumer that parses it in a language whose number is a double would
-    // otherwise quietly lose the low digits of a uptime-class timestamp.
-    auto num = [](double v) -> std::string {
-      if (!std::isfinite(v)) return "null";
-      std::ostringstream os;
-      os.precision(17);
-      os << v;
-      return os.str();
-    };
-    auto pair = [&](const double* a) {
-      return "[" + num(a[0]) + "," + num(a[1]) + "]";
-    };
-    auto pairi = [&](const auto* a) {
-      return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
-    };
-    // Every row's `t` is CLOCK_MONOTONIC nanoseconds (see common/time.hpp), and a
-    // monotonic clock says nothing by itself once the machine has rebooted -- it
-    // restarts. A file that outlives the boot it describes has to carry its own
-    // translation, measured in the same instant it was written, rather than leaving
-    // the reader to infer wall time from the name of the directory it was rotated
-    // into. Measured on this station 2026-09-28: BOOTTIME minus MONOTONIC = 15 us
-    // (this Pi has never suspended), so the two are interchangeable *here*; the
-    // declared name is what stops that from being an assumption next year.
-    observe_clock_mapping();
-    const long long wall_ns = mono_to_wall_ns_ + mono_now_ns();
-    out << "{\"kind\":\"trip_trace\",\"rows\":" << frozen_count_
-        << ",\"frozen_t_ns\":\"" << frozen_t_ns_ << "\""
-        << ",\"clock\":\"CLOCK_MONOTONIC\""
-        << ",\"boot_id\":\"" << boot_id_ << "\""
-        << ",\"wall_t_ns\":\"" << wall_ns << "\""
-        << ",\"mono_to_wall_ns\":\"" << mono_to_wall_ns_ << "\""
-        << ",\"mono_to_wall_err_ns\":\"" << mono_to_wall_err_ns_ << "\""
-        << ",\"clock_epoch\":" << clock_epoch_ << "}\n";
-    for (std::size_t i = 0; i < frozen_count_; ++i) {
-      const ControlLogRecord& r = frozen_trace_[i];
-      out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
-          << "\",\"mode\":\"" << operating_mode_name(r.mode)
-          << "\",\"track\":\"" << tracking::track_state_name(r.track_state)
-          << "\",\"phase\":\"" << phase_name(r.phase)
-          << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
-          << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
-          << ",\"cmd\":" << pair(r.v_command) << ",\"be_cmd\":" << pair(r.backend_cmd)
-          << ",\"vout\":" << pair(r.drive_out) << ",\"effort\":" << pair(r.effort)
-          // Amperes, from the drive that reports them; null where a drive reports no
-          // current. The same column name as the socket answer, so a reader does not have
-          // to learn two vocabularies for the same ring.
-          << ",\"cur\":" << pair(r.current_a)
-          << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
-          << ",\"tx_ns\":" << pairi(r.tx_ns) << ",\"tx_seq\":" << pairi(r.tx_seq)
-          << ",\"rx_seq\":" << pairi(r.rx_seq) << ",\"encoder_raw\":" << pairi(r.encoder_raw)
-          << ",\"current_raw\":" << pair(r.current_raw) << ",\"enabled_state\":" << pairi(r.enabled_state)
-          << ",\"output_requested\":" << pair(r.output_requested)
-          << ",\"output_reason\":" << pairi(r.output_reason) << ",\"command_kind\":" << pairi(r.command_kind)
-          << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
-          << ",\"param_revision\":" << r.param_revision
-          << ",\"param_state\":\"" << r.param_state.data() << "\" "
-          << ",\"param_context\":\"" << r.param_context.data() << "\"" 
-             ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\" "
-             ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\" "
-          << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)
-          << ",\"current_cap\":" << pair(r.current_cap)
-          << ",\"rx_velocity_20\":" << pair(r.rx_velocity_20)
-          << ",\"rx_velocity_30\":" << pair(r.rx_velocity_30)
-          << ",\"rx_velocity_40\":" << pair(r.rx_velocity_40)
-          << ",\"velocity_window_ms\":" << pairi(r.velocity_window_ms)
-          << ",\"friction_a\":" << pair(r.friction_a)
-          << ",\"friction_state\":" << pairi(r.friction_state)
-          << ",\"friction_exhausted\":" << pairi(r.friction_exhausted)
-          << ",\"safety\":" << static_cast<int>(r.safety_action)
-          << ",\"period_us\":" << r.cycle_duration_us;
-      out << ",\"pitch_registers\":[";
-      for (int j=0;j<6;++j) {
-        if(j) out << ',';
-        out << '[' << num(r.pitch_register_value[j]) << ',' << r.pitch_register_request_ns[j]
-            << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
-      }
-      out << "]}\n";
+    // promise at 03:00. One trip file in flight at a time, from its own buffer, so
+    // the writer never reads the frozen window a web reader is copying.
+    if (trip_out_busy_.exchange(true, std::memory_order_acquire)) {
+      ++trip_files_dropped_;
+      spdlog::warn("trip trace {} not written: the previous trip file is still being "
+                   "written ({} dropped); the window stays readable over the socket",
+                   frozen_t_ns_, trip_files_dropped_);
+      return;
     }
-    if (out.good()) archive_path_ = path;
+    std::copy_n(frozen_trace_.get(), frozen_count_, trip_out_.get());
+    trip_out_count_ = frozen_count_;
+    trip_out_t_ns_ = frozen_t_ns_;
+    trip_out_generation_ = freeze_generation_;
+    if (!writer_.post([this] { write_trip_file(); })) {
+      trip_out_busy_.store(false, std::memory_order_release);
+      ++trip_files_dropped_;
+      spdlog::warn("trip trace {} not written: evidence queue full ({} dropped)",
+                   frozen_t_ns_, trip_files_dropped_);
+    }
   }
   // What a trace reader gets: the frozen trip window when there is one, because
   // that is the answer to the question anybody asks after a trip. `frozen` is on
@@ -1093,14 +1030,24 @@ class Telemetry {
   // One line per controlled stop, appended beside the traces so the launcher's rotation
   // takes it away with the round it describes. Best-effort for the same reason the trip
   // file is best-effort: a full disk may not become a new way to fail a stop.
-  void append_stop_evidence(const std::string& line) {
+  // Queued, not written: the stop paths run in the control step, and the append is the
+  // evidence writer's job.
+  void append_stop_evidence(std::string line) {
     if (archive_dir_.empty()) return;
-    std::error_code ec;
-    std::filesystem::create_directories(archive_dir_, ec);
-    std::ofstream out(std::filesystem::path(archive_dir_) / "stop-evidence.ndjson",
-                      std::ios::app);
-    if (!out) return;
-    out << line;
+    const bool queued = writer_.post([this, line = std::move(line)] {
+      std::string dir;
+      {
+        std::lock_guard<std::mutex> lk(trace_mu_);
+        dir = archive_dir_;
+      }
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      std::ofstream out(std::filesystem::path(dir) / "stop-evidence.ndjson", std::ios::app);
+      if (out) out << line;
+    });
+    if (!queued)
+      spdlog::warn("stop evidence not written: evidence queue full ({} dropped)",
+                   writer_.dropped());
   }
   void set_trace_archive_dir(const std::string& dir) {
     observe_clock_mapping();  // the first artifact could be written at any moment
@@ -1112,14 +1059,31 @@ class Telemetry {
       if (!line.empty()) boot_id_ = line;
     }
 
-    std::lock_guard<std::mutex> lk(trace_mu_);
-    archive_dir_ = dir;
-    // Made now rather than at the latch: the launcher moves this directory into
-    // the archive on every restart, and a trip is a bad moment to discover that
-    // the place you meant to write to has been moved out from under you.
-    std::error_code ec;
-    std::filesystem::create_directories(archive_dir_, ec);
+    {
+      std::lock_guard<std::mutex> lk(trace_mu_);
+      archive_dir_ = dir;
+      // Made now rather than at the latch: the launcher moves this directory into
+      // the archive on every restart, and a trip is a bad moment to discover that
+      // the place you meant to write to has been moved out from under you.
+      std::error_code ec;
+      std::filesystem::create_directories(archive_dir_, ec);
+      // The trip file's own copy of the window, allocated (and touched) here at setup
+      // so a latch only ever copies into memory it already has.
+      if (!trip_out_) trip_out_ = std::make_unique<ControlLogRecord[]>(kFrozenTraceCap);
+    }
+    // Started here, from setup, so the writer never inherits the control thread's class.
+    writer_.start();
   }
+  // Blocks until every evidence file queued so far is on disk (or has failed). For
+  // shutdown, before the logger goes away, and for tests; never for the loop.
+  void wait_for_evidence() { writer_.drain(); }
+  // Evidence the loop asked for and the writer never got: a full queue, or a trip
+  // that latched while the previous trip's file was still being written.
+  uint64_t evidence_dropped() const {
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    return writer_.dropped() + trip_files_dropped_;
+  }
+  // Where the frozen window was written, once the file is complete.
   bool trace_archive_path(std::string& out) const {
     std::lock_guard<std::mutex> lk(trace_mu_);
     if (archive_path_.empty()) return false;
@@ -1159,17 +1123,125 @@ class Telemetry {
     {
       std::lock_guard<std::mutex> lk(trace_mu_);
       trace_.clear();
+      ++freeze_generation_;  // a trip file still being written is not published after this
+      frozen_count_ = 0;
+      frozen_t_ns_ = 0;
+      archive_path_.clear();  // under the lock: the evidence writer publishes it
     }
     control_log_.clear();
     event_log_.clear();
     blackbox_.clear();
-    frozen_count_ = 0;
-    frozen_t_ns_ = 0;
-    archive_path_.clear();
     snapshot_ = TelemetrySnapshot{};
   }
 
  private:
+  // The trip file, on the evidence writer's thread. Reads only what freeze handed it
+  // (trip_out_*, owned by this job until trip_out_busy_ drops) and what was fixed at
+  // startup; publishes the path under trace_mu_ only if no newer freeze or clear()
+  // has happened meanwhile, so a reader is never pointed at an older trip.
+  void write_trip_file() {
+    std::string dir;
+    {
+      std::lock_guard<std::mutex> lk(trace_mu_);
+      dir = archive_dir_;
+    }
+    const std::string path =
+        dir + "/trip-" + std::to_string(trip_out_t_ns_) + ".ndjson";
+    bool ok = false;
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (!ec) {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      if (out) {
+        // Numbers that are not finite are `null`, the same rule the telemetry line
+        // already follows. Absolute ns and the 64-bit command sequence are decimal
+        // strings here (docs/04_CONTRACTS.md §2): this file outlives the process, and
+        // a consumer that parses it in a language whose number is a double would
+        // otherwise quietly lose the low digits of a uptime-class timestamp.
+        auto num = [](double v) -> std::string {
+          if (!std::isfinite(v)) return "null";
+          std::ostringstream os;
+          os.precision(17);
+          os << v;
+          return os.str();
+        };
+        auto pair = [&](const double* a) {
+          return "[" + num(a[0]) + "," + num(a[1]) + "]";
+        };
+        auto pairi = [&](const auto* a) {
+          return "[" + std::to_string(a[0]) + "," + std::to_string(a[1]) + "]";
+        };
+        // Every row's `t` is CLOCK_MONOTONIC nanoseconds (see common/time.hpp), and a
+        // monotonic clock says nothing by itself once the machine has rebooted -- it
+        // restarts. A file that outlives the boot it describes has to carry its own
+        // translation, measured in the same instant it was written, rather than leaving
+        // the reader to infer wall time from the name of the directory it was rotated
+        // into. Measured on this station 2026-09-28: BOOTTIME minus MONOTONIC = 15 us
+        // (this Pi has never suspended), so the two are interchangeable *here*; the
+        // declared name is what stops that from being an assumption next year.
+        observe_clock_mapping();
+        const long long wall_ns = mono_to_wall_ns_ + mono_now_ns();
+        out << "{\"kind\":\"trip_trace\",\"rows\":" << trip_out_count_
+            << ",\"frozen_t_ns\":\"" << trip_out_t_ns_ << "\""
+            << ",\"clock\":\"CLOCK_MONOTONIC\""
+            << ",\"boot_id\":\"" << boot_id_ << "\""
+            << ",\"wall_t_ns\":\"" << wall_ns << "\""
+            << ",\"mono_to_wall_ns\":\"" << mono_to_wall_ns_ << "\""
+            << ",\"mono_to_wall_err_ns\":\"" << mono_to_wall_err_ns_ << "\""
+            << ",\"clock_epoch\":" << clock_epoch_ << "}\n";
+        for (std::size_t i = 0; i < trip_out_count_; ++i) {
+          const ControlLogRecord& r = trip_out_[i];
+          out << "{\"t\":\"" << r.timestamp_ns << "\",\"ack\":\"" << r.command_seq
+              << "\",\"mode\":\"" << operating_mode_name(r.mode)
+              << "\",\"track\":\"" << tracking::track_state_name(r.track_state)
+              << "\",\"phase\":\"" << phase_name(r.phase)
+              << "\",\"temp_raw\":[" << r.temp_raw[0] << ',' << r.temp_raw[1] << ']'
+              << ",\"q\":" << pair(r.q_actual) << ",\"ref\":" << pair(r.q_ref)
+              << ",\"cmd\":" << pair(r.v_command) << ",\"be_cmd\":" << pair(r.backend_cmd)
+              << ",\"vout\":" << pair(r.drive_out) << ",\"effort\":" << pair(r.effort)
+              // Amperes, from the drive that reports them; null where a drive reports no
+              // current. The same column name as the socket answer, so a reader does not have
+              // to learn two vocabularies for the same ring.
+              << ",\"cur\":" << pair(r.current_a)
+              << ",\"vest\":" << pair(r.v_estimated) << ",\"rx\":" << pairi(r.feedback_ns)
+              << ",\"tx_ns\":" << pairi(r.tx_ns) << ",\"tx_seq\":" << pairi(r.tx_seq)
+              << ",\"rx_seq\":" << pairi(r.rx_seq) << ",\"encoder_raw\":" << pairi(r.encoder_raw)
+              << ",\"current_raw\":" << pair(r.current_raw) << ",\"enabled_state\":" << pairi(r.enabled_state)
+              << ",\"output_requested\":" << pair(r.output_requested)
+              << ",\"output_reason\":" << pairi(r.output_reason) << ",\"command_kind\":" << pairi(r.command_kind)
+              << ",\"pi_integral\":" << pair(r.pi_integral) << ",\"pi_velocity\":" << pair(r.pi_velocity)
+              << ",\"param_revision\":" << r.param_revision
+              << ",\"param_state\":\"" << r.param_state.data() << "\" "
+              << ",\"param_context\":\"" << r.param_context.data() << "\"" 
+                 ",\"param_applied_hash\":\"" << r.param_applied_hash.data() << "\" "
+                 ",\"param_expected_hash\":\"" << r.param_expected_hash.data() << "\" "
+              << ",\"pi_kp\":" << pair(r.pi_kp) << ",\"pi_ki\":" << pair(r.pi_ki)
+              << ",\"current_cap\":" << pair(r.current_cap)
+              << ",\"rx_velocity_20\":" << pair(r.rx_velocity_20)
+              << ",\"rx_velocity_30\":" << pair(r.rx_velocity_30)
+              << ",\"rx_velocity_40\":" << pair(r.rx_velocity_40)
+              << ",\"velocity_window_ms\":" << pairi(r.velocity_window_ms)
+              << ",\"friction_a\":" << pair(r.friction_a)
+              << ",\"friction_state\":" << pairi(r.friction_state)
+              << ",\"friction_exhausted\":" << pairi(r.friction_exhausted)
+              << ",\"safety\":" << static_cast<int>(r.safety_action)
+              << ",\"period_us\":" << r.cycle_duration_us;
+          out << ",\"pitch_registers\":[";
+          for (int j=0;j<6;++j) {
+            if(j) out << ',';
+            out << '[' << num(r.pitch_register_value[j]) << ',' << r.pitch_register_request_ns[j]
+                << ',' << r.pitch_register_rx_ns[j] << ',' << r.pitch_register_status[j] << ']';
+          }
+          out << "]}\n";
+        }
+        ok = out.good();
+      }
+    }
+    std::lock_guard<std::mutex> lk(trace_mu_);
+    if (ok && trip_out_generation_ == freeze_generation_) archive_path_ = path;
+    trip_out_busy_.store(false, std::memory_order_release);
+  }
+
   mutable std::mutex snapshot_mu_;
   mutable std::mutex trace_mu_;
   RingBuffer<ControlLogRecord, kTraceCap> trace_;  // 1.28 s; timestamp gaps expose drops
@@ -1251,6 +1323,20 @@ class Telemetry {
   RingBuffer<EventRecord, kEventCap> event_log_;
   uint64_t event_pushes_ = 0;  // does not saturate where size() does
   RingBuffer<ControlLogRecord, kBlackBoxCap> blackbox_;
+
+  // The trip file in flight (see freeze_control_trace / write_trip_file). The rows and
+  // their header belong to the writer's job while trip_out_busy_ is set; freeze_generation_
+  // and trip_files_dropped_ are guarded by trace_mu_.
+  std::unique_ptr<ControlLogRecord[]> trip_out_;
+  std::size_t trip_out_count_ = 0;
+  int64_t trip_out_t_ns_ = 0;
+  uint64_t trip_out_generation_ = 0;
+  std::atomic<bool> trip_out_busy_{false};
+  uint64_t freeze_generation_ = 0;
+  uint64_t trip_files_dropped_ = 0;
+  // Last, so it is destroyed first: its destructor runs what is still queued, and those
+  // jobs read the members above.
+  EvidenceWriter writer_;
 };
 
 }  // namespace telemetry

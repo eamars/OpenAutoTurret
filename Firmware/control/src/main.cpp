@@ -890,6 +890,9 @@ int main(int argc, char** argv) {
   if (imu_observer) imu_observer->stop();
   web.stop();
   if (vision) vision->stop();
+  // The shutdown's own stop record and any trip trace are written by the evidence writer;
+  // let them land while the logger they may warn through still exists.
+  loop.wait_for_evidence();
   spdlog::info("controld stopped cleanly");
   spdlog::shutdown();  // drain + drop the async log queue (no lost tail)
   return shutdown_failed ? 2 : 0;
