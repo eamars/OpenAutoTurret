@@ -141,13 +141,13 @@ class TestTrackSetWire(unittest.TestCase):
         from perception.tracking.track import TrackState
         return [track_at(0.5 + 0.1 * i, index=i + 1, **kw) for i in range(n)]
 
-    def test_the_track_set_is_exactly_2562_bytes(self):
+    def test_the_track_set_is_exactly_2946_bytes(self):
         from perception.protocol.wire import encode_track_set, _TRACKSET_SIZE
         payload = encode_track_set(self._tracks(2), frame_sequence=1, sensor_timestamp_ns=2,
                                    publish_timestamp_ns=3, width=1920, height=1080)
-        self.assertEqual(len(payload), 2562,
-                         "controld refuses any TrackSet length other than 2562 bytes")
-        self.assertEqual(_TRACKSET_SIZE, 2562)
+        self.assertEqual(len(payload), 2946,
+                         "controld refuses any TrackSet length other than 2946 bytes")
+        self.assertEqual(_TRACKSET_SIZE, 2946)
 
     def test_header_carries_geometry_and_the_count(self):
         from perception.protocol.wire import encode_track_set
@@ -165,7 +165,7 @@ class TestTrackSetWire(unittest.TestCase):
         tracks[0].state = TrackState.RETIRED
         payload = encode_track_set(tracks, frame_sequence=1, sensor_timestamp_ns=2,
                                    publish_timestamp_ns=3, width=1920, height=1080)
-        self.assertEqual(len(payload), 2562)
+        self.assertEqual(len(payload), 2946)
         count = struct.unpack("<H", payload[32:34])[0]
         self.assertEqual(count, 0, "a RETIRED identity is gone, so it must not be on the wire")
         self.assertNotIn(b"person", payload[34:])
@@ -197,7 +197,7 @@ class TestTrackSetWire(unittest.TestCase):
         payload = encode_track_set([track], frame_sequence=1, sensor_timestamp_ns=2,
                                    publish_timestamp_ns=3, width=1920, height=1080)
         from perception.protocol.wire import _TRACK_LAYOUT
-        values = struct.unpack(_TRACK_LAYOUT, payload[34:113])
+        values = struct.unpack(_TRACK_LAYOUT, payload[34:125])
         self.assertAlmostEqual(values[-5], .08)
         self.assertAlmostEqual(values[-4], -.04)
         self.assertEqual(values[-3:], (14, 12, 2))
@@ -210,7 +210,7 @@ class TestTrackSetWire(unittest.TestCase):
             track.ambiguous = ambiguous
             payload = encode_track_set([track], frame_sequence=1, sensor_timestamp_ns=2,
                                        publish_timestamp_ns=3, width=1920, height=1080)
-            values = struct.unpack(_TRACK_LAYOUT, payload[34:113])
+            values = struct.unpack(_TRACK_LAYOUT, payload[34:125])
             self.assertEqual(values[5], 2, "v3 can only express withheld measurements as occlusion")
 
     def test_trackset_and_legacy_measurement_use_the_same_identity(self):

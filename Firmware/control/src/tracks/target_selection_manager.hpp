@@ -65,7 +65,7 @@ struct TargetSelection {
   bool has_selection = false;
   TrackUuid selected{};
   uint16_t selected_class = 0;
-  char selected_descriptor[24] = {};  // "Person #2" (§10), never a bare uuid
+  char selected_descriptor[32] = {};  // "Person #2" (§10), never a bare uuid
   uint16_t selected_display_index = 0;
   TimeNs selection_timestamp = 0;
   Visibility visibility_state = Visibility::None;

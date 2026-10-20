@@ -147,11 +147,11 @@ PROTOCOL_SIZE = _SIZE
 # contract, not a hint: the message has a constant size so the receiving side never has
 # to negotiate a length or allocate while someone else is on a deadline.
 K_MAX_TRACKS = 32
-_CLASS_NAME_LEN = 12
+_CLASS_NAME_LEN = 24  # tracks/track_set.hpp kClassNameLen (12 until 2026-10-20: "potted plan")
 
-_TRACK_FORMAT = "QQHH12sB" + "f" * 10 + "HHH"
+_TRACK_FORMAT = "QQHH24sB" + "f" * 10 + "HHH"
 _TRACK_SIZE = struct.calcsize("<" + _TRACK_FORMAT)
-assert _TRACK_SIZE == 79, f"unexpected per-track size {_TRACK_SIZE}"
+assert _TRACK_SIZE == 91, f"unexpected per-track size {_TRACK_SIZE}"
 
 # Header: one unsigned 64-bit counter plus two signed 64-bit stamps, then resolution
 # and count. §9's camera SensorTimestamp stays mandatory: without it "how old is this
@@ -162,7 +162,7 @@ assert _TRACK_SIZE == 79, f"unexpected per-track size {_TRACK_SIZE}"
 _HEADER_FORMAT = "QqqIIH"
 _TS_FORMAT = "<" + _HEADER_FORMAT + _TRACK_FORMAT * K_MAX_TRACKS
 TRACK_SET_SIZE = struct.calcsize(_TS_FORMAT)
-assert TRACK_SET_SIZE == 34 + 79 * K_MAX_TRACKS, TRACK_SET_SIZE
+assert TRACK_SET_SIZE == 34 + 91 * K_MAX_TRACKS, TRACK_SET_SIZE
 
 
 @dataclass

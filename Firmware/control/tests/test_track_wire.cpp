@@ -1,8 +1,8 @@
 // OpenAutoTurret v3 §59/§60 — the TrackSet wire format, pinned against the Python
 // publisher.
 //
-// The first two tests carry a GOLDEN BYTE PREFIX: the same 113 bytes (the 34-byte
-// header plus one 79-byte track record) are asserted in
+// The first two tests carry a GOLDEN BYTE PREFIX: the same 125 bytes (the 34-byte
+// header plus one 91-byte track record) are asserted in
 // Firmware/vision/tests/test_protocol.py. Both sides may therefore be changed, but not
 // silently — a field-order swap in either language breaks the other's test. That class
 // of drift is the dangerous one: swapping two adjacent same-width fields (say
@@ -29,7 +29,7 @@ constexpr const char* kGoldenPrefixHex =
     "0100000000000000"  // uuid.lo = 1
     "0100"              // display_index = 1
     "0100"              // class_id = 1
-    "706572736f6e000000000000"  // class_name = "person"
+    "706572736f6e000000000000000000000000000000000000"  // class_name = "person"
     "01"                // state = CONFIRMED
     "52b85e3f"          // detector_confidence = 0.87f
     "c3f5683f"          // track_confidence = 0.91f
@@ -96,8 +96,8 @@ TrackSet fixture() {
 }  // namespace
 
 TEST(TrackSetWire, SizesMatchTheSpec) {
-  EXPECT_EQ(sizeof(TrackWire), 79u);
-  EXPECT_EQ(kTrackSetWireSize, 2562u);
+  EXPECT_EQ(sizeof(TrackWire), 91u);
+  EXPECT_EQ(kTrackSetWireSize, 2946u);
   // §59/§60: the two formats share one socket and are told apart by length. If a
   // TrackSet ever came out the same size as a v1 measurement, that dispatch would
   // stop being decidable and the fix would be a type byte — which v1's field
@@ -109,14 +109,14 @@ TEST(TrackSetWire, EncodeMatchesThePythonPublishersGoldenPrefix) {
   uint8_t buf[kTrackSetWireSize];
   const std::size_t n = encode_track_set(fixture(), buf, sizeof(buf));
   ASSERT_EQ(n, kTrackSetWireSize);
-  EXPECT_EQ(to_hex(buf, 113), std::string(kGoldenPrefixHex))
+  EXPECT_EQ(to_hex(buf, 125), std::string(kGoldenPrefixHex))
       << "byte-for-byte agreement with vision/protocol.py is the whole point of this "
          "test; if the Python side changed intentionally, change its fixture too";
 }
 
 TEST(TrackSetWire, DecodesWhatPythonEncoded) {
   const std::string bytes = from_hex(std::string(kGoldenPrefixHex));
-  ASSERT_EQ(bytes.size(), 113u);
+  ASSERT_EQ(bytes.size(), 125u);
   // A prefix is not a message: the tail is zero padding, which is legal (§60 pads to a
   // constant length), so extend with zeros rather than pretend the fixture is whole.
   std::string full = bytes;
@@ -177,14 +177,14 @@ TEST(TrackSetWire, UnknownStateDecodesToTentativeNotToWhateverCameIn) {
 TEST(TrackSetWire, ClassNameIsAlwaysTerminated) {
   uint8_t buf[kTrackSetWireSize];
   TrackSet s = fixture();
-  std::memcpy(s.tracks[0].class_name, "personallerg", 12);  // fills all 12 bytes
+  std::memcpy(s.tracks[0].class_name, "potted plant on a table", 24);  // fills all 24 bytes
   ASSERT_EQ(encode_track_set(s, buf, sizeof(buf)), kTrackSetWireSize);
   TrackSet out;
   ASSERT_TRUE(decode_track_set(buf, kTrackSetWireSize, out));
   ASSERT_EQ(out.count, 1);
-  // 11 characters plus the terminator: the terminator is reserved, which is the
-  // whole reason the name cannot consume all 12 wire bytes.
-  EXPECT_STREQ(out.tracks[0].class_name, "personaller")
+  // 23 characters plus the terminator: the terminator is reserved, which is the
+  // whole reason the name cannot consume all 24 wire bytes.
+  EXPECT_STREQ(out.tracks[0].class_name, "potted plant on a table")
       << "a full-width name must truncate, not overrun into the next field";
 }
 

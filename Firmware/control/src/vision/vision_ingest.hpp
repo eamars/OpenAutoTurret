@@ -3,7 +3,7 @@
 //
 // controld BINDS a SOCK_SEQPACKET Unix socket; visiond is the client that publishes
 // fixed-size datagrams on it: v1's 58-byte TargetMeasurement (§6.2) or, from v3 on,
-// the 2562-byte TrackSet (§9/§59/§60). Video frames never traverse this path (§6.1).
+// the 2946-byte TrackSet (§9/§59/§60). Video frames never traverse this path (§6.1).
 //
 // Both are accepted, distinguished by length (§59), which is what lets controld be
 // updated BEFORE visiond instead of requiring a synchronized stop-the-world upgrade.

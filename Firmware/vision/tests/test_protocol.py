@@ -84,7 +84,7 @@ GOLDEN_PREFIX_HEX = (
     "0100000000000000"
     "0100"
     "0100"
-    "706572736f6e000000000000"
+    "706572736f6e000000000000000000000000000000000000"
     "01"
     "52b85e3f"
     "c3f5683f"
@@ -130,7 +130,7 @@ def _golden_track_set() -> TrackSet:
 def test_track_set_is_a_constant_length():
     """§60: fixed maximum track count, normalized coordinates. The receiver must never
     have to negotiate a length or allocate on a deadline."""
-    assert TRACK_SET_SIZE == 34 + 79 * 32
+    assert TRACK_SET_SIZE == 34 + 91 * 32
     assert len(_golden_track_set().encode()) == TRACK_SET_SIZE
     empty = TrackSet().encode()
     assert len(empty) == TRACK_SET_SIZE, "an empty scene must not shrink the message"
@@ -138,8 +138,8 @@ def test_track_set_is_a_constant_length():
 
 def test_track_set_wire_matches_the_cpp_decoder():
     encoded = _golden_track_set().encode()
-    assert encoded[:113].hex() == GOLDEN_PREFIX_HEX, (
-        "34-byte header + one 79-byte record must agree with "
+    assert encoded[:125].hex() == GOLDEN_PREFIX_HEX, (
+        "34-byte header + one 91-byte record must agree with "
         "control/tests/test_track_wire.cpp byte for byte")
 
 
@@ -181,7 +181,7 @@ def test_tracks_past_the_cap_are_dropped_not_packed():
 
 def test_decode_refuses_any_other_length():
     good = _golden_track_set().encode()
-    for bad in (good[:-1], good + b"\0", good[:113]):
+    for bad in (good[:-1], good + b"\0", good[:125]):
         try:
             TrackSet.decode(bad)
         except ValueError:

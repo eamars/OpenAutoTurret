@@ -28,7 +28,7 @@ def test_native_packet_preserves_session_and_generation():
     observation = selector.update(frame, frame.sensor_timestamp_ns)
     packet = encode_perception_frame(frame, observation)
     header = HEADER.unpack_from(packet)
-    assert len(packet) == 2662
+    assert len(packet) == 3046
     assert header[:3] == (b'OTP1', 1, 100)
     assert header[3:9] == (2**64-1, 2**64-1, 0, 17, 1, 12)
     assert header[9:11] == (1, 1)

@@ -3630,7 +3630,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         out.display_index = t.display_index;
         // Same shape as the selection's own descriptor (§10): a label is a label in
         // both places or the operator is being shown two vocabularies.
-        char cap[16];
+        char cap[sizeof t.class_name];
         std::snprintf(cap, sizeof cap, "%s", t.class_name);
         if (cap[0] >= 'a' && cap[0] <= 'z') cap[0] = static_cast<char>(cap[0] - 32);
         std::snprintf(out.label, sizeof out.label, "%s #%u", cap,

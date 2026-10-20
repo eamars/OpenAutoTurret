@@ -56,11 +56,11 @@ struct TrackSetWire {
 };
 #pragma pack(pop)
 
-// 79 = 16 (uuid) + 4 (display/class) + 12 (name) + 1 (state) + 8 (confidences)
+// 91 = 16 (uuid) + 4 (display/class) + 24 (name) + 1 (state) + 8 (confidences)
 //      + 16 (bbox) + 8 (anchor) + 8 (velocity) + 6 (counters)
-// 2562 = 34 (header) + 32 * 79
-static_assert(sizeof(TrackWire) == 79, "TrackWire layout drifted from §9");
-static_assert(sizeof(TrackSetWire) == 2562, "TrackSetWire size drifted from §60");
+// 2946 = 34 (header) + 32 * 91
+static_assert(sizeof(TrackWire) == 91, "TrackWire layout drifted from §9");
+static_assert(sizeof(TrackSetWire) == 2946, "TrackSetWire size drifted from §60");
 
 constexpr std::size_t kTrackSetWireSize = sizeof(TrackSetWire);
 // v1's single-target message, kept readable so controld can be updated first (§59).
@@ -101,8 +101,8 @@ inline bool decode_track_set(const uint8_t* data, std::size_t size, TrackSet& ou
     if (!t.uuid.valid()) continue;  // a zero uuid is padding, not a candidate
     t.display_index = tw.display_index;
     t.class_id = tw.class_id;
-    // Always leave room for the terminator: a publisher that fills all 12 bytes is
-    // saying "personallerg", not a name that overruns a buffer somewhere else.
+    // Always leave room for the terminator: a publisher that fills every name byte
+    // is sending a long name, not one that may overrun a buffer somewhere else.
     std::memcpy(t.class_name, tw.class_name, kClassNameLen - 1);
     t.class_name[kClassNameLen - 1] = '\0';
     t.state = state_from_wire(tw.state);

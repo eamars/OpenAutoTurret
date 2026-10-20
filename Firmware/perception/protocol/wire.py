@@ -2,7 +2,7 @@
 
 controld binds ``/tmp/ota_vision.sock`` (SOCK_SEQPACKET) and reads fixed-size datagrams. It
 accepts two, distinguished by length: the 58-byte v1 :class:`TargetMeasurement` (a single target
-visiond chose) or the 2562-byte v3 ``TrackSet`` (a frame's tracks).
+visiond chose) or the 2946-byte v3 ``TrackSet`` (a frame's tracks).
 
 The live daemon defaults to :mod:`native_wire`, which wraps the candidate list and
 authoritative selected observation in one datagram. These encoders remain for
@@ -27,12 +27,12 @@ from typing import Any, Optional, Sequence, Tuple
 _FORMAT = "<QQbi" + "f" * 7 + "bQ"
 _SIZE = struct.calcsize(_FORMAT)
 
-#: v3 TrackSet wire (§60): 34-byte header + 32 × 79-byte tracks = 2562 bytes.
+#: v3 TrackSet wire (§60): 34-byte header + 32 × 91-byte tracks = 2946 bytes.
 _TRACKSET_HEADER = "<QQQIIH"                 # frame_seq u64, sensor i64, publish i64, w u32, h u32, count u16
-_TRACK_LAYOUT = "<QQHH12sBff4f2f2fHHH"        # uuid_hi/lo, disp, class, name, state, confs, bbox, anchor, vel, counters
+_TRACK_LAYOUT = "<QQHH24sBff4f2f2fHHH"        # uuid_hi/lo, disp, class, name, state, confs, bbox, anchor, vel, counters
 _TRACKSET_SIZE = struct.calcsize(_TRACKSET_HEADER) + 32 * struct.calcsize(_TRACK_LAYOUT)
 _MAX_TRACKS = 32
-_CLASS_NAME_LEN = 12
+_CLASS_NAME_LEN = 24  # tracks/track_set.hpp kClassNameLen
 #: Wire state bytes (track_wire.hpp ::state_from_wire). 0=Tentative 1=Confirmed 2=Occluded 3=Lost.
 _WIRE_STATE = {"TENTATIVE": 0, "CONFIRMED_VISIBLE": 1, "OCCLUDED": 2, "LOST_REACQUIRABLE": 3}
 _WIRE_STATE_RETIRED = 99
@@ -243,14 +243,14 @@ def measurement_from_selection(selection: Any, *, frame_sequence: int,
 
 def encode_track_set(tracks: Sequence[Any], *, frame_sequence: int, sensor_timestamp_ns: int,
                      publish_timestamp_ns: int, width: int, height: int) -> Optional[bytes]:
-    """Serialize a frame's tracks into controld's 2562-byte v3 ``TrackSet`` datagram (§60).
+    """Serialize a frame's tracks into controld's 2946-byte v3 ``TrackSet`` datagram (§60).
 
     This is the message that actually populates ``controld``'s ``SelectionManager``: with the
     tracks in hand, ``select_target <display_index>`` can pick the confirmed person and the turret
     leaves ``LOST_HOLD``. The v1 measurement alone never sets the selection, which is exactly why
     the motor never followed before.
 
-    The wire struct is a FIXED 2562 bytes: a 34-byte header plus 32 ``TrackWire`` slots, never
+    The wire struct is a FIXED 2946 bytes: a 34-byte header plus 32 ``TrackWire`` slots, never
     fewer. Unused slots are zeroed and ``count`` says how many are real — an oversized *variable*
     datagram is refused by controld and a crowded scene becomes blindness, so the length is sacred.
     RETIRED tracks are omitted. Exceeding the 32-track capacity is an explicit error.

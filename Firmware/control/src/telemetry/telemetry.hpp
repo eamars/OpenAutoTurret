@@ -72,8 +72,8 @@ struct TrackListing {
   uint64_t uuid_hi = 0;
   char uuid_text[kUuidTextLen] = {};
   uint16_t display_index = 0;
-  char label[24] = {};        // "Person #2" (§10) — what the operator reads
-  char class_name[16] = {};   // as the detector named it
+  char label[32] = {};        // "Person #2" (§10) — what the operator reads
+  char class_name[24] = {};   // as the detector named it (tracks::kClassNameLen)
   char state[16] = {};        // CONFIRMED | TENTATIVE | OCCLUDED | LOST
   float confidence = 0.0f;
   float anchor_x = 0.0f;      // normalised, for the overlay's box

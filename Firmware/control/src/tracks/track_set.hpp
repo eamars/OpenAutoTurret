@@ -28,9 +28,11 @@ namespace tracks {
 
 // §60: "fixed maximum track count ... suggested max_visible_tracks = 32".
 constexpr int kMaxTracks = 32;
-// Class names are short labels for a human ("person", "vehicle"). Longer names are
-// truncated at the boundary rather than growing the record.
-constexpr int kClassNameLen = 12;
+// Class names are labels for a human ("person", "potted plant"). 23 characters and the
+// terminator: every COCO name fits whole (the longest, "baseball glove", is 14). Until
+// 2026-10-20 this was 12, and the operator read "potted plan" and "dining tabl". Longer
+// names are still truncated at the boundary rather than growing the record.
+constexpr int kClassNameLen = 24;
 
 // §10: `track_uuid` is a 128-bit session-unique identity and the ONLY thing a
 // selection command carries. `display_index` is the human label ("Person #2") and
