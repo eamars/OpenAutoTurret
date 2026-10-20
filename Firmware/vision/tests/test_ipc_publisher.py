@@ -99,15 +99,13 @@ def test_reconnect_after_the_daemon_dies_is_caller_policy():
         pub.publish(TargetMeasurement(frame_sequence=1, sensor_timestamp_ns=1,
                                       valid=False))
         sub.stop()
-        time.sleep(0.2)
+        # A SEQPACKET peer that is gone shows up as EPIPE/ECONNRESET on the
+        # very next send: stop() returns only once the connection is shut
+        # down, so no wait and no retries. (The retries used to hide a stop()
+        # that missed a connection its serve thread was still accepting.)
         with pytest.raises(OSError):
-            # A SEQPACKET peer that is gone shows up as EPIPE/ECONNRESET on a
-            # send; give it a few attempts (the first may still be buffered).
-            for i in range(20):
-                pub.publish(TargetMeasurement(frame_sequence=2 + i,
-                                              sensor_timestamp_ns=2,
-                                              valid=False))
-                time.sleep(0.02)
+            pub.publish(TargetMeasurement(frame_sequence=2,
+                                          sensor_timestamp_ns=2, valid=False))
         pub.stop()
 
 
