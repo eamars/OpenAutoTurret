@@ -73,7 +73,7 @@ still violate the rule and are the next work. Do not cite them as precedent.
 | Following error > 15° (yaw), and the pitch following error | both servos | FAULT | HOLD. The servo lets go (yaw zero current; pitch drive at speed zero). The supervisor's stop starts at the measured axis (`kStopReanchorRad`), so nothing pushes toward the old reference. It clears 1 s later, once the reference is back within 0.05 rad of the axis. |
 | Pitch servo feedback older than 20 ms | pitch servo | pitch servo fault | The servo lets go to the drive's speed-zero hold and re-engages when feedback is fresh. A fault only after 0.5 s without a break. A disabled or self-faulted drive is still a fault at once (it isn't holding). |
 | Faults during homing, mode transitions, recovery failure | `ControlLoop` | `deenergize_all()`: release both axes | `stop_axes_safely()`: release only what `fault_releases_axis` says cannot be held. The pitch drive holds speed zero (`hold_axis`). `deenergize_all()` is kept for operator stop and shutdown only (next row). Motor recovery's own disable, needed to clear drive faults, is unchanged. |
-| Operator stop and shutdown | launcher → `controld` | pitch STOP at the end | **open, owner decision:** park first so the release is safe, or hold. |
+| Operator stop and shutdown | launcher → `controld`, web SHUTDOWN | pitch STOP at the end, wherever it stood | 2026-10-20: a stop ends with the payload resting on its stop, homed or not. A homed turret runs the rest-park SHUTDOWN (10-03). A held but unhomed pitch is lowered onto its rest stop by contact, then released (see "Off is read from the drive" below). Releasing where it stands is left only for a pitch that cannot be moved: the drive has faulted, or the supervisor forbids motion. |
 | Motor over-temperature (supervisor), drive-reported fault | supervisor | FaultStop / Disable | Consistent: a hazard, and a faulted drive is not holding anyway. |
 | 100 RPM speed cap, pitch end-stop guard | servos | FAULT | Consistent: hazards, immediate. The pitch drive is now held at speed zero, not released. |
 | BNO085 IMU drops off I2C (a known BNO085 behaviour; station 2026-10-03 14:27:32) | `imu-bno085`, launcher | One recovery, then exit; the launcher waited on it and stopped the **whole stack** | Fixed 2026-10-03: observe-only capture reconnects for as long as it runs (backoff 0.1 to 5 s); the launcher no longer waits on it. The HUD shows the IMU stale until it returns. Commissioning captures keep their single recovery.<br>2026-10-05: the sensor held SDA low for hours, through three stack restarts; the I2C soft reset cannot reach a sensor that owns the bus. Its RST is now wired to **GPIO4**, and every (re)connect pulses it (`--reset-gpio`, launcher default `/dev/gpiochip0:4`, `OTA_IMU_RESET_GPIO=` disables). The same day showed 10 under-voltage events in two days: the Pi's supply is the suspected trigger. |
@@ -120,6 +120,45 @@ actions. Each one works from wherever it is offered. Only SHUTDOWN asks for two 
 - **Recovering the pitch.** A drive that reports its own fault is cleared with the CyberGear fault
   clear, which is a STOP. A drive that is still holding speed zero is re-armed without being
   released (`CyberGearSystem::finish_axis_recovery`).
+
+### Homing without torque off, and "off" read from the drive (2026-10-20)
+
+From the drive review of 2026-10-19 (`run/drive-review-20261019/REPORT.md` §7–9a, three homings
+measured):
+
+- **What homing was.**
+  - Pitch only, both stops, 65–74 s.
+  - The approaches run at 5 and 3°/s, where the CyberGear's speed loop stick-slips (0–8°/s at 5,
+    mostly a 0.5–1°/s creep at 3).
+  - Each contact pushed the stop for 1.5 s, winding the drive's speed loop up to 3.3 N·m.
+  - **Five STOP/RunMode/enable recipes**, each one torque off for about 0.4 s. In each one the pitch
+    moved 0.7–2.7° on its own, the same in all three runs. With an unbalanced payload that is a fall,
+    five times per homing.
+- **What it is now** (`homing.speed_mode_backoff: true`, `turret_mixed.yaml`).
+  - **Contact.** It is gated on a 0.8 N·m push. Friction notches stall at 0.1–0.45 N·m; a stop reaches
+    0.8 within about 0.1 s. That allows a 250 ms dwell in place of 1.5 s.
+  - **Backoffs.** They are speed-mode moves under a host position law, at 10°/s.
+  - **No re-arm anywhere.** The hand-over to service skips its STOP when the drive already runs speed
+    mode with the same verified gains and limit.
+  - **Speeds.** Approaches at 10 / 5°/s. Repeatability gate 0.2° (contacts repeat to one count).
+  - **What is left torque-off.** Switching the drive on at the start. The pitch is then at rest on its
+    rest stop.
+  - The old recipes existed because the 1.5 s push wound the speed loop beyond what any SpdRef could
+    back out of (rehome3 and p3c). Those were measured on the earlier CyberGear *yaw*. The pitch winds
+    and unwinds at about 1.4 N·m/s per 5°/s of speed error.
+  - **If a backoff ever cannot leave a stop,** its 15 s timeout fails the homing with pitch held. That
+    is a HOLD-class outcome, not a fall.
+- **Off is read from the drive.** Idle no longer means "motors off".
+  - STOP MOTION during homing, and a Fault, hold pitch energised (ruling 2026-10-02). The web's
+    SHUTDOWN and the process stop used to read that Idle as already off, and released the pitch where
+    it stood.
+  - Now they ask the pitch drive. A held, unhomed pitch is lowered onto its rest stop at touch speed;
+    contact is a stall while pushing at least 0.8 N·m. Only then is it released.
+  - If that touch cannot finish, the pitch stays held and Shutdown says why.
+- **Evidence.**
+  - Events `HOMING_STARTED` and `HOMING_COMPLETE`.
+  - The tracking trace's `yaw` column: applied current, crosstalk-corrected angle, GM6020 absolute
+    angle.
 
 ### The pitch envelope's boundary: position and direction (owner, 2026-10-03)
 
@@ -1028,8 +1067,8 @@ be inferred from a missing limit:
 
 ```
 [warning] continuous yaw declared WITHOUT a position envelope; the sector is gone,
-not merely unmeasured (AUTO_ROAM still sweeps a declared region, and every other
-guard is unchanged)
+not merely unmeasured (AUTO_ROAM patrols the whole circle in one direction, and every
+other guard is unchanged)
 ```
 
 What to expect, measured on this station rather than assumed:
@@ -1039,10 +1078,10 @@ What to expect, measured on this station rather than assumed:
   down yet does not.
 - **Angles run past the encoder seam.** A manual jog took yaw from -0.3 to **+274.1 degrees**
   with no fault; the session angle is unwrapped, so it does not jump at 180 degrees.
-- **AUTO_ROAM still sweeps a bounded region.** With no wall to inherit one, the region is
-  declared: it is centred on the session reference and sized by the search span (the log
-  reports `search sweep clamped to [-37.1, 37.1] deg`), so the mode keeps its promise of a
-  deterministic bounded sweep that a person watching can predict.
+- **AUTO_ROAM patrols the whole circle** (since the 2026-10-02 ruling below; this line said
+  "still sweeps a bounded region" until 2026-10-20). The `search sweep clamped to [-37.1,
+  37.1] deg` line that HOME still prints is the trimmed search span of the configure path,
+  which the patrol never reads: it is not the roam's region (drive review 2026-10-20, §13.1).
 - **The independent guards are untouched.** After the envelope went away, the first long
   approach drove yaw past the backend's own `speed_over_ceiling` guard (25 deg/s, hard
   coded). That trip was correct; the ask was wrong, and the fix capped the sweep at the
