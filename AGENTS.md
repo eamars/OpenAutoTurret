@@ -46,3 +46,9 @@ cards. Dated as-built reports are historical.
   feedback (that one test writes `/dev/shm`), and let `deploy_station.py`
   run the full suite, hardware included, on the station itself. Do not
   escalate privileges to make the local suite green.
+- The Python suites (`perception/tests`, `web/webd/tests`, `vision/tests`,
+  `tools/tracking/tests`) are not in ctest, so a deploy does not run them: run
+  them on the workstation (Linux/WSL) from `Firmware/` with a `.venv` built
+  from `Firmware/requirements-test.txt`. The tracking tests need this
+  checkout's `tracking-sim` built and named by `OTA_TRACKING_SIM`. Expected:
+  all pass, two skips that name a missing station resource.
