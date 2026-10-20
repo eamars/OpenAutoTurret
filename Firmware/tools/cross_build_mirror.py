@@ -35,13 +35,39 @@ def run(cmd, **kwargs):
     return subprocess.run([str(c) for c in cmd], check=True, **kwargs)
 
 
+def wsl_path(windows_path: str) -> Path:
+    """C:/x/y (as git on Windows writes it) -> /mnt/c/x/y."""
+    p = windows_path.strip().replace("\\", "/")
+    if len(p) > 1 and p[1] == ":":
+        return Path(f"/mnt/{p[0].lower()}{p[2:]}")
+    return Path(p)
+
+
+def fetch_source(repo: Path) -> tuple[Path, str]:
+    """Where to fetch REVISION from, and the ref that names it there.
+
+    A plain checkout: the checkout, HEAD. A git worktree (side sessions deploy from those): its
+    .git is a file naming a Windows path that git inside WSL cannot follow (2026-10-20), so fetch
+    from the shared repository instead, by the worktree's branch."""
+    dot_git = repo / ".git"
+    if dot_git.is_dir():
+        return repo, "HEAD"
+    gitdir = wsl_path(dot_git.read_text(encoding="utf-8").split("gitdir:", 1)[1])
+    common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+    head = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+    if not head.startswith("ref: "):
+        raise SystemExit("the worktree's HEAD is detached: deploy from a branch")
+    return common, head[5:]
+
+
 def mirror_source(repo: Path, revision: str, src: Path) -> None:
     if not (src / ".git").is_dir():
         src.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "init", "-q", src])
     # The checkout's HEAD is REVISION (deploy_station.py checked the tree was clean). Fetching it
     # by name rather than by hash needs no server-side settings.
-    run(["git", "-C", src, "fetch", "-q", "--no-tags", "--depth=1", repo, "HEAD"])
+    source, ref = fetch_source(repo)
+    run(["git", "-C", src, "fetch", "-q", "--no-tags", "--depth=1", source, ref])
     fetched = subprocess.run(["git", "-C", src, "rev-parse", "FETCH_HEAD"], check=True,
                              capture_output=True, text=True).stdout.strip()
     if fetched != revision:
