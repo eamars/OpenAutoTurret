@@ -217,6 +217,17 @@ measured):
     0.41 deg of the line (rms 0.14), rate ratio 1.02.
   - What remains is the yaw bearing's breakaway: at the start yaw jumps 0.3-0.5 deg ahead of its
     own reference, then the reference catches up (the drive review's stick-slip, not the jog).
+- **Yaw friction re-identified, asset kept** (2026-10-20). `commission.py check yaw` measured
+  friction 38-62% below the 10-02 asset (Stribeck peak 0.35 A against 0.72). `yaw --update
+  --no-write` produced an accepted candidate (same gains, wn 27.5; friction 0.20 + 0.35 A, Stribeck
+  speed 0.12 rad/s), compared back to back (use case A-B-A, then four diagonal jogs each):
+  - use case: rest error 0.52 vs 0.56 deg (inside the current asset's own spread), but slow-ramp
+    RMS 0.32 vs 0.24 deg, slow-ramp jitter 0.79 vs 0.38, speed jitter 3.8 vs 2.3 deg/s, moving peak
+    1.00 vs 0.87 deg, 2.5 vs 0.75 stalls a pass: worse;
+  - diagonal: start lead 0.41 vs 0.41 deg, stop overshoot 0.17 vs 0.18 deg: the same.
+  - So the asset's high low-speed friction feedforward is what carries slow tracking through the
+    stick-slip, and the start lurch is not its doing. Candidate in
+    `run/servo-commission/update-20261020/`, not written.
 
 ### The pitch envelope's boundary: position and direction (owner, 2026-10-03)
 
