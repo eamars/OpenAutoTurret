@@ -1441,10 +1441,14 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
                  "applied{} (gap {} since start)", gap_ms, max_step_ns / 1'000'000, yaw_state_.position_rad,
                  applied, drive_zeroed ? ", the drive's own watchdog had zeroed it" : "", yaw_servo_gaps_);
   }
+  const auto before = yaw_servo_.observer();
   if (!yaw_servo_.observe_encoder(ts, yaw_state_.position_rad + offset)) {
     // The observer could not take the reading: let go (zero current) and let the next reference
     // re-engage it from the measured state. A transient, not a fault (owner ruling 2026-10-02).
-    spdlog::warn("yaw servo: encoder reading not accepted by the observer; released, re-engages on the next reference");
+    spdlog::warn("yaw servo: encoder reading not accepted by the observer; released, re-engages on the next "
+                 "reference (sample t {:.6f} q {:+.6f}; observer t {:.6f} encoder t {:.6f} q {:+.6f} v {:+.4f} "
+                 "p00 {:.3g} p01 {:.3g} p11 {:.3g} ready {})", ts, yaw_state_.position_rad + offset, before.t,
+                 before.encoder_time, before.q, before.v, before.p00, before.p01, before.p11, before.ready);
     release_yaw_servo_locked();
     send_yaw_zero_locked();
     return;

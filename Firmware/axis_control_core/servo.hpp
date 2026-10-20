@@ -86,6 +86,9 @@ class Servo {
   // Commissioning: change feedback gains between steps (integral kept).
   bool set_gains(double kq,double kv,double ki);
   long stale_samples() const { return stale_samples_; }
+  // The observer's state, for a log line that has to say why a reading was refused.
+  struct Observer { double t, encoder_time, q, v, p00, p01, p11; bool ready; };
+  Observer observer() const { return {t_, encoder_time_, q_, v_, p00_, p01_, p11_, ready_}; }
   double friction(double v_ref) const;
   double friction_at(double v_ref, double q) const;
   double crosstalk_gain(double q) const;
