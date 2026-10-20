@@ -35,12 +35,13 @@ def extrinsics():
     """R_PC (camera -> pitch frame), row-major, from calibration/camera_extrinsics.yaml."""
     lines = [l for l in (FIRMWARE / "calibration/camera_extrinsics.yaml").read_text(encoding="utf-8").splitlines()
              if l and not l.startswith("#")]
-    rows = []
-    for l in lines:
-        l = l.split("=", 1)[1] if "=" in l else l
-        rows.append([float(x) for x in l.split()])
-    matrix = [x for r in rows[1:4] for x in r]  # rows[0] is t_P_C
-    assert len(matrix) == 9
+    # Key lines (t_P_C, pitch_from_homed_low, ...) come first; the rotation is the last three rows.
+    # Until 2026-10-19 this took rows[1:4], which after the 10-06 `pitch_from_homed_low` key line
+    # was t_P_C plus two rotation rows: nine numbers, the wrong matrix, and every simulated target
+    # projected off the frame.
+    rows = [[float(x) for x in l.split()] for l in lines if "=" not in l]
+    matrix = [x for r in rows[-3:] for x in r]
+    assert len(matrix) == 9, matrix
     return matrix
 
 
