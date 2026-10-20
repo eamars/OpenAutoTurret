@@ -31,8 +31,13 @@ def intrinsics():
             "width": int(kv["width"]), "height": int(kv["height"])}
 
 
-def extrinsics():
-    """R_PC (camera -> pitch frame), row-major, from calibration/camera_extrinsics.yaml."""
+def extrinsics(pitch_low_rad=None):
+    """R_PC (camera -> pitch frame), row-major, from calibration/camera_extrinsics.yaml.
+
+    A homed-relative extrinsic (pitch_from_homed_low=1) measures pitch from the homed low stop.
+    With pitch_low_rad (where that stop reads in the caller's pitch frame) it is placed in that
+    frame as controld places it after homing, R_y(-low) R_PC (TurretKinematics::placed_at_pitch_stop);
+    without it, it stays in the file's own frame."""
     lines = [l for l in (FIRMWARE / "calibration/camera_extrinsics.yaml").read_text(encoding="utf-8").splitlines()
              if l and not l.startswith("#")]
     # Key lines (t_P_C, pitch_from_homed_low, ...) come first; the rotation is the last three rows.
@@ -42,6 +47,11 @@ def extrinsics():
     rows = [[float(x) for x in l.split()] for l in lines if "=" not in l]
     matrix = [x for r in rows[-3:] for x in r]
     assert len(matrix) == 9, matrix
+    homed = any(l.split("=", 1)[0].strip() == "pitch_from_homed_low" and float(l.split("=", 1)[1]) == 1
+                for l in lines if "=" in l)
+    if homed and pitch_low_rad is not None:
+        c, s = math.cos(-pitch_low_rad), math.sin(-pitch_low_rad)
+        matrix = list((np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]]) @ np.array(matrix).reshape(3, 3)).ravel())
     return matrix
 
 

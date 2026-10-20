@@ -276,6 +276,37 @@ void level1_slows_to_a_falling_speed_cap() {
   check(std::abs(r.v[0])<1e-3,"a zero cap toward an end stops the reference");
 }
 
+void level1_reaches_its_speed_ceiling_jerk_limited() {
+  // Stage 1, 2026-10-20 (yaw limits of tracking_prior.json): the speed ceiling's a^2/2j release was
+  // judged at the start of each 5 ms segment, so a reference still accelerating at ~7 rad/s^2 met
+  // v_max inside the segment, where integrate() cut the acceleration to 0 in one step -- seen by
+  // the servo's 1 kHz sampling as a jerk ~3x j_max, unflagged. The release must hold at the
+  // segment's end: at every servo sample the jerk stays within j_max.
+  Level1Parameters p=level1_parameters();
+  p.axis[0].v_max=1.75; p.axis[0].a_max=24.56; p.axis[0].j_max=2456; p.axis[0].lead_limit=10;
+  double worst_j=0, worst_v=0;
+  for (double distance:{0.15,0.3,0.6,1.2,3.0,-0.4,-2.0})
+    for (double rate:{0.,1.2,-1.2}) {
+      Level1Generator g; g.configure(p);
+      g.reset(kS,{0.,-0.8},{0.,0.},{0.,0.});
+      JointGoal goal; goal.valid=true; goal.velocity_valid={true,true};
+      ReferenceSample r=g.last();
+      for (int k=1;k<=600;++k) {
+        const int64_t t=kS+int64_t(k)*5'000'000;
+        goal.q={distance+rate*k*0.005,-0.8}; goal.v={rate,0.};
+        const ReferenceSample prev=r;
+        r=g.step(t,goal,r_measured(prev));
+        double q,v,a,a_last=prev.a[0];
+        for (int m=1;m<=5;++m) {
+          prev.at(0,prev.t_ns+int64_t(m)*1'000'000,q,v,a);
+          worst_j=std::max(worst_j,std::abs(a-a_last)/1e-3); worst_v=std::max(worst_v,std::abs(v)); a_last=a;
+        }
+      }
+    }
+  check(worst_v<=1.75+1e-9,"the speed ceiling holds");
+  check(worst_j<=2456*(1+1e-6),"the ceiling is reached with the acceleration released at j_max, never cut");
+}
+
 TrackerParameters tracker_parameters() {
   TrackerParameters p;
   p.estimator=estimator_parameters(); p.level1=level1_parameters(); p.pixel_sigma=1.5;
@@ -371,6 +402,7 @@ int main() {
   run("level1_pitch_prefers_undershoot_and_ignores_small_motion",level1_pitch_prefers_undershoot_and_ignores_small_motion);
   run("level1_holds_inside_pitch_travel",level1_holds_inside_pitch_travel);
   run("level1_slows_to_a_falling_speed_cap",level1_slows_to_a_falling_speed_cap);
+  run("level1_reaches_its_speed_ceiling_jerk_limited",level1_reaches_its_speed_ceiling_jerk_limited);
   run("tracker_removes_camera_rotation_once",tracker_removes_camera_rotation_once);
   run("tracker_identity_change_drops_motion",tracker_identity_change_drops_motion);
   run("tracker_uses_optical_time",tracker_uses_optical_time);

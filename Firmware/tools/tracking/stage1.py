@@ -47,7 +47,11 @@ def braking_distance(v, a_max, j_max):
 
 def _c(name, value, limit, ok):
     v = None if value is None else float(value)
-    return {"check": name, "value": None if v is None or not math.isfinite(v) else round(v, 4), "limit": limit, "pass": bool(ok)}
+    if v is not None and math.isfinite(v):
+        # Four decimals, but never round a small nonzero value to 0: a 3e-5 rad departure against a
+        # 1e-6 limit was reported as "0.0 (limit 1e-06)" and read as a broken comparison.
+        v = round(v, 4) if v == 0 or abs(v) >= 1e-3 else float(f"{v:.3g}")
+    return {"check": name, "value": None if v is None or not math.isfinite(v) else v, "limit": limit, "pass": bool(ok)}
 
 
 def recognised(t, start, horizon):
