@@ -269,8 +269,8 @@ class DerateMarksTheTapeEdge(_NodeBuilders):
         # prefix rather than a guessed entity: the point of this test is which colour the label got.
         # The attribute order carries an opacity now (the tape fades at its ends), so match
         # the label by colour-and-attribute-set rather than by an exact two-attribute prefix.
-        self.assertRegex(marked, 'fill="%s"[^>]*>\+100' % self.C["amber"])
-        self.assertRegex(marked, 'fill="%s"[^>]*>\+80' % self.C["green"],
+        self.assertRegex(marked, r'fill="%s"[^>]*>\+100' % self.C["amber"])
+        self.assertRegex(marked, r'fill="%s"[^>]*>\+80' % self.C["green"],
                       "the neighbour tick stays green; everything amber at once is not a highlight")
 
     def test_the_page_only_asks_for_a_mark_while_safety_is_derating(self) -> None:
