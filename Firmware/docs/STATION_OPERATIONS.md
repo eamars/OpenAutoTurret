@@ -173,8 +173,10 @@ measured):
   - Now a frame newer than the caller's clock is fresh feedback, in the yaw snapshot, the mode
     transition and the homing guard. Only a stamp 1 s or more ahead is a broken clock.
   - A late loop belongs to the deadline monitor.
-  - Still open: the fault path writes the control trace and black box synchronously in the real-time
-    control thread (80 ms that time).
+  - The 80 ms step that time was the fault path formatting and writing its trip trace in the control
+    thread. Since release 8d04a06 (2026-10-20) trip traces and stop records go to a background
+    evidence writer (nice 10, 16-slot queue). The step only copies, and a full queue drops the file
+    and counts it, never a cycle. Not yet seen on the station with a real trip.
 - **Idle commands only a held axis.** A BRAKE in Shutdown used to command both de-energised axes to a
   stop target that was not finite; on 2026-10-20 15:23:53 the yaw guard tripped and the station latched
   Fault at boot.
