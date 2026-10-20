@@ -4,6 +4,11 @@
 // commissioning trips stop it. The plant is the identified model of the commissioned asset
 // (axis::YawPlant: LuGre friction, the encoder's current crosstalk, actuation delay), fed by the
 // current the backend actually put on the (test) wire.
+//
+// Time is simulated: the backend's clock and the plant both read `virtual_now`, which run()
+// advances 1 ms per encoder frame. These tests used to sleep 1 ms between frames on the real
+// clock; under a parallel ctest one sleep stretched past the servo's 20 ms dt_max and the servo
+// tripped servo_data_invalid, correctly, for a gap the test itself had made (2026-10-20).
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -27,13 +32,21 @@
 
 namespace ota {
 
+namespace {
+TimeNs g_virtual_ns = 1'000'000'000'000;  // simulated CLOCK_MONOTONIC, ns
+// Like the real clock, no two readings are equal: each one is a nanosecond on. The legacy velocity
+// loop refuses a step at its own reset instant, which two real reads can never produce.
+TimeNs virtual_now() { return ++g_virtual_ns; }
+}  // namespace
+
 struct MixedBackendTestAccess {
   static std::filesystem::path firmware() {
     return ota_test_firmware_dir(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path());
   }
   static constexpr uint16_t kFirstCount = 1000;
   static void prepare(MixedCanMotorBackend& b, std::function<bool(const can::RawFrame&)> sender) {
-    const auto now = now_monotonic_ns();
+    b.clock_ = &virtual_now;
+    const auto now = virtual_now();
     std::lock_guard lock(b.yaw_mutex_);
     b.profile_.yaw.motor_id = 1;
     b.profile_.yaw.control_mode = config::mixed::ControlMode::Current;
@@ -68,7 +81,7 @@ struct MixedBackendTestAccess {
   static bool load(MixedCanMotorBackend& b, std::string& err) { return b.load_servos(err); }
   // One GM6020 frame carrying an absolute angle reading.
   static void frame(MixedCanMotorBackend& b, double reading_abs, double v) {
-    b.heartbeat_ns_.store(now_monotonic_ns());
+    b.heartbeat_ns_.store(virtual_now());
     const long counts = std::lround(reading_abs / gm6020::UnwrappedEncoder::kRadiansPerCount);
     const auto angle = static_cast<uint16_t>(((counts % 8192) + 8192) % 8192);
     can::RawFrame f;
@@ -77,7 +90,7 @@ struct MixedBackendTestAccess {
     const auto rpm = static_cast<int16_t>(std::lround(v * 60 / (2 * M_PI)));
     f.data[2] = static_cast<uint16_t>(rpm) >> 8; f.data[3] = static_cast<uint16_t>(rpm) & 0xff;
     f.data[6] = 30;
-    f.rx_ns = now_monotonic_ns();
+    f.rx_ns = virtual_now();
     b.on_yaw_frame(f);
   }
   static bool engaged(MixedCanMotorBackend& b) { std::lock_guard l(b.yaw_mutex_); return b.yaw_servo_active_; }
@@ -89,18 +102,18 @@ namespace {
 using Access = MixedBackendTestAccess;
 constexpr double kStart = Access::kFirstCount * gm6020::UnwrappedEncoder::kRadiansPerCount;
 
-// The commissioned asset's identified plant, advanced in real time (the backend reads the clock).
+// The commissioned asset's identified plant, advanced in simulated time (the backend's clock).
 // `crosstalk_shift` (rad/A) moves the encoder's true current sensitivity off the identified table.
 struct Plant {
   std::unique_ptr<axis::YawPlant> model;
-  std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+  TimeNs t0 = virtual_now();
   explicit Plant(double crosstalk_shift = 0.0) {
     const auto asset = YAML::LoadFile((Access::firmware() / "config/servo/yaw_servo.json").string());
     auto p = axis::yaw_plant_from_yaml(asset["plant"]);
     for (auto& g : p.crosstalk_map) g += crosstalk_shift;
     model = std::make_unique<axis::YawPlant>(p, kStart);
   }
-  double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+  double now() const { return (virtual_now() - t0) * 1e-9; }
   void command(double amps) { model->command(now(), amps); }
   double q() const { return model->position() - kStart; }  // session-relative, as the backend reports it
 };
@@ -111,7 +124,7 @@ double amps_of(const can::RawFrame& f) {
 
 MotorBackend::ServoReference hold_at(double q, double valid_s = 10.0) {
   MotorBackend::ServoReference r;
-  r.t_ns = now_monotonic_ns(); r.q = q; r.valid_s = valid_s;
+  r.t_ns = virtual_now(); r.q = q; r.valid_s = valid_s;
   return r;
 }
 
@@ -120,7 +133,7 @@ MotorBackend::ServoReference hold_at(double q, double valid_s = 10.0) {
 MotorBackend::ServoReference smooth(double t, double distance, double duration) {
   const double s = std::clamp(t / duration, 0.0, 1.0);
   MotorBackend::ServoReference r;
-  r.t_ns = now_monotonic_ns();
+  r.t_ns = virtual_now();
   r.q = distance * (10 * std::pow(s, 3) - 15 * std::pow(s, 4) + 6 * std::pow(s, 5));
   r.v = t < duration ? distance / duration * (30 * s * s - 60 * std::pow(s, 3) + 30 * std::pow(s, 4)) : 0.0;
   r.a = t < duration ? distance / (duration * duration) * (60 * s - 180 * s * s + 120 * std::pow(s, 3)) : 0.0;
@@ -154,7 +167,7 @@ struct HardMove {
   MotorBackend::ServoReference at(double t) const {
     const auto& s = qva[std::min<std::size_t>(qva.size() - 1, static_cast<std::size_t>(t * 1000))];
     MotorBackend::ServoReference r;
-    r.t_ns = now_monotonic_ns(); r.q = s[0]; r.v = t < duration() ? s[1] : 0.0; r.a = t < duration() ? s[2] : 0.0;
+    r.t_ns = virtual_now(); r.q = s[0]; r.v = t < duration() ? s[1] : 0.0; r.a = t < duration() ? s[2] : 0.0;
     r.valid_s = 0.02;
     return r;
   }
@@ -162,12 +175,14 @@ struct HardMove {
 
 void run(MixedCanMotorBackend& b, Plant& plant, double seconds,
          const std::function<void(double)>& tick = nullptr) {
-  const auto start = std::chrono::steady_clock::now();
-  const auto end = start + std::chrono::duration<double>(seconds);
+  // One encoder frame per simulated millisecond, as the GM6020 sends them; the control loop's
+  // reference every 5 ms.
+  const TimeNs start = virtual_now();
+  const TimeNs end = start + static_cast<TimeNs>(seconds * 1e9);
   double next_tick = 0;
-  while (std::chrono::steady_clock::now() < end) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  while (virtual_now() < end) {
+    g_virtual_ns += 1'000'000;
+    const double elapsed = (virtual_now() - start) * 1e-9;
     if (tick && elapsed >= next_tick) { tick(elapsed); next_tick += 0.005; }
     const double t = plant.now();
     plant.model->advance(t);
@@ -193,6 +208,24 @@ TEST(ReferenceServo, FollowsTheReferenceThroughTheProductionOutputPath) {
   // The asset's hold band is 0.004 rad and its stall recovery acts beyond 0.0025 rad: at rest
   // the axis sits within the band of the reference.
   EXPECT_NEAR(plant.q(), 0.05, 0.006);
+}
+
+// What the old real-time version of these tests hit under load, made explicit: a frame gap past
+// the asset's dt_max (20 ms) is servo data the servo cannot integrate, and it trips. The failure
+// then read as every later command_reference refused.
+TEST(ReferenceServo, AFrameGapPastDtMaxTripsTheServo) {
+  MixedCanMotorBackend b;
+  Plant plant;
+  Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
+  std::string err;
+  ASSERT_TRUE(Access::load(b, err)) << err;
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0)));
+  run(b, plant, 0.1);
+  EXPECT_FALSE(Access::tripped(b));
+  g_virtual_ns += 25'000'000;  // one 25 ms hole in the 1 kHz stream
+  run(b, plant, 0.01);
+  EXPECT_TRUE(Access::tripped(b));
+  EXPECT_FALSE(b.command_reference(AxisId::Yaw, hold_at(0.0)));
 }
 
 TEST(ReferenceServo, LegacyCommandReleasesIt) {
@@ -291,14 +324,14 @@ TEST(ReferenceServo, SnapshotCarriesTheCrosstalkCorrectedAngle) {
   Access::prepare(b, [&](const can::RawFrame& f) { plant.command(amps_of(f)); return true; });
   std::string err;
   ASSERT_TRUE(Access::load(b, err)) << err;
-  EXPECT_FALSE(std::isfinite(b.snapshot(AxisId::Yaw, now_monotonic_ns()).q_true_rad)) << "not driving: no correction";
+  EXPECT_FALSE(std::isfinite(b.snapshot(AxisId::Yaw, virtual_now()).q_true_rad)) << "not driving: no correction";
   const HardMove move(80 * M_PI / 180, 0.4);
   ASSERT_TRUE(b.command_reference(AxisId::Yaw, move.at(0)));
   double raw2 = 0, true2 = 0;
   int n = 0, missing = 0;
   run(b, plant, move.duration(), [&](double t) {
     ASSERT_TRUE(b.command_reference(AxisId::Yaw, move.at(t)));
-    const auto s = b.snapshot(AxisId::Yaw, now_monotonic_ns());
+    const auto s = b.snapshot(AxisId::Yaw, virtual_now());
     if (!s.has_feedback || t < 0.02) return;
     if (!std::isfinite(s.q_true_rad)) { ++missing; return; }
     // plant.q() has not advanced since the frame this snapshot holds (run() ticks before it advances).

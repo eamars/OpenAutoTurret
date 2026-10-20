@@ -246,6 +246,11 @@ class MixedCanMotorBackend final : public MotorBackend {
   // inhibition path without opening a second physical CAN owner.
   std::function<bool(const can::RawFrame&)> yaw_test_send_;
   std::function<CanHealth()> yaw_test_health_;
+  // Every clock reading this backend takes. CLOCK_MONOTONIC in production; a test that feeds
+  // encoder frames points it at simulated time, so a 1 kHz frame stream is 1 kHz however busy
+  // the machine running the test is (test_reference_servo, 2026-10-20: a 1 ms real-time sleep
+  // stretched past the servo's 20 ms dt_max under a parallel ctest, and the servo rightly tripped).
+  TimeNs (*clock_)() = &now_monotonic_ns;
   // The yaw asset's identified encoder crosstalk (rad/A per bin), for the true-angle estimate the
   // tracking history uses. The servo's own table is this minus a stabilising bias.
   std::array<double, axis::ServoParameters::kCrosstalkBins> yaw_identified_crosstalk_{};
