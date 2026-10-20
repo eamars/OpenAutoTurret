@@ -134,13 +134,25 @@ measured):
   - **Five STOP/RunMode/enable recipes**, each one torque off for about 0.4 s. In each one the pitch
     moved 0.7–2.7° on its own, the same in all three runs. With an unbalanced payload that is a fall,
     five times per homing.
-- **What it is now** (`homing.speed_mode_backoff: true`, `turret_mixed.yaml`).
+- **What it is now** (`homing.speed_mode_backoff: true`, `turret_mixed.yaml`; release 6048094, measured
+  over three HOMEs on 2026-10-20). **31 s from the rest stop.** Contacts repeat to 1–2.5 counts; nothing
+  moves that was not commanded.
   - **Contact.** It is gated on a 0.8 N·m push. Friction notches stall at 0.1–0.45 N·m; a stop reaches
-    0.8 within about 0.1 s. That allows a 250 ms dwell in place of 1.5 s.
+    0.8 within about 0.1 s.
+  - **The push stops at the gate** (the contact cap). Once the axis has run at half the approach speed
+    and then stalls at the gate's push, the approach commands SpdRef 0. The contact is confirmed by the
+    axis staying on the stop for 250 ms; the stop's compliance may spring back by up to a degree.
+    - Measured: 0.81–1.06 N·m at the cap, against 1.1–3.4 N·m before. The backoff leaves the stop
+      within 0.25 s.
+    - The contact is recorded where the push reached the gate. The endpoints therefore sit shallower
+      than the old deep-push ones: the low stop by 0.07–0.13°, the high stop by about 0.5°. The camera
+      extrinsic's pitch frame (relative to the homed low stop) moved by about 0.1° with it.
   - **Backoffs.** They are speed-mode moves under a host position law, at 10°/s.
   - **No re-arm anywhere.** The hand-over to service skips its STOP when the drive already runs speed
     mode with the same verified gains and limit.
-  - **Speeds.** Approaches at 10 / 5°/s. Repeatability gate 0.2° (contacts repeat to one count).
+  - **Speeds.** Approaches at 10 / 8°/s; at 5°/s the fine approach crept in stick-slip. Repeatability
+    gate 0.2°. The motion guard's speed ceiling is 1.5× the fastest homing speed (it was +2°/s, which
+    warned on a correct 10°/s approach).
   - **What is left torque-off.** Switching the drive on at the start. The pitch is then at rest on its
     rest stop.
   - The old recipes existed because the 1.5 s push wound the speed loop beyond what any SpdRef could
@@ -148,6 +160,14 @@ measured):
     and unwinds at about 1.4 N·m/s per 5°/s of speed error.
   - **If a backoff ever cannot leave a stop,** its 15 s timeout fails the homing with pitch held. That
     is a HOLD-class outcome, not a fall.
+- **Open (2026-10-20):** homing faults on any supervisor BRAKE, however brief.
+  - On 15:34:13 it was a single cycle in which the GM6020's feedback carried a NaN while pitch homed;
+    its cause is not yet found.
+  - The fault path then spent 80 ms writing files in the control thread.
+  - Under the fault/hold ruling a transient should only degrade.
+- **Idle commands only a held axis.** A BRAKE in Shutdown used to command both de-energised axes to a
+  stop target that was not finite; on 2026-10-20 15:23:53 the yaw guard tripped and the station latched
+  Fault at boot.
 - **Off is read from the drive.** Idle no longer means "motors off".
   - STOP MOTION during homing, and a Fault, hold pitch energised (ruling 2026-10-02). The web's
     SHUTDOWN and the process stop used to read that Idle as already off, and released the pitch where
