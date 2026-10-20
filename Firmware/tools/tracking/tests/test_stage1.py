@@ -3,10 +3,19 @@ the Level-1 target feedforward beats feedback only wherever the subject moves st
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import sim  # noqa: E402
 import stage1  # noqa: E402
+
+if not sim.TRACKING_SIM.is_file():
+    # Every test here runs the native simulator; with no build there is nothing to measure. Build the
+    # one target from this checkout so the result describes this source, not an older binary.
+    pytest.skip(f"tracking-sim is not built at {sim.TRACKING_SIM}: cmake --build <build dir> "
+                f"--target tracking-sim, then set OTA_TRACKING_SIM to the binary",
+                allow_module_level=True)
 
 PRIOR = sim.tracking_parameters("tracking_prior.json")
 
