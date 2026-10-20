@@ -176,7 +176,8 @@ measured):
   - The 80 ms step that time was the fault path formatting and writing its trip trace in the control
     thread. Since release 8d04a06 (2026-10-20) trip traces and stop records go to a background
     evidence writer (nice 10, 16-slot queue). The step only copies, and a full queue drops the file
-    and counts it, never a cycle. Not yet seen on the station with a real trip.
+    and counts it, never a cycle. Stop records are seen landing through it on the station (17:44
+    shutdown); no trip has happened since, so a trip file through it is not yet seen.
 - **Idle commands only a held axis.** A BRAKE in Shutdown used to command both de-energised axes to a
   stop target that was not finite; on 2026-10-20 15:23:53 the yaw guard tripped and the station latched
   Fault at boot.
@@ -191,6 +192,30 @@ measured):
   - Events `HOMING_STARTED` and `HOMING_COMPLETE`.
   - The tracking trace's `yaw` column: applied current, crosstalk-corrected angle, GM6020 absolute
     angle.
+
+### Pitch lambda, class names, extrinsic and the diagonal jog (2026-10-20, releases eb40835, a0ff118)
+
+- **Pitch lambda 2.5 -> 4** (drive review proposal 7, owner approved). Only the approach to the
+  dead band's edge is stiffer; the 3 deg band, its 3 deg/s centring and the no-pass ruling are
+  unchanged. Station, tv, 20 s holds: 8-10 deg into 0.5 deg in 2.5-2.9 s (was 6.3-7.3 s), 5 deg in
+  2.1-2.6 s (was 4.8 s), overshoot <= 0.07 deg, final <= 0.03 deg.
+- **Class names cross the vision wire whole** (24 bytes, was 12): "potted plant", not
+  "potted plan". TrackSet 2562 -> 2946 bytes, native frame 2662 -> 3046; controld and visiond
+  ship together, and a mismatched pair refuses on the exact-length check.
+- **Camera extrinsic re-referenced to the capped homing contact**: R_P_C = R_y(+0.00191) R_P_C, so
+  the matrix placed per power-up is unchanged (the contact sits 0.109 deg shallower than the old
+  deep push).
+- **A diagonal jog is one motion** (owner, 2026-10-20). One rate for both axes (the slower pace),
+  one origin per jog, each target placed from the least progress either axis has made while both
+  have room; an axis its end of travel is slowing leaves the coupling and stops there while the
+  other carries on (ruling 2026-10-03). Both axes' feed-forward is their reference's own ramped
+  speed; yaw used to take the jog's speed as a step. Station, coarse 3 s:
+  - before: yaw moved 0.1 s before pitch, the rate ratio wandered 0.82-1.14, the path bent by
+    up to 0.62 deg in free travel;
+  - after: both references start on the same tick and agree to 0.001 deg; free-travel path within
+    0.41 deg of the line (rms 0.14), rate ratio 1.02.
+  - What remains is the yaw bearing's breakaway: at the start yaw jumps 0.3-0.5 deg ahead of its
+    own reference, then the reference catches up (the drive review's stick-slip, not the jog).
 
 ### The pitch envelope's boundary: position and direction (owner, 2026-10-03)
 

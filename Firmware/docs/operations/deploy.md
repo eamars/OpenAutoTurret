@@ -75,6 +75,15 @@ Windows tar drops the executable bits and the launcher then reads the tree as "n
 compiles natively. The build happens before the station is touched, so a failed build leaves no
 release directory behind.
 
+Since 2026-10-20 the Windows route builds **the commit, from a WSL-native mirror**
+(`tools/cross_build_mirror.py`): a git mirror checked out at the deployed revision, a copy of the
+sysroot and host libraries, and the build tree, all under `~/.cache/ota-cross/` in WSL. Through
+`/mnt/c` (WSL's 9p) a header change was a 3-4 minute build; natively a cold build is 46 s and the
+whole deploy, station suite and re-home included, 3.5 minutes. The first run copies the 869 MB
+sysroot once. Because the binaries are built from the commit, an edit made in the checkout while a
+deploy runs can no longer reach them. Every ssh/scp carries `ServerAliveInterval=15`: a deploy's ssh
+once sat 79 minutes on a dead connection.
+
 Three things a handover needs, and each has already cost this project a session:
 
 1. **`--prebuilt`** — reuse artifacts built on this host instead of rebuilding. A cold arm64 tree is
