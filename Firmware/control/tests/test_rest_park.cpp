@@ -783,3 +783,75 @@ TEST(RestParkUnhomed, StaleFeedbackInShutdownCommandsNothingAndDoesNotFault) {
   EXPECT_EQ(loop.phase(), Phase::Idle);
   EXPECT_TRUE(loop.motors_off());
 }
+
+// Fault, hold, degrade (owner ruling 2026-10-02) during homing. Station 2026-10-20 15:34:13: one
+// cycle of missing feedback made the supervisor BRAKE for 94 ms and the correct homing faulted. A
+// Brake pauses homing with pitch held and it resumes; only a pause that lasts 5 s ends it.
+namespace {
+struct PausedHoming {
+  CountingPlant* plant = nullptr;
+  std::unique_ptr<ControlLoop> loop;
+  int64_t t = kDtNs;
+  bool start() {
+    auto p = std::make_unique<CountingPlant>();
+    p->set_stops(AxisId::Pitch, -1, 1);
+    p->set_stops(AxisId::Yaw, -100, 100);
+    p->set_position(AxisId::Pitch, -0.95);
+    plant = p.get();
+    loop = std::make_unique<ControlLoop>(station_cfg(), std::move(p));
+    HomingPlanConfig hcfg;
+    hcfg.homing.coarse_speed_rad_s = 10 * kDeg2Rad;
+    hcfg.homing.fine_speed_rad_s = 8 * kDeg2Rad;
+    hcfg.homing.settle_time_s = .3;
+    hcfg.homing.contact.effort_contact_threshold_nm = 0.8;
+    hcfg.homing.contact.contact_dwell_ms = 250;
+    hcfg.homing.speed_mode_backoff = true;
+    hcfg.homing.backoff_speed_rad_s = 10 * kDeg2Rad;
+    hcfg.travel_bands[0] = TravelBand{0, 115};
+    std::vector<HomingAction> actions{{.type = HomingActionType::HomeFullRange, .axis = AxisId::Pitch}};
+    std::string error;
+    return loop->start_homing(HomingPlan(std::move(actions), hcfg), error);
+  }
+  void step(int n) { for (int k = 0; k < n; ++k, t += kDtNs) loop->step(t, kDtNs); }
+  // Pitch feedback goes missing for `ms`, the way the supervisor saw it on the station.
+  void drop_feedback(int ms) {
+    plant->set_feedback_ok(AxisId::Pitch, false);
+    step(ms / 5);
+    plant->set_feedback_ok(AxisId::Pitch, true);
+  }
+  bool finish() {
+    for (int k = 0; k < 60'000; ++k) {
+      step(1);
+      if (loop->phase() == Phase::Fault) return false;
+      if (loop->position_ready() && loop->phase() == Phase::Hold) return true;
+    }
+    return false;
+  }
+};
+}  // namespace
+
+TEST(HomingPause, ATransientBrakePausesHomingAndItCompletes) {
+  PausedHoming h;
+  ASSERT_TRUE(h.start());
+  h.step(400);  // 2 s: the coarse approach under way
+  ASSERT_EQ(h.loop->phase(), Phase::Homing);
+  const double q_before = h.plant->position(AxisId::Pitch);
+  h.drop_feedback(150);
+  EXPECT_EQ(h.loop->phase(), Phase::Homing) << "a 150 ms brake ended the homing: " << h.loop->fault_reason();
+  EXPECT_NEAR(h.plant->position(AxisId::Pitch), q_before, 0.05) << "pitch held while paused";
+  ASSERT_TRUE(h.finish()) << h.loop->fault_reason();
+  const auto& pl = h.loop->limits()[static_cast<int>(AxisId::Pitch)];
+  EXPECT_NEAR(pl.q_hard_min_rad, -1.0, 0.01);
+  EXPECT_NEAR(pl.q_hard_max_rad, 1.0, 0.01);
+  EXPECT_EQ(h.plant->pitch_releases, 0);
+}
+
+TEST(HomingPause, APersistentBrakeStillEndsTheHomingWithPitchHeld) {
+  PausedHoming h;
+  ASSERT_TRUE(h.start());
+  h.step(400);
+  h.drop_feedback(6000);
+  EXPECT_EQ(h.loop->phase(), Phase::Fault);
+  EXPECT_NE(h.loop->fault_reason().find("5 s"), std::string::npos) << h.loop->fault_reason();
+  EXPECT_EQ(h.plant->pitch_releases, 0) << "a failed homing holds pitch, it does not drop it";
+}

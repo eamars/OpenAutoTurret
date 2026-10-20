@@ -445,11 +445,16 @@ bool MixedCanMotorBackend::establish_yaw_reference(std::string& err) {
 
 bool MixedCanMotorBackend::yaw_feedback_safe_locked(TimeNs now) const {
   if (!yaw_reference_valid_.load() || !yaw_state_.received || !yaw_state_.encoder_valid) return false;
-  const auto age = now - yaw_state_.feedback.rx_ns;
-  // A CAN receive callback can publish a frame after the caller sampled its
-  // cycle timestamp but before it acquired yaw_mutex_. Allow only that small
-  // clock-order race; the exported snapshot timestamp is clamped below.
-  return age >= -5'000'000LL && age <= kFreshnessLimitNs &&
+  // A frame newer than the caller's clock is the freshest feedback there is: the caller sampled its
+  // cycle time and ran late (station 2026-10-20 15:34:13: the control step reached its snapshot ~5 ms
+  // after its tick while the GM6020 kept sending at 1 kHz; the old -5 ms bound read a fresh frame as
+  // missing feedback, the supervisor braked and homing faulted). A late loop is the deadline
+  // monitor's business. Only a stamp a second or more ahead of the caller's clock is not feedback
+  // (a broken clock). The exported snapshot timestamp is clamped below.
+  const auto rx = yaw_state_.feedback.rx_ns;
+  if (rx > now + kLateCallerToleranceNs) return false;
+  const auto age = std::max<TimeNs>(0, now - rx);
+  return age <= kFreshnessLimitNs &&
       std::isfinite(yaw_state_.position_rad) &&
       std::isfinite(yaw_state_.feedback.speed_rad_s());
 }

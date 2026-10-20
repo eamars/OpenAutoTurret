@@ -71,7 +71,9 @@ bool run(AxisId active, int dir, const std::string& condition, bool abort=true) 
   const AxisId other=active==AxisId::Yaw ? AxisId::Pitch : AxisId::Yaw;
   const AxisId disturbed=condition=="inactive drift" ? other : active;
   int cycles=0;
-  while(f.loop.phase()==Phase::Homing && cycles++<500) {
+  // A missing or regressing feedback pauses homing (fault/hold ruling) and ends it only after 5 s.
+  const int limit = condition=="stale" ? 1500 : 500;
+  while(f.loop.phase()==Phase::Homing && cycles++<limit) {
     if(condition=="nonfinite") f.plant->set_position(disturbed,std::numeric_limits<double>::quiet_NaN());
     else if(condition=="stale") f.plant->set_feedback_ok(disturbed,false);
     else if(condition=="future" || condition=="regressing") {
@@ -88,7 +90,10 @@ bool run(AxisId active, int dir, const std::string& condition, bool abort=true) 
   }
   const bool motion=condition=="pending drift" || condition=="inactive drift" ||
       condition=="overspeed" || condition=="wrong direction";
-  const bool ok=(condition=="normal" || (!abort && motion)) ? f.loop.phase()==Phase::Homing : f.latched();
+  // "future" is a frame 20 ms newer than the cycle clock: a late caller, fresh feedback. "regressing"
+  // steps the stamp back 20 ms once and then advances again: one cycle's pause. Homing goes on.
+  const bool transient = condition=="future" || condition=="regressing";
+  const bool ok=(condition=="normal" || transient || (!abort && motion)) ? f.loop.phase()==Phase::Homing : f.latched();
   std::cout<<axis_name(active)<<" dir="<<dir<<" condition="<<condition
            <<" abort="<<abort<<" ms="<<cycles*5<<" pass="<<ok<<" reason='"<<f.loop.fault_reason()<<"'\n";
   return ok;

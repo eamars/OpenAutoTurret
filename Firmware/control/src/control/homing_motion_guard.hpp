@@ -14,6 +14,9 @@ class HomingMotionGuard {
   struct Observation {
     std::string reason;
     bool motion_only = false;
+    // Feedback missing or late this cycle: a transient the homing waits out (it pauses), unlike an
+    // invalid or unhealthy drive.
+    bool feedback_gap = false;
   };
   void expect(AxisId axis, const DesiredState& ds, double q) {
     auto& s = axes_[static_cast<size_t>(axis)];
@@ -34,14 +37,15 @@ class HomingMotionGuard {
   Observation observe(AxisId axis, const AxisSnapshot& fb, TimeNs now,
                       double speed_cap, TimeNs max_age, double max_temp) {
     auto& s = axes_[static_cast<size_t>(axis)];
-    const auto fail = [axis](const char* why, bool motion_only = false) {
-      return Observation{std::string(axis_name(axis))+" homing: "+why, motion_only};
+    const auto fail = [axis](const char* why, bool motion_only = false, bool feedback_gap = false) {
+      return Observation{std::string(axis_name(axis))+" homing: "+why, motion_only, feedback_gap};
     };
     // A concurrently received frame can be newer than the cycle start by a
     // fraction of one tick. Larger future timestamps remain invalid.
-    if (!fb.has_feedback || fb.rx_ns < 0 || fb.rx_ns > now+5'000'000 ||
+    // Newer than `now` is fresh (a late caller); only a stamp a second or more ahead is invalid.
+    if (!fb.has_feedback || fb.rx_ns < 0 || fb.rx_ns > now + kLateCallerToleranceNs ||
         now-fb.rx_ns > max_age || (s.sampled && fb.rx_ns < s.latest_ns))
-      return fail("missing, stale or regressing feedback");
+      return fail("missing, stale or regressing feedback", false, true);
     if (!std::isfinite(fb.q_rad) || !std::isfinite(fb.torque_nm) ||
         !std::isfinite(fb.temp_c) || fb.faults || fb.temp_c > max_temp)
       return fail("invalid encoder or unhealthy drive");

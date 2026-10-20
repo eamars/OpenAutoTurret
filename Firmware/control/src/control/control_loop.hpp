@@ -672,6 +672,9 @@ class ControlLoop {
   // Homing high-rate motion-log cycle counter (gates the 100 Hz log; see the
   // Phase::Homing case). Reset in start_homing().
   int homing_log_cycle_ = 0;
+  // A supervisor Brake/Hold pauses homing; it ends the homing only after it has persisted.
+  TimeNs homing_paused_since_ns_ = 0;
+  static constexpr TimeNs kHomingPausePersistenceNs = 5'000'000'000;
   TimeNs homing_observe_ns_ = 0;
   std::array<TimeNs, kAxisCount> homing_warning_ns_{};
   // Position-derived velocity for at-rest decisions (P0j): the drive's

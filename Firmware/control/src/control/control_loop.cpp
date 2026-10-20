@@ -229,6 +229,7 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err, bool recover_f
   pitch_homed_ = false;
   at_ready_ = false;
   homing_log_cycle_ = 0;
+  homing_paused_since_ns_ = 0;
   homing_observe_ns_ = 0;
   homing_warning_ns_ = {};
   limits_ = {};
@@ -2190,7 +2191,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
       }
       // Check both axes before any command or mode recipe advances. No load
       // direction, balance pose, or zero-speed command certifies a held axis.
-      std::string motion_error;
+      std::string motion_error, feedback_gap;
       for (int i=0; i<kAxisCount; ++i) {
         const AxisId axis = static_cast<AxisId>(i);
         if (backend_->supports_continuous_yaw() && axis == AxisId::Yaw) {
@@ -2227,6 +2228,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             homing_->motion_speed_ceiling(), cfg_.feedback_max_age_ms*1'000'000LL,
             cfg_.motor_overtemp_c);
         if (observation.reason.empty()) continue;
+        if (observation.feedback_gap) {
+          feedback_gap = observation.reason;  // waited out below, like the supervisor's brake
+          continue;
+        }
         if (observation.motion_only && !cfg_.homing_motion_checks_abort) {
           if (!homing_warning_ns_[i] || now_ns-homing_warning_ns_[i]>=1'000'000'000LL) {
             spdlog::warn("{}; continuing homing (motion_checks_abort=false)", observation.reason);
@@ -2238,10 +2243,42 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         }
       }
       if (!motion_error.empty()) { fault(motion_error); break; }
-      if (last_decision_.action != SafetyAction::Allow &&
-          last_decision_.action != SafetyAction::Derate) {
-        fault("safety interrupted homing: " + last_decision_.reason);
-        break;
+      if (!feedback_gap.empty() || (last_decision_.action != SafetyAction::Allow &&
+          last_decision_.action != SafetyAction::Derate)) {
+        // Fault, hold, degrade (owner ruling 2026-10-02). A Brake or Hold is the supervisor stopping
+        // motion for a condition that may be transient (stale feedback for one cycle): homing pauses
+        // with the axis held at speed zero (step 6 commands it) and resumes from where it is once
+        // the supervisor allows motion again. Station 2026-10-20 15:34:13: a 94 ms BRAKE faulted a
+        // correct homing. Only a pause that persists (5 s, the owner's figure) ends the homing.
+        // FaultStop and Disable are hazards (over-temperature, a drive fault) and end it at once.
+        const bool pausable = last_decision_.action == SafetyAction::Allow ||
+                              last_decision_.action == SafetyAction::Derate ||
+                              last_decision_.action == SafetyAction::Brake ||
+                              last_decision_.action == SafetyAction::Hold;
+        const std::string why = feedback_gap.empty() ? last_decision_.reason : feedback_gap;
+        if (!pausable) {
+          fault("safety interrupted homing: " + last_decision_.reason);
+          break;
+        }
+        if (!homing_paused_since_ns_) {
+          homing_paused_since_ns_ = now_ns;
+          spdlog::warn("homing paused: {} (pitch held; resumes when motion is allowed again)", why);
+        } else if (now_ns - homing_paused_since_ns_ >= kHomingPausePersistenceNs) {
+          fault("homing interrupted for 5 s: " + why);
+          break;
+        }
+        // Hold the homing axis at speed zero ourselves: with the supervisor still allowing motion,
+        // step 6 leaves a speed-mode axis on the approach SpdRef it last had.
+        if (homing_ && !homing_->complete()) {
+          const AxisId ha = homing_->active_axis();
+          if (!(backend_->supports_continuous_yaw() && ha == AxisId::Yaw) && sp[ix(ha)].in_speed_mode)
+            backend_->command_velocity(ha, 0.0);
+        }
+        break;  // nothing steps the homing while paused
+      }
+      if (homing_paused_since_ns_) {
+        spdlog::info("homing resumed after {:.0f} ms paused", (now_ns - homing_paused_since_ns_) / 1e6);
+        homing_paused_since_ns_ = 0;
       }
       if (backend_->supports_continuous_yaw() && !yaw_session_reference_valid_)
         break;  // wait for a fresh stationary session baseline before any pitch motion

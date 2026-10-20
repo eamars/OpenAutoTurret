@@ -31,6 +31,12 @@
 namespace ota {
 
 // Latest known state of one axis (a non-blocking read of the freshest feedback).
+// A feedback frame stamped after the caller's cycle clock is the freshest feedback there is: the
+// caller sampled its clock and ran late (station 2026-10-20 15:34:13, ~5 ms). Only a stamp this far
+// ahead of the caller's clock is not feedback but a broken clock; a caller this late is the deadline
+// monitor's business.
+constexpr TimeNs kLateCallerToleranceNs = 1'000'000'000;
+
 struct AxisSnapshot {
   bool has_feedback = false;
   TimeNs rx_ns = 0;        // host monotonic time of the freshest feedback

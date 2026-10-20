@@ -48,6 +48,11 @@ struct MixedBackendTestAccess {
     backend.yaw_test_health_ = [health] { return health; };
   }
 
+  static void set_yaw_rx(MixedCanMotorBackend& backend, TimeNs rx_ns) {
+    std::lock_guard lock(backend.yaw_mutex_);
+    backend.yaw_state_.feedback.rx_ns = rx_ns;
+  }
+
   static bool trip_yaw_after_proving_mutex_is_busy(
       MixedCanMotorBackend& backend,
       const std::function<void(bool)>& report_contention) {
@@ -89,16 +94,28 @@ struct MixedBackendTestAccess {
   }
 };
 
-TEST(Adr002YawOutput, FreshStopClockDoesNotRejectFramesNewerThanTheLastTick) {
+// A frame newer than the caller's clock is fresh feedback: the caller ran late, the drive did not.
+// Station 2026-10-20 15:34:13: the control step reached its snapshot ~5 ms after its tick, the old
+// -5 ms bound reported the 1 kHz GM6020 frame as missing, the supervisor braked and homing faulted.
+TEST(Adr002YawOutput, AFrameNewerThanALateCallersClockIsFreshFeedback) {
   MixedCanMotorBackend backend;
   MixedBackendTestAccess::prepare_current_yaw(backend, [](const auto&) { return true; });
   const auto fresh_clock = now_monotonic_ns();
-  const auto old = backend.snapshot(AxisId::Yaw,fresh_clock-10'000'000);
-  EXPECT_FALSE(old.has_feedback);
-  EXPECT_FALSE(std::isfinite(old.q_rad));
-  const auto current = backend.snapshot(AxisId::Yaw,fresh_clock);
+  const auto late = backend.snapshot(AxisId::Yaw, fresh_clock - 10'000'000);
+  EXPECT_TRUE(late.has_feedback);
+  EXPECT_TRUE(std::isfinite(late.q_rad));
+  EXPECT_LE(late.rx_ns, fresh_clock - 10'000'000) << "the exported stamp is clamped to the caller's clock";
+  const auto current = backend.snapshot(AxisId::Yaw, fresh_clock);
   EXPECT_TRUE(current.has_feedback);
   EXPECT_TRUE(std::isfinite(current.q_rad));
+}
+
+TEST(Adr002YawOutput, AFrameStampedAheadOfTheRealClockIsNotFeedback) {
+  MixedCanMotorBackend backend;
+  MixedBackendTestAccess::prepare_current_yaw(backend, [](const auto&) { return true; });
+  MixedBackendTestAccess::set_yaw_rx(backend, now_monotonic_ns() + 2'000'000'000);  // a broken clock
+  const auto s = backend.snapshot(AxisId::Yaw, now_monotonic_ns());
+  EXPECT_FALSE(s.has_feedback);
 }
 
 TEST(Adr002YawOutput, SessionTrialRejectsOverCapAndStaleFeedback) {

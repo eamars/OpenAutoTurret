@@ -449,7 +449,10 @@ MotorBackend::Transition CanMotorBackend::transition_mode(
   };
   can::AxisLatest s;
   system_.axis(axis).latest(s);
-  if (!s.has_feedback || s.rx_ns<=0 || s.rx_ns>now+5000000LL || now-s.rx_ns>100000000LL ||
+  // A frame newer than `now` is fresh (the caller ran late), not invalid; only one a second or more
+  // ahead is (drive review 2026-10-20, the late-caller class).
+  if (!s.has_feedback || s.rx_ns<=0 || s.rx_ns>now+kLateCallerToleranceNs ||
+      now-s.rx_ns>100000000LL ||
       !std::isfinite(s.q_rad) || s.faults)
     return fail("fresh finite fault-free feedback required for mode setup");
   if (t.stage == 0 && !position && in_speed_mode_[i] && s.mode == 2 &&
