@@ -1702,6 +1702,9 @@ function paint(t) {
     : [value && value.operating_mode, value && value.phase,
       value && value.watch_point_set, value && value.watch_point_usable,
       value && value.selected_uuid, value && value.perception_session_uuid,
+      // TARGETS > FOLLOW draws these: without them the chip kept blinking after the switch ended,
+      // because nothing else the drawer draws changed on that frame (station, 2026-10-20 23:04).
+      value && value.target_type, value && value.target_type_switching, value && value.target_type_overdue,
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
   const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);
   lastTelemetry = t; lastTelemetryAt = Date.now();

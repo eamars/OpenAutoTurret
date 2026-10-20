@@ -92,6 +92,13 @@ class DockAndDrawerBehaviour(unittest.TestCase):
     def test_no_chips_from_a_controller_that_reports_no_type(self):
         self.assertIsNone(self._chips({"operating_mode": "MANUAL"}))
 
+    def test_the_drawer_repaints_when_the_follow_chips_change(self):
+        # Station 2026-10-20 23:04: CAT kept blinking after the switch ended, because the drawer's
+        # repaint key held nothing the FOLLOW row draws. The key must include what the drawer shows.
+        paint = HUD_JS[HUD_JS.index("function paint(t)"):HUD_JS.index("function updateStaleness")]
+        for field in ("target_type", "target_type_switching", "target_type_overdue"):
+            self.assertIn("value.%s" % field, paint, field)
+
     def _rows(self, drawer: str, telemetry: dict):
         return self._node("console.log(JSON.stringify(T.hudDrawerActions(%s, %s)));"
                           % (json.dumps(drawer), json.dumps(telemetry)))
