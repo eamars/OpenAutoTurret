@@ -1459,6 +1459,13 @@ void MixedCanMotorBackend::step_yaw_servo_locked(TimeNs rx_ns) {
   if (yaw_identified_crosstalk_valid_)
     yaw_state_.position_true_rad =
         yaw_servo_.corrected_reading(ts, yaw_state_.position_rad + offset, yaw_identified_crosstalk_.data()) - offset;
+  // Frames closer than the servo's dt_min to its last step feed the observer above but do not step
+  // or send. At the GM6020's 1 kHz this never bites; it bites on the backlog a stalled receiver reads
+  // in one burst (station 2026-10-20, a 60 ms freeze: 60 frames within microseconds), where a current
+  // frame per encoder frame overflowed the CAN transmit queue, the failed send unreadied the servo and
+  // it let go. The servo integrates a step sooner than dt_min as dt_min anyway.
+  const auto min_step_ns = static_cast<TimeNs>(yaw_servo_.parameters().dt_min * 1e9);
+  if (yaw_servo_last_step_ns_ && now - yaw_servo_last_step_ns_ < min_step_ns) return;
   double q, v, a;
   if (yaw_reference_.at(now, q, v, a)) yaw_servo_hold_q_ = q;
   else { q = yaw_servo_hold_q_; v = a = 0; ++yaw_servo_stale_; }

@@ -232,6 +232,39 @@ TEST(ReferenceServo, AOneOffFrameHoleIsReseededNotTripped) {
   EXPECT_NEAR(plant.q(), 0.0, 0.006);
 }
 
+TEST(ReferenceServo, TheBacklogAfterAHoleIsObservedNotFloodedOntoTheBus) {
+  // Station 2026-10-20, controld frozen 60 ms: the receiver read the 60 queued frames within
+  // microseconds, the servo sent a current frame for each, the CAN transmit queue overflowed, the
+  // failed send unreadied the servo and it let go. The backlog feeds the observer; the bus gets at
+  // most one frame per dt_min (0.3 ms), which 1 Mbit/s drains (one frame per ~130 us).
+  MixedCanMotorBackend b;
+  Plant plant;
+  int sends = 0;
+  bool refuse = false;
+  TimeNs last_send = 0;
+  Access::prepare(b, [&](const can::RawFrame& f) {
+    const TimeNs t = virtual_now();
+    if (last_send && t - last_send < 130'000) refuse = true;  // the queue would overflow
+    last_send = t; ++sends; plant.command(amps_of(f)); return !refuse;
+  });
+  std::string err;
+  ASSERT_TRUE(Access::load(b, err)) << err;
+  ASSERT_TRUE(b.command_reference(AxisId::Yaw, hold_at(0.0, 100.0)));
+  run(b, plant, 0.3);
+  g_virtual_ns += 60'000'000;
+  const int before = sends;
+  for (int k = 0; k < 60; ++k) {  // the queued frames, read 10 us apart
+    Access::frame(b, plant.model->reading(plant.model->position(), plant.now()), plant.model->velocity());
+    g_virtual_ns += 10'000;
+  }
+  EXPECT_FALSE(refuse) << "a send came sooner than the bus can take it";
+  EXPECT_LE(sends - before, 3) << "the 0.6 ms burst sent " << sends - before << " current frames";
+  EXPECT_TRUE(Access::engaged(b));
+  run(b, plant, 0.5);
+  EXPECT_FALSE(Access::tripped(b));
+  EXPECT_TRUE(Access::engaged(b));
+}
+
 TEST(ReferenceServo, AHoleMidMoveDoesNotKickTheAxis) {
   // The same 0.05 rad move twice, once with a 40 ms hole at its fastest point: the re-seeded servo
   // must follow as the uninterrupted one does, not lurch.
