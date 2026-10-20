@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -174,14 +175,48 @@ class ForInsetMarkup(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout[:-1] if r.stdout.endswith("\n") else r.stdout
 
-    def test_the_words_the_revision_asks_for_are_present(self) -> None:
+    def test_the_map_carries_a_legend_and_no_captions(self) -> None:
+        # Owner, 2026-10-21: "FIELD OF REGARD" and "SAFE ENVELOPE" are unnecessary text.
         svg = self._svg({})
-        self.assertIn("FIELD OF REGARD", svg)
-        self.assertIn("SAFE ENVELOPE", svg)
+        self.assertNotIn("FIELD OF REGARD", svg)
+        self.assertNotIn("SAFE ENVELOPE", svg)
         self.assertIn("<polygon", svg, "§11: green safe-envelope polygon")
-        self.assertIn("FOV", svg)
-        self.assertIn("TARGET", svg)
-        self.assertIn("PRED", svg, "§11: short legend")
+        self.assertIn(">FOV<", svg)
+        self.assertIn(">TARGET<", svg)
+        self.assertIn(">PRED<", svg, "§11: short legend")
+
+    def test_the_legend_is_one_row_above_the_map_ending_at_its_right_edge(self) -> None:
+        # Owner, 2026-10-21: the legend floated over the envelope's top-right corner. It now has the
+        # band above the map to itself.
+        svg = self._svg({})
+        g = self._geometry()
+        rows = re.findall(r'<text class="flbl" x="([-\d.]+)" y="([-\d.]+)"[^>]*>(\w+)</text>', svg)
+        self.assertEqual([r[2] for r in rows], ["FOV", "TARGET", "PRED"], "left to right")
+        ys = {float(r[1]) for r in rows}
+        self.assertEqual(len(ys), 1, "one row")
+        plot = g["plot"]
+        self.assertLess(ys.pop(), plot["y"], "above the map, not over the envelope")
+        xs = [float(r[0]) for r in rows]
+        self.assertEqual(xs, sorted(xs))
+        pred_right = xs[-1] + len("PRED") * 9 * 0.66
+        self.assertAlmostEqual(pred_right, plot["x"] + plot["w"], delta=0.2, msg="ends on the map's right edge")
+        self.assertGreater(xs[0] - 8 - 5, plot["x"], "starts inside the box")
+
+    def _geometry(self) -> dict:
+        js = "console.log(JSON.stringify(T.hudForInset(%s)));" % json.dumps(_base())
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(HUD_GEOMETRY_JS + "\nmodule.exports = { hudForInset };\n")
+            geo = fh.name
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+                fh.write("const T = require(%r);\n%s" % (geo, js))
+                main = fh.name
+            r = subprocess.run(["node", main], capture_output=True, text=True, timeout=30)
+        finally:
+            os.unlink(geo)
+            os.unlink(main)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
 
     def test_the_predicted_marker_is_amber_not_green(self) -> None:
         # Same rule as §10, enforced here too: two green symbols side by side would put an intention
@@ -195,9 +230,9 @@ class ForInsetMarkup(unittest.TestCase):
 
     def test_envelope_is_green_and_the_fov_rectangle_is_white(self) -> None:
         svg = self._svg({})
-        poly = svg[svg.index("<polygon"):svg.index("SAFE ENVELOPE")]
+        poly = svg[svg.index("<polygon"):svg.index("<clipPath")]
         self.assertIn(C_TOKENS["green"], poly)
-        fov = svg[svg.index("<rect", svg.index("SAFE ENVELOPE")):svg.index("<line", svg.index("SAFE ENVELOPE"))]
+        fov = svg[svg.index("<rect", svg.index("</clipPath>")):svg.index("<line", svg.index("</clipPath>"))]
         self.assertIn(C_TOKENS["white"], fov, "§11: white current-camera FOV rectangle")
 
     def test_the_box_is_low_opacity_not_a_card(self) -> None:

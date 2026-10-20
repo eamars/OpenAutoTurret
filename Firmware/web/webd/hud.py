@@ -876,12 +876,10 @@ function hudForInsetSvg(g, C) {
     // dominant as §11.2 requires.
     '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w + '" height="' + g.h + '" rx="2" ' +
       'fill="' + C.black + '" fill-opacity=".28" stroke="' + C.line + '" stroke-width="1"/>',
-    '<text class="tlbl" x="' + (g.x + g.w / 2) + '" y="' + (g.y + g.titleH * 0.72) +
-      '" text-anchor="middle" fill="' + C.dim + '">FIELD OF REGARD</text>',
+    // No title and no "SAFE ENVELOPE" caption (owner, 2026-10-21): the map explains itself, and the
+    // band above it carries the legend instead.
     '<polygon points="' + pts + '" fill="' + C.green + '" fill-opacity=".10" stroke="' + C.green +
       '" stroke-width="1" opacity=".85"/>',
-    '<text class="tlbl" x="' + (g.plot.x + 2) + '" y="' + (g.plot.y + g.plot.h - 3) +
-      '" fill="' + C.green + '" opacity=".8">SAFE ENVELOPE</text>',
     // The view rectangle is clipped to the map; on a ring its overhang reappears at the other edge.
     '<clipPath id="for-plot-clip"><rect x="' + g.plot.x + '" y="' + (g.plot.y - g.plot.h) +
       '" width="' + g.plot.w + '" height="' + (3 * g.plot.h) + '"/></clipPath>',
@@ -906,19 +904,33 @@ function hudForInsetSvg(g, C) {
                (q.y + d) + 'L' + (q.x - d) + ' ' + q.y + 'Z" fill="none" stroke="' + C.amber +
                '" stroke-width="1.4"' + (q.off ? ' opacity=".45"/>' : '/>'));
   }
-  // §11's "short legend": three rows, no paragraphs.
-  const lx = g.x + g.w - Math.max(52, g.w * 0.20), ly = g.y + g.titleH + 3;
-  parts.push('<line x1="' + lx + '" y1="' + ly + '" x2="' + (lx + 9) + '" y2="' + ly +
-             '" stroke="' + C.white + '" stroke-width="1"/><text class="flbl" x="' + (lx + 12) +
-             '" y="' + (ly + 3) + '" fill="' + C.dim + '">FOV</text>');
-  parts.push('<circle cx="' + (lx + 4) + '" cy="' + (ly + 12) + '" r="3.4" fill="none" stroke="' +
-             C.green + '" stroke-width="1.2"/><text class="flbl" x="' + (lx + 12) + '" y="' +
-             (ly + 15) + '" fill="' + C.dim + '">TARGET</text>');
-  parts.push('<path d="M' + (lx + 4) + ' ' + (ly + 18) + 'L' + (lx + 9) + ' ' + (ly + 23) + 'L' +
-             (lx + 4) + ' ' + (ly + 28) + 'L' + (lx - 1) + ' ' + (ly + 23) + 'Z" fill="none" stroke="' +
-             C.amber + '" stroke-width="1.2"/><text class="flbl" x="' + (lx + 12) + '" y="' +
-             (ly + 26) + '" fill="' + C.dim + '">PRED</text>');
+  parts.push(hudForLegendSvg(g, C));
   return parts.join("");
+}
+
+// §11's "short legend": one row in the band above the map, its right end on the map's right edge,
+// so it has a place of its own instead of floating over the envelope's corner (owner, 2026-10-21).
+// Laid out right to left from that edge; text.flbl is 9 px monospace with .06em spacing.
+const HUD_FOR_LEGEND_CHAR_PX = 9 * 0.66;
+function hudForLegendSvg(g, C) {
+  const cy = g.y + g.titleH / 2 + 1;
+  const marks = {
+    FOV: (sx) => '<line x1="' + (sx - 4.5) + '" y1="' + cy + '" x2="' + (sx + 4.5) + '" y2="' + cy +
+      '" stroke="' + C.white + '" stroke-width="1"/>',
+    TARGET: (sx) => '<circle cx="' + sx + '" cy="' + cy + '" r="3.4" fill="none" stroke="' + C.green +
+      '" stroke-width="1.2"/>',
+    PRED: (sx) => '<path d="M' + sx + ' ' + (cy - 4) + 'L' + (sx + 4) + ' ' + cy + 'L' + sx + ' ' +
+      (cy + 4) + 'L' + (sx - 4) + ' ' + cy + 'Z" fill="none" stroke="' + C.amber + '" stroke-width="1.2"/>'
+  };
+  const out = [];
+  let right = g.plot.x + g.plot.w;
+  for (const label of ["PRED", "TARGET", "FOV"]) {
+    const tx = right - label.length * HUD_FOR_LEGEND_CHAR_PX, sx = tx - 8;
+    out.unshift(marks[label](sx) + '<text class="flbl" x="' + tx.toFixed(1) + '" y="' + (cy + 3) +
+                '" fill="' + C.dim + '">' + label + '</text>');
+    right = sx - 5 - 10;
+  }
+  return out.join("");
 }
 
 // --- §5 / §6 travel tapes --------------------------------------------------

@@ -149,11 +149,13 @@ class TypographyMatchesSection16(unittest.TestCase):
     def test_the_tiers_are_declared_and_actually_spent(self) -> None:
         # A class that is declared but never emitted is how --hud-mono deleted three rules with every test
         # still green. Sizes mean nothing unless the drawing uses the class carrying them.
-        self.assertGreaterEqual(HUD_JS.count('class="flbl"'), 3,
-                                "the FOR legend rows must be drawn with the smallest tier")
+        # The FOR legend draws its three entries from one loop since 2026-10-21; test_for_inset asserts
+        # on the emitted SVG that FOV, TARGET and PRED all carry this class.
+        self.assertIn('class="flbl"', HUD_JS, "the FOR legend must be drawn with the smallest tier")
         self.assertIn('class="lbl" fill="', HUD_JS,
                       "target identity must be drawn on the candidate tier")
-        self.assertGreaterEqual(HUD_JS.count('class="tlbl"'), 5,
+        # 3: the FOR inset's title and envelope caption, the other two, were removed on 2026-10-21.
+        self.assertGreaterEqual(HUD_JS.count('class="tlbl"'), 3,
                                 "the tape scale must stay on the scale tier")
 
 
