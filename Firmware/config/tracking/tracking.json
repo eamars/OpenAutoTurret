@@ -45,7 +45,7 @@
    "q_max_rad": 0.0
   },
   "pitch": {
-   "lambda_rad_s": 2.5,
+   "lambda_rad_s": 4.0,
    "v_max_rad_s": 10.47,
    "a_max_rad_s2": 1.0472,
    "j_max_rad_s3": 26.18,
@@ -70,9 +70,9 @@
  "jacobian_det_min": 0.001,
  "stage2": {
   "estimator": "prior (stage 1): R and q_a need a moving subject (stage 2)",
-  "level1": "yaw lambda 6 chosen 2026-10-20 from the closed-loop simulation with the camera measured 2026-10-19 (drive review proposal 4, run/drive-review-20261019/tools/lambda_choice.py: rise 0.64 s vs 0.92 s at lambda 4, overshoot <=0.02 deg, a_max/v_max never reached for steps <=30 deg); pitch lambda unchanged (2.5, owner ruling on the dead band); limits by owner ruling (100 RPM, physical capability). The stage-2 lambda solve does not exist in the tree.",
+  "level1": "yaw lambda 6 chosen 2026-10-20 from the closed-loop simulation with the camera measured 2026-10-19 (drive review proposal 4, run/drive-review-20261019/tools/lambda_choice.py: rise 0.64 s vs 0.92 s at lambda 4, overshoot <=0.02 deg, a_max/v_max never reached for steps <=30 deg); pitch lambda 2.5 -> 4 on 2026-10-20 (drive review proposal 7, owner approved): only the approach to the dead band's edge is stiffer, the band, its 3 deg/s centring and the no-pass ruling are unchanged; sim 10 deg into 0.5 deg 3.1 s vs 4.8 s, overshoot 0.01 deg; limits by owner ruling (100 RPM, physical capability). The stage-2 lambda solve does not exist in the tree.",
   "pixel_sigma_px": "prior (stage 1): measured from a still subject in stage 2",
   "timing": "measured 2026-10-02 (tracking.py timing, sessions timing-timing-1, timing-fixed8ms-timing-1): uncertainty 3.9 ms"
  },
- "assembled": "2026-10-20T13:05:15 (yaw lambda 4 -> 6 from the drive review, by hand from the 10-02 assembly)"
+ "assembled": "2026-10-20T18:00:00 (yaw lambda 4 -> 6 and pitch lambda 2.5 -> 4 from the drive review, by hand from the 10-02 assembly)"
 }
