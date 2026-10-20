@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <string>
 #include "mode/mode_manager.hpp"
+#include "mode/target_type.hpp"
 
 namespace ota {
 namespace web {
@@ -65,6 +66,7 @@ inline constexpr int kYawIx = 1;
 //   start_payload_verification, select_payload_profile <name>,
 //   request_park, request_shutdown,
 //   set_speed <patrol_wide|patrol_detail|track>=<deg/s|default>  (this session only),
+//   set_target_type <HUMAN|HEAD|CAT|DOG>  (what is followed; saved across restarts),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -150,6 +152,18 @@ inline CommandResult validate_command(const SystemCommandState& s,
         r.error = "set_speed value must be a positive speed in deg/s";
         return r;
       }
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "set_target_type") {
+    // What the turret follows (owner, 2026-10-20). It moves nothing by itself -- a change holds the
+    // turret while perception swaps its model -- so, like set_speed, it is allowed before homing and
+    // in a fault.
+    TargetType t;
+    if (!target_type_from_name(arg, t)) {
+      r.error = "set_target_type needs HUMAN, HEAD, CAT or DOG";
+      return r;
     }
     r.ok = true;
     return r;

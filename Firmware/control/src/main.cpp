@@ -587,6 +587,11 @@ int main(int argc, char** argv) {
     }
     std::string wp_err;
     loop.set_watch_point_store(wp_path, wp_err);  // logs what it found
+    // The operator's target type (HUMAN/HEAD/CAT/DOG, owner 2026-10-20) lives beside it.
+    std::string tt_path;
+    if (!wp_path.empty()) tt_path = (std::filesystem::path(wp_path).parent_path() / "target_type.json").string();
+    std::string tt_err;
+    loop.set_target_type_store(tt_path, tt_err);  // logs what it found
   }
   web::WebServer::Config web_cfg;
   if (const char* sp = std::getenv("OTA_WEB_SOCKET")) web_cfg.socket_path = sp;

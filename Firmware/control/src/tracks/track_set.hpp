@@ -116,6 +116,7 @@ struct TrackSet {
     uint64_t generation = 0, track_set_sequence = 0;
     uint8_t state = 0; // NO_TARGET, VISIBLE, OCCLUDED, LOST, AMBIGUOUS, STALE
     bool valid = false, just_reacquired = false, narrow_view = false;
+    uint8_t target_type = 0;  // perception's applied target type code (0 none; see mode/target_type.hpp)
     float association_quality = 0, identity_confidence = 0, ambiguity = 0;
   } observation;
   uint64_t frame_sequence = 0;

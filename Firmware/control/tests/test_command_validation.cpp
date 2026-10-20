@@ -224,3 +224,14 @@ TEST(CommandValidation, SetSpeedTakesAKnownKeyAndAPositiveSpeedOrDefault) {
   EXPECT_FALSE(validate_command(s, "set_speed", "track=0").ok);
   EXPECT_FALSE(validate_command(s, "set_speed", "track=nan").ok);
 }
+
+TEST(CommandValidation, TargetTypeIsAllowedBeforeHomingAndOnlyTheFourTypes) {
+  // Owner, 2026-10-20: it moves nothing by itself (a change holds the turret while perception
+  // swaps its model), so like set_speed it is allowed unhomed and in a fault.
+  SystemCommandState s;
+  s.fault = true;
+  for (const char* t : {"HUMAN", "head", " Cat ", "DOG"})
+    EXPECT_TRUE(validate_command(s, "set_target_type", t).ok) << t;
+  EXPECT_FALSE(validate_command(s, "set_target_type", "bird").ok);
+  EXPECT_FALSE(validate_command(s, "set_target_type", "").ok);
+}

@@ -41,6 +41,7 @@
 #include "mode/manual_controller.hpp"
 #include "mode/roam_planner.hpp"
 #include "mode/surveillance_planner.hpp"
+#include "mode/target_type.hpp"
 #include "mode/watch_point.hpp"
 #include "tracking/auto_track_controller.hpp"
 #include "tracks/target_selection_manager.hpp"
@@ -321,6 +322,11 @@ class ControlLoop {
   // station then starts with no watch point rather than a half-read one.
   bool set_watch_point_store(const std::string& path, std::string& err);
   const WatchPoint& watch_point() const { return watch_; }
+  // What the turret follows: HUMAN, HEAD, CAT or DOG (owner, 2026-10-20; mode/target_type.hpp).
+  // Loaded once from `path` (empty: this session only); a missing file is the default, HEAD.
+  bool set_target_type_store(const std::string& path, std::string& err);
+  TargetType target_type() const { return target_type_; }
+  bool target_type_switching() const { return tswitch_.active; }
   // The mode the automatic cycle returns to after a loss: AUTO_ROAM, or SURVEILLANCE once the
   // operator has chosen it. HOME and a restart go back to AUTO_ROAM (owner ruling 2026-10-03).
   OperatingMode auto_return_mode() const { return auto_return_mode_; }
@@ -892,6 +898,24 @@ class ControlLoop {
   OperatingMode auto_return_mode_ = OperatingMode::AutoRoam;
   WatchPoint watch_;
   std::unique_ptr<WatchPointStore> watch_store_;
+  // The operator's target type and the switch to it (owner, 2026-10-20). While a switch is active
+  // the turret holds in MANUAL with the automatic cycle frozen; it ends when perception's frames
+  // carry the requested type, and the mode the turret was in resumes. Not a fault if it never does:
+  // after kTargetSwitchPatienceNs it stays held and says so.
+  TargetType target_type_ = kDefaultTargetType;
+  std::unique_ptr<TargetTypeStore> target_store_;
+  struct TargetSwitch {
+    bool active = false;
+    bool overdue = false;
+    TimeNs since_ns = 0;
+    TimeNs matched_since_ns = 0;
+    OperatingMode resume = OperatingMode::Manual;
+  } tswitch_;
+  static constexpr TimeNs kTargetSwitchSettleNs = 300'000'000;    // frames of the new type, steadily
+  static constexpr TimeNs kTargetSwitchPatienceNs = 10'000'000'000;
+  void execute_set_target_type(const std::string& arg);
+  void step_target_switch(TimeNs now_ns);
+  TargetType applied_target_type(TimeNs now_ns) const;
   SurveillanceState last_surveil_state_ = SurveillanceState::Idle;
   bool surveil_unusable_ = false;   // entered, but the point did not resolve: holding, said once
   // The resolved point as published (5 Hz: resolving asks the yaw drive for its absolute angle).

@@ -1939,6 +1939,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // Drive-mode item 4: the automatic AUTO_TRACK <-> AUTO_ROAM hand-off, checked before the intent is built
     // so a switch that happens now takes effect this cycle rather than being a cycle late. Inert while both
     // keys are 0 (the shipped default), in which case evaluate_auto_switch() returns immediately.
+    step_target_switch(now_ns);
     evaluate_auto_switch(now_ns);
     last_intent_ = build_mode_intent(now_ns);
     // §36/§44 across every handover, not just the one the section is titled after.
@@ -3808,6 +3809,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // target only on the way back to a watch point), and the point itself, in this session's
     // joints for the tapes. Re-resolved at 5 Hz: it asks the yaw drive for its absolute angle.
     snap.auto_return_mode = operating_mode_name(auto_return_mode_);
+    snap.target_type = target_type_name(target_type_);
+    snap.target_type_applied = target_type_name(applied_target_type(now_ns));
+    snap.target_type_switching = tswitch_.active;
+    snap.target_type_overdue = tswitch_.overdue;
     snap.watch_point_set = watch_.valid;
     snap.watch_point_saved = watch_store_ ? watch_store_->last_result() : -1;
     snap.watch_point_persistent = watch_store_ && watch_store_->persistent();
@@ -4603,6 +4608,88 @@ bool ControlLoop::set_watch_point_store(const std::string& path, std::string& er
     spdlog::info("no watch point saved{}; SURVEILLANCE waits for MODE > SET WATCH POINT",
                  path.empty() ? " (no state directory: a new one lasts this session only)" : "");
   return ok;
+}
+
+bool ControlLoop::set_target_type_store(const std::string& path, std::string& err) {
+  err.clear();
+  target_type_ = kDefaultTargetType;
+  bool ok = true;
+  if (!path.empty()) {
+    TargetType t;
+    if (load_target_type(path, t, err)) target_type_ = t;
+    else if (!err.empty()) ok = false;
+  }
+  target_store_ = std::make_unique<TargetTypeStore>(path);
+  if (!ok)
+    spdlog::error("target type file {} not used: {}; following {} (the default)", path, err,
+                  target_type_name(target_type_));
+  else
+    spdlog::info("target type {}{}", target_type_name(target_type_),
+                 path.empty() ? " (no state directory: a change lasts this session only)" : "");
+  return ok;
+}
+
+TargetType ControlLoop::applied_target_type(TimeNs now_ns) const {
+  // The type the newest native frame was produced for, while the frames are fresh.
+  const auto& set = selection_.last_set();
+  if (!set.observation.native || last_set_receive_ns_ <= 0 || now_ns - last_set_receive_ns_ > 250'000'000LL)
+    return TargetType::None;
+  return target_type_from_code(set.observation.target_type);
+}
+
+void ControlLoop::execute_set_target_type(const std::string& arg) {
+  const std::string name = "set_target_type";
+  TargetType wanted;
+  if (!target_type_from_name(arg, wanted)) {
+    ack_command(name, false, "set_target_type needs HUMAN, HEAD, CAT or DOG");
+    return;
+  }
+  const TargetType before = target_type_;
+  target_type_ = wanted;
+  if (target_store_ && wanted != before) target_store_->save(wanted);
+  if (applied_target_type(now_ns_) == wanted && !tswitch_.active) {
+    ack_command(name, true, std::string("following ") + target_type_name(wanted));
+    return;
+  }
+  // Hold through the swap. A homed, holding turret drops what it follows and holds where it is (MANUAL);
+  // the mode it was in resumes afterwards. AUTO_TRACK resumes as the mode its loss returns to: the
+  // target it was following is gone with the old model.
+  if (!tswitch_.active) {
+    const OperatingMode m = mode_mgr_.mode();
+    tswitch_.resume = m == OperatingMode::AutoTrack ? auto_return_mode_ : m;
+    if (m != OperatingMode::Manual && phase_ == Phase::Hold) request_mode(OperatingMode::Manual);
+  }
+  tswitch_.active = true;
+  tswitch_.overdue = false;
+  tswitch_.since_ns = now_ns_;
+  tswitch_.matched_since_ns = 0;
+  spdlog::info("target type {} -> {}: holding until perception's frames carry it; then {}", target_type_name(before),
+               target_type_name(wanted), operating_mode_name(tswitch_.resume));
+  ack_command(name, true, std::string("switching to ") + target_type_name(wanted) + "; holding until it is applied");
+}
+
+void ControlLoop::step_target_switch(TimeNs now_ns) {
+  if (!tswitch_.active) return;
+  if (applied_target_type(now_ns) == target_type_) {
+    if (tswitch_.matched_since_ns == 0) tswitch_.matched_since_ns = now_ns;
+    if (now_ns - tswitch_.matched_since_ns < kTargetSwitchSettleNs) return;
+    tswitch_.active = false;
+    const OperatingMode resume = tswitch_.resume;
+    const bool resuming = resume != OperatingMode::Manual && phase_ == Phase::Hold &&
+                          mode_mgr_.mode() == OperatingMode::Manual;
+    spdlog::info("target type {} applied after {:.2f} s{}", target_type_name(target_type_),
+                 (now_ns - tswitch_.since_ns) * 1e-9,
+                 resuming ? std::string("; resuming ") + operating_mode_name(resume) : std::string());
+    if (resuming) request_mode(resume);
+    return;
+  }
+  tswitch_.matched_since_ns = 0;
+  if (!tswitch_.overdue && now_ns - tswitch_.since_ns > kTargetSwitchPatienceNs) {
+    tswitch_.overdue = true;
+    // Not a hazard: the turret is held and stays held (fault/hold ruling, 2026-10-02).
+    spdlog::warn("target type {} not applied by perception after {} s; holding in MANUAL until it is "
+                 "(or another type is chosen)", target_type_name(target_type_), kTargetSwitchPatienceNs / 1'000'000'000);
+  }
 }
 
 bool ControlLoop::watch_point_target(double q_yaw_now, double& q_yaw, double& q_pitch,
@@ -5615,6 +5702,12 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   // The deployed profile enables automatic acquisition and loss recovery.
   // A zero dwell disables the corresponding hand-off for commissioning.
   if (cfg_.auto_roam_on_loss_ms <= 0 && cfg_.auto_track_on_acquire_ms <= 0) return;
+  // Frozen while the target type changes: the old model's last tracks are not a reason to move.
+  if (tswitch_.active) {
+    loss_since_ns_ = 0;
+    acquire_since_ns_ = 0;
+    return;
+  }
 
   // Only ever considered from Ready. A homing / parking / fault station is not "looking for a target", it is doing
   // something the supervisor asked for, and stealing the mode out from under that would be a safety regression
@@ -5926,6 +6019,31 @@ void ControlLoop::execute_command(const std::string& name,
                 std::to_string(param_tx_.revision())+", hash "+
                 (param_tx_.applied_hash().empty() ? "none" : param_tx_.applied_hash())+
                 "): "+param_tx_.last_reason()); return;
+  }
+  // A target type switch holds the turret while perception changes model (owner, 2026-10-20): no
+  // motion of the operator's own until the new type's frames arrive; a mode asked for meanwhile is
+  // the one resumed afterwards.
+  if (tswitch_.active && (name=="manual_jog_start" || name=="manual_step" || name=="response_probe" ||
+      name=="run_test_motion" || name=="start_tracking")) {
+    ack_command(name, false, std::string("switching target type to ") + target_type_name(target_type_) +
+                "; the turret holds until the new model's frames arrive");
+    return;
+  }
+  if (tswitch_.active && name == "set_mode") {
+    OperatingMode target;
+    if (!operating_mode_from_name(arg.c_str(), target)) {
+      ack_command(name, false, "unknown mode '" + arg + "'; expected MANUAL, AUTO_TRACK, AUTO_ROAM or SURVEILLANCE");
+      return;
+    }
+    tswitch_.resume = target == OperatingMode::AutoTrack ? auto_return_mode_ : target;
+    if (target == OperatingMode::AutoRoam || target == OperatingMode::Surveillance) auto_return_mode_ = target;
+    ack_command(name, true, std::string(operating_mode_name(tswitch_.resume)) +
+                " after the switch to " + target_type_name(target_type_));
+    return;
+  }
+  if (name == "set_target_type") {
+    execute_set_target_type(arg);
+    return;
   }
   if (phase_ == Phase::Recovering) {
     if (name == "stop_motion" || name == "hold") stop_motion();

@@ -3294,3 +3294,89 @@ TEST(Surveillance, TheWatchPointNamesTheSameDirectionAfterARestart) {
   }
   std::filesystem::remove_all(dir);
 }
+
+namespace {
+// A native perception frame with no candidates, produced for target type `code` (0 none).
+tracks::TrackSet typed_frame(uint32_t seq, TimeNs t, uint8_t code) {
+  auto set = two_people(seq, t, 1, 2);
+  set.count = 0;
+  set.width = 1920;
+  set.height = 1080;
+  set.observation.native = true;
+  set.observation.session = {1, 1};
+  set.observation.generation = 1;
+  set.observation.track_set_sequence = seq;
+  set.observation.state = 0;
+  set.observation.valid = false;
+  set.observation.target_type = code;
+  return set;
+}
+}  // namespace
+
+TEST(TargetTypeSwitch, HoldsThroughTheSwapThenResumesTheModeItWasIn) {
+  // Owner, 2026-10-20: drop the target, hold energised, no automatic mode changes, and resume the
+  // mode the turret was in once perception's frames carry the new type.
+  HomedLoop h(true, 0, false, true);
+  ASSERT_TRUE(h.ready);
+  uint32_t seq = 0;
+  auto frames = [&](uint8_t code, int cycles) {
+    for (int i = 0; i < cycles; ++i) {
+      if (i % 6 == 0) h.loop->feed_track_set(typed_frame(++seq, h.t, code), h.t);
+      h.step(1);
+    }
+  };
+  h.run("set_mode", "AUTO_ROAM");
+  frames(2, 100);
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  ASSERT_EQ(h.snap().target_type_applied, "HEAD");
+
+  h.run("set_target_type", "CAT");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual) << "held while the model changes";
+  EXPECT_TRUE(h.snap().target_type_switching);
+  EXPECT_EQ(h.snap().target_type, "CAT");
+
+  h.run("manual_jog_start", "yaw+");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0) << "no motion of the operator's own during the swap";
+
+  frames(2, 200);  // the old model's frames are not the new type
+  EXPECT_TRUE(h.snap().target_type_switching);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+
+  frames(3, 120);  // 0.6 s of CAT frames
+  EXPECT_FALSE(h.snap().target_type_switching);
+  EXPECT_EQ(h.snap().target_type_applied, "CAT");
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "the mode it was in resumes";
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(TargetTypeSwitch, AModeAskedForDuringTheSwapIsTheOneResumed) {
+  HomedLoop h(true, 0, false, true);
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(20);
+  h.run("set_target_type", "DOG");
+  h.run("set_mode", "MANUAL");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1);
+  uint32_t seq = 0;
+  for (int i = 0; i < 150; ++i) {
+    if (i % 6 == 0) h.loop->feed_track_set(typed_frame(++seq, h.t, 4), h.t);
+    h.step(1);
+  }
+  EXPECT_FALSE(h.snap().target_type_switching);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+}
+
+TEST(TargetTypeSwitch, AnUnappliedTypeHoldsAndSaysSoWithoutFaulting) {
+  // Perception never applies it (no frames at all): not a hazard, so not a fault (2026-10-02).
+  HomedLoop h(true, 0, false, true);
+  ASSERT_TRUE(h.ready);
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(20);
+  h.run("set_target_type", "CAT");
+  h.step(2100);  // 10.5 s
+  EXPECT_TRUE(h.snap().target_type_switching);
+  EXPECT_TRUE(h.snap().target_type_overdue);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}

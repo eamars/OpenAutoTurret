@@ -539,6 +539,13 @@ struct TelemetrySnapshot {
   // known); written to a state directory or this session only; the last write's outcome (1 ok,
   // 0 failed, -1 none yet); and where it is, in this session's joints (NaN when not resolvable).
   std::string auto_return_mode = "AUTO_ROAM";
+  // What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
+  // fresh frame was produced for ("" while none), whether the turret is holding for the switch, and
+  // whether that switch is overdue (perception has not applied it within 10 s).
+  std::string target_type = "HEAD";
+  std::string target_type_applied;
+  bool target_type_switching = false;
+  bool target_type_overdue = false;
   bool watch_point_set = false;
   bool watch_point_usable = false;
   bool watch_point_persistent = false;
