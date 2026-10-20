@@ -288,6 +288,31 @@ TEST(RestPark, ShutdownWritesItsStopRecordAndTheShutdownLineCarriesItsId) {
   fs::remove_all(dir);
 }
 
+TEST(RestPark, PitchSpringingBackOffTheStopThenRestingIsStillStationary) {
+  // Station, 2026-10-21: releasing the 0.8 N.m push lets pitch spring back ~0.3 deg off the stop,
+  // more than the claim's tolerance, and then it rests. "Stationary" is about now, not the release.
+  namespace fs = std::filesystem;
+  Station s;
+  const fs::path dir = fs::temp_directory_path() / ("ota-rest-spring-" + std::to_string(::getpid()));
+  fs::remove_all(dir);
+  s.loop->set_trace_archive_dir(dir.string());
+  ASSERT_TRUE(s.home());
+  s.run("request_shutdown");
+  ASSERT_TRUE(s.until([&] { return s.stage() == "releasing" || s.saw_fault; }));
+  s.step(20);  // 100 ms into the release
+  s.sim->set_position(AxisId::Pitch, s.sim->position(AxisId::Pitch) + 0.3 * kDeg2Rad);
+  const int64_t sprang_at = s.t;
+  ASSERT_TRUE(s.until([&] { return s.loop->phase() == Phase::Idle || s.saw_fault; }));
+  EXPECT_GE(s.t - sprang_at, static_cast<int64_t>(rest_cfg().park.dwell_ms) * 1'000'000)
+      << "the record waits for the dwell after the last motion";
+  s.loop->wait_for_evidence();
+  std::ifstream in(dir / "stop-evidence.ndjson");
+  std::string line;
+  ASSERT_TRUE(std::getline(in, line));
+  EXPECT_NE(line.find("\"completion_quality\":\"verified\""), std::string::npos) << line;
+  fs::remove_all(dir);
+}
+
 TEST(RestPark, ABootIntoShutdownStaysOffUntilHome) {
   // Owner, 2026-10-03: two states, Homed or Shutdown, and a boot is Shutdown (like a printer's
   // firmware: up and reachable, motors off, nothing moves until Home). controld's

@@ -655,9 +655,12 @@ class ControlLoop {
     Phase unhomed_from = Phase::Idle;
     double lift_from_rad = 0, lift_speed_rad_s = 0;
     std::string then_command, then_arg;  // Lift: the mode command that runs once pitch is in
-    // Release: where each axis was when the motors were first asked off, and the furthest either
-    // has moved from there since -- the stop record's stationary claim.
-    std::array<double, kAxisCount> release_q{}, release_moved{};
+    // Release: each axis's resting position and since when it has stayed within the park tolerance
+    // of it -- the stop record's stationary claim. The anchor moves with the axis, because pitch
+    // springs back ~0.3 deg off the stop when the push is released (station, 2026-10-21) and then
+    // rests; what matters is that it is still now, not that it never moved after the release.
+    std::array<double, kAxisCount> release_q{};
+    std::array<TimeNs, kAxisCount> release_still_since_ns{};
   } rest_park_;
   // Lift: up to 10 deg/s, reached at 20 deg/s^2 from the stop, slowing into the approach pose.
   static constexpr double kRestLiftSpeedRadS = 10.0 * kDeg2Rad;

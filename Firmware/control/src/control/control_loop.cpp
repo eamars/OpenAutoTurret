@@ -906,17 +906,17 @@ void ControlLoop::note_rest_park_evidence(const AxisSnapshot sp[kAxisCount], Tim
   ev.axes[1].zero_requested = Evidence::Requested;
   ev.axes[1].disable_requested = Evidence::Unsupported;  // the GM6020 has no disable to confirm
   ev.axes[1].disable_confirmed = Evidence::Unsupported;
-  // Stationary: neither axis moved further than the park's own pose tolerance from where it was
-  // when the motors were first asked off, over the whole release.
-  const double tol = .5 * cfg_.park.pos_tol_deg * kDeg2Rad;
-  const long long window = rest_park_.last_disable_ns ? now_ns - rest_park_.since_ns : 0;
+  // Stationary: the axis has stayed within half the park pose tolerance for at least the park
+  // dwell, with motors off. The window published is how long it has.
+  const TimeNs dwell = static_cast<TimeNs>(cfg_.park.dwell_ms) * 1'000'000;
   for (int a : {P, Y}) {
     auto& axis = ev.axes[a == P ? 0 : 1];
     axis.last_neutral_request_ns = rest_park_.last_disable_ns;
     if (sp[a].has_feedback && sp[a].rx_ns > 0) axis.feedback_age_ms = static_cast<double>(now_ns - sp[a].rx_ns) / 1e6;
-    if (window > 0 && rest_park_.release_moved[a] <= tol) {
+    const TimeNs still = rest_park_.last_disable_ns ? now_ns - rest_park_.release_still_since_ns[a] : 0;
+    if (still >= dwell && still > 0) {
       axis.stationary_observed = Evidence::Observed;
-      axis.stationary_window_ns = window;
+      axis.stationary_window_ns = still;
     }
   }
   ev.finalise();
@@ -989,16 +989,13 @@ bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_n
     }
     case RestPark::Release: {
       const bool confirmed = pitch.has_feedback && pitch.disabled_known && pitch.disabled;
-      if (!rest_park_.last_disable_ns) {
-        for (int i = 0; i < kAxisCount; ++i) {
-          rest_park_.release_q[i] = sp[i].q_rad;
-          rest_park_.release_moved[i] = 0.0;
-        }
-      }
+      const double still_tol = .5 * cfg_.park.pos_tol_deg * kDeg2Rad;
       for (int i = 0; i < kAxisCount; ++i) {
         const double moved = std::abs(sp[i].q_rad - rest_park_.release_q[i]);
-        rest_park_.release_moved[i] = std::isfinite(moved)
-            ? std::max(rest_park_.release_moved[i], moved) : std::numeric_limits<double>::infinity();
+        if (!rest_park_.last_disable_ns || !(moved <= still_tol)) {
+          rest_park_.release_q[i] = sp[i].q_rad;
+          rest_park_.release_still_since_ns[i] = now_ns;
+        }
       }
       if (!rest_park_.last_disable_ns ||
           (!confirmed && now_ns - rest_park_.last_disable_ns >= 100'000'000)) {
@@ -1009,13 +1006,16 @@ bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_n
       }
       const bool timed_out = now_ns - rest_park_.since_ns >= 2'000'000'000;
       if (!confirmed && !timed_out) return true;
-      // The drive confirms off in about 10 ms, and "stationary for 10 ms" is no claim at all: keep
-      // watching both axes for the park dwell (500 ms on the station) before the record is written.
-      if (confirmed && now_ns - rest_park_.since_ns < static_cast<TimeNs>(cfg_.park.dwell_ms) * 1'000'000)
-        return true;
+      // The drive confirms off in about 10 ms, and "stationary for 10 ms" is no claim at all: wait
+      // until both axes have rested for the park dwell (500 ms on the station), or 3 s at most.
+      const TimeNs dwell = static_cast<TimeNs>(cfg_.park.dwell_ms) * 1'000'000;
+      const bool rested = now_ns - std::max(rest_park_.release_still_since_ns[0],
+                                            rest_park_.release_still_since_ns[1]) >= dwell;
+      if (confirmed && !rested && now_ns - rest_park_.since_ns < 3'000'000'000) return true;
       if (confirmed)
-        spdlog::info("SHUT DOWN: yaw at {:+.1f} deg, pitch on its rest stop, both motors switched off; "
-                     "Home starts it again", last_q_[ix(AxisId::Yaw)] * kRad2Deg);
+        spdlog::info("SHUT DOWN: yaw at {:+.1f} deg, pitch on its rest stop ({:+.2f} deg from the touch once "
+                     "released), both motors switched off; Home starts it again", last_q_[ix(AxisId::Yaw)] * kRad2Deg,
+                     (pitch.q_rad - rest_park_.pitch_hold_rad) * kRad2Deg);
       else
         spdlog::error("SHUT DOWN: pitch disable not confirmed by feedback within 2 s; its STOP requests "
                       "continue (yaw has no disable to confirm)");
