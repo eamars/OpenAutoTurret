@@ -103,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="publish atomic native observation and candidate-list frames to controld")
     parser.add_argument("--selection-socket", default="/tmp/ota-selection.sock",
                         help="local UUID selection/ACK socket; empty disables the service")
+    parser.add_argument("--pin-profile", action="store_true",
+                        help="keep --profile's model and classes: target type requests from the controller "
+                             "are acknowledged, not applied (developer runs on a chosen profile)")
     parser.add_argument('--controller-state-url', default='',
                         help='read-only controller state for optional AUTO_SELECT_SINGLE: unix:<controld web socket> '
                              '(the launcher) or an HTTP /api/state URL')
@@ -398,6 +401,12 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
 
     try:
         adapter = build_adapter(config, manifest=manifest)
+        if not isinstance(adapter, MockAdapter):
+            # The operator's target type can need the other network (perception/target_type.py): one
+            # adapter object for the daemon's life, whose model the pipeline swaps between frames.
+            from .model.swappable import SwappableAdapter
+            adapter = SwappableAdapter(adapter, profile=config.profile,
+                                       build=lambda profile: build_adapter(config, profile=profile))
         # "What I cannot see has not been updated": the backend publishes its own self-report once a
         # second so the web surface can say, in one glance, which network is producing the tracks.
         # The path defaults to beside the stream manifest, so a station that set one has the other.
@@ -437,7 +446,10 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
                                   session_uuid=args.session_uuid or "", orientation=orientation)
     if args.selection_socket and not args.legacy_track_wire:
         pipeline.selection_service = SelectionService(args.selection_socket)
-    if args.controller_state_url and pipeline.selector.auto.enabled:
+    pipeline.pin_profile = bool(args.pin_profile)
+    # Always read when there is a controller to read: besides the optional auto-select, it carries the
+    # operator's target type, which the pipeline follows between frames.
+    if args.controller_state_url:
         pipeline.controller_context = ControllerContext(args.controller_state_url)
     lores: Optional[Tuple[int, int]] = None      # set by the profile that asks for a second leg
     camera: Optional[CameraOwner] = None

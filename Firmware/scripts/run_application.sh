@@ -91,6 +91,10 @@ if [ "$ACTION" = stop ]; then
   exit 1
 fi
 PROFILE=hailo_yolov8s_pose   # person boxes + COCO-17 keypoints; the aim anchor is the head (2026-10-02)
+# A plain start follows the operator's target type (HUMAN/HEAD/CAT/DOG, owner 2026-10-20): visiond starts
+# on this profile and swaps to the persisted type. An explicit --profile pins the model for a developer
+# run: visiond acknowledges type requests without changing its model or classes.
+PROFILE_PINNED=0
 FRAMES=0
 MODE=hardware
 START_WEB=1
@@ -150,7 +154,7 @@ while [ $# -gt 0 ]; do
     --no-web) START_WEB=0; shift ;;
     --home) START_STATE_HOME=1; shift ;;
     --production) PRODUCTION=1; shift ;;
-    --profile) PROFILE="${2:?--profile requires a name}"; shift 2 ;;
+    --profile) PROFILE="${2:?--profile requires a name}"; PROFILE_PINNED=1; shift 2 ;;
     --frames) FRAMES="${2:?--frames requires a count}"; shift 2 ;;
     --dev) set -x; shift ;;
     --probe-build) PROBE_BUILD=1; shift ;;
@@ -681,6 +685,7 @@ vision_args=(--config perception/configs/perception_v1.json --profile "$PROFILE"
              --max-frames "$FRAMES" --publish-dir "$RUN/perception"
              --selection-socket "$OTA_SELECTION_SOCKET")
 if [ "$PRODUCTION" -eq 1 ]; then vision_args+=(--production); fi
+if [ "$PROFILE_PINNED" -eq 1 ]; then vision_args+=(--pin-profile); fi
 # Validate before any controller can home or enable motors.
 if [ "$MODE" != mixed-controller-commission ]; then
   "$PY" -c 'import sys; from perception.visiond import build_parser,load_config; load_config(build_parser().parse_args(sys.argv[1:]))' "${vision_args[@]}"

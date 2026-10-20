@@ -111,6 +111,8 @@ class TrackSet:
     #: wide frame. Carried on the native wire (flags bit 1) so the control loop can pace AUTO_ROAM
     #: to the field of view the operator is actually watching.
     narrow_view: bool = False
+    #: The target type applied when this set was produced (perception/target_type.py codes; 0 = none).
+    target_type_code: int = 0
     model_id: str = ""
     model_generation: int = 0
     tracks: List[Track] = field(default_factory=list)

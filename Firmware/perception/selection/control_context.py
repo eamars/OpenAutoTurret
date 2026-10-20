@@ -106,7 +106,8 @@ class ControllerContext:
         return (observed, stamp, str(uuid.UUID(int=(hi << 64) | lo)),
                 state['operating_mode'] if native else '',
                 str(state.get('mode_phase', '')) if native else '',
-                str(state.get('auto_return_mode', '')) if native else '')
+                str(state.get('auto_return_mode', '')) if native else '',
+                str(state.get('target_type', '')))
 
     def allows_auto_select(self, session_uuid, now_ns):
         return self.operating_mode(session_uuid, now_ns) in AUTO_MODES
@@ -122,22 +123,30 @@ class ControllerContext:
             surveillance=mode == 'SURVEILLANCE' or (mode == 'AUTO_TRACK' and return_mode == 'SURVEILLANCE'),
             controller_lost=mode == 'AUTO_TRACK' and phase in LOST_PHASES)
 
-    def _fresh(self, session_uuid, now_ns):
-        """(mode, mode_phase, auto_return_mode) of a fresh sample for this session, else blanks."""
+    def requested_target_type(self, session_uuid, now_ns):
+        """The operator's target type (HUMAN/HEAD/CAT/DOG) from a fresh sample of this session, else ''.
+
+        Not gated on the native wire: before the first native frame controld has not seen this session
+        yet, so the session check below already refuses it, and a stale sample asks for nothing."""
+        return self._fresh(session_uuid, now_ns, with_type=True)[3]
+
+    def _fresh(self, session_uuid, now_ns, with_type=False):
+        """(mode, mode_phase, auto_return_mode[, target_type]) of a fresh sample for this session, else blanks."""
         with self._lock:
             sample = self._state
+        blank = ('', '', '', '') if with_type else ('', '', '')
         if sample is None:
-            return '', '', ''
+            return blank
         received, stamp, session, mode, *rest = sample
-        phase, return_mode = (list(rest) + ['', ''])[:2]
+        phase, return_mode, requested = (list(rest) + ['', '', ''])[:3]
         try:
             same_session = uuid.UUID(session) == uuid.UUID(session_uuid)
         except (ValueError, TypeError, AttributeError):
-            return '', '', ''
+            return blank
         if (same_session and 0 <= now_ns-received <= 250_000_000 and
                 0 <= now_ns-stamp <= 250_000_000):
-            return mode, phase, return_mode
-        return '', '', ''
+            return (mode, phase, return_mode, requested) if with_type else (mode, phase, return_mode)
+        return blank
 
     def close(self):
         self._stop.set()

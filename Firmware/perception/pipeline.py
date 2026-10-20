@@ -30,6 +30,7 @@ retired code's habit of returning an empty result on error is what made "no dete
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -76,6 +77,7 @@ from .protocol.track_set import TrackSet
 from .replay.recorder import Recorder
 from .selection.control_context import SelectionFlags
 from .selection.target_selection_manager import TargetSelectionManager
+from .target_type import target_type
 from .tracking.diagnostics import AssociationDiagnostics
 from .tracking.track_manager import TrackManager
 
@@ -392,6 +394,13 @@ class PerceptionPipeline:
         self.deduplicator = DetectionDeduplicator(config.dedup, anchor_cfg=config.anchor,
                                                   event_log=self.events)
         self.permitted = tuple(config.active_model.permitted_classes or ())
+        # The operator's target type (perception/target_type.py), followed between frames: None until
+        # one has been applied (the launcher's profile as configured). ``pin_profile``: a developer run
+        # on a chosen profile acknowledges requests without applying them.
+        self.applied_target_type = None
+        self.pin_profile = False
+        self.target_type_swaps: Dict[str, int] = {"applied": 0, "model_changes": 0, "failures": 0}
+        self._target_type_retry_ns = 0
         self.counters = PipelineCounters()
         self._stats: Dict[str, RingStats] = {
             stage: RingStats(stage, int(config.timing_window)) for stage in STAGES}
@@ -400,6 +409,59 @@ class PerceptionPipeline:
         self._unmeasured: set = set()
         self._running = False
         self._deselect_reasons: Dict[str, int] = {}
+
+    # -- the operator's target type -------------------------------------------
+    def _follow_target_type(self, sensor_ns: int) -> None:
+        """Between frames: apply the type the controller asks for, if it is not the one applied.
+
+        Called with the inference lock held (InferenceSwitch), so a model swap has no frame in flight.
+        A request is only read from a fresh controller context of this session; a stale one changes
+        nothing. A failed swap is retried every 5 s, not every frame.
+        """
+        ctx = self.controller_context
+        if ctx is None or not hasattr(ctx, "requested_target_type"):
+            return
+        wanted = target_type(ctx.requested_target_type(self.manager.session_uuid, self.clock()))
+        if wanted is None or wanted == self.applied_target_type:
+            return
+        now = self.clock()
+        if now < self._target_type_retry_ns:
+            return
+        try:
+            self.apply_target_type(wanted, sensor_ns)
+        except Exception as exc:  # noqa: BLE001 - the old model keeps running; the controller holds
+            self.target_type_swaps["failures"] += 1
+            self._target_type_retry_ns = now + 5_000_000_000
+            self.events.emit(EventType.MODEL_REJECTED_INCOMPATIBLE, error=f"target type {wanted.name}: {exc}")
+            print(f"visiond: target type {wanted.name} not applied ({exc}); still on "
+                  f"{getattr(self.applied_target_type, 'name', 'the configured profile')}", file=sys.stderr)
+
+    def apply_target_type(self, wanted, sensor_ns: int = 0) -> None:
+        """Run ``wanted``: its model (swapped only when it differs), its classes and aim, no old tracks.
+
+        Every track and the selection are dropped: the operator asked for something else, and a person
+        track must not survive into CAT. A pinned profile acknowledges the type and keeps everything.
+        """
+        previous = self.applied_target_type
+        if not self.pin_profile:
+            started = time.monotonic_ns()
+            swap = getattr(self.adapter, "swap", None)
+            changed = bool(swap(wanted.profile, anchor_target=wanted.anchor)) if callable(swap) else False
+            self.permitted = tuple(wanted.classes)
+            model = self.config.model_for(wanted.profile)
+            self.manager.set_model(model)
+            self.manager.drop_all(sensor_ns, reason=f"target type {wanted.name}")
+            self.selector.drop(reason=f"target type {wanted.name}")
+            if changed:
+                self.target_type_swaps["model_changes"] += 1
+            print(f"visiond: target type {getattr(previous, 'name', '-')} -> {wanted.name}: "
+                  f"{wanted.profile}{' (model swapped)' if changed else ''}, classes {list(wanted.classes)}, "
+                  f"aim {wanted.anchor}, {(time.monotonic_ns() - started) / 1e6:.0f} ms", file=sys.stderr)
+        else:
+            print(f"visiond: target type {wanted.name} acknowledged; the profile is pinned "
+                  f"({getattr(self.adapter, 'profile', '?')})", file=sys.stderr)
+        self.applied_target_type = wanted
+        self.target_type_swaps["applied"] += 1
 
     # -- one frame ----------------------------------------------------------
     def process_frame(self, image: Any, metadata: Any = None, *,
@@ -418,6 +480,7 @@ class PerceptionPipeline:
             marks[name] = self.clock()
 
         try:
+            self._follow_target_type(int(sensor_timestamp_ns))
             mark("inference_start")
             if capture_started_ns is not None:
                 self._record("capture_to_metadata_ms", int(capture_started_ns) -
@@ -528,6 +591,8 @@ class PerceptionPipeline:
             # from which file the frame came.
             track_set.stamp_camera(camera_id)
             track_set.narrow_view = self.view_scale != 1.0
+            track_set.target_type_code = (self.applied_target_type.code
+                                          if self.applied_target_type is not None else 0)
             observation.publish_timestamp_ns = published_ns
             mark("selection_end")
             self._record("selection_update_ms",

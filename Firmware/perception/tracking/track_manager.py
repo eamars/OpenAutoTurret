@@ -124,6 +124,19 @@ class TrackManager:
     def model_generation(self) -> int:
         return self._model_generation
 
+    def set_model(self, model) -> None:
+        """A new model from the next frame on (target type change): its score thresholds.
+
+        Its identity arrives with its first detection set (model_id, and the generation the swap bumped,
+        §33); tracks from the old model are not carried over (drop_all)."""
+        self.thresholds = model.thresholds
+
+    def drop_all(self, sensor_ns: int, *, reason: str) -> None:
+        """Retire every live track (the operator changed what is being followed)."""
+        for track in self._live_tracks():
+            self._retire(track, sensor_ns, reason=reason)
+        self._selected_uuid = None
+
     def set_selected_uuid(self, track_uuid: Optional[str]) -> None:
         """§26 and §25.1 both need to know whom the operator chose."""
         self._selected_uuid = track_uuid or None

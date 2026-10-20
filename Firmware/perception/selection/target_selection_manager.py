@@ -463,6 +463,10 @@ class TargetSelectionManager:
             selected_track_uuid=self.state.selected_uuid,
             selected_display_label=self.state.display_label)
 
+    def drop(self, *, reason: str) -> None:
+        """Release the selection because what is being followed changed (target type)."""
+        self._clear_selection(reason=reason, event=EventType.TARGET_CLEARED, detail=reason)
+
     def _clear_selection(self, *, reason: str, event: EventType, detail: str) -> None:
         if not self.state.has_selection:
             return

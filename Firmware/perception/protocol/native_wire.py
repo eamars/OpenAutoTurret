@@ -33,7 +33,9 @@ def encode_perception_frame(track_set, observation):
         track_set.track_set_sequence,
         int(observation.target_state), int(observation.measurement_valid),
         # bit 0: just reacquired; bit 1: the narrow (detail) view is the one being inferred.
-        int(observation.just_reacquired) | (2 if getattr(track_set, 'narrow_view', False) else 0),
+        # bits 2-4: the target type this frame was produced for (perception/target_type.py), 0 = none.
+        int(observation.just_reacquired) | (2 if getattr(track_set, 'narrow_view', False) else 0)
+        | ((int(getattr(track_set, 'target_type_code', 0)) & 7) << 2),
         bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max, anchor.x, anchor.y,
         observation.detector_score, observation.association_quality,
         observation.identity_confidence, observation.ambiguity,
