@@ -856,9 +856,15 @@ function hudForInset(o) {
     if (fov.x < plot.x) fovWrap = Object.assign({}, fov, { x: fov.x + turn });
     else if (fov.x + fov.w > plot.x + plot.w) fovWrap = Object.assign({}, fov, { x: fov.x - turn });
   }
+  const envPx = o.pts.map((pt) => { const q = toPx(pt[0], pt[1]); return { x: q[0], y: q[1] }; });
+  const ex = envPx.map((p) => p.x), ey = envPx.map((p) => p.y);
   const g = {
     x: x, y: y, w: w, h: h, plot: plot, scale: k, ring: ring,
-    envPx: o.pts.map((pt) => { const q = toPx(pt[0], pt[1]); return { x: q[0], y: q[1] }; }),
+    envPx: envPx,
+    // The drawn map's box: letterboxing centres it in the plot, so the legend anchors to this.
+    map: { x: Math.min.apply(null, ex), y: Math.min.apply(null, ey),
+           w: Math.max.apply(null, ex) - Math.min.apply(null, ex),
+           h: Math.max.apply(null, ey) - Math.min.apply(null, ey) },
     fov: fov, fovWrap: fovWrap,
     los: los,
     target: Array.isArray(o.target) ? clampMark(o.target) : null,
@@ -908,12 +914,13 @@ function hudForInsetSvg(g, C) {
   return parts.join("");
 }
 
-// §11's "short legend": one row in the band above the map, its right end on the map's right edge,
-// so it has a place of its own instead of floating over the envelope's corner (owner, 2026-10-21).
-// Laid out right to left from that edge; text.flbl is 9 px monospace with .06em spacing.
+// §11's "short legend": one row sitting on the drawn map's top edge, its right end on the map's right
+// edge, so it belongs to the map instead of floating over the envelope's corner or the empty box above
+// a letterboxed map (owner, 2026-10-21). Laid out right to left from that edge; text.flbl is 9 px
+// monospace with .06em spacing.
 const HUD_FOR_LEGEND_CHAR_PX = 9 * 0.66;
 function hudForLegendSvg(g, C) {
-  const cy = g.y + g.titleH / 2 + 1;
+  const cy = Math.max(g.y + 6, g.map.y - 7);
   const marks = {
     FOV: (sx) => '<line x1="' + (sx - 4.5) + '" y1="' + cy + '" x2="' + (sx + 4.5) + '" y2="' + cy +
       '" stroke="' + C.white + '" stroke-width="1"/>',
@@ -923,8 +930,11 @@ function hudForLegendSvg(g, C) {
       (cy + 4) + 'L' + (sx - 4) + ' ' + cy + 'Z" fill="none" stroke="' + C.amber + '" stroke-width="1.2"/>'
   };
   const out = [];
-  let right = g.plot.x + g.plot.w;
-  for (const label of ["PRED", "TARGET", "FOV"]) {
+  const labels = ["PRED", "TARGET", "FOV"];
+  const width = labels.reduce((s, l) => s + l.length * HUD_FOR_LEGEND_CHAR_PX + 8 + 4.5 + 15, -15);
+  // A map narrower than the legend: keep the row inside the box rather than off its left side.
+  let right = Math.max(g.map.x + g.map.w, g.x + 4 + width);
+  for (const label of labels) {
     const tx = right - label.length * HUD_FOR_LEGEND_CHAR_PX, sx = tx - 8;
     out.unshift(marks[label](sx) + '<text class="flbl" x="' + tx.toFixed(1) + '" y="' + (cy + 3) +
                 '" fill="' + C.dim + '">' + label + '</text>');

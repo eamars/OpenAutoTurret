@@ -185,22 +185,25 @@ class ForInsetMarkup(unittest.TestCase):
         self.assertIn(">TARGET<", svg)
         self.assertIn(">PRED<", svg, "§11: short legend")
 
-    def test_the_legend_is_one_row_above_the_map_ending_at_its_right_edge(self) -> None:
-        # Owner, 2026-10-21: the legend floated over the envelope's top-right corner. It now has the
-        # band above the map to itself.
+    def test_the_legend_is_one_row_on_the_map_ending_at_its_right_edge(self) -> None:
+        # Owner, 2026-10-21: the legend floated over the envelope's top-right corner. It now sits on
+        # the drawn map's top edge (not the box's: a letterboxed map is centred in it).
         svg = self._svg({})
         g = self._geometry()
         rows = re.findall(r'<text class="flbl" x="([-\d.]+)" y="([-\d.]+)"[^>]*>(\w+)</text>', svg)
         self.assertEqual([r[2] for r in rows], ["FOV", "TARGET", "PRED"], "left to right")
         ys = {float(r[1]) for r in rows}
         self.assertEqual(len(ys), 1, "one row")
-        plot = g["plot"]
-        self.assertLess(ys.pop(), plot["y"], "above the map, not over the envelope")
+        top = min(p["y"] for p in g["envPx"])
+        right = max(p["x"] for p in g["envPx"])
+        baseline = ys.pop()
+        self.assertLess(baseline, top, "above the map, not over the envelope")
+        self.assertLess(top - baseline, 8, "on the map's edge, not floating above it")
         xs = [float(r[0]) for r in rows]
         self.assertEqual(xs, sorted(xs))
         pred_right = xs[-1] + len("PRED") * 9 * 0.66
-        self.assertAlmostEqual(pred_right, plot["x"] + plot["w"], delta=0.2, msg="ends on the map's right edge")
-        self.assertGreater(xs[0] - 8 - 5, plot["x"], "starts inside the box")
+        self.assertAlmostEqual(pred_right, right, delta=0.2, msg="ends on the map's right edge")
+        self.assertGreater(xs[0] - 8 - 5, g["x"], "starts inside the box")
 
     def _geometry(self) -> dict:
         js = "console.log(JSON.stringify(T.hudForInset(%s)));" % json.dumps(_base())
