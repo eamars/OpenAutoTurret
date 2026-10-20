@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -277,6 +278,10 @@ TEST(RestPark, ShutdownWritesItsStopRecordAndTheShutdownLineCarriesItsId) {
   EXPECT_EQ(field(lines[0], "stage"), "parked");
   EXPECT_EQ(field(lines[0], "completion_quality"), "verified") << lines[0];
   EXPECT_NE(lines[0].find("\"disable_confirmed\":\"confirmed\""), std::string::npos) << "pitch said it is off";
+  // The stationary claim covers the park dwell, not the 10 ms the drive takes to confirm off.
+  char window[64];
+  std::snprintf(window, sizeof window, "\"stationary_window_ms\":%.1f", static_cast<double>(rest_cfg().park.dwell_ms));
+  EXPECT_NE(lines[0].find(window), std::string::npos) << lines[0];
   EXPECT_EQ(field(lines[1], "kind"), "shutdown");
   EXPECT_NE(field(lines[0], "stop_id"), "");
   EXPECT_EQ(field(lines[1], "stop_id"), field(lines[0], "stop_id")) << "one key joins the stop and the process end";

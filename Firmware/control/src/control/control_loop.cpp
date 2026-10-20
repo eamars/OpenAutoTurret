@@ -1009,6 +1009,10 @@ bool ControlLoop::step_rest_park(const AxisSnapshot sp[kAxisCount], TimeNs now_n
       }
       const bool timed_out = now_ns - rest_park_.since_ns >= 2'000'000'000;
       if (!confirmed && !timed_out) return true;
+      // The drive confirms off in about 10 ms, and "stationary for 10 ms" is no claim at all: keep
+      // watching both axes for the park dwell (500 ms on the station) before the record is written.
+      if (confirmed && now_ns - rest_park_.since_ns < static_cast<TimeNs>(cfg_.park.dwell_ms) * 1'000'000)
+        return true;
       if (confirmed)
         spdlog::info("SHUT DOWN: yaw at {:+.1f} deg, pitch on its rest stop, both motors switched off; "
                      "Home starts it again", last_q_[ix(AxisId::Yaw)] * kRad2Deg);
