@@ -140,10 +140,16 @@ ReferenceSample Level1Generator::step(int64_t t_ns,const JointGoal& goal,const s
     // Speed bounds: v_max both ways, tightened by the host's directional caps. Above a cap the
     // request is pulled down along the same jerk-limited curve that approaches it from below (a
     // cap that falls as the axis nears its end must slow the reference, not merely stop it
-    // accelerating).
+    // accelerating). The release reserve is counted in whole segments: the request r is the
+    // acceleration at this segment's end (a ramp from a over the period P), and releasing r to 0 by
+    // constant-jerk segments gains at most r^2/2j + |r|P/2, so v + (a+r)P/2 + r|r|/2j + rP/2 <= cap.
+    // A state on that curve releases at j_max exactly; from below it the next segment can always
+    // reach it. (The continuous a^2/2j reserve, judged at the segment's start, let the speed meet
+    // v_max inside a segment, where integrate() cut a to 0 in one step: stage 1, 2026-10-20.)
     const double vp=std::min({c.v_max,c.v_pos_cap,centre_cap}), vn=std::min({c.v_max,c.v_neg_cap,centre_cap});
-    const auto toward=[&](double gap) { return std::copysign(std::sqrt(2*c.j_max*std::abs(gap)),gap); };
-    const double up=toward(vp-v), down=-toward(vn+v);
+    const double jp=c.j_max*p_.period_s, half=a*p_.period_s/2;
+    const auto toward=[&](double gap) { return std::copysign(std::sqrt(jp*jp+2*c.j_max*std::abs(gap))-jp,gap); };
+    const double up=toward(vp-v-half), down=-toward(vn+v+half);
     if (request>up || request<down) { request=std::clamp(request,down,up); flags|=kVelocityLimited; }
     if (std::abs(request)>c.a_max) { request=std::copysign(c.a_max,request); flags|=kAccelerationLimited; }
     double j=(request-a)/p_.period_s;
