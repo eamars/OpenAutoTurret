@@ -24,11 +24,13 @@
 // Control-thread only. The web thread queues commands; the lease clock is advanced once
 // per control cycle, so an expired lease is noticed within 5 ms rather than whenever the
 // next HTTP request happens to land.
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include "common/time.hpp"
@@ -101,6 +103,14 @@ struct ManualConfig {
   // axes in one request and the envelope limits them together. Two independent
   // single-axis requests would not be the same thing: each would be limited as if the
   // other axis were still.
+  //
+  // A diagonal is one motion, not two jogs that happen to overlap (owner, 2026-10-20). Both
+  // axes run at one rate, the slower axis's pace, and from one origin; while both have room,
+  // neither target is placed further along the line than the axis that has made the least
+  // progress, plus the lead. Measured before this on the station (coarse, 3 s): yaw started
+  // 0.1 s before pitch, the pitch/yaw rate ratio wandered 0.82-1.14 and the path bent by up
+  // to 0.6 deg in free travel. An axis that its own end of travel is slowing leaves the
+  // coupling and stops there while the other carries on (owner, 2026-10-03).
   bool allow_diagonal = true;
 };
 
@@ -139,6 +149,15 @@ class ManualController {
     cfg_.view_is_detail = view_is_detail;
   }
   const ManualConfig& config() const { return cfg_; }
+  // The speed each axis's end of travel still allows this cycle, each way ({pitch, yaw}). An
+  // axis allowed less than the jog's rate in its direction is being slowed by its end of
+  // travel and leaves the diagonal's coupling. Not set: no end anywhere.
+  void set_room(const double positive_rad_s[2], const double negative_rad_s[2]) {
+    for (int i = 0; i < 2; ++i) {
+      room_pos_[i] = positive_rad_s[i];
+      room_neg_[i] = negative_rad_s[i];
+    }
+  }
   bool lease_active() const { return lease_until_ns_ > 0; }
   ManualProfile profile() const { return profile_; }
 
@@ -221,6 +240,10 @@ class ManualController {
       dir.yaw = 0;  // §39 leaves diagonal optional; refusing the second axis is honest,
                     // refusing the whole jog with no explanation is not.
     }
+    // A new direction is a new line: its origin is where the turret is when it starts.
+    // The pad repeats manual_jog_start for the same button; that continues the line.
+    if (lease_until_ns_ == 0 || dir.yaw != dir_.yaw || dir.pitch != dir_.pitch)
+      origin_pending_ = true;
     dir_ = dir;
     hold_latched_ = false;
     profile_ = profile;
@@ -322,16 +345,42 @@ class ManualController {
       // motion that resumes when the way opens is small. An accumulated target would
       // bank up a debt during the block and spend it the instant the limit moved —
       // a lurch at exactly the moment the operator was told to be careful.
-      const double horizon = static_cast<double>(cfg_.jog_horizon_ms) / 1000.0;
-      const double yaw_horizon = static_cast<double>(cfg_.yaw_jog_horizon_ms) / 1000.0;
+      const double horizon[2] = {static_cast<double>(cfg_.jog_horizon_ms) / 1000.0,
+                                 static_cast<double>(cfg_.yaw_jog_horizon_ms) / 1000.0};
+      const int d[2] = {dir_.pitch, dir_.yaw};
+      if (origin_pending_) {
+        origin_[0] = q_now[0];
+        origin_[1] = q_now[1];
+        origin_pending_ = false;
+      }
+      // One rate for the whole jog: the slowest moving axis's pace, so a diagonal is the
+      // diagonal and not whichever axis happens to be quicker.
+      double rate = std::numeric_limits<double>::infinity();
+      for (int i = 0; i < 2; ++i)
+        if (d[i]) rate = std::min(rate, v_max_rad_s[i] * lim.velocity_scale);
+      // Progress along the line is the least any axis with room has made; each target is
+      // placed from that, so the axis ahead waits for the one behind instead of drawing a
+      // curve. Re-derived from q_now every cycle, as before: nothing banks up while blocked.
+      bool coupled[2] = {false, false};
+      double progress = std::numeric_limits<double>::infinity();
+      for (int i = 0; i < 2; ++i) {
+        if (!d[i] || (d[i] > 0 ? room_pos_[i] : room_neg_[i]) < rate * (1.0 - 1e-9)) continue;
+        coupled[i] = true;
+        progress = std::min(progress, d[i] * (q_now[i] - origin_[i]));
+      }
+      double q_target[2], v_target[2];
+      for (int i = 0; i < 2; ++i) {
+        v_target[i] = d[i] * rate;
+        if (!d[i]) q_target[i] = hold_q_[i];
+        else if (coupled[i]) q_target[i] = origin_[i] + d[i] * (progress + rate * horizon[i]);
+        else q_target[i] = q_now[i] + v_target[i] * horizon[i];
+      }
       out.intent.type = IntentType::JointPosition;
       out.intent.has_joint_target = true;
-      out.intent.v_yaw_rad_s = static_cast<double>(dir_.yaw) * v_max_rad_s[1] *
-                              lim.velocity_scale;
-      out.intent.v_pitch_rad_s = static_cast<double>(dir_.pitch) * v_max_rad_s[0] *
-                                lim.velocity_scale;
-      out.intent.q_yaw_rad = dir_.yaw ? q_now[1] + out.intent.v_yaw_rad_s * yaw_horizon : hold_q_[1];
-      out.intent.q_pitch_rad = dir_.pitch ? q_now[0] + out.intent.v_pitch_rad_s * horizon : hold_q_[0];
+      out.intent.v_pitch_rad_s = v_target[0];
+      out.intent.v_yaw_rad_s = v_target[1];
+      out.intent.q_pitch_rad = q_target[0];
+      out.intent.q_yaw_rad = q_target[1];
       out.intent.velocity_scale = lim.velocity_scale;
       out.intent.acceleration_scale = lim.acceleration_scale;
       out.intent.jerk_scale = lim.jerk_scale;
@@ -414,6 +463,13 @@ class ManualController {
   // every cycle turned encoder noise/drift into target velocity feed-forward.
   double hold_q_[2]{};
   bool hold_latched_ = false;
+  // The jog's line: where it started ({pitch, yaw}) and each axis's room (set_room).
+  double origin_[2]{};
+  bool origin_pending_ = true;
+  double room_pos_[2] = {std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::infinity()};
+  double room_neg_[2] = {std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::infinity()};
   ManualConfig cfg_;
   JogDirection dir_{};
   ManualProfile profile_ = ManualProfile::Normal;

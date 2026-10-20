@@ -1701,6 +1701,20 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           precise.velocity_scale = std::clamp(patrol_detail_deg_s() * kDeg2Rad / base, 0.01, 1.0);
         }
         manual_.set_pace_limits(coarse, precise, narrow);
+        // Each axis's room in the jog's direction, by the same governor that caps the reference
+        // below: an axis its end of travel is slowing leaves the diagonal and stops there.
+        double room_pos[kAxisCount], room_neg[kAxisCount];
+        for (int i = 0; i < kAxisCount; ++i) {
+          const auto profile = motion_profile(i, OperatingMode::Manual);
+          const control::BoundaryGovernor boundary{
+              std::min(cfg_.a_brake_rad_s2, profile.maximum.acceleration),
+              std::min(cfg_.j_brake_rad_s3, profile.maximum.jerk), .20, cfg_.stop_margin_rad};
+          const auto b = boundary.at(sp[i].q_rad, cycle_limits[i], v_max[i],
+                                     speed_servo_[i].acceleration, v_est_[i]);
+          room_pos[i] = b.positive_speed;
+          room_neg[i] = b.negative_speed;
+        }
+        manual_.set_room(room_pos, room_neg);
       }
       manual_out_ = manual_.update(q_logical, v_max, now_ns, period_ns);
       if (response_probe_until_ns_ && (now_ns >= response_probe_until_ns_ ||
@@ -2512,8 +2526,15 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           } else {
             // A hold's target does not move: its velocity is zero, not an estimate carried over
             // from whatever the reference was following a tick ago.
+            // A leased jog says how fast it wants to go; its target is re-placed from the measured
+            // pose every cycle, so the target's own derivative is the axis's speed, not the
+            // operator's, and a stuck axis would never be asked to move.
+            const bool jog = tracking_ref_.source == ReferenceSource::Manual && manual_out_.lease_active &&
+                             last_intent_.source == MotionSource::Manual && last_intent_.live_at(now_ns);
             q_ref[i] = tracking_ref_.source == ReferenceSource::Hold
                 ? control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk,0.0)
+                : jog ? control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk,
+                            i == ix(AxisId::Yaw) ? last_intent_.v_yaw_rad_s : last_intent_.v_pitch_rad_s)
                 : control::limit_reference(ref_lim_[i],solved,dt,lim[i],acceleration,jerk);
           }
         }
@@ -3193,13 +3214,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                   std::clamp(last_intent_.velocity_scale, 0.0, 1.0));
           }
           if (last_decision_.action == SafetyAction::Derate) cap *= cfg_.derate_factor;
-          double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
-          // A leased jog carries an explicit velocity. Its measured-pose
-          // waypoint is bounded to prevent queued travel when blocked; its
-          // derivative must not replace the operator's requested velocity.
-          if (a == AxisId::Yaw && manual_out_.lease_active && last_intent_.source == MotionSource::Manual &&
-              last_intent_.live_at(now_ns) && !response_probe_until_ns_)
-            ff = i == ix(AxisId::Yaw) ? last_intent_.v_yaw_rad_s : last_intent_.v_pitch_rad_s;
+          // Both axes feed forward their reference's own speed. A leased jog's requested speed
+          // reaches that reference as the limiter's target speed (Phase::Hold above), so it
+          // ramps in on both axes alike. Until 2026-10-20 yaw alone took the jog's speed here,
+          // as a step: on the station a diagonal's yaw started 0.1 s before its pitch.
+          const double ff = ref_lim_engaged_ ? ref_lim_[i].v_rad_s : 0.0;
           const control::BoundaryGovernor boundary{
               std::min(cfg_.a_brake_rad_s2,profile.maximum.acceleration),
               std::min(cfg_.j_brake_rad_s3,profile.maximum.jerk),.20,cfg_.stop_margin_rad};

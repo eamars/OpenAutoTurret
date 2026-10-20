@@ -3,6 +3,8 @@
 // operator's browser stops existing.
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "mode/manual_controller.hpp"
 
 namespace ota {
@@ -147,6 +149,64 @@ TEST_F(ManualTest, DiagonalJogIsOneRequestNotTwo) {
   EXPECT_NE(out_.intent.v_yaw_rad_s, 0.0);
   EXPECT_NE(out_.intent.v_pitch_rad_s, 0.0);
   EXPECT_LT(out_.intent.v_pitch_rad_s, 0.0);
+}
+
+// Owner, 2026-10-20: a diagonal must be a true diagonal, not the two axes each doing their own
+// jog. On the station before this, yaw started 0.1 s before pitch and the rate ratio wandered
+// 0.82-1.14 in free travel.
+TEST_F(ManualTest, ADiagonalRunsBothAxesAtOnePace) {
+  v_max_[0] = 0.20;  // pitch slower than yaw: the diagonal takes the slower pace on both
+  ASSERT_TRUE(m_.jog_start(JogDirection{+1, -1}, ManualProfile::Normal, now_));
+  step();
+  const double pace = 0.20 * m_.config().normal.velocity_scale;
+  EXPECT_DOUBLE_EQ(out_.intent.v_yaw_rad_s, pace);
+  EXPECT_DOUBLE_EQ(out_.intent.v_pitch_rad_s, -pace) << "the two axes of one diagonal ran at two rates";
+}
+
+TEST_F(ManualTest, TheAxisAheadWaitsForTheAxisBehind) {
+  ASSERT_TRUE(m_.jog_start(JogDirection{+1, +1}, ManualProfile::Normal, now_));
+  step();
+  const double lead = v_max_[1] * m_.config().normal.velocity_scale * m_.config().jog_horizon_ms / 1000.0;
+  // Yaw has got 0.1 rad along, pitch has not moved (sticking, or slower to answer).
+  q_[1] = 0.1;
+  step();
+  EXPECT_NEAR(out_.intent.q_yaw_rad, lead, 1e-12)
+      << "yaw was placed ahead of its own position, off the line, instead of waiting for pitch";
+  EXPECT_NEAR(out_.intent.q_pitch_rad, lead, 1e-12);
+  // Pitch catches up: both move on along the same line.
+  q_[0] = 0.1;
+  step();
+  EXPECT_NEAR(out_.intent.q_yaw_rad, 0.1 + lead, 1e-12);
+  EXPECT_NEAR(out_.intent.q_pitch_rad, 0.1 + lead, 1e-12);
+}
+
+TEST_F(ManualTest, AnAxisAtItsEndOfTravelLeavesTheDiagonalAndTheOtherCarriesOn) {
+  // Owner, 2026-10-03: each axis stops at its own end of travel while the other may still move.
+  ASSERT_TRUE(m_.jog_start(JogDirection{+1, +1}, ManualProfile::Normal, now_));
+  step();
+  const double lead = v_max_[1] * m_.config().normal.velocity_scale * m_.config().jog_horizon_ms / 1000.0;
+  const double inf = std::numeric_limits<double>::infinity();
+  const double pos[2] = {0.0, inf}, neg[2] = {inf, inf};  // pitch has no room upward
+  m_.set_room(pos, neg);
+  q_[1] = 0.3;
+  step();
+  EXPECT_NEAR(out_.intent.q_yaw_rad, 0.3 + lead, 1e-12)
+      << "yaw waited for a pitch that its end of travel has stopped";
+}
+
+TEST_F(ManualTest, RepeatingTheSameJogContinuesItsLineAndANewDirectionStartsAnother) {
+  ASSERT_TRUE(m_.jog_start(JogDirection{+1, +1}, ManualProfile::Normal, now_));
+  step();
+  const double lead = v_max_[1] * m_.config().normal.velocity_scale * m_.config().jog_horizon_ms / 1000.0;
+  q_[0] = 0.05;
+  q_[1] = 0.2;
+  ASSERT_TRUE(m_.jog_start(JogDirection{+1, +1}, ManualProfile::Normal, now_));  // the pad's repeat
+  step();
+  EXPECT_NEAR(out_.intent.q_yaw_rad, 0.05 + lead, 1e-12) << "a repeated start re-based the line";
+  ASSERT_TRUE(m_.jog_start(JogDirection{-1, +1}, ManualProfile::Normal, now_));
+  step();
+  EXPECT_NEAR(out_.intent.q_yaw_rad, 0.2 - lead, 1e-12) << "a new direction kept the old line's origin";
+  EXPECT_NEAR(out_.intent.q_pitch_rad, 0.05 + lead, 1e-12);
 }
 
 TEST_F(ManualTest, StepIsARelativeMoveThatCompletes) {
