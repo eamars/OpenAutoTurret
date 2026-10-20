@@ -11,8 +11,11 @@
 //     (motor pose interpolated at the capture time, §11);
 //   * the TrackingStateMachine (§34) + confidence decay (§35);
 //   * the SearchPlanner (§36, §49);
-//   * the ReferenceManager (§16) + LosJointSolver (§14);
-//   * the Telemetry store (§6.3, §43).
+//   * the ReferenceManager (§16) + LosJointSolver (§14).
+//
+// It has no Telemetry store of its own: the ControlLoop's is the one the web, the black box and
+// the trace read. A private copy here was never read, and allocating its trace rings cost 3-4.6 ms
+// of the 5 ms control step every time a mode turned tracking on (2026-10-20).
 //
 // The ControlLoop calls update_snapshots() each cycle (feeding the motor
 // history), set_measurement() when visiond publishes a new frame, and
@@ -31,7 +34,6 @@
 #include "geometry/camera_model.hpp"
 #include "geometry/los_joint_solver.hpp"
 #include "geometry/los_uncertainty.hpp"
-#include "telemetry/telemetry.hpp"
 #include "tracking/target_estimator.hpp"
 #include "tracking/aim_point.hpp"
 #include "tracking/target_measurement.hpp"
@@ -346,8 +348,6 @@ class TrackingController {
                              - estimator_.state_timestamp_ns(), 0,
                              static_cast<int64_t>(cfg_.estimator.max_prediction_s * 1e9));
   }
-  telemetry::Telemetry& telemetry() { return telemetry_; }
-  const telemetry::Telemetry& telemetry() const { return telemetry_; }
   const ReferenceRequest& last_reference() const { return last_ref_; }
 
   // Record the current yaw (for the search planner's relative motion) and the
@@ -386,7 +386,6 @@ class TrackingController {
     has_identity_ = false;
     aim_valid_ = false;
     predicted_az_act_rad_ = predicted_el_act_rad_ = 0.0;
-    telemetry_.clear();
   }
 
   // What the axis is aimed at, for the HUD's aim cue. Kept in the controller because that is the
@@ -431,7 +430,6 @@ class TrackingController {
   tracking::TrackingStateMachine fsm_;
   SearchPlanner search_;
   ReferenceManager refman_;
-  telemetry::Telemetry telemetry_;
 
   bool has_measurement_ = false;
   uint64_t last_frame_sequence_ = 0;
