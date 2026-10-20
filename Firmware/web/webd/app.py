@@ -321,18 +321,26 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             payload["video_streams_error"] = absent
         # controld's §20 imu block stays the base (it is the control-side claim); what the trace shows
         # is layered on top, because the reader can see samples controld's snapshot does not carry.
+        # Beside the manifest, as visiond writes it; neither set means no file to read (not "/...").
+        manifest = str(config.stream_manifest or "")
         path = (os.environ.get("OTA_INFERENCE_HEALTH", "").strip()
-                or (str(config.stream_manifest).rsplit("/", 1)[0] + "/inference_health.json"))
-        try:
-            health = dict(_read_json_cached(path))
-            age_ms = (time.time_ns() - int(health.get("updated_ns") or 0)) / 1e6
-            health["present"] = True
-            health["age_ms"] = round(age_ms, 1)
-            health["fresh"] = age_ms < INFERENCE_STALE_AFTER_S * 1000.0
-            payload["inference"] = health
-        except (OSError, ValueError):
+                or (os.path.join(os.path.dirname(manifest), "inference_health.json")
+                    if manifest else ""))
+        if not path:
             payload["inference"] = {"present": False,
-                                    "reason": f"no health file at {path}"}
+                                    "reason": "no health file configured (OTA_INFERENCE_HEALTH and "
+                                              "OTA_VISION_STREAM_MANIFEST are unset)"}
+        else:
+            try:
+                health = dict(_read_json_cached(path))
+                age_ms = (time.time_ns() - int(health.get("updated_ns") or 0)) / 1e6
+                health["present"] = True
+                health["age_ms"] = round(age_ms, 1)
+                health["fresh"] = age_ms < INFERENCE_STALE_AFTER_S * 1000.0
+                payload["inference"] = health
+            except (OSError, ValueError):
+                payload["inference"] = {"present": False,
+                                        "reason": f"no health file at {path}"}
         # The dashboard's CONNECTED chip claims `system.connected`, and the ledger maps that claim to
         # `controld_connected` -- which until now lived only in /api/health, so the page read a key the
         # snapshot never carried and the chip was red forever. Publish it beside everything else the

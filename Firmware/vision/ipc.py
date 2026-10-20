@@ -123,7 +123,17 @@ class IpcSubscriber:
 
     def _serve(self) -> None:
         assert self._sock is not None
-        self._conn, _ = self._sock.accept()
+        try:
+            conn, _ = self._sock.accept()
+        except OSError:
+            return                       # stop() shut the listener down before a peer arrived
+        with self._lock:
+            if not self._running:
+                # stop() ran while this thread was inside accept(): it found no connection to
+                # close, so this one is ours to close, or the peer would write into it forever.
+                conn.close()
+                return
+            self._conn = conn
         while self._running:
             try:
                 # Must exceed the largest valid message. A small buffer on a SEQPACKET
@@ -151,22 +161,33 @@ class IpcSubscriber:
                 self._latest = decoded
 
     def stop(self) -> None:
-        self._running = False
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except OSError:
-                pass
-            self._conn = None
-        if self._sock is not None:
-            try:
-                self._sock.close()
-            except OSError:
-                pass
-            self._sock = None
+        """Returns only once the peer's connection is shut down: its next send fails.
+
+        close() alone does not wake a thread blocked in accept() or recv() on Linux; the blocked
+        call keeps the socket alive, and an accept() in flight hands back a connection after this
+        method has looked for one. shutdown() wakes both, and the serve thread closes a connection
+        it accepted after _running went false. So: shut down, join, then close.
+        """
+        with self._lock:
+            self._running = False
+            conn = self._conn
+        for s in (self._sock, conn):
+            if s is not None:
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
+        for s in (conn, self._sock):
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        self._conn = None
+        self._sock = None
         try:
             os.unlink(self._path)
         except FileNotFoundError:

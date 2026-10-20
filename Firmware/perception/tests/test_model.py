@@ -25,6 +25,7 @@ from perception.model.imx500_yolo import Imx500YoloAdapter
 from perception.model.label_maps import COCO
 
 PACKAGE_ROOT = os.path.dirname(os.path.abspath(perception.__file__))
+IMX500_MODELS = "/usr/share/imx500-models"     # the imx500 package's install directory
 GOOD_INTRINSICS = {
     "task": "object detection", "inference_rate": 16.0, "bbox_order": "xy",
     "bbox_normalization": True, "preserve_aspect_ratio": True,
@@ -757,8 +758,9 @@ class TestFactory(unittest.TestCase):
         config = VisionConfig.from_file(os.path.join(PACKAGE_ROOT, "configs",
                                                      "perception_v1.json"))
         self.assertEqual(sorted(config.models),
-                         ["bakeoff_efficientdet320", "bakeoff_nanodet416", "offline_replay",
-                          "person_detect", "person_detect_available"])
+                         ["_mock", "bakeoff_efficientdet320", "bakeoff_nanodet416",
+                          "hailo_yolov8n", "hailo_yolov8n_objects", "hailo_yolov8s_pose",
+                          "offline_replay", "person_detect", "person_detect_available"])
         for name in config.models:
             item = manifest_for(config, name)
             item.validate()
@@ -776,6 +778,12 @@ class TestFactory(unittest.TestCase):
         start-up, just earlier and with a traceback that names the file.
         """
         import hashlib
+
+        if not os.path.isdir(IMX500_MODELS):
+            # The minimum below is a fact about the station's disk. A workstation has no imx500
+            # package, so it has nothing to measure; where the package is installed, it still holds.
+            self.skipTest(f"{IMX500_MODELS} is absent: not a station, no installed artefact to "
+                          f"measure")
 
         config = VisionConfig.from_file(os.path.join(PACKAGE_ROOT, "configs",
                                                      "perception_v1.json"))

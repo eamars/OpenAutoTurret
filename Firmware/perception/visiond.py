@@ -333,6 +333,19 @@ def run_replay(args: argparse.Namespace, config: VisionConfig) -> int:
     return EXIT_OK
 
 
+def inference_health_path(environ) -> str:
+    """Where the inference health file goes: OTA_INFERENCE_HEALTH, else beside the stream manifest.
+
+    Neither set means no file (ADR-001 work order: unset publishes nothing). Deriving it from an unset
+    manifest used to give "/inference_health.json", a write to the filesystem root.
+    """
+    explicit = environ.get("OTA_INFERENCE_HEALTH", "").strip()
+    if explicit:
+        return explicit
+    manifest = environ.get("OTA_VISION_STREAM_MANIFEST", "").strip()
+    return os.path.join(os.path.dirname(manifest), "inference_health.json") if manifest else ""
+
+
 def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
     """The station path: one camera owner, one adapter, one publish target."""
     if args.select_controller:
@@ -411,15 +424,13 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         # second so the web surface can say, in one glance, which network is producing the tracks.
         # The path defaults to beside the stream manifest, so a station that set one has the other.
         from .inference_health import HealthPublisher
-        health_path = (os.environ.get("OTA_INFERENCE_HEALTH", "").strip()
-                       or (os.path.dirname(os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip())
-                           + "/inference_health.json"))
+        health_path = inference_health_path(os.environ)
         # The second camera's adapter does not exist yet at this line -- it is created once its own
         # sensor has opened -- so the health beat asks a function for its companions every second.
         # An absent key then means "there is no second leg in this boot", which is a different claim
         # from a key that says 0 Hz, and the difference is the whole point of publishing this file.
         health_extras: Dict[str, Any] = {"fn": None}
-        if health_path.strip("/"):
+        if health_path:
             adapter_health = HealthPublisher(
                 adapter=adapter, path=health_path,
                 companions=lambda: (health_extras["fn"]() if callable(health_extras["fn"]) else {})

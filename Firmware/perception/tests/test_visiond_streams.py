@@ -17,7 +17,19 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from perception.stream_manifest import StreamManifest  # noqa: E402
-from perception.visiond import _StreamAnnouncer, _role_for_stream  # noqa: E402
+from perception.visiond import (_StreamAnnouncer, _role_for_stream,  # noqa: E402
+                                inference_health_path)
+
+
+def test_the_health_file_sits_beside_the_manifest_and_is_absent_when_neither_is_set():
+    assert inference_health_path({}) == "", "unset publishes nothing, not /inference_health.json"
+    assert inference_health_path({"OTA_VISION_STREAM_MANIFEST": "/run/ota/video_streams.json"}) \
+        == "/run/ota/inference_health.json"
+    assert inference_health_path({"OTA_VISION_STREAM_MANIFEST": "video_streams.json"}) \
+        == "inference_health.json"
+    assert inference_health_path({"OTA_INFERENCE_HEALTH": "/x/h.json",
+                                  "OTA_VISION_STREAM_MANIFEST": "/run/ota/video_streams.json"}) \
+        == "/x/h.json"
 
 
 def test_the_role_comes_from_what_the_sensor_reported_not_from_a_hope():

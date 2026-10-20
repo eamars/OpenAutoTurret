@@ -13,6 +13,17 @@ import numpy as np
 
 from vision import installation_calibration as ic
 
+try:
+    import cv2  # noqa: F401
+    HAVE_CV2 = True
+except Exception:  # noqa: BLE001
+    HAVE_CV2 = False
+
+# The same guard as the other calibration suites. It covers only a machine with no OpenCV at all
+# (the station has it from the OS; Firmware/requirements-test.txt installs it on a workstation).
+# With cv2 present, a board that detects nothing still FAILS below, as it must.
+NEEDS_CV2 = unittest.skipUnless(HAVE_CV2, "needs OpenCV (pip install -r Firmware/requirements-test.txt)")
+
 
 def _rot_x(a):
     c, s = math.cos(a), math.sin(a)
@@ -65,6 +76,7 @@ class TestDeriveRWB(unittest.TestCase):
         self.assertLess(_ang_deg(R_est, R_W_B_true), 1e-6)
 
 
+@NEEDS_CV2
 class TestSolveBoardPose(unittest.TestCase):
     def _board(self):
         spec = ic.BoardSpec(marker_cols=3, marker_rows=3)
@@ -172,6 +184,7 @@ class TestPersistence(unittest.TestCase):
         self.assertIsNone(ic.load_R_W_B("/nonexistent/path/pose.yaml"))
 
 
+@NEEDS_CV2
 class TestDetection(unittest.TestCase):
     def test_marker_detection_and_pose(self):
         """Render ArUco markers on a white background at known 3D positions,
@@ -232,6 +245,7 @@ class TestDetection(unittest.TestCase):
         self.assertLess(pose.reprojection_error_px, 5.0)
 
 
+@NEEDS_CV2
 class TestEndToEnd(unittest.TestCase):
     def test_run_calibration_frontal(self):
         # Render the board frontally; the pipeline collects valid frames and

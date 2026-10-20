@@ -1,0 +1,8 @@
+# Workstation test venv for the Python suites (perception, web/webd, vision, tools/tracking):
+#   python3 -m venv .venv && .venv/bin/pip install -r Firmware/requirements-test.txt
+# then, from Firmware/:  ../.venv/bin/python -m pytest perception/tests web/webd/tests vision/tests tools/tracking/tests
+# Never install this on the station: there cv2 is an OS package (install_station.py checks it).
+-r requirements-station.txt
+pytest
+httpx                    # fastapi's TestClient
+opencv-python-headless   # vision calibration tests; the station's cv2 comes from the OS
