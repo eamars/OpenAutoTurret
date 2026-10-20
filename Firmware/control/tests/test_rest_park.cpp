@@ -739,3 +739,47 @@ TEST(HomingNoTorqueOff, TheOldBackoffNeededAModeChangePerBackoff) {
   EXPECT_GE(r.plant->pitch_position_entries, 4);
   EXPECT_GT(r.plant->pitch_transitions, 2);
 }
+
+// A boot into Shutdown that sees stale feedback (station 2026-10-20 15:23:53): the supervisor's BRAKE
+// commanded both de-energised axes to a stop target that was not finite; the yaw guard tripped and the
+// station latched Fault. An axis that is off must receive no command at all.
+namespace {
+class OffAxisWatch : public HeldPitchPlant {
+ public:
+  void command(AxisId a, double q, double lim) override {
+    if (!snapshot(a, 0).in_speed_mode && !snapshot(a, 0).in_position_mode) ++to_off_axis;
+    HeldPitchPlant::command(a, q, lim);
+  }
+  void command_velocity(AxisId a, double v) override {
+    if (!snapshot(a, 0).in_speed_mode && !snapshot(a, 0).in_position_mode) ++to_off_axis;
+    HeldPitchPlant::command_velocity(a, v);
+  }
+  int to_off_axis = 0;
+};
+}  // namespace
+
+TEST(RestParkUnhomed, StaleFeedbackInShutdownCommandsNothingAndDoesNotFault) {
+  auto p = std::make_unique<OffAxisWatch>();
+  p->set_stops(AxisId::Pitch, -1, 1);
+  p->set_stops(AxisId::Yaw, -100, 100);
+  auto* plant = p.get();
+  ControlLoop loop(station_cfg(), std::move(p));
+  int64_t t = kDtNs;
+  auto run = [&](int n) { for (int k = 0; k < n; ++k, t += kDtNs) loop.step(t, kDtNs); };
+  run(10);
+  ASSERT_TRUE(loop.motors_off());
+  plant->set_feedback_ok(AxisId::Pitch, false);
+  plant->set_feedback_ok(AxisId::Yaw, false);
+  bool braked = false;
+  for (int k = 0; k < 100; ++k) {
+    run(1);
+    braked |= loop.last_decision().action == SafetyAction::Brake;
+  }
+  plant->set_feedback_ok(AxisId::Pitch, true);
+  plant->set_feedback_ok(AxisId::Yaw, true);
+  run(100);
+  EXPECT_TRUE(braked) << "the supervisor never braked: this test exercises nothing";
+  EXPECT_EQ(plant->to_off_axis, 0) << "a brake in Shutdown commanded an axis that is off";
+  EXPECT_EQ(loop.phase(), Phase::Idle);
+  EXPECT_TRUE(loop.motors_off());
+}

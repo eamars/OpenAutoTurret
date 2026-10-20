@@ -3091,6 +3091,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     if (pitch_test_transitioning_ && a == AxisId::Pitch) continue;  // the mode switch owns pitch
     if (mixed_parking_handled) continue;  // mixed stop issued direct, topology-specific safe outputs above
     if (rest_park_handled) continue;      // the rest park's stages on the stop, likewise
+    // Idle: an axis that is off stays off. Only one that is held (pitch at speed zero after a STOP
+    // MOTION during homing) is braked. Station 2026-10-20 15:23:53: stale feedback 0.7 s after a
+    // boot into Shutdown made the supervisor BRAKE; step 6 then commanded both de-energised axes to
+    // a stop target that was not finite, the yaw guard tripped and the station latched Fault. A
+    // finite target would have been no better: a command switches yaw's speed loop back on.
+    if (phase_ == Phase::Idle && !sp[i].in_speed_mode && !sp[i].in_position_mode) continue;
     bool do_command = true;
     switch (last_decision_.action) {
       case SafetyAction::Allow:
