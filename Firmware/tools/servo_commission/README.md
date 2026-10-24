@@ -124,6 +124,21 @@ and friction.
   limit-cycle through friction — 2.7 A peaks, ±0.7 rad/s about the sliding speed — and the survey
   trips the speed limit, with or without noise. Nothing can be identified in that state;
   `test_prior_gains_at_10x` is an expected failure until the prior changes.
+- **Friction fit (`identify.fit_friction`, 2026-10-25):** the creep term's speed is held under
+  0.86 deg/s (`CREEP_SPEED_MAX`) while the Stribeck speed stays at or above 4.6 deg/s, so the two
+  exponentials cannot trade off, and a model reading above a measured plateau costs twice what one
+  reading below it does (`OVER_READ_WEIGHT`: an over-reading feedforward slips the standing axis
+  ahead of its reference, an under-reading one leaves it behind for the integral). With both speeds
+  free to meet (creep up to 2.9 deg/s) the 04:03 survey fitted stribeck 1.53 A against creep 1.25 A
+  for plateaus of 0.15–0.59 A, read the feedforward 0.08 A above the 1 deg/s plateau (the ramp
+  slipped 1.8° ahead on it) and the old cap rule 1.66 A. Over the seven surveys of 2026-10-24/25 the
+  fit now reads the 1 deg/s plateau within +0.03 A in the + direction, never rises above a measured
+  plateau by more than its spread, and under-reads the − direction where its plateaus bump at
+  1–2 deg/s (0.52–0.61 A with 0.14–0.16 A of spread, 23:43 and 03:04: −0.13 A). Weighting plateaus by
+  their spread was tried and dropped: at 10–20 deg/s the spread is the loop ringing, not an error of
+  the mean, and down-weighting those plateaus under-read the feedforward at speed (the 5× `--update`
+  case then stick-slipped at 10 deg/s). Each direction's `plateau_max` goes into the asset for the
+  cap rule.
 - **Crosstalk table:** a 10 deg/s scan with 0.25 s windows reproduces a known table within
   0.6 mrad/A RMS. A 20 deg/s scan under-reads it by about 14%, which caused instability.
 - **Prior gains (kq 20 / kv 0.5 / ki 20):** quiet through the survey for inertia 0.015–0.15 and
@@ -151,11 +166,16 @@ and friction.
   +0.15 A rise is the stall count (rocks on small steps the drifted friction makes necessary). The
   PI corner ki/kq never exceeds 0.4·wn (`design.INTEGRAL_CORNER_MAX`): at wn 4.6 — a 5× payload
   under a drifted table — 3 rad/s rang the fast ramps to 12° of jitter, 1.8 does not.
-- **Integral cap = the worse direction's breakaway + `friction_drift_A` (0.15 A), stall current =
-  the cap (2026-10-25):** at a stopped reference the friction feedforward is zero, so the integral
-  is the servo's whole authority against static friction. Until then the cap was the two directions'
-  mean static level and the stall current 0.9× that: on the 5× payload 0.40 / 0.35 A against a +
-  breakaway of 0.435 A that the night's drift took to 0.44–0.69 A (MEASURE 2026-10-25 00:38). Every
+- **Integral cap = the larger direction's largest survey plateau + `breakaway_over_plateau_A`
+  (0.35 A) + `friction_drift_A` (0.15 A), stall current = the cap (2026-10-25):** at a stopped
+  reference the friction feedforward is zero, so the integral is the servo's whole authority against
+  static friction. The breakaway the station shows sits above its sliding plateaus (00:38 needed
+  0.44–0.69 A over plateaus topping at 0.36; 02:04 0.63 over 0.37), and the fit's coulomb + stribeck
+  is an extrapolation to zero speed (1.66 A at 04:03 for plateaus of 0.59, cap at the 1.2 A ceiling);
+  over the night's surveys the rule gives 0.82–1.11 A. A high cap costs nothing the journals show:
+  with the 1.2 A cap the integral never passed 0.47 A (04:03). Until 2026-10-25 the cap was the two
+  directions' mean static level and the stall current 0.9× that: on the 5× payload 0.40 / 0.35 A
+  against a + breakaway of 0.435 A that the night's drift took to 0.44–0.69 A (MEASURE 00:38). Every
   settle that fell 0.14° short then ended in a stall rock — three of the five fired while the integral
   was still winding (it gains 0.05–0.07 A in the 0.3 s window at ki 36), and not one rock freed the
   axis: each zeroed the integral and moved the axis 0.1–0.24° the wrong way until the integral had

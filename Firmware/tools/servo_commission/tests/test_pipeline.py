@@ -58,12 +58,12 @@ def residual_bound(table):
     return RULES["crosstalk_drift_fraction"] * max(abs(g) for g in table)
 
 
-def identified_friction(breakaway_positive, breakaway_negative, inertia=0.26):
-    """An identified-plant record with the given static friction (coulomb + stribeck) per direction."""
+def identified_friction(plateau_positive, plateau_negative, inertia=0.26):
+    """An identified-plant record whose largest measured plateau per direction is the given level."""
     def side(b):
-        return {"coulomb": 0.2 * b, "stribeck": 0.8 * b, "stribeck_speed": 0.2, "viscous": 0.05}
+        return {"coulomb": 0.2 * b, "stribeck": 0.8 * b, "stribeck_speed": 0.2, "viscous": 0.05, "plateau_max": b}
     return {"inertia": inertia, "actuation_delay_s": 0.001,
-            "friction": {"positive": side(breakaway_positive), "negative": side(breakaway_negative), "creep_drop": 0.0,
+            "friction": {"positive": side(plateau_positive), "negative": side(plateau_negative), "creep_drop": 0.0,
                          "creep_speed": 0.01, "map_positive": [0.0] * 24, "map_negative": [0.0] * 24},
             "crosstalk": {"delay_s": 0.001, "table": [0.0] * 120, "uncertainty": 0.0005}}
 
@@ -71,23 +71,56 @@ def identified_friction(breakaway_positive, breakaway_negative, inertia=0.26):
 class Design(unittest.TestCase):
     def test_integral_cap_covers_breakaway_and_drift(self):
         """The integral is the servo's whole authority at a stopped reference (friction FF is zero
-        there), so its cap is the worse direction's breakaway plus the bearing's session-to-session
-        drift, and a stall is declared only once that much is applied (stall_current = cap).
-        PAYLOAD 10-24, MEASURE 2026-10-25 00:38: the old cap (the two directions' mean, 0.40 A) sat
-        under the + breakaway of 0.435 A, and the old stall current (0.9 x mean, 0.353 A) fired three
-        of the five stall rocks while the integral was still winding."""
-        dsg = {"wn": 7.0, "zeta": 0.5, "integral_rate": 3.0, "friction_drift": RULES["friction_drift_A"], "bias": 0.002}
-        payload = design.servo(PRIOR, identified_friction(0.435, 0.349), dsg)
-        self.assertAlmostEqual(payload["integral_cap"], 0.435 + RULES["friction_drift_A"], places=3)
+        there), so its cap is what the station showed: the larger direction's largest survey plateau,
+        plus the static excess over the plateaus the station needed to break away
+        (breakaway_over_plateau_A: 0.44-0.69 A over plateaus of 0.36 on 2026-10-25 00:38), plus the
+        session-to-session drift; a stall is declared only once that much is applied (stall_current =
+        cap). Not the fit's coulomb + stribeck: that is an extrapolation to zero speed, and the
+        04:03 fit put it at 1.66 A for plateaus of 0.59 (cap 1.2 A, the ceiling)."""
+        margin = RULES["breakaway_over_plateau_A"] + RULES["friction_drift_A"]
+        dsg = {"wn": 7.0, "zeta": 0.5, "integral_rate": 3.0, "friction_drift": RULES["friction_drift_A"],
+               "breakaway_over_plateau": RULES["breakaway_over_plateau_A"], "bias": 0.002}
+        payload = design.servo(PRIOR, identified_friction(0.36, 0.34), dsg)
+        self.assertAlmostEqual(payload["integral_cap"], 0.36 + margin, places=3)
+        self.assertGreater(payload["integral_cap"], 0.69)  # what 00:38 needed
         self.assertEqual(payload["stall_recovery"]["current_A"], payload["integral_cap"])
-        self.assertGreater(payload["integral_cap"], 0.4)
-        bare = design.servo(PRIOR, identified_friction(0.761, 0.696, inertia=0.04), dsg)
-        self.assertAlmostEqual(bare["integral_cap"], 0.761 + RULES["friction_drift_A"], places=3)
-        self.assertEqual(bare["stall_recovery"]["current_A"], bare["integral_cap"])
-        heavy = design.servo(PRIOR, identified_friction(1.3, 1.0), dsg)
-        self.assertEqual(heavy["integral_cap"], 1.2)  # the thermal ceiling
-        self.assertEqual(heavy["stall_recovery"]["current_A"], 1.2)
+        degenerate = identified_friction(0.59, 0.46)
+        degenerate["friction"]["positive"].update(coulomb=0.13, stribeck=1.53)  # the 04:03 fit
+        self.assertAlmostEqual(design.servo(PRIOR, degenerate, dsg)["integral_cap"], 0.59 + margin, places=3)
+        bare = design.servo(PRIOR, identified_friction(0.75, 0.70, inertia=0.04), dsg)
+        self.assertEqual(bare["integral_cap"], 1.2)  # the thermal ceiling
+        self.assertEqual(bare["stall_recovery"]["current_A"], 1.2)
         self.assertEqual(RULES["friction_drift_A"], 0.15)
+        self.assertEqual(RULES["breakaway_over_plateau_A"], 0.35)
+
+    def test_friction_fit_is_identifiable(self):
+        """The survey plateaus of 2026-10-25 04:03 (left) and 2026-10-24 23:43 (right), as measured.
+        The fit's two exponentials (Stribeck, creep) used to trade off when their speeds could meet:
+        04:03 came out as stribeck 1.53 A against creep 1.25 A, feedforward 0.08 A above the 1 deg/s
+        plateau. With the creep speed held under 0.86 deg/s and each plateau weighted by its spread,
+        the model never rises above the measured plateaus by more than their spread, and its static
+        level stays near the plateaus."""
+        spd = [0.25, 0.5, 1, 2, 5, 10, 20, 40, 65]
+        surveys = {
+            "04:03": {1: ([0.59, 0.42, 0.40, 0.41, 0.44, 0.28, 0.22, 0.17, 0.18], [0.11, 0.07, 0.06, 0.14, 0.28, 0.24, 0.09, 0.07, 0.29]),
+                      -1: ([0.15, 0.31, 0.40, 0.45, 0.46, 0.33, 0.23, 0.18, 0.19], [0.09, 0.06, 0.10, 0.17, 0.24, 0.33, 0.09, 0.10, 0.24])},
+            "23:43": {1: ([0.38, 0.37, 0.43, 0.42, 0.42, 0.28, 0.18, 0.19, 0.18], [0.04, 0.11, 0.09, 0.14, 0.24, 0.31, 0.07, 0.07, 0.16]),
+                      -1: ([0.12, 0.24, 0.52, 0.61, 0.31, 0.28, 0.21, 0.22, 0.20], [0.04, 0.05, 0.14, 0.16, 0.19, 0.31, 0.09, 0.09, 0.29])}}
+        for name, sides in surveys.items():
+            rows = [{"direction": d, "speed": v * math.pi / 180, "current": c, "spread": sp, "n": 500}
+                    for d, (cur, spr) in sides.items() for v, c, sp in zip(spd, cur, spr)]
+            fit = identify.fit_friction(rows)
+            self.assertLessEqual(fit["creep_speed"], identify.CREEP_SPEED_MAX + 1e-9, name)
+            v = np.linspace(0.1, 70, 2000) * math.pi / 180
+            for d, key in ((1, "positive"), (-1, "negative")):
+                p = fit[key]
+                g = identify.servo_friction_curve(v, p["coulomb"], p["stribeck"], p["stribeck_speed"], p["viscous"], fit["creep_drop"], fit["creep_speed"])
+                cur, spr = sides[d]
+                self.assertLessEqual(float(np.max(g)), max(cur) + max(spr), f"{name} {key}: model peak {np.max(g):.2f}")
+                g1 = float(np.interp(math.pi / 180, v, g))
+                self.assertLessEqual(g1, cur[2] + spr[2], f"{name} {key}: model at 1 deg/s {g1:.2f} vs plateau {cur[2]}")
+                self.assertLess(p["coulomb"] + p["stribeck"], 1.0, f"{name} {key}: static level {p['coulomb'] + p['stribeck']:.2f}")
+                self.assertEqual(p["plateau_max"], max(cur))
 
     def test_slow_ramps_with_the_station_servo_under_drift(self):
         """MEASURE 2026-10-25 02:04 (PAYLOAD 10-24): kq 13 / ki 36 (the crosstalk allowance's gain for
@@ -100,12 +133,13 @@ class Design(unittest.TestCase):
         t = truth("payload_5x_knee")["yaw"]
         t.pop("friction_drift_A", None)
         plant = dict(t, coulomb_positive=t["coulomb_positive"] + 0.15, coulomb_negative=t["coulomb_negative"] + 0.15)
-        f = {"positive": {"coulomb": 0.143, "stribeck": 0.4874, "stribeck_speed": 0.08, "viscous": 0.0157},
-             "negative": {"coulomb": 0.1983, "stribeck": 0.2915, "stribeck_speed": 0.08, "viscous": 0.0157},
+        f = {"positive": {"coulomb": 0.143, "stribeck": 0.4874, "stribeck_speed": 0.08, "viscous": 0.0157, "plateau_max": 0.37},
+             "negative": {"coulomb": 0.1983, "stribeck": 0.2915, "stribeck_speed": 0.08, "viscous": 0.0157, "plateau_max": 0.36},
              "creep_drop": 0.4296, "creep_speed": 0.01989, "map_positive": [0.0] * 24, "map_negative": [0.0] * 24}
         identified = {"inertia": 0.27036, "actuation_delay_s": 0.001, "friction": f,
                       "crosstalk": {"delay_s": t["crosstalk_delay_s"], "table": t["crosstalk_map"], "uncertainty": 0.0005}}
-        dsg = {"wn": 6.9, "zeta": 0.5, "integral_rate": 3.0, "friction_drift": RULES["friction_drift_A"], "bias": 0.002}
+        dsg = {"wn": 6.9, "zeta": 0.5, "integral_rate": 3.0, "friction_drift": RULES["friction_drift_A"],
+               "breakaway_over_plateau": RULES["breakaway_over_plateau_A"], "bias": 0.002}
         servo = design.servo(PRIOR, identified, dsg)
         self.assertAlmostEqual(servo["kq"], 13.0, delta=0.2)
         m = manifests.yaw("t", servo, "usecase")
@@ -279,8 +313,9 @@ class Pipeline(unittest.TestCase):
             stalls = [v["extra"]["stalls"] for v in asset["validation"]]
             self.assertTrue(all(n <= 4 for n in stalls), f"start {start}: stalls {stalls}")
             f = asset["identified"]["friction"]
-            breakaway = max(f["positive"]["coulomb"] + f["positive"]["stribeck"], f["negative"]["coulomb"] + f["negative"]["stribeck"])
-            self.assertAlmostEqual(asset["servo_parameters"]["integral_cap"], breakaway + RULES["friction_drift_A"], places=3)
+            plateau = max(f["positive"]["plateau_max"], f["negative"]["plateau_max"])
+            self.assertAlmostEqual(asset["servo_parameters"]["integral_cap"],
+                                   min(1.2, plateau + RULES["breakaway_over_plateau_A"] + RULES["friction_drift_A"]), places=3)
             self.assertEqual(asset["servo_parameters"]["stall_recovery"]["current_A"], asset["servo_parameters"]["integral_cap"])
 
     def test_yaw_update_with_a_drifted_table(self):

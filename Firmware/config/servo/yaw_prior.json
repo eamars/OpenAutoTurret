@@ -26,7 +26,8 @@
   "station_onset_margin": 1.2,
   "oscillation_limit_A": 0.3,
   "integral_rate_per_s": 3.0,
-  "friction_drift_A": 0.15
+  "friction_drift_A": 0.15,
+  "breakaway_over_plateau_A": 0.35
  },
  "servo_parameters": {
   "encoder_variance": 4.9e-08,
@@ -128,5 +129,5 @@
    "rock_s": 0.025
   }
  },
- "design_rules_basis": "friction_drift_A 0.15: the bearing's static friction level moves by that much between sessions an hour apart (three surveys 2026-10-24 disagreed by 0.06-0.3 A; MEASURE 2026-10-25 00:38 needed 0.44-0.69 A to break away where the fit said 0.435), so the integral cap -- the servo's whole authority at a stopped reference -- is the worse direction's breakaway plus this, and a stall is declared only once that much is applied (stall_current = integral_cap). crosstalk_drift_fraction 1.0: the design boundary is taken with the crosstalk table wrong by its own largest |g| (the loop survives losing the compensation). Station 2026-10-02: the reading moved 3 mrad/A off the morning's table within the day and the yaw buzzed at standstill; see tools/servo_commission/design.py."
+ "design_rules_basis": "breakaway_over_plateau_A 0.35: the static friction the station needs to break away sits above the largest sliding plateau its survey measured (2026-10-25 00:38: 0.44-0.69 A over plateaus topping at 0.36; 02:04: 0.63 over 0.37), so the integral cap is the larger direction's largest plateau plus this plus the drift allowance -- never the fit's coulomb + stribeck, an extrapolation to zero speed (1.66 A at 04:03 for plateaus of 0.59). friction_drift_A 0.15: the bearing's static friction level moves by that much between sessions an hour apart (three surveys 2026-10-24 disagreed by 0.06-0.3 A; MEASURE 2026-10-25 00:38 needed 0.44-0.69 A to break away where the fit said 0.435), so the integral cap -- the servo's whole authority at a stopped reference -- is the worse direction's breakaway plus this, and a stall is declared only once that much is applied (stall_current = integral_cap). crosstalk_drift_fraction 1.0: the design boundary is taken with the crosstalk table wrong by its own largest |g| (the loop survives losing the compensation). Station 2026-10-02: the reading moved 3 mrad/A off the morning's table within the day and the yaw buzzed at standstill; see tools/servo_commission/design.py."
 }
