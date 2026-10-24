@@ -25,7 +25,7 @@
   "design_margin": 0.85,
   "station_onset_margin": 1.2,
   "oscillation_limit_A": 0.3,
-  "integral_rate_per_s": 1.5
+  "integral_rate_per_s": 3.0
  },
  "servo_parameters": {
   "encoder_variance": 4.9e-08,

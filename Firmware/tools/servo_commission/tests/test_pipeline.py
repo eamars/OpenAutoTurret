@@ -176,6 +176,30 @@ class Pipeline(unittest.TestCase):
         sweep = next(s for s in report["steps"] if s["step"] == "inertia")["sweep"]
         self.assertEqual(sweep["f0_hz"], 3.0)
 
+    def test_yaw_payload_5x_as_measured_with_friction_drift(self):
+        """The 5x payload as the station measured it (payload_5x_knee: the friction knee the fit cannot
+        follow, and the bearing's level moving +-0.1 A between sessions), from three start angles:
+        every validation pass accepted. At integral rate 1.5 this plant failed 2 of 3 starts the way
+        the station did on 2026-10-24 22:58 (ramp+1 speed ratio 0.874 after a -drift pass; 6 stalls):
+        the slow ramps' stuck start, which only a faster integral closes within the crosstalk-robust
+        gain cap (kv feeds the crosstalk loop: zeta 0.75 lowers the boundary from 9.8 to 6.9 rad/s)."""
+        for start in (1.0, 3.5, 5.2):
+            t = truth("payload_5x_knee")
+            t["yaw_start_rad"] = start
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+                json.dump(t, f)
+            try:
+                with tempfile.TemporaryDirectory() as out:
+                    done = subprocess.run([sys.executable, str(HERE / "commission.py"), "yaw", "--sim", f.name, "--out", out],
+                                          capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 0, done.stdout[-2000:] + done.stderr[-2000:])
+                    asset = load(Path(out) / "yaw_servo.json")
+            finally:
+                Path(f.name).unlink()
+            self.assertTrue(asset["provenance"]["accepted"], f"start {start}: " + json.dumps([v["fails"] for v in asset["validation"]]))
+            ratios = [r for v in asset["validation"] for r in v["summary"]["speed_ratio"]]
+            self.assertTrue(all(0.9 <= r <= 1.1 for r in ratios), f"start {start}: speed ratios {ratios}")
+
     def test_yaw_update_with_a_drifted_table(self):
         """`yaw --update` on the payload with the asset's three-week-old table (RE-RUN on the station,
         2026-10-24): the inertia is still identified, the fit reports the drift, the run is accepted."""

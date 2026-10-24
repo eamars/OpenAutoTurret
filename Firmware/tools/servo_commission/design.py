@@ -1,7 +1,7 @@
 """Controller design from identified plant parameters (deterministic rules + simulation).
 
 Yaw: one loop shape scaled by inertia: kq = a*wn^2, kv = 2*zeta*a*wn (zeta 0.5), and an
-integral at a fixed rate ki = integral_rate*kq (1.5/s): the integral works against friction,
+integral at a fixed rate ki = integral_rate*kq (3/s since 2026-10-24, 1.5 before): the integral works against friction,
 which does not scale with inertia (station 2026-10-02: wn-scaled integral left steps 0.2 deg short).
 The usable wn is bounded by the encoder current crosstalk left after compensation:
 the reading becomes q + r*i, and a residual r <= 0 puts a right-half-plane zero at
@@ -30,9 +30,16 @@ import sim
 DEG = math.pi / 180
 
 
-def gains(inertia, wn, zeta=0.5, integral_rate=1.5):
+INTEGRAL_CORNER_MAX = 0.4  # the PI corner ki/kq never above this fraction of wn (phase at the loop's bandwidth)
+
+
+def gains(inertia, wn, zeta=0.5, integral_rate=3.0):
+    """kq = J wn^2, kv = 2 zeta J wn, ki = kq * min(integral_rate, 0.4 wn): the integral rate is the
+    design rule's (friction does not scale with inertia) unless the loop is so slow that the PI corner
+    would sit above 0.4 wn -- at wn 4.6 (a 5x payload under a drifted table) 3 rad/s rang the fast
+    ramps to 12 deg of jitter; 1.8 does not."""
     kq = inertia * wn * wn
-    return {"kq": round(kq, 3), "kv": round(2 * zeta * inertia * wn, 4), "ki": round(kq * integral_rate, 2)}
+    return {"kq": round(kq, 3), "kv": round(2 * zeta * inertia * wn, 4), "ki": round(kq * min(integral_rate, INTEGRAL_CORNER_MAX * wn), 2)}
 
 
 def plant(identified):

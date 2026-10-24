@@ -257,3 +257,57 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     with every controld, so the newest run (0001) looked oldest. Fixed (`calibd` orders runs by the
     stamp in their names). Its reports, logs and manifests remain; the per-segment rows are in
     `yaw/report.json`.
+- **Why the 5× payload failed yaw validation at wn 8.2, and the fix (2026-10-25, simulator and
+  recorded data; branch `claude/payload-slow-ramps-5x`).**
+  - **The speed-ratio excess is a stuck start.** ramp±1's 1.104/1.158 over the 7 s window is
+    0.7–1.1° of extra travel, the ramps end on target, and the "jitter" (0.9–1.1° p95-5) is the
+    catch-up slope: the axis stood for ~1–1.5 s after the ramp began. The preceding step had left it
+    0.5° ahead with the integral wound to ≈ −0.3 A against friction; the ramp started with FF +0.36,
+    I −0.3, under the 0.37–0.42 A breakaway, and at kq 14.5 / ki 21.7 it took ~1.2 s and 1° of lag
+    before P and the unwinding integral broke it free. The bare turret (kq 30.8, ki 46) does the same
+    in ~0.4 s and passes. Pass 1's small steps overshooting 72–194% (a 0.1° step travelling 0.23°)
+    is the mirror image: a release by a stall rock when the friction level sat below the feedforward.
+  - **The cause is friction drift against the feedforward, not stick-slip while tracking.** Three
+    surveys of the same payload the same evening (21:16, 22:58, 23:43) disagree by 0.06–0.3 A at
+    0.25–5 deg/s; the validation passes meet a feedforward that is ±0.1–0.15 A off. The station
+    stick-slips at slow speed under the prior's gains, bare and payload alike (survey plateaus:
+    30–43% of the time stuck), with 60–100 ms stick phases: a lightly damped loop limit cycle, not
+    slow stiction; the static excess at stick-end is +0.02…0.09 A only.
+  - **Reproduced in the simulator** with a plant shaped as measured (`sim_cases/payload_5x_knee`:
+    friction flat to ~2 deg/s then a knee of −2 A·s/rad that the fit's exponential cannot follow —
+    `fit_friction` bounds stribeck_speed at 0.08 rad/s — and `friction_drift_A` 0.1: the simulated
+    station moves the Coulomb levels ±0.1 A from one session to the next). With friction +0.15 A over
+    the feedforward the candidate servo gives ramp+1 1.108/1.132 and 3–6 stalls (station 1.104/1.158,
+    3 stalls); −0.10 A gives 0.88–0.92 and step overshoots of 39–133%. The full pipeline on that
+    plant at integral rate 1.5 failed two of three start angles (speed ratio 0.874; 6 stalls).
+  - **Fix: the design's integral rate 1.5 → 3 (`yaw_prior.json` design_rules), the PI corner never
+    above 0.4·wn (`design.gains`).** Six of six start angles accepted (speed ratios 0.91–1.03, ≤3
+    stalls); the crosstalk-robust boundary is unchanged (9.84 vs 9.7 rad/s). The corner bound comes
+    from the `--update` test: under a drifted table the design lands at wn 4.6, where a 3 rad/s
+    corner rang the 10–20 deg/s ramps to 12° of jitter. Not available instead: more damping (kv feeds the crosstalk loop: ζ 0.75
+    lowers the boundary to 6.9 rad/s, ζ 1.0 to "inadequate"), breakaway help
+    (`friction_correction_rate`: trades the speed ratio for 5–9 stalls), rocks during slow ramps
+    (more stalls), a wider hold band (no effect), slow-speed friction learning (the first slow ramp
+    is always cold). The bare turret's design gets ki 46 → 92 (PI corner 3 rad/s against wn 27.5);
+    its pipeline test still passes.
+  - **Still the owner's:** (a) under a +0.15 A rise the small steps need 4–8 stall rocks per pass
+    at any gain tried, against a gate of 4 — a threshold question; (b) the crosstalk drift
+    allowance (1.0 × max|g|) caps the payload at kq ≈ 14–21; at 0.5 the design gives wn 10.6
+    (kq 24), speed ratios 0.976–1.031 everywhere and 1.6× better accuracy, for 3× less margin
+    against a crosstalk drift the station has shown at 1.1 mrad/A in three weeks; (c) the FF's
+    friction fit cannot follow the measured knee or the hour-to-hour level — the drift is real, so
+    the loop must carry it; the fit's instability (23:43: + 0.18+0.62, creep 0.68) comes from the
+    plateau means being limit-cycle averages under the prior.
+  - **Confirmed on run 2's journals (MEASURE 23:55, same failure: pass 2 ramp−1 at 1.149).** Every
+    0.2 s from that ramp's start: the feedforward steps to −0.19 A, the axis breaks away and slips
+    0.5° ahead (2.5× the reference speed at 0.2 s); while ahead the loop winds the integral against
+    the direction of travel (+0.04 → +0.13 A); the axis then stands from 0.6 to 1.8 s while the
+    reference passes it (0.5° ahead → 0.63° behind) until the integral has unwound and P has grown
+    to the −0.38 A breakaway; the catch-up after 1.8 s is the "speed". Pass 1's ramp−1 shows the same
+    slip with a shorter stick (0.985). The unwinding rate, ki·e ≈ 20.8 × 5 mrad ≈ 0.1 A/s as seen,
+    is what the rule change triples. The exact servo-level root — an integral that winds against a
+    moving reference while the axis stands ahead of it — would be a conditional-integration change
+    in `axis_control_core/servo.cpp` (production code; not made here).
+  - **The next station run (MEASURE on #5 with this branch) must show:** `ki ≈ 3 × kq` in the ladder
+    line (≈ 40–65), both passes accepted with speed ratios inside 0.93–1.07, and in the use-case
+    journals a stick at ramp±1's start no longer than ~0.5 s with the integral unwinding at ≥ 0.3 A/s.

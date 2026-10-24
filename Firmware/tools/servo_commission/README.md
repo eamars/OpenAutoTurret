@@ -17,7 +17,7 @@ were calibrated how.
 | `score.py`, `usecase.py` | ADR-003-shaped references (Level-1 generator), per-segment metrics, the acceptance gates, and conformance to the calibrated accuracy limits. |
 | `accuracy.py` | The yaw accuracy calibration (`commission.py calibrate`): per-pass metrics, the fixed limit rule (1.25 x worst pass), the motor-feedforward-off variant, and the comparison. |
 | `journal.py` | Reads commissiond journals into arrays. |
-| `sim_cases/` | Hidden plants for the offline proof: this station's estimate, a 2.5× payload, and the 5× (the 2026-10-24 payload's class) and 10× payloads, all with the station's measured encoder noise and friction roughness. |
+| `sim_cases/` | Hidden plants for the offline proof: this station's estimate, a 2.5× payload, the 5× (the 2026-10-24 payload's class) and 10× payloads, all with the station's measured encoder noise and friction roughness; and `payload_5x_knee`, the payload as its three surveys measured it (a friction knee the fit cannot follow, and `friction_drift_A`: the simulated station moves the Coulomb levels ±0.1 A from one session to the next, so validation meets the feedforward cold as it does on the station). |
 | `tests/test_pipeline.py` | The offline proof: identification accuracy, delay calibration, and whole-pipeline acceptance. |
 | `templates/` | Session manifest skeletons (station topology, IMU calibration, limits). |
 
@@ -120,8 +120,19 @@ and friction.
   taken with the table wrong by its own largest |g|. On 2026-10-02 the commissioned gains (wn 44.7,
   stable to -2 mrad/A of error) buzzed at standstill once the reading had drifted ~3 mrad/A; the
   redesign (wn 27.5, bias 3 mrad/A) is quiet to -7 mrad/A in simulation, at friction x0.5 to x2.
-- **Integral rate ki = 1.5·kq, not scaled with wn:** the integral works against friction, which
-  does not scale with inertia.
+- **Integral rate ki = 3·kq, not scaled with wn:** the integral works against friction, which
+  does not scale with inertia. It was 1.5·kq (2026-10-02) until the 5× payload (2026-10-24): the
+  bearing's friction level moves ±0.1 A between sessions an hour apart (three surveys the same
+  evening disagreed by that much at 0.25–5 deg/s), and at the gain the crosstalk drift allowance
+  permits a heavy plant (kq 14.5 against the bare turret's 30.8) the integral at 1.5·kq took over a
+  second to make up the feedforward's shortfall at a slow ramp's start — the axis stood for ~1.2 s
+  while the reference ran 1° ahead, then caught up, and the speed-ratio gate read 1.10–1.16. On the
+  simulated station with that drift (`payload_5x_knee`) rate 1.5 failed two of three starts; rate 3
+  passes six of six (speed ratios 0.91–1.03). Damping is not available for this: kv also feeds the
+  crosstalk loop, and ζ 0.75 cuts the robust boundary from 9.8 to 6.9 rad/s. What remains under a
+  +0.15 A rise is the stall count (rocks on small steps the drifted friction makes necessary). The
+  PI corner ki/kq never exceeds 0.4·wn (`design.INTEGRAL_CORNER_MAX`): at wn 4.6 — a 5× payload
+  under a drifted table — 3 rad/s rang the fast ramps to 12° of jitter, 1.8 does not.
 - **Stall recovery always on in a designed asset:** without it, ±90 deg moves stuck 0.33 deg short
   at 1.1 A. It acts when the axis is more than 0.14 deg behind while pushing, for 0.3 s, and only
   with |v_ref| < 0.01 rad/s, so it fires at targets and not at the walking profile's reversals.

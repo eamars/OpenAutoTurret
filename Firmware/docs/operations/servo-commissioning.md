@@ -120,7 +120,7 @@ numbers; the report records every number):
    so when it exceeds the scan's repeatability.
 4. **design (simulation).** `servo-sim` runs the identified plant through eight angles with steps
    and 5 and 20 deg/s ramps. Gains follow one loop shape scaled by inertia: kq = a·wn²,
-   kv = a·wn (zeta 0.5), ki = 1.5·kq. For each compensation bias (1, 2, 3 mrad/A left in the
+   kv = a·wn (zeta 0.5), ki = 3·kq. For each compensation bias (1, 2, 3 mrad/A left in the
    reading on purpose) it finds the largest quiet wn with the table shifted by ± (its uncertainty +
    a drift allowance of `crosstalk_drift_fraction` × the table's largest |g|; rule 1.0, so the loop
    survives losing the compensation). It then keeps the bias whose simulated use case scores best.
