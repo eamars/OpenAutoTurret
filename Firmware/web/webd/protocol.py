@@ -89,6 +89,10 @@ class Telemetry:
     # saved, resolvable this session, kept across restarts, the last save's outcome (1/0/-1), and
     # where it is in this session's joints (None when it does not resolve).
     auto_return_mode: str = "AUTO_ROAM"
+    # The calibration record in force (ADR-005): {"id", "name"}, or None when the station has no store
+    # and runs on its configured files; and why it cannot be used ("" when it can; HOME is refused).
+    calibration_record: Optional[dict] = None
+    calibration_blocked: str = ""
     # What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
     # fresh frame was produced for ("" while none), the hold while it switches, and an overdue switch.
     target_type: str = ""

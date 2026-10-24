@@ -127,6 +127,18 @@ TEST(WebServer, UnknownYawTorqueIsValidJsonNull) {
   EXPECT_EQ(wire.find("nan"), std::string::npos);
 }
 
+TEST(WebServer, TheCalibrationRecordInForceIsAnObjectOrNull) {
+  // ADR-005: no store (the configured files) is null, not a record #0.
+  telemetry::TelemetrySnapshot s;
+  EXPECT_NE(format_telemetry(s).find("\"calibration_record\":null"), std::string::npos);
+  s.calibration_record_id = 2;
+  s.calibration_record_name = "FRICTION \"10-20\"";
+  s.calibration_blocked = "record #2: yaw_servo.json does not parse";
+  const std::string wire = format_telemetry(s);
+  EXPECT_NE(wire.find("\"calibration_record\":{\"id\":2,\"name\":\"FRICTION \\\"10-20\\\"\"}"), std::string::npos) << wire;
+  EXPECT_NE(wire.find("\"calibration_blocked\":\"record #2: yaw_servo.json does not parse\""), std::string::npos);
+}
+
 TEST(WebServer, AnInvalidatedEncoderLeavesTheFrameValidJson) {
   // Station, 2026-10-02: a trip invalidated the yaw encoder, q_yaw_rad went NaN, and every frame
   // after it was rejected by webd -- the page showed nothing for the whole fault. Any number may be

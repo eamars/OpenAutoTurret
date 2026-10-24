@@ -273,7 +273,11 @@ bool MixedCanMotorBackend::open(const config::mixed::Profile& profile,
       close();
       return false;
     }
-    if (profile_.servo && !load_servos(err)) {
+    // No asset paths: the calibration record in force cannot be used (ADR-005 D4). The backend opens
+    // without servos and the control loop refuses HOME, so nothing moves on someone else's gains.
+    if (profile_.servo && profile_.servo->yaw_asset.empty())
+      spdlog::warn("servos not configured: the calibration record in force cannot be used");
+    else if (profile_.servo && !load_servos(err)) {
       close();
       return false;
     }

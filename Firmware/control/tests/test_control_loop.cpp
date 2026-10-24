@@ -709,6 +709,24 @@ TEST(MotorRecovery, FaultRecoveryStaysDisabledUntilExplicitHome) {
   EXPECT_TRUE(run_to_ready(*h.loop, *h.sim, h.t));
 }
 
+TEST(CalibrationRecord, AnUnusableRecordInForceRefusesHomeAndSaysWhy) {
+  // ADR-005 D4: no servo was configured from it, so nothing may move -- and no other record is used.
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.loop->set_homing_factory([] { return make_plan(); });
+  h.loop->set_calibration_record(2, "BENCH TEST", "record #2: yaw_servo.json does not parse");
+  h.run("start_homing");
+  EXPECT_FALSE(h.loop->last_command_ack().accepted);
+  EXPECT_NE(h.loop->last_command_ack().reason.find("yaw_servo.json does not parse"), std::string::npos)
+      << h.loop->last_command_ack().reason;
+  EXPECT_EQ(h.snap().calibration_record_id, 2);
+  EXPECT_EQ(h.snap().calibration_record_name, "BENCH TEST");
+  EXPECT_EQ(h.snap().calibration_blocked, "record #2: yaw_servo.json does not parse");
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.run("start_homing");
+  EXPECT_TRUE(h.loop->last_command_ack().accepted) << h.loop->last_command_ack().reason;
+}
+
 TEST(MotorRecovery, SilencePersistentFaultAndHeatCannotBeClearedBySoftware) {
   for (int scenario = 0; scenario < 3; ++scenario) {
     HomedLoop h(false);

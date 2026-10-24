@@ -27,6 +27,7 @@
 #include <string>
 #include <thread>
 
+#include "calibration/calibration_store.hpp"
 #include "calibration/camera_calibration.hpp"
 #include "config/tracking_setup.hpp"
 #include "calibration/homing_plan.hpp"
@@ -184,7 +185,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   for (const auto& w : lr.warnings) spdlog::warn("config: {}", w);
-  const config::TurretConfig& cfg = lr.config;
+  config::TurretConfig& cfg = lr.config;   // the calibration record in force replaces its file parts
   const bool mixed_mode = !sim_mode && !cfg.hardware_profile.empty();
   const char* mixed_commission_env = std::getenv("OTA_MIXED_COMMISSION_MANUAL");
   const bool mixed_commission_manual = mixed_mode && mixed_commission_env &&
@@ -205,6 +206,46 @@ int main(int argc, char** argv) {
     spdlog::info("mixed hardware: continuous GM6020 yaw on {}, bounded CyberGear pitch on {}",
                  mixed_profile.yaw_bus.interface, mixed_profile.pitch_bus.interface);
   }
+  // ADR-005: the calibration record in force supplies the servo assets, the extrinsic and the bore.
+  // The launcher seeds #1 from the configured files into an empty store; without a store (a
+  // workstation run, the tests) the configured files are used as before. A record in force that
+  // cannot be used configures no servo and keeps the station shut down -- never another record.
+  int calibration_id = 0;
+  std::string calibration_name, calibration_blocked;
+  if (const char* sd = std::getenv("OTA_STATE_DIR"); sd != nullptr && *sd != '\0') {
+    calibration::Store store;
+    std::string e;
+    if (!store.open(sd, e)) {
+      spdlog::error("calibration store: {}; using the configured files", e);
+    } else {
+      for (const auto& line : store.adopted()) spdlog::info("calibration: {}", line);
+      std::string why;
+      if (store.empty()) {
+        spdlog::warn("calibration: no records in {}/calibration; using the configured files", sd);
+      } else if (const auto* r = store.in_force(why)) {
+        calibration_id = r->id;
+        calibration_name = r->name;
+        cfg.camera.extrinsics_file = r->path("extrinsic").string();
+        cfg.alignment = r->bore.alignment();
+        if (mixed_profile.servo) {
+          mixed_profile.servo->yaw_asset = r->path("yaw").string();
+          mixed_profile.servo->pitch_asset = r->path("pitch").string();
+        }
+        spdlog::info("calibration: record #{} {} in force, from {} ({} records)", r->id, r->name,
+                     r->dir.string(), store.records().size());
+      } else {
+        calibration_id = store.active_id();
+        if (const auto* r = store.find(calibration_id)) calibration_name = r->name;
+        calibration_blocked = why;
+        if (mixed_profile.servo) {
+          mixed_profile.servo->yaw_asset.clear();
+          mixed_profile.servo->pitch_asset.clear();
+        }
+        spdlog::error("calibration: {}; no servo is configured and HOME is refused", why);
+      }
+    }
+  }
+
   // Reject invalid explicit alignment before opening a motor transport.
   TrackingController::Config tracking_cfg;
   try { tracking_cfg = make_tracking_cfg(cfg); }
@@ -365,6 +406,7 @@ int main(int argc, char** argv) {
     spdlog::warn("mixed commissioning: manual/hold only; AUTO_ROAM startup and tracking auto-enable suppressed");
   }
   ControlLoop loop(std::move(control_cfg), std::move(backend));
+  loop.set_calibration_record(calibration_id, calibration_name, calibration_blocked);
 
   // The BNO085 is mounted on the moving pitch assembly. It observes gimbal
   // motion independently of motor feedback; it is not the fixed base pose.
@@ -551,10 +593,14 @@ int main(int argc, char** argv) {
   // both motors off, nothing moves until the web's HOME -- and a deploy restores the state it found.
   // Unset means homed, which is what every caller did before the ruling.
   const char* start_state_env = std::getenv("OTA_START_STATE");
-  const bool start_shut_down = start_state_env && std::strcmp(start_state_env, "shutdown") == 0;
+  // A calibration record that cannot be used keeps it shut down whatever the launcher asked (D4).
+  const bool start_shut_down = (start_state_env && std::strcmp(start_state_env, "shutdown") == 0) ||
+                               !calibration_blocked.empty();
   if (start_shut_down) {
     loop.deenergize_all();
-    spdlog::info("start state: SHUTDOWN (both motors off, not homed); MENU > HOME starts the station");
+    spdlog::info("start state: SHUTDOWN (both motors off, not homed); {}",
+                 calibration_blocked.empty() ? "MENU > HOME starts the station"
+                                             : "HOME is refused until another calibration record is chosen");
   } else if (!reused && !loop.start_homing(std::move(plan), err)) {
     spdlog::error("start homing failed: {}", err);
     loop.deenergize_all();

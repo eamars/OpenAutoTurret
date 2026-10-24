@@ -325,6 +325,10 @@ class ControlLoop {
   // What the turret follows: HUMAN, HEAD, CAT or DOG (owner, 2026-10-20; mode/target_type.hpp).
   // Loaded once from `path` (empty: this session only); a missing file is the default, HEAD.
   bool set_target_type_store(const std::string& path, std::string& err);
+  // The calibration record in force (ADR-005), read by main before the backend opened. `blocked`:
+  // the record in force cannot be used, so no servo was configured and HOME is refused with this
+  // reason. Never another record instead (D4).
+  void set_calibration_record(int id, std::string name, std::string blocked);
   TargetType target_type() const { return target_type_; }
   bool target_type_switching() const { return tswitch_.active; }
   // The mode the automatic cycle returns to after a loss: AUTO_ROAM, or SURVEILLANCE once the
@@ -913,6 +917,8 @@ class ControlLoop {
   // after kTargetSwitchPatienceNs it stays held and says so.
   TargetType target_type_ = kDefaultTargetType;
   std::unique_ptr<TargetTypeStore> target_store_;
+  int calibration_id_ = 0;                 // 0: no store, the configured files are in use
+  std::string calibration_name_, calibration_blocked_;
   struct TargetSwitch {
     bool active = false;
     bool overdue = false;

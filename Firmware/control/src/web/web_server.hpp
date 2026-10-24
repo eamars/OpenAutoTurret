@@ -488,7 +488,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"operating_mode\":\"" << json_escape(s.operating_mode) << "\""
      << ",\"supervisory_state\":\"" << json_escape(s.supervisory_state) << "\""
      << ",\"mode_phase\":\"" << json_escape(s.mode_phase) << "\""
-     << ",\"auto_return_mode\":\"" << json_escape(s.auto_return_mode) << "\""
+     << ",\"auto_return_mode\":\"" << json_escape(s.auto_return_mode) << "\"";
+  if (s.calibration_record_id > 0)
+    os << ",\"calibration_record\":{\"id\":" << s.calibration_record_id << ",\"name\":\""
+       << json_escape(s.calibration_record_name) << "\"}";
+  else
+    os << ",\"calibration_record\":null";
+  os << ",\"calibration_blocked\":\"" << json_escape(s.calibration_blocked) << "\""
      << ",\"target_type\":\"" << json_escape(s.target_type) << "\""
      << ",\"target_type_applied\":\"" << json_escape(s.target_type_applied) << "\""
      << ",\"target_type_switching\":" << (s.target_type_switching ? "true" : "false")

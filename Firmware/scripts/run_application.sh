@@ -794,6 +794,15 @@ elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; t
     fi
   fi
 fi
+# ADR-005: an empty calibration store gets record #1 from this release's configured files; a store
+# with records is left alone (no comparison with the source, owner 2026-10-24). controld reads the
+# record in force; if seeding fails it says so and runs on the configured files.
+if ! "$PY" "$APP/tools/calibration_records.py" seed --state "$OTA_STATE_DIR" \
+     --config "$ACTIVE_CONTROL_CONFIG" --root "$APP" >"$RUN/calibration-seed.log" 2>&1; then
+  echo "calibration records: seeding failed (see $RUN/calibration-seed.log); controld uses the configured files" >&2
+else
+  cat "$RUN/calibration-seed.log"
+fi
 "${control_sched[@]}" "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
 controller_pid=$!
 children+=("$controller_pid")

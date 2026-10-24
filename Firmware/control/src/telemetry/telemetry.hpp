@@ -539,6 +539,11 @@ struct TelemetrySnapshot {
   // known); written to a state directory or this session only; the last write's outcome (1 ok,
   // 0 failed, -1 none yet); and where it is, in this session's joints (NaN when not resolvable).
   std::string auto_return_mode = "AUTO_ROAM";
+  // The calibration record in force (ADR-005): its id (0 when there is no store and the configured
+  // files are in use) and name, and why it cannot be used ("" when it can; HOME is refused while not).
+  int calibration_record_id = 0;
+  std::string calibration_record_name;
+  std::string calibration_blocked;
   // What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
   // fresh frame was produced for ("" while none), whether the turret is holding for the switch, and
   // whether that switch is overdue (perception has not applied it within 10 s).

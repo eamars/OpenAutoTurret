@@ -3862,6 +3862,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // target only on the way back to a watch point), and the point itself, in this session's
     // joints for the tapes. Re-resolved at 5 Hz: it asks the yaw drive for its absolute angle.
     snap.auto_return_mode = operating_mode_name(auto_return_mode_);
+    snap.calibration_record_id = calibration_id_;
+    snap.calibration_record_name = calibration_name_;
+    snap.calibration_blocked = calibration_blocked_;
     snap.target_type = target_type_name(target_type_);
     snap.target_type_applied = target_type_name(applied_target_type(now_ns));
     snap.target_type_switching = tswitch_.active;
@@ -4663,6 +4666,12 @@ bool ControlLoop::set_watch_point_store(const std::string& path, std::string& er
     spdlog::info("no watch point saved{}; SURVEILLANCE waits for MODE > SET WATCH POINT",
                  path.empty() ? " (no state directory: a new one lasts this session only)" : "");
   return ok;
+}
+
+void ControlLoop::set_calibration_record(int id, std::string name, std::string blocked) {
+  calibration_id_ = id;
+  calibration_name_ = std::move(name);
+  calibration_blocked_ = std::move(blocked);
 }
 
 bool ControlLoop::set_target_type_store(const std::string& path, std::string& err) {
@@ -6794,6 +6803,12 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "start_homing") {
+    // ADR-005 D4: a record that cannot be used configured no servo; nothing moves until another is
+    // chosen, because a servo designed for another payload is the failure records exist to prevent.
+    if (!calibration_blocked_.empty()) {
+      ack_command(name, false, calibration_blocked_ + "; choose another calibration record");
+      return;
+    }
     if (!homing_factory_ || phase_ == Phase::Homing || phase_ == Phase::Parking) {
       ack_command(name, false, phase_ == Phase::Homing ? "already homing"
           : !homing_factory_ ? "homing is not configured" : "the process-exit stop is under way");
