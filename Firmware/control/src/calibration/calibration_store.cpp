@@ -1,8 +1,10 @@
 #include "calibration/calibration_store.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <limits>
 #include <system_error>
 
@@ -266,20 +268,161 @@ std::string records_json(const std::vector<Record>& records) {
   return o + "]";
 }
 
-bool write_active(const fs::path& dir, int id, std::string& err) {
-  const fs::path tmp = dir / "active.json.tmp", final = dir / "active.json";
-  {
-    std::FILE* f = std::fopen(tmp.string().c_str(), "wb");
-    if (f == nullptr) { err = "cannot write " + tmp.string(); return false; }
-    std::fprintf(f, "{\"schema\": 1, \"active\": %d}\n", id);
-    const bool ok = std::fflush(f) == 0 && ::fsync(fileno(f)) == 0;
-    std::fclose(f);
-    if (!ok) { err = "cannot flush " + tmp.string(); return false; }
-  }
+namespace {
+// Temp file, flushed to the disk, then renamed over: a reader never sees half a file, and a power
+// cut never leaves an empty one (the WSL crash of 2026-10-24 showed what unflushed writes become).
+bool write_file(const fs::path& final, const std::string& text, std::string& err) {
+  const fs::path tmp = final.string() + ".tmp";
+  std::FILE* f = std::fopen(tmp.string().c_str(), "wb");
+  if (f == nullptr) { err = "cannot write " + tmp.string(); return false; }
+  const bool ok = std::fwrite(text.data(), 1, text.size(), f) == text.size() && std::fflush(f) == 0 &&
+                  ::fsync(fileno(f)) == 0;
+  std::fclose(f);
+  if (!ok) { err = "cannot write " + tmp.string(); return false; }
   std::error_code ec;
   fs::rename(tmp, final, ec);
   if (ec) { err = "cannot replace " + final.string() + ": " + ec.message(); return false; }
   return true;
+}
+
+bool json_number(const std::string& s) {
+  std::size_t i = 0;
+  if (i < s.size() && s[i] == '-') ++i;
+  const std::size_t digits = i;
+  while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+  if (i == digits) return false;
+  if (i < s.size() && s[i] == '.') {
+    const std::size_t f = ++i;
+    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+    if (i == f) return false;
+  }
+  if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+    ++i;
+    if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i;
+    const std::size_t e = i;
+    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+    if (i == e) return false;
+  }
+  return i == s.size();
+}
+
+// yaml-cpp reads JSON but writes YAML; record.json is read by the Python tool with json.loads, so
+// it is written back as JSON. A quoted scalar stays a string ("!" tag); a plain one is written as it
+// was when it is a JSON number, true, false or null.
+std::string to_json(const YAML::Node& n, int indent) {
+  const std::string pad(indent + 1, ' '), end(indent, ' ');
+  if (n.IsMap()) {
+    std::string o = "{";
+    bool first = true;
+    for (const auto& kv : n) {
+      o += (first ? "\n" : ",\n") + pad + "\"" + esc(kv.first.as<std::string>()) + "\": " + to_json(kv.second, indent + 1);
+      first = false;
+    }
+    return first ? "{}" : o + "\n" + end + "}";
+  }
+  if (n.IsSequence()) {
+    std::string o = "[";
+    for (std::size_t i = 0; i < n.size(); ++i) o += (i ? ", " : "") + to_json(n[i], indent + 1);
+    return o + "]";
+  }
+  if (n.IsNull() || !n.IsDefined()) return "null";
+  const std::string v = n.Scalar();
+  if (n.Tag() != "!" && (json_number(v) || v == "true" || v == "false" || v == "null")) return v;
+  return "\"" + esc(v) + "\"";
+}
+
+std::string now_local() {
+  const std::time_t t = std::time(nullptr);
+  std::tm tm{};
+  localtime_r(&t, &tm);
+  char b[40];
+  std::strftime(b, sizeof b, "%Y-%m-%dT%H:%M:%S%z", &tm);
+  std::string s = b;
+  if (s.size() > 2) s.insert(s.size() - 2, ":");   // +1300 -> +13:00, as the Python tool writes it
+  return s;
+}
+}  // namespace
+
+bool write_active(const fs::path& dir, int id, std::string& err) {
+  return write_file(dir / "active.json", "{\"schema\": 1, \"active\": " + std::to_string(id) + "}\n", err);
+}
+
+std::string record_name(const std::string& raw) {
+  std::string name;
+  for (char c : raw) name += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  while (!name.empty() && name.back() == ' ') name.pop_back();
+  while (!name.empty() && name.front() == ' ') name.erase(name.begin());
+  if (name.empty() || name.size() > 24) return {};
+  for (char c : name)
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == ' ' || c == '-' || c == '_')) return {};
+  return name;
+}
+
+bool rename_record(const fs::path& dir, const std::string& name, std::string& err) {
+  try {
+    YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
+    doc["name"] = name;
+    doc["name"].SetTag("!");
+    return write_file(dir / "record.json", to_json(doc, 0) + "\n", err);
+  } catch (const std::exception& e) {
+    err = std::string("record.json does not parse (") + e.what() + ")";
+    return false;
+  }
+}
+
+bool copy_record(const Record& from, const fs::path& dir, const std::string& name, std::string& err) {
+  // Made beside, then renamed into place: a half-made record is never in records/.
+  const fs::path staging = dir.parent_path().parent_path() / (".new-" + dir.filename().string());
+  std::error_code ec;
+  fs::remove_all(staging, ec);
+  fs::create_directories(staging, ec);
+  if (ec) { err = "cannot create " + staging.string() + ": " + ec.message(); return false; }
+  std::string parts;
+  for (const char* part : kParts) {
+    const auto& file = from.parts.at(part).file;
+    fs::copy_file(from.dir / file, staging / file, fs::copy_options::overwrite_existing, ec);
+    if (ec) { err = "cannot copy " + file + ": " + ec.message(); fs::remove_all(staging, ec); return false; }
+    parts += std::string(parts.empty() ? "" : ",\n") + "  \"" + part + "\": {\"file\": \"" + esc(file) +
+             "\", \"origin\": \"inherited\", \"from\": " + std::to_string(from.id) + "}";
+  }
+  const std::string record = "{\n \"schema\": \"ota.calibration-record/1\",\n \"name\": \"" + esc(name) +
+      "\",\n \"created\": \"" + now_local() + "\",\n \"source\": \"copy of #" + std::to_string(from.id) +
+      "\",\n \"extrinsic_frame\": \"pitch_from_homed_low\",\n \"parts\": {\n" + parts + "\n },\n \"last_run\": null\n}\n";
+  if (!write_file(staging / "record.json", record, err)) { fs::remove_all(staging, ec); return false; }
+  fs::create_directories(dir.parent_path(), ec);
+  fs::rename(staging, dir, ec);
+  if (ec) { err = "cannot place " + dir.string() + ": " + ec.message(); fs::remove_all(staging, ec); return false; }
+  return true;
+}
+
+bool remove_record(const fs::path& root, int id, std::string& err) {
+  std::error_code ec;
+  fs::create_directories(root / "deleted", ec);
+  fs::path to = root / "deleted" / id_dir(id);
+  for (int n = 1; fs::exists(to, ec); ++n) to = root / "deleted" / (id_dir(id) + "." + std::to_string(n));
+  fs::rename(root / "records" / id_dir(id), to, ec);
+  if (ec) { err = "cannot remove #" + std::to_string(id) + ": " + ec.message(); return false; }
+  return true;
+}
+
+fs::path Store::dir_of(int id) const { return root_ / "records" / id_dir(id); }
+
+int Store::next_id() const {
+  const auto live = ids_in(root_ / "records"), gone = ids_in(root_ / "deleted");
+  return 1 + std::max(live.empty() ? 0 : live.back(), gone.empty() ? 0 : gone.back());
+}
+
+void Store::refresh(int id) {
+  Record r = read_record(dir_of(id), id);
+  for (auto& existing : records_)
+    if (existing.id == id) { existing = std::move(r); return; }
+  records_.push_back(std::move(r));
+  std::sort(records_.begin(), records_.end(), [](const Record& a, const Record& b) { return a.id < b.id; });
+}
+
+void Store::drop(int id) {
+  records_.erase(std::remove_if(records_.begin(), records_.end(), [id](const Record& r) { return r.id == id; }),
+                 records_.end());
 }
 
 Writer::Writer() : thread_([this] {

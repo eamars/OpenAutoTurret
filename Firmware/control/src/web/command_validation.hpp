@@ -69,6 +69,8 @@ inline constexpr int kYawIx = 1;
 //   set_speed <patrol_wide|patrol_detail|track>=<deg/s|default>  (this session only),
 //   set_target_type <HUMAN|HEAD|CAT|DOG>  (what is followed; saved across restarts),
 //   set_calibration_record <id>           (ADR-005: the record in force; saved across restarts),
+//   rename_calibration_record <id> <name>, new_calibration_record <from> <name>,
+//   delete_calibration_record <id>         (ADR-005: records leave the way they came; not #1),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -177,6 +179,21 @@ inline CommandResult validate_command(const SystemCommandState& s,
     if (arg.empty() || arg.size() > 6 ||
         !std::all_of(arg.begin(), arg.end(), [](char c) { return c >= '0' && c <= '9'; }) || arg == "0") {
       r.error = "set_calibration_record needs a record number";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "rename_calibration_record" || command == "new_calibration_record" ||
+      command == "delete_calibration_record") {
+    // "<id> <name>" / "<source id> <name>" / "<id>": files on the station, nothing that moves; controld
+    // checks the name and refuses #1 (the shipped backup) and removing the record in force.
+    const std::size_t sp = arg.find(' ');
+    const std::string id = arg.substr(0, sp);
+    const bool named = command != "delete_calibration_record";
+    if (id.empty() || id.size() > 6 || !std::all_of(id.begin(), id.end(), [](char c) { return c >= '0' && c <= '9'; }) ||
+        (named && (sp == std::string::npos || arg.size() - sp - 1 > 40)) || (!named && sp != std::string::npos)) {
+      r.error = command + (named ? " needs a record number and a name" : " needs a record number");
       return r;
     }
     r.ok = true;

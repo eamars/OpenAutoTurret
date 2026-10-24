@@ -73,6 +73,16 @@ std::string records_json(const std::vector<Record>& records);
 // active.json, written atomically.
 bool write_active(const std::filesystem::path& state_calibration_dir, int id, std::string& err);
 
+// Record files, changed on disk (call off the control thread; each is atomic). Records leave the way
+// they came (owner, 2026-10-24): rename, a copy made from another, removal to deleted/ (kept, not
+// erased: a measured record holds an hour of station time). #1 is the shipped backup -- the caller
+// refuses it; these do what they are asked.
+bool rename_record(const std::filesystem::path& dir, const std::string& name, std::string& err);
+bool copy_record(const Record& from, const std::filesystem::path& dir, const std::string& name, std::string& err);
+bool remove_record(const std::filesystem::path& state_calibration_dir, int id, std::string& err);
+// A name: 1-24 letters, digits, spaces, '-' or '_', stored upper case. Empty when it is not one.
+std::string record_name(const std::string& raw);
+
 // File work off the 200 Hz control thread: jobs run in order on one thread of their own.
 class Writer {
  public:
@@ -106,6 +116,12 @@ class Store {
   const Record* in_force(std::string& why) const;
   const std::filesystem::path& root() const { return root_; }
   void set_active(int id) { active_ = id; }
+  std::filesystem::path dir_of(int id) const;
+  // The next id: never one in records/ or deleted/.
+  int next_id() const;
+  // After a change on disk: read one record again (added if new), or forget a removed one.
+  void refresh(int id);
+  void drop(int id);
 
  private:
   void adopt_incoming();

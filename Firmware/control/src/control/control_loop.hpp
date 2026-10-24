@@ -755,6 +755,8 @@ class ControlLoop {
     std::string gate_reject;  // empty = run it; non-empty = answer with this
     // set_calibration_record: the record, read and parsed on the web thread (file I/O).
     std::shared_ptr<const calibration::Prepared> prepared;
+    // rename/new/delete_calibration_record: done on the web thread; the control thread acks with this.
+    std::string done;
   };
   std::deque<PendingCommand> command_queue_;
   std::atomic<bool> shutdown_requested_{false};
@@ -934,6 +936,7 @@ class ControlLoop {
   std::shared_ptr<const std::string> calibration_records_json_;
   bool calibration_unverified_ = false;    // switched since the last VERIFY (a nudge, never a run)
   std::shared_ptr<const calibration::Prepared> prepared_for_command_;
+  std::string done_for_command_;
   // The swap hold (ADR-005 D5): the target-type switch (owner, 2026-10-20) and the calibration-record
   // switch share it. While it is active the turret holds in MANUAL with the automatic cycle frozen
   // and jogs refused; it ends when every pending swap is applied, and the mode the turret was in
@@ -950,15 +953,27 @@ class ControlLoop {
     bool record_applied = false;
     bool record_refused = false;               // the backend refused it; tried again only if chosen again
     TimeNs record_rest_since_ns = 0;           // at rest: before the swap, then settled after it
+    double record_rest_q[kAxisCount] = {0, 0}; // where the current rest window began
   } hold_;
   static constexpr TimeNs kTargetSwitchSettleNs = 300'000'000;    // frames of the new type, steadily
   static constexpr TimeNs kRecordRestNs = 100'000'000;            // at rest before the servos swap
   static constexpr TimeNs kRecordSettleNs = 300'000'000;          // and settled after, on the new ones
-  static constexpr double kRecordRestRadS = 0.5 * 3.14159265358979323846 / 180.0;
+  // At rest = both measured positions stay within this of where the window began. Not speed: on
+  // the station (2026-10-24) the CyberGear's speed reading at rest spanned -2.6..+8 deg/s while its
+  // position did not move by one count. 0.3 deg is above the yaw servo's 4 mrad hold band and the
+  // pitch's 0.022 deg count; a turret still braking at 3 deg/s leaves it within 100 ms.
+  static constexpr double kRecordRestBandRad = 0.3 * 3.14159265358979323846 / 180.0;
   static constexpr TimeNs kSwapPatienceNs = 10'000'000'000;
   void begin_swap_hold();
   void execute_set_target_type(const std::string& arg);
-  void execute_set_calibration_record(const std::string& arg);
+  void execute_set_calibration_record(const std::string& arg,
+                                      const std::string& ack_name = "set_calibration_record",
+                                      const std::string& prefix = "");
+  // Web thread: the file side of rename/new/delete_calibration_record (ADR-005 D2).
+  web::CommandResult calibration_files(const std::string& name, const std::string& arg,
+                                       std::shared_ptr<const calibration::Prepared>& prepared,
+                                       std::string& done);
+  void rebuild_calibration_json_locked();
   bool apply_calibration(const calibration::Prepared& p, std::string& err);
   void step_swap_hold(TimeNs now_ns, const AxisSnapshot sp[kAxisCount]);
   TargetType applied_target_type(TimeNs now_ns) const;

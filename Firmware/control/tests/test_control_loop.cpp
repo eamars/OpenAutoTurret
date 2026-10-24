@@ -803,6 +803,71 @@ TEST(CalibrationSwitch, HomedItHoldsSwapsOnAStillTurretSettlesAndResumesTheMode)
   EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
 }
 
+TEST(CalibrationRecords, RenameRemoveAndNewLeaveTheWayTheyCameAndSpareTheShippedBackup) {
+  // Owner, 2026-10-24: records added from the page are removed from the page; #1 AS SHIPPED is the
+  // failsafe backup -- never renamed or removed -- and the record in force cannot be removed.
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/false);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  auto refused = [&](const char* cmd, const char* arg) { return h.loop->submit_command(cmd, arg).error; };
+  EXPECT_EQ(refused("rename_calibration_record", "1 MINE"), "#1 is the shipped backup and stays as shipped");
+  EXPECT_EQ(refused("delete_calibration_record", "1"), "#1 is the shipped backup and stays as shipped");
+  EXPECT_EQ(refused("rename_calibration_record", "2 a/b"), "a name is 1-24 letters, digits, spaces, - or _");
+
+  h.run("rename_calibration_record", "2 friction b");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.snap().cmd_ack_reason, "#2 is FRICTION B");
+  ASSERT_TRUE(h.snap().calibration_records_json);
+  EXPECT_NE(h.snap().calibration_records_json->find("\"name\":\"FRICTION B\""), std::string::npos);
+  {
+    // Still JSON (the Python tool reads it with json.loads), the name a string, the rest kept.
+    std::ifstream in(ota_cal_fixture::record_dir(s, 2) / "record.json");
+    const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    EXPECT_NE(text.find("\"name\": \"FRICTION B\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"from\": 1"), std::string::npos) << "a number stays a number: " << text;
+    EXPECT_NE(text.find("\"last_run\": null"), std::string::npos) << text;
+  }
+
+  // NEW: a copy of #2, put in force (shut down: at once), every part inherited from #2.
+  h.run("new_calibration_record", "2 rangefinder");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.snap().cmd_ack_reason, "#3 RANGEFINDER made from #2; #3 in force; the next HOME uses it");
+  EXPECT_EQ(h.snap().calibration_record_id, 3);
+  EXPECT_NE(h.snap().calibration_records_json->find("\"id\":3,\"name\":\"RANGEFINDER\""), std::string::npos);
+  EXPECT_NE(h.snap().calibration_records_json->find("\"origin\":\"inherited\",\"date\":\"\",\"run\":\"\",\"from\":2"),
+            std::string::npos) << *h.snap().calibration_records_json;
+
+  EXPECT_EQ(refused("delete_calibration_record", "3"), "#3 is in force: choose another record first");
+  h.run("delete_calibration_record", "2");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_TRUE(std::filesystem::exists(s.cal() / "deleted/0002/record.json")) << "kept, not erased";
+  EXPECT_EQ(h.snap().calibration_records_json->find("\"id\":2,"), std::string::npos);
+  h.run("new_calibration_record", "1 again");
+  EXPECT_EQ(h.snap().calibration_record_id, 4) << "ids are never reused: 2 is in deleted/";
+}
+
+TEST(CalibrationSwitch, ItCompletesWithTheStationsNoisySpeedReadingAndFlickeringCounts) {
+  // Station, 2026-10-24: the first switch never swapped -- its rest test used speed, and the pitch
+  // CyberGear's speed reading at rest spans -2.6..+8 deg/s. Rest is now judged by position.
+  ota_cal_fixture::State s;
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.sim->set_speed_noise(AxisId::Pitch, 8.0 * kDeg2Rad);
+  h.sim->set_speed_noise(AxisId::Yaw, 0.5 * kDeg2Rad);
+  h.sim->set_encoder(AxisId::Pitch, 0.000383, 0.6);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(100);
+  h.run("set_calibration_record", "2");
+  run_switch(h);
+  EXPECT_EQ(h.sim->servo_swaps(), 1);
+  EXPECT_FALSE(h.snap().calibration_switching);
+  EXPECT_FALSE(h.snap().calibration_overdue);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+}
+
 TEST(CalibrationSwitch, AStopDuringTheSwapIsNotUndoneWhenItEnds) {
   for (const char* stop : {"stop_motion", "hold"}) {
     ota_cal_fixture::State s;

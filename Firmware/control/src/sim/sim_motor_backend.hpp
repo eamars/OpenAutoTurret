@@ -63,6 +63,10 @@ class SimMotorBackend : public MotorBackend {
     axes_[ix(a)].quantum = quantum_rad;
     axes_[ix(a)].dither_counts = dither_counts;
   }
+  // The speed reading as the station gives it: on 2026-10-24 the pitch CyberGear's speed spanned
+  // -2.6..+8 deg/s while its position did not move by one count. A plant that reports its true speed
+  // hides every at-rest test built on speed. `peak_rad_s` is the peak of a deterministic noise.
+  void set_speed_noise(AxisId a, double peak_rad_s) { axes_[ix(a)].speed_noise = peak_rad_s; }
   void set_feedback_ok(AxisId a, bool ok) { axes_[ix(a)].feedback_ok = ok; }
   void set_faults(AxisId a, uint16_t f) { axes_[ix(a)].faults = f; }
   void set_temp(AxisId a, double t) { axes_[ix(a)].temp_c = t; }
@@ -145,7 +149,7 @@ class SimMotorBackend : public MotorBackend {
     s.has_feedback = ax.feedback_ok;
     s.rx_ns = now_ns;
     s.q_rad = measured(ax, now_ns);
-    s.v_rad_s = ax.v;
+    s.v_rad_s = ax.v + (ax.speed_noise > 0 ? (2.0 * unit_hash(now_ns ^ 0x5DEECE66Dull) - 1.0) * ax.speed_noise : 0.0);
     s.torque_nm = ax.torque;
     s.temp_c = ax.temp_c;
     s.faults = ax.faults;
@@ -183,13 +187,16 @@ class SimMotorBackend : public MotorBackend {
   struct Axis;
   // The encoder reading of the true position (set_encoder). The noise is a hash of the sample time,
   // so one instant always reads the same and a test run is repeatable.
-  static double measured(const Axis& ax, TimeNs now_ns) {
-    if (!(ax.quantum > 0)) return ax.q;
-    uint64_t z = static_cast<uint64_t>(now_ns) + 0x9E3779B97F4A7C15ull;
+  static double unit_hash(uint64_t seed) {   // [0, 1), the same for the same seed
+    uint64_t z = seed + 0x9E3779B97F4A7C15ull;
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
     z ^= z >> 31;
-    const double u = static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);  // [0, 1)
+    return static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
+  }
+  static double measured(const Axis& ax, TimeNs now_ns) {
+    if (!(ax.quantum > 0)) return ax.q;
+    const double u = unit_hash(static_cast<uint64_t>(now_ns));
     const double noise = (2.0 * u - 1.0) * ax.dither_counts * ax.quantum;
     return std::round((ax.q + noise) / ax.quantum) * ax.quantum;
   }
@@ -277,6 +284,7 @@ class SimMotorBackend : public MotorBackend {
     bool discovery_ok = true;
     double quantum = 0.0;        // set_encoder: 0 reports the exact position
     double dither_counts = 0.0;
+    double speed_noise = 0.0;    // set_speed_noise: 0 reports the true speed
   };
 
   double dt_;

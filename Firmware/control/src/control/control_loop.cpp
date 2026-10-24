@@ -4753,16 +4753,79 @@ void ControlLoop::begin_swap_hold() {
 void ControlLoop::set_calibration_store(std::shared_ptr<calibration::Store> store) {
   std::lock_guard lk(calibration_mutex_);
   calibration_store_ = std::move(store);
+  rebuild_calibration_json_locked();
+  if (calibration_store_ && !calibration_writer_) calibration_writer_ = std::make_unique<calibration::Writer>();
+}
+
+void ControlLoop::rebuild_calibration_json_locked() {
   calibration_records_json_ = calibration_store_
       ? std::make_shared<const std::string>(calibration::records_json(calibration_store_->records()))
       : nullptr;
-  if (calibration_store_ && !calibration_writer_) calibration_writer_ = std::make_unique<calibration::Writer>();
+}
+
+// ADR-005 D2: records leave the way they came. Runs on the web thread, holding command_mutex_; the
+// store's mutex is taken only around memory, never around file I/O, because the 200 Hz loop takes it
+// to publish the list. #1 is the shipped backup (owner, 2026-10-24): never renamed or removed.
+web::CommandResult ControlLoop::calibration_files(const std::string& name, const std::string& arg,
+                                                  std::shared_ptr<const calibration::Prepared>& prepared,
+                                                  std::string& done) {
+  web::CommandResult r;
+  const std::size_t sp = arg.find(' ');
+  const int id = std::atoi(arg.substr(0, sp).c_str());
+  const std::string label = sp == std::string::npos ? std::string() : calibration::record_name(arg.substr(sp + 1));
+  calibration::Record rec;
+  std::filesystem::path root, dir;
+  int active = 0, next = 0;
+  {
+    std::lock_guard lk(calibration_mutex_);
+    if (!calibration_store_) { r.error = "this station keeps no calibration records"; return r; }
+    const auto* found = calibration_store_->find(id);
+    if (!found) { r.error = "no calibration record #" + std::to_string(id); return r; }
+    rec = *found;
+    root = calibration_store_->root();
+    active = calibration_store_->active_id();
+    next = calibration_store_->next_id();
+    dir = calibration_store_->dir_of(name == "new_calibration_record" ? next : id);
+  }
+  std::string err;
+  if (name != "new_calibration_record" && id == 1) {
+    r.error = "#1 is the shipped backup and stays as shipped";
+    return r;
+  }
+  if (name != "delete_calibration_record" && label.empty()) {
+    r.error = "a name is 1-24 letters, digits, spaces, - or _";
+    return r;
+  }
+  if (name == "rename_calibration_record") {
+    if (!calibration::rename_record(dir, label, err)) { r.error = err; return r; }
+    done = "#" + std::to_string(id) + " is " + label;
+  } else if (name == "delete_calibration_record") {
+    if (id == active) { r.error = "#" + std::to_string(id) + " is in force: choose another record first"; return r; }
+    if (!calibration::remove_record(root, id, err)) { r.error = err; return r; }
+    done = "#" + std::to_string(id) + " " + rec.name + " removed (kept in deleted/)";
+  } else {
+    if (!rec.unusable.empty()) { r.error = "record #" + std::to_string(id) + ": " + rec.unusable; return r; }
+    if (!calibration::copy_record(rec, dir, label, err)) { r.error = err; return r; }
+    auto p = std::make_shared<calibration::Prepared>();
+    if (!calibration::prepare(calibration::read_record(dir, next), *p, err)) { r.error = err; return r; }
+    prepared = std::move(p);
+    done = "#" + std::to_string(next) + " " + label + " made from #" + std::to_string(id);
+  }
+  {
+    std::lock_guard lk(calibration_mutex_);
+    if (name == "delete_calibration_record") calibration_store_->drop(id);
+    else calibration_store_->refresh(name == "new_calibration_record" ? next : id);
+    rebuild_calibration_json_locked();
+  }
+  r.ok = true;
+  return r;
 }
 
 // ADR-005 D5. The record was read, checked and parsed on the web thread; here it is put in force:
 // at once in Shutdown (nothing is engaged), through the swap hold when homed.
-void ControlLoop::execute_set_calibration_record(const std::string& arg) {
-  const std::string name = "set_calibration_record";
+void ControlLoop::execute_set_calibration_record(const std::string& arg, const std::string& ack_name,
+                                                 const std::string& prefix) {
+  const std::string& name = ack_name;
   const auto prepared = std::move(prepared_for_command_);
   if (!prepared) {
     ack_command(name, false, "record " + arg + " was not prepared");
@@ -4777,7 +4840,7 @@ void ControlLoop::execute_set_calibration_record(const std::string& arg) {
     return;
   }
   if (id == calibration_id_ && calibration_blocked_.empty() && !hold_.record) {
-    ack_command(name, true, "#" + std::to_string(id) + " is in force");
+    ack_command(name, true, prefix + "#" + std::to_string(id) + " is in force");
     return;
   }
   const bool homed = phase_ == Phase::Hold;
@@ -4807,7 +4870,7 @@ void ControlLoop::execute_set_calibration_record(const std::string& arg) {
   }
   if (!homed) {
     spdlog::info("calibration: #{} -> #{} {} in force (shut down: the next HOME uses it)", from, id, calibration_name_);
-    ack_command(name, true, "#" + std::to_string(id) + " in force; the next HOME uses it");
+    ack_command(name, true, prefix + "#" + std::to_string(id) + " in force; the next HOME uses it");
     return;
   }
   begin_swap_hold();
@@ -4818,7 +4881,7 @@ void ControlLoop::execute_set_calibration_record(const std::string& arg) {
   hold_.record_rest_since_ns = 0;
   spdlog::info("calibration: #{} -> #{} {}: holding until the turret rests, then the servos swap; then {}", from, id,
                calibration_name_, operating_mode_name(hold_.resume));
-  ack_command(name, true, "switching to #" + std::to_string(id) + "; holding until its servos are engaged and settled");
+  ack_command(name, true, prefix + "switching to #" + std::to_string(id) + "; holding until its servos are engaged and settled");
 }
 
 // The servos from the record's assets (the backend releases each engaged one; the next reference
@@ -4854,13 +4917,16 @@ void ControlLoop::step_swap_hold(TimeNs now_ns, const AxisSnapshot sp[kAxisCount
   }
   if (hold_.record) {
     // At rest on both axes: before the swap, so the servos change on a still turret; after it, so the
-    // switch ends only once the new servos hold it still.
-    const bool still = std::abs(sp[ix(AxisId::Yaw)].v_rad_s) < kRecordRestRadS &&
-                       std::abs(sp[ix(AxisId::Pitch)].v_rad_s) < kRecordRestRadS;
+    // switch ends only once the new servos hold it still. A window restarts wherever the turret is
+    // when it leaves the band.
+    const double qy = sp[ix(AxisId::Yaw)].q_rad, qp = sp[ix(AxisId::Pitch)].q_rad;
+    const bool still = hold_.record_rest_since_ns != 0 &&
+                       std::abs(qy - hold_.record_rest_q[ix(AxisId::Yaw)]) < kRecordRestBandRad &&
+                       std::abs(qp - hold_.record_rest_q[ix(AxisId::Pitch)]) < kRecordRestBandRad;
     if (!still) {
-      hold_.record_rest_since_ns = 0;
-    } else if (hold_.record_rest_since_ns == 0) {
       hold_.record_rest_since_ns = now_ns;
+      hold_.record_rest_q[ix(AxisId::Yaw)] = qy;
+      hold_.record_rest_q[ix(AxisId::Pitch)] = qp;
     } else if (!hold_.record_applied && !hold_.record_refused &&
                now_ns - hold_.record_rest_since_ns >= kRecordRestNs) {
       std::string err;
@@ -5714,8 +5780,12 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
       prepared = std::move(p);
     }
   }
+  std::string done;
+  if (r.ok && (name == "rename_calibration_record" || name == "delete_calibration_record" ||
+               name == "new_calibration_record"))
+    r = calibration_files(name, arg, prepared, done);
   // Rejected here or executed there, either way controld answers (§52).
-  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error, std::move(prepared)});
+  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error, std::move(prepared), std::move(done)});
   return r;
 }
 
@@ -5733,8 +5803,10 @@ void ControlLoop::process_commands() {
     ack_in_flight_ = c.name;
     const uint64_t before = ack_seq_;
     prepared_for_command_ = std::move(c.prepared);
+    done_for_command_ = std::move(c.done);
     execute_command(c.name, c.arg);
     prepared_for_command_.reset();
+    done_for_command_.clear();
     if (ack_seq_ == before) {
       // Nobody claimed the answer, so this command has no failure path: the quiet
       // hold, the stop, the shutdown request. That default is honest only because
@@ -6292,6 +6364,19 @@ void ControlLoop::execute_command(const std::string& name,
   }
   if (name == "set_calibration_record") {
     execute_set_calibration_record(arg);
+    return;
+  }
+  if (name == "rename_calibration_record" || name == "delete_calibration_record") {
+    {
+      std::lock_guard lk(calibration_mutex_);
+      if (calibration_store_)
+        if (const auto* r = calibration_store_->find(calibration_id_)) calibration_name_ = r->name;
+    }
+    ack_command(name, true, done_for_command_);
+    return;
+  }
+  if (name == "new_calibration_record") {   // made on the web thread; now it is put in force
+    execute_set_calibration_record(arg, name, done_for_command_ + "; ");
     return;
   }
   if (phase_ == Phase::Recovering) {
