@@ -22,10 +22,10 @@ were calibrated how.
 | `templates/` | Session manifest skeletons (station topology, IMU calibration, limits). |
 
 The C++ that commissiond and the simulator share lives in `axis_control_core/`:
-- `servo.*`: the yaw position servo. Its integral lives in the friction frame (2026-10-25): it
-  holds the friction feedforward's shortfall along the commanded motion, so it reverses sign when
-  the motion reverses (the frame is the last motion's through a rest: a rest's own winding is
-  toward the target), and while the axis is ahead of a reference still on its way to it — the
+- `servo.*`: the yaw position servo. Its integral holds the friction feedforward's shortfall along
+  the commanded motion and keeps its sign through a reversal (flipping it with the motion was tried
+  on the station 2026-10-25 and hurt 4 of 5 times: at a reversal it carries the last move's settling
+  and slip, not a friction shortfall). While the axis is ahead of a reference still on its way to it — the
   reference's stopping distance v²/2a covers the gap — it grows only if the feedforward is carrying
   the axis along with the reference (advancing faster than `stall_speed` but no faster than twice
   the reference). A stand, the mount's free slip past the reference (0.3–0.9° in 0.2 s, 2–9× the

@@ -36,6 +36,13 @@ struct YawPlantParameters {
   double encoder_noise_rad, encoder_noise_corner_hz;
   double friction_noise_A, friction_noise_corner_hz;
   unsigned long noise_seed;  // the noise processes' seed: one value, one repeatable run; vary it for several draws
+  // The drive's free play (measured 2026-10-25, MEASURE 00:38-05:00 on PAYLOAD 10-24): at a force
+  // reversal the motor turns 0.7-1.1 deg under 0.05-0.3 A, far below the bearing's breakaway, before
+  // it takes the load along -- lost motion between the motor (and its encoder) and the load. Zero
+  // (the default) is the rigid body above. Otherwise the motor side (motor_inertia of `inertia`, its
+  // own small friction) drives the load side (the rest, with the bearing friction above) through a
+  // gap of free_play_rad closed by a stiff damped contact; the encoder reads the motor.
+  double free_play_rad, motor_inertia, motor_friction_A, contact_stiffness, contact_damping;
 };
 YawPlantParameters yaw_plant_from_yaml(const YAML::Node& node);
 
@@ -45,8 +52,9 @@ class YawPlant {
   // A command sent at `time` acts after actuation_delay_s.
   void command(double time,double current);
   void advance(double to);
-  double position() const { return q_; }
+  double position() const { return q_; }  // the motor's (the encoder's), with free play
   double velocity() const { return v_; }
+  double load_position() const { return free_play()?ql_:q_; }
   double current() const { return i_; }
   // Host reading received at `receipt`: the angle sampled encoder_delay_s
   // earlier (call advance(receipt-encoder_delay_s) first), plus the encoder's noise and
@@ -55,8 +63,11 @@ class YawPlant {
   double friction(double v,double q) const;
  private:
   double commanded(double time) const;
+  bool free_play() const { return p_.free_play_rad>0; }
+  double sliding_force(double v,double q,double h,double& z_next,double& damping);
   YawPlantParameters p_;
   double t_=0, q_=0, v_=0, i_=0, z_=0;
+  double ql_=0, vl_=0;  // the load side, with free play
   std::deque<std::pair<double,double>> commands_;
   // Noise processes (first-order, exact discretisation), from the parameters' seed: runs stay repeatable.
   std::mt19937_64 rng_;

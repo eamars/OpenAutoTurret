@@ -35,6 +35,23 @@ void creeps_below_the_peak_and_holds_below_the_creep_level() {
   expect(creep.position()>1e-3,"creeps under a force between the creep level and the peak");
   expect(std::abs(hold.position())<1e-3,"holds (only elastic pre-sliding) below the creep level");
 }
+void free_play_lets_the_motor_turn_alone_until_it_takes_the_load() {
+  // 0.2 A holds the rigid plant (above); with free play it turns the motor across the gap to the
+  // load's face and no further, and reversing it turns the motor to the other face: the station's
+  // 0.7-1.1 deg under 0.05-0.3 A at a force reversal.
+  auto p=yaw_fixture();
+  p.free_play_rad=.7*M_PI/180; p.motor_inertia=.005; p.motor_friction_A=.05;
+  p.contact_stiffness=5000; p.contact_damping=4;
+  YawPlant plant(p,0.);
+  plant.command(0.,.2);
+  plant.advance(1.);
+  expect(std::abs(plant.position()-plant.load_position()-p.free_play_rad/2)<1e-4,"the motor stops at the load's face");
+  expect(std::abs(plant.load_position())<1e-3 && std::abs(plant.velocity())<1e-3,"the load holds, nothing rings");
+  plant.command(1.,-.2);
+  plant.advance(2.);
+  expect(std::abs(plant.position()-plant.load_position()+p.free_play_rad/2)<1e-4,"reversed, the motor crosses the whole gap");
+  expect(std::abs(plant.load_position())<1e-3,"and the load still holds");
+}
 void reading_carries_the_crosstalk_of_the_delayed_command() {
   auto p=yaw_fixture();
   for (auto& g:p.crosstalk_map) g=.005;
@@ -78,6 +95,7 @@ int main() {
   try {
     sliding_current_equals_the_friction_curve();
     creeps_below_the_peak_and_holds_below_the_creep_level();
+    free_play_lets_the_motor_turn_alone_until_it_takes_the_load();
     reading_carries_the_crosstalk_of_the_delayed_command();
     position_loop_does_not_wind_into_the_clamp();
     guard_trips_on_a_limit_cycle_not_on_a_rock();

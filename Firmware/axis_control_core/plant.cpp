@@ -48,10 +48,15 @@ YawPlantParameters yaw_plant_from_yaml(const YAML::Node& n) {
   p.encoder_noise_rad=n["encoder_noise_rad"].as<double>(0.); p.encoder_noise_corner_hz=n["encoder_noise_corner_hz"].as<double>(40.);
   p.friction_noise_A=n["friction_noise_A"].as<double>(0.); p.friction_noise_corner_hz=n["friction_noise_corner_hz"].as<double>(6.);
   p.noise_seed=n["noise_seed"].as<unsigned long>(20261024UL);
+  p.free_play_rad=n["free_play_rad"].as<double>(0.); p.motor_inertia=n["motor_inertia"].as<double>(0.01);
+  p.motor_friction_A=n["motor_friction_A"].as<double>(0.05);
+  p.contact_stiffness=n["contact_stiffness"].as<double>(5000.); p.contact_damping=n["contact_damping"].as<double>(4.);
+  if (p.free_play_rad>0) check(p.motor_inertia>0 && p.motor_inertia<p.inertia && p.contact_stiffness>0,"free play: motor inertia/contact");
   check(p.inertia>0 && p.stribeck_speed>0 && p.counts_per_rev>0 && p.presliding_stiffness>0,"inertia/stribeck_speed/counts/stiffness");
   check(p.creep_speed>0 && p.encoder_noise_corner_hz>0 && p.friction_noise_corner_hz>0,"creep_speed/noise corners");
   for (double v:{p.coulomb_positive,p.coulomb_negative,p.stribeck_positive,p.stribeck_negative,p.viscous,p.presliding_damping,p.creep_drop,
-                 p.actuation_delay_s,p.current_tau_s,p.encoder_delay_s,p.crosstalk_delay_s,p.encoder_noise_rad,p.friction_noise_A})
+                 p.actuation_delay_s,p.current_tau_s,p.encoder_delay_s,p.crosstalk_delay_s,p.encoder_noise_rad,p.friction_noise_A,
+                 p.free_play_rad,p.motor_friction_A,p.contact_damping})
     check(std::isfinite(v) && v>=0,"nonnegative terms");
   return p;
 }
@@ -66,7 +71,7 @@ double ou_step(double state,double h,double sigma,double corner_hz,std::mt19937_
 }
 }
 
-YawPlant::YawPlant(const YawPlantParameters& p,double position) : p_(p), q_(position), rng_(p.noise_seed) { commands_.push_back({-1e9,0.}); }
+YawPlant::YawPlant(const YawPlantParameters& p,double position) : p_(p), q_(position), ql_(position), rng_(p.noise_seed) { commands_.push_back({-1e9,0.}); }
 void YawPlant::command(double time,double current) { commands_.push_back({time,current}); }
 double YawPlant::commanded(double time) const { return latest(commands_,time); }
 // Steady sliding friction magnitude at speed v (the LuGre g(v)), at least a trace above zero.
@@ -78,24 +83,45 @@ double YawPlant::friction(double v,double q) const {
     periodic(positive?p_.friction_map_positive:p_.friction_map_negative,YawPlantParameters::kFrictionBins,q);
   return std::max(1e-3,magnitude);
 }
-void YawPlant::advance(double to) {
+// The bearing's force on a body sliding at v over the substep h (LuGre, z advanced to z_next), and
+// the damping it adds, for the semi-implicit velocity update.
+double YawPlant::sliding_force(double v,double q,double h,double& z_next,double& damping) {
   // LuGre: dz/dt = v - sigma0*|v|*z/g(v);  F = sigma0*z + sigma1*dz/dt + viscous*v.
   // z is integrated exactly for the substep's frozen v (stiff when sliding fast).
   const double s0=p_.presliding_stiffness,s1=p_.presliding_damping;
+  const double k=s0*std::abs(v)/friction(v,q);
+  z_next=k>1e-12?v/k+(z_-v/k)*std::exp(-k*h):z_+v*h;
+  const double dz=(z_next-z_)/h;
+  // Roughness: the sliding level wanders; it acts along the friction (nothing at rest).
+  friction_noise_=ou_step(friction_noise_,h,p_.friction_noise_A,p_.friction_noise_corner_hz,rng_);
+  damping=s1*(k>1e-12?(1-std::exp(-k*h))/(k*h):1.)+p_.viscous;
+  return s0*z_next+s1*dz+p_.viscous*v+friction_noise_*std::tanh(v/0.01);
+}
+void YawPlant::advance(double to) {
   while (t_<to-1e-12) {
     const double h=std::min(kStep,to-t_);
     const double u=commanded(t_+h-p_.actuation_delay_s);
     i_=p_.current_tau_s>0?i_+(u-i_)*(1-std::exp(-h/p_.current_tau_s)):u;
-    const double k=s0*std::abs(v_)/friction(v_,q_);
-    const double z_next=k>1e-12?v_/k+(z_-v_/k)*std::exp(-k*h):z_+v_*h;
-    const double dz=(z_next-z_)/h;
-    // Roughness: the sliding level wanders; it acts along the friction (nothing at rest).
-    friction_noise_=ou_step(friction_noise_,h,p_.friction_noise_A,p_.friction_noise_corner_hz,rng_);
-    const double force=s0*z_next+s1*dz+p_.viscous*v_+friction_noise_*std::tanh(v_/0.01);
-    // Semi-implicit in the damping terms keeps the stiff contact stable at this step.
-    const double damping=s1*(k>1e-12?(1-std::exp(-k*h))/(k*h):1.)+p_.viscous;
-    const double next=(p_.inertia*v_+h*(i_-p_.load-force+damping*v_))/(p_.inertia+h*damping);
-    q_+=0.5*(v_+next)*h; v_=next; z_=z_next; t_+=h;
+    double z_next,damping;
+    if (!free_play()) {
+      const double force=sliding_force(v_,q_,h,z_next,damping);
+      // Semi-implicit in the damping terms keeps the stiff contact stable at this step.
+      const double next=(p_.inertia*v_+h*(i_-p_.load-force+damping*v_))/(p_.inertia+h*damping);
+      q_+=0.5*(v_+next)*h; v_=next;
+    } else {
+      // The motor pushes the load only across the gap's faces, and never pulls it.
+      const double half=0.5*p_.free_play_rad,gap=q_-ql_;
+      const double into=gap>half?gap-half:gap<-half?gap+half:0.;
+      double contact=into==0.?0.:p_.contact_stiffness*into+p_.contact_damping*(v_-vl_);
+      if (into>0) contact=std::max(contact,0.); else if (into<0) contact=std::min(contact,0.);
+      const double force=sliding_force(vl_,ql_,h,z_next,damping);
+      const double motor=(v_+h*(i_-contact-p_.motor_friction_A*std::tanh(v_/0.005))/p_.motor_inertia);
+      const double jl=p_.inertia-p_.motor_inertia;
+      const double load=(jl*vl_+h*(contact-p_.load-force+damping*vl_))/(jl+h*damping);
+      q_+=0.5*(v_+motor)*h; v_=motor;
+      ql_+=0.5*(vl_+load)*h; vl_=load;
+    }
+    z_=z_next; t_+=h;
   }
   prune(commands_,t_-p_.actuation_delay_s-p_.crosstalk_delay_s);
 }
