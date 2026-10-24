@@ -38,7 +38,7 @@ struct ServoParameters {
   double crosstalk_delay_s;
   double crosstalk_map[kCrosstalkBins];
   // PID on position error. The integral holds the friction feedforward's shortfall along the
-  // commanded motion (yaw carries no load), so it reverses sign when the motion reverses, and
+  // commanded motion (yaw carries no load); it keeps its sign through a reversal, and
   // while the axis is ahead of a reference still on its way it grows only if the feedforward is
   // carrying the axis along with the reference: a stand, a free slip past it or a spring-back
   // toward it is the reference's remaining travel, not a feedforward excess (servo.cpp).
@@ -113,7 +113,7 @@ class Servo {
   // last_output_: the servo's own output, which the slew limit follows (an added
   // identification excitation must not drag it).
   double integral_=0, last_applied_=0, last_output_=0, mean_square_=0;
-  int last_saturated_=0, last_direction_=0;
+  int last_saturated_=0;
   long stale_samples_=0, stall_events_=0;
   double stall_since_=-1, stall_position_=0, rock_until_=-1, rock_direction_=0;
   std::deque<std::pair<double,double>> applied_history_;  // (time, applied current)
