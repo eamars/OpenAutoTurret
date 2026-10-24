@@ -152,4 +152,17 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   the page. It runs `commission.py check pitch` (the pitch use case with the record's pitch asset)
   in CALIBRATING and installs nothing. It exists so controld's pitch executor can be tried on the
   station before the first real RE-RUN: VERIFY is yaw only (D8).
+- **Station, 2026-10-24 18:31, VERIFY on #2 FRICTION 10-20.** COMPLETE in 60 s, verdict
+  UPDATE_PARAMETERS. The friction drift is −25, −20, −2, −54, +33 and 0 % across the six speed
+  plateaus, against #1's uniform −26 to −50 %. So #2 fits better than #1, but fails the 25 % rule at
+  two plateaus. Both records pass the tracking gates. #1 was put back in force afterwards.
+- **Station, 2026-10-24 18:41, CHECK-PITCH on #1: controld's pitch executor on the hardware.**
+  - The window came from controld's own homing (−0.611 to +0.601 rad).
+  - The session ended COMPLETE in 60 s with verdict REUSE_EXACT: ramp RMS 0.018–0.022 deg, walker
+    0.022 deg, final step error ≤ 0.003 deg. That is at least as good as the asset's 10-02
+    validation with commissiond (0.021–0.045, 0.031 and ≤ 0.007 deg).
+  - Held yaw moved 1.5 mrad over the session, under the 0.2 deg decoupling record.
+  - **Still to run on the hardware:** the pitch identify sweep and its fit, the yaw survey,
+    crosstalk, inertia, ladder and circle sessions, and an install. All are parts of a RE-RUN, which
+    waits for the owner's payload and go-ahead.
 
