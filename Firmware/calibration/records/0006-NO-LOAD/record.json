@@ -30,8 +30,8 @@
   },
   "bore": {
    "file": "bore.yaml",
-   "origin": "inherited",
-   "from": 1
+   "origin": "zeroed",
+   "date": "2026-10-25"
   }
  },
  "last_run": {
