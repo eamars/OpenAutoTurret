@@ -177,6 +177,91 @@ TEST(AlignmentGeometry, PointingIsAnExactRotationNotATangentSum) {
   EXPECT_NEAR(a.u_norm*in.width - tangent_u, -in.fx*std::tan(r)*(1/std::cos(r) - 1), 1e-6);
 }
 
+namespace {
+// The station's wide camera (calibration/camera_intrinsics.yaml, 2026-09-04).
+geo::CameraIntrinsics station_wide() {
+  geo::CameraIntrinsics in;
+  in.fx = 1389; in.fy = 1467; in.cx = 960; in.cy = 540; in.width = 1920; in.height = 1080;
+  return in;
+}
+geo::BoreAlignment mark_at(geo::CameraOffset o, double depth_m) {
+  geo::BoreAlignmentConfig c;
+  c.enabled = true; c.assumed_depth_m = depth_m; c.wide = o;
+  return geo::bore_alignment(c, geo::CameraRole::Wide, station_wide());
+}
+}
+
+TEST(CameraZero, ATapGivesThePointingThatPutsTheMarkExactlyThere) {
+  // ADR-006 D1: the solver is bore_alignment's inverse, at any installation offset, distance and
+  // pointing a camera on this turret can have.
+  const auto in = station_wide();
+  for (const geo::CameraOffset installed : {geo::CameraOffset{155, -20, 0}, geo::CameraOffset{145, 40, 0},
+                                            geo::CameraOffset{-80, 120, 35}, geo::CameraOffset{}})
+    for (double depth : {3.0, 10.0, 37.5, 250.0, 1500.0})
+      for (const auto& [right, up] : std::initializer_list<std::pair<double, double>>{
+               {0, 0}, {1.2, -0.8}, {-2.5, 1.7}, {6, 4}}) {
+        SCOPED_TRACE(testing::Message() << installed.right_mm << "," << installed.up_mm << " mm at " << depth
+                                        << " m, pointing " << right << "," << up);
+        geo::CameraOffset truth = installed;
+        truth.right_deg = right; truth.up_deg = up;
+        const auto tap = mark_at(truth, depth);
+        ASSERT_TRUE(tap.valid) << tap.reason;
+        const auto z = geo::solve_camera_pointing(installed, depth, tap.u_norm, tap.v_norm, in);
+        ASSERT_TRUE(z.valid) << z.reason;
+        EXPECT_NEAR(z.right_deg, right, 1e-7);
+        EXPECT_NEAR(z.up_deg, up, 1e-7);
+      }
+}
+
+TEST(CameraZero, OneZeroWithTheRightOffsetsHoldsAtEveryDistance) {
+  // The owner's offsets (2026-10-24, bore frame): wide 155 mm right and 20 mm below the payload's aim
+  // axis, pointing slightly off. Zeroed on a target at 25 m, the mark at any other distance is where
+  // the true camera sees the aim axis: only the parallax changes, and the model carries it.
+  const geo::CameraOffset installed{155, -20, 0};
+  geo::CameraOffset truth = installed;
+  truth.right_deg = 0.9; truth.up_deg = -0.4;
+  const auto tap = mark_at(truth, 25);
+  const auto z = geo::solve_camera_pointing(installed, 25, tap.u_norm, tap.v_norm, station_wide());
+  ASSERT_TRUE(z.valid);
+  geo::CameraOffset zeroed = installed;
+  zeroed.right_deg = z.right_deg; zeroed.up_deg = z.up_deg;
+  for (double depth : {5.0, 10.0, 100.0, 1500.0}) {
+    const auto want = mark_at(truth, depth), got = mark_at(zeroed, depth);
+    EXPECT_NEAR(got.u_norm*1920, want.u_norm*1920, 1e-6) << depth;
+    EXPECT_NEAR(got.v_norm*1080, want.v_norm*1080, 1e-6) << depth;
+  }
+  // The parallax is real: 155 mm is 15.5 mrad at 10 m and 0.1 at 1500 m, so the mark moves ~21 px
+  // across the wide picture between them.
+  EXPECT_NEAR((mark_at(zeroed, 1500).u_norm - mark_at(zeroed, 10).u_norm)*1920, 1389*(0.155/10 - 0.155/1500), 0.2);
+}
+
+TEST(CameraZero, AnOffsetErrorCostsItsParallaxAwayFromTheZeroDistance) {
+  // ADR-006 risk 1: the zero is exact at its distance whatever the offsets; 5 mm wrong costs
+  // 5 mm x (1/D - 1/D_zero) elsewhere -- 0.45 mrad at 10 m after a zero at 100 m.
+  geo::CameraOffset truth{155, -20, 0, 0.5, 0.3};
+  const auto tap = mark_at(truth, 100);
+  const geo::CameraOffset believed{150, -20, 0};
+  const auto z = geo::solve_camera_pointing(believed, 100, tap.u_norm, tap.v_norm, station_wide());
+  ASSERT_TRUE(z.valid);
+  geo::CameraOffset zeroed = believed;
+  zeroed.right_deg = z.right_deg; zeroed.up_deg = z.up_deg;
+  EXPECT_NEAR(mark_at(zeroed, 100).u_norm, tap.u_norm, 1e-12) << "exact at the zero's distance";
+  const double err_mrad = (mark_at(zeroed, 10).u_norm - mark_at(truth, 10).u_norm)*1920/1389*1000;
+  EXPECT_NEAR(std::abs(err_mrad), 5e-3*(1/10.0 - 1/100.0)*1000, 0.02);
+}
+
+TEST(CameraZero, RefusesWhatCannotBeAZero) {
+  const auto in = station_wide();
+  const geo::CameraOffset o{155, -20, 0};
+  EXPECT_FALSE(geo::solve_camera_pointing(o, 0, .5, .5, in).valid);
+  EXPECT_FALSE(geo::solve_camera_pointing(o, -3, .5, .5, in).valid);
+  EXPECT_FALSE(geo::solve_camera_pointing(o, 10, 1.2, .5, in).valid);
+  EXPECT_FALSE(geo::solve_camera_pointing(o, 10, .5, .5, geo::CameraIntrinsics{0, 0, 0, 0, 0, 0}).valid);
+  // A tap at the picture's edge from a camera 2 cm from the bore at 1 m is 34 deg off: a zero, but
+  // nothing like this turret; the 45 deg rule (bore_alignment's) is what refuses a wild one.
+  EXPECT_TRUE(geo::solve_camera_pointing(geo::CameraOffset{20, 0, 0}, 1, 0.0, .5, in).valid);
+}
+
 TEST(AlignmentGeometry, BoundedAndIterativeSolversUseSameSight) {
   auto kin = geo::TurretKinematics::aligned();
   const geo::Vec3 sight{-.04, .03, 1};
