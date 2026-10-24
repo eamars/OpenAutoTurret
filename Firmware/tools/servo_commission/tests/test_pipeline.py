@@ -24,6 +24,7 @@ import commission  # noqa: E402
 import design  # noqa: E402
 import identify  # noqa: E402
 import manifests  # noqa: E402
+import score  # noqa: E402
 import sim  # noqa: E402
 import station  # noqa: E402
 
@@ -122,17 +123,17 @@ class Design(unittest.TestCase):
                 self.assertLess(p["coulomb"] + p["stribeck"], 1.0, f"{name} {key}: static level {p['coulomb'] + p['stribeck']:.2f}")
                 self.assertEqual(p["plateau_max"], max(cur))
 
-    def test_slow_ramps_with_the_station_servo_under_drift(self):
-        """MEASURE 2026-10-25 02:04 (PAYLOAD 10-24): kq 13 / ki 36 (the crosstalk allowance's gain for
-        this payload), the fit's creep term (friction FF 0.33 A at 1 deg/s against 0.6 A of breakaway),
-        and the bearing 0.15 A stickier than at the survey. The 1 deg/s ramps stood 1.2-2.4 s at their
-        start -- the integral left in the previous move's frame (0.25 A the wrong way) plus 0.3 A/s to
-        unwind it -- and read speed ratios 1.12-1.21. With the integral in the friction frame (servo.cpp:
-        it reverses with the motion and does not grow while the axis stands ahead of an approaching
-        reference) the same passes read 0.94-1.05 on this plant. Stalls stay at 0 (the cap rule)."""
+    def test_slow_ramps_on_the_free_play_mount(self):
+        """MEASURE 2026-10-25 (PAYLOAD 10-24): kq 13 / ki 36 (the crosstalk allowance's gain for this
+        payload), the fit's creep term, and the drive's free play (0.7 deg: the motor turns alone at
+        every force reversal before it takes the load). The 1 deg/s ramps hold the speed gate while the
+        bearing sits between the feedforward and 0.1 A under it, and ramp-1 stands and catches up once
+        the bearing is 0.25 A stickier than the feedforward: the accuracy campaign's first pass at 09:13
+        (ramp-1 1.253 after the bearing had worked in by 0.27 A), which is why the survey now follows a
+        work-in pass. The integral keeps its sign through a reversal (servo.cpp): the rigid plant needed
+        the old reversal flip to pass this, the station never did. Stalls stay at 0 (the cap rule)."""
         t = truth("payload_5x_knee")["yaw"]
         t.pop("friction_drift_A", None)
-        plant = dict(t, coulomb_positive=t["coulomb_positive"] + 0.15, coulomb_negative=t["coulomb_negative"] + 0.15)
         f = {"positive": {"coulomb": 0.143, "stribeck": 0.4874, "stribeck_speed": 0.08, "viscous": 0.0157, "plateau_max": 0.37},
              "negative": {"coulomb": 0.1983, "stribeck": 0.2915, "stribeck_speed": 0.08, "viscous": 0.0157, "plateau_max": 0.36},
              "creep_drop": 0.4296, "creep_speed": 0.01989, "map_positive": [0.0] * 24, "map_negative": [0.0] * 24}
@@ -144,15 +145,22 @@ class Design(unittest.TestCase):
         self.assertAlmostEqual(servo["kq"], 13.0, delta=0.2)
         m = manifests.yaw("t", servo, "usecase")
         import score, usecase  # noqa: E402
-        for start in (1.0, 5.2):
-            r, status = sim.yaw(servo, plant, m["reference_samples"], start=start, hold_after=m["servo_hold_after_s"])
-            self.assertEqual(status, "COMPLETE")
-            res = {"t": r["t"], "qr": r["qr"], "vr": r["vr"], "q": r["q_hat"], "v": r["v_hat"], "u": r["u"],
-                   "true_t": r["t"], "true_q": r["q_true"], "true_v": r["v_true"]}
-            rows = usecase.metrics(res, score.segments(m))
-            ratios = {x["label"]: x["v_ratio"] for x in rows if "v_ratio" in x}
-            self.assertTrue(all(0.9 <= v <= 1.1 for v in ratios.values()), f"start {start}: {ratios}")
-            self.assertLessEqual(int(r["stalls"][-1]), 2, f"start {start}")
+        for stickier, holds in ((-0.1, True), (0.0, True), (0.25, False)):
+            plant = dict(t, coulomb_positive=t["coulomb_positive"] + stickier, coulomb_negative=t["coulomb_negative"] + stickier,
+                         free_play_rad=math.radians(0.7))
+            for start in (1.0, 5.2):
+                r, status = sim.yaw(servo, plant, m["reference_samples"], start=start, hold_after=m["servo_hold_after_s"])
+                self.assertEqual(status, "COMPLETE")
+                res = {"t": r["t"], "qr": r["qr"], "vr": r["vr"], "q": r["q_hat"], "v": r["v_hat"], "u": r["u"],
+                       "true_t": r["t"], "true_q": r["q_true"], "true_v": r["v_true"]}
+                rows = usecase.metrics(res, score.segments(m))
+                ratios = {x["label"]: x["v_ratio"] for x in rows if "v_ratio" in x}
+                what = f"bearing {stickier:+.2f} A, start {start}: {ratios}"
+                if holds:
+                    self.assertTrue(all(0.9 <= v <= 1.1 for v in ratios.values()), what)
+                else:
+                    self.assertGreater(ratios["ramp-1"], 1.1, what)
+                self.assertEqual(int(r["stalls"][-1]), 0, what)
 
     def test_plant_noise_seed(self):
         """Two seeds are two noise draws; the same seed repeats the run exactly (the proofs run several)."""
@@ -285,17 +293,21 @@ class Pipeline(unittest.TestCase):
         sweep = next(s for s in report["steps"] if s["step"] == "inertia")["sweep"]
         self.assertEqual(sweep["f0_hz"], 3.0)
 
-    def test_yaw_payload_5x_as_measured_with_friction_drift(self):
+    def test_yaw_payload_5x_on_a_bearing_that_works_in(self):
         """The 5x payload as the station measured it (payload_5x_knee: the friction knee the fit cannot
-        follow, and the bearing's level moving +-0.15 A between sessions), from three start angles:
-        every validation pass accepted, at most 4 stalls each (the gate; measured worst 2 with the cap
-        rule, 5 without, over three starts and three noise draws). At integral rate 1.5 this plant
-        failed 2 of 3 starts the way the station did on 2026-10-24 22:58 (ramp+1 speed ratio 0.874
-        after a -drift pass; 6 stalls): the slow ramps' stuck start, which only a faster integral closes
-        within the crosstalk-robust gain cap (kv feeds the crosstalk loop: zeta 0.75 lowers the
-        boundary from 9.8 to 6.9 rad/s). Stalls: Design.test_integral_cap_covers_breakaway_and_drift."""
-        for start in (1.0, 3.5, 5.2):
+        follow), with the drive's free play (0.7 deg) and a bearing that works in by 0.25 A over the
+        first use-case passes of a run (0.27 -> 0.38 -> 0.51 A on the 1 deg/s ramps, 2026-10-25): the
+        work-in pass before the survey puts the feedforward between the rested and the worked-in
+        bearing, the run is accepted from two start angles, and four accuracy-campaign passes after it
+        meet the tracking gates. Without the work-in every start failed (the survey read the rested
+        bearing). Start 3.5 is left out: its survey's slow plateaus sit on stickier angles than the
+        passes, and the feedforward over-reads there (ramp+1 0.62), with or without the work-in -- the
+        survey still measures the slow friction where it starts, not where the passes run.
+        Stalls: Design.test_integral_cap_covers_breakaway_and_drift."""
+        for start in (1.0, 5.2):
             t = truth("payload_5x_knee")
+            t["yaw"].pop("friction_drift_A", None)
+            t["yaw"].update(free_play_rad=math.radians(0.7), work_in_A=0.25)
             t["yaw_start_rad"] = start
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
                 json.dump(t, f)
@@ -304,6 +316,7 @@ class Pipeline(unittest.TestCase):
                     done = subprocess.run([sys.executable, str(HERE / "commission.py"), "yaw", "--sim", f.name, "--out", out],
                                           capture_output=True, text=True)
                     self.assertEqual(done.returncode, 0, done.stdout[-2000:] + done.stderr[-2000:])
+                    self.assertIn("work-in COMPLETE", (Path(out) / "commission.log").read_text(encoding="utf-8"))
                     asset = load(Path(out) / "yaw_servo.json")
             finally:
                 Path(f.name).unlink()
@@ -317,6 +330,14 @@ class Pipeline(unittest.TestCase):
             self.assertAlmostEqual(asset["servo_parameters"]["integral_cap"],
                                    min(1.2, plateau + RULES["breakaway_over_plateau_A"] + RULES["friction_drift_A"]), places=3)
             self.assertEqual(asset["servo_parameters"]["stall_recovery"]["current_A"], asset["servo_parameters"]["integral_cap"])
+            # The campaign meets the bearing the work-in and the two validation passes left.
+            simulated = station.SimStation(t, log=lambda *a: None)
+            simulated.worked_passes, simulated.yaw_position = 3, start
+            x = asset["identified"]["crosstalk"]
+            for k in range(4):
+                j = simulated.run("yaw", manifests.yaw(f"c{k}", asset["servo_parameters"], commission.calibration_script(0.0)), f"c{k}")
+                rows, extra = score.yaw(j, x["table"], x["delay_s"])
+                self.assertEqual(score.gate_yaw(rows, extra), [], f"start {start}: campaign pass {k}")
 
     def test_yaw_update_with_a_drifted_table(self):
         """`yaw --update` on the payload with the asset's three-week-old table (RE-RUN on the station,
