@@ -466,6 +466,44 @@ TEST(Homing, SpeedModeHomingStopsPushingAtTheContactGate) {
   EXPECT_LE(capped, 3 * 30) << "at most ~150 ms of push per contact";
 }
 
+// Station 2026-10-24 22:45:56, PAYLOAD 10-24: the pitch started on its rest stop and climbed against
+// the payload's weight. It lurched 0.3 deg in the first 50 ms breaking away, then crawled at about
+// 0.025 rad/s while the drive wound up to the 0.8 N.m gate. Armed on the lurch, the cap took the crawl
+// for a stop, the backoff drove into the stop it started on, and homing faulted. The recorded
+// feedback (10 ms, the drive repeating frames), then the crawl continuing: still approaching.
+TEST(Homing, AHeavyPayloadCrawlingOffItsRestStopIsNotAStop) {
+  struct Sample { int ms; double q, v, tq; };
+  const Sample rec[] = {
+      {76, -0.69715, -0.0012, 0.0},   {86, -0.69676, 0.0024, 0.0},    {106, -0.69409, 0.0243, 0.0},
+      {126, -0.69142, 0.0425, 0.0},   {146, -0.69066, 0.0417, 0.389}, {166, -0.69066, 0.0348, 0.722},
+      {186, -0.69066, 0.0278, 0.647}, {206, -0.69066, 0.0232, 0.596}, {226, -0.68990, 0.0257, 0.414},
+      {256, -0.68990, 0.0205, 0.556}, {276, -0.68914, 0.0235, 0.649}, {296, -0.68837, 0.0259, 0.611},
+      {316, -0.68761, 0.0280, 0.826}};
+  HomingParams p = test_params();
+  p.contact.effort_contact_threshold_nm = 0.8;
+  p.contact.contact_dwell_ms = 250;
+  p.speed_mode_backoff = true;
+  HomingController hc(ota::AxisId::Pitch, +1, p);
+  int capped_at = -1;
+  const auto feed = [&](int ms, double q, double v, double tq) {
+    HomingFeedback fb;
+    fb.t_ns = static_cast<int64_t>(ms) * 1'000'000;
+    fb.pos_rad = q; fb.vel_rad_s = v; fb.torque_nm = tq;
+    const DesiredState ds = hc.step(fb);
+    if (capped_at < 0 && !ds.hold && !ds.position_move && ds.velocity_rad_s == 0.0) capped_at = ms;
+  };
+  // Fill the 10 ms steps between the recorded frames with the frame in force (the drive repeats them).
+  for (std::size_t i = 0; i < std::size(rec); ++i) {
+    const int end = i + 1 < std::size(rec) ? rec[i + 1].ms : rec[i].ms + 10;
+    for (int ms = rec[i].ms; ms < end; ms += 10) feed(ms, rec[i].q, rec[i].v, rec[i].tq);
+  }
+  // The crawl goes on at 0.025 rad/s, pushing 0.85 N.m, for another second.
+  double q = rec[std::size(rec) - 1].q;
+  for (int ms = 326; ms < 1326; ms += 10) feed(ms, q += 0.025 * 0.010, 0.025, 0.85);
+  EXPECT_EQ(capped_at, -1) << "capped at " << capped_at << " ms: the crawl was taken for a stop";
+  EXPECT_FALSE(hc.terminal()) << hc.result().fail_reason;
+}
+
 // The stop's compliance springs back when the push eases (station 2026-10-20 15:34:09: 0.04-0.07 deg
 // at SpdRef 0). That is still the stop: the capped contact must confirm, not release and push on.
 TEST(Homing, CappedContactSurvivesTheStopSpringingBack) {

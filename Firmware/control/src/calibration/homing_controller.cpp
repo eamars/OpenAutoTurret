@@ -84,6 +84,7 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
   cap_mark_q_ = current_pos_rad;
   cap_mark_ns_ = now;
   cap_speed_rad_s_ = 0.0;
+  cap_running_steps_ = 0;
   cap_armed_ = false;
 }
 
@@ -205,10 +206,14 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         cap_speed_rad_s_ = std::fabs(fb.pos_rad - cap_mark_q_) / ((fb.t_ns - cap_mark_ns_) * 1e-9);
         cap_mark_q_ = fb.pos_rad;
         cap_mark_ns_ = fb.t_ns;
+        // A stop is met after RUNNING: armed once the axis has run at half the approach speed for two
+        // 50 ms steps in a row, so a heavy payload starting from rest (slow, pushing hard) is not taken
+        // for one. One step is not running: PAYLOAD 10-24's breakaway off its rest stop lurched 0.3 deg
+        // in the first 50 ms, then crawled up against its weight at a seventh of the approach speed;
+        // armed on the lurch, the cap took the crawl for a stop (station 2026-10-24 22:45:56).
+        cap_running_steps_ = cap_speed_rad_s_ >= 0.5 * phase_.speed_rad_s ? cap_running_steps_ + 1 : 0;
+        if (cap_running_steps_ >= 2) cap_armed_ = true;
       }
-      // A stop is met after moving: armed once the axis has run at half the approach speed, so a
-      // heavy payload starting from rest (slow, pushing hard) is not taken for one.
-      if (cap_speed_rad_s_ >= 0.5 * phase_.speed_rad_s) cap_armed_ = true;
       const bool stalled = cap_speed_rad_s_ < 0.5 * phase_.speed_rad_s;
       if (cap_armed_ && !push_capped_ && !push_cap_spent_ && stalled &&
           last_cr_.signed_effort_nm >= p_.contact.effort_contact_threshold_nm) {

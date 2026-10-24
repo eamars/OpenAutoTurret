@@ -293,6 +293,7 @@ class HomingController {
   double cap_mark_q_ = 0.0, cap_speed_rad_s_ = 0.0;
   TimeNs cap_mark_ns_ = 0;
   bool cap_armed_ = false;
+  int cap_running_steps_ = 0;   // consecutive 50 ms steps at half the approach speed
   double push_capped_q_ = 0.0;
   double contact_q_ = 0.0;  // where this cycle's contact is recorded
   Phase phase_;
