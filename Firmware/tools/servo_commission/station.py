@@ -119,26 +119,34 @@ class SimStation:
         self.log = log
         self.yaw_position = truth.get("yaw_start_rad", 1.0)
         self.yaw_sessions = 0
+        self.worked_passes = 0  # use-case-shaped sessions run so far (the bearing's work-in)
 
     def run(self, axis, manifest, label):
         return self._yaw(manifest) if axis == "yaw" else self._pitch(manifest)
 
-    def _yaw_plant(self):
+    def _yaw_plant(self, m):
         """The plant for this session. With "friction_drift_A" the bearing's Coulomb levels sit
         +drift above the survey's on every odd session after it and -drift below on every even one:
         the station's friction moved by +-0.1 A between sessions an hour apart (three surveys of
-        PAYLOAD 10-24), so a validation pass meets the feedforward cold."""
+        PAYLOAD 10-24), so a validation pass meets the feedforward cold. With "work_in_A" they rise by
+        work_in_A * (1 - 2^-n) after n use-case-shaped passes (steps, slow ramps, the walker): the
+        station's bearing worked in by 0.1-0.13 A a pass, at any angle (2026-10-25)."""
         p = dict(self.truth["yaw"])
         drift = p.pop("friction_drift_A", 0.0)
+        work = p.pop("work_in_A", 0.0) * (1 - 0.5 ** self.worked_passes)
         self.yaw_sessions += 1
         if drift and self.yaw_sessions > 1:
             sign = 1.0 if self.yaw_sessions % 2 == 0 else -1.0
             p["coulomb_positive"] = max(0.0, p["coulomb_positive"] + sign * drift)
             p["coulomb_negative"] = max(0.0, p["coulomb_negative"] + sign * drift)
+        p["coulomb_positive"] += work
+        p["coulomb_negative"] += work
+        if any(s["label"] == "walker" for s in m.get("reference_segments_labels", [])):
+            self.worked_passes += 1
         return p
 
     def _yaw(self, m):
-        request = {"axis": "yaw", "servo": m["servo_parameters"], "plant": self._yaw_plant(),
+        request = {"axis": "yaw", "servo": m["servo_parameters"], "plant": self._yaw_plant(m),
                    "reference": sim.reference_arrays(m["reference_samples"]), "start_position_rad": self.yaw_position,
                    "hold_after_s": m["servo_hold_after_s"], "speed_limit_rad_s": m["servo_speed_limit_rad_s"],
                    "oscillation_limit_A": m.get("servo_oscillation_limit_A", 0.0)}

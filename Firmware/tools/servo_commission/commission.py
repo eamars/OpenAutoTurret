@@ -189,6 +189,36 @@ def idle_axis(run, axis, j):
 
 
 # ---------------------------------------------------------------------------- yaw
+def bearing_level(j):
+    """Mean |current| on the 1 deg/s ramps after their first 1.5 s: the bearing's slow friction as
+    this session met it (None for a session without them)."""
+    c = j.get("cycles")
+    segs = [s for s in (j.get("manifest") or {}).get("reference_segments_labels", []) if s["label"] in ("ramp+1", "ramp-1")]
+    if c is None or not len(c["t"]) or not segs:
+        return None
+    t = c["t"] - c["t"][0]
+    k = np.zeros(len(t), bool)
+    for s in segs:
+        k |= (t >= s["begin_s"] + 1.5) & (t < s["end_s"])
+    return round(float(np.mean(np.abs(c["u"][k]))), 3) if k.any() else None
+
+
+def yaw_work_in(run, servo):
+    """One use-case pass before the survey, judged by nothing. The bearing works in over the first
+    passes of a run and stays worked in at any angle (PAYLOAD 10-24, 2026-10-25: |u| on the 1 deg/s
+    ramps 0.27 -> 0.38 -> 0.51 A over three passes; 0.40-0.61 A after the accuracy campaign moved
+    90 deg on), so a survey of the rested bearing under-reads what the validation and accuracy passes
+    meet, and at 1 deg/s the servo carries only about 0.15 A of that before it stands. Surveyed after
+    one pass, the feedforward sits between the rested and the worked-in bearing. A work-in that does
+    not complete is logged, not a stop: the survey checks the axis itself."""
+    j = run.session("work_in", manifests.yaw(f"{run.id}-work_in", servo, "usecase"))
+    footer = j.get("footer") or {}
+    level = bearing_level(j)
+    run.log(f"    work-in {footer.get('status')}" + (f" {footer.get('detail')}" if footer.get("status") != "COMPLETE" else "")
+            + (f"; the 1 deg/s ramps needed {level:.2f} A" if level is not None else ""))
+    run.step("work_in", status=footer.get("status"), bearing_A=level)
+
+
 def yaw_survey(run, servo):
     j = run.session("survey", manifests.yaw(f"{run.id}-survey", servo, "survey", vmax=65.0))
     complete(j, "survey")
@@ -365,7 +395,9 @@ def yaw_validate(run, servo, identified, passes=2, circle=True, position=None, p
             if fast > 0.2:
                 fails.append(f"circle: fast current RMS {fast:.2f} A")
         summ = score.summary(rows)
-        run.log(f"    {name}{n}: {json.dumps(summ)} stalls {extra.get('stalls')} -> {'ACCEPTED' if not fails else 'NOT ACCEPTED: ' + '; '.join(fails)}"
+        level = bearing_level(j)
+        run.log(f"    {name}{n}: {json.dumps(summ)} stalls {extra.get('stalls')}" + (f" bearing {level:.2f} A" if level is not None else "")
+                + f" -> {'ACCEPTED' if not fails else 'NOT ACCEPTED: ' + '; '.join(fails)}"
                 + (f"; ACCURACY BELOW THE CALIBRATED LIMITS: {'; '.join(conformance)}" if conformance else ""))
         entry = {"script": name, "summary": summ, "extra": extra, "fails": fails, "conformance": conformance, "rows": rows}
         if predict and name == "usecase" and n == 0:
@@ -408,6 +440,9 @@ def commission_yaw(args):
             "the pitch stays disabled and rests where the last pitch session parked it (commission pitch first)")
     try:
         base = prior["servo_parameters"]
+        # The work-in runs the servo this payload already has, if any: the prior's gains are the bare
+        # turret's.
+        yaw_work_in(run, current["servo_parameters"] if args.update and current else base)
         fit, j, guess = yaw_survey(run, base)
         position = last_yaw_angle(j)
         servo = with_friction(base, fit)
@@ -722,7 +757,9 @@ def calibrate(args):
             rows, extra = score.yaw(j, x["table"], x["delay_s"]) if "cycles" in j else ([], {})
             fails = score.gate_yaw(rows, extra) + ([] if status == "COMPLETE" else [f"session {status}"])
             metrics = accuracy.pass_metrics(rows)
+            level = bearing_level(j)
             run.log(f"    {name}{k}: {json.dumps({m: round(v, 3) for m, v in metrics.items()})} stalls {extra.get('stalls')}"
+                    + (f" bearing {level:.2f} A" if level is not None else "")
                     + (f" -- {'; '.join(fails)}" if fails else ""))
             # Valid for the comparison: the session completed and the axis really tracked. Stall
             # recoveries are an outcome to compare, not a reason to leave a pass out.
