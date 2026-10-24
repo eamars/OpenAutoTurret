@@ -61,6 +61,9 @@ class CanMotorBackend : public MotorBackend {
   // SpdRef written every call, never skipped as unchanged: each write is answered by a type-2
   // frame, which is how a 1 kHz host position loop gets 1 kHz feedback (ADR-002.2 pitch servo).
   bool command_velocity_always(AxisId axis, double velocity_rad_s);
+  // Stop where it is, in whichever mode the drive runs: SpdRef 0 and LocRef at the measured position,
+  // the neutral pair adoption writes. False when either could not be written (no feedback: no LocRef).
+  bool hold_where_it_is(AxisId axis);
   void keepalive(AxisId axis) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp,

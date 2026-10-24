@@ -168,3 +168,37 @@ TEST(PitchRegisterDiagnostics, GainReadbackMismatchCannotReportComplete) {
   EXPECT_EQ(result, MotorBackend::Transition::Failed);
   EXPECT_NE(error.find("readback"), std::string::npos);
 }
+
+// Station 2026-10-24 22:46: a homing backoff ran the pitch in position mode toward a target past the
+// rest stop it sat on; homing faulted and the fault's hold wrote SpdRef 0, which a drive in position
+// mode ignores. It kept chasing the target at its current limit for 11 minutes (+15 C) until the stack
+// restarted. A hold stops the drive where it is in either mode.
+TEST(PitchHold, AHoldStopsADriveInPositionModeWhereItIs) {
+  Fixture f;
+  const auto loc = static_cast<uint16_t>(cybergear::Reg::LocRef);
+  const auto spd = static_cast<uint16_t>(cybergear::Reg::SpdRef);
+  f.transport->registers[static_cast<uint16_t>(cybergear::Reg::RunMode)] = 1;   // position mode
+  f.transport->emit_running_feedback();                                         // the pitch at 0 rad
+  std::string error;
+  ASSERT_TRUE(f.backend.adopt_running_mode(AxisId::Pitch, true, error)) << error;
+  f.backend.command(AxisId::Pitch, -0.0716, 0.1745);   // the backoff's target, 4 deg past the stop
+  ASSERT_NEAR(f.transport->registers[loc], -0.0716, 1e-6);
+  f.transport->emit_running_feedback();   // still at 0: the stop holds it
+  f.backend.command_velocity_always(AxisId::Pitch, 0.0);   // the old hold: speed zero only
+  EXPECT_NEAR(f.transport->registers[loc], -0.0716, 1e-6) << "speed zero leaves the drive chasing its target";
+  EXPECT_TRUE(f.backend.hold_where_it_is(AxisId::Pitch));
+  EXPECT_NEAR(f.transport->registers[loc], 0.0, 4e-4) << "the target is where the axis is (one count): no push";
+  EXPECT_EQ(f.transport->registers[spd], 0.0);
+}
+
+TEST(PitchHold, AHoldStopsADriveInSpeedModeToo) {
+  Fixture f;
+  const auto spd = static_cast<uint16_t>(cybergear::Reg::SpdRef);
+  f.transport->emit_running_feedback();
+  std::string error;
+  ASSERT_TRUE(f.backend.adopt_running_mode(AxisId::Pitch, false, error)) << error;   // speed mode
+  f.backend.command_velocity(AxisId::Pitch, 0.3);
+  ASSERT_NEAR(f.transport->registers[spd], 0.3, 1e-6);
+  EXPECT_TRUE(f.backend.hold_where_it_is(AxisId::Pitch));
+  EXPECT_EQ(f.transport->registers[spd], 0.0);
+}

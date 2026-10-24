@@ -827,6 +827,26 @@ bool CanMotorBackend::command_velocity_always(AxisId axis, double velocity_rad_s
   return true;
 }
 
+// Speed zero alone is no hold for a drive in position mode, which ignores SpdRef and keeps its last
+// LocRef: on 2026-10-24 22:46 a homing backoff's target, past the rest stop the pitch sat on, kept the
+// drive pushing at its current limit for 11 minutes (+15 C) after the fault's hold. Both references
+// are written, as adoption does, so the drive stops where it is whichever mode it runs.
+bool CanMotorBackend::hold_where_it_is(AxisId axis) {
+  if (transition_.stage && transition_.axis == axis) return false;
+  const auto a = static_cast<size_t>(axis);
+  bool ok = write_reg_float(cybergear::Reg::SpdRef, 0.0f, axis);
+  if (ok) last_spd_ref_[a] = 0.0;
+  can::AxisLatest l;
+  if (!system_.axis(axis).latest(l) || !l.has_feedback || !std::isfinite(l.q_rad)) return false;
+  std::string err;
+  if (!system_.send_position_ref(axis, static_cast<float>(l.q_rad), &err)) {
+    spdlog::warn("hold: LocRef at the measured position refused axis={} q={:+.6f}: {}", a, l.q_rad, err);
+    return false;
+  }
+  last_loc_ref_[a] = l.q_rad;
+  return ok;
+}
+
 void CanMotorBackend::keepalive(AxisId axis) {
   if (transition_.stage && transition_.axis == axis) return;
   // The CyberGear emits COMM_TYPE_2 feedback ONLY in response to a command

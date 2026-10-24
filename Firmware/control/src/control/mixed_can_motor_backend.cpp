@@ -1573,8 +1573,9 @@ void MixedCanMotorBackend::hold_axis(AxisId axis) {
   end_pitch_session("the pitch axis was held by the drive");
   release_pitch_servo();
   pitch_transition_active_.store(false);
-  if (!pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0))
-    spdlog::warn("pitch hold: speed-zero write refused (mode transition in progress); the drive keeps its last target");
+  if (!pitch_backend_.hold_where_it_is(AxisId::Pitch))
+    spdlog::warn("pitch hold: not both references written (mode transition in progress, or no feedback); "
+                 "the drive may keep its last target");
 }
 
 // Called with yaw_mutex_ held, on every GM6020 frame while the servo is engaged: the
