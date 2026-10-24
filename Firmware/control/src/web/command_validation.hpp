@@ -71,10 +71,11 @@ inline constexpr int kYawIx = 1;
 //   set_calibration_record <id>           (ADR-005: the record in force; saved across restarts),
 //   rename_calibration_record <id> <name>, new_calibration_record <from> <name>,
 //   delete_calibration_record <id>         (ADR-005: records leave the way they came; not #1),
-//   set_bore_mode <on|off>, set_bore_zero <m|inf>, trim_bore <wide|detail> <right|up> <mrad>
+//   set_bore_mode <on|off>, set_bore_range <m|inf>, trim_bore <wide|detail> <right|up> <mrad>,
+//   zero_bore <wide|detail> <m> <u> <v>, set_bore_offset <wide|detail> <right> <up> <forward mm>
+//                                          (ADR-005 D9, ADR-006: the bore of the record in force; not #1),
 //   verify_calibration, run_calibration <kind>, stop_calibration  (ADR-005 D7: runs, from the page),
 //   calibration_session|note|finish <run> ...                    (calibd's side of a run),
-//                                          (ADR-005 D9: the bore of the record in force; not #1),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -188,15 +189,22 @@ inline CommandResult validate_command(const SystemCommandState& s,
     r.ok = true;
     return r;
   }
-  if (command == "set_bore_mode" || command == "set_bore_zero" || command == "trim_bore") {
-    // ADR-005 D9: the bore of the record in force. Shape only; controld decides (still turret, not #1).
+  if (command == "set_bore_mode" || command == "set_bore_range" || command == "trim_bore" ||
+      command == "zero_bore" || command == "set_bore_offset") {
+    // ADR-005 D9 / ADR-006: the bore of the record in force. Shape only; controld decides (still
+    // turret, not #1, the numbers).
     const bool ok = command == "set_bore_mode" ? (arg == "on" || arg == "off")
-        : command == "set_bore_zero" ? (arg == "inf" || (!arg.empty() && arg.size() <= 12 &&
+        : command == "set_bore_range" ? (arg == "inf" || (!arg.empty() && arg.size() <= 12 &&
             std::all_of(arg.begin(), arg.end(), [](char c) { return (c >= '0' && c <= '9') || c == '.'; })))
-        : (arg.rfind("wide ", 0) == 0 || arg.rfind("detail ", 0) == 0) && arg.size() <= 32;
+        : (arg.rfind("wide ", 0) == 0 || arg.rfind("detail ", 0) == 0) && arg.size() <= 64 &&
+            std::all_of(arg.begin(), arg.end(), [](char c) {
+              return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || c == '.' || c == '-' || c == '+' || c == ' ';
+            });
     if (!ok) {
       r.error = command == "set_bore_mode" ? "set_bore_mode needs on or off"
-              : command == "set_bore_zero" ? "set_bore_zero needs metres or inf"
+              : command == "set_bore_range" ? "set_bore_range needs metres or inf"
+              : command == "zero_bore" ? "zero_bore needs wide|detail <metres> <u> <v>"
+              : command == "set_bore_offset" ? "set_bore_offset needs wide|detail <right_mm> <up_mm> <forward_mm>"
               : "trim_bore needs wide|detail right|up <mrad>";
       return r;
     }

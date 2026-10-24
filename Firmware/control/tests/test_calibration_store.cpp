@@ -47,7 +47,7 @@ TEST(CalibrationStore, TheShippedRecordIsPutInForceWithEveryPart) {
   EXPECT_EQ(r->parts.at("extrinsic").from, 1);
   EXPECT_EQ(r->path("yaw"), s.cal() / "records/0001/yaw_servo.json");
   EXPECT_FALSE(r->bore.enabled) << "mode off: the tracker keeps aiming the camera centre";
-  EXPECT_DOUBLE_EQ(r->bore.zero_m, 10);
+  EXPECT_DOUBLE_EQ(r->bore.range_m, 10) << "the fixture writes ADR-005's zero_m: still read";
   const auto a = r->bore.alignment();
   EXPECT_DOUBLE_EQ(a.wide.right_mm, 75);
   EXPECT_DOUBLE_EQ(a.assumed_depth_m, 10);
@@ -139,7 +139,7 @@ TEST(CalibrationStore, ZeroAtInfinityHasNoParallax) {
   make_record(s, 1, "AT 10 M", bore_yaml("manual_depth", "10"));
   make_record(s, 2, "AT INFINITY", bore_yaml("manual_depth", ".inf"));
   auto store = open(s);
-  EXPECT_TRUE(std::isinf(store.find(2)->bore.zero_m));
+  EXPECT_TRUE(std::isinf(store.find(2)->bore.range_m));
   const geo::CameraIntrinsics cam{1389, 1467, 960, 540, 1920, 1080};
   const auto at10 = geo::bore_alignment(store.find(1)->bore.alignment(), geo::CameraRole::Wide, cam);
   const auto inf = geo::bore_alignment(store.find(2)->bore.alignment(), geo::CameraRole::Wide, cam);

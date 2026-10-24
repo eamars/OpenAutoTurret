@@ -34,16 +34,25 @@ struct PartInfo {
 // bore.yaml (ADR-005 D9). The operator's trims are kept apart from the base angles, in mrad, so the
 // record says what was configured and what was adjusted. A positive trim moves the bore mark right
 // (or up) on the picture: the bore turns right of where the camera looks.
+// ADR-006: base.right_mm/up_mm/forward_mm are the camera's installation offset from the payload's aim
+// axis, per record because they belong to the payload. A zero (D2) writes the trims so that the
+// effective pointing is the one solved from the tap, and keeps the target's distance and the date.
 struct BoreCamera {
   geo::CameraOffset base;
   double trim_right_mrad = 0, trim_up_mrad = 0;
+  double zeroed_m = 0;       // the zero's target distance; 0 = this camera was never zeroed
+  std::string zeroed_on;     // the zero's date
   geo::CameraOffset effective() const;
 };
 
 struct Bore {
   bool enabled = false;      // mode manual_depth: the tracker aims the bore, not the camera centre
-  double zero_m = 10;        // the zeroing distance; infinity = no parallax
+  // ADR-006 D5: the working distance -- the tracker's assumed range and the distance the marks are
+  // drawn for. Infinity = no parallax. A zero sets it to its own distance; it can change afterwards.
+  // (ADR-005 called it the zeroing distance, `zero_m`, which is still read.)
+  double range_m = 10;
   BoreCamera wide, detail;
+  BoreCamera& camera(geo::CameraRole role) { return role == geo::CameraRole::Detail ? detail : wide; }
   geo::BoreAlignmentConfig alignment() const;
 };
 
@@ -77,9 +86,11 @@ std::string records_json(const std::vector<Record>& records);
 // active.json, written atomically: the record in force, and whether it has been VERIFYed since it was
 // chosen (the nudge survives a restart).
 bool write_active(const std::filesystem::path& state_calibration_dir, int id, bool unverified, std::string& err);
-// bore.yaml, written whole, and record.json's bore part marked trimmed on `date` (ADR-005 D9).
+// bore.yaml, written whole, and record.json's bore part marked `origin` ("trimmed", ADR-005 D9, or
+// "zeroed", ADR-006) on `date`.
 std::string bore_yaml(const Bore& b);
-bool write_bore(const std::filesystem::path& dir, const Bore& b, const std::string& date, std::string& err);
+bool write_bore(const std::filesystem::path& dir, const Bore& b, const std::string& date, std::string& err,
+                const std::string& origin = "trimmed");
 std::string today_local();
 // A YAML (or JSON) document as JSON: what record.json, and a session journal's manifest, are written
 // as (json.loads reads them).
@@ -139,7 +150,7 @@ class Store {
   void set_active(int id) { active_ = id; }
   bool unverified() const { return unverified_; }
   // After a trim: the record's bore in memory, its part marked trimmed (the file is written apart).
-  void set_bore(int id, const Bore& b, const std::string& date);
+  void set_bore(int id, const Bore& b, const std::string& date, const std::string& origin = "trimmed");
   // A run's end, in memory (the file is written apart, write_last_run).
   void set_last_run(int id, const Record::LastRun& last);
   std::filesystem::path dir_of(int id) const;

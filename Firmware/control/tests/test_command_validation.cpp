@@ -242,9 +242,15 @@ TEST(CommandValidation, BoreCommandsAreShapeCheckedAndAllowedBeforeHoming) {
   EXPECT_TRUE(validate_command(s, "set_bore_mode", "on").ok);
   EXPECT_TRUE(validate_command(s, "set_bore_mode", "off").ok);
   EXPECT_FALSE(validate_command(s, "set_bore_mode", "maybe").ok);
-  for (const char* z : {"25", "1500", "0.5", "inf"}) EXPECT_TRUE(validate_command(s, "set_bore_zero", z).ok) << z;
-  for (const char* z : {"", "-5", "far", "1e3"}) EXPECT_FALSE(validate_command(s, "set_bore_zero", z).ok) << z;
+  for (const char* z : {"25", "1500", "0.5", "inf"}) EXPECT_TRUE(validate_command(s, "set_bore_range", z).ok) << z;
+  for (const char* z : {"", "-5", "far", "1e3"}) EXPECT_FALSE(validate_command(s, "set_bore_range", z).ok) << z;
+  EXPECT_FALSE(validate_command(s, "set_bore_zero", "25").ok) << "ADR-005's name is gone: set_bore_range";
   EXPECT_TRUE(validate_command(s, "trim_bore", "wide right -0.1").ok);
   EXPECT_TRUE(validate_command(s, "trim_bore", "detail up 1").ok);
   EXPECT_FALSE(validate_command(s, "trim_bore", "tele right 1").ok);
+  // ADR-006: the zero and the installation offsets.
+  EXPECT_TRUE(validate_command(s, "zero_bore", "detail 37.5 0.4821 0.5133").ok);
+  EXPECT_TRUE(validate_command(s, "set_bore_offset", "wide 155 -20 0").ok);
+  EXPECT_FALSE(validate_command(s, "zero_bore", "tele 25 0.5 0.5").ok);
+  EXPECT_FALSE(validate_command(s, "set_bore_offset", "wide 155;rm -20 0").ok);
 }

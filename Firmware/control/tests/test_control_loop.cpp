@@ -1233,7 +1233,7 @@ TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {
 
   ASSERT_TRUE(ack("set_calibration_record", "2").first);
   EXPECT_NE(ack("trim_bore", "wide right 1").second.find("turn the bore on first"), std::string::npos);
-  EXPECT_NE(ack("set_bore_zero", "25").second.find("turn the bore on first"), std::string::npos);
+  EXPECT_NE(ack("set_bore_range", "25").second.find("turn the bore on first"), std::string::npos);
   const auto rev = h.snap().tracking_config_revision;
   ASSERT_TRUE(ack("set_bore_mode", "on").first) << h.snap().cmd_ack_reason;
   EXPECT_TRUE(h.snap().alignment_config.enabled);
@@ -1247,13 +1247,16 @@ TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {
   // A positive trim moves the mark right on the picture: the camera is turned that much less right.
   EXPECT_NEAR(h.snap().alignment_config.wide.right_deg, -0.5e-3 * 180 / M_PI, 1e-12);
   EXPECT_NEAR(h.snap().alignment_config.wide.up_deg, 1.2e-3 * 180 / M_PI, 1e-12);
-  EXPECT_DOUBLE_EQ(h.snap().alignment_config.detail.right_deg, 0) << "the detail camera is not trimmed";
-  EXPECT_NE(ack("trim_bore", "detail right 1").second.find("intrinsics are not measured"), std::string::npos);
+  EXPECT_DOUBLE_EQ(h.snap().alignment_config.detail.right_deg, 0) << "the detail camera is trimmed apart";
+  // ADR-006 D3: the detail camera is trimmed like the wide one (its picture is in the wide frame).
+  EXPECT_EQ(ack("trim_bore", "detail right 1").second, "detail R +1.0 · U +0.0 mrad");
+  EXPECT_NEAR(h.snap().alignment_config.detail.right_deg, -1e-3 * 180 / M_PI, 1e-12);
+  EXPECT_NEAR(h.snap().alignment_config.wide.right_deg, -0.5e-3 * 180 / M_PI, 1e-12) << "the wide one is untouched";
   EXPECT_NE(ack("trim_bore", "wide right 200").second.find("at most 100 mrad"), std::string::npos);
 
-  ASSERT_TRUE(ack("set_bore_zero", "25").first);
+  ASSERT_TRUE(ack("set_bore_range", "25").first);
   EXPECT_DOUBLE_EQ(h.snap().alignment_config.assumed_depth_m, 25);
-  EXPECT_EQ(ack("set_bore_zero", "inf").second, "zeroed at infinity: no parallax");
+  EXPECT_EQ(ack("set_bore_range", "inf").second, "working distance infinity: no parallax");
   EXPECT_GT(h.snap().alignment_config.assumed_depth_m, 1e5);
   EXPECT_NE(h.snap().calibration_records_json->find("\"origin\":\"trimmed\""), std::string::npos)
       << *h.snap().calibration_records_json;
@@ -1263,7 +1266,7 @@ TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {
   EXPECT_TRUE(eventually([&] {
     std::ifstream in(dir / "bore.yaml");
     const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-    return text.find("zero_m: .inf") != std::string::npos;
+    return text.find("range_m: .inf") != std::string::npos;
   }));
   calibration::Store again;
   std::string err;
@@ -1272,11 +1275,107 @@ TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {
   ASSERT_NE(rec, nullptr);
   EXPECT_EQ(rec->unusable, "");
   EXPECT_TRUE(rec->bore.enabled);
-  EXPECT_FALSE(std::isfinite(rec->bore.zero_m));
+  EXPECT_FALSE(std::isfinite(rec->bore.range_m));
   EXPECT_DOUBLE_EQ(rec->bore.wide.trim_right_mrad, 0.5);
   EXPECT_DOUBLE_EQ(rec->bore.wide.trim_up_mrad, -1.2);
   EXPECT_EQ(rec->parts.at("bore").origin, "trimmed");
   EXPECT_TRUE(again.unverified()) << "the switch's VERIFY nudge survives a restart";
+}
+
+TEST(CalibrationBore, AZeroPutsEachCamerasMarkOnTheTappedTargetWithItsInstallationOffset) {
+  // ADR-006: the owner's offsets (bore frame) and one target at 37.5 m. In a MANUAL hold the payload
+  // is on the target; a tap per camera solves that camera's pointing, and its mark lands on the tap.
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/true, 0.0f, /*wide_lens=*/true);
+  ASSERT_TRUE(h.ready);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_calibration_record", "2");
+  run_switch(h);
+  h.run("set_mode", "MANUAL");
+  h.step(200);
+  auto ack = [&](const char* cmd, const char* arg) {
+    h.run(cmd, arg);
+    return std::make_pair(h.snap().cmd_ack_accepted == 1, h.snap().cmd_ack_reason);
+  };
+  ASSERT_TRUE(ack("set_bore_mode", "on").first) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(ack("set_bore_offset", "wide 155 -20 0").second, "wide installed 155 mm right, -20 up, 0 forward");
+  ASSERT_TRUE(ack("set_bore_offset", "detail 145 40 0").first) << h.snap().cmd_ack_reason;
+
+  // Where each camera, really pointing a little off the payload, sees the target: the taps.
+  geo::CameraIntrinsics in;
+  in.fx = h.snap().camera_fx_px; in.fy = h.snap().camera_fy_px; in.cx = h.snap().camera_cx_px;
+  in.cy = h.snap().camera_cy_px; in.width = h.snap().camera_width; in.height = h.snap().camera_height;
+  geo::BoreAlignmentConfig truth;
+  truth.enabled = true;
+  truth.assumed_depth_m = 37.5;
+  truth.wide = {155, -20, 0, 0.9, -0.4};
+  truth.detail = {145, 40, 0, 0.6, 1.3};   // about 23 mrad apart, as the 2026-10-02 registration found
+  const auto wide_tap = geo::bore_alignment(truth, geo::CameraRole::Wide, in);
+  const auto detail_tap = geo::bore_alignment(truth, geo::CameraRole::Detail, in);
+  ASSERT_TRUE(wide_tap.valid && detail_tap.valid);
+  const auto tap = [](const char* cam, const geo::BoreAlignment& t) {
+    char arg[96];
+    std::snprintf(arg, sizeof arg, "%s 37.5 %.9f %.9f", cam, t.u_norm, t.v_norm);
+    return std::string(arg);
+  };
+
+  ASSERT_TRUE(ack("zero_bore", tap("wide", wide_tap).c_str()).first) << h.snap().cmd_ack_reason;
+  EXPECT_DOUBLE_EQ(h.snap().alignment_config.assumed_depth_m, 37.5) << "D5: the working distance starts at the zero's";
+  EXPECT_NEAR(h.snap().bore_alignment_wide.u_norm, wide_tap.u_norm, 1e-5) << "the mark is where the target was tapped";
+  EXPECT_NEAR(h.snap().bore_alignment_wide.v_norm, wide_tap.v_norm, 1e-5);
+  // The trims carry the solved pointing to 0.01 mrad.
+  EXPECT_NEAR(h.snap().alignment_config.wide.right_deg, 0.9, 1e-5 * 180 / M_PI);
+  EXPECT_NEAR(h.snap().alignment_config.wide.up_deg, -0.4, 1e-5 * 180 / M_PI);
+  ASSERT_TRUE(ack("zero_bore", tap("detail", detail_tap).c_str()).first) << h.snap().cmd_ack_reason;
+  EXPECT_NEAR(h.snap().bore_alignment_detail.u_norm, detail_tap.u_norm, 1e-5);
+  EXPECT_NEAR(h.snap().bore_alignment_detail.v_norm, detail_tap.v_norm, 1e-5);
+  EXPECT_NEAR(h.snap().alignment_config.detail.up_deg, 1.3, 1e-5 * 180 / M_PI);
+  EXPECT_NEAR(h.snap().bore_alignment_wide.u_norm, wide_tap.u_norm, 1e-5) << "the detail zero leaves the wide one alone";
+  EXPECT_NE(h.snap().calibration_records_json->find("\"origin\":\"zeroed\""), std::string::npos)
+      << *h.snap().calibration_records_json;
+  EXPECT_NE(h.snap().calibration_records_json->find("\"zeroed_m\":37.5"), std::string::npos);
+
+  // The working distance changes without a new zero; the mark moves by the modelled parallax only.
+  ASSERT_TRUE(ack("set_bore_range", "150").first);
+  truth.assumed_depth_m = 150;
+  EXPECT_NEAR(h.snap().bore_alignment_wide.u_norm, geo::bore_alignment(truth, geo::CameraRole::Wide, in).u_norm, 1e-5)
+      << "at 150 m the mark is where the real camera sees the payload's aim";
+  EXPECT_GT(h.snap().bore_alignment_wide.u_norm, wide_tap.u_norm) << "a camera right of the bore sees it move right with range";
+  // A new installation offset unmakes that camera's zero.
+  EXPECT_EQ(ack("set_bore_offset", "wide 160 -20 0").second, "wide installed 160 mm right, -20 up, 0 forward: zero it again");
+  EXPECT_NE(ack("zero_bore", "wide 37.5 1.4 0.5").second.find("outside the picture"), std::string::npos);
+  EXPECT_NE(ack("zero_bore", "wide 0 0.5 0.5").second.find("distance must be positive"), std::string::npos);
+
+  // Kept in the record's files.
+  const auto dir = ota_cal_fixture::record_dir(s, 2);
+  std::string text;
+  EXPECT_TRUE(eventually([&] {
+    std::ifstream in(dir / "bore.yaml");
+    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return text.find("detail: {right_mm: 145, up_mm: 40") != std::string::npos &&
+           text.find("zeroed_m: 37.5") != std::string::npos && text.find("range_m: 150") != std::string::npos;
+  })) << text;
+
+  // Only in a MANUAL hold (owner): not in AUTO_ROAM, and not in Shutdown.
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(20);
+  EXPECT_NE(ack("zero_bore", "wide 37.5 0.46 0.53").second.find("zero in a MANUAL hold"), std::string::npos);
+}
+
+TEST(CalibrationBore, AZeroIsNotMadeInShutdown) {
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/false, 0.0f, /*wide_lens=*/true);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_calibration_record", "2");
+  h.run("set_bore_mode", "on");
+  ASSERT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  h.run("set_bore_offset", "wide 155 -20 0");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << "offsets can be entered in Shutdown: " << h.snap().cmd_ack_reason;
+  h.run("zero_bore", "wide 25 0.46 0.53");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("zero in a MANUAL hold"), std::string::npos) << h.snap().cmd_ack_reason;
 }
 
 TEST(CalibrationBore, OnlyAStillTurretIsTrimmed) {

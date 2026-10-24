@@ -147,8 +147,8 @@ function hudBoreMark(t, stale, main) {
       !Number.isFinite(a.assumed_depth_m) || a.assumed_depth_m <= 0 ||
       !Number.isFinite(m.x_norm) || !Number.isFinite(m.y_norm) ||
       m.x_norm < 0 || m.x_norm > 1 || m.y_norm < 0 || m.y_norm > 1) return null;
-  // ADR-005 D9: the record's zeroing distance (infinity is published as 1e6 m).
-  return { u: m.x_norm, v: m.y_norm, label: "ZERO " + hudBoreZeroName(a.assumed_depth_m) };
+  // ADR-006 D5: the working distance the mark is drawn for (infinity is published as 1e6 m).
+  return { u: m.x_norm, v: m.y_norm, label: "RANGE " + hudBoreZeroName(a.assumed_depth_m) };
 }
 
 function hudMeasurementPointSvg(t, lay, stale, C) {
@@ -472,7 +472,8 @@ function hudTargetTypeChips(t) {
 const HUD_CAL_PARTS = [["yaw", "YAW SERVO"], ["pitch", "PITCH SERVO"], ["accuracy", "ACCURACY"],
                        ["extrinsic", "EXTRINSIC"], ["bore", "BORE"]];
 const HUD_CAL_COMMANDS = ["set_calibration_record", "rename_calibration_record", "new_calibration_record",
-                          "delete_calibration_record", "set_bore_mode", "set_bore_zero", "trim_bore",
+                          "delete_calibration_record", "set_bore_mode", "set_bore_range", "trim_bore",
+                          "zero_bore", "set_bore_offset",
                           "verify_calibration", "run_calibration", "stop_calibration"];
 function hudCalibrationOrigin(p) {
   if (!p || !p.origin) return { text: "NONE", tone: "warn" };
@@ -565,7 +566,7 @@ function hudCalibrationBore(t, pace) {
   if (!cur || !cur.id) return null;
   if (cur.id === 1) return { locked: true, note: "#1 is the shipped backup: NEW… makes a copy to trim" };
   const recs = Array.isArray(t.calibration_records) ? t.calibration_records : [];
-  const b = (recs.filter((x) => x.id === cur.id)[0] || {}).bore || {}, w = b.wide || {};
+  const b = (recs.filter((x) => x.id === cur.id)[0] || {}).bore || {}, w = b.wide || {}, d = b.detail || {};
   const on = b.mode === "manual_depth", switching = !!t.calibration_switching, parked = !!t.rest_park;
   const still = !switching && !parked && (t.phase === "idle" || (t.phase === "hold" && t.operating_mode === "MANUAL"));
   const why = switching ? "switching…" : parked ? "parked: trim in a MANUAL hold or in Shutdown"
@@ -575,35 +576,47 @@ function hudCalibrationBore(t, pace) {
     : null;
   pace = HUD_BORE_PACES.indexOf(pace) >= 0 ? pace : 0.1;
   const live = still && on;
-  // A distance off the ladder (a file edited by hand) steps to its neighbours on it.
-  const zero = b.zero_m === undefined ? 10 : b.zero_m, far = (z) => z === null ? Infinity : z;
-  const below = HUD_BORE_ZEROS.filter((z) => far(z) < far(zero)).pop();
-  const above = HUD_BORE_ZEROS.filter((z) => far(z) > far(zero))[0];
+  // ADR-006 D5: the working distance (the tracker's assumed range). A distance off the ladder (a zero
+  // made at 37.5 m, a file edited by hand) steps to its neighbours on it.
+  const range = b.range_m === undefined ? 10 : b.range_m, far = (z) => z === null ? Infinity : z;
+  const below = HUD_BORE_ZEROS.filter((z) => far(z) < far(range)).pop();
+  const above = HUD_BORE_ZEROS.filter((z) => far(z) > far(range))[0];
   const zarg = (z) => !live || z === undefined ? null : z === null ? "inf" : String(z);
   const offset = Math.hypot(Number(w.right_mm) || 0, Number(w.up_mm) || 0);
   const intr = t.camera_intrinsics || {};
   const px = (mrad, f) => intr.valid && Number.isFinite(f) ? (mrad / 1000 * f).toFixed(1) : null;
   const sign = (v) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
-  const r = Number(w.trim_right_mrad) || 0, u = Number(w.trim_up_mrad) || 0;
-  const trimPx = px(r, intr.fx) === null ? "" : " (" + sign(Number(px(r, intr.fx))) + " / " + sign(Number(px(u, intr.fy))) + " px)";
   const pacePx = px(pace, intr.fx);
-  const trim = (axis, d) => ({ text: d < 0 ? "−" : "+", command: live ? "trim_bore" : null,
-                               arg: "wide " + axis + " " + String(d * pace) });
+  const trim = (cam, axis, step) => ({ text: step < 0 ? "−" : "+", command: live ? "trim_bore" : null,
+                                       arg: cam + " " + axis + " " + String(step * pace) });
+  // One camera's row (ADR-006 D3: the detail camera is trimmed like the wide one; its picture is in
+  // the wide frame, so the pixels shown are the wide camera's).
+  const camera = (cam, c) => {
+    const r = Number(c.trim_right_mrad) || 0, u = Number(c.trim_up_mrad) || 0;
+    const trimPx = cam !== "wide" || px(r, intr.fx) === null ? ""
+      : " (" + sign(Number(px(r, intr.fx))) + " / " + sign(Number(px(u, intr.fy))) + " px)";
+    const zeroed = Number(c.zeroed_m) > 0;
+    return { buttons: [trim(cam, "right", -1), trim(cam, "right", 1), trim(cam, "up", -1), trim(cam, "up", 1)],
+             text: "R " + sign(r) + " · U " + sign(u) + " MRAD" + trimPx,
+             zeroed: zeroed ? "ZEROED " + String(c.zeroed_on || "").slice(5) + " AT " + hudBoreZeroName(Number(c.zeroed_m))
+                            : "NOT ZEROED",
+             installed: Math.round(Number(c.right_mm) || 0) + " R · " + Math.round(Number(c.up_mm) || 0) + " U MM",
+             note: on ? "" : "turn the bore on to trim it" };
+  };
   return {
     locked: false, on: on, still: still, live: live, hold: hold,
     note: !still ? why : on ? "the tracker aims the bore" : "the tracker aims the camera centre",
     mode: [{ label: "OFF", on: !on, command: still && on ? "set_bore_mode" : null, arg: "off" },
            { label: "ON", on: on, command: still && !on ? "set_bore_mode" : null, arg: "on" }],
-    zero: { name: hudBoreZeroName(zero), down: zarg(below), up: zarg(above),
-            note: !on ? "turn the bore on to zero it" : "zero on a target at this distance · " +
-              (far(zero) < 1e5 && offset > 0 ? (offset / zero).toFixed(2) + " mrad parallax from the " +
-                Math.round(offset) + " mm offset" : "no parallax") },
+    range: { name: hudBoreZeroName(range), down: zarg(below), up: zarg(above),
+             note: !on ? "turn the bore on to set it" : "the tracker's assumed range · " +
+               (far(range) < 1e5 && offset > 0 ? (offset / range).toFixed(2) + " mrad parallax from the " +
+                 Math.round(offset) + " mm offset" : "no parallax") },
     paces: HUD_BORE_PACES.map((p) => ({ label: String(p), ui: "pace:" + p, on: p === pace })),
     paceNote: "one press moves the amber bore mark " + pace + " mrad" + (pacePx === null ? "" : " (" + pacePx + " px on the wide camera)"),
-    wide: { buttons: [trim("right", -1), trim("right", 1), trim("up", -1), trim("up", 1)],
-            text: "R " + sign(r) + " · U " + sign(u) + " MRAD" + trimPx,
-            note: on ? "" : "turn the bore on to trim it" },   // why it is greyed otherwise: the BORE row says
-    detail: "needs the detail camera's intrinsics: its field of view is not measured"
+    // Greyed when moving: the BORE row says why, once.
+    wide: camera("wide", w),
+    detail: camera("detail", d)
   };
 }
 
@@ -2230,25 +2243,25 @@ function renderCalibrationBore(t) {
     (command ? ' data-cmd="' + command + '" data-arg="' + escapeMarkup(arg) + '" data-kind="act"' : " disabled") + ">" +
     text + "</button>";
   const snote = (text, warn) => text ? '<span class="snote' + (warn ? " warn" : "") + '">' + escapeMarkup(text) + "</span>" : "";
-  const b = s.wide.buttons;
   let h = s.hold ? '<button type="button" class="drow calhold" data-cmd="' + s.hold.command + '" data-arg="' +
     s.hold.arg + '" data-kind="act"><span class="rl">' + s.hold.label + '</span><span class="rn">' + s.hold.note +
     "</span></button>" : "";
   h += '<div class="drow setting"><span class="rl">BORE</span><span class="stepper">' +
        s.mode.map((m) => sb(m.label, m.command, m.arg, " chip" + (m.on ? " on" : ""))).join("") + "</span>" +
        snote(s.note, !s.still) + "</div>";
-  h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">ZERO AT</span><span class="stepper">' +
-       sb("−", s.zero.down && "set_bore_zero", s.zero.down) + '<span class="sval">' + escapeMarkup(s.zero.name) + "</span>" +
-       sb("+", s.zero.up && "set_bore_zero", s.zero.up) + "</span>" + snote(s.zero.note, false) + "</div>";
+  h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">RANGE</span><span class="stepper">' +
+       sb("−", s.range.down && "set_bore_range", s.range.down) + '<span class="sval">' + escapeMarkup(s.range.name) + "</span>" +
+       sb("+", s.range.up && "set_bore_range", s.range.up) + "</span>" + snote(s.range.note, false) + "</div>";
   h += '<div class="drow setting"><span class="rl">STEP</span><span class="stepper">' +
        s.paces.map((p) => '<button type="button" class="sbtn chip' + (p.on ? " on" : "") + '" data-calui="' + p.ui + '">' +
                           p.label + "</button>").join("") + "&nbsp;MRAD</span>" + snote(s.paceNote, false) + "</div>";
-  h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">WIDE</span><span class="stepper">R ' +
-       sb(b[0].text, b[0].command, b[0].arg) + sb(b[1].text, b[1].command, b[1].arg) + "&nbsp; U " +
-       sb(b[2].text, b[2].command, b[2].arg) + sb(b[3].text, b[3].command, b[3].arg) + "</span>" +
-       snote(s.wide.text, false) + snote(s.wide.note, true) + "</div>";
-  h += '<div class="drow setting gated"><span class="rl">DETAIL</span><span class="rn">NOT YET</span>' +
-       snote(s.detail, true) + "</div>";
+  for (const [label, c] of [["WIDE", s.wide], ["DETAIL", s.detail]]) {
+    const b = c.buttons;
+    h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">' + label + '</span><span class="stepper">R ' +
+         sb(b[0].text, b[0].command, b[0].arg) + sb(b[1].text, b[1].command, b[1].arg) + "&nbsp; U " +
+         sb(b[2].text, b[2].command, b[2].arg) + sb(b[3].text, b[3].command, b[3].arg) + "</span>" +
+         snote(c.text + " · " + c.zeroed, false) + snote(c.note, true) + "</div>";
+  }
   return h;
 }
 // ADR-005 D7: the run view takes the drawer while a run is in progress: steps, the session, calibd's

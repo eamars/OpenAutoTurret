@@ -62,6 +62,9 @@ BoreCamera read_bore_camera(const YAML::Node& n, const std::string& name) {
             n["right_deg"].as<double>(), n["up_deg"].as<double>()};
   c.trim_right_mrad = n["trim_right_mrad"] ? n["trim_right_mrad"].as<double>() : 0.0;
   c.trim_up_mrad = n["trim_up_mrad"] ? n["trim_up_mrad"].as<double>() : 0.0;
+  c.zeroed_m = n["zeroed_m"] ? n["zeroed_m"].as<double>() : 0.0;
+  c.zeroed_on = n["zeroed_on"] ? n["zeroed_on"].as<std::string>() : std::string();
+  if (!(c.zeroed_m >= 0) || !std::isfinite(c.zeroed_m)) throw std::runtime_error(name + " zeroed_m must be a distance");
   return c;
 }
 
@@ -93,8 +96,8 @@ std::string check_part(const std::string& part, const fs::path& file, Bore& bore
       const std::string mode = str(doc["mode"]);
       if (mode != "off" && mode != "manual_depth") return "bore.yaml mode must be off or manual_depth";
       bore.enabled = mode == "manual_depth";
-      bore.zero_m = doc["zero_m"].as<double>();
-      if (!(bore.zero_m > 0)) return "bore.yaml zero_m must be a positive distance or .inf";
+      bore.range_m = (doc["range_m"] ? doc["range_m"] : doc["zero_m"]).as<double>();   // zero_m: ADR-005's name
+      if (!(bore.range_m > 0)) return "bore.yaml range_m must be a positive distance or .inf";
       bore.wide = read_bore_camera(doc["wide"], "wide");
       bore.detail = read_bore_camera(doc["detail"], "detail");
       // The same validity rule the tracker applies, checked here so a bad bore refuses the record
@@ -123,7 +126,7 @@ geo::CameraOffset BoreCamera::effective() const {
 geo::BoreAlignmentConfig Bore::alignment() const {
   geo::BoreAlignmentConfig c;
   c.enabled = enabled;
-  c.assumed_depth_m = std::isfinite(zero_m) ? zero_m : kInfiniteDepthM;
+  c.assumed_depth_m = std::isfinite(range_m) ? range_m : kInfiniteDepthM;
   c.wide = wide.effective();
   c.detail = detail.effective();
   return c;
@@ -248,7 +251,9 @@ std::string num(double v) {
 }
 std::string camera_json(const BoreCamera& c) {
   return "{\"trim_right_mrad\":" + num(c.trim_right_mrad) + ",\"trim_up_mrad\":" + num(c.trim_up_mrad) +
-         ",\"right_mm\":" + num(c.base.right_mm) + ",\"up_mm\":" + num(c.base.up_mm) + "}";
+         ",\"right_mm\":" + num(c.base.right_mm) + ",\"up_mm\":" + num(c.base.up_mm) +
+         ",\"forward_mm\":" + num(c.base.forward_mm) + ",\"zeroed_m\":" + num(c.zeroed_m) +
+         ",\"zeroed_on\":\"" + esc(c.zeroed_on) + "\"}";
 }
 }  // namespace
 
@@ -265,9 +270,9 @@ std::string records_json(const std::vector<Record>& records) {
       o += "\"" + part + "\":{\"origin\":\"" + esc(info.origin) + "\",\"date\":\"" + esc(info.date) +
            "\",\"run\":\"" + esc(info.run) + "\",\"from\":" + std::to_string(info.from) + "}";
     }
-    // zero_m null = infinity (no parallax).
+    // range_m null = infinity (no parallax).
     o += "},\"bore\":{\"mode\":\"" + std::string(r.bore.enabled ? "manual_depth" : "off") +
-         "\",\"zero_m\":" + num(r.bore.zero_m) + ",\"wide\":" + camera_json(r.bore.wide) +
+         "\",\"range_m\":" + num(r.bore.range_m) + ",\"wide\":" + camera_json(r.bore.wide) +
          ",\"detail\":" + camera_json(r.bore.detail) + "},\"last_run\":" +
          (r.last_run.kind.empty() ? std::string("null")
                                   : "{\"kind\":\"" + esc(r.last_run.kind) + "\",\"verdict\":\"" + esc(r.last_run.verdict) +
@@ -375,19 +380,25 @@ std::string bore_yaml(const Bore& b) {
     return std::string(name) + ": {right_mm: " + num(c.base.right_mm) + ", up_mm: " + num(c.base.up_mm) +
            ", forward_mm: " + num(c.base.forward_mm) + ", right_deg: " + num(c.base.right_deg) +
            ", up_deg: " + num(c.base.up_deg) + ", trim_right_mrad: " + num(c.trim_right_mrad) +
-           ", trim_up_mrad: " + num(c.trim_up_mrad) + "}\n";
+           ", trim_up_mrad: " + num(c.trim_up_mrad) +
+           (c.zeroed_m > 0 ? ", zeroed_m: " + num(c.zeroed_m) + ", zeroed_on: \"" + c.zeroed_on + "\"" : std::string()) +
+           "}\n";
   };
-  return "# ADR-005 D9: this record's bore. mode off = the tracker aims the camera centre.\n"
+  return "# ADR-005 D9 / ADR-006: this record's bore. mode off = the tracker aims the camera centre.\n"
+         "# Per camera: the installation offset (mm) from the payload's aim axis, the pointing (deg) and\n"
+         "# the trims (mrad) on it; a zero records its target distance and date.\n"
          "schema: 1\nmode: \"" + std::string(b.enabled ? "manual_depth" : "off") + "\"\n"
-         "zero_m: " + (std::isfinite(b.zero_m) ? num(b.zero_m) : std::string(".inf")) +
-         "   # zeroing distance; .inf = no parallax\n" + cam("wide", b.wide) + cam("detail", b.detail);
+         "range_m: " + (std::isfinite(b.range_m) ? num(b.range_m) : std::string(".inf")) +
+         "   # working distance: the tracker's assumed range; .inf = no parallax\n" + cam("wide", b.wide) +
+         cam("detail", b.detail);
 }
 
 // record.json is rewritten by a rename (the web thread) and by a trim (the writer thread): each reads,
 // changes one field and writes it back, so they take turns or one would undo the other.
 static std::mutex record_json_mutex;
 
-bool write_bore(const fs::path& dir, const Bore& b, const std::string& date, std::string& err) {
+bool write_bore(const fs::path& dir, const Bore& b, const std::string& date, std::string& err,
+                const std::string& origin) {
   if (!write_file(dir / "bore.yaml", bore_yaml(b), err)) return false;
   std::lock_guard lk(record_json_mutex);
   try {
@@ -395,7 +406,7 @@ bool write_bore(const fs::path& dir, const Bore& b, const std::string& date, std
     YAML::Node part = doc["parts"]["bore"];
     part.remove("from");
     part.remove("rev");
-    part["origin"] = "trimmed";
+    part["origin"] = origin;
     part["origin"].SetTag("!");
     part["date"] = date;
     part["date"].SetTag("!");
@@ -546,11 +557,11 @@ void Store::set_last_run(int id, const Record::LastRun& last) {
     if (r.id == id) r.last_run = last;
 }
 
-void Store::set_bore(int id, const Bore& b, const std::string& date) {
+void Store::set_bore(int id, const Bore& b, const std::string& date, const std::string& origin) {
   for (auto& r : records_)
     if (r.id == id) {
       r.bore = b;
-      r.parts["bore"] = PartInfo{"bore.yaml", "trimmed", date, "", "", 0};
+      r.parts["bore"] = PartInfo{"bore.yaml", origin, date, "", "", 0};
     }
 }
 

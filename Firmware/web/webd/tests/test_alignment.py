@@ -56,7 +56,7 @@ console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) 
         out = json.loads(telemetry_to_json(telemetry_from_json(self.data)))
         for key in ("alignment", "aim_point_policy", "target_aim_source", "target_aim_box_clipped"):
             self.assertEqual(out[key], self.data[key])
-        self.assertEqual(self.render(out)["mark"]["label"], "ZERO 10 m")
+        self.assertEqual(self.render(out)["mark"]["label"], "RANGE 10 m")
 
     def test_crosshair_uses_controller_projection_and_contain_scaling(self):
         rendered = self.render(width=960, height=800)

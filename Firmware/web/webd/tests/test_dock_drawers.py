@@ -275,14 +275,14 @@ class DockAndDrawerBehaviour(unittest.TestCase):
             "accuracy": {"origin": "shipped", "date": "2026-10-02", "run": "", "from": 0},
             "extrinsic": {"origin": "shipped", "date": "", "run": "", "from": 0},
             "bore": {"origin": "shipped", "date": "", "run": "", "from": 0}},
-         "bore": {"mode": "off", "zero_m": 10, "wide": {"trim_right_mrad": 0, "trim_up_mrad": 0}}},
+         "bore": {"mode": "off", "range_m": 10, "wide": {"trim_right_mrad": 0, "trim_up_mrad": 0}}},
         {"id": 2, "name": "FRICTION 10-20", "unusable": "", "parts": {
             "yaw": {"origin": "measured", "date": "2026-10-20", "run": "", "from": 0},
             "pitch": {"origin": "inherited", "date": "", "run": "", "from": 1},
             "accuracy": {"origin": "inherited", "date": "", "run": "", "from": 1},
             "extrinsic": {"origin": "inherited", "date": "", "run": "", "from": 1},
             "bore": {"origin": "inherited", "date": "", "run": "", "from": 1}},
-         "bore": {"mode": "off", "zero_m": None, "wide": {"trim_right_mrad": 1.5, "trim_up_mrad": -0.3}}},
+         "bore": {"mode": "off", "range_m": None, "wide": {"trim_right_mrad": 1.5, "trim_up_mrad": -0.3}}},
         {"id": 4, "name": "BENCH", "unusable": "yaw_servo.json does not parse", "parts": {}, "bore": {}},
     ]
 
@@ -401,9 +401,9 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         blocked = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_blocked="record #2: x")
         self.assertIn("HOME is refused", blocked["notes"][0]["text"])
 
-    # ADR-005 D9 (owner, 2026-10-24): bore mode per record; ZERO AT and the MRAD trims apply with it on.
+    # ADR-005 D9 (owner, 2026-10-24): bore mode per record; RANGE (ADR-006: the working distance) and the MRAD trims apply with it on.
     INTR = {"valid": True, "fx": 1389, "fy": 1467}
-    ON = {"mode": "manual_depth", "zero_m": 25,
+    ON = {"mode": "manual_depth", "range_m": 25,
           "wide": {"trim_right_mrad": 1.5, "trim_up_mrad": -0.3, "right_mm": 75, "up_mm": 75}}
 
     def _bore(self, pace=0.1, bore=None, **t):
@@ -426,7 +426,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertEqual([(m["label"], m["on"], m["command"]) for m in b["mode"]],
                          [("OFF", True, None), ("ON", False, "set_bore_mode")])
         self.assertEqual(b["note"], "the tracker aims the camera centre")
-        self.assertEqual((b["zero"]["down"], b["zero"]["up"]), (None, None))
+        self.assertEqual((b["range"]["down"], b["range"]["up"]), (None, None))
         self.assertTrue(all(x["command"] is None for x in b["wide"]["buttons"]))
         self.assertIn("turn the bore on", b["wide"]["note"])
 
@@ -439,18 +439,27 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertEqual(b["wide"]["text"], "R +1.5 · U −0.3 MRAD (+2.1 / −0.4 px)")
         self.assertEqual([p["on"] for p in b["paces"]], [False, True, False])
         self.assertIn("1 mrad (1.4 px on the wide camera)", b["paceNote"])
-        self.assertEqual((b["zero"]["name"], b["zero"]["down"], b["zero"]["up"]), ("25 m", "10", "50"))
-        self.assertIn("4.24 mrad parallax from the 106 mm offset", b["zero"]["note"])
+        self.assertEqual((b["range"]["name"], b["range"]["down"], b["range"]["up"]), ("25 m", "10", "50"))
+        self.assertIn("4.24 mrad parallax from the 106 mm offset", b["range"]["note"])
         self.assertIsNone(b["hold"])
         fine = self._bore(bore=self.ON, phase="idle")
         self.assertEqual(fine["wide"]["buttons"][1]["arg"], "wide right 0.1", "the MIL click; Shutdown is still too")
+        # ADR-006 D3: the detail camera has the same row, its own trims and zero.
+        self.assertEqual([x["arg"] for x in b["detail"]["buttons"]],
+                         ["detail right -1", "detail right 1", "detail up -1", "detail up 1"])
+        self.assertEqual(b["wide"]["zeroed"], "NOT ZEROED")
+        zeroed = self._bore(bore=dict(self.ON, detail={"trim_right_mrad": -10.47, "trim_up_mrad": -22.69, "right_mm": 145,
+                                                        "up_mm": 40, "zeroed_m": 37.5, "zeroed_on": "2026-10-24"}), phase="idle")
+        self.assertEqual(zeroed["detail"]["zeroed"], "ZEROED 10-24 AT 37.5 m")
+        self.assertEqual(zeroed["detail"]["text"], "R −10.5 · U −22.7 MRAD", "no wide pixels on the detail row")
+        self.assertEqual(zeroed["detail"]["installed"], "145 R · 40 U MM")
 
     def test_the_ladder_ends_at_infinity_and_a_hand_edited_distance_steps_to_its_neighbours(self) -> None:
-        inf = self._bore(bore=dict(self.ON, zero_m=None), phase="idle")
-        self.assertEqual((inf["zero"]["name"], inf["zero"]["down"], inf["zero"]["up"]), ("∞", "1500", None))
-        self.assertIn("no parallax", inf["zero"]["note"])
-        odd = self._bore(bore=dict(self.ON, zero_m=30), phase="idle")
-        self.assertEqual((odd["zero"]["down"], odd["zero"]["up"]), ("25", "50"))
+        inf = self._bore(bore=dict(self.ON, range_m=None), phase="idle")
+        self.assertEqual((inf["range"]["name"], inf["range"]["down"], inf["range"]["up"]), ("∞", "1500", None))
+        self.assertIn("no parallax", inf["range"]["note"])
+        odd = self._bore(bore=dict(self.ON, range_m=30), phase="idle")
+        self.assertEqual((odd["range"]["down"], odd["range"]["up"]), ("25", "50"))
         self.assertEqual(self._node("console.log(JSON.stringify([T.hudBoreZeroName(1e6), T.hudBoreZeroName(10), "
                                     "T.hudBoreZeroName(0.5)]));"), ["∞", "10 m", "0.5 m"])
 

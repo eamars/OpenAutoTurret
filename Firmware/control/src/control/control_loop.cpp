@@ -5159,48 +5159,117 @@ void ControlLoop::execute_bore_command(const std::string& name, const std::strin
     return;
   }
   if (hold_.active) { ack_command(name, false, "a switch is holding the turret; trim once it ends"); return; }
-  const bool still = phase_ == Phase::Idle ||
-                     (phase_ == Phase::Hold && mode_mgr_.mode() == OperatingMode::Manual && rest_park_.stage == RestPark::Off);
-  if (!still) {
+  const bool manual_hold =
+      phase_ == Phase::Hold && mode_mgr_.mode() == OperatingMode::Manual && rest_park_.stage == RestPark::Off;
+  const bool still = phase_ == Phase::Idle || manual_hold;
+  // ADR-006: a zero is made with the payload pointed at its target by the D-pad, so only in a MANUAL
+  // hold (owner); the other bore settings also in Shutdown (ADR-005 D9).
+  if (name == "zero_bore" ? !manual_hold : !still) {
     ack_command(name, false, rest_park_.stage != RestPark::Off ? "parked: trim in a MANUAL hold or in Shutdown"
+                             : name == "zero_bore" ? "zero in a MANUAL hold: point the payload at the target with the D-pad"
                              : phase_ == Phase::Hold ? "trim in MANUAL: MODE > MANUAL holds where it is"
                                                      : "trim on a still turret: a MANUAL hold or Shutdown");
     return;
   }
   calibration::Bore b = rec.bore;
-  char what[160];
+  char what[200];
+  std::string origin = "trimmed";
+  // "wide" or "detail", the camera a command names.
+  const auto camera_named = [](const char* cam, geo::CameraRole& role) {
+    if (std::string(cam) == "wide") role = geo::CameraRole::Wide;
+    else if (std::string(cam) == "detail") role = geo::CameraRole::Detail;
+    else return false;
+    return true;
+  };
+  constexpr double kDegPerMrad = 1e-3 * 180.0 / M_PI;
   if (name == "set_bore_mode") {
     b.enabled = arg == "on";
     std::snprintf(what, sizeof what, "%s", b.enabled ? "bore on: the tracker aims the bore"
                                                      : "bore off: the tracker aims the camera centre");
-  } else if (name == "set_bore_zero") {
-    if (!b.enabled) { ack_command(name, false, "turn the bore on first: off, the tracker aims the camera centre"); return; }
-    b.zero_m = arg == "inf" ? std::numeric_limits<double>::infinity() : std::atof(arg.c_str());
-    if (!(b.zero_m > 0)) { ack_command(name, false, "the zeroing distance is a positive distance, or inf"); return; }
-    if (std::isfinite(b.zero_m)) std::snprintf(what, sizeof what, "zeroed at %g m", b.zero_m);
-    else std::snprintf(what, sizeof what, "zeroed at infinity: no parallax");
+  } else if (!b.enabled) {
+    ack_command(name, false, "turn the bore on first: off, the tracker aims the camera centre");
+    return;
+  } else if (name == "set_bore_range") {
+    b.range_m = arg == "inf" ? std::numeric_limits<double>::infinity() : std::atof(arg.c_str());
+    if (!(b.range_m > 0)) { ack_command(name, false, "the working distance is a positive distance, or inf"); return; }
+    if (std::isfinite(b.range_m)) std::snprintf(what, sizeof what, "working distance %g m", b.range_m);
+    else std::snprintf(what, sizeof what, "working distance infinity: no parallax");
+  } else if (name == "zero_bore") {
+    // ADR-006 D1: the payload is on a target `metres` ahead; the operator tapped it at (u, v) of the
+    // wide frame in this camera's picture. Solve the camera's pointing, keep it as trims on the base.
+    char cam[16] = {0};
+    double metres = 0, u = 0, v = 0;
+    geo::CameraRole role{};
+    if (std::sscanf(arg.c_str(), "%15s %lf %lf %lf", cam, &metres, &u, &v) != 4 || !camera_named(cam, role)) {
+      ack_command(name, false, "zero_bore needs wide|detail, the target's metres and the tap's u v");
+      return;
+    }
+    auto& c = b.camera(role);
+    const auto z = geo::solve_camera_pointing(c.base, metres, u, v, tracking_cfg_.intrinsics);
+    if (!z.valid) { ack_command(name, false, std::string("no zero: ") + z.reason); return; }
+    const double right = std::round((c.base.right_deg - z.right_deg) / kDegPerMrad * 100.0) / 100.0;
+    const double up = std::round((c.base.up_deg - z.up_deg) / kDegPerMrad * 100.0) / 100.0;
+    if (std::abs(right) > 100.0 || std::abs(up) > 100.0) {
+      std::snprintf(what, sizeof what, "the zero needs R %+.1f · U %+.1f mrad, more than 100: check the "
+                    "installation offset and the tap", right, up);
+      ack_command(name, false, what);
+      return;
+    }
+    c.trim_right_mrad = right;
+    c.trim_up_mrad = up;
+    c.zeroed_m = metres;
+    c.zeroed_on = calibration::today_local();
+    b.range_m = metres;   // D5: the working distance starts at the zero's distance
+    origin = "zeroed";
+    std::snprintf(what, sizeof what, "%s zeroed at %g m: R %+.2f · U %+.2f mrad", cam, metres, right, up);
+  } else if (name == "set_bore_offset") {
+    char cam[16] = {0};
+    double right_mm = 0, up_mm = 0, forward_mm = 0;
+    geo::CameraRole role{};
+    if (std::sscanf(arg.c_str(), "%15s %lf %lf %lf", cam, &right_mm, &up_mm, &forward_mm) != 4 ||
+        !camera_named(cam, role)) {
+      ack_command(name, false, "set_bore_offset needs wide|detail and right, up, forward mm");
+      return;
+    }
+    for (double mm : {right_mm, up_mm, forward_mm})
+      if (!std::isfinite(mm) || std::abs(mm) > 1000.0) {
+        ack_command(name, false, "an installation offset is at most 1000 mm either way");
+        return;
+      }
+    auto& c = b.camera(role);
+    c.base.right_mm = right_mm;
+    c.base.up_mm = up_mm;
+    c.base.forward_mm = forward_mm;
+    // The pointing a zero solved belongs to the offset it was solved with: this camera needs a new zero.
+    const bool was_zeroed = c.zeroed_m > 0;
+    c.zeroed_m = 0;
+    c.zeroed_on.clear();
+    std::snprintf(what, sizeof what, "%s installed %g mm right, %g up, %g forward%s", cam, right_mm, up_mm,
+                  forward_mm, was_zeroed ? ": zero it again" : "");
   } else {
     char cam[16] = {0}, axis[16] = {0};
     double mrad = 0;
-    if (std::sscanf(arg.c_str(), "%15s %15s %lf", cam, axis, &mrad) != 3) {
+    geo::CameraRole role{};
+    if (std::sscanf(arg.c_str(), "%15s %15s %lf", cam, axis, &mrad) != 3 || !camera_named(cam, role)) {
       ack_command(name, false, "trim_bore needs a camera, an axis and mrad");
       return;
     }
-    if (std::string(cam) == "detail") {
-      ack_command(name, false, "the detail camera's intrinsics are not measured: no bore mark to trim against");
-      return;
-    }
-    if (!b.enabled) { ack_command(name, false, "turn the bore on first: off, the tracker aims the camera centre"); return; }
-    double& trim = std::string(axis) == "up" ? b.wide.trim_up_mrad : b.wide.trim_right_mrad;
+    auto& c = b.camera(role);
+    double& trim = std::string(axis) == "up" ? c.trim_up_mrad : c.trim_right_mrad;
     trim = std::round((trim + mrad) * 10.0) / 10.0;   // 0.1 mrad, the MIL click
     if (std::abs(trim) > 100.0) { ack_command(name, false, "a trim is at most 100 mrad either way"); return; }
-    std::snprintf(what, sizeof what, "wide R %+.1f · U %+.1f mrad", b.wide.trim_right_mrad, b.wide.trim_up_mrad);
+    std::snprintf(what, sizeof what, "%s R %+.1f · U %+.1f mrad", cam, c.trim_right_mrad, c.trim_up_mrad);
   }
   const auto alignment = b.alignment();
-  if (alignment.enabled) {
-    const auto mark = geo::bore_alignment(alignment, geo::CameraRole::Wide, tracking_cfg_.intrinsics);
-    if (!mark.valid) { ack_command(name, false, std::string("the bore would not be valid: ") + mark.reason); return; }
-  }
+  if (alignment.enabled)
+    for (const auto role : {geo::CameraRole::Wide, geo::CameraRole::Detail}) {
+      const auto mark = geo::bore_alignment(alignment, role, tracking_cfg_.intrinsics);
+      if (!mark.valid) {
+        ack_command(name, false, std::string("the ") + (role == geo::CameraRole::Wide ? "wide" : "detail") +
+                                     " bore would not be valid: " + mark.reason);
+        return;
+      }
+    }
   if (tracking_) disable_tracking();
   tracking_cfg_.alignment = alignment;
   ++tracking_config_revision_;
@@ -5208,13 +5277,13 @@ void ControlLoop::execute_bore_command(const std::string& name, const std::strin
   std::filesystem::path dir;
   {
     std::lock_guard lk(calibration_mutex_);
-    calibration_store_->set_bore(rec.id, b, date);
+    calibration_store_->set_bore(rec.id, b, date, origin);
     rebuild_calibration_json_locked();
     dir = calibration_store_->dir_of(rec.id);
   }
-  calibration_writer_->post([dir, b, date] {
+  calibration_writer_->post([dir, b, date, origin] {
     std::string e;
-    if (!calibration::write_bore(dir, b, date, e)) spdlog::error("calibration: {}", e);
+    if (!calibration::write_bore(dir, b, date, e, origin)) spdlog::error("calibration: {}", e);
   });
   spdlog::info("calibration: #{} bore: {}", rec.id, what);
   ack_command(name, true, what);
@@ -6906,7 +6975,8 @@ void ControlLoop::execute_command(const std::string& name,
     ack_command(name, true, done_for_command_);
     return;
   }
-  if (name == "set_bore_mode" || name == "set_bore_zero" || name == "trim_bore") {
+  if (name == "set_bore_mode" || name == "set_bore_range" || name == "trim_bore" || name == "zero_bore" ||
+      name == "set_bore_offset") {
     execute_bore_command(name, arg);
     return;
   }
