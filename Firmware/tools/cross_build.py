@@ -37,6 +37,15 @@ def run(cmd, **kwargs):
     return proc
 
 
+def jobs() -> int:
+    """Parallel compile jobs: every core, unless OTA_BUILD_JOBS says fewer (the launcher's native
+    build honours the same variable). On 2026-10-24 a 32-way build on the Windows workstation, beside
+    other workloads, exhausted the host's commit memory and Windows killed WSL mid-build
+    (Resource-Exhaustion-Detector 2004, then 'The WSL Service terminated unexpectedly', 7034)."""
+    value = os.environ.get("OTA_BUILD_JOBS", "")
+    return int(value) if value.isdigit() and int(value) > 0 else (os.cpu_count() or 2)
+
+
 def build_gtest(prefix: Path) -> None:
     """Configure, build and install GTest for the target, once, unless it is already there."""
     if (prefix / "lib/cmake/GTest/GTestConfig.cmake").exists():
@@ -51,7 +60,7 @@ def build_gtest(prefix: Path) -> None:
          "-DCMAKE_TOOLCHAIN_FILE=" + str(FIRMWARE / "cmake/aarch64-pi.toolchain.cmake"),
          "-DCMAKE_BUILD_TYPE=Release",
          f"-DCMAKE_INSTALL_PREFIX={prefix}", "-DBUILD_GMOCK=OFF"])
-    run(["cmake", "--build", source, "--parallel", os.cpu_count() or 2])
+    run(["cmake", "--build", source, "--parallel", jobs()])
     run(["cmake", "--install", source])
 
 
@@ -104,9 +113,9 @@ def main() -> int:
 
     if args.target:
         for target in args.target:
-            run(["cmake", "--build", build, "--target", target, "--parallel", os.cpu_count() or 2], env=env)
+            run(["cmake", "--build", build, "--target", target, "--parallel", jobs()], env=env)
     else:
-        run(["cmake", "--build", build, "--parallel", os.cpu_count() or 2], env=env)
+        run(["cmake", "--build", build, "--parallel", jobs()], env=env)
 
     # Verify what was actually produced rather than trusting the toolchain file's promises.
     # Not under CMakeFiles/: executables never live there, and the Makefile generator's
