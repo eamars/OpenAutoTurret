@@ -2360,18 +2360,25 @@ function renameCalibrationDialog() {
 function newCalibrationDialog(from) {
   const t = lastTelemetry || {};
   const recs = (Array.isArray(t.calibration_records) ? t.calibration_records : []).filter((r) => !r.unusable);
-  const state = { from: from || (t.calibration_record || {}).id };
+  const state = { from: from || (t.calibration_record || {}).id, measure: false };
   const homed = t.phase === "hold";
   function draw(d) {
     d.querySelector(".from").innerHTML = recs.map((r) => '<button type="button" class="chip' +
       (r.id === state.from ? " on" : "") + '" data-from="' + r.id + '">#' + r.id + " " + escapeMarkup(r.name) + "</button>").join("");
+    // ADR-005 D7, NEW's measurement: opt-in, and only on a homed turret (from Shutdown: HOME, then RE-RUN).
+    d.querySelector(".measure").innerHTML = homed
+      ? '<button type="button" class="chip' + (state.measure ? " on" : "") + '" data-measure="1">MEASURE IT NOW</button>'
+      : "";
     d.querySelector(".sum").textContent = "Makes a copy of #" + state.from + " (every part marked FROM #" + state.from +
-      ") and puts it in force" + (homed ? ": the turret holds while the servos change, then carries on." : ".") +
-      " It measures nothing yet: runs come with stage 2.";
+      ") and puts it in force" + (homed ? ": the turret holds while the servos change" : ".") +
+      (!homed ? " To measure it, HOME, then RE-RUN."
+        : state.measure ? ", then measures it: pitch, yaw and its accuracy, about 71 min. The turret turns up to 65 deg/s: keep clear."
+        : ", then carries on. It measures nothing: RE-RUN does.");
   }
   calibrationDialog('<div class="dt">NEW CALIBRATION RECORD</div><div class="dl">NAME</div>' +
     '<input maxlength="24" spellcheck="false" placeholder="e.g. RANGEFINDER">' +
-    '<div class="dl">A COPY OF</div><div class="from row"></div><div class="sum dn"></div><div class="err dn warn"></div>' +
+    '<div class="dl">A COPY OF</div><div class="from row"></div><div class="measure row"></div><div class="sum dn"></div>' +
+    '<div class="err dn warn"></div>' +
     '<div class="db"><button type="button" data-k="go">CREATE</button><button type="button" data-k="cancel">CANCEL</button></div>', (d) => {
     draw(d);
     const input = d.querySelector("input");
@@ -2379,11 +2386,12 @@ function newCalibrationDialog(from) {
     d.addEventListener("click", (e) => {
       const f = e.target.closest && e.target.closest("[data-from]");
       if (f) { state.from = Number(f.dataset.from); draw(d); }
+      if (e.target.closest && e.target.closest("[data-measure]")) { state.measure = !state.measure; draw(d); }
     });
     const go = () => {
       const v = input.value.trim();
       if (!HUD_CAL_NAME.test(v)) { d.querySelector(".err").textContent = "Name it first: 1-24 letters, digits, spaces, - or _."; return; }
-      sendCommand("new_calibration_record", state.from + " " + v.toUpperCase());
+      sendCommand("new_calibration_record", state.from + (state.measure && homed ? " +MEASURE " : " ") + v.toUpperCase());
       closeCalibrationDialog();
     };
     d.querySelector('[data-k="go"]').onclick = go;

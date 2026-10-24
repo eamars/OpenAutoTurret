@@ -1009,7 +1009,11 @@ class ControlLoop {
   void execute_set_target_type(const std::string& arg);
   void execute_set_calibration_record(const std::string& arg,
                                       const std::string& ack_name = "set_calibration_record",
-                                      const std::string& prefix = "");
+                                      const std::string& prefix = "", const std::string& suffix = "");
+  // ADR-005 D7, NEW's measurement: a MEASURE run once the new record is in force and settled.
+  bool measure_after_switch_ = false;
+  // Why a run of `kind` cannot start now ("" when it can).
+  std::string calibration_run_refusal(const std::string& kind);
   // Web thread: the file side of rename/new/delete_calibration_record (ADR-005 D2).
   web::CommandResult calibration_files(const std::string& name, const std::string& arg,
                                        std::shared_ptr<const calibration::Prepared>& prepared,

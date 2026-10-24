@@ -34,7 +34,10 @@ ACCURACY_FILE = Path(__file__).resolve().parents[2] / "config/servo/yaw_accuracy
 # deliberate change re-run the calibration. YAW_LIMITS are the design targets the simulator's bias
 # choice normalises by (design.predicted_cost). Speeds in deg/s, angles in deg.
 YAW_GATES = {"speed_ratio": (0.9, 1.1), "max_stalls": 4}
-PITCH_GATES = {}
+# The pitch really tracks (ADR-005 D8: the gate used to pass anything): every ramp and the walker
+# within this error RMS. Ten times the 2026-10-02 asset's worst (0.045 deg ramps, 0.031 deg walker), so
+# it fails a loop that does not follow, not one that follows a little worse than the last.
+PITCH_GATES = {"tracking_rms_deg": 0.5}
 YAW_LIMITS = {"speed_ratio": (0.95, 1.05), "ramp_p95_5": 0.15, "ramp_p95_5_fast": 0.25, "step_final": 0.25,
               "step_overshoot_deg": 0.1, "walker_rms": 0.2, "long_final": 0.35, "max_stalls": 2}
 PITCH_LIMITS = {"ramp_rms": 0.1, "walker_rms": 0.1, "step_final": 0.05}
@@ -117,7 +120,12 @@ def conformance_yaw(rows):
 
 
 def gate_pitch(rows, extra):
-    return []
+    """Hard gates: the run fails on these. Every scripted segment is there, and the axis follows."""
+    if not rows:
+        return ["no segments scored (the session ended early)"]
+    limit = PITCH_GATES["tracking_rms_deg"]
+    return [f"{r['label']}: error RMS {r['err_rms']:.3f} deg (not tracking)" for r in rows
+            if (r["label"].startswith("ramp") or r["label"] == "walker") and r["err_rms"] > limit]
 
 
 def accept_yaw(rows, extra):

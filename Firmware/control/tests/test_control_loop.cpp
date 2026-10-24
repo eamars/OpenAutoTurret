@@ -1113,6 +1113,35 @@ TEST(CalibrationRun, PartsThatWouldBreakTheRecordInstallNothing) {
       << h.snap().cmd_ack_reason;
 }
 
+TEST(CalibrationRun, NewWithMeasureSwitchesToTheCopyThenMeasuresIt) {
+  // ADR-005 D7, NEW: create the record (parts inherited), switch to it (D5), then measure it.
+  RunFixture f;
+  auto& h = f.h;
+  h.run("new_calibration_record", "2 +MEASURE RANGEFINDER");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_NE(h.snap().cmd_ack_reason.find("MEASURE begins once it is in force"), std::string::npos) << h.snap().cmd_ack_reason;
+  EXPECT_NE(h.snap().calibration_records_json->find("\"name\":\"RANGEFINDER\""), std::string::npos) << "'+MEASURE' is not the name";
+  EXPECT_TRUE(h.snap().calibration_switching);
+  run_switch(h);
+  ASSERT_TRUE(h.loop->calibrating()) << "the switch settled, and the measurement began";
+  EXPECT_NE(f.run_json().find("\"kind\":\"MEASURE\""), std::string::npos) << f.run_json();
+  EXPECT_EQ(h.snap().calibration_record_id, 3);
+  // calibd finishes it: the mode the NEW interrupted resumes.
+  h.run("calibration_finish", (std::to_string(f.run_id()) + " - ACCEPTED").c_str());
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+}
+
+TEST(CalibrationRun, StopDuringTheSwitchCancelsNewsMeasurement) {
+  RunFixture f;
+  auto& h = f.h;
+  h.run("new_calibration_record", "2 +MEASURE RANGEFINDER");
+  h.run("stop_motion");
+  run_switch(h);
+  EXPECT_FALSE(h.loop->calibrating()) << "STOP is the operator's last word";
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_EQ(h.snap().calibration_record_id, 3) << "the record is still made and in force";
+}
+
 TEST(CalibrationRun, StopDuringASessionHoldsBothAxesAndEndsInManual) {
   for (const char* stop : {"stop_calibration", "stop_motion", "hold"}) {
     RunFixture f;

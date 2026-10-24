@@ -55,8 +55,8 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 | S2.1 | CALIBRATING, the run lifecycle and gates, `calibration_run` telemetry, the journal writer, the **pitch** session executor (yaw held) | unit tests on the sim backend | built 2026-10-24 |
 | S2.2 | the **yaw** session executor (pitch held), kernel RX timestamps on the yaw bus | unit tests; production servo unchanged in the sim | built 2026-10-24 |
 | S2.3 | calibd and `ControldStation`, scipy, the launcher; the page's run view and STOP | Python tests against a fake controld; the page in the browser | built 2026-10-24 |
-| S2.4 | installing accepted parts (`history/`) and resuming; NEW's measurement | unit tests | install built 2026-10-24; NEW's measurement to do |
-| S2.5 | VERIFY (`check yaw`), with D8's two fixes (session end status; the pitch gate) | Python tests | — |
+| S2.4 | installing accepted parts (`history/`) and resuming; NEW's measurement | unit tests | built 2026-10-24 |
+| S2.5 | VERIFY (`check yaw`), with D8's two fixes (session end status; the pitch gate) | Python tests; the first VERIFY on the station | built 2026-10-24 |
 | S2.6 | the servo-commissioning card rewritten | doc-tree check | — |
 
 **On the station, with the owner's go only** (no real calibration until the payload is mounted and
@@ -133,4 +133,19 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     never lose their count, and the new servos go in force the way a switch puts them. The owner's
     ruling for after a run is "the mode it interrupted".
   - A finished VERIFY, or an installed measurement, clears the VERIFY nudge.
+- **NEW's measurement.** `new_calibration_record <from> +MEASURE <name>` makes the copy, switches to
+  it, and once the switch has settled starts a MEASURE run, resuming the interrupted mode after it.
+  STOP during the switch cancels the measurement. From Shutdown the record is made and put in force,
+  and the answer says to HOME and then RE-RUN. The NEW dialog offers MEASURE IT NOW when homed.
+- **S2.5, D8's fixes.** The pitch gate (`score.gate_pitch`) passed anything. It now fails a run with
+  no scored segments, or with a ramp or the walker above 0.5 deg error RMS: ten times the 10-02
+  asset's worst, so it catches a loop that does not follow. `check yaw` counts a probe that did not
+  end COMPLETE as a failure.
+- **Station, 2026-10-24 18:27, the first VERIFY that ran.**
+  - From the page, on #1 AS SHIPPED. The yaw probe session ended COMPLETE, calibd scored it on the
+    Pi in about 3 s, and the run took 61 s. AUTO_ROAM resumed.
+  - Verdict UPDATE_PARAMETERS. The tracking gates pass (speed ratio 0.965–1.004), but the friction
+    is 26–50 % below #1's 10-02 asset. That is the drift record #2 (the 10-20 update, 38–62 % lower)
+    was measured for.
+  - The probe's journal is 52 MB. A full yaw run is about 1 GB, and journal pruning is still to do.
 

@@ -546,7 +546,9 @@ def check(args):
             return identify.servo_friction_curve(r["speed"], p["coulomb"], p["stribeck"], p["stribeck_speed"], p["viscous"],
                                                  fit["creep_drop"], fit["creep_speed"])
         drift = [r["current"] / expected(r) - 1 for r in friction]
-        fails = score.gate_yaw(rows, extra)
+        # ADR-005 D8: a probe that did not run to its end proves nothing, whatever it scored.
+        status = (j.get("footer") or {}).get("status")
+        fails = score.gate_yaw(rows, extra) + ([] if status == "COMPLETE" else [f"session {status}"])
         worst = max((abs(d) for d in drift), default=0.0)
         verdict = "REUSE_EXACT" if not fails and worst < 0.25 else "UPDATE_PARAMETERS"
         run.log(f"    friction against the asset: {', '.join(f'{d:+.0%}' for d in drift)}; acceptance fails: {fails or 'none'}")

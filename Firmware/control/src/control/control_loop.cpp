@@ -4752,24 +4752,29 @@ void ControlLoop::execute_set_target_type(const std::string& arg) {
 // ADR-005 D7: calibration runs.
 // ---------------------------------------------------------------------------
 
+std::string ControlLoop::calibration_run_refusal(const std::string& kind) {
+  bool gyro = false;
+  {
+    std::lock_guard lk(imu_mutex_);
+    gyro = imu_observation_.gyro_fresh;
+  }
+  std::string why;
+  if (run_.active) why = "run " + std::to_string(run_.id) + " is in progress";
+  // position_ready(), not homed_: a continuous yaw is never "homed" (no endpoint), yet a homed
+  // pitch and a valid yaw session reference are exactly what a run needs.
+  else if (phase_ != Phase::Hold || !position_ready()) why = "HOME first: a run needs a homed turret";
+  else if (rest_park_.stage != RestPark::Off) why = "parked: choose a mode, then run";
+  else if (hold_.active) why = "a switch is holding the turret; run once it ends";
+  else if (!gyro) why = "the IMU gyro is not fresh, and every session needs it";
+  else if (!calibration_id_ || !calibration_blocked_.empty()) why = "no usable calibration record is in force";
+  else if (kind != "VERIFY" && calibration_id_ == 1) why = "#1 is the shipped backup: MEASURE A COPY makes a record to measure";
+  return why;
+}
+
 void ControlLoop::execute_calibration_run_command(const std::string& name, const std::string& arg) {
   if (name == "verify_calibration" || name == "run_calibration") {
     const std::string kind = name == "verify_calibration" ? std::string("VERIFY") : arg;
-    bool gyro = false;
-    {
-      std::lock_guard lk(imu_mutex_);
-      gyro = imu_observation_.gyro_fresh;
-    }
-    std::string why;
-    if (run_.active) why = "run " + std::to_string(run_.id) + " is in progress";
-    // position_ready(), not homed_: a continuous yaw is never "homed" (no endpoint), yet a homed
-    // pitch and a valid yaw session reference are exactly what a run needs.
-    else if (phase_ != Phase::Hold || !position_ready()) why = "HOME first: a run needs a homed turret";
-    else if (rest_park_.stage != RestPark::Off) why = "parked: choose a mode, then run";
-    else if (hold_.active) why = "a switch is holding the turret; run once it ends";
-    else if (!gyro) why = "the IMU gyro is not fresh, and every session needs it";
-    else if (!calibration_id_ || !calibration_blocked_.empty()) why = "no usable calibration record is in force";
-    else if (kind != "VERIFY" && calibration_id_ == 1) why = "#1 is the shipped backup: MEASURE A COPY makes a record to measure";
+    const std::string why = calibration_run_refusal(kind);
     if (!why.empty()) {
       ack_command(name, false, why);
       return;
@@ -5035,7 +5040,10 @@ web::CommandResult ControlLoop::calibration_files(const std::string& name, const
   web::CommandResult r;
   const std::size_t sp = arg.find(' ');
   const int id = std::atoi(arg.substr(0, sp).c_str());
-  const std::string label = sp == std::string::npos ? std::string() : calibration::record_name(arg.substr(sp + 1));
+  // NEW's measurement (ADR-005 D7): "<from> +MEASURE <name>". A name never holds '+'.
+  std::string raw = sp == std::string::npos ? std::string() : arg.substr(sp + 1);
+  if (name == "new_calibration_record" && raw.rfind("+MEASURE ", 0) == 0) raw = raw.substr(9);
+  const std::string label = raw.empty() ? std::string() : calibration::record_name(raw);
   calibration::Record rec;
   std::filesystem::path root, dir;
   int active = 0, next = 0;
@@ -5171,7 +5179,7 @@ void ControlLoop::execute_bore_command(const std::string& name, const std::strin
 // ADR-005 D5. The record was read, checked and parsed on the web thread; here it is put in force:
 // at once in Shutdown (nothing is engaged), through the swap hold when homed.
 void ControlLoop::execute_set_calibration_record(const std::string& arg, const std::string& ack_name,
-                                                 const std::string& prefix) {
+                                                 const std::string& prefix, const std::string& suffix) {
   const std::string& name = ack_name;
   const auto prepared = std::move(prepared_for_command_);
   if (!prepared) {
@@ -5217,7 +5225,7 @@ void ControlLoop::execute_set_calibration_record(const std::string& arg, const s
   }
   if (!homed) {
     spdlog::info("calibration: #{} -> #{} {} in force (shut down: the next HOME uses it)", from, id, calibration_name_);
-    ack_command(name, true, prefix + "#" + std::to_string(id) + " in force; the next HOME uses it");
+    ack_command(name, true, prefix + "#" + std::to_string(id) + " in force; the next HOME uses it" + suffix);
     return;
   }
   begin_swap_hold();
@@ -5228,7 +5236,8 @@ void ControlLoop::execute_set_calibration_record(const std::string& arg, const s
   hold_.record_rest_since_ns = 0;
   spdlog::info("calibration: #{} -> #{} {}: holding until the turret rests, then the servos swap; then {}", from, id,
                calibration_name_, operating_mode_name(hold_.resume));
-  ack_command(name, true, prefix + "switching to #" + std::to_string(id) + "; holding until its servos are engaged and settled");
+  ack_command(name, true, prefix + "switching to #" + std::to_string(id) +
+                              "; holding until its servos are engaged and settled" + suffix);
 }
 
 // The servos from the record's assets (the backend releases each engaged one; the next reference
@@ -5296,6 +5305,17 @@ void ControlLoop::step_swap_hold(TimeNs now_ns, const AxisSnapshot sp[kAxisCount
   if (!hold_.target && !hold_.record) {
     hold_.active = false;
     const OperatingMode resume = hold_.resume;
+    if (measure_after_switch_) {
+      measure_after_switch_ = false;
+      const std::string why = calibration_run_refusal("MEASURE");
+      if (why.empty()) {
+        begin_calibration_run("MEASURE");
+        run_.resume = resume;   // after the measurement, the mode the NEW interrupted
+        return;
+      }
+      spdlog::warn("calibration: #{} in force, not measured: {}", calibration_id_, why);
+      ack_command("new_calibration_record", false, "#" + std::to_string(calibration_id_) + " is in force but not measured: " + why);
+    }
     const bool resuming = resume != OperatingMode::Manual && phase_ == Phase::Hold &&
                           mode_mgr_.mode() == OperatingMode::Manual;
     if (resuming) {
@@ -6816,7 +6836,10 @@ void ControlLoop::execute_command(const std::string& name,
   }
   // Stop Motion or Hold meanwhile is the operator's last word: the swap ends in MANUAL, not in the
   // mode it interrupted. Both carry on to their usual handling below.
-  if (hold_.active && (name == "stop_motion" || name == "hold")) hold_.resume = OperatingMode::Manual;
+  if (hold_.active && (name == "stop_motion" || name == "hold")) {
+    hold_.resume = OperatingMode::Manual;
+    measure_after_switch_ = false;
+  }
   if (name == "set_target_type") {
     execute_set_target_type(arg);
     return;
@@ -6839,7 +6862,13 @@ void ControlLoop::execute_command(const std::string& name,
     return;
   }
   if (name == "new_calibration_record") {   // made on the web thread; now it is put in force
-    execute_set_calibration_record(arg, name, done_for_command_ + "; ");
+    // NEW's measurement starts once the new record is in force and settled (step_swap_hold).
+    const bool measure = arg.find(" +MEASURE ") != std::string::npos;
+    const bool homed = phase_ == Phase::Hold && position_ready();
+    measure_after_switch_ = measure && homed;
+    execute_set_calibration_record(arg, name, done_for_command_ + "; ",
+                                   !measure ? std::string() : homed ? "; MEASURE begins once it is in force"
+                                                                    : "; MEASURE needs a homed turret: HOME, then RE-RUN");
     return;
   }
   if (phase_ == Phase::Recovering) {
