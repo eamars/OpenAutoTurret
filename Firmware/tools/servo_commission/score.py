@@ -25,15 +25,24 @@ import usecase
 DEG = math.pi / 180
 ACCURACY_FILE = Path(__file__).resolve().parents[2] / "config/servo/yaw_accuracy.json"
 
-# Gates (fail the run, no asset is written): the servo really tracks (speed ratio, so a barely-moving
-# axis cannot pass on low jitter) and stalls were recovered. Conformance (reported, never blocks the
+# Gates (fail the run, no asset is written) are engineering ones (owner ruling 2026-10-25: accept the
+# real world's imperfections unless an error is fatal or an overshoot or undershoot significant): the
+# session completes (the callers check), stalls were recovered (at most max_stalls), the axis follows
+# (every steady ramp's speed within speed_ratio of the reference: a stuck or a runaway axis, not a late
+# start), and it points (the servo error on every ramp and the walker, and every step's overshoot,
+# within pointing_deg: a quarter of the detail camera's ~13.6 deg view, so a tracked target stays in the
+# central half of its frame). Until then the speed gate was 0.9-1.1, a bare-turret sanity check that at
+# 1 deg/s on PAYLOAD 10-24 failed ramps with 0.85-1.8 deg of start transient and passed others with
+# 1.9 deg: it measured where a late start fell in its window, not how far off the axis was (STAGE2.md,
+# 2026-10-25). Every pass since the integral-cap rule stays under 2.2 deg; the one wrong feedforward
+# (09:58, 0.3 A over) reached 3.6-3.9. Conformance (reported, never blocks the
 # asset): the accuracy limits in config/servo/yaw_accuracy.json, calibrated by `commission.py
 # calibrate` from the real FF+FB tracking performance (owner ruling 2026-10-02, accuracy.py). A
 # servo that works on a changed plant must still be written -- keeping the old asset would be
 # worse -- and a conformance shortfall is a capability finding: inspect the hardware, or after a
 # deliberate change re-run the calibration. YAW_LIMITS are the design targets the simulator's bias
 # choice normalises by (design.predicted_cost). Speeds in deg/s, angles in deg.
-YAW_GATES = {"speed_ratio": (0.9, 1.1), "max_stalls": 4}
+YAW_GATES = {"speed_ratio": (0.5, 1.5), "max_stalls": 4, "pointing_deg": 3.4}
 # The pitch really tracks (ADR-005 D8: the gate used to pass anything): every ramp and the walker
 # within this error RMS. Ten times the 2026-10-02 asset's worst (0.045 deg ramps, 0.031 deg walker), so
 # it fails a loop that does not follow, not one that follows a little worse than the last.
@@ -99,15 +108,31 @@ def calibrated_limits():
 
 
 def tracking_fails(rows):
-    """The axis really tracks: every steady ramp's speed within YAW_GATES of the reference."""
+    """The axis follows: every steady ramp's speed within YAW_GATES of the reference."""
     lo, hi = YAW_GATES["speed_ratio"]
     return [f"{r['label']}: speed ratio {r['v_ratio']:.3f} (not tracking)" for r in rows
             if r["label"].startswith("ramp") and "v_ratio" in r and not lo <= r["v_ratio"] <= hi]
 
 
+def pointing_fails(rows):
+    """The axis points well enough for the cameras: the servo error on every ramp (the reversal pair
+    included) and the walker, and every step's overshoot, within YAW_GATES."""
+    limit = YAW_GATES["pointing_deg"]
+    fails = []
+    for r in rows:
+        name = r["label"]
+        if (name.startswith(("ramp", "rev-")) and name != "rev-stop" or name == "walker") and r["err_max"] > limit:
+            fails.append(f"{name}: error {r['err_max']:.2f} deg (pointing)")
+        elif name.startswith(("step", "long")) and "overshoot_pct" in r:
+            overshoot = r["overshoot_pct"] / 100 * abs(float(name[4:]))
+            if overshoot > limit:
+                fails.append(f"{name}: overshoot {overshoot:.2f} deg (pointing)")
+    return fails
+
+
 def gate_yaw(rows, extra):
-    """Hard gates: the run fails on these."""
-    fails = tracking_fails(rows)
+    """Hard gates: the run fails on these (the session's completion is the caller's)."""
+    fails = tracking_fails(rows) + pointing_fails(rows)
     if extra.get("stalls", 0) > YAW_GATES["max_stalls"]:
         fails.append(f"{extra['stalls']} stalls")
     return fails

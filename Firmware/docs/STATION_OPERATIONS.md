@@ -339,6 +339,17 @@ runs from the page (VERIFY, RE-RUN, NEW's measurement) come with stage 2 and are
 - **A switch cannot tell whether the record fits what is mounted.** The station cannot see the
   payload; the VERIFY row says NOT VERIFIED SINCE SWITCH. A yaw motor change makes every record's
   crosstalk table stale, and the station cannot tell either.
+- **What a calibration passes on (owner ruling, 2026-10-25: "unless there is fatal error, or
+  significant overshoot or undershoot, I'd accept imperfections").** The yaw gates
+  (`score.YAW_GATES`) are engineering ones: the session completes; at most 4 recovered stalls; the
+  axis follows (every steady ramp's speed within 0.5-1.5 of the reference: stuck or runaway); and it
+  points (servo error on every ramp and the walker, and every step's overshoot, within 3.4 deg, a
+  quarter of the detail camera's ~13.6 deg view, so a tracked target stays in the central half of the
+  frame). Everything else is the record's measured accuracy, reported against its limits, never a
+  stop. They replaced a 0.9-1.1 speed gate that, at 1 deg/s on the 5x payload with the drive's 0.7 deg
+  of free play, failed ramps with 0.85-1.8 deg of start transient and passed others with 1.9 deg
+  (ADR-005/STAGE2.md). The detail camera's view has not been measured; 13.6 deg is the config's
+  estimate.
 - **Records in and out.** `tools/calibration_records.py import --state run/state --name NAME [--from
   ID] [--yaw F ...]` on the station stages a workstation result in `incoming/`; controld adopts it at
   its next start under the next free id, never in force by itself. `tools/calibration_records.py

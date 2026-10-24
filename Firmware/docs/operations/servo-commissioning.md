@@ -137,9 +137,12 @@ numbers; the report records every number):
    guard tripping, otherwise the gain drops 10% and the circle repeats (up to three times). The
    ladder only saw two angles.
 7. **validate (station).** Two use-case passes.
-   - **Gates** (`score.py` `YAW_GATES`): the session completes, ramps really track (speed ratio
-     within 10%), and there are at most 4 stalls (counted inside the scored script). A gate failure
-     writes no asset.
+   - **Gates** (`score.py` `YAW_GATES`, owner ruling 2026-10-25: accept imperfections unless an
+     error is fatal or an overshoot or undershoot significant): the session completes; at most 4
+     stalls (counted inside the scored script); the axis follows (every steady ramp's speed within
+     0.5-1.5 of the reference); and it points (servo error on every ramp and the walker, and every
+     step's overshoot, within 3.4 deg: a quarter of the detail camera's view). A gate failure writes
+     no asset. The accuracy campaign holds its feedforward+feedback passes to the same gates.
    - **Conformance:** the pass is scored against the calibrated accuracy limits in
      [`yaw_accuracy.json`](../../config/servo/yaw_accuracy.json) and any shortfall is logged as
      `ACCURACY BELOW THE CALIBRATED LIMITS`. The asset is still written: on a changed plant the

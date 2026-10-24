@@ -203,22 +203,6 @@ def bearing_level(j):
     return round(float(np.mean(np.abs(c["u"][k]))), 3) if k.any() else None
 
 
-def yaw_work_in(run, servo):
-    """One use-case pass before the survey, judged by nothing. The bearing works in over the first
-    passes of a run and stays worked in at any angle (PAYLOAD 10-24, 2026-10-25: |u| on the 1 deg/s
-    ramps 0.27 -> 0.38 -> 0.51 A over three passes; 0.40-0.61 A after the accuracy campaign moved
-    90 deg on), so a survey of the rested bearing under-reads what the validation and accuracy passes
-    meet, and at 1 deg/s the servo carries only about 0.15 A of that before it stands. Surveyed after
-    one pass, the feedforward sits between the rested and the worked-in bearing. A work-in that does
-    not complete is logged, not a stop: the survey checks the axis itself."""
-    j = run.session("work_in", manifests.yaw(f"{run.id}-work_in", servo, "usecase"))
-    footer = j.get("footer") or {}
-    level = bearing_level(j)
-    run.log(f"    work-in {footer.get('status')}" + (f" {footer.get('detail')}" if footer.get("status") != "COMPLETE" else "")
-            + (f"; the 1 deg/s ramps needed {level:.2f} A" if level is not None else ""))
-    run.step("work_in", status=footer.get("status"), bearing_A=level)
-
-
 def yaw_survey(run, servo):
     j = run.session("survey", manifests.yaw(f"{run.id}-survey", servo, "survey", vmax=65.0))
     complete(j, "survey")
@@ -440,9 +424,6 @@ def commission_yaw(args):
             "the pitch stays disabled and rests where the last pitch session parked it (commission pitch first)")
     try:
         base = prior["servo_parameters"]
-        # The work-in runs the servo this payload already has, if any: the prior's gains are the bare
-        # turret's.
-        yaw_work_in(run, (current or {}).get("servo_parameters") or base)
         fit, j, guess = yaw_survey(run, base)
         position = last_yaw_angle(j)
         servo = with_friction(base, fit)
@@ -678,7 +659,7 @@ def rescore(args):
     asset = json.load(open(out / "yaw_servo.json", encoding="utf-8"))
     x = asset["identified"]["crosstalk"]
     results, accepted = [], True
-    for path in sorted(out.glob("*-usecase*/yaw-control.jsonl")):
+    for path in sorted(out.glob("**/*-usecase*/yaw-control.jsonl")):
         j = journal.yaw(path)
         rows, extra = score.yaw(j, x["table"], x["delay_s"])
         fails = score.gate_yaw(rows, extra)
@@ -694,7 +675,7 @@ def rescore(args):
     old = {v["script"] + str(i): v.get("predicted") for i, v in enumerate(asset.get("validation", []))}
     asset["validation"] = [dict(r, predicted=old.get(f"usecase{i}")) for i, r in enumerate(results)]
     asset["provenance"]["accepted"] = accepted
-    asset["provenance"]["rescored"] = "gates: tracking and stalls; conformance: config/servo/yaw_accuracy.json"
+    asset["provenance"]["rescored"] = "gates: completes, stalls, follows, points; conformance: config/servo/yaw_accuracy.json"
     (out / "yaw_servo.json").write_text(json.dumps(asset, indent=1), encoding="utf-8")
     if accepted and not args.no_write:
         (CONFIG / "yaw_servo.json").write_text(json.dumps(asset, indent=1) + "\n", encoding="utf-8")
