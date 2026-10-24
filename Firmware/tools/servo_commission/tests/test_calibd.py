@@ -146,6 +146,27 @@ class VerifyThroughThePipeline(unittest.TestCase):
             self.assertTrue(any(a.endswith("check | starting") for a in notes), notes)
             self.assertTrue((runner.root / "check" / "report.json").exists(), "kept in the store's runs/")
 
+    def test_check_pitch_runs_the_pitch_use_case_on_the_record_s_pitch_asset(self):
+        truth = json.loads((HERE / "sim_cases" / "station_estimate.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            record = state / "calibration" / "records" / "0001"
+            record.mkdir(parents=True)
+            shutil.copy(HERE.parents[1] / "config/servo/pitch_servo.json", record / "pitch_servo.json")
+            fake = FakeController(Path(tmp))
+            fake.run["kind"] = "CHECK-PITCH"
+            runner = calibd.Runner(fake, state, fake.run, {"id": 1, "name": "AS SHIPPED"}, poll_s=0.01)
+            sim_station = stations.SimStation(truth, log=lambda *_: None)
+            original = calibd.ControldStation
+            calibd.ControldStation = lambda *a, **k: sim_station
+            try:
+                verdict = runner.execute()
+            finally:
+                calibd.ControldStation = original
+            self.assertIn(verdict, ("REUSE_EXACT", "UPDATE_PARAMETERS"), verdict)
+            report = json.loads((runner.root / "check" / "report.json").read_text())
+            self.assertEqual(report["axis"], "pitch")
+
 
 if __name__ == "__main__":
     unittest.main()

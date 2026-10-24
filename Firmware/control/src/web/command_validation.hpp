@@ -214,7 +214,7 @@ inline CommandResult validate_command(const SystemCommandState& s,
       need = " takes no argument";
     } else if (command == "run_calibration") {
       ok = arg == "RERUN" || arg == "RERUN+ACCURACY" || arg == "RERUN+CROSSTALK" ||
-           arg == "RERUN+ACCURACY+CROSSTALK" || arg == "MEASURE";
+           arg == "RERUN+ACCURACY+CROSSTALK" || arg == "MEASURE" || arg == "CHECK-PITCH";
       need = " needs RERUN, RERUN+ACCURACY, RERUN+CROSSTALK, RERUN+ACCURACY+CROSSTALK or MEASURE";
     } else {
       // calibd's: "<run> <axis> <manifest>", "<run> <text>", "<run> <verdict>".

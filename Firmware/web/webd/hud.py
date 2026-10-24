@@ -611,13 +611,14 @@ function hudCalibrationBore(t, pace) {
 // step a line belongs to ("pitch | ..."). STOP is one press and acts at once.
 const HUD_RUN_PLANS = {
   "VERIFY": [["check", "CHECK YAW"]],
+  "CHECK-PITCH": [["check", "CHECK PITCH"]],
   "RERUN": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"]],
   "RERUN+CROSSTALK": [["pitch", "PITCH"], ["yaw", "YAW + CROSSTALK"]],
   "RERUN+ACCURACY": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"], ["calibrate", "ACCURACY"]],
   "RERUN+ACCURACY+CROSSTALK": [["pitch", "PITCH"], ["yaw", "YAW + CROSSTALK"], ["calibrate", "ACCURACY"]],
   "MEASURE": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"], ["calibrate", "ACCURACY"]]
 };
-const HUD_RUN_MINUTES = { "VERIFY": 2, "RERUN": 45, "RERUN+CROSSTALK": 47, "RERUN+ACCURACY": 71,
+const HUD_RUN_MINUTES = { "VERIFY": 2, "CHECK-PITCH": 2, "RERUN": 45, "RERUN+CROSSTALK": 47, "RERUN+ACCURACY": 71,
                           "RERUN+ACCURACY+CROSSTALK": 73, "MEASURE": 71 };
 function hudRunKindName(kind) {
   return kind === "VERIFY" ? "VERIFY" : kind === "MEASURE" ? "MEASURE" : String(kind || "").replace("RERUN", "RE-RUN").split("+").join(" + ");

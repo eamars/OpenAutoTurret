@@ -148,4 +148,8 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     is 26–50 % below #1's 10-02 asset. That is the drift record #2 (the 10-20 update, 38–62 % lower)
     was measured for.
   - The probe's journal is 52 MB. A full yaw run is about 1 GB, and journal pruning is still to do.
+- **CHECK-PITCH (developer only, 2026-10-24).** It is `run_calibration CHECK-PITCH`, not offered on
+  the page. It runs `commission.py check pitch` (the pitch use case with the record's pitch asset)
+  in CALIBRATING and installs nothing. It exists so controld's pitch executor can be tried on the
+  station before the first real RE-RUN: VERIFY is yaw only (D8).
 

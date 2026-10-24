@@ -4767,7 +4767,9 @@ std::string ControlLoop::calibration_run_refusal(const std::string& kind) {
   else if (hold_.active) why = "a switch is holding the turret; run once it ends";
   else if (!gyro) why = "the IMU gyro is not fresh, and every session needs it";
   else if (!calibration_id_ || !calibration_blocked_.empty()) why = "no usable calibration record is in force";
-  else if (kind != "VERIFY" && calibration_id_ == 1) why = "#1 is the shipped backup: MEASURE A COPY makes a record to measure";
+  // A check installs nothing: VERIFY (and the developer's CHECK-PITCH) run on every record, #1 included.
+  else if (kind != "VERIFY" && kind != "CHECK-PITCH" && calibration_id_ == 1)
+    why = "#1 is the shipped backup: MEASURE A COPY makes a record to measure";
   return why;
 }
 

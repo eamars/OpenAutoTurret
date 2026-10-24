@@ -48,6 +48,9 @@ PRODUCES = {"pitch": "pitch_servo.json", "yaw": "yaw_servo.json", "calibrate": "
 # What each kind runs: (pipeline, options) in order.
 PLAN = {
     "VERIFY": [("check", {})],
+    # Developer only, not on the page: the pitch servo's use-case check (commission.py check pitch).
+    # It installs nothing; it is how controld's pitch executor is tried on the station.
+    "CHECK-PITCH": [("check", {"axis": "pitch"})],
     "RERUN": [("pitch", {}), ("yaw", {"update": True})],
     "RERUN+CROSSTALK": [("pitch", {}), ("yaw", {"update": False})],
     "RERUN+ACCURACY": [("pitch", {}), ("yaw", {"update": True}), ("calibrate", {})],
@@ -160,10 +163,10 @@ class Runner:
     def pipeline(self, which: str, options: dict, station) -> dict:
         import commission
         out = self.root / which
-        args = SimpleNamespace(sim=None, out=str(out), no_write=True, no_build=True, resume=None, axis="yaw",
+        axis = options.get("axis", "pitch" if which == "pitch" else "yaw")
+        args = SimpleNamespace(sim=None, out=str(out), no_write=True, no_build=True, resume=None, axis=axis,
                                update=options.get("update", False), from_prior=False, station=station,
-                               on_log=self.say,
-                               asset=str(self.record_dir / ("pitch_servo.json" if which == "pitch" else "yaw_servo.json")))
+                               on_log=self.say, asset=str(self.record_dir / f"{axis}_servo.json"))
         commission.RUNS = self.root.parent
         try:
             {"check": commission.check, "pitch": commission.commission_pitch, "yaw": commission.commission_yaw,
