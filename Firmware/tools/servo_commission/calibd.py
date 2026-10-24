@@ -17,7 +17,10 @@ What a run measures is the existing commissioning, its rules unchanged:
     RERUN+ACCURACY+CROSSTALK  both                              (~73 min)
     MEASURE           NEW's measurement: as RERUN+ACCURACY      (~71 min)
 
-Each run is kept in <state>/calibration/runs/<run>-<kind>-<stamp>/, one directory per pipeline.
+Each run is kept in <state>/calibration/runs/<run>-<kind>-<stamp>/, one directory per pipeline, with
+run.json (the record, the kind, the verdict). Reports are kept; journals (~1 GB a full yaw run) only
+for each record's latest installed run -- `calibrate yaw` reads its validation passes -- and the
+three most recent runs (ADR-005 D3).
 
     python Firmware/tools/servo_commission/calibd.py [--socket PATH] [--state DIR]
 """
@@ -215,6 +218,34 @@ class Runner:
             self.done.set()
 
 
+KEEP_RECENT = 3
+
+
+def prune(runs: Path, keep_recent=KEEP_RECENT) -> list:
+    """Journals of runs nobody will read again: not a record's latest installed run, not recent.
+    Returns the journals removed. Reports, logs and manifests stay."""
+    done = []
+    for d in sorted(runs.iterdir()) if runs.is_dir() else []:
+        try:
+            done.append((d, json.loads((d / "run.json").read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            continue   # a run without run.json (in progress, or from before): left alone
+    keep = {d for d, _ in done[-keep_recent:]}
+    latest_installed = {}
+    for d, info in done:
+        if info.get("installed"):
+            latest_installed[info.get("record")] = d
+    keep |= set(latest_installed.values())
+    removed = []
+    for d, _ in done:
+        if d in keep:
+            continue
+        for journal_file in d.rglob("*.jsonl"):
+            journal_file.unlink()
+            removed.append(journal_file)
+    return removed
+
+
 def serve(link, state: Path, poll_s=0.2, once=False):
     """Waits for runs; one at a time."""
     handled = set()
@@ -236,6 +267,21 @@ def serve(link, state: Path, poll_s=0.2, once=False):
             ok, error = link.send("calibration_finish", f"{run['id']} {runner.root} {verdict[:400]}")
             if not ok:
                 print(f"calibd: finish refused: {error}", flush=True)
+            # Whether controld installed it is its answer on the control thread (the ack), not the gate's.
+            installed = False
+            deadline = time.monotonic() + 3.0
+            while ok and (runner.root / "install").is_dir() and time.monotonic() < deadline:
+                t = link.telemetry()
+                if t is not None and t.cmd_ack_command == "calibration_finish":
+                    installed = "installed into" in (t.cmd_ack_reason or "")
+                    break
+                time.sleep(0.05)
+            (runner.root / "run.json").write_text(json.dumps(
+                {"run": run["id"], "kind": run["kind"], "record": record.get("id"), "verdict": verdict,
+                 "installed": installed}, indent=1), encoding="utf-8")
+            removed = prune(runner.root.parent)
+            if removed:
+                print(f"calibd: pruned {len(removed)} journals of older runs", flush=True)
             if once:
                 return verdict
         time.sleep(poll_s)

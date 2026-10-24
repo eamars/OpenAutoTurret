@@ -168,5 +168,38 @@ class VerifyThroughThePipeline(unittest.TestCase):
             self.assertEqual(report["axis"], "pitch")
 
 
+
+class Pruning(unittest.TestCase):
+    """ADR-005 D3: reports stay; journals only for each record's latest installed run and the recent."""
+
+    def run_dir(self, runs, name, record, installed):
+        d = runs / name
+        (d / "yaw" / "sessions" / "s1").mkdir(parents=True)
+        (d / "yaw" / "sessions" / "s1" / "yaw-control.jsonl").write_text("{}\n")
+        (d / "yaw" / "report.json").write_text("{}")
+        (d / "run.json").write_text(json.dumps({"record": record, "installed": installed}))
+        return d
+
+    def test_only_the_latest_installed_run_per_record_and_the_recent_keep_journals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            old_install_2 = self.run_dir(runs, "0001-rerun", 2, True)
+            new_install_2 = self.run_dir(runs, "0002-rerun", 2, True)
+            install_3 = self.run_dir(runs, "0003-measure", 3, True)
+            verify = self.run_dir(runs, "0004-verify", 2, False)
+            recent = [self.run_dir(runs, f"000{k}-verify", 2, False) for k in (5, 6, 7)]
+            (runs / "0008-verify").mkdir()   # in progress: no run.json yet
+            (runs / "0008-verify" / "a.jsonl").write_text("{}\n")
+            removed = calibd.prune(runs)
+            journals = lambda d: list(d.rglob("*.jsonl"))
+            self.assertEqual(journals(old_install_2), [], "superseded by #2's newer install")
+            self.assertEqual(journals(verify), [], "neither installed nor recent")
+            for d in [new_install_2, install_3] + recent:
+                self.assertEqual(len(journals(d)), 1, d.name)
+            self.assertTrue((runs / "0008-verify" / "a.jsonl").exists(), "a run in progress is not touched")
+            self.assertTrue((old_install_2 / "yaw" / "report.json").exists(), "reports are kept")
+            self.assertEqual(len(removed), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
