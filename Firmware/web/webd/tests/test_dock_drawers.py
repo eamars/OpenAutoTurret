@@ -48,7 +48,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self._geo.write(HUD_GEOMETRY_JS +
                         "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows, hudTargetTypeChips,"
                         " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey,"
-                        " hudCalibrationEntry, hudCalibrationPanel };\n")
+                        " hudCalibrationEntry, hudCalibrationPanel, hudCalibrationBore, hudBoreZeroName };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -307,8 +307,6 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertEqual([c["bad"] for c in p["chips"]], [False, False, True])
         self.assertEqual([x["text"] for x in p["parts"]],
                          ["MEASURED 10-20", "FROM #1", "FROM #1", "FROM #1", "FROM #1"])
-        self.assertIn("ZERO ∞", p["bore"])
-        self.assertIn("WIDE R +1.5 U −0.3 MRAD", p["bore"])
 
     def test_the_shipped_backup_is_locked_and_never_offered_for_removal(self) -> None:
         # Owner, 2026-10-24: records leave the way they came, but #1 AS SHIPPED is the failsafe backup.
@@ -347,6 +345,72 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertIn("simulated refusal", over["notes"][0]["text"])
         blocked = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_blocked="record #2: x")
         self.assertIn("HOME is refused", blocked["notes"][0]["text"])
+
+    # ADR-005 D9 (owner, 2026-10-24): bore mode per record; ZERO AT and the MRAD trims apply with it on.
+    INTR = {"valid": True, "fx": 1389, "fy": 1467}
+    ON = {"mode": "manual_depth", "zero_m": 25,
+          "wide": {"trim_right_mrad": 1.5, "trim_up_mrad": -0.3, "right_mm": 75, "up_mm": 75}}
+
+    def _bore(self, pace=0.1, bore=None, **t):
+        recs = json.loads(json.dumps(self.CAL_RECORDS))
+        if bore is not None:
+            recs[1]["bore"] = bore
+        t.setdefault("calibration_records", recs)
+        t.setdefault("calibration_record", {"id": 2, "name": "FRICTION 10-20"})
+        t.setdefault("camera_intrinsics", self.INTR)
+        return self._node("console.log(JSON.stringify(T.hudCalibrationBore(%s, %s)));" % (json.dumps(t), json.dumps(pace)))
+
+    def test_the_shipped_backup_has_no_bore_controls(self) -> None:
+        b = self._bore(calibration_record={"id": 1, "name": "AS SHIPPED"}, phase="hold", operating_mode="MANUAL")
+        self.assertTrue(b["locked"])
+        self.assertIn("NEW", b["note"])
+
+    def test_off_offers_only_on_and_greys_the_zero_and_the_trims(self) -> None:
+        b = self._bore(phase="hold", operating_mode="MANUAL")
+        self.assertFalse(b["on"])
+        self.assertEqual([(m["label"], m["on"], m["command"]) for m in b["mode"]],
+                         [("OFF", True, None), ("ON", False, "set_bore_mode")])
+        self.assertEqual(b["note"], "the tracker aims the camera centre")
+        self.assertEqual((b["zero"]["down"], b["zero"]["up"]), (None, None))
+        self.assertTrue(all(x["command"] is None for x in b["wide"]["buttons"]))
+        self.assertIn("turn the bore on", b["wide"]["note"])
+
+    def test_on_in_a_manual_hold_trims_at_the_chosen_pace_and_steps_the_zero_ladder(self) -> None:
+        b = self._bore(pace=1, bore=self.ON, phase="hold", operating_mode="MANUAL")
+        self.assertEqual(b["mode"][0]["command"], "set_bore_mode", "OFF is offered")
+        self.assertEqual([(x["command"], x["arg"]) for x in b["wide"]["buttons"]],
+                         [("trim_bore", "wide right -1"), ("trim_bore", "wide right 1"),
+                          ("trim_bore", "wide up -1"), ("trim_bore", "wide up 1")])
+        self.assertEqual(b["wide"]["text"], "R +1.5 · U −0.3 MRAD (+2.1 / −0.4 px)")
+        self.assertEqual([p["on"] for p in b["paces"]], [False, True, False])
+        self.assertIn("1 mrad (1.4 px on the wide camera)", b["paceNote"])
+        self.assertEqual((b["zero"]["name"], b["zero"]["down"], b["zero"]["up"]), ("25 m", "10", "50"))
+        self.assertIn("4.24 mrad parallax from the 106 mm offset", b["zero"]["note"])
+        self.assertIsNone(b["hold"])
+        fine = self._bore(bore=self.ON, phase="idle")
+        self.assertEqual(fine["wide"]["buttons"][1]["arg"], "wide right 0.1", "the MIL click; Shutdown is still too")
+
+    def test_the_ladder_ends_at_infinity_and_a_hand_edited_distance_steps_to_its_neighbours(self) -> None:
+        inf = self._bore(bore=dict(self.ON, zero_m=None), phase="idle")
+        self.assertEqual((inf["zero"]["name"], inf["zero"]["down"], inf["zero"]["up"]), ("∞", "1500", None))
+        self.assertIn("no parallax", inf["zero"]["note"])
+        odd = self._bore(bore=dict(self.ON, zero_m=30), phase="idle")
+        self.assertEqual((odd["zero"]["down"], odd["zero"]["up"]), ("25", "50"))
+        self.assertEqual(self._node("console.log(JSON.stringify([T.hudBoreZeroName(1e6), T.hudBoreZeroName(10), "
+                                    "T.hudBoreZeroName(0.5)]));"), ["∞", "10 m", "0.5 m"])
+
+    def test_a_moving_turret_offers_the_hold_and_nothing_else(self) -> None:
+        roam = self._bore(bore=self.ON, phase="hold", operating_mode="AUTO_ROAM")
+        self.assertEqual((roam["hold"]["command"], roam["hold"]["arg"]), ("set_mode", "MANUAL"))
+        self.assertFalse(roam["still"])
+        self.assertIn("trim in MANUAL", roam["note"])
+        self.assertTrue(all(m["command"] is None for m in roam["mode"]))
+        self.assertTrue(all(x["command"] is None for x in roam["wide"]["buttons"]))
+        for t in ({"phase": "hold", "operating_mode": "MANUAL", "calibration_switching": True},
+                  {"phase": "parked", "rest_park": "parked"}, {"phase": "homing"}):
+            b = self._bore(bore=self.ON, **t)
+            self.assertIsNone(b["hold"], t)
+            self.assertFalse(b["live"], t)
 
     def test_the_pad_dims_and_stops_jogging_while_a_swap_holds_the_turret(self) -> None:
         self.assertIn("!t.target_type_switching && !t.calibration_switching", HUD_JS)

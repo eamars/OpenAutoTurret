@@ -71,6 +71,8 @@ inline constexpr int kYawIx = 1;
 //   set_calibration_record <id>           (ADR-005: the record in force; saved across restarts),
 //   rename_calibration_record <id> <name>, new_calibration_record <from> <name>,
 //   delete_calibration_record <id>         (ADR-005: records leave the way they came; not #1),
+//   set_bore_mode <on|off>, set_bore_zero <m|inf>, trim_bore <wide|detail> <right|up> <mrad>
+//                                          (ADR-005 D9: the bore of the record in force; not #1),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -179,6 +181,21 @@ inline CommandResult validate_command(const SystemCommandState& s,
     if (arg.empty() || arg.size() > 6 ||
         !std::all_of(arg.begin(), arg.end(), [](char c) { return c >= '0' && c <= '9'; }) || arg == "0") {
       r.error = "set_calibration_record needs a record number";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "set_bore_mode" || command == "set_bore_zero" || command == "trim_bore") {
+    // ADR-005 D9: the bore of the record in force. Shape only; controld decides (still turret, not #1).
+    const bool ok = command == "set_bore_mode" ? (arg == "on" || arg == "off")
+        : command == "set_bore_zero" ? (arg == "inf" || (!arg.empty() && arg.size() <= 12 &&
+            std::all_of(arg.begin(), arg.end(), [](char c) { return (c >= '0' && c <= '9') || c == '.'; })))
+        : (arg.rfind("wide ", 0) == 0 || arg.rfind("detail ", 0) == 0) && arg.size() <= 32;
+    if (!ok) {
+      r.error = command == "set_bore_mode" ? "set_bore_mode needs on or off"
+              : command == "set_bore_zero" ? "set_bore_zero needs metres or inf"
+              : "trim_bore needs wide|detail right|up <mrad>";
       return r;
     }
     r.ok = true;

@@ -147,7 +147,8 @@ function hudBoreMark(t, stale, main) {
       !Number.isFinite(a.assumed_depth_m) || a.assumed_depth_m <= 0 ||
       !Number.isFinite(m.x_norm) || !Number.isFinite(m.y_norm) ||
       m.x_norm < 0 || m.x_norm > 1 || m.y_norm < 0 || m.y_norm > 1) return null;
-  return { u: m.x_norm, v: m.y_norm, label: "ASSUMED " + a.assumed_depth_m.toFixed(1) + " m" };
+  // ADR-005 D9: the record's zeroing distance (infinity is published as 1e6 m).
+  return { u: m.x_norm, v: m.y_norm, label: "ZERO " + hudBoreZeroName(a.assumed_depth_m) };
 }
 
 function hudMeasurementPointSvg(t, lay, stale, C) {
@@ -471,7 +472,7 @@ function hudTargetTypeChips(t) {
 const HUD_CAL_PARTS = [["yaw", "YAW SERVO"], ["pitch", "PITCH SERVO"], ["accuracy", "ACCURACY"],
                        ["extrinsic", "EXTRINSIC"], ["bore", "BORE"]];
 const HUD_CAL_COMMANDS = ["set_calibration_record", "rename_calibration_record", "new_calibration_record",
-                          "delete_calibration_record"];
+                          "delete_calibration_record", "set_bore_mode", "set_bore_zero", "trim_bore"];
 function hudCalibrationOrigin(p) {
   if (!p || !p.origin) return { text: "NONE", tone: "warn" };
   const date = String(p.date || "").slice(5);   // 2026-10-02 -> 10-02
@@ -530,14 +531,67 @@ function hudCalibrationPanel(t) {
     { label: "NEW…", ui: "new", kind: switching ? "gated" : "act", note: "a copy of a record, put in force" }];
   const removable = recs.filter((x) => x.id !== 1 && x.id !== cur.id).map((x) => ({
     id: x.id, title: x.name, command: "delete_calibration_record", arg: String(x.id), kind: "danger" }));
-  const b = r.bore || {}, w = b.wide || {};
-  const mrad = (v) => (Number(v) >= 0 ? "+" : "−") + Math.abs(Number(v) || 0).toFixed(1);
-  const bore = (b.mode === "manual_depth" ? "ON" : "OFF") + " · ZERO " + (b.zero_m === null || b.zero_m === undefined ? "∞" : b.zero_m + " m") +
-               " · WIDE R " + mrad(w.trim_right_mrad) + " U " + mrad(w.trim_up_mrad) + " MRAD";
   return { inForce: { id: cur.id, name: cur.name, locked: locked }, chips: chips, bar: bar, notes: notes,
            parts: parts, unmeasured: unmeasured, unmeasuredFrom: unmeasured ? rp.yaw.from : null,
-           measure: measure, removable: removable, bore: bore,
+           measure: measure, removable: removable,
            stop: { label: "STOP MOTION", command: "hold", arg: "", kind: "stop" } };
+}
+
+// ADR-005 D9, the BORE section. Per record (owner, 2026-10-24): ON, the tracker aims the bore rather
+// than the camera centre, and the zeroing distance and the MRAD trims apply. Only a still turret is
+// trimmed -- a MANUAL hold or Shutdown -- and never #1. Reachable from any mode (it is under MENU), so
+// the panel offers the hold itself rather than only refusing.
+const HUD_BORE_ZEROS = [5, 10, 25, 50, 100, 200, 500, 1000, 1500, null];   // m; null = infinity
+const HUD_BORE_PACES = [0.1, 1, 10];
+function hudBoreZeroName(z) {
+  return z === null || z === undefined || !Number.isFinite(z) || z >= 1e5 ? "∞" : Number(z.toFixed(1)) + " m";
+}
+function hudCalibrationBore(t, pace) {
+  t = t || {};
+  const cur = t.calibration_record;
+  if (!cur || !cur.id) return null;
+  if (cur.id === 1) return { locked: true, note: "#1 is the shipped backup: NEW… makes a copy to trim" };
+  const recs = Array.isArray(t.calibration_records) ? t.calibration_records : [];
+  const b = (recs.filter((x) => x.id === cur.id)[0] || {}).bore || {}, w = b.wide || {};
+  const on = b.mode === "manual_depth", switching = !!t.calibration_switching, parked = !!t.rest_park;
+  const still = !switching && !parked && (t.phase === "idle" || (t.phase === "hold" && t.operating_mode === "MANUAL"));
+  const why = switching ? "switching…" : parked ? "parked: HOME, then trim in a MANUAL hold"
+    : t.phase === "hold" ? "trim in MANUAL: MODE › MANUAL holds where it is" : "trim on a still turret: a MANUAL hold or Shutdown";
+  const hold = !still && !switching && !parked && t.phase === "hold"
+    ? { label: "HOLD HERE TO TRIM", command: "set_mode", arg: "MANUAL", kind: "act", note: "MANUAL: the turret stops where it is" }
+    : null;
+  pace = HUD_BORE_PACES.indexOf(pace) >= 0 ? pace : 0.1;
+  const live = still && on;
+  // A distance off the ladder (a file edited by hand) steps to its neighbours on it.
+  const zero = b.zero_m === undefined ? 10 : b.zero_m, far = (z) => z === null ? Infinity : z;
+  const below = HUD_BORE_ZEROS.filter((z) => far(z) < far(zero)).pop();
+  const above = HUD_BORE_ZEROS.filter((z) => far(z) > far(zero))[0];
+  const zarg = (z) => !live || z === undefined ? null : z === null ? "inf" : String(z);
+  const offset = Math.hypot(Number(w.right_mm) || 0, Number(w.up_mm) || 0);
+  const intr = t.camera_intrinsics || {};
+  const px = (mrad, f) => intr.valid && Number.isFinite(f) ? (mrad / 1000 * f).toFixed(1) : null;
+  const sign = (v) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
+  const r = Number(w.trim_right_mrad) || 0, u = Number(w.trim_up_mrad) || 0;
+  const trimPx = px(r, intr.fx) === null ? "" : " (" + sign(Number(px(r, intr.fx))) + " / " + sign(Number(px(u, intr.fy))) + " px)";
+  const pacePx = px(pace, intr.fx);
+  const trim = (axis, d) => ({ text: d < 0 ? "−" : "+", command: live ? "trim_bore" : null,
+                               arg: "wide " + axis + " " + String(d * pace) });
+  return {
+    locked: false, on: on, still: still, live: live, hold: hold,
+    note: !still ? why : on ? "the tracker aims the bore" : "the tracker aims the camera centre",
+    mode: [{ label: "OFF", on: !on, command: still && on ? "set_bore_mode" : null, arg: "off" },
+           { label: "ON", on: on, command: still && !on ? "set_bore_mode" : null, arg: "on" }],
+    zero: { name: hudBoreZeroName(zero), down: zarg(below), up: zarg(above),
+            note: !on ? "turn the bore on to zero it" : "zero on a target at this distance · " +
+              (far(zero) < 1e5 && offset > 0 ? (offset / zero).toFixed(2) + " mrad parallax from the " +
+                Math.round(offset) + " mm offset" : "no parallax") },
+    paces: HUD_BORE_PACES.map((p) => ({ label: String(p), ui: "pace:" + p, on: p === pace })),
+    paceNote: "one press moves the amber bore mark " + pace + " mrad" + (pacePx === null ? "" : " (" + pacePx + " px on the wide camera)"),
+    wide: { buttons: [trim("right", -1), trim("right", 1), trim("up", -1), trim("up", 1)],
+            text: "R " + sign(r) + " · U " + sign(u) + " MRAD" + trimPx,
+            note: !on ? "turn the bore on to trim it" : !still ? why : "" },
+    detail: "needs the detail camera's intrinsics: its field of view is not measured"
+  };
 }
 
 function hudSpeedRows(t) {
@@ -1791,7 +1845,7 @@ function paint(t) {
   // Phase changes must refresh their Home/recovery gates even with no tracks.
   const calKey = value => value ? [value.calibration_record, value.calibration_switching, value.calibration_overdue,
     Math.round(10 * (Number(value.calibration_progress) || 0)), value.calibration_unverified, value.calibration_blocked,
-    value.calibration_records, value.phase] : null;
+    value.calibration_records, value.phase, value.operating_mode, value.rest_park] : null;
   const drawerKey = value => JSON.stringify(drawerOpen === "CALIBRATION" ? calKey(value)
     : drawerOpen === "MENU"
     ? [value && value.phase, value && value.rest_park, value && value.rest_park_on_stop,
@@ -2069,8 +2123,40 @@ function noteCalibrationAck(t) {
   const first = calSeenSeq === null;
   calSeenSeq = t.cmd_ack_seq;
   if (first || HUD_CAL_COMMANDS.indexOf(t.cmd_ack_command) < 0 || t.cmd_ack_accepted !== 0) return false;
-  calRefusal = { reason: String(t.cmd_ack_reason || ""), at: Date.now() };
+  calRefusal = { reason: String(t.cmd_ack_reason || "").replace(/^web gate: /, ""), at: Date.now() };
   return true;
+}
+let calPace = 0.1;   // MRAD per press; the page's own, like the main display choice
+function renderCalibrationBore(t) {
+  const s = hudCalibrationBore(t, calPace);
+  if (!s) return "";
+  if (s.locked)
+    return '<div class="drow setting gated"><span class="rl">BORE</span><span class="rn">LOCKED</span>' +
+      '<span class="snote warn">' + escapeMarkup(s.note) + "</span></div>";
+  const sb = (text, command, arg, cls) => '<button type="button" class="sbtn' + (cls || "") + '"' +
+    (command ? ' data-cmd="' + command + '" data-arg="' + escapeMarkup(arg) + '" data-kind="act"' : " disabled") + ">" +
+    text + "</button>";
+  const snote = (text, warn) => text ? '<span class="snote' + (warn ? " warn" : "") + '">' + escapeMarkup(text) + "</span>" : "";
+  const b = s.wide.buttons;
+  let h = s.hold ? '<button type="button" class="drow calhold" data-cmd="' + s.hold.command + '" data-arg="' +
+    s.hold.arg + '" data-kind="act"><span class="rl">' + s.hold.label + '</span><span class="rn">' + s.hold.note +
+    "</span></button>" : "";
+  h += '<div class="drow setting"><span class="rl">BORE</span><span class="stepper">' +
+       s.mode.map((m) => sb(m.label, m.command, m.arg, " chip" + (m.on ? " on" : ""))).join("") + "</span>" +
+       snote(s.note, !s.still) + "</div>";
+  h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">ZERO AT</span><span class="stepper">' +
+       sb("−", s.zero.down && "set_bore_zero", s.zero.down) + '<span class="sval">' + escapeMarkup(s.zero.name) + "</span>" +
+       sb("+", s.zero.up && "set_bore_zero", s.zero.up) + "</span>" + snote(s.zero.note, false) + "</div>";
+  h += '<div class="drow setting"><span class="rl">STEP</span><span class="stepper">' +
+       s.paces.map((p) => '<button type="button" class="sbtn chip' + (p.on ? " on" : "") + '" data-calui="' + p.ui + '">' +
+                          p.label + "</button>").join("") + "&nbsp;MRAD</span>" + snote(s.paceNote, false) + "</div>";
+  h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">WIDE</span><span class="stepper">R ' +
+       sb(b[0].text, b[0].command, b[0].arg) + sb(b[1].text, b[1].command, b[1].arg) + "&nbsp; U " +
+       sb(b[2].text, b[2].command, b[2].arg) + sb(b[3].text, b[3].command, b[3].arg) + "</span>" +
+       snote(s.wide.text, false) + snote(s.wide.note, true) + "</div>";
+  h += '<div class="drow setting gated"><span class="rl">DETAIL</span><span class="rn">NOT YET</span>' +
+       snote(s.detail, true) + "</div>";
+  return h;
 }
 function renderCalibrationPanel(t) {
   const spec = hudCalibrationPanel(t);
@@ -2117,8 +2203,7 @@ function renderCalibrationPanel(t) {
   h += '<div class="drow setting"><span class="rl">REMOVE</span><span class="stepper wrap">' +
        (removable || '<span class="snote">nothing to remove</span>') +
        "</span><span class=\"snote\">#1 is the shipped backup; the record in force can't be removed. Two presses.</span></div>";
-  h += '<div class="dsec">BORE</div><div class="drow setting"><span class="rl">BORE</span><span class="rn">' +
-       escapeMarkup(spec.bore) + "</span></div>";
+  h += '<div class="dsec">BORE</div>' + renderCalibrationBore(t);
   h += '<div class="pstop">' + row(spec.stop) + "</div>";
   return h;
 }
@@ -2354,6 +2439,7 @@ drawer.addEventListener("click", (e) => {
     else if (k === "rename") renameCalibrationDialog();
     else if (k === "new") newCalibrationDialog();
     else if (k === "newcopy") newCalibrationDialog(1);
+    else if (k.indexOf("pace:") === 0) { calPace = Number(k.slice(5)); renderDrawer(); }
     return;
   }
   const ui = e.target && e.target.closest ? e.target.closest("button[data-ui]") : null;
@@ -2616,6 +2702,7 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #drawer .calrec .rl b { color:#95f58b; font-weight:400; }
 #drawer .rn.locked { color:#f2b329; font-size:9px; letter-spacing:.08em; }
 #drawer .stepper.wrap { flex-wrap:wrap; gap:4px; }
+#drawer .calhold .rl { color:#95f58b; }
 #drawer .sbtn.chip.bad { color:#f2b329; border-color:rgba(242,179,41,.6); }
 #drawer .sbtn.chip.del { color:rgba(255,93,93,.85); border-color:rgba(255,93,93,.45); background:rgba(255,93,93,.06); }
 #drawer .sbtn.chip.del.armed { color:#f2b329; border-color:#f2b329; background:rgba(242,179,41,.16); }

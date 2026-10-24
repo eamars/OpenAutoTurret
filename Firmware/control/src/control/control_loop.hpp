@@ -974,6 +974,8 @@ class ControlLoop {
                                        std::shared_ptr<const calibration::Prepared>& prepared,
                                        std::string& done);
   void rebuild_calibration_json_locked();
+  // ADR-005 D9: the bore of the record in force -- on/off, its zeroing distance, its MRAD trims.
+  void execute_bore_command(const std::string& name, const std::string& arg);
   bool apply_calibration(const calibration::Prepared& p, std::string& err);
   void step_swap_hold(TimeNs now_ns, const AxisSnapshot sp[kAxisCount]);
   TargetType applied_target_type(TimeNs now_ns) const;

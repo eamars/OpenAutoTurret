@@ -70,8 +70,13 @@ bool prepare(const Record& record, Prepared& out, std::string& err);
 
 // The records for telemetry: id, name, why unusable, each part's origin and the bore.
 std::string records_json(const std::vector<Record>& records);
-// active.json, written atomically.
-bool write_active(const std::filesystem::path& state_calibration_dir, int id, std::string& err);
+// active.json, written atomically: the record in force, and whether it has been VERIFYed since it was
+// chosen (the nudge survives a restart).
+bool write_active(const std::filesystem::path& state_calibration_dir, int id, bool unverified, std::string& err);
+// bore.yaml, written whole, and record.json's bore part marked trimmed on `date` (ADR-005 D9).
+std::string bore_yaml(const Bore& b);
+bool write_bore(const std::filesystem::path& dir, const Bore& b, const std::string& date, std::string& err);
+std::string today_local();
 
 // Record files, changed on disk (call off the control thread; each is atomic). Records leave the way
 // they came (owner, 2026-10-24): rename, a copy made from another, removal to deleted/ (kept, not
@@ -116,6 +121,9 @@ class Store {
   const Record* in_force(std::string& why) const;
   const std::filesystem::path& root() const { return root_; }
   void set_active(int id) { active_ = id; }
+  bool unverified() const { return unverified_; }
+  // After a trim: the record's bore in memory, its part marked trimmed (the file is written apart).
+  void set_bore(int id, const Bore& b, const std::string& date);
   std::filesystem::path dir_of(int id) const;
   // The next id: never one in records/ or deleted/.
   int next_id() const;
@@ -129,6 +137,7 @@ class Store {
   std::vector<Record> records_;
   std::vector<std::string> adopted_;
   int active_ = 0;
+  bool unverified_ = false;
 };
 
 }  // namespace ota::calibration

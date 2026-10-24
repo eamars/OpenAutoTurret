@@ -847,6 +847,90 @@ TEST(CalibrationRecords, RenameRemoveAndNewLeaveTheWayTheyCameAndSpareTheShipped
   EXPECT_EQ(h.snap().calibration_record_id, 4) << "ids are never reused: 2 is in deleted/";
 }
 
+TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {
+  // Owner, 2026-10-24: bore mode is per record. #1 stays as shipped; a copy can turn the bore on, and
+  // then its zeroing distance and its 0.1 mrad trims apply to what the tracker aims.
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/false, 0.0f, /*wide_lens=*/true);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  auto ack = [&](const char* cmd, const char* arg) {
+    h.run(cmd, arg);
+    return std::make_pair(h.snap().cmd_ack_accepted == 1, h.snap().cmd_ack_reason);
+  };
+  EXPECT_NE(ack("set_bore_mode", "on").second.find("#1 is the shipped backup"), std::string::npos);
+  EXPECT_FALSE(h.snap().alignment_config.enabled);
+
+  ASSERT_TRUE(ack("set_calibration_record", "2").first);
+  EXPECT_NE(ack("trim_bore", "wide right 1").second.find("turn the bore on first"), std::string::npos);
+  EXPECT_NE(ack("set_bore_zero", "25").second.find("turn the bore on first"), std::string::npos);
+  const auto rev = h.snap().tracking_config_revision;
+  ASSERT_TRUE(ack("set_bore_mode", "on").first) << h.snap().cmd_ack_reason;
+  EXPECT_TRUE(h.snap().alignment_config.enabled);
+  EXPECT_GT(h.snap().tracking_config_revision, rev) << "the tracker is rebuilt from the new bore";
+  EXPECT_DOUBLE_EQ(h.snap().alignment_config.assumed_depth_m, 10);
+
+  EXPECT_TRUE(ack("trim_bore", "wide right 0.5").first);
+  const auto r = ack("trim_bore", "wide up -1.2");
+  EXPECT_TRUE(r.first);
+  EXPECT_EQ(r.second, "wide R +0.5 · U -1.2 mrad");
+  // A positive trim moves the mark right on the picture: the camera is turned that much less right.
+  EXPECT_NEAR(h.snap().alignment_config.wide.right_deg, -0.5e-3 * 180 / M_PI, 1e-12);
+  EXPECT_NEAR(h.snap().alignment_config.wide.up_deg, 1.2e-3 * 180 / M_PI, 1e-12);
+  EXPECT_DOUBLE_EQ(h.snap().alignment_config.detail.right_deg, 0) << "the detail camera is not trimmed";
+  EXPECT_NE(ack("trim_bore", "detail right 1").second.find("intrinsics are not measured"), std::string::npos);
+  EXPECT_NE(ack("trim_bore", "wide right 200").second.find("at most 100 mrad"), std::string::npos);
+
+  ASSERT_TRUE(ack("set_bore_zero", "25").first);
+  EXPECT_DOUBLE_EQ(h.snap().alignment_config.assumed_depth_m, 25);
+  EXPECT_EQ(ack("set_bore_zero", "inf").second, "zeroed at infinity: no parallax");
+  EXPECT_GT(h.snap().alignment_config.assumed_depth_m, 1e5);
+  EXPECT_NE(h.snap().calibration_records_json->find("\"origin\":\"trimmed\""), std::string::npos)
+      << *h.snap().calibration_records_json;
+
+  // Kept: the files say it, and a store opened again reads the same bore.
+  const auto dir = ota_cal_fixture::record_dir(s, 2);
+  EXPECT_TRUE(eventually([&] {
+    std::ifstream in(dir / "bore.yaml");
+    const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    return text.find("zero_m: .inf") != std::string::npos;
+  }));
+  calibration::Store again;
+  std::string err;
+  ASSERT_TRUE(again.open(s.dir, err)) << err;
+  const auto* rec = again.find(2);
+  ASSERT_NE(rec, nullptr);
+  EXPECT_EQ(rec->unusable, "");
+  EXPECT_TRUE(rec->bore.enabled);
+  EXPECT_FALSE(std::isfinite(rec->bore.zero_m));
+  EXPECT_DOUBLE_EQ(rec->bore.wide.trim_right_mrad, 0.5);
+  EXPECT_DOUBLE_EQ(rec->bore.wide.trim_up_mrad, -1.2);
+  EXPECT_EQ(rec->parts.at("bore").origin, "trimmed");
+  EXPECT_TRUE(again.unverified()) << "the switch's VERIFY nudge survives a restart";
+}
+
+TEST(CalibrationBore, OnlyAStillTurretIsTrimmed) {
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/true, 0.0f, /*wide_lens=*/true);
+  ASSERT_TRUE(h.ready);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_calibration_record", "2");
+  run_switch(h);
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(20);
+  h.run("set_bore_mode", "on");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("trim in MANUAL"), std::string::npos) << h.snap().cmd_ack_reason;
+  h.run("set_mode", "MANUAL");
+  h.step(200);
+  h.run("set_bore_mode", "on");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  h.run("set_mode", "AUTO_ROAM");
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "the tracker starts with the bore on";
+  EXPECT_TRUE(h.snap().alignment_config.enabled);
+}
+
 TEST(CalibrationSwitch, ItCompletesWithTheStationsNoisySpeedReadingAndFlickeringCounts) {
   // Station, 2026-10-24: the first switch never swapped -- its rest test used speed, and the pitch
   // CyberGear's speed reading at rest spans -2.6..+8 deg/s. Rest is now judged by position.

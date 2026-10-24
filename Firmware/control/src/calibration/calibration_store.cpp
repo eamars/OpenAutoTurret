@@ -197,6 +197,7 @@ bool Store::open(const fs::path& state_dir, std::string& err) {
   try {
     const auto doc = YAML::LoadFile((root_ / "active.json").string());
     active_ = doc["active"].as<int>();
+    unverified_ = doc["unverified"] && doc["unverified"].as<bool>();
   } catch (const std::exception&) {
     active_ = 0;   // reported by in_force()
   }
@@ -343,8 +344,49 @@ std::string now_local() {
 }
 }  // namespace
 
-bool write_active(const fs::path& dir, int id, std::string& err) {
-  return write_file(dir / "active.json", "{\"schema\": 1, \"active\": " + std::to_string(id) + "}\n", err);
+bool write_active(const fs::path& dir, int id, bool unverified, std::string& err) {
+  return write_file(dir / "active.json", "{\"schema\": 1, \"active\": " + std::to_string(id) +
+                    ", \"unverified\": " + (unverified ? "true" : "false") + "}\n", err);
+}
+
+std::string today_local() {
+  const std::time_t t = std::time(nullptr);
+  std::tm tm{};
+  localtime_r(&t, &tm);
+  char b[16];
+  std::strftime(b, sizeof b, "%Y-%m-%d", &tm);
+  return b;
+}
+
+std::string bore_yaml(const Bore& b) {
+  auto cam = [](const char* name, const BoreCamera& c) {
+    return std::string(name) + ": {right_mm: " + num(c.base.right_mm) + ", up_mm: " + num(c.base.up_mm) +
+           ", forward_mm: " + num(c.base.forward_mm) + ", right_deg: " + num(c.base.right_deg) +
+           ", up_deg: " + num(c.base.up_deg) + ", trim_right_mrad: " + num(c.trim_right_mrad) +
+           ", trim_up_mrad: " + num(c.trim_up_mrad) + "}\n";
+  };
+  return "# ADR-005 D9: this record's bore. mode off = the tracker aims the camera centre.\n"
+         "schema: 1\nmode: \"" + std::string(b.enabled ? "manual_depth" : "off") + "\"\n"
+         "zero_m: " + (std::isfinite(b.zero_m) ? num(b.zero_m) : std::string(".inf")) +
+         "   # zeroing distance; .inf = no parallax\n" + cam("wide", b.wide) + cam("detail", b.detail);
+}
+
+bool write_bore(const fs::path& dir, const Bore& b, const std::string& date, std::string& err) {
+  if (!write_file(dir / "bore.yaml", bore_yaml(b), err)) return false;
+  try {
+    YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
+    YAML::Node part = doc["parts"]["bore"];
+    part.remove("from");
+    part.remove("rev");
+    part["origin"] = "trimmed";
+    part["origin"].SetTag("!");
+    part["date"] = date;
+    part["date"].SetTag("!");
+    return write_file(dir / "record.json", to_json(doc, 0) + "\n", err);
+  } catch (const std::exception& e) {
+    err = std::string("record.json does not parse (") + e.what() + ")";
+    return false;
+  }
 }
 
 std::string record_name(const std::string& raw) {
@@ -406,6 +448,14 @@ bool remove_record(const fs::path& root, int id, std::string& err) {
 }
 
 fs::path Store::dir_of(int id) const { return root_ / "records" / id_dir(id); }
+
+void Store::set_bore(int id, const Bore& b, const std::string& date) {
+  for (auto& r : records_)
+    if (r.id == id) {
+      r.bore = b;
+      r.parts["bore"] = PartInfo{"bore.yaml", "trimmed", date, "", "", 0};
+    }
+}
 
 int Store::next_id() const {
   const auto live = ids_in(root_ / "records"), gone = ids_in(root_ / "deleted");

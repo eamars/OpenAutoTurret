@@ -4754,6 +4754,7 @@ void ControlLoop::set_calibration_store(std::shared_ptr<calibration::Store> stor
   std::lock_guard lk(calibration_mutex_);
   calibration_store_ = std::move(store);
   rebuild_calibration_json_locked();
+  if (calibration_store_) calibration_unverified_ = calibration_store_->unverified();
   if (calibration_store_ && !calibration_writer_) calibration_writer_ = std::make_unique<calibration::Writer>();
 }
 
@@ -4821,6 +4822,86 @@ web::CommandResult ControlLoop::calibration_files(const std::string& name, const
   return r;
 }
 
+
+// ADR-005 D9 (owner, 2026-10-24): bore mode is per record -- on, the tracker aims the bore, not the
+// camera centre -- and with it on, the zeroing distance and the MRAD trims. Only on a still turret
+// (MANUAL hold, or Shutdown) and never on #1, the shipped backup. The geometry changes here, while no
+// tracker exists; the files are written on the writer thread.
+void ControlLoop::execute_bore_command(const std::string& name, const std::string& arg) {
+  calibration::Record rec;
+  bool found = false;
+  {
+    std::lock_guard lk(calibration_mutex_);
+    if (calibration_store_)
+      if (const auto* r = calibration_store_->find(calibration_id_)) { rec = *r; found = true; }
+  }
+  if (!found) { ack_command(name, false, "no calibration record is in force"); return; }
+  if (rec.id == 1) {
+    ack_command(name, false, "#1 is the shipped backup and stays as shipped: NEW makes a copy to trim");
+    return;
+  }
+  if (hold_.active) { ack_command(name, false, "a switch is holding the turret; trim once it ends"); return; }
+  const bool still = phase_ == Phase::Idle ||
+                     (phase_ == Phase::Hold && mode_mgr_.mode() == OperatingMode::Manual && rest_park_.stage == RestPark::Off);
+  if (!still) {
+    ack_command(name, false, rest_park_.stage != RestPark::Off ? "parked: HOME, then trim in a MANUAL hold"
+                             : phase_ == Phase::Hold ? "trim in MANUAL: MODE > MANUAL holds where it is"
+                                                     : "trim on a still turret: a MANUAL hold or Shutdown");
+    return;
+  }
+  calibration::Bore b = rec.bore;
+  char what[160];
+  if (name == "set_bore_mode") {
+    b.enabled = arg == "on";
+    std::snprintf(what, sizeof what, "%s", b.enabled ? "bore on: the tracker aims the bore"
+                                                     : "bore off: the tracker aims the camera centre");
+  } else if (name == "set_bore_zero") {
+    if (!b.enabled) { ack_command(name, false, "turn the bore on first: off, the tracker aims the camera centre"); return; }
+    b.zero_m = arg == "inf" ? std::numeric_limits<double>::infinity() : std::atof(arg.c_str());
+    if (!(b.zero_m > 0)) { ack_command(name, false, "the zeroing distance is a positive distance, or inf"); return; }
+    if (std::isfinite(b.zero_m)) std::snprintf(what, sizeof what, "zeroed at %g m", b.zero_m);
+    else std::snprintf(what, sizeof what, "zeroed at infinity: no parallax");
+  } else {
+    char cam[16] = {0}, axis[16] = {0};
+    double mrad = 0;
+    if (std::sscanf(arg.c_str(), "%15s %15s %lf", cam, axis, &mrad) != 3) {
+      ack_command(name, false, "trim_bore needs a camera, an axis and mrad");
+      return;
+    }
+    if (std::string(cam) == "detail") {
+      ack_command(name, false, "the detail camera's intrinsics are not measured: no bore mark to trim against");
+      return;
+    }
+    if (!b.enabled) { ack_command(name, false, "turn the bore on first: off, the tracker aims the camera centre"); return; }
+    double& trim = std::string(axis) == "up" ? b.wide.trim_up_mrad : b.wide.trim_right_mrad;
+    trim = std::round((trim + mrad) * 10.0) / 10.0;   // 0.1 mrad, the MIL click
+    if (std::abs(trim) > 100.0) { ack_command(name, false, "a trim is at most 100 mrad either way"); return; }
+    std::snprintf(what, sizeof what, "wide R %+.1f · U %+.1f mrad", b.wide.trim_right_mrad, b.wide.trim_up_mrad);
+  }
+  const auto alignment = b.alignment();
+  if (alignment.enabled) {
+    const auto mark = geo::bore_alignment(alignment, geo::CameraRole::Wide, tracking_cfg_.intrinsics);
+    if (!mark.valid) { ack_command(name, false, std::string("the bore would not be valid: ") + mark.reason); return; }
+  }
+  if (tracking_) disable_tracking();
+  tracking_cfg_.alignment = alignment;
+  ++tracking_config_revision_;
+  const std::string date = calibration::today_local();
+  std::filesystem::path dir;
+  {
+    std::lock_guard lk(calibration_mutex_);
+    calibration_store_->set_bore(rec.id, b, date);
+    rebuild_calibration_json_locked();
+    dir = calibration_store_->dir_of(rec.id);
+  }
+  calibration_writer_->post([dir, b, date] {
+    std::string e;
+    if (!calibration::write_bore(dir, b, date, e)) spdlog::error("calibration: {}", e);
+  });
+  spdlog::info("calibration: #{} bore: {}", rec.id, what);
+  ack_command(name, true, what);
+}
+
 // ADR-005 D5. The record was read, checked and parsed on the web thread; here it is put in force:
 // at once in Shutdown (nothing is engaged), through the swap hold when homed.
 void ControlLoop::execute_set_calibration_record(const std::string& arg, const std::string& ack_name,
@@ -4864,7 +4945,7 @@ void ControlLoop::execute_set_calibration_record(const std::string& arg, const s
       const auto dir = calibration_store_->root();
       calibration_writer_->post([dir, id] {
         std::string e;
-        if (!calibration::write_active(dir, id, e)) spdlog::error("calibration: {}", e);
+        if (!calibration::write_active(dir, id, true, e)) spdlog::error("calibration: {}", e);
       });
     }
   }
@@ -6373,6 +6454,10 @@ void ControlLoop::execute_command(const std::string& name,
         if (const auto* r = calibration_store_->find(calibration_id_)) calibration_name_ = r->name;
     }
     ack_command(name, true, done_for_command_);
+    return;
+  }
+  if (name == "set_bore_mode" || name == "set_bore_zero" || name == "trim_bore") {
+    execute_bore_command(name, arg);
     return;
   }
   if (name == "new_calibration_record") {   // made on the web thread; now it is put in force

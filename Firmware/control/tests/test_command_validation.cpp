@@ -235,3 +235,16 @@ TEST(CommandValidation, TargetTypeIsAllowedBeforeHomingAndOnlyTheFourTypes) {
   EXPECT_FALSE(validate_command(s, "set_target_type", "bird").ok);
   EXPECT_FALSE(validate_command(s, "set_target_type", "").ok);
 }
+
+TEST(CommandValidation, BoreCommandsAreShapeCheckedAndAllowedBeforeHoming) {
+  // ADR-005 D9: controld decides when (a still turret, not #1); the gate only checks the shape.
+  SystemCommandState s;
+  EXPECT_TRUE(validate_command(s, "set_bore_mode", "on").ok);
+  EXPECT_TRUE(validate_command(s, "set_bore_mode", "off").ok);
+  EXPECT_FALSE(validate_command(s, "set_bore_mode", "maybe").ok);
+  for (const char* z : {"25", "1500", "0.5", "inf"}) EXPECT_TRUE(validate_command(s, "set_bore_zero", z).ok) << z;
+  for (const char* z : {"", "-5", "far", "1e3"}) EXPECT_FALSE(validate_command(s, "set_bore_zero", z).ok) << z;
+  EXPECT_TRUE(validate_command(s, "trim_bore", "wide right -0.1").ok);
+  EXPECT_TRUE(validate_command(s, "trim_bore", "detail up 1").ok);
+  EXPECT_FALSE(validate_command(s, "trim_bore", "tele right 1").ok);
+}
