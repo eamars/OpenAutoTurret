@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <ctime>
 #include <limits>
+#include <iterator>
+#include <fstream>
 #include <system_error>
 
 #include <unistd.h>
@@ -415,6 +417,80 @@ bool rename_record(const fs::path& dir, const std::string& name, std::string& er
     YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
     doc["name"] = name;
     doc["name"].SetTag("!");
+    return write_file(dir / "record.json", to_json(doc, 0) + "\n", err);
+  } catch (const std::exception& e) {
+    err = std::string("record.json does not parse (") + e.what() + ")";
+    return false;
+  }
+}
+
+bool install_parts(const fs::path& dir, int id, const fs::path& from, const std::string& run, const std::string& date,
+                   std::vector<std::string>& installed, std::string& err) {
+  static const std::pair<const char*, const char*> kMeasured[] = {
+      {"yaw", "yaw_servo.json"}, {"pitch", "pitch_servo.json"}, {"accuracy", "yaw_accuracy.json"}};
+  std::error_code ec;
+  installed.clear();
+  for (const auto& [part, file] : kMeasured)
+    if (fs::is_regular_file(from / file, ec)) installed.push_back(part);
+  if (installed.empty()) { err = "nothing to install in " + from.string(); return false; }
+  // Staged: the record as it would be, read and checked like any record before anything changes.
+  const fs::path staging = dir.parent_path().parent_path() / (".install-" + dir.filename().string());
+  fs::remove_all(staging, ec);
+  fs::create_directories(staging, ec);
+  for (const auto& e : fs::directory_iterator(dir, ec))
+    if (e.is_regular_file()) fs::copy_file(e.path(), staging / e.path().filename(), fs::copy_options::overwrite_existing, ec);
+  for (const auto& [part, file] : kMeasured)
+    if (fs::is_regular_file(from / file)) fs::copy_file(from / file, staging / file, fs::copy_options::overwrite_existing, ec);
+  if (ec) { err = "cannot stage the install: " + ec.message(); fs::remove_all(staging, ec); return false; }
+  const Record staged = read_record(staging, id);
+  fs::remove_all(staging, ec);
+  if (!staged.unusable.empty()) { err = "the measured parts would make the record unusable: " + staged.unusable; return false; }
+  // In place: the replaced files to history/, the new ones written atomically, record.json last.
+  std::string stamp = run;
+  for (char& c : stamp) if (c == '/' || c == ' ') c = '_';
+  const fs::path history = dir / "history" / stamp;
+  fs::create_directories(history, ec);
+  if (ec) { err = "cannot create " + history.string() + ": " + ec.message(); return false; }
+  std::lock_guard lk(record_json_mutex);
+  try {
+    YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
+    fs::copy_file(dir / "record.json", history / "record.json", fs::copy_options::overwrite_existing, ec);
+    for (const auto& [part, file] : kMeasured) {
+      if (!fs::is_regular_file(from / file)) continue;
+      const std::string current = doc["parts"][part]["file"] ? doc["parts"][part]["file"].as<std::string>() : file;
+      if (fs::is_regular_file(dir / current)) fs::copy_file(dir / current, history / current, fs::copy_options::overwrite_existing, ec);
+      std::ifstream in(from / file);
+      const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+      if (!write_file(dir / file, text, err)) return false;
+      YAML::Node p;
+      p["file"] = file;
+      p["file"].SetTag("!");
+      p["origin"] = "measured";
+      p["origin"].SetTag("!");
+      p["date"] = date;
+      p["date"].SetTag("!");
+      p["run"] = run;
+      p["run"].SetTag("!");
+      doc["parts"][part] = p;
+    }
+    return write_file(dir / "record.json", to_json(doc, 0) + "\n", err);
+  } catch (const std::exception& e) {
+    err = std::string("record.json does not parse (") + e.what() + ")";
+    return false;
+  }
+}
+
+bool write_last_run(const fs::path& dir, const std::string& kind, const std::string& verdict, const std::string& run,
+                    const std::string& date, std::string& err) {
+  std::lock_guard lk(record_json_mutex);
+  try {
+    YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
+    YAML::Node r;
+    for (const auto& [k, v] : {std::pair{"kind", kind}, {"verdict", verdict}, {"run", run}, {"date", date}}) {
+      r[k] = v;
+      r[k].SetTag("!");
+    }
+    doc["last_run"] = r;
     return write_file(dir / "record.json", to_json(doc, 0) + "\n", err);
   } catch (const std::exception& e) {
     err = std::string("record.json does not parse (") + e.what() + ")";

@@ -5,6 +5,7 @@
 //   * the Phase-2 deliverable: boot -> homed -> safe hold -> park cycle;
 //   * stale feedback -> Brake (a recoverable safe stop, NOT a fault);
 //   * motor hard fault -> Disable (de-energize, fault-locked).
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -1005,6 +1006,111 @@ TEST(CalibrationRun, AYawSessionRunsWhilePitchHoldsAndProductionTakesYawBackWher
   h.run("calibration_finish", (std::to_string(id) + " ACCEPTED").c_str());
   EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
   EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(CalibrationRun, AFaultDuringASessionEndsTheRunAndLeavesHomeOpen) {
+  // Station, 2026-10-24 18:10:54: a fault mid-session left the run active forever (it was stepped only
+  // in the homed hold), and its CALIBRATING gate refused the HOME that recovers the fault.
+  RunFixture f;
+  auto& h = f.h;
+  h.loop->set_homing_factory([] { return make_plan(); });
+  const int id = f.begin();
+  f.session(id, "rerun-01-identify");
+  h.step(50);
+  ASSERT_TRUE(h.sim->session_owns_pitch());
+  h.sim->set_faults(AxisId::Pitch, 1);   // a drive fault: the supervisor disables, the station faults
+  h.step(5);
+  h.sim->set_faults(AxisId::Pitch, 0);
+  EXPECT_EQ(h.loop->phase(), Phase::Fault);
+  EXPECT_FALSE(h.loop->calibrating()) << "the run ended with the hold it needed";
+  EXPECT_NE(f.run_json().find("\"state\":\"failed\""), std::string::npos) << f.run_json();
+  EXPECT_FALSE(h.sim->session_owns_pitch());
+  h.run("start_homing");
+  EXPECT_NE(h.snap().cmd_ack_reason.find("calibrating"), 0u) << "HOME is not gated by a dead run: " << h.snap().cmd_ack_reason;
+}
+
+TEST(CalibrationRun, PreparingABigSessionNeverHoldsUpTheControlCycle) {
+  // Station, 2026-10-24 18:10:54: the session was prepared under the lock the loop takes every cycle;
+  // the loop waited 160 ms and the independent motor watchdog faulted the station.
+  RunFixture f;
+  auto& h = f.h;
+  const int id = f.begin();
+  // A 300 s script at 50 Hz, as a survey's: a long parse and a 32 MB journal ring.
+  std::string samples;
+  for (int k = 0; k <= 15000; ++k)
+    samples += std::string(k ? "," : "") + "{\"time_s\":" + std::to_string(k * 0.02) +
+               ",\"position_rad\":0,\"velocity_rad_s\":0,\"acceleration_rad_s2\":0}";
+  const auto dir = f.s.dir / "runs" / "big";
+  auto m = ota_cal_fixture::pitch_manifest();
+  m = m.substr(0, m.find("\"reference_samples\":[")) + "\"reference_samples\":[" + samples + "]}}";
+  ota_cal_fixture::write(dir / "manifest.json", m);
+  std::atomic<bool> done{false};
+  std::thread web([&] {
+    h.loop->submit_command("calibration_session", std::to_string(id) + " pitch " + (dir / "manifest.json").string());
+    done = true;
+  });
+  double worst_ms = 0;
+  while (!done) {
+    const auto t0 = std::chrono::steady_clock::now();
+    h.step(1);
+    worst_ms = std::max(worst_ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));   // simulated time near real time
+  }
+  web.join();
+  EXPECT_LT(worst_ms, 50.0) << "a control cycle waited on the web thread's preparation";
+  h.step(3);
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+}
+
+TEST(CalibrationRun, AnAcceptedRunInstallsItsPartsKeepsTheOldOnesAndPutsTheRecordBackInForce) {
+  // ADR-005 D7.6: calibd leaves the accepted parts in <run>/install/; controld puts them into the
+  // record the run measured, keeps the replaced files in history/, and swaps the servos as a switch
+  // does before the interrupted mode resumes.
+  RunFixture f;
+  auto& h = f.h;
+  const int id = f.begin("RERUN");
+  const auto run = f.s.cal() / "runs" / "0001-rerun-20261024-190000";
+  const auto rec = ota_cal_fixture::record_dir(f.s, 2);
+  std::filesystem::create_directories(run / "install");
+  std::filesystem::copy_file(rec / "yaw_servo.json", run / "install" / "yaw_servo.json");
+  std::filesystem::copy_file(rec / "pitch_servo.json", run / "install" / "pitch_servo.json");
+  const int swaps = h.sim->servo_swaps();
+  h.run("calibration_finish", (std::to_string(id) + " " + run.string() + " ACCEPTED; pitch ACCEPTED; yaw ACCEPTED").c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_NE(h.snap().cmd_ack_reason.find("installed into #2: yaw, pitch"), std::string::npos) << h.snap().cmd_ack_reason;
+  EXPECT_FALSE(h.loop->calibrating());
+  EXPECT_TRUE(h.snap().calibration_switching) << "the new servos go in force through the swap hold";
+  EXPECT_FALSE(h.snap().calibration_unverified) << "a measurement of this payload needs no VERIFY nudge";
+  run_switch(h);
+  EXPECT_EQ(h.sim->servo_swaps(), swaps + 1);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "then the mode the run interrupted";
+  const auto record = file_text(rec / "record.json");
+  EXPECT_NE(record.find("\"origin\": \"measured\""), std::string::npos) << record;
+  EXPECT_NE(record.find("\"run\": \"0001-rerun-20261024-190000\""), std::string::npos) << record;
+  EXPECT_NE(record.find("\"last_run\""), std::string::npos) << record;
+  EXPECT_TRUE(std::filesystem::exists(rec / "history" / "0001-rerun-20261024-190000" / "yaw_servo.json")) << "kept";
+  EXPECT_NE(h.snap().calibration_records_json->find("\"origin\":\"measured\""), std::string::npos);
+}
+
+TEST(CalibrationRun, PartsThatWouldBreakTheRecordInstallNothing) {
+  RunFixture f;
+  auto& h = f.h;
+  const int id = f.begin("RERUN");
+  const auto run = f.s.cal() / "runs" / "0001-rerun-bad";
+  const auto rec = ota_cal_fixture::record_dir(f.s, 2);
+  const auto before = file_text(rec / "yaw_servo.json");
+  ota_cal_fixture::write(run / "install" / "yaw_servo.json", "{\"servo_parameters\": {");
+  h.run("calibration_finish", (std::to_string(id) + " " + run.string() + " ACCEPTED").c_str());
+  EXPECT_NE(h.snap().cmd_ack_reason.find("NOT INSTALLED: the measured parts would make the record unusable"),
+            std::string::npos) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(file_text(rec / "yaw_servo.json"), before) << "the record is unchanged";
+  EXPECT_FALSE(h.snap().calibration_switching);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  // And a run outside the store's runs/ is not installed from.
+  const int again = f.begin("RERUN");
+  h.run("calibration_finish", (std::to_string(again) + " /tmp ACCEPTED").c_str());
+  EXPECT_NE(h.snap().cmd_ack_reason.find("NOT INSTALLED: the run is not in the store's runs/"), std::string::npos)
+      << h.snap().cmd_ack_reason;
 }
 
 TEST(CalibrationRun, StopDuringASessionHoldsBothAxesAndEndsInManual) {

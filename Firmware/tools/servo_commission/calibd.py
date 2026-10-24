@@ -27,6 +27,7 @@ import argparse
 import datetime
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -42,6 +43,8 @@ sys.path.insert(0, str(FIRMWARE))
 import journal  # noqa: E402
 
 JOURNAL = {"yaw": "yaw-control.jsonl", "pitch": "sensorless-homing.jsonl"}
+# What each pipeline leaves for the record when it is accepted (ADR-005 D7.6).
+PRODUCES = {"pitch": "pitch_servo.json", "yaw": "yaw_servo.json", "calibrate": "yaw_accuracy.json"}
 # What each kind runs: (pipeline, options) in order.
 PLAN = {
     "VERIFY": [("check", {})],
@@ -171,8 +174,10 @@ class Runner:
         return json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
 
     def execute(self) -> str:
+        """The verdict. A run whose every pipeline was accepted leaves its parts in install/, which
+        controld puts into the record; anything less installs nothing (a payload set is one set)."""
         threading.Thread(target=self.heartbeat, daemon=True, name="calibd-heartbeat").start()
-        verdicts = []
+        verdicts, produced = [], []
         try:
             for which, options in PLAN[self.kind]:
                 station = ControldStation(self.link, self.id, self.root / which / "sessions", log=self.say, poll_s=self.poll_s)
@@ -192,6 +197,14 @@ class Runner:
                     verdicts.append(f"{which} ACCEPTED")
                 else:
                     verdicts.append(f"{which} done")
+                if which in PRODUCES and (self.root / which / PRODUCES[which]).exists():
+                    produced.append(self.root / which / PRODUCES[which])
+            if produced:
+                install = self.root / "install"
+                install.mkdir(exist_ok=True)
+                for path in produced:
+                    shutil.copy(path, install / path.name)
+                verdicts.insert(0, "ACCEPTED")
             return "; ".join(verdicts) or "nothing ran"
         except Stopped as e:
             return f"STOPPED: {e}"
@@ -217,7 +230,7 @@ def serve(link, state: Path, poll_s=0.2, once=False):
                 traceback.print_exc()
                 verdict = f"NOT ACCEPTED: calibd failed: {e}"
             print(f"calibd: run {run['id']}: {verdict}", flush=True)
-            ok, error = link.send("calibration_finish", f"{run['id']} {verdict[:400]}")
+            ok, error = link.send("calibration_finish", f"{run['id']} {runner.root} {verdict[:400]}")
             if not ok:
                 print(f"calibd: finish refused: {error}", flush=True)
             if once:

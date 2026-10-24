@@ -90,6 +90,15 @@ std::string to_json(const YAML::Node& n, int indent = 0);
 bool rename_record(const std::filesystem::path& dir, const std::string& name, std::string& err);
 bool copy_record(const Record& from, const std::filesystem::path& dir, const std::string& name, std::string& err);
 bool remove_record(const std::filesystem::path& state_calibration_dir, int id, std::string& err);
+// ADR-005 D7.6: a run's accepted parts (yaw_servo.json, pitch_servo.json, yaw_accuracy.json, whichever
+// `from` holds) into the record at `dir`. Checked first, on a staged copy: parts that would make the
+// record unusable install nothing. Each replaced file is kept in history/<stamp>/, and record.json
+// marks the part measured by `run` on `date`. `installed` names the parts.
+bool install_parts(const std::filesystem::path& dir, int id, const std::filesystem::path& from, const std::string& run,
+                   const std::string& date, std::vector<std::string>& installed, std::string& err);
+// record.json's last_run: what the latest run on this record was, how it ended and when.
+bool write_last_run(const std::filesystem::path& dir, const std::string& kind, const std::string& verdict,
+                    const std::string& run, const std::string& date, std::string& err);
 // A name: 1-24 letters, digits, spaces, '-' or '_', stored upper case. Empty when it is not one.
 std::string record_name(const std::string& raw);
 

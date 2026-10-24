@@ -1556,6 +1556,10 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
   //     web thread; execution happens HERE on the control thread so all state
   //     mutation stays single-threaded.
   process_commands();
+  // ADR-005 D7: every cycle, whatever the phase. Station, 2026-10-24 18:10:54: stepped only inside the
+  // homed hold, a run caught by a fault never ended -- and its CALIBRATING gate then refused the HOME
+  // that recovers the fault.
+  step_calibration_run(now_ns, sp);
 
   // 1b. Phase 6: feed the tracking controller the current pose (for §11
   //     timestamp interpolation) and consume any pending visiond measurement.
@@ -1995,7 +1999,6 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // Drive-mode item 4: the automatic AUTO_TRACK <-> AUTO_ROAM hand-off, checked before the intent is built
     // so a switch that happens now takes effect this cycle rather than being a cycle late. Inert while both
     // keys are 0 (the shipped default), in which case evaluate_auto_switch() returns immediately.
-    step_calibration_run(now_ns, sp);
     step_swap_hold(now_ns, sp);
     evaluate_auto_switch(now_ns);
     last_intent_ = build_mode_intent(now_ns);
@@ -4815,8 +4818,41 @@ void ControlLoop::execute_calibration_run_command(const std::string& name, const
       ack_command(name, false, "session " + run_.session->label() + " is still running");
       return;
     }
-    end_calibration_run("done", tail, run_.resume);
-    ack_command(name, true, "run " + std::to_string(id) + " done: " + tail);
+    // "<run dir> <verdict>"; the install (if any) was done on the web thread.
+    const auto sp = tail.find(' ');
+    std::string verdict = sp == std::string::npos ? std::string() : tail.substr(sp + 1);
+    if (!done_for_command_.empty()) verdict += (verdict.empty() ? "" : "; ") + done_for_command_;
+    auto prepared = std::move(prepared_for_command_);
+    const OperatingMode resume = run_.resume;
+    // A VERIFY that ran answers the switch's question (D5.5), whatever it found; an installed
+    // measurement is this payload's by construction. Either way the nudge goes.
+    const bool verified = prepared || (run_.kind == "VERIFY" && (verdict.rfind("REUSE_EXACT", 0) == 0 ||
+                                                                 verdict.rfind("UPDATE_PARAMETERS", 0) == 0));
+    if (verified && calibration_unverified_) {
+      calibration_unverified_ = false;
+      std::lock_guard lk(calibration_mutex_);
+      if (calibration_store_) {
+        const auto dir = calibration_store_->root();
+        const int in_force = calibration_id_;
+        calibration_writer_->post([dir, in_force] {
+          std::string e;
+          if (!calibration::write_active(dir, in_force, false, e)) spdlog::error("calibration: {}", e);
+        });
+      }
+    }
+    end_calibration_run("done", verdict, prepared ? OperatingMode::Manual : resume);
+    if (prepared) {
+      // The record's new servos go in force the way a switch puts them: held, at rest, swapped,
+      // settled; then the mode the run interrupted.
+      begin_swap_hold();
+      hold_.resume = resume;
+      hold_.record = std::move(prepared);
+      hold_.record_from = calibration_id_;
+      hold_.record_applied = false;
+      hold_.record_refused = false;
+      hold_.record_rest_since_ns = 0;
+    }
+    ack_command(name, true, "run " + std::to_string(id) + " done: " + verdict);
     return;
   }
   // calibration_session: made on the web thread.
@@ -4859,6 +4895,11 @@ void ControlLoop::begin_calibration_run(const std::string& kind) {
   run_.state = "waiting";
   run_.resume = m == OperatingMode::AutoTrack ? auto_return_mode_ : m;
   run_.started_ns = run_.heard_ns = now_ns_;
+  {
+    std::lock_guard lk(calibration_mutex_);
+    run_record_id_web_ = calibration_id_;
+    run_kind_web_ = kind;
+  }
   // The run moves both axes: every hold from here on is where they are, never the ready pose.
   mode_has_moved_ = true;
   if (m != OperatingMode::Manual) request_mode(OperatingMode::Manual);
@@ -4985,7 +5026,7 @@ void ControlLoop::rebuild_calibration_json_locked() {
       : nullptr;
 }
 
-// ADR-005 D2: records leave the way they came. Runs on the web thread, holding command_mutex_; the
+// ADR-005 D2: records leave the way they came. Runs on the web thread, holding web_prep_mutex_; the
 // store's mutex is taken only around memory, never around file I/O, because the 200 Hz loop takes it
 // to publish the list. #1 is the shipped backup (owner, 2026-10-24): never renamed or removed.
 web::CommandResult ControlLoop::calibration_files(const std::string& name, const std::string& arg,
@@ -6039,8 +6080,17 @@ void ControlLoop::abort_payload_check(TimeNs now_ns, const std::string& reason) 
 
 web::CommandResult ControlLoop::submit_command(const std::string& name,
                                                const std::string& arg) {
-  std::lock_guard<std::mutex> lk(command_mutex_);
-  web::CommandResult r = web::validate_command(command_state_, name, arg);
+  // command_mutex_ guards only the gate's state and the queue: the control loop takes it every cycle
+  // (process_commands), so nothing slow happens under it. Station, 2026-10-24 18:10:54: a calibration
+  // session's manifest was parsed and its 64 MB journal allocated and fsynced under it; the loop
+  // waited 160 ms, the independent motor watchdog tripped and the station faulted. What the web
+  // thread prepares (files, parses) happens under web_prep_mutex_, which serialises the web threads.
+  std::lock_guard prep_lock(web_prep_mutex_);
+  web::CommandResult r;
+  {
+    std::lock_guard<std::mutex> lk(command_mutex_);
+    r = web::validate_command(command_state_, name, arg);
+  }
   if (r.ok && name == "select_payload_profile") {
     // Reject an unknown profile SYNCHRONOUSLY. The web response is written
     // before the control thread executes anything, so an "ok" that later turns
@@ -6111,7 +6161,66 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
       r.error = "session not prepared: " + err;
     }
   }
+  // ADR-005 D7.6: calibd's finish -- `<run> <run dir> <verdict>`. The run's accepted parts, in
+  // <run dir>/install/, go into the record the run measured, here on the web thread (file I/O); the
+  // control thread then puts the record back in force. Every finish is noted in record.json.
+  if (r.ok && name == "calibration_finish") {
+    const auto a = arg.find(' '), b = a == std::string::npos ? a : arg.find(' ', a + 1);
+    const std::filesystem::path run_dir = a == std::string::npos ? std::string() : arg.substr(a + 1, b == std::string::npos ? b : b - a - 1);
+    const std::string verdict = b == std::string::npos ? std::string() : arg.substr(b + 1);
+    int id = 0;
+    std::string kind;
+    std::filesystem::path record_dir, runs;
+    {
+      std::lock_guard clk(calibration_mutex_);
+      id = run_record_id_web_;
+      kind = run_kind_web_;
+      if (calibration_store_ && calibration_store_->find(id)) {
+        record_dir = calibration_store_->dir_of(id);
+        runs = calibration_store_->root() / "runs";
+      }
+    }
+    std::error_code ec;
+    const auto canon = std::filesystem::weakly_canonical(run_dir, ec);
+    const auto base = std::filesystem::weakly_canonical(runs, ec);
+    const bool in_store = !record_dir.empty() && !run_dir.empty() &&
+                          std::mismatch(base.begin(), base.end(), canon.begin(), canon.end()).first == base.end();
+    const std::string date = calibration::today_local(), run = run_dir.filename().string();
+    if (in_store && std::filesystem::is_directory(canon / "install", ec)) {
+      std::vector<std::string> parts;
+      std::string err;
+      auto p = std::make_shared<calibration::Prepared>();
+      if (!calibration::install_parts(record_dir, id, canon / "install", run, date, parts, err)) {
+        done = "NOT INSTALLED: " + err;
+      } else {
+        {
+          std::lock_guard clk(calibration_mutex_);
+          calibration_store_->refresh(id);
+          rebuild_calibration_json_locked();
+        }
+        std::string joined;
+        for (const auto& part : parts) joined += (joined.empty() ? "" : ", ") + part;
+        if (calibration::prepare(calibration::read_record(record_dir, id), *p, err)) {
+          prepared = std::move(p);
+          done = "installed into #" + std::to_string(id) + ": " + joined;
+        } else {
+          done = "installed into #" + std::to_string(id) + " (" + joined + ") but it does not prepare: " + err;
+        }
+      }
+    } else if (!record_dir.empty() && !run_dir.empty() && !in_store) {
+      done = "NOT INSTALLED: the run is not in the store's runs/";
+    }
+    if (!record_dir.empty()) {
+      std::string err;
+      if (!calibration::write_last_run(record_dir, kind, verdict, run, date, err))
+        spdlog::error("calibration: #{} last run not written: {}", id, err);
+      std::lock_guard clk(calibration_mutex_);
+      calibration_store_->refresh(id);
+      rebuild_calibration_json_locked();
+    }
+  }
   // Rejected here or executed there, either way controld answers (§52).
+  std::lock_guard<std::mutex> lk(command_mutex_);
   command_queue_.push_back({name, arg, r.ok ? std::string() : r.error, std::move(prepared), std::move(done),
                             std::move(session)});
   return r;

@@ -747,7 +747,8 @@ class ControlLoop {
   // each cycle for web-thread validation; command_queue_ is drained on the
   // control thread. Both guarded by command_mutex_.
   web::SystemCommandState command_state_;
-  mutable std::mutex command_mutex_;
+  mutable std::mutex command_mutex_;   // the gate's state and the queue only: the loop takes it each cycle
+  std::mutex web_prep_mutex_;          // the web threads' file and parse work for a command (submit_command)
   // A command that the web thread's gate refused still goes onto the queue,
   // carrying the refusal, so the control thread publishes it as the answer.
   // Otherwise a gate rejection leaves the previous command's ack on the
@@ -993,6 +994,9 @@ class ControlLoop {
     bool stopping = false;
   } run_;
   int run_seq_ = 0;
+  // What the web thread needs of the run in progress to install its parts (calibration_mutex_).
+  int run_record_id_web_ = 0;
+  std::string run_kind_web_;
   // calibd answers between sessions within this, or the run ends (not a fault).
   static constexpr TimeNs kCalibdSilenceNs = 15'000'000'000;
   std::shared_ptr<const std::string> calibration_run_json_;   // calibration_mutex_

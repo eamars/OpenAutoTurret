@@ -37,7 +37,7 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 | `stop_calibration` | page | CALIBRATING | ends the session now, both axes held, run STOPPED, MANUAL |
 | `calibration_session <run> <axis> <manifest>` | calibd | CALIBRATING, no session | controld runs one session and writes its journal beside the manifest |
 | `calibration_note <run> <text>` | calibd | CALIBRATING | the run view's last line |
-| `calibration_finish <run> <verdict> [dir]` | calibd | CALIBRATING, no session | installs the accepted parts from `dir` (if any), HOMEs, resumes the interrupted mode |
+| `calibration_finish <run> <run dir> <verdict>` | calibd | CALIBRATING, no session | installs the accepted parts from `<run dir>/install/` (if any) through the swap hold, then resumes the interrupted mode |
 
 - **calibd must answer.** A run that sees no calibd command for 15 s, while no session is active, ends
   NOT RUN ("calibd is not answering"). This is a persistence timeout, not a fault.
@@ -55,7 +55,7 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 | S2.1 | CALIBRATING, the run lifecycle and gates, `calibration_run` telemetry, the journal writer, the **pitch** session executor (yaw held) | unit tests on the sim backend | built 2026-10-24 |
 | S2.2 | the **yaw** session executor (pitch held), kernel RX timestamps on the yaw bus | unit tests; production servo unchanged in the sim | built 2026-10-24 |
 | S2.3 | calibd and `ControldStation`, scipy, the launcher; the page's run view and STOP | Python tests against a fake controld; the page in the browser | built 2026-10-24 |
-| S2.4 | installing accepted parts (`history/`), HOME and resume; NEW's measurement | unit tests | — |
+| S2.4 | installing accepted parts (`history/`) and resuming; NEW's measurement | unit tests | install built 2026-10-24; NEW's measurement to do |
 | S2.5 | VERIFY (`check yaw`), with D8's two fixes (session end status; the pitch gate) | Python tests | — |
 | S2.6 | the servo-commissioning card rewritten | doc-tree check | — |
 
@@ -109,4 +109,28 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     line, STOP), the mode block reads CALIBRATING, the dock is dimmed and the D-pad hidden. After
     the run the panel shows LAST RUN.
   - `scipy` is in `requirements-station.txt` and in the test venv.
+- **Station, 2026-10-24 18:10, the first VERIFY.** It reached the station from the page and its
+  yaw probe session started. Then the station faulted, with both motors off and pitch near level.
+  Two bugs, both fixed:
+  - The web thread prepared the session (parsed the manifest, allocated and fsynced the 64 MB
+    journal ring) under `command_mutex_`, which the 200 Hz loop takes every cycle. The loop waited
+    160 ms, and the independent motor watchdog tripped. Since then the web thread's preparation runs
+    under its own `web_prep_mutex_`, and `command_mutex_` guards only the gate's state and the
+    queue.
+  - The run was stepped only inside the homed hold, so in Fault it never ended, and its CALIBRATING
+    gate refused the HOME that recovers. Since then it is stepped every cycle in every phase, and a
+    fault ends it as "failed".
+  - Both have tests that fail on the old code (`CalibrationRun.PreparingABigSession…`,
+    `CalibrationRun.AFaultDuringASession…`).
+- **S2.4 (2026-10-24).**
+  - calibd copies the parts of a run whose every pipeline was accepted into `<run>/install/`.
+    Anything less installs nothing: a payload set is one set.
+  - controld installs them into the record the run measured, on the web thread. It checks them
+    first on a staged copy, keeps the replaced files in `history/<run>/`, marks the parts
+    `measured`, and notes `last_run` in record.json.
+  - It then puts the record back in force through the swap hold and resumes the interrupted mode.
+  - **No HOME after a run** (D7.6 said HOME). The homed frame survives a run, because the encoders
+    never lose their count, and the new servos go in force the way a switch puts them. The owner's
+    ruling for after a run is "the mode it interrupted".
+  - A finished VERIFY, or an installed measurement, clears the VERIFY nudge.
 

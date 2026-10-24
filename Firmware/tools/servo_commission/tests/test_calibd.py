@@ -52,7 +52,7 @@ class FakeController:
             return True, ""
         if name == "calibration_finish":
             with self.lock:
-                self.run.update(active=False, state="done", verdict=arg.split(" ", 1)[1])
+                self.run.update(active=False, state="done", verdict=arg.split(" ", 2)[2])
             return True, ""
         assert name == "calibration_session", name
         run, axis, path = arg.split(" ", 2)
