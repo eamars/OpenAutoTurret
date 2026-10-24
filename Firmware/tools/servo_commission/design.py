@@ -73,18 +73,29 @@ def servo(base, identified, design):
              crosstalk_delay_s=identified["crosstalk"]["delay_s"],
              crosstalk_map=[round(g - design["bias"], 7) for g in identified["crosstalk"]["table"]])
     s.update(gains(identified["inertia"], design["wn"], design["zeta"], design["integral_rate"]))
-    # Stall recovery and the integral authority scale with the low-speed friction level.
+    # At a stopped reference the friction feedforward is zero, so the integral is the servo's whole
+    # authority against static friction: its cap covers the worse direction's breakaway plus the
+    # bearing's session-to-session level shift (design rule friction_drift_A, +-0.15 A measured
+    # 2026-10-24/25), never above 1.2 A (thermal). Until 2026-10-25 it was the two directions' mean
+    # static level: 0.40 A on the 5x payload, under its own + breakaway of 0.435 and far under
+    # breakaway + drift, so every settle that fell 0.14 deg short ended in a stall rock.
     low = 0.5 * (f["positive"]["coulomb"] + f["positive"]["stribeck"] + f["negative"]["coulomb"] + f["negative"]["stribeck"])
-    s["integral_cap"] = round(min(1.2, max(0.4, 1.0 * low)), 3)
+    breakaway = max(f["positive"]["coulomb"] + f["positive"]["stribeck"], f["negative"]["coulomb"] + f["negative"]["stribeck"])
+    s["integral_cap"] = round(min(1.2, breakaway + design["friction_drift"]), 3)
     # Stall recovery is always on in a designed asset (the prior leaves it off: its
     # thresholds need the friction level): a 25 ms reverse rock after 0.3 s stuck more
     # than 0.14 deg behind while pushing (station 2026-10-02: 0.29 deg let small steps
     # sit 0.27-0.29 deg short at 1.3 A, just inside the threshold).
     # Only near a stopped reference (|v_ref| < 0.01 rad/s): a rock during the walking profile's
     # reversals cost 0.26 deg RMS there (station 2026-10-02), while the reversal frees it anyway.
+    # "Pushing" means the whole authority is applied: stall_current = integral_cap. At 0.9 x the
+    # mean static level (2026-10-02 to 2026-10-25) it sat 0.05 A under the cap, and on the 5x
+    # payload (ki 36: the integral gains 0.05-0.07 A in the 0.3 s window) three of the five stall
+    # rocks of MEASURE 00:38 fired while the integral was still winding; each then threw that
+    # integral away and moved the axis 0.1-0.24 deg the wrong way.
     stall = dict(s["stall_recovery"], error_rad=0.0025, speed_rad_s=0.009, time_s=0.3, rock_s=0.025,
                  reference_speed_rad_s=0.01)
-    stall["current_A"] = round(min(1.2, max(0.3, 0.9 * low)), 3)
+    stall["current_A"] = s["integral_cap"]
     stall["rock_current_A"] = round(min(0.8, max(0.2, 0.6 * low)), 3)
     s["stall_recovery"] = stall
     return s
@@ -130,14 +141,14 @@ def wn_floor(inertia):
     return max(5.0, math.sqrt(KQ_FLOOR / inertia))
 
 
-def boundary(identified, base, bias, residual_shift, zeta, integral_rate, start=0.0, lo=None, hi=200.0, steps=8):
+def boundary(identified, base, bias, residual_shift, zeta, integral_rate, friction_drift, start=0.0, lo=None, hi=200.0, steps=8):
     """Largest stable wn (bisection in log wn) for plant crosstalk = table + residual_shift,
     servo table = table - bias. Returns (wn, onset angle just above it)."""
     if lo is None:
         lo = wn_floor(identified["inertia"])
     p = plant(identified)
     p["crosstalk_map"] = [g + residual_shift for g in identified["crosstalk"]["table"]]
-    design = {"bias": bias, "zeta": zeta, "integral_rate": integral_rate}
+    design = {"bias": bias, "zeta": zeta, "integral_rate": integral_rate, "friction_drift": friction_drift}
 
     def ok(wn):
         design["wn"] = wn
@@ -196,10 +207,11 @@ def design_yaw(identified, base, rules, start=0.0, log=print):
     delta = crosstalk_error_bound(identified, rules)
     candidates = []
     for bias in rules["crosstalk_bias_candidates_rad_per_A"]:
-        results = [boundary(identified, base, bias, shift, rules["zeta"], rules["integral_rate_per_s"], start)
+        results = [boundary(identified, base, bias, shift, rules["zeta"], rules["integral_rate_per_s"], rules["friction_drift_A"], start)
                    for shift in (-delta, +delta)]
         wn_b = min(r[0] for r in results)
-        dsg = {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "bias": bias, "wn": rules["design_margin"] * wn_b}
+        dsg = {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "friction_drift": rules["friction_drift_A"],
+               "bias": bias, "wn": rules["design_margin"] * wn_b}
         rows, extra, status = predicted_usecase(identified, servo(base, identified, dsg), start)
         cost = predicted_cost(rows, extra, status)
         log(f"  bias {bias * 1e3:.1f} mrad/A: stable to wn {results[0][0]:.1f} / {results[1][0]:.1f} rad/s "
@@ -211,10 +223,11 @@ def design_yaw(identified, base, rules, start=0.0, log=print):
         # plateaus stick-slipped) makes the model unusable for design. The station decides alone.
         log(f"  MODEL INADEQUATE: no quiet gain even at wn {floor:.1f} in simulation; the station ladder decides alone")
         bias = rules["crosstalk_bias_candidates_rad_per_A"][1]
-        return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "bias": bias, "model_adequate": False,
-                "boundary_wn_sim": None, "wn": None, "onset_angles_sim": []}
+        return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "friction_drift": rules["friction_drift_A"],
+                "bias": bias, "model_adequate": False, "boundary_wn_sim": None, "wn": None, "onset_angles_sim": []}
     cost, bias, wn_b, angles = min(candidates, key=lambda c: (round(c[0], 2), c[1]))
-    return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "bias": bias, "model_adequate": True,
+    return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "friction_drift": rules["friction_drift_A"],
+            "bias": bias, "model_adequate": True,
             "boundary_wn_sim": round(wn_b, 2), "wn": round(rules["design_margin"] * wn_b, 2), "predicted_cost": round(cost, 3),
             "onset_angles_sim": [round(a, 4) for a in angles], "crosstalk_error_bound": round(delta, 6)}
 

@@ -35,6 +35,7 @@ struct YawPlantParameters {
   // rms and corner (a torque roughness that moves the axis below ~8 Hz). Zero disables either.
   double encoder_noise_rad, encoder_noise_corner_hz;
   double friction_noise_A, friction_noise_corner_hz;
+  unsigned long noise_seed;  // the noise processes' seed: one value, one repeatable run; vary it for several draws
 };
 YawPlantParameters yaw_plant_from_yaml(const YAML::Node& node);
 
@@ -57,8 +58,8 @@ class YawPlant {
   YawPlantParameters p_;
   double t_=0, q_=0, v_=0, i_=0, z_=0;
   std::deque<std::pair<double,double>> commands_;
-  // Noise processes (first-order, exact discretisation), from a fixed seed: runs stay repeatable.
-  std::mt19937_64 rng_{20261024};
+  // Noise processes (first-order, exact discretisation), from the parameters' seed: runs stay repeatable.
+  std::mt19937_64 rng_;
   double friction_noise_=0, encoder_noise_=0, last_reading_time_=0;
   bool read_before_=false;
 };

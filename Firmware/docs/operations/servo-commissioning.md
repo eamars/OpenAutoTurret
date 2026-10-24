@@ -245,8 +245,9 @@ wsl.exe -e bash -c "cd /mnt/c/workspace/OpenAutoTurret && run/servo-commission/v
   the circle journal; usually a local crosstalk-table error, so run `commission.py yaw` (not
   `--update`) to remeasure the table.
 - **`NOT ACCEPTED` with stalls or long moves short.** The bearing stuck. Warm up (a full turn at
-  30 deg/s) and rerun; if it persists, the stall-recovery thresholds in `design.servo` scale with
-  the measured friction level.
+  30 deg/s) and rerun; if it persists, the integral cap and stall current in `design.servo` are the
+  worse direction's breakaway plus the `friction_drift_A` allowance (0.15 A): more than five stalls
+  in a pass means the friction has moved further than that since the survey.
 - **`deploy failed`** (workstation route). Read `deploy.log` in the run directory, and
   [the deploy card](deploy.md).
 - **Page: `HOME first`, `the IMU gyro is not fresh`, `#1 is the shipped backup`.** The run gate.
