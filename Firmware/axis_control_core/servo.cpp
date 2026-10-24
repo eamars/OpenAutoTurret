@@ -37,7 +37,7 @@ bool Servo::reset(double t,double q,double v,double current) {
   // Bumpless: whatever was applied becomes the integral's starting point.
   integral_=std::clamp(current-friction(0.)-p_.load,-p_.integral_cap,p_.integral_cap);
   applied_history_.clear(); applied_history_.push_back({t,current});
-  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; last_direction_=0;
+  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0;
   ready_=true; return true;
 }
 bool Servo::reseed(double t,double q,double v,double applied) {
@@ -153,17 +153,12 @@ ServoOutput Servo::step(double now,double q_ref,double v_ref,double a_ref) {
   const double beyond=std::max(0.,std::abs(e)-p_.friction_correction_deadband);
   const double motion=v_ref+p_.friction_correction_rate*(e>0?beyond:-beyond);
   const double fr=friction_at(motion,q);
-  // The integral holds the friction feedforward's shortfall along the commanded motion (yaw
-  // carries no load), so when the motion reverses the shortfall reverses with it. Left in the old
-  // frame it had to unwind through zero first: on the 5x payload (kq 13, ki 36) the 1 deg/s ramps
-  // stood 1.2-2.4 s at their start (2026-10-25) and the walker's reversals lagged 0.9 s. The frame
-  // is the last motion's through a rest: a rest's own winding is toward the target and the
-  // integral keeps doing that by itself.
+  // The integral keeps its sign when the motion reverses. Flipping it with the motion (reading it
+  // as the feedforward's friction shortfall along the motion) was tried on the station 2026-10-25:
+  // at a reversal it mostly carries the last move's settling and slip instead, and 4 of 5 flips
+  // turned it against the new move (MEASURE 03:04-05:00; 05:00's ramp+1 at 1.231 was one). 00:38,
+  // without the flip, passed both passes.
   const int direction=motion>p_.hold_speed?1:motion<-p_.hold_speed?-1:0;
-  if (direction) {
-    if (last_direction_ && direction!=last_direction_) integral_=-integral_;
-    last_direction_=direction;
-  }
   // Ahead of a reference that is still on its way (e against the direction, and the reference's
   // stopping distance v_ref^2 / 2 a_ref covers the gap -- an axis beyond that has overshot the
   // target and the integral works toward it as usual), the error is the reference's remaining
