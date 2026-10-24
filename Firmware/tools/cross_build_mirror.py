@@ -75,6 +75,23 @@ def mirror_source(repo: Path, revision: str, src: Path) -> None:
                          "then deploy again")
     run(["git", "-C", src, "-c", "advice.detachedHead=false", "checkout", "-q", "--force", revision])
     run(["git", "-C", src, "clean", "-q", "-fdx"])
+    # The binaries must be built from the commit, nothing else. On 2026-10-24 the checkout left the
+    # 20 files it had just rewritten empty (WSL, hours after a crash of its VM; the objects were
+    # intact and a second checkout restored them). An empty header failed the build; an empty .cpp
+    # could have linked into a binary that is not the commit. So: verify, rewrite once, else stop.
+    if differing(src):
+        print("mirror: the checkout does not match the commit; rewriting the tree", flush=True)
+        run(["git", "-C", src, "rm", "-r", "-q", "--cached", "."])
+        run(["git", "-C", src, "reset", "-q", "--hard", revision])
+        if still := differing(src):
+            raise SystemExit("mirror: these files still differ from " + revision[:12] + ": " + ", ".join(still[:10]))
+
+
+def differing(src: Path) -> list:
+    """Tracked files whose contents are not the commit's."""
+    out = subprocess.run(["git", "-C", src, "status", "--porcelain", "--untracked-files=no"],
+                         check=True, capture_output=True, text=True).stdout
+    return [line[3:] for line in out.splitlines() if line.strip()]
 
 
 def mirror_sysroot(sysroot: Path, dest: Path) -> Path:
