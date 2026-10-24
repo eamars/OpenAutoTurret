@@ -51,6 +51,9 @@ struct TargetMeasurement {
   bool authoritative_anchor = false;
   float association_quality = 1.0f;
   float identity_confidence = 1.0f;
+  // ADR-006 D4: the detail camera produced it (its picture published in the wide frame, wire flag
+  // bit 1). The tracker re-expresses it as the wide camera would have seen it.
+  bool from_detail = false;
 
   static constexpr std::size_t kWireSize = sizeof(TargetMeasurementWire);
 

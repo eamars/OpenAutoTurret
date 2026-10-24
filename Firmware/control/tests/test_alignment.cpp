@@ -262,6 +262,52 @@ TEST(CameraZero, RefusesWhatCannotBeAZero) {
   EXPECT_TRUE(geo::solve_camera_pointing(geo::CameraOffset{20, 0, 0}, 1, 0.0, .5, in).valid);
 }
 
+TEST(CameraZero, ADetailFrameIsSeenAsTheWideCameraWouldHaveSeenIt) {
+  // ADR-006 D4. The owner's offsets, and the two cameras pointing about 23 mrad apart (2026-10-02).
+  const auto in = station_wide();
+  geo::BoreAlignmentConfig c;
+  c.enabled = true;
+  c.assumed_depth_m = 37.5;
+  c.wide = {155, -20, 0, 0.9, -0.4};
+  c.detail = {145, 40, 0, 0.6, 1.3};
+  // A target on the detail camera's crosshair is on the wide camera's: the tracking point is one.
+  const auto wide = geo::bore_alignment(c, geo::CameraRole::Wide, in);
+  const auto detail = geo::bore_alignment(c, geo::CameraRole::Detail, in);
+  double u = detail.u_norm*in.width, v = detail.v_norm*in.height;
+  ASSERT_TRUE(geo::detail_pixel_in_wide(c, in, u, v));
+  EXPECT_NEAR(u, wide.u_norm*in.width, 0.01);
+  EXPECT_NEAR(v, wide.v_norm*in.height, 0.01);
+  EXPECT_GT(std::hypot(detail.u_norm - wide.u_norm, detail.v_norm - wide.v_norm)*in.width, 20)
+      << "and they are far apart in the two pictures: without D4 that is the step at a swap";
+  // Any point at the working distance along the detail camera's axis maps to where the wide camera
+  // sees that very point.
+  const geo::Vec3 seen{-0.12, 0.05, 1};   // a ray of the detail camera
+  const geo::Vec3 point = geo::camera_to_bore(c.detail, seen*c.assumed_depth_m) + geo::camera_position(c.detail);
+  const geo::Vec3 in_wide = geo::bore_to_camera(c.wide, point - geo::camera_position(c.wide));
+  u = in.cx + in.fx*seen.x; v = in.cy + in.fy*seen.y;
+  ASSERT_TRUE(geo::detail_pixel_in_wide(c, in, u, v));
+  EXPECT_NEAR(u, in.cx + in.fx*in_wide.x/in_wide.z, 1e-9);
+  EXPECT_NEAR(v, in.cy + in.fy*in_wide.y/in_wide.z, 1e-9);
+}
+
+TEST(CameraZero, BeforeAZeroADetailFrameIsUntouched) {
+  // Every record today gives both cameras the same placeholder offset; the bore off means the tracker
+  // aims the camera centre. Either way D4 changes nothing.
+  const auto in = station_wide();
+  geo::BoreAlignmentConfig c;
+  c.enabled = true;
+  c.wide = c.detail = {75, 75, 0, 0, 0};
+  double u = 812.5, v = 300.25;
+  ASSERT_TRUE(geo::detail_pixel_in_wide(c, in, u, v));
+  EXPECT_EQ(u, 812.5);
+  EXPECT_EQ(v, 300.25);
+  c.detail = {145, 40, 0, 0.6, 1.3};
+  c.enabled = false;
+  ASSERT_TRUE(geo::detail_pixel_in_wide(c, in, u, v));
+  EXPECT_EQ(u, 812.5);
+  EXPECT_EQ(v, 300.25);
+}
+
 TEST(AlignmentGeometry, BoundedAndIterativeSolversUseSameSight) {
   auto kin = geo::TurretKinematics::aligned();
   const geo::Vec3 sight{-.04, .03, 1};

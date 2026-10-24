@@ -6491,6 +6491,7 @@ const tracks::Track* ControlLoop::apply_track_set(const tracks::TrackSet& set,
   if (obs.native) {
     m.association_quality = obs.association_quality;
     m.identity_confidence = obs.identity_confidence;
+    m.from_detail = obs.narrow_view;
   }
   if (pick != nullptr) {
     if (set.width == 0 || set.height == 0) {

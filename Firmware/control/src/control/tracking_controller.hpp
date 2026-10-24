@@ -151,7 +151,12 @@ class TrackingController {
         tracking::aim_point_px(m.anchor_u_px, m.anchor_v_px, m.bbox_x_min_norm, m.bbox_y_min_norm,
                               m.bbox_x_max_norm, m.bbox_y_max_norm, cfg_.intrinsics, cfg_.aim,
                               m.authoritative_anchor);
-    const geo::Vec3 r_cam = camera_.pixel_to_ray(ap.u_px, ap.v_px);
+    // ADR-006 D4: a detail-camera frame is seen as the wide camera would have seen it, through both
+    // cameras' offsets at the working distance. The aim point published for the page stays in the
+    // frame the page draws that picture in.
+    double obs_u = ap.u_px, obs_v = ap.v_px;
+    if (m.from_detail && !geo::detail_pixel_in_wide(cfg_.alignment, cfg_.intrinsics, obs_u, obs_v)) return false;
+    const geo::Vec3 r_cam = camera_.pixel_to_ray(obs_u, obs_v);
     const geo::Vec3 r_base =
         cfg_.kinematics.ray_to_base(r_cam, sy.q, sp.q);
     double az, el;
@@ -167,7 +172,7 @@ class TrackingController {
       track::PixelObservation z;
       z.sensor_ns = static_cast<int64_t>(m.sensor_timestamp_ns);
       z.exposure_s = cfg_.core_nominal_exposure_s;
-      z.u = ap.u_px; z.v = ap.v_px;
+      z.u = obs_u; z.v = obs_v;
       z.identity = m.has_track_id ? m.visual_track_id : 0;
       const TimeNs t_o = core_->observation_time(z);
       MotorSample op, oy;
@@ -193,7 +198,7 @@ class TrackingController {
     const double sigma_y = std::max({2.0, cfg_.estimator.measurement_sigma_rad*cfg_.intrinsics.fy,
         0.02*(m.bbox_y_max_norm-m.bbox_y_min_norm)*cfg_.intrinsics.height});
     const auto variance = geo::pixel_los_variance(camera_, cfg_.kinematics,
-        sy.q, sp.q, ap.u_px, ap.v_px, sigma_x, sigma_y);
+        sy.q, sp.q, obs_u, obs_v, sigma_x, sigma_y);
     if (!estimator_.update(az, el, m.sensor_timestamp_ns,
                            variance[0]/quality, variance[1]/quality)) return false;
     last_aim_point_ = ap;

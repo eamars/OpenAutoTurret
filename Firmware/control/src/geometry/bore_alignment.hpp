@@ -46,15 +46,25 @@ struct BoreAlignment {
 // bore-frame vector seen from the camera is R^T v. Exact at any angle: the two-tangent shortcut the
 // old model used is off by tan(right) (1/cos(up) - 1), 3 urad at 1 deg x 1 deg but 2.7 mrad at
 // 10 deg x 10 deg, which a camera mounted well off the bore can reach.
-inline bool bore_in_camera(const CameraOffset& o, double depth_m, Vec3& origin, Vec3& direction, Vec3& point) {
+// A bore-frame vector (x right, y down, z forward) in the camera's coordinates, R^T v, and back, R v.
+inline Vec3 bore_to_camera(const CameraOffset& o, const Vec3& v) {
   const double cr = std::cos(o.right_deg*M_PI/180), sr = std::sin(o.right_deg*M_PI/180);
   const double cu = std::cos(o.up_deg*M_PI/180), su = std::sin(o.up_deg*M_PI/180);
-  const auto to_camera = [&](const Vec3& v) {
-    const Vec3 a{cr*v.x - sr*v.z, v.y, sr*v.x + cr*v.z};   // Ry(right)^T
-    return Vec3{a.x, cu*a.y + su*a.z, -su*a.y + cu*a.z};    // Rx(up)^T
-  };
-  origin = to_camera(Vec3{-o.right_mm, o.up_mm, -o.forward_mm}/1000);
-  direction = to_camera(Vec3{0, 0, 1});
+  const Vec3 a{cr*v.x - sr*v.z, v.y, sr*v.x + cr*v.z};   // Ry(right)^T
+  return Vec3{a.x, cu*a.y + su*a.z, -su*a.y + cu*a.z};    // Rx(up)^T
+}
+inline Vec3 camera_to_bore(const CameraOffset& o, const Vec3& v) {
+  const double cr = std::cos(o.right_deg*M_PI/180), sr = std::sin(o.right_deg*M_PI/180);
+  const double cu = std::cos(o.up_deg*M_PI/180), su = std::sin(o.up_deg*M_PI/180);
+  const Vec3 a{v.x, cu*v.y - su*v.z, su*v.y + cu*v.z};    // Rx(up)
+  return Vec3{cr*a.x + sr*a.z, a.y, -sr*a.x + cr*a.z};    // Ry(right)
+}
+// Where the camera sits, in the bore frame (metres).
+inline Vec3 camera_position(const CameraOffset& o) { return Vec3{o.right_mm, -o.up_mm, o.forward_mm}/1000; }
+
+inline bool bore_in_camera(const CameraOffset& o, double depth_m, Vec3& origin, Vec3& direction, Vec3& point) {
+  origin = bore_to_camera(o, camera_position(o)*-1.0);
+  direction = bore_to_camera(o, Vec3{0, 0, 1});
   const double s = (depth_m-origin.z)/direction.z;
   if (!(s > 0) || !std::isfinite(s)) return false;
   point = origin + direction*s;
@@ -90,6 +100,23 @@ inline BoreAlignment bore_alignment(const BoreAlignmentConfig& c, CameraRole rol
   out.valid = true;
   out.reason = "assumed depth";
   return out;
+}
+
+// ADR-006 D4: a pixel of a detail-camera frame (in the wide frame the detail picture is published in)
+// re-expressed as the wide camera would have seen the same point: through the detail camera's
+// pointing and position into the bore frame, at the working distance along its axis, and out through
+// the wide camera's. The identity while the bore is off or the two cameras' offsets are the same
+// (every record before a zero). False when the point is not in front of the wide camera.
+inline bool detail_pixel_in_wide(const BoreAlignmentConfig& c, const CameraIntrinsics& in, double& u_px, double& v_px) {
+  if (!c.enabled || c.detail == c.wide) return true;
+  if (!in.valid() || !(c.assumed_depth_m > 0)) return false;
+  const Vec3 ray{(u_px - in.cx)/in.fx, (v_px - in.cy)/in.fy, 1};
+  const Vec3 point = camera_to_bore(c.detail, ray*c.assumed_depth_m) + camera_position(c.detail);
+  const Vec3 w = bore_to_camera(c.wide, point - camera_position(c.wide));
+  if (!(w.z > 0) || !std::isfinite(w.x) || !std::isfinite(w.y)) return false;
+  u_px = in.cx + in.fx*w.x/w.z;
+  v_px = in.cy + in.fy*w.y/w.z;
+  return true;
 }
 
 // ADR-006 D1, the zero: the inverse of bore_alignment. The payload points at a target `depth_m`
