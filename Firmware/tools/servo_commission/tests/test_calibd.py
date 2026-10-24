@@ -200,6 +200,20 @@ class Pruning(unittest.TestCase):
             self.assertTrue((old_install_2 / "yaw" / "report.json").exists(), "reports are kept")
             self.assertEqual(len(removed), 2)
 
+    def test_recent_means_by_time_across_a_controld_restart(self):
+        # Station 2026-10-24 23:18: run ids restart with every controld, so the run that had just
+        # ended was 0001 beside older 0002s and 0003s -- and sorting by name pruned it on the spot.
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            names = ["0001-verify-20261024-182744", "0002-verify-20261024-183120", "0001-verify-20261024-190657",
+                     "0002-verify-20261024-211446", "0003-rerun+accuracy-20261024-211618",
+                     "0001-check-pitch-20261024-184122", "0001-rerun+accuracy-20261024-225809"]
+            dirs = {n: self.run_dir(runs, n, 5, False) for n in names}
+            calibd.prune(runs, keep_recent=3)
+            kept = sorted(n for n, d in dirs.items() if list(d.rglob("*.jsonl")))
+            self.assertEqual(kept, ["0001-rerun+accuracy-20261024-225809", "0002-verify-20261024-211446",
+                                    "0003-rerun+accuracy-20261024-211618"])
+
 
 if __name__ == "__main__":
     unittest.main()

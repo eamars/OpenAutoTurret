@@ -225,7 +225,13 @@ def prune(runs: Path, keep_recent=KEEP_RECENT) -> list:
     """Journals of runs nobody will read again: not a record's latest installed run, not recent.
     Returns the journals removed. Reports, logs and manifests stay."""
     done = []
-    for d in sorted(runs.iterdir()) if runs.is_dir() else []:
+    # Oldest first by when the run started: the name's trailing stamp, <id>-<kind>-YYYYMMDD-HHMMSS. Not
+    # by name -- run ids restart with every controld, so the newest run can be 0001 beside an older
+    # 0003, and sorting by name pruned the run that had just ended (2026-10-24 23:18).
+    def started(d):
+        stamp = d.name.rsplit("-", 2)[-2:]
+        return "".join(stamp) if len(stamp) == 2 and all(s.isdigit() for s in stamp) else f"{d.stat().st_mtime:020.6f}"
+    for d in sorted(runs.iterdir(), key=started) if runs.is_dir() else []:
         try:
             done.append((d, json.loads((d / "run.json").read_text(encoding="utf-8"))))
         except (OSError, ValueError):
