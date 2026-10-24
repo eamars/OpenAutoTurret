@@ -442,7 +442,7 @@ def commission_yaw(args):
         base = prior["servo_parameters"]
         # The work-in runs the servo this payload already has, if any: the prior's gains are the bare
         # turret's.
-        yaw_work_in(run, current["servo_parameters"] if args.update and current else base)
+        yaw_work_in(run, (current or {}).get("servo_parameters") or base)
         fit, j, guess = yaw_survey(run, base)
         position = last_yaw_angle(j)
         servo = with_friction(base, fit)
