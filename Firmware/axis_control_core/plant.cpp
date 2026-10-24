@@ -45,12 +45,24 @@ YawPlantParameters yaw_plant_from_yaml(const YAML::Node& n) {
   p.encoder_delay_s=n["encoder_delay_s"].as<double>(); p.crosstalk_delay_s=n["crosstalk_delay_s"].as<double>(0.);
   table(n,"crosstalk_map",p.crosstalk_map);
   p.counts_per_rev=n["counts_per_rev"].as<double>(8192.);
+  p.encoder_noise_rad=n["encoder_noise_rad"].as<double>(0.); p.encoder_noise_corner_hz=n["encoder_noise_corner_hz"].as<double>(40.);
+  p.friction_noise_A=n["friction_noise_A"].as<double>(0.); p.friction_noise_corner_hz=n["friction_noise_corner_hz"].as<double>(6.);
   check(p.inertia>0 && p.stribeck_speed>0 && p.counts_per_rev>0 && p.presliding_stiffness>0,"inertia/stribeck_speed/counts/stiffness");
-  check(p.creep_speed>0,"creep_speed");
+  check(p.creep_speed>0 && p.encoder_noise_corner_hz>0 && p.friction_noise_corner_hz>0,"creep_speed/noise corners");
   for (double v:{p.coulomb_positive,p.coulomb_negative,p.stribeck_positive,p.stribeck_negative,p.viscous,p.presliding_damping,p.creep_drop,
-                 p.actuation_delay_s,p.current_tau_s,p.encoder_delay_s,p.crosstalk_delay_s})
+                 p.actuation_delay_s,p.current_tau_s,p.encoder_delay_s,p.crosstalk_delay_s,p.encoder_noise_rad,p.friction_noise_A})
     check(std::isfinite(v) && v>=0,"nonnegative terms");
   return p;
+}
+
+namespace {
+// One step of a first-order (Ornstein-Uhlenbeck) process with stationary rms `sigma` and corner
+// frequency `corner_hz`, advanced by h seconds: exact, so the step size does not matter.
+double ou_step(double state,double h,double sigma,double corner_hz,std::mt19937_64& rng) {
+  if (sigma<=0) return 0.;
+  const double decay=std::exp(-2*M_PI*corner_hz*h);
+  return state*decay+sigma*std::sqrt(1-decay*decay)*std::normal_distribution<double>(0.,1.)(rng);
+}
 }
 
 YawPlant::YawPlant(const YawPlantParameters& p,double position) : p_(p), q_(position) { commands_.push_back({-1e9,0.}); }
@@ -76,7 +88,9 @@ void YawPlant::advance(double to) {
     const double k=s0*std::abs(v_)/friction(v_,q_);
     const double z_next=k>1e-12?v_/k+(z_-v_/k)*std::exp(-k*h):z_+v_*h;
     const double dz=(z_next-z_)/h;
-    const double force=s0*z_next+s1*dz+p_.viscous*v_;
+    // Roughness: the sliding level wanders; it acts along the friction (nothing at rest).
+    friction_noise_=ou_step(friction_noise_,h,p_.friction_noise_A,p_.friction_noise_corner_hz,rng_);
+    const double force=s0*z_next+s1*dz+p_.viscous*v_+friction_noise_*std::tanh(v_/0.01);
     // Semi-implicit in the damping terms keeps the stiff contact stable at this step.
     const double damping=s1*(k>1e-12?(1-std::exp(-k*h))/(k*h):1.)+p_.viscous;
     const double next=(p_.inertia*v_+h*(i_-p_.load-force+damping*v_))/(p_.inertia+h*damping);
@@ -84,9 +98,12 @@ void YawPlant::advance(double to) {
   }
   prune(commands_,t_-p_.actuation_delay_s-p_.crosstalk_delay_s);
 }
-double YawPlant::reading(double sampled,double receipt) const {
+double YawPlant::reading(double sampled,double receipt) {
   const double u=commanded(receipt-p_.crosstalk_delay_s);
-  const double q=sampled+periodic(p_.crosstalk_map,YawPlantParameters::kCrosstalkBins,sampled)*u;
+  encoder_noise_=ou_step(encoder_noise_,read_before_?std::max(receipt-last_reading_time_,0.):1.,
+                         p_.encoder_noise_rad,p_.encoder_noise_corner_hz,rng_);
+  last_reading_time_=receipt; read_before_=true;
+  const double q=sampled+periodic(p_.crosstalk_map,YawPlantParameters::kCrosstalkBins,sampled)*u+encoder_noise_;
   const double quantum=2*M_PI/p_.counts_per_rev;
   return std::round(q/quantum)*quantum;
 }

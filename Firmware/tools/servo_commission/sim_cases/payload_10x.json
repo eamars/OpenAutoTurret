@@ -1,5 +1,5 @@
 {
- "description": "A heavy payload: yaw inertia 10x the bare turret's measured 0.045 A*s^2/rad (2026-10-02). PAYLOAD 10-24 measured about 5x (0.2-0.25) and its survey found the bearing friction unchanged, so only the inertia changes; the GM6020's crosstalk and the pitch do not.",
+ "description": "A heavy payload: yaw inertia 10x the bare turret's measured 0.045 A*s^2/rad (2026-10-02). PAYLOAD 10-24 measured about 5x (0.2-0.25) and its survey found the bearing friction unchanged, so only the inertia changes; the GM6020's crosstalk and the pitch do not. Encoder reading noise 0.2 mrad rms (40 Hz corner) and a friction roughness of 0.03 A rms (6 Hz corner), from the station's noise floor measured 2026-10-24 (ADR-005 STAGE2.md).",
  "yaw_start_rad": 1.0,
  "yaw": {
   "inertia": 0.45,
@@ -190,7 +190,11 @@
    0.0045438,
    0.0032587,
    0.0013064
-  ]
+  ],
+  "encoder_noise_rad": 0.0002,
+  "encoder_noise_corner_hz": 40.0,
+  "friction_noise_A": 0.03,
+  "friction_noise_corner_hz": 6.0
  },
  "pitch": {
   "speed_delay_s": 0.002,
