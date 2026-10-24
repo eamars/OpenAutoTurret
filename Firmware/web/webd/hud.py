@@ -310,8 +310,10 @@ function hudDockSpecs(o) {
   // §13's controls, in the order the revision lists them. DIAG left the dock on 2026-10-03 (owner):
   // its rows live in the stats overlay, which MENU > SETTINGS turns on, like a video player's
   // "stats for nerds"; an operator who does not ask for engineering numbers does not see them.
-  const keys = ["TARGETS", "MODE", "MANUAL", "MENU"];
-  const open = (o && typeof o.open === "string") ? o.open : null;
+  // MANUAL left the dock on 2026-10-24 (owner): the D-pad, shown in MANUAL, is the manual control.
+  // MENU > CALIBRATION is a panel of MENU's, so MENU stays lit while it is open.
+  const keys = ["TARGETS", "MODE", "MENU"];
+  const open = (o && typeof o.open === "string") ? (o.open === "CALIBRATION" ? "MENU" : o.open) : null;
   return keys.map((k) => ({ key: k, active: (k === open) }));
 }
 
@@ -384,23 +386,6 @@ function hudDrawerActions(name, t) {
     return rows;
   }
 
-  if (name === "MANUAL") {
-    // The jogs and steps are gated by the daemon: outside MANUAL it answers ok=false with an
-    // explanation. They are still listed - greyed, reason on the row - because a control that silently
-    // vanishes is how an operator learns to guess at the interface. STOP is deliberately not in that
-    // group: `hold` is accepted in every mode, and a stop that only works in one mode is not a stop.
-    const gate = inManual ? "act" : "gated";
-    const note = inManual ? "" : "MANUAL MODE ONLY";
-    const rows = [
-      { label: "STEP YAW +1 " + otaAxisArrow("yaw", 1), command: "manual_step", arg: "yaw+1", kind: gate, note: note },
-      { label: "STEP YAW -1 " + otaAxisArrow("yaw", -1), command: "manual_step", arg: "yaw-1", kind: gate, note: note },
-      { label: "STEP PITCH +1 " + otaAxisArrow("pitch", 1), command: "manual_step", arg: "pitch+1", kind: gate, note: note },
-      { label: "STEP PITCH -1 " + otaAxisArrow("pitch", -1), command: "manual_step", arg: "pitch-1", kind: gate, note: note }
-    ];
-    rows.push({ label: "STOP MOTION", command: "hold", arg: "", kind: "stop",
-                note: inManual ? "" : "ALWAYS AVAILABLE" });
-    return rows;
-  }
 
   if (name === "MENU") {
     // Owner ruling 2026-10-03: three supervisory actions, each of which works from where it is offered.
@@ -477,6 +462,82 @@ function hudTargetTypeChips(t) {
     : t.target_type_overdue ? { mode: "overdue", fraction: 1 }
     : fraction > 0 ? { mode: "fill", fraction: fraction } : { mode: "wait", fraction: 0 };
   return { label: "FOLLOW", chips: chips, note: note, progress: progress };
+}
+
+// ADR-005: calibration records -- payload sets, chosen, renamed, copied and removed from MENU >
+// CALIBRATION (owner, 2026-10-24). controld owns them and holds the turret through a switch, as for
+// the target type; the page shows what each record knows and sends the commands. #1 AS SHIPPED is the
+// failsafe backup: never renamed, removed, measured into or trimmed.
+const HUD_CAL_PARTS = [["yaw", "YAW SERVO"], ["pitch", "PITCH SERVO"], ["accuracy", "ACCURACY"],
+                       ["extrinsic", "EXTRINSIC"], ["bore", "BORE"]];
+const HUD_CAL_COMMANDS = ["set_calibration_record", "rename_calibration_record", "new_calibration_record",
+                          "delete_calibration_record"];
+function hudCalibrationOrigin(p) {
+  if (!p || !p.origin) return { text: "NONE", tone: "warn" };
+  const date = String(p.date || "").slice(5);   // 2026-10-02 -> 10-02
+  if (p.origin === "measured") return { text: ("MEASURED " + date).trim(), tone: "good" };
+  if (p.origin === "shipped") return { text: ("SHIPPED " + date).trim(), tone: "" };
+  if (p.origin === "inherited") return { text: "FROM #" + p.from, tone: "dim" };
+  if (p.origin === "trimmed") return { text: ("TRIMMED " + date).trim(), tone: "good" };
+  return { text: String(p.origin).toUpperCase(), tone: "" };
+}
+// The MENU row that opens the panel. It is the only place outside the panel that names the record in
+// force (owner: calibration is an internal setting, folded under the menu). Null without records.
+function hudCalibrationEntry(t) {
+  const c = t && t.calibration_record;
+  if (!c || !c.id) return null;
+  return { label: "CALIBRATION ›", note: "#" + c.id + " " + c.name +
+           (t.calibration_switching ? " · SWITCHING" : t.calibration_blocked ? " · CANNOT BE USED" : "") };
+}
+function hudCalibrationPanel(t) {
+  t = t || {};
+  const cur = t.calibration_record;
+  if (!cur || !cur.id) return null;
+  const recs = Array.isArray(t.calibration_records) ? t.calibration_records : [];
+  const r = recs.filter((x) => x.id === cur.id)[0] || { id: cur.id, name: cur.name, parts: {}, unusable: "" };
+  const switching = !!t.calibration_switching;
+  const locked = cur.id === 1;
+  const chips = recs.map((x) => ({
+    id: x.id, label: "#" + x.id + " " + x.name, current: x.id === cur.id, bad: !!x.unusable,
+    title: x.unusable || x.name, command: (x.id === cur.id && !switching) ? null : "set_calibration_record",
+    arg: String(x.id) }));
+  const fraction = Math.min(1, Math.max(0, Number(t.calibration_progress) || 0));
+  const bar = !switching ? null : t.calibration_overdue ? { mode: "overdue", fraction: 1 }
+    : fraction > 0 ? { mode: "fill", fraction: fraction } : { mode: "wait", fraction: 0 };
+  const notes = [];
+  if (switching && t.calibration_overdue)
+    notes.push({ warn: true, text: "NOT APPLIED: #" + cur.id + (t.calibration_blocked ? ": " + t.calibration_blocked
+      : "'s servos have not settled") + ". Holding in MANUAL; choose a record again to retry." });
+  else if (switching)
+    notes.push({ warn: false, text: "#" + t.calibration_switch_from + " → #" + cur.id + ": holding while the servos change" });
+  else if (t.calibration_blocked)
+    notes.push({ warn: true, text: t.calibration_blocked + ". HOME is refused until another record is chosen." });
+  const parts = HUD_CAL_PARTS.map((pair) => {
+    const o = hudCalibrationOrigin((r.parts || {})[pair[0]]);
+    return { label: pair[1], text: o.text, tone: o.tone };
+  });
+  const rp = r.parts || {};
+  const unmeasured = !!(rp.yaw && rp.pitch && rp.yaw.origin === "inherited" && rp.pitch.origin === "inherited");
+  // Runs (VERIFY, RE-RUN, NEW's measurement) arrive with stage 2: shown, greyed, saying so -- a
+  // control that silently vanishes is how an operator learns to guess at the interface.
+  const later = "COMES WITH STAGE 2";
+  const measure = [
+    { label: "VERIFY", kind: "gated", nudge: !!t.calibration_unverified,
+      note: (t.calibration_unverified ? "NOT VERIFIED SINCE SWITCH · " : "") + later },
+    locked ? { label: "MEASURE A COPY…", ui: "newcopy", kind: switching ? "gated" : "act",
+               note: "#1 stays as shipped: NEW from #1" }
+           : { label: "RE-RUN", kind: "gated", note: later },
+    { label: "NEW…", ui: "new", kind: switching ? "gated" : "act", note: "a copy of a record, put in force" }];
+  const removable = recs.filter((x) => x.id !== 1 && x.id !== cur.id).map((x) => ({
+    id: x.id, title: x.name, command: "delete_calibration_record", arg: String(x.id), kind: "danger" }));
+  const b = r.bore || {}, w = b.wide || {};
+  const mrad = (v) => (Number(v) >= 0 ? "+" : "−") + Math.abs(Number(v) || 0).toFixed(1);
+  const bore = (b.mode === "manual_depth" ? "ON" : "OFF") + " · ZERO " + (b.zero_m === null || b.zero_m === undefined ? "∞" : b.zero_m + " m") +
+               " · WIDE R " + mrad(w.trim_right_mrad) + " U " + mrad(w.trim_up_mrad) + " MRAD";
+  return { inForce: { id: cur.id, name: cur.name, locked: locked }, chips: chips, bar: bar, notes: notes,
+           parts: parts, unmeasured: unmeasured, unmeasuredFrom: unmeasured ? rp.yaw.from : null,
+           measure: measure, removable: removable, bore: bore,
+           stop: { label: "STOP MOTION", command: "hold", arg: "", kind: "stop" } };
 }
 
 function hudSpeedRows(t) {
@@ -1728,9 +1789,14 @@ function setStats(on) {
 function paint(t) {
   // Track churn must not replace MENU buttons between pointer-down and click.
   // Phase changes must refresh their Home/recovery gates even with no tracks.
-  const drawerKey = value => JSON.stringify(drawerOpen === "MENU"
+  const calKey = value => value ? [value.calibration_record, value.calibration_switching, value.calibration_overdue,
+    Math.round(10 * (Number(value.calibration_progress) || 0)), value.calibration_unverified, value.calibration_blocked,
+    value.calibration_records, value.phase] : null;
+  const drawerKey = value => JSON.stringify(drawerOpen === "CALIBRATION" ? calKey(value)
+    : drawerOpen === "MENU"
     ? [value && value.phase, value && value.rest_park, value && value.rest_park_on_stop,
-       hudSpeedRows(value).map(r => [r.value, r.max])]
+       hudSpeedRows(value).map(r => [r.value, r.max]), value && value.calibration_record,
+       value && value.calibration_switching, value && value.calibration_blocked]
     : [value && value.operating_mode, value && value.phase,
       value && value.watch_point_set, value && value.watch_point_usable,
       value && value.selected_uuid, value && value.perception_session_uuid,
@@ -1739,7 +1805,9 @@ function paint(t) {
       value && value.target_type, value && value.target_type_switching, value && value.target_type_overdue,
       Math.round(10 * ((value && value.target_type_progress) || 0)),
       ((value && value.tracks) || []).map(x => [x.uuid, x.selected, x.selectable, x.state])]);
-  const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t);
+  // A refused calibration command repaints the panel once, to say why; other acks never do.
+  const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t) ||
+    (noteCalibrationAck(t) && drawerOpen === "CALIBRATION");
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   render(t);
@@ -1933,8 +2001,7 @@ function dockIcon(k) {
 }
 
 function renderDock() {
-  dock.innerHTML = hudDockSpecs({ open: drawerOpen }).filter((b) =>
-    b.key !== "MANUAL" || (lastTelemetry && lastTelemetry.operating_mode === "MANUAL")).map((b) =>
+  dock.innerHTML = hudDockSpecs({ open: drawerOpen }).map((b) =>
     '<button type="button" class="dockbtn' + (b.active ? " on" : "") + '" data-key="' + b.key +
     '" aria-pressed="' + (b.active ? "true" : "false") + '">' + dockIcon(b.key) +
     "<span>" + b.key + "</span></button>").join("");
@@ -1946,7 +2013,16 @@ function escapeMarkup(value) {
 }
 
 function renderDrawer() {
-  if (!drawerOpen) { drawer.hidden = true; drawer.innerHTML = ""; return; }
+  if (!drawerOpen) { drawer.hidden = true; drawer.innerHTML = ""; drawer.classList.remove("calpanel"); return; }
+  if (drawerOpen === "CALIBRATION") {
+    const top = drawer.scrollTop;
+    drawer.classList.add("calpanel");
+    drawer.innerHTML = renderCalibrationPanel(lastTelemetry || {});
+    drawer.hidden = false;
+    drawer.scrollTop = top;
+    return;
+  }
+  drawer.classList.remove("calpanel");
   let rows;
   {
     rows = hudDrawerActions(drawerOpen, lastTelemetry || {}).map((a) => {
@@ -1983,6 +2059,139 @@ function renderTargetTypes(t) {
     "</div>";
 }
 
+// MENU > CALIBRATION (ADR-005): the panel takes the drawer's place, MENU stays lit, ‹ MENU goes back.
+let calRefusal = null, calSeenSeq = null;
+function noteCalibrationAck(t) {
+  // The station's word on a refused calibration command shows in the panel for a few seconds: these
+  // refusals say something the operator must act on (#1 is the backup, the record cannot be read).
+  // True only when a new refusal arrived; an accepted command, or any other, changes nothing here.
+  if (!t || t.cmd_ack_seq === calSeenSeq) return false;
+  const first = calSeenSeq === null;
+  calSeenSeq = t.cmd_ack_seq;
+  if (first || HUD_CAL_COMMANDS.indexOf(t.cmd_ack_command) < 0 || t.cmd_ack_accepted !== 0) return false;
+  calRefusal = { reason: String(t.cmd_ack_reason || ""), at: Date.now() };
+  return true;
+}
+function renderCalibrationPanel(t) {
+  const spec = hudCalibrationPanel(t);
+  if (!spec) return '<div class="dtitle">CALIBRATION</div><div class="dnote">This station keeps no calibration records.</div>';
+  const cls = (tone) => tone ? " " + tone : "";
+  const row = (a, extra) => {
+    const waiting = hudRowAwaitsConfirm(a, pendingConfirm);
+    const inert = (!a.command && !a.ui) || a.kind === "gated";
+    return '<button type="button" class="drow' + (a.kind === "gated" ? " gated" : "") + (a.kind === "stop" ? " stop" : "") +
+      (a.nudge ? " nudge" : "") + (waiting ? " confirm" : "") + '"' + (a.ui ? ' data-calui="' + a.ui + '"' : "") +
+      (a.command ? ' data-cmd="' + escapeMarkup(a.command) + '" data-arg="' + escapeMarkup(a.arg || "") + '"' : "") +
+      ' data-kind="' + a.kind + '"' + (inert ? " disabled" : "") + '><span class="rl">' +
+      escapeMarkup(waiting ? "CONFIRM " + a.label : a.label) + '</span><span class="rn">' +
+      escapeMarkup(waiting ? "PRESS AGAIN" : (a.note || "")) + "</span></button>" + (extra || "");
+  };
+  let h = '<div class="ptop"><button type="button" class="pback" data-calui="back">‹ MENU</button>' +
+          '<span class="dtitle">CALIBRATION</span></div>';
+  h += '<div class="drow setting calrec"><span class="rl">IN FORCE&nbsp; <b>#' + spec.inForce.id + " " +
+       escapeMarkup(spec.inForce.name) + "</b></span>" + (spec.inForce.locked
+         ? '<span class="rn locked">SHIPPED BACKUP · LOCKED</span>'
+         : '<button type="button" class="sbtn chip" data-calui="rename">RENAME</button>') + "</div>";
+  const chips = spec.chips.map((c) => '<button type="button" class="sbtn chip' + (c.current ? " on" : "") +
+    (c.bad ? " bad" : "") + '" data-cmd="' + (c.command || "") + '" data-arg="' + c.arg + '" data-kind="act"' +
+    ' title="' + escapeMarkup(c.title) + '"' + (c.command ? "" : " disabled") + ">" + escapeMarkup(c.label) +
+    (c.bad ? " !" : "") + "</button>").join("");
+  const bar = !spec.bar ? "" : '<span class="tbar ' + spec.bar.mode + '" role="progressbar"><i style="width:' +
+    (spec.bar.mode === "wait" ? 30 : Math.round(spec.bar.fraction * 100)) + '%"></i></span>';
+  const notes = spec.notes.map((n) => '<span class="snote' + (n.warn ? " warn" : "") + '">' + escapeMarkup(n.text) + "</span>");
+  if (calRefusal && Date.now() - calRefusal.at < 8000)
+    notes.push('<span class="snote warn">' + escapeMarkup(calRefusal.reason) + "</span>");
+  h += '<div class="drow setting calchips"><span class="stepper wrap">' + chips + "</span>" + bar + notes.join("") + "</div>";
+  h += '<div class="dsec">WHAT #' + spec.inForce.id + " KNOWS</div><div class=\"drow setting\"><div class=\"calparts\">" +
+       spec.parts.map((q) => '<span class="k">' + q.label + '</span><span class="v' + cls(q.tone) + '">' +
+                             escapeMarkup(q.text) + "</span>").join("") + "</div>" +
+       (spec.unmeasured ? '<span class="snote warn">NOT MEASURED: its servo parts are copied from #' +
+                          spec.unmeasuredFrom + ".</span>" : "") + "</div>";
+  h += '<div class="dsec">MEASURE</div>' + spec.measure.map((a) => row(a)).join("");
+  const removable = spec.removable.map((x) => {
+    const armed = hudRowAwaitsConfirm(x, pendingConfirm);
+    return '<button type="button" class="sbtn chip del' + (armed ? " armed" : "") + '" data-cmd="' + x.command +
+      '" data-arg="' + x.arg + '" data-kind="danger" title="' + escapeMarkup(x.title) + '">' +
+      (armed ? "CONFIRM REMOVE #" + x.id : "#" + x.id + " ×") + "</button>";
+  }).join("");
+  h += '<div class="drow setting"><span class="rl">REMOVE</span><span class="stepper wrap">' +
+       (removable || '<span class="snote">nothing to remove</span>') +
+       "</span><span class=\"snote\">#1 is the shipped backup; the record in force can't be removed. Two presses.</span></div>";
+  h += '<div class="dsec">BORE</div><div class="drow setting"><span class="rl">BORE</span><span class="rn">' +
+       escapeMarkup(spec.bore) + "</span></div>";
+  h += '<div class="pstop">' + row(spec.stop) + "</div>";
+  return h;
+}
+
+// Dialogs sit outside the drawer: its repaint rewrites its innerHTML, which would wipe an input.
+let calDialog = null;
+function closeCalibrationDialog() { if (calDialog) calDialog.remove(); calDialog = null; }
+function calibrationDialog(html, ready) {
+  closeCalibrationDialog();
+  calDialog = document.createElement("div");
+  calDialog.id = "caldlg";
+  calDialog.innerHTML = '<div class="box" role="dialog" aria-modal="true">' + html + "</div>";
+  $("viewport").appendChild(calDialog);
+  calDialog.addEventListener("click", (e) => { if (e.target === calDialog) closeCalibrationDialog(); });
+  ready(calDialog);
+}
+const HUD_CAL_NAME = /^[A-Za-z0-9 _-]{1,24}$/;
+function renameCalibrationDialog() {
+  const spec = hudCalibrationPanel(lastTelemetry || {});
+  if (!spec || spec.inForce.locked) return;
+  const id = spec.inForce.id;
+  calibrationDialog('<div class="dt">RENAME #' + id + '</div><input maxlength="24" spellcheck="false" value="' +
+    escapeMarkup(spec.inForce.name) + '"><div class="dn">1-24 letters, digits, spaces, - or _. The id #' + id +
+    ' stays.</div><div class="db"><button type="button" data-k="ok">RENAME</button>' +
+    '<button type="button" data-k="cancel">CANCEL</button></div>', (d) => {
+    const input = d.querySelector("input"), note = d.querySelector(".dn");
+    input.focus(); input.select();
+    const ok = () => {
+      const v = input.value.trim();
+      if (!HUD_CAL_NAME.test(v)) { note.textContent = "Not a name: 1-24 letters, digits, spaces, - or _."; note.classList.add("warn"); return; }
+      sendCommand("rename_calibration_record", id + " " + v.toUpperCase());
+      closeCalibrationDialog();
+    };
+    d.querySelector('[data-k="ok"]').onclick = ok;
+    d.querySelector('[data-k="cancel"]').onclick = closeCalibrationDialog;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") ok(); if (e.key === "Escape") closeCalibrationDialog(); });
+  });
+}
+function newCalibrationDialog(from) {
+  const t = lastTelemetry || {};
+  const recs = (Array.isArray(t.calibration_records) ? t.calibration_records : []).filter((r) => !r.unusable);
+  const state = { from: from || (t.calibration_record || {}).id };
+  const homed = t.phase === "hold";
+  function draw(d) {
+    d.querySelector(".from").innerHTML = recs.map((r) => '<button type="button" class="chip' +
+      (r.id === state.from ? " on" : "") + '" data-from="' + r.id + '">#' + r.id + " " + escapeMarkup(r.name) + "</button>").join("");
+    d.querySelector(".sum").textContent = "Makes a copy of #" + state.from + " (every part marked FROM #" + state.from +
+      ") and puts it in force" + (homed ? ": the turret holds while the servos change, then carries on." : ".") +
+      " It measures nothing yet: runs come with stage 2.";
+  }
+  calibrationDialog('<div class="dt">NEW CALIBRATION RECORD</div><div class="dl">NAME</div>' +
+    '<input maxlength="24" spellcheck="false" placeholder="e.g. RANGEFINDER">' +
+    '<div class="dl">A COPY OF</div><div class="from row"></div><div class="sum dn"></div><div class="err dn warn"></div>' +
+    '<div class="db"><button type="button" data-k="go">CREATE</button><button type="button" data-k="cancel">CANCEL</button></div>', (d) => {
+    draw(d);
+    const input = d.querySelector("input");
+    input.focus();
+    d.addEventListener("click", (e) => {
+      const f = e.target.closest && e.target.closest("[data-from]");
+      if (f) { state.from = Number(f.dataset.from); draw(d); }
+    });
+    const go = () => {
+      const v = input.value.trim();
+      if (!HUD_CAL_NAME.test(v)) { d.querySelector(".err").textContent = "Name it first: 1-24 letters, digits, spaces, - or _."; return; }
+      sendCommand("new_calibration_record", state.from + " " + v.toUpperCase());
+      closeCalibrationDialog();
+    };
+    d.querySelector('[data-k="go"]').onclick = go;
+    d.querySelector('[data-k="cancel"]').onclick = closeCalibrationDialog;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); if (e.key === "Escape") closeCalibrationDialog(); });
+  });
+}
+
 function renderSettings(t) {
   const btn = (arg, text, label) => '<button type="button" class="sbtn" data-cmd="set_speed" data-kind="act"' +
     ' data-arg="' + escapeMarkup(arg || "") + '" aria-label="' + label + '"' + (arg ? "" : " disabled") + ">" +
@@ -1995,7 +2204,10 @@ function renderSettings(t) {
     btn(r.reset, "\u21BA", r.label + " back to " + (r.base === null ? "default" : r.base.toFixed(1))) +
     '</span><span class="snote">' + (r.base === null ? "" : "default " + r.base.toFixed(1)) +
     (r.max === null ? "" : " \u00B7 max " + r.max.toFixed(1)) + "</span></div>").join("");
-  return '<div class="dsec">SETTINGS</div>' + speeds +
+  const cal = hudCalibrationEntry(t);
+  const entry = !cal ? "" : '<button type="button" class="drow calentry" data-calui="open"><span class="rl">' +
+    cal.label + '</span><span class="rn">' + escapeMarkup(cal.note) + "</span></button>";
+  return '<div class="dsec">SETTINGS</div>' + entry + speeds +
     '<div class="dnote">Speeds hold until the station restarts.</div>' +
     '<div class="drow setting gated"><span class="rl">' + HUD_TARGET_POLICY.label + '</span><span class="rn">' +
     HUD_TARGET_POLICY.value + '</span><span class="snote">' + HUD_TARGET_POLICY.note + "</span></div>" +
@@ -2062,6 +2274,7 @@ function stopPadJog() {
 }
 function padReady(t) {
   return t && t.operating_mode === "MANUAL" && t.phase === "hold" &&
+    !t.target_type_switching && !t.calibration_switching &&
     !t.telemetry_stale && transportOk && Date.now() - lastTelemetryAt < 300 &&
     (t.safety_action === "ALLOW" || t.safety_action === "DERATE");
 }
@@ -2072,6 +2285,8 @@ function renderManualPad(t) {
   if (pad.hidden !== hidden) { pad.hidden = hidden; renderDock(); }
   const enabled = padReady(t);
   pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
+  // A swap hold (target type or calibration record): controld refuses jogs, so the pad says so.
+  pad.classList.toggle("held", !!(t && (t.target_type_switching || t.calibration_switching)));
   // Releasing an arrow is the stop. The centre is the pace: the camera's, or outlined when the
   // operator pinned it.
   const pace = padPace() === "precise" ? "FINE" : "COARSE";
@@ -2079,7 +2294,6 @@ function renderManualPad(t) {
   $("pad-pace").setAttribute("aria-pressed", String(!!padPaceOverride));
   $("pad-pace").title = padPaceOverride ? "Pace pinned; tap to follow the camera" : "Pace follows the camera; tap to pin the other";
   if (!enabled) stopPadJog();
-  if (drawerOpen === "MANUAL" && pad.hidden) { drawerOpen = null; renderDrawer(); }
 }
 // The pad's pace: null follows the main camera; "coarse" | "precise" is the operator's pin, which a
 // camera swap clears (the new view brings its own pace back).
@@ -2131,6 +2345,17 @@ dock.addEventListener("click", (e) => {
 });
 
 drawer.addEventListener("click", (e) => {
+  const cal = e.target && e.target.closest ? e.target.closest("button[data-calui]") : null;
+  if (cal) {
+    if (cal.disabled) return;
+    const k = cal.getAttribute("data-calui");
+    if (k === "open") { drawerOpen = "CALIBRATION"; pendingConfirm = null; renderDock(); renderDrawer(); drawer.scrollTop = 0; }
+    else if (k === "back") setDrawer("MENU");
+    else if (k === "rename") renameCalibrationDialog();
+    else if (k === "new") newCalibrationDialog();
+    else if (k === "newcopy") newCalibrationDialog(1);
+    return;
+  }
   const ui = e.target && e.target.closest ? e.target.closest("button[data-ui]") : null;
   if (ui) { setStats(!statsOn); return; }
   const b = e.target && e.target.closest ? e.target.closest("button[data-cmd]") : null;
@@ -2376,6 +2601,54 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 @keyframes tslide { from { transform:translateX(-100%); } to { transform:translateX(340%); } }
 #drawer .snote.warn { color:#f2b329; }
 #drawer .snote { width:100%; font-size:9px; color:rgba(237,242,235,.45); }
+
+/* MENU > CALIBRATION (ADR-005): a panel in the drawer's place, wider; its chips and rows are the
+   drawer's own vocabulary, amber for "not yet / refused", red only for removal and stop. */
+#drawer.calpanel { width: min(440px, 92vw); max-height: calc(100vh - 8.5% - 58px - 90px); }
+#drawer .ptop { display:flex; align-items:center; justify-content:space-between; margin:0 0 4px; }
+#drawer .ptop .dtitle { margin:0; }
+#drawer .pback { font:inherit; font-size:9px; letter-spacing:.1em; color:#95f58b; background:none;
+                 border:1px solid rgba(149,245,139,.38); border-radius:3px; padding:2px 7px; cursor:pointer; }
+#drawer .pback:hover { background:rgba(149,245,139,.10); }
+#drawer .calentry .rl { color:#95f58b; }
+#drawer .calentry .rn { color:#edf2eb; }
+#drawer .calrec { align-items:baseline; }
+#drawer .calrec .rl b { color:#95f58b; font-weight:400; }
+#drawer .rn.locked { color:#f2b329; font-size:9px; letter-spacing:.08em; }
+#drawer .stepper.wrap { flex-wrap:wrap; gap:4px; }
+#drawer .sbtn.chip.bad { color:#f2b329; border-color:rgba(242,179,41,.6); }
+#drawer .sbtn.chip.del { color:rgba(255,93,93,.85); border-color:rgba(255,93,93,.45); background:rgba(255,93,93,.06); }
+#drawer .sbtn.chip.del.armed { color:#f2b329; border-color:#f2b329; background:rgba(242,179,41,.16); }
+#drawer .calchips .tbar { margin-top:5px; }
+#drawer .calparts { width:100%; display:grid; grid-template-columns:96px 1fr; gap:0 8px; font-size:9px; margin-top:3px; }
+#drawer .calparts .k { color:rgba(237,242,235,.55); letter-spacing:.06em; }
+#drawer .calparts .v.good { color:#95f58b; }
+#drawer .calparts .v.dim { color:rgba(237,242,235,.45); }
+#drawer .calparts .v.warn { color:#f2b329; }
+#drawer .drow.nudge .rn { color:#f2b329; }
+#drawer .pstop { margin-top:8px; border-top:1px solid rgba(255,93,93,.35); }
+/* Phones: the drawer's 32vw is ~120 px, too narrow for MENU's rows (owner, 2026-10-24). */
+@media (max-width: 600px) { #drawer { width: min(330px, 92vw); } #drawer.calpanel { width: min(440px, 92vw); } }
+/* A swap hold refuses jogs: the pad says so instead of looking live. */
+#manual-pad.held { opacity:.25; pointer-events:none; }
+/* The drawer's layer (40), later in the document so above it; never above the safety banner (50). */
+#caldlg { position:absolute; inset:0; z-index:40; background:rgba(0,0,0,.45); display:flex; align-items:center;
+          justify-content:center; }
+#caldlg .box { width:min(380px, 86vw); background:rgba(2,5,4,.95); border:1px solid rgba(149,245,139,.45);
+               border-radius:2px; padding:10px 11px; font:400 10px/1.5 var(--hud-mono); color:#edf2eb; }
+#caldlg .dt { color:#95f58b; font-size:10px; letter-spacing:.14em; margin-bottom:6px; }
+#caldlg .dl { color:rgba(237,242,235,.55); font-size:9px; letter-spacing:.08em; margin:7px 0 3px; }
+#caldlg .dn { font-size:9px; color:rgba(237,242,235,.6); margin-top:6px; }
+#caldlg .warn { color:#f2b329; }
+#caldlg input { width:100%; box-sizing:border-box; height:26px; background:rgba(149,245,139,.06); color:#edf2eb;
+                border:1px solid rgba(149,245,139,.38); border-radius:3px; font:inherit; font-size:12px;
+                letter-spacing:.08em; text-transform:uppercase; padding:0 6px; }
+#caldlg .row { display:flex; flex-wrap:wrap; gap:4px; }
+#caldlg .chip, #caldlg .db button { height:22px; font:inherit; font-size:10px; letter-spacing:.06em; color:#95f58b;
+                background:rgba(149,245,139,.08); border:1px solid rgba(149,245,139,.38); border-radius:3px;
+                padding:0 7px; cursor:pointer; }
+#caldlg .chip.on { color:#0b100b; background:#95f58b; }
+#caldlg .db { display:flex; gap:6px; margin-top:10px; }
 
 /* --- §22 safety presentation ------------------------------------------------ */
 #safety { position:absolute; left:50%; top:16%; transform:translateX(-50%); text-align:center;

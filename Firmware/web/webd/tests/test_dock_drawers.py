@@ -47,7 +47,8 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self._geo = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False)
         self._geo.write(HUD_GEOMETRY_JS +
                         "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows, hudTargetTypeChips,"
-                        " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey };\n")
+                        " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey,"
+                        " hudCalibrationEntry, hudCalibrationPanel };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -116,16 +117,19 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     # -- the dock itself ---------------------------------------------------------------
 
-    def test_the_dock_is_the_revision_less_diag(self) -> None:
+    def test_the_dock_is_targets_mode_menu(self) -> None:
         # §13 listed five; DIAG left on 2026-10-03 (owner): its rows are in the stats overlay, which
-        # MENU > SETTINGS turns on. The order of the rest is unchanged.
+        # MENU > SETTINGS turns on. MANUAL left on 2026-10-24 (owner): the D-pad is the manual control.
         spec = self._node("console.log(JSON.stringify(T.hudDockSpecs({})));")
-        self.assertEqual([b["key"] for b in spec], ["TARGETS", "MODE", "MANUAL", "MENU"])
+        self.assertEqual([b["key"] for b in spec], ["TARGETS", "MODE", "MENU"])
         self.assertTrue(all(not b["active"] for b in spec))
 
     def test_exactly_one_button_shows_the_open_drawer(self) -> None:
-        spec = self._node("console.log(JSON.stringify(T.hudDockSpecs({open:\"MANUAL\"})));")
-        self.assertEqual([b["key"] for b in spec if b["active"]], ["MANUAL"])
+        spec = self._node("console.log(JSON.stringify(T.hudDockSpecs({open:\"MODE\"})));")
+        self.assertEqual([b["key"] for b in spec if b["active"]], ["MODE"])
+        # MENU > CALIBRATION is MENU's own panel: MENU stays lit while it is open.
+        spec = self._node("console.log(JSON.stringify(T.hudDockSpecs({open:\"CALIBRATION\"})));")
+        self.assertEqual([b["key"] for b in spec if b["active"]], ["MENU"])
 
     def test_the_page_keeps_a_single_open_drawer_variable(self) -> None:
         # §13.2 "only one drawer should be open at a time". Asserted structurally: one variable and one
@@ -224,8 +228,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
 
     # -- MANUAL ------------------------------------------------------------------------
 
-    def test_jog_and_step_arguments_match_the_daemon(self) -> None:
-        rows = self._rows("MANUAL", {"operating_mode": "MANUAL"})
+    def test_jog_arguments_match_the_daemon(self) -> None:
         self.assertEqual(set(re.findall(r'data-direction="([^"]+)"', HUD_HTML)),
                          {"left", "right", "up", "down", "up-left", "up-right", "down-left",
                           "down-right"})
@@ -244,16 +247,11 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                                      "T.otaAxisArrow('yaw',1),T.otaAxisArrow('yaw',-1),"
                                      "T.otaAxisArrow('pitch',1),T.otaAxisArrow('pitch',-1)]));"),
                          ["←", "→", "↓", "↑"])
-        for r in [r for r in rows if r["command"] == "manual_step"]:
-            self.assertRegex(r["arg"], r"^(yaw|pitch)[+-][0-9.]+$")
 
-    def test_stop_motion_is_always_offered_and_is_hold(self) -> None:
-        for mode in ("MANUAL", "AUTO_TRACK", "AUTO_ROAM"):
-            rows = self._rows("MANUAL", {"operating_mode": mode})
-            stop = [r for r in rows if r["label"] == "STOP MOTION"]
-            self.assertEqual(len(stop), 1, "a stop that vanishes in some modes is not a stop")
-            self.assertEqual(stop[0]["command"], "hold")
-            self.assertEqual(stop[0]["kind"], "stop", "§14 reserves red for stop and fault")
+    def test_the_manual_drawer_is_gone_and_the_pad_is_the_manual_control(self) -> None:
+        # Owner, 2026-10-24: "I don't want the MANUAL anymore as we have the DPAD already".
+        self.assertEqual(self._rows("MANUAL", {"operating_mode": "MANUAL"}), [])
+        self.assertIn('id="manual-pad"', HUD_HTML)
 
     def test_the_pad_paces_by_the_main_camera_and_its_centre_is_the_pace(self) -> None:
         # Owner, 2026-10-03: coarse on wide, fine on detail (controld's "view" profile); the centre
@@ -267,10 +265,93 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertNotIn("data-jog", re.search(r'<button id="pad-pace".*?</button>', pad).group(),
                          "the pace button must never start a jog")
 
-    def test_jogs_are_not_duplicated_as_click_actions_in_the_drawer(self) -> None:
-        rows = self._rows("MANUAL", {"operating_mode": "AUTO_TRACK"})
-        jogs = [r for r in rows if r["command"] == "manual_jog_start"]
-        self.assertEqual(jogs, [])
+    # -- MENU > CALIBRATION (ADR-005) -------------------------------------------------------
+
+    CAL_RECORDS = [
+        {"id": 1, "name": "AS SHIPPED", "unusable": "", "parts": {
+            "yaw": {"origin": "shipped", "date": "2026-10-02", "run": "yaw-20261002-123425", "from": 0},
+            "pitch": {"origin": "shipped", "date": "2026-10-02", "run": "", "from": 0},
+            "accuracy": {"origin": "shipped", "date": "2026-10-02", "run": "", "from": 0},
+            "extrinsic": {"origin": "shipped", "date": "", "run": "", "from": 0},
+            "bore": {"origin": "shipped", "date": "", "run": "", "from": 0}},
+         "bore": {"mode": "off", "zero_m": 10, "wide": {"trim_right_mrad": 0, "trim_up_mrad": 0}}},
+        {"id": 2, "name": "FRICTION 10-20", "unusable": "", "parts": {
+            "yaw": {"origin": "measured", "date": "2026-10-20", "run": "", "from": 0},
+            "pitch": {"origin": "inherited", "date": "", "run": "", "from": 1},
+            "accuracy": {"origin": "inherited", "date": "", "run": "", "from": 1},
+            "extrinsic": {"origin": "inherited", "date": "", "run": "", "from": 1},
+            "bore": {"origin": "inherited", "date": "", "run": "", "from": 1}},
+         "bore": {"mode": "off", "zero_m": None, "wide": {"trim_right_mrad": 1.5, "trim_up_mrad": -0.3}}},
+        {"id": 4, "name": "BENCH", "unusable": "yaw_servo.json does not parse", "parts": {}, "bore": {}},
+    ]
+
+    def _panel(self, **t):
+        t.setdefault("calibration_records", self.CAL_RECORDS)
+        return self._node("console.log(JSON.stringify(T.hudCalibrationPanel(%s)));" % json.dumps(t))
+
+    def test_the_menu_row_names_the_record_in_force_and_is_absent_without_records(self) -> None:
+        entry = self._node("console.log(JSON.stringify(T.hudCalibrationEntry("
+                           "{calibration_record:{id:2,name:'FRICTION 10-20'}})));")
+        self.assertEqual(entry, {"label": "CALIBRATION ›", "note": "#2 FRICTION 10-20"})
+        switching = self._node("console.log(JSON.stringify(T.hudCalibrationEntry("
+                               "{calibration_record:{id:2,name:'X'},calibration_switching:true})));")
+        self.assertEqual(switching["note"], "#2 X · SWITCHING")
+        self.assertIsNone(self._node("console.log(JSON.stringify(T.hudCalibrationEntry({calibration_record:null})));"))
+
+    def test_the_chips_switch_records_and_the_one_in_force_sends_nothing(self) -> None:
+        p = self._panel(calibration_record={"id": 2, "name": "FRICTION 10-20"}, phase="hold")
+        self.assertEqual([(c["label"], c["command"], c["arg"]) for c in p["chips"]],
+                         [("#1 AS SHIPPED", "set_calibration_record", "1"),
+                          ("#2 FRICTION 10-20", None, "2"),
+                          ("#4 BENCH", "set_calibration_record", "4")])
+        self.assertEqual([c["bad"] for c in p["chips"]], [False, False, True])
+        self.assertEqual([x["text"] for x in p["parts"]],
+                         ["MEASURED 10-20", "FROM #1", "FROM #1", "FROM #1", "FROM #1"])
+        self.assertIn("ZERO ∞", p["bore"])
+        self.assertIn("WIDE R +1.5 U −0.3 MRAD", p["bore"])
+
+    def test_the_shipped_backup_is_locked_and_never_offered_for_removal(self) -> None:
+        # Owner, 2026-10-24: records leave the way they came, but #1 AS SHIPPED is the failsafe backup.
+        p = self._panel(calibration_record={"id": 1, "name": "AS SHIPPED"}, phase="hold")
+        self.assertTrue(p["inForce"]["locked"])
+        self.assertEqual([x["arg"] for x in p["removable"]], ["2", "4"], "never #1, never the record in force")
+        self.assertTrue(all(x["kind"] == "danger" and x["command"] == "delete_calibration_record" for x in p["removable"]))
+        measure = {m["label"]: m for m in p["measure"]}
+        self.assertIn("MEASURE A COPY…", measure, "#1 is never measured into; a copy is")
+        self.assertNotIn("RE-RUN", measure)
+        p2 = self._panel(calibration_record={"id": 2, "name": "FRICTION 10-20"}, phase="hold")
+        self.assertFalse(p2["inForce"]["locked"])
+        self.assertEqual([x["arg"] for x in p2["removable"]], ["4"])
+
+    def test_runs_are_shown_greyed_until_stage_two(self) -> None:
+        p = self._panel(calibration_record={"id": 2, "name": "F"}, phase="hold", calibration_unverified=True)
+        verify = [m for m in p["measure"] if m["label"] == "VERIFY"][0]
+        self.assertEqual(verify["kind"], "gated")
+        self.assertTrue(verify["nudge"], "a switch since the last VERIFY: a nudge, never a run")
+        self.assertIn("NOT VERIFIED SINCE SWITCH", verify["note"])
+        self.assertIn("COMES WITH STAGE 2", verify["note"])
+        self.assertEqual(p["stop"], {"label": "STOP MOTION", "command": "hold", "arg": "", "kind": "stop"})
+
+    def test_a_switch_shows_its_bar_and_says_why_when_it_is_not_applied(self) -> None:
+        wait = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_switching=True,
+                           calibration_switch_from=1, calibration_progress=0)
+        self.assertEqual(wait["bar"]["mode"], "wait")
+        self.assertIn("#1 → #2", wait["notes"][0]["text"])
+        self.assertIsNotNone(wait["chips"][1]["command"], "choosing again retries")
+        fill = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_switching=True, calibration_progress=0.5)
+        self.assertEqual(fill["bar"], {"mode": "fill", "fraction": 0.5})
+        over = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_switching=True,
+                           calibration_overdue=True, calibration_blocked="simulated refusal")
+        self.assertEqual(over["bar"]["mode"], "overdue")
+        self.assertTrue(over["notes"][0]["warn"])
+        self.assertIn("simulated refusal", over["notes"][0]["text"])
+        blocked = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_blocked="record #2: x")
+        self.assertIn("HOME is refused", blocked["notes"][0]["text"])
+
+    def test_the_pad_dims_and_stops_jogging_while_a_swap_holds_the_turret(self) -> None:
+        self.assertIn("!t.target_type_switching && !t.calibration_switching", HUD_JS)
+        self.assertIn('pad.classList.toggle("held"', HUD_JS)
+        self.assertIn("#manual-pad.held", HUD_CSS)
 
     # -- MENU / DIAG -------------------------------------------------------------------
 
