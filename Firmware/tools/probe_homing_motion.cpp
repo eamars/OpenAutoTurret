@@ -127,9 +127,19 @@ bool known_contact_bound(AxisId axis, int dir) {
   if(home.state()!=AxisHomeState::ApproachFine) return false;
   // The previously observed contact has disappeared. Fine home must not
   // traverse another 150 degrees trying to find a replacement obstruction.
+  // Since 2026-10-25 (owner: no fault unless it is a hazard) it backs off
+  // instead of standing there, and the failure is the station's to retry: a
+  // stop that is really gone is met by the retry's coarse approach, which is
+  // bounded by a full traverse and faults as a hazard.
   fb.pos_rad=.75*kDeg2Rad*dir;
-  const auto ds=home.step(fb);
-  const bool ok=home.terminal() && !home.result().valid && ds.hold;
+  bool into_stop=false;
+  for(int i=0;i<2000 && !home.terminal();++i) {
+    const auto ds=home.step(fb);
+    if(!ds.hold && (ds.position_move ? (ds.target_rad-fb.pos_rad)*dir>1e-9 : ds.velocity_rad_s*dir>0)) into_stop=true;
+    if(ds.position_move) fb.pos_rad=ds.target_rad;  // the backoff arrives
+    fb.t_ns+=5'000'000;
+  }
+  const bool ok=home.terminal() && !home.result().valid && !home.result().hazard && !into_stop;
   std::cout<<axis_name(axis)<<" dir="<<dir<<" missing_known_contact_aborts="<<ok<<'\n';
   return ok;
 }
