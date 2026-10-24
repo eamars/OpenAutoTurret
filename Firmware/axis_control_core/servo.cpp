@@ -37,7 +37,7 @@ bool Servo::reset(double t,double q,double v,double current) {
   // Bumpless: whatever was applied becomes the integral's starting point.
   integral_=std::clamp(current-friction(0.)-p_.load,-p_.integral_cap,p_.integral_cap);
   applied_history_.clear(); applied_history_.push_back({t,current});
-  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; last_direction_=0; ahead_since_=-1;
+  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; last_direction_=0;
   ready_=true; return true;
 }
 bool Servo::reseed(double t,double q,double v,double applied) {
@@ -153,21 +153,32 @@ ServoOutput Servo::step(double now,double q_ref,double v_ref,double a_ref) {
   const double beyond=std::max(0.,std::abs(e)-p_.friction_correction_deadband);
   const double motion=v_ref+p_.friction_correction_rate*(e>0?beyond:-beyond);
   const double fr=friction_at(motion,q);
-  // The integral holds the friction feedforward's shortfall along that motion (yaw carries no
-  // load), so when the motion reverses the shortfall reverses with it. Left in the old frame it
-  // had to unwind through zero first: on the 5x payload (kq 13, ki 36) the 1 deg/s ramps stood
-  // 1.2-2.4 s at their start (2026-10-25) and the walker's reversals lagged 0.9 s.
+  // The integral holds the friction feedforward's shortfall along the commanded motion (yaw
+  // carries no load), so when the motion reverses the shortfall reverses with it. Left in the old
+  // frame it had to unwind through zero first: on the 5x payload (kq 13, ki 36) the 1 deg/s ramps
+  // stood 1.2-2.4 s at their start (2026-10-25) and the walker's reversals lagged 0.9 s. The frame
+  // is the last motion's through a rest: a rest's own winding is toward the target and the
+  // integral keeps doing that by itself.
   const int direction=motion>p_.hold_speed?1:motion<-p_.hold_speed?-1:0;
-  if (direction && last_direction_ && direction!=last_direction_) integral_=-integral_;
-  if (direction) last_direction_=direction;
-  // Ahead of a moving reference and standing (the stall detector's displacement judgement), the
-  // error is the reference's remaining travel, not a force the axis resists: integrating it wound
-  // the loop against the move about to start. An axis moving ahead still integrates, so an
-  // over-estimating feedforward is still corrected.
-  const bool ahead=direction && e*direction<0;
-  if (!ahead) ahead_since_=-1;
-  else if (ahead_since_<0) { ahead_since_=now; ahead_position_=q; }
-  const bool standing_ahead=ahead && std::abs(q-ahead_position_)<=p_.stall_speed*(now-ahead_since_)+2*2*M_PI/8192;
+  if (direction) {
+    if (last_direction_ && direction!=last_direction_) integral_=-integral_;
+    last_direction_=direction;
+  }
+  // Ahead of a reference that is still on its way (e against the direction, and the reference's
+  // stopping distance v_ref^2 / 2 a_ref covers the gap -- an axis beyond that has overshot the
+  // target and the integral works toward it as usual), the error is the reference's remaining
+  // travel, not a force the axis resists, unless the feedforward is carrying the axis ahead -- and
+  // only then may the integral take the excess out. "Carried" means advancing along the direction
+  // faster than the stall detector's stall_speed but no faster than twice the reference: the free
+  // slip the mount shows at every force reversal runs 2-9x the reference (0.3-0.9 deg in 0.2 s),
+  // the spring-back that follows it runs the other way, and a stand does not run at all; all three
+  // read as standing. MEASURE 03:04: slip and spring-back wound +0.25-0.36 A against ramp-1 and
+  // step-2.0 in under a second, and that integral is what the ramps then stood for.
+  const bool reference_reaches=!(a_ref*v_ref<0) || std::abs(e)<v_ref*v_ref/(2*std::abs(a_ref));
+  const bool ahead=direction && e*direction<0 && reference_reaches;
+  const double advance=v*direction;
+  const bool carried=advance>p_.stall_speed && advance<2*std::abs(v_ref);
+  const bool standing_ahead=ahead && !carried;
   // Learning: steady tracking in one direction moves persistent integral into
   // the friction map at this angle; the sum (map+integral) is unchanged.
   if (p_.friction_learning_rate>0 && std::abs(v_ref)>=p_.friction_learning_speed && !last_saturated_) {

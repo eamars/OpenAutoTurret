@@ -155,16 +155,62 @@ void no_integration_while_standing_ahead_of_an_approaching_reference() {
   const auto passed=run(s,t,300,0.,.004,.05);
   expect(passed.integral>.1,"integration resumes once the axis is behind");
 }
+// The axis follows a prescribed true trajectory q(t) against a reference q_ref(t) moving at v_ref.
+template <class Q,class R>
+ServoOutput follow(Servo& s,double& t,int steps,Q q_of,R q_ref_of,double v_ref) {
+  ServoOutput out{};
+  for(int k=0;k<steps;++k) {
+    t+=.001; expect(s.observe_encoder(t,q_of(t)),"encoder");
+    out=s.step(t,q_ref_of(t),v_ref,0.); expect(out.status==int(ServoStatus::Ok),"ok"); s.acknowledge(true,out.limited);
+  }
+  return out;
+}
 void integration_continues_while_moving_ahead() {
   // The axis moves with the reference but 4 mrad ahead of it (an over-estimating feedforward):
-  // the integral still winds negative and takes the excess out.
+  // the integral winds negative and takes the excess out.
   Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
-  double t=0.,q=0.; ServoOutput out{};
-  for(int k=0;k<300;++k) {
-    q+=.05*.001; t+=.001; expect(s.observe_encoder(t,q),"encoder");
-    out=s.step(t,q-.004,.05,0.); expect(out.status==int(ServoStatus::Ok),"ok"); s.acknowledge(true,out.limited);
-  }
-  expect(out.integral<-.1,"an axis running ahead of the reference still unwinds the feedforward excess");
+  double t=0.;
+  const auto out=follow(s,t,300,[](double t){return .05*t;},[](double t){return .05*t-.004;},.05);
+  expect(out.integral<-.1,"an axis carried ahead of the reference unwinds the feedforward excess");
+}
+void a_slip_and_spring_back_ahead_of_the_reference_do_not_integrate() {
+  // MEASURE 2026-10-25 03:04: at a ramp start the mount lets the motor slip 0.5 deg ahead in 0.2 s
+  // (2.3x the reference speed), then spring back toward the reference at 1 deg/s. Neither is a
+  // feedforward excess: the integral must not move while the reference is still on its way.
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.;
+  const auto ref=[](double t){return -.004+.02*t;};         // reference 4 mrad behind, coming up at 0.02 rad/s
+  // (The velocity estimate passes through the "carried" band for a few ms as the slip starts: a
+  // few mA, against 0.1 A and more for a carried axis.)
+  auto out=follow(s,t,200,[](double t){return .045*t;},ref,.02);   // slip: 9 mrad ahead in 0.2 s
+  expect(std::abs(out.integral)<.03,"no integration during the slip ahead");
+  out=follow(s,t,200,[](double t){return .009-.0175*(t-.2);},ref,.02);  // spring-back at 1 deg/s, still ahead
+  expect(std::abs(out.integral)<.03,"no integration during the spring-back");
+  out=follow(s,t,600,[](double){return .0055;},ref,.02);                  // the reference passes: behind
+  expect(out.integral>.1,"integration resumes once the reference has passed");
+}
+void an_overshot_target_integrates_while_the_reference_settles() {
+  // The reference decelerates toward its target (v_ref 0.01, a_ref -0.1: 0.5 mrad to go) while the
+  // axis already sits 4 mrad beyond it. That is an overshoot, not a reference on its way: the
+  // integral winds toward the target instead of waiting.
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.; ServoOutput out{};
+  for(int k=0;k<300;++k) { t+=.001; expect(s.observe_encoder(t,0.),"encoder"); out=s.step(t,-.004,.01,-.1); s.acknowledge(true,out.limited); }
+  expect(out.integral<-.1,"an overshot target is worked toward during the settling tail");
+}
+void the_frame_survives_a_rest() {
+  // After a - move the reference stops with the axis 6 mrad short of the target; the rest winds
+  // the integral further toward it (still along -). The next move going + reverses the integral:
+  // the shortfall now points along the new motion.
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.;
+  auto out=run(s,t,300,0.,-.004,-.05);
+  expect(out.integral<-.1,"integral winds along the - move");
+  out=run(s,t,300,0.,-.006,0.);
+  expect(out.integral<-.2,"the rest keeps working toward the target");
+  const double rested=out.integral;
+  out=run(s,t,1,0.,-.006,.05);
+  expect(std::abs(out.integral+rested)<.02,"a move the other way reverses the rested integral");
 }
 void friction_feedforward_follows_the_reference_only() {
   Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
@@ -202,6 +248,9 @@ int main() {
     integral_reverses_with_the_motion();
     no_integration_while_standing_ahead_of_an_approaching_reference();
     integration_continues_while_moving_ahead();
+    a_slip_and_spring_back_ahead_of_the_reference_do_not_integrate();
+    an_overshot_target_integrates_while_the_reference_settles();
+    the_frame_survives_a_rest();
     excitation_does_not_drag_the_slew_limit();
     stall_rock_waits_for_a_stopped_reference();
     travel_governor_stops_before_the_end();

@@ -24,13 +24,21 @@ were calibrated how.
 The C++ that commissiond and the simulator share lives in `axis_control_core/`:
 - `servo.*`: the yaw position servo. Its integral lives in the friction frame (2026-10-25): it
   holds the friction feedforward's shortfall along the commanded motion, so it reverses sign when
-  the motion reverses, and it does not grow while the axis stands ahead of a reference still on its
-  way to it (the error then is the reference's travel, not a force the axis resists). Left in the
-  old frame, the 5× payload's 1 deg/s ramps stood 1.2–2.4 s at their start (MEASURE 02:04: the
-  integral 0.25 A the wrong way, 0.3 A/s to unwind it, speed ratios 1.12–1.21) and the walker's
-  reversals lagged 0.9 s. On the simulated station (`payload_5x_knee`, ±0.15 A, three starts, two
-  noise draws, the station's kq 13 / ki 36 servo) the ramps go from 4 of 18 passes failing
-  (1.14–1.16) to none (0.91–1.06); step finals 1.27° → 0.76°, long-move finals and stalls unchanged.
+  the motion reverses (the frame is the last motion's through a rest: a rest's own winding is
+  toward the target), and while the axis is ahead of a reference still on its way to it — the
+  reference's stopping distance v²/2a covers the gap — it grows only if the feedforward is carrying
+  the axis along with the reference (advancing faster than `stall_speed` but no faster than twice
+  the reference). A stand, the mount's free slip past the reference (0.3–0.9° in 0.2 s, 2–9× the
+  reference speed) and the spring-back toward it that follows are the reference's remaining
+  travel, not a feedforward excess. Left in the old frame, the 5× payload's 1 deg/s ramps stood
+  1.2–2.4 s at their start (MEASURE 02:04: the integral 0.25 A the wrong way, 0.3 A/s to unwind it,
+  speed ratios 1.12–1.21); with the frame but a displacement test for "standing", the slip and the
+  spring-back still wound 0.25–0.36 A against the move (MEASURE 03:04: ramp−1 1.104). On the
+  simulated station (`payload_5x_knee`, ±0.15 A, three starts, two noise draws, the station's
+  kq 14 / ki 43 servo) the ramps read 0.94–1.05 (stiff plant) and 0.96–1.07 (a mount compliance of
+  0.5° per 0.2 A), against 0.93–1.07 / 0.96–1.08 before the refinement and 4 of 18 passes failing
+  before the frame; stalls 0, long-move finals unchanged, step finals 1.07° → 1.03°, worst step
+  overshoot 0.87° → 1.11° (the one metric that gave way; the sim has no free slip to gain from).
 - `position_loop.*`: the pitch host loop.
 - `session_parts.hpp`: the reference table, the excitation sweep and the oscillation guard.
 - `servo_config.*`: the asset loader.

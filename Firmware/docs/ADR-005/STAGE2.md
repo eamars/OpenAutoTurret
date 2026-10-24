@@ -459,6 +459,48 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     - What the next MEASURE on #5 must show: both passes accepted with ramp±1 inside 0.93–1.07; in
       the journals the integral flipping sign at each ramp start and walker reversal, and no winding
       while the axis stands with the reference approaching (`i` flat until e crosses zero).
+  - **MEASURE 03:04 (release 62f1c52): one pass accepted, the other missed by 0.004 (ramp−1 1.104,
+    0 stalls). Refinement (Fable, 05:00; branch `claude/yaw-friction-frame-2`): "standing" was the
+    wrong test, and the frame must survive a rest.**
+    - On the journals (`ramp_start.py`, usecase1): at ramp−1 the motor slips 0.5° ahead at
+      2–3 deg/s under 0.1 A, then springs back toward the reference at 1 deg/s; the displacement
+      test read both as "moving", so the integral wound +0.02 → +0.26 A against the move in 0.8 s,
+      the axis stood until 1.6 s after the reference had passed, lurched, and stuck again at 2.3 s
+      (feedforward −0.34 A against a −0.59 A breakaway). At step−2.0 the same slip (9 deg/s, 1.5°
+      ahead) and spring-back wound −0.13 → +0.36 A (1.1 A/s at that error); the rest unwound it only
+      to +0.28, and the flip at ramp+1 made that −0.26 A against the ramp. The axis then crept at
+      0.3–0.5 deg/s on the feedforward alone for a second.
+    - Rules now (servo.cpp, no parameter): (1) the frame is the last motion's, through a rest (a
+      rest winds toward the target by itself; turning the frame to the target at rest and flipping
+      there kicked the axis back and forth across the target — step overshoot 2.9° in the sim);
+      (2) "ahead" also requires the reference to still reach the axis — its stopping distance
+      v_ref²/2a_ref covers the gap — an axis beyond that has overshot and the integral works toward
+      the target (frozen, an overshot step sat 0.6° off for its whole settling tail); (3) while
+      ahead, the integral grows only if the feedforward is carrying the axis: advancing along the
+      direction faster than stall_speed but no faster than twice the reference. Velocity alone with
+      a 0.3 s qualifier was tried: it read the sim's gentle feedforward run-ahead on steps as
+      standing and doubled their overshoot. Five C++ tests: reversal, standing ahead, carried ahead,
+      slip + spring-back, overshot target, frame through a rest.
+    - Sim A/B (03:04 servo kq 14.4 / ki 43 / cap 0.75 on `payload_5x_knee` ±0.15 A, three starts,
+      two noise draws):
+
+      | plant | servo | ramp±1 and all ramps | stalls | step final | step overshoot | long final |
+      |---|---|---|---|---|---|---|
+      | stiff | e89e521 | 0.929–1.066 | 0 | 1.07° | 0.87° | 0.55° |
+      | stiff | refined | 0.940–1.046 | 0 | 1.03° | 1.11° | 0.55° |
+      | compliant | e89e521 | 0.962–1.075 | 0 | 0.82° | 0.77° | 0.34° |
+      | compliant | refined | 0.959–1.071 | 0 | 0.80° | 0.89° | 0.34° |
+
+      The ramps now sit inside 0.93–1.07 on every pass with margin to both gates; the sim cannot
+      show the refinement's real gain (it has no free slip), and its one cost is step overshoot in
+      a few cells (+0.2–0.5°, conformance, not gated). A 2 deg/s floor on the carried band did not
+      move it (1.12°), so it is not the band; left as is.
+    - Not changed, still the owner's call: `friction_correction_rate` 4.4/s (rest offsets 0.4–0.5°
+      → ~0.3°, ramps 0.94–1.05 → 0.97–1.04 on e89e521's numbers).
+    - What the next MEASURE on #5 must show: ramp±1 inside 0.93–1.07 on both passes; in the journals
+      `i` flat through the slip and the spring-back at each ramp start (0.1–0.9 s), the flip at the
+      ramp start carrying the previous rest's shortfall along the new motion (not against it), and
+      the integral winding only once the reference has passed.
 - **Homing that is not a hazard no longer faults (owner, 2026-10-25 01:40: "no fault state if the
   issue is not safety related"; `25ef55a`, probe update `f2ca460`).**
   - The 00:28 FAULT was a repeatability miss: no hazard.
