@@ -1,6 +1,7 @@
 #include "capture.hpp"
 #include "readback.hpp"
 #include <arpa/inet.h>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <linux/can.h>
+#include <linux/sock_diag.h>
 #include <poll.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -35,6 +37,33 @@ struct Loopback {
     return sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr))==sizeof(frame);
   }
 };
+// Loopback delivery is not synchronous: sendto() can return before the datagram reaches the
+// receiving socket (WSL2's 6.18 kernel, 2026-10-24: not one lone datagram in 20 was readable at
+// once, and 853 of a 1000 burst had landed when the loop ended). Reading or counting straight
+// after sending is reading a race, so the tests first wait, up to a second, until every datagram
+// sent has landed: queued (receive-queue bytes over one frame's truesize) or dropped.
+std::array<uint32_t,SK_MEMINFO_VARS> meminfo(int fd) {
+  std::array<uint32_t,SK_MEMINFO_VARS> m{}; socklen_t size=sizeof(m);
+  if (getsockopt(fd,SOL_SOCKET,SO_MEMINFO,m.data(),&size)) throw std::runtime_error("SO_MEMINFO");
+  return m;
+}
+uint32_t frame_truesize() {
+  static const uint32_t size=[] {
+    Loopback probe; pollfd ready{probe.rx,POLLIN,0};
+    if (!probe.send() || poll(&ready,1,1000)<=0) throw std::runtime_error("loopback probe");
+    return meminfo(probe.rx)[SK_MEMINFO_RMEM_ALLOC];  // exactly one frame has landed
+  }();
+  return size;
+}
+bool landed(int rx, uint32_t sent) {
+  const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+  do {
+    const auto m=meminfo(rx);
+    if (m[SK_MEMINFO_RMEM_ALLOC]/frame_truesize()+m[SK_MEMINFO_DROPS]>=sent) return true;
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+  } while (std::chrono::steady_clock::now()<deadline);
+  return false;
+}
 Receipt reply(int64_t t, int type=17, int motor=127) {
   Receipt r; r.frame.id=ota::cybergear::pack_ext_id(type,motor,0);
   r.frame.data[0]=0x1a; r.frame.data[1]=0x70;
@@ -134,6 +163,7 @@ TEST(Receiver, KernelReportsRealDatagramOverflow) {
   Receipt r; uint64_t observed_drops=0;
   can_frame frame{}; frame.can_id=0; frame.can_dlc=8;
   for (int i=0;i<1000;++i) ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
+  ASSERT_TRUE(landed(rx,1000));
   auto receive=[&]() {
     const auto previous=r.kernel_monotonic_ns;
     try { return receiver.receive(r); }
@@ -162,7 +192,8 @@ TEST(Receiver, FinalCounterDetectsLossBeforeAnyOverflowNotificationIsDequeued) {
   EXPECT_EQ(receiver.kernel_drops(),0u);
   can_frame frame{}; frame.can_dlc=8;
   for (int i=0;i<1000;++i) ASSERT_EQ(sendto(tx,&frame,sizeof(frame),0,reinterpret_cast<sockaddr*>(&addr),len),sizeof(frame));
-  // No receive() call and no subsequent trigger packet: loss is observable now.
+  // No receive() call and no subsequent trigger packet: once the burst has landed, loss is observable.
+  ASSERT_TRUE(landed(rx,1000));
   EXPECT_GT(receiver.kernel_drops(),0u);
   close(rx); close(tx);
 }
@@ -174,15 +205,19 @@ TEST(Receiver, FinalCounterDetectsLossBeforeAnyOverflowNotificationIsDequeued) {
 TEST(Receiver, StampsAtQueueTimeFromConstructionAndDiscardsWhatWasAlreadyQueued) {
   Loopback link;
   for (int i=0;i<5;++i) ASSERT_TRUE(link.send());
+  ASSERT_TRUE(landed(link.rx,5)) << "queued before construction";
   TimestampedReceiver receiver(link.rx);
   EXPECT_EQ(receiver.startup_discarded(),5u);
   Receipt r; EXPECT_FALSE(receiver.receive(r));
-  // Sent straight after construction, before any deferred work could have been waited for here.
+  // Sent straight after construction, before any deferred work could have been waited for here;
+  // read 2 ms after it queued, so a queue-time stamp is at least that old.
   ASSERT_TRUE(link.send());
+  ASSERT_TRUE(landed(link.rx,1));
   std::this_thread::sleep_for(std::chrono::milliseconds(2));
   ASSERT_TRUE(receiver.receive(r));
   EXPECT_GE(r.dequeue_ns-r.kernel_monotonic_ns,1'000'000) << "stamped when read, not when queued";
   for (int i=0;i<50;++i) ASSERT_TRUE(link.send());
+  ASSERT_TRUE(landed(link.rx,50));
   int received=0;
   while (receiver.receive(r)) ++received;
   EXPECT_EQ(received,50);
