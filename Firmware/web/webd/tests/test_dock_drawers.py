@@ -367,14 +367,16 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertEqual((between["session"]["label"], between["session"]["text"]), ("FITTING AND DESIGNING", "TURRET HELD"))
         self.assertIsNone(self._node("console.log(JSON.stringify(T.hudCalibrationRun({calibrating:false})));"))
 
-    def test_the_panel_says_how_the_last_run_ended(self) -> None:
-        last = lambda r: self._node("console.log(JSON.stringify(T.hudCalibrationLastRun(%s)));" % json.dumps({"calibration_run": r}))
-        good = last({"id": 1, "kind": "VERIFY", "active": False, "state": "done", "verdict": "REUSE_EXACT", "elapsed_s": 131})
-        self.assertEqual((good["text"], good["tone"], good["elapsed"]), ("VERIFY · REUSE_EXACT", "good", "2:11"))
-        self.assertEqual(last({"kind": "VERIFY", "active": False, "state": "done", "verdict": "UPDATE_PARAMETERS"})["tone"], "warn")
-        self.assertEqual(last({"kind": "RERUN", "active": False, "state": "failed", "verdict": "calibd is not answering"})["text"],
-                         "RE-RUN · calibd is not answering")
-        self.assertIsNone(last({"kind": "VERIFY", "active": True}))
+    def test_the_panel_says_how_the_record_s_own_last_run_ended(self) -> None:
+        last = lambda rec, run=None: self._node("console.log(JSON.stringify(T.hudCalibrationLastRun(%s, %s)));" % (
+            json.dumps({"calibration_run": run}), json.dumps(rec)))
+        rec = {"id": 2, "last_run": {"kind": "VERIFY", "verdict": "REUSE_EXACT", "run": "0002-verify-x", "date": "2026-10-24"}}
+        self.assertEqual(last(rec), {"text": "VERIFY · REUSE_EXACT", "tone": "good", "elapsed": "10-24"})
+        just = last(rec, {"kind": "VERIFY", "active": False, "state": "done", "verdict": "REUSE_EXACT", "elapsed_s": 61})
+        self.assertEqual(just["elapsed"], "1:01", "the run that just ended says how long it took")
+        drift = dict(rec, last_run=dict(rec["last_run"], verdict="UPDATE_PARAMETERS"))
+        self.assertEqual(last(drift)["tone"], "warn")
+        self.assertIsNone(last({"id": 2, "last_run": None}), "a record with no run says nothing")
 
     def test_a_run_dims_the_dock_hides_the_pad_and_takes_the_drawer(self) -> None:
         self.assertIn('!t.calibration_switching && !t.calibrating', HUD_JS)

@@ -53,6 +53,8 @@ struct Record {
   std::filesystem::path dir;
   std::map<std::string, PartInfo> parts;   // yaw, pitch, accuracy, extrinsic, bore
   Bore bore;
+  // record.json's last_run: the latest run on this record (ADR-005 D6, LAST RUN). Empty kind: none.
+  struct LastRun { std::string kind, verdict, run, date; } last_run;
   std::string unusable;                    // why it cannot be put in force; empty when it can
   std::filesystem::path path(const std::string& part) const;
 };

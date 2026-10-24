@@ -545,7 +545,7 @@ function hudCalibrationPanel(t, opts) {
     id: x.id, title: x.name, command: "delete_calibration_record", arg: String(x.id), kind: "danger" }));
   return { inForce: { id: cur.id, name: cur.name, locked: locked }, chips: chips, bar: bar, notes: notes,
            parts: parts, unmeasured: unmeasured, unmeasuredFrom: unmeasured ? rp.yaw.from : null,
-           lastRun: hudCalibrationLastRun(t),
+           lastRun: hudCalibrationLastRun(t, r),
            measure: measure, removable: removable,
            stop: { label: "STOP MOTION", command: "hold", arg: "", kind: "stop" } };
 }
@@ -658,14 +658,18 @@ function hudCalibrationRun(t) {
             note: "ends the session now; both axes held; installs nothing" }
   };
 }
-// The last run, once it has ended: what the panel says under WHAT #N KNOWS.
-function hudCalibrationLastRun(t) {
+// The record's own last run (record.json's last_run, ADR-005 D6), under WHAT #N KNOWS. A run that
+// just ended on this record says how long it took too.
+function hudCalibrationLastRun(t, record) {
+  const l = record && record.last_run;
   const r = t && t.calibration_run;
-  if (!r || r.active) return null;
-  const verdict = String(r.verdict || "");
-  const good = r.state === "done" && !/^NOT ACCEPTED|^STOPPED/.test(verdict) && !/UPDATE_PARAMETERS/.test(verdict);
-  return { text: hudRunKindName(r.kind) + " · " + (verdict || String(r.state || "").toUpperCase()),
-           tone: good ? "good" : "warn", elapsed: hudMinSec(r.elapsed_s) };
+  if (!l || !l.kind) return null;
+  const verdict = String(l.verdict || "");
+  const good = !/^NOT |^STOPPED|calibd|UPDATE_PARAMETERS/.test(verdict) && verdict !== "";
+  const date = String(l.date || "").slice(5);
+  const ended = r && !r.active && r.kind === l.kind && r.verdict && verdict.indexOf(String(r.verdict).split(";")[0]) === 0;
+  return { text: hudRunKindName(l.kind) + " · " + (verdict || "NO VERDICT"), tone: good ? "good" : "warn",
+           elapsed: ended ? hudMinSec(r.elapsed_s) : date };
 }
 
 function hudSpeedRows(t) {

@@ -141,6 +141,8 @@ Record read_record(const fs::path& dir, int id) {
   try {
     const auto doc = YAML::LoadFile((dir / "record.json").string());
     r.name = str(doc["name"]);
+    if (const auto l = doc["last_run"]; l && l.IsMap())
+      r.last_run = {str(l["kind"]), str(l["verdict"]), str(l["run"]), str(l["date"])};
     for (const char* part : kParts) {
       const auto p = doc["parts"][part];
       if (!p || !p.IsMap()) { r.unusable = std::string("record.json has no ") + part + " part"; return r; }
@@ -266,7 +268,11 @@ std::string records_json(const std::vector<Record>& records) {
     // zero_m null = infinity (no parallax).
     o += "},\"bore\":{\"mode\":\"" + std::string(r.bore.enabled ? "manual_depth" : "off") +
          "\",\"zero_m\":" + num(r.bore.zero_m) + ",\"wide\":" + camera_json(r.bore.wide) +
-         ",\"detail\":" + camera_json(r.bore.detail) + "}}";
+         ",\"detail\":" + camera_json(r.bore.detail) + "},\"last_run\":" +
+         (r.last_run.kind.empty() ? std::string("null")
+                                  : "{\"kind\":\"" + esc(r.last_run.kind) + "\",\"verdict\":\"" + esc(r.last_run.verdict) +
+                                        "\",\"run\":\"" + esc(r.last_run.run) + "\",\"date\":\"" + esc(r.last_run.date) + "\"}") +
+         "}";
   }
   return o + "]";
 }
