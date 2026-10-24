@@ -22,7 +22,15 @@ were calibrated how.
 | `templates/` | Session manifest skeletons (station topology, IMU calibration, limits). |
 
 The C++ that commissiond and the simulator share lives in `axis_control_core/`:
-- `servo.*`: the yaw position servo.
+- `servo.*`: the yaw position servo. Its integral lives in the friction frame (2026-10-25): it
+  holds the friction feedforward's shortfall along the commanded motion, so it reverses sign when
+  the motion reverses, and it does not grow while the axis stands ahead of a reference still on its
+  way to it (the error then is the reference's travel, not a force the axis resists). Left in the
+  old frame, the 5× payload's 1 deg/s ramps stood 1.2–2.4 s at their start (MEASURE 02:04: the
+  integral 0.25 A the wrong way, 0.3 A/s to unwind it, speed ratios 1.12–1.21) and the walker's
+  reversals lagged 0.9 s. On the simulated station (`payload_5x_knee`, ±0.15 A, three starts, two
+  noise draws, the station's kq 13 / ki 36 servo) the ramps go from 4 of 18 passes failing
+  (1.14–1.16) to none (0.91–1.06); step finals 1.27° → 0.76°, long-move finals and stalls unchanged.
 - `position_loop.*`: the pitch host loop.
 - `session_parts.hpp`: the reference table, the excitation sweep and the oscillation guard.
 - `servo_config.*`: the asset loader.

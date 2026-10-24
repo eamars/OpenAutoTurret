@@ -416,6 +416,49 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
       `stall_recovery.current_A` equal to it in the accepted asset; ≤ 2 stalls per validation pass;
       in the journals no rock while `i` is still rising, and after the campaign's positioning moves
       the integral reaching the cap before any rock.
+  - **MEASURE 02:04 confirmed the cap (0 stalls, cap 0.78) and failed the slow ramps (1.145 /
+    1.210 / 1.124). Study and fix (Fable, 03:30; branch `claude/yaw-stuck-start`): the integral
+    belongs to the direction of motion.**
+    - On the journals (`ramp_start.py`): before ramp+1 the axis sits 0.43–0.47° short of the
+      previous step's target, pulled by only 0.05–0.10 A (its integral, +0.19 A wound the wrong way
+      during that step's own slip, had spent the whole rest unwinding). At the ramp start the
+      feedforward steps to +0.33 A; the motor moves 0.5° at 2 deg/s under 0.1–0.15 A — the same free
+      slip every force reversal shows (step+0.2 travels 0.32°, step+0.5 0.42°, the stall rocks moved
+      the axis 0.1–0.24° backwards), so the mount has about 0.5° of lost motion between motor and
+      load — then stands 0.4–2.4 s while the integral winds to −0.30 A against the move and the
+      reference passes it; P + I need 0.3 A over the 0.33 A feedforward to reach the 0.63 A breakaway.
+      On the steady ramps the integral is +0.05…+0.13 A moving + and −0.03…−0.11 A moving −, and at
+      the walker's 13 reversals it takes a median 0.9 s (max 1.9 s) to cross to the new direction.
+    - Invariant (servo.cpp): the integral holds the friction feedforward's shortfall along the
+      commanded motion (yaw carries no load). Two clauses: it reverses sign when the motion
+      reverses (direction = sign of v_ref + correction, through hold_speed), and it does not grow
+      while the axis stands ahead of a moving reference (the stall detector's displacement
+      judgement) — an axis moving ahead still integrates, so an over-estimating feedforward is still
+      corrected. Three C++ unit tests beside the servo tests. No new parameter.
+    - Proof (`stuck_start.py`; the 02:04 servo kq 13 / ki 36 with the fit's creep term on
+      `payload_5x_knee` at −0.15 / 0 / +0.15 A, starts 1.0 / 3.5 / 5.2, two noise draws, and the same
+      on a plant with a mount compliance of 0.5° per 0.2 A, which the sim otherwise lacks):
+
+      | plant | servo | ramp ratios | failed passes | worst step final | worst long final | stalls |
+      |---|---|---|---|---|---|---|
+      | stiff | origin/main | 0.912–1.156 | 4 / 18 (ramp+1 1.14–1.16) | 1.27° | 0.78° | 0 |
+      | stiff | friction frame | 0.911–1.056 | 0 / 18 | 0.76° | 0.78° (same cells) | 0 |
+      | compliant | origin/main | 0.963–1.096 | 0 / 18 | 0.68° | 0.45° | 0 |
+      | compliant | friction frame | 0.966–1.082 | 0 / 18 | 0.56° | 0.45° | 0 |
+
+      Candidates that did not do it: freezing the integral while standing ahead, alone (5 / 9: the
+      sim's integral is already wound against before the ramp, so the reversal is what must flip
+      it); a higher cap (nothing); `friction_correction_rate` alone (3 / 9).
+    - The pre-ramp rest offset (0.4–0.5° ahead) is the hold band plus the loop's lack of
+      stiffness doing what they do (kq 13 holds 0.1 A at 0.45°), and it is what leaves the low end
+      of the ratios at 0.91. The lever for it is the existing `friction_correction_rate` (friction
+      feedforward toward the target outside a deadband of the hold band): at 4.4/s on top of the fix
+      the ratios tighten to 0.943–1.041 / 0.971–1.052 and step finals fall to 0.42°, with 0 stalls.
+      Not enabled here — it changes every asset's behaviour at rest (a 0.7 A push toward the target
+      on the bare turret beyond 0.23°); the owner's call, with those numbers.
+    - What the next MEASURE on #5 must show: both passes accepted with ramp±1 inside 0.93–1.07; in
+      the journals the integral flipping sign at each ramp start and walker reversal, and no winding
+      while the axis stands with the reference approaching (`i` flat until e crosses zero).
 - **Homing that is not a hazard no longer faults (owner, 2026-10-25 01:40: "no fault state if the
   issue is not safety related"; `25ef55a`, probe update `f2ca460`).**
   - The 00:28 FAULT was a repeatability miss: no hazard.

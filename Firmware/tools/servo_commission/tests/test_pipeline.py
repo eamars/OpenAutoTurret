@@ -89,6 +89,37 @@ class Design(unittest.TestCase):
         self.assertEqual(heavy["stall_recovery"]["current_A"], 1.2)
         self.assertEqual(RULES["friction_drift_A"], 0.15)
 
+    def test_slow_ramps_with_the_station_servo_under_drift(self):
+        """MEASURE 2026-10-25 02:04 (PAYLOAD 10-24): kq 13 / ki 36 (the crosstalk allowance's gain for
+        this payload), the fit's creep term (friction FF 0.33 A at 1 deg/s against 0.6 A of breakaway),
+        and the bearing 0.15 A stickier than at the survey. The 1 deg/s ramps stood 1.2-2.4 s at their
+        start -- the integral left in the previous move's frame (0.25 A the wrong way) plus 0.3 A/s to
+        unwind it -- and read speed ratios 1.12-1.21. With the integral in the friction frame (servo.cpp:
+        it reverses with the motion and does not grow while the axis stands ahead of an approaching
+        reference) the same passes read 0.94-1.05 on this plant. Stalls stay at 0 (the cap rule)."""
+        t = truth("payload_5x_knee")["yaw"]
+        t.pop("friction_drift_A", None)
+        plant = dict(t, coulomb_positive=t["coulomb_positive"] + 0.15, coulomb_negative=t["coulomb_negative"] + 0.15)
+        f = {"positive": {"coulomb": 0.143, "stribeck": 0.4874, "stribeck_speed": 0.08, "viscous": 0.0157},
+             "negative": {"coulomb": 0.1983, "stribeck": 0.2915, "stribeck_speed": 0.08, "viscous": 0.0157},
+             "creep_drop": 0.4296, "creep_speed": 0.01989, "map_positive": [0.0] * 24, "map_negative": [0.0] * 24}
+        identified = {"inertia": 0.27036, "actuation_delay_s": 0.001, "friction": f,
+                      "crosstalk": {"delay_s": t["crosstalk_delay_s"], "table": t["crosstalk_map"], "uncertainty": 0.0005}}
+        dsg = {"wn": 6.9, "zeta": 0.5, "integral_rate": 3.0, "friction_drift": RULES["friction_drift_A"], "bias": 0.002}
+        servo = design.servo(PRIOR, identified, dsg)
+        self.assertAlmostEqual(servo["kq"], 13.0, delta=0.2)
+        m = manifests.yaw("t", servo, "usecase")
+        import score, usecase  # noqa: E402
+        for start in (1.0, 5.2):
+            r, status = sim.yaw(servo, plant, m["reference_samples"], start=start, hold_after=m["servo_hold_after_s"])
+            self.assertEqual(status, "COMPLETE")
+            res = {"t": r["t"], "qr": r["qr"], "vr": r["vr"], "q": r["q_hat"], "v": r["v_hat"], "u": r["u"],
+                   "true_t": r["t"], "true_q": r["q_true"], "true_v": r["v_true"]}
+            rows = usecase.metrics(res, score.segments(m))
+            ratios = {x["label"]: x["v_ratio"] for x in rows if "v_ratio" in x}
+            self.assertTrue(all(0.9 <= v <= 1.1 for v in ratios.values()), f"start {start}: {ratios}")
+            self.assertLessEqual(int(r["stalls"][-1]), 2, f"start {start}")
+
     def test_plant_noise_seed(self):
         """Two seeds are two noise draws; the same seed repeats the run exactly (the proofs run several)."""
         t = truth("payload_5x_knee")["yaw"]
