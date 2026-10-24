@@ -416,3 +416,37 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
       `stall_recovery.current_A` equal to it in the accepted asset; ≤ 2 stalls per validation pass;
       in the journals no rock while `i` is still rising, and after the campaign's positioning moves
       the integral reaching the cap before any rock.
+- **Homing that is not a hazard no longer faults (owner, 2026-10-25 01:40: "no fault state if the
+  issue is not safety related"; `25ef55a`, probe update `f2ca460`).**
+  - The 00:28 FAULT was a repeatability miss: no hazard.
+  - Every homing failure is now classified. Hazards still FAULT:
+    - a drive fault, a torque abort or invalid feedback;
+    - no stop after a full traverse;
+    - travel that is not the configured mechanism's.
+  - Everything else is not a fault: timeouts, settle, clearance, a fine contact that moved, a
+    repeatability miss, a fine pass past the contact it had just observed. These back off the stop
+    by the backoff distance, then the whole homing runs again, up to 3 attempts. After the third,
+    the station holds unhomed in phase `idle` with the pitch held. Telemetry carries
+    `homing_attempt` and `homing_failure`, the page shows HOMING FAILED (amber, with the reason), and
+    HOME starts again without a recovery.
+  - Deployed at 02:04 with the integral cap. HOME with the payload passed on the first attempt.
+- **MEASURE on #5, 02:04–02:25 (release `f2ca460`: calibd's asset fix, homing, integral cap): the
+  stalls are gone; NOT ACCEPTED on the slow ramps.**
+  - **Pitch ACCEPTED.**
+  - **Survey:** + 0.14+0.49 A, − 0.20+0.29 A. Breakaway +0.63 / −0.49 A, about 0.15–0.2 A above
+    00:38's, so the drift came between the two runs.
+  - **Identification and design:** J 0.2704 (loop delay 2.38 ms). wn 6.9 → kq 13.02, ki 36.15.
+    `integral_cap` 0.78 = `stall_recovery.current_A`: the new rule, live. Ladder quiet to 10.6.
+  - **Validation:** 0 stalls in both passes, against 1 and 4 at 00:38. But ramp+1 ran at
+    1.145 / 1.210 and ramp−1 at 1.124, over the 10% gate. Rests reached 0.45–0.68°. The simulator had
+    predicted 1.10–1.17 at +0.15 A.
+  - **The stuck start, from pass 2's ramp+1 journal:**
+    - The previous segment left the axis 0.47° *ahead* of the reference, with u −0.10 A holding it.
+    - The ramp's feedforward step (+0.33 A) let it slip further ahead, to 0.78°.
+    - From +0.4 to about +2.4 s it stood. Meanwhile the integral wound against the travel to −0.30 A,
+      well short of the 0.78 cap, while the reference reached and passed it. u stayed at 0.03–0.07 A
+      until +1.1 s and reached 0.55 A only at +2.4 s, when the axis lurched at 4 deg/s.
+    - ramp−1 shows the same pattern, smaller.
+    - The cap is not the cause. The root is the integral winding against a reference moving toward
+      a standing axis: a conditional-integration change in `axis_control_core/servo.cpp`. Fable is
+      proving it in the simulator (the knee plant reproduces 1.10–1.17).
