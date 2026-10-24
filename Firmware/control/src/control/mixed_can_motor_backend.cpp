@@ -1008,6 +1008,7 @@ MotorBackend::Transition MixedCanMotorBackend::transition_mode(
 
 void MixedCanMotorBackend::deenergize(AxisId axis) {
   if (axis == AxisId::Pitch) {
+    end_pitch_session("the pitch axis was de-energised");
     release_pitch_servo();
     pitch_transition_active_.store(false);
     if (pitch_opened_.load()) pitch_backend_.deenergize(axis);
@@ -1108,6 +1109,7 @@ void MixedCanMotorBackend::command_yaw_velocity_locked(double desired, TimeNs no
 void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
                                    double limit_spd_rad_s) {
   if (axis == AxisId::Pitch) {
+    if (pitch_session_owns_axis()) return;
     release_pitch_servo();
     if (pitch_opened_.load()) pitch_backend_.command(axis, q_ref_rad, limit_spd_rad_s);
     return;
@@ -1131,6 +1133,7 @@ void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
 
 void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) {
   if (axis == AxisId::Pitch) {
+    if (pitch_session_owns_axis()) return;
     release_pitch_servo();
     if (pitch_opened_.load()) pitch_backend_.command_velocity(axis, velocity_rad_s);
     return;
@@ -1269,6 +1272,87 @@ void MixedCanMotorBackend::release_yaw_servo_locked() {
                yaw_state_.position_rad, yaw_servo_stale_);
 }
 
+// ADR-005 D7: a calibration session takes the pitch axis from the production servo. The pitch servo
+// thread steps it every millisecond against the same feedback, with the production guards in front
+// of it: a drive that is not running is a hazard, late feedback ends the session (the drive holds
+// speed zero), and the end-stop guard and travel governor stay in force whatever the script asks.
+bool MixedCanMotorBackend::begin_calibration_session(const std::shared_ptr<calibration::Session>& session,
+                                                      const calibration::PitchWindow& window, std::string& err) {
+  if (!session) { err = "no session"; return false; }
+  if (session->axis() != AxisId::Pitch) { err = "yaw sessions are not run by controld yet"; return false; }
+  auto pitch = std::dynamic_pointer_cast<calibration::PitchSession>(session);
+  std::lock_guard lock(pitch_servo_mutex_);
+  if (!pitch) { err = "not a pitch session"; return false; }
+  if (!pitch_servo_configured_ || !pitch_opened_.load() || pitch_servo_fault_.load()) {
+    err = "the pitch servo is not available";
+    return false;
+  }
+  if (pitch_session_) { err = "a session is already running"; return false; }
+  if (!window.valid()) { err = "no pitch window from homing"; return false; }
+  pitch_session_ = std::move(pitch);
+  pitch_session_window_ = window;
+  pitch_servo_active_.store(false);
+  spdlog::info("calibration: pitch session {} takes the axis (window {:+.4f} .. {:+.4f} rad)", session->label(),
+               window.min_rad, window.max_rad);
+  return true;
+}
+
+void MixedCanMotorBackend::release_calibration_session() {
+  std::lock_guard lock(pitch_servo_mutex_);
+  if (!pitch_session_) return;
+  spdlog::info("calibration: pitch session {} hands the axis back", pitch_session_->label());
+  pitch_session_->abandon("released");
+  pitch_session_.reset();
+  pitch_servo_last_step_ns_ = 0;
+}
+
+bool MixedCanMotorBackend::pitch_session_owns_axis() const {
+  std::lock_guard lock(pitch_servo_mutex_);
+  return pitch_session_ != nullptr;
+}
+
+void MixedCanMotorBackend::end_pitch_session(const char* why) {
+  std::lock_guard lock(pitch_servo_mutex_);
+  if (!pitch_session_) return;
+  pitch_session_->abandon(why);
+  pitch_session_.reset();
+}
+
+void MixedCanMotorBackend::step_pitch_session_locked() {
+  const auto now = clock_();
+  can::AxisLatest l;
+  const bool have = pitch_system_.axis(AxisId::Pitch).latest(l) && l.has_feedback;
+  if (!have || l.mode != 2 || l.faults) {
+    spdlog::error("pitch session: drive disabled or faulted (feedback={} mode={} faults={})", have, l.mode, l.faults);
+    pitch_servo_fault_.store(true);
+    pitch_session_->abandon("the pitch drive is not running");
+    pitch_session_.reset();
+    pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+    return;
+  }
+  if (now - l.rx_ns > kPitchFreshNs) {
+    spdlog::warn("pitch session: feedback {:.1f} ms old; the drive holds speed zero", (now - l.rx_ns) / 1e6);
+    pitch_stale_since_ns_ = l.rx_ns;
+    pitch_session_->abandon("pitch feedback late");
+    pitch_session_.reset();
+    pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+    return;
+  }
+  const double guard = profile_.servo->pitch_guard_rad;
+  const double low = pitch_session_window_.min_rad - guard, high = pitch_session_window_.max_rad + guard;
+  if (l.q_rad < low || l.q_rad > high) {
+    spdlog::error("pitch session end-stop guard: axis {:+.4f} rad outside [{:+.4f}, {:+.4f}]", l.q_rad, low, high);
+    pitch_servo_fault_.store(true);
+    pitch_session_->abandon("the pitch end-stop guard");
+    pitch_session_.reset();
+    pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
+    return;
+  }
+  const double speed = pitch_session_->step(now, l.q_rad, l.rx_ns, l.torque_nm, pitch_session_window_);
+  pitch_backend_.command_velocity_always(
+      AxisId::Pitch, axis::travel_governor(speed, l.q_rad, low, high, profile_.servo->pitch_stop_acceleration_rad_s2));
+}
+
 void MixedCanMotorBackend::release_pitch_servo() {
   std::lock_guard lock(pitch_servo_mutex_);
   pitch_servo_active_.store(false);
@@ -1285,6 +1369,7 @@ bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& 
   }
   if (axis == AxisId::Pitch) {
     std::lock_guard lock(pitch_servo_mutex_);
+    if (pitch_session_) return true;   // the session's axis: taken, not followed
     if (!pitch_servo_configured_ || pitch_servo_fault_.load() || !pitch_opened_.load()) return false;
     // Refused, not engaged (see pitch_servo_may_engage); refusing while engaged hands the axis to
     // the legacy path, whose command releases the servo.
@@ -1411,6 +1496,7 @@ bool MixedCanMotorBackend::fault_releases_axis(AxisId axis) const {
 // The CyberGear holds speed zero on its own encoder; yaw (host current) has no such hold.
 void MixedCanMotorBackend::hold_axis(AxisId axis) {
   if (axis != AxisId::Pitch || !pitch_opened_.load()) { deenergize(axis); return; }
+  end_pitch_session("the pitch axis was held by the drive");
   release_pitch_servo();
   pitch_transition_active_.store(false);
   if (!pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0))
@@ -1555,8 +1641,11 @@ void MixedCanMotorBackend::pitch_servo_loop(std::stop_token stop) {
         pitch_backend_.command_velocity_always(AxisId::Pitch, 0.0);
       }
     }
-    if (!pitch_servo_active_.load()) continue;
     std::lock_guard lock(pitch_servo_mutex_);
+    if (pitch_session_) {
+      step_pitch_session_locked();
+      continue;
+    }
     if (!pitch_servo_active_.load()) continue;
     const auto now = clock_();
     can::AxisLatest l;

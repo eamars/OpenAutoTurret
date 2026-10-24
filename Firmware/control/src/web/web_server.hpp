@@ -502,6 +502,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"calibration_unverified\":" << (s.calibration_unverified ? "true" : "false")
      << ",\"calibration_records\":"
      << (s.calibration_records_json ? *s.calibration_records_json : std::string("[]"))
+     << ",\"calibrating\":" << (s.calibrating ? "true" : "false")
+     << ",\"calibration_run\":" << (s.calibration_run_json ? *s.calibration_run_json : std::string("null"))
      << ",\"target_type\":\"" << json_escape(s.target_type) << "\""
      << ",\"target_type_applied\":\"" << json_escape(s.target_type_applied) << "\""
      << ",\"target_type_switching\":" << (s.target_type_switching ? "true" : "false")

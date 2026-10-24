@@ -555,6 +555,9 @@ struct TelemetrySnapshot {
   // Every record (id, name, why unusable, each part's origin, the bore), as JSON: changes rarely,
   // so it is built once per change and shared, not rebuilt per frame.
   std::shared_ptr<const std::string> calibration_records_json;
+  // ADR-005 D7: CALIBRATING, and the run in progress or the last one (raw JSON; null before any).
+  bool calibrating = false;
+  std::shared_ptr<const std::string> calibration_run_json;
   // What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
   // fresh frame was produced for ("" while none), whether the turret is holding for the switch, and
   // whether that switch is overdue (perception has not applied it within 10 s).

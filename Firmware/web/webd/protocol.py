@@ -102,6 +102,11 @@ class Telemetry:
     calibration_unverified: bool = False
     # Every record: id, name, why unusable, each part's origin (date, run, from), the bore.
     calibration_records: list = field(default_factory=list)
+    # A calibration run (ADR-005 D7): CALIBRATING, and the run in progress or the last one -- id, kind,
+    # state, elapsed, the session (label, axis, elapsed, expected), the last session's end, calibd's
+    # last note and the verdict. None before the first run.
+    calibrating: bool = False
+    calibration_run: Optional[dict] = None
     # What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
     # fresh frame was produced for ("" while none), the hold while it switches, and an overdue switch.
     target_type: str = ""

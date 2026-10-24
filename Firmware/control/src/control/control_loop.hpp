@@ -33,6 +33,7 @@
 
 #include <utility>
 
+#include "calibration/calibration_session.hpp"
 #include "calibration/calibration_store.hpp"
 #include "calibration/homing_plan.hpp"
 #include "calibration/installation_pose.hpp"
@@ -385,12 +386,17 @@ class ControlLoop {
   struct ImuObservation {
     bool present = false;
     bool gravity_valid = false;
+    bool gyro_fresh = false;
   };
-  void observe_imu(bool present, bool gravity_valid) {
+  // `gyro_fresh`: every calibration session needs the gyro (ADR-005 D7: a run is offered only with it).
+  void observe_imu(bool present, bool gravity_valid, bool gyro_fresh = false) {
     std::lock_guard<std::mutex> lk(imu_mutex_);
     imu_observation_.present = present;
     imu_observation_.gravity_valid = gravity_valid;
+    imu_observation_.gyro_fresh = gyro_fresh;
   }
+  // ADR-005 D7: a calibration run is in progress (CALIBRATING).
+  bool calibrating() const { return run_.active; }
   const BaseOrientation& base_orientation() const { return base_orientation_; }
 
   // --- payload profiling / verification (Phase 9, §28.5, §31) -----------
@@ -757,8 +763,11 @@ class ControlLoop {
     std::shared_ptr<const calibration::Prepared> prepared;
     // rename/new/delete_calibration_record: done on the web thread; the control thread acks with this.
     std::string done;
+    // calibration_session: the session, made on the web thread (the manifest read, the journal opened).
+    std::shared_ptr<calibration::Session> session;
   };
   std::deque<PendingCommand> command_queue_;
+  std::shared_ptr<calibration::Session> session_for_command_;   // calibration_session, while it executes
   std::atomic<bool> shutdown_requested_{false};
   // One-shot restricted test-motion target (rad), consumed next cycle.
   bool has_test_motion_ = false;
@@ -965,6 +974,34 @@ class ControlLoop {
   static constexpr double kRecordRestBandRad = 0.3 * 3.14159265358979323846 / 180.0;
   static constexpr TimeNs kSwapPatienceNs = 10'000'000'000;
   void begin_swap_hold();
+  // ADR-005 D7: a calibration run -- VERIFY, RE-RUN, NEW's measurement. CALIBRATING overlays the homed
+  // hold: MANUAL, no tracker, and nothing manual or automatic acts. calibd sends one session at a
+  // time; the backend runs it on its axis while production holds the other, and between sessions
+  // calibd fits and designs while controld holds. STOP ends it at once, both axes held.
+  struct CalibrationRun {
+    bool active = false;
+    int id = 0;                                  // counts runs since start; calibd quotes it
+    std::string kind;                            // VERIFY, RERUN, RERUN+ACCURACY, RERUN+CROSSTALK, MEASURE
+    std::string state;                           // waiting, session, done, stopped, failed
+    OperatingMode resume = OperatingMode::Manual;
+    TimeNs started_ns = 0, heard_ns = 0, ended_ns = 0;   // heard: calibd's last word
+    std::shared_ptr<calibration::Session> session;
+    TimeNs session_ns = 0;
+    double idle_lo = 0, idle_hi = 0;             // the other axis through the session
+    int sessions = 0;
+    std::string note, verdict, last_session;
+    bool stopping = false;
+  } run_;
+  int run_seq_ = 0;
+  // calibd answers between sessions within this, or the run ends (not a fault).
+  static constexpr TimeNs kCalibdSilenceNs = 15'000'000'000;
+  std::shared_ptr<const std::string> calibration_run_json_;   // calibration_mutex_
+  TimeNs calibration_run_json_ns_ = 0;
+  void execute_calibration_run_command(const std::string& name, const std::string& arg);
+  void begin_calibration_run(const std::string& kind);
+  void step_calibration_run(TimeNs now_ns, const AxisSnapshot sp[kAxisCount]);
+  void end_calibration_run(const char* state, const std::string& why, OperatingMode resume);
+  void publish_calibration_run(TimeNs now_ns, bool force);
   void execute_set_target_type(const std::string& arg);
   void execute_set_calibration_record(const std::string& arg,
                                       const std::string& ack_name = "set_calibration_record",

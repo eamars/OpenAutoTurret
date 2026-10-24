@@ -72,6 +72,8 @@ inline constexpr int kYawIx = 1;
 //   rename_calibration_record <id> <name>, new_calibration_record <from> <name>,
 //   delete_calibration_record <id>         (ADR-005: records leave the way they came; not #1),
 //   set_bore_mode <on|off>, set_bore_zero <m|inf>, trim_bore <wide|detail> <right|up> <mrad>
+//   verify_calibration, run_calibration <kind>, stop_calibration  (ADR-005 D7: runs, from the page),
+//   calibration_session|note|finish <run> ...                    (calibd's side of a run),
 //                                          (ADR-005 D9: the bore of the record in force; not #1),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
@@ -196,6 +198,37 @@ inline CommandResult validate_command(const SystemCommandState& s,
       r.error = command == "set_bore_mode" ? "set_bore_mode needs on or off"
               : command == "set_bore_zero" ? "set_bore_zero needs metres or inf"
               : "trim_bore needs wide|detail right|up <mrad>";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "verify_calibration" || command == "run_calibration" || command == "stop_calibration" ||
+      command == "calibration_session" || command == "calibration_note" || command == "calibration_finish") {
+    // ADR-005 D7: a calibration run. Shape only; controld decides (homed, the gyro fresh, not #1 for a
+    // re-run, the run calibd quotes). STOP is never refused here, whatever the state.
+    bool ok;
+    const char* need;
+    if (command == "verify_calibration" || command == "stop_calibration") {
+      ok = arg.empty();
+      need = " takes no argument";
+    } else if (command == "run_calibration") {
+      ok = arg == "RERUN" || arg == "RERUN+ACCURACY" || arg == "RERUN+CROSSTALK" || arg == "MEASURE";
+      need = " needs RERUN, RERUN+ACCURACY, RERUN+CROSSTALK or MEASURE";
+    } else {
+      // calibd's: "<run> <axis> <manifest>", "<run> <text>", "<run> <verdict>".
+      const std::size_t sp = arg.find(' ');
+      const std::string id = arg.substr(0, sp);
+      ok = !id.empty() && id.size() <= 9 && arg.size() <= 512 &&
+           std::all_of(id.begin(), id.end(), [](char c) { return c >= '0' && c <= '9'; }) &&
+           (sp != std::string::npos || command == "calibration_finish");
+      if (command == "calibration_session")
+        ok = ok && (arg.compare(sp + 1, 6, "pitch ") == 0 || arg.compare(sp + 1, 4, "yaw ") == 0);
+      need = command == "calibration_session" ? " needs a run number, pitch or yaw, and a manifest path"
+                                              : " needs a run number and a text";
+    }
+    if (!ok) {
+      r.error = command + need;
       return r;
     }
     r.ok = true;

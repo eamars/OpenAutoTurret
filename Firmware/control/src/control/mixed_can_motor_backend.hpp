@@ -16,6 +16,7 @@
 #include "config/mixed_hardware_profile.hpp"
 #include "control/episode_latch.hpp"
 #include "control/can_motor_backend.hpp"
+#include "calibration/calibration_session.hpp"
 #include "control/servo_assets.hpp"
 #include "position_loop.hpp"
 #include "servo.hpp"
@@ -239,6 +240,9 @@ class MixedCanMotorBackend final : public MotorBackend {
   bool servo_available(AxisId axis) const override;
   bool command_reference(AxisId axis, const ServoReference& reference) override;
   bool swap_servo_assets(const ServoAssets& assets, std::string& err) override;
+  bool begin_calibration_session(const std::shared_ptr<calibration::Session>& session,
+                                 const calibration::PitchWindow& window, std::string& err) override;
+  void release_calibration_session() override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;
 
@@ -292,6 +296,10 @@ class MixedCanMotorBackend final : public MotorBackend {
   void release_yaw_servo_locked();
   void release_pitch_servo();
   void pitch_servo_loop(std::stop_token stop);
+  // ADR-005 D7: a pitch calibration session in place of the production servo (pitch_servo_mutex_).
+  void step_pitch_session_locked();
+  bool pitch_session_owns_axis() const;
+  void end_pitch_session(const char* why);
   bool yaw_servo_configured_ = false, yaw_servo_active_ = false;
   axis::Servo yaw_servo_;
   axis::ServoOutput yaw_servo_out_{};
@@ -325,6 +333,8 @@ class MixedCanMotorBackend final : public MotorBackend {
   double pitch_following_error_rad_ = 0, pitch_hold_q_ = 0;
   TimeNs pitch_servo_last_step_ns_ = 0;
   std::jthread pitch_servo_;
+  std::shared_ptr<calibration::PitchSession> pitch_session_;   // pitch_servo_mutex_
+  calibration::PitchWindow pitch_session_window_{};
 
   config::mixed::Profile profile_{};
   can::SocketCanBus yaw_bus_;

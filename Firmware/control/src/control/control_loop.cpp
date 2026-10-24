@@ -14,6 +14,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 
 #include "vision/vision_ingest.hpp"
@@ -1992,6 +1995,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // Drive-mode item 4: the automatic AUTO_TRACK <-> AUTO_ROAM hand-off, checked before the intent is built
     // so a switch that happens now takes effect this cycle rather than being a cycle late. Inert while both
     // keys are 0 (the shipped default), in which case evaluate_auto_switch() returns immediately.
+    step_calibration_run(now_ns, sp);
     step_swap_hold(now_ns, sp);
     evaluate_auto_switch(now_ns);
     last_intent_ = build_mode_intent(now_ns);
@@ -3880,9 +3884,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         : !hold_.record_applied || hold_.record_rest_since_ns == 0 ? 0.0
         : std::clamp(static_cast<double>(now_ns - hold_.record_rest_since_ns) / kRecordSettleNs, 0.0, 1.0);
     snap.calibration_unverified = calibration_unverified_;
+    snap.calibrating = run_.active;
     {
       std::lock_guard lk(calibration_mutex_);
       snap.calibration_records_json = calibration_records_json_;
+      snap.calibration_run_json = calibration_run_json_;
     }
     snap.watch_point_set = watch_.valid;
     snap.watch_point_saved = watch_store_ ? watch_store_->last_result() : -1;
@@ -4739,6 +4745,219 @@ void ControlLoop::execute_set_target_type(const std::string& arg) {
 // Hold through a swap. A homed, holding turret drops what it follows and holds where it is (MANUAL);
 // the mode it was in resumes afterwards. AUTO_TRACK resumes as the mode its loss returns to: the
 // target it was following is gone with the old model, or seen through other geometry.
+// ---------------------------------------------------------------------------
+// ADR-005 D7: calibration runs.
+// ---------------------------------------------------------------------------
+
+void ControlLoop::execute_calibration_run_command(const std::string& name, const std::string& arg) {
+  if (name == "verify_calibration" || name == "run_calibration") {
+    const std::string kind = name == "verify_calibration" ? std::string("VERIFY") : arg;
+    bool gyro = false;
+    {
+      std::lock_guard lk(imu_mutex_);
+      gyro = imu_observation_.gyro_fresh;
+    }
+    std::string why;
+    if (run_.active) why = "run " + std::to_string(run_.id) + " is in progress";
+    else if (phase_ != Phase::Hold || !homed_) why = "HOME first: a run needs a homed turret";
+    else if (rest_park_.stage != RestPark::Off) why = "parked: choose a mode, then run";
+    else if (hold_.active) why = "a switch is holding the turret; run once it ends";
+    else if (!gyro) why = "the IMU gyro is not fresh, and every session needs it";
+    else if (!calibration_id_ || !calibration_blocked_.empty()) why = "no usable calibration record is in force";
+    else if (kind != "VERIFY" && calibration_id_ == 1) why = "#1 is the shipped backup: MEASURE A COPY makes a record to measure";
+    if (!why.empty()) {
+      ack_command(name, false, why);
+      return;
+    }
+    begin_calibration_run(kind);
+    ack_command(name, true, "calibrating: " + kind + " on #" + std::to_string(calibration_id_) + ", run " +
+                                std::to_string(run_.id));
+    return;
+  }
+  if (name == "stop_calibration") {
+    if (!run_.active) {
+      ack_command(name, false, "no calibration run is in progress");
+      return;
+    }
+    // STOP is the operator's word: the run ends in MANUAL, as a STOP during a swap hold does.
+    run_.stopping = true;
+    run_.resume = OperatingMode::Manual;
+    if (run_.session) {
+      run_.session->stop("the operator pressed STOP");
+      ack_command(name, true, "stopping run " + std::to_string(run_.id) + ": both axes held");
+    } else {
+      end_calibration_run("stopped", "stopped by the operator", OperatingMode::Manual);
+      ack_command(name, true, "run " + std::to_string(run_.id) + " stopped: both axes held");
+    }
+    return;
+  }
+  // calibd's commands quote the run they belong to: a stale calibd cannot steer a newer run.
+  char* rest = nullptr;
+  const long id = std::strtol(arg.c_str(), &rest, 10);
+  const std::string tail = rest && *rest == ' ' ? std::string(rest + 1) : std::string();
+  if (!run_.active || id != run_.id) {
+    ack_command(name, false, run_.active ? "run " + std::to_string(id) + " is not the run in progress (" +
+                                               std::to_string(run_.id) + ")"
+                                         : std::string("no calibration run is in progress"));
+    return;
+  }
+  run_.heard_ns = now_ns_;
+  if (name == "calibration_note") {
+    run_.note = tail;
+    publish_calibration_run(now_ns_, true);
+    ack_command(name, true, "noted");
+    return;
+  }
+  if (name == "calibration_finish") {
+    if (run_.session) {
+      ack_command(name, false, "session " + run_.session->label() + " is still running");
+      return;
+    }
+    end_calibration_run("done", tail, run_.resume);
+    ack_command(name, true, "run " + std::to_string(id) + " done: " + tail);
+    return;
+  }
+  // calibration_session: made on the web thread.
+  auto session = std::move(session_for_command_);
+  if (!session) {
+    ack_command(name, false, "the session was not prepared");
+    return;
+  }
+  if (run_.stopping) {
+    ack_command(name, false, "the run is stopping");
+    return;
+  }
+  if (run_.session) {
+    ack_command(name, false, "session " + run_.session->label() + " is still running");
+    return;
+  }
+  const auto& pl = limits_[ix(AxisId::Pitch)];
+  const calibration::PitchWindow window{pl.valid ? pl.q_soft_min_rad : 0.0, pl.valid ? pl.q_soft_max_rad : 0.0};
+  std::string err;
+  if (!backend_->begin_calibration_session(session, window, err)) {
+    ack_command(name, false, "session " + session->label() + " not started: " + err);
+    return;
+  }
+  const int other = session->axis() == AxisId::Pitch ? ix(AxisId::Yaw) : ix(AxisId::Pitch);
+  run_.idle_lo = run_.idle_hi = last_positions()[other];
+  run_.session = std::move(session);
+  run_.session_ns = now_ns_;
+  run_.state = "session";
+  spdlog::info("calibration: run {} session {} on {}", run_.id, run_.session->label(), axis_name(run_.session->axis()));
+  publish_calibration_run(now_ns_, true);
+  ack_command(name, true, "session " + run_.session->label() + " on " + axis_name(run_.session->axis()));
+}
+
+void ControlLoop::begin_calibration_run(const std::string& kind) {
+  const OperatingMode m = mode_mgr_.mode();
+  run_ = CalibrationRun{};
+  run_.active = true;
+  run_.id = ++run_seq_;
+  run_.kind = kind;
+  run_.state = "waiting";
+  run_.resume = m == OperatingMode::AutoTrack ? auto_return_mode_ : m;
+  run_.started_ns = run_.heard_ns = now_ns_;
+  // The run moves both axes: every hold from here on is where they are, never the ready pose.
+  mode_has_moved_ = true;
+  if (m != OperatingMode::Manual) request_mode(OperatingMode::Manual);
+  spdlog::info("calibration: run {} {} on #{} {}; resumes {} afterwards", run_.id, kind, calibration_id_,
+               calibration_name_, operating_mode_name(run_.resume));
+  publish_calibration_run(now_ns_, true);
+}
+
+void ControlLoop::step_calibration_run(TimeNs now_ns, const AxisSnapshot sp[kAxisCount]) {
+  if (!run_.active) return;
+  backend_->advance_calibration_session(now_ns);
+  const bool held = phase_ == Phase::Hold;
+  if (run_.session) {
+    const int i = ix(run_.session->axis()), other = i == ix(AxisId::Pitch) ? ix(AxisId::Yaw) : ix(AxisId::Pitch);
+    run_.idle_lo = std::min(run_.idle_lo, sp[other].q_rad);
+    run_.idle_hi = std::max(run_.idle_hi, sp[other].q_rad);
+    // A safety stop or a fault ends the session where it is, both axes held.
+    if (!held) run_.session->stop("the station left its hold");
+    else if (last_decision_.action == SafetyAction::Brake || last_decision_.action == SafetyAction::FaultStop ||
+             last_decision_.action == SafetyAction::Disable)
+      run_.session->stop("the safety supervisor stopped the turret");
+    if (run_.session->state() == calibration::SessionState::Holding) {
+      // Production takes the axis back where the session left it: the hold, its reference and the
+      // manual hold are re-anchored there before the backend lets the session go.
+      if (i == ix(AxisId::Pitch)) mode_hold_pitch_rad_ = sp[i].q_rad;
+      else mode_hold_yaw_rad_ = sp[i].q_rad;
+      ref_lim_[i].reset_at(sp[i].q_rad);
+      manual_.release_hold();
+      backend_->release_calibration_session();
+      auto s = std::move(run_.session);
+      char idle[192];
+      std::snprintf(idle, sizeof idle,
+                    "{\"kind\":\"idle_axis\",\"axis\":\"%s\",\"motion_rad\":%.6g,\"low_rad\":%.9g,\"high_rad\":%.9g}",
+                    other == ix(AxisId::Yaw) ? "yaw" : "pitch", run_.idle_hi - run_.idle_lo, run_.idle_lo, run_.idle_hi);
+      if (!calibration_writer_) calibration_writer_ = std::make_unique<calibration::Writer>();
+      calibration_writer_->post([s, row = std::string(idle)] {
+        if (!s->finish(row)) spdlog::error("calibration: session {}: the journal footer was not written", s->label());
+      });
+      run_.last_session = s->label() + ": " + (s->complete() ? std::string("COMPLETE") : s->detail());
+      ++run_.sessions;
+      run_.heard_ns = now_ns;   // calibd's turn: fitting, designing
+      run_.state = "fitting";
+      spdlog::info("calibration: run {} {} (idle {} moved {:.3f} deg)", run_.id, run_.last_session,
+                   other == ix(AxisId::Yaw) ? "yaw" : "pitch", (run_.idle_hi - run_.idle_lo) * kRad2Deg);
+      if (run_.stopping) end_calibration_run("stopped", "stopped by the operator", OperatingMode::Manual);
+      else if (!held) end_calibration_run("failed", std::string("the station left its hold (") + phase_name(phase_) + ")",
+                                          OperatingMode::Manual);
+      publish_calibration_run(now_ns, true);
+      return;
+    }
+  } else if (!held) {
+    end_calibration_run("failed", std::string("the station left its hold (") + phase_name(phase_) + ")",
+                        OperatingMode::Manual);
+  } else if (now_ns - run_.heard_ns > kCalibdSilenceNs) {
+    // Not a fault: nothing moves without calibd, and the record is unchanged.
+    end_calibration_run("failed", "calibd is not answering", run_.resume);
+  }
+  publish_calibration_run(now_ns, false);
+}
+
+void ControlLoop::end_calibration_run(const char* state, const std::string& why, OperatingMode resume) {
+  run_.active = false;
+  run_.state = state;
+  run_.verdict = why;
+  run_.ended_ns = now_ns_;
+  spdlog::info("calibration: run {} {}: {}; {}", run_.id, state, why, operating_mode_name(resume));
+  if (phase_ == Phase::Hold && resume != OperatingMode::Manual) request_mode(resume);
+  publish_calibration_run(now_ns_, true);
+}
+
+void ControlLoop::publish_calibration_run(TimeNs now_ns, bool force) {
+  if (!force && now_ns - calibration_run_json_ns_ < 250'000'000) return;
+  calibration_run_json_ns_ = now_ns;
+  if (!run_.id) return;
+  const auto num = [](double v) { char b[32]; std::snprintf(b, sizeof b, "%.1f", v); return std::string(b); };
+  const auto quote = [](const std::string& s) {
+    std::string o = "\"";
+    for (const char c : s) {
+      if (c == '"' || c == '\\') { o += '\\'; o += c; }
+      else if (static_cast<unsigned char>(c) >= 0x20) o += c;
+    }
+    return o + "\"";
+  };
+  const TimeNs end = run_.active ? now_ns : run_.ended_ns;
+  std::string j = "{\"id\":" + std::to_string(run_.id) + ",\"kind\":" + quote(run_.kind) + ",\"active\":" +
+                  (run_.active ? "true" : "false") + ",\"state\":" + quote(run_.state) + ",\"elapsed_s\":" +
+                  num((end - run_.started_ns) * 1e-9) + ",\"sessions\":" + std::to_string(run_.sessions) +
+                  ",\"session\":";
+  if (run_.session)
+    j += "{\"label\":" + quote(run_.session->label()) + ",\"axis\":\"" + axis_name(run_.session->axis()) +
+         "\",\"elapsed_s\":" + num((now_ns - run_.session_ns) * 1e-9) + ",\"expected_s\":" +
+         num(run_.session->expected_s()) + "}";
+  else
+    j += "null";
+  j += ",\"last_session\":" + quote(run_.last_session) + ",\"note\":" + quote(run_.note) + ",\"verdict\":" +
+       quote(run_.verdict) + "}";
+  auto json = std::make_shared<const std::string>(std::move(j));
+  std::lock_guard lk(calibration_mutex_);
+  calibration_run_json_ = std::move(json);
+}
+
 void ControlLoop::begin_swap_hold() {
   if (!hold_.active) {
     const OperatingMode m = mode_mgr_.mode();
@@ -5865,8 +6084,31 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
   if (r.ok && (name == "rename_calibration_record" || name == "delete_calibration_record" ||
                name == "new_calibration_record"))
     r = calibration_files(name, arg, prepared, done);
+  // ADR-005 D7: calibd's session -- `<run> <pitch|yaw> <manifest path>`. The manifest is read and the
+  // journal opened here, beside it, on the web thread; the control thread only starts it.
+  std::shared_ptr<calibration::Session> session;
+  if (r.ok && name == "calibration_session") {
+    const auto a = arg.find(' '), b = a == std::string::npos ? a : arg.find(' ', a + 1);
+    const std::string axis = b == std::string::npos ? std::string() : arg.substr(a + 1, b - a - 1);
+    const std::filesystem::path manifest = b == std::string::npos ? std::string() : arg.substr(b + 1);
+    std::string text, err;
+    {
+      std::ifstream in(manifest);
+      text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    if (text.empty()) err = "cannot read " + manifest.string();
+    else if (axis == "pitch")
+      session = calibration::PitchSession::make(text, (manifest.parent_path() / "sensorless-homing.jsonl").string(),
+                                                manifest.parent_path().filename().string(), err);
+    else err = "yaw sessions are not run by controld yet";
+    if (!session) {
+      r.ok = false;
+      r.error = "session not prepared: " + err;
+    }
+  }
   // Rejected here or executed there, either way controld answers (§52).
-  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error, std::move(prepared), std::move(done)});
+  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error, std::move(prepared), std::move(done),
+                            std::move(session)});
   return r;
 }
 
@@ -5885,9 +6127,11 @@ void ControlLoop::process_commands() {
     const uint64_t before = ack_seq_;
     prepared_for_command_ = std::move(c.prepared);
     done_for_command_ = std::move(c.done);
+    session_for_command_ = std::move(c.session);
     execute_command(c.name, c.arg);
     prepared_for_command_.reset();
     done_for_command_.clear();
+    session_for_command_.reset();
     if (ack_seq_ == before) {
       // Nobody claimed the answer, so this command has no failure path: the quiet
       // hold, the stop, the shutdown request. That default is honest only because
@@ -6096,8 +6340,8 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   // A zero dwell disables the corresponding hand-off for commissioning.
   if (cfg_.auto_roam_on_loss_ms <= 0 && cfg_.auto_track_on_acquire_ms <= 0) return;
   // Frozen through a swap hold: the old model's last tracks, or tracks seen through the old geometry,
-  // are not a reason to move.
-  if (hold_.active) {
+  // are not a reason to move. And through a calibration run: nothing automatic acts (ADR-005 D7).
+  if (hold_.active || run_.active) {
     loss_since_ns_ = 0;
     acquire_since_ns_ = 0;
     return;
@@ -6392,6 +6636,25 @@ void ControlLoop::param_exchange_yaw(const std::string& command,
 
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
+  // ADR-005 D7: CALIBRATING. Nothing manual or automatic acts; STOP MOTION and HOLD are the run's STOP.
+  if (run_.active) {
+    if (name == "stop_motion" || name == "hold" || name == "stop_calibration") {
+      execute_calibration_run_command("stop_calibration", arg);
+      return;
+    }
+    if (name == "calibration_session" || name == "calibration_note" || name == "calibration_finish" ||
+        name == "verify_calibration" || name == "run_calibration") {
+      execute_calibration_run_command(name, arg);
+      return;
+    }
+    ack_command(name, false, "calibrating: no manual or automatic control until the run ends; STOP ends it now");
+    return;
+  }
+  if (name == "verify_calibration" || name == "run_calibration" || name == "stop_calibration" ||
+      name == "calibration_session" || name == "calibration_note" || name == "calibration_finish") {
+    execute_calibration_run_command(name, arg);
+    return;
+  }
   if ((name=="yaw_control_trial" || name=="pitch_control_trial") && response_probe_until_ns_) {
     ack_command(name,false,"response probe active; wait before changing gains"); return;
   }

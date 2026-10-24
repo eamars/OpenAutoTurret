@@ -12,6 +12,7 @@
 
 #include <cmath>
 
+#include "calibration/calibration_session.hpp"
 #include "control/motor_backend.hpp"
 #include "control/motor_recovery_check.hpp"
 
@@ -28,6 +29,38 @@ class SimMotorBackend : public MotorBackend {
     return true;
   }
   int servo_swaps() const { return servo_swaps_; }
+  // ADR-005 D7: the simulator runs a pitch session on its speed-mode plant, stepped once a control
+  // cycle (it has no servo threads); the control loop's own pitch commands stand aside meanwhile.
+  bool begin_calibration_session(const std::shared_ptr<calibration::Session>& session,
+                                 const calibration::PitchWindow& window, std::string& err) override {
+    auto pitch = std::dynamic_pointer_cast<calibration::PitchSession>(session);
+    if (!pitch) { err = "the simulator runs pitch sessions only"; return false; }
+    if (pitch_session_) { err = "a session is already running"; return false; }
+    auto& ax = axes_[ix(AxisId::Pitch)];
+    session_was_position_ = ax.in_position_mode;
+    ax.in_position_mode = false;
+    ax.in_speed_mode = true;
+    ax.spd_ref = 0.0;
+    pitch_session_ = std::move(pitch);
+    session_window_ = window;
+    ++sessions_;
+    return true;
+  }
+  void release_calibration_session() override {
+    if (!pitch_session_) return;
+    pitch_session_->abandon("released");
+    pitch_session_.reset();
+    auto& ax = axes_[ix(AxisId::Pitch)];
+    ax.spd_ref = 0.0;
+    if (session_was_position_) { ax.in_speed_mode = false; ax.in_position_mode = true; ax.target = ax.q; }
+  }
+  void advance_calibration_session(TimeNs now) override {
+    if (!pitch_session_) return;
+    auto& ax = axes_[ix(AxisId::Pitch)];
+    ax.spd_ref = pitch_session_->step(now, measured(ax, now), now, ax.torque, session_window_);
+  }
+  int sessions() const { return sessions_; }
+  bool session_owns_pitch() const { return pitch_session_ != nullptr; }
   void set_refuse_servo_swap(bool refuse) { refuse_servo_swap_ = refuse; }
   void set_recovery_before_homing(bool enabled) { pre_home_recovery_ = enabled; }
   bool recovery_before_homing() const override { return pre_home_recovery_; }
@@ -135,6 +168,10 @@ class SimMotorBackend : public MotorBackend {
     return true;
   }
   void deenergize(AxisId axis) override {
+    if (axis == AxisId::Pitch && pitch_session_) {
+      pitch_session_->abandon("the pitch axis was de-energised");
+      pitch_session_.reset();
+    }
     auto& ax = axes_[ix(axis)];
     ax.deenergized = true;
     ax.in_position_mode = false;
@@ -159,12 +196,14 @@ class SimMotorBackend : public MotorBackend {
     return s;
   }
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override {
+    if (axis == AxisId::Pitch && pitch_session_) { advance(ix(axis)); return; }
     auto& ax = axes_[ix(axis)];
     ax.target = q_ref_rad;
     ax.limit_spd = limit_spd_rad_s;
     advance(ix(axis));
   }
   void command_velocity(AxisId axis, double velocity_rad_s) override {
+    if (axis == AxisId::Pitch && pitch_session_) { advance(ix(axis)); return; }
     auto& ax = axes_[ix(axis)];
     ax.spd_ref = velocity_rad_s;
     advance(ix(axis));
@@ -183,6 +222,10 @@ class SimMotorBackend : public MotorBackend {
   bool pre_home_recovery_ = false;
   int servo_swaps_ = 0;
   bool refuse_servo_swap_ = false;
+  std::shared_ptr<calibration::PitchSession> pitch_session_;
+  calibration::PitchWindow session_window_{};
+  bool session_was_position_ = false;
+  int sessions_ = 0;
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   struct Axis;
   // The encoder reading of the true position (set_encoder). The noise is a hash of the sample time,

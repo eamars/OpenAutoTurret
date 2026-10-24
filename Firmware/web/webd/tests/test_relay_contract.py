@@ -26,7 +26,8 @@ def test_webd_declares_the_fields_the_page_reads():
                        "soft_limits_valid", "q_soft_min_pitch_rad",
                        "q_soft_max_pitch_rad", "q_soft_min_yaw_rad",
                        "q_soft_max_yaw_rad", "soft_limit_distance_pitch_rad",
-                       "soft_limit_distance_yaw_rad", "calibration_record", "calibration_blocked"):
+                       "soft_limit_distance_yaw_rad", "calibration_record", "calibration_blocked",
+                       "calibrating", "calibration_run"):
         assert re.search(rf"^\s*{field_name}\s*:", proto, re.M), (
             f"webd does not declare {field_name}: the page would read undefined "
             "and its own fallback text would hide it"

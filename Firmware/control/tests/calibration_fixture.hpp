@@ -70,6 +70,21 @@ inline void choose(const State& s, int id) {
   write(s.cal() / "active.json", "{\"schema\": 1, \"active\": " + std::to_string(id) + "}\n");
 }
 
+// What tools/servo_commission/manifests.pitch() writes, cut to what a session reads: a 2 s script with
+// a step of `step_rad` at 0.5 s, about the window centre (ADR-005 D7).
+inline std::string pitch_manifest(const std::string& extra_trial = "", double step_rad = 0.02) {
+  std::string samples;
+  for (int k = 0; k <= 100; ++k) {
+    const double t = k * 0.02;
+    samples += std::string(k ? "," : "") + "{\"time_s\":" + std::to_string(t) + ",\"position_rad\":" +
+               std::to_string(t >= 0.5 ? step_rad : 0.0) + ",\"velocity_rad_s\":0,\"acceleration_rad_s2\":0}";
+  }
+  return "{\"schema\":\"adr0022.sensorless-homing/1\",\"purpose\":\"pitch_sensorless_homing\",\"session_label\":\"t-identify\","
+         "\"servo_trial\":{\"kp_per_s\":20,\"ki_per_s2\":0,\"integral_clamp_rad_s\":0,\"speed_limit_rad_s\":0.5,"
+         "\"command_period_s\":0.001,\"hold_after_s\":0.5,\"following_error_rad\":0.1,\"approach_speed_rad_s\":0.08,"
+         "\"window_margin_rad\":0.14" + extra_trial + ",\"reference_samples\":[" + samples + "]}}";
+}
+
 inline std::string active_json(const State& s) {
   std::ifstream in(s.cal() / "active.json");
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};

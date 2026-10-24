@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <future>
 #include <memory>
@@ -845,6 +847,150 @@ TEST(CalibrationRecords, RenameRemoveAndNewLeaveTheWayTheyCameAndSpareTheShipped
   EXPECT_EQ(h.snap().calibration_records_json->find("\"id\":2,"), std::string::npos);
   h.run("new_calibration_record", "1 again");
   EXPECT_EQ(h.snap().calibration_record_id, 4) << "ids are never reused: 2 is in deleted/";
+}
+
+namespace {
+// A homed loop with records #1 and #2 (#2 in force), a fresh gyro and the mode it ran in (ADR-005 D7).
+struct RunFixture {
+  ota_cal_fixture::State s;
+  HomedLoop h;
+  RunFixture() {
+    EXPECT_TRUE(h.ready);
+    h.loop->set_calibration_record(1, "AS SHIPPED", "");
+    h.loop->set_calibration_store(two_records(s));
+    h.run("set_calibration_record", "2");
+    run_switch(h);
+    h.loop->observe_imu(true, true, true);
+    h.run("set_mode", "AUTO_ROAM");
+    h.step(20);
+  }
+  int begin(const char* kind = "RERUN") {
+    h.run("run_calibration", kind);
+    EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+    return run_id();
+  }
+  int run_id() {
+    const auto j = h.snap().calibration_run_json;
+    return j ? std::atoi(j->c_str() + j->find("\"id\":") + 5) : 0;
+  }
+  std::string run_json() { return h.snap().calibration_run_json ? *h.snap().calibration_run_json : ""; }
+  // calibd's side: a manifest in its own directory, handed to controld.
+  std::filesystem::path session(int id, const std::string& label, double step_rad = 0.02) {
+    const auto dir = s.dir / "runs" / label;
+    ota_cal_fixture::write(dir / "manifest.json", ota_cal_fixture::pitch_manifest("", step_rad));
+    h.run("calibration_session", (std::to_string(id) + " pitch " + (dir / "manifest.json").string()).c_str());
+    return dir / "sensorless-homing.jsonl";
+  }
+  void until_session_ends(int limit = 4000) {
+    for (int i = 0; i < limit && run_json().find("\"session\":{") != std::string::npos; ++i) h.step(1);
+  }
+};
+std::string file_text(const std::filesystem::path& p) {
+  std::ifstream in(p);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+}  // namespace
+
+TEST(CalibrationRun, OfferedOnlyHomedWithAFreshGyroAndNeverAsAReRunOfTheShippedBackup) {
+  // ADR-005 D7: every session needs the IMU (the stuck-I2C1 incidents would abort a run).
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/false);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.loop->observe_imu(true, true, true);
+  h.run("verify_calibration");
+  EXPECT_EQ(h.snap().cmd_ack_reason, "HOME first: a run needs a homed turret");
+  ota_cal_fixture::State s2;
+  HomedLoop g;
+  ASSERT_TRUE(g.ready);
+  g.loop->set_calibration_record(1, "AS SHIPPED", "");
+  g.loop->set_calibration_store(two_records(s2));
+  g.run("verify_calibration");
+  EXPECT_EQ(g.snap().cmd_ack_reason, "the IMU gyro is not fresh, and every session needs it");
+  g.loop->observe_imu(true, true, true);
+  g.run("run_calibration", "RERUN");
+  EXPECT_EQ(g.snap().cmd_ack_reason, "#1 is the shipped backup: MEASURE A COPY makes a record to measure");
+  EXPECT_FALSE(g.loop->calibrating());
+  g.run("verify_calibration");
+  EXPECT_EQ(g.snap().cmd_ack_accepted, 1) << g.snap().cmd_ack_reason;
+  EXPECT_TRUE(g.loop->calibrating()) << "VERIFY is offered on every record, #1 included";
+}
+
+TEST(CalibrationRun, APitchSessionRunsWhileYawHoldsAndTheRunEndsInTheModeItInterrupted) {
+  RunFixture f;
+  auto& h = f.h;
+  const int id = f.begin();
+  EXPECT_TRUE(h.snap().calibrating);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual) << "no tracker, nothing automatic";
+  EXPECT_NE(f.run_json().find("\"state\":\"waiting\""), std::string::npos) << f.run_json();
+  // Nothing manual or automatic acts.
+  for (const auto& [cmd, arg] : {std::pair{"set_mode", "AUTO_ROAM"}, std::pair{"manual_jog_start", "yaw+"},
+                                 std::pair{"set_calibration_record", "1"}, std::pair{"start_homing", ""}}) {
+    h.run(cmd, arg);
+    EXPECT_EQ(h.snap().cmd_ack_accepted, 0) << cmd;
+    EXPECT_EQ(h.snap().cmd_ack_reason, "calibrating: no manual or automatic control until the run ends; STOP ends it now");
+  }
+  const double yaw0 = h.sim->position(AxisId::Yaw);
+  const auto journal = f.session(id, "rerun-01-identify");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.sim->sessions(), 1);
+  EXPECT_NE(f.run_json().find("\"session\":{\"label\":\"rerun-01-identify\",\"axis\":\"pitch\""), std::string::npos)
+      << f.run_json();
+  f.until_session_ends();
+  EXPECT_FALSE(h.sim->session_owns_pitch()) << "production has the axis back";
+  EXPECT_NE(f.run_json().find("\"last_session\":\"rerun-01-identify: COMPLETE\""), std::string::npos) << f.run_json();
+  EXPECT_NEAR(h.sim->position(AxisId::Yaw), yaw0, 1e-3) << "yaw held through the pitch session";
+  // The journal is commissiond's, with the idle axis's record and the footer, written off the loop.
+  EXPECT_TRUE(eventually([&] { return file_text(journal).find("\"kind\":\"footer\"") != std::string::npos; }));
+  const auto text = file_text(journal);
+  EXPECT_NE(text.find("\"kind\":\"idle_axis\",\"axis\":\"yaw\""), std::string::npos);
+  EXPECT_NE(text.find("\"status\":\"COMPLETE\""), std::string::npos);
+  // Held between sessions: the pitch does not drift back to where the run began.
+  const double pitch_after = h.sim->position(AxisId::Pitch);
+  h.step(200);
+  EXPECT_NEAR(h.sim->position(AxisId::Pitch), pitch_after, 2e-3);
+  h.run("calibration_finish", (std::to_string(id) + " ACCEPTED").c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_FALSE(h.loop->calibrating());
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "the mode the run interrupted";
+  EXPECT_NE(f.run_json().find("\"state\":\"done\""), std::string::npos);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(CalibrationRun, StopDuringASessionHoldsBothAxesAndEndsInManual) {
+  for (const char* stop : {"stop_calibration", "stop_motion", "hold"}) {
+    RunFixture f;
+    auto& h = f.h;
+    const int id = f.begin();
+    const auto journal = f.session(id, "rerun-01-identify");
+    h.step(100);
+    h.run(stop);
+    EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << stop << ": " << h.snap().cmd_ack_reason;
+    h.step(3);
+    EXPECT_FALSE(h.loop->calibrating()) << stop;
+    EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual) << stop << ": STOP is the operator's word";
+    EXPECT_NE(f.run_json().find("\"state\":\"stopped\""), std::string::npos) << f.run_json();
+    EXPECT_NE(f.run_json().find("stopped: the operator pressed STOP"), std::string::npos) << f.run_json();
+    EXPECT_FALSE(h.sim->session_owns_pitch());
+    EXPECT_TRUE(eventually([&] { return file_text(journal).find("\"status\":\"INVALID\"") != std::string::npos; }));
+    EXPECT_EQ(h.loop->phase(), Phase::Hold) << "held, energised: " << h.loop->fault_reason();
+  }
+}
+
+TEST(CalibrationRun, ASilentCalibdEndsTheRunWithoutAFaultAndAStaleOneCannotSteerIt) {
+  RunFixture f;
+  auto& h = f.h;
+  const int id = f.begin("RERUN");
+  h.run("calibration_note", (std::to_string(id + 7) + " fitting").c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("is not the run in progress"), std::string::npos);
+  h.run("calibration_note", (std::to_string(id) + " design: kp 30").c_str());
+  EXPECT_NE(f.run_json().find("\"note\":\"design: kp 30\""), std::string::npos);
+  h.step(3100);   // 15.5 s with no word from calibd
+  EXPECT_FALSE(h.loop->calibrating());
+  EXPECT_NE(f.run_json().find("calibd is not answering"), std::string::npos) << f.run_json();
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "nothing was measured: carry on";
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
 }
 
 TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {

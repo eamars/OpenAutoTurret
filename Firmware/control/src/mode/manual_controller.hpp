@@ -284,6 +284,10 @@ class ManualController {
     return true;
   }
 
+  // The axes moved under someone else's control (a calibration session, ADR-005 D7): the next hold
+  // latches where they are now, not where the last one was.
+  void release_hold() { hold_latched_ = false; }
+
   void cancel(TimeNs now_ns) {
     (void)now_ns;
     lease_until_ns_ = 0;

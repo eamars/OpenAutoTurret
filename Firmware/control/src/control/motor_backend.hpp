@@ -20,6 +20,7 @@
 #include <limits>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@
 namespace ota {
 
 struct ServoAssets;   // control/servo_assets.hpp
+namespace calibration { class Session; struct PitchWindow; }   // calibration/calibration_session.hpp
 
 // Latest known state of one axis (a non-blocking read of the freshest feedback).
 // A feedback frame stamped after the caller's cycle clock is the freshest feedback there is: the
@@ -388,6 +390,19 @@ class MotorBackend {
   // with the servos as they were, only when an asset is refused; a backend with no servos has
   // nothing to swap.
   virtual bool swap_servo_assets(const ServoAssets&, std::string&) { return true; }
+  // ADR-005 D7: one calibration session at a time. The backend's own servo thread for the session's
+  // axis steps it; the axis's production servo stands aside and its references are ignored, while the
+  // other axis keeps production's hold. `window` is production's pitch envelope (D7.5).
+  virtual bool begin_calibration_session(const std::shared_ptr<calibration::Session>&,
+                                         const calibration::PitchWindow&, std::string& err) {
+    err = "this backend runs no calibration sessions";
+    return false;
+  }
+  // The session holds and the control loop has re-anchored its own hold at the axis: production's
+  // servo takes the axis back with the next reference.
+  virtual void release_calibration_session() {}
+  // A backend with no servo threads (the simulator) steps the session here, once a control cycle.
+  virtual void advance_calibration_session(TimeNs) {}
  private:
   std::function<void()> invalidate_;
 };

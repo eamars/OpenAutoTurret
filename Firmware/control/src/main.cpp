@@ -812,7 +812,8 @@ int main(int argc, char** argv) {
         const auto imu_state = imu_observer->snapshot(t0);
         loop.observe_imu(/*present=*/imu_state.trace_open &&
                                    (imu_state.game_rv_fresh || imu_state.gyro_fresh),
-                         /*gravity_valid=*/imu_state.game_rv_fresh && !imu_state.gap_seen);
+                         /*gravity_valid=*/imu_state.game_rv_fresh && !imu_state.gap_seen,
+                         /*gyro_fresh=*/imu_state.gyro_fresh);
         spdlog::info("BNO085 observer: generation={} tare={} game_rv_fresh={} gyro_fresh={} status={} gap={} trace_ended={}",
                      imu_state.generation, imu_state.game_rv_tared,
                      imu_state.game_rv_fresh, imu_state.gyro_fresh,
