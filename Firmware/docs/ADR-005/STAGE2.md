@@ -37,10 +37,11 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 | `stop_calibration` | page | CALIBRATING | ends the session now, both axes held, run STOPPED, MANUAL |
 | `calibration_session <run> <axis> <manifest>` | calibd | CALIBRATING, no session | controld runs one session and writes its journal beside the manifest |
 | `calibration_note <run> <text>` | calibd | CALIBRATING | the run view's last line |
-| `calibration_finish <run> <run dir> <verdict>` | calibd | CALIBRATING, no session | installs the accepted parts from `<run dir>/install/` (if any) through the swap hold, then resumes the interrupted mode |
+| `calibration_finish <run> <run dir> <verdict>` | calibd | the run in progress, no session; once | installs the accepted parts from `<run dir>/install/` (if any) through the swap hold, then resumes the interrupted mode |
 
-- **calibd must answer.** A run that sees no calibd command for 15 s, while no session is active, ends
-  NOT RUN ("calibd is not answering"). This is a persistence timeout, not a fault.
+- **calibd must answer.** A run that sees no calibd command for 15 s, while no session is active and
+  no finish is being installed, ends NOT RUN ("calibd is not answering"). This is a persistence
+  timeout, not a fault.
 - **Telemetry `calibration_run`:** run id, kind, state (`waiting`, `session`, `fitting`, `done`,
   `stopped`, `failed`), the steps, the current session (label, axis, elapsed, expected), the last
   note, and the verdict.
@@ -165,4 +166,18 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   - **Still to run on the hardware:** the pitch identify sweep and its fit, the yaw survey,
     crosstalk, inertia, ladder and circle sessions, and an install. All are parts of a RE-RUN, which
     waits for the owner's payload and go-ahead.
+- **Readiness check before the payload, 2026-10-24 19:00–21:30.**
+  - STOP during a VERIFY's session, from the page: both axes held, MANUAL, LAST RUN STOPPED.
+  - At 375 px the panel's notes ran off the edge (drawer rows are made for one-word states). They
+    wrap now; nothing in the panel is wider than the phone.
+  - A run that ends without calibd's finish (STOP, a fault, a silent calibd) is recorded as the
+    record's LAST RUN by controld. calibd sends no finish after a STOP.
+  - **A finish acted before it was accepted.** The web thread installed parts and wrote
+    record.json for any finish, and the control thread refused a finish for a run that had ended
+    only afterwards. So a late finish (calibd silent for 15 s during a fit, then done) would have
+    put parts in the record that never took force. Only the run in progress, once, touches a
+    record now. Once its finish is taken in, the run waits for it: the silence rule does not end it,
+    and a STOP ends it in MANUAL after the install. A fault in that window still ends it; the parts
+    are then in the record and take force at the next switch, and the refusal says so.
+    `CalibrationRun.OnlyTheRunInProgressFinishesIntoARecord` fails on the old code.
 

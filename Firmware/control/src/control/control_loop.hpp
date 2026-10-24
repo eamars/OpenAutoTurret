@@ -994,9 +994,14 @@ class ControlLoop {
     bool stopping = false;
   } run_;
   int run_seq_ = 0;
-  // What the web thread needs of the run in progress to install its parts (calibration_mutex_).
+  // What the web thread needs of the run in progress to install its parts (calibration_mutex_): the
+  // run (0: none), and whether its finish has been taken in. Only that run's finish touches a record,
+  // once; from then on the run waits for it -- calibd has answered, and a STOP ends it after the install.
+  int run_id_web_ = 0;
+  bool run_finishing_web_ = false;
   int run_record_id_web_ = 0;
   std::string run_kind_web_;
+  bool run_finishing();
   // calibd answers between sessions within this, or the run ends (not a fault).
   static constexpr TimeNs kCalibdSilenceNs = 15'000'000'000;
   std::shared_ptr<const std::string> calibration_run_json_;   // calibration_mutex_

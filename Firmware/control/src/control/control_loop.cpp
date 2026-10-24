@@ -4797,6 +4797,9 @@ void ControlLoop::execute_calibration_run_command(const std::string& name, const
     if (run_.session) {
       run_.session->stop("the operator pressed STOP");
       ack_command(name, true, "stopping run " + std::to_string(run_.id) + ": both axes held");
+    } else if (run_finishing()) {
+      // Nothing moves; what the run measured is going into the record. It ends there, in MANUAL.
+      ack_command(name, true, "run " + std::to_string(run_.id) + " is installing what it measured: it ends held, in MANUAL");
     } else {
       end_calibration_run("stopped", "stopped by the operator", OperatingMode::Manual);
       ack_command(name, true, "run " + std::to_string(run_.id) + " stopped: both axes held");
@@ -4808,9 +4811,12 @@ void ControlLoop::execute_calibration_run_command(const std::string& name, const
   const long id = std::strtol(arg.c_str(), &rest, 10);
   const std::string tail = rest && *rest == ' ' ? std::string(rest + 1) : std::string();
   if (!run_.active || id != run_.id) {
-    ack_command(name, false, run_.active ? "run " + std::to_string(id) + " is not the run in progress (" +
-                                               std::to_string(run_.id) + ")"
-                                         : std::string("no calibration run is in progress"));
+    // A finish's install, if the run ended under it (a fault), is in the record: it takes force at
+    // the next switch, and the refusal says so.
+    ack_command(name, false, (run_.active ? "run " + std::to_string(id) + " is not the run in progress (" +
+                                                std::to_string(run_.id) + ")"
+                                          : std::string("no calibration run is in progress")) +
+                                 (done_for_command_.empty() ? std::string() : "; " + done_for_command_));
     return;
   }
   run_.heard_ns = now_ns_;
@@ -4822,7 +4828,12 @@ void ControlLoop::execute_calibration_run_command(const std::string& name, const
   }
   if (name == "calibration_finish") {
     if (run_.session) {
-      ack_command(name, false, "session " + run_.session->label() + " is still running");
+      {
+        std::lock_guard lk(calibration_mutex_);
+        run_finishing_web_ = false;
+      }
+      ack_command(name, false, "session " + run_.session->label() + " is still running" +
+                                   (done_for_command_.empty() ? std::string() : "; " + done_for_command_));
       return;
     }
     // "<run dir> <verdict>"; the install (if any) was done on the web thread.
@@ -4904,6 +4915,8 @@ void ControlLoop::begin_calibration_run(const std::string& kind) {
   run_.started_ns = run_.heard_ns = now_ns_;
   {
     std::lock_guard lk(calibration_mutex_);
+    run_id_web_ = run_.id;
+    run_finishing_web_ = false;
     run_record_id_web_ = calibration_id_;
     run_kind_web_ = kind;
   }
@@ -4960,11 +4973,17 @@ void ControlLoop::step_calibration_run(TimeNs now_ns, const AxisSnapshot sp[kAxi
   } else if (!held) {
     end_calibration_run("failed", std::string("the station left its hold (") + phase_name(phase_) + ")",
                         OperatingMode::Manual);
-  } else if (now_ns - run_.heard_ns > kCalibdSilenceNs) {
-    // Not a fault: nothing moves without calibd, and the record is unchanged.
+  } else if (now_ns - run_.heard_ns > kCalibdSilenceNs && !run_finishing()) {
+    // Not a fault: nothing moves without calibd, and the record is unchanged. A finish being
+    // installed is calibd's last word, already in.
     end_calibration_run("failed", "calibd is not answering", run_.resume);
   }
   publish_calibration_run(now_ns, false);
+}
+
+bool ControlLoop::run_finishing() {
+  std::lock_guard lk(calibration_mutex_);
+  return run_finishing_web_;
 }
 
 void ControlLoop::end_calibration_run(const char* state, const std::string& why, OperatingMode resume) {
@@ -4975,12 +4994,15 @@ void ControlLoop::end_calibration_run(const char* state, const std::string& why,
   // calibd's finish records a run it completed (record.json last_run, on the web thread). A run that
   // ends any other way -- STOP, a fault, a silent calibd -- is recorded here, off the loop.
   // The store is updated in memory here and the file on the writer thread, as a bore trim is.
-  if (std::string(state) != "done") {
-    const calibration::Record::LastRun last{run_.kind,
-        std::string(state == std::string("stopped") ? "STOPPED: " : "NOT RUN: ") + why,
-        "run " + std::to_string(run_.id), calibration::today_local()};
+  const calibration::Record::LastRun last{run_.kind,
+      std::string(state == std::string("stopped") ? "STOPPED: " : "NOT RUN: ") + why,
+      "run " + std::to_string(run_.id), calibration::today_local()};
+  {
     std::lock_guard lk(calibration_mutex_);
-    if (calibration_store_ && calibration_writer_ && calibration_store_->find(run_record_id_web_)) {
+    run_id_web_ = 0;   // a finish that comes now changes no record
+    run_finishing_web_ = false;
+    if (std::string(state) != "done" && calibration_store_ && calibration_writer_ &&
+        calibration_store_->find(run_record_id_web_)) {
       const auto dir = calibration_store_->dir_of(run_record_id_web_);
       const int id = run_record_id_web_;
       calibration_store_->set_last_run(id, last);
@@ -6214,6 +6236,7 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
     const auto a = arg.find(' '), b = a == std::string::npos ? a : arg.find(' ', a + 1);
     const std::filesystem::path run_dir = a == std::string::npos ? std::string() : arg.substr(a + 1, b == std::string::npos ? b : b - a - 1);
     const std::string verdict = b == std::string::npos ? std::string() : arg.substr(b + 1);
+    const long run_no = std::strtol(arg.c_str(), nullptr, 10);
     int id = 0;
     std::string kind;
     std::filesystem::path record_dir, runs;
@@ -6221,7 +6244,11 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
       std::lock_guard clk(calibration_mutex_);
       id = run_record_id_web_;
       kind = run_kind_web_;
-      if (calibration_store_ && calibration_store_->find(id)) {
+      // Only the run in progress, and only its first finish, touches a record: a late or stale
+      // calibd's is refused by the control thread with nothing changed.
+      const bool ours = run_id_web_ != 0 && run_no == run_id_web_ && !run_finishing_web_;
+      if (ours) run_finishing_web_ = true;
+      if (ours && calibration_store_ && calibration_store_->find(id)) {
         record_dir = calibration_store_->dir_of(id);
         runs = calibration_store_->root() / "runs";
       }

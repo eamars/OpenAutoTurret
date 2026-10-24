@@ -1185,6 +1185,38 @@ TEST(CalibrationRun, ASilentCalibdEndsTheRunWithoutAFaultAndAStaleOneCannotSteer
   EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
 }
 
+TEST(CalibrationRun, OnlyTheRunInProgressFinishesIntoARecord) {
+  // 2026-10-24, on the station: a finish the control thread refused had already been written into
+  // record.json by the web thread. Another run's finish, or a late one, changes no record.
+  RunFixture f;
+  auto& h = f.h;
+  const auto rec = ota_cal_fixture::record_dir(f.s, 2);
+  auto staged = [&](const std::string& name) {
+    const auto run = f.s.cal() / "runs" / name;
+    std::filesystem::create_directories(run / "install");
+    std::filesystem::copy_file(rec / "yaw_servo.json", run / "install" / "yaw_servo.json");
+    return run;
+  };
+  const int id = f.begin("RERUN");
+  h.run("calibration_finish", (std::to_string(id + 5) + " " + staged("0006-rerun-other").string() + " ACCEPTED").c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_TRUE(h.loop->calibrating()) << "the run in progress goes on";
+  h.step(3100);   // calibd falls silent: the run ends; then its finish comes
+  ASSERT_FALSE(h.loop->calibrating());
+  h.run("calibration_finish", (std::to_string(id) + " " + staged("0001-rerun-late").string() + " ACCEPTED").c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_EQ(h.snap().cmd_ack_reason, "no calibration run is in progress");
+  EXPECT_FALSE(h.snap().calibration_switching);
+  EXPECT_TRUE(eventually([&] { return file_text(rec / "record.json").find("NOT RUN: calibd is not answering") != std::string::npos; }))
+      << file_text(rec / "record.json");
+  const auto record = file_text(rec / "record.json");
+  EXPECT_EQ(record.find("\"origin\": \"measured\""), std::string::npos) << "nothing installed: " << record;
+  EXPECT_FALSE(std::filesystem::exists(rec / "history" / "0006-rerun-other"));
+  EXPECT_FALSE(std::filesystem::exists(rec / "history" / "0001-rerun-late"));
+  EXPECT_NE(h.snap().calibration_records_json->find("NOT RUN: calibd is not answering"), std::string::npos)
+      << "the last run is the silence, not the late finish: " << *h.snap().calibration_records_json;
+}
+
 TEST(CalibrationBore, ACopyCanAimTheBoreZeroItAndTrimItInMilsAndKeepsIt) {
   // Owner, 2026-10-24: bore mode is per record. #1 stays as shipped; a copy can turn the bore on, and
   // then its zeroing distance and its 0.1 mrad trims apply to what the tracker aims.
