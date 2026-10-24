@@ -108,8 +108,16 @@ numbers; the report records every number):
    encoder's to the current's 80 Hz component gives the reading's current sensitivity, at 2.5 deg
    resolution; the 120-bin table carries a delay. The disagreement between the two directions is
    the table's uncertainty.
-3. **inertia.** Sliding at 30 deg/s while an 8–30 Hz current sweep is added. The response, with
-   the sweep as the instrument, is fitted to rigid body + loop delay + leftover crosstalk.
+3. **inertia.** Sliding at 30 deg/s while a 0.3 A current sweep is added. The response, with
+   the sweep as the instrument, is fitted to rigid body + loop delay + leftover crosstalk. The
+   sweep's start follows the plant: the survey's speed changes give a rough inertia first
+   (accelerating minus decelerating current at the same speed), and the sweep starts at the
+   nearest of 8, 5.6, 4 or 3 Hz to twice the prior loop's resonance. The bare turret keeps its
+   8–30 Hz, 10.5 s sweep; a payload of about 5× gets 3–30 Hz over 18 s (the session is 45 s
+   instead of 30). Why: a rigid body answers with 1/(J w²), and at 8–30 Hz a 5× payload's
+   response is smaller than the encoder's noise and the table's drift (PAYLOAD 10-24: no coherent
+   band). The leftover crosstalk the fit reports is the table's drift since its scan; the log says
+   so when it exceeds the scan's repeatability.
 4. **design (simulation).** `servo-sim` runs the identified plant through eight angles with steps
    and 5 and 20 deg/s ramps. Gains follow one loop shape scaled by inertia: kq = a·wn²,
    kv = a·wn (zeta 0.5), ki = 1.5·kq. For each compensation bias (1, 2, 3 mrad/A left in the
@@ -227,6 +235,12 @@ wsl.exe -e bash -c "cd /mnt/c/workspace/OpenAutoTurret && run/servo-commission/v
   an error, but the model's prediction is meaningless for that run.
 - **Ladder oscillation at the first step.** The model is far too optimistic. The ladder still
   brackets the onset from 0.6×. Check `report.json` "inertia" bands: low coherence means a bad sweep.
+- **`inertia: only N coherent frequency bands`** (the run is NOT ACCEPTED, nothing installed).
+  The rigid-body response did not rise above the encoder noise and the table's drift in the
+  sweep's bands. PAYLOAD 10-24 (5×) failed this way with the fixed 8–30 Hz sweep; the sweep now
+  starts lower for a heavier plant. If it happens with the 3 Hz sweep, look at the survey step's
+  `inertia_from_speed_changes` (is the plant heavier than the prior's gains can hold? the 10× case
+  limit-cycles under the prior in simulation) and at the sweep session's peak current and speed.
 - **`no gain with margin all the way round`.** Three circle checks tripped. Look for the angle in
   the circle journal; usually a local crosstalk-table error, so run `commission.py yaw` (not
   `--update`) to remeasure the table.
