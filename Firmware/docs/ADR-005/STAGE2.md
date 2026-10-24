@@ -311,3 +311,65 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   - **The next station run (MEASURE on #5 with this branch) must show:** `ki ≈ 3 × kq` in the ladder
     line (≈ 40–65), both passes accepted with speed ratios inside 0.93–1.07, and in the use-case
     journals a stick at ramp±1's start no longer than ~0.5 s with the integral unwinding at ≥ 0.3 A/s.
+- **Station, 2026-10-24 23:43 – 2026-10-25 00:38: a CAN hole, a homing regression, and the hold's
+  second heating.**
+  - **23:51: a 30 ms yaw CAN dropout ended run 1's inertia session** (`MEASUREMENT_LIMITED: servo
+    sensor data stale or invalid`), and with it the run. Owner, the same night: the station is real,
+    and one transient must not end a run. Fixed in `d00ff46`: a session that ends on a data hole, a
+    late start or a missing footer runs again under a new label (`-r1`, `-r2`), at most twice. A
+    result is never repeated: guard trips, the plant's limits and the operator's STOP all count as
+    results. The run's report lists each retry with its reason.
+  - **00:28: two-step arming broke the fine approaches.** The second fine approach never armed the
+    cap, met the stop 0.5° deeper, and failed the repeatability check. Fixed in `961b685`: only the
+    coarse approach needs two steps, since the payload's crawl off the rest stop happens there. The
+    fine approaches arm on one step again. HOME passed at 00:38 in 28 s. Not explained: why two
+    steps never armed a fine approach. The open-loop replay of the recorded feedback diverges after
+    the first backoff.
+  - **In that FAULT the pitch heated again (+1.3 °C/min), after `e688606`.** The approach drives
+    the CyberGear in speed mode. Its integral, wound against the stop, survives SpdRef 0. LocRef at
+    the measured position then holds the stop compressed. **Proposed to the owner (not made):** a
+    hold that releases a push into a stop, for example by holding just off it. That changes how a
+    FAULT behaves.
+- **MEASURE on #5, 00:38–01:12 (release `961b685`, with the slow-ramp fix): validation ACCEPTED,
+  then NOT ACCEPTED in the accuracy campaign, which had measured the wrong servo.**
+  - **Pitch ACCEPTED.** Yaw identification:
+    - The survey's rough J of 0.219 set the sweep to 3–30 Hz.
+    - Result: J 0.2647, against 0.213 and 0.229 in the two runs before, a 25% scatter. Loop delay
+      0.00 ms, which is the fit's bound. Residual crosstalk −0.12 mrad/A. 5 of 16 bands coherent.
+  - **Yaw design:** bias 3, boundary wn 8.2. The ladder was quiet up to wn 10.7 at 156° and 324°.
+    The chosen wn 7.0 gives kq 12.97, kv 1.853, ki 36.3, so ki = 2.8 kq under the new rule. The
+    circle at 1.1× was quiet.
+  - **Validation ACCEPTED on both passes: the slow-ramp fix works on the station.** Speed ratios
+    0.98–1.071 and 0.975–1.06; ramp±1 now 1.025–1.071, against 1.104–1.158 before. 1 and 4 stalls.
+  - **Accuracy is 2–3× worse than the bare turret's limits on every metric:**
+    - rests up to 0.63° off;
+    - ramp RMS 0.23–0.62°;
+    - slow-ramp P95-5 up to 2.2°;
+    - walker RMS 0.53–0.56°.
+
+    The model predicted 0.03–0.09° RMS. **Owner, 01:05:** long-term reliability after the initial
+    calibration matters more than accuracy, so the drift allowance stays at 1.0.
+  - **The accuracy campaign ran the record's bare-turret yaw asset**, not the asset the run had just
+    accepted. That asset has J 0.041, kq 30.8, ki 46 and an integral cap of 0.73 A.
+    - Cause: calibd gave every step the record's asset, and #5, made NEW from #1, holds #1's.
+    - Failure: its third FF+FB pass, ff_fb2, stuck for about 9 s after its positioning move. The
+      error sat at +0.35° while the drive pushed 0.55 A. Five 25 ms rocks counted as 5 stalls,
+      over the gate of 4, so no limits were written and nothing was installed.
+    - Fix 1: a later step measures the asset this run accepted (`calibd.Runner.asset_for`).
+    - Fix 2: `asset_validation_journals` now finds the validation passes in calibd's layout, under
+      `sessions/`, and calibrate counts only COMPLETE attempts. The limits now include those passes,
+      as the campaign's docstring promises.
+    - Incidental data: on this inertia the bare gains are wn 10.8. They ran three passes on the
+      payload without a limit cycle, with the same accuracy (rests 0.45–0.64°).
+  - **The accepted servo's stalls come from the integral cap, not the gains.**
+    - Validation pass 2 had four stalls, all near a stationary reference at 0.23–0.46° error. In two
+      of them the integral was pinned at its 0.4 A cap.
+    - The design caps the integral at the mean low-speed friction (`integral_cap = 1.0 × low`),
+      here 0.39 A. That is under this payload's + breakaway of 0.435 A, and well under breakaway
+      plus the ±0.15 A drift.
+    - Each rock zeroes the integral. It winds back to the cap in about 2 s, and the axis stalls
+      again.
+    - The bare turret never showed this. Its 10-02 asset's 0.73 A cap sits well above its friction
+      today, which measured 38–62% below that asset's fit on 10-20.
+    - This is likely what the simulator's "4–8 stall rocks per pass at any gain" was.
+    - Under study with Fable: a cap that covers the larger direction's breakaway plus the drift.
