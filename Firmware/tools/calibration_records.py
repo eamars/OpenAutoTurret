@@ -10,6 +10,7 @@ and records staged in incoming/, which controld adopts at its next start under t
     calibration_records.py import --state DIR --name NAME [--from ID] [--yaw F] [--pitch F]
                                   [--accuracy F] [--extrinsic F] [--bore F]
     calibration_records.py list   --state DIR
+    calibration_records.py pull   [--host USER@HOST] [--address IP] [--state DIR] [--to DIR] [ID ...]
 
 There are no hashes (owner, 2026-10-24): the committed files seed #1 once, on an empty store, and a
 deploy never compares them with the records again. A record is usable when its files parse.
@@ -18,12 +19,15 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -34,6 +38,8 @@ PARTS = {"yaw": "yaw_servo.json", "pitch": "pitch_servo.json", "accuracy": "yaw_
          "extrinsic": "camera_extrinsics.yaml", "bore": "bore.yaml"}
 NAME = re.compile(r"^[A-Z0-9 _-]{1,24}$")
 BORE_KEYS = ("right_mm", "up_mm", "forward_mm", "right_deg", "up_deg")
+FIRMWARE = Path(__file__).resolve().parents[1]
+STATION_STATE = "/home/eamars/workspace/OpenAutoTurret/run/state"
 
 
 def store_dirs(state: Path) -> tuple:
@@ -205,6 +211,44 @@ def listing(state: Path) -> str:
     return "\n".join(out) or f"no records in {records}"
 
 
+def place(fetched: Path, dest: Path, ids=None) -> str:
+    """Records fetched from a station into <dest>/<id>-<name>/, without journals (runtime captures,
+    outside git). A record pulled again replaces its earlier pull, renamed or not."""
+    out = []
+    dest.mkdir(parents=True, exist_ok=True)
+    for rid in record_ids(fetched):
+        if ids and rid not in ids:
+            continue
+        src = fetched / f"{rid:04d}"
+        try:
+            name = str(json.loads((src / "record.json").read_text(encoding="utf-8")).get("name") or "")
+        except (OSError, ValueError) as e:
+            out.append(f"#{rid} skipped: record.json unreadable ({e})")
+            continue
+        slug = re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-") or "UNNAMED"
+        for old in dest.glob(f"{rid:04d}-*"):
+            shutil.rmtree(old)
+        target = dest / f"{rid:04d}-{slug}"
+        shutil.copytree(src, target, ignore=shutil.ignore_patterns("journals", "*.tmp", ".*"))
+        out.append(f"#{rid} {name} -> {target}")
+    return "\n".join(out) or f"no records in {fetched}"
+
+
+def pull(host: str, state: str, dest: Path, ids=None, address: str | None = None) -> str:
+    """Copies the station's records into the repository as evidence (ADR-005 D3). Read-only on the
+    station: one ssh that streams a tar of records/."""
+    ssh = ["ssh", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+    if address:   # mDNS goes stale after a reboot; the key is still the station's
+        ssh += ["-o", f"HostName={address}", "-o", f"HostKeyAlias={host.rsplit('@', 1)[-1]}"]
+    remote = shlex.quote(f"{state.rstrip('/')}/calibration/records")
+    data = subprocess.run([*ssh, host, f"tar -C {remote} --exclude=journals -cf - ."],
+                          check=True, capture_output=True).stdout
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            tar.extractall(tmp, filter="data")
+        return place(Path(tmp), dest, ids)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -221,6 +265,12 @@ def main(argv=None) -> int:
         i.add_argument("--" + part, type=Path)
     lst = sub.add_parser("list")
     lst.add_argument("--state", required=True, type=Path)
+    pl = sub.add_parser("pull", help="copy the station's records into the repository, without journals")
+    pl.add_argument("--host", default="eamars@rpi-turret")
+    pl.add_argument("--address", help="connect here instead of the host's name (e.g. 192.168.2.103)")
+    pl.add_argument("--state", default=STATION_STATE, help="the station's state directory")
+    pl.add_argument("--to", type=Path, default=FIRMWARE / "calibration" / "records")
+    pl.add_argument("ids", nargs="*", type=int, help="only these records (default: all)")
     a = ap.parse_args(argv)
     if a.cmd == "seed":
         root = (a.root or a.config.resolve().parents[1]).resolve()
@@ -228,6 +278,8 @@ def main(argv=None) -> int:
     elif a.cmd == "import":
         files = {p: getattr(a, p) for p in PARTS if getattr(a, p) is not None}
         print(import_record(a.state, a.name, a.source, files))
+    elif a.cmd == "pull":
+        print(pull(a.host, a.state, a.to, a.ids, a.address))
     else:
         print(listing(a.state))
     return 0

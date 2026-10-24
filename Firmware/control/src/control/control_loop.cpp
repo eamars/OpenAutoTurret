@@ -4844,7 +4844,7 @@ void ControlLoop::execute_bore_command(const std::string& name, const std::strin
   const bool still = phase_ == Phase::Idle ||
                      (phase_ == Phase::Hold && mode_mgr_.mode() == OperatingMode::Manual && rest_park_.stage == RestPark::Off);
   if (!still) {
-    ack_command(name, false, rest_park_.stage != RestPark::Off ? "parked: HOME, then trim in a MANUAL hold"
+    ack_command(name, false, rest_park_.stage != RestPark::Off ? "parked: trim in a MANUAL hold or in Shutdown"
                              : phase_ == Phase::Hold ? "trim in MANUAL: MODE > MANUAL holds where it is"
                                                      : "trim on a still turret: a MANUAL hold or Shutdown");
     return;

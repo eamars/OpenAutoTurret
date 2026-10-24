@@ -555,7 +555,7 @@ function hudCalibrationBore(t, pace) {
   const b = (recs.filter((x) => x.id === cur.id)[0] || {}).bore || {}, w = b.wide || {};
   const on = b.mode === "manual_depth", switching = !!t.calibration_switching, parked = !!t.rest_park;
   const still = !switching && !parked && (t.phase === "idle" || (t.phase === "hold" && t.operating_mode === "MANUAL"));
-  const why = switching ? "switching…" : parked ? "parked: HOME, then trim in a MANUAL hold"
+  const why = switching ? "switching…" : parked ? "parked: trim in a MANUAL hold or in Shutdown"
     : t.phase === "hold" ? "trim in MANUAL: MODE › MANUAL holds where it is" : "trim on a still turret: a MANUAL hold or Shutdown";
   const hold = !still && !switching && !parked && t.phase === "hold"
     ? { label: "HOLD HERE TO TRIM", command: "set_mode", arg: "MANUAL", kind: "act", note: "MANUAL: the turret stops where it is" }
@@ -589,7 +589,7 @@ function hudCalibrationBore(t, pace) {
     paceNote: "one press moves the amber bore mark " + pace + " mrad" + (pacePx === null ? "" : " (" + pacePx + " px on the wide camera)"),
     wide: { buttons: [trim("right", -1), trim("right", 1), trim("up", -1), trim("up", 1)],
             text: "R " + sign(r) + " · U " + sign(u) + " MRAD" + trimPx,
-            note: !on ? "turn the bore on to trim it" : !still ? why : "" },
+            note: on ? "" : "turn the bore on to trim it" },   // why it is greyed otherwise: the BORE row says
     detail: "needs the detail camera's intrinsics: its field of view is not measured"
   };
 }

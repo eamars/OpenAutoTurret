@@ -404,6 +404,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertEqual((roam["hold"]["command"], roam["hold"]["arg"]), ("set_mode", "MANUAL"))
         self.assertFalse(roam["still"])
         self.assertIn("trim in MANUAL", roam["note"])
+        self.assertEqual(roam["wide"]["note"], "", "said once, on the BORE row")
         self.assertTrue(all(m["command"] is None for m in roam["mode"]))
         self.assertTrue(all(x["command"] is None for x in roam["wide"]["buttons"]))
         for t in ({"phase": "hold", "operating_mode": "MANUAL", "calibration_switching": True},

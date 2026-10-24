@@ -305,6 +305,45 @@ Design and decisions: [DESIGN_TARGET_TYPE_2026-10-20.md](DESIGN_TARGET_TYPE_2026
   the operator's type without applying it (the stationary-object trials on the objects profile
   keep working). A plain `start` follows the operator's type.
 
+## Calibration records: payload sets on the page (owner rulings, 2026-10-24)
+
+Design and decisions: [ADR-005](ADR-005/ADR-005.md). Stage 1 (records, switching, bore trims) is in;
+runs from the page (VERIFY, RE-RUN, NEW's measurement) come with stage 2 and are shown greyed.
+
+- **What a record is.** One payload set: the yaw and pitch servo assets, the yaw accuracy limits,
+  the camera->pitch extrinsic and the bore. The station keeps them in
+  `run/state/calibration/records/<id>/`, with `active.json` naming the one in force (and whether it
+  has been verified since it was chosen). Ids are never reused; a removed record goes to `deleted/`,
+  kept, not erased.
+- **#1 AS SHIPPED is the failsafe backup.** Seeded once, from the release's committed files, into an
+  empty store only; never renamed, removed, measured into or trimmed. No hashes: a record is usable
+  when its files parse and the servo gate accepts them. Changing a calibration file in git does not
+  change the station's records.
+- **What the operator sees.** MENU > CALIBRATION: the record in force, one chip per record, what each
+  part is (SHIPPED / MEASURED date / FROM #n / TRIMMED date), RENAME, NEW (a copy of a record, put in
+  force), REMOVE (two presses; not #1, not the record in force), and the BORE section.
+- **What a switch does.** In Shutdown it applies at once and the next HOME uses it. Homed, it is the
+  target-type switch's hold: MANUAL, the turret brakes and holds, the servos swap after 0.1 s at rest
+  (within 0.3 deg of where the hold began), settle for 0.3 s, and the interrupted mode resumes. STOP
+  MOTION or HOLD meanwhile ends it in MANUAL. Not applied in 10 s: held in MANUAL, NOT APPLIED and why,
+  no fault. Refused while homing, parking, parked or faulted.
+- **Measured on the station (releases 7e6f9ab..5617a61).** Command to resumed AUTO_ROAM 0.97 s; from
+  a still MANUAL hold the swap itself moves yaw at most 0.046 deg (one count) and pitch 0.022 deg, done
+  in 0.48-0.53 s. The servo re-engages bumpless at the same position.
+- **The bore (D9).** Per record, OFF or ON. ON, the tracker aims the bore instead of the camera centre
+  and the HUD draws the amber mark labelled `ZERO 25 m` / `ZERO ∞`. With it on: ZERO AT (5..1500 m, ∞;
+  zero on a target at that distance) and WIDE R/U trims at 0.1, 1 or 10 mrad per press. Only in a
+  MANUAL hold or in Shutdown; the panel offers HOLD HERE TO TRIM otherwise. The detail camera's rows
+  wait for its intrinsics.
+- **A switch cannot tell whether the record fits what is mounted.** The station cannot see the
+  payload; the VERIFY row says NOT VERIFIED SINCE SWITCH. A yaw motor change makes every record's
+  crosstalk table stale, and the station cannot tell either.
+- **Records in and out.** `tools/calibration_records.py import --state run/state --name NAME [--from
+  ID] [--yaw F ...]` on the station stages a workstation result in `incoming/`; controld adopts it at
+  its next start under the next free id, never in force by itself. `tools/calibration_records.py
+  pull [--address IP]` on the workstation copies the station's records, without journals, into
+  `Firmware/calibration/records/<id>-<name>/` to commit as evidence.
+
 ## SURVEILLANCE: a fixed camera that follows (owner ruling, 2026-10-05)
 
 **Ruling.** A fourth mode, AUTO_ROAM's sibling. The turret faces a saved **watch point** and holds

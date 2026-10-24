@@ -69,6 +69,43 @@ class Seed(unittest.TestCase):
         self.assertEqual(cr.record_ids(self.state / "calibration" / "records"), [1])
 
 
+class Pull(unittest.TestCase):
+    """What `pull` does with what it fetched: the repository copy, without journals (ADR-005 D3)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.fetched = Path(self.tmp.name) / "fetched"
+        self.dest = Path(self.tmp.name) / "repo"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def record(self, rid, name):
+        d = self.fetched / f"{rid:04d}"
+        (d / "journals" / "yaw-20261024").mkdir(parents=True)
+        (d / "journals" / "yaw-20261024" / "journal.jsonl").write_text("{}\n")
+        (d / "record.json").write_text(json.dumps({"name": name}))
+        (d / "bore.yaml").write_text("mode: \"off\"\n")
+        return d
+
+    def test_each_record_lands_under_its_id_and_name_without_journals(self):
+        self.record(1, "AS SHIPPED")
+        self.record(2, "FRICTION 10-20")
+        out = cr.place(self.fetched, self.dest)
+        self.assertIn("#2 FRICTION 10-20", out)
+        self.assertEqual(sorted(p.name for p in self.dest.iterdir()), ["0001-AS-SHIPPED", "0002-FRICTION-10-20"])
+        self.assertEqual(sorted(p.name for p in (self.dest / "0002-FRICTION-10-20").iterdir()),
+                         ["bore.yaml", "record.json"])
+
+    def test_a_record_pulled_again_replaces_its_earlier_pull_and_others_are_kept(self):
+        self.record(2, "FRICTION 10-20")
+        self.record(3, "RANGE")
+        cr.place(self.fetched, self.dest)
+        (self.fetched / "0002" / "record.json").write_text(json.dumps({"name": "FRICTION B"}))
+        cr.place(self.fetched, self.dest, ids=[2])
+        self.assertEqual(sorted(p.name for p in self.dest.iterdir()), ["0002-FRICTION-B", "0003-RANGE"])
+
+
 class Import(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

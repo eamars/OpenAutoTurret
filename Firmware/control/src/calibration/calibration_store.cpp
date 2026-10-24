@@ -371,8 +371,13 @@ std::string bore_yaml(const Bore& b) {
          "   # zeroing distance; .inf = no parallax\n" + cam("wide", b.wide) + cam("detail", b.detail);
 }
 
+// record.json is rewritten by a rename (the web thread) and by a trim (the writer thread): each reads,
+// changes one field and writes it back, so they take turns or one would undo the other.
+static std::mutex record_json_mutex;
+
 bool write_bore(const fs::path& dir, const Bore& b, const std::string& date, std::string& err) {
   if (!write_file(dir / "bore.yaml", bore_yaml(b), err)) return false;
+  std::lock_guard lk(record_json_mutex);
   try {
     YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
     YAML::Node part = doc["parts"]["bore"];
@@ -401,6 +406,7 @@ std::string record_name(const std::string& raw) {
 }
 
 bool rename_record(const fs::path& dir, const std::string& name, std::string& err) {
+  std::lock_guard lk(record_json_mutex);
   try {
     YAML::Node doc = YAML::LoadFile((dir / "record.json").string());
     doc["name"] = name;

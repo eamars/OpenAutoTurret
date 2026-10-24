@@ -52,6 +52,11 @@ already, and the launcher's native path defaults to `-j$(nproc)` as of 2026-09-2
 loaded, which is still an unmeasured combination). A cold arm64 tree is a full rebuild of the
 controller and takes minutes; that is expected, not a hang, and it is the reason `--prebuilt` exists.
 
+`OTA_BUILD_JOBS` caps the cross build too (2026-10-24). On a Windows workstation the build runs in
+WSL, so the variable must cross into it: `export OTA_BUILD_JOBS=4 WSLENV="${WSLENV:+$WSLENV:}OTA_BUILD_JOBS"`
+before `deploy_station.py`. Four jobs is what the owner's workstation sustains beside its other
+loads; `$(nproc)` there exhausted Windows' commit memory (see "Known failure modes").
+
 ## The command
 
 ```bash
@@ -148,6 +153,12 @@ What is *not* an option: starting from "I don't know how this works" and trying 
 station. The station is an instrument, not a scratch pad.
 
 ## Known failure modes, with their reasons
+
+- **The cross build fails on files that are empty in the WSL mirror, or WSL dies mid-build**
+  (2026-10-24) → Windows ran out of commit memory (System log: Resource-Exhaustion-Detector 2004, then
+  the WSL service 7034) and the mirror's checkout wrote zero-length files. `cross_build_mirror` now
+  refuses a tree that does not match the commit and names the files; free memory and set
+  `OTA_BUILD_JOBS` (above) rather than retrying at full parallelism.
 
 - **The remote step exits 2 right after a successful cross build** → the deploy ran without
   `--prebuilt`, so `run_application.sh deploy` on the station tried a **native** build and this station
