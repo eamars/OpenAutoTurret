@@ -1191,50 +1191,65 @@ void MixedCanMotorBackend::keepalive(AxisId axis) {
 
 bool MixedCanMotorBackend::load_servos(std::string& err) {
   const auto& c = *profile_.servo;
-  try {
-    const auto yaw_asset = YAML::LoadFile(c.yaw_asset);
-    auto yaw = axis::servo_from_yaml(yaw_asset["servo_parameters"]);
-    // The profile's authority is the ceiling; an asset can ask for less, never more.
-    yaw.current_cap = std::min(yaw.current_cap, c.yaw_current_limit_a);
-    yaw.rms_limit = std::min(yaw.rms_limit, c.yaw_rms_limit_a);
-    if (!yaw_servo_.configure(yaw)) {
-      err = "yaw servo asset rejected: " + c.yaw_asset;
-      return false;
-    }
-    // Optional: without the identified table the tracking history keeps the raw reading.
-    yaw_identified_crosstalk_valid_ = false;
-    const auto identified = yaw_asset["identified"]["crosstalk"]["table"];
-    if (identified && identified.IsSequence() && identified.size() == yaw_identified_crosstalk_.size()) {
-      bool finite = true;
-      for (std::size_t k = 0; k < yaw_identified_crosstalk_.size(); ++k) {
-        yaw_identified_crosstalk_[k] = identified[k].as<double>();
-        finite = finite && std::isfinite(yaw_identified_crosstalk_[k]);
-      }
-      yaw_identified_crosstalk_valid_ = finite;
-    }
-    if (!yaw_identified_crosstalk_valid_)
-      spdlog::warn("yaw asset has no usable identified crosstalk table; tracking uses the raw yaw reading");
-    const auto trial = YAML::LoadFile(c.pitch_asset)["servo_trial"];
-    // The asset's speed clamp was a commissioning choice; the owner's cap is 100 RPM (2026-10-02).
-    const axis::PositionLoopParameters loop{trial["kp_per_s"].as<double>(), trial["ki_per_s2"].as<double>(),
-                                            trial["integral_clamp_rad_s"].as<double>(), c.speed_limit_rad_s};
-    pitch_following_error_rad_ = trial["following_error_rad"].as<double>();
-    if (!pitch_loop_.configure(loop) || !(pitch_following_error_rad_ > 0)) {
-      err = "pitch servo asset rejected: " + c.pitch_asset;
-      return false;
-    }
-    yaw_oscillation_ = axis::OscillationMonitor(c.oscillation_limit_a);
-    yaw_servo_epoch_ns_ = clock_();
-    yaw_servo_configured_ = pitch_servo_configured_ = true;
-    spdlog::info("ADR-002.2 servos loaded: yaw {} (kq {} A/rad, kv {} A s/rad, ki {} A/(rad s), peak {} A, rms {} A, "
-                 "inertia {} A s^2/rad); pitch {} (kp {}/s, ki {}/s^2, speed {} rad/s, following {} rad)",
-                 c.yaw_asset, yaw.kq, yaw.kv, yaw.ki, yaw.current_cap, yaw.rms_limit, yaw.inertia,
-                 c.pitch_asset, loop.kp, loop.ki, loop.speed_limit, pitch_following_error_rad_);
-    return true;
-  } catch (const std::exception& error) {
-    err = std::string("servo asset: ") + error.what();
+  ServoAssets assets;
+  return parse_servo_assets(c.yaw_asset, c.pitch_asset, assets, err) && install_servos(assets, err);
+}
+
+bool MixedCanMotorBackend::install_servos(const ServoAssets& a, std::string& err) {
+  const auto& c = *profile_.servo;
+  // The profile's authority is the ceiling; an asset can ask for less, never more.
+  auto yaw = a.yaw;
+  yaw.current_cap = std::min(yaw.current_cap, c.yaw_current_limit_a);
+  yaw.rms_limit = std::min(yaw.rms_limit, c.yaw_rms_limit_a);
+  // The asset's speed clamp was a commissioning choice; the owner's cap is 100 RPM (2026-10-02).
+  auto loop = a.pitch;
+  loop.speed_limit = c.speed_limit_rad_s;
+  // Both are checked before either is touched: a refused asset leaves the servos as they were.
+  if (axis::Servo probe; !probe.configure(yaw)) {
+    err = "yaw servo asset rejected: " + a.yaw_path;
     return false;
   }
+  if (axis::PositionLoop probe; !probe.configure(loop) || !(a.pitch_following_error_rad > 0)) {
+    err = "pitch servo asset rejected: " + a.pitch_path;
+    return false;
+  }
+  {
+    std::lock_guard lock(yaw_mutex_);
+    // An engaged servo is released where it is; the next reference re-engages it bumpless (the
+    // current on the wire becomes the integral's start). The epoch stays: the servo's clock must
+    // not run backwards across a swap.
+    release_yaw_servo_locked();
+    yaw_servo_.configure(yaw);
+    yaw_identified_crosstalk_ = a.yaw_crosstalk;
+    yaw_identified_crosstalk_valid_ = a.yaw_crosstalk_valid;
+    yaw_oscillation_ = axis::OscillationMonitor(c.oscillation_limit_a);
+    if (!yaw_servo_configured_) yaw_servo_epoch_ns_ = clock_();
+    yaw_servo_configured_ = true;
+  }
+  {
+    std::lock_guard lock(pitch_servo_mutex_);
+    pitch_servo_active_.store(false);   // the drive holds its last speed until the next reference
+    pitch_loop_.configure(loop);
+    pitch_following_error_rad_ = a.pitch_following_error_rad;
+    pitch_servo_configured_ = true;
+  }
+  if (!a.yaw_crosstalk_valid)
+    spdlog::warn("yaw asset has no usable identified crosstalk table; tracking uses the raw yaw reading");
+  spdlog::info("ADR-002.2 servos loaded: yaw {} (kq {} A/rad, kv {} A s/rad, ki {} A/(rad s), peak {} A, rms {} A, "
+               "inertia {} A s^2/rad); pitch {} (kp {}/s, ki {}/s^2, speed {} rad/s, following {} rad)",
+               a.yaw_path, yaw.kq, yaw.kv, yaw.ki, yaw.current_cap, yaw.rms_limit, yaw.inertia,
+               a.pitch_path, loop.kp, loop.ki, loop.speed_limit, a.pitch_following_error_rad);
+  return true;
+}
+
+bool MixedCanMotorBackend::swap_servo_assets(const ServoAssets& assets, std::string& err) {
+  if (!profile_.servo) return true;   // the legacy speed paths: nothing to swap
+  if (!install_servos(assets, err)) return false;
+  // A station that booted with an unusable record opened without servos (ADR-005 D4): the pitch
+  // servo's thread starts with the first record that can be used.
+  if (opened_.load() && !pitch_servo_.joinable())
+    pitch_servo_ = std::jthread([this](std::stop_token stop) { pitch_servo_loop(stop); });
+  return true;
 }
 
 bool MixedCanMotorBackend::servo_available(AxisId axis) const {

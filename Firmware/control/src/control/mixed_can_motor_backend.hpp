@@ -16,6 +16,7 @@
 #include "config/mixed_hardware_profile.hpp"
 #include "control/episode_latch.hpp"
 #include "control/can_motor_backend.hpp"
+#include "control/servo_assets.hpp"
 #include "position_loop.hpp"
 #include "servo.hpp"
 #include "session_parts.hpp"
@@ -237,6 +238,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   void keepalive(AxisId axis) override;
   bool servo_available(AxisId axis) const override;
   bool command_reference(AxisId axis, const ServoReference& reference) override;
+  bool swap_servo_assets(const ServoAssets& assets, std::string& err) override;
   void set_current_limit(AxisId axis, double limit_cur_a) override;
   void set_speed_loop_gains(AxisId axis, double spd_kp, double spd_ki) override;
 
@@ -282,8 +284,10 @@ class MixedCanMotorBackend final : public MotorBackend {
   AxisSnapshot yaw_snapshot_locked(TimeNs now_ns) const;
   void command_yaw_velocity_locked(double velocity_rad_s, TimeNs now_ns);
   // ADR-003 3b: the ADR-002.2 servos (MotorBackend::ServoReference). Loaded from the profile's
-  // servo assets at open; a configured but unloadable asset refuses to open.
+  // servo assets at open; a configured but unloadable asset refuses to open. install_servos is the
+  // half shared with a swap of the record in force (ADR-005).
   bool load_servos(std::string& err);
+  bool install_servos(const ServoAssets& assets, std::string& err);
   void step_yaw_servo_locked(TimeNs rx_ns);
   void release_yaw_servo_locked();
   void release_pitch_servo();

@@ -495,6 +495,13 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
   else
     os << ",\"calibration_record\":null";
   os << ",\"calibration_blocked\":\"" << json_escape(s.calibration_blocked) << "\""
+     << ",\"calibration_switching\":" << (s.calibration_switching ? "true" : "false")
+     << ",\"calibration_overdue\":" << (s.calibration_overdue ? "true" : "false")
+     << ",\"calibration_switch_from\":" << s.calibration_switch_from
+     << ",\"calibration_progress\":" << s.calibration_progress
+     << ",\"calibration_unverified\":" << (s.calibration_unverified ? "true" : "false")
+     << ",\"calibration_records\":"
+     << (s.calibration_records_json ? *s.calibration_records_json : std::string("[]"))
      << ",\"target_type\":\"" << json_escape(s.target_type) << "\""
      << ",\"target_type_applied\":\"" << json_escape(s.target_type_applied) << "\""
      << ",\"target_type_switching\":" << (s.target_type_switching ? "true" : "false")

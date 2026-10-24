@@ -212,12 +212,15 @@ int main(int argc, char** argv) {
   // cannot be used configures no servo and keeps the station shut down -- never another record.
   int calibration_id = 0;
   std::string calibration_name, calibration_blocked;
+  std::shared_ptr<calibration::Store> calibration_store;   // kept by the loop, for switching
   if (const char* sd = std::getenv("OTA_STATE_DIR"); sd != nullptr && *sd != '\0') {
-    calibration::Store store;
+    auto opened = std::make_shared<calibration::Store>();
+    auto& store = *opened;
     std::string e;
     if (!store.open(sd, e)) {
       spdlog::error("calibration store: {}; using the configured files", e);
     } else {
+      if (!store.empty()) calibration_store = opened;
       for (const auto& line : store.adopted()) spdlog::info("calibration: {}", line);
       std::string why;
       if (store.empty()) {
@@ -407,6 +410,7 @@ int main(int argc, char** argv) {
   }
   ControlLoop loop(std::move(control_cfg), std::move(backend));
   loop.set_calibration_record(calibration_id, calibration_name, calibration_blocked);
+  loop.set_calibration_store(calibration_store);
 
   // The BNO085 is mounted on the moving pitch assembly. It observes gimbal
   // motion independently of motor feedback; it is not the fixed base pose.

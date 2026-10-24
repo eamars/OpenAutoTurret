@@ -7,12 +7,19 @@
 //
 // There are no hashes (owner, 2026-10-24): a record is usable when its files parse and make a servo,
 // a position loop, a rotation and a valid bore. A file edited by hand needs no bookkeeping.
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "control/servo_assets.hpp"
 #include "geometry/bore_alignment.hpp"
+#include "geometry/turret_kinematics.hpp"
 
 namespace ota::calibration {
 
@@ -51,6 +58,38 @@ struct Record {
 // Reads and checks one record directory; a problem is reported in `unusable`, never thrown.
 Record read_record(const std::filesystem::path& dir, int id);
 
+// A record parsed into what is applied: the servo assets for the backend, the extrinsic (in its
+// homed frame) and the bore for the tracking geometry. Made off the control thread (file I/O).
+struct Prepared {
+  Record record;
+  ServoAssets servo;
+  geo::TurretKinematics kinematics;
+  geo::BoreAlignmentConfig alignment;
+};
+bool prepare(const Record& record, Prepared& out, std::string& err);
+
+// The records for telemetry: id, name, why unusable, each part's origin and the bore.
+std::string records_json(const std::vector<Record>& records);
+// active.json, written atomically.
+bool write_active(const std::filesystem::path& state_calibration_dir, int id, std::string& err);
+
+// File work off the 200 Hz control thread: jobs run in order on one thread of their own.
+class Writer {
+ public:
+  Writer();
+  ~Writer();
+  Writer(const Writer&) = delete;
+  Writer& operator=(const Writer&) = delete;
+  void post(std::function<void()> job);
+
+ private:
+  std::mutex m_;
+  std::condition_variable cv_;
+  std::deque<std::function<void()>> jobs_;
+  bool stop_ = false;
+  std::thread thread_;
+};
+
 class Store {
  public:
   // Opens <state_dir>/calibration. A missing store is an empty one, not an error; false only when
@@ -65,6 +104,8 @@ class Store {
   // another record instead (ADR-005 D4): a servo designed for another payload is the failure this
   // feature exists to prevent.
   const Record* in_force(std::string& why) const;
+  const std::filesystem::path& root() const { return root_; }
+  void set_active(int id) { active_ = id; }
 
  private:
   void adopt_incoming();

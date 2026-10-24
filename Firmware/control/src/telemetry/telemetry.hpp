@@ -544,6 +544,17 @@ struct TelemetrySnapshot {
   int calibration_record_id = 0;
   std::string calibration_record_name;
   std::string calibration_blocked;
+  // The switch to another record (D5): holding for it, from which record, how far (0 until the servos
+  // have swapped, then the settle), overdue after 10 s; and whether the record in force has been
+  // VERIFYed since it was chosen (the station cannot see the payload).
+  bool calibration_switching = false;
+  bool calibration_overdue = false;
+  int calibration_switch_from = 0;
+  double calibration_progress = 1.0;
+  bool calibration_unverified = false;
+  // Every record (id, name, why unusable, each part's origin, the bore), as JSON: changes rarely,
+  // so it is built once per change and shared, not rebuilt per frame.
+  std::shared_ptr<const std::string> calibration_records_json;
   // What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
   // fresh frame was produced for ("" while none), whether the turret is holding for the switch, and
   // whether that switch is overdue (perception has not applied it within 10 s).

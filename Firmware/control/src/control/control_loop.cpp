@@ -1992,7 +1992,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     // Drive-mode item 4: the automatic AUTO_TRACK <-> AUTO_ROAM hand-off, checked before the intent is built
     // so a switch that happens now takes effect this cycle rather than being a cycle late. Inert while both
     // keys are 0 (the shipped default), in which case evaluate_auto_switch() returns immediately.
-    step_target_switch(now_ns);
+    step_swap_hold(now_ns, sp);
     evaluate_auto_switch(now_ns);
     last_intent_ = build_mode_intent(now_ns);
     // §36/§44 across every handover, not just the one the section is titled after.
@@ -3867,10 +3867,23 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.calibration_blocked = calibration_blocked_;
     snap.target_type = target_type_name(target_type_);
     snap.target_type_applied = target_type_name(applied_target_type(now_ns));
-    snap.target_type_switching = tswitch_.active;
-    snap.target_type_overdue = tswitch_.overdue;
-    snap.target_type_progress = !tswitch_.active ? 1.0 : tswitch_.matched_since_ns == 0 ? 0.0
-        : std::clamp(static_cast<double>(now_ns - tswitch_.matched_since_ns) / kTargetSwitchSettleNs, 0.0, 1.0);
+    snap.target_type_switching = hold_.active && hold_.target;
+    snap.target_type_overdue = snap.target_type_switching && hold_.overdue;
+    snap.target_type_progress = !snap.target_type_switching ? 1.0 : hold_.target_matched_since_ns == 0 ? 0.0
+        : std::clamp(static_cast<double>(now_ns - hold_.target_matched_since_ns) / kTargetSwitchSettleNs, 0.0, 1.0);
+    // ADR-005: the record switch. Progress 0 until the servos have swapped (how long the turret takes
+    // to come to rest is not knowable in advance), then the share of the settle on the new servos.
+    snap.calibration_switching = hold_.active && hold_.record != nullptr;
+    snap.calibration_overdue = snap.calibration_switching && hold_.overdue;
+    snap.calibration_switch_from = snap.calibration_switching ? hold_.record_from : 0;
+    snap.calibration_progress = !snap.calibration_switching ? 1.0
+        : !hold_.record_applied || hold_.record_rest_since_ns == 0 ? 0.0
+        : std::clamp(static_cast<double>(now_ns - hold_.record_rest_since_ns) / kRecordSettleNs, 0.0, 1.0);
+    snap.calibration_unverified = calibration_unverified_;
+    {
+      std::lock_guard lk(calibration_mutex_);
+      snap.calibration_records_json = calibration_records_json_;
+    }
     snap.watch_point_set = watch_.valid;
     snap.watch_point_saved = watch_store_ ? watch_store_->last_result() : -1;
     snap.watch_point_persistent = watch_store_ && watch_store_->persistent();
@@ -4711,48 +4724,186 @@ void ControlLoop::execute_set_target_type(const std::string& arg) {
   const TargetType before = target_type_;
   target_type_ = wanted;
   if (target_store_ && wanted != before) target_store_->save(wanted);
-  if (applied_target_type(now_ns_) == wanted && !tswitch_.active) {
+  if (applied_target_type(now_ns_) == wanted && !hold_.target) {
     ack_command(name, true, std::string("following ") + target_type_name(wanted));
     return;
   }
-  // Hold through the swap. A homed, holding turret drops what it follows and holds where it is (MANUAL);
-  // the mode it was in resumes afterwards. AUTO_TRACK resumes as the mode its loss returns to: the
-  // target it was following is gone with the old model.
-  if (!tswitch_.active) {
-    const OperatingMode m = mode_mgr_.mode();
-    tswitch_.resume = m == OperatingMode::AutoTrack ? auto_return_mode_ : m;
-    if (m != OperatingMode::Manual && phase_ == Phase::Hold) request_mode(OperatingMode::Manual);
-  }
-  tswitch_.active = true;
-  tswitch_.overdue = false;
-  tswitch_.since_ns = now_ns_;
-  tswitch_.matched_since_ns = 0;
+  begin_swap_hold();
+  hold_.target = true;
+  hold_.target_matched_since_ns = 0;
   spdlog::info("target type {} -> {}: holding until perception's frames carry it; then {}", target_type_name(before),
-               target_type_name(wanted), operating_mode_name(tswitch_.resume));
+               target_type_name(wanted), operating_mode_name(hold_.resume));
   ack_command(name, true, std::string("switching to ") + target_type_name(wanted) + "; holding until it is applied");
 }
 
-void ControlLoop::step_target_switch(TimeNs now_ns) {
-  if (!tswitch_.active) return;
-  if (applied_target_type(now_ns) == target_type_) {
-    if (tswitch_.matched_since_ns == 0) tswitch_.matched_since_ns = now_ns;
-    if (now_ns - tswitch_.matched_since_ns < kTargetSwitchSettleNs) return;
-    tswitch_.active = false;
-    const OperatingMode resume = tswitch_.resume;
-    const bool resuming = resume != OperatingMode::Manual && phase_ == Phase::Hold &&
-                          mode_mgr_.mode() == OperatingMode::Manual;
-    spdlog::info("target type {} applied after {:.2f} s{}", target_type_name(target_type_),
-                 (now_ns - tswitch_.since_ns) * 1e-9,
-                 resuming ? std::string("; resuming ") + operating_mode_name(resume) : std::string());
-    if (resuming) request_mode(resume);
+// Hold through a swap. A homed, holding turret drops what it follows and holds where it is (MANUAL);
+// the mode it was in resumes afterwards. AUTO_TRACK resumes as the mode its loss returns to: the
+// target it was following is gone with the old model, or seen through other geometry.
+void ControlLoop::begin_swap_hold() {
+  if (!hold_.active) {
+    const OperatingMode m = mode_mgr_.mode();
+    hold_.resume = m == OperatingMode::AutoTrack ? auto_return_mode_ : m;
+    if (m != OperatingMode::Manual && phase_ == Phase::Hold) request_mode(OperatingMode::Manual);
+  }
+  hold_.active = true;
+  hold_.overdue = false;
+  hold_.since_ns = now_ns_;
+}
+
+void ControlLoop::set_calibration_store(std::shared_ptr<calibration::Store> store) {
+  std::lock_guard lk(calibration_mutex_);
+  calibration_store_ = std::move(store);
+  calibration_records_json_ = calibration_store_
+      ? std::make_shared<const std::string>(calibration::records_json(calibration_store_->records()))
+      : nullptr;
+  if (calibration_store_ && !calibration_writer_) calibration_writer_ = std::make_unique<calibration::Writer>();
+}
+
+// ADR-005 D5. The record was read, checked and parsed on the web thread; here it is put in force:
+// at once in Shutdown (nothing is engaged), through the swap hold when homed.
+void ControlLoop::execute_set_calibration_record(const std::string& arg) {
+  const std::string name = "set_calibration_record";
+  const auto prepared = std::move(prepared_for_command_);
+  if (!prepared) {
+    ack_command(name, false, "record " + arg + " was not prepared");
     return;
   }
-  tswitch_.matched_since_ns = 0;
-  if (!tswitch_.overdue && now_ns - tswitch_.since_ns > kTargetSwitchPatienceNs) {
-    tswitch_.overdue = true;
+  const int id = prepared->record.id;
+  if (phase_ == Phase::Homing || phase_ == Phase::Recovering || phase_ == Phase::Parking ||
+      phase_ == Phase::Fault || rest_park_.stage != RestPark::Off) {
+    ack_command(name, false, phase_ == Phase::Fault ? "faulted: HOME recovers first"
+                                 : rest_park_.stage != RestPark::Off ? "parked: choose a mode, or SHUTDOWN, first"
+                                 : std::string("wait until ") + phase_name(phase_) + " ends");
+    return;
+  }
+  if (id == calibration_id_ && calibration_blocked_.empty() && !hold_.record) {
+    ack_command(name, true, "#" + std::to_string(id) + " is in force");
+    return;
+  }
+  const bool homed = phase_ == Phase::Hold;
+  if (!homed) {
+    // Shutdown: nothing is engaged, so the servos and the geometry change now; HOME uses them.
+    std::string err;
+    if (!apply_calibration(*prepared, err)) {
+      ack_command(name, false, err);
+      return;
+    }
+  }
+  const int from = calibration_id_;
+  calibration_id_ = id;
+  calibration_name_ = prepared->record.name;
+  calibration_blocked_.clear();
+  calibration_unverified_ = true;   // the station cannot see the payload; VERIFY says (a nudge)
+  {
+    std::lock_guard lk(calibration_mutex_);
+    if (calibration_store_) {
+      calibration_store_->set_active(id);
+      const auto dir = calibration_store_->root();
+      calibration_writer_->post([dir, id] {
+        std::string e;
+        if (!calibration::write_active(dir, id, e)) spdlog::error("calibration: {}", e);
+      });
+    }
+  }
+  if (!homed) {
+    spdlog::info("calibration: #{} -> #{} {} in force (shut down: the next HOME uses it)", from, id, calibration_name_);
+    ack_command(name, true, "#" + std::to_string(id) + " in force; the next HOME uses it");
+    return;
+  }
+  begin_swap_hold();
+  hold_.record = prepared;
+  hold_.record_from = from;
+  hold_.record_applied = false;
+  hold_.record_refused = false;
+  hold_.record_rest_since_ns = 0;
+  spdlog::info("calibration: #{} -> #{} {}: holding until the turret rests, then the servos swap; then {}", from, id,
+               calibration_name_, operating_mode_name(hold_.resume));
+  ack_command(name, true, "switching to #" + std::to_string(id) + "; holding until its servos are engaged and settled");
+}
+
+// The servos from the record's assets (the backend releases each engaged one; the next reference
+// re-engages it bumpless) and the tracking geometry from its extrinsic and bore. Only while no
+// tracker exists -- the swap hold and Shutdown both guarantee it -- as set_tracking_config requires.
+bool ControlLoop::apply_calibration(const calibration::Prepared& p, std::string& err) {
+  if (tracking_) disable_tracking();
+  if (!backend_->swap_servo_assets(p.servo, err)) return false;
+  tracking_cfg_.kinematics = p.kinematics;
+  tracking_cfg_.alignment = p.alignment;
+  extrinsic_R_PC_ = p.kinematics.R_PC;
+  place_extrinsic_in_session();
+  ++tracking_config_revision_;
+  spdlog::info("calibration: #{} {} applied: servos from {}, extrinsic {}, bore {}", p.record.id, p.record.name,
+               p.record.dir.string(), p.kinematics.pitch_from_homed_low ? "homed-frame" : "raw-frame",
+               p.alignment.enabled ? "on" : "off");
+  return true;
+}
+
+void ControlLoop::step_swap_hold(TimeNs now_ns, const AxisSnapshot sp[kAxisCount]) {
+  if (!hold_.active) return;
+  if (hold_.target) {
+    if (applied_target_type(now_ns) == target_type_) {
+      if (hold_.target_matched_since_ns == 0) hold_.target_matched_since_ns = now_ns;
+      if (now_ns - hold_.target_matched_since_ns >= kTargetSwitchSettleNs) {
+        hold_.target = false;
+        spdlog::info("target type {} applied after {:.2f} s", target_type_name(target_type_),
+                     (now_ns - hold_.since_ns) * 1e-9);
+      }
+    } else {
+      hold_.target_matched_since_ns = 0;
+    }
+  }
+  if (hold_.record) {
+    // At rest on both axes: before the swap, so the servos change on a still turret; after it, so the
+    // switch ends only once the new servos hold it still.
+    const bool still = std::abs(sp[ix(AxisId::Yaw)].v_rad_s) < kRecordRestRadS &&
+                       std::abs(sp[ix(AxisId::Pitch)].v_rad_s) < kRecordRestRadS;
+    if (!still) {
+      hold_.record_rest_since_ns = 0;
+    } else if (hold_.record_rest_since_ns == 0) {
+      hold_.record_rest_since_ns = now_ns;
+    } else if (!hold_.record_applied && !hold_.record_refused &&
+               now_ns - hold_.record_rest_since_ns >= kRecordRestNs) {
+      std::string err;
+      if (apply_calibration(*hold_.record, err)) {
+        hold_.record_applied = true;
+        hold_.record_rest_since_ns = 0;
+      } else {
+        // The old servos keep holding (a refused asset changes nothing); the hold says why, and
+        // tries again only when a record is chosen again.
+        hold_.record_refused = true;
+        calibration_blocked_ = err;
+        spdlog::error("calibration: #{} not applied: {}", hold_.record->record.id, err);
+      }
+    } else if (hold_.record_applied && now_ns - hold_.record_rest_since_ns >= kRecordSettleNs) {
+      spdlog::info("calibration: #{} {} applied and settled after {:.2f} s", hold_.record->record.id,
+                   hold_.record->record.name, (now_ns - hold_.since_ns) * 1e-9);
+      hold_.record.reset();
+    }
+  }
+  if (!hold_.target && !hold_.record) {
+    hold_.active = false;
+    const OperatingMode resume = hold_.resume;
+    const bool resuming = resume != OperatingMode::Manual && phase_ == Phase::Hold &&
+                          mode_mgr_.mode() == OperatingMode::Manual;
+    if (resuming) {
+      spdlog::info("swap hold ended after {:.2f} s; resuming {}", (now_ns - hold_.since_ns) * 1e-9,
+                   operating_mode_name(resume));
+      request_mode(resume);
+    }
+    return;
+  }
+  if (!hold_.overdue && now_ns - hold_.since_ns > kSwapPatienceNs) {
+    hold_.overdue = true;
     // Not a hazard: the turret is held and stays held (fault/hold ruling, 2026-10-02).
-    spdlog::warn("target type {} not applied by perception after {} s; holding in MANUAL until it is "
-                 "(or another type is chosen)", target_type_name(target_type_), kTargetSwitchPatienceNs / 1'000'000'000);
+    spdlog::warn("swap hold overdue after {} s ({}{}); holding in MANUAL until it is applied, or another is chosen",
+                 kSwapPatienceNs / 1'000'000'000,
+                 hold_.target ? std::string("target type ") + target_type_name(target_type_) + " not applied by perception" : "",
+                 hold_.record ? std::string(hold_.target ? "; " : "") + "calibration #" +
+                                    std::to_string(hold_.record->record.id) +
+                                    (hold_.record_applied ? " not settled"
+                                     : hold_.record_refused ? " refused: " + calibration_blocked_
+                                     : " waiting for the turret to rest")
+                              : "");
   }
 }
 
@@ -5540,8 +5691,31 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
                                               : payload_profile_dir_);
     }
   }
+  // ADR-005 D5: the record is read, checked and parsed here, on the web thread (file I/O, YAML),
+  // never on the control thread; a record that cannot be used is refused before anything changes.
+  std::shared_ptr<const calibration::Prepared> prepared;
+  if (r.ok && name == "set_calibration_record") {
+    calibration::Record record;
+    bool found = false;
+    {
+      std::lock_guard clk(calibration_mutex_);
+      if (calibration_store_)
+        if (const auto* rec = calibration_store_->find(std::atoi(arg.c_str()))) { record = *rec; found = true; }
+    }
+    auto p = std::make_shared<calibration::Prepared>();
+    std::string err;
+    if (!found) {
+      r.ok = false;
+      r.error = calibration_store_ ? "no calibration record #" + arg : "this station keeps no calibration records";
+    } else if (!calibration::prepare(calibration::read_record(record.dir, record.id), *p, err)) {
+      r.ok = false;
+      r.error = err + "; nothing changed";
+    } else {
+      prepared = std::move(p);
+    }
+  }
   // Rejected here or executed there, either way controld answers (§52).
-  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error});
+  command_queue_.push_back({name, arg, r.ok ? std::string() : r.error, std::move(prepared)});
   return r;
 }
 
@@ -5558,7 +5732,9 @@ void ControlLoop::process_commands() {
     }
     ack_in_flight_ = c.name;
     const uint64_t before = ack_seq_;
+    prepared_for_command_ = std::move(c.prepared);
     execute_command(c.name, c.arg);
+    prepared_for_command_.reset();
     if (ack_seq_ == before) {
       // Nobody claimed the answer, so this command has no failure path: the quiet
       // hold, the stop, the shutdown request. That default is honest only because
@@ -5766,8 +5942,9 @@ void ControlLoop::evaluate_auto_switch(TimeNs now_ns) {
   // The deployed profile enables automatic acquisition and loss recovery.
   // A zero dwell disables the corresponding hand-off for commissioning.
   if (cfg_.auto_roam_on_loss_ms <= 0 && cfg_.auto_track_on_acquire_ms <= 0) return;
-  // Frozen while the target type changes: the old model's last tracks are not a reason to move.
-  if (tswitch_.active) {
+  // Frozen through a swap hold: the old model's last tracks, or tracks seen through the old geometry,
+  // are not a reason to move.
+  if (hold_.active) {
     loss_since_ns_ = 0;
     acquire_since_ns_ = 0;
     return;
@@ -6084,32 +6261,37 @@ void ControlLoop::execute_command(const std::string& name,
                 (param_tx_.applied_hash().empty() ? "none" : param_tx_.applied_hash())+
                 "): "+param_tx_.last_reason()); return;
   }
-  // A target type switch holds the turret while perception changes model (owner, 2026-10-20): no
-  // motion of the operator's own until the new type's frames arrive; a mode asked for meanwhile is
-  // the one resumed afterwards.
-  if (tswitch_.active && (name=="manual_jog_start" || name=="manual_step" || name=="response_probe" ||
+  // A swap hold (a target-type switch, owner 2026-10-20, or a calibration-record switch, ADR-005)
+  // holds the turret: no motion of the operator's own until the swap is applied; a mode asked for
+  // meanwhile is the one resumed afterwards.
+  const std::string swapping = !hold_.active ? std::string()
+      : hold_.record ? "switching calibration record to #" + std::to_string(hold_.record->record.id)
+      : std::string("switching target type to ") + target_type_name(target_type_);
+  if (hold_.active && (name=="manual_jog_start" || name=="manual_step" || name=="response_probe" ||
       name=="run_test_motion" || name=="start_tracking")) {
-    ack_command(name, false, std::string("switching target type to ") + target_type_name(target_type_) +
-                "; the turret holds until the new model's frames arrive");
+    ack_command(name, false, swapping + "; the turret holds until it is applied");
     return;
   }
-  if (tswitch_.active && name == "set_mode") {
+  if (hold_.active && name == "set_mode") {
     OperatingMode target;
     if (!operating_mode_from_name(arg.c_str(), target)) {
       ack_command(name, false, "unknown mode '" + arg + "'; expected MANUAL, AUTO_TRACK, AUTO_ROAM or SURVEILLANCE");
       return;
     }
-    tswitch_.resume = target == OperatingMode::AutoTrack ? auto_return_mode_ : target;
+    hold_.resume = target == OperatingMode::AutoTrack ? auto_return_mode_ : target;
     if (target == OperatingMode::AutoRoam || target == OperatingMode::Surveillance) auto_return_mode_ = target;
-    ack_command(name, true, std::string(operating_mode_name(tswitch_.resume)) +
-                " after the switch to " + target_type_name(target_type_));
+    ack_command(name, true, std::string(operating_mode_name(hold_.resume)) + " after " + swapping);
     return;
   }
   // Stop Motion or Hold meanwhile is the operator's last word: the swap ends in MANUAL, not in the
   // mode it interrupted. Both carry on to their usual handling below.
-  if (tswitch_.active && (name == "stop_motion" || name == "hold")) tswitch_.resume = OperatingMode::Manual;
+  if (hold_.active && (name == "stop_motion" || name == "hold")) hold_.resume = OperatingMode::Manual;
   if (name == "set_target_type") {
     execute_set_target_type(arg);
+    return;
+  }
+  if (name == "set_calibration_record") {
+    execute_set_calibration_record(arg);
     return;
   }
   if (phase_ == Phase::Recovering) {

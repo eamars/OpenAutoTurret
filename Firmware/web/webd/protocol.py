@@ -93,6 +93,15 @@ class Telemetry:
     # and runs on its configured files; and why it cannot be used ("" when it can; HOME is refused).
     calibration_record: Optional[dict] = None
     calibration_blocked: str = ""
+    # The switch to another record (ADR-005 D5): holding for it, from which record, its progress (0 until
+    # the servos have swapped, then the settle), overdue after 10 s, and not VERIFYed since it was chosen.
+    calibration_switching: bool = False
+    calibration_overdue: bool = False
+    calibration_switch_from: int = 0
+    calibration_progress: float = 1.0
+    calibration_unverified: bool = False
+    # Every record: id, name, why unusable, each part's origin (date, run, from), the bore.
+    calibration_records: list = field(default_factory=list)
     # What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
     # fresh frame was produced for ("" while none), the hold while it switches, and an overdue switch.
     target_type: str = ""

@@ -10,6 +10,7 @@
 // network transport (WebServer) and the actual execution (ControlLoop) are
 // separate; this module is the validation gate in between and is unit-testable
 // in isolation.
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -67,6 +68,7 @@ inline constexpr int kYawIx = 1;
 //   request_park, request_shutdown,
 //   set_speed <patrol_wide|patrol_detail|track>=<deg/s|default>  (this session only),
 //   set_target_type <HUMAN|HEAD|CAT|DOG>  (what is followed; saved across restarts),
+//   set_calibration_record <id>           (ADR-005: the record in force; saved across restarts),
 //   run_test_motion <pos_rad>  (restricted test motion)
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
@@ -163,6 +165,18 @@ inline CommandResult validate_command(const SystemCommandState& s,
     TargetType t;
     if (!target_type_from_name(arg, t)) {
       r.error = "set_target_type needs HUMAN, HEAD, CAT or DOG";
+      return r;
+    }
+    r.ok = true;
+    return r;
+  }
+  if (command == "set_calibration_record") {
+    // ADR-005: the record in force. Shape only here: controld decides by the station's state (in
+    // Shutdown at once, homed through the swap hold, refused while homing, parking or faulted, with
+    // the reason), and the record itself is read before anything changes.
+    if (arg.empty() || arg.size() > 6 ||
+        !std::all_of(arg.begin(), arg.end(), [](char c) { return c >= '0' && c <= '9'; }) || arg == "0") {
+      r.error = "set_calibration_record needs a record number";
       return r;
     }
     r.ok = true;

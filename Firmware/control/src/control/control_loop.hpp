@@ -33,6 +33,7 @@
 
 #include <utility>
 
+#include "calibration/calibration_store.hpp"
 #include "calibration/homing_plan.hpp"
 #include "calibration/installation_pose.hpp"
 #include "calibration/park_controller.hpp"
@@ -329,8 +330,12 @@ class ControlLoop {
   // the record in force cannot be used, so no servo was configured and HOME is refused with this
   // reason. Never another record instead (D4).
   void set_calibration_record(int id, std::string name, std::string blocked);
+  // The store the records live in (ADR-005), for switching between them; null: none.
+  void set_calibration_store(std::shared_ptr<calibration::Store> store);
+  int calibration_record_id() const { return calibration_id_; }
+  bool calibration_switching() const { return hold_.active && hold_.record != nullptr; }
   TargetType target_type() const { return target_type_; }
-  bool target_type_switching() const { return tswitch_.active; }
+  bool target_type_switching() const { return hold_.active && hold_.target; }
   // The mode the automatic cycle returns to after a loss: AUTO_ROAM, or SURVEILLANCE once the
   // operator has chosen it. HOME and a restart go back to AUTO_ROAM (owner ruling 2026-10-03).
   OperatingMode auto_return_mode() const { return auto_return_mode_; }
@@ -748,6 +753,8 @@ class ControlLoop {
     std::string name;
     std::string arg;
     std::string gate_reject;  // empty = run it; non-empty = answer with this
+    // set_calibration_record: the record, read and parsed on the web thread (file I/O).
+    std::shared_ptr<const calibration::Prepared> prepared;
   };
   std::deque<PendingCommand> command_queue_;
   std::atomic<bool> shutdown_requested_{false};
@@ -919,17 +926,41 @@ class ControlLoop {
   std::unique_ptr<TargetTypeStore> target_store_;
   int calibration_id_ = 0;                 // 0: no store, the configured files are in use
   std::string calibration_name_, calibration_blocked_;
-  struct TargetSwitch {
+  // ADR-005: the record store (read by the web thread to prepare a switch, hence the mutex), its
+  // file writer (never the 200 Hz thread), and the record list as telemetry carries it.
+  std::shared_ptr<calibration::Store> calibration_store_;
+  std::unique_ptr<calibration::Writer> calibration_writer_;
+  mutable std::mutex calibration_mutex_;
+  std::shared_ptr<const std::string> calibration_records_json_;
+  bool calibration_unverified_ = false;    // switched since the last VERIFY (a nudge, never a run)
+  std::shared_ptr<const calibration::Prepared> prepared_for_command_;
+  // The swap hold (ADR-005 D5): the target-type switch (owner, 2026-10-20) and the calibration-record
+  // switch share it. While it is active the turret holds in MANUAL with the automatic cycle frozen
+  // and jogs refused; it ends when every pending swap is applied, and the mode the turret was in
+  // resumes. Not a fault if one never is: after kSwapPatienceNs it stays held and says so.
+  struct SwapHold {
     bool active = false;
     bool overdue = false;
     TimeNs since_ns = 0;
-    TimeNs matched_since_ns = 0;
     OperatingMode resume = OperatingMode::Manual;
-  } tswitch_;
+    bool target = false;                       // perception's frames do not carry the type yet
+    TimeNs target_matched_since_ns = 0;
+    std::shared_ptr<const calibration::Prepared> record;   // not yet applied and settled
+    int record_from = 0;
+    bool record_applied = false;
+    bool record_refused = false;               // the backend refused it; tried again only if chosen again
+    TimeNs record_rest_since_ns = 0;           // at rest: before the swap, then settled after it
+  } hold_;
   static constexpr TimeNs kTargetSwitchSettleNs = 300'000'000;    // frames of the new type, steadily
-  static constexpr TimeNs kTargetSwitchPatienceNs = 10'000'000'000;
+  static constexpr TimeNs kRecordRestNs = 100'000'000;            // at rest before the servos swap
+  static constexpr TimeNs kRecordSettleNs = 300'000'000;          // and settled after, on the new ones
+  static constexpr double kRecordRestRadS = 0.5 * 3.14159265358979323846 / 180.0;
+  static constexpr TimeNs kSwapPatienceNs = 10'000'000'000;
+  void begin_swap_hold();
   void execute_set_target_type(const std::string& arg);
-  void step_target_switch(TimeNs now_ns);
+  void execute_set_calibration_record(const std::string& arg);
+  bool apply_calibration(const calibration::Prepared& p, std::string& err);
+  void step_swap_hold(TimeNs now_ns, const AxisSnapshot sp[kAxisCount]);
   TargetType applied_target_type(TimeNs now_ns) const;
   SurveillanceState last_surveil_state_ = SurveillanceState::Idle;
   bool surveil_unusable_ = false;   // entered, but the point did not resolve: holding, said once

@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <system_error>
+
+#include <unistd.h>
 
 #include <yaml-cpp/yaml.h>
 
@@ -196,6 +199,111 @@ bool Store::open(const fs::path& state_dir, std::string& err) {
     active_ = 0;   // reported by in_force()
   }
   return true;
+}
+
+bool prepare(const Record& record, Prepared& out, std::string& err) {
+  if (!record.unusable.empty()) {
+    err = "record #" + std::to_string(record.id) + ": " + record.unusable;
+    return false;
+  }
+  Prepared p;
+  p.record = record;
+  if (!parse_servo_assets(record.path("yaw").string(), record.path("pitch").string(), p.servo, err)) {
+    err = "record #" + std::to_string(record.id) + ": " + err;
+    return false;
+  }
+  std::string detail;
+  p.kinematics = load_camera_extrinsics(record.path("extrinsic").string(), detail);
+  if (detail != "R_P_C loaded from file") {
+    err = "record #" + std::to_string(record.id) + ": camera_extrinsics.yaml: " + detail;
+    return false;
+  }
+  p.alignment = record.bore.alignment();
+  out = std::move(p);
+  return true;
+}
+
+namespace {
+std::string esc(const std::string& s) {
+  std::string o;
+  for (char c : s) {
+    if (c == '"' || c == '\\') { o += '\\'; o += c; }
+    else if (static_cast<unsigned char>(c) < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", c); o += b; }
+    else o += c;
+  }
+  return o;
+}
+std::string num(double v) {
+  if (!std::isfinite(v)) return "null";
+  char b[32];
+  std::snprintf(b, sizeof b, "%.6g", v);
+  return b;
+}
+std::string camera_json(const BoreCamera& c) {
+  return "{\"trim_right_mrad\":" + num(c.trim_right_mrad) + ",\"trim_up_mrad\":" + num(c.trim_up_mrad) +
+         ",\"right_mm\":" + num(c.base.right_mm) + ",\"up_mm\":" + num(c.base.up_mm) + "}";
+}
+}  // namespace
+
+std::string records_json(const std::vector<Record>& records) {
+  std::string o = "[";
+  for (const auto& r : records) {
+    if (o.size() > 1) o += ',';
+    o += "{\"id\":" + std::to_string(r.id) + ",\"name\":\"" + esc(r.name) + "\",\"unusable\":\"" +
+         esc(r.unusable) + "\",\"parts\":{";
+    bool first = true;
+    for (const auto& [part, info] : r.parts) {
+      if (!first) o += ',';
+      first = false;
+      o += "\"" + part + "\":{\"origin\":\"" + esc(info.origin) + "\",\"date\":\"" + esc(info.date) +
+           "\",\"run\":\"" + esc(info.run) + "\",\"from\":" + std::to_string(info.from) + "}";
+    }
+    // zero_m null = infinity (no parallax).
+    o += "},\"bore\":{\"mode\":\"" + std::string(r.bore.enabled ? "manual_depth" : "off") +
+         "\",\"zero_m\":" + num(r.bore.zero_m) + ",\"wide\":" + camera_json(r.bore.wide) +
+         ",\"detail\":" + camera_json(r.bore.detail) + "}}";
+  }
+  return o + "]";
+}
+
+bool write_active(const fs::path& dir, int id, std::string& err) {
+  const fs::path tmp = dir / "active.json.tmp", final = dir / "active.json";
+  {
+    std::FILE* f = std::fopen(tmp.string().c_str(), "wb");
+    if (f == nullptr) { err = "cannot write " + tmp.string(); return false; }
+    std::fprintf(f, "{\"schema\": 1, \"active\": %d}\n", id);
+    const bool ok = std::fflush(f) == 0 && ::fsync(fileno(f)) == 0;
+    std::fclose(f);
+    if (!ok) { err = "cannot flush " + tmp.string(); return false; }
+  }
+  std::error_code ec;
+  fs::rename(tmp, final, ec);
+  if (ec) { err = "cannot replace " + final.string() + ": " + ec.message(); return false; }
+  return true;
+}
+
+Writer::Writer() : thread_([this] {
+  std::unique_lock lk(m_);
+  for (;;) {
+    cv_.wait(lk, [this] { return stop_ || !jobs_.empty(); });
+    if (jobs_.empty()) return;   // stopping, and nothing left to write
+    auto job = std::move(jobs_.front());
+    jobs_.pop_front();
+    lk.unlock();
+    job();
+    lk.lock();
+  }
+}) {}
+
+Writer::~Writer() {
+  { std::lock_guard lk(m_); stop_ = true; }
+  cv_.notify_all();
+  thread_.join();
+}
+
+void Writer::post(std::function<void()> job) {
+  { std::lock_guard lk(m_); jobs_.push_back(std::move(job)); }
+  cv_.notify_one();
 }
 
 const Record* Store::find(int id) const {

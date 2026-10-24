@@ -30,6 +30,8 @@
 
 namespace ota {
 
+struct ServoAssets;   // control/servo_assets.hpp
+
 // Latest known state of one axis (a non-blocking read of the freshest feedback).
 // A feedback frame stamped after the caller's cycle clock is the freshest feedback there is: the
 // caller sampled its clock and ran late (station 2026-10-20 15:34:13, ~5 ms). Only a stamp this far
@@ -381,6 +383,11 @@ class MotorBackend {
   };
   virtual bool servo_available(AxisId) const { return false; }
   virtual bool command_reference(AxisId, const ServoReference&) { return false; }
+  // ADR-005: the calibration record in force changed. Configure the servos from these parsed
+  // assets; each engaged servo is released and the next reference re-engages it bumpless. False,
+  // with the servos as they were, only when an asset is refused; a backend with no servos has
+  // nothing to swap.
+  virtual bool swap_servo_assets(const ServoAssets&, std::string&) { return true; }
  private:
   std::function<void()> invalidate_;
 };

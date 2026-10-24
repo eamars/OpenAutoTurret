@@ -8,10 +8,12 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "calibration/homing_plan.hpp"
@@ -19,6 +21,7 @@
 #include "control/session_replay.hpp"
 #include "sim/sim_motor_backend.hpp"
 #include "blocking_sink.hpp"
+#include "calibration_fixture.hpp"
 
 #include <gtest/gtest.h>
 
@@ -725,6 +728,144 @@ TEST(CalibrationRecord, AnUnusableRecordInForceRefusesHomeAndSaysWhy) {
   h.loop->set_calibration_record(1, "AS SHIPPED", "");
   h.run("start_homing");
   EXPECT_TRUE(h.loop->last_command_ack().accepted) << h.loop->last_command_ack().reason;
+}
+
+namespace {
+// Two usable records in a store, #1 in force (ADR-005).
+std::shared_ptr<calibration::Store> two_records(const ota_cal_fixture::State& s) {
+  ota_cal_fixture::make_record(s, 1, "AS SHIPPED");
+  ota_cal_fixture::make_record(s, 2, "FRICTION 10-20");
+  ota_cal_fixture::choose(s, 1);
+  auto store = std::make_shared<calibration::Store>();
+  std::string err;
+  EXPECT_TRUE(store->open(s.dir, err)) << err;
+  return store;
+}
+bool eventually(const std::function<bool()>& done) {
+  for (int i = 0; i < 400 && !done(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  return done();
+}
+// Steps until the record switch ends (or `limit` cycles), counting the cycle the servos swapped on.
+int run_switch(HomedLoop& h, int limit = 2000) {
+  int swapped_at = -1;
+  for (int i = 0; i < limit && h.snap().calibration_switching; ++i) {
+    h.step(1);
+    if (swapped_at < 0 && h.sim->servo_swaps() > 0) swapped_at = i;
+  }
+  return swapped_at;
+}
+}  // namespace
+
+TEST(CalibrationSwitch, InShutdownTheRecordIsInForceAtOnceAndNothingMoves) {
+  ota_cal_fixture::State s;
+  HomedLoop h(/*home=*/false);
+  ASSERT_EQ(h.loop->phase(), Phase::Idle);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_calibration_record", "2");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_NE(h.snap().cmd_ack_reason.find("the next HOME uses it"), std::string::npos);
+  EXPECT_EQ(h.sim->servo_swaps(), 1) << "nothing is engaged: the servos change now";
+  EXPECT_EQ(h.snap().calibration_record_id, 2);
+  EXPECT_EQ(h.snap().calibration_record_name, "FRICTION 10-20");
+  EXPECT_FALSE(h.snap().calibration_switching) << "no hold: nothing moves";
+  EXPECT_TRUE(h.snap().calibration_unverified) << "the station cannot see the payload: a VERIFY nudge";
+  EXPECT_TRUE(eventually([&] { return ota_cal_fixture::active_json(s).find("\"active\": 2") != std::string::npos; }))
+      << "persisted: " << ota_cal_fixture::active_json(s);
+}
+
+TEST(CalibrationSwitch, HomedItHoldsSwapsOnAStillTurretSettlesAndResumesTheMode) {
+  // Owner, 2026-10-24: a switch while homed resumes the mode it interrupted, as the target type does.
+  ota_cal_fixture::State s;
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_mode", "AUTO_ROAM");
+  h.step(100);
+  ASSERT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  h.run("set_calibration_record", "2");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual) << "held for the swap";
+  EXPECT_TRUE(h.snap().calibration_switching);
+  EXPECT_EQ(h.snap().calibration_switch_from, 1);
+  EXPECT_EQ(h.snap().calibration_record_id, 2);
+  EXPECT_EQ(h.snap().calibration_progress, 0.0) << "nothing swapped yet";
+  h.run("manual_jog_start", "yaw+");
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 0);
+  EXPECT_NE(h.snap().cmd_ack_reason.find("switching calibration record to #2"), std::string::npos)
+      << h.snap().cmd_ack_reason;
+  const int swapped_at = run_switch(h);
+  EXPECT_GE(swapped_at, 0) << "the servos swapped";
+  EXPECT_FALSE(h.snap().calibration_switching);
+  EXPECT_EQ(h.sim->servo_swaps(), 1);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "the mode it was in resumes";
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(CalibrationSwitch, AStopDuringTheSwapIsNotUndoneWhenItEnds) {
+  for (const char* stop : {"stop_motion", "hold"}) {
+    ota_cal_fixture::State s;
+    HomedLoop h;
+    ASSERT_TRUE(h.ready);
+    h.loop->set_calibration_record(1, "AS SHIPPED", "");
+    h.loop->set_calibration_store(two_records(s));
+    h.run("set_mode", "AUTO_ROAM");
+    h.step(20);
+    h.run("set_calibration_record", "2");
+    h.run(stop, "");
+    run_switch(h);
+    EXPECT_FALSE(h.snap().calibration_switching) << stop;
+    EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual) << stop << " during the swap stays stopped";
+  }
+}
+
+TEST(CalibrationSwitch, AnUnusableOrUnknownRecordIsRefusedBeforeAnythingChanges) {
+  ota_cal_fixture::State s;
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.run("set_mode", "AUTO_ROAM");
+  // Damaged after the store was read: the record is read again when it is chosen.
+  ota_cal_fixture::write(ota_cal_fixture::record_dir(s, 2) / "yaw_servo.json", "{\"servo_parameters\": {");
+  const auto r = h.loop->submit_command("set_calibration_record", "2");
+  EXPECT_FALSE(r.ok);
+  EXPECT_NE(r.error.find("record #2: yaw_servo.json does not parse"), std::string::npos) << r.error;
+  EXPECT_NE(r.error.find("nothing changed"), std::string::npos);
+  const auto unknown = h.loop->submit_command("set_calibration_record", "9");
+  EXPECT_EQ(unknown.error, "no calibration record #9");
+  h.step(3);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
+  EXPECT_EQ(h.snap().calibration_record_id, 1);
+  EXPECT_FALSE(h.snap().calibration_switching);
+  EXPECT_EQ(h.sim->servo_swaps(), 0);
+}
+
+TEST(CalibrationSwitch, ARefusedSwapHoldsSaysWhyAndDoesNotFault) {
+  // Not a hazard (ruling 2026-10-02): the old servos keep holding; after 10 s the hold says it is overdue.
+  ota_cal_fixture::State s;
+  HomedLoop h;
+  ASSERT_TRUE(h.ready);
+  h.loop->set_calibration_record(1, "AS SHIPPED", "");
+  h.loop->set_calibration_store(two_records(s));
+  h.sim->set_refuse_servo_swap(true);
+  h.run("set_mode", "AUTO_ROAM");
+  h.run("set_calibration_record", "2");
+  h.step(2100);   // 10.5 s
+  EXPECT_TRUE(h.snap().calibration_switching);
+  EXPECT_TRUE(h.snap().calibration_overdue);
+  EXPECT_NE(h.snap().calibration_blocked.find("simulated refusal"), std::string::npos) << h.snap().calibration_blocked;
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+  // Choosing again retries: with the backend accepting, the switch completes and the mode resumes.
+  h.sim->set_refuse_servo_swap(false);
+  h.run("set_calibration_record", "1");
+  run_switch(h);
+  EXPECT_FALSE(h.snap().calibration_switching);
+  EXPECT_TRUE(h.snap().calibration_blocked.empty());
+  EXPECT_EQ(h.snap().calibration_record_id, 1);
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
 }
 
 TEST(MotorRecovery, SilencePersistentFaultAndHeatCannotBeClearedBySoftware) {

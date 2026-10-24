@@ -20,6 +20,15 @@ namespace ota::sim {
 class SimMotorBackend : public MotorBackend {
  public:
   explicit SimMotorBackend(double dt_s = 0.005) : dt_(dt_s) {}
+  // The simulated plant runs no servos; a swap of the record in force (ADR-005) is counted so the
+  // control loop's side of it can be tested, and can be refused to test that path.
+  bool swap_servo_assets(const ServoAssets&, std::string& err) override {
+    if (refuse_servo_swap_) { err = "simulated refusal"; return false; }
+    ++servo_swaps_;
+    return true;
+  }
+  int servo_swaps() const { return servo_swaps_; }
+  void set_refuse_servo_swap(bool refuse) { refuse_servo_swap_ = refuse; }
   void set_recovery_before_homing(bool enabled) { pre_home_recovery_ = enabled; }
   bool recovery_before_homing() const override { return pre_home_recovery_; }
   bool begin_motor_recovery(std::string&) override {
@@ -168,6 +177,8 @@ class SimMotorBackend : public MotorBackend {
   MotorRecoveryCheck recovery_;
   bool recovery_begin_pending_ = false;
   bool pre_home_recovery_ = false;
+  int servo_swaps_ = 0;
+  bool refuse_servo_swap_ = false;
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   struct Axis;
   // The encoder reading of the true position (set_encoder). The noise is a hash of the sample time,
