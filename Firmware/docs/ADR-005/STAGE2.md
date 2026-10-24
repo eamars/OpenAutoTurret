@@ -54,7 +54,7 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 |---|---|---|---|
 | S2.1 | CALIBRATING, the run lifecycle and gates, `calibration_run` telemetry, the journal writer, the **pitch** session executor (yaw held) | unit tests on the sim backend | built 2026-10-24 |
 | S2.2 | the **yaw** session executor (pitch held), kernel RX timestamps on the yaw bus | unit tests; production servo unchanged in the sim | built 2026-10-24 |
-| S2.3 | calibd and `ControldStation`, scipy, the launcher; the page's run view and STOP | Python tests against a fake controld; the page in the browser | — |
+| S2.3 | calibd and `ControldStation`, scipy, the launcher; the page's run view and STOP | Python tests against a fake controld; the page in the browser | built 2026-10-24 |
 | S2.4 | installing accepted parts (`history/`), HOME and resume; NEW's measurement | unit tests | — |
 | S2.5 | VERIFY (`check yaw`), with D8's two fixes (session end status; the pitch gate) | Python tests | — |
 | S2.6 | the servo-commissioning card rewritten | doc-tree check | — |
@@ -93,4 +93,20 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   - A session's journal header holds the manifest re-emitted as JSON, as commissiond's does.
   - `journal.py` reads controld's `idle_axis` row. `tools/servo_commission/tests/test_controld_journal.py`
     parses the journals the C++ executors write.
+- **S2.3 (2026-10-24).**
+  - `tools/servo_commission/calibd.py` waits for a run in CALIBRATING. It runs the kind's
+    pipelines (`check`, `pitch`, `yaw`, `calibrate`) with a `ControldStation`, which gives a
+    session to controld and returns its journal parsed.
+  - A heartbeat note every 5 s keeps controld's 15 s window open through long fits. Notes read
+    `<step> | <line>`, which the run view shows.
+  - Runs are kept in `<state>/calibration/runs/`. The pipelines write nothing to `config/`
+    (`no_write`).
+  - `commission.py` gained an injected station, a log hook, the asset taken from the record, and a
+    runs root; it is otherwise unchanged.
+  - The launcher starts calibd at nice 10, beside webd, and does not wait on it.
+  - The page: VERIFY and RE-RUN (with +ACCURACY and +CROSSTALK) are live and take two presses.
+    During a run the drawer is the run view (steps, the session with its time, calibd's last
+    line, STOP), the mode block reads CALIBRATING, the dock is dimmed and the D-pad hidden. After
+    the run the panel shows LAST RUN.
+  - `scipy` is in `requirements-station.txt` and in the test venv.
 

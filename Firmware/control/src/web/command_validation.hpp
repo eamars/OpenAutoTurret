@@ -213,8 +213,9 @@ inline CommandResult validate_command(const SystemCommandState& s,
       ok = arg.empty();
       need = " takes no argument";
     } else if (command == "run_calibration") {
-      ok = arg == "RERUN" || arg == "RERUN+ACCURACY" || arg == "RERUN+CROSSTALK" || arg == "MEASURE";
-      need = " needs RERUN, RERUN+ACCURACY, RERUN+CROSSTALK or MEASURE";
+      ok = arg == "RERUN" || arg == "RERUN+ACCURACY" || arg == "RERUN+CROSSTALK" ||
+           arg == "RERUN+ACCURACY+CROSSTALK" || arg == "MEASURE";
+      need = " needs RERUN, RERUN+ACCURACY, RERUN+CROSSTALK, RERUN+ACCURACY+CROSSTALK or MEASURE";
     } else {
       // calibd's: "<run> <axis> <manifest>", "<run> <text>", "<run> <verdict>".
       const std::size_t sp = arg.find(' ');

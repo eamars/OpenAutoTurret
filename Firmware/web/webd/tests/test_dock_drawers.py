@@ -48,7 +48,8 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self._geo.write(HUD_GEOMETRY_JS +
                         "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows, hudTargetTypeChips,"
                         " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey,"
-                        " hudCalibrationEntry, hudCalibrationPanel, hudCalibrationBore, hudBoreZeroName };\n")
+                        " hudCalibrationEntry, hudCalibrationPanel, hudCalibrationBore, hudBoreZeroName,"
+                        " hudCalibrationRun, hudRerunKind, hudCalibrationLastRun };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -321,14 +322,66 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertFalse(p2["inForce"]["locked"])
         self.assertEqual([x["arg"] for x in p2["removable"]], ["4"])
 
-    def test_runs_are_shown_greyed_until_stage_two(self) -> None:
+    def _panel_opts(self, opts, **t):
+        t.setdefault("calibration_records", self.CAL_RECORDS)
+        return self._node("console.log(JSON.stringify(T.hudCalibrationPanel(%s, %s)));" % (json.dumps(t), json.dumps(opts)))
+
+    def test_runs_take_two_presses_and_are_offered_homed_and_still(self) -> None:
+        # ADR-005 D6/D7: VERIFY on every record, RE-RUN with its options; two presses each.
         p = self._panel(calibration_record={"id": 2, "name": "F"}, phase="hold", calibration_unverified=True)
-        verify = [m for m in p["measure"] if m["label"] == "VERIFY"][0]
-        self.assertEqual(verify["kind"], "gated")
+        measure = {m["label"]: m for m in p["measure"]}
+        verify = measure["VERIFY"]
+        self.assertEqual((verify["kind"], verify["command"], verify["arg"]), ("danger", "verify_calibration", ""))
         self.assertTrue(verify["nudge"], "a switch since the last VERIFY: a nudge, never a run")
         self.assertIn("NOT VERIFIED SINCE SWITCH", verify["note"])
-        self.assertIn("COMES WITH STAGE 2", verify["note"])
+        rerun = measure["RE-RUN"]
+        self.assertEqual((rerun["kind"], rerun["command"], rerun["arg"]), ("danger", "run_calibration", "RERUN"))
+        self.assertIn("~45 MIN", rerun["note"])
+        self.assertEqual([o["label"] for o in rerun["options"]], ["+ACCURACY", "+CROSSTALK"])
+        both = {m["label"]: m for m in self._panel_opts({"accuracy": True, "crosstalk": True},
+                                                        calibration_record={"id": 2, "name": "F"}, phase="hold")["measure"]}
+        self.assertEqual(both["RE-RUN"]["arg"], "RERUN+ACCURACY+CROSSTALK")
+        self.assertIn("~73 MIN", both["RE-RUN"]["note"])
         self.assertEqual(p["stop"], {"label": "STOP MOTION", "command": "hold", "arg": "", "kind": "stop"})
+        for t, why in (({"phase": "idle"}, "HOME FIRST"), ({"phase": "hold", "rest_park": "parked"}, "PARKED"),
+                       ({"phase": "hold", "calibration_switching": True}, "WAIT"), ({"phase": "hold", "calibrating": True}, "WAIT")):
+            m = {x["label"]: x for x in self._panel(calibration_record={"id": 2, "name": "F"}, **t)["measure"]}
+            self.assertEqual((m["VERIFY"]["kind"], m["VERIFY"]["command"]), ("gated", None), t)
+            self.assertIn(why, m["VERIFY"]["note"], t)
+
+    def test_the_run_view_says_where_the_run_is_and_offers_stop(self) -> None:
+        run = {"id": 4, "kind": "RERUN+ACCURACY", "active": True, "state": "session", "elapsed_s": 750.4, "sessions": 3,
+               "session": {"label": "yaw-20261024-1530-02-crosstalk", "axis": "yaw", "elapsed_s": 42, "expected_s": 84},
+               "last_session": "yaw-...-01-survey: COMPLETE", "note": "yaw | inertia 0.0412, loop delay 1.6 ms", "verdict": ""}
+        r = self._node("console.log(JSON.stringify(T.hudCalibrationRun(%s)));" % json.dumps(
+            {"calibrating": True, "calibration_run": run, "calibration_record": {"id": 2, "name": "F"}}))
+        self.assertEqual(r["line2"], "RE-RUN + ACCURACY · YAW UPDATE")
+        self.assertEqual([(x["label"], x["state"]) for x in r["steps"]],
+                         [("PITCH", "done"), ("YAW UPDATE", "now"), ("ACCURACY", "next")])
+        self.assertEqual((r["session"]["axis"], r["session"]["text"], r["session"]["fraction"]), ("YAW", "0:42 / ~1:24", 0.5))
+        self.assertEqual(r["note"], "inertia 0.0412, loop delay 1.6 ms")
+        self.assertEqual(r["elapsed"], "12:30 OF ~71 MIN")
+        self.assertEqual((r["stop"]["command"], r["stop"]["kind"]), ("stop_calibration", "stop"), "one press")
+        between = self._node("console.log(JSON.stringify(T.hudCalibrationRun(%s)));" % json.dumps(
+            {"calibrating": True, "calibration_run": dict(run, session=None, state="fitting")}))
+        self.assertEqual((between["session"]["label"], between["session"]["text"]), ("FITTING AND DESIGNING", "TURRET HELD"))
+        self.assertIsNone(self._node("console.log(JSON.stringify(T.hudCalibrationRun({calibrating:false})));"))
+
+    def test_the_panel_says_how_the_last_run_ended(self) -> None:
+        last = lambda r: self._node("console.log(JSON.stringify(T.hudCalibrationLastRun(%s)));" % json.dumps({"calibration_run": r}))
+        good = last({"id": 1, "kind": "VERIFY", "active": False, "state": "done", "verdict": "REUSE_EXACT", "elapsed_s": 131})
+        self.assertEqual((good["text"], good["tone"], good["elapsed"]), ("VERIFY · REUSE_EXACT", "good", "2:11"))
+        self.assertEqual(last({"kind": "VERIFY", "active": False, "state": "done", "verdict": "UPDATE_PARAMETERS"})["tone"], "warn")
+        self.assertEqual(last({"kind": "RERUN", "active": False, "state": "failed", "verdict": "calibd is not answering"})["text"],
+                         "RE-RUN · calibd is not answering")
+        self.assertIsNone(last({"kind": "VERIFY", "active": True}))
+
+    def test_a_run_dims_the_dock_hides_the_pad_and_takes_the_drawer(self) -> None:
+        self.assertIn('!t.calibration_switching && !t.calibrating', HUD_JS)
+        self.assertIn('|| !!(t && t.calibrating)', HUD_JS, "the D-pad is hidden during a run")
+        self.assertIn('dock.classList.toggle("held", running)', HUD_JS)
+        self.assertIn('drawerOpen !== "RUN") setDrawer', HUD_JS, "the dock cannot close the run view")
+        self.assertIn("#dock.held", HUD_CSS)
 
     def test_a_switch_shows_its_bar_and_says_why_when_it_is_not_applied(self) -> None:
         wait = self._panel(calibration_record={"id": 2, "name": "F"}, calibration_switching=True,

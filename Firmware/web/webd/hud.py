@@ -472,7 +472,8 @@ function hudTargetTypeChips(t) {
 const HUD_CAL_PARTS = [["yaw", "YAW SERVO"], ["pitch", "PITCH SERVO"], ["accuracy", "ACCURACY"],
                        ["extrinsic", "EXTRINSIC"], ["bore", "BORE"]];
 const HUD_CAL_COMMANDS = ["set_calibration_record", "rename_calibration_record", "new_calibration_record",
-                          "delete_calibration_record", "set_bore_mode", "set_bore_zero", "trim_bore"];
+                          "delete_calibration_record", "set_bore_mode", "set_bore_zero", "trim_bore",
+                          "verify_calibration", "run_calibration", "stop_calibration"];
 function hudCalibrationOrigin(p) {
   if (!p || !p.origin) return { text: "NONE", tone: "warn" };
   const date = String(p.date || "").slice(5);   // 2026-10-02 -> 10-02
@@ -490,7 +491,7 @@ function hudCalibrationEntry(t) {
   return { label: "CALIBRATION ›", note: "#" + c.id + " " + c.name +
            (t.calibration_switching ? " · SWITCHING" : t.calibration_blocked ? " · CANNOT BE USED" : "") };
 }
-function hudCalibrationPanel(t) {
+function hudCalibrationPanel(t, opts) {
   t = t || {};
   const cur = t.calibration_record;
   if (!cur || !cur.id) return null;
@@ -519,20 +520,32 @@ function hudCalibrationPanel(t) {
   });
   const rp = r.parts || {};
   const unmeasured = !!(rp.yaw && rp.pitch && rp.yaw.origin === "inherited" && rp.pitch.origin === "inherited");
-  // Runs (VERIFY, RE-RUN, NEW's measurement) arrive with stage 2: shown, greyed, saying so -- a
-  // control that silently vanishes is how an operator learns to guess at the interface.
-  const later = "COMES WITH STAGE 2";
+  // Runs (ADR-005 D7): offered homed and still -- not while a switch, a park or a run holds the turret.
+  // Two presses each: a run turns the turret at up to 65 deg/s (D6). controld has the last word (the
+  // IMU, the record), and its refusal shows in the panel.
+  const busy = switching || !!t.calibrating;
+  const gate = t.phase !== "hold" ? "HOME FIRST" : t.rest_park ? "PARKED" : busy ? "WAIT: THE TURRET IS HELD" : "";
+  const rerun = hudRerunKind(opts);
+  const run = (label, command, arg, note) => gate
+    ? { label: label, kind: "gated", command: null, arg: arg, note: gate }
+    : { label: label, kind: "danger", command: command, arg: arg, note: note };
+  const verify = run("VERIFY", "verify_calibration", "", "~2 MIN · A PROBE OF THE YAW SERVO AGAINST THIS RECORD");
+  verify.nudge = !!t.calibration_unverified;
+  if (t.calibration_unverified) verify.note = "NOT VERIFIED SINCE SWITCH · " + verify.note;
   const measure = [
-    { label: "VERIFY", kind: "gated", nudge: !!t.calibration_unverified,
-      note: (t.calibration_unverified ? "NOT VERIFIED SINCE SWITCH · " : "") + later },
+    verify,
     locked ? { label: "MEASURE A COPY…", ui: "newcopy", kind: switching ? "gated" : "act",
                note: "#1 stays as shipped: NEW from #1" }
-           : { label: "RE-RUN", kind: "gated", note: later },
+           : Object.assign(run("RE-RUN", "run_calibration", rerun, "~" + HUD_RUN_MINUTES[rerun] + " MIN · PITCH, THEN YAW" +
+                               (opts && opts.accuracy ? ", THEN ACCURACY" : "")),
+                           { options: [{ key: "accuracy", label: "+ACCURACY", on: !!(opts && opts.accuracy) },
+                                       { key: "crosstalk", label: "+CROSSTALK", on: !!(opts && opts.crosstalk) }] }),
     { label: "NEW…", ui: "new", kind: switching ? "gated" : "act", note: "a copy of a record, put in force" }];
   const removable = recs.filter((x) => x.id !== 1 && x.id !== cur.id).map((x) => ({
     id: x.id, title: x.name, command: "delete_calibration_record", arg: String(x.id), kind: "danger" }));
   return { inForce: { id: cur.id, name: cur.name, locked: locked }, chips: chips, bar: bar, notes: notes,
            parts: parts, unmeasured: unmeasured, unmeasuredFrom: unmeasured ? rp.yaw.from : null,
+           lastRun: hudCalibrationLastRun(t),
            measure: measure, removable: removable,
            stop: { label: "STOP MOTION", command: "hold", arg: "", kind: "stop" } };
 }
@@ -592,6 +605,66 @@ function hudCalibrationBore(t, pace) {
             note: on ? "" : "turn the bore on to trim it" },   // why it is greyed otherwise: the BORE row says
     detail: "needs the detail camera's intrinsics: its field of view is not measured"
   };
+}
+
+// ADR-005 D7: a calibration run. The station's estimates (workstation runs); calibd's notes say which
+// step a line belongs to ("pitch | ..."). STOP is one press and acts at once.
+const HUD_RUN_PLANS = {
+  "VERIFY": [["check", "CHECK YAW"]],
+  "RERUN": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"]],
+  "RERUN+CROSSTALK": [["pitch", "PITCH"], ["yaw", "YAW + CROSSTALK"]],
+  "RERUN+ACCURACY": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"], ["calibrate", "ACCURACY"]],
+  "RERUN+ACCURACY+CROSSTALK": [["pitch", "PITCH"], ["yaw", "YAW + CROSSTALK"], ["calibrate", "ACCURACY"]],
+  "MEASURE": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"], ["calibrate", "ACCURACY"]]
+};
+const HUD_RUN_MINUTES = { "VERIFY": 2, "RERUN": 45, "RERUN+CROSSTALK": 47, "RERUN+ACCURACY": 71,
+                          "RERUN+ACCURACY+CROSSTALK": 73, "MEASURE": 71 };
+function hudRunKindName(kind) {
+  return kind === "VERIFY" ? "VERIFY" : kind === "MEASURE" ? "MEASURE" : String(kind || "").replace("RERUN", "RE-RUN").split("+").join(" + ");
+}
+function hudMinSec(s) {
+  s = Math.max(0, Math.round(Number(s) || 0));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+// The re-run the panel offers: RE-RUN, with the operator's +ACCURACY and +CROSSTALK.
+function hudRerunKind(opts) {
+  opts = opts || {};
+  return "RERUN" + (opts.accuracy ? "+ACCURACY" : "") + (opts.crosstalk ? "+CROSSTALK" : "");
+}
+function hudCalibrationRun(t) {
+  const r = t && t.calibration_run;
+  if (!t || !t.calibrating || !r || !r.active) return null;
+  const plan = HUD_RUN_PLANS[r.kind] || [];
+  const note = String(r.note || ""), bar = note.indexOf(" | ");
+  const key = bar > 0 ? note.slice(0, bar) : "", line = bar > 0 ? note.slice(bar + 3) : note;
+  const at = Math.max(0, plan.findIndex((p) => p[0] === key));
+  const s = r.session;
+  const session = s
+    ? { label: s.label, axis: String(s.axis || "").toUpperCase(), active: true,
+        text: hudMinSec(s.elapsed_s) + " / ~" + hudMinSec(s.expected_s),
+        fraction: Math.min(1, Math.max(0, (Number(s.elapsed_s) || 0) / Math.max(1, Number(s.expected_s) || 1))) }
+    : { label: r.state === "waiting" ? "WAITING FOR CALIBD" : "FITTING AND DESIGNING", axis: "", active: false,
+        text: "TURRET HELD", fraction: 0 };
+  const c = t.calibration_record || {};
+  return {
+    title: "CALIBRATING", kind: r.kind, kindName: hudRunKindName(r.kind),
+    line2: hudRunKindName(r.kind) + (plan[at] ? " · " + plan[at][1] : ""),
+    record: c.id ? "#" + c.id + " " + c.name : "",
+    steps: plan.map((p, i) => ({ label: p[1], state: i < at ? "done" : i === at ? "now" : "next" })),
+    session: session, note: line, sessions: Number(r.sessions) || 0,
+    elapsed: hudMinSec(r.elapsed_s) + " OF ~" + (HUD_RUN_MINUTES[r.kind] || "?") + " MIN",
+    stop: { label: "STOP", command: "stop_calibration", arg: "", kind: "stop",
+            note: "ends the session now; both axes held; installs nothing" }
+  };
+}
+// The last run, once it has ended: what the panel says under WHAT #N KNOWS.
+function hudCalibrationLastRun(t) {
+  const r = t && t.calibration_run;
+  if (!r || r.active) return null;
+  const verdict = String(r.verdict || "");
+  const good = r.state === "done" && !/^NOT ACCEPTED|^STOPPED/.test(verdict) && !/UPDATE_PARAMETERS/.test(verdict);
+  return { text: hudRunKindName(r.kind) + " · " + (verdict || String(r.state || "").toUpperCase()),
+           tone: good ? "good" : "warn", elapsed: hudMinSec(r.elapsed_s) };
 }
 
 function hudSpeedRows(t) {
@@ -1711,6 +1784,8 @@ function render(t) {
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
                              rest: t.rest_park, jogging: !!t.manual_lease_active });
+  const runNow = hudCalibrationRun(t);
+  if (runNow) { st.line1 = "CALIBRATING"; st.line2 = escapeMarkup(runNow.line2); st.named = true; }
   if (window.otaPipNoteStreams) window.otaPipNoteStreams(t.video_streams);
   $("mode-block").innerHTML =
     '<div class="m1">' + st.line1 + '</div>' +
@@ -1845,8 +1920,13 @@ function paint(t) {
   // Phase changes must refresh their Home/recovery gates even with no tracks.
   const calKey = value => value ? [value.calibration_record, value.calibration_switching, value.calibration_overdue,
     Math.round(10 * (Number(value.calibration_progress) || 0)), value.calibration_unverified, value.calibration_blocked,
-    value.calibration_records, value.phase, value.operating_mode, value.rest_park] : null;
-  const drawerKey = value => JSON.stringify(drawerOpen === "CALIBRATION" ? calKey(value)
+    value && value.calibration_records, value.phase, value.operating_mode, value.rest_park,
+    value.calibration_run && [value.calibration_run.id, value.calibration_run.active, value.calibration_run.verdict]] : null;
+  // ADR-005 D7: a run takes the drawer; when it ends the panel shows how it went.
+  if (t && t.calibrating && drawerOpen !== "RUN") { drawerOpen = "RUN"; pendingConfirm = null; closeCalibrationDialog(); renderDock(); }
+  else if (t && !t.calibrating && drawerOpen === "RUN") { drawerOpen = "CALIBRATION"; renderDock(); renderDrawer(); }
+  const drawerKey = value => JSON.stringify(drawerOpen === "RUN" ? [value && value.calibration_run]
+    : drawerOpen === "CALIBRATION" ? calKey(value)
     : drawerOpen === "MENU"
     ? [value && value.phase, value && value.rest_park, value && value.rest_park_on_stop,
        hudSpeedRows(value).map(r => [r.value, r.max]), value && value.calibration_record,
@@ -2055,9 +2135,11 @@ function dockIcon(k) {
 }
 
 function renderDock() {
-  dock.innerHTML = hudDockSpecs({ open: drawerOpen }).map((b) =>
+  const running = drawerOpen === "RUN";
+  dock.classList.toggle("held", running);
+  dock.innerHTML = hudDockSpecs({ open: running ? "MENU" : drawerOpen }).map((b) =>
     '<button type="button" class="dockbtn' + (b.active ? " on" : "") + '" data-key="' + b.key +
-    '" aria-pressed="' + (b.active ? "true" : "false") + '">' + dockIcon(b.key) +
+    '" aria-pressed="' + (b.active ? "true" : "false") + '"' + (running ? " disabled" : "") + ">" + dockIcon(b.key) +
     "<span>" + b.key + "</span></button>").join("");
 }
 
@@ -2068,6 +2150,12 @@ function escapeMarkup(value) {
 
 function renderDrawer() {
   if (!drawerOpen) { drawer.hidden = true; drawer.innerHTML = ""; drawer.classList.remove("calpanel"); return; }
+  if (drawerOpen === "RUN") {
+    drawer.classList.add("calpanel");
+    drawer.innerHTML = renderCalibrationRun(lastTelemetry || {});
+    drawer.hidden = false;
+    return;
+  }
   if (drawerOpen === "CALIBRATION") {
     const top = drawer.scrollTop;
     drawer.classList.add("calpanel");
@@ -2158,8 +2246,30 @@ function renderCalibrationBore(t) {
        snote(s.detail, true) + "</div>";
   return h;
 }
+// ADR-005 D7: the run view takes the drawer while a run is in progress: steps, the session, calibd's
+// last line, STOP. The dock is dimmed and the D-pad hidden: nothing manual acts until it ends.
+let calRerunOpts = { accuracy: false, crosstalk: false };
+function renderCalibrationRun(t) {
+  const r = hudCalibrationRun(t);
+  if (!r) return '<div class="dtitle">CALIBRATING</div><div class="dnote">The run has ended.</div>';
+  const steps = r.steps.map((s) => '<span class="rstep ' + s.state + '">' + (s.state === "done" ? "✓ " : s.state === "now" ? "● " : "") +
+                                   escapeMarkup(s.label) + "</span>").join('<span class="rsep">›</span>');
+  const s = r.session;
+  let h = '<div class="dtitle">CALIBRATING</div>';
+  h += '<div class="drow setting"><span class="rl">' + escapeMarkup(r.kindName) + '</span><span class="rn">' +
+       escapeMarkup(r.record) + " · " + escapeMarkup(r.elapsed) + "</span></div>";
+  h += '<div class="drow setting"><span class="rsteps">' + steps + "</span></div>";
+  h += '<div class="drow setting"><span class="rl">' + (s.active ? "SESSION " + escapeMarkup(s.axis) : escapeMarkup(s.label)) +
+       '</span><span class="rn">' + escapeMarkup(s.text) + "</span>" +
+       (s.active ? '<span class="snote">' + escapeMarkup(s.label) + '</span><span class="tbar fill"><i style="width:' +
+                   Math.round(s.fraction * 100) + '%"></i></span>' : "") + "</div>";
+  if (r.note) h += '<div class="drow setting"><span class="snote rnote">' + escapeMarkup(r.note) + "</span></div>";
+  h += '<div class="pstop"><button type="button" class="drow stop" data-cmd="' + r.stop.command + '" data-arg="" data-kind="stop">' +
+       '<span class="rl">' + r.stop.label + '</span><span class="rn">' + escapeMarkup(r.stop.note) + "</span></button></div>";
+  return h;
+}
 function renderCalibrationPanel(t) {
-  const spec = hudCalibrationPanel(t);
+  const spec = hudCalibrationPanel(t, calRerunOpts);
   if (!spec) return '<div class="dtitle">CALIBRATION</div><div class="dnote">This station keeps no calibration records.</div>';
   const cls = (tone) => tone ? " " + tone : "";
   const row = (a, extra) => {
@@ -2192,8 +2302,13 @@ function renderCalibrationPanel(t) {
        spec.parts.map((q) => '<span class="k">' + q.label + '</span><span class="v' + cls(q.tone) + '">' +
                              escapeMarkup(q.text) + "</span>").join("") + "</div>" +
        (spec.unmeasured ? '<span class="snote warn">NOT MEASURED: its servo parts are copied from #' +
-                          spec.unmeasuredFrom + ".</span>" : "") + "</div>";
-  h += '<div class="dsec">MEASURE</div>' + spec.measure.map((a) => row(a)).join("");
+                          spec.unmeasuredFrom + ".</span>" : "") +
+       (spec.lastRun ? '<span class="snote' + (spec.lastRun.tone === "warn" ? " warn" : "") + '">LAST RUN: ' +
+                       escapeMarkup(spec.lastRun.text) + " (" + spec.lastRun.elapsed + ")</span>" : "") + "</div>";
+  h += '<div class="dsec">MEASURE</div>' + spec.measure.map((a) => row(a, !a.options ? "" :
+    '<div class="drow setting ropts"><span class="stepper">' + a.options.map((o) => '<button type="button" class="sbtn chip' +
+      (o.on ? " on" : "") + '" data-calui="opt:' + o.key + '">' + o.label + "</button>").join("") +
+    '</span><span class="snote">+ACCURACY measures the limits again (~26 min); +CROSSTALK after a yaw motor change</span></div>')).join("");
   const removable = spec.removable.map((x) => {
     const armed = hudRowAwaitsConfirm(x, pendingConfirm);
     return '<button type="button" class="sbtn chip del' + (armed ? " armed" : "") + '" data-cmd="' + x.command +
@@ -2359,14 +2474,14 @@ function stopPadJog() {
 }
 function padReady(t) {
   return t && t.operating_mode === "MANUAL" && t.phase === "hold" &&
-    !t.target_type_switching && !t.calibration_switching &&
+    !t.target_type_switching && !t.calibration_switching && !t.calibrating &&
     !t.telemetry_stale && transportOk && Date.now() - lastTelemetryAt < 300 &&
     (t.safety_action === "ALLOW" || t.safety_action === "DERATE");
 }
 function renderManualPad(t) {
   const pad = $("manual-pad");
   if (!pad) return;
-  const hidden = !(t && t.operating_mode === "MANUAL" && t.phase === "hold");
+  const hidden = !(t && t.operating_mode === "MANUAL" && t.phase === "hold") || !!(t && t.calibrating);
   if (pad.hidden !== hidden) { pad.hidden = hidden; renderDock(); }
   const enabled = padReady(t);
   pad.querySelectorAll("button[data-jog]").forEach(b => { b.disabled = !enabled; });
@@ -2426,7 +2541,7 @@ setInterval(() => renderManualPad(lastTelemetry), 100);
 
 dock.addEventListener("click", (e) => {
   const b = e.target && e.target.closest ? e.target.closest("button[data-key]") : null;
-  if (b) setDrawer(b.getAttribute("data-key"));
+  if (b && !b.disabled && drawerOpen !== "RUN") setDrawer(b.getAttribute("data-key"));
 });
 
 drawer.addEventListener("click", (e) => {
@@ -2440,6 +2555,7 @@ drawer.addEventListener("click", (e) => {
     else if (k === "new") newCalibrationDialog();
     else if (k === "newcopy") newCalibrationDialog(1);
     else if (k.indexOf("pace:") === 0) { calPace = Number(k.slice(5)); renderDrawer(); }
+    else if (k.indexOf("opt:") === 0) { const o = k.slice(4); calRerunOpts[o] = !calRerunOpts[o]; pendingConfirm = null; renderDrawer(); }
     return;
   }
   const ui = e.target && e.target.closest ? e.target.closest("button[data-ui]") : null;
@@ -2703,6 +2819,13 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #drawer .rn.locked { color:#f2b329; font-size:9px; letter-spacing:.08em; }
 #drawer .stepper.wrap { flex-wrap:wrap; gap:4px; }
 #drawer .calhold .rl { color:#95f58b; }
+#dock.held { opacity:.35; }
+#drawer .rsteps { display:flex; flex-wrap:wrap; gap:6px; font-size:11px; letter-spacing:.08em; }
+#drawer .rstep.done { color:#95f58b; }
+#drawer .rstep.now { color:#edf2eb; }
+#drawer .rstep.next { color:rgba(237,242,235,.45); }
+#drawer .rsep { color:rgba(237,242,235,.35); }
+#drawer .rnote { font-family:inherit; color:#c5d0c5; white-space:normal; }
 #drawer .sbtn.chip.bad { color:#f2b329; border-color:rgba(242,179,41,.6); }
 #drawer .sbtn.chip.del { color:rgba(255,93,93,.85); border-color:rgba(255,93,93,.45); background:rgba(255,93,93,.06); }
 #drawer .sbtn.chip.del.armed { color:#f2b329; border-color:#f2b329; background:rgba(242,179,41,.16); }

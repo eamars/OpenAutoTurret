@@ -7,3 +7,6 @@ websockets
 PyYAML
 numpy
 Pillow
+# calibd's fits (tools/servo_commission: identify.py, score.py), ADR-005 D7. An arm64 wheel exists
+# for the station venv's Python 3.13 (checked 2026-10-24).
+scipy

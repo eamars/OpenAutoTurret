@@ -55,6 +55,8 @@ DEG = math.pi / 180
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 CONFIG = REPO / "Firmware/config/servo"
+# Where commissioning runs are kept (calibd keeps the station's in the calibration store, ADR-005 D7).
+RUNS = REPO / "run/servo-commission"
 
 
 DELAY_OFFSET_S = 0.0012
@@ -70,13 +72,19 @@ class Run:
     def __init__(self, args, axis):
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.id = f"{axis}-{stamp}{'-sim' if args.sim else ''}"
-        self.out = Path(args.out or REPO / "run/servo-commission" / self.id)
+        self.out = Path(args.out or RUNS / self.id)
         self.out.mkdir(parents=True, exist_ok=True)
         self.logfile = open(self.out / "commission.log", "a", encoding="utf-8")
         self.axis = axis
         self.report = {"run": self.id, "axis": axis, "started": stamp, "station": "sim" if args.sim else stations.HOST,
                        "steps": []}
-        if args.sim:
+        # Every line also goes to on_log when given (calibd: the page's run view).
+        self.on_log = getattr(args, "on_log", None)
+        if getattr(args, "station", None) is not None:
+            # calibd: controld runs the sessions (ADR-005 D7).
+            self.station = args.station
+            self.report["station"] = getattr(args.station, "name", "station")
+        elif args.sim:
             truth = json.load(open(args.sim, encoding="utf-8"))
             self.station = stations.SimStation(truth, log=self.log)
             self.report["sim_truth"] = str(args.sim)
@@ -87,6 +95,8 @@ class Run:
     def log(self, text):
         print(text, flush=True)
         self.logfile.write(text + "\n"); self.logfile.flush()
+        if self.on_log:
+            self.on_log(text)
 
     def session(self, name, manifest):
         self.count += 1
@@ -342,7 +352,7 @@ def commission_yaw(args):
     run = Run(args, "yaw")
     prior = json.load(open(CONFIG / "yaw_prior.json", encoding="utf-8"))
     rules = prior["design_rules"]
-    current = json.load(open(CONFIG / "yaw_servo.json", encoding="utf-8")) if args.update else None
+    current = load_asset(argparse.Namespace(asset=getattr(args, "asset", None), axis="yaw")) if args.update else None
     run.log(f"yaw commissioning {run.id} ({'update from the current asset' if args.update else 'from the prior: nothing assumed'}); "
             "the pitch stays disabled and rests where the last pitch session parked it (commission pitch first)")
     try:
@@ -615,7 +625,7 @@ def calibration_script(goto):
 
 def asset_validation_journals(asset):
     """The use-case journals the asset was accepted on (its commissioning run's validation)."""
-    for report in sorted((REPO / "run/servo-commission").glob("*/report.json")):
+    for report in sorted(RUNS.glob("**/report.json")):
         if json.load(open(report, encoding="utf-8")).get("run") == asset["provenance"]["run"]:
             return sorted(report.parent.glob("*-usecase*/yaw-control.jsonl"))
     return []

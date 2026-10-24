@@ -817,6 +817,14 @@ if [ "$START_WEB" -eq 1 ]; then
   children+=("$web_pid")
   child_name[$web_pid]=webd
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
+  # ADR-005 D7: calibd, idle until the page starts a calibration run; controld runs the sessions and
+  # calibd fits and designs between them. Low priority, and not waited on (see the wait below): a
+  # calibd that dies moves nothing, and controld ends a run that hears nothing from it for 15 s.
+  OTA_SERVO_SIM="$APP/build/axis_control_core/servo-sim" nice -n 10 \
+    "$PY" "$APP/tools/servo_commission/calibd.py" >"$RUN/calibd.log" 2>&1 &
+  calibd_pid=$!
+  children+=("$calibd_pid")
+  child_name[$calibd_pid]=calibd
 fi
 if [ "$MODE" != mixed-controller-commission ]; then
   if [ "$MODE" != perception ]; then
@@ -837,14 +845,14 @@ printf 'Mode: %s\nConfig: %s\nPython: %s\nChildren: %s\n' "$MODE" "${controller_
 cp "$RUN/launcher.pid" "$RUN/started"
 echo "Stack logs: $RUN; web port: $OTA_WEB_PORT. Ctrl-C stops this stack."
 # A failed child or finite capture ends its own stack; unrelated processes are untouched.
-# The observe-only IMU is not one of them: it sits in children so cleanup stops it, but it is
-# not waited on. Station, 2026-10-03 14:27:32: the BNO085 lost its I2C link, its process
+# The observe-only IMU and calibd are not among them: they sit in children so cleanup stops them,
+# but they are not waited on. Station, 2026-10-03 14:27:32: the BNO085 lost its I2C link, its process
 # exited, and this wait took the whole stack down with it (owner ruling 2026-10-02: losing a
 # display-only sensor is not even a HOLD).
 first_child_status=0
 waited=()
 for pid in "${children[@]}"; do
-  [ "$pid" = "${imu_shadow_pid:-}" ] || waited+=("$pid")
+  [ "$pid" = "${imu_shadow_pid:-}" ] || [ "$pid" = "${calibd_pid:-}" ] || waited+=("$pid")
 done
 wait -n "${waited[@]}" || first_child_status=$?
 note_child_exit
