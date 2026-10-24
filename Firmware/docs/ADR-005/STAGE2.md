@@ -298,6 +298,16 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     friction fit cannot follow the measured knee or the hour-to-hour level — the drift is real, so
     the loop must carry it; the fit's instability (23:43: + 0.18+0.62, creep 0.68) comes from the
     plateau means being limit-cycle averages under the prior.
-  - **Confirm on the station:** a MEASURE on #5 with the new rule; from its journals the integral
-    at each ramp start and the time to first motion (the mechanism above), the stall count under
-    that day's drift, and the speed ratios' margin.
+  - **Confirmed on run 2's journals (MEASURE 23:55, same failure: pass 2 ramp−1 at 1.149).** Every
+    0.2 s from that ramp's start: the feedforward steps to −0.19 A, the axis breaks away and slips
+    0.5° ahead (2.5× the reference speed at 0.2 s); while ahead the loop winds the integral against
+    the direction of travel (+0.04 → +0.13 A); the axis then stands from 0.6 to 1.8 s while the
+    reference passes it (0.5° ahead → 0.63° behind) until the integral has unwound and P has grown
+    to the −0.38 A breakaway; the catch-up after 1.8 s is the "speed". Pass 1's ramp−1 shows the same
+    slip with a shorter stick (0.985). The unwinding rate, ki·e ≈ 20.8 × 5 mrad ≈ 0.1 A/s as seen,
+    is what the rule change triples. The exact servo-level root — an integral that winds against a
+    moving reference while the axis stands ahead of it — would be a conditional-integration change
+    in `axis_control_core/servo.cpp` (production code; not made here).
+  - **The next station run (MEASURE on #5 with this branch) must show:** `ki ≈ 3 × kq` in the ladder
+    line (≈ 40–65), both passes accepted with speed ratios inside 0.93–1.07, and in the use-case
+    journals a stick at ramp±1's start no longer than ~0.5 s with the integral unwinding at ≥ 0.3 A/s.
