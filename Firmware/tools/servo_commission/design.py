@@ -74,13 +74,17 @@ def servo(base, identified, design):
              crosstalk_map=[round(g - design["bias"], 7) for g in identified["crosstalk"]["table"]])
     s.update(gains(identified["inertia"], design["wn"], design["zeta"], design["integral_rate"]))
     # At a stopped reference the friction feedforward is zero, so the integral is the servo's whole
-    # authority against static friction: its cap covers the worse direction's breakaway plus the
-    # bearing's session-to-session level shift (design rule friction_drift_A, +-0.15 A measured
-    # 2026-10-24/25), never above 1.2 A (thermal). Until 2026-10-25 it was the two directions' mean
-    # static level: 0.40 A on the 5x payload, under its own + breakaway of 0.435 and far under
-    # breakaway + drift, so every settle that fell 0.14 deg short ended in a stall rock.
+    # authority against static friction: its cap covers the breakaway plus the bearing's
+    # session-to-session level shift (design rule friction_drift_A, +-0.15 A measured 2026-10-24/25),
+    # never above 1.2 A (thermal). The breakaway is built on what the survey measured -- the larger
+    # direction's largest plateau -- plus the static excess the station showed over its plateaus
+    # (design rule breakaway_over_plateau_A: 00:38 needed 0.44-0.69 A where the plateaus topped at
+    # 0.36; 02:04 0.63 over 0.37), not on the fit's coulomb + stribeck, an extrapolation to zero
+    # speed that the 04:03 fit put at 1.66 A for plateaus of 0.59. Until 2026-10-25 the cap was the
+    # two directions' mean static level: 0.40 A on the 5x payload, under its own breakaway, so every
+    # settle that fell 0.14 deg short ended in a stall rock.
     low = 0.5 * (f["positive"]["coulomb"] + f["positive"]["stribeck"] + f["negative"]["coulomb"] + f["negative"]["stribeck"])
-    breakaway = max(f["positive"]["coulomb"] + f["positive"]["stribeck"], f["negative"]["coulomb"] + f["negative"]["stribeck"])
+    breakaway = max(f["positive"]["plateau_max"], f["negative"]["plateau_max"]) + design["breakaway_over_plateau"]
     s["integral_cap"] = round(min(1.2, breakaway + design["friction_drift"]), 3)
     # Stall recovery is always on in a designed asset (the prior leaves it off: its
     # thresholds need the friction level): a 25 ms reverse rock after 0.3 s stuck more
@@ -141,14 +145,16 @@ def wn_floor(inertia):
     return max(5.0, math.sqrt(KQ_FLOOR / inertia))
 
 
-def boundary(identified, base, bias, residual_shift, zeta, integral_rate, friction_drift, start=0.0, lo=None, hi=200.0, steps=8):
+def boundary(identified, base, bias, residual_shift, zeta, integral_rate, friction_drift, breakaway_over_plateau,
+             start=0.0, lo=None, hi=200.0, steps=8):
     """Largest stable wn (bisection in log wn) for plant crosstalk = table + residual_shift,
     servo table = table - bias. Returns (wn, onset angle just above it)."""
     if lo is None:
         lo = wn_floor(identified["inertia"])
     p = plant(identified)
     p["crosstalk_map"] = [g + residual_shift for g in identified["crosstalk"]["table"]]
-    design = {"bias": bias, "zeta": zeta, "integral_rate": integral_rate, "friction_drift": friction_drift}
+    design = {"bias": bias, "zeta": zeta, "integral_rate": integral_rate, "friction_drift": friction_drift,
+              "breakaway_over_plateau": breakaway_over_plateau}
 
     def ok(wn):
         design["wn"] = wn
@@ -207,11 +213,12 @@ def design_yaw(identified, base, rules, start=0.0, log=print):
     delta = crosstalk_error_bound(identified, rules)
     candidates = []
     for bias in rules["crosstalk_bias_candidates_rad_per_A"]:
-        results = [boundary(identified, base, bias, shift, rules["zeta"], rules["integral_rate_per_s"], rules["friction_drift_A"], start)
+        results = [boundary(identified, base, bias, shift, rules["zeta"], rules["integral_rate_per_s"], rules["friction_drift_A"],
+                            rules["breakaway_over_plateau_A"], start)
                    for shift in (-delta, +delta)]
         wn_b = min(r[0] for r in results)
         dsg = {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "friction_drift": rules["friction_drift_A"],
-               "bias": bias, "wn": rules["design_margin"] * wn_b}
+               "breakaway_over_plateau": rules["breakaway_over_plateau_A"], "bias": bias, "wn": rules["design_margin"] * wn_b}
         rows, extra, status = predicted_usecase(identified, servo(base, identified, dsg), start)
         cost = predicted_cost(rows, extra, status)
         log(f"  bias {bias * 1e3:.1f} mrad/A: stable to wn {results[0][0]:.1f} / {results[1][0]:.1f} rad/s "
@@ -224,10 +231,11 @@ def design_yaw(identified, base, rules, start=0.0, log=print):
         log(f"  MODEL INADEQUATE: no quiet gain even at wn {floor:.1f} in simulation; the station ladder decides alone")
         bias = rules["crosstalk_bias_candidates_rad_per_A"][1]
         return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "friction_drift": rules["friction_drift_A"],
-                "bias": bias, "model_adequate": False, "boundary_wn_sim": None, "wn": None, "onset_angles_sim": []}
+                "breakaway_over_plateau": rules["breakaway_over_plateau_A"], "bias": bias, "model_adequate": False,
+                "boundary_wn_sim": None, "wn": None, "onset_angles_sim": []}
     cost, bias, wn_b, angles = min(candidates, key=lambda c: (round(c[0], 2), c[1]))
     return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "friction_drift": rules["friction_drift_A"],
-            "bias": bias, "model_adequate": True,
+            "breakaway_over_plateau": rules["breakaway_over_plateau_A"], "bias": bias, "model_adequate": True,
             "boundary_wn_sim": round(wn_b, 2), "wn": round(rules["design_margin"] * wn_b, 2), "predicted_cost": round(cost, 3),
             "onset_angles_sim": [round(a, 4) for a in angles], "crosstalk_error_bound": round(delta, 6)}
 

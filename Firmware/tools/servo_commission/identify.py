@@ -53,12 +53,31 @@ def servo_friction_curve(v, coulomb, stribeck, speed, viscous, creep_drop=0.0, c
     return np.maximum(0.0, coulomb + stribeck * np.exp(-v / speed) - creep_drop * np.exp(-v / creep_speed)) + viscous * v
 
 
+# The creep term's speed scale: the level falls again below about 1 deg/s, so the dip lives under
+# 0.86 deg/s (0.015 rad/s), and the Stribeck speed stays at or above 4.6 deg/s (0.08 rad/s). The two
+# exponentials are then at least 5x apart in speed and cannot trade off: with both allowed to meet
+# (creep up to 0.05 rad/s, 2026-10-25 04:03) the fit put a Stribeck of 1.53 A against a creep of
+# 1.25 A for plateaus that never left 0.15-0.59 A, read the feedforward 0.06 A above the 1 deg/s
+# plateau, and the cap rule 1.2 A.
+CREEP_SPEED_MAX = 0.015
+# A model that reads above a measured plateau costs this much more than one that reads below it (the
+# residual is scaled by it, so the squared loss by its square): an over-reading feedforward slips the
+# standing axis ahead of its reference, where nothing can help it, while an under-reading one leaves
+# it behind, where the integral does its job. Unweighted, the 04:03 fit sat 0.08 A above the 1 deg/s
+# plateau, pulled up by the stick-slip average at 0.25 deg/s. (Weighting plateaus by their spread was
+# tried and dropped: the spread at 10-20 deg/s is the loop ringing, not an error of the mean, and
+# down-weighting those plateaus under-read the feedforward at speed.)
+OVER_READ_WEIGHT = 2.0
+
+
 def fit_friction(rows):
     """Friction-speed curve: per direction a Coulomb level, a Stribeck excess and viscous
     slope; shared by both directions (one bearing) the Stribeck speed and the low-speed
-    creep term (the level falls again below ~1 deg/s).
+    creep term (the level falls again below ~1 deg/s, CREEP_SPEED_MAX).
 
-    Bounded least squares on the per-speed means from a fixed start.
+    Bounded least squares on the per-speed means from a fixed start. Each direction also carries
+    `plateau_max`, the largest measured plateau: what the station shows of its friction level,
+    which the design's integral cap is built on (the fitted static level is a model extrapolation).
     """
     by = {d: [x for x in rows if x["direction"] == d] for d in (1, -1)}
     for d, r in by.items():
@@ -72,19 +91,21 @@ def fit_friction(rows):
         per = {1: (p[0], p[1], p[6], p[2]), -1: (p[3], p[4], p[6], p[5])}  # coulomb, stribeck, speed, viscous
         return per, (p[7], p[8]) if slow else (0.0, 0.01)
 
-    def resid(p):
+    def resid(p, weighted=True):
         per, (drop, cspeed) = unpack(p)
-        return np.concatenate([servo_friction_curve(v[d], *per[d], drop, cspeed) - f[d] for d in (1, -1)])
+        r = np.concatenate([servo_friction_curve(v[d], *per[d], drop, cspeed) - f[d] for d in (1, -1)])
+        return np.where(r > 0, r * OVER_READ_WEIGHT, r) if weighted else r
 
     x0 = [0.3, 0.3, 0.0, 0.3, 0.3, 0.0, 0.3] + ([0.3, 0.01] if slow else [])
     lo = [0, 0, 0, 0, 0, 0, 0.08] + ([0, 0.002] if slow else [])
-    hi = [2, 2, 1, 2, 2, 1, 1.0] + ([2, 0.05] if slow else [])
+    hi = [2, 2, 1, 2, 2, 1, 1.0] + ([2, CREEP_SPEED_MAX] if slow else [])
     fit = least_squares(resid, x0=x0, bounds=(lo, hi))
     per, (drop, cspeed) = unpack(fit.x)
     out = {"creep_drop": float(drop), "creep_speed": float(cspeed),
-           "rms_residual": float(np.sqrt(np.mean(fit.fun ** 2))), "speeds": len(rows)}
+           "rms_residual": float(np.sqrt(np.mean(resid(fit.x, weighted=False) ** 2))), "speeds": len(rows)}
     for d, name in ((1, "positive"), (-1, "negative")):
         out[name] = dict(zip(("coulomb", "stribeck", "stribeck_speed", "viscous"), map(float, per[d])))
+        out[name]["plateau_max"] = float(np.max(f[d]))
     return out
 
 

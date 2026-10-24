@@ -501,6 +501,49 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
       `i` flat through the slip and the spring-back at each ramp start (0.1–0.9 s), the flip at the
       ramp start carrying the previous rest's shortfall along the new motion (not against it), and
       the integral winding only once the reference has passed.
+  - **MEASURE 04:03 (release 5153d15): the servo rule held (`i` flat +0.06 A through a 2 s stand),
+    one pass accepted at 0.957–1.020, the other missed at 0.885 (ramp+1 too slow). A degenerate
+    friction fit set the feedforward and the cap (Fable, 06:00; branch `claude/yaw-friction-fit`).**
+    - The fit: stribeck 1.53 A against creep 1.25 A (creep speed at its 2.86 deg/s bound, where it
+      meets the 4.6 deg/s Stribeck speed) for plateaus of 0.15–0.59 A; model 0.48 A at 1 deg/s against
+      a 0.40 A plateau. The ramp+1 feedforward of 0.46 A slipped the motor 1.8° ahead at 6.5 deg/s and
+      the axis stood 2 s for the reference. The cap rule read coulomb + stribeck as 1.66 A → 1.2 A.
+    - The step overshoots (0.77–1.08° on step+0.2/+0.5) are not the cap: peak |i| in those steps was
+      0.28–0.47 A, −0.07…−0.17 A at the moment of peak travel; they happen at +0.4 s with the
+      feedforward at 0.44–0.47 A — the free slip again.
+    - Fit (`identify.fit_friction`): creep speed ≤ 0.86 deg/s (`CREEP_SPEED_MAX` 0.015 rad/s) against
+      a Stribeck speed ≥ 4.6 deg/s, so the exponentials are 5× apart and cannot trade off; and a
+      model reading above a plateau costs twice what one reading below does (`OVER_READ_WEIGHT` 2:
+      over-reading slips the standing axis ahead, under-reading leaves it behind for the integral).
+      Over the seven surveys of the night:
+
+      | survey | + g(1°/s) vs plateau | + static (Fc+Fs) old → new | − g(1°/s) vs plateau | model peak ≤ max plateau + spread |
+      |---|---|---|---|---|
+      | 21:16 | 0.33 vs 0.33±0.05 | 0.43 → 0.41 | 0.29 vs 0.32 | yes |
+      | 23:43 | 0.45 vs 0.43±0.09 | 0.80 → 0.67 | 0.38 vs 0.52±0.14 (bump) | yes |
+      | 23:55 | 0.31 vs 0.32 | 0.47 → 0.41 | 0.23 vs 0.25 | yes |
+      | 00:38 | 0.33 vs 0.35 | 0.43 → 0.41 | 0.25 vs 0.32 | yes |
+      | 02:04 | 0.35 vs 0.35 | 0.63 → 0.56 | 0.25 vs 0.27 | yes |
+      | 03:04 | 0.38 vs 0.37 | 0.60 → 0.49 | 0.37 vs 0.50±0.14 (bump) | yes |
+      | 04:03 | 0.43 vs 0.40±0.06 | **1.66 → 0.56** | 0.33 vs 0.40 | yes |
+
+      The + side is read within +0.03 A; the − side is under-read where its plateaus bump at 1–2 deg/s
+      (a shape the exponential cannot follow). Weighting plateaus by their spread was tried first and
+      dropped: at 10–20 deg/s the spread is the loop ringing, not an error of the mean, and the
+      down-weighted fit under-read the feedforward at speed — the 5× `--update` case (kq 4.9) then
+      stick-slipped at 10 deg/s (ratio 0.884, 4.5° of jitter) with any cap.
+    - Cap (`design.servo`): the larger direction's largest plateau (`plateau_max`, now in the asset)
+      + `breakaway_over_plateau_A` 0.35 (00:38 needed 0.44–0.69 A over plateaus of 0.36; 02:04 0.63
+      over 0.37) + `friction_drift_A` 0.15, ceiling 1.2; stall current = cap. Over the night's surveys:
+      0.82–1.11 A (04:03: 1.09 instead of 1.2; 00:38: 0.86 instead of 0.585, above the 0.69 it needed).
+      A high cap cost nothing the journals show (the integral never passed 0.47 A under the 1.2 A cap).
+    - Honest limit: the 1 deg/s ramp's ratio on this mount is set by the free slip at its start
+      (0.5–1.8°) and the rest offset before it (0.4–0.5°), divided by 1 deg/s against the gate's 1 s
+      exclusion. The fit fix removes the over-reading feedforward that made the 04:03 slip 1.8°; it does
+      not remove the slip. If the next run still misses at 1 deg/s, the morning's choices are
+      `friction_correction_rate` (rest offset), a feedforward that waits for the reference while the
+      axis stands ahead (a servo change: no force reversal on a standing axis, so no slip), or a slow-ramp
+      gate that measures tracking after the start for heavy payloads.
 - **Homing that is not a hazard no longer faults (owner, 2026-10-25 01:40: "no fault state if the
   issue is not safety related"; `25ef55a`, probe update `f2ca460`).**
   - The 00:28 FAULT was a repeatability miss: no hazard.
