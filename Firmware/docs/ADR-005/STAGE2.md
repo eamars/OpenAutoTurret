@@ -493,3 +493,23 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     - The cap is not the cause. The root is the integral winding against a reference moving toward
       a standing axis: a conditional-integration change in `axis_control_core/servo.cpp`. Fable is
       proving it in the simulator (the knee plant reproduces 1.10–1.17).
+- **MEASURE on #5, 03:04–03:25 (release `62f1c52`: Fable's friction-frame integral, `e89e521`):
+  one validation pass accepted, the other missed by 0.004.**
+  - **Before the run:** 3 min of AUTO_ROAM on the new servo were clean, with no servo episode and no
+    warning.
+  - **Pitch ACCEPTED.**
+  - **Survey and identification:** + 0.16+0.44 A, − 0.19+0.40 A. J 0.2032; the night's five runs
+    span 0.20–0.27.
+  - **Design:** wn 8.4 → kq 14.37, ki 43.11. Ladder quiet to 12.9.
+  - **Validation:**
+    - usecase0 ACCEPTED: 0.952–1.061, 0 stalls.
+    - usecase1 NOT ACCEPTED: ramp−1 at 1.104, 0 stalls, slow-ramp P95-5 2.28°.
+  - **Two edge cases in the journals:**
+    - **Spring-back.** On ramp−1 the axis slipped 0.65° ahead, then sprang back toward the reference
+      at about 1 deg/s. The "standing ahead" test judges displacement without sign, so it counted the
+      spring-back as moving, and the integral wound against the travel to +0.26 A. The axis then
+      stood about 0.8 s after the reference passed.
+    - **Flip after a rest.** At ramp+1 the reversal flip turned an integral that a rest had been
+      working on (+0.28 A) into a push against the new motion (−0.26 A).
+    - Back to Fable: judge "standing" by progress along the travel, and decide what a rest does to
+      the integral's frame.
