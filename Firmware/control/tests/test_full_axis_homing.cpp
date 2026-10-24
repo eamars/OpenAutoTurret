@@ -202,6 +202,7 @@ TEST(FullAxisHoming, TravelTooShortFails) {
   EXPECT_NEAR(r.endpoint_a_rad, -1.0, 0.02);
   EXPECT_NEAR(r.endpoint_b_rad, -0.5, 0.02);
   EXPECT_NEAR(r.measured_travel_deg, 0.5 * 180.0 / M_PI, 1.0);
+  EXPECT_TRUE(r.hazard) << "a mechanism that is not the configured one: a hazard";
   SUCCEED();
 }
 
@@ -251,6 +252,7 @@ TEST(FullAxisHoming, EndpointAFaultFailsWholeAxis) {
   EXPECT_NE(r.fail_reason.find("endpoint A"), std::string::npos) << r.fail_reason;
   EXPECT_NE(r.fail_reason.find("hard abort or motor fault"), std::string::npos)
       << r.fail_reason;
+  EXPECT_TRUE(r.hazard) << "a drive fault is a hazard";
   SUCCEED();
 }
 
@@ -275,5 +277,6 @@ TEST(FullAxisHoming, EndpointBTimeoutFailsWholeAxis) {
   EXPECT_TRUE(full.home_a().result().valid) << r.fail_reason;
   EXPECT_NE(r.fail_reason.find("endpoint B"), std::string::npos) << r.fail_reason;
   EXPECT_NE(r.fail_reason.find("timeout"), std::string::npos) << r.fail_reason;
+  EXPECT_FALSE(r.hazard) << "a timeout is not a hazard (owner, 2026-10-25): the station retries";
   SUCCEED();
 }

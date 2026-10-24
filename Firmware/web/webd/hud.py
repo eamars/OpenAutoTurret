@@ -205,7 +205,14 @@ function hudStateLabel(o) {
   const surv = mode === "SURVEILLANCE";
   // The station is Homed or Shutdown (owner ruling 2026-10-03), and a boot is Shutdown: the phase is
   // controld's "idle", and the line says what starts it.
+  // A homing that failed without a hazard is no fault (owner, 2026-10-25): it retried, backed off its
+  // stop, and holds there unhomed with the pitch held. "SHUTDOWN · MOTORS OFF" would be untrue.
+  const homingFailure = String(o.homing_failure || "").trim();
+  if (o.supervisory === "idle" && homingFailure)
+    return { line1: "HOMING FAILED", line2: "HOLDING · MENU › HOME TO RETRY", named: true };
   if (o.supervisory === "idle") return { line1: "SHUTDOWN", line2: "MOTORS OFF · MENU › HOME", named: true };
+  if (o.supervisory === "homing" && Number(o.homing_attempt) > 1)
+    return { line1: "HOMING", line2: "RETRY " + Number(o.homing_attempt) + "/3", named: true };
   // At the park pose the station is homed and holding; the line names the next steps.
   if (o.supervisory === "parked") return { line1: "PARKED", line2: "AUTO · MANUAL · SHUTDOWN", named: true };
   // A mode selected on the stop: the park lifts pitch back into its envelope first, then the mode runs.
@@ -282,6 +289,15 @@ function hudSafetyPresentation(t) {
     return { label: "FAULT", reason: fault || "fault stop commanded by controld",
              tone: "red", tier: "interrupt", edge: null };
   }
+  // Not a fault (owner, 2026-10-25), but the operator must see why the station is not homed: amber, with
+  // the reason, while it retries and once it holds.
+  const homingFailure = String(t.homing_failure || "").trim();
+  if (homingFailure && t.phase === "idle")
+    return { label: "HOMING FAILED", reason: homingFailure + " · HOME to retry", tone: "amber",
+             tier: "prominent", edge: null };
+  if (homingFailure && t.phase === "homing")
+    return { label: "HOMING RETRY " + Number(t.homing_attempt || 0) + "/3", reason: homingFailure,
+             tone: "amber", tier: "caution", edge: null };
   if (a === "BRAKE") return { label: "BRAKING", reason: "", tone: "amber", tier: "prominent", edge: null };
   if (a === "DERATE") {
     const e = hudSafetyEdge(t);
@@ -409,11 +425,14 @@ function hudDrawerActions(name, t) {
     const phase = String(t.phase || "");
     const rest = String(t.rest_park || "");
     const parking = rest === "moving" || rest === "touching" || rest === "lifting";
+    // Idle after a homing that failed without a hazard holds unhomed with the pitch held (2026-10-25).
+    const held = phase === "idle" && String(t.homing_failure || "").trim() !== "";
     const busy = phase === "homing" || phase === "recovering";
     const home = busy
       ? { kind: "gated", note: phase === "recovering" ? "RECOVERING THE DRIVES…" : "HOMING…" }
       : rest === "releasing" ? { kind: "gated", note: "SWITCHING THE MOTORS OFF…" }
       : { kind: "act", note: phase === "fault" ? "Recover the drives, then home both axes"
+          : held ? "Homing failed; home again, then AUTO ROAM"
           : phase === "idle" ? "Start: home, then AUTO ROAM" : "Re-home both axes, then AUTO ROAM" };
     const homed = phase === "hold" || phase === "parked" || phase === "parking";
     const park = parking ? { kind: "gated", note: rest === "touching" ? "TOUCHING THE REST STOP…"
@@ -421,9 +440,9 @@ function hudDrawerActions(name, t) {
       : rest === "parked" && t.rest_park_on_stop === true ? { kind: "current", note: "PARKED · ANY MODE LEAVES" }
       : rest === "parked" ? { kind: "act", note: "Short of the rest stop: touch it again" }
       : phase === "hold" ? { kind: "act", note: "Yaw to 0, pitch onto its rest stop, hold" }
-      : { kind: "gated", note: phase === "idle" ? "MOTORS OFF · HOME FIRST" : "HOME FIRST" };
+      : { kind: "gated", note: phase === "idle" && !held ? "MOTORS OFF · HOME FIRST" : "HOME FIRST" };
     const off = rest === "releasing" ? { kind: "gated", note: "SWITCHING THE MOTORS OFF…" }
-      : phase === "idle" ? { kind: "gated", note: "MOTORS ARE OFF · HOME TO START" }
+      : phase === "idle" && !held ? { kind: "gated", note: "MOTORS ARE OFF · HOME TO START" }
       : homed && !busy ? { kind: "danger", note: "Park, then switch both motors off" }
       : { kind: "gated", note: "HOME FIRST" };
     return [
@@ -1867,7 +1886,8 @@ function render(t) {
 
   // §4.1 mode block, §21's state wording. Three lines, first line strongest.
   const st = hudStateLabel({ mode: t.operating_mode, phase: t.mode_phase, supervisory: t.phase,
-                             rest: t.rest_park, jogging: !!t.manual_lease_active });
+                             rest: t.rest_park, jogging: !!t.manual_lease_active,
+                             homing_attempt: t.homing_attempt, homing_failure: t.homing_failure });
   const runNow = hudCalibrationRun(t);
   if (runNow) { st.line1 = "CALIBRATING"; st.line2 = escapeMarkup(runNow.line2); st.named = true; }
   if (window.otaPipNoteStreams) window.otaPipNoteStreams(t.video_streams);
@@ -2013,6 +2033,7 @@ function paint(t) {
     : drawerOpen === "CALIBRATION" ? calKey(value)
     : drawerOpen === "MENU"
     ? [value && value.phase, value && value.rest_park, value && value.rest_park_on_stop,
+       value && value.homing_failure,
        hudSpeedRows(value).map(r => [r.value, r.max]), value && value.calibration_record,
        value && value.calibration_switching, value && value.calibration_blocked]
     : [value && value.operating_mode, value && value.phase,

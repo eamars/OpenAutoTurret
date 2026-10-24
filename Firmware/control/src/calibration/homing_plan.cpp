@@ -88,8 +88,9 @@ HomingPlan::HomingPlan(std::vector<HomingAction> actions, HomingPlanConfig cfg)
   if (!actions_.empty()) start_action();
 }
 
-void HomingPlan::fail(const std::string& reason) {
+void HomingPlan::fail(const std::string& reason, bool hazard) {
   failed_ = true;
+  hazard_ = hazard;
   fail_reason_ = reason;
 }
 
@@ -269,6 +270,7 @@ DesiredState HomingPlan::step(const HomingFeedback& fb) {
   DesiredState ds;
   bool sub_terminal = false;
   bool sub_ok = false;
+  bool sub_hazard = true;  // a coarse home or a move has no release: its failures stay hazards
   std::string sub_reason;
   switch (active_type_) {
     case HomingActionType::HomeEndpoint:
@@ -282,6 +284,7 @@ DesiredState HomingPlan::step(const HomingFeedback& fb) {
         sub_terminal = home_->terminal();
         sub_ok = home_->result().valid;
         sub_reason = sub_ok ? "endpoint homed (fine)" : home_->result().fail_reason;
+        sub_hazard = home_->result().hazard;
       }
       break;
     case HomingActionType::HomeFullRange:
@@ -289,6 +292,7 @@ DesiredState HomingPlan::step(const HomingFeedback& fb) {
       sub_terminal = full_->terminal();
       sub_ok = full_->result().valid;
       sub_reason = sub_ok ? "full range homed" : full_->result().fail_reason;
+      sub_hazard = full_->result().hazard;
       break;
     case HomingActionType::Move:
       ds = move_->step(fb);
@@ -303,7 +307,7 @@ DesiredState HomingPlan::step(const HomingFeedback& fb) {
       record_action_result();
       if (!failed_) advance();
     } else {
-      fail(describe_action() + " failed: " + sub_reason);
+      fail(describe_action() + " failed: " + sub_reason, sub_hazard);
     }
   }
   return ds;

@@ -142,6 +142,8 @@ inline std::string format_telemetry(const telemetry::TelemetrySnapshot& s) {
      << ",\"ts_ns\":" << s.timestamp_ns
      << ",\"phase\":\"" << json_escape(s.phase) << "\""
      << ",\"fault\":\"" << json_escape(s.fault_reason) << "\""
+     << ",\"homing_attempt\":" << s.homing_attempt
+     << ",\"homing_failure\":\"" << json_escape(s.homing_failure) << "\""
      << ",\"rest_park\":\"" << json_escape(s.rest_park) << "\""
      << ",\"rest_park_on_stop\":" << (s.rest_park_on_stop ? "true" : "false")
      << ",\"at_ready\":" << (s.at_ready ? "true" : "false")

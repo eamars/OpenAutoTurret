@@ -126,6 +126,9 @@ class HomingPlan {
   bool complete() const { return complete_; }
   bool failed() const { return failed_; }
   const std::string& fail_reason() const { return fail_reason_; }
+  // A failure that is a safety hazard (FAULT), or one that released off the stop for the station
+  // to retry and then hold (owner ruling 2026-10-02, homing 2026-10-25; HomingResult::hazard).
+  bool failure_hazard() const { return hazard_; }
   size_t action_index() const { return static_cast<size_t>(idx_); }
   size_t action_count() const { return actions_.size(); }
 
@@ -158,7 +161,7 @@ class HomingPlan {
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   void start_action();
   void advance();
-  void fail(const std::string& reason);
+  void fail(const std::string& reason, bool hazard = true);
   void record_action_result();
   void record_endpoint(AxisId a, Endpoint e, double raw_rad, double rep_rad);
   void finalize_axis(AxisId a);  // compute model + validate span when both known
@@ -169,6 +172,7 @@ class HomingPlan {
   int idx_ = 0;
   bool complete_ = false;
   bool failed_ = false;
+  bool hazard_ = true;
   std::string fail_reason_;
 
   std::array<AxisPlanState, kAxisCount> states_{};

@@ -151,6 +151,11 @@ struct TelemetrySnapshot {
   // station IPC client both need it (§42.1).
   std::string phase;
   std::string fault_reason;
+  // A homing that failed without a hazard is no fault (owner, 2026-10-25): the attempt under way
+  // (1-3, 0 before the first homing) and the last such failure's reason. In phase "homing" the
+  // reason is why this attempt is a retry; in phase "idle" the station holds unhomed, pitch held.
+  int homing_attempt = 0;
+  std::string homing_failure;
   // The web's Park / Shutdown: "" | "moving" | "touching" | "parked" | "releasing". "moving" runs
   // under phase "hold", which is why it needs saying; `rest_park_on_stop` is false when the pitch
   // stopped beside its rest stop rather than on it (Shutdown then touches again first).
@@ -794,6 +799,9 @@ enum class Event : uint8_t {
   // Appended after the 2026-09-27 yaw guard trip: a watchdog trip reaches the operator
   // with the condition that fired it, never as the one bare string shared by eight causes.
   MotorWatchdogTrip,
+  // 2026-10-25: a homing attempt that failed without a hazard (it backs off its stop; the station
+  // retries, then holds unhomed). A hazard still ends in a fault.
+  HomingFailed,
 };
 
 // The name is the wire format. Numbers are for storage; a log, a dashboard and a person
@@ -840,6 +848,7 @@ inline const char* event_name(Event e) {
     case Event::ManualStep: return "MANUAL_STEP";
     case Event::StopMotion: return "STOP_MOTION";
     case Event::MotorWatchdogTrip: return "MOTOR_WATCHDOG_TRIP";
+    case Event::HomingFailed: return "HOMING_FAILED";
   }
   return "UNKNOWN";
 }

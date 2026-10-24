@@ -296,6 +296,7 @@ TEST(Homing, HardAbortOnLargeEffortFails) {
   EXPECT_TRUE(hc.state() == ota::AxisHomeState::Failed) << hc.result().fail_reason;
   EXPECT_FALSE(hc.result().valid);
   EXPECT_NE(hc.result().fail_reason.find("hard abort"), std::string::npos);
+  EXPECT_TRUE(hc.result().hazard) << "a torque abort is a hazard: it faults where it is";
   SUCCEED();
 }
 
@@ -347,6 +348,7 @@ TEST(Homing, RotationCapFailsWhenNoStopFound) {
   EXPECT_FALSE(r.valid);
   EXPECT_NE(r.fail_reason.find("rotation cap"), std::string::npos)
       << "fail_reason was: " << r.fail_reason;
+  EXPECT_TRUE(r.hazard) << "no stop where one must be is a hazard";
   SUCCEED();
 }
 
@@ -421,7 +423,35 @@ TEST(Homing, RepeatabilityRetryExhaustsThenFails) {
       << "must run all retries before faulting";
   EXPECT_NE(r.fail_reason.find("repeatability"), std::string::npos)
       << "fail_reason was: " << r.fail_reason;
+  // Owner, 2026-10-25: not a hazard. It backs off the stop before the failure stands, so nothing
+  // is left pushing into it (00:28: the fault's hold kept the pitch 3.3 N.m into its stop).
+  EXPECT_FALSE(r.hazard);
+  EXPECT_FALSE(axis.at_stop);
+  EXPECT_LT(axis.q, 1.0 - 4.0 * kDeg2Rad) << "a backoff's distance off the stop";
   SUCCEED();
+}
+
+TEST(Homing, AStopThatGivesWayOnTheSecondPassReleasesNotFaults) {
+  // 2026-10-25 00:28: the second fine approach went 0.54 deg past the first contact. Past the bound a
+  // fine pass takes from the contact it just observed is not a missing stop: release, not a hazard.
+  SimAxis axis;
+  axis.reset(0.5, 1.0);
+  HomingController hc(ota::AxisId::Pitch, +1, test_params());
+  int64_t t = 0;
+  bool moved = false;
+  for (int i = 0; i < 20000 && !hc.terminal(); ++i, t += kDtNs) {
+    if (!moved && hc.state() == ota::AxisHomeState::VerifyRepeatability) {
+      axis.stop_at += 2.0 * kDeg2Rad;  // the stop gives way by more than the 0.5 deg allowance
+      moved = true;
+    }
+    axis.step(hc.step(axis.feedback(t)), t);
+  }
+  ASSERT_TRUE(moved);
+  const ota::HomingResult& r = hc.result();
+  ASSERT_TRUE(hc.state() == ota::AxisHomeState::Failed) << r.fail_reason;
+  EXPECT_FALSE(r.hazard) << r.fail_reason;
+  EXPECT_NE(r.fail_reason.find("passed the observed contact"), std::string::npos) << r.fail_reason;
+  EXPECT_LT(axis.q, 1.0 - 3.0 * kDeg2Rad) << "backed off the stop";
 }
 
 // Speed-mode homing stops pushing at the contact gate (station 2026-10-20: with the approach speed

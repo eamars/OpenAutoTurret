@@ -515,6 +515,8 @@ class ControlLoop {
   const std::array<AxisLimits, kAxisCount>& limits() const { return limits_; }
   const std::array<AxisLogicalModel, kAxisCount>& models() const { return models_; }
   const std::string& fault_reason() const { return fault_reason_; }
+  int homing_attempt() const { return homing_attempt_; }
+  const std::string& homing_failure() const { return homing_failure_; }
   const SupervisorDecision& last_decision() const { return last_decision_; }
   // Latest raw-axis positions (rad) seen by the loop (for telemetry).
   const std::array<double, kAxisCount>& last_positions() const {
@@ -584,6 +586,7 @@ class ControlLoop {
   void finish_payload_check(TimeNs now_ns);
   void abort_payload_check(TimeNs now_ns, const std::string& reason);
   void apply_payload_derate(bool derated);
+  void homing_failed_without_hazard(TimeNs now_ns);
   void fault(const std::string& reason, bool stop_all = true) {
     const bool replace_park_failure = park_failed_;
     park_failed_ = false;  // a safety fault cannot be cleared as a park-only failure
@@ -708,6 +711,11 @@ class ControlLoop {
   // A supervisor Brake/Hold pauses homing; it ends the homing only after it has persisted.
   TimeNs homing_paused_since_ns_ = 0;
   static constexpr TimeNs kHomingPausePersistenceNs = 5'000'000'000;
+  // Owner ruling 2026-10-02, applied to homing 2026-10-25: a homing failure that is not a hazard
+  // retries, up to kHomingAttempts in all, then holds unhomed (homing_failed_without_hazard).
+  static constexpr int kHomingAttempts = 3;
+  int homing_attempt_ = 0;
+  std::string homing_failure_;
   TimeNs homing_observe_ns_ = 0;
   std::array<TimeNs, kAxisCount> homing_warning_ns_{};
   // Position-derived velocity for at-rest decisions (P0j): the drive's

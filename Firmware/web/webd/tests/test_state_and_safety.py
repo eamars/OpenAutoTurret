@@ -180,6 +180,40 @@ class SafetyLadder(_NodeBuilders):
         self.assertEqual(got["tier"], "caution")
 
 
+@unittest.skipUnless(shutil.which("node"), "node not installed; the builders cannot be executed")
+class HomingFailedIsNotAFault(_NodeBuilders):
+    """Owner, 2026-10-25: "no fault state if the issue is not safety related". A homing that fails without
+    a hazard retries, then holds unhomed with the pitch held: amber with the reason, never red, and never
+    "SHUTDOWN · MOTORS OFF", which would be untrue."""
+
+    FAILURE = "pitch home full range failed: endpoint A homing failed: repeatability exceeded"
+
+    def _pres(self, t):
+        return self._node("console.log(JSON.stringify(T.hudSafetyPresentation(%s)));" % json.dumps(t))
+
+    def test_the_hold_after_three_attempts_says_homing_failed_not_shutdown(self) -> None:
+        got = self._label(supervisory="idle", homing_attempt=3, homing_failure=self.FAILURE)
+        self.assertEqual((got["line1"], got["line2"]), ("HOMING FAILED", "HOLDING · MENU › HOME TO RETRY"))
+        self.assertEqual(self._label(supervisory="idle")["line1"], "SHUTDOWN", "a boot is still Shutdown")
+
+    def test_a_retry_says_which_attempt(self) -> None:
+        got = self._label(supervisory="homing", homing_attempt=2, homing_failure=self.FAILURE)
+        self.assertEqual((got["line1"], got["line2"]), ("HOMING", "RETRY 2/3"))
+        self.assertEqual(self._label(supervisory="homing", homing_attempt=1)["line2"], "")
+
+    def test_the_panel_is_amber_with_the_reason(self) -> None:
+        held = self._pres({"phase": "idle", "safety_action": "ALLOW", "homing_attempt": 3,
+                           "homing_failure": self.FAILURE})
+        self.assertEqual((held["label"], held["tone"], held["tier"]), ("HOMING FAILED", "amber", "prominent"))
+        self.assertIn("repeatability exceeded", held["reason"])
+        self.assertIn("HOME to retry", held["reason"])
+        retry = self._pres({"phase": "homing", "safety_action": "ALLOW", "homing_attempt": 2,
+                            "homing_failure": self.FAILURE})
+        self.assertEqual((retry["label"], retry["tone"]), ("HOMING RETRY 2/3", "amber"))
+        fault = self._pres({"phase": "fault", "fault": "homing failed: drive fault", "homing_failure": ""})
+        self.assertEqual((fault["label"], fault["tone"]), ("FAULT", "red"), "a hazard is still a fault")
+
+
 class SafetyPresentationIsOnThePage(unittest.TestCase):
     maxDiff = None
 

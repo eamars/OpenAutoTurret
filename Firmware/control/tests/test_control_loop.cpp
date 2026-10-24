@@ -465,6 +465,79 @@ TEST(ControlLoop, MotorFaultTriggersDisable) {
   EXPECT_EQ(loop.phase(), Phase::Fault);
 }
 
+// Owner, 2026-10-25: "no fault state if the issue is not safety related". The 00:28 homing faulted on a
+// repeatability miss. A homing that fails without a hazard backs off its stop, homes again up to three
+// attempts in all, then holds unhomed -- never Fault -- and HOME starts it again without a recovery.
+HomingPlan plan_with_approach_timeout(double timeout_s, TravelBand band = TravelBand{0.0, 115.0}) {
+  HomingPlanConfig hcfg;
+  HomingParams hp;
+  hp.coarse_speed_rad_s = 20.0 * kDeg2Rad;
+  hp.fine_speed_rad_s = 2.0 * kDeg2Rad;
+  hp.settle_time_s = 0.3;
+  hp.approach_timeout_s = timeout_s;
+  hcfg.homing = hp;
+  hcfg.travel_bands[0] = band;
+  hcfg.travel_bands[1] = band;
+  std::vector<HomingAction> actions;
+  actions.push_back(HomingAction{.type = HomingActionType::HomeFullRange, .axis = AxisId::Pitch});
+  actions.push_back(HomingAction{.type = HomingActionType::HomeFullRange, .axis = AxisId::Yaw});
+  return HomingPlan(std::move(actions), hcfg);
+}
+
+TEST(ControlLoop, AHomingThatFailsWithoutAHazardRetriesThenHoldsUnhomedNotFault) {
+  auto backend = std::make_unique<sim::SimMotorBackend>(0.005);
+  sim::SimMotorBackend* sim = backend.get();
+  sim->set_stops(AxisId::Pitch, -1.0, 1.0);
+  sim->set_stops(AxisId::Yaw, -1.0, 1.0);
+  sim->set_position(AxisId::Pitch, 0.5);
+  sim->set_position(AxisId::Yaw, -0.3);
+  ControlLoop loop(make_cfg(), std::move(backend));
+  // 0.5 rad to the stop at 20 deg/s takes 1.4 s: a 1 s approach times out every time.
+  loop.set_homing_factory([] { return plan_with_approach_timeout(1.0); });
+  std::string err;
+  ASSERT_TRUE(loop.start_homing(plan_with_approach_timeout(1.0), err)) << err;
+  int64_t t = 0;
+  std::vector<int> attempts;
+  for (int i = 0; i < kMaxSteps; ++i, t += kDtNs) {
+    loop.step(t, kDtNs);
+    if (attempts.empty() || attempts.back() != loop.homing_attempt()) attempts.push_back(loop.homing_attempt());
+    if (loop.phase() != Phase::Homing) break;
+  }
+  EXPECT_EQ(loop.phase(), Phase::Idle) << loop.fault_reason();
+  EXPECT_TRUE(loop.fault_reason().empty()) << "no fault: " << loop.fault_reason();
+  EXPECT_EQ(attempts, (std::vector<int>{1, 2, 3}));
+  EXPECT_NE(loop.homing_failure().find("timeout"), std::string::npos) << loop.homing_failure();
+  EXPECT_FALSE(loop.homed());
+  EXPECT_EQ(loop.telemetry().snapshot().homing_failure, loop.homing_failure());
+  EXPECT_EQ(loop.telemetry().snapshot().homing_attempt, 3);
+
+  // HOME from the hold: a fresh homing, no recovery; it clears the failure once homed.
+  ASSERT_TRUE(loop.start_homing(make_plan(), err)) << err;
+  EXPECT_EQ(loop.phase(), Phase::Homing);
+  EXPECT_EQ(loop.homing_attempt(), 1);
+  EXPECT_TRUE(loop.homing_failure().empty());
+  ASSERT_TRUE(run_to_ready(loop, *sim, t)) << loop.fault_reason();
+}
+
+TEST(ControlLoop, AHomingHazardStillFaultsAtOnce) {
+  auto backend = std::make_unique<sim::SimMotorBackend>(0.005);
+  sim::SimMotorBackend* sim = backend.get();
+  sim->set_stops(AxisId::Pitch, -1.0, 1.0);
+  sim->set_stops(AxisId::Yaw, -1.0, 1.0);
+  sim->set_position(AxisId::Pitch, 0.5);
+  sim->set_position(AxisId::Yaw, -0.3);
+  ControlLoop loop(make_cfg(), std::move(backend));
+  // 115 deg of travel against a mechanism configured for 300: not the machine it should be.
+  loop.set_homing_factory([] { return plan_with_approach_timeout(30.0, TravelBand{0.0, 300.0}); });
+  std::string err;
+  ASSERT_TRUE(loop.start_homing(plan_with_approach_timeout(30.0, TravelBand{0.0, 300.0}), err)) << err;
+  int64_t t = 0;
+  for (int i = 0; i < kMaxSteps && loop.phase() == Phase::Homing; ++i, t += kDtNs) loop.step(t, kDtNs);
+  EXPECT_EQ(loop.phase(), Phase::Fault);
+  EXPECT_NE(loop.fault_reason().find("outside expected"), std::string::npos) << loop.fault_reason();
+  EXPECT_EQ(loop.homing_attempt(), 1) << "a hazard is never retried";
+}
+
 // The step that latches a fault does no file I/O (§46; scheduling ruling 2026-10-03). On the
 // station, 2026-10-20 15:34:13, the step that latched a fault took 79.6 ms: the trip trace was
 // formatted and written in the control thread while visiond loaded its model. Here the trip

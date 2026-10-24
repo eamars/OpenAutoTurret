@@ -42,7 +42,7 @@ DesiredState FullAxisHoming::step(const HomingFeedback& fb) {
           hold.message = "endpoint A homed; starting endpoint B";
           return hold;
         }
-        fail("endpoint A homing failed: " + home_a_.result().fail_reason);
+        fail("endpoint A homing failed: " + home_a_.result().fail_reason, home_a_.result().hazard);
       }
       return ds;
     }
@@ -56,7 +56,7 @@ DesiredState FullAxisHoming::step(const HomingFeedback& fb) {
                        home_b_.result().repeatability_rad);
           validate();
         } else {
-          fail("endpoint B homing failed: " + home_b_.result().fail_reason);
+          fail("endpoint B homing failed: " + home_b_.result().fail_reason, home_b_.result().hazard);
         }
       }
       return ds;
@@ -110,10 +110,11 @@ void FullAxisHoming::validate() {
   }
 }
 
-void FullAxisHoming::fail(const std::string& reason) {
+void FullAxisHoming::fail(const std::string& reason, bool hazard) {
   result_.complete = true;
   result_.valid = false;
   result_.fail_reason = reason;
+  result_.hazard = hazard;
   phase_ = FullAxisPhase::Failed;
 }
 

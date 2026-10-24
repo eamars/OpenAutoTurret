@@ -242,6 +242,8 @@ bool ControlLoop::start_homing(HomingPlan plan, std::string& err, bool recover_f
     yaw_reference_stationary_since_ns_ = 0;
   }
   phase_ = Phase::Homing;
+  homing_attempt_ = 1;       // homing_failed_without_hazard numbers its own retries
+  homing_failure_.clear();
   emit(telemetry::Event::HomingStarted, now_ns_, 0, "homing", "started");
   if (recover_first || backend_->recovery_before_homing()) return start_motor_recovery(err, true);
   return true;
@@ -1189,6 +1191,34 @@ void ControlLoop::deenergize_all() {
     yaw_reference_stationary_since_ns_ = 0;
   }
   for (int i = 0; i < kAxisCount; ++i) backend_->deenergize(static_cast<AxisId>(i));
+}
+
+// Owner ruling 2026-10-02, applied to homing 2026-10-25 ("no fault state if the issue is not safety
+// related"): the 00:28 homing faulted on a repeatability miss and held the pitch 3.3 N.m into its stop.
+// A failure that is not a hazard has already backed off its stop (HomingController::release). Home
+// again, up to kHomingAttempts in all; then hold where it is, unhomed (pitch held by its drive, as a STOP during homing leaves it), with the reason
+// on the page -- HOME starts again, no recovery needed. Bounded: every attempt pushes into both stops,
+// and a cause that survives three is a mechanism to look at, not one to keep pushing on.
+void ControlLoop::homing_failed_without_hazard(TimeNs now_ns) {
+  const int failed = homing_attempt_;
+  const std::string why = homing_->fail_reason();
+  const std::string detail = "attempt " + std::to_string(failed) + "/" + std::to_string(kHomingAttempts) + ": " + why;
+  emit(telemetry::Event::HomingFailed, now_ns, 0, "homing", detail.c_str());
+  spdlog::warn("homing attempt {}/{} failed, not a hazard (backed off the stop): {}", failed, kHomingAttempts, why);
+  std::string e;
+  if (failed < kHomingAttempts && homing_factory_ && start_homing(homing_factory_(), e)) {
+    homing_attempt_ = failed + 1;
+    homing_failure_ = why;
+    spdlog::warn("homing: attempt {}/{} started", homing_attempt_, kHomingAttempts);
+    return;
+  }
+  stop_axes_safely();
+  phase_ = Phase::Idle;
+  pending_homing_ds_.reset();
+  homing_attempt_ = failed;
+  homing_failure_ = e.empty() ? why : why + "; the retry could not start: " + e;
+  spdlog::error("homing failed {} times, not a hazard: holding unhomed, pitch held where it is; HOME to retry ({})",
+                failed, homing_failure_);
 }
 
 // Owner ruling 2026-10-02 (STATION_OPERATIONS.md "Fault, hold, degrade"): a failed homing, mode
@@ -2393,6 +2423,9 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
           else if (status == MotorBackend::Transition::Complete) ++homing_final_axis_;
         } else if (finalize_homing()) {
           phase_ = Phase::Hold;
+          if (homing_attempt_ > 1)
+            spdlog::info("homing complete on attempt {}/{} (after: {})", homing_attempt_, kHomingAttempts, homing_failure_);
+          homing_failure_.clear();
           emit(telemetry::Event::HomingComplete, now_ns, 0, "homing", "complete");
         }
         else { stop_axes_safely(); fault("homing results invalid"); }
@@ -2501,8 +2534,12 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             sp[ix(a)].torque_nm, ds.velocity_rad_s, ds.message);
       }
       if (homing_->failed()) {
-        stop_axes_safely();
-        fault("homing failed: " + homing_->fail_reason());
+        if (homing_->failure_hazard()) {
+          stop_axes_safely();
+          fault("homing failed: " + homing_->fail_reason());
+        } else {
+          homing_failed_without_hazard(now_ns);
+        }
       }
       break;
     }
@@ -3504,6 +3541,8 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     snap.timestamp_ns = now_ns;
     snap.phase = phase_name(phase_);
     snap.fault_reason = fault_reason_;
+    snap.homing_attempt = homing_attempt_;
+    snap.homing_failure = homing_failure_;
     snap.rest_park = rest_park_stage();
     snap.rest_park_on_stop = rest_park_.touched;
     snap.at_ready = at_ready_;

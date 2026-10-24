@@ -51,6 +51,7 @@ struct FullAxisHomingResult {
   double measured_travel_deg = 0.0;  // span between the endpoints (deg)
   double repeatability_rad = 0.0;    // worst endpoint repeatability (rad)
   std::string fail_reason;        // non-empty if !valid
+  bool hazard = true;             // a FAULT; false: an endpoint's release (HomingResult::hazard)
   AxisLogicalModel model;         // logical model (valid if result.valid)
 };
 
@@ -75,7 +76,7 @@ class FullAxisHoming {
 
  private:
   void validate();
-  void fail(const std::string& reason);
+  void fail(const std::string& reason, bool hazard = true);  // measured travel off: a hazard
 
   AxisId axis_;
   FullAxisHomingParams p_;

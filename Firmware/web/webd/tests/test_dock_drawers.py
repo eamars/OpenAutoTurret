@@ -117,6 +117,18 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         return self._node("console.log(JSON.stringify(T.hudDrawerActions(%s, %s)));"
                           % (json.dumps(drawer), json.dumps(telemetry)))
 
+    def test_menu_after_a_failed_homing_offers_home_and_does_not_claim_the_motors_are_off(self) -> None:
+        # Owner, 2026-10-25: a homing that failed without a hazard holds unhomed, pitch held.
+        rows = {r["label"]: r for r in self._rows("MENU", {
+            "phase": "idle", "homing_attempt": 3, "homing_failure": "repeatability exceeded"})}
+        self.assertEqual((rows["HOME"]["kind"], rows["HOME"]["command"]), ("act", "start_homing"))
+        self.assertIn("Homing failed", rows["HOME"]["note"])
+        for k in ("PARK", "SHUTDOWN"):
+            self.assertEqual(rows[k]["kind"], "gated")
+            self.assertNotIn("OFF", rows[k]["note"], k)
+        boot = {r["label"]: r for r in self._rows("MENU", {"phase": "idle"})}
+        self.assertIn("MOTORS ARE OFF", boot["SHUTDOWN"]["note"], "a boot is Shutdown, motors off")
+
     # -- the dock itself ---------------------------------------------------------------
 
     def test_the_dock_is_targets_mode_menu(self) -> None:

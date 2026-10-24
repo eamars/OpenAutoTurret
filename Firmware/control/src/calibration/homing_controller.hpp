@@ -210,6 +210,11 @@ struct HomingResult {
   int repeatability_retries = 0;     // second-approach passes re-run on a
                                      // non-repeatable q2 (p3f friction stall)
   std::string fail_reason;           // non-empty if !valid
+  // Owner ruling 2026-10-02, applied to homing 2026-10-25: a failure is a FAULT only if it is a
+  // safety hazard (a drive fault, a torque abort, bad feedback, no stop where one must be). The
+  // rest (timeouts, repeatability, a contact that moved) back off the stop first and leave the
+  // station to retry the homing and then hold; see release().
+  bool hazard = true;
   // --- Adaptive-current diagnostics (§22) ---
   double peak_torque_nm = 0.0;       // max |tau| observed during the run
   double contact_torque_nm = 0.0;    // |tau| at the validated fine contact
@@ -248,6 +253,9 @@ class HomingController {
     // target_rad and LimitSpd = speed_rad_s and the drive's own position
     // loop does the moving. velocity_rad_s is unused (0.0).
     bool position_mode = false;
+    // An approach whose travel bound is a contact this homing already observed (plus the
+    // repeatability allowance), not a full traverse: passing it is not a missing stop.
+    bool bounded_by_contact = false;
     bool approach = false;  // move until contact, not to a fixed target
     TimeNs start_ns = 0;
   };
@@ -270,7 +278,9 @@ class HomingController {
   bool backoff_arrived(const HomingFeedback& fb);
   void begin_settle(TimeNs now);
   void begin_hold();
-  void fail(const std::string& reason);
+  void fail(const std::string& reason);  // a hazard: stands where it is
+  // Not a hazard: back off the stop by backoff_rad (releasing the push into it), then stand.
+  void release(const std::string& reason, const HomingFeedback& fb);
   // Jitter (stick-slip) diagnostic suffix for timeout/repeatability fails
   // (C1, A.4): empty unless the approach showed stick-slip.
   std::string jitter_suffix() const;

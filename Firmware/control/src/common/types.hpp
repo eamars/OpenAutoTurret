@@ -65,6 +65,7 @@ enum class AxisHomeState : uint8_t {
   ApproachFine,
   ContactFine,
   VerifyRepeatability,
+  Releasing,  // a failure that is not a hazard: backing off the stop before it stands
   Complete,
   Failed,
 };

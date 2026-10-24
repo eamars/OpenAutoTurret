@@ -72,8 +72,10 @@ void HomingController::begin_approach(double speed_rad_s, TimeNs now,
     // observation plus the repeatability allowance, not another full traverse.
     const double contact = fine_samples_>0 ? fine_contact1_rad_ : coarse_contact_rad_;
     phase_.target_rad=contact+p_.repeatability_rad*dir_;
+    phase_.bounded_by_contact = true;
   } else {
     phase_.target_rad=current_pos_rad+(target_distance_rad<0 ? p_.max_travel_rad : target_distance_rad)*dir_;
+    phase_.bounded_by_contact = false;
   }
   phase_.start_ns = now;
   detector_.reset();
@@ -147,12 +149,25 @@ void HomingController::begin_hold() {
 void HomingController::fail(const std::string& reason) {
   result_.complete = true;
   result_.valid = false;
-  result_.fail_reason = reason;
+  result_.fail_reason = state_ == AxisHomeState::Releasing
+      ? reason + " (backing off after: " + result_.fail_reason + ")" : reason;
   result_.peak_torque_nm = peak_torque_nm_;
   result_.final_limit_cur_a = limit_cur_a_;
   result_.current_raises = current_raises_;
+  result_.hazard = true;
   begin_hold();
   state_ = AxisHomeState::Failed;
+}
+
+void HomingController::release(const std::string& reason, const HomingFeedback& fb) {
+  // 2026-10-25 00:28: a repeatability miss faulted with the pitch 3.3 N.m into its stop, and the
+  // fault's hold kept it there, heating. Not a hazard: away from the stop first, then the failure
+  // stands for the station to retry. A hazard on the way (the checks at the top of step()) still
+  // fails where it is.
+  result_.fail_reason = reason;
+  result_.hazard = false;
+  begin_backoff_to(fb.t_ns, fb.pos_rad - p_.backoff_rad * dir_, fb.pos_rad);
+  state_ = AxisHomeState::Releasing;
 }
 
 std::string HomingController::jitter_suffix() const {
@@ -182,12 +197,17 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
   }
   if (p_.motion_checks_abort && phase_.kind==PhaseKind::Settle && fb.t_ns-phase_.start_ns>
       static_cast<TimeNs>((p_.settle_time_s+3.0)*1e9)) {
-    fail("settle: no stationary encoder window before deadline");
-    return hold_state("homing failed");
+    release("settle: no stationary encoder window before deadline", fb);
   }
   if (p_.motion_checks_abort && phase_.approach && phase_.kind==PhaseKind::Move && arrived(fb)) {
-    fail("approach: exceeded travel bound without validated contact");
-    return hold_state("homing failed");
+    // Past a full traverse with no stop is a missing stop: a hazard. Past the bound a fine pass
+    // takes from the contact it just observed (the stop gave way by more than the repeatability
+    // allowance, 2026-10-25 00:28) is not.
+    if (!phase_.bounded_by_contact) {
+      fail("approach: exceeded travel bound without validated contact");
+      return hold_state("homing failed");
+    }
+    release("approach: passed the observed contact by more than the repeatability allowance", fb);
   }
   // 1. Run the contact detector if the current phase is an approach move.
   bool contact = false;
@@ -311,7 +331,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         begin_settle(fb.t_ns);
         state_ = AxisHomeState::ContactCoarse;
       } else if (timed_out(fb)) {
-        fail("coarse approach: timeout with no contact" + jitter_suffix());
+        release("coarse approach: timeout with no contact" + jitter_suffix(), fb);
       } else if (arrived(fb)) {
         fail("coarse approach: reached travel limit with no contact" +
              jitter_suffix());
@@ -342,17 +362,17 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         // the backoff target (stuck in friction) hung the homing forever
         // (2026-09-02 yaw rehome2); p3c timed out inside the yaw detent
         // zone on the velocity-mode backoff that this replaced.
-        fail("backoff: timeout (position mode, stuck in friction? q=" +
-             std::to_string(fb.pos_rad) + " target=" +
-             std::to_string(phase_.target_rad) + " dq=" +
-             std::to_string(fb.pos_rad - phase_.target_rad) +
-             " v=" + std::to_string(fb.vel_rad_s) + " rad)");
+        release("backoff: timeout (position mode, stuck in friction? q=" +
+                std::to_string(fb.pos_rad) + " target=" +
+                std::to_string(phase_.target_rad) + " dq=" +
+                std::to_string(fb.pos_rad - phase_.target_rad) +
+                " v=" + std::to_string(fb.vel_rad_s) + " rad)", fb);
       }
       break;
 
     case AxisHomeState::Settle:
       if (p_.motion_checks_abort && std::abs(fb.pos_rad-phase_.target_rad)>=arrive_tol_rad_) {
-        fail("backoff: clearance lost during settle");
+        release("backoff: clearance lost during settle", fb);
       } else if (settled(fb)) {
         begin_approach(p_.fine_speed_rad_s, fb.t_ns, fb.pos_rad);
         // The backoff left the axis in position mode; the fine approach is
@@ -371,7 +391,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         fail("fine approach: hard abort or motor fault");
       } else if (contact) {
         if (!p_.observe_only && p_.motion_checks_abort && std::abs(contact_q_-coarse_contact_rad_)>p_.repeatability_rad) {
-          fail("fine contact inconsistent with coarse contact; obstruction or load stall unverified");
+          release("fine contact inconsistent with coarse contact; obstruction or load stall unverified", fb);
           break;
         }
         fine_contact1_rad_ = contact_q_;
@@ -379,7 +399,7 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
         begin_settle(fb.t_ns);
         state_ = AxisHomeState::ContactFine;
       } else if (timed_out(fb)) {
-        fail("fine approach: timeout with no contact" + jitter_suffix());
+        release("fine approach: timeout with no contact" + jitter_suffix(), fb);
       } else if (arrived(fb)) {
         fail("fine approach: reached travel limit with no contact" +
              jitter_suffix());
@@ -413,12 +433,12 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
           rearm_pending_ = !p_.speed_mode_backoff;
         } else if (fb.t_ns - phase_.start_ns >=
                    static_cast<TimeNs>(p_.backoff_timeout_s * 1e9)) {
-          fail("repeatability: small backoff timeout (position mode, stuck "
-               "in friction? q=" +
-               std::to_string(fb.pos_rad) + " target=" +
-               std::to_string(phase_.target_rad) + " dq=" +
-               std::to_string(fb.pos_rad - phase_.target_rad) +
-               " v=" + std::to_string(fb.vel_rad_s) + " rad)");
+          release("repeatability: small backoff timeout (position mode, stuck "
+                  "in friction? q=" +
+                  std::to_string(fb.pos_rad) + " target=" +
+                  std::to_string(phase_.target_rad) + " dq=" +
+                  std::to_string(fb.pos_rad - phase_.target_rad) +
+                  " v=" + std::to_string(fb.vel_rad_s) + " rad)", fb);
         }
       } else {  // second fine approach
         if (contact) {
@@ -458,19 +478,34 @@ DesiredState HomingController::step(const HomingFeedback& fb) {
             verify_phase_ = 0;
           } else {
             result_.repeatability_retries = verify_retries_;
-            fail("repeatability exceeded: |q1 - q2|=" +
-                 std::to_string(rep / kDeg2Rad) + " deg > " +
-                 std::to_string(p_.repeatability_rad / kDeg2Rad) + " deg " +
-                 "after " + std::to_string(verify_retries_) + " retries" +
-                 jitter_suffix());
+            release("repeatability exceeded: |q1 - q2|=" +
+                    std::to_string(rep / kDeg2Rad) + " deg > " +
+                    std::to_string(p_.repeatability_rad / kDeg2Rad) + " deg " +
+                    "after " + std::to_string(verify_retries_) + " retries" +
+                    jitter_suffix(), fb);
           }
         } else if (timed_out(fb)) {
-          fail("repeatability: second approach timeout with no contact" +
-               jitter_suffix());
+          release("repeatability: second approach timeout with no contact" +
+                  jitter_suffix(), fb);
         } else if (arrived(fb)) {
           fail("repeatability: second approach reached travel limit, no contact" +
                jitter_suffix());
         }
+      }
+      break;
+
+    case AxisHomeState::Releasing:
+      // Off the stop (or as far as friction lets it go in the backoff time), then the failure
+      // stands: the station retries the homing, then holds (ControlLoop).
+      if (backoff_arrived(fb) ||
+          fb.t_ns - phase_.start_ns >= static_cast<TimeNs>(p_.backoff_timeout_s * 1e9)) {
+        result_.complete = true;
+        result_.valid = false;
+        result_.peak_torque_nm = peak_torque_nm_;
+        result_.final_limit_cur_a = limit_cur_a_;
+        result_.current_raises = current_raises_;
+        begin_hold();
+        state_ = AxisHomeState::Failed;
       }
       break;
 

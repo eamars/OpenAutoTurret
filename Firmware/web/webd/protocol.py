@@ -45,6 +45,11 @@ class Telemetry:
     # "payload_check") + the fault reason while phase == "fault" (§6.3).
     phase: str = ""
     fault: str = ""
+    # A homing that failed without a hazard is no fault (owner, 2026-10-25): the attempt under way
+    # (1-3) and the last such failure. Phase "homing" with a failure is a retry; phase "idle" with
+    # one holds unhomed, pitch held.
+    homing_attempt: int = 0
+    homing_failure: str = ""
     # The web's Park / Shutdown (owner ruling 2026-10-03): "" | "moving" | "touching" | "parked" |
     # "releasing". "moving" runs under phase "hold", which is why it is its own field.
     # rest_park_on_stop: the pitch reached its rest stop (false: it stopped beside it).

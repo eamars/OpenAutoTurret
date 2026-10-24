@@ -169,6 +169,11 @@ def main() -> int:
         fault = state.get("fault")
         if fault:
             raise RuntimeError(f"station reported fault during activation: {fault}")
+        # Not a fault (owner, 2026-10-25), and not Shutdown either: the homing failed three times
+        # without a hazard and the station holds unhomed, pitch held, until HOME tries again.
+        if state.get("phase") == "idle" and state.get("homing_failure"):
+            raise RuntimeError("homing failed three times without a hazard; the station holds "
+                               f"unhomed (MENU > HOME retries): {state.get('homing_failure')}")
         gaps = shutdown_gaps(state) if args.expect == "shutdown" else readiness_gaps(state)
         if not gaps:
             print(
