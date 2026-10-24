@@ -1,0 +1,276 @@
+{
+ "schema": "ota.servo-accuracy/1",
+ "axis": "yaw",
+ "status": "OWNER_RULING_MEASURED_CAPABILITY",
+ "ruling": "Owner 2026-10-02: calibrate the yaw accuracy limits from the real tracking performance of the feedforward + feedback controller (the ADR-003 photography spec had no framing budget).",
+ "asset_run": "yaw-20261002-123425",
+ "calibration_run": "yaw-20261002-140001",
+ "rule": "limit = ceil(1.25 x worst pass, grid) over 6 FF+FB passes (4 angles 90 deg apart + the asset's validation passes)",
+ "error": "servo error q_ref - q_true (encoder with the measured crosstalk removed), use-case script of usecase.py",
+ "limits": {
+  "rest_error_deg": 0.44,
+  "overshoot_deg": 0.18,
+  "ramp_rms_slow_deg": 0.19,
+  "ramp_rms_fast_deg": 0.19,
+  "ramp_jitter_slow_deg": 0.34,
+  "ramp_jitter_fast_deg": 0.24,
+  "speed_jitter_dps": 2.89,
+  "walker_rms_deg": 0.26,
+  "moving_peak_deg": 0.79
+ },
+ "units": {
+  "rest_error_deg": "deg",
+  "overshoot_deg": "deg",
+  "ramp_rms_slow_deg": "deg",
+  "ramp_rms_fast_deg": "deg",
+  "ramp_jitter_slow_deg": "deg",
+  "ramp_jitter_fast_deg": "deg",
+  "speed_jitter_dps": "deg/s",
+  "walker_rms_deg": "deg",
+  "moving_peak_deg": "deg"
+ },
+ "definitions": {
+  "rest_error_deg": "pointing error at rest: final error after every step, stop, long move and hold",
+  "overshoot_deg": "largest overshoot past a step or long-move target",
+  "ramp_rms_slow_deg": "error RMS while following 1-5 deg/s ramps",
+  "ramp_rms_fast_deg": "error RMS while following 10-20 deg/s ramps and reversals",
+  "ramp_jitter_slow_deg": "detrended P95-P5 of the error on steady 1-5 deg/s ramps",
+  "ramp_jitter_fast_deg": "detrended P95-P5 of the error on steady 10-20 deg/s ramps",
+  "speed_jitter_dps": "std of the 20 ms-averaged speed error on steady ramps (motion blur)",
+  "walker_rms_deg": "error RMS on the 20 s multi-sine walking profile",
+  "moving_peak_deg": "largest error while the reference moves (ramp starts, reversals, walker)"
+ },
+ "tracker_frame": {
+  "camera": "IMX500 wide, 1920x1080",
+  "fx_px_per_rad": 1389.0,
+  "px_per_deg": 24.24,
+  "limits_px": {
+   "rest_error_px": 10.7,
+   "overshoot_px": 4.4,
+   "ramp_rms_slow_px": 4.6,
+   "ramp_rms_fast_px": 4.6,
+   "ramp_jitter_slow_px": 8.2,
+   "ramp_jitter_fast_px": 5.8,
+   "speed_jitter_px_s": 70.1,
+   "walker_rms_px": 6.3,
+   "moving_peak_px": 19.2
+  }
+ },
+ "passes": [
+  {
+   "pass": "ff_fb0",
+   "metrics": {
+    "rest_error_deg": 0.3228,
+    "overshoot_deg": 0.0472,
+    "ramp_rms_slow_deg": 0.0916,
+    "ramp_rms_fast_deg": 0.09,
+    "ramp_jitter_slow_deg": 0.1086,
+    "ramp_jitter_fast_deg": 0.1191,
+    "speed_jitter_dps": 1.1395,
+    "walker_rms_deg": 0.2033,
+    "moving_peak_deg": 0.5239
+   },
+   "stalls": 4
+  },
+  {
+   "pass": "ff_fb1",
+   "metrics": {
+    "rest_error_deg": 0.3486,
+    "overshoot_deg": 0.0287,
+    "ramp_rms_slow_deg": 0.1114,
+    "ramp_rms_fast_deg": 0.1492,
+    "ramp_jitter_slow_deg": 0.1367,
+    "ramp_jitter_fast_deg": 0.1878,
+    "speed_jitter_dps": 2.1045,
+    "walker_rms_deg": 0.1668,
+    "moving_peak_deg": 0.6306
+   },
+   "stalls": 2
+  },
+  {
+   "pass": "ff_fb2",
+   "metrics": {
+    "rest_error_deg": 0.3279,
+    "overshoot_deg": 0.0132,
+    "ramp_rms_slow_deg": 0.1062,
+    "ramp_rms_fast_deg": 0.0876,
+    "ramp_jitter_slow_deg": 0.1394,
+    "ramp_jitter_fast_deg": 0.1104,
+    "speed_jitter_dps": 0.9619,
+    "walker_rms_deg": 0.1324,
+    "moving_peak_deg": 0.4552
+   },
+   "stalls": 4
+  },
+  {
+   "pass": "ff_fb3",
+   "metrics": {
+    "rest_error_deg": 0.2957,
+    "overshoot_deg": 0.0102,
+    "ramp_rms_slow_deg": 0.1193,
+    "ramp_rms_fast_deg": 0.1044,
+    "ramp_jitter_slow_deg": 0.1607,
+    "ramp_jitter_fast_deg": 0.1268,
+    "speed_jitter_dps": 1.6669,
+    "walker_rms_deg": 0.1453,
+    "moving_peak_deg": 0.6307
+   },
+   "stalls": 2
+  },
+  {
+   "pass": "yaw-20261002-123425-07-usecase0",
+   "metrics": {
+    "rest_error_deg": 0.2612,
+    "overshoot_deg": 0.1136,
+    "ramp_rms_slow_deg": 0.0875,
+    "ramp_rms_fast_deg": 0.0811,
+    "ramp_jitter_slow_deg": 0.0869,
+    "ramp_jitter_fast_deg": 0.1185,
+    "speed_jitter_dps": 1.5258,
+    "walker_rms_deg": 0.1625,
+    "moving_peak_deg": 0.4018
+   },
+   "stalls": 2
+  },
+  {
+   "pass": "yaw-20261002-123425-08-usecase1",
+   "metrics": {
+    "rest_error_deg": 0.3228,
+    "overshoot_deg": 0.1416,
+    "ramp_rms_slow_deg": 0.1484,
+    "ramp_rms_fast_deg": 0.0962,
+    "ramp_jitter_slow_deg": 0.267,
+    "ramp_jitter_fast_deg": 0.1437,
+    "speed_jitter_dps": 2.3052,
+    "walker_rms_deg": 0.1433,
+    "moving_peak_deg": 0.4625
+   },
+   "stalls": 2
+  }
+ ],
+ "motor_feedforward_comparison": {
+  "what": "ADR-003 sec. 7B: identical references and gains; fb_only has every plant feedforward term zero",
+  "fb_only_passes": [
+   {
+    "pass": "fb_only0",
+    "metrics": {
+     "rest_error_deg": 0.3468,
+     "overshoot_deg": 0.0,
+     "ramp_rms_slow_deg": 0.2323,
+     "ramp_rms_fast_deg": 0.1955,
+     "ramp_jitter_slow_deg": 0.1558,
+     "ramp_jitter_fast_deg": 0.1135,
+     "speed_jitter_dps": 1.2238,
+     "walker_rms_deg": 0.2713,
+     "moving_peak_deg": 0.6587
+    },
+    "stalls": 2,
+    "fails": []
+   },
+   {
+    "pass": "fb_only1",
+    "metrics": {
+     "rest_error_deg": 0.3024,
+     "overshoot_deg": 0.0096,
+     "ramp_rms_slow_deg": 0.1045,
+     "ramp_rms_fast_deg": 0.2175,
+     "ramp_jitter_slow_deg": 0.1418,
+     "ramp_jitter_fast_deg": 0.2598,
+     "speed_jitter_dps": 1.3834,
+     "walker_rms_deg": 0.2299,
+     "moving_peak_deg": 0.6128
+    },
+    "stalls": 5,
+    "fails": [
+     "5 stalls"
+    ]
+   },
+   {
+    "pass": "fb_only2",
+    "metrics": {
+     "rest_error_deg": 0.2482,
+     "overshoot_deg": 0.0,
+     "ramp_rms_slow_deg": 0.0982,
+     "ramp_rms_fast_deg": 0.2015,
+     "ramp_jitter_slow_deg": 0.1061,
+     "ramp_jitter_fast_deg": 0.117,
+     "speed_jitter_dps": 0.8894,
+     "walker_rms_deg": 0.2107,
+     "moving_peak_deg": 0.541
+    },
+    "stalls": 0,
+    "fails": []
+   },
+   {
+    "pass": "fb_only3",
+    "metrics": {
+     "rest_error_deg": 0.342,
+     "overshoot_deg": 0.052,
+     "ramp_rms_slow_deg": 0.1592,
+     "ramp_rms_fast_deg": 0.225,
+     "ramp_jitter_slow_deg": 0.159,
+     "ramp_jitter_fast_deg": 0.1196,
+     "speed_jitter_dps": 1.3472,
+     "walker_rms_deg": 0.2336,
+     "moving_peak_deg": 0.6267
+    },
+    "stalls": 6,
+    "fails": [
+     "6 stalls"
+    ]
+   }
+  ],
+  "paired_means": {
+   "rest_error_deg": {
+    "ff_fb": 0.3238,
+    "fb_only": 0.3099,
+    "fb_over_ff": 0.96
+   },
+   "overshoot_deg": {
+    "ff_fb": 0.0248,
+    "fb_only": 0.0154,
+    "fb_over_ff": 0.62
+   },
+   "ramp_rms_slow_deg": {
+    "ff_fb": 0.1071,
+    "fb_only": 0.1485,
+    "fb_over_ff": 1.39
+   },
+   "ramp_rms_fast_deg": {
+    "ff_fb": 0.1078,
+    "fb_only": 0.2099,
+    "fb_over_ff": 1.95
+   },
+   "ramp_jitter_slow_deg": {
+    "ff_fb": 0.1363,
+    "fb_only": 0.1407,
+    "fb_over_ff": 1.03
+   },
+   "ramp_jitter_fast_deg": {
+    "ff_fb": 0.1361,
+    "fb_only": 0.1525,
+    "fb_over_ff": 1.12
+   },
+   "speed_jitter_dps": {
+    "ff_fb": 1.4682,
+    "fb_only": 1.2109,
+    "fb_over_ff": 0.82
+   },
+   "walker_rms_deg": {
+    "ff_fb": 0.162,
+    "fb_only": 0.2364,
+    "fb_over_ff": 1.46
+   },
+   "moving_peak_deg": {
+    "ff_fb": 0.5601,
+    "fb_only": 0.6098,
+    "fb_over_ff": 1.09
+   },
+   "stalls": {
+    "ff_fb": 3.0,
+    "fb_only": 3.25,
+    "fb_over_ff": 1.08
+   }
+  }
+ }
+}

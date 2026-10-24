@@ -1,0 +1,6 @@
+# ADR-005 D9: this record's bore. mode off = the tracker aims the camera centre.
+schema: 1
+mode: "off"
+zero_m: 10   # zeroing distance; .inf = no parallax
+wide: {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0, trim_right_mrad: 0, trim_up_mrad: 0}
+detail: {right_mm: 75, up_mm: 75, forward_mm: 0, right_deg: 0, up_deg: 0, trim_right_mrad: 0, trim_up_mrad: 0}

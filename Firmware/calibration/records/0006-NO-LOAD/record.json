@@ -1,7 +1,7 @@
 {
  "schema": "ota.calibration-record/1",
- "name": "PAYLOAD 10-24",
- "created": "2026-10-24T21:13:46+13:00",
+ "name": "NO_LOAD",
+ "created": "2026-10-25T11:56:25+13:00",
  "source": "copy of #1",
  "extrinsic_frame": "pitch_from_homed_low",
  "parts": {
@@ -9,19 +9,19 @@
    "file": "yaw_servo.json",
    "origin": "measured",
    "date": "2026-10-25",
-   "run": "0001-rerun+accuracy-20261025-104602"
+   "run": "0002-measure-20261025-115625"
   },
   "pitch": {
    "file": "pitch_servo.json",
    "origin": "measured",
    "date": "2026-10-25",
-   "run": "0001-rerun+accuracy-20261025-104602"
+   "run": "0002-measure-20261025-115625"
   },
   "accuracy": {
    "file": "yaw_accuracy.json",
    "origin": "measured",
    "date": "2026-10-25",
-   "run": "0001-rerun+accuracy-20261025-104602"
+   "run": "0002-measure-20261025-115625"
   },
   "extrinsic": {
    "file": "camera_extrinsics.yaml",
@@ -35,9 +35,9 @@
   }
  },
  "last_run": {
-  "kind": "RERUN+ACCURACY",
+  "kind": "MEASURE",
   "verdict": "ACCEPTED; pitch ACCEPTED; yaw ACCEPTED; calibrate done",
-  "run": "0001-rerun+accuracy-20261025-104602",
+  "run": "0002-measure-20261025-115625",
   "date": "2026-10-25"
  }
 }

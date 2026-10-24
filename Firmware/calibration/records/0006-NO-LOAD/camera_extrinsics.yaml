@@ -1,0 +1,59 @@
+# ota-camera-extrinsics v1
+# Camera-to-pitch-frame rotation for the current mixed-drive station, 2026-09-27.
+#
+# The 2026-09-06 extrinsic was measured on the previous mechanism. The current
+# GM6020 yaw / CyberGear pitch mechanism retains its measured pitch boresight
+# offset, but the camera optical and image-down axes are opposite that old
+# installation. This is a proper half-turn around the camera-right axis:
+# R_P_C(current) = R_P_C(2026-09-06) * rot_x(pi).
+#
+# Direct station probes in MANUAL/HOLD: yaw encoder +17.71 deg shifted fixed
+# features RIGHT in the corrected 1920x1080 preview (camera turned left), and
+# pitch encoder +11.04 deg shifted them UP (camera pointed down). Projecting a
+# fixed yaw landmark through the old matrix predicts x=397 from x=846; this
+# matrix predicts x=1273, in the observed rightward direction. Both matrices
+# predict the observed upward pitch displacement. Detection-box x coordinates
+# also match the upright preview, so do not flip detector coordinates again.
+#
+# The inherited 0.860 rad pitch offset is provisional on this new mechanism.
+# Refit from stationary-background flow and verify live target convergence;
+# these two sign probes alone do not establish subpixel calibration. Translation,
+# parallax, and lens distortion remain unmeasured. Translation below is unused
+# by LOS. Historical old-mechanism fit: docs/archive/partially-implemented/validation/automatic_service_validation_2026_09_06.md.
+#
+# REFIT 2026-10-05 (station, stationary target): the inherited 0.860 rad offset above was wrong
+# by ~42 deg. A level potted plant computed at +42 deg elevation, so pixels were turned into world
+# azimuth with the wrong cos(elevation) and 39 % of every yaw motion leaked into the target
+# estimate (k 1.39-1.42 in four reacquisition slews, identical) -- the vision loop ran ~1.4x too
+# stiff and a person's keypoint noise drove a 2.2 Hz yaw limit cycle. Fit: the one rotation about
+# camera-right (= the pitch axis) that holds a stationary target's world azimuth still through
+# four 8-14 deg AUTO_TRACK slews (tools/tracking/stationary_trial.py, potted plant, generic
+# YOLOv8n): R_P_C(2026-10-05) = R_P_C(2026-09-27) * rot_x(-41.765 deg), per-slew -41.54..-42.13,
+# std 0.24 deg. Offset now 0.1311 rad. Slew azimuth variance /27; the plant reads +0.3 deg
+# elevation (it sits at camera height) and a person at the desk -1.5 deg. Lens scale checked in
+# the same session: a 10 deg yaw step moves the image 230-245 px against 245 predicted (fx 1389).
+# Still unmeasured: roll about the optical axis, translation, distortion.
+#
+# HOMED FRAME 2026-10-06: the rotation below is relative to pitch measured from the HOMED LOW STOP,
+# not the motor's raw angle. The geared CyberGear knows its output angle only modulo 360/7.75 =
+# 46.45 deg at power-up: after the station was moved (powered off) the raw pitch frame shifted by
+# 92.903 deg (two steps; soft min -2.2342 -> -0.612741 rad, predicted 1.621456, measured 1.621459)
+# and every detection's elevation shifted with it -- tracking went wild. The refit above was made in
+# the 2026-10-05 power-up, whose homed low stop read -2.321466 rad raw (soft min - 5 deg margin), so
+# R_P_C(homed) = R_y(-2.321466) * R_P_C(2026-10-05 raw). controld places it in each power-up's raw
+# frame after homing (R_y(-raw_low) * R_P_C(homed)); the 2026-09-27 "~42 deg" error was very likely
+# this same frame shift (one 46.45 deg step, less the mount's own few degrees).
+#
+# CONTACT 2026-10-20: homing now records the low stop where the capped push meets it (release
+# 6048094), not where a 2-3 N.m push ends; on this power-up that reads -0.69829 rad raw against the
+# deep push's -0.7002, 0.00191 rad (0.109 deg) shallower. The rotation below is therefore the one
+# above re-referenced to the new contact, R_P_C = R_y(+0.00191) * R_P_C(2026-10-06), so the matrix
+# controld places in each power-up's raw frame is unchanged. Within the 10-05 fit's own spread
+# (0.24 deg per slew), but a known bias, so it is removed rather than left.
+#
+# Format: optional key lines, the t_P_C key, then three row-major rotation rows.
+pitch_from_homed_low=1
+t_P_C=0 0 0
+0 0.7706268522042173 0.6372866346172805
+-1 0 0
+0 -0.6372866346172805 0.7706268522042173

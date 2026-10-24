@@ -1,0 +1,15 @@
+{
+ "schema": "ota.calibration-record/1",
+ "name": "NO_LOAD",
+ "created": "2026-10-25T11:56:25+13:00",
+ "source": "copy of #1",
+ "extrinsic_frame": "pitch_from_homed_low",
+ "parts": {
+  "yaw": {"file": "yaw_servo.json", "origin": "inherited", "from": 1},
+  "pitch": {"file": "pitch_servo.json", "origin": "inherited", "from": 1},
+  "accuracy": {"file": "yaw_accuracy.json", "origin": "inherited", "from": 1},
+  "extrinsic": {"file": "camera_extrinsics.yaml", "origin": "inherited", "from": 1},
+  "bore": {"file": "bore.yaml", "origin": "inherited", "from": 1}
+ },
+ "last_run": null
+}

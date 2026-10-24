@@ -699,3 +699,22 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   - **Installed** into #5 (yaw, pitch, accuracy); controld applied it at 11:27:01, settled in
     0.41 s, AUTO_ROAM resumed, no fault. The record is in
     `Firmware/calibration/records/0005-PAYLOAD-10-24/`.
+- **Profiles named, 11:56 2026-10-25 (owner).** #5 renamed CALI_3_5KG_LOAD (the 3.5 kg payload's
+  measured set above). The payload came off; #6 NO_LOAD made from #1 AS SHIPPED and put in force with
+  NEW's measurement.
+- **MEASURE on #6 NO_LOAD, 11:56–12:37 2026-10-25 (release `4254230`, bare turret): ACCEPTED and
+  installed.**
+  - **Survey:** 1 deg/s 0.40/0.44 A (the bearing still worked in from the morning's runs); fit
+    + 0.15+0.28 A, − 0.14+0.34 A, creep 0.68 A.
+  - **Inertia:** 0.0374 A·s²/rad, 13/16 coherent bands (10-02: 0.0407); table drift +0.86 mrad/A.
+  - **Design:** sim boundary 34.7 rad/s; ladder no onset to 45 rad/s; wn 29.5 → kq 32.55, kv 1.10,
+    ki 97.6 (#1 AS SHIPPED: kq 30.8, kv 1.12, ki 46).
+  - **Validation:** usecase0 0.992–1.006, usecase1 0.997–1.014; ramp RMS 0.09–0.17°, walker 0.22°,
+    0 stalls.
+  - **Accuracy campaign:** 8/8 complete, 0 stalls, all inside the gates; moving peak 0.71–0.93°,
+    walker 0.22–0.28°, bearing 0.43–0.60 A.
+  - **#6's limits:** rest 0.61°, overshoot 0.67°, slow-ramp RMS 0.31°, fast-ramp RMS 0.24°, walker
+    RMS 0.34°, moving peak 1.17° -- 2.7–3.7× tighter than CALI_3_5KG_LOAD's (the payload's 5×
+    inertia under the same crosstalk allowance).
+  - **Installed** into #6 and applied at 12:37:17 (settled 0.41 s), MANUAL hold kept. Records in
+    `Firmware/calibration/records/0005-CALI-3-5KG-LOAD/` and `0006-NO-LOAD/`.
