@@ -133,6 +133,39 @@ void stall_rock_waits_for_a_stopped_reference() {
   for(int k=0;k<700;++k) { const auto out=run(s,t,1,0.,.03,.05); rocked|=out.rocking!=0; }
   expect(!rocked,"no rock while the reference is still moving");
 }
+void integral_reverses_with_the_motion() {
+  // Stuck behind a reference moving away at +0.05 rad/s the integral winds positive: the
+  // feedforward's shortfall along + motion. The reference then moves the other way: the same
+  // shortfall now points along - motion, so the integral flips sign at once instead of unwinding
+  // through zero (the 5x payload's 1 deg/s ramps stood 1.2-2.4 s doing that, 2026-10-25).
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.;
+  const auto before=run(s,t,300,0.,.004,.05);
+  expect(before.integral>.1,"integral winds behind a reference moving away");
+  const auto after=run(s,t,1,0.,.004,-.05);
+  expect(std::abs(after.integral+before.integral)<.01,"the integral reverses with the motion");
+}
+void no_integration_while_standing_ahead_of_an_approaching_reference() {
+  // Axis stuck at 0, reference 4 mrad behind it and coming up at +0.05 rad/s: the error is the
+  // reference's remaining travel, so nothing integrates until it has passed; then the shortfall does.
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.;
+  const auto standing=run(s,t,300,0.,-.004,.05);
+  expect(std::abs(standing.integral)<1e-9,"nothing integrated while the reference is on its way");
+  const auto passed=run(s,t,300,0.,.004,.05);
+  expect(passed.integral>.1,"integration resumes once the axis is behind");
+}
+void integration_continues_while_moving_ahead() {
+  // The axis moves with the reference but 4 mrad ahead of it (an over-estimating feedforward):
+  // the integral still winds negative and takes the excess out.
+  Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
+  double t=0.,q=0.; ServoOutput out{};
+  for(int k=0;k<300;++k) {
+    q+=.05*.001; t+=.001; expect(s.observe_encoder(t,q),"encoder");
+    out=s.step(t,q-.004,.05,0.); expect(out.status==int(ServoStatus::Ok),"ok"); s.acknowledge(true,out.limited);
+  }
+  expect(out.integral<-.1,"an axis running ahead of the reference still unwinds the feedforward excess");
+}
 void friction_feedforward_follows_the_reference_only() {
   Servo s; expect(s.configure(fixture()) && s.reset(0.,0.,0.,0.),"configure");
   expect(s.friction(0.)==0.,"no friction feedforward at rest");
@@ -166,6 +199,9 @@ int main() {
     rms_budget_lowers_authority();
     stall_rocks_against_the_push();
     friction_feedforward_follows_the_reference_only();
+    integral_reverses_with_the_motion();
+    no_integration_while_standing_ahead_of_an_approaching_reference();
+    integration_continues_while_moving_ahead();
     excitation_does_not_drag_the_slew_limit();
     stall_rock_waits_for_a_stopped_reference();
     travel_governor_stops_before_the_end();

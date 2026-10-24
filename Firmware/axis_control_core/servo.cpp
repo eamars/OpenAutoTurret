@@ -37,7 +37,8 @@ bool Servo::reset(double t,double q,double v,double current) {
   // Bumpless: whatever was applied becomes the integral's starting point.
   integral_=std::clamp(current-friction(0.)-p_.load,-p_.integral_cap,p_.integral_cap);
   applied_history_.clear(); applied_history_.push_back({t,current});
-  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; ready_=true; return true;
+  last_applied_=last_output_=current; mean_square_=current*current; last_saturated_=0; last_direction_=0; ahead_since_=-1;
+  ready_=true; return true;
 }
 bool Servo::reseed(double t,double q,double v,double applied) {
   if (!ready_ || !std::isfinite(t) || !std::isfinite(q) || !std::isfinite(v) ||
@@ -150,7 +151,23 @@ ServoOutput Servo::step(double now,double q_ref,double v_ref,double a_ref) {
   // reference plus a correction toward it. A stationary reference with a stuck
   // position error therefore still receives breakaway help toward the target.
   const double beyond=std::max(0.,std::abs(e)-p_.friction_correction_deadband);
-  const double fr=friction_at(v_ref+p_.friction_correction_rate*(e>0?beyond:-beyond),q);
+  const double motion=v_ref+p_.friction_correction_rate*(e>0?beyond:-beyond);
+  const double fr=friction_at(motion,q);
+  // The integral holds the friction feedforward's shortfall along that motion (yaw carries no
+  // load), so when the motion reverses the shortfall reverses with it. Left in the old frame it
+  // had to unwind through zero first: on the 5x payload (kq 13, ki 36) the 1 deg/s ramps stood
+  // 1.2-2.4 s at their start (2026-10-25) and the walker's reversals lagged 0.9 s.
+  const int direction=motion>p_.hold_speed?1:motion<-p_.hold_speed?-1:0;
+  if (direction && last_direction_ && direction!=last_direction_) integral_=-integral_;
+  if (direction) last_direction_=direction;
+  // Ahead of a moving reference and standing (the stall detector's displacement judgement), the
+  // error is the reference's remaining travel, not a force the axis resists: integrating it wound
+  // the loop against the move about to start. An axis moving ahead still integrates, so an
+  // over-estimating feedforward is still corrected.
+  const bool ahead=direction && e*direction<0;
+  if (!ahead) ahead_since_=-1;
+  else if (ahead_since_<0) { ahead_since_=now; ahead_position_=q; }
+  const bool standing_ahead=ahead && std::abs(q-ahead_position_)<=p_.stall_speed*(now-ahead_since_)+2*2*M_PI/8192;
   // Learning: steady tracking in one direction moves persistent integral into
   // the friction map at this angle; the sum (map+integral) is unchanged.
   if (p_.friction_learning_rate>0 && std::abs(v_ref)>=p_.friction_learning_speed && !last_saturated_) {
@@ -173,7 +190,7 @@ ServoOutput Servo::step(double now,double q_ref,double v_ref,double a_ref) {
     // holding the axis loaded against static friction (heat, and a stuck
     // preloaded contact that needs far more current to restart).
     if (p_.hold_relax_tau_s>0) integral_*=std::exp(-dt/p_.hold_relax_tau_s);
-  } else if (!(last_saturated_ && last_saturated_*e>0))
+  } else if (!(last_saturated_ && last_saturated_*e>0) && !standing_ahead)
     integral_=std::clamp(integral_+p_.ki*e*dt,-p_.integral_cap,p_.integral_cap);
   out.proportional=p_.kq*e; out.derivative=p_.kv*ev; out.integral=integral_;
   out.feedforward=ff; out.friction=fr; out.velocity_error=ev;
