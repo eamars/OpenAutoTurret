@@ -57,7 +57,7 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 | S2.3 | calibd and `ControldStation`, scipy, the launcher; the page's run view and STOP | Python tests against a fake controld; the page in the browser | built 2026-10-24 |
 | S2.4 | installing accepted parts (`history/`) and resuming; NEW's measurement | unit tests | built 2026-10-24 |
 | S2.5 | VERIFY (`check yaw`), with D8's two fixes (session end status; the pitch gate) | Python tests; the first VERIFY on the station | built 2026-10-24 |
-| S2.6 | the servo-commissioning card rewritten | doc-tree check | — |
+| S2.6 | the servo-commissioning card rewritten | doc-tree check | done 2026-10-24 |
 
 **On the station, with the owner's go only** (no real calibration until the payload is mounted and
 the owner says so): pitch identify through commissiond and through controld on the same plant,

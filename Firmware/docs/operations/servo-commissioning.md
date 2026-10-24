@@ -4,29 +4,46 @@
 
 Commissioning, or re-commissioning, the yaw position servo and the pitch speed-mode servo after
 anything mechanical changes: a camera or payload, added or removed weights, a bearing service, a
-motor swap. One command per axis does everything:
+motor swap. The pipeline does everything:
 
 - identifies the plant;
 - designs the controller from the identified plant and a simulator;
 - checks the result on the station;
-- writes `config/servo/<axis>_servo.json` when the fixed acceptance limits pass.
+- keeps the accepted assets.
 
-Not for production: these are bounded commissiond sessions, and production is not touched. Not for
-diagnosing production tracking.
+On the station this is a **calibration run from the page** (ADR-005 D7): MENU › CALIBRATION, VERIFY,
+RE-RUN or NEW…. The accepted parts go into the calibration record in force; #1 AS SHIPPED is never
+measured into. The same pipeline (`commission.py`) also runs from the workstation over ssh, for
+development and for a station that has no records yet.
+
+Not for diagnosing production tracking.
 
 ## Where the work happens
 
-On the Windows workstation, with the tool itself running in WSL:
+**From the page (the station's own route).** Everything runs on the Pi:
+- **controld** keeps the motors for the whole run, in CALIBRATING. It runs each session itself:
+  the axis under test follows the session, and production holds the other.
+- **calibd** (`tools/servo_commission/calibd.py`, started by the launcher) is the orchestrator. It
+  builds each session's manifest, reads the journal controld writes, and fits and designs between
+  sessions with numpy, scipy and the release's `servo-sim`.
+- **Runs and journals** are kept in `run/state/calibration/runs/<run>-<kind>-<stamp>/`.
+- **Accepted parts** are installed into the record; the replaced files go to `history/<run>/`.
 
+Nothing is built or deployed for a run. Build plan and protocol:
+[ADR-005 stage 2](../ADR-005/STAGE2.md).
+
+**From the workstation (development).** On the Windows workstation, with the tool running in WSL:
 - **Orchestrator:** `commission.py`, with numpy/scipy and the native `servo-sim` simulator.
 - **Build:** the ARM64 `commissiond` cross-build (the `run/adr0022-debian13` tree).
 - **Deploy:** Windows `python.exe` runs `deploy_station.py` once per commissioning run, then every
   session runs in that one release.
 - **Station access:** Windows `ssh.exe`/`scp.exe`, using this machine's own identity.
+- **Production must be stopped.** commissiond and controld both take the motion lock, and each
+  commissiond session leaves the axis it does not test unpowered.
 
 The Pi compiles nothing. Read [the deploy card](deploy.md) for the cross-build tree.
 
-One-time setup, in WSL from the repository root:
+One-time setup for the workstation route, in WSL from the repository root:
 
 ```bash
 python3 -m venv run/servo-commission/venv && run/servo-commission/venv/bin/pip install numpy scipy matplotlib pytest
@@ -38,7 +55,24 @@ cmake -S Firmware -B run/adr0022-local/firmware -DCMAKE_BUILD_TYPE=Release && ma
 
 ## The command
 
-From Git Bash or PowerShell on the workstation:
+**From the page.** The station must be homed, with the IMU gyro fresh (every session needs it).
+
+| Press | Runs | Station time |
+|---|---|---|
+| VERIFY (two presses), any record | `check yaw`: one 60 s probe scored against the record's asset. `REUSE_EXACT`, or `UPDATE_PARAMETERS` when a gate fails or the friction has drifted 25 % | ~1 min |
+| RE-RUN (two presses), not #1 | `pitch`, then `yaw --update` | ~45 min |
+| RE-RUN +ACCURACY | then `calibrate yaw` | ~71 min |
+| RE-RUN +CROSSTALK | `yaw` instead of `yaw --update`: after a yaw motor change | ~47 min |
+| NEW… with MEASURE IT NOW | makes a copy, switches to it, then measures it as RE-RUN +ACCURACY | ~71 min |
+
+- **During a run** the drawer shows the steps, the session and its time, and calibd's last line.
+  The dock is dimmed and the D-pad hidden.
+- **STOP** (one press; STOP MOTION does the same) ends the session at once, holds both axes,
+  installs nothing, and ends in MANUAL.
+- **Afterwards** the station resumes the mode the run interrupted, and the panel says LAST RUN.
+- **Developer only:** `run_calibration CHECK-PITCH` (the API, not the page) runs `check pitch`.
+
+**From the workstation**, in Git Bash or PowerShell:
 
 ```bash
 wsl.exe -e bash -c "cd /mnt/c/workspace/OpenAutoTurret/Firmware/tools/servo_commission && ../../../run/servo-commission/venv/bin/python commission.py yaw"
@@ -46,11 +80,13 @@ wsl.exe -e bash -c "cd /mnt/c/workspace/OpenAutoTurret/Firmware/tools/servo_comm
 
 Replace `yaw` with `pitch` for the other axis. Each run writes `run/servo-commission/<run id>/`,
 containing `commission.log`, `report.json`, `report.md`, every session's manifest and journal, and
-the candidate asset. Station time is about 25 minutes for yaw and 10 for pitch.
+the candidate asset. Station time is about 25 minutes for yaw (19 of them sessions) and 25 for
+pitch: commissiond's own sessions add up to about 9 minutes, and the rest is the Pi's review of
+each journal around them.
 
-Order: commission **pitch first**. Each session leaves the other axis unpowered, where its own
-friction holds it within one sensor count (measured). Pitch parks at its centre, so yaw is then
-identified at a defined pitch posture.
+Order: commission **pitch first**. On the workstation route each session leaves the other axis
+unpowered, where its own friction holds it within one sensor count (measured); from the page,
+production holds it. Pitch parks at its centre, so yaw is then identified at a defined pitch posture.
 
 | What changed | Run | What happens |
 |---|---|---|
@@ -153,11 +189,13 @@ wsl.exe -e bash -c "cd /mnt/c/workspace/OpenAutoTurret && run/servo-commission/v
 
 ## What it does not prove
 
-- **Production behaviour.** Production yaw still uses the old speed PI, and pitch the old
-  SpeedServo path, until ADR-003 integrates the servo.
+- **Production behaviour.** Production runs these assets (ADR-003 3b), but with production's own
+  guards and limits in front of them: an accepted asset is a tuned servo, not a qualified tracking
+  pipeline.
 - **Thermal qualification.** The authority is 3 A peak and 1.62 A RMS (owner ruling, 2026-10-02),
   protected by the 55 C motor-temperature trip; 0.8 A is guidance only.
-- **Stop or park behaviour.** Sessions end with zero yaw current and pitch STOP.
+- **Stop or park behaviour.** commissiond's sessions end with zero yaw current and pitch STOP; a run
+  from the page ends with production holding both axes.
 - **That the simulator predicts tracking error.** It predicts the stability boundary to within
   about 10–15% and identifies the plant. It does not model the bearing's rest-dependent breakaway,
   its cold/warm drift or the 240–255 deg bump, so its tracking-error predictions are optimistic.
@@ -195,7 +233,17 @@ wsl.exe -e bash -c "cd /mnt/c/workspace/OpenAutoTurret && run/servo-commission/v
 - **`NOT ACCEPTED` with stalls or long moves short.** The bearing stuck. Warm up (a full turn at
   30 deg/s) and rerun; if it persists, the stall-recovery thresholds in `design.servo` scale with
   the measured friction level.
-- **`deploy failed`.** Read `deploy.log` in the run directory, and [the deploy card](deploy.md).
+- **`deploy failed`** (workstation route). Read `deploy.log` in the run directory, and
+  [the deploy card](deploy.md).
+- **Page: `HOME first`, `the IMU gyro is not fresh`, `#1 is the shipped backup`.** The run gate.
+  HOME, check the IMU (`imu-bno085`, the stuck-I2C1 incidents), or NEW… a copy to measure.
+- **Page: the run ends `calibd is not answering`.** controld heard nothing from calibd for 15 s while
+  no session ran. Read `calibd.log` in the stack's run directory. Nothing was installed.
+- **Page: `NOT INSTALLED: the measured parts would make the record unusable`.** The accepted parts
+  did not pass the record's own checks (a servo the gate refuses). The record is unchanged; the
+  run's directory keeps them.
+- **Page: the station faults when a session begins** (2026-10-24, fixed in `3a0e32f`). The control
+  loop waited on the web thread's preparation of the session; see STAGE2.md "As built".
 - **Pitch `native register readback differs`.** The drive's as-found settings differ from the
   prior's `native_settings`; the journal's `register_read` rows show the real values. Nothing was
   enabled.
