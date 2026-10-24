@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
     BootFsm boot(*backend, BootConfig{});
     while (!boot.ready_to_home() && !boot.faulted()) boot.step();
     if (boot.faulted()) {
-      std::fprintf(stderr, "boot fault: %s\n", boot.error());
+      std::fprintf(stderr, "boot fault: %s\n", boot.error().c_str());
       backend->deenergize(AxisId::Pitch);
       backend->deenergize(AxisId::Yaw);
       return 1;
