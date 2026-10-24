@@ -235,3 +235,25 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     ≈0.2 → a 3 Hz sweep), the 3–30 Hz sweep's coherence (the sim's 2–8 Hz floor is calibrated on
     the bare turret; the payload's is about 2× it), the fit's r ≈ +1.1 mrad/A, and the design's
     outcome at 5× under the drift allowance.
+- **Station, 2026-10-24 22:45–23:19: the inertia fix on the station, and three faults it surfaced.**
+  - **The deploy's homing faulted with the payload** (`endpoint A homing failed: backoff: timeout`).
+    From the rest stop, the pitch lurched 0.3° breaking away (one 50 ms step above half the approach
+    speed), then crawled up against the payload's weight at ~0.025 rad/s while the drive wound up.
+    The push cap armed on the lurch and took the crawl for a stop at the 0.8 N·m gate; the backoff
+    then drove into the real stop. Fixed in `6752fa3`: the cap arms after two running steps (the
+    station's recorded feedback is the test). HOME then passed in 35 s from the same pose.
+  - **In that FAULT the pitch kept pushing into its stop for 11 minutes** (33 → 49 °C, 1.4 °C/min):
+    the hold wrote SpdRef 0, which a CyberGear in position mode ignores, so the backoff's target
+    past the stop stayed in force. Fixed in `e688606`: a hold writes SpdRef 0 and LocRef at the
+    measured position, the neutral pair adoption writes, so the drive stops in either mode.
+  - **MEASURE on #5, 22:58–23:19, NOT ACCEPTED at yaw validation.** Pitch ACCEPTED (ramp RMS
+    0.027–0.053°). Yaw: the survey's rough inertia 0.216 → sweep 3–30 Hz over 18.3 s → J 0.2128,
+    delay 1.97 ms, residual crosstalk +0.45 mrad/A, 5/16 bands (the prediction held). Design bias 3,
+    boundary wn 9.7; the ladder was quiet to wn 12.6 at 156° and 324°; chosen wn 8.2 (the robust
+    design, under the drift allowance); circle at 1.1× quiet. Validation: pass 1 ACCEPTED (speed
+    ratio 0.959–1.051); pass 2 failed the slow ramps (±1 deg/s: 1.104 and 1.158 against 10%,
+    3 stalls; steps stop short then lurch). Nothing was installed.
+  - **That run's journals were pruned as it ended**: calibd sorted runs by name, and run ids restart
+    with every controld, so the newest run (0001) looked oldest. Fixed (`calibd` orders runs by the
+    stamp in their names). Its reports, logs and manifests remain; the per-segment rows are in
+    `yaw/report.json`.
