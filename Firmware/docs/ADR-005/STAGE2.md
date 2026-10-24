@@ -622,3 +622,25 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     + 0.08+0.35 to + 0.13+1.53 A for plateaus within 0.1–0.2 A of each other. Back to Fable: bound
     the fit, or fit the plateau envelope, and base the cap on the survey's largest plateau plus the
     drift.
+- **MEASURE on #5, 05:00–05:21 (release `362caf5`: Fable's identifiable friction fit, `abf550c`):
+  the fit is sane; pass 1 accepted, pass 2 not. The last run of the night.**
+  - **Fit:** + 0.14+0.47 A, − 0.21+0.17 A, creep 0.32 A, held at its new 0.86 deg/s bound. Largest
+    plateau 0.48 A, so cap = stall current 0.984 A.
+  - **Design:** J 0.2231, wn 8.1 → kq 14.57, ki 43.7.
+  - **Validation:** usecase0 ACCEPTED (0.934–1.068, 0 stalls). usecase1 NOT ACCEPTED: ramp+1 at
+    1.231.
+  - **What happened on usecase1's ramp+1:**
+    - The reference was still moving − just before the ramp, and the integral (+0.18 A) was settling
+      that move.
+    - The friction frame's reversal flip turned it into −0.17 A against the new + motion.
+    - The axis stood, fell 0.33° behind, then caught up. The flip's assumption (the integral is
+      friction shortfall along the motion) fails whenever the integral carries something else.
+  - **The night's pattern since the friction frame (03:04, 04:03, 05:00):**
+    - Pass 1 accepted every time (0.93–1.07). Pass 2 failed every time, on one ±1 deg/s ramp, in
+      either direction (1.104, 0.885, 1.231).
+    - 0 stalls in every pass since the integral-cap rule.
+    - Both passes start at the same angle (about 100.5° mod 360); pass 2 follows pass 1 directly.
+  - **Left for the owner:** how to make the 1 deg/s ramps robust on this mount. Fable is analysing
+    the journals for: why pass 2, whether the flip is a net gain, and one recommendation among
+    `friction_correction_rate`, a feedforward that waits while the axis stands ahead, a slow-ramp
+    gate that judges tracking after the start for heavy payloads, or reverting the flip.
