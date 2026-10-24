@@ -17,7 +17,7 @@ were calibrated how.
 | `score.py`, `usecase.py` | ADR-003-shaped references (Level-1 generator), per-segment metrics, the acceptance gates, and conformance to the calibrated accuracy limits. |
 | `accuracy.py` | The yaw accuracy calibration (`commission.py calibrate`): per-pass metrics, the fixed limit rule (1.25 x worst pass), the motor-feedforward-off variant, and the comparison. |
 | `journal.py` | Reads commissiond journals into arrays. |
-| `sim_cases/` | Hidden plants for the offline proof: this station's estimate, and a 2.5× payload. |
+| `sim_cases/` | Hidden plants for the offline proof: this station's estimate, a 2.5× payload, and the 5× (the 2026-10-24 payload's class) and 10× payloads, all with the station's measured encoder noise and friction roughness. |
 | `tests/test_pipeline.py` | The offline proof: identification accuracy, delay calibration, and whole-pipeline acceptance. |
 | `templates/` | Session manifest skeletons (station topology, IMU calibration, limits). |
 
@@ -47,8 +47,19 @@ So friction:
 σ0 = 2000 A/rad and σ1 = 5 A·s/rad are structural constants, not identified. The 80 Hz probe at
 rest shows no measurable pre-sliding compliance, so σ0 must be well above 1000.
 
-The encoder reads round(q + g(angle)·u(t_receipt − crosstalk_delay)) in 8192 counts, where g is
-the measured crosstalk table.
+The encoder reads round(q + g(angle)·u(t_receipt − crosstalk_delay) + n) in 8192 counts, where g is
+the measured crosstalk table and n the encoder's own noise: 0.2 mrad rms, flat to 40 Hz and
+falling as 1/f above (`encoder_noise_rad`, `encoder_noise_corner_hz`). It was measured on the
+station 2026-10-24 on three inertia sessions and the survey plateaus: the same 0.05–0.1 mrad per
+band from 8 to 60 Hz at every speed (5–40 deg/s) and for both inertias, so it is neither a
+spatial pattern nor motion. Without it the simulator was 5–10× quieter than the station in the
+very band the inertia sweep used, and passed sweeps that failed on the station.
+
+The sliding friction level also wanders (`friction_noise_A` 0.03 A rms, 6 Hz corner; nothing at
+rest): a torque roughness calibrated to the un-excited ramp's 2–8 Hz motion on the bare turret
+(1.3, 1.3, 0.44 mrad in the 2–4, 4–6, 6–8 Hz bands at 30 deg/s under the prior's gains). The
+payload's low-frequency motion is about twice what this level gives; the 5× case keeps the
+bare level because a higher one made the prior's loop ring to 2 A where the station showed 0.9 A.
 
 What the model leaves out, and why that is acceptable:
 - **Breakaway that grows with rest time and load.** The servo's stall rock handles it on the
@@ -68,7 +79,33 @@ and friction.
 ## Calibrations made in simulation (re-check them if the scripts change)
 
 - **Loop delay:** the inertia sweep's fitted delay is the actuation delay plus 1.2 ms
-  (`commission.DELAY_OFFSET_S`; `tests/test_pipeline.py::test_delay_calibration`).
+  (`commission.DELAY_OFFSET_S`; `tests/test_pipeline.py::test_delay_calibration`). The fit bounds it
+  to 4 ms: a heavy plant's coherent bands sit below 10 Hz, where the phase cannot pin it.
+- **Inertia sweep (`manifests.inertia_sweep_for`, 2026-10-24):** a rigid body answers the 0.3 A
+  sweep with 1/(J w²), so a 5× payload's response at 8–30 Hz (0.2–0.5 mrad/A) sat under the encoder
+  noise and the crosstalk table's ~1 mrad/A drift. The sweep now starts at the nearest of 8, 5.6, 4,
+  3 Hz to twice the prior loop's resonance sqrt(kq/J) — below that the swing reverses a light
+  plant's sliding or trips the speed limit — using the survey's rough inertia
+  (`identify.inertia_from_speed_changes`: accelerating minus decelerating current at the same
+  speed), and keeps 5.5 s per octave. The bare turret's 8–30 Hz, 10.5 s sweep is unchanged; the
+  payload gets 3–30 Hz over 18.3 s (+16 s of session). The FRF uses a flat-top window: a Hanning
+  window weighted the sweep's first and last bands by a few per cent, which is why the 8.3 Hz band
+  never cohered on the station. The leftover-crosstalk term is bounded by the design's drift
+  allowance (`crosstalk_drift_fraction` × max|g|), not the scan's repeatability: pinned at the old
+  ±0.48 mrad/A bound, a drifted table biased a 5× inertia by −50% while 15/16 bands cohered.
+- **Design floor (`design.wn_floor`, 2026-10-24):** the lowest gain the design and the ladder
+  consider is a loop stiffness kq = J wn² of 6.75 A/rad (15 rad/s at the bare turret's 0.03, the
+  fixed floor until then), never below 5 rad/s. Weaker, the loop cannot lift friction without a
+  stick-slip cycle the oscillation guard reads as instability, and the ladder's ramps lag into the
+  following-error limit. A 5× payload's quiet gain under the drift allowance is wn 6.5–9.3 (the
+  right-half-plane zero 1/sqrt(J g) falls as 1/sqrt(J)), which the fixed 15 declared inadequate,
+  leaving the blind ladder to fail the circle. The commissioned 5× servo (wn 5.5) passes the gates
+  but tracks 2–3× outside the bare turret's calibrated accuracy limits: the allowance, not the
+  identification, sets a payload's accuracy.
+- **The prior's gains at 10×:** in the simulator kq 20 / kv 0.5 (ζ 0.08 at 0.45 A·s²/rad)
+  limit-cycle through friction — 2.7 A peaks, ±0.7 rad/s about the sliding speed — and the survey
+  trips the speed limit, with or without noise. Nothing can be identified in that state;
+  `test_prior_gains_at_10x` is an expected failure until the prior changes.
 - **Crosstalk table:** a 10 deg/s scan with 0.25 s windows reproduces a known table within
   0.6 mrad/A RMS. A 20 deg/s scan under-reads it by about 14%, which caused instability.
 - **Prior gains (kq 20 / kv 0.5 / ki 20):** quiet through the survey for inertia 0.015–0.15 and

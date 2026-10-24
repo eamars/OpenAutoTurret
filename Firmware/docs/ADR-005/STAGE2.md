@@ -181,3 +181,57 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     are then in the record and take force at the next switch, and the refusal says so.
     `CalibrationRun.OnlyTheRunInProgressFinishesIntoARecord` fails on the old code.
 
+- **PAYLOAD 10-24: why the yaw inertia identification failed, and the fix (2026-10-24, simulator
+  and recorded data only; branch `claude/inertia-heavy-payload-7a56f6`).** RE-RUN +ACCURACY on #5
+  ended `inertia: only 1 coherent frequency bands`; nothing was installed.
+  - **The payload is about 5× the bare turret: J = 0.20 ± 0.04 A·s²/rad** (bare 0.0407). Two
+    independent methods on the recorded sessions: the survey's speed changes, friction cancelled
+    by pairing accelerating and decelerating current at the same speed (0.18–0.21 on the survey
+    and the inertia session; the same method reads the bare turret at 0.036–0.040 on four
+    sessions); and the VERIFY probe's step responses simulated on the asset's plant with today's
+    friction, which excludes J ≥ 0.3 (the 2° steps would overshoot 16 mrad against the measured
+    8–14) and sits best at 0.16–0.25. The main session's reversal regression (0.21) agrees.
+  - **controld's executor is not the cause.** Frame timing 1.00 ms median, no reordering; the
+    transmitted and measured current carry the sweep with coherence 0.99 over 10–24 Hz; and the
+    raw encoder/current ratio along the sweep follows the asset's crosstalk table to within
+    ~1 mrad/A, so the compensation's timing and table are right.
+  - **Root cause, quantitatively.** A rigid body answers the 0.3 A sweep with 1/(J w²): at
+    12.6 Hz that is 4.3 mrad/A for the bare turret and 0.8 mrad/A for the payload, against (a) the
+    table's drift since 10-02, +1.1 mrad/A overall (10-20 showed +0.9) with ~0.5 mrad/A by angle,
+    and (b) the encoder's own noise, 0.05–0.13 mrad per band at 8–30 Hz — the same at 5–40 deg/s
+    and for both inertias, so neither a spatial pattern nor motion. The bare turret's response
+    sat 4–10× above both; the payload's was below them. The fit's leftover-crosstalk term was
+    bounded at the scan's repeatability (±0.48 mrad/A) and so could not absorb the drift: on
+    10-20 it was already pinned at the bound. A Hanning window on the sweep's record also weighted
+    its first band by a few per cent (8.3 Hz cohered at 0.05 on 10-02 too).
+  - **Why the simulator did not show it.** Its plant had neither noise term: 5–10× quieter than
+    the station at 8–30 Hz (it matched only above 200 Hz, where quantization dominates). With the
+    measured encoder noise and a friction roughness calibrated to the un-excited ramp's 2–8 Hz
+    motion, the old sweep on a 5× plant with a drifted table gives J −45…−66% while 15/16 bands
+    cohere — worse than the station's failure: it would have installed a wrong inertia.
+  - **The change** (`tools/servo_commission`, README "Calibrations"): the sweep's start follows the
+    plant — the survey's rough inertia picks the nearest of 8, 5.6, 4, 3 Hz to twice the prior
+    loop's resonance (lower, a light plant's sliding reverses or trips the speed limit at 3–4 Hz;
+    proven in the simulator for 0.015–0.045) — at 5.5 s per octave; the bare turret's sweep is
+    unchanged, a 5× payload gets 3–30 Hz over 18.3 s (session 45 s instead of 30). Flat-top
+    window; leftover crosstalk bounded by the design's drift allowance; loop delay bounded to 4 ms;
+    the design's and the ladder's gain floor is now a loop stiffness (kq 6.75 A/rad: the old
+    15 rad/s at the bare turret, 5.5 at 5×). Proof in `tests/test_pipeline.py` on the noisy plants: identification within 15%
+    for 0.015, 0.03, 0.075, 0.20, 0.225 with a scanned and with a drifted table, the drift found
+    as r = −1.1 mrad/A; the survey estimate within 30%; the full 5× pipeline (from the prior, and
+    `--update` with a drifted table) ACCEPTED: identification 0.242, design boundary wn 6.5 rad/s.
+  - **The 5× design is capped by the drift allowance, not by identification.** With the table
+    assumed wrong by its largest |g| (6 mrad/A, `crosstalk_drift_fraction` 1.0) the right-half-plane
+    zero 1/sqrt(J g) sits at 26 rad/s for J 0.24, and the quiet gain is wn 6.5–9.3 (bare turret:
+    30–55). The commissioned servo (wn 5.5, kq 7.3) passes the acceptance gates but tracks 2–3×
+    outside the bare turret's calibrated accuracy limits (ramp RMS 0.30–0.59° against 0.19°). The
+    station on 10-24 drifted 1.1 mrad/A in three weeks; whether a payload may be designed against a
+    smaller allowance (and re-checked more often) is the owner's call, not this change's.
+  - **10× is a prior problem, not an identification one.** Under kq 20 / kv 0.5 (ζ 0.08 at
+    0.45 A·s²/rad) the simulated loop limit-cycles through friction, 2.7 A peaks and ±0.7 rad/s
+    about the sliding speed, with or without noise, and the survey trips the speed limit. Pinned
+    as an expected failure (`test_prior_gains_at_10x`).
+  - **Still to confirm on the station (MEASURE on #5):** the survey's rough inertia (expect
+    ≈0.2 → a 3 Hz sweep), the 3–30 Hz sweep's coherence (the sim's 2–8 Hz floor is calibrated on
+    the bare turret; the payload's is about 2× it), the fit's r ≈ +1.1 mrad/A, and the design's
+    outcome at 5× under the drift allowance.

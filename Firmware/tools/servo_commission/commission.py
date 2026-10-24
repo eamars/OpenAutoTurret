@@ -173,9 +173,16 @@ def yaw_survey(run, servo):
     if heavy:
         run.log(f"    THERMAL GUIDANCE: sliding friction reaches {max(r['current'] for r in heavy):.2f} A, above the "
                 f"{guidance} A guidance level (rating {servo['rms_limit']} A): watch motor temperature in sustained slow rotation")
+    # Rough inertia from the speed changes: it only chooses the inertia sweep's frequencies.
+    try:
+        guess, bins = identify.inertia_from_speed_changes(j)
+        run.log(f"    inertia from the speed changes: about {guess:.3f} A*s^2/rad ({bins} speed bins); the sweep measures it")
+    except ValueError as e:
+        guess, bins = None, 0
+        run.log(f"    {e}: the sweep starts at {manifests.INERTIA_SWEEP['f0_hz']:g} Hz")
     run.step("survey", plateaus=rows, friction={k: v for k, v in fit.items()}, temperature_raw=[float(j["feedback"]["temperature"][0]),
-             float(j["feedback"]["temperature"][-1])], capability_warning=bool(heavy))
-    return fit, j
+             float(j["feedback"]["temperature"][-1])], capability_warning=bool(heavy), inertia_from_speed_changes=guess, speed_bins=bins)
+    return fit, j, guess
 
 
 def with_friction(servo, fit):
@@ -215,25 +222,35 @@ def crosstalk_from(rows, half, frequency, inertia, run):
             "disagreement_by_angle": [round(float(x), 7) for x in by_angle]}
 
 
-def yaw_inertia(run, servo, crosstalk):
-    script = manifests.inertia_sweep()
-    sweep = dict(manifests.INERTIA_SWEEP, begin_s=3.0, duration_s=10.5)
+def yaw_inertia(run, servo, crosstalk, rules, inertia_guess=None):
+    script, sweep = manifests.inertia_sweep_for(inertia_guess, servo["kq"])
+    run.log(f"    sweep {sweep['f0_hz']:g}-{sweep['f1_hz']:g} Hz over {sweep['duration_s']:g} s at {sweep['amplitude_A']:g} A"
+            + (f" (for an inertia of about {inertia_guess:.3f})" if inertia_guess else ""))
     j = run.session("inertia", manifests.yaw(f"{run.id}-inertia", servo, script, excitation=sweep, vmax=35.0))
     complete(j, "inertia")
+    # The crosstalk the fit may find left over is what the design tolerates (its drift allowance),
+    # not the scan's repeatability: the table drifted ~1 mrad/A in three weeks (2026-10-24).
+    bound = max(crosstalk["uncertainty"], rules["crosstalk_drift_fraction"] * max(abs(g) for g in crosstalk["table"]))
     points = identify.inertia_response(j, sweep, crosstalk["table"], crosstalk["delay_s"])
-    a, d, r, rms = identify.inertia_from_frf(points, residual_bound=crosstalk["uncertainty"])
+    a, d, r, rms = identify.inertia_from_frf(points, residual_bound=bound)
     coherent = sum(1 for p in points if p[2] >= 0.5)
     run.log(f"    inertia {a:.4f} A*s^2/rad, loop delay {d * 1e3:.2f} ms, residual crosstalk {r * 1e3:+.2f} mrad/A, "
             f"fit {rms:.2f} ({coherent}/{len(points)} coherent bands)")
-    run.step("inertia", inertia=a, loop_delay_s=d, residual_crosstalk=r, fit_rms=rms,
-             bands=[(p[0], abs(p[1]), math.degrees(np.angle(p[1])), p[2]) for p in points])
+    if abs(r) > crosstalk["uncertainty"]:
+        run.log(f"    the crosstalk table is off by {r * 1e3:+.2f} mrad/A (its scan repeatability was {crosstalk['uncertainty'] * 1e3:.2f}): "
+                "it has drifted; within the design's drift allowance, so the design stands")
+    run.step("inertia", inertia=a, loop_delay_s=d, residual_crosstalk=r, fit_rms=rms, sweep=sweep, residual_bound=bound,
+             inertia_guess=inertia_guess, bands=[(p[0], abs(p[1]), math.degrees(np.angle(p[1])), p[2]) for p in points])
     return a, d, j
 
 
 def yaw_ladder(run, servo_base, identified, dsg, rules, position):
     """Station gain ladder at the weakest angles; one session per angle (the guard ends a session)."""
     if dsg.get("model_adequate", True):
-        wns = [round(dsg["boundary_wn_sim"] * s, 2) for s in (0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3)]
+        # Never below the stiffness floor (design.wn_floor): weaker, the 20 deg/s ramps lag into the
+        # following-error limit and end the session without an onset (5x payload, 2026-10-24).
+        floor = design.wn_floor(identified["inertia"])
+        wns = sorted({round(max(floor, dsg["boundary_wn_sim"] * s), 2) for s in (0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3)})
     else:  # no model guidance: a fixed geometric range covering every plant seen so far
         wns = [round(25.0 * 1.2 ** k, 2) for k in range(7)]
     angles = design.ladder_angles(dsg, identified["crosstalk"])
@@ -357,7 +374,7 @@ def commission_yaw(args):
             "the pitch stays disabled and rests where the last pitch session parked it (commission pitch first)")
     try:
         base = prior["servo_parameters"]
-        fit, j = yaw_survey(run, base)
+        fit, j, guess = yaw_survey(run, base)
         position = last_yaw_angle(j)
         servo = with_friction(base, fit)
         if args.update and current.get("identified", {}).get("crosstalk"):
@@ -369,7 +386,7 @@ def commission_yaw(args):
             crosstalk = crosstalk_from(rows, half, frequency, None, run)
         servo = dict(servo, crosstalk_delay_s=crosstalk["delay_s"],
                      crosstalk_map=[g - rules["crosstalk_bias_candidates_rad_per_A"][1] for g in crosstalk["table"]])
-        inertia, loop_delay, j = yaw_inertia(run, servo, crosstalk)
+        inertia, loop_delay, j = yaw_inertia(run, servo, crosstalk, rules, guess)
         position = last_yaw_angle(j)
         if not (args.update and current.get("identified", {}).get("crosstalk")):
             crosstalk = crosstalk_from(rows, half, frequency, inertia, run)  # remove the rigid-body share of the probe response
@@ -789,6 +806,7 @@ def main():
         g = c.add_mutually_exclusive_group()
         g.add_argument("--from-prior", action="store_true", help="assume nothing (the default)")
         g.add_argument("--update", action="store_true", help="start from the current asset (reuse the crosstalk table)")
+        c.add_argument("--asset", help="the asset --update starts from (default config/servo/<axis>_servo.json)")
     for name in ("check", "validate"):
         c = sub.add_parser(name)
         c.add_argument("axis", choices=("yaw", "pitch"))

@@ -113,6 +113,40 @@ def friction_maps(samples, curve, bins=24):
     return maps
 
 
+def inertia_from_speed_changes(j, bin_width=0.02, min_speed=0.03, min_accel=0.1, smooth=51):
+    """Rough inertia from a session's speed changes, friction cancelled by pairing: at the same
+    speed and direction, the current while accelerating minus the current while decelerating is
+    2 J a. Speed and acceleration come from the servo's own velocity estimate (smoothed 50 ms),
+    not the reference, which the prior's gains follow with a lag on a heavy plant. Weighted
+    median over speed bins -> (inertia, bins). It chooses the inertia sweep's frequencies
+    (manifests.inertia_sweep_for); the sweep measures. Station 2026-10-24 surveys: bare turret
+    0.036-0.040 (sweep 0.0407), payload 0.18-0.21."""
+    c = j["cycles"]
+    t, u = c["t"], c["u"]
+    kern = np.ones(smooth) / smooth
+    v = np.convolve(c["v"], kern, mode="same")
+    a = np.convolve(np.gradient(v, t), kern, mode="same")
+    speed, sgn = np.abs(v), np.sign(v)
+    along = a * sgn
+    ok = (speed > min_speed) & (np.abs(a) > min_accel) & (c["rock"] == 0) & (c["sat"] == 0)
+    rows = []
+    for d in (1, -1):
+        for b in np.arange(min_speed, np.max(speed) + bin_width, bin_width):
+            k = ok & (sgn == d) & (speed >= b) & (speed < b + bin_width)
+            kp, km = k & (along > 0), k & (along < 0)
+            if kp.sum() < 10 or km.sum() < 10:
+                continue
+            da = np.mean(a[kp]) - np.mean(a[km])
+            if abs(da) > 1e-6:
+                rows.append(((np.mean(u[kp]) - np.mean(u[km])) / da, int(kp.sum() + km.sum())))
+    if len(rows) < 4:
+        raise ValueError(f"inertia from speed changes: only {len(rows)} speed bins with both signs of acceleration")
+    estimates = np.array([r[0] for r in rows]); weights = np.array([r[1] for r in rows])
+    order = np.argsort(estimates)
+    cumulative = np.cumsum(weights[order])
+    return float(estimates[order][np.searchsorted(cumulative, cumulative[-1] / 2)]), len(rows)
+
+
 # ---------------------------------------------------------------- crosstalk (yaw)
 def crosstalk_windows(j, begin_s, duration_s, frequency, window_s=0.5):
     """Encoder response to the probe tone per window: (angle, complex gain rad/A, applied amplitude).
@@ -183,11 +217,23 @@ def sweep_value(sweep, t):
     return np.where(inside, amp * np.sin(TWO_PI * sweep["f0_hz"] * (np.exp(k * np.clip(e, 0, None)) - 1) / k), 0.0)
 
 
+def sweep_window(n, taper=0.05):
+    """Flat with short cosine tapers (Tukey). A sweep puts each frequency at one place in the
+    record, its lowest at the start: a Hanning window weighted the first and last bands by a few
+    per cent of the middle ones, which is why those bands never cohered (station 2026-10-02,
+    8.3 Hz: 0.05) and why a heavy plant, whose signal is in the lowest bands, was lost."""
+    w = np.ones(n)
+    m = max(1, int(round(taper * n)))
+    ramp = 0.5 * (1 - np.cos(np.pi * np.arange(m) / m))
+    w[:m] = ramp; w[-m:] = ramp[::-1]
+    return w
+
+
 def frf(t, x, u, y, f0, f1, bands=16):
     """Band-averaged response y/u over [f0, f1] Hz using the excitation x as the
     instrument (Syx/Sux): unbiased by the loop's own feedback. Also the coherence of y with x."""
     dt = np.median(np.diff(t))
-    w = np.hanning(len(t))
+    w = sweep_window(len(t))
     X = np.fft.rfft((x - np.mean(x)) * w)
     U = np.fft.rfft((u - np.mean(u)) * w)
     Y = np.fft.rfft((y - np.polyval(np.polyfit(t - t[0], y, 2), t - t[0])) * w)
@@ -213,11 +259,14 @@ def inertia_response(j, sweep, table, delay, margin=0.3):
     return frf(t, sweep_value(sweep, t), journal.applied(tx, t), y, sweep["f0_hz"], sweep["f1_hz"])
 
 
-def inertia_from_frf(points, residual_bound=0.0005, min_coherence=0.5):
+def inertia_from_frf(points, residual_bound=0.0005, min_coherence=0.5, max_delay=0.004):
     """Fit H(w) = (-1/(a w^2) + r) * exp(-j w d): inertia a, loop delay d and the
-    crosstalk left after removing the measured table, r (bounded by the table's
-    uncertainty: at high inertia the rigid-body term is small and could otherwise
-    trade against r). Returns (a, d, r, rms)."""
+    crosstalk left after removing the measured table, r. The two terms are told apart by
+    their frequency dependence (1/w^2 against flat), which is why the sweep reaches down
+    to 3 Hz; r's bound is the drift the design tolerates, not the scan's repeatability (the
+    station's table drifted ~1 mrad/A within three weeks, 2026-10-24). d is bounded to the
+    physical range (commissiond measured 1.0-1.5 ms): a heavy plant's coherent bands sit
+    below 10 Hz, where the phase cannot pin it. Returns (a, d, r, rms)."""
     pts = [p for p in points if p[2] >= min_coherence]
     if len(pts) < 4:
         raise ValueError(f"inertia: only {len(pts)} coherent frequency bands")
@@ -228,7 +277,7 @@ def inertia_from_frf(points, residual_bound=0.0005, min_coherence=0.5):
         e = ((-1.0 / (a * w ** 2) + r) * np.exp(-1j * w * d) - H) / np.abs(H)
         return np.concatenate([e.real, e.imag])
 
-    fit = least_squares(resid, x0=[0.05, 0.002, 0.0], bounds=([1e-3, 0.0, -residual_bound], [2.0, 0.02, residual_bound]))
+    fit = least_squares(resid, x0=[0.05, 0.0015, 0.0], bounds=([1e-3, 0.0, -residual_bound], [2.0, max_delay, residual_bound]))
     return float(fit.x[0]), float(fit.x[1]), float(fit.x[2]), float(np.sqrt(np.mean(fit.fun ** 2)))
 
 

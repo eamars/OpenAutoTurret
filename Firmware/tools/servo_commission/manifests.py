@@ -46,7 +46,29 @@ def inertia_sweep(speed=30.0, duration=12.0):
             (duration, "ramp", -speed * DEG, "sweep-"), (2.0, "hold", 0, "final")]
 
 
-INERTIA_SWEEP = {"amplitude_A": 0.3, "f0_hz": 8.0, "f1_hz": 30.0}
+INERTIA_SWEEP = {"amplitude_A": 0.3, "f0_hz": 8.0, "f1_hz": 30.0}  # the bare turret's sweep; inertia_sweep_for() lowers f0
+SWEEP_STARTS_HZ = (8.0, 5.6, 4.0, 3.0)  # steps of sqrt(2); the bare turret's proven start first
+SWEEP_SECONDS_PER_OCTAVE = 5.5  # 8-30 Hz in 10.5 s, as commissioned 2026-10-02
+
+
+def inertia_sweep_for(inertia_guess, kq, speed=30.0):
+    """The sweep for a plant of roughly this inertia under the prior's kq -> (script, excitation).
+
+    A rigid body answers the sweep with 1/(J w^2): a payload's response is only above the encoder
+    noise and the crosstalk table's drift at low frequency (2026-10-24, 5x the bare turret: nothing
+    left at 8-30 Hz). The sweep therefore starts about two times above the prior loop's resonance
+    sqrt(kq/J) -- lower, the 0.3 A swing reverses a light plant's sliding or trips the speed limit
+    -- at the nearest of a few fixed starts (runs stay comparable), never above 8 Hz (the proven
+    bare-turret sweep, unchanged) nor below 3 Hz (the friction roughness floor), and spends the
+    same time per octave as the 8-30 Hz sweep. No guess: 8 Hz."""
+    f1 = INERTIA_SWEEP["f1_hz"]
+    f0 = INERTIA_SWEEP["f0_hz"]
+    if inertia_guess:
+        target = 2.0 * math.sqrt(kq / inertia_guess) / (2 * math.pi)
+        f0 = min(SWEEP_STARTS_HZ, key=lambda f: abs(math.log(f / target)))
+    duration = round(SWEEP_SECONDS_PER_OCTAVE * math.log2(f1 / f0), 1)
+    sweep = dict(INERTIA_SWEEP, f0_hz=f0, begin_s=3.0, duration_s=duration)
+    return inertia_sweep(speed=speed, duration=duration + 1.5), sweep
 
 
 def ladder_step(tag):

@@ -1,5 +1,6 @@
 #pragma once
 #include <deque>
+#include <random>
 #include <utility>
 #include <yaml-cpp/yaml.h>
 
@@ -27,6 +28,13 @@ struct YawPlantParameters {
   double crosstalk_delay_s;                        // reading moves with the command sent this long before receipt
   double crosstalk_map[kCrosstalkBins];            // rad/A over absolute angle
   double counts_per_rev;
+  // What the station adds beyond the rigid body (measured 2026-10-24 on three inertia sessions and
+  // the survey plateaus, docs/ADR-005/STAGE2.md): the reading carries a noise of this rms, flat to
+  // the corner and falling as 1/f above it (0.28 mrad, 40 Hz: the same at every speed and
+  // inertia, so it is the encoder's, not motion); and the sliding friction level wanders with this
+  // rms and corner (a torque roughness that moves the axis below ~8 Hz). Zero disables either.
+  double encoder_noise_rad, encoder_noise_corner_hz;
+  double friction_noise_A, friction_noise_corner_hz;
 };
 YawPlantParameters yaw_plant_from_yaml(const YAML::Node& node);
 
@@ -40,14 +48,19 @@ class YawPlant {
   double velocity() const { return v_; }
   double current() const { return i_; }
   // Host reading received at `receipt`: the angle sampled encoder_delay_s
-  // earlier (call advance(receipt-encoder_delay_s) first), quantized, plus crosstalk.
-  double reading(double sampled_position,double receipt) const;
+  // earlier (call advance(receipt-encoder_delay_s) first), plus the encoder's noise and
+  // crosstalk, quantized. Readings are drawn in receipt order (the noise is a process).
+  double reading(double sampled_position,double receipt);
   double friction(double v,double q) const;
  private:
   double commanded(double time) const;
   YawPlantParameters p_;
   double t_=0, q_=0, v_=0, i_=0, z_=0;
   std::deque<std::pair<double,double>> commands_;
+  // Noise processes (first-order, exact discretisation), from a fixed seed: runs stay repeatable.
+  std::mt19937_64 rng_{20261024};
+  double friction_noise_=0, encoder_noise_=0, last_reading_time_=0;
+  bool read_before_=false;
 };
 
 // CyberGear pitch in its own speed mode (RunMode 2): the speed follows SpdRef

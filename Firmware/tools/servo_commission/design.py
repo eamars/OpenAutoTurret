@@ -111,9 +111,23 @@ def stable(plant_parameters, servo_parameters, start, limit=0.3):
     return False, float(np.mod(r["q_true"][-1], 2 * math.pi))
 
 
-def boundary(identified, base, bias, residual_shift, zeta, integral_rate, start=0.0, lo=15.0, hi=200.0, steps=7):
+# The lowest gain the design considers: a loop stiffness kq = J wn^2 of KQ_FLOOR A/rad (15 rad/s at
+# the bare turret's 0.03, the fixed floor until 2026-10-24), never below 5 rad/s. Weaker than that the
+# loop cannot lift friction without a stick-slip cycle the oscillation guard reads as instability, so
+# the bisection has no stable end. A 5x payload's quiet gain under the drift allowance is wn 6-9 (the
+# right-half-plane zero 1/sqrt(J g) falls as 1/sqrt(J)), which a fixed 15 declared inadequate.
+KQ_FLOOR = 6.75
+
+
+def wn_floor(inertia):
+    return max(5.0, math.sqrt(KQ_FLOOR / inertia))
+
+
+def boundary(identified, base, bias, residual_shift, zeta, integral_rate, start=0.0, lo=None, hi=200.0, steps=8):
     """Largest stable wn (bisection in log wn) for plant crosstalk = table + residual_shift,
     servo table = table - bias. Returns (wn, onset angle just above it)."""
+    if lo is None:
+        lo = wn_floor(identified["inertia"])
     p = plant(identified)
     p["crosstalk_map"] = [g + residual_shift for g in identified["crosstalk"]["table"]]
     design = {"bias": bias, "zeta": zeta, "integral_rate": integral_rate}
@@ -184,10 +198,11 @@ def design_yaw(identified, base, rules, start=0.0, log=print):
         log(f"  bias {bias * 1e3:.1f} mrad/A: stable to wn {results[0][0]:.1f} / {results[1][0]:.1f} rad/s "
             f"(table -/+ {delta * 1e3:.2f} mrad/A); use case at wn {dsg['wn']:.1f}: cost {cost:.2f}")
         candidates.append((cost, bias, wn_b, [r[1] for r in results if r[1] is not None]))
-    if all(c[2] <= 15.0 * 1.0001 for c in candidates):
+    floor = wn_floor(identified["inertia"])
+    if all(c[2] <= floor * 1.0001 for c in candidates):
         # Unstable even at the lowest gain: the identified friction (usually a survey whose slow
         # plateaus stick-slipped) makes the model unusable for design. The station decides alone.
-        log("  MODEL INADEQUATE: no quiet gain even at wn 15 in simulation; the station ladder decides alone")
+        log(f"  MODEL INADEQUATE: no quiet gain even at wn {floor:.1f} in simulation; the station ladder decides alone")
         bias = rules["crosstalk_bias_candidates_rad_per_A"][1]
         return {"zeta": rules["zeta"], "integral_rate": rules["integral_rate_per_s"], "bias": bias, "model_adequate": False,
                 "boundary_wn_sim": None, "wn": None, "onset_angles_sim": []}
