@@ -16,6 +16,9 @@ import tempfile
 
 
 def run(args, **kwargs):
+    # No step reads stdin. An inherited stdin pipe can keep Windows' ssh.exe open after the remote
+    # command has exited (2026-10-24: the deploy waited 85 min on a finished `ln -s`).
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
     return subprocess.run(args, check=True, **kwargs)
 
 
