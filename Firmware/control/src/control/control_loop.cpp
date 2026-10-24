@@ -6096,6 +6096,9 @@ void ControlLoop::execute_command(const std::string& name,
                 " after the switch to " + target_type_name(target_type_));
     return;
   }
+  // Stop Motion or Hold meanwhile is the operator's last word: the swap ends in MANUAL, not in the
+  // mode it interrupted. Both carry on to their usual handling below.
+  if (tswitch_.active && (name == "stop_motion" || name == "hold")) tswitch_.resume = OperatingMode::Manual;
   if (name == "set_target_type") {
     execute_set_target_type(arg);
     return;

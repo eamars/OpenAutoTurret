@@ -3373,6 +3373,26 @@ TEST(TargetTypeSwitch, AModeAskedForDuringTheSwapIsTheOneResumed) {
   EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual);
 }
 
+TEST(TargetTypeSwitch, AStopDuringTheSwapIsNotUndoneWhenItEnds) {
+  // The operator's last word was "stop": the end of the swap must not start the patrol again.
+  for (const char* stop : {"stop_motion", "hold"}) {
+    HomedLoop h(true, 0, false, true);
+    ASSERT_TRUE(h.ready);
+    h.run("set_mode", "AUTO_ROAM");
+    h.step(20);
+    h.run("set_target_type", "DOG");
+    h.run(stop, "");
+    EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << stop << ": " << h.snap().cmd_ack_reason;
+    uint32_t seq = 0;
+    for (int i = 0; i < 150; ++i) {
+      if (i % 6 == 0) h.loop->feed_track_set(typed_frame(++seq, h.t, 4), h.t);
+      h.step(1);
+    }
+    EXPECT_FALSE(h.snap().target_type_switching) << stop;
+    EXPECT_EQ(h.loop->operating_mode(), OperatingMode::Manual) << stop << " during the swap stays stopped";
+  }
+}
+
 TEST(TargetTypeSwitch, AnUnappliedTypeHoldsAndSaysSoWithoutFaulting) {
   // Perception never applies it (no frames at all): not a hazard, so not a fault (2026-10-02).
   HomedLoop h(true, 0, false, true);

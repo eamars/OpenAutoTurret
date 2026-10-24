@@ -293,6 +293,8 @@ Design and decisions: [DESIGN_TARGET_TYPE_2026-10-20.md](DESIGN_TARGET_TYPE_2026
 - **What a change does.** controld persists it (`run/state/target_type.json`) and, until perception's
   frames carry it, holds the turret in MANUAL: the target is dropped, the turret brakes and holds, the
   automatic cycle is frozen and jogs are refused. A mode chosen meanwhile is the one resumed.
+  STOP MOTION or HOLD meanwhile ends the switch in MANUAL. Before 2026-10-24 the switch still resumed
+  the mode it had interrupted, so a stopped turret started patrolling again once the model was in.
   visiond swaps the network between frames when the type needs the other model.
 - **Measured on the station (release e561e58).** Model swap in visiond 191-208 ms (HEAD <-> CAT/DOG,
   HUMAN), 0 ms between types of one model. Command to resumed mode 0.37-0.57 s. From a 15 deg/s
