@@ -1159,6 +1159,13 @@ TEST(CalibrationRun, StopDuringASessionHoldsBothAxesAndEndsInManual) {
     EXPECT_FALSE(h.sim->session_owns_pitch());
     EXPECT_TRUE(eventually([&] { return file_text(journal).find("\"status\":\"INVALID\"") != std::string::npos; }));
     EXPECT_EQ(h.loop->phase(), Phase::Hold) << "held, energised: " << h.loop->fault_reason();
+    // Recorded as the record's last run by controld itself: calibd's finish never comes.
+    EXPECT_NE(h.snap().calibration_records_json->find("\"verdict\":\"STOPPED: stopped by the operator\""),
+              std::string::npos) << *h.snap().calibration_records_json;
+    EXPECT_TRUE(eventually([&] {
+      return file_text(ota_cal_fixture::record_dir(f.s, 2) / "record.json").find("STOPPED: stopped by the operator") !=
+             std::string::npos;
+    })) << "and in record.json";
   }
 }
 

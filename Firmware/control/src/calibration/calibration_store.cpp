@@ -541,6 +541,11 @@ bool remove_record(const fs::path& root, int id, std::string& err) {
 
 fs::path Store::dir_of(int id) const { return root_ / "records" / id_dir(id); }
 
+void Store::set_last_run(int id, const Record::LastRun& last) {
+  for (auto& r : records_)
+    if (r.id == id) r.last_run = last;
+}
+
 void Store::set_bore(int id, const Bore& b, const std::string& date) {
   for (auto& r : records_)
     if (r.id == id) {

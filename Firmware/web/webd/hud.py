@@ -2832,6 +2832,10 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #drawer .rn.locked { color:#f2b329; font-size:9px; letter-spacing:.08em; }
 #drawer .stepper.wrap { flex-wrap:wrap; gap:4px; }
 #drawer .calhold .rl { color:#95f58b; }
+/* The panel's notes are sentences, not the one-word states MENU's rows carry: they wrap rather than
+   run off a phone's edge (2026-10-24, 375 px). The label keeps its width. */
+#drawer.calpanel .drow .rn { white-space:normal; text-align:right; }
+#drawer.calpanel .drow .rl { flex-shrink:0; }
 #dock.held { opacity:.35; }
 #drawer .rsteps { display:flex; flex-wrap:wrap; gap:6px; font-size:11px; letter-spacing:.08em; }
 #drawer .rstep.done { color:#95f58b; }

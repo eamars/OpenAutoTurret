@@ -140,6 +140,8 @@ class Store {
   bool unverified() const { return unverified_; }
   // After a trim: the record's bore in memory, its part marked trimmed (the file is written apart).
   void set_bore(int id, const Bore& b, const std::string& date);
+  // A run's end, in memory (the file is written apart, write_last_run).
+  void set_last_run(int id, const Record::LastRun& last);
   std::filesystem::path dir_of(int id) const;
   // The next id: never one in records/ or deleted/.
   int next_id() const;

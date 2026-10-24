@@ -264,9 +264,11 @@ def serve(link, state: Path, poll_s=0.2, once=False):
                 traceback.print_exc()
                 verdict = f"NOT ACCEPTED: calibd failed: {e}"
             print(f"calibd: run {run['id']}: {verdict}", flush=True)
-            ok, error = link.send("calibration_finish", f"{run['id']} {runner.root} {verdict[:400]}")
+            # A run that ended under calibd (STOP, a fault) is over: controld has recorded it already.
+            ok, error = (False, "the run had ended") if verdict.startswith("STOPPED:") else \
+                link.send("calibration_finish", f"{run['id']} {runner.root} {verdict[:400]}")
             if not ok:
-                print(f"calibd: finish refused: {error}", flush=True)
+                print(f"calibd: not finished: {error}", flush=True)
             # Whether controld installed it is its answer on the control thread (the ack), not the gate's.
             installed = False
             deadline = time.monotonic() + 3.0

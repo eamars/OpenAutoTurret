@@ -4972,6 +4972,26 @@ void ControlLoop::end_calibration_run(const char* state, const std::string& why,
   run_.state = state;
   run_.verdict = why;
   run_.ended_ns = now_ns_;
+  // calibd's finish records a run it completed (record.json last_run, on the web thread). A run that
+  // ends any other way -- STOP, a fault, a silent calibd -- is recorded here, off the loop.
+  // The store is updated in memory here and the file on the writer thread, as a bore trim is.
+  if (std::string(state) != "done") {
+    const calibration::Record::LastRun last{run_.kind,
+        std::string(state == std::string("stopped") ? "STOPPED: " : "NOT RUN: ") + why,
+        "run " + std::to_string(run_.id), calibration::today_local()};
+    std::lock_guard lk(calibration_mutex_);
+    if (calibration_store_ && calibration_writer_ && calibration_store_->find(run_record_id_web_)) {
+      const auto dir = calibration_store_->dir_of(run_record_id_web_);
+      const int id = run_record_id_web_;
+      calibration_store_->set_last_run(id, last);
+      rebuild_calibration_json_locked();
+      calibration_writer_->post([dir, id, last] {
+        std::string e;
+        if (!calibration::write_last_run(dir, last.kind, last.verdict, last.run, last.date, e))
+          spdlog::error("calibration: #{} last run not written: {}", id, e);
+      });
+    }
+  }
   spdlog::info("calibration: run {} {}: {}; {}", run_.id, state, why, operating_mode_name(resume));
   if (phase_ == Phase::Hold && resume != OperatingMode::Manual) request_mode(resume);
   publish_calibration_run(now_ns_, true);
