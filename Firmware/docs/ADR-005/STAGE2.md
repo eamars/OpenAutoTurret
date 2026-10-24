@@ -555,3 +555,27 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
       working on (+0.28 A) into a push against the new motion (−0.26 A).
     - Back to Fable: judge "standing" by progress along the travel, and decide what a rest does to
       the integral's frame.
+- **MEASURE on #5, 04:03–04:24 (release `5153d15`: Fable's refined friction frame, `3e5fbf2`):
+  the servo rule works, a degenerate friction fit failed the run.**
+  - **Pitch ACCEPTED.**
+  - **Survey plateaus** look like earlier ones: + 0.40–0.44 A and − 0.31–0.46 A between 0.5 and
+    5 deg/s.
+  - **The fit degenerated:** + 0.13+1.53 A, − 0.21+1.26 A, creep 1.25 A. The Stribeck and creep
+    terms trade off against each other.
+    - The cap rule read breakaway as Coulomb + Stribeck = 1.66 A, so `integral_cap`, the stall
+      current and the rock current all hit their ceilings (1.2 / 1.2 / 0.8 A).
+    - The slow-speed feedforward came out at 0.46 A against a measured 0.40.
+  - **Design:** J 0.2233, wn 7.8 → kq 13.41, ki 40.24.
+  - **Validation:**
+    - usecase0 ACCEPTED: 0.957–1.020, 0 stalls, slow-ramp RMS 0.30°, walker 0.37°, all the best of
+      the night. But step overshoot 0.79°.
+    - usecase1 NOT ACCEPTED: ramp+1 at 0.885 (too slow), overshoot 1.08°.
+  - **What happened on usecase1's ramp+1:**
+    - The over-estimating feedforward threw the axis ahead at 6.5 deg/s to 1.8° in front.
+    - It stood about 2 s while the reference caught up, with the integral held flat (+0.06 A) as
+      the new rule intends, then tracked to within 0.1°.
+  - **The class:** every design quantity derived from the friction fit inherits its degeneracy:
+    the feedforward, the cap, the stall current and the rock. Tonight's fits ranged from
+    + 0.08+0.35 to + 0.13+1.53 A for plateaus within 0.1–0.2 A of each other. Back to Fable: bound
+    the fit, or fit the plateau envelope, and base the cap on the survey's largest plateau plus the
+    drift.
