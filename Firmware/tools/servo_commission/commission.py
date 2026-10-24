@@ -680,7 +680,8 @@ def asset_validation_journals(asset):
     """The use-case journals the asset was accepted on (its commissioning run's validation)."""
     for report in sorted(RUNS.glob("**/report.json")):
         if json.load(open(report, encoding="utf-8")).get("run") == asset["provenance"]["run"]:
-            return sorted(report.parent.glob("*-usecase*/yaw-control.jsonl"))
+            # Directly beside the report (commission.py's own runs) or under sessions/ (calibd's).
+            return sorted(report.parent.glob("**/*-usecase*/yaw-control.jsonl"))
     return []
 
 
@@ -735,7 +736,10 @@ def calibrate(args):
                              "the servo itself needs `commission.py check yaw` first")
     prior = []
     for path in asset_validation_journals(asset):
-        rows, extra = score.yaw(journal.yaw(path), x["table"], x["delay_s"])
+        j = journal.yaw(path)
+        if (j.get("footer") or {}).get("status") != "COMPLETE":
+            continue   # a transient's attempt; its retry beside it is the pass
+        rows, extra = score.yaw(j, x["table"], x["delay_s"])
         prior.append({"pass": path.parent.name, "metrics": accuracy.pass_metrics(rows), "stalls": extra.get("stalls")})
     ff = passes["ff_fb"] + prior
     limits = accuracy.limits_from([p["metrics"] for p in ff])

@@ -169,6 +169,61 @@ class VerifyThroughThePipeline(unittest.TestCase):
 
 
 
+class StepAssets(unittest.TestCase):
+    """A later step measures what the run will install (MEASURE on #5, 2026-10-25 01:12: the accuracy
+    campaign ran the record's bare-turret yaw asset on the 5x payload, after the run had accepted its own)."""
+
+    def runner(self, tmp, kind="MEASURE"):
+        state = Path(tmp) / "state"
+        record = state / "calibration" / "records" / "0005"
+        record.mkdir(parents=True)
+        (record / "yaw_servo.json").write_text('{"from": "record"}')
+        run = {"id": 1, "kind": kind, "active": True, "state": "waiting"}
+        return calibd.Runner(FakeController(Path(tmp)), state, run, {"id": 5, "name": "PAYLOAD 10-24"}, poll_s=0.01)
+
+    def asset_given_to(self, runner, which, options):
+        import commission
+        name = {"yaw": "commission_yaw", "calibrate": "calibrate"}[which]
+        seen, original = {}, getattr(commission, name)
+        setattr(commission, name, lambda args: seen.setdefault("asset", args.asset))
+        try:
+            runner.pipeline(which, options, station=None)
+        finally:
+            setattr(commission, name, original)
+        return json.loads(Path(seen["asset"]).read_text())["from"]
+
+    def test_the_accuracy_campaign_measures_the_yaw_servo_this_run_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self.runner(tmp)
+            self.assertEqual(self.asset_given_to(runner, "yaw", {"update": True}), "record", "yaw --update starts from the record")
+            (runner.root / "yaw").mkdir(parents=True)
+            (runner.root / "yaw" / "yaw_servo.json").write_text('{"from": "this run"}')
+            self.assertEqual(self.asset_given_to(runner, "calibrate", {}), "this run")
+
+    def test_with_no_yaw_accepted_in_the_run_the_record_s_servo_is_measured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.asset_given_to(self.runner(tmp, "RERUN+ACCURACY"), "calibrate", {}), "record")
+
+    def test_the_asset_s_validation_passes_are_found_in_calibd_s_layout(self):
+        import commission
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            yaw = runs / "0001-measure-20261025-003847" / "yaw"
+            for label in ("yaw-20261025-004206-06-usecase0", "yaw-20261025-004206-07-usecase1",
+                          "yaw-20261025-004206-07-usecase1-r1", "yaw-20261025-004206-05-circle0"):
+                (yaw / "sessions" / label).mkdir(parents=True)
+                (yaw / "sessions" / label / "yaw-control.jsonl").write_text("{}\n")
+            (yaw / "report.json").write_text('{"run": "yaw-20261025-004206"}')
+            original, commission.RUNS = commission.RUNS, runs
+            try:
+                found = commission.asset_validation_journals({"provenance": {"run": "yaw-20261025-004206"}})
+            finally:
+                commission.RUNS = original
+            self.assertEqual([p.parent.name for p in found], ["yaw-20261025-004206-06-usecase0", "yaw-20261025-004206-07-usecase1",
+                                                              "yaw-20261025-004206-07-usecase1-r1"],
+                             "every use-case attempt; calibrate keeps the COMPLETE ones")
+
+
 class Pruning(unittest.TestCase):
     """ADR-005 D3: reports stay; journals only for each record's latest installed run and the recent."""
 

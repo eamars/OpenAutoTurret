@@ -164,13 +164,20 @@ class Runner:
         while not self.done.wait(5.0):
             self.link.send("calibration_note", f"{self.id} {self.note}")
 
+    def asset_for(self, axis: str) -> Path:
+        """The servo a step works on: the one this run already accepted for the axis, so a later step
+        measures what the run will install (MEASURE 2026-10-25 01:12: the accuracy campaign ran the
+        record's bare-turret asset on the payload), else the record's."""
+        accepted = self.root / axis / PRODUCES[axis]
+        return accepted if accepted.exists() else self.record_dir / f"{axis}_servo.json"
+
     def pipeline(self, which: str, options: dict, station) -> dict:
         import commission
         out = self.root / which
         axis = options.get("axis", "pitch" if which == "pitch" else "yaw")
         args = SimpleNamespace(sim=None, out=str(out), no_write=True, no_build=True, resume=None, axis=axis,
                                update=options.get("update", False), from_prior=False, station=station,
-                               on_log=self.say, asset=str(self.record_dir / f"{axis}_servo.json"))
+                               on_log=self.say, asset=str(self.asset_for(axis)))
         commission.RUNS = self.root.parent
         try:
             {"check": commission.check, "pitch": commission.commission_pitch, "yaw": commission.commission_yaw,
