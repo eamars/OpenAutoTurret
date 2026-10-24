@@ -644,3 +644,23 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     the journals for: why pass 2, whether the flip is a net gain, and one recommendation among
     `friction_correction_rate`, a feedforward that waits while the axis stands ahead, a slow-ramp
     gate that judges tracking after the start for heavy payloads, or reverting the flip.
+- **MEASURE on #5, 09:13–09:36 2026-10-25 (release `7783785`: the integral's reversal flip reverted on
+  the owner's word, standing/carried/stopping-distance kept): the yaw step accepted with both passes
+  for the first time; the accuracy campaign's first pass failed the slow ramps. Nothing installed.**
+  - **Fit:** + 0.00+0.48 A, − 0.14+0.27 A, creep 0.27 A. J 0.1984, wn 8.8 → kq 15.54, ki 46.6.
+  - **Validation:** usecase0 ACCEPTED (0.953–1.028), usecase1 ACCEPTED (0.950–1.029), 0 stalls.
+    On usecase0's ramp+1 the integral kept its +0.33 A along the ramp (the flip would have turned it
+    against it); the axis slipped 1.8° ahead, then crept while the reference caught up.
+  - **Accuracy campaign:** ff_fb0 NOT ACCEPTED, ramp+1 1.105, ramp−1 1.253; the run stopped there.
+  - **Why: the bearing works in.** Mean |u| on the same arc (324–340°), pass after pass:
+    ramp−1 0.27 → 0.38 → 0.51 A, ramp+1 0.43 → 0.47 → 0.56 A, ramp±5 up by 0.15 A, motor at 33–34 C
+    throughout. The survey's feedforward stays at 0.24–0.36 A, so by the third pass the integral
+    has to find 0.27 A more; at 1 deg/s that is a 1–2 s stand and a catch-up (lag 1.7°). The 00:38
+    run's seven passes show the same: up about 0.2 A over the first two passes, then wandering
+    0.33–0.68 A. The servo's friction learning does not catch it: it learns only at 2 deg/s and
+    above, mixes in the steps' settling (learned maps moved ±0.05–0.15 A with either sign), and each
+    session starts from the asset (production keeps what it learns across re-engagements).
+  - **Simulator:** with the drive's free play in the plant (`free_play_rad`, new: 0.7°), the
+    simulator reproduces this: the motor bursts ahead at a force reversal as on the station, the
+    reversal flip no longer matters (2/6 failing either way, against 6/6 vs 0/6 on the rigid plant),
+    and ramp−1 fails 6/6 once the bearing is 0.25 A stickier than the feedforward (1/6 at 0).
