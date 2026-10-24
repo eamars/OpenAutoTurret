@@ -47,6 +47,7 @@ YawPlantParameters yaw_plant_from_yaml(const YAML::Node& n) {
   p.counts_per_rev=n["counts_per_rev"].as<double>(8192.);
   p.encoder_noise_rad=n["encoder_noise_rad"].as<double>(0.); p.encoder_noise_corner_hz=n["encoder_noise_corner_hz"].as<double>(40.);
   p.friction_noise_A=n["friction_noise_A"].as<double>(0.); p.friction_noise_corner_hz=n["friction_noise_corner_hz"].as<double>(6.);
+  p.noise_seed=n["noise_seed"].as<unsigned long>(20261024UL);
   check(p.inertia>0 && p.stribeck_speed>0 && p.counts_per_rev>0 && p.presliding_stiffness>0,"inertia/stribeck_speed/counts/stiffness");
   check(p.creep_speed>0 && p.encoder_noise_corner_hz>0 && p.friction_noise_corner_hz>0,"creep_speed/noise corners");
   for (double v:{p.coulomb_positive,p.coulomb_negative,p.stribeck_positive,p.stribeck_negative,p.viscous,p.presliding_damping,p.creep_drop,
@@ -65,7 +66,7 @@ double ou_step(double state,double h,double sigma,double corner_hz,std::mt19937_
 }
 }
 
-YawPlant::YawPlant(const YawPlantParameters& p,double position) : p_(p), q_(position) { commands_.push_back({-1e9,0.}); }
+YawPlant::YawPlant(const YawPlantParameters& p,double position) : p_(p), q_(position), rng_(p.noise_seed) { commands_.push_back({-1e9,0.}); }
 void YawPlant::command(double time,double current) { commands_.push_back({time,current}); }
 double YawPlant::commanded(double time) const { return latest(commands_,time); }
 // Steady sliding friction magnitude at speed v (the LuGre g(v)), at least a trace above zero.

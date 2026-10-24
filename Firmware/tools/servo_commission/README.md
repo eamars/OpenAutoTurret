@@ -64,7 +64,9 @@ bare level because a higher one made the prior's loop ring to 2 A where the stat
 What the model leaves out, and why that is acceptable:
 - **Breakaway that grows with rest time and load.** The servo's stall rock handles it on the
   station.
-- **Friction drift with temperature.** Re-run `check`.
+- **Friction drift with temperature.** Re-run `check`. Between sessions an hour apart the level
+  moves ±0.15 A (`friction_drift_A`, the design's allowance; `SimStation` applies it to the knee
+  case's sessions after the survey). The plant's noise draw is set by `noise_seed`.
 - **The localized bump near 240–255 deg.** Partly captured by the friction maps.
 
 The model is used to choose the bias and the candidate gain, and to bracket the station ladder. The
@@ -133,9 +135,27 @@ and friction.
   +0.15 A rise is the stall count (rocks on small steps the drifted friction makes necessary). The
   PI corner ki/kq never exceeds 0.4·wn (`design.INTEGRAL_CORNER_MAX`): at wn 4.6 — a 5× payload
   under a drifted table — 3 rad/s rang the fast ramps to 12° of jitter, 1.8 does not.
+- **Integral cap = the worse direction's breakaway + `friction_drift_A` (0.15 A), stall current =
+  the cap (2026-10-25):** at a stopped reference the friction feedforward is zero, so the integral
+  is the servo's whole authority against static friction. Until then the cap was the two directions'
+  mean static level and the stall current 0.9× that: on the 5× payload 0.40 / 0.35 A against a +
+  breakaway of 0.435 A that the night's drift took to 0.44–0.69 A (MEASURE 2026-10-25 00:38). Every
+  settle that fell 0.14° short then ended in a stall rock — three of the five fired while the integral
+  was still winding (it gains 0.05–0.07 A in the 0.3 s window at ki 36), and not one rock freed the
+  axis: each zeroed the integral and moved the axis 0.1–0.24° the wrong way until the integral had
+  rebuilt (2 s). The bare turret's 2026-10-02 asset (cap 0.73 A, breakaway 0.76) never showed it
+  because its friction had since fallen 38–62% below the fit. On the simulated station
+  (`payload_5x_knee`, ±0.15 A, three start angles, three noise draws) the validation pass's worst
+  stall count goes from 5 (pipeline servo) / 4 (the station's kq 13 servo) to 2; a higher cap alone
+  changes nothing, since the detector fires first. The campaign's feedforward-off pass, where the
+  integral carries all the friction, goes from 27 / 23 stalls to 13 / 4 at +0.15 A — those passes
+  record their stalls and are not gated on them. Long-move finals and step overshoot are unchanged.
+  The rock still zeroes the integral: without that a jammed axis would rock every 0.3 s, and the
+  simulator (LuGre, no contact loading) cannot show any benefit of the rock itself.
 - **Stall recovery always on in a designed asset:** without it, ±90 deg moves stuck 0.33 deg short
-  at 1.1 A. It acts when the axis is more than 0.14 deg behind while pushing, for 0.3 s, and only
-  with |v_ref| < 0.01 rad/s, so it fires at targets and not at the walking profile's reversals.
+  at 1.1 A. It acts when the axis is more than 0.14 deg behind while pushing the whole integral
+  authority, for 0.3 s, and only with |v_ref| < 0.01 rad/s, so it fires at targets and not at the
+  walking profile's reversals.
 - **Oscillation guard:** 50 ms above 0.3 A of fast RMS, with rocks excluded. The ladder and circle
   count a speed trip as an onset too.
 - **Scoring against the measured (unbiased) crosstalk table:** the deliberate bias is real

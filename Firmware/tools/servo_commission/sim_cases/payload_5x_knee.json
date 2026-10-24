@@ -1,5 +1,5 @@
 {
- "description": "PAYLOAD 10-24 as the three surveys of 2026-10-24 measured it: 5x inertia; friction flat at 0.30-0.42 A (+) and 0.24-0.27 A (-) up to about 2 deg/s, then a knee (slope -2 A*s/rad) to 0.2 A -- a shape the fit's exponential cannot follow -- no creep; and the bearing's friction level moving by +-0.10 A between sessions an hour apart (friction_drift_A: the simulated station shifts the Coulomb levels by +0.10 A for every odd session after the survey and -0.10 A for every even one, so the validation passes meet the feedforward cold, as the station's did). Encoder noise and roughness as station_estimate.",
+ "description": "PAYLOAD 10-24 as the three surveys of 2026-10-24 measured it: 5x inertia; friction flat at 0.30-0.42 A (+) and 0.24-0.27 A (-) up to about 2 deg/s, then a knee (slope -2 A*s/rad) to 0.2 A -- a shape the fit's exponential cannot follow -- no creep; and the bearing's friction level moving by +-0.15 A between sessions an hour apart (friction_drift_A: the simulated station shifts the Coulomb levels by +0.15 A for every odd session after the survey and -0.15 A for every even one, so the validation passes meet the feedforward cold, as the station's did). Encoder noise and roughness as station_estimate.",
  "yaw_start_rad": 1.0,
  "yaw": {
   "inertia": 0.225,
@@ -195,7 +195,7 @@
   "encoder_noise_corner_hz": 40.0,
   "friction_noise_A": 0.03,
   "friction_noise_corner_hz": 6.0,
-  "friction_drift_A": 0.1
+  "friction_drift_A": 0.15
  },
  "pitch": {
   "speed_delay_s": 0.002,

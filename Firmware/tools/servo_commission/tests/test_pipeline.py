@@ -21,8 +21,10 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
 import commission  # noqa: E402
+import design  # noqa: E402
 import identify  # noqa: E402
 import manifests  # noqa: E402
+import sim  # noqa: E402
 import station  # noqa: E402
 
 CASES = HERE / "sim_cases"
@@ -54,6 +56,48 @@ def drifted(table, rng):
 
 def residual_bound(table):
     return RULES["crosstalk_drift_fraction"] * max(abs(g) for g in table)
+
+
+def identified_friction(breakaway_positive, breakaway_negative, inertia=0.26):
+    """An identified-plant record with the given static friction (coulomb + stribeck) per direction."""
+    def side(b):
+        return {"coulomb": 0.2 * b, "stribeck": 0.8 * b, "stribeck_speed": 0.2, "viscous": 0.05}
+    return {"inertia": inertia, "actuation_delay_s": 0.001,
+            "friction": {"positive": side(breakaway_positive), "negative": side(breakaway_negative), "creep_drop": 0.0,
+                         "creep_speed": 0.01, "map_positive": [0.0] * 24, "map_negative": [0.0] * 24},
+            "crosstalk": {"delay_s": 0.001, "table": [0.0] * 120, "uncertainty": 0.0005}}
+
+
+class Design(unittest.TestCase):
+    def test_integral_cap_covers_breakaway_and_drift(self):
+        """The integral is the servo's whole authority at a stopped reference (friction FF is zero
+        there), so its cap is the worse direction's breakaway plus the bearing's session-to-session
+        drift, and a stall is declared only once that much is applied (stall_current = cap).
+        PAYLOAD 10-24, MEASURE 2026-10-25 00:38: the old cap (the two directions' mean, 0.40 A) sat
+        under the + breakaway of 0.435 A, and the old stall current (0.9 x mean, 0.353 A) fired three
+        of the five stall rocks while the integral was still winding."""
+        dsg = {"wn": 7.0, "zeta": 0.5, "integral_rate": 3.0, "friction_drift": RULES["friction_drift_A"], "bias": 0.002}
+        payload = design.servo(PRIOR, identified_friction(0.435, 0.349), dsg)
+        self.assertAlmostEqual(payload["integral_cap"], 0.435 + RULES["friction_drift_A"], places=3)
+        self.assertEqual(payload["stall_recovery"]["current_A"], payload["integral_cap"])
+        self.assertGreater(payload["integral_cap"], 0.4)
+        bare = design.servo(PRIOR, identified_friction(0.761, 0.696, inertia=0.04), dsg)
+        self.assertAlmostEqual(bare["integral_cap"], 0.761 + RULES["friction_drift_A"], places=3)
+        self.assertEqual(bare["stall_recovery"]["current_A"], bare["integral_cap"])
+        heavy = design.servo(PRIOR, identified_friction(1.3, 1.0), dsg)
+        self.assertEqual(heavy["integral_cap"], 1.2)  # the thermal ceiling
+        self.assertEqual(heavy["stall_recovery"]["current_A"], 1.2)
+        self.assertEqual(RULES["friction_drift_A"], 0.15)
+
+    def test_plant_noise_seed(self):
+        """Two seeds are two noise draws; the same seed repeats the run exactly (the proofs run several)."""
+        t = truth("payload_5x_knee")["yaw"]
+        t.pop("friction_drift_A", None)
+        script = manifests.samples([(1.0, "hold", 0, "hold"), (1.5, "ramp", 0.2, "ramp")])[0]
+        servo = servo_for({"yaw": t}, t["crosstalk_map"])
+        runs = [sim.yaw(servo, dict(t, noise_seed=seed), script)[0]["q_hat"] for seed in (1, 2, 1)]
+        self.assertTrue(np.array_equal(runs[0], runs[2]))
+        self.assertFalse(np.array_equal(runs[0], runs[1]))
 
 
 class Identification(unittest.TestCase):
@@ -178,11 +222,13 @@ class Pipeline(unittest.TestCase):
 
     def test_yaw_payload_5x_as_measured_with_friction_drift(self):
         """The 5x payload as the station measured it (payload_5x_knee: the friction knee the fit cannot
-        follow, and the bearing's level moving +-0.1 A between sessions), from three start angles:
-        every validation pass accepted. At integral rate 1.5 this plant failed 2 of 3 starts the way
-        the station did on 2026-10-24 22:58 (ramp+1 speed ratio 0.874 after a -drift pass; 6 stalls):
-        the slow ramps' stuck start, which only a faster integral closes within the crosstalk-robust
-        gain cap (kv feeds the crosstalk loop: zeta 0.75 lowers the boundary from 9.8 to 6.9 rad/s)."""
+        follow, and the bearing's level moving +-0.15 A between sessions), from three start angles:
+        every validation pass accepted, at most 4 stalls each (the gate; measured worst 2 with the cap
+        rule, 5 without, over three starts and three noise draws). At integral rate 1.5 this plant
+        failed 2 of 3 starts the way the station did on 2026-10-24 22:58 (ramp+1 speed ratio 0.874
+        after a -drift pass; 6 stalls): the slow ramps' stuck start, which only a faster integral closes
+        within the crosstalk-robust gain cap (kv feeds the crosstalk loop: zeta 0.75 lowers the
+        boundary from 9.8 to 6.9 rad/s). Stalls: Design.test_integral_cap_covers_breakaway_and_drift."""
         for start in (1.0, 3.5, 5.2):
             t = truth("payload_5x_knee")
             t["yaw_start_rad"] = start
@@ -199,6 +245,12 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(asset["provenance"]["accepted"], f"start {start}: " + json.dumps([v["fails"] for v in asset["validation"]]))
             ratios = [r for v in asset["validation"] for r in v["summary"]["speed_ratio"]]
             self.assertTrue(all(0.9 <= r <= 1.1 for r in ratios), f"start {start}: speed ratios {ratios}")
+            stalls = [v["extra"]["stalls"] for v in asset["validation"]]
+            self.assertTrue(all(n <= 4 for n in stalls), f"start {start}: stalls {stalls}")
+            f = asset["identified"]["friction"]
+            breakaway = max(f["positive"]["coulomb"] + f["positive"]["stribeck"], f["negative"]["coulomb"] + f["negative"]["stribeck"])
+            self.assertAlmostEqual(asset["servo_parameters"]["integral_cap"], breakaway + RULES["friction_drift_A"], places=3)
+            self.assertEqual(asset["servo_parameters"]["stall_recovery"]["current_A"], asset["servo_parameters"]["integral_cap"])
 
     def test_yaw_update_with_a_drifted_table(self):
         """`yaw --update` on the payload with the asset's three-week-old table (RE-RUN on the station,

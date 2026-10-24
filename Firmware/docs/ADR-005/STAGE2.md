@@ -373,3 +373,46 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
       today, which measured 38–62% below that asset's fit on 10-20.
     - This is likely what the simulator's "4–8 stall rocks per pass at any gain" was.
     - Under study with Fable: a cap that covers the larger direction's breakaway plus the drift.
+  - **The cap study's verdict (Fable, 01:50; branch `claude/yaw-integral-cap`): half the stalls were
+    the cap, the other half the stall detector; both rules now follow the plant.**
+    - On the journals: all five stalls (uc0 1, uc1 4) sat at a stopped reference 0.23–0.9° behind
+      with the friction feedforward at zero (the fit's creep term puts the model's rest friction at
+      0.06 A), so the integral was the only authority. Two had it pinned at the 0.4 A cap; three
+      fired 0.3 s after the push crossed the stall current of 0.353 A while the integral was still
+      winding at 0.17–0.25 A/s — the window between 0.9×low and 1.0×low is 0.05 A. The plant needed
+      ≥ 0.40–0.45 A (−) and ≥ 0.44–0.69 A (+) where the fit said 0.349 / 0.435. Not one rock freed
+      the axis: each zeroed the integral and the error grew 0.1–0.24° the wrong way until the
+      integral had rebuilt (2 s) or the next reference move took over. No stall repeated within a
+      segment, so the "winds back to the cap and stalls again" cycle did not occur in this run; the
+      bare servo's five stalls in ff_fb2 (cap 0.73, I at 0.48–0.57, not pinned) were the detector's.
+    - Broken invariant: a stall must mean "the whole authority is applied and nothing moves". The
+      rule now: `integral_cap = max(breakaway+, breakaway−) + friction_drift_A` (0.15 A, a new design
+      rule in `yaw_prior.json`; ceiling 1.2 A), `stall_current = integral_cap`. For this payload:
+      cap 0.585 (was 0.40), stall current 0.585 (was 0.353). Bare turret: 0.91 (was 0.73 / 0.66).
+    - Proof (`payload_5x_knee`, Coulomb levels −0.15 / 0 / +0.15 A, starts 1.0 / 3.5 / 5.2 rad,
+      three noise draws; both the pipeline's servo for that plant, kq 20.8 / ki 62, and the
+      station's accepted kq 13 / ki 36): worst stalls in the validation pass 5 → 2 and 4 → 2 at
+      +0.15 A, 3 → 2 and 3 → 0 at 0; a higher cap alone (stall current unchanged) leaves every
+      count as it was. Long-move finals (0.18–0.47°) and step overshoot (0.5–0.6° at −0.15 A, the
+      feedforward's) unchanged; no oscillation onset. The campaign's feedforward-off pass, where the
+      integral carries all the friction: 27 / 23 → 13 / 4 stalls at +0.15 A (recorded, not gated).
+    - Not fixed, and not the cap's: with the station's kq 13 servo the knee plant at +0.15 A fails
+      the ramp+1 speed gate at every start (1.10–1.17; 6 of 9 passes, cap or no cap) — the slow
+      ramp's stuck start again, the stiffness the crosstalk allowance leaves (owner 01:05: keep it).
+      Within one run the validation follows the survey by minutes, so the station's ramps passed at
+      1.025–1.071; the campaign an hour later is where +0.15 A applies. The retry ruling covers a
+      repeated pass; the journals will show the integral at the ramp start.
+    - The rock keeps zeroing the integral: at this inertia P alone (0.07 A at 0.3°) cannot restart
+      the axis, so the zeroing is what spaces the rocks by one integral rewind (2–3 s); without it a
+      jammed axis would rock every 0.3 s. The simulator cannot weigh the rock itself (LuGre carries
+      no contact loading); the station says 5 of 5 rocks did not free the payload.
+    - Why the model's prediction was 5–10× optimistic: `design.plant()` runs the use case without
+      the station's noise terms and with the fit's creep term, so its rest friction is 0.06 A and
+      every move finishes. With the noise terms and `creep_drop` 0 the same servo on the fitted plant
+      gives step finals ±0.58°, long finals 0.47°, ramp RMS 0.13–0.45°, walker 0.24° — within 1.3× of
+      the station on everything but the walker (0.55°: slow-speed stick-slip). Drift adds the stalls
+      and the speed ratios, not the accuracy gap. Not changed here (the prediction is advisory).
+    - The next MEASURE on #5 must show: `integral_cap` ≈ breakaway + 0.15 (≈ 0.55–0.65) and
+      `stall_recovery.current_A` equal to it in the accepted asset; ≤ 2 stalls per validation pass;
+      in the journals no rock while `i` is still rising, and after the campaign's positioning moves
+      the integral reaching the cap before any rock.
