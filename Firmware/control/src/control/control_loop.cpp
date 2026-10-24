@@ -5074,10 +5074,14 @@ web::CommandResult ControlLoop::calibration_files(const std::string& name, const
     prepared = std::move(p);
     done = "#" + std::to_string(next) + " " + label + " made from #" + std::to_string(id);
   }
+  // Read here, put under the lock: the control loop takes calibration_mutex_ every cycle.
+  const int changed = name == "new_calibration_record" ? next : id;
+  calibration::Record fresh;
+  if (name != "delete_calibration_record") fresh = calibration::read_record(calibration_store_->dir_of(changed), changed);
   {
     std::lock_guard lk(calibration_mutex_);
     if (name == "delete_calibration_record") calibration_store_->drop(id);
-    else calibration_store_->refresh(name == "new_calibration_record" ? next : id);
+    else calibration_store_->put(std::move(fresh));
     rebuild_calibration_json_locked();
   }
   r.ok = true;
@@ -6193,11 +6197,6 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
       if (!calibration::install_parts(record_dir, id, canon / "install", run, date, parts, err)) {
         done = "NOT INSTALLED: " + err;
       } else {
-        {
-          std::lock_guard clk(calibration_mutex_);
-          calibration_store_->refresh(id);
-          rebuild_calibration_json_locked();
-        }
         std::string joined;
         for (const auto& part : parts) joined += (joined.empty() ? "" : ", ") + part;
         if (calibration::prepare(calibration::read_record(record_dir, id), *p, err)) {
@@ -6214,8 +6213,10 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
       std::string err;
       if (!calibration::write_last_run(record_dir, kind, verdict, run, date, err))
         spdlog::error("calibration: #{} last run not written: {}", id, err);
+      // Read here, put under the lock: the control loop takes calibration_mutex_ every cycle.
+      auto fresh = calibration::read_record(record_dir, id);
       std::lock_guard clk(calibration_mutex_);
-      calibration_store_->refresh(id);
+      calibration_store_->put(std::move(fresh));
       rebuild_calibration_json_locked();
     }
   }

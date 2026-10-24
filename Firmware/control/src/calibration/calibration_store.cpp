@@ -548,10 +548,11 @@ int Store::next_id() const {
   return 1 + std::max(live.empty() ? 0 : live.back(), gone.empty() ? 0 : gone.back());
 }
 
-void Store::refresh(int id) {
-  Record r = read_record(dir_of(id), id);
+void Store::refresh(int id) { put(read_record(dir_of(id), id)); }
+
+void Store::put(Record r) {
   for (auto& existing : records_)
-    if (existing.id == id) { existing = std::move(r); return; }
+    if (existing.id == r.id) { existing = std::move(r); return; }
   records_.push_back(std::move(r));
   std::sort(records_.begin(), records_.end(), [](const Record& a, const Record& b) { return a.id < b.id; });
 }

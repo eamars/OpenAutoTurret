@@ -141,8 +141,11 @@ class Store {
   std::filesystem::path dir_of(int id) const;
   // The next id: never one in records/ or deleted/.
   int next_id() const;
-  // After a change on disk: read one record again (added if new), or forget a removed one.
+  // After a change on disk: read one record again (added if new), or forget a removed one. refresh()
+  // reads the files; a caller that holds a lock the control loop takes reads the record first
+  // (read_record) and only puts it here, in memory.
   void refresh(int id);
+  void put(Record record);
   void drop(int id);
 
  private:
