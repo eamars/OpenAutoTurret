@@ -664,3 +664,22 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     simulator reproduces this: the motor bursts ahead at a force reversal as on the station, the
     reversal flip no longer matters (2/6 failing either way, against 6/6 vs 0/6 on the rigid plant),
     and ramp−1 fails 6/6 once the bearing is 0.25 A stickier than the feedforward (1/6 at 0).
+- **MEASURE on #5, 09:58–10:22 2026-10-25 (release `7275f4a`: a work-in use-case pass before the
+  yaw survey, owner's choice): the work-in does not last. Yaw NOT ACCEPTED, nothing installed.**
+  - **Work-in:** COMPLETE (with #1's bare asset), 0.36 A on its 1 deg/s ramps.
+  - **Survey right after it:** the slow plateaus came up by 0.25 A, the fast ones did not —
+    1 deg/s 0.56/0.58 A (09:13: 0.31/0.31), 0.5 deg/s − 0.51 (0.22), 5 deg/s and up unchanged. The
+    work-in raises only the creep and stick end. Fit + 0.12+0.62, − 0.18+0.52, creep 0.64 A.
+  - **Design:** J 0.250 (4/16 coherent bands), wn 7.3 → kq 13.25, ki 38.6.
+  - **Validation:** usecase0 bearing 0.22 A, ramp+1 0.629, ramp−1 0.848; usecase1 bearing 0.27 A,
+    0.704 / 0.828; overshoot 1.34°. The run's own model predicted 0.845.
+  - **What happened:** the survey's full turns, the inertia sweep, the ladders and the circle check
+    (about 10 minutes of fast and wide motion) put the bearing back to rested before pass 1, so the
+    feedforward from the worked-in survey over-read by about 0.3 A: on ramp+1 it threw the axis 3.75°
+    ahead at 11.8 deg/s, and the axis stood (even sprang back) while the reference caught up.
+  - **What this settles about the bearing:** its slow friction follows its recent motion. A few
+    minutes of slow back-and-forth raise it by about 0.25 A at 1 deg/s; a few minutes of turning at
+    speed bring it back. Any one feedforward is right for one of the two states and about 0.25 A
+    wrong for the other, and at 1 deg/s the servo carries only about 0.1–0.15 A either way
+    (station and free-play simulator agree): over-read → slip ahead and stand (0.6–0.85), under-read
+    → stand and catch up (1.1–1.25).
