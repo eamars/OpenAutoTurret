@@ -55,6 +55,16 @@ function hudProject(u, v, lay) {
   return { ok: true, x: lay.ox + uu * lay.w, y: lay.oy + vv * lay.h };
 }
 
+// The inverse of hudProject: a viewport point (CSS px) as a normalised point of the wide frame, the
+// frame every published coordinate is in -- so a tap on the detail picture lands in it too (ADR-006).
+// ok is false for a point outside the picture (on a letterbox bar).
+function hudUnproject(x, y, lay) {
+  if (!lay || !lay.ok || !(lay.w > 0) || !(lay.h > 0)) return { ok: false, u: 0, v: 0 };
+  const k = (lay.k > 1) ? lay.k : 1;
+  const uu = (x - lay.ox) / lay.w, vv = (y - lay.oy) / lay.h;
+  return { ok: uu >= 0 && uu <= 1 && vv >= 0 && vv <= 1, u: 0.5 + (uu - 0.5) / k, v: 0.5 + (vv - 0.5) / k };
+}
+
 // Which camera is on the main display, from the station rather than from this page: only that one
 // is inferred (owner, 2026-10-02), so every page and every reload must agree. An absent or stale
 // inference report means "assume wide" -- every boot starts there.
@@ -617,6 +627,61 @@ function hudCalibrationBore(t, pace) {
     // Greyed when moving: the BORE row says why, once.
     wide: camera("wide", w),
     detail: camera("detail", d)
+  };
+}
+
+// ADR-006: the turret has settled when, over the last 0.6 s, neither axis has moved more than
+// 0.3 mrad. The yaw hold band is 4 mrad, so a payload pointed with the D-pad can settle a few mrad
+// from where it was sent: the procedure waits for this, and the operator checks the payload is still
+// on the target before tapping. samples: [{t: ms, yaw: rad, pitch: rad}], oldest first.
+const HUD_SETTLE_MS = 600, HUD_SETTLE_MRAD = 0.3;
+function hudSettled(samples, now) {
+  const recent = (samples || []).filter((s) => now - s.t <= HUD_SETTLE_MS && Number.isFinite(s.yaw) &&
+                                               Number.isFinite(s.pitch));
+  if (recent.length < 3 || now - recent[0].t < 0.8 * HUD_SETTLE_MS) return { ok: false, spread: null };
+  const span = (k) => Math.max.apply(null, recent.map((s) => s[k])) - Math.min.apply(null, recent.map((s) => s[k]));
+  const spread = 1000 * Math.max(span("yaw"), span("pitch"));
+  return { ok: spread <= HUD_SETTLE_MRAD, spread: spread };
+}
+
+// ADR-006 D6: the ZERO procedure. z is the page's own state: the target's distance as typed and the
+// camera whose next tap on the picture is armed. settle is hudSettled's verdict. Null on #1 (the BORE
+// rows say why) or with no record. The tap is the camera on the main display's.
+function hudCalibrationZero(t, z, settle) {
+  t = t || {}; z = z || {};
+  const cur = t.calibration_record;
+  if (!cur || !cur.id || cur.id === 1) return null;
+  const recs = Array.isArray(t.calibration_records) ? t.calibration_records : [];
+  const b = (recs.filter((x) => x.id === cur.id)[0] || {}).bore || {};
+  const on = b.mode === "manual_depth";
+  const hold = t.phase === "hold" && t.operating_mode === "MANUAL" && !t.calibration_switching && !t.rest_park;
+  const still = hold || t.phase === "idle";
+  const main = hudMainView(t).main;
+  const d = Number(z.distance), haveD = z.distance !== null && z.distance !== undefined && Number.isFinite(d) && d > 0;
+  const settled = !!(settle && settle.ok);
+  const offsets = ["wide", "detail"].map((cam) => {
+    const c = b[cam] || {};
+    const v = [c.right_mm, c.up_mm, c.forward_mm].map((x) => Math.round(Number(x) || 0));
+    return { cam: cam, label: cam.toUpperCase(), values: v, ui: on && still ? "zero:offset:" + cam : null,
+             text: v[0] + " R · " + v[1] + " U · " + v[2] + " F MM" };
+  });
+  const why = !on ? "turn the bore on first"
+    : !hold ? "zero in a MANUAL hold: MODE › MANUAL, then point the payload at the target"
+    : !haveD ? "type the target's distance first"
+    : !settled ? "wait until the turret has settled" : "";
+  const armed = !!z.armed && z.armed === main;
+  return {
+    on: on, hold: hold, main: main, offsets: offsets,
+    distance: { text: haveD ? hudBoreZeroName(d) : "NOT SET", ui: on ? "zero:distance" : null },
+    settle: !hold ? { text: "—", ok: false }
+      : settled ? { text: "SETTLED", ok: true }
+      : { text: "SETTLING" + (settle && settle.spread !== null ? " · " + settle.spread.toFixed(1) + " MRAD" : "…"), ok: false },
+    tap: armed ? { label: "CANCEL THE TAP", ui: "zero:cancel", armed: true,
+                   note: "tap the target on the " + main + " picture" }
+      : { label: "TAP THE TARGET · " + main.toUpperCase(), ui: why ? null : "zero:arm", armed: false,
+          note: why || "the payload is on the target: tap it on the " + main + " picture" },
+    // What the tap sends, less the point: zero_bore <camera> <metres> <u> <v>.
+    arg: haveD ? main + " " + d : null
   };
 }
 
@@ -1606,6 +1671,7 @@ function render(t) {
   const lay = hudLayout(vw, vh, iw, ih);
   const view = hudMainView(t);
   lay.k = view.k;
+  window.otaLastLayout = lay;   // ADR-006: a tap is unprojected through what was drawn
   if (window.otaPanesFollow) window.otaPanesFollow(view);
   svg.setAttribute("viewBox", "0 0 " + vw + " " + vh);
   svg.setAttribute("width", vw);
@@ -1960,10 +2026,19 @@ function paint(t) {
   // A refused calibration command repaints the panel once, to say why; other acks never do.
   const drawerChanged = drawerKey(lastTelemetry) !== drawerKey(t) ||
     (noteCalibrationAck(t) && drawerOpen === "CALIBRATION");
+  const settledBefore = hudSettled(calSamples, Date.now()).ok;
+  if (t && Number.isFinite(t.q_yaw_rad) && Number.isFinite(t.q_pitch_rad)) {
+    calSamples.push({ t: Date.now(), yaw: t.q_yaw_rad, pitch: t.q_pitch_rad });
+    while (calSamples.length && Date.now() - calSamples[0].t > 3000) calSamples.shift();
+  }
+  const settleFlipped = hudSettled(calSamples, Date.now()).ok !== settledBefore && drawerOpen === "CALIBRATION";
+  // An armed tap ends when its reason does: the turret left the MANUAL hold, or the cameras swapped.
+  if (calZero.armed && (!t || t.phase !== "hold" || t.operating_mode !== "MANUAL" || hudMainView(t).main !== calZero.armed))
+    disarmZero();
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   render(t);
-  if (drawerOpen && drawerChanged) renderDrawer();
+  if (drawerOpen && (drawerChanged || settleFlipped) && !calZero.armed) renderDrawer();
 }
 
 function updateStaleness(t) {
@@ -2221,6 +2296,9 @@ function renderTargetTypes(t) {
 
 // MENU > CALIBRATION (ADR-005): the panel takes the drawer's place, MENU stays lit, ‹ MENU goes back.
 let calRefusal = null, calSeenSeq = null;
+// ADR-006: the ZERO procedure's page state, and the turret's recent position for the settle check.
+let calZero = { distance: null, armed: null };
+const calSamples = [];
 function noteCalibrationAck(t) {
   // The station's word on a refused calibration command shows in the panel for a few seconds: these
   // refusals say something the operator must act on (#1 is the backup, the record cannot be read).
@@ -2336,10 +2414,108 @@ function renderCalibrationPanel(t) {
   h += '<div class="drow setting"><span class="rl">REMOVE</span><span class="stepper wrap">' +
        (removable || '<span class="snote">nothing to remove</span>') +
        "</span><span class=\"snote\">#1 is the shipped backup; the record in force can't be removed. Two presses.</span></div>";
-  h += '<div class="dsec">BORE</div>' + renderCalibrationBore(t);
+  h += '<div class="dsec">BORE</div>' + renderCalibrationBore(t) + renderCalibrationZero(t);
   h += '<div class="pstop">' + row(spec.stop) + "</div>";
   return h;
 }
+
+// ADR-006 D6: ZERO. Offsets per camera, the target's distance, the settle check, and the tap.
+function renderCalibrationZero(t) {
+  const s = hudCalibrationZero(t, calZero, hudSettled(calSamples, Date.now()));
+  if (!s) return "";
+  const chip = (text, ui) => '<button type="button" class="sbtn chip"' + (ui ? ' data-calui="' + ui + '"' : " disabled") +
+    ">" + escapeMarkup(text) + "</button>";
+  let h = '<div class="dsec">ZERO</div>';
+  h += s.offsets.map((o) => '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">' + o.label +
+    '</span><span class="stepper">' + chip(o.text, o.ui) + '</span><span class="snote">from the payload\'s aim axis</span></div>').join("");
+  h += '<div class="drow setting' + (s.on ? "" : " gated") + '"><span class="rl">TARGET</span><span class="stepper">' +
+       chip(s.distance.text, s.distance.ui) + '</span><span class="snote">the zero target\'s distance</span></div>';
+  h += '<div class="drow setting"><span class="rl">TURRET</span><span class="rn' + (s.settle.ok ? "" : " warn") + '">' +
+       escapeMarkup(s.settle.text) + "</span></div>";
+  h += '<button type="button" class="drow' + (s.tap.ui ? "" : " gated") + (s.tap.armed ? " confirm" : "") + '"' +
+       (s.tap.ui ? ' data-calui="' + s.tap.ui + '"' : " disabled") + '><span class="rl">' + escapeMarkup(s.tap.label) +
+       '</span><span class="rn">' + escapeMarkup(s.tap.note) + "</span></button>";
+  return h;
+}
+function zeroDistanceDialog() {
+  calibrationDialog('<div class="dt">ZERO TARGET</div><div class="dl">DISTANCE TO THE TARGET, METRES</div>' +
+    '<input inputmode="decimal" spellcheck="false" value="' + (calZero.distance === null ? "" : calZero.distance) + '">' +
+    '<div class="dn">Measured from the payload. The zero is made at this distance; the crosshairs are then right at ' +
+    'every distance, from the installation offsets.</div><div class="err dn warn"></div>' +
+    '<div class="db"><button type="button" data-k="ok">SET</button><button type="button" data-k="cancel">CANCEL</button></div>', (d) => {
+    const input = d.querySelector("input");
+    input.focus();
+    const ok = () => {
+      const v = Number(input.value.trim());
+      if (!(v >= 0.5 && v <= 5000)) { d.querySelector(".err").textContent = "A distance from 0.5 to 5000 m."; return; }
+      calZero.distance = v;
+      closeCalibrationDialog();
+      renderDrawer();
+    };
+    d.querySelector('[data-k="ok"]').onclick = ok;
+    d.querySelector('[data-k="cancel"]').onclick = closeCalibrationDialog;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") ok(); if (e.key === "Escape") closeCalibrationDialog(); });
+  });
+}
+function zeroOffsetDialog(cam) {
+  const s = hudCalibrationZero(lastTelemetry || {}, calZero, null);
+  const o = s && s.offsets.filter((x) => x.cam === cam)[0];
+  if (!o) return;
+  const field = (label, v) => '<div class="dl">' + label + '</div><input inputmode="decimal" spellcheck="false" value="' + v + '">';
+  calibrationDialog('<div class="dt">' + o.label + ' CAMERA · INSTALLATION OFFSET</div>' +
+    field("RIGHT OF THE PAYLOAD'S AIM AXIS, MM (SEEN FROM BEHIND)", o.values[0]) +
+    field("UP, MM", o.values[1]) + field("FORWARD, MM", o.values[2]) +
+    '<div class="dn">A new offset needs a new zero for this camera.</div><div class="err dn warn"></div>' +
+    '<div class="db"><button type="button" data-k="ok">SET</button><button type="button" data-k="cancel">CANCEL</button></div>', (d) => {
+    const inputs = d.querySelectorAll("input");
+    inputs[0].focus();
+    const ok = () => {
+      const v = Array.prototype.map.call(inputs, (i) => Number(i.value.trim()));
+      if (!v.every((x) => Number.isFinite(x) && Math.abs(x) <= 1000)) {
+        d.querySelector(".err").textContent = "Each offset is a number of millimetres, at most 1000 either way.";
+        return;
+      }
+      sendCommand("set_bore_offset", cam + " " + v.join(" "));
+      closeCalibrationDialog();
+    };
+    d.querySelector('[data-k="ok"]').onclick = ok;
+    d.querySelector('[data-k="cancel"]').onclick = closeCalibrationDialog;
+  });
+}
+// The tap: the drawer steps aside so the whole picture can be tapped; a bar says what to do.
+function armZero() {
+  const s = hudCalibrationZero(lastTelemetry || {}, calZero, hudSettled(calSamples, Date.now()));
+  if (!s || s.tap.ui !== "zero:arm") return;
+  calZero.armed = s.main;
+  const bar = document.createElement("div");
+  bar.id = "zerobar";
+  bar.innerHTML = '<span>TAP THE TARGET ON THE ' + s.main.toUpperCase() + ' PICTURE</span><button type="button">CANCEL</button>';
+  bar.querySelector("button").onclick = (e) => { e.stopPropagation(); disarmZero(); };
+  $("viewport").appendChild(bar);
+  $("viewport").classList.add("zeroing");
+  drawer.hidden = true;
+}
+function disarmZero() {
+  calZero.armed = null;
+  const bar = $("zerobar");
+  if (bar) bar.remove();
+  $("viewport").classList.remove("zeroing");
+  if (drawerOpen) renderDrawer();
+}
+$("viewport").addEventListener("pointerdown", (e) => {
+  // A press on a control (the bar, a dialog, the D-pad, the dock) is that control's, never a zero tap.
+  if (!calZero.armed || (e.target && e.target.closest &&
+                         e.target.closest("#zerobar, #caldlg, #manual-pad, #dock, #drawer, #pip, button"))) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const s = hudCalibrationZero(lastTelemetry || {}, calZero, hudSettled(calSamples, Date.now()));
+  const rect = $("viewport").getBoundingClientRect();
+  const p = hudUnproject(e.clientX - rect.left, e.clientY - rect.top, window.otaLastLayout);
+  if (!s || !s.arg || s.main !== calZero.armed) { disarmZero(); return; }
+  if (!p.ok) { $("zerobar").querySelector("span").textContent = "TAP INSIDE THE PICTURE"; return; }
+  sendCommand("zero_bore", s.arg + " " + p.u.toFixed(6) + " " + p.v.toFixed(6));
+  disarmZero();
+}, true);
 
 // Dialogs sit outside the drawer: its repaint rewrites its innerHTML, which would wipe an input.
 let calDialog = null;
@@ -2581,6 +2757,10 @@ drawer.addEventListener("click", (e) => {
     else if (k === "new") newCalibrationDialog();
     else if (k === "newcopy") newCalibrationDialog(1);
     else if (k.indexOf("pace:") === 0) { calPace = Number(k.slice(5)); renderDrawer(); }
+    else if (k === "zero:distance") zeroDistanceDialog();
+    else if (k.indexOf("zero:offset:") === 0) zeroOffsetDialog(k.slice(12));
+    else if (k === "zero:arm") armZero();
+    else if (k === "zero:cancel") disarmZero();
     else if (k.indexOf("opt:") === 0) { const o = k.slice(4); calRerunOpts[o] = !calRerunOpts[o]; pendingConfirm = null; renderDrawer(); }
     return;
   }
@@ -2880,6 +3060,13 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 #caldlg .dl { color:rgba(237,242,235,.55); font-size:9px; letter-spacing:.08em; margin:7px 0 3px; }
 #caldlg .dn { font-size:9px; color:rgba(237,242,235,.6); margin-top:6px; }
 #caldlg .warn { color:#f2b329; }
+/* ADR-006: an armed ZERO tap. The drawer steps aside; the bar says what to do and cancels. */
+#viewport.zeroing { cursor:crosshair; }
+#zerobar { position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:40; display:flex; gap:10px;
+           align-items:center; padding:6px 10px; background:rgba(2,5,4,.9); border:1px solid #f2b329; border-radius:2px;
+           font:500 11px/1.4 var(--hud-mono); letter-spacing:.1em; color:#f2b329; max-width:92vw; }
+#zerobar button { height:22px; font:inherit; font-size:10px; color:#f2b329; background:transparent;
+                  border:1px solid rgba(242,179,41,.6); border-radius:3px; padding:0 8px; cursor:pointer; }
 #caldlg input { width:100%; box-sizing:border-box; height:26px; background:rgba(149,245,139,.06); color:#edf2eb;
                 border:1px solid rgba(149,245,139,.38); border-radius:3px; font:inherit; font-size:12px;
                 letter-spacing:.08em; text-transform:uppercase; padding:0 6px; }

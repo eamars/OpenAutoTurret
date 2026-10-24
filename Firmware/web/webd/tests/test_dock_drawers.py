@@ -49,7 +49,8 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                         "\nmodule.exports = { hudDockSpecs, hudDrawerActions, hudDiagRows, hudTargetTypeChips,"
                         " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey,"
                         " hudCalibrationEntry, hudCalibrationPanel, hudCalibrationBore, hudBoreZeroName,"
-                        " hudCalibrationRun, hudRerunKind, hudCalibrationLastRun };\n")
+                        " hudCalibrationRun, hudRerunKind, hudCalibrationLastRun, hudCalibrationZero, hudSettled,"
+                        " hudUnproject, hudProject };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -462,6 +463,70 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertEqual((odd["range"]["down"], odd["range"]["up"]), ("25", "50"))
         self.assertEqual(self._node("console.log(JSON.stringify([T.hudBoreZeroName(1e6), T.hudBoreZeroName(10), "
                                     "T.hudBoreZeroName(0.5)]));"), ["∞", "10 m", "0.5 m"])
+
+    # ADR-006 D6: the ZERO procedure.
+    def _zero(self, z=None, settle=None, bore=None, **t):
+        recs = json.loads(json.dumps(self.CAL_RECORDS))
+        recs[1]["bore"] = bore if bore is not None else dict(self.ON, wide=dict(self.ON["wide"], forward_mm=0),
+                                                             detail={"right_mm": 145, "up_mm": 40, "forward_mm": 0})
+        t.setdefault("calibration_records", recs)
+        t.setdefault("calibration_record", {"id": 2, "name": "FRICTION 10-20"})
+        return self._node("console.log(JSON.stringify(T.hudCalibrationZero(%s, %s, %s)));" % (
+            json.dumps(t), json.dumps(z or {"distance": None, "armed": None}), json.dumps(settle)))
+
+    def test_zero_walks_through_hold_distance_and_settle_before_the_tap(self) -> None:
+        roam = self._zero(phase="hold", operating_mode="AUTO_ROAM")
+        self.assertIsNone(roam["tap"]["ui"])
+        self.assertIn("MANUAL hold", roam["tap"]["note"])
+        nod = self._zero(phase="hold", operating_mode="MANUAL", settle={"ok": True, "spread": 0.1})
+        self.assertEqual(nod["tap"]["note"], "type the target's distance first")
+        self.assertEqual(nod["distance"]["text"], "NOT SET")
+        moving = self._zero({"distance": 37.5, "armed": None}, {"ok": False, "spread": 1.84}, phase="hold", operating_mode="MANUAL")
+        self.assertEqual(moving["settle"]["text"], "SETTLING · 1.8 MRAD")
+        self.assertIsNone(moving["tap"]["ui"])
+        ready = self._zero({"distance": 37.5, "armed": None}, {"ok": True, "spread": 0.1}, phase="hold", operating_mode="MANUAL")
+        self.assertEqual((ready["tap"]["ui"], ready["tap"]["label"]), ("zero:arm", "TAP THE TARGET · WIDE"))
+        self.assertEqual(ready["arg"], "wide 37.5")
+        self.assertEqual(ready["distance"]["text"], "37.5 m")
+        self.assertEqual([o["text"] for o in ready["offsets"]], ["75 R · 75 U · 0 F MM", "145 R · 40 U · 0 F MM"])
+        armed = self._zero({"distance": 37.5, "armed": "wide"}, {"ok": True, "spread": 0.1}, phase="hold", operating_mode="MANUAL")
+        self.assertEqual((armed["tap"]["ui"], armed["tap"]["label"]), ("zero:cancel", "CANCEL THE TAP"))
+        # The detail camera on the main display: its tap.
+        det = self._zero({"distance": 37.5, "armed": None}, {"ok": True, "spread": 0.1}, phase="hold", operating_mode="MANUAL",
+                         inference={"main_camera": {"role": "detail", "views": {"detail": {"scale": 5.9}},
+                                                    "available": ["wide", "detail"]}})
+        self.assertEqual((det["tap"]["label"], det["arg"]), ("TAP THE TARGET · DETAIL", "detail 37.5"))
+        self.assertIsNone(self._zero(calibration_record={"id": 1, "name": "AS SHIPPED"}), "#1: the BORE rows say why")
+        off = self._zero(bore={"mode": "off"}, phase="hold", operating_mode="MANUAL")
+        self.assertEqual(off["tap"]["note"], "turn the bore on first")
+        self.assertIsNone(off["offsets"][0]["ui"])
+
+    def test_the_settle_check_wants_0_6_s_within_0_3_mrad(self) -> None:
+        still = [{"t": i * 100, "yaw": 1.0 + 1e-5 * (i % 2), "pitch": -0.1} for i in range(8)]
+        drift = [{"t": i * 100, "yaw": 1.0 + 2e-4 * i, "pitch": -0.1} for i in range(8)]
+        r = self._node("console.log(JSON.stringify([T.hudSettled(%s, 700), T.hudSettled(%s, 700), T.hudSettled(%s, 250)]));"
+                       % (json.dumps(still), json.dumps(drift), json.dumps(still[:3])))
+        self.assertTrue(r[0]["ok"])
+        self.assertFalse(r[1]["ok"])
+        self.assertAlmostEqual(r[1]["spread"], 1.2, places=6)
+        self.assertFalse(r[2]["ok"], "too short a history is not yet settled")
+
+    def test_a_tap_unprojects_into_the_wide_frame_on_either_picture(self) -> None:
+        # hudUnproject undoes hudProject, with the detail picture's scale too; a letterbox bar is not a tap.
+        r = self._node(
+            "const out = [];"
+            "for (const k of [1, 5.9]) { const lay = Object.assign(T.hudLayout ? {} : {}, {ok: true, s: 0.5, ox: 0, oy: 60,"
+            " w: 960, h: 540, k: k});"
+            "  for (const [u, v] of [[0.5, 0.5], [0.48, 0.53], [0.52, 0.47]]) {"
+            "    const p = T.hudProject(u, v, lay), q = T.hudUnproject(p.x, p.y, lay); out.push([q.ok, q.u - u, q.v - v]); } }"
+            "const lay = {ok: true, s: 0.5, ox: 0, oy: 60, w: 960, h: 540, k: 1};"
+            "out.push(T.hudUnproject(400, 30, lay).ok);"
+            "console.log(JSON.stringify(out));")
+        for ok, du, dv in r[:-1]:
+            self.assertTrue(ok)
+            self.assertAlmostEqual(du, 0, places=12)
+            self.assertAlmostEqual(dv, 0, places=12)
+        self.assertFalse(r[-1], "the bar above the picture")
 
     def test_a_moving_turret_offers_the_hold_and_nothing_else(self) -> None:
         roam = self._bore(bore=self.ON, phase="hold", operating_mode="AUTO_ROAM")
