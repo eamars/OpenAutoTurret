@@ -35,7 +35,11 @@ struct RawFrame {
   uint32_t id{0};
   uint8_t dlc{8};
   uint8_t data[8]{};
-  ota::TimeNs rx_ns{0};  // monotonic timestamp at receipt
+  ota::TimeNs rx_ns{0};  // monotonic timestamp at receipt: the kernel's, when the socket gives one
+  // The kernel's receipt stamp on CLOCK_REALTIME (0 when none), and when the receive thread dequeued
+  // the frame: the evidence a calibration journal keeps (ADR-005 D7.4).
+  ota::TimeNs rx_realtime_ns{0};
+  ota::TimeNs dequeue_ns{0};
   bool extended{true};
   bool rtr{false};
   bool error{false};

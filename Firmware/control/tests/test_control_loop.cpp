@@ -24,6 +24,8 @@
 #include "sim/sim_motor_backend.hpp"
 #include "blocking_sink.hpp"
 #include "calibration_fixture.hpp"
+#include "plant.hpp"
+#include <yaml-cpp/yaml.h>
 
 #include <gtest/gtest.h>
 
@@ -954,6 +956,54 @@ TEST(CalibrationRun, APitchSessionRunsWhileYawHoldsAndTheRunEndsInTheModeItInter
   EXPECT_FALSE(h.loop->calibrating());
   EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam) << "the mode the run interrupted";
   EXPECT_NE(f.run_json().find("\"state\":\"done\""), std::string::npos);
+  EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
+}
+
+TEST(CalibrationRun, AYawSessionRunsWhilePitchHoldsAndProductionTakesYawBackWhereItEnded) {
+  RunFixture f;
+  auto& h = f.h;
+  const auto asset = YAML::LoadFile((ota_cal_fixture::firmware() / "config/servo/yaw_servo.json").string());
+  h.sim->set_yaw_session_plant(axis::yaw_plant_from_yaml(asset["plant"]));
+  const int id = f.begin();
+  // calibd's yaw manifest: the asset's servo, a hold, a 0.2 rad ramp in 2 s and a hold.
+  YAML::Node m;
+  m["schema"] = "adr0022.yaw-control/1";
+  m["purpose"] = "yaw_shared_core_3a";
+  m["yaw_current_bound_A"] = asset["servo_parameters"]["current_cap"];
+  m["servo_parameters"] = asset["servo_parameters"];
+  m["servo_motor_temperature_limit_C"] = 55;
+  m["servo_speed_limit_rad_s"] = 1.75;
+  m["servo_hold_after_s"] = 0.5;
+  for (int k = 0; k <= 175; ++k) {
+    const double ts = k * 0.02;
+    YAML::Node r;
+    r["time_s"] = ts;
+    r["position_rad"] = 0.2 * std::clamp((ts - 0.5) / 2.0, 0.0, 1.0);
+    r["velocity_rad_s"] = ts > 0.5 && ts < 2.5 ? 0.1 : 0.0;
+    r["acceleration_rad_s2"] = 0.0;
+    m["reference_samples"].push_back(r);
+  }
+  YAML::Emitter e;
+  e << YAML::Flow << m;
+  const auto dir = f.s.dir / "runs" / "rerun-02-probe";
+  ota_cal_fixture::write(dir / "manifest.json", e.c_str());
+  const double yaw0 = h.sim->position(AxisId::Yaw), pitch0 = h.sim->position(AxisId::Pitch);
+  h.run("calibration_session", (std::to_string(id) + " yaw " + (dir / "manifest.json").string()).c_str());
+  EXPECT_EQ(h.snap().cmd_ack_accepted, 1) << h.snap().cmd_ack_reason;
+  EXPECT_TRUE(h.sim->session_owns_yaw());
+  f.until_session_ends();
+  EXPECT_FALSE(h.sim->session_owns_yaw());
+  EXPECT_NE(f.run_json().find("\"last_session\":\"rerun-02-probe: COMPLETE\""), std::string::npos) << f.run_json();
+  EXPECT_NEAR(h.sim->position(AxisId::Yaw), yaw0 + 0.2, 0.005);
+  EXPECT_NEAR(h.sim->position(AxisId::Pitch), pitch0, 1e-3) << "pitch held through the yaw session";
+  // Production holds yaw where the session left it: no drive back to where the run began.
+  const double after = h.sim->position(AxisId::Yaw);
+  h.step(200);
+  EXPECT_NEAR(h.sim->position(AxisId::Yaw), after, 2e-3);
+  EXPECT_TRUE(eventually([&] { return file_text(dir / "yaw-control.jsonl").find("\"status\":\"COMPLETE\"") != std::string::npos; }));
+  EXPECT_NE(file_text(dir / "yaw-control.jsonl").find("\"kind\":\"idle_axis\",\"axis\":\"pitch\""), std::string::npos);
+  h.run("calibration_finish", (std::to_string(id) + " ACCEPTED").c_str());
+  EXPECT_EQ(h.loop->operating_mode(), OperatingMode::AutoRoam);
   EXPECT_EQ(h.loop->phase(), Phase::Hold) << h.loop->fault_reason();
 }
 

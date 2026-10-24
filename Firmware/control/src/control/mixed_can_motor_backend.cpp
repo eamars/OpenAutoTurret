@@ -386,7 +386,8 @@ void MixedCanMotorBackend::on_yaw_frame(const can::RawFrame& frame) {
     yaw_origin_rad_ = 0;
   }
   yaw_state_.position_true_rad = std::numeric_limits<double>::quiet_NaN();
-  if (yaw_servo_active_) step_yaw_servo_locked(decoded.rx_ns);
+  if (yaw_session_) step_yaw_session_locked(decoded, frame);
+  else if (yaw_servo_active_) step_yaw_servo_locked(decoded.rx_ns);
 }
 
 bool MixedCanMotorBackend::absolute_angle_offset(AxisId axis, double& offset_rad) const {
@@ -516,6 +517,10 @@ void MixedCanMotorBackend::trip_yaw_locked(const char* condition) {
   yaw_trip_.store(true);
   yaw_motion_allowed_.store(false);
   yaw_servo_active_ = false;
+  if (yaw_session_) {   // a trip ends a calibration session too (ADR-005 D7)
+    yaw_session_->abandon("the yaw guard tripped");
+    yaw_session_.reset();
+  }
   yaw_position_mode_ = yaw_speed_mode_ = false;
   yaw_position_target_rad_ = yaw_state_.position_rad;
   yaw_speed_target_rad_s_ = yaw_shaped_speed_rad_s_ = 0;
@@ -1016,6 +1021,10 @@ void MixedCanMotorBackend::deenergize(AxisId axis) {
     return;
   }
   std::lock_guard lock(yaw_mutex_);
+  if (yaw_session_) {
+    yaw_session_->abandon("the yaw axis was de-energised");
+    yaw_session_.reset();
+  }
   release_yaw_servo_locked();
   yaw_motion_allowed_.store(false);
   yaw_position_mode_ = yaw_speed_mode_ = false;
@@ -1115,6 +1124,7 @@ void MixedCanMotorBackend::command(AxisId axis, double q_ref_rad,
     return;
   }
   std::lock_guard lock(yaw_mutex_);
+  if (yaw_session_) return;
   release_yaw_servo_locked();
   // Read after the release: it restarts the legacy loop at its own clock reading, and a command
   // stamped earlier is a step backwards in time that latches velocity_loop_invalid (station,
@@ -1139,6 +1149,7 @@ void MixedCanMotorBackend::command_velocity(AxisId axis, double velocity_rad_s) 
     return;
   }
   std::lock_guard lock(yaw_mutex_);
+  if (yaw_session_) return;
   release_yaw_servo_locked();
   const auto now = clock_();  // after the release, as in command()
   if (!std::isfinite(velocity_rad_s)) {
@@ -1279,7 +1290,23 @@ void MixedCanMotorBackend::release_yaw_servo_locked() {
 bool MixedCanMotorBackend::begin_calibration_session(const std::shared_ptr<calibration::Session>& session,
                                                       const calibration::PitchWindow& window, std::string& err) {
   if (!session) { err = "no session"; return false; }
-  if (session->axis() != AxisId::Pitch) { err = "yaw sessions are not run by controld yet"; return false; }
+  if (session->axis() == AxisId::Yaw) {
+    auto yaw = std::dynamic_pointer_cast<calibration::YawSession>(session);
+    if (!yaw) { err = "not a yaw session"; return false; }
+    if (pitch_session_owns_axis()) { err = "a session is already running"; return false; }
+    std::lock_guard lock(yaw_mutex_);
+    if (yaw_session_) { err = "a session is already running"; return false; }
+    if (!yaw_servo_configured_ || yaw_trip_.load() || !yaw_motion_allowed_.load()) {
+      err = "the yaw servo is not available";
+      return false;
+    }
+    // The session's servo starts from the current production was applying: no step at the hand-over.
+    yaw->set_entry_current(yaw_servo_active_ ? yaw_last_output_.load() : 0.0);
+    release_yaw_servo_locked();
+    yaw_session_ = std::move(yaw);
+    spdlog::info("calibration: yaw session {} takes the axis at q={:+.5f} rad", session->label(), yaw_state_.position_rad);
+    return true;
+  }
   auto pitch = std::dynamic_pointer_cast<calibration::PitchSession>(session);
   std::lock_guard lock(pitch_servo_mutex_);
   if (!pitch) { err = "not a pitch session"; return false; }
@@ -1298,6 +1325,18 @@ bool MixedCanMotorBackend::begin_calibration_session(const std::shared_ptr<calib
 }
 
 void MixedCanMotorBackend::release_calibration_session() {
+  {
+    std::lock_guard lock(yaw_mutex_);
+    if (yaw_session_) {
+      // Production's servo re-engages with the next reference, from the zero current the session
+      // ended on.
+      spdlog::info("calibration: yaw session {} hands the axis back at q={:+.5f} rad", yaw_session_->label(),
+                   yaw_state_.position_rad);
+      yaw_session_->abandon("released");
+      yaw_session_.reset();
+      return;
+    }
+  }
   std::lock_guard lock(pitch_servo_mutex_);
   if (!pitch_session_) return;
   spdlog::info("calibration: pitch session {} hands the axis back", pitch_session_->label());
@@ -1316,6 +1355,37 @@ void MixedCanMotorBackend::end_pitch_session(const char* why) {
   if (!pitch_session_) return;
   pitch_session_->abandon(why);
   pitch_session_.reset();
+}
+
+void MixedCanMotorBackend::step_yaw_session_locked(const gm6020::Feedback& d, const can::RawFrame& frame) {
+  const auto now = clock_();
+  // Production's guards come first, as for its servo: unsafe feedback or an unhealthy bus is the
+  // guard's call; a trip, a withdrawn permission or a silent control loop ends the session.
+  if (!yaw_feedback_safe_locked(now) || !yaw_bus_healthy()) return;
+  if (yaw_trip_.load() || !yaw_motion_allowed_.load() || !heartbeat_seen_.load() ||
+      now - heartbeat_ns_.load() > kHeartbeatLimitNs) {
+    yaw_session_->abandon("the yaw guard stopped the axis");
+    send_yaw_zero_locked();
+    return;
+  }
+  calibration::YawFrame f;
+  f.rx_ns = frame.rx_ns;
+  f.rx_realtime_ns = frame.rx_realtime_ns;
+  f.dequeue_ns = frame.dequeue_ns;
+  f.angle_count = d.angle_count;
+  f.speed_rpm = d.speed_rpm;
+  f.current_raw = d.current_raw;
+  f.temperature_raw = d.temperature_raw;
+  f.current_a = d.current_a();
+  const double u = yaw_session_->control(now, f);
+  if (!std::isfinite(u)) return;
+  yaw_last_command_ns_ = now;   // the session is the one commanding the axis
+  yaw_output_reason_ = 1;
+  const double peak = std::min(yaw_session_->current_bound(), profile_.servo->yaw_current_limit_a);
+  const auto begin = clock_();
+  const bool sent = send_yaw_output_locked(gm6020::servo_current_frame(profile_.yaw.motor_id, u, peak), u);
+  yaw_session_->sent(sent, sent ? yaw_last_output_.load() : 0.0,
+                     gm6020::current_raw_uncapped(std::clamp(u, -peak, peak)), begin, clock_());
 }
 
 void MixedCanMotorBackend::step_pitch_session_locked() {
@@ -1395,6 +1465,10 @@ bool MixedCanMotorBackend::command_reference(AxisId axis, const ServoReference& 
     return true;
   }
   std::lock_guard lock(yaw_mutex_);
+  if (yaw_session_) {   // the session's axis: taken, not followed
+    yaw_last_command_ns_ = clock_();
+    return true;
+  }
   if (!yaw_servo_configured_) return false;
   const auto now = clock_();
   yaw_last_command_ns_ = now;

@@ -4759,7 +4759,9 @@ void ControlLoop::execute_calibration_run_command(const std::string& name, const
     }
     std::string why;
     if (run_.active) why = "run " + std::to_string(run_.id) + " is in progress";
-    else if (phase_ != Phase::Hold || !homed_) why = "HOME first: a run needs a homed turret";
+    // position_ready(), not homed_: a continuous yaw is never "homed" (no endpoint), yet a homed
+    // pitch and a valid yaw session reference are exactly what a run needs.
+    else if (phase_ != Phase::Hold || !position_ready()) why = "HOME first: a run needs a homed turret";
     else if (rest_park_.stage != RestPark::Off) why = "parked: choose a mode, then run";
     else if (hold_.active) why = "a switch is holding the turret; run once it ends";
     else if (!gyro) why = "the IMU gyro is not fresh, and every session needs it";
@@ -6100,7 +6102,10 @@ web::CommandResult ControlLoop::submit_command(const std::string& name,
     else if (axis == "pitch")
       session = calibration::PitchSession::make(text, (manifest.parent_path() / "sensorless-homing.jsonl").string(),
                                                 manifest.parent_path().filename().string(), err);
-    else err = "yaw sessions are not run by controld yet";
+    else if (axis == "yaw")
+      session = calibration::YawSession::make(text, (manifest.parent_path() / "yaw-control.jsonl").string(),
+                                              manifest.parent_path().filename().string(), err);
+    else err = "a session is on pitch or yaw";
     if (!session) {
       r.ok = false;
       r.error = "session not prepared: " + err;

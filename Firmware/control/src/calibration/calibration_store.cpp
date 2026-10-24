@@ -307,6 +307,8 @@ bool json_number(const std::string& s) {
   return i == s.size();
 }
 
+}  // namespace
+
 // yaml-cpp reads JSON but writes YAML; record.json is read by the Python tool with json.loads, so
 // it is written back as JSON. A quoted scalar stays a string ("!" tag); a plain one is written as it
 // was when it is a JSON number, true, false or null.
@@ -331,6 +333,8 @@ std::string to_json(const YAML::Node& n, int indent) {
   if (n.Tag() != "!" && (json_number(v) || v == "true" || v == "false" || v == "null")) return v;
   return "\"" + esc(v) + "\"";
 }
+
+namespace {
 
 std::string now_local() {
   const std::time_t t = std::time(nullptr);

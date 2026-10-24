@@ -11,9 +11,12 @@
 #pragma once
 
 #include <cmath>
+#include <optional>
 
 #include "calibration/calibration_session.hpp"
 #include "control/motor_backend.hpp"
+#include "can/gm6020_protocol.hpp"
+#include "plant.hpp"
 #include "control/motor_recovery_check.hpp"
 
 namespace ota::sim {
@@ -31,11 +34,23 @@ class SimMotorBackend : public MotorBackend {
   int servo_swaps() const { return servo_swaps_; }
   // ADR-005 D7: the simulator runs a pitch session on its speed-mode plant, stepped once a control
   // cycle (it has no servo threads); the control loop's own pitch commands stand aside meanwhile.
+  // A yaw session runs on the identified yaw plant (axis_control_core's model, as servo-sim): the test
+  // hands it the plant, the session's current drives it at 1 kHz, and the simulated yaw follows it.
+  void set_yaw_session_plant(const axis::YawPlantParameters& p) { yaw_plant_parameters_ = p; }
   bool begin_calibration_session(const std::shared_ptr<calibration::Session>& session,
                                  const calibration::PitchWindow& window, std::string& err) override {
+    if (pitch_session_ || yaw_session_) { err = "a session is already running"; return false; }
+    if (auto yaw = std::dynamic_pointer_cast<calibration::YawSession>(session)) {
+      if (!yaw_plant_parameters_) { err = "the simulator has no yaw plant (set_yaw_session_plant)"; return false; }
+      yaw_plant_.emplace(*yaw_plant_parameters_, kYawPlantOrigin);
+      yaw_session_q0_ = axes_[ix(AxisId::Yaw)].q;
+      yaw_session_t_ns_ = 0;
+      yaw_session_ = std::move(yaw);
+      ++sessions_;
+      return true;
+    }
     auto pitch = std::dynamic_pointer_cast<calibration::PitchSession>(session);
-    if (!pitch) { err = "the simulator runs pitch sessions only"; return false; }
-    if (pitch_session_) { err = "a session is already running"; return false; }
+    if (!pitch) { err = "not a session the simulator runs"; return false; }
     auto& ax = axes_[ix(AxisId::Pitch)];
     session_was_position_ = ax.in_position_mode;
     ax.in_position_mode = false;
@@ -47,6 +62,14 @@ class SimMotorBackend : public MotorBackend {
     return true;
   }
   void release_calibration_session() override {
+    if (yaw_session_) {
+      yaw_session_->abandon("released");
+      yaw_session_.reset();
+      auto& ax = axes_[ix(AxisId::Yaw)];
+      ax.target = ax.q;
+      ax.v = 0.0;
+      return;
+    }
     if (!pitch_session_) return;
     pitch_session_->abandon("released");
     pitch_session_.reset();
@@ -55,12 +78,41 @@ class SimMotorBackend : public MotorBackend {
     if (session_was_position_) { ax.in_speed_mode = false; ax.in_position_mode = true; ax.target = ax.q; }
   }
   void advance_calibration_session(TimeNs now) override {
+    if (yaw_session_) {
+      // GM6020 frames at 1 kHz up to now, as the receive thread would deliver them.
+      if (!yaw_session_t_ns_) yaw_session_t_ns_ = now - 5'000'000;
+      const auto& p = *yaw_plant_parameters_;
+      const double quantum = 2 * 3.14159265358979323846 / 8192;
+      for (; yaw_session_t_ns_ + 1'000'000 <= now; yaw_session_t_ns_ += 1'000'000) {
+        const double sampled_t = (yaw_session_t_ns_ + 1'000'000) * 1e-9;
+        yaw_plant_->advance(sampled_t);
+        const double sampled = yaw_plant_->position(), receipt = sampled_t + p.encoder_delay_s;
+        yaw_plant_->advance(receipt);
+        const double reading = yaw_plant_->reading(sampled, receipt);
+        calibration::YawFrame f;
+        f.rx_ns = static_cast<TimeNs>(receipt * 1e9);
+        f.dequeue_ns = f.rx_ns;
+        f.angle_count = static_cast<uint16_t>(((std::llround(reading / quantum) % 8192) + 8192) % 8192);
+        f.temperature_raw = 35;
+        const TimeNs at = f.rx_ns + 200'000;
+        const double u = yaw_session_->control(at, f);
+        if (!std::isfinite(u)) continue;
+        const int raw = gm6020::current_raw_uncapped(u);
+        yaw_plant_->command(at * 1e-9, raw * gm6020::kAmpsPerRaw);
+        yaw_session_->sent(true, raw * gm6020::kAmpsPerRaw, raw, at, at + 30'000);
+      }
+      auto& ax = axes_[ix(AxisId::Yaw)];
+      ax.q = yaw_session_q0_ + (yaw_plant_->position() - kYawPlantOrigin);
+      ax.v = yaw_plant_->velocity();
+      return;
+    }
     if (!pitch_session_) return;
     auto& ax = axes_[ix(AxisId::Pitch)];
     ax.spd_ref = pitch_session_->step(now, measured(ax, now), now, ax.torque, session_window_);
   }
   int sessions() const { return sessions_; }
   bool session_owns_pitch() const { return pitch_session_ != nullptr; }
+  bool session_owns_yaw() const { return yaw_session_ != nullptr; }
   void set_refuse_servo_swap(bool refuse) { refuse_servo_swap_ = refuse; }
   void set_recovery_before_homing(bool enabled) { pre_home_recovery_ = enabled; }
   bool recovery_before_homing() const override { return pre_home_recovery_; }
@@ -172,6 +224,10 @@ class SimMotorBackend : public MotorBackend {
       pitch_session_->abandon("the pitch axis was de-energised");
       pitch_session_.reset();
     }
+    if (axis == AxisId::Yaw && yaw_session_) {
+      yaw_session_->abandon("the yaw axis was de-energised");
+      yaw_session_.reset();
+    }
     auto& ax = axes_[ix(axis)];
     ax.deenergized = true;
     ax.in_position_mode = false;
@@ -197,6 +253,7 @@ class SimMotorBackend : public MotorBackend {
   }
   void command(AxisId axis, double q_ref_rad, double limit_spd_rad_s) override {
     if (axis == AxisId::Pitch && pitch_session_) { advance(ix(axis)); return; }
+    if (axis == AxisId::Yaw && yaw_session_) return;   // the plant moves it
     auto& ax = axes_[ix(axis)];
     ax.target = q_ref_rad;
     ax.limit_spd = limit_spd_rad_s;
@@ -204,6 +261,7 @@ class SimMotorBackend : public MotorBackend {
   }
   void command_velocity(AxisId axis, double velocity_rad_s) override {
     if (axis == AxisId::Pitch && pitch_session_) { advance(ix(axis)); return; }
+    if (axis == AxisId::Yaw && yaw_session_) return;
     auto& ax = axes_[ix(axis)];
     ax.spd_ref = velocity_rad_s;
     advance(ix(axis));
@@ -226,6 +284,12 @@ class SimMotorBackend : public MotorBackend {
   calibration::PitchWindow session_window_{};
   bool session_was_position_ = false;
   int sessions_ = 0;
+  static constexpr double kYawPlantOrigin = 1.0;   // the plant's absolute angle where a session begins
+  std::shared_ptr<calibration::YawSession> yaw_session_;
+  std::optional<axis::YawPlantParameters> yaw_plant_parameters_;
+  std::optional<axis::YawPlant> yaw_plant_;
+  double yaw_session_q0_ = 0.0;
+  TimeNs yaw_session_t_ns_ = 0;
   static size_t ix(AxisId a) { return static_cast<size_t>(a); }
   struct Axis;
   // The encoder reading of the true position (set_encoder). The noise is a hash of the sample time,

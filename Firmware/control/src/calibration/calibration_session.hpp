@@ -13,16 +13,19 @@
 // - the control thread watches state() and, once the session is Holding, re-anchors production's
 //   hold and releases the axis;
 // - the calibration writer thread writes the footer (finish()).
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "capture/journal.hpp"
 #include "common/types.hpp"
 #include "position_loop.hpp"
+#include "servo.hpp"
 #include "session_parts.hpp"
 
 namespace ota::calibration {
@@ -116,6 +119,62 @@ class PitchSession final : public Session {
   double min_ = 0, max_ = 0, centre_ = 0, slack_ = 0, origin_ = 0, approach_s_ = 0;
   TimeNs begin_ns_ = 0, next_ns_ = 0, last_ns_ = 0;
   double command_ = 0, hold_q_ = 0;
+};
+
+// What one GM6020 feedback frame gives a yaw session.
+struct YawFrame {
+  TimeNs rx_ns = 0, rx_realtime_ns = 0, dequeue_ns = 0;   // the kernel's receipt, and the dequeue
+  uint16_t angle_count = 0;
+  int16_t speed_rpm = 0, current_raw = 0;
+  uint8_t temperature_raw = 0;
+  double current_a = 0;
+};
+
+// commissiond's yaw servo session (yaw_control_session.cpp): its own axis::Servo with the manifest's
+// parameters, stepped on every GM6020 frame against the manifest's reference, relative to where
+// control began, with its gain schedule, excitation and trips. It differs in what holds: commissiond
+// left pitch unpowered and ended with yaw at zero current; here pitch is held by production, and
+// yaw is handed back to production's servo as soon as the session ends (zero current until then,
+// one control cycle at most).
+class YawSession final : public Session {
+ public:
+  static std::shared_ptr<YawSession> make(const std::string& manifest_json, const std::string& journal_path,
+                                          std::string label, std::string& err);
+  // The current production was applying when the session took the axis: the servo starts there.
+  void set_entry_current(double amps) { entry_current_ = amps; }
+  double current_bound() const { return current_bound_; }
+
+  // Yaw receive thread, every frame: the current to send (A), or NaN to send nothing this frame.
+  double control(TimeNs now, const YawFrame& frame);
+  // After the send: what went out (the journal's yaw_current_tx, the servo's acknowledgement).
+  void sent(bool ok, double actual_a, int raw, TimeNs begin_ns, TimeNs accepted_ns);
+
+ private:
+  YawSession(std::string label, std::string journal_path) : Session(AxisId::Yaw, std::move(label), std::move(journal_path)) {}
+  double position() const;
+  void stop_here(const std::string& detail);
+
+  axis::ServoParameters parameters_{};
+  axis::Servo servo_;
+  axis::ReferenceTable reference_;
+  axis::LogSweep excitation_;
+  axis::OscillationMonitor oscillation_;
+  std::vector<std::array<double, 4>> schedule_;   // begin_s, kq, kv, ki
+  std::size_t next_gain_ = 0;
+  double current_bound_ = 0, speed_limit_ = 0, hold_after_s_ = 0, temperature_limit_ = 0;
+  double entry_current_ = 0;
+  // The encoder, unwrapped from the first frame (the servo's coordinates: the absolute GM6020 angle).
+  bool have_encoder_ = false;
+  uint16_t previous_count_ = 0;
+  int64_t counts_ = 0;
+  double offset_rad_ = 0, initial_position_ = 0;
+  TimeNs epoch_ns_ = 0, begin_ns_ = 0, last_step_ns_ = 0, last_rock_ns_ = 0;
+  std::array<std::pair<TimeNs, double>, 64> speed_ring_{};   // (time, position) for the 20 ms speed check
+  std::size_t speed_head_ = 0, speed_count_ = 0;
+  // The step whose current is being sent.
+  double requested_ = 0, limited_ = 0;
+  const char* phase_ = "control";
+  bool pending_ = false;
 };
 
 }  // namespace ota::calibration

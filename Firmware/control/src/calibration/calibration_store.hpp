@@ -21,6 +21,8 @@
 #include "geometry/bore_alignment.hpp"
 #include "geometry/turret_kinematics.hpp"
 
+namespace YAML { class Node; }
+
 namespace ota::calibration {
 
 // Where one part of a record came from (record.json "parts"): measured, inherited, trimmed, shipped.
@@ -77,6 +79,9 @@ bool write_active(const std::filesystem::path& state_calibration_dir, int id, bo
 std::string bore_yaml(const Bore& b);
 bool write_bore(const std::filesystem::path& dir, const Bore& b, const std::string& date, std::string& err);
 std::string today_local();
+// A YAML (or JSON) document as JSON: what record.json, and a session journal's manifest, are written
+// as (json.loads reads them).
+std::string to_json(const YAML::Node& n, int indent = 0);
 
 // Record files, changed on disk (call off the control thread; each is atomic). Records leave the way
 // they came (owner, 2026-10-24): rename, a copy made from another, removal to deleted/ (kept, not

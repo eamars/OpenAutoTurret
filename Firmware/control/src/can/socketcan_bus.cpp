@@ -14,6 +14,8 @@
 #include <linux/can/raw.h>
 
 #include <cstring>
+#include <ctime>
+#include <sys/uio.h>
 
 #include "can/can_netlink.hpp"
 #include "common/thread_class.hpp"
@@ -91,6 +93,14 @@ bool SocketCanBus::configure_interface(std::string& err) {
     return true;
   }
 
+  namespace {
+  ota::TimeNs realtime_ns() {
+    struct timespec t{};
+    ::clock_gettime(CLOCK_REALTIME, &t);
+    return static_cast<ota::TimeNs>(t.tv_sec) * 1'000'000'000 + t.tv_nsec;
+  }
+  }  // namespace
+
   bool SocketCanBus::open(const Options& opts, std::string& err) {
   close();
   opts_ = opts;
@@ -141,6 +151,12 @@ bool SocketCanBus::configure_interface(std::string& err) {
     close();
     return false;
   }
+
+  // The kernel stamps each frame as it queues it (ADR-005 D7.4): identification measures the loop's
+  // delay from these, and a stamp taken after the receive thread woke adds that wake-up to it. On a
+  // kernel without it the frames carry the thread's own reading, as before.
+  const int stamp = 1;
+  kernel_stamps_ = ::setsockopt(fd_, SOL_SOCKET, SO_TIMESTAMPNS, &stamp, sizeof(stamp)) == 0;
 
   // Non-blocking for TX; RX uses poll() on the same fd.
   const int fl = ::fcntl(fd_, F_GETFL, 0);
@@ -212,10 +228,20 @@ void SocketCanBus::rx_loop() {
     }
     if (!(pfds[0].revents & POLLIN)) continue;
 
-    // Drain available frames (bounded batch to keep latency low).
+    // Drain available frames (bounded batch to keep latency low). The kernel's stamps are on
+    // CLOCK_REALTIME: bracketed by one reading of each clock per batch, they map to the monotonic
+    // clock everything else here runs on.
+    const ota::TimeNs realtime_minus_monotonic = realtime_ns() - ota::now_monotonic_ns();
     for (int i = 0; i < 64; ++i) {
       struct can_frame f{};
-      const ssize_t n = ::recv(fd_, &f, sizeof(f), 0);
+      struct iovec io{&f, sizeof(f)};
+      alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(struct timespec))];
+      struct msghdr msg{};
+      msg.msg_iov = &io;
+      msg.msg_iovlen = 1;
+      msg.msg_control = control;
+      msg.msg_controllen = sizeof(control);
+      const ssize_t n = ::recvmsg(fd_, &msg, 0);
       if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
         if (errno == EINTR) continue;
@@ -244,7 +270,17 @@ void SocketCanBus::rx_loop() {
       rf.dlc = f.can_dlc;
       if (!rf.rtr && rf.dlc <= sizeof(rf.data))
         std::memcpy(rf.data, f.data, rf.dlc);
-      rf.rx_ns = ota::now_monotonic_ns();
+      rf.dequeue_ns = ota::now_monotonic_ns();
+      rf.rx_ns = rf.dequeue_ns;
+      for (struct cmsghdr* c = CMSG_FIRSTHDR(&msg); kernel_stamps_ && c; c = CMSG_NXTHDR(&msg, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SO_TIMESTAMPNS) continue;
+        struct timespec ts;
+        std::memcpy(&ts, CMSG_DATA(c), sizeof(ts));
+        rf.rx_realtime_ns = static_cast<ota::TimeNs>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
+        const ota::TimeNs kernel = rf.rx_realtime_ns - realtime_minus_monotonic;
+        // Never later than the dequeue (a clock step between the two readings would say so).
+        if (kernel > 0 && kernel <= rf.dequeue_ns) rf.rx_ns = kernel;
+      }
 
       {
         std::lock_guard<std::mutex> lk(stats_mtx_);

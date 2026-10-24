@@ -1,5 +1,9 @@
 """Read commissiond servo journals (yaw-control.jsonl, sensorless-homing.jsonl) into arrays.
 
+controld writes the same journals for the sessions of a calibration run (ADR-005 D7), with one
+difference: the idle axis is held, not left unpowered, and its record is one `idle_axis` row
+(where it was and how far it moved) instead of commissiond's pitch readbacks or raw yaw frames.
+
 Times are seconds from yaw_control_begin (yaw) or from the trial script's time zero
 (pitch: the end of the approach). Only the row kinds the tooling uses are decoded.
 """
@@ -41,11 +45,13 @@ def _rows(path, kinds):
 
 def yaw(path):
     r = _rows(path, ("header", "yaw_control_begin", "yaw_feedback", "yaw_current_tx", "servo_cycle",
-                     "servo_learned", "servo_gains", "footer", "register_read"))
+                     "servo_learned", "servo_gains", "footer", "register_read", "idle_axis"))
     manifest = _typed(json.loads(r["header"][0]["manifest_yaml"]))
     begin = r["yaw_control_begin"][0]["time_ns"] if r["yaw_control_begin"] else None
     # The idle pitch (disabled during yaw sessions): its MechPos readbacks, for the decoupling record.
     posture = [x["value"] for x in r["register_read"] if x.get("index") == 0x7019 and x.get("value") is not None]
+    # controld: the held pitch's range through the session.
+    posture += [x[k] for x in r["idle_axis"] if x.get("axis") == "pitch" for k in ("low_rad", "high_rad") if k in x]
     out = {"manifest": manifest, "footer": r["footer"][0] if r["footer"] else None,
            "learned": r["servo_learned"][0]["parameters"] if r["servo_learned"] else None,
            "pitch_posture": np.array(posture, float), "begin_ns": begin}
@@ -98,7 +104,7 @@ def true_position(j, table, delay):
 
 def pitch(path):
     r = _rows(path, ("header", "pitch_trial", "pitch_trial_approach", "pitch_trial_window", "homing_endpoints",
-                     "pitch_trial_gains", "footer", "can_rx"))
+                     "pitch_trial_gains", "footer", "can_rx", "idle_axis"))
     manifest = _typed(json.loads(r["header"][0]["manifest_yaml"]))
     out = {"manifest": manifest, "footer": r["footer"][0] if r["footer"] else None,
            "window": r["pitch_trial_window"][0] if r["pitch_trial_window"] else None,
@@ -108,6 +114,9 @@ def pitch(path):
     if counts:
         unwrapped = np.cumsum(np.concatenate([[0], (np.diff(counts) + 4096) % 8192 - 4096]))
         out["yaw_motion_rad"] = float(np.ptp(unwrapped) * COUNT)
+    for x in r["idle_axis"]:   # controld: the held yaw's motion through the session
+        if x.get("axis") == "yaw":
+            out["yaw_motion_rad"] = float(x["motion_rad"])
     rows = r["pitch_trial"]
     if not rows:
         return out

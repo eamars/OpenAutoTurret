@@ -53,7 +53,7 @@ calibd is a second client of controld's web socket (`max_clients` 8) and reads i
 | # | Scope | Proved by | Status |
 |---|---|---|---|
 | S2.1 | CALIBRATING, the run lifecycle and gates, `calibration_run` telemetry, the journal writer, the **pitch** session executor (yaw held) | unit tests on the sim backend | built 2026-10-24 |
-| S2.2 | the **yaw** session executor (pitch held), kernel RX timestamps on the yaw bus | unit tests; production servo unchanged in the sim | — |
+| S2.2 | the **yaw** session executor (pitch held), kernel RX timestamps on the yaw bus | unit tests; production servo unchanged in the sim | built 2026-10-24 |
 | S2.3 | calibd and `ControldStation`, scipy, the launcher; the page's run view and STOP | Python tests against a fake controld; the page in the browser | — |
 | S2.4 | installing accepted parts (`history/`), HOME and resume; NEW's measurement | unit tests | — |
 | S2.5 | VERIFY (`check yaw`), with D8's two fixes (session end status; the pitch gate) | Python tests | — |
@@ -77,4 +77,20 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     the backend hands the axis back to production, and the writer thread writes the idle axis's
     record and the footer.
   - A supervisor BRAKE, FAULT-STOP or DISABLE stops the session where it is.
+- **S2.1, found on the station.** The first VERIFY was refused "HOME first" on a homed station.
+  `homed_` is false there by design, because a continuous yaw has no endpoint; `position_ready()`
+  is the station's "homed". The simulator never showed it, since its yaw is bounded.
+- **S2.2 (2026-10-24).**
+  - The yaw executor steps its own `axis::Servo` (the manifest's parameters) on every GM6020 frame,
+    under production's guards. Its trips (following error, sensor data, 20 ms encoder speed,
+    oscillation, temperature, transmit) end the session.
+  - When the session ends it sends zero current until production's servo takes yaw back, which is
+    one control cycle at most.
+  - The speed check uses the encoder only. commissiond also read the gyro; the gyro still gates a
+    run, but it does not reach the backend.
+  - Every CAN frame now carries the kernel's receipt time (`SO_TIMESTAMPNS`, mapped to the
+    monotonic clock), and production's servos step on it too.
+  - A session's journal header holds the manifest re-emitted as JSON, as commissiond's does.
+  - `journal.py` reads controld's `idle_axis` row. `tools/servo_commission/tests/test_controld_journal.py`
+    parses the journals the C++ executors write.
 

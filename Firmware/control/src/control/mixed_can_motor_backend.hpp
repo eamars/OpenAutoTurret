@@ -298,6 +298,9 @@ class MixedCanMotorBackend final : public MotorBackend {
   void pitch_servo_loop(std::stop_token stop);
   // ADR-005 D7: a pitch calibration session in place of the production servo (pitch_servo_mutex_).
   void step_pitch_session_locked();
+  // ADR-005 D7: a yaw calibration session in place of the production servo (yaw_mutex_), stepped on
+  // every GM6020 frame like the servo it stands in for.
+  void step_yaw_session_locked(const gm6020::Feedback& decoded, const can::RawFrame& frame);
   bool pitch_session_owns_axis() const;
   void end_pitch_session(const char* why);
   bool yaw_servo_configured_ = false, yaw_servo_active_ = false;
@@ -334,6 +337,7 @@ class MixedCanMotorBackend final : public MotorBackend {
   TimeNs pitch_servo_last_step_ns_ = 0;
   std::jthread pitch_servo_;
   std::shared_ptr<calibration::PitchSession> pitch_session_;   // pitch_servo_mutex_
+  std::shared_ptr<calibration::YawSession> yaw_session_;       // yaw_mutex_
   calibration::PitchWindow pitch_session_window_{};
 
   config::mixed::Profile profile_{};

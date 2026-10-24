@@ -89,6 +89,7 @@ class SocketCanBus : public CanTransport {
 
   Options opts_{};
   int fd_ = -1;
+  bool kernel_stamps_ = false;   // SO_TIMESTAMPNS: frames carry the kernel's receipt time
   int wake_fd_[2] = {-1, -1};
   std::atomic<bool> running_{false};
   std::thread rx_thread_;
