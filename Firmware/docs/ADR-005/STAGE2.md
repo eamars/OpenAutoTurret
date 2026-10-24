@@ -683,3 +683,19 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     wrong for the other, and at 1 deg/s the servo carries only about 0.1–0.15 A either way
     (station and free-play simulator agree): over-read → slip ahead and stand (0.6–0.85), under-read
     → stand and catch up (1.1–1.25).
+- **MEASURE on #5, 10:46–11:27 2026-10-25 (release `4254230`: engineering gates, owner ruling; the
+  work-in reverted): ACCEPTED and installed. #5 PAYLOAD 10-24 now runs its own servos.**
+  - **Fit:** + 0.13+0.37 A, − 0.19+0.23 A, creep 0.27 A. J 0.2156 (6/16 coherent bands), wn 8.4 →
+    kq 15.32, kv 1.82, ki 46.0 (#1's bare-turret yaw servo that #5 held until now: kq 30.8, kv 1.12).
+  - **Validation:** usecase0 ACCEPTED (speed 0.814–1.027, bearing 0.29 A), usecase1 ACCEPTED
+    (0.966–1.149, bearing 0.42 A); 0 stalls. The old 0.9–1.1 gate would have failed both.
+  - **Accuracy campaign:** all 8 passes complete, 0 stalls, every FF+FB pass inside the gates; the
+    bearing worked in from 0.36 to 0.56 A and back (0.44, 0.36, 0.40, 0.56, 0.54, 0.37, 0.43, 0.49):
+    worst moving error 1.48–2.42°, step overshoot up to 1.44°, walker 0.50–0.79° RMS.
+  - **#5's limits** (1.25 × the worst pass): rest 0.82°, overshoot 1.8°, slow-ramp RMS 1.15°,
+    fast-ramp RMS 0.71°, walker RMS 1.0°, moving peak 3.14° (76 px on the tracker). The motor
+    feedforward helps the fast ramps (FB-only / FF+FB 1.25) and the walker little (0.82); on
+    this mount it costs rest error (0.8) and overshoot (0.38).
+  - **Installed** into #5 (yaw, pitch, accuracy); controld applied it at 11:27:01, settled in
+    0.41 s, AUTO_ROAM resumed, no fault. The record is in
+    `Firmware/calibration/records/0005-PAYLOAD-10-24/`.
