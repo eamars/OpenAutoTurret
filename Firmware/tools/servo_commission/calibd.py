@@ -100,6 +100,7 @@ class ControldStation:
 
     def run(self, axis, manifest, label):
         """One session: the manifest beside its journal, controld runs it, the journal comes back parsed."""
+        from commission import Transient   # lazily, as the pipelines import commission (numpy, scipy)
         d = self.root / label
         d.mkdir(parents=True, exist_ok=True)
         bound = dict(manifest, session_label=label)
@@ -118,7 +119,7 @@ class ControldStation:
             if t.cmd_ack_command == "calibration_session" and t.cmd_ack_accepted == 0:
                 raise RuntimeError(f"{label}: {t.cmd_ack_reason}")
             if time.monotonic() > deadline:
-                raise RuntimeError(f"{label}: controld did not start the session")
+                raise Transient(f"{label}: controld did not start the session")
             time.sleep(self.poll_s)
         # Done: controld has handed the axis back and says how the session ended.
         while True:
@@ -130,7 +131,7 @@ class ControldStation:
         deadline = time.monotonic() + 20.0   # the footer is written on controld's writer thread
         while '"kind":"footer"' not in (name.read_text(encoding="utf-8")[-4096:] if name.exists() else ""):
             if time.monotonic() > deadline:
-                raise RuntimeError(f"{label}: the journal has no footer")
+                raise Transient(f"{label}: the journal has no footer")
             time.sleep(self.poll_s)
         return (journal.yaw if axis == "yaw" else journal.pitch)(name)
 

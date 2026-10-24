@@ -66,6 +66,27 @@ class Failed(RuntimeError):
     pass
 
 
+class Transient(RuntimeError):
+    """A station could not run or finish a session for a passing reason (it did not start in time, its
+    journal's footer was late): the session is repeated."""
+
+
+# The station is real: anything can happen, and one transient must not end a 20-70 min run (owner,
+# 2026-10-24, after a 30 ms yaw CAN dropout invalidated an inertia session). A session that ended for
+# one of these reasons measured nothing wrong about the plant -- its data has a hole -- so it runs
+# again, up to SESSION_RETRIES times. Never repeated: a guard's trip (oscillation, speed limit,
+# following error, authority, temperature, RMS budget), which is what a ladder or a circle measures,
+# and a STOP, which is the operator's.
+SESSION_RETRIES = 2
+TRANSIENT_ENDS = ("MEASUREMENT_LIMITED: servo sensor data stale", "MEASUREMENT_LIMITED: servo encoder update rejected",
+                  "MEASUREMENT_LIMITED: encoder update rejected", "yaw control TX failed", "pitch feedback late")
+
+
+def transient_end(footer):
+    detail = (footer or {}).get("detail") or ""
+    return (footer or {}).get("status") != "COMPLETE" and any(t in detail for t in TRANSIENT_ENDS)
+
+
 class Run:
     """One commissioning run: its station, output directory, log and report."""
 
@@ -101,13 +122,26 @@ class Run:
     def session(self, name, manifest):
         self.count += 1
         label = f"{self.id}-{self.count:02d}-{name}"
-        self.log(f"[{self.count}] {name}: {label}")
-        j = self.station.run(self.axis, manifest, label)
-        footer = j.get("footer") or {}
-        self.log(f"    footer {footer.get('status')} {footer.get('detail', '')}")
-        rec = idle_axis(self, self.axis, j)
-        if rec:
-            self.report.setdefault("idle_axis", []).append(dict(rec, session=name))
+        for attempt in range(SESSION_RETRIES + 1):
+            tag = label if attempt == 0 else f"{label}-r{attempt}"
+            self.log(f"[{self.count}] {name}: {tag}")
+            try:
+                j = self.station.run(self.axis, manifest, tag)
+            except Transient as e:
+                if attempt == SESSION_RETRIES:
+                    raise Failed(f"{name}: {e} ({SESSION_RETRIES + 1} attempts)") from e
+                self.log(f"    {e}: a transient, the session runs again ({attempt + 1} of {SESSION_RETRIES})")
+                self.report.setdefault("retries", []).append({"session": tag, "reason": str(e)})
+                continue
+            footer = j.get("footer") or {}
+            self.log(f"    footer {footer.get('status')} {footer.get('detail', '')}")
+            rec = idle_axis(self, self.axis, j)
+            if rec:
+                self.report.setdefault("idle_axis", []).append(dict(rec, session=name))
+            if not transient_end(footer) or attempt == SESSION_RETRIES:
+                return j
+            self.log(f"    a transient, the session runs again ({attempt + 1} of {SESSION_RETRIES})")
+            self.report.setdefault("retries", []).append({"session": tag, "reason": footer.get("detail")})
         return j
 
     def step(self, name, **values):
