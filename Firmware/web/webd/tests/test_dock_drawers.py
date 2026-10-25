@@ -665,6 +665,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                      "if (exit.main && window.otaSetMain) window.otaSetMain(exit.main);",
                      'hudReticle(t, stale, view.main, drawerOpen === "CALIBRATION")',
                      "if (!s.settle.ok) { say(",
+                     'classList.contains("stale")) { say("NO LIVE DATA FROM THE STATION',
                      "(t.calibration_record || {}).id !== calZero.record"):
             self.assertIn(line, HUD_JS + HUD_HTML)
 

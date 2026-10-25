@@ -335,6 +335,7 @@ runs from the page (VERIFY, RE-RUN, NEW's measurement) come with stage 2 and are
   camera centre, and the reticle sits on it. With it on: RANGE (the working distance), WIDE and
   DETAIL R/U trims at 0.1, 1 or 10 mrad per press, the installation offsets and the ZERO tap. Only in
   a MANUAL hold or in Shutdown (the tap: a MANUAL hold); the panel offers HOLD HERE TO TRIM otherwise.
+  The procedure, by the page or by snapshots: [the camera-zero card](operations/camera-zero.md).
 - **Calibration ends where it found the station (owner, 2026-10-25: "ensure the calibration life
   cycle is closed").** Calibration is MENU > CALIBRATION open on the page. Only there is the reticle
   the amber bore mark, captioned `RANGE 11 m`, with the optical axis beside it; outside it is the

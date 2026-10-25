@@ -29,6 +29,14 @@ cards. Dated as-built reports are historical.
   checkout it is standing in), so read
   [the deploy card](Firmware/docs/operations/deploy.md) before deploying from a machine you did not
   build the last release on, and read `Firmware/tools/doc_tree_check.py`'s rules if you add a card.
+- **Calibration** (MENU › CALIBRATION on the page) has two cards:
+  [servo-commissioning](Firmware/docs/operations/servo-commissioning.md) for runs (VERIFY, RE-RUN,
+  NEW's measurement), and [camera-zero](Firmware/docs/operations/camera-zero.md) for the crosshairs.
+  An agent measures a zero from snapshots with `Firmware/tools/camera_zero.py`, rather than
+  improvising image scripts.
+  - Calibration ends where it found the station. Leave it as you found it, normally AUTO_ROAM with
+    the wide camera on the main display, or say why not.
+  - Never zero or trim #1 AS SHIPPED.
 - **Fault vs hold (owner ruling 2026-10-02):** before adding or tuning any guard, trip or watchdog,
   read "Fault, hold, degrade" at the top of
   [`Firmware/docs/STATION_OPERATIONS.md`](Firmware/docs/STATION_OPERATIONS.md):

@@ -2634,7 +2634,7 @@ $("viewport").addEventListener("pointerdown", (e) => {
   // What armed the tap must still be true when it lands: the picture is live and the turret has not
   // moved since (someone jogging on another page, a hold drifting). The tap stays armed.
   const say = (text) => { $("zerobar").querySelector("span").textContent = text; };
-  if ($("viewport").classList.contains("stale")) { say("THE PICTURE IS STALE: WAIT, THEN TAP"); return; }
+  if ($("viewport").classList.contains("stale")) { say("NO LIVE DATA FROM THE STATION: WAIT, THEN TAP"); return; }
   if (!s.settle.ok) { say("THE TURRET IS MOVING: WAIT UNTIL IT SETTLES, THEN TAP"); return; }
   if (!p.ok) { say("TAP INSIDE THE PICTURE"); return; }
   sendCommand("zero_bore", s.arg + " " + p.u.toFixed(6) + " " + p.v.toFixed(6));

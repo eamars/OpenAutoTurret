@@ -15,8 +15,9 @@ procedure from a flag list.
 | run a bounded motor / IMU / pitch commissioning session | [`STATION_OPERATIONS.md`](STATION_OPERATIONS.md) §"Bounded commissioning, without automatic startup" |
 | commission or re-commission the yaw / pitch servo (after a payload, camera, weight, bearing or motor change) | [`operations/servo-commissioning.md`](operations/servo-commissioning.md) — a run from the page (MENU › CALIBRATION: VERIFY, RE-RUN, NEW), or `commission.py` from the workstation: identify, design, verify on the station, keep the asset |
 | work on camera tracking (ADR-003: target estimator, Level-1 reference, its stages and status) | [`ADR-003/IMPLEMENTATION.md`](ADR-003/IMPLEMENTATION.md) — the plan, the decisions taken against the architect's package, and the state of each stage; stage 1 is `tools/tracking/tracking.py stage1` |
-| work on calibration records (several payload sets: switch, rename, re-run, trim the bore from the web) | [`ADR-005/ADR-005.md`](ADR-005/ADR-005.md) — proposed 2026-10-24, not implemented: what a record holds, the station store, the switch, the MENU › CALIBRATION panel, runs in CALIBRATING inside controld |
-| zero the cameras (each camera's crosshair on the payload's line of sight; the tracker per camera) | [`ADR-006/ADR-006.md`](ADR-006/ADR-006.md) — draft 2026-10-24: the zero from one target at a known distance plus the installation offsets, the detail camera, the procedure |
+| work on calibration records (several payload sets: switch, rename, re-run, trim the bore from the web) | [`ADR-005/ADR-005.md`](ADR-005/ADR-005.md) — stages 1 and 2 built and in use: what a record holds, the station store, the switch, the MENU › CALIBRATION panel, runs in CALIBRATING inside controld; stage 3 (the extrinsic) only when the camera box is remounted |
+| zero the cameras (each camera's crosshair on the payload's line of sight, after a payload is mounted or an offset changes) | [`operations/camera-zero.md`](operations/camera-zero.md) — from the page (MENU › CALIBRATION › ZERO: tap the target) or from the workstation (`tools/camera_zero.py`: measured from full-resolution snapshots); the commands, what a zero proves, its refusals |
+| understand why the camera zero works the way it does | [`ADR-006/ADR-006.md`](ADR-006/ADR-006.md) — closed 2026-10-25: the decisions, the measurements on NO_LOAD, the calibration lifecycle and its failure modes |
 | plan the precision mount (0.3 MOA rangefinder: actuators, drives, development order) | [`Hardware/HDP-001/HDP-001.md`](../../Hardware/HDP-001/HDP-001.md) — proposal, primary and secondary hardware |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
@@ -38,6 +39,8 @@ that justify the procedure.
 | [`operations/deploy.md`](operations/deploy.md) | build location, the two different things named "deploy", the three things a handover needs, and what to do on a host with no cross-toolchain |
 | [`operations/start-stop-status.md`](operations/start-stop-status.md) | launcher actions, run dir, what `stop` proves, what it does not |
 | [`operations/os-setup.md`](operations/os-setup.md) | the real-time grant, CPU split and UI-last priorities; the per-thread table; how to verify it took |
+| [`operations/servo-commissioning.md`](operations/servo-commissioning.md) | calibration runs from the page (VERIFY, RE-RUN, NEW's measurement) and `commission.py` from the workstation |
+| [`operations/camera-zero.md`](operations/camera-zero.md) | the camera zero: offsets, the target's distance, the tap or the snapshot measurement, checking it, its refusals |
 
 ## Verify the tree
 
