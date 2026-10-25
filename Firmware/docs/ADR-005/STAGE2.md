@@ -1,5 +1,8 @@
 # ADR-005 stage 2: runs from the page — build plan and status
 
+**Closed 2026-10-25** (section "Stage 2 closed", at the end): every item of ADR-005's stage-2
+verification checked against the station's runs.
+
 Stage 2 of [ADR-005](ADR-005.md) (D7, D8): VERIFY, RE-RUN and NEW's measurement run on the station
 from MENU › CALIBRATION, in a CALIBRATING phase inside controld, orchestrated by `calibd`.
 Stage 1 (records, switching, bore trims) is built and verified on the station (2026-10-24, `0309d0c`).
@@ -763,3 +766,28 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   - Still harsher than the station: on the free-play plant, the full pipeline's first pass refuses
     ramp+1 at 3.7-4.1° (gate 3.4°). That pass runs in the sim case's −0.15 A friction-drift
     session.
+
+## Stage 2 closed (2026-10-25)
+
+ADR-005 section 7's verification list, checked from the runs kept on the station. Sixteen runs
+came from the page between 2026-10-24 18:10 and 2026-10-25 12:37. No new run was needed.
+
+| Item | Result |
+|---|---|
+| A RE-RUN of the current payload from the page, end to end | RE-RUN+ACCURACY on the 3.5 kg payload, 10:46: ACCEPTED and installed into #5. MEASURE on #6 NO_LOAD, 11:56: the same. Both resumed the interrupted mode. |
+| The idle axis through every session, "within one sensor count" | Not as written, and the criterion was wrong. Over every session of the five kept runs (two full runs, one failed run, a VERIFY, CHECK-PITCH), held yaw moved at most 2.3 mrad (3 counts) and held pitch at most 1.53 mrad (4 counts of 0.38). One count was commissiond's unpowered axis, held by its friction alone. Under controld the idle axis is servo-held: yaw inside its 4 mrad hold band, both well under the 0.2° decoupling limit (`commission.IDLE_AXIS_LIMIT`). That limit is the criterion now. |
+| The asset against the 10-02 one | NO_LOAD: J 0.0374 against 0.0407, kq 32.55 against 30.8, ki 97.6 against 46 (the integral rate's 3× rule). Section "MEASURE on #6". |
+| Each step timed on the Pi | VERIFY 1 min. Pitch and yaw 20 min: the runs that ended at yaw validation. With the accuracy campaign 40 min: both accepted runs. The page, calibd and the card quoted 2, 45 and 71 min; they now use the measured times. Risk 2, pitch taking 25 min, is gone without a launcher between sessions. |
+| STOP mid-session leaves both axes held | 2026-10-24 19:00, from the page (section "Readiness check"). |
+| Risk 1: the executors in controld | Pitch: CHECK-PITCH on #1 tracked at least as well as commissiond's 10-02 validation. Yaw: frame timing 1.00 ms median, no reordering. The side-by-side pitch identify was never run; the end-to-end runs, whose identification agrees with the 10-02 plant, stand in for it. |
+| Risk 3: journals in memory beside visiond | The largest kept journal, a 240 MB yaw survey, parses in 14 s with a 1.37 GB peak. The Pi has 6.9 GB available with the stack running. |
+
+Two fixes found while closing it:
+- **A failed accuracy pass read as a crash.** `check` and `calibrate` let their `Failed` reach calibd,
+  so the 00:38 and 09:13 runs ended "NOT ACCEPTED: calibd failed: calibration pass ff_fb0 failed the
+  tracking gates". Every pipeline now ends through `commission.stopped`, giving "NOT ACCEPTED:
+  calibrate: calibration pass …". The test `AFailedPipelineIsAVerdict` fails on the old code.
+- **Releases filled the card.** 151 releases took 44 GB of the station's 117 GB card. A deploy now
+  keeps the release in force and the three newest, and removes the rest
+  (`deploy_station.prune_releases`; owner: "remove legacy build files … each build takes heaps of
+  space").

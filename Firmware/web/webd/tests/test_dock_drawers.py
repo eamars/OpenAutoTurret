@@ -349,12 +349,12 @@ class DockAndDrawerBehaviour(unittest.TestCase):
         self.assertIn("NOT VERIFIED SINCE SWITCH", verify["note"])
         rerun = measure["RE-RUN"]
         self.assertEqual((rerun["kind"], rerun["command"], rerun["arg"]), ("danger", "run_calibration", "RERUN"))
-        self.assertIn("~45 MIN", rerun["note"])
+        self.assertIn("~20 MIN", rerun["note"])
         self.assertEqual([o["label"] for o in rerun["options"]], ["+ACCURACY", "+CROSSTALK"])
         both = {m["label"]: m for m in self._panel_opts({"accuracy": True, "crosstalk": True},
                                                         calibration_record={"id": 2, "name": "F"}, phase="hold")["measure"]}
         self.assertEqual(both["RE-RUN"]["arg"], "RERUN+ACCURACY+CROSSTALK")
-        self.assertIn("~73 MIN", both["RE-RUN"]["note"])
+        self.assertIn("~42 MIN", both["RE-RUN"]["note"])
         self.assertEqual(p["stop"], {"label": "STOP MOTION", "command": "hold", "arg": "", "kind": "stop"})
         for t, why in (({"phase": "idle"}, "HOME FIRST"), ({"phase": "hold", "rest_park": "parked"}, "PARKED"),
                        ({"phase": "hold", "calibration_switching": True}, "WAIT"), ({"phase": "hold", "calibrating": True}, "WAIT")):
@@ -373,7 +373,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                          [("PITCH", "done"), ("YAW UPDATE", "now"), ("ACCURACY", "next")])
         self.assertEqual((r["session"]["axis"], r["session"]["text"], r["session"]["fraction"]), ("YAW", "0:42 / ~1:24", 0.5))
         self.assertEqual(r["note"], "inertia 0.0412, loop delay 1.6 ms")
-        self.assertEqual(r["elapsed"], "12:30 OF ~71 MIN")
+        self.assertEqual(r["elapsed"], "12:30 OF ~40 MIN")
         self.assertEqual((r["stop"]["command"], r["stop"]["kind"]), ("stop_calibration", "stop"), "one press")
         between = self._node("console.log(JSON.stringify(T.hudCalibrationRun(%s)));" % json.dumps(
             {"calibrating": True, "calibration_run": dict(run, session=None, state="fitting")}))

@@ -10,12 +10,13 @@ controld's socket (it reads the telemetry, it sends commands). For a run in CALI
 - finishes the run with its verdict.
 
 What a run measures is the existing commissioning, its rules unchanged:
-    VERIFY            check yaw                                 (~2 min)
-    RERUN             pitch, then yaw --update                  (~45 min)
-    RERUN+CROSSTALK   pitch, then yaw (a yaw motor change)      (~47 min)
-    RERUN+ACCURACY    RERUN, then calibrate yaw                 (~71 min)
-    RERUN+ACCURACY+CROSSTALK  both                              (~73 min)
-    MEASURE           NEW's measurement: as RERUN+ACCURACY      (~71 min)
+    VERIFY            check yaw                                 (~1 min)
+    RERUN             pitch, then yaw --update                  (~20 min)
+    RERUN+CROSSTALK   pitch, then yaw (a yaw motor change)      (~22 min)
+    RERUN+ACCURACY    RERUN, then calibrate yaw                 (~40 min)
+    RERUN+ACCURACY+CROSSTALK  both                              (~42 min)
+    MEASURE           NEW's measurement: as RERUN+ACCURACY      (~40 min)
+(measured on the station, 2026-10-24/25)
 
 Each run is kept in <state>/calibration/runs/<run>-<kind>-<stamp>/, one directory per pipeline, with
 run.json (the record, the kind, the verdict). Reports are kept; journals (~1 GB a full yaw run) only

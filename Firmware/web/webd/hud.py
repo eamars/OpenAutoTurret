@@ -574,7 +574,7 @@ function hudCalibrationPanel(t, opts) {
   const run = (label, command, arg, note) => gate
     ? { label: label, kind: "gated", command: null, arg: arg, note: gate }
     : { label: label, kind: "danger", command: command, arg: arg, note: note };
-  const verify = run("VERIFY", "verify_calibration", "", "~2 MIN · A PROBE OF THE YAW SERVO AGAINST THIS RECORD");
+  const verify = run("VERIFY", "verify_calibration", "", "~1 MIN · A PROBE OF THE YAW SERVO AGAINST THIS RECORD");
   verify.nudge = !!t.calibration_unverified;
   if (t.calibration_unverified) verify.note = "NOT VERIFIED SINCE SWITCH · " + verify.note;
   const measure = [
@@ -765,8 +765,10 @@ const HUD_RUN_PLANS = {
   "RERUN+ACCURACY+CROSSTALK": [["pitch", "PITCH"], ["yaw", "YAW + CROSSTALK"], ["calibrate", "ACCURACY"]],
   "MEASURE": [["pitch", "PITCH"], ["yaw", "YAW UPDATE"], ["calibrate", "ACCURACY"]]
 };
-const HUD_RUN_MINUTES = { "VERIFY": 2, "CHECK-PITCH": 2, "RERUN": 45, "RERUN+CROSSTALK": 47, "RERUN+ACCURACY": 71,
-                          "RERUN+ACCURACY+CROSSTALK": 73, "MEASURE": 71 };
+// Measured on the station, 2026-10-24/25 (16 runs): VERIFY 1 min; pitch and yaw 20 (the runs that ended at
+// yaw validation); with the accuracy campaign 40 (both accepted runs). +CROSSTALK is the scan's ~2 min.
+const HUD_RUN_MINUTES = { "VERIFY": 1, "CHECK-PITCH": 1, "RERUN": 20, "RERUN+CROSSTALK": 22, "RERUN+ACCURACY": 40,
+                          "RERUN+ACCURACY+CROSSTALK": 42, "MEASURE": 40 };
 function hudRunKindName(kind) {
   return kind === "VERIFY" ? "VERIFY" : kind === "MEASURE" ? "MEASURE" : String(kind || "").replace("RERUN", "RE-RUN").split("+").join(" + ");
 }
@@ -2495,7 +2497,7 @@ function renderCalibrationPanel(t) {
   h += '<div class="dsec">MEASURE</div>' + spec.measure.map((a) => row(a, !a.options ? "" :
     '<div class="drow setting ropts"><span class="stepper">' + a.options.map((o) => '<button type="button" class="sbtn chip' +
       (o.on ? " on" : "") + '" data-calui="opt:' + o.key + '">' + o.label + "</button>").join("") +
-    '</span><span class="snote">+ACCURACY measures the limits again (~26 min); +CROSSTALK after a yaw motor change</span></div>')).join("");
+    '</span><span class="snote">+ACCURACY measures the limits again (~20 min); +CROSSTALK after a yaw motor change</span></div>')).join("");
   const removable = spec.removable.map((x) => {
     const armed = hudRowAwaitsConfirm(x, pendingConfirm);
     return '<button type="button" class="sbtn chip del' + (armed ? " armed" : "") + '" data-cmd="' + x.command +
@@ -2663,7 +2665,7 @@ function newCalibrationDialog(from) {
     d.querySelector(".sum").textContent = "Makes a copy of #" + state.from + " (every part marked FROM #" + state.from +
       ") and puts it in force" + (homed ? ": the turret holds while the servos change" : ".") +
       (!homed ? " To measure it, HOME, then RE-RUN."
-        : state.measure ? ", then measures it: pitch, yaw and its accuracy, about 71 min. The turret turns up to 65 deg/s: keep clear."
+        : state.measure ? ", then measures it: pitch, yaw and its accuracy, about 40 min. The turret turns up to 65 deg/s: keep clear."
         : ", then carries on. It measures nothing: RE-RUN does.");
   }
   calibrationDialog('<div class="dt">NEW CALIBRATION RECORD</div><div class="dl">NAME</div>' +

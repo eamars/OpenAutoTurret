@@ -167,7 +167,20 @@ def last_yaw_angle(j):
     return float(j["feedback"]["q"][-1])
 
 
-IDLE_AXIS_LIMIT = math.radians(0.2)  # the idle axis is unpowered; its friction holds it (measured <= 0.044 deg)
+# The idle axis: unpowered under commissiond, its friction held it (<= 0.044 deg); under controld it is
+# servo-held, and moved at most 2.3 mrad (yaw, 3 counts: its hold band is 4) and 1.5 mrad (pitch, 4
+# counts) over every session of five runs, 2026-10-24/25.
+IDLE_AXIS_LIMIT = math.radians(0.2)
+
+
+def stopped(run, e):
+    """A pipeline that cannot go on ends STOPPED, its reason in the report, which calibd's verdict
+    reads ("NOT ACCEPTED: <step>: <reason>"). Every pipeline ends this way: check and calibrate did
+    not, so their Failed reached calibd as a crash ("calibd failed: calibration pass ff_fb0 failed the
+    tracking gates", MEASURE 2026-10-25 00:38 and 09:13)."""
+    run.log(f"STOPPED: {e}")
+    run.step("stopped", reason=str(e))
+    sys.exit(1)
 
 
 def idle_axis(run, axis, j):
@@ -469,9 +482,7 @@ def commission_yaw(args):
         asset = yaw_asset(run, prior, identified, dsg, servo, results, accepted)
         finish(run, args, asset, accepted, "yaw_servo.json")
     except Failed as e:
-        run.log(f"STOPPED: {e}")
-        run.step("stopped", reason=str(e))
-        sys.exit(1)
+        stopped(run, e)
 
 
 def yaw_asset(run, prior, identified, dsg, servo, results, accepted):
@@ -589,16 +600,21 @@ def commission_pitch(args):
                  "native_settings": settings, "servo_trial": trial}
         finish(run, args, asset, accepted, "pitch_servo.json")
     except Failed as e:
-        run.log(f"STOPPED: {e}")
-        run.step("stopped", reason=str(e))
-        sys.exit(1)
+        stopped(run, e)
 
 
 # ------------------------------------------------------------------ check/validate
 def check(args):
     """Is the current asset still right? A short probe compared with the model's prediction."""
+    run = Run(args, args.axis)
+    try:
+        check_asset(run, args)
+    except Failed as e:
+        stopped(run, e)
+
+
+def check_asset(run, args):
     axis = args.axis
-    run = Run(args, axis)
     asset = load_asset(args)
     if axis == "yaw":
         m = manifests.yaw(f"{run.id}-probe", asset["servo_parameters"], "probe")
@@ -720,6 +736,13 @@ def calibrate(args):
     if args.resume:
         args.out = args.resume
     run = Run(args, "yaw")
+    try:
+        calibrate_campaign(run, args)
+    except Failed as e:
+        stopped(run, e)
+
+
+def calibrate_campaign(run, args):
     asset = load_asset(args)
     x = asset["identified"]["crosstalk"]
     variants = {"ff_fb": asset["servo_parameters"], "fb_only": accuracy.motor_feedback_only(asset["servo_parameters"])}

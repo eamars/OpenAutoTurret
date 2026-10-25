@@ -60,10 +60,10 @@ cmake -S Firmware -B run/adr0022-local/firmware -DCMAKE_BUILD_TYPE=Release && ma
 | Press | Runs | Station time |
 |---|---|---|
 | VERIFY (two presses), any record | `check yaw`: one 60 s probe scored against the record's asset. `REUSE_EXACT`, or `UPDATE_PARAMETERS` when a gate fails or the friction has drifted 25 % | ~1 min |
-| RE-RUN (two presses), not #1 | `pitch`, then `yaw --update` | ~45 min |
-| RE-RUN +ACCURACY | then `calibrate yaw` | ~71 min |
-| RE-RUN +CROSSTALK | `yaw` instead of `yaw --update`: after a yaw motor change | ~47 min |
-| NEW… with MEASURE IT NOW | makes a copy, switches to it, then measures it as RE-RUN +ACCURACY | ~71 min |
+| RE-RUN (two presses), not #1 | `pitch`, then `yaw --update` | ~20 min |
+| RE-RUN +ACCURACY | then `calibrate yaw` | ~40 min |
+| RE-RUN +CROSSTALK | `yaw` instead of `yaw --update`: after a yaw motor change | ~22 min |
+| NEW… with MEASURE IT NOW | makes a copy, switches to it, then measures it as RE-RUN +ACCURACY | ~40 min |
 
 - **During a run** the drawer shows the steps, the session and its time, and calibd's last line.
   The dock is dimmed and the D-pad hidden.
@@ -86,7 +86,8 @@ each journal around them.
 
 Order: commission **pitch first**. On the workstation route each session leaves the other axis
 unpowered, where its own friction holds it within one sensor count (measured); from the page,
-production holds it. Pitch parks at its centre, so yaw is then identified at a defined pitch posture.
+production holds it: within 2.3 mrad in yaw and 1.5 mrad in pitch (measured over five runs, 2026-10-25).
+Pitch parks at its centre, so yaw is then identified at a defined pitch posture.
 
 | What changed | Run | What happens |
 |---|---|---|

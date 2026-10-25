@@ -80,6 +80,23 @@ def cross_build(repo, args, revision=None):
     return repo / "Firmware" / "build-arm64.tar", False
 
 
+# A release is ~300 MB with its build; 151 had piled up to 44 GB of the station's card by 2026-10-25
+# (owner: "each build takes heaps of space"). Kept: the one in force, and the newest few to roll back to.
+KEEP_RELEASES = 3
+
+
+def prune_script(releases: str, keep: int = KEEP_RELEASES) -> str:
+    """Shell that removes releases other than run/current's and the `keep` newest, printing the count."""
+    return (f"cd {shlex.quote(releases)} && cur=$(basename \"$(readlink -f ../current)\") && [ -n \"$cur\" ] && "
+            f"n=0; for d in $(ls -1dt -- */ | sed 's#/$##' | tail -n +{keep + 1}); do "
+            "[ \"$d\" = \"$cur\" ] && continue; rm -rf -- \"$d\" && n=$((n+1)); done; "
+            "echo \"Old releases removed: $n (kept run/current and the newest " + str(keep) + ")\"")
+
+
+def prune_releases(remote, releases: str) -> None:
+    print(remote(prune_script(releases), capture_output=True, text=True).stdout.strip(), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="eamars@rpi-turret")
@@ -332,7 +349,9 @@ def main():
                f"--url http://127.0.0.1:$port --wait-ready {args.ready_timeout} --expect {state}")
         print(f"Active and {'ready' if state == 'homed' else 'up in SHUTDOWN (MENU > HOME starts it)'}: "
               f"{release}", flush=True)
+        prune_releases(remote, releases)
     else:
+        prune_releases(remote, releases)
         print("Build only; the running station was not changed.")
         if args.commission_hardware:
             print(f"Receive/discovery probe: ssh {args.host} \"bash {script} run --commission-hardware\"")

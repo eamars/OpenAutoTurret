@@ -118,6 +118,40 @@ class SessionProtocol(unittest.TestCase):
             self.station(FakeController(self.journals, stop_during=True), "d").run("yaw", {}, "y")
 
 
+class AFailedPipelineIsAVerdict(unittest.TestCase):
+    """A pipeline that cannot go on says why in its verdict, never as calibd crashing. check and
+    calibrate let their Failed through: MEASURE 2026-10-25 00:38 and 09:13 ended "NOT ACCEPTED:
+    calibd failed: calibration pass ff_fb0 failed the tracking gates"."""
+
+    class Dead:
+        """A station whose every session is a transient (a CAN hole, a missing footer)."""
+        name = "controld"
+
+        def run(self, axis, manifest, label):
+            import commission
+            raise commission.Transient(f"{label}: the journal has no footer")
+
+    def test_check_and_calibrate_end_stopped_with_the_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            record = state / "calibration" / "records" / "0002"
+            record.mkdir(parents=True)
+            shutil.copy(HERE.parents[1] / "config/servo/yaw_servo.json", record / "yaw_servo.json")
+            fake = FakeController(Path(tmp))
+            runner = calibd.Runner(fake, state, fake.run, {"id": 2, "name": "FRICTION 10-20"}, poll_s=0.01)
+            original = calibd.ControldStation
+            calibd.ControldStation = lambda *a, **k: self.Dead()
+            try:
+                verdict = runner.execute()   # VERIFY: check yaw
+            finally:
+                calibd.ControldStation = original
+            self.assertRegex(verdict, r"^NOT ACCEPTED: check: probe: .*the journal has no footer \(\d attempts\)$")
+            report = runner.pipeline("calibrate", {}, self.Dead())
+            stopped = [s for s in report["steps"] if s["step"] == "stopped"]
+            self.assertEqual(len(stopped), 1, report["steps"])
+            self.assertIn("ff_fb0", stopped[0]["reason"])
+
+
 class SimLink(FakeController):
     """A fake controld whose sessions are servo-sim's answers (SimStation), written out as journals
     would be -- here simply handed to the pipeline through the station interface."""
