@@ -42,7 +42,17 @@ struct YawPlantParameters {
   // (the default) is the rigid body above. Otherwise the motor side (motor_inertia of `inertia`, its
   // own small friction) drives the load side (the rest, with the bearing friction above) through a
   // gap of free_play_rad closed by a stiff damped contact; the encoder reads the motor.
-  double free_play_rad, motor_inertia, motor_friction_A, contact_stiffness, contact_damping;
+  // The gap is not free: gap_damping (A*s/rad) drags the motor against the load at any position in
+  // it. The station's inertia sweep on that payload (2026-10-25 10:49, sliding at 30 deg/s) put
+  // -0.37 A on the motor for 22-33% of every cycle and still read the rigid body at 3-9 Hz (|H|
+  // within 10% of 1/(J w^2), coherence 0.75-0.97); a free gap opens on every such dip (the motor's
+  // 0.01 is decelerated 40 times harder than the sliding load), and the motor rattling across it
+  // left the sweep 2 coherent bands of 16 and no inertia. The slow reversals bound the drag from the
+  // other side: the station's motor slips across at 2-9 times a 1 deg/s reference under 0.3-0.6 A
+  // (a drag of 2-17). 12, the middle of what reproduces both on the 5x payload: the sweep 10/16
+  // coherent, J +14% (the rigid plant +10%), and the slow ramps as the station's (9-14 do; 6-8 and
+  // 20 lose the ramps of a bearing 0.1 A under its feedforward).
+  double free_play_rad, motor_inertia, motor_friction_A, contact_stiffness, contact_damping, gap_damping;
 };
 YawPlantParameters yaw_plant_from_yaml(const YAML::Node& node);
 

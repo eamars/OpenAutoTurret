@@ -51,12 +51,13 @@ YawPlantParameters yaw_plant_from_yaml(const YAML::Node& n) {
   p.free_play_rad=n["free_play_rad"].as<double>(0.); p.motor_inertia=n["motor_inertia"].as<double>(0.01);
   p.motor_friction_A=n["motor_friction_A"].as<double>(0.05);
   p.contact_stiffness=n["contact_stiffness"].as<double>(5000.); p.contact_damping=n["contact_damping"].as<double>(4.);
+  p.gap_damping=n["gap_damping"].as<double>(12.);
   if (p.free_play_rad>0) check(p.motor_inertia>0 && p.motor_inertia<p.inertia && p.contact_stiffness>0,"free play: motor inertia/contact");
   check(p.inertia>0 && p.stribeck_speed>0 && p.counts_per_rev>0 && p.presliding_stiffness>0,"inertia/stribeck_speed/counts/stiffness");
   check(p.creep_speed>0 && p.encoder_noise_corner_hz>0 && p.friction_noise_corner_hz>0,"creep_speed/noise corners");
   for (double v:{p.coulomb_positive,p.coulomb_negative,p.stribeck_positive,p.stribeck_negative,p.viscous,p.presliding_damping,p.creep_drop,
                  p.actuation_delay_s,p.current_tau_s,p.encoder_delay_s,p.crosstalk_delay_s,p.encoder_noise_rad,p.friction_noise_A,
-                 p.free_play_rad,p.motor_friction_A,p.contact_damping})
+                 p.free_play_rad,p.motor_friction_A,p.contact_damping,p.gap_damping})
     check(std::isfinite(v) && v>=0,"nonnegative terms");
   return p;
 }
@@ -109,11 +110,13 @@ void YawPlant::advance(double to) {
       const double next=(p_.inertia*v_+h*(i_-p_.load-force+damping*v_))/(p_.inertia+h*damping);
       q_+=0.5*(v_+next)*h; v_=next;
     } else {
-      // The motor pushes the load only across the gap's faces, and never pulls it.
+      // The motor pushes the load only across the gap's faces, and never pulls it; the gap's drag
+      // couples them at any position (YawPlantParameters).
       const double half=0.5*p_.free_play_rad,gap=q_-ql_;
       const double into=gap>half?gap-half:gap<-half?gap+half:0.;
       double contact=into==0.?0.:p_.contact_stiffness*into+p_.contact_damping*(v_-vl_);
       if (into>0) contact=std::max(contact,0.); else if (into<0) contact=std::min(contact,0.);
+      contact+=p_.gap_damping*(v_-vl_);
       const double force=sliding_force(vl_,ql_,h,z_next,damping);
       const double motor=(v_+h*(i_-contact-p_.motor_friction_A*std::tanh(v_/0.005))/p_.motor_inertia);
       const double jl=p_.inertia-p_.motor_inertia;

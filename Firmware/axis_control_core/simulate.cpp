@@ -51,7 +51,7 @@ SimulationResult yaw(const YAML::Node& request) {
   if (!servo.configure(servo_parameters)) throw std::runtime_error("DATA_INVALID: servo parameters");
   SimulationResult result;
   result.columns={"t","qr","vr","ar","q_true","v_true","q_meas","u","excitation","q_hat","v_hat","integral",
-                  "friction","rocking","stalls","current","saturated","requested","rms","cap"};
+                  "friction","rocking","stalls","current","saturated","requested","rms","cap","q_load"};
   // Control begins on the first receipt; its reading is the reference origin.
   const double first_receipt=period+plant_parameters.encoder_delay_s;
   plant.advance(period);
@@ -94,7 +94,7 @@ SimulationResult yaw(const YAML::Node& request) {
     plant.command(now,sent); servo.acknowledge(true,sent);
     result.rows.push_back({since,origin+r.position,r.velocity,r.acceleration,plant.position(),plant.velocity(),q_meas,sent,x,
                            out.position,out.velocity,out.integral,out.friction,double(out.rocking),double(out.stall_events),
-                           plant.current(),double(out.saturated),out.requested,out.rms,out.cap});
+                           plant.current(),double(out.saturated),out.requested,out.rms,out.cap,plant.load_position()});
     if (std::abs(encoder_speed)>speed_limit) { result.status="HARD_ABORT: yaw speed limit"; break; }
   }
   result.learned=servo_to_json(servo.learned());

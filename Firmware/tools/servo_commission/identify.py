@@ -110,7 +110,12 @@ def fit_friction(rows):
 
 
 def friction_maps(samples, curve, bins=24):
-    """Per-angle residual friction (A) per direction above the fitted curve: the servo's friction maps."""
+    """Per-angle residual friction (A) per direction above the fitted curve: the servo's friction maps.
+
+    Entry i is the value at angle i/bins of a turn, linear in between (Servo::friction_at), so each
+    sample counts towards its nearest entry. Counted towards the entry below it, as before 2026-10-25,
+    every map came out half an entry (7.5 deg) late: on the 5x case 0.04 A rms of shape error, 0.14-0.17
+    A at the sticky arc's edges; 0.014 A rms and 0.08 A counted to the nearest."""
     maps = {}
     for direction, name in ((1, "positive"), (-1, "negative")):
         k = np.sign(samples["v"]) == direction
@@ -118,7 +123,7 @@ def friction_maps(samples, curve, bins=24):
         speed = np.abs(samples["v"][k])
         residual = direction * samples["u"][k] - servo_friction_curve(speed, p["coulomb"], p["stribeck"], p["stribeck_speed"],
                                                                       p["viscous"], curve["creep_drop"], curve["creep_speed"])
-        b = (np.mod(samples["q"][k], TWO_PI) / TWO_PI * bins).astype(int) % bins
+        b = np.rint(np.mod(samples["q"][k], TWO_PI) / TWO_PI * bins).astype(int) % bins
         values = np.full(bins, np.nan)
         for i in range(bins):
             if (b == i).sum() >= 100:

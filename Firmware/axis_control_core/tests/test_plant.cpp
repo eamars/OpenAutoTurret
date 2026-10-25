@@ -52,6 +52,28 @@ void free_play_lets_the_motor_turn_alone_until_it_takes_the_load() {
   expect(std::abs(plant.position()-plant.load_position()+p.free_play_rad/2)<1e-4,"reversed, the motor crosses the whole gap");
   expect(std::abs(plant.load_position())<1e-3,"and the load still holds");
 }
+void free_play_keeps_the_load_through_a_current_dip_while_sliding() {
+  // The station's inertia sweep: sliding, the motor's current dips below zero for tens of ms in every
+  // cycle, and the encoder still reads the rigid body (YawPlantParameters::gap_damping). Without the
+  // gap's drag the motor leaves the face it pushes on and crosses the whole gap; with it, it stays.
+  auto slide=[](double drag) {
+    auto p=yaw_fixture();
+    p.free_play_rad=.7*M_PI/180; p.motor_inertia=.01; p.motor_friction_A=.05;
+    p.contact_stiffness=5000; p.contact_damping=4; p.gap_damping=drag;
+    YawPlant plant(p,0.);
+    plant.command(0.,.6);
+    plant.advance(2.);   // sliding, the motor on the load's face
+    plant.command(2.,-.4);
+    plant.command(2.06,.6);
+    double lowest=1.;
+    for (double t=2.;t<2.3;t+=1e-3) { plant.advance(t); lowest=std::min(lowest,plant.position()-plant.load_position()); }
+    return std::make_pair(p.free_play_rad/2,lowest);
+  };
+  const auto [face,free]=slide(0.);
+  expect(free<-.9*face,"a free gap: a 60 ms dip throws the motor across it");
+  const auto [face12,dragged]=slide(12.);
+  expect(face12-dragged<.003,"the gap's drag: the motor stays within 3 mrad of the face it pushes on");
+}
 void reading_carries_the_crosstalk_of_the_delayed_command() {
   auto p=yaw_fixture();
   for (auto& g:p.crosstalk_map) g=.005;
@@ -96,6 +118,7 @@ int main() {
     sliding_current_equals_the_friction_curve();
     creeps_below_the_peak_and_holds_below_the_creep_level();
     free_play_lets_the_motor_turn_alone_until_it_takes_the_load();
+    free_play_keeps_the_load_through_a_current_dip_while_sliding();
     reading_carries_the_crosstalk_of_the_delayed_command();
     position_loop_does_not_wind_into_the_clamp();
     guard_trips_on_a_limit_cycle_not_on_a_rock();
