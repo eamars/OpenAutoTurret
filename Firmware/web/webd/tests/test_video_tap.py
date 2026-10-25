@@ -75,5 +75,53 @@ class TapStaleness(unittest.TestCase):
         src.stop()
 
 
+class TapSize(unittest.TestCase):
+    """A tapped stream is whatever visiond wrote, so its state says the served picture's size: it used to
+    echo the start request's 1920x1080 for both previews (wide 640x360, detail 1280x720)."""
+
+    @staticmethod
+    def jpeg(width, height, comment=b""):
+        import io
+        from PIL import Image
+        out = io.BytesIO()
+        Image.new("RGB", (width, height), (40, 80, 120)).save(out, "JPEG", quality=70)
+        data = out.getvalue()
+        if comment:   # a COM segment ahead of the frame header, as visiond's OTA_FRAME snapshots carry
+            data = data[:2] + b"\xff\xfe" + (len(comment) + 2).to_bytes(2, "big") + comment + data[2:]
+        return data
+
+    def test_the_frame_header_gives_the_size(self):
+        from web.webd.video import jpeg_size
+        self.assertEqual(jpeg_size(self.jpeg(640, 360)), (640, 360))
+        self.assertEqual(jpeg_size(self.jpeg(1280, 720, comment=b"OTA_FRAME\x00{}")), (1280, 720))
+        self.assertIsNone(jpeg_size(STALE_JPEG))
+        self.assertIsNone(jpeg_size(b"not a jpeg at all"))
+
+    def test_the_state_reports_the_served_size_not_the_request(self):
+        path = os.path.join(tempfile.mkdtemp(), "tap.jpg")
+        with open(path, "wb") as f:
+            f.write(self.jpeg(640, 360))
+        saved = os.environ.get("OTA_VISION_FRAME_TAP")
+        os.environ["OTA_VISION_FRAME_TAP"] = path
+        try:
+            src = VideoSource(enabled=True)
+            st = src.start(1920, 1080, 10, 70)
+            self.assertTrue(st.running, st.error)
+            self.assertEqual((st.width, st.height), (640, 360))
+            with open(path + ".tmp", "wb") as f:
+                f.write(self.jpeg(1280, 720))
+            os.replace(path + ".tmp", path)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and src.state().width != 1280:
+                time.sleep(0.02)
+            self.assertEqual((src.state().width, src.state().height), (1280, 720))
+            src.stop()
+        finally:
+            if saved is None:
+                os.environ.pop("OTA_VISION_FRAME_TAP", None)
+            else:
+                os.environ["OTA_VISION_FRAME_TAP"] = saved
+
+
 if __name__ == "__main__":
     unittest.main()

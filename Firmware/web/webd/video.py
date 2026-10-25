@@ -33,6 +33,27 @@ from common import image_corrections as ic
 log = logging.getLogger(__name__)
 
 
+def jpeg_size(jpeg: bytes) -> Optional[Tuple[int, int]]:
+    """(width, height) from a JPEG's frame header, or None. A tapped stream's size is whatever
+    visiond wrote (the wide preview is 640x360, the detail 1280x720), not what the start asked for."""
+    i = 2
+    while i + 9 <= len(jpeg) and jpeg[:2] == b"\xff\xd8":
+        if jpeg[i] != 0xFF:
+            return None
+        marker = jpeg[i + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        length = int.from_bytes(jpeg[i + 2:i + 4], "big")
+        # SOF0..SOF15, less DHT (C4), JPG (C8) and DAC (CC): height then width after the precision.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            return int.from_bytes(jpeg[i + 7:i + 9], "big"), int.from_bytes(jpeg[i + 5:i + 7], "big")
+        if marker == 0xDA or length < 2:
+            return None
+        i += 2 + length
+    return None
+
+
 @dataclass
 class VideoState:
     """Snapshot of the video source state (returned by the API)."""
@@ -345,8 +366,12 @@ class VideoSource:
                 return self.state()
             self._running = True
             self.starts += 1
+            # The size is the served picture's (kept current by the loop), not the request's: the
+            # 1920x1080 this used to echo was config, and no tapped stream is that size.
+            with self._frame_lock:
+                size = jpeg_size(self._latest) or (0, 0)
             self._state = VideoState(
-                running=True, width=width, height=height, fps=float(fps),
+                running=True, width=size[0], height=size[1], fps=float(fps),
                 quality=int(quality),
                 camera=("vision-tap" if not self._stream_role
                         else f"vision-tap:{self._stream_role}"))
@@ -402,11 +427,14 @@ class VideoSource:
                     return
                 if jpeg:
                     now = time.monotonic()
+                    size = jpeg_size(jpeg)
                     with self._frame_lock:
                         self._latest = jpeg
                         self._seq += 1
                         self._ts = now
                         self._count += 1
+                        if size and self._running:
+                            self._state.width, self._state.height = size
                     self._recent.append(now)
                     self._arrived.append(now)
                     if not self._first_frame.is_set():

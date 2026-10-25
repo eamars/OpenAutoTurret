@@ -849,8 +849,10 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
     snapshot.start()
 
     leg_wanted = threading.Event()
+    delivered = 0
 
     def poll():
+        nonlocal delivered
         request = picam2.capture_request()
         try:
             # make_array already copies out of the request's buffer (picamera2 request.py: "we
@@ -863,7 +865,10 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
             metadata = dict(request.get_metadata())   # 名字里带下划线：getmetadata() 不存在
         finally:
             request.release()
-        sequence = int(metadata.get("sequence", 0))
+        # libcamera's metadata carries no frame number (this read "sequence" and got 0 for every
+        # frame): count delivered frames, as the wide camera does (camera.py).
+        delivered += 1
+        sequence = delivered
         stamp = metadata.get("SensorTimestamp")
         tap.offer(image, now_ns=None, metadata={"camera": "detail",
                                                "sensor_timestamp_ns": stamp,
