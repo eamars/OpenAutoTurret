@@ -39,7 +39,8 @@ const mark = hudBoreMark(input.t, !!input.stale, input.main || "wide");
 // module that quietly owned page colours would be a second place to declare them.
 const C = {"green": "#95f58b", "dim": "rgba(149,245,139,.56)", "faint": "rgba(149,245,139,.22)", "amber": "#f2b329", "red": "#ff5d5d", "white": "#edf2eb", "black": "rgba(3,6,5,.80)", "stroke": "#05070a", "text": "#c5d0c5", "text_dim": "#8c998c"};
 console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) : null,
-  point: hudMeasurementPointSvg(input.t, lay, !!input.stale, C)}));
+  point: hudMeasurementPointSvg(input.t, lay, !!input.stale, C),
+  reticle: hudReticle(input.t, !!input.stale, input.main || "wide", !!input.calibrating)}));
 ''', encoding="utf-8")
 
     def tearDown(self):
@@ -92,6 +93,25 @@ console.log(JSON.stringify({mark, pixel: mark ? hudProject(mark.u, mark.v, lay) 
         self.assertAlmostEqual(detail["v"], 0.4)
         self.data["alignment"]["detail"]["valid"] = False
         self.assertIsNone(self.render(main="detail")["mark"], "no wide mark drawn on the detail picture")
+
+    def test_calibration_aids_show_only_in_calibration(self):
+        # Owner, 2026-10-25: "I can still see the RANGE 11 m marker outside of the calibration mode".
+        # The reticle stays on the bore point -- the tracker centres targets there -- but the amber, the
+        # working-distance caption and the optical-axis circle belong to MENU > CALIBRATION.
+        out = self.render()["reticle"]
+        self.assertAlmostEqual(out["u"], 949.5825/1920)
+        self.assertEqual((out["amber"], out["label"], out["axis"], out["warning"]), (False, None, None, None))
+        cal = self.render(calibrating=True)["reticle"]
+        self.assertAlmostEqual(cal["u"], out["u"])
+        self.assertEqual((cal["amber"], cal["label"]), (True, "RANGE 10 m"))
+        self.assertEqual(cal["axis"], {"u": 0.5, "v": 0.5}, "no intrinsics here: the assumed centre")
+        # A bore that cannot be drawn is degraded operation, so it says so whether calibrating or not.
+        self.data["alignment"]["wide"]["valid"] = False
+        for calibrating in (False, True):
+            broken = self.render(calibrating=calibrating)["reticle"]
+            self.assertEqual((broken["u"], broken["amber"], broken["warning"]), (0.5, False, "BORE ALIGNMENT UNAVAILABLE"))
+        self.data["alignment"]["mode"] = "off"
+        self.assertEqual(self.render(calibrating=True)["reticle"]["warning"], None)
 
     def test_fallback_and_clipping_are_visible(self):
         self.data["target_aim_source"] = "invalid_box_anchor_fallback"

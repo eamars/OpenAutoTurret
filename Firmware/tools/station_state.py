@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Print the station's state as the deploy tool restores it: ``homed`` or ``shutdown``.
+"""Print the station's state as the deploy tool restores it: ``homed`` or ``shutdown`` -- or
+``calibrating``, a run in progress, which the deploy does not interrupt.
 
 Owner ruling 2026-10-03: the station is Homed or Shutdown, and a deploy returns it to the one it
 found. Homed means a reachable controller with valid limits that is neither shut down nor faulted.
@@ -15,6 +16,10 @@ import urllib.request
 
 
 def classify(state: dict) -> str:
+    # A calibration run in progress (ADR-005 D7) is homed, but a restart would end it unfinished --
+    # up to 70 minutes of the turret's time, nothing installed -- so the deploy refuses to activate.
+    if state.get("controld_connected") and state.get("calibrating"):
+        return "calibrating"
     up = (state.get("controld_connected") and state.get("soft_limits_valid")
           and state.get("phase") not in ("idle", "fault"))
     return "homed" if up else "shutdown"

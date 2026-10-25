@@ -281,11 +281,14 @@ def main():
         root = args.root.rstrip("/")
         # Two states (owner ruling 2026-10-03): a deploy returns the station to the one it found
         # (tools/station_state.py says which), unless --start-state names one.
-        state = args.start_state
-        if state == "keep":
-            probe = release + "/Firmware/tools/station_state.py"
-            state = remote(f"{quote(venv + '/bin/python')} {quote(probe)}",
-                           capture_output=True, text=True).stdout.strip() or "shutdown"
+        probe = release + "/Firmware/tools/station_state.py"
+        found = remote(f"{quote(venv + '/bin/python')} {quote(probe)}",
+                       capture_output=True, text=True).stdout.strip() or "shutdown"
+        if found == "calibrating":
+            # Whatever --start-state says: the restart would end the run unfinished.
+            raise SystemExit(f"Not activated: a calibration run is in progress (MENU > CALIBRATION shows it). "
+                             f"Wait for it to end, or STOP it, then deploy again. The verified release is {release}.")
+        state = found if args.start_state == "keep" else args.start_state
         print(f"Start state: {state.upper()}", flush=True)
         # run/current is what the boot service starts; replace it atomically.
         remote(f"ln -sfn {quote(release)} {quote(root + '/run/current.new')} && "

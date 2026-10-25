@@ -331,11 +331,19 @@ runs from the page (VERIFY, RE-RUN, NEW's measurement) come with stage 2 and are
 - **Measured on the station (releases 7e6f9ab..5617a61).** Command to resumed AUTO_ROAM 0.97 s; from
   a still MANUAL hold the swap itself moves yaw at most 0.046 deg (one count) and pitch 0.022 deg, done
   in 0.48-0.53 s. The servo re-engages bumpless at the same position.
-- **The bore (D9).** Per record, OFF or ON. ON, the tracker aims the bore instead of the camera centre
-  and the HUD draws the amber mark labelled `ZERO 25 m` / `ZERO ∞`. With it on: ZERO AT (5..1500 m, ∞;
-  zero on a target at that distance) and WIDE R/U trims at 0.1, 1 or 10 mrad per press. Only in a
-  MANUAL hold or in Shutdown; the panel offers HOLD HERE TO TRIM otherwise. The detail camera's rows
-  wait for its intrinsics.
+- **The bore (D9, ADR-006).** Per record, OFF or ON. ON, the tracker aims the bore instead of the
+  camera centre, and the reticle sits on it. With it on: RANGE (the working distance), WIDE and
+  DETAIL R/U trims at 0.1, 1 or 10 mrad per press, the installation offsets and the ZERO tap. Only in
+  a MANUAL hold or in Shutdown (the tap: a MANUAL hold); the panel offers HOLD HERE TO TRIM otherwise.
+- **Calibration ends where it found the station (owner, 2026-10-25: "ensure the calibration life
+  cycle is closed").** Calibration is MENU > CALIBRATION open on the page. Only there is the reticle
+  the amber bore mark, captioned `RANGE 11 m`, with the optical axis beside it; outside it is the
+  plain green reticle on the same point. Leaving (‹ MENU or any dock button) drops the ZERO
+  procedure's state, puts the main display back if calibration swapped it, and resumes the mode its
+  HOLD HERE TO TRIM interrupted -- unless the station left that hold some other way, or a run was
+  STOPPED (STOP is the operator's word). Runs keep their own rule: the interrupted mode, MANUAL after
+  STOP. A deploy refuses to activate during a run. The failure modes and their handling are in
+  [ADR-006](ADR-006/ADR-006.md) section 6.
 - **A switch cannot tell whether the record fits what is mounted.** The station cannot see the
   payload; the VERIFY row says NOT VERIFIED SINCE SWITCH. A yaw motor change makes every record's
   crosstalk table stale, and the station cannot tell either.

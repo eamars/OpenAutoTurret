@@ -50,7 +50,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                         " otaJogForArrow, otaAxisArrow, hudRowAwaitsConfirm, hudConfirmKey,"
                         " hudCalibrationEntry, hudCalibrationPanel, hudCalibrationBore, hudBoreZeroName,"
                         " hudCalibrationRun, hudRerunKind, hudCalibrationLastRun, hudCalibrationZero, hudSettled,"
-                        " hudUnproject, hudProject };\n")
+                        " hudUnproject, hudProject, hudCalibrationExit, hudCalibrationHoldStands };\n")
         self._geo.close()
 
     def tearDown(self) -> None:
@@ -553,6 +553,65 @@ class DockAndDrawerBehaviour(unittest.TestCase):
             b = self._bore(bore=self.ON, **t)
             self.assertIsNone(b["hold"], t)
             self.assertFalse(b["live"], t)
+
+    # The calibration lifecycle closes (owner, 2026-10-25): leaving MENU > CALIBRATION puts back what
+    # calibration changed -- the main display, the mode its HOLD HERE interrupted -- and nothing else.
+
+    def test_the_hold_says_which_mode_comes_back(self) -> None:
+        roam = self._bore(bore=self.ON, phase="hold", operating_mode="AUTO_ROAM")
+        self.assertEqual(roam["hold"]["ui"], "hold")
+        self.assertEqual(roam["hold"]["note"], "MANUAL until you leave calibration, then AUTO ROAM again")
+        self.assertIsNone(roam["held"])
+        held = self._node("console.log(JSON.stringify(T.hudCalibrationBore(%s, 0.1, 'SURVEILLANCE')));" % json.dumps(
+            {"calibration_records": self.CAL_RECORDS, "calibration_record": {"id": 2, "name": "F"},
+             "phase": "hold", "operating_mode": "MANUAL"}))
+        self.assertEqual(held["held"], "HELD FOR CALIBRATION · SURVEILLANCE AGAIN WHEN YOU LEAVE")
+
+    def _exit(self, session, **t):
+        return self._node("console.log(JSON.stringify(T.hudCalibrationExit(%s, %s)));" % (json.dumps(session), json.dumps(t)))
+
+    @staticmethod
+    def _main(role):
+        return {"inference": {"main_camera": {"role": role, "available": ["wide", "detail"]}}}
+
+    def test_leaving_calibration_puts_back_the_camera_and_the_interrupted_mode(self) -> None:
+        manual = dict(phase="hold", operating_mode="MANUAL", **self._main("detail"))
+        self.assertEqual(self._exit({"main": "wide", "resume": "AUTO_ROAM"}, **manual), {"main": "wide", "mode": "AUTO_ROAM"})
+        self.assertEqual(self._exit(None, **manual), {"main": None, "mode": None}, "never entered: nothing to undo")
+        self.assertEqual(self._exit({"main": "detail", "resume": None}, **manual), {"main": None, "mode": None},
+                         "what the operator chose outside calibration stays")
+        self.assertEqual(self._exit({"main": "wide", "resume": "MANUAL"}, **manual)["mode"], None)
+        # The hold is not calibration's any more, or not a still hold: nothing is resumed.
+        for t in ({"phase": "hold", "operating_mode": "AUTO_TRACK"}, {"phase": "idle"}, {"phase": "fault"},
+                  dict(manual, calibrating=True), dict(manual, calibration_switching=True), dict(manual, rest_park="parked")):
+            self.assertIsNone(self._exit({"main": "detail", "resume": "AUTO_ROAM"}, **t)["mode"], t)
+        alone = dict(manual, inference={"main_camera": {"role": "wide", "available": ["wide"]}})
+        self.assertIsNone(self._exit({"main": "detail", "resume": None}, **alone)["main"], "no detail stream to swap to")
+
+    def test_calibrations_hold_ends_when_the_station_leaves_it_or_a_run_is_stopped(self) -> None:
+        stands = lambda prev, t: self._node("console.log(JSON.stringify(T.hudCalibrationHoldStands(%s, %s)));" % (
+            json.dumps(prev), json.dumps(t)))
+        manual = {"phase": "hold", "operating_mode": "MANUAL"}
+        self.assertTrue(stands(None, manual))
+        self.assertTrue(stands(manual, dict(manual, calibrating=True)), "a run keeps it")
+        self.assertTrue(stands(manual, {"phase": "hold", "calibration_switching": True}), "a swap hold keeps it")
+        self.assertFalse(stands(manual, {"phase": "hold", "operating_mode": "AUTO_TRACK"}))
+        self.assertFalse(stands(manual, {"phase": "fault"}))
+        run = lambda state: {"id": 3, "active": False, "state": state}
+        self.assertFalse(stands(dict(manual, calibrating=True), dict(manual, calibration_run=run("stopped"))),
+                         "STOP is the operator's word: leaving must not start the turret again")
+        self.assertTrue(stands(dict(manual, calibrating=True), dict(manual, calibration_run=run("done"))))
+
+    def test_the_page_closes_calibration_on_every_way_out(self) -> None:
+        # Leaving is setDrawer's (‹ MENU and every dock button go through it); the run's end comes back
+        # into calibration. A tap re-checks what armed it, and a new record in force ends it.
+        self.assertIn('const leaving = drawerOpen === "CALIBRATION" && key !== "CALIBRATION";', HUD_JS)
+        self.assertIn("if (leaving) leaveCalibration();", HUD_JS)
+        self.assertIn('drawerOpen = "CALIBRATION"; enterCalibration();', HUD_JS)
+        self.assertIn('hudReticle(t, stale, view.main, drawerOpen === "CALIBRATION")', HUD_JS)
+        self.assertIn("if (!s.settle.ok) { say(", HUD_JS)
+        self.assertIn('classList.contains("stale")) { say(', HUD_JS)
+        self.assertIn("(t.calibration_record || {}).id !== calZero.record", HUD_JS)
 
     def test_the_pad_dims_and_stops_jogging_while_a_swap_holds_the_turret(self) -> None:
         self.assertIn("!t.target_type_switching && !t.calibration_switching", HUD_JS)

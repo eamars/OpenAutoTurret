@@ -15,8 +15,9 @@ boundary that is not the camera's. So the whole frame is always visible and the 
 the cost, taken deliberately.
 
 The optical-axis marker uses the camera principal point. With virtual bore alignment
-enabled, the main reticle uses the controller's projected bore sight and is amber,
-labelled with its assumed depth; the camera centre remains a small separate marker.
+enabled, the main reticle sits on the controller's projected bore sight. Only in calibration
+(MENU > CALIBRATION open) is it amber and labelled with its working distance, with the camera
+centre as a small separate marker; leaving calibration puts back what it changed (hudCalibrationExit).
 The requested measurement point is a white diamond. No bore range is measured here.
 """
 from __future__ import annotations
@@ -159,6 +160,20 @@ function hudBoreMark(t, stale, main) {
       m.x_norm < 0 || m.x_norm > 1 || m.y_norm < 0 || m.y_norm > 1) return null;
   // ADR-006 D5: the working distance the mark is drawn for (infinity is published as 1e6 m).
   return { u: m.x_norm, v: m.y_norm, label: "RANGE " + hudBoreZeroName(a.assumed_depth_m) };
+}
+
+// The reticle: where the tracker centres a target -- the bore point with BORE ON, else the optical
+// axis. Calibration's aids belong to calibration (owner, 2026-10-25: "I can still see the RANGE 11 m
+// marker outside of the calibration mode"): with MENU › CALIBRATION open the bore point is the amber
+// bore mark, captioned with its working distance, the optical axis a small circle beside it; outside,
+// the same point is the plain green reticle. A bore that cannot be drawn says so in either.
+function hudReticle(t, stale, main, calibrating) {
+  const bore = hudBoreMark(t, stale, main);
+  const axis = hudAxisNorm(t && t.camera_intrinsics) || { u: 0.5, v: 0.5 };
+  const aids = !!bore && !!calibrating;
+  return { u: bore ? bore.u : axis.u, v: bore ? bore.v : axis.v, amber: aids, axis: aids ? axis : null,
+           label: aids ? bore.label : null,
+           warning: !bore && t && t.alignment && t.alignment.mode === "manual_depth" ? "BORE ALIGNMENT UNAVAILABLE" : null };
 }
 
 function hudMeasurementPointSvg(t, lay, stale, C) {
@@ -586,10 +601,11 @@ function hudCalibrationPanel(t, opts) {
 // the panel offers the hold itself rather than only refusing.
 const HUD_BORE_ZEROS = [5, 10, 25, 50, 100, 200, 500, 1000, 1500, null];   // m; null = infinity
 const HUD_BORE_PACES = [0.1, 1, 10];
+function hudModeName(mode) { return String(mode || "MANUAL").replace(/_/g, " "); }
 function hudBoreZeroName(z) {
   return z === null || z === undefined || !Number.isFinite(z) || z >= 1e5 ? "∞" : Number(z.toFixed(1)) + " m";
 }
-function hudCalibrationBore(t, pace) {
+function hudCalibrationBore(t, pace, resume) {
   t = t || {};
   const cur = t.calibration_record;
   if (!cur || !cur.id) return null;
@@ -600,9 +616,14 @@ function hudCalibrationBore(t, pace) {
   const still = !switching && !parked && (t.phase === "idle" || (t.phase === "hold" && t.operating_mode === "MANUAL"));
   const why = switching ? "switching…" : parked ? "parked: trim in a MANUAL hold or in Shutdown"
     : t.phase === "hold" ? "trim in MANUAL: MODE › MANUAL holds where it is" : "trim on a still turret: a MANUAL hold or Shutdown";
+  // Calibration's own hold ends with calibration (hudCalibrationExit): the row says so, and while it
+  // stands the panel says which mode comes back.
   const hold = !still && !switching && !parked && t.phase === "hold"
-    ? { label: "HOLD HERE TO TRIM", command: "set_mode", arg: "MANUAL", kind: "act", note: "MANUAL: the turret stops where it is" }
+    ? { label: "HOLD HERE TO TRIM", command: "set_mode", arg: "MANUAL", kind: "act", ui: "hold",
+        note: "MANUAL until you leave calibration, then " + hudModeName(t.operating_mode) + " again" }
     : null;
+  const held = resume && resume !== "MANUAL" && still && !switching
+    ? "HELD FOR CALIBRATION · " + hudModeName(resume) + " AGAIN WHEN YOU LEAVE" : null;
   pace = HUD_BORE_PACES.indexOf(pace) >= 0 ? pace : 0.1;
   const live = still && on;
   // ADR-006 D5: the working distance (the tracker's assumed range). A distance off the ladder (a zero
@@ -633,7 +654,7 @@ function hudCalibrationBore(t, pace) {
              note: on ? "" : "turn the bore on to trim it" };
   };
   return {
-    locked: false, on: on, still: still, live: live, hold: hold,
+    locked: false, on: on, still: still, live: live, hold: hold, held: held,
     note: !still ? why : on ? "the tracker aims the bore" : "the tracker aims the camera centre",
     mode: [{ label: "OFF", on: !on, command: still && on ? "set_bore_mode" : null, arg: "off" },
            { label: "ON", on: on, command: still && !on ? "set_bore_mode" : null, arg: "on" }],
@@ -685,7 +706,7 @@ function hudCalibrationZero(t, z, settle) {
              text: v[0] + " R · " + v[1] + " U · " + v[2] + " F MM" };
   });
   const why = !on ? "turn the bore on first"
-    : !hold ? "zero in a MANUAL hold: MODE › MANUAL, then point the payload at the target"
+    : !hold ? "zero in a MANUAL hold: HOLD HERE TO TRIM, then point the payload at the target"
     : !haveD ? "type the target's distance first"
     : !settled ? "wait until the turret has settled" : "";
   const armed = !!z.armed && z.armed === main;
@@ -702,6 +723,35 @@ function hudCalibrationZero(t, z, settle) {
     // What the tap sends, less the point: zero_bore <camera> <metres> <u> <v>.
     arg: haveD ? main + " " + d : null
   };
+}
+
+// The calibration lifecycle closes (owner, 2026-10-25). Calibration is MENU › CALIBRATION open on
+// this page. Entering it notes the camera on the main display; its HOLD HERE TO TRIM notes the mode
+// that hold interrupted. Leaving it -- ‹ MENU, or any dock button -- puts back what calibration
+// changed and nothing else: the main display, which the ZERO procedure swaps, and the interrupted
+// mode, while the turret still stands in that MANUAL hold. A run ends as its own rules say (the mode
+// it interrupted; MANUAL after STOP), so it is the same rule one level down. The page's ZERO state
+// (the distance, an armed tap, a dialog) goes too, and the reticle loses calibration's aids.
+// session: {main, resume} or null; t: the station now. Returns what to send.
+function hudCalibrationExit(session, t) {
+  t = t || {};
+  if (!session) return { main: null, mode: null };
+  const view = hudMainView(t);
+  const held = t.phase === "hold" && t.operating_mode === "MANUAL" && !t.calibrating && !t.calibration_switching &&
+               !t.rest_park;
+  return { main: session.main && session.main !== view.main && view.canSwap ? session.main : null,
+           mode: session.resume && session.resume !== "MANUAL" && held ? session.resume : null };
+}
+// Whether the MANUAL hold calibration took still stands, from the last telemetry (prev) and this one.
+// It ends when the station leaves it any other way -- a mode chosen on another page, a fault, PARK,
+// Shutdown -- and when a run is STOPPED: STOP is the operator's word (the run ends in MANUAL), so
+// leaving calibration afterwards must not start the turret again. Swap holds and runs keep it.
+function hudCalibrationHoldStands(prev, t) {
+  t = t || {};
+  const run = t.calibration_run || {};
+  if (prev && prev.calibrating && !t.calibrating && run.state === "stopped") return false;
+  if (t.calibrating || t.calibration_switching) return true;
+  return t.phase === "hold" && t.operating_mode === "MANUAL";
 }
 
 // ADR-005 D7: a calibration run. The station's estimates (workstation runs); calibd's notes say which
@@ -1748,11 +1798,10 @@ function render(t) {
   // §7: the optical axis. Sparse brackets, verticals above and below, short bars
   // left and right, open centre - and never on the target.
   const intr = t.camera_intrinsics;
-  const axis = hudAxisNorm(intr) || { u: 0.5, v: 0.5 };
-  const bore = hudBoreMark(t, stale, view.main);
-  const c = hudProject(bore ? bore.u : axis.u, bore ? bore.v : axis.v, lay);
+  const ret = hudReticle(t, stale, view.main, drawerOpen === "CALIBRATION");
+  const c = hudProject(ret.u, ret.v, lay);
   if (c.ok) {
-    const g = bore ? C.amber : C.green, r = 26, gap = 8, len = 12;
+    const g = ret.amber ? C.amber : C.green, r = 26, gap = 8, len = 12;
     const corner = (sx, sy) =>
       '<path d="M ' + (c.x + sx * r) + ' ' + (c.y + sy * gap) + ' L ' + (c.x + sx * r) + ' ' +
       (c.y + sy * r) + ' L ' + (c.x + sx * gap) + ' ' + (c.y + sy * r) + '" fill="none" ' +
@@ -1765,16 +1814,14 @@ function render(t) {
       corner(-1, -1) + corner(1, -1) + corner(-1, 1) + corner(1, 1) + cant[0] + cant[1] +
       (intr ? "" : '<text x="' + (c.x + r + 18) + '" y="' + (c.y + 4) + '" class="lbl" ' +
         'fill="' + C.amber + '">RETICLE UNCALIBRATED (assumed centre)</text>');
-    if (bore) {
-      const optical = hudProject(axis.u, axis.v, lay);
+    if (ret.axis) {
+      const optical = hudProject(ret.axis.u, ret.axis.v, lay);
       if (optical.ok) layers.reticle += '<circle cx="' + optical.x + '" cy="' + optical.y +
         '" r="3" fill="none" stroke="' + C.dim + '" stroke-width="1"/>';
-      layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
-        '" class="lbl" fill="' + C.amber + '">' + bore.label + '</text>';
-    } else if (t.alignment && t.alignment.mode === "manual_depth") {
-      layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
-        '" class="lbl" fill="' + C.amber + '">BORE ALIGNMENT UNAVAILABLE</text>';
     }
+    if (ret.label || ret.warning)
+      layers.reticle += '<text x="' + (c.x+36) + '" y="' + (c.y+25) +
+        '" class="lbl" fill="' + C.amber + '">' + (ret.label || ret.warning) + '</text>';
   }
   layers.sel += hudMeasurementPointSvg(t, lay, stale, C);
 
@@ -2028,7 +2075,7 @@ function paint(t) {
     value.calibration_run && [value.calibration_run.id, value.calibration_run.active, value.calibration_run.verdict]] : null;
   // ADR-005 D7: a run takes the drawer; when it ends the panel shows how it went.
   if (t && t.calibrating && drawerOpen !== "RUN") { drawerOpen = "RUN"; pendingConfirm = null; closeCalibrationDialog(); renderDock(); }
-  else if (t && !t.calibrating && drawerOpen === "RUN") { drawerOpen = "CALIBRATION"; renderDock(); renderDrawer(); }
+  else if (t && !t.calibrating && drawerOpen === "RUN") { drawerOpen = "CALIBRATION"; enterCalibration(); renderDock(); renderDrawer(); }
   const drawerKey = value => JSON.stringify(drawerOpen === "RUN" ? [value && value.calibration_run]
     : drawerOpen === "CALIBRATION" ? calKey(value)
     : drawerOpen === "MENU"
@@ -2053,9 +2100,17 @@ function paint(t) {
     while (calSamples.length && Date.now() - calSamples[0].t > 3000) calSamples.shift();
   }
   const settleFlipped = hudSettled(calSamples, Date.now()).ok !== settledBefore && drawerOpen === "CALIBRATION";
-  // An armed tap ends when its reason does: the turret left the MANUAL hold, or the cameras swapped.
-  if (calZero.armed && (!t || t.phase !== "hold" || t.operating_mode !== "MANUAL" || hudMainView(t).main !== calZero.armed))
+  // An armed tap ends when its reason does: the turret left the MANUAL hold, the cameras swapped, or
+  // another record came into force (the tap would zero that one).
+  if (calZero.armed && (!t || t.phase !== "hold" || t.operating_mode !== "MANUAL" || hudMainView(t).main !== calZero.armed ||
+                        t.calibration_switching || (t.calibration_record || {}).id !== calZero.record))
     disarmZero();
+  // Calibration's hold, once it stands, is forgotten when it ends some other way (taken: the frames
+  // between HOLD HERE and the hold arriving are not an ending).
+  if (calSession && calSession.resume) {
+    if (hudCalibrationHoldStands(lastTelemetry, t)) calSession.taken = true;
+    else if (calSession.taken) calSession.resume = null;
+  }
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   render(t);
@@ -2318,8 +2373,23 @@ function renderTargetTypes(t) {
 // MENU > CALIBRATION (ADR-005): the panel takes the drawer's place, MENU stays lit, ‹ MENU goes back.
 let calRefusal = null, calSeenSeq = null;
 // ADR-006: the ZERO procedure's page state, and the turret's recent position for the settle check.
-let calZero = { distance: null, armed: null };
+let calZero = { distance: null, armed: null, record: null };
 const calSamples = [];
+// What calibration found and changed, to put back on leaving it (hudCalibrationExit).
+let calSession = null;
+function enterCalibration() {
+  if (!calSession) calSession = { main: hudMainView(lastTelemetry || {}).main, resume: null };
+}
+function leaveCalibration() {
+  const exit = hudCalibrationExit(calSession, lastTelemetry || {});
+  calSession = null;
+  disarmZero();
+  calZero = { distance: null, armed: null, record: null };
+  closeCalibrationDialog();
+  calRefusal = null;
+  if (exit.mode) sendCommand("set_mode", exit.mode);
+  if (exit.main && window.otaSwapPip) window.otaSwapPip();
+}
 function noteCalibrationAck(t) {
   // The station's word on a refused calibration command shows in the panel for a few seconds: these
   // refusals say something the operator must act on (#1 is the backup, the record cannot be read).
@@ -2333,7 +2403,7 @@ function noteCalibrationAck(t) {
 }
 let calPace = 0.1;   // MRAD per press; the page's own, like the main display choice
 function renderCalibrationBore(t) {
-  const s = hudCalibrationBore(t, calPace);
+  const s = hudCalibrationBore(t, calPace, calSession && calSession.resume);
   if (!s) return "";
   if (s.locked)
     return '<div class="drow setting gated"><span class="rl">BORE</span><span class="rn">LOCKED</span>' +
@@ -2342,9 +2412,9 @@ function renderCalibrationBore(t) {
     (command ? ' data-cmd="' + command + '" data-arg="' + escapeMarkup(arg) + '" data-kind="act"' : " disabled") + ">" +
     text + "</button>";
   const snote = (text, warn) => text ? '<span class="snote' + (warn ? " warn" : "") + '">' + escapeMarkup(text) + "</span>" : "";
-  let h = s.hold ? '<button type="button" class="drow calhold" data-cmd="' + s.hold.command + '" data-arg="' +
-    s.hold.arg + '" data-kind="act"><span class="rl">' + s.hold.label + '</span><span class="rn">' + s.hold.note +
-    "</span></button>" : "";
+  let h = s.hold ? '<button type="button" class="drow calhold" data-calui="' + s.hold.ui + '"><span class="rl">' +
+    s.hold.label + '</span><span class="rn">' + escapeMarkup(s.hold.note) + "</span></button>" : "";
+  if (s.held) h += '<div class="drow setting"><span class="snote">' + escapeMarkup(s.held) + "</span></div>";
   h += '<div class="drow setting"><span class="rl">BORE</span><span class="stepper">' +
        s.mode.map((m) => sb(m.label, m.command, m.arg, " chip" + (m.on ? " on" : ""))).join("") + "</span>" +
        snote(s.note, !s.still) + "</div>";
@@ -2508,6 +2578,7 @@ function armZero() {
   const s = hudCalibrationZero(lastTelemetry || {}, calZero, hudSettled(calSamples, Date.now()));
   if (!s || s.tap.ui !== "zero:arm") return;
   calZero.armed = s.main;
+  calZero.record = ((lastTelemetry || {}).calibration_record || {}).id;
   const bar = document.createElement("div");
   bar.id = "zerobar";
   bar.innerHTML = '<span>TAP THE TARGET ON THE ' + s.main.toUpperCase() + ' PICTURE</span><button type="button">CANCEL</button>';
@@ -2533,7 +2604,12 @@ $("viewport").addEventListener("pointerdown", (e) => {
   const rect = $("viewport").getBoundingClientRect();
   const p = hudUnproject(e.clientX - rect.left, e.clientY - rect.top, window.otaLastLayout);
   if (!s || !s.arg || s.main !== calZero.armed) { disarmZero(); return; }
-  if (!p.ok) { $("zerobar").querySelector("span").textContent = "TAP INSIDE THE PICTURE"; return; }
+  // What armed the tap must still be true when it lands: the picture is live and the turret has not
+  // moved since (someone jogging on another page, a hold drifting). The tap stays armed.
+  const say = (text) => { $("zerobar").querySelector("span").textContent = text; };
+  if ($("viewport").classList.contains("stale")) { say("THE PICTURE IS STALE: WAIT, THEN TAP"); return; }
+  if (!s.settle.ok) { say("THE TURRET IS MOVING: WAIT UNTIL IT SETTLES, THEN TAP"); return; }
+  if (!p.ok) { say("TAP INSIDE THE PICTURE"); return; }
   sendCommand("zero_bore", s.arg + " " + p.u.toFixed(6) + " " + p.v.toFixed(6));
   disarmZero();
 }, true);
@@ -2643,8 +2719,10 @@ function renderSettings(t) {
 // `drawerOpen` variable rather than five toggles, which makes the rule structural instead of something
 // each handler has to remember to honour.
 function setDrawer(key) {
+  const leaving = drawerOpen === "CALIBRATION" && key !== "CALIBRATION";
   drawerOpen = (drawerOpen === key) ? null : key;
   pendingConfirm = null;
+  if (leaving) leaveCalibration();
   renderDock();
   renderDrawer();
 }
@@ -2772,7 +2850,16 @@ drawer.addEventListener("click", (e) => {
   if (cal) {
     if (cal.disabled) return;
     const k = cal.getAttribute("data-calui");
-    if (k === "open") { drawerOpen = "CALIBRATION"; pendingConfirm = null; renderDock(); renderDrawer(); drawer.scrollTop = 0; }
+    if (k === "open") { drawerOpen = "CALIBRATION"; enterCalibration(); pendingConfirm = null; renderDock(); renderDrawer(); drawer.scrollTop = 0; }
+    else if (k === "hold") {
+      // Calibration's own hold: the mode it interrupts comes back when calibration ends.
+      const s = hudCalibrationBore(lastTelemetry || {}, calPace);
+      if (!s || !s.hold) return;
+      enterCalibration();
+      calSession.resume = (lastTelemetry || {}).operating_mode || null;
+      calSession.taken = false;
+      sendCommand(s.hold.command, s.hold.arg);
+    }
     else if (k === "back") setDrawer("MENU");
     else if (k === "rename") renameCalibrationDialog();
     else if (k === "new") newCalibrationDialog();
