@@ -730,3 +730,36 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     or the 0.7° of free play. The work-in pass of 10:00 (a fixed learned level) over-read by
     0.3 A within ten minutes.
   - **Reopen** if a real target tracked at 2 deg/s or slower misses its record's limits.
+- **The survey's slow plateaus run where it starts: a known limit, not fixed (2026-10-25).** The
+  0.25-2 deg/s plateaus run on the few degrees where the survey begins. No other plateau crosses
+  that arc at a steady speed, so the survey cannot tell a sticky arc from a high slow friction, and
+  the curve takes in the start arc's friction.
+  - In the simulator, from 3.5 rad (a +0.32 A spike in that case's map), the 1 deg/s feedforward
+    reads 0.11-0.18 A high and ramp+1 slips past the pointing gate. The pipeline test now expects
+    that refusal and says why.
+  - Fitting the curve and the map as one model was tried and dropped: with the start arc
+    unobserved, it only traded this bias for others (the drifted-table case then slipped 16°).
+  - On the station it does not limit slow tracking. The maps span −0.08..+0.14 A on
+    CALI_3_5KG_LOAD and −0.04..+0.06 A on NO_LOAD, which bounds the bias. The bearing's work-in
+    (+0.25 A within a run) is larger.
+- **Found on the way: the friction maps sat half an entry late (fixed, `05b7898`).**
+  `identify.friction_maps` counted each sample towards the entry below it, but the servo reads
+  entry i at angle i/24 of a turn, linear in between (`Servo::friction_at`). Every map came out
+  7.5° late.
+  - Counted to the nearest entry, the 5× case's map shape error drops from 0.042 to 0.014 A rms,
+    and its worst point from 0.14-0.17 to 0.05-0.08 A.
+  - The drifted-table `--update` case, refused before for a 4.6° stick-slip, is now accepted.
+  - On #5 and #6 the feedforward would move by 0.014-0.034 A rms, at most 0.13 A at one angle,
+    with no mean shift. It applies from the next MEASURE or RE-RUN; no run is needed for it.
+- **The free-play plant's sweep (fixed, `05b7898`).** With `free_play_rad` on, the simulated inertia
+  sweep failed: 2 of 16 coherent bands, no inertia. The station's sweep on the payload had −0.37 A
+  on the motor for a quarter of every cycle and still read the rigid body at 3-9 Hz (coherence
+  0.75-0.97, J 0.212).
+  - In the sim a free gap opened on every current dip, and the 0.01 motor inertia rattled across it.
+  - The gap now drags (`gap_damping`, 12 A·s/rad by default). The sweep reads 8-9/16 coherent
+    bands, J +14..+28%, fit rms 0.14-0.17 (station 0.154).
+  - The slow ramps still behave as on the station: drags of 9-14 reproduce them, 6-8 and 20 do not.
+  - Free play stays off by default, and the rigid plant is unchanged.
+  - Still harsher than the station: on the free-play plant, the full pipeline's first pass refuses
+    ramp+1 at 3.7-4.1° (gate 3.4°). That pass runs in the sim case's −0.15 A friction-drift
+    session.
