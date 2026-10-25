@@ -43,6 +43,19 @@ def test_kept_the_one_in_force_the_two_newest_that_were_and_nothing_else(tmp_pat
 
 
 @needs_symlinks
+def test_newest_in_force_means_when_it_went_live_not_when_its_directory_last_changed(tmp_path):
+    # The first prune on the station (2026-10-25): markers written by hand into three releases moved
+    # their directories' times, in the wrong order, and the latest of them was removed.
+    root, releases = station(tmp_path, ["A", "B", "C", "D"], "D", activated=("A", "B", "C", "D"))
+    now = time.time()
+    for name, live in (("A", now - 300), ("B", now - 200), ("C", now - 100)):
+        os.utime(releases / name / "ACTIVATED", (live, live))
+    os.utime(releases / "A", (now, now))   # something wrote into A last
+    prune_releases.main([str(root)])
+    assert left(releases) == ["B", "C", "D"]
+
+
+@needs_symlinks
 def test_failed_deploys_never_push_out_the_last_good_release(tmp_path):
     # A in force; B and C failed (never ACTIVATED); D just activated.
     root, releases = station(tmp_path, ["A", "B", "C", "D"], "D", activated=("A", "D"))

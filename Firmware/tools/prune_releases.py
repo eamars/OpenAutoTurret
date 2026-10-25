@@ -34,8 +34,11 @@ def plan(root: Path, keep: list[Path] = ()) -> tuple[list[Path], str]:
         return [], f"run/current ({current}) is not a release under {releases}: nothing removed"
     kept = {current} | {Path(k).resolve() for k in keep}
     children = [d for d in releases.iterdir() if d.is_dir() and not d.is_symlink()]
-    children.sort(key=lambda d: d.stat().st_mtime, reverse=True)
-    activated = [d for d in children if (d / MARKER).exists() and d not in kept]
+    # Newest in force by when each went live: the marker's own time. Not the directory's, which any
+    # write inside it moves (writing the markers themselves did, and the first prune on the station
+    # kept two older releases over the latest one, 2026-10-25).
+    activated = sorted((d for d in children if (d / MARKER).is_file() and d not in kept),
+                       key=lambda d: (d / MARKER).stat().st_mtime, reverse=True)
     kept |= set(activated[:KEEP_ACTIVATED])
     return [d for d in children if d not in kept], ""
 
