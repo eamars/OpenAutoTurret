@@ -2135,7 +2135,9 @@ function paint(t) {
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   render(t);
-  if (drawerOpen && (drawerChanged || settleFlipped) && !calZero.armed) renderDrawer();
+  // The panel's HELD line follows the page's own session too (a STOP cancels it with no telemetry change).
+  const heldMoved = drawerOpen === "CALIBRATION" && ((calSession && calSession.resume) || null) !== calResumeShown;
+  if (drawerOpen && (drawerChanged || settleFlipped || heldMoved) && !calZero.armed) renderDrawer();
 }
 
 function updateStaleness(t) {
@@ -2397,7 +2399,7 @@ let calRefusal = null, calSeenSeq = null;
 let calZero = { distance: null, armed: null, record: null };
 const calSamples = [];
 // What calibration found and changed, to put back on leaving it (hudCalibrationExit).
-let calSession = null;
+let calSession = null, calResumeShown = null;
 function enterCalibration() {
   if (!calSession) calSession = { main: hudMainView(lastTelemetry || {}).main, resume: null, taken: false, swapped: false };
 }
@@ -2427,6 +2429,7 @@ function noteCalibrationAck(t) {
 }
 let calPace = 0.1;   // MRAD per press; the page's own, like the main display choice
 function renderCalibrationBore(t) {
+  calResumeShown = (calSession && calSession.resume) || null;   // what this paint drew from
   const s = hudCalibrationBore(t, calPace, calSession && calSession.resume);
   if (!s) return "";
   if (s.locked)
