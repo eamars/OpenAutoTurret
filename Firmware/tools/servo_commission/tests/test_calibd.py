@@ -151,6 +151,54 @@ class AFailedPipelineIsAVerdict(unittest.TestCase):
             self.assertEqual(len(stopped), 1, report["steps"])
             self.assertIn("ff_fb0", stopped[0]["reason"])
 
+    class Refused:
+        """controld refuses the session: calibd's own RuntimeError, not the pipeline's Failed."""
+        name = "controld"
+
+        def run(self, axis, manifest, label):
+            raise RuntimeError(f"{label}: controld refused the session: busy")
+
+    class NoCycles:
+        """A probe that ended before control began: a footer and nothing to score."""
+        name = "controld"
+
+        def run(self, axis, manifest, label):
+            import numpy as np
+            return {"manifest": manifest, "footer": {"status": "ABORTED", "detail": "fault before the first cycle"},
+                    "learned": None, "pitch_posture": np.array([]), "begin_ns": None}
+
+    def verify(self, station):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            record = state / "calibration" / "records" / "0002"
+            record.mkdir(parents=True)
+            shutil.copy(HERE.parents[1] / "config/servo/yaw_servo.json", record / "yaw_servo.json")
+            fake = FakeController(Path(tmp))
+            runner = calibd.Runner(fake, state, fake.run, {"id": 2, "name": "FRICTION 10-20"}, poll_s=0.01)
+            original = calibd.ControldStation
+            calibd.ControldStation = lambda *a, **k: station
+            try:
+                return runner.execute()
+            finally:
+                calibd.ControldStation = original
+
+    def test_any_other_error_still_names_its_step(self):
+        # Review 2026-10-25: only Failed was caught; a refusal (and identify's ValueError, 2026-10-24
+        # 21:16) still read "calibd failed: ...".
+        self.assertRegex(self.verify(self.Refused()), r"^NOT ACCEPTED: check: RuntimeError: .*controld refused the session: busy$")
+
+    def test_a_probe_that_never_ran_is_update_parameters(self):
+        # ADR-005 D8: a probe that did not run to its end proves nothing -- it raised KeyError: 'cycles'.
+        self.assertEqual(self.verify(self.NoCycles()), "UPDATE_PARAMETERS")
+
+    def test_a_stop_still_ends_the_run_not_the_step(self):
+        class Stopping:
+            name = "controld"
+
+            def run(self, axis, manifest, label):
+                raise calibd.Stopped("stopped by the operator")
+        self.assertEqual(self.verify(Stopping()), "STOPPED: stopped by the operator")
+
 
 class SimLink(FakeController):
     """A fake controld whose sessions are servo-sim's answers (SimStation), written out as journals

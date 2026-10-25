@@ -620,10 +620,10 @@ function hudCalibrationBore(t, pace, resume) {
   // stands the panel says which mode comes back.
   const hold = !still && !switching && !parked && t.phase === "hold"
     ? { label: "HOLD HERE TO TRIM", command: "set_mode", arg: "MANUAL", kind: "act", ui: "hold",
-        note: "MANUAL until you leave calibration, then " + hudModeName(t.operating_mode) + " again" }
+        note: "MANUAL until you leave calibration, then " + hudModeName(hudResumeMode(t)) + " again" }
     : null;
   const held = resume && resume !== "MANUAL" && still && !switching
-    ? "HELD FOR CALIBRATION · " + hudModeName(resume) + " AGAIN WHEN YOU LEAVE" : null;
+    ? "HELD FOR CALIBRATION · " + hudModeName(resume) + " AGAIN WHEN YOU LEAVE · STOP MOTION KEEPS IT HELD" : null;
   pace = HUD_BORE_PACES.indexOf(pace) >= 0 ? pace : 0.1;
   const live = still && on;
   // ADR-006 D5: the working distance (the tracker's assumed range). A distance off the ladder (a zero
@@ -732,15 +732,39 @@ function hudCalibrationZero(t, z, settle) {
 // mode, while the turret still stands in that MANUAL hold. A run ends as its own rules say (the mode
 // it interrupted; MANUAL after STOP), so it is the same rule one level down. The page's ZERO state
 // (the distance, an armed tap, a dialog) goes too, and the reticle loses calibration's aids.
-// session: {main, resume} or null; t: the station now. Returns what to send.
-function hudCalibrationExit(session, t) {
+// session: {main, resume, taken, swapped} or null; t: the station now; fresh: whether t is live.
+// Returns what to send. The main display goes back by name (a swap made on this page while
+// calibrating: swapped), never by toggling, so a telemetry frame that lags the swap cannot send it the
+// wrong way. Nothing resumes on stale telemetry: the turret stays held, which is safe and shown.
+function hudCalibrationExit(session, t, fresh) {
   t = t || {};
   if (!session) return { main: null, mode: null };
-  const view = hudMainView(t);
   const held = t.phase === "hold" && t.operating_mode === "MANUAL" && !t.calibrating && !t.calibration_switching &&
                !t.rest_park;
-  return { main: session.main && session.main !== view.main && view.canSwap ? session.main : null,
-           mode: session.resume && session.resume !== "MANUAL" && held ? session.resume : null };
+  return { main: session.swapped && session.main && hudMainView(t).canSwap ? session.main : null,
+           mode: fresh && session.resume && session.resume !== "MANUAL" && held ? session.resume : null };
+}
+// The mode a hold taken now gives back: controld's own rule for runs and swap holds -- a track
+// returns to its return mode (AUTO_ROAM or SURVEILLANCE), the target having been left behind.
+function hudResumeMode(t) {
+  t = t || {};
+  return t.operating_mode === "AUTO_TRACK" ? (t.auto_return_mode || "AUTO_ROAM") : (t.operating_mode || null);
+}
+// The calibration session through one telemetry frame. A STOP -- STOP MOTION (`hold`) or a run's STOP,
+// from any page: the ack is the station's -- is the operator's word, so nothing resumes afterwards
+// (review 2026-10-25: STOP MOTION in calibration's own MANUAL hold changed nothing the page watched,
+// and leaving resumed the roam). Otherwise the hold, once it stands (taken: the frames between HOLD
+// HERE and the hold arriving are not an ending), is forgotten when it ends some other way.
+function hudCalibrationSessionStep(session, prev, t) {
+  if (!session || !session.resume) return session;
+  t = t || {};
+  const s = Object.assign({}, session);
+  const stopped = !!prev && t.cmd_ack_seq !== prev.cmd_ack_seq && t.cmd_ack_accepted !== 0 &&
+                  (t.cmd_ack_command === "hold" || t.cmd_ack_command === "stop_calibration");
+  if (stopped) s.resume = null;
+  else if (hudCalibrationHoldStands(prev, t)) s.taken = true;
+  else if (s.taken) s.resume = null;
+  return s;
 }
 // Whether the MANUAL hold calibration took still stands, from the last telemetry (prev) and this one.
 // It ends when the station leaves it any other way -- a mode chosen on another page, a fault, PARK,
@@ -2107,12 +2131,7 @@ function paint(t) {
   if (calZero.armed && (!t || t.phase !== "hold" || t.operating_mode !== "MANUAL" || hudMainView(t).main !== calZero.armed ||
                         t.calibration_switching || (t.calibration_record || {}).id !== calZero.record))
     disarmZero();
-  // Calibration's hold, once it stands, is forgotten when it ends some other way (taken: the frames
-  // between HOLD HERE and the hold arriving are not an ending).
-  if (calSession && calSession.resume) {
-    if (hudCalibrationHoldStands(lastTelemetry, t)) calSession.taken = true;
-    else if (calSession.taken) calSession.resume = null;
-  }
+  if (calSession) calSession = hudCalibrationSessionStep(calSession, lastTelemetry, t);
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   render(t);
@@ -2380,17 +2399,20 @@ const calSamples = [];
 // What calibration found and changed, to put back on leaving it (hudCalibrationExit).
 let calSession = null;
 function enterCalibration() {
-  if (!calSession) calSession = { main: hudMainView(lastTelemetry || {}).main, resume: null };
+  if (!calSession) calSession = { main: hudMainView(lastTelemetry || {}).main, resume: null, taken: false, swapped: false };
 }
+// The PIP's swap, while calibrating, is calibration's to put back.
+function noteCalibrationSwap() { if (calSession) calSession.swapped = true; }
 function leaveCalibration() {
-  const exit = hudCalibrationExit(calSession, lastTelemetry || {});
+  const fresh = !!lastTelemetryAt && Date.now() - lastTelemetryAt < 1000 && !$("viewport").classList.contains("stale");
+  const exit = hudCalibrationExit(calSession, lastTelemetry || {}, fresh);
   calSession = null;
   disarmZero();
   calZero = { distance: null, armed: null, record: null };
   closeCalibrationDialog();
   calRefusal = null;
   if (exit.mode) sendCommand("set_mode", exit.mode);
-  if (exit.main && window.otaSwapPip) window.otaSwapPip();
+  if (exit.main && window.otaSetMain) window.otaSetMain(exit.main);
 }
 function noteCalibrationAck(t) {
   // The station's word on a refused calibration command shows in the panel for a few seconds: these
@@ -2858,7 +2880,7 @@ drawer.addEventListener("click", (e) => {
       const s = hudCalibrationBore(lastTelemetry || {}, calPace);
       if (!s || !s.hold) return;
       enterCalibration();
-      calSession.resume = (lastTelemetry || {}).operating_mode || null;
+      calSession.resume = hudResumeMode(lastTelemetry);
       calSession.taken = false;
       sendCommand(s.hold.command, s.hold.arg);
     }
@@ -2880,6 +2902,7 @@ drawer.addEventListener("click", (e) => {
   if (!b || b.disabled) return;
   const cmd = b.getAttribute("data-cmd");
   if (!cmd) return;
+  if (calSession && (cmd === "hold" || cmd === "stop_calibration")) calSession.resume = null;
   if (b.getAttribute("data-kind") === "danger") {
     // Two presses for the actions that move the turret somewhere it was not just asked to go. The label
     // changes and the row says PRESS AGAIN, so the waiting state is on screen, not in someone's memory.
@@ -3277,12 +3300,13 @@ HUD_HTML = """<!DOCTYPE html>
     // Swap asks the STATION to change the main display -- which is also the camera the Hailo sees
     // (owner, 2026-10-02) -- and the panes follow the published answer (otaPanesFollow), so every
     // open page shows the same thing and a reload does not undo it.
-    window.otaSwapPip = async function () {
+    // By name: the station answers a request for the camera already there with no change.
+    window.otaSetMain = async function (role) {
       el("pipfps").textContent = "swapping...";
       try {
         const r = await fetch("/api/camera/main", { method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role: panes.pip.role }) });
+          body: JSON.stringify({ role: role }) });
         const j = await r.json();
         if (!j.accepted) {
           el("pipfps").textContent = "refused: " + (j.detail || j.reason || "?");
@@ -3293,6 +3317,7 @@ HUD_HTML = """<!DOCTYPE html>
                                 canSwap: true, generation: mc.generation, boot: mc.boot });
       } catch (e) { el("pipfps").textContent = "refused: " + e; }
     };
+    window.otaSwapPip = function () { noteCalibrationSwap(); return window.otaSetMain(panes.pip.role); };
     el("pipswap").addEventListener("click", window.otaSwapPip);
     el("piplabel").textContent = "PIP detail";       // every boot starts with wide on the main display
   })();

@@ -259,6 +259,15 @@ class Identification(unittest.TestCase):
             inertia = self.identified(j, sweep, table)[0]
             self.assertLess(abs(inertia / t["yaw"]["inertia"] - 1), 0.2, f"start {start}: J {inertia:.4f}")
 
+    def test_the_gap_drag_is_stable_for_a_light_motor(self):
+        """The drag is implicit (plant.cpp): with a motor side 20 times lighter, an explicit drag of 12
+        diverged within the sweep (HARD_ABORT: yaw speed limit; review 2026-10-25). inertia_session
+        asserts the session completes."""
+        t = truth("payload_5x_knee")
+        t["yaw"].pop("friction_drift_A")
+        t["yaw"].update(free_play_rad=math.radians(0.7), motor_inertia=0.0005, gap_damping=12.0)
+        self.inertia_session(t, t["yaw"]["crosstalk_map"], guess=0.18)
+
     @unittest.expectedFailure
     def test_prior_gains_at_10x(self):
         """Known limit (2026-10-24, simulator): at 10x the bare turret's inertia the prior's gains
@@ -306,13 +315,15 @@ class Identification(unittest.TestCase):
 
 class Pipeline(unittest.TestCase):
     def run_pipeline(self, axis, case, *options, accepted=True):
+        """accepted: the verdict expected, or None for a case that sits on a gate (either is right)."""
         with tempfile.TemporaryDirectory() as out:
             done = subprocess.run([sys.executable, str(HERE / "commission.py"), axis, "--sim", str(CASES / f"{case}.json"),
                                    "--out", out, *options], capture_output=True, text=True)
             self.assertEqual(done.returncode, 0, done.stdout[-2000:] + done.stderr[-2000:])
             asset = load(Path(out) / f"{axis}_servo.json")
             report = load(Path(out) / "report.json")
-        self.assertEqual(asset["provenance"]["accepted"], accepted, json.dumps(asset["validation"])[:2000])
+        if accepted is not None:
+            self.assertEqual(asset["provenance"]["accepted"], accepted, json.dumps(asset["validation"])[:2000])
         return asset, report
 
     def test_yaw_from_prior_station_estimate(self):
@@ -389,17 +400,21 @@ class Pipeline(unittest.TestCase):
         """`yaw --update` on the payload with the asset's three-week-old table (RE-RUN on the station,
         2026-10-24): the inertia is still identified and the fit reports the drift. This plant's
         friction is nearly twice the station's (0.58 A at 5 deg/s against 0.31-0.36), and with the
-        drift allowance the robust design is wn 4.5 (kq 4.9), soft: it stick-slips on the slow ramps,
-        about 2 deg of jitter and a moving peak of 2.4 deg, inside the engineering gates. (It slipped
-        4.6 deg on ramp-5, refused, while the friction map sat half an entry late:
-        Design.test_friction_maps_land_where_the_servo_reads_them.)"""
+        drift allowance the robust design is wn 4.5 (kq 4.9), soft: it stick-slips on the slow ramps.
+        Its verdict sits on the 3.4 deg pointing gate and turns on the drift drawn (review 2026-10-25,
+        seeds 2-6): accepted for 4 of 5 with the friction map on its entries, 2 of 5 while it sat half
+        an entry late (seed 2, this one, then slipped 4.6 deg on ramp-5; seed 5 now misses by 0.15 deg on
+        rev-a). So the verdict is not what this test checks: the identification and the design are.
+        The map itself: Design.test_friction_maps_land_where_the_servo_reads_them."""
         t = truth("payload_5x")
         old = drifted(t["yaw"]["crosstalk_map"], np.random.default_rng(2))
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
             json.dump({"identified": {"crosstalk": {"delay_s": t["yaw"]["crosstalk_delay_s"], "table": old, "uncertainty": 0.000479}}}, f)
-        asset, report = self.run_pipeline("yaw", "payload_5x", "--update", "--asset", f.name)
+        asset, report = self.run_pipeline("yaw", "payload_5x", "--update", "--asset", f.name, accepted=None)
         Path(f.name).unlink()
         self.assertLess(asset["servo_parameters"]["kq"], 6.0)
+        fails = [x for v in asset["validation"] for x in v["fails"]]
+        self.assertTrue(all("(pointing)" in x for x in fails), f"only the pointing gate is in play: {fails}")
         self.assertLess(abs(asset["identified"]["inertia"] / t["yaw"]["inertia"] - 1), 0.15, asset["identified"]["inertia"])
         step = next(s for s in report["steps"] if s["step"] == "inertia")
         self.assertLess(abs(step["residual_crosstalk"] + 0.0011), 0.0006, f"drift found: {step['residual_crosstalk'] * 1e3:+.2f} mrad/A")

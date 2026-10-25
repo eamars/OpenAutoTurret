@@ -174,10 +174,10 @@ IDLE_AXIS_LIMIT = math.radians(0.2)
 
 
 def stopped(run, e):
-    """A pipeline that cannot go on ends STOPPED, its reason in the report, which calibd's verdict
-    reads ("NOT ACCEPTED: <step>: <reason>"). Every pipeline ends this way: check and calibrate did
-    not, so their Failed reached calibd as a crash ("calibd failed: calibration pass ff_fb0 failed the
-    tracking gates", MEASURE 2026-10-25 00:38 and 09:13)."""
+    """A pipeline that cannot go on (Failed) ends STOPPED, its reason in the report, which calibd's
+    verdict reads ("NOT ACCEPTED: <step>: <reason>"). check and calibrate did not, so their Failed
+    reached calibd as a crash ("calibd failed: calibration pass ff_fb0 failed the tracking gates",
+    MEASURE 2026-10-25 00:38 and 09:13). Any other error is calibd's to name (Runner.pipeline)."""
     run.log(f"STOPPED: {e}")
     run.step("stopped", reason=str(e))
     sys.exit(1)
@@ -619,9 +619,12 @@ def check_asset(run, args):
     if axis == "yaw":
         m = manifests.yaw(f"{run.id}-probe", asset["servo_parameters"], "probe")
         j = run.session("probe", m)
-        rows, extra = score.yaw(j, asset["identified"]["crosstalk"]["table"], asset["identified"]["crosstalk"]["delay_s"])
-        samples = identify.friction_plateaus(j)
-        friction = identify.friction_by_speed(samples)
+        # ADR-005 D8: a probe that did not run to its end proves nothing, whatever it scored; one that
+        # ended before control began has no cycles to score at all (it used to raise KeyError).
+        status = (j.get("footer") or {}).get("status")
+        rows, extra = (score.yaw(j, asset["identified"]["crosstalk"]["table"], asset["identified"]["crosstalk"]["delay_s"])
+                       if "cycles" in j else ([], {}))
+        friction = identify.friction_by_speed(identify.friction_plateaus(j)) if status == "COMPLETE" else []
         fit = asset["identified"]["friction"]
 
         def expected(r):
@@ -629,9 +632,7 @@ def check_asset(run, args):
             return identify.servo_friction_curve(r["speed"], p["coulomb"], p["stribeck"], p["stribeck_speed"], p["viscous"],
                                                  fit["creep_drop"], fit["creep_speed"])
         drift = [r["current"] / expected(r) - 1 for r in friction]
-        # ADR-005 D8: a probe that did not run to its end proves nothing, whatever it scored.
-        status = (j.get("footer") or {}).get("status")
-        fails = score.gate_yaw(rows, extra) + ([] if status == "COMPLETE" else [f"session {status}"])
+        fails =score.gate_yaw(rows, extra) + ([] if status == "COMPLETE" else [f"session {status}"])
         worst = max((abs(d) for d in drift), default=0.0)
         verdict = "REUSE_EXACT" if not fails and worst < 0.25 else "UPDATE_PARAMETERS"
         run.log(f"    friction against the asset: {', '.join(f'{d:+.0%}' for d in drift)}; acceptance fails: {fails or 'none'}")

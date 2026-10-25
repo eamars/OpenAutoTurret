@@ -751,7 +751,9 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   7.5° late.
   - Counted to the nearest entry, the 5× case's map shape error drops from 0.042 to 0.014 A rms,
     and its worst point from 0.14-0.17 to 0.05-0.08 A.
-  - The drifted-table `--update` case, refused before for a 4.6° stick-slip, is now accepted.
+  - The drifted-table `--update` case sits on the 3.4° pointing gate, its verdict turning on the drift
+    drawn: accepted for 4 of 5 drift seeds with the map on its entries, 2 of 5 before (review,
+    2026-10-25). Its test no longer pins the verdict.
   - On #5 and #6 the feedforward would move by 0.014-0.034 A rms, at most 0.13 A at one angle,
     with no mean shift. It applies from the next MEASURE or RE-RUN; no run is needed for it.
 - **The free-play plant's sweep (fixed, `05b7898`).** With `free_play_rad` on, the simulated inertia
@@ -759,8 +761,13 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
   on the motor for a quarter of every cycle and still read the rigid body at 3-9 Hz (coherence
   0.75-0.97, J 0.212).
   - In the sim a free gap opened on every current dip, and the 0.01 motor inertia rattled across it.
-  - The gap now drags (`gap_damping`, 12 A·s/rad by default). The sweep reads 8-9/16 coherent
-    bands, J +14..+28%, fit rms 0.14-0.17 (station 0.154).
+  - The gap now drags (`gap_damping`, 12 A·s/rad by default), solved implicitly with both
+    velocities, so a lighter motor side cannot make it diverge (review, 2026-10-25: explicit, a
+    0.0005 motor blew the sweep up). The sweep reads 9-10/16 coherent bands and J +11.7..+17.2%
+    from starts 1.0, 3.5 and 5.2 (the rigid plant +10%). Its fit rms is 0.09, under the
+    station's 0.154: the sim's sweep is cleaner than the station's. (The first note here gave
+    8-9/16, J +14..+28% and rms 0.14-0.17 "as the station's"; the review could not reproduce
+    them.)
   - The slow ramps still behave as on the station: drags of 9-14 reproduce them, 6-8 and 20 do not.
   - Free play stays off by default, and the rigid plant is unchanged.
   - Still harsher than the station: on the free-play plant, the full pipeline's first pass refuses
@@ -775,19 +782,35 @@ came from the page between 2026-10-24 18:10 and 2026-10-25 12:37. No new run was
 | Item | Result |
 |---|---|
 | A RE-RUN of the current payload from the page, end to end | RE-RUN+ACCURACY on the 3.5 kg payload, 10:46: ACCEPTED and installed into #5. MEASURE on #6 NO_LOAD, 11:56: the same. Both resumed the interrupted mode. |
-| The idle axis through every session, "within one sensor count" | Not as written, and the criterion was wrong. Over every session of the five kept runs (two full runs, one failed run, a VERIFY, CHECK-PITCH), held yaw moved at most 2.3 mrad (3 counts) and held pitch at most 1.53 mrad (4 counts of 0.38). One count was commissiond's unpowered axis, held by its friction alone. Under controld the idle axis is servo-held: yaw inside its 4 mrad hold band, both well under the 0.2° decoupling limit (`commission.IDLE_AXIS_LIMIT`). That limit is the criterion now. |
+| The idle axis through every session, "within one sensor count" | **Not met as written.** Over every session of the five kept runs (two full runs, one failed run, a VERIFY, CHECK-PITCH), held yaw moved at most 2.3 mrad (3 counts) and held pitch at most 1.53 mrad (4 counts of 0.38). One count was measured on commissiond's unpowered axis, held by its friction alone; under controld the idle axis is servo-held, and yaw's hold band is ±4 mrad. What the movement must be small against is what the sessions measure: the pitch posture the yaw inertia is identified at (1.5 mrad changes nothing), and the yaw servo error the gates read (2.3 mrad is 4% of the 3.4° gate). It is. The 0.2° `IDLE_AXIS_LIMIT` is only the log's flag, not a guarantee: a held yaw may drift up to its 4 mrad band unopposed. |
 | The asset against the 10-02 one | NO_LOAD: J 0.0374 against 0.0407, kq 32.55 against 30.8, ki 97.6 against 46 (the integral rate's 3× rule). Section "MEASURE on #6". |
-| Each step timed on the Pi | VERIFY 1 min. Pitch and yaw 20 min: the runs that ended at yaw validation. With the accuracy campaign 40 min: both accepted runs. The page, calibd and the card quoted 2, 45 and 71 min; they now use the measured times. Risk 2, pitch taking 25 min, is gone without a launcher between sessions. |
+| Each step timed on the Pi | VERIFY 1 min. Pitch and yaw 20 min: the runs that ended at yaw validation. With the accuracy campaign 40 min: both accepted runs. The page, calibd and the card quoted 2, 45 and 71 min; they now use the measured times (+CROSSTALK's 2 min is estimated: no CROSSTALK run is among the 16). Risk 2, pitch taking 25 min, is gone without a launcher between sessions. |
 | STOP mid-session leaves both axes held | 2026-10-24 19:00, from the page (section "Readiness check"). |
 | Risk 1: the executors in controld | Pitch: CHECK-PITCH on #1 tracked at least as well as commissiond's 10-02 validation. Yaw: frame timing 1.00 ms median, no reordering. The side-by-side pitch identify was never run; the end-to-end runs, whose identification agrees with the 10-02 plant, stand in for it. |
 | Risk 3: journals in memory beside visiond | The largest kept journal, a 240 MB yaw survey, parses in 14 s with a 1.37 GB peak. The Pi has 6.9 GB available with the stack running. |
 
 Two fixes found while closing it:
-- **A failed accuracy pass read as a crash.** `check` and `calibrate` let their `Failed` reach calibd,
-  so the 00:38 and 09:13 runs ended "NOT ACCEPTED: calibd failed: calibration pass ff_fb0 failed the
-  tracking gates". Every pipeline now ends through `commission.stopped`, giving "NOT ACCEPTED:
-  calibrate: calibration pass …". The test `AFailedPipelineIsAVerdict` fails on the old code.
+- **A failed step read as a crash.** `check` and `calibrate` let their `Failed` reach calibd, so the
+  00:38 and 09:13 runs ended "NOT ACCEPTED: calibd failed: calibration pass ff_fb0 failed the
+  tracking gates". They now end through `commission.stopped` like the pitch and yaw pipelines.
+  calibd itself names any other error with its step, "NOT ACCEPTED: yaw: ValueError: inertia: only
+  1 coherent frequency bands" (2026-10-24 21:16 read "calibd failed: ..."); only STOP passes through.
+  A VERIFY probe that ended before control began gives UPDATE_PARAMETERS, as D8 says (it raised
+  KeyError).
 - **Releases filled the card.** 151 releases took 44 GB of the station's 117 GB card. A deploy now
-  keeps the release in force and the three newest, and removes the rest
-  (`deploy_station.prune_releases`; owner: "remove legacy build files … each build takes heaps of
-  space").
+  removes old ones through `tools/prune_releases.py`, on the station. It keeps the release in force,
+  the two newest that were in force (the deploy marks one ACTIVATED when it goes live) and a
+  build-only deploy's own, and removes nothing unless run/current resolves to a release inside
+  run/releases (owner: "remove legacy build files … each build takes heaps of space").
+
+**Review, 2026-10-25.** An independent review of the day's commits (e9cc20f..f776ce6) found the
+first version of that prune to be dangerous: a shell one-liner whose `;` let its delete loop run
+in the ssh login's `$HOME` had its `cd` failed. It also counted failed deploys as newest. The
+review also found:
+- the first version of the step fix above covered `Failed` only;
+- the drifted-table test pinned one verdict on a gate;
+- the free-play sweep numbers here were wrong;
+- the explicit drag diverged with a light motor.
+
+Each is fixed, with a test that fails on the old code. The page's findings are in ADR-006
+section 6.

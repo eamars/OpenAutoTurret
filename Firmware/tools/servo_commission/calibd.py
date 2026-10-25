@@ -16,7 +16,7 @@ What a run measures is the existing commissioning, its rules unchanged:
     RERUN+ACCURACY    RERUN, then calibrate yaw                 (~40 min)
     RERUN+ACCURACY+CROSSTALK  both                              (~42 min)
     MEASURE           NEW's measurement: as RERUN+ACCURACY      (~40 min)
-(measured on the station, 2026-10-24/25)
+(measured on the station, 2026-10-24/25; +CROSSTALK's 2 min is an estimate)
 
 Each run is kept in <state>/calibration/runs/<run>-<kind>-<stamp>/, one directory per pipeline, with
 run.json (the record, the kind, the verdict). Reports are kept; journals (~1 GB a full yaw run) only
@@ -185,6 +185,14 @@ class Runner:
              "calibrate": commission.calibrate}[which](args)
         except SystemExit:
             pass   # the pipeline's own STOPPED: its report says why
+        except Stopped:
+            raise   # STOP, a fault, controld gave up: the run is over, not this step
+        except Exception as e:
+            # Any other error still ends this step with its reason, naming the step: identify's
+            # "inertia: only 1 coherent frequency bands" (2026-10-24 21:16), a refused session, a bug.
+            # It used to escape the run as "calibd failed: ...", which read as calibd crashing.
+            traceback.print_exc()
+            return {"steps": [{"step": "stopped", "reason": f"{type(e).__name__}: {e}"}]}
         report = out / "report.json"
         return json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
 

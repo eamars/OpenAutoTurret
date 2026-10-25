@@ -340,9 +340,11 @@ runs from the page (VERIFY, RE-RUN, NEW's measurement) come with stage 2 and are
   the amber bore mark, captioned `RANGE 11 m`, with the optical axis beside it; outside it is the
   plain green reticle on the same point. Leaving (‹ MENU or any dock button) drops the ZERO
   procedure's state, puts the main display back if calibration swapped it, and resumes the mode its
-  HOLD HERE TO TRIM interrupted -- unless the station left that hold some other way, or a run was
-  STOPPED (STOP is the operator's word). Runs keep their own rule: the interrupted mode, MANUAL after
-  STOP. A deploy refuses to activate during a run. The failure modes and their handling are in
+  HOLD HERE TO TRIM interrupted (a track's return mode, as controld resumes after a run). It does
+  not resume if the station left that hold some other way, if the telemetry is stale, or after any
+  STOP (STOP MOTION, or a run's STOP, from any page): STOP is the operator's word, and the way to
+  leave calibration held. Runs keep their own rule: the interrupted mode, MANUAL after STOP. A
+  deploy refuses to activate during a run. The failure modes and their handling are in
   [ADR-006](ADR-006/ADR-006.md) section 6.
 - **A switch cannot tell whether the record fits what is mounted.** The station cannot see the
   payload; the VERIFY row says NOT VERIFIED SINCE SWITCH. A yaw motor change makes every record's

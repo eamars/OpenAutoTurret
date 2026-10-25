@@ -116,11 +116,15 @@ void YawPlant::advance(double to) {
       const double into=gap>half?gap-half:gap<-half?gap+half:0.;
       double contact=into==0.?0.:p_.contact_stiffness*into+p_.contact_damping*(v_-vl_);
       if (into>0) contact=std::max(contact,0.); else if (into<0) contact=std::min(contact,0.);
-      contact+=p_.gap_damping*(v_-vl_);
       const double force=sliding_force(vl_,ql_,h,z_next,damping);
-      const double motor=(v_+h*(i_-contact-p_.motor_friction_A*std::tanh(v_/0.005))/p_.motor_inertia);
-      const double jl=p_.inertia-p_.motor_inertia;
-      const double load=(jl*vl_+h*(contact-p_.load-force+damping*vl_))/(jl+h*damping);
+      // The drag is implicit: both velocities are solved together, so it cannot diverge however light
+      // the motor (explicit, a 0.0005 motor at a drag of 12 blew the sweep up; review 2026-10-25). With
+      // no drag (d = 0) this is the two separate updates.
+      const double jm=p_.motor_inertia,jl=p_.inertia-jm,d=h*p_.gap_damping,l=jl+h*damping;
+      const double a=jm*v_+h*(i_-contact-p_.motor_friction_A*std::tanh(v_/0.005));
+      const double b=jl*vl_+h*(contact-p_.load-force+damping*vl_);
+      const double det=jm*l+d*(jm+l);
+      const double motor=(a*(l+d)+d*b)/det,load=(b*(jm+d)+d*a)/det;
       q_+=0.5*(v_+motor)*h; v_=motor;
       ql_+=0.5*(vl_+load)*h; vl_=load;
     }

@@ -81,20 +81,27 @@ def cross_build(repo, args, revision=None):
 
 
 # A release is ~300 MB with its build; 151 had piled up to 44 GB of the station's card by 2026-10-25
-# (owner: "each build takes heaps of space"). Kept: the one in force, and the newest few to roll back to.
-KEEP_RELEASES = 3
+# (owner: "each build takes heaps of space"). tools/prune_releases.py keeps the one in force, the two
+# newest that were in force (marked ACTIVATED when they went live), and a build-only deploy's own.
+def prune_releases(remote, python: str, release: str, root: str, keep_new: bool) -> None:
+    script = release + "/Firmware/tools/prune_releases.py"
+    print(remote(f"{shlex.quote(python)} {shlex.quote(script)} {shlex.quote(root)}"
+                 + (f" --keep {shlex.quote(release)}" if keep_new else ""),
+                 capture_output=True, text=True).stdout.strip(), flush=True)
 
 
-def prune_script(releases: str, keep: int = KEEP_RELEASES) -> str:
-    """Shell that removes releases other than run/current's and the `keep` newest, printing the count."""
-    return (f"cd {shlex.quote(releases)} && cur=$(basename \"$(readlink -f ../current)\") && [ -n \"$cur\" ] && "
-            f"n=0; for d in $(ls -1dt -- */ | sed 's#/$##' | tail -n +{keep + 1}); do "
-            "[ \"$d\" = \"$cur\" ] && continue; rm -rf -- \"$d\" && n=$((n+1)); done; "
-            "echo \"Old releases removed: $n (kept run/current and the newest " + str(keep) + ")\"")
+def station_found(remote, python: str, probe: str) -> str:
+    """tools/station_state.py's answer: homed, shutdown, or calibrating (a run in progress)."""
+    # A station with no release in force yet has no probe to ask: nothing runs there.
+    return remote(f"if [ -f {shlex.quote(probe)} ]; then {shlex.quote(python)} {shlex.quote(probe)}; else echo shutdown; fi",
+                  capture_output=True, text=True).stdout.strip() or "shutdown"
 
 
-def prune_releases(remote, releases: str) -> None:
-    print(remote(prune_script(releases), capture_output=True, text=True).stdout.strip(), flush=True)
+def refuse_during_run(found: str, release: str = "") -> None:
+    if found == "calibrating":
+        # Whatever --start-state says: the restart would end the run unfinished.
+        raise SystemExit("Not activated: a calibration run is in progress (MENU > CALIBRATION shows it). Wait for "
+                         "it to end, or STOP it, then deploy again." + (f" The verified release is {release}." if release else ""))
 
 
 def main():
@@ -233,6 +240,11 @@ def main():
     venv = args.root.rstrip("/") + "/run/station-venv"
     state = args.root.rstrip("/") + "/run/state"
     remote(f"test -x {quote(venv + '/bin/python')}")
+    if args.activate:
+        # Before the build and the station's test suite load the Pi for minutes: the release in force
+        # answers (its station_state.py knows `calibrating` since 2026-10-25; an older one says homed).
+        refuse_during_run(station_found(remote, venv + "/bin/python",
+                                        args.root.rstrip("/") + "/run/current/Firmware/tools/station_state.py"))
     release = remote(f"mkdir -p {quote(releases)} && mktemp -d {quote(releases + '/' + deployment_label + '.XXXXXX')}",
                      capture_output=True, text=True).stdout.strip()
     if not release.startswith(releases + "/") or "\n" in release:
@@ -298,13 +310,9 @@ def main():
         root = args.root.rstrip("/")
         # Two states (owner ruling 2026-10-03): a deploy returns the station to the one it found
         # (tools/station_state.py says which), unless --start-state names one.
-        probe = release + "/Firmware/tools/station_state.py"
-        found = remote(f"{quote(venv + '/bin/python')} {quote(probe)}",
-                       capture_output=True, text=True).stdout.strip() or "shutdown"
-        if found == "calibrating":
-            # Whatever --start-state says: the restart would end the run unfinished.
-            raise SystemExit(f"Not activated: a calibration run is in progress (MENU > CALIBRATION shows it). "
-                             f"Wait for it to end, or STOP it, then deploy again. The verified release is {release}.")
+        # Again just before the restart: a run may have started while this release was built.
+        found = station_found(remote, venv + "/bin/python", release + "/Firmware/tools/station_state.py")
+        refuse_during_run(found, release)
         state = found if args.start_state == "keep" else args.start_state
         print(f"Start state: {state.upper()}", flush=True)
         # run/current is what the boot service starts; replace it atomically.
@@ -349,9 +357,10 @@ def main():
                f"--url http://127.0.0.1:$port --wait-ready {args.ready_timeout} --expect {state}")
         print(f"Active and {'ready' if state == 'homed' else 'up in SHUTDOWN (MENU > HOME starts it)'}: "
               f"{release}", flush=True)
-        prune_releases(remote, releases)
+        remote(f"touch {quote(release + '/ACTIVATED')}")
+        prune_releases(remote, venv + "/bin/python", release, root, keep_new=False)
     else:
-        prune_releases(remote, releases)
+        prune_releases(remote, venv + "/bin/python", release, args.root.rstrip("/"), keep_new=True)
         print("Build only; the running station was not changed.")
         if args.commission_hardware:
             print(f"Receive/discovery probe: ssh {args.host} \"bash {script} run --commission-hardware\"")
