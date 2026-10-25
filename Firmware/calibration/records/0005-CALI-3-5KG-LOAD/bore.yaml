@@ -4,5 +4,5 @@
 schema: 1
 mode: "manual_depth"
 range_m: 11   # working distance: the tracker's assumed range; .inf = no parallax
-wide: {right_mm: 155, up_mm: -20, forward_mm: 0, right_deg: 0, up_deg: 0, trim_right_mrad: -2, trim_up_mrad: 0.9}
-detail: {right_mm: 145, up_mm: 40, forward_mm: 0, right_deg: 0, up_deg: 0, trim_right_mrad: -1, trim_up_mrad: 4.8}
+wide: {right_mm: 155, up_mm: -20, forward_mm: 0, right_deg: 0, up_deg: 0, trim_right_mrad: -1.6, trim_up_mrad: 0.8}
+detail: {right_mm: 145, up_mm: 40, forward_mm: 0, right_deg: 0, up_deg: 0, trim_right_mrad: -0.9, trim_up_mrad: 5.3}
