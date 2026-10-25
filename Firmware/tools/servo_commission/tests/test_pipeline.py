@@ -123,10 +123,38 @@ class Design(unittest.TestCase):
                 self.assertLess(p["coulomb"] + p["stribeck"], 1.0, f"{name} {key}: static level {p['coulomb'] + p['stribeck']:.2f}")
                 self.assertEqual(p["plateau_max"], max(cur))
 
+    def test_friction_maps_land_where_the_servo_reads_them(self):
+        """Servo::friction_at reads map entry i at angle i/24 of a turn, linear in between. The survey's
+        map counted each sample towards the entry below it, so it came out half an entry (7.5 deg) late:
+        on the 5x case's sticky arc 0.04 A rms of shape error over the turn and 0.14-0.17 A at its edges.
+        Counted towards the nearest entry: under 0.025 A rms (measured 0.012-0.014), surveys started off
+        the sticky arc. (From on it, at 3.5 rad, the curve also takes that arc's friction: Pipeline.
+        test_yaw_payload_5x_as_measured_with_friction_drift.)"""
+        t = truth("payload_5x_knee")
+        y = t["yaw"]
+        q = np.linspace(0, 2 * math.pi, 720, endpoint=False)
+
+        def at(table, angle):
+            x = np.mod(angle, 2 * math.pi) / (2 * math.pi) * len(table)
+            k0 = np.floor(x).astype(int) % len(table)
+            w = x - np.floor(x)
+            table = np.asarray(table, float)
+            return (1 - w) * table[k0] + w * table[(k0 + 1) % len(table)]
+
+        for start in (1.0, 5.2):
+            j = station.SimStation(dict(t, yaw_start_rad=start), log=lambda *a: None).run(
+                "yaw", manifests.yaw("t-survey", PRIOR, "survey", vmax=65.0), "survey")
+            samples = identify.friction_plateaus(j)
+            maps = identify.friction_maps(samples, identify.fit_friction(identify.friction_by_speed(samples)))
+            for key in ("positive", "negative"):
+                shape = at(maps[key], q) - at(y[f"friction_map_{key}"], q)
+                rms = float(np.sqrt(np.mean((shape - np.mean(shape)) ** 2)))
+                self.assertLess(rms, 0.025, f"start {start} {key}: map shape error {rms:.3f} A rms")
+
     def test_slow_ramps_on_the_free_play_mount(self):
         """MEASURE 2026-10-25 (PAYLOAD 10-24): kq 13 / ki 36 (the crosstalk allowance's gain for this
-        payload), the fit's creep term, and the drive's free play (0.7 deg: the motor turns alone at
-        every force reversal before it takes the load). The 1 deg/s ramps hold the speed gate while the
+        payload), the fit's creep term, and the drive's free play (0.7 deg: the motor turns alone, against
+        the gap's drag, at every force reversal before it takes the load). The 1 deg/s ramps hold the speed gate while the
         bearing sits between the feedforward and 0.1 A under it, and ramp-1 stands and catches up once
         the bearing is 0.25 A stickier than the feedforward: the accuracy campaign's first pass at 09:13
         (ramp-1 1.253 after the bearing had worked in by 0.27 A; a start transient of 1.7 deg, inside the
@@ -211,6 +239,25 @@ class Identification(unittest.TestCase):
         for guess, f0, duration in ((0.04, 8.0, 10.5), (None, 8.0, 10.5), (0.075, 5.6, 13.3), (0.2, 3.0, 18.3), (0.45, 3.0, 18.3)):
             _, sweep = manifests.inertia_sweep_for(guess, PRIOR["kq"])
             self.assertEqual((sweep["f0_hz"], sweep["duration_s"]), (f0, duration), f"inertia {guess}")
+
+    def test_sweep_through_the_drive_free_play(self):
+        """The 5x payload with the drive's 0.7 deg of free play, as the station's sweep saw it
+        (2026-10-25 10:49: -0.37 A on the motor for a quarter of every cycle, the rigid body read at
+        3-9 Hz, J 0.212): the gap's drag keeps the motor on the face it pushes (YawPlantParameters::
+        gap_damping). A free gap rattled the motor across it on every dip: 2 coherent bands of 16, no
+        inertia. Within 20% (the rigid plant's sweep reads +10% here), from either side of the turn."""
+        t = truth("payload_5x_knee")
+        t["yaw"].pop("friction_drift_A")
+        t["yaw"]["free_play_rad"] = math.radians(0.7)
+        table = t["yaw"]["crosstalk_map"]
+        for start in (1.0, 3.5):
+            t["yaw_start_rad"] = start
+            j, sweep = self.inertia_session(t, table, guess=0.18)
+            points = identify.inertia_response(j, sweep, table, 0.001)
+            coherent = sum(1 for p in points if p[2] >= 0.5)
+            self.assertGreaterEqual(coherent, 8, f"start {start}: {coherent}/16 coherent bands")
+            inertia = self.identified(j, sweep, table)[0]
+            self.assertLess(abs(inertia / t["yaw"]["inertia"] - 1), 0.2, f"start {start}: J {inertia:.4f}")
 
     @unittest.expectedFailure
     def test_prior_gains_at_10x(self):
@@ -297,11 +344,21 @@ class Pipeline(unittest.TestCase):
         """The 5x payload as the station measured it (payload_5x_knee: the friction knee the fit cannot
         follow, and the bearing's level moving +-0.15 A between sessions): accepted under the
         engineering gates (score.YAW_GATES) from two start angles, at most 4 stalls each (measured worst
-        2 with the cap rule, 5 without). Start 3.5 is refused, and rightly: its survey's slow plateaus
-        sit on stickier angles than the passes, the feedforward over-reads there, and ramp+1 slips
-        3.75 deg ahead -- the survey measures the slow friction where it starts, not where the passes
-        run (open, 2026-10-25). Stalls: Design.test_integral_cap_covers_breakaway_and_drift."""
-        for start in (1.0, 5.2):
+        2 with the cap rule, 5 without). Stalls: Design.test_integral_cap_covers_breakaway_and_drift.
+
+        From 3.5 rad it is refused, and the test says so (a known limit, closed 2026-10-25). The survey
+        runs its 0.25-2 deg/s plateaus on the few degrees where it starts, and no other plateau crosses
+        that arc at a steady speed (every one begins or ends there, settling), so nothing in the survey
+        tells a sticky arc from a high slow friction: the curve takes the start's friction. This case's
+        map has a +0.32 A spike at 3.5 rad, so the 1 deg/s feedforward reads 0.11-0.18 A high over the
+        whole turn and ramp+1 slips ahead. Fitting the curve and the map as one model was tried: with
+        the start arc unobserved it only traded this bias for others (the --update case then slipped
+        16 deg). On the station it is not what limits slow tracking: its maps span -0.08..+0.14 A (#5,
+        survey at 50 deg) and -0.04..+0.06 A (#6, 63 deg), which bounds the bias, while the bearing's
+        own slow level rises 0.25 A within a run (the work-in, docs/ADR-005/STAGE2.md) against a servo
+        tolerance at 1 deg/s of 0.1-0.15 A."""
+        refused = 3.5
+        for start in (1.0, refused, 5.2):
             t = truth("payload_5x_knee")
             t["yaw_start_rad"] = start
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
@@ -314,7 +371,12 @@ class Pipeline(unittest.TestCase):
                     asset = load(Path(out) / "yaw_servo.json")
             finally:
                 Path(f.name).unlink()
-            self.assertTrue(asset["provenance"]["accepted"], f"start {start}: " + json.dumps([v["fails"] for v in asset["validation"]]))
+            fails = [x for v in asset["validation"] for x in v["fails"]]
+            if start == refused:
+                self.assertFalse(asset["provenance"]["accepted"], "start 3.5 accepted: the docstring's limit is gone")
+                self.assertTrue(fails and all(x.startswith("ramp+") and "(pointing)" in x for x in fails), fails)
+                continue
+            self.assertTrue(asset["provenance"]["accepted"], f"start {start}: " + json.dumps(fails))
             stalls = [v["extra"]["stalls"] for v in asset["validation"]]
             self.assertTrue(all(n <= 4 for n in stalls), f"start {start}: stalls {stalls}")
             f = asset["identified"]["friction"]
@@ -327,16 +389,17 @@ class Pipeline(unittest.TestCase):
         """`yaw --update` on the payload with the asset's three-week-old table (RE-RUN on the station,
         2026-10-24): the inertia is still identified and the fit reports the drift. This plant's
         friction is nearly twice the station's (0.58 A at 5 deg/s against 0.31-0.36), and with the
-        drift allowance the robust design is wn 4.5 (kq 4.9): it stick-slips 4.6 deg on ramp-5, so the
-        engineering gates refuse it (the old speed gate passed it on its mean speed)."""
+        drift allowance the robust design is wn 4.5 (kq 4.9), soft: it stick-slips on the slow ramps,
+        about 2 deg of jitter and a moving peak of 2.4 deg, inside the engineering gates. (It slipped
+        4.6 deg on ramp-5, refused, while the friction map sat half an entry late:
+        Design.test_friction_maps_land_where_the_servo_reads_them.)"""
         t = truth("payload_5x")
         old = drifted(t["yaw"]["crosstalk_map"], np.random.default_rng(2))
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
             json.dump({"identified": {"crosstalk": {"delay_s": t["yaw"]["crosstalk_delay_s"], "table": old, "uncertainty": 0.000479}}}, f)
-        asset, report = self.run_pipeline("yaw", "payload_5x", "--update", "--asset", f.name, accepted=False)
+        asset, report = self.run_pipeline("yaw", "payload_5x", "--update", "--asset", f.name)
         Path(f.name).unlink()
-        fails = [x for v in asset["validation"] for x in v["fails"]]
-        self.assertTrue(fails and all("(pointing)" in x for x in fails), fails)
+        self.assertLess(asset["servo_parameters"]["kq"], 6.0)
         self.assertLess(abs(asset["identified"]["inertia"] / t["yaw"]["inertia"] - 1), 0.15, asset["identified"]["inertia"])
         step = next(s for s in report["steps"] if s["step"] == "inertia")
         self.assertLess(abs(step["residual_crosstalk"] + 0.0011), 0.0006, f"drift found: {step['residual_crosstalk'] * 1e3:+.2f} mrad/A")
