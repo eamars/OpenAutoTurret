@@ -615,7 +615,7 @@ function hudCalibrationBore(t, pace, resume) {
   const on = b.mode === "manual_depth", switching = !!t.calibration_switching, parked = !!t.rest_park;
   const still = !switching && !parked && (t.phase === "idle" || (t.phase === "hold" && t.operating_mode === "MANUAL"));
   const why = switching ? "switching…" : parked ? "parked: trim in a MANUAL hold or in Shutdown"
-    : t.phase === "hold" ? "trim in MANUAL: MODE › MANUAL holds where it is" : "trim on a still turret: a MANUAL hold or Shutdown";
+    : t.phase === "hold" ? "trim in MANUAL: HOLD HERE TO TRIM stops the turret where it is" : "trim on a still turret: a MANUAL hold or Shutdown";
   // Calibration's own hold ends with calibration (hudCalibrationExit): the row says so, and while it
   // stands the panel says which mode comes back.
   const hold = !still && !switching && !parked && t.phase === "hold"

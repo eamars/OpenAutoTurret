@@ -718,3 +718,15 @@ comparing journals and fits (ADR-005 risk 1); then the first VERIFY; then a RE-R
     inertia under the same crosstalk allowance).
   - **Installed** into #6 and applied at 12:37:17 (settled 0.41 s), MANUAL hold kept. Records in
     `Firmware/calibration/records/0005-CALI-3-5KG-LOAD/` and `0006-NO-LOAD/`.
+- **Adaptive friction learning for slow tracking: not built (2026-10-25; the owner delegated the
+  open items).** The bearing's slow friction (at most 2 deg/s) follows recent motion: about +0.25 A
+  after minutes of slow back-and-forth, reset by fast turning, against a servo tolerance of about
+  ±0.15 A at 1 deg/s.
+  - That movement is already inside both records' measurements. Their accuracy campaigns ran with
+    the bearing between 0.36 and 0.60 A, every pass inside the engineering gates. Their limits
+    (moving peak 3.14° on CALI_3_5KG_LOAD, 1.17° on NO_LOAD) are measured with it.
+  - A learner could tighten slow tracking within those limits. It would cost a production servo
+    change with failure modes of its own: learning the wrong level through a stall, the free slip,
+    or the 0.7° of free play. The work-in pass of 10:00 (a fixed learned level) over-read by
+    0.3 A within ten minutes.
+  - **Reopen** if a real target tracked at 2 deg/s or slower misses its record's limits.
