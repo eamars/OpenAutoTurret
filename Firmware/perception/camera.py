@@ -96,7 +96,8 @@ class CameraOwner:
                  main_stream: str = "main",
                  inference_stream: Optional[str] = None,
                  inference_size: Tuple[int, int] = (0, 0),
-                 copy_main: bool = True) -> None:
+                 copy_main: bool = True,
+                 snapshot: Optional[Any] = None) -> None:
         if min(int(stream_size[0]), int(stream_size[1])) <= 0:
             raise ConfigError(
                 f"CameraOwner needs a real stream size, got {stream_size}. The retired code's "
@@ -118,6 +119,9 @@ class CameraOwner:
         # was 6.2 MB of 1080p per frame, most of the 2-6 ms `_ota_image_copy_ms`, on the thread
         # that also runs inference. Off only when a leg exists; ``image`` is then None.
         self.copy_main = bool(copy_main) or not inference_stream or preview is not None
+        # perception.snapshot.SnapshotSlot: on request, the next frame's full picture goes to it (the
+        # one copy a measurement needs), whether or not the frames copy it otherwise.
+        self.snapshot = snapshot
         self.stats = CameraStats()
         self.frame_sequence = 0
         self._previous_sensor_ns = 0
@@ -145,7 +149,11 @@ class CameraOwner:
             self.stats.last_frame_gap_ms = gap_ms
             self.stats.max_gap_ms = max(self.stats.max_gap_ms, gap_ms)
             self._previous_receive_ns = receive_ns
-            image = request.make_array(self.main_stream) if self.copy_main else None
+            snapshot = self.snapshot is not None and self.snapshot.wanted()
+            full = request.make_array(self.main_stream) if (self.copy_main or snapshot) else None
+            # A copy made only for the snapshot is not handed on: downstream reads exactly what it
+            # read before.
+            image = full if self.copy_main else None
             # Both legs come from the same request, so the picture and the inference input are the
             # same instant of light -- two requests would have been two timestamps.
             inference_image = (request.make_array(self.inference_stream)
@@ -165,6 +173,9 @@ class CameraOwner:
             self.frame_sequence += 1
             self.stats.delivered += 1
             self._previous_sensor_ns = sensor_ns
+            if snapshot and full is not None:
+                self.snapshot.offer(full, {"sensor_timestamp_ns": sensor_ns,
+                                           "frame_sequence": self.frame_sequence})
             if self.preview is not None and image is not None:
                 # §39: one reference into a one-slot buffer. Safe to hand on and to keep after
                 # release() below, because Picamera2's make_array() copies the camera buffer

@@ -46,6 +46,7 @@ from .model import (OFFLINE_ADAPTERS, EnvironmentManifest, build_adapter, manife
 from .model.adapter import MockAdapter
 from .pipeline import LatestJsonPublisher, PerceptionPipeline, PreviewTap
 from .preview import JpegPreviewWorker
+from .snapshot import SnapshotSlot
 from .detail_stream import DetailFrame, DetailStreamAnnouncer, SecondaryCameraStream
 from .inference_switch import InferenceSwitch, View
 from .main_camera import MainCamera
@@ -395,6 +396,10 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
     tap_path = os.environ.get("OTA_VISION_FRAME_TAP", "").strip()
     if preview.enabled and tap_path:
         preview_worker = JpegPreviewWorker(preview, tap_path)
+    # ADR-006: a full-resolution frame on request, for measurements (the live preview is the leg).
+    snapshot_dir = os.path.dirname(tap_path) or os.path.dirname(
+        os.environ.get("OTA_VISION_STREAM_MANIFEST", "").strip())
+    snapshots = {"wide": SnapshotSlot("wide", os.path.join(snapshot_dir, "snapshot_wide.jpg"))} if snapshot_dir else {}
     diagnostics = AssociationDiagnostics(
         capacity=int(config.tracking.diagnostics_capacity),
         # Asking for a dump on disk is an instruction to fill it: `--diagnostics` overrides the
@@ -515,8 +520,9 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
                              inference_stream=("lores" if lores else None),
                              inference_size=(lores or stream),
                              # Inference and the wide preview both read the leg; only the input
-                             # tensor probe compares against the full picture.
-                             copy_main=bool(args.input_tensor_probe))
+                             # tensor probe compares against the full picture, and a snapshot.
+                             copy_main=bool(args.input_tensor_probe),
+                             snapshot=snapshots.get("wide"))
         if (model.adapter or "").strip().lower() not in ("hailo", "hailo8", "hailo_pose"):
             adapter.open(device=imx500, camera=picam2)
         pipeline.start()
@@ -528,6 +534,12 @@ def run_capture(args: argparse.Namespace, config: VisionConfig) -> int:
         if pipeline.selection_service is not None:
             pipeline.selection_service.main_camera = main_camera
         detail = _start_detail_stream(primary_ident=primary_ident, secondary=config.secondary)
+        if "wide" in snapshots:
+            snapshots["wide"].start()
+        if detail is not None and detail.get("snapshot") is not None:
+            snapshots["detail"] = detail["snapshot"]   # started with its stream
+        if pipeline.selection_service is not None:
+            pipeline.selection_service.snapshots = snapshots
         views = {"wide": View(camera_id=primary_ident.id, leg=(lores or stream), declared=stream)}
         scale = float(config.secondary.view_scale or 0.0)
         if detail is not None and detail.get("lores") is not None and lores is not None:
@@ -833,6 +845,8 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
     tap = PreviewTap(enabled=True, fps=preview_fps, latest_queue_depth=1)
     preview = JpegPreviewWorker(tap, os.path.join(run_dir, "preview_detail.jpg"))
     preview.start()
+    snapshot = SnapshotSlot("detail", os.path.join(run_dir, "snapshot_detail.jpg"))
+    snapshot.start()
 
     leg_wanted = threading.Event()
 
@@ -854,6 +868,9 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
         tap.offer(image, now_ns=None, metadata={"camera": "detail",
                                                "sensor_timestamp_ns": stamp,
                                                "frame_sequence": sequence})
+        if snapshot.wanted():
+            # The full picture is copied for the preview anyway; the snapshot keeps this one.
+            snapshot.offer(image, {"sensor_timestamp_ns": stamp, "frame_sequence": sequence})
         return DetailFrame(camera_id=ident.id, frame_sequence=sequence,
                            sensor_timestamp_ns=None if stamp is None else int(stamp),
                            image=image, metadata=metadata,
@@ -869,7 +886,8 @@ def _start_detail_stream(*, primary_ident=None, secondary=None):
                                           size=stream_size)
         announcer.start()
     return {"picam2": picam2, "stream": stream, "preview": preview, "announcer": announcer,
-            "ident": ident, "stream_size": stream_size, "lores": lores, "leg_wanted": leg_wanted}
+            "ident": ident, "stream_size": stream_size, "lores": lores, "leg_wanted": leg_wanted,
+            "snapshot": snapshot}
 
 
 def _start_detail_inference(detail, switch, pipeline, *, wire_publisher=None, legacy=False):

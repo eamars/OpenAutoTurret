@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .config import WebConfig, load_web_config
@@ -45,7 +45,7 @@ from .protocol import TELEMETRY_STALE_AFTER_S
 from web.webd.hud import HUD_HTML
 from .protocol import ResponseMessage, Telemetry, telemetry_to_json
 from .video import VideoSource, mjpeg_frame
-from .selection_client import request_main_camera, request_selection
+from .selection_client import request_main_camera, request_selection, request_snapshot, wait_for_snapshot
 
 
 log = logging.getLogger("webd")
@@ -499,6 +499,27 @@ def create_app(client: ControldClient, config: WebConfig) -> FastAPI:
             return JSONResponse({"ok": False, "error": problem})
         st = await asyncio.to_thread(source_for(role).stop)
         return JSONResponse({"ok": True, **st.to_dict()})
+
+    @app.get("/api/video/snapshot")
+    async def video_snapshot(camera: Optional[str] = None, timeout_s: float = 3.0):
+        """One full-resolution frame of a camera, for measurements (ADR-006): wide 1920x1080, detail
+        1280x720, the same capture and field of view as the preview and the detector. The live preview
+        stays the small leg; this asks visiond for the next full frame once (one copy, one encode off
+        the camera thread). The frame's identity is in the X-OTA-Snapshot header."""
+        role, problem = _role_or_error(camera)
+        if problem:
+            return JSONResponse(status_code=400, content={"error": problem, "roles": list(STREAM_ROLES)})
+        reply = await asyncio.to_thread(
+            request_snapshot, os.environ.get('OTA_SELECTION_SOCKET', '/tmp/ota-selection.sock'), role)
+        if not reply.get("accepted"):
+            return JSONResponse(status_code=409, content=reply)
+        wait = min(max(float(timeout_s), 0.2), 10.0)
+        jpeg, meta = await asyncio.to_thread(wait_for_snapshot, reply["path"], reply["request"], wait)
+        if jpeg is None:
+            return JSONResponse(status_code=504, content={"error": f"no {role} snapshot within {wait:g} s", **reply})
+        return Response(content=jpeg, media_type="image/jpeg",
+                        headers={"X-OTA-Snapshot": json.dumps(meta, separators=(",", ":")),
+                                 "Cache-Control": "no-store"})
 
     @app.get("/api/video")
     async def video_stream(limit: Optional[int] = None,

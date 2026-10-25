@@ -29,6 +29,8 @@ class SelectionService:
         self.inode = None
         # perception.main_camera.MainCamera, when visiond owns two cameras.
         self.main_camera = None
+        # role -> perception.snapshot.SnapshotSlot, the cameras that can take a full-resolution frame.
+        self.snapshots = {}
 
     def start(self):
         import fcntl  # local Linux IPC, like SOCK_SEQPACKET below
@@ -88,10 +90,11 @@ class SelectionService:
                     data = json.loads(raw)
                     if not isinstance(data, dict):
                         raise ValueError('selection request must be an object')
-                    if data.get('type') == 'set_main_camera':
+                    if data.get('type') in ('set_main_camera', 'snapshot'):
                         # Not a tracker decision, so it is not queued behind a frame: the swap must
                         # work precisely when the current camera is producing nothing useful.
-                        reply = self._main_camera(data)
+                        reply = (self._main_camera(data) if data.get('type') == 'set_main_camera'
+                                 else self._snapshot(data))
                         client.sendall(json.dumps(reply, allow_nan=False).encode())
                         continue
                     item = dict(data=data, expires=time.monotonic()+.6,
@@ -119,6 +122,16 @@ class SelectionService:
         if not ok:
             reply.update(reason='CAMERA_REFUSED', detail=detail)
         return reply
+
+    def _snapshot(self, data):
+        """Arm a camera's full-resolution snapshot (ADR-006). The reply names the file and the id its
+        JPEG will carry; the frame arrives within a frame time or two."""
+        role = data.get('role')
+        slot = self.snapshots.get(role)
+        if slot is None:
+            return {'accepted': False, 'reason': 'NO_SNAPSHOT',
+                    'detail': f'no snapshot for camera {role!r}; this run has {sorted(self.snapshots)}'}
+        return {'accepted': True, 'role': role, 'request': slot.request(), 'path': str(slot.path)}
 
     def process(self, selector, track_set, now_ns):
         for _ in range(16):
