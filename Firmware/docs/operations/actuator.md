@@ -81,5 +81,6 @@ null when off), the saved values and `shots`.
 | `UNAVAILABLE`: `PWM write failed: … the output is off` | sysfs refused a write; the output was switched off | nothing: controld tries again every 5 s and returns to A when the write works |
 | `NOT CALIBRATED`, or `actuator.json refused: …` | no file, or a value outside 500..2500 µs or 0..5000 ms | calibrate it (above); the reason names the bad value |
 | `FAULT` | the station is faulted; nothing actuates beside a fault | HOME recovers first |
-| `IN CALIBRATION` | a session is open, possibly on another page | DONE there, or leave calibration |
+| `IN CALIBRATION` | a session is open, possibly on another page | DONE there, or leave calibration; controld closes a session nobody has touched for 5 minutes |
+| `RECOVERING` | motor recovery is running; every command but STOP waits for it | wait for it to end |
 | the launcher logs `controld left the PWM on; the launcher returned it to rest …` | controld ended without switching off (a crash) | the launcher already drove A and switched it off; read controld's log for the crash |
