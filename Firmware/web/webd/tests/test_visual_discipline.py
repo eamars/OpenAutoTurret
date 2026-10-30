@@ -177,7 +177,9 @@ class PaletteDiscipline(unittest.TestCase):
             if sel.startswith(":root") or sel in ("html, body", "html", "body"):
                 continue   # declaring the token is not spending it; §15 test above pins the value
             if "#ff5d5d" in body or "var(--hud-red)" in body:
-                if not any(w in sel for w in ("red", "fault", "stop", ".s1")):
+                # The one exception, by name: ADR-007's ACTUATE button is red at the owner's word
+                # (2026-10-30), knowing it shares the colour with FAULT.
+                if not any(w in sel for w in ("red", "fault", "stop", ".s1", "#actuate")):
                     offenders.append(sel)
         self.assertEqual(offenders, [],
                          "§15: red only for fault/stop. A panel that spends red on anything inconvenient "

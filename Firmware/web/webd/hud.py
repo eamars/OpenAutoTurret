@@ -518,7 +518,8 @@ const HUD_CAL_PARTS = [["yaw", "YAW SERVO"], ["pitch", "PITCH SERVO"], ["accurac
 const HUD_CAL_COMMANDS = ["set_calibration_record", "rename_calibration_record", "new_calibration_record",
                           "delete_calibration_record", "set_bore_mode", "set_bore_range", "trim_bore",
                           "zero_bore", "set_bore_offset",
-                          "verify_calibration", "run_calibration", "stop_calibration"];
+                          "verify_calibration", "run_calibration", "stop_calibration",
+                          "actuator_calibration", "actuator_pulse", "actuator_test", "set_actuator"];
 function hudCalibrationOrigin(p) {
   if (!p || !p.origin) return { text: "NONE", tone: "warn" };
   const date = String(p.date || "").slice(5);   // 2026-10-02 -> 10-02
@@ -722,6 +723,87 @@ function hudCalibrationZero(t, z, settle) {
           note: why || "the payload is on the target: tap it on the " + main + " picture" },
     // What the tap sends, less the point: zero_bore <camera> <metres> <u> <v>.
     arg: haveD ? main + " " + d : null
+  };
+}
+
+// ADR-007 D8: the one-shot actuator (a servo: rest at A; ACTUATE goes to B, waits the dwell, comes
+// back). Its button stays in its place under the D-pad, lit or greyed, whether or not the D-pad shows
+// (owner, 2026-10-30): the layout never moves under a finger. One press -- the two-press rule is
+// SHUTDOWN's alone. controld has the last word, and its refusal shows under the button for a while.
+// Null: this station has no actuator, and there is no button.
+function hudActuateButton(t) {
+  t = t || {};
+  const a = t.actuator;
+  if (!a || typeof a !== "object") return null;
+  const firing = a.state === "active" || a.state === "returning";
+  const why = !a.available ? "UNAVAILABLE"
+    : !a.configured ? "NOT CALIBRATED"
+    : t.phase === "fault" ? "FAULT"
+    : t.calibrating ? "CALIBRATING"
+    : a.state === "calibrating" ? "IN CALIBRATION"
+    : a.state === "active" ? "FIRING"
+    : a.state === "returning" ? "RETURNING"
+    : a.state === "stopping" || a.state === "stopped" ? "STOPPING" : "";
+  return { label: "ACTUATE", command: why ? null : "actuate", arg: "", note: why, firing: firing,
+           title: a.reason || (a.configured ? "A " + a.rest_us + " µs → B " + a.active_us + " µs, " + a.dwell_ms + " ms, → A"
+                                            : "not calibrated") };
+}
+
+// ADR-007 D6/D8: MENU › CALIBRATION's ACTUATOR section. ADJUST opens controld's session (the servo
+// holds its pulse, powered, until DONE); the marks, the step and the dwell are the page's until SAVE.
+// ui: {open, step, pulse, rest, active, dwell} (pulse: what this page last sent; null until the
+// station's first frame of the session).
+const HUD_ACT_STEPS = [50, 10, 2];   // us per press, as tools/actuator_calibrate.py
+const HUD_ACT_DWELL_STEP = 50;       // ms per press
+function hudActuatorSession(t, open) {
+  // The station's session, or a test shot inside it (which leaves "calibrating" for a moment).
+  const a = t && t.actuator;
+  return !!a && (a.state === "calibrating" || (!!open && (a.state === "active" || a.state === "returning")));
+}
+function hudCalibrationActuator(t, ui) {
+  t = t || {}; ui = ui || {};
+  const a = t.actuator;
+  if (!a || typeof a !== "object") return null;
+  const saved = a.configured ? "A " + a.rest_us + " · B " + a.active_us + " µs · " + a.dwell_ms + " ms" : "NOT CALIBRATED";
+  if (!hudActuatorSession(t, ui.open)) {
+    const why = !a.available ? (a.reason || "unavailable")
+      : t.phase === "fault" ? "faulted: HOME recovers first"
+      : t.calibrating ? "a calibration run holds the station"
+      : a.state === "active" || a.state === "returning" ? "wait: a shot is running"
+      : a.state === "stopping" || a.state === "stopped" ? "the actuator is stopping" : "";
+    return { open: false, saved: saved, warn: a.available && !a.configured ? a.reason : "",
+             adjust: { label: "ADJUST A / B…", command: why ? null : "actuator_calibration", arg: "start",
+                       kind: why ? "gated" : "act",
+                       note: why || "the servo goes to " + (a.configured ? "A (" + a.rest_us + " µs)" : "1500 µs") +
+                                    " and stays powered until DONE" } };
+  }
+  const clamp = (us) => Math.max(500, Math.min(2500, Math.round(us)));
+  const step = HUD_ACT_STEPS.indexOf(ui.step) >= 0 ? ui.step : 10;
+  const pulse = Number.isFinite(ui.pulse) ? ui.pulse : Number.isFinite(a.pulse_us) ? a.pulse_us : null;
+  const testing = a.state !== "calibrating";
+  const pick = (v, s) => Number.isFinite(v) ? v : a.configured && Number.isFinite(s) ? s : null;
+  const rest = pick(ui.rest, a.rest_us), active = pick(ui.active, a.active_us);
+  const dwell = Number.isFinite(ui.dwell) ? ui.dwell : a.configured ? a.dwell_ms : 300;
+  const marked = rest !== null && active !== null;
+  const values = marked ? rest + " " + active + " " + dwell : "";
+  const unsaved = marked && !(a.configured && rest === a.rest_us && active === a.active_us && dwell === a.dwell_ms);
+  const live = !testing && pulse !== null;
+  const mark = (v) => v === null ? "—" : v + " µs";
+  return {
+    open: true, testing: testing, saved: saved, unsaved: unsaved,
+    pulse: { text: pulse === null ? "…" : pulse + " µs",
+             down: live && pulse > 500 ? String(clamp(pulse - step)) : null,
+             up: live && pulse < 2500 ? String(clamp(pulse + step)) : null },
+    steps: HUD_ACT_STEPS.map((s) => ({ label: String(s), ui: "act:step:" + s, on: s === step })),
+    rest: { text: mark(rest), ui: live ? "act:rest" : null },
+    active: { text: mark(active), ui: live ? "act:active" : null },
+    dwell: { text: dwell + " ms", down: dwell > 0 ? "act:dwell:-" : null, up: dwell < 5000 ? "act:dwell:+" : null },
+    test: { label: "TEST", command: marked && !testing ? "actuator_test" : null, arg: values,
+            note: testing ? "testing…" : marked ? "A → B → " + dwell + " ms → A, with these marks" : "mark A and B first" },
+    save: { label: "SAVE", command: marked && !testing && unsaved ? "set_actuator" : null, arg: values,
+            note: !marked ? "mark A and B first" : unsaved ? "in force at once, and kept across restarts" : "saved" },
+    done: { label: "DONE", command: "actuator_calibration", arg: "stop",
+            note: (unsaved ? "unsaved marks are dropped · " : "") + (a.configured ? "back to A, then limp" : "the servo goes limp") }
   };
 }
 
@@ -1758,6 +1840,7 @@ function chip(label, state, value) {
 
 function render(t) {
   renderManualPad(t);
+  renderActuate(t);
   const video = $("video"), svg = $("overlay");
   if (!video || !svg) return;
 
@@ -2098,7 +2181,8 @@ function paint(t) {
   const calKey = value => value ? [value.calibration_record, value.calibration_switching, value.calibration_overdue,
     Math.round(10 * (Number(value.calibration_progress) || 0)), value.calibration_unverified, value.calibration_blocked,
     value && value.calibration_records, value.phase, value.operating_mode, value.rest_park,
-    value.calibration_run && [value.calibration_run.id, value.calibration_run.active, value.calibration_run.verdict]] : null;
+    value.calibration_run && [value.calibration_run.id, value.calibration_run.active, value.calibration_run.verdict],
+    value.actuator] : null;
   // ADR-005 D7: a run takes the drawer; when it ends the panel shows how it went.
   if (t && t.calibrating && drawerOpen !== "RUN") { drawerOpen = "RUN"; pendingConfirm = null; closeCalibrationDialog(); renderDock(); }
   else if (t && !t.calibrating && drawerOpen === "RUN") { drawerOpen = "CALIBRATION"; enterCalibration(); renderDock(); renderDrawer(); }
@@ -2132,12 +2216,16 @@ function paint(t) {
                         t.calibration_switching || (t.calibration_record || {}).id !== calZero.record))
     disarmZero();
   if (calSession) calSession = hudCalibrationSessionStep(calSession, lastTelemetry, t);
+  const actOpenBefore = calAct.open;
+  syncCalAct(t);
+  noteActuateAck(t);
   lastTelemetry = t; lastTelemetryAt = Date.now();
   transportOk = true;
   render(t);
   // The panel's HELD line follows the page's own session too (a STOP cancels it with no telemetry change).
   const heldMoved = drawerOpen === "CALIBRATION" && ((calSession && calSession.resume) || null) !== calResumeShown;
-  if (drawerOpen && (drawerChanged || settleFlipped || heldMoved) && !calZero.armed) renderDrawer();
+  const actClosed = drawerOpen === "CALIBRATION" && actOpenBefore !== calAct.open;
+  if (drawerOpen && (drawerChanged || settleFlipped || heldMoved || actClosed) && !calZero.armed) renderDrawer();
 }
 
 function updateStaleness(t) {
@@ -2413,6 +2501,9 @@ function leaveCalibration() {
   calZero = { distance: null, armed: null, record: null };
   closeCalibrationDialog();
   calRefusal = null;
+  // ADR-007: an actuator session ends with calibration, wherever it was left from.
+  if (calAct.open || hudActuatorSession(lastTelemetry, false)) sendCommand("actuator_calibration", "stop");
+  resetCalAct();
   if (exit.mode) sendCommand("set_mode", exit.mode);
   if (exit.main && window.otaSetMain) window.otaSetMain(exit.main);
 }
@@ -2533,8 +2624,77 @@ function renderCalibrationPanel(t) {
        (removable || '<span class="snote">nothing to remove</span>') +
        "</span><span class=\"snote\">#1 is the shipped backup; the record in force can't be removed. Two presses.</span></div>";
   h += '<div class="dsec">BORE</div>' + renderCalibrationBore(t) + renderCalibrationZero(t);
+  h += renderCalibrationActuator(t);
   h += '<div class="pstop">' + row(spec.stop) + "</div>";
   return h;
+}
+
+// ADR-007: the actuator's section. The page's marks live in calAct until SAVE; controld's session is
+// opened by ADJUST and closed by DONE, by leaving calibration (leaveCalibration), or by controld itself.
+let calAct = { open: false, since: 0, step: 10, pulse: null, rest: null, active: null, dwell: null };
+function resetCalAct() { calAct = { open: false, since: 0, step: calAct.step, pulse: null, rest: null, active: null, dwell: null }; }
+function renderCalibrationActuator(t) {
+  const s = hudCalibrationActuator(t, calAct);
+  if (!s) return "";
+  const snote = (text, warn) => text ? '<span class="snote' + (warn ? " warn" : "") + '">' + escapeMarkup(text) + "</span>" : "";
+  const sb = (text, command, arg) => '<button type="button" class="sbtn"' +
+    (command ? ' data-cmd="' + command + '" data-arg="' + escapeMarkup(arg) + '" data-kind="act"' : " disabled") + ">" + text + "</button>";
+  const ub = (text, ui, cls) => '<button type="button" class="sbtn' + (cls || "") + '"' +
+    (ui ? ' data-calui="' + ui + '"' : " disabled") + ">" + text + "</button>";
+  const act = (a, cls) => '<button type="button" class="drow' + (a.command ? "" : " gated") + (cls || "") + '"' +
+    (a.command ? ' data-cmd="' + a.command + '" data-arg="' + escapeMarkup(a.arg) + '" data-kind="act"' : " disabled") +
+    '><span class="rl">' + escapeMarkup(a.label) + '</span><span class="rn">' + escapeMarkup(a.note) + "</span></button>";
+  let h = '<div class="dsec">ACTUATOR</div>';
+  h += '<div class="drow setting"><span class="rl">SAVED</span><span class="rn' + (s.saved === "NOT CALIBRATED" ? " warn" : "") +
+       '">' + escapeMarkup(s.saved) + "</span>" + snote(s.warn, true) + "</div>";
+  if (!s.open) return h + act(s.adjust);
+  h += '<div class="drow setting"><span class="rl">PULSE</span><span class="stepper">' +
+       sb("−", s.pulse.down && "actuator_pulse", s.pulse.down) + '<span class="sval">' + escapeMarkup(s.pulse.text) + "</span>" +
+       sb("+", s.pulse.up && "actuator_pulse", s.pulse.up) + "</span>" +
+       snote(s.testing ? "testing…" : "near an end stop, small steps: back off at the first buzz", false) + "</div>";
+  h += '<div class="drow setting"><span class="rl">STEP</span><span class="stepper">' +
+       s.steps.map((p) => ub(p.label, p.ui, " chip" + (p.on ? " on" : ""))).join("") + "&nbsp;µS</span></div>";
+  h += '<div class="drow setting"><span class="rl">MARK</span><span class="stepper">' +
+       ub("REST (A)", s.rest.ui, " chip") + '<span class="sval">' + escapeMarkup(s.rest.text) + "</span>" +
+       ub("ACTIVE (B)", s.active.ui, " chip") + '<span class="sval">' + escapeMarkup(s.active.text) + "</span>" +
+       "</span>" + snote("marks the pulse the servo holds now", false) + "</div>";
+  h += '<div class="drow setting"><span class="rl">DWELL</span><span class="stepper">' +
+       ub("−", s.dwell.down) + '<span class="sval">' + escapeMarkup(s.dwell.text) + "</span>" + ub("+", s.dwell.up) +
+       "</span>" + snote("the wait at B, " + HUD_ACT_DWELL_STEP + " ms a press", false) + "</div>";
+  return h + act(s.test) + act(s.save) + act(s.done);
+}
+// What a press on the section changes on this page (the commands themselves go through the drawer's
+// usual path). Returns true when the panel should repaint.
+function actuatorCalUi(k) {
+  if (k.indexOf("act:step:") === 0) { calAct.step = Number(k.slice(9)); return true; }
+  const s = hudCalibrationActuator(lastTelemetry || {}, calAct);
+  if (!s || !s.open) return false;
+  const pulse = Number.isFinite(calAct.pulse) ? calAct.pulse : (lastTelemetry.actuator || {}).pulse_us;
+  if (k === "act:rest" && Number.isFinite(pulse)) { calAct.rest = pulse; return true; }
+  if (k === "act:active" && Number.isFinite(pulse)) { calAct.active = pulse; return true; }
+  if (k === "act:dwell:-" || k === "act:dwell:+") {
+    const now = Number.parseFloat(s.dwell.text);
+    calAct.dwell = Math.max(0, Math.min(5000, now + (k === "act:dwell:+" ? HUD_ACT_DWELL_STEP : -HUD_ACT_DWELL_STEP)));
+    return true;
+  }
+  return false;
+}
+// The page's side of a command it sends to the actuator.
+function noteActuatorCommand(cmd, arg) {
+  if (cmd === "actuator_calibration" && arg === "start") { resetCalAct(); calAct.open = true; calAct.since = Date.now(); }
+  else if (cmd === "actuator_calibration" && arg === "stop") resetCalAct();
+  else if (cmd === "actuator_pulse") calAct.pulse = Number(arg);
+  else if (cmd === "set_actuator") { const v = String(arg).split(" ").map(Number); calAct.rest = v[0]; calAct.active = v[1]; calAct.dwell = v[2]; }
+}
+// Each frame: the session's first pulse comes from the station, and a session the station no longer
+// has (refused, closed elsewhere, ended by controld) ends here too. A second and a half covers the
+// command's round trip.
+function syncCalAct(t) {
+  if (!calAct.open) return;
+  const a = (t && t.actuator) || {};
+  if (hudActuatorSession(t, true)) {
+    if (!Number.isFinite(calAct.pulse) && a.state === "calibrating" && Number.isFinite(a.pulse_us)) calAct.pulse = a.pulse_us;
+  } else if (Date.now() - calAct.since > 1500) resetCalAct();
 }
 
 // ADR-006 D6: ZERO. Offsets per camera, the target's distance, the settle check, and the tap.
@@ -2823,6 +2983,39 @@ function renderManualPad(t) {
   $("pad-pace").title = padPaceOverride ? "Pace pinned; tap to follow the camera" : "Pace follows the camera; tap to pin the other";
   if (!enabled) stopPadJog();
 }
+// ADR-007 D8: the ACTUATE button. Greyed, with the reason on it, whenever controld would refuse it or
+// the page cannot see the station; controld's own refusal, if one comes, shows under it for 6 s.
+let actuateRefusal = null, actuateSeenSeq = null;
+function noteActuateAck(t) {
+  if (!t || t.cmd_ack_seq === actuateSeenSeq) return;
+  const first = actuateSeenSeq === null;
+  actuateSeenSeq = t.cmd_ack_seq;
+  if (!first && t.cmd_ack_command === "actuate" && t.cmd_ack_accepted === 0)
+    actuateRefusal = { reason: String(t.cmd_ack_reason || "").replace(/^web gate: /, ""), at: Date.now() };
+}
+function renderActuate(t) {
+  const slot = $("actuate-slot");
+  if (!slot) return;
+  const s = hudActuateButton(t);
+  if (slot.hidden !== !s) slot.hidden = !s;
+  if (!s) return;
+  const seen = !!t && !t.telemetry_stale && transportOk && Date.now() - lastTelemetryAt < 1000;
+  const b = $("actuate");
+  const note = !seen ? "NO TELEMETRY" : s.note;
+  const html = escapeMarkup(s.label) + (note ? "<small>" + escapeMarkup(note) + "</small>" : "");
+  if (b.innerHTML !== html) b.innerHTML = html;
+  b.disabled = !seen || !s.command;
+  b.classList.toggle("firing", s.firing);
+  b.title = s.title;
+  const r = actuateRefusal && Date.now() - actuateRefusal.at < 6000 ? actuateRefusal.reason : "";
+  if ($("actuate-note").textContent !== r) $("actuate-note").textContent = r;
+}
+$("actuate").addEventListener("click", () => {
+  const s = hudActuateButton(lastTelemetry);
+  if (!s || !s.command || $("actuate").disabled) return;
+  actuateRefusal = null;
+  sendCommand(s.command, s.arg);
+});
 // The pad's pace: null follows the main camera; "coarse" | "precise" is the operator's pin, which a
 // camera swap clears (the new view brings its own pace back).
 let padPaceOverride = null, padPaceRole = null;
@@ -2865,7 +3058,7 @@ $("pad-pace").addEventListener("click", () => {
 });
 // The Manual / Hold and Auto buttons are gone (owner, 2026-10-05): every mode, SURVEILLANCE included,
 // is one press in the MODE drawer, and MODE > MANUAL holds where the turret is.
-setInterval(() => renderManualPad(lastTelemetry), 100);
+setInterval(() => { renderManualPad(lastTelemetry); renderActuate(lastTelemetry); }, 100);
 
 dock.addEventListener("click", (e) => {
   const b = e.target && e.target.closest ? e.target.closest("button[data-key]") : null;
@@ -2897,6 +3090,7 @@ drawer.addEventListener("click", (e) => {
     else if (k === "zero:arm") armZero();
     else if (k === "zero:cancel") disarmZero();
     else if (k.indexOf("opt:") === 0) { const o = k.slice(4); calRerunOpts[o] = !calRerunOpts[o]; pendingConfirm = null; renderDrawer(); }
+    else if (k.indexOf("act:") === 0) { if (actuatorCalUi(k)) renderDrawer(); }
     return;
   }
   const ui = e.target && e.target.closest ? e.target.closest("button[data-ui]") : null;
@@ -2914,8 +3108,10 @@ drawer.addEventListener("click", (e) => {
     const key = hudConfirmKey(cmd, b.getAttribute("data-arg") || "");
     if (pendingConfirm !== key) { pendingConfirm = key; renderDrawer(); return; }
   }
+  noteActuatorCommand(cmd, b.getAttribute("data-arg") || "");
   sendCommand(cmd, b.getAttribute("data-arg") || "");
   if (pendingConfirm !== null) { pendingConfirm = null; renderDrawer(); }
+  else if (cmd.indexOf("actuator") === 0 || cmd === "set_actuator") renderDrawer();
 });
 
 renderDock();
@@ -3187,6 +3383,19 @@ text.flbl { font-size: 9px; letter-spacing: .06em; font-family: inherit; }    /*
 @media (max-width: 600px) { #drawer { width: min(330px, 92vw); } #drawer.calpanel { width: min(440px, 92vw); } }
 /* A swap hold refuses jogs: the pad says so instead of looking live. */
 #manual-pad.held { opacity:.25; pointer-events:none; }
+/* ADR-007 D8: ACTUATE, under the D-pad's place whether or not the D-pad shows (owner, 2026-10-30). The
+   pad is 176 px wide (3 x 48 + 2 x 5 + 2 x 10 + 2) and ends at 50% + 75 px; the button keeps that width
+   and starts 10 px below it. Red, at the owner's word, although red is otherwise a fault's (§15). */
+#actuate-slot { position:absolute; left:24px; top:calc(50% + 85px); width:176px; z-index:30;
+  display:flex; flex-direction:column; gap:4px; }
+#actuate-slot[hidden] { display:none; }
+#actuate { height:46px; border:1px solid var(--hud-red); border-radius:7px; background:rgba(255,93,93,.14);
+  color:var(--hud-red); font:600 13px/1 var(--hud-mono); letter-spacing:.16em; touch-action:manipulation; }
+#actuate small { display:block; margin-top:3px; font:9px/1 var(--hud-mono); letter-spacing:.08em; }
+#actuate:disabled { opacity:.35; }
+#actuate.firing { background:var(--hud-red); color:#05070a; opacity:1; }
+#actuate-note { min-height:11px; font:10px/1.2 var(--hud-mono); letter-spacing:.04em; color:var(--hud-amber);
+  text-shadow:0 0 4px #000; }
 /* The drawer's layer (40), later in the document so above it; never above the safety banner (50). */
 #caldlg { position:absolute; inset:0; z-index:40; background:rgba(0,0,0,.45); display:flex; align-items:center;
           justify-content:center; }
@@ -3369,6 +3578,9 @@ HUD_HTML = """<!DOCTYPE html>
     <button data-direction="left" aria-label="Aim camera left">←</button><button id="pad-pace" type="button" aria-pressed="false" aria-label="Jog pace">COARSE</button><button data-direction="right" aria-label="Aim camera right">→</button>
     <button data-direction="down-left" aria-label="Aim camera down and left">↙</button><button data-direction="down" aria-label="Aim camera down">↓</button><button data-direction="down-right" aria-label="Aim camera down and right">↘</button>
   </div>
+  <!-- ADR-007 D8: the actuator's button, in its own place under the D-pad's (hidden only on a station
+       with no actuator). -->
+  <div id="actuate-slot" hidden><button id="actuate" type="button" aria-label="Actuate">ACTUATE</button><span id="actuate-note" role="status"></span></div>
   <!-- §22 safety indication. Outside the health chips, because BRAKING and FAULT are asked to be more
        prominent than a chip and a fault to interrupt normal operation. -->
   <div id="safety" hidden role="status" aria-live="assertive"></div>

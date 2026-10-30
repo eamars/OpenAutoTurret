@@ -659,7 +659,7 @@ class DockAndDrawerBehaviour(unittest.TestCase):
                      "if (leaving) leaveCalibration();",
                      'drawerOpen = "CALIBRATION"; enterCalibration();',
                      "if (calSession) calSession = hudCalibrationSessionStep(calSession, lastTelemetry, t);",
-                     "if (drawerOpen && (drawerChanged || settleFlipped || heldMoved) && !calZero.armed) renderDrawer();",
+                     "if (drawerOpen && (drawerChanged || settleFlipped || heldMoved || actClosed) && !calZero.armed) renderDrawer();",
                      'if (calSession && (cmd === "hold" || cmd === "stop_calibration")) calSession.resume = null;',
                      "window.otaSwapPip = function () { noteCalibrationSwap(); return window.otaSetMain(panes.pip.role); };",
                      "if (exit.main && window.otaSetMain) window.otaSetMain(exit.main);",
