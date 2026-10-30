@@ -112,6 +112,11 @@ class Telemetry:
     # last note and the verdict. None before the first run.
     calibrating: bool = False
     calibration_run: Optional[dict] = None
+    # ADR-007: the one-shot actuator (the GPIO15 servo) as controld's worker publishes it -- available,
+    # configured, state (off|rest|returning|active|calibrating|unconfigured|unavailable|stopping|stopped),
+    # reason, gpio, powered, pulse_us, rest_us, active_us, dwell_ms, hold_at_rest, shots, persistent,
+    # saved. None: no actuator on this station.
+    actuator: Optional[dict] = None
     # What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
     # fresh frame was produced for ("" while none), the hold while it switches, and an overdue switch.
     target_type: str = ""
