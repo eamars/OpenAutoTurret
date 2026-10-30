@@ -2,9 +2,10 @@
 """Find the one-shot actuator's REST (A) and ACTIVE (B) pulse widths, interactively, on the station.
 
 The actuator is a hobby servo on GPIO15 (physical pin 10, owner 2026-10-30): it rests at A, and on
-ACTIVATE moves to B, waits the dwell, and returns to A. This is the quick tool that finds A, B and the
-dwell and saves them to the station's state directory; controld will read the same file once it owns
-the servo, and then this tool must not run beside it.
+ACTIVATE moves to B, waits the dwell, and returns to A. This is the bench tool that finds A, B and the
+dwell and saves them to the station's state directory, where controld reads them at start (ADR-007).
+controld owns the servo while it runs, so this tool refuses to start beside it: with the stack up,
+use MENU > CALIBRATION > ACTUATOR, or stop the stack first.
 
     ssh -t eamars@rpi-turret python3 ~/actuator_calibrate.py            # a real terminal: keys below
     ssh -t eamars@rpi-turret python3 ~/actuator_calibrate.py --start 1500
@@ -127,6 +128,9 @@ def main() -> int:
     ap.add_argument("--start", type=float, help="first pulse, us (default: saved REST, else 1500)")
     args = ap.parse_args()
 
+    if subprocess.run(["pgrep", "-x", "controld"], capture_output=True).returncode == 0:
+        sys.exit("controld is running and owns the actuator: use MENU > CALIBRATION > ACTUATOR on the page, "
+                 "or stop the stack first")
     path = args.state / "actuator.json"
     saved = json.loads(path.read_text()) if path.exists() else {}
     if saved:
@@ -172,7 +176,8 @@ def main() -> int:
                 if rest is None or active is None:
                     print("\nmark REST (r) and ACTIVE (b) first")
                     continue
-                record = {"schema": 1, "gpio": args.gpio, "period_us": PERIOD_NS // 1000,
+                # Keys this tool does not edit (hold_at_rest, ADR-007 Q1) are kept as they were.
+                record = {**saved, "schema": 1, "gpio": args.gpio, "period_us": PERIOD_NS // 1000,
                           "rest_us": rest, "active_us": active, "dwell_ms": dwell_ms,
                           "saved": datetime.now().astimezone().isoformat(timespec="seconds")}
                 args.state.mkdir(parents=True, exist_ok=True)

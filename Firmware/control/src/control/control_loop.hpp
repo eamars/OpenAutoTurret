@@ -64,6 +64,7 @@
 #include "control/tracking_controller.hpp"
 #include "common/types.hpp"
 #include "payload/payload_check.hpp"
+#include "actuator/actuator.hpp"
 #include "payload/payload_profile.hpp"
 #include "payload/payload_verifier.hpp"
 #include "tracking/target_measurement.hpp"
@@ -327,6 +328,9 @@ class ControlLoop {
   // What the turret follows: HUMAN, HEAD, CAT or DOG (owner, 2026-10-20; mode/target_type.hpp).
   // Loaded once from `path` (empty: this session only); a missing file is the default, HEAD.
   bool set_target_type_store(const std::string& path, std::string& err);
+  // ADR-007: the one-shot actuator, owned by main (null: none on this station). The loop only passes
+  // the operator's commands to it and copies its status into telemetry.
+  void set_actuator(Actuator* actuator) { actuator_ = actuator; }
   // The calibration record in force (ADR-005), read by main before the backend opened. `blocked`:
   // the record in force cannot be used, so no servo was configured and HOME is refused with this
   // reason. Never another record instead (D4).
@@ -944,6 +948,7 @@ class ControlLoop {
   // after kTargetSwitchPatienceNs it stays held and says so.
   TargetType target_type_ = kDefaultTargetType;
   std::unique_ptr<TargetTypeStore> target_store_;
+  Actuator* actuator_ = nullptr;
   int calibration_id_ = 0;                 // 0: no store, the configured files are in use
   std::string calibration_name_, calibration_blocked_;
   // ADR-005: the record store (read by the web thread to prepare a switch, hence the mutex), its
@@ -1020,6 +1025,7 @@ class ControlLoop {
   void end_calibration_run(const char* state, const std::string& why, OperatingMode resume);
   void publish_calibration_run(TimeNs now_ns, bool force);
   void execute_set_target_type(const std::string& arg);
+  void execute_actuator_command(const std::string& name, const std::string& arg);
   void execute_set_calibration_record(const std::string& arg,
                                       const std::string& ack_name = "set_calibration_record",
                                       const std::string& prefix = "", const std::string& suffix = "");

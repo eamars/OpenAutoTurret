@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <sstream>
 
 #include "vision/vision_ingest.hpp"
 #include "common/time.hpp"
@@ -3927,6 +3928,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
         : std::clamp(static_cast<double>(now_ns - hold_.record_rest_since_ns) / kRecordSettleNs, 0.0, 1.0);
     snap.calibration_unverified = calibration_unverified_;
     snap.calibrating = run_.active;
+    snap.actuator_json = actuator_ ? actuator_->status_json() : nullptr;
     {
       std::lock_guard lk(calibration_mutex_);
       snap.calibration_records_json = calibration_records_json_;
@@ -4782,6 +4784,53 @@ void ControlLoop::execute_set_target_type(const std::string& arg) {
   spdlog::info("target type {} -> {}: holding until perception's frames carry it; then {}", target_type_name(before),
                target_type_name(wanted), operating_mode_name(hold_.resume));
   ack_command(name, true, std::string("switching to ") + target_type_name(wanted) + "; holding until it is applied");
+}
+
+// ADR-007: the one-shot actuator. The gate checked the shape; the state is decided here (any state but
+// a fault, owner 2026-10-30) and by the actuator itself (calibrated, not mid-shot, the session open).
+void ControlLoop::execute_actuator_command(const std::string& name, const std::string& arg) {
+  if (!actuator_) {
+    ack_command(name, false, "no actuator on this station (OTA_ACTUATOR_GPIO is not set)");
+    return;
+  }
+  const bool closing = name == "actuator_calibration" && arg == "stop";
+  if (phase_ == Phase::Fault && !closing) {
+    ack_command(name, false, "faulted: no actuation beside a fault; HOME recovers first");
+    return;
+  }
+  std::istringstream in(arg);
+  std::string why;
+  std::string done;
+  if (name == "actuate") {
+    why = actuator_->fire();
+    done = "fired";
+  } else if (name == "actuator_calibration") {
+    std::string verb;
+    in >> verb;
+    if (verb == "start") {
+      int us = 0;
+      std::optional<int> start;
+      if (in >> us) start = us;
+      why = actuator_->begin_calibration(start);
+      done = "actuator calibration open";
+    } else {
+      why = actuator_->end_calibration();
+      done = "actuator calibration closed; back to rest";
+    }
+  } else if (name == "actuator_pulse") {
+    int us = 0;
+    in >> us;
+    why = actuator_->set_pulse(us);
+    done = "pulse " + std::to_string(us) + " us";
+  } else {
+    int rest = 0, active = 0;
+    double dwell = 0;
+    in >> rest >> active >> dwell;
+    why = name == "actuator_test" ? actuator_->test(rest, active, dwell) : actuator_->save(rest, active, dwell);
+    done = name == "actuator_test" ? "test shot" : "saved: rest " + std::to_string(rest) + " us, active " +
+           std::to_string(active) + " us";
+  }
+  ack_command(name, why.empty(), why.empty() ? done : why);
 }
 
 // Hold through a swap. A homed, holding turret drops what it follows and holds where it is (MANUAL);
@@ -6929,6 +6978,8 @@ void ControlLoop::param_exchange_yaw(const std::string& command,
 
 void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
+  // ADR-007 D4: STOP MOTION ends an actuator shot at A, whatever else it does (§27: never gated).
+  if (name == "stop_motion" && actuator_) actuator_->abort();
   // ADR-005 D7: CALIBRATING. Nothing manual or automatic acts; STOP MOTION and HOLD are the run's STOP.
   if (run_.active) {
     if (name == "stop_motion" || name == "hold" || name == "stop_calibration") {
@@ -7000,6 +7051,11 @@ void ControlLoop::execute_command(const std::string& name,
   }
   if (name == "set_target_type") {
     execute_set_target_type(arg);
+    return;
+  }
+  if (name == "actuate" || name == "actuator_calibration" || name == "actuator_pulse" ||
+      name == "actuator_test" || name == "set_actuator") {
+    execute_actuator_command(name, arg);
     return;
   }
   if (name == "set_calibration_record") {

@@ -27,6 +27,7 @@
 #include <string>
 #include <thread>
 
+#include "actuator/actuator.hpp"
 #include "calibration/calibration_store.hpp"
 #include "calibration/camera_calibration.hpp"
 #include "config/tracking_setup.hpp"
@@ -643,6 +644,28 @@ int main(int argc, char** argv) {
     std::string tt_err;
     loop.set_target_type_store(tt_path, tt_err);  // logs what it found
   }
+  // ADR-007: the one-shot actuator (owner, 2026-10-30). The launcher names its pin (OTA_ACTUATOR_GPIO;
+  // unset or empty: none) after muxing it to PWM, and says why not when it could not
+  // (OTA_ACTUATOR_UNAVAILABLE). Every problem is a degrade: the stack runs, ACTUATE is refused with it.
+  std::unique_ptr<Actuator> actuator;
+  if (const char* g = std::getenv("OTA_ACTUATOR_GPIO"); g != nullptr && *g != '\0') {
+    int gpio = -1;
+    try { gpio = std::stoi(g); } catch (...) {}
+    std::string path;
+    if (const char* sd = std::getenv("OTA_STATE_DIR"); sd != nullptr && *sd != '\0')
+      path = (std::filesystem::path(sd) / "actuator.json").string();
+    ActuatorConfig acfg;
+    std::string cfg_err;
+    if (!path.empty()) load_actuator_config(path, acfg, cfg_err);
+    std::string why;
+    if (const char* u = std::getenv("OTA_ACTUATOR_UNAVAILABLE"); u != nullptr && *u != '\0') why = u;
+    std::unique_ptr<PwmOutput> pwm;
+    if (why.empty()) {
+      if (auto p = SysfsPwm::open("/sys/class/pwm", gpio, acfg.valid ? acfg.period_us : 20000, why)) pwm = std::move(p);
+    }
+    actuator = std::make_unique<Actuator>(std::move(pwm), why, path, gpio, acfg, cfg_err);
+    loop.set_actuator(actuator.get());
+  }
   web::WebServer::Config web_cfg;
   if (const char* sp = std::getenv("OTA_WEB_SOCKET")) web_cfg.socket_path = sp;
   if (const char* hz = std::getenv("OTA_WEB_HZ")) {
@@ -849,6 +872,9 @@ int main(int argc, char** argv) {
   // Park before joining I/O workers: their shutdown can exceed the independent
   // watchdog's heartbeat deadline. Commands remain gated by parking/shutdown.
   loop.set_vision_link(nullptr);
+  // ADR-007 D4: the actuator goes back to A now and switches off after its travel, on its own thread
+  // while the axes park; it is joined below, once they have.
+  if (actuator) actuator->request_shutdown();
   // A process stop -- the launcher's stop, a deploy, the boot service at power-off -- ends the same
   // way the web's SHUTDOWN does whenever it can (owner, 2026-10-03: "once a heavy payload is
   // installed it becomes dangerous" to release pitch where it stands): yaw to 0, pitch onto its rest
@@ -946,6 +972,11 @@ int main(int argc, char** argv) {
   if (imu_observer) imu_observer->stop();
   web.stop();
   if (vision) vision->stop();
+  if (actuator) {
+    actuator->shutdown();
+    loop.set_actuator(nullptr);
+    spdlog::info("actuator {}", actuator->state_name());
+  }
   // The shutdown's own stop record and any trip trace are written by the evidence writer;
   // let them land while the logger they may warn through still exists.
   loop.wait_for_evidence();

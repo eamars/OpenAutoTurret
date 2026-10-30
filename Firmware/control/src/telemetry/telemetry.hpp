@@ -563,6 +563,8 @@ struct TelemetrySnapshot {
   // ADR-005 D7: CALIBRATING, and the run in progress or the last one (raw JSON; null before any).
   bool calibrating = false;
   std::shared_ptr<const std::string> calibration_run_json;
+  // ADR-007: the one-shot actuator's state as its worker publishes it (raw JSON; null: no actuator).
+  std::shared_ptr<const std::string> actuator_json;
   // What the turret follows (owner, 2026-10-20): the operator's choice, the type perception's newest
   // fresh frame was produced for ("" while none), whether the turret is holding for the switch, and
   // whether that switch is overdue (perception has not applied it within 10 s).

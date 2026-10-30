@@ -426,6 +426,24 @@ stop_cause_line() {
   [ -z "$cause_signal" ] || printf ' signal=%s' "$cause_signal"
   printf '\n'
 }
+# ADR-007 D4: controld returns the actuator to rest and switches its PWM off when it stops. A controld
+# that crashed cannot, and the hardware PWM keeps its last pulse -- B, if it died mid-shot -- so after
+# the controller has exited the launcher does it: rest from the station's file, half a second of
+# travel, off. Nothing to do when the channel is already off (the normal case).
+actuator_release() {
+  [ -n "${OTA_ACTUATOR_GPIO-}" ] || return 0
+  local ch chip='' c dir rest
+  case "$OTA_ACTUATOR_GPIO" in 12) ch=0 ;; 13) ch=1 ;; 14) ch=2 ;; 15) ch=3 ;; *) return 0 ;; esac
+  for c in /sys/class/pwm/pwmchip*; do
+    case "$(readlink -f "$c" 2>/dev/null)" in *1f00098000*) chip=$c ;; esac
+  done
+  dir="${chip:-/nonexistent}/pwm$ch"
+  [ "$(cat "$dir/enable" 2>/dev/null)" = 1 ] || return 0
+  rest=$(sed -n 's/.*"rest_us": *\([0-9][0-9]*\).*/\1/p' "${OTA_STATE_DIR:-/nonexistent}/actuator.json" 2>/dev/null | head -n 1)
+  if [ -n "$rest" ] && echo "${rest}000" > "$dir/duty_cycle" 2>/dev/null; then sleep 0.5; fi
+  echo 0 > "$dir/enable" 2>/dev/null || true
+  echo "actuator: controld left the PWM on; the launcher returned it to rest${rest:+ ($rest us)} and switched it off"
+}
 cleanup() {
   trap - EXIT INT TERM
   local reason
@@ -464,6 +482,7 @@ cleanup() {
     kill -TERM "$controller_pid" 2>/dev/null || true
     wait "$controller_pid" || true
   fi
+  actuator_release
   # Keep the single BNO085 owner alive through the controller's controlled
   # stop, then release I2C ownership.
   if [ -n "$imu_pid" ]; then
@@ -647,6 +666,35 @@ else
   OTA_STATE_DIR="${OTA_STATE_DIR:-$RUN/state}"
 fi
 export OTA_STATE_DIR
+# ADR-007: the one-shot actuator's pin (owner, 2026-10-30: a hobby servo on GPIO15, physical pin 10).
+# The owner's pwm overlay (config.txt) creates the RP1 PWM0 chip but leaves the pin on another function
+# on the Pi 5, so the mux is set here on every start and checked; controld drives the channel. Any
+# problem goes to controld, which publishes it and refuses ACTUATE: a degrade, never a stop.
+# GPIO18/19 are refused: on this station they are SPI1, the pitch bus's chip select and MISO.
+# OTA_ACTUATOR_GPIO= (empty) disables the actuator.
+OTA_ACTUATOR_UNAVAILABLE=
+if [ "$MODE" = hardware ] && [ "$SIM_REQUESTED" != 1 ]; then
+  OTA_ACTUATOR_GPIO="${OTA_ACTUATOR_GPIO-15}"
+else
+  OTA_ACTUATOR_GPIO="${OTA_ACTUATOR_GPIO-}"
+fi
+if [ -n "$OTA_ACTUATOR_GPIO" ]; then
+  case "$OTA_ACTUATOR_GPIO" in
+    12|13|14|15)
+      if ! pinctrl set "$OTA_ACTUATOR_GPIO" a0 2>/dev/null; then
+        OTA_ACTUATOR_UNAVAILABLE="pinctrl could not mux GPIO$OTA_ACTUATOR_GPIO"
+      elif ! pinctrl get "$OTA_ACTUATOR_GPIO" | grep -q PWM0_CHAN; then
+        OTA_ACTUATOR_UNAVAILABLE="GPIO$OTA_ACTUATOR_GPIO is not on PWM0 ($(pinctrl get "$OTA_ACTUATOR_GPIO"))"
+      fi ;;
+    *) OTA_ACTUATOR_UNAVAILABLE="GPIO$OTA_ACTUATOR_GPIO is not an actuator pin here (PWM0 on GPIO12-15 only)" ;;
+  esac
+  if [ -n "$OTA_ACTUATOR_UNAVAILABLE" ]; then
+    echo "actuator: $OTA_ACTUATOR_UNAVAILABLE; ACTUATE will be refused" >&2
+  else
+    echo "actuator: GPIO$OTA_ACTUATOR_GPIO on PWM0"
+  fi
+fi
+export OTA_ACTUATOR_GPIO OTA_ACTUATOR_UNAVAILABLE
 # ADR-003 D17: controld's per-tick tracking record (one JSON line per Level-1 tick while tracking).
 export OTA_TRACKING_TRACE="$RUN/tracking-trace.jsonl"
 export OTA_PERCEPTION_TRACE="$RUN/perception-trace.jsonl"   # joins the tracking trace by sensor_ns
