@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -126,13 +127,17 @@ bool load_actuator_config(const std::string& path, ActuatorConfig& out, std::str
 }
 
 bool save_actuator_config(const std::string& path, const ActuatorConfig& c, std::string& err) {
-  const std::string tmp = path + ".tmp";
+  // Its own temp name (the bench tool uses .json.tmp), and on the disk before the rename: this
+  // station has browned out, and a rename over an unwritten file loses the calibration.
+  const std::string tmp = path + ".controld.tmp";
   {
-    std::ofstream f(tmp, std::ios::trunc);
-    if (!f) { err = "cannot open " + tmp + " for writing"; return false; }
-    f << actuator_config_to_json(c);
-    f.flush();
-    if (!f.good()) { err = "write failed for " + tmp; return false; }
+    const std::string text = actuator_config_to_json(c);
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { err = "cannot open " + tmp + " for writing: " + std::strerror(errno); return false; }
+    const bool ok = ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size()) && ::fsync(fd) == 0;
+    const int e = errno;
+    ::close(fd);
+    if (!ok) { err = "write failed for " + tmp + ": " + std::strerror(e); return false; }
   }
   if (std::rename(tmp.c_str(), path.c_str()) != 0) {
     err = "rename " + tmp + " -> " + path + " failed";
@@ -259,9 +264,9 @@ void Actuator::publish_locked() {
     << ",\"state\":\"" << mode_name_locked() << "\""
     << ",\"reason\":\"" << escape(reason_) << "\""
     << ",\"gpio\":" << gpio_
-    << ",\"powered\":" << (powered_ ? "true" : "false")
+    << ",\"powered\":" << (out_on_ ? "true" : "false")
     << ",\"pulse_us\":";
-  if (powered_) o << pulse_us_; else o << "null";
+  if (out_on_) o << out_pulse_; else o << "null";
   if (cfg_.valid)
     o << ",\"rest_us\":" << cfg_.rest_us << ",\"active_us\":" << cfg_.active_us << ",\"dwell_ms\":" << cfg_.dwell_ms;
   else
@@ -270,12 +275,7 @@ void Actuator::publish_locked() {
     << ",\"shots\":" << shots_
     << ",\"persistent\":" << (path_.empty() ? "false" : "true")
     << ",\"saved\":" << saved_ << "}";
-  status_ = std::make_shared<const std::string>(o.str());
-}
-
-std::shared_ptr<const std::string> Actuator::status_json() const {
-  std::lock_guard lk(mutex_);
-  return status_;
+  status_.store(std::make_shared<const std::string>(o.str()));
 }
 
 std::string Actuator::fire() {
@@ -293,9 +293,10 @@ std::string Actuator::fire() {
   mode_ = Mode::Active;
   pulse_us_ = cfg_.active_us;
   shot_rest_us_ = cfg_.rest_us;
+  shot_dwell_ms_ = cfg_.dwell_ms;
+  dwell_started_ = false;  // the worker starts it once B is written
   powered_ = true;
   back_to_calibration_ = false;
-  until_ = Clock::now() + std::chrono::microseconds(static_cast<int64_t>(cfg_.dwell_ms * 1000.0));
   ++shots_;
   publish_locked();
   cv_.notify_all();
@@ -347,8 +348,9 @@ std::string Actuator::test(int rest_us, int active_us, double dwell_ms) {
   mode_ = Mode::Active;
   pulse_us_ = active_us;
   shot_rest_us_ = rest_us;
+  shot_dwell_ms_ = dwell_ms;
+  dwell_started_ = false;
   back_to_calibration_ = true;
-  until_ = Clock::now() + std::chrono::microseconds(static_cast<int64_t>(dwell_ms * 1000.0));
   publish_locked();
   cv_.notify_all();
   return "";
@@ -385,6 +387,13 @@ std::string Actuator::end_calibration() {
     pulse_us_ = shot_rest_us_ = cfg_.rest_us;
     powered_ = true;
     until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
+  } else if (testing) {
+    // Never calibrated, closed during a test shot: back to the test's own A first, then limp there
+    // (the Settling end turns an unconfigured actuator off), never limp at B.
+    mode_ = Mode::Settling;
+    pulse_us_ = shot_rest_us_;
+    powered_ = true;
+    until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
   } else {
     mode_ = Mode::Unconfigured;
     powered_ = false;
@@ -403,6 +412,12 @@ void Actuator::request_shutdown() {
                      mode_ == Mode::Calibrating)) {
     mode_ = Mode::Settling;
     pulse_us_ = shot_rest_us_ = cfg_.rest_us;
+    powered_ = true;
+    until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
+  } else if (mode_ == Mode::Active || mode_ == Mode::Settling) {
+    // Never calibrated, a test shot under way: to its own A, then off.
+    mode_ = Mode::Settling;
+    pulse_us_ = shot_rest_us_;
     powered_ = true;
     until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
   } else if (mode_ != Mode::Unavailable) {
@@ -426,7 +441,7 @@ void Actuator::run() {
   std::unique_lock lk(mutex_);
   for (;;) {
     const auto now = Clock::now();
-    if (mode_ == Mode::Active && now >= until_) {
+    if (mode_ == Mode::Active && dwell_started_ && now >= until_) {
       mode_ = Mode::Settling;
       pulse_us_ = shot_rest_us_;
       until_ = now + std::chrono::milliseconds(opt_.settle_ms);
@@ -438,10 +453,31 @@ void Actuator::run() {
       } else if (back_to_calibration_) {
         back_to_calibration_ = false;
         mode_ = Mode::Calibrating;
+      } else if (!cfg_.valid) {
+        mode_ = Mode::Unconfigured;  // a first calibration closed mid-test: limp at the test's A
+        powered_ = false;
       } else {
         mode_ = Mode::Idle;
         powered_ = cfg_.hold_at_rest;
       }
+      publish_locked();
+    } else if (mode_ == Mode::Unavailable && write_failed_ && !stopping_ && now >= until_) {
+      // A failed write is no hazard, so it recovers by itself (owner ruling 2026-10-02): the channel
+      // is tried again from A, whatever the worker believes is on it.
+      write_failed_ = false;
+      reason_.clear();
+      if (cfg_.valid) {
+        mode_ = Mode::Settling;
+        pulse_us_ = shot_rest_us_ = cfg_.rest_us;
+        powered_ = true;
+        until_ = now + std::chrono::milliseconds(opt_.settle_ms);
+      } else {
+        mode_ = Mode::Unconfigured;
+        powered_ = false;
+        reason_ = "not calibrated";
+      }
+      first = true;
+      spdlog::info("actuator: trying the PWM channel again");
       publish_locked();
     }
     std::optional<ActuatorConfig> save;
@@ -458,10 +494,14 @@ void Actuator::run() {
       else spdlog::error("actuator calibration NOT saved ({}); it holds for this session only", save_err);
     }
     std::string err;
-    bool ok = true;
+    bool ok = true, off_ok = false;
     if (write) {
       ok = pwm_->set(want_pulse, want_on, err);
       if (!ok) ok = pwm_->set(want_pulse, want_on, err);  // once more before giving up
+      // Never left on at a pulse nobody wants (B, when the return to A fails): `enable` is another
+      // attribute, and may be written where `duty_cycle` was refused.
+      std::string ignored;
+      if (!ok && want_on) off_ok = pwm_->set(0, false, ignored);
     }
     lk.lock();
     if (save) {
@@ -473,21 +513,35 @@ void Actuator::run() {
         applied_pulse = want_pulse;
         applied_on = want_on;
         first = false;
+        out_on_ = applied_on;
+        out_pulse_ = applied_pulse;
+        // B is on the wire: the dwell starts now, and lasts at least one period, so the servo sees B.
+        if (mode_ == Mode::Active && !dwell_started_ && applied_on && applied_pulse == pulse_us_) {
+          dwell_started_ = true;
+          const double ms = std::max(shot_dwell_ms_, cfg_.period_us / 1000.0);
+          until_ = Clock::now() + std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0));
+        }
       } else {
-        spdlog::error("actuator PWM write failed twice ({}); the actuator is unavailable", err);
+        if (off_ok) applied_on = out_on_ = false;
+        spdlog::error("actuator PWM write failed twice ({}); {}; trying again in {} ms", err,
+                      off_ok ? "the output is switched off" : "the output may still be on", opt_.retry_ms);
         mode_ = Mode::Unavailable;
-        reason_ = "PWM write failed: " + err;
+        write_failed_ = true;
+        reason_ = "PWM write failed: " + err + (off_ok ? "; the output is off"
+                                                       : "; the output may still be on at " + std::to_string(applied_pulse) + " us");
         powered_ = false;
-        publish_locked();
+        until_ = Clock::now() + std::chrono::milliseconds(opt_.retry_ms);
       }
+      publish_locked();
     }
     if (stopping_ && (mode_ == Mode::Unavailable || (mode_ == Mode::Stopped && applied_on == powered_)) &&
         !pending_save_)
       return;
-    // Wake for a request, or at the end of the dwell or the travel.
-    const bool timed = mode_ == Mode::Active || mode_ == Mode::Settling;
+    // Wake for a request, or at the end of the dwell, the travel or a retry wait.
+    const bool timed = (mode_ == Mode::Active && dwell_started_) || mode_ == Mode::Settling ||
+                       (mode_ == Mode::Unavailable && write_failed_);
     const bool pending = pending_save_.has_value() || (mode_ != Mode::Unavailable &&
-        (powered_ != applied_on || (powered_ && pulse_us_ != applied_pulse)));
+        (first || powered_ != applied_on || (powered_ && pulse_us_ != applied_pulse)));
     if (pending) continue;
     if (timed) cv_.wait_until(lk, until_);
     else cv_.wait(lk);

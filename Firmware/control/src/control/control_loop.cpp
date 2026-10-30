@@ -4793,40 +4793,37 @@ void ControlLoop::execute_actuator_command(const std::string& name, const std::s
     ack_command(name, false, "no actuator on this station (OTA_ACTUATOR_GPIO is not set)");
     return;
   }
-  const bool closing = name == "actuator_calibration" && arg == "stop";
+  web::ActuatorArgs a;
+  if (const std::string need = web::parse_actuator_args(name, arg, a); !need.empty()) {
+    ack_command(name, false, need);  // the gate refuses these first; a queued command is checked again
+    return;
+  }
+  const bool closing = name == "actuator_calibration" && a.verb == "stop";
   if (phase_ == Phase::Fault && !closing) {
     ack_command(name, false, "faulted: no actuation beside a fault; HOME recovers first");
     return;
   }
-  std::istringstream in(arg);
+  // The parse bounds every number to 0..100000, so the narrowing below is exact; the actuator checks
+  // the pulses against 500..2500 us and says so.
+  const int us = static_cast<int>(a.a), rest = static_cast<int>(a.a), active = static_cast<int>(a.b);
   std::string why;
   std::string done;
   if (name == "actuate") {
     why = actuator_->fire();
     done = "fired";
   } else if (name == "actuator_calibration") {
-    std::string verb;
-    in >> verb;
-    if (verb == "start") {
-      int us = 0;
-      std::optional<int> start;
-      if (in >> us) start = us;
-      why = actuator_->begin_calibration(start);
+    if (!closing) {
+      why = actuator_->begin_calibration(a.has_a ? std::optional<int>(us) : std::nullopt);
       done = "actuator calibration open";
     } else {
       why = actuator_->end_calibration();
       done = "actuator calibration closed; back to rest";
     }
   } else if (name == "actuator_pulse") {
-    int us = 0;
-    in >> us;
     why = actuator_->set_pulse(us);
     done = "pulse " + std::to_string(us) + " us";
   } else {
-    int rest = 0, active = 0;
-    double dwell = 0;
-    in >> rest >> active >> dwell;
-    why = name == "actuator_test" ? actuator_->test(rest, active, dwell) : actuator_->save(rest, active, dwell);
+    why = name == "actuator_test" ? actuator_->test(rest, active, a.dwell) : actuator_->save(rest, active, a.dwell);
     done = name == "actuator_test" ? "test shot" : "saved: rest " + std::to_string(rest) + " us, active " +
            std::to_string(active) + " us";
   }
@@ -6980,6 +6977,11 @@ void ControlLoop::execute_command(const std::string& name,
                                   const std::string& arg) {
   // ADR-007 D4: STOP MOTION ends an actuator shot at A, whatever else it does (§27: never gated).
   if (name == "stop_motion" && actuator_) actuator_->abort();
+  // ADR-007 D6: closing the actuator's calibration is never refused, whatever holds the station.
+  if (web::is_actuator_close(name, arg)) {
+    execute_actuator_command(name, arg);
+    return;
+  }
   // ADR-005 D7: CALIBRATING. Nothing manual or automatic acts; STOP MOTION and HOLD are the run's STOP.
   if (run_.active) {
     if (name == "stop_motion" || name == "hold" || name == "stop_calibration") {

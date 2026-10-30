@@ -44,8 +44,10 @@ from datetime import datetime
 from pathlib import Path
 
 PWM0_ADDRESS = "1f00098000"  # RP1 PWM0, the block GPIO12/13/14/15/18/19 reach
-# GPIO -> (pinctrl function that is PWM0, PWM0 channel), from `pinctrl funcs` on the station.
-PWM0_PINS = {12: ("a0", 0), 13: ("a0", 1), 14: ("a0", 2), 15: ("a0", 3), 18: ("a3", 2), 19: ("a3", 3)}
+# GPIO -> (pinctrl function that is PWM0, PWM0 channel), from `pinctrl funcs` on the station. GPIO18/19
+# also reach PWM0 (a3), but on this station they are SPI1, the pitch bus's chip select and MISO:
+# muxing them cuts the pitch drive off, so they are not offered.
+PWM0_PINS = {12: ("a0", 0), 13: ("a0", 1), 14: ("a0", 2), 15: ("a0", 3)}
 PERIOD_NS = 20_000_000  # 50 Hz
 HARD_MIN_US, HARD_MAX_US = 500, 2500
 DEFAULT_STATE = Path.home() / "workspace/OpenAutoTurret/run/state"
@@ -160,7 +162,9 @@ def main() -> int:
             elif k == "b":
                 active = round(us)
             elif k == "w":
-                dwell_ms = max(0.0, ask_number("dwell at ACTIVE, ms", dwell_ms))
+                # controld refuses a file with a dwell outside 0..5000 ms (or not finite) whole.
+                d = ask_number("dwell at ACTIVE, ms (0..5000)", dwell_ms)
+                dwell_ms = min(5000.0, max(0.0, d)) if d == d and abs(d) != float("inf") else dwell_ms
             elif k == "g" and rest is not None:
                 us = float(rest)
                 ch.set_us(us)

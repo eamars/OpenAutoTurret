@@ -10,6 +10,7 @@
 // What the servo does (ADR-007 D4): at start it goes to A once, from wherever it was (a crash may have
 // left it at B); between shots it is limp at A, or powered there with `hold_at_rest`; STOP MOTION
 // ends a shot at A at once; the process's stop drives A, lets it travel, and switches the PWM off.
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -78,7 +79,8 @@ int pwm0_channel_for_gpio(int gpio);
 class Actuator {
  public:
   struct Options {
-    int settle_ms = 500;  // the travel allowed to reach A before the servo goes limp
+    int settle_ms = 500;   // the travel allowed to reach A before the servo goes limp
+    int retry_ms = 5000;   // after a failed write, how long until the worker tries the channel again
   };
   // `pwm` null: unavailable, with `unavailable_reason`. `path` "": nothing is saved across restarts.
   // `config` is what was loaded from `path` (valid=false: unconfigured, `config_problem` says why if
@@ -104,8 +106,9 @@ class Actuator {
   void request_shutdown();  // non-blocking: A, settle, PWM off, then the worker ends
   void shutdown();          // request_shutdown() and wait for it
 
-  // The page's object (ADR-007 D7), rebuilt on every change; never null.
-  std::shared_ptr<const std::string> status_json() const;
+  // The page's object (ADR-007 D7), rebuilt on every change; never null. Lock-free: the 200 Hz loop
+  // reads it every tick and must not wait on the Background worker.
+  std::shared_ptr<const std::string> status_json() const { return status_.load(); }
   std::string state_name() const;
 
  private:
@@ -127,13 +130,21 @@ class Actuator {
   int pulse_us_ = 0;              // wanted output
   bool powered_ = false;
   int shot_rest_us_ = 0;          // the shot's A (a calibration test may use unsaved values)
+  double shot_dwell_ms_ = 0;
+  // The dwell starts when B is on the wire, not when the shot was accepted: the worker's wake-up and
+  // the write would otherwise eat it (a dwell of 0 never sent B at all). At least one PWM period.
+  bool dwell_started_ = false;
   bool back_to_calibration_ = false;
-  Clock::time_point until_{};     // end of the dwell (Active) or of the travel (Settling)
+  Clock::time_point until_{};     // end of the dwell (Active), of the travel (Settling), of a retry wait
   bool stopping_ = false;
+  bool write_failed_ = false;     // Unavailable because a write failed: the worker retries
   std::optional<ActuatorConfig> pending_save_;
   int saved_ = -1;                // 1: the last save reached the disk; 0: it failed; -1: none yet
   int64_t shots_ = 0;
-  std::shared_ptr<const std::string> status_;
+  // What is on the wire, as far as the worker knows: published, rather than what is wanted.
+  bool out_on_ = false;
+  int out_pulse_ = 0;
+  std::atomic<std::shared_ptr<const std::string>> status_;
   std::thread thread_;
 };
 

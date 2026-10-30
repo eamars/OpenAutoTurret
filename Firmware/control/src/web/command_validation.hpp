@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <sstream>
 #include <string>
+#include <vector>
 #include "mode/mode_manager.hpp"
 #include "mode/target_type.hpp"
 
@@ -80,10 +81,62 @@ inline constexpr int kYawIx = 1;
 //   actuate, actuator_calibration <start [us]|stop>, actuator_pulse <us>,
 //   actuator_test|set_actuator <rest_us> <active_us> <dwell_ms>   (ADR-007: the one-shot actuator),
 //   run_test_motion <pos_rad>  (restricted test motion)
+// ADR-007: an actuator command's argument as words, each number the whole of its word. "" for a shape
+// that is not one of the actuator's (`need` says what is). The same parse serves the gate and controld.
+struct ActuatorArgs {
+  std::string verb;          // actuator_calibration: start | stop
+  long a = 0, b = 0;         // a pulse; or rest and active (us)
+  double dwell = 0;          // ms
+  bool has_a = false;
+};
+inline std::string parse_actuator_args(const std::string& command, const std::string& arg, ActuatorArgs& out) {
+  std::istringstream in(arg);
+  std::vector<std::string> w;
+  for (std::string x; in >> x;) w.push_back(x);
+  const auto whole_long = [](const std::string& x, long& v) {
+    try { std::size_t n = 0; v = std::stol(x, &n); return n == x.size() && v >= 0 && v <= 100000; }
+    catch (...) { return false; }
+  };
+  const auto whole_double = [](const std::string& x, double& v) {
+    try { std::size_t n = 0; v = std::stod(x, &n); return n == x.size() && std::isfinite(v); }
+    catch (...) { return false; }
+  };
+  out = ActuatorArgs{};
+  if (command == "actuate") return w.empty() ? "" : "actuate takes no argument";
+  if (command == "actuator_calibration") {
+    const char* need = "actuator_calibration needs start [us] or stop";
+    if (w.empty() || (w[0] != "start" && w[0] != "stop")) return need;
+    out.verb = w[0];
+    if (w.size() == 1) return "";
+    if (w[0] == "stop" || w.size() > 2 || !whole_long(w[1], out.a)) return need;
+    out.has_a = true;
+    return "";
+  }
+  if (command == "actuator_pulse") {
+    if (w.size() != 1 || !whole_long(w[0], out.a)) return "actuator_pulse needs a pulse in us";
+    out.has_a = true;
+    return "";
+  }
+  if (w.size() != 3 || !whole_long(w[0], out.a) || !whole_long(w[1], out.b) || !whole_double(w[2], out.dwell))
+    return command + " needs <rest_us> <active_us> <dwell_ms>";
+  out.has_a = true;
+  return "";
+}
+inline bool is_actuator_close(const std::string& command, const std::string& arg) {
+  ActuatorArgs a;
+  return command == "actuator_calibration" && parse_actuator_args(command, arg, a).empty() && a.verb == "stop";
+}
+
 inline CommandResult validate_command(const SystemCommandState& s,
                                       const std::string& command,
                                       const std::string& arg = "") {
   CommandResult r;
+  // ADR-007 D6: closing the actuator's calibration is never refused, in any state: it is what puts
+  // the servo back at rest and switches it off.
+  if (is_actuator_close(command, arg)) {
+    r.ok = true;
+    return r;
+  }
   if (s.motor_recovery_active && command != "hold" && command != "stop_motion") {
     r.error = "motor recovery active; wait or Stop Motion to cancel"; return r;
   }
@@ -265,36 +318,13 @@ inline CommandResult validate_command(const SystemCommandState& s,
       command == "actuator_test" || command == "set_actuator") {
     // ADR-007: the one-shot actuator moves no axis, so it is allowed before homing (owner, 2026-10-30:
     // in any state but a fault). Shape here; controld and the actuator decide the rest (calibrated, not
-    // mid-shot, the session open). Closing its calibration is never refused.
-    std::istringstream in(arg);
-    std::string extra;
-    bool ok;
-    const char* need;
-    if (command == "actuate") {
-      ok = arg.empty();
-      need = "actuate takes no argument";
-    } else if (command == "actuator_calibration") {
-      std::string verb;
-      long us = 0;
-      in >> verb;
-      ok = (verb == "stop" && !(in >> extra)) ||
-           (verb == "start" && (in.eof() || ((in >> us) && !(in >> extra))));
-      need = "actuator_calibration needs start [us] or stop";
-    } else if (command == "actuator_pulse") {
-      long us = 0;
-      ok = (in >> us) && !(in >> extra);
-      need = "actuator_pulse needs a pulse in us";
-    } else {
-      long rest = 0, active = 0;
-      double dwell = 0;
-      ok = (in >> rest >> active >> dwell) && !(in >> extra);
-      need = "needs <rest_us> <active_us> <dwell_ms>";
-    }
-    if (!ok) {
-      r.error = command == "actuator_test" || command == "set_actuator" ? command + " " + need : need;
+    // mid-shot, the session open). Closing its calibration was let through at the top.
+    ActuatorArgs parsed;
+    if (const std::string need = parse_actuator_args(command, arg, parsed); !need.empty()) {
+      r.error = need;
       return r;
     }
-    if (s.fault && !(command == "actuator_calibration" && arg == "stop")) {
+    if (s.fault) {
       r.error = "system faulted; no actuation beside a fault";
       return r;
     }

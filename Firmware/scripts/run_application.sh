@@ -429,20 +429,28 @@ stop_cause_line() {
 # ADR-007 D4: controld returns the actuator to rest and switches its PWM off when it stops. A controld
 # that crashed cannot, and the hardware PWM keeps its last pulse -- B, if it died mid-shot -- so after
 # the controller has exited the launcher does it: rest from the station's file, half a second of
-# travel, off. Nothing to do when the channel is already off (the normal case).
+# travel, off. Nothing to do when the channel is already off (the normal case). It runs inside cleanup,
+# under errexit: nothing in it may fail the shell (no file, an unwritable channel), or the rest of the
+# stack is never stopped.
 actuator_release() {
   [ -n "${OTA_ACTUATOR_GPIO-}" ] || return 0
-  local ch chip='' c dir rest
+  local ch chip='' c dir rest='' how
   case "$OTA_ACTUATOR_GPIO" in 12) ch=0 ;; 13) ch=1 ;; 14) ch=2 ;; 15) ch=3 ;; *) return 0 ;; esac
   for c in /sys/class/pwm/pwmchip*; do
-    case "$(readlink -f "$c" 2>/dev/null)" in *1f00098000*) chip=$c ;; esac
+    case "$(readlink -f "$c" 2>/dev/null || true)" in *1f00098000*) chip=$c ;; esac
   done
   dir="${chip:-/nonexistent}/pwm$ch"
-  [ "$(cat "$dir/enable" 2>/dev/null)" = 1 ] || return 0
-  rest=$(sed -n 's/.*"rest_us": *\([0-9][0-9]*\).*/\1/p' "${OTA_STATE_DIR:-/nonexistent}/actuator.json" 2>/dev/null | head -n 1)
-  if [ -n "$rest" ] && echo "${rest}000" > "$dir/duty_cycle" 2>/dev/null; then sleep 0.5; fi
-  echo 0 > "$dir/enable" 2>/dev/null || true
-  echo "actuator: controld left the PWM on; the launcher returned it to rest${rest:+ ($rest us)} and switched it off"
+  [ "$(cat "$dir/enable" 2>/dev/null || true)" = 1 ] || return 0
+  if [ -r "${OTA_STATE_DIR:-/nonexistent}/actuator.json" ]; then
+    rest=$(sed -n 's/.*"rest_us": *\([0-9][0-9]*\).*/\1/p' "$OTA_STATE_DIR/actuator.json" 2>/dev/null | head -n 1) || rest=''
+  fi
+  how="left it where it was (no rest known)"
+  if [ -n "$rest" ]; then
+    if echo "${rest}000" > "$dir/duty_cycle" 2>/dev/null; then how="returned it to rest ($rest us)"; sleep 0.5
+    else how="could not return it to rest ($rest us)"; fi
+  fi
+  if echo 0 > "$dir/enable" 2>/dev/null; then how="$how and switched it off"; else how="$how; switching it off FAILED"; fi
+  echo "actuator: controld left the PWM on; the launcher $how"
 }
 cleanup() {
   trap - EXIT INT TERM
@@ -684,7 +692,10 @@ if [ -n "$OTA_ACTUATOR_GPIO" ]; then
       if ! pinctrl set "$OTA_ACTUATOR_GPIO" a0 2>/dev/null; then
         OTA_ACTUATOR_UNAVAILABLE="pinctrl could not mux GPIO$OTA_ACTUATOR_GPIO"
       elif ! pinctrl get "$OTA_ACTUATOR_GPIO" | grep -q PWM0_CHAN; then
-        OTA_ACTUATOR_UNAVAILABLE="GPIO$OTA_ACTUATOR_GPIO is not on PWM0 ($(pinctrl get "$OTA_ACTUATOR_GPIO"))"
+        OTA_ACTUATOR_UNAVAILABLE="GPIO$OTA_ACTUATOR_GPIO is not on PWM0 ($(pinctrl get "$OTA_ACTUATOR_GPIO" 2>&1 || true))"
+      elif pgrep -f 'actuator_calibrate\.py' >/dev/null 2>&1; then
+        # The bench tool writes the same channel; two writers would fight over the servo.
+        OTA_ACTUATOR_UNAVAILABLE="the bench tool actuator_calibrate.py is running; stop it and restart the stack"
       fi ;;
     *) OTA_ACTUATOR_UNAVAILABLE="GPIO$OTA_ACTUATOR_GPIO is not an actuator pin here (PWM0 on GPIO12-15 only)" ;;
   esac

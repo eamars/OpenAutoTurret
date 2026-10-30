@@ -27,11 +27,12 @@ class FakePwm : public PwmOutput {
     std::mutex m;
     std::vector<Write> writes;
     bool fail = false;
+    int fail_pulse = -1;  // refuse only switching on at this pulse (a duty_cycle write that fails)
   };
   explicit FakePwm(std::shared_ptr<Shared> s) : s_(std::move(s)) {}
   bool set(int pulse_us, bool enabled, std::string& err) override {
     std::lock_guard lk(s_->m);
-    if (s_->fail) { err = "EIO"; return false; }
+    if (s_->fail || (enabled && pulse_us == s_->fail_pulse)) { err = "EIO"; return false; }
     s_->writes.emplace_back(enabled ? pulse_us : 0, enabled);
     return true;
   }
@@ -62,9 +63,9 @@ ActuatorConfig owner_config(bool hold = false) {
 struct Rig {
   std::shared_ptr<FakePwm::Shared> pwm = std::make_shared<FakePwm::Shared>();
   std::unique_ptr<Actuator> act;
-  explicit Rig(ActuatorConfig c, std::string path = "", std::string problem = "") {
+  explicit Rig(ActuatorConfig c, std::string path = "", std::string problem = "", int retry_ms = 5000) {
     act = std::make_unique<Actuator>(std::make_unique<FakePwm>(pwm), "", std::move(path), 15, c, problem,
-                                     Actuator::Options{60});
+                                     Actuator::Options{60, retry_ms});
   }
   std::vector<Write> writes() {
     std::lock_guard lk(pwm->m);
@@ -254,6 +255,64 @@ TEST(Actuator, APwmThatCannotBeWrittenMakesItUnavailableNotSilentlyStuck) {
   EXPECT_NE(rig.act->fire().find("unavailable"), std::string::npos);
 }
 
+// Review of 2026-10-30: the dwell used to be timed from when the shot was accepted, so a dwell of 0
+// never wrote B at all, and every dwell lost the worker's wake-up and the write.
+TEST(Actuator, BIsAlwaysWrittenAndHeldAtLeastOnePeriod) {
+  ActuatorConfig c = owner_config();
+  c.dwell_ms = 0;
+  Rig rig(c);
+  ASSERT_TRUE(rig.wait_state("off"));
+  ASSERT_EQ(rig.act->fire(), "");
+  ASSERT_TRUE(rig.wait_state("returning"));
+  ASSERT_TRUE(rig.wait_state("off"));
+  const auto w = rig.writes();
+  ASSERT_EQ(w.size(), 5u);
+  EXPECT_EQ(w[2], Write(1450, true));
+  EXPECT_EQ(w[3], Write(1650, true));
+}
+
+// Review of 2026-10-30: a failed return to A left the output on at B while the status said "off".
+TEST(Actuator, AFailedReturnToRestSwitchesOffAndSaysWhatIsOnTheWire) {
+  Rig rig(owner_config(), "", "", 150);
+  ASSERT_TRUE(rig.wait_state("off"));
+  ASSERT_EQ(rig.act->fire(), "");
+  ASSERT_TRUE(rig.wait_writes(3));  // at B
+  {
+    std::lock_guard lk(rig.pwm->m);
+    rig.pwm->fail_pulse = 1650;  // A cannot be written
+  }
+  ASSERT_TRUE(rig.wait_state("unavailable"));
+  const auto w = rig.writes();
+  EXPECT_EQ(w.back(), Write(0, false)) << "switched off rather than left at B";
+  const std::string s = *rig.act->status_json();
+  EXPECT_NE(s.find("\"powered\":false"), std::string::npos) << s;
+  EXPECT_NE(s.find("the output is off"), std::string::npos) << s;
+  EXPECT_NE(rig.act->fire().find("unavailable"), std::string::npos);
+  // A failed write is no hazard: the channel is tried again, and comes back when it works.
+  {
+    std::lock_guard lk(rig.pwm->m);
+    rig.pwm->fail_pulse = -1;
+  }
+  ASSERT_TRUE(rig.wait_state("off"));
+  EXPECT_EQ(rig.act->fire(), "");
+}
+
+// Review of 2026-10-30: a first calibration closed during its test shot went limp at B.
+TEST(Actuator, AFirstCalibrationClosedMidTestReturnsToTheTestsRest) {
+  Rig rig(ActuatorConfig{});
+  ASSERT_TRUE(rig.wait_writes(1));
+  ASSERT_EQ(rig.act->begin_calibration(1600), "");
+  ASSERT_TRUE(rig.wait_writes(2));
+  ASSERT_EQ(rig.act->test(1600, 1400, 3000), "");
+  ASSERT_TRUE(rig.wait_writes(3));  // off, 1600, 1400
+  ASSERT_EQ(rig.act->end_calibration(), "");
+  ASSERT_TRUE(rig.wait_state("unconfigured"));
+  const auto w = rig.writes();
+  ASSERT_GE(w.size(), 5u);
+  EXPECT_EQ(w[w.size() - 2], Write(1600, true));
+  EXPECT_EQ(w.back(), Write(0, false));
+}
+
 TEST(Actuator, NoChannelIsUnavailableWithTheReason) {
   Actuator a(nullptr, "no PWM chip at 1f00098000: the pwm overlay is not loaded", "", 15, owner_config(), "");
   EXPECT_EQ(a.state_name(), "unavailable");
@@ -324,6 +383,28 @@ TEST(ActuatorCommands, TheGateChecksShapesAndAllowsEverythingButAFaultUnhomed) {
   s.fault = false;
   s.shutdown_or_parking = true;  // the process's exit stop
   EXPECT_FALSE(web::validate_command(s, "actuate", "").ok);
+  // Closing is never refused (review of 2026-10-30: the exit stop and motor recovery refused it).
+  EXPECT_TRUE(web::validate_command(s, "actuator_calibration", " stop ").ok);
+  s.shutdown_or_parking = false;
+  s.motor_recovery_active = true;
+  EXPECT_TRUE(web::validate_command(s, "actuator_calibration", "stop").ok);
+}
+
+TEST(ActuatorCommands, EveryNumberIsTheWholeOfItsWordAndInRange) {
+  web::SystemCommandState s;
+  // Words, not stream positions: a trailing space is no different from none.
+  EXPECT_TRUE(web::validate_command(s, "actuator_calibration", "start ").ok);
+  EXPECT_TRUE(web::validate_command(s, "actuator_calibration", "start 1500 ").ok);
+  // A number too large for an int used to pass the gate as a long and open the session at the default.
+  EXPECT_FALSE(web::validate_command(s, "actuator_calibration", "start 99999999999").ok);
+  EXPECT_FALSE(web::validate_command(s, "actuator_pulse", "1500us").ok);
+  EXPECT_FALSE(web::validate_command(s, "actuator_pulse", "-5").ok);
+  EXPECT_FALSE(web::validate_command(s, "set_actuator", "1650 1450 nan").ok);
+  web::ActuatorArgs a;
+  ASSERT_EQ(web::parse_actuator_args("actuator_test", "1650 1450 300.5", a), "");
+  EXPECT_EQ(a.a, 1650);
+  EXPECT_EQ(a.b, 1450);
+  EXPECT_DOUBLE_EQ(a.dwell, 300.5);
 }
 
 }  // namespace
