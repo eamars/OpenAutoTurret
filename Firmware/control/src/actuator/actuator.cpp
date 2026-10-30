@@ -229,6 +229,7 @@ Actuator::Actuator(std::unique_ptr<PwmOutput> pwm, std::string unavailable_reaso
     powered_ = true;
     until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
   }
+  unconfigured_reason_ = mode_ == Mode::Unconfigured ? reason_ : "not calibrated";
   if (mode_ == Mode::Unavailable) spdlog::warn("actuator unavailable: {}", reason_);
   else if (mode_ == Mode::Unconfigured) spdlog::warn("actuator GPIO{} unconfigured: {}", gpio_, reason_);
   else spdlog::info("actuator GPIO{}: rest {} us, active {} us, dwell {} ms, {} at rest", gpio_, cfg_.rest_us,
@@ -317,7 +318,10 @@ std::string Actuator::begin_calibration(std::optional<int> start_us) {
   std::lock_guard lk(mutex_);
   if (stopping_) return "the actuator is stopping";
   if (mode_ == Mode::Unavailable) return "actuator unavailable: " + reason_;
-  if (mode_ == Mode::Calibrating) return "";  // already open: the page may ask again
+  if (mode_ == Mode::Calibrating) {  // already open: the page may ask again
+    cal_activity_ = Clock::now();
+    return "";
+  }
   if (mode_ == Mode::Active || mode_ == Mode::Settling) return "wait: the servo is moving";
   if (mode_ == Mode::Stopped) return "the actuator is stopped";
   const int us = start_us ? *start_us : cfg_.valid ? cfg_.rest_us : 1500;
@@ -325,6 +329,7 @@ std::string Actuator::begin_calibration(std::optional<int> start_us) {
   mode_ = Mode::Calibrating;
   pulse_us_ = us;
   powered_ = true;
+  cal_activity_ = Clock::now();
   publish_locked();
   cv_.notify_all();
   return "";
@@ -335,6 +340,7 @@ std::string Actuator::set_pulse(int us) {
   if (mode_ != Mode::Calibrating) return "the actuator's calibration is not open";
   if (us < kActuatorMinPulseUs || us > kActuatorMaxPulseUs) return actuator_values_refusal(us, us, 0);
   pulse_us_ = us;
+  cal_activity_ = Clock::now();
   publish_locked();
   cv_.notify_all();
   return "";
@@ -351,6 +357,7 @@ std::string Actuator::test(int rest_us, int active_us, double dwell_ms) {
   shot_dwell_ms_ = dwell_ms;
   dwell_started_ = false;
   back_to_calibration_ = true;
+  cal_activity_ = Clock::now();
   publish_locked();
   cv_.notify_all();
   return "";
@@ -370,6 +377,7 @@ std::string Actuator::save(int rest_us, int active_us, double dwell_ms) {
   c.saved = local_iso_now();
   cfg_ = c;
   reason_.clear();
+  cal_activity_ = Clock::now();
   if (path_.empty()) saved_ = 0;
   else pending_save_ = c;
   publish_locked();
@@ -419,6 +427,13 @@ void Actuator::request_shutdown() {
     mode_ = Mode::Settling;
     pulse_us_ = shot_rest_us_;
     powered_ = true;
+    until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
+  } else if (mode_ == Mode::Unavailable && write_failed_) {
+    // The channel failed earlier: one more try at A, then off, rather than leaving whatever is on it.
+    write_failed_ = false;
+    mode_ = Mode::Settling;
+    pulse_us_ = shot_rest_us_ = cfg_.valid ? cfg_.rest_us : shot_rest_us_;
+    powered_ = cfg_.valid;
     until_ = Clock::now() + std::chrono::milliseconds(opt_.settle_ms);
   } else if (mode_ != Mode::Unavailable) {
     mode_ = Mode::Stopped;
@@ -474,10 +489,24 @@ void Actuator::run() {
       } else {
         mode_ = Mode::Unconfigured;
         powered_ = false;
-        reason_ = "not calibrated";
+        reason_ = unconfigured_reason_;
       }
       first = true;
       spdlog::info("actuator: trying the PWM channel again");
+      publish_locked();
+    } else if (mode_ == Mode::Calibrating && !stopping_ &&
+               now >= cal_activity_ + std::chrono::milliseconds(opt_.calibration_idle_ms)) {
+      // Nobody has touched the session for minutes: the page that opened it is gone. Close it as DONE
+      // would, so the servo is not left powered at a calibration pulse with nobody watching.
+      spdlog::warn("actuator calibration idle for {} s; closed (back to rest)", opt_.calibration_idle_ms / 1000);
+      if (cfg_.valid) {
+        mode_ = Mode::Settling;
+        pulse_us_ = shot_rest_us_ = cfg_.rest_us;
+        until_ = now + std::chrono::milliseconds(opt_.settle_ms);
+      } else {
+        mode_ = Mode::Unconfigured;
+        powered_ = false;
+      }
       publish_locked();
     }
     std::optional<ActuatorConfig> save;
@@ -515,14 +544,9 @@ void Actuator::run() {
         first = false;
         out_on_ = applied_on;
         out_pulse_ = applied_pulse;
-        // B is on the wire: the dwell starts now, and lasts at least one period, so the servo sees B.
-        if (mode_ == Mode::Active && !dwell_started_ && applied_on && applied_pulse == pulse_us_) {
-          dwell_started_ = true;
-          const double ms = std::max(shot_dwell_ms_, cfg_.period_us / 1000.0);
-          until_ = Clock::now() + std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0));
-        }
       } else {
         if (off_ok) applied_on = out_on_ = false;
+        back_to_calibration_ = false;  // a failure ends a session: the retry must not reopen it
         spdlog::error("actuator PWM write failed twice ({}); {}; trying again in {} ms", err,
                       off_ok ? "the output is switched off" : "the output may still be on", opt_.retry_ms);
         mode_ = Mode::Unavailable;
@@ -534,16 +558,26 @@ void Actuator::run() {
       }
       publish_locked();
     }
+    // B is on the wire -- written just now, or already there (a test whose B is the pulse the session
+    // held): the dwell starts, and lasts at least one period, so the servo sees B. Checked on every
+    // pass, not only after a write, or a shot that needed no write would never end (review 2026-10-30).
+    if (mode_ == Mode::Active && !dwell_started_ && applied_on && applied_pulse == pulse_us_ && !first) {
+      dwell_started_ = true;
+      const double ms = std::max(shot_dwell_ms_, cfg_.period_us / 1000.0);
+      until_ = Clock::now() + std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0));
+    }
     if (stopping_ && (mode_ == Mode::Unavailable || (mode_ == Mode::Stopped && applied_on == powered_)) &&
         !pending_save_)
       return;
-    // Wake for a request, or at the end of the dwell, the travel or a retry wait.
+    // Wake for a request, or at the end of the dwell, the travel, a retry wait or an idle session.
     const bool timed = (mode_ == Mode::Active && dwell_started_) || mode_ == Mode::Settling ||
-                       (mode_ == Mode::Unavailable && write_failed_);
+                       (mode_ == Mode::Unavailable && write_failed_) || mode_ == Mode::Calibrating;
+    const auto wake = mode_ == Mode::Calibrating ? cal_activity_ + std::chrono::milliseconds(opt_.calibration_idle_ms)
+                                                 : until_;
     const bool pending = pending_save_.has_value() || (mode_ != Mode::Unavailable &&
         (first || powered_ != applied_on || (powered_ && pulse_us_ != applied_pulse)));
     if (pending) continue;
-    if (timed) cv_.wait_until(lk, until_);
+    if (timed) cv_.wait_until(lk, wake);
     else cv_.wait(lk);
   }
 }

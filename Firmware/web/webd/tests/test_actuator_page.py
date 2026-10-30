@@ -76,6 +76,7 @@ class ActuatorBuilders(unittest.TestCase):
             (station(available=False, state="unavailable", reason="no PWM chip"), "UNAVAILABLE"),
             (station(configured=False, state="unconfigured"), "NOT CALIBRATED"),
             (dict(station(), phase="fault"), "FAULT"),
+            (dict(station(), phase="recovering"), "RECOVERING"),
             (dict(station(), calibrating=True), "CALIBRATING"),
             (station(state="calibrating", powered=True, pulse_us=1600), "IN CALIBRATION"),
             (station(state="active", powered=True, pulse_us=1450), "FIRING"),
@@ -87,7 +88,7 @@ class ActuatorBuilders(unittest.TestCase):
             self.assertIsNone(b["command"], why)
             self.assertEqual(b["note"], why)
         self.assertEqual(self.button(cases[0][0])["title"], "no PWM chip", "controld's reason is the tooltip")
-        self.assertTrue(self.button(cases[5][0])["firing"])
+        self.assertTrue(self.button(dict((why, t) for t, why in cases)["FIRING"])["firing"])
 
     # -- the section, closed ---------------------------------------------------------------------
 
@@ -178,7 +179,24 @@ class ActuatorPageStructure(unittest.TestCase):
 
     def test_leaving_calibration_closes_the_actuators_session(self) -> None:
         leave = re.search(r"function leaveCalibration\(\) \{.*?\n\}", HUD_JS, re.S).group(0)
-        self.assertIn('sendCommand("actuator_calibration", "stop")', leave)
+        self.assertIn('actuatorRequest("actuator_calibration", "stop")', leave)
+        # Second review, 2026-10-30: a session this page did not open (a reload, another tab), or one
+        # mid-test, must close too: the station's own word, with a test shot counted as the session.
+        self.assertIn("hudActuatorSession(lastTelemetry, true)", leave)
+
+    def test_a_page_that_goes_away_closes_its_session(self) -> None:
+        hide = re.search(r'window\.addEventListener\("pagehide".*?\n\}\);', HUD_JS, re.S).group(0)
+        self.assertIn("keepalive: true", hide)
+        self.assertIn('"actuator_calibration", arg: "stop"', hide)
+
+    def test_after_a_test_the_pulse_is_the_stations_again(self) -> None:
+        # Second review: the page kept the B it last sent, and "+" stepped from there.
+        sync = re.search(r"function syncCalAct\(t\) \{.*?\n\}", HUD_JS, re.S).group(0)
+        self.assertIn('if (a.state !== "calibrating") calAct.pulse = null;', sync)
+
+    def test_actuator_commands_go_in_order_and_a_tap_under_the_button_is_not_a_zero(self) -> None:
+        self.assertIn("if (actuatorCmd) actuatorRequest(cmd", HUD_JS)
+        self.assertIn("#manual-pad, #actuate-slot, #dock", HUD_JS)
 
     def test_its_refusals_reach_the_calibration_panel(self) -> None:
         for c in ("actuator_calibration", "actuator_pulse", "actuator_test", "set_actuator"):
@@ -209,6 +227,19 @@ class FakeActuatorAnswersLikeControld(unittest.TestCase):
         a.handle("actuator_calibration", "start")
         self.assertEqual(a.handle("actuator_pulse", "400")[1], "pulse 400 us is outside 500..2500 us")
         self.assertEqual(a.handle("actuate", "")[1], "the actuator's calibration is open")
+        self.assertFalse(a.handle("actuator_pulse", "abc")[0], "a malformed argument is refused, not raised")
+
+    def test_a_first_calibration_closed_mid_test_returns_to_the_tests_rest(self) -> None:
+        a = FakeActuator(rest_us=None, active_us=None, settle_ms=50)
+        a.handle("actuator_calibration", "start 1600")
+        a.handle("actuator_test", "1600 1400 3000")
+        a.handle("actuator_calibration", "stop")
+        self.assertEqual((a.status()["state"], a.status()["pulse_us"]), ("returning", 1600))
+        for _ in range(100):
+            if a.status()["state"] == "unconfigured":
+                break
+            time.sleep(0.01)
+        self.assertEqual(a.status()["state"], "unconfigured")
 
 
 if __name__ == "__main__":

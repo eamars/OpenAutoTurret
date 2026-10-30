@@ -81,6 +81,9 @@ class Actuator {
   struct Options {
     int settle_ms = 500;   // the travel allowed to reach A before the servo goes limp
     int retry_ms = 5000;   // after a failed write, how long until the worker tries the channel again
+    // A calibration session nobody touches for this long is closed (back to A, limp): the backstop for
+    // a page that vanished (a closed tab, a lost network) with the servo powered.
+    int calibration_idle_ms = 300000;
   };
   // `pwm` null: unavailable, with `unavailable_reason`. `path` "": nothing is saved across restarts.
   // `config` is what was loaded from `path` (valid=false: unconfigured, `config_problem` says why if
@@ -138,6 +141,8 @@ class Actuator {
   Clock::time_point until_{};     // end of the dwell (Active), of the travel (Settling), of a retry wait
   bool stopping_ = false;
   bool write_failed_ = false;     // Unavailable because a write failed: the worker retries
+  std::string unconfigured_reason_;  // why it is unconfigured, kept for after a retry
+  Clock::time_point cal_activity_{}; // the session's last command
   std::optional<ActuatorConfig> pending_save_;
   int saved_ = -1;                // 1: the last save reached the disk; 0: it failed; -1: none yet
   int64_t shots_ = 0;

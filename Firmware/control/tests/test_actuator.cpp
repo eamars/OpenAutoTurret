@@ -63,9 +63,10 @@ ActuatorConfig owner_config(bool hold = false) {
 struct Rig {
   std::shared_ptr<FakePwm::Shared> pwm = std::make_shared<FakePwm::Shared>();
   std::unique_ptr<Actuator> act;
-  explicit Rig(ActuatorConfig c, std::string path = "", std::string problem = "", int retry_ms = 5000) {
+  explicit Rig(ActuatorConfig c, std::string path = "", std::string problem = "", int retry_ms = 5000,
+               int idle_ms = 300000) {
     act = std::make_unique<Actuator>(std::make_unique<FakePwm>(pwm), "", std::move(path), 15, c, problem,
-                                     Actuator::Options{60, retry_ms});
+                                     Actuator::Options{60, retry_ms, idle_ms});
   }
   std::vector<Write> writes() {
     std::lock_guard lk(pwm->m);
@@ -311,6 +312,55 @@ TEST(Actuator, AFirstCalibrationClosedMidTestReturnsToTheTestsRest) {
   ASSERT_GE(w.size(), 5u);
   EXPECT_EQ(w[w.size() - 2], Write(1600, true));
   EXPECT_EQ(w.back(), Write(0, false));
+}
+
+// Second review, 2026-10-30: the dwell started only on a write, so a test whose B was the pulse the
+// session already held needed no write, and stayed at B for ever.
+TEST(Actuator, ATestWhoseBIsAlreadyOnTheWireStillEnds) {
+  Rig rig(owner_config());
+  ASSERT_TRUE(rig.wait_state("off"));
+  ASSERT_EQ(rig.act->begin_calibration(1450), "");
+  ASSERT_TRUE(rig.wait_writes(3));  // A, off, 1450
+  ASSERT_EQ(rig.act->test(1650, 1450, 80), "");
+  ASSERT_TRUE(rig.wait_state("returning"));
+  ASSERT_TRUE(rig.wait_state("calibrating"));
+  EXPECT_EQ(rig.writes().back(), Write(1650, true));
+}
+
+// Second review, 2026-10-30: a write failure during a test left the session flag set, and the retry
+// reopened a session no page owned, powered.
+TEST(Actuator, AFailureEndsTheSessionAndTheRetryDoesNotReopenIt) {
+  Rig rig(owner_config(), "", "", 150);
+  ASSERT_TRUE(rig.wait_state("off"));
+  ASSERT_EQ(rig.act->begin_calibration(1600), "");
+  ASSERT_TRUE(rig.wait_writes(3));
+  {
+    std::lock_guard lk(rig.pwm->m);
+    rig.pwm->fail_pulse = 1600;  // the return to the test's A fails
+  }
+  ASSERT_EQ(rig.act->test(1600, 1450, 50), "");
+  ASSERT_TRUE(rig.wait_state("unavailable"));
+  {
+    std::lock_guard lk(rig.pwm->m);
+    rig.pwm->fail_pulse = -1;
+  }
+  ASSERT_TRUE(rig.wait_state("off"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  EXPECT_EQ(rig.act->state_name(), "off");
+}
+
+// Second review, 2026-10-30: a session whose page vanished stayed open, powered, for good.
+TEST(Actuator, AnIdleSessionClosesItself) {
+  Rig rig(owner_config(), "", "", 5000, 200);
+  ASSERT_TRUE(rig.wait_state("off"));
+  ASSERT_EQ(rig.act->begin_calibration(1600), "");
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  ASSERT_EQ(rig.act->set_pulse(1610), "");  // activity keeps it open
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  EXPECT_EQ(rig.act->state_name(), "calibrating");
+  ASSERT_TRUE(rig.wait_state("off"));
+  const auto w = rig.writes();
+  EXPECT_EQ(w[w.size() - 2], Write(1650, true)) << "closed at A, as DONE would";
 }
 
 TEST(Actuator, NoChannelIsUnavailableWithTheReason) {

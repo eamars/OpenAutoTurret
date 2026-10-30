@@ -83,8 +83,8 @@ class FakeActuator:
             if self._back_to_cal:
                 self._back_to_cal = False
                 self.state = "calibrating"
-            else:
-                self.state, self.pulse = "off", None
+            else:  # never calibrated, closed mid-test: limp at the test's A, as controld does
+                self.state, self.pulse = ("off" if self.configured else "unconfigured"), None
         self._after(self._settle, done)
 
     def _shot(self, active: int, rest: int, dwell: float, back_to_cal: bool) -> None:
@@ -94,7 +94,10 @@ class FakeActuator:
     # -- commands, as controld answers them: (accepted, reason or what was done) ----------------
     def handle(self, command: str, arg: str, faulted: bool = False) -> Tuple[bool, str]:
         with self._lock:
-            ok, why = self._handle_locked(command, arg, faulted)
+            try:
+                ok, why = self._handle_locked(command, arg, faulted)
+            except (ValueError, IndexError):
+                ok, why = False, command + ": malformed argument (the gate refuses this shape)"
             self._changed_locked()
             return ok, why
 
@@ -125,9 +128,12 @@ class FakeActuator:
             if closing:
                 if self.state not in ("calibrating",) and not self._back_to_cal:
                     return True, "actuator calibration closed; back to rest"
+                testing = self.state in ("active", "returning")
                 self._back_to_cal = False
                 if self.configured:
                     self._settle_to(self.rest)
+                elif testing:
+                    self._settle_to(self._shot_rest)  # never calibrated: to the test's A, then limp
                 else:
                     self.state, self.pulse = "unconfigured", None
                     self._gen += 1

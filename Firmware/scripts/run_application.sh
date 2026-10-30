@@ -693,7 +693,7 @@ if [ -n "$OTA_ACTUATOR_GPIO" ]; then
         OTA_ACTUATOR_UNAVAILABLE="pinctrl could not mux GPIO$OTA_ACTUATOR_GPIO"
       elif ! pinctrl get "$OTA_ACTUATOR_GPIO" | grep -q PWM0_CHAN; then
         OTA_ACTUATOR_UNAVAILABLE="GPIO$OTA_ACTUATOR_GPIO is not on PWM0 ($(pinctrl get "$OTA_ACTUATOR_GPIO" 2>&1 || true))"
-      elif pgrep -f 'actuator_calibrate\.py' >/dev/null 2>&1; then
+      elif pgrep -f '^[^ ]*python[0-9.]* [^ ]*actuator_calibrate\.py' >/dev/null 2>&1; then
         # The bench tool writes the same channel; two writers would fight over the servo.
         OTA_ACTUATOR_UNAVAILABLE="the bench tool actuator_calibrate.py is running; stop it and restart the stack"
       fi ;;

@@ -739,6 +739,7 @@ function hudActuateButton(t) {
   const why = !a.available ? "UNAVAILABLE"
     : !a.configured ? "NOT CALIBRATED"
     : t.phase === "fault" ? "FAULT"
+    : t.phase === "recovering" ? "RECOVERING"   // the gate refuses every command during motor recovery
     : t.calibrating ? "CALIBRATING"
     : a.state === "calibrating" ? "IN CALIBRATION"
     : a.state === "active" ? "FIRING"
@@ -2501,8 +2502,10 @@ function leaveCalibration() {
   calZero = { distance: null, armed: null, record: null };
   closeCalibrationDialog();
   calRefusal = null;
-  // ADR-007: an actuator session ends with calibration, wherever it was left from.
-  if (calAct.open || hudActuatorSession(lastTelemetry, false)) sendCommand("actuator_calibration", "stop");
+  // ADR-007: an actuator session ends with calibration, wherever it was left from -- including one a
+  // reload or another tab opened, and one mid-test (controld never refuses the close, and ignores it
+  // with no session open).
+  if (calAct.open || hudActuatorSession(lastTelemetry, true)) actuatorRequest("actuator_calibration", "stop");
   resetCalAct();
   if (exit.mode) sendCommand("set_mode", exit.mode);
   if (exit.main && window.otaSetMain) window.otaSetMain(exit.main);
@@ -2679,6 +2682,22 @@ function actuatorCalUi(k) {
   }
   return false;
 }
+// The actuator's commands go in order, one after the other, like the D-pad's: two quick PULSE presses
+// must not reach controld reversed and leave the servo a step from what the page shows.
+let actuatorRequests = Promise.resolve();
+function actuatorRequest(cmd, arg) {
+  actuatorRequests = actuatorRequests.then(() => sendCommand(cmd, arg)).catch(() => {});
+  return actuatorRequests;
+}
+// A page that goes away (reload, closed tab) closes its session on the way out; controld closes a
+// session left idle for minutes if even this is lost.
+window.addEventListener("pagehide", () => {
+  if (!calAct.open) return;
+  try {
+    fetch("/api/command", { method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+                            body: JSON.stringify({ command: "actuator_calibration", arg: "stop" }) });
+  } catch (e) {}
+});
 // The page's side of a command it sends to the actuator.
 function noteActuatorCommand(cmd, arg) {
   if (cmd === "actuator_calibration" && arg === "start") { resetCalAct(); calAct.open = true; calAct.since = Date.now(); }
@@ -2693,7 +2712,11 @@ function syncCalAct(t) {
   if (!calAct.open) return;
   const a = (t && t.actuator) || {};
   if (hudActuatorSession(t, true)) {
-    if (!Number.isFinite(calAct.pulse) && a.state === "calibrating" && Number.isFinite(a.pulse_us)) calAct.pulse = a.pulse_us;
+    // A test shot moves the servo away from what this page last sent and back to the test's A, not
+    // to that pulse: forget it, and take the station's pulse again once the session holds (review
+    // 2026-10-30: the next "+" was nearly a full stroke from where the servo stood).
+    if (a.state !== "calibrating") calAct.pulse = null;
+    else if (!Number.isFinite(calAct.pulse) && Number.isFinite(a.pulse_us)) calAct.pulse = a.pulse_us;
   } else if (Date.now() - calAct.since > 1500) resetCalAct();
 }
 
@@ -2784,7 +2807,7 @@ function disarmZero() {
 $("viewport").addEventListener("pointerdown", (e) => {
   // A press on a control (the bar, a dialog, the D-pad, the dock) is that control's, never a zero tap.
   if (!calZero.armed || (e.target && e.target.closest &&
-                         e.target.closest("#zerobar, #caldlg, #manual-pad, #dock, #drawer, #pip, button"))) return;
+                         e.target.closest("#zerobar, #caldlg, #manual-pad, #actuate-slot, #dock, #drawer, #pip, button"))) return;
   e.preventDefault();
   e.stopPropagation();
   const s = hudCalibrationZero(lastTelemetry || {}, calZero, hudSettled(calSamples, Date.now()));
@@ -2985,7 +3008,7 @@ function renderManualPad(t) {
 }
 // ADR-007 D8: the ACTUATE button. Greyed, with the reason on it, whenever controld would refuse it or
 // the page cannot see the station; controld's own refusal, if one comes, shows under it for 6 s.
-let actuateRefusal = null, actuateSeenSeq = null;
+let actuateRefusal = null, actuateSeenSeq = null, actuatePressedAt = 0;
 function noteActuateAck(t) {
   if (!t || t.cmd_ack_seq === actuateSeenSeq) return;
   const first = actuateSeenSeq === null;
@@ -3004,17 +3027,21 @@ function renderActuate(t) {
   const note = !seen ? "NO TELEMETRY" : s.note;
   const html = escapeMarkup(s.label) + (note ? "<small>" + escapeMarkup(note) + "</small>" : "");
   if (b.innerHTML !== html) b.innerHTML = html;
-  b.disabled = !seen || !s.command;
+  b.disabled = !seen || !s.command || Date.now() - actuatePressedAt < 800;
   b.classList.toggle("firing", s.firing);
   b.title = s.title;
   const r = actuateRefusal && Date.now() - actuateRefusal.at < 6000 ? actuateRefusal.reason : "";
   if ($("actuate-note").textContent !== r) $("actuate-note").textContent = r;
 }
+// A double tap would send the second press before the station's next frame greys the button, and come
+// back as a refusal: the page holds the button for 0.8 s after a press instead (actuatePressedAt).
 $("actuate").addEventListener("click", () => {
   const s = hudActuateButton(lastTelemetry);
-  if (!s || !s.command || $("actuate").disabled) return;
+  if (!s || !s.command || $("actuate").disabled || Date.now() - actuatePressedAt < 800) return;
+  actuatePressedAt = Date.now();
   actuateRefusal = null;
   sendCommand(s.command, s.arg);
+  renderActuate(lastTelemetry);
 });
 // The pad's pace: null follows the main camera; "coarse" | "precise" is the operator's pin, which a
 // camera swap clears (the new view brings its own pace back).
@@ -3109,7 +3136,9 @@ drawer.addEventListener("click", (e) => {
     if (pendingConfirm !== key) { pendingConfirm = key; renderDrawer(); return; }
   }
   noteActuatorCommand(cmd, b.getAttribute("data-arg") || "");
-  sendCommand(cmd, b.getAttribute("data-arg") || "");
+  const actuatorCmd = cmd.indexOf("actuator") === 0 || cmd === "set_actuator";
+  if (actuatorCmd) actuatorRequest(cmd, b.getAttribute("data-arg") || "");
+  else sendCommand(cmd, b.getAttribute("data-arg") || "");
   if (pendingConfirm !== null) { pendingConfirm = null; renderDrawer(); }
   else if (cmd.indexOf("actuator") === 0 || cmd === "set_actuator") renderDrawer();
 });
