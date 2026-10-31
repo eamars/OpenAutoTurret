@@ -20,7 +20,7 @@ procedure from a flag list.
 | understand why the camera zero works the way it does | [`ADR-006/ADR-006.md`](ADR-006/ADR-006.md) — closed 2026-10-25: the decisions, the measurements on NO_LOAD, the calibration lifecycle and its failure modes |
 | fire, calibrate or recover the one-shot actuator (the GPIO15 servo) | [`operations/actuator.md`](operations/actuator.md) — ACTUATE, MENU › CALIBRATION › ACTUATOR, the bench tool, the overlay, what each "unavailable" means |
 | work on the one-shot actuator (the GPIO15 hobby servo: rest A, fire to B, dwell, back) | [`ADR-007/ADR-007.md`](ADR-007/ADR-007.md) — closed 2026-10-31 (built, two reviews, checked): why GPIO15 and not GPIO18, the overlay and mux, the supply finding, the commands, telemetry and page |
-| plan the precision mount (0.3 MOA rangefinder: actuators, drives, development order) | [`Hardware/HDP-001/HDP-001.md`](../../Hardware/HDP-001/HDP-001.md) — proposal, primary and secondary hardware |
+| plan the precision mount (0.3 MOA rangefinder: per-axis requirement, actuators, drives, development order) | [`Hardware/HDP-001/HDP-001.md`](../../Hardware/HDP-001/HDP-001.md) — proposal, primary and secondary hardware, candidate comparison (§8) |
 | plan or record a design decision | a new `ADR-NNN/` directory (see "New document convention" below) |
 | look up a legacy document | [`archive/README.md`](archive/README.md), which indexes them by implementation state and states each one's limits |
 | look up a vendor protocol or manual | [`references/`](references/), grouped by device |
