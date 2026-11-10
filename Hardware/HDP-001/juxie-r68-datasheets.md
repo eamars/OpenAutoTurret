@@ -7,6 +7,10 @@ The PDFs themselves are not in the repository (vendor copyright); the owner keep
 `Downloads/MZ17 Servo Motors/`. Chinese labels are translated; the original term is kept where it
 matters. Anything inferred rather than read is marked *(inferred)*.
 
+**Outcome (owner, 2026-11-10): the series is out for the turret.** Its position covers one turn, so
+it cannot drive a continuously turning yaw (HDP-001 §8.8). This file stays as the record, and as the
+starting point if another Juxie part comes up.
+
 | File | What it is | Applies to the R68? |
 |---|---|---|
 | `CE-RB-R68-101-Lite-CO-I.pdf` | 2D drawing + spec table, **R68 Lite**, title block Wuxi Juxie Intelligent Drive Technology (无锡巨蟹智能驱动科技有限公司), dated 2026-01-09 | yes: **the part in question** |

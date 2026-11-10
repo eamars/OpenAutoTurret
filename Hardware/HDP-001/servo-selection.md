@@ -17,6 +17,9 @@
 | 2026-10-31 | Plugs are fitted after the cables are routed, so the bore is not sized by connectors | HDP-001 §1.4 F5: must ≥ 15 mm usable |
 | 2026-10-31 | A datasheet for the MZ17 will follow; the sheet in hand is preliminary | HDP-001 §8.6 |
 | 2026-11-10 | The datasheets arrived, for the MZ17-mini (Juxie R68 Lite), which the owner reads as ticking more boxes than the MZ17 | HDP-001 §8.8; transcribed in [`juxie-r68-datasheets.md`](juxie-r68-datasheets.md) |
+| 2026-11-10 | **The MZ17 series is out.** Its position covers one turn, so it cannot drive a continuously turning yaw | options 2–4 of §4 struck; the price trade moves to the suppliers still to ask (§7) |
+| 2026-11-10 | Joint life is not a concern: the mount needs accuracy, not torque, so the joints run far below their rating | a vendor's rated life (e.g. 5000 h) is not a gate |
+| 2026-11-10 | **Yaw turns continuously** (through the slip ring): the yaw joint must command and report position across more than one turn, or across ±180° without a fault | new gate in §2 |
 
 **Open: what "slightly lower" means as a number.** Reference points:
 - the spec, 0.3 MOA = 18″ (13 cm at 1500 m);
@@ -39,6 +42,7 @@ This split between §2 and §3 is a proposal, for the owner to confirm.
 | Telemetry, and an output zero kept in the joint | G6, G7 | the fault, hold and degrade ruling; no homing |
 | Usable yaw bore ≥ 15 mm (or a way around it: §4 option 3) | F5 | the slip ring's cables have to pass |
 | 24–48 V, and torque and loads at least the must | G3, D1–D2, B3–B4 | |
+| Yaw only: position commanded and reported across more than one turn, or across ±180° without a limit trip or a rejected step | G1, G2 | yaw turns continuously through the slip ring (owner, 2026-11-10); a single-turn drive leaves no way round its seam |
 
 ## 3. Tradeable for price, judged on the total of §5
 
@@ -53,14 +57,19 @@ This split between §2 and §3 is a proposal, for the owner to confirm.
 ## 4. The options
 
 The estimates come from §5 and are not measurements. Cost is relative, with the MZ17 = 1: the owner
-puts the eRob90 at about 2.
+puts the eRob90 at about 2. The MZ17 stays the cost yardstick although it is out.
+
+**Options 2–4 are out (owner, 2026-11-10):** the MZ17 series covers one turn, so it fails the yaw
+gate of §2, and on pitch its 19.8″ protocol step and missing brake fail G1 and D5 (HDP-001 §8.8).
+They are kept below as the record of what the price trade was worth. A cheaper pitch candidate from
+§7's "to ask" rows would take option 2's place.
 
 | Option | Yaw | Pitch | Total, loop on the output encoder | Total, loop on the motor encoder | Cost | Conditions |
 |---|---|---|---|---|---|---|
 | 1 | eRob90 HS | eRob90 HS + brake | ≈ 14.6″ ≈ 0.24 MOA | — (the eRob closes on its output) | ≈ 4 | the plan's §8.3; ZeroErr does not guarantee its own figures |
-| 2 | eRob90 HS | **MZ17**, 101:1 | ≈ 15″ ≈ 0.25 MOA | ≈ 18″ ≈ 0.30 MOA; ≈ 0.26 with the preload | ≈ 3 | the MZ17's brake, CAN protocol and position unit (§2) |
-| 3 | MZ17 | MZ17 | ≈ 15″ ≈ 0.25 MOA, but 8 m/s gusts throw yaw ≈ 9″ before the loop recovers | ≈ 24″ ≈ 0.40 MOA; ≈ 0.36 with the preload | ≈ 2 | yaw stiffness exactly on the must, no margin. The Ø12 bore needs thin cables (~10 mm), or the yaw joint mounted inverted so that CAN stays off the slip ring |
-| 4 | MZ20 | MZ17 | ≈ 15″ ≈ 0.25 MOA | ≈ 22″ ≈ 0.36 MOA; ≈ 0.32 with the preload | ≈ 2–3 | the MZ20's bore, encoder and price are not on the sheet |
+| 2 (out) | eRob90 HS | **MZ17**, 101:1 | ≈ 15″ ≈ 0.25 MOA | ≈ 18″ ≈ 0.30 MOA; ≈ 0.26 with the preload | ≈ 3 | the MZ17's brake, CAN protocol and position unit (§2) |
+| 3 (out) | MZ17 | MZ17 | ≈ 15″ ≈ 0.25 MOA, but 8 m/s gusts throw yaw ≈ 9″ before the loop recovers | ≈ 24″ ≈ 0.40 MOA; ≈ 0.36 with the preload | ≈ 2 | yaw stiffness exactly on the must, no margin. The Ø12 bore needs thin cables (~10 mm), or the yaw joint mounted inverted so that CAN stays off the slip ring |
+| 4 (out) | MZ20 | MZ17 | ≈ 15″ ≈ 0.25 MOA | ≈ 22″ ≈ 0.36 MOA; ≈ 0.32 with the preload | ≈ 2–3 | the MZ20's bore, encoder and price are not on the sheet |
 | 5 | SHG-20 build | SHG-20 build | ≈ 14″ ≈ 0.24 MOA | — | not priced (the drive alone is ≈ USD 770 per axis) | two axes of mechanical design. Fallback if phase 1 fails (HDP-001 §4) |
 
 **What the table says:**
@@ -68,13 +77,14 @@ puts the eRob90 at about 2.
   total.** About 14″ of the 18″ belongs to calibration, heat shimmer and the base (§5). With the
   mechanics below about 5″ per axis, a better joint buys about 0.01 MOA. Paying twice for the eRob90
   on pitch is then hard to justify.
-- **The deciding unknown is G2.** Does the MZ17's position loop close on its output encoder? If it
-  does not, option 2 still lands at about 0.30 MOA, which is the spec. Option 3 lands at about
-  0.4 MOA.
+- **For a cheaper pitch joint, the deciding rows are G2 and G1's position step.** A joint that
+  closes on its output encoder and carries position finer than 1″ lands within about 0.01 MOA of the
+  eRob90. One that closes on the motor encoder lands at about 0.30 MOA, which is the spec.
 - **Yaw is where the eRob90 earns its price:**
   - its bore clears 15 mm;
   - its stiffness (1.6×10⁴) has margin over the must;
-  - its loop on the output encoder is confirmed (ZeroErr's CANopen manual V1.9).
+  - its loop on the output encoder is confirmed (ZeroErr's CANopen manual V1.9);
+  - **still to confirm:** that its drive runs past ±180° (the yaw gate of §2, HDP-001 §8.4).
 
 ## 5. Estimating a candidate's accuracy
 
@@ -133,11 +143,11 @@ smaller, joint precision matters more, and this section should be redone with th
 
 | Candidate | Axis | Status (2026-10-31) | Next step |
 |---|---|---|---|
-| ZeroErr eRob90 HS, CANopen | yaw (and pitch in option 1) | **lead for yaw** | §8.4 questions to ZeroErr; quote the HS / CANopen / brake variants |
-| MZ17, 101:1 (= Juxie R68 DNN) | pitch | superseded by the MZ17-mini: 19 bit, Ø12 bore | — |
-| **MZ17-mini, 101:1 (= Juxie R68 Lite)**, 2026-11-10 | both axes (option 3), or pitch (option 2) | **fails the §2 position-step gate as documented**: 21-bit encoder, but the protocol carries int16 per turn (19.8″). Clears A4, F5 and G2. No brake | **Asked 2026-11-10** (the owner forwarded question 1 to the supplier). Closes on Juxie's answer, or on a bench unit's SDO test (HDP-001 §8.8). Yes: re-place in §4 as option 3, case A. No: out |
-| MZ20 | yaw (option 4) | to ask | bore, encoder, price |
-| ZeroErr eRob80 HS | pitch | alternative to the MZ17, at about the eRob90's price | none unless the MZ17 fails a gate |
+| ZeroErr eRob90 HS, CANopen | yaw (and pitch in option 1) | **lead for yaw** | §8.4 questions to ZeroErr, including the yaw gate of §2 (position past ±180°); quote the HS / CANopen / brake variants |
+| MZ17, 101:1 (= Juxie R68 DNN) | pitch | out with the series (2026-11-10) | — |
+| MZ17-mini, 101:1 (= Juxie R68 Lite), 2026-11-10 | both axes, or pitch | **out (owner, 2026-11-10):** position covers one turn, so no continuous yaw. On pitch: the protocol's int16 per turn (19.8″) fails G1 and it has no brake (D5). Clears A4, F5 and G2 | reopen only if Juxie documents multi-turn position at full resolution (HDP-001 §8.8) |
+| MZ20 | yaw (option 4) | out with the series (2026-11-10): it was the yaw size, and the series covers one turn | — |
+| ZeroErr eRob80 HS | pitch | alternative to the eRob90 on pitch, at about its price | only if the payload's mass (phase 0) makes the eRob90's 0.5 kg matter |
 | SHG-20 build (HDP-001 §4) | both | fallback if phase 1 fails | — |
 | Spinea TwinSpin build | pitch only | not pursued: no bore; the standard lost motion misses A9 | — |
 | MyActuator RH | — | rejected: 17-bit output encoder, 36″ CAN position step | — |
@@ -150,5 +160,3 @@ smaller, joint precision matters more, and this section should be redone with th
 - The accuracy floor that "slightly lower" means (§1).
 - Whether the gate/tradeable split of §2–§3 is right.
 - The pitch preload (HDP-001 §6.6), which needs the pitch brake.
-- Whether the yaw joint may be mounted inverted (option 3 and the bore): its body would ride on the
-  yaw stage, keeping CAN off the slip ring.
