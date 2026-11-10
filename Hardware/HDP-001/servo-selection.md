@@ -19,6 +19,7 @@
 | 2026-11-10 | The datasheets arrived, for the MZ17-mini (Juxie R68 Lite), which the owner reads as ticking more boxes than the MZ17 | HDP-001 §8.8; transcribed in [`juxie-r68-datasheets.md`](juxie-r68-datasheets.md) |
 | 2026-11-10 | **The MZ17 series is out.** Its position covers one turn, so it cannot drive a continuously turning yaw | options 2–4 of §4 struck; the price trade moves to the suppliers still to ask (§7) |
 | 2026-11-10 | Joint life is not a concern: the mount needs accuracy, not torque, so the joints run far below their rating | a vendor's rated life (e.g. 5000 h) is not a gate |
+| 2026-11-10 | Screen cycloidal reducers and servo combos too, Chinese and China-made first | HDP-001 §8.9; candidates in §7 |
 | 2026-11-10 | **Yaw turns continuously** (through the slip ring): the yaw joint must command and report position across more than one turn, or across ±180° without a fault | new gate in §2 |
 
 **Open: what "slightly lower" means as a number.** Reference points:
@@ -150,6 +151,9 @@ smaller, joint precision matters more, and this section should be redone with th
 | ZeroErr eRob80 HS | pitch | alternative to the eRob90 on pitch, at about its price | only if the payload's mass (phase 0) makes the eRob90's 0.5 kg matter |
 | SHG-20 build (HDP-001 §4) | both | fallback if phase 1 fails | — |
 | Spinea TwinSpin build | pitch only | not pursued: no bore; the standard lost motion misses A9 | — |
+| **PHYBOT 动易 PhyArc** (integrated cycloidal), 2026-11-10 | either | **to ask**: the only integrated cycloidal joint found. Own CAN FD protocol; encoder bits, loop encoder, bore and brake not published (HDP-001 §8.9) | the owner asks PHYBOT §8.9's five questions; closes on the answers or a bench unit |
+| Cycloidal reducers for a build: 环动 SHPR-H, 西格 CPB-072H / 086H, 2026-11-10 | either | not pursued: no published lost motion or bore, and a build costs what the SHG-20 build does, with worse lost motion (HDP-001 §8.9) | reopen only if the SHG-20 build becomes the path (phase 1 fails) |
+| 海尚 HSOAR SD-BR85C; industrial RV-10C class (双环, 秦川, 振康, 中大力德, 智同, 飞马, Nabtesco); Sumitomo Fine Cyclo | — | out: lost motion ≤ 2′ (A9), or Ø147 mm and 4.6 kg for the gear alone (F2, F4), or no small hollow size (HDP-001 §8.9) | — |
 | MyActuator RH | — | rejected: 17-bit output encoder, 36″ CAN position step | — |
 | Leaderdrive 绿的谐波 KAH / KAT | either | to ask: is the encoder on the output? | HDP-001 §8.5 |
 | Leadshine 雷赛 RJ1 / RJH | either | to ask: encoder bits | HDP-001 §8.5 |
