@@ -254,6 +254,35 @@ TEST_F(VisionIngestTest, RestartRebindsTheSamePath) {
   again.stop();
 }
 
+// ADR-008 D6: each visiond restart is a new connection. The finished reader is
+// joined by the accept thread instead of living until stop().
+TEST_F(VisionIngestTest, FinishedReaderThreadsAreReaped) {
+  vision::VisionIngest ingest(cfg_, &link_, [](const vision::TargetMeasurement&) {});
+  std::string err;
+  ASSERT_TRUE(ingest.start(err)) << err;
+  const int kCycles = 25;
+  for (int i = 0; i < kCycles; ++i) {
+    const int fd = connect_client(cfg_.socket_path);
+    ASSERT_GE(fd, 0);
+    ASSERT_TRUE(wait_for([&] { return link_.stats().clients == 1; })) << i;
+    ::close(fd);
+    ASSERT_TRUE(wait_for([&] { return link_.stats().clients == 0; })) << i;
+    EXPECT_LE(ingest.client_thread_count(), 2u) << i;
+  }
+  EXPECT_TRUE(wait_for([&] { return ingest.client_thread_count() == 0; }))
+      << ingest.client_thread_count() << " threads after " << kCycles << " reconnects";
+  // A publisher connected now is still served.
+  const int fd = connect_client(cfg_.socket_path);
+  ASSERT_GE(fd, 0);
+  ASSERT_TRUE(wait_for([&] { return ingest.client_thread_count() == 1; }));
+  const auto wire = make_measurement(9).encode();
+  ASSERT_EQ(::send(fd, wire.data(), wire.size(), 0), static_cast<ssize_t>(wire.size()));
+  EXPECT_TRUE(wait_for([&] { return link_.stats().frames == 1u; }));
+  ::close(fd);
+  ingest.stop();
+  EXPECT_EQ(ingest.client_thread_count(), 0u);
+}
+
 TEST(VisionLinkCounters, TracksFramesDropsAndClients) {
   vision::VisionLink link;
   EXPECT_FALSE(link.stats().connected);

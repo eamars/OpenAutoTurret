@@ -435,8 +435,8 @@ class VideoSource:
                         self._count += 1
                         if size and self._running:
                             self._state.width, self._state.height = size
-                    self._recent.append(now)
-                    self._arrived.append(now)
+                    self._stamp("_recent", now)
+                    self._stamp("_arrived", now)
                     if not self._first_frame.is_set():
                         self._first_frame.set()
             self._stop_evt.wait(0.02)
@@ -457,7 +457,7 @@ class VideoSource:
                 self._open_error = f"camera request failed: {e}"
                 return
             now = time.monotonic()
-            self._arrived.append(now)
+            self._stamp("_arrived", now)
             try:
                 # FPS cap: only JPEG-encode a frame when one is due. Skipping is
                 # cheap — and the request is ALWAYS released (the main §42.3
@@ -471,6 +471,18 @@ class VideoSource:
                     request.release()
                 except Exception:  # noqa: BLE001
                     pass
+
+    #: Frame stamps older than this are dropped as they are added. The rates read a 5 s window, and
+    #: until 2026-11-10 only reading them trimmed the lists: with no page polling video state, webd
+    #: kept every frame's stamp for as long as it ran (ADR-008 D6).
+    _STAMP_KEEP_S = 10.0
+
+    def _stamp(self, name: str, now: float) -> None:
+        stamps = getattr(self, name)
+        stamps.append(now)
+        if stamps[0] < now - 2 * self._STAMP_KEEP_S:     # trimmed in bulk, about every 10 s
+            cut = now - self._STAMP_KEEP_S
+            setattr(self, name, [t for t in stamps if t >= cut])
 
     def measured_arrival_fps(self, now=None, window_s: float = 5.0) -> float:
         """Rate at which COMPLETED REQUESTS arrive from the camera, before any processing.
@@ -509,7 +521,7 @@ class VideoSource:
         orientation = state._orientation
         wb_mode = state._wb_mode
         state._last_publish = now
-        self._recent.append(now)
+        self._stamp("_recent", now)
         arr = request.make_array("main")
         # The colour-order check (below, once) needs the decode WITHOUT the install orientation:
         # request.make_image() knows nothing about how the lens is mounted, so comparing a

@@ -614,3 +614,15 @@ class TestWithLiveTracker(unittest.TestCase):
 
 if __name__ == "__main__":                                     # pragma: no cover
     unittest.main()
+
+
+def test_the_alias_map_keeps_the_newest_merges_only():
+    # ADR-008 D6: aliases lived for the whole session, and a session is as long as visiond runs.
+    from perception.selection.alias_map import AliasMap
+    aliases = AliasMap()
+    for n in range(AliasMap.MAX_ALIASES + 50):
+        aliases.add(f"r{n}", f"s{n}")
+    assert len(aliases.records()) == AliasMap.MAX_ALIASES
+    assert aliases.resolve("r0") is None, "the oldest merge was dropped"
+    newest = AliasMap.MAX_ALIASES + 49
+    assert aliases.resolve(f"r{newest}") == f"s{newest}"

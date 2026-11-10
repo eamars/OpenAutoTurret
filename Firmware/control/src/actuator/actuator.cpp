@@ -1,4 +1,5 @@
 #include "actuator/actuator.hpp"
+#include "common/durable_file.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -128,23 +129,9 @@ bool load_actuator_config(const std::string& path, ActuatorConfig& out, std::str
 
 bool save_actuator_config(const std::string& path, const ActuatorConfig& c, std::string& err) {
   // Its own temp name (the bench tool uses .json.tmp), and on the disk before the rename: this
-  // station has browned out, and a rename over an unwritten file loses the calibration.
-  const std::string tmp = path + ".controld.tmp";
-  {
-    const std::string text = actuator_config_to_json(c);
-    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) { err = "cannot open " + tmp + " for writing: " + std::strerror(errno); return false; }
-    const bool ok = ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size()) && ::fsync(fd) == 0;
-    const int e = errno;
-    ::close(fd);
-    if (!ok) { err = "write failed for " + tmp + ": " + std::strerror(e); return false; }
-  }
-  if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-    err = "rename " + tmp + " -> " + path + " failed";
-    return false;
-  }
-  err.clear();
-  return true;
+  // station has browned out, and a rename over an unwritten file loses the calibration. The
+  // directory is synced too, so the rename itself survives a power cut (ADR-008 D5).
+  return ota::write_file_durably(path, actuator_config_to_json(c), err, ".controld.tmp");
 }
 
 int pwm0_channel_for_gpio(int gpio) {

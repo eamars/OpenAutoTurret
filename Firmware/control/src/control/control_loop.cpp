@@ -2683,7 +2683,7 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
             servo_jerk_[i] = r.j[c];
             q_ref[i] = r.q[c];
           }
-          trace_core_tick(rec, now_ns);
+          trace_core_tick(rec, now_ns, sp);
         } else {
           core_engaged_ = false;
           servo_jerk_[0] = servo_jerk_[1] = 0.0;
@@ -3603,21 +3603,11 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
                                  : tracking::TrackState::ReadyHold;
     snap.target_confidence = tracking_ ? tracking_->confidence() : 0.0;
     snap.tracking_active = tracking_ && tracking_ref_.is_tracking_reference;
-    // The tracking counterpart of the homing motion log, at half the cadence of this fill (so
-    // it stays inside the 200 Hz deadline the way P0h established). The cadence claim is not asserted
-    // here: the t= stamps in the output are the evidence, and they are what first refuted the
-    // assumption behind this line - it was originally placed above, where it read snap.tracking_active
-    // BEFORE this file assigns it, so it logged nothing at all and looked like a silent feature.. It exists because requirement
-    // (b) asks whether following is JERK-LIMITED, and until now the only high-rate evidence stream
-    // on this station was homing's: during AUTO_TRACK the reference was visible only through the
-    // ~15 Hz telemetry snapshot, where a 1.5 deg reference step followed by a hold looks like a
-    // megabyte of acceleration. Second derivatives need a rate that can see them.
-    //
-    // Logged on the same line: the reference AND the axis, plus the reference's derived rate and
-    // acceleration, so the two questions a smoothness complaint actually splits into - did the
-    // reference move smoothly, and did the axis follow it - can be answered separately instead of
-    // inferred from one differenced feedback channel. Only while a tracking reference is active, so
-    // a station at rest does not write a stream nobody asked for.
+    // The high-rate evidence of tracking (is following jerk-limited; did the reference move
+    // smoothly, and did the axis follow it) is the 200 Hz tracking trace, trace_core_tick: the
+    // reference with its rate and acceleration, and the axes' measured position and velocity.
+    // A 100 Hz "track-motion" line in controller.log carried the same and grew the RAM-backed log
+    // by more than 1 GB a day of tracking; ADR-008 D5 removed it.
     // Publish the profile's OWN rate and acceleration, now that it has them. The block above
     // re-derives both by differencing the published reference, which was the only way when the
     // reference was a bare solve - and on hardware it turned out to be the noise source, not the
@@ -3646,14 +3636,6 @@ Phase ControlLoop::step(TimeNs now_ns, TimeNs period_ns) {
     }
     snap.tracking_command_rate_yaw_rad_s = tracking_command_rate[ix(AxisId::Yaw)];
     snap.tracking_command_rate_pitch_rad_s = tracking_command_rate[ix(AxisId::Pitch)];
-    if (snap.tracking_active && (tracking_log_cycle_++ & 1) == 0) {
-      spdlog::info(
-          "track-motion t={:.2f}ms q={:+.5f} v={:+.4f} qref={:+.5f} vref={:+.4f} "
-          "aref={:+.2f} q_p={:+.5f} qref_p={:+.5f}",
-          static_cast<double>(now_ns) / 1e6, snap.q_yaw_rad, snap.v_yaw_rad_s,
-          snap.q_ref_yaw_rad, snap.q_ref_rate_yaw_rad_s, snap.q_ref_accel_yaw_rad_s2,
-          snap.q_pitch_rad, snap.q_ref_pitch_rad);
-    }
 
     // Which candidate is being followed is loop state, not link state. Publishing it
     // from inside the `if (vision_link_)` block below would report "following nothing"
@@ -7823,7 +7805,11 @@ namespace ota {
 // ADR-003 D17: one line per Level-1 tick, enough to say from the record alone whether an error
 // came from the estimate (goal vs truth, offline), the reference (e_track) or the servo
 // (e_servo). Written by spdlog's async pool, never by this thread. Core axis order: yaw, pitch.
-void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
+// "q" and "v" are the axes' measured position and velocity this cycle (the snapshot the loop ran
+// on); with "ref" they carry everything controller.log's 100 Hz track-motion line did, which this
+// record replaced (ADR-008 D5).
+void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns,
+                                  const AxisSnapshot sp[kAxisCount]) {
   if (!tracking_trace_) return;
   const auto& g = r.los;
   const auto& d = tracking_->core()->estimator().diagnostics();
@@ -7846,7 +7832,7 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       "\"sig_w\":[{:.5f},{:.5f}],\"goal_los\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"ffw\":[{:.3f},{:.3f}],\"fade\":{:.3f},"
       "\"valid\":[{},{}],\"goal_q\":[{:.6f},{:.6f},{:.5f},{:.5f}],\"goal_valid\":{},"
       "\"ref\":[{:.6f},{:.6f},{:.5f},{:.5f},{:.4f},{:.4f},{:.3f},{:.3f}],\"flags\":[{},{}],"
-      "\"q\":[{:.6f},{:.6f}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
+      "\"q\":[{:.6f},{:.6f}],\"v\":[{},{}],\"e_track\":[{:.6f},{:.6f}],\"e_servo\":[{:.6f},{:.6f}],"
       "\"nis\":{:.3f},\"w\":{:.3f},\"accepted\":{},\"rejected\":{},\"downweighted\":{},\"rate_limited\":{},"
       "\"obs\":[{},{},{:.2f},{:.2f},{:.6f},{:.6f},{:.6f},{:.6f},{}],\"yaw\":[{},{},{}]}}",
       now_ns, g.state_ns, g.age_s, x[0].theta, x[1].theta, x[0].omega, x[1].omega,
@@ -7856,7 +7842,9 @@ void ControlLoop::trace_core_tick(const track::TickRecord& r, TimeNs now_ns) {
       r.joint.q[0], r.joint.q[1], r.joint.v[0], r.joint.v[1], r.joint.valid ? 1 : 0,
       r.reference.q[0], r.reference.q[1], r.reference.v[0], r.reference.v[1], r.reference.a[0], r.reference.a[1],
       r.reference.j[0], r.reference.j[1], r.reference.flags[0], r.reference.flags[1],
-      r.q_measured[0], r.q_measured[1], r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
+      r.q_measured[0], r.q_measured[1],
+      num(sp[ix(AxisId::Yaw)].v_rad_s, 5), num(sp[ix(AxisId::Pitch)].v_rad_s, 5),
+      r.e_track[0], r.e_track[1], r.e_servo[0], r.e_servo[1],
       d.nis, d.weight, d.accepted, d.rejected, d.downweighted, d.rate_limited,
       z.sensor_ns, z.t_ns, z.u, z.v, z.yaw, z.pitch, z.az, z.el, z.accepted ? 1 : 0,
       num(ys.current_a_known ? ys.current_a : std::numeric_limits<double>::quiet_NaN(), 3),

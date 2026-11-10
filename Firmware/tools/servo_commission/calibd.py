@@ -45,6 +45,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(FIRMWARE))
 
 import journal  # noqa: E402
+from perception.protocol.jsonio import atomic_write_text  # noqa: E402
 
 JOURNAL = {"yaw": "yaw-control.jsonl", "pitch": "sensorless-homing.jsonl"}
 # What each pipeline leaves for the record when it is accepted (ADR-005 D7.6).
@@ -107,7 +108,7 @@ class ControldStation:
         bound = dict(manifest, session_label=label)
         bound.pop("output", None)
         path = d / "manifest.json"
-        path.write_text(json.dumps(bound, indent=1), encoding="utf-8")
+        atomic_write_text(str(path), json.dumps(bound, indent=1))   # whole or absent (ADR-008 D5)
         ok, error = self.link.send("calibration_session", f"{self.run_id} {axis} {path}")
         if not ok:
             raise RuntimeError(f"{label}: controld refused the session: {error}")
@@ -285,9 +286,10 @@ def finish(link, runner, run, record, verdict):
             installed = "installed into" in (t.cmd_ack_reason or "")
             break
         time.sleep(0.05)
-    (runner.root / "run.json").write_text(json.dumps(
+    # Whole or absent (ADR-008 D5): prune() reads run.json to decide what it may delete.
+    atomic_write_text(str(runner.root / "run.json"), json.dumps(
         {"run": run["id"], "kind": run["kind"], "record": record.get("id"), "verdict": verdict,
-         "installed": installed}, indent=1), encoding="utf-8")
+         "installed": installed}, indent=1))
     removed = prune(runner.root.parent)
     if removed:
         print(f"calibd: pruned {len(removed)} journals of older runs", flush=True)

@@ -1278,10 +1278,66 @@ class Telemetry {
         ok = out.good();
       }
     }
+    // Before the path is published and the slot released: no newer trip file can be
+    // written meanwhile, so the file just written is the newest one the prune sees.
+    prune_trip_files(dir);
     std::lock_guard<std::mutex> lk(trace_mu_);
     if (ok && trip_out_generation_ == freeze_generation_) archive_path_ = path;
     trip_out_busy_.store(false, std::memory_order_release);
   }
+
+ public:
+  // ADR-008 D5: one trip file per fault latch, so a station that latches over and over
+  // must not fill the RAM-backed run dir with them. The newest are the evidence anybody
+  // reads; older ones go.
+  static constexpr std::size_t kTripFilesKept = 50;
+
+  // The time in a "trip-<t>.ndjson" name, or false for any other name.
+  static bool trip_file_time(const std::string& name, uint64_t& t) {
+    static constexpr char kPrefix[] = "trip-";
+    static constexpr char kSuffix[] = ".ndjson";
+    const std::size_t pre = sizeof(kPrefix) - 1, suf = sizeof(kSuffix) - 1;
+    if (name.size() <= pre + suf || name.compare(0, pre, kPrefix) != 0 ||
+        name.compare(name.size() - suf, suf, kSuffix) != 0)
+      return false;
+    const std::string digits = name.substr(pre, name.size() - pre - suf);
+    if (digits.size() > 19) return false;  // more than int64 holds: not one of ours
+    t = 0;
+    for (const char c : digits) {
+      if (c < '0' || c > '9') return false;
+      t = t * 10 + static_cast<uint64_t>(c - '0');
+    }
+    return true;
+  }
+
+  // Keep the newest kTripFilesKept trip files in `dir`, newest by the monotonic time in
+  // the name (a directory holds one run, so one boot, and the name is immune to the wall
+  // clock stepping at boot on a Pi with no RTC). Only regular files named
+  // trip-<digits>.ndjson count or go: a symlink is never followed or removed, nothing
+  // below the directory is visited, and any other file is left alone. Evidence writer's
+  // thread only; best-effort, like the trip file itself.
+  static void prune_trip_files(const std::string& dir) {
+    namespace fs = std::filesystem;
+    std::vector<std::pair<uint64_t, fs::path>> trips;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+      uint64_t t = 0;
+      if (!trip_file_time(it->path().filename().string(), t)) continue;
+      std::error_code sec;
+      const fs::file_status st = it->symlink_status(sec);
+      if (sec || !fs::is_regular_file(st)) continue;
+      trips.emplace_back(t, it->path());
+    }
+    if (trips.size() <= kTripFilesKept) return;
+    std::sort(trips.begin(), trips.end());
+    const std::size_t drop = trips.size() - kTripFilesKept;
+    for (std::size_t i = 0; i < drop; ++i) {
+      std::error_code rec;
+      fs::remove(trips[i].second, rec);
+    }
+  }
+
+ private:
 
   mutable std::mutex snapshot_mu_;
   mutable std::mutex trace_mu_;

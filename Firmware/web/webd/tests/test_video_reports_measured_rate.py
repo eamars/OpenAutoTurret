@@ -68,3 +68,14 @@ def test_requested_and_measured_are_separate_fields():
     assert {"fps", "fps_published", "frames_published"} <= reported
     assert VideoState().fps == 0.0 and VideoState().fps_published == 0.0, (
         "an idle source must claim neither a requested nor a delivered rate")
+
+
+def test_frame_stamps_stay_bounded_with_nobody_reading_the_rate():
+    """ADR-008 D6: only reading the rate trimmed the stamp lists, so with no page polling video
+    state webd kept every frame's stamp for as long as it ran (~5 MB a day at 15 fps)."""
+    src = _source()
+    for i in range(15 * 3600):                 # an hour at 15 fps, nobody asking
+        src._stamp("_recent", i / 15.0)
+        src._stamp("_arrived", i / 15.0)
+    assert len(src._recent) <= 15 * 20 + 1 and len(src._arrived) <= 15 * 20 + 1
+    assert abs(src.measured_fps(now=3600.0) - 15.0) < 0.5, "the 5 s rate must still read right"

@@ -256,3 +256,15 @@ def atomic_write_text(path: str, text: str, *, durable: bool = True) -> None:
         except OSError:
             pass
         raise
+    if durable:
+        # The rename is only durable once the directory is (ADR-008 D5: the station's supply is
+        # marginal). The file is already in place, so a directory that cannot be synced is not a
+        # failed write: it is left as it is, rather than raised after the fact.
+        try:
+            directory = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            pass

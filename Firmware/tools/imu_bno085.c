@@ -48,19 +48,33 @@ static void emit_tare(uint64_t rx_ns, int checkpoint) {
            checkpoint ? ",\"checkpoint\":true" : "");
     ++output_lines;
 }
+// A failed flush or truncate (a full tmpfs) is a transient: retention is retried 256 lines later and
+// said once per episode. Until 2026-11-10 one failure switched retention off for good, after which
+// the trace grew without a bound for the rest of the process (ADR-008 D5). Only a stdout that is
+// not a regular file at all (a pipe, a terminal) gives retention up.
+static int retention_failing = 0;
+static void retention_retry_later(const char *what) {
+    if (!retention_failing)
+        fprintf(stderr,"IMU trace retention: %s failed (%s); retrying\n",what,strerror(errno));
+    retention_failing = 1;
+    clearerr(stdout);
+    output_lines = retain_lines > 256 ? retain_lines - 256 : 0;
+}
 static void maybe_rotate_trace(void) {
     if (!continuous_mode || retain_lines == 0 || output_lines < retain_lines) return;
     struct stat st;
-    if (fflush(stdout) != 0 || fstat(STDOUT_FILENO, &st) != 0 || !S_ISREG(st.st_mode)) {
+    if (fstat(STDOUT_FILENO, &st) != 0 || !S_ISREG(st.st_mode)) {
         fprintf(stderr,"IMU trace retention disabled: stdout is not a seekable regular file\n");
         retain_lines = 0;
         return;
     }
+    if (fflush(stdout) != 0) { retention_retry_later("flush"); return; }
     if (ftruncate(STDOUT_FILENO, 0) != 0 || lseek(STDOUT_FILENO, 0, SEEK_SET) < 0) {
-        fprintf(stderr,"IMU trace retention failed: %s\n",strerror(errno));
-        retain_lines = 0;
+        retention_retry_later("truncate");
         return;
     }
+    if (retention_failing) fprintf(stderr,"IMU trace retention: recovered\n");
+    retention_failing = 0;
     clearerr(stdout);
     output_lines = 0;
     printf("{\"kind\":\"trace_reset\",\"rx_ns\":%" PRIu64 ",\"generation\":%u,\"reason\":\"retained_lines\",\"tare_invalidated\":false}\n",

@@ -64,8 +64,8 @@ void VisionIngest::stop() {
     std::lock_guard<std::mutex> lk(clients_mu_);
     for (int fd : client_fds_) ::shutdown(fd, SHUT_RDWR);
   }
-  for (auto& t : client_threads_) {
-    if (t.joinable()) t.join();
+  for (auto& c : client_threads_) {
+    if (c.thread.joinable()) c.thread.join();
   }
   {
     std::lock_guard<std::mutex> lk(clients_mu_);
@@ -74,9 +74,26 @@ void VisionIngest::stop() {
   }
 }
 
+// Join and forget the readers that have finished (ADR-008 D6), so each visiond
+// restart does not leave a thread behind for the process lifetime. Joining
+// under clients_mu_ is safe, unlike in stop(): a finished reader released the
+// mutex before it set `done`, so the join waits only for the thread's exit.
+void VisionIngest::reap_finished_clients() {
+  std::lock_guard<std::mutex> lk(clients_mu_);
+  for (auto it = client_threads_.begin(); it != client_threads_.end();) {
+    if (it->done->load()) {
+      if (it->thread.joinable()) it->thread.join();
+      it = client_threads_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 void VisionIngest::accept_loop() {
   apply_thread_class("vision-accept", ThreadClass::Normal);
   while (running_.load()) {
+    reap_finished_clients();
     pollfd pfd{listen_fd_, POLLIN, 0};
     int pr = ::poll(&pfd, 1, 100);  // 100 ms so stop() is observed promptly
     if (pr < 0) {
@@ -97,10 +114,25 @@ void VisionIngest::accept_loop() {
         ::close(cfd);
         continue;
       }
-      client_fds_.push_back(cfd);
-      if (link_) link_->note_client_added();
-      client_threads_.emplace_back(
-          std::thread([this, cfd] { client_loop(cfd); }));
+      // Room first, so that once the thread exists, storing it cannot throw
+      // (a joinable std::thread destroyed unjoined terminates the process).
+      // A thread that cannot be created drops this publisher, not controld.
+      try {
+        client_fds_.reserve(client_fds_.size() + 1);
+        client_threads_.reserve(client_threads_.size() + 1);
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        std::thread t([this, cfd, done] {
+          client_loop(cfd);
+          done->store(true);
+        });
+        client_fds_.push_back(cfd);
+        if (link_) link_->note_client_added();
+        client_threads_.push_back(ClientThread{std::move(t), std::move(done)});
+      } catch (const std::exception& e) {
+        spdlog::warn("vision ingest: publisher dropped, no thread for it: {}",
+                     e.what());
+        ::close(cfd);
+      }
     }
   }
 }

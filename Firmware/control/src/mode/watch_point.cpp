@@ -1,5 +1,7 @@
 #include "mode/watch_point.hpp"
 
+#include "common/durable_file.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -61,20 +63,8 @@ bool load_watch_point(const std::string& path, WatchPoint& out, std::string& err
 }
 
 bool save_watch_point(const std::string& path, const WatchPoint& w, std::string& err) {
-  const std::string tmp = path + ".tmp";
-  {
-    std::ofstream f(tmp, std::ios::trunc);
-    if (!f) { err = "cannot open " + tmp + " for writing"; return false; }
-    f << watch_point_to_json(w);
-    f.flush();
-    if (!f.good()) { err = "write failed for " + tmp; return false; }
-  }
-  if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-    err = "rename " + tmp + " -> " + path + " failed";
-    return false;
-  }
-  err.clear();
-  return true;
+  // Durable (ADR-008 D5): runs on WatchPointStore's writer thread, never the control thread.
+  return write_file_durably(path, watch_point_to_json(w), err);
 }
 
 WatchPointStore::WatchPointStore(std::string path) : path_(std::move(path)) {

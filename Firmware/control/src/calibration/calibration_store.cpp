@@ -15,6 +15,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "calibration/camera_calibration.hpp"
+#include "common/durable_file.hpp"
 #include "position_loop.hpp"
 #include "servo.hpp"
 #include "servo_config.hpp"
@@ -285,18 +286,9 @@ std::string records_json(const std::vector<Record>& records) {
 namespace {
 // Temp file, flushed to the disk, then renamed over: a reader never sees half a file, and a power
 // cut never leaves an empty one (the WSL crash of 2026-10-24 showed what unflushed writes become).
+// The directory is synced as well, so the rename itself survives a power cut (ADR-008 D5).
 bool write_file(const fs::path& final, const std::string& text, std::string& err) {
-  const fs::path tmp = final.string() + ".tmp";
-  std::FILE* f = std::fopen(tmp.string().c_str(), "wb");
-  if (f == nullptr) { err = "cannot write " + tmp.string(); return false; }
-  const bool ok = std::fwrite(text.data(), 1, text.size(), f) == text.size() && std::fflush(f) == 0 &&
-                  ::fsync(fileno(f)) == 0;
-  std::fclose(f);
-  if (!ok) { err = "cannot write " + tmp.string(); return false; }
-  std::error_code ec;
-  fs::rename(tmp, final, ec);
-  if (ec) { err = "cannot replace " + final.string() + ": " + ec.message(); return false; }
-  return true;
+  return ota::write_file_durably(final.string(), text, err);
 }
 
 bool json_number(const std::string& s) {

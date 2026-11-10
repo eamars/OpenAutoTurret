@@ -1,5 +1,7 @@
 #include "mode/target_type.hpp"
 
+#include "common/durable_file.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -102,20 +104,11 @@ void TargetTypeStore::run() {
       const TargetType t = *pending_;
       pending_.reset();
       lk.unlock();
-      const std::string tmp = path_ + ".tmp";
-      bool ok = false;
-      {
-        std::ofstream f(tmp, std::ios::trunc);
-        if (f) {
-          f << target_type_to_json(t);
-          f.flush();
-          ok = f.good();
-        }
-      }
-      ok = ok && std::rename(tmp.c_str(), path_.c_str()) == 0;
+      std::string err;
+      const bool ok = write_file_durably(path_, target_type_to_json(t), err);  // ADR-008 D5
       last_result_.store(ok ? 1 : 0);
       if (ok) spdlog::info("target type {} saved to {}", target_type_name(t), path_);
-      else spdlog::error("target type {} NOT saved to {}; it holds for this session only", target_type_name(t), path_);
+      else spdlog::error("target type {} NOT saved to {} ({}); it holds for this session only", target_type_name(t), path_, err);
       lk.lock();
       continue;  // a save queued during the write runs before stopping
     }

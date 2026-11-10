@@ -30,6 +30,50 @@ it found (`--start-state homed|shutdown` overrides). `--sim` still homes at star
 `start` returns after the children are launched, **not** after readiness — a station that is up and a
 station that is ready are different claims, and the difference is tens of seconds of homing.
 
+## When a process dies (ADR-008, 2026-11-10)
+
+In normal operation (hardware or `--sim`, no `--frames`) the launcher supervises:
+
+| Process | If it exits |
+|---|---|
+| **controld** | The stack stops as before (the rest are stopped, controld has parked if it could) and the launcher exits **1**. The boot service then restarts it after 10 s, in **SHUTDOWN** (owner, 2026-11-10). |
+| **visiond, webd, calibd, the IMU capture** | Started again by the launcher after 1, 2, 4 … s, capped at 60 s, reset by 10 minutes up; never given up on. controld keeps running and the station **stays homed**. The page's STOP is away for the seconds webd takes to return; `stop` over SSH is not. |
+
+- `launcher.log` (or the user journal under the boot service) and the service's own log say
+  `<name> exited (<status>) after N s; restart K in D s`.
+- A stop someone asked for (`stop`, a deploy, `systemctl --user stop`, a signal) exits 0 and is not
+  restarted.
+- A launcher killed outright leaves its children running. `stop` finds them in `$RUN/children` and
+  stops them, controld first, so it parks. The boot service's ExecStop does this before systemd
+  restarts the unit.
+- Commissioning, captures and perception-only runs are not supervised: a child that ends ends the
+  run, as before.
+
+**Evidence that survives a reboot:** `run/evidence/<utc>-<cause>/` beside `run/state`, on the SD
+card. It holds the cause, the exit status, the last MiB of each log that matters, and the journal
+tail under the boot service. One bundle is written per controld exit, and per service restart at
+most once per 10 minutes per service. The newest 20 are kept, 200 MiB at most.
+
+**Storage budgets in the run dir (a tmpfs, i.e. RAM).** Each log is capped in place: copied to
+`<name>.1`, then truncated, every 10 s if needed.
+
+| File | Cap (×2 with `.1`) |
+|---|---|
+| `controller.log` | 64 MiB |
+| `vision.log` | 16 MiB |
+| other logs | 8 MiB |
+| `resources.ndjson` | 4 MiB |
+
+- `logs-history/` keeps 10 rounds and at most 256 MiB.
+- The run dir as a whole has a budget of 768 MiB. Over it, history goes first, then the `.1` parts.
+- `OTA_LOG_CAP_BYTES`, `OTA_HISTORY_BUDGET_BYTES` and `OTA_RUN_BUDGET_BYTES` override the budgets
+  for a test.
+
+**Resources:** `status` prints `resources.json`, the latest of a once-a-minute record. It holds each
+process's RSS, threads, open files, uptime, restarts and last exit, plus the run dir's size and the
+free space in RAM and on the SD card. `resources.ndjson` keeps the history. A count of restarts that
+keeps rising, or an RSS that keeps climbing, is the early warning that the 2026-11-10 stop lacked.
+
 ## What it proves
 
 `stop` printing a clean result proves the launcher's stop path ran: motion cancelled, axes brought

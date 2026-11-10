@@ -864,8 +864,7 @@ class ControlLoop {
   double pitch_test_q_ = 0.0;
   double servo_jerk_[kAxisCount] = {0.0, 0.0};
   std::shared_ptr<spdlog::logger> tracking_trace_;  // OTA_TRACKING_TRACE: one JSON line per core tick
-  void trace_core_tick(const track::TickRecord& r, TimeNs now_ns);
-  unsigned tracking_log_cycle_ = 0;
+  void trace_core_tick(const track::TickRecord& r, TimeNs now_ns, const AxisSnapshot sp[kAxisCount]);
   std::optional<bool> search_override_;  // enable_search / disable_search
   // v3 §53: converts the authoritative mode's intent into a joint reference.
   // Built from the commissioned kinematics when a tracking session is configured

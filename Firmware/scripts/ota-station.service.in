@@ -17,7 +17,17 @@ ExecStart=@ROOT@/run/current/Firmware/scripts/station_boot.sh
 ExecStop=@ROOT@/run/current/Firmware/scripts/run_application.sh stop
 KillMode=mixed
 TimeoutStopSec=150
-Restart=no
+# ADR-008 D4 (owner, 2026-11-10): a crashed stack comes back by itself, in SHUTDOWN -- web and camera
+# up, motors off until HOME, as at boot. The launcher exits 0 for every stop someone asked for (its
+# stop, a deploy, systemctl) and 1 when controld exited or the cause is unknown; a launcher killed
+# outright is a signal. Only the last two restart. ExecStop runs first in every case, and it stops
+# any children an outright-killed launcher left behind (controld first, so it parks).
+# A failure that will not clear by itself (a stray controld, a locked CAN bus) is retried for as
+# long as it lasts, but backs off: 10 s, then growing to 5 minutes between attempts (systemd 254+).
+Restart=on-failure
+RestartSec=10
+RestartSteps=5
+RestartMaxDelaySec=300
 
 [Install]
 WantedBy=default.target

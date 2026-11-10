@@ -56,6 +56,12 @@ class AliasMap:
     #: a resolver loop, and the resolver is the thing under test.
     MAX_CHAIN = 16
 
+    #: The newest merges kept (ADR-008 D6). A session lasts as long as visiond runs -- 10.5 days on
+    #: 2026-11-10, with 301 merges -- so "for the rest of the session" had no bound. 1024 is about a
+    #: month of merges at that rate; nobody's click or selection still names an identity that
+    #: merged away a month ago.
+    MAX_ALIASES = 1024
+
     def __init__(self) -> None:
         self._map: Dict[str, AliasRecord] = {}
 
@@ -77,7 +83,10 @@ class AliasMap:
         record = AliasRecord(retired_uuid=retired_uuid, survivor_uuid=survivor_uuid,
                              reason=reason, sensor_timestamp_ns=int(sensor_timestamp_ns),
                              frame_sequence=int(frame_sequence))
+        self._map.pop(retired_uuid, None)          # re-added: it becomes the newest
         self._map[retired_uuid] = record
+        while len(self._map) > self.MAX_ALIASES:   # dicts keep insertion order: oldest first
+            del self._map[next(iter(self._map))]
         return record
 
     # -- queries ------------------------------------------------------------

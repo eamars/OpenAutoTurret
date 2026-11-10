@@ -826,6 +826,47 @@ TEST(WebServer, CleanStop) {
   server2.stop();
 }
 
+// ADR-008 D6: a webd that reconnects must not leave one thread per connection
+// behind. A finished client thread is joined by the accept thread; a live one
+// is left alone and keeps being served.
+TEST(WebServer, FinishedClientThreadsAreReapedAndLiveOnesKept) {
+  WebServer::Config cfg;
+  cfg.socket_path = "/tmp/ota_web_test_reap.sock";
+  cfg.telemetry_hz = 50;
+  cfg.max_clients = 4;
+  WebServer server(cfg, [] { return telemetry::TelemetrySnapshot{}; },
+                   [](const std::string&, const std::string&) {
+                     CommandResult r;
+                     r.ok = true;
+                     return r;
+                   });
+  std::string err;
+  ASSERT_TRUE(server.start(err)) << err;
+  auto wait_until = [](auto pred) {
+    for (int i = 0; i < 300 && !pred(); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return pred();
+  };
+  const int live = connect_client(cfg.socket_path);
+  ASSERT_TRUE(wait_until([&] { return server.connected_clients() == 1; }));
+  const int kCycles = 25;
+  for (int i = 0; i < kCycles; ++i) {
+    const int fd = connect_client(cfg.socket_path);
+    ASSERT_TRUE(wait_until([&] { return server.connected_clients() == 2; })) << i;
+    ::close(fd);
+    ASSERT_TRUE(wait_until([&] { return server.connected_clients() == 1; })) << i;
+    EXPECT_LE(server.client_thread_count(), 3u) << i;
+  }
+  EXPECT_TRUE(wait_until([&] { return server.client_thread_count() == 1; }))
+      << server.client_thread_count() << " threads after " << kCycles
+      << " reconnects";
+  std::string msg;
+  EXPECT_TRUE(read_message(live, msg)) << "the live client must still be served";
+  ::close(live);
+  server.stop();
+  EXPECT_EQ(server.client_thread_count(), 0u);
+}
+
 // --- structural validity of the telemetry line -------------------------------
 //
 // json_balanced above proves nesting. It cannot see the two mistakes a hand-written emitter actually

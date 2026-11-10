@@ -58,11 +58,50 @@ stopped_status() {
     echo 'Stopped (last park outcome unavailable)'
   fi
 }
+# ADR-008 section 8: a launcher killed outright (SIGKILL, OOM) runs no cleanup, and its children --
+# controld still holding both CAN buses and the motion lock -- outlive it. $RUN/children names them
+# (name, pid, start time; rewritten at every start and restart), so a stop can still bring them down
+# in the launcher's order: controld first, which parks, then the rest. The boot service's ExecStop is
+# a stop, so systemd does this before it restarts the unit.
+stop_orphans() {
+  [ -r "$RUN/children" ] || return 1
+  local name pid start ctl='' others=() p attempt alive
+  while read -r name pid start; do
+    [[ "$pid" =~ ^[0-9]+$ && "$start" =~ ^[0-9]+$ ]] || continue
+    [ -r "/proc/$pid/stat" ] && [ "$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)" = "$start" ] || continue
+    if [ "$name" = controld ]; then ctl="$pid"; else others+=("$pid"); fi
+  done < "$RUN/children"
+  [ -n "$ctl" ] || [ "${#others[@]}" -gt 0 ] || return 1
+  echo "The launcher is gone but its children are not (controld ${ctl:-gone}, ${#others[@]} other); stopping them, controld first."
+  printf 'cause=orphan_stop utc=%s controld=%s others=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "${ctl:-none}" "${others[*]:-none}" > "$RUN/shutdown.cause" 2>/dev/null || true
+  if [ -n "$ctl" ]; then
+    kill -TERM "$ctl" 2>/dev/null || true
+    for ((attempt=0; attempt<120; attempt++)); do kill -0 "$ctl" 2>/dev/null || break; sleep 1; done
+  fi
+  for p in "${others[@]}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for ((attempt=0; attempt<50; attempt++)); do
+    alive=0; for p in "${others[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
+    [ "$alive" = 1 ] || break; sleep 0.1
+  done
+  for p in "${others[@]}"; do kill -KILL "$p" 2>/dev/null || true; done
+  if [ -n "$ctl" ] && kill -0 "$ctl" 2>/dev/null; then
+    echo "Stopped: controld did not exit within 120 s of TERM; it is still running ($ctl)" > "$RUN/shutdown.result"
+  elif grep -Fq 'SHUT DOWN (pitch released on its rest stop' "$RUN/controller.log" 2>/dev/null; then
+    echo 'Stopped: SHUT DOWN (pitch on its rest stop, yaw at 0, both motors off; orphaned stack)' > "$RUN/shutdown.result"
+  else
+    { echo 'Stopped: orphaned stack stopped; park not confirmed'; tail -n 8 "$RUN/controller.log" 2>/dev/null; } > "$RUN/shutdown.result"
+  fi
+  rm -f -- "$RUN/children" "$RUN/launcher.pid" "$RUN/started" "$RUN/web.port"
+  return 0
+}
 if [ "$ACTION" = status ]; then
   if owned_launcher; then
     echo "Running (launcher $launcher_pid); checkout: $(readlink "/proc/$launcher_pid/cwd")"
     [ ! -r "$RUN/stack.info" ] || cat "$RUN/stack.info"
     echo "Logs: $RUN/{launcher,controller,vision,web}.log"
+    # ADR-008 D6: what each process holds and how often it has been restarted, once a minute.
+    [ ! -r "$RUN/resources.json" ] || { echo "Resources: $(cat "$RUN/resources.json")"; }
     # Process ownership is not motor readiness. Query the active stack's port,
     # not an environment override belonging to this status caller.
     if [ -r "$RUN/web.port" ]; then
@@ -76,7 +115,10 @@ if [ "$ACTION" = status ]; then
   exit 0
 fi
 if [ "$ACTION" = stop ]; then
-  if ! owned_launcher; then echo 'Already stopped'; stopped_status; exit 0; fi
+  if ! owned_launcher; then
+    if stop_orphans; then stopped_status; exit 0; fi
+    echo 'Already stopped'; stopped_status; exit 0
+  fi
   # An operator stop leaves a credential, so the launcher can later tell "someone
   # asked for this" apart from "a child died and cleanup followed". Without it a
   # clean-looking stop is unattributable, and /tmp logs get truncated on restart.
@@ -320,8 +362,10 @@ if [ "$ACTION" = start ]; then
     mkdir -p "$previous_log_dir"
     mv -- "$RUN/launcher.log" "$previous_log_dir/launcher.log"
   fi
+  # Append (ADR-008 D5): the launcher's housekeeping truncates its logs in place, and a writer
+  # without O_APPEND would carry on at its old offset into a hole.
   nohup setsid bash "$APP/scripts/run_application.sh" run "${options[@]}" \
-    >"$RUN/launcher.log" 2>&1 < /dev/null 11>&- &
+    >>"$RUN/launcher.log" 2>&1 < /dev/null 11>&- &
   child=$!
   for ((attempt=0; attempt<200; attempt++)); do
     if owned_launcher && [ -r "$RUN/started" ] &&
@@ -364,7 +408,7 @@ rotate_stack_logs() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   src="$RUN/logs-history/$stamp-launcher$$"
   mkdir -p "$src" || return 0
-  for f in "$RUN"/*.log "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
+  for f in "$RUN"/*.log "$RUN"/*.log.1 "$RUN"/shutdown.result "$RUN"/shutdown.cause "$RUN"/stack.info; do
     # start has already opened this run's launcher.log. Moving that inode makes
     # status/startup failure reporting point at a missing file for the whole run.
     if [ "$f" = "$RUN/launcher.log" ] && { [ "$f" -ef "/proc/$$/fd/1" ] || [ "$f" -ef "/proc/$$/fd/2" ]; }; then continue; fi
@@ -381,6 +425,64 @@ rotate_stack_logs() {
     ls -1dt */ 2>/dev/null | tail -n +"$((keep + 1))" | while IFS= read -r old; do
       rm -rf -- "$old" || true
     done ) || true
+  prune_history_bytes "$HISTORY_BUDGET_BYTES"
+}
+# ADR-008 D5: every byte the running stack writes has a budget. $RUN is a tmpfs, i.e. RAM: on
+# 2026-11-10 controller.log alone had reached 833 MB in 10.5 days, with nothing to stop it. Each log
+# is capped in place (copytruncate: the file is copied to <name>.1, then truncated; every writer
+# opens it O_APPEND, so it carries on at the new end), logs-history has a byte budget as well as its
+# count, and the whole run dir has a backstop. OTA_LOG_CAP_BYTES overrides every log cap (the
+# ADR-008 S3 proof runs at 1 MiB).
+MIB=1048576
+HISTORY_BUDGET_BYTES="${OTA_HISTORY_BUDGET_BYTES:-$((256 * MIB))}"
+RUN_BUDGET_BYTES="${OTA_RUN_BUDGET_BYTES:-$((768 * MIB))}"
+log_cap() {
+  if [ -n "${OTA_LOG_CAP_BYTES:-}" ]; then echo "$OTA_LOG_CAP_BYTES"; return; fi
+  case "$1" in
+    controller.log) echo $((64 * MIB)) ;;
+    vision.log) echo $((16 * MIB)) ;;
+    resources.ndjson) echo $((4 * MIB)) ;;
+    *) echo $((8 * MIB)) ;;
+  esac
+}
+cap_file() {
+  local f="$1" cap size
+  cap="$(log_cap "$(basename -- "$f")")"
+  size="$(stat -c %s -- "$f" 2>/dev/null)" || return 0
+  [ "$size" -gt "$cap" ] || return 0
+  cp -f -- "$f" "$f.1" 2>/dev/null || return 0
+  : > "$f" 2>/dev/null || return 0
+  printf '[%s] launcher: rotated at %s bytes (cap %s); the previous part is %s.1\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$size" "$cap" "$(basename -- "$f")" >> "$f" 2>/dev/null || true
+}
+# Exactly one number: du exits non-zero when a file vanishes mid-scan, yet still prints its total.
+dir_bytes() {
+  local v
+  v="$(du -sb -- "$1" 2>/dev/null | cut -f1 | head -n 1)" || true
+  [[ "$v" =~ ^[0-9]+$ ]] || v=0
+  echo "$v"
+}
+prune_history_bytes() {
+  local budget="$1" oldest
+  [ -d "$RUN/logs-history" ] || return 0
+  while [ "$(dir_bytes "$RUN/logs-history")" -gt "$budget" ]; do
+    oldest="$(cd "$RUN/logs-history" 2>/dev/null && ls -1dtr */ 2>/dev/null | head -n 1)" || oldest=''
+    [ -n "$oldest" ] || break
+    rm -rf -- "$RUN/logs-history/${oldest%/}" 2>/dev/null || break
+  done
+}
+# Once per housekeeping tick (10 s): cap the logs, keep logs-history inside its budget, and if the
+# run dir as a whole is still over its own, give up history first and then the .1 parts.
+housekeeping() {
+  local f
+  for f in "$RUN"/*.log "$RUN"/resources.ndjson; do [ -f "$f" ] && cap_file "$f"; done
+  prune_history_bytes "$HISTORY_BUDGET_BYTES"
+  if [ "$(dir_bytes "$RUN")" -gt "$RUN_BUDGET_BYTES" ]; then
+    echo "launcher: run dir over its $RUN_BUDGET_BYTES-byte budget; dropping log history, then .1 parts"
+    prune_history_bytes 0
+    [ "$(dir_bytes "$RUN")" -gt "$RUN_BUDGET_BYTES" ] && rm -f -- "$RUN"/*.log.1 "$RUN"/resources.ndjson.1
+  fi
+  return 0
 }
 rotate_stack_logs 10
 children=()
@@ -391,6 +493,140 @@ cause_signal=''
 first_child_status=''
 exited_pid=''
 exited_name=''
+# A child is registered once per process: a restart replaces its predecessor's pid, so neither
+# children nor child_name grows with the number of restarts (ADR-008 I1, the launcher included).
+register_child() {
+  local name="$1" pid="$2" old kept=()
+  for old in "${children[@]}"; do
+    [ "${child_name[$old]:-}" = "$name" ] && { unset "child_name[$old]"; continue; }
+    kept+=("$old")
+  done
+  children=("${kept[@]}" "$pid")
+  child_name[$pid]="$name"
+  write_children
+}
+# $RUN/children: name, pid and kernel start time of each child, for a stop that finds the launcher
+# gone (stop_orphans). Written whole and renamed, so a reader never sees half of it.
+children_written=0
+write_children() {
+  local pid
+  children_written=1
+  { for pid in "${children[@]}"; do
+      printf '%s %s %s\n' "${child_name[$pid]:-unknown}" "$pid" \
+        "$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || echo 0)"
+    done; } > "$RUN/children.tmp" 2>/dev/null && mv -f -- "$RUN/children.tmp" "$RUN/children" 2>/dev/null || true
+}
+# The services (ADR-008 D2): each started by one function, so a restart runs exactly the first
+# start's command. Logs are opened O_APPEND (D5), and a restart appends to the same log.
+launch_webd() {
+  "${web_sched[@]}" "$PY" -m web.webd.app >>"$RUN/web.log" 2>&1 &
+  web_pid=$!; register_child webd "$web_pid"
+}
+# ADR-005 D7: calibd, idle until the page starts a calibration run; controld runs the sessions and
+# calibd fits and designs between them. Low priority: a calibd that dies moves nothing, and controld
+# ends a run that hears nothing from it for 15 s.
+launch_calibd() {
+  OTA_SERVO_SIM="$APP/build/axis_control_core/servo-sim" nice -n 10 \
+    "$PY" "$APP/tools/servo_commission/calibd.py" >>"$RUN/calibd.log" 2>&1 &
+  calibd_pid=$!; register_child calibd "$calibd_pid"
+}
+launch_visiond() {
+  "${vision_sched[@]}" "$PY" -m perception.visiond "${vision_args[@]}" >>"$RUN/vision.log" 2>&1 &
+  vision_pid=$!; register_child visiond "$vision_pid"
+}
+# The continuous IMU capture. Its trace is truncated at each (re)start; it trims itself after that.
+# In normal operation imu_pid and imu_shadow_pid name the same process (cleanup keeps the IMU alive
+# through the controller's stop by imu_pid); a restart moves both.
+launch_imu() {
+  "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 "${imu_reset_args[@]}" \
+    >"$RUN/imu.ndjson" 2>>"$RUN/imu.log" &
+  local old="${imu_shadow_pid:-}"
+  imu_shadow_pid=$!; register_child imu-bno085 "$imu_shadow_pid"
+  if [ -n "$old" ] && [ "${imu_pid:-}" = "$old" ]; then imu_pid="$imu_shadow_pid"; fi
+}
+launch_service() {
+  case "$1" in
+    webd) launch_webd ;; calibd) launch_calibd ;; visiond) launch_visiond ;; imu-bno085) launch_imu ;;
+    *) return 1 ;;
+  esac
+}
+# ADR-008 D2: supervision, with restarts, in normal operation only -- the station and its simulation,
+# not a finite capture (--frames) and not a commissioning or perception-only run, whose children
+# end their own stack as before.
+SUPERVISE=0
+if { [ "$MODE" = hardware ] || [ "$MODE" = sim ]; } && [ "$FRAMES" = 0 ]; then SUPERVISE=1; fi
+declare -A svc_pid=() svc_started=() svc_restarts=() svc_delay=() svc_due=() svc_last_exit=() svc_evidence_at=()
+# ADR-008 D5: crash evidence on the SD card, beside run/state, because the run dir is RAM and a
+# reboot takes it. A bundle is the cause and the last MiB of each log that matters; the newest 20
+# are kept, 200 MiB at most.
+evidence_dir() {
+  if [ -n "${OTA_EVIDENCE_DIR:-}" ]; then echo "$OTA_EVIDENCE_DIR"; return; fi
+  local state; state="$(readlink -f -- "${OTA_STATE_DIR:-$RUN/state}" 2>/dev/null)" || state="$RUN/state"
+  echo "$(dirname -- "$state")/evidence"
+}
+write_evidence() {
+  local cause="$1" dir d f old
+  shift
+  dir="$(evidence_dir)"
+  d="$dir/$(date -u +%Y%m%dT%H%M%SZ)-$cause"
+  mkdir -p -- "$d" 2>/dev/null || return 0
+  for f in "$RUN/shutdown.cause" "$RUN/shutdown.result" "$RUN/launcher.log" "$RUN/resources.json" "$@"; do
+    [ -f "$f" ] && tail -c "$MIB" -- "$f" > "$d/$(basename -- "$f")" 2>/dev/null
+  done
+  # Under the boot service the launcher's own output is the user journal, not launcher.log.
+  if [ -n "${INVOCATION_ID:-}" ] && command -v journalctl >/dev/null 2>&1; then
+    journalctl --user -u ota-station.service -n 300 --no-pager > "$d/launcher.journal" 2>/dev/null || true
+  fi
+  printf 'cause=%s utc=%s launcher=%s uptime_s=%s release=%s\n' "$cause" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$SECONDS" "$APP" > "$d/what.txt" 2>/dev/null || true
+  # The newest 10 of each cause, so a flapping service cannot push a controld crash's evidence out;
+  # then 200 MiB in all, oldest first. A delete that fails ends the pruning, never loops on it.
+  ( cd -- "$dir" 2>/dev/null || exit 0
+    ls -1dt -- */ 2>/dev/null | awk -F/ '{c=$1; sub(/^[0-9TZ]+-/, "", c); if (++n[c] > 10) print $1}' |
+      while IFS= read -r old; do rm -rf -- "$old" || break; done
+    while [ "$(dir_bytes .)" -gt $((200 * MIB)) ]; do
+      old="$(ls -1dtr -- */ 2>/dev/null | head -n 1)"; [ -n "$old" ] || break
+      rm -rf -- "${old%/}" || break
+    done ) || true
+  echo "launcher: evidence saved in $d"
+  return 0
+}
+# True when a bundle of this cause was written in the last 10 minutes: a stack that fails the same
+# way at every start (a stray controld, a locked CAN bus) is restarted by systemd for months, and
+# must not write megabytes to the SD card at each one.
+evidence_recent() {
+  local dir; dir="$(evidence_dir)"
+  [ -d "$dir" ] && find "$dir" -maxdepth 1 -type d -name "*-$1" -mmin -10 2>/dev/null | grep -q .
+}
+# ADR-008 D6: what every process holds, once a minute, so a leak is seen long before it bites.
+# resources.json is the latest (status prints it); resources.ndjson keeps the history, capped.
+proc_line() {
+  local name="$1" pid="$2" rss=0 thr=0 fds=0 up=0 restarts last
+  if [ -n "$pid" ] && [ -r "/proc/$pid/status" ]; then
+    rss="$(awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null)"; rss="${rss:-0}"
+    thr="$(awk '/^Threads:/ {print $2}' "/proc/$pid/status" 2>/dev/null)"; thr="${thr:-0}"
+    fds="$(ls -1 "/proc/$pid/fd" 2>/dev/null | wc -l)"
+  fi
+  up=$((SECONDS - ${svc_started[$name]:-0}))
+  restarts="${svc_restarts[$name]:-0}"; last="${svc_last_exit[$name]:-}"
+  printf '"%s":{"pid":%s,"rss_kb":%s,"threads":%s,"fds":%s,"up_s":%s,"restarts":%s,"last_exit":"%s"}' \
+    "$name" "${pid:-0}" "$rss" "$thr" "$fds" "$up" "$restarts" "$last"
+}
+write_resources() {
+  local line name sep=',' tmp_avail sd_avail
+  tmp_avail="$(df -B1 --output=avail -- "$RUN" 2>/dev/null | tail -n 1 | tr -d ' ')"
+  sd_avail="$(df -B1 --output=avail -- "$APP" 2>/dev/null | tail -n 1 | tr -d ' ')"
+  line="{\"utc\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"uptime_s\":$SECONDS,\"run_dir_bytes\":$(dir_bytes "$RUN"),"
+  line+="\"tmpfs_avail_bytes\":${tmp_avail:-0},\"sd_avail_bytes\":${sd_avail:-0},\"processes\":{"
+  line+="$(proc_line launcher "$$")$sep$(proc_line controld "${controller_pid:-}")"
+  for name in webd calibd visiond imu-bno085; do
+    [ -n "${svc_restarts[$name]+set}" ] || continue
+    line+="$sep$(proc_line "$name" "${svc_pid[$name]:-}")"
+  done
+  line+="}}"
+  printf '%s\n' "$line" > "$RUN/resources.json.tmp" 2>/dev/null && mv -f -- "$RUN/resources.json.tmp" "$RUN/resources.json" 2>/dev/null
+  printf '%s\n' "$line" >> "$RUN/resources.ndjson" 2>/dev/null || true
+}
 # wait -n reports a status but not the child it belongs to; record both while the
 # siblings are still alive to point at, i.e. before cleanup signals anyone.
 note_child_exit() {
@@ -412,6 +648,10 @@ describe_status() {
   else
     printf '%s' "$s"
   fi
+}
+# A stop request counts only if it names this launcher (ADR-008 review, 2026-11-10).
+stop_requested() {
+  [ -r "$RUN/stop.request" ] && grep -q "launcher=$$\( \|\$\)" "$RUN/stop.request" 2>/dev/null
 }
 stop_cause_line() {
   local reason="$1" operator=''
@@ -453,9 +693,19 @@ actuator_release() {
   echo "actuator: controld left the PWM on; the launcher $how"
 }
 cleanup() {
-  trap - EXIT INT TERM
+  # A second INT or TERM while the stack comes down is noted, not obeyed: with the default action
+  # it killed the launcher in the middle of the controlled stop, before the controller was told to
+  # park (GNU timeout sends TERM to the launcher and then to its group: two signals, ADR-008 dry
+  # run, 2026-11-10). A trap that only records is reset in every child, so nothing inherits it.
+  trap - EXIT
+  trap 'cause_signal="${cause_signal:-INT}"' INT
+  trap 'cause_signal="${cause_signal:-TERM}"' TERM
+  # Nothing in here may end the shell before the children are signalled and the controller has
+  # parked: a full tmpfs failing the write of shutdown.cause used to be enough, under errexit
+  # (ADR-008 D5).
+  set +e
   local reason
-  if [ -r "$RUN/stop.request" ]; then reason=operator_stop
+  if stop_requested; then reason=operator_stop
   elif [ -n "$exited_pid" ]; then reason=child_exit
   elif [ -n "$cause_signal" ]; then reason=external_signal
   else reason=unattributed; fi
@@ -486,9 +736,12 @@ cleanup() {
   done
   # Ask the exact owned controller child to run its own controlled shutdown.
   # Waiting without signaling it leaves the launcher stuck in cleanup.
+  # A trapped signal ends a wait early, with controld still parking (ADR-008 review, 2026-11-10):
+  # wait again until the process is really gone.
   if [ -n "$controller_pid" ]; then
     kill -TERM "$controller_pid" 2>/dev/null || true
     wait "$controller_pid" || true
+    while kill -0 "$controller_pid" 2>/dev/null; do wait "$controller_pid" || true; done
   fi
   actuator_release
   # Keep the single BNO085 owner alive through the controller's controlled
@@ -496,6 +749,7 @@ cleanup() {
   if [ -n "$imu_pid" ]; then
     kill -TERM "$imu_pid" 2>/dev/null || true
     wait "$imu_pid" || true
+    while kill -0 "$imu_pid" 2>/dev/null; do wait "$imu_pid" || true; done
   fi
   # If a commissioning child exited abnormally, its in-process guard cannot
   # send again. The launcher still owns the station lock here and requests a
@@ -547,11 +801,28 @@ cleanup() {
     wait "$pid" || true
   done
   rm -f -- "$RUN/launcher.pid" "$RUN/started" "$RUN/stack.info" "$RUN/web.port"
+  # Only the launcher that wrote the children record removes it: one that refused to start beside a
+  # stray controld must leave the record that lets stop find it (ADR-008 review, 2026-11-10).
+  [ "$children_written" != 1 ] || rm -f -- "$RUN/children"
+  # ADR-008 D4: the exit code carries the cause to the boot service, whose Restart=on-failure
+  # brings a crashed stack back in SHUTDOWN (owner, 2026-11-10). A stop someone asked for -- the
+  # launcher's stop, a deploy, systemctl, a signal -- is a success and is not restarted; a
+  # controller that exited, or a cause nobody can name, is a failure. Until 2026-11-10 every
+  # path ended 0 here, and the station stayed down after a crash.
+  if [ "$SUPERVISE" = 1 ]; then
+    case "$reason" in
+      operator_stop|external_signal) exit 0 ;;
+      *) evidence_recent "$reason" || write_evidence "$reason" "$RUN"/*.log; exit 1 ;;
+    esac
+  fi
 }
 trap cleanup EXIT
 trap 'cause_signal=INT; exit 130' INT
 trap 'cause_signal=TERM; exit 143' TERM
 rm -f -- "$RUN/shutdown.result"
+# A request addressed to an earlier launcher (a stop that arrived while that one was already in its
+# cleanup) must not make this one's crash look like an operator stop, and so not be restarted.
+rm -f -- "$RUN/stop.request"
 printf '%s %s\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" > "$RUN/launcher.pid"
 if [ "$MODE" = establish-homing ] || [ "$MODE" = control-yaw ]; then
   "$PY" "$APP/tools/adr0022_capture_launch.py" "$SESSION_MANIFEST" "--$MODE" >"$RUN/controller.log" 2>&1 &
@@ -774,8 +1045,10 @@ if { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; } && [
     echo 'Legacy IMU consumer still running; refusing BNO085 continuous capture.' >&2; exit 1
   fi
   export OTA_IMU_TRACE="$RUN/imu.ndjson"
-  "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 "${imu_reset_args[@]}" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-  imu_pid=$!; children+=("$imu_pid"); child_name[$imu_pid]=imu-bno085
+  launch_imu; imu_pid="$imu_shadow_pid"
+  # Commissioning waits on this IMU (its failure ends the session); only normal operation makes it
+  # observe-only, below.
+  [ "$MODE" = hardware ] || imu_shadow_pid=''
   # Commissioning requires a fresh host tare and same-generation game rotation sample before the
   # controller starts: there the IMU trace is evidence. Normal operation only waits for one, then
   # starts without it (below). The IMU residual remains observe-only either way.
@@ -832,8 +1105,7 @@ elif { [ "$MODE" = hardware ] || [ "$MODE" = mixed-controller-commission ]; }; t
       echo 'Legacy IMU consumer still running; the UI will report the IMU as not configured.' >&2
     else
       export OTA_IMU_TRACE="$RUN/imu.ndjson"
-      "${imu_sched[@]}" "$APP/build/imu-bno085" --continuous --retain-lines 4096 "${imu_reset_args[@]}" >"$RUN/imu.ndjson" 2>"$RUN/imu.log" &
-      imu_shadow_pid=$!; children+=("$imu_shadow_pid"); child_name[$imu_shadow_pid]=imu-bno085
+      launch_imu
       imu_shadow_ready=0
       for ((attempt=0; attempt<30; attempt++)); do
         kill -0 "$imu_shadow_pid" 2>/dev/null || break
@@ -862,7 +1134,7 @@ if ! "$PY" "$APP/tools/calibration_records.py" seed --state "$OTA_STATE_DIR" \
 else
   cat "$RUN/calibration-seed.log"
 fi
-"${control_sched[@]}" "$CONTROLD" "${controller_args[@]}" >"$RUN/controller.log" 2>&1 &
+"${control_sched[@]}" "$CONTROLD" "${controller_args[@]}" >>"$RUN/controller.log" 2>&1 &
 controller_pid=$!
 children+=("$controller_pid")
 child_name[$controller_pid]=controld
@@ -871,19 +1143,9 @@ else
   START_WEB=0
 fi
 if [ "$START_WEB" -eq 1 ]; then
-  "${web_sched[@]}" "$PY" -m web.webd.app >"$RUN/web.log" 2>&1 &
-  web_pid=$!
-  children+=("$web_pid")
-  child_name[$web_pid]=webd
+  launch_webd
   printf '%s\n' "$OTA_WEB_PORT" > "$RUN/web.port"
-  # ADR-005 D7: calibd, idle until the page starts a calibration run; controld runs the sessions and
-  # calibd fits and designs between them. Low priority, and not waited on (see the wait below): a
-  # calibd that dies moves nothing, and controld ends a run that hears nothing from it for 15 s.
-  OTA_SERVO_SIM="$APP/build/axis_control_core/servo-sim" nice -n 10 \
-    "$PY" "$APP/tools/servo_commission/calibd.py" >"$RUN/calibd.log" 2>&1 &
-  calibd_pid=$!
-  children+=("$calibd_pid")
-  child_name[$calibd_pid]=calibd
+  launch_calibd
 fi
 if [ "$MODE" != mixed-controller-commission ]; then
   if [ "$MODE" != perception ]; then
@@ -892,10 +1154,7 @@ if [ "$MODE" != mixed-controller-commission ]; then
     # (docs/operations/os-setup.md), and perception must not wait on it.
     vision_args+=(--controller-state-url "unix:$OTA_WEB_SOCKET")
   fi
-  "${vision_sched[@]}" "$PY" -m perception.visiond "${vision_args[@]}" >"$RUN/vision.log" 2>&1 &
-  vision_pid=$!
-  children+=("$vision_pid")
-  child_name[$vision_pid]=visiond
+  launch_visiond
 elif [ "$MODE" = mixed-controller-commission ]; then
   echo 'Mixed controller commissioning: vision and web are not started.'
 fi
@@ -903,15 +1162,121 @@ fi
 printf 'Mode: %s\nConfig: %s\nPython: %s\nChildren: %s\n' "$MODE" "${controller_args[0]}" "$PY" "${children[*]}" > "$RUN/stack.info"
 cp "$RUN/launcher.pid" "$RUN/started"
 echo "Stack logs: $RUN; web port: $OTA_WEB_PORT. Ctrl-C stops this stack."
-# A failed child or finite capture ends its own stack; unrelated processes are untouched.
-# The observe-only IMU and calibd are not among them: they sit in children so cleanup stops them,
-# but they are not waited on. Station, 2026-10-03 14:27:32: the BNO085 lost its I2C link, its process
-# exited, and this wait took the whole stack down with it (owner ruling 2026-10-02: losing a
-# display-only sensor is not even a HOLD).
+write_children
 first_child_status=0
-waited=()
+if [ "$SUPERVISE" != 1 ]; then
+  # A failed child or finite capture ends its own stack; unrelated processes are untouched.
+  # The observe-only IMU and calibd are not among them: they sit in children so cleanup stops them,
+  # but they are not waited on. Station, 2026-10-03 14:27:32: the BNO085 lost its I2C link, its
+  # process exited, and this wait took the whole stack down with it (owner ruling 2026-10-02: losing
+  # a display-only sensor is not even a HOLD).
+  waited=()
+  for pid in "${children[@]}"; do
+    [ "$pid" = "${imu_shadow_pid:-}" ] || [ "$pid" = "${calibd_pid:-}" ] || waited+=("$pid")
+  done
+  wait -n "${waited[@]}" || first_child_status=$?
+  note_child_exit
+  exit "$first_child_status"
+fi
+
+# ADR-008 D2: supervision. Only controld owns motor safety, so only its exit ends the stack. The
+# services -- visiond, webd, calibd, the observe-only IMU -- fail alone and are started again, with a
+# backoff of 1, 2, 4 ... s capped at 60 s, reset by 10 minutes up; never given up on. Station,
+# 2026-11-10 13:13: visiond died on one bad label, this wait stopped the whole station, and nothing
+# brought it back. controld meets each one going away as it already must: vision lost (its tracker
+# loses the target, a HOLD at most), a page that reconnects, a calibration run that fails. The
+# station stays homed through any of them.
+# A one-second ticker in the same wait drives the restarts, the housekeeping (10 s) and the resource
+# watch (60 s); wait -n -p (bash 5.1+) names whichever child ended.
 for pid in "${children[@]}"; do
-  [ "$pid" = "${imu_shadow_pid:-}" ] || [ "$pid" = "${calibd_pid:-}" ] || waited+=("$pid")
+  name="${child_name[$pid]:-}"
+  case "$name" in
+    webd|calibd|visiond) ;;
+    imu-bno085) [ -n "${OTA_IMU_TRACE:-}" ] && [ "$pid" = "${imu_shadow_pid:-}" ] || continue ;;
+    *) continue ;;
+  esac
+  svc_pid[$name]="$pid"; svc_started[$name]="$SECONDS"; svc_restarts[$name]=0; svc_delay[$name]=0
 done
-wait -n "${waited[@]}" || first_child_status=$?
-note_child_exit
+service_log() {
+  case "$1" in webd) echo "$RUN/web.log" ;; visiond) echo "$RUN/vision.log" ;;
+    calibd) echo "$RUN/calibd.log" ;; imu-bno085) echo "$RUN/imu.log" ;; esac
+}
+service_exited() {
+  local name="$1" status="$2" up delay log
+  up=$((SECONDS - ${svc_started[$name]}))
+  if [ "$up" -ge 600 ]; then delay=1
+  else delay=$((2 * ${svc_delay[$name]})); [ "$delay" -ge 1 ] || delay=1; [ "$delay" -le 60 ] || delay=60; fi
+  svc_delay[$name]="$delay"
+  svc_restarts[$name]=$((${svc_restarts[$name]} + 1))
+  svc_last_exit[$name]="$(describe_status "$status") at $(date -u +%Y-%m-%dT%H:%M:%SZ) after ${up}s"
+  svc_pid[$name]=''
+  svc_due[$name]=$((SECONDS + delay))
+  log="$(service_log "$name")"
+  echo "launcher: $name exited ($(describe_status "$status")) after ${up} s; restart ${svc_restarts[$name]} in ${delay} s"
+  printf '[%s] launcher: %s exited (%s) after %s s; restart %s in %s s\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+    "$name" "$(describe_status "$status")" "$up" "${svc_restarts[$name]}" "$delay" >> "$log" 2>/dev/null || true
+  # One evidence bundle per service per 10 minutes: enough for the why, and a service crash-looping
+  # at the 60 s cap does not write a megabyte a minute to the SD card.
+  if [ $((SECONDS - ${svc_evidence_at[$name]:--600})) -ge 600 ]; then
+    svc_evidence_at[$name]="$SECONDS"
+    write_evidence "restart-$name" "$log"
+  fi
+}
+restart_due_services() {
+  local name
+  for name in "${!svc_due[@]}"; do
+    [ "$SECONDS" -ge "${svc_due[$name]}" ] || continue
+    unset "svc_due[$name]"
+    launch_service "$name" || continue
+    svc_pid[$name]="${children[-1]}"      # register_child appends the new process last
+    svc_started[$name]="$SECONDS"
+    echo "launcher: $name started again (pid ${svc_pid[$name]}, restart ${svc_restarts[$name]})"
+    printf '[%s] launcher: %s started again (pid %s, restart %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+      "$name" "${svc_pid[$name]}" "${svc_restarts[$name]}" >> "$(service_log "$name")" 2>/dev/null || true
+  done
+}
+tick=0
+while :; do
+  sleep 1 &
+  ticker=$!
+  waitlist=("$ticker" "$controller_pid")
+  for name in "${!svc_pid[@]}"; do [ -z "${svc_pid[$name]}" ] || waitlist+=("${svc_pid[$name]}"); done
+  ended=''; status=0
+  wait -n -p ended "${waitlist[@]}" || status=$?
+  if [ "$ended" = "$ticker" ]; then
+    tick=$((tick + 1))
+    restart_due_services
+    if [ $((tick % 10)) -eq 0 ]; then
+      housekeeping
+      # Belt and braces for wait -n: a child that died while this shell was busy elsewhere is a
+      # zombie (state Z), which kill -0 cannot tell from a live one. Reap it here (ADR-008 review).
+      for name in "${!svc_pid[@]}" controld; do
+        if [ "$name" = controld ]; then pid="$controller_pid"; else pid="${svc_pid[$name]}"; fi
+        [ -n "$pid" ] || continue
+        pstate=''
+        { read -r _ _ pstate _ < "/proc/$pid/stat"; } 2>/dev/null || pstate=gone
+        [ "$pstate" = Z ] || [ "$pstate" = gone ] || continue
+        status=0; wait "$pid" 2>/dev/null || status=$?
+        if [ "$name" = controld ]; then
+          first_child_status="$status"; exited_pid="$pid"; exited_name=controld; break 2
+        fi
+        service_exited "$name" "$status"
+      done
+    fi
+    [ $((tick % 60)) -ne 0 ] || write_resources
+    continue
+  fi
+  kill "$ticker" 2>/dev/null || true; wait "$ticker" 2>/dev/null || true
+  # A signal ends the shell through its trap before control comes back here; a wait that returned
+  # without naming a child is taken as controld's exit only if controld is in fact gone.
+  if [ -z "$ended" ] && kill -0 "$controller_pid" 2>/dev/null; then continue; fi
+  if [ -z "$ended" ] || [ "$ended" = "$controller_pid" ]; then
+    first_child_status="$status"; exited_pid="${ended:-$controller_pid}"; exited_name=controld
+    break
+  fi
+  for name in "${!svc_pid[@]}"; do
+    if [ "${svc_pid[$name]}" = "$ended" ]; then service_exited "$name" "$status"; fi
+  done
+  write_resources
+done
+exit 1

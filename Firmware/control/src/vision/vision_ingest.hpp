@@ -157,9 +157,24 @@ class VisionIngest {
   bool running() const { return running_.load(); }
   const Config& config() const { return cfg_; }
 
+  // Reader threads not yet joined: the live ones plus any that finished since
+  // the accept thread last woke (ADR-008 D6).
+  std::size_t client_thread_count() const {
+    std::lock_guard<std::mutex> lk(clients_mu_);
+    return client_threads_.size();
+  }
+
  private:
+  // One per accepted connection. `done` is the reader's last write, so a
+  // thread whose flag is set has nothing left to do but exit.
+  struct ClientThread {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> done;
+  };
+
   void accept_loop();
   void client_loop(int cfd);
+  void reap_finished_clients();
 
   Config cfg_;
   VisionLink* link_ = nullptr;
@@ -169,9 +184,9 @@ class VisionIngest {
   std::thread accept_thread_;
   std::atomic<bool> running_{false};
 
-  std::mutex clients_mu_;  // guards client_fds_ / client_threads_
+  mutable std::mutex clients_mu_;  // guards client_fds_ / client_threads_
   std::vector<int> client_fds_;
-  std::vector<std::thread> client_threads_;
+  std::vector<ClientThread> client_threads_;
 };
 
 }  // namespace vision

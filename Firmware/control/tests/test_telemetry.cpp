@@ -213,6 +213,64 @@ TEST(Telemetry, AFrozenWindowAlsoReachesDiskAndSaysWhere) {
   EXPECT_FALSE(blocked.trace_archive_path(none));
 }
 
+TEST(Telemetry, OnlyTheNewestTripFilesAreKeptAndNothingElseIsTouched) {
+  // ADR-008 D5: one trip file per fault latch, with no limit on count, can fill the RAM-backed
+  // run dir of a station that latches over and over. The newest 50 stay; nothing that is not a
+  // trip file, and nothing reached through a symlink, is ever deleted.
+  namespace fs = std::filesystem;
+  const fs::path dir = "/tmp/ota_trace_prune_test_" + std::to_string(::getpid());
+  const fs::path outside = dir.string() + "_outside";
+  std::error_code ec;
+  fs::remove_all(dir, ec);
+  fs::remove_all(outside, ec);
+  fs::create_directories(dir);
+  fs::create_directories(outside);
+  const std::size_t kOld = Telemetry::kTripFilesKept + 9;
+  // Older by their monotonic name; numbers of different widths, so a string sort would be wrong.
+  for (std::size_t i = 0; i < kOld; ++i)
+    std::ofstream(dir / ("trip-" + std::to_string(5 + i * 997) + ".ndjson")) << "{}\n";
+  for (const char* keep : {"stop-evidence.ndjson", "trip-12x.ndjson", "trip-.ndjson", "trip-3.json",
+                           "notatrip-1.ndjson"})
+    std::ofstream(dir / keep) << "keep\n";
+  fs::create_directory(dir / "trip-1.ndjson");                  // a directory by that name
+  std::ofstream(outside / "trip-2.ndjson") << "outside\n";
+  fs::create_symlink(outside / "trip-2.ndjson", dir / "trip-2.ndjson");  // oldest name of all
+
+  Telemetry t;
+  t.set_trace_archive_dir(dir.string());
+  ControlLogRecord r;
+  r.timestamp_ns = 900000000000LL;  // newer than every planted name
+  r.phase = ota::Phase::Fault;
+  t.push_control(r);
+  t.freeze_control_trace();
+  t.wait_for_evidence();
+  std::string path;
+  ASSERT_TRUE(t.trace_archive_path(path));
+
+  std::size_t trips = 0;
+  uint64_t oldest = std::numeric_limits<uint64_t>::max();
+  for (const auto& e : fs::directory_iterator(dir)) {
+    uint64_t when = 0;
+    if (fs::is_regular_file(e.symlink_status()) &&
+        Telemetry::trip_file_time(e.path().filename().string(), when)) {
+      ++trips;
+      oldest = std::min(oldest, when);
+    }
+  }
+  EXPECT_EQ(trips, Telemetry::kTripFilesKept);
+  EXPECT_TRUE(fs::exists(path)) << "the file just written is the newest and stays";
+  // 59 planted + 1 new = 60, so the 10 oldest planted ones went.
+  EXPECT_EQ(oldest, 5u + 10u * 997u);
+  for (const char* keep : {"stop-evidence.ndjson", "trip-12x.ndjson", "trip-.ndjson", "trip-3.json",
+                           "notatrip-1.ndjson"})
+    EXPECT_TRUE(fs::exists(dir / keep)) << keep;
+  EXPECT_TRUE(fs::is_directory(dir / "trip-1.ndjson"));
+  EXPECT_TRUE(fs::is_symlink(dir / "trip-2.ndjson"));
+  EXPECT_TRUE(fs::exists(outside / "trip-2.ndjson")) << "a symlink's target is never deleted";
+  fs::remove_all(dir, ec);
+  fs::remove_all(outside, ec);
+}
+
 TEST(Telemetry, SnapshotIsOverwrittenEachCycle) {
   Telemetry t;
   TelemetrySnapshot s;

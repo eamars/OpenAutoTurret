@@ -659,8 +659,8 @@ class WebServer {
     // mutex to unregister its fd, so holding it here would deadlock.
     // (client_threads_ is stable here — the accept thread is already joined,
     // and client threads never modify it.)
-    for (auto& t : client_threads_) {
-      if (t.joinable()) t.join();
+    for (auto& c : client_threads_) {
+      if (c.thread.joinable()) c.thread.join();
     }
     {
       std::lock_guard<std::mutex> lk(clients_mu_);
@@ -674,12 +674,44 @@ class WebServer {
     return static_cast<int>(client_fds_.size());
   }
 
+  // Client threads not yet joined: the live ones plus any that finished since
+  // the accept thread last woke (ADR-008 D6). Stays near connected_clients().
+  std::size_t client_thread_count() const {
+    std::lock_guard<std::mutex> lk(clients_mu_);
+    return client_threads_.size();
+  }
+
   const Config& config() const { return cfg_; }
 
  private:
+  // One per accepted connection. `done` is the client thread's last write, so
+  // a thread whose flag is set has nothing left to do but exit.
+  struct ClientThread {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> done;
+  };
+
+  // Join and forget the client threads that have finished (ADR-008 D6), so a
+  // reconnecting webd does not leave one thread per connection behind for the
+  // process lifetime. Joining under clients_mu_ is safe, unlike in stop(): a
+  // finished thread released the mutex before it set `done`, so the join
+  // never waits on anything but the thread's exit.
+  void reap_finished_clients() {
+    std::lock_guard<std::mutex> lk(clients_mu_);
+    for (auto it = client_threads_.begin(); it != client_threads_.end();) {
+      if (it->done->load()) {
+        if (it->thread.joinable()) it->thread.join();
+        it = client_threads_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
   void accept_loop() {
     apply_thread_class("web-accept", ThreadClass::Background);
     while (running_.load()) {
+      reap_finished_clients();
       pollfd pfd{listen_fd_, POLLIN, 0};
       int pr = ::poll(&pfd, 1, 100);  // 100 ms so we observe stop()
       if (pr < 0) {
@@ -699,9 +731,23 @@ class WebServer {
           ::close(cfd);  // over limit: drop
           continue;
         }
-        client_fds_.push_back(cfd);
-        client_threads_.emplace_back(
-            std::thread([this, cfd] { client_loop(cfd); }));
+        // Room first, so that once the thread exists, storing it cannot throw
+        // (a joinable std::thread destroyed unjoined terminates the process).
+        // A thread that cannot be created drops this client, not controld.
+        try {
+          client_fds_.reserve(client_fds_.size() + 1);
+          client_threads_.reserve(client_threads_.size() + 1);
+          auto done = std::make_shared<std::atomic<bool>>(false);
+          std::thread t([this, cfd, done] {
+            client_loop(cfd);
+            done->store(true);
+          });
+          client_fds_.push_back(cfd);
+          client_threads_.push_back(ClientThread{std::move(t), std::move(done)});
+        } catch (const std::exception& e) {
+          spdlog::warn("web: client dropped, no thread for it: {}", e.what());
+          ::close(cfd);
+        }
       }
     }
   }
@@ -900,7 +946,7 @@ class WebServer {
 
   mutable std::mutex clients_mu_;
   std::vector<int> client_fds_;
-  std::vector<std::thread> client_threads_;
+  std::vector<ClientThread> client_threads_;
 };
 
 }  // namespace web
