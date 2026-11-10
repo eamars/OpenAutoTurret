@@ -23,12 +23,13 @@
 | 2026-11-10 | **Price.** The eRob90 is about 8,000 CNY, a bit out of range. The owner accepts lower accuracy, up to about 0.3 MOA on both axes. Wants a side-by-side comparison of every option, with none eliminated yet | §9 |
 | 2026-11-10 | **Yaw turns continuously** (through the slip ring): the yaw joint must command and report position across more than one turn, or across ±180° without a fault | new gate in §2 |
 
-**Open: what "slightly lower" means as a number.** Reference points:
-- the spec, 0.3 MOA = 18″ (13 cm at 1500 m);
-- ≈ 0.4 MOA (17–19 cm), which still keeps the beam on the IPSC target at 1500 m (half-width ±32″
-  = 0.53 MOA), with less margin left for beam divergence.
-
-The owner's floor goes here once given.
+**The floor (owner, 2026-11-10): 0.3 MOA = 18″ on each axis, not in total.**
+- Each axis's joint may contribute up to about 15″, after its share of the 14″ allowance for
+  calibration, heat shimmer and the base (HDP-001 §1.3).
+- The combined error of both axes may reach about 25″ (0.42 MOA). That still keeps the beam on the
+  IPSC target at 1500 m (half-width ±32″ = 0.53 MOA), with less margin for beam divergence.
+- HDP-001 §1.1, §1.3 and rows A1, A4, C3, E1, E2 and E4 were rewritten to match. B1's stiffness and
+  E4's peak are unchanged.
 
 ## 2. Hard gates: a candidate that misses one is out, whatever the price
 
@@ -38,7 +39,7 @@ This split between §2 and §3 is a proposal, for the owner to confirm.
 |---|---|---|
 | Gearing without tooth clearance: strain-wave or precision cycloidal (a catalogue's "背隙 15″" on a strain-wave joint is read as lost motion, A9) | A8 | planetary backlash is arc-minutes (§5) |
 | Torsional stiffness at least the must: yaw 1.0×10⁴, pitch 0.8×10⁴ N·m/rad | B1 | no loop setting buys stiffness back (§2) |
-| A documented CAN protocol that carries position finer than 1″ | G1 | a coarse bus step quantises the aim itself (MyActuator's 0.01° = 36″) |
+| A documented CAN protocol whose position step keeps the axis within its 15″ share (§5): a step of up to about 20″ just fits; finer than 2.5″ is recommended (until 2026-11-10: finer than 1″) | G1 | a coarse bus step quantises the aim itself. Juxie's 19.8″ step gives 10–14″ and fits; MyActuator's 0.01° (36″) gives 17–20″ and does not |
 | A torque limit that can be set in the drive | D4 | at full peak, these joints crush a hand and twist a tripod |
 | A brake on pitch whenever pitch can be out of balance at shutdown | D5 | owner ruling: never de-energise an unbalanced load |
 | Telemetry, and an output zero kept in the joint | G6, G7 | the fault, hold and degrade ruling; no homing |
@@ -46,11 +47,11 @@ This split between §2 and §3 is a proposal, for the owner to confirm.
 | 24–48 V, and torque and loads at least the must | G3, D1–D2, B3–B4 | |
 | Yaw only: position commanded and reported across more than one turn, or across ±180° without a limit trip or a rejected step | G1, G2 | yaw turns continuously through the slip ring (owner, 2026-11-10); a single-turn drive leaves no way round its seam |
 
-## 3. Tradeable for price, judged on the total of §5
+## 3. Tradeable for price, judged per axis on §5 (each axis ≤ 18″, the joint ≤ about 15″)
 
 | Row | What is given up |
 |---|---|
-| A4: output encoder 19 bit instead of 20 | about ±1.2″ more hold error per axis |
+| A4: output encoder 20 bit instead of 19 (19 is now the must) | 20 bit buys about ±1.2″ less hold error per axis |
 | G2 on pitch: the loop closes on the motor encoder | pitch's backlash and wind-up reach the payload. Worth about +6–8″ on pitch, less with the preload of HDP-001 §6.6 |
 | A2, A3: vendor repeatability and accuracy | the camera loop removes both once the joint has arrived (HDP-001 §1.3). They matter only for a first shot taken before the camera corrects |
 | G4: IP rating | a cover gives it |
@@ -63,6 +64,8 @@ puts the eRob90 at about 2. The MZ17 stays the cost yardstick although it is out
 
 **Options 2–4 are out (owner, 2026-11-10):** the MZ17 series covers one turn, so it fails the yaw
 gate of §2, and on pitch its 19.8″ protocol step and missing brake fail G1 and D5 (HDP-001 §8.8).
+After the per-axis floor of the same day (§1), the step fits G1. So an MZ17-mini on pitch fails only
+D5, and option 2 is back as a pitch option in §9.
 They are kept below as the record of what the price trade was worth. A cheaper pitch candidate from
 §7's "to ask" rows would take option 2's place.
 
@@ -147,7 +150,7 @@ smaller, joint precision matters more, and this section should be redone with th
 |---|---|---|---|
 | ZeroErr eRob90 HS, CANopen | yaw (and pitch in option 1) | **lead for yaw** | §8.4 questions to ZeroErr, including the yaw gate of §2 (position past ±180°); quote the HS / CANopen / brake variants |
 | MZ17, 101:1 (= Juxie R68 DNN) | pitch | out with the series (2026-11-10) | — |
-| MZ17-mini, 101:1 (= Juxie R68 Lite), 2026-11-10 | both axes, or pitch | **out (owner, 2026-11-10):** position covers one turn, so no continuous yaw. On pitch: the protocol's int16 per turn (19.8″) fails G1 and it has no brake (D5). Clears A4, F5 and G2 | reopen only if Juxie documents multi-turn position at full resolution (HDP-001 §8.8) |
+| MZ17-mini, 101:1 (= Juxie R68 Lite), 2026-11-10 | both axes, or pitch | **out for yaw (owner, 2026-11-10):** position covers one turn, so no continuous yaw. **Pitch: possible.** Under the per-axis floor (§1) its 19.8″ step fits G1 (10–14″). It has no brake (D5). Clears A4, F5 and G2 | pitch: ask Juxie for a brake, or confirm that pitch is balanced at every shutdown; yaw: reopen only if Juxie documents multi-turn position |
 | MZ20 | yaw (option 4) | out with the series (2026-11-10): it was the yaw size, and the series covers one turn | — |
 | ZeroErr eRob80 HS | pitch | alternative to the eRob90 on pitch, at about its price | only if the payload's mass (phase 0) makes the eRob90's 0.5 kg matter |
 | SHG-20 build (HDP-001 §4) | both | fallback if phase 1 fails | — |
@@ -162,8 +165,6 @@ smaller, joint precision matters more, and this section should be redone with th
 
 ## 8. Open for the owner
 
-- The accuracy floor that "slightly lower" means (§1). On 2026-11-10 the owner gave "about 0.3 MOA
-  on both axes". §9 shows both readings of it. Which one holds is still to confirm.
 - Whether the gate/tradeable split of §2–§3 is right.
 - The pitch preload (HDP-001 §6.6), which needs the pitch brake.
 
@@ -190,9 +191,9 @@ about 0.3 MOA on both axes. Gates that a candidate fails are shown as conditions
 - **Total** is §5's combination of both axes: √(e_yaw² + e_pitch² + 14²).
 
 **Two readings of the owner's "0.3 MOA on both axes":**
-- (a) **Each axis ≤ 0.3 MOA (18″).** This allows e up to about 15″ per axis, and a total of up to
+- (a) **Each axis ≤ 0.3 MOA (18″). The owner's ruling, 2026-11-10 (§1).** This allows e up to about 15″ per axis, and a total of up to
   about 0.42 MOA.
-- (b) **The total ≤ 0.3 MOA,** which is HDP-001's spec. This allows e up to about 7.5″ per axis.
+- (b) **The total ≤ 0.3 MOA,** HDP-001's spec until then, kept for reference. This allows e up to about 7.5″ per axis.
 - Most of the cheap joints pass (a) and fail (b).
 
 ### 9.2 Per joint
