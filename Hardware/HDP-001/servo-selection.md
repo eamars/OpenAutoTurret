@@ -135,7 +135,7 @@ smaller, joint precision matters more, and this section should be redone with th
 |---|---|---|---|
 | ZeroErr eRob90 HS, CANopen | yaw (and pitch in option 1) | **lead for yaw** | §8.4 questions to ZeroErr; quote the HS / CANopen / brake variants |
 | MZ17, 101:1 (= Juxie R68 DNN) | pitch | superseded by the MZ17-mini: 19 bit, Ø12 bore | — |
-| **MZ17-mini, 101:1 (= Juxie R68 Lite)**, 2026-11-10 | both axes (option 3), or pitch (option 2) | **fails the §2 position-step gate as documented**: 21-bit encoder, but the protocol carries int16 per turn (19.8″). Clears A4, F5 and G2. No brake | HDP-001 §8.8 question 1 to Juxie (full-resolution position on the R68 Lite?), or one bench unit to read it |
+| **MZ17-mini, 101:1 (= Juxie R68 Lite)**, 2026-11-10 | both axes (option 3), or pitch (option 2) | **fails the §2 position-step gate as documented**: 21-bit encoder, but the protocol carries int16 per turn (19.8″). Clears A4, F5 and G2. No brake | **Asked 2026-11-10** (the owner forwarded question 1 to the supplier). Closes on Juxie's answer, or on a bench unit's SDO test (HDP-001 §8.8). Yes: re-place in §4 as option 3, case A. No: out |
 | MZ20 | yaw (option 4) | to ask | bore, encoder, price |
 | ZeroErr eRob80 HS | pitch | alternative to the MZ17, at about the eRob90's price | none unless the MZ17 fails a gate |
 | SHG-20 build (HDP-001 §4) | both | fallback if phase 1 fails | — |
