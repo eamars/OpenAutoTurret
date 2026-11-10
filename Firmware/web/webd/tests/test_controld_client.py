@@ -137,3 +137,25 @@ def test_a_frame_that_cannot_be_parsed_is_counted_and_said_out_loud(caplog):
         "the log line must say what the operator is about to notice, not just that something "
         "failed to parse"
     )
+
+
+def test_a_frame_the_parser_cannot_take_does_not_end_the_reader():
+    """ADR-008 D3: valid JSON that is not an object raised past the ValueError/KeyError catch and
+    killed the reader thread, leaving webd up with telemetry and commands silently gone."""
+    from web.webd.controld_client import ControldClient
+
+    client = ControldClient("/tmp/definitely-not-there.sock")
+
+    class _Sock:
+        def __init__(self, frames):
+            self._frames = list(frames)
+
+        def recv_into(self, buffer):
+            frame = self._frames.pop(0) if self._frames else b""
+            buffer[:len(frame)] = frame
+            return len(frame)
+
+    client._read_loop(_Sock([b'[1, 2, 3]', b'"telemetry"',
+                             b'{"type":"telemetry","ts_ns":1,"phase":"hold"}']))
+    assert client.malformed_frames == 2
+    assert client.latest_telemetry() is not None, "the good frame after the bad ones was lost"

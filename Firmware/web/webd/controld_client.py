@@ -207,7 +207,25 @@ class ControldClient:
                 return  # peer closed
             if not n:
                 return
-            self._dispatch(bytes(buffer[:n]).decode("utf-8", "replace"))
+            raw = bytes(buffer[:n]).decode("utf-8", "replace")
+            try:
+                self._dispatch(raw)
+            except Exception as exc:                                      # noqa: BLE001
+                # One frame this reader cannot take must not end it (ADR-008 D3): a dead reader
+                # leaves webd up with telemetry and commands silently gone, and nothing notices.
+                self._note_malformed(exc, raw)
+
+    def _note_malformed(self, exc: BaseException, raw: str) -> None:
+        self.malformed_frames += 1
+        # Rate-limited, not suppressed: at 15 Hz this would drown the journal, and once is
+        # enough for the first occurrence and then again every five seconds of continuing
+        # failure, which is what "it is broken and stays broken" is allowed to cost.
+        if self.malformed_frames == 1 or self.malformed_frames % 75 == 0:
+            log.error(
+                "rejected a frame from controld (%d so far): %s: %s%s — the page has had no "
+                "telemetry since the last good frame; frame began %r",
+                self.malformed_frames, type(exc).__name__, exc,
+                (" at byte %d" % exc.pos if hasattr(exc, "pos") else ""), raw[:72])
 
     def _dispatch(self, raw: str) -> None:
         try:
@@ -224,16 +242,7 @@ class ControldClient:
                              "control trace is read via /api/control_trace, so this "
                              "is not a fault, but it is also not telemetry", exc)
                 return
-            self.malformed_frames += 1
-            # Rate-limited, not suppressed: at 15 Hz this would drown the journal, and once is
-            # enough for the first occurrence and then again every five seconds of continuing
-            # failure, which is what "it is broken and stays broken" is allowed to cost.
-            if self.malformed_frames == 1 or self.malformed_frames % 75 == 0:
-                log.error(
-                    "rejected a frame from controld (%d so far): %s%s — the page has had no "
-                    "telemetry since the last good frame; frame began %r",
-                    self.malformed_frames, exc,
-                    (" at byte %d" % exc.pos if hasattr(exc, "pos") else ""), raw[:72])
+            self._note_malformed(exc, raw)
             return
         if mtype == "telemetry":
             from .protocol import telemetry_from_json

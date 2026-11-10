@@ -96,7 +96,7 @@ class Track:
     #: reason a merged document is still readable: two boxes normalised to the same picture can
     #: come from optics whose centres are degrees apart.
     camera_id: str = ""
-    display_index: int = 0                 # §27: monotonic per class within a session
+    display_index: int = 0                 # §27: per class, 1..65535, wraps (ADR-008 D1)
     class_id: int = 0
     class_name: str = ""
     state: TrackState = TrackState.TENTATIVE

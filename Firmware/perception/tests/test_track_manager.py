@@ -17,6 +17,7 @@ import unittest
 from perception.events import EventLog, EventType
 from perception.tests.support import (advance, commissioned_config, det, dset, ms, at)
 from perception.tracking.track import Track, TrackState
+from perception.protocol.wire import encode_track_set
 from perception.tracking.track_manager import TrackManager
 
 
@@ -241,7 +242,8 @@ class TestIdentityConfidence(unittest.TestCase):
 
 
 class TestDisplayLabels(unittest.TestCase):
-    """§27: labels are monotonic per class within a session and never reused."""
+    """§27: labels go up per class and are not reused while anyone can mean the old holder;
+    at the wire bound they wrap (ADR-008 D1)."""
 
     def test_labels_increase_even_after_the_lower_one_retired(self):
         manager = TrackManager(commissioned_config())
@@ -265,6 +267,61 @@ class TestDisplayLabels(unittest.TestCase):
                                       det(2, cx=0.9, class_id=1, class_name="bicycle")]),
                                 at(0))
         self.assertEqual(sorted(t.display_index for t in result.tracks), [1, 1])
+
+    # ADR-008 D1. Station, 2026-11-10 13:13: the 65,536th person of a 10.5-day session did not
+    # fit the TrackSet's uint16 label, and the encoder's refusal ended visiond and the stack.
+    def test_labels_wrap_at_the_wire_bound_and_never_issue_zero(self):
+        manager = TrackManager(commissioned_config())
+        manager._next_display_index["person"] = 65534     # 65,533 people already seen
+        result = manager.update(dset([det(1, cx=0.1), det(2, cx=0.5), det(3, cx=0.9)]), at(0))
+        self.assertEqual(sorted(t.display_index for t in result.tracks), [1, 65534, 65535])
+        payload = encode_track_set(result.tracks, frame_sequence=1, sensor_timestamp_ns=2,
+                                   publish_timestamp_ns=3, width=1920, height=1080)
+        self.assertEqual(len(payload), 2946, "the wrapped set must encode like any other")
+
+    def test_after_the_wrap_labels_still_held_are_stepped_over(self):
+        manager = TrackManager(commissioned_config())
+        first = manager.update(dset([det(1, cx=0.1), det(2, cx=0.3)]), at(0))
+        self.assertEqual(sorted(t.display_index for t in first.tracks), [1, 2])
+        manager._next_display_index["person"] = 65535
+        result = manager.update(dset([det(1, cx=0.1), det(2, cx=0.3), det(3, cx=0.6),
+                                      det(4, cx=0.9)], sensor_ns=at(1)), at(1))
+        labels = sorted(t.display_index for t in result.tracks)
+        self.assertEqual(labels, [1, 2, 3, 65535],
+                         "a live Person #1 and a new Person #1 would be the 10-02 bug again")
+
+    def test_the_selected_label_stays_reserved_after_its_track_is_lost(self):
+        manager = TrackManager(commissioned_config())
+        first = manager.update(dset([det(1, cx=0.1)]), at(0))
+        manager.set_selected_uuid(first.tracks[0].track_uuid)
+        manager.update(dset([], sensor_ns=at(2) + ms(3.2)), at(2) + ms(3.2))
+        self.assertEqual(manager.tracks(), [], "the selected person has left and expired")
+        manager._next_display_index["person"] = 65535
+        result = manager.update(dset([det(5, cx=0.2), det(6, cx=0.8)],
+                                     sensor_ns=at(3) + ms(3.2)), at(3) + ms(3.2))
+        self.assertEqual(sorted(t.display_index for t in result.tracks), [2, 65535],
+                         "the operator still means Person #1; nobody else may wear it")
+
+    def test_the_allocator_crosses_the_bound_twice_beside_32_live_tracks(self):
+        # The allocator alone, as a long session drives it: 32 tracks live (the wire's capacity),
+        # the oldest leaving as each newcomer arrives, for two full turns of the counter -- and one
+        # person who never leaves, whose label each turn must step over.
+        from types import SimpleNamespace
+        manager = TrackManager(commissioned_config())
+        manager._next_display_index["person"] = 65500
+        stayer = SimpleNamespace(display_index=manager.display_index_for("person"),
+                                 class_name="person")
+        passing, issued = [], []
+        for _ in range(2 * 65535 + 100):
+            manager._tracks = [stayer] + passing
+            label = manager.display_index_for("person")
+            issued.append(label)
+            self.assertTrue(1 <= label <= 65535, label)
+            self.assertNotIn(label, {t.display_index for t in manager._tracks})
+            passing.append(SimpleNamespace(display_index=label, class_name="person"))
+            if len(passing) > 31:
+                passing.pop(0)
+        self.assertNotIn(stayer.display_index, issued, "the stayer's label was handed out again")
 
 
 class TestPublishedSet(unittest.TestCase):

@@ -650,18 +650,32 @@ def _publish_wire(outcome, publisher: Optional[SocketPublisher], *, legacy=False
     if publisher is None or outcome.track_set is None:
         return False
     track_set = outcome.track_set
-    if not legacy:
-        if outcome.observation is None:
-            return False
-        sent = publisher.send(encode_perception_frame(track_set, outcome.observation))
-        if sent:
-            _trace_observation(outcome.observation, metadata)
-        return sent
-    return publisher.send(encode_track_set(
-        track_set.tracks, frame_sequence=track_set.frame_sequence,
-        sensor_timestamp_ns=track_set.sensor_timestamp_ns,
-        publish_timestamp_ns=track_set.publish_timestamp_ns,
-        width=track_set.stream_width, height=track_set.stream_height))
+    if not legacy and outcome.observation is None:
+        return False
+    # One frame whose message cannot be built loses that frame, not the process (ADR-008 D3).
+    # Station, 2026-11-10 13:13: the 65,536th track's label raised here, outside the frame's
+    # catch-all, and took visiond -- and with it the whole stack -- down. controld already
+    # treats a frame it never received as a gap; one that never comes again is its stale-vision
+    # HOLD, which clears when frames encode again.
+    try:
+        if not legacy:
+            payload = encode_perception_frame(track_set, outcome.observation)
+        else:
+            payload = encode_track_set(
+                track_set.tracks, frame_sequence=track_set.frame_sequence,
+                sensor_timestamp_ns=track_set.sensor_timestamp_ns,
+                publish_timestamp_ns=track_set.publish_timestamp_ns,
+                width=track_set.stream_width, height=track_set.stream_height)
+    except Exception as exc:                                              # noqa: BLE001
+        if publisher.note_encode_failure(exc, time.monotonic_ns()):
+            print(f"visiond: frame {track_set.frame_sequence} not sent, its message could not "
+                  f"be built ({publisher.encode_failures} so far): {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+        return False
+    sent = publisher.send(payload)
+    if sent and not legacy:
+        _trace_observation(outcome.observation, metadata)
+    return sent
 
 
 #: The role a physical sensor is allowed to publish under (§ architect's (b) binding). This is a

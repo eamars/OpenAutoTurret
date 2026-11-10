@@ -55,6 +55,10 @@ from .diagnostics import AssociationDiagnostics
 from .duplicate_track_resolver import DuplicateTrackResolver, MergeDecision
 from .track import Track, TrackState, new_session_uuid
 
+#: The largest label the TrackSet can carry: ``display_index`` is a uint16 on the wire, and 0
+#: means "no target" to controld and the HUD (ADR-008 D1).
+MAX_DISPLAY_INDEX = 0xFFFF
+
 #: Exponential weight applied to a new box over the remembered one. Light on purpose
 #: (§36): the box is what the overlay draws and what the IoU term measures, so heavy
 #: smoothing would make association disagree with the measurement, while the *anchor* — the
@@ -98,6 +102,7 @@ class TrackManager:
         self._tracks: List[Track] = []
         self._next_display_index: Dict[str, int] = {}
         self._selected_uuid: Optional[str] = None
+        self._selected_label: Optional[Tuple[str, int]] = None
         self._last_sensor_ns: int = 0
         self._sequence: int = 0
         self._model_id: str = config.active_model.model_id
@@ -136,11 +141,22 @@ class TrackManager:
         for track in self._live_tracks():
             self._retire(track, sensor_ns, reason=reason)
         self._selected_uuid = None
+        self._selected_label = None
 
     def set_selected_uuid(self, track_uuid: Optional[str]) -> None:
         """§26 and §25.1 both need to know whom the operator chose."""
+        same = bool(track_uuid) and track_uuid == self._selected_uuid
         self._selected_uuid = track_uuid or None
         self.resolver.note_selected(self._selected_uuid)
+        # The label the operator chose stays reserved while the selection lasts, even once its
+        # track has been lost: a new "Person #N" beside a selected "Person #N" is the confusion
+        # display_index_for exists to prevent.
+        chosen = self.find(self._selected_uuid) if self._selected_uuid else None
+        if chosen is not None:
+            self._selected_label = ((chosen.class_name or "target").strip().lower(),
+                                    chosen.display_index)
+        elif not same:
+            self._selected_label = None
 
     def tracks(self) -> List[Track]:
         return [track.copy() for track in self._tracks
@@ -195,17 +211,32 @@ class TrackManager:
         return True, "selectable"
 
     def display_index_for(self, class_name: str) -> int:
-        """§27: monotonic within a session, never reused, even after retirement.
+        """§27: a label is not reused while anyone can still mean its old holder.
 
         The retired path reused the lowest free label, which is the direct cause of the
-        handover's ``select_target 2 -> "selected Person #1"``. A label becomes reusable
-        only when a new ``session_uuid`` makes every old label meaningless; inside a session
-        the numbers only go up.
+        handover's ``select_target 2 -> "selected Person #1"``: a label came back seconds
+        after its holder left. So the numbers go up, per class, and are not handed out again
+        until the counter has gone all the way round.
+
+        The counter has a bound (ADR-008 D1): the TrackSet carries the label as uint16 and
+        reads 0 as "no target", so it runs 1..65535 and then wraps to 1. Station, 2026-11-10
+        13:13: after 10.5 days and 65,535 people, the 65,536th ended visiond. At the wrap it
+        skips every label still held by a track of the class (live, or retired this frame)
+        and the selected identity's, so no two tracks the operator can see share a number,
+        and a label returns only after some 65,500 other tracks of its class.
         """
         key = (class_name or "target").strip().lower()
-        nxt = self._next_display_index.get(key, 1)
-        self._next_display_index[key] = nxt + 1
-        return nxt
+        held = {t.display_index for t in self._tracks
+                if (t.class_name or "target").strip().lower() == key}
+        if self._selected_label is not None and self._selected_label[0] == key:
+            held.add(self._selected_label[1])
+        label = self._next_display_index.get(key, 1)
+        for _ in range(len(held)):      # at most every held label is stepped over
+            if label not in held:
+                break
+            label = label % MAX_DISPLAY_INDEX + 1
+        self._next_display_index[key] = label % MAX_DISPLAY_INDEX + 1
+        return label
 
     # -- the frame ----------------------------------------------------------
     def update(self, dset: DetectionSet, now_ns: int, *, image=None) -> TrackSet:

@@ -269,6 +269,30 @@ def prune(runs: Path, keep_recent=KEEP_RECENT) -> list:
     return removed
 
 
+def finish(link, runner, run, record, verdict):
+    """A run's ending: tell controld, wait for its install answer, write run.json, prune."""
+    # A run that ended under calibd (STOP, a fault) is over: controld has recorded it already.
+    ok, error = (False, "the run had ended") if verdict.startswith("STOPPED:") else \
+        link.send("calibration_finish", f"{run['id']} {runner.root} {verdict[:400]}")
+    if not ok:
+        print(f"calibd: not finished: {error}", flush=True)
+    # Whether controld installed it is its answer on the control thread (the ack), not the gate's.
+    installed = False
+    deadline = time.monotonic() + 3.0
+    while ok and (runner.root / "install").is_dir() and time.monotonic() < deadline:
+        t = link.telemetry()
+        if t is not None and t.cmd_ack_command == "calibration_finish":
+            installed = "installed into" in (t.cmd_ack_reason or "")
+            break
+        time.sleep(0.05)
+    (runner.root / "run.json").write_text(json.dumps(
+        {"run": run["id"], "kind": run["kind"], "record": record.get("id"), "verdict": verdict,
+         "installed": installed}, indent=1), encoding="utf-8")
+    removed = prune(runner.root.parent)
+    if removed:
+        print(f"calibd: pruned {len(removed)} journals of older runs", flush=True)
+
+
 def serve(link, state: Path, poll_s=0.2, once=False):
     """Waits for runs; one at a time."""
     handled = set()
@@ -280,33 +304,27 @@ def serve(link, state: Path, poll_s=0.2, once=False):
             handled.add(run["id"])
             record = t.calibration_record or {}
             print(f"calibd: run {run['id']} {run['kind']} on #{record.get('id')} {record.get('name')}", flush=True)
-            runner = Runner(link, state, run, record)
+            # ADR-008 D3: whatever one run does wrong (a full disk, a lost link, a record it cannot
+            # read) fails that run. calibd stays, or every later run would wait 15 s for nothing.
             try:
-                verdict = runner.execute()
-            except Exception as e:   # a bug here must not leave the station waiting 15 s for nothing
+                runner = Runner(link, state, run, record)
+            except Exception as e:
                 traceback.print_exc()
-                verdict = f"NOT ACCEPTED: calibd failed: {e}"
+                runner, verdict = None, f"NOT ACCEPTED: calibd could not start the run: {e}"
+            if runner is not None:
+                try:
+                    verdict = runner.execute()
+                except Exception as e:   # a bug here must not leave the station waiting 15 s for nothing
+                    traceback.print_exc()
+                    verdict = f"NOT ACCEPTED: calibd failed: {e}"
             print(f"calibd: run {run['id']}: {verdict}", flush=True)
-            # A run that ended under calibd (STOP, a fault) is over: controld has recorded it already.
-            ok, error = (False, "the run had ended") if verdict.startswith("STOPPED:") else \
-                link.send("calibration_finish", f"{run['id']} {runner.root} {verdict[:400]}")
-            if not ok:
-                print(f"calibd: not finished: {error}", flush=True)
-            # Whether controld installed it is its answer on the control thread (the ack), not the gate's.
-            installed = False
-            deadline = time.monotonic() + 3.0
-            while ok and (runner.root / "install").is_dir() and time.monotonic() < deadline:
-                t = link.telemetry()
-                if t is not None and t.cmd_ack_command == "calibration_finish":
-                    installed = "installed into" in (t.cmd_ack_reason or "")
-                    break
-                time.sleep(0.05)
-            (runner.root / "run.json").write_text(json.dumps(
-                {"run": run["id"], "kind": run["kind"], "record": record.get("id"), "verdict": verdict,
-                 "installed": installed}, indent=1), encoding="utf-8")
-            removed = prune(runner.root.parent)
-            if removed:
-                print(f"calibd: pruned {len(removed)} journals of older runs", flush=True)
+            try:
+                if runner is not None:
+                    finish(link, runner, run, record, verdict)
+            except Exception:
+                traceback.print_exc()
+                print(f"calibd: run {run['id']} could not be finished; waiting for the next",
+                      flush=True)
             if once:
                 return verdict
         time.sleep(poll_s)

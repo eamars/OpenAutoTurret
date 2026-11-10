@@ -150,6 +150,24 @@ class SocketPublisher:
         self.sent = 0
         self.failures = 0
         self.last_error = ""
+        # Frames whose message could not be built (ADR-008 D3): counted here, beside the sends,
+        # because they are the same loss to controld -- a frame it never received.
+        self.encode_failures = 0
+        self.last_encode_error = ""
+        self._encode_reported_ns = 0
+
+    def note_encode_failure(self, exc: BaseException, now_ns: int) -> bool:
+        """Count one frame dropped before sending; True when it should be said out loud.
+
+        The first failure and then one a minute: an error on every frame at 30 Hz would bury
+        the log, and one line a minute with the running count still says "broken and staying
+        broken"."""
+        self.encode_failures += 1
+        self.last_encode_error = f"{type(exc).__name__}: {exc}"
+        if self.encode_failures == 1 or now_ns - self._encode_reported_ns >= 60_000_000_000:
+            self._encode_reported_ns = now_ns
+            return True
+        return False
 
     def connect(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
@@ -182,7 +200,9 @@ class SocketPublisher:
             return False
 
     def stats(self) -> dict:
-        return {"sent": self.sent, "failures": self.failures, "last_error": self.last_error}
+        return {"sent": self.sent, "failures": self.failures, "last_error": self.last_error,
+                "encode_failures": self.encode_failures,
+                "last_encode_error": self.last_encode_error}
 
     def close(self) -> None:
         if self._sock is not None:

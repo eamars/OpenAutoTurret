@@ -58,3 +58,13 @@ def test_numeric_timing_drains_without_track_or_image_publication(tmp_path):
     writer.close()
     assert json.loads((tmp_path/'timing.json').read_text())['frame_sequence'] == 17
     assert not (tmp_path/'track_set.json').exists()
+
+
+def test_a_non_finite_timing_is_written_as_null_not_raised(tmp_path):
+    # ADR-008 D3: allow_nan=False made one NaN KPI end the camera loop, and with it visiond.
+    writer = LatestJsonPublisher(str(tmp_path))
+    writer.publish_timing({'frame_sequence': 18, 'imx500_kpi_ms': [float('nan'), 3.0],
+                           'stages_ms': {'infer': float('inf')}})
+    writer.close()
+    timing = json.loads((tmp_path/'timing.json').read_text())
+    assert timing['imx500_kpi_ms'] == [None, 3.0] and timing['stages_ms'] == {'infer': None}

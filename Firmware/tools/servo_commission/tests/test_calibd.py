@@ -354,3 +354,46 @@ class Pruning(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneRunFailsAloneAdr008(unittest.TestCase):
+    """ADR-008 D3: whatever one run does wrong fails that run; calibd keeps serving. Before, an
+    error building the run or finishing it (a full disk, a lost link) ended calibd, and every
+    later run waited 15 s for nothing."""
+
+    class Link:
+        def __init__(self, record):
+            self.record = record
+
+        def telemetry(self):
+            return SimpleNamespace(calibrating=True, calibration_record=self.record,
+                                   calibration_run={"active": True, "state": "waiting",
+                                                    "id": 7, "kind": "VERIFY"})
+
+        def send(self, name, arg=""):
+            return True, ""
+
+    def test_a_run_that_cannot_start_is_a_verdict_not_an_exit(self):
+        with tempfile.TemporaryDirectory() as state:
+            verdict = calibd.serve(self.Link(record=None), Path(state), poll_s=0, once=True)
+        self.assertTrue(verdict.startswith("NOT ACCEPTED: calibd could not start the run"), verdict)
+
+    def test_a_run_whose_ending_fails_leaves_calibd_serving(self):
+        class Runner:
+            def __init__(self, *args):
+                self.root = Path("/nonexistent")
+
+            def execute(self):
+                return "ACCEPTED"
+
+        def finish(*args):
+            raise OSError(28, "No space left on device")
+
+        saved = calibd.Runner, calibd.finish
+        calibd.Runner, calibd.finish = Runner, finish
+        try:
+            verdict = calibd.serve(self.Link(record={"id": 6}), Path("/nonexistent"), poll_s=0,
+                                   once=True)
+        finally:
+            calibd.Runner, calibd.finish = saved
+        self.assertEqual(verdict, "ACCEPTED")

@@ -29,6 +29,8 @@ retired code's habit of returning an empty result on error is what made "no dete
 """
 from __future__ import annotations
 
+import math
+import numbers
 import os
 import sys
 import threading
@@ -80,6 +82,18 @@ from .selection.target_selection_manager import TargetSelectionManager
 from .target_type import target_type
 from .tracking.diagnostics import AssociationDiagnostics
 from .tracking.track_manager import TrackManager
+
+
+def _finite_or_none(value: Any) -> Any:
+    """``value`` with every NaN and infinity replaced by None, for diagnostics that must still be
+    written: strict JSON (``allow_nan=False``) has no spelling for them."""
+    if isinstance(value, numbers.Real) and not isinstance(value, numbers.Integral):
+        return value if math.isfinite(float(value)) else None   # float, and numpy's floats
+    if isinstance(value, dict):
+        return {k: _finite_or_none(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_or_none(v) for v in value]
+    return value
 
 #: §40's stages, in the order they happen. One RingStats each, named after its own boundary.
 #: Upper bound on a credible sensor→publish span. Beyond this the two stamps are almost
@@ -303,8 +317,20 @@ class LatestJsonPublisher(JsonPublisher):
                 pass  # failures and last_error are exposed in the run report
 
     def publish_timing(self, timing):
-        """Numeric metadata only; one pending snapshot, written off the camera thread."""
-        encoded = dumps(timing)
+        """Numeric metadata only; one pending snapshot, written off the camera thread.
+
+        A diagnostic, so it never ends the camera loop (ADR-008 D3): a non-finite value (an IMX500
+        KPI or a stage timing) is written as null, and anything still unencodable drops this
+        snapshot and is counted."""
+        try:
+            encoded = dumps(timing)
+        except (TypeError, ValueError):
+            try:
+                encoded = dumps(_finite_or_none(timing))
+            except (TypeError, ValueError) as exc:
+                self.failures += 1
+                self.last_error = f"timing: {exc}"
+                return
         with self._condition:
             if not self._closed:
                 self._timing = encoded

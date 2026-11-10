@@ -752,7 +752,7 @@ int main(int argc, char** argv) {
   TimeNs due = t_prev + period_ns;
   bool logged_fault = false;
   bool logged_ready = false;
-  int cycles = 0;
+  int64_t cycles = 0;  // int overflowed (undefined) after 124 days at 200 Hz (ADR-008 D1)
 
   // Steady-state 200 Hz loop (no slow work inside).
   if (system) system->start_watchdog();

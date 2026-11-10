@@ -336,3 +336,28 @@ class TestSyntheticWorker(CliCase):
         self.assertIn("state=stopped", line)      # ended clean -- not dead, not hung
         self.assertIn("frames=6", line)           # delivered what it was asked to deliver
         self.assertIn("generation=1", line)       # one owner, never restarted
+
+
+class TestWirePublishContainment(unittest.TestCase):
+    """ADR-008 D3. Station, 2026-11-10 13:13: an encode error raised out of _publish_wire, outside
+    the frame's catch-all, and ended visiond -- and with it the whole stack."""
+
+    def test_a_frame_whose_message_cannot_be_built_is_dropped_and_counted(self):
+        from types import SimpleNamespace
+        from perception.protocol.wire import SocketPublisher
+
+        publisher = SocketPublisher("/nonexistent/ota-vision.sock")
+        track = SimpleNamespace(state=None, display_index=70000, class_name="person",
+                                track_uuid="", bbox=None, anchor=None)
+        track_set = SimpleNamespace(tracks=[track], frame_sequence=9, sensor_timestamp_ns=1,
+                                    publish_timestamp_ns=2, stream_width=640, stream_height=360)
+        outcome = SimpleNamespace(track_set=track_set, observation=None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            for _ in range(3):
+                self.assertFalse(visiond._publish_wire(outcome, publisher, legacy=True))
+        self.assertEqual(publisher.encode_failures, 3)
+        self.assertEqual(publisher.sent, 0)
+        self.assertIn("display index", publisher.stats()["last_encode_error"])
+        self.assertEqual(err.getvalue().count("could not be built"), 1,
+                         "the first failure is said once; the rest are counted, not printed")
