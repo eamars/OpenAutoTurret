@@ -20,6 +20,7 @@
 | 2026-11-10 | **The MZ17 series is out.** Its position covers one turn, so it cannot drive a continuously turning yaw | options 2–4 of §4 struck; the price trade moves to the suppliers still to ask (§7) |
 | 2026-11-10 | Joint life is not a concern: the mount needs accuracy, not torque, so the joints run far below their rating | a vendor's rated life (e.g. 5000 h) is not a gate |
 | 2026-11-10 | Screen cycloidal reducers and servo combos too, Chinese and China-made first | HDP-001 §8.9; candidates in §7 |
+| 2026-11-10 | **Price.** The eRob90 is about 8,000 CNY, a bit out of range. The owner accepts lower accuracy, up to about 0.3 MOA on both axes. Wants a side-by-side comparison of every option, with none eliminated yet | §9 |
 | 2026-11-10 | **Yaw turns continuously** (through the slip ring): the yaw joint must command and report position across more than one turn, or across ±180° without a fault | new gate in §2 |
 
 **Open: what "slightly lower" means as a number.** Reference points:
@@ -161,6 +162,96 @@ smaller, joint precision matters more, and this section should be redone with th
 
 ## 8. Open for the owner
 
-- The accuracy floor that "slightly lower" means (§1).
+- The accuracy floor that "slightly lower" means (§1). On 2026-11-10 the owner gave "about 0.3 MOA
+  on both axes". §9 shows both readings of it. Which one holds is still to confirm.
 - Whether the gate/tradeable split of §2–§3 is right.
 - The pitch preload (HDP-001 §6.6), which needs the pitch brake.
+
+## 9. Price and accuracy, side by side (2026-11-10)
+
+The owner asked for a CNY price range per option, with nothing eliminated, against an accuracy of
+about 0.3 MOA on both axes. Gates that a candidate fails are shown as conditions, not as verdicts.
+
+### 9.1 How the numbers were made
+
+**Prices are ranges per joint, not quotes.**
+- Only one figure comes from the owner: the eRob90, at about 8,000 CNY.
+- For other Chinese brands, overseas retail prices were scaled to a China price. The owner's eRob90
+  figure gives the factor: overseas retail is USD 1,610–2,327 (11–16.5k CNY), so a China price is
+  about 0.5–0.7× overseas retail.
+- Exchange rates assumed: 1 USD ≈ 7.1 CNY, 1 EUR ≈ 7.7 CNY.
+- "Class" means an order-of-magnitude figure with no source for that part. Treat it as a placeholder
+  until a quote comes in.
+
+**Accuracy follows §5.**
+- *e* is the joint's own hold error per axis, in an 8 m/s wind.
+- **Per axis** is that error plus half of §5's 14″ allowance for calibration, heat shimmer and the
+  base: √(e² + 9.9²).
+- **Total** is §5's combination of both axes: √(e_yaw² + e_pitch² + 14²).
+
+**Two readings of the owner's "0.3 MOA on both axes":**
+- (a) **Each axis ≤ 0.3 MOA (18″).** This allows e up to about 15″ per axis, and a total of up to
+  about 0.42 MOA.
+- (b) **The total ≤ 0.3 MOA,** which is HDP-001's spec. This allows e up to about 7.5″ per axis.
+- Most of the cheap joints pass (a) and fail (b).
+
+### 9.2 Per joint
+
+| # | Joint | Gear | CNY per joint | Basis of the price | Axes | e per axis | Per axis | Decides it, or fails as documented |
+|---|---|---|---|---|---|---|---|---|
+| 1 | ZeroErr eRob90 HS, CANopen | strain-wave 20 | 7–10k | owner ≈ 8k; overseas USD 1,610–2,327 | both | 2–3″ | 0.17 | yaw: does position run past ±180° (§2)? |
+| 2 | ZeroErr eRob80 HS | strain-wave 17 | 5–8k | class: below the eRob90 | pitch; yaw on B1's line | 3–4″ (yaw: gusts ≈ 9″ transient) | 0.18 | — |
+| 3 | ZeroErr eRob70 | strain-wave 14 | 4–6k | class | pitch | 4–6″ | 0.19 | yaw fails B1 (gusts ≈ 18″); 19-bit encoder (A4) |
+| 4 | Juxie R68 Lite (MZ17-mini) | strain-wave 17 | 1.5–4k | owner: eRob ≈ 2× MZ17; Juxie's Lite line starts at 699 CNY (R48-Lite) | both | 10–14″ (19.8″ bus step) | 0.23–0.29 | position covers one turn (yaw); no brake (D5) |
+| 5 | Juxie R68 DNN (MZ17) | strain-wave 17 | 1.5–4k | as #4 | pitch (Ø12 bore) | 10–14″ | 0.23–0.29 | as #4; 19-bit encoder |
+| 6 | Juxie R83 (MZ20) | strain-wave 20 | 3–6k | class, from #4 | yaw | 10–14″ (if it has the R68's protocol) | 0.23–0.29 | as #4 |
+| 7 | EYOU 意优 PH17 / PH20, CANopen | strain-wave 17 / 20 | 3–5k | overseas USD 700–1,300 | both (bore 11–18 mm: sources disagree) | 3–4″ if the loop is on the output encoder, 10–17″ if not | 0.18–0.33 | which encoder closes the loop; 19-bit (A4) |
+| 8 | MyActuator RH-20 | strain-wave 20 | 4–7k | overseas USD 930–1,700 | both | 17–20″ (36″ bus step, 17-bit) | 0.33–0.37 | the bus step (G1) |
+| 9 | Leaderdrive 绿的 KAH + KDE drive | strain-wave | 5–10k | class; the gear alone lists at 1.1–3.4k | both | 2–4″ (output loop) or 10–17″ | 0.17–0.33 | is the encoder on the output? |
+| 10 | Leadshine 雷赛 RJ1 / RJH | strain-wave | 3–6k | class; "economy" line, 35% below imports (the maker) | both | 10–20″ (±36″ repeatability) | 0.23–0.37 | encoder bits |
+| 11 | Honpine 宏品 HPJM-RE | strain-wave | 8–20k (?) | overseas listings USD 3.8–4.7k, size unclear | both | 10–14″ (16-bit on one page) | 0.23–0.29 | encoder bits; CANopen only on the single-encoder version |
+| 12 | Harmonic Drive SHA-20, integrated drive | strain-wave 20 | 20–40k | class; quote only | both (bore ≈ 17 mm) | 10–14″ (16-bit output encoder) | 0.23–0.29 | price |
+| 13 | PHYBOT 动易 PhyArc 68 / 78 | cycloidal 25:1 | 6–15k | PhyArc 78 is USD 2,050 overseas | both, if hollow | 3–5″ (output loop) or ≈ 30″ (motor loop, 1′ backlash) | 0.18–0.53 | HDP-001 §8.9's questions |
+| 14 | SHG-20 build (HD SHG-20 + Kollmorgen KBM-17 + Renishaw RESA30 + Ingenia Everest) | strain-wave 20 | 25–45k | class: gear USD 1–1.8k, encoder 1–2k, drive 645–800, plus machining | both | 1–2″ | 0.16 | two axes of mechanical design |
+| 15 | China-made strain-wave build (Leaderdrive LHSG-20 + 85 mm frameless motor + RLS AksIM-2 + a CANopen dual-loop drive) | strain-wave 20 | 6–15k | gear 1.1–3.4k; motor 1–3k (CubeMars RI85 ≈ 990); AksIM-2 ≈ EUR 221 (17-bit; 20-bit on request), so 1.5–3k; drive 1.5–5k; housing 1.5–4k | both | 3–4″ | 0.18 | the design work of #14; the drive's dual loop |
+| 16 | Spinea TwinSpin TS 70 H build | cycloidal | 20–35k | class | pitch (13 mm bore) | 2–3″ | 0.17 | lost motion < 1.5′ (A9): reversal hunting |
+| 17 | Chinese cycloidal build (环动 SHPR-H, 西格 CPB, 海尚 SD-BR85C + #15's parts) | cycloidal | 7–15k | class: reducer 2–5k (no price found) | both, if the bore allows | 3–5″ | 0.18 | lost motion 1–2′ (A9); no data |
+| 18 | Nabtesco RV-10C build | RV | 20–35k | class | yaw only (Ø147 mm, 4.6 kg for the gear alone) | 2–3″ | 0.17 | size and mass (F2, F4) |
+
+### 9.3 Pairs worth comparing
+
+| Yaw + pitch | CNY for both axes | Per axis, yaw / pitch | Total | Reading (a): each axis ≤ 0.3 | Reading (b): total ≤ 0.3 |
+|---|---|---|---|---|---|
+| eRob90 + eRob90 | 14–20k | 0.17 / 0.17 | 0.24 MOA | ✓ | ✓ |
+| eRob90 + eRob80 | 12–18k | 0.17 / 0.18 | 0.25 | ✓ | ✓ |
+| eRob90 + EYOU PH17 | 10–15k | 0.17 / 0.18–0.33 | 0.24–0.37 | ✓ if EYOU's loop is on the output | ✓ only in that case |
+| eRob90 + R68 Lite | 8.5–14k | 0.17 / 0.23–0.29 | 0.29–0.33 | ✓ | on the line |
+| EYOU + EYOU | 6–10k | 0.18–0.33 each | 0.25–0.46 | ✓ if the loop is on the output | ✓ only in that case |
+| China-made build ×2 (#15) | 12–30k | 0.18 each | 0.25 | ✓ | ✓, after two axes of design |
+| R68 Lite + R68 Lite | 3–8k | 0.23–0.29 each | 0.33–0.40 | ✓ on accuracy; yaw cannot turn past one turn | ✗ |
+| MyActuator RH-20 ×2 | 8–14k | 0.33–0.37 each | 0.46–0.53 | ✗ | ✗ |
+
+### 9.4 What the comparison says
+
+- **Below the eRob's price, the one row that decides a joint is whether its position loop closes on
+  the output encoder** (G2), and with what bus step (G1). Joints that close on the output encoder sit
+  at about 0.18 MOA per axis whatever they cost. The rest sit at 0.23–0.37.
+- **EYOU's PH17 / PH20 is the cheapest unknown that could match the eRob**, at about half its price.
+  One answer decides it: which encoder closes its position loop.
+- **On reading (a), the Juxie R68 Lite passes on accuracy at the lowest price.** It still fails on
+  yaw's one-turn range and has no brake. As pitch under an eRob90 yaw, it is the cheapest pair that
+  passes (a).
+- **Building our own joint is not cheaper once the design work is counted.** #15's parts come to
+  roughly the eRob90's price, before the design and machining of two axes.
+
+**Price sources, 2026-11-10:**
+- eRob90 overseas: [aifitlab](https://aifitlab.com/products/zeroerr-erob-90-t-motor), [rcdrone](https://rcdrone.top/products/zeroerr-erob-90-t-motor)
+- MyActuator RH-20: [RobotShop](https://www.robotshop.com/products/myactuator-mt-rh-20ethercatcan-harmonic-joint-motor-robot-joint-motor-large-hollow-design-high-precision-high-torque-harmonic-reducer), [OZ Robotics](https://ozrobotics.com/shop/rh-series-standard-type-motor-with-integrated-design-and-vibration-resistance-mt-rh-20-100-b/)
+- EYOU: [RobotShop PH17B](https://www.robotshop.com/products/eyou-robotics-canopen-harmonic-actuator-with-brake-134-nm-instantaneous-30-rpm-ph17b-101-c), [aifitlab PH20](https://aifitlab.com/products/eyou-ph20-motor), [sicubeshop](https://sicubeshop.com/products/ph-series-mechanical-arm-hollow-harmonic-servo-motor-robot-joint-module)
+- Juxie R48-Lite at 699 CNY: [OFweek](https://mp.ofweek.com/robot/a256714842617)
+- PhyArc 78 at USD 2,050: [Humanoid.guide](https://humanoid.guide/cycloidal-reducers-humanoid-joints/)
+- Leaderdrive LCSG / LHSG-20 listings: [gys.cn](https://m.gys.cn/jiansuji/5138751456.html)
+- CubeMars RI85: [DirectIndustry](https://www.directindustry-china.cn/zhizaoshang-gongye/48v-li-ju-dian-ji-222855.html)
+- RLS AksIM-2: [MAB Robotics](https://www.mabrobotics.pl/product-page/rls-aksim-2)
+- Ingenia Everest: [Novanta](https://novanta.com/robotics-automation/product/everest/)
+- Honpine: [RobotShop](https://www.robotshop.com/products/honpine-hollow-shaft-integrated-harmonic-drive-servo-motor-rotary-actuators)
