@@ -12,16 +12,20 @@ Description=OpenAutoTurret station (boots SHUTDOWN: web and camera up, motors of
 [Service]
 Type=simple
 ExecStart=@ROOT@/run/current/Firmware/scripts/station_boot.sh
-# The launcher's own controlled stop: park, then disable. KillMode=mixed sends TERM to the launcher
-# only, so it can bring the motors down before anything else is signalled.
+# The launcher's own controlled stop: park, then disable. A stop runs ExecStop first, which stops the
+# launcher, which stops its children in order; nothing is left for the kill below.
 ExecStop=@ROOT@/run/current/Firmware/scripts/run_application.sh stop
-KillMode=mixed
+# control-group, not mixed (station, 2026-11-10, ADR-008 V5): when the launcher itself is killed
+# outright, systemd runs no ExecStop, and under mixed it SIGKILLed everything left at once --
+# controld too, which then never parks (homed, the pitch would drop). Under control-group what is
+# left gets TERM, controld parks on it as it does on the launcher's own TERM, and SIGKILL comes
+# only after TimeoutStopSec.
+KillMode=control-group
 TimeoutStopSec=150
 # ADR-008 D4 (owner, 2026-11-10): a crashed stack comes back by itself, in SHUTDOWN -- web and camera
 # up, motors off until HOME, as at boot. The launcher exits 0 for every stop someone asked for (its
 # stop, a deploy, systemctl) and 1 when controld exited or the cause is unknown; a launcher killed
-# outright is a signal. Only the last two restart. ExecStop runs first in every case, and it stops
-# any children an outright-killed launcher left behind (controld first, so it parks).
+# outright is a signal. Only the last two restart.
 # A failure that will not clear by itself (a stray controld, a locked CAN bus) is retried for as
 # long as it lasts, but backs off: 10 s, then growing to 5 minutes between attempts (systemd 254+).
 Restart=on-failure

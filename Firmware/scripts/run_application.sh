@@ -61,8 +61,9 @@ stopped_status() {
 # ADR-008 section 8: a launcher killed outright (SIGKILL, OOM) runs no cleanup, and its children --
 # controld still holding both CAN buses and the motion lock -- outlive it. $RUN/children names them
 # (name, pid, start time; rewritten at every start and restart), so a stop can still bring them down
-# in the launcher's order: controld first, which parks, then the rest. The boot service's ExecStop is
-# a stop, so systemd does this before it restarts the unit.
+# in the launcher's order: controld first, which parks, then the rest. This is for a stack started
+# with `start`. Under the boot service systemd runs no ExecStop after its main process is killed;
+# its KillMode=control-group sends the children TERM instead, on which controld parks as well.
 stop_orphans() {
   [ -r "$RUN/children" ] || return 1
   local name pid start ctl='' others=() p attempt alive
@@ -575,7 +576,9 @@ write_evidence() {
   done
   # Under the boot service the launcher's own output is the user journal, not launcher.log.
   if [ -n "${INVOCATION_ID:-}" ] && command -v journalctl >/dev/null 2>&1; then
-    journalctl --user -u ota-station.service -n 300 --no-pager > "$d/launcher.journal" 2>/dev/null || true
+    # The station keeps no user journal; a user unit's lines are in the system journal (readable by
+    # the adm group the operator is in).
+    journalctl _SYSTEMD_USER_UNIT=ota-station.service -n 300 --no-pager > "$d/launcher.journal" 2>/dev/null || true
   fi
   printf 'cause=%s utc=%s launcher=%s uptime_s=%s release=%s\n' "$cause" \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$SECONDS" "$APP" > "$d/what.txt" 2>/dev/null || true

@@ -43,9 +43,13 @@ In normal operation (hardware or `--sim`, no `--frames`) the launcher supervises
   `<name> exited (<status>) after N s; restart K in D s`.
 - A stop someone asked for (`stop`, a deploy, `systemctl --user stop`, a signal) exits 0 and is not
   restarted.
-- A launcher killed outright leaves its children running. `stop` finds them in `$RUN/children` and
-  stops them, controld first, so it parks. The boot service's ExecStop does this before systemd
-  restarts the unit.
+- A launcher killed outright runs no cleanup. Under the boot service, systemd then sends every child
+  TERM (`KillMode=control-group`), so controld parks, and restarts the unit. It does not run ExecStop
+  in this case, and under the old `KillMode=mixed` it SIGKILLed controld, which never parked (station,
+  2026-11-10). Outside the boot service, `stop` finds the children in `$RUN/children` and stops them,
+  controld first.
+- The launcher's own lines under the boot service are in the system journal:
+  `journalctl _SYSTEMD_USER_UNIT=ota-station.service` (the station keeps no user journal).
 - Commissioning, captures and perception-only runs are not supervised: a child that ends ends the
   run, as before.
 
