@@ -16,6 +16,7 @@
 | 2026-10-31 | **Price matters.** The eRob90 costs almost twice the MZ17, and the owner would accept slightly lower accuracy if the saving is worth it | precision rows can be traded for price (§3), judged on the estimated total (§5), not row by row |
 | 2026-10-31 | Plugs are fitted after the cables are routed, so the bore is not sized by connectors | HDP-001 §1.4 F5: must ≥ 15 mm usable |
 | 2026-10-31 | A datasheet for the MZ17 will follow; the sheet in hand is preliminary | HDP-001 §8.6 |
+| 2026-11-10 | The datasheets arrived, for the MZ17-mini (Juxie R68 Lite), which the owner reads as ticking more boxes than the MZ17 | HDP-001 §8.8; transcribed in [`juxie-r68-datasheets.md`](juxie-r68-datasheets.md) |
 
 **Open: what "slightly lower" means as a number.** Reference points:
 - the spec, 0.3 MOA = 18″ (13 cm at 1500 m);
@@ -133,7 +134,8 @@ smaller, joint precision matters more, and this section should be redone with th
 | Candidate | Axis | Status (2026-10-31) | Next step |
 |---|---|---|---|
 | ZeroErr eRob90 HS, CANopen | yaw (and pitch in option 1) | **lead for yaw** | §8.4 questions to ZeroErr; quote the HS / CANopen / brake variants |
-| MZ17, 101:1 (Tmall MZ17-mini) | pitch (both axes in option 3) | **value candidate for pitch**, preliminary sheet only | datasheet; the §8.4 questions, G2 first; brake? |
+| MZ17, 101:1 (= Juxie R68 DNN) | pitch | superseded by the MZ17-mini: 19 bit, Ø12 bore | — |
+| **MZ17-mini, 101:1 (= Juxie R68 Lite)**, 2026-11-10 | both axes (option 3), or pitch (option 2) | **fails the §2 position-step gate as documented**: 21-bit encoder, but the protocol carries int16 per turn (19.8″). Clears A4, F5 and G2. No brake | HDP-001 §8.8 question 1 to Juxie (full-resolution position on the R68 Lite?), or one bench unit to read it |
 | MZ20 | yaw (option 4) | to ask | bore, encoder, price |
 | ZeroErr eRob80 HS | pitch | alternative to the MZ17, at about the eRob90's price | none unless the MZ17 fails a gate |
 | SHG-20 build (HDP-001 §4) | both | fallback if phase 1 fails | — |
